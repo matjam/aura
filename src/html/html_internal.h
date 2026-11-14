@@ -98,7 +98,9 @@ typedef struct HtmlTokenizer {
     char *buf;
     size_t len, cap, pos;
     size_t checked;  /* input-stream errors reported up to here */
-    size_t stop_at;  /* treat input from here on as not yet available */
+    unsigned limit_ins; /* nonzero: input from ins on is not yet available
+                         * (parsing document.write text up to the
+                         * insertion point) */
     bool eof;        /* no more input will be appended */
     bool pause;      /* stop before the next step (parser pause flag) */
     bool done;       /* the EOF token has been emitted */
@@ -162,6 +164,9 @@ AuNode *html_tb_fragment_root(HtmlTreeBuilder *tb);
 void html_tb_free(HtmlTreeBuilder *tb);
 void html_tb_emit(void *tb, HtmlToken *tok);
 bool html_tb_cdata_ok(void *tb);
+/* Serializer element classes (HTML namespace tags). */
+bool html_serializes_void(AuAtom tag);
+bool html_serializes_rawtext(AuAtom tag);
 void html_tb_set_script_hook(HtmlTreeBuilder *tb,
                              void (*hook)(void *ctx, AuElement *script), void *ctx);
 

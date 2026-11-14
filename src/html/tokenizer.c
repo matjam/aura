@@ -130,7 +130,6 @@ static const uint16_t ch_class[128] = {
 void html_tok_init(HtmlTokenizer *t)
 {
     memset(t, 0, sizeof *t);
-    t->stop_at = (size_t)-1;
     t->ins = (size_t)-1;
     t->line = 1;
     t->col = 1;
@@ -154,17 +153,15 @@ void html_tok_free(HtmlTokenizer *t)
 
 static void reserve_input(HtmlTokenizer *t, size_t extra)
 {
-    /* Drop consumed input once it is large compared with what is left. */
-    if (t->pos >= 4096 && t->pos >= t->len / 2) {
+    /* Drop consumed input once it is large compared with what is left.
+     * Not while an insertion point is defined: the parser keeps saved
+     * insertion points as offsets too. */
+    if (t->pos >= 4096 && t->pos >= t->len / 2 && t->ins == (size_t)-1) {
         size_t drop = t->pos;
         memmove(t->buf, t->buf + drop, t->len - drop);
         t->len -= drop;
         t->pos = 0;
         t->checked = t->checked > drop ? t->checked - drop : 0;
-        if (t->stop_at != (size_t)-1)
-            t->stop_at -= drop;
-        if (t->ins != (size_t)-1)
-            t->ins -= drop;
     }
     if (t->len + extra > t->cap) {
         size_t cap = t->cap ? t->cap * 2 : 4096;
@@ -244,13 +241,13 @@ static void check_input_char(HtmlTokenizer *t, int c)
 
 static size_t avail_end(const HtmlTokenizer *t)
 {
-    return t->len < t->stop_at ? t->len : t->stop_at;
+    return (t->limit_ins && t->ins < t->len) ? t->ins : t->len;
 }
 
 /* True if no input beyond avail_end will ever arrive. */
 static bool input_final(const HtmlTokenizer *t)
 {
-    return t->eof && t->stop_at >= t->len;
+    return t->eof && !t->limit_ins;
 }
 
 static int peek(HtmlTokenizer *t, size_t *n)

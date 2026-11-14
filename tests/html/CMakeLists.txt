@@ -1,2 +1,5 @@
 add_executable(test_html_tokenizer test_tokenizer.c json.c)
 target_link_libraries(test_html_tokenizer aura_engine)
+
+add_executable(test_html_tree test_tree.c)
+target_link_libraries(test_html_tree aura_engine)
