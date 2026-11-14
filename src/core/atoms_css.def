@@ -1,0 +1,3 @@
+/* Atoms for CSS property names, keywords and at-rule names.
+ * ATOM(identifier, "string"). A name already in atoms_html.def must not be
+ * repeated here; use that constant. */

@@ -1,0 +1,9 @@
+/* Atoms for HTML, SVG and MathML element and attribute names.
+ * ATOM(identifier, "string"). Append only; the DOM depends on the first
+ * block. */
+ATOM(id, "id")
+ATOM(class, "class")
+ATOM(style, "style")
+ATOM(html, "html")
+ATOM(head, "head")
+ATOM(body, "body")
