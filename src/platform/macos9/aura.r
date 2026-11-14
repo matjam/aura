@@ -82,7 +82,7 @@ resource 'DITL' (128) {
 	{
 		{88, 278, 108, 346}, Button { enabled, "OK" };
 		{12, 70, 80, 346}, StaticText { disabled,
-			"Aura\nA web browser engine for Mac OS 9.\n"
+			"Aura\0x0DA web browser engine for Mac OS 9.\0x0D"
 			"Paint, font and window test build." }
 	}
 };
@@ -102,7 +102,7 @@ resource 'ALRT' (129) {
 resource 'DITL' (129) {
 	{
 		{138, 318, 158, 386}, Button { enabled, "OK" };
-		{12, 70, 130, 386}, StaticText { disabled, "^0\n^1\n^2\n^3" }
+		{12, 70, 130, 386}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
 	}
 };
 

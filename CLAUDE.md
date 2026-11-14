@@ -55,6 +55,45 @@ The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
 screenshots and input). `os9-enforcer/CLAUDE.md` describes how to use it.
 The guest has outbound network access.
 
+## Guest testing
+
+Aura has its own test machine, separate from the one os9-protect runs, so
+the two never share a disk, a socket or a QEMU process. Runtime files go
+in `run/` of the main checkout (set `AURA_RUN` to use another folder);
+`tools/guest-env.sh` holds the settings.
+
+To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
+the background. The first start copies os9-protect's
+`disks/os9-vmoff.qcow2` (read only) into `run/os9-base.qcow2` and boots an
+overlay on the copy. Disk writes are discarded when QEMU exits; set
+`PERSIST=1` to keep them. Mac OS takes about a minute to boot.
+
+To copy the application in, build it with `./build.sh ppc` and run
+`tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
+The files arrive as a CD named AuraTest on the guest's desktop.
+
+To launch it, run `tools/guest-qmp.py open AuraTest Aura`. To take a
+screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`. To type, use
+`tools/guest-qmp.py key cmd-q` or `type TEXT`; to click or drag, use
+`click X Y` or `drag X1 Y1 X2 Y2` (guest screen pixels).
+
+To compare the window with the host rendering, render the scene at the
+window's size (the title shows it) and compare the content area, which
+starts at 20,50 on the guest screen:
+
+```bash
+build/host/src/platform/host/aura-host scene -w 584 -h 390 -o run/host.png
+tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
+```
+
+To change the screen depth, click the Monitor BitDepth module in the
+guest's Control Strip (the eighth icon) and pick 256 Colors, Thousands or
+Millions. In Aura, File > Benchmark times the scene, fills and text, and
+File > Font List shows the fonts it found.
+
+To stop the guest, run `tools/guest-run.sh stop`, or choose Special > Shut
+Down in the guest.
+
 ## Design
 
 The decisions and milestones are in the Gandalf vault,

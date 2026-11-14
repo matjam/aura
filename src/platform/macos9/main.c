@@ -193,6 +193,10 @@ void au_platform_present(int x, int y, int w, int h)
      * identity. */
     ForeColor(blackColor);
     BackColor(whiteColor);
+    /* srcCopy maps each pixel to the nearest colour at 256 colours, which
+     * bands gradients. ditherCopy (64) looks better but, tried in the 9.2.2
+     * guest, it left the Appearance scroll bar thumb drawn as noise from
+     * then on; dithering in the engine is the alternative to try. */
     CopyBits(&((GrafPtr)gworld)->portBits, &((GrafPtr)win)->portBits, &src, &dst, srcCopy, NULL);
     SetPort(saved);
 }
@@ -486,6 +490,13 @@ static void mouse_down(EventRecord *ev)
 static void key_down(EventRecord *ev)
 {
     char ch = (char)(ev->message & charCodeMask);
+    /* Command-Option-M: allocate until memory runs out, to test the
+     * out-of-memory handler. (Key code 0x2E is M; Option changes the
+     * character.) */
+    if ((ev->modifiers & cmdKey) && (ev->modifiers & optionKey) && ((ev->message >> 8) & 0xFF) == 0x2E) {
+        for (;;)
+            (void)au_alloc(1024 * 1024);
+    }
     if (ev->modifiers & cmdKey) {
         do_menu(MenuKey(ch));
         return;
@@ -573,9 +584,15 @@ int main(void)
     font_load_ms = au_platform_time_ms() - t0;
     InitCursor();
 
-    /* A 640 x 480 content area, below the menu bar. */
-    Rect wr;
-    SetRect(&wr, 40, 60, 40 + 640 + kScrollBarWidth - 1, 60 + 480);
+    /* A 640 x 480 content area below the menu bar, or less on a small
+     * screen. */
+    Rect screen = qd.screenBits.bounds, wr;
+    int cw = 640, ch = 480;
+    if (cw > screen.right - 40 - kScrollBarWidth)
+        cw = screen.right - 40 - kScrollBarWidth;
+    if (ch > screen.bottom - 90)
+        ch = screen.bottom - 90;
+    SetRect(&wr, 20, 50, (short)(20 + cw + kScrollBarWidth - 1), (short)(50 + ch));
     win = NewCWindow(NULL, &wr, (ConstStringPtr) "\pAura", true, kZoomDocProc, (WindowPtr)-1, true, 0);
     SetPort((GrafPtr)win);
     Rect sr = {0, 0, 10, 10};
