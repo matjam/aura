@@ -8,8 +8,9 @@
 #define KAPPA 0.5522847498f
 
 /* Flattening tolerance in pixels: the furthest a line segment may stray
- * from its curve. A quarter pixel is invisible after antialiasing. */
-#define FLAT_TOL 0.2f
+ * from its curve. A tenth of a pixel keeps the area within a fraction of a
+ * percent (a chord always cuts inside a convex curve). */
+#define FLAT_TOL 0.1f
 
 void au_path_init(AuPath *p)
 {

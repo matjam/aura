@@ -371,9 +371,9 @@ void au_draw_mask(AuCanvas *c, const uint8_t *mask, int w, int h, int stride, fl
 
 static uint32_t bilerp(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11, uint32_t fx, uint32_t fy)
 {
-    uint32_t top = au_px_scale(p00, 256 - fx) + au_px_scale(p10, fx);
-    uint32_t bot = au_px_scale(p01, 256 - fx) + au_px_scale(p11, fx);
-    return au_px_scale(top, 256 - fy) + au_px_scale(bot, fy);
+    uint32_t top = au_px_scale_trunc(p00, 256 - fx) + au_px_scale_trunc(p10, fx);
+    uint32_t bot = au_px_scale_trunc(p01, 256 - fx) + au_px_scale_trunc(p11, fx);
+    return au_px_scale_trunc(top, 256 - fy) + au_px_scale_trunc(bot, fy);
 }
 
 void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, AuFilter filter,

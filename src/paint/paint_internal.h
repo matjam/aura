@@ -10,7 +10,18 @@
  * multiply and a shift replace a divide by 255.
  * AltiVec: these become vec_mule/vec_mulo over four pixels. */
 
+/* Rounds to nearest, so that "over" an opaque pixel stays opaque. A
+ * product is at most 255 * 256 + 128, which fits its 16-bit field. */
 static inline uint32_t au_px_scale(uint32_t p, uint32_t a256)
+{
+    uint32_t rb = ((((p & 0x00FF00FFu) * a256) + 0x00800080u) >> 8) & 0x00FF00FFu;
+    uint32_t ag = ((((p >> 8) & 0x00FF00FFu) * a256) + 0x00800080u) & 0xFF00FF00u;
+    return rb | ag;
+}
+
+/* Truncating scale, for interpolation: scale(a, 256 - t) + scale(b, t)
+ * must not exceed 255 in any channel, which rounding both terms could. */
+static inline uint32_t au_px_scale_trunc(uint32_t p, uint32_t a256)
 {
     uint32_t rb = (((p & 0x00FF00FFu) * a256) >> 8) & 0x00FF00FFu;
     uint32_t ag = (((p >> 8) & 0x00FF00FFu) * a256) & 0xFF00FF00u;

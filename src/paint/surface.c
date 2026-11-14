@@ -111,7 +111,7 @@ void au_blend_solid_span(AuPixel *dst, int n, uint32_t src, const uint8_t *cov)
 
 static uint32_t lerp_px(uint32_t a, uint32_t b, uint32_t t256)
 {
-    return au_px_scale(a, 256 - t256) + au_px_scale(b, t256);
+    return au_px_scale_trunc(a, 256 - t256) + au_px_scale_trunc(b, t256);
 }
 
 void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut *out)
