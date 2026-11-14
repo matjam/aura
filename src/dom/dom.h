@@ -19,6 +19,7 @@
 typedef enum {
     AU_NODE_ELEMENT = 1,
     AU_NODE_TEXT = 3,
+    AU_NODE_PROCESSING_INSTRUCTION = 7, /* an AuProcessingInstruction */
     AU_NODE_COMMENT = 8,
     AU_NODE_DOCUMENT = 9,
     AU_NODE_DOCTYPE = 10,
@@ -141,5 +142,22 @@ void au_text_set(AuText *t, const char *data, size_t len);
 AuElement *au_document_element(const AuDocument *doc);
 AuElement *au_document_head(const AuDocument *doc);
 AuElement *au_document_body(const AuDocument *doc);
+
+/* ---- Additions for the HTML parser ---- */
+
+/* Processing instruction node (<?target data?>). The text part holds the
+ * data, so au_as_text works on it. */
+typedef struct AuProcessingInstruction {
+    AuText text;
+    AuAtom target;
+} AuProcessingInstruction;
+
+AuNode *au_pi_new(AuDocument *doc, AuAtom target, const char *data, size_t len);
+
+/* Appends an attribute without looking for an existing one with the same
+ * name. The caller guarantees the name is not already present (the HTML
+ * tokenizer removes duplicates), which keeps building an element with n
+ * attributes O(n). */
+void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len);
 
 #endif

@@ -84,6 +84,7 @@ static void node_free(AuNode *n)
     }
     case AU_NODE_TEXT:
     case AU_NODE_COMMENT:
+    case AU_NODE_PROCESSING_INSTRUCTION:
         au_free(((AuText *)n)->data);
         break;
     case AU_NODE_DOCTYPE: {
@@ -370,4 +371,31 @@ AuElement *au_document_head(const AuDocument *doc)
 AuElement *au_document_body(const AuDocument *doc)
 {
     return html_child(doc, AU_ATOM_body);
+}
+
+/* ---- Additions for the HTML parser ---- */
+
+AuNode *au_pi_new(AuDocument *doc, AuAtom target, const char *data, size_t len)
+{
+    AuProcessingInstruction *pi = au_calloc(sizeof *pi);
+    pi->text.data = au_strndup(data, len);
+    pi->text.len = len;
+    pi->text.cap = len + 1;
+    pi->target = target;
+    return node_init(&pi->text.node, AU_NODE_PROCESSING_INSTRUCTION, doc);
+}
+
+void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len)
+{
+    if (el->nattrs == el->attr_cap) {
+        el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 4;
+        el->attrs = au_realloc(el->attrs, el->attr_cap * sizeof *el->attrs);
+    }
+    AuAttr *a = &el->attrs[el->nattrs++];
+    a->name = name;
+    a->ns = (uint8_t)ns;
+    a->value = au_strndup(value, len);
+    a->len = (uint32_t)len;
+    if (ns == AU_ATTR_NS_NONE)
+        attr_changed(el, name, a->value, len);
 }
