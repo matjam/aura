@@ -114,14 +114,26 @@ enum {
 };
 
 /* An entry in the list of active formatting elements. el is NULL for a
- * marker. The token's attributes are kept so elements can be recreated
- * and compared (Noah's Ark) as the token had them. */
+ * marker and for the adoption agency's bookmark. The token's attributes
+ * are kept so elements can be recreated and compared (Noah's Ark) as the
+ * token had them. */
 typedef struct FmtEntry {
+    struct FmtEntry *prev, *next;   /* list order */
+    struct FmtEntry *bprev, *bnext; /* hash bucket chain (elements only) */
     AuElement *el;
     AuAtom tag;
     AuAttr *attrs;
     uint32_t nattrs;
+    uint32_t sig;   /* hash of tag and attributes */
+    uint32_t depth; /* markers before this entry */
 } FmtEntry;
+
+/* An open-addressed map from pointer to pointer. */
+typedef struct PtrMap {
+    const void **keys;
+    void **vals;
+    uint32_t size, count;
+} PtrMap;
 
 struct HtmlTreeBuilder {
     AuDocument *doc;      /* the parser's Document */
@@ -132,11 +144,16 @@ struct HtmlTreeBuilder {
     uint32_t depth, stack_cap;
     AuElement **set;      /* hash set of the elements on the stack */
     uint32_t set_size, set_count;
-    uint32_t *tag_count;  /* open HTML elements per static tag */
+    uint32_t *tag_count;  /* open HTML elements per tag atom */
+    uint32_t tag_count_size;
 
-    FmtEntry *afe;
-    uint32_t nafe, afe_cap;
-    uint32_t *afe_tag_count;
+    FmtEntry *afe_head, *afe_tail;
+    uint32_t nafe;              /* element entries */
+    uint32_t markers;           /* marker entries */
+    FmtEntry **bhead, **btail;  /* Noah's Ark buckets */
+    uint32_t nbuckets;
+    PtrMap afe_map;             /* element to entry */
+    uint32_t *afe_tag_count;    /* element entries per static tag atom */
 
     uint8_t *tmpl_modes;
     uint32_t ntmpl, tmpl_cap;
@@ -269,10 +286,26 @@ static void set_del(HtmlTreeBuilder *tb, AuElement *e)
     }
 }
 
+/* tag_count is indexed by atom and grows to cover every tag pushed, so
+ * "no such element is open" is O(1) for custom tags too. */
 static void count_tag(HtmlTreeBuilder *tb, AuElement *e, int d)
 {
-    if (e->ns == AU_NS_HTML && e->tag < AU_ATOM_STATIC_COUNT)
-        tb->tag_count[e->tag] += (uint32_t)d;
+    if (e->ns != AU_NS_HTML)
+        return;
+    if (e->tag >= tb->tag_count_size) {
+        uint32_t size = tb->tag_count_size * 2;
+        while (size <= e->tag)
+            size *= 2;
+        tb->tag_count = au_realloc(tb->tag_count, size * sizeof *tb->tag_count);
+        memset(tb->tag_count + tb->tag_count_size, 0, (size - tb->tag_count_size) * sizeof *tb->tag_count);
+        tb->tag_count_size = size;
+    }
+    tb->tag_count[e->tag] += (uint32_t)d;
+}
+
+static uint32_t open_count(const HtmlTreeBuilder *tb, AuAtom tag)
+{
+    return tag < tb->tag_count_size ? tb->tag_count[tag] : 0;
 }
 
 static void push(HtmlTreeBuilder *tb, AuElement *e)
@@ -556,7 +589,7 @@ static bool scope_boundary(const AuElement *e, int scope)
 /* True if an HTML element with tag is in the given scope. */
 static bool in_scope(const HtmlTreeBuilder *tb, AuAtom tag, int scope)
 {
-    if (tag < AU_ATOM_STATIC_COUNT && !tb->tag_count[tag])
+    if (!open_count(tb, tag))
         return false;
     for (uint32_t i = tb->depth; i-- > 0;) {
         AuElement *e = tb->stack[i];
@@ -902,59 +935,227 @@ static AuAtom adjust_svg_tag(AuAtom tag)
     return to ? au_atom_cstr(to) : tag;
 }
 
-/* ---- Active formatting elements ---- */
+/* ---- Active formatting elements ----
+ * A doubly linked list of heap entries, so removal and insertion anywhere
+ * are O(1); a map from element to entry; and hash buckets keyed by
+ * (signature of tag and attributes, marker depth). An entry's marker depth
+ * is the number of markers before it, so entries "after the last marker"
+ * are those whose depth equals the current marker count. Within a bucket,
+ * entries with the same key stay in list order, which lets Noah's Ark find
+ * its matches without scanning the list. */
 
-static void afe_free_entry(FmtEntry *f)
+#define BOOKMARK_DEPTH 0xFFFFFFFFu /* depth of the adoption agency's bookmark */
+
+static uint32_t mix(uint32_t h)
 {
-    if (f->el) {
-        if (f->tag < AU_ATOM_STATIC_COUNT)
-            ;
-        au_node_unref(&f->el->node);
-    }
-    for (uint32_t i = 0; i < f->nattrs; i++)
-        au_free(f->attrs[i].value);
-    au_free(f->attrs);
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    return h;
 }
 
-static void afe_count(HtmlTreeBuilder *tb, const FmtEntry *f, int d)
+static void *map_get(const PtrMap *m, const void *k)
 {
-    if (f->el && f->tag < AU_ATOM_STATIC_COUNT)
-        tb->afe_tag_count[f->tag] += (uint32_t)d;
+    if (!m->size)
+        return NULL;
+    uint32_t i = ptr_slot(k, m->size);
+    while (m->keys[i]) {
+        if (m->keys[i] == k)
+            return m->vals[i];
+        i = (i + 1) & (m->size - 1);
+    }
+    return NULL;
 }
 
-static void afe_insert_at(HtmlTreeBuilder *tb, uint32_t i, FmtEntry f)
+static void map_put(PtrMap *m, const void *k, void *v)
 {
-    if (tb->nafe == tb->afe_cap) {
-        tb->afe_cap = tb->afe_cap ? tb->afe_cap * 2 : 16;
-        tb->afe = au_realloc(tb->afe, tb->afe_cap * sizeof *tb->afe);
+    if ((m->count + 1) * 2 > m->size) {
+        uint32_t old = m->size;
+        const void **ok = m->keys;
+        void **ov = m->vals;
+        m->size = old ? old * 2 : 64;
+        m->keys = au_calloc(m->size * sizeof *m->keys);
+        m->vals = au_calloc(m->size * sizeof *m->vals);
+        m->count = 0;
+        for (uint32_t i = 0; i < old; i++)
+            if (ok[i])
+                map_put(m, ok[i], ov[i]);
+        au_free((void *)ok);
+        au_free(ov);
     }
-    memmove(tb->afe + i + 1, tb->afe + i, (tb->nafe - i) * sizeof *tb->afe);
-    tb->afe[i] = f;
+    uint32_t i = ptr_slot(k, m->size);
+    while (m->keys[i])
+        i = (i + 1) & (m->size - 1);
+    m->keys[i] = k;
+    m->vals[i] = v;
+    m->count++;
+}
+
+static void map_del(PtrMap *m, const void *k)
+{
+    uint32_t mask = m->size - 1;
+    uint32_t j = ptr_slot(k, m->size);
+    while (m->keys[j] != k)
+        j = (j + 1) & mask;
+    m->keys[j] = NULL;
+    m->count--;
+    for (uint32_t i = (j + 1) & mask; m->keys[i]; i = (i + 1) & mask) {
+        uint32_t h = ptr_slot(m->keys[i], m->size);
+        if ((j < i) ? (h <= j || h > i) : (h <= j && h > i)) {
+            m->keys[j] = m->keys[i];
+            m->vals[j] = m->vals[i];
+            m->keys[i] = NULL;
+            j = i;
+        }
+    }
+}
+
+static uint32_t entry_sig(AuAtom tag, const AuAttr *a, uint32_t n)
+{
+    uint32_t h = mix(tag * 2654435761u);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t x = a[i].name * 0x9E3779B1u;
+        for (uint32_t k = 0; k < a[i].len; k++)
+            x = (x ^ (unsigned char)a[i].value[k]) * 16777619u;
+        h += mix(x); /* a sum, so attribute order does not matter */
+    }
+    return h;
+}
+
+static uint32_t bucket_of(const HtmlTreeBuilder *tb, const FmtEntry *e)
+{
+    return mix(e->sig + e->depth * 0x9E3779B9u) & (tb->nbuckets - 1);
+}
+
+static void bucket_link_after(HtmlTreeBuilder *tb, FmtEntry *e, FmtEntry *after)
+{
+    uint32_t b = bucket_of(tb, e);
+    e->bprev = after;
+    e->bnext = after ? after->bnext : tb->bhead[b];
+    if (after)
+        after->bnext = e;
+    if (e->bnext)
+        e->bnext->bprev = e;
+    else
+        tb->btail[b] = e;
+    if (!e->bprev)
+        tb->bhead[b] = e;
+}
+
+static void bucket_unlink(HtmlTreeBuilder *tb, FmtEntry *e)
+{
+    uint32_t b = bucket_of(tb, e);
+    if (e->bprev)
+        e->bprev->bnext = e->bnext;
+    else
+        tb->bhead[b] = e->bnext;
+    if (e->bnext)
+        e->bnext->bprev = e->bprev;
+    else
+        tb->btail[b] = e->bprev;
+    e->bprev = e->bnext = NULL;
+}
+
+static void buckets_grow(HtmlTreeBuilder *tb)
+{
+    if (tb->nafe < tb->nbuckets)
+        return;
+    tb->nbuckets = tb->nbuckets ? tb->nbuckets * 2 : 16;
+    au_free(tb->bhead);
+    au_free(tb->btail);
+    tb->bhead = au_calloc(tb->nbuckets * sizeof *tb->bhead);
+    tb->btail = au_calloc(tb->nbuckets * sizeof *tb->btail);
+    for (FmtEntry *e = tb->afe_head; e; e = e->next)
+        if (e->el)
+            bucket_link_after(tb, e, tb->btail[bucket_of(tb, e)]);
+}
+
+static void list_link_after(HtmlTreeBuilder *tb, FmtEntry *e, FmtEntry *after)
+{
+    e->prev = after;
+    e->next = after ? after->next : tb->afe_head;
+    if (after)
+        after->next = e;
+    else
+        tb->afe_head = e;
+    if (e->next)
+        e->next->prev = e;
+    else
+        tb->afe_tail = e;
+}
+
+static void list_unlink(HtmlTreeBuilder *tb, FmtEntry *e)
+{
+    if (e->prev)
+        e->prev->next = e->next;
+    else
+        tb->afe_head = e->next;
+    if (e->next)
+        e->next->prev = e->prev;
+    else
+        tb->afe_tail = e->prev;
+    e->prev = e->next = NULL;
+}
+
+static void afe_tag_count_add(HtmlTreeBuilder *tb, AuAtom tag, int d)
+{
+    if (tag < AU_ATOM_STATIC_COUNT)
+        tb->afe_tag_count[tag] += (uint32_t)d;
+}
+
+/* Adds element entry e (el, tag, attrs, sig and depth set) after `after`
+ * in the list and after `bafter` in its bucket. */
+static void afe_add(HtmlTreeBuilder *tb, FmtEntry *e, FmtEntry *after, FmtEntry *bafter)
+{
     tb->nafe++;
-    afe_count(tb, &f, 1);
+    buckets_grow(tb);
+    list_link_after(tb, e, after);
+    bucket_link_after(tb, e, bafter ? bafter : tb->btail[bucket_of(tb, e)]);
+    map_put(&tb->afe_map, e->el, e);
+    afe_tag_count_add(tb, e->tag, 1);
+    au_node_ref(&e->el->node);
 }
 
-static void afe_remove_at(HtmlTreeBuilder *tb, uint32_t i)
+/* Removes and frees an entry: an element, a marker or the bookmark. */
+static void afe_free(HtmlTreeBuilder *tb, FmtEntry *e)
 {
-    afe_count(tb, &tb->afe[i], -1);
-    afe_free_entry(&tb->afe[i]);
-    memmove(tb->afe + i, tb->afe + i + 1, (tb->nafe - i - 1) * sizeof *tb->afe);
-    tb->nafe--;
+    if (e->el) {
+        bucket_unlink(tb, e);
+        map_del(&tb->afe_map, e->el);
+        afe_tag_count_add(tb, e->tag, -1);
+        tb->nafe--;
+        au_node_unref(&e->el->node);
+    } else if (e->depth != BOOKMARK_DEPTH) {
+        tb->markers--;
+    }
+    list_unlink(tb, e);
+    for (uint32_t i = 0; i < e->nattrs; i++)
+        au_free(e->attrs[i].value);
+    au_free(e->attrs);
+    au_free(e);
 }
 
 static void afe_push_marker(HtmlTreeBuilder *tb)
 {
-    FmtEntry f;
-    memset(&f, 0, sizeof f);
-    afe_insert_at(tb, tb->nafe, f);
+    FmtEntry *e = au_calloc(sizeof *e);
+    e->depth = tb->markers++;
+    list_link_after(tb, e, tb->afe_tail);
 }
 
-static int afe_index(const HtmlTreeBuilder *tb, const AuElement *e)
+static FmtEntry *afe_find(const HtmlTreeBuilder *tb, const AuElement *el)
 {
-    for (uint32_t i = tb->nafe; i-- > 0;)
-        if (tb->afe[i].el == e)
-            return (int)i;
-    return -1;
+    return map_get(&tb->afe_map, el);
+}
+
+/* The last element entry with tag after the last marker, or NULL. */
+static FmtEntry *afe_last_with_tag(const HtmlTreeBuilder *tb, AuAtom tag)
+{
+    if (tag < AU_ATOM_STATIC_COUNT && !tb->afe_tag_count[tag])
+        return NULL;
+    for (FmtEntry *e = tb->afe_tail; e && e->el; e = e->prev)
+        if (e->tag == tag)
+            return e;
+    return NULL;
 }
 
 static bool same_attrs(const FmtEntry *a, const FmtEntry *b)
@@ -973,36 +1174,35 @@ static bool same_attrs(const FmtEntry *a, const FmtEntry *b)
     return true;
 }
 
-static void afe_push(HtmlTreeBuilder *tb, AuElement *e, const HtmlToken *t)
+static void afe_push(HtmlTreeBuilder *tb, AuElement *el, const HtmlToken *t)
 {
-    FmtEntry f;
-    f.el = e;
-    f.tag = e->tag;
-    f.nattrs = t->nattrs;
-    f.attrs = t->nattrs ? au_alloc(t->nattrs * sizeof *f.attrs) : NULL;
+    FmtEntry *f = au_calloc(sizeof *f);
+    f->el = el;
+    f->tag = el->tag;
+    f->nattrs = t->nattrs;
+    f->attrs = t->nattrs ? au_alloc(t->nattrs * sizeof *f->attrs) : NULL;
     for (uint32_t i = 0; i < t->nattrs; i++) {
-        f.attrs[i].name = t->attrs[i].name;
-        f.attrs[i].ns = 0;
-        f.attrs[i].value = au_strndup(t->vals + t->attrs[i].voff, t->attrs[i].vlen);
-        f.attrs[i].len = t->attrs[i].vlen;
+        f->attrs[i].name = t->attrs[i].name;
+        f->attrs[i].ns = 0;
+        f->attrs[i].value = au_strndup(t->vals + t->attrs[i].voff, t->attrs[i].vlen);
+        f->attrs[i].len = t->attrs[i].vlen;
     }
-    /* Noah's Ark: at most three matching entries after the last marker. */
-    if (f.tag >= AU_ATOM_STATIC_COUNT || tb->afe_tag_count[f.tag] >= 3) {
-        int matches = 0, earliest = -1;
-        for (uint32_t i = tb->nafe; i-- > 0;) {
-            FmtEntry *g = &tb->afe[i];
-            if (!g->el)
+    f->sig = entry_sig(f->tag, f->attrs, f->nattrs);
+    f->depth = tb->markers;
+    /* Noah's Ark: at most three matching entries after the last marker.
+     * Same-key entries are in list order in the bucket, so the third
+     * match found from the tail is the earliest. */
+    if ((f->tag >= AU_ATOM_STATIC_COUNT || tb->afe_tag_count[f->tag] >= 3) && tb->nbuckets) {
+        int matches = 0;
+        for (FmtEntry *g = tb->btail[bucket_of(tb, f)]; g; g = g->bprev) {
+            if (g->depth == f->depth && g->sig == f->sig && g->tag == f->tag && same_attrs(g, f) &&
+                ++matches == 3) {
+                afe_free(tb, g);
                 break;
-            if (g->tag == f.tag && same_attrs(g, &f)) {
-                matches++;
-                earliest = (int)i;
             }
         }
-        if (matches >= 3)
-            afe_remove_at(tb, (uint32_t)earliest);
     }
-    au_node_ref(&e->node);
-    afe_insert_at(tb, tb->nafe, f);
+    afe_add(tb, f, tb->afe_tail, NULL);
 }
 
 static AuElement *create_from_entry(HtmlTreeBuilder *tb, const FmtEntry *f)
@@ -1013,39 +1213,71 @@ static AuElement *create_from_entry(HtmlTreeBuilder *tb, const FmtEntry *f)
     return e;
 }
 
-static void afe_replace_el(FmtEntry *f, AuElement *e)
+static void afe_replace_el(HtmlTreeBuilder *tb, FmtEntry *f, AuElement *e)
 {
+    map_del(&tb->afe_map, f->el);
     au_node_ref(&e->node);
     au_node_unref(&f->el->node);
     f->el = e;
+    map_put(&tb->afe_map, e, f);
+}
+
+/* Moves entry f to just after the bookmark bm, keeping f's bucket in list
+ * order. bm may lie before or after f; both directions are walked at once,
+ * so the cost is proportional to the distance between them. */
+static void afe_move_to_bookmark(HtmlTreeBuilder *tb, FmtEntry *f, FmtEntry *bm)
+{
+    if (f->next == bm)
+        return;
+    bool forward = false;
+    for (FmtEntry *a = f->next, *b = bm->next;; a = a ? a->next : NULL, b = b ? b->next : NULL) {
+        if (a == bm) {
+            forward = true;
+            break;
+        }
+        if (b == f)
+            break;
+    }
+    uint32_t bk = bucket_of(tb, f);
+    FmtEntry *same = NULL;
+    if (forward) {
+        /* f moves later: it goes after the last same-bucket entry it passes. */
+        for (FmtEntry *e = f->next; e != bm; e = e->next)
+            if (e->el && bucket_of(tb, e) == bk)
+                same = e;
+    } else {
+        /* f moves earlier: it goes before the first same-bucket entry it passes. */
+        for (FmtEntry *e = bm->next; e != f && !same; e = e->next)
+            if (e->el && bucket_of(tb, e) == bk)
+                same = e;
+    }
+    list_unlink(tb, f);
+    list_link_after(tb, f, bm);
+    if (same) {
+        bucket_unlink(tb, f);
+        bucket_link_after(tb, f, forward ? same : same->bprev);
+    }
 }
 
 static void reconstruct_afe(HtmlTreeBuilder *tb)
 {
-    if (!tb->nafe)
+    FmtEntry *e = tb->afe_tail;
+    if (!e || !e->el || in_stack(tb, e->el))
         return;
-    FmtEntry *last = &tb->afe[tb->nafe - 1];
-    if (!last->el || in_stack(tb, last->el))
-        return;
-    uint32_t i = tb->nafe - 1;
-    while (i > 0) {
-        FmtEntry *e = &tb->afe[i - 1];
-        if (!e->el || in_stack(tb, e->el))
-            break;
-        i--;
-    }
-    for (; i < tb->nafe; i++) {
-        AuElement *e = create_from_entry(tb, &tb->afe[i]);
-        insert_and_push(tb, e);
-        afe_replace_el(&tb->afe[i], e);
+    while (e->prev && e->prev->el && !in_stack(tb, e->prev->el))
+        e = e->prev;
+    for (; e; e = e->next) {
+        AuElement *el = create_from_entry(tb, e);
+        afe_replace_el(tb, e, el);
+        insert_and_push(tb, el);
     }
 }
 
 static void clear_afe_to_marker(HtmlTreeBuilder *tb)
 {
-    while (tb->nafe) {
-        bool marker = !tb->afe[tb->nafe - 1].el;
-        afe_remove_at(tb, tb->nafe - 1);
+    while (tb->afe_tail) {
+        bool marker = !tb->afe_tail->el;
+        afe_free(tb, tb->afe_tail);
         if (marker)
             break;
     }
@@ -1203,26 +1435,18 @@ static void stop(HtmlTreeBuilder *tb)
 static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
 {
     AuElement *c = cur(tb);
-    if (is_html(c, subject) && afe_index(tb, c) < 0) {
+    if (is_html(c, subject) && !afe_find(tb, c)) {
         pop(tb);
         return false;
     }
     for (int outer = 0; outer < 8; outer++) {
-        int fi = -1;
-        for (uint32_t i = tb->nafe; i-- > 0;) {
-            if (!tb->afe[i].el)
-                break;
-            if (tb->afe[i].tag == subject) {
-                fi = (int)i;
-                break;
-            }
-        }
-        if (fi < 0)
+        FmtEntry *fent = afe_last_with_tag(tb, subject);
+        if (!fent)
             return true;
-        AuElement *fe = tb->afe[fi].el;
+        AuElement *fe = fent->el;
         int fe_idx = stack_index(tb, fe);
         if (fe_idx < 0) {
-            afe_remove_at(tb, (uint32_t)fi);
+            afe_free(tb, fent);
             return false;
         }
         if (!element_in_scope(tb, fe))
@@ -1236,12 +1460,14 @@ static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
         }
         if (fb_idx < 0) {
             pop_until_el(tb, fe);
-            afe_remove_at(tb, (uint32_t)fi);
+            afe_free(tb, fent);
             return false;
         }
         AuElement *furthest = tb->stack[fb_idx];
         AuElement *common = tb->stack[fe_idx - 1];
-        int bookmark = fi;
+        FmtEntry *bm = au_calloc(sizeof *bm); /* the bookmark */
+        bm->depth = BOOKMARK_DEPTH;
+        list_link_after(tb, bm, fent);
         AuElement *last_node = furthest;
         au_node_ref(&last_node->node);
         int node_idx = fb_idx;
@@ -1250,22 +1476,18 @@ static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
             AuElement *node = tb->stack[node_idx];
             if (node == fe)
                 break;
-            int ai = afe_index(tb, node);
-            if (inner > 3 && ai >= 0) {
-                afe_remove_at(tb, (uint32_t)ai);
-                if (ai < bookmark)
-                    bookmark--;
-                if (ai < fi)
-                    fi--;
-                ai = -1;
+            FmtEntry *ae = afe_find(tb, node);
+            if (inner > 3 && ae) {
+                afe_free(tb, ae);
+                ae = NULL;
             }
-            if (ai < 0) {
+            if (!ae) {
                 stack_remove_at(tb, (uint32_t)node_idx);
                 fb_idx--;
                 continue;
             }
-            AuElement *ne = create_from_entry(tb, &tb->afe[ai]);
-            afe_replace_el(&tb->afe[ai], ne);
+            AuElement *ne = create_from_entry(tb, ae);
+            afe_replace_el(tb, ae, ne);
             /* Replace node with ne on the stack. */
             set_del(tb, node);
             count_tag(tb, node, -1);
@@ -1276,8 +1498,10 @@ static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
             count_tag(tb, ne, 1);
             au_node_unref(&ne->node); /* creation reference; the stack and list hold it */
             node = ne;
-            if (last_node == furthest)
-                bookmark = ai + 1;
+            if (last_node == furthest) {
+                list_unlink(tb, bm);
+                list_link_after(tb, bm, ae);
+            }
             au_node_append(&node->node, &last_node->node);
             au_node_ref(&node->node);
             au_node_unref(&last_node->node);
@@ -1287,20 +1511,13 @@ static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
         insert_at(p, &last_node->node);
         au_node_unref(&last_node->node);
 
-        AuElement *ne = create_from_entry(tb, &tb->afe[fi]);
+        AuElement *ne = create_from_entry(tb, fent);
         au_node_reparent_children(&furthest->node, &ne->node);
         au_node_append(&furthest->node, &ne->node);
 
-        FmtEntry moved = tb->afe[fi];
-        moved.el = ne; /* takes over the entry's attribute copy */
-        au_node_unref(&fe->node);
-        afe_count(tb, &tb->afe[fi], -1);
-        memmove(tb->afe + fi, tb->afe + fi + 1, (tb->nafe - fi - 1) * sizeof *tb->afe);
-        tb->nafe--;
-        if (fi < bookmark)
-            bookmark--;
-        au_node_ref(&ne->node);
-        afe_insert_at(tb, (uint32_t)bookmark, moved);
+        afe_move_to_bookmark(tb, fent, bm);
+        afe_replace_el(tb, fent, ne);
+        afe_free(tb, bm);
 
         stack_remove(tb, fe);
         fb_idx = stack_index(tb, furthest);
@@ -1312,6 +1529,8 @@ static bool adoption_agency(HtmlTreeBuilder *tb, AuAtom subject)
 
 static void any_other_end_tag(HtmlTreeBuilder *tb, AuAtom tag)
 {
+    if (!open_count(tb, tag))
+        return;
     for (uint32_t i = tb->depth; i-- > 0;) {
         AuElement *node = tb->stack[i];
         if (is_html(node, tag)) {
@@ -1931,14 +2150,6 @@ static void after_head(HtmlTreeBuilder *tb, HtmlToken *t)
     dispatch(tb, t);
 }
 
-static bool eof_ok_element(const AuElement *e)
-{
-    if (e->ns != AU_NS_HTML)
-        return false;
-    return (flags_of(e->tag) & F_THOROUGH && e->tag != AU_ATOM_caption && e->tag != AU_ATOM_colgroup) ||
-           e->tag == AU_ATOM_body || e->tag == AU_ATOM_html;
-}
-
 static void in_body_start(HtmlTreeBuilder *tb, HtmlToken *t)
 {
     AuAtom n = t->name;
@@ -2040,28 +2251,23 @@ static void in_body_start(HtmlTreeBuilder *tb, HtmlToken *t)
         insert_html(tb, t);
         tb->frameset_ok = false;
         return;
-    case AU_ATOM_a:
-        if (tb->afe_tag_count[AU_ATOM_a]) {
-            for (uint32_t i = tb->nafe; i-- > 0;) {
-                AuElement *e = tb->afe[i].el;
-                if (!e)
-                    break;
-                if (tb->afe[i].tag == AU_ATOM_a) {
-                    au_node_ref(&e->node);
-                    if (adoption_agency(tb, AU_ATOM_a))
-                        any_other_end_tag(tb, AU_ATOM_a);
-                    int k = afe_index(tb, e);
-                    if (k >= 0)
-                        afe_remove_at(tb, (uint32_t)k);
-                    stack_remove(tb, e);
-                    au_node_unref(&e->node);
-                    break;
-                }
-            }
+    case AU_ATOM_a: {
+        FmtEntry *ae = afe_last_with_tag(tb, AU_ATOM_a);
+        if (ae) {
+            AuElement *e = ae->el;
+            au_node_ref(&e->node);
+            if (adoption_agency(tb, AU_ATOM_a))
+                any_other_end_tag(tb, AU_ATOM_a);
+            ae = afe_find(tb, e);
+            if (ae)
+                afe_free(tb, ae);
+            stack_remove(tb, e);
+            au_node_unref(&e->node);
         }
         reconstruct_afe(tb);
         afe_push(tb, insert_html(tb, t), t);
         return;
+    }
     case AU_ATOM_b: case AU_ATOM_big: case AU_ATOM_code: case AU_ATOM_em: case AU_ATOM_font: case AU_ATOM_i:
     case AU_ATOM_s: case AU_ATOM_small: case AU_ATOM_strike: case AU_ATOM_strong: case AU_ATOM_tt:
     case AU_ATOM_u:
@@ -2338,7 +2544,6 @@ static void in_body(HtmlTreeBuilder *tb, HtmlToken *t)
             in_template(tb, t);
             return;
         }
-        (void)eof_ok_element;
         stop(tb);
         return;
     }
@@ -3077,6 +3282,7 @@ HtmlTreeBuilder *html_tb_new(AuDocument *doc, HtmlTokenizer *tok, bool scripting
     tb->scripting = scripting;
     tb->frameset_ok = true;
     tb->mode = M_INITIAL;
+    tb->tag_count_size = AU_ATOM_STATIC_COUNT;
     tb->tag_count = au_calloc(AU_ATOM_STATIC_COUNT * sizeof *tb->tag_count);
     tb->afe_tag_count = au_calloc(AU_ATOM_STATIC_COUNT * sizeof *tb->afe_tag_count);
     au_buf_init(&tb->pending);
@@ -3118,8 +3324,8 @@ void html_tb_free(HtmlTreeBuilder *tb)
 {
     while (tb->depth)
         pop(tb);
-    while (tb->nafe)
-        afe_remove_at(tb, tb->nafe - 1);
+    while (tb->afe_tail)
+        afe_free(tb, tb->afe_tail);
     set_pointer(&tb->head, NULL);
     set_pointer(&tb->form, NULL);
     if (tb->context)
@@ -3127,7 +3333,10 @@ void html_tb_free(HtmlTreeBuilder *tb)
     au_free(tb->stack);
     au_free(tb->set);
     au_free(tb->tag_count);
-    au_free(tb->afe);
+    au_free(tb->bhead);
+    au_free(tb->btail);
+    au_free((void *)tb->afe_map.keys);
+    au_free(tb->afe_map.vals);
     au_free(tb->afe_tag_count);
     au_free(tb->tmpl_modes);
     au_buf_free(&tb->pending);

@@ -1,0 +1,344 @@
+#data
+<!DOCTYPE html><title>T &amp; t</title><p>One<p>Two
+#errors
+#document
+| <!DOCTYPE html>
+| <html>
+|   <head>
+|     <title>
+|       "T & t"
+|   <body>
+|     <p>
+|       "One"
+|     <p>
+|       "Two"
+
+#data
+<b>1<p>2</b>3</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <b>
+|       "1"
+|     <p>
+|       <b>
+|         "2"
+|       "3"
+
+#data
+<a href=x>1<div>2</a>3</div>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <a>
+|       href="x"
+|       "1"
+|     <div>
+|       <a>
+|         href="x"
+|         "2"
+|       "3"
+
+#data
+<table>a<tr><td>b</td></tr>c</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     "ac"
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "b"
+
+#data
+<table><tr><td>1<td>2<tr><td>3</table>after
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "1"
+|           <td>
+|             "2"
+|         <tr>
+|           <td>
+|             "3"
+|     "after"
+
+#data
+<ul><li>a<li>b</ul><dl><dt>t<dd>d</dl>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <ul>
+|       <li>
+|         "a"
+|       <li>
+|         "b"
+|     <dl>
+|       <dt>
+|         "t"
+|       <dd>
+|         "d"
+
+#data
+<svg viewbox="0 0 1 1"><foreignobject><p>x</p></foreignobject><lineargradient/></svg>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <svg svg>
+|       viewBox="0 0 1 1"
+|       <svg foreignObject>
+|         <p>
+|           "x"
+|       <svg linearGradient>
+
+#data
+<math definitionurl=u><mi>x</mi><annotation-xml encoding="text/html"><b>b</b></annotation-xml></math>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <math math>
+|       definitionURL="u"
+|       <math mi>
+|         "x"
+|       <math annotation-xml>
+|         encoding="text/html"
+|         <b>
+|           "b"
+
+#data
+<svg><a xlink:href=h xml:lang=en xmlns:xlink=x></a></svg>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <svg svg>
+|       <svg a>
+|         xlink href="h"
+|         xml lang="en"
+|         xmlns xlink="x"
+
+#data
+<svg><p>breaks out</svg>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <svg svg>
+|     <p>
+|       "breaks out"
+
+#data
+<template><tr><td>c</td></tr></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <tr>
+|           <td>
+|             "c"
+|   <body>
+
+#data
+<select><option>a<option selected>b</select>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       <option>
+|         "a"
+|       <option>
+|         selected=""
+|         "b"
+
+#data
+<select><div>x</div><option>y</select>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       <div>
+|         "x"
+|       <option>
+|         "y"
+
+#data
+<noscript><p>n</p></noscript>
+#errors
+#script-off
+#document
+| <html>
+|   <head>
+|     <noscript>
+|   <body>
+|     <p>
+|       "n"
+
+#data
+<noscript><p>n</p></noscript>
+#errors
+#script-on
+#document
+| <html>
+|   <head>
+|     <noscript>
+|       "<p>n</p>"
+|   <body>
+
+#data
+<body><?target some data?><!--c-->
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <?target some data?>
+|     <!-- c -->
+
+#data
+<p>&notit; &notin; &amp &#x41;&#65;&#x80;&#0;
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "¬it; ∉ & AA€�"
+
+#data
+<a title="&notit;&amp=">x</a>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <a>
+|       title="&notit;&amp="
+|       "x"
+
+#data
+<pre>
+
+x</pre><textarea>
+y</textarea>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <pre>
+|       "
+x"
+|     <textarea>
+|       "y"
+
+#data
+<div id=a id=b class="c  d">x</div>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <div>
+|       class="c  d"
+|       id="a"
+|       "x"
+
+#data
+<script>a</script><style>b</style><b>
+#errors
+#document
+| <html>
+|   <head>
+|     <script>
+|       "a"
+|     <style>
+|       "b"
+|   <body>
+|     <b>
+
+#data
+<frameset><frame></frameset><noframes>n</noframes>
+#errors
+#document
+| <html>
+|   <head>
+|   <frameset>
+|     <frame>
+|   <noframes>
+|     "n"
+
+#data
+<td>cell</td>x
+#errors
+#document-fragment
+tr
+#document
+| <td>
+|   "cell"
+| "x"
+
+#data
+<option>a<b>b</b>
+#errors
+#document-fragment
+select
+#document
+| <option>
+|   "a"
+|   <b>
+|     "b"
+
+#data
+<p>a</b>b
+#errors
+#document-fragment
+div
+#document
+| <p>
+|   "ab"
+
+#data
+</textarea>&amp;<b>
+#errors
+#document-fragment
+textarea
+#document
+| "</textarea>&<b>"
+
+#data
+<circle/><foreignObject><b>x</b></foreignObject>
+#errors
+#document-fragment
+svg svg
+#document
+| <svg circle>
+| <svg foreignObject>
+|   <b>
+|     "x"

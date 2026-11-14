@@ -1,6 +1,6 @@
 /* Runs the html5lib tokenizer tests (*.test JSON files).
  *
- * Usage: test_tokenizer [-v] FILE.test...
+ * Usage: test_tokenizer [-v] [-x expected-failures.txt] FILE.test...
  *
  * Each test runs once per initial state. The input goes through the
  * input decoder (newline normalization) and is fed both as one chunk and
@@ -150,7 +150,6 @@ static void expected(const JVal *output, int dbl, AuBuf *o)
 {
     AuBuf chars;
     au_buf_init(&chars);
-#define S(v, b) put_jstr(v, dbl, b)
     for (size_t i = 0; output && i < output->n; i++) {
         const JVal *tk = output->items[i];
         const char *kind = tk->items[0]->str;
@@ -219,7 +218,6 @@ static void expected(const JVal *output, int dbl, AuBuf *o)
         au_buf_putc(o, '\n');
     }
     au_buf_free(&chars);
-#undef S
 }
 
 static int state_of(const char *s)
@@ -289,14 +287,57 @@ static char *read_file(const char *path, size_t *len)
     return b;
 }
 
+/* Expected failures: lines "FILE:N # reason" (see test_tree.c). */
+static char **xfail;
+static int nxfail;
+
+static void load_xfail(const char *path)
+{
+    size_t len;
+    char *s = read_file(path, &len);
+    if (!s) {
+        fprintf(stderr, "cannot read %s\n", path);
+        exit(1);
+    }
+    for (char *line = strtok(s, "\n"); line; line = strtok(NULL, "\n")) {
+        char *hash = strchr(line, '#');
+        if (hash)
+            *hash = 0;
+        char *e = line + strlen(line);
+        while (e > line && (e[-1] == ' ' || e[-1] == '\t'))
+            *--e = 0;
+        if (!*line)
+            continue;
+        xfail = realloc(xfail, (size_t)(nxfail + 1) * sizeof *xfail);
+        xfail[nxfail++] = strdup(line);
+    }
+    free(s);
+}
+
+static int is_xfail(const char *file, size_t num)
+{
+    char key[512];
+    snprintf(key, sizeof key, "%s:%zu", file, num);
+    for (int i = 0; i < nxfail; i++)
+        if (!strcmp(xfail[i], key))
+            return 1;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    int total_pass = 0, total_fail = 0;
+    int total_pass = 0, total_fail = 0, total_xfail = 0, total_na = 0, unexpected = 0;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "-v")) {
             verbose = 1;
             continue;
         }
+        if (!strcmp(argv[a], "-x") && a + 1 < argc) {
+            load_xfail(argv[++a]);
+            continue;
+        }
+        const char *base = strrchr(argv[a], '/');
+        base = base ? base + 1 : argv[a];
         size_t flen;
         char *src = read_file(argv[a], &flen);
         if (!src) {
@@ -311,12 +352,14 @@ int main(int argc, char **argv)
             fprintf(stderr, "%s: no tests\n", argv[a]);
             return 1;
         }
-        int pass = 0, fail = 0;
+        int pass = 0, fail = 0, xf = 0, na = 0;
         for (size_t i = 0; i < tests->n; i++) {
             JVal *tc = tests->items[i];
             if (json_get(root, "xmlViolationTests")) {
-                /* These expect the infoset coercion of 13.2.9, which is
-                 * not part of the parser. */
+                /* These expect the "coercing an HTML DOM into an infoset"
+                 * tweaks of 13.2.9, an XML-pipeline step that is not part
+                 * of the HTML parser. */
+                na++;
                 continue;
             }
             JVal *in = json_get(tc, "input");
@@ -347,6 +390,7 @@ int main(int argc, char **argv)
             JVal *last = json_get(tc, "lastStartTag");
             size_t ns = states ? states->n : 1;
             int ok = 1;
+            int expected_fail = is_xfail(base, i + 1);
             for (size_t s = 0; s < ns; s++) {
                 int st = states ? state_of(states->items[s]->str) : HTML_STATE_DATA;
                 for (int bytewise = 0; bytewise < 2; bytewise++) {
@@ -358,11 +402,11 @@ int main(int argc, char **argv)
                     const char *w = want.data ? au_buf_cstr(&want) : "";
                     const char *we = wanterr.data ? au_buf_cstr(&wanterr) : "";
                     if (strcmp(got, w) || strcmp(goterr, we)) {
-                        if (ok && verbose) {
+                        if (ok && (verbose || !expected_fail)) {
                             JVal *desc = json_get(tc, "description");
-                            printf("FAIL %s: %s [state %d%s]\n--- input\n%s\n--- want\n%s%s--- got\n%s%s\n",
-                                   argv[a], desc ? desc->str : "", st, bytewise ? ", bytewise" : "",
-                                   input, w, we, got, goterr);
+                            printf("%s %s:%zu: %s [state %d%s]\n--- input\n%s\n--- want\n%s%s--- got\n%s%s\n",
+                                   expected_fail ? "XFAIL" : "FAIL", base, i + 1, desc ? desc->str : "", st,
+                                   bytewise ? ", bytewise" : "", input, w, we, got, goterr);
                         }
                         ok = 0;
                     }
@@ -372,21 +416,33 @@ int main(int argc, char **argv)
                     au_buf_free(&r.errpos);
                 }
             }
-            if (ok)
+            if (ok) {
                 pass++;
-            else
+                if (expected_fail) {
+                    printf("UNEXPECTED PASS %s:%zu\n", base, i + 1);
+                    unexpected++;
+                }
+            } else if (expected_fail) {
+                xf++;
+            } else {
                 fail++;
+            }
             au_buf_free(&want);
             au_buf_free(&wanterr);
             free(input);
         }
-        const char *base = strrchr(argv[a], '/');
-        printf("%-32s %5d passed %5d failed\n", base ? base + 1 : argv[a], pass, fail);
+        printf("%-32s %5d passed %5d failed %3d expected failures", base, pass, fail, xf);
+        if (na)
+            printf(" (%d not applicable: infoset coercion)", na);
+        printf("\n");
         total_pass += pass;
         total_fail += fail;
+        total_xfail += xf;
+        total_na += na;
         json_free(root);
         free(src);
     }
-    printf("tokenizer total: %d passed, %d failed\n", total_pass, total_fail);
-    return total_fail ? 1 : 0;
+    printf("tokenizer total: %d passed, %d failed, %d expected failures, %d not applicable\n", total_pass,
+           total_fail, total_xfail, total_na);
+    return (total_fail || unexpected) ? 1 : 0;
 }
