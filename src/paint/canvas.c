@@ -1,0 +1,451 @@
+/* The canvas: translation, clip stack, opacity groups, and the fill and
+ * image operations. Borders and shadows are in border.c. */
+#include "paint_internal.h"
+
+#include <math.h>
+#include <string.h>
+
+typedef struct Group {
+    AuSurface *surface; /* the group's pixels */
+    int ox, oy;         /* canvas pixel of the surface's top-left */
+    size_t clip_depth;  /* clip stack depth at begin */
+} Group;
+
+struct AuCanvas {
+    AuSurface *base;
+    float tx, ty;
+    AuIRect *clips; /* in base-surface pixels; clips[0] is the surface */
+    size_t nclips, clip_cap;
+    Group *groups;
+    size_t ngroups, group_cap;
+};
+
+AuCanvas *au_canvas_new(AuSurface *target)
+{
+    AuCanvas *c = au_calloc(sizeof *c);
+    c->base = target;
+    c->clip_cap = 8;
+    c->clips = au_alloc(c->clip_cap * sizeof(AuIRect));
+    AuIRect all = {0, 0, target->width, target->height};
+    c->clips[0] = all;
+    c->nclips = 1;
+    return c;
+}
+
+void au_canvas_free(AuCanvas *c)
+{
+    if (!c)
+        return;
+    while (c->ngroups)
+        au_canvas_group_end(c, 1.0f);
+    au_free(c->clips);
+    au_free(c->groups);
+    au_free(c);
+}
+
+AuSurface *au_canvas_target(AuCanvas *c)
+{
+    return c->base;
+}
+
+void au_canvas_translate(AuCanvas *c, float dx, float dy)
+{
+    c->tx += dx;
+    c->ty += dy;
+}
+
+void au_canvas_get_translation(const AuCanvas *c, float *dx, float *dy)
+{
+    *dx = c->tx;
+    *dy = c->ty;
+}
+
+static int round_px(float v)
+{
+    if (v > 1e8f)
+        return 100000000;
+    if (v < -1e8f)
+        return -100000000;
+    return (int)floorf(v + 0.5f);
+}
+
+void au_canvas_clip_push(AuCanvas *c, AuRect r)
+{
+    AuIRect ir = {round_px(r.x + c->tx), round_px(r.y + c->ty), round_px(r.x + r.w + c->tx),
+                  round_px(r.y + r.h + c->ty)};
+    if (c->nclips == c->clip_cap) {
+        c->clip_cap *= 2;
+        c->clips = au_realloc(c->clips, c->clip_cap * sizeof(AuIRect));
+    }
+    c->clips[c->nclips] = au_irect_intersect(c->clips[c->nclips - 1], ir);
+    c->nclips++;
+}
+
+void au_canvas_clip_pop(AuCanvas *c)
+{
+    if (c->nclips > 1)
+        c->nclips--;
+}
+
+AuIRect au_canvas_clip(const AuCanvas *c)
+{
+    return c->clips[c->nclips - 1];
+}
+
+AuSurface *au_canvas_current(AuCanvas *c, int *ox, int *oy, AuIRect *clip)
+{
+    AuIRect cl = c->clips[c->nclips - 1];
+    if (c->ngroups) {
+        Group *g = &c->groups[c->ngroups - 1];
+        *ox = g->ox;
+        *oy = g->oy;
+        AuIRect gr = {g->ox, g->oy, g->ox + g->surface->width, g->oy + g->surface->height};
+        cl = au_irect_intersect(cl, gr);
+        cl.x0 -= g->ox;
+        cl.x1 -= g->ox;
+        cl.y0 -= g->oy;
+        cl.y1 -= g->oy;
+        *clip = cl;
+        return g->surface;
+    }
+    *ox = *oy = 0;
+    *clip = cl;
+    return c->base;
+}
+
+/* ---- Groups ---- */
+
+void au_canvas_group_begin(AuCanvas *c, AuRect bounds)
+{
+    AuIRect b = {(int)floorf(bounds.x + c->tx), (int)floorf(bounds.y + c->ty),
+                 (int)ceilf(bounds.x + bounds.w + c->tx), (int)ceilf(bounds.y + bounds.h + c->ty)};
+    b = au_irect_intersect(b, c->clips[c->nclips - 1]);
+    if (c->ngroups) {
+        Group *pg = &c->groups[c->ngroups - 1];
+        AuIRect pr = {pg->ox, pg->oy, pg->ox + pg->surface->width, pg->oy + pg->surface->height};
+        b = au_irect_intersect(b, pr);
+    }
+    if (c->ngroups == c->group_cap) {
+        c->group_cap = c->group_cap ? c->group_cap * 2 : 4;
+        c->groups = au_realloc(c->groups, c->group_cap * sizeof(Group));
+    }
+    Group *g = &c->groups[c->ngroups++];
+    g->surface = au_surface_new(b.x1 - b.x0, b.y1 - b.y0);
+    g->ox = b.x0;
+    g->oy = b.y0;
+    g->clip_depth = c->nclips;
+}
+
+void au_canvas_group_end(AuCanvas *c, float opacity)
+{
+    if (!c->ngroups)
+        return;
+    Group g = c->groups[--c->ngroups];
+    c->nclips = g.clip_depth;
+    if (opacity > 1)
+        opacity = 1;
+    uint32_t a = opacity > 0 ? (uint32_t)(opacity * 256.0f + 0.5f) : 0;
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *dst = au_canvas_current(c, &ox, &oy, &clip);
+    /* The group surface sits at canvas pixel (g.ox, g.oy); in dst pixels
+     * that is (g.ox - ox, g.oy - oy). */
+    int gx = g.ox - ox, gy = g.oy - oy;
+    AuIRect r = {gx, gy, gx + g.surface->width, gy + g.surface->height};
+    r = au_irect_intersect(r, clip);
+    if (a && !au_irect_empty(r)) {
+        for (int y = r.y0; y < r.y1; y++) {
+            const AuPixel *src = g.surface->pixels + (size_t)(y - gy) * g.surface->stride + (r.x0 - gx);
+            AuPixel *d = dst->pixels + (size_t)y * dst->stride + r.x0;
+            int n = r.x1 - r.x0;
+            for (int i = 0; i < n; i++) {
+                uint32_t s = src[i];
+                if (!s)
+                    continue;
+                if (a < 256)
+                    s = au_px_scale(s, a);
+                d[i] = au_px_over(s, d[i]);
+            }
+        }
+    }
+    au_surface_free(g.surface);
+}
+
+/* ---- Rectangles ----
+ * A rectangle is filled directly, without the path rasterizer: each row
+ * gets a coverage factor for its vertical overlap, and the two edge
+ * columns get their horizontal overlap. */
+
+typedef struct {
+    int kind; /* 0 solid, 1 gradient */
+    uint32_t color;
+    AuGradientLut *lut;
+} Source;
+
+static void blend_row(AuSurface *s, int x, int y, int n, const Source *src, const uint8_t *cov)
+{
+    AuPixel *row = s->pixels + (size_t)y * s->stride + x;
+    if (src->kind == 0)
+        au_blend_solid_span(row, n, src->color, cov);
+    else
+        au_blend_gradient_span(row, x, y, n, src->lut, cov);
+}
+
+static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
+{
+    if (!(r.w > 0 && r.h > 0))
+        return;
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    float x0 = r.x + c->tx - ox, y0 = r.y + c->ty - oy;
+    float x1 = x0 + r.w, y1 = y0 + r.h;
+    if (x0 < -1e7f)
+        x0 = -1e7f;
+    if (y0 < -1e7f)
+        y0 = -1e7f;
+    if (x1 > 1e7f)
+        x1 = 1e7f;
+    if (y1 > 1e7f)
+        y1 = 1e7f;
+    AuIRect ir = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1)};
+    ir = au_irect_intersect(ir, clip);
+    if (au_irect_empty(ir))
+        return;
+    int n = ir.x1 - ir.x0;
+    uint8_t stackbuf[512];
+    uint8_t *cov = n <= (int)sizeof stackbuf ? stackbuf : au_alloc((size_t)n);
+    /* Horizontal coverage of the first and last columns. */
+    float lc = 1.0f - (x0 - floorf(x0)); /* left column, if partial */
+    float rc = x1 - floorf(x1);           /* right column, if partial */
+    int lcol = (int)floorf(x0), rcol = (int)floorf(x1);
+    for (int y = ir.y0; y < ir.y1; y++) {
+        float top = (float)y > y0 ? (float)y : y0;
+        float bot = (float)(y + 1) < y1 ? (float)(y + 1) : y1;
+        float vy = bot - top;
+        if (vy <= 0)
+            continue;
+        bool partial = vy < 0.999f || (lcol >= ir.x0 && lc < 0.999f) || (rcol < ir.x1 && rc > 0.001f);
+        if (!partial) {
+            blend_row(s, ir.x0, y, n, src, NULL);
+            continue;
+        }
+        uint8_t full = (uint8_t)(vy * 255.0f + 0.5f);
+        memset(cov, full, (size_t)n);
+        if (lcol == rcol) {
+            /* Narrower than one pixel. */
+            if (lcol >= ir.x0 && lcol < ir.x1)
+                cov[lcol - ir.x0] = (uint8_t)((x1 - x0) * vy * 255.0f + 0.5f);
+        } else {
+            if (lcol >= ir.x0 && lcol < ir.x1)
+                cov[lcol - ir.x0] = (uint8_t)(lc * vy * 255.0f + 0.5f);
+            if (rcol >= ir.x0 && rcol < ir.x1)
+                cov[rcol - ir.x0] = (uint8_t)(rc * vy * 255.0f + 0.5f);
+        }
+        blend_row(s, ir.x0, y, n, src, cov);
+    }
+    if (cov != stackbuf)
+        au_free(cov);
+}
+
+void au_fill_rect(AuCanvas *c, AuRect r, AuColor color)
+{
+    Source src = {0, au_premul(color), NULL};
+    if (!(src.color >> 24))
+        return;
+    fill_rect_source(c, r, &src);
+}
+
+void au_fill_rect_gradient(AuCanvas *c, AuRect r, const AuGradient *g)
+{
+    int ox, oy;
+    AuIRect clip;
+    au_canvas_current(c, &ox, &oy, &clip);
+    AuGradientLut *lut = au_alloc(sizeof *lut);
+    au_gradient_prepare(g, c->tx - ox, c->ty - oy, lut);
+    Source src = {1, 0, lut};
+    fill_rect_source(c, r, &src);
+    au_free(lut);
+}
+
+/* ---- Paths ---- */
+
+typedef struct {
+    AuSurface *s;
+    const Source *src;
+} PathCtx;
+
+static void path_span(void *ctx, int y, int x, int n, const uint8_t *cov)
+{
+    PathCtx *p = ctx;
+    blend_row(p->s, x, y, n, p->src, cov);
+}
+
+static void fill_path_source(AuCanvas *c, const AuPath *p, AuFillRule rule, const Source *src)
+{
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    PathCtx ctx = {s, src};
+    au_raster_path(p, c->tx - ox, c->ty - oy, rule, clip, path_span, &ctx);
+}
+
+void au_fill_path(AuCanvas *c, const AuPath *p, AuFillRule rule, AuColor color)
+{
+    Source src = {0, au_premul(color), NULL};
+    if (!(src.color >> 24))
+        return;
+    fill_path_source(c, p, rule, &src);
+}
+
+void au_fill_path_gradient(AuCanvas *c, const AuPath *p, AuFillRule rule, const AuGradient *g)
+{
+    int ox, oy;
+    AuIRect clip;
+    au_canvas_current(c, &ox, &oy, &clip);
+    AuGradientLut *lut = au_alloc(sizeof *lut);
+    au_gradient_prepare(g, c->tx - ox, c->ty - oy, lut);
+    Source src = {1, 0, lut};
+    fill_path_source(c, p, rule, &src);
+    au_free(lut);
+}
+
+void au_fill_rounded_rect(AuCanvas *c, AuRect r, const AuRadii *radii, AuColor color)
+{
+    if (au_radii_zero(radii)) {
+        au_fill_rect(c, r, color);
+        return;
+    }
+    AuPath p;
+    au_path_init(&p);
+    au_path_rounded_rect(&p, r, radii, false);
+    au_fill_path(c, &p, AU_FILL_NONZERO, color);
+    au_path_free(&p);
+}
+
+/* ---- Masks ---- */
+
+/* Coverage gamma for text: linear coverage makes dark-on-light text look
+ * thin; this lifts mid values a little. */
+static uint8_t text_gamma[256];
+static bool text_gamma_ready;
+
+void au_draw_mask(AuCanvas *c, const uint8_t *mask, int w, int h, int stride, float x, float y,
+                  AuColor color)
+{
+    uint32_t src = au_premul(color);
+    if (!(src >> 24) || w <= 0 || h <= 0)
+        return;
+    if (!text_gamma_ready) {
+        for (int i = 0; i < 256; i++)
+            text_gamma[i] = (uint8_t)(powf(i / 255.0f, 1.0f / 1.2f) * 255.0f + 0.5f);
+        text_gamma_ready = true;
+    }
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    int px = round_px(x + c->tx) - ox, py = round_px(y + c->ty) - oy;
+    AuIRect r = {px, py, px + w, py + h};
+    r = au_irect_intersect(r, clip);
+    if (au_irect_empty(r))
+        return;
+    uint8_t buf[256];
+    int n = r.x1 - r.x0;
+    uint8_t *cov = n <= (int)sizeof buf ? buf : au_alloc((size_t)n);
+    for (int yy = r.y0; yy < r.y1; yy++) {
+        const uint8_t *m = mask + (size_t)(yy - py) * stride + (r.x0 - px);
+        for (int i = 0; i < n; i++)
+            cov[i] = text_gamma[m[i]];
+        au_blend_solid_span(s->pixels + (size_t)yy * s->stride + r.x0, n, src, cov);
+    }
+    if (cov != buf)
+        au_free(cov);
+}
+
+/* ---- Images ----
+ * Destination pixels map back to source coordinates in 16.16 fixed point.
+ * Bilinear filtering samples pixel centres and clamps at the edges of the
+ * source rectangle.
+ * AltiVec: the bilinear blend is four multiplies per pixel and vectorises
+ * well. */
+
+static uint32_t bilerp(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11, uint32_t fx, uint32_t fy)
+{
+    uint32_t top = au_px_scale_trunc(p00, 256 - fx) + au_px_scale_trunc(p10, fx);
+    uint32_t bot = au_px_scale_trunc(p01, 256 - fx) + au_px_scale_trunc(p11, fx);
+    return au_px_scale_trunc(top, 256 - fy) + au_px_scale_trunc(bot, fy);
+}
+
+void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, AuFilter filter,
+                   float opacity)
+{
+    AuIRect all = {0, 0, img->width, img->height};
+    src = au_irect_intersect(src, all);
+    if (au_irect_empty(src) || !(dst.w > 0 && dst.h > 0) || !(opacity > 0))
+        return;
+    if (opacity > 1)
+        opacity = 1;
+    uint32_t a = (uint32_t)(opacity * 256.0f + 0.5f);
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    float x0 = dst.x + c->tx - ox, y0 = dst.y + c->ty - oy;
+    /* Images snap to whole pixels, as browsers paint them. */
+    AuIRect d = {round_px(x0), round_px(y0), round_px(x0 + dst.w), round_px(y0 + dst.h)};
+    if (d.x1 <= d.x0)
+        d.x1 = d.x0 + 1;
+    if (d.y1 <= d.y0)
+        d.y1 = d.y0 + 1;
+    AuIRect r = au_irect_intersect(d, clip);
+    if (au_irect_empty(r))
+        return;
+    int sw = src.x1 - src.x0, sh = src.y1 - src.y0;
+    int dw = d.x1 - d.x0, dh = d.y1 - d.y0;
+    /* Source step per destination pixel, 16.16. */
+    int32_t stepx = (int32_t)(((int64_t)sw << 16) / dw);
+    int32_t stepy = (int32_t)(((int64_t)sh << 16) / dh);
+    for (int y = r.y0; y < r.y1; y++) {
+        AuPixel *drow = s->pixels + (size_t)y * s->stride;
+        if (filter == AU_FILTER_NEAREST) {
+            int32_t sy = (int32_t)(((int64_t)(y - d.y0) * stepy + stepy / 2) >> 16);
+            if (sy >= sh)
+                sy = sh - 1;
+            const AuPixel *srow = img->pixels + (size_t)(src.y0 + sy) * img->stride + src.x0;
+            int32_t fx = (r.x0 - d.x0) * stepx + stepx / 2;
+            for (int x = r.x0; x < r.x1; x++, fx += stepx) {
+                int32_t sx = fx >> 16;
+                if (sx >= sw)
+                    sx = sw - 1;
+                uint32_t p = srow[sx];
+                if (!p)
+                    continue;
+                if (a < 256)
+                    p = au_px_scale(p, a);
+                drow[x] = au_px_over(p, drow[x]);
+            }
+        } else {
+            /* Centre of destination pixel, mapped, minus half a source
+             * pixel, gives the top-left sample. */
+            int32_t fy = (int32_t)((int64_t)(y - d.y0) * stepy + stepy / 2) - 32768;
+            int32_t iy = fy >> 16;
+            uint32_t wy = (uint32_t)(fy & 0xFFFF) >> 8;
+            int32_t y0i = iy < 0 ? 0 : (iy >= sh ? sh - 1 : iy);
+            int32_t y1i = iy + 1 < 0 ? 0 : (iy + 1 >= sh ? sh - 1 : iy + 1);
+            const AuPixel *r0 = img->pixels + (size_t)(src.y0 + y0i) * img->stride + src.x0;
+            const AuPixel *r1 = img->pixels + (size_t)(src.y0 + y1i) * img->stride + src.x0;
+            int32_t fx = (r.x0 - d.x0) * stepx + stepx / 2 - 32768;
+            for (int x = r.x0; x < r.x1; x++, fx += stepx) {
+                int32_t ix = fx >> 16;
+                uint32_t wx = (uint32_t)(fx & 0xFFFF) >> 8;
+                int32_t x0i = ix < 0 ? 0 : (ix >= sw ? sw - 1 : ix);
+                int32_t x1i = ix + 1 < 0 ? 0 : (ix + 1 >= sw ? sw - 1 : ix + 1);
+                uint32_t p = bilerp(r0[x0i], r0[x1i], r1[x0i], r1[x1i], wx, wy);
+                if (!p)
+                    continue;
+                if (a < 256)
+                    p = au_px_scale(p, a);
+                drow[x] = au_px_over(p, drow[x]);
+            }
+        }
+    }
+}
