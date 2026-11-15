@@ -324,6 +324,7 @@ struct AuLayout {
     float vw, vh;      /* viewport */
     float doc_w, doc_h;
     bool need_build, need_layout, built_once;
+    uint32_t build_count, layout_count; /* box tree builds and layout passes since creation */
     /* fonts */
     LFont *font_hash[64];
     LArena font_arena;
@@ -341,7 +342,7 @@ struct AuLayout {
     uint32_t nabs, abs_cap;
     /* statistics */
     AuLayoutStats stats;
-    uint32_t tree_builds, layout_passes, intrinsic_runs; /* since creation (stats is cleared with the tree) */
+    uint32_t intrinsic_runs; /* since creation (stats is cleared with the tree) */
     int depth;
     float view_scroll_x, view_scroll_y; /* during paint and hit testing */
     /* Boxes placed against the viewport (position: fixed outside any

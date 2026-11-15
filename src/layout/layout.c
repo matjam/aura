@@ -1602,7 +1602,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->need_build) {
         /* Keep inner scroll offsets across the rebuild. */
         l_build_tree(L);
-        L->tree_builds++;
+        L->build_count++;
         L->need_build = false;
         L->need_layout = true;
         L->need_restack = true;
@@ -1625,8 +1625,8 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         if (L->full_layout)
             forget_layouts(L);
         L->gen++;
-        L->layout_passes++;
         layout_root(L);
+        L->layout_count++;
         L->full_layout = false;
         L->need_layout = false;
         L->need_restack = true;
@@ -1652,6 +1652,12 @@ void au_layout_document_size(const AuLayout *L, float *w, float *h)
     *h = L->doc_h;
 }
 
+void au_layout_pass_counts(const AuLayout *L, uint32_t *builds, uint32_t *layouts)
+{
+    *builds = L->build_count;
+    *layouts = L->layout_count;
+}
+
 void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
 {
     *s = L->stats;
@@ -1675,8 +1681,8 @@ void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
         }
     }
     s->tree_bytes = L->tree.total;
-    s->tree_builds = L->tree_builds;
-    s->layout_passes = L->layout_passes;
+    s->tree_builds = L->build_count;
+    s->layout_passes = L->layout_count;
     s->intrinsic_runs = L->intrinsic_runs;
 }
 

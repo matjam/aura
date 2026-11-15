@@ -163,6 +163,7 @@ struct AuCssResolver {
     bool has_has;
     bool styled_once;
     bool full_restyle;
+    uint32_t styled_count; /* elements styled since creation (au_css_resolver_styled_count) */
 
     RuleEntry *entries;
     uint32_t nentries, entries_cap;
@@ -1696,6 +1697,7 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
         if (forced) {
             const AuStyle *ps = pe ? au_element_style(pe) : NULL;
             AuStyle *s = compute_element(r, el, ps, &r->bloom);
+            r->styled_count++;
             if (!pe)
                 r->root_style = s;
             store_style(el, s);
@@ -1725,6 +1727,8 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
 }
 
 void au_css_style_document(AuCssResolver *r, AuDocument *doc) { style_pass(r, doc, false); }
+
+uint32_t au_css_resolver_styled_count(const AuCssResolver *r) { return r->styled_count; }
 
 void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 {
