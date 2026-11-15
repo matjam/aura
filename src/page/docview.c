@@ -345,8 +345,7 @@ static void parse_sheet(AuDocView *dv, SheetSrc *s, bool keep_text)
         au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
     if (!keep_text) {
         au_free(s->text);
-        s->text = NULL;
-        s->len = 0;
+        s->text = NULL; /* len stays: the size the sheet had (au_docview_memory_estimate) */
     }
     dv->sheets_dirty = true;
     if (s->parent) {
@@ -555,7 +554,7 @@ size_t au_docview_memory_estimate(AuDocView *dv)
     for (uint32_t i = 0; i < dv->nslots; i++)
         if (dv->slots[i].src)
             sheet_bytes(dv->slots[i].src, &css);
-    n += css * 3; /* the text and the rules parsed from it */
+    n += css * 4; /* the rules parsed from the text (about four times its size); the text is not kept */
     AuLayoutStats ls;
     au_layout_stats(dv->layout, &ls);
     n += ls.tree_bytes + ls.frag_bytes;
