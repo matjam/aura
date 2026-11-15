@@ -542,6 +542,20 @@ static bool cb_confirm(void *ctx, AuPage *p, const char *message)
     return !h->confirm || h->confirm(h->ctx, t->win, message);
 }
 
+/* Go Back on the blocked-site page: the previous entry, or, in a tab
+ * opened for that address alone, close the tab. */
+static void cb_go_back(void *ctx, AuPage *p)
+{
+    AuTab *t = ctx;
+    (void)p;
+    if (au_nav_can_go(&t->nav, -1)) {
+        if (t->win->tabs[t->win->active] == t)
+            au_bw_go(t->win, -1);
+    } else if (t->win->ntabs > 1) {
+        t->close_pending = true;
+    }
+}
+
 /* The page's load turned out to be a file to save. */
 static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff)
 {
@@ -808,7 +822,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
-                          cb_submit_post, cb_popup, cb_choose_file, cb_confirm};
+                          cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};
     t->page = au_page_new(&env, &cb);
     if (index < 0 || index > w->ntabs)
         index = w->ntabs;
@@ -1700,6 +1714,11 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
         float p = s.progress < 0 ? 0 : s.progress > 1 ? 1 : s.progress;
         snprintf(progress, sizeof progress, "Loading, %d%%", (int)(p * 100.0f + 0.5f));
         s.progress_text = progress;
+    }
+    if (t) {
+        AuPageStats ps;
+        au_page_stats(t->page, &ps);
+        s.blocked = (int)ps.blocked;
     }
     s.throbber_frame = w->throbber_frame;
     s.draw_native_standins = w->native_standins;

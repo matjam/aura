@@ -46,7 +46,9 @@ typedef enum AuCommand {
     AU_CMD_DUPLICATE_TAB,
     /* downloads */
     AU_CMD_SAVE_LINK,
-    AU_CMD_SAVE_IMAGE
+    AU_CMD_SAVE_IMAGE,
+    /* the page: "Turn Off (On) Blocking for This Site" */
+    AU_CMD_TOGGLE_BLOCKING
 } AuCommand;
 
 typedef enum AuContextKind {
@@ -90,5 +92,14 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
 void au_context_menu_free(AuContextMenu *m);
 /* Runs cmd from menu m. Returns false when it is the shell's to do. */
 bool au_bw_context_command(AuBrowserWindow *w, const AuContextMenu *m, AuCommand cmd);
+
+/* Content blocking per site: the registrable domains in the
+ * blocking.sites_off preference. au_bw_site_blocking says whether the
+ * active page is a site blocking can apply to (http or https, with the
+ * blocking preference on) and whether it is switched off there;
+ * au_bw_toggle_site_blocking flips it, bumps prefs_gen (the shell saves
+ * the preferences and passes them to the blocklists) and reloads. */
+bool au_bw_site_blocking(AuBrowserWindow *w, bool *off);
+void au_bw_toggle_site_blocking(AuBrowserWindow *w);
 
 #endif

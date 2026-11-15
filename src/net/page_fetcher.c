@@ -2,6 +2,7 @@
  * notes in loader.h. Only page.h's fetcher types are used from
  * src/browser. */
 #include "loader.h"
+#include "blocklist.h"
 #include "../browser/page.h"
 
 #include <stdio.h>
@@ -195,6 +196,7 @@ static void pf_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *in
     fi.error = error_of(err);
     fi.status = info->status;
     fi.mixed = info->mixed;
+    fi.blocked_reason = info->blocked_reason;
     fi.message = "";
     /* No TCP/IP at all reads better as such than as a DNS failure. */
     if (f->offline && (err == AU_NET_ERR_DNS || err == AU_NET_ERR_CONNECT)) {
@@ -396,6 +398,17 @@ static bool pf_allow_cert(void *ctx, const char *host, const uint8_t sha256[32])
     return au_net_allow_cert(au_net_loader_net(f->l), host, sha256);
 }
 
+static void pf_allow_blocked(void *ctx, const char *url)
+{
+    AuNetPageFetcher *f = ctx;
+    AuBlocklist *bl = au_net_loader_blocklist(f->l);
+    AuUrl u;
+    if (!bl || !au_url_parse(&u, url, NULL))
+        return;
+    au_blocklist_allow_session(bl, u.host);
+    au_url_free(&u);
+}
+
 void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *out)
 {
     memset(out, 0, sizeof *out);
@@ -405,6 +418,7 @@ void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *ou
     out->poll = pf_poll;
     out->status = pf_status;
     out->allow_cert = pf_allow_cert;
+    out->allow_blocked = pf_allow_blocked;
 }
 
 AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f)

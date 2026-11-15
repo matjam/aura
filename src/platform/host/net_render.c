@@ -16,6 +16,7 @@
  * Cookies and HSTS state come from and go back to the profile folder
  * (see net_host.h). Prints what was fetched and how long it took. */
 #include "host.h"
+#include "net/blocklist.h"
 #include "net/loader.h"
 #include "net_host.h"
 #include "png.h"
@@ -240,6 +241,8 @@ int au_host_net_render_main(int argc, char **argv)
     const char *url = NULL, *out = "page.png";
     int w = 800, h = 0, scroll = 0;
     bool scripts = false;
+    const char *blocklist_file = NULL;
+    struct AuBlocklist *blocklist = NULL;
     int wait_ms = 5000;
     const char *evals[16];
     int nevals = 0;
@@ -260,6 +263,8 @@ int au_host_net_render_main(int argc, char **argv)
             scroll = atoi(argv[++i]);
         else if (!strcmp(a, "--script"))
             scripts = true;
+        else if (!strcmp(a, "--blocklist") && i + 1 < argc)
+            blocklist_file = argv[++i];
         else if (!strcmp(a, "--wait") && i + 1 < argc)
             wait_ms = atoi(argv[++i]);
         else if (!strcmp(a, "--eval") && i + 1 < argc && nevals < 16)
@@ -281,6 +286,8 @@ int au_host_net_render_main(int argc, char **argv)
     memset(&nr, 0, sizeof nr);
     au_buf_init(&nr.body);
     nr.l = au_net_loader_new(ses.net);
+    if (blocklist_file && (blocklist = au_host_blocklist_open(blocklist_file)) != NULL)
+        au_net_loader_set_blocklist(nr.l, blocklist);
     AuHostLoader *files = au_host_loader_new();
     au_host_loader_interface(files, &nr.image_decoder);
 
@@ -378,6 +385,10 @@ int au_host_net_render_main(int argc, char **argv)
     au_docview_free(nr.dv);
     au_fontset_free(fonts);
 done:
+    if (blocklist) {
+        au_host_blocklist_report(blocklist);
+        au_blocklist_free(blocklist);
+    }
     au_net_loader_free(nr.l);
     au_host_loader_free(files);
     au_buf_free(&nr.body);

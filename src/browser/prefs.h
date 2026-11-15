@@ -23,6 +23,7 @@
 typedef enum { AU_TABS_TOP, AU_TABS_LEFT } AuTabPosition;
 typedef enum { AU_STARTUP_HOME, AU_STARTUP_BLANK, AU_STARTUP_RESTORE } AuStartup;
 typedef enum { AU_COOKIES_ALL, AU_COOKIES_SAME_SITE, AU_COOKIES_NONE } AuCookiePolicy;
+typedef enum { AU_BLOCK_UPDATE_DAILY, AU_BLOCK_UPDATE_WEEKLY, AU_BLOCK_UPDATE_NEVER } AuBlockUpdate;
 
 /* Limits the window and the file parser apply. */
 #define AU_TAB_COLUMN_MIN 100
@@ -89,6 +90,15 @@ typedef struct AuPrefs {
     /* URLs other applications open (the GURL Apple event) go to a new
      * window rather than a new tab in the front window. */
     bool external_new_window;
+
+    /* Content blocking (block_trackers is the switch; src/net/blocklist.h).
+     * block_lists: ids of the catalogue lists in use, separated by spaces.
+     * block_custom: https URLs of lists the user added. block_allow and
+     * block_deny: the user's own domains, never and always blocked.
+     * block_sites_off: registrable domains of sites where nothing is
+     * blocked. */
+    char *block_lists, *block_custom, *block_allow, *block_deny, *block_sites_off;
+    AuBlockUpdate block_update; /* how often the lists' publishers are asked */
 
     /* Keys this version does not know, kept for writing back. */
     AuPrefsExtra *extra;

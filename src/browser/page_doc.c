@@ -515,6 +515,11 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     } else {
         if (info && info->mixed && p->have_security)
             p->mixed = true;
+        if (info && info->blocked_reason) {
+            p->stats.blocked++;
+            if (p->cb.load_progress) /* the status bar shows the count */
+                p->cb.load_progress(p->cb.ctx, p);
+        }
         p->completed++;
         au_docview_resource_done(p->dv, f->id, ok);
         report_progress(p);
@@ -2210,6 +2215,26 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
         au_buf_puts(&b, "<p>Check the proxy settings in Preferences &gt; Network.</p>");
         break;
     case AU_FETCH_ERR_BLOCKED:
+        if (info && info->blocked_reason) {
+            /* A blocklist names this site ("blocked: LIST"). Nothing was
+             * sent to it. */
+            const char *list = info->blocked_reason;
+            if (!strncmp(list, "blocked: ", 9))
+                list += 9;
+            title = "Site blocked";
+            error_head(p, &b, title, "Aura blocked this site");
+            au_buf_puts(&b, "<p><b>");
+            html_escape_str(&b, host);
+            au_buf_puts(&b, "</b> is on a blocklist you use (");
+            html_escape_str(&b, list);
+            au_buf_puts(&b, "), so Aura did not connect to it. Lists name sites that serve advertising or "
+                            "tracking, or that are reported as harmful.</p>"
+                            "<p class=action><a href='aura-action:back'>Go Back</a></p>"
+                            "<p class=action><a href='aura-action:unblock'>Visit Anyway (this session)</a></p>"
+                            "<p class=note>Visiting anyway opens this site until you quit Aura. To allow it for "
+                            "good, add it under Preferences &gt; Blocking.</p>");
+            break;
+        }
         title = "Blocked";
         error_head(p, &b, title, "Aura blocked this page");
         au_buf_puts(&b, "<p>The request was refused by Aura's security rules (for example, plain HTTP to a site that "
@@ -2944,6 +2969,15 @@ static void internal_action(AuPage *p, const char *what)
         au_page_reload(p);
     } else if (!strcmp(what, "retry")) {
         au_page_reload(p);
+    } else if (!strcmp(what, "unblock")) {
+        const AuPageFetcher *fe = fetcher_for(p, p->url);
+        if (!fe || !fe->allow_blocked)
+            return;
+        fe->allow_blocked(fe->ctx, p->url);
+        au_page_reload(p);
+    } else if (!strcmp(what, "back")) {
+        if (p->cb.go_back)
+            p->cb.go_back(p->cb.ctx, p);
     }
 }
 
