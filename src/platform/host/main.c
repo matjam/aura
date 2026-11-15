@@ -132,6 +132,8 @@ static int usage(void)
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
             "                        in the page) save:FILE (the page source) console;\n"
             "                        --no-doc-cache makes Back and Forward load again)\n"
+            "                        (developer tools: netlog[:details] perf eval:EXPR source[:FIRST,COUNT]\n"
+            "                        devshot:source|console|network|perf:FILE.png)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
@@ -811,7 +813,7 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             const char *line = au_page_console_line(t->page, i, &level);
             printf("console %d: %s\n", level, line ? line : "");
         }
-    } else {
+    } else if (!au_host_dev_action(w, o->net ? ses->net : NULL, a)) { /* netlog, perf, eval:, source, devshot: */
         fprintf(stderr, "aura-host: unknown --do action %s\n", a);
     }
     AuTab *t = au_bw_active_tab(w);
@@ -880,6 +882,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_net_apply_prefs(ses.net, &b->prefs);
         o->cache = au_cache_new(au_net_cache_bytes_from_prefs(&b->prefs));
         au_net_set_cache(ses.net, o->cache);
+        au_net_set_trace_headers(ses.net, true); /* --do netlog:details shows headers */
         loader = au_net_loader_new(ses.net);
         if (o->blocklist && (blocklist = au_host_blocklist_open(o->blocklist)) != NULL)
             au_net_loader_set_blocklist(loader, blocklist);

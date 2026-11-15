@@ -29,6 +29,7 @@ static void replaced_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_
 
 const LFcOps l_fc_flow = {l_flow_layout, l_flow_intrinsic};
 const LFcOps l_fc_flex = {l_flex_layout, l_flex_intrinsic};
+const LFcOps l_fc_grid = {l_grid_layout, l_grid_intrinsic};
 const LFcOps l_fc_table = {l_table_layout, l_table_intrinsic};
 const LFcOps l_fc_replaced = {replaced_layout, replaced_intrinsic};
 
@@ -36,6 +37,7 @@ const LFcOps *l_fc_ops(const LBlock *b)
 {
     switch (b->b.inner) {
     case LI_FLEX: return &l_fc_flex;
+    case LI_GRID: return &l_fc_grid;
     case LI_TABLE: return &l_fc_table;
     case LI_REPLACED: return &l_fc_replaced;
     default: return &l_fc_flow; /* rows, row groups, columns: laid out by their table */
@@ -248,7 +250,7 @@ float l_atomic_baseline(const LBlock *k)
         float bl = !isnan(k->baseline) ? k->baseline : k->h - k->bw[2] - k->p[2];
         return k->m[0] + bl;
     }
-    if (k->b.inner == LI_FLEX && !isnan(k->baseline))
+    if ((k->b.inner == LI_FLEX || k->b.inner == LI_GRID) && !isnan(k->baseline))
         return k->m[0] + k->baseline;
     if (isnan(k->last_baseline) || (k->b.flags & LF_CLIPS))
         return mh;
@@ -1117,6 +1119,8 @@ static void layout_abspos(AuLayout *L, LBlock *b, LBox *cb)
     LBox *ref = ref_block(cb);
     LArea r;
     cb_rect(L, cb, &r);
+    if (L->ngrid_abs)
+        l_grid_abspos_area(L, b, &r);
     /* Static position into the reference block's coordinates. */
     LBlock *g = l_geom_parent(&b->b);
     float gx = 0, gy = 0, rx = 0, ry = 0;
@@ -1262,6 +1266,7 @@ void au_layout_free(AuLayout *L)
     au_free(L->items);
     au_free(L->segs);
     au_free(L->abs);
+    au_free(L->grid_abs);
     au_free(L->hidden);
     au_free(L);
 }

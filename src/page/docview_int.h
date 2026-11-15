@@ -85,8 +85,8 @@ struct AuDocView {
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     /* scripts (script.c) */
-    AuDocScript *script; /* this document's, while scripting is on */
-    bool scripting;      /* the setting, applied at begin */
+    AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
+    char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
@@ -105,6 +105,7 @@ struct AuDocView {
     float goal_x;        /* textarea: the x kept by up and down (-1: none) */
     AuElement *pressed;  /* a button held down (referenced), or NULL */
     bool submitting;     /* a submission is being made (no nesting) */
+    AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
 };
 
 

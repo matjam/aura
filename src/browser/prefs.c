@@ -129,7 +129,9 @@ void au_prefs_init(AuPrefs *p)
     p->history_days = 30;
     p->http_proxy_port = 8080;
     p->https_proxy_port = 8080;
-    au_prefs_set_str(&p->user_agent, AU_DEFAULT_USER_AGENT);
+    /* Empty: the default (au_prefs_user_agent), so a new Aura version
+     * sends its own string rather than one saved by an older version. */
+    au_prefs_set_str(&p->user_agent, "");
     /* 8 MB: the HTTP cache keeps entries up to a quarter of it, and a
      * Wikipedia article's HTML (1.3 MB) and script bundle must fit for
      * Back to be served from memory. The image budget per page is the
@@ -281,6 +283,11 @@ static void put_escaped(AuBuf *b, const char *s)
     }
 }
 
+const char *au_prefs_user_agent(const AuPrefs *p)
+{
+    return p && p->user_agent && p->user_agent[0] ? p->user_agent : AU_DEFAULT_USER_AGENT;
+}
+
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out)
 {
     au_buf_puts(out, "# Aura preferences. One key=value per line.\n");
@@ -370,5 +377,9 @@ bool au_prefs_parse(AuPrefs *p, const char *data, size_t len)
     }
     au_buf_free(&key);
     au_buf_free(&val);
+    /* A file saved by a version that stored its default string. */
+    if (p->user_agent && (!strcmp(p->user_agent, AU_DEFAULT_USER_AGENT) ||
+                          !strncmp(p->user_agent, AU_OLD_USER_AGENT_PREFIX, strlen(AU_OLD_USER_AGENT_PREFIX))))
+        au_prefs_set_str(&p->user_agent, "");
     return ok;
 }

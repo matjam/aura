@@ -19,8 +19,11 @@ enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FI
 enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
        EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
-       VIEW_TABS_LEFT, VIEW_DEBUG = 12 };
-enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_NETWORK, DEBUG_TIMINGS };
+       VIEW_TABS_LEFT };
+/* The Develop menu (kDebugMenu): the developer windows, then the debug
+ * items. */
+enum { DEV_SOURCE = 1, DEV_CONSOLE, DEV_NETWORK, DEV_PERF, DEBUG_SCENE = 6, DEBUG_FONTS, DEBUG_BENCH, DEBUG_NETWORK,
+       DEBUG_TIMINGS };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
 enum { WIN_DOWNLOADS_ITEM = 1, WIN_COOKIES_ITEM, WIN_FIRST_WINDOW = 4 };
@@ -328,8 +331,11 @@ void mac_adjust_menus(void)
         EnableItem(edit, EDIT_FIND);
     else
         DisableItem(edit, EDIT_FIND);
+    bool dev_front = fm && fm->kind >= WIN_SOURCE;
+    if (dev_front)
+        EnableItem(edit, EDIT_FIND);
     for (short i = EDIT_FIND_AGAIN; i <= EDIT_FIND_PREVIOUS; i++) {
-        if (t && g_browser->find_text)
+        if (dev_front ? devwin_can_find_again(fm) : (t && g_browser->find_text))
             EnableItem(edit, i);
         else
             DisableItem(edit, i);
@@ -465,13 +471,21 @@ static void do_menu(long choice)
             prefswin_show();
             break;
         }
+        /* Find in a developer window searches its text. */
+        MacWin *dev = mac_win_of(FrontWindow());
+        if (dev && dev->kind < WIN_SOURCE)
+            dev = NULL;
         if (item == EDIT_FIND) {
-            if (b)
+            if (dev)
+                devwin_find(dev);
+            else if (b)
                 browserwin_find(b);
             break;
         }
         if (item == EDIT_FIND_AGAIN || item == EDIT_FIND_PREVIOUS) {
-            if (w && !au_bw_find_again(w, item == EDIT_FIND_AGAIN))
+            if (dev)
+                devwin_find_again(dev, item == EDIT_FIND_AGAIN);
+            else if (w && !au_bw_find_again(w, item == EDIT_FIND_AGAIN))
                 SysBeep(1);
             break;
         }
@@ -493,10 +507,7 @@ static void do_menu(long choice)
             if (w)
                 au_bw_stop(w);
             break;
-        case VIEW_SOURCE:
-            if (w)
-                au_bw_view_source(w);
-            break;
+        case VIEW_SOURCE: devwin_show(WIN_SOURCE); break;
         case VIEW_ZOOM_IN:
         case VIEW_ZOOM_OUT:
         case VIEW_ZOOM_RESET:
@@ -512,6 +523,10 @@ static void do_menu(long choice)
         break;
     case kDebugMenu:
         switch (item) {
+        case DEV_SOURCE:
+        case DEV_CONSOLE:
+        case DEV_NETWORK:
+        case DEV_PERF: devwin_show((WinKind)(WIN_SOURCE + item - DEV_SOURCE)); break;
         case DEBUG_SCENE: mac_open_url("about:scene", false); break;
         case DEBUG_FONTS: mac_open_url("about:fonts", false); break;
         case DEBUG_BENCH:
@@ -781,7 +796,7 @@ static void key_down(EventRecord *ev)
             return;
         }
         if ((ch == 'g' || ch == 'G') && (ev->modifiers & shiftKey)) {
-            if (b && g_browser->find_text) {
+            if ((m && m->kind >= WIN_SOURCE) ? devwin_can_find_again(m) : (b && g_browser->find_text != NULL)) {
                 HiliteMenu(kEditMenu);
                 do_menu(((long)kEditMenu << 16) | EDIT_FIND_PREVIOUS);
             }
@@ -906,13 +921,6 @@ int main(void)
         mac_out_of_memory(1024);
     SetMenuBar(mbar);
     AppendResMenu(GetMenuHandle(kAppleMenu), 'DRVR');
-    MenuHandle debug = GetMenu(kDebugMenu);
-    if (debug) {
-        InsertMenu(debug, -1);
-        MenuHandle view = GetMenuHandle(kViewMenu);
-        SetItemCmd(view, VIEW_DEBUG, 0x1B);
-        SetItemMark(view, VIEW_DEBUG, (CharParameter)kDebugMenu);
-    }
     DrawMenuBar();
     mac_context_init();
 
