@@ -8,28 +8,14 @@
  * (disk full, locked disk, damaged archive, Command-period) removes the
  * partial folder and says what happened.
  *
- * The archive (big-endian; tools/make-sea.py writes it):
- *
- *   header   "AuraSEA1", u32 entry count, u32 total bytes of all forks,
- *            Pascal string in 32 bytes: the folder's name
- *   entry    u32 'AuEn', u8 kind (0 folder, 1 file), u8 0, u16 path length,
- *            type, creator, u16 Finder flags, u16 0,
- *            u32 creation date, u32 modification date (Mac OS seconds),
- *            data fork: u32 length, u32 compressed length, u32 CRC-32,
- *            resource fork: the same three,
- *            the path (Mac Roman, components separated by ':', relative
- *            to the folder), u32 CRC-32 of the entry up to here,
- *            the data fork, then the resource fork, each as a raw deflate
- *            stream (nothing for an empty fork)
- *   trailer  the data fork's last 20 bytes: "AuraSEA1", u32 offset of the
- *            header in the fork, u32 length of the archive from the header
- *            to the trailer, u32 CRC-32 of the header
+ * sea_archive.h describes the archive and sea_archive.c reads it (portable
+ * code, which the host tests run too); this file is the Mac OS part.
  *
  * Forks are streamed through two fixed buffers and Aura's inflate decoder
  * (src/codec), so the memory needed does not depend on the archive. */
 #include <Multiverse.h>
 
-#include "codec/codec.h"
+#include "sea_archive.h"
 
 #include <string.h>
 
@@ -37,15 +23,8 @@ enum {
     kAlertStop = 128,   /* ^0 ^1, OK */
     kAlertRename = 129, /* ^0 exists, use ^1? OK, Cancel */
 
-    kErrDamaged = 1, /* the archive is not what the packer wrote */
-    kErrStopped = 2, /* Command-period */
-
-    kInSize = 16 * 1024,
-    kOutSize = 32 * 1024,
-    kHeaderSize = 48,
-    kEntrySize = 52,
-    kTrailerSize = 20,
-    kMaxPath = 240,
+    kErrDamaged = AU_SEA_DAMAGED, /* the archive is not what the packer wrote */
+    kErrStopped = 2,              /* Command-period */
 
     kBarLeft = 16,
     kBarTop = 44,
@@ -53,25 +32,12 @@ enum {
     kBarBottom = 56
 };
 
-static const char kMagic[] = "AuraSEA1";
-
 /* A Pascal string literal as the Toolbox takes it. */
 #define P(s) ((ConstStringPtr)(s))
 
-typedef struct {
-    unsigned char kind;
-    OSType type, creator;
-    unsigned short flags;
-    unsigned long created, modified;
-    unsigned long data_len, data_clen, data_crc;
-    unsigned long rsrc_len, rsrc_clen, rsrc_crc;
-    Str255 path; /* ":Fonts:inter:Inter.ttf", relative to the folder */
-} SeaEntry;
-
-static short g_archive;       /* this application's data fork */
-static unsigned long g_left;  /* archive bytes not yet read */
-static AuInflate *g_inflate;
-static unsigned char *g_in, *g_out;
+static short g_archive; /* this application's data fork */
+static short g_output;  /* the fork being written */
+static AuSea g_sea;
 
 static WindowPtr g_window;
 static unsigned long g_total, g_done;
@@ -80,11 +46,6 @@ static Str63 g_label;         /* the file being written */
 static unsigned long g_polled; /* TickCount of the last event poll */
 
 /* ---- Small helpers ---- */
-
-static unsigned long be32(const unsigned char *p)
-{
-    return (unsigned long)p[0] << 24 | (unsigned long)p[1] << 16 | (unsigned long)p[2] << 8 | p[3];
-}
 
 static void pstr_copy(StringPtr to, ConstStringPtr from, int max)
 {
@@ -115,29 +76,54 @@ static void stop_alert(ConstStringPtr what, ConstStringPtr detail)
 
 /* ---- Reading the archive ---- */
 
-static OSErr sea_read(void *to, unsigned long n)
+static OSErr poll_events(void);
+static void advance(unsigned long n);
+
+static int io_read(void *ctx, void *to, uint32_t n)
 {
     long count = (long)n;
-    OSErr err;
-    if (n > g_left)
+    OSErr err = FSRead(g_archive, &count, to);
+    (void)ctx;
+    if (err == eofErr || (err == noErr && (uint32_t)count != n))
         return kErrDamaged;
-    err = FSRead(g_archive, &count, to);
-    if (err == eofErr || (err == noErr && (unsigned long)count != n))
-        return kErrDamaged;
-    g_left -= n;
     return err;
+}
+
+/* Writes to the open fork, moves the progress bar and, six times a
+ * second, handles events. */
+static int io_write(void *ctx, const void *from, uint32_t n)
+{
+    long count = (long)n;
+    OSErr err = FSWrite(g_output, &count, from);
+    (void)ctx;
+    if (err != noErr)
+        return err;
+    advance(n);
+    if (TickCount() - g_polled >= 10)
+        return poll_events();
+    return noErr;
 }
 
 /* Opens this application's data fork and reads the trailer and the
  * header. Returns the folder's name and sets g_total. */
 static OSErr sea_open(FSSpec *self, StringPtr folder, unsigned long *entries)
 {
+    static const AuSeaIo io = {NULL, io_read, io_write};
     ProcessSerialNumber psn;
     ProcessInfoRec info;
-    unsigned char b[kHeaderSize];
-    long eof, pos;
-    unsigned long offset, length;
+    unsigned char trailer[AU_SEA_TRAILER];
+    unsigned char name[32];
+    unsigned char *in, *out;
+    AuInflate *inflate;
+    long eof;
+    uint32_t offset, length, crc, count, total;
     OSErr err;
+
+    in = (unsigned char *)NewPtr(AU_SEA_IN);
+    out = (unsigned char *)NewPtr(AU_SEA_OUT);
+    if (!in || !out)
+        return memFullErr;
+    inflate = au_inflate_new(AU_INFLATE_RAW);
 
     GetCurrentProcess(&psn);
     memset(&info, 0, sizeof info);
@@ -152,77 +138,22 @@ static OSErr sea_open(FSSpec *self, StringPtr folder, unsigned long *entries)
     err = GetEOF(g_archive, &eof);
     if (err != noErr)
         return err;
-    if (eof < kTrailerSize + kHeaderSize)
+    if (eof < AU_SEA_TRAILER)
         return kErrDamaged;
-    err = SetFPos(g_archive, fsFromStart, eof - kTrailerSize);
+    err = SetFPos(g_archive, fsFromStart, eof - AU_SEA_TRAILER);
+    if (err == noErr)
+        err = (OSErr)io_read(NULL, trailer, AU_SEA_TRAILER);
+    if (err == noErr)
+        err = (OSErr)au_sea_trailer(trailer, (uint32_t)eof, &offset, &length, &crc);
+    if (err == noErr)
+        err = SetFPos(g_archive, fsFromStart, (long)offset);
+    if (err == noErr)
+        err = (OSErr)au_sea_begin(&g_sea, &io, length, crc, inflate, in, out, name, &count, &total);
     if (err != noErr)
         return err;
-    g_left = kTrailerSize;
-    err = sea_read(b, kTrailerSize);
-    if (err != noErr)
-        return err;
-    offset = be32(b + 8);
-    length = be32(b + 12);
-    if (memcmp(b, kMagic, 8) != 0 || length < kHeaderSize || offset > (unsigned long)eof ||
-        length != (unsigned long)eof - kTrailerSize - offset)
-        return kErrDamaged;
-    pos = (long)offset;
-    err = SetFPos(g_archive, fsFromStart, pos);
-    if (err != noErr)
-        return err;
-    g_left = length;
-    {
-        unsigned long want = be32(b + 16);
-        err = sea_read(b, kHeaderSize);
-        if (err != noErr)
-            return err;
-        if (memcmp(b, kMagic, 8) != 0 || au_codec_crc32(0, b, kHeaderSize) != want || b[16] == 0 || b[16] > 31)
-            return kErrDamaged;
-    }
-    *entries = be32(b + 8);
-    g_total = be32(b + 12);
-    pstr_copy(folder, b + 16, 31);
-    return noErr;
-}
-
-/* Reads the next entry's header. The path gets a leading colon, which
- * makes it a partial path name; a component may not be empty, since "::"
- * names the parent folder. */
-static OSErr sea_next(SeaEntry *e)
-{
-    unsigned char b[kEntrySize + kMaxPath + 4];
-    unsigned long n;
-    unsigned i;
-    OSErr err = sea_read(b, kEntrySize);
-    if (err != noErr)
-        return err;
-    n = (unsigned long)b[6] << 8 | b[7];
-    if (be32(b) != 'AuEn' || b[4] > 1 || n == 0 || n > kMaxPath)
-        return kErrDamaged;
-    err = sea_read(b + kEntrySize, n + 4);
-    if (err != noErr)
-        return err;
-    if (au_codec_crc32(0, b, kEntrySize + n) != be32(b + kEntrySize + n))
-        return kErrDamaged;
-    e->kind = b[4];
-    e->type = be32(b + 8);
-    e->creator = be32(b + 12);
-    e->flags = (unsigned short)(b[16] << 8 | b[17]);
-    e->created = be32(b + 20);
-    e->modified = be32(b + 24);
-    e->data_len = be32(b + 28);
-    e->data_clen = be32(b + 32);
-    e->data_crc = be32(b + 36);
-    e->rsrc_len = be32(b + 40);
-    e->rsrc_clen = be32(b + 44);
-    e->rsrc_crc = be32(b + 48);
-    e->path[0] = (unsigned char)(n + 1);
-    e->path[1] = ':';
-    memcpy(e->path + 2, b + kEntrySize, n);
-    for (i = 2; i <= e->path[0]; i++) {
-        if (e->path[i] == ':' && (e->path[i - 1] == ':' || i == e->path[0]))
-            return kErrDamaged;
-    }
+    *entries = count;
+    g_total = total;
+    pstr_copy(folder, name, 31);
     return noErr;
 }
 
@@ -347,60 +278,7 @@ static void advance(unsigned long n)
 
 /* ---- Writing files ---- */
 
-/* Inflates one fork from the archive into the open file `out`. */
-static OSErr put_fork(short out, unsigned long len, unsigned long clen, unsigned long want_crc)
-{
-    unsigned long crc = 0, total = 0;
-    const uint8_t *in = g_in;
-    size_t in_len = 0;
-    AuCodecStatus st = AU_CODEC_OK;
-    OSErr err;
-
-    if (len == 0 && clen == 0)
-        return noErr;
-    au_inflate_reset(g_inflate);
-    while (st != AU_CODEC_DONE) {
-        uint8_t *o = g_out;
-        size_t out_len = kOutSize;
-        long made;
-        if (in_len == 0) {
-            unsigned long n = clen < kInSize ? clen : kInSize;
-            if (n == 0)
-                return kErrDamaged;
-            err = sea_read(g_in, n);
-            if (err != noErr)
-                return err;
-            clen -= n;
-            in = g_in;
-            in_len = n;
-        }
-        st = au_inflate_run(g_inflate, &in, &in_len, &o, &out_len);
-        if (st == AU_CODEC_ERROR)
-            return kErrDamaged;
-        made = (long)(kOutSize - out_len);
-        if (made > 0) {
-            long count = made;
-            total += (unsigned long)made;
-            if (total > len)
-                return kErrDamaged;
-            crc = au_codec_crc32(crc, g_out, (size_t)made);
-            err = FSWrite(out, &count, g_out);
-            if (err != noErr)
-                return err;
-            advance((unsigned long)made);
-        }
-        if (TickCount() - g_polled >= 6) {
-            err = poll_events();
-            if (err != noErr)
-                return err;
-        }
-    }
-    if (clen != 0 || in_len != 0 || total != len || crc != want_crc)
-        return kErrDamaged;
-    return noErr;
-}
-
-static OSErr put_file(short vol, long dir, const SeaEntry *e)
+static OSErr put_file(short vol, long dir, const AuSeaEntry *e)
 {
     CInfoPBRec pb;
     Str255 name;
@@ -413,7 +291,8 @@ static OSErr put_file(short vol, long dir, const SeaEntry *e)
     err = HOpenDF(vol, dir, e->path, fsWrPerm, &ref);
     if (err != noErr)
         return err;
-    err = put_fork(ref, e->data_len, e->data_clen, e->data_crc);
+    g_output = ref;
+    err = (OSErr)au_sea_fork(&g_sea, e->data_len, e->data_clen, e->data_crc);
     err2 = FSClose(ref);
     if (err == noErr)
         err = err2;
@@ -423,7 +302,8 @@ static OSErr put_file(short vol, long dir, const SeaEntry *e)
         err = HOpenRF(vol, dir, e->path, fsWrPerm, &ref);
         if (err != noErr)
             return err;
-        err = put_fork(ref, e->rsrc_len, e->rsrc_clen, e->rsrc_crc);
+        g_output = ref;
+        err = (OSErr)au_sea_fork(&g_sea, e->rsrc_len, e->rsrc_clen, e->rsrc_crc);
         err2 = FSClose(ref);
         if (err == noErr)
             err = err2;
@@ -494,11 +374,11 @@ static void remove_tree(short vol, long root)
 
 static OSErr extract(short vol, long dir, unsigned long entries, StringPtr failed)
 {
-    SeaEntry e;
+    AuSeaEntry e;
     unsigned long i;
     OSErr err = noErr;
     for (i = 0; i < entries && err == noErr; i++) {
-        err = sea_next(&e);
+        err = (OSErr)au_sea_next(&g_sea, &e);
         if (err != noErr)
             break;
         pstr_copy(failed, e.path, 255);
@@ -517,8 +397,8 @@ static OSErr extract(short vol, long dir, unsigned long entries, StringPtr faile
         if (err == noErr)
             err = poll_events();
     }
-    if (err == noErr && g_left != 0)
-        err = kErrDamaged;
+    if (err == noErr)
+        err = (OSErr)au_sea_end(&g_sea);
     return err;
 }
 
@@ -560,6 +440,17 @@ static unsigned long free_bytes(short vol)
     return blocks * size;
 }
 
+static Boolean volume_locked(short vol)
+{
+    HParamBlockRec pb;
+    memset(&pb, 0, sizeof pb);
+    pb.volumeParam.ioVRefNum = vol;
+    if (PBHGetVInfoSync(&pb) != noErr)
+        return false;
+    /* Bit 7: locked by hardware; bit 15: locked by software. */
+    return (pb.volumeParam.ioVAtrb & 0x8080) != 0;
+}
+
 /* Writes a low-memory global. Not inlined: the compiler warns about a
  * store through a constant address. */
 static __attribute__((noinline)) void lowmem_put(unsigned long address, int size, long value)
@@ -578,10 +469,15 @@ static Boolean choose_folder(const FSSpec *self, ConstStringPtr folder, FSSpec *
         Str63 name;
         Str255 text;
 
-        /* Start beside the archive. */
-        lowmem_put(0x0214, 2, -self->vRefNum); /* SFSaveDisk */
-        lowmem_put(0x0398, 4, self->parID);    /* CurDirStore */
-        free_name(self->vRefNum, self->parID, folder, name);
+        /* Start beside the archive, unless its disk is locked (a CD):
+         * then Standard File starts where it last was. */
+        if (!volume_locked(self->vRefNum)) {
+            lowmem_put(0x0214, 2, -self->vRefNum); /* SFSaveDisk */
+            lowmem_put(0x0398, 4, self->parID);    /* CurDirStore */
+            free_name(self->vRefNum, self->parID, folder, name);
+        } else {
+            pstr_copy(name, folder, 31);
+        }
         InitCursor();
         StandardPutFile(P("\pPut the Aura folder here, named:"), name, &reply);
         if (!reply.sfGood)
@@ -716,13 +612,6 @@ int main(void)
     FlushEvents(everyEvent, 0);
 
     failed[0] = 0;
-    g_in = (unsigned char *)NewPtr(kInSize);
-    g_out = (unsigned char *)NewPtr(kOutSize);
-    if (!g_in || !g_out) {
-        report(memFullErr, failed);
-        return 1;
-    }
-    g_inflate = au_inflate_new(AU_INFLATE_RAW);
 
     err = sea_open(&self, folder, &entries);
     if (err != noErr) {

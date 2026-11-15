@@ -26,7 +26,7 @@ else()
 endif()
 configure_file(sea_vers.r.in ${CMAKE_CURRENT_BINARY_DIR}/sea_vers.r @ONLY)
 
-add_application(AuraSEA sea.c sea.r ../aura_icon.r ${CMAKE_CURRENT_BINARY_DIR}/sea_vers.r
+add_application(AuraSEA sea.c sea_archive.c sea.r ../aura_icon.r ${CMAKE_CURRENT_BINARY_DIR}/sea_vers.r
                 CREATOR AuSX)
 target_include_directories(AuraSEA PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(AuraSEA PRIVATE -O2)
