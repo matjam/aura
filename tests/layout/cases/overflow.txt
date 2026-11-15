@@ -218,6 +218,14 @@ pixel 20 29 dddddd
 pixel 20 33 a8a8a8
 pixel 20 36 545454
 
+=== same-coloured sides with a zero-width side join without seams
+<body style="margin:0">
+<div style="width:0;height:0;border-style:solid;border-color:#ff0000;border-width:0 10px 10px"></div>
+---
+pixel 5 4 ff0000
+pixel 14 4 ff0000
+pixel 10 1 ff0000
+
 === outline paints outside the border box
 <body style="margin:0">
 <div style="margin:20px;width:50px;height:50px;outline:5px solid #ff0000"></div>
