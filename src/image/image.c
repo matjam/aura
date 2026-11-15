@@ -231,9 +231,12 @@ bool au_img_header(AuImageDecoder *d, int w, int h, int orient, bool alpha)
     d->info.height = orient >= 5 ? w : h;
     d->info.has_alpha = alpha;
     int s = au_img_scale(d);
+    int ow = (d->info.width + s - 1) / s, oh = (d->info.height + s - 1) / s;
+    if ((uint64_t)ow * (uint64_t)oh * 4 > d->opt.max_bytes)
+        return au_img_fail(d, "image too large for the memory cap"), false;
     d->info.scale_denom = s;
-    d->info.out_w = (d->info.width + s - 1) / s;
-    d->info.out_h = (d->info.height + s - 1) / s;
+    d->info.out_w = ow;
+    d->info.out_h = oh;
     d->info.ready = true;
     return true;
 }
@@ -427,14 +430,24 @@ void au_img_row(AuImageDecoder *d, int y, const uint32_t *argb)
         return;
     }
     int red = d->red;
-    uint32_t *acc = d->acc;
-    for (int x = 0; x < d->cw; x++) {
-        uint32_t p = premul(argb[x]);
-        uint32_t *a = acc + 4 * (x / red);
-        a[0] += p >> 24;
-        a[1] += (p >> 16) & 255;
-        a[2] += (p >> 8) & 255;
-        a[3] += p & 255;
+    uint32_t *a = d->acc;
+    for (int x0 = 0; x0 < d->cw; x0 += red, a += 4) {
+        int x1 = x0 + red < d->cw ? x0 + red : d->cw;
+        uint32_t sa = 0, sr = 0, sg = 0, sb = 0;
+        for (int x = x0; x < x1; x++) {
+            uint32_t p = argb[x];
+            uint32_t al = p >> 24;
+            if (al != 255)
+                p = premul(p);
+            sa += al;
+            sr += (p >> 16) & 255;
+            sg += (p >> 8) & 255;
+            sb += p & 255;
+        }
+        a[0] += sa;
+        a[1] += sr;
+        a[2] += sg;
+        a[3] += sb;
     }
     d->acc_n++;
     if (d->acc_n == red || y == d->ch - 1)

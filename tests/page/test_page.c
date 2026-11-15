@@ -3,6 +3,7 @@
  * incremental feeding, resize. Uses the Ahem-like test font. */
 #include "../layout/ahem.h"
 #include "page/page.h"
+#include "image/cache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -378,31 +379,53 @@ static void test_incremental(void)
 
 /* ---- Images ---- */
 
-static bool fake_decode(void *ctx, const void *data, size_t len, int *w, int *h, AuSurface **px)
+/* A w x h 24-bit BMP of one colour (the view decodes images itself). */
+static size_t make_bmp(uint8_t *out, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 {
-    (void)ctx;
-    /* "WxH" */
-    char buf[32];
-    if (len >= sizeof buf)
-        return false;
-    memcpy(buf, data, len);
-    buf[len] = 0;
-    if (sscanf(buf, "%dx%d", w, h) != 2)
-        return false;
-    *px = NULL;
-    return true;
+    size_t stride = ((size_t)w * 3 + 3) & ~(size_t)3, n = 54 + stride * (size_t)h;
+    memset(out, 0, n);
+    out[0] = 'B';
+    out[1] = 'M';
+    out[10] = 54;
+    out[14] = 40;
+    out[18] = (uint8_t)w;
+    out[19] = (uint8_t)(w >> 8);
+    out[22] = (uint8_t)h;
+    out[23] = (uint8_t)(h >> 8);
+    out[26] = 1;
+    out[28] = 24;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint8_t *p = out + 54 + (size_t)y * stride + (size_t)x * 3;
+            p[0] = b;
+            p[1] = g;
+            p[2] = r;
+        }
+    return n;
+}
+
+static void deliver_bytes(Fake *f, AuDocView *dv, const char *url, const uint8_t *data, size_t len, bool ok)
+{
+    FakeReq *r = fake_find(f, url);
+    CHECK(r != NULL, "no request for %s", url);
+    if (!r)
+        return;
+    /* In two parts: sizes are known from the header, before the end. */
+    size_t half = len / 2;
+    au_docview_resource_data(dv, r->id, data, half);
+    au_docview_resource_data(dv, r->id, data + half, len - half);
+    au_docview_resource_done(dv, r->id, ok);
 }
 
 static void test_images(void)
 {
     Fake f;
-    AuDocView *dv = new_view(&f);
-    AuLoader li = {&f, fake_request, NULL, fake_decode};
-    au_docview_free(dv);
     memset(&f, 0, sizeof f);
-    dv = au_docview_new(fonts, &li, NULL);
+    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html = "<!DOCTYPE html><body style='margin:0'><img id=i src='p.png'><img id=j src='q.png' width=20>"
-                       "<div id=d style='background:url(bg.png)'>x</div>";
+                       "<div id=d style='background:url(bg.png)'>x</div>"
+                       "<p><img id=k src='broken.png' alt='Broken picture'><img id=m src='slow.png' alt='Slow'>";
     au_docview_load(dv, html, strlen(html), "http://example.com/");
     au_docview_set_viewport(dv, 800, 600);
     au_docview_update(dv);
@@ -414,12 +437,36 @@ static void test_images(void)
     au_canvas_free(c);
     au_surface_free(s);
     CHECK(fake_find(&f, "http://example.com/bg.png") != NULL, "background image not requested");
-    fake_deliver(&f, dv, "http://example.com/p.png", "40x30", true);
-    fake_deliver(&f, dv, "http://example.com/q.png", "40x30", true);
-    AuRect r = rect_of(dv, "i");
+    /* Pending: an empty box, no alt text yet. */
+    AuRect r = rect_of(dv, "m");
+    CHECK(r.w == 0, "pending image with alt text is %g wide", r.w);
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 255, 0, 0);
+    deliver_bytes(&f, dv, "http://example.com/p.png", bmp, n, true);
+    deliver_bytes(&f, dv, "http://example.com/q.png", bmp, n, true);
+    fake_deliver(&f, dv, "http://example.com/broken.png", "not an image at all", true);
+    r = rect_of(dv, "i");
     CHECK(r.w == 40 && r.h == 30, "img size %gx%g", r.w, r.h);
     r = rect_of(dv, "j");
     CHECK(r.w == 20 && r.h == 15, "img width attr keeps ratio: %gx%g", r.w, r.h);
+    /* Failed: the alt text, inline. */
+    r = rect_of(dv, "k");
+    CHECK(r.w > 40, "broken image shows its alt text: %g wide", r.w);
+    /* The decoded pixels are painted. */
+    s = au_surface_new(100, 100);
+    c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 100, 100}, 0, 0);
+    CHECK(au_surface_get(s, 10, 10) == AU_RGB(255, 0, 0), "image pixel %08x", au_surface_get(s, 10, 10));
+    r = rect_of(dv, "j");
+    int jx = (int)(r.x + r.w / 2), jy = (int)(r.y + r.h / 2);
+    CHECK(au_surface_get(s, jx, jy) == AU_RGB(255, 0, 0), "scaled image pixel %08x", au_surface_get(s, jx, jy));
+    au_canvas_free(c);
+    au_surface_free(s);
+    AuImageCacheStats st;
+    au_docview_image_stats(dv, &st);
+    CHECK(st.entries == 5 && st.decoded == 2, "image cache: %u entries, %u decoded", st.entries, st.decoded);
+    /* q.png is shown at 20 x 15: decoded at half size. */
+    CHECK(st.decoded_bytes == (40 * 30 + 20 * 15) * 4, "decoded bytes %zu", st.decoded_bytes);
     au_docview_free(dv);
 }
 

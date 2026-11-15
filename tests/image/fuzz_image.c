@@ -71,8 +71,13 @@ static Result decode(const uint8_t *data, size_t len, const AuImageOptions *o, s
         }
     }
     const AuImageInfo *info = au_image_info(d);
-    if (info->ready && ((size_t)info->out_w * info->out_h * 4 > (o->max_bytes ? o->max_bytes : AU_IMAGE_DEFAULT_MAX_BYTES))) {
-        printf("fuzz_image: canvas over the cap\n");
+    const AuSurface *cv = au_image_canvas(d);
+    size_t capb = o->max_bytes ? (o->max_bytes < 64 ? 64 : o->max_bytes) : AU_IMAGE_DEFAULT_MAX_BYTES;
+    if ((cv && (size_t)cv->width * cv->height * 4 > capb) ||
+        (info->ready && (size_t)info->out_w * info->out_h * 4 > capb)) {
+        it_write_file("fuzz-cap.bin", data, len);
+        printf("fuzz_image: canvas over the cap (%s, %dx%d, cap %zu); input in fuzz-cap.bin\n",
+               au_image_format_name(info->format), info->out_w, info->out_h, capb);
         abort();
     }
     r.st = r.frames >= 64 ? AU_IMAGE_DONE : st;
