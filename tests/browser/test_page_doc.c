@@ -8,6 +8,7 @@
 #include "../layout/ahem.h"
 #include "browser/browser.h"
 #include "browser/context.h"
+#include "browser/credits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -834,6 +835,20 @@ static void test_save_source(void)
     au_bw_navigate(w, "about:scene");
     settle(w);
     CHECK(!au_bw_page_source(w, &data, &len));
+
+    /* about:licences (the About box's Licences button) lists every credit. */
+    au_bw_navigate(w, "about:licences");
+    settle(w);
+    CHECK_STR(au_page_title(au_bw_active_tab(w)->page), "Licences");
+    CHECK(au_bw_page_source(w, &data, &len));
+    char *src = au_strndup(data, len);
+    for (size_t i = 0; i < au_ncredits; i++)
+        CHECK(strstr(src, au_credits[i].file) != NULL);
+    CHECK(strstr(src, "SIL Open Font License 1.1") && strstr(src, "Bitstream Vera"));
+    au_free(src);
+    au_bw_navigate(w, "about:licenses");
+    settle(w);
+    CHECK_STR(au_page_title(au_bw_active_tab(w)->page), "Licences");
     au_browser_free(b);
 }
 

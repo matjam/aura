@@ -6,6 +6,7 @@
  *   prefswin.c    the Preferences window (Appearance controls)
  *   storage.c     files in the Preferences folder, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
+ *   aboutbox.c    the About box
  *   contextmenu.c contextual menus (Contextual Menu Manager or pop-up)
  *   internetconfig.c  helper applications, download folder, file mappings
  *
@@ -119,6 +120,9 @@ char *mac_choose_file_url(void);
 /* File > Save Page As: asks for a file (StandardPutFile) and writes the
  * active page's source to it, type TEXT, creator AURA. */
 void mac_save_page(AuBrowserWindow *w);
+
+/* ---- aboutbox.c ---- */
+void mac_about_box(void);
 
 /* ---- contextmenu.c ---- */
 /* Finds the Contextual Menu Manager (call once at start-up). */

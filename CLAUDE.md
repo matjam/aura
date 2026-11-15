@@ -223,6 +223,15 @@ creator AURA. Open Location selects the whole address again when the
 field already has the focus, and a paste into the field turns line
 breaks into spaces.
 
+To change the About box or about:licences, edit the credits table in
+`src/browser/credits.c` (the version, the tagline, and one entry per
+bundled font or third-party library with its licence); `aboutbox.c`
+and `build_licences` in `page_doc.c` both read it. The table has a
+commented slot for the BearSSL and QuickJS-ng entries: add them there
+when those libraries join the build. The About box (DLOG 202) draws
+icon family 128 at 64 pixels with `PlotIconID`; its empty `dctb` gives
+it a colour port, without which the icon draws in black and white.
+
 To change how Aura works with Internet Config, edit
 `src/platform/macos9/internetconfig.c`. Mac OS 9.2.2 has the Internet
 Config component ('PREF', 'ICAp') but no InternetConfigLib shared

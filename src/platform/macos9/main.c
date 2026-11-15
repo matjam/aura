@@ -389,7 +389,7 @@ static void do_menu(long choice)
     switch (menu) {
     case kAppleMenu:
         if (item == 1) {
-            NoteAlert(128, NULL);
+            mac_about_box();
         } else {
             Str255 name;
             GetMenuItemText(GetMenuHandle(kAppleMenu), item, name);

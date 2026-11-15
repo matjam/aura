@@ -1,6 +1,6 @@
 /* The page interface (page.h) on top of the document view (src/page).
  *
- *   about:blank, about:home, about:fonts
+ *   about:blank, about:home, about:fonts, about:licences
  *                 generated HTML, loaded through the engine inside
  *                 au_page_navigate
  *   about:scene   the paint test scene (scene.c), painted directly
@@ -23,6 +23,7 @@
 #include "scene.h"
 #include "url.h"
 
+#include "credits.h"
 #include "../layout/selection.h"
 #include "../page/page.h"
 
@@ -827,6 +828,7 @@ static void page_head(AuBuf *b, const char *title)
                    "body { font-family: sans-serif; margin: 24px 32px; color: #222; line-height: 1.35; }"
                    "h1 { font-size: 28px; color: #203c78; margin: 0 0 6px; }"
                    "h2 { font-size: 17px; margin: 22px 0 6px; }"
+                   "h3 { font-size: 14px; margin: 14px 0 4px; }"
                    "p { margin: 0 0 10px; }"
                    ".note { color: #5a5a5a; font-size: 13px; }"
                    ".url { font-family: monospace; color: #5a5a5a; font-size: 13px; }"
@@ -847,13 +849,62 @@ static void build_home(AuBuf *b)
                    "<h2>Built-in pages</h2><ul>"
                    "<li><a href='about:scene'>Paint and font test scene</a></li>"
                    "<li><a href='about:fonts'>Installed fonts</a></li>"
-                   "<li><a href='about:blank'>Blank page</a></li></ul>"
+                   "<li><a href='about:blank'>Blank page</a></li>"
+                   "<li><a href='about:licences'>Licences</a></li></ul>"
                    "<h2>Placeholders for network pages</h2><ul>"
                    "<li><a href='http://example.com/'>http://example.com/</a></li>"
                    "<li><a href='http://www.macintoshrepository.org/'>http://www.macintoshrepository.org/</a></li>"
                    "<li><a href='https://www.w3.org/TR/css-2023/'>https://www.w3.org/TR/css-2023/</a></li></ul>"
                    "<p class=note style='margin-top:18px'>Command-click a link to open it in a new tab.</p>"
                    "</body></html>");
+}
+
+static void credit_rows(AuBuf *b, AuCreditKind kind)
+{
+    for (size_t i = 0; i < au_ncredits; i++) {
+        const AuCredit *c = &au_credits[i];
+        if (c->kind != kind)
+            continue;
+        au_buf_puts(b, "<h3>");
+        html_escape_str(b, c->name);
+        au_buf_puts(b, "</h3><p>");
+        html_escape_str(b, c->what);
+        au_buf_puts(b, ".</p><p class=note>");
+        for (const char *s = c->copyright; *s;) {
+            size_t n = strcspn(s, "\n");
+            char line[256];
+            snprintf(line, sizeof line, "%.*s", (int)n, s);
+            html_escape_str(b, line);
+            s += n;
+            if (*s == '\n') {
+                au_buf_puts(b, "<br>");
+                s++;
+            }
+        }
+        au_buf_puts(b, "</p><p>Licence: ");
+        html_escape_str(b, c->licence);
+        au_buf_puts(b, ". The full text is in <span class=url>");
+        html_escape_str(b, c->file);
+        au_buf_puts(b, "</span> beside the Aura application.</p>");
+    }
+}
+
+static void build_licences(AuBuf *b)
+{
+    page_head(b, "Licences");
+    au_buf_puts(b, "<h1>Licences</h1><p class=note>Aura " AU_VERSION ". " AU_TAGLINE
+                   " Aura's own code is written for Aura. These parts come from others.</p>"
+                   "<h2>Fonts</h2>");
+    credit_rows(b, AU_CREDIT_FONT);
+    au_buf_puts(b, "<h2>Libraries</h2>");
+    size_t libs = 0;
+    for (size_t i = 0; i < au_ncredits; i++)
+        libs += au_credits[i].kind == AU_CREDIT_LIBRARY;
+    if (libs)
+        credit_rows(b, AU_CREDIT_LIBRARY);
+    else
+        au_buf_puts(b, "<p>This build contains no third-party libraries.</p>");
+    au_buf_puts(b, "</body></html>");
 }
 
 static void css_string(AuBuf *b, const char *s)
@@ -1159,6 +1210,9 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
             load_html_now(p, b.data, b.len, NULL);
         } else if (wn == 5 && !memcmp(what, "fonts", 5)) {
             build_fonts(p, &b);
+            load_html_now(p, b.data, b.len, NULL);
+        } else if (wn == 8 && (!memcmp(what, "licences", 8) || !memcmp(what, "licenses", 8))) {
+            build_licences(&b);
             load_html_now(p, b.data, b.len, NULL);
         } else if (wn == 5 && !memcmp(what, "blank", 5)) {
             au_buf_puts(&b, "<!DOCTYPE html><html><head></head><body></body></html>");

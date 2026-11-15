@@ -159,27 +159,6 @@ resource 'tab#' (128) {
 	}
 };
 
-/* 128: About. */
-resource 'ALRT' (128) {
-	{0, 0, 120, 360}, 128,
-	{
-		OK, visible, sound1;
-		OK, visible, sound1;
-		OK, visible, sound1;
-		OK, visible, sound1
-	},
-	alertPositionMainScreen
-};
-
-resource 'DITL' (128) {
-	{
-		{88, 278, 108, 346}, Button { enabled, "OK" };
-		{12, 70, 80, 346}, StaticText { disabled,
-			"Aura 0.3\0x0DA web browser for Mac OS 9.\0x0D"
-			"Test build: local HTML files through Aura's own engine; no networking yet." }
-	}
-};
-
 /* 131: page timings and memory (Debug > Page Timings), ^0 to ^3. */
 resource 'ALRT' (131) {
 	{0, 0, 230, 440}, 131,
@@ -270,6 +249,31 @@ resource 'DITL' (200) {
 		{78, 168, 98, 240}, Button { enabled, "Cancel" };
 		{40, 16, 56, 324}, EditText { enabled, "" };
 		{12, 16, 30, 324}, StaticText { disabled, "^0" }
+	}
+};
+
+/* 202: About Aura. ^0 name and version, ^1 what Aura is, ^2 fonts,
+ * ^3 libraries (aboutbox.c fills them from the credits table). */
+resource 'DLOG' (202) {
+	{0, 0, 236, 420}, movableDBoxProc, invisible, noGoAway, 0, 202, "About Aura",
+	alertPositionMainScreen
+};
+
+/* An empty colour table: its presence makes the Dialog Manager give the
+ * About box a colour port, so the icon draws in colour. */
+data 'dctb' (202) {
+	$"00000000 0000 FFFF"
+};
+
+resource 'DITL' (202) {
+	{
+		{200, 334, 220, 404}, Button { enabled, "OK" };
+		{200, 222, 220, 322}, Button { enabled, "Licences..." };
+		{16, 16, 80, 80}, UserItem { disabled };
+		{20, 96, 38, 404}, StaticText { disabled, "^0" };
+		{42, 96, 78, 404}, StaticText { disabled, "^1" };
+		{96, 16, 150, 404}, StaticText { disabled, "^2" };
+		{156, 16, 190, 404}, StaticText { disabled, "^3" }
 	}
 };
 
