@@ -92,6 +92,14 @@ void css_tokenize(const char *src, size_t len, CssTokens *out);
 void css_tokens_rematch(CssTokens *tk);
 void css_tokens_free(CssTokens *tk);
 static inline const char *css_tok_str(const CssTokens *tk, const CssToken *t) { return tk->pool.data + t->str; }
+/* The number of a NUMBER, PERCENT or DIMENSION token as it was written
+ * ("+0025", "1e3"), without the unit or percent sign; *len is 0 for
+ * tokens that were copied (css_tokens_append) rather than tokenized. */
+static inline const char *css_tok_num_text(const CssTokens *tk, const CssToken *t, uint32_t *len)
+{
+    *len = t->type == TK_NUMBER || t->type == TK_PERCENT || t->type == TK_DIMENSION ? t->name_len : 0;
+    return tk->pool.data + t->str - *len;
+}
 /* The string length of a token, functions included. */
 static inline uint32_t css_tok_len(const CssToken *t) { return t->type == TK_FUNCTION ? t->name_len : t->len; }
 /* Serializes tokens [a, b) back to CSS text. */
@@ -107,6 +115,10 @@ typedef struct CssTokList {
     uint8_t has_attr;
 } CssTokList;
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b);
+/* Between these, css_toklist_new returns one shared list for equal
+ * tokens (a sheet parse). Calls nest. */
+void css_toklist_intern_begin(void);
+void css_toklist_intern_end(void);
 CssTokList *css_toklist_retain(CssTokList *l);
 void css_toklist_release(CssTokList *l);
 /* Appends tokens [a, b) of src to dst, copying their strings and fixing
@@ -155,6 +167,12 @@ bool css_unit_canonical(int unit, float *factor, int *canon);
 /* Building blobs */
 size_t css_value_tree_size(const AuCssValue *v);
 AuCssBlob *css_blob_pack(const AuCssValue *v, const char *base_url);
+/* A blob without a base URL. Between css_blob_intern_begin and
+ * css_blob_intern_end (a sheet parse; calls nest) equal values get one
+ * shared blob. */
+AuCssBlob *css_blob_pack_shared(const AuCssValue *v);
+void css_blob_intern_begin(void);
+void css_blob_intern_end(void);
 AuCssValue *css_value_copy(CssArena *a, const AuCssValue *v);
 bool css_value_equal(const AuCssValue *a, const AuCssValue *b);
 /* True if computing v needs context (relative units, calc, currentcolor
@@ -403,7 +421,11 @@ typedef struct CssMatchCtx {
     bool quirks;
     const AuElement *scope; /* :scope; NULL means the root element */
     uint32_t has_used;
-    const CssHasIndex *has_index; /* or NULL */
+    /* The :has() summary, or NULL. An empty index is built from has_root
+     * (a document) the first time a :has() needs it; with has_root NULL
+     * an empty index is not used. */
+    CssHasIndex *has_index;
+    const AuNode *has_root;
 } CssMatchCtx;
 
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc);
@@ -515,8 +537,12 @@ void css_group_release_fields(int g, void *grp);
 void css_group_release(int g, void *grp);
 void *css_group_clone(int g, const void *grp);
 bool css_group_equal(int g, const void *a, const void *b);
+bool css_group_same(int g, const void *a, const void *b);
 AuStyle *css_style_new(void);
 
+/* A custom property map: n entries sorted by name. With base set, the map
+ * holds only the entries that differ from base (a NULL value hides the
+ * base's entry) and lookups go on to base; chains are at most 12 long. */
 struct AuCustomProps {
     uint32_t refs;
     uint32_t n;
@@ -524,10 +550,16 @@ struct AuCustomProps {
         AuAtom name;
         CssTokList *value; /* NULL: guaranteed-invalid (initial) */
     } *e;
+    AuCustomProps *base; /* retained, or NULL */
+    uint32_t total;      /* entries in the chain, an upper bound of the names */
+    uint16_t depth;      /* maps below this one */
 };
 void css_custom_release(AuCustomProps *c);
 AuCustomProps *css_custom_retain(AuCustomProps *c);
 CssTokList *css_custom_get(const AuCustomProps *c, AuAtom name);
+/* The effective entries of a map and its bases, sorted by name, without
+ * hidden ones; values are borrowed. The caller frees the array. */
+struct CssCustomEntry *css_custom_flatten(const AuCustomProps *c, uint32_t *n);
 
 /* Context for computing one element's values. */
 typedef struct CssComputeCtx {

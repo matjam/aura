@@ -1775,6 +1775,83 @@ AuCssBlob *css_blob_pack(const AuCssValue *v, const char *base_url)
     return b;
 }
 
+/* While a sheet is parsed, declared values that are equal share one blob
+ * (shorthands fill in the same initial lists again and again). The table
+ * holds a reference on each blob until the parse ends; declared blobs are
+ * never changed. */
+static struct {
+    AuCssBlob **slots;
+    uint32_t size, count;
+    int depth;
+} blob_intern;
+
+void css_blob_intern_begin(void) { blob_intern.depth++; }
+
+void css_blob_intern_end(void)
+{
+    if (--blob_intern.depth > 0)
+        return;
+    for (uint32_t i = 0; i < blob_intern.size; i++)
+        au_css_blob_release(blob_intern.slots[i]);
+    au_free(blob_intern.slots);
+    blob_intern.slots = NULL;
+    blob_intern.size = blob_intern.count = 0;
+    blob_intern.depth = 0;
+}
+
+static uint32_t value_hash(const AuCssValue *v, uint32_t h)
+{
+    h = (h ^ v->type) * 16777619u;
+    h = (h ^ v->unit) * 16777619u;
+    h = (h ^ v->kw) * 16777619u;
+    h = (h ^ v->n) * 16777619u;
+    if (is_string_type(v->type)) {
+        for (uint32_t i = 0; i < v->n; i++)
+            h = (h ^ (unsigned char)v->u.str[i]) * 16777619u;
+    } else if (is_tree_type(v->type)) {
+        for (uint32_t i = 0; i < v->n; i++)
+            h = value_hash(&v->u.items[i], h);
+    } else if (v->type == AU_CSSV_COLOR) {
+        h = (h ^ v->u.rgba) * 16777619u;
+    } else if (v->type != AU_CSSV_KEYWORD && v->type != AU_CSSV_DELIM) {
+        uint32_t bits;
+        float f = v->u.num == 0 ? 0 : v->u.num; /* -0 equals 0 */
+        memcpy(&bits, &f, sizeof bits);
+        h = (h ^ bits) * 16777619u;
+    }
+    return h;
+}
+
+AuCssBlob *css_blob_pack_shared(const AuCssValue *v)
+{
+    if (blob_intern.depth <= 0)
+        return css_blob_pack(v, NULL);
+    if (blob_intern.count * 2 >= blob_intern.size) {
+        uint32_t size = blob_intern.size ? blob_intern.size * 2 : 256;
+        AuCssBlob **slots = au_calloc(size * sizeof *slots);
+        for (uint32_t i = 0; i < blob_intern.size; i++) {
+            AuCssBlob *o = blob_intern.slots[i];
+            if (!o)
+                continue;
+            uint32_t k = value_hash(&o->value, 2166136261u) & (size - 1);
+            while (slots[k])
+                k = (k + 1) & (size - 1);
+            slots[k] = o;
+        }
+        au_free(blob_intern.slots);
+        blob_intern.slots = slots;
+        blob_intern.size = size;
+    }
+    uint32_t h = value_hash(v, 2166136261u) & (blob_intern.size - 1);
+    for (; blob_intern.slots[h]; h = (h + 1) & (blob_intern.size - 1))
+        if (css_value_equal(&blob_intern.slots[h]->value, v))
+            return au_css_blob_retain(blob_intern.slots[h]);
+    AuCssBlob *b = css_blob_pack(v, NULL);
+    blob_intern.slots[h] = au_css_blob_retain(b);
+    blob_intern.count++;
+    return b;
+}
+
 AuCssBlob *au_css_blob_retain(AuCssBlob *b)
 {
     if (b)

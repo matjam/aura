@@ -411,8 +411,11 @@ work in these places:
   strip paints only what it shows; box and text ink extents (shadows,
   outlines, inline SVG with visible overflow) must cover what they draw.
 - Hover follows a scroll only after the scroll pauses for
-  `AU_REHOVER_MS` (150 ms): on Wikipedia a hover change restyles the
-  whole document (`:has()` rules), 1.7 s per scroll step in the guest.
+  `AU_REHOVER_MS` (150 ms). The delay dates from when a hover change
+  restyled the whole document on pages with `:has()` rules (1.7 s per
+  scroll step on Wikipedia in the guest); a hover change now restyles
+  about two elements there (see CSS), and the delay has not been
+  measured again in the guest.
 
 `tests/browser/test_scroll_shift.c` scrolls sample pages and inline
 pages with fixed, sticky and transformed boxes both ways and compares
@@ -608,10 +611,106 @@ the system lacks.
   Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
   sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
   default instance); a CJK font pack (see the fonts README for what one
-  needs). CSS does not parse `font-variation-settings`,
-  `font-optical-sizing` or `font-tech()`, layout passes only weight and
-  style to the font list, and the CSS parser loses `unicode-range`
-  tokens (webfont.c reads them from the sheet text).
+  needs). CSS does not parse `font-tech()`, and layout passes only
+  weight and style to the font list (`font-variation-settings` and
+  `font-optical-sizing` are computed, in `AuStyleInhRare`). webfont.c
+  still reads `unicode-range` from the sheet text, which it gets once,
+  when the sheet is parsed; the parsed descriptor is there to replace
+  that (see CSS).
+
+## CSS
+
+`src/css/css.h` is the interface: sheets, the resolver, computed styles,
+invalidation, selectors. `css_int.h` is shared by the files of `src/css`
+and its tests only.
+
+- **To restyle after a change**, call `au_css_invalidate` (before or
+  after the change) and then `au_css_restyle`. For a state bit use
+  `au_css_invalidate_state` with the `AU_STATE_*` bits that changed, on
+  every element whose bits changed; for hover and active use
+  `au_css_move_state`, which sets the bits and reports only the elements
+  below the common ancestor of the old and the new element.
+- **What a change restyles.** When the rule index is built
+  (`deps_build` in `cascade.c`), every selector is analysed for the
+  states it reads and the classes, ids and attributes it names, and for
+  where the elements it can style lie from the element that changes:
+  the element itself, its descendants, its following siblings, or the
+  ancestors and preceding siblings a `:has()` argument can anchor on.
+  A change marks only those (`AU_STATE_STYLE_SELF_DIRTY` for one
+  element, `AU_STATE_STYLE_DIRTY` for a subtree). A class, id or
+  attribute that no selector names, no presentational hint reads and no
+  `attr()` or pseudo-class depends on restyles nothing. Selectors the
+  analysis cannot follow (`:nth-child(... of S)` with a state or name
+  in S, a complex selector nested inside a `:has()` argument) restyle
+  the document. Child insertions and removals are not targeted: they
+  restyle the element's subtree and its following siblings' subtrees,
+  or the document when a `:has()` rule exists.
+- **Class and id changes** need the names that changed. `src/dom` notes
+  them in `AuDocument.style_names` when the attribute changes, and the
+  resolver resolves the elements reported for class or id when the
+  restyle starts (the DOM mutation hook reports before the change). To
+  add an attribute that a pseudo-class or a presentational hint reads,
+  add it to `attr_state` or leave it out of `attr_never_hint` in
+  `cascade.c`.
+- **Equal styles keep their object.** A style pass compares each newly
+  computed style with the element's old one by value (`style_same`) and
+  keeps the old `AuStyle` when they are equal; a changed style takes
+  over the old groups whose values are equal (`adopt_groups`). Code that
+  compares style or group pointers (layout's `style_diff`) then sees
+  only what changed. A marked element whose style is unchanged does not
+  restyle its subtree.
+- **Sharing.** Elements with the same parent style, tag and matched
+  rules share one `AuStyle`; the key includes the matched `::before`,
+  `::after` and `::marker` rules, and an element whose pseudo-element
+  uses `attr()` is not shared. Custom property maps are layered: a map
+  holds the element's own entries and refers to the parent's map
+  (`AuCustomProps.base`, chains of at most 12).
+- **Sheets in a document** (`src/page/docview.c`, "Requests" and
+  "Styles"): each `<style>`, `<link>` and `@import` is a `SheetSrc`. It
+  is parsed once, when its text arrives (`parse_sheet`); the resolver
+  borrows the parsed sheets, and a change of the sheet list detaches and
+  adds them again (`au_css_resolver_detach_sheets`) without parsing. A
+  fetched sheet's text is freed after parsing; a `<style>`'s is kept to
+  notice edits. A source whose media query does not match the device is
+  neither fetched nor parsed (`start_sheet`); `undefer_sheets` starts it
+  when the viewport changes so that it matches. A sheet that has been
+  parsed stays, and the cascade evaluates its media query.
+- **Memory of parsed sheets.** During a sheet parse equal `var()` and
+  custom property token lists share one list
+  (`css_toklist_intern_begin`) and equal declared values one blob
+  (`css_blob_intern_begin`); arrays are trimmed to their length. To see
+  what sheets cost, run `build/host/tests/css/css_bench --mem
+  FILE.css...` (macOS only): it prints the heap each parsed sheet keeps
+  and the index size.
+- **Selector queries.** `au_css_query_selector` and
+  `au_css_selector_matches_scoped` take the element `:scope` stands for
+  (the element querySelector, querySelectorAll or closest was called
+  on); with a document or NULL, `:scope` is the root element.
+- **`@font-face` descriptors** are generic value trees
+  (`au_css_font_face_descriptor`), except `unicode-range`: a COMMA_LIST
+  of LISTs of two integer NUMBERs, the first and last code point of
+  each range; an invalid `unicode-range` is dropped. The tokenizer keeps
+  each number as written (`css_tok_num_text`) for this, since
+  `U+0025-00FF` and `U+1e3` are number tokens.
+- **Tests.** `tests/css/cases/*.txt` (one ctest per file, format in
+  `test_css.c`), `test_css_api.c` (API tests), and
+  `test_css_invalidate.c`, which changes states, classes, ids,
+  attributes and inline styles on a page with and without `:has()`
+  rules and checks every computed value of every element against a full
+  restyle. To time hover moves over a page, run
+  `build/host/tests/css/test_css_invalidate --bench [--verify]
+  PAGE.html [SHEET.css ...]`: it prints elements restyled and time per
+  move, first with the old coarse invalidation, then targeted.
+- **Measured on the host.** A saved Wikipedia article (9301 elements,
+  `:has()` rules): a hover move restyled 9301 elements in 12 ms, now 2
+  on average (8 at most) in 0.012 ms. The GitHub home page (20 sheets,
+  2.5 MB of CSS, 2157 custom properties): `aura-host chrome` peaked at
+  147 MB, now 79 MB; the parsed sheets take 10.3 MB instead of 17.1 MB,
+  and the computed styles 5.8 MB instead of 44 MB.
+- **Not done:** targeted invalidation of child insertions and removals;
+  `@container`, `@scope` and `@starting-style` are parsed and never
+  apply; preference changes (dark scheme, reduced motion) do not reach
+  the device, so sheets deferred for them stay deferred.
 
 ## Images
 
