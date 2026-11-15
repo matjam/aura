@@ -1,11 +1,11 @@
 /* A bounded DER reader for certificate details shown to the user:
  * subject, issuer, validity, subjectAltName DNS names, fingerprint.
- * Validation itself is BearSSL's; this only describes. */
+ * Validation itself is the TLS library's; this only describes. */
 #include "tls.h"
 
 #include "auth.h"
 
-#include "bearssl.h"
+#include "core/hash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -168,10 +168,7 @@ static bool parse_time(int tag, const Der *v, int64_t *t)
 bool au_cert_parse(const uint8_t *der, size_t len, AuCertEntry *e)
 {
     memset(e, 0, sizeof *e);
-    br_sha256_context sc;
-    br_sha256_init(&sc);
-    br_sha256_update(&sc, der, len);
-    br_sha256_out(&sc, e->sha256);
+    au_sha256(der, len, e->sha256);
     Der d = {der, der + len}, cert, tbs, x;
     int tag;
     if (!der_expect(&d, 0x30, &cert) || !der_expect(&cert, 0x30, &tbs))

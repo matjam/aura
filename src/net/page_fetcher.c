@@ -3,6 +3,7 @@
  * src/browser. */
 #include "loader.h"
 #include "blocklist.h"
+#include "tls.h"
 #include "../browser/page.h"
 
 #include <stdio.h>
@@ -121,17 +122,15 @@ void au_net_fetch_cert_from(AuFetchCert *out, const AuCertInfo *ci, uint16_t ver
         memcpy(o->sha256, e->sha256, 32);
         snprintf(o->san, sizeof o->san, "%s", e->san);
     }
-    out->error = ci->error != 0 && ci->error != 32 /* BR_ERR_X509_OK */;
+    out->error = ci->error != 0;
     if (out->error && ci->reason)
         snprintf(out->reason, sizeof out->reason, "%s", ci->reason);
     out->clock_wrong = ci->clock_wrong;
     out->hsts = ci->hsts;
     out->overridden = ci->overridden;
     out->checked_at = ci->checked_at;
-    if (version == 0x0303)
-        snprintf(out->protocol, sizeof out->protocol, "TLS 1.2");
-    else if (version)
-        snprintf(out->protocol, sizeof out->protocol, "TLS %04X", (unsigned)version);
+    if (version)
+        snprintf(out->protocol, sizeof out->protocol, "%s", au_tls_version_name(version));
     snprintf(out->cipher, sizeof out->cipher, "%s", cipher ? cipher : "");
 }
 
@@ -176,10 +175,8 @@ static void fetch_net_from(AuFetchNet *out, const AuLoadInfo *i, bool with_heade
     out->request_head = i->request_head ? i->request_head : "";
     out->response_head = "";
     out->blocked_reason = i->blocked_reason ? i->blocked_reason : i->mixed ? "mixed content" : "";
-    if (i->tls_version == 0x0303)
-        snprintf(proto, 16, "TLS 1.2");
-    else if (i->tls_version)
-        snprintf(proto, 16, "TLS %04X", (unsigned)i->tls_version);
+    if (i->tls_version)
+        snprintf(proto, 16, "%s", au_tls_version_name(i->tls_version));
     const AuHttpTrace *t = i->trace;
     if (!t)
         return;

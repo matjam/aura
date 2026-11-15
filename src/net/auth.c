@@ -2,7 +2,7 @@
 #include "auth.h"
 #include "headers.h"
 
-#include "bearssl.h"
+#include "core/hash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -210,16 +210,13 @@ static void hexdigest(bool sha256, const char *s, size_t n, char *out)
     uint8_t d[32];
     size_t dl;
     if (sha256) {
-        br_sha256_context c;
-        br_sha256_init(&c);
-        br_sha256_update(&c, s, n);
-        br_sha256_out(&c, d);
+        au_sha256(s, n, d);
         dl = 32;
     } else {
-        br_md5_context c;
-        br_md5_init(&c);
-        br_md5_update(&c, s, n);
-        br_md5_out(&c, d);
+        AuMd5 c;
+        au_md5_init(&c);
+        au_md5_update(&c, s, n);
+        au_md5_out(&c, d);
         dl = 16;
     }
     for (size_t i = 0; i < dl; i++)

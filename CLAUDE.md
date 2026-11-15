@@ -29,9 +29,9 @@ what you need to build, test and change Aura.
   `src/core/atoms_css.def`.
 - Public names start with `au_` (functions), `Au` (types), `AU_`
   (constants).
-- Third-party code is limited to QuickJS-ng (JavaScript) and BearSSL
-  (TLS), in `third_party/`. Everything else is written here. Ask before
-  adding another.
+- Third-party code is limited to QuickJS-ng (JavaScript) and Mbed TLS
+  (TLS, with its cryptography library TF-PSA-Crypto), in `third_party/`.
+  Everything else is written here. Ask before adding another.
 - Commit each working step to `main`. Commit only our own sources. Apple
   files, downloaded test suites and fonts stay out of git, except the
   redistributable bundled fonts in `assets/fonts`, which are committed
@@ -73,7 +73,7 @@ what you need to build, test and change Aura.
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
 | `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive (see CI and releases) |
-| `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
+| `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and Mbed TLS 4.1 (`mbedtls`, with `mbedtls-patches`, `mbedtls-config` and `mbedtls.cmake`); `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/frames` | nested documents: the document view with a table of pages, and a browser window over the fake transport |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
@@ -218,14 +218,54 @@ by its own scripts or kept in git-ignored folders here.
 - **Disk images.** The test machine's base images are in `disks/`
   (git-ignored): `os9-novm.qcow2` is a stock Mac OS 9.2.2 with virtual
   memory off, and `os9-vmoff.qcow2` is the same system with Enforcer
-  installed. Both are standalone qcow2 files with no backing file. To
-  update Enforcer on the second, install a new Enforcer build in that
-  guest with `PERSIST=1` and fold the overlay into the image.
+  installed. Both are standalone qcow2 files with no backing file.
+- **The Enforcer on `os9-vmoff.qcow2`** is version 0.1.0, installed on
+  2026-11-15 from that project's `dist/` as built at 12:58 that day:
+  commit 6ba015b plus changes not yet committed there (`common/engine.c`,
+  `common/kcb.h`, `installer/kpatch.h`, `kernel/nanokernel.s`). Enforcer's
+  files carry no version resource; the installed extension is 96,498
+  bytes. `disks/os9-vmoff.before-update.qcow2` is the image before that
+  update (an Enforcer of 2026-11-14). To go back to it, stop every guest
+  and copy it over `os9-vmoff.qcow2`; `guest-run.sh` then sets aside the
+  overlays made on the newer image.
+- **To update Enforcer on `os9-vmoff.qcow2`**, use a run folder of your
+  own (`export AURA_RUN=$PWD/run-enf`) and these steps. Enforcer's
+  installer updates an installed Enforcer in place.
+  1. Stop every guest that runs the Enforcer base, and copy
+     `disks/os9-vmoff.qcow2` to `disks/os9-vmoff.before-update.qcow2`.
+  2. Run `BASE=enforcer PERSIST=1 tools/guest-run.sh start`, wait for the
+     Finder, and push the three MacBinary files of Enforcer's `dist/`
+     together: `tools/guest-push.sh -n EnfNew "DIST/Enforcer
+     Installer.bin" "DIST/Enforcer Extension.bin" DIST/Enforcer.bin`.
+  3. Run `tools/guest-qmp.py open EnfNew "Enforcer Installer"`, wait
+     until `front-app` prints Enforcer Installer, and click Install (at
+     486,366 on a 640x480 screen). When the text says Enforcer is
+     installed, click Restart (the same button).
+  4. QEMU's mac99 firmware stays on a black screen after a guest
+     restart. Wait 20 seconds for the guest to finish writing, run
+     `tools/guest-run.sh stop`, and start again with `BASE=enforcer
+     PERSIST=1`.
+  5. Check the install: open OS > System Folder > Control Panels >
+     Enforcer (click the desktop, then type each name and press
+     Command-O). It says "Protecting N applications" and "NanoKernel
+     owner check on" when the kernel patch and the extension both run.
+     Get Info on System Folder > Extensions > Enforcer Extension shows
+     the size, which matches the sum of the two forks `guest-push.sh`
+     printed.
+  6. Choose Special > Shut Down (the menu title is at 246,10, the item
+     at 270,136); QEMU exits. Then fold the overlay into the image and
+     check it:
+     `~/.local/opt/qemu-os9/bin/qemu-img commit
+     run-enf/os9-overlay-enforcer.qcow2`, then `qemu-img info
+     disks/os9-vmoff.qcow2` (no backing file) and `qemu-img check
+     disks/os9-vmoff.qcow2`. Delete the overlay.
+  7. Change the version, date and commit in the paragraph above.
 - **hfsutils** (`hformat`, `hcopy`) for `tools/guest-push.sh`:
   `brew install hfsutils`.
 
 The install scripts, the QEMU patch and the two disk images were copied
-from the os9-enforcer project on 2026-11-14.
+from the os9-enforcer project on 2026-11-14. The Enforcer image was
+updated on 2026-11-15 as described above.
 
 ## Guest testing
 
@@ -235,12 +275,18 @@ checkout (set `AURA_RUN` to use another folder, for example to run a
 second guest beside the first); `tools/guest-env.sh` holds the settings.
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
-the background. `BASE` picks the system: `stock` (the default) is
-`disks/os9-novm.qcow2`, Mac OS 9.2.2 with virtual memory off and no
-Enforcer; `enforcer` (`BASE=enforcer tools/guest-run.sh start`) is
-`disks/os9-vmoff.qcow2`, which has the Enforcer kernel and extension
-installed. The guest boots an overlay on the base image
-(`run/os9-overlay-BASE.qcow2`), so the base is never written. One guest
+the background. `BASE` picks the system: `enforcer` (the default) is
+`disks/os9-vmoff.qcow2`, Mac OS 9.2.2 with virtual memory off and the
+Enforcer kernel and extension installed; `stock` (`BASE=stock
+tools/guest-run.sh start`) is `disks/os9-novm.qcow2`, the same system
+without Enforcer. The guest boots an overlay on the base image
+(`run/os9-overlay-BASE.qcow2`), so the base is never written. An overlay
+is valid only for the base image it was made on, and booting it on a
+changed image damages the guest's disk: `guest-run.sh` records the base
+image's modification time and size beside the overlay
+(`os9-overlay-BASE.qcow2.base`), and when they differ at `start` or
+`reset` it renames the overlay `os9-overlay-BASE.stale.qcow2` and makes
+a new one. One guest
 runs per run folder; `status` names the running base. Disk writes are
 discarded when QEMU exits; set `PERSIST=1` to keep them in the overlay.
 Mac OS takes about a minute to boot. `GEOMETRY` sets the largest screen
@@ -248,10 +294,22 @@ mode the guest offers (default `1024x768x32`; for example
 `GEOMETRY=1440x1050x32`); Mac OS starts at 640x480 or the last mode
 chosen, and the Control Strip's resolution module switches to it.
 
-Test on the stock base first. Use the Enforcer base to check Aura under
-Enforcer; its own bugs show there too (see the scroll bar thumb note
-under Browser chrome). Enforcer's state and offense log are read with
-that project's own tools, which Aura does not carry.
+Test on the Enforcer base day to day: Enforcer stops Aura, or logs it,
+when Aura writes into another application's memory, so such a bug shows
+there and not on the stock system. Before a release, test on the stock
+base as well (`BASE=stock`), because most users run without Enforcer.
+Enforcer's own bugs show on its base too; to tell one from an Aura bug,
+repeat the test on the stock base. To see what Enforcer caught, quit
+Aura and open the Enforcer control panel (OS > System Folder > Control
+Panels > Enforcer): its Caught list names each write it blocked, and
+the lines below it count the writes checked, stopped and blocked. Writes
+into the system heap are logged only when "Also log writes into the
+system heap" is on. Enforcer's state and offense log can also be read
+from the host with that project's own tools, which Aura does not carry.
+On 2026-11-15, with Enforcer 0.1.0 (see Disk images), Aura at 3df6ecc
+loaded a local page, Hacker News and a Wikipedia article, scrolled,
+typed in a search field, showed Develop > Performance and was launched
+three times in one boot: the control panel reported nothing caught.
 
 To copy the application in, build it with `./build.sh ppc` and run
 `tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*`, which puts the
@@ -705,7 +763,10 @@ Toolbox points learned the hard way:
   those pixels in a chunk of the current application (Aura) and frees
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
-  handle then names Aura's font data.
+  handle then names Aura's font data. That was the Enforcer of
+  2026-11-14 (matjam/os9-enforcer#1). With the build installed on
+  2026-11-15 the thumbs of a second and a third launch were drawn
+  correctly, pixel for pixel as on the first.
 
 ## Developer tools
 
@@ -1361,9 +1422,11 @@ itself. `src/net` talks to the platform through `AuNetOps`
 (`src/platform/platform.h`): DNS, non-blocking TCP, a monotonic and a
 wall clock, and an entropy source. The host implements it with BSD
 sockets (`src/platform/host/net_host.c`); Mac OS 9 with Open Transport
-(`src/platform/macos9/net_ot.c`). There is no global state: one `AuNet`
-per application holds the connection pool, TLS configuration and the
-policy stores the embedder attaches.
+(`src/platform/macos9/net_ot.c`). One `AuNet` per application holds the
+connection pool, the TLS sessions and the policy stores the embedder
+attaches. The only process-wide state is the TLS library's
+(`src/net/tls_platform.c`: its allocator hook, key store, random
+generator and clocks).
 
 - **To fetch with the engine**, create the platform's ops, then
   `au_net_new(ops)`, attach a root store (`au_roots_load` on
@@ -1432,28 +1495,109 @@ policy stores the embedder attaches.
 - **To try the stack on Mac OS 9**, build with `./build.sh ppc` and push
   `build/ppc/src/platform/macos9/nettest/NetTest.bin` with a copy of
   `assets/net/aura-roots.bin` named `aura-roots` (`guest-push.sh` would
-  decode a `.bin` file as MacBinary). NetTest times the crypto
-  primitives, a DNS lookup and a TCP connection, then fetches a URL list
-  twice and prints status, cipher and timings; a `NetTest URLs` file
-  beside it replaces the list. It also writes `NetTest Log` in the Aura
-  preferences folder.
+  decode a `.bin` file as MacBinary). NetTest waits for the entropy
+  pool, times the TLS library's primitives (hashing, the two ciphers,
+  key exchange on X25519 and P-256, ECDSA and RSA verification), a DNS
+  lookup and a TCP connection, then fetches a URL list twice and prints
+  status, TLS version, cipher, the handshake's time and the other
+  timings, and last the memory the TLS library holds and the most it
+  held; a `NetTest URLs` file beside it replaces the list. It also
+  writes `NetTest Log` in the Aura preferences folder.
 
-TLS is BearSSL 0.6 with the 32-bit implementations: TLS 1.2 only, ECDHE
-with AES-GCM or ChaCha20-Poly1305, then RSA key exchange with AES-GCM
-as a last resort (www.fsf.org offers no ECDHE, only DHE, which BearSSL
-lacks, and RSA), SNI, ALPN `http/1.1`, session resumption, and
-certificate errors reported with the chain (`au_http_cert_info`). TLS
-1.3 is not available in BearSSL; every acceptance site still offers
-TLS 1.2.
+TLS is Mbed TLS 4.1 (`third_party/mbedtls`; `third_party/README.md`
+says how it is carried and updated), used only through `src/net/tls.c`:
+TLS 1.3 and TLS 1.2, X25519 (the key share sent), P-256 and P-384,
+ChaCha20-Poly1305 first and then AES-GCM, ECDSA and RSA certificates
+(RSA-PSS and PKCS#1 v1.5), SNI, ALPN `http/1.1`, session resumption
+(tickets and the TLS 1.2 session id, TLS 1.3 tickets), and certificate
+errors reported with the chain (`au_http_cert_info`). It has no RSA key
+exchange and no DHE: a server that offers only those in TLS 1.2
+(www.fsf.org) fails with "Secure connection failed".
+`docs/tls13-feasibility.md` records why BearSSL was replaced.
 
+- **To change what Aura offers** (versions, cipher suites, groups,
+  signature algorithms), edit the tables at the top of `tls.c`. To
+  change what the library is built with, edit
+  `third_party/mbedtls-config`; the Mac OS 9 library is a client only,
+  and the host's adds the server half for the tests.
+- **The interface** (`tls.h`) passes buffers: the stack asks for room
+  for ciphertext from the socket (`au_tls_in`), for ciphertext to send
+  (`au_tls_out`), for decrypted data (`au_tls_read`) and for room to
+  write (`au_tls_write`). The library instead calls back for bytes, so
+  `AuTls` holds staging buffers (4 KB in, 4.5 KB out, 4 KB of decrypted
+  data, and 4 KB to encrypt while a request is being sent) and `step`
+  runs the library as far as they allow. `http.c` did not change shape; it gained
+  `session_keep`.
+- **Certificates.** The library verifies the chain during the handshake
+  in its "optional" mode, which never stops the handshake for a
+  certificate error; `finish_handshake` reads the verdict and decides
+  before any application data moves in either direction. One error is
+  reported per chain, in this order: expired or not yet valid, wrong
+  host, untrusted, weak key, unsupported algorithm, key usage. Do not
+  change the mode to "none": the library then checks nothing, including
+  key usage.
+- **Trust anchors** come from the root store through `ca_cb`: the
+  library asks who may have signed a certificate, and `roots.c` offers
+  the roots with that subject name, which are parsed then (one per
+  handshake, usually). Nothing else is ever offered as an anchor.
+- **The user's exception** (`au_tls_allow_cert`, Continue Anyway)
+  applies in `finish_handshake` to a chain whose leaf has the accepted
+  fingerprint; the connection is marked `overridden` and its session is
+  not kept.
+- **Sessions.** `au_tls_save_session` gives the library's serialized
+  session when there is a new one: after a full TLS 1.2 handshake, and
+  each time a TLS 1.3 server sends a ticket, which happens after the
+  handshake. `session_keep` in `http.c` asks after the handshake and on
+  every pass while the connection is open. A resumed connection has no
+  chain of its own (`AuCertInfo.count` is 0): the session entry keeps
+  the chain of the full handshake for the certificate viewer, and a new
+  ticket replaces the old one in the entry. Sessions hold key material
+  and the library trusts their contents: keep them in memory only. A
+  session over 1 KB is not kept.
+- **Memory, clocks and entropy** (`tls_platform.c`). The library
+  allocates through `au_try_alloc`; a failed allocation fails the
+  handshake with "not enough memory for the secure connection" and never
+  reaches the out-of-memory handler (`test_alloc_failure`). Certificate
+  dates are checked against the time given to `au_tls_new` (so
+  `AURA_FAKE_TIME` works); ticket ages use `AuNetOps.now_ms` through
+  `au_tls_tick`, which `au_net_pump` calls. The library's random
+  generator (HMAC-DRBG) takes its seed from a pool that `http.c` feeds
+  with `AuNetOps.entropy` output, at the first https request and again
+  every 1000 uses; the library starts at the first feed, so nothing in
+  it runs before the platform has entropy.
+- **The root store** holds whole DER certificates (format version 2,
+  `roots.h`); a version 1 file from an older Aura is refused with a
+  message that says so.
+- **Tests.** `tests/net/test_tls.c` runs against the library's server
+  half in `tests/net/fakenet.c` (`FakeServer.tls_min`, `tls_max`,
+  `no_resume`, `p256_only` for a HelloRetryRequest, `strip_tls13` for a
+  downgrade attempt, `mangle` to damage bytes): certificate errors and
+  exceptions, the clock, HSTS, entropy, the caIssuers cases, both
+  protocol versions, RSA and P-384 keys, resumption, the downgrade
+  sentinel and allocation failures. Fixtures come from
+  `tests/net/gen_tls_fixtures.py`. `fuzz_net tls ITERATIONS SEED
+  SECONDS` fuzzes handshakes through `tls.c` (ctest `net_tls_fuzz`,
+  20 seconds at most; it prints how many it ran); run it longer under
+  the sanitizer build after changing `tls.c` or updating the library.
+- **Measured** (2026-11-15). `Aura.pef` grew from 4,041,788 to
+  4,287,026 bytes (6%) and the installer archive by 187 KB, 76 KB of it
+  the root store. An open connection holds about 26 KB in the library
+  and 13 KB of staging, about what BearSSL's 42 KB was; a handshake
+  takes about 22 KB more. In the stock guest (QEMU, not a G4; times vary
+  with the host's load), by NetTest: a full TLS 1.3 handshake took 112 ms
+  with an RSA-PSS certificate (www.reddit.com), TLS 1.2 handshakes 211 ms
+  (github.com, ECDSA) and 231 ms (duckduckgo.com, RSA), and a resumed
+  TLS 1.3 handshake 76 to 83 ms. X25519 costs about 26 ms per handshake
+  where BearSSL's took 4 ms; that is not tuned yet. No real G4 has been
+  measured.
 - **Incomplete chains.** Some servers send their certificate without
   the intermediate (macintoshgarden.org, incomplete-chain.badssl.com).
-  When the chain as sent does not reach a root, the X.509 wrapper in
-  `tls.c` (`complete_chain`) builds a path from the leaf over the
-  server's certificates and the intermediates pool (`certpool.c`) and
-  replays it into BearSSL's minimal engine from `start_chain`, so every
-  check runs on the completed chain as if the server had sent it. Pool
-  certificates are never trust anchors. When the path stops for want of
+  When the chain as sent does not reach a root, `complete_chain` in
+  `tls.c` builds a path from the leaf over the server's certificates and
+  the intermediates pool (`certpool.c`) and has the library verify that
+  path, so every check runs on the completed chain as if the server had
+  sent it. Pool certificates are never trust anchors. When the path
+  stops for want of
   an issuer, `AuCertInfo` names the last certificate's caIssuers URL and
   the transfer (`aia_begin`, `aia_step` in `http.c`) fetches it over
   plain http as a child transfer (no cookies, referrer or cache, 16 KB,
@@ -1501,8 +1645,8 @@ On the test machine, QEMU sets the guest clock to UTC while the guest's
 Map control panel says UTC-7, so the wall time Aura computes there is
 7 hours ahead. Certificates are still within their dates.
 
-The root store (`assets/net/aura-roots.bin`) was made from curl's
-Mozilla bundle dated 2026-11-05 (118 roots, checked current on
+The root store (`assets/net/aura-roots.bin`, 127 KB) was made from
+curl's Mozilla bundle dated 2026-11-05 (118 roots, checked current on
 2026-11-15); it holds the USERTrust and Sectigo Public Server
 Authentication R46/E46 roots and ISRG Root X1/X2. To regenerate it,
 download `https://curl.se/ca/cacert.pem` and run `python3 -I
@@ -1510,8 +1654,10 @@ src/net/gen_roots.py cacert.pem assets/net/aura-roots.bin`. Never add
 intermediates to it.
 
 Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
-sites that offer only TLS 1.3, or only DHE or other ciphers outside
-BearSSL's set, fail with "Secure connection failed".
+sites that offer only TLS 1.2 with RSA key exchange or DHE, or only
+ciphers other than AES-GCM and ChaCha20-Poly1305, fail with "Secure
+connection failed". No post-quantum key exchange, no revocation
+checking, no client certificates.
 
 ## Content blocking
 

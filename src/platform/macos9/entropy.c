@@ -27,7 +27,7 @@
  * takes 64 bits off that. */
 #include "entropy.h"
 
-#include "bearssl.h"
+#include "core/hash.h"
 #include "core/core.h"
 
 #include <string.h>
@@ -73,16 +73,16 @@ struct AuMacEntropy {
 
 static void mix(AuMacEntropy *e, const void *data, size_t len)
 {
-    br_sha256_context c;
-    br_sha256_init(&c);
-    br_sha256_update(&c, "mix", 3);
-    br_sha256_update(&c, e->state, sizeof e->state);
+    AuSha256 c;
+    au_sha256_init(&c);
+    au_sha256_update(&c, "mix", 3);
+    au_sha256_update(&c, e->state, sizeof e->state);
     uint8_t n[4] = {(uint8_t)(e->counter >> 24), (uint8_t)(e->counter >> 16), (uint8_t)(e->counter >> 8),
                     (uint8_t)e->counter};
     e->counter++;
-    br_sha256_update(&c, n, sizeof n);
-    br_sha256_update(&c, data, len);
-    br_sha256_out(&c, e->state);
+    au_sha256_update(&c, n, sizeof n);
+    au_sha256_update(&c, data, len);
+    au_sha256_out(&c, e->state);
 }
 
 static void credit(AuMacEntropy *e, unsigned amount, unsigned *bucket)
@@ -211,15 +211,15 @@ static void write_seed(AuMacEntropy *e)
         return;
     uint8_t buf[sizeof kSeedMagic + kSeedLen + 1];
     memcpy(buf, kSeedMagic, sizeof kSeedMagic);
-    br_sha256_context c;
-    br_sha256_init(&c);
-    br_sha256_update(&c, "seed", 4);
-    br_sha256_update(&c, e->state, sizeof e->state);
-    br_sha256_out(&c, buf + sizeof kSeedMagic);
-    br_sha256_init(&c);
-    br_sha256_update(&c, "next", 4);
-    br_sha256_update(&c, e->state, sizeof e->state);
-    br_sha256_out(&c, e->state);
+    AuSha256 c;
+    au_sha256_init(&c);
+    au_sha256_update(&c, "seed", 4);
+    au_sha256_update(&c, e->state, sizeof e->state);
+    au_sha256_out(&c, buf + sizeof kSeedMagic);
+    au_sha256_init(&c);
+    au_sha256_update(&c, "next", 4);
+    au_sha256_update(&c, e->state, sizeof e->state);
+    au_sha256_out(&c, e->state);
     bool full = e->credit >= AU_MAC_ENTROPY_THRESHOLD * kBit;
     buf[sizeof kSeedMagic + kSeedLen] = full ? 1 : 0;
 
@@ -368,26 +368,26 @@ bool au_mac_entropy_read(AuMacEntropy *e, void *out, size_t len)
     uint8_t *o = out;
     while (len) {
         uint8_t block[32];
-        br_sha256_context c;
-        br_sha256_init(&c);
-        br_sha256_update(&c, "out", 3);
-        br_sha256_update(&c, e->state, sizeof e->state);
+        AuSha256 c;
+        au_sha256_init(&c);
+        au_sha256_update(&c, "out", 3);
+        au_sha256_update(&c, e->state, sizeof e->state);
         uint8_t n[4] = {(uint8_t)(e->counter >> 24), (uint8_t)(e->counter >> 16), (uint8_t)(e->counter >> 8),
                         (uint8_t)e->counter};
         e->counter++;
-        br_sha256_update(&c, n, sizeof n);
-        br_sha256_out(&c, block);
+        au_sha256_update(&c, n, sizeof n);
+        au_sha256_out(&c, block);
         size_t k = len < sizeof block ? len : sizeof block;
         memcpy(o, block, k);
         o += k;
         len -= k;
         memset(block, 0, sizeof block);
     }
-    br_sha256_context c;
-    br_sha256_init(&c);
-    br_sha256_update(&c, "next", 4);
-    br_sha256_update(&c, e->state, sizeof e->state);
-    br_sha256_out(&c, e->state);
+    AuSha256 c;
+    au_sha256_init(&c);
+    au_sha256_update(&c, "next", 4);
+    au_sha256_update(&c, e->state, sizeof e->state);
+    au_sha256_out(&c, e->state);
     return true;
 }
 

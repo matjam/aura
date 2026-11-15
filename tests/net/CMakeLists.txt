@@ -49,11 +49,17 @@ add_test(NAME net_cookies_fuzz COMMAND fuzz_cookies 20000 1)
 # store loader, certificates, HSTS, authentication headers, dates, MIME.
 #   fuzz_net all ITERATIONS SEED assets/net/aura-roots.bin
 add_executable(fuzz_net fuzz_net.c tls_fixtures.c)
-target_link_libraries(fuzz_net aura_engine)
+target_link_libraries(fuzz_net aura_fakenet)
 target_include_directories(fuzz_net PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME net_parsers_fuzz COMMAND fuzz_net all 30000 1 ${CMAKE_SOURCE_DIR}/assets/net/aura-roots.bin)
 # caIssuers bundles, the AIA extension and the intermediates pool file.
 add_test(NAME net_aia_fuzz COMMAND fuzz_net aia 20000 1)
+# TLS handshakes with the server's bytes damaged, through tls.c and the
+# TLS library, at most 20 seconds. To run longer, build with the
+# sanitizers and run
+#   fuzz_net tls ITERATIONS SEED SECONDS
+add_test(NAME net_tls_fuzz COMMAND fuzz_net tls 1200 1 20)
+set_tests_properties(net_tls_fuzz PROPERTIES TIMEOUT 120)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/more.cmake OPTIONAL)
 

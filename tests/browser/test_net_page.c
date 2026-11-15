@@ -264,7 +264,7 @@ static FakeServer *tls_server(Env *e, const char *host, int fix)
     s->tls = true;
     s->chain = &tls_fixtures[fix].cert;
     s->chain_len = 1;
-    s->eckey = &tls_fixtures[fix].key;
+    s->key = &tls_fixtures[fix].key;
     return s;
 }
 
@@ -432,7 +432,7 @@ static void test_security(void)
     CHECK(au_page_cert(page(&e)) && au_page_cert(page(&e))->count == 1, "certificate kept");
     int ntabs = e.w->ntabs;
     CHECK(au_bw_show_certificate(e.w) && e.w->ntabs == ntabs + 1, "certificate viewer opens");
-    CHECK(page_text_has(&e, "Certificate for tls.test") && page_text_has(&e, "TLS 1.2") &&
+    CHECK(page_text_has(&e, "Certificate for tls.test") && page_text_has(&e, "TLS 1.3") &&
               page_text_has(&e, "SHA-256"),
           "viewer shows host, protocol and fingerprint");
     au_bw_close_tab(e.w, e.w->active);
@@ -570,7 +570,7 @@ static FakeServer *dual_server(Env *e, const char *host, int fix)
         s->tls = true;
         s->chain = &tls_fixtures[fix].cert;
         s->chain_len = 1;
-        s->eckey = &tls_fixtures[fix].key;
+        s->key = &tls_fixtures[fix].key;
     }
     return s;
 }
@@ -606,7 +606,7 @@ static void test_https_first_pages(void)
     /* HTTPS that failed in TLS after the server spoke it: a valid
      * certificate (other.test) but the handshake signed with another key. */
     FakeServer *tf = dual_server(&e, "other.test", TLS_FIX_WRONGHOST);
-    tf->eckey = &tls_fixtures[TLS_FIX_VALID].key;
+    tf->key = &tls_fixtures[TLS_FIX_VALID].key;
     expect_title(&e, "http://other.test/", "Secure connection failed");
     CHECK(page_text_has(&e, "has an HTTPS site, but the secure connection to it failed"), "TLS failure wording");
     CHECK(click_link(&e, "aura-action:http") && !click_link(&e, "aura-action:continue"),
@@ -647,7 +647,7 @@ static void test_https_first_pages(void)
     respond_html(aia, "<title>Completed</title>");
     FakeServer *ca = fake_server(&e.f, "ca.test", 80);
     static char ca_resp[2048];
-    const br_x509_certificate *ic = &tls_fixtures[TLS_FIX_INTER].cert;
+    const TlsCert *ic = &tls_fixtures[TLS_FIX_INTER].cert;
     int hl = snprintf(ca_resp, sizeof ca_resp, "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n\r\n", (unsigned)ic->data_len);
     memcpy(ca_resp + hl, ic->data, ic->data_len);
     fake_add(ca, ca_resp)->len = (size_t)hl + ic->data_len;

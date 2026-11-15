@@ -1,6 +1,6 @@
 # Third-party code
 
-Aura carries two third-party libraries, QuickJS-ng and BearSSL. Each entry
+Aura carries two third-party libraries, QuickJS-ng and Mbed TLS. Each entry
 records where the code came from and how to update it.
 
 ## QuickJS-ng (JavaScript engine)
@@ -43,25 +43,62 @@ records where the code came from and how to update it.
   `tests/js/CMakeLists.txt` runs each through `aura-host js`. Copy them
   again from the new release when updating.
 
-## BearSSL
+## Mbed TLS (TLS and X.509), with TF-PSA-Crypto
 
-- Version: 0.6
-- Source: https://www.bearssl.org/bearssl-0.6.tar.gz
-- SHA-256 of the tarball:
-  6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14
-- Imported: 2026-11-14
-- Licence: MIT (`bearssl/LICENSE.txt`)
-
-`bearssl/src`, `bearssl/inc`, `LICENSE.txt` and `README.txt` are copied
-unchanged from the tarball. The tools, tests, samples, build files and
-`T0Comp.exe` are left out. `bearssl/CMakeLists.txt` is ours: it builds
-every file under `src/` except the CPU-specific ones (`*_x86ni.c`,
-`*_pwr8.c`, `*_sse2.c`, `*_pclmul.c`) and turns off the system RNG and
-clock sources, since Aura supplies entropy and time through `AuNetOps`.
-
-To update BearSSL, replace `src` and `inc` with those of the new release,
-update this file, and run `./build.sh test` (the TLS tests use an
-in-process BearSSL server).
+- **Version:** Mbed TLS 4.1.1, the 4.1 long-term support branch
+  (supported until March 2029), released 2026-07-07. It carries
+  TF-PSA-Crypto 1.1.1, its cryptography library, in `tf-psa-crypto/`:
+  in Mbed TLS 4 the two are separate trees and both are needed.
+- **Source:**
+  https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-4.1.1/mbedtls-4.1.1.tar.bz2
+- **SHA-256 of the tarball:**
+  3359a349e23db3d5536fcee032ae7b2ecbfc08972fab643089b5cbf2a375c98c
+  (the release's `mbedtls-4.1.1-sha256sum.txt` gives the same).
+- **Imported:** 2026-11-15, replacing BearSSL 0.6
+  (`docs/tls13-feasibility.md` records why).
+- **Licence:** Apache-2.0 OR GPL-2.0-or-later, at the user's choice
+  (`mbedtls/LICENSE`, `mbedtls/tf-psa-crypto/LICENSE`). Aura takes it
+  under Apache-2.0. The distribution carries the licence text as
+  `Licences/MbedTLS.txt` (`build.sh`), and about:licences shows the
+  notice (`src/browser/credits.c`).
+- **What is kept:** `library/` and `include/`, and from `tf-psa-crypto/`
+  the folders `core`, `dispatch`, `extras`, `platform`, `utilities`,
+  `include` and `drivers/builtin`, with the licences and READMEs
+  (`mbedtls-patches/apply.sh` lists them). Left out: tests, programs,
+  documentation, scripts, the framework, the release's build files, and
+  the Everest, p256-m and post-quantum drivers.
+- **Build:** `mbedtls.cmake` builds the static library `aura_mbedtls`
+  from those sources with Aura's configuration,
+  `mbedtls-config/aura_mbedtls_config.h` and `aura_crypto_config.h`: a
+  TLS 1.2 and 1.3 client; ECDHE with X25519, P-256 and P-384; ECDSA and
+  RSA (PKCS#1 v1.5 and PSS) verification; AES-GCM and ChaCha20-Poly1305;
+  SHA-256, SHA-384 and SHA-512 (SHA-1 only to parse root certificates);
+  HKDF; X.509 parsing and verification with the trusted-certificate
+  callback; session tickets, SNI and ALPN. No server, no DTLS, no
+  sockets, files, threads, operating system time or entropy: the
+  library gets memory, clocks and entropy from `src/net/tls_platform.c`.
+  The library is compiled with `-O2` and without warnings; Aura reaches
+  it only from `src/net/tls.c`, `src/net/tls_platform.c`, NetTest and the
+  tests.
+- **Host builds add the server half** (`AURA_MBEDTLS_SERVER`, set by
+  `mbedtls.cmake` for every build except Mac OS 9): the in-process TLS
+  server of `tests/net/fakenet.c` needs it. The library's structures
+  depend on the configuration, so the definition is public to
+  everything that includes its headers.
+- **Do not enable `MBEDTLS_ECDH_VARIANT_EVEREST_ENABLED`.** With it,
+  X25519 gave wrong shared secrets on big-endian PowerPC and every
+  handshake failed its first integrity check.
+- **Changes:** none. Any change goes in `mbedtls-patches/` as a patch,
+  applied in name order by `apply.sh`. To update Mbed TLS, download the
+  new release of the 4.1 branch, check its SHA-256, and run
+  `third_party/mbedtls-patches/apply.sh UNPACKED_DIR`, which replaces
+  `third_party/mbedtls` and applies the patches; update this file and
+  the version in `src/browser/credits.c`; then run `./build.sh all`,
+  the sanitizer build's tests, and NetTest in the guest. `mbedtls.cmake`
+  leaves out the source files that Aura's configuration turns off (they
+  compile to nothing); if a new release or a configuration change needs
+  one of them, the link fails with undefined symbols, and the file comes
+  off that list.
 
 ## Data from other projects
 
@@ -74,6 +111,7 @@ These are not code, but are generated from other projects' files:
 - `src/net/psl_data.c`: the Public Suffix List (Mozilla Public License
   2.0), generated by `src/net/gen_psl.py`. The list version is recorded
   in the file.
-- `assets/net/aura-roots.bin`: trust anchors from the curl CA bundle
-  (Mozilla's root store, MPL 2.0), generated by `src/net/gen_roots.py`.
+- `assets/net/aura-roots.bin`: the root certificates of the curl CA
+  bundle (Mozilla's root store, MPL 2.0), whole, in DER, generated by
+  `src/net/gen_roots.py`.
 

@@ -32,9 +32,7 @@ list(FILTER AURA_ENGINE_SOURCES EXCLUDE REGEX "/src/platform/")
 add_library(aura_engine STATIC ${AURA_ENGINE_SOURCES})
 target_include_directories(aura_engine PUBLIC src)
 include(third_party/quickjs.cmake)
-# BearSSL (TLS and its primitives), used by src/net.
-add_subdirectory(third_party/bearssl)
-target_link_libraries(aura_engine PUBLIC bearssl)
+include(third_party/mbedtls.cmake)
 
 if(AURA_MACOS9)
     if(EXISTS ${CMAKE_SOURCE_DIR}/src/platform/macos9/CMakeLists.txt)
