@@ -51,6 +51,7 @@ typedef struct AuLoadRequest {
     bool user_activated;
     bool reload;                  /* bypass the cache (end-to-end reload) */
     bool revalidate;              /* a reload: revalidate a cached copy (Cache-Control: max-age=0) */
+    bool history;                 /* Back or Forward: use any cached copy as is (AuHttpRequest.history) */
     bool allow_http_fallback;     /* HTTPS-first: the user accepted plain http */
     const char *method;           /* NULL: GET */
     AuBodySource *body;           /* ownership passes */

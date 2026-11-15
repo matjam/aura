@@ -532,7 +532,9 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
         rq.document_url = p->url;
         rq.top_level_url = p->url;
         rq.referrer_policy = p->rpolicy;
-        rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS ? AU_FETCH_CACHE_BYPASS : AU_FETCH_CACHE_NORMAL;
+        rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS || p->cache_mode == AU_FETCH_CACHE_HISTORY
+                       ? p->cache_mode
+                       : AU_FETCH_CACHE_NORMAL;
     }
     f->fid = fe->start(fe->ctx, &rq, &f->sink);
     if (!f->fid) {
@@ -2013,7 +2015,7 @@ void au_page_navigate(AuPage *p, const char *url)
 
 void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll_y)
 {
-    p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    p->cache_mode = AU_FETCH_CACHE_HISTORY;
     start_load(p, url, true, scroll_x, scroll_y, false);
 }
 

@@ -49,6 +49,9 @@ static struct {
     AuDiskCache *disk;
     short cache_vref;
     long cache_dir;
+    /* Disk cache file times (microseconds) and counts, for Network Status. */
+    uint32_t dc_read_us, dc_write_us;
+    unsigned dc_reads, dc_writes;
     AuNetLoader *loader;
     AuNetPageFetcher *pf;
     AuNetTransferSource *xfer;
@@ -296,9 +299,31 @@ static void dc_list(void *ctx, void (*each)(void *, const char *, size_t, uint32
     }
 }
 
+static bool dc_read_file(const char *name, AuBuf *out);
+static bool dc_write_file(const char *name, const void *data, size_t len);
+
 static bool dc_read(void *ctx, const char *name, AuBuf *out)
 {
     (void)ctx;
+    uint32_t t0 = au_mac_clock_us();
+    bool ok = dc_read_file(name, out);
+    N.dc_read_us += au_mac_clock_us() - t0;
+    N.dc_reads++;
+    return ok;
+}
+
+static bool dc_write(void *ctx, const char *name, const void *data, size_t len)
+{
+    (void)ctx;
+    uint32_t t0 = au_mac_clock_us();
+    bool ok = dc_write_file(name, data, len);
+    N.dc_write_us += au_mac_clock_us() - t0;
+    N.dc_writes++;
+    return ok;
+}
+
+static bool dc_read_file(const char *name, AuBuf *out)
+{
     FSSpec s;
     short ref;
     if (!cache_spec(name, &s) || FSpOpenDF(&s, fsRdPerm, &ref) != noErr)
@@ -319,9 +344,8 @@ static bool dc_read(void *ctx, const char *name, AuBuf *out)
     return ok;
 }
 
-static bool dc_write(void *ctx, const char *name, const void *data, size_t len)
+static bool dc_write_file(const char *name, const void *data, size_t len)
 {
-    (void)ctx;
     char tname[40];
     snprintf(tname, sizeof tname, "%s.tmp", name);
     FSSpec tmp, dst;
@@ -577,11 +601,19 @@ void mac_net_status(char lines[4][256])
     snprintf(lines[2], 256, "Roots: %u certificates. Cookies: %u. HSTS hosts: %u. Loads active: %d.",
              N.roots ? (unsigned)au_roots_count(N.roots) : 0, N.jar ? (unsigned)au_cookie_jar_count(N.jar) : 0,
              N.hsts ? (unsigned)au_hsts_count(N.hsts) : 0, N.loader ? au_net_loader_active(N.loader) : 0);
-    snprintf(lines[3], 256, "Cache: %lu KB in memory (%u entries), %lu KB on disk (%u files).",
+    AuCacheStats cs;
+    memset(&cs, 0, sizeof cs);
+    if (N.cache)
+        au_cache_stats(N.cache, &cs);
+    snprintf(lines[3], 256,
+             "Cache: %lu KB in memory (%u), %lu KB on disk (%u). Lookups %lu fresh, %lu history, %lu revalidated "
+             "(%lu 304), %lu missed, %lu from disk. Disk %u reads %lu ms, %u writes %lu ms.",
              N.cache ? (unsigned long)(au_cache_bytes(N.cache) / 1024) : 0,
              N.cache ? (unsigned)au_cache_count(N.cache) : 0,
              N.disk ? (unsigned long)(au_disk_cache_bytes(N.disk) / 1024) : 0,
-             N.disk ? (unsigned)au_disk_cache_count(N.disk) : 0);
+             N.disk ? (unsigned)au_disk_cache_count(N.disk) : 0, cs.fresh, cs.history, cs.stale, cs.not_modified,
+             cs.misses, cs.from_storage, N.dc_reads, (unsigned long)(N.dc_read_us / 1000), N.dc_writes,
+             (unsigned long)(N.dc_write_us / 1000));
 }
 
 void mac_net_rules_changed(void)

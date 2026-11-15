@@ -106,6 +106,7 @@ struct AuHttpTransfer {
     AuReferrerPolicy rpolicy;
     char *top_level;
     bool user_activated, reload, omit_credentials, manual_redirect, allow_http_fallback;
+    bool history; /* AuHttpRequest.history */
     bool https_first_upgrade; /* this attempt is an HTTPS-first upgrade */
     int64_t range_start, range_end;
     uint32_t total_timeout, started_ms, last_ms;
@@ -368,6 +369,7 @@ AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbac
     t->top_level = dupz(rq->top_level_url);
     t->user_activated = rq->user_activated;
     t->reload = rq->reload;
+    t->history = rq->history && !rq->reload;
     t->omit_credentials = rq->omit_credentials;
     t->manual_redirect = rq->manual_redirect;
     t->allow_http_fallback = rq->allow_http_fallback;
@@ -1564,7 +1566,8 @@ static bool cache_try(AuHttpTransfer *t)
     AuHeaders req;
     request_fields(t, &req);
     AuCacheEntry *e = NULL;
-    AuCacheState st = au_cache_lookup(net->cache, au_buf_cstr(&key), &req, wall(net), &e);
+    AuCacheState st = t->history ? au_cache_lookup_history(net->cache, au_buf_cstr(&key), &req, &e)
+                                 : au_cache_lookup(net->cache, au_buf_cstr(&key), &req, wall(net), &e);
     au_headers_free(&req);
     au_buf_free(&key);
     if (st == AU_CACHE_FRESH) {

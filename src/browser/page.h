@@ -85,7 +85,8 @@ typedef enum {
 typedef enum {
     AU_FETCH_CACHE_NORMAL,     /* use the cache as HTTP says */
     AU_FETCH_CACHE_REVALIDATE, /* reload: revalidate the document */
-    AU_FETCH_CACHE_BYPASS      /* Shift- or Option-reload: fetch everything again */
+    AU_FETCH_CACHE_BYPASS,     /* Shift- or Option-reload: fetch everything again */
+    AU_FETCH_CACHE_HISTORY     /* Back or Forward: use cached copies as they are, stale or not */
 } AuFetchCacheMode;
 
 typedef struct AuFetchRequest {

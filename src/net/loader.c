@@ -482,6 +482,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     hr.top_level_url = rq->top_level_url;
     hr.user_activated = rq->user_activated;
     hr.reload = rq->reload;
+    hr.history = rq->history && !rq->reload && !rq->revalidate;
     if (rq->revalidate && !rq->reload)
         au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
