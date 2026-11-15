@@ -81,6 +81,12 @@ typedef struct AuGradientLut {
     float dx, dy;   /* t = (px - ox) * dx + (py - oy) * dy, 0..1 */
     float irx, iry; /* radial: t = |((px - ox) * irx, (py - oy) * iry)| */
     bool radial, repeat;
+    /* SVG: reflect spread; a surface-to-gradient-space matrix (ox, oy and
+     * the rest are then in gradient space); a focal point (fx, fy) with
+     * the circle of radius r at (ox, oy). */
+    bool reflect, has_matrix, focal, slow;
+    float m[6];
+    float fx, fy, r, fa;
 } AuGradientLut;
 
 void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut *out);

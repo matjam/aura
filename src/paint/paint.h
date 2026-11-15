@@ -112,9 +112,49 @@ void au_path_ellipse(AuPath *p, float cx, float cy, float rx, float ry);
  * caps, round joins. Fill the result with AU_FILL_NONZERO. */
 void au_path_stroke(const AuPath *in, float width, AuPath *out);
 
+/* An affine transform: x' = a x + c y + e, y' = b x + d y + f. */
+typedef struct AuMatrix {
+    float a, b, c, d, e, f;
+} AuMatrix;
+
+/* m = m * n: n applies first, then m. */
+void au_matrix_multiply(AuMatrix *m, const AuMatrix *n);
+/* False (and *out unchanged) when m is not invertible. */
+bool au_matrix_invert(const AuMatrix *m, AuMatrix *out);
+/* Maps every point of p through m, in place. */
+void au_path_transform(AuPath *p, const AuMatrix *m);
+/* The bounding box of p's points (control points included): x0, y0, x1,
+ * y1. False for an empty path. */
+bool au_path_bounds(const AuPath *p, float b[4]);
+
+/* An SVG elliptical arc from the current point to (x, y) (SVG 1.1
+ * appendix F.6): radii rx, ry, x-axis rotation in degrees, the large-arc
+ * and sweep flags. Radii too small to reach are scaled up; a zero radius
+ * gives a line. Appended as cubics, one per quarter turn or less. */
+void au_path_arc_svg(AuPath *p, float rx, float ry, float rot_deg, bool large, bool sweep, float x, float y);
+
+/* Stroking with caps, joins and dashes (stroke.c). The outline is a
+ * union of pieces wound the same way: fill it with AU_FILL_NONZERO. */
+typedef enum { AU_CAP_BUTT, AU_CAP_ROUND, AU_CAP_SQUARE } AuLineCap;
+typedef enum { AU_JOIN_MITER, AU_JOIN_ROUND, AU_JOIN_BEVEL } AuLineJoin;
+#define AU_STROKE_MAX_DASHES 64
+typedef struct AuStrokeStyle {
+    float width;
+    uint8_t cap, join;   /* AuLineCap, AuLineJoin */
+    float miter_limit;   /* ratio of miter length to width; below 1 counts as 1 */
+    const float *dashes; /* NULL or ndashes lengths, on and off alternately */
+    size_t ndashes;      /* an odd count repeats the list; at most AU_STROKE_MAX_DASHES */
+    float dash_offset;
+    float tolerance;     /* flattening tolerance in path units; 0: 0.1 */
+} AuStrokeStyle;
+void au_path_stroke_style(const AuPath *in, const AuStrokeStyle *st, AuPath *out);
+
 /* ---- Paint sources ---- */
 
-#define AU_GRADIENT_MAX_STOPS 16
+#define AU_GRADIENT_MAX_STOPS 32
+
+/* Spread methods beyond the 0..1 range. */
+enum { AU_SPREAD_PAD, AU_SPREAD_REFLECT, AU_SPREAD_REPEAT };
 
 typedef struct AuGradientStop {
     float pos; /* 0..1 along the gradient line */
@@ -131,6 +171,21 @@ typedef struct AuGradient {
     bool radial, repeat;
     int nstops;
     AuGradientStop stops[AU_GRADIENT_MAX_STOPS];
+    /* SVG additions; zero leaves the behaviour above.
+     * spread: AU_SPREAD_REFLECT mirrors each period (repeat set or
+     * AU_SPREAD_REPEAT repeats it).
+     * has_matrix: the geometry above is in a gradient space that matrix
+     * maps to canvas coordinates (SVG gradientTransform and
+     * objectBoundingBox units).
+     * focal: a radial gradient's 0 position is the point (fx, fy) instead
+     * of the centre (the circle of radius rx at (x0, y0) is still the 1
+     * position; ry is ignored). A focal point on or outside the circle is
+     * moved just inside it, as SVG 1.1 says. */
+    uint8_t spread;
+    bool has_matrix;
+    AuMatrix matrix;
+    bool focal;
+    float fx, fy;
 } AuGradient;
 
 /* Sets the gradient line for a CSS linear-gradient(angle) over box:
@@ -164,10 +219,14 @@ AuIRect au_canvas_clip(const AuCanvas *c);
  * (0..1). Groups nest. */
 void au_canvas_group_begin(AuCanvas *c, AuRect bounds);
 void au_canvas_group_end(AuCanvas *c, float opacity);
-/* An affine transform: x' = a x + c y + e, y' = b x + d y + f. */
-typedef struct AuMatrix {
-    float a, b, c, d, e, f;
-} AuMatrix;
+/* Masks: begin a group for the content, then a second group over the same
+ * bounds for the mask, draw the mask, and call au_canvas_mask_end. It ends
+ * the mask group and multiplies the content group's pixels by the mask's
+ * alpha (luminance false) or by its luminance times alpha (luminance true,
+ * the SVG mask element: linear coefficients 0.2125, 0.7154, 0.0721 on the
+ * stored values). The caller then ends the content group. With fewer than
+ * two groups open it only ends the innermost one. */
+void au_canvas_mask_end(AuCanvas *c, bool luminance);
 /* Transformed layers: drawing between begin and end goes to a temporary
  * surface covering bounds (whole pixels, not limited by the current
  * clip), which end draws through m (canvas coordinates, before the
