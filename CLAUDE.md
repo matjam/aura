@@ -531,6 +531,21 @@ work in these places:
 - Painting skips boxes outside the canvas clip (`au_layout_paint`), so a
   strip paints only what it shows; box and text ink extents (shadows,
   outlines, inline SVG with visible overflow) must cover what they draw.
+  `rect_hits` in `draw.c` allows one pixel above and below, because a
+  text fragment is as tall as the face's rounded ascent and descent and
+  glyphs reach up to half a pixel past it.
+- Drawing must not depend on the scroll offset, or moved pixels differ
+  from a fresh paint by a coverage level on antialiased edges.
+  `au_layout_paint` puts the whole pixels of the scroll offset in the
+  canvas translation and paints boxes at document coordinates, and
+  `raster()`, `fill_rect_source`, `au_draw_border` and
+  `au_draw_box_shadow` add the whole pixels of the translation to their
+  integer bounds instead of to the coordinates. Keep new drawing code to
+  that rule: take the fraction of the translation into the coordinates
+  and add its whole pixels when writing pixels. `paint_svg` does the same
+  for an inline SVG's place. To check a page, render it with `aura-host
+  render PAGE -s Y` at several offsets and compare the rows that both
+  images show.
 - Hover follows a scroll only after the scroll pauses for
   `AU_REHOVER_MS` (150 ms). The delay dates from when a hover change
   restyled the whole document on pages with `:has()` rules (1.7 s per
@@ -732,7 +747,19 @@ resize:W,H`.
   the elements it left out in `AuLayout.hidden`). Layout then reuses
   every independent subtree whose constraints did not change, and keeps
   intrinsic widths, which do not depend on the viewport. Lengths in
-  viewport units reach layout as style changes.
+  viewport units reach layout as style changes. The restyle itself is
+  skipped or partial when the cascade says so (see CSS, "A viewport
+  change").
+- **An image change** (`au_layout_images_changed`: a size became known,
+  an image failed) keeps the box tree. Each image box asks the loader
+  again (`l_image_refresh`); a box whose size depends on the image is
+  marked for layout, and one with a width and height in pixels is only
+  repainted. The tree is built again only while its shape depends on
+  images (`AuLayout.images_shape`: an object or embed element with a
+  resource, a list-style-image that is not sized yet). The document view
+  repaints the boxes that show a changed image
+  (`au_layout_image_users` names the boxes with it as a background or
+  mask) and the whole page only when layout changed geometry.
 - **Generated text** (a pseudo-element's content, a marker's number) is
   a text box whose node is the element; `current_style` in `layout.c`
   finds its style through the pseudo-element box above it.
@@ -756,22 +783,98 @@ resize:W,H`.
   counters (no tree build or intrinsic run for a height or width change,
   a new measure after a text or font size change).
   `tests/paint/test_shape_cache.c` covers the face caches and the glyph
-  cache.
+  cache. `test_image_arrival_cost` in `tests/page/test_page.c` checks
+  that an arriving image builds no tree, lays out only when its size
+  matters and invalidates the boxes that show it.
 - **Measured** on a Wikipedia article of 18,053 boxes. Host (CPU time):
   width change in layout 2.6 ms (3.7 before), paint of a 1440x900 view
   0.92 ms (1.22), first paint of a page of new text 1.36 ms (1.68), a
   32-pixel strip 0.046 ms (0.061), a one-pixel paint 0.005 ms: painting
   already costs in proportion to what it shows. A width change through
-  the document view takes 18 ms, of which the restyle of every element
-  is 15 ms; the cascade does not yet tell which viewport changes leave
-  styles alone. Guest (emulated, stock base, 600 pixels wide): the last
+  the document view took 18 ms, of which the restyle of every element
+  was 15 ms; on live Wikipedia (`aura-host chrome --do resize:W,H`) a
+  resize that crosses no media query breakpoint now spends 1 to 2 ms in
+  style and layout, and one that crosses a breakpoint 15 to 17 ms. Guest (emulated, stock base, 600 pixels wide): the last
   style and layout pass of the load 465 ms (11,251 ms before the pooled
   allocator), a whole-page paint 4 to 5 ms (54), a page down 4 to 11 ms
   (349), a window zoom two passes of about 280 ms each.
-- **Not done:** an image whose size becomes known still rebuilds the
-  box tree (`au_layout_images_changed`); text is segmented and measured
-  again for each layout of its block (the word cache answers the
-  widths); `l_queue_abspos` searches its queue linearly.
+- **Not done:** text is segmented and measured again for each layout of
+  its block (the word cache answers the widths); `l_layout_abspos_for`
+  removes queue entries with `memmove`; a DOM insertion or removal
+  builds the whole box tree again (the search suggestions on Wikipedia
+  cost a tree build each time the list changes).
+
+## Layout behaviour
+
+Cases are in `tests/layout/cases/*.txt` (format in `test_layout.c`; the
+test loader serves `data:` URLs, so cases can use images). Where a rule
+below names Blink, it comes from reading Blink's source and from CSS
+specifications, not from running Chrome beside Aura.
+
+- **Font metrics are whole pixels.** `l_font` rounds a face's ascent,
+  descent and line gap each to a whole pixel, as Blink's
+  `SimpleFontData::PlatformInit` does, so `line-height: normal` is their
+  sum (16px Aura Sans, with Arial's metrics: 14 + 3 + 1 = 18px, the
+  height Chrome gives 16px Arial). The leading above an inline box is
+  half the difference to the line height rounded down, the rest goes
+  below (`half_leading` in `inline.c`, Blink's `CalculateLeadingSpace`).
+  Fallback faces are rounded the same way in
+  `au_glyph_run_fallback_extents`.
+- **Line breaking.** A `<wbr>` is a break opportunity whatever
+  `white-space` says (Blink and Gecko break there inside nowrap text).
+  Emoji break like ideographs (UAX #14 class ID): before and after each,
+  and between a letter and an emoji. `l_break_class` gives `BK_EXTEND`
+  to combining marks, variation selectors, ZWJ, emoji modifiers and tag
+  characters, which stay with what precedes them (and a ZWJ joins what
+  follows), and `BK_RI` to regional indicators, which break only between
+  pairs. The emoji set is the pictograph blocks U+1F000 to U+1FAFF and
+  the BMP characters with emoji presentation; it is not generated from
+  the Unicode data files.
+- **Containing blocks.** A box with a transform, `translate`, `rotate`,
+  `scale`, `perspective`, a filter, `backdrop-filter`, layout or paint
+  containment, or `will-change` naming one of those is the containing
+  block of its absolutely positioned and fixed descendants
+  (`l_style_contains_fixed`, `LF_TRANSFORM`). A fixed box under one
+  scrolls with the page.
+- **Rounded clips.** A box with `border-radius` and overflow clipped on
+  both axes clips positioned descendants to its rounded padding box:
+  `layer_origin` in `draw.c` paints the layer into a group that
+  `layer_clips_pop` masks, unless the layer's ink stays clear of the
+  corners.
+- **`background-attachment: fixed`** positions a layer against the
+  viewport on any box. Once a box has painted one,
+  `au_layout_scroll_damage` returns -1 and a scroll repaints the page.
+- **Clearance.** A block placed by clearance takes the top margins of
+  its first children into its own top margin, which lies above the edge
+  clearance placed (`LMargin.absorb` in `block.c`); an empty cleared
+  block still lets the next block's margin apply.
+- **Images.** `object-fit` and `object-position` are applied when an
+  image box is painted. `list-style-image` makes the marker an image box
+  with a 7px gap after it (Blink's marker padding), or the
+  `list-style-type` marker when the image fails. `img_source` in
+  `boxtree.c` chooses among `srcset` candidates for one device pixel per
+  CSS pixel (the lowest density of at least 1; width descriptors against
+  `sizes` and the viewport) and among the `<source>` elements of a
+  `<picture>` (media and type), and the natural size is divided by the
+  candidate's density. `au_layout_image_source` gives the document view
+  the same choice. A choice that depends on the viewport makes a
+  viewport change build the box tree again. Not done: `currentSrc` in
+  script, `image-set()`, and `sizes` lengths other than px, vw, vh, em
+  and rem.
+- **Text offsets for script.** `au_layout_text_pos_from_dom` and
+  `au_layout_text_pos_to_dom` (`selection.h`) convert between a text
+  node's UTF-16 offsets and `AuTextPos` by processing the node's data as
+  the box tree did (`l_text_process` with its offset map), and
+  `au_layout_range_rects` gives a range's rectangles per line.
+- **Acid2** (http://acid2.acidtests.org/#top, compared with its
+  reference image at the scroll position of `#top`): the rows that still
+  differ are four rows of the eyes (rows 51, 53, 55 and 57 of the
+  168-pixel face: the Adam7 PNG shows the row above repeated in image
+  rows 1 to 9 in `aura-host render`, though `aura-host image` decodes
+  the file correctly; the cause is not found) and two pixels per row
+  along the nose's diagonal border joins (rows 72 to 95, where the red
+  background shows through the antialiased seam between two border
+  colours).
 
 ## Grid
 
@@ -943,7 +1046,8 @@ the system lacks.
 - **Line height.** With `line-height: normal`, a line holding fallback
   glyphs grows to the fallback face's ascent and descent (each with half
   its line gap) where they exceed the primary's, as Blink does; a fixed
-  line height ignores fallback faces.
+  line height ignores fallback faces. Layout rounds these metrics to
+  whole pixels (see Layout behaviour).
 - **Not done:** OpenType shaping of text (GPOS, and GSUB beyond emoji
   sequences), so no ligatures, kerning beyond `kern`, Arabic joining,
   Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
@@ -983,6 +1087,21 @@ and its tests only.
   the document. Child insertions and removals are not targeted: they
   restyle the element's subtree and its following siblings' subtrees,
   or the document when a `:has()` rule exists.
+- **A viewport change.** The rule index records every media query it
+  evaluates with its result (`media_dep` in `cascade.c`), and a computed
+  style that used a viewport unit has `AU_STYLE_F_VIEWPORT_UNITS`.
+  `au_css_resolver_set_device` with a device that differs only in the
+  viewport size evaluates the recorded queries again: when none changed,
+  the index is kept and `au_css_restyle` computes only the elements
+  whose style (or pseudo-element style) has the flag, and what inherits
+  from them; with no such style it computes nothing.
+  `au_css_resolver_viewport_restyle` says which of the three applies,
+  and the document view skips the style pass on `AU_CSS_VIEWPORT_NONE`.
+  Any other device difference, or a media query that changed, restyles
+  the document as before. Container queries are not evaluated, so
+  nothing is recorded for them. `test_css_invalidate --viewport DIR`
+  (ctest `css_viewport`) resizes pages through fourteen sizes and
+  compares every computed value with a document styled from scratch.
 - **Class and id changes** need the names that changed. `src/dom` notes
   them in `AuDocument.style_names` when the attribute changes, and the
   resolver resolves the elements reported for class or id when the
@@ -1113,7 +1232,7 @@ test and a fuzz run under the sanitizers.
   ITERATIONS SEED tests/image/vectors/*/*`.
 - **Not done:** arithmetic-coded, lossless and 12-bit JPEG; colour
   management (gamma, ICC profiles and colour spaces are ignored);
-  object-fit, border-image and list-style-image in layout. At 256
+  border-image in layout. At 256
   colours images band; nothing dithers them.
 - Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
   `FInfo` collide with Toolbox types. Prefix types with `Au`.
@@ -1523,15 +1642,19 @@ global object is the window, the DOM bindings and the event loop.
   the parser are handled in `js_ranges_text` (data only appended moves
   nothing, anything else puts the node's points at offset 0). To change
   a text mutation path in the prelude, keep it going through
-  `replaceData`. Not exact: `getClientRects` and
-  `getBoundingClientRect` return the boxes of the elements a range
-  covers (layout has no query from a DOM text offset to a position),
-  and `normalize()` moves points in merged text nodes to their parent.
+  `replaceData`. `getClientRects` and `getBoundingClientRect` give the
+  rectangles of the selected part of each text node, one per line,
+  through `N.textRects` and the `text_rects` hook (`h_text_rects` in
+  `script.c`, on layout's `au_layout_text_pos_from_dom` and
+  `au_layout_range_rects`); a collapsed range in text gives one
+  rectangle of no width. Not exact: `normalize()` moves points in merged
+  text nodes to their parent.
 - **Selection** is script state with one range and a direction
   (`extend`, `setBaseAndExtent`, `selectionchange`). It is not the
   selection the user makes with the mouse (`page_doc.c`), and it is not
-  painted: joining them needs a mapping between DOM offsets and
-  `AuTextPos` (processed text offsets) in layout.
+  painted. To join them, convert each boundary point with
+  `au_layout_text_pos_from_dom` and `au_layout_text_pos_to_dom`
+  (`src/layout/selection.h`); that is not wired yet.
 - **CSSOM** (`prelude_cssom.js`). `element.sheet` and
   `document.styleSheets` give a `CSSStyleSheet` per style or link
   element. Rules are read from the sheet's text
@@ -1667,15 +1790,19 @@ work with script off, and script reads and writes the same state.
   listeners changed: `au_docview_key` updates at its end and invalidates
   the page only if the update changed geometry or raised a paint, so a
   restyle that computes the same values repaints the field only
-  (`test_keystroke_cost`, "attribute writers"). Open: on live Wikipedia
+  (`test_keystroke_cost`, "attribute writers"). On live Wikipedia
   (`aura-host chrome -w 1440 -h 900 --net --tab
-  https://en.wikipedia.org/wiki/Mac_OS_9 --do clickname:search --do
-  keys:abcdef`) a key restyles 2 elements (the hidden inputs whose value
-  the page sets), but a box tree build and a layout still run on every
-  key and the viewport is repainted; no DOM change other than those two
-  attributes is reported, so the build is asked for inside layout
-  (`au_layout_styles_changed` deciding on a rebuild, or
-  `au_layout_images_changed`). Find which before changing anything.
+  https://en.wikipedia.org/wiki/Mac_OS_9 --do wait:4000 --do
+  clickname:search --do wait:3000 --do keys:macint`) the box tree build
+  on a key came from the suggestion list's thumbnails: an image whose
+  size became known made layout build the tree again and the view
+  invalidate the page, at the next update, which a key runs. An image
+  change now keeps the tree (see Layout and paint speed), and a key
+  there restyles 2 elements, builds no tree, runs no layout and
+  invalidates the field (439 x 41 pixels). What remains is the page's
+  own work: when the suggestion list changes, its DOM insertions build
+  the tree again, and keys typed while the page still loads its search
+  module pay for that loading.
 - **Mac OS 9 key handling.** `bw_key` does not paint: the event loop in
   `main.c` handles up to 8 queued keys and then paints once
   (`idle_all`).

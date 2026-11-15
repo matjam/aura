@@ -1,0 +1,97 @@
+Images: object-fit, object-position, list-style-image, srcset. The cases
+load data: URLs through the test loader.
+
+
+=== object-fit and object-position
+<body style="margin:0">
+<style>img { width:60px; height:60px; background:#0000ff; display:block; float:left; margin-right:10px }</style>
+<img style="object-fit:fill" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:contain" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:cover" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:none" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:none;object-position:0 100%" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:contain;object-position:right 5px top 0" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="width:20px;height:20px;object-fit:scale-down" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="object-fit:scale-down" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+---
+// fill: the whole box
+pixel 2 2 ff0000
+pixel 57 57 ff0000
+// contain: 60x30, centred (y 15 to 45)
+pixel 72 10 0000ff
+pixel 72 17 ff0000
+pixel 127 43 ff0000
+pixel 100 50 0000ff
+// cover: 120x60, clipped to the box
+pixel 142 2 ff0000
+pixel 197 57 ff0000
+pixel 204 30 ffffff
+// none: 40x20 centred (x 10 to 50, y 20 to 40)
+pixel 215 30 0000ff
+pixel 222 22 ff0000
+pixel 258 38 ff0000
+pixel 240 45 0000ff
+// none at 0 100%: bottom left
+pixel 282 58 ff0000
+pixel 318 42 ff0000
+pixel 325 50 0000ff
+pixel 300 35 0000ff
+// contain, 5px from the right, at the top
+pixel 352 2 ff0000
+pixel 352 35 0000ff
+pixel 404 28 ff0000
+// scale-down in a 20x20 box: contain, 20x10 (y 5 to 15)
+pixel 430 2 0000ff
+pixel 430 10 ff0000
+// scale-down in a 60x60 box: the image's own size, centred
+pixel 455 30 0000ff
+pixel 470 30 ff0000
+
+=== srcset, sizes and picture choose the image
+viewport 800 600
+<body style="margin:0">
+<style>img { display:block }</style>
+<img id=x src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII= 2x">
+<img id=x1 srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII= 1x, data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII= 2x">
+<img id=w srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII= 300w, data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII= 500w" sizes="(max-width: 500px) 100vw, 400px">
+<img id=w2 srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII= 300w, data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII= 500w" sizes="(min-width: 500px) 250px, 400px">
+<img id=w3 srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII= 900w, data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII= 1500w">
+<picture><source media="(max-width: 500px)" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII="><source type="image/x-unknown" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII="><source srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII="><img id=p src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII="></picture>
+<picture><source media="(min-width: 500px)" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII="><img id=p2 src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII="></picture>
+---
+// R is 40x20, B is 10x10. One device pixel per CSS pixel.
+// src is the 1x candidate beside a 2x one
+#x w=40 h=20
+#x1 w=10 h=10
+// 400px slot: 300w is 0.75x, 500w is 1.25x; an image with a width
+// descriptor has the density-corrected size 40 / 1.25
+#w w=32 h=16
+// 250px slot: 300w is 1.2x
+#w2 w=8.33 h=8.33
+// no sizes: 100vw = 800px; 900w is 1.125x
+#w3 w=8.89 h=8.89
+#p w=40 h=20
+#p2 w=40 h=20
+
+=== list-style-image replaces the marker
+<body style="margin:0">
+<ul style="margin:0;padding-left:40px;list-style-image:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR42mNgYPiPF41KY0EA8INjndXmqyIAAAAASUVORK5CYII=)">
+<li id=a>xx</li>
+<li id=b style="list-style-position:inside">xx</li>
+<li id=c style="list-style-image:url(data:image/png;base64,AAAA);list-style-type:square">xx</li>
+</ul>
+---
+// a 10x10 blue image; the font's baseline is 12.8px down a 16px line.
+// outside: the image ends 7px before the content edge and sits on the baseline
+pixel 24 5 0000ff
+pixel 32 11 0000ff
+pixel 34 8 ffffff
+pixel 22 8 ffffff
+pixel 28 1 ffffff
+// inside: the image, 7px, then the text
+pixel 42 22 0000ff
+pixel 49 27 0000ff
+pixel 53 24 ffffff
+pixel 58 24 000000
+// a broken image: the square of list-style-type
+pixel 28 40 000000

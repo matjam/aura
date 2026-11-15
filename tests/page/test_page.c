@@ -520,6 +520,119 @@ static void test_images(void)
     au_docview_free(dv);
 }
 
+/* An image that arrives keeps the box tree. The cause of a box tree
+ * build on every key in Wikipedia's search field: the suggestion list's
+ * thumbnails are background images, and an image whose size became known
+ * (any image, shown or not) made layout build the tree again and the
+ * view invalidate the page. Now a background image repaints the boxes
+ * that show it, an <img> with a fixed size repaints its box, and an
+ * <img> that takes its size from the image is laid out again. */
+typedef struct InvalLog {
+    int n;
+    AuIRect u;
+} InvalLog;
+
+static void log_invalidate(void *ctx, AuDocView *dv, AuIRect r)
+{
+    InvalLog *l = ctx;
+    (void)dv;
+    if (!l->n++) {
+        l->u = r;
+        return;
+    }
+    if (r.x0 < l->u.x0) l->u.x0 = r.x0;
+    if (r.y0 < l->u.y0) l->u.y0 = r.y0;
+    if (r.x1 > l->u.x1) l->u.x1 = r.x1;
+    if (r.y1 > l->u.y1) l->u.y1 = r.y1;
+}
+
+static void type_char(AuDocView *dv, char ch)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_KEY_DOWN;
+    e.ch = (unsigned char)ch;
+    au_docview_key(dv, &e);
+    au_docview_update(dv);
+}
+
+static bool inside(AuIRect u, AuRect a, AuRect b)
+{
+    float x0 = a.x < b.x ? a.x : b.x, y0 = a.y < b.y ? a.y : b.y;
+    float x1 = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w, y1 = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+    return u.x0 >= (int)x0 - 6 && u.y0 >= (int)y0 - 6 && u.x1 <= (int)x1 + 6 && u.y1 <= (int)y1 + 6;
+}
+
+static void test_image_arrival_cost(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof f);
+    InvalLog log;
+    memset(&log, 0, sizeof log);
+    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuDocViewCallbacks cb;
+    memset(&cb, 0, sizeof cb);
+    cb.ctx = &log;
+    cb.invalidate = log_invalidate;
+    AuDocView *dv = au_docview_new(fonts, &li, &cb);
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_puts(&html, "<!DOCTYPE html><body style='margin:0'><input id=q value=x>"
+                       "<div id=t style='width:40px;height:40px;background-image:url(thumb.png)'></div>"
+                       "<img id=fixed src=fixed.png width=20 height=20 style='display:block'>"
+                       "<img id=free src=free.png style='display:block'>");
+    for (int i = 0; i < 50; i++)
+        au_buf_puts(&html, "<p>Paragraph <b>bold</b> text</p>");
+    au_docview_load(dv, au_buf_cstr(&html), html.len, "http://example.com/");
+    au_buf_free(&html);
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 200);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0); /* asks for the background */
+    AuRect q = rect_of(dv, "q");
+    mouse(dv, AU_EVENT_MOUSE_DOWN, (int)q.x + 5, (int)q.y + 5, 0);
+    mouse(dv, AU_EVENT_MOUSE_UP, (int)q.x + 5, (int)q.y + 5, 0);
+    type_char(dv, 'a');
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 255, 0, 0);
+    static const struct {
+        const char *url, *id;
+        unsigned layouts;
+    } cases[] = {{"http://example.com/thumb.png", "t", 0},
+                 {"http://example.com/fixed.png", "fixed", 0},
+                 {"http://example.com/free.png", "free", 1}};
+    for (size_t k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        AuDocViewStats s0, s1;
+        au_docview_stats(dv, &s0);
+        AuRect before = rect_of(dv, cases[k].id);
+        log.n = 0;
+        deliver_image(&f, dv, cases[k].url, bmp, n, true);
+        type_char(dv, 'b');
+        au_docview_stats(dv, &s1);
+        CHECK(s1.tree_builds == s0.tree_builds, "%s arrived: %u tree builds", cases[k].id,
+              s1.tree_builds - s0.tree_builds);
+        CHECK(s1.layouts - s0.layouts == cases[k].layouts, "%s arrived: %u layouts", cases[k].id,
+              s1.layouts - s0.layouts);
+        if (!cases[k].layouts)
+            CHECK(log.n >= 1 && inside(log.u, q, before), "%s arrived: invalidated %d,%d-%d,%d", cases[k].id,
+                  log.u.x0, log.u.y0, log.u.x1, log.u.y1);
+        au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    }
+    AuRect r = rect_of(dv, "free");
+    CHECK(r.w == 40 && r.h == 30, "image laid out at its size: %gx%g", r.w, r.h);
+    r = rect_of(dv, "t");
+    CHECK(au_surface_get(s, (int)r.x + 5, (int)r.y + 5) == AU_RGB(255, 0, 0), "background painted: %08x",
+          au_surface_get(s, (int)r.x + 5, (int)r.y + 5));
+    r = rect_of(dv, "fixed");
+    CHECK(au_surface_get(s, (int)r.x + 5, (int)r.y + 5) == AU_RGB(255, 0, 0), "fixed image painted: %08x",
+          au_surface_get(s, (int)r.x + 5, (int)r.y + 5));
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* <object> shows an image or its fallback content; <embed> shows an
  * image; SVG images size from their width and height. */
 static void test_object_embed(void)
@@ -766,6 +879,7 @@ int main(void)
     test_input();
     test_incremental();
     test_images();
+    test_image_arrival_cost();
     test_object_embed();
     test_user_css();
     test_webfonts();

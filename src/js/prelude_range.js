@@ -5,10 +5,9 @@
  * or removed; character data edits report through replaceData and
  * splitText in prelude_dom.js. Offsets are UTF-16 code units.
  *
- * Not exact: getClientRects and getBoundingClientRect return the boxes of
- * the elements the range covers; a boundary inside a text node counts its
- * parent element's box (layout has no query from a DOM text offset to a
- * position). normalize() moves boundary points in merged text nodes to
+ * getClientRects and getBoundingClientRect ask layout for the rectangles
+ * of the selected part of each text node (N.textRects).
+ * Not exact: normalize() moves boundary points in merged text nodes to
  * their parent. The Selection object is script state: it is not the
  * selection the user makes with the mouse, and it is not painted. */
 
@@ -189,13 +188,36 @@ class Range extends AbstractRange {
         return f;
     }
     getClientRects() {
+        /* CSSOM View: the border boxes of each element the range selects
+         * whose parent it does not select, and for each text node it
+         * selects or partly selects the rectangles of the selected part
+         * (layout answers per line, N.textRects; for a collapsed range in
+         * text, one rectangle of no width). Where layout cannot answer for
+         * a text node (no hook), its parent element's boxes stand in. */
         const p = N.rangeGet(this[S.range]);
         const out = [];
-        const add = (el) => { if (el && el.nodeType === 1) for (const r of el.getClientRects()) out.push(r); };
-        if (p[0] === p[2] && p[1] === p[3]) return out;
-        if (isCharData(p[0])) add(p[0].parentElement);
-        for (const n of containedNodes(p, false)) add(n.nodeType === 1 ? n : n.nodeType === 3 && n.parentElement !== p[0].parentElement ? n.parentElement : null);
-        if (isCharData(p[2]) && p[2] !== p[0] && p[2].parentElement !== p[0].parentElement) add(p[2].parentElement);
+        const v = N.viewport();
+        const stood = new Set();
+        const text = (n, a, b) => {
+            const r = N.textRects(n, a, b);
+            if (r) { for (let i = 0; i < r.length; i += 4) out.push(new DOMRect(r[i] - v[2], r[i + 1] - v[3], r[i + 2], r[i + 3])); return; }
+            const el = n.parentElement;
+            if (r === undefined && el && a !== b && !stood.has(el)) {
+                stood.add(el);
+                for (const q of el.getClientRects()) out.push(q);
+            }
+        };
+        if (p[0] === p[2]) {
+            if (p[0].nodeType === 3) text(p[0], p[1], p[3]);
+            if (p[0].nodeType === 3 || p[1] === p[3]) return out;
+        }
+        if (p[0].nodeType === 3) text(p[0], p[1], p[0].data.length);
+        const all = containedNodes(p, true), set = new Set(all);
+        for (const n of all) {
+            if (n.nodeType === 1 && !set.has(n.parentNode)) for (const q of n.getClientRects()) out.push(q);
+            else if (n.nodeType === 3) text(n, 0, n.data.length);
+        }
+        if (p[2].nodeType === 3 && p[2] !== p[0]) text(p[2], 0, p[3]);
         return out;
     }
     getBoundingClientRect() {

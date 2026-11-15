@@ -17,3 +17,32 @@ between blocks, and the baseline of an empty cell with a height.
 </ul>
 ---
 #u h=10
+
+=== a child's top margin collapses into the margin of a block placed by clearance
+<body style="margin:0">
+<div style="height:10px;margin-bottom:48px"></div>
+<div id="f" style="float:left;margin:-24px 24px -12px;width:100px;height:60px"></div>
+<div id="e" style="margin:75px"><div style="margin:0 24px -72px 48px"></div></div>
+<div id="s" style="margin:60px 36px;clear:both"><div id="c" style="margin-top:3px;height:24px"></div></div>
+<div id="n" style="height:5px"></div>
+---
+// the float's margin box starts after the first block's bottom margin
+// (58): its border box is 24 above. Its margin box ends at 58 - 24 + 60
+// - 12 = 82. Without clear the second block's border edge would be at
+// 10 + (75 - 72) = 13, so clearance places it at 82 (negative clearance:
+// 13 + c + 60 = 82), and the child's 3px margin is inside the collapsed
+// 60px one.
+#f y=34 h=60
+#e y=13 h=0
+#s y=82 h=24
+#c y=82
+#n y=166
+
+=== an empty block with clear keeps the next block's top margin
+<body style="margin:0">
+<div style="float:left;width:10px;height:30px"></div>
+<div id="x" style="clear:both"></div>
+<div id="n" style="margin-top:7px;height:5px"></div>
+---
+#x y=30 h=0
+#n y=37

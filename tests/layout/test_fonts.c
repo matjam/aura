@@ -105,8 +105,11 @@ int main(void)
     float h, lines[32];
     float base;
     EXPECT(block_lines(dump, "latin", &base, lines, 32) == 1);
-    /* Aura Sans at 16px: (1854 + 434 + 67) / 2048 * 16. */
-    EXPECT(fabsf(base - 18.40f) < 0.05f);
+    /* Aura Sans at 16px: ascent 1854, descent 434 and line gap 67 units of
+     * 2048 are 14.48, 3.39 and 0.52px, each rounded to a whole pixel as
+     * Blink does: 14 + 3 + 1. (Arial has the same metrics, and Chrome's
+     * line-height: normal for 16px Arial is 18px.) */
+    EXPECT(fabsf(base - 18.0f) < 0.01f);
     /* Greek and Cyrillic are in the primary face: the same height. */
     EXPECT(block_lines(dump, "greek", &h, lines, 32) == 1 && fabsf(h - base) < 0.01f);
     EXPECT(block_lines(dump, "cyr", &h, lines, 32) == 1 && fabsf(h - base) < 0.01f);
