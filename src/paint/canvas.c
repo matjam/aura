@@ -171,6 +171,41 @@ void au_canvas_group_end(AuCanvas *c, float opacity)
     au_surface_free(g.surface);
 }
 
+typedef struct {
+    uint8_t *mask;
+    int x0, y0, w;
+} MaskCtx;
+
+static void mask_span(void *ctx, int y, int x, int n, const uint8_t *cov)
+{
+    MaskCtx *m = ctx;
+    memcpy(m->mask + (size_t)(y - m->y0) * m->w + (x - m->x0), cov, (size_t)n);
+}
+
+void au_canvas_group_mask(AuCanvas *c, const AuPath *p)
+{
+    if (!c->ngroups)
+        return;
+    Group *g = &c->groups[c->ngroups - 1];
+    int w = g->surface->width, h = g->surface->height;
+    if (w <= 0 || h <= 0)
+        return;
+    MaskCtx m = {au_calloc((size_t)w * h), g->ox, g->oy, w};
+    AuIRect area = {g->ox, g->oy, g->ox + w, g->oy + h};
+    au_raster_path(p, c->tx, c->ty, AU_FILL_NONZERO, area, mask_span, &m);
+    for (int y = 0; y < h; y++) {
+        AuPixel *row = g->surface->pixels + (size_t)y * g->surface->stride;
+        const uint8_t *mr = m.mask + (size_t)y * w;
+        for (int x = 0; x < w; x++) {
+            uint32_t cv = mr[x];
+            if (cv == 255 || !row[x])
+                continue;
+            row[x] = cv ? au_px_scale(row[x], cv + (cv >> 7)) : 0;
+        }
+    }
+    au_free(m.mask);
+}
+
 /* ---- Rectangles ----
  * A rectangle is filled directly, without the path rasterizer: each row
  * gets a coverage factor for its vertical overlap, and the two edge

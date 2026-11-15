@@ -163,6 +163,11 @@ AuIRect au_canvas_clip(const AuCanvas *c);
  * (0..1). Groups nest. */
 void au_canvas_group_begin(AuCanvas *c, AuRect bounds);
 void au_canvas_group_end(AuCanvas *c, float opacity);
+/* Multiplies the innermost group's pixels by the coverage of p (canvas
+ * coordinates, nonzero rule): pixels outside p become transparent. This
+ * gives a clip of any shape (rounded overflow clipping). No-op outside a
+ * group. */
+void au_canvas_group_mask(AuCanvas *c, const AuPath *p);
 
 void au_fill_rect(AuCanvas *c, AuRect r, AuColor color);
 void au_fill_rect_gradient(AuCanvas *c, AuRect r, const AuGradient *g);

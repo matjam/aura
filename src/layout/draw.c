@@ -278,25 +278,28 @@ static void inset_radii(AuRadii *r, const float *in)
     }
 }
 
-static uint32_t shade(uint32_t argb, float f)
+/* The dark or light shade of a groove, ridge, inset or outset border, as
+ * Blink computes it: the largest channel v (0..1) moves by 0.33 and the
+ * others scale with it. Black darkens to #ababab and lightens to #545454
+ * so a black bevel still shows. */
+static uint32_t bevel(uint32_t argb, bool dark)
 {
     uint32_t a = argb >> 24, r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
-    if (f < 1) {
-        r = (uint32_t)(r * f);
-        g = (uint32_t)(g * f);
-        b = (uint32_t)(b * f);
-    } else {
-        r = r + (uint32_t)((255 - r) * (f - 1));
-        g = g + (uint32_t)((255 - g) * (f - 1));
-        b = b + (uint32_t)((255 - b) * (f - 1));
-    }
+    if (!r && !g && !b)
+        return (a << 24) | (dark ? 0xabababu : 0x545454u);
+    float v = (float)(r > g ? (r > b ? r : b) : (g > b ? g : b)) / 255.0f;
+    float m = dark ? l_max(0, (v - 0.33f) / v) : l_min(1, v + 0.33f) / v;
+    float k = m * 255.99f / 255.0f;
+    r = (uint32_t)l_min(255, r * k);
+    g = (uint32_t)l_min(255, g * k);
+    b = (uint32_t)l_min(255, b * k);
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
 static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col, bool dotted)
 {
     float len = side == AU_SIDE_TOP || side == AU_SIDE_BOTTOM ? box.w : box.h;
-    float dash = dotted ? w : 3 * w, gap = dotted ? w : 2 * w;
+    float dash = dotted ? w : 2 * w, gap = w;
     if (dash <= 0)
         return;
     int n = (int)((len + gap) / (dash + gap));
@@ -322,6 +325,97 @@ static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col
     }
 }
 
+/* One side of a rounded border for draw_rounded_dashes: its length along
+ * the side, its width, and the extent of each end's corner along (e) and
+ * across (d) the side. */
+typedef struct {
+    AuRect box;
+    int side;
+    float len, w, e0, d0, e1, d1;
+} LDashSide;
+
+/* Adds to p the part of the band of side s from a to b along it: as thick
+ * as the corner where it lies inside one, else the border width. */
+static void dash_piece(AuPath *p, const LDashSide *s, float a, float b, bool dot)
+{
+    float cut[4] = {a, l_max(a, l_min(b, s->e0)), l_min(b, l_max(a, s->len - s->e1)), b};
+    float th[3] = {s->d0, s->w, s->d1};
+    for (int k = 0; k < 3; k++) {
+        float u = cut[k], v = cut[k + 1];
+        if (v - u <= 0)
+            continue;
+        float d = th[k];
+        AuRect r;
+        switch (s->side) {
+        case AU_SIDE_TOP: r = (AuRect){s->box.x + u, s->box.y, v - u, d}; break;
+        case AU_SIDE_BOTTOM: r = (AuRect){s->box.x + u, s->box.y + s->box.h - d, v - u, d}; break;
+        case AU_SIDE_LEFT: r = (AuRect){s->box.x, s->box.y + u, d, v - u}; break;
+        default: r = (AuRect){s->box.x + s->box.w - d, s->box.y + u, d, v - u}; break;
+        }
+        if (dot && k == 1 && u == a && v == b) {
+            AuRadii rr = {{s->w / 2, s->w / 2, s->w / 2, s->w / 2}, {s->w / 2, s->w / 2, s->w / 2, s->w / 2}};
+            au_path_rounded_rect(p, r, &rr, false);
+        } else {
+            au_path_rect(p, r);
+        }
+    }
+}
+
+static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col, const uint8_t *st,
+                         const AuRadii *radii);
+
+/* Rounded borders with dashed or dotted sides: the sides are drawn solid
+ * in a group, then masked to dashes spaced over each side's full length
+ * as for square corners. A dash in a corner exposes the curve there. */
+static void draw_rounded_dashes(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col,
+                                const uint8_t *st, const AuRadii *radii)
+{
+    uint8_t solid_st[4];
+    for (int i = 0; i < 4; i++)
+        solid_st[i] = (st[i] == AU_BORDER_STYLE_DASHED || st[i] == AU_BORDER_STYLE_DOTTED)
+                          ? AU_BORDER_STYLE_SOLID
+                          : st[i];
+    au_canvas_group_begin(c, box);
+    draw_borders(c, box, bw, col, solid_st, radii);
+    /* Corner extents: the larger of the radius and the adjacent border. */
+    float cw[4], ch[4];
+    static const int hs[4] = {3, 1, 1, 3}, vs[4] = {0, 0, 2, 2};
+    for (int i = 0; i < 4; i++) {
+        cw[i] = l_max(radii->rx[i], bw[hs[i]]);
+        ch[i] = l_max(radii->ry[i], bw[vs[i]]);
+    }
+    /* Corners at each side's start and end (top-left is 0, clockwise). */
+    static const int c0[4] = {0, 1, 3, 0}, c1[4] = {1, 2, 2, 3};
+    AuPath p;
+    au_path_init(&p);
+    for (int i = 0; i < 4; i++) {
+        if (bw[i] <= 0)
+            continue;
+        bool horiz = i == AU_SIDE_TOP || i == AU_SIDE_BOTTOM;
+        LDashSide s = {box, i, horiz ? box.w : box.h, bw[i], 0, 0, 0, 0};
+        s.e0 = horiz ? cw[c0[i]] : ch[c0[i]];
+        s.d0 = horiz ? ch[c0[i]] : cw[c0[i]];
+        s.e1 = horiz ? cw[c1[i]] : ch[c1[i]];
+        s.d1 = horiz ? ch[c1[i]] : cw[c1[i]];
+        bool dot = st[i] == AU_BORDER_STYLE_DOTTED;
+        if (!dot && st[i] != AU_BORDER_STYLE_DASHED) {
+            dash_piece(&p, &s, 0, s.len, false);
+            continue;
+        }
+        float dash = dot ? s.w : 2 * s.w, gap = s.w;
+        int n = (int)((s.len + gap) / (dash + gap));
+        n = n < 1 ? 1 : n > 4000 ? 4000 : n;
+        if (n == 1)
+            dash = l_min(dash, s.len);
+        float step = n > 1 ? (s.len - dash) / (n - 1) : 0;
+        for (int k = 0; k < n; k++)
+            dash_piece(&p, &s, k * step, k * step + dash, dot);
+    }
+    au_canvas_group_mask(c, &p);
+    au_path_free(&p);
+    au_canvas_group_end(c, 1.0f);
+}
+
 /* Draws borders with widths bw, colours col (paint ARGB) and styles st. */
 static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col, const uint8_t *st,
                          const AuRadii *radii)
@@ -329,6 +423,13 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
     AuBorder solid = {{0}, {0}};
     bool any_solid = false;
     bool has_radii = radii && !au_radii_zero(radii);
+    if (has_radii)
+        for (int i = 0; i < 4; i++)
+            if (bw[i] > 0 && (col[i] >> 24) &&
+                (st[i] == AU_BORDER_STYLE_DASHED || st[i] == AU_BORDER_STYLE_DOTTED)) {
+                draw_rounded_dashes(c, box, bw, col, st, radii);
+                return;
+            }
     for (int i = 0; i < 4; i++) {
         /* Every side keeps its width, painted or not: the corner joins
          * depend on the neighbours' widths (CSS triangles are boxes with
@@ -345,9 +446,9 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
         uint32_t cc = col[i];
         bool tl = i == AU_SIDE_TOP || i == AU_SIDE_LEFT;
         if (s == AU_BORDER_STYLE_INSET)
-            cc = tl ? shade(cc, 0.6f) : cc;
+            cc = bevel(cc, tl);
         else if (s == AU_BORDER_STYLE_OUTSET)
-            cc = tl ? cc : shade(cc, 0.6f);
+            cc = bevel(cc, !tl);
         solid.color[i] = cc;
         any_solid = true;
     }
@@ -379,7 +480,7 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
             outer.width[i] = inner_b.width[i] = solid.width[i] / 2;
             in[i] = solid.width[i] / 2;
             bool tl = i == AU_SIDE_TOP || i == AU_SIDE_LEFT;
-            uint32_t dark = shade(solid.color[i], 0.6f), light = solid.color[i];
+            uint32_t dark = bevel(solid.color[i], true), light = bevel(solid.color[i], false);
             outer.color[i] = (tl == groove) ? dark : light;
             inner_b.color[i] = (tl == groove) ? light : dark;
         }
@@ -1766,8 +1867,23 @@ static void paint_lines(PCtx *P, LBlock *b, float ox, float oy, LBox *owner)
 
 static void paint_flow(PCtx *P, LBlock *b, float ox, float oy, int phase);
 
+/* The padding-box radii of b's overflow clip, if any corner is rounded. */
+static bool clip_radii(const LBlock *b, AuRadii *out)
+{
+    AuRadii r;
+    box_radii(b, &r, b->w, b->h);
+    if (au_radii_zero(&r))
+        return false;
+    inset_radii(&r, b->bw);
+    if (au_radii_zero(&r))
+        return false;
+    if (out)
+        *out = r;
+    return true;
+}
+
 /* Pushes b's overflow clip; returns the origin offset for its content. */
-static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *cy)
+static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *cy, bool shaped)
 {
     *cx = ox;
     *cy = oy;
@@ -1784,9 +1900,32 @@ static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *
         r.h += 200000;
     }
     au_canvas_clip_push(P->c, r);
+    /* A rounded padding box clips through a group masked at pop_clip. */
+    if (shaped && s->overflow_x != AU_OVERFLOW_VISIBLE && s->overflow_y != AU_OVERFLOW_VISIBLE &&
+        clip_radii(b, NULL))
+        au_canvas_group_begin(P->c, r);
     *cx = ox - b->scroll_x;
     *cy = oy - b->scroll_y;
     return true;
+}
+
+/* Undoes push_clip (clipped is its result; ox, oy the box origin). */
+static void pop_clip(PCtx *P, LBlock *b, float ox, float oy, bool clipped)
+{
+    if (!clipped)
+        return;
+    const AuStyleBox *s = b->b.style->box;
+    AuRadii rr;
+    if (s->overflow_x != AU_OVERFLOW_VISIBLE && s->overflow_y != AU_OVERFLOW_VISIBLE &&
+        clip_radii(b, &rr)) {
+        AuPath p;
+        au_path_init(&p);
+        au_path_rounded_rect(&p, box_area(b, ox, oy, AU_K_padding_box), &rr, false);
+        au_canvas_group_mask(P->c, &p);
+        au_path_free(&p);
+        au_canvas_group_end(P->c, 1.0f);
+    }
+    au_canvas_clip_pop(P->c);
 }
 
 static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
@@ -1858,12 +1997,11 @@ static void paint_flow(PCtx *P, LBlock *b, float ox, float oy, int phase)
         return;
     P->depth++;
     float cx, cy;
-    bool clipped = push_clip(P, b, ox, oy, &cx, &cy);
+    bool clipped = push_clip(P, b, ox, oy, &cx, &cy, true);
     if (phase == PH_INLINE && (b->b.flags & LF_INLINES))
         paint_lines(P, b, cx, cy, NULL);
     paint_children(P, &b->b, cx, cy, phase);
-    if (clipped)
-        au_canvas_clip_pop(P->c);
+    pop_clip(P, b, ox, oy, clipped);
     if (phase == PH_INLINE) {
         paint_scrollbars(P, b, ox, oy);
         /* outlines of in-flow descendants */
@@ -1888,14 +2026,13 @@ static void paint_atomic(PCtx *P, LBlock *k, float ox, float oy)
         return;
     }
     float cx, cy;
-    bool clipped = push_clip(P, k, ox, oy, &cx, &cy);
+    bool clipped = push_clip(P, k, ox, oy, &cx, &cy, true);
     paint_children(P, &k->b, cx, cy, PH_BG);
     paint_children(P, &k->b, cx, cy, PH_FLOAT);
     if (k->b.flags & LF_INLINES)
         paint_lines(P, k, cx, cy, NULL);
     paint_children(P, &k->b, cx, cy, PH_INLINE);
-    if (clipped)
-        au_canvas_clip_pop(P->c);
+    pop_clip(P, k, ox, oy, clipped);
     paint_scrollbars(P, k, ox, oy);
     paint_outline(P, &k->b, (AuRect){ox, oy, k->w, k->h});
 }
@@ -2012,7 +2149,7 @@ static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *o
         }
         if (applies[i] && (a->flags & LF_CLIPS)) {
             float cx, cy;
-            push_clip(P, k, x, y, &cx, &cy);
+            push_clip(P, k, x, y, &cx, &cy, false);
             pushed++;
             x = cx;
             y = cy;
@@ -2113,7 +2250,7 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         paint_replaced(P, k, ox, oy);
     } else {
         float cx, cy;
-        bool clipped = push_clip(P, k, ox, oy, &cx, &cy);
+        bool clipped = push_clip(P, k, ox, oy, &cx, &cy, true);
         if (sc && k->layers)
             paint_layer_list(P, k, cx, cy, 0, k->layers->nneg);
         if (!cull) {
@@ -2125,8 +2262,7 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         }
         if (sc && k->layers)
             paint_layer_list(P, k, cx, cy, k->layers->nneg, k->layers->n);
-        if (clipped)
-            au_canvas_clip_pop(P->c);
+        pop_clip(P, k, ox, oy, clipped);
         paint_scrollbars(P, k, ox, oy);
     }
     paint_outline(P, b, (AuRect){ox, oy, k->w, k->h});

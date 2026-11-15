@@ -178,6 +178,46 @@ pixel 5 5 ff0000
 pixel 30 30 00ff00
 pixel 65 30 ff0000
 
+=== overflow hidden with border-radius clips to the rounded padding box
+<body style="margin:0">
+<div style="overflow:hidden;border-radius:20px;width:40px;height:40px">
+<div style="height:100px;background:#ff0000"></div>
+</div>
+---
+pixel 1 1 ffffff
+pixel 38 38 ffffff
+pixel 20 20 ff0000
+pixel 20 1 ff0000
+
+=== dashes are twice the border width, spaced over the side
+<body style="margin:0">
+<div style="width:92px;height:20px;border:4px dashed #ff0000"></div>
+---
+// 8 dashes of 8px over 100px: one every 13.14px
+pixel 4 1 ff0000
+pixel 10 1 ffffff
+pixel 16 1 ff0000
+
+=== rounded dashed borders stay dashed
+<body style="margin:0">
+<div style="width:100px;height:32px;border:4px dashed #ff0000;border-radius:8px"></div>
+---
+// 9 dashes over 108px: 0-8, 12.5-20.5, 25-33...
+pixel 10 1 ffffff
+pixel 16 1 ff0000
+pixel 23 1 ffffff
+pixel 29 1 ff0000
+
+=== inset borders use Blink's dark and light shades
+<body style="margin:0">
+<div style="width:40px;height:20px;border:6px inset #888888"></div>
+<div style="width:40px;height:20px;border:6px ridge #000000"></div>
+---
+pixel 20 2 343434
+pixel 20 29 dddddd
+pixel 20 33 545454
+pixel 20 36 ababab
+
 === outline paints outside the border box
 <body style="margin:0">
 <div style="margin:20px;width:50px;height:50px;outline:5px solid #ff0000"></div>
