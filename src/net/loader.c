@@ -140,6 +140,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->cipher = r->cipher;
     i->fallback_cause = r->fallback_cause;
     i->mixed = r->mixed;
+    i->request_head = "";
     i->blocked_reason = r->blocked[0] ? r->blocked : NULL;
 }
 
@@ -428,6 +429,11 @@ static void t_done(void *ctx, AuHttpTransfer *t, AuNetError err)
         return;
     AuLoadInfo info;
     fill_info(r, &info);
+    AuHttpTrace trace;
+    au_http_trace(t, &trace);
+    info.trace = &trace;
+    info.response_headers = au_http_response_headers(t);
+    info.request_head = au_http_request_head(t);
     if (r->cb.done)
         r->cb.done(r->cb.ctx, r->id, err, &info);
 }

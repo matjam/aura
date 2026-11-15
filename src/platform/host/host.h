@@ -28,5 +28,10 @@ void au_host_set_window_surface(AuSurface *s);
 /* aura-host js (jsrun.c). */
 int au_host_js_main(int argc, char **argv);
 int au_host_page_main(int argc, char **argv);
+/* aura-host chrome: the developer tools' --do actions (devtools_host.c);
+ * false when a is not one. net may be NULL. */
+struct AuBrowserWindow;
+struct AuNet;
+bool au_host_dev_action(struct AuBrowserWindow *w, struct AuNet *net, const char *a);
 
 #endif

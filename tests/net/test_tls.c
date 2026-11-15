@@ -576,8 +576,43 @@ static void test_aia_hostile_pool(void)
     aia_env_free(&e);
 }
 
+/* HTTPS-first: a site whose HTTPS address redirects to plain HTTP on the
+ * same host is loaded over HTTP instead of being upgraded again for
+ * ever (www.macintoshrepository.org). */
+static void test_https_first_downgrade_redirect(void)
+{
+    FakeNet f;
+    fake_init(&f);
+    AuRootStore *roots = test_roots();
+    AuNet *net = au_net_new(&f.ops);
+    au_net_set_roots(net, roots);
+    au_net_config(net)->https_first = true;
+    /* One host: TLS on 443, plain http on any other port. Responses are
+     * served in order: the redirect over https, then the page over http. */
+    FakeServer *s = tls_server(&f, "tls.test", TLS_FIX_VALID);
+    s->port = 0;
+    s->special_port = 443;
+    FakeServer *p = s;
+    fake_respond(s, "HTTP/1.1 302 Found\r\nLocation: http://tls.test/\r\nContent-Length: 0\r\n\r\n");
+    fake_respond(p, OK_RESP);
+    Result r;
+    get(&f, net, &r, "http://tls.test/", 800);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200 && r.body == 5,
+          "https-first follows a redirect back to http: err %s status %d", au_net_error_name(r.err), r.status);
+    CHECK(au_net_http_allowed(net, "tls.test"), "the host is remembered as HTTP for the session");
+    /* The next page on the site goes straight to http. */
+    fake_respond(p, OK_RESP);
+    get(&f, net, &r, "http://tls.test/next", 800);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200, "second page over http: err %s",
+          au_net_error_name(r.err));
+    au_net_free(net);
+    au_roots_free(roots);
+    fake_free(&f);
+}
+
 int main(void)
 {
+    test_https_first_downgrade_redirect();
     test_aia_fetch();
     test_aia_depth_pkcs7();
     test_aia_pem();

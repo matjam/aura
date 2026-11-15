@@ -33,6 +33,7 @@
 #include "../html/html.h"
 #include "../layout/layout.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct */
+#include "perf.h"
 
 typedef struct AuDocView AuDocView;
 
@@ -195,6 +196,17 @@ uint32_t au_docview_scripts_due(AuDocView *dv);
  * converted to a string, goes in out. False without a runtime or when it
  * throws (out then holds the error). */
 bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
+
+/* ---- Measurements (the developer tools) ---- */
+/* The document's time counters (perf.h): script, style, layout and paint
+ * are timed by the view when the embedder gives a clock (now_ms); the
+ * shell adds the screen copy. Cleared by au_docview_begin. */
+AuPerf *au_docview_perf(AuDocView *dv);
+/* Parsing is over and, with script, DOMContentLoaded has fired. */
+bool au_docview_content_loaded(const AuDocView *dv);
+/* Bytes the document's script runtime has allocated and its limit; 0, 0
+ * without a runtime. */
+void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit);
 
 /* ---- Keeping a document while it is not shown ----
  * An embedder that keeps a view alive while another document is shown

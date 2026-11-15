@@ -51,6 +51,7 @@ dist() {
     cp build/ppc/src/platform/macos9/Aura.bin "$d/"
     cp assets/net/aura-roots.bin "$d/aura-roots"
     mkdir -p "$d/Licences"
+    cp LICENSE "$d/Licences/Aura.txt"
     cp third_party/bearssl/LICENSE.txt "$d/Licences/BearSSL.txt"
     cp third_party/quickjs/LICENSE "$d/Licences/QuickJS-ng.txt"
     for fam in assets/fonts/*/; do
