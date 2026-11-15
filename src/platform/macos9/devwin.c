@@ -309,7 +309,10 @@ static void network_detail(DevWin *dw, AuPage *p)
     uint32_t seq = r ? r->seq : 0;
     uint32_t old_top = seq == dw->detail_seq ? dw->dv.top : 0;
     dw->detail_seq = seq;
-    au_dev_network_detail_lines(r, &dw->dlist);
+    if (r)
+        au_dev_network_detail_lines(r, &dw->dlist);
+    else
+        au_dev_network_blocked_lines(l, &dw->dlist); /* nothing selected: what was blocked */
     dw->dv.top = old_top;
 }
 

@@ -394,6 +394,17 @@ static void test_netlog_tls_and_blocked(void)
     CHECK(ad && ad->state == AU_NETREC_BLOCKED && !strncmp(ad->blocked_reason, "blocked: ", 9) &&
               ad->connection == 0,
           "blocklist: state %d, reason \"%s\"", ad ? ad->state : -1, ad ? ad->blocked_reason : "");
+    au_buf_init(&b);
+    au_netlog_blocked(l, &b);
+    CHECK(strstr(au_buf_cstr(&b), "Blocked requests (1)") && strstr(au_buf_cstr(&b), "http://ads.test/pixel.gif  (") &&
+              !strstr(au_buf_cstr(&b), "blocked: "),
+          "the blocked list: %s", au_buf_cstr(&b));
+    au_buf_free(&b);
+    AuTextList blines;
+    au_textlist_init(&blines);
+    au_dev_network_blocked_lines(l, &blines);
+    CHECK(blines.n == 3 && blines.style[0] == AU_TS_HEADING, "blocked lines for the pane (%u)", (unsigned)blines.n);
+    au_textlist_free(&blines);
     au_net_loader_set_blocklist(e.l, NULL);
     au_blocklist_free(bl);
 

@@ -92,6 +92,11 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     au_buf_printf(out, "\n  images: %lu KB decoded of %lu KB (%lu decodes, %lu evictions)\n",
                   (unsigned long)st.image_kb, (unsigned long)st.image_budget_kb, (unsigned long)st.image_decodes,
                   (unsigned long)st.image_evictions);
+    au_buf_printf(out, "  documents kept for Back and Forward: %lu, about %lu KB",
+                  (unsigned long)au_page_kept_count(p), (unsigned long)(au_page_kept_bytes(p) / 1024));
+    if (st.restored)
+        au_buf_printf(out, " (this one was restored; hiding the last took %lu ms)", (unsigned long)st.hide_ms);
+    au_buf_putc(out, '\n');
     AuGlyphCacheStats gs;
     au_glyph_cache_stats(&gs);
     au_buf_printf(out, "  glyph cache: %lu KB, %lu glyphs (%lu hits, %lu misses, %lu evictions)\n",
@@ -104,6 +109,8 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
                       (unsigned long)h->http_cache_kb, (unsigned long)h->http_cache_max_kb,
                       (unsigned long)h->http_cache_entries, h->cache_fresh, h->cache_history, h->cache_stale,
                       h->cache_304, h->cache_missed, h->cache_stored, h->cache_disk);
+        au_buf_printf(out, "  DNS: %lu lookups, %lu from the cache, %lu shared, %lu requests, %lu answers held\n",
+                      h->dns_lookups, h->dns_hits, h->dns_shared, h->dns_requests, h->dns_entries);
         au_buf_printf(out, "\nConnections: %d open, %d busy", h->connections, h->connections_busy);
         if (h->connection_text && h->connection_text[0])
             au_buf_printf(out, ": %s", h->connection_text);
@@ -282,6 +289,28 @@ void au_dev_network_detail_lines(const AuNetRecord *r, AuTextList *out)
     au_netlog_detail(r, &b);
     au_dev_report_lines(au_buf_cstr(&b), out);
     au_buf_free(&b);
+}
+
+void au_dev_network_blocked_lines(const AuNetLog *l, AuTextList *out)
+{
+    au_textlist_clear(out);
+    if (!l || !l->blocked) {
+        au_textlist_add_text(out, AU_TS_DIM, "Select a request to see its details and headers.");
+        return;
+    }
+    AuBuf b;
+    au_buf_init(&b);
+    au_netlog_blocked(l, &b);
+    const char *s = au_buf_cstr(&b);
+    bool first = true;
+    while (*s) {
+        size_t n = strcspn(s, "\n");
+        au_textlist_add(out, first ? AU_TS_HEADING : AU_TS_PLAIN, s, n);
+        first = false;
+        s += n + (s[n] == '\n');
+    }
+    au_buf_free(&b);
+    au_textlist_add_text(out, AU_TS_DIM, "Select a request to see its details and headers.");
 }
 
 void au_dev_report_lines(const char *text, AuTextList *out)

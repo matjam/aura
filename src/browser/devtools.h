@@ -18,6 +18,7 @@ typedef struct AuDevHostInfo {
     bool have_net;
     uint32_t http_cache_kb, http_cache_max_kb, http_cache_entries;
     unsigned long cache_fresh, cache_history, cache_stale, cache_304, cache_missed, cache_stored, cache_disk;
+    unsigned long dns_lookups, dns_hits, dns_shared, dns_requests, dns_entries;
     int connections, connections_busy;
     const char *connection_text; /* "example.com:443 x2 (1 busy), ..." or NULL */
 } AuDevHostInfo;
@@ -65,6 +66,10 @@ void au_dev_console_lines(const AuPage *p, struct AuTextList *out);
 void au_dev_network_lines(const struct AuNetLog *l, struct AuTextList *out);
 /* One request's details (au_netlog_detail); "Select a request" for NULL. */
 void au_dev_network_detail_lines(const struct AuNetRecord *r, struct AuTextList *out);
+/* What the Network window's lower pane shows while no request is
+ * selected: the requests that were blocked (au_netlog_blocked), then the
+ * hint to select one. */
+void au_dev_network_blocked_lines(const struct AuNetLog *l, struct AuTextList *out);
 /* A report's text: a line that is not indented and is followed by an
  * indented one becomes a heading. */
 void au_dev_report_lines(const char *text, struct AuTextList *out);

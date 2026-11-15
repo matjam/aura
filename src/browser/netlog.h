@@ -118,7 +118,11 @@ void au_netlog_detail(const AuNetRecord *r, AuBuf *out);
  * DOMContentLoaded and load; connections ("" or NULL for none) is the
  * shell's text of the open connections per host and is appended. */
 void au_netlog_footer(const AuNetLog *l, const char *connections, AuBuf *out);
-/* Header, every row, footer; with details, each row is followed by its
+/* The requests refused by policy (a blocklist, mixed content) that the
+ * log still holds: a title line with the count, then one line each with
+ * the reason and the address. Nothing when none was blocked. */
+void au_netlog_blocked(const AuNetLog *l, AuBuf *out);
+/* Header, every row, the blocked list, footer; with details, each row is followed by its
  * detail lines, indented. */
 void au_netlog_dump(const AuNetLog *l, const char *connections, bool details, AuBuf *out);
 

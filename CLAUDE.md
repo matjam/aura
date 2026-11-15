@@ -552,7 +552,9 @@ Timings).
   `blocked_reason`: a blocklist's refusal arrives in
   `AuLoadInfo.blocked_reason` ("blocked: LIST NAME") and mixed content
   as `AuLoadInfo.mixed`; `page_fetcher.c` passes either on as
-  `AuFetchNet.blocked_reason`.
+  `AuFetchNet.blocked_reason`. While no request is selected, the
+  window's lower pane lists the page's blocked requests with the list
+  that stopped each (`au_netlog_blocked`).
 - **Console** shows the page's console lines (`au_page_console_line`)
   through `au_dev_console_lines` in `src/browser/devtools.c`. Uncaught
   errors and unhandled rejections arrive as error lines with their

@@ -497,6 +497,22 @@ void au_netlog_footer(const AuNetLog *l, const char *connections, AuBuf *out)
         au_buf_printf(out, "; connections: %s", connections);
 }
 
+void au_netlog_blocked(const AuNetLog *l, AuBuf *out)
+{
+    if (!l->blocked)
+        return;
+    au_buf_printf(out, "Blocked requests (%lu)\n", (unsigned long)l->blocked);
+    for (uint32_t i = 0; i < l->count; i++) {
+        const AuNetRecord *r = au_netlog_at(l, i);
+        if (r->state != AU_NETREC_BLOCKED)
+            continue;
+        const char *why = r->blocked_reason[0] ? r->blocked_reason : "by policy";
+        if (!strncmp(why, "blocked: ", 9))
+            why += 9; /* a blocklist's reason is "blocked: LIST NAME" */
+        au_buf_printf(out, "  %s  (%s)\n", r->url, why);
+    }
+}
+
 void au_netlog_dump(const AuNetLog *l, const char *connections, bool details, AuBuf *out)
 {
     au_netlog_header(out);
@@ -523,6 +539,7 @@ void au_netlog_dump(const AuNetLog *l, const char *connections, bool details, Au
         }
     }
     au_buf_free(&d);
+    au_netlog_blocked(l, out);
     au_netlog_footer(l, connections, out);
     au_buf_putc(out, '\n');
 }

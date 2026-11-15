@@ -62,6 +62,13 @@ void au_net_dev_info(AuNet *net, AuDevHostInfo *h, AuBuf *conn_text)
         h->cache_stored = cs.stored;
         h->cache_disk = cs.from_storage;
     }
+    AuDnsStats ds;
+    au_net_dns_stats(net, &ds);
+    h->dns_lookups = ds.lookups;
+    h->dns_hits = ds.hits;
+    h->dns_shared = ds.shared;
+    h->dns_requests = ds.requests;
+    h->dns_entries = ds.entries;
     au_buf_clear(conn_text);
     au_net_connections_text(net, conn_text, &h->connections, &h->connections_busy);
     h->connection_text = au_buf_cstr(conn_text);
