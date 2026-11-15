@@ -1085,7 +1085,7 @@ unsigned css_value_type(const AuCssValue *v)
                 if ((m & ~(unsigned)(CT_LENGTH | CT_PERCENT)) == 0 && t && u)
                     t = m;
                 else if ((t == CT_PERCENT || u == CT_PERCENT) && (m & ~(unsigned)CT_PERCENT) &&
-                         ((m & ~(unsigned)CT_PERCENT) & (m & ~(unsigned)CT_PERCENT) - 1) == 0)
+                         ((m & ~(unsigned)CT_PERCENT) & ((m & ~(unsigned)CT_PERCENT) - 1)) == 0)
                     t = m; /* percent mixed with angle, time, ...: resolved by the property */
                 else
                     return CT_INVALID;
@@ -1399,9 +1399,9 @@ static void simplify(CssArena *a, AuCssValue *v)
     }
     default: {
         /* functions of numbers or of one canonical unit */
-        double x[32];
+        double x[32] = {0};
         int key = -1000;
-        if (v->n > 32)
+        if (v->n == 0 || v->n > 32)
             return;
         for (uint32_t i = 0; i < v->n; i++) {
             float val;
