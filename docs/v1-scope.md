@@ -25,11 +25,14 @@ Gmail's web application is not a version 1 criterion.
 
 These are to be confirmed by measurement on real hardware.
 
-- The application is under 3 MB on disk.
 - Aura uses under 16 MB when idle.
 - A Wikipedia article is displayed within a few seconds of its bytes
   arriving.
 - A laid-out page scrolls smoothly.
+
+There is no size target for the application on disk. Keep it small where
+that costs nothing, and report its size when it changes, but do not cut a
+feature to meet a number.
 
 ## Must have
 
