@@ -2211,7 +2211,7 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
         au_buf_puts(&b, "<p>The secure connection to <b>");
         html_escape_str(&b, host);
         au_buf_puts(&b, "</b> failed. The server may need a protocol or cipher Aura does not offer (Aura speaks "
-                        "TLS 1.2 with AES-GCM or ChaCha20-Poly1305; it has no TLS 1.3).</p>");
+                        "TLS 1.3 and TLS 1.2 with AES-GCM or ChaCha20-Poly1305 and elliptic-curve key exchange).</p>");
         au_buf_puts(&b, retry);
         break;
     case AU_FETCH_ERR_CLOCK: {

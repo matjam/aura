@@ -56,9 +56,3 @@ add_test(NAME net_parsers_fuzz COMMAND fuzz_net all 30000 1 ${CMAKE_SOURCE_DIR}/
 add_test(NAME net_aia_fuzz COMMAND fuzz_net aia 20000 1)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/more.cmake OPTIONAL)
-
-# TLS 1.3 feasibility proof: the RFC 8448 trace and RSA-PSS on BearSSL's
-# primitives (docs/tls13-feasibility.md).
-add_executable(test_tls13_kat test_tls13_kat.c)
-target_link_libraries(test_tls13_kat aura_engine)
-add_test(NAME net_tls13_kat COMMAND test_tls13_kat)

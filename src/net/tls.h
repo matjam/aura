@@ -1,34 +1,37 @@
-/* TLS client over BearSSL, sans I/O: the caller moves ciphertext between
- * the engine and the socket, and plaintext between the engine and HTTP.
+/* TLS client over Mbed TLS (third_party/mbedtls), sans I/O: the caller
+ * moves ciphertext between the engine and the socket, and plaintext
+ * between the engine and HTTP.
  *
- * Configuration (fixed): TLS 1.2 only; ECDHE key exchange with ECDSA or
- * RSA certificates; ChaCha20-Poly1305 first (fastest without AES
- * hardware), then AES-128-GCM and AES-256-GCM; RSA key exchange with
- * AES-GCM last, for servers without ECDHE; curves X25519, P-256,
- * P-384; SNI; ALPN "http/1.1"; secure renegotiation refused. Only the
- * 32-bit BearSSL implementations are used (i31/m31, aes_ct,
- * ghash_ctmul32, chacha20_ct, poly1305_ctmul), so the host runs the same
- * code as the PowerPC build.
+ * Configuration (fixed): TLS 1.3 and TLS 1.2. TLS 1.3 with
+ * ChaCha20-Poly1305 first (fastest without AES hardware), then
+ * AES-128-GCM and AES-256-GCM. TLS 1.2 with ECDHE key exchange and ECDSA
+ * or RSA certificates, the same ciphers in the same order; no RSA key
+ * exchange and no DHE (the library has neither). Key exchange groups
+ * X25519 (the key share sent), P-256 and P-384. Handshake signatures:
+ * ECDSA, RSA-PSS and RSA PKCS#1 v1.5 with SHA-256 or stronger. SNI; ALPN
+ * "http/1.1"; session tickets and TLS 1.3 resumption; no renegotiation,
+ * no early data. The library's configuration is
+ * third_party/mbedtls-config.
  *
- * Certificates are checked against the root store (roots.h) with
- * BearSSL's X.509 minimal engine: chain to a trust anchor, validity at
- * the time given, key usage, and the host name (SNI name). The chain the
- * server sent is recorded for the certificate viewer (AuCertInfo).
+ * Certificates are checked against the root store (roots.h) by the
+ * library: chain to a trust anchor, validity at the time given, key
+ * usage, and the host name (SNI name). The chain the server sent is
+ * recorded for the certificate viewer (AuCertInfo).
  *
  * Incomplete chains. Some servers send their certificate without the
  * intermediate that links it to a root. When the chain as sent does not
- * reach a trust anchor, the X.509 wrapper builds a path from the leaf:
- * each next certificate is one the server sent, else one from the
- * intermediates pool (AuCertPool, filled from caIssuers URLs), whose
- * subject is the previous certificate's issuer. The path is then replayed
- * into the same minimal engine, from start_chain, exactly as if the
- * server had sent it: every check (signatures, dates, CA flags, key
- * usage, the host name, and the trust anchor at the end) runs again on
- * the completed chain. Pool certificates are never trust anchors; a path
- * that does not end at a bundled root fails as before. When the path
- * stops for want of an issuer, AuCertInfo names the last certificate's
- * caIssuers URL (aia_url), and the HTTP layer may fetch it into the pool
- * and connect again. */
+ * reach a trust anchor, tls.c builds a path from the leaf: each next
+ * certificate is one the server sent, else one from the intermediates
+ * pool (AuCertPool, filled from caIssuers URLs), whose subject is the
+ * previous certificate's issuer. The library then verifies that path
+ * exactly as if the server had sent it: every check (signatures, dates,
+ * CA flags, the host name, and the trust anchor at the end) runs on the
+ * completed chain. Trust anchors come only from the root store, through
+ * a callback that offers the roots named as an issuer; pool certificates
+ * are never trust anchors, and a path that does not end at a bundled
+ * root fails as before. When the path stops for want of an issuer,
+ * AuCertInfo names the last certificate's caIssuers URL (aia_url), and
+ * the HTTP layer may fetch it into the pool and connect again. */
 #ifndef AURA_NET_TLS_H
 #define AURA_NET_TLS_H
 
@@ -74,7 +77,7 @@ typedef struct AuDerSpan {
 } AuDerSpan;
 
 /* The issuer and subject Names of a certificate, as whole TLVs (the bytes
- * BearSSL compares). False when the certificate is malformed or has
+ * the TLS library compares). False when the certificate is malformed or has
  * trailing bytes. */
 bool au_x509_names(const uint8_t *der, size_t len, AuDerSpan *issuer, AuDerSpan *subject);
 /* The first http: caIssuers URL of the Authority Information Access
@@ -104,7 +107,7 @@ struct AuCertInfo {
     int added;           /* of count, the last ones came from the intermediates pool, not the server */
     bool missing_issuer; /* the chain stops at a certificate whose issuer Aura does not have */
     char aia_url[256];   /* with missing_issuer: that certificate's caIssuers URL, or "" */
-    int error;           /* BearSSL error code, 0 when valid */
+    int error;           /* AU_TLS_ERR_*, 0 when valid */
     const char *reason;  /* English text for the error page */
     bool clock_wrong;    /* the system date is before the root store's date */
     bool hsts;           /* the host is an HSTS host: the error cannot be overridden */
@@ -116,16 +119,46 @@ typedef enum { AU_TLS_HANDSHAKE, AU_TLS_OPEN, AU_TLS_CLOSED, AU_TLS_FAILED } AuT
 
 typedef struct AuTls AuTls;
 
-/* Saved session parameters for resumption (opaque, about 100 bytes). */
+/* A saved session for resumption: the TLS library's serialized form (a
+ * TLS 1.2 session id or ticket, or a TLS 1.3 ticket with its secret).
+ * Keep it in memory only: it holds key material and the library trusts
+ * its contents. A session too large for data is not saved. */
 typedef struct AuTlsSession {
-    uint8_t data[128];
+    uint8_t data[1024];
+    uint16_t len;
     bool valid;
 } AuTlsSession;
 
+/* Errors (au_tls_error, AuCertInfo.error); 0 is no error. The first group
+ * are certificate errors: the stack reports them as AU_NET_ERR_CERT with
+ * the chain, and the user may make an exception for them. */
+enum {
+    AU_TLS_ERR_CERT_EXPIRED = 1, /* expired or not yet valid */
+    AU_TLS_ERR_CERT_NOT_TRUSTED, /* does not chain to a root in the store */
+    AU_TLS_ERR_CERT_BAD_NAME,    /* not for this host */
+    AU_TLS_ERR_CERT_KEY_USAGE,   /* key usage does not allow a TLS server */
+    AU_TLS_ERR_CERT_WEAK_KEY,
+    AU_TLS_ERR_CERT_UNSUPPORTED, /* a signature or key algorithm Aura lacks */
+    AU_TLS_ERR_CERT_EMPTY_CHAIN,
+    AU_TLS_ERR_CERT_MALFORMED,
+    AU_TLS_ERR_VERSION = 64, /* no TLS 1.2 or 1.3 in common */
+    AU_TLS_ERR_ALERT,        /* the server sent a fatal alert */
+    AU_TLS_ERR_IO,           /* the connection closed during the handshake */
+    AU_TLS_ERR_BAD_MAC,
+    AU_TLS_ERR_NO_RANDOM,
+    AU_TLS_ERR_MEMORY,
+    AU_TLS_ERR_ILLEGAL,      /* a handshake value that is not allowed (a downgrade marker, say) */
+    AU_TLS_ERR_HANDSHAKE,    /* anything else */
+};
+
 /* Starts a client handshake to host (the SNI name and the name checked
  * against the certificate) with certificates validated at time now
- * (seconds since 1970 UTC). seed is fresh random input (32 bytes) for the
- * engine's DRBG. resume may be NULL. Returns NULL only when roots is NULL. */
+ * (seconds since 1970 UTC). TLS 1.3 is offered with TLS 1.2. seed is
+ * fresh random input (32 bytes): it is mixed into the pool the library's
+ * random generator seeds itself from (tls_platform.h), and the first one
+ * starts the library. resume may be NULL. Returns NULL only when roots is
+ * NULL; any other failure (no memory, say) gives an AuTls in the failed
+ * state. */
 AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const uint8_t seed[32],
                   const AuTlsSession *resume);
 void au_tls_free(AuTls *t);
@@ -160,18 +193,26 @@ void au_tls_flush(AuTls *t);
  * caller, which treats it as truncation only where framing needs it). */
 void au_tls_close(AuTls *t);
 
-/* After AU_TLS_FAILED: the BearSSL error and the stack's error class
- * (AU_NET_ERR_CERT for certificate problems, AU_NET_ERR_TLS otherwise). */
+/* After AU_TLS_FAILED: the error (AU_TLS_ERR_*) and the stack's error
+ * class (AU_NET_ERR_CERT for certificate problems, AU_NET_ERR_TLS
+ * otherwise). */
 int au_tls_error(AuTls *t);
 AuNetError au_tls_net_error(AuTls *t);
-/* After AU_TLS_FAILED: whether the server spoke TLS at all (a ServerHello,
- * certificates or an alert), as opposed to closing or sending something
- * else. */
+/* After AU_TLS_FAILED: whether the server spoke TLS at all (its first
+ * bytes were a handshake or alert record), as opposed to closing or
+ * sending something else. */
 bool au_tls_peer_spoke_tls(AuTls *t);
-const char *au_tls_error_text(int bearssl_error);
+const char *au_tls_error_text(int error);
+/* "TLS 1.3" or "TLS 1.2" for AuSecurityInfo.version (0x0304, 0x0303);
+ * "TLS" for anything else. */
+const char *au_tls_version_name(int version);
 const AuCertInfo *au_tls_cert_info(AuTls *t);
 void au_tls_security(AuTls *t, AuSecurityInfo *si);
-/* After the handshake: the session for later resumption. */
+/* A session for later resumption, when a new one is there to take: after
+ * a full TLS 1.2 handshake, and each time a TLS 1.3 server sends a ticket
+ * (which happens after the handshake, with the first data). Returns false
+ * when there is none, or it does not fit. Call it after au_tls_state
+ * turns AU_TLS_OPEN and after each au_tls_read. */
 bool au_tls_save_session(AuTls *t, AuTlsSession *out);
 
 /* Parses one DER certificate into an AuCertEntry (subject, issuer,

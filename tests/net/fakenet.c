@@ -1,6 +1,15 @@
 /* Fake network for tests. See fakenet.h. */
 #include "fakenet.h"
 
+#include "net/tls_platform.h"
+
+#include "mbedtls/pk.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/ssl_cache.h"
+#include "mbedtls/ssl_ticket.h"
+#include "mbedtls/x509_crt.h"
+#include "psa/crypto.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,11 +26,164 @@ typedef struct FakeSock {
     uint32_t last_tick;
     bool close_when_drained, reset_when_drained, closed, reset;
     /* TLS server side */
-    br_ssl_server_context *sc;
-    uint8_t *iobuf;
+    struct FakeTls *sc;
     AuBuf s2c; /* ciphertext to the client */
     size_t s2c_off;
+    AuBuf c2s; /* ciphertext from the client, not yet read by the server */
+    size_t c2s_off;
+    bool first_record_seen;
 } FakeSock;
+
+/* One connection's server. */
+typedef struct FakeTls {
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config conf;
+    mbedtls_x509_crt crt;
+    mbedtls_pk_context pk;
+    bool hs_done, dead;
+    int hellos; /* ClientHello records seen */
+    uint16_t groups[2];
+} FakeTls;
+
+/* What a server keeps between connections. */
+typedef struct FakeTlsServer {
+    mbedtls_ssl_cache_context cache;
+    mbedtls_ssl_ticket_context tickets;
+} FakeTlsServer;
+
+static int srv_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    FakeSock *k = ctx;
+    au_buf_append(&k->s2c, buf, len);
+    return (int)len;
+}
+
+static int srv_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    FakeSock *k = ctx;
+    size_t have = k->c2s.len - k->c2s_off;
+    if (!have)
+        return MBEDTLS_ERR_SSL_WANT_READ;
+    if (len > have)
+        len = have;
+    memcpy(buf, k->c2s.data + k->c2s_off, len);
+    k->c2s_off += len;
+    if (k->c2s_off == k->c2s.len)
+        k->c2s_off = k->c2s.len = 0;
+    return (int)len;
+}
+
+void fake_tls_start(void)
+{
+    static const uint8_t seed[32] = {0x41, 0x75, 0x72, 0x61, 1, 2, 3, 4};
+    au_tls_entropy_feed(seed, sizeof seed);
+}
+
+/* Sets up the server side of a connection. False when the library
+ * refuses the certificate or key (a broken fixture). */
+static bool srv_start(FakeSock *k)
+{
+    FakeServer *s = k->srv;
+    FakeTls *t = calloc(1, sizeof *t);
+    k->sc = t;
+    mbedtls_ssl_init(&t->ssl);
+    mbedtls_ssl_config_init(&t->conf);
+    mbedtls_x509_crt_init(&t->crt);
+    mbedtls_pk_init(&t->pk);
+    fake_tls_start();
+    bool ok = mbedtls_ssl_config_defaults(&t->conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                          MBEDTLS_SSL_PRESET_DEFAULT) == 0;
+    for (size_t i = 0; ok && i < s->chain_len; i++)
+        ok = mbedtls_x509_crt_parse_der(&t->crt, s->chain[i].data, s->chain[i].data_len) == 0;
+    ok = ok && mbedtls_pk_parse_key(&t->pk, s->key->der, s->key->len, NULL, 0) == 0;
+    ok = ok && mbedtls_ssl_conf_own_cert(&t->conf, &t->crt, &t->pk) == 0;
+    if (!ok) {
+        /* A broken fixture, or the allocation failures a test injects:
+         * the connection closes and the client's request fails. */
+        t->dead = true;
+        return false;
+    }
+    mbedtls_ssl_conf_min_tls_version(&t->conf, s->tls_min == 13 ? MBEDTLS_SSL_VERSION_TLS1_3
+                                                                 : MBEDTLS_SSL_VERSION_TLS1_2);
+    mbedtls_ssl_conf_max_tls_version(&t->conf, s->tls_max == 12 ? MBEDTLS_SSL_VERSION_TLS1_2
+                                                                 : MBEDTLS_SSL_VERSION_TLS1_3);
+    if (s->alpn_http11) {
+        static const char *const protos[] = {"http/1.1", NULL};
+        mbedtls_ssl_conf_alpn_protocols(&t->conf, protos);
+    }
+    if (s->p256_only) {
+        t->groups[0] = MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1;
+        t->groups[1] = MBEDTLS_SSL_IANA_TLS_GROUP_NONE;
+        mbedtls_ssl_conf_groups(&t->conf, t->groups);
+    }
+    if (!s->no_resume) {
+        if (!s->tls_state) {
+            s->tls_state = calloc(1, sizeof *s->tls_state);
+            mbedtls_ssl_cache_init(&s->tls_state->cache);
+            mbedtls_ssl_ticket_init(&s->tls_state->tickets);
+            /* On failure (injected allocation failures) the server issues
+             * no usable tickets and handshakes are full ones. */
+            (void)mbedtls_ssl_ticket_setup(&s->tls_state->tickets, PSA_ALG_GCM, PSA_KEY_TYPE_AES, 256, 86400);
+        }
+        mbedtls_ssl_conf_session_cache(&t->conf, &s->tls_state->cache, mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
+        mbedtls_ssl_conf_session_tickets_cb(&t->conf, mbedtls_ssl_ticket_write, mbedtls_ssl_ticket_parse,
+                                            &s->tls_state->tickets);
+        mbedtls_ssl_conf_new_session_tickets(&t->conf, 1);
+    } else {
+        mbedtls_ssl_conf_new_session_tickets(&t->conf, 0);
+    }
+    if (mbedtls_ssl_setup(&t->ssl, &t->conf) != 0) {
+        t->dead = true;
+        return false;
+    }
+    mbedtls_ssl_set_bio(&t->ssl, k, srv_send, srv_recv, NULL);
+    return true;
+}
+
+static void srv_free(FakeSock *k)
+{
+    if (!k->sc)
+        return;
+    mbedtls_ssl_free(&k->sc->ssl);
+    mbedtls_ssl_config_free(&k->sc->conf);
+    mbedtls_x509_crt_free(&k->sc->crt);
+    mbedtls_pk_free(&k->sc->pk);
+    free(k->sc);
+    k->sc = NULL;
+}
+
+/* The attacker of FakeServer.strip_tls13: in a ClientHello record, turns
+ * the TLS 1.3 entry of supported_versions into TLS 1.2. */
+static void strip_tls13(uint8_t *rec, size_t len)
+{
+    if (len < 5 + 4 + 2 + 32 + 1 || rec[0] != 22 || rec[5] != 1)
+        return;
+    size_t p = 5 + 4 + 2 + 32;
+    p += 1 + (size_t)rec[p]; /* session id */
+    if (p + 2 > len)
+        return;
+    p += 2 + (((size_t)rec[p] << 8) | rec[p + 1]); /* cipher suites */
+    if (p + 1 > len)
+        return;
+    p += 1 + (size_t)rec[p]; /* compression */
+    if (p + 2 > len)
+        return;
+    size_t end = p + 2 + (((size_t)rec[p] << 8) | rec[p + 1]);
+    p += 2;
+    if (end > len)
+        end = len;
+    while (p + 4 <= end) {
+        unsigned type = ((unsigned)rec[p] << 8) | rec[p + 1];
+        size_t el = ((size_t)rec[p + 2] << 8) | rec[p + 3];
+        if (type == 0x002b && p + 4 + el <= end) {
+            for (size_t i = p + 5; i + 1 < p + 4 + el; i += 2)
+                if (rec[i] == 3 && rec[i + 1] == 4)
+                    rec[i + 1] = 3;
+            return;
+        }
+        p += 4 + el;
+    }
+}
 
 static FakeNet *fn(void *ctx) { return ctx; }
 
@@ -78,25 +240,9 @@ static uint32_t f_connect(void *ctx, const AuNetAddr *addr, uint16_t port)
         au_buf_init(&k->s2c);
         s->connections++;
         f->open_socks++;
+        au_buf_init(&k->c2s);
         if (s->tls && k->special) {
-            k->sc = calloc(1, sizeof *k->sc);
-            br_ssl_server_init_full_ec(k->sc, s->chain, s->chain_len, BR_KEYTYPE_EC, s->eckey);
-            k->iobuf = malloc(BR_SSL_BUFSIZE_BIDI);
-            br_ssl_engine_set_buffer(&k->sc->eng, k->iobuf, BR_SSL_BUFSIZE_BIDI, 1);
-            /* A different seed per connection: with a repeated seed the
-             * server would issue the same session ID again, which the
-             * client takes for an accepted resumption. */
-            uint8_t seed[32] = {1, 2, 3};
-            seed[4] = (uint8_t)i;
-            seed[5] = (uint8_t)s->connections;
-            seed[6] = (uint8_t)(s - f->servers);
-            br_ssl_engine_inject_entropy(&k->sc->eng, seed, sizeof seed);
-            if (!s->cache_ready || s->no_resume) {
-                br_ssl_session_cache_lru_init(&s->cache, s->cache_buf, sizeof s->cache_buf);
-                s->cache_ready = true;
-            }
-            br_ssl_server_set_cache(k->sc, &s->cache.vtable);
-            br_ssl_server_reset(k->sc);
+            srv_start(k);
         } else if (s->banner && k->special) {
             au_buf_puts(&k->resp, s->banner);
         }
@@ -188,37 +334,41 @@ static void serve(FakeSock *k)
 
 static void tls_pump(FakeSock *k)
 {
-    br_ssl_engine_context *e = &k->sc->eng;
-    for (int round = 0; round < 64; round++) {
+    FakeTls *t = k->sc;
+    FakeServer *s = k->srv;
+    for (int round = 0; round < 64 && !t->dead; round++) {
         bool progress = false;
-        unsigned st = br_ssl_engine_current_state(e);
-        if (st == BR_SSL_CLOSED)
-            return;
-        if (st & BR_SSL_RECVAPP) {
-            size_t len;
-            uint8_t *p = br_ssl_engine_recvapp_buf(e, &len);
-            au_buf_append(&k->req, p, len);
-            br_ssl_engine_recvapp_ack(e, len);
+        if (!t->hs_done) {
+            int rc = mbedtls_ssl_handshake(&t->ssl);
+            if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE)
+                return;
+            if (rc != 0) {
+                t->dead = true; /* the alert, if any, is in s2c */
+                return;
+            }
+            t->hs_done = true;
+            s->handshakes++;
+            s->last_version = mbedtls_ssl_get_version_number(&t->ssl) == MBEDTLS_SSL_VERSION_TLS1_3 ? 13 : 12;
+            s->last_hrr = t->hellos > 1;
+            snprintf(s->last_suite, sizeof s->last_suite, "%s", mbedtls_ssl_get_ciphersuite(&t->ssl));
+            progress = true;
+        }
+        unsigned char buf[4096];
+        int n = mbedtls_ssl_read(&t->ssl, buf, sizeof buf);
+        if (n > 0) {
+            au_buf_append(&k->req, buf, (size_t)n);
             serve(k);
             progress = true;
+        } else if (n != MBEDTLS_ERR_SSL_WANT_READ && n != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            t->dead = true; /* close_notify, or an error */
+            return;
         }
-        if ((st & BR_SSL_SENDAPP) && k->resp.len > k->resp_off) {
-            size_t len;
-            uint8_t *p = br_ssl_engine_sendapp_buf(e, &len);
-            size_t n = k->resp.len - k->resp_off;
-            if (n > len)
-                n = len;
-            memcpy(p, k->resp.data + k->resp_off, n);
-            br_ssl_engine_sendapp_ack(e, n);
-            k->resp_off += n;
-            br_ssl_engine_flush(e, 0);
-            progress = true;
-        }
-        if (st & BR_SSL_SENDREC) {
-            size_t len;
-            uint8_t *p = br_ssl_engine_sendrec_buf(e, &len);
-            au_buf_append(&k->s2c, p, len);
-            br_ssl_engine_sendrec_ack(e, len);
+        while (k->resp.len > k->resp_off) {
+            size_t want = k->resp.len - k->resp_off;
+            int w = mbedtls_ssl_write(&t->ssl, (const unsigned char *)k->resp.data + k->resp_off, want);
+            if (w <= 0)
+                break;
+            k->resp_off += (size_t)w;
             progress = true;
         }
         if (!progress)
@@ -235,26 +385,26 @@ static long f_send(void *ctx, uint32_t sock, const void *data, size_t len)
     if (k->closed)
         return (long)len; /* swallowed; the close shows up on recv */
     if (k->sc) {
-        const uint8_t *p = data;
-        size_t left = len;
-        while (left) {
-            unsigned st = br_ssl_engine_current_state(&k->sc->eng);
-            if (st == BR_SSL_CLOSED || !(st & BR_SSL_RECVREC)) {
-                tls_pump(k);
-                st = br_ssl_engine_current_state(&k->sc->eng);
-                if (st == BR_SSL_CLOSED || !(st & BR_SSL_RECVREC))
-                    break;
+        if (k->sc->dead)
+            return (long)len; /* swallowed; the close shows up on recv */
+        size_t at = k->c2s.len;
+        au_buf_append(&k->c2s, data, len);
+        /* Before the handshake ends, look at each record the client sent
+         * for a ClientHello (the client sends whole records per call). */
+        if (!k->sc->hs_done) {
+            uint8_t *d = (uint8_t *)k->c2s.data + at;
+            for (size_t o = 0; o + 6 <= len;) {
+                size_t rl = ((size_t)d[o + 3] << 8) | d[o + 4];
+                if (d[o] == 22 && d[o + 5] == 1) {
+                    k->sc->hellos++;
+                    if (k->srv->strip_tls13)
+                        strip_tls13(d + o, len - o < 5 + rl ? len - o : 5 + rl);
+                }
+                o += 5 + rl;
             }
-            size_t cap;
-            uint8_t *b = br_ssl_engine_recvrec_buf(&k->sc->eng, &cap);
-            size_t n = left < cap ? left : cap;
-            memcpy(b, p, n);
-            br_ssl_engine_recvrec_ack(&k->sc->eng, n);
-            p += n;
-            left -= n;
-            tls_pump(k);
         }
-        return (long)(len - left);
+        tls_pump(k);
+        return (long)len;
     }
     au_buf_append(&k->req, data, len);
     serve(k);
@@ -285,7 +435,7 @@ static long f_recv(void *ctx, uint32_t sock, void *buf, size_t cap)
             k->reset = true;
             return AU_NETIO_ERROR;
         }
-        if (br_ssl_engine_current_state(&k->sc->eng) == BR_SSL_CLOSED)
+        if (k->sc->dead)
             return AU_NETIO_CLOSED;
         return AU_NETIO_WOULD_BLOCK;
     }
@@ -322,8 +472,8 @@ static void f_close(void *ctx, uint32_t sock)
     au_buf_free(&k->req);
     au_buf_free(&k->resp);
     au_buf_free(&k->s2c);
-    free(k->sc);
-    free(k->iobuf);
+    au_buf_free(&k->c2s);
+    srv_free(k);
     free(k);
     f->socks[sock] = NULL;
     f->open_socks--;
@@ -361,6 +511,7 @@ void fake_init(FakeNet *f)
     f->now = 1000;
     f->wall = 1800000000; /* 2027 */
     f->entropy_ready = true;
+    fake_tls_start();
 }
 
 void fake_free(FakeNet *f)
@@ -368,9 +519,16 @@ void fake_free(FakeNet *f)
     for (int i = 0; i < FAKE_MAX_SOCKS; i++)
         if (f->socks[i])
             f_close(f, (uint32_t)i);
-    for (int i = 0; i < f->nservers; i++)
+    for (int i = 0; i < f->nservers; i++) {
         for (int j = 0; j < f->servers[i].nreq; j++)
             au_free(f->servers[i].requests[j]);
+        if (f->servers[i].tls_state) {
+            mbedtls_ssl_cache_free(&f->servers[i].tls_state->cache);
+            mbedtls_ssl_ticket_free(&f->servers[i].tls_state->tickets);
+            free(f->servers[i].tls_state);
+            f->servers[i].tls_state = NULL;
+        }
+    }
 }
 
 FakeServer *fake_server(FakeNet *f, const char *host, uint16_t port)

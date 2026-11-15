@@ -15,7 +15,7 @@
 #include "../codec/codec.h"
 #include "../url/url.h"
 
-#include "bearssl.h"
+#include "tls_platform.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -181,9 +181,8 @@ struct AuNet {
     const AuRootStore *roots;
     AuHttpTransfer *transfers;
     Conn *conns;
-    br_hmac_drbg_context drbg;
-    bool drbg_ready;
-    uint32_t drbg_uses;
+    bool drbg_ready;     /* the TLS library's random generator has been seeded from the platform */
+    uint32_t drbg_uses;  /* connections and nonces since the last seed material */
     SessionEntry sessions[SESSION_CACHE];
     int next_session;
     CertException exceptions[CERT_EXCEPTIONS];
@@ -555,6 +554,32 @@ static void session_store(AuNet *net, const char *host, uint16_t port, const AuT
     *net->sessions[slot].cert = *ci;
 }
 
+/* Keeps the connection's session for resumption when the engine has a
+ * new one: after a full TLS 1.2 handshake, and whenever a TLS 1.3 server
+ * sends a ticket (after the handshake). A resumed connection has no
+ * chain of its own: its new ticket replaces the old one and the entry
+ * keeps the chain of the full handshake. A connection the user's
+ * exception let through is not cached, so every later connection is
+ * checked again. */
+static void session_keep(Conn *c)
+{
+    AuNet *net = c->net;
+    AuTlsSession s;
+    if (!au_tls_save_session(c->tls_engine, &s))
+        return;
+    const AuCertInfo *ci = au_tls_cert_info(c->tls_engine);
+    if (ci->overridden)
+        return;
+    if (ci->count > 0) {
+        session_store(net, c->host, c->port, &s, ci);
+    } else {
+        SessionEntry *e = session_entry(net, c->host, c->port);
+        if (e && e->cert)
+            e->s = s;
+    }
+    memset(&s, 0, sizeof s);
+}
+
 /* ---- Certificate exceptions ---- */
 
 static const CertException *exception_for(AuNet *net, const char *host)
@@ -598,7 +623,9 @@ void au_net_clear_cert_exceptions(AuNet *net)
     }
 }
 
-/* Seeds the DRBG from the platform once; false while entropy is short. */
+/* Gives the TLS library's random generator seed material from the
+ * platform, once and again every 1000 uses; false while entropy is short
+ * (the first TLS handshake waits for it). */
 static bool drbg_ready(AuNet *net)
 {
     if (net->drbg_ready && net->drbg_uses < 1000)
@@ -606,11 +633,10 @@ static bool drbg_ready(AuNet *net)
     uint8_t seed[48];
     if (!net->ops.entropy || !net->ops.entropy(net->ops.ctx, seed, sizeof seed))
         return net->drbg_ready; /* keep using the old state if reseeding must wait */
-    if (!net->drbg_ready)
-        br_hmac_drbg_init(&net->drbg, &br_sha256_vtable, seed, sizeof seed);
-    else
-        br_hmac_drbg_update(&net->drbg, seed, sizeof seed);
+    bool ok = au_tls_entropy_feed(seed, sizeof seed);
     memset(seed, 0, sizeof seed);
+    if (!ok)
+        return net->drbg_ready;
     net->drbg_ready = true;
     net->drbg_uses = 0;
     return true;
@@ -668,9 +694,13 @@ static void start_tls(Conn *c)
 {
     AuNet *net = c->net;
     uint8_t seed[32];
-    br_hmac_drbg_generate(&net->drbg, seed, sizeof seed);
-    net->drbg_uses++;
     int64_t now = wall(net);
+    au_tls_tick(now_ms(net));
+    if (!au_tls_random(seed, sizeof seed)) {
+        conn_kill(c, AU_NET_ERR_TLS);
+        return;
+    }
+    net->drbg_uses++;
     c->tls_engine = au_tls_new(net->roots, c->host, now, seed, session_find(net, c->host, c->port));
     memset(seed, 0, sizeof seed);
     if (!c->tls_engine) {
@@ -783,6 +813,8 @@ static bool conn_io(Conn *c)
                 progress = true;
             }
             AuTlsState ts = au_tls_state(c->tls_engine);
+            if (c->state == C_READY && ts == AU_TLS_OPEN)
+                session_keep(c);
             if (ts == AU_TLS_FAILED) {
                 conn_kill(c, au_tls_net_error(c->tls_engine));
                 return true;
@@ -951,13 +983,7 @@ static bool conn_step(Conn *c)
             return true;
         if (au_tls_state(c->tls_engine) == AU_TLS_OPEN) {
             c->state = C_READY;
-            /* A resumed session keeps the chain of its full handshake; a
-             * connection the user's exception let through is not cached,
-             * so every later connection is checked again. */
-            AuTlsSession s;
-            const AuCertInfo *ci = au_tls_cert_info(c->tls_engine);
-            if (ci->count > 0 && !ci->overridden && au_tls_save_session(c->tls_engine, &s))
-                session_store(net, c->host, c->port, &s, ci);
+            session_keep(c);
             return true;
         }
         if (c->eof) {
@@ -1041,8 +1067,8 @@ static void add_auth_header(AuHttpTransfer *t, AuBuf *b, AuthEntry *e, const cha
     if (!strcmp(e->params.scheme, "Digest")) {
         uint8_t r[8];
         char cnonce[17];
-        if (drbg_ready(t->net)) {
-            br_hmac_drbg_generate(&t->net->drbg, r, sizeof r);
+        if (drbg_ready(t->net) && au_tls_random(r, sizeof r)) {
+            t->net->drbg_uses++;
         } else {
             /* No entropy yet: the client nonce needs uniqueness, not
              * secrecy. */
@@ -2476,6 +2502,7 @@ bool au_net_pump(AuNet *net)
     bool any = false;
     /* Idle connections: notice closes, expire. */
     uint32_t now = now_ms(net);
+    au_tls_tick(now); /* the TLS library's millisecond clock (ticket ages) */
     for (Conn *c = net->conns, *next; c; c = next) {
         next = c->next;
         if (c->owner)
@@ -2557,7 +2584,6 @@ void au_net_free(AuNet *net)
     au_free(c->accept_language);
     au_free(c->http_proxy_host);
     au_free(c->https_proxy_host);
-    memset(&net->drbg, 0, sizeof net->drbg);
     au_free(net);
 }
 

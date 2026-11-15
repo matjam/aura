@@ -218,8 +218,12 @@ static void run_roots(const Input *in)
     char err[128];
     AuRootStore *r = au_roots_load(p, in->n, err, sizeof err);
     if (r) {
-        size_t n;
-        au_roots_anchors(r, &n);
+        /* Every root's name can be looked up by a name of the input. */
+        const uint8_t *der;
+        size_t len, pos = 0;
+        while (au_roots_next_by_subject(r, p, in->n < 64 ? in->n : 64, &pos, &der, &len)) {
+        }
+        (void)au_roots_count(r);
         au_roots_free(r);
     }
     free(p);

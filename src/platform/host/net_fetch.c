@@ -16,7 +16,6 @@
 #include "net/tls.h"
 #include "net_host.h"
 
-#include "bearssl.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,7 +66,7 @@ static void fmt_time(int64_t t, char *out, size_t cap)
 static void print_cert(const AuCertInfo *ci)
 {
     char a[40], b[40];
-    bool bad = ci->error != 0 && ci->error != BR_ERR_X509_OK;
+    bool bad = ci->error != 0;
     fprintf(stderr, "* %s for %s%s%s\n", bad ? "TLS/certificate failure" : "certificate valid", ci->host,
             bad && ci->reason ? ": " : "", bad && ci->reason ? ci->reason : "");
     if (ci->clock_wrong)
@@ -112,7 +111,7 @@ static void on_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *r)
     for (size_t i = 0; i < r->headers->n; i++)
         fprintf(stderr, "< %s: %s\n", r->headers->items[i].name, r->headers->items[i].value);
     if (r->security.tls)
-        fprintf(stderr, "* TLS %s, %s, ALPN %s%s\n", r->security.version == 0x0303 ? "1.2" : "?",
+        fprintf(stderr, "* %s, %s, ALPN %s%s\n", au_tls_version_name(r->security.version),
                 r->security.cipher ? r->security.cipher : "?",
                 r->security.alpn && r->security.alpn[0] ? r->security.alpn : "none",
                 r->security.resumed ? ", resumed" : "");

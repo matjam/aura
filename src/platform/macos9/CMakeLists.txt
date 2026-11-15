@@ -35,4 +35,3 @@ target_link_libraries(Aura aura_engine AppearanceLib OpenTransportLib OpenTptInt
 add_subdirectory(nettest)
 add_subdirectory(jstest)
 add_subdirectory(sea)
-add_subdirectory(tlstrial)

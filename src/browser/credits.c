@@ -34,8 +34,18 @@ const AuCredit au_credits[] = {
      "Copyright (c) 2017-2026 Fabrice Bellard\nCopyright (c) 2017-2024 Charlie Gordon\n"
      "Copyright (c) 2023-2026 Ben Noordhuis\nCopyright (c) 2023-2026 Sa\xc3\xbal Ibarra Corret\xc3\xa9",
      "MIT licence", "Licences:QuickJS-ng.txt", NULL},
-    {AU_CREDIT_LIBRARY, "BearSSL 0.6", "TLS for https: connections", "Copyright (c) 2016 Thomas Pornin.",
-     "MIT licence", "Licences:BearSSL.txt", NULL},
+    {AU_CREDIT_LIBRARY, "Mbed TLS 4.1.1 with TF-PSA-Crypto 1.1.1", "TLS for https: connections",
+     "Copyright The Mbed TLS Contributors.", "Apache License 2.0", "Licences:MbedTLS.txt",
+     "Licensed under the Apache License, Version 2.0 (the \"License\"); you may not use these files except in "
+     "compliance with the License. You may obtain a copy of the License at "
+     "http://www.apache.org/licenses/LICENSE-2.0\n"
+     "Unless required by applicable law or agreed to in writing, software distributed under the License is "
+     "distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or "
+     "implied. See the License for the specific language governing permissions and limitations under the "
+     "License.\n"
+     "Mbed TLS is offered under the Apache License 2.0 or the GNU General Public License 2.0 or later; Aura "
+     "uses it under the Apache License 2.0. Aura builds the unmodified library sources with its own "
+     "configuration."},
     {AU_CREDIT_DATA, "Mozilla's root certificates", "The certificate authorities https: trusts (the aura-roots file)",
      "Mozilla's root store (NSS certdata.txt) as published by the curl project, https://curl.se/ca/cacert.pem.",
      "Mozilla Public License 2.0", NULL,
