@@ -18,6 +18,10 @@
 # largest mode the display offers; GEOMETRY=1440x1050x32 allows the size
 # of a large screen.
 #
+# The guest's clock starts at the local time of the base image's time
+# zone (-rtc base; AURA_GUEST_UTC_OFFSET in tools/guest-env.sh), so Mac OS
+# shows the right time for its zone and Aura works out the right UTC.
+#
 # BASE picks the system: enforcer (default, Mac OS 9.2.2 with the Enforcer
 # kernel and extension) or stock (without Enforcer). The guest boots an
 # overlay in AURA_RUN on the base image in disks/, so the base image is
@@ -66,6 +70,15 @@ base_stamp() {
   stat -c '%Y %s' "$AURA_BASE" 2>/dev/null || stat -f '%m %z' "$AURA_BASE"
 }
 
+# The guest's local time now, for -rtc base: UTC plus the zone offset of
+# the base image (AURA_GUEST_UTC_OFFSET in guest-env.sh). QEMU's default
+# is UTC, which Mac OS would take for local time. GNU date takes -d,
+# BSD date -r.
+rtc_base() {
+  t=$(($(date +%s) + AURA_GUEST_UTC_OFFSET))
+  date -u -d "@$t" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -r "$t" +%Y-%m-%dT%H:%M:%S
+}
+
 case "${1:-}" in
   start)
     if running; then
@@ -84,6 +97,7 @@ case "${1:-}" in
         -name "Aura test machine" \
         -M mac99,via=pmu \
         -m "${MEM:-512}" \
+        -rtc base="$(rtc_base)" \
         -boot c \
         -drive file="$AURA_DISK",format=qcow2,media=disk \
         -drive if=ide,index=2,media=cdrom \
@@ -106,6 +120,7 @@ case "${1:-}" in
       -name "Aura test machine" \
       -M mac99,via=pmu \
       -m "${MEM:-512}" \
+      -rtc base="$(rtc_base)" \
       -boot c \
       -drive file="$AURA_DISK",format=qcow2,media=disk \
       -drive if=ide,index=2,media=cdrom \

@@ -34,9 +34,11 @@ records where the code came from and how to update it.
   header has a reproduction), `0005` a working `JS_WRITE_OBJ_BSWAP`:
   bytecode is in the byte order of the machine that reads it and
   v0.18.0 swaps nowhere, so the build tool `tools/jsprelude` writes the
-  prelude's bytecode byte-swapped for the PowerPC build, and `0006`
+  prelude's bytecode byte-swapped for the PowerPC build, `0006`
   one shared copy of the source text for a function and the functions
-  nested in it (each used to keep its own copy).
+  nested in it (each used to keep its own copy), and `0007`
+  `JS_SetTimeSource`, through which the embedder supplies Date's clock
+  and time zone offset (`src/js/clock.h`).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
