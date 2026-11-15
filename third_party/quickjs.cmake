@@ -54,7 +54,7 @@ else()
     set(AURA_PRELUDE_BC ${AURA_PRELUDE_DIR}/prelude.bc)
     # The order prelude.c joins the files in.
     set(AURA_PRELUDE_JS)
-    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_net prelude_obs)
+    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_web prelude_net prelude_workers prelude_obs)
         list(APPEND AURA_PRELUDE_JS ${CMAKE_SOURCE_DIR}/src/js/${part}.js)
     endforeach()
     set(AURA_JSPRELUDE_SRC ${CMAKE_SOURCE_DIR}/tools/jsprelude/jsprelude.c)
@@ -88,11 +88,24 @@ else()
         DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_PRELUDE_JS}
         COMMENT "Compiling the JavaScript prelude to bytecode"
         VERBATIM)
-    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC})
+    # A worker's prelude: the parts that need no document, then the worker
+    # global (prelude.c joins the same files for the source build).
+    set(AURA_WORKER_BC ${AURA_PRELUDE_DIR}/prelude_worker.bc)
+    set(AURA_WORKER_JS)
+    foreach(part prelude prelude_web prelude_net prelude_worker)
+        list(APPEND AURA_WORKER_JS ${CMAKE_SOURCE_DIR}/src/js/${part}.js)
+    endforeach()
+    add_custom_command(OUTPUT ${AURA_WORKER_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_WORKER_BC} ${AURA_WORKER_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_WORKER_JS}
+        COMMENT "Compiling the worker prelude to bytecode"
+        VERBATIM)
+    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC})
     add_dependencies(aura_engine aura_prelude_bc)
     # #embed looks beside the source file, then in --embed-dir (Clang and
     # GCC 15 or later), not in the include path.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
-        OBJECT_DEPENDS ${AURA_PRELUDE_BC}
+        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC}"
         COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
 endif()

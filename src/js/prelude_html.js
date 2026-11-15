@@ -786,18 +786,6 @@ function formDataSet(form, submitter) {
     }
     return out;
 }
-const formEncode = (pairs) => pairs.map(([k, v]) => encodeForm(k) + '=' + encodeForm(v)).join('&');
-function encodeForm(s) {
-    s = str(s).replace(/\r?\n|\r/g, '\r\n');
-    let out = '';
-    for (const b of N.utf8Encode(s.toWellFormed())) {
-        const c = String.fromCharCode(b);
-        if (/[A-Za-z0-9*\-._]/.test(c)) out += c;
-        else if (c === ' ') out += '+';
-        else out += '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
-    }
-    return out;
-}
 let submitting = null;
 /* Submits form: with events (requestSubmit, a submit button), interactive
  * validation and a cancelable submit event first. The embedder builds the

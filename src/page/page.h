@@ -30,6 +30,7 @@
 #define AURA_PAGE_H
 
 #include "../dom/control.h"
+#include "../core/coro.h"
 #include "../html/html.h"
 #include "../layout/layout.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct */
@@ -126,6 +127,9 @@ typedef struct AuDocViewCallbacks {
      * .getRandomValues); false when the source is not ready. Optional:
      * without it pages have no crypto object. */
     bool (*random)(void *ctx, AuDocView *dv, void *buf, size_t len);
+    /* Coroutines for workers (core/coro.h). Optional: without them a
+     * worker runs on the caller's stack, a task at a time. */
+    const AuCoroOps *coro;
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */

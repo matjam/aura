@@ -149,6 +149,7 @@ int au_host_page_main(int argc, char **argv)
     memset(&cb, 0, sizeof cb);
     cb.ctx = &run;
     cb.console = c_console;
+    cb.coro = au_host_coro_ops();
     cb.open_url = c_open;
     cb.load_finished = c_loaded;
     AuDocView *dv = au_docview_new(fonts, &li, &cb);

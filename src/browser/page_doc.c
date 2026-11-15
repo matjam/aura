@@ -1467,6 +1467,7 @@ static void new_view(AuPage *p)
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
     dcb.random = p->env.random ? dv_random : NULL;
+    dcb.coro = p->env.coro;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;

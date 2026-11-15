@@ -153,6 +153,11 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
 {
     (void)cctx;
     AuJs *js = opaque;
+    if (js->worker) {
+        int r = js_worker_interrupt(js);
+        if (r >= 0)
+            return r;
+    }
     if (js->depth == 0 || js->closing)
         return js->closing;
     if (js->interrupted)
@@ -237,6 +242,8 @@ static void append_value(JSContext *ctx, AuBuf *b, JSValueConst v)
 static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool handled)
 {
     JSContext *ctx = js->ctx;
+    if (js->worker && js_worker_terminating(js))
+        return; /* terminate() stopped it: nothing to report */
     AuBuf b;
     au_buf_init(&b);
     if (js->root->interrupted || js->closing) {
@@ -529,16 +536,28 @@ extern const unsigned char au_js_prelude_bc[];
 extern const size_t au_js_prelude_bc_len;
 #endif
 
+#ifdef AU_JS_PRELUDE_SOURCE
+extern const char au_js_worker_prelude_src[];
+extern const size_t au_js_worker_prelude_len;
+#else
+extern const unsigned char au_js_worker_prelude_bc[];
+extern const size_t au_js_worker_prelude_bc_len;
+#endif
+
 static bool load_prelude(AuJs *js, JSValue N)
 {
     JSContext *ctx = js->ctx;
 #ifdef AU_JS_PRELUDE_SOURCE
-    JSValue fn = JS_Eval(ctx, au_js_prelude_src, au_js_prelude_len, "aura:prelude", JS_EVAL_TYPE_GLOBAL);
+    JSValue fn = js->worker ? JS_Eval(ctx, au_js_worker_prelude_src, au_js_worker_prelude_len, "aura:worker-prelude",
+                                      JS_EVAL_TYPE_GLOBAL)
+                            : JS_Eval(ctx, au_js_prelude_src, au_js_prelude_len, "aura:prelude", JS_EVAL_TYPE_GLOBAL);
 #else
     /* The bytecode is the compiled script; running it gives the prelude
      * function, as evaluating the source does. JS_EvalFunction frees the
      * script. */
-    JSValue fn = JS_ReadObject(ctx, au_js_prelude_bc, au_js_prelude_bc_len, JS_READ_OBJ_BYTECODE);
+    JSValue fn = js->worker ? JS_ReadObject(ctx, au_js_worker_prelude_bc, au_js_worker_prelude_bc_len,
+                                            JS_READ_OBJ_BYTECODE)
+                            : JS_ReadObject(ctx, au_js_prelude_bc, au_js_prelude_bc_len, JS_READ_OBJ_BYTECODE);
     if (!JS_IsException(fn))
         fn = JS_EvalFunction(ctx, fn);
 #endif
@@ -673,6 +692,78 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     js_module_init(js);
     js_module_natives(js, N);
     js_frames_natives(js, N);
+    js_worker_natives(js, N);
+    bool ok = load_prelude(js, N);
+    JS_FreeValue(ctx, N);
+    js_leave(js);
+    if (!ok) {
+        au_js_free(js);
+        return NULL;
+    }
+    return js;
+}
+
+/* A worker's runtime: no document, the natives that need none, and the
+ * worker prelude. Made and freed on the worker's stack (worker.c). */
+AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool opaque_origin)
+{
+    AuJs *root = owner->root;
+    AuJs *js = au_calloc(sizeof *js);
+    js->root = js;
+    js->worker = true;
+    js->wk = wk;
+    js->settings = root->settings;
+    js->settings.origin = NULL;
+    js->settings.memory_limit = root->settings.worker_memory_limit ? root->settings.worker_memory_limit : 8u << 20;
+    size_t stack = root->settings.worker_stack ? root->settings.worker_stack : AU_JS_WORKER_STACK;
+    js->settings.stack_limit = owner->hooks.coro ? stack - stack / 5 : root->settings.stack_limit;
+    js->hooks.ctx = owner->hooks.ctx;
+    js->hooks.now_ms = owner->hooks.now_ms;
+    js->hooks.console = owner->hooks.console;
+    js->hooks.random = owner->hooks.random;
+    js->hooks.fetcher = owner->hooks.fetcher;
+    js->hooks.coro = owner->hooks.coro;
+    if (!owner->hooks.coro)
+        js->hooks.long_script = owner->hooks.long_script;
+    js->P = JS_UNDEFINED;
+    js->rt = JS_NewRuntime2(&qa_funcs, js);
+    if (!js->rt) {
+        au_free(js);
+        return NULL;
+    }
+    JS_SetRuntimeOpaque(js->rt, js);
+    JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
+    JS_SetInterruptHandler(js->rt, interrupt_cb, js);
+    JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
+    JSContext *ctx = JS_NewContextRaw(js->rt);
+    if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
+        JS_AddIntrinsicRegExp(ctx) || JS_AddIntrinsicJSON(ctx) || JS_AddIntrinsicProxy(ctx) ||
+        JS_AddIntrinsicMapSet(ctx) || JS_AddIntrinsicTypedArrays(ctx) || JS_AddIntrinsicPromise(ctx) ||
+        JS_AddIntrinsicWeakRef(ctx) || JS_AddIntrinsicDOMException(ctx) || JS_AddIntrinsicAToB(ctx)) {
+        if (ctx)
+            JS_FreeContext(ctx);
+        JS_FreeRuntime(js->rt);
+        au_free(js);
+        return NULL;
+    }
+    js->ctx = ctx;
+    JS_SetContextOpaque(ctx, js);
+    js->url = au_strndup(url, strlen(url));
+    js->base = au_strndup(url, strlen(url));
+    js->opaque_origin = opaque_origin;
+    js->origin = opaque_origin ? au_strndup("null", 4) : au_strndup(owner->origin, strlen(owner->origin));
+    JSValue g = JS_GetGlobalObject(ctx);
+    js->global = g;
+    JS_FreeValue(ctx, g);
+    js_enter(js);
+    JSValue N = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, N, base_natives, JS_COUNTOF(base_natives));
+    js_natives_shared_init(js, N);
+    js_loop_init(js, N);
+    js_fetch_init(js, N);
+    js_module_init(js);
+    js_module_natives(js, N);
+    js_worker_natives(js, N);
     bool ok = load_prelude(js, N);
     JS_FreeValue(ctx, N);
     js_leave(js);
@@ -687,6 +778,8 @@ void au_js_free(AuJs *js)
 {
     if (!js)
         return;
+    if (!js->worker)
+        js_workers_free(js); /* while the fetcher and the hooks are still there */
     js->closing = true;
     JSContext *ctx = js->ctx;
     js_loop_free(js);
@@ -768,13 +861,15 @@ void au_js_free(AuJs *js)
         js->errors++;
         js_console(js, AU_JS_ERROR, msg, (size_t)n);
     }
-    js_hooks_remove(js);
+    if (js->doc)
+        js_hooks_remove(js);
     if (js->current_script)
         au_node_unref(&js->current_script->node);
     for (uint32_t i = 0; i < js->ndocs; i++)
         au_node_unref(&js->docs[i]->node);
     au_free(js->docs);
-    au_node_unref(&js->doc->node);
+    if (js->doc)
+        au_node_unref(&js->doc->node);
     free_muted(js);
     au_free(js->url);
     au_free(js->base);
@@ -922,6 +1017,7 @@ void au_js_stats(const AuJs *js, AuJsStats *s)
         JS_ComputeMemoryUsage(js->rt, &mu);
         s->memory_used = (size_t)mu.malloc_size;
     }
+    s->memory_used += js_workers_memory(js);
     s->memory_limit = js->root->settings.memory_limit;
     s->wrappers = js->root->nwraps;
     s->errors = js->errors;

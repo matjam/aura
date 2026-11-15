@@ -195,6 +195,10 @@ struct AuJs {
     bool worker;
     struct JsWorker *wk;
     struct JsWorker *workers;
+    uint32_t worker_rr;          /* which worker runs first next time */
+    struct JsWkMsg *port_in, *port_in_tail; /* a document: port messages from other runtimes */
+    struct JsPortChan *chans;    /* root: message channels that cross runtimes */
+    uint32_t nchans, next_chan, next_worker_id;
     char **muted; /* URLs of scripts whose errors are muted (au_js_mute_script) */
     uint32_t nmuted;
     /* statistics */
@@ -295,6 +299,22 @@ bool js_worker_defer_fetch(AuJs *js, int kind, uint32_t id, int status, const ch
  * wait itself: returns false when the worker is being terminated. */
 bool js_worker_can_wait(AuJs *js);
 bool js_worker_wait(AuJs *js);
+void js_worker_natives(AuJs *js, JSValue N);
+/* A document is going: ends its workers. A root is going: frees the
+ * channel table. */
+void js_workers_free(AuJs *js);
+/* A worker's interrupt check: 1 to stop the script (the worker is being
+ * terminated), 0 to go on (after yielding when its slice is used up), -1
+ * for the ordinary time budget (a worker without its own stack). */
+int js_worker_interrupt(AuJs *js);
+bool js_worker_terminating(const AuJs *js);
+size_t js_workers_memory(const AuJs *js);
+/* The earliest timer of a document's workers (-1: none), and whether
+ * every one of them only waits for a message. */
+double js_workers_next_timer(const AuJs *js);
+bool js_workers_idle(const AuJs *js);
+/* runtime.c: the runtime of a worker, made on the worker's stack. */
+AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool opaque_origin);
 
 /* ---- module.c ---- */
 void js_module_init(AuJs *js);
@@ -318,6 +338,10 @@ typedef struct JsUrl {
  * Free with js_url_free. */
 bool js_url_parse(const char *input, const char *base, JsUrl *out);
 void js_url_free(JsUrl *u);
+
+/* A worker coroutine's stack unless the settings say otherwise. The
+ * sanitizers' frames are far larger (see au_js_settings_default). */
+#define AU_JS_WORKER_STACK ((size_t)256 << 10)
 
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 

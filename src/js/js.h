@@ -39,6 +39,7 @@
 #ifndef AURA_JS_H
 #define AURA_JS_H
 
+#include "../core/coro.h"
 #include "../dom/dom.h"
 #include "../html/html.h"
 
@@ -75,6 +76,11 @@ typedef struct AuJsSettings {
     const char *origin;
     bool sandbox_origin;
     bool no_top_navigation;
+    /* Workers (see "Workers" below). */
+    size_t worker_memory_limit; /* bytes one worker's runtime may allocate; 0: 8 MB */
+    size_t worker_stack;        /* bytes of stack for a worker's coroutine; 0: 256 KB */
+    uint32_t worker_slice_ms;   /* how long a worker runs before it yields to the page; 0: 8 */
+    int max_workers;            /* workers alive in one page; 0: 8 */
 } AuJsSettings;
 
 void au_js_settings_default(AuJsSettings *s);
@@ -236,6 +242,9 @@ typedef struct AuJsHooks {
     AuJs *(*frame_js)(void *ctx, AuElement *el);
     AuJs *(*parent_js)(void *ctx);
     AuElement *(*frame_element)(void *ctx);
+    /* Coroutines for workers (optional; see core/coro.h). The struct must
+     * outlive the AuJs. */
+    const AuCoroOps *coro;
 } AuJsHooks;
 
 /* Kinds for dom_changed. */
@@ -380,9 +389,32 @@ bool au_js_idle(const AuJs *js);
 /* Runs the garbage collector. */
 void au_js_gc(AuJs *js);
 
+/* ---- Workers ----
+ * A dedicated worker (new Worker(url)) is a QuickJS runtime of its own
+ * with a small prelude and no document. It runs only inside
+ * au_js_run_workers, in time slices: with hooks.coro each worker has its
+ * own stack and yields when its slice is used up, in the middle of a
+ * script if need be; without it a worker runs one task at a time on the
+ * caller's stack. Messages pass between the page and a worker as bytes
+ * (structured clone); nothing else is shared. A worker's requests go
+ * through the document's fetcher with the worker's AuJs as js, and the
+ * embedder reports them with au_js_fetch_head and the rest as for any
+ * request. Workers end with their document (au_js_free), wait while
+ * nothing calls au_js_run_workers (a hidden document), and count in
+ * au_js_stats.
+ *
+ * Runs the workers of js's document for up to budget_ms and delivers
+ * their messages to the document. Returns true if anything ran. */
+bool au_js_run_workers(AuJs *js, uint32_t budget_ms);
+/* A worker of js's document has something to do now (the embedder should
+ * call au_js_run_workers again soon). */
+bool au_js_workers_busy(const AuJs *js);
+/* How many workers js's document has. */
+int au_js_worker_count(const AuJs *js);
+
 /* ---- Statistics ---- */
 typedef struct AuJsStats {
-    size_t memory_used;  /* bytes allocated by the runtime */
+    size_t memory_used;  /* bytes allocated by the runtime, and by the document's workers (with their stacks) */
     size_t memory_limit;
     uint32_t wrappers;   /* live node wrappers */
     uint32_t errors;     /* uncaught exceptions reported */

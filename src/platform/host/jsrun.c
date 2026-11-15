@@ -238,12 +238,14 @@ void au_host_js_loop(AuJs *js, void *run_ctx, double (*now)(void *), void (*skip
             did = true;
         if (au_js_run_tasks(js, 50))
             did = true;
+        if (au_js_run_workers(js, 20))
+            did = true;
         if (au_js_wants_frame(js)) {
             au_js_run_frame(js);
             au_js_layout_done(js);
             did = true;
         }
-        if (did)
+        if (did || au_js_workers_busy(js))
             continue;
         if (au_js_idle(js))
             break;
@@ -283,6 +285,7 @@ static int js_main(int argc, char **argv)
     s.online = true;
     int first = 0;
     int expect_errors = 0;
+    bool no_coro = false;
     bool as_module = false, stats = false;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--html") && i + 1 < argc)
@@ -295,6 +298,8 @@ static int js_main(int argc, char **argv)
             s.kill_ms = (uint32_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stack") && i + 1 < argc)
             s.stack_limit = (size_t)atoi(argv[++i]) * 1024;
+        else if (!strcmp(argv[i], "--no-coro"))
+            no_coro = true; /* workers run on this stack, a task at a time */
         else if (!strcmp(argv[i], "--expect-errors") && i + 1 < argc)
             expect_errors = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--module"))
@@ -339,6 +344,7 @@ static int js_main(int argc, char **argv)
     h.now_ms = h_now;
     h.console = h_console;
     h.random = h_random;
+    h.coro = no_coro ? NULL : au_host_coro_ops();
     h.fetcher.ctx = &run;
     h.fetcher.start = h_fetch_start;
     h.fetcher.abort = h_fetch_abort;

@@ -36,6 +36,7 @@
 #include "../dom/control.h" /* AuControlFile, AuPopupItem */
 #include "../page/perf.h" /* AuPerf: counters only */
 #include "../paint/font.h"
+#include "../core/coro.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct, no OS calls */
 #include "prefs.h"
 
@@ -314,6 +315,8 @@ typedef struct AuPageEnv {
     /* Optional: cryptographically strong random bytes for script
      * (AuBrowserHost.random); false when the source is not ready. */
     bool (*random)(void *ctx, void *buf, size_t len);
+    /* Optional: coroutines for workers (AuBrowserHost.coro). */
+    const AuCoroOps *coro;
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

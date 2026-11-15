@@ -355,6 +355,10 @@ static AuElement *h_frame_element(void *ctx)
     return au_frames_element(s->dv);
 }
 
+/* How long the workers of a document run in one au_docscript_run, after
+ * the document's own tasks. */
+#define WORKER_BUDGET_MS 12
+
 /* ---- Fetches made by script (fetch, XHR, module and script loads) ---- */
 
 /* The loader reports no headers: the type comes from the URL's suffix. */
@@ -523,6 +527,7 @@ static bool ensure_js(AuDocScript *s)
     h.submit_form = h_submit_form;
     if (au_dv_callbacks(s->dv)->random)
         h.random = h_random;
+    h.coro = au_dv_callbacks(s->dv)->coro;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
@@ -1093,6 +1098,9 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
         au_js_run_frame(s->js);
         ran = true;
     }
+    /* The document's workers, a slice each in turn. */
+    if (au_js_run_workers(s->js, WORKER_BUDGET_MS))
+        ran = true;
     leave(s);
     return ran;
 }
@@ -1128,7 +1136,7 @@ uint32_t au_docscript_due(AuDocScript *s)
 {
     if (!s->js)
         return UINT32_MAX;
-    if (s->resize_pending || s->scroll_pending)
+    if (s->resize_pending || s->scroll_pending || au_js_workers_busy(s->js))
         return 0;
     uint32_t due = au_js_wants_frame(s->js) ? 16 : UINT32_MAX;
     double t = au_js_next_timer(s->js);
