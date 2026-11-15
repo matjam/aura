@@ -161,6 +161,54 @@ static void expect_cert_error(int fix, const char *what, const char *reason_part
     fake_free(&f);
 }
 
+/* The user's session exception: only for the leaf with the fingerprint
+ * accepted, never for an HSTS host, never cached as a session, and no
+ * HSTS from an overridden connection. */
+static void expect_exception(int fix, const char *what)
+{
+    FakeNet f;
+    fake_init(&f);
+    AuRootStore *roots = test_roots();
+    AuHsts *hsts = au_hsts_new();
+    AuNet *net = au_net_new(&f.ops);
+    au_net_set_roots(net, roots);
+    au_net_set_hsts(net, hsts);
+    FakeServer *s = tls_server(&f, "tls.test", fix);
+    fake_respond(s, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nStrict-Transport-Security: max-age=1000\r\n\r\nhello");
+    fake_respond(s, OK_RESP);
+    Result r;
+    get(&f, net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_ERR_CERT && r.have_cert, "%s: fails first", what);
+    uint8_t wrong[32];
+    memcpy(wrong, r.cert.chain[0].sha256, 32);
+    wrong[0] ^= 1;
+    CHECK(au_net_allow_cert(net, "tls.test", wrong), "%s: exception recorded", what);
+    get(&f, net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_ERR_CERT, "%s: another fingerprint does not pass: %s", what, au_net_error_name(r.err));
+    CHECK(au_net_allow_cert(net, "tls.test", r.cert.chain[0].sha256), "%s: exception for the leaf", what);
+    get(&f, net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_OK && r.status == 200 && r.body == 5, "%s: continues: %s", what, au_net_error_name(r.err));
+    CHECK(r.have_cert && r.cert.overridden && r.cert.error != 0, "%s: marked overridden", what);
+    CHECK(!au_hsts_is_known(hsts, "tls.test", f.wall), "%s: no HSTS from an overridden connection", what);
+    /* A later connection is checked again (no resumed session), and still passes. */
+    s->resp[s->next - 1].close_after = true;
+    get(&f, net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_OK && !r.sec.resumed && r.cert.overridden, "%s: second: %s resumed %d", what,
+          au_net_error_name(r.err), r.sec.resumed);
+    au_net_clear_cert_exceptions(net);
+    au_net_close_idle(net);
+    fake_respond(s, OK_RESP);
+    get(&f, net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_ERR_CERT, "%s: cleared: %s", what, au_net_error_name(r.err));
+    /* HSTS hosts get no exception. */
+    au_hsts_process(hsts, "tls.test", "max-age=1000", f.wall);
+    CHECK(!au_net_allow_cert(net, "tls.test", r.cert.chain[0].sha256), "%s: refused for HSTS", what);
+    au_net_free(net);
+    au_hsts_free(hsts);
+    au_roots_free(roots);
+    fake_free(&f);
+}
+
 static void test_clock_wrong(void)
 {
     FakeNet f;
@@ -305,6 +353,9 @@ int main(void)
     expect_cert_error(TLS_FIX_EXPIRED, "expired", "expired");
     expect_cert_error(TLS_FIX_WRONGHOST, "wrong host", "different site");
     expect_cert_error(TLS_FIX_UNTRUSTED, "untrusted root", "trust");
+    expect_exception(TLS_FIX_EXPIRED, "expired");
+    expect_exception(TLS_FIX_WRONGHOST, "wrong host");
+    expect_exception(TLS_FIX_UNTRUSTED, "untrusted");
     test_clock_wrong();
     test_resumption_and_hsts();
     test_hsts_not_from_bad_cert();

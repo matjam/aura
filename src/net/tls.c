@@ -19,6 +19,12 @@ typedef struct ChainRecorder {
     uint8_t *cur;
     size_t cur_len, cur_cap;
     bool cur_overflow;
+    /* The user's session exception (au_tls_allow_cert): the leaf's
+     * fingerprint, and the leaf's key decoded when the exception applies. */
+    bool allow;
+    uint8_t allow_sha256[32];
+    br_x509_decoder_context leaf;
+    bool leaf_ok;
 } ChainRecorder;
 
 struct AuTls {
@@ -95,6 +101,12 @@ static void rec_end_cert(const br_x509_class **ctx)
             au_cert_parse(r->cur, r->cur_len, e);
         else
             snprintf(e->subject, sizeof e->subject, "(certificate too large to show)");
+        /* The leaf the user accepted: decode its key (no validation). */
+        if (info->count == 0 && r->allow && !r->cur_overflow && !memcmp(e->sha256, r->allow_sha256, 32)) {
+            br_x509_decoder_init(&r->leaf, NULL, NULL);
+            br_x509_decoder_push(&r->leaf, r->cur, r->cur_len);
+            r->leaf_ok = br_x509_decoder_get_pkey(&r->leaf) != NULL;
+        }
     }
     info->count++;
     r->minimal.vtable->end_cert(&r->minimal.vtable);
@@ -105,12 +117,24 @@ static unsigned rec_end_chain(const br_x509_class **ctx)
     ChainRecorder *r = rec_of(ctx);
     unsigned err = r->minimal.vtable->end_chain(&r->minimal.vtable);
     r->owner->info.error = (int)err;
+    /* A certificate error the user chose to continue past for this exact
+     * leaf certificate (and only that one): the handshake goes on with the
+     * leaf's key, and the connection is marked as overridden. */
+    if (err != 0 && err >= BR_ERR_X509_OK && err < BR_ERR_X509_OK + 32 && r->leaf_ok) {
+        r->owner->info.overridden = true;
+        return 0;
+    }
     return err;
 }
 
 static const br_x509_pkey *rec_get_pkey(const br_x509_class *const *ctx, unsigned *usages)
 {
-    const ChainRecorder *r = (const ChainRecorder *)(const void *)ctx;
+    ChainRecorder *r = (ChainRecorder *)(void *)ctx;
+    if (r->owner->info.overridden) {
+        if (usages)
+            *usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN;
+        return br_x509_decoder_get_pkey(&r->leaf);
+    }
     return r->minimal.vtable->get_pkey(&r->minimal.vtable, usages);
 }
 
@@ -191,6 +215,12 @@ AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const
         return t;
     }
     return t;
+}
+
+void au_tls_allow_cert(AuTls *t, const uint8_t sha256[32])
+{
+    t->xc.allow = true;
+    memcpy(t->xc.allow_sha256, sha256, 32);
 }
 
 void au_tls_free(AuTls *t)

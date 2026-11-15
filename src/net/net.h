@@ -255,4 +255,28 @@ const AuCertInfo *au_http_cert_info(const AuHttpTransfer *t);
 void au_http_set_user(AuHttpTransfer *t, void *user);
 void *au_http_user(const AuHttpTransfer *t);
 
+/* What a transfer is doing, for the status bar. */
+typedef enum {
+    AU_PHASE_QUEUED,     /* waiting to start, or for a free connection */
+    AU_PHASE_ENTROPY,    /* https: waiting for the platform's entropy source */
+    AU_PHASE_RESOLVING,  /* looking up the host name */
+    AU_PHASE_CONNECTING, /* opening the TCP connection (or the proxy tunnel) */
+    AU_PHASE_SECURING,   /* the TLS handshake */
+    AU_PHASE_SENDING,    /* sending the request */
+    AU_PHASE_WAITING,    /* sent; no response bytes yet */
+    AU_PHASE_RECEIVING,  /* response bytes arriving */
+    AU_PHASE_DONE
+} AuHttpPhase;
+AuHttpPhase au_http_phase(const AuHttpTransfer *t);
+
+/* ---- Certificate exceptions ----
+ * The user chose to continue past a certificate error on host: later
+ * connections accept a chain whose leaf certificate has this SHA-256
+ * fingerprint (and no other) despite the error, until
+ * au_net_clear_cert_exceptions or au_net_free (exceptions are never
+ * saved). Responses over such connections carry AuCertInfo.overridden.
+ * Refused (false) for an HSTS host. */
+bool au_net_allow_cert(AuNet *net, const char *host, const uint8_t sha256[32]);
+void au_net_clear_cert_exceptions(AuNet *net);
+
 #endif

@@ -70,7 +70,15 @@ typedef struct AuthEntry {
 typedef struct SessionEntry {
     char *hostport;
     AuTlsSession s;
+    AuCertInfo *cert; /* the full handshake's chain, for resumed connections */
 } SessionEntry;
+
+#define CERT_EXCEPTIONS 16
+
+typedef struct CertException {
+    char *host;
+    uint8_t sha256[32];
+} CertException;
 
 struct AuHttpTransfer {
     AuHttpTransfer *next;
@@ -144,6 +152,8 @@ struct AuNet {
     uint32_t drbg_uses;
     SessionEntry sessions[SESSION_CACHE];
     int next_session;
+    CertException exceptions[CERT_EXCEPTIONS];
+    int next_exception;
     AuthEntry auth[AUTH_CACHE];
     int next_auth;
     AuBrotliDict *brdict;
@@ -446,17 +456,23 @@ static void session_key(const char *host, uint16_t port, char *out, size_t cap)
     snprintf(out, cap, "%s:%u", host, (unsigned)port);
 }
 
-static const AuTlsSession *session_find(AuNet *net, const char *host, uint16_t port)
+static SessionEntry *session_entry(AuNet *net, const char *host, uint16_t port)
 {
     char key[300];
     session_key(host, port, key, sizeof key);
     for (int i = 0; i < SESSION_CACHE; i++)
         if (net->sessions[i].hostport && !strcmp(net->sessions[i].hostport, key) && net->sessions[i].s.valid)
-            return &net->sessions[i].s;
+            return &net->sessions[i];
     return NULL;
 }
 
-static void session_store(AuNet *net, const char *host, uint16_t port, const AuTlsSession *s)
+static const AuTlsSession *session_find(AuNet *net, const char *host, uint16_t port)
+{
+    SessionEntry *e = session_entry(net, host, port);
+    return e ? &e->s : NULL;
+}
+
+static void session_store(AuNet *net, const char *host, uint16_t port, const AuTlsSession *s, const AuCertInfo *ci)
 {
     char key[300];
     session_key(host, port, key, sizeof key);
@@ -471,6 +487,52 @@ static void session_store(AuNet *net, const char *host, uint16_t port, const AuT
         net->sessions[slot].hostport = au_strndup(key, strlen(key));
     }
     net->sessions[slot].s = *s;
+    if (!net->sessions[slot].cert)
+        net->sessions[slot].cert = au_alloc(sizeof *net->sessions[slot].cert);
+    *net->sessions[slot].cert = *ci;
+}
+
+/* ---- Certificate exceptions ---- */
+
+static const CertException *exception_for(AuNet *net, const char *host)
+{
+    for (int i = 0; i < CERT_EXCEPTIONS; i++)
+        if (net->exceptions[i].host && !strcmp(net->exceptions[i].host, host))
+            return &net->exceptions[i];
+    return NULL;
+}
+
+bool au_net_allow_cert(AuNet *net, const char *host, const uint8_t sha256[32])
+{
+    if (!host || !*host || au_hsts_is_known(net->hsts, host, wall(net)))
+        return false;
+    int slot = -1;
+    for (int i = 0; i < CERT_EXCEPTIONS; i++)
+        if (net->exceptions[i].host && !strcmp(net->exceptions[i].host, host))
+            slot = i;
+    if (slot < 0) {
+        slot = net->next_exception;
+        net->next_exception = (net->next_exception + 1) % CERT_EXCEPTIONS;
+        au_free(net->exceptions[slot].host);
+        net->exceptions[slot].host = au_strndup(host, strlen(host));
+    }
+    memcpy(net->exceptions[slot].sha256, sha256, 32);
+    /* Sessions resumed later must not skip the check the exception
+     * replaces; drop a cached session for the host. */
+    for (int i = 0; i < SESSION_CACHE; i++) {
+        SessionEntry *e = &net->sessions[i];
+        if (e->hostport && !strncmp(e->hostport, host, strlen(host)) && e->hostport[strlen(host)] == ':')
+            e->s.valid = false;
+    }
+    return true;
+}
+
+void au_net_clear_cert_exceptions(AuNet *net)
+{
+    for (int i = 0; i < CERT_EXCEPTIONS; i++) {
+        au_free(net->exceptions[i].host);
+        net->exceptions[i].host = NULL;
+    }
 }
 
 /* Seeds the DRBG from the platform once; false while entropy is short. */
@@ -544,12 +606,16 @@ static void start_tls(Conn *c)
     uint8_t seed[32];
     br_hmac_drbg_generate(&net->drbg, seed, sizeof seed);
     net->drbg_uses++;
-    c->tls_engine = au_tls_new(net->roots, c->host, wall(net), seed, session_find(net, c->host, c->port));
+    int64_t now = wall(net);
+    c->tls_engine = au_tls_new(net->roots, c->host, now, seed, session_find(net, c->host, c->port));
     memset(seed, 0, sizeof seed);
     if (!c->tls_engine) {
         conn_kill(c, AU_NET_ERR_CERT);
         return;
     }
+    const CertException *ex = exception_for(net, c->host);
+    if (ex && !au_hsts_is_known(net->hsts, c->host, now))
+        au_tls_allow_cert(c->tls_engine, ex->sha256);
     c->state = C_TLS;
 }
 
@@ -802,9 +868,13 @@ static bool conn_step(Conn *c)
             return true;
         if (au_tls_state(c->tls_engine) == AU_TLS_OPEN) {
             c->state = C_READY;
+            /* A resumed session keeps the chain of its full handshake; a
+             * connection the user's exception let through is not cached,
+             * so every later connection is checked again. */
             AuTlsSession s;
-            if (au_tls_save_session(c->tls_engine, &s))
-                session_store(net, c->host, c->port, &s);
+            const AuCertInfo *ci = au_tls_cert_info(c->tls_engine);
+            if (ci->count > 0 && !ci->overridden && au_tls_save_session(c->tls_engine, &s))
+                session_store(net, c->host, c->port, &s, ci);
             return true;
         }
         if (c->eof) {
@@ -1519,6 +1589,11 @@ static void record_tls(AuHttpTransfer *t, Conn *c)
     t->security.cipher = t->cipher;
     t->security.alpn = t->alpn;
     const AuCertInfo *ci = au_tls_cert_info(c->tls_engine);
+    if (ci && ci->count == 0 && t->security.resumed) {
+        const SessionEntry *e = session_entry(t->net, c->host, c->port);
+        if (e && e->cert)
+            ci = e->cert;
+    }
     if (ci) {
         t->cert = *ci;
         t->have_cert = true;
@@ -1533,7 +1608,8 @@ static bool handle_head(AuHttpTransfer *t)
     int st = t->parser.status;
     store_cookies(t);
     /* HSTS: only from a secure connection without certificate errors. */
-    if (net->hsts && !strcmp(t->url.scheme, "https") && t->url.host_type == AU_URL_HOST_DOMAIN) {
+    if (net->hsts && !strcmp(t->url.scheme, "https") && t->url.host_type == AU_URL_HOST_DOMAIN &&
+        !(t->have_cert && t->cert.overridden)) {
         const char *sts = au_headers_get(&t->parser.headers, "strict-transport-security");
         if (sts)
             au_hsts_process(net->hsts, t->url.host, sts, wall(net));
@@ -2078,8 +2154,11 @@ void au_net_free(AuNet *net)
     }
     while (net->conns)
         conn_remove(net, net->conns);
-    for (int i = 0; i < SESSION_CACHE; i++)
+    for (int i = 0; i < SESSION_CACHE; i++) {
         au_free(net->sessions[i].hostport);
+        au_free(net->sessions[i].cert);
+    }
+    au_net_clear_cert_exceptions(net);
     for (int i = 0; i < AUTH_CACHE; i++) {
         au_free(net->auth[i].hostport);
         au_free(net->auth[i].realm);
@@ -2094,4 +2173,30 @@ void au_net_free(AuNet *net)
     au_free(c->https_proxy_host);
     memset(&net->drbg, 0, sizeof net->drbg);
     au_free(net);
+}
+
+AuHttpPhase au_http_phase(const AuHttpTransfer *t)
+{
+    switch (t->state) {
+    case T_START: return AU_PHASE_QUEUED;
+    case T_WAIT_CONN:
+        return !strcmp(t->url.scheme, "https") && !t->net->drbg_ready ? AU_PHASE_ENTROPY : AU_PHASE_QUEUED;
+    case T_SEND:
+    case T_RECV:
+    case T_DRAIN:
+        if (!t->conn)
+            return AU_PHASE_QUEUED;
+        switch (t->conn->state) {
+        case C_RESOLVE: return AU_PHASE_RESOLVING;
+        case C_CONNECT:
+        case C_PROXY: return AU_PHASE_CONNECTING;
+        case C_TLS: return AU_PHASE_SECURING;
+        default: break;
+        }
+        if (t->state == T_SEND)
+            return AU_PHASE_SENDING;
+        return t->got_bytes ? AU_PHASE_RECEIVING : AU_PHASE_WAITING;
+    case T_WAIT_CRED: return AU_PHASE_WAITING;
+    default: return AU_PHASE_DONE;
+    }
 }

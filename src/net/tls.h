@@ -37,6 +37,7 @@ struct AuCertInfo {
     const char *reason;  /* English text for the error page */
     bool clock_wrong;    /* the system date is before the root store's date */
     bool hsts;           /* the host is an HSTS host: the error cannot be overridden */
+    bool overridden;     /* error set, but the user's session exception let the handshake go on */
     int64_t checked_at;  /* the time used for validation */
 };
 
@@ -58,6 +59,13 @@ AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const
                   const AuTlsSession *resume);
 void au_tls_free(AuTls *t);
 AuTlsState au_tls_state(AuTls *t);
+/* The user's exception for this connection: a certificate error (expired,
+ * wrong host, untrusted issuer...) on a chain whose leaf certificate has
+ * this SHA-256 fingerprint does not stop the handshake; AuCertInfo keeps
+ * the error and sets overridden. Call before the server's certificates
+ * arrive (right after au_tls_new). The stack never calls it for an HSTS
+ * host. */
+void au_tls_allow_cert(AuTls *t, const uint8_t sha256[32]);
 
 /* Ciphertext to send: a pointer and length (0 when none); then report how
  * much the socket took. */
