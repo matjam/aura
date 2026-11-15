@@ -290,6 +290,11 @@ void au_blend_gradient_span(AuPixel *dst, int x, int y, int n, const AuGradientL
         stc = 1e9f;
     if (stc < -1e9f)
         stc = -1e9f;
+    /* NaN passes the clamps above (a gradient with a NaN stop). */
+    if (t0c != t0c)
+        t0c = 0;
+    if (stc != stc)
+        stc = 0;
     int64_t t = (int64_t)t0c, step = (int64_t)stc;
     for (int i = 0; i < n; i++, t += step) {
         uint32_t c = cov ? cov[i] : 255;

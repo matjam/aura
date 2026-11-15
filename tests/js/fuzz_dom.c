@@ -245,11 +245,14 @@ static AuSurface *surface;
 static long slow_ms = 60000;
 
 static double fake_now;
+/* The clock script sees: CPU time, twenty times as fast, so that the
+ * engine's ten-second limit on a script that does not end (callbacks
+ * that keep each other going) costs half a second here. */
 static double now_ms(void *ctx, AuDocView *dv)
 {
     (void)ctx, (void)dv;
-    fake_now += 1;
-    return fake_now;
+    fake_now += 0.001;
+    return fake_now + (double)clock() * 20000.0 / CLOCKS_PER_SEC;
 }
 
 static void between_steps(AuDocView *dv)
