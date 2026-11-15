@@ -23,6 +23,7 @@
 
 #include "appearance.h"
 #include "browser/browser.h"
+#include "browser/favicon.h"
 #include "browser/context.h"
 #include "browser/listview.h"
 #include "browser/url.h"
@@ -161,6 +162,9 @@ bool storage_subfolder(const char *name, short *vref, long *dir);
  * https), and real downloads. */
 /* After storage_load_all: creates everything and loads Cookies and HSTS. */
 void mac_net_init(void);
+/* len bytes from the entropy pool; false until it has gathered enough
+ * (and before mac_net_init). */
+bool mac_net_random(void *buf, size_t len);
 /* Every event WaitNextEvent returns, null events included. */
 void mac_net_event(const EventRecord *ev);
 /* Once per pass of the event loop. */

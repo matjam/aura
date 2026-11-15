@@ -171,6 +171,11 @@ static bool w_entropy(void *ctx, void *buf, size_t len)
     return au_mac_entropy_read(N.entropy, buf, len);
 }
 
+bool mac_net_random(void *buf, size_t len)
+{
+    return N.entropy && au_mac_entropy_read(N.entropy, buf, len);
+}
+
 static unsigned entropy_bits(void *ctx)
 {
     (void)ctx;
@@ -479,6 +484,9 @@ static void apply_prefs(void)
             AuCacheStorage st;
             au_disk_cache_storage(N.disk, &st);
             au_cache_set_storage(N.cache, &st);
+            /* The disk has every stored body: memory keeps the last
+             * megabyte used instead of the whole memory cache budget. */
+            au_cache_set_resident(N.cache, 1024u * 1024u);
         } else {
             au_cache_set_storage(N.cache, NULL);
         }

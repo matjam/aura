@@ -37,3 +37,62 @@ target_link_libraries(aura_engine PUBLIC aura_quickjs)
 if(NOT APPLE OR AURA_MACOS9)
     target_link_libraries(aura_quickjs PUBLIC m)
 endif()
+
+# The prelude (src/js/prelude*.js) is compiled to bytecode at build time by
+# tools/jsprelude and embedded by src/js/prelude.c. QuickJS bytecode is in
+# the byte order of the machine that reads it, so the Mac OS 9 build runs
+# the tool on the host with --swap (big-endian output). The cross build
+# compiles the tool with the host's own C compiler; it runs no PowerPC
+# code. To embed the source instead and compile it at every runtime start
+# (errors in the prelude then carry line numbers), configure with
+# -DAURA_JS_PRELUDE_SOURCE=ON.
+option(AURA_JS_PRELUDE_SOURCE "Embed the JavaScript prelude as source, not bytecode" OFF)
+if(AURA_JS_PRELUDE_SOURCE)
+    target_compile_definitions(aura_engine PRIVATE AU_JS_PRELUDE_SOURCE)
+else()
+    set(AURA_PRELUDE_DIR ${CMAKE_BINARY_DIR}/gen)
+    set(AURA_PRELUDE_BC ${AURA_PRELUDE_DIR}/prelude.bc)
+    # The order prelude.c joins the files in.
+    set(AURA_PRELUDE_JS)
+    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_net prelude_obs)
+        list(APPEND AURA_PRELUDE_JS ${CMAKE_SOURCE_DIR}/src/js/${part}.js)
+    endforeach()
+    set(AURA_JSPRELUDE_SRC ${CMAKE_SOURCE_DIR}/tools/jsprelude/jsprelude.c)
+    set(AURA_QJS_SOURCES ${AURA_QJS_DIR}/dtoa.c ${AURA_QJS_DIR}/libregexp.c ${AURA_QJS_DIR}/libunicode.c
+        ${AURA_QJS_DIR}/quickjs.c)
+    file(GLOB AURA_QJS_HEADERS ${AURA_QJS_DIR}/*.h)
+    if(AURA_MACOS9)
+        find_program(AURA_HOST_CC NAMES cc gcc clang NO_CMAKE_FIND_ROOT_PATH)
+        if(NOT AURA_HOST_CC)
+            message(FATAL_ERROR "no host C compiler (cc) to build tools/jsprelude; set AURA_HOST_CC")
+        endif()
+        set(AURA_JSPRELUDE ${AURA_PRELUDE_DIR}/jsprelude-host)
+        add_custom_command(OUTPUT ${AURA_JSPRELUDE}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+            COMMAND ${AURA_HOST_CC} -O1 -w -funsigned-char -fno-strict-aliasing -D_GNU_SOURCE -I${AURA_QJS_DIR} -o ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_SRC} ${AURA_QJS_SOURCES} -lm
+            DEPENDS ${AURA_JSPRELUDE_SRC} ${AURA_QJS_SOURCES} ${AURA_QJS_HEADERS}
+            COMMENT "Building jsprelude with the host compiler"
+            VERBATIM)
+        set(AURA_JSPRELUDE_FLAGS --swap)
+        set(AURA_JSPRELUDE_DEP ${AURA_JSPRELUDE})
+    else()
+        add_executable(jsprelude ${AURA_JSPRELUDE_SRC})
+        target_link_libraries(jsprelude PRIVATE aura_quickjs)
+        set(AURA_JSPRELUDE $<TARGET_FILE:jsprelude>)
+        set(AURA_JSPRELUDE_FLAGS)
+        set(AURA_JSPRELUDE_DEP jsprelude)
+    endif()
+    add_custom_command(OUTPUT ${AURA_PRELUDE_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_PRELUDE_BC} ${AURA_PRELUDE_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_PRELUDE_JS}
+        COMMENT "Compiling the JavaScript prelude to bytecode"
+        VERBATIM)
+    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC})
+    add_dependencies(aura_engine aura_prelude_bc)
+    # #embed looks beside the source file, then in --embed-dir (Clang and
+    # GCC 15 or later), not in the include path.
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
+        OBJECT_DEPENDS ${AURA_PRELUDE_BC}
+        COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
+endif()

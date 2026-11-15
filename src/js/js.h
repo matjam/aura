@@ -228,6 +228,11 @@ void au_js_run_module(AuJs *js, AuElement *el, const char *src, size_t len, cons
 /* Evaluates src as a script and appends the result's string form to out
  * (for the host tool and tests). Returns false on an exception. */
 bool au_js_eval(AuJs *js, const char *src, size_t len, AuBuf *out);
+/* Appends what the script heap holds by kind (QuickJS's own accounting:
+ * atoms, strings, objects, properties, shapes, function bytecode, line
+ * tables, arrays). au_js_eval with the source "aura:memory" does the
+ * same, so a host tool reaches it through a page. */
+void au_js_memory_report(AuJs *js, AuBuf *out);
 /* A javascript: URL activated by a link. */
 void au_js_run_javascript_url(AuJs *js, const char *url);
 /* An import map (<script type="importmap">): its JSON text. */

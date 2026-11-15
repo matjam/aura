@@ -10,14 +10,16 @@
 
 /* ---- Helpers shared across src/css ---- */
 
-void css_grow(void **arr, uint32_t *cap, uint32_t n, size_t sz)
+void (css_grow)(void **arr, uint32_t *cap, uint32_t n, size_t sz)
 {
     if (n <= *cap)
         return;
     uint32_t c = *cap ? *cap : 4;
     while (c < n)
         c *= 2;
-    *arr = au_realloc(*arr, (size_t)c * sz);
+    /* In parentheses: with AU_MEM_TRACK the block is counted for the
+     * caller (css_int.h), not for this line. */
+    *arr = (au_realloc)(*arr, (size_t)c * sz);
     *cap = c;
 }
 

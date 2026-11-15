@@ -906,6 +906,15 @@ static double dv_now(void *ctx, AuDocView *dv)
     return now(ctx);
 }
 
+/* crypto.getRandomValues: bytes from the platform's entropy source, or
+ * false (the call throws) while it is not ready. */
+static bool dv_random(void *ctx, AuDocView *dv, void *buf, size_t len)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->env.random && p->env.random(p->env.ctx, buf, len);
+}
+
 static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
 {
     if (dv == ((AuPage *)ctx)->dv)
@@ -1262,6 +1271,7 @@ static void new_view(AuPage *p)
     dcb.now_ms = dv_now;
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
+    dcb.random = p->env.random ? dv_random : NULL;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;
@@ -2507,6 +2517,12 @@ static void main_done(AuPage *p, bool ok, const AuFetchInfo *info)
         p->failed = true;
     p->main_done = true;
     p->dirty = true;
+    /* The source is complete: give back the room its buffer grew beyond
+     * its length (up to as much again). */
+    if (p->source.cap > p->source.len + 1 && p->source.len) {
+        p->source.data = au_realloc(p->source.data, p->source.len + 1);
+        p->source.cap = p->source.len + 1;
+    }
     report_progress(p);
 }
 
@@ -3383,4 +3399,89 @@ int au_page_scroll_damage(AuPage *p, int ox, int oy, int nx, int ny, AuIRect *ou
     if (p->kind != K_DOC || p->dirty || !au_docview_document(p->dv))
         return -1;
     return au_docview_scroll_damage(p->dv, ox, oy, nx, ny, out, max);
+}
+
+/* ---- The site icon ---- */
+
+/* How well a link's sizes attribute suits a 16 pixel icon: the smallest
+ * size of at least 16 is best, then "any" or no attribute, then the
+ * largest below 16. */
+static int icon_sizes_score(const char *sizes)
+{
+    if (!sizes || !*sizes)
+        return 500;
+    int best = 0;
+    const char *s = sizes;
+    while (*s) {
+        while (au_is_space((unsigned char)*s))
+            s++;
+        if (!*s)
+            break;
+        int w = 0, sc;
+        const char *t = s;
+        while (au_is_digit((unsigned char)*t) && w < 100000)
+            w = w * 10 + (*t++ - '0');
+        if (t == s)
+            sc = 500; /* "any" */
+        else if (w >= 16)
+            sc = 2000 - (w > 1000 ? 1000 : w);
+        else
+            sc = w;
+        if (sc > best)
+            best = sc;
+        while (*s && !au_is_space((unsigned char)*s))
+            s++;
+    }
+    return best;
+}
+
+static bool rel_has_icon(const char *rel)
+{
+    while (*rel) {
+        while (au_is_space((unsigned char)*rel))
+            rel++;
+        const char *e = rel;
+        while (*e && !au_is_space((unsigned char)*e))
+            e++;
+        if (au_ieq(rel, (size_t)(e - rel), "icon", 4))
+            return true;
+        rel = e;
+    }
+    return false;
+}
+
+char *au_page_icon_url(AuPage *p)
+{
+    if (p->kind != K_DOC || !p->begun || p->failed || p->internal || !p->url || !au_docview_document(p->dv))
+        return NULL;
+    if (!au_url_scheme_is(p->url, "http") && !au_url_scheme_is(p->url, "https"))
+        return NULL;
+    AuDocument *d = au_docview_document(p->dv);
+    AuAtom a_rel = au_atom_cstr("rel"), a_href = au_atom_cstr("href"), a_sizes = au_atom_cstr("sizes");
+    const char *best = NULL;
+    int best_score = -1;
+    for (AuNode *c = au_node_next(&d->node, &d->node); c; c = au_node_next(c, &d->node)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        AuElement *el = au_as_element(c);
+        if (el->tag == AU_ATOM_body)
+            break; /* icons are named in the head */
+        if (el->tag != AU_ATOM_link)
+            continue;
+        const char *rel = au_element_get_attr(el, a_rel), *href = au_element_get_attr(el, a_href);
+        if (!rel || !href || !*href || !rel_has_icon(rel))
+            continue;
+        int sc = icon_sizes_score(au_element_get_attr(el, a_sizes));
+        if (sc > best_score) {
+            best_score = sc;
+            best = href;
+        }
+    }
+    char abs[2048];
+    if (best && au_url_resolve(au_docview_base_url(p->dv), best, abs, sizeof abs) &&
+        (au_url_scheme_is(abs, "http") || au_url_scheme_is(abs, "https")))
+        return au_strndup(abs, strlen(abs));
+    if (au_url_resolve(p->url, "/favicon.ico", abs, sizeof abs))
+        return au_strndup(abs, strlen(abs));
+    return NULL;
 }

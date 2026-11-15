@@ -57,6 +57,7 @@ typedef struct AuLoadRequest {
     AuBodySource *body;           /* ownership passes */
     const char *content_type;     /* of the body */
     bool to_utf8;                 /* transcode HTML documents (see above) */
+    bool omit_credentials;        /* no cookies, no HTTP authentication (AuHttpRequest.omit_credentials) */
 } AuLoadRequest;
 
 typedef struct AuLoadInfo {

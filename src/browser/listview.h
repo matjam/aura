@@ -21,6 +21,7 @@ typedef struct AuListRow {
     char *text;
     char *detail;   /* drawn dimmed after the text (a URL, a time) */
     uint32_t id;    /* bookmark id, or history index */
+    char *icon_host; /* links: the host whose site icon the row shows, or NULL for the page glyph */
 } AuListRow;
 
 typedef struct AuListView {
@@ -30,6 +31,10 @@ typedef struct AuListView {
     int scroll;   /* pixels */
     int width, height;
     bool active;  /* window active: selection drawn highlighted */
+    /* Optional, set by the shell after au_listview_init: the browser's
+     * site icons (favicon.h). Link rows filled from bookmarks or history
+     * then show their site's icon when the store has one. */
+    struct AuFavicons *icons;
 } AuListView;
 
 void au_listview_init(AuListView *lv);

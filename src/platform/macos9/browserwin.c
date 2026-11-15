@@ -764,6 +764,13 @@ static bool host_read(void *ctx, const char *url, char **data, size_t *len)
     return mac_read_file_url(url, data, len);
 }
 
+/* crypto for pages: the entropy pool the network stack uses. */
+static bool host_random(void *ctx, void *buf, size_t len)
+{
+    (void)ctx;
+    return mac_net_random(buf, len);
+}
+
 void browserwin_host(AuBrowserHost *h)
 {
     memset(h, 0, sizeof *h);
@@ -780,6 +787,7 @@ void browserwin_host(AuBrowserHost *h)
     h->choose_file = host_choose_file;
     h->confirm = host_confirm;
     h->scroll_area = host_scroll_area;
+    h->random = host_random;
 }
 
 /* ---- Events ---- */

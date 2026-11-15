@@ -800,6 +800,11 @@ static void index_build(AuCssResolver *r, bool quirks)
     for (uint32_t i = 0; i < r->nsheets; i++)
         walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap);
     au_free(stack);
+    if (r->nentries && r->nentries < r->entries_cap) {
+        /* Kept until the sheets change: trim to the length. */
+        r->entries = au_realloc(r->entries, r->nentries * sizeof *r->entries);
+        r->entries_cap = r->nentries;
+    }
     sort_registrations(r);
     for (int i = 0; i < 3; i++)
         layer_rank(&r->layers[i]);
@@ -834,14 +839,25 @@ static void index_build(AuCssResolver *r, bool quirks)
 
 /* ---- Resolver lifetime ---- */
 
+/* The user agent sheets are parsed once and shared by every resolver
+ * (each document view has one; a parsed copy is about 110 KB). Resolvers
+ * only read them. They are freed with the last resolver. */
+static AuCssSheet *ua_shared, *ua_quirks_shared;
+static uint32_t ua_users;
+
 AuCssResolver *au_css_resolver_new(void)
 {
     au_css_init();
     AuCssResolver *r = au_calloc(sizeof *r);
     au_css_device_default(&r->dev);
     au_css_font_prefs_default(&r->fprefs);
-    r->ua = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false);
-    r->ua_quirks = css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true);
+    if (!ua_users++) {
+        ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false);
+        ua_quirks_shared =
+            css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true);
+    }
+    r->ua = ua_shared;
+    r->ua_quirks = ua_quirks_shared;
     r->index_dirty = true;
     return r;
 }
@@ -890,8 +906,11 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->matched);
     au_free(r->matched_entries);
     au_free(r->pseudo_entries);
-    au_css_sheet_free(r->ua);
-    au_css_sheet_free(r->ua_quirks);
+    if (!--ua_users) {
+        au_css_sheet_free(ua_shared);
+        au_css_sheet_free(ua_quirks_shared);
+        ua_shared = ua_quirks_shared = NULL;
+    }
     for (uint32_t i = 0; i < r->nsheets; i++)
         au_css_sheet_free(r->sheets[i]);
     au_free(r->sheets);

@@ -108,6 +108,7 @@ typedef struct AuFetchRequest {
     const void *body;         /* copied; NULL for none */
     size_t body_len;
     const char *body_type;    /* the body's Content-Type */
+    bool omit_credentials;    /* send no cookies and no HTTP authentication (an icon on another host) */
 } AuFetchRequest;
 
 /* Why a fetch failed (src/net's errors, plus what the embedder adds). */
@@ -289,6 +290,9 @@ typedef struct AuPageEnv {
     const AuPageFetcher *(*fetcher)(void *ctx, const char *scheme);
     /* The selection highlight colour (paint ARGB); 0 for a default. */
     uint32_t highlight;
+    /* Optional: cryptographically strong random bytes for script
+     * (AuBrowserHost.random); false when the source is not ready. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -436,6 +440,12 @@ size_t au_page_console_count(const AuPage *p);
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The URL of the loaded document's site icon, for the caller to free with
+ * au_free: the <link rel=icon> whose sizes fit 16 pixels best (the
+ * smallest of at least 16, else the largest), else /favicon.ico of the
+ * document's origin. NULL for a document that is not http or https, an
+ * internal page, or a failed load. */
+char *au_page_icon_url(AuPage *p);
 /* The document view's update counts (style passes, styled elements, box
  * tree builds, layouts; AuDocViewStats in src/page/page.h), for timings
  * and tests. False for a page without a document view. */
