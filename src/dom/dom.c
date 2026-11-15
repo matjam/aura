@@ -2,6 +2,29 @@
 
 #include <string.h>
 
+/* ---- Mutation hooks (additions for script) ---- */
+
+#define HOOKS(n) ((n)->doc ? (n)->doc->hooks : NULL)
+
+static inline void hold_changed(AuNode *n)
+{
+    const AuDomHooks *h;
+    if (n->js && (h = HOOKS(n)) && h->hold_changed)
+        h->hold_changed(n->doc->hooks_ctx, n);
+}
+
+static inline void bump(AuNode *n)
+{
+    if (n->doc)
+        n->doc->version++;
+}
+
+void au_document_set_hooks(AuDocument *doc, const AuDomHooks *hooks, void *ctx)
+{
+    doc->hooks = hooks;
+    doc->hooks_ctx = ctx;
+}
+
 /* ---- Construction ---- */
 
 static AuNode *node_init(AuNode *n, AuNodeType type, AuDocument *doc)
@@ -75,6 +98,12 @@ static void node_free(AuNode *n)
             au_free(e->attrs[i].value);
         au_free(e->attrs);
         au_free(e->classes);
+        if (e->shadow_root) {
+            AuNode *sr = e->shadow_root;
+            e->shadow_root = NULL;
+            ((AuShadowRoot *)sr)->host = NULL;
+            au_node_unref(sr);
+        }
         if (e->template_content) {
             AuNode *c = e->template_content;
             e->template_content = NULL;
@@ -117,6 +146,7 @@ static void destroy_subtree(AuNode *root)
             c->prev = c->next = NULL;
             if (c->refs > 0) {
                 c->parent = NULL;
+                hold_changed(c);
             } else {
                 c->parent = n; /* the way back up */
                 n = c;
@@ -131,8 +161,10 @@ static void destroy_subtree(AuNode *root)
 
 AuNode *au_node_ref(AuNode *n)
 {
-    if (n)
+    if (n) {
         n->refs++;
+        hold_changed(n);
+    }
     return n;
 }
 
@@ -142,6 +174,7 @@ void au_node_unref(AuNode *n)
         return;
     if (n->refs > 0)
         n->refs--;
+    hold_changed(n);
     if (n->refs == 0 && !n->parent)
         destroy_subtree(n);
 }
@@ -153,6 +186,7 @@ static void unlink_node(AuNode *c)
     AuNode *p = c->parent;
     if (!p)
         return;
+    AuNode *prev = c->prev, *next = c->next;
     if (c->prev)
         c->prev->next = c->next;
     else
@@ -162,6 +196,11 @@ static void unlink_node(AuNode *c)
     else
         p->last_child = c->prev;
     c->parent = c->prev = c->next = NULL;
+    bump(p);
+    const AuDomHooks *h = HOOKS(p);
+    if (h && h->removed)
+        h->removed(p->doc->hooks_ctx, p, c, prev, next);
+    hold_changed(c);
 }
 
 void au_node_insert_before(AuNode *parent, AuNode *child, AuNode *before)
@@ -186,6 +225,11 @@ void au_node_insert_before(AuNode *parent, AuNode *child, AuNode *before)
             parent->first_child = child;
         parent->last_child = child;
     }
+    bump(parent);
+    const AuDomHooks *h = HOOKS(parent);
+    if (h && h->inserted)
+        h->inserted(parent->doc->hooks_ctx, parent, child);
+    hold_changed(child);
 }
 
 void au_node_append(AuNode *parent, AuNode *child)
@@ -273,9 +317,18 @@ static void attr_changed(AuElement *el, AuAtom name, const char *v, size_t len)
         update_classes(el, v, len);
 }
 
+static void attr_hook(AuElement *el, AuAtom name, uint8_t ns, const AuAttr *old)
+{
+    bump(&el->node);
+    const AuDomHooks *h = HOOKS(&el->node);
+    if (h && h->attr_changing)
+        h->attr_changing(el->node.doc->hooks_ctx, el, name, ns, old ? old->value : NULL, old ? old->len : 0);
+}
+
 void au_element_set_attr_ns(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len)
 {
     AuAttr *a = au_element_attr(el, name);
+    attr_hook(el, name, (uint8_t)ns, a);
     if (a) {
         au_free(a->value);
     } else {
@@ -303,6 +356,7 @@ void au_element_remove_attr(AuElement *el, AuAtom name)
     AuAttr *a = au_element_attr(el, name);
     if (!a)
         return;
+    attr_hook(el, name, a->ns, a);
     au_free(a->value);
     uint32_t i = (uint32_t)(a - el->attrs);
     memmove(a, a + 1, (el->nattrs - i - 1) * sizeof *a);
@@ -320,7 +374,15 @@ bool au_element_has_class(const AuElement *el, AuAtom cls)
 
 /* ---- Character data ---- */
 
-void au_text_append(AuText *t, const char *data, size_t len)
+static void text_hook(AuText *t)
+{
+    bump(&t->node);
+    const AuDomHooks *h = HOOKS(&t->node);
+    if (h && h->text_changing)
+        h->text_changing(t->node.doc->hooks_ctx, t, t->data, t->len);
+}
+
+static void text_append(AuText *t, const char *data, size_t len)
 {
     if (t->len + len + 1 > t->cap) {
         size_t cap = t->cap ? t->cap * 2 : 16;
@@ -334,10 +396,17 @@ void au_text_append(AuText *t, const char *data, size_t len)
     t->data[t->len] = 0;
 }
 
+void au_text_append(AuText *t, const char *data, size_t len)
+{
+    text_hook(t);
+    text_append(t, data, len);
+}
+
 void au_text_set(AuText *t, const char *data, size_t len)
 {
+    text_hook(t);
     t->len = 0;
-    au_text_append(t, data, len);
+    text_append(t, data, len);
     if (!len)
         t->data[0] = 0;
 }
@@ -387,6 +456,7 @@ AuNode *au_pi_new(AuDocument *doc, AuAtom target, const char *data, size_t len)
 
 void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len)
 {
+    attr_hook(el, name, (uint8_t)ns, NULL);
     if (el->nattrs == el->attr_cap) {
         el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 4;
         el->attrs = au_realloc(el->attrs, el->attr_cap * sizeof *el->attrs);

@@ -1,0 +1,66 @@
+Build on Mac OS 9 (Retro68 GCC, newlib, PowerPC).
+
+Retro68's newlib has no pthread.h, no clock_gettime and no PRId64
+macros, and Mac OS 9 has no threads. Retro68 GCC predefines
+`macintosh`, which selects:
+- no pthread include and JS_HAVE_THREADS 0 (as for wasi and DJGPP);
+- js__hrtime_ns from gettimeofday (libretrocrt has it);
+- PRId64/PRIu64/PRIx64 fallbacks;
+- no C11 atomics (SharedArrayBuffer and Atomics.wait need threads).
+JS_NO_ATOMICS turns atomics off on any platform, to measure that trim.
+
+--- a/cutils.h
++++ b/cutils.h
+@@ -61,13 +61,21 @@
+ #include <windows.h>
+ #include <process.h> // _beginthread
+ #endif
+-#if !defined(_WIN32) && !defined(EMSCRIPTEN) && !defined(__wasi__) && !defined(__DJGPP)
++#if !defined(_WIN32) && !defined(EMSCRIPTEN) && !defined(__wasi__) && !defined(__DJGPP) && !defined(macintosh)
+ #include <errno.h>
+ #include <pthread.h>
+ #endif
+ #if !defined(_WIN32)
+ #include <limits.h>
+ #include <unistd.h>
++#endif
++
++#if defined(macintosh) && !defined(PRId64)
++/* Retro68 newlib (Mac OS 9) defines no 64-bit printf macros; its printf is
++   built without long long support, so these only feed debug output. */
++#define PRId64 "lld"
++#define PRIu64 "llu"
++#define PRIx64 "llx"
+ #endif
+
+ #if defined(__sun)
+@@ -638,7 +646,7 @@
+
+ /* Cross-platform threading APIs. */
+
+-#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP)
++#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP) || defined(macintosh)
+
+ #define JS_HAVE_THREADS 0
+
+@@ -1607,7 +1615,7 @@
+ }
+ #else
+ static inline uint64_t js__hrtime_ns(void) {
+-#ifdef __DJGPP
++#if defined(__DJGPP) || defined(macintosh)
+   struct timeval tv;
+   if (gettimeofday(&tv, NULL))
+     abort();
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -72,7 +72,8 @@
+ // atomic_store etc. are completely busted in recent versions of tcc;
+ // somehow the compiler forgets to load |ptr| into %rdi when calling
+ // the __atomic_*() helpers in its lib/stdatomic.c and lib/atomic.S
+-#if !defined(__TINYC__) && !defined(EMSCRIPTEN) && !defined(__wasi__) && !__STDC_NO_ATOMICS__ && !defined(__DJGPP)
++#if !defined(__TINYC__) && !defined(EMSCRIPTEN) && !defined(__wasi__) && !__STDC_NO_ATOMICS__ && !defined(__DJGPP) \
++    && !defined(macintosh) && !defined(JS_NO_ATOMICS)
+ #include "quickjs-c-atomics.h"
+ #define CONFIG_ATOMICS
+ #endif

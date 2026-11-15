@@ -18,6 +18,14 @@ void au_free(void *p);
 char *au_strndup(const char *s, size_t n);
 void au_set_oom_handler(void (*handler)(size_t wanted));
 
+/* ---- Non-fatal allocation ----
+ * For allocators that must survive running out, such as the JavaScript
+ * engine's, which turns a failed allocation into a script out-of-memory
+ * error. These return NULL on failure and never call the OOM handler.
+ * Free the result with au_free. */
+void *au_try_alloc(size_t n);
+void *au_try_realloc(void *p, size_t n);
+
 /* ---- Growable byte buffer ---- */
 typedef struct AuBuf {
     char *data;

@@ -37,7 +37,8 @@ typedef struct AuNode AuNode;
 typedef struct AuDocument AuDocument;
 
 struct AuNode {
-    uint8_t type; /* AuNodeType */
+    uint8_t type;  /* AuNodeType */
+    uint8_t flags; /* AU_NODEF_* (see "Additions for script") */
     uint32_t refs;
     AuDocument *doc; /* owning document; for the document itself, itself */
     AuNode *parent, *first_child, *last_child, *prev, *next;
@@ -65,6 +66,7 @@ typedef struct AuElement {
     void *style;              /* computed style, owned by src/css */
     void *box;                /* layout data, owned by src/layout */
     uint32_t state;           /* AU_STATE_* bits (see the end of this file) */
+    AuNode *shadow_root;      /* an AuShadowRoot attached to this element, or NULL (referenced) */
 } AuElement;
 
 /* Text and comment nodes. */
@@ -83,6 +85,10 @@ struct AuDocument {
     AuNode node;
     uint8_t quirks; /* AuQuirksMode */
     char *url;      /* may be NULL */
+    /* Additions for script (see the end of this file). */
+    uint32_t version;          /* incremented by every tree, attribute and text change */
+    const struct AuDomHooks *hooks; /* mutation observers of this document, or NULL */
+    void *hooks_ctx;
 };
 
 /* ---- Casts. The caller checks node->type first. ---- */
@@ -188,5 +194,102 @@ enum {
     AU_STATE_SUBTREE_DIRTY = 1u << 17
 };
 void au_element_set_state(AuElement *el, uint32_t bits, bool on);
+
+/* ---- Additions for script ----
+ *
+ * Mutation hooks. A document's hooks (set with au_document_set_hooks) see
+ * every change made through this file's functions, whoever makes it (the
+ * parser, script bindings, the document view): MutationObserver, live
+ * collections, custom element reactions, shadow slot assignment and style
+ * invalidation all hang off them. Hooks run in the middle of a mutation:
+ * they must not mutate the tree, free nodes or run script; they record
+ * what happened and act later. A document without hooks pays one pointer
+ * test per change. AuDocument.version changes on every mutation, hooks or
+ * not, so caches (live collections) can tell they are stale. */
+typedef struct AuDomHooks {
+    /* child was inserted into parent (already linked). */
+    void (*inserted)(void *ctx, AuNode *parent, AuNode *child);
+    /* child was removed from parent; prev and next were its siblings. */
+    void (*removed)(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next);
+    /* An attribute is about to change: old is its current value (NULL
+     * when absent). After the call the new value is stored. */
+    void (*attr_changing)(void *ctx, AuElement *el, AuAtom name, uint8_t ns, const char *old, size_t old_len);
+    /* Text, comment or processing instruction data is about to change. */
+    void (*text_changing)(void *ctx, AuText *t, const char *old, size_t old_len);
+    /* A node with a JavaScript wrapper (AuNode.js set) gained or lost a
+     * holder: a parent or a reference. The bindings decide from
+     * au_node_held_elsewhere whether the node keeps its wrapper alive. */
+    void (*hold_changed)(void *ctx, AuNode *n);
+} AuDomHooks;
+
+void au_document_set_hooks(AuDocument *doc, const AuDomHooks *hooks, void *ctx);
+
+/* True when n is held by something besides one reference (its wrapper's):
+ * a parent or other references (a shadow host holds one on its shadow
+ * root). */
+static inline bool au_node_held_elsewhere(const AuNode *n) { return n->parent || n->refs > 1; }
+
+/* AuNode.flags. */
+enum {
+    AU_NODEF_SHADOW_ROOT = 1u, /* an AuShadowRoot (type AU_NODE_FRAGMENT) */
+    AU_NODEF_JS_STRONG = 2u,   /* the node holds its wrapper (owned by src/js) */
+    AU_NODEF_JS_MARK = 4u      /* free for src/js bookkeeping */
+};
+
+/* ---- Shadow DOM ----
+ * A shadow root is a document fragment attached to a host element. The host
+ * references it (AuElement.shadow_root); the shadow root names its host
+ * without a reference. The shadow tree is not among the host's children:
+ * the node tree stays a plain tree, and the flat tree (what style and
+ * layout should see) is reached through the functions below. */
+typedef enum { AU_SHADOW_OPEN = 0, AU_SHADOW_CLOSED = 1 } AuShadowMode;
+
+typedef struct AuShadowRoot {
+    AuNode node;
+    AuElement *host;
+    uint8_t mode;            /* AuShadowMode */
+    uint8_t delegates_focus;
+    uint8_t manual_slots;    /* slotAssignment "manual" */
+    uint8_t clonable, serializable;
+    uint8_t declarative;     /* from <template shadowrootmode> */
+} AuShadowRoot;
+
+static inline bool au_is_shadow_root(const AuNode *n)
+{
+    return n && n->type == AU_NODE_FRAGMENT && (n->flags & AU_NODEF_SHADOW_ROOT);
+}
+
+/* Attaches a new shadow root to host and returns it (owned by host), or
+ * NULL if host already has one. The caller checks attachShadow's rules
+ * (valid host names). */
+AuShadowRoot *au_element_attach_shadow(AuElement *host, AuShadowMode mode);
+/* The shadow root of el, or NULL. */
+static inline AuShadowRoot *au_element_shadow_root(const AuElement *el) { return (AuShadowRoot *)el->shadow_root; }
+/* The root of n's tree: a document, shadow root, fragment or detached
+ * node. */
+AuNode *au_node_root(const AuNode *n);
+/* The shadow-including root (through shadow hosts). */
+AuNode *au_node_shadow_including_root(const AuNode *n);
+/* True when n is in a document (through shadow hosts). */
+bool au_node_is_connected(const AuNode *n);
+/* The slot name of a slottable (its slot attribute, "" when none) and of
+ * a <slot> element (its name attribute). */
+const char *au_slot_name_of(const AuNode *n);
+/* The slot n is assigned to, or NULL: n's parent is a shadow host whose
+ * shadow root has a <slot> (in tree order the first) with n's slot name.
+ * Elements and text are slottables; manual assignment is not supported. */
+AuElement *au_node_assigned_slot(const AuNode *n);
+/* The nodes assigned to slot, in tree order, into out (up to cap);
+ * returns the count (may exceed cap). */
+size_t au_slot_assigned_nodes(const AuElement *slot, AuNode **out, size_t cap);
+
+/* ---- The flat tree ----
+ * For style and layout of shadow trees: a shadow host's flat children are
+ * its shadow root's children; a <slot>'s flat children are its assigned
+ * nodes, or its own children when none are assigned; other nodes' flat
+ * children are their children, minus slottables of hosts. */
+AuNode *au_flat_first_child(const AuNode *n);
+AuNode *au_flat_next_sibling(const AuNode *n);
+AuNode *au_flat_parent(const AuNode *n);
 
 #endif

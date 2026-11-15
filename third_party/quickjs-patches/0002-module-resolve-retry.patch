@@ -1,0 +1,34 @@
+Make a failed module resolution retryable.
+
+js_resolve_module marks a module resolved before it resolves the
+modules it imports. When an import cannot be resolved yet (Aura's
+loader is synchronous: it reports the missing URLs, fetches them, and
+evaluates again), the module stayed marked resolved with a null
+import, and the retry used the half-resolved module. On failure the
+module is now left unresolved, so the retry resolves it again.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -31365,14 +31365,20 @@
+                                                   rme->module_name,
+                                                   rme->attributes);
+         if (!m1)
+-            return -1;
++            goto fail;
+         rme->module = m1;
+         /* already done in js_host_resolve_imported_module() except if
+            the module was loaded with JS_EvalBinary() */
+         if (js_resolve_module(ctx, m1) < 0)
+-            return -1;
++            goto fail;
+     }
+     return 0;
++ fail:
++    /* Aura: leave the module unresolved so that a later attempt, made
++       after the embedder has fetched the missing modules, resolves it
++       again instead of using a half-resolved module. */
++    m->resolved = false;
++    return -1;
+ }
+
+ static JSVarRef *js_create_module_var(JSContext *ctx, bool is_lexical)

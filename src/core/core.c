@@ -52,6 +52,18 @@ void au_free(void *p)
     free(p);
 }
 
+/* ---- Non-fatal allocation ---- */
+
+void *au_try_alloc(size_t n)
+{
+    return malloc(n ? n : 1);
+}
+
+void *au_try_realloc(void *p, size_t n)
+{
+    return realloc(p, n ? n : 1);
+}
+
 char *au_strndup(const char *s, size_t n)
 {
     char *p = au_alloc(n + 1);
