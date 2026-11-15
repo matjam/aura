@@ -427,6 +427,8 @@ static long f_recv(void *ctx, uint32_t sock, void *buf, size_t cap)
                 n = cap;
             memcpy(buf, k->s2c.data + k->s2c_off, n);
             k->s2c_off += n;
+            if (k->srv->mangle)
+                k->srv->mangle(k->srv->mangle_ctx, buf, n);
             return (long)n;
         }
         if (k->resp.len == k->resp_off && (k->close_when_drained || k->closed))

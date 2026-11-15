@@ -4,10 +4,10 @@
 
 A web browser for Mac OS 9 on PowerPC, with its engine written from
 scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
-two third-party libraries, QuickJS-ng for JavaScript and BearSSL for TLS.
+two third-party libraries, QuickJS-ng for JavaScript and Mbed TLS for TLS.
 
 Aura is in early development. It loads web pages over HTTP and HTTPS
-(TLS 1.2), runs JavaScript, keeps cookies, blocks trackers with
+(TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
 downloaded blocklists, and downloads files. Many sites do not work yet.
 
 ## Download
@@ -56,6 +56,6 @@ WOFF or TrueType, variable fonts included).
 ## Licence
 
 Aura's own code is under the MIT licence; see `LICENSE`. QuickJS-ng,
-BearSSL, the bundled fonts, the root certificates and the Public Suffix
+Mbed TLS (Apache-2.0), the bundled fonts, the root certificates and the Public Suffix
 List keep their own licences: see `third_party/README.md`,
 `assets/fonts/README.md` and Aura's About box.

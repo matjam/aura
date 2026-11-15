@@ -63,6 +63,10 @@ typedef struct FakeServer {
      * it, so the server negotiates TLS 1.2 and marks its random with the
      * downgrade sentinel. */
     bool strip_tls13;
+    /* When set, called with each piece of TLS ciphertext on its way to
+     * the client; it may change the bytes (a fuzzer, a faulty link). */
+    void (*mangle)(void *ctx, uint8_t *data, size_t len);
+    void *mangle_ctx;
     int handshakes;       /* TLS handshakes completed */
     int last_version;     /* 12 or 13: the last completed handshake's version */
     bool last_hrr;        /* that handshake's first ClientHello was answered with a HelloRetryRequest */
