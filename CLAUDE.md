@@ -36,7 +36,7 @@ what you need to build, test and change Aura.
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
-| `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its stub |
+| `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
 | `src/platform/host` | host tools: headless render to PNG, tree dumps |
 | `src/platform/macos9` | the Mac OS 9 application |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
@@ -109,7 +109,15 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 To change the screen depth, click the Monitor BitDepth module in the
 guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
 and pick 256 Colors, Thousands or Millions. In Aura, View > Debug > Benchmark times the scene, fills and
-the chrome, and View > Debug > Font List shows the fonts it found.
+the chrome, View > Debug > Font List shows the fonts it found, and View
+> Debug > Page Timings shows the active page's first paint, load and
+layout times, times ten 32-pixel scroll repaints, and shows free heap
+and temporary memory.
+
+To open a local page in the guest, push it with the application (for
+example `tools/guest-push.sh -n AuraTest Aura.bin
+tests/page/samples/*`) and choose File > Open File, drop it on the Aura
+icon, or type its path (`AuraTest:wiki.html`) in the address field.
 
 To stop the guest, run `tools/guest-run.sh stop`, or choose Special > Shut
 Down in the guest.
@@ -120,15 +128,35 @@ To change how a browser window looks or behaves, work in `src/browser`:
 `chrome.c` lays out, paints and hit-tests the tab strip (or left tab
 column), toolbar and status bar; `browser.c` holds windows, tabs and
 back/forward lists and routes input; `page.h` is the interface a page
-implements, and `page_stub.c` implements it until the real engine
-replaces it. The model never calls the OS; the shells pass events in and
+implements, and `page_doc.c` implements it on the document view
+(`src/page`). The model never calls the OS; the shells pass events in and
 show the rectangles it reports through `AuBrowserHost.invalidate`.
+
+Pages load asynchronously: `au_page_navigate` only starts a load, and
+`au_page_idle` reads files (the document, then its style sheets,
+@imports and images in request order) and feeds the parser, at most
+40 ms per call. While a document loads it is laid out at most every
+300 ms (four times the last layout's duration for slow pages), then once
+at the end. Generated about: pages (home, blank, fonts) load inside
+`au_page_navigate`; about:scene paints the test scene directly. A URL
+that differs from the current one only by its fragment scrolls instead
+of loading, and back and forward restore the scroll position each entry
+was left at. To plug in networking, register a fetcher per scheme with
+`au_browser_set_fetcher` (see `AuPageFetcher` in `page.h`); without one,
+http and https show a placeholder after a simulated load. Image sizes
+come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
+yet. The font preferences reach the engine as the generic families of
+the font set and a user style sheet (`html { font-size }`, monospace
+size); the minimum font size and text zoom have no hook in `src/css`
+yet.
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
---tab about:home --tab http://example.com/ -o run/chrome.png`. Run
-`aura-host` without arguments for the other options (tab overflow,
-hover, address field text).
+--tab about:home --tab file:tests/page/samples/wiki.html -o
+run/chrome.png`. `--tab` takes a URL, a path or `file:` with a relative
+path; `--scroll Y` scrolls the active tab and `--mouse X Y` moves the
+pointer (hover, a link's status text). Run `aura-host` without arguments
+for the other options (tab overflow, hover, address field text).
 
 The Mac OS 9 shell (`src/platform/macos9`) keeps one module per kind of
 window (`browserwin.c`, `listwin.c`, `prefswin.c`), with menus and the

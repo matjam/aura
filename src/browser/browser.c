@@ -351,6 +351,8 @@ static void cb_content_size(void *ctx, AuPage *p)
     (void)p;
 }
 
+static void rehover(AuBrowserWindow *w);
+
 static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
 {
     AuTab *t = ctx;
@@ -361,6 +363,7 @@ static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
     if (is_active(t) && (t->scroll_x != ox || t->scroll_y != oy)) {
         invalidate(t->win, t->win->layout.page);
         changed(t->win, AU_CHANGED_SCROLL);
+        rehover(t->win);
     }
     (void)p;
 }
@@ -901,6 +904,22 @@ void au_bw_scroll_max(AuBrowserWindow *w, int *max_x, int *max_y)
         *max_y = 0;
 }
 
+static void page_event(AuBrowserWindow *w, const AuEvent *ev);
+
+/* The document moved under a resting pointer: hover and the status text
+ * follow what is now under it. */
+static void rehover(AuBrowserWindow *w)
+{
+    if (!w->mouse_in_page || w->pressed.part != AU_HIT_NONE)
+        return;
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_MOUSE_MOVE;
+    e.x = w->mouse_x;
+    e.y = w->mouse_y;
+    page_event(w, &e);
+}
+
 void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
 {
     AuTab *t = au_bw_active_tab(w);
@@ -913,6 +932,7 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
     if (t->scroll_x != ox || t->scroll_y != oy) {
         invalidate(w, w->layout.page);
         changed(w, AU_CHANGED_SCROLL);
+        rehover(w);
     }
 }
 
@@ -977,6 +997,11 @@ static void click(AuBrowserWindow *w, AuHit h, const AuEvent *ev)
 AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
 {
     AuHit h = au_chrome_hit(&w->layout, ev->x, ev->y);
+    if (ev->type == AU_EVENT_MOUSE_MOVE) {
+        w->mouse_x = ev->x;
+        w->mouse_y = ev->y;
+        w->mouse_in_page = h.part == AU_HIT_PAGE;
+    }
     switch (ev->type) {
     case AU_EVENT_MOUSE_MOVE:
         if (w->pressed.part == AU_HIT_SPLITTER) {

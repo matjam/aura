@@ -102,6 +102,8 @@ struct AuBrowserWindow {
     AuHit hover, pressed;
     int drag_tab; /* tab being dragged, or -1 */
     int drag_x, drag_y;
+    int mouse_x, mouse_y; /* the pointer's last position (window), for hover after scrolling */
+    bool mouse_in_page;
     bool drag_moved;
     int split_x, split_w; /* splitter drag start */
     char *field;          /* address field text while edited, else NULL */

@@ -236,8 +236,11 @@ static void test_links(void)
     CHECK(status_has(t, ""));
 
     /* A fragment link scrolls within the document; no reload. */
+    mouse_at(w, AU_EVENT_MOUSE_MOVE, 8, 24, 0);
+    CHECK(status_has(t, "file:///mem/links.html#sec"));
     click_at(w, 8, 24, 0);
     CHECK_STR(au_page_url(t->page), "file:///mem/links.html#sec");
+    CHECK(status_has(t, "")); /* the pointer now rests on no link */
     CHECK(!t->loading && t->nav.n == 2);
     CHECK(t->scroll_y == 1032);
     /* Back to the top entry: the same document, at its old position. */
