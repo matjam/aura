@@ -35,6 +35,10 @@ struct BrowserWin {
     Point last_mouse;
     char *undo; /* field text before the last edit (Mac Roman) */
     size_t undo_len;
+    /* Multiple clicks: the last mouse-down's time, place and count. */
+    UInt32 click_when;
+    Point click_at;
+    int clicks;
     BrowserWin *next;
 };
 
@@ -583,7 +587,16 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     e.x = pt.h;
     e.y = pt.v;
     e.mods = mods_of(ev->modifiers);
-    e.clicks = 1;
+    /* A click within the double-click time of the last one, near it,
+     * counts up: 2 selects a word, 3 a paragraph. */
+    int dx = pt.h - b->click_at.h, dy = pt.v - b->click_at.v;
+    if (b->clicks && ev->when - b->click_when <= (UInt32)GetDblTime() && dx * dx + dy * dy <= 16)
+        b->clicks = b->clicks < 3 ? b->clicks + 1 : 1;
+    else
+        b->clicks = 1;
+    b->click_when = ev->when;
+    b->click_at = pt;
+    e.clicks = b->clicks;
     e.time_ms = au_platform_time_ms();
     au_bw_mouse(b->bw, &e);
     browserwin_flush_all();
@@ -720,8 +733,25 @@ static bool bw_key(MacWin *mw, EventRecord *ev)
 static bool bw_edit(MacWin *mw, int item)
 {
     BrowserWin *b = (BrowserWin *)mw;
-    if (!b->field_focus)
+    if (!b->field_focus) {
+        /* The page: Copy the selection, Select All. (Item 0 asks about
+         * text editing, which the page does not do; main.c enables
+         * Copy and Select All itself.) */
+        if (item == 4) {
+            AuBuf t;
+            au_buf_init(&t);
+            if (au_bw_selection_text(b->bw, &t))
+                mac_put_scrap(t.data, t.len);
+            au_buf_free(&t);
+            return true;
+        }
+        if (item == 7) {
+            au_bw_select_all(b->bw);
+            flush(b);
+            return true;
+        }
         return false;
+    }
     if (item == 0)
         return true;
     SetPort((GrafPtr)mw->win);
@@ -928,6 +958,56 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     SelectWindow(w);
     mac_menus_dirty();
     return b;
+}
+
+/* ---- Edit > Find ---- */
+
+enum { FIND_OK = 1, FIND_CANCEL, FIND_TEXT, FIND_LABEL, FIND_CASE };
+
+void browserwin_find(BrowserWin *b)
+{
+    if (!au_bw_active_tab(b->bw))
+        return;
+    DialogPtr d = GetNewDialog(201, NULL, (WindowPtr)-1);
+    if (!d)
+        return;
+    short type;
+    Handle h;
+    Rect r;
+    Str255 p;
+    mac_pstr(g_browser->find_text ? g_browser->find_text : "", p);
+    GetDialogItem(d, FIND_TEXT, &type, &h, &r);
+    SetDialogItemText(h, p);
+    SelectDialogItemText(d, FIND_TEXT, 0, 32767);
+    GetDialogItem(d, FIND_CASE, &type, &h, &r);
+    ControlHandle check = (ControlHandle)h;
+    SetControlValue(check, g_browser->find_case ? 1 : 0);
+    SetDialogDefaultItem(d, FIND_OK);
+    SetDialogCancelItem(d, FIND_CANCEL);
+    ShowWindow((WindowPtr)d);
+    short item = 0;
+    for (;;) {
+        ModalDialog(NULL, &item);
+        if (item == FIND_CASE)
+            SetControlValue(check, !GetControlValue(check));
+        else if (item == FIND_OK || item == FIND_CANCEL)
+            break;
+    }
+    char *text = NULL;
+    bool match_case = GetControlValue(check) != 0;
+    if (item == FIND_OK) {
+        GetDialogItem(d, FIND_TEXT, &type, &h, &r);
+        GetDialogItemText(h, p);
+        text = mac_roman_to_utf8((const char *)p + 1, p[0]);
+    }
+    DisposeDialog(d);
+    if (text) {
+        SetPort((GrafPtr)b->base.win);
+        if (!au_bw_find(b->bw, text, match_case))
+            SysBeep(1);
+        au_free(text);
+        flush(b);
+    }
 }
 
 /* ---- Debug > Page Timings ---- */

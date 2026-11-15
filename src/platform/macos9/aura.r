@@ -59,7 +59,7 @@ resource 'MENU' (129, "File") {
 };
 
 resource 'MENU' (130, "Edit") {
-	130, textMenuProc, 0x7FFFFF7D, enabled, "Edit",
+	130, textMenuProc, 0x7FFFF77D, enabled, "Edit",
 	{
 		"Undo", noIcon, "Z", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
@@ -68,6 +68,10 @@ resource 'MENU' (130, "Edit") {
 		"Paste", noIcon, "V", noMark, plain;
 		"Clear", noIcon, noKey, noMark, plain;
 		"Select All", noIcon, "A", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Find...", noIcon, "F", noMark, plain;
+		"Find Again", noIcon, "G", noMark, plain;
+		"Find Previous", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Preferences...", noIcon, noKey, noMark, plain
 	}
@@ -245,6 +249,22 @@ resource 'DITL' (200) {
 		{78, 168, 98, 240}, Button { enabled, "Cancel" };
 		{40, 16, 56, 324}, EditText { enabled, "" };
 		{12, 16, 30, 324}, StaticText { disabled, "^0" }
+	}
+};
+
+/* 201: Find (Edit > Find...). */
+resource 'DLOG' (201) {
+	{0, 0, 120, 340}, movableDBoxProc, invisible, noGoAway, 0, 201, "Find",
+	alertPositionMainScreen
+};
+
+resource 'DITL' (201) {
+	{
+		{88, 254, 108, 326}, Button { enabled, "Find" };
+		{88, 168, 108, 240}, Button { enabled, "Cancel" };
+		{36, 16, 52, 324}, EditText { enabled, "" };
+		{12, 16, 30, 324}, StaticText { disabled, "Find text in this page:" };
+		{60, 16, 78, 324}, CheckBox { enabled, "Match case" }
 	}
 };
 

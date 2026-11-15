@@ -16,7 +16,8 @@ enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
        FILE_QUIT = 9 };
-enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_PREFS = 9 };
+enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
+       EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
        VIEW_TABS_LEFT, VIEW_DEBUG = 12 };
 enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS, DEBUG_TIMINGS };
@@ -290,6 +291,22 @@ void mac_adjust_menus(void)
         else
             DisableItem(edit, i);
     }
+    /* In a page: Copy needs a selection, Select All a tab. */
+    if (!text && browser_front && t) {
+        if (au_bw_has_selection(w))
+            EnableItem(edit, EDIT_COPY);
+        EnableItem(edit, EDIT_SELECT_ALL);
+    }
+    if (t)
+        EnableItem(edit, EDIT_FIND);
+    else
+        DisableItem(edit, EDIT_FIND);
+    for (short i = EDIT_FIND_AGAIN; i <= EDIT_FIND_PREVIOUS; i++) {
+        if (t && g_browser->find_text)
+            EnableItem(edit, i);
+        else
+            DisableItem(edit, i);
+    }
     if (t && t->loading)
         EnableItem(view, VIEW_STOP);
     else
@@ -416,6 +433,16 @@ static void do_menu(long choice)
     case kEditMenu: {
         if (item == EDIT_PREFS) {
             prefswin_show();
+            break;
+        }
+        if (item == EDIT_FIND) {
+            if (b)
+                browserwin_find(b);
+            break;
+        }
+        if (item == EDIT_FIND_AGAIN || item == EDIT_FIND_PREVIOUS) {
+            if (w && !au_bw_find_again(w, item == EDIT_FIND_AGAIN))
+                SysBeep(1);
             break;
         }
         MacWin *m = mac_win_of(FrontWindow());
@@ -669,6 +696,14 @@ static void key_down(EventRecord *ev)
         if (ch == '=')
             ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();
+        /* MenuKey ignores Shift: Shift-Command-G is Find Previous. */
+        if ((ch == 'g' || ch == 'G') && (ev->modifiers & shiftKey)) {
+            if (b && g_browser->find_text) {
+                HiliteMenu(kEditMenu);
+                do_menu(((long)kEditMenu << 16) | EDIT_FIND_PREVIOUS);
+            }
+            return;
+        }
         long choice = MenuKey(ch);
         if (choice >> 16)
             do_menu(choice);
@@ -789,6 +824,13 @@ int main(void)
     AuBrowserHost host;
     browserwin_host(&host);
     g_browser = au_browser_new(g_fonts, &host);
+    {
+        /* Selections use the highlight colour of the Appearance control
+         * panel. */
+        RGBColor hl = LMGetHiliteRGB();
+        g_browser->highlight = 0xFF000000u | ((uint32_t)(hl.red >> 8) << 16) | ((uint32_t)(hl.green >> 8) << 8) |
+                               (uint32_t)(hl.blue >> 8);
+    }
     if (storage_init())
         storage_load_all();
     InitCursor();

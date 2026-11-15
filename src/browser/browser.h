@@ -132,6 +132,9 @@ struct AuBrowser {
     int nwindows;
     uint32_t prefs_gen, session_gen;
     uint32_t next_tab_id;
+    uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
+    char *find_text;     /* the last Find, for Find Again; NULL before one */
+    bool find_case;      /* it was case-sensitive */
     struct {
         char scheme[16];
         AuPageFetcher fetcher;
@@ -185,6 +188,18 @@ void au_bw_home(AuBrowserWindow *w);
  * NULL. */
 AuBookmark *au_bw_bookmark_page(AuBrowserWindow *w, bool toggle);
 bool au_bw_is_bookmarked(AuBrowserWindow *w);
+
+/* ---- Selection and find (active tab) ---- */
+bool au_bw_has_selection(AuBrowserWindow *w);
+/* Appends the selected text to out; false when none. */
+bool au_bw_selection_text(AuBrowserWindow *w, AuBuf *out);
+void au_bw_select_all(AuBrowserWindow *w);
+/* Finds text (remembered for au_bw_find_again) forward from the
+ * selection; false when there is no match. */
+bool au_bw_find(AuBrowserWindow *w, const char *text, bool case_sensitive);
+/* Repeats the last find forward or backward; false without a match or
+ * an earlier find. */
+bool au_bw_find_again(AuBrowserWindow *w, bool forward);
 
 /* ---- Text zoom (active tab) ----
  * dir > 0 zooms in a step, dir < 0 out, 0 back to 100%. The site's zoom

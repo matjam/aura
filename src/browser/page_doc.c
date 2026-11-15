@@ -23,6 +23,7 @@
 #include "scene.h"
 #include "url.h"
 
+#include "../layout/selection.h"
 #include "../page/page.h"
 
 #include <stdio.h>
@@ -101,6 +102,13 @@ struct AuPage {
     bool open_new_tab;
 
     float zoom; /* text zoom, 1 for none */
+
+    /* Text selection: anchor and focus hold a reference to their node. */
+    AuTextPos anchor, focus;
+    AuTextRange sel_base; /* the word or paragraph a double or triple click chose */
+    int sel_mode;         /* 1 characters, 2 words, 3 paragraphs */
+    bool selecting, sel_dragged;
+    int down_x, down_y;
 
     AuPageStats stats;
 };
@@ -574,12 +582,217 @@ static void check_finished(AuPage *p)
     finish(p, !p->failed);
 }
 
+/* ---- Selection ----
+ * The page keeps the anchor (where the selection started) and the focus
+ * (where it ends, following the pointer); the layout paints the range
+ * between them. Both positions hold a reference to their text node, so
+ * the layout's unreferenced copy stays valid until the selection is
+ * cleared, which happens before the document is replaced. */
+
+#define DEFAULT_HIGHLIGHT 0xFFB3D7FFu /* light blue, as the Mac's default highlight */
+
+static void set_pos(AuTextPos *dst, AuTextPos src)
+{
+    if (src.node)
+        au_node_ref(src.node);
+    if (dst->node)
+        au_node_unref(dst->node);
+    *dst = src;
+}
+
+static void invalidate_view(AuPage *p)
+{
+    if (p->cb.invalidate && p->kind == K_DOC)
+        p->cb.invalidate(p->cb.ctx, p, (AuIRect){p->scroll_x, p->scroll_y, p->scroll_x + p->vw, p->scroll_y + p->vh});
+}
+
+static AuTextRange sel_range(const AuPage *p)
+{
+    return au_text_range_make(p->anchor, p->focus);
+}
+
+/* Hands the current selection to the layout and repaints. */
+static void sel_apply(AuPage *p)
+{
+    AuTextRange r = sel_range(p);
+    uint32_t col = p->env.highlight ? p->env.highlight : DEFAULT_HIGHLIGHT;
+    au_layout_set_selection(au_docview_layout(p->dv), au_text_range_empty(&r) ? NULL : &r, col);
+    invalidate_view(p);
+}
+
+static void sel_set(AuPage *p, AuTextPos anchor, AuTextPos focus)
+{
+    set_pos(&p->anchor, anchor);
+    set_pos(&p->focus, focus);
+    sel_apply(p);
+}
+
+void au_page_clear_selection(AuPage *p)
+{
+    bool had = p->anchor.node || p->focus.node;
+    au_layout_set_selection(au_docview_layout(p->dv), NULL, 0);
+    AuTextPos none = {NULL, 0};
+    set_pos(&p->anchor, none);
+    set_pos(&p->focus, none);
+    p->sel_base.start = p->sel_base.end = none;
+    p->selecting = false;
+    if (had)
+        invalidate_view(p);
+}
+
+bool au_page_has_selection(const AuPage *p)
+{
+    AuTextRange r = sel_range(p);
+    return p->kind == K_DOC && !au_text_range_empty(&r);
+}
+
+bool au_page_selection_text(AuPage *p, AuBuf *out)
+{
+    if (!au_page_has_selection(p))
+        return false;
+    au_docview_update(p->dv);
+    AuTextRange r = sel_range(p);
+    size_t before = out->len;
+    au_layout_range_text(au_docview_layout(p->dv), &r, out);
+    return out->len > before;
+}
+
+void au_page_select_all(AuPage *p)
+{
+    if (p->kind != K_DOC || !p->begun)
+        return;
+    au_docview_update(p->dv);
+    AuTextRange all;
+    if (au_layout_all_text(au_docview_layout(p->dv), &all))
+        sel_set(p, all.start, all.end);
+}
+
+/* Scrolls so document rectangle r is in view, if it is not. */
+static void reveal(AuPage *p, AuRect r)
+{
+    int x = p->scroll_x, y = p->scroll_y;
+    if (r.y < (float)y || r.y + r.h > (float)(y + p->vh))
+        y = (int)r.y - p->vh / 3;
+    if (r.x < (float)x || r.x + r.w > (float)(x + p->vw))
+        x = (int)r.x - 20;
+    if (x < 0)
+        x = 0;
+    if (y < 0)
+        y = 0;
+    if (x != p->scroll_x || y != p->scroll_y)
+        request_scroll(p, x, y);
+}
+
+bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive)
+{
+    if (p->kind != K_DOC || !p->begun || !text || !*text)
+        return false;
+    au_docview_update(p->dv);
+    AuLayout *L = au_docview_layout(p->dv);
+    AuTextRange cur = sel_range(p), m;
+    AuTextPos from = {NULL, 0};
+    if (cur.start.node)
+        from = forward ? cur.end : cur.start;
+    if (!au_layout_find(L, text, &from, forward, !case_sensitive, &m))
+        return false;
+    sel_set(p, m.start, m.end);
+    AuRect r;
+    if (au_layout_range_rect(L, &m, &r))
+        reveal(p, r);
+    return true;
+}
+
+/* The text position at document point (x, y). */
+static bool pos_at(AuPage *p, int x, int y, AuTextPos *out)
+{
+    au_docview_update(p->dv);
+    return au_layout_text_pos_at(au_docview_layout(p->dv), (float)(x - p->scroll_x), (float)(y - p->scroll_y),
+                                 (float)p->scroll_x, (float)p->scroll_y, out);
+}
+
+/* Extends a word or paragraph selection to the unit at q. */
+static void extend_by_unit(AuPage *p, AuTextPos q)
+{
+    AuLayout *L = au_docview_layout(p->dv);
+    AuTextRange u;
+    bool ok = p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u);
+    if (!ok)
+        u.start = u.end = q;
+    if (au_text_pos_cmp(&q, &p->sel_base.start) < 0)
+        sel_set(p, p->sel_base.end, u.start);
+    else
+        sel_set(p, p->sel_base.start, au_text_pos_cmp(&u.end, &p->sel_base.end) > 0 ? u.end : p->sel_base.end);
+}
+
+/* Selection by mouse: returns true when the event was a selection
+ * gesture that should not activate a link. */
+static bool sel_mouse(AuPage *p, const AuEvent *ev)
+{
+    AuTextPos q;
+    switch (ev->type) {
+    case AU_EVENT_MOUSE_DOWN: {
+        bool have = pos_at(p, ev->x, ev->y, &q);
+        p->selecting = true;
+        p->sel_dragged = false;
+        p->down_x = ev->x;
+        p->down_y = ev->y;
+        p->sel_mode = ev->clicks >= 3 ? 3 : ev->clicks == 2 ? 2 : 1;
+        if (!have) {
+            au_page_clear_selection(p);
+            p->selecting = true;
+            return false;
+        }
+        AuLayout *L = au_docview_layout(p->dv);
+        if ((ev->mods & AU_MOD_SHIFT) && p->anchor.node) {
+            p->sel_mode = 1;
+            sel_set(p, p->anchor, q);
+            return true;
+        }
+        AuTextRange u;
+        if (p->sel_mode > 1 && (p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u))) {
+            /* sel_base holds no references: its nodes belong to the
+             * document, which outlives it (it is cleared first). */
+            p->sel_base = u;
+            sel_set(p, u.start, u.end);
+            return true;
+        }
+        p->sel_mode = 1;
+        sel_set(p, q, q);
+        return false;
+    }
+    case AU_EVENT_MOUSE_MOVE:
+        if (!p->selecting)
+            return false;
+        if (!p->sel_dragged) {
+            int dx = ev->x - p->down_x, dy = ev->y - p->down_y;
+            if (dx * dx + dy * dy < 16)
+                return false;
+            p->sel_dragged = true;
+        }
+        if (!pos_at(p, ev->x, ev->y, &q))
+            return true;
+        if (p->sel_mode > 1 && p->sel_base.start.node)
+            extend_by_unit(p, q);
+        else if (p->anchor.node)
+            sel_set(p, p->anchor, q);
+        return true;
+    case AU_EVENT_MOUSE_UP: {
+        bool gesture = p->selecting && (p->sel_dragged || p->sel_mode > 1 || (ev->mods & AU_MOD_SHIFT));
+        p->selecting = false;
+        return gesture;
+    }
+    default:
+        return false;
+    }
+}
+
 /* ---- Documents ---- */
 
 /* Starts the new document in the view (the old one stays visible until
  * then). */
 static void begin_doc(AuPage *p, const char *url)
 {
+    au_page_clear_selection(p);
     if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, "");
     p->kind = K_DOC;
@@ -884,6 +1097,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     }
     cancel_all(p);
     compact_fetches(p);
+    au_page_clear_selection(p);
     p->gen++;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     au_free(p->url);
@@ -1063,6 +1277,7 @@ void au_page_free(AuPage *p)
         return;
     cancel_all(p);
     compact_fetches(p);
+    au_page_clear_selection(p);
     au_docview_free(p->dv); /* cancels nothing more: the fetches are gone */
     au_free(p->fetches);
     au_free(p->url);
@@ -1176,7 +1391,11 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
         return false;
-    bool used = au_docview_mouse(p->dv, ev);
+    bool gesture = sel_mouse(p, ev);
+    AuEvent e = *ev;
+    if (gesture && ev->type == AU_EVENT_MOUSE_UP)
+        e.x = e.y = -100000; /* end the press without activating a link */
+    bool used = au_docview_mouse(p->dv, &e) || gesture;
     if (p->open_url) {
         char *u = p->open_url;
         p->open_url = NULL;

@@ -264,6 +264,13 @@ struct AuLayout {
     bool need_paint;
     bool need_restack;
     bool full_layout; /* the viewport changed: no subtree may be reused */
+    /* The text selection painted (selection.c); nodes not referenced. */
+    struct {
+        AuNode *n0, *n1;
+        uint32_t o0, o1;
+        uint32_t color;
+        bool on;
+    } sel;
 };
 
 /* ---- Style access with anonymous boxes ---- */
@@ -404,6 +411,9 @@ void l_paint(AuLayout *L, AuCanvas *c, LArea dirty);
  * matrix in its border-box coordinates; false when it has none (draw.c). */
 bool l_transform_matrix(const LBlock *b, AuMatrix *out);
 bool l_hit(AuLayout *L, float x, float y, AuHitResult *r);
+/* selection.c: paints the selection highlight behind text fragment f of
+ * IFC root content at x (the fragment's left, canvas) and y (its top). */
+void l_select_paint_frag(AuLayout *L, AuCanvas *c, const LFrag *f, LFont *font, float x, float y);
 void l_dump(AuLayout *L, AuBuf *out);
 float l_sticky_offset(AuLayout *L, LBlock *b, float *dx);
 

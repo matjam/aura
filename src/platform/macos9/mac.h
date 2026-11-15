@@ -90,6 +90,8 @@ void browserwin_benchmark(BrowserWin *bw);
 /* Debug menu: the active page's load and layout times, a timed scroll
  * repaint, and free memory. */
 void browserwin_page_timings(BrowserWin *bw);
+/* Edit > Find: asks for text and finds it in the active page. */
+void browserwin_find(BrowserWin *bw);
 
 /* ---- listwin.c ---- */
 void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY or WIN_DOWNLOADS */
@@ -121,6 +123,9 @@ char *mac_roman_to_utf8(const char *s, size_t n);
 /* UTF-8 to Mac Roman bytes (au_alloc'd, NUL-terminated); *n gets the
  * length. */
 char *mac_utf8_to_roman(const char *s, size_t *n);
+/* Puts UTF-8 text on the clipboard as TEXT (Mac Roman, transliterated,
+ * carriage return lines) and 'utxt' (UTF-16). False when it fails. */
+bool mac_put_scrap(const char *utf8, size_t n);
 /* Sets a menu item's text exactly (no metacharacter parsing). */
 void mac_set_item_text(MenuHandle m, short item, const char *utf8);
 void mac_append_item(MenuHandle m, const char *utf8);

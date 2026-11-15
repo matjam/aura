@@ -87,6 +87,8 @@ typedef struct AuPageEnv {
     /* The fetcher for a URL scheme (lower case, without ':'), or NULL.
      * Optional. file: and about: are built in. */
     const AuPageFetcher *(*fetcher)(void *ctx, const char *scheme);
+    /* The selection highlight colour (paint ARGB); 0 for a default. */
+    uint32_t highlight;
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -158,6 +160,24 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
 /* Input in document coordinates. Return true when the page used it. */
 bool au_page_mouse(AuPage *p, const AuEvent *ev);
 bool au_page_key(AuPage *p, const AuEvent *ev);
+/* ---- Text selection and find ----
+ * The user selects text with the mouse through au_page_mouse: dragging
+ * selects characters, a double click a word, a triple click a paragraph
+ * (dragging after them extends by words or paragraphs), Shift-click
+ * extends the selection. A drag that selects does not activate the link
+ * it started on. A new document clears the selection. */
+bool au_page_has_selection(const AuPage *p);
+/* Appends the selected text (UTF-8, line breaks between blocks) to out;
+ * false when nothing is selected. */
+bool au_page_selection_text(AuPage *p, AuBuf *out);
+void au_page_select_all(AuPage *p);
+void au_page_clear_selection(AuPage *p);
+/* Finds text in the page, forward from the selection's end or backward
+ * from its start (the whole page without one), wrapping around; selects
+ * the match and scrolls it into view. Case-insensitive unless
+ * case_sensitive. False when there is no match (the selection stays). */
+bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive);
+
 /* Scrolls an inner scrolling box under document point (x, y) by (dx,
  * dy). Returns false when none can move: the browser then scrolls the
  * viewport. */

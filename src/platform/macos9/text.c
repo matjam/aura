@@ -45,6 +45,23 @@ void mac_pstr(const char *utf8, Str255 out)
     au_free(r);
 }
 
+bool mac_put_scrap(const char *utf8, size_t n)
+{
+    AuBuf roman, utxt;
+    au_buf_init(&roman);
+    au_buf_init(&utxt);
+    au_macroman_from_utf8(utf8, n, &roman, '?', AU_MR_CR_LINES);
+    au_utf16be_from_utf8(utf8, n, &utxt, AU_MR_CR_LINES);
+    bool ok = ZeroScrap() == noErr && PutScrap((long)roman.len, 'TEXT', roman.data) == noErr;
+    /* The Unicode flavour is extra: Mac OS 8.6 and later applications
+     * read it; older ones take TEXT. */
+    if (ok && utxt.len)
+        (void)PutScrap((long)utxt.len, 'utxt', utxt.data);
+    au_buf_free(&roman);
+    au_buf_free(&utxt);
+    return ok;
+}
+
 void mac_set_item_text(MenuHandle m, short item, const char *utf8)
 {
     Str255 p;

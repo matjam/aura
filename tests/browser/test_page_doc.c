@@ -55,6 +55,10 @@ static const struct {
     /* A PNG header for a 40x30 image. */
     {"pic.png", "\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0(\0\0\0\x1e"},
     {"notes.txt", "line <one>\r\nline & two\n"},
+    {"sel.html",
+     "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:20px'>"
+     "<p style='margin:0'>alpha <a href='other.html'>beta</a> gamma</p><p style='margin:0'>delta findme</p>"
+     "<div style='height:3000px'></div><p style='margin:0'>far findme</p>"},
     {"big.html", "<!DOCTYPE html><body style='margin:0'><div style='font-size:50em;line-height:1'>x</div>"},
     {"tiny.html",
      "<!DOCTYPE html><body style='margin:0'><div style='white-space:nowrap;font-size:10px;line-height:1'>"
@@ -577,6 +581,98 @@ static void test_zoom(void)
     au_browser_free(b);
 }
 
+static void press(AuBrowserWindow *w, AuEventType type, int x, int y, uint32_t mods, int clicks)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = type;
+    e.x = w->layout.page.x0 + x - t->scroll_x;
+    e.y = w->layout.page.y0 + y - t->scroll_y;
+    e.mods = mods;
+    e.clicks = clicks;
+    au_bw_mouse(w, &e);
+}
+
+static char *sel_text(AuBrowserWindow *w)
+{
+    static char buf[256];
+    AuBuf b;
+    au_buf_init(&b);
+    buf[0] = 0;
+    if (au_bw_selection_text(w, &b))
+        snprintf(buf, sizeof buf, "%s", au_buf_cstr(&b));
+    au_buf_free(&b);
+    return buf;
+}
+
+/* Selecting with the mouse, copying, Select All and Find through the
+ * page and the browser model. */
+static void test_selection(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/sel.html", true, -1);
+    settle(w);
+    AuTab *t = au_bw_active_tab(w);
+    CHECK(!au_bw_has_selection(w) && !au_bw_find_again(w, true));
+
+    /* Drag from "alpha" into the link: selects, and the link does not
+     * open when released over it. */
+    press(w, AU_EVENT_MOUSE_DOWN, 4, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, 40, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, 94, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 94, 10, 0, 1);
+    CHECK(au_bw_has_selection(w));
+    CHECK_STR(sel_text(w), "alpha bet");
+    CHECK_STR(au_page_url(t->page), "file:///mem/sel.html");
+    paint(w);
+    /* Shift-click extends to the next paragraph. */
+    press(w, AU_EVENT_MOUSE_DOWN, 25, 30, AU_MOD_SHIFT, 1);
+    press(w, AU_EVENT_MOUSE_UP, 25, 30, AU_MOD_SHIFT, 1);
+    CHECK_STR(sel_text(w), "alpha beta gamma\nde");
+    /* A plain click clears it; a double click selects a word, a triple
+     * click the paragraph. */
+    press(w, AU_EVENT_MOUSE_DOWN, 300, 30, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 300, 30, 0, 1);
+    CHECK(!au_bw_has_selection(w));
+    press(w, AU_EVENT_MOUSE_DOWN, 125, 10, 0, 2);
+    press(w, AU_EVENT_MOUSE_UP, 125, 10, 0, 2);
+    CHECK_STR(sel_text(w), "gamma");
+    press(w, AU_EVENT_MOUSE_DOWN, 125, 10, 0, 3);
+    press(w, AU_EVENT_MOUSE_MOVE, 30, 30, 0, 3); /* drag on: whole paragraphs */
+    press(w, AU_EVENT_MOUSE_UP, 30, 30, 0, 3);
+    CHECK_STR(sel_text(w), "alpha beta gamma\ndelta findme");
+
+    au_bw_select_all(w);
+    CHECK_STR(sel_text(w), "alpha beta gamma\ndelta findme\nfar findme");
+
+    /* Find: from the selection's end, wrapping; the far match scrolls
+     * into view. */
+    press(w, AU_EVENT_MOUSE_DOWN, 300, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 300, 10, 0, 1);
+    CHECK(au_bw_find(w, "FINDME", false));
+    CHECK_STR(sel_text(w), "findme");
+    CHECK(t->scroll_y == 0);
+    CHECK(au_bw_find_again(w, true));
+    CHECK(t->scroll_y > 2500);
+    CHECK(au_bw_find_again(w, true)); /* wraps to the first */
+    CHECK(t->scroll_y == 0);
+    CHECK(au_bw_find_again(w, false)); /* back: the last again */
+    CHECK(t->scroll_y > 2500);
+    CHECK(!au_bw_find(w, "FINDME", true)); /* case-sensitive: none */
+    CHECK(!au_bw_find(w, "absent", false));
+    CHECK_STR(sel_text(w), "findme"); /* a failed find keeps the selection */
+
+    /* A new document clears the selection; a plain click opens a link. */
+    au_bw_scroll_to(w, 0, 0);
+    click_at(w, 70, 10, 0);
+    CHECK_STR(au_page_url(t->page), "file:///mem/other.html");
+    CHECK(!au_bw_has_selection(w));
+    settle(w);
+    au_browser_free(b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -588,6 +684,7 @@ int main(void)
     test_network();
     test_stop_scroll_resize();
     test_zoom();
+    test_selection();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

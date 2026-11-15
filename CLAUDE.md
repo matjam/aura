@@ -215,6 +215,23 @@ the active page is wider than it (`au_chrome_layout_hscroll`); the two
 bars meet at a blank corner square above the grow box, and Shift turns
 a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 
+To change text selection or find, work in `src/layout/selection.c`
+(positions, words, paragraphs, the text of a range, find, and the
+painted highlight; `draw.c` calls `l_select_paint_frag` for each text
+fragment while a selection is set) and in the selection section of
+`page_doc.c`, which turns mouse events into selections: a drag selects
+characters, a double click a word, a triple click a paragraph, Shift
+extends, and a drag that selects does not follow the link it started
+on. `au_page_find` searches the page's text with simple case folding
+(ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
+selection, wrapping. The Mac OS 9 shell counts clicks within the
+double-click time, copies with `mac_put_scrap` (TEXT in Mac Roman with
+transliteration and carriage returns, plus 'utxt'), asks for the text
+with the Find dialog (DLOG 201), maps Shift-Command-G to Find Previous
+itself (MenuKey ignores Shift), and paints selections in the
+Appearance highlight colour (`LMGetHiliteRGB`, passed in
+`AuBrowser.highlight`).
+
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
 --tab about:home --tab file:tests/page/samples/wiki.html -o

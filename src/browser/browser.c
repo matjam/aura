@@ -462,6 +462,7 @@ void au_browser_free(AuBrowser *b)
     au_history_free(&b->history);
     au_bookmarks_free(&b->bookmarks);
     au_downloads_free(&b->downloads);
+    au_free(b->find_text);
     au_free(b);
 }
 
@@ -567,7 +568,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->win = w;
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
-    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher};
+    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
     AuPageCallbacks cb = {t,           cb_title, cb_url,    cb_started,    cb_progress,     cb_finished,
                           cb_open,     cb_status, cb_invalidate, cb_content_size, cb_scroll_to};
     t->page = au_page_new(&env, &cb);
@@ -585,6 +586,44 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     set_viewport(t);
     b->session_gen++;
     return t;
+}
+
+/* ---- Selection and find ---- */
+
+bool au_bw_has_selection(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_has_selection(t->page);
+}
+
+bool au_bw_selection_text(AuBrowserWindow *w, AuBuf *out)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_selection_text(t->page, out);
+}
+
+void au_bw_select_all(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (t)
+        au_page_select_all(t->page);
+}
+
+bool au_bw_find(AuBrowserWindow *w, const char *text, bool case_sensitive)
+{
+    AuBrowser *b = w->browser;
+    if (!text || !*text)
+        return false;
+    au_prefs_set_str(&b->find_text, text);
+    b->find_case = case_sensitive;
+    return au_bw_find_again(w, true);
+}
+
+bool au_bw_find_again(AuBrowserWindow *w, bool forward)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuBrowser *b = w->browser;
+    return t && b->find_text && au_page_find(t->page, b->find_text, forward, b->find_case);
 }
 
 /* ---- Text zoom ----
