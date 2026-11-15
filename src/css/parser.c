@@ -407,6 +407,132 @@ static void add_import(Parser *p, uint32_t a, uint32_t b)
     sh->import_rules[r->index] = r; /* the caller appends r to the rule list */
 }
 
+static int hex_digit(int c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    c |= 0x20;
+    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+/* One <urange> from its text after the "u" ("+26", "+0-7F", "+4??"):
+ * CSS Syntax 3, section 7.1. */
+static bool urange_text(const char *t, size_t n, uint32_t *first, uint32_t *last)
+{
+    size_t i = 0;
+    if (i >= n || t[i] != '+')
+        return false;
+    i++;
+    uint32_t v = 0;
+    int digits = 0, marks = 0;
+    for (; i < n && hex_digit((unsigned char)t[i]) >= 0; i++, digits++)
+        v = digits < 6 ? v * 16 + (uint32_t)hex_digit((unsigned char)t[i]) : v;
+    for (; i < n && t[i] == '?'; i++)
+        marks++;
+    if (digits + marks == 0 || digits + marks > 6)
+        return false;
+    if (marks) {
+        if (i != n)
+            return false;
+        *first = v << (4 * marks);
+        *last = *first | ((1u << (4 * marks)) - 1);
+    } else if (i == n) {
+        *first = *last = v;
+    } else {
+        if (t[i] != '-')
+            return false;
+        i++;
+        uint32_t w = 0;
+        digits = 0;
+        for (; i < n && hex_digit((unsigned char)t[i]) >= 0; i++, digits++)
+            w = digits < 6 ? w * 16 + (uint32_t)hex_digit((unsigned char)t[i]) : w;
+        if (digits == 0 || digits > 6 || i != n)
+            return false;
+        *first = v;
+        *last = w;
+    }
+    return *last <= 0x10FFFF && *first <= *last;
+}
+
+/* The unicode-range descriptor: <urange>#. The tokenizer has no urange
+ * token ("u+a" is also a selector), so each range is put together from
+ * the text of its tokens: the ident "u", then idents, numbers and
+ * dimensions as written, "+" and "?". Returns a COMMA_LIST with one LIST
+ * of two integer NUMBERs (first and last code point) per range, or NULL
+ * if the value is invalid. */
+static AuCssValue *parse_unicode_range(CssArena *arena, const CssTokens *tk, uint32_t a, uint32_t b)
+{
+    uint32_t count = 1;
+    for (uint32_t i = a; i < b; i++)
+        count += tk->t[i].type == TK_COMMA;
+    if (count > 4096)
+        return NULL;
+    AuCssValue *list = css_new_list(arena, AU_CSSV_COMMA_LIST, count);
+    uint32_t item = 0;
+    for (uint32_t i = a; i <= b;) {
+        uint32_t e = i;
+        while (e < b && tk->t[e].type != TK_COMMA)
+            e++;
+        uint32_t s = skip_ws(tk, i, e);
+        while (e > s && tk->t[e - 1].type == TK_WS)
+            e--;
+        if (s >= e || tk->t[s].type != TK_IDENT || tk->t[s].len != 1 || (css_tok_str(tk, &tk->t[s])[0] | 0x20) != 'u')
+            return NULL;
+        char text[24];
+        size_t n = 0;
+        for (uint32_t k = s + 1; k < e; k++) {
+            const CssToken *t = &tk->t[k];
+            const char *part = NULL;
+            uint32_t plen = 0;
+            char ch;
+            if (t->type == TK_IDENT) {
+                part = css_tok_str(tk, t);
+                plen = t->len;
+            } else if (t->type == TK_DELIM && (t->num == '+' || t->num == '?')) {
+                ch = (char)t->num;
+                part = &ch;
+                plen = 1;
+            } else if (t->type == TK_NUMBER || t->type == TK_DIMENSION) {
+                part = css_tok_num_text(tk, t, &plen);
+                if (!plen)
+                    return NULL;
+            } else {
+                return NULL;
+            }
+            if (n + plen > sizeof text)
+                return NULL;
+            memcpy(text + n, part, plen);
+            n += plen;
+            if (t->type == TK_DIMENSION) {
+                if (n + t->len > sizeof text)
+                    return NULL;
+                memcpy(text + n, css_tok_str(tk, t), t->len);
+                n += t->len;
+            }
+        }
+        uint32_t first, last;
+        if (!urange_text(text, n, &first, &last))
+            return NULL;
+        AuCssValue *r = &list->u.items[item++];
+        r->type = AU_CSSV_LIST;
+        r->n = 2;
+        r->u.items = css_arena_alloc(arena, 2 * sizeof(AuCssValue));
+        memset(r->u.items, 0, 2 * sizeof(AuCssValue));
+        r->u.items[0].type = r->u.items[1].type = AU_CSSV_NUMBER;
+        r->u.items[0].unit = r->u.items[1].unit = 1;
+        r->u.items[0].u.num = (float)first;
+        r->u.items[1].u.num = (float)last;
+        if (e >= b)
+            break;
+        /* e may have been moved back over whitespace: go on after the comma */
+        i = e;
+        while (i < b && tk->t[i].type != TK_COMMA)
+            i++;
+        i++;
+    }
+    return list;
+}
+
 static void parse_font_face(Parser *p, uint32_t s, uint32_t e)
 {
     const CssTokens *tk = p->tk;
@@ -436,7 +562,14 @@ static void parse_font_face(Parser *p, uint32_t s, uint32_t e)
             char name[32];
             if (css_lower(css_tok_str(tk, &tk->t[i]), tk->t[i].len, name, sizeof name) && k < ve) {
                 CssParseCtx cx = {&arena, false, false, sh->base_url};
-                AuCssValue *v = css_parse_value(&cx, tk, k, ve);
+                bool urange = strcmp(name, "unicode-range") == 0;
+                AuCssValue *v = urange ? parse_unicode_range(&arena, tk, k, ve) : css_parse_value(&cx, tk, k, ve);
+                if (!v && urange) {
+                    /* an invalid descriptor is ignored: the face covers every character */
+                    css_arena_reset(&arena);
+                    i = j;
+                    continue;
+                }
                 if (!v) {
                     AuBuf b;
                     au_buf_init(&b);

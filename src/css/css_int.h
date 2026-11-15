@@ -92,6 +92,14 @@ void css_tokenize(const char *src, size_t len, CssTokens *out);
 void css_tokens_rematch(CssTokens *tk);
 void css_tokens_free(CssTokens *tk);
 static inline const char *css_tok_str(const CssTokens *tk, const CssToken *t) { return tk->pool.data + t->str; }
+/* The number of a NUMBER, PERCENT or DIMENSION token as it was written
+ * ("+0025", "1e3"), without the unit or percent sign; *len is 0 for
+ * tokens that were copied (css_tokens_append) rather than tokenized. */
+static inline const char *css_tok_num_text(const CssTokens *tk, const CssToken *t, uint32_t *len)
+{
+    *len = t->type == TK_NUMBER || t->type == TK_PERCENT || t->type == TK_DIMENSION ? t->name_len : 0;
+    return tk->pool.data + t->str - *len;
+}
 /* The string length of a token, functions included. */
 static inline uint32_t css_tok_len(const CssToken *t) { return t->type == TK_FUNCTION ? t->name_len : t->len; }
 /* Serializes tokens [a, b) back to CSS text. */

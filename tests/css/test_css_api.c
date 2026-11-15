@@ -296,6 +296,89 @@ static void test_sharing_pseudo(void)
     au_css_resolver_free(r);
 }
 
+/* ---- unicode-range ---- */
+
+/* The ranges of the n-th @font-face as "first-last first-last", "none"
+ * without the descriptor. */
+static const char *ranges_of(const AuCssSheet *s, size_t i)
+{
+    static char buf[256];
+    const AuCssValue *v = au_css_font_face_descriptor(au_css_sheet_font_face(s, i), "unicode-range");
+    if (!v)
+        return "none";
+    buf[0] = 0;
+    if (v->type != AU_CSSV_COMMA_LIST)
+        return "bad";
+    for (uint32_t k = 0; k < v->n; k++) {
+        const AuCssValue *r = &v->u.items[k];
+        if (r->type != AU_CSSV_LIST || r->n != 2 || r->u.items[0].type != AU_CSSV_NUMBER)
+            return "bad";
+        snprintf(buf + strlen(buf), sizeof buf - strlen(buf), "%s%X-%X", k ? " " : "",
+                 (unsigned)r->u.items[0].u.num, (unsigned)r->u.items[1].u.num);
+    }
+    return buf;
+}
+
+static void test_unicode_range(void)
+{
+    static const char *const cases[][2] = {
+        {"U+26", "26-26"},
+        {"u+0-7F", "0-7F"},
+        {"U+0025-00FF", "25-FF"},
+        {"U+4??", "400-4FF"},
+        {"U+??????", "bad-range"}, /* past U+10FFFF */
+        {"U+????", "0-FFFF"},
+        {"U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+FEFF, U+FFFD", "0-FF 131-131 152-153 2BB-2BC 2000-206F FEFF-FEFF FFFD-FFFD"},
+        {"U+1F00-1FFF", "1F00-1FFF"},
+        {"U+1e3", "1E3-1E3"},
+        {"U+2e5-2e9", "2E5-2E9"},
+        {"U+a-f", "A-F"},
+        {"U+A5 , U+10FFFF", "A5-A5 10FFFF-10FFFF"},
+        {"U+abcdef", "bad-range"},
+        {"U+110000", "bad-range"},
+        {"U+1e-5", "bad-range"}, /* first above last */
+        {"U+0-7F,", "bad-range"},
+        {"U+ 26", "bad-range"},
+        {"U+1234567", "bad-range"},
+        {"U+12?-34", "bad-range"},
+        {"26", "bad-range"},
+        {"U+3.5", "bad-range"},
+        {"/* c */ U+41-5A /* d */", "41-5A"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char css[512];
+        snprintf(css, sizeof css, "@font-face { font-family: F; unicode-range: %s; src: url(f.woff) }", cases[i][0]);
+        AuCssSheet *s = sheet(css);
+        const char *got = ranges_of(s, 0);
+        const char *want = strcmp(cases[i][1], "bad-range") == 0 ? "none" : cases[i][1];
+        checks++;
+        if (strcmp(got, want) != 0) {
+            failures++;
+            fprintf(stderr, "unicode-range: %s: got %s, want %s\n", cases[i][0], got, want);
+        }
+        /* the descriptors around it are kept either way */
+        CHECK(au_css_font_face_descriptor(au_css_sheet_font_face(s, 0), "src") != NULL);
+        au_css_sheet_free(s);
+    }
+    /* declarations and custom properties keep working with the numbers'
+     * source text in the token pool */
+    AuCssDeclBlock *b = au_css_parse_inline_style("width: +0025px; --x: 1e3 +7% 2.50em", 35, NULL);
+    AuBuf out;
+    au_buf_init(&out);
+    au_css_decl_block_serialize(b, &out);
+    CHECK(strcmp(au_buf_cstr(&out), "width: 25px; --x: 1000 +7% 2.5em;") == 0);
+    if (failures)
+        fprintf(stderr, "    serialized: %s\n", au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_css_decl_block_free(b);
+    /* a NUL byte is read as U+FFFD and the tokenizer goes on (it used to
+     * loop forever) */
+    static const char nul[] = "a\0b { color: red } #x\0 { width: 1px } p { height: 2px\0 }";
+    AuCssSheet *s = au_css_sheet_parse(nul, sizeof nul, AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+    CHECK(au_css_sheet_rule_count(s) >= 2);
+    au_css_sheet_free(s);
+}
+
 /* ---- :scope ---- */
 
 static AuElement *query(const char *sel, AuNode *root)
@@ -650,6 +733,7 @@ int main(void)
     test_sharing();
     test_sharing_pseudo();
     test_scope();
+    test_unicode_range();
     test_typed();
     test_inline_api();
     test_quirks_ua();

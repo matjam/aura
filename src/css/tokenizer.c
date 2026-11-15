@@ -153,7 +153,9 @@ static int peek(const Lexer *L, size_t k)
 
 static bool is_newline(int c) { return c == '\n' || c == '\r' || c == '\f'; }
 static bool is_ws(int c) { return c == ' ' || c == '\t' || is_newline(c); }
-static bool is_ident_start(int c) { return au_is_alpha(c) || c == '_' || c >= 0x80; }
+/* U+0000 counts: it is read as U+FFFD (copy_cp). Without it a NUL byte
+ * started an ident that consumed nothing, and the tokenizer never ended. */
+static bool is_ident_start(int c) { return au_is_alpha(c) || c == '_' || c >= 0x80 || c == 0; }
 static bool is_ident_char(int c) { return is_ident_start(c) || au_is_digit(c) || c == '-'; }
 
 static bool valid_escape(int c1, int c2) { return c1 == '\\' && c2 != -1 && !is_newline(c2); }
@@ -335,12 +337,20 @@ static double consume_number(Lexer *L, bool *integer, bool *sign)
 static void consume_numeric(Lexer *L)
 {
     bool integer, sign;
+    size_t from = L->i;
     double v = consume_number(L, &integer, &sign);
     float f = (float)v;
     if (v > 3.0e38)
         f = 3.0e38f;
     else if (v < -3.0e38)
         f = -3.0e38f;
+    /* The number as written goes into the pool, just before the token's
+     * string: <urange> is parsed from that text (css_tok_num_text), since
+     * "U+0025-00FF" and "U+1e3" are numbers to the tokenizer. */
+    size_t nlen = L->i - from;
+    if (nlen > 0xFFFF)
+        nlen = 0;
+    au_buf_append(&L->out->pool, L->s + from, nlen);
     if (starts_ident(peek(L, 0), peek(L, 1), peek(L, 2))) {
         CssToken *t = push_tok(L, TK_DIMENSION);
         t->num = f;
@@ -349,15 +359,17 @@ static void consume_numeric(Lexer *L)
         consume_ident_seq(L);
         end_str(L, t);
         t->unit = (uint16_t)unit_lookup(L->out->pool.data + t->str, t->len);
-    } else if (peek(L, 0) == '%') {
-        L->i++;
-        CssToken *t = push_tok(L, TK_PERCENT);
-        t->num = f;
-        t->flags = sign ? TF_SIGN : 0;
+        t->name_len = (uint16_t)nlen;
     } else {
-        CssToken *t = push_tok(L, TK_NUMBER);
+        bool pct = peek(L, 0) == '%';
+        if (pct)
+            L->i++;
+        CssToken *t = push_tok(L, pct ? TK_PERCENT : TK_NUMBER);
         t->num = f;
-        t->flags = (uint8_t)((integer ? TF_INTEGER : 0) | (sign ? TF_SIGN : 0));
+        t->flags = (uint8_t)((!pct && integer ? TF_INTEGER : 0) | (sign ? TF_SIGN : 0));
+        t->str = (uint32_t)L->out->pool.len;
+        t->name_len = (uint16_t)nlen;
+        au_buf_putc(&L->out->pool, 0);
     }
 }
 
@@ -733,6 +745,8 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
             t.str = 0;
             break;
         }
+        if (t.type != TK_FUNCTION)
+            t.name_len = 0; /* a number's source text is not copied */
         if (close_of(t.type)) {
             uint32_t end = t.len > b ? b : t.len;
             t.len = end - a + base;
