@@ -2241,8 +2241,16 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
     case AU_FETCH_ERR_REDIRECTS:
         title = "Too many redirects";
         error_head(p, &b, title, "This page redirects too many times");
-        au_buf_puts(&b, "<p>The server keeps sending Aura to another address. This can happen when a site needs "
-                        "cookies that Aura's settings block.</p>");
+        au_buf_puts(&b, "<p>The server answered with a redirect to another address more than 20 times in a row, "
+                        "so Aura stopped following them.</p>");
+        if (info && info->url && info->url[0]) {
+            au_buf_puts(&b, "<p>The last address it sent Aura to was <b>");
+            html_escape_str(&b, info->url);
+            au_buf_puts(&b, "</b>.</p>");
+        }
+        au_buf_puts(&b, "<p>The usual causes are a site that needs a cookie Aura's settings block, or a site "
+                        "that sends its secure address to its plain one and back. Develop &gt; Network lists "
+                        "each redirect with the address it came from.</p>");
         au_buf_puts(&b, retry);
         break;
     case AU_FETCH_ERR_PROTOCOL:

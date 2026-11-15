@@ -111,6 +111,7 @@ struct AuHttpTransfer {
     bool history; /* AuHttpRequest.history */
     bool no_cache; /* AuHttpRequest.no_cache */
     bool https_first_upgrade; /* this attempt is an HTTPS-first upgrade */
+    bool was_upgraded;        /* some attempt of this transfer was an HTTPS-first upgrade */
     int64_t range_start, range_end;
     uint32_t total_timeout, started_ms, last_ms;
     /* progress */
@@ -1866,6 +1867,16 @@ static bool handle_head(AuHttpTransfer *t)
                 au_headers_remove(&t->extra, "authorization");
             au_origin_free(&a);
             au_origin_free(&b);
+            /* A site that answers its HTTPS address with a redirect to
+             * plain HTTP on the same host (www.macintoshrepository.org
+             * does, for old browsers) has chosen HTTP itself, over a
+             * connection whose certificate was checked. Upgrading that
+             * address again would redirect for ever, so the host is
+             * loaded over HTTP as if the user had confirmed it. Hosts
+             * known to HSTS are still upgraded. */
+            if (t->was_upgraded && !strcmp(t->url.scheme, "https") && !strcmp(nu.scheme, "http") &&
+                !strcmp(t->url.host, nu.host))
+                t->allow_http_fallback = true;
             /* The redirecting URL becomes the referrer context only for
              * policy; the referrer stays the original document. */
             au_url_free(&t->url);
@@ -2000,6 +2011,8 @@ static bool hsts_upgrade(AuHttpTransfer *t)
         return false;
     au_url_upgrade_to_https(&t->url);
     t->https_first_upgrade = !known;
+    if (!known)
+        t->was_upgraded = true;
     return true;
 }
 
