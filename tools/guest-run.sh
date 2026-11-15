@@ -16,11 +16,9 @@
 # (Control Strip or Monitors), not on the QEMU command line.
 #
 # BASE picks the system: stock (default, Mac OS 9.2.2 without Enforcer)
-# or enforcer (with the os9-enforcer kernel and extension). The first
-# start of a base flattens a private copy of its os9-protect image into
-# AURA_RUN (reading it only), and boots an overlay on that copy, so
-# nothing os9-protect owns is ever written or locked for writing. See
-# tools/guest-env.sh for the settings.
+# or enforcer (with the Enforcer kernel and extension). The guest boots an
+# overlay in AURA_RUN on the base image in disks/, so the base image is
+# never written. See tools/guest-env.sh for the settings.
 set -eu
 . "$(dirname "$0")/guest-env.sh"
 
@@ -29,15 +27,12 @@ running() {
 }
 
 prepare_disk() {
-  if [ ! -f "$AURA_DISK_COPY" ]; then
-    echo "guest-run: copying $AURA_BASE to $AURA_DISK_COPY (read-only use of the source)"
-    # -U: do not take os9-protect's image lock; the source is only read,
-    # and its own QEMU runs it with -snapshot, so nothing writes it.
-    "$QEMU_IMG" convert -U -O qcow2 "$AURA_BASE" "$AURA_DISK_COPY.tmp"
-    mv "$AURA_DISK_COPY.tmp" "$AURA_DISK_COPY"
+  if [ ! -f "$AURA_BASE" ]; then
+    echo "guest-run: no base image $AURA_BASE (see Guest testing in CLAUDE.md)" >&2
+    exit 1
   fi
   if [ ! -f "$AURA_DISK" ]; then
-    "$QEMU_IMG" create -q -f qcow2 -F qcow2 -b "$AURA_DISK_COPY" "$AURA_DISK"
+    "$QEMU_IMG" create -q -f qcow2 -F qcow2 -b "$AURA_BASE" "$AURA_DISK"
   fi
 }
 

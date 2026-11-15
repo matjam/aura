@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Control Aura's test machine (tools/guest-run.sh) over QMP.
 
-Adapted from os9-protect's tools/qmp.py; this copy only talks to Aura's
-own guest, through the socket in AURA_RUN.
+It only talks to Aura's own guest, through the socket in AURA_RUN.
 
 Usage:
   tools/guest-qmp.py screenshot out.png

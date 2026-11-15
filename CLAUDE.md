@@ -50,46 +50,61 @@ change to the top-level file.
 - `./build.sh test` builds for the host and runs the tests.
 - `./build.sh ppc` builds for Mac OS 9 with Retro68 (GCC 16.1, Multiversal
   Interfaces). The toolchain is found through `RETRO68`, then in
-  `~/.local/opt/retro68/COMMIT` (the commit is `RETRO68_REV` in
-  `build.sh`), then in `../os9-protect/toolchain/build/toolchain`. A
-  `build/ppc` folder keeps the toolchain it was first configured with;
-  delete it to switch.
-  The guest scripts find QEMU through `QEMU`, then in
-  `~/.local/opt/qemu/VERSION/bin` (`AURA_QEMU_REV` in
-  `tools/guest-env.sh`). The versioned folders follow os9-enforcer's
-  convention; its `toolchain/build.sh` and `qemu/build.sh` install them.
-  The guest's disk images come from `../os9-enforcer/disks`, or from
-  `../os9-protect/disks` when that is absent (`OS9_PROTECT` overrides).
+  `~/.local/opt/retro68` (`toolchain/find.sh`). A `build/ppc` folder
+  keeps the toolchain it was first configured with; delete it to switch.
 
-The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
-(`run.sh`, `tools/push.sh` to copy files in, `tools/qmp.py` for
-screenshots and input). `os9-enforcer/CLAUDE.md` describes how to use it.
-The guest has outbound network access.
+## Dependencies outside the repository
+
+Aura depends on no other project's checkout. What it needs is installed
+by its own scripts or kept in git-ignored folders here.
+
+- **Retro68.** To install the toolchain, run `toolchain/build.sh`. It
+  fetches Retro68 at the commit pinned in the script (a4a389c41e90,
+  PowerPC only, Multiversal Interfaces) into `toolchain/Retro68`, builds
+  in `toolchain/build`, and installs in `~/.local/opt/retro68` (or
+  `$RETRO68`). It does nothing when that folder's `REVISION` names the
+  pinned commit. To move to another commit, change it in the script,
+  empty the install folder, and run the script. In CI, cache
+  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`.
+- **QEMU.** To install the QEMU the test machine runs, run
+  `qemu/build.sh`. It clones the release pinned in the script (v11.1.3)
+  into `qemu/src`, applies `qemu/patches/*.patch`, and installs in
+  `~/.local/opt/qemu-os9` (or `$QEMU_PREFIX`). It does nothing when the
+  install's `REVISION` matches.
+- **Disk images.** The test machine's base images are in `disks/`
+  (git-ignored): `os9-novm.qcow2` is a stock Mac OS 9.2.2 with virtual
+  memory off, and `os9-vmoff.qcow2` is the same system with Enforcer
+  installed. Both are standalone qcow2 files with no backing file. To
+  update Enforcer on the second, install a new Enforcer build in that
+  guest with `PERSIST=1` and fold the overlay into the image.
+- **hfsutils** (`hformat`, `hcopy`) for `tools/guest-push.sh`:
+  `brew install hfsutils`.
+
+The install scripts, the QEMU patch and the two disk images were copied
+from the os9-enforcer project on 2026-11-14.
 
 ## Guest testing
 
-Aura has its own test machine, separate from the one os9-protect runs, so
-the two never share a disk, a socket or a QEMU process. Runtime files go
-in `run/` of the main checkout (set `AURA_RUN` to use another folder);
-`tools/guest-env.sh` holds the settings.
+Aura has its own test machine: a QEMU mac99 guest running Mac OS 9.2.2,
+with outbound network access. Runtime files go in `run/` of the main
+checkout (set `AURA_RUN` to use another folder, for example to run a
+second guest beside the first); `tools/guest-env.sh` holds the settings.
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
-the background. `BASE` picks the system: `stock` (the default) is Mac OS
-9.2.2 with virtual memory off and no Enforcer, from os9-protect's
-`disks/os9-novm.qcow2`; `enforcer` (`BASE=enforcer tools/guest-run.sh
-start`) is `disks/os9-vmoff.qcow2`, which has the os9-enforcer kernel and
-extension installed. The first start of a base copies its image (read
-only) into `run/os9-base-BASE.qcow2` and boots an overlay on the copy
-(`run/os9-aura-BASE.qcow2`). One guest runs at a time; `status` names the
-running base. Disk writes are discarded when QEMU exits; set `PERSIST=1`
-to keep them. Mac OS takes about a minute to boot.
+the background. `BASE` picks the system: `stock` (the default) is
+`disks/os9-novm.qcow2`, Mac OS 9.2.2 with virtual memory off and no
+Enforcer; `enforcer` (`BASE=enforcer tools/guest-run.sh start`) is
+`disks/os9-vmoff.qcow2`, which has the Enforcer kernel and extension
+installed. The guest boots an overlay on the base image
+(`run/os9-overlay-BASE.qcow2`), so the base is never written. One guest
+runs per run folder; `status` names the running base. Disk writes are
+discarded when QEMU exits; set `PERSIST=1` to keep them in the overlay.
+Mac OS takes about a minute to boot.
 
 Test on the stock base first. Use the Enforcer base to check Aura under
 Enforcer; its own bugs show there too (see the scroll bar thumb note
-under Browser chrome). To read Enforcer's state and offense log, run
-os9-enforcer's `tools/xlog-read.py` with
-`QMP_SOCK=run/qmp.sock`; the extension on that disk is older than the
-script, so the script may report a different layout.
+under Browser chrome). Enforcer's state and offense log are read with
+that project's own tools, which Aura does not carry.
 
 To copy the application in, build it with `./build.sh ppc` and run
 `tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
