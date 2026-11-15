@@ -118,7 +118,7 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
 static uint32_t fetch_font(void *ctx, const char *url)
 {
     AuDocView *dv = ctx;
-    Request *r = add_request(dv, url, AU_RES_OTHER);
+    Request *r = add_request(dv, url, AU_RES_FONT);
     if (!r)
         return 0;
     r->font = true;

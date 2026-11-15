@@ -14,3 +14,10 @@ if(TARGET aura_host_platform)
     target_compile_definitions(test_chrome_fonts PRIVATE AURA_FONTS_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
     add_test(NAME chrome_fonts COMMAND test_chrome_fonts)
 endif()
+
+# The fetcher path on src/net's fake transport (no network).
+add_executable(test_net_page test_net_page.c ${CMAKE_SOURCE_DIR}/tests/net/tls_fixtures.c)
+target_link_libraries(test_net_page aura_fakenet m)
+target_include_directories(test_net_page PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_net_page COMMAND test_net_page)
+set_tests_properties(browser_net_page PROPERTIES TIMEOUT 120)

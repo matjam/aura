@@ -456,6 +456,10 @@ static void icon_security(AuCanvas *c, AuIRect r, AuSecurity s)
     switch (s) {
     case AU_SECURITY_SECURE: icon_lock(c, cx, cy, false, AU_RGB(0, 120, 40)); break;
     case AU_SECURITY_NOT_SECURE: icon_lock(c, cx - 1, cy, true, AU_RGB(150, 40, 40)); break;
+    case AU_SECURITY_MIXED: /* secure document, insecure parts: an amber lock with a bar */
+        icon_lock(c, cx, cy - 1, false, AU_RGB(200, 120, 0));
+        au_fill_rect(c, (AuRect){cx - 5, cy + 6, 10, 2}, AU_RGB(200, 120, 0));
+        break;
     case AU_SECURITY_CERT_ERROR: {
         float tri[] = {0, -7, 7, 6, -7, 6};
         poly(c, tri, 3, cx, cy, AU_RGB(200, 30, 30));

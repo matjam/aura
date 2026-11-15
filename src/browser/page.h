@@ -44,35 +44,188 @@ typedef enum {
     AU_SECURITY_NONE,       /* nothing to say: about:, file:, empty */
     AU_SECURITY_SECURE,     /* HTTPS with a valid certificate */
     AU_SECURITY_NOT_SECURE, /* plain HTTP */
-    AU_SECURITY_CERT_ERROR  /* HTTPS with a certificate problem */
+    AU_SECURITY_CERT_ERROR, /* HTTPS with a certificate problem (or one the user continued past) */
+    AU_SECURITY_MIXED       /* HTTPS, but some of the page's resources were insecure or blocked as such */
 } AuSecurity;
 
 /* ---- Fetchers ----
  * A fetcher supplies the bytes of URLs of one scheme (a network stack
  * registers one for http and one for https). start() only begins a fetch
- * and returns a nonzero id (0: it cannot be fetched); the bytes and the
- * end arrive through the sink, from poll() or any later call into the
- * fetcher, never from inside start(). After done (or cancel) the fetcher
- * makes no more calls for that id. poll() is called from every
- * au_page_idle of a page with fetches outstanding, so a fetcher shared by
- * several pages is polled more than once per event loop turn. */
+ * and returns a nonzero id (0: it cannot be fetched); the response head,
+ * the bytes and the end arrive through the sink, from poll() or any later
+ * call into the fetcher, never from inside start(). After done (or
+ * cancel, or a download hand-off) the fetcher makes no more calls for
+ * that id. poll() is called from every au_page_idle of a page with
+ * fetches outstanding, so a fetcher shared by several pages is polled
+ * more than once per event loop turn. */
+
+/* What a request is for. */
+typedef enum {
+    AU_FETCH_DOCUMENT,   /* the page itself (a navigation) */
+    AU_FETCH_STYLESHEET,
+    AU_FETCH_IMAGE,
+    AU_FETCH_FONT,
+    AU_FETCH_SCRIPT,
+    AU_FETCH_OTHER
+} AuFetchKind;
+
+/* The referrer policy (Referrer-Policy names, in src/net's order). */
+typedef enum {
+    AU_FETCH_RP_DEFAULT, /* strict-origin-when-cross-origin */
+    AU_FETCH_RP_NO_REFERRER,
+    AU_FETCH_RP_NO_REFERRER_WHEN_DOWNGRADE,
+    AU_FETCH_RP_SAME_ORIGIN,
+    AU_FETCH_RP_ORIGIN,
+    AU_FETCH_RP_STRICT_ORIGIN,
+    AU_FETCH_RP_ORIGIN_WHEN_CROSS_ORIGIN,
+    AU_FETCH_RP_STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+    AU_FETCH_RP_UNSAFE_URL
+} AuFetchReferrerPolicy;
+
+typedef enum {
+    AU_FETCH_CACHE_NORMAL,     /* use the cache as HTTP says */
+    AU_FETCH_CACHE_REVALIDATE, /* reload: revalidate the document */
+    AU_FETCH_CACHE_BYPASS      /* Shift- or Option-reload: fetch everything again */
+} AuFetchCacheMode;
+
+typedef struct AuFetchRequest {
+    const char *url;
+    AuFetchKind kind;
+    /* The document making the request (referrer, mixed content, Sec-Fetch-*),
+     * NULL for a navigation the user started (typed, bookmark, history). */
+    const char *document_url;
+    /* The top-level document (site for cookies, third-party decisions);
+     * NULL when this request is the top-level navigation. */
+    const char *top_level_url;
+    AuFetchReferrerPolicy referrer_policy;
+    AuFetchCacheMode cache;
+    bool user_activated;      /* a click or the address field started it */
+    bool allow_http_fallback; /* HTTPS-first: the user accepted plain http for this navigation */
+    const char *method;       /* NULL: GET */
+    const void *body;         /* copied; NULL for none */
+    size_t body_len;
+    const char *body_type;    /* the body's Content-Type */
+} AuFetchRequest;
+
+/* Why a fetch failed (src/net's errors, plus what the embedder adds). */
+typedef enum {
+    AU_FETCH_OK = 0,
+    AU_FETCH_ERR_BAD_URL,
+    AU_FETCH_ERR_SCHEME,
+    AU_FETCH_ERR_DNS,
+    AU_FETCH_ERR_CONNECT,
+    AU_FETCH_ERR_TIMEOUT,
+    AU_FETCH_ERR_RESET,
+    AU_FETCH_ERR_PROTOCOL,
+    AU_FETCH_ERR_TOO_LARGE,
+    AU_FETCH_ERR_REDIRECTS,
+    AU_FETCH_ERR_DECODE,
+    AU_FETCH_ERR_TLS,
+    AU_FETCH_ERR_CERT,
+    AU_FETCH_ERR_CLOCK,
+    AU_FETCH_ERR_PROXY,
+    AU_FETCH_ERR_HTTPS_FALLBACK, /* HTTPS-first: https failed; the user may confirm http */
+    AU_FETCH_ERR_BLOCKED,
+    AU_FETCH_ERR_CANCELLED,
+    AU_FETCH_ERR_NO_NETWORK      /* no TCP/IP: AuFetchInfo.message says why */
+} AuFetchError;
+
+/* Certificate details for the error page and the certificate viewer. */
+#define AU_FETCH_CERT_CHAIN 8
+typedef struct AuFetchCertEntry {
+    char subject[192], issuer[192];
+    int64_t not_before, not_after; /* seconds since 1970 UTC; 0 when unknown */
+    uint8_t sha256[32];
+    char san[256];                 /* DNS names, comma-separated */
+} AuFetchCertEntry;
+
+typedef struct AuFetchCert {
+    char host[256];      /* the name checked */
+    int count;           /* certificates the server sent (at most AU_FETCH_CERT_CHAIN kept) */
+    AuFetchCertEntry chain[AU_FETCH_CERT_CHAIN];
+    char reason[160];    /* English text of the problem; "" when valid */
+    bool error;          /* the chain did not validate */
+    bool clock_wrong;    /* the system date is before the root store's date */
+    bool hsts;           /* an HSTS host: no exception may be made */
+    bool overridden;     /* the user's session exception let it through */
+    int64_t checked_at;  /* the time used for validation */
+    char protocol[16];   /* "TLS 1.2" */
+    char cipher[64];
+} AuFetchCert;
+
+/* The response head, before any data. Strings are valid during the call. */
+typedef struct AuFetchResponse {
+    int status;               /* 0 for data: URLs */
+    const char *url;          /* the final URL after redirects */
+    const char *content_type; /* computed (after sniffing); "" when unknown */
+    const char *charset;      /* the Content-Type charset; "" when none */
+    const char *encoding;     /* documents: the encoding the bytes are in ("UTF-8" after conversion) */
+    int64_t content_length;   /* -1 when unknown */
+    bool attachment;          /* Content-Disposition: attachment */
+    const char *filename;     /* from Content-Disposition; "" when none */
+    const char *csp;          /* Content-Security-Policy; "" when none */
+    const char *referrer_policy; /* Referrer-Policy; "" when none */
+    AuSecurity security;
+    const AuFetchCert *cert;  /* https: the certificate details, or NULL */
+    bool from_cache;
+} AuFetchResponse;
+
+/* The end of a fetch. Strings and cert are valid during the call. */
 typedef struct AuFetchInfo {
     const char *url;          /* the final URL after redirects, or NULL when unchanged */
     const char *content_type; /* "text/html", "text/css", ...; NULL when unknown */
+    AuFetchError error;
+    int status;               /* the HTTP status, 0 when none */
+    const AuFetchCert *cert;  /* certificate details after a certificate error, or NULL */
+    bool mixed;               /* a subresource blocked (or failed) as mixed content */
+    const char *message;      /* more about the error ("" when nothing) */
 } AuFetchInfo;
 
 typedef struct AuFetchSink {
     void *ctx;
+    /* The response head (before data). Optional. */
+    void (*response)(void *ctx, uint32_t id, const AuFetchResponse *r);
     void (*data)(void *ctx, uint32_t id, const void *bytes, size_t len);
-    /* info is NULL or describes the response (it may come before data). */
+    /* ok is info->error == AU_FETCH_OK. info is NULL or describes the end. */
     void (*done)(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info);
+    /* A document response that should be saved rather than shown
+     * (attachment, or a type Aura does not display). Return true to take
+     * it: handoff then names the transfer for the download manager (see
+     * AuDownload.handoff) and no more sink calls follow for id. Return
+     * false to receive it as usual. Optional (false). */
+    bool (*download)(void *ctx, uint32_t id, const AuFetchResponse *r, uint32_t handoff);
 } AuFetchSink;
+
+/* What a fetch is doing, for the status bar. */
+typedef enum {
+    AU_FETCH_PHASE_QUEUED,
+    AU_FETCH_PHASE_ENTROPY,    /* https waits for the random source */
+    AU_FETCH_PHASE_RESOLVING,
+    AU_FETCH_PHASE_CONNECTING,
+    AU_FETCH_PHASE_SECURING,
+    AU_FETCH_PHASE_SENDING,
+    AU_FETCH_PHASE_WAITING,
+    AU_FETCH_PHASE_RECEIVING,
+    AU_FETCH_PHASE_DONE
+} AuFetchPhase;
+
+typedef struct AuFetchStatus {
+    AuFetchPhase phase;
+    int64_t received, total;   /* body bytes; total -1 when unknown */
+    unsigned entropy_bits, entropy_needed; /* the random source's progress (0, 0 when not known) */
+} AuFetchStatus;
 
 typedef struct AuPageFetcher {
     void *ctx;
-    uint32_t (*start)(void *ctx, const char *url, const AuFetchSink *sink);
+    uint32_t (*start)(void *ctx, const AuFetchRequest *rq, const AuFetchSink *sink);
     void (*cancel)(void *ctx, uint32_t id);
     void (*poll)(void *ctx);
+    /* Optional: what fetch id is doing. False when the id is unknown. */
+    bool (*status)(void *ctx, uint32_t id, AuFetchStatus *out);
+    /* Optional: the user chose to continue past a certificate error on
+     * host, for the certificate with this fingerprint, for this session.
+     * False when refused (an HSTS host). */
+    bool (*allow_cert)(void *ctx, const char *host, const uint8_t sha256[32]);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {
@@ -112,6 +265,14 @@ typedef struct AuPageCallbacks {
      * position a history entry or a reload restores. The browser clamps
      * it and reports the result with au_page_set_scroll. */
     void (*scroll_to)(void *ctx, AuPage *p, int x, int y);
+    /* The document being loaded is a file to save, not a page to show
+     * (attachment, or a type Aura does not display): r describes it and
+     * handoff names its transfer (AuDownload.handoff). Return true when the
+     * browser took it; the page then goes back to the document it showed
+     * before (url_changed reports the old URL). Optional: without it, or
+     * when it returns false, the page shows that it cannot display the
+     * file. */
+    bool (*download)(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */
@@ -128,14 +289,35 @@ void au_page_navigate(AuPage *p, const char *url);
  * kept and the position applied at once. */
 void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll_y);
 void au_page_stop(AuPage *p);
-/* Loads the current URL again, keeping the scroll position. */
+/* Loads the current URL again, keeping the scroll position. The document
+ * is revalidated with the server; with bypass_cache (Shift- or
+ * Option-reload) the document and every resource are fetched again. */
 void au_page_reload(AuPage *p);
+void au_page_reload_bypass(AuPage *p);
+/* Shows url (a view-source: URL) as the source text data, without
+ * fetching anything: View Source of a network page uses the bytes kept
+ * for Save Page As. */
+void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_t len);
+/* Shows generated HTML (an internal page such as about:certificate) as
+ * url, without fetching anything. */
+void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len);
 
 const char *au_page_url(const AuPage *p);   /* never NULL */
 const char *au_page_title(const AuPage *p); /* "" when the page has none */
 bool au_page_loading(const AuPage *p);
 float au_page_progress(const AuPage *p);    /* 0..1 while loading */
 AuSecurity au_page_security(const AuPage *p);
+/* The main document's certificate (https pages and certificate error
+ * pages), or NULL. */
+const AuFetchCert *au_page_cert(const AuPage *p);
+/* Appends the certificate viewer's HTML for the page's certificate (its
+ * chain, validity, fingerprints, protocol and cipher) to out; false when
+ * the page has none. */
+bool au_page_certificate_html(const AuPage *p, AuBuf *out);
+/* What the load is doing, for the status bar: "Looking up example.com",
+ * "Waiting for example.com", "Loading 3 of 12 resources"...; "" when
+ * not loading. */
+void au_page_status_text(const AuPage *p, char *out, size_t cap);
 /* The main document's bytes as they arrived (for Save Page As): false
  * while it is loading, after a failed or stopped load, and for pages
  * that have none (about:scene). The bytes stay valid until the next

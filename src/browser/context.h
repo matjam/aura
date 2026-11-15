@@ -43,7 +43,10 @@ typedef enum AuCommand {
     AU_CMD_CLOSE_TAB,
     AU_CMD_CLOSE_OTHER_TABS,
     AU_CMD_RELOAD_TAB,
-    AU_CMD_DUPLICATE_TAB
+    AU_CMD_DUPLICATE_TAB,
+    /* downloads */
+    AU_CMD_SAVE_LINK,
+    AU_CMD_SAVE_IMAGE
 } AuCommand;
 
 typedef enum AuContextKind {

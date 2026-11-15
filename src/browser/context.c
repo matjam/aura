@@ -1,5 +1,6 @@
 /* Contextual menus (context.h). */
 #include "context.h"
+#include "url.h"
 
 #include <string.h>
 
@@ -29,6 +30,12 @@ static char *take(AuBuf *b)
     }
     au_buf_cstr(b);
     return au_buf_take(b, NULL);
+}
+
+/* Save Link As and Save Image As download http and https addresses. */
+static bool saveable(const char *url)
+{
+    return au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https");
 }
 
 bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuContextMenu *m)
@@ -79,12 +86,16 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
             add(m, AU_CMD_OPEN_LINK_WINDOW, "Open Link in New Window", true);
             sep(m);
             add(m, AU_CMD_COPY_LINK, "Copy Link Address", true);
+            if (saveable(m->link))
+                add(m, AU_CMD_SAVE_LINK, "Save Link As", true);
             add(m, AU_CMD_BOOKMARK_LINK, "Bookmark Link", true);
         }
         if (m->image) {
             sep(m);
             add(m, AU_CMD_OPEN_IMAGE_TAB, "Open Image in New Tab", true);
             add(m, AU_CMD_COPY_IMAGE, "Copy Image Address", true);
+            if (saveable(m->image))
+                add(m, AU_CMD_SAVE_IMAGE, "Save Image As", true);
         }
         if (!m->link && !m->image) {
             add(m, AU_CMD_BACK, "Back", au_nav_can_go(&t->nav, -1));
@@ -134,6 +145,14 @@ bool au_bw_context_command(AuBrowserWindow *w, const AuContextMenu *m, AuCommand
     case AU_CMD_OPEN_IMAGE_TAB:
         if (m->image)
             au_bw_new_tab(w, m->image, false, -1);
+        return true;
+    case AU_CMD_SAVE_LINK:
+        if (m->link)
+            au_bw_save_url(w, m->link);
+        return true;
+    case AU_CMD_SAVE_IMAGE:
+        if (m->image)
+            au_bw_save_url(w, m->image);
         return true;
     case AU_CMD_BACK: au_bw_back(w); return true;
     case AU_CMD_FORWARD: au_bw_forward(w); return true;

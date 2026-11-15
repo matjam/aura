@@ -35,7 +35,7 @@
 
 typedef struct AuDocView AuDocView;
 
-typedef enum { AU_RES_STYLESHEET, AU_RES_IMAGE, AU_RES_OTHER } AuResourceKind;
+typedef enum { AU_RES_STYLESHEET, AU_RES_IMAGE, AU_RES_OTHER, AU_RES_FONT } AuResourceKind;
 
 typedef struct AuLoader {
     void *ctx;

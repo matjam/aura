@@ -24,6 +24,7 @@
 #include "url.h"
 
 #include "credits.h"
+#include "history.h"
 #include "../layout/selection.h"
 #include "../page/page.h"
 
@@ -58,6 +59,7 @@ struct Fetch {
     const AuPageFetcher *fetcher;
     uint32_t fid;
     AuFetchSink sink;
+    AuFetchKind kind;
     bool done, ok, cancelled;
 };
 
@@ -105,6 +107,30 @@ struct AuPage {
     float zoom; /* text zoom, 1 for none */
 
     AuBuf source; /* the main document's bytes as they arrived (Save Page As) */
+
+    /* Network documents. */
+    AuFetchCacheMode cache_mode;    /* of the current load */
+    bool allow_http;                /* HTTPS-first: the user accepted http for the next load */
+    char *link_referrer, *link_target; /* a link this page opened: its referrer, for that navigation */
+    char *referrer;                 /* the current load's referrer (NULL: typed or bookmarked) */
+    AuFetchReferrerPolicy rpolicy;  /* the document's Referrer-Policy */
+    AuSecurity security;            /* from the main response */
+    bool have_security, mixed;
+    AuFetchCert *cert;              /* the main document's certificate, or NULL */
+    int status;                     /* the main response's status */
+    char *content_type;             /* the main response's type, "" before one */
+    bool internal;                  /* the document is an internal page Aura generated (error, interim) */
+    bool image_doc;                 /* the document is an image: shown with a generated <img> */
+    bool discard;                   /* the document is of a type Aura cannot show: its bytes are dropped */
+    char last_status[160];          /* the status text last reported (load_progress) */
+    AuBuf *preset_source;           /* au_page_navigate_source: the bytes to show */
+    bool interim;                   /* an internal page shown while the real one is awaited */
+    uint32_t interim_ms;
+    unsigned interim_bits;
+    /* What was shown before this load, for a load that turned out to be a
+     * download. */
+    char *prev_url, *prev_title;
+    bool prev_begun;
 
     /* Text selection: anchor and focus hold a reference to their node. */
     AuTextPos anchor, focus;
@@ -356,6 +382,31 @@ static void compact_fetches(AuPage *p)
 
 static void main_data(AuPage *p, const char *bytes, size_t len);
 static void main_done(AuPage *p, bool ok, const AuFetchInfo *info);
+static void main_response(AuPage *p, const AuFetchResponse *r);
+static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff);
+
+static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
+{
+    Fetch *f = ctx;
+    (void)id;
+    if (f->done || f->cancelled)
+        return;
+    if (f->main) {
+        main_response(f->page, r);
+    } else if (f->page->have_security && f->page->security == AU_SECURITY_SECURE &&
+               r->security != AU_SECURITY_SECURE && r->security != AU_SECURITY_NONE) {
+        f->page->mixed = true; /* an insecure or doubtful resource in a secure page */
+    }
+}
+
+static bool sink_download(void *ctx, uint32_t id, const AuFetchResponse *r, uint32_t handoff)
+{
+    Fetch *f = ctx;
+    (void)id;
+    if (f->done || f->cancelled || !f->main)
+        return false;
+    return main_download(f->page, r, handoff);
+}
 
 static void sink_data(void *ctx, uint32_t id, const void *bytes, size_t len)
 {
@@ -383,6 +434,8 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     if (f->main) {
         main_done(p, ok, info);
     } else {
+        if (info && info->mixed && p->have_security)
+            p->mixed = true;
         p->completed++;
         au_docview_resource_done(p->dv, f->id, ok);
         report_progress(p);
@@ -404,12 +457,15 @@ static const AuPageFetcher *fetcher_for(AuPage *p, const char *url)
 }
 
 /* Starts fetching url from a file or a fetcher. Returns NULL when no
- * source can supply it. Nothing is delivered before the next idle. */
-static Fetch *start_fetch(AuPage *p, const char *url, bool main)
+ * source can supply it. Nothing is delivered before the next idle. The
+ * main document's request carries the navigation's context; a resource's
+ * names the document as its referrer and top-level site. */
+static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kind)
 {
     if (au_url_scheme_is(url, "file")) {
         Fetch *f = fetch_new(p, url, main);
         f->is_file = true;
+        f->kind = kind;
         return f;
     }
     const AuPageFetcher *fe = fetcher_for(p, url);
@@ -417,10 +473,29 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main)
         return NULL;
     Fetch *f = fetch_new(p, url, main);
     f->fetcher = fe;
+    f->kind = kind;
     f->sink.ctx = f;
+    f->sink.response = sink_response;
     f->sink.data = sink_data;
     f->sink.done = sink_done;
-    f->fid = fe->start(fe->ctx, f->url, &f->sink);
+    f->sink.download = main ? sink_download : NULL;
+    AuFetchRequest rq;
+    memset(&rq, 0, sizeof rq);
+    rq.url = f->url;
+    rq.kind = kind;
+    if (main) {
+        rq.document_url = p->referrer;
+        rq.user_activated = true;
+        rq.cache = p->cache_mode;
+        rq.allow_http_fallback = p->allow_http;
+        p->allow_http = false;
+    } else {
+        rq.document_url = p->url;
+        rq.top_level_url = p->url;
+        rq.referrer_policy = p->rpolicy;
+        rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS ? AU_FETCH_CACHE_BYPASS : AU_FETCH_CACHE_NORMAL;
+    }
+    f->fid = fe->start(fe->ctx, &rq, &f->sink);
     if (!f->fid) {
         f->cancelled = true; /* removed at the next compaction */
         return NULL;
@@ -432,10 +507,14 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main)
 static uint32_t loader_request(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind)
 {
     AuPage *p = ctx;
-    (void)dv, (void)kind;
+    (void)dv;
     if (p->nfetches > 2000)
         return 0;
-    Fetch *f = start_fetch(p, url, false);
+    AuFetchKind fk = kind == AU_RES_STYLESHEET ? AU_FETCH_STYLESHEET
+                     : kind == AU_RES_IMAGE    ? AU_FETCH_IMAGE
+                     : kind == AU_RES_FONT     ? AU_FETCH_FONT
+                                               : AU_FETCH_OTHER;
+    Fetch *f = start_fetch(p, url, false, fk);
     if (!f)
         return 0;
     f->id = ++p->next_id;
@@ -799,6 +878,8 @@ static void begin_doc(AuPage *p, const char *url)
     if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, "");
     p->kind = K_DOC;
+    p->internal = false;
+    p->interim = false;
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_scroll(p->dv, 0, 0);
@@ -1031,10 +1112,13 @@ static void start_main_doc(AuPage *p, const char *bytes, size_t len, const char 
     if (starts_with_ci(u, "view-source:"))
         u += 12;
     size_t q = strcspn(u, "?#");
+    if (!content_type && p->content_type && p->content_type[0])
+        content_type = p->content_type;
     if (p->source_mode) {
         p->plain = true;
     } else if (content_type) {
-        p->plain = starts_with_ci(content_type, "text/plain");
+        /* HTML is rendered; every other type shown is text. */
+        p->plain = !starts_with_ci(content_type, "text/html") && !starts_with_ci(content_type, "application/xhtml");
     } else if (ends_with(u, q, ".html") || ends_with(u, q, ".htm") || ends_with(u, q, ".xhtml") ||
                ends_with(u, q, ".shtml")) {
         p->plain = false;
@@ -1043,6 +1127,8 @@ static void start_main_doc(AuPage *p, const char *bytes, size_t len, const char 
     } else {
         p->plain = !looks_like_html(bytes, len);
     }
+    if (p->interim)
+        set_title(p, "");
     begin_doc(p, p->url);
     if (p->plain) {
         AuBuf name, b;
@@ -1062,7 +1148,9 @@ static void start_main_doc(AuPage *p, const char *bytes, size_t len, const char 
 
 static void main_data(AuPage *p, const char *bytes, size_t len)
 {
-    if (!p->begun)
+    if (p->image_doc || p->discard)
+        return; /* the <img> the page made fetches it; or nothing to show */
+    if (!p->begun || p->interim)
         start_main_doc(p, bytes, len, NULL);
     au_buf_append(&p->source, bytes, len);
     if (p->plain)
@@ -1081,23 +1169,460 @@ static void show_error(AuPage *p, const char *title, const char *what)
     build_error(p, &b, title, what);
     p->failed = true;
     load_html_now(p, b.data, b.len, title);
+    p->internal = true;
     au_buf_free(&b);
+}
+
+/* ---- Network error pages ----
+ * Internal pages the engine renders in place of the document. Their links
+ * to aura-action: URLs (continue past a certificate error, use plain
+ * http, try again) work only on these pages (p->internal), never on a web
+ * page. */
+
+static const char *const month_names[12] = {"January", "February", "March",     "April",   "May",      "June",
+                                            "July",    "August",   "September", "October", "November", "December"};
+
+/* "14 November 2026, 10:00 UTC". */
+static void put_date(AuBuf *b, int64_t t)
+{
+    if (!t) {
+        au_buf_puts(b, "unknown");
+        return;
+    }
+    int64_t day = au_day_of(t);
+    int y, m, d, wd;
+    au_date_of_day(day, &y, &m, &d, &wd);
+    int64_t secs = t - day * 86400;
+    au_buf_printf(b, "%d %s %d, %02d:%02d UTC", d, month_names[(m - 1) % 12], y, (int)(secs / 3600),
+                  (int)(secs / 60 % 60));
+}
+
+static void put_fingerprint(AuBuf *b, const uint8_t *h)
+{
+    for (int i = 0; i < 32; i++) {
+        au_buf_printf(b, "%02X", h[i]);
+        if (i == 15)
+            au_buf_puts(b, "<br>");
+        else if (i < 31)
+            au_buf_putc(b, ':');
+    }
+}
+
+static void put_cert_entry(AuBuf *b, const AuFetchCertEntry *e)
+{
+    au_buf_puts(b, "<table class=cert><tr><th>Issued to</th><td>");
+    html_escape_str(b, e->subject);
+    au_buf_puts(b, "</td></tr><tr><th>Issued by</th><td>");
+    html_escape_str(b, e->issuer);
+    au_buf_puts(b, "</td></tr><tr><th>Valid from</th><td>");
+    put_date(b, e->not_before);
+    au_buf_puts(b, "</td></tr><tr><th>Valid until</th><td>");
+    put_date(b, e->not_after);
+    au_buf_puts(b, "</td></tr>");
+    if (e->san[0]) {
+        au_buf_puts(b, "<tr><th>Names</th><td>");
+        html_escape_str(b, e->san);
+        au_buf_puts(b, "</td></tr>");
+    }
+    au_buf_puts(b, "<tr><th>SHA-256</th><td class=url>");
+    put_fingerprint(b, e->sha256);
+    au_buf_puts(b, "</td></tr></table>");
+}
+
+static const char cert_css[] = "<style>table.cert { border-collapse: collapse; margin: 6px 0 12px; font-size: 13px }"
+                               "table.cert th { text-align: left; padding: 2px 12px 2px 0; color: #5a5a5a;"
+                               " font-weight: normal; vertical-align: top; white-space: nowrap }"
+                               "table.cert td { padding: 2px 0 }"
+                               ".action { margin: 18px 0 }"
+                               ".action a { padding: 3px 10px; border: 1px solid #888; background: #eee;"
+                               " color: #000; text-decoration: none }</style>";
+
+static void cert_chain_html(AuBuf *b, const AuFetchCert *c)
+{
+    int n = c->count < AU_FETCH_CERT_CHAIN ? c->count : AU_FETCH_CERT_CHAIN;
+    for (int i = 0; i < n; i++) {
+        au_buf_printf(b, "<h3>%s</h3>", i == 0 ? "The site's certificate" : "Issuer's certificate");
+        put_cert_entry(b, &c->chain[i]);
+    }
+    if (c->count > n)
+        au_buf_printf(b, "<p class=note>%d more certificates are not shown.</p>", c->count - n);
+}
+
+bool au_page_certificate_html(const AuPage *p, AuBuf *b)
+{
+    const AuFetchCert *c = p->cert;
+    if (!c)
+        return false;
+    page_head(b, "Certificate");
+    au_buf_puts(b, cert_css);
+    au_buf_puts(b, "<h1>Certificate for ");
+    html_escape_str(b, c->host);
+    au_buf_puts(b, "</h1>");
+    if (c->overridden) {
+        au_buf_puts(b, "<p><b>Not valid:</b> ");
+        html_escape_str(b, c->reason);
+        au_buf_puts(b, ". You chose to continue to this site anyway, for this session.</p>");
+    } else if (c->error) {
+        au_buf_puts(b, "<p><b>Not valid:</b> ");
+        html_escape_str(b, c->reason);
+        au_buf_puts(b, ".</p>");
+    } else {
+        au_buf_puts(b, "<p>The connection is encrypted and the certificate is valid: it was issued for this site "
+                       "by an authority Aura trusts.</p>");
+    }
+    if (c->protocol[0]) {
+        au_buf_puts(b, "<table class=cert><tr><th>Protocol</th><td>");
+        html_escape_str(b, c->protocol);
+        au_buf_puts(b, "</td></tr><tr><th>Cipher suite</th><td>");
+        html_escape_str(b, c->cipher[0] ? c->cipher : "unknown");
+        au_buf_puts(b, "</td></tr><tr><th>Checked</th><td>");
+        put_date(b, c->checked_at);
+        au_buf_puts(b, "</td></tr></table>");
+    }
+    if (c->count == 0)
+        au_buf_puts(b, "<p class=note>The server sent no certificates on this connection.</p>");
+    cert_chain_html(b, c);
+    au_buf_puts(b, "</body></html>");
+    return true;
+}
+
+static const char *status_reason(int st)
+{
+    switch (st) {
+    case 400: return "Bad Request";
+    case 401: return "Unauthorized";
+    case 403: return "Forbidden";
+    case 404: return "Not Found";
+    case 405: return "Method Not Allowed";
+    case 406: return "Not Acceptable";
+    case 408: return "Request Timeout";
+    case 410: return "Gone";
+    case 429: return "Too Many Requests";
+    case 500: return "Internal Server Error";
+    case 501: return "Not Implemented";
+    case 502: return "Bad Gateway";
+    case 503: return "Service Unavailable";
+    case 504: return "Gateway Timeout";
+    default: return st >= 500 ? "Server Error" : "Error";
+    }
+}
+
+/* Shows an internal page built in b (the head and title are b's), as the
+ * failed load's document. */
+static void show_internal(AuPage *p, AuBuf *b, const char *title, bool failed)
+{
+    p->failed = failed;
+    load_html_now(p, b->data, b->len, title);
+    p->internal = true;
+}
+
+static void error_head(AuPage *p, AuBuf *b, const char *title, const char *heading)
+{
+    page_head(b, title);
+    au_buf_puts(b, cert_css);
+    au_buf_puts(b, "<h1>");
+    html_escape_str(b, heading);
+    au_buf_puts(b, "</h1><p class=url>");
+    html_escape_str(b, p->url);
+    au_buf_puts(b, "</p>");
+}
+
+static void show_net_error(AuPage *p, const AuFetchInfo *info)
+{
+    char host[256];
+    au_url_host(p->url, host, sizeof host);
+    AuBuf b;
+    au_buf_init(&b);
+    AuFetchError e = info ? info->error : AU_FETCH_ERR_CONNECT;
+    const char *title = "Cannot load page";
+    const char *retry = "<p class=action><a href='aura-action:retry'>Try Again</a></p>";
+    switch (e) {
+    case AU_FETCH_ERR_DNS:
+        title = "Server not found";
+        error_head(p, &b, title, "Aura cannot find this server");
+        au_buf_puts(&b, "<p>No server named <b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b> was found. Check the address for typing errors. If it is right, check that the "
+                        "Mac is connected to the internet (the TCP/IP control panel).</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_CONNECT:
+        title = "Cannot connect";
+        error_head(p, &b, title, "Aura cannot connect to this server");
+        au_buf_puts(&b, "<p>The server <b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b> refused the connection or cannot be reached. It may be down, or a firewall or "
+                        "proxy may be in the way.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_TIMEOUT:
+        title = "Connection timed out";
+        error_head(p, &b, title, "The connection timed out");
+        au_buf_puts(&b, "<p>The server <b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b> took too long to respond. It may be busy or unreachable.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_RESET:
+        title = "Connection reset";
+        error_head(p, &b, title, "The connection was reset");
+        au_buf_puts(&b, "<p>The connection to the server broke while the page was loading.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_NO_NETWORK:
+        title = "No network";
+        error_head(p, &b, title, "No network connection");
+        au_buf_puts(&b, "<p>");
+        html_escape_str(&b, info && info->message && info->message[0] ? info->message
+                                                                     : "Open Transport TCP/IP is not available.");
+        au_buf_puts(&b, "</p><p>Check the TCP/IP control panel, then try again.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_TLS:
+        title = "Secure connection failed";
+        error_head(p, &b, title, "Aura cannot make a secure connection");
+        au_buf_puts(&b, "<p>The secure connection to <b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b> failed. The server may need a protocol or cipher Aura does not offer (Aura speaks "
+                        "TLS 1.2 with ECDHE and AES-GCM or ChaCha20-Poly1305).</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_CLOCK: {
+        title = "Date is wrong";
+        error_head(p, &b, title, "Your Mac's date looks wrong");
+        au_buf_puts(&b, "<p>Aura cannot check this site's certificate because the Mac's clock says <b>");
+        put_date(&b, info && info->cert ? info->cert->checked_at : 0);
+        au_buf_puts(&b, "</b>, which is earlier than the certificates Aura knows about were issued.</p>"
+                        "<p>Set the date and time in the Date &amp; Time control panel, then try again.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    }
+    case AU_FETCH_ERR_CERT: {
+        const AuFetchCert *c = info ? info->cert : NULL;
+        title = "Certificate problem";
+        error_head(p, &b, title, "This site's certificate is not valid");
+        au_buf_puts(&b, "<p>Aura cannot confirm that this is the real <b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b>: ");
+        html_escape_str(&b, c && c->reason[0] ? c->reason : "the certificate is not valid");
+        au_buf_puts(&b, ". Someone may be trying to read or change what you send and receive.</p>");
+        if (c)
+            cert_chain_html(&b, c);
+        if (c && c->hsts) {
+            au_buf_puts(&b, "<p><b>This site must always be secure</b> (it uses HTTP Strict Transport Security), so "
+                            "Aura offers no way past this error.</p>");
+        } else if (c && c->count > 0 && p->main_fetch && p->main_fetch->fetcher &&
+                   p->main_fetch->fetcher->allow_cert) {
+            au_buf_puts(&b, "<p class=action><a href='aura-action:continue'>Continue Anyway</a></p>"
+                            "<p class=note>Continuing trusts this certificate for this site until you quit Aura. "
+                            "The address field then shows that the site is not secure.</p>");
+        }
+        break;
+    }
+    case AU_FETCH_ERR_HTTPS_FALLBACK:
+        title = "HTTPS not available";
+        error_head(p, &b, title, "This site does not support HTTPS");
+        au_buf_puts(&b, "<p><b>");
+        html_escape_str(&b, host);
+        au_buf_puts(&b, "</b> cannot be reached securely. On the plain HTTP site, what you send and receive "
+                        "can be read and changed by others on the network.</p>"
+                        "<p class=action><a href='aura-action:http'>Continue to the HTTP Site</a></p>");
+        break;
+    case AU_FETCH_ERR_REDIRECTS:
+        title = "Too many redirects";
+        error_head(p, &b, title, "This page redirects too many times");
+        au_buf_puts(&b, "<p>The server keeps sending Aura to another address. This can happen when a site needs "
+                        "cookies that Aura's settings block.</p>");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_PROTOCOL:
+    case AU_FETCH_ERR_DECODE:
+        title = "Bad response";
+        error_head(p, &b, title, "The server sent a response Aura cannot read");
+        au_buf_puts(&b, retry);
+        break;
+    case AU_FETCH_ERR_TOO_LARGE:
+        title = "Too large";
+        error_head(p, &b, title, "The response is too large");
+        break;
+    case AU_FETCH_ERR_PROXY:
+        title = "Proxy error";
+        error_head(p, &b, title, "The proxy server refused the request");
+        au_buf_puts(&b, "<p>Check the proxy settings in Preferences &gt; Network.</p>");
+        break;
+    case AU_FETCH_ERR_BLOCKED:
+        title = "Blocked";
+        error_head(p, &b, title, "Aura blocked this page");
+        au_buf_puts(&b, "<p>The request was refused by Aura's security rules (for example, plain HTTP to a site that "
+                        "must always be secure).</p>");
+        break;
+    default:
+        error_head(p, &b, title, "Aura cannot load this page");
+        au_buf_puts(&b, retry);
+        break;
+    }
+    au_buf_puts(&b, "</body></html>");
+    show_internal(p, &b, title, true);
+    au_buf_free(&b);
+}
+
+static void show_http_error(AuPage *p)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    char heading[96];
+    snprintf(heading, sizeof heading, "%d %s", p->status, status_reason(p->status));
+    error_head(p, &b, heading, heading);
+    au_buf_puts(&b, p->status >= 500 ? "<p>The server had a problem and sent no page.</p>"
+                                     : "<p>The server refused the request and sent no page.</p>");
+    au_buf_puts(&b, "</body></html>");
+    show_internal(p, &b, heading, true);
+    au_buf_free(&b);
+}
+
+static void show_unsupported(AuPage *p)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    error_head(p, &b, "Cannot show file", "Aura cannot show this kind of file");
+    au_buf_puts(&b, "<p>The file is of type <b>");
+    html_escape_str(&b, p->content_type && p->content_type[0] ? p->content_type : "unknown");
+    au_buf_puts(&b, "</b>. To keep it, choose Save Link As in the link's contextual menu.</p></body></html>");
+    show_internal(p, &b, "Cannot show file", true);
+    au_buf_free(&b);
+}
+
+/* Types a document may be shown as: HTML, text and images. */
+static bool displayable_type(const char *t)
+{
+    return !t[0] || starts_with_ci(t, "text/") || starts_with_ci(t, "image/") ||
+           starts_with_ci(t, "application/xhtml+xml") || starts_with_ci(t, "application/xml") ||
+           starts_with_ci(t, "application/json") || starts_with_ci(t, "application/javascript");
+}
+
+static AuFetchReferrerPolicy parse_referrer_policy(const char *v, AuFetchReferrerPolicy cur)
+{
+    static const char *const names[] = {"",       "no-referrer",          "no-referrer-when-downgrade",
+                                        "same-origin", "origin",          "strict-origin",
+                                        "origin-when-cross-origin", "strict-origin-when-cross-origin",
+                                        "unsafe-url"};
+    /* The last known token of a comma-separated list wins. */
+    while (*v) {
+        while (*v == ' ' || *v == ',' || *v == '\t')
+            v++;
+        size_t n = strcspn(v, ", \t");
+        for (int i = 1; i < 9; i++)
+            if (strlen(names[i]) == n && au_ieq(v, n, names[i], n))
+                cur = (AuFetchReferrerPolicy)i;
+        v += n;
+    }
+    return cur;
+}
+
+static void main_response(AuPage *p, const AuFetchResponse *r)
+{
+    if (r->url && r->url[0] && strcmp(r->url, p->url) != 0) {
+        /* A redirect: the address field and the history entry take the
+         * final URL, once. */
+        set_str(&p->url, r->url);
+        if (p->cb.url_changed)
+            p->cb.url_changed(p->cb.ctx, p, p->url);
+    }
+    p->status = r->status;
+    set_str(&p->content_type, r->content_type);
+    p->security = r->security;
+    p->have_security = true;
+    p->mixed = false;
+    au_free(p->cert);
+    p->cert = NULL;
+    if (r->cert) {
+        p->cert = au_alloc(sizeof *p->cert);
+        *p->cert = *r->cert;
+    }
+    if (r->referrer_policy && r->referrer_policy[0])
+        p->rpolicy = parse_referrer_policy(r->referrer_policy, p->rpolicy);
+    if (!displayable_type(r->content_type) && !p->source_mode) {
+        p->discard = true; /* main_data drops it; main_done says so */
+        return;
+    }
+    if (starts_with_ci(r->content_type, "image/") && !p->source_mode) {
+        AuBuf b, name;
+        au_buf_init(&b);
+        au_buf_init(&name);
+        url_file_name(p->url, &name);
+        au_buf_puts(&b, "<!DOCTYPE html><html><head><title>");
+        html_escape(&b, name.data ? name.data : "", name.len);
+        au_buf_puts(&b, "</title></head><body style='margin:0'><img style='display:block' src=\"");
+        html_escape_str(&b, p->url);
+        au_buf_puts(&b, "\">");
+        begin_doc(p, p->url);
+        au_docview_feed(p->dv, b.data, b.len);
+        p->image_doc = true;
+        au_buf_free(&b);
+        au_buf_free(&name);
+    }
+}
+
+static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
+{
+    if (!p->cb.download || p->source_mode)
+        return false;
+    char *url = au_strndup(p->url, strlen(p->url));
+    /* Back to what was shown before, then hand over (the browser drops
+     * the history entry this load made). */
+    set_str(&p->url, p->prev_url ? p->prev_url : "about:blank");
+    set_title(p, p->prev_title ? p->prev_title : "");
+    if (!p->begun)
+        p->begun = p->prev_begun;
+    p->main_done = true;
+    if (p->main_fetch) {
+        p->main_fetch->done = true; /* no more calls from the fetcher */
+        p->main_fetch = NULL;
+    }
+    bool took = p->cb.download(p->cb.ctx, p, r, handoff);
+    au_free(url);
+    if (p->cb.url_changed)
+        p->cb.url_changed(p->cb.ctx, p, p->url);
+    finish(p, true);
+    return took;
 }
 
 static void main_done(AuPage *p, bool ok, const AuFetchInfo *info)
 {
-    if (info && info->url && strcmp(info->url, p->url) != 0) {
+    /* The final URL, except after HTTPS-first's failed upgrade, where the
+     * address stays the one the user asked for. */
+    if (info && info->url && strcmp(info->url, p->url) != 0 && info->error != AU_FETCH_ERR_HTTPS_FALLBACK) {
         set_str(&p->url, info->url);
         if (p->cb.url_changed)
             p->cb.url_changed(p->cb.ctx, p, p->url);
     }
+    if (info && info->cert && !p->cert) {
+        p->cert = au_alloc(sizeof *p->cert);
+        *p->cert = *info->cert;
+        p->security = AU_SECURITY_CERT_ERROR;
+        p->have_security = true;
+    }
+    bool is_file = au_url_scheme_is(p->url, "file");
     if (!ok && (!p->main_fetch || p->main_fetch->off == 0)) {
         p->main_done = true;
-        show_error(p, au_url_scheme_is(p->url, "file") ? "File not found" : "Cannot load page",
-                   au_url_scheme_is(p->url, "file") ? "Cannot open this file" : "Cannot load this page");
+        if (is_file || !info)
+            show_error(p, is_file ? "File not found" : "Cannot load page",
+                       is_file ? "Cannot open this file" : "Cannot load this page");
+        else
+            show_net_error(p, info);
         return;
     }
-    if (!p->begun)
+    if (p->discard) {
+        p->main_done = true;
+        show_unsupported(p);
+        return;
+    }
+    if (ok && p->status >= 400 && p->main_fetch && p->main_fetch->off == 0) {
+        p->main_done = true;
+        show_http_error(p);
+        return;
+    }
+    if (!p->begun || p->interim)
         start_main_doc(p, "", 0, info ? info->content_type : NULL);
     if (p->plain)
         au_docview_feed(p->dv, "</pre></body></html>", 20);
@@ -1156,8 +1681,30 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     au_buf_free(&p->source);
     p->gen++;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
-    au_free(p->url);
+    /* What is shown now, in case this load turns out to be a download. */
+    au_free(p->prev_url);
+    au_free(p->prev_title);
+    p->prev_url = p->url;
+    p->prev_title = au_strndup(p->title, strlen(p->title));
+    p->prev_begun = p->begun;
     p->url = u;
+    /* The referrer: this page's own address when one of its links asked
+     * for the navigation; none when the user typed or chose it. */
+    au_free(p->referrer);
+    p->referrer = NULL;
+    if (p->link_target && !strcmp(p->link_target, u) && p->link_referrer)
+        p->referrer = au_strndup(p->link_referrer, strlen(p->link_referrer));
+    au_free(p->link_target);
+    au_free(p->link_referrer);
+    p->link_target = p->link_referrer = NULL;
+    p->rpolicy = AU_FETCH_RP_DEFAULT;
+    p->have_security = p->mixed = false;
+    au_free(p->cert);
+    p->cert = NULL;
+    p->status = 0;
+    set_str(&p->content_type, "");
+    p->image_doc = p->discard = false;
+    p->last_status[0] = 0;
     p->failed = false;
     p->begun = false;
     p->main_done = false;
@@ -1228,8 +1775,24 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         p->source_mode = true;
         target = u + 12;
     }
+    if (p->preset_source) {
+        /* View Source of a page whose bytes are at hand. */
+        AuBuf src = *p->preset_source;
+        au_free(p->preset_source);
+        p->preset_source = NULL;
+        p->main_done = false;
+        start_main_doc(p, src.data ? src.data : "", src.len, NULL);
+        au_buf_append(&p->source, src.data ? src.data : "", src.len);
+        feed_plain(p, src.data ? src.data : "", src.len);
+        au_buf_free(&src);
+        au_docview_feed(p->dv, "</pre></body></html>", 20);
+        au_docview_finish(p->dv);
+        p->main_done = true;
+        check_finished(p);
+        return;
+    }
     if (au_url_scheme_is(target, "file") || fetcher_for(p, target)) {
-        p->main_fetch = start_fetch(p, target, true);
+        p->main_fetch = start_fetch(p, target, true, AU_FETCH_DOCUMENT);
         if (p->main_fetch) {
             p->main = p->main_fetch->is_file ? MAIN_FILE : MAIN_FETCH;
             return;
@@ -1246,17 +1809,48 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
 
 void au_page_navigate(AuPage *p, const char *url)
 {
+    p->cache_mode = AU_FETCH_CACHE_NORMAL;
     start_load(p, url, false, 0, 0, false);
 }
 
 void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll_y)
 {
+    p->cache_mode = AU_FETCH_CACHE_NORMAL;
     start_load(p, url, true, scroll_x, scroll_y, false);
 }
 
 void au_page_reload(AuPage *p)
 {
+    p->cache_mode = AU_FETCH_CACHE_REVALIDATE;
     start_load(p, p->url, true, p->scroll_x, p->scroll_y, true);
+}
+
+void au_page_reload_bypass(AuPage *p)
+{
+    p->cache_mode = AU_FETCH_CACHE_BYPASS;
+    start_load(p, p->url, true, p->scroll_x, p->scroll_y, true);
+}
+
+void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_t len)
+{
+    au_free(p->preset_source);
+    p->preset_source = au_alloc(sizeof *p->preset_source);
+    au_buf_init(p->preset_source);
+    au_buf_append(p->preset_source, data, len);
+    p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    start_load(p, url, false, 0, 0, true);
+}
+
+void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len)
+{
+    p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    start_load(p, "about:blank", false, 0, 0, true);
+    set_str(&p->url, url);
+    if (p->cb.url_changed)
+        p->cb.url_changed(p->cb.ctx, p, p->url);
+    p->loading = true;
+    load_html_now(p, html, len, NULL);
+    p->internal = true;
 }
 
 void au_page_stop(AuPage *p)
@@ -1344,6 +1938,13 @@ void au_page_free(AuPage *p)
     au_free(p->title);
     au_free(p->fragment);
     au_free(p->open_url);
+    au_free(p->link_referrer);
+    au_free(p->link_target);
+    au_free(p->referrer);
+    au_free(p->cert);
+    au_free(p->content_type);
+    au_free(p->prev_url);
+    au_free(p->prev_title);
     au_free(p);
 }
 
@@ -1366,10 +1967,20 @@ AuSecurity au_page_security(const AuPage *p)
     const char *u = p->url;
     if (starts_with_ci(u, "view-source:"))
         u += 12;
-    /* Nothing is connected to TLS yet, so HTTPS is not claimed secure. */
+    if (p->have_security) {
+        if (p->security == AU_SECURITY_SECURE && p->mixed)
+            return AU_SECURITY_MIXED;
+        return p->security;
+    }
+    /* Before the response: http is never secure; https says nothing yet. */
     if (au_url_scheme_is(u, "http"))
         return AU_SECURITY_NOT_SECURE;
     return AU_SECURITY_NONE;
+}
+
+const AuFetchCert *au_page_cert(const AuPage *p)
+{
+    return p->cert;
 }
 
 void au_page_set_viewport(AuPage *p, int width, int height)
@@ -1456,6 +2067,25 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
     }
 }
 
+/* A link on an internal page: continue past a certificate error (for
+ * this host and certificate, this session), accept plain http after
+ * HTTPS-first failed, or try again. */
+static void internal_action(AuPage *p, const char *what)
+{
+    if (!strcmp(what, "continue")) {
+        const AuPageFetcher *fe = fetcher_for(p, p->url);
+        if (!p->cert || p->cert->hsts || p->cert->clock_wrong || p->cert->count < 1 || !fe || !fe->allow_cert ||
+            !fe->allow_cert(fe->ctx, p->cert->host, p->cert->chain[0].sha256))
+            return;
+        au_page_reload(p);
+    } else if (!strcmp(what, "http")) {
+        p->allow_http = true;
+        au_page_reload(p);
+    } else if (!strcmp(what, "retry")) {
+        au_page_reload(p);
+    }
+}
+
 bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
@@ -1468,8 +2098,20 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     if (p->open_url) {
         char *u = p->open_url;
         p->open_url = NULL;
-        if (p->cb.open_url)
-            p->cb.open_url(p->cb.ctx, p, u, p->open_new_tab);
+        if (starts_with_ci(u, "aura-action:")) {
+            /* Only Aura's own pages may ask for these. */
+            if (p->internal)
+                internal_action(p, u + 12);
+        } else {
+            /* The navigation this link causes has this page as referrer. */
+            if (!p->open_new_tab && !p->internal && (au_url_scheme_is(p->url, "http") ||
+                                                     au_url_scheme_is(p->url, "https"))) {
+                set_str(&p->link_referrer, p->url);
+                set_str(&p->link_target, u);
+            }
+            if (p->cb.open_url)
+                p->cb.open_url(p->cb.ctx, p, u, p->open_new_tab);
+        }
         au_free(u);
         used = true;
     }
@@ -1552,6 +2194,95 @@ static bool file_step(AuPage *p)
     return true;
 }
 
+/* The main document's fetch status, while it has not begun. */
+static bool main_status(const AuPage *p, AuFetchStatus *st)
+{
+    const Fetch *f = p->main_fetch;
+    if (!p->loading || !f || f->done || f->cancelled || !f->fetcher || !f->fetcher->status)
+        return false;
+    return f->fetcher->status(f->fetcher->ctx, f->fid, st);
+}
+
+void au_page_status_text(const AuPage *p, char *out, size_t cap)
+{
+    out[0] = 0;
+    if (!p->loading || !cap)
+        return;
+    char host[256];
+    au_url_host(p->url, host, sizeof host);
+    AuFetchStatus st;
+    if ((!p->begun || p->interim) && main_status(p, &st)) {
+        switch (st.phase) {
+        case AU_FETCH_PHASE_ENTROPY:
+            snprintf(out, cap, "Gathering randomness for a secure connection (move the mouse to help)");
+            return;
+        case AU_FETCH_PHASE_RESOLVING: snprintf(out, cap, "Looking up %s", host); return;
+        case AU_FETCH_PHASE_CONNECTING: snprintf(out, cap, "Connecting to %s", host); return;
+        case AU_FETCH_PHASE_SECURING: snprintf(out, cap, "Making a secure connection to %s", host); return;
+        case AU_FETCH_PHASE_SENDING:
+        case AU_FETCH_PHASE_WAITING: snprintf(out, cap, "Waiting for %s", host); return;
+        case AU_FETCH_PHASE_RECEIVING: snprintf(out, cap, "Receiving the page from %s", host); return;
+        default: break;
+        }
+    }
+    if (p->requested > 0 && p->completed < p->requested) {
+        snprintf(out, cap, "Loading resources: %u of %u done", (unsigned)p->completed, (unsigned)p->requested);
+        return;
+    }
+    snprintf(out, cap, "Loading %s", host[0] ? host : p->url);
+}
+
+/* While https waits for the random source, the page says so, with the
+ * pool's progress (refreshed twice a second). */
+static void update_interim(AuPage *p)
+{
+    AuFetchStatus st;
+    if ((p->begun && !p->interim) || !main_status(p, &st) || st.phase != AU_FETCH_PHASE_ENTROPY ||
+        !st.entropy_needed)
+        return;
+    uint32_t t = now(p);
+    if (p->interim && t - p->interim_ms < 500 && st.entropy_bits == p->interim_bits)
+        return;
+    if (!p->interim && t - p->load_start < 300)
+        return; /* a short wait needs no page */
+    unsigned pct = st.entropy_bits >= st.entropy_needed ? 100 : st.entropy_bits * 100 / st.entropy_needed;
+    AuBuf b;
+    au_buf_init(&b);
+    page_head(&b, "Preparing a secure connection");
+    au_buf_puts(&b, "<h1>Preparing a secure connection</h1><p class=url>");
+    html_escape_str(&b, p->url);
+    au_buf_printf(&b,
+                  "</p><p>Aura is gathering randomness for the encryption keys of secure connections. This "
+                  "happens once, the first time Aura runs on this Mac; later runs start from a saved seed.</p>"
+                  "<p><b>Moving the mouse or typing makes it faster.</b></p>"
+                  "<div style='width:300px;height:14px;border:1px solid #666;background:#fff'>"
+                  "<div style='width:%upx;height:14px;background:#203c78'></div></div>"
+                  "<p class=note>%u%% (%u of %u bits)</p></body></html>",
+                  pct * 3, pct, st.entropy_bits < st.entropy_needed ? st.entropy_bits : st.entropy_needed,
+                  st.entropy_needed);
+    begin_doc(p, p->url);
+    au_docview_feed(p->dv, b.data, b.len);
+    au_docview_finish(p->dv);
+    p->interim = true;
+    p->internal = true;
+    p->interim_ms = t;
+    p->interim_bits = st.entropy_bits;
+    p->dirty = true;
+    set_title(p, "Preparing a secure connection");
+    au_buf_free(&b);
+}
+
+static void report_status(AuPage *p)
+{
+    char s[sizeof p->last_status];
+    au_page_status_text(p, s, sizeof s);
+    if (strcmp(s, p->last_status)) {
+        snprintf(p->last_status, sizeof p->last_status, "%s", s);
+        if (p->cb.load_progress)
+            p->cb.load_progress(p->cb.ctx, p);
+    }
+}
+
 void au_page_idle(AuPage *p)
 {
     if (p->main == MAIN_SIM && p->loading) {
@@ -1605,8 +2336,10 @@ void au_page_idle(AuPage *p)
     if (gen != p->gen)
         return; /* a callback started another load */
     compact_fetches(p);
+    update_interim(p);
     maybe_layout(p, false);
     check_finished(p);
+    report_status(p);
 }
 
 bool au_page_busy(const AuPage *p)

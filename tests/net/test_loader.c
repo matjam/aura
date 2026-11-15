@@ -266,10 +266,20 @@ static void test_downloads(void)
 /* ---- The page fetcher adapter ---- */
 typedef struct S {
     AuBuf body;
-    bool done, ok;
-    char ct[64], url[256];
+    bool done, ok, responded;
+    char ct[64], url[256], resp_url[256];
+    AuFetchError err;
+    AuSecurity security;
 } S;
 
+static void s_response(void *ctx, uint32_t id, const AuFetchResponse *r)
+{
+    (void)id;
+    S *s = ctx;
+    s->responded = true;
+    s->security = r->security;
+    snprintf(s->resp_url, sizeof s->resp_url, "%s", r->url);
+}
 static void s_data(void *ctx, uint32_t id, const void *b, size_t n)
 {
     (void)id;
@@ -281,8 +291,17 @@ static void s_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *i)
     S *s = ctx;
     s->done = true;
     s->ok = ok;
+    s->err = i ? i->error : AU_FETCH_OK;
     snprintf(s->ct, sizeof s->ct, "%s", i && i->content_type ? i->content_type : "");
     snprintf(s->url, sizeof s->url, "%s", i && i->url ? i->url : "");
+}
+
+static void run_fetcher(FakeNet *f, AuPageFetcher *fe, int rounds)
+{
+    for (int i = 0; i < rounds; i++) {
+        fe->poll(fe->ctx);
+        f->now += 10;
+    }
 }
 
 static void test_adapter(void)
@@ -307,53 +326,90 @@ static void test_adapter(void)
     memset(&b, 0, sizeof b);
     au_buf_init(&a.body);
     au_buf_init(&b.body);
-    AuFetchSink sa = {&a, s_data, s_done}, sb = {&b, s_data, s_done};
-    uint32_t ida = fe.start(fe.ctx, "http://site.test/", &sa);
-    /* The image is requested while the page loads: a subresource. */
-    uint32_t idb = fe.start(fe.ctx, "http://tracker.test/p.gif", &sb);
+    AuFetchSink sa = {&a, s_response, s_data, s_done, NULL}, sb = {&b, s_response, s_data, s_done, NULL};
+    AuFetchRequest ra = {0}, rb = {0};
+    ra.url = "http://site.test/";
+    ra.kind = AU_FETCH_DOCUMENT;
+    ra.user_activated = true;
+    uint32_t ida = fe.start(fe.ctx, &ra, &sa);
+    /* The page's image: a third-party subresource of the page. */
+    rb.url = "http://tracker.test/p.gif";
+    rb.kind = AU_FETCH_IMAGE;
+    rb.document_url = "http://site.test/";
+    rb.top_level_url = "http://site.test/";
+    uint32_t idb = fe.start(fe.ctx, &rb, &sb);
     CHECK(ida && idb && ida != idb, "ids");
-    for (int i = 0; i < 200; i++) {
-        fe.poll(fe.ctx);
-        f.now += 10;
-    }
-    CHECK(a.done && a.ok && !strcmp(a.ct, "text/html") && a.body.len == 16, "page: %s %zu", a.ct, a.body.len);
+    run_fetcher(&f, &fe, 200);
+    CHECK(a.done && a.ok && a.responded && !strcmp(a.ct, "text/html") && a.body.len == 16, "page: %s %zu", a.ct,
+          a.body.len);
+    CHECK(a.security == AU_SECURITY_NOT_SECURE, "http page: not secure");
     CHECK(b.done && b.ok && !strcmp(b.ct, "image/gif"), "image: %s", b.ct);
     CHECK(tracker->nreq == 1 && strstr(tracker->requests[0], "Referer: http://site.test/"),
           "subresource has the page as referrer");
     CHECK(au_cookie_jar_count(jar) == 1, "third-party cookie not stored: %zu cookies", au_cookie_jar_count(jar));
-    CHECK(au_net_page_fetcher_security(pf, "http://site.test/", NULL) == AU_LOAD_SECURITY_NOT_SECURE,
-          "security recorded for the navigation");
-    /* After a quiet period, the next start is a navigation again. */
-    f.now += AU_FETCHER_QUIET_MS + 100;
+    /* A navigation by the user sends no referrer, even right after another
+     * load (no guessing from timing). */
     fake_respond(tracker, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
     S c;
     memset(&c, 0, sizeof c);
     au_buf_init(&c.body);
-    AuFetchSink sc = {&c, s_data, s_done};
-    fe.start(fe.ctx, "http://tracker.test/", &sc);
-    for (int i = 0; i < 200; i++) {
-        fe.poll(fe.ctx);
-        f.now += 10;
-    }
+    AuFetchSink sc = {&c, s_response, s_data, s_done, NULL};
+    AuFetchRequest rc = {0};
+    rc.url = "http://tracker.test/";
+    rc.kind = AU_FETCH_DOCUMENT;
+    fe.start(fe.ctx, &rc, &sc);
+    run_fetcher(&f, &fe, 200);
     CHECK(c.done && c.ok, "second navigation");
     CHECK(tracker->nreq == 2 && !strstr(tracker->requests[1], "Referer:"), "a navigation sends no referrer");
-    /* Cancel: no callbacks. */
+    CHECK(strstr(tracker->requests[1], "Upgrade-Insecure-Requests: 1") != NULL, "navigation mode");
+    /* Reload: revalidate. */
+    fake_respond(site, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nzz");
+    S r2;
+    memset(&r2, 0, sizeof r2);
+    au_buf_init(&r2.body);
+    AuFetchSink sr = {&r2, s_response, s_data, s_done, NULL};
+    AuFetchRequest rr = {0};
+    rr.url = "http://site.test/";
+    rr.kind = AU_FETCH_DOCUMENT;
+    rr.cache = AU_FETCH_CACHE_REVALIDATE;
+    fe.start(fe.ctx, &rr, &sr);
+    run_fetcher(&f, &fe, 200);
+    CHECK(r2.done && site->nreq == 2 && strstr(site->requests[1], "Cache-Control: max-age=0"), "reload revalidates");
+    /* Status: a fetch that has not started its connection. */
     fake_respond(site, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nzz");
     S d;
     memset(&d, 0, sizeof d);
     au_buf_init(&d.body);
-    AuFetchSink sd = {&d, s_data, s_done};
-    uint32_t idd = fe.start(fe.ctx, "http://site.test/x", &sd);
+    AuFetchSink sd = {&d, s_response, s_data, s_done, NULL};
+    AuFetchRequest rd = {0};
+    rd.url = "http://site.test/x";
+    rd.kind = AU_FETCH_DOCUMENT;
+    uint32_t idd = fe.start(fe.ctx, &rd, &sd);
+    AuFetchStatus st;
+    CHECK(fe.status(fe.ctx, idd, &st) && st.phase == AU_FETCH_PHASE_QUEUED, "status before the pump: %d", st.phase);
+    /* Cancel: no callbacks. */
     fe.cancel(fe.ctx, idd);
-    for (int i = 0; i < 100; i++) {
-        fe.poll(fe.ctx);
-        f.now += 10;
-    }
+    run_fetcher(&f, &fe, 100);
     CHECK(!d.done && d.body.len == 0, "cancelled fetch is silent");
+    /* Errors arrive as AuFetchError. */
+    FakeServer *gone = fake_server(&f, "gone.test", 80);
+    gone->dns_fail = true;
+    S g;
+    memset(&g, 0, sizeof g);
+    au_buf_init(&g.body);
+    AuFetchSink sg = {&g, s_response, s_data, s_done, NULL};
+    AuFetchRequest rg = {0};
+    rg.url = "http://gone.test/";
+    rg.kind = AU_FETCH_DOCUMENT;
+    fe.start(fe.ctx, &rg, &sg);
+    run_fetcher(&f, &fe, 100);
+    CHECK(g.done && !g.ok && g.err == AU_FETCH_ERR_DNS, "DNS error: %d", g.err);
     au_buf_free(&a.body);
     au_buf_free(&b.body);
     au_buf_free(&c.body);
+    au_buf_free(&r2.body);
     au_buf_free(&d.body);
+    au_buf_free(&g.body);
     au_net_page_fetcher_free(pf);
     au_net_loader_free(l);
     au_net_free(net);

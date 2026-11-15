@@ -468,7 +468,7 @@ static void deliver_bytes(Fake *f, AuDocView *dv, const char *url, const char *d
     CHECK(r != NULL, "no request for %s", url);
     if (!r)
         return;
-    CHECK(r->kind == AU_RES_OTHER, "font fetched as kind %d", (int)r->kind);
+    CHECK(r->kind == AU_RES_FONT, "font fetched as kind %d", (int)r->kind);
     if (data)
         au_docview_resource_data(dv, r->id, data, len);
     au_docview_resource_done(dv, r->id, ok);
