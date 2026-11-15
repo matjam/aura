@@ -427,9 +427,9 @@ defGlobal('structuredClone', structuredClone);
 
 /* ---------------- URL, URLSearchParams ---------------- */
 
-/* The parser is N.urlParse (src/js/url.c), marked for replacement by
- * src/url: [href, protocol, username, password, hostname, port,
- * pathname, search, hash] or null. */
+/* The parser is N.urlParse (src/js/url.c, the WHATWG parser of src/url):
+ * [href, protocol, username, password, hostname, port, pathname, search,
+ * hash] or null. */
 const specialPorts = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443', 'ftp:': '21' };
 function parseUrl(input, base) {
     const r = base === undefined ? N.urlParse(input) : N.urlParse(input, base);

@@ -103,6 +103,19 @@ test('URL parsing and setters', () => {
     assert.equal(new URL('data:text/plain,hi').protocol, 'data:');
 });
 
+test('URL uses the WHATWG host parser', () => {
+    assert.equal(new URL('http://0x7f.1/').hostname, '127.0.0.1');
+    assert.equal(new URL('http://[::1]:81/').host, '[::1]:81');
+    assert.equal(new URL('http://b\u00fccher.example/').hostname, 'xn--bcher-kva.example');
+    assert.equal(new URL('http://a/%2e%2E/b').pathname, '/b');
+    assert.equal(new URL('file:///C:/x/../y').pathname, '/C:/y');
+    assert.throws(() => new URL('http://a b/'), TypeError);
+    const a = document.createElement('a');
+    a.href = 'https://Example.COM:443/p?q#h';
+    assert.equal(a.host, 'example.com');
+    assert.equal(a.pathname, '/p');
+});
+
 test('URLSearchParams', () => {
     const p = new URLSearchParams('?a=1&b=2&a=3');
     assert.deepEqual(p.getAll('a'), ['1', '3']);

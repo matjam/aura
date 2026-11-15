@@ -228,14 +228,14 @@ void js_module_free(AuJs *js);
 bool js_modules_pending(const AuJs *js);
 bool js_module_probing(const AuJs *js);
 
-/* ---- url.c: the minimal URL helper ---- */
+/* ---- url.c: src/url's parser in the URL API's terms ---- */
 typedef struct JsUrl {
-    char *href;     /* serialized */
-    /* offsets into href for each component; -1 when absent */
+    char *href; /* serialized */
+    /* each component as the URL API returns it, "" when absent */
     char *protocol, *username, *password, *hostname, *port, *pathname, *search, *hash;
 } JsUrl;
 /* Parses input against base (may be NULL). Returns false for a failure.
- * Free with js_url_free. Marked for replacement by src/url. */
+ * Free with js_url_free. */
 bool js_url_parse(const char *input, const char *base, JsUrl *out);
 void js_url_free(JsUrl *u);
 
