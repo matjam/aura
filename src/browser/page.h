@@ -498,6 +498,7 @@ typedef struct AuPageStats {
     uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
     uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
     uint32_t restored;       /* times this document was shown again from the document cache */
+    bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);
 

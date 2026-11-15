@@ -587,7 +587,10 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         if (bt)
             au_page_stats(bt->page, &ps);
         printf("%s: %s, %.1f ms in the call, %.0f ms until idle\n", a,
-               ps.restored ? "the kept document was shown" : "the page was loaded again", shown, now_ms() - t0);
+               ps.restored          ? "the kept document was shown"
+               : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
+                                    : "the page was loaded again, its document from the network",
+               shown, now_ms() - t0);
     } else if (!strcmp(a, "cache")) {
         AuCacheStats cs;
         memset(&cs, 0, sizeof cs);

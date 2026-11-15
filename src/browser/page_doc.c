@@ -2300,6 +2300,7 @@ static void main_response(AuPage *p, const AuFetchResponse *r)
     adopt_url(p, r->url);
     p->status = r->status;
     p->no_store = r->no_store;
+    p->stats.document_cached = r->from_cache;
     set_str(&p->content_type, r->content_type);
     p->security = r->security;
     p->have_security = true;
