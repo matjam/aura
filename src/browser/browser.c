@@ -3,6 +3,7 @@
 #include "url.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- Back/forward list ---- */
@@ -197,9 +198,19 @@ static void relayout(AuBrowserWindow *w, bool full)
     au_chrome_layout(&w->layout, w->width, w->height, w->browser->prefs.tab_position,
                      w->browser->prefs.tab_column_width, w->ntabs, w->tab_scroll);
     w->tab_scroll = w->layout.tab_scroll;
+    /* A horizontal scroll bar while the active page is wider than the
+     * page area (its width does not change with the bar). */
+    AuTab *at = au_bw_active_tab(w);
+    if (at) {
+        int cw, ch;
+        au_page_content_size(at->page, &cw, &ch);
+        if (cw > w->layout.page.x1 - w->layout.page.x0)
+            au_chrome_layout_hscroll(&w->layout);
+    }
     bool moved = memcmp(&old.page, &w->layout.page, sizeof old.page) ||
                  memcmp(&old.address, &w->layout.address, sizeof old.address) ||
-                 memcmp(&old.vscroll, &w->layout.vscroll, sizeof old.vscroll) || old.width != w->width ||
+                 memcmp(&old.vscroll, &w->layout.vscroll, sizeof old.vscroll) ||
+                 memcmp(&old.hscroll, &w->layout.hscroll, sizeof old.hscroll) || old.width != w->width ||
                  old.height != w->height;
     if (moved) {
         AuTab *t = au_bw_active_tab(w);
@@ -214,6 +225,20 @@ static void relayout(AuBrowserWindow *w, bool full)
         invalidate_all(w);
     else
         invalidate(w, w->layout.tabstrip);
+}
+
+/* Lays out again when the active page's width needs the horizontal
+ * scroll bar shown or hidden. */
+static void check_hscroll(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return;
+    int cw, ch;
+    au_page_content_size(t->page, &cw, &ch);
+    bool need = cw > w->layout.page.x1 - w->layout.page.x0;
+    if (need != !au_irect_empty(w->layout.hscroll))
+        relayout(w, false);
 }
 
 static void ensure_tab_visible(AuBrowserWindow *w, int i)
@@ -346,8 +371,13 @@ static void cb_content_size(void *ctx, AuPage *p)
 {
     AuTab *t = ctx;
     clamp_scroll(t);
-    if (is_active(t))
+    if (is_active(t)) {
+        if (t->win->painting)
+            t->win->hscroll_dirty = true; /* not in the middle of a paint: at the next idle */
+        else
+            check_hscroll(t->win);
         changed(t->win, AU_CHANGED_SCROLL);
+    }
     (void)p;
 }
 
@@ -360,6 +390,8 @@ static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
     t->scroll_x = x;
     t->scroll_y = y;
     clamp_scroll(t);
+    if (t->scroll_x != ox || t->scroll_y != oy)
+        t->win->browser->scroll_gen++;
     if (is_active(t) && (t->scroll_x != ox || t->scroll_y != oy)) {
         invalidate(t->win, t->win->layout.page);
         changed(t->win, AU_CHANGED_SCROLL);
@@ -432,6 +464,9 @@ void au_browser_free(AuBrowser *b)
     au_history_free(&b->history);
     au_bookmarks_free(&b->bookmarks);
     au_downloads_free(&b->downloads);
+    au_free(b->find_text);
+    for (int i = 0; i < b->nclosed; i++)
+        au_nav_free(&b->closed[i]);
     au_free(b);
 }
 
@@ -483,6 +518,7 @@ AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height)
     w->height = height;
     w->active = -1;
     w->drag_tab = -1;
+    w->x = w->y = -1;
     w->hover.part = w->pressed.part = AU_HIT_NONE;
     w->active_window = true;
     b->windows = au_realloc(b->windows, (size_t)(b->nwindows + 1) * sizeof *b->windows);
@@ -507,6 +543,10 @@ void au_browser_window_free(AuBrowserWindow *w)
         free_tab(w->tabs[i]);
     au_free(w->tabs);
     au_free(w->field);
+    if (w->label_list)
+        au_fontlist_free(w->label_list);
+    if (w->small_list)
+        au_fontlist_free(w->small_list);
     for (int i = 0; i < b->nwindows; i++) {
         if (b->windows[i] == w) {
             memmove(&b->windows[i], &b->windows[i + 1], (size_t)(b->nwindows - i - 1) * sizeof *b->windows);
@@ -533,7 +573,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->win = w;
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
-    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher};
+    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
     AuPageCallbacks cb = {t,           cb_title, cb_url,    cb_started,    cb_progress,     cb_finished,
                           cb_open,     cb_status, cb_invalidate, cb_content_size, cb_scroll_to};
     t->page = au_page_new(&env, &cb);
@@ -553,9 +593,186 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     return t;
 }
 
+/* ---- Selection and find ---- */
+
+bool au_bw_has_selection(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_has_selection(t->page);
+}
+
+bool au_bw_selection_text(AuBrowserWindow *w, AuBuf *out)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_selection_text(t->page, out);
+}
+
+void au_bw_select_all(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (t)
+        au_page_select_all(t->page);
+}
+
+bool au_bw_find(AuBrowserWindow *w, const char *text, bool case_sensitive)
+{
+    AuBrowser *b = w->browser;
+    if (!text || !*text)
+        return false;
+    au_prefs_set_str(&b->find_text, text);
+    b->find_case = case_sensitive;
+    return au_bw_find_again(w, true);
+}
+
+bool au_bw_find_again(AuBrowserWindow *w, bool forward)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuBrowser *b = w->browser;
+    return t && b->find_text && au_page_find(t->page, b->find_text, forward, b->find_case);
+}
+
+/* ---- Text zoom ----
+ * Each tab has a text zoom; the last zoom chosen for a site (host, or
+ * the scheme for URLs without one) is kept in prefs.zoom_sites as
+ * "key=percent" items separated by spaces, and applied when a tab moves
+ * to that site. */
+
+static const float zoom_steps[] = {0.5f, 0.67f, 0.8f, 0.9f, 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f};
+#define NZOOM ((int)(sizeof zoom_steps / sizeof zoom_steps[0]))
+#define MAX_ZOOM_SITES 64
+
+static void zoom_key(const char *url, char *out, size_t cap)
+{
+    if (!strncmp(url, "view-source:", 12))
+        url += 12;
+    au_url_host(url, out, cap);
+    if (!out[0]) {
+        size_t n = au_url_scheme_len(url, strlen(url));
+        if (n + 2 > cap)
+            n = 0;
+        memcpy(out, url, n);
+        out[n] = ':';
+        out[n + 1] = 0;
+    }
+    for (char *p = out; *p; p++)
+        if (*p >= 'A' && *p <= 'Z')
+            *p = (char)(*p + 32);
+}
+
+float au_browser_site_zoom(const AuBrowser *b, const char *url)
+{
+    char key[256];
+    zoom_key(url, key, sizeof key);
+    size_t kn = strlen(key);
+    const char *s = b->prefs.zoom_sites ? b->prefs.zoom_sites : "";
+    while (*s) {
+        while (*s == ' ')
+            s++;
+        const char *e = s;
+        while (*e && *e != ' ')
+            e++;
+        if ((size_t)(e - s) > kn + 1 && !memcmp(s, key, kn) && s[kn] == '=') {
+            int pct = atoi(s + kn + 1);
+            if (pct >= 50 && pct <= 300)
+                return (float)pct / 100.0f;
+        }
+        s = e;
+    }
+    return 1.0f;
+}
+
+static void set_site_zoom(AuBrowser *b, const char *url, float zoom)
+{
+    char key[256];
+    zoom_key(url, key, sizeof key);
+    size_t kn = strlen(key);
+    AuBuf out;
+    au_buf_init(&out);
+    int pct = (int)(zoom * 100.0f + 0.5f);
+    if (pct != 100 && kn && !strchr(key, ' ') && !strchr(key, '='))
+        au_buf_printf(&out, "%s=%d", key, pct);
+    int kept = 1;
+    const char *s = b->prefs.zoom_sites ? b->prefs.zoom_sites : "";
+    while (*s && kept < MAX_ZOOM_SITES) {
+        while (*s == ' ')
+            s++;
+        const char *e = s;
+        while (*e && *e != ' ')
+            e++;
+        if (e > s && !((size_t)(e - s) > kn && !memcmp(s, key, kn) && s[kn] == '=')) {
+            if (out.len)
+                au_buf_putc(&out, ' ');
+            au_buf_append(&out, s, (size_t)(e - s));
+            kept++;
+        }
+        s = e;
+    }
+    au_prefs_set_str(&b->prefs.zoom_sites, au_buf_cstr(&out));
+    au_buf_free(&out);
+    b->prefs_gen++;
+}
+
+/* A tab moving to url takes the site's zoom when the site changes. */
+static void apply_site_zoom(AuTab *t, const char *url)
+{
+    char a[256], c[256];
+    zoom_key(url, a, sizeof a);
+    zoom_key(au_page_url(t->page), c, sizeof c);
+    if (strcmp(a, c) != 0 || !au_nav_current(&t->nav))
+        au_page_set_zoom(t->page, au_browser_site_zoom(t->win->browser, url));
+}
+
+void au_bw_zoom(AuBrowserWindow *w, int dir)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return;
+    float z = au_page_zoom(t->page), nz = 1.0f;
+    if (dir > 0) {
+        nz = zoom_steps[NZOOM - 1];
+        for (int i = 0; i < NZOOM; i++)
+            if (zoom_steps[i] > z + 0.001f) {
+                nz = zoom_steps[i];
+                break;
+            }
+    } else if (dir < 0) {
+        nz = zoom_steps[0];
+        for (int i = NZOOM - 1; i >= 0; i--)
+            if (zoom_steps[i] < z - 0.001f) {
+                nz = zoom_steps[i];
+                break;
+            }
+    }
+    if (nz == z)
+        return;
+    au_page_set_zoom(t->page, nz);
+    set_site_zoom(w->browser, au_page_url(t->page), nz);
+    clamp_scroll(t);
+    invalidate(w, w->layout.page);
+    changed(w, AU_CHANGED_SCROLL);
+}
+
+bool au_bw_can_zoom(AuBrowserWindow *w, int dir)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return false;
+    float z = au_page_zoom(t->page);
+    if (dir > 0)
+        return z < zoom_steps[NZOOM - 1] - 0.001f;
+    if (dir < 0)
+        return z > zoom_steps[0] + 0.001f;
+    return z < 0.999f || z > 1.001f;
+}
+
+static bool fresh_blank(AuTab *t);
+static bool hand_off(AuBrowser *b, const char *url);
+static void push_closed(AuBrowser *b, AuTab *t);
+
 /* Loads url into tab t as a new back/forward entry. */
 static void load_new(AuTab *t, const char *url)
 {
+    apply_site_zoom(t, url);
     AuNavEntry *cur = au_nav_current(&t->nav);
     if (cur)
         cur->scroll_y = t->scroll_y;
@@ -569,6 +786,8 @@ static void load_new(AuTab *t, const char *url)
 
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index)
 {
+    if (w->ntabs > 0 && hand_off(w->browser, url))
+        return NULL;
     if (index < 0)
         index = w->active >= 0 ? w->active + 1 : w->ntabs;
     AuTab *t = make_tab(w, index);
@@ -577,7 +796,32 @@ AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int ind
         au_bw_select_tab(w, tab_index(w, t));
     load_new(t, url && *url ? url : "about:blank");
     changed(w, AU_CHANGED_MENUS);
+    if (au_bw_active_tab(w) == t)
+        changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     return t;
+}
+
+/* ---- Keyboard focus ----
+ * The rule: after a navigation or a tab switch the page has the focus,
+ * unless the user is typing in the address field (it has the focus and
+ * holds an edit), and except that a tab showing a fresh blank page puts
+ * the focus in the field, ready for an address. The shell moves the
+ * focus when it gets AU_CHANGED_FOCUS_PAGE or AU_CHANGED_FOCUS_FIELD. */
+
+bool au_bw_typing(const AuBrowserWindow *w)
+{
+    return w->field_focused && w->field != NULL;
+}
+
+static bool fresh_blank(AuTab *t)
+{
+    return t->nav.n <= 1 && !strcmp(au_page_url(t->page), "about:blank");
+}
+
+static void focus_after_navigation(AuBrowserWindow *w)
+{
+    if (!au_bw_typing(w))
+        changed(w, AU_CHANGED_FOCUS_PAGE);
 }
 
 void au_bw_select_tab(AuBrowserWindow *w, int i)
@@ -589,7 +833,9 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
     au_free(w->field);
     w->field = NULL;
     AuTab *t = w->tabs[i];
+    changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     set_viewport(t);
+    check_hscroll(w);
     clamp_scroll(t);
     ensure_tab_visible(w, i);
     if (old != i) {
@@ -616,6 +862,7 @@ void au_bw_close_tab(AuBrowserWindow *w, int i)
     AuTab *t = w->tabs[i];
     memmove(&w->tabs[i], &w->tabs[i + 1], (size_t)(w->ntabs - i - 1) * sizeof *w->tabs);
     w->ntabs--;
+    push_closed(w->browser, t);
     free_tab(t);
     int next = w->active;
     if (i < w->active)
@@ -627,6 +874,196 @@ void au_bw_close_tab(AuBrowserWindow *w, int i)
     relayout(w, true);
     au_bw_select_tab(w, next);
     w->browser->session_gen++;
+}
+
+AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i)
+{
+    if (i < 0 || i >= w->ntabs)
+        return NULL;
+    AuTab *src = w->tabs[i];
+    AuTab *t = make_tab(w, i + 1);
+    for (int k = 0; k < src->nav.n; k++) {
+        au_nav_push(&t->nav, src->nav.e[k].url, src->nav.e[k].title);
+        t->nav.e[k].scroll_y = src->nav.e[k].scroll_y;
+    }
+    t->nav.index = src->nav.index;
+    relayout(w, false);
+    au_bw_select_tab(w, i + 1);
+    AuNavEntry *e = au_nav_current(&t->nav);
+    char *url = au_strndup(e ? e->url : "about:blank", strlen(e ? e->url : "about:blank"));
+    au_page_set_zoom(t->page, au_page_zoom(src->page));
+    au_page_navigate_entry(t->page, url, src->scroll_x, src->scroll_y);
+    au_free(url);
+    changed(w, AU_CHANGED_MENUS | AU_CHANGED_FOCUS_PAGE);
+    return t;
+}
+
+/* A new tab after the active one holding a copy of nav, at entry index,
+ * loaded and scrolled to where that entry was left; activated or not. */
+static AuTab *tab_from_nav(AuBrowserWindow *w, const AuNavList *nav, int index, int at, bool activate)
+{
+    if (index < 0 || index >= nav->n)
+        return NULL;
+    AuTab *t = make_tab(w, at);
+    for (int k = 0; k < nav->n; k++) {
+        au_nav_push(&t->nav, nav->e[k].url, nav->e[k].title);
+        t->nav.e[t->nav.n - 1].scroll_y = nav->e[k].scroll_y;
+    }
+    t->nav.index = index;
+    relayout(w, false);
+    if (activate)
+        au_bw_select_tab(w, tab_index(w, t));
+    AuNavEntry *e = &t->nav.e[index];
+    char *url = au_strndup(e->url, strlen(e->url));
+    apply_site_zoom(t, url);
+    au_page_navigate_entry(t->page, url, 0, e->scroll_y);
+    au_free(url);
+    changed(w, AU_CHANGED_MENUS);
+    return t;
+}
+
+AuTab *au_bw_go_new_tab(AuBrowserWindow *w, int delta)
+{
+    AuTab *src = au_bw_active_tab(w);
+    if (!src || !au_nav_can_go(&src->nav, delta))
+        return NULL;
+    /* The current entry's position is the tab's own. */
+    AuNavEntry *cur = au_nav_current(&src->nav);
+    if (cur)
+        cur->scroll_y = src->scroll_y;
+    return tab_from_nav(w, &src->nav, src->nav.index + delta, w->active + 1, false);
+}
+
+int au_bw_history_items(AuBrowserWindow *w, int dir, AuHistoryItem *out, int cap)
+{
+    AuTab *t = au_bw_active_tab(w);
+    int n = 0;
+    if (!t || !dir)
+        return 0;
+    for (int i = t->nav.index + (dir < 0 ? -1 : 1); i >= 0 && i < t->nav.n && n < cap; i += dir < 0 ? -1 : 1) {
+        out[n].delta = i - t->nav.index;
+        out[n].url = t->nav.e[i].url;
+        out[n].title = t->nav.e[i].title[0] ? t->nav.e[i].title : t->nav.e[i].url;
+        n++;
+    }
+    return n;
+}
+
+/* ---- Recently closed tabs ---- */
+
+static void push_closed(AuBrowser *b, AuTab *t)
+{
+    if (!t->nav.n)
+        return;
+    AuNavEntry *cur = au_nav_current(&t->nav);
+    if (cur)
+        cur->scroll_y = t->scroll_y;
+    if (b->nclosed == AU_MAX_CLOSED_TABS) {
+        au_nav_free(&b->closed[0]);
+        memmove(&b->closed[0], &b->closed[1], (AU_MAX_CLOSED_TABS - 1) * sizeof b->closed[0]);
+        b->nclosed--;
+    }
+    /* Move the list: the tab is about to be freed. */
+    b->closed[b->nclosed++] = t->nav;
+    au_nav_init(&t->nav);
+}
+
+bool au_browser_can_reopen(const AuBrowser *b)
+{
+    return b->nclosed > 0;
+}
+
+AuTab *au_bw_reopen_closed_tab(AuBrowserWindow *w)
+{
+    AuBrowser *b = w->browser;
+    if (!b->nclosed)
+        return NULL;
+    AuNavList nav = b->closed[--b->nclosed];
+    AuTab *t = tab_from_nav(w, &nav, nav.index, w->active + 1, true);
+    au_nav_free(&nav);
+    if (t)
+        changed(w, AU_CHANGED_FOCUS_PAGE);
+    return t;
+}
+
+void au_bw_close_other_tabs(AuBrowserWindow *w, int keep)
+{
+    if (keep < 0 || keep >= w->ntabs)
+        return;
+    AuTab *k = w->tabs[keep];
+    au_bw_select_tab(w, keep);
+    for (int i = w->ntabs - 1; i >= 0; i--)
+        if (w->tabs[i] != k)
+            au_bw_close_tab(w, i);
+}
+
+void au_bw_reload_tab(AuBrowserWindow *w, int i)
+{
+    if (i >= 0 && i < w->ntabs)
+        au_page_reload(w->tabs[i]->page);
+}
+
+bool au_bw_can_view_source(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return false;
+    const char *u = au_page_url(t->page);
+    return au_url_scheme_is(u, "file") || au_url_scheme_is(u, "http") || au_url_scheme_is(u, "https");
+}
+
+void au_bw_view_source(AuBrowserWindow *w)
+{
+    if (!au_bw_can_view_source(w))
+        return;
+    AuBuf u;
+    au_buf_init(&u);
+    au_buf_puts(&u, "view-source:");
+    au_buf_puts(&u, au_page_url(au_bw_active_tab(w)->page));
+    au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
+    au_buf_free(&u);
+}
+
+bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_source(t->page, data, len);
+}
+
+void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap)
+{
+    AuTab *t = au_bw_active_tab(w);
+    char name[256], host[256];
+    name[0] = host[0] = 0;
+    if (t) {
+        const char *u = au_page_url(t->page);
+        if (!strncmp(u, "view-source:", 12))
+            u += 12;
+        au_url_host(u, host, sizeof host);
+        au_download_name_from_url(u, name, sizeof name);
+        /* A directory URL names its host: use the title instead. */
+        const char *title = au_page_title(t->page);
+        if ((!name[0] || !strcmp(name, host)) && *title)
+            snprintf(name, sizeof name, "%s", title);
+    }
+    if (!name[0])
+        snprintf(name, sizeof name, "%s", "page");
+    if (!strchr(name, '.') || !strcmp(name, host)) {
+        size_t n = strlen(name);
+        if (n + 6 < sizeof name)
+            memcpy(name + n, ".html", 6);
+    }
+    au_hfs_sanitize(name, NULL, NULL, out, cap);
+}
+
+AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *title)
+{
+    AuBookmark *have = au_bookmark_find_url(&b->bookmarks, url);
+    if (have)
+        return have;
+    AuBookmark *made = au_bookmark_add(&b->bookmarks, NULL, NULL, title && *title ? title : url, url, now(b));
+    au_browser_bookmarks_changed(b);
+    return made;
 }
 
 void au_bw_move_tab(AuBrowserWindow *w, int from, int to)
@@ -648,25 +1085,61 @@ void au_bw_move_tab(AuBrowserWindow *w, int from, int to)
 
 /* ---- Navigation ---- */
 
+bool au_browser_opens_url(const AuBrowser *b, const char *url)
+{
+    size_t n = au_url_scheme_len(url, strlen(url));
+    if (!n)
+        return true;
+    static const char *const own[] = {"about", "file", "view-source", "http", "https"};
+    for (size_t i = 0; i < sizeof own / sizeof own[0]; i++)
+        if (au_url_scheme_is(url, own[i]))
+            return true;
+    for (int i = 0; i < b->nfetchers; i++)
+        if (strlen(b->fetchers[i].scheme) == n && !strncmp(b->fetchers[i].scheme, url, n))
+            return true;
+    return false;
+}
+
+/* An address Aura does not open itself goes to the host (a helper
+ * application); true when the host took it. */
+static bool hand_off(AuBrowser *b, const char *url)
+{
+    return url && b->host.open_external && !au_browser_opens_url(b, url) &&
+           b->host.open_external(b->host.ctx, url);
+}
+
 void au_bw_navigate(AuBrowserWindow *w, const char *url)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (!t)
+    if (!t || hand_off(w->browser, url))
         return;
-    au_free(w->field);
-    w->field = NULL;
+    bool typing = au_bw_typing(w);
+    if (!typing) {
+        au_free(w->field);
+        w->field = NULL;
+    }
     load_new(t, url);
     invalidate(w, w->layout.toolbar);
     changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    focus_after_navigation(w);
 }
 
 void au_bw_navigate_input(AuBrowserWindow *w, const char *text)
 {
     char *url = au_url_from_input(text, w->browser->prefs.search_template, NULL);
-    if (url) {
+    if (!url)
+        return;
+    if (au_bw_active_tab(w) && hand_off(w->browser, url)) {
+        /* A helper application took it: the field shows the page's
+         * address again and the page keeps the focus. */
+        au_free(w->field);
+        w->field = NULL;
+        invalidate(w, w->layout.toolbar);
+        changed(w, AU_CHANGED_FIELD | AU_CHANGED_FOCUS_PAGE);
+    } else {
         au_bw_navigate(w, url);
-        au_free(url);
     }
+    au_free(url);
 }
 
 void au_bw_go(AuBrowserWindow *w, int delta)
@@ -680,12 +1153,15 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     AuNavEntry *e = au_nav_go(&t->nav, delta);
     char *url = au_strndup(e->url, strlen(e->url));
     int sy = e->scroll_y;
-    au_free(w->field);
-    w->field = NULL;
+    if (!au_bw_typing(w)) {
+        au_free(w->field);
+        w->field = NULL;
+    }
     record_visit(w->browser, url, e->title);
     /* The page scrolls back to sy once it is loaded far enough. */
     t->scroll_x = t->scroll_y = 0;
     au_page_set_scroll(t->page, 0, 0);
+    apply_site_zoom(t, url);
     au_page_navigate_entry(t->page, url, 0, sy);
     au_free(url);
     clamp_scroll(t);
@@ -693,6 +1169,7 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     invalidate(w, w->layout.toolbar);
     invalidate(w, w->layout.page);
     changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    focus_after_navigation(w);
 }
 
 void au_bw_back(AuBrowserWindow *w) { au_bw_go(w, -1); }
@@ -798,9 +1275,20 @@ void au_bw_resize(AuBrowserWindow *w, int width, int height)
         width = 1;
     if (height < 1)
         height = 1;
+    if (w->width != width || w->height != height)
+        w->browser->session_gen++;
     w->width = width;
     w->height = height;
     relayout(w, true);
+}
+
+void au_bw_set_position(AuBrowserWindow *w, int x, int y)
+{
+    if (w->x == x && w->y == y)
+        return;
+    w->x = x;
+    w->y = y;
+    w->browser->session_gen++;
 }
 
 void au_bw_set_active(AuBrowserWindow *w, bool active)
@@ -852,16 +1340,30 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
         s.status_text = status;
     }
     s.progress = t ? au_page_progress(t->page) : 0;
+    char progress[32];
+    if (t && t->loading) {
+        float p = s.progress < 0 ? 0 : s.progress > 1 ? 1 : s.progress;
+        snprintf(progress, sizeof progress, "Loading, %d%%", (int)(p * 100.0f + 0.5f));
+        s.progress_text = progress;
+    }
     s.throbber_frame = w->throbber_frame;
     s.draw_native_standins = w->native_standins;
     s.active_window = w->active_window;
+    if (!w->label_list && w->browser->fonts) {
+        w->label_list = au_fontlist_parse(w->browser->fonts, AU_CHROME_LABEL_FAMILIES, 400, false);
+        w->small_list = au_fontlist_parse(w->browser->fonts, AU_CHROME_SMALL_FAMILIES, 400, false);
+    }
+    s.label_list = w->label_list;
+    s.small_list = w->small_list;
     au_chrome_paint(c, w->browser->fonts, &w->layout, &s, clip);
     AuIRect pg = au_irect_intersect(w->layout.page, clip);
     if (t && !au_irect_empty(pg)) {
         AuIRect p = w->layout.page;
         au_canvas_clip_push(c, (AuRect){(float)pg.x0, (float)pg.y0, (float)(pg.x1 - pg.x0), (float)(pg.y1 - pg.y0)});
+        w->painting = true;
         au_page_paint(t->page, c, (AuRect){(float)p.x0, (float)p.y0, (float)(p.x1 - p.x0), (float)(p.y1 - p.y0)},
                       t->scroll_x, t->scroll_y);
+        w->painting = false;
         au_canvas_clip_pop(c);
     } else if (!au_irect_empty(pg)) {
         au_fill_rect(c, (AuRect){(float)pg.x0, (float)pg.y0, (float)(pg.x1 - pg.x0), (float)(pg.y1 - pg.y0)},
@@ -930,6 +1432,7 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
     t->scroll_y = y;
     clamp_scroll(t);
     if (t->scroll_x != ox || t->scroll_y != oy) {
+        w->browser->scroll_gen++;
         invalidate(w, w->layout.page);
         changed(w, AU_CHANGED_SCROLL);
         rehover(w);
@@ -973,9 +1476,20 @@ static void page_event(AuBrowserWindow *w, const AuEvent *ev)
 static void click(AuBrowserWindow *w, AuHit h, const AuEvent *ev)
 {
     AuTab *t = au_bw_active_tab(w);
+    bool cmd = ev && (ev->mods & AU_MOD_COMMAND);
     switch (h.part) {
-    case AU_HIT_BACK: au_bw_back(w); break;
-    case AU_HIT_FORWARD: au_bw_forward(w); break;
+    case AU_HIT_BACK:
+        if (cmd)
+            au_bw_go_new_tab(w, -1);
+        else
+            au_bw_back(w);
+        break;
+    case AU_HIT_FORWARD:
+        if (cmd)
+            au_bw_go_new_tab(w, 1);
+        else
+            au_bw_forward(w);
+        break;
     case AU_HIT_RELOAD:
         if (t && t->loading)
             au_bw_stop(w);
@@ -1099,13 +1613,19 @@ AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
         return h;
     }
     case AU_EVENT_SCROLL: {
-        /* An inner scrolling box under the pointer takes the wheel first. */
+        /* An inner scrolling box under the pointer takes the wheel first.
+         * Shift turns a vertical wheel horizontal. */
         AuTab *t = au_bw_active_tab(w);
+        int dx = ev->dx, dy = ev->dy;
+        if ((ev->mods & AU_MOD_SHIFT) && dx == 0) {
+            dx = dy;
+            dy = 0;
+        }
         if (t && h.part == AU_HIT_PAGE &&
             au_page_scroll(t->page, ev->x - w->layout.page.x0 + t->scroll_x, ev->y - w->layout.page.y0 + t->scroll_y,
-                           ev->dx, ev->dy))
+                           dx, dy))
             return h;
-        au_bw_scroll_by(w, ev->dx, ev->dy);
+        au_bw_scroll_by(w, dx, dy);
         return h;
     }
     default:
@@ -1146,6 +1666,10 @@ bool au_bw_key(AuBrowserWindow *w, const AuEvent *ev)
 
 void au_bw_idle(AuBrowserWindow *w)
 {
+    if (w->hscroll_dirty) {
+        w->hscroll_dirty = false;
+        check_hscroll(w);
+    }
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {
         au_page_idle(w->tabs[i]->page);
@@ -1188,16 +1712,19 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out)
     au_buf_puts(out, "# Aura session 1\n");
     for (int i = 0; i < b->nwindows; i++) {
         const AuBrowserWindow *w = b->windows[i];
-        au_buf_printf(out, "window %d %d %d\n", w->width, w->height, w->active);
+        au_buf_printf(out, "window %d %d %d %d %d\n", w->width, w->height, w->active, w->x, w->y);
         for (int j = 0; j < w->ntabs; j++) {
-            const AuNavList *nav = &w->tabs[j]->nav;
+            const AuTab *t = w->tabs[j];
+            const AuNavList *nav = &t->nav;
             au_buf_printf(out, "tab %d\n", nav->index);
             for (int k = 0; k < nav->n; k++) {
+                /* The current entry's position is the tab's own. */
+                int sy = k == nav->index ? t->scroll_y : nav->e[k].scroll_y;
                 au_buf_puts(out, "entry\t");
                 put_clean(out, nav->e[k].url);
                 au_buf_putc(out, '\t');
                 put_clean(out, nav->e[k].title);
-                au_buf_putc(out, '\n');
+                au_buf_printf(out, "\t%d\n", sy > 0 ? sy : 0);
             }
         }
     }
@@ -1238,8 +1765,10 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
             continue;
         }
         if (!strncmp(l, "window ", 7)) {
-            int w = 0, h = 0, a = 0;
-            if (sscanf(l + 7, "%d %d %d", &w, &h, &a) != 3) {
+            int w = 0, h = 0, a = 0, x = -1, y = -1;
+            /* The position came later: older files have three numbers. */
+            int got = sscanf(l + 7, "%d %d %d %d %d", &w, &h, &a, &x, &y);
+            if (got != 3 && got != 5) {
                 ok = false;
                 continue;
             }
@@ -1249,6 +1778,8 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
             sw->width = w;
             sw->height = h;
             sw->active = a;
+            sw->x = got == 5 ? x : -1;
+            sw->y = got == 5 ? y : -1;
         } else if (!strncmp(l, "tab ", 4) && s->nwindows) {
             AuSessionWindow *sw = &s->windows[s->nwindows - 1];
             int idx = 0;
@@ -1271,9 +1802,20 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
                 ok = false;
                 continue;
             }
+            /* After the title, optionally, the scroll position. */
+            char *title = tab ? tab + 1 : (char *)"";
+            char *tab2 = tab ? strchr(title, '\t') : NULL;
+            int sy = 0;
+            if (tab2) {
+                *tab2 = 0;
+                sy = atoi(tab2 + 1);
+                if (sy < 0)
+                    sy = 0;
+            }
             int want = nav->index;
             nav->index = nav->n - 1;
-            au_nav_push(nav, url, tab ? tab + 1 : "");
+            au_nav_push(nav, url, title);
+            nav->e[nav->index].scroll_y = sy;
             nav->index = want;
         } else {
             ok = false;
@@ -1308,13 +1850,17 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
     for (int j = 0; j < sw->ntabs; j++) {
         const AuNavList *src = &sw->tabs[j].nav;
         AuTab *t = make_tab(w, w->ntabs);
-        for (int k = 0; k < src->n; k++)
+        for (int k = 0; k < src->n; k++) {
             au_nav_push(&t->nav, src->e[k].url, src->e[k].title);
+            t->nav.e[t->nav.n - 1].scroll_y = src->e[k].scroll_y;
+        }
         t->nav.index = src->index;
         AuNavEntry *e = au_nav_current(&t->nav);
         if (e) {
+            /* Back where it was left, once the page is tall enough. */
             char *url = au_strndup(e->url, strlen(e->url));
-            au_page_navigate(t->page, url);
+            apply_site_zoom(t, url);
+            au_page_navigate_entry(t->page, url, 0, e->scroll_y);
             au_free(url);
         }
     }

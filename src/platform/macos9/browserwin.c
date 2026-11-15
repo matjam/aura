@@ -27,7 +27,7 @@ struct BrowserWin {
     AuBrowserWindow *bw;
     GWorldPtr gw;
     AuSurface *surf;
-    ControlHandle vscroll;
+    ControlHandle vscroll, hscroll;
     TEHandle te;
     bool field_focus;
     bool closing;
@@ -35,6 +35,10 @@ struct BrowserWin {
     Point last_mouse;
     char *undo; /* field text before the last edit (Mac Roman) */
     size_t undo_len;
+    /* Multiple clicks: the last mouse-down's time, place and count. */
+    UInt32 click_when;
+    Point click_at;
+    int clicks;
     BrowserWin *next;
 };
 
@@ -134,6 +138,11 @@ static void blit(BrowserWin *b, AuIRect r)
     Rect gr = qd_rect(l->grow);
     RectRgn(cut, &gr);
     DiffRgn(mask, cut, mask);
+    if (!au_irect_empty(l->hscroll)) {
+        Rect hr = qd_rect(l->hscroll);
+        RectRgn(cut, &hr);
+        DiffRgn(mask, cut, mask);
+    }
     ForeColor(blackColor);
     BackColor(whiteColor);
     CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy | kDitherCopy, mask);
@@ -303,6 +312,13 @@ static void focus_field(BrowserWin *b, bool on)
 
 void browserwin_focus_field(BrowserWin *b)
 {
+    /* Open Location (Command-L) selects the whole address again when the
+     * field already has the focus, ready to type over. */
+    if (b->field_focus) {
+        SetPort((GrafPtr)b->base.win);
+        field_scroll_home(b);
+        TESetSelect(0, 32767, b->te);
+    }
     focus_field(b, true);
     flush(b);
 }
@@ -381,6 +397,12 @@ static void place_controls(BrowserWin *b)
     MoveControl(b->vscroll, (short)l->vscroll.x0, (short)l->vscroll.y0);
     SizeControl(b->vscroll, (short)(l->vscroll.x1 - l->vscroll.x0), (short)(l->vscroll.y1 - l->vscroll.y0));
     ShowControl(b->vscroll);
+    HideControl(b->hscroll);
+    if (!au_irect_empty(l->hscroll)) {
+        MoveControl(b->hscroll, (short)l->hscroll.x0, (short)l->hscroll.y0);
+        SizeControl(b->hscroll, (short)(l->hscroll.x1 - l->hscroll.x0), (short)(l->hscroll.y1 - l->hscroll.y0));
+        ShowControl(b->hscroll);
+    }
     place_field(b);
 }
 
@@ -399,6 +421,15 @@ static void update_scroll(BrowserWin *b)
         SetControlMaximum(b->vscroll, (short)my);
     if (GetControlValue(b->vscroll) != y)
         SetControlValue(b->vscroll, (short)y);
+    if (mx > 32767)
+        mx = 32767;
+    int x = t ? t->scroll_x : 0;
+    if (x > 32767)
+        x = 32767;
+    if (GetControlMaximum(b->hscroll) != mx)
+        SetControlMaximum(b->hscroll, (short)mx);
+    if (GetControlValue(b->hscroll) != x)
+        SetControlValue(b->hscroll, (short)x);
 }
 
 static pascal void scroll_action(ControlHandle c, short part)
@@ -407,17 +438,22 @@ static pascal void scroll_action(ControlHandle c, short part)
     if (!b)
         return;
     const AuChromeLayout *l = &b->bw->layout;
-    int page = (l->page.y1 - l->page.y0) - 40;
+    bool horiz = c == b->hscroll;
+    int page = horiz ? (l->page.x1 - l->page.x0) - 40 : (l->page.y1 - l->page.y0) - 40;
     if (page < 20)
         page = 20;
+    int d = 0;
     switch (part) {
-    case inUpButton: au_bw_scroll_by(b->bw, 0, -16); break;
-    case inDownButton: au_bw_scroll_by(b->bw, 0, 16); break;
-    case inPageUp: au_bw_scroll_by(b->bw, 0, -page); break;
-    case inPageDown: au_bw_scroll_by(b->bw, 0, page); break;
+    case inUpButton: d = -16; break;
+    case inDownButton: d = 16; break;
+    case inPageUp: d = -page; break;
+    case inPageDown: d = page; break;
     }
+    if (horiz)
+        au_bw_scroll_by(b->bw, d, 0);
+    else
+        au_bw_scroll_by(b->bw, 0, d);
     flush(b);
-    (void)c;
 }
 
 /* ---- Host callbacks ---- */
@@ -454,6 +490,10 @@ static void host_changed(void *ctx, AuBrowserWindow *w, unsigned what)
         update_scroll(b);
     if (what & AU_CHANGED_MENUS)
         mac_menus_dirty();
+    if ((what & AU_CHANGED_FOCUS_PAGE) && b->field_focus) {
+        focus_field(b, false);
+        field_set(b, au_bw_field_text(w), false);
+    }
     if (what & AU_CHANGED_FOCUS_FIELD)
         focus_field(b, true);
 }
@@ -466,6 +506,13 @@ static void host_close(void *ctx, AuBrowserWindow *w)
      * closes it after this event (browserwin_flush_all). */
     if (b)
         b->closing = true;
+}
+
+/* mailto:, ftp: and other addresses go to their Internet Config helper. */
+static bool host_external(void *ctx, const char *url)
+{
+    (void)ctx;
+    return mac_ic_launch_url(url);
 }
 
 static uint32_t host_ms(void *ctx)
@@ -495,6 +542,7 @@ void browserwin_host(AuBrowserHost *h)
     h->invalidate = host_invalidate;
     h->changed = host_changed;
     h->close_window = host_close;
+    h->open_external = host_external;
 }
 
 /* ---- Events ---- */
@@ -534,6 +582,7 @@ static void bw_activate(MacWin *mw, bool on)
     BrowserWin *b = (BrowserWin *)mw;
     SetPort((GrafPtr)mw->win);
     HiliteControl(b->vscroll, on ? 0 : 255);
+    HiliteControl(b->hscroll, on ? 0 : 255);
     if (b->field_focus) {
         if (on)
             TEActivate(b->te);
@@ -545,6 +594,37 @@ static void bw_activate(MacWin *mw, bool on)
     flush(b);
 }
 
+static bool bw_edit(MacWin *mw, int item);
+static void context_menu(BrowserWin *b, Point pt, Point global);
+
+enum { kHistoryMenuID = 181, kHistoryItems = 15 };
+
+/* The pop-up under Back (dir -1) or Forward (dir 1): the entries that
+ * way, nearest first; choosing one goes there. */
+static void history_popup(BrowserWin *b, int dir)
+{
+    AuHistoryItem items[kHistoryItems];
+    int n = au_bw_history_items(b->bw, dir, items, kHistoryItems);
+    if (n == 0)
+        return;
+    MenuHandle m = NewMenu(kHistoryMenuID, (ConstStringPtr) "\p");
+    if (!m)
+        return;
+    for (int i = 0; i < n; i++)
+        mac_append_item(m, items[i].title);
+    InsertMenu(m, -1);
+    AuIRect r = dir < 0 ? b->bw->layout.back : b->bw->layout.forward;
+    Point at = {(short)r.y1, (short)r.x0};
+    LocalToGlobal(&at);
+    long choice = PopUpMenuSelect(m, at.v, at.h, 0);
+    DeleteMenu(kHistoryMenuID);
+    DisposeMenu(m);
+    short item = (short)(choice & 0xFFFF);
+    if ((short)(choice >> 16) == kHistoryMenuID && item >= 1 && item <= n)
+        au_bw_go(b->bw, items[item - 1].delta);
+    flush(b);
+}
+
 static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
 {
     AuEvent e;
@@ -553,14 +633,46 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     e.x = pt.h;
     e.y = pt.v;
     e.mods = mods_of(ev->modifiers);
-    e.clicks = 1;
+    /* A click within the double-click time of the last one, near it,
+     * counts up: 2 selects a word, 3 a paragraph. */
+    int dx = pt.h - b->click_at.h, dy = pt.v - b->click_at.v;
+    if (b->clicks && ev->when - b->click_when <= (UInt32)GetDblTime() && dx * dx + dy * dy <= 16)
+        b->clicks = b->clicks < 3 ? b->clicks + 1 : 1;
+    else
+        b->clicks = 1;
+    b->click_when = ev->when;
+    b->click_at = pt;
+    e.clicks = b->clicks;
     e.time_ms = au_platform_time_ms();
-    au_bw_mouse(b->bw, &e);
+    AuHit hit = au_bw_mouse(b->bw, &e);
     browserwin_flush_all();
     Point last = pt;
+    /* Holding the button still on the page for most of a second opens
+     * the contextual menu, as Control-click does; on Back or Forward,
+     * after half a second, the pop-up of the entries that way. */
+    bool history = hit.part == AU_HIT_BACK || hit.part == AU_HIT_FORWARD;
+    bool may_hold = (hit.part == AU_HIT_PAGE || history) && b->clicks == 1 && !(ev->modifiers & (shiftKey | cmdKey));
     while (StillDown() && !b->closing) {
         Point p;
         GetMouse(&p);
+        if (may_hold && (p.h - pt.h) * (p.h - pt.h) + (p.v - pt.v) * (p.v - pt.v) > 9)
+            may_hold = false;
+        if (may_hold && TickCount() - ev->when >= (history ? 30u : 45u)) {
+            /* End the press where nothing is, so no link opens and the
+             * button does not act. */
+            e.type = AU_EVENT_MOUSE_UP;
+            e.x = e.y = -30000;
+            au_bw_mouse(b->bw, &e);
+            b->clicks = 0;
+            if (history) {
+                history_popup(b, hit.part == AU_HIT_BACK ? -1 : 1);
+            } else {
+                Point global = pt;
+                LocalToGlobal(&global);
+                context_menu(b, pt, global);
+            }
+            return;
+        }
         if (p.h != last.h || p.v != last.v) {
             last = p;
             e.type = AU_EVENT_MOUSE_MOVE;
@@ -579,12 +691,106 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     b->last_mouse = last;
 }
 
+static bool clipboard_has_text(void)
+{
+    long off = 0;
+    return GetScrap(NULL, 'TEXT', &off) > 0;
+}
+
+/* Paste and Go: the clipboard's text, line breaks as spaces, as typed
+ * address-field input. */
+static void paste_and_go(BrowserWin *b)
+{
+    Handle h = NewHandle(0);
+    long off = 0;
+    if (!h)
+        return;
+    long n = GetScrap(h, 'TEXT', &off);
+    if (n > 0) {
+        HLock(h);
+        char *u = mac_roman_to_utf8(*h, (size_t)n);
+        HUnlock(h);
+        for (char *p = u; *p; p++)
+            if (*p == '\r' || *p == '\n' || *p == '\t')
+                *p = ' ';
+        char *s = u;
+        while (*s == ' ')
+            s++;
+        size_t len = strlen(s);
+        while (len && s[len - 1] == ' ')
+            s[--len] = 0;
+        if (*s) {
+            field_revert(b);
+            focus_field(b, false);
+            au_bw_navigate_input(b->bw, s);
+        }
+        au_free(u);
+    }
+    DisposeHandle(h);
+}
+
+/* The contextual menu for local point pt. */
+static void context_menu(BrowserWin *b, Point pt, Point global)
+{
+    AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
+    bool field = h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY;
+    if (field && !b->field_focus)
+        focus_field(b, true);
+    unsigned flags = 0;
+    if (b->field_focus) {
+        TEPtr te = *b->te;
+        if (te->selStart != te->selEnd)
+            flags |= AU_CONTEXT_FIELD_SELECTION;
+        if (te->teLength > 0)
+            flags |= AU_CONTEXT_FIELD_TEXT;
+    }
+    if (clipboard_has_text())
+        flags |= AU_CONTEXT_CLIPBOARD_TEXT;
+    AuContextMenu m;
+    if (!au_bw_context_menu(b->bw, pt.h, pt.v, flags, &m))
+        return;
+    flush(b);
+    int i = mac_context_select(&m, global);
+    AuCommand cmd = i >= 0 ? m.items[i].cmd : AU_CMD_NONE;
+    SetPort((GrafPtr)b->base.win);
+    if (!au_bw_context_command(b->bw, &m, cmd)) {
+        switch (cmd) {
+        case AU_CMD_OPEN_LINK_WINDOW:
+            if (m.link)
+                browserwin_new(m.link, NULL);
+            break;
+        case AU_CMD_COPY_LINK:
+            if (m.link)
+                mac_put_scrap(m.link, strlen(m.link));
+            break;
+        case AU_CMD_COPY_IMAGE:
+            if (m.image)
+                mac_put_scrap(m.image, strlen(m.image));
+            break;
+        case AU_CMD_COPY: bw_edit(&b->base, 4); break;
+        case AU_CMD_CUT: bw_edit(&b->base, 3); break;
+        case AU_CMD_FIELD_COPY: bw_edit(&b->base, 4); break;
+        case AU_CMD_PASTE: bw_edit(&b->base, 5); break;
+        case AU_CMD_SELECT_ALL: bw_edit(&b->base, 7); break;
+        case AU_CMD_PASTE_GO: paste_and_go(b); break;
+        default: break;
+        }
+    }
+    au_context_menu_free(&m);
+    if (!b->closing)
+        flush(b);
+}
+
 static void bw_click(MacWin *mw, EventRecord *ev)
 {
     BrowserWin *b = (BrowserWin *)mw;
     SetPort((GrafPtr)mw->win);
     Point pt = ev->where;
     GlobalToLocal(&pt);
+    if (mac_context_click(ev)) {
+        context_menu(b, pt, ev->where);
+        return;
+    }
     AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
     if (h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY) {
         if (!b->field_focus) {
@@ -599,15 +805,18 @@ static void bw_click(MacWin *mw, EventRecord *ev)
         flush(b);
         return;
     }
-    if (h.part == AU_HIT_VSCROLL) {
+    if (h.part == AU_HIT_VSCROLL || h.part == AU_HIT_HSCROLL) {
         ControlHandle c;
         short part = FindControl(pt, mw->win, &c);
-        if (c == b->vscroll && part) {
+        if ((c == b->vscroll || c == b->hscroll) && part) {
             g_tracking = b;
             if (part == inThumb) {
                 TrackControl(c, pt, NULL);
                 AuTab *t = au_bw_active_tab(b->bw);
-                au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
+                if (c == b->hscroll)
+                    au_bw_scroll_to(b->bw, GetControlValue(c), t ? t->scroll_y : 0);
+                else
+                    au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
             } else {
                 static ControlActionUPP action;
                 if (!action)
@@ -687,8 +896,25 @@ static bool bw_key(MacWin *mw, EventRecord *ev)
 static bool bw_edit(MacWin *mw, int item)
 {
     BrowserWin *b = (BrowserWin *)mw;
-    if (!b->field_focus)
+    if (!b->field_focus) {
+        /* The page: Copy the selection, Select All. (Item 0 asks about
+         * text editing, which the page does not do; main.c enables
+         * Copy and Select All itself.) */
+        if (item == 4) {
+            AuBuf t;
+            au_buf_init(&t);
+            if (au_bw_selection_text(b->bw, &t))
+                mac_put_scrap(t.data, t.len);
+            au_buf_free(&t);
+            return true;
+        }
+        if (item == 7) {
+            au_bw_select_all(b->bw);
+            flush(b);
+            return true;
+        }
         return false;
+    }
     if (item == 0)
         return true;
     SetPort((GrafPtr)mw->win);
@@ -712,11 +938,23 @@ static bool bw_edit(MacWin *mw, int item)
         ZeroScrap();
         TEToScrap();
         return true;
-    case 5:
+    case 5: {
         undo_snapshot(b);
         TEFromScrap();
+        /* The field is one line: pasted line breaks and tabs become
+         * spaces (an address copied across lines still works). */
+        Handle scrap = TEScrapHandle();
+        long n = TEGetScrapLength();
+        if (scrap && *scrap) {
+            for (long i = 0; i < n; i++) {
+                char c = (*scrap)[i];
+                if (c == '\r' || c == '\n' || c == '\t')
+                    (*scrap)[i] = ' ';
+            }
+        }
         TEPaste(b->te);
         break;
+    }
     case 6:
         undo_snapshot(b);
         TEDelete(b->te);
@@ -780,6 +1018,17 @@ static void bw_grow(MacWin *mw)
     g_browser->prefs_gen++;
 }
 
+void browserwin_moved(BrowserWin *b)
+{
+    GrafPtr old;
+    GetPort(&old);
+    SetPort((GrafPtr)b->base.win);
+    Point p = {0, 0};
+    LocalToGlobal(&p);
+    SetPort(old);
+    au_bw_set_position(b->bw, p.h, p.v);
+}
+
 static void bw_close(MacWin *mw)
 {
     browserwin_close((BrowserWin *)mw);
@@ -832,6 +1081,13 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
         ch = sw->height;
     }
     int x = 20 + (count % 8) * 20, y = 50 + (count % 8) * 20;
+    /* A restored window goes back where it was when its title bar is
+     * still on this screen (the screen may have changed since). */
+    if (sw && sw->x >= 0 && sw->y >= GetMBarHeight() + 18 && sw->x <= screen.right - 80 &&
+        sw->y <= screen.bottom - 60) {
+        x = sw->x;
+        y = sw->y;
+    }
     if (cw > screen.right - x - 4)
         cw = screen.right - x - 4;
     if (ch > screen.bottom - y - 26) /* clear of the Control Strip */
@@ -860,13 +1116,15 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     SetPort((GrafPtr)w);
     Rect sr = {0, 0, 10, 10};
     b->vscroll = NewControl(w, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
-    if (!b->vscroll)
+    b->hscroll = NewControl(w, &sr, (ConstStr255Param) "\p", false, 0, 0, 0, scrollBarProc, 0);
+    if (!b->vscroll || !b->hscroll)
         mac_out_of_memory(256);
     make_gworld(b);
     int iw, ih;
     content_size(b, &iw, &ih);
     b->bw = au_browser_window_new(g_browser, iw, ih);
     b->bw->platform = b;
+    au_bw_set_position(b->bw, x, y);
     b->bw->native_field = true;
     b->next = g_wins;
     g_wins = b;
@@ -894,6 +1152,56 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     SelectWindow(w);
     mac_menus_dirty();
     return b;
+}
+
+/* ---- Edit > Find ---- */
+
+enum { FIND_OK = 1, FIND_CANCEL, FIND_TEXT, FIND_LABEL, FIND_CASE };
+
+void browserwin_find(BrowserWin *b)
+{
+    if (!au_bw_active_tab(b->bw))
+        return;
+    DialogPtr d = GetNewDialog(201, NULL, (WindowPtr)-1);
+    if (!d)
+        return;
+    short type;
+    Handle h;
+    Rect r;
+    Str255 p;
+    mac_pstr(g_browser->find_text ? g_browser->find_text : "", p);
+    GetDialogItem(d, FIND_TEXT, &type, &h, &r);
+    SetDialogItemText(h, p);
+    SelectDialogItemText(d, FIND_TEXT, 0, 32767);
+    GetDialogItem(d, FIND_CASE, &type, &h, &r);
+    ControlHandle check = (ControlHandle)h;
+    SetControlValue(check, g_browser->find_case ? 1 : 0);
+    SetDialogDefaultItem(d, FIND_OK);
+    SetDialogCancelItem(d, FIND_CANCEL);
+    ShowWindow((WindowPtr)d);
+    short item = 0;
+    for (;;) {
+        ModalDialog(NULL, &item);
+        if (item == FIND_CASE)
+            SetControlValue(check, !GetControlValue(check));
+        else if (item == FIND_OK || item == FIND_CANCEL)
+            break;
+    }
+    char *text = NULL;
+    bool match_case = GetControlValue(check) != 0;
+    if (item == FIND_OK) {
+        GetDialogItem(d, FIND_TEXT, &type, &h, &r);
+        GetDialogItemText(h, p);
+        text = mac_roman_to_utf8((const char *)p + 1, p[0]);
+    }
+    DisposeDialog(d);
+    if (text) {
+        SetPort((GrafPtr)b->base.win);
+        if (!au_bw_find(b->bw, text, match_case))
+            SysBeep(1);
+        au_free(text);
+        flush(b);
+    }
 }
 
 /* ---- Debug > Page Timings ---- */

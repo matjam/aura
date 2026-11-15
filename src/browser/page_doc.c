@@ -1,6 +1,6 @@
 /* The page interface (page.h) on top of the document view (src/page).
  *
- *   about:blank, about:home, about:fonts
+ *   about:blank, about:home, about:fonts, about:licences
  *                 generated HTML, loaded through the engine inside
  *                 au_page_navigate
  *   about:scene   the paint test scene (scene.c), painted directly
@@ -23,6 +23,8 @@
 #include "scene.h"
 #include "url.h"
 
+#include "credits.h"
+#include "../layout/selection.h"
 #include "../page/page.h"
 
 #include <stdio.h>
@@ -99,6 +101,17 @@ struct AuPage {
     /* A link activated inside au_docview_mouse, handled after it returns. */
     char *open_url;
     bool open_new_tab;
+
+    float zoom; /* text zoom, 1 for none */
+
+    AuBuf source; /* the main document's bytes as they arrived (Save Page As) */
+
+    /* Text selection: anchor and focus hold a reference to their node. */
+    AuTextPos anchor, focus;
+    AuTextRange sel_base; /* the word or paragraph a double or triple click chose */
+    int sel_mode;         /* 1 characters, 2 words, 3 paragraphs */
+    bool selecting, sel_dragged;
+    int down_x, down_y;
 
     AuPageStats stats;
 };
@@ -210,31 +223,30 @@ static bool font_installed(AuFontSet *fs, const char *family)
 }
 
 /* The preferences' families become the generic families (when they are
- * installed), and the sizes go into the user style sheet. */
+ * installed); the default sizes, the minimum size and the tab's text zoom
+ * go to the resolver's font preferences. */
 static void apply_font_prefs(AuPage *p)
 {
     const AuPrefs *pr = p->env.prefs;
-    if (!pr)
-        return;
-    if (font_installed(p->env.fonts, pr->font_serif))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_SERIF, pr->font_serif);
-    if (font_installed(p->env.fonts, pr->font_sans))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_SANS_SERIF, pr->font_sans);
-    if (font_installed(p->env.fonts, pr->font_mono))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_MONOSPACE, pr->font_mono);
-    int size = pr->font_size > 0 ? pr->font_size : 16;
-    int mono = pr->font_size_mono > 0 ? pr->font_size_mono : 13;
-    char css[512];
-    int n = snprintf(css, sizeof css, "html { font-size: %dpx; font-family: serif; }\n", size);
-    if (mono != size && n > 0 && (size_t)n < sizeof css) {
-        /* Monospace text at its own size, without compounding inside <pre>. */
-        int milli = mono * 1000 / size;
-        snprintf(css + n, sizeof css - (size_t)n,
-                 "pre, code, kbd, samp, tt, listing, xmp, plaintext, textarea { font-size: %d.%03dem; }\n"
-                 "pre code, pre kbd, pre samp, pre tt { font-size: 1em; }\n",
-                 milli / 1000, milli % 1000);
+    AuCssFontPrefs fp;
+    au_css_font_prefs_default(&fp);
+    if (pr) {
+        if (font_installed(p->env.fonts, pr->font_serif))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_SERIF, pr->font_serif);
+        if (font_installed(p->env.fonts, pr->font_sans))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_SANS_SERIF, pr->font_sans);
+        if (font_installed(p->env.fonts, pr->font_mono))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_MONOSPACE, pr->font_mono);
+        if (pr->font_size > 0)
+            fp.default_size = (float)pr->font_size;
+        if (pr->font_size_mono > 0)
+            fp.default_mono_size = (float)pr->font_size_mono;
+        fp.min_size = pr->font_size_min > 0 ? (float)pr->font_size_min : 0;
     }
-    au_docview_set_user_css(p->dv, css);
+    fp.text_zoom = p->zoom > 0 ? p->zoom : 1;
+    au_docview_set_font_prefs(p->dv, &fp);
+    /* The initial family: the reader's serif face, as browsers default. */
+    au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
 }
 
 /* ---- Image sizes ----
@@ -573,12 +585,217 @@ static void check_finished(AuPage *p)
     finish(p, !p->failed);
 }
 
+/* ---- Selection ----
+ * The page keeps the anchor (where the selection started) and the focus
+ * (where it ends, following the pointer); the layout paints the range
+ * between them. Both positions hold a reference to their text node, so
+ * the layout's unreferenced copy stays valid until the selection is
+ * cleared, which happens before the document is replaced. */
+
+#define DEFAULT_HIGHLIGHT 0xFFB3D7FFu /* light blue, as the Mac's default highlight */
+
+static void set_pos(AuTextPos *dst, AuTextPos src)
+{
+    if (src.node)
+        au_node_ref(src.node);
+    if (dst->node)
+        au_node_unref(dst->node);
+    *dst = src;
+}
+
+static void invalidate_view(AuPage *p)
+{
+    if (p->cb.invalidate && p->kind == K_DOC)
+        p->cb.invalidate(p->cb.ctx, p, (AuIRect){p->scroll_x, p->scroll_y, p->scroll_x + p->vw, p->scroll_y + p->vh});
+}
+
+static AuTextRange sel_range(const AuPage *p)
+{
+    return au_text_range_make(p->anchor, p->focus);
+}
+
+/* Hands the current selection to the layout and repaints. */
+static void sel_apply(AuPage *p)
+{
+    AuTextRange r = sel_range(p);
+    uint32_t col = p->env.highlight ? p->env.highlight : DEFAULT_HIGHLIGHT;
+    au_layout_set_selection(au_docview_layout(p->dv), au_text_range_empty(&r) ? NULL : &r, col);
+    invalidate_view(p);
+}
+
+static void sel_set(AuPage *p, AuTextPos anchor, AuTextPos focus)
+{
+    set_pos(&p->anchor, anchor);
+    set_pos(&p->focus, focus);
+    sel_apply(p);
+}
+
+void au_page_clear_selection(AuPage *p)
+{
+    bool had = p->anchor.node || p->focus.node;
+    au_layout_set_selection(au_docview_layout(p->dv), NULL, 0);
+    AuTextPos none = {NULL, 0};
+    set_pos(&p->anchor, none);
+    set_pos(&p->focus, none);
+    p->sel_base.start = p->sel_base.end = none;
+    p->selecting = false;
+    if (had)
+        invalidate_view(p);
+}
+
+bool au_page_has_selection(const AuPage *p)
+{
+    AuTextRange r = sel_range(p);
+    return p->kind == K_DOC && !au_text_range_empty(&r);
+}
+
+bool au_page_selection_text(AuPage *p, AuBuf *out)
+{
+    if (!au_page_has_selection(p))
+        return false;
+    au_docview_update(p->dv);
+    AuTextRange r = sel_range(p);
+    size_t before = out->len;
+    au_layout_range_text(au_docview_layout(p->dv), &r, out);
+    return out->len > before;
+}
+
+void au_page_select_all(AuPage *p)
+{
+    if (p->kind != K_DOC || !p->begun)
+        return;
+    au_docview_update(p->dv);
+    AuTextRange all;
+    if (au_layout_all_text(au_docview_layout(p->dv), &all))
+        sel_set(p, all.start, all.end);
+}
+
+/* Scrolls so document rectangle r is in view, if it is not. */
+static void reveal(AuPage *p, AuRect r)
+{
+    int x = p->scroll_x, y = p->scroll_y;
+    if (r.y < (float)y || r.y + r.h > (float)(y + p->vh))
+        y = (int)r.y - p->vh / 3;
+    if (r.x < (float)x || r.x + r.w > (float)(x + p->vw))
+        x = (int)r.x - 20;
+    if (x < 0)
+        x = 0;
+    if (y < 0)
+        y = 0;
+    if (x != p->scroll_x || y != p->scroll_y)
+        request_scroll(p, x, y);
+}
+
+bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive)
+{
+    if (p->kind != K_DOC || !p->begun || !text || !*text)
+        return false;
+    au_docview_update(p->dv);
+    AuLayout *L = au_docview_layout(p->dv);
+    AuTextRange cur = sel_range(p), m;
+    AuTextPos from = {NULL, 0};
+    if (cur.start.node)
+        from = forward ? cur.end : cur.start;
+    if (!au_layout_find(L, text, &from, forward, !case_sensitive, &m))
+        return false;
+    sel_set(p, m.start, m.end);
+    AuRect r;
+    if (au_layout_range_rect(L, &m, &r))
+        reveal(p, r);
+    return true;
+}
+
+/* The text position at document point (x, y). */
+static bool pos_at(AuPage *p, int x, int y, AuTextPos *out)
+{
+    au_docview_update(p->dv);
+    return au_layout_text_pos_at(au_docview_layout(p->dv), (float)(x - p->scroll_x), (float)(y - p->scroll_y),
+                                 (float)p->scroll_x, (float)p->scroll_y, out);
+}
+
+/* Extends a word or paragraph selection to the unit at q. */
+static void extend_by_unit(AuPage *p, AuTextPos q)
+{
+    AuLayout *L = au_docview_layout(p->dv);
+    AuTextRange u;
+    bool ok = p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u);
+    if (!ok)
+        u.start = u.end = q;
+    if (au_text_pos_cmp(&q, &p->sel_base.start) < 0)
+        sel_set(p, p->sel_base.end, u.start);
+    else
+        sel_set(p, p->sel_base.start, au_text_pos_cmp(&u.end, &p->sel_base.end) > 0 ? u.end : p->sel_base.end);
+}
+
+/* Selection by mouse: returns true when the event was a selection
+ * gesture that should not activate a link. */
+static bool sel_mouse(AuPage *p, const AuEvent *ev)
+{
+    AuTextPos q;
+    switch (ev->type) {
+    case AU_EVENT_MOUSE_DOWN: {
+        bool have = pos_at(p, ev->x, ev->y, &q);
+        p->selecting = true;
+        p->sel_dragged = false;
+        p->down_x = ev->x;
+        p->down_y = ev->y;
+        p->sel_mode = ev->clicks >= 3 ? 3 : ev->clicks == 2 ? 2 : 1;
+        if (!have) {
+            au_page_clear_selection(p);
+            p->selecting = true;
+            return false;
+        }
+        AuLayout *L = au_docview_layout(p->dv);
+        if ((ev->mods & AU_MOD_SHIFT) && p->anchor.node) {
+            p->sel_mode = 1;
+            sel_set(p, p->anchor, q);
+            return true;
+        }
+        AuTextRange u;
+        if (p->sel_mode > 1 && (p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u))) {
+            /* sel_base holds no references: its nodes belong to the
+             * document, which outlives it (it is cleared first). */
+            p->sel_base = u;
+            sel_set(p, u.start, u.end);
+            return true;
+        }
+        p->sel_mode = 1;
+        sel_set(p, q, q);
+        return false;
+    }
+    case AU_EVENT_MOUSE_MOVE:
+        if (!p->selecting)
+            return false;
+        if (!p->sel_dragged) {
+            int dx = ev->x - p->down_x, dy = ev->y - p->down_y;
+            if (dx * dx + dy * dy < 16)
+                return false;
+            p->sel_dragged = true;
+        }
+        if (!pos_at(p, ev->x, ev->y, &q))
+            return true;
+        if (p->sel_mode > 1 && p->sel_base.start.node)
+            extend_by_unit(p, q);
+        else if (p->anchor.node)
+            sel_set(p, p->anchor, q);
+        return true;
+    case AU_EVENT_MOUSE_UP: {
+        bool gesture = p->selecting && (p->sel_dragged || p->sel_mode > 1 || (ev->mods & AU_MOD_SHIFT));
+        p->selecting = false;
+        return gesture;
+    }
+    default:
+        return false;
+    }
+}
+
 /* ---- Documents ---- */
 
 /* Starts the new document in the view (the old one stays visible until
  * then). */
 static void begin_doc(AuPage *p, const char *url)
 {
+    au_page_clear_selection(p);
     if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, "");
     p->kind = K_DOC;
@@ -593,6 +810,7 @@ static void begin_doc(AuPage *p, const char *url)
 static void load_html_now(AuPage *p, const char *html, size_t len, const char *title)
 {
     begin_doc(p, p->url);
+    au_buf_append(&p->source, html, len);
     au_docview_feed(p->dv, html, len);
     au_docview_finish(p->dv);
     if (title)
@@ -610,6 +828,7 @@ static void page_head(AuBuf *b, const char *title)
                    "body { font-family: sans-serif; margin: 24px 32px; color: #222; line-height: 1.35; }"
                    "h1 { font-size: 28px; color: #203c78; margin: 0 0 6px; }"
                    "h2 { font-size: 17px; margin: 22px 0 6px; }"
+                   "h3 { font-size: 14px; margin: 14px 0 4px; }"
                    "p { margin: 0 0 10px; }"
                    ".note { color: #5a5a5a; font-size: 13px; }"
                    ".url { font-family: monospace; color: #5a5a5a; font-size: 13px; }"
@@ -630,13 +849,62 @@ static void build_home(AuBuf *b)
                    "<h2>Built-in pages</h2><ul>"
                    "<li><a href='about:scene'>Paint and font test scene</a></li>"
                    "<li><a href='about:fonts'>Installed fonts</a></li>"
-                   "<li><a href='about:blank'>Blank page</a></li></ul>"
+                   "<li><a href='about:blank'>Blank page</a></li>"
+                   "<li><a href='about:licences'>Licences</a></li></ul>"
                    "<h2>Placeholders for network pages</h2><ul>"
                    "<li><a href='http://example.com/'>http://example.com/</a></li>"
                    "<li><a href='http://www.macintoshrepository.org/'>http://www.macintoshrepository.org/</a></li>"
                    "<li><a href='https://www.w3.org/TR/css-2023/'>https://www.w3.org/TR/css-2023/</a></li></ul>"
                    "<p class=note style='margin-top:18px'>Command-click a link to open it in a new tab.</p>"
                    "</body></html>");
+}
+
+static void credit_rows(AuBuf *b, AuCreditKind kind)
+{
+    for (size_t i = 0; i < au_ncredits; i++) {
+        const AuCredit *c = &au_credits[i];
+        if (c->kind != kind)
+            continue;
+        au_buf_puts(b, "<h3>");
+        html_escape_str(b, c->name);
+        au_buf_puts(b, "</h3><p>");
+        html_escape_str(b, c->what);
+        au_buf_puts(b, ".</p><p class=note>");
+        for (const char *s = c->copyright; *s;) {
+            size_t n = strcspn(s, "\n");
+            char line[256];
+            snprintf(line, sizeof line, "%.*s", (int)n, s);
+            html_escape_str(b, line);
+            s += n;
+            if (*s == '\n') {
+                au_buf_puts(b, "<br>");
+                s++;
+            }
+        }
+        au_buf_puts(b, "</p><p>Licence: ");
+        html_escape_str(b, c->licence);
+        au_buf_puts(b, ". The full text is in <span class=url>");
+        html_escape_str(b, c->file);
+        au_buf_puts(b, "</span> beside the Aura application.</p>");
+    }
+}
+
+static void build_licences(AuBuf *b)
+{
+    page_head(b, "Licences");
+    au_buf_puts(b, "<h1>Licences</h1><p class=note>Aura " AU_VERSION ". " AU_TAGLINE
+                   " Aura's own code is written for Aura. These parts come from others.</p>"
+                   "<h2>Fonts</h2>");
+    credit_rows(b, AU_CREDIT_FONT);
+    au_buf_puts(b, "<h2>Libraries</h2>");
+    size_t libs = 0;
+    for (size_t i = 0; i < au_ncredits; i++)
+        libs += au_credits[i].kind == AU_CREDIT_LIBRARY;
+    if (libs)
+        credit_rows(b, AU_CREDIT_LIBRARY);
+    else
+        au_buf_puts(b, "<p>This build contains no third-party libraries.</p>");
+    au_buf_puts(b, "</body></html>");
 }
 
 static void css_string(AuBuf *b, const char *s)
@@ -796,6 +1064,7 @@ static void main_data(AuPage *p, const char *bytes, size_t len)
 {
     if (!p->begun)
         start_main_doc(p, bytes, len, NULL);
+    au_buf_append(&p->source, bytes, len);
     if (p->plain)
         feed_plain(p, bytes, len);
     else
@@ -883,6 +1152,8 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     }
     cancel_all(p);
     compact_fetches(p);
+    au_page_clear_selection(p);
+    au_buf_free(&p->source);
     p->gen++;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     au_free(p->url);
@@ -939,6 +1210,9 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
             load_html_now(p, b.data, b.len, NULL);
         } else if (wn == 5 && !memcmp(what, "fonts", 5)) {
             build_fonts(p, &b);
+            load_html_now(p, b.data, b.len, NULL);
+        } else if (wn == 8 && (!memcmp(what, "licences", 8) || !memcmp(what, "licenses", 8))) {
+            build_licences(&b);
             load_html_now(p, b.data, b.len, NULL);
         } else if (wn == 5 && !memcmp(what, "blank", 5)) {
             au_buf_puts(&b, "<!DOCTYPE html><html><head></head><body></body></html>");
@@ -1040,6 +1314,7 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     p->vh = 480;
     p->content_w = p->vw;
     p->content_h = p->vh;
+    p->zoom = 1;
     AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
@@ -1061,6 +1336,8 @@ void au_page_free(AuPage *p)
         return;
     cancel_all(p);
     compact_fetches(p);
+    au_page_clear_selection(p);
+    au_buf_free(&p->source);
     au_docview_free(p->dv); /* cancels nothing more: the fetches are gone */
     au_free(p->fetches);
     au_free(p->url);
@@ -1068,6 +1345,15 @@ void au_page_free(AuPage *p)
     au_free(p->fragment);
     au_free(p->open_url);
     au_free(p);
+}
+
+bool au_page_source(const AuPage *p, const char **data, size_t *len)
+{
+    if (p->kind != K_DOC || !p->main_done || p->failed || !p->source.len)
+        return false;
+    *data = p->source.data;
+    *len = p->source.len;
+    return true;
 }
 
 const char *au_page_url(const AuPage *p) { return p->url; }
@@ -1126,6 +1412,20 @@ void au_page_prefs_changed(AuPage *p)
     }
 }
 
+void au_page_set_zoom(AuPage *p, float zoom)
+{
+    if (!(zoom >= AU_PAGE_ZOOM_MIN))
+        zoom = AU_PAGE_ZOOM_MIN;
+    if (zoom > AU_PAGE_ZOOM_MAX)
+        zoom = AU_PAGE_ZOOM_MAX;
+    if (zoom == p->zoom)
+        return;
+    p->zoom = zoom;
+    au_page_prefs_changed(p);
+}
+
+float au_page_zoom(const AuPage *p) { return p->zoom; }
+
 void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
 {
     uint32_t t0 = now(p);
@@ -1160,7 +1460,11 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
         return false;
-    bool used = au_docview_mouse(p->dv, ev);
+    bool gesture = sel_mouse(p, ev);
+    AuEvent e = *ev;
+    if (gesture && ev->type == AU_EVENT_MOUSE_UP)
+        e.x = e.y = -100000; /* end the press without activating a link */
+    bool used = au_docview_mouse(p->dv, &e) || gesture;
     if (p->open_url) {
         char *u = p->open_url;
         p->open_url = NULL;
@@ -1170,6 +1474,28 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
         used = true;
     }
     return used;
+}
+
+static void put_resolved(AuPage *p, const AuElement *el, const char *name, AuBuf *out)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a ? au_element_get_attr(el, a) : NULL;
+    char abs[2048];
+    if (v && *v && au_url_resolve(au_docview_base_url(p->dv), v, abs, sizeof abs))
+        au_buf_puts(out, abs);
+}
+
+void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image)
+{
+    if (p->kind != K_DOC || !p->begun)
+        return;
+    AuHitResult r;
+    if (!au_docview_hit_test(p->dv, x, y, &r))
+        return;
+    if (link && r.link)
+        put_resolved(p, r.link, "href", link);
+    if (image && r.element && r.element->tag == AU_ATOM_img)
+        put_resolved(p, r.element, "src", image);
 }
 
 bool au_page_key(AuPage *p, const AuEvent *ev)

@@ -96,6 +96,10 @@ AuLayout *au_docview_layout(const AuDocView *dv);
  * cascaded below the author's sheets; NULL removes it. It applies to
  * this and later documents. */
 void au_docview_set_user_css(AuDocView *dv, const char *css);
+/* Sets the font preferences (default sizes, text zoom, minimum size; see
+ * au_css_resolver_set_font_prefs) for this and later documents. A change
+ * restyles the document at the next update. */
+void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p);
 
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);

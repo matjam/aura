@@ -202,9 +202,98 @@ was left at. To plug in networking, register a fetcher per scheme with
 http and https show a placeholder after a simulated load. Image sizes
 come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
 yet. The font preferences reach the engine as the generic families of
-the font set and a user style sheet (`html { font-size }`, monospace
-size). `src/css` now has `au_css_resolver_set_font_prefs` (default
-sizes, text zoom, minimum size); the shell does not call it yet.
+the font set and, for the default and monospace sizes, the minimum size
+and the tab's text zoom, `au_docview_set_font_prefs` (which passes them
+to `au_css_resolver_set_font_prefs`). Text zoom is per tab
+(`au_bw_zoom`, View > Zoom In, Zoom Out, Actual Size); the last zoom
+chosen for a site (host, or scheme for `file:`) is kept in the
+`zoom.sites` preference and applied when a tab opens that site again.
+
+Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
+a navigation or a tab switch the page has the focus, unless the user is
+typing in the address field; a tab showing a fresh blank page puts it in
+the field. The model reports the move with `AU_CHANGED_FOCUS_PAGE` or
+`AU_CHANGED_FOCUS_FIELD`.
+
+A horizontal scroll bar appears along the bottom of the page area while
+the active page is wider than it (`au_chrome_layout_hscroll`); the two
+bars meet at a blank corner square above the grow box, and Shift turns
+a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
+
+To change Save Page As, see `au_page_source` (the page keeps the main
+document's bytes as they arrived, until the next load), `au_bw_save_name`
+(the suggested file name) and `mac_save_page` in `storage.c`, which asks
+with `StandardPutFile` and writes the bytes unchanged as a TEXT file with
+creator AURA. Open Location selects the whole address again when the
+field already has the focus, and a paste into the field turns line
+breaks into spaces.
+
+Back and Forward: a Command-click opens that entry in a new tab behind
+(`au_bw_go_new_tab`); holding the button for half a second (30 ticks)
+shows a pop-up of the entries that way (`au_bw_history_items`,
+`history_popup` in `browserwin.c`). File > Reopen Closed Tab
+(Shift-Command-T, mapped in `key_down` because MenuKey ignores Shift)
+brings back the last of up to `AU_MAX_CLOSED_TABS` closed tabs with
+their history and scroll position. While a page loads, the status bar
+shows its progress in the middle (`AuChromeState.progress_text`). Each
+window's position goes into the session (`au_bw_set_position` after a
+drag or zoom) and a restored window returns there when its title bar
+is still on screen.
+
+To change the About box or about:licences, edit the credits table in
+`src/browser/credits.c` (the version, the tagline, and one entry per
+bundled font or third-party library with its licence); `aboutbox.c`
+and `build_licences` in `page_doc.c` both read it. The table has a
+commented slot for the BearSSL and QuickJS-ng entries: add them there
+when those libraries join the build. The About box (DLOG 202) draws
+icon family 128 at 64 pixels with `PlotIconID`; its empty `dctb` gives
+it a colour port, without which the icon draws in black and white.
+
+To change how Aura works with Internet Config, edit
+`src/platform/macos9/internetconfig.c`. Mac OS 9.2.2 has the Internet
+Config component ('PREF', 'ICAp') but no InternetConfigLib shared
+library (GetSharedLibrary fails with -2804 in the stock guest), so
+Retro68's InternetConfigLib stub cannot be used: Aura opens the
+component with `OpenDefaultComponent` and makes each call through
+`CallComponentUPP` with a parameter block, checking every selector with
+`kComponentCanDoSelect` first. `internetconfig.h` declares what the
+Multiversal Interfaces lack (the IC records, in 68K alignment, and the
+Component Manager calls). Addresses Aura does not open itself
+(`au_browser_opens_url`) reach the shell through
+`AuBrowserHost.open_external`, which calls `ICLaunchURL`. The GURL Apple
+event opens its URL in a new tab, or a new window with
+`links.external_new_window`. Preferences > General has the Make Aura
+the Default Browser button, the only place Aura writes Internet Config
+(the http, https and file helpers). `mac_ic_download_folder` and
+`mac_ic_map_filename` are there for downloads. To send a GURL in the
+guest, run `open location "URL"` in Script Editor.
+
+To change what a contextual menu offers, edit `src/browser/context.c`:
+`au_bw_context_menu` builds the items for a window point (link, image,
+page, address field or tab, using `au_page_hit_info` for the page) and
+`au_bw_context_command` runs the commands the model can; the shell does
+the rest (clipboard, field editing, a new window). On Mac OS 9,
+`contextmenu.c` finds the Contextual Menu Manager in the ContextualMenu
+shared library at run time (the Multiversal Interfaces do not declare
+it) and falls back to `PopUpMenuSelect`; Control-click opens the menu,
+and so does holding the button still on the page for 45 ticks.
+
+To change text selection or find, work in `src/layout/selection.c`
+(positions, words, paragraphs, the text of a range, find, and the
+painted highlight; `draw.c` calls `l_select_paint_frag` for each text
+fragment while a selection is set) and in the selection section of
+`page_doc.c`, which turns mouse events into selections: a drag selects
+characters, a double click a word, a triple click a paragraph, Shift
+extends, and a drag that selects does not follow the link it started
+on. `au_page_find` searches the page's text with simple case folding
+(ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
+selection, wrapping. The Mac OS 9 shell counts clicks within the
+double-click time, copies with `mac_put_scrap` (TEXT in Mac Roman with
+transliteration and carriage returns, plus 'utxt'), asks for the text
+with the Find dialog (DLOG 201), maps Shift-Command-G to Find Previous
+itself (MenuKey ignores Shift), and paints selections in the
+Appearance highlight colour (`LMGetHiliteRGB`, passed in
+`AuBrowser.highlight`).
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
@@ -224,7 +313,15 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+`Session` and `Downloads`, and `Running` while it runs. The session
+(windows, tabs, back and forward lists, scroll positions) is saved
+3 seconds after tabs change and every 30 seconds while only scroll
+positions do (`session_gen`, `scroll_gen`). `Running` is made at start
+and deleted after the last save at quit; when Aura finds it at start,
+the last run crashed or ran out of memory, and Aura offers to restore
+the session (ALRT 133) unless the startup preference restores it
+anyway. To test this in the guest, press Command-Option-M (the
+out-of-memory test) and launch Aura again. Each is written to a `.tmp` file and swapped
 in; a file that fails to parse is renamed with ` (damaged)` before a new
 one is written. To start with clean state in the guest, delete that
 folder.

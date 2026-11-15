@@ -289,7 +289,7 @@ static AuHitPart hit_by_name(const char *s)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL};
     AuBrowser *b = au_browser_new(fonts, &host);
     b->prefs.tab_position = o->pos;
     if (o->column)

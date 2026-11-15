@@ -44,7 +44,7 @@ resource 'MENU' (128, "Apple") {
 };
 
 resource 'MENU' (129, "File") {
-	129, textMenuProc, 0x7FFFFF6F, enabled, "File",
+	129, textMenuProc, 0x7FFFFAEF, enabled, "File",
 	{
 		"New Window", noIcon, "N", noMark, plain;
 		"New Tab", noIcon, "T", noMark, plain;
@@ -53,13 +53,16 @@ resource 'MENU' (129, "File") {
 		"-", noIcon, noKey, noMark, plain;
 		"Close Tab", noIcon, "W", noMark, plain;
 		"Close Window", noIcon, noKey, noMark, plain;
+		"Reopen Closed Tab", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Save Page As...", noIcon, "S", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
 	}
 };
 
 resource 'MENU' (130, "Edit") {
-	130, textMenuProc, 0x7FFFFF7D, enabled, "Edit",
+	130, textMenuProc, 0x7FFFF77D, enabled, "Edit",
 	{
 		"Undo", noIcon, "Z", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
@@ -69,16 +72,24 @@ resource 'MENU' (130, "Edit") {
 		"Clear", noIcon, noKey, noMark, plain;
 		"Select All", noIcon, "A", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
+		"Find...", noIcon, "F", noMark, plain;
+		"Find Again", noIcon, "G", noMark, plain;
+		"Find Previous", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
 		"Preferences...", noIcon, noKey, noMark, plain
 	}
 };
 
 resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFFB7, enabled, "View",
+	131, textMenuProc, 0x7FFFFB77, enabled, "View",
 	{
 		"Reload", noIcon, "R", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
 		"View Source", noIcon, "U", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Zoom In", noIcon, "+", noMark, plain;
+		"Zoom Out", noIcon, "-", noMark, plain;
+		"Actual Size", noIcon, "0", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Tabs on Top", noIcon, noKey, noMark, plain;
 		"Tabs on Left", noIcon, noKey, noMark, plain;
@@ -149,27 +160,6 @@ resource 'tab#' (128) {
 	}
 };
 
-/* 128: About. */
-resource 'ALRT' (128) {
-	{0, 0, 120, 360}, 128,
-	{
-		OK, visible, sound1;
-		OK, visible, sound1;
-		OK, visible, sound1;
-		OK, visible, sound1
-	},
-	alertPositionMainScreen
-};
-
-resource 'DITL' (128) {
-	{
-		{88, 278, 108, 346}, Button { enabled, "OK" };
-		{12, 70, 80, 346}, StaticText { disabled,
-			"Aura 0.3\0x0DA web browser for Mac OS 9.\0x0D"
-			"Test build: local HTML files through Aura's own engine; no networking yet." }
-	}
-};
-
 /* 131: page timings and memory (Debug > Page Timings), ^0 to ^3. */
 resource 'ALRT' (131) {
 	{0, 0, 230, 440}, 131,
@@ -229,6 +219,47 @@ resource 'DITL' (130) {
 	}
 };
 
+/* 132: a file error; ^0 says what failed. */
+resource 'ALRT' (132) {
+	{0, 0, 100, 360}, 132,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (132) {
+	{
+		{68, 278, 88, 346}, Button { enabled, "OK" };
+		{12, 70, 60, 346}, StaticText { disabled, "^0" }
+	}
+};
+
+/* 133: offers to restore the last session after an unclean exit. */
+resource 'ALRT' (133) {
+	{0, 0, 120, 380}, 133,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (133) {
+	{
+		{88, 278, 108, 366}, Button { enabled, "Restore" };
+		{88, 156, 108, 266}, Button { enabled, "Don't Restore" };
+		{12, 70, 80, 366}, StaticText { disabled,
+			"Aura did not quit normally last time. Restore the windows and tabs "
+			"that were open?" }
+	}
+};
+
 /* 200: asks for a name (new bookmark folder, rename); ^0 is the prompt. */
 resource 'DLOG' (200) {
 	{0, 0, 110, 340}, movableDBoxProc, invisible, noGoAway, 0, 200, "Name",
@@ -241,6 +272,47 @@ resource 'DITL' (200) {
 		{78, 168, 98, 240}, Button { enabled, "Cancel" };
 		{40, 16, 56, 324}, EditText { enabled, "" };
 		{12, 16, 30, 324}, StaticText { disabled, "^0" }
+	}
+};
+
+/* 202: About Aura. ^0 name and version, ^1 what Aura is, ^2 fonts,
+ * ^3 libraries (aboutbox.c fills them from the credits table). */
+resource 'DLOG' (202) {
+	{0, 0, 236, 420}, movableDBoxProc, invisible, noGoAway, 0, 202, "About Aura",
+	alertPositionMainScreen
+};
+
+/* An empty colour table: its presence makes the Dialog Manager give the
+ * About box a colour port, so the icon draws in colour. */
+data 'dctb' (202) {
+	$"00000000 0000 FFFF"
+};
+
+resource 'DITL' (202) {
+	{
+		{200, 334, 220, 404}, Button { enabled, "OK" };
+		{200, 222, 220, 322}, Button { enabled, "Licences..." };
+		{16, 16, 80, 80}, UserItem { disabled };
+		{20, 96, 38, 404}, StaticText { disabled, "^0" };
+		{42, 96, 78, 404}, StaticText { disabled, "^1" };
+		{96, 16, 150, 404}, StaticText { disabled, "^2" };
+		{156, 16, 190, 404}, StaticText { disabled, "^3" }
+	}
+};
+
+/* 201: Find (Edit > Find...). */
+resource 'DLOG' (201) {
+	{0, 0, 120, 340}, movableDBoxProc, invisible, noGoAway, 0, 201, "Find",
+	alertPositionMainScreen
+};
+
+resource 'DITL' (201) {
+	{
+		{88, 254, 108, 326}, Button { enabled, "Find" };
+		{88, 168, 108, 240}, Button { enabled, "Cancel" };
+		{36, 16, 52, 324}, EditText { enabled, "" };
+		{12, 16, 30, 324}, StaticText { disabled, "Find text in this page:" };
+		{60, 16, 78, 324}, CheckBox { enabled, "Match case" }
 	}
 };
 

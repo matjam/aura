@@ -87,6 +87,8 @@ typedef struct AuPageEnv {
     /* The fetcher for a URL scheme (lower case, without ':'), or NULL.
      * Optional. file: and about: are built in. */
     const AuPageFetcher *(*fetcher)(void *ctx, const char *scheme);
+    /* The selection highlight colour (paint ARGB); 0 for a default. */
+    uint32_t highlight;
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -134,6 +136,11 @@ const char *au_page_title(const AuPage *p); /* "" when the page has none */
 bool au_page_loading(const AuPage *p);
 float au_page_progress(const AuPage *p);    /* 0..1 while loading */
 AuSecurity au_page_security(const AuPage *p);
+/* The main document's bytes as they arrived (for Save Page As): false
+ * while it is loading, after a failed or stopped load, and for pages
+ * that have none (about:scene). The bytes stay valid until the next
+ * load or au_page_free. */
+bool au_page_source(const AuPage *p, const char **data, size_t *len);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */
 void au_page_set_viewport(AuPage *p, int width, int height);
@@ -142,6 +149,13 @@ void au_page_content_size(const AuPage *p, int *width, int *height);
 void au_page_set_scroll(AuPage *p, int x, int y);
 /* Font preferences or other settings in env.prefs changed: restyle. */
 void au_page_prefs_changed(AuPage *p);
+/* Text zoom: font sizes are multiplied by zoom (clamped to the range
+ * below); other lengths are not. It applies to this and later documents
+ * of the page until changed. */
+#define AU_PAGE_ZOOM_MIN 0.5f
+#define AU_PAGE_ZOOM_MAX 3.0f
+void au_page_set_zoom(AuPage *p, float zoom);
+float au_page_zoom(const AuPage *p);
 
 /* Paints the document into the canvas rectangle view (canvas
  * coordinates), with the document point (scroll_x, scroll_y) at view's
@@ -151,6 +165,28 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
 /* Input in document coordinates. Return true when the page used it. */
 bool au_page_mouse(AuPage *p, const AuEvent *ev);
 bool au_page_key(AuPage *p, const AuEvent *ev);
+/* What is at document point (x, y), for a contextual menu: appends the
+ * absolute URL of the link under it to link and of the image under it to
+ * image (nothing when there is none; either may be NULL). */
+void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image);
+/* ---- Text selection and find ----
+ * The user selects text with the mouse through au_page_mouse: dragging
+ * selects characters, a double click a word, a triple click a paragraph
+ * (dragging after them extends by words or paragraphs), Shift-click
+ * extends the selection. A drag that selects does not activate the link
+ * it started on. A new document clears the selection. */
+bool au_page_has_selection(const AuPage *p);
+/* Appends the selected text (UTF-8, line breaks between blocks) to out;
+ * false when nothing is selected. */
+bool au_page_selection_text(AuPage *p, AuBuf *out);
+void au_page_select_all(AuPage *p);
+void au_page_clear_selection(AuPage *p);
+/* Finds text in the page, forward from the selection's end or backward
+ * from its start (the whole page without one), wrapping around; selects
+ * the match and scrolls it into view. Case-insensitive unless
+ * case_sensitive. False when there is no match (the selection stays). */
+bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive);
+
 /* Scrolls an inner scrolling box under document point (x, y) by (dx,
  * dy). Returns false when none can move: the browser then scrolls the
  * viewport. */
