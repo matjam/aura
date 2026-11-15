@@ -57,6 +57,7 @@ typedef struct AuFontFace {
     int16_t avg_width; /* OS/2 xAvgCharWidth, 0 when absent */
     uint16_t weight; /* OS/2 usWeightClass, 400 when absent */
     bool italic;
+    uint8_t synth; /* AU_FONT_SYNTH_*: styles drawn by Aura, not the font */
 
     char family[64];   /* typographic family (name 16), else family (1) */
     char subfamily[64];
@@ -70,6 +71,17 @@ int au_font_face_count(const void *data, size_t len);
  * TrueType font. data must outlive the face. */
 AuFontFace *au_font_face_new(const void *data, size_t len, int index);
 void au_font_face_free(AuFontFace *f);
+
+/* Synthesized styles, for a family that lacks a bold or italic face (as
+ * browsers do): bold strikes each outline twice, offset to the right by
+ * 1/24 of the em at 9px down to 1/32 at 36px and up (Skia's fake bold
+ * strength); italic shears the outlines by 0.2 (about 11 degrees).
+ * Advances do not change, so text measures as the regular face. */
+enum { AU_FONT_SYNTH_BOLD = 1, AU_FONT_SYNTH_ITALIC = 2 };
+/* A copy of f that draws with the given synthesized styles (its own id
+ * in the glyph cache; italic and weight say what it draws). Free it with
+ * au_font_face_free before f's data goes. */
+AuFontFace *au_font_face_synthesize(const AuFontFace *f, unsigned synth);
 
 /* The glyph for a Unicode code point; 0 (.notdef) when missing. */
 uint16_t au_font_glyph(const AuFontFace *f, uint32_t cp);

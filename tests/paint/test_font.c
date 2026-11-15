@@ -140,6 +140,58 @@ static double glyph_area(const AuFontFace *f, uint16_t g, float scale, int w, in
     return s;
 }
 
+/* Coverage (0..255) of pixel (x, y) of glyph g drawn at scale with its
+ * baseline at y = 60 in an 80x60 mask. */
+static int glyph_px(const AuFontFace *f, uint16_t g, float scale, int x, int y)
+{
+    AuPath p;
+    au_path_init(&p);
+    CHECK(au_font_glyph_path(f, g, scale, scale, 0, 60, &p));
+    uint8_t *m = au_calloc(80 * 60);
+    au_raster_mask(&p, AU_FILL_NONZERO, (AuIRect){0, 0, 80, 60}, m);
+    int v = m[y * 80 + x];
+    au_free(m);
+    au_path_free(&p);
+    return v;
+}
+
+/* A family with only a regular face gets synthesized italic and bold. */
+static void test_synthesis(const uint8_t *data, size_t len)
+{
+    AuFontSet *set = au_fontset_new();
+    CHECK(au_fontset_add_data(set, data, len) == 1);
+    AuFontFace *reg = au_fontset_match(set, "TestSans", 400, false);
+    AuFontFace *it = au_fontset_match(set, "TestSans", 400, true);
+    AuFontFace *bd = au_fontset_match(set, "TestSans", 700, false);
+    AuFontFace *bi = au_fontset_match(set, "TestSans", 700, true);
+    CHECK(reg && it && bd && bi);
+    CHECK(reg->synth == 0 && !reg->italic);
+    CHECK(it->synth == AU_FONT_SYNTH_ITALIC && it->italic);
+    CHECK(bd->synth == AU_FONT_SYNTH_BOLD && bd->weight == 700 && !bd->italic);
+    CHECK(bi->synth == (AU_FONT_SYNTH_BOLD | AU_FONT_SYNTH_ITALIC));
+    CHECK(it->id != reg->id && bd->id != reg->id && bi->id != it->id);
+    /* Variants are made once. */
+    CHECK(au_fontset_match(set, "TestSans", 400, true) == it);
+    CHECK(au_fontset_match(set, "TestSans", 800, false) == bd);
+    /* 500 is not bold enough to synthesize. */
+    CHECK(au_fontset_match(set, "TestSans", 500, false) == reg);
+    /* Advances do not change. */
+    CHECK_NEAR(au_text_width(it, 20, "AB", 2), au_text_width(reg, 20, "AB", 2), 1e-4);
+    CHECK_NEAR(au_text_width(bd, 20, "AB", 2), au_text_width(reg, 20, "AB", 2), 1e-4);
+    /* Glyph 1 is the square x 100..900, y 0..800: at 0.05 px per unit,
+     * x 5..45 with its top at y = 20. Italic leans the top right by
+     * 0.2 x 39 = 7.8 px; bold strikes again 50/32 px to the right. */
+    CHECK(glyph_px(reg, 1, 0.05f, 6, 21) == 255);
+    CHECK(glyph_px(it, 1, 0.05f, 6, 21) == 0);
+    CHECK(glyph_px(it, 1, 0.05f, 50, 21) == 255);
+    CHECK(glyph_px(reg, 1, 0.05f, 50, 21) == 0);
+    CHECK(glyph_px(reg, 1, 0.05f, 45, 40) == 0);
+    CHECK(glyph_px(bd, 1, 0.05f, 45, 40) == 255);
+    CHECK_NEAR(glyph_area(it, 1, 0.05f, 80, 60), 1600, 2);
+    CHECK_NEAR(glyph_area(bd, 1, 0.05f, 80, 60), 40 * (40 + 50.0 / 32), 2);
+    au_fontset_free(set);
+}
+
 static uint32_t rng = 12345;
 static uint32_t next_rand(void)
 {
@@ -294,6 +346,7 @@ static void test_built_font(void)
     CHECK(au_fontset_match(set, "Nope, sans-serif", 700, true) != NULL);
     CHECK(au_fontset_match(set, "", 400, false) != NULL); /* fallback */
     au_fontset_free(set);
+    test_synthesis(data, len);
 
     au_font_face_free(f);
     /* Damaged copies of the built font. */
@@ -346,7 +399,9 @@ static void test_matching(void)
     CHECK(au_fontset_match(set, "Fam", 600, false) == w700); /* 600: heavier first */
     CHECK(au_fontset_match(set, "Fam", 200, false) == w300); /* 200: lighter first */
     CHECK(au_fontset_match(set, "Fam", 900, false) == w700);
-    CHECK(au_fontset_match(set, "Fam", 700, true) == wit);    /* style before weight */
+    /* Style before weight: the italic 400, with bold synthesized. */
+    AuFontFace *wbi = au_fontset_match(set, "Fam", 700, true);
+    CHECK(wbi && wbi->italic && wbi->synth == AU_FONT_SYNTH_BOLD);
     au_fontset_free(set);
 }
 
