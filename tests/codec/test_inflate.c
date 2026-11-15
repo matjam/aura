@@ -312,8 +312,8 @@ static void test_bad_streams(void)
         au_inflate_free(z);
     }
     /* Checksums against known values. */
-    CHECK(au_crc32(0, "123456789", 9) == 0xCBF43926u, "crc32 check value");
-    CHECK(au_adler32(1, "Wikipedia", 9) == 0x11E60398u, "adler32 check value");
+    CHECK(au_codec_crc32(0, "123456789", 9) == 0xCBF43926u, "crc32 check value");
+    CHECK(au_codec_adler32(1, "Wikipedia", 9) == 0x11E60398u, "adler32 check value");
 }
 
 /* Throughput on the largest vector, decoded repeatedly. */

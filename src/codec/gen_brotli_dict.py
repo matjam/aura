@@ -60,7 +60,7 @@ AuBrotliDict *au_brotli_dict_new(void)
     AuBrotliDict *d;
     if (!au_inflate_all(AU_INFLATE_ZLIB, dict_z, sizeof dict_z, AU_BROTLI_DICT_SIZE, &bytes, &len))
         return NULL;
-    if (len != AU_BROTLI_DICT_SIZE || au_crc32(0, bytes, len) != DICT_CRC) {
+    if (len != AU_BROTLI_DICT_SIZE || au_codec_crc32(0, bytes, len) != DICT_CRC) {
         au_free(bytes);
         return NULL;
     }

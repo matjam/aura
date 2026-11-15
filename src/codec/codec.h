@@ -53,8 +53,8 @@ static inline void au_decoder_free(AuDecoder *d)
 static inline const char *au_decoder_error(const AuDecoder *d) { return d->error(d); }
 
 /* ---- CRC-32 (ISO 3309, as gzip uses) and Adler-32 ---- */
-uint32_t au_crc32(uint32_t crc, const void *data, size_t len); /* start with 0 */
-uint32_t au_adler32(uint32_t adler, const void *data, size_t len); /* start with 1 */
+uint32_t au_codec_crc32(uint32_t crc, const void *data, size_t len); /* start with 0 */
+uint32_t au_codec_adler32(uint32_t adler, const void *data, size_t len); /* start with 1 */
 
 /* ---- Inflate ---- */
 typedef enum {

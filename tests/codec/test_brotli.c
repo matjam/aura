@@ -318,7 +318,7 @@ static void test_dict(void)
 {
     const uint8_t *p = au_brotli_dict_bytes(dict);
     CHECK(memcmp(p, "timedownlifeleftback", 20) == 0, "dictionary start");
-    CHECK(au_crc32(0, p, AU_BROTLI_DICT_SIZE) == 0x5136CB04u, "dictionary CRC");
+    CHECK(au_codec_crc32(0, p, AU_BROTLI_DICT_SIZE) == 0x5136CB04u, "dictionary CRC");
 }
 
 static double now(void) { return (double)clock() / CLOCKS_PER_SEC; }

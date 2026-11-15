@@ -181,12 +181,15 @@ AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const
         memcpy(&sp, resume->data, sizeof sp < sizeof resume->data ? sizeof sp : sizeof resume->data);
         br_ssl_engine_set_session_parameters(eng, &sp);
     }
+    /* Entropy goes in before the reset: the reset seeds the engine's DRBG
+     * and fails with BR_ERR_NO_RANDOM when nothing was injected (the
+     * build has no system seeder). */
+    br_ssl_engine_inject_entropy(eng, seed, 32);
     if (!br_ssl_client_reset(cc, host, resume && resume->valid)) {
         t->failed = true;
         t->error = br_ssl_engine_last_error(eng);
         return t;
     }
-    br_ssl_engine_inject_entropy(eng, seed, 32);
     return t;
 }
 

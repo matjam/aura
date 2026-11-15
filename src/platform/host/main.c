@@ -19,6 +19,7 @@
 #include "browser/scene.h"
 #include "browser/url.h"
 #include "render.h"
+#include "net_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -379,6 +380,8 @@ int main(int argc, char **argv)
     if (argc < 2)
         return usage();
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "fetch"))
+        return au_host_fetch_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
     if (!strcmp(cmd, "chrome")) {

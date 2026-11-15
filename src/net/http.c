@@ -195,6 +195,13 @@ AuHttpCache *au_net_cache(AuNet *net) { return net->cache; }
 void au_net_set_roots(AuNet *net, const AuRootStore *roots) { net->roots = roots; }
 
 static uint32_t now_ms(AuNet *net) { return net->ops.now_ms(net->ops.ctx); }
+/* Milliseconds from since to now, wrap-safe; 0 when since is later (a
+ * time stamp taken after now was read). */
+static uint32_t elapsed(uint32_t now, uint32_t since)
+{
+    int32_t d = (int32_t)(now - since);
+    return d > 0 ? (uint32_t)d : 0;
+}
 static int64_t wall(AuNet *net) { return net->ops.wall_time(net->ops.ctx); }
 
 /* ---- Body sources ---- */
@@ -695,7 +702,7 @@ static bool conn_step(Conn *c)
         AuNetAddr a;
         int r = net->ops.resolve_poll(net->ops.ctx, c->resolve_req, &a);
         if (r == 0) {
-            if (now - c->started_ms > net->cfg.connect_timeout_ms)
+            if (elapsed(now, c->started_ms) > net->cfg.connect_timeout_ms)
                 conn_kill(c, AU_NET_ERR_TIMEOUT);
             return false;
         }
@@ -716,7 +723,7 @@ static bool conn_step(Conn *c)
     case C_CONNECT: {
         int r = net->ops.connect_poll(net->ops.ctx, c->sock);
         if (r == 0) {
-            if (now - c->started_ms > net->cfg.connect_timeout_ms)
+            if (elapsed(now, c->started_ms) > net->cfg.connect_timeout_ms)
                 conn_kill(c, AU_NET_ERR_TIMEOUT);
             return false;
         }
@@ -780,7 +787,7 @@ static bool conn_step(Conn *c)
             conn_kill(c, AU_NET_ERR_PROXY);
             return true;
         }
-        if (now - c->last_ms > net->cfg.connect_timeout_ms)
+        if (elapsed(now, c->last_ms) > net->cfg.connect_timeout_ms)
             conn_kill(c, AU_NET_ERR_TIMEOUT);
         return moved;
     }
@@ -799,7 +806,7 @@ static bool conn_step(Conn *c)
             conn_kill(c, AU_NET_ERR_TLS);
             return true;
         }
-        if (now - c->last_ms > net->cfg.connect_timeout_ms)
+        if (elapsed(now, c->last_ms) > net->cfg.connect_timeout_ms)
             conn_kill(c, AU_NET_ERR_TIMEOUT);
         return moved;
     }
@@ -1686,7 +1693,7 @@ static bool step(AuHttpTransfer *t)
         t->state = T_FINISHED;
         return true;
     }
-    if (t->total_timeout && now - t->started_ms > t->total_timeout && t->state != T_FINISHED &&
+    if (t->total_timeout && elapsed(now, t->started_ms) > t->total_timeout && t->state != T_FINISHED &&
         t->state != T_FAILED) {
         detach_conn(t, false);
         fail_later(t, AU_NET_ERR_TIMEOUT);
@@ -1761,7 +1768,7 @@ static bool step(AuHttpTransfer *t)
         if (any)
             t->last_ms = now;
         if ((t->state == T_SEND || t->state == T_RECV || t->state == T_DRAIN) && t->conn &&
-            now - t->last_ms > net->cfg.idle_timeout_ms) {
+            elapsed(now, t->last_ms) > net->cfg.idle_timeout_ms) {
             detach_conn(t, false);
             fail_later(t, AU_NET_ERR_TIMEOUT);
             return true;
@@ -1792,7 +1799,8 @@ bool au_net_pump(AuNet *net)
             continue;
         if (c->state == C_READY)
             conn_io(c);
-        if (c->state == C_DEAD || c->eof || now - c->last_ms > net->cfg.keepalive_ms || c->in.len > c->in_off) {
+        if (c->state == C_DEAD || c->eof || elapsed(now, c->last_ms) > net->cfg.keepalive_ms ||
+            c->in.len > c->in_off) {
             conn_remove(net, c);
             any = true;
         }
