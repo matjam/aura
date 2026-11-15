@@ -383,18 +383,33 @@ bad_order:
 
 static void set_doc_subtree(AuNode *root, AuDocument *doc)
 {
-    if (root->doc == doc)
-        return;
-    for (AuNode *n = root; n; n = au_node_next(n, root)) {
-        n->doc = doc;
-        if (n->type == AU_NODE_ELEMENT) {
-            AuElement *e = (AuElement *)n;
-            if (e->template_content)
-                e->template_content->doc = doc; /* its contents keep their own document in the standard; close enough */
-            if (e->shadow_root)
-                set_doc_subtree(e->shadow_root, doc);
+    /* Shadow roots met on the way are walked from a list rather than by a
+     * nested call: script can nest hosts in shadow roots without limit. */
+    AuNode **work = NULL;
+    size_t nwork = 0, cap = 0;
+    for (;;) {
+        if (root->doc != doc) {
+            for (AuNode *n = root; n; n = au_node_next(n, root)) {
+                n->doc = doc;
+                if (n->type == AU_NODE_ELEMENT) {
+                    AuElement *e = (AuElement *)n;
+                    if (e->template_content)
+                        e->template_content->doc = doc; /* its contents keep their own document in the standard; close enough */
+                    if (e->shadow_root) {
+                        if (nwork == cap) {
+                            cap = cap ? cap * 2 : 8;
+                            work = au_realloc(work, cap * sizeof *work);
+                        }
+                        work[nwork++] = e->shadow_root;
+                    }
+                }
+            }
         }
+        if (!nwork)
+            break;
+        root = work[--nwork];
     }
+    au_free(work);
 }
 
 /* Inserts node (a fragment's children when it is a fragment) before child.
@@ -529,36 +544,57 @@ static AuNode *clone_one(AuDocument *doc, const AuNode *n)
     return NULL;
 }
 
-static void clone_children(AuDocument *doc, const AuNode *src, AuNode *dst);
+/* Clones src's subtree under dst without recursion over depth. Template
+ * contents met on the way are cloned from a list rather than by a nested
+ * call: templates nest in templates as deeply as a page likes. */
+typedef struct ClonePair {
+    const AuNode *src;
+    AuNode *dst;
+} ClonePair;
 
-/* Clones src's subtree under dst without recursion over depth (template
- * contents recurse once per nested template, which is bounded by the
- * number of templates). */
 static void clone_children(AuDocument *doc, const AuNode *src, AuNode *dst)
 {
-    const AuNode *s = src->first_child;
-    AuNode *d = dst;
-    while (s) {
-        AuNode *c = clone_one(doc, s);
-        if (c) {
-            au_node_append(d, c);
-            au_node_unref(c);
-            if (s->type == AU_NODE_ELEMENT && ((const AuElement *)s)->template_content)
-                clone_children(doc, ((const AuElement *)s)->template_content, ((AuElement *)c)->template_content);
+    ClonePair *work = NULL;
+    size_t nwork = 0, cap = 0;
+    for (;;) {
+        const AuNode *s = src->first_child;
+        AuNode *d = dst;
+        while (s) {
+            AuNode *c = clone_one(doc, s);
+            if (c) {
+                au_node_append(d, c);
+                au_node_unref(c);
+                if (s->type == AU_NODE_ELEMENT && ((const AuElement *)s)->template_content &&
+                    ((AuElement *)c)->template_content) {
+                    if (nwork == cap) {
+                        cap = cap ? cap * 2 : 8;
+                        work = au_realloc(work, cap * sizeof *work);
+                    }
+                    work[nwork].src = ((const AuElement *)s)->template_content;
+                    work[nwork].dst = ((AuElement *)c)->template_content;
+                    nwork++;
+                }
+            }
+            if (s->first_child && c) {
+                s = s->first_child;
+                d = c;
+                continue;
+            }
+            while (s && s != src && !s->next) {
+                s = s->parent;
+                d = d->parent;
+            }
+            if (!s || s == src)
+                break;
+            s = s->next;
         }
-        if (s->first_child && c) {
-            s = s->first_child;
-            d = c;
-            continue;
-        }
-        while (s && s != src && !s->next) {
-            s = s->parent;
-            d = d->parent;
-        }
-        if (!s || s == src)
+        if (!nwork)
             break;
-        s = s->next;
+        nwork--;
+        src = work[nwork].src;
+        dst = work[nwork].dst;
     }
+    au_free(work);
 }
 
 static AuNode *clone_node(AuDocument *doc, const AuNode *n, bool deep)
