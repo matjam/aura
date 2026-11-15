@@ -727,6 +727,9 @@ static void test_cache_navigation(void)
     env_init(&e);
     AuHttpCache *cache = au_cache_new(1 << 20);
     au_net_set_cache(e.net, cache);
+    /* Without the document cache (tests/browser/test_back_cache.c covers
+     * it), Back and Forward load through the HTTP cache's history mode. */
+    e.b->prefs.document_cache_pages = 0;
     FakeServer *s = fake_server(&e.f, "wiki.test", 80);
     static char pa[512], pb[512], css[256], nm[256];
     const char *a = "<!DOCTYPE html><title>A</title><link rel=stylesheet href=/s.css><p>page a "

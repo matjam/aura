@@ -72,6 +72,7 @@ struct AuDocView {
     AuElement *hover, *active;
     char hover_link[2048];
     uint32_t scanned_nodes;
+    size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     /* scripts (script.c) */
     AuDocScript *script; /* this document's, while scripting is on */
     bool scripting;      /* the setting, applied at begin */

@@ -101,6 +101,24 @@ void au_js_unload(AuJs *js)
     call_bool(js, "unload", 0, NULL);
 }
 
+bool au_js_has_unload_handler(AuJs *js)
+{
+    bool r = true; /* when in doubt, the document is not kept */
+    if (!js->closing) {
+        JSValue v = js_call_prelude(js, "hasUnloadHandler", 0, NULL);
+        if (JS_IsBool(v))
+            r = JS_ToBool(js->ctx, v);
+        JS_FreeValue(js->ctx, v);
+    }
+    return r;
+}
+
+void au_js_page_transition(AuJs *js, bool show)
+{
+    JSValue a[1] = {JS_NewBool(js->ctx, show)};
+    call_bool(js, "pageTransition", 1, a);
+}
+
 void au_js_resized(AuJs *js)
 {
     call_bool(js, "resized", 0, NULL);

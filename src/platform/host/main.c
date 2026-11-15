@@ -51,12 +51,15 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
-            "                        go:URL back forward cache (the HTTP cache's counts with --net)\n"
-            "                        js:CODE (evaluate in the page) save:FILE (the page source) console)\n"
+            "                        go:URL back forward cache (the HTTP cache's counts with --net,\n"
+            "                        the documents kept for Back and Forward, DNS lookups)\n"
+            "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
+            "                        in the page) save:FILE (the page source) console;\n"
+            "                        --no-doc-cache makes Back and Forward load again)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
@@ -291,6 +294,7 @@ typedef struct ChromeOpts {
     int scroll, mouse_x, mouse_y;
     int scroll_bench; /* steps of the scroll benchmark; 0 for none */
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
+    bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
@@ -602,15 +606,38 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         au_bw_navigate(w, a + 3);
         chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
     } else if (!strcmp(a, "back") || !strcmp(a, "forward")) {
+        double t0 = now_ms();
         au_bw_go(w, a[0] == 'b' ? -1 : 1);
+        double shown = now_ms() - t0;
         chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+        AuTab *bt = au_bw_active_tab(w);
+        AuPageStats ps;
+        memset(&ps, 0, sizeof ps);
+        if (bt)
+            au_page_stats(bt->page, &ps);
+        printf("%s: %s, %.1f ms in the call, %.0f ms until idle\n", a,
+               ps.restored          ? "the kept document was shown"
+               : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
+                                    : "the page was loaded again, its document from the network",
+               shown, now_ms() - t0);
     } else if (!strcmp(a, "cache")) {
         AuCacheStats cs;
         memset(&cs, 0, sizeof cs);
         if (o->cache)
             au_cache_stats(o->cache, &cs);
-        printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored\n",
-               cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored);
+        printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored, "
+               "%lu stale while revalidating\n",
+               cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored, cs.stale_while_revalidate);
+        size_t kept_bytes = 0;
+        size_t kept = au_browser_kept_documents(b, &kept_bytes);
+        printf("documents kept for Back and Forward: %lu, about %lu KB\n", (unsigned long)kept,
+               (unsigned long)(kept_bytes / 1024));
+        if (ses->net) {
+            AuDnsStats ds;
+            au_net_dns_stats(ses->net, &ds);
+            printf("dns: %lu lookups, %lu from the cache, %lu shared, %lu requests\n", ds.lookups, ds.hits, ds.shared,
+                   ds.requests);
+        }
     } else if (!strncmp(a, "keys:", 5)) {
         /* Types TEXT one key at a time and prints what each key cost:
          * the time in the key event and the idle pass after it, the
@@ -710,6 +737,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         host.invalidate = key_inval;
     }
     AuBrowser *b = au_browser_new(fonts, &host);
+    if (o->no_doc_cache)
+        b->prefs.document_cache_pages = 0;
     /* --net: http and https through the network stack and page fetcher,
      * as the Mac application does; without it they show the stand-in. */
     AuHostSession ses;
@@ -907,6 +936,8 @@ int main(int argc, char **argv)
                 o.scroll_bench = atoi(argv[++i]);
             else if (!strcmp(a, "--no-shift"))
                 o.no_shift = true;
+            else if (!strcmp(a, "--no-doc-cache"))
+                o.no_doc_cache = true;
             else if (!strcmp(a, "--mouse") && i + 2 < argc) {
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);
