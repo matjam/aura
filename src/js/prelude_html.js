@@ -1,0 +1,1452 @@
+
+/* ---------------- HTML elements: reflection ---------------- */
+
+const HEP = HTMLElement.prototype;
+const resolveUrl = (v) => { const r = N.urlParse(str(v), null); return r ? r[0] : str(v); };
+
+/* Reflected attributes, as compact tables: [property, kind, attribute,
+ * extra]. Kinds: s string, b boolean, u URL, l long (extra: default),
+ * n non-negative long (extra: default), e enumerated (extra:
+ * [keywords, missing default, invalid default]), d double (extra:
+ * default), t token list (the DOMTokenList property; extra: supported
+ * tokens). */
+function reflect(proto, rows) {
+    const props = {};
+    for (const [prop, kind, attrName, extra] of rows) {
+        const attr = attrName || prop.toLowerCase();
+        let d;
+        switch (kind) {
+        case 's':
+            d = { get() { return this.getAttribute(attr) ?? ''; }, set(v) { this.setAttribute(attr, str(v)); } };
+            break;
+        case 'b':
+            d = { get() { return this.hasAttribute(attr); }, set(v) { this.toggleAttribute(attr, !!v); } };
+            break;
+        case 'u':
+            d = {
+                get() { const v = this.getAttribute(attr); return v === null ? '' : resolveUrl(v); },
+                set(v) { this.setAttribute(attr, str(v)); },
+            };
+            break;
+        case 'l': case 'n': {
+            const def = extra === undefined ? (kind === 'n' ? 0 : 0) : extra;
+            d = {
+                get() {
+                    const v = this.getAttribute(attr);
+                    if (v === null) return def;
+                    const m = /^[\t\n\f\r ]*([+-]?[0-9]+)/.exec(v);
+                    if (!m) return def;
+                    const n = parseInt(m[1], 10);
+                    if (n < -2147483648 || n > 2147483647 || (kind === 'n' && n < 0)) return def;
+                    return n;
+                },
+                set(v) {
+                    v = Number(v) | 0;
+                    if (kind === 'n' && v < 0) throw domErr('The value must not be negative', 'IndexSizeError');
+                    this.setAttribute(attr, String(v));
+                },
+            };
+            break;
+        }
+        case 'd': {
+            const def = extra || 0;
+            d = {
+                get() { const v = parseFloat(this.getAttribute(attr)); return isFinite(v) ? v : def; },
+                set(v) { v = Number(v); if (!isFinite(v)) throw new TypeError('The value is not finite'); this.setAttribute(attr, String(v)); },
+            };
+            break;
+        }
+        case 'e': {
+            const [kw, missing, invalid] = extra;
+            d = {
+                get() {
+                    const v = this.getAttribute(attr);
+                    if (v === null) return missing;
+                    const l = v.toLowerCase();
+                    return kw.includes(l) ? l : invalid;
+                },
+                set(v) { this.setAttribute(attr, str(v)); },
+            };
+            break;
+        }
+        case 't':
+            d = {
+                get() { return tokenList(this, attr, extra); },
+                set(v) { this.setAttribute(attr, str(v)); },
+            };
+            break;
+        }
+        props[prop] = d;
+    }
+    for (const k of Object.keys(props)) Object.defineProperty(proto, k, Object.assign(props[k], { configurable: true, enumerable: true }));
+}
+
+reflect(HEP, [['title', 's'], ['lang', 's'], ['translate', 'e', 0, [['yes', 'no'], 'yes', 'yes']],
+    ['dir', 'e', 0, [['ltr', 'rtl', 'auto'], '', '']], ['hidden', 'b'], ['inert', 'b'], ['accessKey', 's', 'accesskey'],
+    ['autofocus', 'b'], ['nonce', 's'], ['autocapitalize', 's'], ['enterKeyHint', 's', 'enterkeyhint'],
+    ['inputMode', 's', 'inputmode'], ['popover', 's']]);
+defProps(HEP, {
+    get dataset() { return datasetOf(this); },
+    get style() { return styleOf(this); },
+    set style(v) { this.setAttribute('style', str(v)); },
+    get tabIndex() {
+        const v = this.getAttribute('tabindex');
+        if (v !== null && /^\s*[+-]?\d+/.test(v)) return parseInt(v, 10);
+        const n = this.localName;
+        if (/^(a|area|button|frame|iframe|input|object|select|textarea)$/.test(n)) return 0;
+        if (n === 'summary' && this.parentElement && this.parentElement.localName === 'details' &&
+            childOfType(this.parentElement, 'summary') === this) return 0;
+        return -1;
+    },
+    set tabIndex(v) { this.setAttribute('tabindex', String(Number(v) | 0)); },
+    get draggable() { const v = (this.getAttribute('draggable') || '').toLowerCase(); return v === 'true' || (v !== 'false' && (this.localName === 'img' || (this.localName === 'a' && this.hasAttribute('href')))); },
+    set draggable(v) { this.setAttribute('draggable', v ? 'true' : 'false'); },
+    get spellcheck() { return (this.getAttribute('spellcheck') || '').toLowerCase() !== 'false'; },
+    set spellcheck(v) { this.setAttribute('spellcheck', v ? 'true' : 'false'); },
+    get contentEditable() {
+        const v = this.getAttribute('contenteditable');
+        if (v === null) return 'inherit';
+        const l = v.toLowerCase();
+        return l === '' || l === 'true' ? 'true' : l === 'false' ? 'false' : l === 'plaintext-only' ? 'plaintext-only' : 'inherit';
+    },
+    set contentEditable(v) {
+        const l = str(v).toLowerCase();
+        if (l === 'inherit') this.removeAttribute('contenteditable');
+        else if (l === 'true' || l === 'false' || l === 'plaintext-only') this.setAttribute('contenteditable', l);
+        else throw domErr('Invalid contentEditable value', 'SyntaxError');
+    },
+    get isContentEditable() {
+        for (let e = this; e; e = e.parentElement) {
+            const v = e.getAttribute('contenteditable');
+            if (v !== null) return v.toLowerCase() !== 'false';
+        }
+        return false;
+    },
+    get innerText() { return innerTextOf(this); },
+    set innerText(v) {
+        v = str(v);
+        const d = this.ownerDocument;
+        const f = d.createDocumentFragment();
+        const lines = v.split(/\r\n|\r|\n/);
+        lines.forEach((l, i) => { if (i) f.appendChild(d.createElement('br')); if (l) f.appendChild(d.createTextNode(l)); });
+        this.replaceChildren(f);
+    },
+    get outerText() { return this.innerText; },
+    set outerText(v) { const t = this.ownerDocument.createTextNode(str(v)); this.replaceWith(t); },
+    click() {
+        if (this.hasAttribute('disabled') && isFormControl(this)) return;
+        if (this[S.clicking]) return;
+        this[S.clicking] = true;
+        try {
+            activate(this, new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: G }));
+        } finally {
+            this[S.clicking] = false;
+        }
+    },
+    attachInternals() { throw domErr('ElementInternals is not supported', 'NotSupportedError'); },
+});
+S.clicking = Symbol('clicking');
+
+/* innerText without layout: block-level elements break lines, br is a
+ * newline, display:none (hidden attribute, script, style, head) is
+ * skipped, and white space collapses outside pre. */
+const blockTags = new Set(['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'dd', 'div', 'dl', 'dt',
+    'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr',
+    'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul', 'tr', 'summary', 'center', 'body', 'html', 'caption']);
+const hiddenTags = new Set(['script', 'style', 'head', 'template', 'noscript', 'title', 'meta', 'link']);
+function innerTextOf(root) {
+    if (!root.isConnected || hiddenTags.has(root.localName)) return root.textContent;
+    let out = '';
+    let pendingBreak = 0;
+    const emit = (s) => {
+        if (!s) return;
+        if (pendingBreak && out) out += '\n'.repeat(pendingBreak);
+        pendingBreak = 0;
+        out += s;
+    };
+    const stack = [[root, false]];
+    while (stack.length) {
+        const [n, closing] = stack.pop();
+        if (closing) {
+            if (n.localName === 'p') pendingBreak = Math.max(pendingBreak, 2);
+            else if (blockTags.has(n.localName)) pendingBreak = Math.max(pendingBreak, 1);
+            else if (n.localName === 'td' || n.localName === 'th') { if (n.nextElementSibling) emit('\t'); }
+            continue;
+        }
+        if (n.nodeType === 3) {
+            let pre = false;
+            for (let p = n.parentElement; p && p !== root.parentElement; p = p.parentElement)
+                if (p.localName === 'pre' || p.localName === 'textarea') { pre = true; break; }
+            let t = n.data;
+            if (!pre) {
+                t = t.replace(/[\t\n\r ]+/g, ' ');
+                if (!out || /[\n ]$/.test(out) || pendingBreak) t = t.replace(/^ /, '');
+            }
+            emit(t);
+            continue;
+        }
+        if (n.nodeType !== 1 && n !== root) continue;
+        if (n !== root) {
+            if (hiddenTags.has(n.localName) || n.hasAttribute('hidden')) continue;
+            if (n.localName === 'br') { out = out.replace(/ $/, ''); out += pendingBreak ? '\n'.repeat(pendingBreak) : ''; pendingBreak = 0; out += '\n'; continue; }
+            if (n.localName === 'p') pendingBreak = Math.max(pendingBreak, out ? 2 : 0);
+            else if (blockTags.has(n.localName) && out) pendingBreak = Math.max(pendingBreak, 1);
+        }
+        stack.push([n, true]);
+        for (let c = n.lastChild; c; c = c.previousSibling) stack.push([c, false]);
+    }
+    return out.replace(/ +\n/g, '\n').replace(/ $/, '');
+}
+
+const ifaceRows = {
+    HTMLAnchorElement: [['target', 's'], ['download', 's'], ['ping', 's'], ['rel', 's'], ['relList', 't', 'rel'],
+        ['hreflang', 's'], ['type', 's'], ['referrerPolicy', 's', 'referrerpolicy'], ['coords', 's'], ['charset', 's'],
+        ['name', 's'], ['rev', 's'], ['shape', 's']],
+    HTMLAreaElement: [['alt', 's'], ['coords', 's'], ['shape', 's'], ['target', 's'], ['download', 's'], ['ping', 's'],
+        ['rel', 's'], ['relList', 't', 'rel'], ['referrerPolicy', 's', 'referrerpolicy'], ['noHref', 'b', 'nohref']],
+    HTMLMediaElement: [['src', 'u'], ['crossOrigin', 'e', 'crossorigin', [['anonymous', 'use-credentials'], null, 'anonymous']],
+        ['preload', 's'], ['autoplay', 'b'], ['loop', 'b'], ['controls', 'b'], ['defaultMuted', 'b', 'muted']],
+    HTMLVideoElement: [['width', 'n'], ['height', 'n'], ['poster', 'u'], ['playsInline', 'b', 'playsinline']],
+    HTMLBRElement: [['clear', 's']],
+    HTMLBaseElement: [['target', 's']],
+    HTMLBodyElement: [['text', 's'], ['link', 's'], ['vLink', 's', 'vlink'], ['aLink', 's', 'alink'], ['bgColor', 's', 'bgcolor'],
+        ['background', 's']],
+    HTMLButtonElement: [['disabled', 'b'], ['formAction', 'u', 'formaction'], ['formEnctype', 's', 'formenctype'],
+        ['formMethod', 's', 'formmethod'], ['formNoValidate', 'b', 'formnovalidate'], ['formTarget', 's', 'formtarget'],
+        ['name', 's'], ['value', 's'], ['type', 'e', 0, [['submit', 'reset', 'button'], 'submit', 'submit']],
+        ['popoverTargetAction', 's', 'popovertargetaction']],
+    HTMLCanvasElement: [['width', 'n', 0, 300], ['height', 'n', 0, 150]],
+    HTMLDListElement: [['compact', 'b']],
+    HTMLDataElement: [['value', 's']],
+    HTMLDetailsElement: [['open', 'b'], ['name', 's']],
+    HTMLDialogElement: [['open', 'b']],
+    HTMLDivElement: [['align', 's']],
+    HTMLEmbedElement: [['src', 'u'], ['type', 's'], ['width', 's'], ['height', 's'], ['align', 's'], ['name', 's']],
+    HTMLFieldSetElement: [['disabled', 'b'], ['name', 's']],
+    HTMLFormElement: [['acceptCharset', 's', 'accept-charset'], ['autocomplete', 'e', 0, [['on', 'off'], 'on', 'on']],
+        ['enctype', 'e', 0, [['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain'],
+            'application/x-www-form-urlencoded', 'application/x-www-form-urlencoded']],
+        ['method', 'e', 0, [['get', 'post', 'dialog'], 'get', 'get']], ['name', 's'], ['noValidate', 'b', 'novalidate'],
+        ['target', 's'], ['rel', 's'], ['relList', 't', 'rel']],
+    HTMLHeadingElement: [['align', 's']],
+    HTMLHRElement: [['align', 's'], ['color', 's'], ['noShade', 'b', 'noshade'], ['size', 's'], ['width', 's']],
+    HTMLHtmlElement: [['version', 's']],
+    HTMLIFrameElement: [['src', 'u'], ['srcdoc', 's'], ['name', 's'], ['sandbox', 't'], ['allow', 's'],
+        ['allowFullscreen', 'b', 'allowfullscreen'], ['width', 's'], ['height', 's'], ['referrerPolicy', 's', 'referrerpolicy'],
+        ['loading', 'e', 0, [['lazy', 'eager'], 'eager', 'eager']], ['align', 's'], ['scrolling', 's'],
+        ['frameBorder', 's', 'frameborder'], ['longDesc', 'u', 'longdesc'], ['marginHeight', 's', 'marginheight'],
+        ['marginWidth', 's', 'marginwidth']],
+    HTMLImageElement: [['alt', 's'], ['src', 'u'], ['srcset', 's'], ['sizes', 's'],
+        ['crossOrigin', 'e', 'crossorigin', [['anonymous', 'use-credentials'], null, 'anonymous']], ['useMap', 's', 'usemap'],
+        ['isMap', 'b', 'ismap'], ['referrerPolicy', 's', 'referrerpolicy'], ['decoding', 'e', 0, [['sync', 'async', 'auto'], 'auto', 'auto']],
+        ['loading', 'e', 0, [['lazy', 'eager'], 'eager', 'eager']], ['fetchPriority', 'e', 'fetchpriority', [['high', 'low', 'auto'], 'auto', 'auto']],
+        ['name', 's'], ['lowsrc', 'u'], ['align', 's'], ['hspace', 'n'], ['vspace', 'n'], ['longDesc', 'u', 'longdesc'],
+        ['border', 's']],
+    HTMLInputElement: [['accept', 's'], ['alt', 's'], ['autocomplete', 's'], ['defaultChecked', 'b', 'checked'],
+        ['dirName', 's', 'dirname'], ['disabled', 'b'], ['formAction', 'u', 'formaction'], ['formEnctype', 's', 'formenctype'],
+        ['formMethod', 's', 'formmethod'], ['formNoValidate', 'b', 'formnovalidate'], ['formTarget', 's', 'formtarget'],
+        ['height', 'n'], ['max', 's'], ['maxLength', 'n', 'maxlength', -1], ['min', 's'], ['minLength', 'n', 'minlength', -1],
+        ['multiple', 'b'], ['name', 's'], ['pattern', 's'], ['placeholder', 's'], ['readOnly', 'b', 'readonly'],
+        ['required', 'b'], ['size', 'n', 0, 20], ['src', 'u'], ['step', 's'], ['defaultValue', 's', 'value'], ['width', 'n'],
+        ['align', 's'], ['useMap', 's', 'usemap']],
+    HTMLLIElement: [['value', 'l'], ['type', 's']],
+    HTMLLabelElement: [['htmlFor', 's', 'for']],
+    HTMLLegendElement: [['align', 's']],
+    HTMLLinkElement: [['href', 'u'], ['crossOrigin', 'e', 'crossorigin', [['anonymous', 'use-credentials'], null, 'anonymous']],
+        ['rel', 's'], ['relList', 't', 'rel', ['stylesheet', 'preload', 'modulepreload', 'icon', 'alternate', 'prefetch', 'dns-prefetch', 'preconnect', 'next', 'search', 'canonical', 'manifest']],
+        ['as', 's'], ['media', 's'], ['integrity', 's'], ['hreflang', 's'], ['type', 's'], ['sizes', 't'],
+        ['referrerPolicy', 's', 'referrerpolicy'], ['disabled', 'b'], ['charset', 's'], ['rev', 's'], ['target', 's'],
+        ['imageSrcset', 's', 'imagesrcset'], ['imageSizes', 's', 'imagesizes'], ['fetchPriority', 's', 'fetchpriority']],
+    HTMLMapElement: [['name', 's']],
+    HTMLMenuElement: [['compact', 'b']],
+    HTMLMetaElement: [['name', 's'], ['httpEquiv', 's', 'http-equiv'], ['content', 's'], ['media', 's'], ['scheme', 's']],
+    HTMLMeterElement: [['value', 'd'], ['min', 'd'], ['max', 'd', 0, 1], ['low', 'd'], ['high', 'd'], ['optimum', 'd']],
+    HTMLModElement: [['cite', 'u'], ['dateTime', 's', 'datetime']],
+    HTMLOListElement: [['reversed', 'b'], ['start', 'l', 0, 1], ['type', 's'], ['compact', 'b']],
+    HTMLObjectElement: [['data', 'u'], ['type', 's'], ['name', 's'], ['useMap', 's', 'usemap'], ['width', 's'], ['height', 's'],
+        ['align', 's'], ['archive', 's'], ['code', 's'], ['declare', 'b'], ['hspace', 'n'], ['standby', 's'], ['vspace', 'n'],
+        ['codeBase', 'u', 'codebase'], ['codeType', 's', 'codetype'], ['border', 's']],
+    HTMLOptGroupElement: [['disabled', 'b'], ['label', 's']],
+    HTMLOptionElement: [['disabled', 'b'], ['defaultSelected', 'b', 'selected']],
+    HTMLOutputElement: [['name', 's'], ['htmlFor', 't', 'for']],
+    HTMLParagraphElement: [['align', 's']],
+    HTMLPreElement: [['width', 'l']],
+    HTMLProgressElement: [['max', 'd', 0, 1]],
+    HTMLQuoteElement: [['cite', 'u']],
+    HTMLScriptElement: [['src', 'u'], ['type', 's'], ['noModule', 'b', 'nomodule'], ['async', 'b'], ['defer', 'b'],
+        ['crossOrigin', 'e', 'crossorigin', [['anonymous', 'use-credentials'], null, 'anonymous']], ['integrity', 's'],
+        ['referrerPolicy', 's', 'referrerpolicy'], ['charset', 's'], ['event', 's'], ['htmlFor', 's', 'for'],
+        ['fetchPriority', 's', 'fetchpriority']],
+    HTMLSelectElement: [['autocomplete', 's'], ['disabled', 'b'], ['multiple', 'b'], ['name', 's'], ['required', 'b'], ['size', 'n']],
+    HTMLSlotElement: [['name', 's']],
+    HTMLSourceElement: [['src', 'u'], ['type', 's'], ['srcset', 's'], ['sizes', 's'], ['media', 's'], ['width', 'n'], ['height', 'n']],
+    HTMLStyleElement: [['media', 's'], ['type', 's'], ['disabled', 'b'], ['blocking', 't']],
+    HTMLTableElement: [['align', 's'], ['border', 's'], ['frame', 's'], ['rules', 's'], ['summary', 's'], ['width', 's'],
+        ['bgColor', 's', 'bgcolor'], ['cellPadding', 's', 'cellpadding'], ['cellSpacing', 's', 'cellspacing']],
+    HTMLTableCaptionElement: [['align', 's']],
+    HTMLTableCellElement: [['colSpan', 'n', 'colspan', 1], ['rowSpan', 'n', 'rowspan', 1], ['headers', 's'], ['abbr', 's'],
+        ['scope', 'e', 0, [['row', 'col', 'rowgroup', 'colgroup'], '', '']], ['align', 's'], ['axis', 's'], ['height', 's'],
+        ['width', 's'], ['ch', 's', 'char'], ['chOff', 's', 'charoff'], ['noWrap', 'b', 'nowrap'], ['vAlign', 's', 'valign'],
+        ['bgColor', 's', 'bgcolor']],
+    HTMLTableColElement: [['span', 'n', 0, 1], ['align', 's'], ['ch', 's', 'char'], ['chOff', 's', 'charoff'],
+        ['vAlign', 's', 'valign'], ['width', 's']],
+    HTMLTableSectionElement: [['align', 's'], ['ch', 's', 'char'], ['chOff', 's', 'charoff'], ['vAlign', 's', 'valign']],
+    HTMLTableRowElement: [['align', 's'], ['ch', 's', 'char'], ['chOff', 's', 'charoff'], ['vAlign', 's', 'valign'],
+        ['bgColor', 's', 'bgcolor']],
+    HTMLTextAreaElement: [['autocomplete', 's'], ['cols', 'n', 0, 20], ['dirName', 's', 'dirname'], ['disabled', 'b'],
+        ['maxLength', 'n', 'maxlength', -1], ['minLength', 'n', 'minlength', -1], ['name', 's'], ['placeholder', 's'],
+        ['readOnly', 'b', 'readonly'], ['required', 'b'], ['rows', 'n', 0, 2], ['wrap', 's']],
+    HTMLTimeElement: [['dateTime', 's', 'datetime']],
+    HTMLTrackElement: [['kind', 's'], ['src', 'u'], ['srclang', 's'], ['label', 's'], ['default', 'b']],
+    HTMLUListElement: [['compact', 'b'], ['type', 's']],
+};
+for (const name of Object.keys(ifaceRows)) reflect(G[name].prototype, ifaceRows[name]);
+
+/* Hyperlink mixin (a, area): href and its URL parts. */
+const hyperlink = {
+    get href() { const v = this.getAttribute('href'); if (v === null) return ''; const r = N.urlParse(v, null); return r ? r[0] : v; },
+    set href(v) { this.setAttribute('href', str(v)); },
+    toString() { return this.href; },
+};
+const urlPartNames = ['protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin'];
+for (const k of urlPartNames) {
+    Object.defineProperty(hyperlink, k, {
+        get() {
+            const v = this.getAttribute('href');
+            if (v === null) return '';
+            try { return new URL(v, N.docUrl(1))[k]; } catch (e) { return k === 'origin' ? '' : ''; }
+        },
+        set(x) {
+            if (k === 'origin') return;
+            const v = this.getAttribute('href');
+            let u;
+            try { u = new URL(v === null ? '' : v, N.docUrl(1)); } catch (e) { return; }
+            u[k] = x;
+            this.setAttribute('href', u.href);
+        },
+        enumerable: true, configurable: true,
+    });
+}
+for (const C of [HTMLAnchorElement, HTMLAreaElement]) {
+    for (const k of Reflect.ownKeys(hyperlink)) Object.defineProperty(C.prototype, k, Object.getOwnPropertyDescriptor(hyperlink, k));
+}
+defProps(HTMLAnchorElement.prototype, {
+    get text() { return this.textContent; },
+    set text(v) { this.textContent = v; },
+});
+
+/* ---------------- forms ---------------- */
+
+const formControlTags = new Set(['button', 'fieldset', 'input', 'object', 'output', 'select', 'textarea']);
+const isFormControl = (e) => isElement(e) && e.namespaceURI === HTML_NS && formControlTags.has(e.localName);
+const ctrl = new WeakMap(); /* element -> {value, dirty, selected, ...} */
+const ctrlState = (e) => { let s = ctrl.get(e); if (!s) ctrl.set(e, (s = {})); return s; };
+
+function formOwner(e) {
+    const id = e.getAttribute('form');
+    if (id !== null) {
+        const f = e.isConnected ? doc.getElementById(id) : null;
+        return f && f.localName === 'form' ? f : null;
+    }
+    for (let p = e.parentElement; p; p = p.parentElement) if (p.localName === 'form' && p.namespaceURI === HTML_NS) return p;
+    return null;
+}
+function isDisabled(e) {
+    if (e.hasAttribute('disabled')) return true;
+    for (let p = e.parentElement; p; p = p.parentElement) {
+        if (p.localName === 'fieldset' && p.hasAttribute('disabled')) {
+            const legend = childOfType(p, 'legend');
+            if (!legend || !legend.contains(e)) return true;
+        }
+    }
+    return false;
+}
+
+const inputTypes = ['hidden', 'text', 'search', 'tel', 'url', 'email', 'password', 'date', 'month', 'week', 'time',
+    'datetime-local', 'number', 'range', 'color', 'checkbox', 'radio', 'file', 'submit', 'image', 'reset', 'button'];
+const inputType = (e) => { const t = (e.getAttribute('type') || '').toLowerCase(); return inputTypes.includes(t) ? t : 'text'; };
+const valueModeDefault = new Set(['hidden', 'submit', 'image', 'reset', 'button']);
+const valueModeOn = new Set(['checkbox', 'radio']);
+const sanitizeValue = (type, v) => {
+    if (/^(text|search|tel|password)$/.test(type)) return v.replace(/[\r\n]/g, '');
+    if (type === 'url' || type === 'email') return v.replace(/[\r\n]/g, '').trim();
+    if (type === 'number') return /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : '';
+    if (type === 'range') {
+        const n = parseFloat(v);
+        return isFinite(n) ? String(n) : '50';
+    }
+    if (type === 'color') return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '#000000';
+    return v;
+};
+
+function isChecked(e) {
+    const st = N.state(e);
+    if (st & 64) return !!(st & 32); /* AU_STATE_CHECKED_SET */
+    return e.hasAttribute('checked') || (e.localName === 'option' && e.hasAttribute('selected'));
+}
+function radioGroup(e) {
+    const name = e.getAttribute('name');
+    if (!name) return [e];
+    const form = formOwner(e);
+    const root = e.getRootNode();
+    const all = root.querySelectorAll ? root.querySelectorAll('input') : [];
+    return Array.from(all).filter((x) => inputType(x) === 'radio' && x.getAttribute('name') === name && formOwner(x) === form);
+}
+function setChecked(e, on) {
+    N.setChecked(e, on);
+    if (on && inputType(e) === 'radio') for (const r of radioGroup(e)) if (r !== e && isChecked(r)) N.setChecked(r, false);
+}
+
+defProps(HTMLInputElement.prototype, {
+    get type() { return inputType(this); },
+    set type(v) { this.setAttribute('type', str(v)); },
+    get value() {
+        const t = inputType(this);
+        if (valueModeDefault.has(t)) return this.getAttribute('value') ?? '';
+        if (valueModeOn.has(t)) return this.getAttribute('value') ?? 'on';
+        if (t === 'file') return '';
+        const s = ctrlState(this);
+        return sanitizeValue(t, s.dirty ? s.value : this.getAttribute('value') ?? '');
+    },
+    set value(v) {
+        const t = inputType(this);
+        v = v === null ? '' : str(v);
+        if (valueModeDefault.has(t) || valueModeOn.has(t)) { this.setAttribute('value', v); return; }
+        if (t === 'file') { if (v !== '') throw domErr('A file input can only be cleared', 'InvalidStateError'); return; }
+        const s = ctrlState(this);
+        s.value = sanitizeValue(t, v);
+        s.dirty = true;
+        s.selStart = s.selEnd = s.value.length;
+    },
+    get valueAsNumber() {
+        const t = inputType(this), v = this.value;
+        if (t === 'number' || t === 'range') { const n = parseFloat(v); return isFinite(n) ? n : NaN; }
+        if (t === 'date') { const d = Date.parse(v + 'T00:00:00Z'); return isFinite(d) ? d : NaN; }
+        return NaN;
+    },
+    set valueAsNumber(n) {
+        const t = inputType(this);
+        if (t === 'number' || t === 'range') this.value = isFinite(n) ? String(n) : '';
+        else if (t === 'date') this.value = isFinite(n) ? new Date(n).toISOString().slice(0, 10) : '';
+        else throw domErr('valueAsNumber does not apply', 'InvalidStateError');
+    },
+    get valueAsDate() { const t = inputType(this); if (t !== 'date') return null; const d = Date.parse(this.value + 'T00:00:00Z'); return isFinite(d) ? new Date(d) : null; },
+    set valueAsDate(d) { if (inputType(this) !== 'date') throw domErr('valueAsDate does not apply', 'InvalidStateError'); this.value = d ? d.toISOString().slice(0, 10) : ''; },
+    get checked() { return isChecked(this); },
+    set checked(v) { setChecked(this, !!v); },
+    get indeterminate() { return !!(N.state(this) & 128); },
+    set indeterminate(v) { ctrlState(this).indeterminate = !!v; },
+    get files() { return inputType(this) === 'file' ? Object.freeze([]) : null; },
+    get list() { const id = this.getAttribute('list'); const e = id && doc.getElementById(id); return e && e.localName === 'datalist' ? e : null; },
+    select() { const s = ctrlState(this); s.selStart = 0; s.selEnd = this.value.length; fireSimple(this, 'select', true, false); },
+    get selectionStart() { return ctrlState(this).selStart ?? this.value.length; },
+    set selectionStart(v) { ctrlState(this).selStart = v >>> 0; },
+    get selectionEnd() { return ctrlState(this).selEnd ?? this.value.length; },
+    set selectionEnd(v) { ctrlState(this).selEnd = v >>> 0; },
+    get selectionDirection() { return 'none'; },
+    setSelectionRange(a, b) { const s = ctrlState(this); s.selStart = a >>> 0; s.selEnd = b >>> 0; },
+    setRangeText(text) { const s = ctrlState(this); const v = this.value; const a = s.selStart ?? v.length, b = s.selEnd ?? v.length; this.value = v.slice(0, a) + str(text) + v.slice(b); },
+    stepUp(n = 1) { stepBy(this, n); },
+    stepDown(n = 1) { stepBy(this, -n); },
+    showPicker() {},
+});
+function stepBy(e, n) {
+    const t = inputType(e);
+    if (t !== 'number' && t !== 'range') throw domErr('stepUp does not apply', 'InvalidStateError');
+    const step = parseFloat(e.getAttribute('step')) || 1;
+    let v = (parseFloat(e.value) || 0) + step * n;
+    const min = parseFloat(e.getAttribute('min')), max = parseFloat(e.getAttribute('max'));
+    if (isFinite(max) && v > max) v = max;
+    if (isFinite(min) && v < min) v = min;
+    e.value = String(v);
+}
+
+defProps(HTMLTextAreaElement.prototype, {
+    get type() { return 'textarea'; },
+    get defaultValue() { return this.textContent; },
+    set defaultValue(v) { this.textContent = v; },
+    get value() { const s = ctrlState(this); return s.dirty ? s.value : this.textContent.replace(/\r\n?/g, '\n'); },
+    set value(v) { const s = ctrlState(this); s.value = (v === null ? '' : str(v)).replace(/\r\n?/g, '\n'); s.dirty = true; s.selStart = s.selEnd = s.value.length; },
+    get textLength() { return this.value.length; },
+    select() { const s = ctrlState(this); s.selStart = 0; s.selEnd = this.value.length; },
+    get selectionStart() { return ctrlState(this).selStart ?? this.value.length; },
+    set selectionStart(v) { ctrlState(this).selStart = v >>> 0; },
+    get selectionEnd() { return ctrlState(this).selEnd ?? this.value.length; },
+    set selectionEnd(v) { ctrlState(this).selEnd = v >>> 0; },
+    setSelectionRange(a, b) { const s = ctrlState(this); s.selStart = a >>> 0; s.selEnd = b >>> 0; },
+});
+
+/* option and select */
+function optionSelected(o) {
+    const s = ctrl.get(o);
+    if (s && s.selDirty) return !!s.selected;
+    return o.hasAttribute('selected');
+}
+function selectOptions(sel) { return N.collect(sel, 6); }
+function selectedIndexOf(sel) {
+    const opts = selectOptions(sel);
+    for (let i = 0; i < opts.length; i++) if (optionSelected(opts[i])) return i;
+    if (!sel.multiple && (sel.size | 0) <= 1) for (let i = 0; i < opts.length; i++) if (!opts[i].disabled) return i;
+    return -1;
+}
+function setOptionSelected(o, on) {
+    const s = ctrlState(o);
+    s.selDirty = true;
+    s.selected = on;
+    N.setChecked(o, on);
+}
+defProps(HTMLOptionElement.prototype, {
+    get selected() {
+        const sel = this.closest('select');
+        if (sel && !sel.multiple) return selectOptions(sel)[selectedIndexOf(sel)] === this;
+        return optionSelected(this);
+    },
+    set selected(v) {
+        const sel = this.closest('select');
+        if (v && sel && !sel.multiple) for (const o of selectOptions(sel)) if (o !== this) setOptionSelected(o, false);
+        setOptionSelected(this, !!v);
+    },
+    get value() { return this.getAttribute('value') ?? this.text; },
+    set value(v) { this.setAttribute('value', str(v)); },
+    get text() { return this.textContent.replace(/[\t\n\f\r ]+/g, ' ').trim(); },
+    set text(v) { this.textContent = v; },
+    get label() { return this.getAttribute('label') ?? this.text; },
+    set label(v) { this.setAttribute('label', str(v)); },
+    get index() { const sel = this.closest('select'); return sel ? selectOptions(sel).indexOf(this) : 0; },
+    get form() { const sel = this.closest('select'); return sel ? formOwner(sel) : null; },
+});
+defProps(HTMLSelectElement.prototype, {
+    get type() { return this.multiple ? 'select-multiple' : 'select-one'; },
+    get options() { return cachedList(this, 'options', () => makeList(HTMLOptionsCollection, this, 6)); },
+    get length() { return selectOptions(this).length; },
+    set length(n) { this.options.length = n; },
+    get selectedOptions() { return makeList(HTMLCollection, this, -1, null, selectOptions(this).filter((o) => o.selected)); },
+    get selectedIndex() { return selectedIndexOf(this); },
+    set selectedIndex(i) {
+        const opts = selectOptions(this);
+        for (let k = 0; k < opts.length; k++) setOptionSelected(opts[k], k === (i | 0));
+    },
+    get value() { const o = selectOptions(this)[selectedIndexOf(this)]; return o ? o.value : ''; },
+    set value(v) {
+        v = str(v);
+        let done = false;
+        for (const o of selectOptions(this)) { const m = !done && o.value === v; setOptionSelected(o, m); if (m) done = true; }
+    },
+    item(i) { return selectOptions(this)[i >>> 0] || null; },
+    namedItem(n) { return this.options.namedItem(n); },
+    add(el, before) {
+        if (typeof before === 'number') before = selectOptions(this)[before] || null;
+        if (before) before.parentNode.insertBefore(el, before); else this.appendChild(el);
+    },
+    remove(i) {
+        if (arguments.length === 0) { childMixin.remove.call(this); return; }
+        const o = selectOptions(this)[i | 0];
+        if (o) o.remove();
+    },
+    [Symbol.iterator]() { return selectOptions(this)[Symbol.iterator](); },
+});
+
+/* Shared form-associated members. */
+const formAssoc = {
+    get form() { return formOwner(this); },
+    get labels() {
+        if (this.localName === 'input' && inputType(this) === 'hidden') return null;
+        const id = this.id;
+        const out = [];
+        for (const l of doc.getElementsByTagName('label')) if (l.control === this) out.push(l);
+        return makeList(NodeList, this, -1, null, out);
+    },
+    get willValidate() { return !isDisabled(this) && !this.hasAttribute('readonly') && !(this.localName === 'input' && /^(hidden|reset|button)$/.test(inputType(this))) && this.localName !== 'fieldset' && this.localName !== 'output'; },
+    get validity() { return validityOf(this); },
+    get validationMessage() { return validityOf(this).valid ? '' : 'The value is invalid.'; },
+    checkValidity() { const ok = !this.willValidate || validityOf(this).valid; if (!ok) fireSimple(this, 'invalid', false, true); return ok; },
+    reportValidity() { return this.checkValidity(); },
+    setCustomValidity(m) { ctrlState(this).custom = str(m); },
+};
+for (const C of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement, HTMLOutputElement,
+    HTMLFieldSetElement, HTMLObjectElement]) defProps(C.prototype, formAssoc);
+defProps(HTMLLabelElement.prototype, {
+    get control() {
+        const f = this.getAttribute('for');
+        if (f !== null) {
+            const e = this.isConnected ? doc.getElementById(f) : null;
+            return e && labelable(e) ? e : null;
+        }
+        for (const e of this.querySelectorAll('*')) if (labelable(e)) return e;
+        return null;
+    },
+    get form() { const c = this.control; return c ? formOwner(c) : null; },
+});
+const labelable = (e) => /^(button|input|meter|output|progress|select|textarea)$/.test(e.localName) &&
+    !(e.localName === 'input' && inputType(e) === 'hidden');
+defProps(HTMLFieldSetElement.prototype, {
+    get type() { return 'fieldset'; },
+    get elements() { return makeList(HTMLCollection, this, 5); },
+});
+defProps(HTMLOutputElement.prototype, {
+    get type() { return 'output'; },
+    get value() { return this.textContent; },
+    set value(v) { this.textContent = v; },
+    get defaultValue() { const s = ctrl.get(this); return s && 'def' in s ? s.def : this.textContent; },
+    set defaultValue(v) { ctrlState(this).def = str(v); },
+});
+defProps(HTMLLegendElement.prototype, { get form() { const f = this.parentElement; return f && f.localName === 'fieldset' ? formOwner(f) : null; } });
+defProps(HTMLProgressElement.prototype, {
+    get value() { const v = parseFloat(this.getAttribute('value')); return isFinite(v) && v > 0 ? Math.min(v, this.max) : 0; },
+    set value(v) { this.setAttribute('value', String(+v)); },
+    get position() { return this.hasAttribute('value') ? this.value / this.max : -1; },
+});
+
+class ValidityState { constructor() { throw new TypeError('Illegal constructor'); } }
+tag(ValidityState);
+defGlobal('ValidityState', ValidityState);
+function validityOf(e) {
+    const v = Object.create(ValidityState.prototype);
+    const val = 'value' in e ? e.value : '';
+    const s = ctrl.get(e) || {};
+    const t = e.localName === 'input' ? inputType(e) : '';
+    const f = {
+        valueMissing: e.hasAttribute('required') && (t === 'checkbox' ? !e.checked :
+            t === 'radio' ? !radioGroup(e).some(isChecked) : val === ''),
+        typeMismatch: val !== '' && ((t === 'email' && !/^[^@\s]+@[^@\s]+$/.test(val)) || (t === 'url' && !N.urlParse(val))),
+        patternMismatch: false, tooLong: false, tooShort: false, rangeUnderflow: false, rangeOverflow: false,
+        stepMismatch: false, badInput: false, customError: !!s.custom,
+    };
+    const pat = e.getAttribute('pattern');
+    if (pat !== null && val !== '') { try { f.patternMismatch = !new RegExp('^(?:' + pat + ')$', 'v').test(val); } catch (x) { /* invalid pattern: ignored */ } }
+    if (s.dirty) {
+        const maxl = parseInt(e.getAttribute('maxlength'), 10), minl = parseInt(e.getAttribute('minlength'), 10);
+        f.tooLong = maxl >= 0 && val.length > maxl;
+        f.tooShort = minl > 0 && val.length > 0 && val.length < minl;
+    }
+    if ((t === 'number' || t === 'range') && val !== '') {
+        const n = +val, min = parseFloat(e.getAttribute('min')), max = parseFloat(e.getAttribute('max'));
+        f.rangeUnderflow = isFinite(min) && n < min;
+        f.rangeOverflow = isFinite(max) && n > max;
+    }
+    f.valid = !Object.keys(f).some((k) => f[k]);
+    for (const k of Object.keys(f)) Object.defineProperty(v, k, { value: f[k], enumerable: true });
+    return v;
+}
+
+/* form */
+const formElementsOf = (f) => {
+    const out = [];
+    const root = f.isConnected ? doc : f;
+    for (const e of N.collect(root, 5)) if (formOwner(e) === f) out.push(e);
+    return out;
+};
+defProps(HTMLFormElement.prototype, {
+    get elements() { return makeList(HTMLFormControlsCollection, this, -1, null, formElementsOf(this)); },
+    get length() { return formElementsOf(this).length; },
+    get action() { const v = this.getAttribute('action'); return v ? resolveUrl(v) : N.docUrl(0); },
+    set action(v) { this.setAttribute('action', str(v)); },
+    get encoding() { return this.enctype; },
+    set encoding(v) { this.enctype = v; },
+    submit() { submitForm(this, null, false); },
+    requestSubmit(submitter) {
+        if (submitter != null) {
+            if (!isFormControl(submitter) || formOwner(submitter) !== this || !isSubmitButton(submitter))
+                throw new TypeError('requestSubmit: the submitter is not a submit button of this form');
+        }
+        submitForm(this, submitter || null, true);
+    },
+    reset() {
+        if (!fire(this, new Event('reset', { bubbles: true, cancelable: true }))) return;
+        for (const e of formElementsOf(this)) resetControl(e);
+    },
+    checkValidity() { return formElementsOf(this).every((e) => !e.checkValidity || e.checkValidity()); },
+    reportValidity() { return this.checkValidity(); },
+    item(i) { return formElementsOf(this)[i >>> 0] || null; },
+    namedItem(n) { return formElementsOf(this).find((e) => e.id === n || e.getAttribute('name') === n) || null; },
+});
+const isSubmitButton = (e) => (e.localName === 'button' && (e.getAttribute('type') || 'submit').toLowerCase() === 'submit') ||
+    (e.localName === 'input' && (inputType(e) === 'submit' || inputType(e) === 'image'));
+function resetControl(e) {
+    ctrl.delete(e);
+    if (e.localName === 'input' && (inputType(e) === 'checkbox' || inputType(e) === 'radio')) N.setChecked(e, e.hasAttribute('checked'));
+    if (e.localName === 'select') for (const o of selectOptions(e)) { ctrl.delete(o); N.setChecked(o, o.hasAttribute('selected')); }
+}
+
+/* The form data set: [name, value] pairs (files are not supported). */
+function formDataSet(form, submitter) {
+    const out = [];
+    for (const e of formElementsOf(form)) {
+        if (isDisabled(e) || e.localName === 'object' || e.localName === 'fieldset' || e.localName === 'output') continue;
+        const t = e.localName === 'input' ? inputType(e) : e.localName;
+        if ((t === 'submit' || t === 'button' || t === 'reset' || t === 'image' || e.localName === 'button') && e !== submitter) continue;
+        if ((t === 'checkbox' || t === 'radio') && !e.checked) continue;
+        const name = e.getAttribute('name');
+        if (t === 'image') { const p = name ? name + '.' : ''; out.push([p + 'x', '0'], [p + 'y', '0']); continue; }
+        if (!name) continue;
+        if (e.localName === 'select') { for (const o of selectOptions(e)) if (o.selected && !o.disabled) out.push([name, o.value]); continue; }
+        if (t === 'file') { out.push([name, '']); continue; }
+        out.push([name, e.value]);
+        const dir = e.getAttribute('dirname');
+        if (dir && (t === 'text' || t === 'search' || e.localName === 'textarea')) out.push([dir, 'ltr']);
+    }
+    return out;
+}
+const formEncode = (pairs) => pairs.map(([k, v]) => encodeForm(k) + '=' + encodeForm(v)).join('&');
+function encodeForm(s) {
+    s = str(s).replace(/\r?\n|\r/g, '\r\n');
+    let out = '';
+    for (const b of N.utf8Encode(s.toWellFormed())) {
+        const c = String.fromCharCode(b);
+        if (/[A-Za-z0-9*\-._]/.test(c)) out += c;
+        else if (c === ' ') out += '+';
+        else out += '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
+    }
+    return out;
+}
+let submitting = null;
+function submitForm(form, submitter, events) {
+    if (!form.isConnected || submitting === form) return;
+    if (events) {
+        if (!form.noValidate && !(submitter && submitter.hasAttribute('formnovalidate')) && !form.checkValidity()) return;
+        const ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter });
+        if (!fire(form, ev)) return;
+    }
+    const pairs = formDataSet(form, submitter);
+    const pick = (attr, prop) => (submitter && submitter.hasAttribute('form' + attr) ? submitter['form' + prop] : form[prop.toLowerCase()]);
+    const action = submitter && submitter.hasAttribute('formaction') ? submitter.formAction : form.action;
+    const method = (pick('method', 'Method') || 'get').toLowerCase();
+    if (method === 'dialog') {
+        const d = form.closest('dialog');
+        if (d) d.close(submitter ? submitter.value : undefined);
+        return;
+    }
+    const target = pick('target', 'Target') || '';
+    let url;
+    if (method === 'post') {
+        N.print(2, 'Form submission with method POST is not supported yet; submitting with GET.');
+    }
+    if (/^javascript:/i.test(action)) { G.location.href = action; return; }
+    try {
+        const u = new URL(action);
+        u.search = formEncode(pairs);
+        url = u.href;
+    } catch (e) {
+        return;
+    }
+    submitting = form;
+    try {
+        if (target && target !== '_self') N.openWindow(url, target); else N.navigate(url);
+    } finally {
+        submitting = null;
+    }
+}
+
+/* ---------------- activation ---------------- */
+
+/* Runs a click with activation behavior: the nearest activatable
+ * element on the path gets legacy pre-activation (checkbox and radio
+ * toggling), the event is dispatched, then activation runs unless
+ * cancelled, or the pre-activation is undone. */
+function activationTarget(t) {
+    for (let e = t; e; e = e.parentElement || (e.parentNode && N.hostOf(e.parentNode))) {
+        if (!isElement(e)) break;
+        if (e.namespaceURI !== HTML_NS) continue;
+        const n = e.localName;
+        if ((n === 'a' || n === 'area') && e.hasAttribute('href')) return e;
+        if (n === 'input' && !/^(hidden)$/.test(inputType(e))) return e;
+        if (n === 'button' || n === 'label' || n === 'summary') return e;
+    }
+    return null;
+}
+function activate(target, ev, embedder) {
+    let act = activationTarget(target);
+    /* Clicks from the embedder leave links to the embedder. */
+    if (embedder && act && (act.localName === 'a' || act.localName === 'area')) act = null;
+    let undo = null;
+    if (act && act.localName === 'input' && !isDisabled(act)) {
+        const t = inputType(act);
+        if (t === 'checkbox') {
+            const was = act.checked, wasInd = act.indeterminate;
+            act.checked = !was;
+            undo = () => { act.checked = was; ctrlState(act).indeterminate = wasInd; };
+        } else if (t === 'radio') {
+            const group = radioGroup(act);
+            const prev = group.find(isChecked) || null;
+            setChecked(act, true);
+            undo = () => { if (prev) setChecked(prev, true); else N.setChecked(act, false); };
+        }
+    }
+    const ok = fire(target, ev);
+    if (!act) return ok;
+    if (!ok) { if (undo) undo(); return ok; }
+    runActivation(act, undo !== null, ev);
+    return ok;
+}
+function runActivation(e, toggled, ev) {
+    const n = e.localName;
+    if (n === 'a' || n === 'area') { followHyperlink(e); return; }
+    if (n === 'summary') {
+        const d = e.parentElement;
+        if (d && d.localName === 'details' && childOfType(d, 'summary') === e) {
+            d.toggleAttribute('open');
+            fire(d, new ToggleEvent('toggle', { oldState: d.open ? 'closed' : 'open', newState: d.open ? 'open' : 'closed' }));
+        }
+        return;
+    }
+    if (n === 'label') {
+        const c = e.control;
+        if (c && c !== ev.target && !c.contains(ev.target)) c.click();
+        return;
+    }
+    if (isDisabled(e)) return;
+    const t = n === 'input' ? inputType(e) : (e.getAttribute('type') || 'submit').toLowerCase();
+    if (toggled) {
+        if (e.isConnected) {
+            fire(e, new Event('input', { bubbles: true, composed: true }));
+            fire(e, new Event('change', { bubbles: true }));
+        }
+        return;
+    }
+    const form = formOwner(e);
+    if (!form) return;
+    if (t === 'submit' || t === 'image') form.requestSubmit(e);
+    else if (t === 'reset') form.reset();
+}
+function followHyperlink(a) {
+    const href = a.getAttribute('href');
+    if (href === null) return;
+    if (a.hasAttribute('download')) N.print(2, 'Downloads from script clicks are not supported.');
+    const target = a.getAttribute('target') || (doc.querySelector('base[target]') || { getAttribute: () => '' }).getAttribute('target') || '';
+    const url = /^javascript:/i.test(href.trim()) ? href.trim() : resolveUrl(href);
+    if (/^javascript:/i.test(url)) { P.runJavascriptUrl(url); return; }
+    if (target && target !== '_self' && target !== '_top' && target !== '_parent') N.openWindow(url, target);
+    else G.location.assign(url);
+}
+
+/* ---------------- other element interfaces ---------------- */
+
+defProps(HTMLImageElement.prototype, {
+    get width() { const r = N.rect(this); return r ? Math.round(r[2]) : (parseInt(this.getAttribute('width'), 10) || 0); },
+    set width(v) { this.setAttribute('width', String(v >>> 0)); },
+    get height() { const r = N.rect(this); return r ? Math.round(r[3]) : (parseInt(this.getAttribute('height'), 10) || 0); },
+    set height(v) { this.setAttribute('height', String(v >>> 0)); },
+    get naturalWidth() { return 0; },
+    get naturalHeight() { return 0; },
+    get complete() { return true; },
+    get currentSrc() { return this.src; },
+    get x() { const r = N.rect(this); return r ? r[0] : 0; },
+    get y() { const r = N.rect(this); return r ? r[1] : 0; },
+    decode() { return Promise.resolve(); },
+});
+function Image(w, h) {
+    const e = doc.createElement('img');
+    if (w !== undefined) e.setAttribute('width', String(w >>> 0));
+    if (h !== undefined) e.setAttribute('height', String(h >>> 0));
+    return e;
+}
+Image.prototype = HTMLImageElement.prototype;
+defGlobal('Image', Image);
+function Option(text, value, defaultSelected, selected) {
+    const o = doc.createElement('option');
+    if (text !== undefined && text !== '') o.textContent = str(text);
+    if (value !== undefined) o.setAttribute('value', str(value));
+    if (defaultSelected) o.setAttribute('selected', '');
+    if (selected) setOptionSelected(o, true);
+    return o;
+}
+Option.prototype = HTMLOptionElement.prototype;
+defGlobal('Option', Option);
+function Audio(src) { const e = doc.createElement('audio'); e.setAttribute('preload', 'auto'); if (src !== undefined) e.setAttribute('src', str(src)); return e; }
+Audio.prototype = HTMLAudioElement.prototype;
+defGlobal('Audio', Audio);
+
+defProps(HTMLMediaElement.prototype, {
+    play() { return Promise.reject(domErr('Media playback is not supported', 'NotSupportedError')); },
+    pause() {},
+    load() {},
+    canPlayType() { return ''; },
+    get paused() { return true; },
+    get ended() { return false; },
+    get currentTime() { return 0; },
+    set currentTime(v) {},
+    get duration() { return NaN; },
+    get volume() { return 1; },
+    set volume(v) {},
+    get muted() { return false; },
+    set muted(v) {},
+    get readyState() { return 0; },
+    get networkState() { return 3; },
+    get error() { return null; },
+    get currentSrc() { return ''; },
+    get playbackRate() { return 1; },
+    set playbackRate(v) {},
+});
+defProps(HTMLCanvasElement.prototype, {
+    getContext() { return null; },
+    toDataURL() { return 'data:,'; },
+    toBlob(cb) { if (typeof cb === 'function') G.setTimeout(() => cb(null), 0); },
+});
+defProps(HTMLDialogElement.prototype, {
+    show() { if (!this.hasAttribute('open')) this.setAttribute('open', ''); },
+    showModal() {
+        if (this.hasAttribute('open')) throw domErr('The dialog is already open', 'InvalidStateError');
+        if (!this.isConnected) throw domErr('The dialog is not connected', 'InvalidStateError');
+        this.setAttribute('open', '');
+    },
+    close(rv) {
+        if (!this.hasAttribute('open')) return;
+        this.removeAttribute('open');
+        if (rv !== undefined) ctrlState(this).returnValue = str(rv);
+        fireSimple(this, 'close', false, false);
+    },
+    get returnValue() { return (ctrl.get(this) || {}).returnValue || ''; },
+    set returnValue(v) { ctrlState(this).returnValue = str(v); },
+    requestClose(rv) { if (fire(this, new Event('cancel', { cancelable: true }))) this.close(rv); },
+});
+defProps(HTMLScriptElement.prototype, {
+    get text() { let s = ''; for (let c = this.firstChild; c; c = c.nextSibling) if (c.nodeType === 3) s += c.data; return s; },
+    set text(v) { this.textContent = v; },
+});
+HTMLScriptElement.supports = (t) => t === 'classic' || t === 'module' || t === 'importmap';
+defProps(HTMLTitleElement.prototype, {
+    get text() { return this.textContent; },
+    set text(v) { this.textContent = v; },
+});
+defProps(HTMLStyleElement.prototype, { get sheet() { return null; } });
+defProps(HTMLLinkElement.prototype, { get sheet() { return null; } });
+defProps(HTMLIFrameElement.prototype, {
+    get contentDocument() { return null; },
+    get contentWindow() { return null; },
+});
+defProps(HTMLObjectElement.prototype, { get contentDocument() { return null; }, get contentWindow() { return null; } });
+defProps(HTMLSlotElement.prototype, {
+    assignedNodes(opts) { return N.assigned(this, !!(opts && opts.flatten)); },
+    assignedElements(opts) { return N.assigned(this, !!(opts && opts.flatten)).filter(isElement); },
+    assign() { throw domErr('Manual slot assignment is not supported', 'NotSupportedError'); },
+});
+defProps(HTMLDataListElement.prototype, { get options() { return makeList(HTMLCollection, this, 6); } });
+defProps(HTMLMapElement.prototype, { get areas() { return makeList(HTMLCollection, this, 2, 'area'); } });
+defProps(HTMLTimeElement.prototype, {});
+
+/* tables */
+const tagIs = (n, t) => n && n.nodeType === 1 && n.localName === t && n.namespaceURI === HTML_NS;
+const childOfType = (p, t) => { for (let c = p.firstElementChild; c; c = c.nextElementSibling) if (tagIs(c, t)) return c; return null; };
+defProps(HTMLTableElement.prototype, {
+    get caption() { return childOfType(this, 'caption'); },
+    set caption(v) { const c = this.caption; if (c) c.remove(); if (v) this.insertBefore(v, this.firstChild); },
+    get tHead() { return childOfType(this, 'thead'); },
+    set tHead(v) {
+        if (v && !tagIs(v, 'thead')) throw domErr('Not a thead', 'HierarchyRequestError');
+        const c = this.tHead; if (c) c.remove();
+        if (v) { let r = this.firstChild; while (r && (tagIs(r, 'caption') || tagIs(r, 'colgroup') || r.nodeType !== 1)) r = r.nextSibling; this.insertBefore(v, r); }
+    },
+    get tFoot() { return childOfType(this, 'tfoot'); },
+    set tFoot(v) {
+        if (v && !tagIs(v, 'tfoot')) throw domErr('Not a tfoot', 'HierarchyRequestError');
+        const c = this.tFoot; if (c) c.remove(); if (v) this.appendChild(v);
+    },
+    get tBodies() { return cachedList(this, 'tBodies', () => makeList(HTMLCollection, this, 9)); },
+    get rows() { return cachedList(this, 'rows', () => makeList(HTMLCollection, this, 7)); },
+    createCaption() { return this.caption || this.insertBefore(doc.createElement('caption'), this.firstChild); },
+    deleteCaption() { const c = this.caption; if (c) c.remove(); },
+    createTHead() { if (this.tHead) return this.tHead; const h = doc.createElement('thead'); this.tHead = h; return h; },
+    deleteTHead() { const c = this.tHead; if (c) c.remove(); },
+    createTFoot() { if (this.tFoot) return this.tFoot; const f = doc.createElement('tfoot'); this.appendChild(f); return f; },
+    deleteTFoot() { const c = this.tFoot; if (c) c.remove(); },
+    createTBody() {
+        const b = doc.createElement('tbody');
+        const bodies = this.tBodies;
+        const last = bodies[bodies.length - 1];
+        this.insertBefore(b, last ? last.nextSibling : null);
+        return b;
+    },
+    insertRow(i = -1) {
+        i |= 0;
+        const rows = N.collect(this, 7);
+        if (i < -1 || i > rows.length) throw domErr('Row index out of range', 'IndexSizeError');
+        const r = doc.createElement('tr');
+        if (rows.length === 0) {
+            const bodies = N.collect(this, 9);
+            if (bodies.length) bodies[bodies.length - 1].appendChild(r);
+            else this.appendChild(doc.createElement('tbody')).appendChild(r);
+        } else if (i === -1 || i === rows.length) {
+            rows[rows.length - 1].parentNode.appendChild(r);
+        } else {
+            rows[i].parentNode.insertBefore(r, rows[i]);
+        }
+        return r;
+    },
+    deleteRow(i) {
+        i |= 0;
+        const rows = N.collect(this, 7);
+        if (i === -1) { if (rows.length) rows[rows.length - 1].remove(); return; }
+        if (i < 0 || i >= rows.length) throw domErr('Row index out of range', 'IndexSizeError');
+        rows[i].remove();
+    },
+});
+defProps(HTMLTableSectionElement.prototype, {
+    get rows() { return makeList(HTMLCollection, this, 2, 'tr'); },
+    insertRow(i = -1) {
+        i |= 0;
+        const rows = Array.from(this.children).filter((c) => tagIs(c, 'tr'));
+        if (i < -1 || i > rows.length) throw domErr('Row index out of range', 'IndexSizeError');
+        const r = doc.createElement('tr');
+        this.insertBefore(r, i === -1 || i === rows.length ? null : rows[i]);
+        return r;
+    },
+    deleteRow(i) {
+        i |= 0;
+        const rows = Array.from(this.children).filter((c) => tagIs(c, 'tr'));
+        if (i === -1) { if (rows.length) rows[rows.length - 1].remove(); return; }
+        if (i < 0 || i >= rows.length) throw domErr('Row index out of range', 'IndexSizeError');
+        rows[i].remove();
+    },
+});
+defProps(HTMLTableRowElement.prototype, {
+    get cells() { return cachedList(this, 'cells', () => makeList(HTMLCollection, this, 8)); },
+    get rowIndex() { const t = this.closest('table'); return t ? N.collect(t, 7).indexOf(this) : -1; },
+    get sectionRowIndex() { const p = this.parentNode; return p ? Array.from(p.children).filter((c) => tagIs(c, 'tr')).indexOf(this) : -1; },
+    insertCell(i = -1) {
+        i |= 0;
+        const cells = N.collect(this, 8);
+        if (i < -1 || i > cells.length) throw domErr('Cell index out of range', 'IndexSizeError');
+        const c = doc.createElement('td');
+        this.insertBefore(c, i === -1 || i === cells.length ? null : cells[i]);
+        return c;
+    },
+    deleteCell(i) {
+        i |= 0;
+        const cells = N.collect(this, 8);
+        if (i === -1) { if (cells.length) cells[cells.length - 1].remove(); return; }
+        if (i < 0 || i >= cells.length) throw domErr('Cell index out of range', 'IndexSizeError');
+        cells[i].remove();
+    },
+});
+defProps(HTMLTableCellElement.prototype, {
+    get cellIndex() { const p = this.parentNode; return p && tagIs(p, 'tr') ? N.collect(p, 8).indexOf(this) : -1; },
+});
+
+/* ---------------- Document members ---------------- */
+
+let readyState = 'loading';
+defProps(DP, {
+    get readyState() { return readyState; },
+    get location() { return this === doc ? G.location : null; },
+    set location(v) { if (this === doc) G.location.href = v; },
+    get defaultView() { return this === doc ? G : null; },
+    get currentScript() { return this === doc ? N.currentScript() : null; },
+    get cookie() { return this === doc ? N.getCookie() : ''; },
+    set cookie(v) { if (this === doc) N.setCookie(str(v)); },
+    get referrer() { return ''; },
+    get domain() { try { return new URL(N.docUrl(0)).hostname; } catch (e) { return ''; } },
+    set domain(v) { throw domErr('Setting document.domain is not supported', 'SecurityError'); },
+    get lastModified() {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        return p(d.getMonth() + 1) + '/' + p(d.getDate()) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    },
+    get characterSet() { return 'UTF-8'; },
+    get charset() { return 'UTF-8'; },
+    get inputEncoding() { return 'UTF-8'; },
+    get contentType() { return 'text/html'; },
+    get hidden() { return false; },
+    get visibilityState() { return 'visible'; },
+    get designMode() { return 'off'; },
+    set designMode(v) {},
+    get dir() { const h = this.documentElement; return h && h.localName === 'html' ? h.dir : ''; },
+    set dir(v) { const h = this.documentElement; if (h && h.localName === 'html') h.dir = v; },
+    get scrollingElement() { return this.compatMode === 'BackCompat' ? this.body : this.documentElement; },
+    get fullscreenElement() { return null; },
+    get fullscreenEnabled() { return false; },
+    get pictureInPictureEnabled() { return false; },
+    get images() { return cachedList(this, 'images', () => makeList(HTMLCollection, this, 10)); },
+    get embeds() { return cachedList(this, 'embeds', () => makeList(HTMLCollection, this, 2, 'embed')); },
+    get plugins() { return this.embeds; },
+    get links() { return cachedList(this, 'links', () => makeList(HTMLCollection, this, 11)); },
+    get forms() { return cachedList(this, 'forms', () => makeList(HTMLCollection, this, 12)); },
+    get scripts() { return cachedList(this, 'scripts', () => makeList(HTMLCollection, this, 13)); },
+    get anchors() { return cachedList(this, 'anchors', () => makeList(HTMLCollection, this, 14)); },
+    get applets() { return makeList(HTMLCollection, this, -1, null, []); },
+    get all() { return cachedList(this, 'all', () => makeList(HTMLCollection, this, 2, '*')); },
+    getElementsByName(name) { return cachedList(this, 'n:' + str(name), () => makeList(NodeList, this, 4, str(name))); },
+    createEvent(iface) {
+        const map = { event: Event, events: Event, htmlevents: Event, customevent: CustomEvent, uievent: UIEvent,
+            uievents: UIEvent, mouseevent: MouseEvent, mouseevents: MouseEvent, keyboardevent: KeyboardEvent,
+            focusevent: FocusEvent, messageevent: MessageEvent, storageevent: StorageEvent, hashchangeevent: HashChangeEvent,
+            errorevent: ErrorEvent, popstateevent: PopStateEvent, progressevent: ProgressEvent, compositionevent: CompositionEvent,
+            beforeunloadevent: BeforeUnloadEvent, pagetransitionevent: PageTransitionEvent, wheelevent: WheelEvent,
+            pointerevent: PointerEvent, inputevent: InputEvent };
+        const C = map[str(iface).toLowerCase()];
+        if (!C) throw domErr('The event interface is not supported', 'NotSupportedError');
+        const e = new C('');
+        e[S.ev].initialized = false;
+        return e;
+    },
+    createRange() { return new Range(); },
+    createNodeIterator(root, what, filter) { return new NodeIterator(root, what, filter); },
+    createTreeWalker(root, what, filter) { return new TreeWalker(root, what, filter); },
+    /* document.open() and close(): during parsing, write() inserts at the
+     * parser's insertion point and open() has nothing to do; after
+     * parsing, write() itself replaces the document (natives.c). */
+    open() { return this; },
+    close() {},
+    execCommand() { return false; },
+    queryCommandSupported() { return false; },
+    queryCommandEnabled() { return false; },
+    queryCommandState() { return false; },
+    queryCommandValue() { return ''; },
+    getSelection() { return G.getSelection(); },
+    elementFromPoint() { return null; },
+    elementsFromPoint() { return []; },
+    exitFullscreen() { return Promise.reject(new TypeError('Fullscreen is not supported')); },
+    clear() {},
+    captureEvents() {},
+    releaseEvents() {},
+    get fgColor() { const b = this.body; return b ? b.getAttribute('text') || '' : ''; },
+    get bgColor() { const b = this.body; return b ? b.getAttribute('bgcolor') || '' : ''; },
+    get linkColor() { const b = this.body; return b ? b.getAttribute('link') || '' : ''; },
+});
+/* The document lifecycle: "interactive" fires readystatechange and
+ * DOMContentLoaded; "complete" fires readystatechange, load (at window,
+ * with the document as target as browsers do) and pageshow. */
+P.setReadyState = function (s) {
+    if (s === readyState) return;
+    readyState = s;
+    fireSimple(doc, 'readystatechange', false, false);
+    if (s === 'interactive') {
+        fireSimple(doc, 'DOMContentLoaded', true, false);
+    } else if (s === 'complete') {
+        fire(G, new Event('load'), doc);
+        fire(G, new PageTransitionEvent('pageshow', { persisted: false }), doc);
+    }
+};
+
+/* ---------------- traversal ---------------- */
+
+const NodeFilter = {
+    FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2,
+    SHOW_TEXT: 0x4, SHOW_CDATA_SECTION: 0x8, SHOW_ENTITY_REFERENCE: 0x10, SHOW_ENTITY: 0x20,
+    SHOW_PROCESSING_INSTRUCTION: 0x40, SHOW_COMMENT: 0x80, SHOW_DOCUMENT: 0x100, SHOW_DOCUMENT_TYPE: 0x200,
+    SHOW_DOCUMENT_FRAGMENT: 0x400, SHOW_NOTATION: 0x800,
+};
+defGlobal('NodeFilter', NodeFilter);
+function filterNode(it, n) {
+    if (it._active) throw domErr('The filter is already running', 'InvalidStateError');
+    if (!((1 << (n.nodeType - 1)) & it.whatToShow)) return 3;
+    const f = it.filter;
+    if (f === null) return 1;
+    it._active = true;
+    try {
+        const r = typeof f === 'function' ? f.call(undefined, n) : f.acceptNode(n);
+        return Number(r) | 0;
+    } finally {
+        it._active = false;
+    }
+}
+class TreeWalker {
+    constructor(root, what = 0xFFFFFFFF, filter = null) {
+        if (!isNode(root)) throw new TypeError('createTreeWalker: root is not a Node');
+        this._root = root; this.currentNode = root; this._what = what >>> 0; this._filter = filter; this._active = false;
+    }
+    get root() { return this._root; }
+    get whatToShow() { return this._what; }
+    get filter() { return this._filter; }
+    parentNode() {
+        let n = this.currentNode;
+        while (n && n !== this._root) {
+            n = n.parentNode;
+            if (n && filterNode(this, n) === 1) return (this.currentNode = n);
+        }
+        return null;
+    }
+    _child(first) {
+        let n = first ? this.currentNode.firstChild : this.currentNode.lastChild;
+        while (n) {
+            const r = filterNode(this, n);
+            if (r === 1) return (this.currentNode = n);
+            if (r === 3) { const c = first ? n.firstChild : n.lastChild; if (c) { n = c; continue; } }
+            while (n) {
+                const s = first ? n.nextSibling : n.previousSibling;
+                if (s) { n = s; break; }
+                const p = n.parentNode;
+                if (!p || p === this._root || p === this.currentNode) return null;
+                n = p;
+            }
+        }
+        return null;
+    }
+    firstChild() { return this._child(true); }
+    lastChild() { return this._child(false); }
+    _sibling(next) {
+        let n = this.currentNode;
+        if (n === this._root) return null;
+        for (;;) {
+            let s = next ? n.nextSibling : n.previousSibling;
+            while (s) {
+                n = s;
+                const r = filterNode(this, n);
+                if (r === 1) return (this.currentNode = n);
+                s = next ? n.firstChild : n.lastChild;
+                if (r === 2 || !s) s = next ? n.nextSibling : n.previousSibling;
+            }
+            n = n.parentNode;
+            if (!n || n === this._root) return null;
+            if (filterNode(this, n) === 1) return null;
+        }
+    }
+    nextSibling() { return this._sibling(true); }
+    previousSibling() { return this._sibling(false); }
+    previousNode() {
+        let n = this.currentNode;
+        while (n !== this._root) {
+            let s = n.previousSibling;
+            while (s) {
+                n = s;
+                let r = filterNode(this, n);
+                while (r !== 2 && n.lastChild) { n = n.lastChild; r = filterNode(this, n); }
+                if (r === 1) return (this.currentNode = n);
+                s = n.previousSibling;
+            }
+            if (n === this._root || !n.parentNode) return null;
+            n = n.parentNode;
+            if (filterNode(this, n) === 1) return (this.currentNode = n);
+        }
+        return null;
+    }
+    nextNode() {
+        let n = this.currentNode, r = 1;
+        for (;;) {
+            while (r !== 2 && n.firstChild) {
+                n = n.firstChild;
+                r = filterNode(this, n);
+                if (r === 1) return (this.currentNode = n);
+            }
+            let s = null;
+            for (let t = n; t; t = t.parentNode) {
+                if (t === this._root) return null;
+                if (t.nextSibling) { s = t.nextSibling; break; }
+            }
+            if (!s) return null;
+            n = s;
+            r = filterNode(this, n);
+            if (r === 1) return (this.currentNode = n);
+        }
+    }
+}
+tag(TreeWalker);
+defGlobal('TreeWalker', TreeWalker);
+class NodeIterator {
+    constructor(root, what = 0xFFFFFFFF, filter = null) {
+        if (!isNode(root)) throw new TypeError('createNodeIterator: root is not a Node');
+        this._root = root; this._ref = root; this._before = true; this._what = what >>> 0; this._filter = filter; this._active = false;
+    }
+    get root() { return this._root; }
+    get referenceNode() { return this._ref; }
+    get pointerBeforeReferenceNode() { return this._before; }
+    get whatToShow() { return this._what; }
+    get filter() { return this._filter; }
+    _traverse(next) {
+        let n = this._ref, before = this._before;
+        for (;;) {
+            if (next) {
+                if (!before) {
+                    let m = n.firstChild;
+                    if (!m) for (let t = n; t && t !== this._root; t = t.parentNode) if (t.nextSibling) { m = t.nextSibling; break; }
+                    if (!m) return null;
+                    n = m;
+                }
+                before = false;
+            } else {
+                if (before) {
+                    if (n === this._root) return null;
+                    let m = n.previousSibling;
+                    if (m) { while (m.lastChild) m = m.lastChild; } else m = n.parentNode;
+                    if (!m) return null;
+                    n = m;
+                }
+                before = true;
+            }
+            if (filterNode(this, n) === 1) { this._ref = n; this._before = before; return n; }
+            if (!next && !before) before = true;
+        }
+    }
+    nextNode() { return this._traverse(true); }
+    previousNode() { return this._traverse(false); }
+    detach() {}
+}
+tag(NodeIterator);
+defGlobal('NodeIterator', NodeIterator);
+
+/* A minimal Range: boundary points, collapse, selectNode(Contents),
+ * toString, deleteContents and extractContents for a single container,
+ * createContextualFragment and getBoundingClientRect. */
+class AbstractRange {}
+class Range extends AbstractRange {
+    constructor() {
+        super();
+        this.startContainer = doc; this.startOffset = 0; this.endContainer = doc; this.endOffset = 0;
+    }
+    get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+    get commonAncestorContainer() {
+        for (let a = this.startContainer; a; a = a.parentNode) if (a === this.endContainer || a.contains(this.endContainer)) return a;
+        return doc;
+    }
+    _len(n) { return n.nodeType === 3 || n.nodeType === 8 || n.nodeType === 4 || n.nodeType === 7 ? n.data.length : n.childNodes.length; }
+    setStart(n, o) { if (o > this._len(n)) throw domErr('Offset out of range', 'IndexSizeError'); this.startContainer = n; this.startOffset = o >>> 0; if (!this._ordered()) this.collapse(true); }
+    setEnd(n, o) { if (o > this._len(n)) throw domErr('Offset out of range', 'IndexSizeError'); this.endContainer = n; this.endOffset = o >>> 0; if (!this._ordered()) this.collapse(false); }
+    _ordered() {
+        const a = this.startContainer, b = this.endContainer;
+        if (a === b) return this.startOffset <= this.endOffset;
+        const pos = a.compareDocumentPosition(b);
+        return !(pos & 2) || !!(pos & 8);
+    }
+    _idx(n) { let i = 0; for (let c = n.previousSibling; c; c = c.previousSibling) i++; return i; }
+    setStartBefore(n) { this.setStart(n.parentNode, this._idx(n)); }
+    setStartAfter(n) { this.setStart(n.parentNode, this._idx(n) + 1); }
+    setEndBefore(n) { this.setEnd(n.parentNode, this._idx(n)); }
+    setEndAfter(n) { this.setEnd(n.parentNode, this._idx(n) + 1); }
+    collapse(toStart) {
+        if (toStart) { this.endContainer = this.startContainer; this.endOffset = this.startOffset; }
+        else { this.startContainer = this.endContainer; this.startOffset = this.endOffset; }
+    }
+    selectNode(n) {
+        const p = n.parentNode;
+        if (!p) throw domErr('The node has no parent', 'InvalidNodeTypeError');
+        const i = this._idx(n);
+        this.startContainer = this.endContainer = p; this.startOffset = i; this.endOffset = i + 1;
+    }
+    selectNodeContents(n) { this.startContainer = this.endContainer = n; this.startOffset = 0; this.endOffset = this._len(n); }
+    cloneRange() { const r = new Range(); Object.assign(r, { startContainer: this.startContainer, startOffset: this.startOffset, endContainer: this.endContainer, endOffset: this.endOffset }); return r; }
+    detach() {}
+    toString() {
+        const a = this.startContainer, b = this.endContainer;
+        if (a === b && a.nodeType === 3) return a.data.slice(this.startOffset, this.endOffset);
+        let s = '';
+        const w = new TreeWalker(this.commonAncestorContainer, 4);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+            const posA = a.nodeType === 3 ? (n === a ? 0 : a.compareDocumentPosition(n)) : 0;
+            if (n === a) s += n.data.slice(this.startOffset);
+            else if (n === b) { s += n.data.slice(0, this.endOffset); break; }
+            else if (this._inside(n)) s += n.data;
+            void posA;
+        }
+        return s;
+    }
+    _inside(n) {
+        const sa = this._point(this.startContainer, this.startOffset), sb = this._point(this.endContainer, this.endOffset);
+        return this._cmp(n, sa) >= 0 && this._cmp(n, sb) < 0;
+    }
+    _point(c, o) { if (c.nodeType === 3 || c.nodeType === 8) return c; const k = c.childNodes[o]; return k || c; }
+    _cmp(n, ref) { if (n === ref) return 0; const p = ref.compareDocumentPosition(n); return p & 4 ? 1 : -1; }
+    comparePoint(n, o) {
+        if (n === this.startContainer && o < this.startOffset) return -1;
+        if (n === this.endContainer && o > this.endOffset) return 1;
+        return 0;
+    }
+    isPointInRange(n, o) { return this.comparePoint(n, o) === 0; }
+    intersectsNode(n) { return this.commonAncestorContainer.contains(n); }
+    deleteContents() { this.extractContents(); }
+    extractContents() {
+        const f = doc.createDocumentFragment();
+        const a = this.startContainer, b = this.endContainer;
+        if (a === b) {
+            if (a.nodeType === 3 || a.nodeType === 8) {
+                const t = a.data.slice(this.startOffset, this.endOffset);
+                a.deleteData(this.startOffset, this.endOffset - this.startOffset);
+                if (t) f.appendChild(doc.createTextNode(t));
+            } else {
+                const kids = Array.from(a.childNodes).slice(this.startOffset, this.endOffset);
+                for (const k of kids) f.appendChild(k);
+            }
+            this.collapse(true);
+            return f;
+        }
+        throw domErr('Ranges across containers are not supported', 'NotSupportedError');
+    }
+    cloneContents() {
+        const f = doc.createDocumentFragment();
+        const a = this.startContainer;
+        if (a === this.endContainer) {
+            if (a.nodeType === 3) f.appendChild(doc.createTextNode(a.data.slice(this.startOffset, this.endOffset)));
+            else for (const k of Array.from(a.childNodes).slice(this.startOffset, this.endOffset)) f.appendChild(k.cloneNode(true));
+        }
+        return f;
+    }
+    insertNode(n) {
+        const c = this.startContainer;
+        if (c.nodeType === 3) { const t = c.splitText(this.startOffset); c.parentNode.insertBefore(n, t); }
+        else c.insertBefore(n, c.childNodes[this.startOffset] || null);
+    }
+    surroundContents(n) { const f = this.extractContents(); n.appendChild(f); this.insertNode(n); this.selectNode(n); }
+    createContextualFragment(html) {
+        const ctx = this.startContainer.nodeType === 1 ? this.startContainer : this.startContainer.parentElement || doc.body;
+        const t = ctx && ctx.localName !== 'html' ? ctx.cloneNode(false) : doc.createElement('body');
+        t.innerHTML = str(html);
+        const f = doc.createDocumentFragment();
+        while (t.firstChild) f.appendChild(t.firstChild);
+        return f;
+    }
+    getBoundingClientRect() {
+        const n = this.startContainer.nodeType === 1 ? this.startContainer : this.startContainer.parentElement;
+        return n ? n.getBoundingClientRect() : new DOMRect();
+    }
+    getClientRects() { return [this.getBoundingClientRect()]; }
+}
+for (const [k, v] of [['START_TO_START', 0], ['START_TO_END', 1], ['END_TO_END', 2], ['END_TO_START', 3]]) Range[k] = v;
+tag(AbstractRange); tag(Range);
+defGlobal('AbstractRange', AbstractRange);
+defGlobal('Range', Range);
+class StaticRange extends AbstractRange {
+    constructor(init) { super(); Object.assign(this, { startContainer: init.startContainer, startOffset: init.startOffset >>> 0, endContainer: init.endContainer, endOffset: init.endOffset >>> 0 }); }
+    get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+}
+defGlobal('StaticRange', StaticRange);
+
+class Selection {
+    constructor() { this._r = null; }
+    get rangeCount() { return this._r ? 1 : 0; }
+    get isCollapsed() { return !this._r || this._r.collapsed; }
+    get anchorNode() { return this._r ? this._r.startContainer : null; }
+    get anchorOffset() { return this._r ? this._r.startOffset : 0; }
+    get focusNode() { return this._r ? this._r.endContainer : null; }
+    get focusOffset() { return this._r ? this._r.endOffset : 0; }
+    get type() { return !this._r ? 'None' : this._r.collapsed ? 'Caret' : 'Range'; }
+    getRangeAt(i) { if (!this._r || i !== 0) throw domErr('No range at that index', 'IndexSizeError'); return this._r; }
+    addRange(r) { if (!this._r) this._r = r; }
+    removeAllRanges() { this._r = null; }
+    empty() { this._r = null; }
+    removeRange() { this._r = null; }
+    collapse(n, o = 0) { if (!n) { this._r = null; return; } const r = new Range(); r.setStart(n, o); this._r = r; }
+    selectAllChildren(n) { const r = new Range(); r.selectNodeContents(n); this._r = r; }
+    toString() { return this._r ? this._r.toString() : ''; }
+    containsNode(n) { return !!this._r && this._r.intersectsNode(n); }
+}
+tag(Selection);
+defGlobal('Selection', Selection);
+const theSelection = Object.create(Selection.prototype);
+theSelection._r = null;
+defGlobal('getSelection', () => theSelection);
+
+/* DOMParser, XMLSerializer, DOMImplementation */
+class XMLSerializer {
+    serializeToString(n) {
+        if (!isNode(n)) throw new TypeError('serializeToString: not a Node');
+        if (isElement(n)) return n.outerHTML;
+        if (n.nodeType === 3) return n.data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (n.nodeType === 8) return '<!--' + n.data + '-->';
+        const d = doc.createElement('div');
+        d.appendChild(n.cloneNode(true));
+        return d.innerHTML;
+    }
+}
+defGlobal('XMLSerializer', XMLSerializer);
+class DOMParser {
+    parseFromString() { throw domErr('DOMParser needs a second document, which Aura does not support yet', 'NotSupportedError'); }
+}
+defGlobal('DOMParser', DOMParser);
+class DOMImplementation {
+    hasFeature() { return true; }
+    createHTMLDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
+    createDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
+    createDocumentType() { throw domErr('Creating document types is not supported', 'NotSupportedError'); }
+}
+tag(DOMImplementation);
+defGlobal('DOMImplementation', DOMImplementation);
+const theImpl = Object.create(DOMImplementation.prototype);
+defProps(DP, { get implementation() { return theImpl; } });

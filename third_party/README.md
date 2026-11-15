@@ -12,8 +12,8 @@ came from and how to update it.
 - **Licence:** MIT, `quickjs/LICENSE`.
 - **What is kept:** the engine only: `quickjs.c`, `libregexp.c`,
   `libunicode.c`, `dtoa.c` and their headers (`quickjs-patches/apply.sh`
-  lists them). No CLI (`qjs`, `qjsc`), no `quickjs-libc`, no tests, no
-  test262 harness.
+  lists them). No CLI (`qjs`, `qjsc`), no `quickjs-libc`, no test262
+  harness; a subset of the tests (below).
 - **Build:** `quickjs.cmake` builds the static library `aura_quickjs`
   with QuickJS-ng's own warning flags and `-funsigned-char`, and links it
   into `aura_engine`. Aura reaches it only through `src/js`.
@@ -22,4 +22,13 @@ came from and how to update it.
   `third_party/quickjs-patches/apply.sh PRISTINE_DIR`, which copies the
   engine files into `third_party/quickjs` and applies the patches; fix any
   patch that no longer applies; then run `./build.sh test` and the guest
-  self-test (`src/platform/macos9/jstest`).
+  self-test (`src/platform/macos9/jstest`). The patches are:
+  `0001` newlib portability (no pthreads or C11 atomics, big-endian
+  checks), `0002` a retry hook in module resolution so the embedder can
+  fetch a missing module and resolve again, and `0003` a GC mark for
+  WeakMap values with symbol keys (fixes a realm leak).
+- **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
+  folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
+  workers or test262 harness); the microbenchmark is left out.
+  `tests/js/CMakeLists.txt` runs each through `aura-host js`. Copy them
+  again from the new release when updating.

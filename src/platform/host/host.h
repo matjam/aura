@@ -25,5 +25,7 @@ const char *au_host_fonts_dir(void);
 int au_host_font_option(int argc, char **argv, int i);
 /* The offscreen surface standing in for the window. */
 void au_host_set_window_surface(AuSurface *s);
+/* aura-host js (jsrun.c). */
+int au_host_js_main(int argc, char **argv);
 
 #endif
