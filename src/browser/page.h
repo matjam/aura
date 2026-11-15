@@ -356,6 +356,11 @@ size_t au_page_console_count(const AuPage *p);
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The document view's update counts (style passes, styled elements, box
+ * tree builds, layouts; AuDocViewStats in src/page/page.h), for timings
+ * and tests. False for a page without a document view. */
+struct AuDocViewStats;
+bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s);
 const char *au_page_console_line(const AuPage *p, size_t i, int *level);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */

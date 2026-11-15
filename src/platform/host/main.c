@@ -446,6 +446,33 @@ static void chrome_shot(AuBrowserWindow *w, int width, int height, const char *p
     au_surface_free(s);
 }
 
+/* What the window invalidated since the record was cleared (--do keys:). */
+static struct {
+    int n;
+    long area;
+    AuIRect u;
+    AuIRect r[16];
+} key_inv;
+
+static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
+{
+    (void)ctx, (void)w;
+    if (r.x1 <= r.x0 || r.y1 <= r.y0)
+        return;
+    if (key_inv.n < 16)
+        key_inv.r[key_inv.n] = r;
+    if (!key_inv.n) {
+        key_inv.u = r;
+    } else {
+        if (r.x0 < key_inv.u.x0) key_inv.u.x0 = r.x0;
+        if (r.y0 < key_inv.u.y0) key_inv.u.y0 = r.y0;
+        if (r.x1 > key_inv.u.x1) key_inv.u.x1 = r.x1;
+        if (r.y1 > key_inv.u.y1) key_inv.u.y1 = r.y1;
+    }
+    key_inv.n++;
+    key_inv.area += (long)(r.x1 - r.x0) * (r.y1 - r.y0);
+}
+
 static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
 {
     AuEvent e;
@@ -584,6 +611,44 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             au_cache_stats(o->cache, &cs);
         printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored\n",
                cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored);
+    } else if (!strncmp(a, "keys:", 5)) {
+        /* Types TEXT one key at a time and prints what each key cost:
+         * the time in the key event and the idle pass after it, the
+         * document view's update counts, the rectangles invalidated, and
+         * the time to paint them. */
+        const char *s = a + 5;
+        size_t n = strlen(s), i = 0;
+        AuTab *t = au_bw_active_tab(w);
+        AuSurface *surf = au_surface_new(o->w, o->h);
+        AuCanvas *cv = au_canvas_new(surf);
+        au_bw_paint(w, cv, (AuIRect){0, 0, o->w, o->h});
+        while (t && i < n) {
+            size_t adv = 1;
+            uint32_t cp = au_utf8_decode(s + i, n - i, &adv);
+            i += adv ? adv : 1;
+            AuDocViewStats s0, s1;
+            memset(&s0, 0, sizeof s0);
+            memset(&s1, 0, sizeof s1);
+            au_page_update_stats(t->page, &s0);
+            memset(&key_inv, 0, sizeof key_inv);
+            double t0 = now_ms();
+            chrome_key(w, 0, cp, 0);
+            double t1 = now_ms();
+            au_bw_idle(w);
+            double t2 = now_ms();
+            au_page_update_stats(t->page, &s1);
+            for (int k = 0; k < key_inv.n && k < 16; k++)
+                au_bw_paint(w, cv, key_inv.r[k]);
+            double t3 = now_ms();
+            printf("key %c: event %.2f ms, idle %.2f ms, paint %.2f ms; %u style passes, %u elements styled, "
+                   "%u tree builds, %u layouts; %d invalidations, %ld px, union %d,%d %dx%d\n",
+                   cp < 127 ? (char)cp : '?', t1 - t0, t2 - t1, t3 - t2, s1.style_passes - s0.style_passes,
+                   s1.styled_elements - s0.styled_elements, s1.tree_builds - s0.tree_builds, s1.layouts - s0.layouts,
+                   key_inv.n, key_inv.area, key_inv.u.x0, key_inv.u.y0, key_inv.u.x1 - key_inv.u.x0,
+                   key_inv.u.y1 - key_inv.u.y0);
+        }
+        au_canvas_free(cv);
+        au_surface_free(surf);
     } else if (!strncmp(a, "js:", 3)) {
         AuTab *t = au_bw_active_tab(w);
         AuBuf out;
@@ -641,6 +706,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;
         host.scroll_area = bench_scroll;
+    } else {
+        host.invalidate = key_inval;
     }
     AuBrowser *b = au_browser_new(fonts, &host);
     /* --net: http and https through the network stack and page fetcher,
