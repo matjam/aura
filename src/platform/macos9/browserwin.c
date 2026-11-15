@@ -1147,10 +1147,11 @@ static bool bw_key(MacWin *mw, EventRecord *ev)
     e.key = key;
     e.ch = uc;
     e.mods = mods;
-    if (au_bw_key(b->bw, &e)) {
-        flush(b);
+    /* No flush here: the event loop handles the keys queued behind this
+     * one first and then paints once (idle_all), so typing ahead of a
+     * slow page costs one repaint, not one per key. */
+    if (au_bw_key(b->bw, &e))
         return true;
-    }
     if (ch == 0x1B) {
         au_bw_stop(b->bw);
         return true;
@@ -1592,6 +1593,32 @@ void browserwin_page_timings(BrowserWin *b)
     SetCursor(*GetCursor(watchCursor));
     AuPageStats st;
     au_page_stats(t->page, &st);
+    /* Typing, when a text field of the page has the focus: eight
+     * characters and eight Backspaces, each painted and shown as a typed
+     * key is. The field is left as it was (script listeners saw the
+     * keys). */
+    TimedScroll typed;
+    memset(&typed, 0, sizeof typed);
+    if (!b->field_focus && au_bw_page_editing(b->bw)) {
+        flush(b);
+        timing_reset(b);
+        uint32_t u0 = au_mac_clock_us();
+        for (int i = 0; i < 16; i++) {
+            AuEvent e;
+            memset(&e, 0, sizeof e);
+            e.type = AU_EVENT_KEY_DOWN;
+            if (i < 8)
+                e.ch = 'a' + (uint32_t)i;
+            else
+                e.key = AU_KEY_BACKSPACE;
+            au_bw_key(b->bw, &e);
+            au_bw_idle(b->bw);
+            flush(b);
+            typed.steps++;
+        }
+        typed.total_us = au_mac_clock_us() - u0;
+        timing_take(b, &typed);
+    }
     /* Scrolling: ten steps of 32 pixels and five page downs (up near the
      * end), each painted and shown as a scroll by the user is, then a
      * repaint of the whole page; flush() times painting and copying. */
@@ -1632,9 +1659,17 @@ void browserwin_page_timings(BrowserWin *b)
     long temp_free = (long)TempFreeMem();
     AuPageStats st2;
     au_page_stats(t->page, &st2);
-    char l0[200], l1[300], l2[512], l3[256], a[4][96];
-    snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).", au_page_title(t->page),
-             (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
+    char l0[320], l1[300], l2[512], l3[256], a[4][96];
+    if (typed.steps) {
+        /* a long title would push the typing figures out of the 255
+         * characters an alert line holds */
+        timed_text(a[0], sizeof a[0], &typed);
+        snprintf(l0, sizeof l0, "%.60s: first paint %lu ms, loaded in %lu ms. Typing, ms per key (areas): %s.",
+                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms, a[0]);
+    } else {
+        snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).",
+                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
+    }
     snprintf(l1, sizeof l1,
              "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu "
              "resources. Images: %luK of %luK, %lu decodes.",
