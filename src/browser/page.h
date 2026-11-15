@@ -296,6 +296,11 @@ typedef struct AuPageFetcher {
     /* Optional: the user chose to visit the blocked site of url anyway,
      * for this session ("Visit Anyway" on the blocked-site page). */
     void (*allow_blocked)(void *ctx, const char *url);
+    /* Optional: document.cookie for the document at url. top_level_url is
+     * the tab's document when url is a nested document's, else NULL.
+     * get_cookie returns au_alloc'd text ("a=1; b=2") or NULL. */
+    char *(*get_cookie)(void *ctx, const char *url, const char *top_level_url);
+    void (*set_cookie)(void *ctx, const char *url, const char *top_level_url, const char *value);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {

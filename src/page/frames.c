@@ -362,6 +362,25 @@ static void fc_console(void *ctx, AuDocView *dv, int level, const char *text, si
         top->cb.console(top->cb.ctx, top, level, text, len);
 }
 
+/* document.cookie of a nested document: the embedder gets the top-level
+ * view and nested set (script.c passes the document's URL). */
+static char *fc_get_cookie(void *ctx, AuDocView *dv, const char *url, bool nested)
+{
+    AuDocView *top = au_dv_top(((AuFrame *)ctx)->owner);
+    (void)dv;
+    (void)nested;
+    return top->cb.get_cookie ? top->cb.get_cookie(top->cb.ctx, top, url, true) : NULL;
+}
+
+static void fc_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value)
+{
+    AuDocView *top = au_dv_top(((AuFrame *)ctx)->owner);
+    (void)dv;
+    (void)nested;
+    if (top->cb.set_cookie)
+        top->cb.set_cookie(top->cb.ctx, top, url, true, value);
+}
+
 static bool fc_random(void *ctx, AuDocView *dv, void *buf, size_t len)
 {
     (void)dv;
@@ -439,6 +458,8 @@ static AuDocView *frame_view(AuFrame *f)
     if (top->cb.random)
         cb.random = fc_random;
     cb.coro = top->cb.coro;
+    cb.get_cookie = fc_get_cookie;
+    cb.set_cookie = fc_set_cookie;
     cb.popup = fc_popup;
     cb.choose_file = fc_choose_file;
     cb.confirm = fc_confirm;

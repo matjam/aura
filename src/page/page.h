@@ -130,6 +130,12 @@ typedef struct AuDocViewCallbacks {
     /* Coroutines for workers (core/coro.h). Optional: without them a
      * worker runs on the caller's stack, a task at a time. */
     const AuCoroOps *coro;
+    /* document.cookie of the document at url (the view's own, or a nested
+     * document's when nested is set; dv is the top-level view either
+     * way): get_cookie returns au_alloc'd text or NULL. Optional: without
+     * them document.cookie reads "" and writes are dropped. */
+    char *(*get_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested);
+    void (*set_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value);
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */

@@ -1054,6 +1054,26 @@ static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
         request_scroll(ctx, x, y);
 }
 
+/* document.cookie: the scheme's fetcher owns the cookie jar. A view that
+ * is not the page's current one (a kept document running pagehide)
+ * reads nothing and sets nothing. */
+static char *dv_get_cookie(void *ctx, AuDocView *dv, const char *url, bool nested)
+{
+    AuPage *p = ctx;
+    const AuPageFetcher *fe = dv == p->dv ? fetcher_for(p, url) : NULL;
+    if (!fe || !fe->get_cookie)
+        return NULL;
+    return fe->get_cookie(fe->ctx, url, nested ? p->url : NULL);
+}
+
+static void dv_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value)
+{
+    AuPage *p = ctx;
+    const AuPageFetcher *fe = dv == p->dv ? fetcher_for(p, url) : NULL;
+    if (fe && fe->set_cookie)
+        fe->set_cookie(fe->ctx, url, nested ? p->url : NULL, value);
+}
+
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
 {
     AuPage *p = ctx;
@@ -1468,6 +1488,8 @@ static void new_view(AuPage *p)
     dcb.console = dv_console;
     dcb.random = p->env.random ? dv_random : NULL;
     dcb.coro = p->env.coro;
+    dcb.get_cookie = dv_get_cookie;
+    dcb.set_cookie = dv_set_cookie;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;

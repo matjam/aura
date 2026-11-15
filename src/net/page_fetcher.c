@@ -498,6 +498,25 @@ static void pf_allow_blocked(void *ctx, const char *url)
     au_url_free(&u);
 }
 
+static char *pf_get_cookie(void *ctx, const char *url, const char *top_level_url)
+{
+    AuNetPageFetcher *f = ctx;
+    AuBuf b;
+    au_buf_init(&b);
+    au_net_document_cookie_get(au_net_loader_net(f->l), url, top_level_url, &b);
+    if (!b.len) {
+        au_buf_free(&b);
+        return NULL;
+    }
+    return au_buf_take(&b, NULL);
+}
+
+static void pf_set_cookie(void *ctx, const char *url, const char *top_level_url, const char *value)
+{
+    AuNetPageFetcher *f = ctx;
+    au_net_document_cookie_set(au_net_loader_net(f->l), url, top_level_url, value);
+}
+
 void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *out)
 {
     memset(out, 0, sizeof *out);
@@ -508,6 +527,8 @@ void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *ou
     out->status = pf_status;
     out->allow_cert = pf_allow_cert;
     out->allow_blocked = pf_allow_blocked;
+    out->get_cookie = pf_get_cookie;
+    out->set_cookie = pf_set_cookie;
 }
 
 AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f)

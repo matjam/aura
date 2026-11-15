@@ -275,6 +275,42 @@ static uint32_t elapsed(uint32_t now, uint32_t since)
 }
 static int64_t wall(AuNet *net) { return net->ops.wall_time(net->ops.ctx); }
 
+static void document_cookie(AuNet *net, const char *url, const char *top_level_url, const char *value, AuBuf *out)
+{
+    AuUrl u, site;
+    if (out)
+        au_buf_clear(out);
+    if (!net->jar || !url || !au_url_parse(&u, url, NULL))
+        return;
+    if (!strcmp(u.scheme, "http") || !strcmp(u.scheme, "https")) {
+        bool have_site = top_level_url && au_url_parse(&site, top_level_url, NULL);
+        AuCookieRequest cr;
+        memset(&cr, 0, sizeof cr);
+        cr.url = &u;
+        cr.site_for_cookies = have_site ? &site : NULL;
+        cr.safe_method = true;
+        cr.from_script = true;
+        cr.now = wall(net);
+        if (out)
+            au_cookie_jar_document_get(net->jar, &cr, out);
+        else
+            au_cookie_jar_document_set(net->jar, &cr, value);
+        if (have_site)
+            au_url_free(&site);
+    }
+    au_url_free(&u);
+}
+
+void au_net_document_cookie_get(AuNet *net, const char *url, const char *top_level_url, AuBuf *out)
+{
+    document_cookie(net, url, top_level_url, NULL, out);
+}
+
+void au_net_document_cookie_set(AuNet *net, const char *url, const char *top_level_url, const char *value)
+{
+    document_cookie(net, url, top_level_url, value, NULL);
+}
+
 static void trace_init(AuHttpTransfer *t);
 static void trace_note(AuHttpTransfer *t);
 

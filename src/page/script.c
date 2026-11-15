@@ -152,6 +152,38 @@ static bool h_random(void *ctx, void *buf, size_t len)
     return cb->random && cb->random(cb->ctx, s->dv, buf, len);
 }
 
+/* document.cookie. A document without a network URL of its own
+ * (about:blank, srcdoc) has its parent's origin and so its cookies. */
+static const char *cookie_url(AuDocScript *s)
+{
+    AuDocView *dv = s->dv;
+    for (;;) {
+        const char *u = au_docview_url(dv);
+        if (!dv->parent || (strncmp(u, "about:", 6) != 0 && strncmp(u, "data:", 5) != 0))
+            return u;
+        dv = dv->parent;
+    }
+}
+
+static char *h_get_cookie(void *ctx, const char *url)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    (void)url;
+    if (!cb->get_cookie)
+        return NULL;
+    return cb->get_cookie(cb->ctx, au_dv_top(s->dv), cookie_url(s), s->dv->parent != NULL);
+}
+
+static void h_set_cookie(void *ctx, const char *url, const char *value)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    (void)url;
+    if (cb->set_cookie)
+        cb->set_cookie(cb->ctx, au_dv_top(s->dv), cookie_url(s), s->dv->parent != NULL, value);
+}
+
 static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
 {
     AuDocScript *s = ctx;
@@ -547,6 +579,8 @@ static bool ensure_js(AuDocScript *s)
     if (au_dv_callbacks(s->dv)->random)
         h.random = h_random;
     h.coro = au_dv_callbacks(s->dv)->coro;
+    h.get_cookie = h_get_cookie;
+    h.set_cookie = h_set_cookie;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
