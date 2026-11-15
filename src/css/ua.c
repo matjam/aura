@@ -25,6 +25,13 @@ const char css_ua_sheet[] =
     "embed[hidden] { display: inline; height: 0; width: 0; }\n"
     "input[type=hidden i] { display: none !important; }\n"
     "@media (scripting) { noscript { display: none !important; } }\n"
+    /* Frame sets: rows or columns of equal size (the rows and cols
+     * lengths are not read), each frame a nested document. */
+    "frameset { display: flex; flex-direction: column; height: 100vh; margin: 0; }\n"
+    "frameset[cols] { flex-direction: row; }\n"
+    "frameset frameset { height: auto; }\n"
+    "frame, frameset frameset { display: block; flex: 1 1 0; min-width: 0; min-height: 0; align-self: stretch; }\n"
+    "frameset frameset { display: flex; }\n"
     /* the page */
     "html, body { display: block; }\n"
     "body { margin: 8px; }\n"

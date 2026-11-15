@@ -1858,6 +1858,81 @@ static JSValue m_insert_adjacent_html(JSContext *ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
+/* Replaces d's contents with the parse of js->open_buf. */
+static void doc_reparse(AuJs *js, AuDocument *d)
+{
+    AuHtmlOptions o;
+    memset(&o, 0, sizeof o);
+    o.scripting = true; /* as the document was parsed: noscript content stays text */
+    AuDocument *nd = au_html_parse(js->open_buf.data ? js->open_buf.data : "", js->open_buf.len, &o);
+    remove_all_children(&d->node);
+    d->quirks = nd->quirks;
+    while (nd->node.first_child) {
+        AuNode *c = nd->node.first_child;
+        au_node_ref(c);
+        au_node_remove(c);
+        set_doc_subtree(c, d);
+        au_node_append(&d->node, c);
+        au_node_unref(c);
+    }
+    au_node_unref(&nd->node);
+}
+
+/* docOpen(document, close): document.open() and close() once parsing has
+ * ended. open empties the document and starts collecting what is written;
+ * close ends that. */
+static JSValue n_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *d = argc > 0 ? js_unwrap(js, argv[0]) : NULL;
+    bool close = argc > 1 && JS_ToBool(ctx, argv[1]);
+    if (!d || (AuDocument *)d != js->doc || (js->parser && !au_html_parser_done(js->parser)) || js->hooks.parser)
+        return JS_UNDEFINED;
+    if (close) {
+        js->opened = false;
+        au_buf_free(&js->open_buf);
+        au_buf_init(&js->open_buf);
+    } else {
+        js->opened = true;
+        au_buf_clear(&js->open_buf);
+        remove_all_children(d);
+        js_ce_flush(js);
+    }
+    return JS_UNDEFINED;
+}
+
+/* newDocument(): an empty document (DOMImplementation.createDocument).
+ * newDoctype(name, publicId, systemId): a doctype node of this document. */
+static JSValue n_new_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuDocument *d = au_document_new();
+    js_keep_doc(js, d);
+    JSValue r = js_wrap(js, &d->node);
+    au_node_unref(&d->node);
+    return r;
+}
+
+static JSValue n_new_doctype(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    char *parts[3] = {NULL, NULL, NULL};
+    for (int i = 0; i < 3; i++) {
+        parts[i] = argc > i ? js_tostr(ctx, argv[i], NULL) : au_strndup("", 0);
+        if (!parts[i]) {
+            for (int k = 0; k < i; k++)
+                au_free(parts[k]);
+            return JS_EXCEPTION;
+        }
+    }
+    AuNode *n = au_doctype_new(js->doc, parts[0], parts[1], parts[2]);
+    for (int i = 0; i < 3; i++)
+        au_free(parts[i]);
+    JSValue r = js_wrap(js, n);
+    au_node_unref(n);
+    return r;
+}
+
 /* document.write(text): magic 1 adds a newline (writeln). */
 static JSValue m_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -1891,6 +1966,16 @@ static JSValue m_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         if (p) {
             js->parser = p;
             au_html_parser_write(p, b.data ? b.data : "", b.len);
+        }
+    } else if (!ok && js->opened && (!js->parser || au_html_parser_done(js->parser))) {
+        /* After document.open() on a loaded document: the document's
+         * contents become the parse of everything written since the
+         * open. The Document object, its window and its listeners stay;
+         * scripts in the written text do not run. A write without an
+         * open() is still ignored once parsing has ended. */
+        if (js->open_buf.len + b.len <= (size_t)4 << 20) {
+            au_buf_append(&js->open_buf, b.data ? b.data : "", b.len);
+            doc_reparse(js, (AuDocument *)d);
         }
     }
     au_buf_free(&b);
@@ -2416,6 +2501,9 @@ static const JSCFunctionListEntry dom_natives[] = {
     JS_CFUNC_DEF("currentScript", 0, n_current_script),
     JS_CFUNC_DEF("document", 0, n_document),
     JS_CFUNC_DEF("parseHTMLDocument", 1, n_parse_html_document),
+    JS_CFUNC_DEF("docOpen", 2, n_doc_open),
+    JS_CFUNC_DEF("newDocument", 0, n_new_document),
+    JS_CFUNC_DEF("newDoctype", 3, n_new_doctype),
     JS_CFUNC_DEF("is", 2, n_is),
     JS_CFUNC_DEF("eventParent", 1, n_event_parent),
 };

@@ -28,6 +28,7 @@
 #include "netlog.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
+#include "../net/dataurl.h"
 #include "../page/page.h"
 
 #include <stdio.h>
@@ -64,6 +65,8 @@ struct Fetch {
     AuFetchSink sink;
     AuFetchKind kind;
     bool done, ok, cancelled;
+    char *doc_url; /* the nested document that asked (a frame's resources), NULL for the page's own */
+    char *mime;    /* a data: URL's type, reported as the response head before its bytes */
     uint32_t log; /* its record in the page's request log (netlog.h) */
 };
 
@@ -161,6 +164,8 @@ struct AuPage {
 
     /* Text selection: anchor and focus hold a reference to their node. */
     AuTextPos anchor, focus;
+    AuDocView *sel_dv;    /* the nested view the selection is in; NULL: the page's own (sel_view) */
+    AuDocument *sel_doc;  /* the document sel_dv showed then (referenced) */
     AuTextRange sel_base; /* the word or paragraph a double or triple click chose */
     int sel_mode;         /* 1 characters, 2 words, 3 paragraphs */
     bool selecting, sel_dragged;
@@ -412,6 +417,8 @@ static void fetch_free(Fetch *f)
 {
     au_free(f->url);
     au_free(f->data);
+    au_free(f->doc_url);
+    au_free(f->mime);
     au_free(f);
 }
 
@@ -481,13 +488,24 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
         r->security != AU_SECURITY_NONE)
         f->page->mixed = true; /* an insecure or doubtful resource in a secure page */
     /* Script sees the status and these headers (the fetcher passes no
-     * others yet). */
+     * others yet); a frame's document is checked against the framing
+     * headers (src/page/frames.c). */
     AuBuf len;
     au_buf_init(&len);
     if (r->content_length >= 0)
         au_put_i64(&len, r->content_length);
-    const char *hdrs[4];
+    const char *hdrs[8];
     size_t n = 0;
+    if (f->kind == AU_FETCH_FRAME && r->x_frame_options && r->x_frame_options[0]) {
+        hdrs[2 * n] = "x-frame-options";
+        hdrs[2 * n + 1] = r->x_frame_options;
+        n++;
+    }
+    if (f->kind == AU_FETCH_FRAME && r->csp && r->csp[0]) {
+        hdrs[2 * n] = "content-security-policy";
+        hdrs[2 * n + 1] = r->csp;
+        n++;
+    }
     if (r->content_type && r->content_type[0]) {
         hdrs[2 * n] = "content-type";
         hdrs[2 * n + 1] = r->content_type;
@@ -570,12 +588,36 @@ static const AuPageFetcher *fetcher_for(AuPage *p, const char *url)
  * source can supply it. Nothing is delivered before the next idle. The
  * main document's request carries the navigation's context; a resource's
  * names the document as its referrer and top-level site. */
-static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kind)
+static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kind, const AuResourceRequest *rr)
 {
+    /* The document that asks: the page, or a nested document (rr). */
+    const char *doc_url = rr && rr->document_url && rr->document_url[0] ? rr->document_url : p->url;
     if (au_url_scheme_is(url, "file")) {
+        /* a network page reads no local files, in frames either */
+        if (!main && !au_url_scheme_is(doc_url, "file") && !au_url_scheme_is(p->url, "file") &&
+            kind == AU_FETCH_FRAME)
+            return NULL;
         Fetch *f = fetch_new(p, url, main);
         f->is_file = true;
         f->kind = kind;
+        log_begin(p, f, NULL);
+        return f;
+    }
+    if (!main && au_url_scheme_is(url, "data")) {
+        /* A data: URL (a script, a frame's document): decoded here and
+         * delivered from idle like a file that has been read. */
+        AuDataUrl d;
+        au_data_url_init(&d);
+        if (!au_data_url_decode(url, &d)) {
+            au_data_url_free(&d);
+            return NULL;
+        }
+        Fetch *f = fetch_new(p, "data:", main);
+        f->is_file = f->read = true;
+        f->kind = kind;
+        f->mime = au_strndup(au_buf_cstr(&d.mime), d.mime.len);
+        f->data = au_buf_take(&d.body, &f->len);
+        au_data_url_free(&d);
         log_begin(p, f, NULL);
         return f;
     }
@@ -585,6 +627,8 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
     Fetch *f = fetch_new(p, url, main);
     f->fetcher = fe;
     f->kind = kind;
+    if (!main && doc_url != p->url)
+        f->doc_url = au_strndup(doc_url, strlen(doc_url));
     f->sink.ctx = f;
     f->sink.response = sink_response;
     f->sink.data = sink_data;
@@ -613,8 +657,17 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
          * fails left such pages without their style sheets and images.
          * Hosts known to HSTS are still upgraded. */
         rq.allow_http_fallback = true;
-        rq.document_url = p->url;
+        /* The requesting document is the referrer and decides mixed
+         * content (an http frame in an https page is blocked); the tab's
+         * document is the top-level site for cookies and blocklists. */
+        rq.document_url = f->doc_url ? f->doc_url : p->url;
         rq.top_level_url = p->url;
+        if (rr && rr->method && !strcmp(rr->method, "POST")) {
+            rq.method = "POST";
+            rq.body = rr->body ? rr->body : "";
+            rq.body_len = rr->body_len;
+            rq.body_type = rr->body_type;
+        }
         rq.referrer_policy = p->rpolicy;
         rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS || p->cache_mode == AU_FETCH_CACHE_HISTORY
                        ? p->cache_mode
@@ -630,10 +683,13 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
     return f;
 }
 
-/* The document view's loader. */
-static uint32_t loader_request(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind)
+/* The document view's loader. Nested documents ask through the page's
+ * view too (dv is always the top-level view); rq names the document. */
+static uint32_t loader_request_ex(void *ctx, AuDocView *dv, const AuResourceRequest *rq)
 {
     AuPage *p = ctx;
+    const char *url = rq->url;
+    AuResourceKind kind = rq->kind;
     if (dv != p->dv)
         return 0; /* a hidden document fetches nothing */
     if (p->nfetches > 2000)
@@ -641,14 +697,24 @@ static uint32_t loader_request(void *ctx, AuDocView *dv, const char *url, AuReso
     AuFetchKind fk = kind == AU_RES_STYLESHEET ? AU_FETCH_STYLESHEET
                      : kind == AU_RES_IMAGE    ? AU_FETCH_IMAGE
                      : kind == AU_RES_FONT     ? AU_FETCH_FONT
+                     : kind == AU_RES_FRAME    ? AU_FETCH_FRAME
                                                : AU_FETCH_OTHER;
-    Fetch *f = start_fetch(p, url, false, fk);
+    Fetch *f = start_fetch(p, url, false, fk, rq);
     if (!f)
         return 0;
     f->id = ++p->next_id;
     p->requested++;
     p->stats.resources++;
     return f->id;
+}
+
+static uint32_t loader_request(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind)
+{
+    AuResourceRequest rq;
+    memset(&rq, 0, sizeof rq);
+    rq.url = url;
+    rq.kind = kind;
+    return loader_request_ex(ctx, dv, &rq);
 }
 
 static void loader_cancel(void *ctx, uint32_t id)
@@ -833,21 +899,27 @@ bool au_page_is_post(const AuPage *p)
     return p->post;
 }
 
+/* The view that has the keyboard: the page's, or a nested document's. */
+static AuDocView *key_view(const AuPage *p)
+{
+    return au_docview_focus_view(p->dv);
+}
+
 bool au_page_editing(const AuPage *p)
 {
-    return p->kind == K_DOC && p->begun && au_docview_editing(p->dv);
+    return p->kind == K_DOC && p->begun && au_docview_editing(key_view(p));
 }
 
 bool au_page_can_edit(const AuPage *p, int cmd)
 {
-    return au_page_editing(p) && au_docview_can_edit(p->dv, cmd);
+    return au_page_editing(p) && au_docview_can_edit(key_view(p), cmd);
 }
 
 bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out)
 {
     if (!au_page_editing(p))
         return false;
-    bool ok = au_docview_edit(p->dv, cmd, text, len, out);
+    bool ok = au_docview_edit(key_view(p), cmd, text, len, out);
     follow_open_url(p);
     return ok;
 }
@@ -855,7 +927,10 @@ bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out)
 bool au_page_text_field_at(AuPage *p, int x, int y)
 {
     AuHitResult r;
-    if (p->kind != K_DOC || !p->begun || !au_docview_hit_test(p->dv, x, y, &r))
+    if (p->kind != K_DOC || !p->begun)
+        return false;
+    AuDocView *v = au_docview_view_at(p->dv, &x, &y);
+    if (!au_docview_hit_test(v, x, y, &r))
         return false;
     for (AuElement *e = r.element; e; e = au_is_element(e->node.parent) ? au_as_element(e->node.parent) : NULL)
         if (au_ctl_is_text_field(e))
@@ -886,8 +961,10 @@ bool au_page_control_rect(AuPage *p, const char *name, AuIRect *r)
 
 void au_page_blur(AuPage *p)
 {
-    if (p->kind == K_DOC && p->begun)
-        au_docview_set_focus(p->dv, NULL);
+    if (p->kind == K_DOC && p->begun) {
+        AuDocView *v = key_view(p);
+        au_docview_set_focus(v, NULL);
+    }
 }
 
 /* ---- Pending scroll ---- */
@@ -1069,12 +1146,50 @@ static AuTextRange sel_range(const AuPage *p)
     return au_text_range_make(p->anchor, p->focus);
 }
 
+/* The view the selection is in: the page's, or a nested document's
+ * (sel_dv, with the document it showed when the selection was made). A
+ * frame that was removed or navigated since takes its selection with
+ * it: the positions are dropped without touching its layout. */
+static AuDocView *sel_view(AuPage *p)
+{
+    if (!p->sel_dv)
+        return p->dv;
+    if (au_docview_contains(p->dv, p->sel_dv) && au_docview_document(p->sel_dv) == p->sel_doc)
+        return p->sel_dv;
+    AuTextPos none = {NULL, 0};
+    set_pos(&p->anchor, none);
+    set_pos(&p->focus, none);
+    p->sel_base.start = p->sel_base.end = none;
+    p->selecting = false;
+    if (p->sel_doc)
+        au_node_unref(&p->sel_doc->node);
+    p->sel_doc = NULL;
+    p->sel_dv = NULL;
+    return p->dv;
+}
+
+/* Moves the selection's home to view v (the page's own: NULL). */
+static void sel_set_view(AuPage *p, AuDocView *v)
+{
+    if (v == p->dv)
+        v = NULL;
+    if (v == p->sel_dv && (!v || au_docview_document(v) == p->sel_doc))
+        return;
+    au_page_clear_selection(p);
+    if (p->sel_doc)
+        au_node_unref(&p->sel_doc->node);
+    p->sel_dv = v;
+    p->sel_doc = v ? au_docview_document(v) : NULL;
+    if (p->sel_doc)
+        au_node_ref(&p->sel_doc->node);
+}
+
 /* Hands the current selection to the layout and repaints. */
 static void sel_apply(AuPage *p)
 {
     AuTextRange r = sel_range(p);
     uint32_t col = p->env.highlight ? p->env.highlight : DEFAULT_HIGHLIGHT;
-    au_layout_set_selection(au_docview_layout(p->dv), au_text_range_empty(&r) ? NULL : &r, col);
+    au_layout_set_selection(au_docview_layout(sel_view(p)), au_text_range_empty(&r) ? NULL : &r, col);
     invalidate_view(p);
 }
 
@@ -1088,12 +1203,16 @@ static void sel_set(AuPage *p, AuTextPos anchor, AuTextPos focus)
 void au_page_clear_selection(AuPage *p)
 {
     bool had = p->anchor.node || p->focus.node;
-    au_layout_set_selection(au_docview_layout(p->dv), NULL, 0);
+    au_layout_set_selection(au_docview_layout(sel_view(p)), NULL, 0);
     AuTextPos none = {NULL, 0};
     set_pos(&p->anchor, none);
     set_pos(&p->focus, none);
     p->sel_base.start = p->sel_base.end = none;
     p->selecting = false;
+    if (p->sel_doc)
+        au_node_unref(&p->sel_doc->node);
+    p->sel_doc = NULL;
+    p->sel_dv = NULL; /* the next selection starts in the page's own document */
     if (had)
         invalidate_view(p);
 }
@@ -1108,10 +1227,13 @@ bool au_page_selection_text(AuPage *p, AuBuf *out)
 {
     if (!au_page_has_selection(p))
         return false;
-    au_docview_update(p->dv);
+    AuDocView *v = sel_view(p);
+    if (!au_page_has_selection(p))
+        return false;
+    au_docview_update(v);
     AuTextRange r = sel_range(p);
     size_t before = out->len;
-    au_layout_range_text(au_docview_layout(p->dv), &r, out);
+    au_layout_range_text(au_docview_layout(v), &r, out);
     return out->len > before;
 }
 
@@ -1119,9 +1241,12 @@ void au_page_select_all(AuPage *p)
 {
     if (p->kind != K_DOC || !p->begun)
         return;
-    au_docview_update(p->dv);
+    /* in the document that has the keyboard */
+    AuDocView *v = key_view(p);
+    sel_set_view(p, v);
+    au_docview_update(v);
     AuTextRange all;
-    if (au_layout_all_text(au_docview_layout(p->dv), &all))
+    if (au_layout_all_text(au_docview_layout(v), &all))
         sel_set(p, all.start, all.end);
 }
 
@@ -1145,8 +1270,11 @@ bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive
 {
     if (p->kind != K_DOC || !p->begun || !text || !*text)
         return false;
-    au_docview_update(p->dv);
-    AuLayout *L = au_docview_layout(p->dv);
+    /* Find searches the document the selection is in (a nested document
+     * after a click in it), the page's own otherwise. */
+    AuDocView *v = sel_view(p);
+    au_docview_update(v);
+    AuLayout *L = au_docview_layout(v);
     AuTextRange cur = sel_range(p), m;
     AuTextPos from = {NULL, 0};
     if (cur.start.node)
@@ -1155,23 +1283,29 @@ bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive
         return false;
     sel_set(p, m.start, m.end);
     AuRect r;
-    if (au_layout_range_rect(L, &m, &r))
+    if (v == p->dv && au_layout_range_rect(L, &m, &r))
         reveal(p, r);
     return true;
 }
 
-/* The text position at document point (x, y). */
+/* The text position at document point (x, y) of the page, in the view
+ * the selection is in. */
 static bool pos_at(AuPage *p, int x, int y, AuTextPos *out)
 {
-    au_docview_update(p->dv);
-    return au_layout_text_pos_at(au_docview_layout(p->dv), (float)(x - p->scroll_x), (float)(y - p->scroll_y),
-                                 (float)p->scroll_x, (float)p->scroll_y, out);
+    AuDocView *v = sel_view(p);
+    int sx = p->scroll_x, sy = p->scroll_y;
+    if (v != p->dv) {
+        au_docview_point_from_top(v, &x, &y);
+        au_docview_scroll_pos(v, &sx, &sy);
+    }
+    au_docview_update(v);
+    return au_layout_text_pos_at(au_docview_layout(v), (float)(x - sx), (float)(y - sy), (float)sx, (float)sy, out);
 }
 
 /* Extends a word or paragraph selection to the unit at q. */
 static void extend_by_unit(AuPage *p, AuTextPos q)
 {
-    AuLayout *L = au_docview_layout(p->dv);
+    AuLayout *L = au_docview_layout(sel_view(p));
     AuTextRange u;
     bool ok = p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u);
     if (!ok)
@@ -1189,6 +1323,10 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
     AuTextPos q;
     switch (ev->type) {
     case AU_EVENT_MOUSE_DOWN: {
+        /* the selection lives in the document under the pointer */
+        int vx = ev->x, vy = ev->y;
+        AuDocView *home = au_docview_view_at(p->dv, &vx, &vy);
+        sel_set_view(p, home);
         bool have = pos_at(p, ev->x, ev->y, &q);
         p->selecting = true;
         p->sel_dragged = false;
@@ -1197,10 +1335,11 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
         p->sel_mode = ev->clicks >= 3 ? 3 : ev->clicks == 2 ? 2 : 1;
         if (!have) {
             au_page_clear_selection(p);
+            sel_set_view(p, home);
             p->selecting = true;
             return false;
         }
-        AuLayout *L = au_docview_layout(p->dv);
+        AuLayout *L = au_docview_layout(sel_view(p));
         if ((ev->mods & AU_MOD_SHIFT) && p->anchor.node) {
             p->sel_mode = 1;
             sel_set(p, p->anchor, q);
@@ -1278,6 +1417,7 @@ static void new_view(AuPage *p)
     dcb.confirm = dv_confirm;
     dcb.message = dv_message;
     p->dv = au_docview_new(p->env.fonts, &loader, &dcb);
+    au_docview_set_request_ex(p->dv, loader_request_ex);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_clock(p->dv, p->env.time_ms, p->env.ctx);
     apply_font_prefs(p);
@@ -2713,7 +2853,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         return;
     }
     if (au_url_scheme_is(target, "file") || fetcher_for(p, target)) {
-        p->main_fetch = start_fetch(p, target, true, AU_FETCH_DOCUMENT);
+        p->main_fetch = start_fetch(p, target, true, AU_FETCH_DOCUMENT, NULL);
         if (p->main_fetch) {
             p->main = p->main_fetch->is_file ? MAIN_FILE : MAIN_FETCH;
             return;
@@ -3110,7 +3250,9 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     if (p->kind != K_DOC || !p->begun)
         return false;
     if (ev->type == AU_EVENT_MOUSE_DOWN) {
-        p->ctl_press = au_docview_control_at(p->dv, ev->x, ev->y);
+        int vx = ev->x, vy = ev->y;
+        AuDocView *v = au_docview_view_at(p->dv, &vx, &vy);
+        p->ctl_press = au_docview_control_at(v, vx, vy);
         if (p->ctl_press)
             au_page_clear_selection(p);
     }
@@ -3126,12 +3268,12 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     return used;
 }
 
-static void put_resolved(AuPage *p, const AuElement *el, const char *name, AuBuf *out)
+static void put_resolved(AuDocView *dv, const AuElement *el, const char *name, AuBuf *out)
 {
     AuAtom a = au_atom_lookup(name, strlen(name));
     const char *v = a ? au_element_get_attr(el, a) : NULL;
     char abs[2048];
-    if (v && *v && au_url_resolve(au_docview_base_url(p->dv), v, abs, sizeof abs))
+    if (v && *v && au_url_resolve(au_docview_base_url(dv), v, abs, sizeof abs))
         au_buf_puts(out, abs);
 }
 
@@ -3140,12 +3282,14 @@ void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image)
     if (p->kind != K_DOC || !p->begun)
         return;
     AuHitResult r;
-    if (!au_docview_hit_test(p->dv, x, y, &r))
+    /* in the nested document under the point, with its base URL */
+    AuDocView *v = au_docview_view_at(p->dv, &x, &y);
+    if (!au_docview_hit_test(v, x, y, &r))
         return;
     if (link && r.link)
-        put_resolved(p, r.link, "href", link);
+        put_resolved(v, r.link, "href", link);
     if (image && r.element && r.element->tag == AU_ATOM_img)
-        put_resolved(p, r.element, "src", image);
+        put_resolved(v, r.element, "src", image);
 }
 
 /* Keys go to the focused element (fields, controls, Tab between them, and
@@ -3192,6 +3336,12 @@ static bool file_step(AuPage *p)
         }
         if (f->main)
             p->main_total = (uint32_t)f->len;
+    }
+    if (f->mime && !f->main && !f->off) {
+        const char *hdrs[2] = {"content-type", f->mime};
+        au_docview_resource_head(p->dv, f->id, 200, "", NULL, hdrs, 1);
+        if (f->done || f->cancelled)
+            return true;
     }
     size_t n = f->len - f->off;
     if (f->main && n > CHUNK)
@@ -3325,7 +3475,7 @@ void au_page_idle(AuPage *p)
         au_docview_animate(p->dv, now(p)); /* animated images */
         uint32_t t = now(p);
         if (au_docview_editing(p->dv) && (int32_t)(t - p->blink_due) >= 0)
-            p->blink_due = t + au_docview_blink(p->dv, t); /* the caret */
+            p->blink_due = t + au_docview_blink(key_view(p), t); /* the caret */
     }
     if (p->kind == K_DOC && p->begun) {
         uint32_t gen0 = p->gen;
@@ -3333,7 +3483,10 @@ void au_page_idle(AuPage *p)
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
     }
-    if (!p->nfetches && !p->dirty)
+    /* A load whose fetches are all in may still wait for a frame's
+     * document (a srcdoc frame, a frame's load event): check_finished
+     * below ends it. */
+    if (!p->nfetches && !p->dirty && !(p->loading && p->main_done && p->begun))
         return;
     uint32_t gen = p->gen;
     /* Poll each fetcher with transfers outstanding once. */

@@ -41,6 +41,11 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
+          # A personal token, when the repository has one, so that the
+          # release pull request and the tag are made as its owner and
+          # start CI like any other push (events made with GITHUB_TOKEN
+          # start no workflow). Without the secret GITHUB_TOKEN is used.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

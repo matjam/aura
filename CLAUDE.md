@@ -60,7 +60,7 @@ what you need to build, test and change Aura.
 | `src/html` | HTML tokenizer and tree builder |
 | `src/css` | CSS parser, selectors, cascade |
 | `src/layout` | box tree, layout, painting, hit testing |
-| `src/page` | the document view: parsing, style sheets, resources, input |
+| `src/page` | the document view: parsing, style sheets, resources, input, nested documents (`frames.c`) |
 | `src/paint` | surfaces, rasterizer, fonts |
 | `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO, SVG through `src/svg`), the per-document image cache |
 | `src/svg` | XML parser, SVG path and transform grammars, the static SVG renderer, SVG documents |
@@ -75,6 +75,7 @@ what you need to build, test and change Aura.
 | `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive (see CI and releases) |
 | `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
+| `tests/frames` | nested documents: the document view with a table of pages, and a browser window over the fake transport |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 | `assets/net` | `aura-roots.bin`, the root certificate store |
@@ -217,14 +218,54 @@ by its own scripts or kept in git-ignored folders here.
 - **Disk images.** The test machine's base images are in `disks/`
   (git-ignored): `os9-novm.qcow2` is a stock Mac OS 9.2.2 with virtual
   memory off, and `os9-vmoff.qcow2` is the same system with Enforcer
-  installed. Both are standalone qcow2 files with no backing file. To
-  update Enforcer on the second, install a new Enforcer build in that
-  guest with `PERSIST=1` and fold the overlay into the image.
+  installed. Both are standalone qcow2 files with no backing file.
+- **The Enforcer on `os9-vmoff.qcow2`** is version 0.1.0, installed on
+  2026-11-15 from that project's `dist/` as built at 12:58 that day:
+  commit 6ba015b plus changes not yet committed there (`common/engine.c`,
+  `common/kcb.h`, `installer/kpatch.h`, `kernel/nanokernel.s`). Enforcer's
+  files carry no version resource; the installed extension is 96,498
+  bytes. `disks/os9-vmoff.before-update.qcow2` is the image before that
+  update (an Enforcer of 2026-11-14). To go back to it, stop every guest
+  and copy it over `os9-vmoff.qcow2`; `guest-run.sh` then sets aside the
+  overlays made on the newer image.
+- **To update Enforcer on `os9-vmoff.qcow2`**, use a run folder of your
+  own (`export AURA_RUN=$PWD/run-enf`) and these steps. Enforcer's
+  installer updates an installed Enforcer in place.
+  1. Stop every guest that runs the Enforcer base, and copy
+     `disks/os9-vmoff.qcow2` to `disks/os9-vmoff.before-update.qcow2`.
+  2. Run `BASE=enforcer PERSIST=1 tools/guest-run.sh start`, wait for the
+     Finder, and push the three MacBinary files of Enforcer's `dist/`
+     together: `tools/guest-push.sh -n EnfNew "DIST/Enforcer
+     Installer.bin" "DIST/Enforcer Extension.bin" DIST/Enforcer.bin`.
+  3. Run `tools/guest-qmp.py open EnfNew "Enforcer Installer"`, wait
+     until `front-app` prints Enforcer Installer, and click Install (at
+     486,366 on a 640x480 screen). When the text says Enforcer is
+     installed, click Restart (the same button).
+  4. QEMU's mac99 firmware stays on a black screen after a guest
+     restart. Wait 20 seconds for the guest to finish writing, run
+     `tools/guest-run.sh stop`, and start again with `BASE=enforcer
+     PERSIST=1`.
+  5. Check the install: open OS > System Folder > Control Panels >
+     Enforcer (click the desktop, then type each name and press
+     Command-O). It says "Protecting N applications" and "NanoKernel
+     owner check on" when the kernel patch and the extension both run.
+     Get Info on System Folder > Extensions > Enforcer Extension shows
+     the size, which matches the sum of the two forks `guest-push.sh`
+     printed.
+  6. Choose Special > Shut Down (the menu title is at 246,10, the item
+     at 270,136); QEMU exits. Then fold the overlay into the image and
+     check it:
+     `~/.local/opt/qemu-os9/bin/qemu-img commit
+     run-enf/os9-overlay-enforcer.qcow2`, then `qemu-img info
+     disks/os9-vmoff.qcow2` (no backing file) and `qemu-img check
+     disks/os9-vmoff.qcow2`. Delete the overlay.
+  7. Change the version, date and commit in the paragraph above.
 - **hfsutils** (`hformat`, `hcopy`) for `tools/guest-push.sh`:
   `brew install hfsutils`.
 
 The install scripts, the QEMU patch and the two disk images were copied
-from the os9-enforcer project on 2026-11-14.
+from the os9-enforcer project on 2026-11-14. The Enforcer image was
+updated on 2026-11-15 as described above.
 
 ## Guest testing
 
@@ -234,12 +275,18 @@ checkout (set `AURA_RUN` to use another folder, for example to run a
 second guest beside the first); `tools/guest-env.sh` holds the settings.
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
-the background. `BASE` picks the system: `stock` (the default) is
-`disks/os9-novm.qcow2`, Mac OS 9.2.2 with virtual memory off and no
-Enforcer; `enforcer` (`BASE=enforcer tools/guest-run.sh start`) is
-`disks/os9-vmoff.qcow2`, which has the Enforcer kernel and extension
-installed. The guest boots an overlay on the base image
-(`run/os9-overlay-BASE.qcow2`), so the base is never written. One guest
+the background. `BASE` picks the system: `enforcer` (the default) is
+`disks/os9-vmoff.qcow2`, Mac OS 9.2.2 with virtual memory off and the
+Enforcer kernel and extension installed; `stock` (`BASE=stock
+tools/guest-run.sh start`) is `disks/os9-novm.qcow2`, the same system
+without Enforcer. The guest boots an overlay on the base image
+(`run/os9-overlay-BASE.qcow2`), so the base is never written. An overlay
+is valid only for the base image it was made on, and booting it on a
+changed image damages the guest's disk: `guest-run.sh` records the base
+image's modification time and size beside the overlay
+(`os9-overlay-BASE.qcow2.base`), and when they differ at `start` or
+`reset` it renames the overlay `os9-overlay-BASE.stale.qcow2` and makes
+a new one. One guest
 runs per run folder; `status` names the running base. Disk writes are
 discarded when QEMU exits; set `PERSIST=1` to keep them in the overlay.
 Mac OS takes about a minute to boot. `GEOMETRY` sets the largest screen
@@ -247,10 +294,22 @@ mode the guest offers (default `1024x768x32`; for example
 `GEOMETRY=1440x1050x32`); Mac OS starts at 640x480 or the last mode
 chosen, and the Control Strip's resolution module switches to it.
 
-Test on the stock base first. Use the Enforcer base to check Aura under
-Enforcer; its own bugs show there too (see the scroll bar thumb note
-under Browser chrome). Enforcer's state and offense log are read with
-that project's own tools, which Aura does not carry.
+Test on the Enforcer base day to day: Enforcer stops Aura, or logs it,
+when Aura writes into another application's memory, so such a bug shows
+there and not on the stock system. Before a release, test on the stock
+base as well (`BASE=stock`), because most users run without Enforcer.
+Enforcer's own bugs show on its base too; to tell one from an Aura bug,
+repeat the test on the stock base. To see what Enforcer caught, quit
+Aura and open the Enforcer control panel (OS > System Folder > Control
+Panels > Enforcer): its Caught list names each write it blocked, and
+the lines below it count the writes checked, stopped and blocked. Writes
+into the system heap are logged only when "Also log writes into the
+system heap" is on. Enforcer's state and offense log can also be read
+from the host with that project's own tools, which Aura does not carry.
+On 2026-11-15, with Enforcer 0.1.0 (see Disk images), Aura at 3df6ecc
+loaded a local page, Hacker News and a Wikipedia article, scrolled,
+typed in a search field, showed Develop > Performance and was launched
+three times in one boot: the control panel reported nothing caught.
 
 To copy the application in, build it with `./build.sh ppc` and run
 `tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*`, which puts the
@@ -376,6 +435,8 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   beforeunload listener (`au_docview_can_persist`). A reload replaces
   the document. Reopen Closed Tab, duplicated tabs and session restore
   load through the history cache mode, as before.
+- **Frames.** A kept document keeps its nested documents, and they
+  pause and resume with it (see Frames).
 - **While hidden** nothing calls the view, so timers, animation frames,
   image animation and the caret wait, and run again after Back. The
   view's callbacks and loader in `page_doc.c` ignore a view that is not
@@ -655,7 +716,10 @@ Toolbox points learned the hard way:
   those pixels in a chunk of the current application (Aura) and frees
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
-  handle then names Aura's font data.
+  handle then names Aura's font data. That was the Enforcer of
+  2026-11-14 (matjam/os9-enforcer#1). With the build installed on
+  2026-11-15 the thumbs of a second and a third launch were drawn
+  correctly, pixel for pixel as on the first.
 
 ## Developer tools
 
@@ -1570,8 +1634,9 @@ application).
 
 The engine is QuickJS-ng (`third_party/quickjs`), reached only through
 `src/js`; no other folder sees a QuickJS type. `src/js/js.h` is the
-interface: one `AuJs` per document, holding a runtime, a context whose
-global object is the window, the DOM bindings and the event loop.
+interface: one `AuJs` per document, holding a context whose global
+object is the window, the DOM bindings and the event loop. The documents
+of one top-level page share one runtime (see Frames).
 
 - **To run script in a document**, create an `AuJs` with `au_js_new`,
   run scripts with `au_js_run_classic` or the module calls, and call
@@ -1653,7 +1718,7 @@ global object is the window, the DOM bindings and the event loop.
   page and the scripts it loads and serve them from a local HTTP server
   (the origin must be http for origin checks to behave as on the site).
 - **window.postMessage** takes any absolute URL as the target origin
-  and compares only its origin. Google's search box defers its submit
+  and compares only its origin (between frames: see Frames). Google's search box defers its submit
   with `postMessage("sbox.df", location.href)`; comparing the string
   with the origin dropped the message and Return did nothing
   (`tests/js/pages/search_defer.html`, `test_search_box_defer` in
@@ -1985,6 +2050,182 @@ application heap through `au_alloc`.
   after closing a large page was 42 MB of 60 MB free. (7) A system font
   is read whole on first use (into temporary memory); reading only the
   tables used needs a different font data interface.
+
+## Frames
+
+`iframe`, `frame`, `object` and `embed` elements show nested documents.
+To change them, work in `src/page/frames.c` (the frame list, loading,
+painting, input, limits), `src/js/frames.c` and the "windows of other
+documents" part of `src/js/prelude_window.js` (script), and the frame
+parts of `src/browser/page_doc.c` (fetch context, selection, hit
+information).
+
+- **Structure.** Each frame element has an `AuFrame` in the view of the
+  document that holds it (`AuDocView.frames`, tree order). A frame that
+  shows a document owns an `AuDocView` for it, with its own document,
+  style, layout, images and script context. The view is created only
+  when there is content to show or script asks for the frame's window,
+  so an empty iframe costs one record. `au_frames_sync` brings the list
+  in step with the tree: after each parser chunk, before a style pass,
+  and at the end of any script native that inserted, removed or changed
+  a frame element.
+- **The embedder sees one view.** Nested views load through the
+  top-level view's loader and report through its callbacks, always with
+  the top-level view as `dv`. `au_docview_set_request_ex` gives the
+  loader the requesting document's URL and a body (`AuResourceRequest`);
+  data for any request is delivered to the top-level view, which passes
+  it on (`FrameRoute`). Input goes to `au_docview_mouse`, `_key` and
+  `_scroll_at` of the top-level view; `au_docview_view_at` and
+  `au_docview_focus_view` name the nested view under a point or with the
+  keyboard, for code that works on one document (the page's selection,
+  hit information, the Edit commands, the caret).
+- **Loading.** A frame's document is an `AU_RES_FRAME` request of the
+  owner view (`AU_FETCH_FRAME` in the page, `AU_DEST_IFRAME` in the net
+  loader). The response head decides what the element shows: HTML or
+  text is a nested document, an image is a generated document with an
+  `<img>` (iframe) or an image box in layout (object, embed), anything
+  else nothing. `srcdoc`, `about:blank` and `data:` URLs need no
+  network; `page_doc.c` decodes `data:` URLs itself, for scripts too.
+  In `page_doc.c` the requesting document is the referrer and decides
+  mixed content (an http frame in an https page is blocked by the net
+  loader), and the tab's URL is the top-level site for cookies and the
+  blocklist (a listed third-party frame host is not contacted and counts
+  in `AuPageStats.blocked`).
+- **Framing rules** (`framing_allowed`): `X-Frame-Options` DENY and
+  SAMEORIGIN, and the CSP `frame-ancestors` directive with `'none'`,
+  `'self'`, scheme and host sources, each checked against every
+  ancestor; with `frame-ancestors` present `X-Frame-Options` is ignored.
+  A refused frame is empty and the console names it. No other CSP
+  directive is enforced anywhere (`script-src`, `frame-src`, `sandbox`,
+  `default-src` and the rest are ignored), and neither is the
+  `Permissions-Policy` header or the `allow` attribute.
+- **Sandbox.** The `sandbox` attribute turns off scripts (unless
+  `allow-scripts`), form submission (`allow-forms`), the parent's origin
+  (`allow-same-origin`; without it the document's origin is opaque, so
+  it and its parent cannot reach each other), navigation of anything but
+  itself and its descendants (`allow-top-navigation`) and new tabs
+  (`allow-popups`). A nested document inherits its ancestors'
+  restrictions. Other tokens are ignored.
+- **Limits.** 64 nested documents per page (`AU_FRAMES_MAX`), 8 levels
+  (`AU_FRAMES_DEPTH`); a frame whose URL is that of one of its ancestors
+  is refused; `loading=lazy` frames load when they come within a
+  viewport of the visible area or are painted, and do not hold the
+  page's load event. A refused frame stays an empty box and still gets
+  its load event.
+- **Geometry.** Layout makes the element a replaced box (300 x 150 by
+  default) and calls `AuLayoutEnv.paint_frame` with its content box;
+  `au_frames_paint` sets the nested view's viewport to the box, paints
+  it there with the frame's own scroll offset (`AuFrame.sx`, `sy`) and
+  draws the scroll bars (as the page's overflow scrollers, unless
+  `scrolling=no`). A nested document's canvas is transparent unless its
+  root or body has a background (`au_layout_set_transparent`). Rectangles
+  a nested view invalidates are moved into the owner's coordinates and
+  clipped to the box. When the page scrolls by moving pixels a frame
+  moves as a box does; content fixed inside a frame is fixed to the
+  frame (`frames.html` in `tests/browser/test_scroll_shift.c`).
+  `AuLayoutEnv.embed_kind` tells layout whether an object or embed is a
+  nested document, an image or its fallback content. `frameset` is a
+  flex container in the UA sheet: rows or columns of equal size (the
+  `rows` and `cols` lengths are not read).
+- **Input.** A press inside a frame goes to the nested view, which keeps
+  the drag and the release, and gives the frame the keyboard
+  (`AuDocView.focus_frame`) until a press elsewhere. Keys the nested
+  document does not use scroll the frame, and at its end the page. The
+  wheel scrolls the innermost scroller under the pointer, then the
+  frame, then the page. Links and forms follow `target`: a frame's name,
+  `_self`, `_parent`, `_top`, `_blank` (`au_frames_route`); a link in a
+  frame without a target loads in that frame.
+- **Script.** The documents of a top-level page share one QuickJS
+  runtime; each has its own context (`au_js_new_child`), so a
+  same-origin document's objects are reached directly:
+  `contentWindow`, `contentDocument`, `window.parent`, `top`, `frames`,
+  `length`, `frameElement`, indexed and named frames (own accessor
+  properties of the window, set by `P.framesChanged`). The memory limit,
+  the stack limit and the time budget are the runtime's. A node's
+  wrapper takes its prototypes from the realm of the node's document.
+  For a document of another origin `wrapWindow` returns an object with
+  only `postMessage`, `location` (set only), `closed`, `parent`, `top`,
+  `frames`, `length`, indexed frames, child frames by name, `focus`,
+  `blur` and `close`;
+  anything else throws SecurityError, and `contentDocument` is null.
+  `postMessage` checks the target origin, the receiving document clones
+  the data in its own realm, and `event.source` is the sender's window
+  as the receiver may see it. `MessagePort`s in the transfer list move
+  to the receiving document (reCAPTCHA-style widgets hand their parent
+  a port this way). `about:blank` and `srcdoc` frames have their
+  parent's origin. A frame with script off (a sandbox without
+  `allow-scripts`, or the JavaScript preference) has no window object:
+  `contentWindow` is null.
+- **Lifetime.** Script may remove or navigate a frame while that frame's
+  script, or any script of the page, is on the stack. Nothing is freed
+  then. A removed frame leaves its owner's list at once (script sees no
+  window) and waits in the top view's `dead` list; navigations, restarts
+  and load events wait in the frames; `au_frames_idle` does the work
+  when no script of the page runs (`safe`). `au_js_free` of a frame's
+  context leaves the objects other documents still hold valid: wrappers
+  belong to the runtime, the freed context's natives then act for the
+  top-level document (its opaque pointer is set to the root), and the
+  frame's document lives while a wrapper names one of its nodes. So a
+  held reference to a removed frame's function still runs, but
+  `location`, timers and `document.URL` reached through a dead window
+  answer for the top-level document. Free a frame's `AuJs` before the
+  top-level one, and never while `au_js_running`.
+- **The document cache.** A kept document keeps its frames.
+  `au_docview_can_persist`, `au_docview_set_hidden` (pagehide, pageshow,
+  dropped image pixels) and `au_docview_memory_estimate` include them; a
+  page with a frame still loading is not kept.
+- **History.** A frame navigation adds no session history entry: Back
+  leaves the page, and a kept page comes back with each frame's current
+  document. `history.back()` inside a frame acts on the tab.
+- **Also here.** `document.open()` on a loaded document followed by
+  `write` replaces the document's contents with the parse of what was
+  written (the same Document and window; scripts in the written text do
+  not run; a `write` without `open` after load is still ignored).
+  `DOMImplementation.createDocument` and `createDocumentType` make plain
+  documents and doctypes. `fetch` and `XMLHttpRequest` send POST bodies
+  through `request_ex` (the Content-Type header goes with the body;
+  other request headers and other methods are still not sent).
+- **Cost, measured on the host** (Release): a frame without script adds
+  about 6 KB to the estimate and 0.15 ms; a frame with script adds a
+  context with its own copy of the prelude, 1.4 MB and 16 ms (57 ms each
+  with 20 of them, as collections of the growing heap add up). The
+  runtime's 32 MB limit bounds the total: about 20 scripted frames.
+- **To try it**, serve a page with frames from a local HTTP server and
+  run `aura-host chrome --net --tab URL --do wait:500 --do click:X,Y
+  --do type:TEXT -o out.png`; `--do js:CODE` reaches frames through
+  `frames[0]`. `aura-host page PAGE.html` loads file: frames too.
+- **Tests.** `tests/frames/test_frames.c` (the document view with a
+  table of pages: paint against a reference render, scrolling, clicks
+  and keys, script access both ways, postMessage and ports, sandbox,
+  framing headers, limits, lazy loading, objects, removal and navigation
+  while script runs, a kept document, a cross-origin widget) and
+  `test_frames_net.c` (a browser window over the fake transport:
+  referrer, blocklist, X-Frame-Options from a real response, typing and
+  Edit commands in a frame, Back to a kept page with frames). Run both
+  under the sanitizers after a change to lifetimes.
+- **Acid3.** `run/acid3` is not in git: fetch
+  `http://acid3.acidtests.org/` and the files it names once, keep each
+  response's status and Content-Type, and serve them from a local HTTP
+  server (the 404 answers matter). The score went from 59 to 87 with
+  frames. Still failing: 2 (a NodeIterator whose filter removes nodes),
+  21, 23 and 25 (namespace prefixes: `tagName` with a prefix,
+  `createElementNS` name checks), 35 (`:first-child` matches a root
+  without a parent), 46 (a media query case), 69, 74 and 79 (XML and SVG
+  documents in frames: they are shown as text, not parsed into a DOM),
+  72 (`cssRules` is not live), 75 and 77 (SVG DOM interfaces), 80
+  (script in an XHTML document).
+- **Not done:** XML documents in frames (`text/xml`,
+  `application/xhtml+xml`, `image/svg+xml` are shown as text; the XML
+  parser in `src/svg` builds SVG trees only); session history for frame
+  navigations; a nested document's own Referrer-Policy and the
+  `referrerpolicy` attribute (the top-level policy is used); frame
+  scroll bars cannot be dragged (wheel and keys only); `rows` and `cols`
+  sizes of a frameset; Find searches one document (the page, or the
+  frame the selection is in) and Tab does not move between a page and
+  its frames; invalidation rectangles of a frame inside a transformed
+  or scrolled container use the frame's untransformed box; the
+  WindowProxy of a frame is a new object after each navigation; POST
+  into a frame works only with a loader that implements `request_ex`.
 
 ## Design
 
