@@ -236,3 +236,31 @@ test('removing nodes during iteration is safe', () => {
     assert.equal(live.length, 0);
     assert.equal(d.firstChild, null);
 });
+
+test('insertAdjacentElement and insertAdjacentText', () => {
+    const p = document.createElement('div');
+    const a = p.appendChild(document.createElement('a'));
+    a.insertAdjacentElement('beforebegin', document.createElement('b'));
+    a.insertAdjacentElement('afterend', document.createElement('i'));
+    a.insertAdjacentText('afterbegin', 'x');
+    a.insertAdjacentElement('beforeend', document.createElement('u'));
+    assert.equal(p.innerHTML, '<b></b><a>x<u></u></a><i></i>');
+    assert.equal(document.createElement('s').insertAdjacentElement('beforebegin', a), null);
+    assert.throws(() => a.insertAdjacentElement('nowhere', document.createElement('q')), 'SyntaxError');
+});
+
+test('second documents: createHTMLDocument and DOMParser', () => {
+    const d = document.implementation.createHTMLDocument('');
+    assert.equal(d.nodeType, 9);
+    assert.notEqual(d, document);
+    d.body.innerHTML = '<form></form><form></form>';
+    assert.equal(d.body.childNodes.length, 2); /* jQuery's support test */
+    assert.equal(d.title, '');
+    const p = new DOMParser().parseFromString('<p id=x>hi</p><script>window.__ran = 1<\/script>', 'text/html');
+    assert.equal(p.getElementById('x').textContent, 'hi');
+    assert.equal(window.__ran, undefined);
+    const moved = document.body.appendChild(p.getElementById('x'));
+    assert.equal(moved.ownerDocument, document);
+    moved.remove();
+    assert.throws(() => new DOMParser().parseFromString('<a/>', 'text/xml'), 'NotSupportedError');
+});

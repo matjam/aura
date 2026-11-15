@@ -41,7 +41,11 @@ function inspect(v, depth, seen) {
     if (typeof v === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
     if (typeof v === 'symbol' || typeof v === 'bigint') return v.toString() + (typeof v === 'bigint' ? 'n' : '');
     if (v === null || typeof v !== 'object') return String(v);
-    if (v instanceof Error) return v.name + ': ' + v.message;
+    if (v instanceof Error) {
+        /* top level: with the stack, as browsers' consoles show it */
+        const s = v.name + ': ' + v.message;
+        return !depth && v.stack ? s + '\n' + String(v.stack).replace(/\n+$/, '') : s;
+    }
     if (isNode(v)) {
         if (isElement(v)) {
             let s = '<' + v.localName;

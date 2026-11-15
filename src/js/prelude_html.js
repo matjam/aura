@@ -1444,12 +1444,28 @@ class XMLSerializer {
 }
 defGlobal('XMLSerializer', XMLSerializer);
 class DOMParser {
-    parseFromString() { throw domErr('DOMParser needs a second document, which Aura does not support yet', 'NotSupportedError'); }
+    parseFromString(text, type) {
+        type = str(type);
+        if (type !== 'text/html') {
+            if (['text/xml', 'application/xml', 'application/xhtml+xml', 'image/svg+xml'].includes(type))
+                throw domErr('DOMParser: XML documents are not supported', 'NotSupportedError');
+            throw new TypeError('DOMParser: unknown type ' + type);
+        }
+        return N.parseHTMLDocument(str(text));
+    }
 }
 defGlobal('DOMParser', DOMParser);
 class DOMImplementation {
     hasFeature() { return true; }
-    createHTMLDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
+    createHTMLDocument(title) {
+        const d = N.parseHTMLDocument('<!DOCTYPE html><html><head></head><body></body></html>');
+        if (title !== undefined) {
+            const t = d.createElement('title');
+            t.textContent = str(title);
+            d.head.appendChild(t);
+        }
+        return d;
+    }
     createDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
     createDocumentType() { throw domErr('Creating document types is not supported', 'NotSupportedError'); }
 }

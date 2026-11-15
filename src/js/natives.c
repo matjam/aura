@@ -2186,6 +2186,26 @@ static JSValue n_document(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return js_wrap(js, &js->doc->node);
 }
 
+/* parseHTMLDocument(text): a new, inert document parsed from text with
+ * scripting off (DOMParser, createHTMLDocument). Its mutations reach no
+ * observers and nothing renders it. */
+static JSValue n_parse_html_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    size_t n = 0;
+    char *s = argc > 0 ? arg_str(ctx, argv[0], &n) : NULL;
+    if (argc > 0 && !s)
+        return JS_EXCEPTION;
+    AuHtmlOptions o;
+    memset(&o, 0, sizeof o);
+    o.scripting = false;
+    AuDocument *d = au_html_parse(s ? s : "", n, &o);
+    au_free(s);
+    JSValue r = js_wrap(js, &d->node);
+    au_node_unref(&d->node);
+    return r;
+}
+
 /* is(node, iface): instance checks the prelude needs without trusting
  * prototypes script can change. iface: 0 node, 1 element, 2 document, 3
  * fragment, 4 shadow root, 5 text, 6 chardata, 7 connected. */
@@ -2382,6 +2402,7 @@ static const JSCFunctionListEntry dom_natives[] = {
     JS_CFUNC_DEF("createElementRaw", 1, n_create_element_raw),
     JS_CFUNC_DEF("currentScript", 0, n_current_script),
     JS_CFUNC_DEF("document", 0, n_document),
+    JS_CFUNC_DEF("parseHTMLDocument", 1, n_parse_html_document),
     JS_CFUNC_DEF("is", 2, n_is),
     JS_CFUNC_DEF("eventParent", 1, n_event_parent),
 };

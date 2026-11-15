@@ -339,6 +339,25 @@ const nnmHandler = {
     },
 };
 
+/* insertAdjacentElement and insertAdjacentText (insertAdjacentHTML is
+ * native). */
+function insertAdjacent(el, where, node) {
+    switch (str(where).toLowerCase()) {
+    case 'beforebegin': return el.parentNode ? el.parentNode.insertBefore(node, el) : null;
+    case 'afterbegin': return el.insertBefore(node, el.firstChild);
+    case 'beforeend': return el.appendChild(node);
+    case 'afterend': return el.parentNode ? el.parentNode.insertBefore(node, el.nextSibling) : null;
+    default: throw domErr('insertAdjacent: bad position ' + where, 'SyntaxError');
+    }
+}
+defProps(EP, {
+    insertAdjacentElement(where, node) {
+        if (!isElement(node)) throw new TypeError('insertAdjacentElement: not an Element');
+        return insertAdjacent(this, where, node);
+    },
+    insertAdjacentText(where, data) { insertAdjacent(this, where, (this.ownerDocument || doc).createTextNode(str(data))); },
+});
+
 defProps(EP, {
     get attributes() {
         return cachedList(this, 'attributes', () => {
