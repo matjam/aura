@@ -487,7 +487,8 @@ typedef struct VCtx {
     float rdx, rdy; /* relative offset, cumulative */
     int valign;
     uint32_t frag;  /* its fragment on this line */
-    bool quirk;     /* the line height quirk: takes no part in the line height */
+    bool quirk;     /* the line height quirk: counts only once text of its own is on the line */
+    float qt, qb;   /* its extent, applied then */
 } VCtx;
 
 typedef struct LineState {
@@ -837,16 +838,13 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     }
 
     /* The line height calculation quirk (quirks and limited-quirks
-     * modes): on a line without text, inline boxes (the root's strut
-     * included) with no vertical borders or padding take no part in the
-     * line height (as in Blink), so a line holding only images is as tall
-     * as the images. Legacy table layouts depend on it for spacer images. */
+     * modes): an inline box with no vertical borders or padding, the
+     * root's strut included, takes part in the line height only when text
+     * (or a line break) of its own is on the line, as in Blink. A line of
+     * images is as tall as the images, and small text in a span is not
+     * held apart by the block's larger strut. Legacy table layouts
+     * (spacer images, font tags in cells) depend on it. */
     bool lh_quirk = L->doc && L->doc->quirks != AU_QUIRKS_NONE;
-    for (uint32_t j = first; lh_quirk && j < S->fb.n; j++) {
-        const LFrag *f = &S->fb.f[j];
-        if ((f->kind == FR_TEXT && f->len && !(f->flags & FRF_HIDDEN)) || f->kind == FR_BR)
-            lh_quirk = false;
-    }
 
     /* Vertical alignment. */
     VCtx stack[INLINE_MAX_DEPTH + 2];
@@ -859,6 +857,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
     float top = -(stack[0].a + half), bottom = stack[0].d + half;
     if (lh_quirk) {
+        stack[0].qt = top;
+        stack[0].qb = bottom;
         top = INFINITY;
         bottom = -INFINITY;
     }
@@ -922,13 +922,25 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             bo[j] = v->bo;
             ext[j] = v->rdy;
             f->x += v->rdx;
-            if (v->valign != AU_VALIGN_TOP && v->valign != AU_VALIGN_BOTTOM && !v->quirk) {
-                top = l_min(top, v->bo - v->a - hl);
-                bottom = l_max(bottom, v->bo + v->d + hl);
+            if (v->valign != AU_VALIGN_TOP && v->valign != AU_VALIGN_BOTTOM) {
+                if (v->quirk) {
+                    v->qt = v->bo - v->a - hl;
+                    v->qb = v->bo + v->d + hl;
+                } else {
+                    top = l_min(top, v->bo - v->a - hl);
+                    bottom = l_max(bottom, v->bo + v->d + hl);
+                }
+            } else {
+                v->quirk = false;
             }
             continue;
         }
         /* text, atomic, br: belong to P */
+        if (P->quirk && ((f->kind == FR_TEXT && f->len && !(f->flags & FRF_HIDDEN)) || f->kind == FR_BR)) {
+            top = l_min(top, P->qt);
+            bottom = l_max(bottom, P->qb);
+            P->quirk = false;
+        }
         bo[j] = P->bo;
         f->x += P->rdx;
         if (f->kind == FR_ATOMIC) {

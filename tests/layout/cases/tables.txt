@@ -658,3 +658,12 @@ pixel 60 20 000080
 <table cellspacing=0 cellpadding=0><tr><td id=a><img width=1 height=3 style="background:red"></td></tr></table>
 ---
 #a h=16
+
+=== quirks: small text in a span is not held apart by the cell's strut
+<!-- quirks --><body style="margin:0">
+<table cellspacing=0 cellpadding=0 style="line-height:30px"><tr><td id=a><span style="font-size:10px;line-height:10px">small</span></td></tr><tr><td id=b><span style="font-size:10px;line-height:10px">small<br>two</span></td></tr><tr><td id=c>x<span style="font-size:10px;line-height:10px">small</span></td></tr><tr><td id=d><span style="font-size:10px;line-height:10px;padding-top:1px">small</span></td></tr></table>
+---
+#a x=0 y=0 h=10
+#b x=0 y=10 h=20
+#c x=0 y=30 h=30
+#d x=0 y=60 h=10
