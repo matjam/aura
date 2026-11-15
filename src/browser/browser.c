@@ -589,6 +589,10 @@ void au_browser_history_changed(AuBrowser *b)
 
 bool au_browser_busy(const AuBrowser *b)
 {
+    for (int i = 0; i < b->nwindows; i++) {
+        if (b->windows[i]->rehover_pending)
+            return true;
+    }
     for (int i = 0; i < b->nwindows; i++)
         for (int j = 0; j < b->windows[i]->ntabs; j++)
             if (au_page_busy(b->windows[i]->tabs[j]->page))
@@ -1598,7 +1602,9 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
         w->browser->scroll_gen++;
         page_scrolled(w, t, ox, oy, true);
         changed(w, AU_CHANGED_SCROLL);
-        rehover(w);
+        /* Hover follows when the scrolling pauses (au_bw_idle). */
+        w->rehover_pending = w->mouse_in_page;
+        w->scrolled_ms = time_ms(w->browser);
     }
 }
 
@@ -1681,6 +1687,7 @@ AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
         w->mouse_x = ev->x;
         w->mouse_y = ev->y;
         w->mouse_in_page = h.part == AU_HIT_PAGE;
+        w->rehover_pending = false; /* this move brings hover up to date */
     }
     switch (ev->type) {
     case AU_EVENT_MOUSE_MOVE:
@@ -1835,6 +1842,10 @@ void au_bw_idle(AuBrowserWindow *w)
     if (w->hscroll_dirty) {
         w->hscroll_dirty = false;
         check_hscroll(w);
+    }
+    if (w->rehover_pending && time_ms(w->browser) - w->scrolled_ms >= AU_REHOVER_MS) {
+        w->rehover_pending = false;
+        rehover(w);
     }
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {

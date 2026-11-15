@@ -125,6 +125,12 @@ static void flush(AuBrowserWindow *w, AuSurface *s)
     for (int round = 0; round < 8 && au_present_pending(&pres); round++) {
         AuPresentRound r;
         au_present_begin(&pres, s, &r);
+        if (getenv("SHIFT_TRACE")) {
+            fprintf(stderr, "round %d: shift %d (%d,%d)", round, r.shifted, r.dx, r.dy);
+            for (int i = 0; i < r.n; i++)
+                fprintf(stderr, " [%d,%d %d,%d]", r.rects[i].x0, r.rects[i].y0, r.rects[i].x1, r.rects[i].y1);
+            fprintf(stderr, "\n");
+        }
         AuCanvas *c = au_canvas_new(s);
         for (int i = 0; i < r.n; i++)
             au_bw_paint(w, c, r.rects[i]);
@@ -252,6 +258,15 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
     au_bw_key(bw, &k);
     flush(bw, s);
     compare(bw, s, "Up Up");
+    /* Hover follows the pointer once the scrolling pauses. */
+    CHECK(bw->rehover_pending);
+    au_bw_idle(bw);
+    CHECK(bw->rehover_pending);
+    fake_ms += AU_REHOVER_MS;
+    au_bw_idle(bw);
+    CHECK(!bw->rehover_pending);
+    flush(bw, s);
+    compare(bw, s, "hover after scrolling");
     printf("%s at %dx%d: %d moves\n", url, w, h, shifts);
     if (expect_shift > 0)
         CHECK(shifts > 0);

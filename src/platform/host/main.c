@@ -315,7 +315,7 @@ static void copy_rect(AuSurface *dst, const AuSurface *src, AuIRect r)
 }
 
 typedef struct BenchTimes {
-    double paint, blit;
+    double model, paint, blit; /* scrolling in the model (hover, layout), painting, copying */
     long painted, copied; /* pixels */
 } BenchTimes;
 
@@ -365,7 +365,9 @@ static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
         int n = 0;
         for (int i = 0; i < steps; i++) {
             int before = t->scroll_y;
+            double s0 = now_ms();
             au_bw_scroll_by(w, 0, d);
+            bt.model += now_ms() - s0;
             if (t->scroll_y == before)
                 break;
             bench_flush(w, s, screen, &bt);
@@ -376,9 +378,9 @@ static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
             printf("%s: the page does not scroll\n", names[kind]);
             continue;
         }
-        printf("%s: %.2f ms paint + %.2f ms copy per step (%d steps; %ld pixels painted, %ld copied per step; "
+        printf("%s: %.2f ms scroll + %.2f ms paint + %.2f ms copy per step (%d steps; %ld pixels painted, %ld copied per step; "
                "glyph cache %lu hits, %lu misses, %lu evictions, %lu KB)\n",
-               names[kind], bt.paint / n, bt.blit / n, n, bt.painted / n, bt.copied / n,
+               names[kind], bt.model / n, bt.paint / n, bt.blit / n, n, bt.painted / n, bt.copied / n,
                (unsigned long)(g1.hits - g0.hits), (unsigned long)(g1.misses - g0.misses),
                (unsigned long)(g1.evictions - g0.evictions), (unsigned long)(g1.bytes / 1024));
     }

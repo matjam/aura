@@ -139,7 +139,14 @@ struct AuBrowserWindow {
     AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
     bool painting;      /* inside au_bw_paint */
     bool hscroll_dirty; /* the page width changed during a paint: check the scroll bar at the next idle */
+    /* The page scrolled under a resting pointer: hover follows once the
+     * scrolling has paused (AU_REHOVER_MS after scrolled_ms), not at every
+     * step, since a hover change can restyle the whole document. */
+    bool rehover_pending;
+    uint32_t scrolled_ms;
 };
+
+#define AU_REHOVER_MS 150
 
 #define AU_MAX_FETCHERS 8
 #define AU_MAX_CLOSED_TABS 10
