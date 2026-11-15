@@ -36,7 +36,7 @@ typedef struct Result {
     int status;
     size_t body;
     AuSecurityInfo sec;
-    char cipher[64];
+    char cipher[64], alpn[32];
     AuCertInfo cert;
     bool have_cert;
 } Result;
@@ -46,8 +46,11 @@ static void on_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *r)
     Result *res = ctx;
     res->status = r->status;
     res->sec = r->security;
+    /* The strings live in the transfer, which done() frees: copy them. */
     if (r->security.cipher)
         snprintf(res->cipher, sizeof res->cipher, "%s", r->security.cipher);
+    snprintf(res->alpn, sizeof res->alpn, "%s", r->security.alpn ? r->security.alpn : "(null)");
+    res->sec.cipher = res->sec.alpn = NULL;
     const AuCertInfo *ci = au_http_cert_info(t);
     if (ci) {
         res->cert = *ci;
@@ -124,7 +127,7 @@ static void test_valid(void)
     CHECK(r.sec.tls && r.sec.version == 0x0303, "TLS 1.2: %d %04x", r.sec.tls, r.sec.version);
     CHECK(strstr(r.cipher, "ECDHE-ECDSA") != NULL, "ECDHE-ECDSA suite: %s", r.cipher);
     /* The test server offers no ALPN, so none is reported. */
-    CHECK(r.sec.alpn && !strcmp(r.sec.alpn, ""), "no ALPN: %s", r.sec.alpn ? r.sec.alpn : "(null)");
+    CHECK(!strcmp(r.alpn, ""), "no ALPN: %s", r.alpn);
     CHECK(r.have_cert && r.cert.count == 1 && strstr(r.cert.chain[0].subject, "CN=tls.test") &&
               strstr(r.cert.chain[0].issuer, "Aura Test Root") && !strcmp(r.cert.chain[0].san, "tls.test"),
           "chain details: count %d subject %s issuer %s san %s", r.cert.count, r.cert.chain[0].subject,

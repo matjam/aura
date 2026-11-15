@@ -219,7 +219,8 @@ typedef struct AuAuthChallenge {
 typedef struct AuHttpCallbacks {
     void *ctx;
     /* The final response's status and headers (after redirects and
-     * authentication). */
+     * authentication). r and every string it points to are valid only
+     * during the call; copy what is needed. */
     void (*response)(void *ctx, AuHttpTransfer *t, const AuHttpResponse *r);
     /* Decoded body bytes. */
     void (*data)(void *ctx, AuHttpTransfer *t, const void *data, size_t len);

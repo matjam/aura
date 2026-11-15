@@ -63,5 +63,8 @@ const char *au_detect_encoding(const uint8_t *data, size_t len, const char *char
  * or NULL for an unknown label. Covers every label in the standard's
  * table (names only; Aura decodes UTF-8, UTF-16 and windows-1252). */
 const char *au_encoding_label(const char *label, size_t n);
+/* The label table, for tests: its size and the i-th label (and name). */
+size_t au_encoding_label_count(void);
+const char *au_encoding_label_at(size_t i, const char **name);
 
 #endif
