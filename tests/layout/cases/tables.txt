@@ -676,3 +676,52 @@ pixel 60 20 000080
 #t x=0 y=0 w=40 h=40
 #a x=0 y=0 w=40 h=20
 #b x=0 y=20 w=40 h=20
+
+=== quirks: default margins at the start and end of a cell are dropped
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><p id=p1><i></i></p><p id=p2><i></i></p></td></tr></table>
+---
+#a x=0 y=0 w=40 h=50
+#p1 x=0 y=0 w=40 h=20
+#p2 x=0 y=30 w=40 h=20
+
+=== quirks: through collapsing parents too, but not author margins
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><div><h1 id=h><i></i></h1></div></td><td id=b><p style="margin:12px 0" id=p><i></i></p></td><td id=c><div style="margin:5px 0"><p id=q><i></i></p></div></td></tr></table>
+---
+#a x=0 y=0 w=40 h=44
+#h x=0 y=0 w=40 h=20
+#b x=40 y=0 w=40 h=44
+#p x=40 y=12 w=40 h=20
+#c x=80 y=0 w=40 h=44
+#q x=80 y=5 w=40 h=20
+
+=== quirks: default margins in the body
+<!-- quirks --><body style="margin:0" id=bd>
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}</style>
+<div style="height:0"></div><p id=p1><i></i></p><p id=p2><i></i></p>
+---
+#p1 x=0 y=0 w=800 h=20
+#p2 x=0 y=30 w=800 h=20
+
+=== standards: default margins stay in cells
+<body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><p id=p1><i></i></p></td></tr></table>
+---
+#a x=0 y=0 w=40 h=40
+#p1 x=0 y=10 w=40 h=20
+
+=== quirks: a default margin after text, or an empty paragraph
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><i></i><p id=p1><i></i></p>x</td><td id=b><p></p><p id=p2><i></i></p><p></p></td><td id=c><ul id=u><li><i></i></ul></td></tr></table>
+---
+#a x=0 y=0 w=40 h=76
+#p1 x=0 y=30 w=40 h=20
+#b x=40 y=0 w=40 h=76
+#p2 x=40 y=0 w=40 h=20
+#c x=80 y=0 w=80 h=76
+#u x=80 y=0 w=80 h=20
