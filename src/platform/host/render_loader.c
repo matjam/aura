@@ -1,6 +1,8 @@
-/* A file: loader for the document view on the host. */
+/* A file: and data: loader for the document view on the host. */
 #include "host.h"
 #include "render.h"
+
+#include "../../net/dataurl.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -58,7 +60,7 @@ static uint32_t req_fn(void *ctx, AuDocView *dv, const char *url, AuResourceKind
     (void)dv;
     (void)kind;
     AuHostLoader *l = ctx;
-    if (strncmp(url, "file://", 7) != 0)
+    if (strncmp(url, "file://", 7) != 0 && strncmp(url, "data:", 5) != 0)
         return 0; /* network comes later */
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 16;
@@ -174,9 +176,19 @@ bool au_host_loader_pump(AuHostLoader *l, AuDocView *dv)
             char path[4096];
             char *data = NULL;
             size_t len = 0;
-            bool ok = au_host_file_path(r->url, path, sizeof path) && au_platform_read_file(path, &data, &len);
-            if (ok)
-                au_docview_resource_data(dv, r->id, data, len);
+            bool ok;
+            if (!strncmp(r->url, "data:", 5)) {
+                AuDataUrl du;
+                au_data_url_init(&du);
+                ok = au_data_url_decode(r->url, &du);
+                if (ok && du.body.len)
+                    au_docview_resource_data(dv, r->id, du.body.data, du.body.len);
+                au_data_url_free(&du);
+            } else {
+                ok = au_host_file_path(r->url, path, sizeof path) && au_platform_read_file(path, &data, &len);
+                if (ok)
+                    au_docview_resource_data(dv, r->id, data, len);
+            }
             au_docview_resource_done(dv, r->id, ok);
             au_free(data);
         }

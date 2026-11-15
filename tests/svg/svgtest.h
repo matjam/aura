@@ -3,6 +3,7 @@
 #define AURA_SVGTEST_H
 
 #include "svg/svg.h"
+#include "image/cache.h"
 #include "image/image.h"
 
 #include <stdio.h>

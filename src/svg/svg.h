@@ -106,6 +106,14 @@ typedef struct AuSvgEnv {
     AuElement *(*find_id)(void *ctx, AuAtom id);
 } AuSvgEnv;
 
+/* An index of the elements with an id under a node (the node included),
+ * for AuSvgEnv.find_id: the first element in tree order wins. Build it
+ * again when the tree or ids change. */
+typedef struct AuSvgIdIndex AuSvgIdIndex;
+AuSvgIdIndex *au_svg_id_index_new(AuNode *root);
+AuElement *au_svg_id_index_find(const AuSvgIdIndex *x, AuAtom id);
+void au_svg_id_index_free(AuSvgIdIndex *x);
+
 /* The intrinsic size of an outer svg element from its width and height
  * attributes (absolute lengths; font-relative ones against em) and the
  * ratio from width and height, else from viewBox. 0 for what is absent. */

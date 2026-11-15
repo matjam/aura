@@ -20,6 +20,8 @@
 
 #include "layout.h"
 
+#include "../svg/svg.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -68,7 +70,8 @@ enum {
 enum { LR_NONE, LR_IMAGE, LR_TEXT_INPUT, LR_CHECKBOX, LR_RADIO, LR_BUTTON, LR_SELECT, LR_TEXTAREA,
        LR_RANGE, LR_OTHER, LR_DISC, LR_CIRCLE, LR_SQUARE, /* list marker shapes */
        LR_LISTBOX, LR_FILE, LR_COLOR, LR_PROGRESS, LR_METER,
-       LR_DISCLOSURE_OPEN, LR_DISCLOSURE_CLOSED /* marker shapes */ };
+       LR_DISCLOSURE_OPEN, LR_DISCLOSURE_CLOSED /* marker shapes */,
+       LR_SVG /* an outer svg element: painted by src/svg */ };
 
 /* True for the kinds that are form controls. */
 static inline bool l_is_control_kind(int r)
@@ -177,6 +180,7 @@ typedef struct LReplaced {
     float iw, ih;     /* intrinsic size, 0 when unknown */
     float ratio;      /* intrinsic aspect ratio, 0 when none */
     const AuSurface *pixels; /* decoded image or NULL */
+    const char *url;  /* image: the absolute URL (tree arena), for env.image_use */
     const char *label; /* image alt, button, select or input text; list box rows */
     const char *aux;   /* placeholder of a text control; file input status text */
     uint16_t rows, cols; /* textarea and list box size */
@@ -355,7 +359,15 @@ struct AuLayout {
         uint32_t color;
         bool on;
     } sel;
+    /* Inline SVG (draw.c): the renderer's names, made on first use, and
+     * the document's id index, made on first reference and dropped with
+     * the box tree. */
+    struct AuSvgNames *svg_names;
+    struct AuSvgIdIndex *svg_ids;
 };
+
+/* The SVG names of the layout (made on first use). */
+struct AuSvgNames *l_svg_names(AuLayout *L);
 
 /* ---- Style access with anonymous boxes ---- */
 static inline const AuStyle *lb_style(const LBox *b) { return b->style; }

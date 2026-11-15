@@ -568,6 +568,56 @@ static void test_text(void)
     au_surface_free(s);
 }
 
+static void test_image_pipeline(void)
+{
+    const char *svg = "  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 1'><rect width='1' height='1' fill='red'/>"
+                      "<rect x='1' width='1' height='1' fill='#00f'/></svg>";
+    ST_CHECK(au_image_sniff(svg, 16) == AU_IMAGE_FORMAT_SVG, "image sniffing finds SVG");
+    AuImageInfo info;
+    ST_CHECK(au_image_probe(svg, strlen(svg), &info) && info.width == 300 && info.height == 150 &&
+                 info.format == AU_IMAGE_FORMAT_SVG,
+             "probe: %dx%d", info.width, info.height);
+    AuImageOptions o = {0};
+    o.target_w = 600;
+    AuSurface *s = au_image_decode_buffer(svg, strlen(svg), &o, &info);
+    ST_CHECK(s && s->width == 600 && s->height == 300 && info.scale_denom == 1, "drawn at the target, larger");
+    if (s) {
+        EXPECT_PX(s, 100, 150, 255, 255, 0, 0);
+        EXPECT_PX(s, 500, 150, 255, 0, 0, 255);
+        au_surface_free(s);
+    }
+    /* A capped canvas keeps the ratio. */
+    o.target_w = 20000;
+    o.max_bytes = 4 * 1000 * 500;
+    s = au_image_decode_buffer(svg, strlen(svg), &o, &info);
+    ST_CHECK(s && s->width * s->height * 4 <= 4 * 1000 * 500 && abs(s->width - 2 * s->height) <= 2, "capped: %dx%d",
+             s ? s->width : 0, s ? s->height : 0);
+    au_surface_free(s);
+    ST_CHECK(!au_image_decode_buffer("<html></html>", 13, NULL, NULL), "markup that is not SVG fails");
+
+    /* The cache draws it again when shown larger, and keeps the bytes. */
+    AuImageCache *c = au_image_cache_new(0);
+    AuImageEntry *e = au_image_cache_add(c, "data:x");
+    au_image_entry_data(c, e, svg, strlen(svg));
+    au_image_entry_done(c, e, true);
+    int w, h;
+    ST_CHECK(au_image_entry_size(e, &w, &h) && w == 300 && h == 150, "cache size");
+    au_image_cache_frame_begin(c);
+    au_image_entry_use(c, e, 40, 20);
+    const AuSurface *v = au_image_entry_surface(e);
+    ST_CHECK(v->width == 40 && v->height == 20, "drawn at the display size: %dx%d", v->width, v->height);
+    au_image_cache_frame_begin(c);
+    au_image_entry_use(c, e, 800, 400);
+    ST_CHECK(v->width == 800 && v->height == 400, "drawn again larger: %dx%d", v->width, v->height);
+    au_image_cache_frame_begin(c);
+    au_image_entry_use(c, e, 100, 100);
+    ST_CHECK(v->width == 100 && v->height == 100, "drawn again for another shape: %dx%d", v->width, v->height);
+    AuImageCacheStats cs;
+    au_image_cache_stats(c, &cs);
+    ST_CHECK(cs.compressed_bytes == strlen(svg), "SVG bytes kept");
+    au_image_cache_free(c);
+}
+
 static void bench(void)
 {
     /* 200 icons drawn into one canvas. */
@@ -623,6 +673,7 @@ int main(int argc, char **argv)
     test_nested_switch_image();
     test_intrinsic();
     test_text();
+    test_image_pipeline();
     if (do_bench)
         bench();
     if (g_fonts)

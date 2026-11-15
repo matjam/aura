@@ -140,30 +140,40 @@ static int id_cmp(const void *a, const void *b)
     return x->order < y->order ? -1 : x->order > y->order;
 }
 
-static AuElement *find_id(SvgCtx *x, AuAtom id)
+struct AuSvgIdIndex {
+    SvgIdEntry *ids;
+    uint32_t n;
+};
+
+AuSvgIdIndex *au_svg_id_index_new(AuNode *top)
 {
-    if (!id)
-        return NULL;
-    if (x->env && x->env->find_id)
-        return x->env->find_id(x->env->ctx, id);
-    if (!x->ids_built) {
-        x->ids_built = true;
-        uint32_t cap = 0;
-        AuNode *top = &x->root->node;
-        uint32_t order = 0;
-        for (AuNode *n = top; n; n = au_node_next(n, top)) {
-            if (n->type != AU_NODE_ELEMENT || !au_as_element(n)->id)
-                continue;
-            if (x->nids == cap) {
-                cap = cap ? cap * 2 : 16;
-                x->ids = au_realloc(x->ids, cap * sizeof *x->ids);
-            }
-            x->ids[x->nids++] = (SvgIdEntry){au_as_element(n)->id, order++, au_as_element(n)};
+    AuSvgIdIndex *x = au_calloc(sizeof *x);
+    uint32_t cap = 0, order = 0;
+    for (AuNode *n = top; n; n = au_node_next(n, top)) {
+        if (n->type != AU_NODE_ELEMENT || !au_as_element(n)->id)
+            continue;
+        if (x->n == cap) {
+            cap = cap ? cap * 2 : 16;
+            x->ids = au_realloc(x->ids, cap * sizeof *x->ids);
         }
-        if (x->nids)
-            qsort(x->ids, x->nids, sizeof *x->ids, id_cmp);
+        x->ids[x->n++] = (SvgIdEntry){au_as_element(n)->id, order++, au_as_element(n)};
     }
-    uint32_t lo = 0, hi = x->nids;
+    if (x->n)
+        qsort(x->ids, x->n, sizeof *x->ids, id_cmp);
+    return x;
+}
+
+void au_svg_id_index_free(AuSvgIdIndex *x)
+{
+    if (!x)
+        return;
+    au_free(x->ids);
+    au_free(x);
+}
+
+AuElement *au_svg_id_index_find(const AuSvgIdIndex *x, AuAtom id)
+{
+    uint32_t lo = 0, hi = x->n;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;
         if (x->ids[mid].id < id)
@@ -171,7 +181,18 @@ static AuElement *find_id(SvgCtx *x, AuAtom id)
         else
             hi = mid;
     }
-    return lo < x->nids && x->ids[lo].id == id ? x->ids[lo].el : NULL;
+    return lo < x->n && x->ids[lo].id == id ? x->ids[lo].el : NULL; /* the first in tree order */
+}
+
+static AuElement *find_id(SvgCtx *x, AuAtom id)
+{
+    if (!id)
+        return NULL;
+    if (x->env && x->env->find_id)
+        return x->env->find_id(x->env->ctx, id);
+    if (!x->ids)
+        x->ids = au_svg_id_index_new(&x->root->node);
+    return au_svg_id_index_find(x->ids, id);
 }
 
 /* The element a local reference ("#id", or url(#id) text) names. */
@@ -1394,5 +1415,5 @@ void au_svg_paint(AuCanvas *c, const AuSvgNames *n, AuElement *svg, AuRect view,
     }
     if (group)
         au_canvas_group_end(c, op < 1 ? op : 1);
-    au_free(x.ids);
+    au_svg_id_index_free(x.ids);
 }

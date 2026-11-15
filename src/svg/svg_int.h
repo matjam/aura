@@ -106,9 +106,7 @@ typedef struct SvgCtx {
     const AuSvgEnv *env;
     const AuSvgNames *n;
     AuElement *root;      /* the outermost svg painted */
-    SvgIdEntry *ids;      /* own id index when env->find_id is NULL */
-    uint32_t nids;
-    bool ids_built;
+    AuSvgIdIndex *ids;    /* own id index when env->find_id is NULL (built on first use) */
     int depth, use_depth;
     uint32_t painted;     /* elements visited (SVG_MAX_ELEMENTS) */
     AuElement *use_stack[SVG_MAX_USE_DEPTH + 1];

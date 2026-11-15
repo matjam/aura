@@ -578,6 +578,8 @@ static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
         rep->ih = (float)h;
         rep->ratio = h > 0 ? (float)w / h : 0;
         rep->pixels = px;
+        if (L->env.image_use)
+            rep->url = ar_strndup(&L->tree, abs, strlen(abs));
     }
 }
 
@@ -827,7 +829,7 @@ static int replaced_kind(AuNode *node, bool *skip_children, bool *flow)
     AuElement *e = au_as_element(node);
     if (e->ns == AU_NS_SVG && e->tag == AU_ATOM_svg) {
         *skip_children = true;
-        return LR_OTHER;
+        return LR_SVG;
     }
     if (e->ns != AU_NS_HTML)
         return LR_NONE;
@@ -1745,6 +1747,8 @@ void l_box_free_layout(LBox *b)
 
 void l_free_tree(AuLayout *L)
 {
+    au_svg_id_index_free(L->svg_ids);
+    L->svg_ids = NULL;
     LBox *b = L->root;
     while (b) {
         LBox *next;
