@@ -1389,6 +1389,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
         }
         return false;
     }
+    uint32_t t0 = now(p), hide_ms = 0;
     if (in_place) {
         p->leaving = NULL;
     } else {
@@ -1413,6 +1414,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
             kept_add(p, cur, old);
         else
             au_docview_free(old);
+        hide_ms = now(p) - t0;
     }
     /* The page's state becomes the kept document's. */
     set_str(&p->url, url);
@@ -1433,8 +1435,12 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     au_buf_free(&p->source);
     p->source = k->source;
     au_buf_init(&k->source);
+    /* The timings now describe the restore: load_ms the whole of it,
+     * first_paint_ms up to the next paint. */
     p->stats = k->stats;
     p->stats.restored++;
+    p->stats.hide_ms = hide_ms;
+    p->stats.first_paint_ms = 0;
     p->kind = K_DOC;
     p->internal = p->interim = p->failed = p->discard = false;
     p->no_store = false;
@@ -1457,7 +1463,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     p->next_entry = 0;
     p->loading = true;
     p->progress = 0;
-    p->load_start = now(p);
+    p->load_start = t0;
     if (p->cb.load_started)
         p->cb.load_started(p->cb.ctx, p);
     if (p->cb.url_changed)

@@ -497,7 +497,9 @@ typedef struct AuPageStats {
     uint32_t boxes;          /* layout boxes */
     uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
     uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
-    uint32_t restored;       /* times this document was shown again from the document cache */
+    uint32_t restored;       /* times this document was shown again from the document cache; load_ms and
+                              * first_paint_ms then time the last showing */
+    uint32_t hide_ms;        /* of load_ms after a restore: hiding (or freeing) the document that was left */
     bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);
