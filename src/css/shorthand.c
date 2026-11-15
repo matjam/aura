@@ -353,7 +353,8 @@ static bool sh_border_radius(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
                                         AU_PROP_border_bottom_right_radius, AU_PROP_border_bottom_left_radius};
     for (int k = 0; k < 4; k++) {
         AuCssValue *pair[2] = {H[k], V[k]};
-        emit(s, corners[k], list_of(s->cx, pair, 2, AU_CSSV_LIST));
+        /* one value when both radii are the same */
+        emit(s, corners[k], css_value_equal(H[k], V[k]) ? H[k] : list_of(s->cx, pair, 2, AU_CSSV_LIST));
     }
     return true;
 }

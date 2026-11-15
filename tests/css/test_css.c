@@ -65,8 +65,19 @@ static bool split(char *s, const char *sep, char **a, char **b)
         p = q;
         q += sl;
     }
-    if (!p)
+    if (!p) {
+        /* "a SEP" with an empty right side (the line was trimmed) */
+        size_t n = strlen(s), tl = sl;
+        while (tl && sep[tl - 1] == ' ')
+            tl--;
+        if (n >= tl && strncmp(s + n - tl, sep, tl) == 0) {
+            s[n - tl] = 0;
+            *a = trim(s);
+            *b = s + n; /* "" */
+            return true;
+        }
         return false;
+    }
     *p = 0;
     *a = trim(s);
     *b = trim(p + sl);

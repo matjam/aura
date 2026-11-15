@@ -835,13 +835,8 @@ AuCssValue *pp_radius(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
     for (uint32_t i = 0; i < n; i++)
         if (!norm_lp(&it[i], P_PCT | P_NONNEG))
             return NULL;
-    if (n == 1) {
-        AuCssValue *l = css_new_list(cx->arena, AU_CSSV_LIST, 2);
-        l->u.items[0] = *v;
-        l->u.items[1] = *v;
-        return l;
-    }
-    return v;
+    (void)cx;
+    return v; /* one value stands for both radii */
 }
 
 /* ---- Background layers ---- */

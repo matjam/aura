@@ -272,9 +272,20 @@ static void ser(const AuCssValue *v, AuBuf *out, int depth)
     case AU_CSSV_KEYWORD:
         au_buf_puts(out, au_css_keyword_name((AuCssKeyword)v->kw));
         break;
-    case AU_CSSV_IDENT:
-        css_serialize_ident(v->u.str, v->n, out);
+    case AU_CSSV_IDENT: {
+        /* a family name of several identifiers keeps its spaces */
+        const char *s = v->u.str, *e = s + v->n;
+        while (s < e) {
+            const char *sp = memchr(s, ' ', (size_t)(e - s));
+            const char *w = sp ? sp : e;
+            css_serialize_ident(s, (size_t)(w - s), out);
+            if (!sp)
+                break;
+            au_buf_putc(out, ' ');
+            s = sp + 1;
+        }
         break;
+    }
     case AU_CSSV_STRING:
         css_serialize_string(v->u.str, v->n, out);
         break;
