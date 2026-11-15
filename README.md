@@ -30,15 +30,16 @@ Mac OS 9.2.2. What has not happened yet:
 - It has not been used day to day for any length of time.
 - Nobody has reviewed the code for security.
 
-That last point matters more for a browser than for most programs. Aura
-reads whatever a web server sends it, on a system with no memory
-protection, so a bug in a parser is a bug in your whole Mac. I would not
-use it for banking, or type a password into it that you care about. It
-may eat your dog, copy your homework or burn your house down. No
-warranty; see `LICENSE`.
+Every effort has been made to make Aura a secure browser: it checks
+certificates, speaks TLS 1.3, treats everything a server sends as
+hostile, and its parsers are fuzzed. But it is effectively vibecoded,
+and it reads whatever a web server sends it on a system with no memory
+protection. So you might want to do some auditing of your own before
+you use it for sensitive tasks. It may eat your dog, copy your homework
+or burn your house down. No warranty; see `LICENSE`.
 
-So yes, it is vibecoded, or whatever other name you like. I am fine with
-that as long as it works and breaks nothing. If you try it on real
+I am fine with vibecoded, or whatever other name you like, as long as
+it works and breaks nothing. If you try it on real
 hardware, I would like to hear how it went, good or bad: please open an
 issue. `CONTRIBUTING.md` says what is most useful to report.
 
