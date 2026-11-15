@@ -215,8 +215,8 @@ pixel 29 1 ff0000
 ---
 pixel 20 2 343434
 pixel 20 29 dddddd
-pixel 20 33 545454
-pixel 20 36 ababab
+pixel 20 33 a8a8a8
+pixel 20 36 545454
 
 === outline paints outside the border box
 <body style="margin:0">

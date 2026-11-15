@@ -280,13 +280,13 @@ static void inset_radii(AuRadii *r, const float *in)
 
 /* The dark or light shade of a groove, ridge, inset or outset border, as
  * Blink computes it: the largest channel v (0..1) moves by 0.33 and the
- * others scale with it. Black darkens to #ababab and lightens to #545454
+ * others scale with it. Black darkens to #545454 and lightens to #a8a8a8
  * so a black bevel still shows. */
 static uint32_t bevel(uint32_t argb, bool dark)
 {
     uint32_t a = argb >> 24, r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
     if (!r && !g && !b)
-        return (a << 24) | (dark ? 0xabababu : 0x545454u);
+        return (a << 24) | (dark ? 0x545454u : 0xa8a8a8u);
     float v = (float)(r > g ? (r > b ? r : b) : (g > b ? g : b)) / 255.0f;
     float m = dark ? l_max(0, (v - 0.33f) / v) : l_min(1, v + 0.33f) / v;
     float k = m * 255.99f / 255.0f;
