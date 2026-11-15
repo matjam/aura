@@ -743,6 +743,8 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
     uint8_t pseudo = 0;
     uint8_t lead = 0;
     p->pe_name = 0;
+    while (b > a && tk->t[b - 1].type == TK_WS)
+        b--; /* trailing whitespace is not a combinator */
     uint32_t i = sk(tk, a, b);
     if (i >= b)
         return false;

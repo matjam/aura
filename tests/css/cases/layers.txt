@@ -1,0 +1,118 @@
+# Cascade layers: order, nesting, importance, revert-layer, and layers on
+# @import.
+
+=== unlayered styles beat layered ones
+--- css
+#a { color: green; }
+@layer base { #a { color: red; } div { width: 1px; } }
+@layer { div#a.x.y { color: red; } }
+--- html
+html
+  body
+    div#a.x.y
+--- expect
+#a -> color: rgb(0, 128, 0)
+#a -> width: 1px
+
+=== later layers win regardless of specificity
+--- css
+@layer one, two;
+@layer two { div { color: green; } }
+@layer one { #a { color: red; } }
+--- html
+html
+  body
+    div#a
+--- expect
+#a -> color: rgb(0, 128, 0)
+
+=== the statement fixes the order
+--- css
+@layer b, a;
+@layer a { p { color: green; } }
+@layer b { p { color: red; } }
+@layer c { p { margin-top: 1px; } }
+@layer a { p { margin-top: 2px; } }
+--- html
+html
+  body
+    p#p
+--- expect
+#p -> color: rgb(0, 128, 0)
+#p -> margin-top: 1px
+
+=== nested layers come before their parent's own rules
+--- css
+@layer outer {
+  p { color: green; }
+  @layer inner { p { color: red; } }
+}
+@layer outer.inner { p { margin-top: 3px; } }
+@layer outer { p { margin-top: 4px; } }
+--- html
+html
+  body
+    p#p
+--- expect
+#p -> color: rgb(0, 128, 0)
+#p -> margin-top: 4px
+
+=== important declarations reverse the layer order
+--- css
+@layer one, two;
+@layer one { p { color: green !important; } }
+@layer two { p { color: red !important; } }
+p { color: blue !important; }
+--- html
+html
+  body
+    p#p
+--- expect
+#p -> color: rgb(0, 128, 0)
+
+=== important layered beats normal unlayered and inline
+--- css
+@layer x { #p { width: 3px !important; } }
+#p { width: 9px; }
+--- html
+html
+  body
+    p#p[style="width: 5px"]
+--- expect
+#p -> width: 3px
+
+=== revert-layer
+--- css
+@layer base, theme;
+@layer base { p { color: green; margin-top: 2px; } }
+@layer theme { p { color: red; } #a { color: revert-layer; margin-top: revert-layer; } }
+#b { color: blue; }
+#b { color: revert-layer; }
+--- html
+html
+  body
+    p#a
+    p#b
+--- expect
+#a -> color: rgb(0, 128, 0)
+#a -> margin-top: 2px
+#b -> color: rgb(255, 0, 0)
+
+=== layers in @import
+--- css
+@import url(a.css) layer(lib);
+@import url(b.css) layer;
+@import url(c.css) layer(lib.sub) supports(display: grid) screen;
+@import url(d.css) supports(foo: bar);
+@import "e.css" print, (min-width: 100px);
+p { color: red; }
+@import url(late.css);
+--- imports
+# url | media ("" for all) | layer ("" for anonymous) | supports | supported
+a.css |  | lib | (none) | true
+b.css |  |  | (none) | true
+c.css | screen | lib.sub | display: grid | true
+d.css |  | (none) | foo: bar | false
+e.css | print, (min-width: 100px) | (none) | (none) | true
+--- rules
+1

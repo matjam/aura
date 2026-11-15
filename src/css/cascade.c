@@ -1141,7 +1141,8 @@ static void consider(AuCssResolver *r, uint16_t p, uint64_t key, const AuCssDecl
         w->key = key;
         w->decl = d;
         r->touched[r->ntouched++] = p;
-    } else if (key >= w->key) {
+    } else if (key > w->key || (key == w->key && d > w->decl)) {
+        /* equal keys come from one block: the later declaration wins */
         w->key = key;
         w->decl = d;
     }

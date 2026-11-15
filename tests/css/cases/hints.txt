@@ -1,0 +1,108 @@
+# Presentational hints from HTML attributes, as zero-specificity author
+# declarations below every author rule.
+
+=== legacy attributes
+--- html
+html
+  body#body[bgcolor=yellow][text=#00f][background=bg.png]
+    table#t[width=80%][border=2][cellspacing=5][cellpadding=4][align=center][bgcolor=red]
+      tbody
+        tr#tr[align=right][valign=top]
+          td#td[width=30][height=20][nowrap][bgcolor=#0f0]
+          th#th
+    img#img[width=100][height=50][align=left][hspace=3][vspace=4][border=1]
+    font#f[color=green][size=+2][face="Arial, Helvetica"]
+    font#f2[size=1]
+    font#f3[size=9]
+    hr#hr[noshade][size=4][width=50%][align=left]
+    div#d[align=center]
+    p#p[align=right]
+    ol#ol[type=a]
+    ul#ul[type=square]
+    br#br[clear=all]
+    div#hidden[hidden]
+--- expect
+#body -> background-color: rgb(255, 255, 0)
+#body -> color: rgb(0, 0, 255)
+#body -> background-image: url("bg.png")
+#t -> width: 80%
+#t -> border-top-width: 2px
+#t -> border-top-style: outset
+#t -> border-spacing: 5px
+#t -> margin-left: auto
+#t -> background-color: rgb(255, 0, 0)
+#td -> width: 30px
+#td -> height: 20px
+#td -> white-space-collapse: collapse
+#td -> text-wrap-mode: nowrap
+#td -> padding-left: 4px
+#td -> background-color: rgb(0, 255, 0)
+#td -> border-top-width: 1px
+#td -> border-top-style: inset
+#td -> text-align: -webkit-right
+#td -> vertical-align: top
+# the UA th rule beats the inherited alignment (browsers special-case this)
+#th -> text-align: -webkit-center
+#img -> width: 100px
+#img -> height: 50px
+#img -> float: left
+#img -> margin-left: 3px
+#img -> margin-top: 4px
+#img -> border-top-width: 1px
+#f -> color: rgb(0, 128, 0)
+#f -> font-size: 24px
+#f -> font-family: Arial, Helvetica
+#f2 -> font-size: 10px
+#f3 -> font-size: 48px
+#hr -> border-top-style: solid
+#hr -> height: 2px
+#hr -> width: 50%
+#hr -> margin-left: 0px
+#hr -> margin-right: auto
+#d -> text-align: -webkit-center
+#p -> text-align: right
+#ol -> list-style-type: lower-alpha
+#ul -> list-style-type: square
+#br -> clear: both
+#hidden -> display: none
+
+=== author rules beat hints
+--- css
+img { width: 10px; }
+td { background-color: blue; }
+--- html
+html
+  body
+    img#img[width=100]
+    table
+      tr
+        td#td[bgcolor=red]
+--- expect
+#img -> width: 10px
+#td -> background-color: rgb(0, 0, 255)
+
+=== legacy color parsing
+--- html
+html
+  body
+    font#a[color=chucknorris]
+    font#b[color="#abc"]
+    font#c[color=ff0000]
+    font#d[color=transparent]
+    font#e[color=" red "]
+--- expect
+#a -> color: rgb(192, 0, 0)
+#b -> color: rgb(170, 187, 204)
+#c -> color: rgb(255, 0, 0)
+#d -> color: rgb(0, 0, 0)
+#e -> color: rgb(255, 0, 0)
+
+=== attribute values cannot inject declarations
+--- html
+html
+  body
+    font#a[face="x; color: red"]
+    td#b[width="10;color:red"]
+--- expect
+#a -> color: rgb(0, 0, 0)
+#a -> font-family: "x; color: red"

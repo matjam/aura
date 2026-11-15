@@ -500,7 +500,17 @@ static void put_font_face(AuBuf *b, const char *v)
         if (e > s) {
             if (any)
                 au_buf_putc(&tmp, ',');
-            css_serialize_string(s, (size_t)(e - s), &tmp);
+            /* plain names stay identifiers; anything else is quoted */
+            bool plain = !(*s >= '0' && *s <= '9') && *s != '-';
+            for (const char *q = s; q < e && plain; q++) {
+                unsigned char ch = (unsigned char)*q;
+                plain = ch >= 0x80 || ch == ' ' || ch == '-' || ch == '_' || (ch >= '0' && ch <= '9') ||
+                        (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+            }
+            if (plain)
+                au_buf_append(&tmp, s, (size_t)(e - s));
+            else
+                css_serialize_string(s, (size_t)(e - s), &tmp);
             any = true;
         }
     }

@@ -1,0 +1,71 @@
+# Pseudo-element styles computed by the document pass.
+
+=== before and after
+--- css
+#a::before { content: "x"; color: red; }
+#a::after { content: counter(n) " " attr(title); display: block; }
+#b::before { color: red; }
+#c::before { content: none; }
+#d::after { content: normal; }
+#e::before { content: ""; display: none; }
+.f:hover::before { content: "h"; }
+--- html
+html
+  body
+    div#a[title=T]
+    div#b
+    div#c
+    div#d
+    div#e
+    div.f#f
+--- expect
+#a::before -> content: "x"
+#a::before -> color: rgb(255, 0, 0)
+#a::before -> display: inline
+#a::after -> content: counter(n) " " "T"
+#a::after -> display: block
+#b::before -> (none)
+#c::before -> (none)
+#d::after -> (none)
+#e::before -> (none)
+#f::before -> (none)
+
+=== pseudo-elements inherit from their element
+--- css
+#a { color: blue; font-size: 20px; width: 50px; }
+#a::before { content: "a"; }
+#a::after { content: "b"; font-size: 0.5em; width: inherit; }
+--- html
+html
+  body
+    div#a
+--- expect
+#a::before -> color: rgb(0, 0, 255)
+#a::before -> font-size: 20px
+#a::before -> width: auto
+#a::after -> font-size: 10px
+#a::after -> width: 50px
+
+=== markers of list items
+--- css
+li::marker { color: red; }
+--- html
+html
+  body
+    ul
+      li#a
+    div#b
+--- expect
+#a::marker -> color: rgb(255, 0, 0)
+#a::marker -> white-space-collapse: preserve
+#b::marker -> (none)
+
+=== quotes from q
+--- html
+html
+  body
+    p
+      q#q
+--- expect
+#q::before -> content: open-quote
+#q::after -> content: close-quote

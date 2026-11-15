@@ -338,7 +338,15 @@ static void run_expect(const Section *sec, AuDocument *doc, AuCssResolver *r)
     {
         char *sel, *rest, *prop, *want;
         char *l = trim(line);
-        if (!split_first(l, " -> ", &sel, &rest) || !split_first(rest, ":", &prop, &want)) {
+        if (!split_first(l, " -> ", &sel, &rest)) {
+            fail(ln, "bad expect line", "SEL -> prop: value", l);
+            continue;
+        }
+        bool want_none = strcmp(rest, "(none)") == 0; /* SEL::pseudo -> (none): no such style */
+        if (want_none) {
+            prop = NULL;
+            want = rest;
+        } else if (!split_first(rest, ":", &prop, &want)) {
             fail(ln, "bad expect line", "SEL -> prop: value", l);
             continue;
         }
@@ -371,10 +379,12 @@ static void run_expect(const Section *sec, AuDocument *doc, AuCssResolver *r)
         au_buf_init(&b);
         if (!st)
             au_buf_puts(&b, "(none)");
+        else if (!prop)
+            au_buf_puts(&b, "(a style)");
         else if (!au_style_serialize_property(st, au_atom_cstr(prop), &b))
             au_buf_puts(&b, "(unknown property)");
         char what[256];
-        snprintf(what, sizeof what, "%s %s", sel, prop);
+        snprintf(what, sizeof what, "%s %s", sel, prop ? prop : "style");
         check_str(ln, what, want, au_buf_cstr(&b));
         au_buf_free(&b);
     }
@@ -597,16 +607,28 @@ static void run_sheet_checks(const Section *sec, AuCssSheet *s)
             au_buf_putc(&all, '\n');
         }
     }
-    /* compare line by line against the body's non-comment lines */
-    AuBuf want;
+    /* compare line by line against the body's non-comment lines, both trimmed */
+    AuBuf want, got;
     au_buf_init(&want);
+    au_buf_init(&got);
     FOR_LINES(sec, line, ln)
     {
         (void)ln;
         au_buf_printf(&want, "%s\n", trim(line));
     }
-    check_str(sec->line, sec->kind, au_buf_cstr(&want), au_buf_cstr(&all));
+    char *g = au_buf_cstr(&all);
+    for (char *p = g; *p;) {
+        char *e = strchr(p, '\n');
+        if (e)
+            *e = 0;
+        au_buf_printf(&got, "%s\n", trim(p));
+        if (!e)
+            break;
+        p = e + 1;
+    }
+    check_str(sec->line, sec->kind, au_buf_cstr(&want), au_buf_cstr(&got));
     au_buf_free(&want);
+    au_buf_free(&got);
     au_buf_free(&all);
 }
 
