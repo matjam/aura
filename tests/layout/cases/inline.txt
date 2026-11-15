@@ -238,3 +238,23 @@ x</div>
 ---
 hit 60 8 #b
 hit 10 8 <p>
+
+=== a tab advances to the next tab stop
+<body style="margin:0">
+<pre style="margin:0">x	x	<span id=s>x</span></pre>
+---
+#s x=256
+pixel 8 8 000000
+pixel 40 8 ffffff
+pixel 136 8 000000
+pixel 264 8 000000
+
+=== dashed and wavy text decorations
+<body style="margin:0">
+<div style="color:transparent;text-decoration:line-through dashed #ff0000 2px">xxxx</div>
+<div style="color:transparent;text-decoration:line-through wavy #0000ff 2px">xxxx</div>
+---
+pixel 2 5 ff0000
+pixel 9 5 ffffff
+pixel 14 5 ff0000
+pixel 30 18 ffffff

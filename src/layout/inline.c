@@ -637,6 +637,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     }
     bool line_start = true;
     float hang = 0; /* hanging preserved spaces of the last text segment */
+    bool after_tab = false;
     for (uint32_t i = a; i <= e; i++) {
         LSeg *s = &L->segs[i];
         switch (s->kind) {
@@ -698,8 +699,10 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             }
             LFrag *prev = S->fb.n > first ? &S->fb.f[S->fb.n - 1] : NULL;
             if (vis || (s->flags & SF_CONTENT)) {
+                /* A tab is a fragment of its own: its width is the distance
+                 * to the next tab stop, not its glyph's advance. */
                 if (prev && prev->kind == FR_TEXT && prev->box == s->box && prev->start + prev->len == s->start &&
-                    !(prev->flags & FRF_HYPHEN)) {
+                    !(prev->flags & FRF_HYPHEN) && !(s->flags & SF_TAB) && !after_tab) {
                     prev->len += vis;
                     prev->w += w + (trim_trail || lead_skip ? 0 : s->trail_w);
                 } else if (vis) {
@@ -722,6 +725,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
                 }
             }
             x += w + (trim_trail || lead_skip ? 0 : s->trail_w);
+            after_tab = (s->flags & SF_TAB) != 0;
             if (vis)
                 line_start = false;
             /* Preserved spaces at the end of a wrapped line hang: they

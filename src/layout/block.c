@@ -348,7 +348,10 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
         float l, r;
         float est_h = l_max(1, k->h);
         l_floats_avail(&S->floats, y, est_h, cl, cr, &l, &r);
-        float bl = l_max(l, cl + k->m[3]), br = l_min(r, cr - k->m[1]);
+        /* Negative margins pull the box out of its containing block as for
+         * any block; only floats push its border box in. */
+        float bl = l > cl ? l_max(l, cl + k->m[3]) : cl + k->m[3];
+        float br = r < cr ? l_min(r, cr - k->m[1]) : cr - k->m[1];
         float avail = br - bl;
         float w = l_used_width(L, k, cw, avail + k->m[1] + k->m[3], LS_STRETCH);
         float bw = w + l_bp_h(k);

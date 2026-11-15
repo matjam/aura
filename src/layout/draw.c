@@ -1561,6 +1561,53 @@ static int collect_decos(const LBox *t, Deco *out, int max)
     return n;
 }
 
+/* One text decoration line from x to x + w with its top at y: solid,
+ * double, dotted, dashed or wavy (CSS Text Decoration 3). Dots and dashes
+ * are phased from x = 0 so neighbouring fragments continue the pattern. */
+static void deco_line(AuCanvas *c, float x, float y, float w, float th, uint32_t col, int style)
+{
+    if (w <= 0)
+        return;
+    switch (style) {
+    case AU_TEXT_DECORATION_STYLE_DOUBLE:
+        au_fill_rect(c, (AuRect){x, y, w, th}, col);
+        au_fill_rect(c, (AuRect){x, y + th * 2, w, th}, col);
+        return;
+    case AU_TEXT_DECORATION_STYLE_DOTTED:
+    case AU_TEXT_DECORATION_STYLE_DASHED: {
+        float on = style == AU_TEXT_DECORATION_STYLE_DOTTED ? th : th * 3, period = on * 2;
+        float start = floorf(x / period) * period;
+        au_canvas_clip_push(c, (AuRect){x, y - th, w, th * 3});
+        for (float p = start; p < x + w && p - start < 40000; p += period)
+            au_fill_rect(c, (AuRect){p, y, on, th}, col);
+        au_canvas_clip_pop(c);
+        return;
+    }
+    case AU_TEXT_DECORATION_STYLE_WAVY: {
+        /* A zigzag of period 4 * th around the line, stroked th wide. */
+        float amp = l_max(1, th), step = l_max(2, th * 2);
+        float start = floorf(x / (2 * step)) * (2 * step);
+        AuPath p, s;
+        au_path_init(&p);
+        au_path_init(&s);
+        au_path_move_to(&p, start, y + amp);
+        int k = 0;
+        for (float px = start + step; px <= x + w + step && k < 20000; px += step, k++)
+            au_path_line_to(&p, px, (k & 1) ? y + amp : y - amp);
+        au_path_stroke(&p, th, &s);
+        au_canvas_clip_push(c, (AuRect){x, y - amp - th, w, 2 * (amp + th)});
+        au_fill_path(c, &s, AU_FILL_NONZERO, col);
+        au_canvas_clip_pop(c);
+        au_path_free(&p);
+        au_path_free(&s);
+        return;
+    }
+    default:
+        au_fill_rect(c, (AuRect){x, y, w, th}, col);
+        return;
+    }
+}
+
 static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
 {
     LText *t = (LText *)f->box;
@@ -1613,14 +1660,14 @@ static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
         float w = f->w;
         if (d[i].lines & AU_TDL_UNDERLINE) {
             float y = roundf(base + l_max(1, font->m.underline_pos));
-            au_fill_rect(P->c, (AuRect){x, y, w, th}, d[i].color);
-            if (d[i].style == AU_TEXT_DECORATION_STYLE_DOUBLE)
-                au_fill_rect(P->c, (AuRect){x, y + th * 2, w, th}, d[i].color);
+            if (d[i].style == AU_TEXT_DECORATION_STYLE_WAVY)
+                y = roundf(base + l_max(1, font->m.underline_pos) + th);
+            deco_line(P->c, x, y, w, th, d[i].color, d[i].style);
         }
         if (d[i].lines & AU_TDL_OVERLINE)
-            au_fill_rect(P->c, (AuRect){x, roundf(base - font->m.ascent), w, th}, d[i].color);
+            deco_line(P->c, x, roundf(base - font->m.ascent), w, th, d[i].color, d[i].style);
         if (d[i].lines & AU_TDL_LINE_THROUGH)
-            au_fill_rect(P->c, (AuRect){x, roundf(base - font->m.strike_pos - th / 2), w, th}, d[i].color);
+            deco_line(P->c, x, roundf(base - font->m.strike_pos - th / 2), w, th, d[i].color, d[i].style);
     }
 }
 
