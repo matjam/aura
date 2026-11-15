@@ -62,7 +62,8 @@ typedef struct AuNetRecord {
 } AuNetRecord;
 
 typedef struct AuNetLog {
-    AuNetRecord *recs;  /* a ring of AU_NETLOG_MAX, allocated at the first request */
+    AuNetRecord *recs;  /* a ring of at most AU_NETLOG_MAX; it grows with the first requests */
+    uint32_t cap;       /* records allocated */
     uint32_t first_seq; /* seq of the oldest record kept */
     uint32_t count;     /* records kept */
     uint32_t requests;  /* started since the navigation (count plus dropped) */

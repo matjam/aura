@@ -20,14 +20,14 @@ static void rec_free(AuNetRecord *r)
 
 void au_netlog_clear(AuNetLog *l)
 {
-    if (l->recs)
-        for (uint32_t i = 0; i < AU_NETLOG_MAX; i++)
-            if (l->recs[i].url)
-                rec_free(&l->recs[i]);
-    uint32_t gen = l->generation + 1;
+    for (uint32_t i = 0; i < l->cap; i++)
+        if (l->recs[i].url)
+            rec_free(&l->recs[i]);
+    uint32_t gen = l->generation + 1, cap = l->cap;
     AuNetRecord *recs = l->recs;
     memset(l, 0, sizeof *l);
     l->recs = recs;
+    l->cap = cap;
     l->first_seq = 1;
     l->generation = gen;
 }
@@ -37,6 +37,7 @@ void au_netlog_free(AuNetLog *l)
     au_netlog_clear(l);
     au_free(l->recs);
     l->recs = NULL;
+    l->cap = 0;
 }
 
 static AuNetRecord *find(AuNetLog *l, uint32_t seq)
@@ -60,10 +61,20 @@ static void copy_text(char *dst, size_t cap, const char *src)
 
 uint32_t au_netlog_begin(AuNetLog *l, const char *url, const char *method, AuFetchKind kind, uint32_t start_ms)
 {
-    if (!l->recs)
-        l->recs = au_calloc(AU_NETLOG_MAX * sizeof *l->recs);
     uint32_t seq = ++l->requests;
-    AuNetRecord *r = &l->recs[(seq - 1) % AU_NETLOG_MAX];
+    uint32_t slot = (seq - 1) % AU_NETLOG_MAX;
+    if (slot >= l->cap) {
+        /* The first AU_NETLOG_MAX records fill the array in order, so it
+         * grows as they come: a page with thirty requests keeps room for
+         * thirty-two. */
+        uint32_t cap = l->cap ? l->cap * 2 : 16;
+        if (cap > AU_NETLOG_MAX)
+            cap = AU_NETLOG_MAX;
+        l->recs = au_realloc(l->recs, cap * sizeof *l->recs);
+        memset(l->recs + l->cap, 0, (cap - l->cap) * sizeof *l->recs);
+        l->cap = cap;
+    }
+    AuNetRecord *r = &l->recs[slot];
     if (l->count == AU_NETLOG_MAX) {
         rec_free(r); /* the oldest record's slot */
         l->first_seq++;

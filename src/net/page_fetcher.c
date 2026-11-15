@@ -160,8 +160,8 @@ typedef char check_sources[(int)AU_FETCH_FROM_304 == (int)AU_HTTP_FROM_304 ? 1 :
 /* Converts the loader's trace of a finished request for page.h's request
  * log. heads receives the response headers as text when with_headers;
  * remote (64 bytes) and proto (16 bytes) hold the strings out points to. */
-static void au_net_fetch_net_from(AuFetchNet *out, const AuLoadInfo *i, bool with_headers, AuBuf *heads, char *remote,
-                                  char *proto)
+static void fetch_net_from(AuFetchNet *out, const AuLoadInfo *i, bool with_headers, AuBuf *heads, char *remote,
+                           char *proto)
 {
     memset(out, 0, sizeof *out);
     for (int k = 0; k <= AU_FETCH_PHASE_DONE; k++)
@@ -269,7 +269,7 @@ static void pf_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *in
     AuBuf rh;
     char remote[64], proto[16];
     au_buf_init(&rh);
-    au_net_fetch_net_from(&fn, info, au_net_trace_headers(au_net_loader_net(f->l)), &rh, remote, proto);
+    fetch_net_from(&fn, info, au_net_trace_headers(au_net_loader_net(f->l)), &rh, remote, proto);
     fi.net = &fn;
     if (r->sink.done)
         r->sink.done(r->sink.ctx, id, err == AU_NET_OK, &fi);
