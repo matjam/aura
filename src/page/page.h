@@ -29,6 +29,7 @@
 #ifndef AURA_PAGE_H
 #define AURA_PAGE_H
 
+#include "../dom/control.h"
 #include "../html/html.h"
 #include "../layout/layout.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct */
@@ -48,6 +49,16 @@ typedef struct AuLoader {
      * docimages.c). Kept so existing loaders still compile. */
     bool (*decode_image)(void *ctx, const void *data, size_t len, int *w, int *h, AuSurface **pixels);
 } AuLoader;
+
+/* A form submission for the embedder to navigate to. */
+typedef struct AuFormSubmission {
+    const char *url;       /* absolute; for GET the query holds the entry list */
+    const char *method;    /* "GET" or "POST" */
+    const void *body;      /* POST: the encoded entry list */
+    size_t body_len;
+    const char *body_type; /* POST: the Content-Type (with the multipart boundary) */
+    bool new_tab;          /* target _blank or another name */
+} AuFormSubmission;
 
 typedef struct AuDocViewCallbacks {
     void *ctx;
@@ -73,6 +84,23 @@ typedef struct AuDocViewCallbacks {
     /* A console line from script (level: 0 log, 1 info, 2 warn, 3 error,
      * 4 debug). */
     void (*console)(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
+    /* Forms (all optional). A form was submitted: navigate as s says
+     * (without it, GET submissions go through open_url and POST ones are
+     * dropped). */
+    void (*submit)(void *ctx, AuDocView *dv, const AuFormSubmission *s);
+    /* Shows a select's pop-up menu of n items at document rectangle at
+     * (the control), with item selected checked; returns the item chosen
+     * or -1 (-2: no menu after all). Without it the view cycles through
+     * the options on a click. */
+    int (*popup)(void *ctx, AuDocView *dv, const AuPopupItem *items, int n, int selected, AuIRect at);
+    /* Asks for files for an input type=file; true with *files (n of them,
+     * au_alloc'd, taken over) when the user chose. */
+    bool (*choose_file)(void *ctx, AuDocView *dv, bool multiple, AuControlFile **files, uint32_t *n);
+    /* Asks the user to confirm (insecure submission); true to go on.
+     * Without it the action goes on. */
+    bool (*confirm)(void *ctx, AuDocView *dv, const char *message);
+    /* A validation message to show (status bar); "" clears it. */
+    void (*message)(void *ctx, AuDocView *dv, const char *text);
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);
@@ -174,6 +202,41 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev);
 /* Scrolls an inner scroll container under document point (x, y). Returns
  * false when the viewport should scroll instead. */
 bool au_docview_scroll_at(AuDocView *dv, int x, int y, int dx, int dy);
+/* ---- Forms and keyboard focus ----
+ * Clicking a focusable element focuses it (a label focuses or toggles its
+ * control); Tab and Shift-Tab move through the focusable elements in tab
+ * order. Keys go to the focused element: a text field edits its value
+ * (src/page/editing.c), Return submits its form, Space toggles a
+ * checkbox, and so on; keys the view does not use return false (the
+ * browser scrolls). See forms.c. */
+bool au_docview_key(AuDocView *dv, const AuEvent *ev);
+/* The focused element, or NULL. */
+AuElement *au_docview_focus(const AuDocView *dv);
+/* Focuses el (NULL: blur), as a click would (focus events run). */
+void au_docview_set_focus(AuDocView *dv, AuElement *el);
+/* A text field has the focus: the Edit menu acts on it. */
+bool au_docview_editing(const AuDocView *dv);
+/* True when document point (x, y) is over a form control that takes
+ * mouse input itself (text fields, buttons, lists), so the page should
+ * not start a text selection there; also while a field drag is going. */
+bool au_docview_control_at(AuDocView *dv, int x, int y);
+/* Blinks the focused field's caret (now_ms: a millisecond clock),
+ * invalidating only the caret. Returns milliseconds until the next
+ * blink (UINT32_MAX when no field has the focus). */
+uint32_t au_docview_blink(AuDocView *dv, uint32_t now_ms);
+/* Edit commands on the focused text field. COPY and CUT append the
+ * selected text to out; PASTE inserts text (UTF-8). False when no field
+ * has the focus or nothing happened. */
+enum { AU_EDITCMD_UNDO, AU_EDITCMD_CUT, AU_EDITCMD_COPY, AU_EDITCMD_PASTE, AU_EDITCMD_CLEAR, AU_EDITCMD_SELECT_ALL };
+bool au_docview_edit(AuDocView *dv, int cmd, const char *text, size_t len, AuBuf *out);
+/* Whether the focused field can do cmd now (menus): a selection for Cut,
+ * Copy and Clear, an undo step for Undo. */
+bool au_docview_can_edit(const AuDocView *dv, int cmd);
+/* Submits form as if submitter (NULL: implicit) had been activated: the
+ * entry list, encoding and the submit callback (and, with script, the
+ * submit event). For tests and tools. */
+void au_docview_submit(AuDocView *dv, AuElement *form, AuElement *submitter);
+
 /* The hovered link's absolute URL, or "". */
 const char *au_docview_hover_link(const AuDocView *dv);
 bool au_docview_hit_test(AuDocView *dv, int x, int y, AuHitResult *r);

@@ -362,6 +362,73 @@ static void cb_open(void *ctx, AuPage *p, const char *url, bool new_tab)
     (void)p;
 }
 
+static void apply_site_zoom(AuTab *t, const char *url);
+
+/* A form posted: a new entry in this tab, or a new tab. A history entry
+ * for a POST result loads its URL with GET when revisited. */
+static void cb_submit_post(void *ctx, AuPage *p, const char *url, const void *body, size_t len, const char *type,
+                           bool new_tab)
+{
+    AuTab *t = ctx;
+    AuBrowserWindow *w = t->win;
+    (void)p;
+    if (new_tab) {
+        t = au_bw_new_tab(w, "about:blank", false, tab_index(w, t) + 1);
+        if (!t)
+            return;
+    } else {
+        int i = tab_index(w, t);
+        if (i != w->active)
+            au_bw_select_tab(w, i);
+    }
+    apply_site_zoom(t, url);
+    AuNavEntry *cur = au_nav_current(&t->nav);
+    if (cur)
+        cur->scroll_y = t->scroll_y;
+    if (new_tab && t->nav.n == 1) {
+        set_str(&t->nav.e[0].url, url); /* replaces the blank entry */
+    } else {
+        au_nav_push(&t->nav, url, "");
+    }
+    t->scroll_x = t->scroll_y = 0;
+    au_page_set_scroll(t->page, 0, 0);
+    record_visit(w->browser, url, NULL);
+    w->browser->session_gen++;
+    au_page_navigate_post(t->page, url, body, len, type);
+    if (is_active(t))
+        changed(w, AU_CHANGED_FOCUS_PAGE);
+}
+
+static int cb_popup(void *ctx, AuPage *p, const AuPopupItem *items, int n, int selected, AuIRect at)
+{
+    AuTab *t = ctx;
+    AuBrowserWindow *w = t->win;
+    const AuBrowserHost *h = &w->browser->host;
+    (void)p;
+    if (!h->popup)
+        return -2;
+    AuIRect pg = w->layout.page;
+    AuIRect wr = {at.x0 - t->scroll_x + pg.x0, at.y0 - t->scroll_y + pg.y0, at.x1 - t->scroll_x + pg.x0,
+                  at.y1 - t->scroll_y + pg.y0};
+    return h->popup(h->ctx, w, items, n, selected, wr);
+}
+
+static bool cb_choose_file(void *ctx, AuPage *p, bool multiple, AuControlFile **files, uint32_t *n)
+{
+    AuTab *t = ctx;
+    const AuBrowserHost *h = &t->win->browser->host;
+    (void)p;
+    return h->choose_file && h->choose_file(h->ctx, multiple, files, n);
+}
+
+static bool cb_confirm(void *ctx, AuPage *p, const char *message)
+{
+    AuTab *t = ctx;
+    const AuBrowserHost *h = &t->win->browser->host;
+    (void)p;
+    return !h->confirm || h->confirm(h->ctx, t->win, message);
+}
+
 /* The page's load turned out to be a file to save. */
 static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff)
 {
@@ -621,7 +688,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
-                          cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download};
+                          cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
+                          cb_submit_post, cb_popup, cb_choose_file, cb_confirm};
     t->page = au_page_new(&env, &cb);
     if (index < 0 || index > w->ntabs)
         index = w->ntabs;
@@ -1291,18 +1359,55 @@ void au_bw_go(AuBrowserWindow *w, int delta)
 void au_bw_back(AuBrowserWindow *w) { au_bw_go(w, -1); }
 void au_bw_forward(AuBrowserWindow *w) { au_bw_go(w, 1); }
 
+/* A reload of a POST result sends the form again: ask first. */
+static bool confirm_repost(AuBrowserWindow *w, AuTab *t)
+{
+    const AuBrowserHost *h = &w->browser->host;
+    return !au_page_is_post(t->page) || !h->confirm ||
+           h->confirm(h->ctx, w, "This page was the answer to a form. Reloading it sends the form again. Send it again?");
+}
+
 void au_bw_reload(AuBrowserWindow *w)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (t)
+    if (t && confirm_repost(w, t))
         au_page_reload(t->page);
 }
 
 void au_bw_reload_bypass(AuBrowserWindow *w)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (t)
+    if (t && confirm_repost(w, t))
         au_page_reload_bypass(t->page);
+}
+
+/* ---- Form fields ---- */
+
+bool au_bw_page_editing(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && !w->field_focused && au_page_editing(t->page);
+}
+
+bool au_bw_text_field_at(AuBrowserWindow *w, int x, int y)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuIRect pg = w->layout.page;
+    if (!t || x < pg.x0 || y < pg.y0 || x >= pg.x1 || y >= pg.y1)
+        return false;
+    return au_page_text_field_at(t->page, x - pg.x0 + t->scroll_x, y - pg.y0 + t->scroll_y);
+}
+
+bool au_bw_page_can_edit(AuBrowserWindow *w, int cmd)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && !w->field_focused && au_page_can_edit(t->page, cmd);
+}
+
+bool au_bw_page_edit(AuBrowserWindow *w, int cmd, const char *text, size_t len, AuBuf *out)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && !w->field_focused && au_page_edit(t->page, cmd, text, len, out);
 }
 
 void au_bw_stop(AuBrowserWindow *w)
@@ -1373,6 +1478,9 @@ void au_bw_set_field_focus(AuBrowserWindow *w, bool focused)
     if (w->field_focused == focused)
         return;
     w->field_focused = focused;
+    AuTab *t = au_bw_active_tab(w);
+    if (focused && t)
+        au_page_blur(t->page); /* the address field took the keyboard */
     AuIRect r = w->layout.address;
     r.x0 -= 3;
     r.y0 -= 3;

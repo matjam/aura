@@ -703,6 +703,74 @@ static void test_entropy_and_stop(void)
     env_free(&e);
 }
 
+/* ---- Form submission over the fetcher ---- */
+
+static int confirms;
+static bool t_yesno(void *ctx, AuBrowserWindow *w, const char *message)
+{
+    (void)ctx, (void)w, (void)message;
+    confirms++;
+    return false;
+}
+
+static void bw_key(Env *e, int key, uint32_t ch)
+{
+    AuEvent ev;
+    memset(&ev, 0, sizeof ev);
+    ev.type = AU_EVENT_KEY_DOWN;
+    ev.key = key;
+    ev.ch = ch;
+    au_bw_key(e->w, &ev);
+}
+
+static void bw_type(Env *e, const char *s)
+{
+    for (; *s; s++)
+        bw_key(e, 0, (unsigned char)*s);
+}
+
+static void test_forms(void)
+{
+    Env e;
+    env_init(&e);
+    e.b->host.confirm = t_yesno;
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    respond_html(s, "<form action=/s><input name=q></form>");
+    respond_html(s, "<title>Results</title>found");
+    au_bw_new_tab(e.w, "http://site.test/", true, -1);
+    settle(&e, 500);
+    bw_key(&e, AU_KEY_TAB, 0);
+    bw_type(&e, "a b&c");
+    bw_key(&e, AU_KEY_RETURN, 0);
+    settle(&e, 500);
+    CHECK(s->nreq == 2 && !strncmp(s->requests[1], "GET /s?q=a+b%26c HTTP/1.1\r\n", 27), "GET submission: %s",
+          s->nreq > 1 ? s->requests[1] : "(none)");
+    CHECK(!strcmp(au_page_url(page(&e)), "http://site.test/s?q=a+b%26c"), "GET url %s", au_page_url(page(&e)));
+    CHECK(strstr(s->requests[1], "Referer: http://site.test/\r\n") != NULL, "GET referrer");
+
+    respond_html(s, "<form method=post action=/p><input name=a value=1><textarea name=t>x\ny</textarea>"
+                    "<input type=submit id=go></form>");
+    respond_html(s, "<title>Posted</title>thanks");
+    au_bw_navigate(e.w, "http://site.test/form");
+    settle(&e, 500);
+    bw_key(&e, AU_KEY_TAB, 0); /* the text field: Return submits */
+    bw_key(&e, AU_KEY_RETURN, 0);
+    settle(&e, 500);
+    const char *rq = s->nreq > 3 ? s->requests[3] : "";
+    CHECK(!strncmp(rq, "POST /p HTTP/1.1\r\n", 18), "POST request: %s", rq);
+    CHECK(strstr(rq, "Content-Type: application/x-www-form-urlencoded\r\n") != NULL, "POST type: %s", rq);
+    CHECK(strstr(rq, "\r\n\r\na=1&t=x%0D%0Ay") != NULL, "POST body: %s", rq);
+    CHECK(page_text_has(&e, "thanks") && au_page_is_post(page(&e)), "POST result shown");
+    CHECK(au_bw_active_tab(e.w)->nav.n == 4, "history entries: %d", au_bw_active_tab(e.w)->nav.n);
+    /* reloading a POST result asks; the answer here is no */
+    int before = s->nreq;
+    au_bw_reload(e.w);
+    settle(&e, 100);
+    CHECK(confirms == 1 && s->nreq == before, "reload of a POST result: %d confirms, %d requests", confirms,
+          s->nreq - before);
+    env_free(&e);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -713,6 +781,7 @@ int main(void)
     test_errors();
     test_https_first_pages();
     test_entropy_and_stop();
+    test_forms();
     au_fontset_free(fonts);
     printf("net_page: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

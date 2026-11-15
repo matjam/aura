@@ -93,6 +93,16 @@ typedef struct AuBrowserHost {
     /* Optional. A download was added (the shell shows the Downloads
      * window). */
     void (*download_added)(void *ctx, AuDownload *d);
+    /* Optional, for forms. A select's pop-up menu of n items over window
+     * rectangle at, item selected checked: returns the item chosen or -1.
+     * Without it a click steps through the options. */
+    int (*popup)(void *ctx, AuBrowserWindow *w, const AuPopupItem *items, int n, int selected, AuIRect at);
+    /* Asks for files for an input type=file: true with *files (n of them,
+     * au_alloc'd with their names, types and bytes, taken over). */
+    bool (*choose_file)(void *ctx, bool multiple, AuControlFile **files, uint32_t *n);
+    /* A yes or no question (resending a form, sending one from a secure
+     * page over plain http). Without it the answer is yes. */
+    bool (*confirm)(void *ctx, AuBrowserWindow *w, const char *message);
 } AuBrowserHost;
 
 struct AuTab {
@@ -307,8 +317,17 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip);
 /* Mouse events in window coordinates. Returns the hit the event was
  * routed to, so the shell can take over parts it handles natively. */
 AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev);
-/* Keys not taken by the shell (scrolling keys for the page). */
+/* Keys not taken by the address field: the page's focused element and
+ * script first, then scrolling keys. */
 bool au_bw_key(AuBrowserWindow *w, const AuEvent *ev);
+/* A text field in the active page has the keyboard (the address field
+ * does not): keys and the Edit menu go to it. cmd is AU_PAGE_EDIT_*;
+ * see au_page_edit. */
+bool au_bw_page_editing(AuBrowserWindow *w);
+bool au_bw_page_can_edit(AuBrowserWindow *w, int cmd);
+/* Window point (x, y) is over a text field in the page (I-beam cursor). */
+bool au_bw_text_field_at(AuBrowserWindow *w, int x, int y);
+bool au_bw_page_edit(AuBrowserWindow *w, int cmd, const char *text, size_t len, AuBuf *out);
 void au_bw_scroll_to(AuBrowserWindow *w, int x, int y);
 void au_bw_scroll_by(AuBrowserWindow *w, int dx, int dy);
 /* The largest scroll offsets for the active tab (0 when it fits). */

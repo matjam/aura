@@ -145,6 +145,18 @@ struct AuPage {
 
     AuPageStats stats;
 
+    /* Forms: a POST submission waiting for au_page_mouse or au_page_key to
+     * return (sub_*), and the body of the current load when it is a POST
+     * (post_*; kept for a reload). */
+    char *sub_url, *sub_type;
+    AuBuf sub_body;
+    bool sub_new_tab;
+    bool post;
+    AuBuf post_body;
+    char *post_type;
+    uint32_t blink_due;
+    bool ctl_press; /* the button went down on a form control: no text selection */
+
     /* Script console: the last AU_PAGE_CONSOLE_LINES lines, oldest first
      * from console_start. */
     char *console[AU_PAGE_CONSOLE_LINES];
@@ -516,6 +528,12 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
     memset(&rq, 0, sizeof rq);
     rq.url = f->url;
     rq.kind = kind;
+    if (main && p->post) {
+        rq.method = "POST";
+        rq.body = p->post_body.data ? p->post_body.data : "";
+        rq.body_len = p->post_body.len;
+        rq.body_type = p->post_type;
+    }
     if (main) {
         rq.document_url = p->referrer;
         rq.user_activated = true;
@@ -622,6 +640,175 @@ static void dv_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
     p->open_new_tab = new_tab;
 }
 
+/* ---- Forms ---- */
+
+typedef char au_edit_cmds_match[((int)AU_PAGE_EDIT_UNDO == (int)AU_EDITCMD_UNDO &&
+                                 (int)AU_PAGE_EDIT_CUT == (int)AU_EDITCMD_CUT &&
+                                 (int)AU_PAGE_EDIT_COPY == (int)AU_EDITCMD_COPY &&
+                                 (int)AU_PAGE_EDIT_PASTE == (int)AU_EDITCMD_PASTE &&
+                                 (int)AU_PAGE_EDIT_CLEAR == (int)AU_EDITCMD_CLEAR &&
+                                 (int)AU_PAGE_EDIT_SELECT_ALL == (int)AU_EDITCMD_SELECT_ALL)
+                                    ? 1
+                                    : -1];
+
+static bool follow_open_url(AuPage *p);
+static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, bool force);
+
+static void clear_post(AuPage *p)
+{
+    p->post = false;
+    au_buf_free(&p->post_body);
+    au_free(p->post_type);
+    p->post_type = NULL;
+}
+
+/* A submission: GET goes the way of a link; POST waits in sub_* until the
+ * input handler returns (follow_open_url). */
+static void dv_submit(void *ctx, AuDocView *dv, const AuFormSubmission *s)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    if (!s->method || strcmp(s->method, "POST") != 0) {
+        set_str(&p->open_url, s->url);
+        p->open_new_tab = s->new_tab;
+        return;
+    }
+    au_free(p->open_url);
+    p->open_url = NULL;
+    set_str(&p->sub_url, s->url);
+    set_str(&p->sub_type, s->body_type ? s->body_type : "application/x-www-form-urlencoded");
+    au_buf_free(&p->sub_body);
+    au_buf_append(&p->sub_body, s->body ? s->body : "", s->body_len);
+    p->sub_new_tab = s->new_tab;
+}
+
+static int dv_popup(void *ctx, AuDocView *dv, const AuPopupItem *items, int n, int selected, AuIRect at)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->cb.popup ? p->cb.popup(p->cb.ctx, p, items, n, selected, at) : -2;
+}
+
+static bool dv_choose_file(void *ctx, AuDocView *dv, bool multiple, AuControlFile **files, uint32_t *n)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->cb.choose_file && p->cb.choose_file(p->cb.ctx, p, multiple, files, n);
+}
+
+static bool dv_confirm(void *ctx, AuDocView *dv, const char *message)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return !p->cb.confirm || p->cb.confirm(p->cb.ctx, p, message);
+}
+
+static void dv_message(void *ctx, AuDocView *dv, const char *text)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    if (p->cb.status_text)
+        p->cb.status_text(p->cb.ctx, p, text);
+}
+
+/* Hands a POST submission to the browser (a history entry or a new tab);
+ * without the callback the page loads it itself. */
+static bool follow_submit(AuPage *p)
+{
+    if (!p->sub_url)
+        return false;
+    char *u = p->sub_url, *ty = p->sub_type;
+    AuBuf body = p->sub_body;
+    p->sub_url = p->sub_type = NULL;
+    au_buf_init(&p->sub_body);
+    if (!p->internal && (au_url_scheme_is(p->url, "http") || au_url_scheme_is(p->url, "https"))) {
+        set_str(&p->link_referrer, p->url);
+        set_str(&p->link_target, u);
+    }
+    if (p->cb.submit_post)
+        p->cb.submit_post(p->cb.ctx, p, u, body.data ? body.data : "", body.len, ty, p->sub_new_tab);
+    else
+        au_page_navigate_post(p, u, body.data ? body.data : "", body.len, ty);
+    au_buf_free(&body);
+    au_free(u);
+    au_free(ty);
+    return true;
+}
+
+void au_page_navigate_post(AuPage *p, const char *url, const void *body, size_t len, const char *type)
+{
+    char *u = au_strndup(url, strlen(url)); /* url may be p->url */
+    clear_post(p);
+    p->post = true;
+    au_buf_append(&p->post_body, body, len);
+    p->post_type = au_strndup(type ? type : "", type ? strlen(type) : 0);
+    p->cache_mode = AU_FETCH_CACHE_BYPASS;
+    start_load(p, u, false, 0, 0, true);
+    au_free(u);
+}
+
+bool au_page_is_post(const AuPage *p)
+{
+    return p->post;
+}
+
+bool au_page_editing(const AuPage *p)
+{
+    return p->kind == K_DOC && p->begun && au_docview_editing(p->dv);
+}
+
+bool au_page_can_edit(const AuPage *p, int cmd)
+{
+    return au_page_editing(p) && au_docview_can_edit(p->dv, cmd);
+}
+
+bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out)
+{
+    if (!au_page_editing(p))
+        return false;
+    bool ok = au_docview_edit(p->dv, cmd, text, len, out);
+    follow_open_url(p);
+    return ok;
+}
+
+bool au_page_text_field_at(AuPage *p, int x, int y)
+{
+    AuHitResult r;
+    if (p->kind != K_DOC || !p->begun || !au_docview_hit_test(p->dv, x, y, &r))
+        return false;
+    for (AuElement *e = r.element; e; e = au_is_element(e->node.parent) ? au_as_element(e->node.parent) : NULL)
+        if (au_ctl_is_text_field(e))
+            return true;
+    return false;
+}
+
+bool au_page_control_rect(AuPage *p, const char *name, AuIRect *r)
+{
+    if (p->kind != K_DOC || !p->begun || !au_docview_document(p->dv))
+        return false;
+    AuDocument *d = au_docview_document(p->dv);
+    au_docview_update(p->dv);
+    AuAtom an = au_atom_lookup("name", 4);
+    for (AuNode *c = au_node_next(&d->node, &d->node); c; c = au_node_next(c, &d->node)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        AuElement *el = au_as_element(c);
+        const char *v = au_element_get_attr(el, an);
+        AuRect b;
+        if (v && !strcmp(v, name) && au_layout_element_rect(au_docview_layout(p->dv), el, &b) && b.w > 0) {
+            *r = (AuIRect){(int)b.x, (int)b.y, (int)(b.x + b.w), (int)(b.y + b.h)};
+            return true;
+        }
+    }
+    return false;
+}
+
+void au_page_blur(AuPage *p)
+{
+    if (p->kind == K_DOC && p->begun)
+        au_docview_set_focus(p->dv, NULL);
+}
+
 /* ---- Pending scroll ---- */
 
 static void request_scroll(AuPage *p, int x, int y)
@@ -664,6 +851,8 @@ static void internal_action(AuPage *p, const char *what);
 /* Hands a navigation from a link or script to the browser. */
 static bool follow_open_url(AuPage *p)
 {
+    if (follow_submit(p))
+        return true;
     if (!p->open_url)
         return false;
     char *u = p->open_url;
@@ -2008,12 +2197,18 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
 void au_page_navigate(AuPage *p, const char *url)
 {
     p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    if (p->post) {
+        clear_post(p);
+        start_load(p, url, false, 0, 0, true); /* a POST result is no base for a fragment */
+        return;
+    }
     start_load(p, url, false, 0, 0, false);
 }
 
 void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll_y)
 {
     p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    clear_post(p);
     start_load(p, url, true, scroll_x, scroll_y, false);
 }
 
@@ -2036,12 +2231,14 @@ void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_
     au_buf_init(p->preset_source);
     au_buf_append(p->preset_source, data, len);
     p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    clear_post(p);
     start_load(p, url, false, 0, 0, true);
 }
 
 void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len)
 {
     p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    clear_post(p);
     start_load(p, "about:blank", false, 0, 0, true);
     set_str(&p->url, url);
     if (p->cb.url_changed)
@@ -2119,6 +2316,11 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     dcb.now_ms = dv_now;
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
+    dcb.submit = dv_submit;
+    dcb.popup = dv_popup;
+    dcb.choose_file = dv_choose_file;
+    dcb.confirm = dv_confirm;
+    dcb.message = dv_message;
     p->dv = au_docview_new(env->fonts, &loader, &dcb);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_clock(p->dv, env->time_ms, env->ctx);
@@ -2140,6 +2342,10 @@ void au_page_free(AuPage *p)
     au_free(p->title);
     au_free(p->fragment);
     au_free(p->open_url);
+    au_free(p->sub_url);
+    au_free(p->sub_type);
+    au_buf_free(&p->sub_body);
+    clear_post(p);
     au_free(p->link_referrer);
     au_free(p->link_target);
     au_free(p->referrer);
@@ -2310,7 +2516,14 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
         return false;
-    bool gesture = sel_mouse(p, ev);
+    if (ev->type == AU_EVENT_MOUSE_DOWN) {
+        p->ctl_press = au_docview_control_at(p->dv, ev->x, ev->y);
+        if (p->ctl_press)
+            au_page_clear_selection(p);
+    }
+    bool gesture = !p->ctl_press && sel_mouse(p, ev);
+    if (ev->type == AU_EVENT_MOUSE_UP)
+        p->ctl_press = false;
     AuEvent e = *ev;
     if (gesture && ev->type == AU_EVENT_MOUSE_UP)
         e.x = e.y = -100000; /* end the press without activating a link */
@@ -2342,11 +2555,17 @@ void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image)
         put_resolved(p, r.element, "src", image);
 }
 
+/* Keys go to the focused element (fields, controls, Tab between them, and
+ * script listeners); what the page does not use (scrolling keys outside a
+ * field) is the browser's. */
 bool au_page_key(AuPage *p, const AuEvent *ev)
 {
-    (void)p;
-    (void)ev;
-    return false; /* scrolling keys are the browser's */
+    if (p->kind != K_DOC || !p->begun)
+        return false;
+    bool used = au_docview_key(p->dv, ev);
+    if (follow_open_url(p))
+        used = true;
+    return used;
 }
 
 bool au_page_scroll(AuPage *p, int x, int y, int dx, int dy)
@@ -2509,8 +2728,12 @@ void au_page_idle(AuPage *p)
         }
         return;
     }
-    if (p->kind == K_DOC && p->begun)
+    if (p->kind == K_DOC && p->begun) {
         au_docview_animate(p->dv, now(p)); /* animated images */
+        uint32_t t = now(p);
+        if (au_docview_editing(p->dv) && (int32_t)(t - p->blink_due) >= 0)
+            p->blink_due = t + au_docview_blink(p->dv, t); /* the caret */
+    }
     if (p->kind == K_DOC && p->begun) {
         uint32_t gen0 = p->gen;
         au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS); /* timers, tasks, frames */

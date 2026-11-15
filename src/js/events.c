@@ -51,6 +51,45 @@ bool au_js_fire_key(AuJs *js, AuElement *target, const char *type, const char *k
     return call_bool(js, "fireKey", 6, a);
 }
 
+void au_js_focus(AuJs *js, AuElement *el)
+{
+    JSValue a[1] = {js_wrap(js, el ? &el->node : NULL)};
+    call_bool(js, "focusFromEmbedder", 1, a);
+}
+
+bool au_js_fire_input(AuJs *js, AuElement *el, const char *type, const char *input_type, const char *data)
+{
+    JSContext *c = js->ctx;
+    JSValue a[4] = {js_wrap(js, &el->node), JS_NewString(c, type), JS_NewString(c, input_type ? input_type : ""),
+                    data ? JS_NewString(c, data) : JS_NULL};
+    return call_bool(js, "fireInput", 4, a);
+}
+
+bool au_js_fire_submit(AuJs *js, AuElement *form, AuElement *submitter)
+{
+    JSValue a[2] = {js_wrap(js, &form->node), js_wrap(js, submitter ? &submitter->node : NULL)};
+    return call_bool(js, "fireSubmit", 2, a);
+}
+
+int au_js_pattern_test(AuJs *js, const char *pattern, const char *value)
+{
+    if (js->closing)
+        return -1;
+    JSContext *c = js->ctx;
+    JSValue a[2] = {JS_NewString(c, pattern), JS_NewString(c, value)};
+    JSValue v = js_call_prelude(js, "patternTest", 2, a);
+    int r = -1;
+    if (JS_IsNumber(v)) {
+        int32_t x;
+        if (!JS_ToInt32(c, &x, v))
+            r = x;
+    }
+    JS_FreeValue(c, v);
+    JS_FreeValue(c, a[0]);
+    JS_FreeValue(c, a[1]);
+    return r;
+}
+
 void au_js_set_ready_state(AuJs *js, const char *state)
 {
     JSValue a[1] = {JS_NewString(js->ctx, state)};

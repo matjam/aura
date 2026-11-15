@@ -16,6 +16,16 @@ table td { border: 1px solid #ccc; padding: 4px; }
 </style>
 </head>
 <body>
+<h2>Try it</h2>
+<form id="try" action="qa-forms.html">
+<div class="row">Text <input id="q" name="q" placeholder="Type here"> Select <select id="pick" name="pick"><option>Apple</option><option>Banana</option><optgroup label="More"><option>Cherry</option><option disabled>Durian</option></optgroup></select></div>
+<div class="row"><label><input id="agree" type="checkbox" name="agree"> Agree</label> <label><input type="radio" name="size" value="s" checked> Small</label> <label><input id="large" type="radio" name="size" value="l"> Large</label> <button id="send">Send</button> <button type="reset">Reset</button></div>
+<div class="row">Notes <textarea id="notes" name="notes" cols="30" rows="2"></textarea></div>
+<div class="row" id="sent">Nothing sent yet.</div>
+</form>
+<script>
+if (location.search) document.getElementById('sent').textContent = 'Sent: ' + decodeURIComponent(location.search.slice(1).replace(/\+/g, ' '));
+</script>
 <h2>One line, default styles</h2>
 <div class="row" id="line1">Name <input id="t1" type="text" value="Alice"> <button id="b1">Go</button> <select id="s1"><option>One</option><option selected>Second option</option></select> <input id="c1" type="checkbox" checked> check <input id="r1" type="radio" name="r" checked> radio <input id="r2" type="radio" name="r"> off <input id="sub1" type="submit"> xyz</div>
 

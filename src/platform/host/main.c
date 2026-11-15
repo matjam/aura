@@ -49,7 +49,10 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net]\n"
+            "                        [--net] [--do ACTION]...\n"
+            "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
+            "                        key:[cmd-][shift-]NAME\n"
+            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
@@ -279,7 +282,183 @@ typedef struct ChromeOpts {
     bool focus, loading, menus, net;
     const char *hover;
     int scroll, mouse_x, mouse_y;
+    const char *actions[64]; /* --do: scripted input, in order */
+    int nactions;
 } ChromeOpts;
+
+/* Runs the idle loop for at least min_ms and then until nothing is busy,
+ * at most limit_ms in all. */
+static void chrome_settle(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, bool net, double min_ms,
+                          double limit_ms)
+{
+    double t0 = now_ms();
+    for (;;) {
+        double t = now_ms() - t0;
+        if (t >= limit_ms || (t >= min_ms && !au_browser_busy(b)))
+            break;
+        if (net) {
+            au_host_net_wait(ses->host, 10);
+        } else {
+            struct timespec ts = {0, 10 * 1000000};
+            nanosleep(&ts, NULL);
+        }
+        au_bw_idle(w);
+    }
+}
+
+static void chrome_shot(AuBrowserWindow *w, int width, int height, const char *path)
+{
+    AuSurface *s = au_surface_new(width, height);
+    AuCanvas *c = au_canvas_new(s);
+    au_bw_paint(w, c, (AuIRect){0, 0, width, height});
+    if (!au_png_write(path, s))
+        fprintf(stderr, "aura-host: cannot write %s\n", path);
+    else
+        printf("%s: screenshot\n", path);
+    au_canvas_free(c);
+    au_surface_free(s);
+}
+
+static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_KEY_DOWN;
+    e.key = key;
+    e.ch = ch;
+    e.mods = mods;
+    au_bw_key(w, &e);
+}
+
+/* One --do action: click:X,Y (dclick, tclick for double and triple),
+ * type:TEXT, key:[cmd-][shift-][opt-][ctrl-]NAME (a key name or one
+ * character), edit:undo|cut|copy|paste:TEXT|clear|selectall, wait:MS
+ * (at least MS, then until loads finish), shot:FILE.png, field (the
+ * address field takes the keyboard). */
+static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, ChromeOpts *o, const char *a)
+{
+    char buf[64];
+    if (!strncmp(a, "clickname:", 10)) {
+        /* click the middle of the element named so (scrolled into view) */
+        AuTab *t = au_bw_active_tab(w);
+        AuIRect r;
+        if (!t || !au_page_control_rect(t->page, a + 10, &r)) {
+            printf("clickname: no element named %s\n", a + 10);
+            return;
+        }
+        int ph = w->layout.page.y1 - w->layout.page.y0;
+        if (r.y0 < t->scroll_y || r.y1 > t->scroll_y + ph)
+            au_bw_scroll_to(w, t->scroll_x, r.y0 - ph / 3);
+        int x = (r.x0 + r.x1) / 2 - t->scroll_x + w->layout.page.x0;
+        int y = (r.y0 + r.y1) / 2 - t->scroll_y + w->layout.page.y0;
+        snprintf(buf, sizeof buf, "click:%d,%d", x, y);
+        a = buf;
+    }
+    if (!strncmp(a, "click:", 6) || !strncmp(a, "dclick:", 7) || !strncmp(a, "tclick:", 7)) {
+        int clicks = a[0] == 'd' ? 2 : a[0] == 't' ? 3 : 1;
+        int x = 0, y = 0;
+        sscanf(strchr(a, ':') + 1, "%d,%d", &x, &y);
+        for (int k = 1; k <= clicks; k++) {
+            AuEvent e;
+            memset(&e, 0, sizeof e);
+            e.x = x;
+            e.y = y;
+            e.clicks = k;
+            e.type = AU_EVENT_MOUSE_MOVE;
+            au_bw_mouse(w, &e);
+            e.type = AU_EVENT_MOUSE_DOWN;
+            au_bw_mouse(w, &e);
+            e.type = AU_EVENT_MOUSE_UP;
+            au_bw_mouse(w, &e);
+        }
+        au_bw_set_field_focus(w, false);
+        chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "type:", 5)) {
+        const char *s = a + 5;
+        size_t n = strlen(s), i = 0;
+        while (i < n) {
+            size_t adv = 1;
+            uint32_t cp = au_utf8_decode(s + i, n - i, &adv);
+            i += adv ? adv : 1;
+            if (cp == '\n')
+                chrome_key(w, AU_KEY_RETURN, 0, 0);
+            else
+                chrome_key(w, 0, cp, 0);
+        }
+        chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "key:", 4)) {
+        const char *s = a + 4;
+        uint32_t mods = 0;
+        for (;;) {
+            if (!strncmp(s, "cmd-", 4))
+                mods |= AU_MOD_COMMAND, s += 4;
+            else if (!strncmp(s, "shift-", 6))
+                mods |= AU_MOD_SHIFT, s += 6;
+            else if (!strncmp(s, "opt-", 4))
+                mods |= AU_MOD_OPTION, s += 4;
+            else if (!strncmp(s, "ctrl-", 5))
+                mods |= AU_MOD_CONTROL, s += 5;
+            else
+                break;
+        }
+        static const struct {
+            const char *name;
+            int key;
+        } keys[] = {{"left", AU_KEY_LEFT},       {"right", AU_KEY_RIGHT},       {"up", AU_KEY_UP},
+                    {"down", AU_KEY_DOWN},       {"pageup", AU_KEY_PAGE_UP},    {"pagedown", AU_KEY_PAGE_DOWN},
+                    {"home", AU_KEY_HOME},       {"end", AU_KEY_END},           {"backspace", AU_KEY_BACKSPACE},
+                    {"delete", AU_KEY_DELETE},   {"return", AU_KEY_RETURN},     {"tab", AU_KEY_TAB},
+                    {"escape", AU_KEY_ESCAPE},   {"space", -1}};
+        int key = 0;
+        uint32_t ch = 0;
+        for (size_t k = 0; k < sizeof keys / sizeof keys[0]; k++)
+            if (!strcmp(s, keys[k].name))
+                key = keys[k].key;
+        if (key == -1) {
+            key = 0;
+            ch = ' ';
+        } else if (!key) {
+            size_t adv = 0;
+            ch = au_utf8_decode(s, strlen(s), &adv);
+        }
+        chrome_key(w, key, ch, mods);
+        chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "edit:", 5)) {
+        const char *c = a + 5;
+        int cmd = !strcmp(c, "undo")        ? AU_PAGE_EDIT_UNDO
+                  : !strcmp(c, "cut")       ? AU_PAGE_EDIT_CUT
+                  : !strcmp(c, "copy")      ? AU_PAGE_EDIT_COPY
+                  : !strncmp(c, "paste", 5) ? AU_PAGE_EDIT_PASTE
+                  : !strcmp(c, "clear")     ? AU_PAGE_EDIT_CLEAR
+                                            : AU_PAGE_EDIT_SELECT_ALL;
+        const char *text = !strncmp(c, "paste:", 6) ? c + 6 : "";
+        AuBuf out;
+        au_buf_init(&out);
+        bool ok = au_bw_page_edit(w, cmd, text, strlen(text), &out);
+        printf("edit %s: %s%s%s\n", c, ok ? "done" : "not done", out.len ? ", text: " : "", au_buf_cstr(&out));
+        au_buf_free(&out);
+    } else if (!strncmp(a, "wait:", 5)) {
+        chrome_settle(b, w, ses, o->net, atof(a + 5), o->net ? 60000 : 10000);
+    } else if (!strncmp(a, "shot:", 5)) {
+        chrome_settle(b, w, ses, o->net, 0, 200);
+        chrome_shot(w, o->w, o->h, a + 5);
+    } else if (!strcmp(a, "field")) {
+        au_bw_set_field_focus(w, true);
+    } else if (!strcmp(a, "console")) {
+        AuTab *t = au_bw_active_tab(w);
+        size_t n = t ? au_page_console_count(t->page) : 0;
+        for (size_t i = 0; i < n; i++) {
+            int level;
+            const char *line = au_page_console_line(t->page, i, &level);
+            printf("console %d: %s\n", level, line ? line : "");
+        }
+    } else {
+        fprintf(stderr, "aura-host: unknown --do action %s\n", a);
+    }
+    AuTab *t = au_bw_active_tab(w);
+    if (t)
+        printf("after %s: %s%s\n", a, au_page_url(t->page), au_bw_page_editing(w) ? " (editing a field)" : "");
+}
 
 static AuHitPart hit_by_name(const char *s)
 {
@@ -297,7 +476,7 @@ static AuHitPart hit_by_name(const char *s)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     AuBrowser *b = au_browser_new(fonts, &host);
     /* --net: http and https through the network stack and page fetcher,
      * as the Mac application does; without it they show the stand-in. */
@@ -373,6 +552,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     }
     if (o->active >= 0 && o->active < w->ntabs)
         au_bw_select_tab(w, o->active);
+    if (o->nactions)
+        au_bw_set_field_focus(w, false); /* keys go to the page */
+    for (int i = 0; i < o->nactions; i++)
+        chrome_action(b, w, &ses, o, o->actions[i]);
     if (o->field)
         au_bw_set_field_text(w, o->field);
     au_bw_set_field_focus(w, o->focus);
@@ -477,6 +660,8 @@ int main(int argc, char **argv)
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);
             }
+            else if (!strcmp(a, "--do") && i + 1 < argc && o.nactions < 64)
+                o.actions[o.nactions++] = argv[++i];
             else
                 return usage();
         }

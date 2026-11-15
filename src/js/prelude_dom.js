@@ -93,7 +93,36 @@ class HTMLCollection {
     [Symbol.iterator]() { return listItems(this).slice()[Symbol.iterator](); }
 }
 tag(HTMLCollection);
-class HTMLFormControlsCollection extends HTMLCollection {}
+/* form.elements: a name shared by several controls gives a RadioNodeList. */
+class RadioNodeList extends NodeList {
+    get value() {
+        for (const e of listItems(this)) if (e.localName === 'input' && (e.getAttribute('type') || '').toLowerCase() === 'radio' && e.checked) return e.value;
+        return '';
+    }
+    set value(v) {
+        v = str(v);
+        for (const e of listItems(this))
+            if (e.localName === 'input' && (e.getAttribute('type') || '').toLowerCase() === 'radio' && e.value === v) { e.checked = true; break; }
+    }
+}
+tag(RadioNodeList);
+defGlobal('RadioNodeList', RadioNodeList);
+function makeRadioNodeList(items) {
+    const l = makeList(RadioNodeList, null, -1, null, items);
+    l[S.list].named = false;
+    return l;
+}
+/* The controls of a form (or the items of a list) a name matches: one
+ * element, a RadioNodeList for several, null for none. */
+function namedControls(items, name) {
+    name = str(name);
+    if (!name) return null;
+    const m = items.filter((e) => e.id === name || (e.namespaceURI === HTML_NS && e.getAttribute('name') === name));
+    return m.length === 0 ? null : m.length === 1 ? m[0] : makeRadioNodeList(m);
+}
+class HTMLFormControlsCollection extends HTMLCollection {
+    namedItem(name) { return namedControls(listItems(this), name); }
+}
 class HTMLOptionsCollection extends HTMLCollection {
     get selectedIndex() { return this[S.list].root.selectedIndex; }
     set selectedIndex(v) { this[S.list].root.selectedIndex = v; }

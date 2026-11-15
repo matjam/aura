@@ -123,6 +123,39 @@ bool au_layout_hit_test(AuLayout *L, float x, float y, float scroll_x, float scr
  * box. */
 bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out);
 
+/* ---- Form fields (controls.c) ----
+ * Geometry of text fields (single-line inputs and textareas) for the
+ * editing code in src/page. Offsets are byte offsets into the control's
+ * value (src/dom/control.h). Each function returns false (or does
+ * nothing) when el has no laid-out text field box. */
+/* The focused element and whether its caret is shown (blinking); NULL
+ * for none. Painting draws the caret of a focused text field. */
+void au_layout_set_focus(AuLayout *L, AuElement *el, bool caret_on);
+/* The value offset at point (lx, ly) relative to el's border box. */
+bool au_layout_field_offset_at(AuLayout *L, AuElement *el, float lx, float ly, uint32_t *off);
+/* The caret rectangle for offset off in document coordinates (unscrolled
+ * by the viewport: as au_layout_element_rect). */
+bool au_layout_field_caret_rect(AuLayout *L, AuElement *el, uint32_t off, AuRect *out);
+/* The offset lines visual lines down (negative: up) from off, keeping
+ * *goal_x (pass a negative value to start from off's x; it is updated).
+ * In a single-line field, up goes to the start and down to the end. */
+uint32_t au_layout_field_vmove(AuLayout *L, AuElement *el, uint32_t off, int lines, float *goal_x);
+/* The start (dir < 0) or end (dir > 0) of the visual line holding off. */
+uint32_t au_layout_field_line_edge(AuLayout *L, AuElement *el, uint32_t off, int dir);
+/* Scrolls the field's text so the caret is visible. Returns true when the
+ * scroll offset changed. */
+bool au_layout_field_reveal(AuLayout *L, AuElement *el);
+/* Scrolls a textarea's text by dy pixels; false when it cannot move. */
+bool au_layout_field_scroll(AuLayout *L, AuElement *el, float dy);
+/* The list box row at point (lx, ly) relative to el's border box (a
+ * select with multiple or size > 1), counting option groups; -1 when
+ * none. Rows scroll with the control's scroll_y. */
+int au_layout_listbox_row_at(AuLayout *L, AuElement *el, float lx, float ly);
+/* The number of rows a list box shows. */
+int au_layout_listbox_visible(AuLayout *L, AuElement *el);
+/* The range slider's value fraction (0..1) at lx, or -1. */
+float au_layout_range_frac_at(AuLayout *L, AuElement *el, float lx);
+
 /* Scrolls the innermost scroll container under viewport point (x, y) by
  * (dx, dy), clamped. Returns false when no inner scroller can move (the
  * caller then scrolls the viewport). */

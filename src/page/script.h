@@ -38,6 +38,25 @@ void au_docscript_loaded(AuDocScript *s);
 /* Mouse events at target (NULL: none). type is "mousedown", "mouseup",
  * "mousemove" or "click". Returns false when a listener cancelled it. */
 bool au_docscript_mouse(AuDocScript *s, const AuEvent *ev, AuElement *target, const char *type, int vx, int vy);
+/* The JavaScript runtime has started (the page has script or an inline
+ * handler); before that, events reach no listener and the bindings run
+ * no activation behaviour. NULL s is false. */
+bool au_docscript_running(const AuDocScript *s);
+/* Forms. A simple event at el; false when cancelled. */
+bool au_docscript_fire(AuDocScript *s, AuElement *el, const char *type, bool bubbles, bool cancelable);
+/* The user moved the focus to el (NULL: blurred): blur and focus events. */
+void au_docscript_focus(AuDocScript *s, AuElement *el);
+/* keydown, keypress or keyup at target (NULL: the body); false when
+ * cancelled. */
+bool au_docscript_key(AuDocScript *s, AuElement *target, const char *type, const char *key, const char *code,
+                      uint32_t mods);
+/* beforeinput (cancelable) or input at el. */
+bool au_docscript_input(AuDocScript *s, AuElement *el, const char *type, const char *input_type, const char *data);
+/* The submit event (SubmitEvent with submitter); false when cancelled. */
+bool au_docscript_submit_event(AuDocScript *s, AuElement *form, AuElement *submitter);
+/* Tests value against an HTML pattern attribute with the script engine's
+ * RegExp: 1 match, 0 no match, -1 no runtime or a bad pattern. */
+int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value);
 /* Hover moved from one element to another: mouseout and mouseover. */
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy);
 /* A link with a javascript: URL was activated. */
@@ -75,5 +94,11 @@ void au_dv_scroll(const AuDocView *dv, int *x, int *y, int *vw, int *vh);
 AuCssResolver *au_dv_resolver(const AuDocView *dv);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
+/* forms.c: script focused el (NULL: blurred); script submitted form
+ * (form.submit, or requestSubmit after its submit event); script changed
+ * a control's value (repaint). */
+void au_forms_script_focus(AuDocView *dv, AuElement *el);
+void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter);
+void au_forms_changed(AuDocView *dv, AuElement *el);
 
 #endif
