@@ -23,6 +23,7 @@
 #include "mac.h"
 
 #include "browser/present.h"
+#include "page/page.h" /* AuDocViewStats, for Page Timings */
 #include "browser/scene.h"
 #include "clock_mac.h"
 
@@ -1598,26 +1599,39 @@ void browserwin_page_timings(BrowserWin *b)
      * key is. The field is left as it was (script listeners saw the
      * keys). */
     TimedScroll typed;
+    AuDocViewStats ks0, ks1;
     memset(&typed, 0, sizeof typed);
+    memset(&ks0, 0, sizeof ks0);
+    memset(&ks1, 0, sizeof ks1);
     if (!b->field_focus && au_bw_page_editing(b->bw)) {
-        flush(b);
-        timing_reset(b);
-        uint32_t u0 = au_mac_clock_us();
-        for (int i = 0; i < 16; i++) {
+        /* Two characters before and two Backspaces after are not timed:
+         * a field that becomes empty or stops being empty may restyle
+         * (:placeholder-shown), which the steady state does not. */
+        for (int i = -2; i < 18; i++) {
             AuEvent e;
             memset(&e, 0, sizeof e);
             e.type = AU_EVENT_KEY_DOWN;
             if (i < 8)
-                e.ch = 'a' + (uint32_t)i;
+                e.ch = 'a' + (uint32_t)(i + 2);
             else
                 e.key = AU_KEY_BACKSPACE;
+            if (i == 0) {
+                flush(b);
+                timing_reset(b);
+                au_page_update_stats(t->page, &ks0);
+                typed.total_us = au_mac_clock_us();
+            }
+            if (i == 16) {
+                typed.total_us = au_mac_clock_us() - typed.total_us;
+                timing_take(b, &typed);
+                au_page_update_stats(t->page, &ks1);
+            }
             au_bw_key(b->bw, &e);
             au_bw_idle(b->bw);
             flush(b);
-            typed.steps++;
+            if (i >= 0 && i < 16)
+                typed.steps++;
         }
-        typed.total_us = au_mac_clock_us() - u0;
-        timing_take(b, &typed);
     }
     /* Scrolling: ten steps of 32 pixels and five page downs (up near the
      * end), each painted and shown as a scroll by the user is, then a
@@ -1664,8 +1678,13 @@ void browserwin_page_timings(BrowserWin *b)
         /* a long title would push the typing figures out of the 255
          * characters an alert line holds */
         timed_text(a[0], sizeof a[0], &typed);
-        snprintf(l0, sizeof l0, "%.60s: first paint %lu ms, loaded in %lu ms. Typing, ms per key (areas): %s.",
-                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms, a[0]);
+        snprintf(l0, sizeof l0,
+                 "%.40s: first paint %lu ms, loaded in %lu ms. Typing, ms per key (areas): %s; in 16 keys %lu "
+                 "restyles (%lu elements), %lu layouts.",
+                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms, a[0],
+                 (unsigned long)(ks1.style_passes - ks0.style_passes),
+                 (unsigned long)(ks1.styled_elements - ks0.styled_elements),
+                 (unsigned long)(ks1.layouts - ks0.layouts));
     } else {
         snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).",
                  au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
