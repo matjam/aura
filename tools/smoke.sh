@@ -82,7 +82,7 @@ say "starting a stock guest in $AURA_RUN"
 BASE=stock "$here/guest-run.sh" start >/dev/null || { say "FAIL: the guest did not start"; exit 1; }
 started=1
 "$qmp" wait-app Finder 240 || fail "Mac OS did not reach the Finder in 240 s"
-sleep 5
+sleep 15 # the Finder is in front before it takes keys
 
 say "pushing $app"
 "$here/guest-push.sh" -n AuraTest "$app"/* "$repo/tests/page/samples/hn.html" "$here/smoke/recursion.html" >/dev/null ||

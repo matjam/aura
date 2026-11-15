@@ -344,9 +344,22 @@ class QMP:
         self.cmd("send-key", keys=[{"type": "qcode", "data": q} for q in qcodes])
         time.sleep(0.05)
 
-    def type_text(self, text):
+    def type_text(self, text, gap=0.0):
+        """Type text; gap is a pause after each character (a key is held
+        for 100 ms, so without one the presses overlap)."""
         for c in text:
             self.keys(char_codes(c))
+            if gap:
+                time.sleep(gap)
+
+    def release_modifiers(self):
+        """Send a key-up for every modifier. A modifier the guest still
+        takes as held (a lost key-up on a busy host) turns typed letters
+        into commands."""
+        for q in ("meta_l", "shift", "alt", "ctrl"):
+            self.cmd("input-send-event", events=[
+                {"type": "key", "data": {"down": False,
+                                         "key": {"type": "qcode", "data": q}}}])
 
     def screen_size(self):
         path = os.path.join(RUN, ".size.png")
@@ -431,12 +444,22 @@ class QMP:
         """
         info = name + " Info"
         got = None
-        for _ in range(6):
+        for attempt in range(6):
+            self.release_modifiers()
+            if attempt and (got is None or not got.endswith(" Info")):
+                # No Info window at all: the keys did not reach the
+                # Finder. Bring it forward and click the desktop.
+                self.bring_finder_forward()
+                _, height = self.screen_size()
+                self.click(20, height - 40)
+                time.sleep(0.5)
             if desktop:
                 # Makes the desktop active (and selects the startup disk).
                 self.keys(combo("cmd-shift-up"))
-                time.sleep(0.3)
-            self.type_text(name)
+                time.sleep(0.5)
+            # One key at a time: on a busy host overlapping presses were
+            # lost and the name selected nothing.
+            self.type_text(name, gap=0.15)
             time.sleep(0.5)
             self.keys(combo("cmd-i"))
             got = self.wait_finder_title(lambda t: t.endswith(" Info"), 8)

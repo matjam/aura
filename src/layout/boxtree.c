@@ -1379,7 +1379,8 @@ static void setup_select(Builder *B, LBlock *k, LReplaced *rep, AuBuf *t)
             float ow = l_measure(B->L, f, k->b.style, w.data + at, w.len - at);
             if (ow > best) {
                 best = ow;
-                memmove(w.data, w.data + at, w.len - at);
+                if (w.len > at) /* an empty label leaves w.data NULL */
+                    memmove(w.data, w.data + at, w.len - at);
                 w.len -= at;
             } else {
                 w.len = at;
