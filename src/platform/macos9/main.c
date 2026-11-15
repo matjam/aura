@@ -306,6 +306,17 @@ void mac_adjust_menus(void)
         DisableItem(bm, BM_ADD);
 }
 
+/* The simulated downloads write no files, so a name is taken when another
+ * item in the list has it (a real download checks the folder). */
+static bool download_name_taken(void *ctx, const char *name)
+{
+    AuDownloads *dl = ctx;
+    for (int i = 0; i < dl->n; i++)
+        if (strcmp(dl->items[i]->filename, name) == 0)
+            return true;
+    return false;
+}
+
 static void start_sim_downloads(void)
 {
     static const char *const urls[] = {
@@ -315,9 +326,10 @@ static void start_sim_downloads(void)
         "http://example.com/fail/broken_archive.hqx",
     };
     for (size_t i = 0; i < sizeof urls / sizeof urls[0]; i++) {
-        char name[128];
+        char name[128], unique[32];
         au_download_name_from_url(urls[i], name, sizeof name);
-        au_downloads_add(&g_browser->downloads, urls[i], name, "application/octet-stream", -1, mac_now());
+        au_hfs_sanitize(name, download_name_taken, &g_browser->downloads, unique, sizeof unique);
+        au_downloads_add(&g_browser->downloads, urls[i], unique, "application/octet-stream", -1, mac_now());
     }
     listwin_show(WIN_DOWNLOADS);
 }
@@ -606,7 +618,9 @@ static void key_down(EventRecord *ev)
             au_bw_select_tab(w, i);
             return;
         }
-        if ((ch == 'w' || ch == 'W') && (ev->modifiers & shiftKey)) {
+        /* Command-Shift-W closes the window; so does Command-W in a window
+         * without tabs (Close Tab is greyed there). */
+        if ((ch == 'w' || ch == 'W') && ((ev->modifiers & shiftKey) || !(b && m == (MacWin *)b))) {
             close_window(FrontWindow());
             return;
         }
@@ -686,6 +700,10 @@ static void idle_all(void)
 
 int main(void)
 {
+    /* The default stack is small, and a stack that overflows runs into
+     * the top of the heap without any error. Give it 256 KB before the
+     * heap takes the rest of the partition. */
+    SetApplLimit(GetApplLimit() - 256 * 1024);
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();
@@ -762,5 +780,16 @@ int main(void)
     if (g_browser->prefs.clear_history_on_quit)
         au_history_clear(&g_browser->history);
     storage_save_changed(true);
+    /* Dispose of the windows (their controls, GWorlds and TextEdit
+     * records) and leave the Appearance Manager tidily. */
+    WindowPtr w = FrontWindow();
+    while (w) {
+        WindowPtr next = mac_next_window(w);
+        MacWin *m = mac_win_of(w);
+        if (m && m->close)
+            m->close(m);
+        w = next;
+    }
+    UnregisterAppearanceClient();
     return 0;
 }

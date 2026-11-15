@@ -108,6 +108,7 @@ static void make_gworld(BrowserWin *b)
     Ptr base = GetPixBaseAddr(pm);
     int rowbytes = (**pm).rowBytes & 0x3FFF;
     b->surf = au_surface_wrap(base, w, h, rowbytes);
+    au_surface_clear(b->surf, AU_RGB(255, 255, 255)); /* not left as random memory */
 }
 
 /* ---- Showing ---- */

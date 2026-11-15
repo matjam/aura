@@ -90,6 +90,9 @@ static void make_gworld(ListWin *lw)
     if (!LockPixels(pm))
         mac_out_of_memory((size_t)r.right * (size_t)r.bottom * 4);
     lw->surf = au_surface_wrap(GetPixBaseAddr(pm), r.right, r.bottom, (**pm).rowBytes & 0x3FFF);
+    /* A new GWorld holds whatever was in memory; parts the list does not
+     * paint (under the scroll bar) must not show that. */
+    au_surface_clear(lw->surf, AU_RGB(255, 255, 255));
 }
 
 /* Paints the list (and the button bar when bar is set) into the GWorld
@@ -637,8 +640,8 @@ void listwin_show(WinKind kind)
     int x = screen.right - w - 30, y = 70 + (kind - WIN_BOOKMARKS) * 24;
     if (x < 10)
         x = 10;
-    if (y + h > screen.bottom - 10)
-        h = screen.bottom - 10 - y;
+    if (y + h > screen.bottom - 26) /* clear of the Control Strip */
+        h = screen.bottom - 26 - y;
     SetRect(&wr, (short)x, (short)y, (short)(x + w), (short)(y + h));
     const char *title = kind == WIN_BOOKMARKS ? "Bookmarks" : kind == WIN_HISTORY ? "History" : "Downloads";
     Str255 pt;

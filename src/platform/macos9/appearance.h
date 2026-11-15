@@ -54,6 +54,7 @@ enum { kAuControlUseFontMask = 0x0001, kAuControlUseSizeMask = 0x0004 };
 enum { kAuControlFontSmallSystemFont = -2 };
 
 pascal OSErr RegisterAppearanceClient(void);
+pascal OSErr UnregisterAppearanceClient(void);
 pascal OSErr CreateRootControl(WindowPtr inWindow, ControlHandle *outControl);
 pascal OSErr EmbedControl(ControlHandle inControl, ControlHandle inContainer);
 pascal OSErr SetControlData(ControlHandle inControl, ControlPartCodeA inPart, ResType inTagName, Size inSize,

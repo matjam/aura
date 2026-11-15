@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { kW = 560, kH = 452 };
+enum { kW = 560, kH = 330 }; /* fits a 640 by 480 screen */
 enum { NPANES = 6 };
 enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
 
@@ -287,9 +287,9 @@ static void build(PrefsWin *p)
     edit(p, 4, F_HTTPS_HOST, X, y, 240);
     label(p, 4, (short)(X + 248), y, 40, "Port:");
     edit(p, 4, F_HTTPS_PORT, (short)(X + 290), y, 64);
-    y += 22;
+    y += 25;
     small_label(p, 4, X, y, R - X, 16, "Leave the host empty to connect directly.");
-    y += 26;
+    y += 23;
     label(p, 4, L, y, 130, "User agent:");
     edit(p, 4, F_UA, X, y, R - X);
     y += 38;
