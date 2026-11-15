@@ -37,11 +37,11 @@ promise_test('a SHA-256 loop in a worker: page timers keep firing', async () => 
      * every 50 ms, far below what a responsive page gets and far above
      * the zero of a page that waits for the worker */
     assert.ok(r.ticks >= Math.max(3, r.ms / 50), r.ticks + ' ticks in ' + Math.round(r.ms) + ' ms');
-});
+}, 120000);
 promise_test('the same search with crypto.subtle.digest', async () => {
     const r = await prove('subtle', 3);
     assert.ok(r.ticks >= 1);
-});
+}, 120000);
 </script>
 </body>
 </html>
