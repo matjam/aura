@@ -400,7 +400,8 @@ static void net_poll(void *ctx)
     } else if (n->step == 1) {
         s->data(s->ctx, n->id, " page</title><p>hello", 21);
     } else {
-        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK};
+        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK,
+                            NULL};
         n->sink = NULL;
         s->done(s->ctx, n->id, true, &info);
     }
@@ -427,7 +428,7 @@ static void test_network(void)
     /* A registered fetcher. */
     FakeNet net;
     memset(&net, 0, sizeof net);
-    AuPageFetcher f = {&net, net_start, net_cancel, net_poll, NULL, NULL};
+    AuPageFetcher f = {&net, net_start, net_cancel, net_poll, NULL, NULL, NULL};
     au_browser_set_fetcher(b, "http", &f);
     au_bw_navigate(w, "http://example.net/start");
     CHECK(t->loading && net.id == 1 && net.polls == 0);
