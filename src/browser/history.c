@@ -235,22 +235,6 @@ const AuHistoryEntry *au_history_complete(const AuHistory *h, const char *typed)
     return best;
 }
 
-/* Without printf's %lld, which newlib builds may leave out. */
-void au_put_i64(AuBuf *b, int64_t v)
-{
-    char tmp[24];
-    int n = 0;
-    uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
-    do {
-        tmp[n++] = (char)('0' + u % 10);
-        u /= 10;
-    } while (u);
-    if (v < 0)
-        au_buf_putc(b, '-');
-    while (n)
-        au_buf_putc(b, tmp[--n]);
-}
-
 void au_history_serialize(const AuHistory *h, AuBuf *out)
 {
     au_buf_puts(out, "# Aura history 1\n");

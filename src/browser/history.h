@@ -35,8 +35,6 @@ AuTime au_time_of_date(int year, int month, int mday);
  * name within the last week, else "Monday, 3 November 2026". */
 void au_day_label(int64_t day, int64_t today, char *out, size_t cap);
 
-/* Appends v in decimal (the files use it for times). */
-void au_put_i64(AuBuf *b, int64_t v);
 
 /* ---- History ---- */
 

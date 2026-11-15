@@ -133,6 +133,21 @@ void au_buf_printf(AuBuf *b, const char *fmt, ...)
     b->len += (size_t)n;
 }
 
+void au_put_i64(AuBuf *b, int64_t v)
+{
+    char tmp[24];
+    int n = 0;
+    uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    do {
+        tmp[n++] = (char)('0' + u % 10);
+        u /= 10;
+    } while (u);
+    if (v < 0)
+        au_buf_putc(b, '-');
+    while (n)
+        au_buf_putc(b, tmp[--n]);
+}
+
 char *au_buf_cstr(AuBuf *b)
 {
     au_buf_reserve(b, 0);

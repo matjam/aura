@@ -1,6 +1,5 @@
 /* HSTS store, header parsing and preload list. */
 #include "hsts.h"
-#include "../browser/history.h" /* au_put_i64 */
 
 #include <stdio.h>
 #include <stdlib.h>

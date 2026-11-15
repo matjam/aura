@@ -2,7 +2,6 @@
  * authentication, proxies, cookies and HSTS on the wire, timeouts, and
  * the event loop pump. See net.h. */
 #include "auth.h"
-#include "../browser/history.h" /* au_put_i64 */
 #include "../browser/credits.h"
 #include "cache.h"
 #include "cookies.h"

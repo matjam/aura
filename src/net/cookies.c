@@ -1,6 +1,5 @@
 /* The cookie store. See cookies.h. */
 #include "cookies.h"
-#include "../browser/history.h" /* au_put_i64 */
 
 #include "policy.h"
 #include "psl.h"
