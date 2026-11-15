@@ -352,7 +352,7 @@ static void test_netlog_tls_and_blocked(void)
     s->tls = true;
     s->chain = &tls_fixtures[TLS_FIX_VALID].cert;
     s->chain_len = 1;
-    s->eckey = &tls_fixtures[TLS_FIX_VALID].key;
+    s->key = &tls_fixtures[TLS_FIX_VALID].key;
     respond(s, "text/html", "",
             "<!DOCTYPE html><title>Secure</title><link rel=stylesheet href=\"http://tls.test/plain.css\"><p>secure");
     au_bw_new_tab(e.w, "https://tls.test/", true, -1);
@@ -362,7 +362,7 @@ static void test_netlog_tls_and_blocked(void)
     CHECK(doc && doc->status == 200, "https page loaded (%d, state %d, error %d)", doc ? doc->status : -1,
           doc ? doc->state : -1, doc ? doc->error : -1);
     if (doc) {
-        CHECK(!strcmp(doc->protocol, "TLS 1.2") && doc->cipher[0], "TLS version and cipher: %s, %s", doc->protocol,
+        CHECK(!strcmp(doc->protocol, "TLS 1.3") && doc->cipher[0], "TLS version and cipher: %s, %s", doc->protocol,
               doc->cipher);
         CHECK(doc->at[AU_FETCH_PHASE_SECURING] >= 0 && strstr(doc->remote, ":443"), "TLS phase stamped, remote %s",
               doc->remote);

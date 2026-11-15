@@ -969,7 +969,7 @@ static void test_save_source(void)
             CHECK(strstr(src, au_credits[i].file) != NULL);
     }
     CHECK(strstr(src, "SIL Open Font License 1.1") && strstr(src, "Bitstream Vera"));
-    CHECK(strstr(src, "BearSSL 0.6") && strstr(src, "Public Suffix List") && strstr(src, "Brotli Authors") &&
+    CHECK(strstr(src, "Mbed TLS 4.1.1") && strstr(src, "Apache License") && strstr(src, "Public Suffix List") && strstr(src, "Brotli Authors") &&
           strstr(src, "Twemoji") && strstr(src, "https://mozilla.org/MPL/2.0/"));
     au_free(src);
     au_bw_navigate(w, "about:licenses");

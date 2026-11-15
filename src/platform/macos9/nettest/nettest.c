@@ -1,16 +1,20 @@
 /* NetTest: Aura's network stack on Mac OS 9, in a console window.
  *
  * It starts the entropy pool and Open Transport (src/platform/macos9),
- * times the crypto primitives TLS uses, resolves and connects to one host
+ * waits for the entropy pool, times the TLS library's primitives, resolves
+ * and connects to one host
  * through AuNetOps directly, then fetches a list of URLs with the engine
- * (src/net) and prints, for each, the status, TLS version and cipher,
- * time to the response headers and to the end, and the body size.
+ * (src/net) and prints, for each, the status, TLS version and cipher, the
+ * time the TLS handshake took, the time to the response headers and to
+ * the end, and the body size; then the memory the TLS library holds and
+ * the most it held.
  *
  * Files beside the application:
  *   aura-roots.bin   the root store (assets/net/aura-roots.bin), or the
  *   or aura-roots    same file without the extension; without it https
  *                    requests fail with a certificate error
- *   NetTest URLs     optional, one URL per line, replaces the built-in list
+ *   NetTest URLs     optional, one URL per line, replaces the built-in list;
+ *                    "12 " before a URL fetches it with TLS 1.2 only
  * The output is also written to "NetTest Log" in the Aura folder of the
  * Preferences folder. When the list is done, a key or click quits.
  *
@@ -23,10 +27,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "bearssl.h"
+#include "psa/crypto.h"
+
 #include "core/core.h"
 #include "net/net.h"
 #include "net/roots.h"
+#include "net/tls.h"
+#include "net/tls_platform.h"
 
 #include "../clock_mac.h"
 #include "../entropy.h"
@@ -186,64 +193,179 @@ static void write_log(Run *r)
     FlushVol(NULL, vref);
 }
 
-/* ---- Crypto timings ---- */
+/* ---- Crypto timings ----
+ *
+ * The TLS library's primitives through its PSA interface, as a handshake
+ * and the record layer use them: hashing, the two AEAD ciphers, a key
+ * pair and a shared secret on each key exchange group, and signature
+ * verification. Times are in tenths of a millisecond. The library must
+ * have been started (au_tls_entropy_feed). */
+
+static void tenths(Run *r, const char *name, uint32_t t, int n)
+{
+    say(r, "%-15s%5lu.%lu ms\n", name, (unsigned long)(t / (unsigned)n), (unsigned long)(t * 10 / (unsigned)n % 10));
+}
 
 static void bench(Run *r)
 {
-    static unsigned char buf[16384];
+    static uint8_t buf[16384 + 16], out[16384 + 32];
+    uint8_t key[32], nonce[12], tag[64];
+    size_t olen;
+    uint32_t t0, t;
+    int n;
     memset(buf, 0x5A, sizeof buf);
-    unsigned char key[32], iv[12], tag[16];
     memset(key, 1, sizeof key);
-    memset(iv, 2, sizeof iv);
+    memset(nonce, 2, sizeof nonce);
 
-    uint32_t t0 = au_mac_clock_ms(), t;
-    int n = 0;
+    t0 = au_mac_clock_ms();
+    n = 0;
     do {
-        br_sha256_context c;
-        br_sha256_init(&c);
-        br_sha256_update(&c, buf, sizeof buf);
-        br_sha256_out(&c, tag);
+        psa_hash_compute(PSA_ALG_SHA_256, buf, 16384, tag, sizeof tag, &olen);
         n++;
     } while ((t = au_mac_clock_ms() - t0) < 500);
     say(r, "sha256         %5lu KB/s\n", (unsigned long)(n * 16000UL / (t ? t : 1)));
 
-    br_aes_ct_ctr_keys aes;
-    br_aes_ct_ctr_init(&aes, key, 16);
-    unsigned char h[16] = {3}, y[16] = {0};
-    t0 = au_mac_clock_ms();
-    n = 0;
-    do {
-        br_aes_ct_ctr_run(&aes, iv, 1, buf, sizeof buf);
-        br_ghash_ctmul32(y, h, buf, sizeof buf);
-        n++;
-    } while ((t = au_mac_clock_ms() - t0) < 500);
-    say(r, "aes128-gcm     %5lu KB/s\n", (unsigned long)(n * 16000UL / (t ? t : 1)));
+    psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t id = 0;
+    psa_set_key_usage_flags(&at, PSA_KEY_USAGE_ENCRYPT);
+    psa_set_key_algorithm(&at, PSA_ALG_GCM);
+    psa_set_key_type(&at, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&at, 128);
+    if (psa_import_key(&at, key, 16, &id) == PSA_SUCCESS) {
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            psa_aead_encrypt(id, PSA_ALG_GCM, nonce, 12, NULL, 0, buf, 16384, out, sizeof out, &olen);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 500);
+        say(r, "aes128-gcm     %5lu KB/s\n", (unsigned long)(n * 16000UL / (t ? t : 1)));
+        psa_destroy_key(id);
+    }
+    at = psa_key_attributes_init();
+    psa_set_key_usage_flags(&at, PSA_KEY_USAGE_ENCRYPT);
+    psa_set_key_algorithm(&at, PSA_ALG_CHACHA20_POLY1305);
+    psa_set_key_type(&at, PSA_KEY_TYPE_CHACHA20);
+    psa_set_key_bits(&at, 256);
+    if (psa_import_key(&at, key, 32, &id) == PSA_SUCCESS) {
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            psa_aead_encrypt(id, PSA_ALG_CHACHA20_POLY1305, nonce, 12, NULL, 0, buf, 16384, out, sizeof out, &olen);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 500);
+        say(r, "chacha20-poly  %5lu KB/s\n", (unsigned long)(n * 16000UL / (t ? t : 1)));
+        psa_destroy_key(id);
+    }
 
-    t0 = au_mac_clock_ms();
-    n = 0;
-    do {
-        br_poly1305_ctmul_run(key, iv, buf, sizeof buf, NULL, 0, tag, br_chacha20_ct_run, 1);
-        n++;
-    } while ((t = au_mac_clock_ms() - t0) < 500);
-    say(r, "chacha20-poly  %5lu KB/s\n", (unsigned long)(n * 16000UL / (t ? t : 1)));
+    /* Key exchange: make a key pair, then the shared secret with a peer
+     * key (as a client does once per handshake). */
+    static const struct {
+        const char *gen, *dh;
+        psa_ecc_family_t fam;
+        size_t bits;
+    } kx[] = {{"x25519 keygen", "x25519 ecdh", PSA_ECC_FAMILY_MONTGOMERY, 255},
+              {"p256 keygen", "p256 ecdh", PSA_ECC_FAMILY_SECP_R1, 256}};
+    uint8_t peer[80], pub[80];
+    size_t peer_len = 0, pub_len = 0;
+    for (int k = 0; k < 2; k++) {
+        psa_key_id_t a = 0, b = 0;
+        at = psa_key_attributes_init();
+        psa_set_key_usage_flags(&at, PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
+        psa_set_key_algorithm(&at, PSA_ALG_ECDH);
+        psa_set_key_type(&at, PSA_KEY_TYPE_ECC_KEY_PAIR(kx[k].fam));
+        psa_set_key_bits(&at, kx[k].bits);
+        if (psa_generate_key(&at, &b) != PSA_SUCCESS || psa_export_public_key(b, peer, sizeof peer, &peer_len) != PSA_SUCCESS) {
+            say(r, "%s: key generation failed\n", kx[k].gen);
+            continue;
+        }
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            if (a)
+                psa_destroy_key(a);
+            psa_generate_key(&at, &a);
+            psa_export_public_key(a, pub, sizeof pub, &pub_len);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 1000);
+        tenths(r, kx[k].gen, t, n);
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            psa_raw_key_agreement(PSA_ALG_ECDH, a, peer, peer_len, out, 64, &olen);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 1000);
+        tenths(r, kx[k].dh, t, n);
+        if (k == 1) {
+            /* ECDSA verification with the P-256 public key; the signature
+             * is not valid, the work is the same. */
+            psa_key_id_t v = 0;
+            at = psa_key_attributes_init();
+            psa_set_key_usage_flags(&at, PSA_KEY_USAGE_VERIFY_HASH);
+            psa_set_key_algorithm(&at, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+            psa_set_key_type(&at, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+            if (psa_import_key(&at, pub, pub_len, &v) == PSA_SUCCESS) {
+                memset(out, 0x21, 64);
+                t0 = au_mac_clock_ms();
+                n = 0;
+                do {
+                    psa_verify_hash(v, PSA_ALG_ECDSA(PSA_ALG_SHA_256), key, 32, out, 64);
+                    n++;
+                } while ((t = au_mac_clock_ms() - t0) < 1000);
+                tenths(r, "ecdsa p256 vfy", t, n);
+                psa_destroy_key(v);
+            }
+        }
+        psa_destroy_key(a);
+        psa_destroy_key(b);
+    }
 
-    unsigned char point[133], scalar[32];
-    memset(scalar, 0x37, sizeof scalar);
-    const br_ec_impl *ec = &br_ec_all_m31;
-    t0 = au_mac_clock_ms();
-    n = 0;
-    do {
-        ec->mulgen(point, scalar, sizeof scalar, BR_EC_secp256r1);
-        n++;
-    } while ((t = au_mac_clock_ms() - t0) < 1000);
-    say(r, "p256 mulgen    %5lu ms\n", (unsigned long)(t / (unsigned)n));
-    t0 = au_mac_clock_ms();
-    n = 0;
-    do {
-        ec->mulgen(point, scalar, sizeof scalar, BR_EC_curve25519);
-        n++;
-    } while ((t = au_mac_clock_ms() - t0) < 1000);
-    say(r, "x25519         %5lu ms\n", (unsigned long)(t / (unsigned)n));
+    /* RSA verification: the public-key operation dominates. The modulus
+     * is not a product of two primes; the work is the same. */
+    for (int bits = 2048; bits <= 4096; bits *= 2) {
+        static uint8_t der[540], sig[512];
+        size_t len = (size_t)bits / 8, d = 0;
+        /* RSAPublicKey ::= SEQUENCE { INTEGER n, INTEGER 65537 } */
+        size_t body = 4 + 1 + len + 5;
+        der[d++] = 0x30;
+        der[d++] = 0x82;
+        der[d++] = (uint8_t)(body >> 8);
+        der[d++] = (uint8_t)body;
+        der[d++] = 0x02;
+        der[d++] = 0x82;
+        der[d++] = (uint8_t)((len + 1) >> 8);
+        der[d++] = (uint8_t)(len + 1);
+        der[d++] = 0;
+        for (size_t i = 0; i < len; i++)
+            der[d++] = (uint8_t)(0xC1 + i * 7);
+        der[d - len] |= 0x80;
+        der[d - 1] |= 1;
+        der[d++] = 0x02;
+        der[d++] = 0x03;
+        der[d++] = 1;
+        der[d++] = 0;
+        der[d++] = 1;
+        psa_key_id_t v = 0;
+        at = psa_key_attributes_init();
+        psa_set_key_usage_flags(&at, PSA_KEY_USAGE_VERIFY_HASH);
+        psa_set_key_algorithm(&at, PSA_ALG_RSA_PSS(PSA_ALG_SHA_256));
+        psa_set_key_type(&at, PSA_KEY_TYPE_RSA_PUBLIC_KEY);
+        psa_status_t st = psa_import_key(&at, der, d, &v);
+        if (st != PSA_SUCCESS) {
+            say(r, "rsa%d: import failed (%ld)\n", bits, (long)st);
+            continue;
+        }
+        memset(sig, 0x42, len);
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            psa_verify_hash(v, PSA_ALG_RSA_PSS(PSA_ALG_SHA_256), key, 32, sig, len);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 1000);
+        char name[24];
+        snprintf(name, sizeof name, "rsa%d pss vfy", bits);
+        tenths(r, name, t, n);
+        psa_destroy_key(v);
+    }
 }
 
 /* ---- DNS and TCP through AuNetOps ---- */
@@ -290,6 +412,7 @@ typedef struct Fetch {
     unsigned long bytes;
     uint32_t t_start, t_response, t_end;
     char tls[64];
+    long handshake_ms; /* the TLS handshake (-1: none, a reused connection) */
 } Fetch;
 
 static void on_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
@@ -299,7 +422,7 @@ static void on_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp
     f->status = resp->status;
     f->t_response = au_mac_clock_ms();
     if (resp->security.tls)
-        snprintf(f->tls, sizeof f->tls, "TLS %s %s%s", resp->security.version == 0x0303 ? "1.2" : "?",
+        snprintf(f->tls, sizeof f->tls, "%s %s%s", au_tls_version_name(resp->security.version),
                  resp->security.cipher ? resp->security.cipher : "?", resp->security.resumed ? " resumed" : "");
 }
 
@@ -313,15 +436,31 @@ static void on_data(void *ctx, AuHttpTransfer *t, const void *data, size_t len)
 
 static void on_done(void *ctx, AuHttpTransfer *t, AuNetError err)
 {
-    (void)t;
     Fetch *f = ctx;
     f->done = true;
     f->err = err;
     f->t_end = au_mac_clock_ms();
+    AuHttpTrace tr;
+    au_http_trace(t, &tr);
+    /* From the start of the handshake to the next phase that was seen
+     * (phases are stamped once per pump, so this is to the nearest pass
+     * of the event loop). */
+    f->handshake_ms = -1;
+    if (tr.at[AU_PHASE_SECURING] >= 0)
+        for (int ph = AU_PHASE_SENDING; ph <= AU_PHASE_DONE; ph++)
+            if (tr.at[ph] >= 0) {
+                f->handshake_ms = (long)(tr.at[ph] - tr.at[AU_PHASE_SECURING]);
+                break;
+            }
 }
 
 static void fetch(Run *r, const char *url)
 {
+    /* "12 URL" limits this fetch to TLS 1.2, to time it. */
+    bool tls12 = !strncmp(url, "12 ", 3);
+    if (tls12)
+        url += 3;
+    au_tls_limit_version(tls12 ? 0x0303 : 0);
     Fetch f;
     memset(&f, 0, sizeof f);
     AuHttpRequest rq;
@@ -346,6 +485,8 @@ static void fetch(Run *r, const char *url)
     }
     say(r, "  %d %s, headers %lu ms, done %lu ms, %lu bytes\n", f.status, f.tls[0] ? f.tls : "plain",
         (unsigned long)(f.t_response - f.t_start), (unsigned long)(f.t_end - f.t_start), f.bytes);
+    if (f.handshake_ms >= 0)
+        say(r, "  TLS handshake %ld ms\n", f.handshake_ms);
 }
 
 static int load_urls(char **text, const char *urls[kMaxUrls])
@@ -400,7 +541,20 @@ int main(void)
     }
     say(&r, "Open Transport started in %lu ms\n", (unsigned long)(au_mac_clock_ms() - t0));
 
-    bench(&r);
+    /* The TLS library starts when it first gets seed material, which the
+     * entropy pool gives only once it has gathered enough. */
+    {
+        const AuNetOps *ops = au_ot_net_ops(r.ot);
+        uint8_t seed[32];
+        t0 = au_mac_clock_ms();
+        while (!ops->entropy(ops->ctx, seed, sizeof seed))
+            pass(&r, 1);
+        say(&r, "entropy ready after %lu ms more\n", (unsigned long)(au_mac_clock_ms() - t0));
+        if (au_tls_entropy_feed(seed, sizeof seed))
+            bench(&r);
+        else
+            say(&r, "the TLS library did not start\n");
+    }
 
     r.net = NULL;
     probe(&r, "example.com", 80);
@@ -440,8 +594,13 @@ int main(void)
     int nurls = load_urls(&urltext, urls);
     for (int i = 0; i < nurls; i++)
         fetch(&r, urls[i]);
-    /* The same again: pooled connections and resumed TLS sessions. */
-    say(&r, "-- again --\n");
+    /* The same again on new connections: resumed TLS sessions. */
+    say(&r, "-- again, new connections --\n");
+    au_net_close_idle(r.net);
+    for (int i = 0; i < nurls; i++)
+        fetch(&r, urls[i]);
+    /* And once more on the connections now open. */
+    say(&r, "-- again, pooled connections --\n");
     for (int i = 0; i < nurls; i++)
         fetch(&r, urls[i]);
 
@@ -449,6 +608,11 @@ int main(void)
     au_ot_net_stats(r.ot, &st);
     say(&r, "lookups %u (%u failed), connects %u (%u failed), sent %lu, received %lu, last error %ld\n", st.lookups,
         st.lookups_failed, st.connects, st.connects_failed, st.bytes_sent, st.bytes_received, st.last_error);
+    {
+        size_t live, peak;
+        au_tls_memory(&live, &peak);
+        say(&r, "TLS library memory: %lu bytes now, %lu at most\n", (unsigned long)live, (unsigned long)peak);
+    }
     say(&r, "NetTest done. Press a key to quit.\n");
     write_log(&r);
 

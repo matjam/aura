@@ -533,7 +533,7 @@ static FakeServer *tls_server(Env *e, const char *host)
     s->tls = true;
     s->chain = &tls_fixtures[TLS_FIX_VALID].cert;
     s->chain_len = 1;
-    s->eckey = &tls_fixtures[TLS_FIX_VALID].key;
+    s->key = &tls_fixtures[TLS_FIX_VALID].key;
     return s;
 }
 

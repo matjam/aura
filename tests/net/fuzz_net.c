@@ -20,11 +20,13 @@
 #include "net/psl.h"
 #include "net/roots.h"
 #include "net/tls.h"
+#include "fakenet.h"
 #include "tls_fixtures.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static uint32_t rng_state = 1;
 static uint32_t rnd(void)
@@ -218,8 +220,12 @@ static void run_roots(const Input *in)
     char err[128];
     AuRootStore *r = au_roots_load(p, in->n, err, sizeof err);
     if (r) {
-        size_t n;
-        au_roots_anchors(r, &n);
+        /* Every root's name can be looked up by a name of the input. */
+        const uint8_t *der;
+        size_t len, pos = 0;
+        while (au_roots_next_by_subject(r, p, in->n < 64 ? in->n : 64, &pos, &der, &len)) {
+        }
+        (void)au_roots_count(r);
         au_roots_free(r);
     }
     free(p);
@@ -443,6 +449,104 @@ static void run_cache(const Input *in)
     free(p);
 }
 
+#define N(a) (sizeof(a) / sizeof *(a))
+
+/* ---- The TLS handshake, through tls.c ----
+ *
+ * A request over the fake transport to the in-process TLS server, with
+ * the server's bytes damaged on the way to the client: bit flips, bytes
+ * replaced, at a rate drawn per run from "one early byte" to "most
+ * bytes". TLS 1.2 sends its ServerHello, certificates and key exchange
+ * in the clear, so damage there reaches the library's handshake and
+ * X.509 parsers and tls.c's chain handling; in TLS 1.3 only the
+ * ServerHello is in the clear and the rest fails its integrity check.
+ * Every request must end, and one whose bytes were not touched must
+ * succeed. */
+
+typedef struct Mangle {
+    uint32_t rate; /* one byte in rate is damaged; 0 for none */
+    size_t skip;   /* bytes to pass before any damage */
+    size_t seen, damaged;
+} Mangle;
+
+static void mangle(void *ctx, uint8_t *data, size_t len)
+{
+    Mangle *m = ctx;
+    for (size_t i = 0; i < len; i++, m->seen++) {
+        if (!m->rate || m->seen < m->skip || rnd() % m->rate)
+            continue;
+        uint32_t r = rnd();
+        data[i] = (r & 3) == 0 ? (uint8_t)(r >> 8) : (uint8_t)(data[i] ^ (1u << ((r >> 4) & 7)));
+        m->damaged++;
+    }
+}
+
+typedef struct TlsDone {
+    bool done;
+    AuNetError err;
+} TlsDone;
+
+static void tls_done(void *ctx, AuHttpTransfer *t, AuNetError e)
+{
+    (void)t;
+    ((TlsDone *)ctx)->done = true;
+    ((TlsDone *)ctx)->err = e;
+}
+
+static void run_tls(long *completed, long *failed)
+{
+    static const int leaves[] = {TLS_FIX_VALID, TLS_FIX_VALID_RSA, TLS_FIX_VALID_P384, TLS_FIX_AIA_LEAF,
+                                 TLS_FIX_EXPIRED, TLS_FIX_WRONGHOST};
+    static const uint32_t rates[] = {0, 2, 16, 64, 256, 1024, 4096};
+    FakeNet f;
+    fake_init(&f);
+    AuRootStore *roots = au_roots_new(1700000000LL);
+    au_roots_add_der(roots, tls_fixtures[TLS_FIX_CA].cert.data, tls_fixtures[TLS_FIX_CA].cert.data_len);
+    AuNet *net = au_net_new(&f.ops);
+    au_net_set_roots(net, roots);
+    FakeServer *s = fake_server(&f, "tls.test", 443);
+    int fix = leaves[rnd() % N(leaves)];
+    TlsCert chain[2] = {tls_fixtures[fix].cert, tls_fixtures[TLS_FIX_INTER].cert};
+    s->tls = true;
+    s->chain = chain;
+    s->chain_len = fix == TLS_FIX_AIA_LEAF && (rnd() & 1) ? 2 : 1;
+    s->key = &tls_fixtures[fix].key;
+    s->tls_max = rnd() % 3 ? 12 : 13;
+    s->p256_only = (rnd() & 7) == 0;
+    Mangle m = {rates[rnd() % N(rates)], rnd() % 3 ? rnd() % 1600 : 0, 0, 0};
+    s->mangle = mangle;
+    s->mangle_ctx = &m;
+    fake_respond(s, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
+    TlsDone d = {false, AU_NET_OK};
+    AuHttpRequest rq;
+    au_http_request_init(&rq, "https://tls.test/");
+    AuHttpCallbacks cb = {&d, NULL, NULL, tls_done, NULL, NULL};
+    au_http_start(net, &rq, &cb);
+    au_http_request_free(&rq);
+    fake_run(&f, net, 3000, 50);
+    if (!d.done) {
+        printf("tls: a request did not end (damage rate %u after %lu bytes)\n", (unsigned)m.rate,
+               (unsigned long)m.skip);
+        abort();
+    }
+    bool want_ok = fix != TLS_FIX_EXPIRED && fix != TLS_FIX_WRONGHOST && !(fix == TLS_FIX_AIA_LEAF && s->chain_len == 1);
+    if (m.damaged == 0 && want_ok && d.err != AU_NET_OK) {
+        printf("tls: an undamaged handshake failed: %s\n", au_net_error_name(d.err));
+        abort();
+    }
+    if (m.damaged == 0 && !want_ok && d.err == AU_NET_OK) {
+        printf("tls: a bad certificate was accepted\n");
+        abort();
+    }
+    if (d.err == AU_NET_OK)
+        (*completed)++;
+    else
+        (*failed)++;
+    au_net_free(net);
+    au_roots_free(roots);
+    fake_free(&f);
+}
+
 typedef struct Target {
     const char *name;
     const char **seeds;
@@ -450,12 +554,12 @@ typedef struct Target {
     size_t maxlen;
 } Target;
 
-#define N(a) (sizeof(a) / sizeof *(a))
 
 int main(int argc, char **argv)
 {
     if (argc < 4) {
-        fprintf(stderr, "usage: fuzz_net TARGET ITERATIONS SEED [ROOTS_FILE]\n");
+        fprintf(stderr, "usage: fuzz_net TARGET ITERATIONS SEED [ROOTS_FILE]\n"
+                        "       fuzz_net tls ITERATIONS SEED [SECONDS]\n");
         return 2;
     }
     const char *target = argv[1];
@@ -463,6 +567,16 @@ int main(int argc, char **argv)
     rng_state = (uint32_t)atol(argv[3]);
     if (!rng_state)
         rng_state = 1;
+    if (!strcmp(target, "tls")) {
+        /* Its own loop: it is not part of "all" (a handshake costs far
+         * more than a parser run), and it stops at the time cap. */
+        long cap = argc > 4 ? atol(argv[4]) : 0, n = 0, completed = 0, failed = 0;
+        time_t t0 = time(NULL);
+        for (; n < iters && (!cap || time(NULL) - t0 < cap); n++)
+            run_tls(&completed, &failed);
+        printf("tls: %ld handshakes fuzzed (%ld completed, %ld failed)\n", n, completed, failed);
+        return 0;
+    }
     bool all = !strcmp(target, "all");
     Input in;
     in.cap = 1 << 18;

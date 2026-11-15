@@ -1,17 +1,21 @@
 /* Root store loading. See roots.h for the file format. */
 #include "roots.h"
 
-#include "bearssl.h"
+#include "tls.h"
 
 #include <stdio.h>
 #include <string.h>
 
+typedef struct Root {
+    uint8_t *der;
+    size_t len;
+    size_t subj_off, subj_len; /* the subject Name (TLV) within der */
+} Root;
+
 struct AuRootStore {
-    br_x509_trust_anchor *anchors;
+    Root *roots;
     size_t n, cap;
     int64_t date;
-    /* Each anchor's bytes (DN and key) are separate au_alloc blocks so
-     * anchors can be added one at a time. */
 };
 
 AuRootStore *au_roots_new(int64_t date)
@@ -21,84 +25,58 @@ AuRootStore *au_roots_new(int64_t date)
     return r;
 }
 
-static void free_anchor(br_x509_trust_anchor *a)
-{
-    au_free(a->dn.data);
-    if (a->pkey.key_type == BR_KEYTYPE_RSA) {
-        au_free(a->pkey.key.rsa.n);
-        au_free(a->pkey.key.rsa.e);
-    } else {
-        au_free(a->pkey.key.ec.q);
-    }
-}
-
 void au_roots_free(AuRootStore *r)
 {
     if (!r)
         return;
     for (size_t i = 0; i < r->n; i++)
-        free_anchor(&r->anchors[i]);
-    au_free(r->anchors);
+        au_free(r->roots[i].der);
+    au_free(r->roots);
     au_free(r);
 }
 
 int64_t au_roots_date(const AuRootStore *r) { return r->date; }
 size_t au_roots_count(const AuRootStore *r) { return r->n; }
 
-const void *au_roots_anchors(const AuRootStore *r, size_t *n)
+bool au_roots_add_der(AuRootStore *r, const void *der, size_t len)
 {
-    *n = r->n;
-    return r->anchors;
-}
-
-static br_x509_trust_anchor *push(AuRootStore *r)
-{
+    AuDerSpan iss, subj;
+    if (!der || len == 0 || len > AU_ROOT_CERT_MAX || r->n >= AU_ROOTS_MAX || !au_x509_names(der, len, &iss, &subj))
+        return false;
     if (r->n == r->cap) {
         r->cap = r->cap ? r->cap * 2 : 64;
-        r->anchors = au_realloc(r->anchors, r->cap * sizeof *r->anchors);
+        r->roots = au_realloc(r->roots, r->cap * sizeof *r->roots);
     }
-    br_x509_trust_anchor *a = &r->anchors[r->n++];
-    memset(a, 0, sizeof *a);
-    return a;
+    Root *a = &r->roots[r->n++];
+    a->der = au_alloc(len);
+    memcpy(a->der, der, len);
+    a->len = len;
+    a->subj_off = (size_t)(subj.p - (const uint8_t *)der);
+    a->subj_len = subj.len;
+    return true;
 }
 
-static uint8_t *copy(const uint8_t *p, size_t n)
+bool au_roots_next_by_subject(const AuRootStore *r, const uint8_t *dn, size_t dn_len, size_t *pos,
+                              const uint8_t **der, size_t *der_len)
 {
-    uint8_t *q = au_alloc(n ? n : 1);
-    memcpy(q, p, n);
-    return q;
+    for (size_t i = *pos; i < r->n; i++) {
+        const Root *a = &r->roots[i];
+        if (a->subj_len == dn_len && !memcmp(a->der + a->subj_off, dn, dn_len)) {
+            *der = a->der;
+            *der_len = a->len;
+            *pos = i + 1;
+            return true;
+        }
+    }
+    *pos = r->n;
+    return false;
 }
 
-typedef struct Rd {
-    const uint8_t *p;
-    size_t n;
-    bool bad;
-} Rd;
-
-static uint32_t rd(Rd *r, int bytes)
+bool au_roots_has_subject(const AuRootStore *r, const uint8_t *dn, size_t dn_len)
 {
-    if (r->bad || r->n < (size_t)bytes) {
-        r->bad = true;
-        return 0;
-    }
-    uint32_t v = 0;
-    for (int i = 0; i < bytes; i++)
-        v = (v << 8) | r->p[i];
-    r->p += bytes;
-    r->n -= (size_t)bytes;
-    return v;
-}
-
-static const uint8_t *rd_bytes(Rd *r, size_t n)
-{
-    if (r->bad || r->n < n) {
-        r->bad = true;
-        return NULL;
-    }
-    const uint8_t *p = r->p;
-    r->p += n;
-    r->n -= n;
-    return p;
+    size_t pos = 0, len;
+    const uint8_t *der;
+    return au_roots_next_by_subject(r, dn, dn_len, &pos, &der, &len);
 }
 
 AuRootStore *au_roots_load(const void *data, size_t len, char *err, size_t errcap)
@@ -111,110 +89,34 @@ AuRootStore *au_roots_load(const void *data, size_t len, char *err, size_t errca
         return NULL;                                                                                              \
     } while (0)
     AuRootStore *store = NULL;
-    Rd r = {data, len, false};
-    const uint8_t *magic = rd_bytes(&r, 4);
-    if (!magic || memcmp(magic, "AURR", 4))
+    const uint8_t *p = data;
+    if (!p || len < 16 || memcmp(p, "AURR", 4))
         BAD("not a root store file");
-    if (rd(&r, 1) != 1)
+    if (p[4] == 1)
+        BAD("a root store in the old format: replace it with the one that came with this version of Aura");
+    if (p[4] != 2)
         BAD("unsupported root store version");
-    rd(&r, 1);
-    uint32_t count = rd(&r, 2);
-    uint32_t hi = rd(&r, 4), lo = rd(&r, 4);
-    if (r.bad || count == 0 || count > AU_ROOTS_MAX)
+    uint32_t count = ((uint32_t)p[6] << 8) | p[7];
+    uint64_t date = 0;
+    for (int i = 0; i < 8; i++)
+        date = (date << 8) | p[8 + i];
+    if (count == 0 || count > AU_ROOTS_MAX)
         BAD("bad root store header");
-    int64_t date = (int64_t)(((uint64_t)hi << 32) | lo);
-    store = au_roots_new(date);
+    store = au_roots_new((int64_t)date);
+    size_t off = 16;
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t flags = rd(&r, 1);
-        uint32_t dnl = rd(&r, 2);
-        if (r.bad || dnl == 0 || dnl > 1024)
-            BAD("bad anchor name");
-        const uint8_t *dn = rd_bytes(&r, dnl);
-        uint32_t kt = rd(&r, 1);
-        if (r.bad)
-            BAD("truncated anchor");
-        br_x509_trust_anchor *a = push(store);
-        a->dn.data = copy(dn, dnl);
-        a->dn.len = dnl;
-        a->flags = (flags & 1) ? BR_X509_TA_CA : 0;
-        if (kt == 1) {
-            uint32_t nl = rd(&r, 2);
-            if (r.bad || nl == 0 || nl > 1024)
-                BAD("bad RSA modulus");
-            const uint8_t *nb = rd_bytes(&r, nl);
-            uint32_t el = rd(&r, 2);
-            if (r.bad || el == 0 || el > 16)
-                BAD("bad RSA exponent");
-            const uint8_t *eb = rd_bytes(&r, el);
-            if (r.bad)
-                BAD("truncated RSA key");
-            a->pkey.key_type = BR_KEYTYPE_RSA;
-            a->pkey.key.rsa.n = copy(nb, nl);
-            a->pkey.key.rsa.nlen = nl;
-            a->pkey.key.rsa.e = copy(eb, el);
-            a->pkey.key.rsa.elen = el;
-        } else if (kt == 2) {
-            uint32_t curve = rd(&r, 1);
-            uint32_t ql = rd(&r, 2);
-            if (r.bad || (curve != BR_EC_secp256r1 && curve != BR_EC_secp384r1 && curve != BR_EC_secp521r1) ||
-                ql == 0 || ql > 133)
-                BAD("bad EC key");
-            const uint8_t *qb = rd_bytes(&r, ql);
-            if (r.bad)
-                BAD("truncated EC key");
-            a->pkey.key_type = BR_KEYTYPE_EC;
-            a->pkey.key.ec.curve = (int)curve;
-            a->pkey.key.ec.q = copy(qb, ql);
-            a->pkey.key.ec.qlen = ql;
-        } else {
-            /* Undo the half-made anchor before failing. */
-            a->pkey.key_type = BR_KEYTYPE_EC;
-            a->pkey.key.ec.q = NULL;
-            BAD("unknown key type");
-        }
+        if (len - off < 2)
+            BAD("truncated root store");
+        size_t n = ((size_t)p[off] << 8) | p[off + 1];
+        off += 2;
+        if (n == 0 || n > AU_ROOT_CERT_MAX || len - off < n)
+            BAD("bad certificate length");
+        if (!au_roots_add_der(store, p + off, n))
+            BAD("a certificate that cannot be read");
+        off += n;
     }
-    if (r.n != 0)
-        BAD("trailing bytes after the last anchor");
+    if (off != len)
+        BAD("trailing bytes after the last certificate");
     return store;
 #undef BAD
-}
-
-typedef struct DnBuf {
-    AuBuf b;
-} DnBuf;
-
-static void dn_append(void *ctx, const void *buf, size_t len)
-{
-    au_buf_append(&((DnBuf *)ctx)->b, buf, len);
-}
-
-bool au_roots_add_der(AuRootStore *r, const void *der, size_t len)
-{
-    br_x509_decoder_context dc;
-    DnBuf dn;
-    au_buf_init(&dn.b);
-    br_x509_decoder_init(&dc, dn_append, &dn);
-    br_x509_decoder_push(&dc, der, len);
-    br_x509_pkey *pk = br_x509_decoder_get_pkey(&dc);
-    if (!pk || br_x509_decoder_last_error(&dc) != 0 || !dn.b.len) {
-        au_buf_free(&dn.b);
-        return false;
-    }
-    br_x509_trust_anchor *a = push(r);
-    a->dn.data = copy((const uint8_t *)dn.b.data, dn.b.len);
-    a->dn.len = dn.b.len;
-    a->flags = BR_X509_TA_CA;
-    a->pkey.key_type = pk->key_type;
-    if (pk->key_type == BR_KEYTYPE_RSA) {
-        a->pkey.key.rsa.n = copy(pk->key.rsa.n, pk->key.rsa.nlen);
-        a->pkey.key.rsa.nlen = pk->key.rsa.nlen;
-        a->pkey.key.rsa.e = copy(pk->key.rsa.e, pk->key.rsa.elen);
-        a->pkey.key.rsa.elen = pk->key.rsa.elen;
-    } else {
-        a->pkey.key.ec.curve = pk->key.ec.curve;
-        a->pkey.key.ec.q = copy(pk->key.ec.q, pk->key.ec.qlen);
-        a->pkey.key.ec.qlen = pk->key.ec.qlen;
-    }
-    au_buf_free(&dn.b);
-    return true;
 }

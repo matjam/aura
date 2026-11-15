@@ -1,9 +1,13 @@
-/* TLS tests against the in-process BearSSL server (fakenet.c) with the
- * test certificates of tls_fixtures.c: a valid chain, an expired
- * certificate, a wrong host name, an untrusted root, a clock before the
- * root store's date, session resumption, HSTS, waiting for entropy, a
- * server that does not speak TLS, and a bulk transfer timing. */
+/* TLS tests against the in-process TLS server (fakenet.c, the TLS
+ * library's server half) with the test certificates of tls_fixtures.c: a
+ * valid chain, an expired certificate, a wrong host name, an untrusted
+ * root, a clock before the root store's date, session resumption, HSTS,
+ * waiting for entropy, a server that does not speak TLS, a bulk transfer
+ * timing; TLS 1.3 and TLS 1.2 servers, RSA and P-384 keys, resumption in
+ * both versions, a downgrade attempt, a HelloRetryRequest, and the
+ * library's allocations failing. */
 #include "fakenet.h"
+#include "net/tls_platform.h"
 #include "net/auth.h"
 #include "net/hsts.h"
 #include "net/net.h"
@@ -106,7 +110,7 @@ static FakeServer *tls_server(FakeNet *f, const char *host, int fix)
     s->tls = true;
     s->chain = &tls_fixtures[fix].cert;
     s->chain_len = 1;
-    s->eckey = &tls_fixtures[fix].key;
+    s->key = &tls_fixtures[fix].key;
     return s;
 }
 
@@ -125,8 +129,11 @@ static void test_valid(void)
     get(&f, net, &r, "https://tls.test/", 500);
     CHECK(r.done && r.err == AU_NET_OK && r.status == 200 && r.body == 5, "valid: err %s status %d",
           au_net_error_name(r.err), r.status);
-    CHECK(r.sec.tls && r.sec.version == 0x0303, "TLS 1.2: %d %04x", r.sec.tls, r.sec.version);
-    CHECK(strstr(r.cipher, "ECDHE-ECDSA") != NULL, "ECDHE-ECDSA suite: %s", r.cipher);
+    /* Both ends speak TLS 1.3 and Aura's first suite is ChaCha20. */
+    CHECK(r.sec.tls && r.sec.version == 0x0304, "TLS 1.3: %d %04x", r.sec.tls, r.sec.version);
+    CHECK(!strcmp(r.cipher, "TLS_CHACHA20_POLY1305_SHA256"), "TLS 1.3 suite: %s", r.cipher);
+    CHECK(s->handshakes == 1 && s->last_version == 13 && !s->last_hrr, "server saw TLS 1.3 without a retry: %d %d %d",
+          s->handshakes, s->last_version, s->last_hrr);
     /* The test server offers no ALPN, so none is reported. */
     CHECK(!strcmp(r.alpn, ""), "no ALPN: %s", r.alpn);
     CHECK(r.have_cert && r.cert.count == 1 && strstr(r.cert.chain[0].subject, "CN=tls.test") &&
@@ -526,7 +533,7 @@ static void test_aia_chain_order(void)
      * is rebuilt from what the server sent, with no fetch. */
     AiaEnv e;
     aia_env(&e, TLS_FIX_AIA_LEAF2);
-    br_x509_certificate chain[3] = {tls_fixtures[TLS_FIX_AIA_LEAF2].cert, tls_fixtures[TLS_FIX_INTER].cert,
+    TlsCert chain[3] = {tls_fixtures[TLS_FIX_AIA_LEAF2].cert, tls_fixtures[TLS_FIX_INTER].cert,
                                     tls_fixtures[TLS_FIX_INTER2].cert};
     e.tls->chain = chain;
     e.tls->chain_len = 3;
@@ -539,7 +546,7 @@ static void test_aia_chain_order(void)
     aia_env_free(&e);
     /* The complete chain in order needs nothing. */
     aia_env(&e, TLS_FIX_AIA_LEAF);
-    br_x509_certificate full[2] = {tls_fixtures[TLS_FIX_AIA_LEAF].cert, tls_fixtures[TLS_FIX_INTER].cert};
+    TlsCert full[2] = {tls_fixtures[TLS_FIX_AIA_LEAF].cert, tls_fixtures[TLS_FIX_INTER].cert};
     e.tls->chain = full;
     e.tls->chain_len = 2;
     fake_respond(e.tls, OK_RESP);
@@ -610,8 +617,189 @@ static void test_https_first_downgrade_redirect(void)
     fake_free(&f);
 }
 
+/* ---- Protocol versions, key types, resumption (the TLS library) ---- */
+
+typedef struct Env2 {
+    FakeNet f;
+    AuRootStore *roots;
+    AuNet *net;
+    FakeServer *s;
+} Env2;
+
+static void env2_init(Env2 *e, int fix)
+{
+    fake_init(&e->f);
+    e->roots = test_roots();
+    au_roots_add_der(e->roots, tls_fixtures[TLS_FIX_RSA_ROOT].cert.data, tls_fixtures[TLS_FIX_RSA_ROOT].cert.data_len);
+    e->net = au_net_new(&e->f.ops);
+    au_net_set_roots(e->net, e->roots);
+    e->s = tls_server(&e->f, "tls.test", fix);
+}
+
+static void env2_free(Env2 *e)
+{
+    au_net_free(e->net);
+    au_roots_free(e->roots);
+    fake_free(&e->f);
+}
+
+static const char CLOSE_RESP[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+
+/* One request to a server limited to the versions given; expects the
+ * version and a suite name containing suite_part. */
+static void expect_version(const char *what, int fix, int tls_min, int tls_max, int version, const char *suite_part)
+{
+    Env2 e;
+    env2_init(&e, fix);
+    e.s->tls_min = tls_min;
+    e.s->tls_max = tls_max;
+    e.s->alpn_http11 = true;
+    fake_respond(e.s, OK_RESP);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 500);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200 && r.body == 5, "%s: err %s status %d (%s)", what,
+          au_net_error_name(r.err), r.status, r.have_cert && r.cert.reason ? r.cert.reason : "");
+    CHECK(r.sec.version == version, "%s: version %04x", what, r.sec.version);
+    CHECK(strstr(r.cipher, suite_part) != NULL, "%s: suite %s", what, r.cipher);
+    CHECK(!strcmp(r.alpn, "http/1.1"), "%s: ALPN %s", what, r.alpn);
+    CHECK(r.have_cert && r.cert.count == 1 && r.cert.error == 0, "%s: chain of %d, error %d", what, r.cert.count,
+          r.cert.error);
+    env2_free(&e);
+}
+
+static void test_versions_and_keys(void)
+{
+    expect_version("TLS 1.3 only server", TLS_FIX_VALID, 13, 13, 0x0304, "TLS_CHACHA20_POLY1305_SHA256");
+    expect_version("TLS 1.2 only server", TLS_FIX_VALID, 12, 12, 0x0303, "ECDHE-ECDSA-CHACHA20-POLY1305");
+    /* An RSA key: the handshake signature is RSA-PSS in TLS 1.3 (the
+     * only RSA scheme it has) and in TLS 1.2 here. */
+    expect_version("RSA-PSS in TLS 1.3", TLS_FIX_VALID_RSA, 13, 13, 0x0304, "TLS_");
+    expect_version("ECDHE-RSA in TLS 1.2", TLS_FIX_VALID_RSA, 12, 12, 0x0303, "ECDHE-RSA-CHACHA20-POLY1305");
+    expect_version("P-384 ECDSA in TLS 1.3", TLS_FIX_VALID_P384, 13, 13, 0x0304, "TLS_");
+    expect_version("P-384 ECDSA in TLS 1.2", TLS_FIX_VALID_P384, 12, 12, 0x0303, "ECDHE-ECDSA");
+    /* A certificate signed with RSA by an RSA root. */
+    expect_version("RSA chain in TLS 1.3", TLS_FIX_RSA_LEAF, 0, 0, 0x0304, "TLS_");
+    expect_version("RSA chain in TLS 1.2", TLS_FIX_RSA_LEAF, 12, 12, 0x0303, "ECDHE-RSA");
+}
+
+/* Two connections to one server: the second resumes, with a ticket in
+ * TLS 1.3 and with the session cache or a ticket in TLS 1.2; with
+ * resumption off at the server it is a full handshake again. */
+static void expect_resumption(const char *what, int tls_max, bool server_resumes)
+{
+    Env2 e;
+    env2_init(&e, TLS_FIX_VALID);
+    e.s->tls_max = tls_max;
+    e.s->no_resume = !server_resumes;
+    for (int i = 0; i < 3; i++)
+        fake_add(e.s, CLOSE_RESP)->close_after = true;
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/a", 500);
+    CHECK(r.err == AU_NET_OK && !r.sec.resumed && r.cert.count == 1, "%s: first is a full handshake: %s resumed %d",
+          what, au_net_error_name(r.err), r.sec.resumed);
+    for (int i = 0; i < 2; i++) {
+        get(&e.f, e.net, &r, "https://tls.test/b", 500);
+        CHECK(r.err == AU_NET_OK && r.status == 200, "%s: request %d: %s", what, i + 2, au_net_error_name(r.err));
+        CHECK(r.sec.resumed == server_resumes, "%s: request %d resumed %d", what, i + 2, r.sec.resumed);
+        CHECK(r.sec.version == (tls_max == 12 ? 0x0303 : 0x0304), "%s: version %04x", what, r.sec.version);
+        /* A resumed connection still shows the chain of its full handshake. */
+        CHECK(r.have_cert && r.cert.count == 1 && strstr(r.cert.chain[0].subject, "CN=tls.test"),
+              "%s: request %d has the chain: %d", what, i + 2, r.cert.count);
+    }
+    CHECK(e.s->connections == 3 && e.s->handshakes == 3, "%s: three connections, three handshakes: %d %d", what,
+          e.s->connections, e.s->handshakes);
+    env2_free(&e);
+}
+
+static void test_downgrade(void)
+{
+    /* An attacker rewrites the ClientHello so the server sees no TLS 1.3.
+     * The server, which has TLS 1.3, marks its TLS 1.2 ServerHello with
+     * the downgrade sentinel (RFC 8446 section 4.1.3), and the client
+     * must stop there. */
+    Env2 e;
+    env2_init(&e, TLS_FIX_VALID);
+    e.s->strip_tls13 = true;
+    fake_respond(e.s, OK_RESP);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 500);
+    CHECK(r.done && r.err == AU_NET_ERR_TLS, "downgrade refused: %s", au_net_error_name(r.err));
+    CHECK(e.s->handshakes == 0 && e.s->nreq == 0, "no handshake completed and no request sent: %d %d", e.s->handshakes,
+          e.s->nreq);
+    env2_free(&e);
+    /* The same server without the attacker's change, limited to TLS 1.2
+     * by its own configuration, sends no sentinel and is fine. */
+    expect_version("honest TLS 1.2", TLS_FIX_VALID, 12, 12, 0x0303, "ECDHE-ECDSA");
+}
+
+static void test_hello_retry(void)
+{
+    /* The server takes only P-256; Aura's key share is X25519, so the
+     * server asks again and the handshake completes on P-256. */
+    Env2 e;
+    env2_init(&e, TLS_FIX_VALID);
+    e.s->p256_only = true;
+    e.s->tls_min = 13;
+    fake_respond(e.s, OK_RESP);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 500);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200, "HelloRetryRequest: %s", au_net_error_name(r.err));
+    CHECK(e.s->handshakes == 1 && e.s->last_hrr && e.s->last_version == 13, "server retried once: %d %d %d",
+          e.s->handshakes, e.s->last_hrr, e.s->last_version);
+    env2_free(&e);
+}
+
+static void test_alloc_failure(void)
+{
+    /* The TLS library's allocations fail after n successes, for a range
+     * of n: the request fails (or, past the handshake's needs, succeeds)
+     * and nothing reaches the out-of-memory handler. Both ends share the
+     * library here, so either may be the one that fails. */
+    int failed = 0, ok = 0;
+    for (long n = 0; n < 400; n += 7) {
+        Env2 e;
+        env2_init(&e, TLS_FIX_VALID);
+        fake_respond(e.s, OK_RESP);
+        Result r;
+        au_tls_fail_alloc_after(n);
+        get(&e.f, e.net, &r, "https://tls.test/", 500);
+        au_tls_fail_alloc_after(-1);
+        CHECK(r.done, "allocation failure after %ld: the request ended", n);
+        if (r.err == AU_NET_OK)
+            ok++;
+        else
+            failed++;
+        env2_free(&e);
+    }
+    CHECK(failed > 10, "allocation failures failed handshakes: %d failed, %d succeeded", failed, ok);
+    size_t live;
+    au_tls_memory(&live, NULL);
+    /* Everything the connections allocated is back; the library's own
+     * start-up state remains. */
+    CHECK(live < 16384, "the library holds %zu bytes after the failures", live);
+}
+
+static void test_old_root_store(void)
+{
+    static const uint8_t v1[16] = {'A', 'U', 'R', 'R', 1, 0, 0, 1};
+    char err[160] = "";
+    AuRootStore *r = au_roots_load(v1, sizeof v1, err, sizeof err);
+    CHECK(r == NULL && strstr(err, "old format"), "a version 1 store is refused: %s", err);
+    if (r)
+        au_roots_free(r);
+}
+
 int main(void)
 {
+    test_versions_and_keys();
+    expect_resumption("TLS 1.3 resumption", 13, true);
+    expect_resumption("TLS 1.2 resumption", 12, true);
+    expect_resumption("TLS 1.3, server without tickets", 13, false);
+    expect_resumption("TLS 1.2, server without a cache", 12, false);
+    test_downgrade();
+    test_hello_retry();
+    test_alloc_failure();
+    test_old_root_store();
     test_https_first_downgrade_redirect();
     test_aia_fetch();
     test_aia_depth_pkcs7();
