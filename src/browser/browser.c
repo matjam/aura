@@ -369,6 +369,7 @@ AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host)
     au_prefs_init(&b->prefs);
     au_history_init(&b->history, AU_HISTORY_DEFAULT_MAX);
     au_bookmarks_init(&b->bookmarks);
+    au_downloads_init(&b->downloads, au_sim_source());
     b->fonts = fonts;
     b->host = *host;
     b->next_tab_id = 1;
@@ -383,6 +384,7 @@ void au_browser_free(AuBrowser *b)
     au_prefs_free(&b->prefs);
     au_history_free(&b->history);
     au_bookmarks_free(&b->bookmarks);
+    au_downloads_free(&b->downloads);
     au_free(b);
 }
 

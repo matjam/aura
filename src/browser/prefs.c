@@ -59,6 +59,7 @@ static const Key keys[] = {
     I("cache.memory_kb", memory_cache_kb, 0, 1 << 20),
     I("cache.disk_kb", disk_cache_kb, 0, 1 << 22),
     S("downloads.folder", download_folder),
+    B("downloads.decode", decode_downloads),
     I("window.width", window_width, 0, 8192),
     I("window.height", window_height, 0, 8192),
 };

@@ -20,6 +20,7 @@
 
 #include "bookmarks.h"
 #include "chrome.h"
+#include "downloads.h"
 #include "history.h"
 #include "page.h"
 #include "prefs.h"
@@ -116,6 +117,7 @@ struct AuBrowser {
     AuPrefs prefs;
     AuHistory history;
     AuBookmarks bookmarks;
+    AuDownloads downloads; /* with the simulated transfer source for now */
     AuFontSet *fonts;
     AuBrowserHost host;
     AuBrowserWindow **windows;

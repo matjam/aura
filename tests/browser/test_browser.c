@@ -851,6 +851,143 @@ static void test_ellipsize(AuFontSet *fonts)
         CHECK(au_utf8_decode(buf + i, strlen(buf + i), &adv) != 0xFFFD);
 }
 
+/* ---- Downloads ---- */
+
+static bool taken(void *ctx, const char *name)
+{
+    const char *const *list = ctx;
+    for (; *list; list++)
+        if (!strcmp(*list, name))
+            return true;
+    return false;
+}
+
+static void test_downloads(void)
+{
+    char out[128];
+    au_hfs_sanitize("report:final.pdf", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "report-final.pdf");
+    au_hfs_sanitize("A very long file name that will not fit in HFS.sit", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "A very long file name that.sit"); /* cut at 27, trailing space trimmed */
+    au_hfs_sanitize("  .profile  ", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "_profile");
+    au_hfs_sanitize("", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "download");
+    au_hfs_sanitize("tab\there\x01.txt", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "tabhere.txt");
+    au_hfs_sanitize("archive.tar.gzipped-long", NULL, NULL, out, sizeof out);
+    CHECK_STR(out, "archive.tar.gzipped-long");
+    /* Non-ASCII counts as one character each. */
+    au_hfs_sanitize("\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+                    "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+                    "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+                    "\xC3\xA9\xC3\xA9\xC3\xA9.hqx",
+                    NULL, NULL, out, sizeof out);
+    size_t nchars = 0;
+    for (const char *p = out; *p; p++)
+        nchars += ((unsigned char)*p & 0xC0) != 0x80;
+    CHECK(nchars == 31 && strstr(out, ".hqx"));
+    const char *existing[] = {"file.bin", "file 2.bin", NULL};
+    au_hfs_sanitize("file.bin", taken, existing, out, sizeof out);
+    CHECK_STR(out, "file 3.bin");
+    const char *existing2[] = {"Aaaaaaaaaaaaaaaaaaaaaaaaaaa.sit", NULL};
+    au_hfs_sanitize("Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sit", taken, existing2, out, sizeof out);
+    CHECK_STR(out, "Aaaaaaaaaaaaaaaaaaaaaaaaa 2.sit");
+    CHECK(strlen(out) == 31);
+
+    au_download_name_from_url("http://x.example/files/Stuffit%20Expander.sit?x=1", out, sizeof out);
+    CHECK_STR(out, "Stuffit Expander.sit");
+    au_download_name_from_url("http://x.example/", out, sizeof out);
+    CHECK_STR(out, "x.example");
+
+    char sz[32];
+    au_format_size(512, sz, sizeof sz);
+    CHECK_STR(sz, "512 bytes");
+    au_format_size(1536 * 1024, sz, sizeof sz);
+    CHECK_STR(sz, "1.5 MB");
+
+    /* Model with the simulated source and a fake clock. */
+    AuDownloads dl;
+    au_downloads_init(&dl, au_sim_source());
+    dl.max_active = 2;
+    AuDownload *a = au_downloads_add(&dl, "http://x.example/a.sit", "a.sit", "application/x-stuffit", 100000, 5);
+    AuDownload *b = au_downloads_add(&dl, "http://x.example/b:c.bin", "b:c.bin", "", -1, 6);
+    AuDownload *c = au_downloads_add(&dl, "http://x.example/fail.hqx", "fail.hqx", "", 200000, 7);
+    AuDownload *r = au_downloads_add(&dl, "http://refuse.example/r", "r", "", -1, 8);
+    CHECK_STR(b->filename, "b-c.bin");
+    CHECK(a->state == AU_DL_QUEUED && au_downloads_busy(&dl));
+    uint32_t t = 1000;
+    au_downloads_idle(&dl, t);
+    CHECK(a->state == AU_DL_ACTIVE && b->state == AU_DL_ACTIVE && c->state == AU_DL_QUEUED);
+    t += 600;
+    au_downloads_idle(&dl, t);
+    CHECK(a->received > 0 && a->received < a->total && a->rate > 0);
+    CHECK(au_download_eta(a) > 0);
+    au_download_pause(&dl, b);
+    CHECK(b->state == AU_DL_PAUSED);
+    au_downloads_idle(&dl, t);
+    CHECK(c->state == AU_DL_ACTIVE); /* the slot b freed */
+    for (int i = 0; i < 400 && (a->state == AU_DL_ACTIVE || c->state == AU_DL_ACTIVE); i++) {
+        t += 250;
+        au_downloads_idle(&dl, t);
+    }
+    CHECK(a->state == AU_DL_DONE && a->received == 100000);
+    CHECK(c->state == AU_DL_FAILED && c->received == 100000 && strlen(c->error) > 0);
+    au_downloads_idle(&dl, t);
+    CHECK(r->state == AU_DL_FAILED && !strcmp(r->error, "Connection refused"));
+    au_download_resume(&dl, b);
+    CHECK(b->state == AU_DL_QUEUED);
+    int64_t bfore = b->received;
+    au_downloads_idle(&dl, t);
+    t += 1000;
+    au_downloads_idle(&dl, t);
+    CHECK(b->state == AU_DL_ACTIVE && b->received > bfore);
+
+    /* Persistence: the active item comes back paused and interrupted. */
+    AuBuf out_file;
+    au_buf_init(&out_file);
+    au_downloads_serialize(&dl, &out_file);
+    AuDownloads back;
+    au_downloads_init(&back, au_sim_source());
+    CHECK(au_downloads_parse(&back, out_file.data, out_file.len));
+    CHECK(back.n == 4);
+    AuDownload *bb = au_downloads_find(&back, b->id);
+    CHECK(bb && bb->state == AU_DL_PAUSED && bb->interrupted && bb->received == b->received);
+    CHECK(au_downloads_find(&back, a->id)->state == AU_DL_DONE);
+    CHECK_STR(au_downloads_find(&back, c->id)->error, c->error);
+    CHECK(au_downloads_find(&back, a->id)->started == 5);
+    AuDownload *nw = au_downloads_add(&back, "http://new/", "n", "", -1, 9);
+    CHECK(nw->id > r->id);
+
+    au_download_cancel(&dl, b);
+    CHECK(b->state == AU_DL_CANCELLED);
+    au_downloads_clear_completed(&dl);
+    CHECK(dl.n == 0);
+    a = au_downloads_add(&dl, "http://x/", "x", "", -1, 1);
+    au_download_remove(&dl, a);
+    CHECK(dl.n == 0);
+
+    /* Damaged file. */
+    static const char bad[] = "# Aura downloads 1\n1\tbogus\t0\t0\t0\tu\tf\tm\te\nnot\ta\tline\n\x01\x02";
+    CHECK(!au_downloads_parse(&back, bad, sizeof bad - 1));
+    CHECK(back.n == 0);
+    static const char nohead[] = "1\tdone\t5\t5\t0\thttp://a/\ta\t\t\n";
+    CHECK(!au_downloads_parse(&back, nohead, sizeof nohead - 1));
+    CHECK(back.n == 1);
+
+    /* Painting the list must not crash without fonts. */
+    AuSurface *s = au_surface_new(300, 200);
+    AuCanvas *cv = au_canvas_new(s);
+    au_downloads_paint(&back, cv, NULL, 300, 200, 0, 0, true);
+    au_canvas_free(cv);
+    au_surface_free(s);
+    CHECK(au_downloads_hit(&back, 5, 0) == 0 && au_downloads_hit(&back, AU_DL_ROW_H + 1, 0) == -1);
+
+    au_buf_free(&out_file);
+    au_downloads_free(&back);
+    au_downloads_free(&dl);
+}
+
 int main(void)
 {
     AuFontSet *fonts = au_fontset_new(); /* empty: the code must cope */
@@ -864,6 +1001,7 @@ int main(void)
     test_session(fonts);
     test_layout();
     test_ellipsize(fonts);
+    test_downloads();
     au_fontset_free(fonts);
     printf("browser: all tests passed\n");
     return 0;

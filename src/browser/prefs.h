@@ -71,6 +71,7 @@ typedef struct AuPrefs {
 
     /* Downloads */
     char *download_folder; /* platform path; "" for the default */
+    bool decode_downloads; /* decode MacBinary and BinHex after download */
 
     /* Window size remembered between runs (content area, pixels; 0 for
      * the default). */
