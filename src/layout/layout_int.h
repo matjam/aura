@@ -323,7 +323,7 @@ struct AuLayout {
     LBox *root;        /* the root element's box, or NULL */
     float vw, vh;      /* viewport */
     float doc_w, doc_h;
-    bool need_build, need_layout, built_once;
+    bool need_build, need_layout;
     uint32_t build_count, layout_count; /* box tree builds and layout passes since creation */
     /* fonts */
     LFont *font_hash[64];
@@ -353,7 +353,6 @@ struct AuLayout {
     uint32_t nview_boxes;
     bool need_paint;
     bool need_restack;
-    bool full_layout; /* the viewport changed: no subtree may be reused */
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */

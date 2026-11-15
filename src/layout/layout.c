@@ -690,10 +690,14 @@ float l_used_width(AuLayout *L, LBlock *b, float cb_w, float avail, int mode)
 
 /* cb_h only reaches b's layout through b's own percentage heights (its
  * children resolve theirs against b's content height, passed separately). */
-static bool same_cbh(const LBlock *b, float a, float c)
+static bool same_cbh(const AuLayout *L, const LBlock *b, float a, float c)
 {
     if (a == c)
         return true;
+    /* Quirks mode: an auto-height block passes its percentage base down
+     * to its children (l_layout_content), so they depend on it too. */
+    if (L->doc && L->doc->quirks == AU_QUIRKS_FULL && b->b.inner == LI_FLOW)
+        return false;
     if (lb_anon(&b->b))
         return true;
     const AuStyleBox *s = b->b.style->box;
@@ -702,9 +706,9 @@ static bool same_cbh(const LBlock *b, float a, float c)
 
 static bool can_skip(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h)
 {
-    (void)L;
     return (b->b.flags & (LF_HAS_LAYOUT | LF_DIRTY | LF_CHILD_DIRTY | LF_ESCAPES)) == LF_HAS_LAYOUT &&
-           (b->b.flags & LF_BFC) && b->key_w == content_w && b->key_h == content_h && same_cbh(b, b->key_cbh, cb_h);
+           (b->b.flags & LF_BFC) && b->key_w == content_w && b->key_h == content_h &&
+           same_cbh(L, b, b->key_cbh, cb_h);
 }
 
 /* Lays out b's content at content width content_w (content_h: definite
@@ -724,8 +728,6 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     }
     if (b->b.inner == LI_FLOW && !lb_anon(&b->b) && l_is_tag(&b->b, AU_ATOM_fieldset))
         place_legend(L, b, content_w);
-    /* A full layout clears every box's cache first (forget_layouts), so a
-     * hit here is from earlier in the same pass. */
     /* Tables and cells size themselves: a table's content_h is the height
      * of its grid (a minimum), and a cell's is only the percentage base of
      * its children; the cell's height is its content height, which its
@@ -801,7 +803,7 @@ float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h
     if (can_skip(L, b, content_w, content_h, cb_h))
         return b->h;
     if ((b->b.flags & (LF_MEASURE_OK | LF_DIRTY | LF_CHILD_DIRTY)) == LF_MEASURE_OK && b->mk_w == content_w &&
-        b->mk_h == content_h && same_cbh(b, b->mk_cbh, cb_h)) {
+        b->mk_h == content_h && same_cbh(L, b, b->mk_cbh, cb_h)) {
         L->stats.layouts_skipped++;
         return b->m_res;
     }
@@ -878,7 +880,17 @@ static void union_children(LBlock *b, LArea *ink, LArea *scroll)
     while (c) {
         if (c->kind == LK_BLOCK) {
             LBlock *k = (LBlock *)c;
-            if (!(c->flags & LF_FIXED)) {
+            /* An absolutely positioned box counts where its containing
+             * block is b (or an inline box in b), or for the root the
+             * initial containing block. One positioned against a box
+             * outside b is laid out after b, so here it would have the
+             * geometry of the layout before (none in a first layout). */
+            bool outside = false;
+            if (c->flags & LF_ABSPOS) {
+                LBox *ref = k->cb && k->cb->kind != LK_BLOCK ? &l_geom_parent(k->cb)->b : k->cb;
+                outside = ref ? ref != &b->b : b->b.parent != NULL;
+            }
+            if (!(c->flags & LF_FIXED) && !outside) {
                 add_rect(ink, k->x + k->ov.x, k->y + k->ov.y, k->ov.w, k->ov.h);
                 /* A clipping child contributes its margin box. */
                 if (c->flags & LF_CLIPS)
@@ -1283,26 +1295,6 @@ void au_layout_images_changed(AuLayout *L)
     L->need_paint = true;
 }
 
-/* Before a full layout: no box's cached layout, measure or intrinsic
- * widths may be reused (viewport units and initial-containing-block
- * percentages may have changed). Within the pass the caches fill again. */
-static void forget_layouts(AuLayout *L)
-{
-    LBox *b = L->root;
-    while (b) {
-        b->flags &= ~(LF_HAS_LAYOUT | LF_MEASURE_OK | LF_INTRINSIC_OK);
-        l_table_forget(b);
-        if (b->first)
-            b = b->first;
-        else {
-            while (b && !b->next)
-                b = b->parent;
-            if (b)
-                b = b->next;
-        }
-    }
-}
-
 static void mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
@@ -1616,18 +1608,19 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         return true;
     }
     if (L->need_layout || vw != L->vw || vh != L->vh) {
-        /* A viewport change can move anything (viewport units, fixed
-         * boxes, percentages of the initial containing block). */
-        L->full_layout = vw != L->vw || vh != L->vh || !L->built_once;
-        L->built_once = true;
+        /* A viewport change is an incremental layout like any other: the
+         * root's constraints change, and each independent subtree below is
+         * laid out again only when its own width, height or percentage
+         * base changed, it is dirty, or it holds a box positioned against
+         * something outside it (LF_ESCAPES; the viewport for fixed boxes).
+         * Intrinsic widths do not depend on the viewport. Lengths in
+         * viewport units are computed by the cascade, so they arrive as
+         * style changes (au_layout_styles_changed). */
         L->vw = vw;
         L->vh = vh;
-        if (L->full_layout)
-            forget_layouts(L);
         L->gen++;
         layout_root(L);
         L->layout_count++;
-        L->full_layout = false;
         L->need_layout = false;
         L->need_restack = true;
         changed = true;
