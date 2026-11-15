@@ -127,7 +127,8 @@ static int usage(void)
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
-            "                        go:URL back forward cache (the HTTP cache's counts with --net,\n"
+            "                        go:URL back forward closetab mem (bytes live per source line, in a\n"
+            "                        build with -DAURA_MEM_TRACK=ON) cache (the HTTP cache's counts with --net,\n"
             "                        the documents kept for Back and Forward, DNS lookups)\n"
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
             "                        in the page) save:FILE (the page source) console;\n"
@@ -729,6 +730,11 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                shown, now_ms() - t0);
     } else if (!strcmp(a, "mem")) {
         au_host_mem_report("now");
+    } else if (!strcmp(a, "closetab")) {
+        /* Closes the active tab (the window keeps at least one). */
+        if (w->ntabs > 1)
+            au_bw_close_tab(w, w->active);
+        chrome_settle(b, w, ses, o->net, 20, 500);
     } else if (!strcmp(a, "cache")) {
         AuCacheStats cs;
         memset(&cs, 0, sizeof cs);
