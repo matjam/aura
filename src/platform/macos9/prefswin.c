@@ -734,7 +734,10 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         mac_net_clear_cookies();
         listwin_cookies_changed();
         break;
-    case F_CLEAR_CACHE: mac_net_clear_cache(); break;
+    case F_CLEAR_CACHE:
+        mac_net_clear_cache();
+        au_browser_release_documents(g_browser); /* the documents kept for Back and Forward */
+        break;
     case F_SHOW_COOKIES: listwin_show(WIN_COOKIES); break;
     case F_OK: close_prefs(p, true); break;
     case F_CANCEL: close_prefs(p, false); break;

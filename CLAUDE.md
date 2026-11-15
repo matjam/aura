@@ -12,7 +12,10 @@ what you need to build, test and change Aura.
   nested boxes where it can be avoided): Mac OS 9 stacks are small and
   pages nest deeply. Use explicit loops or an explicit stack.
 - Allocate with `au_alloc`, `au_realloc`, `au_free` (`src/core/core.h`).
-  They do not return NULL.
+  They do not return NULL. When malloc fails they first call the
+  release handler (`au_set_release_handler`), which frees caches, and
+  try again; the out-of-memory handler runs when nothing is left to
+  free.
 - Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
   atoms. Names known at compile time go in `src/core/atoms_html.def` or
   `src/core/atoms_css.def`.
@@ -227,6 +230,64 @@ to `au_css_resolver_set_font_prefs`). Text zoom is per tab
 (`au_bw_zoom`, View > Zoom In, Zoom Out, Actual Size); the last zoom
 chosen for a site (host, or scheme for `file:`) is kept in the
 `zoom.sites` preference and applied when a tab opens that site again.
+
+Back and Forward show a kept document instead of loading the page again.
+To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
+("The document cache"); `page.h` describes the interface.
+
+- **What is kept.** When a tab leaves a document for another entry, the
+  page moves the document view (tree, layout, images, script runtime,
+  form contents) into its kept list and makes a new view for the next
+  document. The move happens when the new document begins, so the old
+  one stays on screen until then; a load that never begins (a download,
+  a Stop) leaves it in place. `au_page_navigate_entry` for an entry
+  whose document is kept shows it without a load and sets
+  `AuPageStats.restored`.
+- **Entries.** The browser names each back/forward entry with an id
+  (`AuNavEntry.id`) and calls `au_page_set_entry` before every
+  navigation (`entry_load` in `browser.c`). A navigation path that skips
+  it gets documents that are never kept. `au_page_retain_entries` drops
+  the documents of entries that are gone.
+- **What is not kept:** a document still loading or with fetches under
+  way, a failed load, an internal page, a POST result,
+  `Cache-Control: no-store` on the main document
+  (`AuFetchResponse.no_store`), and a window with an unload or
+  beforeunload listener (`au_docview_can_persist`). A reload replaces
+  the document. Reopen Closed Tab, duplicated tabs and session restore
+  load through the history cache mode, as before.
+- **While hidden** nothing calls the view, so timers, animation frames,
+  image animation and the caret wait, and run again after Back. The
+  view's callbacks and loader in `page_doc.c` ignore a view that is not
+  the page's current one. `au_docview_set_hidden` fires pagehide and
+  pageshow with `persisted` true, drops decoded image pixels (they
+  decode again when painted) and runs the script collector.
+- **Limits.** `cache.documents` (3 per tab, 0 turns the cache off) and
+  `cache.documents_kb` (24 MB over all tabs, by
+  `au_docview_memory_estimate`; a document larger than that is not
+  kept). `au_bw_idle` evicts the oldest over the budget
+  (`au_browser_trim_documents`). On Mac OS 9, `idle_all` in `main.c`
+  drops the oldest kept document while less than 6 MB of heap is free,
+  and `au_alloc` calls the release handler (`au_set_release_handler`,
+  `release_caches` in `main.c`) to drop them all before the
+  out-of-memory alert. Clear Cache in Preferences drops them too.
+- **Measured on the host** (Wikipedia, live): Back to a kept article
+  takes 7 to 10 ms; the same Back through the history cache mode takes
+  450 to 800 ms. An article is estimated at 12 to 15 MB (its script heap
+  is most of it), a very long one (World War II, 2 MB of HTML) at over
+  30 MB, which is not kept.
+- **Measured in the guest** (stock base, Wikipedia, live): Back to a
+  kept article took 56 ms in the engine, 46 ms of it hiding the page
+  left, and the page was painted 971 ms after the key; on screen the
+  change showed about 3 seconds after the key was sent, because the
+  page being left was still running its scripts. Loading the same
+  articles took 30 to 70 seconds. View > Debug > Page Timings shows
+  these times for a page that Back or Forward showed from the kept
+  documents, with the number and estimated size of kept documents.
+- **To try it on the host**, run `aura-host chrome --net --tab URL --do
+  go:URL2 --do back --do cache`: `back` prints whether the kept document
+  was shown and how long it took, `cache` the kept documents and their
+  estimated size. `--no-doc-cache` turns the document cache off.
+  `tests/browser/test_back_cache.c` covers it on the fake transport.
 
 Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
 a navigation or a tab switch the page has the focus, unless the user is
@@ -702,9 +763,33 @@ policy stores the embedder attaches.
   (Cookie included) still selects the variant. An entry may take a
   quarter of the memory cache (8 MB by default), so a large article's
   HTML fits. To count hits on the host, run `aura-host chrome --net
-  --tab URL --do cache --do go:URL2 --do back --do cache`. `au_cache_stats` counts lookups,
-  304s, stores and disk reads. The page is parsed and laid out again on
-  Back: there is no cache of documents.
+  --no-doc-cache --tab URL --do cache --do go:URL2 --do back --do cache`
+  (without `--no-doc-cache`, Back shows the kept document and the HTTP
+  cache is not asked; see Browser chrome). `au_cache_stats` counts
+  lookups, 304s, stores and disk reads.
+- **stale-while-revalidate** (RFC 5861): inside the window
+  `au_cache_lookup` returns `AU_CACHE_STALE_USABLE`. For a subresource,
+  `cache_try` in `http.c` delivers the stale entry at once and starts a
+  transfer of its own to revalidate it (`revalidate_in_background`, one
+  per entry at a time, no callbacks); a document waits for the
+  revalidation. must-revalidate, no-cache and a request's no-cache or
+  max-age turn it off. `tests/net/test_swr.c` covers it.
+- **Disk cache writes are queued.** With
+  `au_disk_cache_set_deferred`, a store only keeps the file's bytes;
+  `au_disk_cache_idle` writes them oldest first and
+  `au_disk_cache_flush` (also `au_disk_cache_free`) writes the rest. A
+  lookup for a queued key is answered from the queue, and more than
+  2 MB of queued bytes are written at once. The Mac OS 9 shell turns it
+  on and writes one file per event loop pass while no transfer is under
+  way (`mac_net_idle`); a write takes about 9 ms there.
+- **The DNS cache** (`src/net/dns.c`) sits between the HTTP client and
+  `AuNetOps.resolve_*`: an answer is used for 5 minutes and a failure
+  for 10 seconds (the platforms give no TTL), at most 64 hosts, and
+  lookups of one host that overlap share one platform request. A
+  refused or failed connection forgets the host's answer.
+  `au_net_clear_dns` clears it (Clear Cache in Preferences does);
+  `au_net_dns_stats` counts lookups, and `aura-host chrome --do cache`
+  prints them. `tests/net/test_dns.c` covers it.
 - **To persist state**, serialize the stores with
   `au_cookie_jar_serialize`, `au_hsts_serialize` and the cache's
   `AuCacheStorage`, and parse them back at start. `aura-host fetch` keeps

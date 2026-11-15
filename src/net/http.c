@@ -141,6 +141,7 @@ struct AuHttpTransfer {
     char alpn[16];
     /* cache */
     AuCacheEntry *cache_entry; /* stale entry being revalidated */
+    bool swr_background;       /* a stale-while-revalidate revalidation: no callbacks, cache_entry is marked */
     AuCacheWriter *cache_w;    /* the response being stored */
     int64_t request_wall;      /* when the request went out (seconds) */
     /* HTTPS-first: the error the https attempt failed with */
@@ -194,6 +195,7 @@ struct AuNet {
     AuBrotliDict *brdict;
     int brdict_users;
     bool in_pump;
+    AuDns *dns; /* name lookups, cached and shared (dns.h) */
 };
 
 const char *au_net_error_name(AuNetError e)
@@ -217,6 +219,7 @@ AuNet *au_net_new(const AuNetOps *ops)
 {
     AuNet *net = au_calloc(sizeof *net);
     net->ops = *ops;
+    net->dns = au_dns_new(ops);
     AuNetConfig *c = &net->cfg;
     au_net_set_config_str(&c->user_agent, AU_DEFAULT_USER_AGENT);
     au_net_set_config_str(&c->accept_language, "en-US,en;q=0.9");
@@ -235,6 +238,16 @@ AuNet *au_net_new(const AuNetOps *ops)
 }
 
 AuNetConfig *au_net_config(AuNet *net) { return &net->cfg; }
+
+void au_net_clear_dns(AuNet *net)
+{
+    au_dns_clear(net->dns);
+}
+
+void au_net_dns_stats(const AuNet *net, AuDnsStats *out)
+{
+    au_dns_stats(net->dns, out);
+}
 const AuNetOps *au_net_ops(AuNet *net) { return &net->ops; }
 void au_net_set_cookie_jar(AuNet *net, AuCookieJar *jar) { net->jar = jar; }
 void au_net_set_hsts(AuNet *net, AuHsts *hsts) { net->hsts = hsts; }
@@ -427,7 +440,7 @@ static void conn_free(Conn *c)
 {
     AuNet *net = c->net;
     if (c->resolve_req)
-        net->ops.resolve_cancel(net->ops.ctx, c->resolve_req);
+        au_dns_cancel(net->dns, c->resolve_req);
     if (c->sock)
         net->ops.close(net->ops.ctx, c->sock);
     au_tls_free(c->tls_engine);
@@ -617,7 +630,7 @@ static Conn *conn_new(AuNet *net, const char *host, uint16_t port, bool tls)
         bare[rl - 2] = 0;
         rh = bare;
     }
-    c->resolve_req = net->ops.resolve_start(net->ops.ctx, rh);
+    c->resolve_req = au_dns_start(net->dns, rh);
     if (!c->resolve_req)
         conn_kill(c, AU_NET_ERR_DNS);
     c->next = net->conns;
@@ -800,6 +813,21 @@ static bool conn_io(Conn *c)
     return any;
 }
 
+/* The connection to the cached address failed: the next lookup of the
+ * host asks the resolver again (the host may have moved). */
+static void forget_address(Conn *c)
+{
+    const char *rh = c->proxy ? c->proxy : c->host;
+    char bare[300];
+    size_t rl = strlen(rh);
+    if (rh[0] == '[' && rl >= 2 && rl < sizeof bare) {
+        memcpy(bare, rh + 1, rl - 2);
+        bare[rl - 2] = 0;
+        rh = bare;
+    }
+    au_dns_forget(c->net->dns, rh);
+}
+
 /* Advances a connection through resolve, connect, proxy CONNECT and the
  * TLS handshake. Returns true if anything happened. */
 static bool conn_step(Conn *c)
@@ -809,13 +837,13 @@ static bool conn_step(Conn *c)
     switch (c->state) {
     case C_RESOLVE: {
         AuNetAddr a;
-        int r = net->ops.resolve_poll(net->ops.ctx, c->resolve_req, &a);
+        int r = au_dns_poll(net->dns, c->resolve_req, &a);
         if (r == 0) {
             if (elapsed(now, c->started_ms) > net->cfg.connect_timeout_ms)
                 conn_kill(c, AU_NET_ERR_TIMEOUT);
             return false;
         }
-        net->ops.resolve_cancel(net->ops.ctx, c->resolve_req);
+        au_dns_cancel(net->dns, c->resolve_req);
         c->resolve_req = 0;
         if (r < 0) {
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_DNS);
@@ -823,6 +851,7 @@ static bool conn_step(Conn *c)
         }
         c->sock = net->ops.connect(net->ops.ctx, &a, c->proxy ? c->proxy_port : c->port);
         if (!c->sock) {
+            forget_address(c);
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_CONNECT);
             return true;
         }
@@ -837,6 +866,7 @@ static bool conn_step(Conn *c)
             return false;
         }
         if (r < 0) {
+            forget_address(c);
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_CONNECT);
             return true;
         }
@@ -1237,16 +1267,25 @@ static void detach_conn(AuHttpTransfer *t, bool reusable)
     c->in.len = c->in_off = 0;
 }
 
+/* Releases the entry being revalidated (a background revalidation also
+ * takes its mark off). */
+static void drop_cache_entry(AuHttpTransfer *t)
+{
+    if (!t->cache_entry)
+        return;
+    if (t->swr_background)
+        au_cache_entry_set_revalidating(t->cache_entry, false);
+    au_cache_entry_release(t->net->cache, t->cache_entry);
+    t->cache_entry = NULL;
+}
+
 static void cache_drop(AuHttpTransfer *t)
 {
     if (t->cache_w) {
         au_cache_abort(t->cache_w);
         t->cache_w = NULL;
     }
-    if (t->cache_entry) {
-        au_cache_entry_release(t->net->cache, t->cache_entry);
-        t->cache_entry = NULL;
-    }
+    drop_cache_entry(t);
 }
 
 /* Ends the transfer's caIssuers fetch, if one runs: it is not wanted any
@@ -1553,6 +1592,35 @@ static void deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
     }
 }
 
+/* stale-while-revalidate: starts a transfer of its own that revalidates
+ * entry e as t's request would have (same URL, fields and context) and
+ * stores the result; nobody listens to it. The entry is marked until that
+ * transfer lets go of it, so one revalidation runs at a time. */
+static void revalidate_in_background(AuHttpTransfer *t, AuCacheEntry *e)
+{
+    AuHttpRequest rq;
+    memset(&rq, 0, sizeof rq);
+    rq.method = "GET";
+    rq.url = t->url.href;
+    au_headers_copy(&rq.headers, &t->extra);
+    rq.dest = t->dest;
+    rq.mode = t->mode;
+    rq.referrer = t->referrer;
+    rq.referrer_policy = t->rpolicy;
+    rq.top_level_url = t->top_level;
+    rq.omit_credentials = t->omit_credentials;
+    rq.allow_http_fallback = t->allow_http_fallback;
+    rq.range_start = rq.range_end = -1;
+    rq.total_timeout_ms = 60000;
+    AuHttpCallbacks cb;
+    memset(&cb, 0, sizeof cb);
+    AuHttpTransfer *b = au_http_start(t->net, &rq, &cb);
+    au_headers_free(&rq.headers);
+    b->swr_background = true;
+    b->cache_entry = au_cache_entry_ref(e); /* T_START then skips the lookup and sends the conditional request */
+    au_cache_entry_set_revalidating(e, true);
+}
+
 /* Looks the request up before connecting. Returns true when a fresh entry
  * was delivered (the transfer is finished). */
 static bool cache_try(AuHttpTransfer *t)
@@ -1571,6 +1639,21 @@ static bool cache_try(AuHttpTransfer *t)
     au_headers_free(&req);
     au_buf_free(&key);
     if (st == AU_CACHE_FRESH) {
+        deliver_cached(t, e, false);
+        au_cache_entry_release(net->cache, e);
+        finish(t, AU_NET_OK);
+        return true;
+    }
+    if (st == AU_CACHE_STALE_USABLE) {
+        /* stale-while-revalidate: a subresource is served stale now and
+         * revalidated in the background; a document waits for the
+         * revalidation, as the user asked for the page as it is now. */
+        if (t->dest == AU_DEST_DOCUMENT || t->dest == AU_DEST_IFRAME) {
+            t->cache_entry = e;
+            return false;
+        }
+        if (!au_cache_entry_revalidating(e))
+            revalidate_in_background(t, e);
         deliver_cached(t, e, false);
         au_cache_entry_release(net->cache, e);
         finish(t, AU_NET_OK);
@@ -1686,15 +1769,12 @@ static bool handle_head(AuHttpTransfer *t)
         int64_t now = wall(net);
         au_cache_update(net->cache, t->cache_entry, &t->parser.headers, t->request_wall, now);
         deliver_cached(t, t->cache_entry, true);
-        au_cache_entry_release(net->cache, t->cache_entry);
-        t->cache_entry = NULL;
+        drop_cache_entry(t);
         t->state = T_RECV; /* the 304 has no body; DONE finishes */
         return true;
     }
-    if (t->cache_entry && st != 401 && st != 407) { /* (an auth retry asks for the same URL again) */
-        au_cache_entry_release(net->cache, t->cache_entry);
-        t->cache_entry = NULL;
-    }
+    if (t->cache_entry && st != 401 && st != 407) /* (an auth retry asks for the same URL again) */
+        drop_cache_entry(t);
     /* Redirects */
     if ((st == 301 || st == 302 || st == 303 || st == 307 || st == 308) && !t->manual_redirect) {
         const char *loc = au_headers_get(&t->parser.headers, "location");
@@ -2408,6 +2488,7 @@ void au_net_free(AuNet *net)
     }
     while (net->conns)
         conn_remove(net, net->conns);
+    au_dns_free(net->dns);
     for (int i = 0; i < SESSION_CACHE; i++) {
         au_free(net->sessions[i].hostport);
         au_free(net->sessions[i].cert);

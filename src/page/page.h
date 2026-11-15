@@ -182,6 +182,25 @@ uint32_t au_docview_scripts_due(AuDocView *dv);
  * throws (out then holds the error). */
 bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
 
+/* ---- Keeping a document while it is not shown ----
+ * An embedder that keeps a view alive while another document is shown
+ * (the browser's document cache for Back and Forward) calls none of the
+ * view's functions meanwhile: timers, animation frames, image animation
+ * and the caret then stand still, and resume with the next
+ * au_docview_run_scripts and au_docview_animate. */
+/* False when the document must be discarded rather than kept: it is
+ * still loading, has requests outstanding, or window has an unload or
+ * beforeunload listener. */
+bool au_docview_can_persist(AuDocView *dv);
+/* The view is about to be hidden (pagehide) or was shown again
+ * (pageshow), both with persisted true. A hidden view drops its decoded
+ * image pixels; images decode again from their bytes when next painted. */
+void au_docview_set_hidden(AuDocView *dv, bool hidden);
+/* An estimate of the memory the document holds, in bytes: the tree, its
+ * style sheets, the layout, images (decoded and compressed) and the
+ * script runtime. */
+size_t au_docview_memory_estimate(AuDocView *dv);
+
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);
 /* Brings style and layout up to date. Returns true if geometry changed. */
