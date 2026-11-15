@@ -35,6 +35,23 @@ ppc() {
     # icon only from a custom icon: the 'icns' at ID -16455 that
     # tools/make-icon.py --custom-icon writes, plus hasCustomIcon.
     python3 tools/finder-flags.py --bundle --custom-icon build/ppc/src/platform/macos9/Aura.bin
+    dist
+}
+
+# The distributable folder, build/ppc/dist/Aura: the application (as
+# MacBinary) beside its Fonts folder (the bundled fonts, their licences
+# and fonts.idx). To push it to the guest:
+#   tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*
+dist() {
+    d=build/ppc/dist/Aura
+    rm -rf "$d"
+    mkdir -p "$d/Fonts"
+    cp build/ppc/src/platform/macos9/Aura.bin "$d/"
+    for fam in assets/fonts/*/; do
+        cp -R "$fam" "$d/Fonts/$(basename "$fam")"
+    done
+    cp assets/fonts/fonts.idx assets/fonts/README.md "$d/Fonts/"
+    echo "$d: $(du -sk "$d/Fonts" | cut -f1) KB of fonts, $(du -sk "$d" | cut -f1) KB in all"
 }
 
 case "${1:-all}" in

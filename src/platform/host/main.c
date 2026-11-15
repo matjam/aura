@@ -5,12 +5,15 @@
  *       Draws the paint test scene and writes it as a PNG.
  *   aura-host fonts [--font file.ttf]...
  *       Lists the registered font faces and the generic families.
+ *   aura-host font-index DIR [-o FILE]
+ *       Writes the index of a Fonts folder (DIR/fonts.idx).
  *   aura-host bench [--font file.ttf]...
  *       Times the rasterizer, compositing and text.
  *   aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--tab URL]...
  *       Renders a browser window (chrome and stub page) as a PNG. See
  *       usage() for the options. */
 #include "host.h"
+#include "fontdir.h"
 #include "png.h"
 #include "browser/browser.h"
 #include "browser/scene.h"
@@ -33,9 +36,12 @@ static double now_ms(void)
 static int usage(void)
 {
     fprintf(stderr,
-            "usage: aura-host scene [-o out.png] [-w W] [-h H] [-s scroll] [--font F]... [--no-system-fonts]\n"
-            "       aura-host fonts [--font F]...\n"
-            "       aura-host bench [--font F]...\n"
+            "usage: aura-host scene [-o out.png] [-w W] [-h H] [-s scroll] [font options]\n"
+            "       aura-host fonts [font options]\n"
+            "       aura-host bench [font options]\n"
+            "       aura-host font-index DIR [-o FILE]   (writes DIR/fonts.idx)\n"
+            "       font options: --font F, --no-system-fonts (or --bundled-only), --no-bundled-fonts,\n"
+            "                     --fonts-dir D (default assets/fonts or $AURA_FONTS)\n"
             "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
@@ -65,13 +71,46 @@ static int cmd_scene(AuFontSet *fonts, const char *out, int w, int h, int scroll
     return 0;
 }
 
+/* aura-host font-index DIR [-o FILE]: writes the Fonts folder index
+ * (default DIR/fonts.idx). */
+static int cmd_font_index(int argc, char **argv)
+{
+    if (argc < 3)
+        return usage();
+    const char *dir = argv[2];
+    char def[2048];
+    snprintf(def, sizeof def, "%s/fonts.idx", dir);
+    const char *out = def;
+    if (argc >= 5 && !strcmp(argv[3], "-o"))
+        out = argv[4];
+    AuBuf b;
+    au_buf_init(&b);
+    if (!au_host_font_index(dir, &b)) {
+        fprintf(stderr, "aura-host: no usable fonts in %s\n", dir);
+        au_buf_free(&b);
+        return 1;
+    }
+    FILE *f = !strcmp(out, "-") ? stdout : fopen(out, "wb");
+    if (!f) {
+        fprintf(stderr, "aura-host: cannot write %s\n", out);
+        au_buf_free(&b);
+        return 1;
+    }
+    fwrite(b.data, 1, b.len, f);
+    if (f != stdout)
+        fclose(f);
+    au_buf_free(&b);
+    return 0;
+}
+
 static int cmd_fonts(AuFontSet *fonts)
 {
     for (size_t i = 0; i < au_fontset_count(fonts); i++) {
         int weight;
         bool italic;
         const char *fam = au_fontset_entry(fonts, i, &weight, &italic);
-        printf("%-28s %3d %s\n", fam, weight, italic ? "italic" : "normal");
+        printf("%-28s %3d %s%s\n", fam, weight, italic ? "italic" : "normal",
+               (au_fontset_entry_flags(fonts, i) & AU_FONT_BUNDLED) ? "  (bundled)" : "");
     }
     static const char *gen[] = {"serif", "sans-serif", "monospace", "system-ui"};
     for (int g = 0; g < 4; g++) {
@@ -352,7 +391,10 @@ int main(int argc, char **argv)
         const char *out = "chrome.png";
         for (int i = 2; i < argc; i++) {
             const char *a = argv[i];
-            if (!strcmp(a, "-o") && i + 1 < argc)
+            int used = au_host_font_option(argc, argv, i);
+            if (used)
+                i += used - 1;
+            else if (!strcmp(a, "-o") && i + 1 < argc)
                 out = argv[++i];
             else if (!strcmp(a, "-w") && i + 1 < argc)
                 o.w = atoi(argv[++i]);
@@ -382,10 +424,6 @@ int main(int argc, char **argv)
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);
             }
-            else if (!strcmp(a, "--font") && i + 1 < argc)
-                au_host_add_font_path(argv[++i]);
-            else if (!strcmp(a, "--no-system-fonts"))
-                au_host_use_system_fonts(false);
             else
                 return usage();
         }
@@ -399,9 +437,14 @@ int main(int argc, char **argv)
     }
     const char *out = "scene.png";
     int w = 640, h = AU_SCENE_HEIGHT, scroll = 0;
+    if (!strcmp(cmd, "font-index"))
+        return cmd_font_index(argc, argv);
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
-        if (!strcmp(a, "-o") && i + 1 < argc)
+        int used = au_host_font_option(argc, argv, i);
+        if (used)
+            i += used - 1;
+        else if (!strcmp(a, "-o") && i + 1 < argc)
             out = argv[++i];
         else if (!strcmp(a, "-w") && i + 1 < argc)
             w = atoi(argv[++i]);
@@ -409,10 +452,6 @@ int main(int argc, char **argv)
             h = atoi(argv[++i]);
         else if (!strcmp(a, "-s") && i + 1 < argc)
             scroll = atoi(argv[++i]);
-        else if (!strcmp(a, "--font") && i + 1 < argc)
-            au_host_add_font_path(argv[++i]);
-        else if (!strcmp(a, "--no-system-fonts"))
-            au_host_use_system_fonts(false);
         else
             return usage();
     }

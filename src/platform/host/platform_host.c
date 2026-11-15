@@ -2,8 +2,10 @@
  * any POSIX system). There is no window; the window surface is an
  * offscreen surface the tool writes to a PNG. */
 #include "host.h"
+#include "fontdir.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -64,7 +66,10 @@ static const char *const system_fonts[] = {
 
 static const char *extra_fonts[64];
 static int nextra;
-static bool use_system_fonts = true;
+static bool use_system_fonts = true, use_bundled_fonts = true;
+static const char *bundled_dir;
+static AuHostFontDir *bundled[16];
+static int nbundled;
 
 void au_host_add_font_path(const char *path)
 {
@@ -75,6 +80,46 @@ void au_host_add_font_path(const char *path)
 void au_host_use_system_fonts(bool on)
 {
     use_system_fonts = on;
+}
+
+void au_host_use_bundled_fonts(bool on)
+{
+    use_bundled_fonts = on;
+}
+
+void au_host_set_fonts_dir(const char *dir)
+{
+    bundled_dir = dir;
+}
+
+const char *au_host_fonts_dir(void)
+{
+    if (bundled_dir)
+        return bundled_dir;
+    const char *env = getenv("AURA_FONTS");
+    return env && *env ? env : AURA_FONTS_DIR;
+}
+
+int au_host_font_option(int argc, char **argv, int i)
+{
+    const char *a = argv[i];
+    if (!strcmp(a, "--font") && i + 1 < argc) {
+        au_host_add_font_path(argv[i + 1]);
+        return 2;
+    }
+    if (!strcmp(a, "--fonts-dir") && i + 1 < argc) {
+        au_host_set_fonts_dir(argv[i + 1]);
+        return 2;
+    }
+    if (!strcmp(a, "--no-system-fonts") || !strcmp(a, "--bundled-only")) {
+        au_host_use_system_fonts(false);
+        return 1;
+    }
+    if (!strcmp(a, "--no-bundled-fonts")) {
+        au_host_use_bundled_fonts(false);
+        return 1;
+    }
+    return 0;
 }
 
 static bool have_family(AuFontSet *set, const char *family)
@@ -119,6 +164,10 @@ void au_platform_load_fonts(AuFontSet *set)
         for (size_t i = 0; i < sizeof system_fonts / sizeof system_fonts[0]; i++)
             add_file(set, system_fonts[i]);
     }
+    /* The bundled faces come after the system's, so a system face of the
+     * same family wins. Their data lives as long as the process. */
+    if (use_bundled_fonts && nbundled < 16)
+        bundled[nbundled++] = au_host_add_font_dir(set, au_host_fonts_dir(), AU_FONT_BUNDLED);
     map_generic(set, AU_GENERIC_SERIF, "Times New Roman", "Times");
     map_generic(set, AU_GENERIC_SANS_SERIF, "Helvetica", "Arial");
     map_generic(set, AU_GENERIC_MONOSPACE, "Courier New", "Courier");

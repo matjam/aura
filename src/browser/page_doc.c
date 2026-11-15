@@ -653,20 +653,28 @@ static void css_string(AuBuf *b, const char *s)
 static void build_fonts(AuPage *p, AuBuf *b)
 {
     page_head(b, "Fonts");
-    size_t n = au_fontset_count(p->env.fonts);
-    au_buf_printf(b, "<h1>Fonts</h1><p class=note>%u font faces registered.</p>"
-                     "<table style='border-spacing:0 2px'>",
-                  (unsigned)n);
+    size_t n = au_fontset_count(p->env.fonts), bundled = 0;
+    for (size_t i = 0; i < n; i++)
+        bundled += (au_fontset_entry_flags(p->env.fonts, i) & AU_FONT_BUNDLED) != 0;
+    AuFontSetStats st;
+    au_fontset_stats(p->env.fonts, &st);
+    au_buf_printf(b,
+                  "<h1>Fonts</h1><p class=note>%u font faces registered: %u from the system, %u bundled with Aura "
+                  "(its Fonts folder). %u loaded, %u KB of font data.</p>"
+                  "<table style='border-spacing:0 2px'>",
+                  (unsigned)n, (unsigned)(n - bundled), (unsigned)bundled, (unsigned)st.loaded,
+                  (unsigned)(st.loaded_bytes / 1024));
     for (size_t i = 0; i < n; i++) {
         int weight;
         bool italic;
         const char *fam = au_fontset_entry(p->env.fonts, i, &weight, &italic);
         if (!fam)
             continue;
+        bool own = (au_fontset_entry_flags(p->env.fonts, i) & AU_FONT_BUNDLED) != 0;
         au_buf_puts(b, "<tr><td class=note style='padding-right:16px'>");
         html_escape_str(b, fam);
-        au_buf_printf(b, " %d%s</td><td style=\"font-size:15px;font-weight:%d;font-style:%s;font-family:", weight,
-                      italic ? " italic" : "", weight, italic ? "italic" : "normal");
+        au_buf_printf(b, " %d%s%s</td><td style=\"font-size:15px;font-weight:%d;font-style:%s;font-family:", weight,
+                      italic ? " italic" : "", own ? " (bundled)" : "", weight, italic ? "italic" : "normal");
         css_string(b, fam);
         au_buf_puts(b, "\">The quick brown fox 0123</td></tr>");
     }

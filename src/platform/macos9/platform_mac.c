@@ -1,7 +1,9 @@
 /* The Mac OS 9 platform: time, files and fonts. The window functions are
  * in main.c, which owns the window.
  *
- * Fonts: Aura bundles none. The fonts in the System Folder's Fonts folder
+ * Fonts: the system's come first, then the faces bundled in the Fonts
+ * folder beside the application (see load_bundled_fonts). The fonts in
+ * the System Folder's Fonts folder
  * are font suitcases that the system opens at startup and keeps in the
  * resource chain, so GetIndResource('FOND') walks every installed family.
  * A family's FOND lists its faces; an entry with point size 0 is an
@@ -190,7 +192,7 @@ static int add_fond(AuFontSet *set, Handle fond)
         ref->id = sfnt;
         int weight = (style & 1) ? 700 : 400;
         bool italic = (style & 2) != 0;
-        au_fontset_add_lazy(set, family, weight, italic, 0, load_sfnt, ref);
+        au_fontset_add_lazy(set, family, weight, italic, 0, 0, load_sfnt, ref);
         added++;
     }
     HSetState(fond, state);
@@ -271,10 +273,237 @@ static void map_generic(AuFontSet *set, AuGenericFamily g, const char *a, const 
     }
 }
 
+/* ---- Bundled fonts: the Fonts folder beside the application ----
+ * The folder holds .ttf files (data fork) in a subfolder per family and
+ * an index, fonts.idx, naming each face's file, weight, style and family.
+ * Faces are registered from the index alone; a face's file is read the
+ * first time it is matched, into temporary memory when there is room. */
+
+typedef struct BundledRef {
+    short vref;
+    long dir;           /* the Fonts folder */
+    unsigned char path[64]; /* partial HFS path from it (Pascal string) */
+    Handle mem;
+    Ptr ptr;
+    bool tried;
+} BundledRef;
+
+static uint32_t fonts_ms, bundled_ms;
+static int bundled_faces;
+
+static bool read_fork(short ref, Handle *hout, Ptr *pout, long *len)
+{
+    long eof = 0;
+    if (GetEOF(ref, &eof) != noErr || eof <= 0)
+        return false;
+    OSErr err;
+    Handle th = TempNewHandle(eof, &err);
+    Ptr buf;
+    if (th && err == noErr) {
+        HLock(th);
+        buf = *th;
+    } else {
+        th = NULL;
+        buf = NewPtr(eof);
+        if (!buf)
+            return false;
+    }
+    long count = eof;
+    if (FSRead(ref, &count, buf) != noErr || count != eof) {
+        if (th)
+            DisposeHandle(th);
+        else
+            DisposePtr(buf);
+        return false;
+    }
+    *hout = th;
+    *pout = th ? NULL : buf;
+    *len = eof;
+    return true;
+}
+
+static bool load_bundled(void *ctx, const void **data, size_t *len)
+{
+    BundledRef *b = ctx;
+    if (!b->tried) {
+        b->tried = true;
+        FSSpec spec;
+        short ref;
+        long n;
+        if (FSMakeFSSpec(b->vref, b->dir, b->path, &spec) == noErr && FSpOpenDF(&spec, fsRdPerm, &ref) == noErr) {
+            if (!read_fork(ref, &b->mem, &b->ptr, &n))
+                b->mem = NULL, b->ptr = NULL;
+            FSClose(ref);
+        }
+    }
+    if (!b->mem && !b->ptr)
+        return false;
+    *data = b->mem ? (const void *)*b->mem : (const void *)b->ptr;
+    *len = (size_t)(b->mem ? GetHandleSize(b->mem) : GetPtrSize(b->ptr));
+    return true;
+}
+
+typedef struct IndexCtx {
+    AuFontSet *set;
+    short vref;
+    long dir;
+} IndexCtx;
+
+static void add_bundled(void *ctx, const AuFontIndexEntry *e)
+{
+    IndexCtx *ic = ctx;
+    size_t n = strlen(e->path);
+    if (n + 1 > 62)
+        return;
+    BundledRef *b = au_calloc(sizeof *b);
+    b->vref = ic->vref;
+    b->dir = ic->dir;
+    /* "a/b.ttf" becomes ":a:b.ttf", relative to the Fonts folder. */
+    b->path[0] = (unsigned char)(n + 1);
+    b->path[1] = ':';
+    for (size_t i = 0; i < n; i++)
+        b->path[2 + i] = e->path[i] == '/' ? ':' : (unsigned char)e->path[i];
+    au_fontset_add_lazy(ic->set, e->family, e->weight, e->italic, e->face_index, AU_FONT_BUNDLED, load_bundled, b);
+    bundled_faces++;
+}
+
+/* The folder named name inside (vref, dir), or false. */
+static bool sub_folder(short vref, long dir, const unsigned char *name, long *out)
+{
+    CInfoPBRec pb;
+    Str255 nm;
+    memcpy(nm, name, (size_t)name[0] + 1);
+    memset(&pb, 0, sizeof pb);
+    pb.dirInfo.ioNamePtr = nm;
+    pb.dirInfo.ioVRefNum = vref;
+    pb.dirInfo.ioDrDirID = dir;
+    pb.dirInfo.ioFDirIndex = 0;
+    if (PBGetCatInfoSync(&pb) != noErr || !(pb.dirInfo.ioFlAttrib & 0x10))
+        return false;
+    *out = pb.dirInfo.ioDrDirID;
+    return true;
+}
+
+static bool has_ttf_suffix(const unsigned char *p)
+{
+    if (p[0] < 5)
+        return false;
+    const unsigned char *s = p + 1 + p[0] - 4;
+    return s[0] == '.' && (s[1] | 32) == 't' && (s[2] | 32) == 't' && ((s[3] | 32) == 'f' || (s[3] | 32) == 'c');
+}
+
+/* Without an index: describe the fonts in the folder and its subfolders
+ * by reading each once (slow; the index exists so this does not run). */
+static void describe_folder(AuBuf *b, short vref, long dir, const char *prefix, int depth)
+{
+    for (short index = 1; index < 500; index++) {
+        CInfoPBRec pb;
+        Str255 name;
+        memset(&pb, 0, sizeof pb);
+        pb.hFileInfo.ioNamePtr = name;
+        pb.hFileInfo.ioVRefNum = vref;
+        pb.hFileInfo.ioDirID = dir;
+        pb.hFileInfo.ioFDirIndex = index;
+        if (PBGetCatInfoSync(&pb) != noErr)
+            break;
+        char rel[128];
+        size_t pl = strlen(prefix);
+        if (pl + name[0] + 2 > sizeof rel)
+            continue;
+        memcpy(rel, prefix, pl);
+        memcpy(rel + pl, name + 1, name[0]);
+        rel[pl + name[0]] = 0;
+        if (pb.hFileInfo.ioFlAttrib & 0x10) {
+            if (depth < 1) {
+                long sub = pb.dirInfo.ioDrDirID;
+                rel[pl + name[0]] = '/';
+                rel[pl + name[0] + 1] = 0;
+                describe_folder(b, vref, sub, rel, depth + 1);
+            }
+            continue;
+        }
+        if (!has_ttf_suffix(name))
+            continue;
+        short ref;
+        if (HOpenDF(vref, dir, name, fsRdPerm, &ref) != noErr)
+            continue;
+        Handle h = NULL;
+        Ptr p = NULL;
+        long len;
+        if (read_fork(ref, &h, &p, &len)) {
+            au_font_index_write(b, rel, h ? (const void *)*h : (const void *)p, (size_t)len);
+            if (h)
+                DisposeHandle(h);
+            else
+                DisposePtr(p);
+        }
+        FSClose(ref);
+    }
+}
+
+static void load_bundled_fonts(AuFontSet *set)
+{
+    ProcessSerialNumber psn;
+    ProcessInfoRec info;
+    FSSpec app;
+    if (GetCurrentProcess(&psn) != noErr)
+        return;
+    memset(&info, 0, sizeof info);
+    info.processInfoLength = sizeof info;
+    info.processAppSpec = &app;
+    if (GetProcessInformation(&psn, &info) != noErr)
+        return;
+    IndexCtx ic = {set, app.vRefNum, 0};
+    if (!sub_folder(app.vRefNum, app.parID, (const unsigned char *)"\005Fonts", &ic.dir))
+        return;
+    short ref;
+    Handle h = NULL;
+    Ptr p = NULL;
+    long len = 0;
+    if (HOpenDF(ic.vref, ic.dir, (const unsigned char *)"\011fonts.idx", fsRdPerm, &ref) == noErr) {
+        bool ok = read_fork(ref, &h, &p, &len);
+        FSClose(ref);
+        if (ok) {
+            au_font_index_parse(h ? (const char *)*h : (const char *)p, (size_t)len, add_bundled, &ic);
+            if (h)
+                DisposeHandle(h);
+            else
+                DisposePtr(p);
+            return;
+        }
+    }
+    AuBuf b;
+    au_buf_init(&b);
+    describe_folder(&b, ic.vref, ic.dir, "", 0);
+    au_font_index_parse(b.data ? b.data : "", b.len, add_bundled, &ic);
+    au_buf_free(&b);
+}
+
+uint32_t mac_fonts_ms(void)
+{
+    return fonts_ms;
+}
+
+uint32_t mac_fonts_bundled_ms(void)
+{
+    return bundled_ms;
+}
+
+int mac_fonts_bundled(void)
+{
+    return bundled_faces;
+}
+
 void au_platform_load_fonts(AuFontSet *set)
 {
+    uint32_t t0 = au_platform_time_ms();
     if (scan_chain(set) == 0)
         scan_fonts_folder(set);
+    /* After the system's: a system face of the same family wins. */
+    uint32_t t1 = au_platform_time_ms();
+    load_bundled_fonts(set);
+    bundled_ms = au_platform_time_ms() - t1;
+    fonts_ms = au_platform_time_ms() - t0;
     map_generic(set, AU_GENERIC_SERIF, "Times New Roman", "Times", "Georgia");
     map_generic(set, AU_GENERIC_SANS_SERIF, "Helvetica", "Arial", "Geneva");
     map_generic(set, AU_GENERIC_MONOSPACE, "Courier New", "Courier", "Monaco");

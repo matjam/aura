@@ -210,7 +210,9 @@ static inline LText *lb_text(LBox *b) { return (LText *)b; }
 
 /* ---- Fonts and text measurement (text.c) ---- */
 typedef struct LFont {
-    AuFontFace *face;
+    AuFontFace *face;   /* the primary face of list */
+    AuFontList *list;   /* the family list, for per-character fallback */
+    bool fallback;      /* some text measured with it used another face */
     float size;
     AuFontMetrics m;
     uint16_t weight;
@@ -221,7 +223,6 @@ typedef struct LFont {
 
 /* ---- The layout context ---- */
 typedef struct LWordEntry LWordEntry;
-typedef struct LFallback LFallback;
 
 typedef struct LSeg LSeg;
 typedef struct LItem LItem;
@@ -244,7 +245,6 @@ struct AuLayout {
     /* fonts */
     LFont *font_hash[64];
     LArena font_arena;
-    LFallback *fallback; /* code point to face cache */
     /* word width cache */
     LWordEntry **words;
     uint32_t nwords, words_cap;
@@ -282,8 +282,8 @@ static inline uint32_t l_paint_color(uint32_t css)
 LFont *l_font(AuLayout *L, const AuStyle *s);
 float l_measure(AuLayout *L, LFont *f, const AuStyle *s, const char *t, size_t n);
 float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n);
-AuFontFace *l_face_for(AuLayout *L, LFont *f, uint32_t cp);
 float l_line_height(const AuStyle *s, LFont *f);
+bool l_text_fallback_extents(AuLayout *L, LFont *f, const char *t, size_t n, float *ascent, float *descent);
 void l_text_free_caches(AuLayout *L);
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,
                  uint32_t color, float spacing);

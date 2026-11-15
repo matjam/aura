@@ -57,6 +57,11 @@ static inline WindowPtr mac_next_window(WindowPtr w)
     return (WindowPtr)((WindowPeek)w)->nextWindow;
 }
 
+/* ---- platform_mac.c ---- */
+uint32_t mac_fonts_ms(void);  /* time au_platform_load_fonts took */
+uint32_t mac_fonts_bundled_ms(void); /* of which, registering the Fonts folder */
+int mac_fonts_bundled(void);  /* faces registered from the Fonts folder */
+
 /* ---- main.c ---- */
 extern AuBrowser *g_browser;
 extern AuFontSet *g_fonts;
