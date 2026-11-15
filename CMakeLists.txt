@@ -30,6 +30,11 @@ endif()
 file(GLOB_RECURSE AURA_ENGINE_SOURCES CONFIGURE_DEPENDS src/*.c)
 list(FILTER AURA_ENGINE_SOURCES EXCLUDE REGEX "/src/platform/")
 add_library(aura_engine STATIC ${AURA_ENGINE_SOURCES})
+# Sanitizer builds: check for null pointers given to memcpy and friends
+# on every host, as glibc's headers make UBSan do on Linux (nullcheck.h).
+if(CMAKE_C_FLAGS MATCHES "-fsanitize")
+    target_compile_options(aura_engine PRIVATE -include ${CMAKE_SOURCE_DIR}/src/core/nullcheck.h)
+endif()
 target_include_directories(aura_engine PUBLIC src)
 include(third_party/quickjs.cmake)
 include(third_party/mbedtls.cmake)

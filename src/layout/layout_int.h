@@ -71,7 +71,8 @@ enum { LR_NONE, LR_IMAGE, LR_TEXT_INPUT, LR_CHECKBOX, LR_RADIO, LR_BUTTON, LR_SE
        LR_RANGE, LR_OTHER, LR_DISC, LR_CIRCLE, LR_SQUARE, /* list marker shapes */
        LR_LISTBOX, LR_FILE, LR_COLOR, LR_PROGRESS, LR_METER,
        LR_DISCLOSURE_OPEN, LR_DISCLOSURE_CLOSED /* marker shapes */,
-       LR_SVG /* an outer svg element: painted by src/svg */ };
+       LR_SVG /* an outer svg element: painted by src/svg */,
+       LR_CANVAS /* a canvas element: its bitmap, from AuLayoutEnv.canvas */ };
 
 /* True for the kinds that are form controls. */
 static inline bool l_is_control_kind(int r)

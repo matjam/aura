@@ -755,13 +755,13 @@ bool css_presentational_hints(const AuElement *el, AuCssDeclBlock *out, bool qui
                tag == HN(h4) || tag == HN(h5) || tag == HN(h6) || tag == HN(legend)) {
         put_align_text(&b, get(el, CSS_HN_align), tag == HN(div));
     } else if (tag == HN(img) || tag == HN(object) || tag == HN(embed) || tag == HN(iframe) ||
-               tag == HN(video) || tag == HN(canvas) || tag == HN(input)) {
+               tag == HN(video) || tag == HN(input)) {
         bool is_input = tag == HN(input);
         const char *ty = is_input ? get(el, CSS_HN_type) : NULL;
         if (!is_input || (ty && attr_ieq(ty, "image"))) {
             put_len(&b, "width", get(el, CSS_HN_width), true, true);
             put_len(&b, "height", get(el, CSS_HN_height), true, true);
-            if (tag != HN(video) && tag != HN(canvas))
+            if (tag != HN(video))
                 put_img_align(&b, get(el, CSS_HN_align));
             put_space(&b, el);
             if (tag == HN(img) || tag == HN(object) || is_input) {

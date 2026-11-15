@@ -310,6 +310,25 @@ static char *h_prompt(void *ctx, const char *origin, const char *message, const 
 
 static bool ensure_js(AuDocScript *s);
 
+static struct AuCanvasSet *h_canvas_set(void *ctx)
+{
+    AuDocScript *s = ctx;
+    return au_dv_canvas_set(s->dv);
+}
+
+static bool h_image_origin_clean(void *ctx, const char *url)
+{
+    AuDocScript *s = ctx;
+    return au_docview_image_origin_clean(s->dv, url);
+}
+
+static bool h_canvas_image(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
+                           size_t url_cap)
+{
+    AuDocScript *s = ctx;
+    return au_dv_canvas_image(s->dv, img, px, w, h, url, url_cap);
+}
+
 static void h_frames_changed(void *ctx)
 {
     AuDocScript *s = ctx;
@@ -540,6 +559,9 @@ static bool ensure_js(AuDocScript *s)
     h.frame_js = h_frame_js;
     h.parent_js = h_parent_js;
     h.frame_element = h_frame_element;
+    h.canvas_set = h_canvas_set;
+    h.canvas_image = h_canvas_image;
+    h.image_origin_clean = h_image_origin_clean;
     AuDocView *dv = s->dv;
     if (dv->parent) {
         /* A nested document: a context in the page's runtime, which the

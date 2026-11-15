@@ -1,6 +1,8 @@
 # Aura
 
 [![CI](https://github.com/matjam/aura/actions/workflows/ci.yml/badge.svg)](https://github.com/matjam/aura/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/matjam/aura)](https://github.com/matjam/aura/releases)
+[![License: MIT](https://img.shields.io/github/license/matjam/aura)](LICENSE)
 
 A web browser for Mac OS 9 on PowerPC, with its engine written from
 scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses

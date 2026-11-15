@@ -67,6 +67,13 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el)
     /* Fixed boxes are placed by the viewport scroll: cover both. */
     int pad = 4;
     AuIRect ir = {(int)r.x - pad, (int)r.y - pad, (int)(r.x + r.w) + pad + 1, (int)(r.y + r.h) + pad + 1};
+    au_dv_invalidate_element_rect(dv, el, ir);
+}
+
+void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect ir)
+{
+    if (!dv->cb.invalidate)
+        return;
     dv->cb.invalidate(dv->cb.ctx, dv, ir);
     if (is_fixed(el)) {
         AuIRect f = {ir.x0 + dv->scroll_x, ir.y0 + dv->scroll_y, ir.x1 + dv->scroll_x, ir.y1 + dv->scroll_y};

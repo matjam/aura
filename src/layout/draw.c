@@ -1748,6 +1748,18 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     case LR_SVG:
         paint_svg(P, b, cb);
         break;
+    case LR_CANVAS:
+        /* The canvas's bitmap, scaled to the content box. */
+        if (P->L->env.canvas && b->b.node && au_is_element(b->b.node) && cb.w > 0 && cb.h > 0) {
+            const AuSurface *px = NULL;
+            if (P->L->env.canvas(P->L->env.ctx, au_as_element(b->b.node), &px) == 0 && px && px->width > 0 &&
+                px->height > 0)
+                au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, cb,
+                              s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
+                                                                                     : AU_FILTER_BILINEAR,
+                              1);
+        }
+        break;
     case LR_OTHER:
         /* A nested document (iframe, frame, object, embed). */
         if (P->L->env.paint_frame && b->b.node && au_is_element(b->b.node) && cb.w >= 1 && cb.h >= 1)

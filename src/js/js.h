@@ -149,6 +149,9 @@ typedef struct AuJsRect {
     float x, y, w, h;
 } AuJsRect;
 
+struct AuSurface;
+struct AuCanvasSet;
+
 typedef struct AuJsHooks {
     void *ctx;
     /* Monotonic milliseconds: timers, performance.now, script budgets. */
@@ -245,6 +248,24 @@ typedef struct AuJsHooks {
     /* Coroutines for workers (optional; see core/coro.h). The struct must
      * outlive the AuJs. */
     const AuCoroOps *coro;
+    /* Canvas (both optional). canvas_set: the document's canvas set (an
+     * AuCanvasSet of src/paint/canvas2d.h), in which the bindings make
+     * each canvas's bitmap so that the embedder can paint it, count its
+     * memory and repaint it after script drew (au_canvas_set_take_dirty);
+     * without the hook the canvases live in a set of the AuJs's own and
+     * are never painted. canvas_image: the decoded pixels of an image
+     * element the document loaded, at full size where memory allows, for
+     * drawImage: *px is valid until script returns to the embedder, *w and
+     * *h are the natural size (the pixels may be a reduced decode), url
+     * receives the URL the image came from. False when it has none. */
+    struct AuCanvasSet *(*canvas_set)(void *ctx);
+    bool (*canvas_image)(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
+                         size_t url_cap);
+    /* Whether the image the document loaded from url may be read back
+     * from a canvas: it is of the document's origin, or its response
+     * passed the CORS check (an <img crossorigin>). Optional: without it
+     * only same-origin, data: and blob: images are clean. */
+    bool (*image_origin_clean)(void *ctx, const char *url);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */

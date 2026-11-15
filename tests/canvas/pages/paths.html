@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: paths, Path2D, fill rules, clipping, strokes, hit tests</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+</head>
+<body>
+<script>
+const G = [0, 128, 0, 255];
+function fresh() { const c = mk(100, 100); c.fillStyle = 'green'; c.strokeStyle = 'green'; return c; }
+test('lines and closePath', () => {
+    const c = fresh();
+    c.beginPath();
+    c.moveTo(10, 10);
+    c.lineTo(90, 10);
+    c.lineTo(50, 90);
+    c.fill(); /* an open subpath is closed for filling */
+    isPx(c, 50, 30, G);
+    assert.deepEqual(px(c, 15, 60), CLEAR);
+    assert.deepEqual(px(c, 85, 60), CLEAR);
+    /* lineTo without a subpath starts one */
+    c.reset();
+    c.fillStyle = 'green';
+    c.lineTo(10, 10);
+    c.lineTo(60, 10);
+    c.lineTo(60, 60);
+    c.lineTo(10, 60);
+    c.fill();
+    isPx(c, 30, 30, G);
+    /* beginPath forgets */
+    c.reset();
+    c.fillStyle = 'green';
+    c.rect(0, 0, 50, 50);
+    c.beginPath();
+    c.fill();
+    assert.deepEqual(px(c, 10, 10), CLEAR);
+    /* arguments that are not finite: the call is dropped */
+    c.beginPath();
+    c.moveTo(10, 10);
+    c.lineTo(Infinity, 10);
+    c.lineTo(90, NaN);
+    c.lineTo(90, 10);
+    c.lineTo(90, 90);
+    c.lineTo(10, 90);
+    c.fill();
+    isPx(c, 50, 50, G);
+    assert.throws(() => c.lineTo(1), TypeError);
+});
+test('fill rules', () => {
+    const c = fresh();
+    c.rect(10, 10, 80, 80);
+    c.rect(30, 30, 40, 40);
+    c.fill();
+    isPx(c, 50, 50, G, 0, 'nonzero fills the inner square');
+    c.reset();
+    c.fillStyle = 'green';
+    c.rect(10, 10, 80, 80);
+    c.rect(30, 30, 40, 40);
+    c.fill('evenodd');
+    assert.deepEqual(px(c, 50, 50), CLEAR, 'evenodd leaves it');
+    isPx(c, 20, 20, G);
+    assert.ok(c.isPointInPath(50, 50));
+    assert.ok(!c.isPointInPath(50, 50, 'evenodd'));
+    assert.ok(c.isPointInPath(20, 20, 'evenodd'));
+    assert.ok(!c.isPointInPath(5, 5));
+    assert.ok(!c.isPointInPath(NaN, 5));
+    assert.throws(() => c.fill('odd'), TypeError);
+    /* a square wound the other way makes a hole under nonzero */
+    c.reset();
+    c.fillStyle = 'green';
+    c.rect(10, 10, 80, 80);
+    c.moveTo(30, 30);
+    c.lineTo(30, 70);
+    c.lineTo(70, 70);
+    c.lineTo(70, 30);
+    c.closePath();
+    c.fill();
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+});
+test('arc, ellipse, arcTo', () => {
+    let c = fresh();
+    c.arc(50, 50, 30, 0, Math.PI * 2);
+    c.fill();
+    isPx(c, 50, 50, G);
+    isPx(c, 50, 22, G);
+    isPx(c, 78, 50, G);
+    assert.deepEqual(px(c, 75, 75), CLEAR, 'outside the circle');
+    assert.deepEqual(px(c, 50, 18), CLEAR);
+    /* a half circle: the lower half, clockwise from 0 to pi */
+    c = fresh();
+    c.arc(50, 50, 30, 0, Math.PI);
+    c.fill();
+    isPx(c, 50, 65, G);
+    assert.deepEqual(px(c, 50, 35), CLEAR);
+    /* counter-clockwise from 0 to pi: the upper half */
+    c = fresh();
+    c.arc(50, 50, 30, 0, Math.PI, true);
+    c.fill();
+    isPx(c, 50, 35, G);
+    assert.deepEqual(px(c, 50, 65), CLEAR);
+    /* more than a turn is the whole circle; equal angles add no arc */
+    c = fresh();
+    c.arc(50, 50, 30, 0, 20);
+    c.fill();
+    isPx(c, 50, 35, G);
+    isPx(c, 50, 65, G);
+    assert.throws(() => c.arc(0, 0, -1, 0, 1), 'IndexSizeError');
+    c = fresh();
+    c.ellipse(50, 50, 40, 10, 0, 0, Math.PI * 2);
+    c.fill();
+    isPx(c, 15, 50, G);
+    isPx(c, 50, 57, G);
+    assert.deepEqual(px(c, 50, 65), CLEAR);
+    /* rotated a quarter turn it is tall */
+    c = fresh();
+    c.ellipse(50, 50, 40, 10, Math.PI / 2, 0, Math.PI * 2);
+    c.fill();
+    isPx(c, 50, 15, G);
+    assert.deepEqual(px(c, 15, 50), CLEAR);
+    assert.throws(() => c.ellipse(0, 0, 1, -1, 0, 0, 1), 'IndexSizeError');
+    /* arcTo rounds a corner: the corner pixel stays clear */
+    c = fresh();
+    c.moveTo(10, 10);
+    c.arcTo(90, 10, 90, 90, 40);
+    c.lineTo(90, 90);
+    c.lineTo(10, 90);
+    c.fill();
+    isPx(c, 50, 50, G);
+    isPx(c, 20, 14, G);
+    assert.deepEqual(px(c, 86, 14), CLEAR, 'the rounded corner');
+    isPx(c, 76, 30, G);
+    assert.throws(() => c.arcTo(1, 1, 2, 2, -1), 'IndexSizeError');
+});
+test('curves', () => {
+    let c = fresh();
+    c.moveTo(10, 90);
+    c.quadraticCurveTo(50, -70, 90, 90);
+    c.fill();
+    isPx(c, 50, 30, G, 0, 'under the quadratic arch (its top is at y = 10)');
+    assert.deepEqual(px(c, 50, 5), CLEAR);
+    assert.deepEqual(px(c, 15, 30), CLEAR);
+    c = fresh();
+    c.moveTo(10, 90);
+    c.bezierCurveTo(10, 10, 90, 10, 90, 90);
+    c.fill();
+    isPx(c, 50, 40, G, 0, 'under the cubic arch (its top is at y = 30)');
+    assert.deepEqual(px(c, 50, 25), CLEAR);
+});
+test('rect and roundRect', () => {
+    let c = fresh();
+    c.rect(20, 20, -10, -10); /* a negative size is the same rectangle */
+    c.fill();
+    isPx(c, 15, 15, G);
+    c = fresh();
+    c.roundRect(10, 10, 80, 80, 30);
+    c.fill();
+    isPx(c, 50, 50, G);
+    isPx(c, 50, 11, G);
+    assert.deepEqual(px(c, 12, 12), CLEAR, 'a rounded corner');
+    assert.deepEqual(px(c, 87, 87), CLEAR);
+    c = fresh();
+    c.roundRect(10, 10, 80, 80, [0, 30]); /* top-left and bottom-right square */
+    c.fill();
+    isPx(c, 11, 11, G);
+    isPx(c, 88, 88, G);
+    assert.deepEqual(px(c, 87, 12), CLEAR);
+    assert.deepEqual(px(c, 12, 87), CLEAR);
+    c = fresh();
+    c.roundRect(10, 10, 80, 80, [{ x: 40, y: 10 }]);
+    c.fill();
+    assert.deepEqual(px(c, 14, 12), CLEAR);
+    isPx(c, 14, 22, G);
+    c = fresh();
+    c.roundRect(10, 10, 80, 80, 500); /* radii shrink to fit: a circle */
+    c.fill();
+    isPx(c, 50, 50, G);
+    assert.deepEqual(px(c, 16, 16), CLEAR);
+    assert.throws(() => c.roundRect(0, 0, 1, 1, -1), RangeError);
+    assert.throws(() => c.roundRect(0, 0, 1, 1, [1, 2, 3, 4, 5]), RangeError);
+});
+test('Path2D', () => {
+    const c = fresh();
+    const p = new Path2D();
+    assert.equal(String(p), '[object Path2D]');
+    p.rect(10, 10, 30, 30);
+    c.fill(p);
+    isPx(c, 20, 20, G);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    /* the current path is untouched */
+    c.rect(60, 60, 20, 20);
+    c.fill(p);
+    c.fill();
+    isPx(c, 70, 70, G);
+    /* the transform applies when the path is drawn */
+    c.reset();
+    c.fillStyle = 'green';
+    c.translate(50, 50);
+    c.fill(p);
+    isPx(c, 70, 70, G);
+    assert.deepEqual(px(c, 20, 20), CLEAR);
+    c.resetTransform();
+    /* copy constructor: a separate path */
+    const q = new Path2D(p);
+    q.rect(0, 0, 5, 5);
+    assert.ok(c.isPointInPath(q, 2, 2));
+    assert.ok(!c.isPointInPath(p, 2, 2));
+    /* SVG path data */
+    const s = new Path2D('M 10 10 h 40 v 40 h -40 Z M 70 70 L 90 70 90 90 Z');
+    assert.ok(c.isPointInPath(s, 30, 30));
+    assert.ok(c.isPointInPath(s, 86, 76));
+    assert.ok(!c.isPointInPath(s, 60, 60));
+    const arcs = new Path2D('M 50 10 A 40 40 0 1 1 49.9 10 Z');
+    assert.ok(c.isPointInPath(arcs, 50, 50));
+    assert.ok(!c.isPointInPath(arcs, 5, 5));
+    assert.ok(!c.isPointInPath(new Path2D('nonsense'), 1, 1), 'bad path data gives an empty path');
+    /* addPath, with a transform */
+    const sum = new Path2D();
+    sum.addPath(p);
+    sum.addPath(p, { a: 1, d: 1, e: 50, f: 50 });
+    sum.addPath(p, new DOMMatrix([0.5, 0, 0, 0.5, 80, 0]));
+    assert.ok(c.isPointInPath(sum, 20, 20));
+    assert.ok(c.isPointInPath(sum, 70, 70));
+    assert.ok(c.isPointInPath(sum, 92, 12));
+    assert.ok(!c.isPointInPath(sum, 50, 20));
+    assert.throws(() => sum.addPath({}), TypeError);
+    /* fill rule with a path */
+    const ring = new Path2D();
+    ring.rect(10, 10, 80, 80);
+    ring.rect(30, 30, 40, 40);
+    c.reset();
+    c.fillStyle = 'green';
+    c.fill(ring, 'evenodd');
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    isPx(c, 20, 50, G);
+});
+test('clip', () => {
+    let c = fresh();
+    c.rect(20, 20, 30, 30);
+    c.clip();
+    c.fillRect(0, 0, 100, 100);
+    isPx(c, 30, 30, G);
+    assert.deepEqual(px(c, 10, 10), CLEAR);
+    assert.deepEqual(px(c, 60, 30), CLEAR);
+    /* clips intersect; restore removes them */
+    c = fresh();
+    c.save();
+    c.rect(0, 0, 60, 100);
+    c.clip();
+    c.beginPath();
+    c.arc(50, 50, 40, 0, 7);
+    c.clip();
+    c.fillRect(0, 0, 100, 100);
+    isPx(c, 40, 50, G);
+    assert.deepEqual(px(c, 70, 50), CLEAR, 'outside the first clip');
+    assert.deepEqual(px(c, 5, 5), CLEAR, 'outside the circle');
+    c.restore();
+    c.fillRect(80, 80, 10, 10);
+    isPx(c, 85, 85, G, 0, 'restore drops the clip');
+    /* an antialiased clip edge is partial */
+    c = fresh();
+    c.rect(10.5, 0, 20, 100);
+    c.clip();
+    c.fillRect(0, 0, 100, 100);
+    near(px(c, 10, 50), [0, 128, 0, 128], 2, 'half-covered column');
+    /* an empty clip hides everything; a Path2D clip with a rule */
+    c = fresh();
+    c.beginPath();
+    c.clip();
+    c.fillRect(0, 0, 100, 100);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    c = fresh();
+    const ring = new Path2D();
+    ring.rect(10, 10, 80, 80);
+    ring.rect(30, 30, 40, 40);
+    c.clip(ring, 'evenodd');
+    c.fillRect(0, 0, 100, 100);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    isPx(c, 20, 50, G);
+    /* clearRect and drawImage respect the clip; putImageData does not */
+    c = fresh();
+    c.fillRect(0, 0, 100, 100);
+    c.rect(0, 0, 50, 100);
+    c.clip();
+    c.clearRect(0, 0, 100, 100);
+    assert.deepEqual(px(c, 25, 50), CLEAR);
+    isPx(c, 75, 50, G);
+    c.putImageData(new ImageData(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1), 80, 80);
+    isPx(c, 80, 80, RED);
+});
+test('strokes', () => {
+    let c = fresh();
+    c.lineWidth = 10;
+    c.moveTo(20, 50);
+    c.lineTo(80, 50);
+    c.stroke();
+    isPx(c, 50, 46, G);
+    isPx(c, 50, 54, G);
+    assert.deepEqual(px(c, 50, 44), CLEAR);
+    assert.deepEqual(px(c, 50, 55), CLEAR);
+    assert.deepEqual(px(c, 18, 50), CLEAR, 'butt cap');
+    assert.ok(c.isPointInStroke(50, 52));
+    assert.ok(!c.isPointInStroke(50, 60));
+    assert.ok(!c.isPointInStroke(18, 50));
+    c.lineCap = 'square';
+    assert.ok(c.isPointInStroke(17, 50));
+    c.stroke();
+    isPx(c, 16, 50, G, 0, 'square cap');
+    assert.deepEqual(px(c, 14, 50), CLEAR);
+    c = fresh();
+    c.lineWidth = 10;
+    c.lineCap = 'round';
+    c.moveTo(20, 50);
+    c.lineTo(80, 50);
+    c.stroke();
+    isPx(c, 16, 50, G, 0, 'round cap');
+    assert.deepEqual(px(c, 15, 45), CLEAR, 'the cap is round');
+    /* joins: the outer corner of a right angle */
+    for (const [join, corner] of [['miter', true], ['bevel', false], ['round', false]]) {
+        c = fresh();
+        c.lineWidth = 20;
+        c.lineJoin = join;
+        c.moveTo(20, 80);
+        c.lineTo(20, 20);
+        c.lineTo(80, 20);
+        c.stroke();
+        assert.equal(px(c, 11, 11)[3] === 255, corner, join + ' corner pixel');
+        isPx(c, 20, 20, G);
+    }
+    /* the miter limit turns a sharp miter into a bevel */
+    c = fresh();
+    c.lineWidth = 10;
+    c.miterLimit = 1;
+    c.moveTo(20, 80);
+    c.lineTo(20, 20);
+    c.lineTo(80, 20);
+    c.stroke();
+    assert.deepEqual(px(c, 15, 15), CLEAR);
+    /* dashes and the offset */
+    c = fresh();
+    c.lineWidth = 6;
+    c.setLineDash([10, 10]);
+    c.moveTo(0, 50);
+    c.lineTo(100, 50);
+    c.stroke();
+    isPx(c, 5, 50, G);
+    assert.deepEqual(px(c, 15, 50), CLEAR);
+    isPx(c, 25, 50, G);
+    c = fresh();
+    c.lineWidth = 6;
+    c.setLineDash([10, 10]);
+    c.lineDashOffset = 10;
+    c.moveTo(0, 50);
+    c.lineTo(100, 50);
+    c.stroke();
+    assert.deepEqual(px(c, 5, 50), CLEAR);
+    isPx(c, 15, 50, G);
+    /* a Path2D stroke; a zero width draws nothing new (ignored value) */
+    c = fresh();
+    c.lineWidth = 4;
+    const p = new Path2D();
+    p.rect(20, 20, 60, 60);
+    c.stroke(p);
+    isPx(c, 20, 50, G);
+    isPx(c, 50, 80, G);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    /* a stroke under a scale: the pen scales too */
+    c = fresh();
+    c.scale(1, 5);
+    c.lineWidth = 2;
+    c.moveTo(10, 10);
+    c.lineTo(90, 10);
+    c.stroke();
+    isPx(c, 50, 46, G);
+    isPx(c, 50, 54, G);
+    assert.deepEqual(px(c, 50, 44), CLEAR);
+});
+test('rectangle calls', () => {
+    const c = fresh();
+    c.fillRect(10, 10, 20, 20);
+    isPx(c, 10, 10, G);
+    isPx(c, 29, 29, G);
+    assert.deepEqual(px(c, 30, 30), CLEAR);
+    c.strokeStyle = 'green';
+    c.lineWidth = 2;
+    c.strokeRect(50, 50, 30, 30);
+    isPx(c, 50, 65, G);
+    isPx(c, 65, 80, G);
+    assert.deepEqual(px(c, 65, 65), CLEAR);
+    c.fillRect(0, 0, 100, 100);
+    c.clearRect(40, 40, 20, 20);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    isPx(c, 39, 50, G);
+    /* fractional edges are partly covered */
+    c.reset();
+    c.fillStyle = 'green';
+    c.fillRect(10.25, 10, 10, 10);
+    near(px(c, 10, 15), [0, 128, 0, 191], 2);
+    near(px(c, 20, 15), [0, 128, 0, 64], 2);
+    /* none of these draw or throw */
+    c.reset();
+    c.fillRect(NaN, 0, 10, 10);
+    c.fillRect(0, 0, Infinity, 10);
+    c.fillRect(0, 0, 0, 10);
+    c.strokeRect(0, 0, 0, 0);
+    c.clearRect(0, NaN, 1, 1);
+    assert.deepEqual(px(c, 1, 1), CLEAR);
+    /* the current path is untouched by rectangle calls */
+    c.rect(60, 60, 10, 10);
+    c.fillRect(0, 0, 5, 5);
+    c.fillStyle = 'green';
+    c.fill();
+    isPx(c, 65, 65, G);
+    /* huge values end at the canvas */
+    c.fillRect(-1e9, -1e9, 2e9, 2e9);
+    isPx(c, 99, 99, G);
+    c.clearRect(-1e30, -1e30, 2e30, 2e30);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    /* a long path: capped, and no call runs away */
+    c.beginPath();
+    for (let i = 0; i < 300000; i++) c.lineTo(i % 100, (i * 7) % 100);
+    c.fill();
+    c.stroke();
+});
+</script>
+</body>
+</html>

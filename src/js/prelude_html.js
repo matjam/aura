@@ -905,6 +905,7 @@ defProps(HTMLImageElement.prototype, {
 /* Setting src from script loads the image here: its header gives
  * naturalWidth and naturalHeight, then load (or error) fires. Images the
  * parser made load through the document view and fire no events yet. */
+const imgBytes = { total: 0, registry: new FinalizationRegistry((n) => { imgBytes.total -= n; }) };
 {
     const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
     Object.defineProperty(HTMLImageElement.prototype, 'src', {
@@ -914,6 +915,7 @@ defProps(HTMLImageElement.prototype, {
             const img = this, url = this.src;
             if (img._iabort) img._iabort();
             img._isz = null;
+            if (img._ibmp || img._ibytes) { img._ibmp = null; img._ibytes = null; }
             if (!url) { img._iload = false; return; }
             img._iload = true;
             const chunks = [];
@@ -934,6 +936,15 @@ defProps(HTMLImageElement.prototype, {
                         n = 0;
                         for (const c of chunks) { all.set(c, n); n += c.length; }
                         size = N.imageSize(all);
+                        /* The bytes stay with the image, for drawImage and
+                         * createImageBitmap to decode (natives_canvas.c
+                         * drops them once decoded): at most 4 MB each and
+                         * 12 MB over the images still alive. */
+                        if (size && n <= 4194304 && imgBytes.total + n <= 12582912) {
+                            imgBytes.total += n;
+                            imgBytes.registry.register(img, n);
+                            img._ibytes = all;
+                        }
                     }
                     img._isz = size;
                     img.dispatchEvent(new Event(size ? 'load' : 'error'));
@@ -986,11 +997,6 @@ defProps(HTMLMediaElement.prototype, {
     get currentSrc() { return ''; },
     get playbackRate() { return 1; },
     set playbackRate(v) {},
-});
-defProps(HTMLCanvasElement.prototype, {
-    getContext() { return null; },
-    toDataURL() { return 'data:,'; },
-    toBlob(cb) { if (typeof cb === 'function') G.setTimeout(() => cb(null), 0); },
 });
 defProps(HTMLDialogElement.prototype, {
     show() { if (!this.hasAttribute('open')) this.setAttribute('open', ''); },
