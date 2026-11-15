@@ -1,15 +1,28 @@
 Aura's application icon
 
-To rebuild the icon, run tools/make-icon.py. It reads the art of the
-concept named by CONCEPT at the top of the script and writes
+Aura's mascot is the kookaburra. To rebuild the icon, run
+tools/make-icon.py. It reads the art of the concept named by CONCEPT at
+the top of the script (kookaburra) and writes
 src/platform/macos9/aura_icon.r and the previews in preview/. To switch to
 another concept, change CONCEPT (frill, kookaburra, platypus or quoll), or
 pass -c NAME, and run it again. To rebuild the contact sheet of all
 concepts (concepts.png), add --sheet.
 
-Each concept is a folder holding icon.txt. The frill folder also holds the
-large illustration, aura.svg, and its render aura.png
-(rsvg-convert -w 256 -h 256 aura.svg -o aura.png).
+The Finder shows a bundle icon from its desktop database, at most 256
+colours. To have Icon Services draw the 32-bit icon in the Finder too, run
+tools/make-icon.py --custom-icon, which also stores the 'icns' at ID
+-16455, and set the built file's hasCustomIcon flag. Retro68's Rez clears
+every Finder flag, so set hasBundle (and hasCustomIcon with the option)
+after each build:
+
+  tools/finder-flags.py --bundle [--custom-icon] build/ppc/src/platform/macos9/Aura.bin
+
+To check its CRC code, run tools/finder-flags.py --self-test; to see a
+file's flags, --show.
+
+Each concept is a folder holding icon.txt. The kookaburra and frill
+folders also hold the large illustration, aura.svg, and its render
+aura.png (rsvg-convert -w 256 -h 256 aura.svg -o aura.png).
 
 The icon.txt format
 

@@ -12,6 +12,8 @@ Usage:
   tools/make-icon.py -c platypus   the same for another concept
   tools/make-icon.py --sheet       also write assets/icon/concepts.png,
                                    the contact sheet of every concept
+  tools/make-icon.py --custom-icon also store the 'icns' at ID -16455,
+                                   the file's custom icon
 
 To switch the application's icon to another concept, change CONCEPT below
 and run the script again.
@@ -22,6 +24,12 @@ those again plus 32-bit colour with 8-bit masks: 'il32'+'l8mk' (32x32),
 'is32'+'s8mk' (16x16), and 'ih32'+'h8mk' with 'ich#', 'ich4', 'ich8'
 (48x48). With -DAURA_ICON_BUNDLE it also defines the Finder bundle: the
 signature resource 'AURA' (0), 'FREF' (128) for 'APPL' and 'BNDL' (128).
+
+The Finder shows a bundle's icon from its desktop database, which keeps at
+most 256 colours and a 1-bit mask. With --custom-icon the 'icns' is also
+written at ID -16455, the file's custom icon, which Icon Services draws in
+32-bit colour with the 8-bit masks; the file then needs its hasCustomIcon
+flag set (tools/finder-flags.py --custom-icon).
 
 The previews are decoded from the bytes written into aura_icon.r, not from
 the art, so they show what the Mac will draw.
@@ -36,7 +44,7 @@ import struct
 import sys
 import zlib
 
-CONCEPT = "frill"
+CONCEPT = "kookaburra"
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(
     __file__)), ".."))
@@ -366,24 +374,31 @@ resource 'BNDL' (128) {
 """
 
 
-def write_rez(art, icons, path):
+def write_rez(art, icons, path, custom_icon=False):
     sizes = sorted(icons)
-    res = [("ICN#", icons[32].icn()), ("icl4", icons[32].ic4()),
-           ("icl8", icons[32].ic8()), ("ics#", icons[16].icn()),
-           ("ics4", icons[16].ic4()), ("ics8", icons[16].ic8()),
-           ("icns", icns(icons))]
+    family = icns(icons)
+    res = [("ICN#", 128, icons[32].icn()), ("icl4", 128, icons[32].ic4()),
+           ("icl8", 128, icons[32].ic8()), ("ics#", 128, icons[16].icn()),
+           ("ics4", 128, icons[16].ic4()), ("ics8", 128, icons[16].ic8()),
+           ("icns", 128, family)]
+    if custom_icon:
+        res.append(("icns", -16455, family))
     with open(path, "w") as f:
         f.write("/* Aura's application icon: %s (concept \"%s\").\n"
                 "   Written by tools/make-icon.py from "
                 "assets/icon/%s/icon.txt.\n"
                 "   Change the art and run the script again instead of "
                 "editing this file.\n\n"
-                "   Icon family 128, sizes %s. */\n\n" %
+                "   Icon family 128, sizes %s.%s */\n\n" %
                 (art.name, art.concept, art.concept,
-                 ", ".join("%dx%d" % (s, s) for s in sizes)))
+                 ", ".join("%dx%d" % (s, s) for s in sizes),
+                 "\n   The 'icns' is also the file's custom icon (ID -16455);"
+                 "\n   set the file's hasCustomIcon flag with"
+                 "\n   tools/finder-flags.py --custom-icon." if custom_icon
+                 else ""))
         f.write(BUNDLE % {"c": CREATOR} + "\n")
-        for rtype, data in res:
-            f.write(rez_data(rtype, 128, data) + "\n\n")
+        for rtype, rid, data in res:
+            f.write(rez_data(rtype, rid, data) + "\n\n")
 
 
 def read_rez(path):
@@ -671,6 +686,8 @@ def main():
     ap.add_argument("-c", "--concept", default=CONCEPT, choices=CONCEPTS)
     ap.add_argument("--sheet", action="store_true",
                     help="also write the contact sheet of all concepts")
+    ap.add_argument("--custom-icon", action="store_true",
+                    help="also store the icns at ID -16455 (custom icon)")
     ap.add_argument("-o", default=REZ_OUT, help="the .r file to write")
     args = ap.parse_args()
 
@@ -679,8 +696,11 @@ def main():
         if s not in art.grids:
             sys.exit("%s: no %dx%d icon" % (art.path, s, s))
     icons = {s: Icon(art, s) for s in art.grids}
-    write_rez(art, icons, args.o)
-    decoded = decode_all(read_rez(args.o))
+    write_rez(art, icons, args.o, args.custom_icon)
+    res = read_rez(args.o)
+    if args.custom_icon and res[("icns", -16455)] != res[("icns", 128)]:
+        sys.exit("icns -16455 differs from icns 128")
+    decoded = decode_all(res)
     write_previews(decoded, PREVIEW)
     print("wrote %s and %s/" % (os.path.relpath(args.o, ROOT),
                                 os.path.relpath(PREVIEW, ROOT)))
