@@ -7,6 +7,7 @@
 
 typedef struct FakeSock {
     FakeServer *srv;
+    bool special; /* tls, banner and connect_hang apply (see FakeServer.special_port) */
     int state; /* 0 connecting, 1 open */
     AuBuf req;      /* plaintext from the client, not yet a whole request */
     AuBuf resp;     /* plaintext to the client */
@@ -71,12 +72,13 @@ static uint32_t f_connect(void *ctx, const AuNetAddr *addr, uint16_t port)
             continue;
         FakeSock *k = calloc(1, sizeof *k);
         k->srv = s;
+        k->special = !s->special_port || s->special_port == port;
         au_buf_init(&k->req);
         au_buf_init(&k->resp);
         au_buf_init(&k->s2c);
         s->connections++;
         f->open_socks++;
-        if (s->tls) {
+        if (s->tls && k->special) {
             k->sc = calloc(1, sizeof *k->sc);
             br_ssl_server_init_full_ec(k->sc, s->chain, s->chain_len, BR_KEYTYPE_EC, s->eckey);
             k->iobuf = malloc(BR_SSL_BUFSIZE_BIDI);
@@ -95,7 +97,7 @@ static uint32_t f_connect(void *ctx, const AuNetAddr *addr, uint16_t port)
             }
             br_ssl_server_set_cache(k->sc, &s->cache.vtable);
             br_ssl_server_reset(k->sc);
-        } else if (s->banner) {
+        } else if (s->banner && k->special) {
             au_buf_puts(&k->resp, s->banner);
         }
         f->socks[i] = k;
@@ -110,7 +112,7 @@ static int f_connect_poll(void *ctx, uint32_t sock)
     FakeSock *k = sock < FAKE_MAX_SOCKS ? f->socks[sock] : NULL;
     if (!k)
         return -1;
-    if (k->srv->connect_hang)
+    if (k->srv->connect_hang && k->special)
         return 0;
     k->state = 1;
     return 1;

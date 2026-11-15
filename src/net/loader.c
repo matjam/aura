@@ -46,6 +46,7 @@ struct Req {
     AuLoadSecurity security;
     AuCertInfo cert;
     bool have_cert;
+    AuNetError fallback_cause;
     /* holding the first bytes for sniffing / encoding detection */
     AuBuf hold;
     size_t hold_need;
@@ -128,6 +129,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->referrer_policy = au_buf_cstr(&r->rpolicy);
     i->tls_version = r->tls_version;
     i->cipher = r->cipher;
+    i->fallback_cause = r->fallback_cause;
     i->mixed = r->mixed;
 }
 
@@ -369,13 +371,18 @@ static void t_done(void *ctx, AuHttpTransfer *t, AuNetError err)
 {
     Req *r = ctx;
     r->finished = true;
-    if (err == AU_NET_ERR_CERT || err == AU_NET_ERR_CLOCK) {
+    if (err == AU_NET_ERR_HTTPS_FALLBACK)
+        r->fallback_cause = au_http_fallback_cause(t);
+    bool cert_problem = err == AU_NET_ERR_CERT || err == AU_NET_ERR_CLOCK ||
+                        r->fallback_cause == AU_NET_ERR_CERT || r->fallback_cause == AU_NET_ERR_CLOCK;
+    if (cert_problem || r->fallback_cause == AU_NET_ERR_TLS) {
         const AuCertInfo *ci = au_http_cert_info(t);
         if (ci) {
             r->cert = *ci;
             r->have_cert = true;
         }
-        r->security = AU_LOAD_SECURITY_CERT_ERROR;
+        if (cert_problem)
+            r->security = AU_LOAD_SECURITY_CERT_ERROR;
     }
     if (!r->url) {
         const char *u = au_http_url(t);

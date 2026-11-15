@@ -179,6 +179,11 @@ typedef struct AuFetchInfo {
     const AuFetchCert *cert;  /* certificate details after a certificate error, or NULL */
     bool mixed;               /* a subresource blocked (or failed) as mixed content */
     const char *message;      /* more about the error ("" when nothing) */
+    /* AU_FETCH_ERR_HTTPS_FALLBACK: why https failed. _CONNECT, _TIMEOUT
+     * or _RESET: the site has no HTTPS; _TLS (message says why), _CERT
+     * or _CLOCK (cert has the details): it has HTTPS, and that failed.
+     * AU_FETCH_OK otherwise. */
+    AuFetchError cause;
 } AuFetchInfo;
 
 typedef struct AuFetchSink {

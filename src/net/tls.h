@@ -164,6 +164,10 @@ void au_tls_close(AuTls *t);
  * (AU_NET_ERR_CERT for certificate problems, AU_NET_ERR_TLS otherwise). */
 int au_tls_error(AuTls *t);
 AuNetError au_tls_net_error(AuTls *t);
+/* After AU_TLS_FAILED: whether the server spoke TLS at all (a ServerHello,
+ * certificates or an alert), as opposed to closing or sending something
+ * else. */
+bool au_tls_peer_spoke_tls(AuTls *t);
 const char *au_tls_error_text(int bearssl_error);
 const AuCertInfo *au_tls_cert_info(AuTls *t);
 void au_tls_security(AuTls *t, AuSecurityInfo *si);

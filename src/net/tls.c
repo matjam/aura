@@ -507,6 +507,13 @@ void au_tls_close(AuTls *t)
 
 int au_tls_error(AuTls *t) { return t->error; }
 
+bool au_tls_peer_spoke_tls(AuTls *t)
+{
+    if (t->error >= BR_ERR_RECV_FATAL_ALERT && t->error < BR_ERR_SEND_FATAL_ALERT)
+        return true; /* the server answered with a TLS alert */
+    return t->info.count > 0 || br_ssl_engine_get_version(&t->cc.eng) != 0;
+}
+
 AuNetError au_tls_net_error(AuTls *t)
 {
     int e = t->error;

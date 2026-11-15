@@ -290,7 +290,8 @@ bool au_net_http_allowed(const AuNet *net, const char *host);
 void au_net_allow_http(AuNet *net, const char *host);
 void au_net_clear_http_allowed(AuNet *net);
 /* After AU_NET_ERR_HTTPS_FALLBACK: why the https attempt failed
- * (AU_NET_ERR_CONNECT, _TIMEOUT, _RESET: the site has no HTTPS; _TLS,
+ * (AU_NET_ERR_CONNECT, _TIMEOUT, _RESET, and _PROTOCOL for a server that
+ * closed or answered without speaking TLS: the site has no HTTPS; _TLS,
  * _CERT, _CLOCK: its HTTPS is broken, and au_http_cert_info has the
  * details). AU_NET_OK otherwise. Valid until done() returns. */
 AuNetError au_http_fallback_cause(const AuHttpTransfer *t);

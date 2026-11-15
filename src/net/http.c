@@ -144,6 +144,7 @@ struct AuHttpTransfer {
     int64_t request_wall;      /* when the request went out (seconds) */
     /* HTTPS-first: the error the https attempt failed with */
     AuNetError fallback_cause;
+    bool tls_never_spoke;
     /* Missing intermediates: the caIssuers fetches this transfer made,
      * the one in progress, and its response. An AIA fetch is itself a
      * transfer (aia_internal) that never chases AIA or uses the cache. */
@@ -1952,7 +1953,7 @@ static AuNetError conn_error_for(AuHttpTransfer *t, AuNetError e)
          e == AU_NET_ERR_TIMEOUT || e == AU_NET_ERR_RESET || e == AU_NET_ERR_DNS)) {
         if (e == AU_NET_ERR_DNS)
             return e;
-        t->fallback_cause = e;
+        t->fallback_cause = e == AU_NET_ERR_TLS && t->tls_never_spoke ? AU_NET_ERR_PROTOCOL : e;
         return AU_NET_ERR_HTTPS_FALLBACK;
     }
     return e;
@@ -2114,6 +2115,10 @@ static void conn_failed(AuHttpTransfer *t, AuNetError e)
     Conn *c = t->conn;
     if (c && c->tls_engine)
         record_tls(t, c);
+    /* A "TLS failure" from a server that never spoke TLS (it closed, or
+     * answered in plain text) means it has no HTTPS. */
+    if (e == AU_NET_ERR_TLS && c && c->tls_engine && !au_tls_peer_spoke_tls(c->tls_engine))
+        t->tls_never_spoke = true;
     if (c && c->tls_engine && (e == AU_NET_ERR_CERT)) {
         int64_t now = wall(t->net);
         if (t->net->roots && now < au_roots_date(t->net->roots)) {
