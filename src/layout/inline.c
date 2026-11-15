@@ -1391,6 +1391,25 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
         }
     }
     L->nsegs = base;
+    /* The block keeps these until its next layout: give back the room the
+     * arrays grew beyond their length (a short paragraph used a few of
+     * the 64 fragments first allocated). */
+    if (S.fb.n < S.fb.cap) {
+        if (S.fb.n) {
+            S.fb.f = au_realloc(S.fb.f, S.fb.n * sizeof *S.fb.f);
+        } else {
+            au_free(S.fb.f);
+            S.fb.f = NULL;
+        }
+    }
+    if (S.nlines < S.lines_cap) {
+        if (S.nlines) {
+            S.lines = au_realloc(S.lines, S.nlines * sizeof *S.lines);
+        } else {
+            au_free(S.lines);
+            S.lines = NULL;
+        }
+    }
     b->frags = S.fb.f;
     b->nfrags = S.fb.n;
     b->lines = S.lines;
