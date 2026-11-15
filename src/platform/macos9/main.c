@@ -20,10 +20,10 @@ enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELE
        EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
        VIEW_TABS_LEFT, VIEW_DEBUG = 12 };
-enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS, DEBUG_TIMINGS };
+enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_NETWORK, DEBUG_TIMINGS };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
-enum { WIN_DOWNLOADS_ITEM = 1, WIN_FIRST_WINDOW = 3 };
+enum { WIN_DOWNLOADS_ITEM = 1, WIN_COOKIES_ITEM, WIN_FIRST_WINDOW = 4 };
 enum { kGoEntries = 15 };
 
 AuBrowser *g_browser;
@@ -348,32 +348,24 @@ void mac_adjust_menus(void)
         DisableItem(bm, BM_ADD);
 }
 
-/* The simulated downloads write no files, so a name is taken when another
- * item in the list has it (a real download checks the folder). */
-static bool download_name_taken(void *ctx, const char *name)
+/* Shift or Option held now (for Reload chosen from the menu). */
+static bool shift_or_option(void)
 {
-    AuDownloads *dl = ctx;
-    for (int i = 0; i < dl->n; i++)
-        if (strcmp(dl->items[i]->filename, name) == 0)
-            return true;
-    return false;
+    uint8_t k[16]; /* the KeyMap: bit (code & 7) of byte (code >> 3) */
+    GetKeys(k);
+    /* Key codes 0x38 (Shift) and 0x3A (Option): byte 7, bits 0 and 2. */
+    return (k[7] & 0x01) || (k[7] & 0x04);
 }
 
-static void start_sim_downloads(void)
+static void network_status(void)
 {
-    static const char *const urls[] = {
-        "http://download.info.apple.com/Mac_OS/Mac_OS_9.2.2_Update.smi.bin",
-        "http://macintoshgarden.org/files/StuffIt_Expander_5.5.sit",
-        "http://www.info-mac.org/net/iCab_Pre2.9.9_PPC.bin",
-        "http://example.com/fail/broken_archive.hqx",
-    };
-    for (size_t i = 0; i < sizeof urls / sizeof urls[0]; i++) {
-        char name[128], unique[32];
-        au_download_name_from_url(urls[i], name, sizeof name);
-        au_hfs_sanitize(name, download_name_taken, &g_browser->downloads, unique, sizeof unique);
-        au_downloads_add(&g_browser->downloads, urls[i], unique, "application/octet-stream", -1, mac_now());
-    }
-    listwin_show(WIN_DOWNLOADS);
+    char lines[4][256];
+    mac_net_status(lines);
+    Str255 p[4];
+    for (int i = 0; i < 4; i++)
+        mac_pstr(lines[i], p[i]);
+    ParamText(p[0], p[1], p[2], p[3]);
+    NoteAlert(131, NULL);
 }
 
 static void close_window(WindowPtr w)
@@ -469,7 +461,10 @@ static void do_menu(long choice)
     case kViewMenu:
         switch (item) {
         case VIEW_RELOAD:
-            if (w)
+            /* Shift or Option: reload from the network, past the cache. */
+            if (w && shift_or_option())
+                au_bw_reload_bypass(w);
+            else if (w)
                 au_bw_reload(w);
             break;
         case VIEW_STOP:
@@ -501,7 +496,7 @@ static void do_menu(long choice)
             if (b)
                 browserwin_benchmark(b);
             break;
-        case DEBUG_DOWNLOADS: start_sim_downloads(); break;
+        case DEBUG_NETWORK: network_status(); break;
         case DEBUG_TIMINGS:
             if (b)
                 browserwin_page_timings(b);
@@ -529,6 +524,8 @@ static void do_menu(long choice)
     case kWindowMenu:
         if (item == WIN_DOWNLOADS_ITEM)
             listwin_show(WIN_DOWNLOADS);
+        else if (item == WIN_COOKIES_ITEM)
+            listwin_show(WIN_COOKIES);
         else if (item >= WIN_FIRST_WINDOW && item - WIN_FIRST_WINDOW < nwindow_items)
             SelectWindow(window_items[item - WIN_FIRST_WINDOW]);
         break;
@@ -820,6 +817,7 @@ static bool any_field_focused(void)
 
 static void idle_all(void)
 {
+    mac_net_idle();
     au_downloads_idle(&g_browser->downloads, au_platform_time_ms());
     for (WindowPtr w = FrontWindow(); w;) {
         WindowPtr next = mac_next_window(w);
@@ -893,6 +891,7 @@ int main(void)
         storage_load_all();
         unclean = storage_begin_run();
     }
+    mac_net_init();
     InitCursor();
 
     /* The last tabs come back when the preference says so, or, after a
@@ -918,12 +917,14 @@ int main(void)
 
     while (!g_quitting) {
         long sleep = 20;
-        if (au_browser_busy(g_browser) || au_downloads_busy(&g_browser->downloads))
+        if (au_browser_busy(g_browser) || au_downloads_busy(&g_browser->downloads) || mac_net_busy())
             sleep = 2;
         else if (any_field_focused())
             sleep = 10; /* caret blink */
         EventRecord ev;
-        if (WaitNextEvent(everyEvent, &ev, sleep, NULL))
+        bool got = WaitNextEvent(everyEvent, &ev, sleep, NULL);
+        mac_net_event(&ev); /* every event, null events included: entropy */
+        if (got)
             handle_event(&ev);
         idle_all();
     }
@@ -944,6 +945,10 @@ int main(void)
             m->close(m);
         w = next;
     }
+    /* With the pages gone: clear what the privacy options say, save
+     * cookies and HSTS, and free the network stack (the entropy pool
+     * writes its seed file last). */
+    mac_net_quit();
     UnregisterAppearanceClient();
     return 0;
 }

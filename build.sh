@@ -40,13 +40,16 @@ ppc() {
 
 # The distributable folder, build/ppc/dist/Aura: the application (as
 # MacBinary) beside its Fonts folder (the bundled fonts, their licences
-# and fonts.idx). To push it to the guest:
+# and fonts.idx) and the root certificate store, aura-roots (Mozilla's
+# root set from assets/net/aura-roots.bin, without the extension so that
+# guest-push.sh does not take it for MacBinary). To push it to the guest:
 #   tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*
 dist() {
     d=build/ppc/dist/Aura
     rm -rf "$d"
     mkdir -p "$d/Fonts"
     cp build/ppc/src/platform/macos9/Aura.bin "$d/"
+    cp assets/net/aura-roots.bin "$d/aura-roots"
     for fam in assets/fonts/*/; do
         cp -R "$fam" "$d/Fonts/$(basename "$fam")"
     done

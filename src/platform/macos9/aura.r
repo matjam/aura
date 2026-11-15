@@ -104,7 +104,7 @@ resource 'MENU' (135, "Debug") {
 		"Test Scene", noIcon, noKey, noMark, plain;
 		"Font List", noIcon, noKey, noMark, plain;
 		"Benchmark", noIcon, noKey, noMark, plain;
-		"Start Simulated Downloads", noIcon, noKey, noMark, plain;
+		"Network Status", noIcon, noKey, noMark, plain;
 		"Page Timings", noIcon, noKey, noMark, plain
 	}
 };
@@ -132,7 +132,8 @@ resource 'MENU' (133, "Bookmarks") {
 resource 'MENU' (134, "Window") {
 	134, textMenuProc, 0x7FFFFFFF, enabled, "Window",
 	{
-		"Downloads", noIcon, "J", noMark, plain
+		"Downloads", noIcon, "J", noMark, plain;
+		"Cookies", noIcon, noKey, noMark, plain
 	}
 };
 
@@ -257,6 +258,47 @@ resource 'DITL' (133) {
 		{12, 70, 80, 366}, StaticText { disabled,
 			"Aura did not quit normally last time. Restore the windows and tabs "
 			"that were open?" }
+	}
+};
+
+/* 134: "warn before downloading applications"; ^0 is the file name. */
+resource 'ALRT' (134) {
+	{0, 0, 130, 400}, 134,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (134) {
+	{
+		{98, 296, 118, 386}, Button { enabled, "Download" };
+		{98, 196, 118, 284}, Button { enabled, "Cancel" };
+		{12, 70, 90, 386}, StaticText { disabled,
+			"\"^0\" looks like an application or installer. Download it anyway? "
+			"Aura saves it in the download folder and never opens it." }
+	}
+};
+
+/* 135: a cookie's or site's details in the Cookies window, ^0 to ^3. */
+resource 'ALRT' (135) {
+	{0, 0, 250, 460}, 135,
+	{
+		OK, visible, silent;
+		OK, visible, silent;
+		OK, visible, silent;
+		OK, visible, silent
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (135) {
+	{
+		{218, 378, 238, 446}, Button { enabled, "OK" };
+		{12, 20, 210, 446}, StaticText { disabled, "^0^1^2^3" }
 	}
 };
 

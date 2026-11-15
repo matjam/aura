@@ -1,9 +1,11 @@
 /* The Preferences window: Appearance Manager controls in a tab control,
  * one pane per section (General, Fonts, Content, Privacy and Security,
  * Network, Downloads). Changes apply on OK; the tab position applies as
- * soon as it is clicked (Cancel puts it back). Settings whose subsystems
- * do not exist yet are stored, shown and editable; the subsystems read
- * them from AuPrefs (src/browser/prefs.h) when they arrive.
+ * soon as it is clicked (Cancel puts it back), and the network settings
+ * reach the network stack through mac_net_prefs_changed. Settings whose
+ * subsystems do not exist yet (trackers, decoding downloads) are stored,
+ * shown and editable; the subsystems read them from AuPrefs
+ * (src/browser/prefs.h) when they arrive.
  *
  * Controls are created in code with Appearance procIDs and embedded in a
  * user pane per tab, which is shown or hidden as the tab changes. */
@@ -25,7 +27,7 @@ typedef enum {
     F_JS, F_IMAGES, F_POPUPS,
     F_DNT, F_GPC, F_HTTPS_FIRST, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
     F_HISTORY_ON, F_HISTORY_DAYS, F_CLEAR_H_QUIT, F_CLEAR_CK_QUIT, F_CLEAR_CA_QUIT,
-    F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE,
+    F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE, F_SHOW_COOKIES,
     F_HTTP_HOST, F_HTTP_PORT, F_HTTPS_HOST, F_HTTPS_PORT, F_UA, F_MEM_CACHE, F_DISK_CACHE,
     F_DL_FOLDER, F_DECODE,
     F_OK, F_CANCEL, F_TAB,
@@ -289,6 +291,7 @@ static void build(PrefsWin *p)
     push(p, 3, F_CLEAR_HISTORY, L, y, 120, "Clear History");
     push(p, 3, F_CLEAR_COOKIES, (short)(L + 130), y, 120, "Clear Cookies");
     push(p, 3, F_CLEAR_CACHE, (short)(L + 260), y, 120, "Clear Cache");
+    push(p, 3, F_SHOW_COOKIES, (short)(L + 390), y, 110, "Cookies...");
 
     /* Network */
     y = 52;
@@ -608,6 +611,7 @@ static void close_prefs(PrefsWin *p, bool ok)
     if (ok) {
         store(p, pr);
         au_browser_prefs_changed(g_browser);
+        mac_net_prefs_changed();
     } else if (pr->tab_position != p->orig_tabs) {
         pr->tab_position = p->orig_tabs;
         au_browser_prefs_changed(g_browser);
@@ -727,9 +731,11 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         au_browser_history_changed(g_browser);
         break;
     case F_CLEAR_COOKIES:
-    case F_CLEAR_CACHE:
-        /* No cookie store or cache exists yet: nothing to clear. */
+        mac_net_clear_cookies();
+        listwin_cookies_changed();
         break;
+    case F_CLEAR_CACHE: mac_net_clear_cache(); break;
+    case F_SHOW_COOKIES: listwin_show(WIN_COOKIES); break;
     case F_OK: close_prefs(p, true); break;
     case F_CANCEL: close_prefs(p, false); break;
     default: break;

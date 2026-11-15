@@ -515,6 +515,25 @@ static bool host_external(void *ctx, const char *url)
     return mac_ic_launch_url(url);
 }
 
+/* "Warn before downloading applications": ALRT 134, Download or Cancel. */
+static bool host_confirm_download(void *ctx, const char *url, const char *name, const char *mime)
+{
+    (void)ctx, (void)url;
+    if (!g_browser->prefs.warn_app_downloads || !mac_download_is_app(name, mime))
+        return true;
+    Str255 p;
+    mac_pstr(name, p);
+    ParamText(p, (ConstStringPtr) "\p", (ConstStringPtr) "\p", (ConstStringPtr) "\p");
+    InitCursor();
+    return CautionAlert(134, NULL) == 1;
+}
+
+static void host_download_added(void *ctx, AuDownload *d)
+{
+    (void)ctx, (void)d;
+    listwin_show(WIN_DOWNLOADS);
+}
+
 static uint32_t host_ms(void *ctx)
 {
     (void)ctx;
@@ -543,6 +562,8 @@ void browserwin_host(AuBrowserHost *h)
     h->changed = host_changed;
     h->close_window = host_close;
     h->open_external = host_external;
+    h->confirm_download = host_confirm_download;
+    h->download_added = host_download_added;
 }
 
 /* ---- Events ---- */

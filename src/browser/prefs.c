@@ -96,7 +96,7 @@ void au_prefs_init(AuPrefs *p)
     p->startup = AU_STARTUP_HOME;
     p->tab_position = AU_TABS_TOP;
     p->tab_column_width = 170;
-    au_prefs_set_str(&p->search_template, "https://duckduckgo.com/html/?q=%s");
+    au_prefs_set_str(&p->search_template, "https://html.duckduckgo.com/html/?q=%s");
     au_prefs_set_str(&p->font_serif, "Times New Roman");
     au_prefs_set_str(&p->font_sans, "Helvetica");
     au_prefs_set_str(&p->font_mono, "Courier New");
