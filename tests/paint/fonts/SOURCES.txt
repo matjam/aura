@@ -14,3 +14,8 @@ notocolr-sub.ttf   Noto Color Emoji, COLR version 1 build
                    (googlefonts/noto-emoji), SIL OFL 1.1
                    (NotoColorEmoji-OFL.txt); subset to a few emoji
 colr-test.ttf      made by the script (every COLR paint format)
+*.woff, *.woff2    intervar.ttf and opensansvar.ttf as WOFF (fontTools),
+                   WOFF2 with glyf and loca transformed, with hmtx also
+                   transformed (opensansvar-hmtx), and a WOFF2 collection of
+                   both (collection.woff2, written by the script); same
+                   licences as their sources

@@ -102,6 +102,24 @@ int au_font_face_count(const void *data, size_t len);
 AuFontFace *au_font_face_new(const void *data, size_t len, int index);
 void au_font_face_free(AuFontFace *f);
 
+/* Web font containers (woff.c). au_font_sniff names a file's format by
+ * its first bytes. au_font_decode turns WOFF 1.0, WOFF2 (collections
+ * included) or a plain sfnt into sfnt bytes the functions above load, in
+ * a new au_alloc'd buffer of at most max_out bytes. CFF-flavoured fonts
+ * give AU_FONT_UNSUPPORTED; corrupt data, sizes that disagree with the
+ * data, or output over max_out give AU_FONT_BAD. Table checksums in the
+ * output are zero. */
+typedef enum {
+    AU_FONT_FORMAT_UNKNOWN,
+    AU_FONT_FORMAT_SFNT,  /* TrueType or a collection */
+    AU_FONT_FORMAT_CFF,   /* OpenType with CFF outlines: not drawn */
+    AU_FONT_FORMAT_WOFF,
+    AU_FONT_FORMAT_WOFF2
+} AuFontFormat;
+typedef enum { AU_FONT_OK, AU_FONT_BAD, AU_FONT_UNSUPPORTED } AuFontStatus;
+AuFontFormat au_font_sniff(const void *data, size_t len);
+AuFontStatus au_font_decode(const void *data, size_t len, size_t max_out, uint8_t **out, size_t *out_len);
+
 /* Synthesized styles, for a family that lacks a bold or italic face (as
  * browsers do): bold strikes each outline twice, offset to the right by
  * 1/24 of the em at 9px down to 1/32 at 36px and up (Skia's fake bold

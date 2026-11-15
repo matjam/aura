@@ -4,7 +4,9 @@
 Usage:
   tools/test-fonts.py fetch [DIR]   download the upstream fonts into DIR
                                     (default build/test-fonts)
-  tools/test-fonts.py make [DIR]    rebuild tests/paint/fonts from DIR
+  tools/test-fonts.py make [DIR] [all|var|color|web]
+                                    rebuild tests/paint/fonts from DIR
+                                    (web: WOFF and WOFF2 of the var subsets)
   tools/test-fonts.py refs [DIR]    write full-size reference instances
                                     into DIR/refs (optional test)
 
@@ -263,6 +265,91 @@ def make_color(d):
     build_colr_test(os.path.join(OUT, 'colr-test.ttf'))
 
 
+def uint_base128(n):
+    out = [n & 0x7F]
+    n >>= 7
+    while n:
+        out.append(0x80 | (n & 0x7F))
+        n >>= 7
+    return bytes(reversed(out))
+
+
+def u255(n):
+    import struct
+    if n < 253:
+        return bytes([n])
+    if n < 506:
+        return bytes([255, n - 253])
+    if n < 762:
+        return bytes([254, n - 506])
+    return bytes([253]) + struct.pack('>H', n)
+
+
+def woff2_collection(fonts, dst):
+    """A WOFF2 collection of whole sfnt files, written here because
+    fontTools has no collection writer: every table untransformed (glyf
+    and loca with the null transform), the second font sharing the first
+    one's 'post' table to exercise sharing."""
+    import struct
+    from fontTools.ttLib import TTFont
+    from fontTools.ttLib.woff2 import woff2KnownTags
+    import brotli
+    tables = []   # (tag, data)
+    dirs = []     # (flavor, [table indices])
+    for i, path in enumerate(fonts):
+        f = TTFont(path)
+        reader = f.reader
+        idx = []
+        for tag in sorted(reader.keys()):
+            data = reader[tag]
+            if i > 0 and tag == 'post':
+                idx.append(next(k for k, t in enumerate(tables) if t[0] == 'post'))
+                continue
+            idx.append(len(tables))
+            tables.append((tag, data))
+        dirs.append((reader.sfntVersion, idx))
+    directory = b''
+    stream = b''
+    for tag, data in tables:
+        known = woff2KnownTags.index(tag) if tag in woff2KnownTags else 63
+        xform = 3 if tag in ('glyf', 'loca') else 0
+        directory += bytes([known | (xform << 6)])
+        if known == 63:
+            directory += tag.encode('latin-1')
+        directory += uint_base128(len(data))
+        stream += data
+    coll = struct.pack('>L', 0x00010000) + u255(len(dirs))
+    for flavor, idx in dirs:
+        fl = flavor if isinstance(flavor, bytes) else flavor.encode('latin-1')
+        coll += u255(len(idx)) + fl + b''.join(u255(k) for k in idx)
+    comp = brotli.compress(stream)
+    body = directory + coll
+    length = 48 + len(body) + len(comp)
+    length += (-length) % 4
+    head = struct.pack('>4s4sLHHLLHHLLLLL', b'wOF2', b'ttcf', length, len(tables), 0, len(stream), len(comp),
+                       1, 0, 0, 0, 0, 0, 0)
+    out = head + body + comp
+    out += b'\0' * (length - len(out))
+    with open(dst, 'wb') as f:
+        f.write(out)
+
+
+def make_web(d):
+    """WOFF and WOFF2 versions of the variable test subsets."""
+    from fontTools.ttLib import TTFont
+    from fontTools.ttLib import woff2
+    for name in ('intervar', 'opensansvar'):
+        f = TTFont(os.path.join(OUT, name + '.ttf'))
+        f.flavor = 'woff'
+        f.save(os.path.join(OUT, name + '.woff'))
+    # glyf and loca transformed (the default), then hmtx too.
+    woff2.compress(os.path.join(OUT, 'intervar.ttf'), os.path.join(OUT, 'intervar.woff2'))
+    woff2.compress(os.path.join(OUT, 'opensansvar.ttf'), os.path.join(OUT, 'opensansvar-hmtx.woff2'),
+                   transform_tables={'glyf', 'loca', 'hmtx'})
+    woff2_collection([os.path.join(OUT, 'intervar.ttf'), os.path.join(OUT, 'opensansvar.ttf')],
+                     os.path.join(OUT, 'collection.woff2'))
+
+
 def refs(d):
     out = os.path.join(d, 'refs')
     os.makedirs(out, exist_ok=True)
@@ -289,6 +376,8 @@ def main():
             make(d)
         if what in ('all', 'color'):
             make_color(d)
+        if what in ('all', 'web'):
+            make_web(d)
     else:
         refs(d)
     return 0

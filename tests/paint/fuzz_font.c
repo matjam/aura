@@ -38,6 +38,11 @@ static void pick_range(const uint8_t *d, size_t len, uint32_t *off, uint32_t *n)
     *n = (uint32_t)len;
     if (len < 12 || rnd(5) == 0)
         return;
+    if (be32(d) == 0x774F4646 || be32(d) == 0x774F4632) { /* wOFF, wOF2: mostly the directories */
+        if (rnd(4))
+            *n = len < 600 ? (uint32_t)len : 600;
+        return;
+    }
     uint32_t dir = 0;
     if (be32(d) == 0x74746366 && len >= 16) /* ttcf */
         dir = be32(d + 12);
@@ -92,7 +97,27 @@ static void mutate(uint8_t *d, size_t *len)
     }
 }
 
+static void exercise_sfnt(const uint8_t *data, size_t len);
+
 static void exercise(const uint8_t *data, size_t len)
+{
+    AuFontFormat fmt = au_font_sniff(data, len);
+    if (fmt != AU_FONT_FORMAT_WOFF && fmt != AU_FONT_FORMAT_WOFF2) {
+        exercise_sfnt(data, len);
+        return;
+    }
+    uint8_t *o;
+    size_t olen;
+    if (au_font_decode(data, len, 4u << 20, &o, &olen) != AU_FONT_OK)
+        return;
+    uint8_t *e = malloc(olen); /* exact size again */
+    memcpy(e, o, olen);
+    au_free(o);
+    exercise_sfnt(e, olen);
+    free(e);
+}
+
+static void exercise_sfnt(const uint8_t *data, size_t len)
 {
     int nf = au_font_face_count(data, len);
     for (int fi = 0; fi < nf && fi < 2; fi++) {

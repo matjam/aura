@@ -26,6 +26,12 @@ file(GLOB FUZZ_FONT_SEEDS ${CMAKE_CURRENT_SOURCE_DIR}/fonts/*.ttf ${CMAKE_CURREN
 add_test(NAME paint_font_fuzz COMMAND fuzz_font 20000 11 40 ${FUZZ_FONT_SEEDS})
 set_tests_properties(paint_font_fuzz PROPERTIES TIMEOUT 120)
 
+# WOFF and WOFF2 decoding against the sfnt sources, and corrupt inputs.
+add_executable(test_woff test_woff.c)
+target_link_libraries(test_woff aura_host_platform aura_engine m)
+add_test(NAME paint_woff COMMAND test_woff ${CMAKE_CURRENT_SOURCE_DIR}/fonts ${CMAKE_SOURCE_DIR}/build/test-fonts)
+set_tests_properties(paint_woff PROPERTIES TIMEOUT 300)
+
 # Colour glyphs (COLR v0/v1, CPAL) and emoji sequences (GSUB).
 add_executable(test_colr test_colr.c)
 target_link_libraries(test_colr aura_host_platform aura_engine m)
