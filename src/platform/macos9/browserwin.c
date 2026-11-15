@@ -813,6 +813,14 @@ static void bw_click(MacWin *mw, EventRecord *ev)
         return;
     }
     AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
+    /* The padlock opens the certificate viewer (a page with a
+     * certificate); elsewhere it is part of the field. */
+    if (h.part == AU_HIT_SECURITY && au_bw_show_certificate(b->bw)) {
+        while (StillDown())
+            ;
+        flush(b);
+        return;
+    }
     if (h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY) {
         if (!b->field_focus) {
             /* The first click selects the whole URL, as browsers do. */

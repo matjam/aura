@@ -331,6 +331,19 @@ static void test_types_and_redirects(void)
           "one history entry, for the final URL (%zu)", e.b->history.n);
     CHECK(!strcmp(e.b->history.e[0].title, "Final"), "its title");
 
+    /* Fragments: a plain load keeps the one asked for, and so does a
+     * redirect whose Location has none. */
+    respond_html(s, "<title>Frag</title><p id=sec>here");
+    au_bw_navigate(e.w, "http://site.test/frag#sec");
+    settle(&e, 500);
+    CHECK(!strcmp(au_page_url(page(&e)), "http://site.test/frag#sec"), "fragment kept: %s", au_page_url(page(&e)));
+    fake_respond(s, "HTTP/1.1 302 Found\r\nLocation: /moved\r\nContent-Length: 0\r\n\r\n");
+    respond_html(s, "<title>Moved</title>moved");
+    au_bw_navigate(e.w, "http://site.test/old#top");
+    settle(&e, 500);
+    CHECK(!strcmp(au_page_url(page(&e)), "http://site.test/moved#top"), "fragment carried over a redirect: %s",
+          au_page_url(page(&e)));
+
     /* An HTTP error with no body. */
     fake_respond(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
     au_bw_navigate(e.w, "http://site.test/missing");

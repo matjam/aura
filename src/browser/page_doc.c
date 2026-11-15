@@ -1542,15 +1542,32 @@ static AuFetchReferrerPolicy parse_referrer_policy(const char *v, AuFetchReferre
     return cur;
 }
 
+/* The fetch's final URL becomes the page's (after a redirect: the
+ * address field and the history entry take it, once). Fetch URLs carry
+ * no fragment: compare without it, and keep the fragment the user asked
+ * for unless the final URL names its own, as the Fetch standard does. */
+static void adopt_url(AuPage *p, const char *final)
+{
+    if (!final || !final[0])
+        return;
+    const char *hash = strchr(p->url, '#');
+    size_t base = hash ? (size_t)(hash - p->url) : strlen(p->url);
+    if ((strlen(final) == base && !strncmp(final, p->url, base)) || !strcmp(final, p->url))
+        return;
+    AuBuf nu;
+    au_buf_init(&nu);
+    au_buf_puts(&nu, final);
+    if (hash && !strchr(final, '#'))
+        au_buf_puts(&nu, hash);
+    set_str(&p->url, au_buf_cstr(&nu));
+    au_buf_free(&nu);
+    if (p->cb.url_changed)
+        p->cb.url_changed(p->cb.ctx, p, p->url);
+}
+
 static void main_response(AuPage *p, const AuFetchResponse *r)
 {
-    if (r->url && r->url[0] && strcmp(r->url, p->url) != 0) {
-        /* A redirect: the address field and the history entry take the
-         * final URL, once. */
-        set_str(&p->url, r->url);
-        if (p->cb.url_changed)
-            p->cb.url_changed(p->cb.ctx, p, p->url);
-    }
+    adopt_url(p, r->url);
     p->status = r->status;
     set_str(&p->content_type, r->content_type);
     p->security = r->security;
@@ -1614,11 +1631,8 @@ static void main_done(AuPage *p, bool ok, const AuFetchInfo *info)
 {
     /* The final URL, except after HTTPS-first's failed upgrade, where the
      * address stays the one the user asked for. */
-    if (info && info->url && strcmp(info->url, p->url) != 0 && info->error != AU_FETCH_ERR_HTTPS_FALLBACK) {
-        set_str(&p->url, info->url);
-        if (p->cb.url_changed)
-            p->cb.url_changed(p->cb.ctx, p, p->url);
-    }
+    if (info && info->url && info->error != AU_FETCH_ERR_HTTPS_FALLBACK)
+        adopt_url(p, info->url);
     if (info && info->cert && !p->cert) {
         p->cert = au_alloc(sizeof *p->cert);
         *p->cert = *info->cert;
