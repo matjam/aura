@@ -853,16 +853,13 @@ static AuCssValue *math_sum(MathP *m, uint32_t *i, uint32_t b)
     uint32_t n = 0;
     items[n++] = first;
     for (;;) {
-        uint32_t j = *i;
-        if (j >= b || m->tk->t[j].type != TK_WS) {
-            skip_ws(m->tk, &j, b);
-            if (j < b)
-                return NULL; /* operators need whitespace around them */
-            break;
-        }
-        skip_ws(m->tk, &j, b);
-        if (j >= b)
-            break;
+        uint32_t j = *i, k = *i;
+        skip_ws(m->tk, &k, b);
+        if (k >= b || m->tk->t[k].type == TK_COMMA)
+            break; /* the end of this argument */
+        if (m->tk->t[j].type != TK_WS)
+            return NULL; /* operators need whitespace around them */
+        j = k;
         const CssToken *t = &m->tk->t[j];
         if (t->type != TK_DELIM || (t->num != '+' && t->num != '-'))
             return NULL;

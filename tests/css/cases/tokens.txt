@@ -1,0 +1,58 @@
+# Tokenizer: round trips through css_tokenize and css_tokens_serialize.
+# Serialization is normalized (numbers, quotes, url tokens), as custom
+# property values are stored as tokens, not text.
+
+=== identifiers and escapes
+--- tokens
+foo => foo
+-foo => -foo
+--custom => --custom
+\66 oo => foo
+a\:b => a\:b
+\30 x => \30 x
+-\31 x => -\31 x
+é => é
+\0 => �
+
+=== numbers and dimensions
+--- tokens
+12 => 12
++12 => +12
+-1.5 => -1.5
+.5 => 0.5
+1e3 => 1000
+10px => 10px
+1.5em => 1.5em
+50% => 50%
+10e => 10e
+1e-1 => 0.1
+
+=== strings
+--- tokens
+"abc" => "abc"
+'abc' => "abc"
+"a\"b" => "a\"b"
+'a"b' => "a\"b"
+"unterminated => "unterminated"
+
+=== url and functions
+--- tokens
+url(foo.png) => url("foo.png")
+url( foo.png ) => url("foo.png")
+url( "foo.png" ) => url( "foo.png" )
+url(a b) => url()
+rgb(1, 2, 3) => rgb(1, 2, 3)
+calc(1px + 2px) => calc(1px + 2px)
+
+=== comments and separators
+--- tokens
+a/**/b => a/**/b
+a /* x */ b => a  b
+<!-- --> => <!-- -->
+a{b:c;d} => a{b:c;d}
+[x] => [x]
+
+=== tokens that would merge get a comment between them
+--- tokens
+a/**/-b => a/**/-b
+1/**/2 => 1/**/2

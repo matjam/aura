@@ -1,0 +1,116 @@
+# Media queries against a 1024x768 screen (the default device) unless the
+# options say otherwise.
+
+=== media types
+--- media
+all => true
+screen => true
+print => false
+only screen => true
+not print => true
+not screen => false
+SCREEN => true
+tv => false
+speech => false
+all and (color) => true
+screen, print => true
+print, tv => false
+
+=== width and height
+--- media
+(min-width: 1000px) => true
+(min-width: 1025px) => false
+(max-width: 1024px) => true
+(width: 1024px) => true
+(width) => true
+(height: 768px) => true
+(min-width: 64em) => true
+(min-width: 65em) => false
+(max-width: 100vw) => true
+(min-width: calc(500px + 500px)) => true
+(min-width: 1000) => false
+(min-width: 0) => true
+screen and (min-width: 600px) and (max-width: 1200px) => true
+screen and (max-width: 600px) => false
+
+=== range syntax
+--- media
+(width > 1000px) => true
+(width >= 1024px) => true
+(width > 1024px) => false
+(1000px < width) => true
+(500px < width < 2000px) => true
+(500px < width < 800px) => false
+(2000px > width > 500px) => true
+(400px <= height <= 768px) => true
+(width < 500px < 600px) => false
+
+=== boolean logic
+--- media
+(min-width: 100px) and (max-width: 200px) => false
+not all and (max-width: 200px) => true
+(not (max-width: 200px)) => true
+((min-width: 100px) or (max-width: 50px)) => true
+((min-width: 2000px) or (max-width: 50px)) => false
+# Media Queries 4 allows or at the top level of a condition
+(min-width: 100px) or (max-width: 50px) => true
+screen and (min-width: 100px) or (max-width: 50px) => false
+(min-width: 100px) and (max-width: 50px) or (color) => false
+not (color) => false
+
+=== other features
+--- media
+(orientation: landscape) => true
+(orientation: portrait) => false
+(aspect-ratio: 4/3) => true
+(min-aspect-ratio: 1/1) => true
+(max-aspect-ratio: 1/1) => false
+(color) => true
+(min-color: 8) => true
+(monochrome) => false
+(monochrome: 0) => true
+(resolution: 1dppx) => true
+(min-resolution: 2dppx) => false
+(min-resolution: 96dpi) => true
+(-webkit-min-device-pixel-ratio: 1) => true
+(-webkit-min-device-pixel-ratio: 2) => false
+(hover: hover) => true
+(hover) => true
+(pointer: fine) => true
+(pointer: coarse) => false
+(any-pointer: fine) => true
+(prefers-color-scheme: light) => true
+(prefers-color-scheme: dark) => false
+(prefers-reduced-motion: no-preference) => true
+(prefers-reduced-motion) => false
+(scripting: enabled) => true
+(forced-colors: none) => true
+(grid) => false
+(grid: 0) => true
+(device-width: 1024px) => true
+(update: fast) => true
+(display-mode: browser) => true
+
+=== unknown and malformed queries are false, not errors
+--- media
+(unknown-feature) => false
+(min-width: red) => false
+(width: 10px 20px) => false
+screen and => false
+garbage here => false
+(min-width: 100px), print => true
+foo(bar) => false
+(hover: maybe) => false
+
+=== a small dark printed page
+--- options
+width 400
+height 600
+dark
+print
+--- media
+print => true
+screen => false
+(max-width: 500px) => true
+(orientation: portrait) => true
+(prefers-color-scheme: dark) => true

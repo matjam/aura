@@ -799,10 +799,18 @@ static bool sup_in_parens(const CssTokens *tk, uint32_t *i, uint32_t b, int dept
             css_sellist_free(l);
             return true;
         }
-        if (au_ieq(css_tok_str(tk, t), t->len, "font-format", 11) ||
-            au_ieq(css_tok_str(tk, t), t->len, "font-tech", 9))
+        if (au_ieq(css_tok_str(tk, t), css_tok_len(t), "font-format", 11)) {
+            /* the formats @font-face src accepts for the font loader */
+            static const char *const formats[] = {"woff2", "woff", "truetype", "opentype", "collection"};
+            uint32_t q = sk(tk, s, e);
+            if (q >= e || tk->t[q].type != TK_IDENT || sk(tk, q + 1, e) != e)
+                return false;
+            for (size_t f = 0; f < sizeof formats / sizeof formats[0]; f++)
+                if (au_ieq(css_tok_str(tk, &tk->t[q]), tk->t[q].len, formats[f], strlen(formats[f])))
+                    return true;
             return false;
-        return false; /* general-enclosed */
+        }
+        return false; /* font-tech() (no color or variation font technology) and general-enclosed */
     }
     if (t->type != TK_LPAREN) {
         *valid = false;

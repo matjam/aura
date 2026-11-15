@@ -1,0 +1,69 @@
+# @supports conditions and CSS.supports(), answered from what the parser
+# accepts.
+
+=== declarations
+--- supports
+(display: flex) => true
+(display: grid) => true
+(display: inline flow-root) => true
+(display: bogus) => false
+(color: red) => true
+(color: lab(50% 10 10)) => true
+(color: color-mix(in srgb, red, blue)) => true
+(width: calc(1px + 2%)) => true
+(width: clamp(1px, 2vw, 3px)) => true
+(width: 10furlongs) => false
+(gap: 1em) => true
+(aspect-ratio: 16 / 9) => true
+(position: sticky) => true
+(position: -webkit-sticky) => true
+(-webkit-appearance: none) => true
+(text-wrap: balance) => true
+(transform: rotate(45deg)) => true
+(backdrop-filter: blur(4px)) => true
+(foo: bar) => false
+(--custom: anything) => true
+(--custom: ) => true
+(width: var(--x)) => true
+(color: red !important) => true
+(display: flex flex) => false
+
+=== logic
+--- supports
+not (display: bogus) => true
+not (display: flex) => false
+(display: flex) and (color: red) => true
+(display: flex) and (foo: bar) => false
+(display: flex) or (foo: bar) => true
+((display: flex) and (not (foo: bar))) => true
+(display: flex) and (color: red) or (width: 1px) => false
+(foo) => false
+foo(bar) => false
+
+=== selector()
+--- supports
+selector(a > b) => true
+selector(:has(a)) => true
+selector(:is(a, b)) => true
+selector(:focus-visible) => true
+selector(::before) => true
+selector(:unknown) => false
+selector(a >) => false
+
+=== font features
+--- supports
+font-format(woff2) => true
+font-format(woff) => true
+font-format(embedded-opentype) => false
+font-tech(color-colrv1) => false
+
+=== CSS.supports(property, value)
+--- supports
+decl display | flex => true
+decl display | bogus => false
+decl margin | 1px 2px 3px 4px => true
+decl margin | 1px 2px 3px 4px 5px => false
+decl font | bold 12px/1.5 serif => true
+decl unknown-thing | 1 => false
+decl --x | 1 => true
+decl COLOR | red => true

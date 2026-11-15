@@ -445,6 +445,7 @@ static void consume_ident_like(Lexer *L)
             j++;
         if (j < L->n && (L->s[j] == '"' || L->s[j] == '\'')) {
             t->type = TK_FUNCTION;
+            t->name_len = 3;
             set_kw(L, t);
             return;
         }
@@ -457,6 +458,7 @@ static void consume_ident_like(Lexer *L)
     if (peek(L, 0) == '(') {
         L->i++;
         t->type = TK_FUNCTION;
+        t->name_len = (uint16_t)(t->len > 0xFFFF ? 0xFFFF : t->len);
     }
     set_kw(L, t);
 }
@@ -722,7 +724,7 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
         case TK_BAD_URL:
         case TK_DIMENSION: {
             uint32_t off = (uint32_t)dst->pool.len;
-            au_buf_append(&dst->pool, src->pool.data + t.str, t.len);
+            au_buf_append(&dst->pool, src->pool.data + t.str, css_tok_len(&t));
             au_buf_putc(&dst->pool, 0);
             t.str = off;
             break;
@@ -827,7 +829,7 @@ void css_tokens_serialize(const CssTokens *tk, uint32_t a, uint32_t b, AuBuf *ou
             css_serialize_ident(s, t->len, out);
             break;
         case TK_FUNCTION:
-            css_serialize_ident(s, t->len, out);
+            css_serialize_ident(s, t->name_len, out);
             au_buf_putc(out, '(');
             break;
         case TK_AT:

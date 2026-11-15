@@ -72,7 +72,7 @@ typedef struct CssToken {
     uint8_t flags;
     uint16_t kw;   /* keyword id of an ident, function or at-keyword (lowercased), or 0 */
     uint16_t unit; /* AuCssUnit of a dimension */
-    uint16_t pad;
+    uint16_t name_len; /* a function's name length (len holds its block end) */
     uint32_t str;  /* offset of the string in the pool */
     uint32_t len;  /* string length; for blocks and functions, the index just past the matching close */
     float num;
@@ -92,6 +92,8 @@ void css_tokenize(const char *src, size_t len, CssTokens *out);
 void css_tokens_rematch(CssTokens *tk);
 void css_tokens_free(CssTokens *tk);
 static inline const char *css_tok_str(const CssTokens *tk, const CssToken *t) { return tk->pool.data + t->str; }
+/* The string length of a token, functions included. */
+static inline uint32_t css_tok_len(const CssToken *t) { return t->type == TK_FUNCTION ? t->name_len : t->len; }
 /* Serializes tokens [a, b) back to CSS text. */
 void css_tokens_serialize(const CssTokens *tk, uint32_t a, uint32_t b, AuBuf *out);
 bool css_tok_is_close(int type);
@@ -343,6 +345,7 @@ struct AuSelector {
     uint8_t rel_comb; /* relative selectors (:has): combinator to the anchor, else 0 */
     uint32_t spec;    /* (a << 16) | (b << 8) | c, each clamped to 255 */
     uint32_t hashes[4]; /* ancestor filter hashes, 0-terminated */
+    AuAtom pseudo_name; /* AU_CSS_PSEUDO_UNKNOWN_WEBKIT: the name as written, for serialization */
     uint8_t flags;
 };
 

@@ -25,6 +25,7 @@ typedef struct {
     const CssTokens *tk;
     const CssSelParseCtx *cx;
     bool failed;
+    AuAtom pe_name; /* name of an unknown or functional pseudo-element, as written */
 } SP;
 
 static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const CssSelParseCtx *cx);
@@ -422,7 +423,7 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
 {
     const CssTokens *tk = p->tk;
     char name[32];
-    if (!css_lower(css_tok_str(tk, f), f->len, name, sizeof name))
+    if (!css_lower(css_tok_str(tk, f), css_tok_len(f), name, sizeof name))
         return false;
     CssSelParseCtx sub = *p->cx;
     sub.depth++;
@@ -448,12 +449,21 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
         AuSelList *l = parse_list(tk, s, e, &sub);
         if (!l)
             return false;
-        if (pc == PC_HAS) {
-            for (uint32_t i = 0; i < l->n; i++)
-                if (l->sel[i].pseudo) {
-                    css_sellist_free(l);
-                    return false;
-                }
+        /* pseudo-elements are not allowed in these lists; :is() and
+         * :where() drop them, :not() and :has() fail */
+        for (uint32_t i = 0; i < l->n; i++) {
+            if (!l->sel[i].pseudo)
+                continue;
+            if (pc == PC_HAS || pc == PC_NOT) {
+                css_sellist_free(l);
+                return false;
+            }
+            for (uint32_t k = 0; k < l->sel[i].ncomp; k++)
+                comp_free(&l->sel[i].comp[k]);
+            au_free(l->sel[i].comp);
+            memmove(&l->sel[i], &l->sel[i + 1], (l->n - i - 1) * sizeof(AuSelector));
+            l->n--;
+            i--;
         }
         AuSelComp *x = push_comp(c, SC_PSEUDO);
         x->op = (uint8_t)pc;
@@ -613,6 +623,11 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
                     if (nt->type != TK_FUNCTION)
                         return false;
                     *pseudo = AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
+                    AuBuf nb;
+                    au_buf_init(&nb);
+                    css_tokens_serialize(tk, q, nt->len, &nb);
+                    p->pe_name = au_atom(nb.data ? nb.data : "", nb.len);
+                    au_buf_free(&nb);
                     k = nt->len;
                 } else {
                     int pe = pseudo_element_lookup(css_tok_str(tk, nt), nt->len, false);
@@ -620,6 +635,8 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
                         return false;
                     if (*pseudo)
                         pe = AU_CSS_PSEUDO_UNKNOWN_WEBKIT; /* nested pseudo-elements */
+                    if (pe == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
+                        p->pe_name = au_atom(css_tok_str(tk, nt), nt->len);
                     *pseudo = (uint8_t)pe;
                     k = q + 1;
                 }
@@ -725,6 +742,7 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
     uint32_t spec = 0;
     uint8_t pseudo = 0;
     uint8_t lead = 0;
+    p->pe_name = 0;
     uint32_t i = sk(tk, a, b);
     if (i >= b)
         return false;
@@ -845,8 +863,10 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
         out->spec = spec_add(spec, ps->spec);
     else
         out->spec = spec_add(spec, amp_spec);
-    if (pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
+    if (pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT) {
         out->pseudo = AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
+        out->pseudo_name = p->pe_name;
+    }
     uint8_t flags = 0;
     for (uint32_t k = 0; k < w; k++) {
         const AuSelComp *c = &out_c[k];
@@ -875,7 +895,7 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
 
 static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const CssSelParseCtx *cx)
 {
-    SP p = {tk, cx, false};
+    SP p = {tk, cx, false, 0};
     AuSelList *l = au_calloc(sizeof *l);
     uint32_t cap = 0;
     uint32_t start = a;
@@ -1044,8 +1064,14 @@ static void ser_selector(const AuSelector *s, AuBuf *out)
         uint32_t b = ends[k], a = k ? ends[k - 1] + 1 : 0;
         for (uint32_t i = a; i < b; i++)
             ser_comp(&s->comp[i], out);
-        if (k == 0 && s->pseudo)
-            au_buf_puts(out, pseudo_el_name(s->pseudo));
+        if (k == 0 && s->pseudo) {
+            if (s->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT && s->pseudo_name) {
+                au_buf_puts(out, "::");
+                au_buf_puts(out, au_atom_str(s->pseudo_name));
+            } else {
+                au_buf_puts(out, pseudo_el_name(s->pseudo));
+            }
+        }
         if (k > 0) {
             int comb = s->comp[ends[k - 1]].op;
             au_buf_puts(out, comb == COMB_DESCENDANT ? " " : comb == COMB_CHILD ? " > " : comb == COMB_NEXT ? " + " : " ~ ");
