@@ -107,7 +107,8 @@ LFont *l_font(AuLayout *L, const AuStyle *s)
                 names[n++] = nm;
         }
     }
-    f->face = L->env.fonts ? au_fontset_match_list(L->env.fonts, names, n, in->font_weight, italic) : NULL;
+    f->list = L->env.fonts ? au_fontlist_new(L->env.fonts, names, n, in->font_weight, italic) : NULL;
+    f->face = au_fontlist_primary(f->list);
     if (f->face)
         au_font_metrics(f->face, size, &f->m);
     else {
@@ -159,50 +160,9 @@ void au_layout_css_metrics(void *layout, const AuStyle *style, float *ex_px, flo
     *ch_px = f->m.ch_advance;
 }
 
-/* ---- Font fallback ----
- * A code point the primary face lacks is drawn with the first registered
- * face that has it. Results are cached per code point. */
-struct LFallback {
-    uint32_t cp[256];
-    AuFontFace *face[256];
-};
-
-AuFontFace *l_face_for(AuLayout *L, LFont *f, uint32_t cp)
-{
-    if (!f->face || cp < 0x20 || au_font_glyph(f->face, cp))
-        return f->face;
-    if (cp == 0xAD || cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0xFEFF)
-        return f->face;
-    if (!L->fallback)
-        L->fallback = au_calloc(sizeof *L->fallback);
-    unsigned slot = (cp * 2654435761u) >> 24;
-    if (L->fallback->cp[slot] == cp + 1)
-        return L->fallback->face[slot] ? L->fallback->face[slot] : f->face;
-    AuFontFace *found = NULL;
-    AuFontSet *fs = L->env.fonts;
-    size_t n = fs ? au_fontset_count(fs) : 0;
-    for (size_t i = 0; i < n && !found; i++) {
-        int w;
-        bool it;
-        const char *fam = au_fontset_entry(fs, i, &w, &it);
-        char q[80];
-        size_t fl = strlen(fam);
-        if (fl > 70)
-            continue;
-        q[0] = '"';
-        memcpy(q + 1, fam, fl);
-        q[fl + 1] = '"';
-        q[fl + 2] = 0;
-        AuFontFace *face = au_fontset_match(fs, q, f->weight, f->italic);
-        if (face && au_font_glyph(face, cp))
-            found = face;
-    }
-    L->fallback->cp[slot] = cp + 1;
-    L->fallback->face[slot] = found;
-    return found ? found : f->face;
-}
-
-/* ---- Measurement ---- */
+/* ---- Measurement ----
+ * Per-character font fallback is src/paint's: au_shape_text_list picks a
+ * face per cluster from the LFont's family list. */
 struct LWordEntry {
     LWordEntry *next;
     const void *face;
@@ -222,53 +182,44 @@ static uint32_t word_hash(const void *face, float size, const char *t, size_t n)
     return h;
 }
 
-static float shape_width(AuLayout *L, AuFontFace *face, float size, const char *t, size_t n)
+/* Shapes t with fallback, noting on f when another face was used. */
+static void shape(LFont *f, const char *t, size_t n, AuGlyphRun *r)
 {
-    AuGlyphRun r;
-    au_glyph_run_init(&r);
-    au_shape_text(face, size, t, n, &r);
-    float w = r.width;
-    au_glyph_run_free(&r);
-    return w;
+    au_shape_text_list(f->list, f->size, t, n, r);
+    if (!f->fallback)
+        for (size_t i = 0; i < r->n; i++)
+            if (r->glyphs[i].face != f->face) {
+                f->fallback = true;
+                break;
+            }
 }
 
 /* Width of t with per-character fallback, no spacing. */
 static float measure_uncached(AuLayout *L, LFont *f, const char *t, size_t n)
 {
+    (void)L;
     if (!f->face)
         return n * f->size * 0.5f;
-    /* Fast path: every character in the primary face. */
-    size_t i = 0;
-    bool all = true;
-    while (i < n) {
-        size_t adv;
-        uint32_t cp = (uint8_t)t[i] < 0x80 ? (adv = 1, (uint8_t)t[i]) : au_utf8_decode(t + i, n - i, &adv);
-        if (cp >= 0x20 && !au_font_glyph(f->face, cp) && l_face_for(L, f, cp) != f->face) {
-            all = false;
-            break;
-        }
-        i += adv;
-    }
-    if (all)
-        return shape_width(L, f->face, f->size, t, n);
-    float w = 0;
-    i = 0;
-    while (i < n) {
-        size_t adv;
-        uint32_t cp = au_utf8_decode(t + i, n - i, &adv);
-        AuFontFace *face = l_face_for(L, f, cp);
-        size_t j = i + adv;
-        while (j < n) {
-            size_t a2;
-            uint32_t c2 = au_utf8_decode(t + j, n - j, &a2);
-            if (l_face_for(L, f, c2) != face)
-                break;
-            j += a2;
-        }
-        w += shape_width(L, face, f->size, t + i, j - i);
-        i = j;
-    }
+    AuGlyphRun r;
+    au_glyph_run_init(&r);
+    shape(f, t, n, &r);
+    float w = r.width;
+    au_glyph_run_free(&r);
     return w;
+}
+
+bool l_text_fallback_extents(AuLayout *L, LFont *f, const char *t, size_t n, float *ascent, float *descent)
+{
+    (void)L;
+    *ascent = *descent = 0;
+    if (!f->face || !f->fallback || !n)
+        return false;
+    AuGlyphRun r;
+    au_glyph_run_init(&r);
+    shape(f, t, n, &r);
+    au_glyph_run_fallback_extents(&r, f->face, f->size, ascent, descent);
+    au_glyph_run_free(&r);
+    return *ascent > 0 || *descent > 0;
 }
 
 float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n)
@@ -277,10 +228,11 @@ float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n)
         return 0;
     if (n > WORD_MAX)
         return measure_uncached(L, f, t, n);
-    uint32_t h = word_hash(f->face, f->size, t, n);
+    /* Keyed by the family list: its fallback chain decides the width. */
+    uint32_t h = word_hash(f->list, f->size, t, n);
     if (L->words_cap) {
         for (LWordEntry *e = L->words[h & (L->words_cap - 1)]; e; e = e->next)
-            if (e->face == f->face && e->size == f->size && e->len == n && !memcmp(e->text, t, n)) {
+            if (e->face == f->list && e->size == f->size && e->len == n && !memcmp(e->text, t, n)) {
                 L->stats.word_hits++;
                 return e->w;
             }
@@ -310,7 +262,7 @@ float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n)
         L->words_cap = ncap;
     }
     LWordEntry *e = ar_alloc(&L->word_arena, sizeof *e + n);
-    e->face = f->face;
+    e->face = f->list;
     e->size = f->size;
     e->w = w;
     e->len = (uint16_t)n;
@@ -366,10 +318,11 @@ void l_text_free_caches(AuLayout *L)
     au_free(L->words);
     L->words = NULL;
     L->words_cap = L->nwords = 0;
+    for (int h = 0; h < 64; h++)
+        for (LFont *f = L->font_hash[h]; f; f = f->next)
+            au_fontlist_free(f->list);
     ar_free_all(&L->font_arena);
     memset(L->font_hash, 0, sizeof L->font_hash);
-    au_free(L->fallback);
-    L->fallback = NULL;
 }
 
 /* ---- Drawing ---- */
@@ -399,16 +352,15 @@ void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const cha
             i += adv;
             continue;
         }
-        AuFontFace *face = l_face_for(L, f, cp);
         size_t j = i + adv;
         while (j < n) {
             size_t a2;
             uint32_t c2 = au_utf8_decode(t + j, n - j, &a2);
-            if (skip_char(c2) || l_face_for(L, f, c2) != face)
+            if (skip_char(c2))
                 break;
             j += a2;
         }
-        au_shape_text(face, f->size, t + i, j - i, &r);
+        shape(f, t + i, j - i, &r);
         if (ls != 0 || ws != 0) {
             float extra = 0;
             for (size_t g = 0; g < r.n; g++) {
@@ -420,7 +372,7 @@ void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const cha
             }
             r.width += extra;
         }
-        au_draw_glyph_run(c, face, f->size, &r, pen, y, color);
+        au_draw_glyph_run(c, f->face, f->size, &r, pen, y, color);
         pen += r.width;
         i = j;
     }

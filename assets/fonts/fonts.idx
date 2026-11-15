@@ -1,0 +1,17 @@
+# Aura font index: path, face, weight, style, family. Written by aura-host font-index.
+dejavu/DejaVuSans.ttf	0	400	normal	DejaVu Sans
+inter/Inter-Bold.ttf	0	700	normal	Inter
+inter/Inter-BoldItalic.ttf	0	700	italic	Inter
+inter/Inter-Italic.ttf	0	400	italic	Inter
+inter/Inter-Regular.ttf	0	400	normal	Inter
+liberation/AuraMono-Bold.ttf	0	700	normal	Aura Mono
+liberation/AuraMono-Regular.ttf	0	400	normal	Aura Mono
+liberation/AuraSans-Bold.ttf	0	700	normal	Aura Sans
+liberation/AuraSans-BoldItalic.ttf	0	700	italic	Aura Sans
+liberation/AuraSans-Italic.ttf	0	400	italic	Aura Sans
+liberation/AuraSans-Regular.ttf	0	400	normal	Aura Sans
+liberation/AuraSerif-Bold.ttf	0	700	normal	Aura Serif
+liberation/AuraSerif-BoldItalic.ttf	0	700	italic	Aura Serif
+liberation/AuraSerif-Italic.ttf	0	400	italic	Aura Serif
+liberation/AuraSerif-Regular.ttf	0	400	normal	Aura Serif
+notoemoji/NotoEmoji-Regular.ttf	0	400	normal	Noto Emoji

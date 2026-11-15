@@ -380,10 +380,10 @@ static void test_matching(void)
     lazy_len = len;
     AuFontSet *set = au_fontset_new();
     /* Three weights of one family, loaded lazily; matching follows CSS. */
-    au_fontset_add_lazy(set, "Fam", 300, false, 0, lazy_loader, NULL);
-    au_fontset_add_lazy(set, "Fam", 400, false, 0, lazy_loader, NULL);
-    au_fontset_add_lazy(set, "Fam", 700, false, 0, lazy_loader, NULL);
-    au_fontset_add_lazy(set, "Fam", 400, true, 0, lazy_loader, NULL);
+    au_fontset_add_lazy(set, "Fam", 300, false, 0, 0, lazy_loader, NULL);
+    au_fontset_add_lazy(set, "Fam", 400, false, 0, 0, lazy_loader, NULL);
+    au_fontset_add_lazy(set, "Fam", 700, false, 0, 0, lazy_loader, NULL);
+    au_fontset_add_lazy(set, "Fam", 400, true, 0, 0, lazy_loader, NULL);
     CHECK(!loaded_lazy);
     CHECK(au_fontset_match(set, "fam", 400, false));
     CHECK(loaded_lazy);

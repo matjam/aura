@@ -55,12 +55,19 @@ void au_shape_text(const AuFontFace *f, float size, const char *text, size_t len
     while (i < len) {
         size_t adv;
         uint32_t cp = au_utf8_decode(text + i, len - i, &adv);
+        uint16_t id = au_font_glyph(f, cp);
+        if (!id && au_uc_is_ignorable(cp)) {
+            i += adv;
+            continue;
+        }
         if (r->n == r->cap) {
             r->cap = r->cap ? r->cap * 2 : 32;
             r->glyphs = au_realloc(r->glyphs, r->cap * sizeof(AuGlyph));
         }
         AuGlyph *g = &r->glyphs[r->n++];
-        g->id = au_font_glyph(f, cp);
+        g->id = id;
+        g->face = NULL;
+        g->y = 0;
         if (!g->id)
             r->missing++;
         g->cluster = (uint32_t)i;
@@ -315,10 +322,11 @@ void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGly
             sub = 0;
             fx += 1;
         }
-        const GlyphEntry *e = cache_get(f, g->id, size, (uint8_t)sub);
+        const GlyphEntry *e = cache_get(g->face ? g->face : f, g->id, size, (uint8_t)sub);
         if (!e->w)
             continue;
-        au_draw_mask(c, e->bits, e->w, e->h, e->w, fx + e->left - tx, by + e->top - ty, color);
+        float gy = g->y ? floorf(g->y + 0.5f) : 0;
+        au_draw_mask(c, e->bits, e->w, e->h, e->w, fx + e->left - tx, by + gy + e->top - ty, color);
     }
 }
 

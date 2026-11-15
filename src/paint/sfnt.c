@@ -560,6 +560,11 @@ static bool glyph_box(const AuFontFace *f, uint16_t g, int16_t box[4])
     return true;
 }
 
+bool au_font_glyph_box(const AuFontFace *f, uint16_t glyph, int16_t box[4])
+{
+    return glyph_box(f, glyph, box);
+}
+
 /* Affine transform from font units: x' = a x + c y + e, y' = b x + d y + f. */
 typedef struct {
     float a, b, c, d, e, f;

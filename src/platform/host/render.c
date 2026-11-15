@@ -1,7 +1,8 @@
 /* aura-host render and dump: an HTML file through the document view.
  *
  *   aura-host render page.html -w 800 [-h 600] [-s scrollY] -o out.png
- *                    [--font F]... [--no-system-fonts] [--repeat N]
+ *                    [--font F]... [--no-system-fonts | --bundled-only]
+ *                    [--no-bundled-fonts] [--fonts-dir D] [--repeat N]
  *       Lays out the page at width W and writes a PNG. The height
  *       defaults to the document height, capped at 16384. Prints timings.
  *   aura-host dump page.html -w 800 [-h 600]
@@ -27,8 +28,10 @@ static double now_ms(void)
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: aura-host render page.html -w W [-h H] [-s scrollY] -o out.png [--font F]...\n"
-                    "       aura-host dump page.html -w W [-h H]\n");
+    fprintf(stderr, "usage: aura-host render page.html -w W [-h H] [-s scrollY] -o out.png [font options]\n"
+                    "       aura-host dump page.html -w W [-h H] [font options]\n"
+                    "font options: --font F, --no-system-fonts (or --bundled-only), --no-bundled-fonts,\n"
+                    "              --fonts-dir D\n");
     return 2;
 }
 
@@ -53,6 +56,11 @@ int au_host_render_main(int argc, char **argv)
     int w = 800, h = 0, scroll = 0, repeat = 1;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
+        int used = au_host_font_option(argc, argv, i);
+        if (used) {
+            i += used - 1;
+            continue;
+        }
         if (!strcmp(a, "-o") && i + 1 < argc)
             out = argv[++i];
         else if (!strcmp(a, "-w") && i + 1 < argc)
@@ -63,10 +71,6 @@ int au_host_render_main(int argc, char **argv)
             scroll = atoi(argv[++i]);
         else if (!strcmp(a, "--repeat") && i + 1 < argc)
             repeat = atoi(argv[++i]);
-        else if (!strcmp(a, "--font") && i + 1 < argc)
-            au_host_add_font_path(argv[++i]);
-        else if (!strcmp(a, "--no-system-fonts"))
-            au_host_use_system_fonts(false);
         else if (a[0] != '-' && !page)
             page = a;
         else
@@ -168,6 +172,10 @@ int au_host_render_main(int argc, char **argv)
         printf("  memory: box tree %zu bytes (%.1f per box), fragments %zu bytes; word cache %u hits %u misses\n",
                st.tree_bytes, st.boxes ? (double)st.tree_bytes / st.boxes : 0.0, st.frag_bytes, st.word_hits,
                st.word_misses);
+        AuFontSetStats fst;
+        au_fontset_stats(fonts, &fst);
+        printf("  fonts: %zu of %zu faces loaded (%zu bytes of font data); fallback cache %zu hits %zu misses\n",
+               fst.loaded, au_fontset_count(fonts), fst.loaded_bytes, fst.fallback_hits, fst.fallback_misses);
         au_canvas_free(c);
         au_surface_free(s);
     }

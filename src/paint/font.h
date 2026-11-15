@@ -14,9 +14,9 @@
  *   to turn text into positioned glyphs. Today it maps through cmap,
  *   applies advances and 'kern'; GSUB ligatures and GPOS kerning and marks
  *   go inside it.
- * - Font fallback: au_shape_text reports glyphs that the face lacks
- *   (glyph 0); a fallback chain from AuFontSet (au_fontset_match with the
- *   next family) will re-shape those runs.
+ * - Complex scripts: au_shape_text_list segments text into clusters and
+ *   picks a face per cluster, but does no reordering or joining (Arabic,
+ *   Indic) and no bidirectional layout.
  * - Hinting: none. Outlines are unhinted; vertical metrics snap the
  *   baseline to whole pixels and the x-height to a whole pixel at text
  *   sizes. */
@@ -87,6 +87,9 @@ AuFontFace *au_font_face_synthesize(const AuFontFace *f, unsigned synth);
 uint16_t au_font_glyph(const AuFontFace *f, uint32_t cp);
 /* Advance width in font units. */
 int au_font_advance_units(const AuFontFace *f, uint16_t glyph);
+/* The glyph's bounding box (xmin, ymin, xmax, ymax) in font units, y up,
+ * from its glyf header. False for an empty or missing glyph. */
+bool au_font_glyph_box(const AuFontFace *f, uint16_t glyph, int16_t box[4]);
 /* Kerning between two glyphs in font units ('kern' format 0). */
 int au_font_kern_units(const AuFontFace *f, uint16_t left, uint16_t right);
 /* Appends the glyph's outline to path, scaled by (sx, sy) pixels per font
@@ -122,6 +125,8 @@ typedef struct AuGlyph {
     float x;          /* pen position, pixels from the run start */
     float advance;    /* including kerning with the next glyph */
     uint32_t cluster; /* byte offset of its text */
+    float y;          /* offset from the baseline, pixels, down positive (placed marks) */
+    const struct AuFontFace *face; /* the face it is drawn with; NULL: the run's face */
 } AuGlyph;
 
 typedef struct AuGlyphRun {
@@ -134,11 +139,14 @@ typedef struct AuGlyphRun {
 void au_glyph_run_init(AuGlyphRun *r);
 void au_glyph_run_free(AuGlyphRun *r);
 /* Shapes len bytes of UTF-8 at size pixels into r (replacing its
- * contents). */
+ * contents), with one face. Default-ignorable code points the face lacks
+ * (variation selectors, zero-width joiners, soft hyphens) give no
+ * glyph. */
 void au_shape_text(const AuFontFace *f, float size, const char *text, size_t len, AuGlyphRun *r);
 float au_text_width(const AuFontFace *f, float size, const char *text, size_t len);
 /* Draws a shaped run with its origin (left end of the baseline) at
- * (x, y). */
+ * (x, y). A glyph with its own face is drawn with that face, else with
+ * f. */
 void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGlyphRun *r, float x,
                        float y, AuColor color);
 /* Shapes and draws; returns the advance. */
@@ -159,8 +167,14 @@ void au_glyph_cache_stats(AuGlyphCacheStats *s);
 void au_glyph_cache_forget_face(const AuFontFace *f);
 
 /* ---- Font sets ----
- * The platform registers the fonts it has; layout asks for the best match
- * for a CSS font-family list, weight and style. */
+ * The platform registers the fonts it has (the system's, then the faces
+ * bundled in Aura's Fonts folder); layout asks for the best match for a
+ * CSS font-family list, weight and style.
+ *
+ * Matching tries, in order: the families the list names (up to its first
+ * generic family), the alias-table targets of those families, the generic
+ * family (the user's preference, then its alias row), and so on through
+ * the list, then sans-serif. Names compare ASCII case-insensitively. */
 
 typedef enum {
     AU_GENERIC_SERIF,
@@ -178,6 +192,9 @@ typedef struct AuFontSet AuFontSet;
  * must then stay valid for the life of the set. */
 typedef bool (*AuFontLoader)(void *ctx, const void **data, size_t *len);
 
+/* Entry flags. */
+enum { AU_FONT_BUNDLED = 1 }; /* from Aura's Fonts folder, not the system */
+
 AuFontSet *au_fontset_new(void);
 /* Frees the set and its faces (not the font data, which the platform
  * owns). */
@@ -185,8 +202,9 @@ void au_fontset_free(AuFontSet *s);
 /* Registers every face in a font file, reading family, weight and style
  * from the font. Returns the number added. data must outlive the set. */
 int au_fontset_add_data(AuFontSet *s, const void *data, size_t len);
-/* Registers one face whose data is loaded when it is first matched. */
-void au_fontset_add_lazy(AuFontSet *s, const char *family, int weight, bool italic, int face_index,
+/* Registers one face whose data is loaded when it is first matched.
+ * flags: AU_FONT_*. */
+void au_fontset_add_lazy(AuFontSet *s, const char *family, int weight, bool italic, int face_index, unsigned flags,
                          AuFontLoader load, void *ctx);
 /* Maps a generic family to an installed one. */
 void au_fontset_set_generic(AuFontSet *s, AuGenericFamily g, const char *family);
@@ -200,5 +218,109 @@ AuFontFace *au_fontset_match_list(AuFontSet *s, const char *const *families, siz
 size_t au_fontset_count(const AuFontSet *s);
 /* Family, weight and style of entry i, for listings. */
 const char *au_fontset_entry(const AuFontSet *s, size_t i, int *weight, bool *italic);
+unsigned au_fontset_entry_flags(const AuFontSet *s, size_t i);
+/* Whether entry i's data has been loaded. */
+bool au_fontset_entry_loaded(const AuFontSet *s, size_t i);
+/* Whether a face of the family is registered (and has not failed to
+ * load). */
+bool au_fontset_has_family(const AuFontSet *s, const char *family, size_t len);
+
+typedef struct AuFontSetStats {
+    size_t loaded;       /* faces whose data is loaded */
+    size_t loaded_bytes; /* their data */
+    size_t loads;        /* faces loaded so far */
+    size_t fallback_hits, fallback_misses; /* the per-set fallback cache */
+} AuFontSetStats;
+void au_fontset_stats(const AuFontSet *s, AuFontSetStats *st);
+
+/* ---- The alias table (fontalias.c) ----
+ * A row maps a family name, as pages write it, to the families tried in
+ * its place, best first. Rows for generic families also name the
+ * preference slot whose family is tried before the targets (-1: none). */
+typedef struct AuFontAlias {
+    const char *name;
+    int generic;         /* AuGenericFamily, or -1 */
+    const char *targets; /* comma-separated */
+} AuFontAlias;
+/* The row for a family or generic family name, or NULL. */
+const AuFontAlias *au_font_alias(const char *family, size_t len);
+/* The row when name is a CSS generic family keyword, else NULL. */
+const AuFontAlias *au_font_generic(const char *name, size_t len);
+/* Comma-separated faces tried for a character no listed family has: text
+ * faces, and the faces tried first for emoji presentation. */
+const char *au_font_text_fallbacks(void);
+const char *au_font_emoji_fallbacks(void);
+
+/* ---- Font lists: per-character fallback ----
+ * A font list is a CSS font-family list resolved against a set, for one
+ * weight and style. Its primary face is what au_fontset_match returns.
+ * For a character the primary face lacks, the face is the first that has
+ * it of: the list's other candidate families in matching order (so the
+ * next families the page names, then their aliases, then the generic),
+ * the text fallback faces (DejaVu Sans first), the emoji faces, and any
+ * face already loaded. Characters with emoji presentation (by default, or
+ * with U+FE0F) try the emoji faces first. Faces keep the list's weight and
+ * style, synthesized when the family lacks them. Decisions are cached per
+ * list and, for the fallback faces, per set by code point and style.
+ * Faces load only when they are tried. */
+typedef struct AuFontList AuFontList;
+AuFontList *au_fontlist_new(AuFontSet *s, const char *const *families, size_t n, int weight, bool italic);
+/* The same from a CSS font-family value. */
+AuFontList *au_fontlist_parse(AuFontSet *s, const char *families, int weight, bool italic);
+void au_fontlist_free(AuFontList *l);
+AuFontFace *au_fontlist_primary(const AuFontList *l);
+/* The face for a code point, or NULL when no face has it. */
+AuFontFace *au_fontlist_face_for(AuFontList *l, uint32_t cp, bool emoji);
+/* The face that has every code point of a cluster (a base and its
+ * marks), or NULL. */
+AuFontFace *au_fontlist_face_for_cluster(AuFontList *l, const uint32_t *cps, size_t n, bool emoji);
+
+/* Shapes text with per-character fallback into r: the text is split into
+ * clusters (a base with its combining marks, variation selectors and
+ * emoji modifiers), each cluster is drawn with one face, and runs of a
+ * face are kerned within themselves. Default-ignorable code points give
+ * no glyph (so U+FE0F is dropped and an emoji ZWJ sequence draws its
+ * components). r->missing counts glyphs no face had; they draw as the
+ * primary face's missing-glyph box. Each glyph's face is set. */
+void au_shape_text_list(AuFontList *l, float size, const char *text, size_t len, AuGlyphRun *r);
+float au_text_width_list(AuFontList *l, float size, const char *text, size_t len);
+float au_draw_text_list(AuCanvas *c, AuFontList *l, float size, float x, float y, const char *text, size_t len,
+                        AuColor color);
+/* The ascent and descent (each with half its line gap) of the faces in r
+ * other than primary, at size; 0 when r uses no other face. For
+ * line-height: normal, where a fallback face's metrics enlarge the line
+ * only when its glyphs are on it. */
+void au_glyph_run_fallback_extents(const AuGlyphRun *r, const AuFontFace *primary, float size, float *ascent,
+                                   float *descent);
+
+/* Unicode properties the segmenter uses (approximations of the UCD,
+ * covering the scripts Aura draws). */
+bool au_uc_is_mark(uint32_t cp);              /* combining marks: stay with their base */
+bool au_uc_is_ignorable(uint32_t cp);         /* default-ignorable: never drawn */
+bool au_uc_emoji_presentation(uint32_t cp);   /* Emoji_Presentation=Yes */
+
+/* ---- The font index ----
+ * A Fonts folder holds an index, fonts.idx, so the platform registers the
+ * bundled faces without opening each font. One line per face, fields
+ * separated by tabs:
+ *
+ *   path  face-index  weight  normal|italic  family
+ *
+ * path is relative to the folder with / between components. Lines
+ * starting with # are comments. aura-host font-index writes it. */
+typedef struct AuFontIndexEntry {
+    char path[256];
+    int face_index;
+    int weight;
+    bool italic;
+    char family[64];
+} AuFontIndexEntry;
+typedef void (*AuFontIndexFn)(void *ctx, const AuFontIndexEntry *e);
+/* Calls fn for each valid line; malformed lines are skipped. Returns the
+ * number of entries. */
+int au_font_index_parse(const char *text, size_t len, AuFontIndexFn fn, void *ctx);
+/* Appends the index lines for one font file (every face in it). Returns
+ * the number of faces. */
+int au_font_index_write(AuBuf *b, const char *path, const void *data, size_t len);
 
 #endif

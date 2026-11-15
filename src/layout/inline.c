@@ -907,6 +907,17 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         /* text, atomic, br: belong to P */
         bo[j] = P->bo;
         f->x += P->rdx;
+        if (f->kind == FR_TEXT && f->box->style->inh->line_height.kind == AU_LEN_NORMAL &&
+            P->valign != AU_VALIGN_TOP && P->valign != AU_VALIGN_BOTTOM) {
+            /* With line-height: normal, a fallback face's ascent and
+             * descent enlarge the line only where its glyphs are (Blink). */
+            float fa, fd;
+            if (l_text_fallback_extents(L, l_font(L, f->box->style), ((LText *)f->box)->text + f->start, f->len,
+                                        &fa, &fd)) {
+                top = l_min(top, P->bo - fa);
+                bottom = l_max(bottom, P->bo + fd);
+            }
+        }
         if (f->kind == FR_ATOMIC) {
             LBlock *k = (LBlock *)f->box;
             float mh = k->h + k->m[0] + k->m[2];

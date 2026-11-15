@@ -190,7 +190,7 @@ static int add_fond(AuFontSet *set, Handle fond)
         ref->id = sfnt;
         int weight = (style & 1) ? 700 : 400;
         bool italic = (style & 2) != 0;
-        au_fontset_add_lazy(set, family, weight, italic, 0, load_sfnt, ref);
+        au_fontset_add_lazy(set, family, weight, italic, 0, 0, load_sfnt, ref);
         added++;
     }
     HSetState(fond, state);
