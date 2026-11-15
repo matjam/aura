@@ -67,6 +67,16 @@ static const char *inline_pages[][2] = {
      "#sc{height:120px;overflow:auto;border:1px solid}#sc h3{position:sticky;top:0;background:#cfc;margin:0}"
      "p{margin:6px}</style><div id=hdr>Hidden</div><div id=btn><i></i>Top <b style='display:inline-block;transform:rotate(30deg)'>&gt;</b></div>"
      "<div id=sc><h3>Inner</h3><p>a<p>b<p>c<p>d<p>e<p>f<p>g</div>"},
+    /* Nested documents move with the page as boxes: one with a fixed
+     * header of its own (fixed to the frame, not the window), one
+     * scrolled, and one fixed to the window (painted again). */
+    {"file:///frames.html",
+     "<!doctype html><style>body{margin:0;font:15px sans-serif}iframe{display:block;margin:10px;width:300px;"
+     "height:120px}#pin{position:fixed;right:10px;top:60px;width:120px;height:60px;margin:0}</style>"
+     "<iframe srcdoc=\"<style>body{margin:0}h4{position:fixed;top:0;left:0;right:0;margin:0;background:#fc9}"
+     "p{margin:30px 0}</style><h4>Fixed in the frame</h4><p>one<p>two<p>three<p>four\"></iframe>"
+     "<iframe srcdoc=\"<body style='background:#def'><p>alpha<p>beta<p>gamma<p>delta<p>epsilon\"></iframe>"
+     "<iframe id=pin srcdoc=\"<body style='background:#fed;margin:2px'>pinned\"></iframe>"},
 };
 
 /* The inline pages' bodies are built from a head and repeated content. */
@@ -328,6 +338,7 @@ int main(void)
     run_page(fonts, "file:///fixed.html", 640, 480, 1);
     run_page(fonts, "file:///fixed2.html", 640, 480, 1);
     run_page(fonts, "file:///sticky.html", 640, 480, 1);
+    run_page(fonts, "file:///frames.html", 640, 480, 1);
     run_page(fonts, "file:///canvasgrad.html", 640, 480, 0);
     au_fontset_free(fonts);
     printf("scroll_shift: ok\n");

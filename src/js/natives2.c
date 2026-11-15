@@ -723,8 +723,8 @@ static JSValue n_alert(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         au_free(def);
     }
     double spent = js_now(js) - t0;
-    js->run_start += spent;
-    js->next_check += spent;
+    js->root->run_start += spent;
+    js->root->next_check += spent;
     au_free(msg);
     return r;
 }

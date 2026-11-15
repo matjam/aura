@@ -245,7 +245,7 @@ void au_put_ms(AuBuf *out, uint32_t ms)
  * and script fetches as "other"; the response's type says which. */
 static const char *kind_name(const AuNetRecord *r)
 {
-    static const char *const names[] = {"document", "style", "image", "font", "script", "other"};
+    static const char *const names[] = {"document", "style", "image", "font", "script", "other", "frame"};
     int k = r->kind;
     if (k == AU_FETCH_OTHER) {
         if (strstr(r->type, "javascript") || strstr(r->type, "ecmascript"))
@@ -255,7 +255,7 @@ static const char *kind_name(const AuNetRecord *r)
         if (strstr(r->type, "json"))
             return "json";
     }
-    return k >= 0 && k < 6 ? names[k] : "other";
+    return k >= 0 && k < 7 ? names[k] : "other";
 }
 
 static const char *source_name(int s)

@@ -67,6 +67,14 @@ typedef struct AuJsSettings {
     bool cookies_enabled;
     uint32_t storage_quota; /* bytes per origin for each storage area; 0: 5 MB */
     int screen_width, screen_height; /* 0: 1024x768 */
+    /* Frames. origin replaces the origin taken from the document URL (an
+     * about:blank or srcdoc frame has its parent's); it is copied.
+     * sandbox_origin gives the document an origin equal to no other (a
+     * sandboxed frame without allow-same-origin). no_top_navigation: the
+     * document may navigate only itself and its descendants. */
+    const char *origin;
+    bool sandbox_origin;
+    bool no_top_navigation;
 } AuJsSettings;
 
 void au_js_settings_default(AuJsSettings *s);
@@ -196,6 +204,21 @@ typedef struct AuJsHooks {
      * and crypto.randomUUID. Returns false when the source cannot give
      * them yet. Without this hook the window has no crypto object. */
     bool (*random)(void *ctx, void *buf, size_t len);
+    /* Frames (all optional; without them a window has no frames and is
+     * its own parent). frames_changed: a frame element (iframe, frame,
+     * object, embed) went into or left the document; the embedder brings
+     * its frame list up to date. frame_count and frame_at: the nested
+     * documents in tree order, and the element of each. frame_js: the
+     * AuJs of the document nested in el, created on demand (NULL: none,
+     * or script is off there). parent_js: the AuJs of the embedding
+     * document (NULL at the top). frame_element: the element that holds
+     * this document, in the parent document. */
+    void (*frames_changed)(void *ctx);
+    int (*frame_count)(void *ctx);
+    AuElement *(*frame_at)(void *ctx, int i);
+    AuJs *(*frame_js)(void *ctx, AuElement *el);
+    AuJs *(*parent_js)(void *ctx);
+    AuElement *(*frame_element)(void *ctx);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */
@@ -206,7 +229,24 @@ enum { AU_JS_CHANGE_CHILDREN = 1, AU_JS_CHANGE_ATTR, AU_JS_CHANGE_TEXT, AU_JS_CH
  * document URL (also its origin and base). Returns NULL if QuickJS cannot
  * start (no memory). */
 AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, const AuJsHooks *hooks);
+/* Creates the AuJs of a document nested in a frame: a new context in the
+ * runtime of page (any AuJs of the top-level page), so that objects pass
+ * between the page's documents. The memory limit, the stack limit and the
+ * time budget are the runtime's. Free it before the top-level document's
+ * AuJs, and only while no script of the page runs (au_js_running):
+ * objects of the freed document that other documents still hold stay
+ * valid, and its document lives as long as a wrapper names one of its
+ * nodes. */
+AuJs *au_js_new_child(AuJs *page, AuDocument *doc, const char *url, const AuJsSettings *settings,
+                      const AuJsHooks *hooks);
 void au_js_free(AuJs *js);
+/* The document's origin as script sees it ("null" for an opaque one). */
+const char *au_js_origin(const AuJs *js);
+/* Script of the page (any of its documents) is on the stack. */
+bool au_js_running(const AuJs *js);
+/* The frame list of js's document changed outside script (the parser, a
+ * frame that loaded): gives the window its indexed and named frames. */
+void au_js_frames_changed(AuJs *js);
 
 /* The parser feeding the document, for document.write and the insertion
  * point (NULL when parsing is done). */

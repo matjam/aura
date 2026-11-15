@@ -1161,6 +1161,15 @@ static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_chil
     const char *type = au_element_get_attr(e, AU_ATOM_type);
     int none = object ? LR_NONE : LR_OTHER;
     *skip_children = !object;
+    /* The document's owner knows when the resource is a nested document,
+     * or failed (src/page/frames.c). */
+    int ek = L->env.embed_kind ? L->env.embed_kind(L->env.ctx, e) : 0;
+    if (ek == 1) {
+        *skip_children = true;
+        return LR_OTHER;
+    }
+    if (ek == 2)
+        return none;
     if (!url || !*url)
         return none;
     if (type && *type && !starts_ci(type, "image/"))
@@ -1236,7 +1245,8 @@ static int replaced_kind(AuLayout *L, AuNode *node, bool *skip_children, bool *f
     }
     if (t == AU_ATOM_object || t == AU_ATOM_embed)
         return embedded_kind(L, e, t == AU_ATOM_object, skip_children);
-    if (t == AU_ATOM_canvas || t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio) {
+    if (t == AU_ATOM_canvas || t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio ||
+        t == AU_ATOM_frame) {
         *skip_children = true;
         return LR_OTHER;
     }

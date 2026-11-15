@@ -177,23 +177,41 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
     return 1;
 }
 
+/* The entry depth, the budget and the interrupt state belong to the
+ * runtime, so they live in the root AuJs: a frame's script that runs
+ * inside its parent's call shares the parent's budget. root->entered
+ * names the AuJs of each entry, innermost last (postMessage's source). */
 void js_enter(AuJs *js)
 {
-    if (js->depth++ == 0) {
-        JS_UpdateStackTop(js->rt);
-        js->run_start = js_now(js);
-        js->next_check = js->run_start + js->settings.slice_ms;
-        js->interrupted = false;
+    AuJs *r = js->root;
+    if (r->depth < (int)JS_COUNTOF(r->entered))
+        r->entered[r->depth] = js;
+    if (r->depth++ == 0) {
+        JS_UpdateStackTop(r->rt);
+        r->run_start = js_now(r);
+        r->next_check = r->run_start + r->settings.slice_ms;
+        r->interrupted = false;
     }
 }
 
 void js_leave(AuJs *js)
 {
-    if (--js->depth == 0) {
-        js->interrupted = false;
-        js->oom = false;
+    AuJs *r = js->root;
+    if (--r->depth == 0) {
+        r->interrupted = false;
+        r->oom = false;
         js_safe_point(js);
     }
+}
+
+const char *au_js_origin(const AuJs *js)
+{
+    return js->origin;
+}
+
+bool au_js_running(const AuJs *js)
+{
+    return js->root->depth > 0;
 }
 
 /* ---- Errors ---- */
@@ -221,7 +239,7 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
     JSContext *ctx = js->ctx;
     AuBuf b;
     au_buf_init(&b);
-    if (js->interrupted || js->closing) {
+    if (js->root->interrupted || js->closing) {
         au_buf_puts(&b, "Script stopped: it ran too long or the page was closed");
     } else if (JS_IsUncatchableError(exc)) {
         au_buf_puts(&b, "Script stopped: ");
@@ -255,7 +273,7 @@ void js_report_exception(AuJs *js)
     /* window.onerror and error listeners first (they may cancel the
      * report); not for interrupts, which must not run more script. */
     bool report = true;
-    if (!JS_IsUncatchableError(exc) && !js->interrupted && !JS_IsUndefined(js->P) && !js->closing) {
+    if (!JS_IsUncatchableError(exc) && !js->root->interrupted && !JS_IsUndefined(js->P) && !js->closing) {
         JSValue fn = JS_GetPropertyStr(ctx, js->P, "reportException");
         if (JS_IsFunction(ctx, fn)) {
             JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 1, (JSValueConst *)&exc);
@@ -304,7 +322,7 @@ JSValue js_call_prelude(AuJs *js, const char *name, int argc, JSValueConst *argv
 static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst reason, bool is_handled,
                               void *opaque)
 {
-    AuJs *js = opaque;
+    AuJs *js = opaque; /* the root: rejections of every context are kept there */
     if (is_handled) {
         for (uint32_t i = 0; i < js->nrejections; i++)
             if (JS_VALUE_GET_PTR(js->rejections[i].promise) == JS_VALUE_GET_PTR(promise)) {
@@ -328,8 +346,9 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
 
 static void report_rejections(AuJs *js)
 {
-    while (js->nrejections) {
-        JsRejection r = js->rejections[--js->nrejections];
+    AuJs *root = js->root;
+    while (root->nrejections) {
+        JsRejection r = root->rejections[--root->nrejections];
         JSValue args[2] = {r.promise, r.reason};
         JSValue h = js_call_prelude(js, "unhandledRejection", 2, args);
         bool log = !(JS_IsBool(h) && !JS_ToBool(js->ctx, h));
@@ -356,28 +375,35 @@ static void run_jobs(AuJs *js)
 
 void au_js_checkpoint(AuJs *js)
 {
-    /* Microtasks run only when no script is on the stack. */
-    if (js->in_checkpoint || js->closing || js->depth > 0)
+    /* Microtasks run only when no script is on the stack. The job queue
+     * is the runtime's, so one checkpoint serves every document of the
+     * page: script in one frame may have changed another's tree. */
+    AuJs *root = js->root;
+    if (root->in_checkpoint || js->closing || root->depth > 0)
         return;
-    js->in_checkpoint = true;
+    root->in_checkpoint = true;
     js_enter(js);
     for (int round = 0; round < 64; round++) {
         run_jobs(js);
         bool more = false;
-        if (js->nreacts) {
-            js_run_reactions(js);
-            more = true;
-        }
-        if (js->nmuts || js->slots_dirty) {
-            js_deliver_mutations(js, true);
-            more = true;
+        for (AuJs *g = root; g; g = g->group_next) {
+            if (g->closing)
+                continue;
+            if (g->nreacts) {
+                js_run_reactions(g);
+                more = true;
+            }
+            if (g->nmuts || g->slots_dirty) {
+                js_deliver_mutations(g, true);
+                more = true;
+            }
         }
         if (!more && !JS_IsJobPending(js->rt))
             break;
     }
     report_rejections(js);
     js_leave(js);
-    js->in_checkpoint = false;
+    root->in_checkpoint = false;
 }
 
 void js_safe_point(AuJs *js)
@@ -429,7 +455,7 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (!ok) {
         /* An interrupt must keep unwinding to the embedder. */
         JSValue e = JS_GetException(ctx);
-        if (JS_IsUncatchableError(e) || js->interrupted) {
+        if (JS_IsUncatchableError(e) || js->root->interrupted) {
             js->current_script = prev;
             if (el)
                 au_node_unref(&el->node);
@@ -494,9 +520,27 @@ static bool load_prelude(AuJs *js, JSValue N)
     return true;
 }
 
+static AuJs *js_create(AuJs *parent, AuDocument *doc, const char *url, const AuJsSettings *settings,
+                       const AuJsHooks *hooks);
+
 AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, const AuJsHooks *hooks)
 {
+    return js_create(NULL, doc, url, settings, hooks);
+}
+
+AuJs *au_js_new_child(AuJs *parent, AuDocument *doc, const char *url, const AuJsSettings *settings,
+                      const AuJsHooks *hooks)
+{
+    if (!parent || parent->root->closing)
+        return NULL;
+    return js_create(parent->root, doc, url, settings, hooks);
+}
+
+static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsSettings *settings,
+                       const AuJsHooks *hooks)
+{
     AuJs *js = au_calloc(sizeof *js);
+    js->root = root ? root : js;
     au_js_settings_default(&js->settings);
     if (settings) {
         AuJsSettings d = js->settings;
@@ -519,25 +563,35 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     if (hooks)
         js->hooks = *hooks;
     js->P = JS_UNDEFINED;
-    js->rt = JS_NewRuntime2(&qa_funcs, js);
-    if (!js->rt) {
-        au_free(js);
-        return NULL;
+    const char *origin_set = js->settings.origin;
+    js->settings.origin = NULL; /* the caller's string: copied below */
+    if (root) {
+        /* A frame: a new context in the page's runtime. */
+        js->rt = root->rt;
+    } else {
+        js->rt = JS_NewRuntime2(&qa_funcs, js);
+        if (!js->rt) {
+            au_free(js);
+            return NULL;
+        }
+        JS_SetRuntimeOpaque(js->rt, js);
+        /* The memory limit is the allocator's (over_limit), not
+         * JS_SetMemoryLimit's, so the out-of-memory error can be built. */
+        JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
+        JS_SetInterruptHandler(js->rt, interrupt_cb, js);
+        JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
     }
-    JS_SetRuntimeOpaque(js->rt, js);
-    /* The memory limit is the allocator's (over_limit), not
-     * JS_SetMemoryLimit's, so the out-of-memory error can be built. */
-    JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
-    JS_SetInterruptHandler(js->rt, interrupt_cb, js);
-    JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
         JS_AddIntrinsicRegExp(ctx) || JS_AddIntrinsicJSON(ctx) || JS_AddIntrinsicProxy(ctx) ||
         JS_AddIntrinsicMapSet(ctx) || JS_AddIntrinsicTypedArrays(ctx) || JS_AddIntrinsicPromise(ctx) ||
-        JS_AddIntrinsicWeakRef(ctx) || JS_AddIntrinsicAToB(ctx)) {
+        JS_AddIntrinsicWeakRef(ctx) || JS_AddIntrinsicDOMException(ctx) || JS_AddIntrinsicAToB(ctx)) {
+        /* DOMException by name: JS_AddIntrinsicAToB adds it only to the
+         * first context of a runtime. */
         if (ctx)
             JS_FreeContext(ctx);
-        JS_FreeRuntime(js->rt);
+        if (!root)
+            JS_FreeRuntime(js->rt);
         au_free(js);
         return NULL;
     }
@@ -548,8 +602,21 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     js->url = au_strndup(url ? url : "about:blank", strlen(url ? url : "about:blank"));
     js->base = au_strndup(js->url, strlen(js->url));
     char origin[512];
-    js_origin_of(js->url, origin, sizeof origin);
+    if (origin_set)
+        snprintf(origin, sizeof origin, "%s", origin_set);
+    else
+        js_origin_of(js->url, origin, sizeof origin);
     js->origin = au_strndup(origin, strlen(origin));
+    js->opaque_origin = js->settings.sandbox_origin || !strcmp(origin, "null");
+    if (js->settings.sandbox_origin) {
+        au_free(js->origin);
+        js->origin = au_strndup("null", 4);
+    }
+    if (root) {
+        /* after the root, so the root stays first */
+        js->group_next = root->group_next;
+        root->group_next = js;
+    }
     JSValue g = JS_GetGlobalObject(ctx);
     js->global = g;
     JS_FreeValue(ctx, g); /* ctx keeps it */
@@ -567,6 +634,7 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     js_fetch_init(js, N);
     js_module_init(js);
     js_module_natives(js, N);
+    js_frames_natives(js, N);
     bool ok = load_prelude(js, N);
     JS_FreeValue(ctx, N);
     js_leave(js);
@@ -588,6 +656,59 @@ void au_js_free(AuJs *js)
     js_module_free(js);
     js_mutations_free(js);
     js_ranges_free(js);
+    au_buf_free(&js->open_buf);
+    if (js->root != js) {
+        /* A frame's context. The runtime, the wrappers and whatever script
+         * in other documents still holds of this one live on: objects of
+         * this context stay valid, and its natives then act for the root
+         * (the context's opaque pointer must never dangle). The document
+         * stays with the root while a wrapper still names one of its
+         * nodes. The embedder calls this only while no script runs. */
+        AuJs *root = js->root;
+        JS_FreeValue(ctx, js->P);
+        js->P = JS_UNDEFINED;
+        js_wrap_free_child(js);
+        JS_SetContextOpaque(ctx, root);
+        JS_FreeContext(ctx);
+        if (root->depth == 0) {
+            JS_RunGC(root->rt);
+            js_drain_pending(root);
+        }
+        js_hooks_remove(js);
+        if (js->current_script)
+            au_node_unref(&js->current_script->node);
+        for (uint32_t i = 0; i <= js->ndocs; i++) {
+            AuDocument *d = i < js->ndocs ? js->docs[i] : js->doc;
+            bool held = false;
+            for (AuJsWrap *w = root->wraps; w && !held; w = w->next)
+                held = w->node->doc == d;
+            if (held && !root->closing)
+                js_keep_doc(root, d);
+            au_node_unref(&d->node);
+        }
+        au_free(js->docs);
+        for (AuJs **pp = &root->group_next; *pp; pp = &(*pp)->group_next)
+            if (*pp == js) {
+                *pp = js->group_next;
+                break;
+            }
+        for (size_t i = 0; i < JS_COUNTOF(root->entered); i++)
+            if (root->entered[i] == js)
+                root->entered[i] = root;
+        au_free(js->url);
+        au_free(js->base);
+        au_free(js->origin);
+        au_free(js);
+        return;
+    }
+    /* The root goes last: contexts of frames that are still there (an
+     * embedder that broke the order) are cut loose first. */
+    while (js->group_next) {
+        AuJs *c = js->group_next;
+        c->hooks.ctx = NULL;
+        memset(&c->hooks, 0, sizeof c->hooks);
+        au_js_free(c);
+    }
     for (uint32_t i = 0; i < js->nrejections; i++) {
         JS_FreeValue(ctx, js->rejections[i].promise);
         JS_FreeValue(ctx, js->rejections[i].reason);
@@ -743,6 +864,8 @@ void au_js_run_javascript_url(AuJs *js, const char *url)
 
 void au_js_gc(AuJs *js)
 {
+    if (js->root->depth > 0)
+        return; /* script of the page is running: not now */
     js_drain_pending(js);
     JS_RunGC(js->rt);
     js_drain_pending(js);
@@ -751,11 +874,16 @@ void au_js_gc(AuJs *js)
 
 void au_js_stats(const AuJs *js, AuJsStats *s)
 {
-    JSMemoryUsage mu;
-    JS_ComputeMemoryUsage(js->rt, &mu);
-    s->memory_used = (size_t)mu.malloc_size;
-    s->memory_limit = js->settings.memory_limit;
-    s->wrappers = js->nwraps;
+    /* The runtime's memory is counted once, for the root; a frame's
+     * context reports none of its own. */
+    s->memory_used = 0;
+    if (js->root == js) {
+        JSMemoryUsage mu;
+        JS_ComputeMemoryUsage(js->rt, &mu);
+        s->memory_used = (size_t)mu.malloc_size;
+    }
+    s->memory_limit = js->root->settings.memory_limit;
+    s->wrappers = js->root->nwraps;
     s->errors = js->errors;
     s->interrupted = js->interrupts;
 }

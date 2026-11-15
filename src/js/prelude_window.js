@@ -8,12 +8,12 @@ defProps(WP, {
     get self() { return G; },
     set self(v) { defGlobal('self', v); },
     get frames() { return G; },
-    get parent() { return G; },
-    get top() { return G; },
+    get parent() { return wrapWindow(N.windowRel(1)); },
+    get top() { return wrapWindow(N.windowRel(2)); },
     get opener() { return null; },
     set opener(v) {},
-    get frameElement() { return null; },
-    get length() { return 0; },
+    get frameElement() { return N.frameElement(); },
+    get length() { return N.frameCount(); },
     get closed() { return false; },
     get name() { return ''; },
     set name(v) {},
@@ -61,7 +61,13 @@ defProps(WP, {
         url = str(url);
         const abs = url === '' ? 'about:blank' : resolveUrl(url);
         target = str(target) || '_blank';
-        if (target === '_self' || target === '_top' || target === '_parent') { G.location.assign(abs); return G; }
+        if (target === '_self') { G.location.assign(abs); return G; }
+        if (target === '_top' || target === '_parent') {
+            const w = N.windowRel(target === '_top' ? 2 : 1);
+            if (w === G) { G.location.assign(abs); return G; }
+            if (!N.navigateWindow(w, abs)) throw domErr('This document may not navigate that window', 'SecurityError');
+            return wrapWindow(w);
+        }
         return N.openWindow(abs, target) ? null : null;
     },
     getComputedStyle: G.getComputedStyle,
@@ -78,8 +84,14 @@ defProps(WP, {
             const mine = N.docUrl(2);
             if (u.origin !== mine && !(u.protocol === 'file:' && mine === 'file://')) return;
         }
-        const cloned = structuredClone(data);
-        N.queueTask(() => fire(G, new MessageEvent('message', { data: cloned, origin: N.docUrl(2), source: G })));
+        /* The caller may be another document of the same origin (this
+         * function is reached through its window object): the message
+         * then comes from that document. */
+        const src = N.enteredWindow();
+        if (src !== G && o === '/' && N.windowInfo(src, 4) !== N.docUrl(2)) return;
+        /* its ports are known to its own realm */
+        const ends = src === G ? transferOf(origin, arguments[2]) : N.transferFrom(src, origin, arguments[2]);
+        P.receiveMessage(data, src, src === G ? N.docUrl(2) : N.windowInfo(src, 4), ends);
     },
     captureEvents() {}, releaseEvents() {},
     requestIdleCallback(cb, opts) {
@@ -377,6 +389,11 @@ defGlobal('PerformanceObserver', PerformanceObserver);
 
 /* ---------------- structuredClone ---------------- */
 
+/* Values may come from another document of the page (postMessage between
+ * frames): types are told by instanceof, then by the class tag, which
+ * holds across realms, and the copy is always made of this realm's
+ * objects. */
+const classTag = (v) => Object.prototype.toString.call(v).slice(8, -1);
 function structuredClone(value, options) {
     const seen = new Map();
     let budget = 1000000;
@@ -395,31 +412,36 @@ function structuredClone(value, options) {
             for (const k of Object.keys(v)) out[k] = clone(v[k]);
             return out;
         }
-        if (v instanceof Date) out = new Date(v.getTime());
-        else if (v instanceof RegExp) out = new RegExp(v.source, v.flags);
-        else if (v instanceof Boolean || v instanceof Number || v instanceof String) out = Object(v.valueOf());
-        else if (v instanceof ArrayBuffer) out = v.slice(0);
+        const t = classTag(v);
+        if (v instanceof Date || t === 'Date') out = new Date(Date.prototype.getTime.call(v));
+        else if (v instanceof RegExp || t === 'RegExp') out = new RegExp(v.source, v.flags);
+        else if (v instanceof Boolean || v instanceof Number || v instanceof String || t === 'Boolean' || t === 'Number' || t === 'String') out = Object(v.valueOf());
+        else if (v instanceof ArrayBuffer || t === 'ArrayBuffer') out = new Uint8Array(new Uint8Array(v)).buffer;
         else if (ArrayBuffer.isView(v)) {
             const buf = clone(v.buffer);
-            out = v instanceof DataView ? new DataView(buf, v.byteOffset, v.byteLength) : new v.constructor(buf, v.byteOffset, v.length);
-        } else if (v instanceof Map) {
+            const C = G[t];
+            if (t === 'DataView') out = new DataView(buf, v.byteOffset, v.byteLength);
+            else if (typeof C === 'function' && /Array$/.test(t)) out = new C(buf, v.byteOffset, v.length);
+            else throw domErr('The object could not be cloned', 'DataCloneError');
+        } else if (v instanceof Map || t === 'Map') {
             out = new Map();
             seen.set(v, out);
-            for (const [a, b] of v) out.set(clone(a), clone(b));
+            Map.prototype.forEach.call(v, (b, a) => out.set(clone(a), clone(b)));
             return out;
-        } else if (v instanceof Set) {
+        } else if (v instanceof Set || t === 'Set') {
             out = new Set();
             seen.set(v, out);
-            for (const a of v) out.add(clone(a));
+            Set.prototype.forEach.call(v, (a) => out.add(clone(a)));
             return out;
-        } else if (v instanceof Error) {
+        } else if (v instanceof Error || t === 'Error') {
             const C = { EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError }[v.name] || Error;
             out = new C(v.message);
             if (v.stack !== undefined) out.stack = String(v.stack);
         } else if (v instanceof Blob) {
             out = v;
         } else if (isNode(v) || v instanceof EventTarget || v instanceof WeakMap || v instanceof WeakSet ||
-            v instanceof Promise || (typeof WeakRef === 'function' && v instanceof WeakRef)) {
+            v instanceof Promise || (typeof WeakRef === 'function' && v instanceof WeakRef) ||
+            t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' || t === 'Window' || t === 'MessagePort') {
             throw domErr('The object could not be cloned', 'DataCloneError');
         } else {
             out = {};
@@ -435,38 +457,83 @@ function structuredClone(value, options) {
 defGlobal('structuredClone', structuredClone);
 
 /* ---------------- MessageChannel ----------------
- * Two entangled ports in this document. A message is cloned when posted
- * and delivered as a task once the receiving port has started (start(),
- * or setting onmessage). Ports cannot be transferred: there is no other
- * context to send them to. */
+ * A port is one end of a pipe. The end's state (its queue and its peer)
+ * is a record kept in portEnds, where page script cannot reach it. A
+ * message is cloned when posted and again by the receiving port, in its
+ * own realm, and delivered as a task once the port has started (start(),
+ * or setting onmessage). Transferring a port (the transfer list of
+ * postMessage, to a window or a port) moves its end's record to a new
+ * port in the receiving document and leaves the old port closed; the
+ * record is never a value page script sees, so the two documents share
+ * no object. */
+const portEnds = new WeakMap();
+const newEnd = () => ({ queue: [], peer: null, wake: null, closed: false });
+/* The ends of the ports in a transfer list (detached from their ports). */
+function transferOf(opts, list) {
+    if (opts && typeof opts === 'object' && !Array.isArray(opts) && opts.transfer !== undefined) list = opts.transfer;
+    else if (Array.isArray(opts)) list = opts;
+    if (list === undefined || list === null) return [];
+    const ends = [];
+    const ports = Array.from(list);
+    for (const p of ports) {
+        const e = p !== null && typeof p === 'object' ? portEnds.get(p) : undefined;
+        if (!e || ends.includes(e)) throw domErr('The transfer list holds a value that cannot be transferred', 'DataCloneError');
+        ends.push(e);
+    }
+    for (const p of ports) { const e = portEnds.get(p); e.wake = null; e.onclose = null; portEnds.delete(p); }
+    return ends;
+}
+P.transferOf = transferOf;
+/* Ports of this realm for ends that arrived with a message. */
+const adoptEnds = (ends) => {
+    const out = [];
+    if (ends) for (let i = 0; i < ends.length; i++) out.push(new MessagePort(S.owner, ends[i]));
+    return Object.freeze(out);
+};
 class MessagePort extends EventTarget {
-    constructor(key) {
+    constructor(key, end) {
         if (key !== S.owner) throw new TypeError('Illegal constructor');
         super();
-        this._other = null; this._queue = []; this._started = false; this._closed = false;
+        this._started = false;
+        portEnds.set(this, end);
+        end.wake = () => { if (this._started) this._drain(); };
+        end.onclose = () => N.queueTask(() => fire(this, new Event('close')));
     }
     postMessage(data, transfer) {
         if (!arguments.length) throw new TypeError('postMessage: 1 argument required');
-        const list = Array.isArray(transfer) ? transfer : transfer && transfer.transfer;
-        if (list && list.length) throw domErr('Transferring objects is not supported', 'DataCloneError');
-        const to = this._other;
-        if (this._closed || !to || to._closed) return;
-        to._queue.push(structuredClone(data));
-        if (to._started) to._drain();
+        const e = portEnds.get(this);
+        const ends = transferOf(transfer);
+        if (e && ends.includes(e.peer)) throw domErr('A port cannot be sent through itself', 'DataCloneError');
+        const to = e && !e.closed ? e.peer : null;
+        const msg = { data: structuredClone(data), ends };
+        if (!to || to.closed) return;
+        to.queue.push(msg);
+        if (to.wake) to.wake();
     }
     _drain() {
         N.queueTask(() => {
-            while (this._started && !this._closed && this._queue.length)
-                fire(this, new MessageEvent('message', { data: this._queue.shift() }));
+            const e = portEnds.get(this);
+            while (e && this._started && !e.closed && e.queue.length) {
+                const m = e.queue.shift();
+                let data;
+                try { data = structuredClone(m.data); } catch (err) { fire(this, new MessageEvent('messageerror', {})); continue; }
+                fire(this, new MessageEvent('message', { data, ports: adoptEnds(m.ends) }));
+            }
         });
     }
-    start() { if (this._started) return; this._started = true; if (this._queue.length) this._drain(); }
+    start() {
+        if (this._started) return;
+        this._started = true;
+        const e = portEnds.get(this);
+        if (e && e.queue.length) this._drain();
+    }
     close() {
-        if (this._closed) return;
-        this._closed = true;
-        const o = this._other;
-        this._other = null;
-        if (o && !o._closed) { o._other = null; N.queueTask(() => fire(o, new Event('close'))); }
+        const e = portEnds.get(this);
+        if (!e || e.closed) return;
+        e.closed = true;
+        const o = e.peer;
+        e.peer = null;
+        if (o && !o.closed) { o.peer = null; if (o.onclose) o.onclose(); }
     }
     get onmessage() { return this._onmessage || null; }
     set onmessage(fn) {
@@ -479,11 +546,134 @@ class MessagePort extends EventTarget {
 defineHandlers(MessagePort.prototype, ['messageerror', 'close']);
 class MessageChannel {
     constructor() {
-        const a = new MessagePort(S.owner), b = new MessagePort(S.owner);
-        a._other = b; b._other = a;
+        const ea = newEnd(), eb = newEnd();
+        ea.peer = eb; eb.peer = ea;
+        const a = new MessagePort(S.owner, ea), b = new MessagePort(S.owner, eb);
         Object.defineProperties(this, { port1: { value: a, enumerable: true }, port2: { value: b, enumerable: true } });
     }
 }
+
+/* ---------------- windows of other documents ----------------
+ * N.frameWindow, N.windowRel and the like return the global object of
+ * another document of the page. wrapWindow turns one into what page
+ * script may hold: the global itself for a document of the same origin,
+ * else an object with the members the standard allows across origins
+ * (postMessage, location as a setter, closed, parent, top, frames,
+ * length, indexed and named frames, focus, blur, close). Anything else throws
+ * SecurityError. The object keeps the global in a closure only. */
+const crossWindows = new WeakMap();
+const securityErr = () => domErr('Blocked a frame from accessing a cross-origin frame', 'SecurityError');
+function crossOriginWindow(g) {
+    const noop = () => {};
+    const loc = Object.freeze(Object.create(null, {
+        href: { set(v) { setLoc(v); }, get() { throw securityErr(); }, enumerable: true },
+        replace: { value: (v) => setLoc(v), enumerable: true },
+    }));
+    const setLoc = (v) => {
+        if (!N.navigateWindow(g, resolveUrl(str(v)))) throw domErr('This document may not navigate that window', 'SecurityError');
+    };
+    const post = function postMessage(data, origin, transfer) {
+        if (!arguments.length) throw new TypeError('postMessage: 1 argument required');
+        let o = typeof origin === 'object' && origin ? (origin.targetOrigin === undefined ? '/' : str(origin.targetOrigin))
+            : str(origin === undefined ? '/' : origin);
+        if (o === '/') o = N.docUrl(2);
+        else if (o !== '*') {
+            let u;
+            try { u = new URL(o); } catch (e) { throw domErr("postMessage: invalid target origin '" + o + "'", 'SyntaxError'); }
+            o = u.origin;
+        }
+        const cloned = structuredClone(data);
+        N.postMessageTo(g, cloned, o, transferOf(origin, transfer));
+    };
+    let self;
+    const get = (p) => {
+        switch (p) {
+        case 'postMessage': return post;
+        case 'location': return loc;
+        case 'closed': return N.windowInfo(g, 3);
+        case 'parent': return wrapWindow(N.windowInfo(g, 1));
+        case 'top': return wrapWindow(N.windowInfo(g, 2));
+        case 'window': case 'self': case 'frames': return self;
+        case 'length': return N.windowInfo(g, 0);
+        case 'opener': return null;
+        case 'focus': case 'blur': case 'close': return noop;
+        case 'then': return undefined;
+        }
+        if (typeof p === 'symbol') {
+            if (p === Symbol.toStringTag) return 'Object';
+            return undefined;
+        }
+        if (isIndex(p)) {
+            const w = N.windowFrameAt(g, +p);
+            if (w !== null) return wrapWindow(w);
+        } else {
+            /* a child frame by its name (widgets find a sibling frame
+             * through their parent this way) */
+            const w = N.windowFrameNamed(g, p);
+            if (w !== null) return wrapWindow(w);
+        }
+        throw securityErr();
+    };
+    self = new Proxy(Object.create(null), {
+        get(t, p) { return get(p); },
+        set(t, p, v) { if (p === 'location') { setLoc(v); return true; } throw securityErr(); },
+        has(t, p) { throw securityErr(); },
+        ownKeys() { return []; },
+        getOwnPropertyDescriptor(t, p) { if (p === 'then' || typeof p === 'symbol') return undefined; throw securityErr(); },
+        defineProperty() { throw securityErr(); },
+        deleteProperty() { throw securityErr(); },
+        getPrototypeOf() { return null; },
+        setPrototypeOf() { throw securityErr(); },
+        preventExtensions() { throw securityErr(); },
+    });
+    return self;
+}
+function wrapWindow(g) {
+    if (g === null || g === undefined) return null;
+    if (g === G || N.windowAccess(g)) return g;
+    let w = crossWindows.get(g);
+    if (!w) { w = crossOriginWindow(g); crossWindows.set(g, w); }
+    return w;
+}
+/* The window and the document of the frame in an iframe, frame, object or
+ * embed element. */
+const frameWindowOf = (el) => wrapWindow(N.frameWindow(el));
+const frameDocumentOf = (el) => {
+    const g = N.frameWindow(el);
+    return g !== null && N.windowAccess(g) ? g.document : null;
+};
+/* A message for this window from the document whose global is src (data
+ * is the sender's value, or its clone when the sender is of another
+ * origin): cloned here, in this realm, and delivered as a task. */
+P.receiveMessage = function (data, src, srcOrigin, ends) {
+    const cloned = structuredClone(data);
+    N.queueTask(() => fire(G, new MessageEvent('message', {
+        data: cloned, origin: srcOrigin, source: wrapWindow(src), ports: adoptEnds(ends) })));
+};
+/* The window's indexed and named frames: own accessor properties, set
+ * again whenever the frame list changes. A name that the window already
+ * has (a member, a global variable) is left alone. */
+let frameProps = [];
+P.framesChanged = function () {
+    for (const k of frameProps) {
+        const d = Object.getOwnPropertyDescriptor(G, k);
+        if (d && d.get && d.get.frameIndex !== undefined) delete G[k];
+    }
+    frameProps = [];
+    const names = N.frameNames();
+    const def = (k, i) => {
+        const get = () => wrapWindow(N.frameWindow(i));
+        get.frameIndex = i;
+        Object.defineProperty(G, k, {
+            get, set(v) { Object.defineProperty(G, k, { value: v, writable: true, enumerable: true, configurable: true }); },
+            enumerable: false, configurable: true,
+        });
+        frameProps.push(k);
+    };
+    for (let i = 0; i < names.length; i++) def(String(i), i);
+    for (let i = 0; i < names.length; i++) if (names[i] && !(names[i] in G)) def(names[i], i);
+};
+
 /* ---------------- crypto ----------------
  * Present only when the embedder has a strong random source
  * (AuJsHooks.random). There is no crypto.subtle. */

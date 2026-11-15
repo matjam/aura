@@ -147,6 +147,7 @@ static void fill_response(AuFetchResponse *r, const AuLoadInfo *i, AuFetchCert *
     r->attachment = i->attachment;
     r->filename = i->filename;
     r->csp = i->csp ? i->csp : "";
+    r->x_frame_options = i->x_frame_options ? i->x_frame_options : "";
     r->referrer_policy = i->referrer_policy ? i->referrer_policy : "";
     r->security = security_of(i->security);
     r->from_cache = i->from_cache;
@@ -364,6 +365,7 @@ static AuRequestDest dest_of(AuFetchKind k, const char *url)
     case AU_FETCH_IMAGE: return AU_DEST_IMAGE;
     case AU_FETCH_FONT: return AU_DEST_FONT;
     case AU_FETCH_SCRIPT: return AU_DEST_SCRIPT;
+    case AU_FETCH_FRAME: return AU_DEST_IFRAME;
     default: break;
     }
     /* Other: fonts named by their extension (the document view's web
@@ -401,7 +403,7 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
     if (frq->body)
         rq.body = au_body_from_bytes(frq->body, frq->body_len, frq->body_type);
     rq.content_type = frq->body_type;
-    rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT;
+    rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT || frq->kind == AU_FETCH_FRAME;
     AuLoadCallbacks cb = {r, pf_response, pf_data, pf_done, pf_download};
     r->id = au_net_loader_start(f->l, &rq, &cb);
     r->next = f->reqs;

@@ -228,6 +228,10 @@ const ifaceRows = {
             'application/x-www-form-urlencoded', 'application/x-www-form-urlencoded']],
         ['method', 'e', 0, [['get', 'post', 'dialog'], 'get', 'get']], ['name', 's'], ['noValidate', 'b', 'novalidate'],
         ['target', 's'], ['rel', 's'], ['relList', 't', 'rel']],
+    HTMLFrameElement: [['src', 'u'], ['name', 's'], ['scrolling', 's'], ['frameBorder', 's', 'frameborder'],
+        ['noResize', 'b', 'noresize'], ['longDesc', 'u', 'longdesc'], ['marginHeight', 's', 'marginheight'],
+        ['marginWidth', 's', 'marginwidth']],
+    HTMLFrameSetElement: [['cols', 's'], ['rows', 's']],
     HTMLHeadingElement: [['align', 's']],
     HTMLHRElement: [['align', 's'], ['color', 's'], ['noShade', 'b', 'noshade'], ['size', 's'], ['width', 's']],
     HTMLHtmlElement: [['version', 's']],
@@ -1026,11 +1030,16 @@ defProps(HTMLTitleElement.prototype, {
     get text() { return this.textContent; },
     set text(v) { this.textContent = v; },
 });
-defProps(HTMLIFrameElement.prototype, {
-    get contentDocument() { return null; },
-    get contentWindow() { return null; },
-});
-defProps(HTMLObjectElement.prototype, { get contentDocument() { return null; }, get contentWindow() { return null; } });
+/* Nested documents (prelude_window.js: frameWindowOf, frameDocumentOf). */
+const frameMembers = {
+    get contentDocument() { return frameDocumentOf(this); },
+    get contentWindow() { return frameWindowOf(this); },
+    getSVGDocument() { return null; },
+};
+defProps(HTMLIFrameElement.prototype, frameMembers);
+defProps(HTMLObjectElement.prototype, frameMembers);
+defProps(HTMLFrameElement.prototype, frameMembers);
+defProps(HTMLEmbedElement.prototype, { getSVGDocument() { return null; } });
 defProps(HTMLSlotElement.prototype, {
     assignedNodes(opts) { return N.assigned(this, !!(opts && opts.flatten)); },
     assignedElements(opts) { return N.assigned(this, !!(opts && opts.flatten)).filter(isElement); },
@@ -1200,8 +1209,8 @@ defProps(DP, {
     /* document.open() and close(): during parsing, write() inserts at the
      * parser's insertion point and open() has nothing to do; after
      * parsing, write() itself replaces the document (natives.c). */
-    open() { return this; },
-    close() {},
+    open() { if (arguments.length > 2) return G.open.apply(G, arguments); N.docOpen(this, false); return this; },
+    close() { N.docOpen(this, true); },
     execCommand() { return false; },
     queryCommandSupported() { return false; },
     queryCommandEnabled() { return false; },
@@ -1432,8 +1441,23 @@ class DOMImplementation {
         }
         return d;
     }
-    createDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
-    createDocumentType() { throw domErr('Creating document types is not supported', 'NotSupportedError'); }
+    /* An empty document with the root element and doctype asked for. It
+     * is a plain document: nothing renders it and no script runs in it. */
+    createDocument(ns, qname, doctype) {
+        const d = N.newDocument();
+        if (doctype !== undefined && doctype !== null) {
+            if (!isNode(doctype) || doctype.nodeType !== 10) throw new TypeError('createDocument: the doctype is not a DocumentType');
+            d.appendChild(doctype);
+        }
+        if (qname !== undefined && qname !== null && str(qname) !== '') d.appendChild(d.createElementNS(ns === undefined ? null : ns, qname));
+        return d;
+    }
+    createDocumentType(name, publicId, systemId) {
+        if (arguments.length < 3) throw new TypeError('createDocumentType: 3 arguments required');
+        name = str(name);
+        if (name === '' || /[\s>]/.test(name) || /^[-.0-9]/.test(name)) throw domErr("'" + name + "' is not a valid name", 'InvalidCharacterError');
+        return N.newDoctype(name, str(publicId), str(systemId));
+    }
 }
 tag(DOMImplementation);
 defGlobal('DOMImplementation', DOMImplementation);

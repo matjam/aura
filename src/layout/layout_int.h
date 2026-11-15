@@ -371,6 +371,7 @@ struct AuLayout {
     LBox *view_boxes[L_VIEW_BOXES];
     uint32_t nview_boxes;
     bool need_paint;
+    bool transparent;      /* a nested document: the canvas gets no white (au_layout_set_transparent) */
     bool need_restack;
     /* The box tree's shape depends on which images are known (an object
      * or embed shows its fallback content otherwise): an image change
