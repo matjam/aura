@@ -1565,7 +1565,14 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     css_decl_block_init(&hints);
     css_presentational_hints(el, &hints, r->quirks);
     bool root = el->node.parent && el->node.parent->type == AU_NODE_DOCUMENT;
-    bool eligible = share_eligible(el, inl, &hints, root);
+    /* An element some ::before or ::after rule matches keeps its own
+     * style: those styles hang off the element's style, and
+     * siblings with the same element rules can differ in their pseudo
+     * rules (li::after and li:last-child::after). (::marker is not
+     * checked: the UA sheet's ::marker rule matches every element, and the
+     * same difference between siblings' ::marker rules is still shared.) */
+    const uint16_t attached = (1u << AU_CSS_PSEUDO_BEFORE) | (1u << AU_CSS_PSEUDO_AFTER);
+    bool eligible = share_eligible(el, inl, &hints, root) && !(bits & attached);
     uint32_t h = 0;
     ShareSlot *slot = NULL;
     if (eligible) {
