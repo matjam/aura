@@ -1967,15 +1967,12 @@ static JSValue m_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
             js->parser = p;
             au_html_parser_write(p, b.data ? b.data : "", b.len);
         }
-    } else if (!ok && (!js->parser || au_html_parser_done(js->parser))) {
-        /* Written after parsing ended (an implicit document.open): the
-         * document's contents become the parse of everything written
-         * since the open. The Document object, its window and its
-         * listeners stay; scripts in the written text do not run. */
-        if (!js->opened) {
-            js->opened = true;
-            au_buf_clear(&js->open_buf);
-        }
+    } else if (!ok && js->opened && (!js->parser || au_html_parser_done(js->parser))) {
+        /* After document.open() on a loaded document: the document's
+         * contents become the parse of everything written since the
+         * open. The Document object, its window and its listeners stay;
+         * scripts in the written text do not run. A write without an
+         * open() is still ignored once parsing has ended. */
         if (js->open_buf.len + b.len <= (size_t)4 << 20) {
             au_buf_append(&js->open_buf, b.data ? b.data : "", b.len);
             doc_reparse(js, (AuDocument *)d);
