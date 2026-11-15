@@ -11,13 +11,20 @@
  * TextEdit (AuBrowserWindow.native_field).
  *
  * Redraws are cheap: the model reports damaged rectangles through
- * AuBrowserHost.invalidate, they are unioned per window, and flush()
- * paints only that rectangle into the GWorld and copies only it to the
- * screen, clipped so the scroll bar and grow box are never covered. The
- * caret blink is TEIdle in the field and repaints nothing else. */
+ * AuBrowserHost.invalidate into a short list per window (AuPresent), and
+ * flush() paints only those rectangles into the GWorld and copies only
+ * them to the screen, clipped so the scroll bar and grow box are never
+ * covered. A scroll moves the page's pixels instead of painting them
+ * (AuBrowserHost.scroll_area): flush moves them in the GWorld (memmove)
+ * and on screen (ScrollRect), and paints only the exposed strip and the
+ * areas the model names (fixed and sticky boxes). Scroll events that
+ * arrive before a flush add up to one move. The caret blink is TEIdle in
+ * the field and repaints nothing else. */
 #include "mac.h"
 
+#include "browser/present.h"
 #include "browser/scene.h"
+#include "clock_mac.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -31,7 +38,10 @@ struct BrowserWin {
     TEHandle te;
     bool field_focus;
     bool closing;
-    AuIRect damage;
+    AuPresent pres; /* damage and the pending scroll move */
+    /* Debug > Page Timings: time in flush, split into painting into the
+     * GWorld and copying to the screen (moves included). */
+    uint32_t paint_us, blit_us;
     Point last_mouse;
     char *undo; /* field text before the last edit (Mac Roman) */
     size_t undo_len;
@@ -44,8 +54,6 @@ struct BrowserWin {
 
 static BrowserWin *g_wins;
 static BrowserWin *g_tracking; /* window whose scroll bar is being tracked */
-
-static const AuIRect kEmpty = {0, 0, 0, 0};
 
 /* ---- Helpers ---- */
 
@@ -117,6 +125,22 @@ static void make_gworld(BrowserWin *b)
 
 /* ---- Showing ---- */
 
+/* The CopyBits mode: dithering only when the screen has 256 colours or
+ * fewer. On a deeper screen the 32-bit GWorld copies straight across
+ * (QuickDraw's fast path: same depth, no colour table, no scaling). */
+static short copy_mode(BrowserWin *b)
+{
+    CGrafPtr port = (CGrafPtr)b->base.win;
+    if ((port->portVersion & 0xC000) == 0xC000 && port->portPixMap && (**port->portPixMap).pixelSize > 8)
+        return srcCopy;
+    return srcCopy | kDitherCopy;
+}
+
+static bool touches(AuIRect a, AuIRect b)
+{
+    return !au_irect_empty(au_irect_intersect(a, b));
+}
+
 /* Copies r of the GWorld to the window, leaving out the scroll bar and
  * grow box, and redraws the address field's text when r covers it. */
 static void blit(BrowserWin *b, AuIRect r)
@@ -127,27 +151,34 @@ static void blit(BrowserWin *b, AuIRect r)
     GetPort(&saved);
     SetPort((GrafPtr)b->base.win);
     const AuChromeLayout *l = &b->bw->layout;
-    RgnHandle mask = NewRgn(), cut = NewRgn();
-    if (!mask || !cut)
-        mac_out_of_memory(64);
     Rect q = qd_rect(r);
-    RectRgn(mask, &q);
-    Rect sb = qd_rect(l->vscroll);
-    RectRgn(cut, &sb);
-    DiffRgn(mask, cut, mask);
-    Rect gr = qd_rect(l->grow);
-    RectRgn(cut, &gr);
-    DiffRgn(mask, cut, mask);
-    if (!au_irect_empty(l->hscroll)) {
-        Rect hr = qd_rect(l->hscroll);
-        RectRgn(cut, &hr);
+    RgnHandle mask = NULL;
+    /* A mask only when r reaches the native parts (most copies are page
+     * strips, which do not). */
+    if (touches(r, l->vscroll) || touches(r, l->grow) || touches(r, l->hscroll)) {
+        RgnHandle cut = NewRgn();
+        mask = NewRgn();
+        if (!mask || !cut)
+            mac_out_of_memory(64);
+        RectRgn(mask, &q);
+        Rect sb = qd_rect(l->vscroll);
+        RectRgn(cut, &sb);
         DiffRgn(mask, cut, mask);
+        Rect gr = qd_rect(l->grow);
+        RectRgn(cut, &gr);
+        DiffRgn(mask, cut, mask);
+        if (!au_irect_empty(l->hscroll)) {
+            Rect hr = qd_rect(l->hscroll);
+            RectRgn(cut, &hr);
+            DiffRgn(mask, cut, mask);
+        }
+        DisposeRgn(cut);
     }
     ForeColor(blackColor);
     BackColor(whiteColor);
-    CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy | kDitherCopy, mask);
-    DisposeRgn(mask);
-    DisposeRgn(cut);
+    CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, copy_mode(b), mask);
+    if (mask)
+        DisposeRgn(mask);
     if (b->te && !au_irect_empty(au_irect_intersect(r, l->address_text))) {
         Rect view = qd_rect(l->address_text);
         ClipRect(&view);
@@ -159,30 +190,67 @@ static void blit(BrowserWin *b, AuIRect r)
     SetPort(saved);
 }
 
-static void paint_damage(BrowserWin *b)
+/* Moves the window's pixels in area by (dx, dy) on screen, as the GWorld's
+ * were, and copies from the GWorld what could not be moved: the strip
+ * uncovered, and parts of the area that were covered by other windows. */
+static void scroll_screen(BrowserWin *b, AuIRect area, int dx, int dy)
 {
-    if (au_irect_empty(b->damage) || !b->surf)
+    GrafPtr saved;
+    GetPort(&saved);
+    SetPort((GrafPtr)b->base.win);
+    RgnHandle upd = NewRgn();
+    if (!upd) {
+        SetPort(saved);
+        blit(b, area);
+        return;
+    }
+    Rect q = qd_rect(area);
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    ScrollRect(&q, (short)dx, (short)dy, upd);
+    if (!EmptyRgn(upd)) {
+        Rect box = (**upd).rgnBBox;
+        CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &box, &box, copy_mode(b), upd);
+    }
+    DisposeRgn(upd);
+    SetPort(saved);
+}
+
+/* Takes the pending damage and move: moves the GWorld's pixels and paints
+ * the damaged rectangles into it. */
+static void paint_pending(BrowserWin *b, AuPresentRound *r)
+{
+    au_present_begin(&b->pres, b->surf, r);
+    if (!b->surf || r->n == 0)
         return;
     AuCanvas *c = au_canvas_new(b->surf);
-    au_bw_paint(b->bw, c, b->damage);
+    for (int i = 0; i < r->n; i++)
+        au_bw_paint(b->bw, c, r->rects[i]);
     au_canvas_free(c);
 }
 
 static void flush(BrowserWin *b)
 {
-    if (au_irect_empty(b->damage))
+    if (!au_present_pending(&b->pres) || !b->surf)
         return;
-    paint_damage(b);
-    AuIRect r = b->damage;
-    b->damage = kEmpty;
-    blit(b, r);
+    uint32_t t0 = au_mac_clock_us();
+    AuPresentRound r;
+    paint_pending(b, &r);
+    uint32_t t1 = au_mac_clock_us();
+    if (r.shifted)
+        scroll_screen(b, r.area, r.dx, r.dy);
+    for (int i = 0; i < r.n; i++)
+        blit(b, r.rects[i]);
+    uint32_t t2 = au_mac_clock_us();
+    b->paint_us += t1 - t0;
+    b->blit_us += t2 - t1;
 }
 
 static void invalidate_all(BrowserWin *b)
 {
     int w, h;
     content_size(b, &w, &h);
-    b->damage = (AuIRect){0, 0, w, h};
+    au_present_invalidate(&b->pres, (AuIRect){0, 0, w, h});
 }
 
 static void draw_grow_box(BrowserWin *b)
@@ -389,6 +457,20 @@ static void field_revert(BrowserWin *b)
 
 /* ---- Scroll bar ---- */
 
+/* kControlScrollBarLiveProc: the Appearance Manager's scroll bar, which
+ * calls the action procedure while its thumb is dragged. */
+enum { kLiveScrollBarProc = 386 };
+
+static bool live_scroll_bars(void)
+{
+    static int known = -1;
+    if (known < 0) {
+        long resp = 0;
+        known = Gestalt('appr', &resp) == noErr && (resp & 1) ? 1 : 0; /* gestaltAppearanceExists */
+    }
+    return known == 1;
+}
+
 static void place_controls(BrowserWin *b)
 {
     const AuChromeLayout *l = &b->bw->layout;
@@ -448,6 +530,17 @@ static pascal void scroll_action(ControlHandle c, short part)
     case inDownButton: d = 16; break;
     case inPageUp: d = -page; break;
     case inPageDown: d = page; break;
+    case inThumb: {
+        /* The live scroll bar (Appearance) calls this while the thumb is
+         * dragged: the page follows. */
+        AuTab *t = au_bw_active_tab(b->bw);
+        if (horiz)
+            au_bw_scroll_to(b->bw, GetControlValue(c), t ? t->scroll_y : 0);
+        else
+            au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
+        flush(b);
+        return;
+    }
     }
     if (horiz)
         au_bw_scroll_by(b->bw, d, 0);
@@ -463,7 +556,15 @@ static void host_invalidate(void *ctx, AuBrowserWindow *w, AuIRect r)
     BrowserWin *b = w->platform;
     (void)ctx;
     if (b)
-        b->damage = au_irect_union(b->damage, r);
+        au_present_invalidate(&b->pres, r);
+}
+
+static void host_scroll_area(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy)
+{
+    BrowserWin *b = w->platform;
+    (void)ctx;
+    if (b)
+        au_present_scroll(&b->pres, area, dx, dy);
 }
 
 static void host_changed(void *ctx, AuBrowserWindow *w, unsigned what)
@@ -564,6 +665,7 @@ void browserwin_host(AuBrowserHost *h)
     h->open_external = host_external;
     h->confirm_download = host_confirm_download;
     h->download_added = host_download_added;
+    h->scroll_area = host_scroll_area;
 }
 
 /* ---- Events ---- */
@@ -588,8 +690,8 @@ static void bw_update(MacWin *mw)
     WindowPtr w = mw->win;
     SetPort((GrafPtr)w);
     BeginUpdate(w);
-    paint_damage(b);
-    b->damage = kEmpty;
+    AuPresentRound r;
+    paint_pending(b, &r); /* the whole window is copied below */
     int cw, ch;
     content_size(b, &cw, &ch);
     blit(b, (AuIRect){0, 0, cw, ch});
@@ -839,17 +941,20 @@ static void bw_click(MacWin *mw, EventRecord *ev)
         short part = FindControl(pt, mw->win, &c);
         if ((c == b->vscroll || c == b->hscroll) && part) {
             g_tracking = b;
+            static ControlActionUPP action;
+            if (!action)
+                action = NewControlActionUPP(scroll_action);
             if (part == inThumb) {
-                TrackControl(c, pt, NULL);
+                /* The live scroll bar tracks the thumb through the action
+                 * procedure; the classic one drags an outline and takes
+                 * none. */
+                TrackControl(c, pt, live_scroll_bars() ? action : NULL);
                 AuTab *t = au_bw_active_tab(b->bw);
                 if (c == b->hscroll)
                     au_bw_scroll_to(b->bw, GetControlValue(c), t ? t->scroll_y : 0);
                 else
                     au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
             } else {
-                static ControlActionUPP action;
-                if (!action)
-                    action = NewControlActionUPP(scroll_action);
                 TrackControl(c, pt, action);
             }
             g_tracking = NULL;
@@ -1033,6 +1138,7 @@ static void bw_grow(MacWin *mw)
     BrowserWin *b = (BrowserWin *)mw;
     SetPort((GrafPtr)mw->win);
     make_gworld(b);
+    au_present_init(&b->pres); /* a pending move was for the old GWorld */
     int w, h;
     content_size(b, &w, &h);
     au_bw_resize(b->bw, w, h);
@@ -1126,6 +1232,7 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     if (ch < 200)
         ch = 200;
     BrowserWin *b = au_calloc(sizeof *b);
+    au_present_init(&b->pres);
     b->base.kind = WIN_BROWSER;
     b->base.update = bw_update;
     b->base.activate = bw_activate;
@@ -1144,8 +1251,9 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     b->base.win = w;
     SetPort((GrafPtr)w);
     Rect sr = {0, 0, 10, 10};
-    b->vscroll = NewControl(w, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
-    b->hscroll = NewControl(w, &sr, (ConstStr255Param) "\p", false, 0, 0, 0, scrollBarProc, 0);
+    short sbproc = live_scroll_bars() ? kLiveScrollBarProc : scrollBarProc;
+    b->vscroll = NewControl(w, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, sbproc, 0);
+    b->hscroll = NewControl(w, &sr, (ConstStr255Param) "\p", false, 0, 0, 0, sbproc, 0);
     if (!b->vscroll || !b->hscroll)
         mac_out_of_memory(256);
     make_gworld(b);
@@ -1175,8 +1283,8 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     update_scroll(b);
     host_changed(NULL, b->bw, AU_CHANGED_TITLE);
     invalidate_all(b);
-    paint_damage(b);
-    b->damage = kEmpty;
+    AuPresentRound r;
+    paint_pending(b, &r); /* shown by the first update event */
     ShowWindow(w);
     SelectWindow(w);
     mac_menus_dirty();
@@ -1240,6 +1348,52 @@ static void ms10(char *out, size_t cap, uint32_t tenths)
     snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
 }
 
+typedef struct TimedScroll {
+    int steps;
+    uint32_t total_us, paint_us, blit_us;
+    size_t hits, misses, evictions; /* glyph cache */
+} TimedScroll;
+
+/* Scrolls by step up to n times, flushing after each as the event loop
+ * does, and times it. */
+static TimedScroll timed_scrolls(BrowserWin *b, AuTab *t, int step, int n)
+{
+    TimedScroll r;
+    memset(&r, 0, sizeof r);
+    flush(b);
+    AuGlyphCacheStats g0, g1;
+    au_glyph_cache_stats(&g0);
+    b->paint_us = b->blit_us = 0;
+    uint32_t u0 = au_mac_clock_us();
+    for (int i = 0; i < n; i++) {
+        int before = t->scroll_y;
+        au_bw_scroll_by(b->bw, 0, step);
+        if (t->scroll_y == before)
+            break;
+        flush(b);
+        r.steps++;
+    }
+    r.total_us = au_mac_clock_us() - u0;
+    r.paint_us = b->paint_us;
+    r.blit_us = b->blit_us;
+    au_glyph_cache_stats(&g1);
+    r.hits = g1.hits - g0.hits;
+    r.misses = g1.misses - g0.misses;
+    r.evictions = g1.evictions - g0.evictions;
+    return r;
+}
+
+/* "12.3 = 4.5 + 6.7" per step, in milliseconds. */
+static void timed_text(char *out, size_t cap, const TimedScroll *s)
+{
+    char a[16], p[16], c[16];
+    uint32_t n = s->steps > 0 ? (uint32_t)s->steps : 1;
+    ms10(a, sizeof a, s->total_us / 100 / n);
+    ms10(p, sizeof p, s->paint_us / 100 / n);
+    ms10(c, sizeof c, s->blit_us / 100 / n);
+    snprintf(out, cap, "%s = %s + %s", a, p, c);
+}
+
 void browserwin_page_timings(BrowserWin *b)
 {
     AuTab *t = au_bw_active_tab(b->bw);
@@ -1248,42 +1402,64 @@ void browserwin_page_timings(BrowserWin *b)
     SetCursor(*GetCursor(watchCursor));
     AuPageStats st;
     au_page_stats(t->page, &st);
-    /* Scroll repaint: ten steps of 32 pixels down (or up near the end),
-     * each painted and shown, then back. */
+    /* Scrolling: ten steps of 32 pixels and five page downs (up near the
+     * end), each painted and shown as a scroll by the user is, then a
+     * repaint of the whole page; flush() times painting and copying. */
     int mx, my;
     au_bw_scroll_max(b->bw, &mx, &my);
-    int start = t->scroll_y, step = start + 320 <= my ? 32 : -32, steps = 0;
-    flush(b);
-    uint32_t t0 = au_platform_time_ms();
-    for (int i = 0; i < 10; i++) {
-        int before = t->scroll_y;
-        au_bw_scroll_by(b->bw, 0, step);
-        if (t->scroll_y == before)
-            break;
-        flush(b);
-        steps++;
-    }
-    uint32_t scroll_total = au_platform_time_ms() - t0;
+    int start = t->scroll_y;
+    const AuChromeLayout *l = &b->bw->layout;
+    int page = (l->page.y1 - l->page.y0) - 40;
+    TimedScroll small = timed_scrolls(b, t, start + 320 <= my ? 32 : -32, 10);
+    TimedScroll big = timed_scrolls(b, t, start + 5 * page <= my ? page : -page, 5);
     au_bw_scroll_to(b->bw, t->scroll_x, start);
     flush(b);
+    TimedScroll full;
+    memset(&full, 0, sizeof full);
+    AuGlyphCacheStats g0, g1;
+    au_glyph_cache_stats(&g0);
+    for (int i = 0; i < 3; i++) {
+        b->paint_us = b->blit_us = 0;
+        au_present_invalidate(&b->pres, l->page);
+        uint32_t u0 = au_mac_clock_us();
+        flush(b);
+        full.total_us += au_mac_clock_us() - u0;
+        full.paint_us += b->paint_us;
+        full.blit_us += b->blit_us;
+        full.steps++;
+    }
+    au_glyph_cache_stats(&g1);
     update_scroll(b);
     long heap_free = FreeMem(), heap_block = MaxBlock();
     long temp_free = (long)TempFreeMem();
-    char l0[200], l1[200], l2[120], l3[160], a[16];
+    char l0[200], l1[200], l2[400], l3[256], a[3][64];
     snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).", au_page_title(t->page),
              (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
     snprintf(l1, sizeof l1, "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu resources.",
              (unsigned long)st.layout_ms, (unsigned long)st.layouts, (unsigned long)st.layout_total_ms,
              (unsigned long)st.paint_ms, (unsigned long)st.boxes, (unsigned long)st.bytes,
              (unsigned long)st.resources);
-    if (steps) {
-        ms10(a, sizeof a, scroll_total * 10 / (uint32_t)steps);
-        snprintf(l2, sizeof l2, "Scroll repaint: %s ms per 32-pixel step (%d steps).", a, steps);
+    if (small.steps) {
+        timed_text(a[0], sizeof a[0], &small);
+        timed_text(a[1], sizeof a[1], &big);
+        timed_text(a[2], sizeof a[2], &full);
+        snprintf(l2, sizeof l2,
+                 "Scrolling (ms: total = painting + copying to the screen): 32-pixel step %s; page down %s; "
+                 "whole page %s.",
+                 a[0], a[1], a[2]);
     } else {
-        snprintf(l2, sizeof l2, "Scroll repaint: the page does not scroll.");
+        timed_text(a[2], sizeof a[2], &full);
+        snprintf(l2, sizeof l2, "Scrolling: the page does not scroll; whole page %s ms.", a[2]);
     }
-    snprintf(l3, sizeof l3, "Memory: heap %ldK free (largest block %ldK), temporary memory %ldK free.",
-             heap_free / 1024, heap_block / 1024, temp_free / 1024);
+    AuGlyphCacheStats gs;
+    au_glyph_cache_stats(&gs);
+    snprintf(l3, sizeof l3,
+             "Memory: heap %ldK free (largest block %ldK), temporary memory %ldK free. Glyph cache: %luK, "
+             "%lu glyphs; in these scrolls %lu hits, %lu misses, %lu evictions.",
+             heap_free / 1024, heap_block / 1024, temp_free / 1024, (unsigned long)(gs.bytes / 1024),
+             (unsigned long)gs.entries, (unsigned long)(small.hits + big.hits + g1.hits - g0.hits),
+             (unsigned long)(small.misses + big.misses + g1.misses - g0.misses),
+             (unsigned long)(small.evictions + big.evictions + g1.evictions - g0.evictions));
     Str255 p[4];
     mac_pstr(l0, p[0]);
     mac_pstr(l1, p[1]);

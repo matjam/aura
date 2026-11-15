@@ -14,6 +14,9 @@
 
 /* Milliseconds since startup; wraps after 49 days. */
 uint32_t au_mac_clock_ms(void);
+/* Microseconds since startup, for timing short work; wraps after 71
+ * minutes, so use differences. */
+uint32_t au_mac_clock_us(void);
 /* Seconds east of UTC, from the Map control panel (0 if unset). */
 int32_t au_mac_gmt_offset(void);
 /* Seconds since 1970-01-01 00:00 UTC. */

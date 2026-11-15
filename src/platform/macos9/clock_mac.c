@@ -22,6 +22,13 @@ uint32_t au_mac_clock_ms(void)
     return (uint32_t)(v / 1000u);
 }
 
+uint32_t au_mac_clock_us(void)
+{
+    AuMacClockWide us;
+    Microseconds(&us);
+    return us.lo;
+}
+
 int32_t au_mac_gmt_offset(void)
 {
     AuMacLocation loc;
