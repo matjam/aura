@@ -924,6 +924,9 @@ static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const 
         css_sellist_free(l);
         return NULL;
     }
+    /* most lists hold one selector; the array grew from room for four */
+    if (l->n && cap > l->n)
+        l->sel = au_realloc(l->sel, l->n * sizeof(AuSelector));
     return l;
 }
 

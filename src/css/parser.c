@@ -208,6 +208,14 @@ static void parse_style_rule(Parser *p, uint32_t a, uint32_t pe, uint32_t blk, c
     p->depth--;
 }
 
+static void decls_trim(AuCssDeclBlock *b)
+{
+    if (b->cap > b->n && b->n) {
+        b->d = au_realloc(b->d, b->n * sizeof *b->d);
+        b->cap = b->n;
+    }
+}
+
 /* Contents of a style rule's block (or of a conditional rule nested in
  * one): declarations, nested rules, at-rules. Declarations before the
  * first nested rule go to style->decls; later runs of declarations become
@@ -291,6 +299,10 @@ static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *sty
         }
         i = j;
     }
+    /* the arrays grew by doubling: give back what is unused */
+    decls_trim(&style->decls);
+    if (nd)
+        decls_trim(&nd->decls);
 }
 
 static void add_import(Parser *p, uint32_t a, uint32_t b)
@@ -827,7 +839,13 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     css_tokenize(css, len, &tk);
     Parser p = {&tk, sh, quirks, true, 0};
     RuleList l = {&sh->rules};
+    /* equal var() and custom property values share one token list, equal
+     * declared values one blob */
+    css_toklist_intern_begin();
+    css_blob_intern_begin();
     parse_rule_list(&p, 0, tk.n, &l, true);
+    css_blob_intern_end();
+    css_toklist_intern_end();
     css_tokens_free(&tk);
     return sh;
 }

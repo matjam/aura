@@ -741,6 +741,80 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
     }
 }
 
+/* While a sheet is parsed, token lists with the same tokens are shared: a
+ * sheet repeats values such as var(--fgColor-default) hundreds of times.
+ * The table holds a reference on each list until the parse ends. Lists
+ * are never changed after they are made. */
+static struct {
+    CssTokList **slots;
+    uint32_t size, count;
+    int depth;
+} tl_intern;
+
+void css_toklist_intern_begin(void) { tl_intern.depth++; }
+
+void css_toklist_intern_end(void)
+{
+    if (--tl_intern.depth > 0)
+        return;
+    for (uint32_t i = 0; i < tl_intern.size; i++)
+        css_toklist_release(tl_intern.slots[i]);
+    au_free(tl_intern.slots);
+    tl_intern.slots = NULL;
+    tl_intern.size = tl_intern.count = 0;
+    tl_intern.depth = 0;
+}
+
+static uint32_t toklist_hash(const CssTokList *l)
+{
+    uint32_t h = 2166136261u;
+    const unsigned char *p = (const unsigned char *)l->tk.t;
+    for (size_t i = 0, n = (size_t)l->tk.n * sizeof(CssToken); i < n; i++)
+        h = (h ^ p[i]) * 16777619u;
+    p = (const unsigned char *)l->tk.pool.data;
+    for (size_t i = 0; i < l->tk.pool.len; i++)
+        h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
+static bool toklist_equal(const CssTokList *x, const CssTokList *y)
+{
+    return x->tk.n == y->tk.n && x->tk.pool.len == y->tk.pool.len &&
+           (!x->tk.n || memcmp(x->tk.t, y->tk.t, (size_t)x->tk.n * sizeof(CssToken)) == 0) &&
+           (!x->tk.pool.len || memcmp(x->tk.pool.data, y->tk.pool.data, x->tk.pool.len) == 0);
+}
+
+/* The list equal to l that the table already has (l is then freed), or l
+ * after adding it. */
+static CssTokList *toklist_intern(CssTokList *l)
+{
+    if (tl_intern.count * 2 >= tl_intern.size) {
+        uint32_t size = tl_intern.size ? tl_intern.size * 2 : 256;
+        CssTokList **slots = au_calloc(size * sizeof *slots);
+        for (uint32_t i = 0; i < tl_intern.size; i++) {
+            CssTokList *o = tl_intern.slots[i];
+            if (!o)
+                continue;
+            uint32_t h = toklist_hash(o) & (size - 1);
+            while (slots[h])
+                h = (h + 1) & (size - 1);
+            slots[h] = o;
+        }
+        au_free(tl_intern.slots);
+        tl_intern.slots = slots;
+        tl_intern.size = size;
+    }
+    uint32_t h = toklist_hash(l) & (tl_intern.size - 1);
+    for (; tl_intern.slots[h]; h = (h + 1) & (tl_intern.size - 1))
+        if (toklist_equal(tl_intern.slots[h], l)) {
+            css_toklist_release(l);
+            return css_toklist_retain(tl_intern.slots[h]);
+        }
+    tl_intern.slots[h] = css_toklist_retain(l);
+    tl_intern.count++;
+    return l;
+}
+
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
 {
     CssTokList *l = au_calloc(sizeof *l);
@@ -752,6 +826,20 @@ CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
             l->has_var = 1;
         if (t->type == TK_FUNCTION && t->kw == AU_K_attr)
             l->has_attr = 1;
+    }
+    if (tl_intern.depth > 0) {
+        CssTokList *shared = toklist_intern(l);
+        if (shared != l)
+            return shared;
+    }
+    /* the arrays grew by doubling: keep what is used */
+    if (l->tk.cap > l->tk.n && l->tk.n) {
+        l->tk.t = au_realloc(l->tk.t, (size_t)l->tk.n * sizeof(CssToken));
+        l->tk.cap = l->tk.n;
+    }
+    if (l->tk.pool.cap > l->tk.pool.len && l->tk.pool.len) {
+        l->tk.pool.data = au_realloc(l->tk.pool.data, l->tk.pool.len);
+        l->tk.pool.cap = l->tk.pool.len;
     }
     return l;
 }

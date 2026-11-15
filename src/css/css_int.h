@@ -107,6 +107,10 @@ typedef struct CssTokList {
     uint8_t has_attr;
 } CssTokList;
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b);
+/* Between these, css_toklist_new returns one shared list for equal
+ * tokens (a sheet parse). Calls nest. */
+void css_toklist_intern_begin(void);
+void css_toklist_intern_end(void);
 CssTokList *css_toklist_retain(CssTokList *l);
 void css_toklist_release(CssTokList *l);
 /* Appends tokens [a, b) of src to dst, copying their strings and fixing
@@ -155,6 +159,12 @@ bool css_unit_canonical(int unit, float *factor, int *canon);
 /* Building blobs */
 size_t css_value_tree_size(const AuCssValue *v);
 AuCssBlob *css_blob_pack(const AuCssValue *v, const char *base_url);
+/* A blob without a base URL. Between css_blob_intern_begin and
+ * css_blob_intern_end (a sheet parse; calls nest) equal values get one
+ * shared blob. */
+AuCssBlob *css_blob_pack_shared(const AuCssValue *v);
+void css_blob_intern_begin(void);
+void css_blob_intern_end(void);
 AuCssValue *css_value_copy(CssArena *a, const AuCssValue *v);
 bool css_value_equal(const AuCssValue *a, const AuCssValue *b);
 /* True if computing v needs context (relative units, calc, currentcolor
