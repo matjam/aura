@@ -28,6 +28,7 @@ static const struct {
     {"dl", JSI_HTMLDListElement}, {"data", JSI_HTMLDataElement}, {"datalist", JSI_HTMLDataListElement},
     {"details", JSI_HTMLDetailsElement}, {"dialog", JSI_HTMLDialogElement}, {"div", JSI_HTMLDivElement},
     {"embed", JSI_HTMLEmbedElement}, {"fieldset", JSI_HTMLFieldSetElement}, {"form", JSI_HTMLFormElement},
+    {"frame", JSI_HTMLFrameElement}, {"frameset", JSI_HTMLFrameSetElement},
     {"h1", JSI_HTMLHeadingElement}, {"h2", JSI_HTMLHeadingElement}, {"h3", JSI_HTMLHeadingElement},
     {"h4", JSI_HTMLHeadingElement}, {"h5", JSI_HTMLHeadingElement}, {"h6", JSI_HTMLHeadingElement},
     {"head", JSI_HTMLHeadElement}, {"hr", JSI_HTMLHRElement}, {"html", JSI_HTMLHtmlElement},
@@ -125,7 +126,7 @@ static void wrap_unlink_pending(AuJs *js, AuJsWrap *w)
 
 static void node_finalizer(JSRuntime *rt, JSValueConst val)
 {
-    AuJs *js = JS_GetRuntimeOpaque(rt);
+    AuJs *js = JS_GetRuntimeOpaque(rt); /* the root: it keeps the wrapper lists */
     AuJsWrap *w = JS_GetOpaque(val, js->cls_node);
     if (!w)
         return;
@@ -146,22 +147,37 @@ static void node_finalizer(JSRuntime *rt, JSValueConst val)
 
 static JSClassDef node_class = {"Node", node_finalizer, NULL, NULL, NULL};
 
+/* The AuJs whose prototypes a node's wrapper gets: the one of the node's
+ * document when that document has a context in this runtime (a frame's
+ * node reached from its parent is an object of the frame's realm), else
+ * the caller's. */
+static AuJs *wrap_realm(AuJs *js, const AuNode *n)
+{
+    AuJs *o = au_js_of(n->doc);
+    if (o && o != js && o->root == js->root && !o->closing)
+        return o;
+    return js;
+}
+
 JSValue js_wrap(AuJs *js, AuNode *n)
 {
     if (!n)
         return JS_NULL;
+    AuJs *root = js->root;
     AuJsWrap *w = n->js;
-    if (w && w->js == js)
+    if (w && w->js == root)
         return JS_DupValue(js->ctx, w->obj);
     if (w || js->closing)
         return JS_NULL; /* a node of another runtime: not reachable from here */
+    js = wrap_realm(js, n);
     JSValue obj = JS_NewObjectProtoClass(js->ctx, js->proto[js_iface_of(n)], js->cls_node);
     if (JS_IsException(obj))
         return obj;
     w = au_calloc(sizeof *w);
     w->obj = obj;
     w->node = n;
-    w->js = js;
+    w->js = root; /* wrappers belong to the runtime */
+    js = root;
     w->next = js->wraps;
     if (js->wraps)
         js->wraps->prev = w;
@@ -188,6 +204,7 @@ AuNode *js_unwrap(AuJs *js, JSValueConst v)
 void js_hold_changed(AuJs *js, AuNode *n)
 {
     AuJsWrap *w = n->js;
+    js = js->root;
     if (!w || w->js != js || js->closing)
         return;
     bool want = au_node_held_elsewhere(n);
@@ -204,6 +221,7 @@ void js_hold_changed(AuJs *js, AuNode *n)
 
 void js_drain_pending(AuJs *js)
 {
+    js = js->root;
     while (js->pending) {
         AuJsWrap *w = js->pending;
         js->pending = w->pnext;
@@ -213,6 +231,34 @@ void js_drain_pending(AuJs *js)
             n->flags &= (uint8_t)~AU_NODEF_JS_STRONG;
             JS_FreeValue(js->ctx, w->obj); /* may finalize w and free n */
         }
+    }
+}
+
+/* A frame's context is going. The nodes of its documents let go of their
+ * wrappers, so wrappers no script holds are collected (and release their
+ * nodes); the context's interface objects go too. */
+void js_wrap_free_child(AuJs *js)
+{
+    AuJs *root = js->root;
+    uint32_t n = 0, cap = root->nwraps;
+    JSValue *vals = cap ? au_alloc(cap * sizeof *vals) : NULL;
+    for (AuJsWrap *w = root->wraps; w; w = w->next) {
+        AuDocument *d = w->node->doc;
+        bool mine = d == js->doc;
+        for (uint32_t i = 0; i < js->ndocs && !mine; i++)
+            mine = js->docs[i] == d;
+        if (mine && (w->node->flags & AU_NODEF_JS_STRONG) && n < cap) {
+            w->node->flags &= (uint8_t)~AU_NODEF_JS_STRONG;
+            vals[n++] = w->obj;
+        }
+    }
+    for (uint32_t i = 0; i < n; i++)
+        JS_FreeValue(js->ctx, vals[i]);
+    au_free(vals);
+    for (int i = 0; i < JSI_COUNT; i++) {
+        JS_FreeValue(js->ctx, js->proto[i]);
+        JS_FreeValue(js->ctx, js->ctor[i]);
+        js->proto[i] = js->ctor[i] = JS_UNDEFINED;
     }
 }
 
@@ -295,8 +341,12 @@ static JSValue iface_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
 void js_wrap_init(AuJs *js)
 {
     JSContext *ctx = js->ctx;
-    JS_NewClassID(js->rt, &js->cls_node);
-    JS_NewClass(js->rt, js->cls_node, &node_class);
+    if (js->root != js) {
+        js->cls_node = js->root->cls_node; /* classes belong to the runtime */
+    } else {
+        JS_NewClassID(js->rt, &js->cls_node);
+        JS_NewClass(js->rt, js->cls_node, &node_class);
+    }
     JSValue objproto = JS_GetPrototype(ctx, js->global); /* Object.prototype (via the global's chain) */
     for (int i = 0; i < JSI_COUNT; i++) {
         int p = iface_parent[i];

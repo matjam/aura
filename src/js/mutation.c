@@ -131,6 +131,21 @@ static void touch_slots(AuJs *js, AuNode *parent)
     }
 }
 
+/* A frame element (iframe, frame, object, embed) in child's subtree went
+ * into or left the document: the frame list is brought up to date at the
+ * end of the native that did it (js_frames_flush). */
+static void frames_touched(AuJs *js, AuNode *parent, AuNode *child)
+{
+    if (js->frames_dirty || !js->hooks.frames_changed || !au_node_is_connected(parent))
+        return;
+    for (AuNode *n = child; n; n = au_node_next(n, child))
+        if (js_is_frame_element(n)) {
+            js->frames_dirty = true;
+            js->root->any_frames_dirty = true;
+            return;
+        }
+}
+
 static void h_inserted(void *ctx, AuNode *parent, AuNode *child)
 {
     AuJs *js = ctx;
@@ -144,6 +159,7 @@ static void h_inserted(void *ctx, AuNode *parent, AuNode *child)
         subtree_reactions(js, child, 1);
     if (js->script_watch && au_node_is_connected(parent))
         subtree_scripts(js, child);
+    frames_touched(js, parent, child);
     touch_slots(js, parent);
 }
 
@@ -158,6 +174,7 @@ static void h_removed(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, Au
         push_mut(js, 1, parent, NULL, child, prev, next, 0, NULL, 0);
     if (js->ce_defs && au_node_is_connected(parent))
         subtree_reactions(js, child, 2);
+    frames_touched(js, parent, child);
     touch_slots(js, parent);
 }
 
@@ -173,6 +190,10 @@ static void h_attr(void *ctx, AuElement *el, AuAtom name, uint8_t ns, const char
         push_react(js, 3, el, name, old, old_len, old != NULL);
     if (el->node.parent && (name == AU_ATOM_slot || name == au_atom("name", 4)))
         touch_slots(js, el->node.parent);
+    if (js->hooks.frames_changed && js_is_frame_element(&el->node) && au_node_is_connected(&el->node)) {
+        js->frames_dirty = true; /* src, srcdoc, data, name: after the change (the hook runs before it) */
+        js->root->any_frames_dirty = true;
+    }
 }
 
 static void h_text(void *ctx, AuText *t, const char *old, size_t old_len)
@@ -296,6 +317,8 @@ void js_ce_flush(AuJs *js)
     js->mut_batch++;
     if (js->nreacts && !js->in_reactions && !js->closing)
         js_run_reactions(js);
+    if (js->root->any_frames_dirty)
+        js_frames_flush(js);
 }
 
 void js_mutations_free(AuJs *js)

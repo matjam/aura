@@ -96,7 +96,8 @@ static char *resolve_spec(AuJs *js, const char *spec, const char *base)
 
 static char *normalize(JSContext *ctx, const char *base, const char *name, void *opaque)
 {
-    AuJs *js = opaque;
+    (void)opaque; /* the runtime is shared by frames: the context names the document */
+    AuJs *js = js_of_ctx(ctx);
     char *r = resolve_spec(js, name, base && *base ? base : js->base);
     if (!r) {
         JS_ThrowTypeError(ctx, "Failed to resolve module specifier \"%s\"", name);
@@ -120,7 +121,8 @@ static void set_meta(JSContext *ctx, JSModuleDef *md, const char *url)
 
 static JSModuleDef *loader(JSContext *ctx, const char *name, void *opaque)
 {
-    AuJs *js = opaque;
+    (void)opaque; /* the runtime is shared by frames: the context names the document */
+    AuJs *js = js_of_ctx(ctx);
     Modules *m = M(js);
     ModSrc *s = find_src(m, name);
     if (!s) {
@@ -314,7 +316,8 @@ static JSValue n_set_import_map(JSContext *ctx, JSValueConst this_val, int argc,
 static void dynamic_import(JSContext *ctx, const char *basename, const char *filename, JSValue token,
                            JSValueConst attributes, void *opaque)
 {
-    AuJs *js = opaque;
+    (void)opaque; /* the runtime is shared by frames: the context names the document */
+    AuJs *js = js_of_ctx(ctx);
     JSValue args[3] = {JS_NewString(ctx, basename ? basename : js->base), JS_NewString(ctx, filename), token};
     JSValue r = js_call_prelude(js, "dynamicImport", 3, args);
     JS_FreeValue(ctx, r);
@@ -397,6 +400,8 @@ static const JSCFunctionListEntry module_natives[] = {
 void js_module_init(AuJs *js)
 {
     js->modules = au_calloc(sizeof(Modules));
+    if (js->root != js)
+        return; /* the runtime's loader finds each document by its context */
     JS_SetModuleLoaderFunc(js->rt, normalize, loader, js);
     JS_SetDynamicImportFunc(js->rt, dynamic_import, js);
 }

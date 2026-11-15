@@ -228,6 +228,10 @@ const ifaceRows = {
             'application/x-www-form-urlencoded', 'application/x-www-form-urlencoded']],
         ['method', 'e', 0, [['get', 'post', 'dialog'], 'get', 'get']], ['name', 's'], ['noValidate', 'b', 'novalidate'],
         ['target', 's'], ['rel', 's'], ['relList', 't', 'rel']],
+    HTMLFrameElement: [['src', 'u'], ['name', 's'], ['scrolling', 's'], ['frameBorder', 's', 'frameborder'],
+        ['noResize', 'b', 'noresize'], ['longDesc', 'u', 'longdesc'], ['marginHeight', 's', 'marginheight'],
+        ['marginWidth', 's', 'marginwidth']],
+    HTMLFrameSetElement: [['cols', 's'], ['rows', 's']],
     HTMLHeadingElement: [['align', 's']],
     HTMLHRElement: [['align', 's'], ['color', 's'], ['noShade', 'b', 'noshade'], ['size', 's'], ['width', 's']],
     HTMLHtmlElement: [['version', 's']],
@@ -1026,11 +1030,16 @@ defProps(HTMLTitleElement.prototype, {
     get text() { return this.textContent; },
     set text(v) { this.textContent = v; },
 });
-defProps(HTMLIFrameElement.prototype, {
-    get contentDocument() { return null; },
-    get contentWindow() { return null; },
-});
-defProps(HTMLObjectElement.prototype, { get contentDocument() { return null; }, get contentWindow() { return null; } });
+/* Nested documents (prelude_window.js: frameWindowOf, frameDocumentOf). */
+const frameMembers = {
+    get contentDocument() { return frameDocumentOf(this); },
+    get contentWindow() { return frameWindowOf(this); },
+    getSVGDocument() { return null; },
+};
+defProps(HTMLIFrameElement.prototype, frameMembers);
+defProps(HTMLObjectElement.prototype, frameMembers);
+defProps(HTMLFrameElement.prototype, frameMembers);
+defProps(HTMLEmbedElement.prototype, { getSVGDocument() { return null; } });
 defProps(HTMLSlotElement.prototype, {
     assignedNodes(opts) { return N.assigned(this, !!(opts && opts.flatten)); },
     assignedElements(opts) { return N.assigned(this, !!(opts && opts.flatten)).filter(isElement); },

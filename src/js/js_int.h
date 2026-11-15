@@ -117,6 +117,17 @@ enum {
 struct AuJs {
     JSRuntime *rt;
     JSContext *ctx;
+    /* Frames (frames.c). The documents of one top-level page share one
+     * runtime, each with its own context: root is the AuJs that owns the
+     * runtime (itself for a top-level document), group links every AuJs of
+     * the runtime from root. The wrapper lists, the entry depth, the time
+     * budget and the allocator's counters below are used through root. */
+    AuJs *root;
+    AuJs *group_next;
+    AuJs *entered[16];  /* root: the AuJs of each nested entry from the embedder */
+    bool opaque_origin; /* a sandboxed document: same-origin with nothing */
+    bool frames_dirty;  /* a frame element went into or left this document */
+    bool any_frames_dirty; /* root: some AuJs of the group has frames_dirty */
     AuDocument *doc;
     /* Documents script created (DOMParser, createHTMLDocument, a cloned
      * document), referenced until au_js_free so that no node outlives its
@@ -196,8 +207,19 @@ double js_now(const AuJs *js);
 JSValue js_str(JSContext *ctx, const char *s, size_t len);
 char *js_tostr(JSContext *ctx, JSValueConst v, size_t *len);
 
+/* ---- frames.c ---- */
+void js_frames_natives(AuJs *js, JSValue N);
+/* The AuJs whose window is global, or NULL (a document that has gone). */
+AuJs *js_of_global(AuJs *js, JSValueConst global);
+/* Tells the embedder about frame elements that came or went, and gives the
+ * window its indexed and named frame properties. */
+void js_frames_flush(AuJs *js);
+bool js_is_frame_element(const AuNode *n);
+
 /* ---- wrap.c ---- */
 void js_wrap_init(AuJs *js);
+/* A child context is going: lets go of its documents' wrappers. */
+void js_wrap_free_child(AuJs *js);
 void js_wrap_free_all(AuJs *js);
 JSValue js_wrap(AuJs *js, AuNode *n);     /* new reference; JS_NULL for NULL */
 AuNode *js_unwrap(AuJs *js, JSValueConst v); /* NULL if not a node */
