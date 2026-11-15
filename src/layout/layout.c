@@ -546,6 +546,7 @@ void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
         return;
     }
     L->depth++;
+    L->intrinsic_runs++;
     float mn = 0, mx = 0;
     if (b->b.inner == LI_REPLACED) {
         float w, h, r;
@@ -1249,6 +1250,7 @@ void au_layout_free(AuLayout *L)
     au_free(L->items);
     au_free(L->segs);
     au_free(L->abs);
+    au_free(L->hidden);
     au_free(L);
 }
 
@@ -1315,13 +1317,64 @@ static void mark_dirty(LBox *b)
     }
 }
 
+/* Whether two CSS values are the same. A restyle may compute an equal
+ * value into a new blob, so blobs are compared by content. Values nested
+ * deeper than 16 lists count as different. */
+static bool value_same(const AuCssValue *a, const AuCssValue *b, int depth)
+{
+    if (a->type != b->type || a->unit != b->unit || a->kw != b->kw || a->n != b->n)
+        return false;
+    switch (a->type) {
+    case AU_CSSV_IDENT:
+    case AU_CSSV_STRING:
+    case AU_CSSV_URL:
+        return a->u.str == b->u.str || (a->u.str && b->u.str && !memcmp(a->u.str, b->u.str, a->n));
+    case AU_CSSV_NUMBER:
+    case AU_CSSV_PERCENT:
+    case AU_CSSV_DIMENSION:
+        return a->u.num == b->u.num;
+    case AU_CSSV_COLOR:
+        return a->u.rgba == b->u.rgba;
+    case AU_CSSV_FUNCTION:
+    case AU_CSSV_CALC:
+    case AU_CSSV_LIST:
+    case AU_CSSV_COMMA_LIST:
+        if (depth >= 16)
+            return false;
+        for (uint32_t i = 0; i < a->n; i++)
+            if (!value_same(&a->u.items[i], &b->u.items[i], depth + 1))
+                return false;
+        return true;
+    default:
+        return true;
+    }
+}
+
+static bool blob_same(const AuCssBlob *a, const AuCssBlob *b)
+{
+    if (a == b)
+        return true;
+    if (!a || !b)
+        return false;
+    if (a->base_url != b->base_url && (!a->base_url || !b->base_url || strcmp(a->base_url, b->base_url) != 0))
+        return false;
+    return value_same(&a->value, &b->value, 0);
+}
+
 /* How a style change affects layout: 0 none, 1 repaint, 2 relayout of
  * the box, 3 rebuild of the box tree. */
+/* Two style groups are the same when they are one object or hold the
+ * same bytes after the reference count (a restyle makes new objects). */
+#define GROUP_SAME(x, y)                                                                                               \
+    ((x) == (y) || !memcmp((const char *)(x) + sizeof(uint32_t), (const char *)(y) + sizeof(uint32_t),                 \
+                           sizeof *(x) - sizeof(uint32_t)))
+
 static int style_diff(const AuStyle *a, const AuStyle *b)
 {
     if (a == b)
         return 0;
-    if (a->box != b->box) {
+    bool box_same = GROUP_SAME(a->box, b->box);
+    if (!box_same) {
         const AuStyleBox *x = a->box, *y = b->box;
         if (x->display != y->display || x->position != y->position || x->float_ != y->float_ ||
             x->overflow_x != y->overflow_x || x->overflow_y != y->overflow_y)
@@ -1329,31 +1382,31 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
     }
     int r = 1;
     const AuStyleInh *ia = a->inh, *ib = b->inh;
-    if (ia != ib) {
+    if (!GROUP_SAME(ia, ib)) {
         if (ia->white_space_collapse != ib->white_space_collapse || ia->visibility != ib->visibility ||
-            ia->list_style_type != ib->list_style_type || ia->list_style_position != ib->list_style_position)
+            !blob_same(ia->list_style_type, ib->list_style_type) || ia->list_style_position != ib->list_style_position)
             return 3;
         if (ia->font_size != ib->font_size || ia->font_weight != ib->font_weight ||
-            ia->font_style != ib->font_style || ia->font_family != ib->font_family ||
+            ia->font_style != ib->font_style || !blob_same(ia->font_family, ib->font_family) ||
             ia->text_align != ib->text_align || ia->text_wrap_mode != ib->text_wrap_mode ||
             memcmp(&ia->line_height, &ib->line_height, sizeof ia->line_height) != 0)
             r = 2;
     }
-    if (a->inhr != b->inhr) {
-        if (a->inhr->text_transform != b->inhr->text_transform || a->inhr->quotes != b->inhr->quotes)
+    if (!GROUP_SAME(a->inhr, b->inhr)) {
+        if (a->inhr->text_transform != b->inhr->text_transform || !blob_same(a->inhr->quotes, b->inhr->quotes))
             return 3;
         r = 2;
     }
-    if (a->box != b->box || a->surr != b->surr || a->flex != b->flex)
+    if (!box_same || !GROUP_SAME(a->surr, b->surr) || !GROUP_SAME(a->flex, b->flex))
         r = 2;
-    if (a->rare != b->rare) {
+    if (!GROUP_SAME(a->rare, b->rare)) {
         const AuStyleRare *x = a->rare, *y = b->rare;
-        if (x->content != y->content || x->counter_reset != y->counter_reset ||
-            x->counter_increment != y->counter_increment || x->counter_set != y->counter_set ||
+        if (!blob_same(x->content, y->content) || !blob_same(x->counter_reset, y->counter_reset) ||
+            !blob_same(x->counter_increment, y->counter_increment) || !blob_same(x->counter_set, y->counter_set) ||
             (x->transform == NULL) != (y->transform == NULL) || (x->opacity < 1) != (y->opacity < 1) ||
             x->line_clamp != y->line_clamp || x->contain != y->contain)
             return 3;
-        if (x->transform != y->transform || x->box_shadow != y->box_shadow ||
+        if (!blob_same(x->transform, y->transform) || !blob_same(x->box_shadow, y->box_shadow) ||
             x->outline_width != y->outline_width || x->text_overflow != y->text_overflow)
             r = r < 2 ? 2 : r;
     }
@@ -1390,6 +1443,29 @@ static const AuStyle *current_style(const LBox *b)
         return NULL;
     if (b->pseudo)
         return au_style_pseudo(es, (AuCssPseudo)b->pseudo);
+    if (b->kind == LK_TEXT && n->type == AU_NODE_ELEMENT) {
+        /* Generated text (a pseudo-element's content, a marker's number):
+         * it has the style of its pseudo-element. */
+        int which = 0;
+        for (const LBox *p = b->parent; p && p->node == n && !which; p = p->parent) {
+            which = p->pseudo;
+            if (!lb_anon(p))
+                break;
+        }
+        if (which == AU_CSS_PSEUDO_MARKER) {
+            const AuStyle *ms = au_style_pseudo(es, AU_CSS_PSEUDO_MARKER);
+            return ms ? ms : es;
+        }
+        if (which)
+            return au_style_pseudo(es, (AuCssPseudo)which);
+        /* Content of a display: contents pseudo-element, placed in the
+         * element's parent box: unchanged while the element still has
+         * that pseudo style. */
+        for (const AuStyle *ps = es->pseudos; ps; ps = ps->next)
+            if (ps == b->style)
+                return ps;
+        return NULL;
+    }
     return es;
 }
 
@@ -1437,6 +1513,12 @@ void au_layout_styles_changed(AuLayout *L)
             if (b)
                 b = b->next;
         }
+    }
+    /* An element left out of the tree for display: none that is shown now. */
+    for (uint32_t i = 0; i < L->nhidden && worst < 3; i++) {
+        const AuStyle *hs = au_element_style(L->hidden[i]);
+        if (hs && hs->box->display != AU_DISPLAY_NONE)
+            worst = 3;
     }
     if (worst == 3)
         L->need_build = true;
@@ -1520,6 +1602,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->need_build) {
         /* Keep inner scroll offsets across the rebuild. */
         l_build_tree(L);
+        L->tree_builds++;
         L->need_build = false;
         L->need_layout = true;
         L->need_restack = true;
@@ -1542,6 +1625,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         if (L->full_layout)
             forget_layouts(L);
         L->gen++;
+        L->layout_passes++;
         layout_root(L);
         L->full_layout = false;
         L->need_layout = false;
@@ -1591,6 +1675,9 @@ void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
         }
     }
     s->tree_bytes = L->tree.total;
+    s->tree_builds = L->tree_builds;
+    s->layout_passes = L->layout_passes;
+    s->intrinsic_runs = L->intrinsic_runs;
 }
 
 bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)

@@ -61,6 +61,7 @@ struct AuDocView {
     int scroll_x, scroll_y;
     bool parsing;
     bool tree_dirty, sheets_dirty, restyle_needed, style_all, images_dirty;
+    bool viewport_restyle; /* the viewport changed: restyle, keeping the box tree where styles allow */
     bool finished_reported;
     float last_w, last_h;
     AuElement *hover, *active;

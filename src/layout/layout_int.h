@@ -341,6 +341,7 @@ struct AuLayout {
     uint32_t nabs, abs_cap;
     /* statistics */
     AuLayoutStats stats;
+    uint32_t tree_builds, layout_passes, intrinsic_runs; /* since creation (stats is cleared with the tree) */
     int depth;
     float view_scroll_x, view_scroll_y; /* during paint and hit testing */
     /* Boxes placed against the viewport (position: fixed outside any
@@ -370,6 +371,11 @@ struct AuLayout {
      * the box tree. */
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
+    /* Elements the box tree build left out for display: none (their
+     * descendants are not listed). Not referenced: read only while the
+     * tree is current (au_layout_styles_changed). */
+    AuElement **hidden;
+    uint32_t nhidden, hidden_cap;
     /* The focused element (not referenced; the document view clears it
      * before the element can go) and whether its caret shows now. */
     AuElement *focus;

@@ -308,6 +308,22 @@ int au_host_layout_bench_main(int argc, char **argv)
         v[i] = now_ms() - t0;
     }
     printf("relayout at %d, height %d -> %d (document view): %.2f ms\n", widths[1], h, h - 16, best_of(v, repeat));
+    /* What one change of each kind costs in passes. */
+    for (int k = 0; k < 2; k++) {
+        AuLayoutStats a, b;
+        au_docview_set_viewport(dv, widths[0], h);
+        au_docview_update(dv);
+        au_layout_stats(L, &a);
+        if (k == 0)
+            au_docview_set_viewport(dv, widths[1], h);
+        else
+            au_docview_set_viewport(dv, widths[0], h - 16);
+        au_docview_update(dv);
+        au_layout_stats(L, &b);
+        printf("%s change: %u box tree builds, %u layout passes, %u intrinsic size runs, %u subtrees reused\n",
+               k == 0 ? "width" : "height", b.tree_builds - a.tree_builds, b.layout_passes - a.layout_passes,
+               b.intrinsic_runs - a.intrinsic_runs, b.layouts_skipped);
+    }
     /* Painting, at each width. */
     for (int k = 0; k < 2; k++) {
         int W = widths[k];
