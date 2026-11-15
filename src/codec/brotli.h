@@ -8,9 +8,10 @@
  * when no brotli stream is active, so it costs memory only while brotli
  * responses are being decoded.
  *
- * Memory: the decoder allocates its ring buffer at the size the stream
- * needs, at most 2^max_window_bits bytes (the stream's WBITS beyond that
- * is an error), plus Huffman tables bounded by the RFC's limits. */
+ * Memory: the ring buffer starts at 64 KB (or the size of a stream made
+ * of one meta-block) and doubles as output arrives, up to 2^WBITS bytes,
+ * at most 2^max_window_bits (a stream's WBITS beyond that is an error);
+ * plus Huffman tables bounded by the RFC's limits. */
 #ifndef AURA_BROTLI_H
 #define AURA_BROTLI_H
 
@@ -18,10 +19,11 @@
 
 #define AU_BROTLI_DICT_SIZE 122784u
 
-/* The default cap on the window: 2^22 = 4 MB, what encoders use by
- * default (lgwin 22). Large-window brotli (RFC 7932 allows up to 24 bits;
- * the non-standard large-window extension more) is refused above this. */
-#define AU_BROTLI_DEFAULT_MAX_WINDOW_BITS 22
+/* The default cap on the window: 2^24, the most RFC 7932 allows (the
+ * brotli tool's default). The ring buffer grows with the output, so a
+ * stream costs min(2^WBITS, its output size) bytes of window. The
+ * non-standard large-window extension is refused. */
+#define AU_BROTLI_DEFAULT_MAX_WINDOW_BITS 24
 
 typedef struct AuBrotliDict AuBrotliDict;
 
