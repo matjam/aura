@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aura notes</title>
+<link rel="stylesheet" href="/style.css">
+<script type="text/javascript" src="/main.js"></script>
+</head>
+<body>
+<div id="header" class="header"><a href="https://www.example.com/">Home</a></div>
+<h2 class="section" id="s0">Aura: development notes</h2>
+<div class="para"><p>`README.md` describes Aura for its users. Keep it short. This file holds
+what you need to build, test and change Aura.</p>
+<a href="/page/1.html" title="Next">More</a></div>
+<h2 class="section" id="s2">Conventions</h2>
+<div class="para"><p>- C99, portable. Engine code (everything in `src/` outside
+  `src/platform/`) makes no OS calls and includes no OS headers. It must
+  build for the host and for PowerPC Mac OS 9 (big-endian, 32-bit, newlib).
+- Do not recurse over document depth (tree walks, destruction, layout of
+  nested boxes where it can be avoided): Mac OS 9 stacks are small and
+  pages nest deeply. Use explicit loops or an explicit stack.
+- Allocate with `au_alloc`, `au_realloc`, `au_free` (`src/core/core.h`).
+  They do not return NULL.
+- Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
+  atoms. Names known at compile time go in `src/core/atoms_html.def` or
+  `src/core/atoms_css.def`.
+- Public names start with `au_` (functions), `Au` (types), `AU_`
+  (constants).
+- Third-party code is limited to QuickJS-ng (JavaScript) and BearSSL
+  (TLS), in `third_party/`. Everything else is written here. Ask before
+  adding another.
+- Commit each working step to `main`. Commit only our own sources. Fonts,
+  Apple files and downloaded test suites stay out of git.
+- Write docs instruction first ("To X, use Y"), in plain technical prose.</p>
+<a href="/page/3.html" title="Next">More</a></div>
+<h2 class="section" id="s4">Layout</h2>
+<div class="para"><p>| Folder | Holds |
+|---|---|
+| `src/core` | allocation, buffers, UTF-8, atoms |
+| `src/dom` | the node tree |
+| `src/html` | HTML tokenizer and tree builder |
+| `src/css` | CSS parser, selectors, cascade |
+| `src/layout` | box tree, layout, painting, hit testing |
+| `src/page` | the document view: parsing, style sheets, resources, input |
+| `src/paint` | surfaces, rasterizer, fonts |
+| `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its stub |
+| `src/platform/host` | host tools: headless render to PNG, tree dumps |
+| `src/platform/macos9` | the Mac OS 9 application |
+| `tests/&lt;area&gt;` | one test area per folder, each with a `CMakeLists.txt` |</p>
+<a href="/page/5.html" title="Next">More</a></div>
+<div class="para"><p>`CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
+every `tests/*/CMakeLists.txt`, so a new source file or test area needs no
+change to the top-level file.</p>
+<a href="/page/6.html" title="Next">More</a></div>
+<h2 class="section" id="s7">Build and test</h2>
+<div class="para"><p>- `./build.sh test` builds for the host and runs the tests.
+- `./build.sh ppc` builds for Mac OS 9 with Retro68 (GCC 16.1, Multiversal
+  Interfaces). The toolchain is found through `RETRO68`, then in
+  `../os9-protect/toolchain/build/toolchain`.</p>
+<a href="/page/8.html" title="Next">More</a></div>
+<div class="para"><p>The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
+(`run.sh`, `tools/push.sh` to copy files in, `tools/qmp.py` for
+screenshots and input). `os9-enforcer/CLAUDE.md` describes how to use it.
+The guest has outbound network access.</p>
+<a href="/page/9.html" title="Next">More</a></div>
+<h2 class="section" id="s10">Guest testing</h2>
+<div class="para"><p>Aura has its own test machine, separate from the one os9-protect runs, so
+the two never share a disk, a socket or a QEMU process. Runtime files go
+in `run/` of the main checkout (set `AURA_RUN` to use another folder);
+`tools/guest-env.sh` holds the settings.</p>
+<a href="/page/11.html" title="Next">More</a></div>
+<div class="para"><p>To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
+the background. `BASE` picks the system: `stock` (the default) is Mac OS
+9.2.2 with virtual memory off and no Enforcer, from os9-protect's
+`disks/os9-novm.qcow2`; `enforcer` (`BASE=enforcer tools/guest-run.sh
+start`) is `disks/os9-vmoff.qcow2`, which has the os9-enforcer kernel and
+extension installed. The first start of a base copies its image (read
+only) into `run/os9-base-BASE.qcow2` and boots an overlay on the copy
+(`run/os9-aura-BASE.qcow2`). One guest runs at a time; `status` names the
+running base. Disk writes are discarded when QEMU exits; set `PERSIST=1`
+to keep them. Mac OS takes about a minute to boot.</p>
+<a href="/page/12.html" title="Next">More</a></div>
+<div class="para"><p>Test on the stock base first. Use the Enforcer base to check Aura under
+Enforcer; its own bugs show there too (see the scroll bar thumb note
+under Browser chrome). To read Enforcer's state and offense log, run
+os9-enforcer's `tools/xlog-read.py` with
+`QMP_SOCK=run/qmp.sock`; the extension on that disk is older than the
+script, so the script may report a different layout.</p>
+<a href="/page/13.html" title="Next">More</a></div>
+<div class="para"><p>To copy the application in, build it with `./build.sh ppc` and run
+`tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
+The files arrive as a CD named AuraTest on the guest's desktop. The
+previous disc is ejected first through the Finder; the script types
+nothing until the guest's current application (`CurApName`) is the
+Finder, and fails if an application on the disc is still open, so quit
+Aura before pushing a new build.</p>
+<a href="/page/14.html" title="Next">More</a></div>
+<div class="para"><p>To launch it, run `tools/guest-qmp.py open AuraTest Aura`. To take a
+screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`. To type, use
+`tools/guest-qmp.py key cmd-q` (any character works as the key, as in
+`'cmd-['`) or `type TEXT`; to click or drag, use `click X Y` or `drag X1
+Y1 X2 Y2` (guest screen pixels). `front-app` prints the current
+application.</p>
+<a href="/page/15.html" title="Next">More</a></div>
+<div class="para"><p>To compare the window with the host rendering, render the scene at the
+window's size (the title shows it) and compare the content area, which
+starts at 20,50 on the guest screen:</p>
+<a href="/page/16.html" title="Next">More</a></div>
+<div class="para"><p>```bash
+build/host/src/platform/host/aura-host scene -w 584 -h 390 -o run/host.png
+tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
+```</p>
+<a href="/page/17.html" title="Next">More</a></div>
+<div class="para"><p>To change the screen depth, click the Monitor BitDepth module in the
+guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
+and pick 256 Colors, Thousands or Millions. In Aura, View &gt; Debug &gt; Benchmark times the scene, fills and
+the chrome, and View &gt; Debug &gt; Font List shows the fonts it found.</p>
+<a href="/page/18.html" title="Next">More</a></div>
+<div class="para"><p>To stop the guest, run `tools/guest-run.sh stop`, or choose Special &gt; Shut
+Down in the guest.</p>
+<a href="/page/19.html" title="Next">More</a></div>
+<h2 class="section" id="s20">Browser chrome</h2>
+<div class="para"><p>To change how a browser window looks or behaves, work in `src/browser`:
+`chrome.c` lays out, paints and hit-tests the tab strip (or left tab
+column), toolbar and status bar; `browser.c` holds windows, tabs and
+back/forward lists and routes input; `page.h` is the interface a page
+implements, and `page_stub.c` implements it until the real engine
+replaces it. The model never calls the OS; the shells pass events in and
+show the rectangles it reports through `AuBrowserHost.invalidate`.</p>
+<a href="/page/21.html" title="Next">More</a></div>
+<div class="para"><p>To render a browser window on the host, run
+`build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
+--tab about:home --tab http://example.com/ -o run/chrome.png`. Run
+`aura-host` without arguments for the other options (tab overflow,
+hover, address field text).</p>
+<a href="/page/22.html" title="Next">More</a></div>
+<div class="para"><p>The Mac OS 9 shell (`src/platform/macos9`) keeps one module per kind of
+window (`browserwin.c`, `listwin.c`, `prefswin.c`), with menus and the
+event loop in `main.c` and files in `storage.c`. The address field is a
+TextEdit record placed over the field the engine draws; the scroll bars
+and menus are native; the Preferences window uses Appearance Manager
+controls, declared in `appearance.h` because the Multiversal Interfaces
+lack them, from AppearanceLib.</p>
+<a href="/page/23.html" title="Next">More</a></div>
+<div class="para"><p>Aura keeps its files in the Aura folder of the system Preferences folder:
+`Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
+`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+in; a file that fails to parse is renamed with ` (damaged)` before a new
+one is written. To start with clean state in the guest, delete that
+folder.</p>
+<a href="/page/24.html" title="Next">More</a></div>
+<div class="para"><p>Downloads use a simulated transfer source (`au_sim_source` in
+`downloads.c`) until networking exists; View &gt; Debug &gt; Start Simulated
+Downloads adds a few.</p>
+<a href="/page/25.html" title="Next">More</a></div>
+<div class="para"><p>Toolbox points learned the hard way:</p>
+<a href="/page/26.html" title="Next">More</a></div>
+<div class="para"><p>- In a Rez `MENU`, the enable flags put item k at bit k-1 (the menu's
+  own flag is the separate `enabled` field). A separator at item 5
+  clears bit 4.
+- Do not call `TEGetPoint` from PowerPC code; it crashed the guest. The
+  caret position comes from `TextWidth` with the TextEdit handles
+  locked.
+- Scroll bar thumbs drawn as coloured noise on the second launch of
+  Aura in a guest boot come from Enforcer, not Aura: they appear only on
+  the Enforcer base, at any depth, with or without dithering. The
+  Appearance theme draws thumbs through a 16x17 GWorld it keeps in the
+  system heap, with its pixels in temporary memory, made the first time
+  a thumb is drawn in the boot. Enforcer's temporary memory pool puts
+  those pixels in a chunk of the current application (Aura) and frees
+  the chunk when Aura quits; the stock Process Manager keeps them. The
+  next Aura launch gets a chunk at the same address, and the theme's
+  handle then names Aura's font data.</p>
+<a href="/page/27.html" title="Next">More</a></div>
+<h2 class="section" id="s28">Design</h2>
+<div class="para"><p>The decisions and milestones are in the Gandalf vault,
+`project:aura:decisions`.</p>
+<a href="/page/29.html" title="Next">More</a></div>
+<div class="para"><p>The scope of version 1 (acceptance sites, required features, what is left
+out) is in `docs/v1-scope.md`. Check a feature against it before building
+it.
+# Aura version 1 scope</p>
+<a href="/page/30.html" title="Next">More</a></div>
+<div class="para"><p>Agreed on 2026-11-14. To change the scope, edit this file and say why in
+the commit.</p>
+<a href="/page/31.html" title="Next">More</a></div>
+<div class="para"><p>Version 1 is a browser a person can use daily on a 1 GHz G4 under
+Mac OS 9.1 to 9.2.2, for server-rendered and moderately scripted sites,
+safely.</p>
+<a href="/page/32.html" title="Next">More</a></div>
+<h2 class="section" id="s33">Acceptance sites</h2>
+<div class="para"><p>Version 1 is done when these work:</p>
+<a href="/page/34.html" title="Next">More</a></div>
+<div class="para"><p>- old.reddit.com: browse, log in, vote, comment
+- reddit.com: read
+- Wikipedia
+- Hacker News
+- DuckDuckGo search
+- GitHub: read repositories and issues
+- typical news and documentation sites, and retro Mac sites</p>
+<a href="/page/35.html" title="Next">More</a></div>
+<div class="para"><p>Gmail's web application is not a version 1 criterion.</p>
+<a href="/page/36.html" title="Next">More</a></div>
+<h2 class="section" id="s37">Targets on a 1 GHz G4</h2>
+<div class="para"><p>These are to be confirmed by measurement on real hardware.</p>
+<a href="/page/38.html" title="Next">More</a></div>
+<div class="para"><p>- The application is under 3 MB on disk.
+- Aura uses under 16 MB when idle.
+- A Wikipedia article is displayed within a few seconds of its bytes
+  arriving.
+- A laid-out page scrolls smoothly.</p>
+<a href="/page/39.html" title="Next">More</a></div>
+<h2 class="section" id="s40">Must have</h2>
+<h2 class="section" id="s41">Engine</h2>
+<div class="para"><p>- HTML: the full parser, the legacy encodings (windows-1252, ISO-8859-1)
+  and the `&lt;meta charset&gt;` prescan.
+- CSS: cascade, custom properties, media queries.
+- Layout: block, inline, inline-block, floats, positioning (relative,
+  absolute, fixed, sticky), flexbox, grid, tables, lists, overflow and
+  scrolling boxes, `display: contents`, stacking contexts.
+- Text: line breaking, white-space modes, alignment, decorations,
+  ellipsis, font fallback, Unicode as far as the system fonts cover it.
+  Web fonts: TrueType, WOFF, WOFF2.
+- Painting: backgrounds, borders, radii, shadows, gradients, opacity, 2D
+  transforms, clipping.
+- Images: PNG, JPEG, animated GIF, WebP, favicons, SVG as images and
+  inline SVG for icons (basic shapes, paths, fills, strokes).
+- Forms: text fields, textarea, checkbox, radio, select, buttons, file
+  upload, submission (GET, POST, multipart), validation attributes, focus
+  and keyboard navigation.
+- JavaScript (QuickJS-ng): DOM and events, CSSOM basics (`style`,
+  `classList`, `getComputedStyle`, `matchMedia`), timers,
+  `requestAnimationFrame`, `fetch` and XHR, URL and URLSearchParams,
+  `localStorage` and `sessionStorage`, the history API, MutationObserver,
+  IntersectionObserver, ResizeObserver, custom elements and shadow DOM,
+  modules and dynamic import, TextEncoder, `document.cookie`.
+- Incremental rendering: show the page as it arrives, and lay out again
+  only what changed.</p>
+<a href="/page/42.html" title="Next">More</a></div>
+<h2 class="section" id="s43">Network</h2>
+<div class="para"><p>- Open Transport, DNS, HTTP/1.1 with keep-alive, redirects, chunked
+  encoding, gzip, deflate and brotli.
+- HTTP and HTTPS proxy; basic and digest authentication.
+- TLS 1.2 at least, certificate validation, a bundled root store, Aura's
+  own random source, and a check for an implausible system clock.
+- Memory and disk cache with validation.
+- Cookies with Secure, HttpOnly, SameSite, name prefixes and the public
+  suffix list.</p>
+<a href="/page/44.html" title="Next">More</a></div>
+<h2 class="section" id="s45">Security and privacy</h2>
+<div class="para"><p>- HSTS with a stored list and a bundled preload list; mixed content
+  blocking; HTTPS-first mode.
+- Same-origin policy, CORS, Content-Security-Policy, `nosniff`,
+  Referrer-Policy.
+- Do Not Track and Global Privacy Control; third-party cookie blocking;
+  tracker and advertisement blocking from a host list.
+- Script limits: memory cap, stack cap, an interrupt for runaway scripts.
+- Downloads are never opened or run automatically.
+- Security indicator, certificate viewer, certificate error page.
+- Every parser that reads network data is bounds-checked, run under
+  sanitizers on the host, and fuzzed. Mac OS 9 has no memory protection,
+  so this is the largest exposure.</p>
+<a href="/page/46.html" title="Next">More</a></div>
+<h2 class="section" id="s47">Application</h2>
+<div class="para"><p>- Windows and tabs (top row or left column), navigation bar, address
+  field with completion and search, status of hovered links, loading
+  progress, Stop.
+- Bookmarks with a manager and import and export; history with a window;
+  downloads with a manager; cookies with a manager; preferences with all
+  panes.
+- Find in page, text selection and copy, contextual menus (link, image,
+  selection), Save Page As, view source, text zoom, local files, dragging
+  a link or file onto the window.
+- Session restore; recovery from out-of-memory per page.
+- Multiprocessing Services: page work runs off the main task and the
+  interface stays responsive.
+- Internet Config: registration as the default browser, the `GURL` Apple
+  event, helper applications for other schemes.</p>
+<a href="/page/48.html" title="Next">More</a></div>
+<h2 class="section" id="s49">Not in version 1</h2>
+<div class="para"><p>- A JavaScript JIT, and Gmail-class web applications at usable speed. A
+  bytecode cache and lazy compilation go in if they are cheap.
+- Audio and video, WebRTC, WebGL, WebAssembly.
+- Web Workers, service workers, IndexedDB.
+- WebSockets and canvas 2D. These are the first two to pull in if an
+  acceptance site needs them.
+- CSS animations and transitions beyond jumping to the end state, 3D
+  transforms, filters, blend modes, container queries.
+- Right-to-left and vertical text, complex-script shaping (Arabic,
+  Indic).
+- HTTP/2, HTTP/3, TLS client certificates.
+- Printing, private windows, saved passwords in the Keychain, extensions,
+  sync.
+- A Carbon build for Mac OS X; 68k Macs.
+# Aura</p>
+<a href="/page/50.html" title="Next">More</a></div>
+<div class="para"><p>A web browser for Mac OS 9 on PowerPC, with its engine written from
+scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
+two third-party libraries, QuickJS-ng for JavaScript and BearSSL for TLS.</p>
+<a href="/page/51.html" title="Next">More</a></div>
+<div class="para"><p>Aura is in early development and does not browse the web yet.</p>
+<a href="/page/52.html" title="Next">More</a></div>
+<h2 class="section" id="s53">Build</h2>
+<div class="para"><p>To build and test on the development machine, then build the Mac OS 9
+application, run:</p>
+<a href="/page/54.html" title="Next">More</a></div>
+<div class="para"><p>```bash
+./build.sh
+```</p>
+<a href="/page/55.html" title="Next">More</a></div>
+<div class="para"><p>The Mac OS 9 build needs Retro68's PowerPC toolchain. Set `RETRO68` to its
+folder, or keep `os9-protect` next to this repository.</p>
+<a href="/page/56.html" title="Next">More</a></div>
+<table border="0" cellpadding="0" cellspacing="0">
+<tr><td class="c0">0</td><td><a href="#s0">Section 0</a></td></tr>
+<tr><td class="c1">1</td><td><a href="#s1">Section 1</a></td></tr>
+<tr><td class="c2">2</td><td><a href="#s2">Section 2</a></td></tr>
+<tr><td class="c0">3</td><td><a href="#s3">Section 3</a></td></tr>
+<tr><td class="c1">4</td><td><a href="#s4">Section 4</a></td></tr>
+<tr><td class="c2">5</td><td><a href="#s5">Section 5</a></td></tr>
+<tr><td class="c0">6</td><td><a href="#s6">Section 6</a></td></tr>
+<tr><td class="c1">7</td><td><a href="#s7">Section 7</a></td></tr>
+<tr><td class="c2">8</td><td><a href="#s8">Section 8</a></td></tr>
+<tr><td class="c0">9</td><td><a href="#s9">Section 9</a></td></tr>
+<tr><td class="c1">10</td><td><a href="#s10">Section 10</a></td></tr>
+<tr><td class="c2">11</td><td><a href="#s11">Section 11</a></td></tr>
+<tr><td class="c0">12</td><td><a href="#s12">Section 12</a></td></tr>
+<tr><td class="c1">13</td><td><a href="#s13">Section 13</a></td></tr>
+<tr><td class="c2">14</td><td><a href="#s14">Section 14</a></td></tr>
+<tr><td class="c0">15</td><td><a href="#s15">Section 15</a></td></tr>
+<tr><td class="c1">16</td><td><a href="#s16">Section 16</a></td></tr>
+<tr><td class="c2">17</td><td><a href="#s17">Section 17</a></td></tr>
+<tr><td class="c0">18</td><td><a href="#s18">Section 18</a></td></tr>
+<tr><td class="c1">19</td><td><a href="#s19">Section 19</a></td></tr>
+<tr><td class="c2">20</td><td><a href="#s20">Section 20</a></td></tr>
+<tr><td class="c0">21</td><td><a href="#s21">Section 21</a></td></tr>
+<tr><td class="c1">22</td><td><a href="#s22">Section 22</a></td></tr>
+<tr><td class="c2">23</td><td><a href="#s23">Section 23</a></td></tr>
+<tr><td class="c0">24</td><td><a href="#s24">Section 24</a></td></tr>
+<tr><td class="c1">25</td><td><a href="#s25">Section 25</a></td></tr>
+<tr><td class="c2">26</td><td><a href="#s26">Section 26</a></td></tr>
+<tr><td class="c0">27</td><td><a href="#s27">Section 27</a></td></tr>
+<tr><td class="c1">28</td><td><a href="#s28">Section 28</a></td></tr>
+<tr><td class="c2">29</td><td><a href="#s29">Section 29</a></td></tr>
+<tr><td class="c0">30</td><td><a href="#s30">Section 30</a></td></tr>
+<tr><td class="c1">31</td><td><a href="#s31">Section 31</a></td></tr>
+<tr><td class="c2">32</td><td><a href="#s32">Section 32</a></td></tr>
+<tr><td class="c0">33</td><td><a href="#s33">Section 33</a></td></tr>
+<tr><td class="c1">34</td><td><a href="#s34">Section 34</a></td></tr>
+<tr><td class="c2">35</td><td><a href="#s35">Section 35</a></td></tr>
+<tr><td class="c0">36</td><td><a href="#s36">Section 36</a></td></tr>
+<tr><td class="c1">37</td><td><a href="#s37">Section 37</a></td></tr>
+<tr><td class="c2">38</td><td><a href="#s38">Section 38</a></td></tr>
+<tr><td class="c0">39</td><td><a href="#s39">Section 39</a></td></tr>
+</table>
+</body>
+</html>
