@@ -78,6 +78,18 @@ static void oom_handler(size_t wanted)
     mac_out_of_memory(wanted);
 }
 
+/* Platform memory for the pooled allocator (au_heap_enable): slabs and
+ * large blocks are pointer blocks in the application heap. */
+static void *heap_get(size_t n)
+{
+    return NewPtr((Size)n);
+}
+
+static void heap_release(void *p)
+{
+    DisposePtr((Ptr)p);
+}
+
 MacWin *mac_win_of(WindowPtr w)
 {
     if (!w || GetWindowKind(w) != userKind)
@@ -849,6 +861,9 @@ int main(void)
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();
+    /* Before the first au_alloc: small blocks come from slabs, not from
+     * one NewPtr each (see src/core/heap.c). */
+    au_heap_enable(heap_get, heap_release);
     InitGraf(&qd.thePort);
     InitFonts();
     InitWindows();

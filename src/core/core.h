@@ -26,6 +26,26 @@ void au_set_oom_handler(void (*handler)(size_t wanted));
 void *au_try_alloc(size_t n);
 void *au_try_realloc(void *p, size_t n);
 
+/* ---- The pooled allocator (heap.c) ----
+ * To make au_alloc and the functions above take small blocks from 32 KB
+ * slabs instead of calling malloc for each, call au_heap_enable before the
+ * first allocation, with the functions that get and release platform
+ * memory (get returns NULL when there is none). The Mac OS 9 shell does:
+ * there malloc is one NewPtr per block, and the Memory Manager is slow
+ * with the tens of thousands of blocks a page holds. Blocks allocated
+ * before the call must not be freed after it. */
+void au_heap_enable(void *(*get)(size_t n), void (*release)(void *p));
+bool au_heap_enabled(void);
+void *au_heap_alloc(size_t n); /* NULL when the platform has no memory */
+void *au_heap_realloc(void *p, size_t n);
+void au_heap_free(void *p);
+typedef struct AuHeapStats {
+    size_t blocks, used_bytes;  /* in use: blocks and the bytes asked for */
+    size_t slabs, large;        /* held from the platform: slabs, and blocks too large for one */
+    size_t system_bytes;        /* bytes held from the platform */
+} AuHeapStats;
+void au_heap_stats(AuHeapStats *s);
+
 /* ---- Growable byte buffer ---- */
 typedef struct AuBuf {
     char *data;

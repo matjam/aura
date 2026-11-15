@@ -20,9 +20,19 @@ void au_set_oom_handler(void (*handler)(size_t wanted))
     oom_handler = handler ? handler : default_oom;
 }
 
+static void *raw_alloc(size_t n)
+{
+    return au_heap_enabled() ? au_heap_alloc(n) : malloc(n);
+}
+
+static void *raw_realloc(void *p, size_t n)
+{
+    return au_heap_enabled() ? au_heap_realloc(p, n) : realloc(p, n);
+}
+
 void *au_alloc(size_t n)
 {
-    void *p = malloc(n ? n : 1);
+    void *p = raw_alloc(n ? n : 1);
     if (!p) {
         oom_handler(n);
         abort(); /* the handler must not return */
@@ -39,7 +49,7 @@ void *au_calloc(size_t n)
 
 void *au_realloc(void *p, size_t n)
 {
-    void *q = realloc(p, n ? n : 1);
+    void *q = raw_realloc(p, n ? n : 1);
     if (!q) {
         oom_handler(n);
         abort();
@@ -49,19 +59,22 @@ void *au_realloc(void *p, size_t n)
 
 void au_free(void *p)
 {
-    free(p);
+    if (au_heap_enabled())
+        au_heap_free(p);
+    else
+        free(p);
 }
 
 /* ---- Non-fatal allocation ---- */
 
 void *au_try_alloc(size_t n)
 {
-    return malloc(n ? n : 1);
+    return raw_alloc(n ? n : 1);
 }
 
 void *au_try_realloc(void *p, size_t n)
 {
-    return realloc(p, n ? n : 1);
+    return raw_realloc(p, n ? n : 1);
 }
 
 char *au_strndup(const char *s, size_t n)
