@@ -522,6 +522,9 @@ bool css_group_equal(int g, const void *a, const void *b);
 bool css_group_same(int g, const void *a, const void *b);
 AuStyle *css_style_new(void);
 
+/* A custom property map: n entries sorted by name. With base set, the map
+ * holds only the entries that differ from base (a NULL value hides the
+ * base's entry) and lookups go on to base; chains are at most 12 long. */
 struct AuCustomProps {
     uint32_t refs;
     uint32_t n;
@@ -529,10 +532,16 @@ struct AuCustomProps {
         AuAtom name;
         CssTokList *value; /* NULL: guaranteed-invalid (initial) */
     } *e;
+    AuCustomProps *base; /* retained, or NULL */
+    uint32_t total;      /* entries in the chain, an upper bound of the names */
+    uint16_t depth;      /* maps below this one */
 };
 void css_custom_release(AuCustomProps *c);
 AuCustomProps *css_custom_retain(AuCustomProps *c);
 CssTokList *css_custom_get(const AuCustomProps *c, AuAtom name);
+/* The effective entries of a map and its bases, sorted by name, without
+ * hidden ones; values are borrowed. The caller frees the array. */
+struct CssCustomEntry *css_custom_flatten(const AuCustomProps *c, uint32_t *n);
 
 /* Context for computing one element's values. */
 typedef struct CssComputeCtx {

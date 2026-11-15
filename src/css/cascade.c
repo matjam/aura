@@ -1413,22 +1413,80 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
             return css_custom_retain((AuCustomProps *)parent);
         }
     }
+    /* A few declarations over a large inherited map: keep only this
+     * element's entries and refer to the parent's map for the rest. A page
+     * with two thousand theme variables and components that each set a
+     * few of their own otherwise copies the whole map per component. */
+    if (parent && passes && parent->total >= 32 && parent->depth < 12 && nw * 4 <= parent->total) {
+        struct CssCustomEntry *own = au_calloc((nw + 1) * sizeof(*own));
+        for (uint32_t i = 0; i < nw; i++) {
+            const AuCssDecl *d = w[i].d;
+            CssTokList *val = NULL;
+            if (d->kind == DK_CUSTOM) {
+                const CssTokList *t = d->u.toks;
+                uint16_t kw = (t->tk.n == 1 && t->tk.t[0].type == TK_IDENT) ? t->tk.t[0].kw : 0;
+                if (kw == AU_K_initial)
+                    val = NULL;
+                else if (kw == AU_K_inherit || kw == AU_K_unset || kw == AU_K_revert || kw == AU_K_revert_layer)
+                    val = css_toklist_retain(css_custom_get(parent, w[i].name));
+                else
+                    val = css_toklist_retain(d->u.toks);
+            }
+            own[i].name = w[i].name;
+            own[i].value = val;
+        }
+        uint8_t *state = au_calloc(nw + 1);
+        VarCtx vc = {r, parent, own, nw, state, 0};
+        for (uint32_t i = 0; i < nw; i++)
+            resolve_custom(&vc, own[i].name);
+        for (uint32_t i = 0; i < nw; i++)
+            if (state[i] == 3) {
+                css_toklist_release(own[i].value);
+                own[i].value = NULL; /* a NULL entry hides the parent's value */
+            }
+        for (uint32_t i = 0; i < nw && r->nprops; i++)
+            if (!own[i].value) {
+                const CssPropertyRule *reg = registered(r, own[i].name);
+                if (reg && reg->initial)
+                    own[i].value = css_toklist_retain(reg->initial);
+            }
+        au_free(state);
+        au_free(w);
+        AuCustomProps *c = au_calloc(sizeof *c);
+        c->refs = 1;
+        c->e = own;
+        c->n = nw;
+        c->base = css_custom_retain((AuCustomProps *)parent);
+        c->depth = (uint16_t)(parent->depth + 1);
+        c->total = parent->total + nw;
+        return c;
+    }
     /* merge with the parent's map into a new sorted map */
     AuCustomProps *c = au_calloc(sizeof *c);
     c->refs = 1;
-    uint32_t pn = parent ? parent->n : 0;
+    struct CssCustomEntry *pe = NULL;
+    uint32_t pn = 0;
+    bool pe_owned = false;
+    if (parent) {
+        pe = parent->e;
+        pn = parent->n;
+        if (parent->base) {
+            pe = css_custom_flatten(parent, &pn);
+            pe_owned = true;
+        }
+    }
     c->e = au_calloc((pn + nw + r->nprops + 1) * sizeof(*c->e));
     struct CssCustomEntry *own = au_calloc((nw + 1) * sizeof(*own));
     uint32_t nown = 0;
     uint32_t pi = 0, wi = 0;
     while (pi < pn || wi < nw) {
-        bool take_parent = wi >= nw || (pi < pn && parent->e[pi].name < w[wi].name);
-        bool both = pi < pn && wi < nw && parent->e[pi].name == w[wi].name;
+        bool take_parent = wi >= nw || (pi < pn && pe[pi].name < w[wi].name);
+        bool both = pi < pn && wi < nw && pe[pi].name == w[wi].name;
         if (take_parent && !both) {
-            const CssPropertyRule *reg = registered(r, parent->e[pi].name);
+            const CssPropertyRule *reg = registered(r, pe[pi].name);
             if (!reg || reg->inherits) {
-                c->e[c->n].name = parent->e[pi].name;
-                c->e[c->n].value = css_toklist_retain(parent->e[pi].value);
+                c->e[c->n].name = pe[pi].name;
+                c->e[c->n].value = css_toklist_retain(pe[pi].value);
                 c->n++;
             }
             pi++;
@@ -1436,7 +1494,7 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
         }
         const AuCssDecl *d = w[wi].d;
         AuAtom name = w[wi].name;
-        CssTokList *pv = both ? parent->e[pi].value : NULL;
+        CssTokList *pv = both ? pe[pi].value : NULL;
         CssTokList *val = NULL;
         if (d->kind == DK_CUSTOM) {
             /* a value that is only a CSS-wide keyword */
@@ -1460,7 +1518,11 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
     uint8_t *state = au_calloc(nown + 1);
     VarCtx vc = {r, NULL, own, nown, state, 0};
     /* lookups of names not declared here go to the merged parent values */
-    AuCustomProps tmp = {1, c->n, c->e};
+    AuCustomProps tmp;
+    memset(&tmp, 0, sizeof tmp);
+    tmp.refs = 1;
+    tmp.n = c->n;
+    tmp.e = c->e;
     vc.custom = &tmp;
     for (uint32_t i = 0; i < nown; i++)
         resolve_custom(&vc, own[i].name);
@@ -1498,6 +1560,9 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
         c->e[pos].value = css_toklist_retain(r->props[i].initial);
         c->n++;
     }
+    c->total = c->n;
+    if (pe_owned)
+        au_free(pe);
     au_free(state);
     au_free(own);
     au_free(w);
@@ -1902,7 +1967,7 @@ static bool custom_same(const AuCustomProps *a, const AuCustomProps *b)
 {
     if (a == b)
         return true;
-    if (!a || !b || a->n != b->n)
+    if (!a || !b || a->n != b->n || a->base != b->base)
         return false;
     for (uint32_t i = 0; i < a->n; i++) {
         const CssTokList *x = a->e[i].value, *y = b->e[i].value;

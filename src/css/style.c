@@ -238,29 +238,68 @@ AuCustomProps *css_custom_retain(AuCustomProps *c)
 
 void css_custom_release(AuCustomProps *c)
 {
-    if (!c || --c->refs)
-        return;
-    for (uint32_t i = 0; i < c->n; i++)
-        css_toklist_release(c->e[i].value);
-    au_free(c->e);
-    au_free(c);
+    while (c && !--c->refs) {
+        AuCustomProps *base = c->base;
+        for (uint32_t i = 0; i < c->n; i++)
+            css_toklist_release(c->e[i].value);
+        au_free(c->e);
+        au_free(c);
+        c = base;
+    }
 }
 
 CssTokList *css_custom_get(const AuCustomProps *c, AuAtom name)
 {
-    if (!c)
-        return NULL;
-    uint32_t lo = 0, hi = c->n;
-    while (lo < hi) {
-        uint32_t mid = (lo + hi) / 2;
-        if (c->e[mid].name == name)
-            return c->e[mid].value;
-        if (c->e[mid].name < name)
-            lo = mid + 1;
-        else
-            hi = mid;
+    for (; c; c = c->base) {
+        uint32_t lo = 0, hi = c->n;
+        while (lo < hi) {
+            uint32_t mid = (lo + hi) / 2;
+            if (c->e[mid].name == name)
+                return c->e[mid].value;
+            if (c->e[mid].name < name)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
     }
     return NULL;
+}
+
+struct CssCustomEntry *css_custom_flatten(const AuCustomProps *c, uint32_t *n)
+{
+    const AuCustomProps *chain[16];
+    uint32_t depth = 0, total = 0;
+    for (const AuCustomProps *p = c; p && depth < 16; p = p->base) {
+        chain[depth++] = p;
+        total += p->n;
+    }
+    struct CssCustomEntry *cur = au_alloc((total + 1) * sizeof *cur), *next = au_alloc((total + 1) * sizeof *next);
+    uint32_t cn = 0;
+    /* from the deepest base up: each layer's entries replace those below */
+    for (uint32_t d = depth; d-- > 0;) {
+        const AuCustomProps *p = chain[d];
+        uint32_t a = 0, b = 0, k = 0;
+        while (a < cn || b < p->n) {
+            if (b >= p->n || (a < cn && cur[a].name < p->e[b].name)) {
+                next[k++] = cur[a++];
+            } else {
+                if (a < cn && cur[a].name == p->e[b].name)
+                    a++;
+                next[k++] = p->e[b++];
+            }
+        }
+        struct CssCustomEntry *t = cur;
+        cur = next;
+        next = t;
+        cn = k;
+    }
+    au_free(next);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < cn; i++)
+        if (cur[i].value)
+            cur[k++] = cur[i];
+    *n = k;
+    return cur;
 }
 
 const char *au_style_custom_property(const AuStyle *s, AuAtom name, size_t *len)
