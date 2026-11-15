@@ -434,6 +434,8 @@ static void test_script(void)
          "<!DOCTYPE html><body><script>var err='';try{parent.document}catch(e){err=e.name}"
          "var err2='';try{parent.hello}catch(e){err2=e.name}"
          "var seen=[];addEventListener('message',function(e){seen.push(e.data.n+'|'+e.origin);"
+         "if(e.data.n==='sib'){var sb='';try{sb=typeof parent.frames['same'].postMessage+(parent.same===parent.frames[0])}"
+         "catch(x){sb=x.name}parent.frames.same.postMessage('from sibling '+sb,'*')}"
          "e.source.postMessage('reply:'+e.data.n+':'+err+':'+err2+':'+(top===parent)+':'+parent.length,e.origin)});"
          "parent.postMessage('ready','http://a.test');parent.postMessage('wrong','http://c.test')</script>"},
         {0}};
@@ -482,6 +484,11 @@ static void test_script(void)
            " var p = e.ports[0]; p.postMessage('via port ' + (p instanceof MessagePort)); } })\");"
            "frames[0].postMessage('port', '*', [ch.port2])");
     JS_IS(&w, "back.join()", "via port true");
+    /* a frame looked up by name through a cross-origin parent: the
+     * cross-origin child asks its parent for its sibling */
+    js(&w, "frames[1].postMessage({n: 'sib'}, 'http://b.test')");
+    JS_IS(&w, "got[got.length - 1]", "reply:sib:SecurityError:SecurityError:true:3|http://b.test|1");
+    JS_IS(&w, "frames[0].seen[frames[0].seen.length - 1]", "from sibling functiontrue|http://b.test|false");
     /* setting a cross-origin window's location navigates it */
     js(&w, "frames[1].location = 'http://a.test/same.html'");
     JS_IS(&w, "frames[1].secret", "42");

@@ -188,6 +188,32 @@ static JSValue n_window_frame_at(JSContext *ctx, JSValueConst this_val, int argc
     return global_of(ctx, t ? frame_at(t, i) : NULL);
 }
 
+/* windowFrameNamed(global, name): the global of that window's frame whose
+ * element has this name attribute (a child frame may be looked up by
+ * name from any origin), or null. */
+static JSValue n_window_frame_named(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuJs *t = argc > 0 ? js_of_global(js, argv[0]) : NULL;
+    if (!t || argc < 2 || !t->hooks.frame_count || !t->hooks.frame_at)
+        return JS_NULL;
+    const char *name = JS_ToCString(ctx, argv[1]);
+    if (!name)
+        return JS_EXCEPTION;
+    JSValue r = JS_NULL;
+    int n = t->hooks.frame_count(t->hooks.ctx);
+    for (int i = 0; i < n && *name; i++) {
+        AuElement *el = t->hooks.frame_at(t->hooks.ctx, i);
+        const char *v = el ? au_element_get_attr(el, au_atom("name", 4)) : NULL;
+        if (v && !strcmp(v, name)) {
+            r = global_of(ctx, frame_at(t, i));
+            break;
+        }
+    }
+    JS_FreeCString(ctx, name);
+    return r;
+}
+
 /* enteredWindow(): the global of the document whose script the embedder
  * entered (the source of a message posted by a same-origin caller). */
 static JSValue n_entered_window(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -287,6 +313,7 @@ static const JSCFunctionListEntry frame_natives[] = {
     JS_CFUNC_DEF("windowAccess", 1, n_window_access),
     JS_CFUNC_DEF("windowInfo", 2, n_window_info),
     JS_CFUNC_DEF("windowFrameAt", 2, n_window_frame_at),
+    JS_CFUNC_DEF("windowFrameNamed", 2, n_window_frame_named),
     JS_CFUNC_DEF("enteredWindow", 0, n_entered_window),
     JS_CFUNC_DEF("postMessageTo", 4, n_post_message_to),
     JS_CFUNC_DEF("transferFrom", 3, n_transfer_from),

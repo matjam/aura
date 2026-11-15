@@ -1593,6 +1593,19 @@ uint32_t au_dv_request(AuDocView *dv, const char *url, bool background)
     return r->id;
 }
 
+uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool background)
+{
+    Request *r = add_request_ex(dv, rq);
+    if (!r)
+        return 0;
+    r->background = background;
+    if (background)
+        dv->nbg++;
+    else
+        dv->finished_reported = false;
+    return r->id;
+}
+
 void au_dv_cancel(AuDocView *dv, uint32_t id)
 {
     Request *r = find_request(dv, id);

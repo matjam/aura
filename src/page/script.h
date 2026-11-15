@@ -91,6 +91,8 @@ bool au_docscript_flush_nav(AuDocScript *s);
 /* Starts an AU_RES_OTHER request. background requests (fetch, XHR) do
  * not hold the load event. Returns 0 when the URL cannot be fetched. */
 uint32_t au_dv_request(AuDocView *dv, const char *url, bool background);
+/* The same with a method and body (the loader's request_ex is needed). */
+uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool background);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);

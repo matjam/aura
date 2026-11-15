@@ -215,6 +215,15 @@ static void test_load(void)
     CHECK(!strcmp(au_buf_cstr(&v), "x"), "copy from the frame's field: '%s'", au_buf_cstr(&v));
     au_buf_free(&v);
 
+    /* A script POST (XMLHttpRequest) carries its body. */
+    respond(site, "", "ok");
+    js(&e, "var x = new XMLHttpRequest(); x.open('POST', '/api'); x.setRequestHeader('Content-Type', 'text/plain');"
+           "x.onload = function () { got.push('xhr ' + x.status + ' ' + x.responseText) }; x.send('hello=1')");
+    settle(&e, 100);
+    CHECK(!strcmp(js(&e, "got[got.length-1]"), "xhr 200 ok"), "a script POST completes: %s", js(&e, "got.join()"));
+    CHECK(site->nreq == 2 && strstr(site->requests[1], "POST /api") && strstr(site->requests[1], "hello=1") &&
+              strstr(site->requests[1], "Content-Type: text/plain"),
+          "the POST reached the server with its body: %s", site->nreq > 1 ? site->requests[1] : "");
     /* The document is kept with its frames; Back shows it with no request. */
     respond(site, "", "<!DOCTYPE html><title>Next</title><p>next");
     go(&e, "http://site.test/next");
@@ -226,7 +235,7 @@ static void test_load(void)
     au_page_stats(page(&e), &st);
     CHECK(st.restored == 1 && other->nreq + site->nreq + deny->nreq == before, "Back: restored %u, requests %d then %d",
           (unsigned)st.restored, before, other->nreq + site->nreq + deny->nreq);
-    CHECK(!strcmp(js(&e, "window.length + ' ' + got.length"), "3 2"), "the kept frames are there: %s",
+    CHECK(!strcmp(js(&e, "window.length + ' ' + got.length"), "3 3"), "the kept frames are there: %s",
           js(&e, "window.length + ' ' + got.length"));
     /* its frame still works (the field's text is still selected) */
     memset(&ev, 0, sizeof ev);

@@ -559,7 +559,7 @@ class MessageChannel {
  * script may hold: the global itself for a document of the same origin,
  * else an object with the members the standard allows across origins
  * (postMessage, location as a setter, closed, parent, top, frames,
- * length, indexed frames, focus, blur, close). Anything else throws
+ * length, indexed and named frames, focus, blur, close). Anything else throws
  * SecurityError. The object keeps the global in a closure only. */
 const crossWindows = new WeakMap();
 const securityErr = () => domErr('Blocked a frame from accessing a cross-origin frame', 'SecurityError');
@@ -605,6 +605,11 @@ function crossOriginWindow(g) {
         }
         if (isIndex(p)) {
             const w = N.windowFrameAt(g, +p);
+            if (w !== null) return wrapWindow(w);
+        } else {
+            /* a child frame by its name (widgets find a sibling frame
+             * through their parent this way) */
+            const w = N.windowFrameNamed(g, p);
             if (w !== null) return wrapWindow(w);
         }
         throw securityErr();

@@ -1527,7 +1527,8 @@ information).
   wrapper takes its prototypes from the realm of the node's document.
   For a document of another origin `wrapWindow` returns an object with
   only `postMessage`, `location` (set only), `closed`, `parent`, `top`,
-  `frames`, `length`, indexed frames, `focus`, `blur` and `close`;
+  `frames`, `length`, indexed frames, child frames by name, `focus`,
+  `blur` and `close`;
   anything else throws SecurityError, and `contentDocument` is null.
   `postMessage` checks the target origin, the receiving document clones
   the data in its own realm, and `event.source` is the sender's window
@@ -1563,7 +1564,9 @@ information).
   written (the same Document and window; scripts in the written text do
   not run; a `write` without `open` after load is still ignored).
   `DOMImplementation.createDocument` and `createDocumentType` make plain
-  documents and doctypes.
+  documents and doctypes. `fetch` and `XMLHttpRequest` send POST bodies
+  through `request_ex` (the Content-Type header goes with the body;
+  other request headers and other methods are still not sent).
 - **Cost, measured on the host** (Release): a frame without script adds
   about 6 KB to the estimate and 0.15 ms; a frame with script adds a
   context with its own copy of the prelude, 1.4 MB and 16 ms (57 ms each

@@ -352,10 +352,31 @@ static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
 {
     (void)js;
     AuDocScript *s = ctx;
-    /* The loader reads with GET and carries no request headers or body. */
-    if (strcmp(req->method, "GET") != 0 || req->body_len)
+    /* GET, and POST with a body when the embedder's loader takes one
+     * (au_docview_set_request_ex); the Content-Type header goes with the
+     * body, other request headers are not sent. */
+    bool post = !strcmp(req->method, "POST");
+    if ((strcmp(req->method, "GET") != 0 && !post) || (req->body_len && !post))
         return 0;
-    uint32_t id = au_dv_request(s->dv, req->url, req->dest == AU_FETCH_DEST_EMPTY);
+    uint32_t id;
+    if (post) {
+        if (!au_dv_top(s->dv)->request_ex)
+            return 0;
+        AuResourceRequest rq;
+        memset(&rq, 0, sizeof rq);
+        rq.url = req->url;
+        rq.kind = AU_RES_OTHER;
+        rq.document_url = au_docview_url(s->dv);
+        rq.method = "POST";
+        rq.body = req->body ? req->body : "";
+        rq.body_len = req->body_len;
+        for (size_t i = 0; i < req->nheaders; i++)
+            if (au_ieq(req->headers[2 * i], strlen(req->headers[2 * i]), "content-type", 12))
+                rq.body_type = req->headers[2 * i + 1];
+        id = au_dv_request_ex(s->dv, &rq, req->dest == AU_FETCH_DEST_EMPTY);
+    } else {
+        id = au_dv_request(s->dv, req->url, req->dest == AU_FETCH_DEST_EMPTY);
+    }
     if (!id)
         return 0;
     if (s->nfetches == s->fetches_cap) {
