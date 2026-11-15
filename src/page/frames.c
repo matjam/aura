@@ -36,6 +36,7 @@
 
 #include "../url/url.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1448,8 +1449,7 @@ void au_frames_paint(AuDocView *dv, AuElement *el, AuCanvas *c, AuRect content)
     if (!f->dv || !f->dv->doc)
         return;
     /* whole pixels: the nested document paints as a page does */
-    AuRect r = {(float)(int)(content.x + 0.5f), (float)(int)(content.y + 0.5f), (float)(int)content.w,
-                (float)(int)content.h};
+    AuRect r = {floorf(content.x + 0.5f), floorf(content.y + 0.5f), floorf(content.w), floorf(content.h)};
     if (r.w < 1 || r.h < 1)
         return;
     au_docview_set_viewport(f->dv, (int)r.w, (int)r.h);

@@ -3358,7 +3358,10 @@ void au_page_idle(AuPage *p)
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
     }
-    if (!p->nfetches && !p->dirty)
+    /* A load whose fetches are all in may still wait for a frame's
+     * document (a srcdoc frame, a frame's load event): check_finished
+     * below ends it. */
+    if (!p->nfetches && !p->dirty && !(p->loading && p->main_done && p->begun))
         return;
     uint32_t gen = p->gen;
     /* Poll each fetcher with transfers outstanding once. */
