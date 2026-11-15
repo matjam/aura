@@ -1,7 +1,8 @@
 /* Light fuzzing of the document pipeline: random documents built from
  * tags, attributes and style declarations that exercise layout (floats,
  * positioning, flex, tables, lists, generated content, overflow, deep
- * nesting), fed in random chunks, laid out at random widths, painted,
+ * nesting; table markup with random spans, missing wrappers and nested
+ * tables), fed in random chunks, laid out at random widths, painted,
  * hit tested, hovered and resized. Deterministic for a seed.
  *
  *   fuzz_page [iterations] [seed] [current.html]
@@ -28,7 +29,11 @@ static uint32_t rnd(uint32_t n)
 
 static const char *const tags[] = {"div", "span", "p", "a", "b", "ul", "ol", "li", "table", "tr", "td", "th",
                                    "img", "br", "wbr", "pre", "h1", "h2", "section", "button", "input", "select",
-                                   "textarea", "q", "sup", "sub", "hr", "em", "code", "blockquote", "center"};
+                                   "textarea", "q", "sup", "sub", "hr", "em", "code", "blockquote", "center",
+                                   "caption", "thead", "tbody", "tfoot", "col", "colgroup", "font"};
+
+static const char *const words[] = {"x", "xx xx", "hello world", "  spaced  ", "&shy;soft&shy;hyphen",
+                                    "longwordlongwordlongword", "\t tab", "\n", "&nbsp;&nbsp;", "a-b-c"};
 
 static const char *const decls[] = {
     "display:block", "display:inline", "display:inline-block", "display:flex", "display:inline-flex",
@@ -51,10 +56,93 @@ static const char *const decls[] = {
     "list-style:square inside", "list-style-type:lower-roman", "text-overflow:ellipsis",
     "-webkit-line-clamp:2", "-webkit-box-orient:vertical", "background:linear-gradient(red,blue)",
     "box-shadow:3px 3px 5px black", "outline:2px solid", "text-decoration:underline",
-    "text-shadow:1px 1px red", "text-transform:uppercase", "tab-size:3", "columns:2", "content:'x'"};
+    "text-shadow:1px 1px red", "text-transform:uppercase", "tab-size:3", "columns:2", "content:'x'",
+    "display:inline-table", "display:table-row", "display:table-row-group", "display:table-header-group",
+    "display:table-footer-group", "display:table-column", "display:table-column-group", "display:table-caption",
+    "border-collapse:collapse", "border-spacing:4px 9px", "table-layout:fixed", "empty-cells:hide",
+    "caption-side:bottom", "visibility:collapse", "border:4px double blue", "border-left:7px groove",
+    "border-top:2px dotted green", "border:0 hidden", "vertical-align:baseline", "vertical-align:bottom",
+    "width:0", "height:100%"};
 
-static const char *const words[] = {"x", "xx xx", "hello world", "  spaced  ", "&shy;soft&shy;hyphen",
-                                    "longwordlongwordlongword", "\t tab", "\n", "&nbsp;&nbsp;", "a-b-c"};
+/* Table markup: well formed or missing its wrappers, with random spans
+ * (rowspan=0 included), presentational attributes and nested tables. */
+static void gen(AuBuf *b, int depth, int budget);
+
+static void gen_table(AuBuf *b, int depth, int budget)
+{
+    static const char *const tattrs[] = {" border=1",       " border=0",       " cellspacing=0",   " cellspacing=5",
+                                         " cellpadding=0",  " cellpadding=7",  " width=\"100%\"",  " width=300",
+                                         " height=200",     " height=\"50%\"", " align=center",    " align=right",
+                                         " bgcolor=\"#cfc\"", " rules=all",    " frame=box",       " frame=void"};
+    static const char *const cattrs[] = {" nowrap",     " width=40",     " width=\"30%\"", " height=25",
+                                         " height=\"50%\"", " align=right", " valign=top",  " valign=bottom",
+                                         " valign=baseline", " bgcolor=red", " width=0",     " background=x.gif"};
+    au_buf_puts(b, "<table");
+    for (int k = (int)rnd(4); k > 0; k--)
+        au_buf_puts(b, tattrs[rnd(sizeof tattrs / sizeof tattrs[0])]);
+    if (rnd(3) == 0)
+        au_buf_printf(b, " style=\"%s;%s\"", decls[rnd(sizeof decls / sizeof decls[0])],
+                      decls[rnd(sizeof decls / sizeof decls[0])]);
+    au_buf_putc(b, '>');
+    if (rnd(4) == 0)
+        au_buf_puts(b, rnd(2) ? "<caption>cap</caption>" : "<caption style=\"caption-side:bottom\">bottom cap</caption>");
+    if (rnd(4) == 0) {
+        au_buf_puts(b, "<colgroup");
+        if (rnd(2))
+            au_buf_printf(b, " span=%u", rnd(4));
+        au_buf_puts(b, ">");
+        for (int k = (int)rnd(3); k > 0; k--)
+            au_buf_printf(b, "<col span=%u width=%u%s>", rnd(3), rnd(80), rnd(2) ? " style=\"background:blue\"" : "");
+        if (rnd(2))
+            au_buf_puts(b, "</colgroup>");
+    }
+    int nsec = (int)rnd(3) + 1;
+    for (int s = 0; s < nsec && b->len < (size_t)budget; s++) {
+        static const char *const secs[] = {"", "thead", "tbody", "tfoot"};
+        const char *sec = secs[rnd(4)];
+        if (*sec)
+            au_buf_printf(b, "<%s>", sec);
+        int nrow = (int)rnd(5);
+        for (int r = 0; r < nrow && b->len < (size_t)budget; r++) {
+            if (rnd(6))
+                au_buf_puts(b, rnd(5) ? "<tr>" : "<tr style=\"background:#eee;height:30px\">");
+            int ncell = (int)rnd(6);
+            for (int c = 0; c < ncell && b->len < (size_t)budget; c++) {
+                if (rnd(12) == 0) {
+                    au_buf_puts(b, " stray text ");
+                    continue;
+                }
+                au_buf_puts(b, rnd(4) ? "<td" : "<th");
+                if (rnd(3) == 0)
+                    au_buf_printf(b, " colspan=%u", rnd(5));
+                if (rnd(3) == 0)
+                    au_buf_printf(b, " rowspan=%u", rnd(5));
+                if (rnd(40) == 0)
+                    au_buf_printf(b, " colspan=%u rowspan=%u", rnd(2000), rnd(70000));
+                if (rnd(3) == 0)
+                    au_buf_puts(b, cattrs[rnd(sizeof cattrs / sizeof cattrs[0])]);
+                if (rnd(4) == 0)
+                    au_buf_printf(b, " style=\"%s;%s\"", decls[rnd(sizeof decls / sizeof decls[0])],
+                                  decls[rnd(sizeof decls / sizeof decls[0])]);
+                au_buf_putc(b, '>');
+                if (rnd(6) == 0 && depth < 30)
+                    gen_table(b, depth + 1, budget);
+                else if (rnd(3) == 0 && depth < 40)
+                    gen(b, depth + 1, budget);
+                else if (rnd(4))
+                    au_buf_puts(b, words[rnd(sizeof words / sizeof words[0])]);
+                if (rnd(3))
+                    au_buf_puts(b, "</td>");
+            }
+            if (rnd(3))
+                au_buf_puts(b, "</tr>");
+        }
+        if (*sec && rnd(3))
+            au_buf_printf(b, "</%s>", sec);
+    }
+    if (rnd(8))
+        au_buf_puts(b, "</table>");
+}
 
 static void gen(AuBuf *b, int depth, int budget)
 {
@@ -62,6 +150,10 @@ static void gen(AuBuf *b, int depth, int budget)
     for (int i = 0; i < n && b->len < (size_t)budget; i++) {
         if (rnd(3) == 0 || depth > 40) {
             au_buf_puts(b, words[rnd(sizeof words / sizeof words[0])]);
+            continue;
+        }
+        if (rnd(6) == 0 && depth < 30) {
+            gen_table(b, depth + 1, budget);
             continue;
         }
         const char *t = tags[rnd(sizeof tags / sizeof tags[0])];
@@ -79,8 +171,10 @@ static void gen(AuBuf *b, int depth, int budget)
             au_buf_puts(b, " href=\"../x.html#e3\"");
         if (!strcmp(t, "img"))
             au_buf_printf(b, " width=%u height=%u alt=\"pic\"", rnd(300), rnd(200));
-        if (!strcmp(t, "td") && rnd(2))
-            au_buf_printf(b, " colspan=%u", rnd(4));
+        if ((!strcmp(t, "td") || !strcmp(t, "th")) && rnd(2))
+            au_buf_printf(b, " colspan=%u rowspan=%u", rnd(4), rnd(4));
+        if (!strcmp(t, "col") || !strcmp(t, "colgroup"))
+            au_buf_printf(b, " span=%u", rnd(4));
         if (!strcmp(t, "ol") && rnd(2))
             au_buf_printf(b, " start=%d", (int)rnd(20) - 5);
         au_buf_putc(b, '>');
@@ -135,7 +229,8 @@ int main(int argc, char **argv)
         au_buf_puts(&b, "<style>");
         int nr = (int)rnd(6);
         static const char *const sels[] = {"div", "p::before", "li::marker", "span:hover", "*", "a:active",
-                                           "#e1", "td", "ul li", "q::after"};
+                                           "#e1", "td", "ul li", "q::after", "table", "tr", "th", "col",
+                                           "caption", "tbody"};
         for (int r = 0; r < nr; r++) {
             au_buf_printf(&b, "%s{", sels[rnd(sizeof sels / sizeof sels[0])]);
             int nd = (int)rnd(4) + 1;
@@ -149,6 +244,13 @@ int main(int argc, char **argv)
             int d = 300 + (int)rnd(700);
             for (int k = 0; k < d; k++)
                 au_buf_puts(&b, rnd(2) ? "<div style=\"padding-left:1px\">" : "<span>");
+            au_buf_puts(&b, "deep");
+        }
+        if (rnd(12) == 0) {
+            /* deeply nested tables */
+            int d = 20 + (int)rnd(120);
+            for (int k = 0; k < d; k++)
+                au_buf_puts(&b, rnd(2) ? "<table><tr><td>" : "<table width=\"100%\"><tr><td colspan=2>x</td><td>");
             au_buf_puts(&b, "deep");
         }
         gen(&b, 0, 6000);

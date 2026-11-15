@@ -200,9 +200,10 @@ void l_table_build_grid(AuLayout *L, LTableBox *t)
         if (c->inner == LI_TABLE_ROW_GROUP) {
             place_section(&G, c->first, (LBlock *)c, 0);
         } else if (is_row(c)) {
+            /* place_section takes the rows up to the next row group; skip
+             * the same run (captions and columns in it included). */
             place_section(&G, c, NULL, 0);
-            while (c->next && (is_row(c->next) || c->next->kind != LK_BLOCK ||
-                               (c->next->flags & LF_ABSPOS)))
+            while (c->next && !(c->next->kind == LK_BLOCK && c->next->inner == LI_TABLE_ROW_GROUP))
                 c = c->next;
         }
     }

@@ -667,3 +667,12 @@ pixel 60 20 000080
 #b x=0 y=10 h=20
 #c x=0 y=30 h=30
 #d x=0 y=60 h=10
+
+=== grid: a column group between rows of the table does not place them twice
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0}</style>
+<div style="display:table;border-spacing:0" id=t><div style="display:table-row"><div style="display:table-cell" id=a><i></i></div></div><div style="display:table-column-group"></div><div style="display:table-row"><div style="display:table-cell" id=b><i></i></div></div></div>
+---
+#t x=0 y=0 w=40 h=40
+#a x=0 y=0 w=40 h=20
+#b x=0 y=20 w=40 h=20
