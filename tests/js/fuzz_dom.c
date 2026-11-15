@@ -191,9 +191,11 @@ static void gen_op(FzBuf *b, int depth)
     case 58: put(b, "e(%u).dispatchEvent(new Event('%s',{bubbles:true,cancelable:true}))", N(), PICK(events)); break;
     case 59: put(b, "e(%u).click()", N()); break;
     case 60:
-        put(b, "var mo=new MutationObserver(");
+        /* At most three: every observer gets a record for every change,
+         * and their callbacks change the tree again. */
+        put(b, "if(O.length<3){var mo=new MutationObserver(");
         gen_callback(b, depth);
-        put(b, ");O.push(mo);mo.observe(e(%u),{childList:true,subtree:true,attributes:true,characterData:true})", N());
+        put(b, ");O.push(mo);mo.observe(e(%u),{childList:true,subtree:true,attributes:true,characterData:true})}", N());
         break;
     case 61:
         put(b, "setTimeout(");

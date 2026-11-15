@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int failures, checks;
 
@@ -581,6 +582,46 @@ static void test_edit_commands(void)
     au_docview_free(dv);
 }
 
+/* Painting a textarea wraps its text. The wrap measured the rest of the
+ * text for every line and every prefix up to each space, so 80,000
+ * characters took 11 s to paint (found by fuzz_layout). The cost must
+ * grow with the text, not with its square: four times the text may take
+ * at most ten times as long. */
+static double textarea_paint_seconds(size_t chars, bool spaces)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    au_buf_puts(&b, "<!DOCTYPE html><textarea rows=4 cols=40>");
+    for (size_t i = 0; i < chars; i++)
+        au_buf_putc(&b, spaces && i % 7 == 6 ? ' ' : 'x');
+    au_buf_puts(&b, "</textarea>");
+    au_buf_putc(&b, 0);
+    Ctx c;
+    AuDocView *dv = view(&c, b.data, false);
+    AuSurface *s = au_surface_new(400, 200);
+    clock_t t0 = clock();
+    for (int k = 0; k < 3; k++) {
+        AuCanvas *cv = au_canvas_new(s);
+        au_docview_paint(dv, cv, (AuRect){0, 0, 400, 200}, 0, 0);
+        au_canvas_free(cv);
+    }
+    double secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    au_surface_free(s);
+    au_docview_free(dv);
+    au_buf_free(&b);
+    return secs;
+}
+
+static void test_textarea_wrap_scaling(void)
+{
+    for (int spaces = 0; spaces < 2; spaces++) {
+        double small = textarea_paint_seconds(10000, spaces != 0);
+        double large = textarea_paint_seconds(40000, spaces != 0);
+        CHECK(large < 10 * small + 0.05, "textarea wrap, spaces %d: 10000 characters %.3f s, 40000 characters %.3f s",
+              spaces, small, large);
+    }
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -596,6 +637,7 @@ int main(void)
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();
+    test_textarea_wrap_scaling();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
