@@ -294,7 +294,7 @@ int main(int argc, char **argv)
     static const char *samples[] = {"wiki.html",     "hn.html",       "hn-item.html", "blog.html",    "docs.html",
                                     "forum.html",    "reddit.html",   "wikitable.html", "qa-boxes.html", "qa-edge.html",
                                     "qa-flex.html",  "qa-inline.html", "qa-quirks.html", "qa-tables.html", "qa-forms.html",
-                                    "emoji.html",    "svg.html",      "images.html"};
+                                    "emoji.html",    "svg.html",      "images.html",  "grid.html"};
     for (size_t i = 0; i < sizeof samples / sizeof samples[0]; i++)
         check_file(argv[1], samples[i]);
 

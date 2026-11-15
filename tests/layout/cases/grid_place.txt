@@ -1,0 +1,337 @@
+Grid: line resolution and the auto-placement algorithm (CSS Grid Layout,
+section 8). Three 100px columns and 16px rows unless noted.
+
+=== line numbers
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-auto-rows:20px">
+<div id=a style="grid-column:2 / 4;grid-row:2"></div>
+<div id=b style="grid-column-start:3;grid-row-start:1"></div>
+</div>
+---
+#a x=100 y=20 w=200 h=20
+#b x=200 y=0 w=100
+
+=== negative line numbers count from the end of the explicit grid
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-column:1 / -1">x</div>
+<div id=b style="grid-column:-2">x</div>
+<div id=c style="grid-column:-3 / -1">x</div>
+</div>
+---
+#a x=0 y=0 w=300
+#b x=200 y=16 w=100
+#c x=100 y=32 w=200
+
+=== start and end lines in the wrong order are swapped; equal lines span one track
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-column:3 / 1">x</div>
+<div id=b style="grid-column:2 / 2">x</div>
+</div>
+---
+#a x=0 w=200
+#b x=100 y=16 w=100
+
+=== span with a start line, with an end line, and alone
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-column:2 / span 2">x</div>
+<div id=b style="grid-column:span 2 / 3">x</div>
+<div id=c style="grid-column:span 3">x</div>
+</div>
+---
+#a x=100 y=0 w=200
+#b x=0 y=16 w=200
+#c x=0 y=32 w=300
+
+=== sparse packing never goes back
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-column:span 2">x</div>
+<div id=b style="grid-column:span 2">x</div>
+<div id=c>x</div>
+</div>
+---
+#a x=0 y=0
+#b x=0 y=16
+#c x=200 y=16
+
+=== dense packing fills earlier holes
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-auto-flow:dense">
+<div id=a style="grid-column:span 2">x</div>
+<div id=b style="grid-column:span 2">x</div>
+<div id=c>x</div>
+<div id=d>x</div>
+</div>
+---
+#a x=0 y=0
+#b x=0 y=16
+#c x=200 y=0
+#d x=200 y=16
+
+=== an item with a column but no row moves to the next row when the cursor passed its column
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-column:2">x</div>
+<div id=b style="grid-column:1">x</div>
+<div id=c style="grid-column:3">x</div>
+</div>
+---
+#a x=100 y=0
+#b x=0 y=16
+#c x=200 y=16
+
+=== dense packing puts an item with a column in the first free row
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-auto-flow:row dense">
+<div id=a style="grid-column:2">x</div>
+<div id=b style="grid-column:1">x</div>
+<div id=c style="grid-column:2">x</div>
+</div>
+---
+#a x=100 y=0
+#b x=0 y=0
+#c x=100 y=16
+
+=== items locked to a row are placed before the others
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=c>x</div>
+<div id=a style="grid-row:1">x</div>
+<div id=b style="grid-area:1 / 1">x</div>
+<div id=d style="grid-row:1">x</div>
+</div>
+---
+// b takes its cell, a and d the next free cells of row 1 in order, c
+// the first free cell left
+#b x=0 y=0
+#a x=100 y=0
+#d x=200 y=0
+#c x=0 y=16
+
+=== spanning rows
+<body style="margin:0">
+<div id=g style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-auto-rows:20px">
+<div id=a style="grid-row:span 2"></div>
+<div id=b></div><div id=c></div><div id=d></div>
+</div>
+---
+#a x=0 y=0 h=40
+#b x=100 y=0
+#c x=200 y=0
+#d x=100 y=20
+#g h=40
+
+=== column flow fills columns, adding implicit columns
+<body style="margin:0">
+<div id=g style="display:grid;width:300px;grid-template-rows:20px 20px;grid-auto-flow:column;grid-auto-columns:50px">
+<div id=a></div><div id=b></div><div id=c></div>
+</div>
+---
+#a x=0 y=0 w=50 h=20
+#b x=0 y=20
+#c x=50 y=0
+#g h=40
+
+=== column flow, dense
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-rows:20px 20px 20px;grid-auto-flow:column dense;grid-auto-columns:50px">
+<div id=a style="grid-row:span 2"></div>
+<div id=b style="grid-row:span 2"></div>
+<div id=c></div>
+</div>
+---
+#a x=0 y=0
+#b x=50 y=0
+#c x=0 y=40
+
+=== implicit tracks before the explicit grid
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px 100px;grid-auto-columns:30px;justify-content:start">
+<div id=a style="grid-column:-4">x</div>
+<div id=b>x</div><div id=c>x</div>
+</div>
+---
+// line -4 is one line before the grid: a 30px implicit column, which
+// auto-placement uses like any other
+#a x=0 y=0 w=30
+#b x=30 w=100
+#c x=130 w=100
+
+=== implicit rows before the explicit grid cycle grid-auto-rows backwards
+<body style="margin:0">
+<div id=g style="display:grid;width:100px;grid-template-rows:50px;grid-auto-rows:10px 20px">
+<div id=a style="grid-row:-4"></div>
+<div id=b style="grid-row:1"></div>
+</div>
+---
+// rows before the grid: 10, then 20 next to the explicit row
+#a y=0 h=10
+#b y=30 h=50
+#g h=80
+
+=== implicit columns after the explicit grid
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px;grid-auto-columns:40px 60px;justify-content:start">
+<div id=a style="grid-column:2">x</div>
+<div id=b style="grid-column:3">x</div>
+<div id=c style="grid-column:4">x</div>
+</div>
+---
+#a x=100 w=40
+#b x=140 w=60
+#c x=200 w=40
+
+=== an auto-placed item wider than the grid adds columns
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px;grid-auto-columns:50px;justify-content:start">
+<div id=a style="grid-column:span 3">x</div>
+<div id=b>x</div><div id=c>x</div>
+</div>
+---
+#a x=0 w=200
+#b x=0 y=16 w=100
+#c x=100 y=16 w=50
+
+=== named lines
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:[side] 100px [main-start] 100px [mid] 100px [main-end]">
+<div id=a style="grid-column:mid">x</div>
+<div id=b style="grid-column:main-start / main-end">x</div>
+<div id=c style="grid-column:main">x</div>
+<div id=d style="grid-column:side / mid">x</div>
+</div>
+---
+// main: the lines main-start and main-end make an implicit area name
+#a x=200 y=0 w=100
+#b x=100 y=16 w=200
+#c x=100 y=32 w=200
+#d x=0 y=48 w=200
+
+=== a named line with an integer, and span to a named line
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:[a] 100px [b] 100px [b] 100px [c]">
+<div id=x style="grid-column:1 / span 2 b">x</div>
+<div id=y style="grid-column:b 2 / c">x</div>
+<div id=z style="grid-column:b -2 / b -1">x</div>
+</div>
+---
+#x x=0 y=0 w=200
+#y x=200 y=0 w=100
+#z x=100 y=16 w=100
+
+=== line names inside repeat
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,[col] 100px)">
+<div id=a style="grid-column:col 3">x</div>
+<div id=b style="grid-column:col 2 / span 2">x</div>
+</div>
+---
+#a x=200 y=0
+#b x=100 y=16 w=200
+
+=== a named line that does not exist is an implicit line after the grid
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px 100px;grid-auto-columns:30px;justify-content:start">
+<div id=a style="grid-column:nope">x</div>
+</div>
+---
+// "1 nope": every implicit line after the grid has the name, and the
+// first of them is one implicit track past the last explicit line
+#a x=230 w=30
+
+=== named areas
+<body style="margin:0">
+<div id=g style="display:grid;width:600px;grid-template-columns:100px 1fr 80px;grid-template-rows:40px auto 30px;
+grid-template-areas:'head head head' 'nav main side' 'foot foot foot'">
+<div id=f style="grid-area:foot"></div>
+<div id=m style="grid-area:main">x</div>
+<div id=s style="grid-area:side"></div>
+<div id=n style="grid-area:nav"></div>
+<div id=h style="grid-area:head"></div>
+</div>
+---
+#h x=0 y=0 w=600 h=40
+#n x=0 y=40 w=100 h=16
+#m x=100 y=40 w=420
+#s x=520 y=40 w=80
+#f x=0 y=56 w=600 h=30
+#g h=86
+
+=== an area's lines can be used one by one
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-auto-rows:20px;
+grid-template-areas:'a b b' 'a c .'">
+<div id=x style="grid-column:b-start;grid-row:a-start / a-end"></div>
+<div id=y style="grid-column-end:b-end;grid-row:2"></div>
+</div>
+---
+#x x=100 y=0 w=100 h=40
+#y x=200 y=20 w=100
+
+=== areas make explicit tracks that grid-auto-* size
+<body style="margin:0">
+<div id=g style="display:grid;width:300px;grid-template-areas:'a b' 'c d';grid-auto-columns:60px;grid-auto-rows:25px;justify-content:start">
+<div id=d style="grid-area:d"></div>
+<div id=e style="grid-column:-1;grid-row:-1"></div>
+</div>
+---
+// line -1 is the end of the area grid
+#d x=60 y=25 w=60 h=25
+#e x=120 y=50
+
+=== the grid-template shorthand with areas, rows and columns
+<body style="margin:0">
+<div id=g style="display:grid;width:300px;grid-template:'top top' 30px 'left right' 50px / 100px 200px">
+<div id=r style="grid-area:right"></div>
+<div id=t style="grid-area:top"></div>
+</div>
+---
+#t x=0 y=0 w=300 h=30
+#r x=100 y=30 w=200 h=50
+#g h=80
+
+=== the grid shorthand with auto-flow
+<body style="margin:0">
+<div id=g style="display:grid;width:300px;grid:auto-flow 25px / 100px 100px">
+<div id=a></div><div id=b></div><div id=c></div>
+</div>
+---
+#b x=100 y=0 h=25
+#c x=0 y=25
+
+=== order changes the placement order
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="order:2">x</div><div id=b>x</div><div id=c style="order:-1">x</div>
+</div>
+---
+#c x=0
+#b x=100
+#a x=200
+
+=== definite items may overlap
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=a style="grid-area:1 / 1 / 2 / 3">x</div>
+<div id=b style="grid-area:1 / 2 / 2 / 4">x</div>
+<div id=c>x</div>
+</div>
+---
+#a x=0 y=0 w=200
+#b x=100 y=0 w=200
+#c x=0 y=16
+
+=== subgrid is laid out as none
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:repeat(3,100px)">
+<div id=s style="display:grid;grid-column:span 3;grid-template-columns:subgrid">
+<div id=a>x</div><div id=b>x</div>
+</div>
+</div>
+---
+// not implemented: the nested grid has one auto column
+#a x=0 y=0 w=300
+#b x=0 y=16

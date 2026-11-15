@@ -1554,7 +1554,7 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
             switch (inner) {
             case AU_DISPLAY_INNER_FLOW_ROOT: b->inner = LI_FLOW; b->flags |= LF_BFC; break;
             case AU_DISPLAY_INNER_FLEX: b->inner = LI_FLEX; b->flags |= LF_BFC; break;
-            case AU_DISPLAY_INNER_GRID: b->inner = LI_FLOW; b->flags |= LF_BFC; break; /* placeholder: grid as block */
+            case AU_DISPLAY_INNER_GRID: b->inner = LI_GRID; b->flags |= LF_BFC; break;
             case AU_DISPLAY_INNER_TABLE: b->inner = LI_TABLE; b->flags |= LF_BFC; break;
             case AU_DISPLAY_INNER_TABLE_ROW_GROUP:
             case AU_DISPLAY_INNER_TABLE_HEADER_GROUP:
@@ -1909,7 +1909,7 @@ static void normalize(Builder *B)
                 else if (!is_out_of_flow(c))
                     any_inline = true;
             }
-            if (b->inner == LI_FLEX) {
+            if (b->inner == LI_FLEX || b->inner == LI_GRID) {
                 wrap_inline_runs(B, b, true);
                 for (LBox *c = b->first; c; c = c->next)
                     if (c->kind == LK_BLOCK && !(c->flags & LF_ABSPOS)) {

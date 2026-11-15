@@ -1,0 +1,201 @@
+Grid: alignment of the tracks in the container (justify-content,
+align-content) and of items in their areas (justify-self, align-self),
+and auto margins. Two 100px columns in a 600px container, 50px rows.
+
+=== justify-content: center
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;justify-content:center">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=200
+#b x=300
+
+=== justify-content: end
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;justify-content:end">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=400
+#b x=500
+
+=== justify-content: space-between
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;justify-content:space-between">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=0
+#b x=500
+
+=== justify-content: space-around
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;justify-content:space-around">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=100
+#b x=400
+
+=== justify-content: space-evenly
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;justify-content:space-evenly">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=133.33
+#b x=366.67
+
+=== space-between adds to the gutters, and spanning items cover them
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px 100px;column-gap:10px;justify-content:space-between">
+<div id=s style="grid-column:1 / 3">x</div><div id=c>x</div>
+</div>
+---
+// free 280 in two parts: gutters of 150
+#s x=0 w=350
+#c x=500
+
+=== align-content with a definite height
+<body style="margin:0">
+<div style="display:grid;width:100px;height:300px;grid-template-rows:50px 50px;align-content:center">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a y=100
+#b y=150
+
+=== align-content: space-between
+<body style="margin:0">
+<div style="display:grid;width:100px;height:300px;grid-template-rows:50px 50px;align-content:space-between">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a y=0
+#b y=250
+
+=== align-content: end with min-height
+<body style="margin:0">
+<div id=g style="display:grid;width:100px;min-height:300px;grid-template-rows:50px 50px;align-content:end">
+<div id=a></div><div id=b></div>
+</div>
+---
+#g h=300
+#a y=200
+#b y=250
+
+=== tracks wider than the container: centring overflows on both sides
+<body style="margin:0">
+<div style="display:grid;width:100px;margin-left:200px;grid-template-columns:100px 100px;justify-content:center">
+<div id=a></div><div id=b></div>
+</div>
+---
+#a x=150
+#b x=250
+
+=== items stretch by default
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;grid-template-rows:50px">
+<div id=a>xx</div>
+</div>
+---
+#a x=0 y=0 w=100 h=50
+
+=== justify-items
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px 100px;grid-template-rows:50px;justify-items:center">
+<div id=a>xx</div>
+<div id=b style="justify-self:end">xx</div>
+<div id=c style="justify-self:start">xx</div>
+</div>
+---
+#a x=34 w=32 h=50
+#b x=168 w=32
+#c x=200 w=32
+
+=== align-items
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px 100px 100px;grid-template-rows:50px;align-items:center">
+<div id=a>xx</div>
+<div id=b style="align-self:end">xx</div>
+<div id=c style="align-self:start">xx</div>
+<div id=d style="align-self:stretch">xx</div>
+</div>
+---
+#a y=17 h=16 w=100
+#b y=34 h=16
+#c y=0 h=16
+#d y=0 h=50
+
+=== place-items: center centres in both axes
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px;grid-template-rows:50px;place-items:center">
+<div id=a>xx</div>
+</div>
+---
+#a x=34 y=17 w=32 h=16
+
+=== justify-items: legacy is normal
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px;justify-items:legacy">
+<div id=a>xx</div>
+</div>
+---
+#a w=100
+
+=== baseline alignment falls back to start
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px;grid-template-rows:50px;align-items:baseline">
+<div id=a>xx</div><div id=b style="font-size:32px">x</div>
+</div>
+---
+// not implemented: a browser would put a 16px lower
+#a y=0 h=16
+#b y=0 h=32
+
+=== a width keeps the item from stretching
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px;grid-template-rows:50px">
+<div id=a style="width:40px;height:20px"></div>
+</div>
+---
+#a x=0 y=0 w=40 h=20
+
+=== auto margins take the free space
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px 100px 100px;grid-template-rows:50px">
+<div id=a style="margin-left:auto">xx</div>
+<div id=b style="margin:auto">xx</div>
+<div id=c style="margin-top:auto">xx</div>
+</div>
+---
+#a x=68 y=0 w=32 h=50
+#b x=134 y=17 w=32 h=16
+#c x=200 y=34 w=100 h=16
+
+=== margins shrink a stretched item
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:100px;grid-template-rows:50px">
+<div id=a style="margin:10px"></div>
+</div>
+---
+#a x=10 y=10 w=80 h=30
+
+=== an end-aligned item wider than its area overflows at the start
+<body style="margin:0">
+<div style="display:grid;width:600px;margin-left:100px;grid-template-columns:100px;justify-items:end">
+<div id=a style="width:150px">x</div>
+</div>
+---
+#a x=50 w=150
+
+=== the first row's first item gives an inline-grid its baseline
+<body style="margin:0">
+<div id=o>xx<span id=g style="display:inline-grid;grid-template-columns:40px;grid-template-rows:40px 40px"><span id=a style="align-self:end">x</span><span>x</span></span></div>
+---
+// a's baseline (its bottom: Ahem has no descent here... the line's
+// baseline) sits on the outer line's baseline. Baseline position not
+// checked in a browser.
+#g x=32 w=40 h=80
+#a x=32 w=40 h=16
