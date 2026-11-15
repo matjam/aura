@@ -3,6 +3,7 @@
  * incremental feeding, resize. Uses the Ahem-like test font. */
 #include "../layout/ahem.h"
 #include "page/page.h"
+#include "image/cache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -378,31 +379,53 @@ static void test_incremental(void)
 
 /* ---- Images ---- */
 
-static bool fake_decode(void *ctx, const void *data, size_t len, int *w, int *h, AuSurface **px)
+/* A w x h 24-bit BMP of one colour (the view decodes images itself). */
+static size_t make_bmp(uint8_t *out, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 {
-    (void)ctx;
-    /* "WxH" */
-    char buf[32];
-    if (len >= sizeof buf)
-        return false;
-    memcpy(buf, data, len);
-    buf[len] = 0;
-    if (sscanf(buf, "%dx%d", w, h) != 2)
-        return false;
-    *px = NULL;
-    return true;
+    size_t stride = ((size_t)w * 3 + 3) & ~(size_t)3, n = 54 + stride * (size_t)h;
+    memset(out, 0, n);
+    out[0] = 'B';
+    out[1] = 'M';
+    out[10] = 54;
+    out[14] = 40;
+    out[18] = (uint8_t)w;
+    out[19] = (uint8_t)(w >> 8);
+    out[22] = (uint8_t)h;
+    out[23] = (uint8_t)(h >> 8);
+    out[26] = 1;
+    out[28] = 24;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint8_t *p = out + 54 + (size_t)y * stride + (size_t)x * 3;
+            p[0] = b;
+            p[1] = g;
+            p[2] = r;
+        }
+    return n;
+}
+
+static void deliver_image(Fake *f, AuDocView *dv, const char *url, const uint8_t *data, size_t len, bool ok)
+{
+    FakeReq *r = fake_find(f, url);
+    CHECK(r != NULL, "no request for %s", url);
+    if (!r)
+        return;
+    /* In two parts: sizes are known from the header, before the end. */
+    size_t half = len / 2;
+    au_docview_resource_data(dv, r->id, data, half);
+    au_docview_resource_data(dv, r->id, data + half, len - half);
+    au_docview_resource_done(dv, r->id, ok);
 }
 
 static void test_images(void)
 {
     Fake f;
-    AuDocView *dv = new_view(&f);
-    AuLoader li = {&f, fake_request, NULL, fake_decode};
-    au_docview_free(dv);
     memset(&f, 0, sizeof f);
-    dv = au_docview_new(fonts, &li, NULL);
+    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html = "<!DOCTYPE html><body style='margin:0'><img id=i src='p.png'><img id=j src='q.png' width=20>"
-                       "<div id=d style='background:url(bg.png)'>x</div>";
+                       "<div id=d style='background:url(bg.png)'>x</div>"
+                       "<p><img id=k src='broken.png' alt='Broken picture'><img id=m src='slow.png' alt='Slow'>";
     au_docview_load(dv, html, strlen(html), "http://example.com/");
     au_docview_set_viewport(dv, 800, 600);
     au_docview_update(dv);
@@ -414,12 +437,36 @@ static void test_images(void)
     au_canvas_free(c);
     au_surface_free(s);
     CHECK(fake_find(&f, "http://example.com/bg.png") != NULL, "background image not requested");
-    fake_deliver(&f, dv, "http://example.com/p.png", "40x30", true);
-    fake_deliver(&f, dv, "http://example.com/q.png", "40x30", true);
-    AuRect r = rect_of(dv, "i");
+    /* Pending: an empty box, no alt text yet. */
+    AuRect r = rect_of(dv, "m");
+    CHECK(r.w == 0, "pending image with alt text is %g wide", r.w);
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 255, 0, 0);
+    deliver_image(&f, dv, "http://example.com/p.png", bmp, n, true);
+    deliver_image(&f, dv, "http://example.com/q.png", bmp, n, true);
+    fake_deliver(&f, dv, "http://example.com/broken.png", "not an image at all", true);
+    r = rect_of(dv, "i");
     CHECK(r.w == 40 && r.h == 30, "img size %gx%g", r.w, r.h);
     r = rect_of(dv, "j");
     CHECK(r.w == 20 && r.h == 15, "img width attr keeps ratio: %gx%g", r.w, r.h);
+    /* Failed: the alt text, inline. */
+    r = rect_of(dv, "k");
+    CHECK(r.w > 40, "broken image shows its alt text: %g wide", r.w);
+    /* The decoded pixels are painted. */
+    s = au_surface_new(100, 100);
+    c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 100, 100}, 0, 0);
+    CHECK(au_surface_get(s, 10, 10) == AU_RGB(255, 0, 0), "image pixel %08x", au_surface_get(s, 10, 10));
+    r = rect_of(dv, "j");
+    int jx = (int)(r.x + r.w / 2), jy = (int)(r.y + r.h / 2);
+    CHECK(au_surface_get(s, jx, jy) == AU_RGB(255, 0, 0), "scaled image pixel %08x", au_surface_get(s, jx, jy));
+    au_canvas_free(c);
+    au_surface_free(s);
+    AuImageCacheStats st;
+    au_docview_image_stats(dv, &st);
+    CHECK(st.entries == 5 && st.decoded == 2, "image cache: %u entries, %u decoded", st.entries, st.decoded);
+    /* q.png is shown at 20 x 15: decoded at half size. */
+    CHECK(st.decoded_bytes == (40 * 30 + 20 * 15) * 4, "decoded bytes %zu", st.decoded_bytes);
     au_docview_free(dv);
 }
 
@@ -444,6 +491,163 @@ static void test_user_css(void)
     au_docview_free(dv);
 }
 
+/* ---- @font-face ---- */
+
+static char *read_sample(const char *name, size_t *len)
+{
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", AURA_PAGE_SAMPLES_DIR, name);
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+        return NULL;
+    fseek(fp, 0, SEEK_END);
+    long n = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *d = malloc(n > 0 ? (size_t)n : 1);
+    *len = fread(d, 1, (size_t)n, fp);
+    fclose(fp);
+    return d;
+}
+
+static void deliver_bytes(Fake *f, AuDocView *dv, const char *url, const char *data, size_t len, bool ok)
+{
+    FakeReq *r = fake_find(f, url);
+    CHECK(r != NULL, "no request for %s", url);
+    if (!r)
+        return;
+    CHECK(r->kind == AU_RES_OTHER, "font fetched as kind %d", (int)r->kind);
+    if (data)
+        au_docview_resource_data(dv, r->id, data, len);
+    au_docview_resource_done(dv, r->id, ok);
+}
+
+static void test_webfonts(void)
+{
+    size_t wlen;
+    char *woff2 = read_sample("sample-inter.woff2", &wlen);
+    CHECK(woff2 != NULL, "cannot read sample-inter.woff2");
+    if (!woff2)
+        return;
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html =
+        "<!DOCTYPE html><style>"
+        "@font-face{font-family:W;src:url(missing.woff2) format('woff2'),url(w.woff2) format('woff2');"
+        "font-weight:100 900}"
+        "@font-face{font-family:W;src:url(cyr.woff2);unicode-range:U+0400-045F}"
+        "@font-face{font-family:Unused;src:url(unused.woff2)}"
+        "@font-face{font-family:Bad;src:url(svg.woff2) tech(color-svg),url(bad.woff2),url(cff.otf)}"
+        "</style><body style='margin:0;font:20px W'>"
+        "<span id=a>iiii</span><br><span id=l style='font-weight:300'>mmmm</span><br>"
+        "<span id=h style='font-weight:800'>mmmm</span><br><span id=b style='font-family:Bad'>x</span>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    AuRect before = rect_of(dv, "a");
+    CHECK(before.w == 80, "Ahem before the web font arrives: %g", before.w);
+    CHECK(fake_find(&f, "http://example.com/missing.woff2") != NULL, "first source not requested");
+    CHECK(fake_find(&f, "http://example.com/w.woff2") == NULL, "second source requested before the first failed");
+    CHECK(fake_find(&f, "http://example.com/cyr.woff2") == NULL, "face outside the text's unicode-range requested");
+    CHECK(fake_find(&f, "http://example.com/unused.woff2") == NULL, "unused family requested");
+    CHECK(fake_find(&f, "http://example.com/svg.woff2") == NULL, "unsupported technology requested");
+    CHECK(fake_find(&f, "http://example.com/bad.woff2") != NULL, "Bad face not requested");
+    /* Fonts are requested when the document is first styled, after parsing
+     * may already have reported the load finished (as images are). */
+    CHECK(au_docview_loading(dv), "not loading while fonts are pending");
+    int finished_before = f.finished;
+    deliver_bytes(&f, dv, "http://example.com/missing.woff2", NULL, 0, false);
+    CHECK(fake_find(&f, "http://example.com/w.woff2") != NULL, "next source not requested after a failure");
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    AuRect after = rect_of(dv, "a");
+    CHECK(after.w > 5 && after.w < 40, "web font laid out: iiii is %g wide", after.w);
+    AuRect l = rect_of(dv, "l"), h = rect_of(dv, "h");
+    CHECK(h.w > l.w + 4, "variable weights: 800 is %g wide, 300 is %g", h.w, l.w);
+    /* Corrupt data and a CFF font fall through to the fallback font. */
+    deliver_bytes(&f, dv, "http://example.com/bad.woff2", "wOF2 not really a font", 22, true);
+    CHECK(fake_find(&f, "http://example.com/cff.otf") != NULL, "source after corrupt data not requested");
+    static const char otto[] = "OTTO\0\0\0\0\0\0\0\0";
+    deliver_bytes(&f, dv, "http://example.com/cff.otf", otto, sizeof otto, true);
+    CHECK(rect_of(dv, "b").w == 20, "CFF face must fall back: %g", rect_of(dv, "b").w);
+    CHECK(!au_docview_loading(dv) && f.finished == finished_before + 1, "load finished %d times after fonts",
+          f.finished - finished_before);
+    CHECK(rect_of(dv, "a").w == after.w, "web font kept");
+    /* A new document drops the faces. */
+    const char *plain = "<!DOCTYPE html><body style='margin:0;font:20px W'><span id=a>iiii</span>";
+    au_docview_load(dv, plain, strlen(plain), "http://example.com/2");
+    CHECK(rect_of(dv, "a").w == 80, "web font outlived its document: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+    /* Freed while a font is still loading. */
+    dv = new_view(&f);
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_update(dv);
+    au_docview_free(dv);
+    free(woff2);
+}
+
+static int count_requests(const Fake *f, const char *url)
+{
+    int n = 0;
+    for (int i = 0; i < f->n; i++)
+        n += !strcmp(f->req[i].url, url);
+    return n;
+}
+
+/* A web font arriving makes a new layout: images stay decoded, are not
+ * fetched again, and animations keep running. */
+static void test_images_and_webfonts(void)
+{
+    size_t wlen, glen;
+    char *woff2 = read_sample("sample-inter.woff2", &wlen);
+    char *gif = read_sample("img/spinner.gif", &glen);
+    CHECK(woff2 && gif, "cannot read samples");
+    if (!woff2 || !gif) {
+        free(woff2);
+        free(gif);
+        return;
+    }
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><style>@font-face{font-family:W;src:url(w.woff2)}</style>"
+                       "<body style='margin:0;font:20px W'><img id=i src='p.png'><img id=g src='s.gif'>"
+                       "<span id=a>iiii</span>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 255, 0, 0);
+    deliver_image(&f, dv, "http://example.com/p.png", bmp, n, true);
+    deliver_image(&f, dv, "http://example.com/s.gif", (const uint8_t *)gif, glen, true);
+    AuSurface *s = au_surface_new(200, 100);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_animate(dv, 1000);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 100}, 0, 0);
+    AuRect ri = rect_of(dv, "i");
+    int ix = (int)(ri.x + 20), iy = (int)(ri.y + 15);
+    CHECK(au_surface_get(s, ix, iy) == AU_RGB(255, 0, 0), "image before the font: %08x", au_surface_get(s, ix, iy));
+    CHECK(au_docview_animating(dv), "animation running before the font");
+    AuImageCacheStats st0;
+    au_docview_image_stats(dv, &st0);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w < 40, "web font laid out: %g", rect_of(dv, "a").w);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 100}, 0, 0);
+    ri = rect_of(dv, "i");
+    ix = (int)(ri.x + 20), iy = (int)(ri.y + 15);
+    CHECK(au_surface_get(s, ix, iy) == AU_RGB(255, 0, 0), "image after the font: %08x", au_surface_get(s, ix, iy));
+    CHECK(rect_of(dv, "i").w == 40 && rect_of(dv, "g").w == 48, "image sizes kept");
+    CHECK(count_requests(&f, "http://example.com/p.png") == 1 && count_requests(&f, "http://example.com/s.gif") == 1,
+          "images fetched again after the font");
+    AuImageCacheStats st1;
+    au_docview_image_stats(dv, &st1);
+    CHECK(st1.entries == st0.entries && st1.decodes == st0.decodes, "images lost: %u entries, %u decodes (were %u, %u)",
+          st1.entries, st1.decodes, st0.entries, st0.decodes);
+    uint32_t next = au_docview_animate(dv, 1100);
+    CHECK(au_docview_animating(dv) && next != UINT32_MAX, "animation stopped after the font");
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+    free(woff2);
+    free(gif);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -455,6 +659,8 @@ int main(void)
     test_incremental();
     test_images();
     test_user_css();
+    test_webfonts();
+    test_images_and_webfonts();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

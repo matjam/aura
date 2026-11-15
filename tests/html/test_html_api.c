@@ -245,8 +245,45 @@ static void test_scaling(void)
     scaling("text in table cells", "<table>", "<tr><td>a</td></tr>", "");
 }
 
+/* Tags with many attributes use a hash set of names that is filled when a
+ * ninth name is looked up. A tag with exactly eight attributes after a
+ * longer one once looped forever clearing a set it had never filled. */
+static void test_many_attributes(void)
+{
+    static const char *const docs[] = {
+        /* nine, then exactly eight */
+        "<p a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8 i=9></p><p a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8></p>",
+        /* a duplicate as the ninth name, twice, then a long tag */
+        "<p a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8 a=9 b=10></p>"
+        "<p a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8 i=9 j=10 k=11></p>",
+        /* a long tag cut off at the end of input, then nothing */
+        "<p a=1 b=2 c=3 d=4 e=5 f=6 g=7 h=8 i=9 j=10",
+        /* enough names to grow the set, then eight, then nine again */
+        "<p a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj>"
+        "<p a b c d e f g h><p a b c d e f g h i>",
+    };
+    static const unsigned counts[][3] = { { 9, 8, 0 }, { 8, 11, 0 }, { 0, 0, 0 }, { 36, 8, 9 } };
+    AuAtom p = au_atom_cstr("p");
+    for (size_t d = 0; d < sizeof docs / sizeof docs[0]; d++) {
+        AuDocument *doc = au_html_parse(docs[d], strlen(docs[d]), NULL);
+        unsigned seen = 0;
+        for (AuNode *n = &doc->node; n; n = au_node_next(n, &doc->node)) {
+            if (!au_is_html_element(n, p))
+                continue;
+            if (seen < 3)
+                CHECK(au_as_element(n)->nattrs == counts[d][seen], "doc %u p %u: %u attributes", (unsigned)d,
+                      seen, (unsigned)au_as_element(n)->nattrs);
+            seen++;
+        }
+        unsigned want = (counts[d][0] != 0) + (counts[d][1] != 0) + (counts[d][2] != 0);
+        CHECK(seen == want, "doc %u: %u p elements, expected %u", (unsigned)d, seen, want);
+        au_node_unref(&doc->node);
+    }
+}
+
 int main(void)
 {
+    test_many_attributes();
     test_serialize();
     test_fragment();
     test_encodings();

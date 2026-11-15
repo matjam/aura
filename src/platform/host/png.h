@@ -4,10 +4,8 @@
 #ifndef AURA_HOST_PNG_H
 #define AURA_HOST_PNG_H
 
+#include "codec/codec.h" /* au_codec_crc32, au_codec_adler32 */
 #include "paint/paint.h"
-
-uint32_t au_crc32(uint32_t crc, const uint8_t *p, size_t n);
-uint32_t au_adler32(uint32_t adler, const uint8_t *p, size_t n);
 
 /* Encodes the surface as an 8-bit RGBA PNG (alpha un-premultiplied). */
 void au_png_encode(const AuSurface *s, AuBuf *out);

@@ -1,0 +1,1 @@
+frames 6 loop 0 delays 100 0 10 250 50 70

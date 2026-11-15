@@ -1,0 +1,21 @@
+Test fonts, made by tools/test-fonts.py make from the upstream fonts it
+fetches. Each is a reduced subset; the licences are beside them.
+
+intervar*.ttf      Inter Variable 4.1 (rsms/inter), SIL OFL 1.1
+                   (Inter-LICENSE.txt); static instances by fontTools
+opensansvar*.ttf   Open Sans variable (google/fonts ofl/opensans), SIL OFL
+                   1.1 (OpenSans-OFL.txt); static instances by fontTools
+twemoji-sub.ttf    Twemoji Mozilla 0.7.0 (mozilla/twemoji-colr): graphics
+                   Twemoji, copyright Twitter, Inc and other contributors,
+                   CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/);
+                   font build Apache License 2.0 (Twemoji-LICENSE.md).
+                   Changed: subset to a few emoji, hinting and names removed.
+notocolr-sub.ttf   Noto Color Emoji, COLR version 1 build
+                   (googlefonts/noto-emoji), SIL OFL 1.1
+                   (NotoColorEmoji-OFL.txt); subset to a few emoji
+colr-test.ttf      made by the script (every COLR paint format)
+*.woff, *.woff2    intervar.ttf and opensansvar.ttf as WOFF (fontTools),
+                   WOFF2 with glyf and loca transformed, with hmtx also
+                   transformed (opensansvar-hmtx), and a WOFF2 collection of
+                   both (collection.woff2, written by the script); same
+                   licences as their sources

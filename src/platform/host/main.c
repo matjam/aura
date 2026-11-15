@@ -19,6 +19,7 @@
 #include "browser/scene.h"
 #include "browser/url.h"
 #include "render.h"
+#include "net_host.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,8 @@ static int usage(void)
             "                        (--tab takes a URL, a path, or file:relative/path)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n"
+            "       aura-host image FILE [-o out.png] [--scale N] [--target WxH] [--chunk N] [--frames]\n"
+            "                        [--repeat N] [--max-bytes N] [--favicon SIZE]\n"
             "       aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] FILE.js...\n"
             "       aura-host page [--quiet] [--expect-errors N] [--click ID]... PAGE.html\n");
     return 2;
@@ -290,7 +293,7 @@ static AuHitPart hit_by_name(const char *s)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL};
     AuBrowser *b = au_browser_new(fonts, &host);
     b->prefs.tab_position = o->pos;
     if (o->column)
@@ -381,8 +384,14 @@ int main(int argc, char **argv)
     if (argc < 2)
         return usage();
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "fetch"))
+        return au_host_fetch_main(argc, argv);
+    if ((!strcmp(cmd, "render") || !strcmp(cmd, "dump")) && au_host_net_render_wanted(argc, argv))
+        return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
+    if (!strcmp(cmd, "image"))
+        return au_host_image_main(argc, argv);
     if (!strcmp(cmd, "js"))
         return au_host_js_main(argc, argv);
     if (!strcmp(cmd, "page"))

@@ -1,0 +1,7 @@
+# WPT urltestdata.json inputs Aura's URL parser is known to get wrong.
+# One input per line, exactly as the test prints it (control bytes and
+# backslashes as \xHH). Lines starting with '#' are comments.
+#
+# Needs the UTS #46 mapping table (mathematical alphanumerics map to
+# ASCII, so the host is "localhost" and becomes empty):
+file://loC𝐀𝐋𝐇𝐨𝐬𝐭/usr/bin

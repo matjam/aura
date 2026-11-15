@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Builds Aura's bundled fonts in assets/fonts from the upstream releases.
 
-Usage: tools/fonts-prepare.py SRC [OUT]
+Usage: tools/fonts-prepare.py SRC [OUT] [--only=FAMILY]...
+
+FAMILY is liberation, inter, dejavu, notoemoji or twemoji (all by
+default).
 
 SRC holds the unpacked upstream downloads (see assets/fonts/README.md for
 the URLs):
@@ -11,6 +14,8 @@ the URLs):
   SRC/dejavu-fonts-ttf-2.37/ttf/      DejaVu 2.37 TTF release
   SRC/NotoEmoji[wght].ttf             Noto Emoji from google/fonts
   SRC/NotoEmoji-OFL.txt               its OFL.txt from the same folder
+  SRC/Twemoji.Mozilla.ttf             mozilla/twemoji-colr release v0.7.0
+  SRC/twemoji-colr-LICENSE.md         LICENSE.md of the same tag
 
 OUT defaults to assets/fonts. The script needs fontTools (pyftsubset); it
 is only needed to regenerate the committed fonts, not to build Aura.
@@ -22,6 +27,8 @@ removed, and glyphs that only GSUB could reach are dropped. Liberation
 carries the Reserved Font Name "Liberation", so its subsets are renamed
 Aura Sans, Aura Serif and Aura Mono as the OFL requires. Noto Emoji is
 published only as a variable font; its wght=400 instance is taken here.
+Twemoji Mozilla (colour emoji) keeps its COLR, CPAL and GSUB tables, and
+gets an ATTRIBUTION.txt for the CC BY 4.0 licence of its graphics.
 """
 import os
 import shutil
@@ -81,12 +88,22 @@ def save(font, path):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith('--only=')]
+    only = [a[7:] for a in sys.argv[1:] if a.startswith('--only=')]
+    if not args:
         print(__doc__)
         return 2
-    src = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), '..', 'assets', 'fonts')
+    src = args[0]
+    out = args[1] if len(args) > 1 else os.path.join(os.path.dirname(__file__), '..', 'assets', 'fonts')
+    steps = (('liberation', liberation), ('inter', inter), ('dejavu', dejavu), ('notoemoji', notoemoji),
+             ('twemoji', twemoji))
+    for name, step in steps:
+        if not only or name in only:
+            step(src, out)
+    return 0
 
+
+def liberation(src, out):
     lib = os.path.join(src, 'liberation-fonts-ttf-2.1.5')
     four = ('Regular', 'Bold', 'Italic', 'BoldItalic')
     # Monospaced italics are rare on the web; Aura synthesizes them.
@@ -100,14 +117,18 @@ def main():
             save(f, os.path.join(out, 'liberation', '%s-%s.ttf' % (new.replace(' ', ''), style)))
     shutil.copy(os.path.join(lib, 'LICENSE'), os.path.join(out, 'liberation', 'LICENSE'))
 
-    inter = os.path.join(src, 'Inter-4.1', 'extras', 'ttf')
+
+def inter(src, out):
+    d = os.path.join(src, 'Inter-4.1', 'extras', 'ttf')
     for style in ('Regular', 'Bold', 'Italic', 'BoldItalic'):
-        f = TTFont(os.path.join(inter, 'Inter-%s.ttf' % style))
+        f = TTFont(os.path.join(d, 'Inter-%s.ttf' % style))
         cps = [cp for cp in f.getBestCmap() if in_ranges(cp, TEXT_RANGES)]
         reduce_font(f, cps)
         save(f, os.path.join(out, 'inter', 'Inter-%s.ttf' % style))
     shutil.copy(os.path.join(src, 'Inter-4.1', 'LICENSE.txt'), os.path.join(out, 'inter', 'LICENSE.txt'))
 
+
+def dejavu(src, out):
     dv = os.path.join(src, 'dejavu-fonts-ttf-2.37')
     # The last-resort face draws symbols and scripts the page's fonts lack;
     # bold is synthesized from the regular face.
@@ -118,12 +139,54 @@ def main():
         save(f, os.path.join(out, 'dejavu', name + '.ttf'))
     shutil.copy(os.path.join(dv, 'LICENSE'), os.path.join(out, 'dejavu', 'LICENSE'))
 
+
+def notoemoji(src, out):
     f = TTFont(os.path.join(src, 'NotoEmoji[wght].ttf'))
     f = instancer.instantiateVariableFont(f, {'wght': 400}, updateFontNames=True)
     reduce_font(f, list(f.getBestCmap()))
     save(f, os.path.join(out, 'notoemoji', 'NotoEmoji-Regular.ttf'))
     shutil.copy(os.path.join(src, 'NotoEmoji-OFL.txt'), os.path.join(out, 'notoemoji', 'OFL.txt'))
-    return 0
+
+
+def twemoji(src, out):
+    # Colour emoji: Twemoji Mozilla keeps its colour tables (COLR version
+    # 0, CPAL) and the GSUB ligatures (ccmp) that join ZWJ sequences, flags,
+    # keycaps and skin tones; hinting and glyph names go.
+    f = TTFont(os.path.join(src, 'Twemoji.Mozilla.ttf'))
+    opts = subset.Options()
+    opts.hinting = False
+    opts.layout_features = ['ccmp']
+    opts.glyph_names = False
+    opts.notdef_outline = True
+    opts.name_IDs = ['*']
+    opts.name_languages = [0x0409]
+    opts.drop_tables += ['FFTM', 'gasp', 'GDEF']
+    s = subset.Subsetter(opts)
+    s.populate(unicodes=list(f.getBestCmap()))
+    s.subset(f)
+    save(f, os.path.join(out, 'twemoji', 'TwemojiMozilla.ttf'))
+    shutil.copy(os.path.join(src, 'twemoji-colr-LICENSE.md'), os.path.join(out, 'twemoji', 'LICENSE.md'))
+    with open(os.path.join(out, 'twemoji', 'ATTRIBUTION.txt'), 'w') as a:
+        a.write(TWEMOJI_ATTRIBUTION)
+
+
+TWEMOJI_ATTRIBUTION = """Twemoji Mozilla, as bundled with Aura
+
+Emoji graphics: Twemoji, copyright 2020 Twitter, Inc and other
+contributors, licensed under the Creative Commons Attribution 4.0
+International licence (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+Source of the graphics: https://github.com/twitter/twemoji
+
+Font build: Twemoji Mozilla 0.7.0, copyright Mozilla Foundation,
+licensed under the Apache License 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+Source: https://github.com/mozilla/twemoji-colr/releases/tag/v0.7.0
+
+Changes made for Aura: hinting, glyph names and the FFTM, gasp and GDEF
+tables were removed (tools/fonts-prepare.py). The emoji graphics are
+unchanged.
+"""
 
 
 if __name__ == '__main__':

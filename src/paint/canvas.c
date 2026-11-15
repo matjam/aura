@@ -515,6 +515,86 @@ static uint32_t bilerp(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11, u
     return au_px_scale_trunc(top, 256 - fy) + au_px_scale_trunc(bot, fy);
 }
 
+/* Source pixels a destination pixel covers along one axis, reduced to at
+ * most RED_TAPS evenly spaced samples. */
+#define RED_TAPS 16
+typedef struct {
+    int32_t start, step; /* first sample; 16.16 distance between samples */
+    int32_t count;
+} RedSpan;
+
+static RedSpan red_span(int64_t i, int64_t n_dst, int32_t n_src)
+{
+    int32_t a = (int32_t)(i * n_src / n_dst);
+    int32_t b = (int32_t)((i + 1) * n_src / n_dst);
+    if (b > n_src)
+        b = n_src;
+    if (b <= a)
+        b = a + 1 <= n_src ? a + 1 : n_src;
+    if (a >= n_src)
+        a = n_src - 1;
+    int32_t n = b - a;
+    RedSpan sp;
+    sp.count = n > RED_TAPS ? RED_TAPS : n;
+    sp.step = (int32_t)(((int64_t)n << 16) / sp.count);
+    sp.start = a;
+    return sp;
+}
+
+/* Downscaling by 2 or more: each destination pixel is the average of the
+ * source pixels it covers (a box filter; at most 16 x 16 samples, evenly
+ * spaced, for larger reductions). Bilinear sampling would skip pixels and
+ * alias. */
+static void draw_image_reduce(AuSurface *s, const AuSurface *img, AuIRect src, AuIRect d, AuIRect r, uint32_t a,
+                              bool store)
+{
+    int sw = src.x1 - src.x0, sh = src.y1 - src.y0;
+    int dw = d.x1 - d.x0, dh = d.y1 - d.y0;
+    int ncol = r.x1 - r.x0;
+    RedSpan colbuf[64];
+    RedSpan *cols = ncol <= 64 ? colbuf : au_alloc((size_t)ncol * sizeof *cols);
+    for (int i = 0; i < ncol; i++)
+        cols[i] = red_span(r.x0 - d.x0 + i, dw, sw);
+    int32_t ys[RED_TAPS];
+    for (int y = r.y0; y < r.y1; y++) {
+        RedSpan rs = red_span(y - d.y0, dh, sh);
+        for (int k = 0; k < rs.count; k++)
+            ys[k] = src.y0 + rs.start + (int32_t)(((int64_t)k * rs.step + rs.step / 2) >> 16);
+        AuPixel *drow = s->pixels + (size_t)y * s->stride;
+        for (int i = 0; i < ncol; i++) {
+            const RedSpan *cs = &cols[i];
+            uint32_t sa = 0, sr = 0, sg = 0, sb = 0;
+            for (int ky = 0; ky < rs.count; ky++) {
+                const AuPixel *row = img->pixels + (size_t)ys[ky] * img->stride + src.x0 + cs->start;
+                int32_t fx = cs->step / 2;
+                for (int kx = 0; kx < cs->count; kx++, fx += cs->step) {
+                    uint32_t p = row[fx >> 16];
+                    sa += p >> 24;
+                    sr += (p >> 16) & 255;
+                    sg += (p >> 8) & 255;
+                    sb += p & 255;
+                }
+            }
+            uint32_t n = (uint32_t)(rs.count * cs->count);
+            uint32_t inv = (65536u + n / 2) / n;
+            uint32_t p = (((sa * inv + 32768) >> 16) << 24) | (((sr * inv + 32768) >> 16) << 16) |
+                         (((sg * inv + 32768) >> 16) << 8) | ((sb * inv + 32768) >> 16);
+            int x = r.x0 + i;
+            if (store) {
+                drow[x] = p | 0xFF000000u;
+                continue;
+            }
+            if (!p)
+                continue;
+            if (a < 256)
+                p = au_px_scale(p, a);
+            drow[x] = au_px_over(p, drow[x]);
+        }
+    }
+    if (cols != colbuf)
+        au_free(cols);
+}
+
 void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, AuFilter filter,
                    float opacity)
 {
@@ -543,6 +623,33 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
     /* Source step per destination pixel, 16.16. */
     int32_t stepx = (int32_t)(((int64_t)sw << 16) / dw);
     int32_t stepy = (int32_t)(((int64_t)sh << 16) / dh);
+    /* Opaque pixels at full opacity replace the destination. */
+    bool store = img->opaque && a >= 256;
+    if (sw == dw && sh == dh) {
+        /* Unscaled: copy or blend straight across. */
+        for (int y = r.y0; y < r.y1; y++) {
+            AuPixel *drow = s->pixels + (size_t)y * s->stride + r.x0;
+            const AuPixel *srow = img->pixels + (size_t)(src.y0 + y - d.y0) * img->stride + src.x0 + (r.x0 - d.x0);
+            int n = r.x1 - r.x0;
+            if (store) {
+                memcpy(drow, srow, (size_t)n * sizeof *drow);
+                continue;
+            }
+            for (int i = 0; i < n; i++) {
+                uint32_t p = srow[i];
+                if (!p)
+                    continue;
+                if (a < 256)
+                    p = au_px_scale(p, a);
+                drow[i] = (p >> 24) == 255 ? p : au_px_over(p, drow[i]);
+            }
+        }
+        return;
+    }
+    if (filter == AU_FILTER_BILINEAR && (stepx >= 2 << 16 || stepy >= 2 << 16)) {
+        draw_image_reduce(s, img, src, d, r, a, store);
+        return;
+    }
     for (int y = r.y0; y < r.y1; y++) {
         AuPixel *drow = s->pixels + (size_t)y * s->stride;
         if (filter == AU_FILTER_NEAREST) {
@@ -556,6 +663,10 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
                 if (sx >= sw)
                     sx = sw - 1;
                 uint32_t p = srow[sx];
+                if (store) {
+                    drow[x] = p;
+                    continue;
+                }
                 if (!p)
                     continue;
                 if (a < 256)
@@ -579,6 +690,11 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
                 int32_t x0i = ix < 0 ? 0 : (ix >= sw ? sw - 1 : ix);
                 int32_t x1i = ix + 1 < 0 ? 0 : (ix + 1 >= sw ? sw - 1 : ix + 1);
                 uint32_t p = bilerp(r0[x0i], r0[x1i], r1[x0i], r1[x1i], wx, wy);
+                if (store) {
+                    /* Truncation can leave alpha at 254: keep it opaque. */
+                    drow[x] = p | 0xFF000000u;
+                    continue;
+                }
                 if (!p)
                     continue;
                 if (a < 256)

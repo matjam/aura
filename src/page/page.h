@@ -44,10 +44,8 @@ typedef struct AuLoader {
     uint32_t (*request)(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind);
     /* Stops a fetch; no more data arrives for id. Optional. */
     void (*cancel)(void *ctx, uint32_t id);
-    /* Decodes image bytes: the intrinsic size and, when the format is
-     * supported, the pixels (a surface from au_surface_new that the view
-     * frees). Returns false for data that is not an image. Optional:
-     * without it images keep a placeholder size. */
+    /* Unused: the view decodes images itself (src/image, through
+     * docimages.c). Kept so existing loaders still compile. */
     bool (*decode_image)(void *ctx, const void *data, size_t len, int *w, int *h, AuSurface **pixels);
 } AuLoader;
 
@@ -106,6 +104,28 @@ AuLayout *au_docview_layout(const AuDocView *dv);
  * cascaded below the author's sheets; NULL removes it. It applies to
  * this and later documents. */
 void au_docview_set_user_css(AuDocView *dv, const char *css);
+/* Sets the font preferences (default sizes, text zoom, minimum size; see
+ * au_css_resolver_set_font_prefs) for this and later documents. A change
+ * restyles the document at the next update. */
+void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p);
+
+/* ---- Images ----
+ * Images decode through src/image: sizes reach layout as soon as each
+ * file's header arrives, pixels decode when an image comes within a
+ * viewport of the visible area (at the size it is shown), large images
+ * fill in as their bytes arrive, and animations advance in
+ * au_docview_animate. See src/image/cache.h for the memory policy. */
+/* The memory budget for decoded images (0: AU_IMAGE_CACHE_DEFAULT_BUDGET). */
+void au_docview_set_image_budget(AuDocView *dv, size_t bytes);
+/* A millisecond clock for decode timings (optional). */
+void au_docview_set_clock(AuDocView *dv, uint32_t (*now_ms)(void *ctx), void *ctx);
+/* Advances animated images to now_ms, invalidating what changes. Returns
+ * the milliseconds until the next frame is due (UINT32_MAX: none). */
+uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms);
+/* An animation in view is running: call au_docview_animate soon. */
+bool au_docview_animating(const AuDocView *dv);
+struct AuImageCacheStats;
+void au_docview_image_stats(const AuDocView *dv, struct AuImageCacheStats *s);
 
 /* ---- Scripts ----
  * Scripting is off by default: <script> is ignored and <noscript> shows.

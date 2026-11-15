@@ -7,7 +7,8 @@ draw characters the page's fonts lack. System fonts always come first.
 Each family's folder holds its licence. The fonts are reduced to what
 Aura's engine draws (TrueType outlines, cmap, metrics, the `kern` table):
 hinting, OpenType layout tables (GSUB, GPOS, GDEF) and glyph names are
-removed, and glyphs only GSUB could reach are dropped.
+removed, and glyphs only GSUB could reach are dropped. The colour emoji
+face keeps its colour tables (COLR, CPAL) and its GSUB ligatures.
 `tools/fonts-prepare.py` rebuilds every file here from the upstream
 downloads below (it needs fontTools; building Aura does not).
 
@@ -22,7 +23,8 @@ assets/fonts`; the paint tests fail when it is out of date.
 | Inter 4.1 | `inter` | 4 | 499,316 |
 | DejaVu Sans 2.37 | `dejavu` | 1 | 502,256 |
 | Noto Emoji 3.002 | `notoemoji` | 1 | 774,144 |
-| Total with licences and index |  |  | about 3.4 MB |
+| Twemoji Mozilla 0.7.0 (colour emoji) | `twemoji` | 1 | 1,171,292 |
+| Total with licences and index |  |  | about 4.6 MB |
 
 ## Aura Sans, Aura Serif, Aura Mono (from Liberation)
 
@@ -94,7 +96,41 @@ assets/fonts`; the paint tests fail when it is out of date.
   reduced as above. Without GSUB the ligature glyphs for ZWJ sequences,
   flags and keycaps are unreachable and dropped; Aura draws the
   components.
-- Use: monochrome emoji and pictographs.
+- Use: monochrome emoji and pictographs: characters asked for in text
+  presentation (U+FE0E, and pictographs that default to it), and emoji
+  newer than Twemoji Mozilla's (Emoji 14.0). It stays behind the colour
+  face in the emoji fallback list.
+
+## Twemoji Mozilla (colour emoji)
+
+- Source: https://github.com/mozilla/twemoji-colr, release v0.7.0,
+  `Twemoji.Mozilla.ttf`
+  (https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/Twemoji.Mozilla.ttf,
+  1,474,284 bytes, SHA-256
+  6d90152ee0d29e82fe2a87793af5aa4b7ad13e6538360889e141e81ed299ee8e), and
+  `LICENSE.md` of the same tag (SHA-256
+  64419edc28e9163204c3be73f835a8dfc34cd6c9b8f7d067bb685f119f839a99).
+- Licence: the emoji graphics are Twemoji, copyright Twitter, Inc and
+  other contributors, under Creative Commons Attribution 4.0
+  International (CC BY 4.0); the font build is copyright Mozilla
+  Foundation under the Apache License 2.0. `twemoji/LICENSE.md` holds
+  both; `twemoji/ATTRIBUTION.txt` gives the credit, the licence link and
+  the changes, as CC BY 4.0 requires. Keep both files with the font.
+- Files: `TwemojiMozilla.ttf` (1,171,292).
+- Changes: hinting, glyph names and the FFTM, gasp and GDEF tables are
+  removed; the COLR (version 0) and CPAL tables and the `ccmp` ligatures
+  of GSUB are kept. The graphics are unchanged.
+- Coverage: 1,418 code points (Emoji 14.0), with ZWJ sequences, flags,
+  keycaps, skin tones and tag sequences as GSUB ligatures.
+- Use: the first emoji fallback face: emoji presentation (by default or
+  with U+FE0F), and the `emoji` generic family.
+- Chosen over Noto Color Emoji's COLR version 1 build
+  (googlefonts/noto-emoji `Noto-COLRv1.ttf`, OFL): reduced the same way
+  that font is 4,966,972 bytes against 1,171,292; its gradients take about
+  2.6 times as long to rasterize as Twemoji's flat layers (host: 0.087 ms
+  against 0.033 ms per 32 px glyph); it covers 1,508 code points (newer
+  emoji) against 1,418. On a 1 GHz G4 with little memory, size and drawing
+  cost decide it.
 
 ## Considered and left out
 

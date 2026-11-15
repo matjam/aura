@@ -15,9 +15,11 @@ enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMen
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
-       FILE_QUIT = 9 };
-enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_PREFS = 9 };
-enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_TABS_TOP = 5, VIEW_TABS_LEFT, VIEW_DEBUG = 8 };
+       FILE_REOPEN_TAB, FILE_SAVE_AS = 10, FILE_QUIT = 12 };
+enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
+       EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
+enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
+       VIEW_TABS_LEFT, VIEW_DEBUG = 12 };
 enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS, DEBUG_TIMINGS };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
@@ -248,11 +250,6 @@ static void rebuild_windows(void)
 
 /* View Source works for documents that have bytes: files and network
  * pages, not generated about: pages or a source view itself. */
-static bool can_view_source(const char *url)
-{
-    return au_url_scheme_is(url, "file") || au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https");
-}
-
 void mac_adjust_menus(void)
 {
     if (menus_dirty) {
@@ -275,6 +272,16 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_CLOSE_WINDOW);
     else
         DisableItem(file, FILE_CLOSE_WINDOW);
+    if (au_browser_can_reopen(g_browser))
+        EnableItem(file, FILE_REOPEN_TAB);
+    else
+        DisableItem(file, FILE_REOPEN_TAB);
+    const char *src_data;
+    size_t src_len;
+    if (w && au_bw_page_source(w, &src_data, &src_len))
+        EnableItem(file, FILE_SAVE_AS);
+    else
+        DisableItem(file, FILE_SAVE_AS);
     /* Undo, Cut, Copy, Paste, Clear and Select All need a text field (or
      * a desk accessory, which takes them through SystemEdit). */
     WindowPtr fw = FrontWindow();
@@ -289,6 +296,22 @@ void mac_adjust_menus(void)
         else
             DisableItem(edit, i);
     }
+    /* In a page: Copy needs a selection, Select All a tab. */
+    if (!text && browser_front && t) {
+        if (au_bw_has_selection(w))
+            EnableItem(edit, EDIT_COPY);
+        EnableItem(edit, EDIT_SELECT_ALL);
+    }
+    if (t)
+        EnableItem(edit, EDIT_FIND);
+    else
+        DisableItem(edit, EDIT_FIND);
+    for (short i = EDIT_FIND_AGAIN; i <= EDIT_FIND_PREVIOUS; i++) {
+        if (t && g_browser->find_text)
+            EnableItem(edit, i);
+        else
+            DisableItem(edit, i);
+    }
     if (t && t->loading)
         EnableItem(view, VIEW_STOP);
     else
@@ -297,10 +320,18 @@ void mac_adjust_menus(void)
         EnableItem(view, VIEW_RELOAD);
     else
         DisableItem(view, VIEW_RELOAD);
-    if (t && can_view_source(au_page_url(t->page)))
+    if (w && au_bw_can_view_source(w))
         EnableItem(view, VIEW_SOURCE);
     else
         DisableItem(view, VIEW_SOURCE);
+    static const short zoom_items[3] = {VIEW_ZOOM_IN, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET};
+    static const int zoom_dirs[3] = {1, -1, 0};
+    for (int i = 0; i < 3; i++) {
+        if (w && au_bw_can_zoom(w, zoom_dirs[i]))
+            EnableItem(view, zoom_items[i]);
+        else
+            DisableItem(view, zoom_items[i]);
+    }
     CheckItem(view, VIEW_TABS_TOP, g_browser->prefs.tab_position == AU_TABS_TOP);
     CheckItem(view, VIEW_TABS_LEFT, g_browser->prefs.tab_position == AU_TABS_LEFT);
     if (t && au_nav_can_go(&t->nav, -1))
@@ -362,7 +393,7 @@ static void do_menu(long choice)
     switch (menu) {
     case kAppleMenu:
         if (item == 1) {
-            NoteAlert(128, NULL);
+            mac_about_box();
         } else {
             Str255 name;
             GetMenuItemText(GetMenuHandle(kAppleMenu), item, name);
@@ -401,12 +432,33 @@ static void do_menu(long choice)
                 close_window(FrontWindow());
             break;
         case FILE_CLOSE_WINDOW: close_window(FrontWindow()); break;
+        case FILE_REOPEN_TAB:
+            if (au_browser_can_reopen(g_browser)) {
+                if (!w)
+                    w = browserwin_model(browserwin_new("about:blank", NULL));
+                au_bw_reopen_closed_tab(w);
+            }
+            break;
+        case FILE_SAVE_AS:
+            if (w)
+                mac_save_page(w);
+            break;
         case FILE_QUIT: g_quitting = true; break;
         }
         break;
     case kEditMenu: {
         if (item == EDIT_PREFS) {
             prefswin_show();
+            break;
+        }
+        if (item == EDIT_FIND) {
+            if (b)
+                browserwin_find(b);
+            break;
+        }
+        if (item == EDIT_FIND_AGAIN || item == EDIT_FIND_PREVIOUS) {
+            if (w && !au_bw_find_again(w, item == EDIT_FIND_AGAIN))
+                SysBeep(1);
             break;
         }
         MacWin *m = mac_win_of(FrontWindow());
@@ -424,18 +476,16 @@ static void do_menu(long choice)
             if (w)
                 au_bw_stop(w);
             break;
-        case VIEW_SOURCE: {
-            AuTab *t = w ? au_bw_active_tab(w) : NULL;
-            if (t && can_view_source(au_page_url(t->page))) {
-                AuBuf u;
-                au_buf_init(&u);
-                au_buf_puts(&u, "view-source:");
-                au_buf_puts(&u, au_page_url(t->page));
-                au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
-                au_buf_free(&u);
-            }
+        case VIEW_SOURCE:
+            if (w)
+                au_bw_view_source(w);
             break;
-        }
+        case VIEW_ZOOM_IN:
+        case VIEW_ZOOM_OUT:
+        case VIEW_ZOOM_RESET:
+            if (w)
+                au_bw_zoom(w, item == VIEW_ZOOM_IN ? 1 : item == VIEW_ZOOM_OUT ? -1 : 0);
+            break;
         case VIEW_TABS_TOP:
         case VIEW_TABS_LEFT:
             g_browser->prefs.tab_position = item == VIEW_TABS_LEFT ? AU_TABS_LEFT : AU_TABS_TOP;
@@ -566,6 +616,41 @@ static pascal OSErr ae_open_docs(const AppleEvent *e, AppleEvent *reply, long re
     return noErr;
 }
 
+/* GURL ('GURL' 'GURL'): another application (through Internet Config,
+ * or a script) asks Aura to open a URL, the direct object as text. It
+ * opens in a new tab of the front window, or in a new window when the
+ * preference says so. */
+static pascal OSErr ae_get_url(const AppleEvent *e, AppleEvent *reply, long refcon)
+{
+    (void)reply, (void)refcon;
+    DescType type;
+    Size size = 0;
+    if (AESizeOfParam((AppleEvent *)e, keyDirectObject, &type, &size) != noErr || size <= 0 || size > 32767)
+        return errAEEventNotHandled;
+    char *buf = au_alloc((size_t)size + 1);
+    Size actual = 0;
+    OSErr err = AEGetParamPtr((AppleEvent *)e, keyDirectObject, typeChar, &type, buf, size, &actual);
+    if (err == noErr && actual > 0 && actual <= size) {
+        char *u = mac_roman_to_utf8(buf, (size_t)actual);
+        /* Trim the spaces and line breaks scripts leave around it. */
+        char *s = u;
+        while (*s == ' ' || *s == '\r' || *s == '\n' || *s == '\t')
+            s++;
+        size_t n = strlen(s);
+        while (n && (s[n - 1] == ' ' || s[n - 1] == '\r' || s[n - 1] == '\n' || s[n - 1] == '\t'))
+            s[--n] = 0;
+        if (*s) {
+            if (g_browser->prefs.external_new_window)
+                browserwin_new(s, NULL);
+            else
+                mac_open_url(s, true);
+        }
+        au_free(u);
+    }
+    au_free(buf);
+    return err == noErr ? noErr : errAEEventNotHandled;
+}
+
 static pascal OSErr ae_quit(const AppleEvent *e, AppleEvent *reply, long refcon)
 {
     (void)e, (void)reply, (void)refcon;
@@ -590,6 +675,8 @@ static void mouse_down(EventRecord *ev)
         break;
     case inDrag:
         DragWindow(w, ev->where, &qd.screenBits.bounds);
+        if (m && m->kind == WIN_BROWSER)
+            browserwin_moved((BrowserWin *)m);
         break;
     case inGrow: {
         Rect limits;
@@ -614,6 +701,8 @@ static void mouse_down(EventRecord *ev)
             ZoomWindow(w, part, true);
             if (m && m->grow)
                 m->grow(m);
+            if (m && m->kind == WIN_BROWSER)
+                browserwin_moved((BrowserWin *)m);
         }
         break;
     case inContent:
@@ -651,7 +740,25 @@ static void key_down(EventRecord *ev)
             close_window(FrontWindow());
             return;
         }
+        if (ch == '=')
+            ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();
+        /* MenuKey ignores Shift: Shift-Command-T is Reopen Closed Tab,
+         * Shift-Command-G Find Previous. */
+        if ((ch == 't' || ch == 'T') && (ev->modifiers & shiftKey)) {
+            if (au_browser_can_reopen(g_browser)) {
+                HiliteMenu(kFileMenu);
+                do_menu(((long)kFileMenu << 16) | FILE_REOPEN_TAB);
+            }
+            return;
+        }
+        if ((ch == 'g' || ch == 'G') && (ev->modifiers & shiftKey)) {
+            if (b && g_browser->find_text) {
+                HiliteMenu(kEditMenu);
+                do_menu(((long)kEditMenu << 16) | EDIT_FIND_PREVIOUS);
+            }
+            return;
+        }
         long choice = MenuKey(ch);
         if (choice >> 16)
             do_menu(choice);
@@ -751,6 +858,7 @@ int main(void)
     AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEPrintDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, NewAEEventHandlerUPP(ae_quit), 0, false);
+    AEInstallEventHandler('GURL', 'GURL', NewAEEventHandlerUPP(ae_get_url), 0, false);
 
     Handle mbar = GetNewMBar(128);
     if (!mbar)
@@ -765,6 +873,7 @@ int main(void)
         SetItemMark(view, VIEW_DEBUG, (CharParameter)kDebugMenu);
     }
     DrawMenuBar();
+    mac_context_init();
 
     SetCursor(*GetCursor(watchCursor));
     g_fonts = au_fontset_new();
@@ -772,13 +881,30 @@ int main(void)
     AuBrowserHost host;
     browserwin_host(&host);
     g_browser = au_browser_new(g_fonts, &host);
-    if (storage_init())
+    {
+        /* Selections use the highlight colour of the Appearance control
+         * panel. */
+        RGBColor hl = LMGetHiliteRGB();
+        g_browser->highlight = 0xFF000000u | ((uint32_t)(hl.red >> 8) << 16) | ((uint32_t)(hl.green >> 8) << 8) |
+                               (uint32_t)(hl.blue >> 8);
+    }
+    bool unclean = false;
+    if (storage_init()) {
         storage_load_all();
+        unclean = storage_begin_run();
+    }
     InitCursor();
 
+    /* The last tabs come back when the preference says so, or, after a
+     * crash, when the user says so. */
     AuSession session;
     bool restored = false;
-    if (g_browser->prefs.startup == AU_STARTUP_RESTORE && storage_session(&session)) {
+    bool have = (g_browser->prefs.startup == AU_STARTUP_RESTORE || unclean) && storage_session(&session);
+    if (have && g_browser->prefs.startup != AU_STARTUP_RESTORE && CautionAlert(133, NULL) != 1) {
+        au_session_free(&session);
+        have = false;
+    }
+    if (have) {
         for (int i = 0; i < session.nwindows; i++) {
             if (session.windows[i].ntabs) {
                 browserwin_new(NULL, &session.windows[i]);
@@ -807,6 +933,7 @@ int main(void)
     if (g_browser->prefs.clear_history_on_quit)
         au_history_clear(&g_browser->history);
     storage_save_changed(true);
+    storage_end_run();
     /* Dispose of the windows (their controls, GWorlds and TextEdit
      * records) and leave the Appearance Manager tidily. */
     WindowPtr w = FrontWindow();

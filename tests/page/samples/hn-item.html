@@ -1,0 +1,53 @@
+<html lang="en" op="news"><head><meta name="referrer" content="origin"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body  { font-family:Verdana, Geneva, sans-serif; font-size:10pt; color:#828282; }
+td    { font-family:Verdana, Geneva, sans-serif; font-size:10pt; color:#828282; }
+.admin td   { font-family:Verdana, Geneva, sans-serif; font-size:8.5pt; color:#000000; }
+.subtext td { font-family:Verdana, Geneva, sans-serif; font-size:  7pt; color:#828282; }
+input    { font-family:monospace; font-size:10pt; }
+a:link    { color:#000000; text-decoration:none; }
+a:visited { color:#828282; text-decoration:none; }
+.default { font-family:Verdana, Geneva, sans-serif; font-size: 10pt; color:#828282; }
+.title   { font-family:Verdana, Geneva, sans-serif; font-size: 10pt; color:#828282; overflow:hidden; }
+.subtext { font-family:Verdana, Geneva, sans-serif; font-size:  7pt; color:#828282; }
+.yclinks { font-family:Verdana, Geneva, sans-serif; font-size:  8pt; color:#828282; }
+.pagetop { font-family:Verdana, Geneva, sans-serif; font-size: 10pt; color:#222222; line-height:12px; }
+.comhead { font-family:Verdana, Geneva, sans-serif; font-size:  8pt; color:#828282; }
+.hnname  { margin-right: 5px; }
+#hnmain { min-width: 796px; }
+.title a { word-break: break-word; }
+.votearrow { width: 10px; height: 10px; border: 0px; margin: 3px 2px 6px; background: url("grayarrow.gif"), linear-gradient(#bbb, #999); background-size: 10px; background-repeat: no-repeat; }
+.votelinks.nosee div.votearrow.rotate180 { display: none; }
+.sitebit { font-size: 8pt; }
+.sitestr { color: #828282; }
+.rank { color: #828282; }
+.pagetop a:visited { color:#000000; }
+.morelink { color:#828282; }
+.spacer { height: 5px; }
+</style>
+<title>Sample News: Tables on old machines</title></head><body><center><table id="hnmain" border="0" cellpadding="0" cellspacing="0" width="85%" bgcolor="#f6f6ef">
+<tr><td bgcolor="#ff6600"><table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:2px"><tr><td style="width:18px;padding-right:4px"><a href="https://news.example"><span style="display:inline-block;width:18px;height:18px;border:1px solid white;background:#ff6600;color:white;font-weight:bold;text-align:center;line-height:18px">Y</span></a></td>
+<td style="line-height:12pt; height:10px;"><span class="pagetop"><b class="hnname"><a href="news">Sample News</a></b> <a href="newest">new</a> | <a href="front">past</a> | <a href="newcomments">comments</a></span></td><td style="text-align:right;padding-right:4px;"><span class="pagetop"><a href="login">login</a></span></td></tr></table></td></tr>
+<tr id="pagespace" title="Tables on old machines" style="height:10px"></tr><tr><td><table class="fatitem" border="0">
+<tr class="athing" id="1"><td align="right" valign="top" class="title"><span class="rank"></span></td><td valign="top" class="votelinks"><center><a href="vote?id=1&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="title"><span class="titleline"><a href="https://example.com/tables">How browsers lay out tables on old machines</a><span class="sitebit comhead"> (<a href="from?site=example.com"><span class="sitestr">example.com</span></a>)</span></span></td></tr><tr><td colspan="2"></td><td class="subtext"><span class="subline"><span class="score">212 points</span> by <a href="user?id=zed" class="hnuser">zed</a> <span class="age"><a href="item?id=1">6 hours ago</a></span> | <a href="item?id=1">7&nbsp;comments</a></span></td></tr>
+<tr style="height:10px"></tr><tr><td colspan="2"></td><td><form action="comment" method="post"><textarea name="text" rows="8" cols="80" wrap="virtual"></textarea><br><br><input type="submit" value="add comment"></form></td></tr>
+</table><br><br><table border="0" class="comment-tree">
+<tr class="athing comtr" id="c0"><td><table border="0"><tr><td class="ind" indent="0"><img src="s.gif" height="1" width="0"></td><td valign="top" class="votelinks"><center><a href="vote?id=c0&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=alice" class="hnuser">alice</a> <span class="age"><a href="item?id=c0">1 hours ago</a></span> <span class="navs"> | <a href="#c1" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">The trick with tables on old machines is caching the column widths. Measuring every cell twice is what made Netscape 4 so slow on long threads.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c0">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c1"><td><table border="0"><tr><td class="ind" indent="1"><img src="s.gif" height="1" width="40"></td><td valign="top" class="votelinks"><center><a href="vote?id=c1&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=bob" class="hnuser">bob</a> <span class="age"><a href="item?id=c1">2 hours ago</a></span> <span class="navs"> | <a href="#c2" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">Netscape 4 also re-laid out the whole table whenever an image without a size finished loading, which is why everyone put width and height on every spacer.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c1">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c2"><td><table border="0"><tr><td class="ind" indent="2"><img src="s.gif" height="1" width="80"></td><td valign="top" class="votelinks"><center><a href="vote?id=c2&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=carol" class="hnuser">carol</a> <span class="age"><a href="item?id=c2">3 hours ago</a></span> <span class="navs"> | <a href="#c3" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">Spacer GIFs! I had forgotten about those. One transparent pixel stretched to whatever width you needed.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c2">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c3"><td><table border="0"><tr><td class="ind" indent="3"><img src="s.gif" height="1" width="120"></td><td valign="top" class="votelinks"><center><a href="vote?id=c3&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=dave" class="hnuser">dave</a> <span class="age"><a href="item?id=c3">4 hours ago</a></span> <span class="navs"> | <a href="#c4" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">And nested tables five deep to get a two pixel border.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c3">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c4"><td><table border="0"><tr><td class="ind" indent="1"><img src="s.gif" height="1" width="40"></td><td valign="top" class="votelinks"><center><a href="vote?id=c4&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=erin" class="hnuser">erin</a> <span class="age"><a href="item?id=c4">5 hours ago</a></span> <span class="navs"> | <a href="#c5" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">Hacker News still renders its comment indentation with a spacer image in a table cell, forty pixels per level.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c4">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c5"><td><table border="0"><tr><td class="ind" indent="0"><img src="s.gif" height="1" width="0"></td><td valign="top" class="votelinks"><center><a href="vote?id=c5&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=frank" class="hnuser">frank</a> <span class="age"><a href="item?id=c5">6 hours ago</a></span> <span class="navs"> | <a href="#c6" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">Is there a reason the reply links are in a font tag inside a u tag?</span><div class="reply"><p><font size="1"><u><a href="reply?id=c5">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+<tr class="athing comtr" id="c6"><td><table border="0"><tr><td class="ind" indent="1"><img src="s.gif" height="1" width="40"></td><td valign="top" class="votelinks"><center><a href="vote?id=c6&amp;how=up"><div class="votearrow" title="upvote"></div></a></center></td><td class="default"><div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead"><a href="user?id=grace" class="hnuser">grace</a> <span class="age"><a href="item?id=c6">7 hours ago</a></span> <span class="navs"> | <a href="#c7" class="clicky">next</a> <a class="togg clicky" n="1" href="javascript:void(0)">[&ndash;]</a></span></span></div><br>
+<div class="comment"><span class="commtext c00">Nobody has touched that template since 2007, and it works in every browser.</span><div class="reply"><p><font size="1"><u><a href="reply?id=c6">reply</a></u></font></p></div></div></td></tr></table></td></tr>
+</table>
+<br><br></td></tr>
+<tr><td><img src="s.gif" height="10" width="0"><table width="100%" cellspacing="0" cellpadding="1"><tr><td bgcolor="#ff6600"></td></tr></table><br>
+<center><span class="yclinks"><a href="newsguidelines.html">Guidelines</a> | <a href="newsfaq.html">FAQ</a> | <a href="contact">Contact</a></span><br><br></center></td></tr>
+</table></center></body></html>

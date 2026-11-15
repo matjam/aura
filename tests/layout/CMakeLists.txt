@@ -1,6 +1,11 @@
 add_executable(test_layout test_layout.c)
 target_link_libraries(test_layout aura_engine m)
 
+# Text selection, range text and find (src/layout/selection.c).
+add_executable(test_selection test_selection.c)
+target_link_libraries(test_selection aura_engine m)
+add_test(NAME layout_selection COMMAND test_selection)
+
 # Mixed scripts, symbols and emoji with the bundled fonts.
 add_executable(test_layout_fonts test_fonts.c)
 target_link_libraries(test_layout_fonts aura_host_platform aura_engine m)

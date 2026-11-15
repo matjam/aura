@@ -487,6 +487,8 @@ typedef struct VCtx {
     float rdx, rdy; /* relative offset, cumulative */
     int valign;
     uint32_t frag;  /* its fragment on this line */
+    bool quirk;     /* the line height quirk: counts only once text of its own is on the line */
+    float qt, qb;   /* its extent, applied then */
 } VCtx;
 
 typedef struct LineState {
@@ -835,15 +837,31 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             line_w = l_min(line_w, avail);
     }
 
+    /* The line height calculation quirk (quirks and limited-quirks
+     * modes): an inline box with no vertical borders or padding, the
+     * root's strut included, takes part in the line height only when text
+     * (or a line break) of its own is on the line, as in Blink. A line of
+     * images is as tall as the images, and small text in a span is not
+     * held apart by the block's larger strut. Legacy table layouts
+     * (spacer images, font tags in cells) depend on it. */
+    bool lh_quirk = L->doc && L->doc->quirks != AU_QUIRKS_NONE;
+
     /* Vertical alignment. */
     VCtx stack[INLINE_MAX_DEPTH + 2];
     int sp = 0;
     vmetrics(L, &root->b, &stack[0]);
+    stack[0].quirk = lh_quirk;
     stack[0].bo = 0;
     stack[0].rdx = stack[0].rdy = 0;
     stack[0].valign = AU_VALIGN_BASELINE;
     float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
     float top = -(stack[0].a + half), bottom = stack[0].d + half;
+    if (lh_quirk) {
+        stack[0].qt = top;
+        stack[0].qb = bottom;
+        top = INFINITY;
+        bottom = -INFINITY;
+    }
     bool any_top_bottom = false;
     /* per-fragment temporary: baseline offset (from root baseline) and top/bottom flags */
     float *bo = au_alloc((nfr + 1) * sizeof(float) * 3);
@@ -861,6 +879,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
                 continue;
             VCtx *v = &stack[sp + 1];
             vmetrics(L, f->box, v);
+            v->quirk = false;
+            if (lh_quirk) {
+                const AuStyleSurround *qs = f->box->style->surr;
+                v->quirk = qs->border_width[0] == 0 && qs->border_width[2] == 0 &&
+                           l_len(&qs->padding[0], C->cw) == 0 && l_len(&qs->padding[2], C->cw) == 0;
+            }
             const AuStyleBox *bx = f->box->style->box;
             float hl = (v->lh - (v->a + v->d)) / 2;
             v->valign = bx->vertical_align;
@@ -899,12 +923,24 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             ext[j] = v->rdy;
             f->x += v->rdx;
             if (v->valign != AU_VALIGN_TOP && v->valign != AU_VALIGN_BOTTOM) {
-                top = l_min(top, v->bo - v->a - hl);
-                bottom = l_max(bottom, v->bo + v->d + hl);
+                if (v->quirk) {
+                    v->qt = v->bo - v->a - hl;
+                    v->qb = v->bo + v->d + hl;
+                } else {
+                    top = l_min(top, v->bo - v->a - hl);
+                    bottom = l_max(bottom, v->bo + v->d + hl);
+                }
+            } else {
+                v->quirk = false;
             }
             continue;
         }
         /* text, atomic, br: belong to P */
+        if (P->quirk && ((f->kind == FR_TEXT && f->len && !(f->flags & FRF_HIDDEN)) || f->kind == FR_BR)) {
+            top = l_min(top, P->qt);
+            bottom = l_max(bottom, P->qb);
+            P->quirk = false;
+        }
         bo[j] = P->bo;
         f->x += P->rdx;
         if (f->kind == FR_TEXT && f->box->style->inh->line_height.kind == AU_LEN_NORMAL &&
@@ -955,6 +991,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     /* Top and bottom aligned boxes taller than the line extend it, in
      * order: a top one below the baseline group, a bottom one above it
      * (as Blink and Gecko do). */
+    if (top > bottom)
+        top = bottom = 0; /* the quirk, and nothing on the line has height */
     for (uint32_t j = 0; any_top_bottom && j < nfr; j++) {
         float h = tbh[j] < 0 ? -tbh[j] : tbh[j];
         if (h <= bottom - top)

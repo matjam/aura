@@ -6,6 +6,9 @@
  *   prefswin.c    the Preferences window (Appearance controls)
  *   storage.c     files in the Preferences folder, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
+ *   aboutbox.c    the About box
+ *   contextmenu.c contextual menus (Contextual Menu Manager or pop-up)
+ *   internetconfig.c  helper applications, download folder, file mappings
  *
  * Every window Aura opens carries a MacWin (its refCon), whose function
  * pointers the event loop calls; that is how several kinds of window
@@ -17,6 +20,7 @@
 
 #include "appearance.h"
 #include "browser/browser.h"
+#include "browser/context.h"
 #include "browser/listview.h"
 #include "browser/url.h"
 
@@ -90,6 +94,10 @@ void browserwin_benchmark(BrowserWin *bw);
 /* Debug menu: the active page's load and layout times, a timed scroll
  * repaint, and free memory. */
 void browserwin_page_timings(BrowserWin *bw);
+/* The window was dragged: its position is kept for the session. */
+void browserwin_moved(BrowserWin *bw);
+/* Edit > Find: asks for text and finds it in the active page. */
+void browserwin_find(BrowserWin *bw);
 
 /* ---- listwin.c ---- */
 void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY or WIN_DOWNLOADS */
@@ -106,11 +114,52 @@ void storage_load_all(void);
  * recent (quitting). */
 void storage_save_changed(bool force);
 bool storage_session(AuSession *s);
+/* Marks Aura as running; returns true when the last run did not quit
+ * normally (its mark was still there). */
+bool storage_begin_run(void);
+/* Removes the mark: call after the last save at quit. */
+void storage_end_run(void);
 AuTime mac_now(void);
 bool mac_read_file_url(const char *url, char **data, size_t *len);
 /* Asks for a file with the standard Open dialog; returns a file: URL to
  * free with au_free, or NULL. */
 char *mac_choose_file_url(void);
+/* File > Save Page As: asks for a file (StandardPutFile) and writes the
+ * active page's source to it, type TEXT, creator AURA. */
+void mac_save_page(AuBrowserWindow *w);
+
+/* ---- aboutbox.c ---- */
+void mac_about_box(void);
+
+/* ---- contextmenu.c ---- */
+/* Finds the Contextual Menu Manager (call once at start-up). */
+void mac_context_init(void);
+/* Whether a mouse-down asks for a contextual menu (Control-click). */
+bool mac_context_click(const EventRecord *ev);
+/* Shows the menu at a global point; returns the chosen item's index in
+ * m->items, or -1. */
+int mac_context_select(const AuContextMenu *m, Point global);
+
+/* ---- internetconfig.c ---- */
+bool mac_ic_available(void);
+/* Opens url with its Internet Config helper (mailto:, ftp:, ...). */
+bool mac_ic_launch_url(const char *url);
+/* Whether a helper application is set for scheme (lower case, no ':'). */
+bool mac_ic_has_helper(const char *scheme);
+/* Aura as the http helper; making it the http, https and file helper.
+ * Only the Preferences button calls the second. */
+bool mac_ic_is_default_browser(void);
+bool mac_ic_make_default_browser(void);
+/* The user's download folder (Internet Config's DownloadFolder). */
+bool mac_ic_download_folder(FSSpec *out);
+/* File type, creator and MIME type for a file name, from Internet
+ * Config's file mappings (for downloads). */
+typedef struct MacFileMap {
+    OSType type, creator;
+    char mime[64];
+    bool binary; /* transfer as binary */
+} MacFileMap;
+bool mac_ic_map_filename(const char *name, MacFileMap *out);
 
 /* ---- text.c ---- */
 /* UTF-8 to a Pascal string in Mac Roman ('?' for characters it lacks),
@@ -121,6 +170,9 @@ char *mac_roman_to_utf8(const char *s, size_t n);
 /* UTF-8 to Mac Roman bytes (au_alloc'd, NUL-terminated); *n gets the
  * length. */
 char *mac_utf8_to_roman(const char *s, size_t *n);
+/* Puts UTF-8 text on the clipboard as TEXT (Mac Roman, transliterated,
+ * carriage return lines) and 'utxt' (UTF-16). False when it fails. */
+bool mac_put_scrap(const char *utf8, size_t n);
 /* Sets a menu item's text exactly (no metacharacter parsing). */
 void mac_set_item_text(MenuHandle m, short item, const char *utf8);
 void mac_append_item(MenuHandle m, const char *utf8);

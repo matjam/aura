@@ -38,15 +38,20 @@ what you need to build, test and change Aura.
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
+| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO), the per-document image cache |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
 | `src/js` | JavaScript: the QuickJS-ng runtime wrapper, the event loop, the DOM and window bindings (C natives plus the `prelude*.js` files) |
-| `src/platform/host` | host tools: headless render to PNG, tree dumps |
-| `src/platform/macos9` | the Mac OS 9 application |
+| `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
+| `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders |
+| `src/net` | HTTP/1.1 client, TLS glue, cookies, HSTS, PSL, cache, sniffing, encodings, the resource loader |
+| `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts |
+| `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
-| `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`); `third_party/README.md` records sources and licences |
+| `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
+| `assets/net` | `aura-roots.bin`, the root certificate store |
 
 `CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
 every `tests/*/CMakeLists.txt`, so a new source file or test area needs no
@@ -198,12 +203,101 @@ that differs from the current one only by its fragment scrolls instead
 of loading, and back and forward restore the scroll position each entry
 was left at. To plug in networking, register a fetcher per scheme with
 `au_browser_set_fetcher` (see `AuPageFetcher` in `page.h`); without one,
-http and https show a placeholder after a simulated load. Image sizes
-come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
-yet. The font preferences reach the engine as the generic families of
-the font set and a user style sheet (`html { font-size }`, monospace
-size). `src/css` now has `au_css_resolver_set_font_prefs` (default
-sizes, text zoom, minimum size); the shell does not call it yet.
+http and https show a placeholder after a simulated load. Images are
+decoded by `src/image` (see Images); `au_page_idle` advances animations.
+The font preferences reach the engine as the generic families of
+the font set and, for the default and monospace sizes, the minimum size
+and the tab's text zoom, `au_docview_set_font_prefs` (which passes them
+to `au_css_resolver_set_font_prefs`). Text zoom is per tab
+(`au_bw_zoom`, View > Zoom In, Zoom Out, Actual Size); the last zoom
+chosen for a site (host, or scheme for `file:`) is kept in the
+`zoom.sites` preference and applied when a tab opens that site again.
+
+Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
+a navigation or a tab switch the page has the focus, unless the user is
+typing in the address field; a tab showing a fresh blank page puts it in
+the field. The model reports the move with `AU_CHANGED_FOCUS_PAGE` or
+`AU_CHANGED_FOCUS_FIELD`.
+
+A horizontal scroll bar appears along the bottom of the page area while
+the active page is wider than it (`au_chrome_layout_hscroll`); the two
+bars meet at a blank corner square above the grow box, and Shift turns
+a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
+
+To change Save Page As, see `au_page_source` (the page keeps the main
+document's bytes as they arrived, until the next load), `au_bw_save_name`
+(the suggested file name) and `mac_save_page` in `storage.c`, which asks
+with `StandardPutFile` and writes the bytes unchanged as a TEXT file with
+creator AURA. Open Location selects the whole address again when the
+field already has the focus, and a paste into the field turns line
+breaks into spaces.
+
+Back and Forward: a Command-click opens that entry in a new tab behind
+(`au_bw_go_new_tab`); holding the button for half a second (30 ticks)
+shows a pop-up of the entries that way (`au_bw_history_items`,
+`history_popup` in `browserwin.c`). File > Reopen Closed Tab
+(Shift-Command-T, mapped in `key_down` because MenuKey ignores Shift)
+brings back the last of up to `AU_MAX_CLOSED_TABS` closed tabs with
+their history and scroll position. While a page loads, the status bar
+shows its progress in the middle (`AuChromeState.progress_text`). Each
+window's position goes into the session (`au_bw_set_position` after a
+drag or zoom) and a restored window returns there when its title bar
+is still on screen.
+
+To change the About box or about:licences, edit the credits table in
+`src/browser/credits.c` (the version, the tagline, and one entry per
+bundled font or third-party library with its licence); `aboutbox.c`
+and `build_licences` in `page_doc.c` both read it. The table has a
+commented slot for the BearSSL and QuickJS-ng entries: add them there
+when those libraries join the build. The About box (DLOG 202) draws
+icon family 128 at 64 pixels with `PlotIconID`; its empty `dctb` gives
+it a colour port, without which the icon draws in black and white.
+
+To change how Aura works with Internet Config, edit
+`src/platform/macos9/internetconfig.c`. Mac OS 9.2.2 has the Internet
+Config component ('PREF', 'ICAp') but no InternetConfigLib shared
+library (GetSharedLibrary fails with -2804 in the stock guest), so
+Retro68's InternetConfigLib stub cannot be used: Aura opens the
+component with `OpenDefaultComponent` and makes each call through
+`CallComponentUPP` with a parameter block, checking every selector with
+`kComponentCanDoSelect` first. `internetconfig.h` declares what the
+Multiversal Interfaces lack (the IC records, in 68K alignment, and the
+Component Manager calls). Addresses Aura does not open itself
+(`au_browser_opens_url`) reach the shell through
+`AuBrowserHost.open_external`, which calls `ICLaunchURL`. The GURL Apple
+event opens its URL in a new tab, or a new window with
+`links.external_new_window`. Preferences > General has the Make Aura
+the Default Browser button, the only place Aura writes Internet Config
+(the http, https and file helpers). `mac_ic_download_folder` and
+`mac_ic_map_filename` are there for downloads. To send a GURL in the
+guest, run `open location "URL"` in Script Editor.
+
+To change what a contextual menu offers, edit `src/browser/context.c`:
+`au_bw_context_menu` builds the items for a window point (link, image,
+page, address field or tab, using `au_page_hit_info` for the page) and
+`au_bw_context_command` runs the commands the model can; the shell does
+the rest (clipboard, field editing, a new window). On Mac OS 9,
+`contextmenu.c` finds the Contextual Menu Manager in the ContextualMenu
+shared library at run time (the Multiversal Interfaces do not declare
+it) and falls back to `PopUpMenuSelect`; Control-click opens the menu,
+and so does holding the button still on the page for 45 ticks.
+
+To change text selection or find, work in `src/layout/selection.c`
+(positions, words, paragraphs, the text of a range, find, and the
+painted highlight; `draw.c` calls `l_select_paint_frag` for each text
+fragment while a selection is set) and in the selection section of
+`page_doc.c`, which turns mouse events into selections: a drag selects
+characters, a double click a word, a triple click a paragraph, Shift
+extends, and a drag that selects does not follow the link it started
+on. `au_page_find` searches the page's text with simple case folding
+(ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
+selection, wrapping. The Mac OS 9 shell counts clicks within the
+double-click time, copies with `mac_put_scrap` (TEXT in Mac Roman with
+transliteration and carriage returns, plus 'utxt'), asks for the text
+with the Find dialog (DLOG 201), maps Shift-Command-G to Find Previous
+itself (MenuKey ignores Shift), and paints selections in the
+Appearance highlight colour (`LMGetHiliteRGB`, passed in
+`AuBrowser.highlight`).
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
@@ -223,7 +317,15 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+`Session` and `Downloads`, and `Running` while it runs. The session
+(windows, tabs, back and forward lists, scroll positions) is saved
+3 seconds after tabs change and every 30 seconds while only scroll
+positions do (`session_gen`, `scroll_gen`). `Running` is made at start
+and deleted after the last save at quit; when Aura finds it at start,
+the last run crashed or ran out of memory, and Aura offers to restore
+the session (ALRT 133) unless the startup preference restores it
+anyway. To test this in the guest, press Command-Option-M (the
+out-of-memory test) and launch Aura again. Each is written to a `.tmp` file and swapped
 in; a file that fails to parse is renamed with ` (damaged)` before a new
 one is written. To start with clean state in the guest, delete that
 folder.
@@ -272,13 +374,14 @@ the system lacks.
   metric-compatible with Arial, Times New Roman and Courier New, renamed
   because Liberation's Reserved Font Name forbids a subset under its own
   name), Inter (modern interface fonts), DejaVu Sans (the last-resort
-  text face) and Noto Emoji (monochrome emoji), about 3.4 MB.
-  `assets/fonts/README.md` records sources, versions, licences, sizes
-  and what was left out.
+  text face), Noto Emoji (monochrome emoji) and Twemoji Mozilla (colour
+  emoji, COLR version 0), about 4.6 MB. `assets/fonts/README.md`
+  records sources, versions, licences, sizes, the choice of Twemoji over
+  Noto Color Emoji, and what was left out.
 - **To add a font**, put its folder (licence included) in
-  `assets/fonts`; reduce it with `tools/fonts-prepare.py` or pyftsubset
-  to TrueType outlines (no CFF, no variable fonts, no colour tables),
-  keeping file and folder names to 31 characters; regenerate the index
+  `assets/fonts`; reduce it with `tools/fonts-prepare.py` (one family:
+  `--only=FAMILY`) or pyftsubset to TrueType outlines (no CFF), keeping
+  file and folder names to 31 characters; regenerate the index
   with `build/host/src/platform/host/aura-host font-index assets/fonts`;
   add its sources to the README; and name it in the alias table or the
   fallback lists if it should stand in for other families. The paint
@@ -304,20 +407,220 @@ the system lacks.
   (DejaVu Sans first, then system faces with wide coverage, including
   CJK faces when a machine has them), the emoji list, then any face
   already loaded. Emoji presentation (by default or with U+FE0F) tries
-  the emoji list first. Default-ignorable code points draw nothing, so
-  U+FE0F is dropped and ZWJ sequences draw their components; skin tone
-  modifiers are dropped. Marks are placed over their base by their ink
-  boxes (the fonts carry no GPOS for Aura to read). Fallback faces keep
-  the requested weight and style, synthesized when missing. A per-list
-  cache and a per-set cache keyed by code point and style keep this
-  fast; a face is loaded only when it is tried.
+  a colour font the page names, then the emoji list (Twemoji Mozilla
+  first); text presentation (U+FE0E) takes the monochrome Noto Emoji.
+  An emoji sequence (ZWJ sequences, flags, keycaps, skin tones, tag
+  sequences) is one cluster: the face's GSUB ligature draws it, and
+  without one its components are drawn. Default-ignorable code points
+  draw nothing. Marks are placed over their base by their ink boxes (the
+  fonts carry no GPOS for Aura to read). Fallback faces keep the
+  requested weight and style, synthesized when missing. A per-list cache
+  and a per-set cache keyed by code point and style keep this fast; a
+  face is loaded only when it is tried.
+- **Variable fonts** (`fontvar.c`): fvar, avar (versions 1 and 2), gvar
+  (with IUP, composite offsets and phantom points), HVAR, MVAR and STAT
+  names. `au_font_face_instance` makes an instance at axis values;
+  `AuFontSet` matching makes instances for the requested weight (wght),
+  italic (ital, else slnt), and, through `au_fontlist_new_style`,
+  stretch (wdth), optical size (opsz) and `font-variation-settings`.
+  Instances are cached per set entry (at most 64). A weight the font
+  cannot reach is synthesized as before. Glyph boxes (`au_font_glyph_box`)
+  are the default instance's.
+- **Colour glyphs** (`colr.c`): CPAL palette 0, COLR version 0 layers
+  and version 1 paint graphs (solid, linear, radial and sweep gradients,
+  transforms, composite modes), with limits on depth (32), paints
+  visited (4096) and cycles. Colour glyphs go in the glyph cache as
+  premultiplied pixels under the same byte limit, keyed with the text
+  colour only when they use it.
+- **GSUB** (`gsub.c`): lookup types 1 (single), 4 (ligature) and 7
+  (extension) of the features ccmp, locl, rlig, liga and clig, for the
+  DFLT, else latn, script. Fallback uses it for emoji sequences only;
+  Latin text is not shaped.
+- **Web fonts.** `au_font_decode` (`woff.c`) turns WOFF 1.0 and WOFF2
+  (transformed glyf, loca and hmtx; collections) into sfnt bytes and
+  refuses CFF-flavoured fonts. `src/page/webfont.c` loads `@font-face`
+  rules for a document view into a font set layered over the platform
+  set (`au_fontset_new_layered`, `au_fontset_add_web`), fetching only
+  faces whose family the styled document uses for text in their
+  `unicode-range`, and lays the document out again when one arrives
+  (font-display: swap). The faces go with the document.
+  `tests/page/samples/webfonts.html` shows a variable WOFF2 font at
+  several weights and a WOFF face limited by `unicode-range`.
+- **Test fonts.** `tests/paint/fonts` holds small subsets of Inter
+  Variable, Open Sans variable, Twemoji Mozilla and Noto Color Emoji
+  (COLR version 1), WOFF and WOFF2 versions, a font with every COLR
+  paint format, and static instances made by fontTools' instancer as
+  references. To rebuild them, run `tools/test-fonts.py fetch`, then
+  `tools/test-fonts.py make` (fontTools and the brotli command needed;
+  building Aura needs neither); `tools/test-fonts.py refs` writes full
+  fonts for `paint_fontvar_full`, which skips without them. To fuzz the
+  font parsers for longer, run the sanitizer build's `fuzz_font
+  ITERATIONS SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*`
+  and `fuzz_webfont ITERATIONS SEED SECONDS`. `test_fontvar DIR --bench`,
+  `test_colr DIR FONTS --bench` and `test_woff DIR --bench FILE` time
+  varied glyphs, colour glyphs and decoding.
 - **Line height.** With `line-height: normal`, a line holding fallback
   glyphs grows to the fallback face's ascent and descent (each with half
   its line gap) where they exceed the primary's, as Blink does; a fixed
   line height ignores fallback faces.
-- **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
-  joining, Indic reordering or bidirectional text; colour emoji; a CJK
-  font pack (see the fonts README for what one needs).
+- **Not done:** OpenType shaping of text (GPOS, and GSUB beyond emoji
+  sequences), so no ligatures, kerning beyond `kern`, Arabic joining,
+  Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
+  sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
+  default instance); a CJK font pack (see the fonts README for what one
+  needs). CSS does not parse `font-variation-settings`,
+  `font-optical-sizing` or `font-tech()`, layout passes only weight and
+  style to the font list, and the CSS parser loses `unicode-range`
+  tokens (webfont.c reads them from the sheet text).
+
+## Images
+
+The decoders in `src/image` parse hostile data on a machine without
+memory protection. Every length comes from the file and is checked
+before use; every size computation is checked for overflow; dimensions
+are capped at 32768 and source pixels at 64 million (`AuImageOptions`);
+the decoded canvas never exceeds `max_bytes` (16 MB by default), and a
+larger image decodes at 1/2, 1/4 and so on down to 1/256, or fails.
+Keep it that way: a change to a decoder needs a vector, a truncation
+test and a fuzz run under the sanitizers.
+
+- **To decode bytes**, create an `AuImageDecoder` with
+  `au_image_decoder_new` and call `au_image_decode` with each chunk as
+  it arrives (`image.h`). The size is known as soon as the header
+  arrives (`au_image_info`), rows fill in as they decode
+  (`au_image_take_dirty`), and each animation frame returns
+  `AU_IMAGE_FRAME`. Output is a premultiplied `AuSurface`; its `opaque`
+  flag lets painting copy instead of blend. `au_image_decode_buffer`
+  decodes a whole file, `au_image_probe` reads only the header, and
+  `au_image_decode_favicon` picks and scales an icon.
+- **Formats.** One file per format: `png.c` (all colour types and
+  depths, Adam7, APNG, CRCs checked), `jpeg.c` (baseline and
+  progressive Huffman, CMYK and YCCK, restarts, EXIF orientation,
+  reduced decoding by IDCT scaling), `gif.c`, `webp.c` with
+  `webp_vp8.c` and `webp_vp8l.c` (lossy, lossless, alpha, animation),
+  `bmp.c` (BMP and ICO). `image.c` holds what they share: sniffing, the
+  limits, row reduction, orientation and frame composition. Each codec
+  is a state machine that consumes every byte it is given, so chunk
+  boundaries never matter.
+- **The cache** (`cache.h`) holds one document's images by URL. Layout
+  gets the size from the header; pixels are decoded only when an image
+  is used in a paint (`au_image_entry_use`), at the smallest power-of-two
+  reduction that still covers the displayed size. The budget comes from
+  the memory cache preference (`au_docview_set_image_budget`, 4 MB by
+  default in the browser, 8 MB otherwise). Over the budget, images not
+  used in the last paint lose their pixels, oldest first, and keep their
+  compressed bytes to decode again. One image may use at most half the
+  budget (at least 1 MB, at most 16 MB). A still image whose bytes are
+  larger than its pixels keeps only the pixels. Animations decode frame
+  by frame from the compressed bytes, keep one canvas, and pause when
+  not painted; delays of 10 ms or less play at 100 ms, as browsers do.
+- **The document view** (`src/page/docimages.c`) decodes images within
+  a viewport above or below the visible area before they scroll in,
+  invalidates only the rectangles of images that changed, and passes
+  pixels to layout through the image callback. A pending image is an
+  empty box; a failed one shows its alt text.
+- **To try a file**, run `build/host/src/platform/host/aura-host image
+  FILE -o out.png`. It prints the format, size, decode time and peak
+  memory; `--scale N`, `--target WxH`, `--chunk N` (feed N bytes at a
+  time), `--frames`, `--repeat N` and `--favicon SIZE` change what it
+  does. `tests/page/samples/images.html` shows every format; its images
+  are drawn by `tests/page/make-sample-images.py`.
+- **Tests.** `tests/image` has one test per format with committed
+  vectors and references made by the host's own decoders (the
+  generator scripts and their headers say how). PngSuite and the libwebp
+  test images are fetched into `build/` by
+  `tests/image/fetch-pngsuite.sh` and a `git clone` of
+  `https://chromium.googlesource.com/webm/libwebp-test-data` into
+  `build/webp-testdata`; their tests skip without them. To fuzz longer,
+  build with the sanitizers and run `build/asan/tests/image/fuzz_image
+  ITERATIONS SEED tests/image/vectors/*/*`.
+- **Not done:** arithmetic-coded, lossless and 12-bit JPEG; colour
+  management (gamma, ICC profiles and colour spaces are ignored);
+  object-fit, border-image and list-style-image in layout. At 256
+  colours images band; nothing dithers them.
+- Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
+  `FInfo` collide with Toolbox types. Prefix types with `Au`.
+
+## Networking
+
+The network stack is portable engine code that never touches a socket
+itself. `src/net` talks to the platform through `AuNetOps`
+(`src/platform/platform.h`): DNS, non-blocking TCP, a monotonic and a
+wall clock, and an entropy source. The host implements it with BSD
+sockets (`src/platform/host/net_host.c`); Mac OS 9 with Open Transport
+(`src/platform/macos9/net_ot.c`). There is no global state: one `AuNet`
+per application holds the connection pool, TLS configuration and the
+policy stores the embedder attaches.
+
+- **To fetch with the engine**, create the platform's ops, then
+  `au_net_new(ops)`, attach a root store (`au_roots_load` on
+  `assets/net/aura-roots.bin`), and optionally a cookie jar, HSTS store
+  and cache (`au_net_set_cookie_jar`, `au_net_set_hsts`,
+  `au_net_set_cache`). Start requests with `au_http_start` and call
+  `au_net_pump` on every pass of the event loop; callbacks run only from
+  the pump. `au_net_apply_prefs` copies the browser preferences in.
+- **To load pages and resources**, use the loader (`src/net/loader.h`):
+  it adds mixed content blocking, MIME sniffing with `nosniff`, encoding
+  detection and conversion to UTF-8, `data:` URLs, HTTPS-first, and the
+  download hand-off (`au_net_download_*`, shaped for `AuTransferSource`).
+  `src/net/page_fetcher.c` adapts it to the browser's `AuPageFetcher`:
+  `au_net_page_fetcher_interface` fills one, and the shell registers it
+  for `http` and `https` with `au_browser_set_fetcher`.
+- **To persist state**, serialize the stores with
+  `au_cookie_jar_serialize`, `au_hsts_serialize` and the cache's
+  `AuCacheStorage`, and parse them back at start. `aura-host fetch` keeps
+  `cookies` and `hsts` in `$AURA_PROFILE` (default `~/.aura-host`).
+- **To try a URL on the host**, run `build/host/src/platform/host/aura-host
+  fetch -v URL`. It prints the response headers, the TLS version, cipher
+  and certificate chain, and timings. `aura-host render URL -w 800 -o
+  out.png` loads a page and its resources over the network and renders
+  it. Set `AURA_FAKE_TIME` (seconds since 1970) to test the clock check.
+- **To try the stack on Mac OS 9**, build with `./build.sh ppc` and push
+  `build/ppc/src/platform/macos9/nettest/NetTest.bin` with a copy of
+  `assets/net/aura-roots.bin` named `aura-roots` (`guest-push.sh` would
+  decode a `.bin` file as MacBinary). NetTest times the crypto
+  primitives, a DNS lookup and a TCP connection, then fetches a URL list
+  twice and prints status, cipher and timings; a `NetTest URLs` file
+  beside it replaces the list. It also writes `NetTest Log` in the Aura
+  preferences folder.
+
+TLS is BearSSL 0.6 with the 32-bit implementations: TLS 1.2 only, ECDHE
+with AES-GCM or ChaCha20-Poly1305, SNI, ALPN `http/1.1`, session
+resumption, and certificate errors reported with the chain
+(`au_http_cert_info`). TLS 1.3 is not available in BearSSL; every
+acceptance site still offers TLS 1.2.
+
+All network work runs on the main task. Open Transport is called only
+from the main task in asynchronous mode; its notifiers run at deferred
+task time and only record which completion arrived, and the next pump
+acts on it. Do not call Open Transport or the engine from an MP task or
+a Time Manager task: Apple's MP documentation (TN2006) lists Open
+Transport among the services that are not MP-safe, and the Toolbox is
+not reentrant.
+
+The Mac OS 9 entropy pool (`src/platform/macos9/entropy.c`) gathers
+loop timing jitter, user input, the mouse, clocks and free memory into a
+SHA-256 pool and refuses output until it has credited 128 bits, so the
+first TLS handshake waits for it (about 15 s from a cold start with no
+user input, less with a seed file or input). The credit rules are in the
+file's header. A seed file, `Random Seed` in the Aura preferences folder,
+carries state between runs and is rewritten at start, when the pool
+first fills, and at exit. The shell calls `au_mac_entropy_event` for
+every event, `au_mac_entropy_idle` once per loop pass, and
+`au_ot_net_idle` with them.
+
+Open Transport has no headers in the Multiversal Interfaces, and Aura has
+no Apple glue library. `src/platform/macos9/ot.h` declares the calls
+used, and `net_ot.c` calls the exported `Priv` routines with its own
+client record, as Apple's glue did.
+
+On the test machine, QEMU sets the guest clock to UTC while the guest's
+Map control panel says UTC-7, so the wall time Aura computes there is
+7 hours ahead. Certificates are still within their dates.
+
+Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
+cookies, HSTS and the cache are kept in memory until the shell saves
+them.
 
 ## JavaScript
 

@@ -252,8 +252,11 @@ static void test_window_cap(Vector *vs, int n)
         r = br_decode(dict, 22, v->br, v->br_len, v->orig_len, NULL, NULL);
         CHECK(r.st == AU_CODEC_ERROR && r.out_len == 0, "%s with a 22-bit cap: st %d", v->name, (int)r.st);
         free(r.out);
+        /* The default cap is 24 bits since the ring buffer grows with the
+         * output (the brotli tool writes lgwin 24 streams by default). */
         r = br_decode(dict, 0, v->br, v->br_len, v->orig_len, NULL, NULL);
-        CHECK(r.st == AU_CODEC_ERROR, "%s with the default cap: st %d", v->name, (int)r.st);
+        CHECK(r.st == AU_CODEC_DONE && r.out_len == v->orig_len, "%s with the default cap: st %d", v->name,
+              (int)r.st);
         free(r.out);
         r = br_decode(dict, 24, v->br, v->br_len, v->orig_len, NULL, NULL);
         CHECK(r.st == AU_CODEC_DONE && r.out_len == v->orig_len, "%s with a 24-bit cap: st %d", v->name, (int)r.st);
@@ -315,7 +318,7 @@ static void test_dict(void)
 {
     const uint8_t *p = au_brotli_dict_bytes(dict);
     CHECK(memcmp(p, "timedownlifeleftback", 20) == 0, "dictionary start");
-    CHECK(au_crc32(0, p, AU_BROTLI_DICT_SIZE) == 0x5136CB04u, "dictionary CRC");
+    CHECK(au_codec_crc32(0, p, AU_BROTLI_DICT_SIZE) == 0x5136CB04u, "dictionary CRC");
 }
 
 static double now(void) { return (double)clock() / CLOCKS_PER_SEC; }

@@ -51,10 +51,12 @@ enum {
     LI_FLOW,      /* block container: block children or an inline formatting context */
     LI_FLEX,
     LI_GRID,      /* placeholder: laid out as LI_FLOW */
-    LI_TABLE,     /* placeholder table layout (table.c) */
+    LI_TABLE,     /* a table (LTableBox, table.c); also holds its captions */
     LI_TABLE_ROW_GROUP,
     LI_TABLE_ROW,
-    LI_TABLE_CELL,
+    LI_TABLE_CELL, /* LCellBox; a block container laid out by its table */
+    LI_TABLE_COLUMN,       /* <col>: no content, geometry set by the table */
+    LI_TABLE_COLUMN_GROUP, /* <colgroup>: holds columns only */
     LI_REPLACED,  /* no children: images, form controls */
     LI_COUNT
 };
@@ -204,6 +206,82 @@ typedef struct LBlock {
     LReplaced *rep;     /* replaced content */
 } LBlock;
 
+/* ---- Tables (table.c) ----
+ *
+ * The box tree is fixed up as CSS 2.1 17.2.1 asks (boxtree.c): every cell
+ * is in a row, every row in a row group or directly in a table, every
+ * table-internal box in a table. The table box acts as the table wrapper
+ * box too: its margins and positioning are the wrapper's, and it holds the
+ * captions above and below the table grid; the grid's border box (where
+ * the table's border and background are painted) is grid_y..grid_y+grid_h
+ * inside it.
+ *
+ * The slot grid is built once per box tree, in the tree arena. Layout
+ * results that the painter and hit testing read (column and row
+ * positions, collapsed borders) are heap arrays owned by the table box. */
+typedef struct LCellBox {
+    LBlock k;
+    uint32_t row, rowspan; /* first row; rows spanned (clamped to its row group) */
+    uint16_t col, colspan; /* first column; columns spanned (clamped to the grid) */
+    float nat_h;           /* content height from the last content layout */
+    float shift;           /* vertical-align offset applied to the content */
+    float base1;           /* the content height the measuring layout used (-1: indefinite) */
+    bool stale;            /* the measuring layout used cached table heights: lay out again */
+} LCellBox;
+
+/* A table's height for one set of constraints, from a layout in the
+ * current layout generation (see l_table_layout). */
+typedef struct LTableMeasure {
+    float w, h, cbh, res, baseline;
+    uint32_t gen;
+} LTableMeasure;
+
+typedef struct LTableRow {
+    LBlock *box;      /* the row */
+    LBlock *group;    /* its row group, or NULL for rows directly in the table */
+    uint32_t first, n; /* cells starting in this row: grid cells[first .. first + n) */
+    uint8_t flags;    /* LTR_* */
+} LTableRow;
+enum { LTR_COLLAPSED = 1, LTR_HEADFOOT = 2 };
+
+typedef struct LTableCol {
+    LBlock *col, *group; /* the column and column group boxes, or NULL */
+} LTableCol;
+
+typedef struct LTableGrid {
+    LCellBox **cells;  /* in row order, then column order */
+    LTableRow *rows;   /* in display order (header group first, footer group last) */
+    LTableCol *cols;
+    uint8_t *colflags; /* LTR_COLLAPSED */
+    uint32_t ncells, nrows, ncols;
+} LTableGrid;
+
+/* A collapsed border segment on a grid line. */
+typedef struct LTableEdge {
+    float w;
+    uint32_t color; /* CSS colour */
+    uint8_t style;  /* AU_BORDER_STYLE_* */
+    uint8_t prec;   /* origin precedence: 6 cell .. 1 table, 0 none */
+} LTableEdge;
+
+typedef struct LTableBox {
+    LBlock k;
+    LTableGrid *g;        /* built with the box tree (tree arena) */
+    float grid_y, grid_h; /* border box of the table grid inside the box */
+    /* Column constraints (valid with LF_INTRINSIC_OK) and the last layout. */
+    float *cmin, *cmax, *cpct, *colx, *colw, *rowy, *rowh;
+    uint8_t *cfl;
+    uint32_t ncap; /* capacity of the column and row arrays */
+    /* Collapsed borders: (nrows + 1) x ncols horizontal and nrows x
+     * (ncols + 1) vertical segments, valid while edges_ok. */
+    LTableEdge *hedge, *vedge;
+    float cbw[4]; /* the table's collapsed border widths (half the outer edges) */
+    bool edges_ok;
+    bool fixed;   /* the last layout used the fixed table layout */
+    LTableMeasure mc[2]; /* heights for the last two constraint sets */
+    uint8_t mc_next;
+} LTableBox;
+
 static inline bool lb_is_block(const LBox *b) { return b->kind == LK_BLOCK; }
 static inline LBlock *lb_block(LBox *b) { return (LBlock *)b; }
 static inline LText *lb_text(LBox *b) { return (LText *)b; }
@@ -264,6 +342,19 @@ struct AuLayout {
     bool need_paint;
     bool need_restack;
     bool full_layout; /* the viewport changed: no subtree may be reused */
+    /* Table measuring: gen counts layout passes of the document; measuring
+     * is nonzero inside a cell's measuring layout, where nested tables may
+     * answer from their measure cache; measure_hits counts those answers. */
+    uint32_t gen;
+    int measuring;
+    uint32_t measure_hits;
+    /* The text selection painted (selection.c); nodes not referenced. */
+    struct {
+        AuNode *n0, *n1;
+        uint32_t o0, o1;
+        uint32_t color;
+        bool on;
+    } sel;
 };
 
 /* ---- Style access with anonymous boxes ---- */
@@ -396,6 +487,28 @@ void l_flex_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 /* table.c */
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *c);
 void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
+/* Builds the slot grid of table t (after the box tree fixup). */
+void l_table_build_grid(AuLayout *L, LTableBox *t);
+/* The table a table-internal box belongs to, or NULL. */
+LTableBox *l_table_of(const LBox *b);
+bool l_table_collapsed(const LTableBox *t);
+/* Edges of table-internal boxes: margins, padding and borders as the
+ * table models give them (l_resolve_box_edges calls it). */
+void l_table_box_edges(LBlock *b, float cb_w);
+/* Invalidates the cached collapsed borders and column constraints. */
+static inline void l_table_forget(LBox *b)
+{
+    if (b->kind == LK_BLOCK && b->inner == LI_TABLE)
+        ((LTableBox *)b)->edges_ok = false;
+}
+void l_table_free(LTableBox *t);
+/* A cell with no in-flow content (empty-cells). */
+bool l_cell_empty(const LBlock *k);
+static inline bool l_is_caption(const LBox *c)
+{
+    return c->kind == LK_BLOCK && !(c->flags & LF_ANON) &&
+           au_display_inner(c->style->box->display) == AU_DISPLAY_INNER_TABLE_CAPTION;
+}
 
 /* stack.c / draw.c / hit.c */
 void l_build_stacking(AuLayout *L);
@@ -404,6 +517,9 @@ void l_paint(AuLayout *L, AuCanvas *c, LArea dirty);
  * matrix in its border-box coordinates; false when it has none (draw.c). */
 bool l_transform_matrix(const LBlock *b, AuMatrix *out);
 bool l_hit(AuLayout *L, float x, float y, AuHitResult *r);
+/* selection.c: paints the selection highlight behind text fragment f of
+ * IFC root content at x (the fragment's left, canvas) and y (its top). */
+void l_select_paint_frag(AuLayout *L, AuCanvas *c, const LFrag *f, LFont *font, float x, float y);
 void l_dump(AuLayout *L, AuBuf *out);
 float l_sticky_offset(AuLayout *L, LBlock *b, float *dx);
 

@@ -127,6 +127,7 @@ struct AuBrotli {
     uint8_t *ring;
     uint32_t rsize, rmask, widx, unflushed;
     uint32_t hist; /* bytes of history, up to window */
+    uint32_t written; /* bytes written while the ring is still growing (capped at window) */
     uint8_t p1, p2;
 
     int is_last;
@@ -771,9 +772,25 @@ static void flush(AuBrotli *b)
     }
 }
 
-/* Free ring space, flushing first if there is none. */
+/* Free ring space. While the ring is smaller than the window it grows:
+ * it is filled linearly (widx equals the bytes written, modulo the size
+ * once full) and doubled when full, so memory follows the output size up
+ * to the window. Once it is window-sized it wraps, flushing first when
+ * there is no room. The caller must reload b->ring after this call. */
 static inline uint32_t ring_room(AuBrotli *b)
 {
+    if (b->rsize < b->window) {
+        if (b->written >= b->rsize) {
+            uint32_t ns = b->rsize * 2;
+            if (ns > b->window)
+                ns = b->window;
+            b->ring = au_realloc(b->ring, ns);
+            b->widx = b->rsize; /* the linear end (widx had wrapped to 0) */
+            b->rsize = ns;
+            b->rmask = ns - 1;
+        }
+        return b->rsize - b->written;
+    }
     if (b->unflushed == b->rsize)
         flush(b);
     return b->rsize - b->unflushed;
@@ -784,6 +801,7 @@ static inline void ring_advance(AuBrotli *b, uint32_t n)
     b->widx = (b->widx + n) & b->rmask;
     b->unflushed += n;
     b->hist = b->window - b->hist > n ? b->hist + n : b->window;
+    b->written = b->window - b->written > n ? b->written + n : b->window;
 }
 
 /* Refreshes the last two bytes after a copy, for literal contexts. */
@@ -802,7 +820,8 @@ static void ensure_ring(AuBrotli *b, bool last)
     uint32_t size;
     if (b->ring)
         return;
-    size = b->window;
+    /* Start small and grow with the output (ring_room). */
+    size = b->window < 65536 ? b->window : 65536;
     if (last) {
         size = 64;
         while (size < b->mlen && size < b->window)
@@ -882,6 +901,7 @@ static void after_copy(AuBrotli *b)
  * out (the state is then saved; the next call resumes). */
 static bool decode_literals(AuBrotli *b)
 {
+    uint32_t room = ring_room(b); /* may grow the ring: before loading it */
     uint32_t val = b->val, nbits = b->nbits;
     const uint8_t *in = b->next_in;
     size_t avail = b->avail_in;
@@ -896,8 +916,8 @@ static bool decode_literals(AuBrotli *b)
 
     if (n > b->blk[0].count)
         n = b->blk[0].count;
-    if (n > b->rsize - b->unflushed)
-        n = b->rsize - b->unflushed;
+    if (n > room)
+        n = room;
     for (k = 0; k < n; k++) {
         const HEnt *t = lt + loff[map[lut[p1] | lut[256 + p2]]];
         HEnt e;
@@ -934,6 +954,7 @@ out:
     b->widx = widx;
     b->unflushed += k;
     b->hist = b->window - b->hist > k ? b->hist + k : b->window;
+    b->written = b->window - b->written > k ? b->written + k : b->window;
     b->p1 = (uint8_t)p1;
     b->p2 = (uint8_t)p2;
     b->blk[0].count -= k;
@@ -1305,7 +1326,7 @@ static int decode(AuBrotli *b)
                         return r;
                     set_lit_type(b);
                 }
-                if (b->unflushed == b->rsize && !ring_room(b))
+                if (!ring_room(b))
                     return R_NEED_OUT;
                 if (!decode_literals(b))
                     return R_NEED_IN;

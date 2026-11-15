@@ -54,6 +54,7 @@ typedef struct AuSurface {
     int width, height;
     int stride; /* pixels from one row to the next */
     bool owned; /* pixels belong to the surface */
+    bool opaque; /* every pixel has alpha 255 (decoded images): drawing may skip blending */
 } AuSurface;
 
 /* A new surface, cleared to transparent. */

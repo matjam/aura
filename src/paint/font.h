@@ -27,6 +27,24 @@
 
 /* ---- Faces ---- */
 
+/* Variable fonts (TrueType flavour: fvar, avar, gvar, HVAR, MVAR). A
+ * variable face is registered once; an instance is a face of its own
+ * (au_font_face_instance) whose outlines, advances and metrics come out
+ * varied. At most AU_FONT_MAX_AXES axes are used; a font with more is
+ * drawn at its default instance. */
+#define AU_FONT_MAX_AXES 16
+
+typedef struct AuFontAxis {
+    uint32_t tag;          /* 'wght', 'wdth', 'opsz', 'ital', 'slnt', ... */
+    float min, def, max;   /* user coordinates */
+    uint16_t name_id;
+    bool hidden;
+} AuFontAxis;
+
+/* The variation data shared by a variable face and its instances
+ * (reference counted; fontvar.c). */
+typedef struct AuFontVar AuFontVar;
+
 typedef struct AuFontFace {
     const uint8_t *data; /* the whole file (a .ttc holds several faces) */
     uint32_t len;
@@ -36,6 +54,8 @@ typedef struct AuFontFace {
     uint32_t cmap, cmap_len, head, head_len, hhea, hhea_len, hmtx, hmtx_len, maxp, maxp_len;
     uint32_t loca, loca_len, glyf, glyf_len, kern, kern_len, os2, os2_len, name, name_len;
     uint32_t post, post_len, cff, cff_len;
+    uint32_t fvar, fvar_len, avar, avar_len, gvar, gvar_len, hvar, hvar_len, mvar, mvar_len;
+    uint32_t stat, stat_len, colr, colr_len, cpal, cpal_len, gsub, gsub_len;
 
     uint16_t units_per_em, num_glyphs, num_hmetrics;
     int16_t loca_format; /* 0 short, 1 long */
@@ -58,6 +78,16 @@ typedef struct AuFontFace {
     uint16_t weight; /* OS/2 usWeightClass, 400 when absent */
     bool italic;
     uint8_t synth; /* AU_FONT_SYNTH_*: styles drawn by Aura, not the font */
+    uint8_t metric_src; /* where ascender etc. came from: 0 hhea, 1 OS/2 typo, 2 OS/2 win (for MVAR) */
+    bool color;   /* has COLR and CPAL: glyphs may draw in colour */
+
+    /* Variations: var is NULL for a static face. coords are the normalized
+     * coordinates (F2Dot14, after avar) of each axis; all zero is the
+     * default instance. varied is true when any coordinate is not zero. */
+    AuFontVar *var;
+    int16_t coords[AU_FONT_MAX_AXES];
+    bool varied;
+    struct AuFontCache *cache; /* lazily built per-face caches */
 
     char family[64];   /* typographic family (name 16), else family (1) */
     char subfamily[64];
@@ -72,6 +102,24 @@ int au_font_face_count(const void *data, size_t len);
 AuFontFace *au_font_face_new(const void *data, size_t len, int index);
 void au_font_face_free(AuFontFace *f);
 
+/* Web font containers (woff.c). au_font_sniff names a file's format by
+ * its first bytes. au_font_decode turns WOFF 1.0, WOFF2 (collections
+ * included) or a plain sfnt into sfnt bytes the functions above load, in
+ * a new au_alloc'd buffer of at most max_out bytes. CFF-flavoured fonts
+ * give AU_FONT_UNSUPPORTED; corrupt data, sizes that disagree with the
+ * data, or output over max_out give AU_FONT_BAD. Table checksums in the
+ * output are zero. */
+typedef enum {
+    AU_FONT_FORMAT_UNKNOWN,
+    AU_FONT_FORMAT_SFNT,  /* TrueType or a collection */
+    AU_FONT_FORMAT_CFF,   /* OpenType with CFF outlines: not drawn */
+    AU_FONT_FORMAT_WOFF,
+    AU_FONT_FORMAT_WOFF2
+} AuFontFormat;
+typedef enum { AU_FONT_OK, AU_FONT_BAD, AU_FONT_UNSUPPORTED } AuFontStatus;
+AuFontFormat au_font_sniff(const void *data, size_t len);
+AuFontStatus au_font_decode(const void *data, size_t len, size_t max_out, uint8_t **out, size_t *out_len);
+
 /* Synthesized styles, for a family that lacks a bold or italic face (as
  * browsers do): bold strikes each outline twice, offset to the right by
  * 1/24 of the em at 9px down to 1/32 at 36px and up (Skia's fake bold
@@ -82,6 +130,36 @@ enum { AU_FONT_SYNTH_BOLD = 1, AU_FONT_SYNTH_ITALIC = 2 };
  * in the glyph cache; italic and weight say what it draws). Free it with
  * au_font_face_free before f's data goes. */
 AuFontFace *au_font_face_synthesize(const AuFontFace *f, unsigned synth);
+
+#define AU_FONT_TAG(a, b, c, d) \
+    (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
+
+/* The axes of a variable face: their count (0 for a static face) and the
+ * range of axis i. */
+int au_font_axis_count(const AuFontFace *f);
+const AuFontAxis *au_font_axis(const AuFontFace *f, int i);
+/* The index of the axis with the tag, or -1. */
+int au_font_axis_find(const AuFontFace *f, uint32_t tag);
+/* The normalized coordinate (F2Dot14, through avar) of a user value on
+ * axis i, clamped to the axis range. */
+int au_font_normalize(const AuFontFace *f, int axis, float value);
+/* Named instances (fvar): the count, and the name ("Bold", from the name
+ * table) and user coordinates (one per axis) of instance i. */
+int au_font_named_instance_count(const AuFontFace *f);
+bool au_font_named_instance(const AuFontFace *f, int i, char *name, size_t cap, float *coords);
+
+/* A face that draws f at other axis positions: n (tag, user value) pairs;
+ * axes not named keep f's coordinates, unknown tags are ignored. Its
+ * outlines, advances and metrics (MVAR) are varied, its id is its own,
+ * its weight and italic say what it draws, and its subfamily names the
+ * matching named instance when there is one. For a static face it is a
+ * plain copy. Free it with au_font_face_free before f's data goes (it
+ * shares f's variation data by reference, so f itself may go first). */
+typedef struct AuFontVariation {
+    uint32_t tag;
+    float value;
+} AuFontVariation;
+AuFontFace *au_font_face_instance(const AuFontFace *f, const AuFontVariation *v, size_t n);
 
 /* The glyph for a Unicode code point; 0 (.notdef) when missing. */
 uint16_t au_font_glyph(const AuFontFace *f, uint32_t cp);
@@ -193,12 +271,46 @@ typedef struct AuFontSet AuFontSet;
 typedef bool (*AuFontLoader)(void *ctx, const void **data, size_t *len);
 
 /* Entry flags. */
-enum { AU_FONT_BUNDLED = 1 }; /* from Aura's Fonts folder, not the system */
+enum {
+    AU_FONT_BUNDLED = 1, /* from Aura's Fonts folder, not the system */
+    AU_FONT_WEB = 2      /* from a page's @font-face */
+};
 
 AuFontSet *au_fontset_new(void);
+/* A set layered over parent (a document's web fonts over the platform's
+ * fonts): a family is looked up in the set's own faces first, then in
+ * parent's; generic family preferences come from parent unless set here.
+ * parent must outlive the set and is not freed with it. */
+AuFontSet *au_fontset_new_layered(AuFontSet *parent);
 /* Frees the set and its faces (not the font data, which the platform
- * owns). */
+ * owns, except web faces' data, which the set owns). */
 void au_fontset_free(AuFontSet *s);
+
+/* A web font face (@font-face): sfnt data the set takes ownership of
+ * (au_alloc'd; freed with the set, or at once when it is not a usable
+ * font), registered under family for weights wmin..wmax (the descriptor's
+ * range; a variable font's wght axis is clamped to it) and the given
+ * style. ranges holds nranges (first, last) code point pairs from
+ * unicode-range (NULL: all); the face is used only for those characters.
+ * Returns false when the data is not a font the engine draws. */
+bool au_fontset_add_web(AuFontSet *s, void *data, size_t len, const char *family, int wmin, int wmax, bool italic,
+                        const uint32_t *ranges, size_t nranges);
+
+/* What a match asks for beyond the family list. weight is 1..1000;
+ * stretch is the CSS font-stretch percentage (0: normal); size is the
+ * font size in CSS px for optical sizing (0: none, as with
+ * font-optical-sizing: none); settings are font-variation-settings, applied
+ * last. A variable face takes these as axis positions (wght, wdth,
+ * ital or slnt, opsz) instead of having them synthesized. */
+typedef struct AuFontStyle {
+    int weight;
+    bool italic;
+    float stretch;
+    float size;
+    const AuFontVariation *settings;
+    size_t nsettings;
+} AuFontStyle;
+AuFontFace *au_fontset_match_style(AuFontSet *s, const char *families, const AuFontStyle *st);
 /* Registers every face in a font file, reading family, weight and style
  * from the font. Returns the number added. data must outlive the set. */
 int au_fontset_add_data(AuFontSet *s, const void *data, size_t len);
@@ -265,6 +377,9 @@ const char *au_font_emoji_fallbacks(void);
  * Faces load only when they are tried. */
 typedef struct AuFontList AuFontList;
 AuFontList *au_fontlist_new(AuFontSet *s, const char *const *families, size_t n, int weight, bool italic);
+/* The same with a full style (stretch, optical size, variation settings;
+ * the settings are copied). */
+AuFontList *au_fontlist_new_style(AuFontSet *s, const char *const *families, size_t n, const AuFontStyle *st);
 /* The same from a CSS font-family value. */
 AuFontList *au_fontlist_parse(AuFontSet *s, const char *families, int weight, bool italic);
 void au_fontlist_free(AuFontList *l);

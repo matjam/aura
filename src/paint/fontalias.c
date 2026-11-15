@@ -23,7 +23,9 @@
 
 #define SANS_MODERN "Inter, Aura Sans"
 #define MONO_MODERN "Menlo, Monaco, DejaVu Sans Mono, Andale Mono, Courier New, Aura Mono"
-#define EMOJI "Noto Emoji"
+/* Colour emoji first; the monochrome face covers text presentation
+ * (U+FE0E) and what the colour face lacks. */
+#define EMOJI "Twemoji Mozilla, Noto Emoji"
 
 /* The CSS generic families. */
 static const AuFontAlias generics[] = {
@@ -122,7 +124,8 @@ static const AuFontAlias rows[] = {
     {"Segoe UI Symbol", -1, "DejaVu Sans, " EMOJI},
     {"Noto Color Emoji", -1, EMOJI},
     {"Android Emoji", -1, EMOJI},
-    {"Twemoji Mozilla", -1, EMOJI},
+    {"Twemoji Mozilla", -1, "Noto Emoji"},
+    {"Twemoji", -1, EMOJI},
     {"EmojiOne Color", -1, EMOJI},
 };
 
