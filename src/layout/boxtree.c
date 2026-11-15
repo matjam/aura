@@ -564,6 +564,26 @@ static void resolve_url(AuLayout *L, const char *url, char *out, size_t cap)
     }
 }
 
+bool l_style_contains_fixed(const AuStyle *s)
+{
+    const AuStyleRare *r = s->rare;
+    if (r->transform || r->translate || r->rotate || r->scale || r->filter || r->backdrop_filter ||
+        r->perspective.kind == AU_LEN_PX || (r->contain & (AU_CONTAIN_LAYOUT | AU_CONTAIN_PAINT)))
+        return true;
+    if (r->will_change) {
+        uint32_t n;
+        const AuCssValue *it = l_items(&r->will_change->value, &n);
+        for (uint32_t i = 0; i < n; i++) {
+            const char *name = it[i].type == AU_CSSV_IDENT ? it[i].u.str : NULL;
+            if (name && (!strcmp(name, "transform") || !strcmp(name, "perspective") || !strcmp(name, "filter") ||
+                         !strcmp(name, "translate") || !strcmp(name, "rotate") || !strcmp(name, "scale") ||
+                         !strcmp(name, "backdrop-filter") || !strcmp(name, "contain")))
+                return true;
+        }
+    }
+    return false;
+}
+
 int l_image_refresh(AuLayout *L, LReplaced *rep)
 {
     if (!rep->src)
@@ -1292,6 +1312,14 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
         b->flags |= LF_RELPOS;
     else if (bx->position == AU_POSITION_STICKY)
         b->flags |= LF_STICKY;
+    /* A box with a transform, perspective, a filter or layout or paint
+     * containment is the containing block of its absolutely positioned
+     * and fixed descendants (CSS Transforms 1 section 3, Transforms 2,
+     * Filter Effects 1 section 5, Containment 1 sections 3.3 and 3.4,
+     * will-change for those properties). Inline boxes are not
+     * transformable. */
+    if (b->kind == LK_BLOCK && l_style_contains_fixed(s))
+        b->flags |= LF_TRANSFORM;
     if (s->inh->visibility != AU_VISIBILITY_VISIBLE)
         b->flags |= LF_HIDDEN;
     if (au_display_list_item(d))

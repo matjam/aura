@@ -476,6 +476,8 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy);
 void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark);
 void l_apply_relative(LBlock *b, float cb_w, float cb_h);
 LBlock *l_geom_parent(LBox *b);
+/* The style makes its box the containing block of fixed descendants. */
+bool l_style_contains_fixed(const AuStyle *s);
 /* Asks the loader about rep's image again. Returns 0 when nothing
  * changed, 1 when only its pixels did, 2 when its size or presence did. */
 int l_image_refresh(AuLayout *L, LReplaced *rep);

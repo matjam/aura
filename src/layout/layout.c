@@ -1373,6 +1373,7 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
         if (x->content != y->content || x->counter_reset != y->counter_reset ||
             x->counter_increment != y->counter_increment || x->counter_set != y->counter_set ||
             (x->transform == NULL) != (y->transform == NULL) || (x->opacity < 1) != (y->opacity < 1) ||
+            l_style_contains_fixed(a) != l_style_contains_fixed(b) ||
             x->line_clamp != y->line_clamp || x->contain != y->contain)
             return 3;
         if (x->transform != y->transform || x->box_shadow != y->box_shadow ||
