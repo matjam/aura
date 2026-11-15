@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>A proof of work in a worker while the page stays responsive</title>
+<!-- page args: --real-time -->
+<script src="../harness.js"></script>
+</head>
+<body>
+<p id="out">working</p>
+<script>
+const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+async function prove(mode, difficulty) {
+    const w = new Worker('res/pow_worker.js');
+    let ticks = 0;
+    const iv = setInterval(() => { ticks++; document.getElementById('out').textContent = mode + ' ' + ticks; }, 5);
+    const t0 = performance.now();
+    const r = await new Promise((resolve, reject) => {
+        w.onmessage = (e) => resolve(e.data);
+        w.onerror = (e) => reject(new Error(e.message));
+        w.postMessage({ data: 'aura-proof-of-work-', difficulty, mode });
+    });
+    const ms = performance.now() - t0;
+    clearInterval(iv);
+    w.terminate();
+    /* the page checks the answer with its own crypto.subtle */
+    const check = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('aura-proof-of-work-' + r.nonce)));
+    assert.equal(check, r.hash);
+    assert.ok(r.hash.startsWith('0'.repeat(difficulty)));
+    console.log('proof of work (' + mode + '): nonce ' + r.nonce + ' in ' + Math.round(ms) + ' ms, ' + ticks + ' page timer ticks');
+    return { ms, ticks, nonce: r.nonce };
+}
+promise_test('a SHA-256 loop in a worker: page timers keep firing', async () => {
+    /* 37,000 hashes or so in one handler that never returns to the event loop */
+    const r = await prove('js', 4);
+    assert.ok(r.nonce > 1000, 'the search took many hashes');
+    /* a 5 ms interval while the worker computes: at least one tick for
+     * every 50 ms, far below what a responsive page gets and far above
+     * the zero of a page that waits for the worker */
+    assert.ok(r.ticks >= Math.max(3, r.ms / 50), r.ticks + ' ticks in ' + Math.round(r.ms) + ' ms');
+});
+promise_test('the same search with crypto.subtle.digest', async () => {
+    const r = await prove('subtle', 3);
+    assert.ok(r.ticks >= 1);
+});
+</script>
+</body>
+</html>

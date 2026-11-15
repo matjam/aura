@@ -1,6 +1,7 @@
 /* Message digests (see digest.h). */
 #include "digest.h"
 #include "../core/hash.h"
+#include "tls_platform.h"
 
 #include <psa/crypto.h>
 #include <string.h>
@@ -44,6 +45,10 @@ bool au_digest_parts(AuDigestAlg alg, const void *const *parts, const size_t *le
                          : alg == AU_DIGEST_SHA512 ? PSA_ALG_SHA_512 : 0;
     if (!pa)
         return false;
+    /* The library's allocator hooks. This call also makes a program that
+     * links the digests without TLS pull in tls_platform.c, which holds
+     * the entropy function the library's archive refers back to. */
+    au_tls_platform_init();
     psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
     if (psa_hash_setup(&op, pa) != PSA_SUCCESS)
         return false;
