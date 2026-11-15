@@ -97,8 +97,13 @@ int au_host_render_main(int argc, char **argv)
     /* Deliver resources until nothing is pending (images are requested
      * during layout, so update between rounds). */
     t0 = now_ms();
+    double t_first = 0, t_last_update = 0;
     for (int round = 0; round < 20; round++) {
+        double tu = now_ms();
         au_docview_update(dv);
+        t_last_update = now_ms() - tu;
+        if (round == 0)
+            t_first = t_last_update;
         if (!au_host_loader_pump(loader, dv))
             break;
     }
@@ -152,8 +157,10 @@ int au_host_render_main(int argc, char **argv)
         AuLayoutStats st;
         au_layout_stats(L, &st);
         printf("%s: %dx%d (document %dx%d)\n", out, w, ph, cw, ch);
-        printf("  fonts %.1f ms, parse %.2f ms, resources %.2f ms, style+layout %.2f ms, layout only %.2f ms\n",
-               t_fonts, t_parse, t_res, t_layout, t_relayout);
+        printf("  fonts %.1f ms, parse %.2f ms, resources (with updates) %.2f ms\n", t_fonts, t_parse, t_res);
+        printf("  first style+layout %.2f ms, last style+layout after sheets %.2f ms, box rebuild+layout %.2f ms, "
+               "relayout %.2f ms\n",
+               t_first, t_last_update, t_layout, t_relayout);
         printf("  paint full %.2f ms (cold glyphs), %.2f ms (warm); 600px view %.2f ms\n", t_paint, t_paint2,
                t_paint_view);
         printf("  boxes %u (blocks %u, inlines %u, texts %u), lines %u, fragments %u\n", st.boxes, st.blocks,

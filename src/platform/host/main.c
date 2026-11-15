@@ -29,7 +29,9 @@ static int usage(void)
     fprintf(stderr,
             "usage: aura-host scene [-o out.png] [-w W] [-h H] [-s scroll] [--font F]... [--no-system-fonts]\n"
             "       aura-host fonts [--font F]...\n"
-            "       aura-host bench [--font F]...\n");
+            "       aura-host bench [--font F]...\n"
+            "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
+            "       aura-host dump page.html -w W\n");
     return 2;
 }
 
