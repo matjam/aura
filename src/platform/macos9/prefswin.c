@@ -1,6 +1,7 @@
 /* The Preferences window: Appearance Manager controls in a tab control,
  * one pane per section (General, Fonts, Content, Privacy and Security,
- * Network, Downloads). Changes apply on OK; the tab position applies as
+ * Network, Downloads, Blocking; the last is mostly in prefs_blocking.c).
+ * Changes apply on OK; the tab position applies as
  * soon as it is clicked (Cancel puts it back), and the network settings
  * reach the network stack through mac_net_prefs_changed. Settings whose
  * subsystems do not exist yet (trackers, decoding downloads) are stored,
@@ -10,13 +11,14 @@
  * Controls are created in code with Appearance procIDs and embedded in a
  * user pane per tab, which is shown or hidden as the tab changes. */
 #include "mac.h"
+#include "blocking_mac.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { kW = 560, kH = 330 }; /* fits a 640 by 480 screen */
-enum { NPANES = 6 };
+enum { kW = 560, kH = 392 }; /* fits a 640 by 480 screen */
+enum { NPANES = 7 };
 enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
 
 /* Field ids: one per control whose value is a preference or an action. */
@@ -30,6 +32,7 @@ typedef enum {
     F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE, F_SHOW_COOKIES,
     F_HTTP_HOST, F_HTTP_PORT, F_HTTPS_HOST, F_HTTPS_PORT, F_UA, F_MEM_CACHE, F_DISK_CACHE,
     F_DL_FOLDER, F_DECODE,
+    F_BL_URLS, F_BL_ALLOW, F_BL_DENY,
     F_OK, F_CANCEL, F_TAB,
     F_COUNT
 } Field;
@@ -267,7 +270,6 @@ static void build(PrefsWin *p)
     check(p, 3, F_GPC, 290, y, 240, "Send Global Privacy Control");
     y += 22;
     check(p, 3, F_HTTPS_FIRST, L, y, 240, "HTTPS-first mode");
-    check(p, 3, F_TRACKERS, 290, y, 240, "Block trackers and ads");
     y += 22;
     check(p, 3, F_WARN_APPS, L, y, 300, "Warn before downloading applications");
     y += 30;
@@ -344,6 +346,20 @@ static void build(PrefsWin *p)
     y += 30;
     small_label(p, 5, L, y, R - L, 30,
                 "Warning before downloading applications is under Privacy and Security.");
+
+    /* Blocking: the switch and the fields here, the lists in
+     * prefs_blocking.c (rows of 18 from y 68, then the update row). */
+    check(p, 6, F_TRACKERS, L, 46, 400, "Block ads and trackers with these lists");
+    prefs_blocking_build(p->base.win, p->panes[6], 68);
+    y = 230;
+    label(p, 6, L, y, 110, "More lists:");
+    edit(p, 6, F_BL_URLS, 144, y, R - 144);
+    y += 40;
+    label(p, 6, L, y, 110, "Always allow:");
+    edit(p, 6, F_BL_ALLOW, 144, y, R - 144);
+    y += 26;
+    label(p, 6, L, y, 110, "Always block:");
+    edit(p, 6, F_BL_DENY, 144, y, R - 144);
 }
 
 /* ---- Values ---- */
@@ -433,6 +449,10 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     set_num(p->field[F_DISK_CACHE], pr->disk_cache_kb);
     set_text(p->field[F_DL_FOLDER], pr->download_folder);
     SetControlValue(p->field[F_DECODE], pr->decode_downloads);
+    set_text(p->field[F_BL_URLS], pr->block_custom);
+    set_text(p->field[F_BL_ALLOW], pr->block_allow);
+    set_text(p->field[F_BL_DENY], pr->block_deny);
+    prefs_blocking_load(pr);
 }
 
 static void store_str(char **dst, ControlHandle c)
@@ -491,6 +511,12 @@ static void store(PrefsWin *p, AuPrefs *pr)
     pr->disk_cache_kb = clampi(get_num(p->field[F_DISK_CACHE], pr->disk_cache_kb), 0, 1 << 22);
     store_str(&pr->download_folder, p->field[F_DL_FOLDER]);
     pr->decode_downloads = GetControlValue(p->field[F_DECODE]) != 0;
+    char *urls = get_text(p->field[F_BL_URLS]), *allow = get_text(p->field[F_BL_ALLOW]),
+         *deny = get_text(p->field[F_BL_DENY]);
+    prefs_blocking_store(pr, urls, allow, deny);
+    au_free(urls);
+    au_free(allow);
+    au_free(deny);
 }
 
 /* ---- Window ---- */
@@ -612,9 +638,12 @@ static void close_prefs(PrefsWin *p, bool ok)
         store(p, pr);
         au_browser_prefs_changed(g_browser);
         mac_net_prefs_changed();
-    } else if (pr->tab_position != p->orig_tabs) {
-        pr->tab_position = p->orig_tabs;
-        au_browser_prefs_changed(g_browser);
+    } else {
+        prefs_blocking_cancel(pr);
+        if (pr->tab_position != p->orig_tabs) {
+            pr->tab_position = p->orig_tabs;
+            au_browser_prefs_changed(g_browser);
+        }
     }
     p->base.close(&p->base);
 }
@@ -622,6 +651,7 @@ static void close_prefs(PrefsWin *p, bool ok)
 static void pw_close(MacWin *mw)
 {
     PrefsWin *p = (PrefsWin *)mw;
+    prefs_blocking_close();
     DisposeWindow(mw->win);
     static const short menus[] = {M_STARTUP, M_COOKIES, M_SERIF, M_SANS, M_MONO};
     for (size_t i = 0; i < sizeof menus / sizeof menus[0]; i++) {
@@ -739,9 +769,15 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         au_browser_release_documents(g_browser); /* the documents kept for Back and Forward */
         break;
     case F_SHOW_COOKIES: listwin_show(WIN_COOKIES); break;
+    case F_TRACKERS:
+        /* At once, like the list checkboxes, so their status lines follow. */
+        pr->block_trackers = GetControlValue(p->field[F_TRACKERS]) != 0;
+        g_browser->prefs_gen++;
+        mac_blocking_prefs_changed();
+        break;
     case F_OK: close_prefs(p, true); break;
     case F_CANCEL: close_prefs(p, false); break;
-    default: break;
+    default: prefs_blocking_click(c); break;
     }
 }
 
@@ -792,6 +828,8 @@ static bool pw_edit(MacWin *mw, int item)
 static void pw_idle(MacWin *mw)
 {
     PrefsWin *p = (PrefsWin *)mw;
+    if (p->pane == NPANES - 1)
+        prefs_blocking_idle();
     if (mw->win == FrontWindow() && g_in_front && p->focus != F_NONE) {
         SetPort((GrafPtr)mw->win);
         IdleControls(mw->win);

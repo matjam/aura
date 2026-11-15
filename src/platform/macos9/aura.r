@@ -157,7 +157,8 @@ resource 'tab#' (128) {
 		0, "Content";
 		0, "Privacy & Security";
 		0, "Network";
-		0, "Downloads"
+		0, "Downloads";
+		0, "Blocking"
 	}
 };
 
