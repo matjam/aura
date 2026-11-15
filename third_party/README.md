@@ -15,8 +15,10 @@ came from and how to update it.
   lists them). No CLI (`qjs`, `qjsc`), no `quickjs-libc`, no test262
   harness; a subset of the tests (below).
 - **Build:** `quickjs.cmake` builds the static library `aura_quickjs`
-  with QuickJS-ng's own warning flags and `-funsigned-char`, and links it
-  into `aura_engine`. Aura reaches it only through `src/js`.
+  with QuickJS-ng's own warning flags, `-funsigned-char` and
+  `-fno-strict-aliasing` (QuickJS passes `uint32_t *` as `int *`, and
+  `uint32_t` is `unsigned long` in Retro68's newlib), and links it into
+  `aura_engine`. Aura reaches it only through `src/js`.
 - **Changes:** every change is a patch in `quickjs-patches/`, applied in
   name order. To update QuickJS-ng, fetch the new release and run
   `third_party/quickjs-patches/apply.sh PRISTINE_DIR`, which copies the
@@ -25,8 +27,11 @@ came from and how to update it.
   self-test (`src/platform/macos9/jstest`). The patches are:
   `0001` newlib portability (no pthreads or C11 atomics, big-endian
   checks), `0002` a retry hook in module resolution so the embedder can
-  fetch a missing module and resolve again, and `0003` a GC mark for
-  WeakMap values with symbol keys (fixes a realm leak).
+  fetch a missing module and resolve again, `0003` a GC mark for
+  WeakMap values with symbol keys (fixes a realm leak), and `0004` 16
+  bytes of padding on every `alloca` on Mac OS 9, because Retro68's GCC
+  places spilled locals in the top 8 bytes of alloca space (the patch
+  header has a reproduction).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

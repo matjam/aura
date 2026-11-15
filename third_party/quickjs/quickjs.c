@@ -48,6 +48,15 @@
 #include "libregexp.h"
 #include "dtoa.h"
 
+#if defined(macintosh)
+/* Retro68's GCC (PowerPC, -O2) can place up to 8 bytes of a function's
+   locals at the top of the space alloca returns, so a store through the
+   alloca pointer overwrites a spilled local and the spill overwrites the
+   buffer. Pad each alloca and leave the top unused. */
+#undef alloca
+#define alloca(n) __builtin_alloca((size_t)(n) + 16)
+#endif
+
 #if defined(EMSCRIPTEN) || defined(_MSC_VER)
 #define DIRECT_DISPATCH  0
 #else

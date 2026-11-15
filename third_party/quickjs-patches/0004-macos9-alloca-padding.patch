@@ -1,0 +1,40 @@
+Pad alloca on Mac OS 9 (Retro68 GCC frame layout defect).
+
+Retro68's GCC 16.1 for PowerPC (XCOFF, AIX-style frames) puts a
+function's locals from the end of the outgoing argument area, but
+returns alloca space at a fixed dynamic offset 8 bytes higher. The top
+8 bytes of every alloca block therefore share memory with a spill slot.
+In JS_CallInternal the frame's var_refs array sits at the top of the
+alloca block, so a closure created from a function such as
+`() => { const a = globalThis.x; const f = () => a; return f(); }` found
+a spilled register instead of NULL in sf->var_refs[0] and read its
+captured variable through a stray pointer. Doubles came back as values
+like -3.9e-170 and the benchmarks' loop counts collapsed.
+
+A minimal reproduction (powerpc-apple-macos-gcc -O2):
+
+    void f(int n) { volatile int keep = get(); int *p = alloca(n * 4);
+                    p[0] = keep; use(p, keep); }
+
+stores `keep` at 56(r31) while p is new_sp + 64, so for n = 4, p[2] is
+`keep`. The proper fix belongs in the compiler; until then every alloca
+here gets 16 more bytes (alignment stays 16) and the top is left unused.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -48,6 +48,15 @@
+ #include "libregexp.h"
+ #include "dtoa.h"
+
++#if defined(macintosh)
++/* Retro68's GCC (PowerPC, -O2) can place up to 8 bytes of a function's
++   locals at the top of the space alloca returns, so a store through the
++   alloca pointer overwrites a spilled local and the spill overwrites the
++   buffer. Pad each alloca and leave the top unused. */
++#undef alloca
++#define alloca(n) __builtin_alloca((size_t)(n) + 16)
++#endif
++
+ #if defined(EMSCRIPTEN) || defined(_MSC_VER)
+ #define DIRECT_DISPATCH  0
+ #else

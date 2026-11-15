@@ -39,9 +39,13 @@ what you need to build, test and change Aura.
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
+| `src/js` | JavaScript: the QuickJS-ng runtime wrapper, the event loop, the DOM and window bindings (C natives plus the `prelude*.js` files) |
 | `src/platform/host` | host tools: headless render to PNG, tree dumps |
 | `src/platform/macos9` | the Mac OS 9 application |
+| `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
+| `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`); `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
+| `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 
 `CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
@@ -314,6 +318,67 @@ the system lacks.
 - **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
   joining, Indic reordering or bidirectional text; colour emoji; a CJK
   font pack (see the fonts README for what one needs).
+
+## JavaScript
+
+The engine is QuickJS-ng (`third_party/quickjs`), reached only through
+`src/js`; no other folder sees a QuickJS type. `src/js/js.h` is the
+interface: one `AuJs` per document, holding a runtime, a context whose
+global object is the window, the DOM bindings and the event loop.
+
+- **To run script in a document**, create an `AuJs` with `au_js_new`,
+  run scripts with `au_js_run_classic` or the module calls, and call
+  `au_js_run_tasks` and `au_js_run_frame` from the idle loop. Free it with
+  `au_js_free` before the document goes, never from inside a hook.
+- **Script in pages** is driven by `src/page/script.c`: parser-blocking
+  scripts pause the parser, `document.write` feeds it, defer, async,
+  module and nomodule scripts run in their order, and the document view
+  fires DOMContentLoaded and load. The runtime starts only when a page has
+  a script or an inline event handler. To turn script off for a document
+  view, call `au_docview_set_scripting(dv, false)` before it loads. The
+  embedder calls `au_docview_run_scripts` from its idle loop and acts on
+  the navigations it reports through `open_url` afterwards.
+- **Ownership.** A node's wrapper holds one reference on the node; the
+  node holds its wrapper while the node is in a tree or otherwise
+  referenced; a node no script has touched has no wrapper. `js_int.h`
+  has the details.
+- **Limits.** Each `AuJs` has a memory limit enforced by its allocator (a
+  refused allocation is an uncatchable out-of-memory error, with a 64 KB
+  reserve so the error can be reported), a C stack limit (deep recursion
+  is a RangeError) and a time budget (`AuJsHooks.long_script` decides
+  whether a long script goes on). Allocation failures never reach
+  `au_alloc`'s fatal handler.
+- **To run a script on the host**, use `build/host/src/platform/host/aura-host
+  js FILE.js...` (`--html PAGE.html` loads a document first, `--stats`
+  prints start-up time and memory). `aura-host page PAGE.html` loads a
+  scripted page through the document view (`--click ID` clicks an
+  element, `--chunk N` feeds the parser N bytes at a time, `--no-script`
+  turns script off). The `tests/js` scripts and pages run under ctest.
+- **To change QuickJS-ng**, add or edit a patch in
+  `third_party/quickjs-patches` and rebuild the tree with `apply.sh` (see
+  `third_party/README.md`); never edit `third_party/quickjs` alone.
+- **To test on Mac OS 9**, build with `./build.sh ppc` and push
+  `build/ppc/src/platform/macos9/jstest/JSTest.bin` with
+  `tools/guest-push.sh -n AuraTest`, then `tools/guest-qmp.py open
+  AuraTest JSTest`. JSTest prints its start-up time and memory, an "ok"
+  or "FAIL" line per self-test, the benchmark times of
+  `tests/js/bench/bench.js` at `BENCH_SCALE` 0.1, and the heap left. To
+  compare with the host, run `aura-host js --stats` on a file that sets
+  `globalThis.BENCH_SCALE = 0.1` followed by `tests/js/bench/bench.js`,
+  with a Release build.
+- **To run JSTest on a real G4**, copy `JSTest.bin` to the machine (a CD
+  made from the image `guest-push.sh` writes, or a file share), decode it
+  with StuffIt Expander if the Finder shows a MacBinary file, and open
+  it. Its SIZE resource asks for 24 MB (20 MB at least); raise it in Get
+  Info if the self-test reports out-of-memory errors. Quit other
+  applications first so the timings are not disturbed. QEMU timings do
+  not predict a G4's: the guest's speed depends on the host's TCG
+  translation, so report G4 and guest numbers separately.
+- **Retro68 compiler points.** QuickJS is built with
+  `-fno-strict-aliasing` (with `uint32_t` as `unsigned long`, string
+  iterators never advanced), and patch 0004 pads every `alloca`, because
+  Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
+  Do not use `alloca` or variable-length arrays in Aura's own code.
 
 ## Design
 

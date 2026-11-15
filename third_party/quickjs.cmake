@@ -13,8 +13,12 @@ add_library(aura_quickjs STATIC
     ${AURA_QJS_DIR}/libunicode.c
     ${AURA_QJS_DIR}/quickjs.c)
 target_include_directories(aura_quickjs SYSTEM PUBLIC ${AURA_QJS_DIR})
+# -fno-strict-aliasing: QuickJS passes uint32_t * where int * is expected
+# (string_getc(p, (int *)&idx), for one). Where uint32_t is unsigned long,
+# as in Retro68's newlib, GCC may then assume the callee's store does not
+# change the variable: on Mac OS 9 string iterators never advanced.
 target_compile_options(aura_quickjs PRIVATE
-    -funsigned-char
+    -funsigned-char -fno-strict-aliasing
     -Wno-implicit-fallthrough -Wno-sign-compare -Wno-missing-field-initializers
     -Wno-unused-parameter -Wno-unused-but-set-variable -Wno-unused-result
     -Wno-array-bounds -Wno-unused-variable -Wno-unused-function

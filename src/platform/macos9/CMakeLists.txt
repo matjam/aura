@@ -6,3 +6,4 @@ add_application(Aura main.c browserwin.c listwin.c prefswin.c storage.c text.c p
 target_include_directories(Aura PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(Aura PRIVATE -O2)
 target_link_libraries(Aura aura_engine AppearanceLib m)
+add_subdirectory(jstest)
