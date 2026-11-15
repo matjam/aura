@@ -3,9 +3,10 @@
 # AURA_RUN     runtime folder (disk overlays, sockets, screenshots, HFS
 #              images). Default: run/ in the main checkout of this repo, so
 #              it survives git worktrees being removed.
-# OS9_PROTECT  the os9-protect checkout whose disk images and QEMU build
-#              are used, read-only (default ../os9-protect beside the main
-#              checkout).
+# OS9_PROTECT  the checkout that holds the test machine's disk images
+#              (disks/), used read-only. Default: ../os9-enforcer beside
+#              the main checkout when it has the disks (the test machine
+#              moved there), else ../os9-protect.
 # BASE         which Mac OS 9.2.2 system the guest boots:
 #                stock     disks/os9-novm.qcow2: the base install with
 #                          virtual memory off, no Enforcer (default)
@@ -15,8 +16,10 @@
 # AURA_BASE    the os9-protect disk to copy, overriding the one BASE names
 #              (give BASE a new name too, so the copy is not mixed up with
 #              another base's).
-# QEMU         the QEMU binary (default: ~/.local/opt/qemu-os9/bin, then
-#              os9-protect's local build, then qemu-system-ppc from PATH).
+# QEMU         the QEMU binary. Default: ~/.local/opt/qemu/VERSION/bin
+#              (VERSION is AURA_QEMU_REV below, the patched build that
+#              os9-enforcer's qemu/build.sh installs), then a local build
+#              in OS9_PROTECT, then qemu-system-ppc from PATH.
 # QEMU_IMG     qemu-img, found the same way.
 
 aura_repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,7 +27,12 @@ aura_repo=$(cd "$(dirname "$0")/.." && pwd)
 aura_main=$(cd "$(git -C "$aura_repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$aura_repo/.git")/.." && pwd)
 
 AURA_RUN=${AURA_RUN:-$aura_main/run}
-OS9_PROTECT=${OS9_PROTECT:-$(cd "$aura_main/.." && pwd)/os9-protect}
+if [ -z "${OS9_PROTECT:-}" ]; then
+  OS9_PROTECT=$(cd "$aura_main/.." && pwd)/os9-enforcer
+  if [ ! -f "$OS9_PROTECT/disks/os9-novm.qcow2" ]; then
+    OS9_PROTECT=$(cd "$aura_main/.." && pwd)/os9-protect
+  fi
+fi
 BASE=${BASE:-stock}
 if [ -z "${AURA_BASE:-}" ]; then
   case "$BASE" in
@@ -36,7 +44,8 @@ if [ -z "${AURA_BASE:-}" ]; then
       ;;
   esac
 fi
-AURA_QEMU_OPT=$HOME/.local/opt/qemu-os9/bin
+AURA_QEMU_REV=005c61c0ef6f-09adc138
+AURA_QEMU_OPT=$HOME/.local/opt/qemu/$AURA_QEMU_REV/bin
 if [ -z "${QEMU:-}" ]; then
   if [ -x "$AURA_QEMU_OPT/qemu-system-ppc" ]; then
     QEMU=$AURA_QEMU_OPT/qemu-system-ppc

@@ -15,5 +15,5 @@ application, run:
 ./build.sh
 ```
 
-The Mac OS 9 build needs Retro68's PowerPC toolchain. Install it in
-`~/.local/opt/retro68`, or set `RETRO68` to its folder.
+The Mac OS 9 build needs Retro68's PowerPC toolchain. Set `RETRO68` to
+its folder, or install it where `build.sh` looks (see its header).

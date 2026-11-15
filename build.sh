@@ -8,11 +8,14 @@
 #   all   test, then ppc (default)
 #
 # The Retro68 PowerPC toolchain is found through RETRO68, then in
-# ~/.local/opt/retro68, then in os9-protect (OS9_PROTECT, default
-# ../os9-protect). A build/ppc folder keeps the toolchain it was first
-# configured with; delete it to switch.
+# ~/.local/opt/retro68/COMMIT (COMMIT is RETRO68_REV below, the first 12
+# hex digits of the Retro68 commit Aura is built with; os9-enforcer's
+# toolchain/build.sh installs it there), then in os9-protect (OS9_PROTECT,
+# default ../os9-protect). A build/ppc folder keeps the toolchain it was
+# first configured with; delete it to switch.
 set -eu
 cd "$(dirname "$0")"
+RETRO68_REV=a4a389c41e90
 
 host() {
     cmake -S . -B build/host -G Ninja >/dev/null
@@ -26,7 +29,7 @@ run_tests() {
 
 ppc() {
     if [ -z "${RETRO68:-}" ]; then
-        RETRO68=$HOME/.local/opt/retro68
+        RETRO68=$HOME/.local/opt/retro68/$RETRO68_REV
         if [ ! -f "$RETRO68/powerpc-apple-macos/cmake/retroppc.toolchain.cmake" ]; then
             RETRO68=${OS9_PROTECT:-../os9-protect}/toolchain/build/toolchain
         fi

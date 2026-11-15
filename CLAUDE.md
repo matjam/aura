@@ -50,12 +50,16 @@ change to the top-level file.
 - `./build.sh test` builds for the host and runs the tests.
 - `./build.sh ppc` builds for Mac OS 9 with Retro68 (GCC 16.1, Multiversal
   Interfaces). The toolchain is found through `RETRO68`, then in
-  `~/.local/opt/retro68`, then in
-  `../os9-protect/toolchain/build/toolchain`. A `build/ppc` folder keeps
-  the toolchain it was first configured with; delete it to switch.
+  `~/.local/opt/retro68/COMMIT` (the commit is `RETRO68_REV` in
+  `build.sh`), then in `../os9-protect/toolchain/build/toolchain`. A
+  `build/ppc` folder keeps the toolchain it was first configured with;
+  delete it to switch.
   The guest scripts find QEMU through `QEMU`, then in
-  `~/.local/opt/qemu-os9/bin`, then in os9-protect's local build. The
-  guest's disk images still come from os9-protect (`OS9_PROTECT`).
+  `~/.local/opt/qemu/VERSION/bin` (`AURA_QEMU_REV` in
+  `tools/guest-env.sh`). The versioned folders follow os9-enforcer's
+  convention; its `toolchain/build.sh` and `qemu/build.sh` install them.
+  The guest's disk images come from `../os9-enforcer/disks`, or from
+  `../os9-protect/disks` when that is absent (`OS9_PROTECT` overrides).
 
 The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
 (`run.sh`, `tools/push.sh` to copy files in, `tools/qmp.py` for
