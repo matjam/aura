@@ -137,26 +137,35 @@ static bool val_has_pct(const AuCssValue *v, int depth)
 {
     if (v->type == AU_CSSV_PERCENT)
         return true;
-    if (v->type == AU_CSSV_CALC && depth < 8)
+    if (v->type == AU_CSSV_CALC) {
+        if (depth >= 16)
+            return true; /* too deep to tell: treat as a percentage */
         for (uint32_t i = 0; i < v->n; i++)
             if (val_has_pct(&v->u.items[i], depth + 1))
                 return true;
+    }
     return false;
 }
 
-/* A computed length-percentage: a px dimension, a percentage, or calc as
- * the sum of both. */
-static float val_len(const AuCssValue *v, float basis, int depth)
+/* A computed length-percentage: a px dimension, a percentage, or a calc
+ * tree, which au_len_resolve evaluates (the blob header is only a
+ * carrier for the node; nothing retains it). */
+static float val_len(const AuCssValue *v, float basis)
 {
     if (v->type == AU_CSSV_PERCENT)
         return v->u.num * basis / 100;
     if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
         return v->u.num;
-    if (v->type == AU_CSSV_CALC && depth < 8) {
-        float t = 0;
-        for (uint32_t i = 0; i < v->n; i++)
-            t += val_len(&v->u.items[i], basis, depth + 1);
-        return t;
+    if (v->type == AU_CSSV_CALC) {
+        AuCssBlob tmp;
+        memset(&tmp, 0, sizeof tmp);
+        tmp.refs = 1;
+        tmp.value = *v;
+        AuLen l;
+        memset(&l, 0, sizeof l);
+        l.kind = AU_LEN_CALC;
+        l.u.calc = &tmp;
+        return au_len_resolve(&l, basis < 0 ? 0 : basis);
     }
     return 0;
 }
@@ -186,7 +195,7 @@ static void breadth(Grid *g, const AuCssValue *v, float basis, uint8_t *k, float
         return;
     }
     *k = GK_PX;
-    *val = px_clamp(val_len(v, basis, 0));
+    *val = px_clamp(val_len(v, basis));
 }
 
 /* The sizing functions of a track for a percentage basis (-1: indefinite,
