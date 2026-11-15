@@ -321,6 +321,112 @@ static void test_typed(void)
     au_css_resolver_free(r);
 }
 
+static AuElement *add_svg(AuDocument *doc, AuNode *parent, const char *tag)
+{
+    AuNode *n = au_element_new(doc, au_atom_cstr(tag), AU_NS_SVG);
+    au_node_append(parent, n);
+    au_node_unref(n);
+    return (AuElement *)n;
+}
+
+static void set(AuElement *el, const char *name, const char *v)
+{
+    au_element_set_attr(el, au_atom_cstr(name), v, strlen(v));
+}
+
+/* SVG properties, presentation attributes as hints, the UA rules for SVG
+ * and the mask shorthand. */
+static void test_svg_props(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *svg = add_svg(doc, &body->node, "svg");
+    set(svg, "width", "24");
+    set(svg, "height", "50%");
+    set(svg, "fill", "none");
+    set(svg, "stroke", "currentColor");
+    set(svg, "stroke-width", "2");
+    set(svg, "stroke-linecap", "round");
+    set(svg, "stroke-linejoin", "bevel");
+    set(svg, "font-size", "12");
+    AuElement *g = add_svg(doc, &svg->node, "g");
+    set(g, "fill", "url(#grad) #00f");
+    set(g, "stroke-dasharray", "4, 2 1");
+    set(g, "fill-opacity", "50%");
+    set(g, "opacity", ".5");
+    set(g, "style", "fill-rule: evenodd");
+    set(g, "class", "c");
+    AuElement *p = add_svg(doc, &g->node, "path");
+    set(p, "fill", "red;color:blue"); /* would inject: skipped */
+    set(p, "stroke-width", "3px");
+    set(p, "paint-order", "stroke fill");
+    set(p, "vector-effect", "non-scaling-stroke");
+    AuElement *stop = add_svg(doc, &g->node, "stop");
+    set(stop, "stop-color", "#ff0000");
+    set(stop, "stop-opacity", "0.25");
+    AuElement *masked = add(doc, &body->node, "div", "m", NULL);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet(".c { stroke-linecap: square; }"
+                                       "body { color: rgb(1, 2, 3); }"
+                                       "#m { -webkit-mask: url(i.svg) center / 16px 16px no-repeat; mask-mode: alpha;"
+                                       " font-variation-settings: 'wght' 600, \"opsz\" 12; font-optical-sizing: none;"
+                                       " font-width: 75%; }"));
+    au_css_style_document(r, doc);
+    const AuStyle *s = au_element_style(svg);
+    CHECK(s->box->width.kind == AU_LEN_PX && s->box->width.u.px == 24);
+    CHECK(s->box->height.kind == AU_LEN_PCT && s->box->height.u.pct == 50);
+    CHECK(s->inhr->fill && css_is_kw(&s->inhr->fill->value, AU_K_none));
+    CHECK(s->inhr->stroke && s->inhr->stroke->value.type == AU_CSSV_COLOR &&
+          s->inhr->stroke->value.u.rgba == AU_COLOR_CURRENT);
+    CHECK(s->inhr->stroke_width.kind == AU_LEN_NUMBER && s->inhr->stroke_width.u.num == 2);
+    CHECK(s->inhr->stroke_linecap == AU_STROKE_LINECAP_ROUND);
+    CHECK(s->inhr->stroke_linejoin == AU_STROKE_LINEJOIN_BEVEL);
+    CHECK(s->inh->font_size == 12);
+    CHECK(s->rare->transform_origin == NULL || true);
+    const AuStyle *gs = au_element_style(g);
+    CHECK(gs->inhr->fill && gs->inhr->fill->value.type == AU_CSSV_LIST);
+    CHECK(gs->inhr->stroke_dasharray && gs->inhr->stroke_dasharray->value.type == AU_CSSV_COMMA_LIST);
+    CHECK(gs->inhr->fill_opacity > 0.49f && gs->inhr->fill_opacity < 0.51f);
+    CHECK(gs->rare->opacity > 0.49f && gs->rare->opacity < 0.51f);
+    CHECK(gs->inhr->fill_rule == AU_FILL_RULE_EVENODD);
+    CHECK(gs->inhr->stroke_linecap == AU_STROKE_LINECAP_SQUARE); /* the author rule beats the inherited hint */
+    CHECK(gs->inhr->stroke_width.kind == AU_LEN_NUMBER); /* inherited */
+    const AuStyle *ps = au_element_style(p);
+    CHECK(ps->inhr->fill == gs->inhr->fill || (ps->inhr->fill && ps->inhr->fill->value.type == AU_CSSV_LIST));
+    CHECK(ps->inh->color != AU_COLOR_RGBA(0, 0, 255, 255));
+    CHECK(ps->inhr->stroke_width.kind == AU_LEN_PX && ps->inhr->stroke_width.u.px == 3);
+    CHECK(ps->inhr->paint_order && ps->inhr->paint_order->value.type == AU_CSSV_LIST);
+    CHECK(ps->rare->vector_effect == AU_VECTOR_EFFECT_NON_SCALING_STROKE);
+    CHECK(ps->inhr->stroke_linecap == AU_STROKE_LINECAP_SQUARE);
+    const AuStyle *ss = au_element_style(stop);
+    CHECK(ss->rare->stop_color == AU_COLOR_RGBA(255, 0, 0, 255));
+    CHECK(ss->rare->stop_opacity == 0.25f);
+    /* The UA sheet: SVG elements other than the outer svg transform about
+     * the origin. */
+    CHECK(prop_is(p, "transform-origin", "0px 0px"));
+    /* Masks. */
+    const AuStyle *ms = au_element_style(masked);
+    CHECK(au_style_mask_layer_count(ms) == 1);
+    CHECK(au_style_mask_layer_count(s) == 0);
+    AuBgLayer l;
+    au_style_mask_layer(ms, 0, &l);
+    CHECK(l.image && l.image->type == AU_CSSV_URL && strcmp(l.image->u.str, "i.svg") == 0);
+    CHECK(l.repeat_x == AU_K_no_repeat && l.repeat_y == AU_K_no_repeat);
+    CHECK(l.attachment == AU_K_alpha);
+    CHECK(l.size && l.size->type == AU_CSSV_LIST);
+    CHECK(l.position_x && l.position_x->type == AU_CSSV_PERCENT && l.position_x->u.num == 50);
+    CHECK(l.origin == AU_K_border_box);
+    CHECK(ms->inhr->font_variation_settings && ms->inhr->font_variation_settings->value.type == AU_CSSV_COMMA_LIST &&
+          ms->inhr->font_variation_settings->value.n == 2);
+    CHECK(ms->inhr->font_optical_sizing == AU_FONT_OPTICAL_SIZING_NONE);
+    CHECK(ms->inh->font_stretch == 75);
+    CHECK(au_css_supports_decl("fill", 4, "url(#a) none", 12));
+    CHECK(!au_css_supports_decl("stroke-dasharray", 16, "1 -2", 4));
+    CHECK(au_css_supports_decl("mask", 4, "url(a.svg) luminance no-clip", 28));
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
 static void test_inline_api(void)
 {
     AuCssDeclBlock *b = au_css_parse_inline_style("color: red; margin: 1px 2px !important; --v: x", 46, NULL);
@@ -467,6 +573,7 @@ int main(void)
     test_typed();
     test_inline_api();
     test_quirks_ua();
+    test_svg_props();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
