@@ -37,6 +37,12 @@ file(GLOB LAYOUT_FUZZ_CORPUS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/sampl
 add_test(NAME page_layout_fuzz COMMAND fuzz_layout 150 1 20 ${LAYOUT_FUZZ_CORPUS})
 set_tests_properties(page_layout_fuzz PROPERTIES TIMEOUT 120)
 file(GLOB LAYOUT_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*.html)
-if(LAYOUT_REGRESS)
-    add_test(NAME page_layout_fuzz_regress COMMAND fuzz_layout replay ${LAYOUT_REGRESS})
+add_test(NAME page_layout_fuzz_regress COMMAND fuzz_layout replay ${LAYOUT_REGRESS})
+
+# In a plain build the fuzzer and its regression inputs run on a thread
+# with a 512 KB stack (about what layout may use on Mac OS 9, where frames
+# are smaller), so recursion over input nesting fails the test. Sanitizer
+# frames are several times larger, so not there.
+if(NOT CMAKE_C_FLAGS MATCHES "sanitize")
+    set_tests_properties(page_layout_fuzz page_layout_fuzz_regress PROPERTIES ENVIRONMENT "AURA_FUZZ_STACK_KB=512")
 endif()

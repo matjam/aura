@@ -605,7 +605,9 @@ static uint32_t count_spaces(const LText *t, uint32_t start, uint32_t len)
 
 /* Builds the fragments of segments [a, e] as one line at S->y with the
  * content edges [l, r] (BFC x). Returns the line height. */
-static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r, float indent, bool last_line,
+/* Not inlined: its VCtx stack (3.7 KB) would sit in l_inline_layout's
+ * frame, which is on the stack once per level of nested inline blocks. */
+static AU_NOINLINE float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r, float indent, bool last_line,
                          bool ellipsis_here)
 {
     InlineCtx *C = S->C;

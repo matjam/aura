@@ -316,14 +316,15 @@ static int fuzz_main(int argc, char **argv)
     }
     for (i = first; i < argc; i++)
         fz_corpus_add_file(&corpus, argv[i], 32 << 10);
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         const FzBuf *src = &corpus.v[fz_rnd((uint32_t)corpus.n)];
         fz_set(&in, src->d, src->n);
         fz_mutate(&in, dict, NDICT, &corpus, 48 << 10);
         fz_save(in.d, in.n);
         run_one(&in, &corpus);
     }
-    printf("fuzz_css: %ld iterations\n", it);
+    printf("fuzz_css: %ld iterations\n", it - fz_first);
     au_surface_free(surface);
     au_fontset_free(fonts);
     return 0;

@@ -295,7 +295,8 @@ static int fuzz_main(int argc, char **argv)
         } else
             fz_corpus_add_file(&corpus, argv[i], 64 << 10);
     }
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         const FzBuf *src = &corpus.v[fz_rnd((uint32_t)corpus.n)];
         if (fz_rnd(16) == 0) {
             /* random bytes */
@@ -311,7 +312,7 @@ static int fuzz_main(int argc, char **argv)
         fz_save(in.d, in.n);
         run_one(&in, &corpus);
     }
-    printf("fuzz_html: %ld iterations\n", it);
+    printf("fuzz_html: %ld iterations\n", it - fz_first);
     return 0;
 }
 

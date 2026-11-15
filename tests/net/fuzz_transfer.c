@@ -345,12 +345,13 @@ static int fuzz_main(int argc, char **argv)
         add_body(&bodies, f.d, f.n, coding);
         free(f.d);
     }
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         build(&in, &bodies);
         fz_save(in.d, in.n);
         run_one(&in);
     }
-    printf("fuzz_transfer: %ld iterations\n", it);
+    printf("fuzz_transfer: %ld iterations\n", it - fz_first);
     return 0;
 }
 

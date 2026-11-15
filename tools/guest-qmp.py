@@ -31,6 +31,14 @@ Usage:
   tools/guest-qmp.py front-window         print the title of the current
                                           application's front window
   tools/guest-qmp.py volumes              print the mounted volumes' names
+  tools/guest-qmp.py wait-app APP [SECONDS]
+                                          wait (60 s) until APP is the current
+                                          application; exit 1 if it is not
+  tools/guest-qmp.py wait-window APP TITLE [SECONDS]
+                                          wait (60 s) until APP is current and
+                                          its front window is called TITLE;
+                                          exit 1, printing the last title, if
+                                          it does not happen
 
 Guest UI (coordinates are guest screen pixels, x right, y down):
   tools/guest-qmp.py pos                  print the cursor position
@@ -653,6 +661,15 @@ def main(argv):
             print("%d %d" % q.screen_size())
         elif op == "front-app" and not args:
             print(q.front_app())
+        elif op == "wait-app" and len(args) in (1, 2):
+            got = q.wait_front_app(args[0], float(args[1]) if len(args) == 2 else 60)
+            if got != args[0]:
+                raise SystemExit(f'wait-app: the current application is {got}, not "{args[0]}"')
+        elif op == "wait-window" and len(args) in (2, 3):
+            got = q.wait_front_window(args[0], args[1], float(args[2]) if len(args) == 3 else 60)
+            if got != args[1]:
+                raise SystemExit(f'wait-window: the front window of "{args[0]}" is {got!r}, not '
+                                 f'"{args[1]}" (current application: {q.front_app()})')
         elif op == "volumes" and not args:
             for _ in range(100):
                 v = q.volumes()

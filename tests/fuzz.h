@@ -8,7 +8,10 @@
  *     fuzz_X replay FILE...
  *
  * It stops at the iteration count or after SECONDS (0: no cap), whichever
- * comes first, and prints the iterations done. The environment variable
+ * comes first, and prints the iterations done. Each iteration's random
+ * choices come from SEED and the iteration number alone: a failure prints
+ * both, and AURA_FUZZ_FIRST=N with the same arguments starts at iteration
+ * N, in any build. The environment variable
  * AURA_FUZZ_SECONDS caps a fuzzer that takes no SECONDS argument. With
  * AURA_FUZZ_SAVE=PATH each input is written to PATH before it is used, so
  * after a crash or a hang PATH holds the input and PATH.seed the PRNG
@@ -46,6 +49,24 @@ static inline uint32_t fz_next(void)
 static inline uint32_t fz_rnd(uint32_t n) { return n ? fz_next() % n : 0; }
 
 static inline void fz_seed(uint32_t s) { fz_state = s ? s : 1; }
+
+/* Every iteration starts from a state made of the seed and the iteration
+ * number, so one iteration can be run again alone: a failure prints both,
+ * and AURA_FUZZ_FIRST=N starts a run at iteration N. */
+static uint32_t fz_base_seed = 1;
+static long fz_first, fz_iter = -1;
+
+static inline void fz_iteration(long it)
+{
+    uint32_t h = fz_base_seed * 0x9E3779B1u ^ ((uint32_t)it + 1u) * 0x85EBCA6Bu;
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    h *= 0x297A2D39u;
+    h ^= h >> 15;
+    fz_iter = it;
+    fz_seed(h);
+}
 
 /* ---- the time cap ---- */
 static time_t fz_deadline;
@@ -334,7 +355,9 @@ static inline int fz_args(int argc, char **argv, long *iters, int *first)
         return 1;
     }
     *iters = argc > 1 ? atol(argv[1]) : 1000;
-    fz_seed(argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 1);
+    fz_base_seed = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 1;
+    fz_seed(fz_base_seed);
+    fz_first = getenv("AURA_FUZZ_FIRST") ? atol(getenv("AURA_FUZZ_FIRST")) : 0;
     fz_cap(argc > 3 ? atol(argv[3]) : 60);
     *first = argc > 4 ? 4 : argc;
     return 0;
@@ -354,18 +377,24 @@ typedef struct FzMain {
 static inline void fz_on_fault(int sig)
 {
     void *frames[48];
-    int n = backtrace(frames, 48);
-    static const char msg[] = "fuzz: bad access (stack overflow?); innermost frames:\n";
-    if (write(2, msg, sizeof msg - 1) < 0)
-        n = 0;
-    backtrace_symbols_fd(frames, n, 2);
+    char line[160];
+    int n, len;
+    len = snprintf(line, sizeof line, "fuzz: %s at seed %lu iteration %ld (AURA_FUZZ_FIRST=%ld runs it again)\n",
+                   sig == SIGABRT ? "abort" : "bad access (stack overflow?)", (unsigned long)fz_base_seed, fz_iter, fz_iter);
+    if (write(2, line, (size_t)len) < 0)
+        len = 0;
+    if (sig != SIGABRT) {
+        n = backtrace(frames, 48);
+        backtrace_symbols_fd(frames, n, 2);
+    }
     signal(sig, SIG_DFL);
     raise(sig);
 }
 
-static inline void *fz_thread(void *p)
+/* Handlers for a bad access (on a signal stack of its own, since the
+ * fault may be the stack's overflow) and for abort. */
+static inline void fz_handlers(void)
 {
-    FzMain *m = (FzMain *)p;
     static char alt[1 << 16];
     stack_t ss;
     struct sigaction sa;
@@ -378,6 +407,13 @@ static inline void *fz_thread(void *p)
     sa.sa_flags = SA_ONSTACK;
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+}
+
+static inline void *fz_thread(void *p)
+{
+    FzMain *m = (FzMain *)p;
+    fz_handlers(); /* the signal stack is per thread */
     m->rc = m->fn(m->argc, m->argv);
     return NULL;
 }
@@ -390,8 +426,10 @@ static inline int fz_main(int (*fn)(int, char **), int argc, char **argv)
     FzMain m;
     pthread_attr_t a;
     pthread_t t;
-    if (!e || atol(e) < 64)
+    if (!e || atol(e) < 64) {
+        fz_handlers();
         return fn(argc, argv);
+    }
     m.fn = fn;
     m.argc = argc;
     m.argv = argv;

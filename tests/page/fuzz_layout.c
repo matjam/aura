@@ -354,7 +354,8 @@ static int fuzz_main(int argc, char **argv)
         else
             fz_corpus_add_file(&images, argv[i], 24 << 10);
     }
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         const FzBuf *src = &pages.v[fz_rnd((uint32_t)pages.n)];
         fz_set(&in, src->d, src->n);
         fz_mutate(&in, dict, NDICT, &pages, 96 << 10);
@@ -363,7 +364,7 @@ static int fuzz_main(int argc, char **argv)
         fz_save(in.d, in.n);
         run_one(&in);
     }
-    printf("fuzz_layout: %ld iterations\n", it);
+    printf("fuzz_layout: %ld iterations\n", it - fz_first);
     au_surface_free(surface);
     au_fontset_free(fonts);
     return 0;

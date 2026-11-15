@@ -447,7 +447,8 @@ static int fuzz_main(int argc, char **argv)
         return 0;
     }
     make_seeds(c);
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         int kind = (int)fz_rnd(K_COUNT);
         const FzBuf *src = &c[kind].v[fz_rnd((uint32_t)c[kind].n)];
         if (fz_rnd(20) == 0) {
@@ -470,7 +471,7 @@ static int fuzz_main(int argc, char **argv)
         }
         run_kind(kind, &in);
     }
-    printf("fuzz_files: %ld iterations\n", it);
+    printf("fuzz_files: %ld iterations\n", it - fz_first);
     return 0;
 }
 

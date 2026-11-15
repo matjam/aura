@@ -350,7 +350,8 @@ static int fuzz_main(int argc, char **argv)
         }
         return 0;
     }
-    for (it = 0; it < iters && !fz_expired(); it++) {
+    for (it = fz_first; it < iters && !fz_expired(); it++) {
+        fz_iteration(it);
         clock_t t0 = clock();
         long ms;
         generate(&in);
@@ -374,7 +375,7 @@ static int fuzz_main(int argc, char **argv)
             abort();
         }
     }
-    printf("fuzz_dom: %ld iterations\n", it);
+    printf("fuzz_dom: %ld iterations\n", it - fz_first);
     au_surface_free(surface);
     au_fontset_free(fonts);
     return 0;

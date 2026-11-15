@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>recursion: running</title>
+<h1 id="h">running</h1>
+<p>A script that calls itself without end must get a RangeError. Before
+the application had a stack large enough for the script engine's limit,
+this page froze the machine. tools/smoke.sh waits for the title to
+become "recursion: caught RangeError".</p>
+<script>
+var depth = 0;
+function f() { depth++; f(); }
+try {
+    f();
+} catch (e) {
+    document.getElementById('h').textContent = 'caught ' + e.name + ' at depth ' + depth;
+    document.title = 'recursion: caught ' + e.name;
+}
+</script>
