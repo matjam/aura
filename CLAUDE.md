@@ -61,7 +61,7 @@ what you need to build, test and change Aura.
 | `src/css` | CSS parser, selectors, cascade |
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input, nested documents (`frames.c`) |
-| `src/paint` | surfaces, rasterizer, fonts |
+| `src/paint` | surfaces, rasterizer, fonts, the 2D canvas context (`canvas2d*.c`) |
 | `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO, SVG through `src/svg`), the per-document image cache |
 | `src/svg` | XML parser, SVG path and transform grammars, the static SVG renderer, SVG documents |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
@@ -76,6 +76,7 @@ what you need to build, test and change Aura.
 | `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and Mbed TLS 4.1 (`mbedtls`, with `mbedtls-patches`, `mbedtls-config` and `mbedtls.cmake`); `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/frames` | nested documents: the document view with a table of pages, and a browser window over the fake transport |
+| `tests/canvas` | the canvas element and its 2D context: the context in C, a fuzzer, the document view over made-up origins, script pages, reference pictures |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 | `assets/net` | `aura-roots.bin`, the root certificate store |
@@ -1368,6 +1369,156 @@ presentation attributes reach the cascade as presentational hints
   `mask: url(#id)` on HTML elements, and one raster per SVG image URL
   (an image shown at two shapes on one page shares the larger raster).
 
+## Canvas
+
+The `<canvas>` element has a 2D context (CanvasRenderingContext2D of the
+HTML standard). The context is a state machine in C that draws on an
+`AuSurface`; script reaches it through C functions on the context's
+prototype; layout paints the surface as a replaced box.
+
+- **Where things are.** `src/paint/canvas2d.h` is the interface and
+  states the limits. `canvas2d.c` holds sets, bitmaps, canvases, state
+  and pixel access; `canvas2d_path.c` builds paths; `canvas2d_draw.c`
+  holds paints, compositing, clipping, shadows, fills, strokes, text
+  and images. `src/js/natives_canvas.c` binds them (with
+  `canvas_css.c` for colours and fonts) and `src/js/prelude_canvas.js`
+  adds the element's methods, `ImageData`, `DOMMatrix`,
+  `OffscreenCanvas` and `createImageBitmap`. `src/css/canvasval.c`
+  parses a colour and a font shorthand given as text
+  (`au_css_parse_color_text`, `au_css_parse_font_text`) with the same
+  code as declarations. `src/image/pngenc.c` is the PNG encoder.
+- **Drawing model** (`canvas2d_draw.c`, top comment). A shape is a
+  coverage from the rasterizer (`au_raster_path`, `au_raster_mask`); a
+  paint gives a premultiplied source pixel per destination pixel
+  (`paint_fetch`: solid, linear, radial and conic gradients through a
+  256-entry table, images and patterns sampled through the inverse
+  matrix); `comp_run` combines them with the operator (`blend_px`: all
+  26 of Compositing and Blending Level 1). The five operators that
+  change pixels the shape does not cover (source-in, source-out,
+  destination-in, destination-atop, copy) run over the whole clip
+  region. The context's path is kept in device space; a stroke is made
+  in user space (`stroke_outline`) with `au_path_stroke_style`, so a
+  non-uniform transform scales the pen. A clip is the clip box, plus
+  one coverage byte per pixel when the clip path is not a rectangle on
+  whole pixels. Shadows blur the shape's alpha with `au_blur_mask`
+  (the box-shadow blur of `border.c`).
+- **Fast paths. Keep them when changing `comp_run` or the image code:**
+  source-over with a solid colour goes to `au_blend_solid_span`; an
+  axis-aligned rectangle (`draw_dev_rect`) builds no path and allocates
+  nothing; `clearRect` over whole pixels is a store; an unscaled image
+  on whole pixels is copied or blended row by row (`blit`), and a
+  reduction by 2 or more uses the page painter's averaging scaler.
+  Pixel runs are copied with `c2d_copy_pixels`, not `memcpy`.
+- **Pixels.** A surface pixel is a native 0xAARRGGBB word,
+  premultiplied; `ImageData` is R, G, B, A bytes, not premultiplied.
+  `au_c2d_row_to_rgba` and `au_c2d_row_from_rgba` convert a row, one
+  32-bit word per pixel; the word differs by byte order, and
+  `test_byte_order` in `tests/canvas/test_canvas2d.c` runs both.
+  Every premultiplied value survives the round trip.
+- **Bindings.** A context object owns its `AuCanvas2D` and holds its
+  canvas in its `canvas` property. The canvas keeps its context in
+  `_c2d`. Colours go through `js_canvas_parse_color`: hex colours
+  without the CSS parser, the last 8 other strings from a cache.
+  Setting `font` to the text it already reads back parses nothing. The
+  `fillStyle` getter returns the same gradient or pattern object
+  (`au_cgradient_user` holds the script object while it lives).
+- **Size changes.** The DOM attribute hook runs before the change, so
+  `js_canvas_attr_changing` only notes the element; `js_canvas_sync`
+  resizes the bitmap at the next canvas call, at `N.canvasSync()` (the
+  `width` and `height` setters) and when script returns to the
+  embedder. The setters write the attribute only when the value
+  changes: `canvas.width = canvas.width` clears the bitmap without a
+  box tree build.
+- **Layout and repaint.** A canvas is `LR_CANVAS`: its natural size is
+  the `width` and `height` attributes (300 x 150 by default), which
+  are not presentational hints, so CSS `width` alone keeps the ratio.
+  `AuLayoutEnv.canvas` gives the bitmap, or -1 with script off, when
+  the element shows its fallback content. The document view owns an
+  `AuCanvasSet` (`au_dv_canvas_set`); `au_dv_turn_end` asks it which
+  canvases were drawn to and invalidates the changed part of each
+  canvas's content box, once per script task. Drawing causes no style
+  pass, tree build or layout.
+- **Images.** `image_source` in `natives_canvas.c` resolves a
+  `drawImage` source: an `ImageBitmap`; a canvas (through the set, or
+  `_c2d` of an `OffscreenCanvas`); an image script loaded, whose bytes
+  the prelude keeps in `_ibytes` (4 MB each, 12 MB over the live
+  images) until the first draw decodes them at full size into `_ibmp`;
+  or an image of the document through `AuJsHooks.canvas_image`
+  (`au_dv_canvas_image`: the image cache's entry, used at its natural
+  size).
+- **Origin-clean.** `js_canvas_image_origin_clean` (`natives_canvas.c`)
+  decides whether an image may be read back: same origin as the
+  document, or a `data:` or `blob:` URL. To use CORS approval, replace
+  that function's body. Drawing an image that fails it taints the
+  canvas, as does drawing a tainted canvas or bitmap, or choosing a
+  pattern made from one; `getImageData`, `toDataURL` and `toBlob` then
+  throw SecurityError. Setting the size makes the canvas clean again.
+- **Memory.** A canvas is at most 4096 pixels on a side and 16 MB; a
+  larger one is inert (calls do nothing, `toDataURL` is `"data:,"`).
+  The bitmap is allocated at the first draw with `au_try_alloc`. A
+  document's canvases, bitmaps and clip masks share 32 MB
+  (`AU_C2D_SET_BUDGET`; each nested document has its own set); over
+  it, a canvas draws nothing until memory is released.
+  `au_docview_memory_estimate` counts them, and a hidden kept document
+  keeps them.
+- **Bounds on hostile input.** A call with an argument that is not
+  finite does nothing. Device coordinates are clamped to 900,000. A
+  path keeps 250,000 segments (more are dropped: a path is at most
+  about 6 MB); a fill needing over 500,000 edges or a stroke walking
+  over 60,000 points draws nothing; gradients keep 256 stops, dash
+  lists 64 entries, the state stack 4096 entries, a text call 16 KB.
+  Keep new loops inside these.
+- **To try it**, load `tests/page/samples/canvas.html`: a bar chart,
+  gradients, a pattern, paths, compositing, text, an image filtered
+  through `getImageData`, a CSS-scaled canvas and an animation (Run
+  plays it and shows the frame time).
+- **Tests** (`tests/canvas`). `test_canvas2d`: the context in C (both
+  byte orders, each operator against the specification's formulas,
+  limits, the PNG encoder read back by the decoder, text against the
+  font list's width); `--bench` prints timings. `fuzz_canvas2d
+  ITERATIONS SEED [SECONDS]`: random call sequences with hostile
+  numbers; run it under the sanitizer build after a change to
+  `canvas2d*.c` or the rasterizer. `test_canvas_page`: the document
+  view over made-up http origins (painting, one repaint per task, no
+  layout, memory, tainting). `pages/*.html` run under `aura-host
+  page`. `ref/scenes.html` is compared with `golden/*.png`: to write
+  the references again, run `aura-host page` with
+  `AURA_UPDATE_GOLDEN=1` and the `--ref ID FILE.png` arguments of
+  `tests/canvas/CMakeLists.txt`, then check each picture against the
+  description beside its scene. The references were checked by eye
+  against the standard, not against another browser.
+- **Measured on the host** (Release, CPU time, 300 x 150 canvas,
+  `test_canvas2d --bench`): an opaque 100 x 100 `fillRect` 1.4 us,
+  with alpha 4.2 us; `clearRect` of the canvas 5.5 us; a 100 x 100
+  `drawImage` unscaled 1.5 us opaque and 6.2 us with alpha, scaled
+  with smoothing 89 us, rotated 145 us; `getImageData` and
+  `putImageData` of the canvas 50 and 54 us; a filled circle 23 us; a
+  12-character `fillText` 32 us; a full linear gradient 197 us, radial
+  399 us. A runtime starts 0.7 ms later and holds 67 KB more.
+- **Measured in the guest** (Enforcer base, QEMU, 2026-11-15): the
+  sample page loads in 455 ms; its animation (a 460 x 160 canvas: a
+  fill, six radial gradient discs, a rotated stroked square and text
+  per frame) runs at 27 to 31 frames per second, with 19 ms of script
+  and drawing, 1.1 ms of page paint and 0.1 ms of screen copy per
+  frame (Develop > Performance). The sample's 13 canvases hold 2.1 MB.
+- **html5test.co** (2026-11-15): 2D Graphics went from 0 to 24 of 25
+  and Offscreen from 0 to 2 of 3; the total from 285 to 311. Missing:
+  JPEG, JPEG-XR and WebP export, hit regions and the bitmap renderer
+  context.
+- **Not done:** WebGL and `bitmaprenderer` contexts; JPEG and WebP
+  encoding (`toDataURL` and `toBlob` always give PNG); `filter`,
+  `fontKerning`, `fontStretch`, `fontVariantCaps`, `textRendering` and
+  `imageSmoothingQuality` are accepted and not applied; colour glyphs
+  (emoji draw as outlines); bidirectional text (`direction` only turns
+  `start` and `end` round); shadow offsets are rounded to whole pixels
+  and the blur is capped at 256; a pattern taints when it is chosen,
+  not when it is drawn; `createImageBitmap` options; video frames and
+  SVG `image` elements as sources; a canvas of another document as a
+  source draws nothing; `object-fit` on a canvas; workers
+  (`transferControlToOffscreen`); context loss events. Layout measures
+  text word by word, so it applies no kerning between a space and its
+  neighbours; `measureText` kerns the whole string.
+
 ## Networking
 
 The network stack is portable engine code that never touches a socket
@@ -1808,7 +1959,7 @@ of one top-level page share one runtime (see Frames).
   Do not use `alloca` or variable-length arrays in Aura's own code.
 - **The prelude** is one function expression split over
   `src/js/prelude*.js`, joined in order (base, dom, html, range, cssom,
-  window, net, obs). The build compiles it to QuickJS bytecode and the
+  window, net, canvas, obs). The build compiles it to QuickJS bytecode and the
   runtime loads that (see "Prelude bytecode" below). To add a file, add
   it to the list in `third_party/quickjs.cmake` and its `#embed` line in
   `prelude.c` (the source build). A name declared twice across the files
