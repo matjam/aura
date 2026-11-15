@@ -21,8 +21,10 @@ what you need to build, test and change Aura.
 - Third-party code is limited to QuickJS-ng (JavaScript) and BearSSL
   (TLS), in `third_party/`. Everything else is written here. Ask before
   adding another.
-- Commit each working step to `main`. Commit only our own sources. Fonts,
-  Apple files and downloaded test suites stay out of git.
+- Commit each working step to `main`. Commit only our own sources. Apple
+  files, downloaded test suites and fonts stay out of git, except the
+  redistributable bundled fonts in `assets/fonts`, which are committed
+  with their licences.
 - Write docs instruction first ("To X, use Y"), in plain technical prose.
 
 ## Layout
@@ -40,6 +42,7 @@ what you need to build, test and change Aura.
 | `src/platform/host` | host tools: headless render to PNG, tree dumps |
 | `src/platform/macos9` | the Mac OS 9 application |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
+| `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 
 `CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
 every `tests/*/CMakeLists.txt`, so a new source file or test area needs no
@@ -52,6 +55,13 @@ change to the top-level file.
   Interfaces). The toolchain is found through `RETRO68`, then in
   `~/.local/opt/retro68` (`toolchain/find.sh`). A `build/ppc` folder
   keeps the toolchain it was first configured with; delete it to switch.
+  It also assembles the distributable folder `build/ppc/dist/Aura`: the
+  application (`Aura.bin`, MacBinary) beside `Fonts` (the family folders
+  of `assets/fonts`, `fonts.idx` and the fonts' README).
+- To run the tests under AddressSanitizer and UBSan, configure a separate
+  folder: `cmake -S . -B build/asan -G Ninja
+  -DCMAKE_C_FLAGS="-fsanitize=address,undefined"`, then `cmake --build
+  build/asan` and `ctest --test-dir build/asan`.
 
 ## Dependencies outside the repository
 
@@ -107,7 +117,14 @@ under Browser chrome). Enforcer's state and offense log are read with
 that project's own tools, which Aura does not carry.
 
 To copy the application in, build it with `./build.sh ppc` and run
-`tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
+`tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*`, which puts the
+application and its `Fonts` folder side by side at the top of the disc
+(push `build/ppc/src/platform/macos9/Aura.bin` alone to test without the
+bundled fonts). A folder argument is copied with its subfolders; fonts
+get type `tfil` and creator `AURA`, licences and READMEs become
+SimpleText documents, and `.html`, `.css`, `.js` and `.idx` files are
+copied byte for byte (hcopy's text mode would translate UTF-8 as
+Latin-1). HFS names are at most 31 characters.
 The files arrive as a CD named AuraTest on the guest's desktop. The
 previous disc is ejected first through the Finder; the script types
 nothing until the guest's current application (`CurApName`) is the
@@ -132,11 +149,16 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 
 To change the screen depth, click the Monitor BitDepth module in the
 guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
-and pick 256 Colors, Thousands or Millions. In Aura, View > Debug > Benchmark times the scene, fills and
-the chrome, View > Debug > Font List shows the fonts it found, and View
-> Debug > Page Timings shows the active page's first paint, load and
-layout times, times ten 32-pixel scroll repaints, and shows free heap
-and temporary memory.
+and pick 256 Colors, Thousands or Millions. In Aura, View > Debug >
+Benchmark times the scene, fills and the chrome and shows how long font
+registration took (and the bundled part of it) and how much font data
+is loaded; View > Debug > Font List (about:fonts) shows the fonts it
+found, with the bundled ones marked; and View > Debug > Page Timings
+shows the active page's first paint, load and layout times, times ten
+32-pixel scroll repaints, and shows free heap and temporary memory.
+The Debug submenu opens by dragging (a click closes it); the
+`QMP.button` and `QMP.move` methods of `tools/guest-qmp.py` can hold
+the button through View, Debug and the item.
 
 The Finder ignores `guest-qmp.py drag` (it moves in one step). To drag
 a file in the Finder (onto the Aura icon, or a copy to the hard disk),
@@ -224,6 +246,74 @@ Toolbox points learned the hard way:
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
   handle then names Aura's font data.
+
+## Fonts
+
+Aura draws with the system's fonts first and with the fonts bundled in
+the `Fonts` folder beside the application for families and characters
+the system lacks.
+
+- **Where faces come from.** On Mac OS 9, `platform_mac.c` registers
+  every outline face of the FONDs in the resource chain (their `sfnt`
+  resources load on first use), then the bundled faces listed in
+  `Fonts/fonts.idx`. On the host, `platform_host.c` loads a fixed list of
+  macOS fonts that match Mac OS 9's, then the bundled faces of
+  `assets/fonts` (`fontdir.c`), lazily. `aura-host` takes
+  `--bundled-only` (no system fonts: reproducible renders, close to a
+  Mac OS 9 machine without the system's fonts), `--no-bundled-fonts` and
+  `--fonts-dir D`; `$AURA_FONTS` also names the folder. `aura-host
+  fonts` lists the faces and marks the bundled ones.
+- **The bundled set** is in `assets/fonts`, one folder per family with
+  its licence: Aura Sans, Aura Serif and Aura Mono (Liberation 2.1.5,
+  metric-compatible with Arial, Times New Roman and Courier New, renamed
+  because Liberation's Reserved Font Name forbids a subset under its own
+  name), Inter (modern interface fonts), DejaVu Sans (the last-resort
+  text face) and Noto Emoji (monochrome emoji), about 3.4 MB.
+  `assets/fonts/README.md` records sources, versions, licences, sizes
+  and what was left out.
+- **To add a font**, put its folder (licence included) in
+  `assets/fonts`; reduce it with `tools/fonts-prepare.py` or pyftsubset
+  to TrueType outlines (no CFF, no variable fonts, no colour tables),
+  keeping file and folder names to 31 characters; regenerate the index
+  with `build/host/src/platform/host/aura-host font-index assets/fonts`;
+  add its sources to the README; and name it in the alias table or the
+  fallback lists if it should stand in for other families. The paint
+  tests check that `fonts.idx` matches the folder and that every face
+  parses and draws.
+- **The alias table** is `src/paint/fontalias.c`: rows map a family name
+  as pages write it (ASCII case-insensitive) to the families tried in
+  its place, installed system families first and bundled faces last.
+  Rows for the CSS generic families also name the preference slot whose
+  family (the user's font preferences, or the platform's choice) is
+  tried before the row; a target naming a generic expands to it. To
+  extend it, add a row. Matching (`au_fontset_match`) tries the families
+  the page names up to its first generic family, then their alias
+  targets, then the generic, and so on, then sans-serif. So "Roboto,
+  Arial, sans-serif" uses an installed Arial before Inter, and "Roboto,
+  sans-serif" uses Inter.
+- **Per-character fallback** is `AuFontList` (`au_fontlist_new`) and
+  `au_shape_text_list` in `src/paint/fallback.c`, which layout uses for
+  all text through its `LFont`. Text is split into clusters (a base with
+  its combining marks, variation selectors and emoji modifiers) and each
+  cluster gets the first face that has all of it: the primary face, the
+  list's other candidates in matching order, the text fallback list
+  (DejaVu Sans first, then system faces with wide coverage, including
+  CJK faces when a machine has them), the emoji list, then any face
+  already loaded. Emoji presentation (by default or with U+FE0F) tries
+  the emoji list first. Default-ignorable code points draw nothing, so
+  U+FE0F is dropped and ZWJ sequences draw their components; skin tone
+  modifiers are dropped. Marks are placed over their base by their ink
+  boxes (the fonts carry no GPOS for Aura to read). Fallback faces keep
+  the requested weight and style, synthesized when missing. A per-list
+  cache and a per-set cache keyed by code point and style keep this
+  fast; a face is loaded only when it is tried.
+- **Line height.** With `line-height: normal`, a line holding fallback
+  glyphs grows to the fallback face's ascent and descent (each with half
+  its line gap) where they exceed the primary's, as Blink does; a fixed
+  line height ignores fallback faces.
+- **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
+  joining, Indic reordering or bidirectional text; colour emoji; a CJK
+  font pack (see the fonts README for what one needs).
 
 ## Design
 
