@@ -679,6 +679,9 @@ void au_css_style_document(AuCssResolver *r, AuDocument *doc);
 /* Restyles what au_css_invalidate marked; styles everything if nothing
  * was styled before. */
 void au_css_restyle(AuCssResolver *r, AuDocument *doc);
+/* The number of elements styled since the resolver was created (for
+ * tests and timings: how much a change restyled). */
+uint32_t au_css_resolver_styled_count(const AuCssResolver *r);
 /* Releases every AuElement.style in doc. */
 void au_css_clear_document(AuDocument *doc);
 

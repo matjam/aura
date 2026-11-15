@@ -324,6 +324,7 @@ struct AuLayout {
     float vw, vh;      /* viewport */
     float doc_w, doc_h;
     bool need_build, need_layout, built_once;
+    uint32_t build_count, layout_count; /* box tree builds and layout passes since creation */
     /* fonts */
     LFont *font_hash[64];
     LArena font_arena;

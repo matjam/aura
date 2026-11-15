@@ -1520,6 +1520,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->need_build) {
         /* Keep inner scroll offsets across the rebuild. */
         l_build_tree(L);
+        L->build_count++;
         L->need_build = false;
         L->need_layout = true;
         L->need_restack = true;
@@ -1543,6 +1544,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
             forget_layouts(L);
         L->gen++;
         layout_root(L);
+        L->layout_count++;
         L->full_layout = false;
         L->need_layout = false;
         L->need_restack = true;
@@ -1566,6 +1568,12 @@ void au_layout_document_size(const AuLayout *L, float *w, float *h)
 {
     *w = L->doc_w;
     *h = L->doc_h;
+}
+
+void au_layout_pass_counts(const AuLayout *L, uint32_t *builds, uint32_t *layouts)
+{
+    *builds = L->build_count;
+    *layouts = L->layout_count;
 }
 
 void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
