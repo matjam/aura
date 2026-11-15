@@ -952,6 +952,79 @@ global object is the window, the DOM bindings and the event loop.
   iterators never advanced), and patch 0004 pads every `alloca`, because
   Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
   Do not use `alloca` or variable-length arrays in Aura's own code.
+- **The prelude** is one function expression split over
+  `src/js/prelude*.js`; `prelude.c` embeds the files in order (base, dom,
+  html, range, cssom, window, net, obs). To add a file, add its `#embed`
+  line there. A name declared twice across the files stops the runtime
+  from starting ("invalid redefinition").
+- **To debug a script on a live page**, use `aura-host chrome` actions:
+  `--do js:CODE` evaluates CODE in the active tab and prints the result,
+  `--do save:FILE` writes the page source, `--do console` prints the
+  console. Uncaught errors, errors in event listeners and unhandled
+  promise rejections go to the console at error level; one that the
+  page's `error` or `unhandledrejection` listener cancels (Google's
+  `window.onerror` returns true) goes there at debug level, marked
+  "handled by the page". To work on a site's scripts offline, save the
+  page and the scripts it loads and serve them from a local HTTP server
+  (the origin must be http for origin checks to behave as on the site).
+- **window.postMessage** takes any absolute URL as the target origin
+  and compares only its origin. Google's search box defers its submit
+  with `postMessage("sbox.df", location.href)`; comparing the string
+  with the origin dropped the message and Return did nothing
+  (`tests/js/pages/search_defer.html`, `test_search_box_defer` in
+  `tests/forms`).
+- **Range** (`prelude_range.js`, `ranges.c`). Boundary points live in C
+  so that the DOM mutation hooks can move them without running script:
+  `js_ranges_inserted` and `js_ranges_removed` follow the DOM standard's
+  insert and remove steps. Offsets in text are UTF-16 code units, which
+  only script knows, so `replaceData` and `splitText` in
+  `prelude_dom.js` report their edits with `N.rangeText` and
+  `N.rangeSplit`; the `data`, `nodeValue` and `textContent` setters and
+  the parser are handled in `js_ranges_text` (data only appended moves
+  nothing, anything else puts the node's points at offset 0). To change
+  a text mutation path in the prelude, keep it going through
+  `replaceData`. Not exact: `getClientRects` and
+  `getBoundingClientRect` return the boxes of the elements a range
+  covers (layout has no query from a DOM text offset to a position),
+  and `normalize()` moves points in merged text nodes to their parent.
+- **Selection** is script state with one range and a direction
+  (`extend`, `setBaseAndExtent`, `selectionchange`). It is not the
+  selection the user makes with the mouse (`page_doc.c`), and it is not
+  painted: joining them needs a mapping between DOM offsets and
+  `AuTextPos` (processed text offsets) in layout.
+- **CSSOM** (`prelude_cssom.js`). `element.sheet` and
+  `document.styleSheets` give a `CSSStyleSheet` per style or link
+  element. Rules are read from the sheet's text
+  (`AuJsHooks.sheet_text`, `au_dv_sheet_text` in `docview.c`) by a
+  splitter in script; `insertRule`, `deleteRule` and changes to a rule
+  write the whole text back (`au_dv_sheet_set_text`, kept in
+  `SheetSrc.om_text`), and the document view parses it again, so the
+  element's own text does not change. `sheet.disabled` sets
+  `SheetSrc.disabled`. A rule's declarations are the `style` attribute
+  of an element that is never inserted, so they share the inline style
+  code. Not done: constructed sheets and `adoptedStyleSheets`, the
+  sheets of `@import` rules, rules nested in a style rule; a
+  cross-origin sheet's rules throw SecurityError.
+- **getComputedStyle** returns the used width and height in pixels
+  (`computedValue` in `prelude_dom.js`, through `N.rect`, which forces a
+  layout), takes `::before`, `::after` and `::marker`, and reads
+  `white-space` as one keyword. Margins, insets and percentages in other
+  properties are still computed values, `transform` is not a matrix, and
+  the `border` and `font` shorthands serialize every part.
+- **crypto** (`getRandomValues`, `randomUUID`; no `subtle`) exists only
+  when the embedder passes `AuJsHooks.random`
+  (`AuDocViewCallbacks.random` for a document view). `aura-host js`
+  reads `/dev/urandom`. The browser does not pass one yet: to give pages
+  `crypto`, set the callback in `page_doc.c` from the platform's entropy
+  source (`AuNetOps.entropy`).
+- **Start-up cost.** `aura-host js --stats` reports 21 to 24 ms and
+  1.66 MB to start a runtime on the host; 18 to 21 ms of it compiles the
+  293 KB prelude and 2 to 4 ms runs it. The prelude is not precompiled
+  to bytecode yet: to do it, compile with `JS_EVAL_FLAG_COMPILE_ONLY` in
+  a host tool at build time, write it with `JS_WriteObject`
+  (`JS_WRITE_OBJ_BYTECODE`; QuickJS-ng swaps bytes itself when reading
+  on a big-endian machine), load it with `JS_ReadObject` and
+  `JS_EvalFunction`, and check JSTest in the guest.
 
 ## Forms
 
@@ -1019,6 +1092,42 @@ work with script off, and script reads and writes the same state.
   `wait:MS`, `shot:FILE.png` and `console`. For example, `aura-host
   chrome --net --tab https://html.duckduckgo.com/html/ --do clickname:q
   --do "type:mac os 9" --do key:return --do wait:3000 -o run/ddg.png`.
+- **What a keystroke costs.** A character typed into, or deleted from,
+  a text field that stays non-empty restyles nothing, builds no box
+  tree, runs no layout and invalidates the field's rectangle only.
+  `edited` in `forms.c` restyles only when `field_style_state` changes:
+  the field becomes empty or stops being empty (`:placeholder-shown`),
+  or its validity bits change. Enter also fires keypress (code 13)
+  before implicit submission. To measure, run `aura-host chrome --tab
+  PAGE --do clickname:NAME --do keys:TEXT`: for each key it prints the
+  time in the event, the idle pass and painting, and the counts from
+  `au_docview_stats` (style passes, elements styled, tree builds,
+  layouts) and the pixels invalidated. In the guest, focus a page field
+  and choose View > Debug > Page Timings: it types 16 keys and shows
+  milliseconds per key with the restyle and layout counts.
+  `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
+  with `:has()` rules, with and without script listeners. Measured in
+  the guest on a 400-paragraph page with `:has()` rules: 61 to 124 ms
+  per key before (a restyle of every element and a layout per key),
+  4.5 ms after.
+- **What script does per key still costs.** A change in a subtree that
+  is not in the document marks nothing dirty (`h_dom_changed` in
+  `script.c`), and attributes the box tree never reads (`aria-*`,
+  `data-*`, `role`, `title`, `tabindex`, a hidden input's `value`)
+  restyle without a box tree rebuild (`au_dv_dom_changed`). An
+  attribute or class change in the document still restyles every
+  element when a sheet has a `:has()` rule (`au_css_invalidate`), and a
+  restyle that computes equal values still schedules a layout or a tree
+  build, because `style_diff` in `layout.c` compares style groups by
+  pointer. Wikipedia's search field sets a hidden input's value on
+  every key, so each key there costs a full restyle, a tree build and a
+  layout until those two are fixed in `src/css` and `src/layout`.
+  `match.c` reads `:placeholder-shown` and validity from the value
+  attribute, not the control's live value, so those selectors do not
+  follow typing yet.
+- **Mac OS 9 key handling.** `bw_key` does not paint: the event loop in
+  `main.c` handles up to 8 queued keys and then paints once
+  (`idle_all`).
 - **Tests.** `tests/forms` (editing, encodings, focus, submission,
   validation, event order), `tests/js/forms.js` (bindings and named
   access), the forms part of `tests/browser/test_net_page.c` (GET and
