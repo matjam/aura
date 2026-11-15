@@ -314,8 +314,14 @@ void au_js_run_frame(AuJs *js)
     js->frames = NULL;
     js->nframes = js->frames_cap = 0;
     JSValue ts = JS_NewFloat64(ctx, js_now(js));
+    /* When a callback (or the jobs it leaves) is stopped for running too
+     * long, the rest of this frame's callbacks are dropped: each would
+     * start with a new time limit, and a page that had queued hundreds
+     * while its observers kept each other going held this call for
+     * minutes. */
+    uint32_t stops = js->root->interrupts;
     for (uint32_t i = 0; i < n; i++) {
-        if (!js->closing) {
+        if (!js->closing && js->root->interrupts == stops) {
             JSValue r = js_call(js, cbs[i].fn, js->global, 1, (JSValueConst *)&ts);
             JS_FreeValue(ctx, r);
             au_js_checkpoint(js);

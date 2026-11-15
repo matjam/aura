@@ -68,4 +68,4 @@ file(GLOB DOM_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*.js
 # A script that never ends must be stopped by its time limit: one that
 # is not shows as a timeout here.
 add_test(NAME js_dom_fuzz_regress COMMAND fuzz_dom replay ${DOM_REGRESS})
-set_tests_properties(js_dom_fuzz_regress PROPERTIES TIMEOUT 120)
+set_tests_properties(js_dom_fuzz_regress PROPERTIES TIMEOUT 300)

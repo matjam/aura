@@ -394,6 +394,12 @@ static void run_jobs(AuJs *js)
             break;
         if (r < 0)
             js_report_exception(js);
+        /* The script's time is up: the jobs left wait for the next
+         * entry. Each further job would run up to ten thousand steps
+         * before the engine asked again, and jobs that queue jobs
+         * (observers that change the tree) kept that up for minutes. */
+        if (js->root->interrupted)
+            break;
     }
 }
 
@@ -410,7 +416,7 @@ void au_js_checkpoint(AuJs *js)
     for (int round = 0; round < 64; round++) {
         run_jobs(js);
         bool more = false;
-        for (AuJs *g = root; g; g = g->group_next) {
+        for (AuJs *g = root; g && !root->interrupted; g = g->group_next) {
             if (g->closing)
                 continue;
             if (g->nreacts) {
@@ -422,7 +428,7 @@ void au_js_checkpoint(AuJs *js)
                 more = true;
             }
         }
-        if (!more && !JS_IsJobPending(js->rt))
+        if (root->interrupted || (!more && !JS_IsJobPending(js->rt)))
             break;
     }
     report_rejections(js);
