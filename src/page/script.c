@@ -57,6 +57,7 @@ struct AuDocScript {
         uint32_t id;      /* loader id */
         const char *type; /* content type guessed from the URL, or NULL */
         bool head_sent;   /* the loader reported the response head */
+        AuJs *js;         /* who asked: the document's runtime or a worker's */
     } *fetches;           /* fetches made by script */
     uint32_t nfetches, fetches_cap;
     uint32_t modules;                  /* module scripts started, not evaluated */
@@ -372,32 +373,39 @@ static const char *type_of(const char *url)
 
 static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
 {
-    (void)js;
     AuDocScript *s = ctx;
-    /* GET, and POST with a body when the embedder's loader takes one
-     * (au_docview_set_request_ex); the Content-Type header goes with the
-     * body, other request headers are not sent. */
-    bool post = !strcmp(req->method, "POST");
-    if ((strcmp(req->method, "GET") != 0 && !post) || (req->body_len && !post))
-        return 0;
+    /* One request of a script's fetch (src/js/fetch.c follows redirects
+     * and applies CORS). A loader that takes a request with its context
+     * (au_docview_set_request_ex) sends it as described; without one only
+     * a plain GET can go out. */
+    bool get = !strcmp(req->method, "GET");
     uint32_t id;
-    if (post) {
-        if (!au_dv_top(s->dv)->request_ex)
-            return 0;
+    bool bg = req->dest == AU_FETCH_DEST_EMPTY || req->dest == AU_FETCH_DEST_WORKER;
+    if (au_dv_top(s->dv)->request_ex) {
         AuResourceRequest rq;
         memset(&rq, 0, sizeof rq);
         rq.url = req->url;
         rq.kind = AU_RES_OTHER;
         rq.document_url = au_docview_url(s->dv);
-        rq.method = "POST";
-        rq.body = req->body ? req->body : "";
+        rq.method = req->method;
+        rq.body = req->body;
         rq.body_len = req->body_len;
         for (size_t i = 0; i < req->nheaders; i++)
             if (au_ieq(req->headers[2 * i], strlen(req->headers[2 * i]), "content-type", 12))
                 rq.body_type = req->headers[2 * i + 1];
-        id = au_dv_request_ex(s->dv, &rq, req->dest == AU_FETCH_DEST_EMPTY);
+        rq.headers = req->headers;
+        rq.nheaders = req->nheaders;
+        rq.script_mode = req->mode == AU_FETCH_NO_CORS ? 2 : req->mode == AU_FETCH_SAME_ORIGIN_MODE ? 3 : 1;
+        rq.cache = req->cache == AU_FETCH_CACHE_ONLY_IF_CACHED ? AU_FETCH_CACHE_FORCE : req->cache;
+        rq.omit_credentials = req->credentials != AU_FETCH_INCLUDE;
+        rq.manual_redirect = req->manual_redirect;
+        rq.referrer = req->referrer;
+        rq.referrer_policy = req->referrer_policy;
+        id = au_dv_request_ex(s->dv, &rq, bg);
     } else {
-        id = au_dv_request(s->dv, req->url, req->dest == AU_FETCH_DEST_EMPTY);
+        if (!get || req->body_len)
+            return 0;
+        id = au_dv_request(s->dv, req->url, bg);
     }
     if (!id)
         return 0;
@@ -408,6 +416,7 @@ static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
     s->fetches[s->nfetches].id = id;
     s->fetches[s->nfetches].type = type_of(req->url);
     s->fetches[s->nfetches].head_sent = false;
+    s->fetches[s->nfetches].js = js;
     s->nfetches++;
     return id;
 }
@@ -421,11 +430,13 @@ static struct ScriptFetch *find_fetch(AuDocScript *s, uint32_t id)
 }
 
 /* Removes a script fetch; returns false if id is not one. */
-static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *head_sent)
+static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *head_sent, AuJs **js)
 {
     struct ScriptFetch *f = find_fetch(s, id);
     if (!f)
         return false;
+    if (js)
+        *js = f->js;
     if (type)
         *type = f->type;
     if (head_sent)
@@ -437,7 +448,7 @@ static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *hea
 static void f_abort(void *ctx, uint32_t id)
 {
     AuDocScript *s = ctx;
-    if (take_fetch(s, id, NULL, NULL))
+    if (take_fetch(s, id, NULL, NULL, NULL))
         au_dv_cancel(s->dv, id);
 }
 
@@ -838,8 +849,10 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
     if (f) {
         f->head_sent = true;
         if (s->js) {
+            /* f->js: the document's runtime, or the worker that asked */
+            AuJs *to = f->js;
             enter(s);
-            au_js_fetch_head(s->js, id, status, status_text ? status_text : "", headers, nheaders, final_url);
+            au_js_fetch_head(to, id, status, status_text ? status_text : "", headers, nheaders, final_url);
             leave(s);
         }
         return;
@@ -860,7 +873,8 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
 {
     const char *type = NULL;
     bool head_sent = false;
-    if (take_fetch(s, id, &type, &head_sent)) {
+    AuJs *to = NULL;
+    if (take_fetch(s, id, &type, &head_sent, &to)) {
         if (!s->js)
             return true;
         enter(s);
@@ -871,11 +885,11 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
              * from the URL. */
             const char *hdrs[2] = {"content-type", type};
             if (!head_sent)
-                au_js_fetch_head(s->js, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
+                au_js_fetch_head(to, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
             if (len)
-                au_js_fetch_data(s->js, id, data, len);
+                au_js_fetch_data(to, id, data, len);
         }
-        au_js_fetch_done(s->js, id, ok);
+        au_js_fetch_done(to, id, ok);
         leave(s);
         return true;
     }

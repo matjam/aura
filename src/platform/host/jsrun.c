@@ -33,6 +33,7 @@
 
 typedef struct HostReq {
     uint32_t id;
+    AuJs *js; /* who asked */
     char *url;
     struct HostReq *next;
 } HostReq;
@@ -122,11 +123,11 @@ static char *read_file(const char *path, size_t *len)
 
 static uint32_t h_fetch_start(void *ctx, AuJs *js, const AuFetchRequest *req)
 {
-    (void)js;
     JsRun *r = ctx;
     if (strncmp(req->url, "file:", 5) != 0)
         return 0;
     HostReq *q = au_calloc(sizeof *q);
+    q->js = js;
     q->id = ++r->next_id;
     q->url = au_strndup(req->url, strlen(req->url));
     *r->tail = q;
@@ -179,6 +180,7 @@ static bool deliver_one(JsRun *r, AuJs *js)
     HostReq *q = r->reqs;
     if (!q)
         return false;
+    js = q->js; /* the document's runtime, or the worker that asked */
     r->reqs = q->next;
     if (!r->reqs)
         r->tail = &r->reqs;

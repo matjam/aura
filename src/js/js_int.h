@@ -186,7 +186,15 @@ struct AuJs {
     size_t range_pend_len;
     /* fetches and modules */
     JsFetch *fetches;
+    uint32_t next_fetch_id;
+    struct AuCorsCache *cors_cache; /* root: the CORS preflight cache (fetch.c) */
     void *modules;
+    /* workers (worker.c): worker is set in a worker's own AuJs, which has
+     * no document; wk is then its record. workers lists the workers a
+     * document made. */
+    bool worker;
+    struct JsWorker *wk;
+    struct JsWorker *workers;
     /* statistics */
     uint32_t errors, interrupts;
     size_t live_bytes; /* bytes the runtime holds (runtime.c allocator) */
@@ -237,6 +245,7 @@ int js_iface_of(const AuNode *n);
 /* ---- natives.c, natives2.c ---- */
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
+void js_natives_shared_init(AuJs *js, JSValue N); /* the natives a worker has too */
 void js_natives_forms_init(AuJs *js, JSValue N);
 
 /* ---- ranges.c ---- */
@@ -272,6 +281,18 @@ bool js_fetch_pending(const AuJs *js);
 /* Origin of an absolute URL into out ("null" for opaque origins). */
 void js_origin_of(const char *url, char *out, size_t cap);
 bool js_same_origin(const AuJs *js, const char *url);
+
+/* ---- worker.c ---- */
+/* The embedder reported something for a fetch of a worker while the
+ * worker was not running: kept for the worker and replayed on its stack
+ * (kind 0 head, 1 data, 2 done, 3 failed). Returns false when js is not a
+ * worker or is running now (the caller then handles it at once). */
+bool js_worker_defer_fetch(AuJs *js, int kind, uint32_t id, int status, const char *text, const char *const *headers,
+                           size_t nheaders, const char *url, const void *data, size_t len);
+/* Whether this worker can park its stack to wait for the network, and the
+ * wait itself: returns false when the worker is being terminated. */
+bool js_worker_can_wait(AuJs *js);
+bool js_worker_wait(AuJs *js);
 
 /* ---- module.c ---- */
 void js_module_init(AuJs *js);

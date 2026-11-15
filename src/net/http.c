@@ -1137,8 +1137,11 @@ static void build_request(AuHttpTransfer *t, Conn *c)
     /* Referer */
     if (au_referrer_compute(t->referrer, &t->url, t->rpolicy, &tmp))
         au_buf_printf(&b, "Referer: %s\r\n", au_buf_cstr(&tmp));
-    /* Origin: for requests other than GET/HEAD, and for CORS. */
-    if (t->referrer && (t->mode == AU_MODE_CORS || (strcmp(t->method, "GET") && strcmp(t->method, "HEAD")))) {
+    /* Origin: for requests other than GET/HEAD, and for CORS. A caller
+     * that follows redirects itself (script requests: src/js/fetch.c)
+     * passes its own, which is "null" once a redirect crossed origins. */
+    if (t->referrer && !au_headers_get(&t->extra, "origin") &&
+        (t->mode == AU_MODE_CORS || (strcmp(t->method, "GET") && strcmp(t->method, "HEAD")))) {
         AuUrl r;
         if (au_url_parse(&r, t->referrer, NULL)) {
             AuOrigin o;

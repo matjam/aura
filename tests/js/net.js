@@ -115,7 +115,16 @@ promise_test('XMLHttpRequest', async () => {
     assert.equal(states[0], 1);
     assert.equal(states[states.length - 1], 4);
     assert.ok(x.getAllResponseHeaders().includes('content-type: application/json'));
-    assert.throws(() => x.open('GET', 'x', false), 'InvalidAccessError');
+    // a synchronous request of a document opens, and fails when sent (no network inside a script call)
+    assert.throws(() => x.open('GET', 'resources/data.json', false), 'InvalidAccessError', 'with a responseType');
+    const sy = new XMLHttpRequest();
+    sy.open('GET', 'resources/data.json', false);
+    assert.throws(() => sy.send(), 'NetworkError');
+    const d = new XMLHttpRequest();
+    d.open('GET', 'data:text/plain,sync%20ok', false);
+    d.send();
+    assert.equal(d.status, 200);
+    assert.equal(d.responseText, 'sync ok');
 });
 
 promise_test('XMLHttpRequest errors and abort', async () => {

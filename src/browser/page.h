@@ -110,6 +110,19 @@ typedef struct AuFetchRequest {
     size_t body_len;
     const char *body_type;    /* the body's Content-Type */
     bool omit_credentials;    /* send no cookies and no HTTP authentication (an icon on another host) */
+    /* A request made by script (fetch, XMLHttpRequest, a worker), one hop
+     * at a time: src/js/fetch.c applies CORS and follows redirects itself.
+     * headers: name, value pairs sent as given (Origin among them).
+     * script_mode: 0 for a resource of the page, else 1 cors, 2 no-cors,
+     * 3 same-origin (Sec-Fetch-Mode). manual_redirect: a 3xx response is
+     * delivered, not followed. no_store: the HTTP cache is neither read
+     * nor filled. no_referrer: no Referer header. */
+    const char *const *headers;
+    size_t nheaders;          /* pairs */
+    uint8_t script_mode;
+    bool manual_redirect;
+    bool no_store;
+    bool no_referrer;
 } AuFetchRequest;
 
 /* Why a fetch failed (src/net's errors, plus what the embedder adds). */
@@ -175,6 +188,12 @@ typedef struct AuFetchResponse {
     const AuFetchCert *cert;  /* https: the certificate details, or NULL */
     bool from_cache;
     bool no_store;            /* Cache-Control: no-store (a document with it is never kept for Back) */
+    const char *status_text;  /* the reason phrase; "" or NULL when none */
+    /* Every response header as name, value pairs (NULL when the fetcher
+     * does not pass them): script reads them through fetch and
+     * XMLHttpRequest, and the CORS checks need them. */
+    const char *const *headers;
+    size_t nheaders;          /* pairs */
 } AuFetchResponse;
 
 /* The end of a fetch. Strings and cert are valid during the call. */

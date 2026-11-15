@@ -53,6 +53,22 @@ typedef struct AuResourceRequest {
     const void *body;
     size_t body_len;
     const char *body_type;
+    /* A request made by script (fetch, XMLHttpRequest, a worker) or a
+     * resource fetched with CORS (a crossorigin attribute); zero for the
+     * rest. method is then any method. headers: name, value pairs to send
+     * as given. script_mode: 0 for a resource of the page, else 1 cors,
+     * 2 no-cors, 3 same-origin. cache: 0 the page's mode, 1 no-store,
+     * 2 reload, 3 no-cache (revalidate), 4 force-cache and only-if-cached
+     * (any stored copy). referrer: NULL for the document's URL, "" for
+     * none, else the URL to send. */
+    const char *const *headers;
+    size_t nheaders; /* pairs */
+    uint8_t script_mode;
+    uint8_t cache;
+    bool omit_credentials;
+    bool manual_redirect; /* deliver a 3xx response instead of following it */
+    const char *referrer;
+    uint8_t referrer_policy; /* 0: the document's; else 1 no-referrer ... 8 unsafe-url, as AuReferrerPolicy */
 } AuResourceRequest;
 
 typedef struct AuLoader {

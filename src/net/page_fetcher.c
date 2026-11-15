@@ -221,7 +221,22 @@ static void pf_response(void *ctx, uint32_t id, const AuLoadInfo *info)
     AuFetchCert *cert = au_alloc(sizeof *cert);
     AuFetchResponse resp;
     fill_response(&resp, info, cert);
+    /* Every header, for script and the CORS checks. */
+    const char **pairs = NULL;
+    const AuHeaders *h = info->response_headers;
+    if (h && h->n) {
+        size_t n = h->n > 256 ? 256 : h->n;
+        pairs = au_alloc(n * 2 * sizeof *pairs);
+        for (size_t i = 0; i < n; i++) {
+            pairs[2 * i] = h->items[i].name;
+            pairs[2 * i + 1] = h->items[i].value;
+        }
+        resp.headers = pairs;
+        resp.nheaders = n;
+    }
+    resp.status_text = info->reason ? info->reason : "";
     r->sink.response(r->sink.ctx, id, &resp);
+    au_free(pairs);
     au_free(cert);
 }
 
@@ -401,8 +416,24 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
         rq.body = au_body_from_bytes(frq->body, frq->body_len, frq->body_type);
     rq.content_type = frq->body_type;
     rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT || frq->kind == AU_FETCH_FRAME;
+    AuHeaders extra;
+    au_headers_init(&extra);
+    for (size_t i = 0; i < frq->nheaders; i++)
+        au_headers_add(&extra, frq->headers[2 * i], frq->headers[2 * i + 1]);
+    if (extra.n)
+        rq.headers = &extra;
+    if (frq->script_mode) {
+        rq.dest = AU_DEST_EMPTY;
+        rq.mode = 1 + (frq->script_mode == 1 ? AU_MODE_CORS : frq->script_mode == 2 ? AU_MODE_NO_CORS
+                                                                                    : AU_MODE_SAME_ORIGIN);
+    }
+    rq.manual_redirect = frq->manual_redirect;
+    rq.no_store = frq->no_store;
+    if (frq->no_referrer)
+        rq.referrer_policy = AU_RP_NO_REFERRER;
     AuLoadCallbacks cb = {r, pf_response, pf_data, pf_done, pf_download};
     r->id = au_net_loader_start(f->l, &rq, &cb);
+    au_headers_free(&extra);
     r->next = f->reqs;
     f->reqs = r;
     return r->id;
