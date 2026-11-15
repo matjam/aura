@@ -845,10 +845,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
     float top = -(stack[0].a + half), bottom = stack[0].d + half;
     bool any_top_bottom = false;
-    float tb_max = 0;
     /* per-fragment temporary: baseline offset (from root baseline) and top/bottom flags */
-    float *bo = au_alloc((nfr + 1) * sizeof(float) * 2);
+    float *bo = au_alloc((nfr + 1) * sizeof(float) * 3);
     float *ext = bo + nfr + 1;
+    /* top-aligned height (positive) or bottom-aligned height (negative), else 0 */
+    float *tbh = ext + nfr + 1;
+    memset(tbh, 0, (nfr + 1) * sizeof(float));
     for (uint32_t j = 0; j < nfr; j++) {
         LFrag *f = &S->fb.f[first + j];
         if (sp > f->depth)
@@ -883,7 +885,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_BOTTOM:
                 v->bo = 0;
                 any_top_bottom = true;
-                tb_max = l_max(tb_max, v->lh);
+                tbh[j] = bx->vertical_align == AU_VALIGN_TOP ? v->lh : -v->lh;
                 break;
             default: v->bo = P->bo; break;
             }
@@ -926,7 +928,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_TOP:
             case AU_VALIGN_BOTTOM:
                 any_top_bottom = true;
-                tb_max = l_max(tb_max, mh);
+                tbh[j] = va == AU_VALIGN_TOP ? mh : -mh;
                 tp = 0;
                 break;
             default: tp = P->bo - bl; break;
@@ -939,11 +941,19 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             }
         }
     }
-    float lh = bottom - top;
-    if (any_top_bottom && tb_max > lh) {
-        bottom += tb_max - lh;
-        lh = tb_max;
+    /* Top and bottom aligned boxes taller than the line extend it, in
+     * order: a top one below the baseline group, a bottom one above it
+     * (as Blink and Gecko do). */
+    for (uint32_t j = 0; any_top_bottom && j < nfr; j++) {
+        float h = tbh[j] < 0 ? -tbh[j] : tbh[j];
+        if (h <= bottom - top)
+            continue;
+        if (tbh[j] > 0)
+            bottom = top + h;
+        else
+            top = bottom - h;
     }
+    float lh = bottom - top;
     float baseline = -top;
     /* Positions. */
     sp = 0;

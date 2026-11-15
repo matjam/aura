@@ -129,6 +129,17 @@ x</div>
 #t y=0
 #b y=33.2
 
+=== a tall bottom-aligned box pushes the baseline group down
+<body style="margin:0">
+<div id=p>x<span style="display:inline-block;width:10px;height:40px;vertical-align:bottom"></span><span id=a style="display:inline-block;width:10px;height:5px"></span></div>
+<div id=q>x<span style="display:inline-block;width:10px;height:40px;vertical-align:top"></span><span id=c style="display:inline-block;width:10px;height:5px"></span></div>
+---
+// bottom: the line's top moves up, so the baseline is at 40 - 3.2
+#p h=40
+#a y=31.8
+// top: the line's bottom moves down; the baseline stays at 12.8
+#c y=47.8
+
 === vertical-align middle
 <body style="margin:0">
 <div style="line-height:100px">x<span id=m style="display:inline-block;width:10px;height:20px;vertical-align:middle"></span></div>
