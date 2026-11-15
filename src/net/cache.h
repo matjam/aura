@@ -56,6 +56,13 @@ AuHttpCache *au_cache_new(size_t max_bytes);
 void au_cache_free(AuHttpCache *c);
 void au_cache_set_max(AuHttpCache *c, size_t max_bytes); /* evicts down to it */
 void au_cache_set_storage(AuHttpCache *c, const AuCacheStorage *s);
+/* With a second-level storage, limits the bytes kept in memory to
+ * `bytes` (0: the whole budget, the default). Entries beyond it leave
+ * memory, least recently used first, and are read back from the storage
+ * when asked for; the budget still decides what may be stored. Without
+ * storage it has no effect. Use it where the storage is a disk cache, so
+ * that every body is not held twice. */
+void au_cache_set_resident(AuHttpCache *c, size_t bytes);
 void au_cache_clear(AuHttpCache *c);
 size_t au_cache_bytes(const AuHttpCache *c);
 size_t au_cache_count(const AuHttpCache *c);

@@ -6,6 +6,7 @@
  *     Aura Preferences   key=value preferences (src/browser/prefs.h)
  *     Bookmarks.html     Netscape bookmark file (bookmarks.h)
  *     History            history log (history.h)
+ *     Favicons           site icons by host (favicon.h)
  *     Session            open windows and tabs (browser.h)
  *     Downloads          the downloads list (downloads.h)
  *     Running            exists while Aura runs (unclean exit detection)
@@ -30,6 +31,10 @@
 #include <string.h>
 
 enum { kSaveDelayMs = 3000, kScrollSaveDelayMs = 30000 };
+
+/* The site icons (src/browser/favicon.h), beside the history. */
+#define kFaviconsFile "Favicons"
+static uint32_t favicons_saved_ms;
 
 static uint32_t saved_session_gen; /* session_gen when the Session file was last written */
 
@@ -307,6 +312,12 @@ void storage_load_all(void)
             keep_aside(F_DOWNLOADS);
         au_free(data);
     }
+    /* Site icons: a damaged file is only dropped (they are fetched
+     * again). */
+    if (storage_read_named(kFaviconsFile, &data, &len)) {
+        au_favicons_parse(b->favicons, data, len);
+        au_free(data);
+    }
     for (int i = 0; i < F_COUNT; i++) {
         save_state[i].saved_gen = save_state[i].seen_gen = generation((FileId)i);
         save_state[i].pending = false;
@@ -393,6 +404,26 @@ void storage_save_changed(bool force)
         } else {
             st->first_change_ms = now; /* try again after the delay */
         }
+        au_buf_free(&out);
+    }
+    /* Site icons, at most every half minute. With history off they are
+     * kept for the run only, and a file from before is emptied. */
+    if (au_favicons_dirty(g_browser->favicons) && (force || now - favicons_saved_ms >= kScrollSaveDelayMs)) {
+        AuBuf out;
+        au_buf_init(&out);
+        if (g_browser->prefs.history_enabled) {
+            au_favicons_serialize(g_browser->favicons, &out);
+        } else {
+            AuFavicons *none = au_favicons_new();
+            au_favicons_serialize(none, &out);
+            au_favicons_free(none);
+            AuBuf scratch;
+            au_buf_init(&scratch);
+            au_favicons_serialize(g_browser->favicons, &scratch); /* clears dirty */
+            au_buf_free(&scratch);
+        }
+        storage_write_named(kFaviconsFile, out.data ? out.data : "", out.len);
+        favicons_saved_ms = now;
         au_buf_free(&out);
     }
     mac_net_save(force);

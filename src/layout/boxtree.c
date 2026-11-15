@@ -249,11 +249,14 @@ static bool is_word_char(uint32_t c)
            (c >= 0xC0 && c != 0xD7 && c != 0xF7 && c != 0x2019);
 }
 
-/* Processes the text of one text node into B->tmp: text-transform, then
- * white space per white-space-collapse (CSS Text 3, 4.1). */
-static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
+/* Processes the text of one text node into out: text-transform, then
+ * white space per white-space-collapse (CSS Text 3, 4.1). *last_space
+ * says whether the inline content before it ends in a collapsible space,
+ * and is updated. With map (n + 1 entries), map[i] receives the offset in
+ * out of what source byte i became (the place before the character it
+ * belongs to; map[n] is the length), never decreasing. */
+void l_text_process(const AuStyle *s, const char *t, size_t n, bool *last_space, AuBuf *out, uint32_t *map)
 {
-    AuBuf *out = &B->tmp;
     au_buf_clear(out);
     int collapse = s->inh->white_space_collapse;
     int transform = s->inhr->text_transform;
@@ -262,6 +265,9 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
     while (i < n) {
         size_t adv;
         uint32_t c = au_utf8_decode(t + i, n - i, &adv);
+        if (map)
+            for (size_t k = 0; k < adv && i + k < n; k++)
+                map[i + k] = (uint32_t)out->len;
         i += adv;
         if (c == '\r') {
             if (i < n && t[i] == '\n')
@@ -272,9 +278,9 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
             c = ' ';
         bool ws = c == ' ' || c == '\t' || c == '\n';
         if (ws && collapse == AU_WHITE_SPACE_COLLAPSE_COLLAPSE) {
-            if (!B->last_space)
+            if (!*last_space)
                 au_buf_putc(out, ' ');
-            B->last_space = true;
+            *last_space = true;
             prev_word = false;
             continue;
         }
@@ -284,17 +290,17 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
                 while (out->len && out->data[out->len - 1] == ' ')
                     out->len--;
                 au_buf_putc(out, '\n');
-                B->last_space = true;
-            } else if (!B->last_space) {
+                *last_space = true;
+            } else if (!*last_space) {
                 au_buf_putc(out, ' ');
-                B->last_space = true;
+                *last_space = true;
             }
             prev_word = false;
             continue;
         }
         if (collapse == AU_WHITE_SPACE_COLLAPSE_PRESERVE_SPACES && c == '\n')
             c = ' ';
-        B->last_space = false;
+        *last_space = false;
         switch (transform) {
         case AU_TEXT_TRANSFORM_UPPERCASE:
             if (c == 0xDF) {
@@ -324,6 +330,18 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
             prev_word = false;
         au_buf_put_utf8(out, c);
     }
+    if (map) {
+        /* Spaces removed before a preserved break: keep the map monotonic. */
+        map[n] = (uint32_t)out->len;
+        for (size_t k = n; k-- > 0;)
+            if (map[k] > map[k + 1])
+                map[k] = map[k + 1];
+    }
+}
+
+static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
+{
+    l_text_process(s, t, n, &B->last_space, &B->tmp, NULL);
 }
 
 static void add_text(Builder *B, LBox *parent, AuNode *node, const AuStyle *s, const char *t, size_t n)
@@ -564,23 +582,301 @@ static void resolve_url(AuLayout *L, const char *url, char *out, size_t cap)
     }
 }
 
+bool l_style_contains_fixed(const AuStyle *s)
+{
+    const AuStyleRare *r = s->rare;
+    if (r->transform || r->translate || r->rotate || r->scale || r->filter || r->backdrop_filter ||
+        r->perspective.kind == AU_LEN_PX || (r->contain & (AU_CONTAIN_LAYOUT | AU_CONTAIN_PAINT)))
+        return true;
+    if (r->will_change) {
+        uint32_t n;
+        const AuCssValue *it = l_items(&r->will_change->value, &n);
+        for (uint32_t i = 0; i < n; i++) {
+            const char *name = it[i].type == AU_CSSV_IDENT ? it[i].u.str : NULL;
+            if (name && (!strcmp(name, "transform") || !strcmp(name, "perspective") || !strcmp(name, "filter") ||
+                         !strcmp(name, "translate") || !strcmp(name, "rotate") || !strcmp(name, "scale") ||
+                         !strcmp(name, "backdrop-filter") || !strcmp(name, "contain")))
+                return true;
+        }
+    }
+    return false;
+}
+
+int l_image_refresh(AuLayout *L, LReplaced *rep)
+{
+    if (!rep->src)
+        return 0;
+    int w = 0, h = 0;
+    const AuSurface *px = NULL;
+    bool loaded = L->env.image && L->env.image(L->env.ctx, rep->src, &w, &h, &px);
+    if (!loaded) {
+        w = h = 0;
+        px = NULL;
+    }
+    float d = rep->density > 0 ? rep->density : 1;
+    float iw = (float)w / d, ih = (float)h / d;
+    int r = 0;
+    if (loaded != rep->loaded || iw != rep->iw || ih != rep->ih)
+        r = 2;
+    else if (px != rep->pixels)
+        r = 1;
+    rep->loaded = loaded;
+    rep->iw = iw;
+    rep->ih = ih;
+    rep->ratio = h > 0 ? (float)w / h : 0;
+    rep->pixels = px;
+    rep->url = loaded && L->env.image_use ? rep->src : NULL;
+    rep->label = loaded ? NULL : rep->alt;
+    return r;
+}
+
 static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
 {
     char abs[2048];
     if (!url || !*url)
         return;
     resolve_url(L, url, abs, sizeof abs);
-    int w = 0, h = 0;
-    const AuSurface *px = NULL;
-    if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
-        rep->loaded = true;
-        rep->iw = (float)w;
-        rep->ih = (float)h;
-        rep->ratio = h > 0 ? (float)w / h : 0;
-        rep->pixels = px;
-        if (L->env.image_use)
-            rep->url = ar_strndup(&L->tree, abs, strlen(abs));
+    rep->src = ar_strndup(&L->tree, abs, strlen(abs));
+    l_image_refresh(L, rep);
+}
+
+/* ---- Image sources: srcset, sizes and <picture> (HTML, "Images") ---- */
+
+static bool ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
+
+/* A source size value (a CSS length) in pixels, or -1. */
+static float source_length(const char *p, const char *end, float vw, float vh)
+{
+    char buf[64];
+    size_t n = (size_t)(end - p);
+    if (n == 0 || n >= sizeof buf)
+        return -1;
+    memcpy(buf, p, n);
+    buf[n] = 0;
+    char *u;
+    double v = strtod(buf, &u);
+    if (u == buf || v < 0)
+        return -1;
+    while (*u && ws(*u))
+        u++;
+    size_t ul = strlen(u);
+    while (ul && ws(u[ul - 1]))
+        ul--;
+    if (ul == 2 && au_ieq(u, 2, "px", 2))
+        return (float)v;
+    if (ul == 2 && au_ieq(u, 2, "vw", 2))
+        return (float)v * vw / 100;
+    if (ul == 2 && au_ieq(u, 2, "vh", 2))
+        return (float)v * vh / 100;
+    if ((ul == 2 && au_ieq(u, 2, "em", 2)) || (ul == 3 && au_ieq(u, 3, "rem", 3)))
+        return (float)v * 16;
+    if (ul == 0 && v == 0)
+        return 0;
+    return -1;
+}
+
+/* The source size of a sizes attribute: the length of the first entry
+ * whose media condition matches, else the last entry's, else 100vw. */
+static float source_size(const char *sizes, float vw, float vh)
+{
+    if (!sizes)
+        return vw;
+    AuCssDevice dev;
+    au_css_device_default(&dev);
+    dev.width = vw;
+    dev.height = vh;
+    const char *p = sizes;
+    while (*p) {
+        const char *e = p;
+        int depth = 0;
+        while (*e && (*e != ',' || depth > 0)) {
+            if (*e == '(')
+                depth++;
+            else if (*e == ')' && depth > 0)
+                depth--;
+            e++;
+        }
+        const char *a = p, *b = e;
+        while (a < b && ws(*a))
+            a++;
+        while (b > a && ws(b[-1]))
+            b--;
+        /* The length is the last token; a media condition ends with ')'. */
+        const char *len = b;
+        while (len > a && !ws(len[-1]) && len[-1] != ')')
+            len--;
+        const char *cond_end = len;
+        while (cond_end > a && ws(cond_end[-1]))
+            cond_end--;
+        float px = source_length(len, b, vw, vh);
+        if (px >= 0 && (cond_end == a || au_css_media_text_matches(a, (size_t)(cond_end - a), &dev)))
+            return px;
+        p = *e ? e + 1 : e;
     }
+    return vw;
+}
+
+/* Picks the candidate of a srcset attribute for a device of one device
+ * pixel per CSS pixel: the lowest density that is at least 1, else the
+ * highest (as Blink picks for its device pixel ratio). src, when given,
+ * is the 1x candidate of a list without width descriptors. Returns the
+ * URL's start and sets *len; *viewport is set when the choice depends on
+ * the viewport (width descriptors). */
+static const char *pick_candidate(const char *srcset, const char *sizes, const char *src, float vw, float vh,
+                                  size_t *len, bool *viewport, float *density)
+{
+    const char *best = NULL;
+    size_t best_len = 0;
+    float best_d = 0;
+    bool any_w = false;
+    float size = -1;
+    const char *p = srcset ? srcset : "";
+    while (*p) {
+        while (*p && (ws(*p) || *p == ','))
+            p++;
+        if (!*p)
+            break;
+        const char *u = p;
+        while (*p && !ws(*p))
+            p++;
+        const char *ue = p;
+        bool comma_ended = false;
+        while (ue > u && ue[-1] == ',') {
+            ue--;
+            comma_ended = true;
+        }
+        float d = 1;
+        bool bad = false;
+        while (!comma_ended) {
+            while (*p && ws(*p))
+                p++;
+            if (!*p)
+                break;
+            if (*p == ',') {
+                p++;
+                break;
+            }
+            const char *t = p;
+            while (*p && !ws(*p) && *p != ',')
+                p++;
+            char num[32];
+            size_t tl = (size_t)(p - t);
+            if (tl < 2 || tl > sizeof num) {
+                bad = true;
+                continue;
+            }
+            memcpy(num, t, tl - 1);
+            num[tl - 1] = 0;
+            char *ne;
+            double v = strtod(num, &ne);
+            char unit = t[tl - 1];
+            if (*ne || v <= 0)
+                bad = true;
+            else if (unit == 'x')
+                d = (float)v;
+            else if (unit == 'w') {
+                if (size < 0)
+                    size = source_size(sizes, vw, vh);
+                any_w = true;
+                d = size > 0 ? (float)v / size : 1e9f;
+            } else if (unit != 'h')
+                bad = true;
+        }
+        if (bad || ue == u)
+            continue;
+        if (!best || (d >= 1 && (best_d < 1 || d < best_d)) || (d < 1 && best_d < 1 && d > best_d)) {
+            best = u;
+            best_len = (size_t)(ue - u);
+            best_d = d;
+        }
+    }
+    if (any_w)
+        *viewport = true;
+    if (src && *src && !any_w && (!best || best_d != 1)) {
+        /* src is a 1x candidate; an exact 1x in the list comes first. */
+        best = src;
+        best_len = strlen(src);
+        best_d = 1;
+    }
+    *len = best_len;
+    if (best)
+        *density = best_d;
+    return best;
+}
+
+static bool image_type_supported(const char *type)
+{
+    static const char *const ok[] = {"image/png",  "image/jpeg", "image/gif",    "image/webp",  "image/bmp",
+                                     "image/apng", "image/x-icon", "image/svg+xml", "image/vnd.microsoft.icon"};
+    size_t n = 0;
+    while (type[n] && type[n] != ';' && !ws(type[n]))
+        n++;
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (au_ieq(type, n, ok[i], strlen(ok[i])))
+            return true;
+    return false;
+}
+
+/* The URL an <img> shows at a vw x vh viewport, as written (not
+ * resolved): from the first usable <source> of its <picture> parent,
+ * else its srcset and src. Returns NULL when it has none. */
+static const char *img_source(const AuNode *img, float vw, float vh, size_t *len, bool *viewport, float *density)
+{
+    *density = 1;
+    const AuNode *pic = img->parent;
+    if (pic && au_is_html_element(pic, AU_ATOM_picture)) {
+        AuCssDevice dev;
+        au_css_device_default(&dev);
+        dev.width = vw;
+        dev.height = vh;
+        for (const AuNode *c = pic->first_child; c && c != img; c = c->next) {
+            if (!au_is_html_element(c, AU_ATOM_source))
+                continue;
+            const char *set = attr_s(c, "srcset");
+            if (!set || !*set)
+                continue;
+            const char *media = attr_s(c, "media"), *type = attr_s(c, "type");
+            if (media && *media) {
+                *viewport = true;
+                if (!au_css_media_text_matches(media, strlen(media), &dev))
+                    continue;
+            }
+            if (type && *type && !image_type_supported(type))
+                continue;
+            const char *u = pick_candidate(set, attr_s(c, "sizes"), NULL, vw, vh, len, viewport, density);
+            if (u)
+                return u;
+        }
+    }
+    const char *src = attr_s(img, "src");
+    const char *set = attr_s(img, "srcset");
+    if (set && *set) {
+        const char *u = pick_candidate(set, attr_s(img, "sizes"), src, vw, vh, len, viewport, density);
+        if (u)
+            return u;
+    }
+    *density = 1;
+    *len = src ? strlen(src) : 0;
+    return src;
+}
+
+bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out)
+{
+    size_t len = 0;
+    bool viewport = false;
+    float density;
+    const char *u;
+    if (au_is_html_element(&el->node, AU_ATOM_img))
+        u = img_source(&el->node, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, &len, &viewport,
+                       &density);
+    else {
+        u = attr_s(&el->node, "src");
+        len = u ? strlen(u) : 0;
+    }
+    if (!u || !len)
+        return false;
+    au_buf_append(out, u, len);
+    return true;
 }
 
 /* Content items of a ::before/::after/::marker style into box. */
@@ -728,6 +1024,33 @@ static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
         au_buf_free(&text);
         return;
     }
+    /* list-style-image: the image is the marker while the loader knows
+     * it; a failed image falls back to list-style-type (CSS Lists 3,
+     * section 3.2). */
+    const AuCssBlob *li = es->inhr->list_style_image;
+    if (li && li->value.type == AU_CSSV_URL && li->value.u.str && *li->value.u.str) {
+        LReplaced *rep = ar_alloc(&B->L->tree, sizeof *rep);
+        image_lookup(B->L, rep, li->value.u.str);
+        if (rep->loaded) {
+            /* Not sized yet, or failing later: the marker may become the
+             * list-style-type one, which is another box. */
+            if (rep->iw <= 0 || rep->ih <= 0)
+                B->L->images_shape = true;
+            rep->marker = true;
+            LBlock *blk = (LBlock *)new_box(B, LK_BLOCK, el, s, sizeof(LBlock));
+            blk->b.pseudo = AU_CSS_PSEUDO_MARKER;
+            blk->b.inner = LI_REPLACED;
+            blk->b.replaced = LR_IMAGE;
+            blk->b.flags = LF_ANON | (inside ? LF_INLINE_LEVEL : LF_MARKER_OUT);
+            blk->rep = rep;
+            append(item, &blk->b);
+            B->L->stats.blocks++;
+            if (inside)
+                B->last_space = false;
+            au_buf_free(&text);
+            return;
+        }
+    }
     const AuCssBlob *lt = es->inh->list_style_type;
     Counter *c = find_counter(B, "list-item", 9);
     int32_t v = c ? c->value : 1;
@@ -848,6 +1171,7 @@ static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_chil
     resolve_url(L, url, abs, sizeof abs);
     int w = 0, h = 0;
     const AuSurface *px = NULL;
+    L->images_shape = true;
     if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
         *skip_children = true;
         return LR_IMAGE;
@@ -1081,12 +1405,34 @@ static void setup_replaced(Builder *B, LBlock *k)
     au_buf_init(&t);
     switch (k->b.replaced) {
     case LR_IMAGE: {
-        image_lookup(B->L, rep, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
+        if (au_is_html_element(n, AU_ATOM_img)) {
+            /* srcset, sizes and <picture> choose the URL. */
+            size_t ulen = 0;
+            bool viewport = false;
+            AuLayout *L = B->L;
+            float density;
+            const char *u = img_source(n, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, &ulen,
+                                       &viewport, &density);
+            /* The natural size is divided by the candidate's density. */
+            rep->density = density;
+            if (viewport)
+                L->src_viewport = true;
+            if (u && ulen) {
+                au_buf_clear(&t);
+                au_buf_append(&t, u, ulen);
+                image_lookup(L, rep, au_buf_cstr(&t));
+                au_buf_clear(&t);
+            }
+        } else {
+            image_lookup(B->L, rep, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
+        }
         const char *alt = attr_s(n, "alt");
-        if (!rep->loaded && !alt && au_is_html_element(n, AU_ATOM_input))
+        if (!alt && au_is_html_element(n, AU_ATOM_input))
             alt = "Submit"; /* image button without alt text */
-        if (!rep->loaded && alt)
-            rep->label = ar_strndup(&B->L->tree, alt, strlen(alt));
+        if (alt)
+            rep->alt = ar_strndup(&B->L->tree, alt, strlen(alt));
+        if (!rep->loaded)
+            rep->label = rep->alt;
         break;
     }
     case LR_BUTTON: {
@@ -1272,6 +1618,14 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
         b->flags |= LF_RELPOS;
     else if (bx->position == AU_POSITION_STICKY)
         b->flags |= LF_STICKY;
+    /* A box with a transform, perspective, a filter or layout or paint
+     * containment is the containing block of its absolutely positioned
+     * and fixed descendants (CSS Transforms 1 section 3, Transforms 2,
+     * Filter Effects 1 section 5, Containment 1 sections 3.3 and 3.4,
+     * will-change for those properties). Inline boxes are not
+     * transformable. */
+    if (b->kind == LK_BLOCK && l_style_contains_fixed(s))
+        b->flags |= LF_TRANSFORM;
     if (s->inh->visibility != AU_VISIBILITY_VISIBLE)
         b->flags |= LF_HIDDEN;
     if (au_display_list_item(d))
@@ -1614,6 +1968,9 @@ static void pop(Builder *B)
 void l_build_tree(AuLayout *L)
 {
     l_free_tree(L);
+    L->images_shape = false;
+    L->fixed_backgrounds = false;
+    L->src_viewport = false;
     AuElement *rootel = L->doc ? au_document_element(L->doc) : NULL;
     if (!rootel || !rootel->style)
         return;

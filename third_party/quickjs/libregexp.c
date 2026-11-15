@@ -3453,6 +3453,127 @@ int lre_get_flags(const uint8_t *bc_buf)
     return get_u16(bc_buf + RE_HEADER_FLAGS);
 }
 
+static void lre_swap16(uint8_t *p)
+{
+    put_u16(p, bswap16(get_u16(p)));
+}
+
+static void lre_swap32(uint8_t *p)
+{
+    put_u32(p, bswap32(get_u32(p)));
+}
+
+/* Swaps the 16 and 32 bit words of compiled bytecode in place: the header
+   (flags, bytecode length) and every opcode's operands. The group names
+   after the bytecode are bytes. 'buf' is in the native byte order.
+   Every opcode is named here so that a new one fails instead of being
+   written unswapped. */
+int lre_byte_swap(uint8_t *buf, size_t len)
+{
+    uint32_t bc_len, pos, n, i, oplen;
+    uint8_t *bc;
+    int opcode;
+
+    if (len < RE_HEADER_LEN)
+        return -1;
+    bc_len = get_u32(buf + RE_HEADER_BYTECODE_LEN);
+    if (bc_len > len - RE_HEADER_LEN)
+        return -1;
+    lre_swap16(buf + RE_HEADER_FLAGS);
+    lre_swap32(buf + RE_HEADER_BYTECODE_LEN);
+    bc = buf + RE_HEADER_LEN;
+    pos = 0;
+    while (pos < bc_len) {
+        opcode = bc[pos];
+        if (opcode >= REOP_COUNT)
+            return -1;
+        oplen = reopcode_info[opcode].size;
+        if (oplen > bc_len - pos)
+            return -1;
+        switch(opcode) {
+        case REOP_char:
+        case REOP_char_i:
+            lre_swap16(bc + pos + 1);
+            break;
+        case REOP_char32:
+        case REOP_char32_i:
+        case REOP_goto:
+        case REOP_split_goto_first:
+        case REOP_split_next_first:
+        case REOP_lookahead:
+        case REOP_negative_lookahead:
+            lre_swap32(bc + pos + 1);
+            break;
+        case REOP_loop:
+        case REOP_set_i32:
+            lre_swap32(bc + pos + 2);
+            break;
+        case REOP_loop_split_goto_first:
+        case REOP_loop_split_next_first:
+        case REOP_loop_check_adv_split_goto_first:
+        case REOP_loop_check_adv_split_next_first:
+            lre_swap32(bc + pos + 2);
+            lre_swap32(bc + pos + 6);
+            break;
+        case REOP_back_reference:
+        case REOP_back_reference_i:
+        case REOP_backward_back_reference:
+        case REOP_backward_back_reference_i:
+            n = bc[pos + 1];
+            if (n > bc_len - pos - oplen)
+                return -1;
+            oplen += n;
+            break;
+        case REOP_range:
+        case REOP_range_i:
+            n = get_u16(bc + pos + 1);
+            if (n * 4 > bc_len - pos - oplen)
+                return -1;
+            lre_swap16(bc + pos + 1);
+            for(i = 0; i < n * 2; i++)
+                lre_swap16(bc + pos + 3 + i * 2);
+            oplen += n * 4;
+            break;
+        case REOP_range32:
+        case REOP_range32_i:
+            n = get_u16(bc + pos + 1);
+            if (n * 8 > bc_len - pos - oplen)
+                return -1;
+            lre_swap16(bc + pos + 1);
+            for(i = 0; i < n * 2; i++)
+                lre_swap32(bc + pos + 3 + i * 4);
+            oplen += n * 8;
+            break;
+        case REOP_dot:
+        case REOP_any:
+        case REOP_space:
+        case REOP_not_space:
+        case REOP_line_start:
+        case REOP_line_start_m:
+        case REOP_line_end:
+        case REOP_line_end_m:
+        case REOP_match:
+        case REOP_lookahead_match:
+        case REOP_negative_lookahead_match:
+        case REOP_save_start:
+        case REOP_save_end:
+        case REOP_save_reset:
+        case REOP_word_boundary:
+        case REOP_word_boundary_i:
+        case REOP_not_word_boundary:
+        case REOP_not_word_boundary_i:
+        case REOP_set_char_pos:
+        case REOP_check_advance:
+        case REOP_prev:
+            break; /* no operands, or 8 bit ones */
+        default:
+            return -1;
+        }
+        pos += oplen;
+    }
+    return 0;
+}
+
 /* Return NULL if no group names. Otherwise, return a pointer to
    'capture_count - 1' zero terminated UTF-8 strings. */
 const char *lre_get_groupnames(const uint8_t *bc_buf)

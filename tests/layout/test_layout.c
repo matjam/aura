@@ -25,6 +25,7 @@
  * square, the default 16px gives 16px glyphs and 16px lines, so geometry
  * does not depend on system fonts. Values compare within 0.05px. */
 #include "ahem.h"
+#include "net/dataurl.h"
 #include "page/page.h"
 
 #include <math.h>
@@ -107,9 +108,52 @@ static int count_lines(AuLayout *L, AuElement *el)
     return n;
 }
 
+/* The cases' loader: data: URLs only. The view asks for an image when
+ * layout or a paint first needs it; deliver_data answers what is pending. */
+typedef struct DataLoader {
+    struct {
+        uint32_t id;
+        char *url;
+    } req[64];
+    int n;
+    uint32_t next;
+} DataLoader;
+
+static uint32_t data_request(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind)
+{
+    DataLoader *d = ctx;
+    (void)dv;
+    (void)kind;
+    if (strncmp(url, "data:", 5) != 0 || d->n == 64)
+        return 0;
+    d->req[d->n].id = ++d->next;
+    d->req[d->n].url = strdup(url);
+    return d->req[d->n++].id;
+}
+
+static void deliver_data(DataLoader *d, AuDocView *dv)
+{
+    while (d->n > 0) {
+        d->n--;
+        uint32_t id = d->req[d->n].id;
+        char *url = d->req[d->n].url;
+        AuDataUrl du;
+        au_data_url_init(&du);
+        bool ok = au_data_url_decode(url, &du);
+        if (ok)
+            au_docview_resource_data(dv, id, du.body.data, du.body.len);
+        au_docview_resource_done(dv, id, ok);
+        au_data_url_free(&du);
+        free(url);
+    }
+}
+
 static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expect, int line0, int vw, int vh)
 {
-    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    DataLoader loader;
+    memset(&loader, 0, sizeof loader);
+    AuLoader li = {&loader, data_request, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
     /* Cases run in standards mode unless they start with their own
      * doctype (or a comment saying "quirks"). */
     static char src[1 << 16];
@@ -121,6 +165,8 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
     }
     au_docview_load(dv, html, hlen, "file:///test/case.html");
     au_docview_set_viewport(dv, vw, vh);
+    au_docview_update(dv);
+    deliver_data(&loader, dv);
     au_docview_update(dv);
     AuDocument *doc = au_docview_document(dv);
     AuLayout *L = au_docview_layout(dv);
@@ -268,6 +314,12 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
                 surf = au_surface_new(vw, vh);
                 AuCanvas *c = au_canvas_new(surf);
                 au_docview_paint(dv, c, (AuRect){0, 0, (float)vw, (float)vh}, 0, scroll);
+                if (loader.n) {
+                    /* background images are asked for by the first paint */
+                    deliver_data(&loader, dv);
+                    au_docview_paint(dv, c, (AuRect){0, 0, (float)vw, (float)vh}, 0, scroll);
+                    au_docview_paint(dv, c, (AuRect){0, 0, (float)vw, (float)vh}, 0, scroll);
+                }
                 au_canvas_free(c);
             }
             checks++;

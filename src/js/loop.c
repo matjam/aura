@@ -267,6 +267,20 @@ bool au_js_run_tasks(AuJs *js, uint32_t budget_ms)
         break;
     }
     js_safe_point(js);
+    /* Collect once script has been quiet for a second and the heap has
+     * grown by an eighth (at least 512 KB) since the last collection.
+     * QuickJS collects by itself only when the heap is half as large
+     * again as after its last collection, so up to a third of a page's
+     * heap could be garbage held by reference cycles while it sits idle
+     * (0.6 MB of 11.3 MB on a Wikipedia article four seconds after its
+     * load). */
+    if (ran) {
+        js->last_ran = js_now(js);
+    } else if (!js->closing) {
+        size_t step = js->gc_base / 8 > (512u << 10) ? js->gc_base / 8 : (512u << 10);
+        if (js->live_bytes > js->gc_base + step && js_now(js) - js->last_ran >= 1000)
+            au_js_gc(js);
+    }
     return ran;
 }
 

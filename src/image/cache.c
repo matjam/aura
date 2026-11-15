@@ -181,8 +181,10 @@ static void sync_view(AuImageEntry *e)
 
 static void set_sized(AuImageCache *c, AuImageEntry *e, int w, int h, AuImageFormat f)
 {
-    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h)
+    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h) {
         c->layout_changed = true;
+        e->changed = true; /* repaint where it shows */
+    }
     e->iw = w;
     e->ih = h;
     e->format = f;
@@ -192,8 +194,10 @@ static void set_sized(AuImageCache *c, AuImageEntry *e, int w, int h, AuImageFor
 
 static void set_failed(AuImageCache *c, AuImageEntry *e)
 {
-    if (e->state != AU_IMAGE_FAILED)
+    if (e->state != AU_IMAGE_FAILED) {
         c->layout_changed = true;
+        e->changed = true;
+    }
     e->state = AU_IMAGE_FAILED;
     drop_pixels(e);
     sync_view(e);

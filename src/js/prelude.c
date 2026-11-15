@@ -1,6 +1,9 @@
 /* The JavaScript prelude, embedded at build time. The parts are one
  * function expression split over several files (see prelude.js): their
- * concatenation, in this order, is the source runtime.c evaluates. */
+ * concatenation, in this order, is the prelude. The build compiles it to
+ * bytecode (prelude.bc) and that is what the runtime loads; with the
+ * CMake option AURA_JS_PRELUDE_SOURCE the source is embedded and compiled
+ * at every runtime start instead (errors then carry line numbers). */
 #include <stddef.h>
 
 #if defined(__clang__)
@@ -8,6 +11,8 @@
 #elif defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
+
+#ifdef AU_JS_PRELUDE_SOURCE
 
 extern const char au_js_prelude_src[];
 extern const size_t au_js_prelude_len;
@@ -31,3 +36,19 @@ const char au_js_prelude_src[] = {
     , 0};
 
 const size_t au_js_prelude_len = sizeof au_js_prelude_src - 1;
+
+#else
+
+/* The prelude as QuickJS bytecode, compiled at build time by
+ * tools/jsprelude from the same files (third_party/quickjs.cmake), in the
+ * byte order of the machine this is built for. */
+extern const unsigned char au_js_prelude_bc[];
+extern const size_t au_js_prelude_bc_len;
+
+const unsigned char au_js_prelude_bc[] = {
+#embed "prelude.bc"
+};
+
+const size_t au_js_prelude_bc_len = sizeof au_js_prelude_bc;
+
+#endif

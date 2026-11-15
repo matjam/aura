@@ -32,6 +32,77 @@
 #include <time.h>
 #include <unistd.h>
 
+/* ---- Memory report (builds with AURA_MEM_TRACK) ----
+ * Prints the bytes live per source folder and per file, largest first,
+ * with what each held when the total was at its peak. */
+void au_host_mem_report(const char *label)
+{
+#ifdef AU_MEM_TRACK
+    static AuMemSite sites[4096];
+    int n = au_mem_sites(sites, 4096);
+    struct {
+        char name[48];
+        size_t live, at_peak, blocks;
+    } dirs[64];
+    int nd = 0;
+    for (int i = 0; i < n; i++) {
+        const char *f = sites[i].file;
+        for (const char *q; (q = strstr(f + 1, "/src/")) != NULL;)
+            f = q;
+        if (!strncmp(f, "/src/", 5))
+            f++;
+        sites[i].file = f;
+        const char *e = strrchr(f, '/');
+        size_t len = e ? (size_t)(e - f) : strlen(f);
+        if (len > 47)
+            len = 47;
+        int d;
+        for (d = 0; d < nd; d++)
+            if (strlen(dirs[d].name) == len && !memcmp(dirs[d].name, f, len))
+                break;
+        if (d == nd) {
+            if (nd == 64)
+                continue;
+            memset(&dirs[nd], 0, sizeof dirs[nd]);
+            memcpy(dirs[nd].name, f, len);
+            nd++;
+        }
+        dirs[d].live += sites[i].live;
+        dirs[d].at_peak += sites[i].at_peak;
+        dirs[d].blocks += sites[i].blocks;
+    }
+    fprintf(stderr, "memory (%s): %lu KB live, %lu KB at the peak\n", label, (unsigned long)(au_mem_live() / 1024),
+            (unsigned long)(au_mem_peak() / 1024));
+    fprintf(stderr, "  %-28s %10s %10s %9s\n", "folder", "live KB", "at peak", "blocks");
+    for (;;) {
+        int best = -1;
+        for (int d = 0; d < nd; d++)
+            if (dirs[d].name[0] && (best < 0 || dirs[d].live > dirs[best].live))
+                best = d;
+        if (best < 0)
+            break;
+        fprintf(stderr, "  %-28s %10.1f %10.1f %9lu\n", dirs[best].name, dirs[best].live / 1024.0,
+                dirs[best].at_peak / 1024.0, (unsigned long)dirs[best].blocks);
+        dirs[best].name[0] = 0;
+    }
+    fprintf(stderr, "  %-28s %10s %10s %9s %10s\n", "file:line", "live KB", "at peak", "blocks", "own peak");
+    for (;;) {
+        int best = -1;
+        for (int i = 0; i < n; i++)
+            if (sites[i].file && (best < 0 || sites[i].live + sites[i].at_peak > sites[best].live + sites[best].at_peak))
+                best = i;
+        if (best < 0 || sites[best].live + sites[best].at_peak < (size_t)(getenv("AURA_MEM_MIN") ? atoi(getenv("AURA_MEM_MIN")) : 65536))
+            break;
+        fprintf(stderr, "  %-28s %10.1f %10.1f %9lu %10.1f\n", sites[best].file, sites[best].live / 1024.0,
+                sites[best].at_peak / 1024.0, (unsigned long)sites[best].blocks, sites[best].peak / 1024.0);
+        sites[best].file = NULL;
+    }
+#else
+    (void)label;
+    fprintf(stderr, "aura-host: memory report needs a build with -DAURA_MEM_TRACK=ON\n");
+#endif
+}
+
 static double now_ms(void)
 {
     struct timespec ts;
@@ -52,11 +123,12 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net] [--no-doc-cache] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
-            "                        go:URL back forward cache (the HTTP cache's counts with --net,\n"
+            "                        go:URL back forward closetab mem (bytes live per source line, in a\n"
+            "                        build with -DAURA_MEM_TRACK=ON) cache (the HTTP cache's counts with --net,\n"
             "                        the documents kept for Back and Forward, DNS lookups)\n"
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
             "                        in the page) save:FILE (the page source) console;\n"
@@ -656,6 +728,13 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
                                     : "the page was loaded again, its document from the network",
                shown, now_ms() - t0);
+    } else if (!strcmp(a, "mem")) {
+        au_host_mem_report("now");
+    } else if (!strcmp(a, "closetab")) {
+        /* Closes the active tab (the window keeps at least one). */
+        if (w->ntabs > 1)
+            au_bw_close_tab(w, w->active);
+        chrome_settle(b, w, ses, o->net, 20, 500);
     } else if (!strcmp(a, "cache")) {
         AuCacheStats cs;
         memset(&cs, 0, sizeof cs);
@@ -762,9 +841,26 @@ static AuHitPart hit_by_name(const char *s)
     return AU_HIT_NONE;
 }
 
+/* crypto for pages: the system's random device. --no-entropy makes it
+ * answer as the Mac OS 9 pool does before it has gathered enough. */
+static bool host_no_entropy;
+static bool host_random(void *ctx, void *buf, size_t len)
+{
+    (void)ctx;
+    if (host_no_entropy)
+        return false;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f)
+        return false;
+    size_t got = len ? fread(buf, 1, len, f) : 0;
+    fclose(f);
+    return got == len;
+}
+
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    host.random = host_random;
     if (o->scroll_bench) {
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;
@@ -773,6 +869,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         host.invalidate = key_inval;
     }
     AuBrowser *b = au_browser_new(fonts, &host);
+    b->site_icons = true;
     if (o->no_doc_cache)
         b->prefs.document_cache_pages = 0;
     /* --net: http and https through the network stack and page fetcher,
@@ -902,6 +999,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         printf("%s: %dx%d, %d tabs (%s), painted in %.2f ms\n", out, o->w, o->h, w->ntabs,
                o->pos == AU_TABS_LEFT ? "left" : "top", t1 - t0);
     }
+    if (getenv("AURA_MEM"))
+        au_host_mem_report("after the paint");
     au_canvas_free(c);
     au_surface_free(s);
     au_browser_free(b);
@@ -988,6 +1087,8 @@ int main(int argc, char **argv)
                 o.no_shift = true;
             else if (!strcmp(a, "--no-doc-cache"))
                 o.no_doc_cache = true;
+            else if (!strcmp(a, "--no-entropy"))
+                host_no_entropy = true;
             else if (!strcmp(a, "--mouse") && i + 2 < argc) {
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);

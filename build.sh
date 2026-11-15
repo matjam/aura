@@ -4,7 +4,8 @@
 # Usage: ./build.sh [host|ppc|test|all]
 #   host  build the engine, host tools and tests for this machine (build/host)
 #   test  build host, then run the tests
-#   ppc   build the Mac OS 9 application with Retro68 (build/ppc)
+#   ppc   build the Mac OS 9 application with Retro68 (build/ppc), the
+#         distributable folder and the self-extracting archive
 #   all   test, then ppc (default)
 #
 # The Retro68 PowerPC toolchain is found by toolchain/find.sh: RETRO68,
@@ -36,6 +37,7 @@ ppc() {
     # tools/make-icon.py --custom-icon writes, plus hasCustomIcon.
     python3 tools/finder-flags.py --bundle --custom-icon build/ppc/src/platform/macos9/Aura.bin
     dist
+    sea
 }
 
 # The distributable folder, build/ppc/dist/Aura: the application (as
@@ -59,6 +61,21 @@ dist() {
     done
     cp assets/fonts/fonts.idx assets/fonts/README.md "$d/Fonts/"
     echo "$d: $(du -sk "$d/Fonts" | cut -f1) KB of fonts, $(du -sk "$d" | cut -f1) KB in all"
+}
+
+# The self-extracting archive of the distributable folder, in two forms:
+# build/ppc/dist/Aura-VERSION.sea.bin (MacBinary) and Aura-VERSION.hqx
+# (BinHex 4.0, plain text). Opened on Mac OS 9, it asks where to put the
+# Aura folder and writes it there (src/platform/macos9/sea). Every date in
+# it is the last commit's, or SOURCE_DATE_EPOCH when that is set, so the
+# same commit gives the same files.
+sea() {
+    v=$(tools/version.sh)
+    out=build/ppc/dist/Aura-$v
+    date=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}
+    python3 tools/make-sea.py --date "$date" build/ppc/dist/Aura "$out.sea.bin"
+    python3 tools/binhex.py "$out.sea.bin" "$out.hqx"
+    python3 tools/binhex.py --compare "$out.hqx" "$out.sea.bin"
 }
 
 case "${1:-all}" in

@@ -3,6 +3,7 @@ run/
 .DS_Store
 .claude/
 __pycache__/
+/chrome.png
 disks/
 toolchain/Retro68/
 toolchain/build/

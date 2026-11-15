@@ -370,6 +370,58 @@ static void d_remove(void *ctx, const char *key)
             d->key[i][0] = 0;
 }
 
+/* With storage and a resident limit, memory holds the newest entries
+ * only and the others come back from the storage. */
+static void test_resident(void)
+{
+    Disk disk;
+    memset(&disk, 0, sizeof disk);
+    AuCacheStorage st = {&disk, d_store, d_load, d_remove};
+    AuHttpCache *c = au_cache_new(1 << 20);
+    au_cache_set_storage(c, &st);
+    au_cache_set_resident(c, 1500);
+    char d[32], spec[160], body[1100], big[1001];
+    date_str(T0, d);
+    snprintf(spec, sizeof spec, "Date: %s\nCache-Control: max-age=100\nETag: \"x\"", d);
+    memset(big, 'a', 1000);
+    big[1000] = 0;
+    store(c, "http://r.test/1", "", 200, spec, big, T0);
+    big[0] = 'b';
+    store(c, "http://r.test/2", "", 200, spec, big, T0);
+    big[0] = 'c';
+    store(c, "http://r.test/3", "", 200, spec, big, T0);
+    CHECK(disk.stores == 3, "all three written to storage: %d", disk.stores);
+    CHECK(au_cache_count(c) == 1, "memory keeps the newest only: %lu entries, %lu bytes", (unsigned long)au_cache_count(c),
+          (unsigned long)au_cache_bytes(c));
+    int loads = disk.loads;
+    CHECK(look(c, "http://r.test/1", "", T0 + 10, body, sizeof body) == AU_CACHE_FRESH && body[0] == 'a' &&
+              strlen(body) == 1000,
+          "an entry that left memory is read back");
+    CHECK(disk.loads == loads + 1, "from the storage");
+    CHECK(look(c, "http://r.test/1", "", T0 + 10, body, sizeof body) == AU_CACHE_FRESH, "and is then in memory");
+    CHECK(disk.loads == loads + 1, "no second read");
+    CHECK(look(c, "http://r.test/3", "", T0 + 10, body, sizeof body) == AU_CACHE_FRESH && body[0] == 'c', "the others too");
+    /* An entry larger than the resident limit is still stored and usable. */
+    AuHttpCache *c2 = au_cache_new(1 << 20);
+    au_cache_set_storage(c2, &st);
+    au_cache_set_resident(c2, 100);
+    big[0] = 'd';
+    store(c2, "http://r.test/4", "", 200, spec, big, T0);
+    CHECK(look(c2, "http://r.test/4", "", T0 + 10, body, sizeof body) == AU_CACHE_FRESH && body[0] == 'd',
+          "an entry over the resident limit");
+    /* Without storage the limit does nothing. */
+    AuHttpCache *c3 = au_cache_new(1 << 20);
+    au_cache_set_resident(c3, 100);
+    store(c3, "http://r.test/5", "", 200, spec, big, T0);
+    store(c3, "http://r.test/6", "", 200, spec, big, T0);
+    CHECK(au_cache_count(c3) == 2, "no storage: both stay");
+    au_cache_free(c);
+    au_cache_free(c2);
+    au_cache_free(c3);
+    for (int i = 0; i < disk.n; i++)
+        au_buf_free(&disk.val[i]);
+}
+
 static void test_storage(void)
 {
     Disk disk;
@@ -840,6 +892,7 @@ int main(void)
     test_store_lookup();
     test_limits();
     test_storage();
+    test_resident();
     test_disk_cache();
     test_client();
     test_history();

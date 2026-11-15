@@ -63,6 +63,107 @@ static uint32_t pixel(AuSurface *s, int x, int y)
     return (uint32_t)s->pixels[y * s->stride + x] | 0xFF000000u;
 }
 
+/* DOM offsets (UTF-16 code units of a text node's data) to text
+ * positions and back, and the rectangles of a range per line. */
+static void test_dom_offsets(AuFontSet *fonts)
+{
+    static const char page[] =
+        "<!DOCTYPE html><body style='margin:0;font:10px/20px Ahem'>"
+        "<p style='margin:0'>  ab   cd\n ef  </p>"
+        "<p style='margin:0;text-transform:uppercase'>stra\xC3\x9F" "e x</p>"
+        "<p style='margin:0'>q\xF0\x9F\x98\x80z</p>"
+        "<p style='margin:0'><span>k </span> m</p>"
+        "<p style='margin:0;width:50px'>abcd efgh</p>"
+        "<p style='margin:0;display:none'>hidden</p>"
+        "<div> </div>";
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    au_docview_load(dv, page, sizeof page - 1, "about:test");
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    AuLayout *L = au_docview_layout(dv);
+    AuTextPos p;
+    uint32_t u;
+    AuRect rc[4];
+
+    /* collapsed white space: "  ab   cd\n ef  " shows as "ab cd ef " */
+    AuNode *n = text_of(dv, "  ab");
+    CHECK(n);
+    static const uint32_t want[] = {0, 0, 0, 1, 2, 3, 3, 3, 4, 5, 6, 6, 7, 8, 9, 9, 9};
+    for (uint32_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+        CHECK(au_layout_text_pos_from_dom(L, n, i, &p));
+        if (p.offset != want[i]) {
+            fprintf(stderr, "offset %u: position %u, want %u\n", (unsigned)i, (unsigned)p.offset, (unsigned)want[i]);
+            exit(1);
+        }
+    }
+    CHECK(au_layout_text_pos_from_dom(L, n, 1000, &p) && p.offset == 9); /* past the end */
+    /* back: the first DOM offset at or after the position, and the round
+     * trip gives the position again */
+    static const uint32_t back[] = {0, 3, 4, 5, 8, 9, 10, 12, 13, 14};
+    for (uint32_t o = 0; o <= 9; o++) {
+        p = (AuTextPos){n, o};
+        CHECK(au_layout_text_pos_to_dom(L, &p, &u));
+        if (u != back[o]) {
+            fprintf(stderr, "position %u: offset %u, want %u\n", (unsigned)o, (unsigned)u, (unsigned)back[o]);
+            exit(1);
+        }
+        AuTextPos q;
+        CHECK(au_layout_text_pos_from_dom(L, n, u, &q) && q.offset == o);
+    }
+    /* "cd" (DOM offsets 7 to 9) is at x 30 to 50 on the first line */
+    AuTextPos a, b;
+    CHECK(au_layout_text_pos_from_dom(L, n, 7, &a) && au_layout_text_pos_from_dom(L, n, 9, &b));
+    AuTextRange r = au_text_range_make(a, b);
+    CHECK(au_layout_range_rects(L, &r, rc, 4) == 1);
+    CHECK(rc[0].x == 30 && rc[0].w == 20 && rc[0].y == 5 && rc[0].h == 10);
+    /* a collapsed range: a caret of no width */
+    r = au_text_range_make(a, a);
+    CHECK(au_layout_range_rects(L, &r, rc, 4) == 1 && rc[0].x == 30 && rc[0].w == 0);
+
+    /* text-transform changes lengths: sharp s becomes SS */
+    n = text_of(dv, "stra");
+    CHECK(n && au_layout_text_pos_from_dom(L, n, 4, &p) && p.offset == 4);
+    CHECK(au_layout_text_pos_from_dom(L, n, 5, &p) && p.offset == 6);
+    CHECK(au_layout_text_pos_from_dom(L, n, 7, &p) && p.offset == 8);
+    p = (AuTextPos){n, 5}; /* between the two S */
+    CHECK(au_layout_text_pos_to_dom(L, &p, &u) && u == 5);
+    p = (AuTextPos){n, 8};
+    CHECK(au_layout_text_pos_to_dom(L, &p, &u) && u == 7);
+
+    /* a character outside the BMP is two code units and four bytes */
+    n = text_of(dv, "q");
+    CHECK(n && au_layout_text_pos_from_dom(L, n, 1, &p) && p.offset == 1);
+    CHECK(au_layout_text_pos_from_dom(L, n, 2, &p) && p.offset == 1); /* inside the pair: its start */
+    CHECK(au_layout_text_pos_from_dom(L, n, 3, &p) && p.offset == 5);
+    p = (AuTextPos){n, 5};
+    CHECK(au_layout_text_pos_to_dom(L, &p, &u) && u == 3);
+
+    /* " m" after "k ": its leading space collapsed into the one before */
+    n = text_of(dv, " m");
+    CHECK(n && au_layout_text_pos_from_dom(L, n, 0, &p) && p.offset == 0);
+    CHECK(au_layout_text_pos_from_dom(L, n, 1, &p) && p.offset == 0);
+    CHECK(au_layout_text_pos_from_dom(L, n, 2, &p) && p.offset == 1);
+
+    /* a range over two lines: one rectangle per line */
+    n = text_of(dv, "abcd efgh");
+    CHECK(n && au_layout_text_pos_from_dom(L, n, 2, &a) && au_layout_text_pos_from_dom(L, n, 7, &b));
+    r = au_text_range_make(a, b);
+    CHECK(au_layout_range_rects(L, &r, rc, 4) == 2);
+    CHECK(rc[0].x == 20 && rc[0].w == 20 && rc[1].x == 0 && rc[1].w == 20 && rc[1].y == rc[0].y + 20);
+    CHECK(au_layout_range_rects(L, &r, rc, 1) == 2); /* the count, whatever fits */
+
+    /* no box: not displayed, or white space that collapsed away */
+    n = text_of(dv, "hidden");
+    CHECK(n && !au_layout_text_pos_from_dom(L, n, 0, &p));
+    AuDocument *d = au_docview_document(dv);
+    AuNode *lastdiv = NULL;
+    for (AuNode *x = au_node_next(&d->node, &d->node); x; x = au_node_next(x, &d->node))
+        if (au_is_html_element(x, AU_ATOM_div))
+            lastdiv = x;
+    CHECK(lastdiv && lastdiv->first_child && !au_layout_text_pos_from_dom(L, lastdiv->first_child, 0, &p));
+    au_docview_free(dv);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -185,6 +286,7 @@ int main(void)
     au_surface_free(surf);
 
     au_docview_free(dv);
+    test_dom_offsets(fonts);
     au_fontset_free(fonts);
     printf("selection: all tests passed\n");
     return 0;

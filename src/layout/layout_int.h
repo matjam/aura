@@ -114,7 +114,8 @@ enum {
     LF_LINE_CLAMP = 1u << 26,
     LF_ESCAPES = 1u << 27,      /* holds an absolutely positioned box whose containing block is outside it */
     LF_MEASURE_OK = 1u << 28,   /* the measure cache (mk_*, m_res) is valid */
-    LF_LEGEND = 1u << 29        /* the rendered legend of its fieldset parent: placed on the top border */
+    LF_LEGEND = 1u << 29,       /* the rendered legend of its fieldset parent: placed on the top border */
+    LF_ABS_QUEUED = 1u << 31    /* in AuLayout.abs, waiting for its containing block to finish */
 };
 
 typedef struct LBox LBox;
@@ -181,11 +182,15 @@ typedef struct LReplaced {
     float ratio;      /* intrinsic aspect ratio, 0 when none */
     const AuSurface *pixels; /* decoded image or NULL */
     const char *url;  /* image: the absolute URL (tree arena), for env.image_use */
+    const char *src;  /* image: the absolute URL asked of env.image, or NULL */
+    const char *alt;  /* image: the text shown while the image is not known */
     const char *label; /* image alt, button, select or input text; list box rows */
     const char *aux;   /* placeholder of a text control; file input status text */
     uint16_t rows, cols; /* textarea and list box size */
     bool loaded;      /* the image is known (size from the loader) */
     bool placeholder; /* text input: label is the placeholder */
+    float density;    /* image: device pixels per CSS pixel of the srcset candidate; 0 means 1 */
+    bool marker;      /* image: a list-style-image marker, with L_MARKER_IMAGE_GAP after it */
 } LReplaced;
 
 typedef struct LBlock {
@@ -367,6 +372,18 @@ struct AuLayout {
     uint32_t nview_boxes;
     bool need_paint;
     bool need_restack;
+    /* The box tree's shape depends on which images are known (an object
+     * or embed shows its fallback content otherwise): an image change
+     * builds the tree again. */
+    bool images_shape;
+    /* A box painted a background layer with background-attachment: fixed
+     * since the tree was built: a scroll cannot move its pixels. */
+    bool fixed_backgrounds;
+    /* The viewport the tree's image sources were chosen for (srcset width
+     * descriptors, sizes, <source media>), and whether any choice depends
+     * on it: the tree is then built again when the viewport changes. */
+    float src_vw, src_vh;
+    bool src_viewport;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */
@@ -425,7 +442,11 @@ void l_text_free_caches(AuLayout *L);
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,
                  uint32_t color, float spacing);
 int l_break_class(uint32_t cp);
-enum { BK_NONE, BK_SPACE, BK_IDEO, BK_HYPHEN, BK_ZWSP, BK_SHY, BK_CLOSE, BK_OPEN, BK_NEWLINE, BK_TAB };
+enum {
+    BK_NONE, BK_SPACE, BK_IDEO, BK_HYPHEN, BK_ZWSP, BK_SHY, BK_CLOSE, BK_OPEN, BK_NEWLINE, BK_TAB,
+    BK_EXTEND, /* stays with what precedes it: combining marks, variation selectors, ZWJ, emoji modifiers, tags */
+    BK_RI      /* a regional indicator: breaks only between pairs */
+};
 
 /* boxtree.c */
 void l_build_tree(AuLayout *L);
@@ -478,6 +499,15 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy);
 void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark);
 void l_apply_relative(LBlock *b, float cb_w, float cb_h);
 LBlock *l_geom_parent(LBox *b);
+/* Space between a list-style-image marker and the list item's content,
+ * part of the marker box's width (Blink's kCMarkerPaddingPx). */
+#define L_MARKER_IMAGE_GAP 7
+void l_text_process(const AuStyle *s, const char *t, size_t n, bool *last_space, AuBuf *out, uint32_t *map);
+/* The style makes its box the containing block of fixed descendants. */
+bool l_style_contains_fixed(const AuStyle *s);
+/* Asks the loader about rep's image again. Returns 0 when nothing
+ * changed, 1 when only its pixels did, 2 when its size or presence did. */
+int l_image_refresh(AuLayout *L, LReplaced *rep);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);

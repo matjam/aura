@@ -44,3 +44,16 @@ target_link_libraries(test_back_cache aura_fakenet m)
 target_include_directories(test_back_cache PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_back_cache COMMAND test_back_cache)
 set_tests_properties(browser_back_cache PROPERTIES TIMEOUT 120)
+
+# crypto.getRandomValues and randomUUID from AuBrowserHost.random.
+add_executable(test_crypto test_crypto.c)
+target_link_libraries(test_crypto aura_engine m)
+add_test(NAME browser_crypto COMMAND test_crypto)
+
+# Site icons for tabs, on the fake transport.
+add_executable(test_favicon test_favicon.c)
+target_link_libraries(test_favicon aura_fakenet m)
+target_include_directories(test_favicon PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+target_compile_definitions(test_favicon PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME browser_favicon COMMAND test_favicon)
+set_tests_properties(browser_favicon PROPERTIES TIMEOUT 120)

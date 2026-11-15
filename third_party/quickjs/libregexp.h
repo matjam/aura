@@ -57,6 +57,10 @@ int lre_get_alloc_count(const uint8_t *bc_buf);
 int lre_check_bytecode(const uint8_t *bc_buf, int bc_buf_len);
 int lre_get_capture_count(const uint8_t *bc_buf);
 int lre_get_flags(const uint8_t *bc_buf);
+/* Swaps the 16 and 32 bit words of compiled bytecode (native byte order)
+   in place, for a machine of the other byte order. Returns -1 when the
+   bytecode is malformed. */
+int lre_byte_swap(uint8_t *buf, size_t len);
 const char *lre_get_groupnames(const uint8_t *bc_buf);
 int lre_exec(uint8_t **capture,
              const uint8_t *bc_buf, const uint8_t *cbuf, int cindex, int clen,

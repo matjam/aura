@@ -12,6 +12,9 @@
 
 /* Grows *arr (element size sz) so index n fits; *cap doubles. */
 void css_grow(void **arr, uint32_t *cap, uint32_t n, size_t sz);
+#ifdef AU_MEM_TRACK
+#define css_grow(arr, cap, n, sz) (au_mem_site_ = AU_MEM_HERE_, css_grow(arr, cap, n, sz))
+#endif
 #define CSS_PUSH(arr, n, cap) \
     (css_grow((void **)&(arr), &(cap), (n) + 1, sizeof(*(arr))), &(arr)[(n)++])
 

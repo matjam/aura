@@ -186,7 +186,7 @@ float l_control_line(AuLayout *L, const LBlock *b, float *ascent)
     LFont *f = l_font(L, s);
     float lh = l_line_height(s, f);
     if (ascent)
-        *ascent = (lh - (f->m.ascent + f->m.descent)) / 2 + f->m.ascent;
+        *ascent = floorf((lh - (f->m.ascent + f->m.descent)) / 2) + f->m.ascent;
     return lh;
 }
 
@@ -353,7 +353,11 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
     *ratio = 0;
     switch (b->b.replaced) {
     case LR_IMAGE:
-        if (r && r->loaded) {
+        if (r && r->loaded && r->marker) {
+            /* A marker image: its own size, then the gap. */
+            *w = r->iw > 0 ? r->iw + L_MARKER_IMAGE_GAP : 0;
+            *h = r->ih;
+        } else if (r && r->loaded) {
             *w = r->iw;
             *h = r->ih;
             *ratio = r->ratio;
@@ -1051,11 +1055,14 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy)
     /* Queued again before its containing block finished (a table lays its
      * cells out twice): one entry, at the latest static position. Two
      * entries per pass would double at every level of nesting. */
-    for (uint32_t i = L->nabs; i-- > 0;)
-        if (L->abs[i].box == &b->b) {
-            L->abs[i].cb = cb;
-            return;
-        }
+    if (b->b.flags & LF_ABS_QUEUED) {
+        for (uint32_t i = L->nabs; i-- > 0;)
+            if (L->abs[i].box == &b->b) {
+                L->abs[i].cb = cb;
+                return;
+            }
+    }
+    b->b.flags |= LF_ABS_QUEUED;
     if (L->nabs == L->abs_cap) {
         L->abs_cap = L->abs_cap ? L->abs_cap * 2 : 32;
         L->abs = au_realloc(L->abs, L->abs_cap * sizeof *L->abs);
@@ -1235,6 +1242,7 @@ void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark)
         /* Remove it, then lay it out (which may queue more after it). */
         memmove(&L->abs[i], &L->abs[i + 1], (L->nabs - i - 1) * sizeof *L->abs);
         L->nabs--;
+        e.box->flags &= ~LF_ABS_QUEUED;
         if (!cb && e.cb) {
             /* A containing block that never finished (too deep): use it anyway. */
         }
@@ -1294,12 +1302,6 @@ void au_layout_tree_changed(AuLayout *L)
     L->need_paint = true;
 }
 
-void au_layout_images_changed(AuLayout *L)
-{
-    L->need_build = true;
-    L->need_paint = true;
-}
-
 static void mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
@@ -1311,6 +1313,40 @@ static void mark_dirty(LBox *b)
         p->flags |= LF_CHILD_DIRTY;
         p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
         l_table_forget(p);
+    }
+}
+
+void au_layout_images_changed(AuLayout *L)
+{
+    if (L->need_build || !L->root || L->images_shape) {
+        L->need_build = true;
+        L->need_paint = true;
+        return;
+    }
+    /* The tree keeps its shape: only image boxes read the loader. A box
+     * whose image changed size (or became known, or failed) is laid out
+     * again; backgrounds and masks are looked up when painted. */
+    LBox *b = L->root;
+    while (b) {
+        if (b->kind == LK_BLOCK && b->replaced == LR_IMAGE && ((LBlock *)b)->rep) {
+            int r = l_image_refresh(L, ((LBlock *)b)->rep);
+            /* A width and height in pixels leave nothing to the image. */
+            const AuStyleBox *sb = b->style->box;
+            if (r == 2 && !(sb->width.kind == AU_LEN_PX && sb->height.kind == AU_LEN_PX)) {
+                mark_dirty(b);
+                L->need_layout = true;
+            }
+            if (r)
+                L->need_paint = true;
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
     }
 }
 
@@ -1339,7 +1375,8 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
             r = 2;
     }
     if (a->inhr != b->inhr) {
-        if (a->inhr->text_transform != b->inhr->text_transform || a->inhr->quotes != b->inhr->quotes)
+        if (a->inhr->text_transform != b->inhr->text_transform || a->inhr->quotes != b->inhr->quotes ||
+            a->inhr->list_style_image != b->inhr->list_style_image)
             return 3;
         r = 2;
     }
@@ -1350,6 +1387,7 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
         if (x->content != y->content || x->counter_reset != y->counter_reset ||
             x->counter_increment != y->counter_increment || x->counter_set != y->counter_set ||
             (x->transform == NULL) != (y->transform == NULL) || (x->opacity < 1) != (y->opacity < 1) ||
+            l_style_contains_fixed(a) != l_style_contains_fixed(b) ||
             x->line_clamp != y->line_clamp || x->contain != y->contain)
             return 3;
         if (x->transform != y->transform || x->box_shadow != y->box_shadow ||
@@ -1497,7 +1535,7 @@ void au_layout_styles_changed(AuLayout *L)
 static void layout_root(AuLayout *L)
 {
     LBlock *root = (LBlock *)L->root;
-    L->nabs = 0;
+    L->nabs = 0; /* empty after a finished pass; a new tree has no queued boxes */
     L->depth = 0;
     L->stats.layouts_skipped = 0;
     l_resolve_box_edges(root, L->vw);
@@ -1545,7 +1583,11 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (vh < 1)
         vh = 1;
     bool changed = false;
+    if (L->src_viewport && (vw != L->src_vw || vh != L->src_vh))
+        L->need_build = true; /* another srcset candidate may apply */
     if (L->need_build) {
+        L->src_vw = vw;
+        L->src_vh = vh;
         /* Keep inner scroll offsets across the rebuild. */
         l_build_tree(L);
         L->build_count++;
@@ -1633,11 +1675,8 @@ void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
     s->intrinsic_runs = L->intrinsic_runs;
 }
 
-bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
+static bool box_rect(LBox *b, AuRect *out)
 {
-    LBox *b = el ? (LBox *)el->box : NULL;
-    if (!b)
-        return false;
     if (b->kind == LK_BLOCK) {
         LBlock *k = (LBlock *)b;
         float x, y;
@@ -1681,4 +1720,109 @@ bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
     }
     *out = (AuRect){gx + x0, gy + y0, x1 - x0, y1 - y0};
     return true;
+}
+
+bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
+{
+    (void)L;
+    LBox *b = el ? (LBox *)el->box : NULL;
+    return b ? box_rect(b, out) : false;
+}
+
+/* The value names url (after resolving) as one of its images. */
+static bool value_names_image(AuLayout *L, const AuCssValue *v, const char *url)
+{
+    if (!v || v->type != AU_CSSV_URL || !v->u.str)
+        return false;
+    char abs[2048];
+    if (!L->env.resolve_url || !L->env.resolve_url(L->env.ctx, v->u.str, abs, sizeof abs))
+        return !strcmp(v->u.str, url);
+    return !strcmp(abs, url);
+}
+
+static bool style_names_image(AuLayout *L, const AuStyle *s, const char *url)
+{
+    AuBgLayer ly;
+    if (s->bg->background_image) {
+        size_t n = au_style_bg_layer_count(s);
+        for (size_t i = 0; i < n; i++) {
+            au_style_bg_layer(s, i, &ly);
+            if (value_names_image(L, ly.image, url))
+                return true;
+        }
+    }
+    if (s->rare->mask_image) {
+        size_t n = au_style_mask_layer_count(s);
+        for (size_t i = 0; i < n; i++) {
+            au_style_mask_layer(s, i, &ly);
+            if (value_names_image(L, ly.image, url))
+                return true;
+        }
+    }
+    return false;
+}
+
+int au_layout_image_users(AuLayout *L, const char *url, void (*fn)(void *ctx, AuRect r), void *ctx)
+{
+    if (!L->root || L->need_build)
+        return -1;
+    int count = 0;
+    const AuStyle *last = NULL;
+    bool last_hit = false;
+    LBox *b = L->root;
+    while (b) {
+        bool hit = false;
+        if (b->kind == LK_BLOCK && b->replaced == LR_IMAGE && ((LBlock *)b)->rep) {
+            const char *src = ((LBlock *)b)->rep->src;
+            hit = src && !strcmp(src, url);
+        } else if (b->kind == LK_BLOCK && b->replaced == LR_SVG) {
+            hit = true; /* an <image> inside may show it */
+        }
+        if (!hit && b->kind != LK_TEXT && b->style && !lb_anon(b) &&
+            (b->style->bg->background_image || b->style->rare->mask_image)) {
+            if (b->style != last) {
+                last = b->style;
+                last_hit = style_names_image(L, b->style, url);
+            }
+            hit = last_hit;
+        }
+        if (hit) {
+            /* The canvas takes the root's or the body's background, and a
+             * box that does not move with the document has no fixed
+             * document rectangle: the caller repaints everything. */
+            if (b == L->root || b->parent == L->root)
+                return -1;
+            for (LBox *p = b; p; p = p->parent) {
+                const AuStyle *ps = p->style;
+                if ((p->flags & LF_FIXED) || (ps && (ps->box->position == AU_POSITION_STICKY || ps->rare->transform ||
+                                                     ps->rare->translate || ps->rare->rotate || ps->rare->scale)))
+                    return -1;
+                if (p->kind == LK_BLOCK && p != L->root &&
+                    (((LBlock *)p)->scroll_x != 0 || ((LBlock *)p)->scroll_y != 0))
+                    return -1;
+            }
+            AuRect r;
+            if (box_rect(b, &r)) {
+                if (b->kind == LK_BLOCK) {
+                    /* Ink outside the border box: an inline SVG with
+                     * visible overflow. */
+                    const LArea *ov = &((LBlock *)b)->ov;
+                    float x0 = l_min(r.x, r.x + ov->x), y0 = l_min(r.y, r.y + ov->y);
+                    float x1 = l_max(r.x + r.w, r.x + ov->x + ov->w), y1 = l_max(r.y + r.h, r.y + ov->y + ov->h);
+                    r = (AuRect){x0, y0, x1 - x0, y1 - y0};
+                }
+                fn(ctx, r);
+                count++;
+            }
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
+    return count;
 }

@@ -434,6 +434,7 @@ static void history_button(ListWin *lw, int which)
         break;
     case H_CLEAR:
         au_history_clear(&g_browser->history);
+        au_favicons_clear(g_browser->favicons); /* they name visited hosts */
         lw->lv->selected = -1;
         au_browser_history_changed(g_browser);
         break;
@@ -787,6 +788,7 @@ void listwin_show(WinKind kind)
     lw->dl_sel = -1;
     lw->last_click_row = -1;
     au_listview_init(&lw->own);
+    lw->own.icons = g_browser->favicons;
     lw->lv = &lw->own;
     if (kind == WIN_COOKIES && mac_net_cookie_jar()) {
         au_cookie_view_init(&lw->cv, mac_net_cookie_jar());

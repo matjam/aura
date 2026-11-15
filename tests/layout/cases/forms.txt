@@ -7,10 +7,10 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0">
 <div id=d><span id=s>x</span><input id=t value=x><button id=b>x</button><input id=c type=checkbox></div>
 ---
-#d h=21.67
-#s y=3.2 h=16
-#t y=2.33 w=274.67 h=19.33
-#b y=2.33 w=29.33 h=19.33
+#d h=22
+#s y=3 h=16
+#t y=2 w=274.67 h=20
+#b y=2 w=29.33 h=20
 #c y=3 w=13 h=13
 
 === radio sits on the baseline with no bottom margin
@@ -18,21 +18,21 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <div id=d><span id=s>x</span><input id=r type=radio></div>
 ---
 #r y=3 w=13 h=13
-#s y=3.2
+#s y=3
 
 === input buttons are border-box and centre their label
 <body style="margin:0">
 <div><span id=s>x</span><input id=b type=submit value=xx style="height:40px"></div>
 ---
 #b y=0 w=42.67 h=40
-#s y=11.2
+#s y=11
 
 === text input with a height centres its text line
 <body style="margin:0">
 <div id=d><span id=s>x</span><input id=t style="height:40px" value=x></div>
 ---
 #t y=0 h=46
-#s y=14.2
+#s y=14
 
 === text input line-height sets its content height
 <body style="margin:0">
@@ -52,8 +52,8 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <div><span id=s>x</span><button id=b style="height:40px"><span id=i>x</span></button></div>
 ---
 #b y=0 h=40
-#i y=13.33
-#s y=11.2
+#i y=13
+#s y=11
 
 === button element is fit-content as a block
 <body style="margin:0">
@@ -72,7 +72,7 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0">
 <select id=s><option>x</option><option selected>xxxx</option></select>
 ---
-#s w=79.33 h=17.33
+#s w=79.33 h=18
 
 === select without arrow when appearance is none
 <body style="margin:0">
@@ -84,33 +84,33 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0">
 <select id=l multiple><option>x</option><option>xx</option></select>
 ---
-#l w=32.67 h=63.33
+#l w=32.67 h=66
 
 === list box size and its last row's baseline
 <body style="margin:0">
 <div><span id=s>x</span><select id=l size=2><option>x</option></select></div>
 ---
-#l y=0 h=32.67
-#s y=15.2
+#l y=0 h=34
+#s y=16
 
 === textarea: cols and rows, aligned by its bottom edge
 <body style="margin:0">
 <div id=d><span id=s>x</span><textarea id=t cols=10 rows=3>x</textarea></div>
 ---
-#t y=0 w=139.33 h=46
-#s y=33.2
+#t y=0 w=139.33 h=48
+#s y=35
 
 === textarea size does not depend on its content (controls.c paints the value)
 <body style="margin:0">
 <textarea id=t style="display:block" cols=2 rows=1>xx xx xx</textarea>
 ---
-#t w=32.67 h=19.33
+#t w=32.67 h=20
 
 === textarea as a block keeps its cols width
 <body style="margin:0">
 <textarea id=t style="display:block" cols=4></textarea>
 ---
-#t x=0 w=59.33 h=32.67
+#t x=0 w=59.33 h=34
 
 === progress and meter sizes and baseline
 <body style="margin:0">
@@ -124,7 +124,7 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0">
 <input id=f type=file>
 ---
-#f h=19.33 w=353.33
+#f h=20 w=353.33
 
 === color input box
 <body style="margin:0">
@@ -143,13 +143,13 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <div><span id=s>x</span><input id=c type=checkbox style="appearance:none;width:20px;height:20px;border:1px solid"></div>
 ---
 #c y=3 w=20 h=20
-#s y=13.2
+#s y=13
 
 === flex baseline alignment uses the control's text baseline
 <body style="margin:0">
 <div style="display:flex;align-items:baseline"><input id=t><span id=s style="font-size:32px">x</span></div>
 ---
-#t y=11.93
+#t y=12
 #s y=0
 
 === flex stretch makes controls as tall as the line
@@ -162,7 +162,7 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0;width:300px">
 <input id=t style="display:block;width:100%;box-sizing:border-box">
 ---
-#t x=0 w=300 h=19.33
+#t x=0 w=300 h=20
 
 === fieldset: the legend sits on the top border
 <body style="margin:0">

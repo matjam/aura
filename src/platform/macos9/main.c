@@ -930,6 +930,7 @@ int main(void)
     AuBrowserHost host;
     browserwin_host(&host);
     g_browser = au_browser_new(g_fonts, &host);
+    g_browser->site_icons = true; /* favicons in the tabs */
     {
         /* Selections use the highlight colour of the Appearance control
          * panel. */
@@ -995,8 +996,10 @@ int main(void)
 
     /* Quit: privacy options, then save everything (the session first, while
      * the windows are still open). */
-    if (g_browser->prefs.clear_history_on_quit)
+    if (g_browser->prefs.clear_history_on_quit) {
         au_history_clear(&g_browser->history);
+        au_favicons_clear(g_browser->favicons);
+    }
     storage_save_changed(true);
     storage_end_run();
     /* Dispose of the windows (their controls, GWorlds and TextEdit

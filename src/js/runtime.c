@@ -457,13 +457,27 @@ static const JSCFunctionListEntry base_natives[] = {
 
 /* ---- Creation ---- */
 
+#ifdef AU_JS_PRELUDE_SOURCE
 extern const char au_js_prelude_src[];
 extern const size_t au_js_prelude_len;
+#else
+extern const unsigned char au_js_prelude_bc[];
+extern const size_t au_js_prelude_bc_len;
+#endif
 
 static bool load_prelude(AuJs *js, JSValue N)
 {
     JSContext *ctx = js->ctx;
+#ifdef AU_JS_PRELUDE_SOURCE
     JSValue fn = JS_Eval(ctx, au_js_prelude_src, au_js_prelude_len, "aura:prelude", JS_EVAL_TYPE_GLOBAL);
+#else
+    /* The bytecode is the compiled script; running it gives the prelude
+     * function, as evaluating the source does. JS_EvalFunction frees the
+     * script. */
+    JSValue fn = JS_ReadObject(ctx, au_js_prelude_bc, au_js_prelude_bc_len, JS_READ_OBJ_BYTECODE);
+    if (!JS_IsException(fn))
+        fn = JS_EvalFunction(ctx, fn);
+#endif
     if (JS_IsException(fn)) {
         js_report_exception(js);
         return false;
@@ -660,9 +674,40 @@ bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, con
     return ok;
 }
 
+void au_js_memory_report(AuJs *js, AuBuf *out)
+{
+    JSMemoryUsage m;
+    JS_ComputeMemoryUsage(js->rt, &m);
+    au_buf_printf(out, "script heap %lu KB in %lu blocks (limit %lu KB), %lu wrappers\n",
+                  (unsigned long)(js->live_bytes / 1024), (unsigned long)m.malloc_count,
+                  (unsigned long)(js->settings.memory_limit / 1024), (unsigned long)js->nwraps);
+    au_buf_printf(out, "  atoms       %7lu  %7lu KB\n", (unsigned long)m.atom_count, (unsigned long)(m.atom_size / 1024));
+    au_buf_printf(out, "  strings     %7lu  %7lu KB\n", (unsigned long)m.str_count, (unsigned long)(m.str_size / 1024));
+    au_buf_printf(out, "  objects     %7lu  %7lu KB\n", (unsigned long)m.obj_count, (unsigned long)(m.obj_size / 1024));
+    au_buf_printf(out, "  properties  %7lu  %7lu KB\n", (unsigned long)m.prop_count, (unsigned long)(m.prop_size / 1024));
+    au_buf_printf(out, "  shapes      %7lu  %7lu KB\n", (unsigned long)m.shape_count, (unsigned long)(m.shape_size / 1024));
+    au_buf_printf(out, "  functions   %7lu  %7lu KB, of which bytecode %lu KB\n", (unsigned long)m.js_func_count,
+                  (unsigned long)(m.js_func_size / 1024), (unsigned long)(m.js_func_code_size / 1024));
+    au_buf_printf(out, "  line tables %7lu  %7lu KB\n", (unsigned long)m.js_func_pc2line_count,
+                  (unsigned long)(m.js_func_pc2line_size / 1024));
+    au_buf_printf(out, "  C functions %7lu, arrays %lu (fast %lu, %lu elements, %lu KB)\n", (unsigned long)m.c_func_count,
+                  (unsigned long)m.array_count, (unsigned long)m.fast_array_count, (unsigned long)m.fast_array_elements,
+                  (unsigned long)(m.fast_array_elements * sizeof(JSValue) / 1024));
+    au_buf_printf(out, "  binary data %7lu  %7lu KB\n", (unsigned long)m.binary_object_count,
+                  (unsigned long)(m.binary_object_size / 1024));
+}
+
 bool au_js_eval(AuJs *js, const char *src, size_t len, AuBuf *out)
 {
     JSContext *ctx = js->ctx;
+    if (len == 11 && !memcmp(src, "aura:memory", 11) && out) {
+        au_js_memory_report(js, out); /* for aura-host chrome --do js:aura:memory */
+        return true;
+    }
+    if (len == 7 && !memcmp(src, "aura:gc", 7)) {
+        au_js_gc(js); /* --do js:aura:gc */
+        return true;
+    }
     js_enter(js);
     char *copy = au_strndup(src, len);
     JSValue r = JS_Eval(ctx, copy, len, "<eval>", JS_EVAL_TYPE_GLOBAL);
@@ -701,6 +746,7 @@ void au_js_gc(AuJs *js)
     js_drain_pending(js);
     JS_RunGC(js->rt);
     js_drain_pending(js);
+    js->gc_base = js->live_bytes;
 }
 
 void au_js_stats(const AuJs *js, AuJsStats *s)

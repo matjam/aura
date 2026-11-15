@@ -4,7 +4,12 @@
 test('internals are not reachable', () => {
     assert.equal(typeof N, 'undefined');
     assert.equal(typeof P, 'undefined');
-    assert.equal(String(print), 'print() {}', 'print is window.print, not the engine print');
+    // The prelude is loaded from bytecode without its source, so its
+    // functions print as native code; a build that embeds the source
+    // (AURA_JS_PRELUDE_SOURCE) prints the method as written.
+    assert.ok(String(print) === 'print() {}' || /^function print\(\) \{\s+\[native code\]\s+\}$/.test(String(print)),
+              'print is window.print, not the engine print: ' + String(print));
+    assert.equal(print.length, 0);
     assert.equal(typeof std, 'undefined');
     assert.equal(typeof os, 'undefined');
     assert.equal(window.N, undefined);
