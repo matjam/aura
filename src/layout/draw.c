@@ -330,6 +330,10 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
     bool any_solid = false;
     bool has_radii = radii && !au_radii_zero(radii);
     for (int i = 0; i < 4; i++) {
+        /* Every side keeps its width, painted or not: the corner joins
+         * depend on the neighbours' widths (CSS triangles are boxes with
+         * transparent sides). */
+        solid.width[i] = bw[i] > 0 ? bw[i] : 0;
         if (bw[i] <= 0 || !(col[i] >> 24))
             continue;
         int s = st[i];
@@ -401,8 +405,107 @@ static float stop_pos(const AuCssValue *v, float len)
     return -1;
 }
 
-/* Fills r (canvas coordinates) with a linear gradient value. Radial and
- * conic gradients are approximated with the average of their colours. */
+/* A length or percentage of a gradient argument against basis. */
+static float grad_len(const AuCssValue *v, float basis)
+{
+    if (v->type == AU_CSSV_PERCENT)
+        return v->u.num * basis / 100;
+    if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
+        return v->u.num;
+    return 0;
+}
+
+/* The centre and radii of a radial gradient (CSS Images 3, 3.2) from its
+ * [shape || size] [at position] argument over area. */
+static void radial_shape(const AuCssValue *a, uint32_t n, AuRect area, AuGradient *g)
+{
+    bool circle = false;
+    int size_kw = AU_K_farthest_corner;
+    float lens[2];
+    int nlen = 0, npos = 0;
+    const AuCssValue *pos[2] = {NULL, NULL};
+    bool at = false;
+    for (uint32_t i = 0; i < n; i++) {
+        const AuCssValue *v = &a[i];
+        if (v->type == AU_CSSV_KEYWORD && v->kw == AU_K_at) {
+            at = true;
+            continue;
+        }
+        if (at) {
+            if (npos < 2)
+                pos[npos++] = v;
+            continue;
+        }
+        if (v->type == AU_CSSV_KEYWORD) {
+            if (v->kw == AU_K_circle)
+                circle = true;
+            else if (v->kw == AU_K_closest_side || v->kw == AU_K_closest_corner || v->kw == AU_K_farthest_side ||
+                     v->kw == AU_K_farthest_corner)
+                size_kw = v->kw;
+        } else if (nlen < 2) {
+            lens[nlen] = grad_len(v, nlen == 0 ? area.w : area.h);
+            nlen++;
+        }
+    }
+    /* Position: keywords or lengths, x then y (a lone y keyword works). */
+    float cx = area.w / 2, cy = area.h / 2;
+    bool xset = false;
+    for (int i = 0; i < npos; i++) {
+        const AuCssValue *v = pos[i];
+        if (v->type == AU_CSSV_KEYWORD) {
+            switch (v->kw) {
+            case AU_K_left: cx = 0; xset = true; break;
+            case AU_K_right: cx = area.w; xset = true; break;
+            case AU_K_top: cy = 0; break;
+            case AU_K_bottom: cy = area.h; break;
+            default: break; /* center */
+            }
+        } else if (!xset) {
+            cx = grad_len(v, area.w);
+            xset = true;
+        } else {
+            cy = grad_len(v, area.h);
+        }
+    }
+    float dl = cx, dr = area.w - cx, dt = cy, db = area.h - cy;
+    if (dl < 0)
+        dl = -dl;
+    if (dr < 0)
+        dr = -dr;
+    if (dt < 0)
+        dt = -dt;
+    if (db < 0)
+        db = -db;
+    float rx, ry;
+    if (nlen) {
+        rx = lens[0];
+        ry = circle || nlen < 2 ? lens[0] : lens[1];
+    } else {
+        bool closest = size_kw == AU_K_closest_side || size_kw == AU_K_closest_corner;
+        float sx = closest ? l_min(dl, dr) : l_max(dl, dr);
+        float sy = closest ? l_min(dt, db) : l_max(dt, db);
+        bool corner = size_kw == AU_K_closest_corner || size_kw == AU_K_farthest_corner;
+        if (circle) {
+            rx = ry = corner ? sqrtf(sx * sx + sy * sy) : (closest ? l_min(sx, sy) : l_max(sx, sy));
+        } else if (corner) {
+            /* the ellipse through the corner with the sides' aspect ratio */
+            rx = sx * 1.41421356f;
+            ry = sy * 1.41421356f;
+        } else {
+            rx = sx;
+            ry = sy;
+        }
+    }
+    g->radial = true;
+    g->x0 = area.x + cx;
+    g->y0 = area.y + cy;
+    g->rx = l_max(rx, 0.01f);
+    g->ry = l_max(ry, 0.01f);
+}
+
+/* Fills r (canvas coordinates) with a linear or radial gradient value,
+ * repeating or not. Conic gradients are approximated with the average of
+ * their colours. */
 static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect r, const AuRadii *radii,
                           const AuStyle *s)
 {
@@ -457,8 +560,19 @@ static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect
             }
         }
     }
-    au_gradient_css_line(&g, area, angle);
-    float glen = sqrtf((g.x1 - g.x0) * (g.x1 - g.x0) + (g.y1 - g.y0) * (g.y1 - g.y0));
+    bool radial = fn->kw == AU_K_radial_gradient || fn->kw == AU_K_repeating_radial_gradient ||
+                  fn->kw == AU_K__webkit_radial_gradient || fn->kw == AU_K__webkit_repeating_radial_gradient;
+    bool repeating = fn->kw == AU_K_repeating_linear_gradient || fn->kw == AU_K_repeating_radial_gradient ||
+                     fn->kw == AU_K__webkit_repeating_linear_gradient ||
+                     fn->kw == AU_K__webkit_repeating_radial_gradient;
+    float glen;
+    if (radial) {
+        radial_shape(first ? p0 : NULL, first ? n0 : 0, area, &g);
+        glen = g.rx;
+    } else {
+        au_gradient_css_line(&g, area, angle);
+        glen = sqrtf((g.x1 - g.x0) * (g.x1 - g.x0) + (g.y1 - g.y0) * (g.y1 - g.y0));
+    }
     /* Stops: positions where given, the rest spread evenly. */
     float pos[AU_GRADIENT_MAX_STOPS];
     uint32_t col[AU_GRADIENT_MAX_STOPS];
@@ -504,7 +618,28 @@ static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect
             pos[k] = pos[i - 1] + (pos[j] - pos[i - 1]) * (k - i + 1) / (j - i + 1);
         i = j;
     }
-    if (!linear) {
+    if (repeating && (linear || radial)) {
+        /* One period, from the first stop to the last, repeats. */
+        float p0s = radial ? 0 : pos[0], period = pos[ns - 1] - p0s;
+        if (period > 1e-4f) {
+            if (radial) {
+                g.rx *= period;
+                g.ry *= period;
+            } else {
+                float vx = g.x1 - g.x0, vy = g.y1 - g.y0;
+                float x0 = g.x0 + vx * p0s, y0 = g.y0 + vy * p0s;
+                g.x0 = x0;
+                g.y0 = y0;
+                g.x1 = x0 + vx * period;
+                g.y1 = y0 + vy * period;
+            }
+            for (int i = 0; i < ns; i++)
+                pos[i] = (pos[i] - p0s) / period;
+            g.repeat = true;
+        }
+    }
+    if (!linear && !radial) {
+        /* conic-gradient: the average of its colours */
         uint32_t a = 0, rr = 0, gg = 0, bb = 0;
         for (int i = 0; i < ns; i++) {
             a += col[i] >> 24;
@@ -556,33 +691,38 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     const AuCssValue *im = ly->image;
     if (!im)
         return;
-    if (im->type == AU_CSSV_FUNCTION) {
-        fill_gradient(P->c, im, origin_box, clip_box, radii, s);
-        return;
-    }
-    if (im->type != AU_CSSV_URL || !P->L->env.image)
-        return;
-    char abs[2048];
-    const char *base = s->bg->background_image ? s->bg->background_image->base_url : NULL;
-    (void)base;
-    if (!P->L->env.resolve_url || !P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs)) {
-        size_t n = strlen(im->u.str);
-        if (n >= sizeof abs)
-            return;
-        memcpy(abs, im->u.str, n + 1);
-    }
+    bool gradient = im->type == AU_CSSV_FUNCTION;
     int iw = 0, ih = 0;
     const AuSurface *px = NULL;
-    if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0)
-        return;
+    if (gradient) {
+        /* No intrinsic size: auto is the origin box (CSS Backgrounds 3). */
+        iw = (int)ceilf(origin_box.w);
+        ih = (int)ceilf(origin_box.h);
+        if (iw <= 0 || ih <= 0)
+            return;
+    } else {
+        if (im->type != AU_CSSV_URL || !P->L->env.image)
+            return;
+        char abs[2048];
+        if (!P->L->env.resolve_url || !P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs)) {
+            size_t n = strlen(im->u.str);
+            if (n >= sizeof abs)
+                return;
+            memcpy(abs, im->u.str, n + 1);
+        }
+        if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0)
+            return;
+    }
     /* Tile size. */
-    float tw = (float)iw, th = (float)ih;
+    float tw = gradient ? origin_box.w : (float)iw, th = gradient ? origin_box.h : (float)ih;
     const AuCssValue *sz = ly->size;
     if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
-        float sx = origin_box.w / iw, sy = origin_box.h / ih;
-        float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
-        tw = iw * sc;
-        th = ih * sc;
+        if (!gradient) {
+            float sx = origin_box.w / iw, sy = origin_box.h / ih;
+            float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
+            tw = iw * sc;
+            th = ih * sc;
+        }
     } else if (sz && sz->type == AU_CSSV_LIST && sz->n == 2) {
         const AuCssValue *a = &sz->u.items[0], *b = &sz->u.items[1];
         bool aa = a->type == AU_CSSV_KEYWORD, ba = b->type == AU_CSSV_KEYWORD;
@@ -590,9 +730,9 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
             tw = bg_len(a, origin_box.w);
         if (!ba)
             th = bg_len(b, origin_box.h);
-        if (aa && !ba)
+        if (!gradient && aa && !ba)
             tw = th * iw / ih;
-        if (ba && !aa)
+        if (!gradient && ba && !aa)
             th = tw * ih / iw;
     }
     if (tw < 0.5f || th < 0.5f)
@@ -604,6 +744,19 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     if (ly->position_y && ly->position_y->type == AU_CSSV_PERCENT)
         py0 = origin_box.y + (origin_box.h - th) * ly->position_y->u.num / 100;
     bool rx = ly->repeat_x != AU_K_no_repeat, ry = ly->repeat_y != AU_K_no_repeat;
+    if (gradient && fabsf(tw - origin_box.w) < 0.01f && fabsf(th - origin_box.h) < 0.01f &&
+        fabsf(px0 - origin_box.x) < 0.01f && fabsf(py0 - origin_box.y) < 0.01f &&
+        (rx && ry ? true
+                  : clip_box.x >= origin_box.x - 0.01f && clip_box.y >= origin_box.y - 0.01f &&
+                        clip_box.x + clip_box.w <= origin_box.x + origin_box.w + 0.01f &&
+                        clip_box.y + clip_box.h <= origin_box.y + origin_box.h + 0.01f)) {
+        /* One tile over the origin box (the usual case). A repeated tile
+         * of the full box fills the clip with the same gradient extended,
+         * which is close enough when the clip box is only a little larger
+         * (border-box clip with padding-box origin). */
+        fill_gradient(P->c, im, origin_box, clip_box, radii, s);
+        return;
+    }
     au_canvas_clip_push(P->c, (AuRect){clip_box.x, clip_box.y, clip_box.w, clip_box.h});
     float x0 = px0, y0 = py0;
     if (rx)
@@ -617,6 +770,11 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         for (float x = x0; x < x1 && count < 20000; x += tw, count++) {
             if (!rect_hits(&P->dirty, x, y, tw, th))
                 continue;
+            if (gradient) {
+                AuRect t = {x, y, tw, th};
+                fill_gradient(P->c, im, t, t, NULL, s);
+                continue;
+            }
             au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, (AuRect){x, y, tw, th},
                           AU_FILTER_BILINEAR, 1);
         }

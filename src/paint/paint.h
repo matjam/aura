@@ -120,9 +120,14 @@ typedef struct AuGradientStop {
     AuColor color;
 } AuGradientStop;
 
-/* A linear gradient from (x0, y0) to (x1, y1), in canvas coordinates. */
+/* A linear gradient from (x0, y0) to (x1, y1), or (radial) an elliptical
+ * one centred on (x0, y0) with radii (rx, ry), in canvas coordinates. A
+ * repeating gradient repeats its 0..1 stop range along the line (or
+ * outwards). Zero-initialize, then set the fields. */
 typedef struct AuGradient {
     float x0, y0, x1, y1;
+    float rx, ry;
+    bool radial, repeat;
     int nstops;
     AuGradientStop stops[AU_GRADIENT_MAX_STOPS];
 } AuGradient;
