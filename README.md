@@ -6,9 +6,58 @@ A web browser for Mac OS 9 on PowerPC, with its engine written from
 scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
 two third-party libraries, QuickJS-ng for JavaScript and Mbed TLS for TLS.
 
+![Aura on Mac OS 9.2.2 showing Wikipedia's Kookaburra article](docs/images/aura-kookaburra.png)
+
 Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
 downloaded blocklists, and downloads files. Many sites do not work yet.
+
+## AI use disclosure
+
+Aura was written almost entirely with AI (Anthropic's Claude), working
+under my direction. I am not writing a browser engine by hand for an
+operating system from 1999: that would be crazy. The HTML parser, CSS,
+layout, painting, fonts, image decoders, networking and the Mac OS 9
+application were all written that way, against the web standards and
+Apple's old documentation, and then tested until things held up.
+
+Does it work? It loads real sites, as the screenshot shows. Everything
+here was tested with a few hundred automated test areas on a modern
+machine, with fuzzers on the parsers, and in an emulator (QEMU) running
+Mac OS 9.2.2. What has not happened yet:
+
+- It has not run on a real Mac.
+- It has not been used day to day for any length of time.
+- Nobody has reviewed the code for security.
+
+Every effort has been made to make Aura a secure browser: it checks
+certificates, speaks TLS 1.3, treats everything a server sends as
+hostile, and its parsers are fuzzed. But it is effectively vibecoded,
+and it reads whatever a web server sends it on a system with no memory
+protection. So you might want to do some auditing of your own before
+you use it for sensitive tasks. It may eat your dog, copy your homework
+or burn your house down. No warranty; see `LICENSE`.
+
+I am fine with vibecoded, or whatever other name you like, as long as
+it works and breaks nothing. If you try it on real
+hardware, I would like to hear how it went, good or bad: please open an
+issue. `CONTRIBUTING.md` says what is most useful to report.
+
+## Performance
+
+This is a browser written to use the modern web on machines that are
+over 20 years old. Some things are just not going to work well.
+
+Websites with highly unoptimized JavaScript will be slow to load and
+use. Aura has web tracker blocking built in to help with that, because a
+large share of slow page loads comes from third-party tracking.
+
+That said, even well optimized sites are just heavy, so do not expect
+Google Docs or Gmail to work well, if they work at all. They expect to
+run on machines with 8 GB or more of RAM, not machines with 256 MB.
+
+So your mileage may vary. We do as much as we can to optimize for
+memory and CPU, but there is only so much we can do there.
 
 ## Download
 

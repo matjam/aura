@@ -22,6 +22,11 @@
 #define MBEDTLS_SSL_PROTO_TLS1_3
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_RSA_ENABLED
+/* RSA key transport in TLS 1.2 (TLS_RSA_WITH_AES_*_GCM_*), for old
+ * servers that offer nothing with forward secrecy. Mbed TLS 4 removed it;
+ * third_party/mbedtls-patches/0001 puts it back. tls.c offers these
+ * suites last, and only while the security.legacy_tls preference is on. */
+#define AURA_MBEDTLS_KEY_EXCHANGE_RSA
 #define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED
 #define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_EPHEMERAL_ENABLED
 /* Middlebox compatibility: the legacy session id and the ChangeCipherSpec

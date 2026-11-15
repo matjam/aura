@@ -54,6 +54,10 @@ typedef struct FakeServer {
      * the first connection). */
     struct FakeTlsServer *tls_state;
     bool alpn_http11; /* the server accepts the ALPN protocol "http/1.1" */
+    /* RSA key exchange (TLS 1.2, no forward secrecy): 1, the server offers
+     * only that, as some old servers do; 2, it offers ECDHE first and RSA
+     * key exchange too; 0, ECDHE only. */
+    int rsa_kex;
     bool no_resume; /* no session cache and no tickets: every handshake is a full one */
     /* The server accepts only P-256 key shares, so a client that sends an
      * X25519 share gets a HelloRetryRequest. */

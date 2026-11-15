@@ -119,6 +119,8 @@ static void on_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *r)
                 r->security.cipher ? r->security.cipher : "?",
                 r->security.alpn && r->security.alpn[0] ? r->security.alpn : "none",
                 r->security.resumed ? ", resumed" : "");
+    if (r->security.legacy_kex)
+        fprintf(stderr, "* RSA key exchange (no forward secrecy)\n");
 }
 
 static void on_data(void *ctx, AuHttpTransfer *t, const void *data, size_t len)
