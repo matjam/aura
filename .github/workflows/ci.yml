@@ -1,0 +1,79 @@
+# Build and test Aura on every push to main and every pull request.
+#
+#   host      configure, build and run the tests (Ubuntu with GCC, macOS
+#             with Apple Clang)
+#   sanitize  the tests under AddressSanitizer and UBSan (Ubuntu, Clang)
+#   ppc       the Mac OS 9 application and the self-extracting archive
+#             (build-ppc.yml), uploaded as artifacts
+#
+# Releases are made by release.yml. Nothing here needs the guest disk
+# images, QEMU or a secret. Actions are pinned to a commit; the comment
+# names the release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    concurrency:
+      group: host-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Ninja
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q ninja-build
+          else
+            brew install ninja
+          fi
+      - name: Build and test
+        run: ./build.sh test
+
+  sanitize:
+    name: Tests under ASan and UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: sanitize-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Ninja
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build
+      - name: Configure
+        run: >-
+          cmake -S . -B build/asan -G Ninja
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
+      - name: Build
+        run: cmake --build build/asan
+      - name: Test
+        env:
+          # Leak detection is off, as it is on macOS, where the sanitizer
+          # build is run by hand: several tests do not free everything at
+          # exit.
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build/asan --output-on-failure
+
+  ppc:
+    name: Mac OS 9
+    uses: ./.github/workflows/build-ppc.yml

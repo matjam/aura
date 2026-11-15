@@ -32,7 +32,7 @@ resource 'SIZE' (-1) {
 };
 
 resource 'MBAR' (128) {
-	{ 128, 129, 130, 131, 132, 133, 134 }
+	{ 128, 129, 130, 131, 132, 133, 135, 134 }
 };
 
 resource 'MENU' (128, "Apple") {
@@ -81,26 +81,31 @@ resource 'MENU' (130, "Edit") {
 };
 
 resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFB77, enabled, "View",
+	131, textMenuProc, 0x7FFFFF77, enabled, "View",
 	{
 		"Reload", noIcon, "R", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
-		"View Source", noIcon, "U", noMark, plain;
+		"Page Source", noIcon, "U", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Zoom In", noIcon, "+", noMark, plain;
 		"Zoom Out", noIcon, "-", noMark, plain;
 		"Actual Size", noIcon, "0", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Tabs on Top", noIcon, noKey, noMark, plain;
-		"Tabs on Left", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Debug", noIcon, noKey, noMark, plain
+		"Tabs on Left", noIcon, noKey, noMark, plain
 	}
 };
 
-resource 'MENU' (135, "Debug") {
-	135, textMenuProc, 0x7FFFFFFF, enabled, "Debug",
+/* Develop: the developer windows, then the debug items that used to be
+   View > Debug. Item 5 is a separator (enable flags: item k is bit k-1). */
+resource 'MENU' (135, "Develop") {
+	135, textMenuProc, 0x7FFFFFEF, enabled, "Develop",
 	{
+		"Page Source", noIcon, noKey, noMark, plain;
+		"Console", noIcon, noKey, noMark, plain;
+		"Network", noIcon, noKey, noMark, plain;
+		"Performance", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
 		"Test Scene", noIcon, noKey, noMark, plain;
 		"Font List", noIcon, noKey, noMark, plain;
 		"Benchmark", noIcon, noKey, noMark, plain;
@@ -379,11 +384,7 @@ resource 'DITL' (201) {
 	}
 };
 
-resource 'vers' (1) {
-	0x00, 0x03, development, 0x00, verUS,
-	"0.3",
-	"0.3, Aura with its page engine"
-};
+/* The 'vers' resource is generated from AU_VERSION (aura_vers.r.in). */
 
 /* The bundle: the application, and the document types it opens, so the
    Finder lets text and HTML files be dropped on its icon. Local icon 1

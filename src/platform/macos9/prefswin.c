@@ -12,6 +12,7 @@
  * user pane per tab, which is shown or hidden as the tab changes. */
 #include "mac.h"
 #include "blocking_mac.h"
+#include "browser/credits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -444,7 +445,7 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     set_num(p->field[F_HTTP_PORT], pr->http_proxy_port);
     set_text(p->field[F_HTTPS_HOST], pr->https_proxy_host);
     set_num(p->field[F_HTTPS_PORT], pr->https_proxy_port);
-    set_text(p->field[F_UA], pr->user_agent);
+    set_text(p->field[F_UA], au_prefs_user_agent(pr));
     set_num(p->field[F_MEM_CACHE], pr->memory_cache_kb);
     set_num(p->field[F_DISK_CACHE], pr->disk_cache_kb);
     set_text(p->field[F_DL_FOLDER], pr->download_folder);
@@ -507,6 +508,10 @@ static void store(PrefsWin *p, AuPrefs *pr)
     store_str(&pr->https_proxy_host, p->field[F_HTTPS_HOST]);
     pr->https_proxy_port = clampi(get_num(p->field[F_HTTPS_PORT], pr->https_proxy_port), 0, 65535);
     store_str(&pr->user_agent, p->field[F_UA]);
+    /* The default is stored as empty, so it follows Aura's version;
+     * clearing the field also returns to the default. */
+    if (pr->user_agent && !strcmp(pr->user_agent, AU_DEFAULT_USER_AGENT))
+        au_prefs_set_str(&pr->user_agent, "");
     pr->memory_cache_kb = clampi(get_num(p->field[F_MEM_CACHE], pr->memory_cache_kb), 0, 1 << 20);
     pr->disk_cache_kb = clampi(get_num(p->field[F_DISK_CACHE], pr->disk_cache_kb), 0, 1 << 22);
     store_str(&pr->download_folder, p->field[F_DL_FOLDER]);

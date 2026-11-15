@@ -280,6 +280,55 @@ typedef enum {
 } AuHttpPhase;
 AuHttpPhase au_http_phase(const AuHttpTransfer *t);
 
+/* ---- Tracing (the developer tools' request log) ----
+ * Every transfer keeps, at the cost of a few stores, when each phase
+ * began, where its response came from and which connection carried it.
+ * au_http_trace copies that out; call it from done(). Header copies cost
+ * memory, so the request head is kept only after
+ * au_net_set_trace_headers(net, true). */
+typedef enum {
+    AU_HTTP_FROM_NETWORK,
+    AU_HTTP_FROM_MEMORY,  /* the memory cache, fresh */
+    AU_HTTP_FROM_DISK,    /* read back from the disk cache, fresh */
+    AU_HTTP_FROM_HISTORY, /* a history navigation: the stored copy as it was */
+    AU_HTTP_FROM_304      /* the stored copy, confirmed by the server (304) */
+} AuHttpSource;
+
+typedef struct AuHttpTrace {
+    /* Milliseconds from the start of the transfer to the start of each
+     * AuHttpPhase on the last attempt (after redirects and retries);
+     * -1 for a phase that never happened (no DNS on a reused connection). */
+    int32_t at[AU_PHASE_DONE + 1];
+    AuHttpPhase phase;       /* the phase last seen */
+    AuHttpSource source;
+    bool reused;             /* the request went out on a pooled connection */
+    uint32_t connection;     /* the connection's number in this AuNet; 0: none was used */
+    AuNetAddr remote;        /* family 0 when unknown */
+    uint16_t remote_port;
+    int64_t transfer_bytes;  /* body bytes as sent (encoded); 0 from the cache */
+    int redirects;
+} AuHttpTrace;
+void au_http_trace(const AuHttpTransfer *t, AuHttpTrace *out);
+/* The final response's headers (empty before one); valid until done()
+ * returns. */
+const AuHeaders *au_http_response_headers(const AuHttpTransfer *t);
+/* The request line and headers as sent on the last attempt, at most 4 KB;
+ * "" unless header tracing is on. */
+const char *au_http_request_head(const AuHttpTransfer *t);
+void au_net_set_trace_headers(AuNet *net, bool on);
+bool au_net_trace_headers(const AuNet *net);
+
+/* The connections open now (busy or pooled): fills at most max entries
+ * and returns how many there are. */
+typedef struct AuNetConnInfo {
+    char host[128];
+    uint16_t port;
+    bool tls, busy;
+    uint32_t id;
+    int served; /* requests completed on it */
+} AuNetConnInfo;
+int au_net_connections(const AuNet *net, AuNetConnInfo *out, int max);
+
 /* ---- Certificate exceptions ----
  * The user chose to continue past a certificate error on host: later
  * connections accept a chain whose leaf certificate has this SHA-256

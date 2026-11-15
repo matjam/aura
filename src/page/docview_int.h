@@ -89,8 +89,8 @@ struct AuDocView {
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     /* scripts (script.c) */
-    AuDocScript *script; /* this document's, while scripting is on */
-    bool scripting;      /* the setting, applied at begin */
+    AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
+    char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
@@ -131,6 +131,7 @@ struct AuDocView {
     int script_depth;    /* entries into script of any document of the page */
     bool frames_work;    /* something waits for au_frames_idle */
     bool in_frames_idle;
+    AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
 };
 
 /* ---- frames.c: nested documents ----

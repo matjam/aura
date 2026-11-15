@@ -3,6 +3,7 @@
  *   main.c        start-up, the event loop, menus, Apple events, saving
  *   browserwin.c  browser windows (GWorld, chrome, page, address field)
  *   listwin.c     the Bookmarks, History, Downloads and Cookies windows
+ *   devwin.c      the Page Source, Console, Network and Performance windows
  *   network.c     the network stack (Open Transport, stores, fetchers)
  *   downloads_mac.c  download files, Reveal in Finder
  *   prefswin.c    the Preferences window (Appearance controls)
@@ -36,7 +37,9 @@ enum {
     kDitherCopy = 64
 };
 
-typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS, WIN_COOKIES } WinKind;
+typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS, WIN_COOKIES,
+               /* The developer windows (devwin.c), in this order. */
+               WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK, WIN_PERF } WinKind;
 
 typedef struct MacWin MacWin;
 struct MacWin {
@@ -108,6 +111,17 @@ void listwin_cookies_changed(void);
 /* Opens url in the front browser window (one is made if needed). */
 void mac_open_url(const char *url, bool new_tab);
 
+/* ---- devwin.c ----
+ * The developer windows: WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK or
+ * WIN_PERF. Each shows the active tab of the frontmost browser window.
+ * Showing one that is open brings it forward and reads the page again. */
+void devwin_show(WinKind kind);
+/* Edit > Find, Find Again and Find Previous while a developer window is
+ * in front (mw is that window). */
+void devwin_find(MacWin *mw);
+void devwin_find_again(MacWin *mw, bool forward);
+bool devwin_can_find_again(MacWin *mw);
+
 /* ---- prefswin.c ---- */
 void prefswin_show(void);
 
@@ -173,6 +187,14 @@ struct AuCookieJar *mac_net_cookie_jar(void); /* NULL before init */
 void mac_net_rules_changed(void);
 /* View > Debug > Network Status: four lines of diagnostics. */
 void mac_net_status(char lines[4][256]);
+/* The developer windows: the network part of the Performance report
+ * (conn holds the text h points to), the open connections per host as
+ * text, and whether the stack keeps request and response headers for
+ * the request log. */
+struct AuDevHostInfo;
+void mac_net_dev_info(struct AuDevHostInfo *h, AuBuf *conn);
+void mac_net_connections_text(AuBuf *out);
+void mac_net_trace_headers(bool on);
 
 /* ---- downloads_mac.c ---- */
 struct AuDownloadFiles;

@@ -52,7 +52,7 @@ enum { LK_BLOCK, LK_INLINE, LK_TEXT, LK_BR, LK_WBR };
 enum {
     LI_FLOW,      /* block container: block children or an inline formatting context */
     LI_FLEX,
-    LI_GRID,      /* placeholder: laid out as LI_FLOW */
+    LI_GRID,      /* grid.c */
     LI_TABLE,     /* a table (LTableBox, table.c); also holds its captions */
     LI_TABLE_ROW_GROUP,
     LI_TABLE_ROW,
@@ -316,6 +316,16 @@ typedef struct LAbsEntry {
 
 typedef struct LFloats LFloats;
 
+/* The grid area an absolutely positioned child of a grid container is
+ * positioned against (grid.c): the edges that grid lines set, in the
+ * container's border-box coordinates (bits of set: left, right, top,
+ * bottom). */
+typedef struct LGridAbs {
+    LBox *box;
+    float edge[4];
+    uint8_t set;
+} LGridAbs;
+
 struct AuLayout {
     AuLayoutEnv env;
     AuDocument *doc;
@@ -342,6 +352,8 @@ struct AuLayout {
     /* absolutely positioned boxes waiting for their containing block */
     LAbsEntry *abs;
     uint32_t nabs, abs_cap;
+    LGridAbs *grid_abs;
+    uint32_t ngrid_abs, grid_abs_cap;
     /* statistics */
     AuLayoutStats stats;
     uint32_t intrinsic_runs; /* since creation (stats is cleared with the tree) */
@@ -440,7 +452,7 @@ typedef struct LFcOps {
     float (*layout)(AuLayout *L, LBlock *b, const LConstraints *c);
     void (*intrinsic)(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 } LFcOps;
-extern const LFcOps l_fc_flow, l_fc_flex, l_fc_table, l_fc_replaced;
+extern const LFcOps l_fc_flow, l_fc_flex, l_fc_grid, l_fc_table, l_fc_replaced;
 const LFcOps *l_fc_ops(const LBlock *b);
 
 /* layout.c: sizing of a box under a containing block */
@@ -518,6 +530,13 @@ float l_floats_bottom(const LFloats *fl);
 /* flex.c */
 float l_flex_layout(AuLayout *L, LBlock *b, const LConstraints *c);
 void l_flex_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
+
+/* grid.c */
+float l_grid_layout(AuLayout *L, LBlock *b, const LConstraints *c);
+void l_grid_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
+/* Replaces r, the containing block of absolutely positioned b, with b's
+ * grid area when its grid container recorded one. */
+void l_grid_abspos_area(AuLayout *L, LBlock *b, LArea *r);
 
 /* table.c */
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *c);

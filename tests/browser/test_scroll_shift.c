@@ -324,7 +324,7 @@ int main(void)
     char url[1024];
     static const char *samples[] = {"wiki.html",  "hn.html",       "hn-item.html", "blog.html",   "docs.html",
                                     "forum.html", "images.html",   "reddit.html",  "qa-flex.html", "qa-tables.html",
-                                    "svg.html",   "wikitable.html"};
+                                    "svg.html",   "wikitable.html", "grid.html"};
     for (size_t i = 0; i < sizeof samples / sizeof samples[0]; i++) {
         char *u;
         snprintf(url, sizeof url, "%s/tests/page/samples/%s", AURA_SOURCE_DIR, samples[i]);
