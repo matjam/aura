@@ -1051,15 +1051,20 @@ void au_frames_clear(AuDocView *dv)
         AuFrame *f = dv->frames[--dv->nframes];
         frame_free(f);
     }
-    /* removed frames of this document that still wait */
-    uint32_t k = 0;
-    for (uint32_t i = 0; i < top->ndead; i++) {
-        if (top->dead[i]->owner == dv)
-            frame_free(top->dead[i]);
-        else
-            top->dead[k++] = top->dead[i];
+    /* Removed frames of this document that still wait. Each is taken
+     * off the list before it is freed: freeing it clears its own nested
+     * view, which edits the same list. */
+    for (;;) {
+        AuFrame *f = NULL;
+        for (uint32_t i = 0; i < top->ndead && !f; i++)
+            if (top->dead[i]->owner == dv) {
+                f = top->dead[i];
+                top->dead[i] = top->dead[--top->ndead];
+            }
+        if (!f)
+            break;
+        frame_free(f);
     }
-    top->ndead = k;
     dv->focus_frame = dv->mouse_frame = dv->hover_frame = NULL;
     dv->frames_dirty = false;
 }

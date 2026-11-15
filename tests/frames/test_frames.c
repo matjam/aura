@@ -667,6 +667,8 @@ static void test_lifetime(void)
          ".textContent}var obj={v:1}</script>"},
         {"http://a.test/d.html", "<!DOCTYPE html><body>d"},
         {"http://a.test/b2.html", "<!DOCTYPE html><body><script>var second=true</script>"},
+        {"http://a.test/outer.html", "<!DOCTYPE html><body><iframe id=in src='b.html'></iframe>"
+                                     "<iframe src='b2.html'></iframe>"},
         {0}};
     World w;
     world_open(&w, site, "http://a.test/", 400, 600);
@@ -704,6 +706,13 @@ static void test_lifetime(void)
     /* A frame removed and put back loads what its src names again. */
     js(&w, "var mm = document.getElementById('m'); document.body.removeChild(mm); document.body.appendChild(mm)");
     JS_IS(&w, "document.getElementById('m').contentWindow.second", "true");
+    /* A frame inside a frame is removed, then the outer one, in one
+     * turn: both wait in the same list and are freed together. */
+    js(&w, "var o = document.createElement('iframe'); o.id = 'o'; o.src = 'outer.html'; document.body.appendChild(o)");
+    JS_IS(&w, "document.getElementById('o').contentWindow.length", "2");
+    JS_IS(&w, "var od = o.contentDocument; var inner = od.getElementById('in'); var iw = inner.contentWindow;"
+              "od.body.removeChild(inner); drop('o'); typeof iw.f + od.body.childNodes.length", "function1");
+    JS_IS(&w, "window.length", "2");
     /* innerHTML replaces every frame at once, from inside a frame's call */
     js(&w, "document.getElementById('m').contentWindow.eval(\"parent.document.body.innerHTML = '<p>gone</p>'; 1\")");
     JS_IS(&w, "window.length + document.body.textContent", "0gone");
