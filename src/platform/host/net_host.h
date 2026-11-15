@@ -27,7 +27,24 @@ char *au_host_read_file(const char *path, size_t *len);
 /* Writes a file safely: to path.tmp, then renamed over path. */
 bool au_host_write_file(const char *path, const void *data, size_t len);
 
+/* Everything a host command needs to make requests: sockets, the root
+ * store, the AuNet, and the cookie jar and HSTS store loaded from the
+ * profile folder (files "cookies" and "hsts"). */
+typedef struct AuHostSession {
+    AuHostNet *host;
+    AuRootStore *roots;
+    AuNet *net;
+    AuCookieJar *jar; /* NULL with cookies off */
+    AuHsts *hsts;
+} AuHostSession;
+bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose);
+/* Saves the stores when they changed, and frees everything. */
+void au_host_session_close(AuHostSession *s);
+
 /* aura-host fetch URL [-o file] [-v] ... (argv[1] is "fetch"). */
 int au_host_fetch_main(int argc, char **argv);
+/* aura-host render|dump with an http or https URL (net_render.c). */
+bool au_host_net_render_wanted(int argc, char **argv);
+int au_host_net_render_main(int argc, char **argv);
 
 #endif

@@ -158,42 +158,6 @@ static int on_credentials(void *ctx, AuHttpTransfer *t, const AuAuthChallenge *c
     return 1;
 }
 
-static void load_store(const char *name, bool (*parse)(void *, const char *, size_t, int64_t), void *store,
-                       int64_t now, bool verbose)
-{
-    char path[4096];
-    if (!au_host_profile_path(name, path, sizeof path))
-        return;
-    size_t len;
-    char *data = au_host_read_file(path, &len);
-    if (!data)
-        return;
-    if (!parse(store, data, len, now))
-        fprintf(stderr, "aura-host: %s is damaged; kept what could be read\n", path);
-    else if (verbose)
-        fprintf(stderr, "* loaded %s\n", path);
-    au_free(data);
-}
-
-static void save_store(const char *name, const AuBuf *b)
-{
-    char path[4096];
-    if (!au_host_profile_path(name, path, sizeof path))
-        return;
-    if (!au_host_write_file(path, b->data ? b->data : "", b->len))
-        fprintf(stderr, "aura-host: cannot write %s\n", path);
-}
-
-static bool parse_cookies(void *s, const char *d, size_t n, int64_t now)
-{
-    return au_cookie_jar_parse(s, d, n, now);
-}
-
-static bool parse_hsts(void *s, const char *d, size_t n, int64_t now)
-{
-    return au_hsts_parse_file(s, d, n, now);
-}
-
 int au_host_fetch_main(int argc, char **argv)
 {
     const char *url = NULL, *outpath = NULL, *method = NULL, *data = NULL, *referer = NULL, *userpass = NULL;
@@ -268,27 +232,15 @@ int au_host_fetch_main(int argc, char **argv)
         f.pass = pass ? pass : "";
     }
 
-    AuHostNet *host = au_host_net_new();
-    if (!host) {
+    AuHostSession ses;
+    if (!au_host_session_open(&ses, cookies, verbose)) {
         fprintf(stderr, "aura-host: cannot set up sockets\n");
         return 3;
     }
+    AuHostNet *host = ses.host;
+    AuNet *net = ses.net;
     f.host = host;
-    const AuNetOps *ops = au_host_net_ops(host);
-    AuRootStore *roots = au_host_load_roots();
-    AuNet *net = au_net_new(ops);
     au_net_config(net)->https_first = https_first;
-    if (roots)
-        au_net_set_roots(net, roots);
-    int64_t now = ops->wall_time(ops->ctx);
-    AuCookieJar *jar = cookies ? au_cookie_jar_new() : NULL;
-    AuHsts *hsts = au_hsts_new();
-    if (jar) {
-        load_store("cookies", parse_cookies, jar, now, verbose);
-        au_net_set_cookie_jar(net, jar);
-    }
-    load_store("hsts", parse_hsts, hsts, now, verbose);
-    au_net_set_hsts(net, hsts);
 
     au_http_request_init(&rq, url);
     rq.headers = extra;
@@ -341,28 +293,7 @@ int au_host_fetch_main(int argc, char **argv)
     if (verbose)
         fprintf(stderr, "* %lld body bytes, %.0f ms in all\n", (long long)f.bytes, t_end - f.t_start);
 
-    /* Persist the stores. */
-    AuBuf b;
-    au_buf_init(&b);
-    now = ops->wall_time(ops->ctx);
-    if (jar && au_cookie_jar_dirty(jar)) {
-        au_cookie_jar_serialize(jar, &b, now);
-        save_store("cookies", &b);
-    }
-    if (au_hsts_dirty(hsts)) {
-        au_buf_clear(&b);
-        au_hsts_serialize(hsts, &b, now);
-        save_store("hsts", &b);
-    }
-    au_buf_free(&b);
-
-    au_net_free(net);
-    if (jar)
-        au_cookie_jar_free(jar);
-    au_hsts_free(hsts);
-    if (roots)
-        au_roots_free(roots);
-    au_host_net_free(host);
+    au_host_session_close(&ses); /* saves the cookie and HSTS files */
     if (outpath)
         fclose(f.out);
     return rc;

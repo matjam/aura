@@ -23,6 +23,10 @@ add_executable(test_cache test_cache.c)
 target_link_libraries(test_cache aura_fakenet)
 add_test(NAME net_cache COMMAND test_cache)
 
+add_executable(test_loader test_loader.c)
+target_link_libraries(test_loader aura_fakenet)
+add_test(NAME net_loader COMMAND test_loader)
+
 add_executable(test_policy test_policy.c)
 target_link_libraries(test_policy aura_engine)
 add_test(NAME net_policy COMMAND test_policy)

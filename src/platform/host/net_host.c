@@ -1,5 +1,7 @@
 /* The host's AuNetOps (see net_host.h). */
 #include "net_host.h"
+#include "net/cookies.h"
+#include "net/hsts.h"
 #include "net/roots.h"
 
 #include <errno.h>
@@ -445,6 +447,86 @@ bool au_host_profile_path(const char *name, char *out, size_t cap)
     if (mkdir(dir, 0700) != 0 && errno != EEXIST)
         return false;
     return snprintf(out, cap, "%s/%s", dir, name) < (int)cap;
+}
+
+static void load_store(const char *name, bool (*parse)(void *, const char *, size_t, int64_t), void *store,
+                       int64_t now, bool verbose)
+{
+    char path[4096];
+    if (!au_host_profile_path(name, path, sizeof path))
+        return;
+    size_t len;
+    char *data = au_host_read_file(path, &len);
+    if (!data)
+        return;
+    if (!parse(store, data, len, now))
+        fprintf(stderr, "aura-host: %s is damaged; kept what could be read\n", path);
+    else if (verbose)
+        fprintf(stderr, "* loaded %s\n", path);
+    au_free(data);
+}
+
+static void save_store(const char *name, const AuBuf *b)
+{
+    char path[4096];
+    if (!au_host_profile_path(name, path, sizeof path))
+        return;
+    if (!au_host_write_file(path, b->data ? b->data : "", b->len))
+        fprintf(stderr, "aura-host: cannot write %s\n", path);
+}
+
+static bool parse_cookies(void *s, const char *d, size_t n, int64_t now) { return au_cookie_jar_parse(s, d, n, now); }
+static bool parse_hsts(void *s, const char *d, size_t n, int64_t now) { return au_hsts_parse_file(s, d, n, now); }
+
+bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose)
+{
+    memset(s, 0, sizeof *s);
+    s->host = au_host_net_new();
+    if (!s->host)
+        return false;
+    const AuNetOps *ops = au_host_net_ops(s->host);
+    s->roots = au_host_load_roots();
+    s->net = au_net_new(ops);
+    if (s->roots)
+        au_net_set_roots(s->net, s->roots);
+    int64_t now = ops->wall_time(ops->ctx);
+    if (cookies) {
+        s->jar = au_cookie_jar_new();
+        load_store("cookies", parse_cookies, s->jar, now, verbose);
+        au_net_set_cookie_jar(s->net, s->jar);
+    }
+    s->hsts = au_hsts_new();
+    load_store("hsts", parse_hsts, s->hsts, now, verbose);
+    au_net_set_hsts(s->net, s->hsts);
+    return true;
+}
+
+void au_host_session_close(AuHostSession *s)
+{
+    if (!s->host)
+        return;
+    const AuNetOps *ops = au_host_net_ops(s->host);
+    int64_t now = ops->wall_time(ops->ctx);
+    AuBuf b;
+    au_buf_init(&b);
+    if (s->jar && au_cookie_jar_dirty(s->jar)) {
+        au_cookie_jar_serialize(s->jar, &b, now);
+        save_store("cookies", &b);
+    }
+    if (au_hsts_dirty(s->hsts)) {
+        au_buf_clear(&b);
+        au_hsts_serialize(s->hsts, &b, now);
+        save_store("hsts", &b);
+    }
+    au_buf_free(&b);
+    au_net_free(s->net);
+    if (s->jar)
+        au_cookie_jar_free(s->jar);
+    au_hsts_free(s->hsts);
+    if (s->roots)
+        au_roots_free(s->roots);
+    au_host_net_free(s->host);
+    memset(s, 0, sizeof *s);
 }
 
 AuRootStore *au_host_load_roots(void)

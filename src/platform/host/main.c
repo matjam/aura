@@ -382,6 +382,8 @@ int main(int argc, char **argv)
     const char *cmd = argv[1];
     if (!strcmp(cmd, "fetch"))
         return au_host_fetch_main(argc, argv);
+    if ((!strcmp(cmd, "render") || !strcmp(cmd, "dump")) && au_host_net_render_wanted(argc, argv))
+        return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
     if (!strcmp(cmd, "chrome")) {
