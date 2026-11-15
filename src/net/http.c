@@ -2392,12 +2392,13 @@ bool au_net_pump(AuNet *net)
         }
     }
     for (AuHttpTransfer *t = net->transfers; t; t = t->next) {
-        for (int k = 0; k < 16 && t->state != T_FINISHED; k++)
-            if (!step(t))
+        for (int k = 0; k < 16 && t->state != T_FINISHED; k++) {
+            bool moved = step(t);
+            trace_note(t); /* the request log's phase times */
+            if (!moved)
                 break;
-            else
-                any = true;
-        trace_note(t);
+            any = true;
+        }
     }
     /* Reap. */
     for (AuHttpTransfer **pp = &net->transfers; *pp;) {

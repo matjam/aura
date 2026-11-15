@@ -28,4 +28,12 @@ add_executable(test_net_page test_net_page.c ${CMAKE_SOURCE_DIR}/tests/net/tls_f
 target_link_libraries(test_net_page aura_fakenet m)
 target_include_directories(test_net_page PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_net_page COMMAND test_net_page)
+
+# The developer tools' models: request log, time counters, console, page
+# source and the text view, on the fake transport.
+add_executable(test_devtools test_devtools.c ${CMAKE_SOURCE_DIR}/tests/net/tls_fixtures.c)
+target_link_libraries(test_devtools aura_fakenet m)
+target_include_directories(test_devtools PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_devtools COMMAND test_devtools)
+set_tests_properties(browser_devtools PROPERTIES TIMEOUT 120)
 set_tests_properties(browser_net_page PROPERTIES TIMEOUT 120)

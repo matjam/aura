@@ -216,9 +216,20 @@ void au_put_ms(AuBuf *out, uint32_t ms)
         au_buf_printf(out, "%lu.%02lu s", (unsigned long)(ms / 1000), (unsigned long)(ms % 1000 / 10));
 }
 
-static const char *kind_name(int k)
+/* What the request was for. The document view asks for scripts, fonts
+ * and script fetches as "other"; the response's type says which. */
+static const char *kind_name(const AuNetRecord *r)
 {
     static const char *const names[] = {"document", "style", "image", "font", "script", "other"};
+    int k = r->kind;
+    if (k == AU_FETCH_OTHER) {
+        if (strstr(r->type, "javascript") || strstr(r->type, "ecmascript"))
+            return "script";
+        if (!strncmp(r->type, "font/", 5) || strstr(r->type, "font-"))
+            return "font";
+        if (strstr(r->type, "json"))
+            return "json";
+    }
     return k >= 0 && k < 6 ? names[k] : "other";
 }
 
@@ -306,7 +317,7 @@ void au_netlog_row(const AuNetRecord *r, AuBuf *out)
         snprintf(t, sizeof t, "ok");
     pad(out, t, W_STATUS + 1);
     pad(out, r->method, W_METHOD + 1);
-    pad(out, kind_name(r->kind), W_KIND + 1);
+    pad(out, kind_name(r), W_KIND + 1);
     if (r->have_net && r->source == AU_FETCH_FROM_NETWORK)
         au_put_size(&b, r->transfer);
     else
@@ -376,7 +387,7 @@ static void put_head(AuBuf *out, const char *title, const char *head)
 void au_netlog_detail(const AuNetRecord *r, AuBuf *out)
 {
     au_buf_printf(out, "URL: %s\n", r->url);
-    au_buf_printf(out, "Request: %s, %s\n", r->method, kind_name(r->kind));
+    au_buf_printf(out, "Request: %s, %s\n", r->method, kind_name(r));
     au_buf_puts(out, "Status: ");
     if (r->status)
         au_buf_printf(out, "%d", r->status);
