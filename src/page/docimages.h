@@ -45,6 +45,9 @@ AuImageCache *au_docimages_cache(AuDocImages *m);
 AuDocImageResult au_docimages_lookup(AuDocImages *m, const char *url, int *w, int *h, const AuSurface **pixels,
                                      AuImageEntry **entry, bool *created);
 
+/* Whether the cache holds an image for url. */
+bool au_docimages_known(AuDocImages *m, const char *url);
+
 /* The DOM changed: the tracked elements are found again before the next
  * paint. */
 void au_docimages_tree_changed(AuDocImages *m);

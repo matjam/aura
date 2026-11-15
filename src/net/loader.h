@@ -58,11 +58,22 @@ typedef struct AuLoadRequest {
     const char *content_type;     /* of the body */
     bool to_utf8;                 /* transcode HTML documents (see above) */
     bool omit_credentials;        /* no cookies, no HTTP authentication (AuHttpRequest.omit_credentials) */
+    /* Requests made by script (fetch, XMLHttpRequest, workers), which
+     * src/js/fetch.c drives one hop at a time. headers: extra request
+     * headers (copied; NULL for none). mode: AuRequestMode + 1, 0 for the
+     * default of the destination. manual_redirect: a 3xx response is
+     * delivered, not followed. no_store: the HTTP cache is neither read
+     * nor filled. */
+    const AuHeaders *headers;
+    int mode;
+    bool manual_redirect;
+    bool no_store;
 } AuLoadRequest;
 
 typedef struct AuLoadInfo {
     const char *url;          /* final URL */
     int status;               /* 0 for data: URLs and failures */
+    const char *reason;       /* the status line's reason phrase ("" when none) */
     const char *mime;         /* computed MIME type (after sniffing) */
     const char *charset;      /* Content-Type charset, "" when none */
     const char *encoding;     /* documents: the detected encoding; "" otherwise */
@@ -84,10 +95,10 @@ typedef struct AuLoadInfo {
      * reason. AU_NET_OK otherwise. */
     AuNetError fallback_cause;
     /* For the developer tools' request log, in done() only: how the
-     * transfer went (au_http_trace), the response headers and the request
-     * as sent ("" unless au_net_set_trace_headers). trace and
-     * response_headers are NULL when no transfer was made (data: URLs,
-     * requests refused before one). */
+     * transfer went (au_http_trace) and the request as sent ("" unless
+     * au_net_set_trace_headers). The response headers are given in
+     * response() and done(). trace and response_headers are NULL when no
+     * transfer was made (data: URLs, requests refused before one). */
     const AuHttpTrace *trace;
     const AuHeaders *response_headers;
     const char *request_head;

@@ -859,8 +859,9 @@ static bool host_random(void *ctx, void *buf, size_t len)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     host.random = host_random;
+    host.coro = au_host_coro_ops();
     if (o->scroll_bench) {
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;

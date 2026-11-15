@@ -39,6 +39,7 @@
 #ifndef AURA_JS_H
 #define AURA_JS_H
 
+#include "../core/coro.h"
 #include "../dom/dom.h"
 #include "../html/html.h"
 
@@ -75,32 +76,52 @@ typedef struct AuJsSettings {
     const char *origin;
     bool sandbox_origin;
     bool no_top_navigation;
+    /* Workers (see "Workers" below). */
+    size_t worker_memory_limit; /* bytes one worker's runtime may allocate; 0: 8 MB */
+    size_t worker_stack;        /* bytes of stack for a worker's coroutine; 0: 256 KB */
+    uint32_t worker_slice_ms;   /* how long a worker runs before it yields to the page; 0: 8 */
+    int max_workers;            /* workers alive in one page; 0: 8 */
 } AuJsSettings;
 
 void au_js_settings_default(AuJsSettings *s);
 
 /* ---- Fetch interface ----
  * Requests that script makes (fetch, XMLHttpRequest, module and external
- * classic scripts) go through this interface. The embedder starts a
- * request and later reports its response with au_js_fetch_head, _data and
- * _done (never from inside start). The JS layer enforces the same-origin
- * policy before calling start; CORS checks are marked in fetch.c. */
+ * classic scripts, workers) go through this interface. fetch.c applies the
+ * same-origin policy and the CORS protocol and follows redirects itself:
+ * the embedder sends one request as described, without following a
+ * redirect, and reports the response with au_js_fetch_head, _data and
+ * _done (never from inside start), with every response header. */
 typedef enum { AU_FETCH_OMIT, AU_FETCH_SAME_ORIGIN, AU_FETCH_INCLUDE } AuFetchCredentials;
 typedef enum { AU_FETCH_CORS, AU_FETCH_NO_CORS, AU_FETCH_SAME_ORIGIN_MODE, AU_FETCH_NAVIGATE } AuFetchMode;
 /* AU_FETCH_DEST_IMAGE: an <img> loaded from script; the bytes reach only
- * the bindings, which expose the size and load or error. */
-typedef enum { AU_FETCH_DEST_EMPTY, AU_FETCH_DEST_SCRIPT, AU_FETCH_DEST_MODULE, AU_FETCH_DEST_IMAGE } AuFetchDest;
+ * the bindings, which expose the size and load or error.
+ * AU_FETCH_DEST_WORKER: a worker's script (importScripts). */
+typedef enum { AU_FETCH_DEST_EMPTY, AU_FETCH_DEST_SCRIPT, AU_FETCH_DEST_MODULE, AU_FETCH_DEST_IMAGE,
+               AU_FETCH_DEST_WORKER } AuFetchDest;
+/* The cache modes of the Fetch standard. The embedder maps them onto its
+ * HTTP cache: no-store neither reads nor fills it, reload fetches again
+ * and stores, no-cache revalidates, force-cache and only-if-cached use
+ * any stored copy. */
+typedef enum { AU_FETCH_CACHE_DEFAULT, AU_FETCH_CACHE_NO_STORE, AU_FETCH_CACHE_RELOAD, AU_FETCH_CACHE_NO_CACHE,
+               AU_FETCH_CACHE_FORCE, AU_FETCH_CACHE_ONLY_IF_CACHED } AuFetchCache;
 
 typedef struct AuFetchRequest {
-    const char *method;  /* upper case */
+    const char *method;  /* as it goes on the wire */
     const char *url;     /* absolute */
-    const char *const *headers; /* name, value, name, value, ... */
+    const char *const *headers; /* name, value, name, value, ...: script's headers and Origin */
     size_t nheaders;     /* pairs */
     const void *body;
     size_t body_len;
-    uint8_t credentials; /* AuFetchCredentials */
+    uint8_t credentials; /* this request: AU_FETCH_INCLUDE (cookies and HTTP authentication) or AU_FETCH_OMIT */
     uint8_t mode;        /* AuFetchMode */
     uint8_t dest;        /* AuFetchDest */
+    uint8_t cache;       /* AuFetchCache */
+    uint8_t referrer_policy; /* 0: the document's; else 1 no-referrer, 2 no-referrer-when-downgrade,
+                              * 3 same-origin, 4 origin, 5 strict-origin, 6 origin-when-cross-origin,
+                              * 7 strict-origin-when-cross-origin, 8 unsafe-url */
+    const char *referrer;    /* NULL: the document's URL; "": none; else the URL to name */
+    bool manual_redirect;    /* always true: report a 3xx response, do not follow it */
 } AuFetchRequest;
 
 typedef struct AuFetcher {
@@ -112,8 +133,10 @@ typedef struct AuFetcher {
     void (*abort)(void *ctx, uint32_t id);
 } AuFetcher;
 
-/* Response head: status, status text, headers as name/value pairs, and the
- * final URL after redirects (NULL: the request URL). */
+/* Response head: status, status text, every header as name/value pairs,
+ * and the final URL (NULL: the request URL; an embedder that could not
+ * leave a redirect unfollowed names where the response came from, and the
+ * response is then checked against that URL's origin). */
 void au_js_fetch_head(AuJs *js, uint32_t id, int status, const char *status_text, const char *const *headers,
                       size_t nheaders, const char *final_url);
 void au_js_fetch_data(AuJs *js, uint32_t id, const void *data, size_t len);
@@ -222,6 +245,9 @@ typedef struct AuJsHooks {
     AuJs *(*frame_js)(void *ctx, AuElement *el);
     AuJs *(*parent_js)(void *ctx);
     AuElement *(*frame_element)(void *ctx);
+    /* Coroutines for workers (optional; see core/coro.h). The struct must
+     * outlive the AuJs. */
+    const AuCoroOps *coro;
     /* Canvas (both optional). canvas_set: the document's canvas set (an
      * AuCanvasSet of src/paint/canvas2d.h), in which the bindings make
      * each canvas's bitmap so that the embedder can paint it, count its
@@ -235,6 +261,11 @@ typedef struct AuJsHooks {
     struct AuCanvasSet *(*canvas_set)(void *ctx);
     bool (*canvas_image)(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
                          size_t url_cap);
+    /* Whether the image the document loaded from url may be read back
+     * from a canvas: it is of the document's origin, or its response
+     * passed the CORS check (an <img crossorigin>). Optional: without it
+     * only same-origin, data: and blob: images are clean. */
+    bool (*image_origin_clean)(void *ctx, const char *url);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */
@@ -276,6 +307,11 @@ void au_js_set_base_url(AuJs *js, const char *base);
  * allowed) and then a microtask checkpoint. url and line name the source
  * in error reports. Returns false if it threw (the error is reported). */
 bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, const char *url, int line);
+/* The classic script at url came from another origin without CORS: errors
+ * thrown by its code reach the page's error handlers as "Script error."
+ * with no message, location or error object (the console still shows
+ * them). Call before running it. */
+void au_js_mute_script(AuJs *js, const char *url);
 /* Runs a module script (inline when src is given, else fetched from url
  * through the fetcher); its dependencies load asynchronously. done is
  * called once the module has evaluated (or failed); it may be NULL. */
@@ -374,9 +410,32 @@ bool au_js_idle(const AuJs *js);
 /* Runs the garbage collector. */
 void au_js_gc(AuJs *js);
 
+/* ---- Workers ----
+ * A dedicated worker (new Worker(url)) is a QuickJS runtime of its own
+ * with a small prelude and no document. It runs only inside
+ * au_js_run_workers, in time slices: with hooks.coro each worker has its
+ * own stack and yields when its slice is used up, in the middle of a
+ * script if need be; without it a worker runs one task at a time on the
+ * caller's stack. Messages pass between the page and a worker as bytes
+ * (structured clone); nothing else is shared. A worker's requests go
+ * through the document's fetcher with the worker's AuJs as js, and the
+ * embedder reports them with au_js_fetch_head and the rest as for any
+ * request. Workers end with their document (au_js_free), wait while
+ * nothing calls au_js_run_workers (a hidden document), and count in
+ * au_js_stats.
+ *
+ * Runs the workers of js's document for up to budget_ms and delivers
+ * their messages to the document. Returns true if anything ran. */
+bool au_js_run_workers(AuJs *js, uint32_t budget_ms);
+/* A worker of js's document has something to do now (the embedder should
+ * call au_js_run_workers again soon). */
+bool au_js_workers_busy(const AuJs *js);
+/* How many workers js's document has. */
+int au_js_worker_count(const AuJs *js);
+
 /* ---- Statistics ---- */
 typedef struct AuJsStats {
-    size_t memory_used;  /* bytes allocated by the runtime */
+    size_t memory_used;  /* bytes allocated by the runtime, and by the document's workers (with their stacks) */
     size_t memory_limit;
     uint32_t wrappers;   /* live node wrappers */
     uint32_t errors;     /* uncaught exceptions reported */

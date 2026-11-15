@@ -224,6 +224,9 @@ bool mac_context_click(const EventRecord *ev);
  * m->items, or -1. */
 int mac_context_select(const AuContextMenu *m, Point global);
 
+/* ---- coro_mac.c: coroutines for workers, on the Thread Manager ---- */
+const AuCoroOps *mac_coro_ops(void);
+
 /* ---- internetconfig.c ---- */
 bool mac_ic_available(void);
 /* Opens url with its Internet Config helper (mailto:, ftp:, ...). */

@@ -2,6 +2,7 @@
  * URLs, text encoding, and the embedder hooks (dialogs, navigation,
  * history, cookies, storage, media queries, focus). */
 #include "js_int.h"
+#include "../net/digest.h"
 #include "../css/css.h"
 
 #include <stdio.h>
@@ -944,19 +945,12 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
     JS_CFUNC_DEF("textRects", 3, n_text_rects),
-    JS_CFUNC_DEF("random", 1, n_random),
     JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
     JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),
     JS_CFUNC_DEF("sheetDisable", 2, n_sheet_disable),
     JS_CFUNC_DEF("viewport", 0, n_viewport),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
-    JS_CFUNC_DEF("urlParse", 2, n_url_parse),
-    JS_CFUNC_DEF("docUrl", 1, n_doc_url),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),
-    JS_CFUNC_DEF("sameOrigin", 1, n_same_origin),
-    JS_CFUNC_DEF("originOf", 1, n_origin_of),
-    JS_CFUNC_DEF("utf8Encode", 1, n_utf8_encode),
-    JS_CFUNC_DEF("utf8Decode", 3, n_utf8_decode),
     JS_CFUNC_DEF("imageSize", 1, n_image_size),
     JS_CFUNC_MAGIC_DEF("alert", 1, n_alert, 0),
     JS_CFUNC_MAGIC_DEF("confirm", 1, n_alert, 1),
@@ -977,11 +971,66 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("setFocus", 2, n_set_focus),
     JS_CFUNC_DEF("setChecked", 2, n_set_checked),
     JS_CFUNC_DEF("state", 1, n_state),
-    JS_CFUNC_DEF("settings", 0, n_settings),
     JS_CFUNC_DEF("compileHandler", 2, n_compile),
 };
+
+/* ---- Digests (crypto.subtle, subresource integrity) ----
+ * digest(name, bytes) -> ArrayBuffer; hmac(name, key, bytes) ->
+ * ArrayBuffer. They throw for an algorithm that is not there. */
+static JSValue n_digest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)this_val;
+    if (argc < 2 + magic)
+        return JS_ThrowTypeError(ctx, "digest: bad arguments");
+    const char *name = JS_ToCString(ctx, argv[0]);
+    if (!name)
+        return JS_EXCEPTION;
+    AuDigestAlg alg = au_digest_by_name(name);
+    JS_FreeCString(ctx, name);
+    size_t klen = 0, len = 0;
+    uint8_t *key = magic ? JS_GetUint8Array(ctx, &klen, argv[1]) : NULL;
+    uint8_t *data = (!magic || key) ? JS_GetUint8Array(ctx, &len, argv[1 + magic]) : NULL;
+    if ((magic && !key) || !data)
+        return JS_EXCEPTION;
+    uint8_t out[AU_DIGEST_MAX];
+    bool ok = alg && (magic ? au_hmac(alg, key, klen, data, len, out) : au_digest(alg, data, len, out));
+    if (!ok)
+        return JS_ThrowTypeError(ctx, "digest: the algorithm is not available");
+    return JS_NewArrayBufferCopy(ctx, out, au_digest_len(alg));
+}
+
+/* detach(buffer): empties an ArrayBuffer that was transferred. */
+static JSValue n_detach(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    if (argc > 0)
+        JS_DetachArrayBuffer(ctx, argv[0]);
+    return JS_UNDEFINED;
+}
+
+/* The natives that need no document: a worker has these and the loop,
+ * fetch and module natives, and nothing else. */
+static const JSCFunctionListEntry natives_shared[] = {
+    JS_CFUNC_DEF("random", 1, n_random),
+    JS_CFUNC_DEF("urlParse", 2, n_url_parse),
+    JS_CFUNC_DEF("docUrl", 1, n_doc_url),
+    JS_CFUNC_DEF("sameOrigin", 1, n_same_origin),
+    JS_CFUNC_DEF("originOf", 1, n_origin_of),
+    JS_CFUNC_DEF("utf8Encode", 1, n_utf8_encode),
+    JS_CFUNC_DEF("utf8Decode", 3, n_utf8_decode),
+    JS_CFUNC_DEF("settings", 0, n_settings),
+    JS_CFUNC_MAGIC_DEF("digest", 2, n_digest, 0),
+    JS_CFUNC_MAGIC_DEF("hmac", 3, n_digest, 1),
+    JS_CFUNC_DEF("detach", 1, n_detach),
+};
+
+void js_natives_shared_init(AuJs *js, JSValue N)
+{
+    JS_SetPropertyFunctionList(js->ctx, N, natives_shared, JS_COUNTOF(natives_shared));
+}
 
 void js_natives2_init(AuJs *js, JSValue N)
 {
     JS_SetPropertyFunctionList(js->ctx, N, natives2, JS_COUNTOF(natives2));
+    js_natives_shared_init(js, N);
 }

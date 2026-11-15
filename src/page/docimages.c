@@ -118,6 +118,8 @@ AuDocImageResult au_docimages_lookup(AuDocImages *m, const char *url, int *w, in
 
 void au_docimages_tree_changed(AuDocImages *m) { m->scan_needed = true; }
 
+bool au_docimages_known(AuDocImages *m, const char *url) { return au_image_cache_find(m->cache, url) != NULL; }
+
 static const char *get_attr(const AuElement *el, const char *name)
 {
     AuAtom a = au_atom_lookup(name, strlen(name));

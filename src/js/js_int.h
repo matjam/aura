@@ -186,7 +186,21 @@ struct AuJs {
     size_t range_pend_len;
     /* fetches and modules */
     JsFetch *fetches;
+    uint32_t next_fetch_id;
+    struct AuCorsCache *cors_cache; /* root: the CORS preflight cache (fetch.c) */
     void *modules;
+    /* workers (worker.c): worker is set in a worker's own AuJs, which has
+     * no document; wk is then its record. workers lists the workers a
+     * document made. */
+    bool worker;
+    struct JsWorker *wk;
+    struct JsWorker *workers;
+    uint32_t worker_rr;          /* which worker runs first next time */
+    struct JsWkMsg *port_in, *port_in_tail; /* a document: port messages from other runtimes */
+    struct JsPortChan *chans;    /* root: message channels that cross runtimes */
+    uint32_t nchans, next_chan, next_worker_id;
+    char **muted; /* URLs of scripts whose errors are muted (au_js_mute_script) */
+    uint32_t nmuted;
     /* statistics */
     uint32_t errors, interrupts;
     size_t live_bytes; /* bytes the runtime holds (runtime.c allocator) */
@@ -245,6 +259,7 @@ int js_iface_of(const AuNode *n);
 /* ---- natives.c, natives2.c ---- */
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
+void js_natives_shared_init(AuJs *js, JSValue N); /* the natives a worker has too */
 void js_natives_forms_init(AuJs *js, JSValue N);
 
 /* ---- natives_canvas.c ---- */
@@ -289,6 +304,34 @@ bool js_fetch_pending(const AuJs *js);
 void js_origin_of(const char *url, char *out, size_t cap);
 bool js_same_origin(const AuJs *js, const char *url);
 
+/* ---- worker.c ---- */
+/* The embedder reported something for a fetch of a worker while the
+ * worker was not running: kept for the worker and replayed on its stack
+ * (kind 0 head, 1 data, 2 done, 3 failed). Returns false when js is not a
+ * worker or is running now (the caller then handles it at once). */
+bool js_worker_defer_fetch(AuJs *js, int kind, uint32_t id, int status, const char *text, const char *const *headers,
+                           size_t nheaders, const char *url, const void *data, size_t len);
+/* Whether this worker can park its stack to wait for the network, and the
+ * wait itself: returns false when the worker is being terminated. */
+bool js_worker_can_wait(AuJs *js);
+bool js_worker_wait(AuJs *js);
+void js_worker_natives(AuJs *js, JSValue N);
+/* A document is going: ends its workers. A root is going: frees the
+ * channel table. */
+void js_workers_free(AuJs *js);
+/* A worker's interrupt check: 1 to stop the script (the worker is being
+ * terminated), 0 to go on (after yielding when its slice is used up), -1
+ * for the ordinary time budget (a worker without its own stack). */
+int js_worker_interrupt(AuJs *js);
+bool js_worker_terminating(const AuJs *js);
+size_t js_workers_memory(const AuJs *js);
+/* The earliest timer of a document's workers (-1: none), and whether
+ * every one of them only waits for a message. */
+double js_workers_next_timer(const AuJs *js);
+bool js_workers_idle(const AuJs *js);
+/* runtime.c: the runtime of a worker, made on the worker's stack. */
+AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool opaque_origin);
+
 /* ---- module.c ---- */
 void js_module_init(AuJs *js);
 void js_module_natives(AuJs *js, JSValue N);
@@ -311,6 +354,10 @@ typedef struct JsUrl {
  * Free with js_url_free. */
 bool js_url_parse(const char *input, const char *base, JsUrl *out);
 void js_url_free(JsUrl *u);
+
+/* A worker coroutine's stack unless the settings say otherwise. The
+ * sanitizers' frames are far larger (see au_js_settings_default). */
+#define AU_JS_WORKER_STACK ((size_t)256 << 10)
 
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 

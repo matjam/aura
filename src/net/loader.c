@@ -40,6 +40,7 @@ struct Req {
     int status;
     AuBuf mime, charset, filename, csp, rpolicy, xfo;
     char encoding[32];
+    char reason[48];
     char cipher[64];
     uint16_t tls_version;
     bool mixed;
@@ -125,6 +126,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     memset(i, 0, sizeof *i);
     i->url = r->url ? r->url : "";
     i->status = r->status;
+    i->reason = r->reason;
     i->mime = au_buf_cstr(&r->mime);
     i->charset = au_buf_cstr(&r->charset);
     i->encoding = r->encoding;
@@ -144,6 +146,8 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->mixed = r->mixed;
     i->request_head = "";
     i->blocked_reason = r->blocked[0] ? r->blocked : NULL;
+    if (r->t && r->have_response && !r->finished)
+        i->response_headers = au_http_response_headers(r->t);
 }
 
 /* ---- windows-1252 to UTF-8 ---- */
@@ -311,6 +315,7 @@ static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
     au_free(r->url);
     r->url = au_strndup(resp->url, strlen(resp->url));
     r->status = resp->status;
+    snprintf(r->reason, sizeof r->reason, "%s", resp->reason ? resp->reason : "");
     au_buf_clear(&r->mime);
     au_buf_puts(&r->mime, resp->mime);
     au_buf_clear(&r->charset);
@@ -546,6 +551,13 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
         hr.body->content_type = au_strndup(rq->content_type, strlen(rq->content_type));
     hr.dest = rq->dest;
     hr.mode = (rq->dest == AU_DEST_DOCUMENT || rq->dest == AU_DEST_IFRAME) ? AU_MODE_NAVIGATE : AU_MODE_NO_CORS;
+    if (rq->mode > 0)
+        hr.mode = (AuRequestMode)(rq->mode - 1);
+    if (rq->headers)
+        for (size_t i = 0; i < rq->headers->n; i++)
+            au_headers_add(&hr.headers, rq->headers->items[i].name, rq->headers->items[i].value);
+    hr.manual_redirect = rq->manual_redirect;
+    hr.no_cache = rq->no_store;
     hr.referrer = rq->document_url;
     hr.referrer_policy = rq->referrer_policy;
     hr.top_level_url = rq->top_level_url;

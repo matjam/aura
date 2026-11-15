@@ -34,6 +34,7 @@ struct SheetSrc {
     size_t om_len;
     AuCssSheet *om_sheet;
     bool disabled;
+    uint8_t cors; /* a link's crossorigin attribute: 0 none, 1 anonymous, 2 use-credentials */
 };
 
 /* A <style> or <link> element in document order. */
@@ -53,6 +54,11 @@ typedef struct Request {
     bool font;           /* an @font-face source */
     AuBuf data;
     bool background; /* script fetch: does not hold the load event */
+    /* Cross-origin reads (docview.c, "Resources of other origins"). */
+    bool script;     /* a script's own request: src/js/fetch.c checks it */
+    bool cross;      /* the URL is of another origin than the document */
+    uint8_t cors;    /* fetched with CORS: 1 anonymous, 2 with credentials */
+    char *img_url;   /* an image's URL, for au_docview_image_origin_clean */
 } Request;
 
 struct AuDocView {
@@ -77,6 +83,8 @@ struct AuDocView {
     AuDocImages *imgs; /* docimages.c */
     Request *reqs;
     uint32_t nreqs, reqs_cap;
+    char **tainted_imgs; /* URLs of images that are not CORS-same-origin */
+    uint32_t ntainted;
     int vw, vh;
     int scroll_x, scroll_y;
     bool parsing;

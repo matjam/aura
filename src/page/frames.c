@@ -438,6 +438,7 @@ static AuDocView *frame_view(AuFrame *f)
     cb.console = fc_console;
     if (top->cb.random)
         cb.random = fc_random;
+    cb.coro = top->cb.coro;
     cb.popup = fc_popup;
     cb.choose_file = fc_choose_file;
     cb.confirm = fc_confirm;

@@ -65,6 +65,7 @@ struct Fetch {
     AuFetchSink sink;
     AuFetchKind kind;
     bool done, ok, cancelled;
+    bool script;   /* a script's own request (fetch, XMLHttpRequest, a worker) */
     char *doc_url; /* the nested document that asked (a frame's resources), NULL for the page's own */
     char *mime;    /* a data: URL's type, reported as the response head before its bytes */
     uint32_t log; /* its record in the page's request log (netlog.h) */
@@ -490,6 +491,36 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
     /* Script sees the status and these headers (the fetcher passes no
      * others yet); a frame's document is checked against the framing
      * headers (src/page/frames.c). */
+    if (r->headers) {
+        /* The fetcher passes every header. The computed type (after
+         * sniffing) replaces the server's for everything but a script's
+         * own request, which reads the header as sent. */
+        const char **hv = au_alloc((r->nheaders + 1) * 2 * sizeof *hv);
+        size_t n = 0;
+        bool typed = false;
+        for (size_t i = 0; i < r->nheaders; i++) {
+            bool ct = au_ieq(r->headers[2 * i], strlen(r->headers[2 * i]), "content-type", 12);
+            if (ct && typed)
+                continue;
+            hv[2 * n] = r->headers[2 * i];
+            hv[2 * n + 1] = r->headers[2 * i + 1];
+            if (ct) {
+                typed = true;
+                if (!f->script && r->content_type && r->content_type[0])
+                    hv[2 * n + 1] = r->content_type;
+            }
+            n++;
+        }
+        if (!typed && !f->script && r->content_type && r->content_type[0]) {
+            hv[2 * n] = "content-type";
+            hv[2 * n + 1] = r->content_type;
+            n++;
+        }
+        au_docview_resource_head(f->page->dv, f->id, r->status ? r->status : 200,
+                                 r->status_text ? r->status_text : "", r->url, hv, n);
+        au_free(hv);
+        return;
+    }
     AuBuf len;
     au_buf_init(&len);
     if (r->content_length >= 0)
@@ -662,16 +693,40 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
          * document is the top-level site for cookies and blocklists. */
         rq.document_url = f->doc_url ? f->doc_url : p->url;
         rq.top_level_url = p->url;
-        if (rr && rr->method && !strcmp(rr->method, "POST")) {
-            rq.method = "POST";
-            rq.body = rr->body ? rr->body : "";
-            rq.body_len = rr->body_len;
-            rq.body_type = rr->body_type;
+        if (rr && rr->method && strcmp(rr->method, "GET") != 0) {
+            rq.method = rr->method;
+            if (rr->body || !strcmp(rr->method, "POST")) {
+                rq.body = rr->body ? rr->body : "";
+                rq.body_len = rr->body_len;
+                rq.body_type = rr->body_type;
+            }
         }
         rq.referrer_policy = p->rpolicy;
         rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS || p->cache_mode == AU_FETCH_CACHE_HISTORY
                        ? p->cache_mode
                        : AU_FETCH_CACHE_NORMAL;
+        if (rr) {
+            /* What a script's request (or a CORS resource) asks for. */
+            rq.headers = rr->headers;
+            rq.nheaders = rr->nheaders;
+            rq.script_mode = rr->script_mode;
+            rq.manual_redirect = rr->manual_redirect;
+            rq.omit_credentials = rr->omit_credentials;
+            if (rr->cache == 1)
+                rq.no_store = true;
+            else if (rr->cache == 2)
+                rq.cache = AU_FETCH_CACHE_BYPASS;
+            else if (rr->cache == 3)
+                rq.cache = AU_FETCH_CACHE_REVALIDATE;
+            else if (rr->cache == 4)
+                rq.cache = AU_FETCH_CACHE_HISTORY;
+            if (rr->referrer && !rr->referrer[0])
+                rq.no_referrer = true;
+            else if (rr->referrer)
+                rq.document_url = rr->referrer;
+            if (rr->referrer_policy)
+                rq.referrer_policy = (AuFetchReferrerPolicy)rr->referrer_policy;
+        }
     }
     log_begin(p, f, rq.method);
     f->fid = fe->start(fe->ctx, &rq, &f->sink);
@@ -702,6 +757,7 @@ static uint32_t loader_request_ex(void *ctx, AuDocView *dv, const AuResourceRequ
     Fetch *f = start_fetch(p, url, false, fk, rq);
     if (!f)
         return 0;
+    f->script = rq->script_mode != 0 && !rq->cors_resource;
     f->id = ++p->next_id;
     p->requested++;
     p->stats.resources++;
@@ -1411,6 +1467,7 @@ static void new_view(AuPage *p)
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
     dcb.random = p->env.random ? dv_random : NULL;
+    dcb.coro = p->env.coro;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;
