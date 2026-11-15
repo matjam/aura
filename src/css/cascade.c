@@ -773,6 +773,11 @@ static void index_build(AuCssResolver *r, bool quirks)
     for (uint32_t i = 0; i < r->nsheets; i++)
         walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap);
     au_free(stack);
+    if (r->nentries && r->nentries < r->entries_cap) {
+        /* Kept until the sheets change: trim to the length. */
+        r->entries = au_realloc(r->entries, r->nentries * sizeof *r->entries);
+        r->entries_cap = r->nentries;
+    }
     sort_registrations(r);
     for (int i = 0; i < 3; i++)
         layer_rank(&r->layers[i]);
