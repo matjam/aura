@@ -2,6 +2,10 @@ add_executable(test_page test_page.c)
 target_link_libraries(test_page aura_engine m)
 add_test(NAME page COMMAND test_page)
 
+add_executable(fuzz_page fuzz_page.c)
+target_link_libraries(fuzz_page aura_engine m)
+add_test(NAME page_fuzz COMMAND fuzz_page 60 7)
+
 # Smoke test: render each sample page to a PNG in the build folder (the
 # host tool prints its timings). Inspect the PNGs by eye after layout work.
 if(TARGET aura-host)

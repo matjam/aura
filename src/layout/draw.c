@@ -183,7 +183,7 @@ void l_build_stacking(AuLayout *L)
 typedef struct PCtx {
     AuLayout *L;
     AuCanvas *c;
-    LRect dirty;   /* canvas coordinates */
+    LArea dirty;   /* canvas coordinates */
     float view_x, view_y; /* canvas position of the viewport's top-left */
     float scroll_x, scroll_y;
     int depth;
@@ -192,7 +192,7 @@ typedef struct PCtx {
 
 enum { PH_BG, PH_FLOAT, PH_INLINE };
 
-static bool rect_hits(const LRect *d, float x, float y, float w, float h)
+static bool rect_hits(const LArea *d, float x, float y, float w, float h)
 {
     return x < d->x + d->w && x + w > d->x && y < d->y + d->h && y + h > d->y;
 }
@@ -1430,7 +1430,7 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
     l_transform_offset(k, &tdx, &tdy);
     ox += tdx;
     oy += tdy;
-    LRect saved = P->dirty;
+    LArea saved = P->dirty;
     bool cull = !rect_hits(&P->dirty, ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h);
     bool sc = (b->flags & LF_STACKING) != 0;
     if (cull && !(sc && k->layers && k->layers->n))
@@ -1544,7 +1544,7 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     /* Canvas coordinates: document point (x, y) maps to (view.x + x -
      * scroll_x, view.y + y - scroll_y). */
     float dx = view.x - scroll_x, dy = view.y - scroll_y;
-    P.dirty = (LRect){view.x, view.y, view.w, view.h};
+    P.dirty = (LArea){view.x, view.y, view.w, view.h};
     LBlock *bgbox;
     const AuStyle *cs = canvas_style(L, &bgbox);
     uint32_t bg = pc(cs, cs->bg->background_color);

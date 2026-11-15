@@ -462,7 +462,7 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->b.flags |= LF_TOO_DEEP;
         b->w = content_w + l_bp_h(b);
         b->h = (content_h >= 0 ? content_h : 0) + l_bp_v(b);
-        b->ov = (LRect){0, 0, b->w, b->h};
+        b->ov = (LArea){0, 0, b->w, b->h};
         return;
     }
     if (!L->full_layout && can_skip(L, b, content_w, content_h, cb_h)) {
@@ -526,7 +526,7 @@ void l_layout_independent(AuLayout *L, LBlock *b, float cb_w, float cb_h, float 
 
 /* ---- Overflow ---- */
 
-static void add_rect(LRect *r, float x, float y, float w, float h)
+static void add_rect(LArea *r, float x, float y, float w, float h)
 {
     if (w <= 0 && h <= 0)
         return;
@@ -537,7 +537,7 @@ static void add_rect(LRect *r, float x, float y, float w, float h)
     r->h = y1 - r->y;
 }
 
-static void shadow_extent(const LBlock *b, LRect *r)
+static void shadow_extent(const LBlock *b, LArea *r)
 {
     if (lb_anon(&b->b))
         return;
@@ -567,7 +567,7 @@ static void shadow_extent(const LBlock *b, LRect *r)
 }
 
 /* Adds the overflow of LBlock descendants reached through inline boxes. */
-static void union_children(LBlock *b, LRect *ink, LRect *scroll)
+static void union_children(LBlock *b, LArea *ink, LArea *scroll)
 {
     LBox *c = b->b.first;
     while (c) {
@@ -597,11 +597,11 @@ static void union_children(LBlock *b, LRect *ink, LRect *scroll)
 
 void l_finish_overflow(LBlock *b)
 {
-    LRect ink = {0, 0, b->w, b->h};
+    LArea ink = {0, 0, b->w, b->h};
     shadow_extent(b, &ink);
     /* Content extent, for scroll containers: starts as the content box; the
      * end padding is added below and the padding box is the minimum. */
-    LRect content = {b->bw[3] + b->p[3], b->bw[0] + b->p[0], l_max(0, b->w - l_bp_h(b)), l_max(0, b->h - l_bp_v(b))};
+    LArea content = {b->bw[3] + b->p[3], b->bw[0] + b->p[0], l_max(0, b->w - l_bp_h(b)), l_max(0, b->h - l_bp_v(b))};
     for (uint32_t i = 0; i < b->nlines; i++) {
         LLine *ln = &b->lines[i];
         add_rect(&content, ln->x, ln->y, ln->w, ln->h);
@@ -612,7 +612,7 @@ void l_finish_overflow(LBlock *b)
             continue;
         add_rect(&content, f->x, f->y, f->w, f->h);
     }
-    LRect kids = content;
+    LArea kids = content;
     union_children(b, &kids, &content);
     if (b->b.flags & LF_CLIPS) {
         /* Scrollable extent includes the end padding. */
@@ -742,15 +742,15 @@ static LBox *ref_block(LBox *cb)
 
 /* Containing block rectangle in the reference block's border-box
  * coordinates. */
-static void cb_rect(AuLayout *L, LBox *cb, LRect *r)
+static void cb_rect(AuLayout *L, LBox *cb, LArea *r)
 {
     if (!cb) {
-        *r = (LRect){0, 0, L->vw, L->vh};
+        *r = (LArea){0, 0, L->vw, L->vh};
         return;
     }
     if (cb->kind == LK_BLOCK) {
         LBlock *k = (LBlock *)cb;
-        *r = (LRect){k->bw[3], k->bw[0], k->w - k->bw[1] - k->bw[3], k->h - k->bw[0] - k->bw[2]};
+        *r = (LArea){k->bw[3], k->bw[0], k->w - k->bw[1] - k->bw[3], k->h - k->bw[0] - k->bw[2]};
         return;
     }
     /* Inline: the box from its first fragment's start to its last
@@ -775,7 +775,7 @@ static void cb_rect(AuLayout *L, LBox *cb, LRect *r)
         }
     }
     const AuStyleSurround *s = cb->style->surr;
-    *r = (LRect){x0 + s->border_width[3], y0 + s->border_width[0],
+    *r = (LArea){x0 + s->border_width[3], y0 + s->border_width[0],
                  l_max(0, x1 - x0 - s->border_width[1] - s->border_width[3]),
                  l_max(0, y1 - y0 - s->border_width[0] - s->border_width[2])};
 }
@@ -783,7 +783,7 @@ static void cb_rect(AuLayout *L, LBox *cb, LRect *r)
 static void layout_abspos(AuLayout *L, LBlock *b, LBox *cb)
 {
     LBox *ref = ref_block(cb);
-    LRect r;
+    LArea r;
     cb_rect(L, cb, &r);
     /* Static position into the reference block's coordinates. */
     LBlock *g = l_geom_parent(&b->b);

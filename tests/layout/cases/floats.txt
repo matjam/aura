@@ -164,3 +164,11 @@ Floats and clear (CSS 2.1 9.5).
 <div id=b style="height:10px"></div>
 ---
 #b y=20
+
+=== a line moved below floats does not place its floats twice
+<body style="margin:0;width:200px">
+<div id=p><div style="float:left;width:150px;height:20px"></div><span id=f style="float:left;width:100px;height:10px"></span>xxxxxxxxxx</div>
+<div id=n style="float:left;width:10px;height:10px"></div>
+---
+#f x=0 y=20
+#p h=46 lines=1

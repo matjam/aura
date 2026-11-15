@@ -147,9 +147,11 @@ typedef struct LLayers {
     uint32_t n, nneg, nzero;
 } LLayers;
 
-typedef struct LRect {
+/* (Not "LRect": the Mac OS List Manager has a function of that name,
+ * visible through Retro68's string.h.) */
+typedef struct LArea {
     float x, y, w, h;
-} LRect;
+} LArea;
 
 /* Replaced element data. */
 typedef struct LReplaced {
@@ -164,7 +166,7 @@ typedef struct LBlock {
     LBox b;
     float x, y, w, h;   /* border box, relative to the geometry parent's border box */
     float m[4], p[4], bw[4]; /* used margins, padding, border widths: top, right, bottom, left */
-    LRect ov;           /* overflow (painted extent) relative to the border box */
+    LArea ov;           /* overflow (painted extent) relative to the border box */
     float baseline;     /* first baseline from the border-box top, NAN if none */
     float last_baseline;
     float scroll_x, scroll_y; /* scroll containers */
@@ -363,7 +365,7 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 
 /* stack.c / draw.c / hit.c */
 void l_build_stacking(AuLayout *L);
-void l_paint(AuLayout *L, AuCanvas *c, LRect dirty);
+void l_paint(AuLayout *L, AuCanvas *c, LArea dirty);
 bool l_hit(AuLayout *L, float x, float y, AuHitResult *r);
 void l_dump(AuLayout *L, AuBuf *out);
 float l_sticky_offset(AuLayout *L, LBlock *b, float *dx);

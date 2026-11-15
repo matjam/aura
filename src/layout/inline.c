@@ -23,7 +23,8 @@ enum {
     SF_TAB = 16,         /* a preserved tab */
     SF_CONTENT = 32,     /* makes the line non-empty */
     SF_SPLITTABLE = 64,  /* may break between any characters if it does not fit */
-    SF_PRESERVED = 128   /* trailing spaces are preserved (pre-wrap): they hang */
+    SF_PRESERVED = 128,  /* trailing spaces are preserved (pre-wrap): they hang */
+    SF_PLACED = SF_TAB   /* IT_FLOAT: already placed (a line that is retried lower must not place it again) */
 };
 
 struct LSeg {
@@ -1152,6 +1153,11 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
         S.ndeferred = 0;
         while (j < L->nsegs) {
             LSeg *s = &L->segs[j];
+            if (s->kind == IT_FLOAT && (s->flags & SF_PLACED)) {
+                end = j;
+                j++;
+                continue;
+            }
             if (s->kind == IT_FLOAT) {
                 LBlock *f = (LBlock *)s->box;
                 /* Lay it out to know its width; place now if it fits. */
@@ -1165,19 +1171,29 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
                 }
                 if (x + fw <= avail + 0.01f || !has_content) {
                     place_float_seg(&S, f, S.y);
+                    s->flags |= SF_PLACED;
                     line_band(&S, strut, &l, &r);
                     avail = r - l;
                 } else if (S.ndeferred < 64) {
                     S.deferred[S.ndeferred++] = j;
                 } else {
                     place_float_seg(&S, f, S.y);
+                    s->flags |= SF_PLACED;
                 }
                 end = j;
                 j++;
                 continue;
             }
             if (s->kind == IT_ABS) {
-                if (s->box) {
+                /* Queued once; a later scan of the same segment (the line
+                 * broke before it, or is retried lower) only moves its
+                 * static position. */
+                if (s->box && (s->flags & SF_PLACED)) {
+                    LBlock *k = (LBlock *)s->box;
+                    k->sx = b->bw[3] + b->p[3] + (l - S.cl) + x;
+                    k->sy = b->bw[0] + b->p[0] + S.y;
+                } else if (s->box) {
+                    s->flags |= SF_PLACED;
                     LBlock *k = (LBlock *)s->box;
                     float sx = b->bw[3] + b->p[3] + (l - S.cl) + x;
                     float sy = b->bw[0] + b->p[0] + S.y;
@@ -1272,16 +1288,19 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
                     S.nopen--;
             }
         }
-        for (int q = 0; q < S.ndeferred; q++)
+        for (int q = 0; q < S.ndeferred; q++) {
             place_float_seg(&S, (LBlock *)L->segs[S.deferred[q]].box, S.y);
+            L->segs[S.deferred[q]].flags |= SF_PLACED;
+        }
         i = end + 1;
     }
     /* Floats and abspos after the clamp point are still placed. */
     for (; i < L->nsegs; i++) {
         LSeg *s = &L->segs[i];
-        if (s->kind == IT_FLOAT)
-            place_float_seg(&S, (LBlock *)s->box, S.y);
-        else if (s->kind == IT_ABS && s->box)
+        if (s->kind == IT_FLOAT) {
+            if (!(s->flags & SF_PLACED))
+                place_float_seg(&S, (LBlock *)s->box, S.y);
+        } else if (s->kind == IT_ABS && s->box && !(s->flags & SF_PLACED))
             l_queue_abspos(L, (LBlock *)s->box, b->bw[3] + b->p[3], b->bw[0] + b->p[0] + S.y);
         else if (s->kind == IT_ATOMIC && clamp) {
             /* hidden by the clamp: give it a position anyway */
