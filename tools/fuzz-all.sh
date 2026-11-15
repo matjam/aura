@@ -132,7 +132,7 @@ for name in $(list | cut -d'|' -f1); do
   code=$(sed -n 's/^exit //p' "$log" | tail -1)
   ub=$(grep -a 'runtime error' "$log" | sed -e 's/: runtime error.*//' | sort -u | wc -l | tr -d ' ')
   as=$(grep -a -c 'ERROR: AddressSanitizer' "$log")
-  last=$(grep -a -v -e '^exit ' -e '^SUMMARY' -e 'runtime error' "$log" | grep -a 'iterations\|documents\|handshakes' | tail -1)
+  last=$(grep -a -v -e '^exit ' -e '^SUMMARY' -e 'runtime error' "$log" | grep -a 'iterations\|documents\|handshakes\|sequences' | tail -1)
   printf '%-11s %-5s %-6s %-5s %s\n' "$name" "$code" "$ub" "$as" "$last"
   if [ "$code" != 0 ] || [ "$ub" != 0 ] || [ "$as" != 0 ]; then
     bad=1

@@ -242,7 +242,8 @@ bool css_color_keyword(uint16_t kw, AuColor *out, bool *is_current)
     return true;
 }
 
-static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+/* NaN (calc(0/0) in a colour) gives 0: it fails both comparisons. */
+static float clamp01(float v) { return v > 0 ? (v > 1 ? 1 : v) : 0; }
 /* Rounds half up; the small bias absorbs float error (hsl(180 100% 25%)
  * is 127.5, which must give 128). */
 static uint32_t to8(float v) { return (uint32_t)(clamp01(v) * 255.0f + 0.5f + 1e-4f); }
