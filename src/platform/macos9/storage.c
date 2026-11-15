@@ -8,6 +8,7 @@
  *     History            history log (history.h)
  *     Session            open windows and tabs (browser.h)
  *     Downloads          the downloads list (downloads.h)
+ *     Running            exists while Aura runs (unclean exit detection)
  *
  * A file is written as "<name>.tmp" and then swapped with the old one
  * (FSpExchangeFiles; on volumes without it, delete and rename), so a crash
@@ -22,7 +23,9 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { kSaveDelayMs = 3000 };
+enum { kSaveDelayMs = 3000, kScrollSaveDelayMs = 30000 };
+
+static uint32_t saved_session_gen; /* session_gen when the Session file was last written */
 
 static short g_vref;
 static long g_dir;
@@ -203,7 +206,7 @@ static uint32_t generation(FileId id)
     case F_PREFS: return b->prefs_gen;
     case F_BOOKMARKS: return b->bookmarks.generation;
     case F_HISTORY: return b->history.generation;
-    case F_SESSION: return b->session_gen;
+    case F_SESSION: return b->session_gen + b->scroll_gen;
     case F_DOWNLOADS: return b->downloads.generation;
     default: return 0;
     }
@@ -263,6 +266,41 @@ void storage_load_all(void)
         save_state[i].saved_gen = save_state[i].seen_gen = generation((FileId)i);
         save_state[i].pending = false;
     }
+    saved_session_gen = b->session_gen;
+}
+
+/* ---- Unclean exits ----
+ * A file "Running" exists while Aura runs: made at start, deleted after
+ * the last save at quit. Found at start, it means the last run crashed
+ * or was forced to quit (the out-of-memory handler leaves it too). */
+
+static bool running_spec(FSSpec *spec)
+{
+    if (!g_ok)
+        return false;
+    OSErr err = FSMakeFSSpec(g_vref, g_dir, (ConstStr255Param) "\pRunning", spec);
+    return err == noErr || err == fnfErr; /* fnfErr: valid, the file does not exist */
+}
+
+bool storage_begin_run(void)
+{
+    FSSpec spec;
+    if (!running_spec(&spec))
+        return false;
+    FInfo fi;
+    bool unclean = FSpGetFInfo(&spec, &fi) == noErr;
+    if (!unclean && FSpCreate(&spec, 'AURA', 'TEXT', -1) == noErr)
+        FlushVol(NULL, g_vref);
+    return unclean;
+}
+
+void storage_end_run(void)
+{
+    FSSpec spec;
+    if (running_spec(&spec)) {
+        FSpDelete(&spec);
+        FlushVol(NULL, g_vref);
+    }
 }
 
 bool storage_session(AuSession *s)
@@ -292,13 +330,20 @@ void storage_save_changed(bool force)
             st->pending = true;
             st->first_change_ms = now;
         }
-        if (!force && now - st->first_change_ms < kSaveDelayMs)
+        /* The session is saved soon after tabs change, and every half
+         * minute while only scroll positions do. */
+        uint32_t delay = kSaveDelayMs;
+        if (i == F_SESSION && g_browser->session_gen == saved_session_gen)
+            delay = kScrollSaveDelayMs;
+        if (!force && now - st->first_change_ms < delay)
             continue;
         AuBuf out;
         au_buf_init(&out);
         serialize((FileId)i, &out);
         if (write_file((FileId)i, out.data ? out.data : "", out.len)) {
             st->saved_gen = generation((FileId)i);
+            if (i == F_SESSION)
+                saved_session_gen = g_browser->session_gen;
             st->pending = false;
         } else {
             st->first_change_ms = now; /* try again after the delay */

@@ -390,6 +390,8 @@ static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
     t->scroll_x = x;
     t->scroll_y = y;
     clamp_scroll(t);
+    if (t->scroll_x != ox || t->scroll_y != oy)
+        t->win->browser->scroll_gen++;
     if (is_active(t) && (t->scroll_x != ox || t->scroll_y != oy)) {
         invalidate(t->win, t->win->layout.page);
         changed(t->win, AU_CHANGED_SCROLL);
@@ -1320,6 +1322,7 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
     t->scroll_y = y;
     clamp_scroll(t);
     if (t->scroll_x != ox || t->scroll_y != oy) {
+        w->browser->scroll_gen++;
         invalidate(w, w->layout.page);
         changed(w, AU_CHANGED_SCROLL);
         rehover(w);
@@ -1590,14 +1593,17 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out)
         const AuBrowserWindow *w = b->windows[i];
         au_buf_printf(out, "window %d %d %d\n", w->width, w->height, w->active);
         for (int j = 0; j < w->ntabs; j++) {
-            const AuNavList *nav = &w->tabs[j]->nav;
+            const AuTab *t = w->tabs[j];
+            const AuNavList *nav = &t->nav;
             au_buf_printf(out, "tab %d\n", nav->index);
             for (int k = 0; k < nav->n; k++) {
+                /* The current entry's position is the tab's own. */
+                int sy = k == nav->index ? t->scroll_y : nav->e[k].scroll_y;
                 au_buf_puts(out, "entry\t");
                 put_clean(out, nav->e[k].url);
                 au_buf_putc(out, '\t');
                 put_clean(out, nav->e[k].title);
-                au_buf_putc(out, '\n');
+                au_buf_printf(out, "\t%d\n", sy > 0 ? sy : 0);
             }
         }
     }
@@ -1671,9 +1677,20 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
                 ok = false;
                 continue;
             }
+            /* After the title, optionally, the scroll position. */
+            char *title = tab ? tab + 1 : (char *)"";
+            char *tab2 = tab ? strchr(title, '\t') : NULL;
+            int sy = 0;
+            if (tab2) {
+                *tab2 = 0;
+                sy = atoi(tab2 + 1);
+                if (sy < 0)
+                    sy = 0;
+            }
             int want = nav->index;
             nav->index = nav->n - 1;
-            au_nav_push(nav, url, tab ? tab + 1 : "");
+            au_nav_push(nav, url, title);
+            nav->e[nav->index].scroll_y = sy;
             nav->index = want;
         } else {
             ok = false;
@@ -1708,14 +1725,17 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
     for (int j = 0; j < sw->ntabs; j++) {
         const AuNavList *src = &sw->tabs[j].nav;
         AuTab *t = make_tab(w, w->ntabs);
-        for (int k = 0; k < src->n; k++)
+        for (int k = 0; k < src->n; k++) {
             au_nav_push(&t->nav, src->e[k].url, src->e[k].title);
+            t->nav.e[t->nav.n - 1].scroll_y = src->e[k].scroll_y;
+        }
         t->nav.index = src->index;
         AuNavEntry *e = au_nav_current(&t->nav);
         if (e) {
+            /* Back where it was left, once the page is tall enough. */
             char *url = au_strndup(e->url, strlen(e->url));
             apply_site_zoom(t, url);
-            au_page_navigate(t->page, url);
+            au_page_navigate_entry(t->page, url, 0, e->scroll_y);
             au_free(url);
         }
     }

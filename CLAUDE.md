@@ -296,7 +296,15 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+`Session` and `Downloads`, and `Running` while it runs. The session
+(windows, tabs, back and forward lists, scroll positions) is saved
+3 seconds after tabs change and every 30 seconds while only scroll
+positions do (`session_gen`, `scroll_gen`). `Running` is made at start
+and deleted after the last save at quit; when Aura finds it at start,
+the last run crashed or ran out of memory, and Aura offers to restore
+the session (ALRT 133) unless the startup preference restores it
+anyway. To test this in the guest, press Command-Option-M (the
+out-of-memory test) and launch Aura again. Each is written to a `.tmp` file and swapped
 in; a file that fails to parse is renamed with ` (damaged)` before a new
 one is written. To start with clean state in the guest, delete that
 folder.

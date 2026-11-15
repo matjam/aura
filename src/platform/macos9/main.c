@@ -865,13 +865,23 @@ int main(void)
         g_browser->highlight = 0xFF000000u | ((uint32_t)(hl.red >> 8) << 16) | ((uint32_t)(hl.green >> 8) << 8) |
                                (uint32_t)(hl.blue >> 8);
     }
-    if (storage_init())
+    bool unclean = false;
+    if (storage_init()) {
         storage_load_all();
+        unclean = storage_begin_run();
+    }
     InitCursor();
 
+    /* The last tabs come back when the preference says so, or, after a
+     * crash, when the user says so. */
     AuSession session;
     bool restored = false;
-    if (g_browser->prefs.startup == AU_STARTUP_RESTORE && storage_session(&session)) {
+    bool have = (g_browser->prefs.startup == AU_STARTUP_RESTORE || unclean) && storage_session(&session);
+    if (have && g_browser->prefs.startup != AU_STARTUP_RESTORE && CautionAlert(133, NULL) != 1) {
+        au_session_free(&session);
+        have = false;
+    }
+    if (have) {
         for (int i = 0; i < session.nwindows; i++) {
             if (session.windows[i].ntabs) {
                 browserwin_new(NULL, &session.windows[i]);
@@ -900,6 +910,7 @@ int main(void)
     if (g_browser->prefs.clear_history_on_quit)
         au_history_clear(&g_browser->history);
     storage_save_changed(true);
+    storage_end_run();
     /* Dispose of the windows (their controls, GWorlds and TextEdit
      * records) and leave the Appearance Manager tidily. */
     WindowPtr w = FrontWindow();

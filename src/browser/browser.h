@@ -136,6 +136,7 @@ struct AuBrowser {
     AuBrowserWindow **windows;
     int nwindows;
     uint32_t prefs_gen, session_gen;
+    uint32_t scroll_gen; /* any tab's scroll position changed (saved with the session, less often) */
     uint32_t next_tab_id;
     uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
     char *find_text;     /* the last Find, for Find Again; NULL before one */
@@ -278,8 +279,12 @@ AuIRect au_bw_hit_rect(AuBrowserWindow *w, AuHit h);
  *     # Aura session 1
  *     window <width> <height> <active tab>
  *     tab <current entry>
- *     entry\t<url>\t<title>
- * Windows hold the tab lines that follow, tabs the entry lines. */
+ *     entry\t<url>\t<title>\t<scroll y>
+ * Windows hold the tab lines that follow, tabs the entry lines. The
+ * scroll position is optional (older files lack it); for the current
+ * entry it is where the tab is scrolled now. session_gen changes with
+ * the windows, tabs and entries; scroll_gen with the scroll positions,
+ * which the shell saves less often. */
 typedef struct AuSessionTab {
     AuNavList nav;
 } AuSessionTab;
@@ -298,7 +303,7 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out);
 bool au_session_parse(AuSession *s, const char *data, size_t len);
 void au_session_free(AuSession *s);
 /* Adds the session window's tabs to w (loading each tab's current
- * entry) and activates its active tab. */
+ * entry, scrolled to where it was) and activates its active tab. */
 void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw);
 
 #endif

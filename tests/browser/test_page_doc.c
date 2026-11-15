@@ -791,6 +791,40 @@ static void test_context_menu(void)
     au_browser_free(b);
 }
 
+/* The session keeps each tab's scroll position and restores it. */
+static void test_session_scroll(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/other.html", true, -1);
+    settle(w);
+    au_bw_navigate(w, "file:///mem/sel.html");
+    settle(w);
+    uint32_t g = b->scroll_gen;
+    au_bw_scroll_to(w, 0, 1200);
+    CHECK(b->scroll_gen != g);
+    AuBuf out;
+    au_buf_init(&out);
+    au_browser_session_serialize(b, &out);
+    CHECK(strstr(au_buf_cstr(&out), "sel.html\t\t1200\n") != NULL);
+    AuSession s;
+    CHECK(au_session_parse(&s, out.data, out.len));
+    CHECK(s.windows[0].tabs[0].nav.e[1].scroll_y == 1200);
+    AuBrowserWindow *r = au_browser_window_new(b, 800, 600);
+    au_bw_restore(r, &s.windows[0]);
+    settle(r);
+    CHECK(r->tabs[0]->scroll_y == 1200);
+    au_session_free(&s);
+    /* Files written before scroll positions still load. */
+    static const char old[] = "# Aura session 1\nwindow 700 500 0\ntab 0\nentry\tfile:///mem/sel.html\tT\n";
+    CHECK(au_session_parse(&s, old, sizeof old - 1));
+    CHECK(s.nwindows == 1 && s.windows[0].tabs[0].nav.e[0].scroll_y == 0);
+    CHECK_STR(s.windows[0].tabs[0].nav.e[0].title, "T");
+    au_session_free(&s);
+    au_buf_free(&out);
+    au_browser_free(b);
+}
+
 static const char *find_mem(const char *name)
 {
     for (size_t i = 0; i < sizeof mem_files / sizeof mem_files[0]; i++)
@@ -866,6 +900,7 @@ int main(void)
     test_selection();
     test_context_menu();
     test_save_source();
+    test_session_scroll();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

@@ -237,6 +237,28 @@ resource 'DITL' (132) {
 	}
 };
 
+/* 133: offers to restore the last session after an unclean exit. */
+resource 'ALRT' (133) {
+	{0, 0, 120, 380}, 133,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (133) {
+	{
+		{88, 278, 108, 366}, Button { enabled, "Restore" };
+		{88, 156, 108, 266}, Button { enabled, "Don't Restore" };
+		{12, 70, 80, 366}, StaticText { disabled,
+			"Aura did not quit normally last time. Restore the windows and tabs "
+			"that were open?" }
+	}
+};
+
 /* 200: asks for a name (new bookmark folder, rename); ^0 is the prompt. */
 resource 'DLOG' (200) {
 	{0, 0, 110, 340}, movableDBoxProc, invisible, noGoAway, 0, 200, "Name",

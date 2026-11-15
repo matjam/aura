@@ -112,6 +112,11 @@ void storage_load_all(void);
  * recent (quitting). */
 void storage_save_changed(bool force);
 bool storage_session(AuSession *s);
+/* Marks Aura as running; returns true when the last run did not quit
+ * normally (its mark was still there). */
+bool storage_begin_run(void);
+/* Removes the mark: call after the last save at quit. */
+void storage_end_run(void);
 AuTime mac_now(void);
 bool mac_read_file_url(const char *url, char **data, size_t *len);
 /* Asks for a file with the standard Open dialog; returns a file: URL to
