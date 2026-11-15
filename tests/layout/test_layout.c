@@ -15,6 +15,9 @@
  *   scroll Y                paint and hit test with the document scrolled
  *   link X Y url            the link under (X, Y) resolves to url
  *
+ * Cases run in standards mode: "<!DOCTYPE html>" is prepended unless the
+ * HTML starts with "<!" (its own doctype, or "<!-- quirks -->").
+ *
  * The font is Ahem-like (tests/layout/ahem.h): every character is a 1em
  * square, the default 16px gives 16px glyphs and 16px lines, so geometry
  * does not depend on system fonts. Values compare within 0.05px. */
@@ -104,6 +107,15 @@ static int count_lines(AuLayout *L, AuElement *el)
 static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expect, int line0, int vw, int vh)
 {
     AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    /* Cases run in standards mode unless they start with their own
+     * doctype (or a comment saying "quirks"). */
+    static char src[1 << 16];
+    if (strncmp(html, "<!", 2) != 0 && hlen + 16 < sizeof src) {
+        memcpy(src, "<!DOCTYPE html>", 15);
+        memcpy(src + 15, html, hlen);
+        html = src;
+        hlen += 15;
+    }
     au_docview_load(dv, html, hlen, "file:///test/case.html");
     au_docview_set_viewport(dv, vw, vh);
     au_docview_update(dv);
@@ -111,12 +123,20 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
     AuLayout *L = au_docview_layout(dv);
     AuSurface *surf = NULL;
     int scroll = 0;
-    int line = line0;
-    for (char *ln = strtok(expect, "\n"); ln; ln = strtok(NULL, "\n"), line++) {
+    int line = line0 - 1;
+    char *next_ln = expect;
+    while (next_ln) {
+        char *ln = next_ln;
+        char *nl = strchr(ln, '\n');
+        if (nl) {
+            *nl = 0;
+            next_ln = nl + 1;
+        } else {
+            next_ln = NULL;
+        }
+        line++;
         while (*ln == ' ' || *ln == '\t')
             ln++;
-        if (!*ln || *ln == '#' ? (*ln != '#') : false)
-            continue;
         if (!*ln)
             continue;
         if (ln[0] == '/' && ln[1] == '/')
@@ -262,6 +282,15 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
     au_docview_free(dv);
 }
 
+/* 1-based line number of byte offset off. */
+static int line_of(const char *s, size_t off)
+{
+    int line = 1;
+    for (size_t i = 0; i < off && s[i]; i++)
+        line += s[i] == '\n';
+    return line;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -278,14 +307,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "cannot open %s\n", argv[a]);
             return 1;
         }
-        static char buf[1 << 20];
+        static char buf[1 << 20], orig[1 << 20];
         size_t n = fread(buf, 1, sizeof buf - 1, f);
         fclose(f);
         buf[n] = 0;
+        memcpy(orig, buf, n + 1);
         char *p = strstr(buf, "=== ");
-        int line = 1;
-        for (char *q = buf; q < p; q++)
-            line += *q == '\n';
         while (p) {
             char *name = p + 4;
             char *eol = strchr(name, '\n');
@@ -293,7 +320,7 @@ int main(int argc, char **argv)
                 break;
             *eol = 0;
             cur_case = name;
-            line++;
+            int line = line_of(orig, (size_t)(eol - buf));
             char *body = eol + 1;
             char *next = strstr(body, "\n=== ");
             if (next)
@@ -306,26 +333,15 @@ int main(int argc, char **argv)
                     body++;
                 if (*body)
                     body++;
-                line++;
             }
             char *sep = strstr(body, "\n---\n");
-            int body_lines = 0;
             if (!sep) {
                 fail(line, "case without ---");
             } else {
-                for (char *q = body; q < sep; q++)
-                    body_lines += *q == '\n';
                 *sep = 0;
-                run_case(fonts, body, strlen(body), sep + 5, line + body_lines + 2, vw, vh);
+                run_case(fonts, body, strlen(body), sep + 5, line_of(orig, (size_t)(sep + 5 - buf)), vw, vh);
             }
             ncases++;
-            int total_lines = 0;
-            for (char *q = body; *q; q++)
-                total_lines += *q == '\n';
-            if (sep)
-                for (char *q = sep + 5; *q; q++)
-                    total_lines += *q == '\n';
-            line += total_lines + 3;
             p = next ? next + 1 : NULL;
         }
     }

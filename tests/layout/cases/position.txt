@@ -1,0 +1,183 @@
+Positioning schemes (CSS 2.1 9.3, 10.3.7, 10.6.4; sticky).
+
+=== relative offsets do not move siblings
+<body style="margin:0">
+<div id=a style="position:relative;left:10px;top:20px;height:30px"></div>
+<div id=b style="height:10px"></div>
+---
+#a x=10 y=20
+#b y=30
+
+=== relative right and bottom
+<body style="margin:0">
+<div id=a style="position:relative;right:10px;bottom:5px;height:30px"></div>
+---
+#a x=-10 y=-5
+
+=== relative percentage offsets
+<body style="margin:0">
+<div style="height:200px"><div id=a style="position:relative;left:10%;top:10%;height:10px"></div></div>
+---
+#a x=80 y=20
+
+=== relative children move with the parent
+<body style="margin:0">
+<div style="position:relative;left:10px;top:10px"><div id=c style="height:10px;margin-left:5px"></div></div>
+---
+#c x=15 y=10
+
+=== absolute in the initial containing block
+<body style="margin:0">
+<div id=a style="position:absolute;left:10px;top:20px;width:100px;height:50px"></div>
+<div id=b style="position:absolute;right:10px;bottom:20px;width:100px;height:50px"></div>
+---
+#a x=10 y=20
+#b x=690 y=530
+
+=== absolute against a positioned ancestor's padding box
+<body style="margin:0">
+<div style="position:relative;margin:50px;border:5px solid;padding:10px;height:200px">
+<div id=a style="position:absolute;left:0;top:0;width:10px;height:10px"></div>
+<div id=b style="position:absolute;right:0;bottom:0;width:10px;height:10px"></div>
+</div>
+---
+#a x=55 y=55
+#b x=735 y=265
+
+=== absolute auto insets use the static position
+<body style="margin:0">
+<div style="position:relative">
+<div style="height:30px"></div>
+<div id=a style="position:absolute;width:10px;height:10px;margin-left:20px"></div>
+</div>
+---
+#a x=20 y=30
+
+=== absolute width from left and right
+<body style="margin:0">
+<div id=a style="position:absolute;left:100px;right:200px;height:10px"></div>
+---
+#a x=100 w=500
+
+=== absolute height from top and bottom
+<body style="margin:0">
+<div id=a style="position:absolute;top:100px;bottom:200px;width:10px"></div>
+---
+#a y=100 h=300
+
+=== absolute shrink-to-fit width
+<body style="margin:0">
+<div id=a style="position:absolute;left:0;top:0">xx xxx</div>
+<div id=b style="position:absolute;left:750px;top:100px">xx xxx</div>
+---
+#a w=96 h=16
+#b w=50 h=32
+
+=== absolute auto margins centre
+<body style="margin:0">
+<div id=a style="position:absolute;left:0;right:0;width:200px;height:10px;margin:0 auto"></div>
+<div id=b style="position:absolute;top:0;bottom:0;height:100px;width:10px;margin:auto 0"></div>
+---
+#a x=300
+#b y=250
+
+=== absolute right with auto left
+<body style="margin:0">
+<div id=a style="position:absolute;right:50px;top:0;width:100px;height:10px"></div>
+---
+#a x=650
+
+=== absolute percentages against the containing block
+<body style="margin:0">
+<div style="position:relative;width:400px;height:200px">
+<div id=a style="position:absolute;left:25%;top:50%;width:50%;height:25%"></div>
+</div>
+---
+#a x=100 y=100 w=200 h=50
+
+=== absolute containing block of an inline
+<body style="margin:0">
+<div style="height:100px"></div>
+<span style="position:relative">xx<span id=a style="position:absolute;left:0;top:0;width:5px;height:5px"></span></span>
+---
+#a x=0 y=100
+
+=== absolute box-sizing border-box
+<body style="margin:0">
+<div id=a style="position:absolute;left:0;top:0;width:100px;height:50px;padding:10px;border:5px solid;box-sizing:border-box"></div>
+---
+#a w=100 h=50
+
+=== absolute replaced element
+<body style="margin:0">
+<img id=i style="position:absolute;left:10px;top:10px" width=40 height=20>
+---
+#i x=10 y=10 w=40 h=20
+
+=== fixed position is against the viewport
+<body style="margin:0">
+<div style="height:2000px"></div>
+<div id=f style="position:fixed;right:0;bottom:0;width:50px;height:50px;background:#ff0000"></div>
+---
+#f x=750 y=550
+scroll 500
+pixel 775 575 ff0000
+pixel 775 75 ffffff
+
+=== fixed does not scroll with the document
+<body style="margin:0">
+<div id=f style="position:fixed;left:0;top:0;width:50px;height:50px;background:#00ff00"></div>
+<div style="height:2000px"></div>
+---
+scroll 300
+pixel 10 10 00ff00
+hit 10 10 #f
+
+=== sticky stays in view while its container is visible
+<body style="margin:0">
+<div style="height:1000px">
+<div style="height:100px"></div>
+<div id=s style="position:sticky;top:0;height:20px;background:#0000ff"></div>
+</div>
+<div style="height:2000px"></div>
+---
+#s y=100
+scroll 300
+pixel 5 5 0000ff
+hit 5 5 #s
+scroll 0
+pixel 5 105 0000ff
+
+=== sticky is limited by its containing block
+<body style="margin:0">
+<div style="height:200px">
+<div id=s style="position:sticky;top:0;height:20px;background:#0000ff"></div>
+</div>
+<div style="height:2000px"></div>
+---
+scroll 300
+pixel 5 5 ffffff
+
+=== abspos out of an overflow:hidden parent that is not positioned
+<body style="margin:0">
+<div style="overflow:hidden;height:10px;width:10px">
+<div id=a style="position:absolute;left:100px;top:100px;width:20px;height:20px;background:#ff0000"></div>
+</div>
+---
+pixel 110 110 ff0000
+hit 110 110 #a
+
+=== abspos inside an overflow:hidden positioned parent is clipped
+<body style="margin:0">
+<div style="position:relative;overflow:hidden;height:10px;width:10px">
+<div id=a style="position:absolute;left:100px;top:100px;width:20px;height:20px;background:#ff0000"></div>
+</div>
+---
+pixel 110 110 ffffff
+hit 110 110 <html>
+
+=== document size includes absolute boxes
+<body style="margin:0">
+<div style="position:absolute;left:1000px;top:1500px;width:10px;height:10px"></div>
+---
+doc w=1010 h=1510

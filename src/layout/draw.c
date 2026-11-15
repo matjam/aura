@@ -1491,12 +1491,27 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
 
 /* The canvas background: the root's background, or the body's when the
  * root has none (CSS 2.1 14.2). */
+/* True if any background layer has an image (not "none"). */
+static bool has_bg_image(const AuStyle *s)
+{
+    if (!s->bg->background_image)
+        return false;
+    size_t nl = au_style_bg_layer_count(s);
+    for (size_t i = 0; i < nl; i++) {
+        AuBgLayer ly;
+        au_style_bg_layer(s, i, &ly);
+        if (ly.image && ly.image->type != AU_CSSV_KEYWORD)
+            return true;
+    }
+    return false;
+}
+
 static const AuStyle *canvas_style(AuLayout *L, LBlock **box)
 {
     LBox *root = L->root;
     *box = (LBlock *)root;
     const AuStyle *s = root->style;
-    bool none = !(s->bg->background_color & 0xFF) && !s->bg->background_image;
+    bool none = !(s->bg->background_color & 0xFF) && !has_bg_image(s);
     if (none && root->node && au_is_html_element(root->node, AU_ATOM_html)) {
         for (LBox *c = root->first; c; c = c->next)
             if (l_is_tag(c, AU_ATOM_body) && c->kind == LK_BLOCK) {
@@ -1539,7 +1554,7 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     LBlock *root = (LBlock *)L->root;
     /* Background images of the canvas: positioned against the root
      * element's box, painted over the whole canvas. */
-    if (cs->bg->background_image) {
+    if (has_bg_image(cs)) {
         float bx, by;
         l_box_origin(&bgbox->b, &bx, &by);
         AuStyleBackground nobg = *cs->bg;

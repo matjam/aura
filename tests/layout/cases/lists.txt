@@ -1,0 +1,141 @@
+Lists, markers, generated content, counters and quotes. Widths use Ahem:
+each character is 16px wide; text markers end with ". " (no-break space).
+
+=== outside markers sit left of the item
+<body style="margin:0">
+<ul style="margin:0;padding-left:40px"><li id=a>x</li><li id=b>x</li></ul>
+---
+#a x=40 y=0 h=16
+#b y=16
+
+=== inside decimal marker takes space in the line
+<body style="margin:0">
+<ol style="margin:0;padding:0;list-style-position:inside"><li>x<span id=s style="display:inline-block;width:5px;height:5px"></span></li></ol>
+---
+// "1. " is three glyphs, then "x"
+#s x=64
+
+=== ol start and reversed
+<body style="margin:0">
+<ol start=9 style="margin:0;padding:0;list-style-position:inside"><li>x</li><li><span id=s style="display:inline-block;width:5px;height:5px"></span></li></ol>
+---
+// "10. " is four glyphs
+#s x=64
+
+=== li value
+<body style="margin:0">
+<ol style="margin:0;padding:0;list-style-position:inside"><li value=100><span id=s style="display:inline-block;width:5px;height:5px"></span></li></ol>
+---
+#s x=80
+
+=== lower-roman and upper-alpha
+<body style="margin:0">
+<ol style="margin:0;padding:0;list-style:lower-roman inside"><li>x</li><li>x</li><li>x</li><li><span id=s style="display:inline-block;width:5px;height:5px"></span></li></ol>
+<ol style="margin:0;padding:0;list-style:upper-alpha inside"><li><span id=t style="display:inline-block;width:5px;height:5px"></span></li></ol>
+---
+// "iv. " and "A. "
+#s x=64
+#t x=48
+
+=== list-style none makes no marker
+<body style="margin:0">
+<ul style="margin:0;padding:0;list-style:none inside"><li><span id=s style="display:inline-block;width:5px;height:5px"></span></li></ul>
+---
+#s x=0
+
+=== disc and square markers paint in the item's colour
+<body style="margin:0">
+<ul style="margin:0;padding-left:40px;color:#ff0000"><li><span style="color:#fff">x</span></li></ul>
+<ul style="margin:0;padding-left:40px;color:#0000ff;list-style:square"><li><span style="color:#fff">x</span></li></ul>
+---
+pixel 30 8 ff0000
+pixel 30 24 0000ff
+pixel 10 8 ffffff
+
+=== nested lists change the bullet
+<body style="margin:0">
+<ul><li>x<ul><li id=n>x</li></ul></li></ul>
+---
+#n x=80
+
+=== before and after strings
+<body style="margin:0">
+<style>#p::before{content:"ab"} #p::after{content:"c"}</style>
+<div id=p>x<span id=s style="display:inline-block;width:5px;height:5px"></span></div>
+---
+#s x=48
+
+=== attr() in content
+<body style="margin:0">
+<style>a::after{content:"[" attr(href) "]"}</style>
+<div><a href="xyz">x</a><span id=s style="display:inline-block;width:5px;height:5px"></span></div>
+---
+#s x=96
+
+=== counters
+<body style="margin:0">
+<style>
+body{counter-reset:c}
+h2{counter-increment:c;margin:0;font-size:16px}
+h2::before{content:counter(c) "."}
+#x::before{content:counter(c, upper-roman)}
+</style>
+<h2>a</h2><h2>a</h2><h2 id=h>a<span id=s style="display:inline-block;width:5px;height:5px"></span></h2>
+<div id=x><span id=t style="display:inline-block;width:5px;height:5px"></span></div>
+---
+#s x=48
+// "III"
+#t x=48
+
+=== nested counters()
+<body style="margin:0">
+<style>
+ol{counter-reset:item;list-style:none;margin:0;padding:0}
+li{counter-increment:item}
+li::before{content:counters(item, ".") " "}
+</style>
+<ol><li>a<ol><li>b</li><li><span id=s style="display:inline-block;width:5px;height:5px"></span></li></ol></li></ol>
+---
+// "1.2 " is four glyphs
+#s x=64
+
+=== quotes
+<body style="margin:0">
+<div><q>x</q><span id=s style="display:inline-block;width:5px;height:5px"></span></div>
+---
+// the Ahem font has no curly quotes: fallback glyphs, width not checked
+#s y=7.8
+
+=== block ::before
+<body style="margin:0">
+<style>#p::before{content:"";display:block;height:30px}</style>
+<div id=p><div id=c style="height:10px"></div></div>
+---
+#c y=30
+#p h=40
+
+=== content none and normal make no box
+<body style="margin:0">
+<style>#p::before{content:none} #p::after{content:normal}</style>
+<div id=p>x<span id=s style="display:inline-block;width:5px;height:5px"></span></div>
+---
+#s x=16
+
+=== display contents promotes children
+<body style="margin:0">
+<div style="display:contents;padding:50px"><div id=c style="height:10px"></div></div>
+---
+#c x=0 y=0
+
+=== display none removes the subtree
+<body style="margin:0">
+<div style="display:none;height:100px"></div>
+<div id=c style="height:10px"></div>
+---
+#c y=0
+
+=== block inside inline splits the inline
+<body style="margin:0">
+<span>x<div id=d style="height:10px"></div>x</span>
+---
+#d y=16 w=800
