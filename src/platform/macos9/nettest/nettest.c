@@ -192,7 +192,7 @@ static void bench(Run *r)
 {
     static unsigned char buf[16384];
     memset(buf, 0x5A, sizeof buf);
-    unsigned char key[32], iv[12], tag[16];
+    unsigned char key[32], iv[12], tag[32];
     memset(key, 1, sizeof key);
     memset(iv, 2, sizeof iv);
 
@@ -244,6 +244,74 @@ static void bench(Run *r)
         n++;
     } while ((t = au_mac_clock_ms() - t0) < 1000);
     say(r, "x25519         %5lu ms\n", (unsigned long)(t / (unsigned)n));
+
+    /* What a handshake costs beyond the key share (TLS 1.3 study): the
+     * ECDH with the server's point, and the signature checks. The inputs
+     * are not valid signatures; the work done is the same. Times are in
+     * tenths of a millisecond. */
+    unsigned char q[65];
+    ec->mulgen(q, scalar, sizeof scalar, BR_EC_secp256r1);
+    t0 = au_mac_clock_ms();
+    n = 0;
+    do {
+        memcpy(point, q, 65);
+        ec->mul(point, 65, scalar, sizeof scalar, BR_EC_secp256r1);
+        n++;
+    } while ((t = au_mac_clock_ms() - t0) < 1000);
+    say(r, "p256 ecdh      %5lu.%lu ms\n", (unsigned long)(t / (unsigned)n), (unsigned long)(t * 10 / (unsigned)n % 10));
+
+    unsigned char sig[64];
+    br_ec_public_key epk;
+    epk.curve = BR_EC_secp256r1;
+    epk.q = q;
+    epk.qlen = 65;
+    memset(sig, 0x21, sizeof sig);
+    t0 = au_mac_clock_ms();
+    n = 0;
+    do {
+        br_ecdsa_i31_vrfy_raw(ec, key, 32, &epk, sig, sizeof sig);
+        n++;
+    } while ((t = au_mac_clock_ms() - t0) < 1000);
+    say(r, "ecdsa p256 vfy %5lu.%lu ms\n", (unsigned long)(t / (unsigned)n), (unsigned long)(t * 10 / (unsigned)n % 10));
+
+    static unsigned char mod[512], x[512];
+    static const unsigned char e65537[3] = {1, 0, 1};
+    for (int bits = 2048; bits <= 4096; bits *= 2) {
+        size_t len = (size_t)bits / 8;
+        for (size_t i = 0; i < len; i++)
+            mod[i] = (unsigned char)(0xC1 + i * 7);
+        mod[0] |= 0x80;
+        mod[len - 1] |= 1;
+        br_rsa_public_key pk;
+        pk.n = mod;
+        pk.nlen = len;
+        pk.e = (unsigned char *)e65537;
+        pk.elen = 3;
+        t0 = au_mac_clock_ms();
+        n = 0;
+        do {
+            memset(x, 0x42, len);
+            br_rsa_i31_public(x, len, &pk);
+            n++;
+        } while ((t = au_mac_clock_ms() - t0) < 1000);
+        say(r, "rsa%d public %5lu.%lu ms\n", bits, (unsigned long)(t / (unsigned)n),
+            (unsigned long)(t * 10 / (unsigned)n % 10));
+    }
+
+    /* HKDF-Expand-Label is one HMAC-SHA-256 over about 60 bytes; a TLS 1.3
+     * handshake runs about 20 of them. */
+    br_hmac_key_context kc;
+    br_hmac_key_init(&kc, &br_sha256_vtable, key, 32);
+    t0 = au_mac_clock_ms();
+    n = 0;
+    do {
+        br_hmac_context hc;
+        br_hmac_init(&hc, &kc, 0);
+        br_hmac_update(&hc, buf, 60);
+        br_hmac_out(&hc, tag);
+        n++;
+    } while ((t = au_mac_clock_ms() - t0) < 500);
+    say(r, "hmac-sha256    %5lu per second\n", (unsigned long)(n * 1000UL / (t ? t : 1)));
 }
 
 /* ---- DNS and TCP through AuNetOps ---- */
