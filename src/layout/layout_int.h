@@ -400,6 +400,9 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 /* stack.c / draw.c / hit.c */
 void l_build_stacking(AuLayout *L);
 void l_paint(AuLayout *L, AuCanvas *c, LArea dirty);
+/* b's transform (translate, rotate, scale, transform about its origin) as a
+ * matrix in its border-box coordinates; false when it has none (draw.c). */
+bool l_transform_matrix(const LBlock *b, AuMatrix *out);
 bool l_hit(AuLayout *L, float x, float y, AuHitResult *r);
 void l_dump(AuLayout *L, AuBuf *out);
 float l_sticky_offset(AuLayout *L, LBlock *b, float *dx);

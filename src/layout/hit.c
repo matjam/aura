@@ -296,6 +296,17 @@ static bool hit_layer(HCtx *H, LBox *b, float ox, float oy)
     l_transform_offset(k, &tdx, &tdy);
     ox += tdx;
     oy += tdy;
+    /* A rotation or scale: test the point mapped back into the box. */
+    float hx = H->x, hy = H->y;
+    AuMatrix tm;
+    if (!tdx && !tdy && l_transform_matrix(k, &tm)) {
+        float det = tm.a * tm.d - tm.b * tm.c;
+        if (det > -1e-6f && det < 1e-6f)
+            return false;
+        float px = H->x - ox - tm.e, py = H->y - oy - tm.f;
+        H->x = ox + (tm.d * px - tm.c * py) / det;
+        H->y = oy + (tm.a * py - tm.b * px) / det;
+    }
     if (!lb_anon(b) && b->style->rare->opacity <= 0 && b != H->L->root) {
         /* invisible but still hit-testable in browsers; keep going */
     }
@@ -321,6 +332,8 @@ static bool hit_layer(HCtx *H, LBox *b, float ox, float oy)
         hit = true;
     }
     H->depth--;
+    H->x = hx;
+    H->y = hy;
     return hit;
 }
 

@@ -239,6 +239,27 @@ pixel 120 30 ff0000
 pixel 10 30 ffffff
 hit 120 30 #t
 
+=== rotate turns painting and hit testing about the centre
+<body style="margin:0">
+<div style="height:50px"></div>
+<div id=t style="width:100px;height:20px;background:#ff0000;transform:rotate(90deg)"></div>
+---
+// centre (50, 60): the box now covers x 40..60, y 10..110
+pixel 50 100 ff0000
+pixel 50 20 ff0000
+pixel 90 60 ffffff
+pixel 10 60 ffffff
+hit 50 100 #t
+hit 90 60 <body>
+
+=== scale about a transform-origin, with opacity
+<body style="margin:0">
+<div id=t style="width:20px;height:20px;background:#000000;transform:scale(2);transform-origin:0 0;opacity:0.5"></div>
+---
+pixel 35 35 808080
+pixel 45 10 ffffff
+hit 35 35 #t
+
 === links are found by hit testing
 <body style="margin:0">
 <base href="http://example.com/dir/">

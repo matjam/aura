@@ -163,6 +163,20 @@ AuIRect au_canvas_clip(const AuCanvas *c);
  * (0..1). Groups nest. */
 void au_canvas_group_begin(AuCanvas *c, AuRect bounds);
 void au_canvas_group_end(AuCanvas *c, float opacity);
+/* An affine transform: x' = a x + c y + e, y' = b x + d y + f. */
+typedef struct AuMatrix {
+    float a, b, c, d, e, f;
+} AuMatrix;
+/* Transformed layers: drawing between begin and end goes to a temporary
+ * surface covering bounds (whole pixels, not limited by the current
+ * clip), which end draws through m (canvas coordinates, before the
+ * canvas translation, like every other coordinate) with bilinear
+ * filtering and the given opacity, clipped by the clip that was current
+ * at begin. begin returns false, and pushes nothing, when bounds is
+ * empty, not finite, or larger than 4 megapixels; the caller then draws
+ * untransformed. Layers and groups nest. */
+bool au_canvas_layer_begin(AuCanvas *c, AuRect bounds);
+void au_canvas_layer_end(AuCanvas *c, const AuMatrix *m, float opacity);
 /* Multiplies the innermost group's pixels by the coverage of p (canvas
  * coordinates, nonzero rule): pixels outside p become transparent. This
  * gives a clip of any shape (rounded overflow clipping). No-op outside a

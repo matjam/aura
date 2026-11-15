@@ -171,6 +171,110 @@ void au_canvas_group_end(AuCanvas *c, float opacity)
     au_surface_free(g.surface);
 }
 
+/* ---- Transformed layers ---- */
+
+bool au_canvas_layer_begin(AuCanvas *c, AuRect bounds)
+{
+    float x0 = bounds.x + c->tx, y0 = bounds.y + c->ty;
+    float x1 = x0 + bounds.w, y1 = y0 + bounds.h;
+    /* Written so that NaN fails. */
+    if (!(x0 > -1e6f && y0 > -1e6f && x1 < 1e6f && y1 < 1e6f && bounds.w > 0 && bounds.h > 0))
+        return false;
+    AuIRect b = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1)};
+    if ((double)(b.x1 - b.x0) * (b.y1 - b.y0) > 4.0 * 1024 * 1024)
+        return false;
+    if (c->ngroups == c->group_cap) {
+        c->group_cap = c->group_cap ? c->group_cap * 2 : 4;
+        c->groups = au_realloc(c->groups, c->group_cap * sizeof(Group));
+    }
+    Group *g = &c->groups[c->ngroups++];
+    g->surface = au_surface_new(b.x1 - b.x0, b.y1 - b.y0);
+    g->ox = b.x0;
+    g->oy = b.y0;
+    g->clip_depth = c->nclips;
+    /* The layer's own clip: its whole surface, not the clip outside. */
+    if (c->nclips == c->clip_cap) {
+        c->clip_cap *= 2;
+        c->clips = au_realloc(c->clips, c->clip_cap * sizeof(AuIRect));
+    }
+    c->clips[c->nclips++] = b;
+    return true;
+}
+
+/* The premultiplied pixel of s at (x, y), transparent outside. */
+static uint32_t px_at(const AuSurface *s, int x, int y)
+{
+    if (x < 0 || y < 0 || x >= s->width || y >= s->height)
+        return 0;
+    return s->pixels[(size_t)y * s->stride + x];
+}
+
+void au_canvas_layer_end(AuCanvas *c, const AuMatrix *m, float opacity)
+{
+    if (!c->ngroups)
+        return;
+    Group g = c->groups[--c->ngroups];
+    c->nclips = g.clip_depth;
+    if (opacity > 1)
+        opacity = 1;
+    uint32_t alpha = opacity > 0 ? (uint32_t)(opacity * 256.0f + 0.5f) : 0;
+    /* The matrix in canvas pixels: undo the translation, map, redo it. */
+    float a = m->a, b = m->b, cc = m->c, d = m->d;
+    float e = m->e + c->tx - (a * c->tx + cc * c->ty);
+    float f = m->f + c->ty - (b * c->tx + d * c->ty);
+    float det = a * d - b * cc;
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *dst = au_canvas_current(c, &ox, &oy, &clip);
+    if (alpha && (det > 1e-6f || det < -1e-6f)) {
+        float ia = d / det, ib = -b / det, ic = -cc / det, id = a / det;
+        float ie = (cc * f - d * e) / det, iff = (b * e - a * f) / det;
+        /* The destination extent: the corners of the layer mapped. */
+        float gx0 = (float)g.ox, gy0 = (float)g.oy;
+        float gx1 = gx0 + g.surface->width, gy1 = gy0 + g.surface->height;
+        float xs[4] = {gx0, gx1, gx1, gx0}, ys[4] = {gy0, gy0, gy1, gy1};
+        float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+        for (int i = 0; i < 4; i++) {
+            float X = a * xs[i] + cc * ys[i] + e, Y = b * xs[i] + d * ys[i] + f;
+            minx = X < minx ? X : minx;
+            maxx = X > maxx ? X : maxx;
+            miny = Y < miny ? Y : miny;
+            maxy = Y > maxy ? Y : maxy;
+        }
+        if (minx < -1e6f || miny < -1e6f || maxx > 1e6f || maxy > 1e6f)
+            minx = miny = maxx = maxy = 0; /* absurd: draw nothing */
+        AuIRect r = {(int)floorf(minx) - ox, (int)floorf(miny) - oy, (int)ceilf(maxx) - ox + 1,
+                     (int)ceilf(maxy) - oy + 1};
+        r = au_irect_intersect(r, clip);
+        for (int y = r.y0; y < r.y1; y++) {
+            AuPixel *row = dst->pixels + (size_t)y * dst->stride;
+            float Y = (float)(y + oy) + 0.5f;
+            for (int x = r.x0; x < r.x1; x++) {
+                float X = (float)(x + ox) + 0.5f;
+                /* The source position, with pixel centres at .5. */
+                float sx = ia * X + ic * Y + ie - gx0 - 0.5f;
+                float sy = ib * X + id * Y + iff - gy0 - 0.5f;
+                if (sx <= -1 || sy <= -1 || sx >= g.surface->width || sy >= g.surface->height)
+                    continue;
+                int x0 = (int)floorf(sx), y0 = (int)floorf(sy);
+                uint32_t fx = (uint32_t)((sx - x0) * 256.0f), fy = (uint32_t)((sy - y0) * 256.0f);
+                uint32_t p00 = px_at(g.surface, x0, y0), p10 = px_at(g.surface, x0 + 1, y0);
+                uint32_t p01 = px_at(g.surface, x0, y0 + 1), p11 = px_at(g.surface, x0 + 1, y0 + 1);
+                if (!(p00 | p10 | p01 | p11))
+                    continue;
+                uint32_t top = au_px_scale_trunc(p00, 256 - fx) + au_px_scale_trunc(p10, fx);
+                uint32_t bot = au_px_scale_trunc(p01, 256 - fx) + au_px_scale_trunc(p11, fx);
+                uint32_t s = au_px_scale_trunc(top, 256 - fy) + au_px_scale_trunc(bot, fy);
+                if (alpha < 256)
+                    s = au_px_scale(s, alpha);
+                if (s)
+                    row[x] = au_px_over(s, row[x]);
+            }
+        }
+    }
+    au_surface_free(g.surface);
+}
+
 typedef struct {
     uint8_t *mask;
     int x0, y0, w;

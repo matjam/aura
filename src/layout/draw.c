@@ -13,11 +13,12 @@
  *
  * Coordinates here are canvas coordinates: every box origin is computed
  * explicitly (the canvas translation is set once), with inner scroll
- * offsets and positioned-fixed adjustments applied on the way. Transforms
- * are limited to translations (translate, translateX/Y, matrix(...)
- * offsets, the translate property): the canvas has no affine transform,
- * so scale, rotate and skew are ignored. Clips are rectangles: rounded
- * overflow clipping is drawn as a square clip. */
+ * offsets and positioned-fixed adjustments applied on the way. A
+ * translation moves the origin; a 2D transform with rotation, scale or
+ * skew paints the stacking context into a canvas layer that is drawn
+ * through the matrix (3D functions other than their 2D part are
+ * ignored). Clips are rectangles; rounded overflow clipping masks a
+ * group with the rounded padding box. */
 #include "layout_int.h"
 
 #include <stdlib.h>
@@ -202,57 +203,171 @@ static uint32_t pc(const AuStyle *s, uint32_t css)
     return l_paint_color(au_style_color(s, css));
 }
 
-/* ---- Transforms (translation only) ---- */
+/* ---- Transforms ---- */
 
+/* m = m * n (n applies first to points). */
+static void mat_mul(AuMatrix *m, AuMatrix n)
+{
+    AuMatrix r = {m->a * n.a + m->c * n.b,       m->b * n.a + m->d * n.b,       m->a * n.c + m->c * n.d,
+                  m->b * n.c + m->d * n.d,       m->a * n.e + m->c * n.f + m->e, m->b * n.e + m->d * n.f + m->f};
+    *m = r;
+}
+
+static float deg_rad(float deg)
+{
+    return deg * 3.14159265f / 180;
+}
+
+/* A length or percentage of basis; an angle in degrees; a number. */
+static float tf_arg(const AuCssValue *v, float basis)
+{
+    if (v->type == AU_CSSV_PERCENT)
+        return v->u.num * basis / 100;
+    if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
+        return v->u.num;
+    return 0;
+}
+
+/* The matrix of one transform function over a w x h box. */
+static AuMatrix tf_function(const AuCssValue *f, float w, float h)
+{
+    AuMatrix m = {1, 0, 0, 1, 0, 0};
+    const AuCssValue *a = f->u.items;
+    uint32_t n = f->n;
+    float x = n > 0 ? tf_arg(&a[0], w) : 0;
+    float y = n > 1 ? tf_arg(&a[1], h) : 0;
+    switch (f->kw) {
+    case AU_K_translate:
+    case AU_K_translate3d: m.e = x, m.f = y; break;
+    case AU_K_translatex: m.e = x; break;
+    case AU_K_translatey: m.f = n > 0 ? tf_arg(&a[0], h) : 0; break;
+    case AU_K_scale:
+    case AU_K_scale3d:
+        m.a = n > 0 ? tf_arg(&a[0], 100) : 1;
+        m.d = n > 1 ? tf_arg(&a[1], 100) : m.a;
+        break;
+    case AU_K_scalex: m.a = n > 0 ? tf_arg(&a[0], 100) : 1; break;
+    case AU_K_scaley: m.d = n > 0 ? tf_arg(&a[0], 100) : 1; break;
+    case AU_K_rotate:
+    case AU_K_rotatez: {
+        float r = deg_rad(x);
+        m.a = m.d = cosf(r);
+        m.b = sinf(r);
+        m.c = -m.b;
+        break;
+    }
+    case AU_K_skew: m.c = tanf(deg_rad(x)), m.b = tanf(deg_rad(y)); break;
+    case AU_K_skewx: m.c = tanf(deg_rad(x)); break;
+    case AU_K_skewy: m.b = tanf(deg_rad(x)); break;
+    case AU_K_matrix:
+        if (n >= 6)
+            m = (AuMatrix){a[0].u.num, a[1].u.num, a[2].u.num, a[3].u.num, tf_arg(&a[4], 0), tf_arg(&a[5], 0)};
+        break;
+    case AU_K_matrix3d:
+        if (n >= 16)
+            m = (AuMatrix){a[0].u.num, a[1].u.num, a[4].u.num, a[5].u.num, tf_arg(&a[12], 0), tf_arg(&a[13], 0)};
+        break;
+    default: break; /* 3D rotations and perspective: the identity */
+    }
+    return m;
+}
+
+/* One transform-origin coordinate: a length, percentage or keyword. */
+static float origin_arg(const AuCssValue *v, float len)
+{
+    if (v->type == AU_CSSV_KEYWORD) {
+        switch (v->kw) {
+        case AU_K_left: case AU_K_top: return 0;
+        case AU_K_right: case AU_K_bottom: return len;
+        default: return len / 2;
+        }
+    }
+    return tf_arg(v, len);
+}
+
+/* b's transform as a matrix in its border-box coordinates (CSS Transforms
+ * 2: translate, rotate, scale, then transform, about transform-origin).
+ * Returns false when there is none. */
+bool l_transform_matrix(const LBlock *b, AuMatrix *out)
+{
+    *out = (AuMatrix){1, 0, 0, 1, 0, 0};
+    if (lb_anon(&b->b))
+        return false;
+    const AuStyleRare *r = b->b.style->rare;
+    if (!r->transform && !r->translate && !r->rotate && !r->scale)
+        return false;
+    float w = b->w, h = b->h;
+    float ox = w / 2, oy = h / 2;
+    if (r->transform_origin) {
+        uint32_t n;
+        const AuCssValue *it = l_items(&r->transform_origin->value, &n);
+        /* A lone vertical keyword sets y. */
+        if (n == 1 && it[0].type == AU_CSSV_KEYWORD && (it[0].kw == AU_K_top || it[0].kw == AU_K_bottom))
+            oy = origin_arg(&it[0], h);
+        else {
+            if (n > 0)
+                ox = origin_arg(&it[0], w);
+            if (n > 1)
+                oy = origin_arg(&it[1], h);
+            /* "top left" order */
+            if (n > 1 && it[0].type == AU_CSSV_KEYWORD && (it[0].kw == AU_K_top || it[0].kw == AU_K_bottom)) {
+                oy = origin_arg(&it[0], h);
+                ox = origin_arg(&it[1], w);
+            }
+        }
+    }
+    AuMatrix m = {1, 0, 0, 1, ox, oy};
+    uint32_t n;
+    if (r->translate) {
+        const AuCssValue *it = l_items(&r->translate->value, &n);
+        mat_mul(&m, (AuMatrix){1, 0, 0, 1, n > 0 ? tf_arg(&it[0], w) : 0, n > 1 ? tf_arg(&it[1], h) : 0});
+    }
+    if (r->rotate) {
+        const AuCssValue *it = l_items(&r->rotate->value, &n);
+        /* "angle", or an axis then the angle: only z rotations are 2D. */
+        if (n > 0 && (n == 1 || (n == 2 && it[0].type == AU_CSSV_KEYWORD && it[0].kw == AU_K_z))) {
+            float rad = deg_rad(tf_arg(&it[n - 1], 0));
+            mat_mul(&m, (AuMatrix){cosf(rad), sinf(rad), -sinf(rad), cosf(rad), 0, 0});
+        }
+    }
+    if (r->scale) {
+        const AuCssValue *it = l_items(&r->scale->value, &n);
+        if (n > 0) {
+            float sx = tf_arg(&it[0], 1), sy = n > 1 ? tf_arg(&it[1], 1) : sx;
+            if (it[0].type == AU_CSSV_PERCENT)
+                sx = it[0].u.num / 100;
+            if (n > 1 && it[1].type == AU_CSSV_PERCENT)
+                sy = it[1].u.num / 100;
+            mat_mul(&m, (AuMatrix){sx, 0, 0, sy, 0, 0});
+        }
+    }
+    if (r->transform) {
+        const AuCssValue *it = l_items(&r->transform->value, &n);
+        for (uint32_t i = 0; i < n; i++)
+            if (it[i].type == AU_CSSV_FUNCTION)
+                mat_mul(&m, tf_function(&it[i], w, h));
+    }
+    mat_mul(&m, (AuMatrix){1, 0, 0, 1, -ox, -oy});
+    *out = m;
+    return true;
+}
+
+/* True when m only translates (within rounding). */
+static bool mat_is_translation(const AuMatrix *m)
+{
+    return fabsf(m->a - 1) < 1e-5f && fabsf(m->d - 1) < 1e-5f && fabsf(m->b) < 1e-5f && fabsf(m->c) < 1e-5f;
+}
+
+/* The translation part of b's transform when it is only a translation,
+ * else (0, 0): rotations and scales go through l_transform_matrix. */
 void l_transform_offset(const LBlock *b, float *dx, float *dy);
 void l_transform_offset(const LBlock *b, float *dx, float *dy)
 {
+    AuMatrix m;
     *dx = *dy = 0;
-    if (lb_anon(&b->b))
-        return;
-    const AuStyleRare *r = b->b.style->rare;
-    if (r->translate) {
-        uint32_t n;
-        const AuCssValue *it = l_items(&r->translate->value, &n);
-        for (uint32_t i = 0; i < n && i < 2; i++) {
-            float v = it[i].type == AU_CSSV_PERCENT ? it[i].u.num * (i ? b->h : b->w) / 100
-                                                    : it[i].type == AU_CSSV_DIMENSION ? it[i].u.num : 0;
-            if (i == 0)
-                *dx += v;
-            else
-                *dy += v;
-        }
-    }
-    if (!r->transform)
-        return;
-    uint32_t n;
-    const AuCssValue *it = l_items(&r->transform->value, &n);
-    for (uint32_t i = 0; i < n; i++) {
-        const AuCssValue *f = &it[i];
-        if (f->type != AU_CSSV_FUNCTION)
-            continue;
-        float a[6] = {0};
-        for (uint32_t k = 0; k < f->n && k < 6; k++) {
-            const AuCssValue *v = &f->u.items[k];
-            if (v->type == AU_CSSV_PERCENT)
-                a[k] = v->u.num * ((k == 1 || f->kw == AU_K_translatey) ? b->h : b->w) / 100;
-            else if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
-                a[k] = v->u.num;
-        }
-        switch (f->kw) {
-        case AU_K_translate:
-        case AU_K_translate3d:
-            *dx += a[0];
-            *dy += a[1];
-            break;
-        case AU_K_translatex: *dx += a[0]; break;
-        case AU_K_translatey: *dy += a[0]; break;
-        case AU_K_matrix:
-            *dx += a[4];
-            *dy += a[5];
-            break;
-        default: break; /* scale, rotate, skew: not supported by the canvas */
-        }
+    if (l_transform_matrix(b, &m) && mat_is_translation(&m)) {
+        *dx = m.e;
+        *dy = m.f;
     }
 }
 
@@ -2212,14 +2327,38 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         return;
     }
     LBlock *k = (LBlock *)b;
-    float tdx, tdy;
-    l_transform_offset(k, &tdx, &tdy);
-    ox += tdx;
-    oy += tdy;
+    AuMatrix tm;
+    bool affine = false;
     LArea saved = P->dirty;
-    bool cull = !rect_hits(&P->dirty, ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h);
+    AuRect ovr;
+    if (l_transform_matrix(k, &tm)) {
+        if (mat_is_translation(&tm)) {
+            ox += tm.e;
+            oy += tm.f;
+        } else {
+            /* In canvas coordinates: about the box origin (ox, oy). */
+            tm.e += ox - (tm.a * ox + tm.c * oy);
+            tm.f += oy - (tm.b * ox + tm.d * oy);
+            affine = true;
+        }
+    }
+    ovr = (AuRect){ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h};
+    bool cull;
+    if (affine) {
+        /* Cull by the transformed extent; inside, paint everything. */
+        float xs[4] = {ovr.x, ovr.x + ovr.w, ovr.x + ovr.w, ovr.x};
+        float ys[4] = {ovr.y, ovr.y, ovr.y + ovr.h, ovr.y + ovr.h};
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (int i = 0; i < 4; i++) {
+            float X = tm.a * xs[i] + tm.c * ys[i] + tm.e, Y = tm.b * xs[i] + tm.d * ys[i] + tm.f;
+            x0 = l_min(x0, X), x1 = l_max(x1, X), y0 = l_min(y0, Y), y1 = l_max(y1, Y);
+        }
+        cull = !rect_hits(&P->dirty, x0, y0, x1 - x0, y1 - y0);
+    } else {
+        cull = !rect_hits(&P->dirty, ovr.x, ovr.y, ovr.w, ovr.h);
+    }
     bool sc = (b->flags & LF_STACKING) != 0;
-    if (cull && !(sc && k->layers && k->layers->n))
+    if (cull && (affine || !(sc && k->layers && k->layers->n)))
         return;
     P->depth++;
     float opacity = lb_anon(b) ? 1 : b->style->rare->opacity;
@@ -2228,8 +2367,14 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         P->depth--;
         return;
     }
+    if (affine && au_canvas_layer_begin(P->c, ovr)) {
+        P->dirty = (LArea){ovr.x, ovr.y, ovr.w, ovr.h};
+        group = false; /* the layer applies the opacity */
+    } else {
+        affine = false;
+    }
     if (group)
-        au_canvas_group_begin(P->c, (AuRect){ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h});
+        au_canvas_group_begin(P->c, ovr);
     if (b != P->L->root)
         paint_decor(P, k, ox, oy);
     else {
@@ -2268,6 +2413,8 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
     paint_outline(P, b, (AuRect){ox, oy, k->w, k->h});
     if (group)
         au_canvas_group_end(P->c, opacity);
+    if (affine)
+        au_canvas_layer_end(P->c, &tm, opacity);
     P->dirty = saved;
     P->depth--;
 }
