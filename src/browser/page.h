@@ -33,6 +33,7 @@
 #ifndef AURA_BROWSER_PAGE_H
 #define AURA_BROWSER_PAGE_H
 
+#include "../dom/control.h" /* AuControlFile, AuPopupItem */
 #include "../paint/font.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct, no OS calls */
 #include "prefs.h"
@@ -273,6 +274,21 @@ typedef struct AuPageCallbacks {
      * when it returns false, the page shows that it cannot display the
      * file. */
     bool (*download)(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff);
+    /* Forms (all optional). A form was submitted with POST: load url with
+     * the body (of Content-Type type) as a new entry with
+     * au_page_navigate_post, or in a new tab. Without it the page loads
+     * it itself. GET submissions arrive through open_url. */
+    void (*submit_post)(void *ctx, AuPage *p, const char *url, const void *body, size_t len, const char *type,
+                        bool new_tab);
+    /* A select's pop-up menu at document rectangle at: returns the item
+     * chosen, -1 for none, or -2 when there is no menu (a click then
+     * steps through the options, as without the callback). */
+    int (*popup)(void *ctx, AuPage *p, const AuPopupItem *items, int n, int selected, AuIRect at);
+    /* Files for an input type=file (see AuDocViewCallbacks.choose_file). */
+    bool (*choose_file)(void *ctx, AuPage *p, bool multiple, AuControlFile **files, uint32_t *n);
+    /* Yes or no (sending a form from a secure page over plain http).
+     * Without it the answer is yes. */
+    bool (*confirm)(void *ctx, AuPage *p, const char *message);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */
@@ -355,6 +371,25 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
 /* Input in document coordinates. Return true when the page used it. */
 bool au_page_mouse(AuPage *p, const AuEvent *ev);
 bool au_page_key(AuPage *p, const AuEvent *ev);
+/* ---- Forms ----
+ * Clicks and keys reach form controls through au_page_mouse and
+ * au_page_key. au_page_editing is true while a text field has the focus
+ * (keys then belong to the page, and the Edit menu acts on the field).
+ * au_page_edit runs an AU_EDITCMD_* command (src/page/page.h numbers:
+ * undo, cut, copy, paste, clear, select all) on that field: Cut and Copy
+ * append the selected text (UTF-8) to out, Paste inserts text. */
+enum { AU_PAGE_EDIT_UNDO, AU_PAGE_EDIT_CUT, AU_PAGE_EDIT_COPY, AU_PAGE_EDIT_PASTE, AU_PAGE_EDIT_CLEAR,
+       AU_PAGE_EDIT_SELECT_ALL };
+bool au_page_editing(const AuPage *p);
+bool au_page_can_edit(const AuPage *p, int cmd);
+bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out);
+/* Takes the focus away from the page's focused element (the address
+ * field took the keyboard). */
+void au_page_blur(AuPage *p);
+/* Loads url with a POST body (a form submission). */
+void au_page_navigate_post(AuPage *p, const char *url, const void *body, size_t len, const char *type);
+/* The current document is the result of a POST (a reload sends it again). */
+bool au_page_is_post(const AuPage *p);
 /* What is at document point (x, y), for a contextual menu: appends the
  * absolute URL of the link under it to link and of the image under it to
  * image (nothing when there is none; either may be NULL). */

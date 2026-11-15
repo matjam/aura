@@ -400,23 +400,21 @@ function setChecked(e, on) {
 defProps(HTMLInputElement.prototype, {
     get type() { return inputType(this); },
     set type(v) { this.setAttribute('type', str(v)); },
+    /* The value and selection live in the control (src/dom/control.h),
+     * shared with the document view's editing. */
     get value() {
         const t = inputType(this);
         if (valueModeDefault.has(t)) return this.getAttribute('value') ?? '';
         if (valueModeOn.has(t)) return this.getAttribute('value') ?? 'on';
-        if (t === 'file') return '';
-        const s = ctrlState(this);
-        return sanitizeValue(t, s.dirty ? s.value : this.getAttribute('value') ?? '');
+        if (t === 'file') { const f = N.ctlFiles(this); return f.length ? 'C:\\fakepath\\' + f[0][0] : ''; }
+        return N.ctlValue(this);
     },
     set value(v) {
         const t = inputType(this);
         v = v === null ? '' : str(v);
         if (valueModeDefault.has(t) || valueModeOn.has(t)) { this.setAttribute('value', v); return; }
-        if (t === 'file') { if (v !== '') throw domErr('A file input can only be cleared', 'InvalidStateError'); return; }
-        const s = ctrlState(this);
-        s.value = sanitizeValue(t, v);
-        s.dirty = true;
-        s.selStart = s.selEnd = s.value.length;
+        if (t === 'file') { if (v !== '') throw domErr('A file input can only be cleared', 'InvalidStateError'); N.ctlClearFiles(this); return; }
+        N.ctlSetValue(this, v);
     },
     get valueAsNumber() {
         const t = inputType(this), v = this.value;
@@ -436,20 +434,54 @@ defProps(HTMLInputElement.prototype, {
     set checked(v) { setChecked(this, !!v); },
     get indeterminate() { return !!(N.state(this) & 128); },
     set indeterminate(v) { ctrlState(this).indeterminate = !!v; },
-    get files() { return inputType(this) === 'file' ? cachedList(this, 'files', emptyFileList) : null; },
+    get files() {
+        if (inputType(this) !== 'file') return null;
+        const fs = N.ctlFiles(this);
+        if (!fs.length) return cachedList(this, 'files', emptyFileList);
+        const fl = Object.create(FileList.prototype);
+        fs.forEach((f, i) => Object.defineProperty(fl, i, { value: new File([f[2]], f[0], { type: f[1] }), enumerable: true }));
+        Object.defineProperty(fl, 'length', { value: fs.length, enumerable: true });
+        return Object.freeze(fl);
+    },
     get list() { const id = this.getAttribute('list'); const e = id && doc.getElementById(id); return e && e.localName === 'datalist' ? e : null; },
-    select() { const s = ctrlState(this); s.selStart = 0; s.selEnd = this.value.length; fireSimple(this, 'select', true, false); },
-    get selectionStart() { return ctrlState(this).selStart ?? this.value.length; },
-    set selectionStart(v) { ctrlState(this).selStart = v >>> 0; },
-    get selectionEnd() { return ctrlState(this).selEnd ?? this.value.length; },
-    set selectionEnd(v) { ctrlState(this).selEnd = v >>> 0; },
-    get selectionDirection() { return 'none'; },
-    setSelectionRange(a, b) { const s = ctrlState(this); s.selStart = a >>> 0; s.selEnd = b >>> 0; },
-    setRangeText(text) { const s = ctrlState(this); const v = this.value; const a = s.selStart ?? v.length, b = s.selEnd ?? v.length; this.value = v.slice(0, a) + str(text) + v.slice(b); },
     stepUp(n = 1) { stepBy(this, n); },
     stepDown(n = 1) { stepBy(this, -n); },
     showPicker() {},
 });
+/* Text selection of text inputs and textareas (UTF-16 offsets; the
+ * control keeps UTF-8 ones). Other input types have none. */
+const hasTextSel = (e) => e.localName === 'textarea' || /^(text|search|tel|url|password)$/.test(inputType(e));
+const textSelection = {
+    select() { N.ctlSetSel(this, 0, 0x7FFFFFFF, false); fireSimple(this, 'select', true, false); },
+    get selectionStart() { return hasTextSel(this) ? N.ctlSel(this)[0] : null; },
+    set selectionStart(v) { const s = N.ctlSel(this); v >>>= 0; N.ctlSetSel(this, v, Math.max(v, s[1]), false); },
+    get selectionEnd() { return hasTextSel(this) ? N.ctlSel(this)[1] : null; },
+    set selectionEnd(v) { const s = N.ctlSel(this); v >>>= 0; N.ctlSetSel(this, Math.min(s[0], v), v, false); },
+    get selectionDirection() { return hasTextSel(this) ? (N.ctlSel(this)[2] ? 'backward' : 'forward') : null; },
+    set selectionDirection(d) { const s = N.ctlSel(this); N.ctlSetSel(this, s[0], s[1], d === 'backward'); },
+    setSelectionRange(a, b, d) {
+        if (!hasTextSel(this)) throw domErr('The input element does not support selection', 'InvalidStateError');
+        N.ctlSetSel(this, a >>> 0, b >>> 0, d === 'backward');
+    },
+    setRangeText(text, start, end, mode) {
+        const v = this.value, sel = N.ctlSel(this);
+        let a = sel[0], b = sel[1];
+        if (start !== undefined) { a = Math.min(start >>> 0, v.length); b = Math.min(end >>> 0, v.length); }
+        if (a > b) throw domErr('start is after end', 'IndexSizeError');
+        text = str(text);
+        N.ctlSetValue(this, v.slice(0, a) + text + v.slice(b));
+        const m = mode || 'preserve';
+        if (m === 'select') N.ctlSetSel(this, a, a + text.length, false);
+        else if (m === 'start') N.ctlSetSel(this, a, a, false);
+        else if (m === 'end') N.ctlSetSel(this, a + text.length, a + text.length, false);
+        else {
+            const d = text.length - (b - a);
+            const fix = (x) => (x > b ? x + d : x > a ? a : x);
+            N.ctlSetSel(this, fix(sel[0]), start === undefined ? a + text.length : fix(sel[1]), false);
+        }
+    },
+};
+defProps(HTMLInputElement.prototype, textSelection);
 function stepBy(e, n) {
     const t = inputType(e);
     if (t !== 'number' && t !== 'range') throw domErr('stepUp does not apply', 'InvalidStateError');
@@ -465,23 +497,15 @@ defProps(HTMLTextAreaElement.prototype, {
     get type() { return 'textarea'; },
     get defaultValue() { return this.textContent; },
     set defaultValue(v) { this.textContent = v; },
-    get value() { const s = ctrlState(this); return s.dirty ? s.value : this.textContent.replace(/\r\n?/g, '\n'); },
-    set value(v) { const s = ctrlState(this); s.value = (v === null ? '' : str(v)).replace(/\r\n?/g, '\n'); s.dirty = true; s.selStart = s.selEnd = s.value.length; },
+    get value() { return N.ctlValue(this); },
+    set value(v) { N.ctlSetValue(this, v === null ? '' : str(v)); },
     get textLength() { return this.value.length; },
-    select() { const s = ctrlState(this); s.selStart = 0; s.selEnd = this.value.length; },
-    get selectionStart() { return ctrlState(this).selStart ?? this.value.length; },
-    set selectionStart(v) { ctrlState(this).selStart = v >>> 0; },
-    get selectionEnd() { return ctrlState(this).selEnd ?? this.value.length; },
-    set selectionEnd(v) { ctrlState(this).selEnd = v >>> 0; },
-    setSelectionRange(a, b) { const s = ctrlState(this); s.selStart = a >>> 0; s.selEnd = b >>> 0; },
 });
+defProps(HTMLTextAreaElement.prototype, textSelection);
 
 /* option and select */
-function optionSelected(o) {
-    const s = ctrl.get(o);
-    if (s && s.selDirty) return !!s.selected;
-    return o.hasAttribute('selected');
-}
+/* Selectedness is the option's checked state, shared with the view. */
+function optionSelected(o) { return isChecked(o); }
 function selectOptions(sel) { return N.collect(sel, 6); }
 function selectedIndexOf(sel) {
     const opts = selectOptions(sel);
@@ -489,12 +513,7 @@ function selectedIndexOf(sel) {
     if (!sel.multiple && (sel.size | 0) <= 1) for (let i = 0; i < opts.length; i++) if (!opts[i].disabled) return i;
     return -1;
 }
-function setOptionSelected(o, on) {
-    const s = ctrlState(o);
-    s.selDirty = true;
-    s.selected = on;
-    N.setChecked(o, on);
-}
+function setOptionSelected(o, on) { N.setChecked(o, on); }
 defProps(HTMLOptionElement.prototype, {
     get selected() {
         const sel = this.closest('select');
@@ -558,10 +577,14 @@ const formAssoc = {
     },
     get willValidate() { return !isDisabled(this) && !this.hasAttribute('readonly') && !(this.localName === 'input' && /^(hidden|reset|button)$/.test(inputType(this))) && this.localName !== 'fieldset' && this.localName !== 'output'; },
     get validity() { return validityOf(this); },
-    get validationMessage() { return validityOf(this).valid ? '' : 'The value is invalid.'; },
+    get validationMessage() { return this.willValidate ? validationMessageOf(this) : ''; },
     checkValidity() { const ok = !this.willValidate || validityOf(this).valid; if (!ok) fireSimple(this, 'invalid', false, true); return ok; },
-    reportValidity() { return this.checkValidity(); },
-    setCustomValidity(m) { ctrlState(this).custom = str(m); },
+    reportValidity() {
+        const ok = !this.willValidate || validityOf(this).valid;
+        if (!ok && fire(this, new Event('invalid', { cancelable: true })) && this.isConnected) this.focus();
+        return ok;
+    },
+    setCustomValidity(m) { N.ctlCustom(this, str(m)); },
 };
 for (const C of [HTMLInputElement, HTMLButtonElement, HTMLSelectElement, HTMLTextAreaElement, HTMLOutputElement,
     HTMLFieldSetElement, HTMLObjectElement]) defProps(C.prototype, formAssoc);
@@ -603,7 +626,7 @@ defGlobal('ValidityState', ValidityState);
 function validityOf(e) {
     const v = Object.create(ValidityState.prototype);
     const val = 'value' in e ? e.value : '';
-    const s = ctrl.get(e) || {};
+    const s = { custom: N.ctlCustom(e), dirty: N.ctlDirty(e) && N.ctlInteracted(e) };
     const t = e.localName === 'input' ? inputType(e) : '';
     const f = {
         valueMissing: e.hasAttribute('required') && (t === 'checkbox' ? !e.checked :
@@ -624,9 +647,27 @@ function validityOf(e) {
         f.rangeUnderflow = isFinite(min) && n < min;
         f.rangeOverflow = isFinite(max) && n > max;
     }
+    if (t === 'file' && e.hasAttribute('required')) f.valueMissing = N.ctlFiles(e).length === 0;
+    if (e.localName === 'select' && e.hasAttribute('required')) {
+        const o = selectOptions(e), i = selectedIndexOf(e);
+        f.valueMissing = i < 0 || (!e.multiple && (e.size | 0) <= 1 && i === 0 && o[0].value === '' && o[0].parentNode === e);
+    }
     f.valid = !Object.keys(f).some((k) => f[k]);
     for (const k of Object.keys(f)) Object.defineProperty(v, k, { value: f[k], enumerable: true });
     return v;
+}
+function validationMessageOf(e) {
+    const v = validityOf(e), t = e.localName === 'input' ? inputType(e) : e.localName;
+    if (v.customError) return N.ctlCustom(e);
+    if (v.valueMissing) return t === 'checkbox' ? 'Please check this box if you want to proceed.' : t === 'radio' ? 'Please select one of these options.' :
+        t === 'select' ? 'Please select an item in the list.' : t === 'file' ? 'Please select a file.' : 'Please fill out this field.';
+    if (v.typeMismatch) return t === 'email' ? 'Please enter an email address.' : 'Please enter a URL.';
+    if (v.patternMismatch) return e.getAttribute('title') || 'Please match the requested format.';
+    if (v.tooLong) return 'Please shorten this text.';
+    if (v.tooShort) return 'Please lengthen this text.';
+    if (v.rangeUnderflow) return 'Value is too small.';
+    if (v.rangeOverflow) return 'Value is too large.';
+    return v.valid ? '' : 'Please enter a valid value.';
 }
 
 /* form */
@@ -655,17 +696,71 @@ defProps(HTMLFormElement.prototype, {
         if (!fire(this, new Event('reset', { bubbles: true, cancelable: true }))) return;
         for (const e of formElementsOf(this)) resetControl(e);
     },
-    checkValidity() { return formElementsOf(this).every((e) => !e.checkValidity || e.checkValidity()); },
-    reportValidity() { return this.checkValidity(); },
+    checkValidity() { let ok = true; for (const e of formElementsOf(this)) if (e.checkValidity && !e.checkValidity()) ok = false; return ok; },
+    reportValidity() { return reportFormValidity(this); },
     item(i) { return formElementsOf(this)[i >>> 0] || null; },
-    namedItem(n) { return formElementsOf(this).find((e) => e.id === n || e.getAttribute('name') === n) || null; },
+    namedItem(n) { return namedControls(formElementsOf(this), n); },
 });
+
+/* Legacy named access: form.controlName and form[index] (past names and
+ * image buttons aside), and document.formName for forms, images, embeds
+ * and objects with a name. Real properties win: the lookup sits in the
+ * prototype chain, behind the interfaces' own members. */
+{
+    const formNamed = (form, p) => {
+        if (isIndex(p)) return formElementsOf(form)[+p];
+        const els = formElementsOf(form).filter((e) => !(e.localName === 'input' && inputType(e) === 'image'));
+        const v = namedControls(els, p);
+        if (v) return v;
+        for (const img of form.getElementsByTagName('img'))
+            if (img.id === p || img.getAttribute('name') === p) return img;
+        return undefined;
+    };
+    const docNamed = (d, p) => {
+        if (!d.documentElement) return undefined;
+        const m = [];
+        for (const e of d.querySelectorAll('form[name],img[name],embed[name],object[name],object[id],iframe[name]')) {
+            const n = e.localName;
+            if (e.getAttribute('name') === p || (e.id === p && (n === 'object' || (n === 'img' && e.hasAttribute('name'))))) m.push(e);
+        }
+        return m.length === 0 ? undefined : m.length === 1 ? m[0] : makeList(HTMLCollection, null, -1, null, m);
+    };
+    /* One proxy between Node.prototype and EventTarget.prototype: it sees
+     * only node lookups that every interface below it missed. Its target
+     * is an empty object over EventTarget.prototype, so instanceof still
+     * finds every interface; the window's chain does not pass through it,
+     * so unresolvable globals still throw. */
+    const base = Object.create(Object.getPrototypeOf(Node.prototype));
+    Object.setPrototypeOf(Node.prototype, new Proxy(base, {
+        get(t, p, r) {
+            if (typeof p === 'string' && p !== 'then' && !(p in t) && isNode(r)) {
+                let v;
+                if (r.nodeType === 9) v = docNamed(r, p);
+                else if (r instanceof HTMLFormElement) v = formNamed(r, p);
+                if (v !== undefined) return v;
+            }
+            return Reflect.get(t, p, r);
+        },
+    }));
+}
 const isSubmitButton = (e) => (e.localName === 'button' && (e.getAttribute('type') || 'submit').toLowerCase() === 'submit') ||
     (e.localName === 'input' && (inputType(e) === 'submit' || inputType(e) === 'image'));
 function resetControl(e) {
     ctrl.delete(e);
-    if (e.localName === 'input' && (inputType(e) === 'checkbox' || inputType(e) === 'radio')) N.setChecked(e, e.hasAttribute('checked'));
-    if (e.localName === 'select') for (const o of selectOptions(e)) { ctrl.delete(o); N.setChecked(o, o.hasAttribute('selected')); }
+    N.ctlReset(e);
+    if (e.localName === 'select') for (const o of selectOptions(e)) { ctrl.delete(o); N.ctlReset(o); }
+}
+/* Interactive validation: invalid at each invalid control; the first
+ * whose event was not cancelled gets the focus. */
+function reportFormValidity(form) {
+    let ok = true, first = null;
+    for (const e of formElementsOf(form)) {
+        if (!e.willValidate || validityOf(e).valid) continue;
+        ok = false;
+        if (fire(e, new Event('invalid', { cancelable: true })) && !first) first = e;
+    }
+    if (first && first.isConnected) first.focus();
+    return ok;
 }
 
 /* The form data set: [name, value] pairs (files are not supported). */
@@ -700,38 +795,19 @@ function encodeForm(s) {
     return out;
 }
 let submitting = null;
+/* Submits form: with events (requestSubmit, a submit button), interactive
+ * validation and a cancelable submit event first. The embedder builds the
+ * entry list, encodes it and navigates (src/page/forms.c). */
 function submitForm(form, submitter, events) {
     if (!form.isConnected || submitting === form) return;
     if (events) {
-        if (!form.noValidate && !(submitter && submitter.hasAttribute('formnovalidate')) && !form.checkValidity()) return;
+        if (!form.noValidate && !(submitter && submitter.hasAttribute('formnovalidate')) && !reportFormValidity(form)) return;
         const ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter });
         if (!fire(form, ev)) return;
     }
-    const pairs = formDataSet(form, submitter);
-    const pick = (attr, prop) => (submitter && submitter.hasAttribute('form' + attr) ? submitter['form' + prop] : form[prop.toLowerCase()]);
-    const action = submitter && submitter.hasAttribute('formaction') ? submitter.formAction : form.action;
-    const method = (pick('method', 'Method') || 'get').toLowerCase();
-    if (method === 'dialog') {
-        const d = form.closest('dialog');
-        if (d) d.close(submitter ? submitter.value : undefined);
-        return;
-    }
-    const target = pick('target', 'Target') || '';
-    let url;
-    if (method === 'post') {
-        N.print(2, 'Form submission with method POST is not supported yet; submitting with GET.');
-    }
-    if (/^javascript:/i.test(action)) { G.location.href = action; return; }
-    try {
-        const u = new URL(action);
-        u.search = formEncode(pairs);
-        url = u.href;
-    } catch (e) {
-        return;
-    }
     submitting = form;
     try {
-        if (target && target !== '_self') N.openWindow(url, target); else N.navigate(url);
+        N.submitForm(form, submitter || null);
     } finally {
         submitting = null;
     }

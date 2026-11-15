@@ -121,7 +121,24 @@ static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t le
 static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
 {
     AuDocScript *s = ctx;
+    if (kind == AU_JS_CHANGE_VALUE) {
+        if (au_is_element(node))
+            au_forms_changed(s->dv, au_as_element(node));
+        return;
+    }
     au_dv_dom_changed(s->dv, node, attr_name, kind);
+}
+
+static void h_focus_changed(void *ctx, AuElement *el)
+{
+    AuDocScript *s = ctx;
+    au_forms_script_focus(s->dv, el);
+}
+
+static void h_submit_form(void *ctx, AuElement *form, AuElement *submitter)
+{
+    AuDocScript *s = ctx;
+    au_forms_script_submit(s->dv, form, submitter);
 }
 
 static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
@@ -356,6 +373,8 @@ static bool ensure_js(AuDocScript *s)
     h.alert = h_alert;
     h.confirm = h_confirm;
     h.prompt = h_prompt;
+    h.focus_changed = h_focus_changed;
+    h.submit_form = h_submit_form;
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
@@ -750,6 +769,11 @@ void au_docscript_loaded(AuDocScript *s)
     leave(s);
 }
 
+bool au_docscript_running(const AuDocScript *s)
+{
+    return s && s->js;
+}
+
 bool au_docscript_mouse(AuDocScript *s, const AuEvent *ev, AuElement *target, const char *type, int vx, int vy)
 {
     if (!s->js || !target)
@@ -761,6 +785,63 @@ bool au_docscript_mouse(AuDocScript *s, const AuEvent *ev, AuElement *target, co
     bool ok = au_js_fire_mouse(s->js, target, type, vx, vy, ev->button, ev->mods & 15, detail, NULL);
     leave(s);
     return ok;
+}
+
+bool au_docscript_fire(AuDocScript *s, AuElement *el, const char *type, bool bubbles, bool cancelable)
+{
+    if (!s->js || !el)
+        return true;
+    enter(s);
+    bool ok = au_js_fire(s->js, &el->node, type, bubbles, cancelable);
+    leave(s);
+    return ok;
+}
+
+void au_docscript_focus(AuDocScript *s, AuElement *el)
+{
+    if (!s->js)
+        return;
+    enter(s);
+    au_js_focus(s->js, el);
+    leave(s);
+}
+
+bool au_docscript_key(AuDocScript *s, AuElement *target, const char *type, const char *key, const char *code,
+                      uint32_t mods)
+{
+    if (!s->js)
+        return true;
+    enter(s);
+    bool ok = au_js_fire_key(s->js, target, type, key, code, mods & 15, false);
+    leave(s);
+    return ok;
+}
+
+bool au_docscript_input(AuDocScript *s, AuElement *el, const char *type, const char *input_type, const char *data)
+{
+    if (!s->js || !el)
+        return true;
+    enter(s);
+    bool ok = au_js_fire_input(s->js, el, type, input_type, data);
+    leave(s);
+    return ok;
+}
+
+bool au_docscript_submit_event(AuDocScript *s, AuElement *form, AuElement *submitter)
+{
+    if (!s->js)
+        return true;
+    enter(s);
+    bool ok = au_js_fire_submit(s->js, form, submitter);
+    leave(s);
+    return ok;
+}
+
+int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value)
+{
+    if (!s->js)
+        return -1;
+    return au_js_pattern_test(s->js, pattern, value);
 }
 
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy)

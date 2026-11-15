@@ -544,6 +544,7 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     JS_SetPropertyFunctionList(ctx, N, base_natives, JS_COUNTOF(base_natives));
     js_natives_init(js, N);
     js_natives2_init(js, N);
+    js_natives_forms_init(js, N);
     js_loop_init(js, N);
     js_fetch_init(js, N);
     js_module_init(js);

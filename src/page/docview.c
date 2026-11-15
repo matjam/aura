@@ -1,79 +1,9 @@
 /* The document view: parser, style sheets, images, resolver, layout,
  * painting, input. */
-#include "page.h"
-#include "docimages.h"
-#include "script.h"
-#include "webfont.h"
+#include "docview_int.h"
 
 #include <stdio.h>
 #include <string.h>
-
-/* A style sheet source: its text once loaded, and its @import children. */
-typedef struct SheetSrc SheetSrc;
-struct SheetSrc {
-    char *url;    /* base URL for the sheet (absolute) */
-    char *media;  /* media attribute or @import media, NULL for all */
-    char *text;   /* NULL while loading (or after a failure) */
-    size_t len;
-    uint32_t req; /* outstanding request, 0 if none */
-    bool failed;
-    SheetSrc **imports; /* one per @import of the sheet, in order */
-    uint32_t nimports;
-    bool imports_scanned;
-};
-
-/* A <style> or <link> element in document order. */
-typedef struct SheetSlot {
-    AuElement *el; /* referenced */
-    SheetSrc *src;
-} SheetSlot;
-
-typedef struct Request {
-    uint32_t id;
-    AuResourceKind kind;
-    SheetSrc *sheet; /* for style sheets */
-    AuImageEntry *image; /* for images: bytes go straight to the image cache */
-    bool font;           /* an @font-face source */
-    AuBuf data;
-    bool background; /* script fetch: does not hold the load event */
-} Request;
-
-struct AuDocView {
-    AuFontSet *fonts;
-    AuWebFonts *webfonts; /* the document's @font-face faces, over fonts */
-    AuLoader loader;
-    AuDocViewCallbacks cb;
-    AuHtmlParser *parser;
-    AuDocument *doc;
-    char *url, *base;
-    char *title;
-    char *user_css; /* the user style sheet, or NULL */
-    AuCssFontPrefs font_prefs; /* au_docview_set_font_prefs */
-    bool has_font_prefs;
-    AuCssResolver *resolver;
-    AuLayout *layout;
-    SheetSlot *slots;
-    uint32_t nslots, slots_cap;
-    AuDocImages *imgs; /* docimages.c */
-    Request *reqs;
-    uint32_t nreqs, reqs_cap;
-    int vw, vh;
-    int scroll_x, scroll_y;
-    bool parsing;
-    bool tree_dirty, sheets_dirty, restyle_needed, style_all, images_dirty;
-    bool finished_reported;
-    float last_w, last_h;
-    AuElement *hover, *active;
-    char hover_link[2048];
-    uint32_t scanned_nodes;
-    /* scripts (script.c) */
-    AuDocScript *script; /* this document's, while scripting is on */
-    bool scripting;      /* the setting, applied at begin */
-    bool sheets_rescan;  /* script changed the tree: look for sheets again */
-    bool layout_ran;     /* layout changed since observers last ran */
-    uint32_t nbg;        /* background requests among reqs */
-    double clock;        /* the fallback clock */
-};
 
 /* ---- Helpers ---- */
 
@@ -151,6 +81,7 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
     dv->title = dup("");
     dv->vw = 800;
     dv->vh = 600;
+    dv->goal_x = -1;
     return dv;
 }
 
@@ -169,6 +100,7 @@ static void free_sheet_src(SheetSrc *s)
 
 static void clear_document(AuDocView *dv)
 {
+    au_forms_clear(dv);
     if (dv->script) {
         AuDocScript *s = dv->script;
         dv->script = NULL;
@@ -1007,6 +939,14 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
         }
     }
     bool used = false;
+    if (ev->type == AU_EVENT_MOUSE_DOWN || ev->type == AU_EVENT_MOUSE_MOVE || ev->type == AU_EVENT_MOUSE_UP) {
+        /* Focus, caret placement, drags in fields, pop-ups, buttons. */
+        used = au_forms_mouse(dv, ev, &r);
+        if (!dv->doc)
+            return true;
+        if (used && ev->type != AU_EVENT_MOUSE_UP)
+            au_docview_hit_test(dv, ev->x, ev->y, &r);
+    }
     switch (ev->type) {
     case AU_EVENT_MOUSE_MOVE: {
         bool before = dv->restyle_needed;
@@ -1018,7 +958,7 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
             if (dv->cb.status_text)
                 dv->cb.status_text(dv->cb.ctx, dv, url);
         }
-        used = dv->restyle_needed && !before;
+        used = used || (dv->restyle_needed && !before);
         break;
     }
     case AU_EVENT_MOUSE_DOWN:
@@ -1039,7 +979,7 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                 }
         }
         bool follow = true;
-        if (dv->script && down && r.element) {
+        if (down && r.element) {
             /* click goes to the nearest common ancestor of the press and
              * release targets */
             AuElement *t = r.element;
@@ -1047,7 +987,18 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                 t = au_is_element(t->node.parent) ? au_as_element(t->node.parent) : NULL;
             if (t) {
                 au_node_ref(&t->node);
-                follow = au_docscript_mouse(dv->script, ev, t, "click", ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+                if (au_docscript_running(dv->script)) {
+                    /* the bindings run the activation behaviour */
+                    follow = au_docscript_mouse(dv->script, ev, t, "click", ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+                } else if (dv->doc) {
+                    AuRect b;
+                    int ix = 0, iy = 0;
+                    if (au_layout_element_rect(dv->layout, t, &b)) {
+                        ix = ev->x - (int)b.x;
+                        iy = ev->y - (int)b.y;
+                    }
+                    au_forms_activate(dv, t, ix, iy);
+                }
                 au_node_unref(&t->node);
             }
             if (!dv->doc)
@@ -1217,6 +1168,9 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
             dv->tree_dirty = true; /* src, colspan, value...: content may change */
         if (el->tag == AU_ATOM_link || el->tag == AU_ATOM_style || el->tag == AU_ATOM_base)
             dv->sheets_rescan = true;
+    } else if (kind == 5) { /* a control's value or selection: repaint only */
+        if (el)
+            au_dv_invalidate_element(dv, el);
     } else if (kind == 4 && el && dv->resolver) { /* state: checked, focus... */
         au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
         dv->restyle_needed = true;

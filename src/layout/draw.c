@@ -1256,13 +1256,10 @@ static LBlock *fieldset_legend(const LBlock *b)
 }
 
 static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy);
-static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy);
 
 static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
 {
     paint_decor_box(P, b, ox, oy);
-    if (b->b.replaced == LR_TEXTAREA)
-        paint_textarea_placeholder(P, b, ox, oy);
 }
 
 /* The backgrounds of the column group, column, row group and row under
@@ -1657,30 +1654,6 @@ static void paint_range(PCtx *P, LBlock *b, AuRect cb, bool native)
         pl_fill(P->c, th_r.x, th_r.y, th_r.w, th_r.h, PL_FRAME);
 }
 
-/* The placeholder of an empty textarea, at its content box. */
-static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy)
-{
-    if (b->b.replaced != LR_TEXTAREA || !b->rep || !b->rep->aux || (b->b.flags & LF_HIDDEN))
-        return;
-    const AuStyle *s = b->b.style;
-    LFont *f = l_font(P->L, s);
-    float asc, lh = l_control_line(P->L, b, &asc);
-    AuRect cb = box_area(b, ox, oy, AU_K_content_box);
-    AuRect pbx = box_area(b, ox, oy, AU_K_padding_box);
-    uint32_t col = placeholder_color(s);
-    au_canvas_clip_push(P->c, pbx);
-    const char *t = b->rep->aux;
-    float y = cb.y + asc;
-    while (*t && y - asc < pbx.y + pbx.h) {
-        const char *e = strchr(t, '\n');
-        size_t n = e ? (size_t)(e - t) : strlen(t);
-        l_draw_text(P->L, P->c, f, s, t, n, cb.x, y, col, 0);
-        y += lh;
-        t += n + (e ? 1 : 0);
-    }
-    au_canvas_clip_pop(P->c);
-}
-
 /* ---- Inline SVG ---- */
 
 /* Resolves url against the document and gets its image, asking for it at
@@ -1771,13 +1744,11 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
                 paint_label(P, b, r->label, (AuRect){cb.x + 2, cb.y, cb.w - 4, cb.h}, color, 0, cb);
         }
         break;
-    case LR_TEXT_INPUT: {
-        /* Clipped to the content box across, the padding box down. */
-        AuRect clip = {cb.x, pbx.y, cb.w, pbx.h};
-        paint_label(P, b, r ? r->label : NULL, cb, r && r->placeholder ? placeholder_color(s) : color,
-                    label_align(s, 0), clip);
+    case LR_TEXT_INPUT:
+    case LR_TEXTAREA:
+        /* The live value (or placeholder), selection and caret. */
+        l_paint_field(P->L, P->c, b, cb, pbx, color, placeholder_color(s));
         break;
-    }
     case LR_BUTTON:
         paint_label(P, b, r ? r->label : NULL, cb, color, label_align(s, 1), pbx);
         break;

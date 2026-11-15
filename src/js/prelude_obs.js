@@ -724,18 +724,25 @@ P.fireKey = function (target, type, key, code, mods, repeat) {
         keyCode: type === 'keypress' ? (key.length === 1 ? key.charCodeAt(0) : kc) : kc,
         charCode: type === 'keypress' && key.length === 1 ? key.charCodeAt(0) : 0 }, modsOf(mods));
     const t = target || focused || doc.body || doc.documentElement;
-    const ok = fire(t, new KeyboardEvent(type, init));
-    /* Enter in a text field submits its form (implicit submission). */
-    if (ok && type === 'keydown' && key === 'Enter' && isElement(t) && t.localName === 'input' &&
-        !/^(checkbox|radio|button|reset|submit|image|file|hidden)$/.test(inputType(t))) {
-        const form = formOwner(t);
-        if (form) {
-            const btn = formElementsOf(form).find(isSubmitButton);
-            if (btn) { if (!isDisabled(btn)) btn.click(); }
-            else form.requestSubmit();
-        }
-    }
-    return ok;
+    const ev = new KeyboardEvent(type, init);
+    ev[S.ev].trusted = true;
+    /* Default actions (editing, implicit submission) are the view's. */
+    return fire(t, ev);
+};
+/* Forms: the view moved the focus, edited a field, or submits a form. */
+P.focusFromEmbedder = function (el) { setFocus(el || null); };
+P.fireInput = function (el, type, inputType, data) {
+    const ev = new InputEvent(type, { bubbles: true, cancelable: type === 'beforeinput', composed: true, inputType, data });
+    ev[S.ev].trusted = true;
+    return fire(el, ev);
+};
+P.fireSubmit = function (form, submitter) {
+    const ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: submitter || null });
+    ev[S.ev].trusted = true;
+    return fire(form, ev);
+};
+P.patternTest = function (pattern, value) {
+    try { return new RegExp('^(?:' + pattern + ')$', 'v').test(value) ? 1 : 0; } catch (e) { return -1; }
 };
 P.unload = function () {
     const bu = new BeforeUnloadEvent('beforeunload', { cancelable: true });

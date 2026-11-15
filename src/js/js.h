@@ -167,6 +167,10 @@ typedef struct AuJsHooks {
     void (*storage_save)(void *ctx, const char *origin, const char *data, size_t len);
     /* Focus moved to el (NULL: the body). */
     void (*focus_changed)(void *ctx, AuElement *el);
+    /* A form is to be submitted (form.submit(), or requestSubmit and
+     * activation after the submit event was not cancelled and validation
+     * passed): the embedder builds the entry list and navigates. */
+    void (*submit_form)(void *ctx, AuElement *form, AuElement *submitter);
     /* document.open(): the embedder starts a new parser. Optional. */
     AuHtmlParser *(*parser)(void *ctx);
     /* The fetch interface. */
@@ -174,7 +178,8 @@ typedef struct AuJsHooks {
 } AuJsHooks;
 
 /* Kinds for dom_changed. */
-enum { AU_JS_CHANGE_CHILDREN = 1, AU_JS_CHANGE_ATTR, AU_JS_CHANGE_TEXT, AU_JS_CHANGE_STATE };
+enum { AU_JS_CHANGE_CHILDREN = 1, AU_JS_CHANGE_ATTR, AU_JS_CHANGE_TEXT, AU_JS_CHANGE_STATE,
+       AU_JS_CHANGE_VALUE /* a form control's value or selection: repaint only */ };
 
 /* Creates the runtime for doc (referenced until au_js_free). url is the
  * document URL (also its origin and base). Returns NULL if QuickJS cannot
@@ -233,6 +238,18 @@ bool au_js_fire_mouse(AuJs *js, AuElement *target, const char *type, int x, int 
 /* Keyboard events: key and code as KeyboardEvent names them. */
 bool au_js_fire_key(AuJs *js, AuElement *target, const char *type, const char *key, const char *code,
                     uint32_t mods, bool repeat);
+/* Forms. The user moved the focus to el (NULL: none): blur, focusout,
+ * focus and focusin, and document.activeElement. */
+void au_js_focus(AuJs *js, AuElement *el);
+/* beforeinput (cancelable) or input (InputEvent with inputType and data,
+ * data NULL for none) at el. Returns false if cancelled. */
+bool au_js_fire_input(AuJs *js, AuElement *el, const char *type, const char *input_type, const char *data);
+/* The submit event at form (SubmitEvent; submitter NULL for none).
+ * Returns false if cancelled. */
+bool au_js_fire_submit(AuJs *js, AuElement *form, AuElement *submitter);
+/* Tests value against an HTML pattern attribute (the whole value, v
+ * flag): 1 match, 0 no match, -1 an invalid pattern. */
+int au_js_pattern_test(AuJs *js, const char *pattern, const char *value);
 /* The document reached a readiness state: "interactive" (parsing is done:
  * readystatechange; deferred scripts run next), "contentloaded"
  * (DOMContentLoaded, after the deferred scripts) or "complete"

@@ -898,7 +898,8 @@ static int replaced_kind(AuLayout *L, AuNode *node, bool *skip_children, bool *f
         return is_listbox(e) ? LR_LISTBOX : LR_SELECT;
     }
     if (t == AU_ATOM_textarea) {
-        *flow = true;
+        /* Its value is painted by controls.c, not laid out as children. */
+        *skip_children = true;
         return LR_TEXTAREA;
     }
     if (t == AU_ATOM_button) {
@@ -1195,11 +1196,7 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
         LBlock *k = (LBlock *)new_box(B, LK_BLOCK, node, s, size);
         b = &k->b;
         B->L->stats.blocks++;
-        if (rk == LR_TEXTAREA) {
-            b->inner = LI_FLOW;
-            b->replaced = (uint8_t)rk;
-            b->flags |= LF_BFC;
-        } else if (rk != LR_NONE && !flow_control) {
+        if (rk != LR_NONE && !flow_control) {
             b->inner = LI_REPLACED;
             b->replaced = (uint8_t)rk;
         } else {
