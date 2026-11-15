@@ -1560,7 +1560,7 @@ static int self_align(const Grid *g, const LBlock *k, int ax)
         float r;
         int rk = k->b.replaced;
         bool keeps = (k->b.inner == LI_REPLACED && (rk == LR_IMAGE || rk == LR_SVG || rk == LR_CHECKBOX ||
-                                                    rk == LR_RADIO || rk == LR_OTHER)) ||
+                                                    rk == LR_RADIO || rk == LR_OTHER || rk == LR_CANVAS)) ||
                      (ax == 1 && l_aspect_ratio(k, &r));
         return keeps ? GA_START : GA_STRETCH;
     }

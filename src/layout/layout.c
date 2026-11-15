@@ -343,6 +343,26 @@ static void place_legend(AuLayout *L, LBlock *b, float content_w)
 
 /* ---- Replaced elements ---- */
 
+/* A canvas size attribute: a non-negative integer, else def. */
+static int l_canvas_attr(const AuNode *n, const char *name, int def)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a && n && au_is_element(n) ? au_element_get_attr((const AuElement *)n, a) : NULL;
+    if (!v)
+        return def;
+    while (au_is_space((unsigned char)*v))
+        v++;
+    if (*v == '+')
+        v++;
+    if (!au_is_digit((unsigned char)*v))
+        return def;
+    long r = 0;
+    for (; au_is_digit((unsigned char)*v); v++)
+        if (r < 1000000)
+            r = r * 10 + (*v - '0');
+    return (int)r;
+}
+
 static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, float *ratio)
 {
     LReplaced *r = b->rep;
@@ -449,6 +469,15 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         *w = em * 0.8f;
         *h = f->m.x_height;
         return;
+    case LR_CANVAS: {
+        /* The bitmap's size: the width and height attributes, 300 x 150
+         * by default (HTML, "The canvas element"); the ratio follows. */
+        *w = (float)l_canvas_attr(b->b.node, "width", 300);
+        *h = (float)l_canvas_attr(b->b.node, "height", 150);
+        if (*w > 0 && *h > 0)
+            *ratio = *w / *h;
+        return;
+    }
     case LR_SVG: {
         /* Absolute width and height attributes, and the ratio from them
          * or the viewBox. Neither size nor ratio: 300 x 150 (CSS 2.1

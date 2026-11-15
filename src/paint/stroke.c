@@ -490,3 +490,50 @@ void au_path_stroke_style(const AuPath *in, const AuStrokeStyle *st, AuPath *out
     au_free(pl.p);
     au_free(tmp.p);
 }
+
+/* An upper bound on the polyline points au_path_stroke_style walks for p
+ * at flattening tolerance tol (0: 0.1), without stroking: the canvas
+ * context refuses strokes that would make too large an outline
+ * (canvas2d_int.h declares this). */
+size_t au_path_stroke_points(const AuPath *p, float tol);
+size_t au_path_stroke_points(const AuPath *p, float tol)
+{
+    if (!(tol > 0))
+        tol = 0.1f;
+    const float *pt = p->pts;
+    float cx = 0, cy = 0;
+    size_t n = 0;
+    for (size_t i = 0; i < p->nops; i++) {
+        switch (p->ops[i]) {
+        case AU_PATH_MOVE:
+        case AU_PATH_LINE:
+            n++;
+            cx = pt[0];
+            cy = pt[1];
+            pt += 2;
+            break;
+        case AU_PATH_QUAD: {
+            float ddx = cx - 2 * pt[0] + pt[2], ddy = cy - 2 * pt[1] + pt[3];
+            n += (size_t)curve_steps(sqrtf(ddx * ddx + ddy * ddy) / 8.0f, tol);
+            cx = pt[2];
+            cy = pt[3];
+            pt += 4;
+            break;
+        }
+        case AU_PATH_CUBIC: {
+            float ax = cx - 2 * pt[0] + pt[2], ay = cy - 2 * pt[1] + pt[3];
+            float bx = pt[0] - 2 * pt[2] + pt[4], by = pt[1] - 2 * pt[3] + pt[5];
+            float d1 = ax * ax + ay * ay, d2 = bx * bx + by * by;
+            n += (size_t)curve_steps(sqrtf(d1 > d2 ? d1 : d2) * 0.75f, tol);
+            cx = pt[4];
+            cy = pt[5];
+            pt += 6;
+            break;
+        }
+        default:
+            n++;
+            break;
+        }
+    }
+    return n;
+}

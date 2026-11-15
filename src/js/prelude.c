@@ -32,6 +32,8 @@ const char au_js_prelude_src[] = {
     , '\n',
 #embed "prelude_net.js"
     , '\n',
+#embed "prelude_canvas.js"
+    , '\n',
 #embed "prelude_obs.js"
     , 0};
 

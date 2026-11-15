@@ -2,6 +2,10 @@
  * painting, input. */
 #include "docview_int.h"
 
+#include "../paint/canvas2d.h"
+
+#include <math.h>
+
 #include <stdio.h>
 #include <string.h>
 
@@ -45,6 +49,8 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
     au_docimages_use(dv->imgs, url, dw, dh);
 }
 
+static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px);
+
 static int layout_embed_kind(void *ctx, AuElement *el)
 {
     return au_frames_embed_kind(ctx, el);
@@ -67,8 +73,13 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_free(dv->layout);
     }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
-                       layout_paint_frame};
+                       layout_paint_frame, layout_canvas};
     dv->layout = au_layout_new(&env);
+    /* Canvas text is drawn with the same fonts; font lists made from the
+     * old set go before the set does. */
+    dv->cur_fonts = fonts;
+    if (dv->canvases)
+        au_canvas_set_fonts(dv->canvases, fonts);
     if (dv->parent)
         au_layout_set_transparent(dv->layout, true); /* a nested document shows its parent through */
     if (dv->doc)
@@ -213,6 +224,11 @@ static void clear_document(AuDocView *dv)
         au_css_resolver_free(dv->resolver);
         dv->resolver = NULL;
     }
+    /* The document's canvases: script objects that outlive the set stay
+     * valid and draw nothing. Before the web fonts go, for the font lists
+     * the set holds. */
+    au_canvas_set_free(dv->canvases);
+    dv->canvases = NULL;
     if (dv->webfonts) {
         new_layout(dv, dv->fonts); /* drops the faces of the old set */
         au_webfonts_free(dv->webfonts);
@@ -729,6 +745,7 @@ size_t au_docview_memory_estimate(AuDocView *dv)
     n += is.decoded_bytes + is.decoder_bytes + is.compressed_bytes;
     n += au_docscript_memory(dv->script);
     n += au_frames_memory(dv);
+    n += au_canvas_set_bytes(dv->canvases); /* canvas bitmaps, ImageBitmaps and clip masks */
     return n;
 }
 
@@ -1818,8 +1835,83 @@ void au_dv_check_finished(AuDocView *dv)
     maybe_finished(dv);
 }
 
+/* ---- Canvases ---- */
+
+struct AuCanvasSet *au_dv_canvas_set(AuDocView *dv)
+{
+    if (!dv->canvases) {
+        dv->canvases = au_canvas_set_new(0);
+        au_canvas_set_fonts(dv->canvases, dv->cur_fonts);
+    }
+    return dv->canvases;
+}
+
+/* The pixels of an image element for drawImage: the image cache's entry
+ * for the source layout chose, decoded at its natural size where the
+ * cache's per-image limit allows. */
+bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, char *url,
+                        size_t url_cap)
+{
+    AuBuf src;
+    au_buf_init(&src);
+    bool ok = false;
+    char abs[2048];
+    if (au_layout_image_source(dv->layout, img, &src) && au_url_resolve(dv->base, au_buf_cstr(&src), abs, sizeof abs)) {
+        AuImageCache *cache = au_docimages_cache(dv->imgs);
+        AuImageEntry *e = au_image_cache_find(cache, abs);
+        int iw = 0, ih = 0;
+        if (e && au_image_entry_state(e) != AU_IMAGE_FAILED && au_image_entry_size(e, &iw, &ih) && iw > 0 && ih > 0) {
+            au_image_entry_use(cache, e, iw, ih);
+            if (au_image_entry_state(e) == AU_IMAGE_READY) {
+                *px = au_image_entry_surface(e);
+                *w = iw;
+                *h = ih;
+                snprintf(url, url_cap, "%s", abs);
+                ok = true;
+            }
+        }
+    }
+    au_buf_free(&src);
+    return ok;
+}
+
+/* Layout's canvas lookup: the bitmap of a canvas element. */
+static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px)
+{
+    AuDocView *dv = ctx;
+    *px = NULL;
+    if (!dv->script)
+        return -1; /* script is off: the fallback content shows */
+    AuCanvas2D *c = au_canvas_set_find(dv->canvases, el);
+    if (c)
+        *px = au_c2d_surface(c);
+    return 0;
+}
+
+/* Script drew to a canvas: repaint the part of its box that changed. */
+static void canvas_dirty(void *ctx, AuCanvas2D *c, void *owner, AuIRect area)
+{
+    AuDocView *dv = ctx;
+    AuElement *el = owner;
+    AuRect cb;
+    int cw = au_c2d_width(c), ch = au_c2d_height(c);
+    if (!el || !au_layout_element_content_rect(dv->layout, el, &cb))
+        return;
+    if (cw <= 0 || ch <= 0 || !(cb.w > 0) || !(cb.h > 0)) {
+        au_dv_invalidate_element(dv, el);
+        return;
+    }
+    float sx = cb.w / (float)cw, sy = cb.h / (float)ch;
+    AuIRect r = {(int)floorf(cb.x + (float)area.x0 * sx) - 1, (int)floorf(cb.y + (float)area.y0 * sy) - 1,
+                 (int)ceilf(cb.x + (float)area.x1 * sx) + 1, (int)ceilf(cb.y + (float)area.y1 * sy) + 1};
+    au_dv_invalidate_element_rect(dv, el, r);
+}
+
 void au_dv_turn_end(AuDocView *dv)
 {
+    /* Canvases script drew to: one repaint of each, however many calls. */
+    if (dv->canvases && au_canvas_set_dirty(dv->canvases))
+        au_canvas_set_take_dirty(dv->canvases, canvas_dirty, dv);
     /* While a key is handled, au_docview_key decides at its end: it
      * updates, and repaints the page only if something changed. */
     if (dv->in_key)

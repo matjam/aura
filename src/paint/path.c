@@ -481,3 +481,52 @@ void au_gradient_add_stop(AuGradient *g, float pos, AuColor c)
     g->stops[g->nstops].color = c;
     g->nstops++;
 }
+
+/* An upper bound on the edges au_path_flatten makes from p, without
+ * making them: the canvas context refuses outlines that would need more
+ * memory than it allows (canvas2d_int.h declares this). */
+size_t au_path_edge_count(const AuPath *p);
+size_t au_path_edge_count(const AuPath *p)
+{
+    const float *pt = p->pts;
+    float cx = 0, cy = 0;
+    size_t n = 0;
+    for (size_t i = 0; i < p->nops; i++) {
+        switch (p->ops[i]) {
+        case AU_PATH_MOVE:
+            n++; /* the edge that closes the subpath before it */
+            cx = pt[0];
+            cy = pt[1];
+            pt += 2;
+            break;
+        case AU_PATH_LINE:
+            n++;
+            cx = pt[0];
+            cy = pt[1];
+            pt += 2;
+            break;
+        case AU_PATH_QUAD: {
+            float ddx = cx - 2 * pt[0] + pt[2], ddy = cy - 2 * pt[1] + pt[3];
+            n += (size_t)subdivisions(sqrtf(ddx * ddx + ddy * ddy) / 8.0f);
+            cx = pt[2];
+            cy = pt[3];
+            pt += 4;
+            break;
+        }
+        case AU_PATH_CUBIC: {
+            float ax = cx - 2 * pt[0] + pt[2], ay = cy - 2 * pt[1] + pt[3];
+            float bx = pt[0] - 2 * pt[2] + pt[4], by = pt[1] - 2 * pt[3] + pt[5];
+            float d1 = ax * ax + ay * ay, d2 = bx * bx + by * by;
+            n += (size_t)subdivisions(sqrtf(d1 > d2 ? d1 : d2) * 0.75f);
+            cx = pt[4];
+            cy = pt[5];
+            pt += 6;
+            break;
+        }
+        default:
+            n++;
+            break;
+        }
+    }
+    return n + 1;
+}

@@ -57,7 +57,8 @@ test('reflected numbers and enumerations', () => {
     assert.equal(f.method, 'get');
     const c = document.createElement('canvas');
     assert.equal(c.width, 300);
-    assert.equal(c.getContext('2d'), null);
+    assert.equal(c.getContext('webgl'), null);
+    assert.equal(c.getContext('2d').canvas, c); /* the 2D context exists: tests/canvas covers it */
     const b = document.createElement('button');
     assert.equal(b.type, 'submit');
     b.type = 'reset';

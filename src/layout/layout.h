@@ -78,6 +78,14 @@ typedef struct AuLayoutEnv {
     /* Paints el's nested document into its content box (canvas
      * coordinates), clipped to it. */
     void (*paint_frame)(void *ctx, AuElement *el, AuCanvas *c, AuRect content);
+    /* A canvas element's bitmap (optional; without it a canvas is an
+     * empty replaced box). Returns -1 when script is off for the document:
+     * the element then shows its fallback content (its children). Else 0,
+     * with *px the bitmap (premultiplied, the size script gave the
+     * canvas) or NULL while nothing has been drawn. Layout takes the
+     * box's natural size from the width and height attributes (300 x 150
+     * by default) and paints the bitmap scaled into the content box. */
+    int (*canvas)(void *ctx, AuElement *el, const AuSurface **px);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
