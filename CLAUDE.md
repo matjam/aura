@@ -297,6 +297,30 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   estimated size. `--no-doc-cache` turns the document cache off.
   `tests/browser/test_back_cache.c` covers it on the fake transport.
 
+Tabs show their site's icon. To change that, work in
+`src/browser/favicon.c` (`favicon.h` describes it): when a document has
+loaded, `cb_finished` in `browser.c` asks the page for its icon URL
+(`au_page_icon_url` in `page_doc.c`: the `<link rel=icon>` whose `sizes`
+suit 16 pixels best, else `/favicon.ico`; http and https documents
+only) and `au_favicons_request` fetches it through the scheme's fetcher
+as an image subresource of the page, so the blocklist, mixed content
+blocking and the HTTP cache apply. An icon on another host is fetched
+without cookies (`AuFetchRequest.omit_credentials`). The bytes (at most
+512 KB) are decoded with `au_image_decode_favicon` to 16 x 16 and kept
+per host, at most 200 hosts; a host is asked again after a week, and a
+host that gave no icon is not asked again while Aura runs.
+`au_bw_idle` polls the fetches and repaints the tab strip when one
+arrives; `chrome.c` draws `AuChromeTab.icon`, and the bookmark and
+history lists draw the icon of each link's host
+(`AuListView.icons`). Fetching is off until the shell sets
+`AuBrowser.site_icons` (the Mac application and `aura-host chrome` do),
+so an embedder or a test with a scripted server gets no request it did
+not expect; the `load_images` preference turns it off too. The Mac
+shell saves the store as `Favicons` in the Aura preferences folder
+(`storage.c`), keeps it in memory only when history is off, and clears
+it wherever it clears the history, because it names visited hosts.
+`tests/browser/test_favicon.c` covers it on the fake transport.
+
 Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
 a navigation or a tab switch the page has the focus, unless the user is
 typing in the address field; a tab showing a fresh blank page puts it in
@@ -445,7 +469,7 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`, the `Blocklists` folder (see Content
+`Session`, `Downloads` and `Favicons`, the `Blocklists` folder (see Content
 blocking), and `Running` while it runs. The session
 (windows, tabs, back and forward lists, scroll positions) is saved
 3 seconds after tabs change and every 30 seconds while only scroll
@@ -1380,10 +1404,12 @@ global object is the window, the DOM bindings and the event loop.
   Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
   Do not use `alloca` or variable-length arrays in Aura's own code.
 - **The prelude** is one function expression split over
-  `src/js/prelude*.js`; `prelude.c` embeds the files in order (base, dom,
-  html, range, cssom, window, net, obs). To add a file, add its `#embed`
-  line there. A name declared twice across the files stops the runtime
-  from starting ("invalid redefinition").
+  `src/js/prelude*.js`, joined in order (base, dom, html, range, cssom,
+  window, net, obs). The build compiles it to QuickJS bytecode and the
+  runtime loads that (see "Prelude bytecode" below). To add a file, add
+  it to the list in `third_party/quickjs.cmake` and its `#embed` line in
+  `prelude.c` (the source build). A name declared twice across the files
+  stops the runtime from starting ("invalid redefinition").
 - **To debug a script on a live page**, use `aura-host chrome` actions:
   `--do js:CODE` evaluates CODE in the active tab and prints the result,
   `--do save:FILE` writes the page source, `--do console` prints the
@@ -1448,18 +1474,48 @@ global object is the window, the DOM bindings and the event loop.
   the `border` and `font` shorthands serialize every part.
 - **crypto** (`getRandomValues`, `randomUUID`; no `subtle`) exists only
   when the embedder passes `AuJsHooks.random`
-  (`AuDocViewCallbacks.random` for a document view). `aura-host js`
-  reads `/dev/urandom`. The browser does not pass one yet: to give pages
-  `crypto`, set the callback in `page_doc.c` from the platform's entropy
-  source (`AuNetOps.entropy`).
-- **Start-up cost.** `aura-host js --stats` reports 21 to 24 ms and
-  1.66 MB to start a runtime on the host; 18 to 21 ms of it compiles the
-  293 KB prelude and 2 to 4 ms runs it. The prelude is not precompiled
-  to bytecode yet: to do it, compile with `JS_EVAL_FLAG_COMPILE_ONLY` in
-  a host tool at build time, write it with `JS_WriteObject`
-  (`JS_WRITE_OBJ_BYTECODE`; QuickJS-ng swaps bytes itself when reading
-  on a big-endian machine), load it with `JS_ReadObject` and
-  `JS_EvalFunction`, and check JSTest in the guest.
+  (`AuDocViewCallbacks.random` for a document view). In the browser the
+  shell passes `AuBrowserHost.random`, which reaches the page through
+  `AuPageEnv.random` and `dv_random` in `page_doc.c`. On Mac OS 9 it is
+  `mac_net_random`, the entropy pool the network stack uses; until the
+  pool has gathered 128 bits it returns false and the calls throw
+  OperationError (they never get weaker bytes). `aura-host chrome` and
+  `aura-host js` read `/dev/urandom`; `aura-host chrome --no-entropy`
+  answers as an unready pool. `tests/browser/test_crypto.c` covers a
+  ready source, an unready one and a host without one (no `crypto`
+  object).
+- **Prelude bytecode.** `tools/jsprelude/jsprelude.c` compiles the
+  prelude with `JS_EVAL_FLAG_COMPILE_ONLY` and writes it with
+  `JS_WriteObject`, without source text or line tables;
+  `third_party/quickjs.cmake` runs it at build time into
+  `build/*/gen/prelude.bc`, `prelude.c` embeds the file, and
+  `load_prelude` in `runtime.c` loads it with `JS_ReadObject` and
+  `JS_EvalFunction`. QuickJS-ng bytecode is in the byte order of the
+  machine that reads it, and v0.18.0 swaps nowhere (its
+  `JS_WRITE_OBJ_BSWAP` was defined as 0). Patch 0005 makes the flag work
+  in the writer: the Mac OS 9 build compiles the tool with the host's C
+  compiler (`AURA_HOST_CC`, found as `cc`) and runs it with `--swap`, so
+  no PowerPC code runs during the build. The tool must be built from the
+  same QuickJS sources as the engine (the bytecode names built-in atoms
+  by number); the build does that. To load the prelude from source
+  instead (errors in it then carry line numbers), configure with
+  `-DAURA_JS_PRELUDE_SOURCE=ON`. Prelude functions print as
+  `function name() { [native code] }` from bytecode. After changing
+  QuickJS or the tool, run JSTest in the guest: its "prelude regexp" and
+  "prelude forms" self-tests use regular expression literals, numbers
+  and strings from the swapped bytecode.
+- **Start-up cost.** `aura-host js --stats` prints the start-up time,
+  the heap, and what the heap holds by kind. Host (RelWithDebInfo): 30 ms
+  and 1.69 MB from source, 5 ms and 1.28 MB from bytecode. Stock guest
+  (JSTest): 1148 ms and 1430 KB from source, 747 ms and 1002 KB from
+  bytecode. The 226 KB of bytecode sit in the application's data instead
+  of 299 KB of source.
+- **Script memory.** See Memory for what a page's script heap holds and
+  how to measure it. A function and the functions nested in it share one
+  copy of their source text (patch 0006). `au_js_run_tasks` runs the
+  collector when script has been idle for a second and the heap has
+  grown by an eighth (at least 512 KB) since the last collection; a
+  hidden document is collected when it is hidden.
 
 ## Forms
 
@@ -1574,6 +1630,121 @@ work with script off, and script reads and writes the same state.
 - **Not done:** date, time and color pickers (they are text fields), the
   dirname attribute's direction, a resend prompt for POST history
   entries, form-associated custom elements, and IME input.
+
+## Memory
+
+The Mac OS 9 application runs in a 64 MB partition (12 MB at least,
+`aura.r`). Font data, the window's GWorld and the blocklists go to
+temporary memory when there is room; everything else comes from the
+application heap through `au_alloc`.
+
+- **To see which code holds memory on the host**, configure a tree with
+  the allocation counter, `cmake -S . -B build/mem -G Ninja
+  -DAURA_MEM_TRACK=ON`, build `aura-host`, and run `AURA_MEM=1
+  build/mem/src/platform/host/aura-host chrome --bundled-only --tab PAGE
+  -o run/a.png`. After the paint it prints the bytes live per source
+  folder and per source line, with what each held when the total was at
+  its peak. `--do mem` prints the same at any point, and `--do closetab
+  --do mem` shows what a closed tab leaves behind. `AURA_MEM_MIN=BYTES`
+  sets the smallest line listed. The counter (`src/core/core.h`) records
+  the file and line of every allocating call through macros and puts a
+  16-byte header on each block; a buffer is counted for the line that
+  first allocated it. A helper that allocates for its callers takes the
+  caller's line when it calls `(au_realloc)(...)` in parentheses and has
+  a macro of its own, as `css_grow` does.
+- **Use `--bundled-only` for figures that should resemble the Mac.**
+  Without it the host tool reads 22 macOS fonts whole at start (19.6 MB),
+  which the Mac application never does: there a face's data is read on
+  first use, into temporary memory. The host's PNG writer takes 11 MB at
+  the end and the tool's own window surface 3 MB (1024 x 768); the Mac's
+  GWorld is in temporary memory.
+- **To see what a script heap holds**, run `aura-host js --stats FILE`
+  or, for a page, `aura-host chrome --net --tab URL --do wait:4000 --do
+  js:aura:memory` (QuickJS's accounting: atoms, strings, objects,
+  properties, shapes, function records, bytecode, line tables).
+  `--do js:aura:gc` runs the collector.
+- **To measure the Mac application**, choose Develop > Page Timings: it
+  shows the free heap, the largest free block and free temporary memory.
+  Develop > Network Status shows the bytes the HTTP cache holds in
+  memory and on disk. Take the first reading after a page has loaded
+  once: the network stack, the root store and the blocklists start
+  after launch.
+- **What things cost** (host, 64-bit, bundled fonts only, 1024 x 768,
+  KB live after the paint, before and after the work of 2026-11-15; a
+  PowerPC build has 4-byte pointers, so pointer-heavy rows are smaller
+  there):
+
+  | Subsystem | Blank tab | Wikipedia article, no script (1 MB of HTML, 9300 elements, 18,000 boxes) | GitHub home page (2.5 MB of CSS, scripts) |
+  |---|---|---|---|
+  | Layout: boxes, fragments, lines | 66, 66 | 6693, 3357 | 2175, 972 |
+  | DOM: nodes, attributes, text | 1, 1 | 3849, 3657 | 1178, 1090 |
+  | CSS: parsed sheets, rule index, computed styles | 152, 146 | 2238, 2188 | 25638, 24688 |
+  | Page source kept for Save Page As | 6, 7 | 2057, 1082 | 521, 535 |
+  | Script heap | 0, 0 | 0, 0 | 2088, 1548 |
+  | Atoms and other core | 60, 60 | 269, 269 | 724, 724 |
+  | Font tables, shaping caches, glyph cache | 43, 43 | 278, 278 | 776, 753 |
+  | HTML parser, document view, image cache | 11, 12 | 92, 94 | 107, 108 |
+  | Host tool only: font file data | 1024, 1024 | 5376, 5376 | 3840, 3840 |
+  | Host tool only: window surface | 3072, 3072 | 3072, 3072 | 3072, 3072 |
+  | Total live | 4453, 4449 | 23942, 19389 | 40138, 37348 |
+
+  With the system fonts, `/usr/bin/time -l` reports a peak footprint of
+  31.7 MB for a blank tab (31.3 before: fonts, PNG and surface are all of
+  it), 49.2 MB for the Wikipedia article (52.2), 38.7 MB for the GitHub
+  page without its sheets (42.1) and 78.2 MB with them (80.2).
+- **A live Wikipedia article's script heap** was 10.6 MB when the load
+  ended: function records 3.9 MB (bytecode 0.4 MB, the rest mostly
+  source text held once per nesting level), objects 1.6 MB, properties
+  1.2 MB, atoms 0.8 MB, the prelude's own objects about 1 MB. Sharing
+  the source text brought it to 8.7 MB; four seconds later the page's
+  lazy modules have raised it to 11.3 MB, and the idle collection takes
+  0.6 MB off. The kept-document estimate for the article fell from
+  15.3 MB to 12.9 MB.
+- **Measured in the guest** (stock base, merged build, live Wikipedia):
+  free heap 63,718 KB on about:home after launch (405,265 KB of
+  temporary memory free), 45,531 KB with the article loaded (largest
+  block 35,885 KB; temporary 401,738 KB), 60,058 KB after closing its
+  tab (largest block 42,523 KB), and 59,973 KB after loading and closing
+  it a second time. The 3.7 MB between the first and third readings is
+  the network stack that started in between (root store, cookies,
+  blocklist state, 975 KB of HTTP cache in memory) and slabs of the
+  pooled allocator that still hold a live block; a second load returned
+  the heap to within 85 KB, so pages are freed. The 3.5 MB of temporary
+  memory is font data, which stays loaded.
+- **The HTTP cache** holds response bodies in memory up to its budget
+  (8 MB by default). With the disk cache on, the Mac application keeps
+  1 MB of them resident (`au_cache_set_resident`); the rest are read
+  back from disk when asked for.
+- **What was cut on 2026-11-15:** an inline formatting context kept
+  room for 64 fragments and 16 lines whatever it used (3.4 MB of the
+  article); the page source buffer kept its doubled capacity; the rule
+  entry array too; an element's attribute array started at 4 entries;
+  every resolver parsed its own user agent sheets (now shared); the
+  prelude's source and line tables in every runtime; nested function
+  source text; the memory cache duplicating the disk cache.
+- **Not done, largest first.** (1) Parsed style sheets: a rule is five
+  to seven blocks (rule, selector list, selectors, components,
+  declarations, token lists); GitHub's 42,000 rules take 345,000 blocks
+  and 24 MB on the host. Allocating a rule's selector list, selectors
+  and components as one block would save the per-block headers (8 bytes
+  each in the Mac's pooled allocator, about 1 MB there) and
+  `AuSelComp.name_cs` and `AuSelector.hashes` could move out of line.
+  (2) Atoms live for the life of the program: every class, id and custom
+  property name of every page visited stays (270 KB for the article,
+  720 KB for GitHub), so a long session grows. Atoms need a count or a
+  per-document table. (3) `LBlock` is 264 bytes on the host (about 216
+  on PowerPC) and every inline box is one; an inline box needs under
+  half of it. (4) `AuElement` carries `template_content`, `shadow_root`
+  and `control`, which almost no element uses (24 bytes of 160 on the
+  host, 12 of about 92 on PowerPC). (5) The prelude's CSSOM, Range and
+  observer parts (a quarter of its source) are created in every runtime;
+  creating them on first use means splitting the single prelude
+  function, and would save an estimated 150 to 250 KB per runtime.
+  (6) The pooled allocator's slabs are `NewPtr` blocks that do not move:
+  one long-lived block keeps a 32 KB slab, and the largest free block
+  after closing a large page was 42 MB of 60 MB free. (7) A system font
+  is read whole on first use (into temporary memory); reading only the
+  tables used needs a different font data interface.
 
 ## Design
 
