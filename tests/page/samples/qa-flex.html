@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Flex layouts</title>
+<style>
+body { font: 14px sans-serif; margin: 10px; width: 760px; background: #f4f4f4; }
+section { background: #fff; margin-bottom: 10px; border: 1px solid #ccc; }
+.nav { display: flex; align-items: center; gap: 12px; padding: 8px; background: #234; color: #fff; }
+.nav .logo { font-weight: bold; font-size: 18px; }
+.nav .right { margin-left: auto; }
+.nav a { color: #9cf; }
+.media { display: flex; gap: 10px; padding: 8px; }
+.media .img { flex: none; width: 64px; height: 64px; background: #9c9; }
+.media .body { flex: 1; min-width: 0; }
+.media .body h3 { margin: 0 0 4px; }
+.trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grail { display: flex; min-height: 120px; }
+.grail > nav { flex: 0 0 120px; background: #def; }
+.grail > main { flex: 1; padding: 6px; }
+.grail > aside { flex: 0 0 100px; background: #fed; }
+.cards { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; }
+.card { flex: 1 1 200px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; }
+.card p { flex: 1; margin: 4px 0; }
+.card button { align-self: flex-end; }
+.center { display: flex; justify-content: center; align-items: center; height: 80px; background: #eef; }
+.center div { background: #fc9; padding: 6px 12px; }
+.cols { display: flex; height: 100px; }
+.cols > div { flex: 1; overflow: auto; border-right: 1px solid #ccc; padding: 4px; }
+.sticky { display: flex; flex-direction: column; height: 140px; }
+.sticky header, .sticky footer { background: #ddd; padding: 4px; }
+.sticky .main { flex: 1; padding: 4px; }
+.order { display: flex; }
+.order div { padding: 6px; border: 1px solid #999; }
+.rev { display: flex; flex-direction: row-reverse; justify-content: space-between; padding: 4px; }
+.base { display: flex; align-items: baseline; gap: 8px; padding: 4px; }
+.stretch { display: flex; align-items: stretch; height: 60px; gap: 4px; padding: 4px; }
+.stretch div { background: #cde; padding: 2px; }
+.grow div { padding: 4px; background: #ffd; border: 1px solid #cc9; }
+.space { display: flex; justify-content: space-around; padding: 6px; }
+.space span { background: #cfc; padding: 2px 8px; }
+.input-row { display: flex; gap: 6px; padding: 6px; }
+.input-row input { flex: 1; }
+.colwrap { display: flex; flex-direction: column; flex-wrap: wrap; height: 70px; align-content: flex-start; gap: 4px 10px; padding: 4px; }
+.colwrap span { background: #edf; padding: 2px 6px; }
+</style></head><body>
+<section class="nav"><span class="logo">Brand</span><a href="#">Home</a><a href="#">Docs</a><a href="#">Blog</a><span class="right"><a href="#">Sign in</a></span></section>
+<section class="media"><div class="img"></div><div class="body"><h3>Media object</h3><div class="trunc">A long description that should be truncated with an ellipsis because min-width zero lets the flex item shrink below its content size.</div><div>Second line wraps normally inside the flexible body column of the media object.</div></div></section>
+<section class="grail"><nav>nav</nav><main>Main content grows to fill the space between the two fixed side columns.</main><aside>aside</aside></section>
+<section class="cards">
+ <div class="card"><b>Card one</b><p>Short text.</p><button>Go</button></div>
+ <div class="card"><b>Card two</b><p>Longer text that wraps onto several lines to make this card taller than the others.</p><button>Go</button></div>
+ <div class="card"><b>Card three</b><p>Medium length text here.</p><button>Go</button></div>
+ <div class="card"><b>Card four</b><p>Wraps to the next row.</p><button>Go</button></div>
+</section>
+<section class="center"><div>centred both ways</div></section>
+<section class="cols"><div>Column one with enough text to need scrolling. Column one with enough text to need scrolling. Column one with enough text to need scrolling.</div><div>Column two.</div><div>Column three.</div></section>
+<section class="sticky"><header>header</header><div class="main">main grows</div><footer>footer at the bottom</footer></section>
+<section class="order"><div style="order:3">A (order 3)</div><div style="order:1">B (order 1)</div><div style="order:2">C (order 2)</div></section>
+<section class="rev"><span>first</span><span>second</span><span>third</span></section>
+<section class="base"><span style="font-size:28px">Big</span><span>small</span><span style="font-size:10px;padding-top:10px">tiny padded</span><button>Button</button></section>
+<section class="stretch"><div>stretched</div><div style="align-self:center">center</div><div style="align-self:flex-end">end</div><div style="height:20px">fixed</div></section>
+<section style="display:flex;padding:4px" class="grow"><div style="flex:1">flex 1</div><div style="flex:2">flex 2</div><div style="flex:0 0 100px">100px</div><div style="flex:1 0 auto">auto content</div></section>
+<section class="space"><span>a</span><span>b</span><span>c</span></section>
+<section class="input-row"><input placeholder="Search"><button>Search</button></section>
+<section class="colwrap"><span>one</span><span>two</span><span>three</span><span>four</span><span>five</span><span>six</span></section>
+</body></html>

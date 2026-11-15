@@ -329,9 +329,9 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
             float cw = l_max(0, w - l_bp_h(k));
             float h = l_spec_height(k, -1);
             l_layout_content(L, k, cw, -1, -1);
-            if (h >= 0 && h + l_bp_v(k) > k->h)
-                k->h = h + l_bp_v(k);
-            rowh = l_max(rowh, k->h);
+            /* k->h stays the content height, so a cell made taller by its
+             * height property still aligns its content below. */
+            rowh = l_max(rowh, h >= 0 ? l_max(k->h, h + l_bp_v(k)) : k->h);
             k->x = x;
             col += span;
             x += w + sh;
