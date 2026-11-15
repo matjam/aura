@@ -92,6 +92,11 @@ const char *au_docview_title(const AuDocView *dv);    /* "" when none */
 AuDocument *au_docview_document(const AuDocView *dv);
 AuLayout *au_docview_layout(const AuDocView *dv);
 
+/* Sets the user style sheet (the reader's defaults: font size, family),
+ * cascaded below the author's sheets; NULL removes it. It applies to
+ * this and later documents. */
+void au_docview_set_user_css(AuDocView *dv, const char *css);
+
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);
 /* Brings style and layout up to date. Returns true if geometry changed. */
