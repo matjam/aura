@@ -37,7 +37,7 @@ static bool same_path(const AuPath *a, const AuPath *b)
 {
     if (a->nops != b->nops || a->npts != b->npts)
         return false;
-    return !memcmp(a->ops, b->ops, a->nops) && (!a->npts || !memcmp(a->pts, b->pts, a->npts * sizeof *a->pts));
+    return (!a->nops || !memcmp(a->ops, b->ops, a->nops)) && (!a->npts || !memcmp(a->pts, b->pts, a->npts * sizeof *a->pts));
 }
 
 /* Every glyph's outline and advance, at the default and at one varied

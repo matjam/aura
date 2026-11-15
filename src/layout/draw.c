@@ -200,9 +200,13 @@ typedef struct PCtx {
 
 enum { PH_BG, PH_FLOAT, PH_INLINE };
 
+/* Whether a box's ink may reach the dirty area. One pixel of slack above
+ * and below: text fragments are as tall as the face's ascent and descent
+ * rounded to whole pixels (l_font), and glyphs reach up to half a pixel
+ * past them. */
 static bool rect_hits(const LArea *d, float x, float y, float w, float h)
 {
-    return x < d->x + d->w && x + w > d->x && y < d->y + d->h && y + h > d->y;
+    return x < d->x + d->w && x + w > d->x && y - 1 < d->y + d->h && y + h + 1 > d->y;
 }
 
 static uint32_t pc(const AuStyle *s, uint32_t css)
@@ -1063,6 +1067,13 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
             continue;
         AuRect clip = box_area_of(b, border_box, ly.clip);
         AuRect origin = box_area_of(b, border_box, ly.origin);
+        if (ly.attachment == AU_K_fixed) {
+            /* Positioned against the viewport and seen through the box's
+             * clip area (CSS Backgrounds 3, 3.5). A scroll then changes
+             * what the box shows: au_layout_scroll_damage repaints. */
+            origin = (AuRect){P->view_x, P->view_y, P->L->vw, P->L->vh};
+            P->L->fixed_backgrounds = true;
+        }
         draw_bg_image(P, s, &ly, origin, clip, rounded ? &radii : NULL);
     }
 }
@@ -1711,7 +1722,16 @@ static void paint_svg(PCtx *P, LBlock *b, AuRect cb)
     if (!b->b.node || !au_is_element(b->b.node) || cb.w <= 0 || cb.h <= 0)
         return;
     AuSvgEnv env = {P->L->env.fonts, P->L, svg_env_image, svg_env_find_id};
+    /* The whole pixels of the box's place go into the canvas translation
+     * and the drawing gets the fraction: its coordinates, and so every
+     * antialiased edge, are then the same wherever the page is scrolled
+     * to (the rasterizer keeps whole pixels of the translation apart). */
+    float ix = floorf(cb.x), iy = floorf(cb.y);
+    au_canvas_translate(P->c, ix, iy);
+    cb.x -= ix;
+    cb.y -= iy;
     au_svg_paint(P->c, l_svg_names(P->L), au_as_element(b->b.node), cb, &env);
+    au_canvas_translate(P->c, -ix, -iy);
 }
 
 static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
@@ -1730,13 +1750,43 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
         break;
     case LR_IMAGE:
         if (r && r->pixels) {
-            if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
-                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(cb.w), (int)ceilf(cb.h));
+            /* object-fit and object-position (CSS Images 3, section 5.5):
+             * the image is drawn at its concrete object size, placed in
+             * the content box and clipped to it. */
+            if (r->marker)
+                cb.w = l_max(0, cb.w - L_MARKER_IMAGE_GAP);
+            AuRect ob = cb;
+            int fit = r->marker ? AU_OBJECT_FIT_FILL : s->rare->object_fit;
+            if (fit != AU_OBJECT_FIT_FILL && r->iw > 0 && r->ih > 0 && cb.w > 0 && cb.h > 0) {
+                float sx = cb.w / r->iw, sy = cb.h / r->ih;
+                float sc = fit == AU_OBJECT_FIT_COVER ? l_max(sx, sy) : fit == AU_OBJECT_FIT_NONE ? 1 : l_min(sx, sy);
+                if (fit == AU_OBJECT_FIT_SCALE_DOWN && sc > 1)
+                    sc = 1;
+                ob.w = r->iw * sc;
+                ob.h = r->ih * sc;
+                const AuCssValue *px_ = NULL, *py_ = NULL;
+                const AuCssBlob *op = s->rare->object_position;
+                if (op && op->value.type == AU_CSSV_LIST && op->value.n == 2) {
+                    px_ = &op->value.u.items[0];
+                    py_ = &op->value.u.items[1];
+                }
+                ob.x = cb.x + (px_ ? bg_len(px_, cb.w - ob.w) : (cb.w - ob.w) / 2);
+                ob.y = cb.y + (py_ ? bg_len(py_, cb.h - ob.h) : (cb.h - ob.h) / 2);
+            }
+            bool crop = ob.x < cb.x - 0.01f || ob.y < cb.y - 0.01f || ob.x + ob.w > cb.x + cb.w + 0.01f ||
+                        ob.y + ob.h > cb.y + cb.h + 0.01f;
+            if (r->url && P->L->env.image_use && ob.w >= 1 && ob.h >= 1 && ob.w <= 8192 && ob.h <= 8192)
+                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(ob.w), (int)ceilf(ob.h));
             const AuSurface *px = r->pixels;
-            au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, cb,
-                          s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
-                                                                                 : AU_FILTER_BILINEAR,
-                          1);
+            if (crop)
+                au_canvas_clip_push(P->c, cb);
+            if (ob.w > 0 && ob.h > 0)
+                au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, ob,
+                              s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
+                                                                                     : AU_FILTER_BILINEAR,
+                              1);
+            if (crop)
+                au_canvas_clip_pop(P->c);
         } else if (cb.w >= 1 && cb.h >= 1) {
             /* Placeholder: a light frame, and the alt text. */
             float w1[4] = {1, 1, 1, 1};
@@ -2599,17 +2649,60 @@ float l_sticky_offset(AuLayout *L, LBlock *b, float *dx)
     return dy;
 }
 
+/* A rounded overflow clip pushed for a layer by layer_origin. */
+#define LAYER_SHAPED_MAX 4
+typedef struct LayerClips {
+    int pushed;  /* clips pushed */
+    int nshaped; /* of them, groups to mask with a rounded padding box */
+    struct {
+        LBlock *k;
+        float x, y;
+        int at; /* index among the pushed clips */
+    } shaped[LAYER_SHAPED_MAX];
+} LayerClips;
+
+/* The radii of k's overflow clip for a layer whose ink is ink (canvas
+ * coordinates), with k's border box at (x, y). False when the clip is
+ * square or the ink stays clear of the rounded corners: inside the band
+ * between the top and bottom corners, or between the left and right
+ * ones. */
+static bool layer_clip_radii(const LBlock *k, float x, float y, AuRect ink, AuRadii *out)
+{
+    const AuStyleBox *s = k->b.style->box;
+    if (s->overflow_x == AU_OVERFLOW_VISIBLE || s->overflow_y == AU_OVERFLOW_VISIBLE)
+        return false;
+    AuRadii r;
+    box_radii(k, &r, k->w, k->h);
+    if (au_radii_zero(&r))
+        return false;
+    inset_radii(&r, k->bw);
+    if (au_radii_zero(&r))
+        return false;
+    float px = x + k->bw[3], py = y + k->bw[0];
+    float pw = k->w - k->bw[1] - k->bw[3], ph = k->h - k->bw[0] - k->bw[2];
+    float top = l_max(r.ry[0], r.ry[1]), bottom = l_max(r.ry[2], r.ry[3]);
+    float left = l_max(r.rx[0], r.rx[3]), right = l_max(r.rx[1], r.rx[2]);
+    if ((ink.y >= py + top && ink.y + ink.h <= py + ph - bottom) ||
+        (ink.x >= px + left && ink.x + ink.w <= px + pw - right))
+        return false;
+    *out = r;
+    return true;
+}
+
 /* Origin of layered box b in canvas coordinates, given its stacking
  * context sc at (sx, sy); pushes the clips of the ancestors that clip it
- * and returns how many were pushed. */
-static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *ox, float *oy)
+ * (pop them with layer_clips_pop). An ancestor with rounded corners and
+ * overflow clipped on both axes clips its positioned descendants to the
+ * rounded padding box, as it does its in-flow content (CSS Backgrounds 3,
+ * "Corner Clipping"): the layer is painted into a group that is masked
+ * when the clip is popped. */
+static void layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *ox, float *oy, LayerClips *lc)
 {
     LBox *chain[L_MAX_DEPTH + 1];
     int n = 0;
     for (LBox *p = b->parent; p && p != sc && n < L_MAX_DEPTH; p = p->parent)
         chain[n++] = p;
-    float x = sx, y = sy;
-    int pushed = 0;
+    lc->pushed = lc->nshaped = 0;
     bool fixed = (b->flags & LF_FIXED) && ((LBlock *)b)->cb == NULL;
     /* Which ancestors clip and scroll b: those in its containing block chain. */
     bool applies[L_MAX_DEPTH + 1];
@@ -2631,42 +2724,91 @@ static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *o
                 need = a;
         }
     }
-    for (int i = n; i-- > 0;) {
-        LBox *a = chain[i];
-        if (a->kind != LK_BLOCK)
-            continue;
-        LBlock *k = (LBlock *)a;
-        x += k->x;
-        y += k->y;
-        if ((a->flags & LF_STICKY) && !(a->flags & LF_LAYERED)) {
-            /* not reached: sticky boxes are layers */
+    /* Two passes: the first finds the layer's place (the ink decides
+     * which rounded clips need a group), the second pushes. */
+    AuRect ink = {0, 0, 0, 0};
+    bool have_ink = false;
+    for (int pass = 0; pass < 2; pass++) {
+        float x = sx, y = sy;
+        for (int i = n; i-- > 0;) {
+            LBox *a = chain[i];
+            if (a->kind != LK_BLOCK)
+                continue;
+            LBlock *k = (LBlock *)a;
+            x += k->x;
+            y += k->y;
+            if (applies[i] && (a->flags & LF_CLIPS)) {
+                float cx = x - k->scroll_x, cy = y - k->scroll_y;
+                if (pass == 1) {
+                    AuRadii rr;
+                    push_clip(P, k, x, y, &cx, &cy, false);
+                    if (lc->nshaped < LAYER_SHAPED_MAX && (!have_ink || layer_clip_radii(k, x, y, ink, &rr))) {
+                        AuRadii any;
+                        AuRect all = {x - 1, y - 1, k->w + 2, k->h + 2};
+                        if (layer_clip_radii(k, x, y, all, &any)) {
+                            au_canvas_group_begin(P->c, box_area(k, x, y, AU_K_padding_box));
+                            lc->shaped[lc->nshaped].k = k;
+                            lc->shaped[lc->nshaped].x = x;
+                            lc->shaped[lc->nshaped].y = y;
+                            lc->shaped[lc->nshaped].at = lc->pushed;
+                            lc->nshaped++;
+                        }
+                    }
+                    lc->pushed++;
+                }
+                x = cx;
+                y = cy;
+            }
         }
-        if (applies[i] && (a->flags & LF_CLIPS)) {
-            float cx, cy;
-            push_clip(P, k, x, y, &cx, &cy, false);
-            pushed++;
-            x = cx;
-            y = cy;
+        if (b->kind == LK_BLOCK) {
+            LBlock *k = (LBlock *)b;
+            x += k->x;
+            y += k->y;
+            if (b->flags & LF_STICKY) {
+                float dx;
+                float dy = l_sticky_offset(P->L, k, &dx);
+                x += dx;
+                y += dy;
+            }
+            if (fixed) {
+                x += P->scroll_x;
+                y += P->scroll_y;
+            }
+            /* The ink is known for an untransformed block; anything else
+             * takes the group whenever a corner is rounded. */
+            const AuStyleRare *r = b->style->rare;
+            if (!r->transform && !r->translate && !r->rotate && !r->scale) {
+                float x0 = l_min(0, k->ov.x), y0 = l_min(0, k->ov.y);
+                float x1 = l_max(k->w, k->ov.x + k->ov.w), y1 = l_max(k->h, k->ov.y + k->ov.h);
+                ink = (AuRect){x + x0, y + y0, x1 - x0, y1 - y0};
+                have_ink = true;
+            }
         }
+        *ox = x;
+        *oy = y;
     }
-    if (b->kind == LK_BLOCK) {
-        LBlock *k = (LBlock *)b;
-        x += k->x;
-        y += k->y;
-        if (b->flags & LF_STICKY) {
-            float dx;
-            float dy = l_sticky_offset(P->L, k, &dx);
-            x += dx;
-            y += dy;
+}
+
+static void layer_clips_pop(PCtx *P, LayerClips *lc)
+{
+    for (int i = lc->pushed; i-- > 0;) {
+        if (lc->nshaped && lc->shaped[lc->nshaped - 1].at == i) {
+            LBlock *k = lc->shaped[lc->nshaped - 1].k;
+            float x = lc->shaped[lc->nshaped - 1].x, y = lc->shaped[lc->nshaped - 1].y;
+            AuRadii rr;
+            AuRect all = {x - 1, y - 1, k->w + 2, k->h + 2};
+            if (layer_clip_radii(k, x, y, all, &rr)) {
+                AuPath p;
+                au_path_init(&p);
+                au_path_rounded_rect(&p, box_area(k, x, y, AU_K_padding_box), &rr, false);
+                au_canvas_group_mask(P->c, &p);
+                au_path_free(&p);
+            }
+            au_canvas_group_end(P->c, 1.0f);
+            lc->nshaped--;
         }
-        if (fixed) {
-            x += P->scroll_x;
-            y += P->scroll_y;
-        }
+        au_canvas_clip_pop(P->c);
     }
-    *ox = x;
-    *oy = y;
-    return pushed;
 }
 
 static void paint_layer_list(PCtx *P, LBlock *sc, float sx, float sy, uint32_t from, uint32_t to)
@@ -2675,10 +2817,10 @@ static void paint_layer_list(PCtx *P, LBlock *sc, float sx, float sy, uint32_t f
     for (uint32_t i = from; i < to; i++) {
         LBox *b = ls->items[i];
         float ox, oy;
-        int pushed = layer_origin(P, &sc->b, sx, sy, b, &ox, &oy);
+        LayerClips lc;
+        layer_origin(P, &sc->b, sx, sy, b, &ox, &oy, &lc);
         paint_layer(P, b, ox, oy);
-        while (pushed--)
-            au_canvas_clip_pop(P->c);
+        layer_clips_pop(P, &lc);
     }
 }
 
@@ -2885,8 +3027,10 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     P.c = c;
     P.scroll_x = scroll_x;
     P.scroll_y = scroll_y;
-    /* Canvas coordinates: document point (x, y) maps to (view.x + x -
-     * scroll_x, view.y + y - scroll_y). */
+    P.view_x = view.x;
+    P.view_y = view.y;
+    /* Document point (x, y) maps to (view.x + x - scroll_x, view.y + y -
+     * scroll_y) in the caller's coordinates. */
     float dx = view.x - scroll_x, dy = view.y - scroll_y;
     /* Cull against the canvas clip (the damaged part of the view), not the
      * whole view: a scroll paints only the exposed strip. */
@@ -2896,6 +3040,22 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
         au_canvas_clip_pop(c);
         return;
     }
+    /* The whole pixels of that offset go into the canvas translation, so
+     * boxes are painted at their document coordinates wherever the page
+     * is scrolled to: an antialiased edge at a fractional coordinate then
+     * gets the same coverage at every scroll offset, which moving pixels
+     * on a scroll relies on (the canvas and the rasterizer keep whole
+     * pixels of the translation apart from the coordinates). */
+    float tdx = floorf(dx), tdy = floorf(dy);
+    au_canvas_translate(c, tdx, tdy);
+    dx -= tdx;
+    dy -= tdy;
+    view.x -= tdx;
+    view.y -= tdy;
+    P.view_x = view.x;
+    P.view_y = view.y;
+    P.dirty.x -= tdx;
+    P.dirty.y -= tdy;
     LBlock *bgbox;
     const AuStyle *cs = canvas_style(L, &bgbox);
     uint32_t bg = pc(cs, cs->bg->background_color);
@@ -2926,6 +3086,7 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     /* The propagated background is not painted again on its own box. */
     P.canvas_box = bgbox;
     paint_layer(&P, &root->b, dx + root->x, dy + root->y);
+    au_canvas_translate(c, -tdx, -tdy);
     au_canvas_clip_pop(c);
 }
 
@@ -2995,7 +3156,8 @@ static bool view_box_extent(LBox *b, AuRect *out)
     LBlock *k = (LBlock *)b;
     float bx, by;
     l_box_origin(b, &bx, &by);
-    AuRect r = {bx + k->ov.x, by + k->ov.y, k->ov.w, k->ov.h};
+    /* One pixel above and below for glyph ink (see rect_hits). */
+    AuRect r = {bx + k->ov.x, by + k->ov.y - 1, k->ov.w, k->ov.h + 2};
     bool any = true;
     /* Descendants: positioned ones are layers, outside b's overflow. A
      * transformed descendant counts with its transformed overflow when
@@ -3012,7 +3174,7 @@ static bool view_box_extent(LBox *b, AuRect *out)
             LBlock *dk = (LBlock *)d;
             float dx, dy;
             l_box_origin(d, &dx, &dy);
-            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y, dk->ov.w, dk->ov.h};
+            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y - 1, dk->ov.w, dk->ov.h + 2};
             AuMatrix m;
             if (l_transform_matrix(dk, &m)) {
                 if (subtree_has(d, LF_POSITIONED | LF_ABSPOS | LF_FIXED, true))
@@ -3085,7 +3247,7 @@ int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny,
                 return -1;
         }
     }
-    if (L->nview_boxes > L_VIEW_BOXES)
+    if (L->nview_boxes > L_VIEW_BOXES || L->fixed_backgrounds)
         return -1;
     int n = 0;
     float dx = ox - nx, dy = oy - ny; /* how painted pixels moved */

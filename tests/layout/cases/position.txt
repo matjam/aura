@@ -189,3 +189,26 @@ doc w=1010 h=1510
 ---
 #a y=40
 #p y=40
+
+=== fixed under a transformed ancestor is positioned against it
+<body style="margin:0;height:2000px">
+<div style="height:50px"></div>
+<div id=t style="transform:translate(10px,20px);width:200px;height:100px;margin-left:30px;border:2px solid #000000">
+<div id=f style="position:fixed;left:5px;top:7px;width:10px;height:10px;background:#ff0000"></div>
+</div>
+<div id=u style="will-change:transform;width:200px;height:20px;margin-left:30px">
+<div id=g style="position:fixed;right:0;bottom:0;width:10px;height:10px;background:#0000ff"></div></div>
+<div id=v style="filter:blur(0);width:100px;height:20px"><div id=h style="position:fixed;left:1px;top:1px;width:4px;height:4px"></div></div>
+<div id=w style="perspective:100px;width:100px;height:20px"><div id=i style="position:fixed;left:1px;top:1px;width:4px;height:4px"></div></div>
+<div id=x style="contain:paint;width:100px;height:20px"><div id=j style="position:fixed;left:1px;top:1px;width:4px;height:4px"></div></div>
+<div id=y style="translate:1px;width:100px;height:20px"><div id=k style="position:fixed;left:1px;top:1px;width:4px;height:4px"></div></div>
+---
+#f x=37 y=59 w=10 h=10
+pixel 50 82 ff0000
+#g x=220 y=164
+#h x=1 y=175
+#i x=1 y=195
+#j x=1 y=215
+#k x=1 y=235
+scroll 40
+pixel 50 42 ff0000

@@ -29,6 +29,7 @@ typedef struct {
     const uint8_t *ring; /* ring coverage over area */
     AuIRect area;
     uint8_t *tmp;
+    int ix, iy; /* whole pixels from the area's coordinates to the surface's */
 } SideCtx;
 
 static void side_span(void *ctx, int y, int x, int n, const uint8_t *cov)
@@ -37,7 +38,7 @@ static void side_span(void *ctx, int y, int x, int n, const uint8_t *cov)
     const uint8_t *ring = sc->ring + (size_t)(y - sc->area.y0) * (sc->area.x1 - sc->area.x0) + (x - sc->area.x0);
     for (int i = 0; i < n; i++)
         sc->tmp[i] = (uint8_t)((cov[i] * au_a256(ring[i])) >> 8);
-    au_blend_solid_span(sc->s->pixels + (size_t)y * sc->s->stride + x, n, sc->color, sc->tmp);
+    au_blend_solid_span(sc->s->pixels + (size_t)(y + sc->iy) * sc->s->stride + (x + sc->ix), n, sc->color, sc->tmp);
 }
 
 void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *radii)
@@ -116,7 +117,14 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
     float tx, ty;
     AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
     au_canvas_get_translation(c, &tx, &ty);
-    float dx = tx - ox, dy = ty - oy;
+    /* Work with the fraction of the translation; its whole pixels are
+     * added when blending (see raster() in raster.c). */
+    int ix = (int)floorf(tx - (float)ox), iy = (int)floorf(ty - (float)oy);
+    float dx = tx - (float)ox - (float)ix, dy = ty - (float)oy - (float)iy;
+    clip.x0 -= ix;
+    clip.x1 -= ix;
+    clip.y0 -= iy;
+    clip.y1 -= iy;
     AuIRect area = {(int)floorf(box.x + dx), (int)floorf(box.y + dy), (int)ceilf(box.x + box.w + dx) + 1,
                     (int)ceilf(box.y + box.h + dy) + 1};
     area = au_irect_intersect(area, clip);
@@ -159,7 +167,7 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
         au_path_line_to(&q, quads[side][4], quads[side][5]);
         au_path_line_to(&q, quads[side][6], quads[side][7]);
         au_path_close(&q);
-        SideCtx sc = {s, au_premul(b->color[side]), mask, area, tmp};
+        SideCtx sc = {s, au_premul(b->color[side]), mask, area, tmp, ix, iy};
         au_raster_path(&q, 0, 0, AU_FILL_NONZERO, area, side_span, &sc);
         au_path_free(&q);
     }
@@ -246,7 +254,14 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     float tx, ty;
     AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
     au_canvas_get_translation(c, &tx, &ty);
-    float px = tx - ox, py = ty - oy;
+    /* The fraction of the translation; whole pixels are added when
+     * blending (see raster() in raster.c). */
+    int ix = (int)floorf(tx - (float)ox), iy = (int)floorf(ty - (float)oy);
+    float px = tx - (float)ox - (float)ix, py = ty - (float)oy - (float)iy;
+    clip.x0 -= ix;
+    clip.x1 -= ix;
+    clip.y0 -= iy;
+    clip.y1 -= iy;
     AuRect b = {box.x + px, box.y + py, box.w, box.h};
     AuRadii br = {{0}, {0}};
     if (radii) {
@@ -301,7 +316,7 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
                 v = (sm[i] * (256u - au_a256(bm[i]))) >> 8;
             cov[i] = (uint8_t)v;
         }
-        au_blend_solid_span(s->pixels + (size_t)y * s->stride + vis.x0, n, src, cov);
+        au_blend_solid_span(s->pixels + (size_t)(y + iy) * s->stride + (vis.x0 + ix), n, src, cov);
     }
     au_free(cov);
     au_free(shape);

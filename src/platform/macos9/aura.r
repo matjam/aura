@@ -384,11 +384,7 @@ resource 'DITL' (201) {
 	}
 };
 
-resource 'vers' (1) {
-	0x00, 0x03, development, 0x00, verUS,
-	"0.3",
-	"0.3, Aura with its page engine"
-};
+/* The 'vers' resource is generated from AU_VERSION (aura_vers.r.in). */
 
 /* The bundle: the application, and the document types it opens, so the
    Finder lets text and HTML files be dropped on its icon. Local icon 1

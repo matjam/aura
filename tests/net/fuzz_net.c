@@ -162,7 +162,7 @@ static void run_http(const Input *in, bool head)
         au_http_parser_free(&hp);
     }
     if (results[0] != results[1] || (results[0] == AU_HP_DONE &&
-                                     (whole.len != split.len || memcmp(whole.data, split.data, whole.len)))) {
+                                     (whole.len != split.len || (whole.len && memcmp(whole.data, split.data, whole.len))))) {
         printf("whole and split parses differ (%d/%d, %zu/%zu bytes)\n", results[0], results[1], whole.len,
                split.len);
         abort();
