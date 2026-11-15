@@ -34,6 +34,7 @@ typedef struct Fetch {
     bool have_cert;
     double t_start, t_response;
     AuHostNet *host;
+    bool again; /* the repeat of --again: print the TLS line only */
 } Fetch;
 
 static double mono_ms(void)
@@ -47,7 +48,10 @@ static int usage(void)
 {
     fprintf(stderr, "usage: aura-host fetch URL [-o file] [-v] [-X METHOD] [-d data] [-H \"Name: value\"]...\n"
                     "                       [-u user:pass] [--referer URL] [--https-first] [--allow-http]\n"
-                    "                       [--no-cookies] [--max-time S]\n");
+                    "                       [--no-cookies] [--max-time S] [--tls12] [--again]\n"
+                    "  --tls12  offer TLS 1.2 only\n"
+                    "  --again  after the response, fetch the URL once more on a new connection\n"
+                    "           and say whether the TLS session was resumed\n");
     return 2;
 }
 
@@ -121,7 +125,8 @@ static void on_data(void *ctx, AuHttpTransfer *t, const void *data, size_t len)
 {
     (void)t;
     Fetch *f = ctx;
-    fwrite(data, 1, len, f->out);
+    if (!f->again)
+        fwrite(data, 1, len, f->out);
     f->bytes += (int64_t)len;
 }
 
@@ -166,7 +171,7 @@ static int on_credentials(void *ctx, AuHttpTransfer *t, const AuAuthChallenge *c
 int au_host_fetch_main(int argc, char **argv)
 {
     const char *url = NULL, *outpath = NULL, *method = NULL, *data = NULL, *referer = NULL, *userpass = NULL;
-    bool verbose = false, https_first = false, allow_http = false, cookies = true;
+    bool verbose = false, https_first = false, allow_http = false, cookies = true, again = false;
     double max_time = 0;
     AuHttpRequest rq;
     AuHeaders extra;
@@ -191,6 +196,10 @@ int au_host_fetch_main(int argc, char **argv)
             allow_http = true;
         else if (!strcmp(a, "--no-cookies"))
             cookies = false;
+        else if (!strcmp(a, "--tls12"))
+            au_tls_limit_version(0x0303);
+        else if (!strcmp(a, "--again"))
+            again = true;
         else if (!strcmp(a, "--max-time") && i + 1 < argc)
             max_time = atof(argv[++i]);
         else if (!strcmp(a, "-H") && i + 1 < argc) {
@@ -281,6 +290,24 @@ int au_host_fetch_main(int argc, char **argv)
             au_host_net_wait(host, 20);
     }
     double t_end = mono_ms();
+    if (again && f.err == AU_NET_OK) {
+        /* The same URL on a new connection: a resumed TLS session when
+         * the server gave one. */
+        au_net_close_idle(net);
+        f.done = false;
+        f.again = true;
+        au_http_request_init(&rq, url);
+        rq.user_activated = true;
+        double t0 = mono_ms();
+        au_http_start(net, &rq, &cb);
+        au_http_request_free(&rq);
+        while (!f.done) {
+            if (!au_net_pump(net))
+                au_host_net_wait(host, 20);
+        }
+        fprintf(stderr, "* again: %s, %.0f ms\n", f.err == AU_NET_OK ? "done" : au_net_error_name(f.err),
+                mono_ms() - t0);
+    }
 
     if (verbose && f.have_cert)
         print_cert(&f.cert);

@@ -119,12 +119,14 @@ typedef enum { AU_TLS_HANDSHAKE, AU_TLS_OPEN, AU_TLS_CLOSED, AU_TLS_FAILED } AuT
 
 typedef struct AuTls AuTls;
 
-/* A saved session for resumption: the TLS library's serialized form (a
- * TLS 1.2 session id or ticket, or a TLS 1.3 ticket with its secret).
+/* A saved session for resumption: the TLS library's serialized form. A
+ * TLS 1.3 session is a ticket and its secret, about 300 bytes. A TLS 1.2
+ * session also carries the server's certificate, so it is 1 to 3 KB.
  * Keep it in memory only: it holds key material and the library trusts
- * its contents. A session too large for data is not saved. */
+ * its contents. A session too large for data is not saved (the next
+ * handshake is then a full one). */
 typedef struct AuTlsSession {
-    uint8_t data[1024];
+    uint8_t data[4096];
     uint16_t len;
     bool valid;
 } AuTlsSession;
@@ -162,6 +164,9 @@ enum {
 AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const uint8_t seed[32],
                   const AuTlsSession *resume);
 void au_tls_free(AuTls *t);
+/* For measurements and tests: connections made from now on offer nothing
+ * above version (0x0303 for TLS 1.2 only); 0 restores the default. */
+void au_tls_limit_version(int version);
 AuTlsState au_tls_state(AuTls *t);
 /* The user's exception for this connection: a certificate error (expired,
  * wrong host, untrusted issuer...) on a chain whose leaf certificate has

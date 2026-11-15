@@ -13,7 +13,8 @@
  *   aura-roots.bin   the root store (assets/net/aura-roots.bin), or the
  *   or aura-roots    same file without the extension; without it https
  *                    requests fail with a certificate error
- *   NetTest URLs     optional, one URL per line, replaces the built-in list
+ *   NetTest URLs     optional, one URL per line, replaces the built-in list;
+ *                    "12 " before a URL fetches it with TLS 1.2 only
  * The output is also written to "NetTest Log" in the Aura folder of the
  * Preferences folder. When the list is done, a key or click quits.
  *
@@ -441,13 +442,25 @@ static void on_done(void *ctx, AuHttpTransfer *t, AuNetError err)
     f->t_end = au_mac_clock_ms();
     AuHttpTrace tr;
     au_http_trace(t, &tr);
-    f->handshake_ms = tr.at[AU_PHASE_SECURING] >= 0 && tr.at[AU_PHASE_SENDING] >= 0
-                          ? (long)(tr.at[AU_PHASE_SENDING] - tr.at[AU_PHASE_SECURING])
-                          : -1;
+    /* From the start of the handshake to the next phase that was seen
+     * (phases are stamped once per pump, so this is to the nearest pass
+     * of the event loop). */
+    f->handshake_ms = -1;
+    if (tr.at[AU_PHASE_SECURING] >= 0)
+        for (int ph = AU_PHASE_SENDING; ph <= AU_PHASE_DONE; ph++)
+            if (tr.at[ph] >= 0) {
+                f->handshake_ms = (long)(tr.at[ph] - tr.at[AU_PHASE_SECURING]);
+                break;
+            }
 }
 
 static void fetch(Run *r, const char *url)
 {
+    /* "12 URL" limits this fetch to TLS 1.2, to time it. */
+    bool tls12 = !strncmp(url, "12 ", 3);
+    if (tls12)
+        url += 3;
+    au_tls_limit_version(tls12 ? 0x0303 : 0);
     Fetch f;
     memset(&f, 0, sizeof f);
     AuHttpRequest rq;
@@ -581,8 +594,13 @@ int main(void)
     int nurls = load_urls(&urltext, urls);
     for (int i = 0; i < nurls; i++)
         fetch(&r, urls[i]);
-    /* The same again: pooled connections and resumed TLS sessions. */
-    say(&r, "-- again --\n");
+    /* The same again on new connections: resumed TLS sessions. */
+    say(&r, "-- again, new connections --\n");
+    au_net_close_idle(r.net);
+    for (int i = 0; i < nurls; i++)
+        fetch(&r, urls[i]);
+    /* And once more on the connections now open. */
+    say(&r, "-- again, pooled connections --\n");
     for (int i = 0; i < nurls; i++)
         fetch(&r, urls[i]);
 

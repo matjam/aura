@@ -30,7 +30,7 @@
 #define CERT_KEEP_MAX 16384 /* bytes of each chain certificate kept for the viewer and path building */
 #define IN_CAP 4096         /* ciphertext from the socket, waiting for the library */
 #define OUT_CAP 4608        /* ciphertext from the library, waiting for the socket: one 4 KB record */
-#define APP_CAP 8192        /* decrypted data, waiting for the stack */
+#define APP_CAP 4096        /* decrypted data, waiting for the stack */
 #define WRITE_CAP 4096      /* plaintext from the stack, waiting to be encrypted (MBEDTLS_SSL_OUT_CONTENT_LEN) */
 
 struct AuTls {
@@ -60,7 +60,8 @@ struct AuTls {
     uint8_t allow_sha256[32];
     bool resumed;
     bool new_session; /* a session (TLS 1.3: a ticket) arrived and was not taken yet */
-    /* Staging. */
+    /* Staging. wr exists only while there is plaintext to send, so an
+     * idle connection does not hold it. */
     uint8_t *in, *out, *app, *wr;
     size_t in_len, in_pos, out_len, out_pos, app_len, app_pos, wr_len;
     size_t wr_pending; /* bytes of wr given to the library in a write that must be repeated */
@@ -488,8 +489,14 @@ static void step(AuTls *t)
         t->wr_len -= (size_t)rc;
         t->wr_pending = 0;
     }
-    if (t->wr_len == 0)
+    if (t->wr_len == 0) {
         t->wr_flush = false;
+        if (t->wr) {
+            memset(t->wr, 0, WRITE_CAP);
+            au_free(t->wr);
+            t->wr = NULL;
+        }
+    }
     /* Decrypted data for the stack. */
     while (t->app_len == t->app_pos) {
         t->app_len = t->app_pos = 0;
@@ -515,6 +522,10 @@ static void step(AuTls *t)
 
 /* ---- Setup ---- */
 
+static int g_max_version; /* au_tls_limit_version */
+
+void au_tls_limit_version(int version) { g_max_version = version; }
+
 AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const uint8_t seed[32],
                   const AuTlsSession *resume)
 {
@@ -539,8 +550,7 @@ AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const
     t->in = au_try_alloc(IN_CAP);
     t->out = au_try_alloc(OUT_CAP);
     t->app = au_try_alloc(APP_CAP);
-    t->wr = au_try_alloc(WRITE_CAP);
-    if (!t->in || !t->out || !t->app || !t->wr) {
+    if (!t->in || !t->out || !t->app) {
         fail(t, AU_TLS_ERR_MEMORY);
         return t;
     }
@@ -552,7 +562,8 @@ AuTls *au_tls_new(const AuRootStore *roots, const char *host, int64_t now, const
         return t;
     }
     mbedtls_ssl_conf_min_tls_version(conf, MBEDTLS_SSL_VERSION_TLS1_2);
-    mbedtls_ssl_conf_max_tls_version(conf, MBEDTLS_SSL_VERSION_TLS1_3);
+    mbedtls_ssl_conf_max_tls_version(conf, g_max_version == 0x0303 ? MBEDTLS_SSL_VERSION_TLS1_2
+                                                                   : MBEDTLS_SSL_VERSION_TLS1_3);
     mbedtls_ssl_conf_ciphersuites(conf, suites);
     mbedtls_ssl_conf_groups(conf, groups);
     mbedtls_ssl_conf_sig_algs(conf, sig_algs);
@@ -705,12 +716,18 @@ uint8_t *au_tls_write(AuTls *t, size_t *cap)
         step(t);
     if (t->failed || t->wr_pending || t->wr_len == WRITE_CAP)
         return NULL;
+    if (!t->wr && !(t->wr = au_try_alloc(WRITE_CAP))) {
+        fail(t, AU_TLS_ERR_MEMORY);
+        return NULL;
+    }
     *cap = WRITE_CAP - t->wr_len;
     return t->wr + t->wr_len;
 }
 
 void au_tls_write_done(AuTls *t, size_t n)
 {
+    if (!t->wr)
+        return;
     t->wr_len += n;
     if (t->wr_len == WRITE_CAP) {
         t->wr_flush = true; /* a full buffer goes out as one record */

@@ -64,8 +64,12 @@ if(NOT AURA_MACOS9)
     target_compile_definitions(aura_mbedtls PUBLIC AURA_MBEDTLS_SERVER)
 endif()
 # Third-party code: its warnings are not ours to fix. Always optimized;
-# the public-key code is far too slow otherwise.
+# the public-key code is far too slow otherwise. The cryptography is
+# built for speed; the protocol and X.509 code (library/), which runs a
+# few times per connection, for size.
 target_compile_options(aura_mbedtls PRIVATE -w -O2)
+file(GLOB AURA_MBEDTLS_PROTOCOL_SOURCES CONFIGURE_DEPENDS ${AURA_MBEDTLS_DIR}/library/*.c)
+set_source_files_properties(${AURA_MBEDTLS_PROTOCOL_SOURCES} PROPERTIES COMPILE_OPTIONS "-Os")
 # The library calls three functions of the engine (the clocks and the
 # entropy source in src/net/tls_platform.c). They are in the object file
 # that every user of the library pulls in first (tls.c calls it), and

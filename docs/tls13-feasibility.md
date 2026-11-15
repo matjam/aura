@@ -584,3 +584,22 @@ in the guest.
   after 4.1.1: from source searches, not from its documentation.
 - s2n-tls, OpenSSL-family and Mbed TLS 3.6 were not built.
 - The traffic-share figures are from third-party summaries.
+
+## Outcome
+
+The replacement was done on 2026-11-15 on this branch, following section
+5: Mbed TLS 4.1.1 is in `third_party/mbedtls`, `src/net/tls.c` runs on
+it, the root store holds whole certificates, the test server is the
+library's server half, and BearSSL is removed. The trial programs and
+the RFC 8448 test named under "Experiments" were removed with it; they
+are in the branch's history (commit 903cc1f). What section 5 left as
+designs was built: chain completion through
+`mbedtls_x509_crt_verify_with_ca_cb`, the staging buffers behind
+`tls.h`, and the in-process test server.
+
+Measured against this study's estimates: the application grew by 245 KB
+(6%), not 180 KB, because the full configuration (the library's own
+random generator, tickets, session handling) is larger than the trial's;
+memory per connection is about the same as before. The current state of
+the code is described in `CLAUDE.md` (Networking) and
+`third_party/README.md`, not here.

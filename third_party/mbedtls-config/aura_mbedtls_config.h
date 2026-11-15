@@ -31,8 +31,10 @@
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION
 #define MBEDTLS_SSL_ALPN
 #define MBEDTLS_SSL_SESSION_TICKETS
-/* tls.c reads the chain after the handshake (the certificate viewer, the
- * error pages, chain completion). */
+/* The library's TLS 1.3 code needs the peer's certificate kept (it does
+ * not compile without this). The cost: the parsed leaf stays for the life
+ * of the connection, and a saved TLS 1.2 session carries the leaf
+ * certificate, 1 to 2.5 KB. */
 #define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE
 #define MBEDTLS_SSL_ALL_ALERT_MESSAGES
 
