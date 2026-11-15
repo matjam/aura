@@ -435,6 +435,13 @@ static void icon_page(AuCanvas *c, float x, float y, AuColor col)
     au_path_free(&p);
 }
 
+/* A site's 16 x 16 icon with its top-left corner at (x, y). */
+static void site_icon(AuCanvas *c, const AuSurface *icon, int x, int y)
+{
+    au_draw_image(c, icon, (AuIRect){0, 0, icon->width, icon->height}, (AuRect){(float)x, (float)y, 16, 16},
+                  AU_FILTER_NEAREST, 1.0f);
+}
+
 static void icon_lock(AuCanvas *c, float cx, float cy, bool open, AuColor col)
 {
     const float pi = 3.14159265f;
@@ -688,6 +695,8 @@ static void paint_tab_top(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, c
         hline(c, x0 + 2, x1 - 2, r.y1 - 1, C_FACE); /* open into the toolbar */
     if (s->tabs[i].loading)
         throbber(c, irect(x0 + 2, y0 + 2, x0 + 20, y1), true, s->throbber_frame);
+    else if (s->tabs[i].icon)
+        site_icon(c, s->tabs[i].icon, x0 + 3, y0 + 2 + (y1 - y0 - 2 - 16) / 2);
     else
         icon_page(c, (float)x0 + 7, (float)y0 + 5, AU_RGB(100, 100, 100));
     AuIRect cr = au_chrome_tab_close_rect(l, i);
@@ -712,6 +721,8 @@ static void paint_tab_left(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, 
     }
     if (s->tabs[i].loading)
         throbber(c, irect(r.x0 + 4, r.y0, r.x0 + 24, r.y1), true, s->throbber_frame);
+    else if (s->tabs[i].icon)
+        site_icon(c, s->tabs[i].icon, r.x0 + 6, r.y0 + (r.y1 - r.y0 - 16) / 2);
     else
         icon_page(c, (float)r.x0 + 9, (float)r.y0 + 5, AU_RGB(100, 100, 100));
     AuIRect cr = au_chrome_tab_close_rect(l, i);

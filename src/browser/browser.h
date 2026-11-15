@@ -156,6 +156,7 @@ struct AuBrowserWindow {
     bool active_window;
     int throbber_frame;
     uint32_t throbber_ms;
+    uint32_t icon_serial; /* the icon store's state the tabs were last painted for */
     AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
     bool painting;      /* inside au_bw_paint */
     bool hscroll_dirty; /* the page width changed during a paint: check the scroll bar at the next idle */
@@ -198,6 +199,12 @@ struct AuBrowser {
         AuPageFetcher fetcher;
     } fetchers[AU_MAX_FETCHERS]; /* see au_browser_set_fetcher */
     int nfetchers;
+    struct AuFavicons *favicons; /* site icons by host (favicon.h) */
+    /* Set by the shell to fetch site icons after each load (off by
+     * default: an embedder or a test that scripts its server's responses
+     * gets no requests it did not expect). The load_images preference
+     * turns them off too. */
+    bool site_icons;
 };
 
 AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host);

@@ -22,6 +22,7 @@
 
 #include "appearance.h"
 #include "browser/browser.h"
+#include "browser/favicon.h"
 #include "browser/context.h"
 #include "browser/listview.h"
 #include "browser/url.h"

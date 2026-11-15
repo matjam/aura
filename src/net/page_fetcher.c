@@ -332,6 +332,7 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
     rq.dest = dest_of(frq->kind, frq->url);
     rq.document_url = frq->document_url;
     rq.top_level_url = frq->top_level_url;
+    rq.omit_credentials = frq->omit_credentials;
     rq.referrer_policy = (AuReferrerPolicy)frq->referrer_policy;
     rq.user_activated = frq->user_activated;
     rq.reload = frq->cache == AU_FETCH_CACHE_BYPASS;

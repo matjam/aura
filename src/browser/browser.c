@@ -1,5 +1,6 @@
 /* The browser model and controller. See browser.h. */
 #include "browser.h"
+#include "favicon.h"
 #include "url.h"
 
 #include <stdio.h>
@@ -387,12 +388,24 @@ static void cb_progress(void *ctx, AuPage *p)
     (void)p;
 }
 
+static const AuPageFetcher *env_fetcher(void *ctx, const char *scheme);
+
 static void cb_finished(void *ctx, AuPage *p, bool ok)
 {
     AuTab *t = ctx;
     t->loading = false;
     loading_changed(t);
-    (void)p, (void)ok;
+    /* The site's icon, after the document and its resources: fetched
+     * unless the store has a fresh one for the host (favicon.h). */
+    AuBrowser *b = t->win->browser;
+    if (ok && b->site_icons && b->prefs.load_images) {
+        char *icon = au_page_icon_url(p);
+        if (icon) {
+            const AuPageFetcher *f = env_fetcher(b, au_url_scheme_is(icon, "https") ? "https" : "http");
+            au_favicons_request(b->favicons, f, au_page_url(p), icon, b->host.now ? b->host.now(b->host.ctx) : 0);
+            au_free(icon);
+        }
+    }
 }
 
 static void cb_open(void *ctx, AuPage *p, const char *url, bool new_tab)
@@ -700,6 +713,7 @@ AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host)
     b->fonts = fonts;
     b->host = *host;
     b->next_tab_id = 1;
+    b->favicons = au_favicons_new();
     return b;
 }
 
@@ -708,6 +722,7 @@ void au_browser_free(AuBrowser *b)
     while (b->nwindows)
         au_browser_window_free(b->windows[b->nwindows - 1]);
     au_free(b->windows);
+    au_favicons_free(b->favicons); /* cancels icon fetches while the fetchers exist */
     au_prefs_free(&b->prefs);
     au_history_free(&b->history);
     au_bookmarks_free(&b->bookmarks);
@@ -1693,6 +1708,7 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
         }
         tabs[i].title = title;
         tabs[i].loading = x->loading;
+        tabs[i].icon = au_favicons_for_url(w->browser->favicons, au_page_url(x->page));
     }
     AuChromeState s;
     memset(&s, 0, sizeof s);
@@ -2062,6 +2078,15 @@ void au_bw_idle(AuBrowserWindow *w)
         rehover(w);
     }
     au_browser_trim_documents(w->browser);
+    {
+        /* Icon fetches run outside the pages; repaint the tabs when one
+         * arrived. */
+        uint32_t serial = au_favicons_idle(w->browser->favicons);
+        if (serial != w->icon_serial) {
+            w->icon_serial = serial;
+            invalidate(w, w->layout.tabs_area);
+        }
+    }
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {
         au_page_idle(w->tabs[i]->page);

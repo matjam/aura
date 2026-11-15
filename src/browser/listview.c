@@ -1,5 +1,7 @@
 /* The bookmarks and history list. See listview.h. */
 #include "listview.h"
+
+#include "favicon.h"
 #include "chrome.h"
 
 #include <stdio.h>
@@ -17,6 +19,7 @@ void au_listview_clear(AuListView *lv)
     for (int i = 0; i < lv->n; i++) {
         au_free(lv->rows[i].text);
         au_free(lv->rows[i].detail);
+        au_free(lv->rows[i].icon_host);
     }
     lv->n = 0;
 }
@@ -42,6 +45,18 @@ void au_listview_add(AuListView *lv, AuRowKind kind, int indent, bool expanded, 
     r->text = au_strndup(text ? text : "", text ? strlen(text) : 0);
     r->detail = au_strndup(detail ? detail : "", detail ? strlen(detail) : 0);
     r->id = id;
+    r->icon_host = NULL;
+}
+
+/* Notes the host of the last row added when the icon store has an icon
+ * for url's site. */
+static void row_icon(AuListView *lv, const char *url)
+{
+    char host[256];
+    if (!lv->icons || !lv->n || !url || !au_favicons_host(url, host, sizeof host) ||
+        !au_favicons_for_host(lv->icons, host))
+        return;
+    lv->rows[lv->n - 1].icon_host = au_strndup(host, strlen(host));
 }
 
 static void clamp(AuListView *lv)
@@ -68,6 +83,8 @@ void au_listview_from_bookmarks(AuListView *lv, const AuBookmarks *bm)
             lv->selected = lv->n;
         au_listview_add(lv, b->folder ? AU_ROW_FOLDER : AU_ROW_LINK, au_bookmark_depth(b), b->expanded, b->title,
                         b->folder ? NULL : b->url, b->id);
+        if (!b->folder)
+            row_icon(lv, b->url);
         b = au_bookmark_next(b, root, b->folder && !b->expanded);
     }
     clamp(lv);
@@ -97,6 +114,7 @@ void au_listview_from_history(AuListView *lv, const AuHistory *h, AuTime now)
         au_buf_puts(&detail, e->url);
         au_listview_add(lv, AU_ROW_LINK, 1, false, *e->title ? e->title : e->url, au_buf_cstr(&detail),
                         (uint32_t)i);
+        row_icon(lv, e->url);
         au_buf_free(&detail);
     }
     clamp(lv);
@@ -202,7 +220,13 @@ void au_listview_paint(const AuListView *lv, AuCanvas *c, AuFontSet *fonts)
             folder_icon(c, x + 14, top + 2);
             x += 32;
         } else if (r->kind == AU_ROW_LINK) {
-            page_icon(c, x + 2, top + 3);
+            /* Looked up at paint time: the store may have dropped it. */
+            const AuSurface *ic = r->icon_host ? au_favicons_for_host(lv->icons, r->icon_host) : NULL;
+            if (ic)
+                au_draw_image(c, ic, (AuIRect){0, 0, ic->width, ic->height}, (AuRect){x, top + 1, 16, 16},
+                              AU_FILTER_NEAREST, 1.0f);
+            else
+                page_icon(c, x + 2, top + 3);
             x += 18;
         }
         if (f) {

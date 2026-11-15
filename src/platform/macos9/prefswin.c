@@ -758,6 +758,7 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         break;
     case F_CLEAR_HISTORY:
         au_history_clear(&g_browser->history);
+        au_favicons_clear(g_browser->favicons); /* they name visited hosts */
         au_browser_history_changed(g_browser);
         break;
     case F_CLEAR_COOKIES:

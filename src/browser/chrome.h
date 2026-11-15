@@ -110,6 +110,7 @@ int au_chrome_drop_index(const AuChromeLayout *l, int x, int y);
 typedef struct AuChromeTab {
     const char *title; /* "" shows the URL or "Untitled" */
     bool loading;
+    const AuSurface *icon; /* the site's 16 x 16 icon, or NULL for the page glyph */
 } AuChromeTab;
 
 typedef struct AuChromeState {

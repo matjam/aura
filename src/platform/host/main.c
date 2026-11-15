@@ -861,6 +861,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         host.invalidate = key_inval;
     }
     AuBrowser *b = au_browser_new(fonts, &host);
+    b->site_icons = true;
     if (o->no_doc_cache)
         b->prefs.document_cache_pages = 0;
     /* --net: http and https through the network stack and page fetcher,

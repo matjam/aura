@@ -542,6 +542,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     if (rq->revalidate && !rq->reload)
         au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
+    hr.omit_credentials = rq->omit_credentials;
     AuHttpCallbacks hc = {r, t_response, t_data, t_done, l->blocklist ? t_redirect : NULL, NULL};
     r->t = au_http_start(l->net, &hr, &hc);
     au_http_request_free(&hr);
