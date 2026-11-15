@@ -112,6 +112,47 @@ bool au_present_pending(const AuPresent *p)
     return p->n > 0 || p->shifting;
 }
 
+/* Copies n pixels, word by word. memmove is not used: newlib's on Mac OS
+ * 9 (built for size) copies a byte at a time, and a page-sized shift
+ * took about 120 ms in the guest at 1400 x 900. backward copies from the
+ * end, for a destination after an overlapping source. */
+static void copy_pixels(AuPixel *d, const AuPixel *s, size_t n, bool backward)
+{
+    if (!backward) {
+        size_t i = 0;
+        for (; i + 8 <= n; i += 8) {
+            AuPixel a = s[i], b = s[i + 1], c = s[i + 2], e = s[i + 3];
+            AuPixel f = s[i + 4], g = s[i + 5], h = s[i + 6], k = s[i + 7];
+            d[i] = a;
+            d[i + 1] = b;
+            d[i + 2] = c;
+            d[i + 3] = e;
+            d[i + 4] = f;
+            d[i + 5] = g;
+            d[i + 6] = h;
+            d[i + 7] = k;
+        }
+        for (; i < n; i++)
+            d[i] = s[i];
+    } else {
+        size_t i = n;
+        for (; i >= 8; i -= 8) {
+            AuPixel a = s[i - 1], b = s[i - 2], c = s[i - 3], e = s[i - 4];
+            AuPixel f = s[i - 5], g = s[i - 6], h = s[i - 7], k = s[i - 8];
+            d[i - 1] = a;
+            d[i - 2] = b;
+            d[i - 3] = c;
+            d[i - 4] = e;
+            d[i - 5] = f;
+            d[i - 6] = g;
+            d[i - 7] = h;
+            d[i - 8] = k;
+        }
+        for (; i > 0; i--)
+            d[i - 1] = s[i - 1];
+    }
+}
+
 void au_present_shift_pixels(AuSurface *s, AuIRect area, int dx, int dy)
 {
     area = au_irect_intersect(area, (AuIRect){0, 0, s->width, s->height});
@@ -122,20 +163,23 @@ void au_present_shift_pixels(AuSurface *s, AuIRect area, int dx, int dy)
     int sx0 = dx >= 0 ? area.x0 : area.x0 - dx;
     int cols = w - abs(dx);
     int rows = h - abs(dy);
-    size_t bytes = (size_t)cols * sizeof(AuPixel);
+    size_t n = (size_t)cols;
+    /* Rows move to other rows, so only a move within a row (dy == 0)
+     * overlaps; moving right then copies from the end. */
+    bool backward = dy == 0 && dx > 0;
     if (dy > 0) {
         /* Moving down: copy from the bottom up. */
         for (int i = rows - 1; i >= 0; i--) {
             int sy = area.y0 + i;
-            memmove(s->pixels + (size_t)(sy + dy) * (size_t)s->stride + (size_t)(sx0 + dx),
-                    s->pixels + (size_t)sy * (size_t)s->stride + (size_t)sx0, bytes);
+            copy_pixels(s->pixels + (size_t)(sy + dy) * (size_t)s->stride + (size_t)(sx0 + dx),
+                        s->pixels + (size_t)sy * (size_t)s->stride + (size_t)sx0, n, backward);
         }
     } else {
         int sy0 = area.y0 - dy;
         for (int i = 0; i < rows; i++) {
             int sy = sy0 + i;
-            memmove(s->pixels + (size_t)(sy + dy) * (size_t)s->stride + (size_t)(sx0 + dx),
-                    s->pixels + (size_t)sy * (size_t)s->stride + (size_t)sx0, bytes);
+            copy_pixels(s->pixels + (size_t)(sy + dy) * (size_t)s->stride + (size_t)(sx0 + dx),
+                        s->pixels + (size_t)sy * (size_t)s->stride + (size_t)sx0, n, backward);
         }
     }
 }

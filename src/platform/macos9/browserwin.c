@@ -41,7 +41,8 @@ struct BrowserWin {
     AuPresent pres; /* damage and the pending scroll move */
     /* Debug > Page Timings: time in flush, split into painting into the
      * GWorld and copying to the screen (moves included). */
-    uint32_t paint_us, blit_us;
+    uint32_t paint_us, blit_us; /* Page Timings: painting (with shift_us) and copying */
+    uint32_t shift_us, areas;   /* moving the offscreen pixels; areas painted */
     Point last_mouse;
     char *undo; /* field text before the last edit (Mac Roman) */
     size_t undo_len;
@@ -220,7 +221,10 @@ static void scroll_screen(BrowserWin *b, AuIRect area, int dx, int dy)
  * the damaged rectangles into it. */
 static void paint_pending(BrowserWin *b, AuPresentRound *r)
 {
+    uint32_t t0 = au_mac_clock_us();
     au_present_begin(&b->pres, b->surf, r);
+    b->shift_us += au_mac_clock_us() - t0;
+    b->areas += (uint32_t)r->n;
     if (!b->surf || r->n == 0)
         return;
     AuCanvas *c = au_canvas_new(b->surf);
@@ -1350,9 +1354,19 @@ static void ms10(char *out, size_t cap, uint32_t tenths)
 
 typedef struct TimedScroll {
     int steps;
-    uint32_t total_us, paint_us, blit_us;
+    uint32_t total_us, paint_us, blit_us, shift_us, areas;
     size_t hits, misses, evictions; /* glyph cache */
 } TimedScroll;
+
+static void timing_reset(BrowserWin *b) { b->paint_us = b->blit_us = b->shift_us = b->areas = 0; }
+
+static void timing_take(BrowserWin *b, TimedScroll *r)
+{
+    r->paint_us += b->paint_us;
+    r->blit_us += b->blit_us;
+    r->shift_us += b->shift_us;
+    r->areas += b->areas;
+}
 
 /* Scrolls by step up to n times, flushing after each as the event loop
  * does, and times it. */
@@ -1363,7 +1377,7 @@ static TimedScroll timed_scrolls(BrowserWin *b, AuTab *t, int step, int n)
     flush(b);
     AuGlyphCacheStats g0, g1;
     au_glyph_cache_stats(&g0);
-    b->paint_us = b->blit_us = 0;
+    timing_reset(b);
     uint32_t u0 = au_mac_clock_us();
     for (int i = 0; i < n; i++) {
         int before = t->scroll_y;
@@ -1374,8 +1388,7 @@ static TimedScroll timed_scrolls(BrowserWin *b, AuTab *t, int step, int n)
         r.steps++;
     }
     r.total_us = au_mac_clock_us() - u0;
-    r.paint_us = b->paint_us;
-    r.blit_us = b->blit_us;
+    timing_take(b, &r);
     au_glyph_cache_stats(&g1);
     r.hits = g1.hits - g0.hits;
     r.misses = g1.misses - g0.misses;
@@ -1383,15 +1396,18 @@ static TimedScroll timed_scrolls(BrowserWin *b, AuTab *t, int step, int n)
     return r;
 }
 
-/* "12.3 = 4.5 + 6.7" per step, in milliseconds. */
+/* "12.3 = 1.0+3.5+6.7 (2)": per step, total = moving pixels + painting +
+ * copying to the screen in milliseconds, and the areas painted per step. */
 static void timed_text(char *out, size_t cap, const TimedScroll *s)
 {
-    char a[16], p[16], c[16];
+    char a[16], m[16], p[16], c[16];
     uint32_t n = s->steps > 0 ? (uint32_t)s->steps : 1;
+    uint32_t paint = s->paint_us > s->shift_us ? s->paint_us - s->shift_us : 0;
     ms10(a, sizeof a, s->total_us / 100 / n);
-    ms10(p, sizeof p, s->paint_us / 100 / n);
+    ms10(m, sizeof m, s->shift_us / 100 / n);
+    ms10(p, sizeof p, paint / 100 / n);
     ms10(c, sizeof c, s->blit_us / 100 / n);
-    snprintf(out, cap, "%s = %s + %s", a, p, c);
+    snprintf(out, cap, "%s = %s+%s+%s (%lu)", a, m, p, c, (unsigned long)((s->areas + n / 2) / n));
 }
 
 void browserwin_page_timings(BrowserWin *b)
@@ -1410,7 +1426,16 @@ void browserwin_page_timings(BrowserWin *b)
     int start = t->scroll_y;
     const AuChromeLayout *l = &b->bw->layout;
     int page = (l->page.y1 - l->page.y0) - 40;
-    TimedScroll small = timed_scrolls(b, t, start + 320 <= my ? 32 : -32, 10);
+    /* The 32-pixel steps run twice: the first time shows content never
+     * painted before (glyphs to draw, images to decode), the second the
+     * steady state. */
+    int dir = start + 320 <= my ? 32 : -32;
+    TimedScroll small = timed_scrolls(b, t, dir, 10);
+    au_bw_scroll_to(b->bw, t->scroll_x, start);
+    flush(b);
+    TimedScroll again = timed_scrolls(b, t, dir, 10);
+    au_bw_scroll_to(b->bw, t->scroll_x, start);
+    flush(b);
     TimedScroll big = timed_scrolls(b, t, start + 5 * page <= my ? page : -page, 5);
     au_bw_scroll_to(b->bw, t->scroll_x, start);
     flush(b);
@@ -1419,37 +1444,42 @@ void browserwin_page_timings(BrowserWin *b)
     AuGlyphCacheStats g0, g1;
     au_glyph_cache_stats(&g0);
     for (int i = 0; i < 3; i++) {
-        b->paint_us = b->blit_us = 0;
+        timing_reset(b);
         au_present_invalidate(&b->pres, l->page);
         uint32_t u0 = au_mac_clock_us();
         flush(b);
         full.total_us += au_mac_clock_us() - u0;
-        full.paint_us += b->paint_us;
-        full.blit_us += b->blit_us;
+        timing_take(b, &full);
         full.steps++;
     }
     au_glyph_cache_stats(&g1);
     update_scroll(b);
     long heap_free = FreeMem(), heap_block = MaxBlock();
     long temp_free = (long)TempFreeMem();
-    char l0[200], l1[200], l2[400], l3[256], a[3][64];
+    AuPageStats st2;
+    au_page_stats(t->page, &st2);
+    char l0[200], l1[300], l2[512], l3[256], a[4][96];
     snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).", au_page_title(t->page),
              (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
-    snprintf(l1, sizeof l1, "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu resources.",
+    snprintf(l1, sizeof l1,
+             "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu "
+             "resources. Images: %luK of %luK, %lu decodes.",
              (unsigned long)st.layout_ms, (unsigned long)st.layouts, (unsigned long)st.layout_total_ms,
              (unsigned long)st.paint_ms, (unsigned long)st.boxes, (unsigned long)st.bytes,
-             (unsigned long)st.resources);
+             (unsigned long)st.resources, (unsigned long)st2.image_kb, (unsigned long)st2.image_budget_kb,
+             (unsigned long)st2.image_decodes);
     if (small.steps) {
         timed_text(a[0], sizeof a[0], &small);
-        timed_text(a[1], sizeof a[1], &big);
-        timed_text(a[2], sizeof a[2], &full);
+        timed_text(a[1], sizeof a[1], &again);
+        timed_text(a[2], sizeof a[2], &big);
+        timed_text(a[3], sizeof a[3], &full);
         snprintf(l2, sizeof l2,
-                 "Scrolling (ms: total = painting + copying to the screen): 32-pixel step %s; page down %s; "
-                 "whole page %s.",
-                 a[0], a[1], a[2]);
+                 "Scrolling, ms per step (total = moving + painting + copying, areas): 32 px %s, again %s; "
+                 "page down %s; whole page %s.",
+                 a[0], a[1], a[2], a[3]);
     } else {
-        timed_text(a[2], sizeof a[2], &full);
-        snprintf(l2, sizeof l2, "Scrolling: the page does not scroll; whole page %s ms.", a[2]);
+        timed_text(a[3], sizeof a[3], &full);
+        snprintf(l2, sizeof l2, "Scrolling: the page does not scroll; whole page %s ms.", a[3]);
     }
     AuGlyphCacheStats gs;
     au_glyph_cache_stats(&gs);
@@ -1457,9 +1487,9 @@ void browserwin_page_timings(BrowserWin *b)
              "Memory: heap %ldK free (largest block %ldK), temporary memory %ldK free. Glyph cache: %luK, "
              "%lu glyphs; in these scrolls %lu hits, %lu misses, %lu evictions.",
              heap_free / 1024, heap_block / 1024, temp_free / 1024, (unsigned long)(gs.bytes / 1024),
-             (unsigned long)gs.entries, (unsigned long)(small.hits + big.hits + g1.hits - g0.hits),
-             (unsigned long)(small.misses + big.misses + g1.misses - g0.misses),
-             (unsigned long)(small.evictions + big.evictions + g1.evictions - g0.evictions));
+             (unsigned long)gs.entries, (unsigned long)(small.hits + again.hits + big.hits + g1.hits - g0.hits),
+             (unsigned long)(small.misses + again.misses + big.misses + g1.misses - g0.misses),
+             (unsigned long)(small.evictions + again.evictions + big.evictions + g1.evictions - g0.evictions));
     Str255 p[4];
     mac_pstr(l0, p[0]);
     mac_pstr(l1, p[1]);

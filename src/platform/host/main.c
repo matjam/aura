@@ -384,6 +384,22 @@ static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
                (unsigned long)(g1.hits - g0.hits), (unsigned long)(g1.misses - g0.misses),
                (unsigned long)(g1.evictions - g0.evictions), (unsigned long)(g1.bytes / 1024));
     }
+    /* Images: page downs to the end and back up, as a reader does. */
+    AuPageStats p0, p1;
+    au_page_stats(t->page, &p0);
+    for (int dir = 1; dir >= -1; dir -= 2)
+        for (int i = 0; i < 400; i++) {
+            int before = t->scroll_y;
+            au_bw_scroll_by(w, 0, dir * page);
+            if (t->scroll_y == before)
+                break;
+            bench_flush(w, s, screen, &bt);
+        }
+    au_page_stats(t->page, &p1);
+    printf("images, down to the end and back: %lu decodes, %lu evictions; %lu KB decoded of a %lu KB budget\n",
+           (unsigned long)(p1.image_decodes - p0.image_decodes),
+           (unsigned long)(p1.image_evictions - p0.image_evictions), (unsigned long)p1.image_kb,
+           (unsigned long)p1.image_budget_kb);
     au_surface_free(s);
     au_surface_free(screen);
 }

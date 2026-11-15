@@ -417,6 +417,8 @@ typedef struct AuPageStats {
     uint32_t bytes;          /* document bytes received */
     uint32_t resources;      /* style sheets and images requested */
     uint32_t boxes;          /* layout boxes */
+    uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
+    uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);
 

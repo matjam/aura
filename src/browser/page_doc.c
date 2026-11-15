@@ -25,6 +25,7 @@
 
 #include "credits.h"
 #include "history.h"
+#include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../page/page.h"
 
@@ -2568,6 +2569,12 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     AuLayoutStats ls;
     au_layout_stats(au_docview_layout(p->dv), &ls);
     s->boxes = ls.boxes;
+    AuImageCacheStats is;
+    au_docview_image_stats(p->dv, &is);
+    s->image_decodes = is.decodes;
+    s->image_evictions = is.evictions;
+    s->image_kb = (uint32_t)(is.decoded_bytes / 1024);
+    s->image_budget_kb = (uint32_t)(is.budget / 1024);
 }
 
 /* ---- Scrolling by moving pixels ---- */
