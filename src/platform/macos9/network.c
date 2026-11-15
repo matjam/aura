@@ -681,3 +681,24 @@ void mac_net_quit(void)
     au_mac_entropy_free(N.entropy);
     memset(&N, 0, sizeof N);
 }
+
+/* ---- Developer windows ---- */
+
+void mac_net_dev_info(struct AuDevHostInfo *h, AuBuf *conn)
+{
+    if (N.net)
+        au_net_dev_info(N.net, h, conn);
+}
+
+void mac_net_connections_text(AuBuf *out)
+{
+    int total, busy;
+    if (N.net)
+        au_net_connections_text(N.net, out, &total, &busy);
+}
+
+void mac_net_trace_headers(bool on)
+{
+    if (N.net)
+        au_net_set_trace_headers(N.net, on);
+}
