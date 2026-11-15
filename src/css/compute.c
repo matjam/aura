@@ -182,7 +182,19 @@ static void set_len(AuLen *dst, const AuLen *src)
         au_css_blob_retain(src->u.calc);
     if (dst->kind == AU_LEN_CALC)
         au_css_blob_release(dst->u.calc);
-    *dst = *src;
+    /* Store the members in zeroed bytes. Groups are compared with memcmp
+     * (css_group_same, layout's style_diff), and callers fill `src` on the
+     * stack, so its padding, and on a 64-bit host the half of the union a
+     * float leaves unused, hold whatever was there: equal styles then
+     * compared as different, depending on the run. */
+    AuLen v;
+    memset(&v, 0, sizeof v);
+    v.kind = src->kind;
+    if (src->kind == AU_LEN_CALC)
+        v.u.calc = src->u.calc;
+    else
+        v.u.px = src->u.px;
+    memcpy(dst, &v, sizeof v);
 }
 
 static void set_blob(AuCssBlob **dst, AuCssBlob *src)

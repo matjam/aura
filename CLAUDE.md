@@ -37,6 +37,19 @@ what you need to build, test and change Aura.
   redistributable bundled fonts in `assets/fonts`, which are committed
   with their licences.
 - Write docs instruction first ("To X, use Y"), in plain technical prose.
+- Commit messages follow Conventional Commits, because release-please
+  works out the next version and the changelog from them: a type, a
+  colon, then the subject as a plain sentence, as before. `fix:` a bug
+  fix (bug-fix digit); `feat:` something a user of Aura can see or use
+  (minor digit); `perf:` faster or smaller; `docs:` documentation only;
+  `test:` tests only; `chore:` tooling, CI, merges and clean-up;
+  `refactor:` no change in behaviour. `feat!:` or `fix!:` marks a change
+  that breaks something users rely on (stored preferences that no longer
+  load, say). Only `feat`, `fix`, `perf` and breaking changes appear in
+  the changelog, and only they cause a release. A merge commit keeps a
+  conventional subject too: `chore: merge main into grid`, or `feat:
+  CSS grid layout` when the merge is what brings the feature to `main`
+  and its own commits were not conventional.
 
 ## Layout
 
@@ -59,6 +72,7 @@ what you need to build, test and change Aura.
 | `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts |
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
+| `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive (see CI and releases) |
 | `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
@@ -78,11 +92,108 @@ change to the top-level file.
   keeps the toolchain it was first configured with; delete it to switch.
   It also assembles the distributable folder `build/ppc/dist/Aura`: the
   application (`Aura.bin`, MacBinary) beside `Fonts` (the family folders
-  of `assets/fonts`, `fonts.idx` and the fonts' README).
+  of `assets/fonts`, `fonts.idx` and the fonts' README). Then it packs
+  that folder as the self-extracting archive, `Aura-VERSION.sea.bin` and
+  `Aura-VERSION.hqx` in `build/ppc/dist` (see CI and releases).
 - To run the tests under AddressSanitizer and UBSan, configure a separate
   folder: `cmake -S . -B build/asan -G Ninja
   -DCMAKE_C_FLAGS="-fsanitize=address,undefined"`, then `cmake --build
   build/asan` and `ctest --test-dir build/asan`.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull
+requests; `release.yml` makes releases. They need nothing outside the
+repository: no disk images, no QEMU, no secrets.
+
+- **Jobs.** `host` runs `./build.sh test` on Ubuntu (GCC) and macOS
+  (Apple Clang). `sanitize` runs the tests on Ubuntu under Clang's
+  AddressSanitizer and UBSan, with leak detection off (several tests do
+  not free everything at exit; macOS, where the sanitizer build is run by
+  hand, does not detect leaks either). `toolchain` builds Retro68 when
+  the cache has none and `ppc` runs `./build.sh ppc` and uploads the two
+  archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and
+  `Aura-VERSION-SHORTHASH-sea-bin`; both are in `build-ppc.yml`, a
+  reusable workflow.
+- **The toolchain cache.** `~/.local/opt/retro68` is cached under the
+  key `retro68-Linux-` plus the hash of `toolchain/build.sh`. To rebuild
+  the toolchain in CI, change that script (the pinned commit, say). A
+  cold build takes about 15 minutes; a newer push does not cancel it. A
+  cache made on a branch serves that branch only; `main`'s serves every
+  branch and pull request.
+- **To make a release**, merge the pull request release-please keeps
+  open ("chore: release VERSION"). `.github/workflows/release.yml` runs
+  release-please on every push to `main`: it reads the Conventional
+  Commits since the last release and opens or updates that pull request,
+  which sets `AU_VERSION` in `src/browser/credits.h` (the line marked
+  `x-release-please-version`), `version.txt`, `CHANGELOG.md` and
+  `.release-please-manifest.json`. When the pull request is merged, the
+  same workflow tags the merge commit `vVERSION`, creates the GitHub
+  release with the changelog entry as its notes, builds the archive from
+  that commit and attaches `Aura-VERSION.hqx` and
+  `Aura-VERSION.sea.bin`. Do not push a tag or edit `AU_VERSION` by
+  hand. To force a version, add `"release-as": "X.Y.Z"` to the package in
+  `release-please-config.json` and remove it after that release.
+- **The version** lives in one place, `AU_VERSION` (three numbers, with
+  one-digit minor and bug-fix parts so that it fits the BCD byte of a
+  `vers` resource). The About box, the user agent, both applications'
+  `vers` resources (generated by CMake from `aura_vers.r.in` and
+  `sea/sea_vers.r.in`), `tools/version.sh` and the archive's file names
+  read it. A `feat:` raises the minor part, a `fix:` or `perf:` the last
+  part; before 1.0 a breaking change raises the minor part.
+- **release-please's settings** are `release-please-config.json`
+  (release type `simple`; `bootstrap-sha` is the commit where changelog
+  collection starts, so the history before Conventional Commits is not
+  read; `initial-version` makes the first release 0.3.0; both stop
+  mattering after the first release) and `.release-please-manifest.json`
+  (the last released version, written by release-please). It needs the
+  repository setting Settings > Actions > General > "Allow GitHub
+  Actions to create and approve pull requests". A release made with the
+  workflow's token starts no other workflow, which is why the build is a
+  job of `release.yml` (it calls `build-ppc.yml`, as `ci.yml` does).
+- **Actions are pinned** to a commit, with the release in a comment. To
+  update one, look up the release's commit (`gh api
+  repos/OWNER/REPO/commits/TAG -q .sha`) and change both.
+- **To build the archive locally**, run `./build.sh ppc`. It writes
+  `build/ppc/dist/Aura-VERSION.sea.bin` (MacBinary) and
+  `Aura-VERSION.hqx` (BinHex 4.0) from `build/ppc/dist/Aura`. To pack
+  another folder or stub, run `tools/make-sea.py DISTFOLDER OUT.bin
+  [--stub AuraSEA.bin] [--date SECONDS]`, then `tools/binhex.py OUT.bin
+  OUT.hqx`. `tools/make-sea.py --list OUT.bin` checks an archive and
+  prints its entries and a SHA-256 of the unpacked contents;
+  `tools/binhex.py --decode IN.hqx OUT.bin` and `--compare IN.hqx
+  REF.bin` read BinHex back.
+- **The archive** is one Mac OS 9 application, "Aura VERSION Installer"
+  (`src/platform/macos9/sea`, creator `AuSX`). `make-sea.py` appends the
+  packed folder to the stub's data fork, after the PowerPC code, and
+  changes the stub's `cfrg` resource from "the code runs to the end of
+  the fork" to the code's length, so that Mac OS does not load the
+  archive with the code. Each file carries its path, type, creator,
+  Finder flags, dates and both forks, each fork as a raw deflate stream
+  with a CRC-32; `sea_archive.h` gives the layout. The packer maps host
+  files as `tools/guest-push.sh` does (`.bin` is MacBinary, fonts become
+  `tfil`/`AURA`, licences become SimpleText documents). Every date is
+  the last commit's (or `SOURCE_DATE_EPOCH`), so one machine builds the
+  same bytes from the same commit. A Linux and a macOS build of one
+  commit differ in the application and the stub: the same code, with
+  functions at other addresses.
+- **The installer** (`sea.c`) asks for the folder with `StandardPutFile`
+  (starting beside itself, with the first free name of "Aura", "Aura 2"
+  and so on; it never replaces an item), writes the files through
+  `sea_archive.c` with two fixed buffers (16 KB in, 32 KB out) and
+  Aura's inflate decoder, sets Finder info and dates, checks every CRC,
+  and sends the Finder an Open Documents event for the new folder. On
+  an error or Command-period it deletes the folder it made and shows
+  what failed. Its partition is 1 MB. `sea_archive.c` is portable:
+  `tests/tools` builds `sea_extract` from it and checks it on the host
+  against the packer, with damaged copies (`tools_sea_extract` in
+  ctest), beside the self-tests of `binhex.py`, `make-sea.py` and
+  `finder-flags.py`.
+- **To test the archive in the guest**, push the `.hqx` with
+  `tools/guest-push.sh` (it arrives as a StuffIt Expander text document)
+  and open it: Expander is on the stock system, asks for a folder
+  because the disc is locked, and writes the installer there. Or push
+  the `.sea.bin`, which arrives as the application.
 
 ## Dependencies outside the repository
 
@@ -96,7 +207,8 @@ by its own scripts or kept in git-ignored folders here.
   `$RETRO68`). It does nothing when that folder's `REVISION` names the
   pinned commit. To move to another commit, change it in the script,
   empty the install folder, and run the script. In CI, cache
-  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`.
+  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`
+  (the workflow does; see CI and releases).
 - **QEMU.** To install the QEMU the test machine runs, run
   `qemu/build.sh`. It clones the release pinned in the script (v11.1.3)
   into `qemu/src`, applies `qemu/patches/*.patch`, and installs in
@@ -148,7 +260,8 @@ bundled fonts). A folder argument is copied with its subfolders; fonts
 get type `tfil` and creator `AURA`, licences and READMEs become
 SimpleText documents, and `.html`, `.css`, `.js` and `.idx` files are
 copied byte for byte (hcopy's text mode would translate UTF-8 as
-Latin-1). HFS names are at most 31 characters.
+Latin-1). A `.hqx` file is copied byte for byte as a StuffIt Expander
+text document, for the guest to decode. HFS names are at most 31 characters.
 The files arrive as a CD named AuraTest on the guest's desktop. The
 previous disc is ejected first through the Finder; the script types
 nothing until the guest's current application (`CurApName`) is the

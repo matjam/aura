@@ -5,7 +5,9 @@
 #
 # Builds an HFS volume holding the files and inserts it as the guest's CD;
 # Mac OS mounts it on the desktop. .bin files are decoded as MacBinary
-# (keeping resource forks, type and creator) and .hqx as BinHex. .html,
+# (keeping resource forks, type and creator). .hqx files are copied byte
+# for byte as text documents of StuffIt Expander (TEXT/SITx), so that the
+# guest decodes the BinHex, not hcopy. .html,
 # .css, .js and .svg files are copied byte for byte as Aura documents
 # (TEXT/AURA). .ttf and .ttc files become type tfil, creator AURA
 # (data-fork TrueType for Aura); .idx files are copied byte for byte as
@@ -78,6 +80,10 @@ copy_file() {
     LICENSE*|OFL*|README*|*.txt|*.md)
       HOME=$AURA_RUN hcopy -t "$1" "$2$base"
       HOME=$AURA_RUN hattrib -t TEXT -c ttxt "$2$base" ;;
+    *.hqx)
+      # Raw: the guest's StuffIt Expander decodes it (hcopy -a would).
+      HOME=$AURA_RUN hcopy -r "$1" "$2$base"
+      HOME=$AURA_RUN hattrib -t TEXT -c SITx "$2$base" ;;
     *.html|*.htm|*.css|*.js|*.svg)
       # Raw: text mode would translate UTF-8 bytes as Latin-1.
       HOME=$AURA_RUN hcopy -r "$1" "$2$base"
