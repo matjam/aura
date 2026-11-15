@@ -109,6 +109,49 @@ pixel 10 10 808080
 #s h=100
 pixel 10 10 ff0000
 
+=== scrolling a container moves its content, clamped to the extent
+<body style="margin:0">
+<div id=s style="overflow:auto;width:100px;height:100px;padding:10px;box-sizing:border-box">
+<div id=a style="height:50px;background:#ff0000"></div>
+<div id=b style="height:50px;background:#00ff00"></div>
+<div id=c style="height:50px;background:#0000ff"></div>
+</div>
+---
+pixel 50 15 ff0000
+hit 50 15 #a
+// extent: 10 + 150 + 10 bottom padding = 170, so at most 70 of scrolling
+scrollat 50 50 0 1000 yes
+pixel 50 85 0000ff
+hit 50 85 #c
+hit 50 95 #s
+pixel 50 20 00ff00
+hit 50 20 #b
+scrollat 50 50 0 10 no
+scrollat 50 50 0 -1000 yes
+hit 50 15 #a
+
+=== a container that fits does not scroll
+<body style="margin:0">
+<div style="overflow:auto;width:100px;height:100px;padding:20px">
+<div style="height:100px;width:100px"></div>
+</div>
+---
+scrollat 50 50 0 50 no
+scrollat 50 50 50 0 no
+
+=== horizontal scroll extent includes the end padding
+<body style="margin:0">
+<div style="overflow:auto;width:100px;height:50px;padding-right:10px;white-space:nowrap">
+<span style="display:inline-block;width:150px;height:10px;background:#ff0000"></span>
+</div>
+---
+pixel 95 5 ff0000
+pixel 105 5 ff0000
+scrollat 50 5 1000 0 yes
+// extent 160 in a 110 padding box: 50 of scrolling; the span ends at 100
+pixel 95 5 ff0000
+pixel 105 5 ffffff
+
 === visibility hidden paints nothing and is not hit
 <body style="margin:0">
 <div style="visibility:hidden;width:50px;height:50px;background:#ff0000"><span id=v style="visibility:visible;display:inline-block;width:10px;height:10px;background:#00ff00"></span></div>

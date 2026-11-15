@@ -228,14 +228,11 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
             uint32_t wl = word_end - sg->start;
             /* A forced newline is not measured. */
             sg->w = wl ? l_measure(L, f, s, x + sg->start, wl) : 0;
+            /* Trailing spaces stay separate in nowrap too (no break
+             * opportunity there), so that they are removed at the end of
+             * the line. */
             if (sg->trail)
                 sg->trail_w = l_measure(L, f, s, x + word_end, sg->trail);
-            if (!pre_sp && !wrap && sg->trail) {
-                /* nowrap: the spaces are ordinary content between words. */
-                sg->w += sg->trail_w;
-                sg->trail_w = 0;
-                sg->trail = 0;
-            }
         }
         sg->wmin = sg->w;
         if (i == sg->start)
@@ -393,6 +390,7 @@ void l_inline_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     const AuStyle *rs = b->b.style;
     float indent = rs->inhr->text_indent.kind == AU_LEN_PX ? rs->inhr->text_indent.u.px : 0;
     float mn = 0, mx = 0, run = indent, line = indent, floats = 0;
+    float run_trail = 0; /* trailing spaces at the end of run */
     for (uint32_t i = base; i < L->nsegs; i++) {
         LSeg *s = &L->segs[i];
         if (s->kind == IT_ABS)
@@ -402,6 +400,7 @@ void l_inline_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
             floats += s->w;
             continue;
         }
+        run_trail = 0;
         if (s->flags & SF_BREAK_BEFORE) {
             mn = l_max(mn, run);
             run = 0;
@@ -440,10 +439,14 @@ void l_inline_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
             run = 0;
             if (s->flags & SF_SHY)
                 mn = l_max(mn, w);
+        } else {
+            /* No break after the spaces (nowrap): they join the run. */
+            run += s->trail_w;
+            run_trail = s->trail_w;
         }
         line += s->trail_w;
     }
-    mn = l_max(mn, run);
+    mn = l_max(mn, run - run_trail);
     mx = l_max(mx, line);
     /* Trailing spaces do not count at the end of the content. */
     if (L->nsegs > base) {

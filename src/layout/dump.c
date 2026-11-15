@@ -119,6 +119,23 @@ void l_dump(AuLayout *L, AuBuf *o)
                 num(o, k->w);
                 au_buf_putc(o, 'x');
                 num(o, k->h);
+                static const char *const en[3] = {"m", "b", "p"};
+                const float *ev[3] = {k->m, k->bw, k->p};
+                for (int e = 0; e < 3; e++)
+                    if (ev[e][0] || ev[e][1] || ev[e][2] || ev[e][3]) {
+                        au_buf_printf(o, " %s=", en[e]);
+                        for (int s = 0; s < 4; s++) {
+                            if (s)
+                                au_buf_putc(o, ',');
+                            num(o, ev[e][s]);
+                        }
+                    }
+                if (b->flags & LF_CLIPS) {
+                    au_buf_puts(o, " extent=");
+                    num(o, k->sw);
+                    au_buf_putc(o, 'x');
+                    num(o, k->sh);
+                }
             } else if (b->kind == LK_TEXT) {
                 au_buf_putc(o, ' ');
                 quoted(o, ((LText *)b)->text, ((LText *)b)->len);

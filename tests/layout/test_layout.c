@@ -13,6 +13,9 @@
  *   pixel X Y RRGGBB        colour at viewport pixel (X, Y), +-8 per channel
  *   doc w=W h=H             document size
  *   scroll Y                paint and hit test with the document scrolled
+ *   scrollat X Y DX DY [yes|no]
+ *                           scroll the container under (X, Y) by DX, DY;
+ *                           yes/no checks whether it scrolled
  *   link X Y url            the link under (X, Y) resolves to url
  *
  * Cases run in standards mode: "<!DOCTYPE html>" is prepended unless the
@@ -141,6 +144,26 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
             continue;
         if (ln[0] == '/' && ln[1] == '/')
             continue;
+        if (!strncmp(ln, "scrollat ", 9)) {
+            /* scrollat X Y DX DY [yes|no]: scroll the container under the
+             * viewport point; the optional word checks the result. */
+            char *p = ln + 9;
+            int x = (int)strtol(p, &p, 10), y = (int)strtol(p, &p, 10);
+            int dx = (int)strtol(p, &p, 10), dy = (int)strtol(p, &p, 10);
+            while (*p == ' ')
+                p++;
+            bool did = au_docview_scroll_at(dv, x, y + scroll, dx, dy);
+            if (*p) {
+                checks++;
+                if (did != (strcmp(p, "yes") == 0))
+                    fail(line, "scrollat %d,%d: expected %s", x, y, p);
+            }
+            if (surf) {
+                au_surface_free(surf);
+                surf = NULL;
+            }
+            continue;
+        }
         if (!strncmp(ln, "scroll ", 7)) {
             scroll = atoi(ln + 7);
             if (surf) {

@@ -575,9 +575,9 @@ static void union_children(LBlock *b, LRect *ink, LRect *scroll)
             LBlock *k = (LBlock *)c;
             if (!(c->flags & LF_FIXED)) {
                 add_rect(ink, k->x + k->ov.x, k->y + k->ov.y, k->ov.w, k->ov.h);
-                float mr = (c->flags & (LF_ABSPOS | LF_FLOAT)) || 1 ? k->m[1] : 0;
+                /* A clipping child contributes its margin box. */
                 if (c->flags & LF_CLIPS)
-                    add_rect(scroll, k->x, k->y, k->w + l_max(0, mr), k->h + l_max(0, k->m[2]));
+                    add_rect(scroll, k->x, k->y, k->w + l_max(0, k->m[1]), k->h + l_max(0, k->m[2]));
                 else
                     add_rect(scroll, k->x + k->ov.x, k->y + k->ov.y, k->ov.w, k->ov.h);
             }
@@ -599,9 +599,9 @@ void l_finish_overflow(LBlock *b)
 {
     LRect ink = {0, 0, b->w, b->h};
     shadow_extent(b, &ink);
-    /* Content extent, for scroll containers: from the padding-box origin. */
-    LRect sc = {b->bw[3], b->bw[0], b->w - b->bw[1] - b->bw[3], b->h - b->bw[0] - b->bw[2]};
-    LRect content = sc;
+    /* Content extent, for scroll containers: starts as the content box; the
+     * end padding is added below and the padding box is the minimum. */
+    LRect content = {b->bw[3] + b->p[3], b->bw[0] + b->p[0], l_max(0, b->w - l_bp_h(b)), l_max(0, b->h - l_bp_v(b))};
     for (uint32_t i = 0; i < b->nlines; i++) {
         LLine *ln = &b->lines[i];
         add_rect(&content, ln->x, ln->y, ln->w, ln->h);
