@@ -636,6 +636,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         }
     }
     bool line_start = true;
+    float hang = 0; /* hanging preserved spaces of the last text segment */
     for (uint32_t i = a; i <= e; i++) {
         LSeg *s = &L->segs[i];
         switch (s->kind) {
@@ -723,6 +724,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             x += w + (trim_trail || lead_skip ? 0 : s->trail_w);
             if (vis)
                 line_start = false;
+            /* Preserved spaces at the end of a wrapped line hang: they
+             * take no room for alignment or overflow (CSS Text 3, 4.1.3). */
+            hang = at_end && (s->flags & SF_PRESERVED) && !lead_skip && S->fb.n > first &&
+                           S->fb.f[S->fb.n - 1].box == s->box
+                       ? s->trail_w
+                       : 0;
             break;
         }
         case IT_ATOMIC: {
@@ -760,6 +767,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         }
     }
     float line_w = x;
+    if (hang > 0 && S->fb.n > first && S->fb.f[S->fb.n - 1].kind == FR_TEXT) {
+        LFrag *hf = &S->fb.f[S->fb.n - 1];
+        float cut = l_min(hang, hf->w);
+        hf->w -= cut;
+        line_w -= cut;
+    }
     uint32_t nfr = S->fb.n - first;
 
     /* text-overflow: ellipsis / line-clamp. */
@@ -891,10 +904,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         if (f->kind == FR_ATOMIC) {
             LBlock *k = (LBlock *)f->box;
             float mh = k->h + k->m[0] + k->m[2];
-            bool use_bottom = isnan(k->last_baseline) || (k->b.flags & LF_CLIPS) || k->b.inner == LI_REPLACED;
-            float bl = use_bottom ? mh : k->m[0] + k->last_baseline;
-            if (k->b.inner == LI_FLEX && !isnan(k->baseline))
-                bl = k->m[0] + k->baseline;
+            float bl = l_atomic_baseline(k);
             int va = k->b.style->box->vertical_align;
             if (P->valign == AU_VALIGN_TOP || P->valign == AU_VALIGN_BOTTOM)
                 va = AU_VALIGN_BASELINE;

@@ -54,6 +54,7 @@ typedef struct AuFontFace {
     int16_t underline_pos, underline_thickness;
     int16_t strike_pos, strike_thickness;
     int16_t xmin, ymin, xmax, ymax;
+    int16_t avg_width; /* OS/2 xAvgCharWidth, 0 when absent */
     uint16_t weight; /* OS/2 usWeightClass, 400 when absent */
     bool italic;
 
@@ -92,6 +93,7 @@ typedef struct AuFontMetrics {
     float x_height;  /* CSS ex */
     float cap_height;
     float ch_advance; /* advance of "0": CSS ch */
+    float avg_advance; /* average character width (OS/2), else ch_advance: form control sizes */
     float space_advance;
     float underline_pos; /* below the baseline, positive */
     float underline_thickness;

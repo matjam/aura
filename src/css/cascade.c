@@ -1282,6 +1282,33 @@ static void consider(AuCssResolver *r, uint16_t p, uint64_t key, const AuCssDecl
     }
 }
 
+/* True when el is a form control and the winning declaration of one of
+ * its background, border or box-shadow properties has author origin
+ * (presentational hints count: they are author level). Browsers then drop
+ * the native appearance and paint the CSS box (CSS UI 4, "appearance":
+ * devolvable widgets). Runs after logical properties were mapped. */
+static bool author_decor(AuCssResolver *r, const AuElement *el)
+{
+    if (el->ns != AU_NS_HTML)
+        return false;
+    AuAtom t = el->tag;
+    if (t != HN(input) && t != HN(select) && t != HN(textarea) && t != HN(button) && t != HN(progress) &&
+        t != HN(meter))
+        return false;
+    static const uint16_t props[] = {
+        AU_PROP_background_color,    AU_PROP_background_image,   AU_PROP_border_top_width,
+        AU_PROP_border_right_width,  AU_PROP_border_bottom_width, AU_PROP_border_left_width,
+        AU_PROP_border_top_style,    AU_PROP_border_right_style, AU_PROP_border_bottom_style,
+        AU_PROP_border_left_style,   AU_PROP_border_top_color,   AU_PROP_border_right_color,
+        AU_PROP_border_bottom_color, AU_PROP_border_left_color,  AU_PROP_box_shadow};
+    for (size_t i = 0; i < CSS_ARRAY_LEN(props); i++) {
+        const Winner *w = &r->winners[props[i]];
+        if (w->gen == r->gen && level_origin(w->key) == 2)
+            return true;
+    }
+    return false;
+}
+
 static void share_groups(AuStyle *s, const AuStyle *parent, const AuStyle *prev);
 static void intern_groups(AuCssResolver *r, AuStyle *s);
 static void swap_group(AuStyle *s, int g, void *other);
@@ -1382,6 +1409,8 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
         apply_decl(&cs, p, r->winners[p].decl, r->winners[p].key);
     }
     css_decl_block_clear(&cs.sh_out);
+    if (!pseudo && el && author_decor(r, el))
+        s->flags |= AU_STYLE_F_AUTHOR_DECOR;
 
     uint16_t pdisp = parent ? parent->box->display : AU_DISPLAY_BLOCK;
     if (pseudo)

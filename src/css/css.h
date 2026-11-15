@@ -438,7 +438,12 @@ enum {
     AU_STYLE_F_VIEWPORT_UNITS = 1, /* depends on the viewport size */
     AU_STYLE_F_HAS_ATTR = 2,       /* uses attr() */
     AU_STYLE_F_ROOT = 4,
-    AU_STYLE_F_AFFECTED_BY_HAS = 8
+    AU_STYLE_F_AFFECTED_BY_HAS = 8,
+    /* A form control (input, select, textarea, button, progress, meter)
+     * whose background, border or box-shadow comes from author styles:
+     * layout paints it as a plain CSS box instead of a native-looking
+     * control, as browsers do for appearance: auto. */
+    AU_STYLE_F_AUTHOR_DECOR = 16
 };
 
 AuStyle *au_style_retain(AuStyle *s);

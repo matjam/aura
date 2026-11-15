@@ -215,26 +215,7 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     au_free(T);
 }
 
-static void shift_content(LBlock *cell, float dy)
-{
-    if (dy == 0)
-        return;
-    for (uint32_t i = 0; i < cell->nlines; i++)
-        cell->lines[i].y += dy;
-    for (uint32_t i = 0; i < cell->nfrags; i++) {
-        cell->frags[i].y += dy;
-        if (cell->frags[i].kind == FR_ATOMIC)
-            ((LBlock *)cell->frags[i].box)->y += dy;
-    }
-    for (LBox *c = cell->b.first; c; c = c->next) {
-        if (c->kind == LK_BLOCK && !(c->flags & LF_INLINE_LEVEL))
-            ((LBlock *)c)->y += dy;
-    }
-    if (!isnan(cell->baseline))
-        cell->baseline += dy;
-    if (!isnan(cell->last_baseline))
-        cell->last_baseline += dy;
-}
+#define shift_content l_shift_content
 
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
 {

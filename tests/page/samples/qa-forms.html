@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Form controls</title>
+<style>
+body { font: 16px sans-serif; margin: 10px; }
+h2 { font-size: 15px; margin: 14px 0 4px; border-bottom: 1px solid #ccc; }
+.row { margin: 6px 0; }
+.flex { display: flex; gap: 6px; border: 1px dashed #aaa; padding: 4px; margin: 6px 0; }
+.styled input, .styled button, .styled select { border: 1px solid #888; border-radius: 4px; background: #fff; padding: 6px 8px; font: 14px sans-serif; }
+.styled button { background: #0366d6; color: #fff; border-color: #0366d6; }
+.noborder { border: none; background: #eef; }
+.big { font-size: 24px; }
+table td { border: 1px solid #ccc; padding: 4px; }
+</style>
+</head>
+<body>
+<h2>One line, default styles</h2>
+<div class="row" id="line1">Name <input id="t1" type="text" value="Alice"> <button id="b1">Go</button> <select id="s1"><option>One</option><option selected>Second option</option></select> <input id="c1" type="checkbox" checked> check <input id="r1" type="radio" name="r" checked> radio <input id="r2" type="radio" name="r"> off <input id="sub1" type="submit"> xyz</div>
+
+<div class="row">Search <input type="search" placeholder="Search..."> email <input type="email" size="10" value="a@b.c"> pw <input type="password" value="secret" size="8"> num <input type="number" value="42" size="4"></div>
+<div class="row">Reset <input type="reset"> button <input type="button" value="Click me"> file <input type="file"> image <input type="image" alt="Send"> color <input type="color" value="#3366cc"> range <input type="range"> date <input type="date" value="2024-01-02"> hidden[<input type="hidden" value="x">]</div>
+
+<div class="row">Textarea <textarea id="ta1" cols="20" rows="3">Some text that wraps inside the textarea box and keeps going</textarea> after <textarea placeholder="Empty with placeholder"></textarea> end</div>
+<div class="row">List <select id="lb1" multiple><option>Apple</option><option selected>Banana</option><optgroup label="Group"><option>Cherry</option><option>Date</option></optgroup></select> size <select size="3"><option>A</option><option>B</option><option>C</option><option>D</option></select> end</div>
+
+<div class="row">Disabled <input disabled value="no edit"> <button disabled>Nope</button> <input type="checkbox" disabled> <select disabled><option>Off</option></select> readonly <input readonly value="fixed"></div>
+
+<div class="row">Button with content <button id="b2"><b>Bold</b> and <i>italic</i></button> <button style="height:40px">Tall</button> <button style="width:120px">Wide</button></div>
+
+<div class="row">progress <progress value="0.6"></progress> <progress></progress> meter <meter value="0.3"></meter> <meter min="0" max="100" low="30" high="70" optimum="80" value="50"></meter> <meter value="0.9" high="0.8"></meter> output <output>12</output></div>
+
+<fieldset id="fs1"><legend id="lg1">Legend text</legend>Inside the fieldset <label>Label <input size="8"></label></fieldset>
+
+<details><summary>Closed details</summary>Hidden content</details>
+<details open><summary>Open details</summary>Shown content</details>
+
+<h2>Restyled</h2>
+<div class="row styled">Author <input value="Styled"> <button>Primary</button> <select><option>Choice</option></select> <input class="noborder" value="No border"></div>
+<div class="row big">Big <input value="24px"> <button>Big</button> <select><option>Big</option></select> <input type="checkbox"> text</div>
+<div class="row"><input style="display:block;width:100%;box-sizing:border-box" value="block 100%"></div>
+<div class="row"><input style="height:40px;padding:0 10px" value="explicit height"> <input style="line-height:30px" value="line-height 30"> <input style="appearance:none;border:1px solid red" value="appearance none"></div>
+
+<h2>Flex</h2>
+<div class="flex"><input value="stretch"> <button>Btn</button> <select><option>Sel</option></select> <span>text</span></div>
+<div class="flex" style="align-items:center;height:50px"><input value="center"> <button>Btn</button> <input type="checkbox"> <span>text</span></div>
+<div class="flex" style="align-items:baseline"><input value="baseline"> <button>Btn</button> <input type="checkbox"> <span style="font-size:24px">Big text</span></div>
+
+<h2>Table and float</h2>
+<table><tr><td>Cell <input size="6"></td><td><button>Cell</button></td><td><select><option>Cell</option></select></td></tr></table>
+<div style="overflow:hidden"><input style="float:right" value="floated right"> text before the float <button style="float:left">Float</button></div>
+</body>
+</html>

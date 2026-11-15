@@ -355,9 +355,36 @@ static void test_quirks_ua(void)
     au_css_resolver_free(r);
 }
 
+/* Author background, border or box-shadow on a form control is flagged
+ * (layout drops the native look); UA styles and border-radius are not. */
+static void test_author_decor(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *plain = add(doc, &body->node, "input", "plain", NULL);
+    AuElement *bg = add(doc, &body->node, "input", "bg", NULL);
+    AuElement *bd = add(doc, &body->node, "button", "bd", NULL);
+    AuElement *lg = add(doc, &body->node, "select", "lg", NULL);
+    AuElement *rad = add(doc, &body->node, "textarea", "rad", NULL);
+    AuElement *div = add(doc, &body->node, "div", "div", NULL);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet("#bg { background: #fff } #bd { border: none } #rad { border-radius: 4px }"
+                                       " #lg { border-inline-start-color: red } div { background: red }"));
+    au_css_style_document(r, doc);
+    CHECK(!(au_element_style(plain)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    CHECK(au_element_style(bg)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(au_element_style(bd)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(au_element_style(lg)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(!(au_element_style(rad)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    CHECK(!(au_element_style(div)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
 int main(void)
 {
     au_css_init();
+    test_author_decor();
     test_invalidation();
     test_has_invalidation();
     test_device_and_metrics();

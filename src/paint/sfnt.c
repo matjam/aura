@@ -443,6 +443,9 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
     if (mac_style & 1)
         f->weight = 700;
     if (f->os2_len >= 78) {
+        int16_t aw = s16(f, f->os2 + 2);
+        if (aw > 0 && aw < f->units_per_em * 2)
+            f->avg_width = aw;
         uint16_t w = u16(f, f->os2 + 4);
         if (w >= 1 && w <= 1000)
             f->weight = w;

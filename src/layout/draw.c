@@ -701,8 +701,186 @@ static void paint_shadows(PCtx *P, const AuStyle *s, AuRect box, const AuRadii *
     }
 }
 
+/* ---- Form controls: native (Platinum) look ----
+ *
+ * A control keeps its native look while the author leaves its appearance
+ * alone: appearance is not none, and no author style sets its background,
+ * border or box-shadow (AU_STYLE_F_AUTHOR_DECOR). Checkboxes, radio
+ * buttons, sliders and meters stay native unless appearance is none, as in
+ * browsers. A restyled control is painted as its CSS box plus its content
+ * (text, arrow). The colours are the Platinum greys of the browser chrome. */
+
+#define PL_FACE AU_RGB(221, 221, 221)
+#define PL_LIGHT AU_RGB(255, 255, 255)
+#define PL_SHADOW AU_RGB(153, 153, 153)
+#define PL_FRAME AU_RGB(102, 102, 102)
+#define PL_DARK AU_RGB(68, 68, 68)
+#define PL_INK AU_RGB(0, 0, 0)
+#define PL_OFF AU_RGB(170, 170, 170)
+#define PL_HILITE AU_RGB(204, 204, 255)
+#define PL_BAR AU_RGB(102, 102, 204)
+#define PL_BAR_LIGHT AU_RGB(153, 153, 238)
+
+static bool control_native(const LBlock *b)
+{
+    if (lb_anon(&b->b) || !l_is_control_kind(b->b.replaced))
+        return false;
+    const AuStyle *s = b->b.style;
+    if (s->rare->appearance == AU_APPEARANCE_NONE)
+        return false;
+    switch (b->b.replaced) {
+    case LR_CHECKBOX:
+    case LR_RADIO:
+    case LR_RANGE:
+    case LR_METER:
+    case LR_FILE:
+        return true;
+    default:
+        return !(s->flags & AU_STYLE_F_AUTHOR_DECOR);
+    }
+}
+
+static bool control_disabled(const LBlock *b)
+{
+    /* Its own disabled attribute, or a disabled fieldset around it. */
+    for (AuNode *n = b->b.node; n && au_is_element(n); n = n->parent)
+        if ((n == b->b.node || au_is_html_element(n, AU_ATOM_fieldset)) &&
+            au_element_get_attr(au_as_element(n), AU_ATOM_disabled))
+            return true;
+    return false;
+}
+
+static void pl_fill(AuCanvas *c, float x, float y, float w, float h, uint32_t col)
+{
+    if (w > 0 && h > 0)
+        au_fill_rect(c, (AuRect){x, y, w, h}, col);
+}
+
+/* r rounded to whole pixels, so one-pixel lines stay sharp. */
+static AuRect snap(AuRect r)
+{
+    float x0 = roundf(r.x), y0 = roundf(r.y), x1 = roundf(r.x + r.w), y1 = roundf(r.y + r.h);
+    return (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+/* A sunken edit field frame of width bw (1 or 2) around r, filled. */
+static void pl_field(AuCanvas *c, AuRect r, float bw, uint32_t face, bool off)
+{
+    r = snap(r);
+    pl_fill(c, r.x, r.y, r.w, r.h, face);
+    if (bw >= 2) {
+        uint32_t o1 = off ? PL_OFF : PL_SHADOW, i1 = off ? PL_OFF : PL_DARK;
+        pl_fill(c, r.x, r.y, r.w, 1, o1);
+        pl_fill(c, r.x, r.y, 1, r.h, o1);
+        pl_fill(c, r.x, r.y + r.h - 1, r.w, 1, PL_LIGHT);
+        pl_fill(c, r.x + r.w - 1, r.y, 1, r.h, PL_LIGHT);
+        pl_fill(c, r.x + 1, r.y + 1, r.w - 2, 1, i1);
+        pl_fill(c, r.x + 1, r.y + 1, 1, r.h - 2, i1);
+        pl_fill(c, r.x + 1, r.y + r.h - 2, r.w - 2, 1, PL_FACE);
+        pl_fill(c, r.x + r.w - 2, r.y + 1, 1, r.h - 2, PL_FACE);
+    } else if (bw >= 1) {
+        uint32_t f = off ? PL_OFF : PL_FRAME;
+        pl_fill(c, r.x, r.y, r.w, 1, f);
+        pl_fill(c, r.x, r.y + r.h - 1, r.w, 1, f);
+        pl_fill(c, r.x, r.y, 1, r.h, f);
+        pl_fill(c, r.x + r.w - 1, r.y, 1, r.h, f);
+    }
+}
+
+/* A raised Platinum push button: a dark rounded frame, a grey face with a
+ * light top-left and a shadowed bottom-right edge. */
+static void pl_button(AuCanvas *c, AuRect r, bool off, float radius)
+{
+    r = snap(r);
+    if (r.w < 2 || r.h < 2)
+        return;
+    float rd = l_min(radius, l_min(r.w, r.h) / 2);
+    AuRadii ro = {{rd, rd, rd, rd}, {rd, rd, rd, rd}};
+    au_fill_rounded_rect(c, r, &ro, off ? PL_OFF : PL_DARK);
+    AuRect in = {r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+    float ri = l_max(0, rd - 1);
+    AuRadii rr = {{ri, ri, ri, ri}, {ri, ri, ri, ri}};
+    au_fill_rounded_rect(c, in, &rr, off ? AU_RGB(232, 232, 232) : PL_FACE);
+    if (in.w > 4 && in.h > 4) {
+        float k = l_max(1, ri / 2);
+        pl_fill(c, in.x + k, in.y, in.w - 2 * k, 1, PL_LIGHT);
+        pl_fill(c, in.x, in.y + k, 1, in.h - 2 * k, PL_LIGHT);
+        if (!off) {
+            pl_fill(c, in.x + k, in.y + in.h - 1, in.w - 2 * k, 1, PL_SHADOW);
+            pl_fill(c, in.x + in.w - 1, in.y + k, 1, in.h - 2 * k, PL_SHADOW);
+        }
+    }
+}
+
+static void tri_down(AuCanvas *c, float cx, float cy, float a, uint32_t col)
+{
+    AuPath p;
+    au_path_init(&p);
+    au_path_move_to(&p, cx - a, cy - a / 2);
+    au_path_line_to(&p, cx + a, cy - a / 2);
+    au_path_line_to(&p, cx, cy + a / 2);
+    au_path_close(&p);
+    au_fill_path(c, &p, AU_FILL_NONZERO, col);
+    au_path_free(&p);
+}
+
+/* The native frame of control b (border box r), in place of its CSS
+ * background and border. */
+static void paint_native_frame(PCtx *P, LBlock *b, AuRect r)
+{
+    bool off = control_disabled(b);
+    const AuStyle *s = b->b.style;
+    uint32_t field = pc(s, s->bg->background_color);
+    if (!(field >> 24))
+        field = PL_LIGHT;
+    switch (b->b.replaced) {
+    case LR_TEXT_INPUT:
+    case LR_TEXTAREA:
+    case LR_LISTBOX:
+        pl_field(P->c, r, l_max(1, l_min(b->bw[0], 2)), off ? AU_RGB(238, 238, 238) : field, off);
+        break;
+    case LR_BUTTON:
+    case LR_COLOR:
+        pl_button(P->c, r, off, 4);
+        break;
+    case LR_SELECT: {
+        pl_button(P->c, r, off, 3);
+        AuRect sr = snap(r);
+        float aw = l_select_arrow_w(b);
+        float x = roundf(sr.x + sr.w - b->bw[1] - aw);
+        if (aw > 0 && sr.h > 6) {
+            pl_fill(P->c, x, sr.y + 2, 1, sr.h - 4, PL_SHADOW);
+            pl_fill(P->c, x + 1, sr.y + 2, 1, sr.h - 4, PL_LIGHT);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 /* Background, shadows and borders of a block box at (ox, oy). */
+static LBlock *fieldset_legend(const LBlock *b)
+{
+    if (b->b.inner != LI_FLOW || lb_anon(&b->b) || !l_is_tag(&b->b, AU_ATOM_fieldset))
+        return NULL;
+    for (LBox *c = b->b.first; c; c = c->next)
+        if (c->kind == LK_BLOCK && (c->flags & LF_LEGEND))
+            return (LBlock *)c;
+    return NULL;
+}
+
+static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy);
+static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy);
+
 static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
+{
+    paint_decor_box(P, b, ox, oy);
+    if (b->b.replaced == LR_TEXTAREA)
+        paint_textarea_placeholder(P, b, ox, oy);
+}
+
+static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy)
 {
     if (lb_anon(&b->b) || (b->b.flags & LF_HIDDEN))
         return;
@@ -712,10 +890,22 @@ static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
     AuRect box = {ox, oy, b->w, b->h};
     if (!rect_hits(&P->dirty, ox + b->ov.x, oy + b->ov.y, b->ov.w, b->ov.h))
         return;
+    /* A fieldset's border runs through the middle of its legend. */
+    LBlock *lg = fieldset_legend(b);
+    if (lg) {
+        float lt = l_max(0, (lg->h + lg->m[0] + lg->m[2] - b->bw[0]) / 2);
+        box.y += lt;
+        box.h = l_max(0, box.h - lt);
+    }
     AuRadii radii;
-    box_radii(b, &radii, b->w, b->h);
+    box_radii(b, &radii, box.w, box.h);
     bool rounded = !au_radii_zero(&radii);
     paint_shadows(P, s, box, rounded ? &radii : NULL, false);
+    if (control_native(b)) {
+        paint_native_frame(P, b, box);
+        paint_shadows(P, s, box, rounded ? &radii : NULL, true);
+        return;
+    }
     if (b != (LBlock *)P->L->root && b != P->canvas_box)
         paint_background(P, s, b, box, false);
     paint_shadows(P, s, box, rounded ? &radii : NULL, true);
@@ -723,7 +913,22 @@ static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
     uint32_t col[4];
     for (int i = 0; i < 4; i++)
         col[i] = pc(s, sr->border_color[i]);
-    draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+    if (!lg) {
+        draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+        return;
+    }
+    /* Leave out the top border behind the legend's border box. */
+    float gx0 = ox + lg->x, gx1 = gx0 + lg->w;
+    AuRect parts[3] = {{box.x - 50, box.y - 50, gx0 - box.x + 50, box.h + 100},
+                       {gx1, box.y - 50, box.x + box.w + 50 - gx1, box.h + 100},
+                       {gx0, box.y + b->bw[0], gx1 - gx0, box.h + 50}};
+    for (int i = 0; i < 3; i++) {
+        if (parts[i].w <= 0)
+            continue;
+        au_canvas_clip_push(P->c, parts[i]);
+        draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+        au_canvas_clip_pop(P->c);
+    }
 }
 
 static void paint_outline(PCtx *P, LBox *bx, AuRect box)
@@ -746,9 +951,11 @@ static void paint_outline(PCtx *P, LBox *bx, AuRect box)
 
 /* ---- Replaced content ---- */
 
-static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t color, int align)
+/* Draws one line of text t in area: vertically centred as a control's
+ * inner line, aligned 0 left, 1 centre, 2 right, clipped to clip. */
+static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t color, int align, AuRect clip)
 {
-    if (!t || !*t)
+    if (!t || !*t || clip.w <= 0 || clip.h <= 0)
         return;
     LFont *f = l_font(P->L, b->b.style);
     size_t n = strlen(t);
@@ -756,9 +963,266 @@ static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t
     float x = area.x;
     if (align == 1)
         x = area.x + (area.w - w) / 2;
-    float y = area.y + (area.h - (f->m.ascent + f->m.descent)) / 2 + f->m.ascent;
-    au_canvas_clip_push(P->c, area);
+    else if (align == 2)
+        x = area.x + area.w - w;
+    float asc, lh = l_control_line(P->L, b, &asc);
+    float y = area.y + (area.h - lh) / 2 + asc;
+    au_canvas_clip_push(P->c, clip);
     l_draw_text(P->L, P->c, f, b->b.style, t, n, x, y, color, 0);
+    au_canvas_clip_pop(P->c);
+}
+
+/* The text alignment of a control's label: 0 left, 1 centre, 2 right. */
+static int label_align(const AuStyle *s, int dflt)
+{
+    switch (s->inh->text_align) {
+    case AU_TEXT_ALIGN_CENTER:
+    case AU_TEXT_ALIGN_WEBKIT_CENTER: return 1;
+    case AU_TEXT_ALIGN_RIGHT:
+    case AU_TEXT_ALIGN_WEBKIT_RIGHT:
+    case AU_TEXT_ALIGN_END: return 2;
+    case AU_TEXT_ALIGN_LEFT:
+    case AU_TEXT_ALIGN_WEBKIT_LEFT: return 0;
+    default: return dflt;
+    }
+}
+
+static uint32_t placeholder_color(const AuStyle *s)
+{
+    const AuStyle *ps = au_style_pseudo(s, AU_CSS_PSEUDO_PLACEHOLDER);
+    return ps ? pc(ps, ps->inh->color) : AU_RGB(0x75, 0x75, 0x75);
+}
+
+static bool control_checked(const LBlock *b)
+{
+    if (!b->b.node || !au_is_element(b->b.node))
+        return false;
+    const AuElement *e = au_as_element(b->b.node);
+    if (e->state & AU_STATE_CHECKED_SET)
+        return (e->state & AU_STATE_CHECKED) != 0;
+    return l_attr(&b->b, au_atom_lookup("checked", 7)) != NULL;
+}
+
+static float num_attr(const LBlock *b, const char *name, float dflt, bool *present)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a ? l_attr(&b->b, a) : NULL;
+    char *end = NULL;
+    float f = v ? strtof(v, &end) : 0;
+    bool ok = v && end != v && isfinite(f);
+    if (present)
+        *present = ok;
+    return ok ? f : dflt;
+}
+
+static void pl_checkbox(AuCanvas *c, AuRect r, bool checked, bool off)
+{
+    r = snap(r);
+    if (r.w < 4 || r.h < 4)
+        return;
+    pl_fill(c, r.x, r.y, r.w, r.h, off ? PL_OFF : PL_INK);
+    pl_fill(c, r.x + 1, r.y + 1, r.w - 2, r.h - 2, off ? AU_RGB(238, 238, 238) : PL_FACE);
+    if (!off) {
+        pl_fill(c, r.x + 1, r.y + 1, r.w - 3, 1, PL_LIGHT);
+        pl_fill(c, r.x + 1, r.y + 1, 1, r.h - 3, PL_LIGHT);
+        pl_fill(c, r.x + 2, r.y + r.h - 2, r.w - 3, 1, PL_SHADOW);
+        pl_fill(c, r.x + r.w - 2, r.y + 2, 1, r.h - 3, PL_SHADOW);
+    }
+    if (checked) {
+        AuPath p, sp;
+        au_path_init(&p);
+        au_path_init(&sp);
+        au_path_move_to(&p, r.x + r.w * 0.22f, r.y + r.h * 0.50f);
+        au_path_line_to(&p, r.x + r.w * 0.44f, r.y + r.h * 0.76f);
+        au_path_line_to(&p, r.x + r.w * 0.86f, r.y + r.h * 0.10f);
+        au_path_stroke(&p, l_max(1.6f, r.w / 6.5f), &sp);
+        au_fill_path(c, &sp, AU_FILL_NONZERO, off ? PL_SHADOW : PL_INK);
+        au_path_free(&p);
+        au_path_free(&sp);
+    }
+}
+
+static void pl_radio(AuCanvas *c, AuRect r, bool checked, bool off)
+{
+    float d = l_min(r.w, r.h);
+    if (d < 4)
+        return;
+    float cx = r.x + r.w / 2, cy = r.y + r.h / 2, rr = d / 2;
+    AuPath p;
+    au_path_init(&p);
+    au_path_ellipse(&p, cx, cy, rr, rr);
+    au_fill_path(c, &p, AU_FILL_NONZERO, off ? PL_OFF : PL_INK);
+    au_path_clear(&p);
+    au_path_ellipse(&p, cx, cy, rr - 1, rr - 1);
+    au_fill_path(c, &p, AU_FILL_NONZERO, off ? AU_RGB(238, 238, 238) : PL_FACE);
+    if (!off) {
+        au_path_clear(&p);
+        au_path_ellipse(&p, cx - rr * 0.22f, cy - rr * 0.22f, rr * 0.5f, rr * 0.5f);
+        au_fill_path(c, &p, AU_FILL_NONZERO, PL_LIGHT);
+    }
+    if (checked) {
+        au_path_clear(&p);
+        au_path_ellipse(&p, cx, cy, rr * 0.42f, rr * 0.42f);
+        au_fill_path(c, &p, AU_FILL_NONZERO, off ? PL_SHADOW : PL_INK);
+    }
+    au_path_free(&p);
+}
+
+/* Parses #rgb or #rrggbb (an input's colour value); black otherwise. */
+static uint32_t color_value(const char *v)
+{
+    unsigned rgb[3] = {0, 0, 0};
+    size_t n = v ? strlen(v) : 0;
+    if (n == 7 && v[0] == '#') {
+        for (int i = 0; i < 3; i++) {
+            char h[3] = {v[1 + 2 * i], v[2 + 2 * i], 0};
+            char *e;
+            unsigned long x = strtoul(h, &e, 16);
+            if (*e)
+                return AU_RGB(0, 0, 0);
+            rgb[i] = (unsigned)x;
+        }
+    }
+    return AU_RGB(rgb[0], rgb[1], rgb[2]);
+}
+
+/* Progress and meter bars: a framed track and its filled part. */
+static void paint_bar(PCtx *P, LBlock *b, AuRect cb, bool native)
+{
+    bool has_value;
+    float frac;
+    uint32_t fillc = PL_BAR;
+    if (b->b.replaced == LR_PROGRESS) {
+        float mx = num_attr(b, "max", 1, NULL);
+        if (mx <= 0)
+            mx = 1;
+        float v = num_attr(b, "value", 0, &has_value);
+        frac = l_max(0, l_min(1, v / mx));
+    } else {
+        /* HTML, "The meter element": the gauge regions. */
+        float mn = num_attr(b, "min", 0, NULL), mx = num_attr(b, "max", 1, NULL);
+        if (mx < mn)
+            mx = mn;
+        float v = l_max(mn, l_min(mx, num_attr(b, "value", 0, NULL)));
+        float lo = l_max(mn, l_min(mx, num_attr(b, "low", mn, NULL)));
+        float hi = l_max(lo, l_min(mx, num_attr(b, "high", mx, NULL)));
+        float opt = l_max(mn, l_min(mx, num_attr(b, "optimum", (mn + mx) / 2, NULL)));
+        frac = mx > mn ? (v - mn) / (mx - mn) : 0;
+        has_value = true;
+        int region; /* 0 optimum, 1 suboptimum, 2 even less good */
+        if (opt < lo)
+            region = v <= lo ? 0 : v <= hi ? 1 : 2;
+        else if (opt > hi)
+            region = v >= hi ? 0 : v >= lo ? 1 : 2;
+        else
+            region = (v >= lo && v <= hi) ? 0 : 1;
+        fillc = region == 0 ? AU_RGB(51, 170, 51) : region == 1 ? AU_RGB(230, 180, 0) : AU_RGB(204, 51, 51);
+    }
+    AuRect r = snap(cb);
+    if (r.w < 2 || r.h < 2)
+        return;
+    if (native) {
+        pl_fill(P->c, r.x, r.y, r.w, r.h, PL_FRAME);
+        r = (AuRect){r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+        pl_fill(P->c, r.x, r.y, r.w, r.h, AU_RGB(238, 238, 238));
+    }
+    if (!has_value) {
+        /* Indeterminate: Platinum's diagonal stripes. */
+        au_canvas_clip_push(P->c, r);
+        float step = l_max(4, r.h);
+        for (float x = r.x - r.h; x < r.x + r.w; x += step * 2) {
+            AuPath p;
+            au_path_init(&p);
+            au_path_move_to(&p, x, r.y + r.h);
+            au_path_line_to(&p, x + step, r.y + r.h);
+            au_path_line_to(&p, x + step + r.h, r.y);
+            au_path_line_to(&p, x + r.h, r.y);
+            au_path_close(&p);
+            au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(170, 170, 221));
+            au_path_free(&p);
+        }
+        au_canvas_clip_pop(P->c);
+        return;
+    }
+    float w = roundf(r.w * frac);
+    pl_fill(P->c, r.x, r.y, w, r.h, fillc);
+    if (fillc == PL_BAR)
+        pl_fill(P->c, r.x, r.y, w, 1, PL_BAR_LIGHT);
+}
+
+static void paint_listbox(PCtx *P, LBlock *b, AuRect pb, uint32_t color)
+{
+    LReplaced *r = b->rep;
+    if (!r || !r->label)
+        return;
+    const AuStyle *s = b->b.style;
+    LFont *f = l_font(P->L, s);
+    float rh = l_listbox_row(P->L, b), asc;
+    l_control_line(P->L, b, &asc);
+    float em = s->inh->font_size;
+    au_canvas_clip_push(P->c, pb);
+    const char *t = r->label;
+    float y = pb.y + b->p[0];
+    float x0 = pb.x + b->p[3] + 2;
+    while (*t && y < pb.y + pb.h) {
+        const char *e = strchr(t, '\n');
+        size_t n = e ? (size_t)(e - t) : strlen(t);
+        uint8_t fl = (uint8_t)t[0] & 15;
+        if (fl & LB_SELECTED)
+            pl_fill(P->c, pb.x, y, pb.w, rh, control_disabled(b) ? AU_RGB(221, 221, 221) : PL_HILITE);
+        float x = x0 + ((fl & LB_INDENT) ? roundf(em * 0.75f) : 0);
+        uint32_t col = (fl & LB_DISABLED) ? AU_RGB(128, 128, 128) : color;
+        if (n > 1) {
+            l_draw_text(P->L, P->c, f, s, t + 1, n - 1, x, y + 1 + asc, col, 0);
+            if (fl & LB_GROUP) /* bold, by overstriking */
+                l_draw_text(P->L, P->c, f, s, t + 1, n - 1, x + 0.6f, y + 1 + asc, col, 0);
+        }
+        y += rh;
+        t += n + (e ? 1 : 0);
+    }
+    au_canvas_clip_pop(P->c);
+}
+
+static void paint_range(PCtx *P, LBlock *b, AuRect cb, bool native)
+{
+    float mn = num_attr(b, "min", 0, NULL), mx = num_attr(b, "max", 100, NULL);
+    if (mx < mn)
+        mx = mn;
+    float v = num_attr(b, "value", mn + (mx - mn) / 2, NULL);
+    float frac = mx > mn ? l_max(0, l_min(1, (v - mn) / (mx - mn))) : 0;
+    bool off = control_disabled(b);
+    float tw = 11, th = l_min(cb.h, 15);
+    float cy = roundf(cb.y + cb.h / 2);
+    pl_field(P->c, (AuRect){cb.x + 2, cy - 2, cb.w - 4, 5}, 2, AU_RGB(204, 204, 204), off);
+    float tx = cb.x + (cb.w - tw) * frac;
+    AuRect th_r = snap((AuRect){tx, cy - th / 2, tw, th});
+    if (native)
+        pl_button(P->c, th_r, off, 2);
+    else
+        pl_fill(P->c, th_r.x, th_r.y, th_r.w, th_r.h, PL_FRAME);
+}
+
+/* The placeholder of an empty textarea, at its content box. */
+static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy)
+{
+    if (b->b.replaced != LR_TEXTAREA || !b->rep || !b->rep->aux || (b->b.flags & LF_HIDDEN))
+        return;
+    const AuStyle *s = b->b.style;
+    LFont *f = l_font(P->L, s);
+    float asc, lh = l_control_line(P->L, b, &asc);
+    AuRect cb = box_area(b, ox, oy, AU_K_content_box);
+    AuRect pbx = box_area(b, ox, oy, AU_K_padding_box);
+    uint32_t col = placeholder_color(s);
+    au_canvas_clip_push(P->c, pbx);
+    const char *t = b->rep->aux;
+    float y = cb.y + asc;
+    while (*t && y - asc < pbx.y + pbx.h) {
+        const char *e = strchr(t, '\n');
+        size_t n = e ? (size_t)(e - t) : strlen(t);
+        l_draw_text(P->L, P->c, f, s, t, n, cb.x, y, col, 0);
+        y += lh;
+        t += n + (e ? 1 : 0);
+    }
     au_canvas_clip_pop(P->c);
 }
 
@@ -767,9 +1231,11 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     if (b->b.flags & LF_HIDDEN)
         return;
     AuRect cb = box_area(b, ox, oy, AU_K_content_box);
+    AuRect pbx = box_area(b, ox, oy, AU_K_padding_box);
     const AuStyle *s = b->b.style;
     uint32_t color = pc(s, s->inh->color);
     LReplaced *r = b->rep;
+    bool native = control_native(b);
     switch (b->b.replaced) {
     case LR_IMAGE:
         if (r && r->pixels) {
@@ -788,103 +1254,91 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
                 au_fill_rect(P->c, cb, AU_RGB(0xEE, 0xEE, 0xEE));
             draw_borders(P->c, cb, w1, gs, st, NULL);
             if (r && r->label)
-                paint_label(P, b, r->label, (AuRect){cb.x + 2, cb.y, cb.w - 4, cb.h}, color, 0);
+                paint_label(P, b, r->label, (AuRect){cb.x + 2, cb.y, cb.w - 4, cb.h}, color, 0, cb);
         }
         break;
     case LR_TEXT_INPUT: {
-        bool placeholder = !l_attr(&b->b, au_atom_lookup("value", 5)) || !*l_attr(&b->b, au_atom_lookup("value", 5));
-        paint_label(P, b, r ? r->label : NULL, cb, placeholder ? AU_RGB(0x75, 0x75, 0x75) : color, 0);
+        /* Clipped to the content box across, the padding box down. */
+        AuRect clip = {cb.x, pbx.y, cb.w, pbx.h};
+        paint_label(P, b, r ? r->label : NULL, cb, r && r->placeholder ? placeholder_color(s) : color,
+                    label_align(s, 0), clip);
         break;
     }
     case LR_BUTTON:
-        paint_label(P, b, r ? r->label : NULL, cb, color, 1);
+        paint_label(P, b, r ? r->label : NULL, cb, color, label_align(s, 1), pbx);
         break;
     case LR_SELECT: {
-        float aw = s->inh->font_size * 1.2f;
-        paint_label(P, b, r ? r->label : NULL, (AuRect){cb.x, cb.y, cb.w - aw, cb.h}, color, 0);
-        AuPath p;
-        au_path_init(&p);
-        float cx = cb.x + cb.w - aw / 2, cy = cb.y + cb.h / 2, a = s->inh->font_size * 0.25f;
-        au_path_move_to(&p, cx - a, cy - a / 2);
-        au_path_line_to(&p, cx + a, cy - a / 2);
-        au_path_line_to(&p, cx, cy + a / 2);
-        au_path_close(&p);
-        au_fill_path(P->c, &p, AU_FILL_NONZERO, color);
-        au_path_free(&p);
-        break;
-    }
-    case LR_TEXTAREA:
-        if (r && r->label) {
-            LFont *f = l_font(P->L, s);
-            float lh = l_line_height(s, f);
-            const char *t = r->label;
-            float y = cb.y + f->m.ascent + (lh - f->m.ascent - f->m.descent) / 2;
-            au_canvas_clip_push(P->c, cb);
-            while (*t && y < cb.y + cb.h + lh) {
-                const char *e = strchr(t, '\n');
-                size_t n = e ? (size_t)(e - t) : strlen(t);
-                l_draw_text(P->L, P->c, f, s, t, n, cb.x, y, color, 0);
-                y += lh;
-                t += n + (e ? 1 : 0);
-            }
-            au_canvas_clip_pop(P->c);
+        float aw = l_select_arrow_w(b);
+        AuRect area = {cb.x, cb.y, l_max(0, cb.w - aw), cb.h};
+        paint_label(P, b, r ? r->label : NULL, area, color, 0, (AuRect){cb.x, pbx.y, area.w, pbx.h});
+        if (aw > 0) {
+            float a = l_max(2.5f, roundf(s->inh->font_size * 0.25f));
+            float cx = roundf(cb.x + cb.w - aw / 2 + b->p[1] / 2), cy = roundf(cb.y + cb.h / 2) + 0.5f;
+            tri_down(P->c, cx, cy, a, native && control_disabled(b) ? PL_SHADOW : color);
         }
         break;
+    }
+    case LR_LISTBOX:
+        paint_listbox(P, b, pbx, color);
+        break;
+    case LR_FILE: {
+        float asc, lh = l_control_line(P->L, b, &asc);
+        float bh = lh + 6, bw = l_file_button_w(P->L, b);
+        AuRect br = {cb.x, cb.y + (cb.h - bh) / 2, bw, bh};
+        bool off = control_disabled(b);
+        if (s->rare->appearance != AU_APPEARANCE_NONE)
+            pl_button(P->c, br, off, 4);
+        paint_label(P, b, r ? r->label : NULL, br, off ? AU_RGB(128, 128, 128) : color, 1, br);
+        AuRect tr = {cb.x + bw + 4, cb.y, l_max(0, cb.w - bw - 4), cb.h};
+        paint_label(P, b, r ? r->aux : NULL, tr, color, 0, (AuRect){tr.x, pbx.y, tr.w, pbx.h});
+        break;
+    }
+    case LR_COLOR: {
+        AuRect sw = snap((AuRect){cb.x + 2, cb.y + 2, cb.w - 4, cb.h - 4});
+        if (sw.w > 2 && sw.h > 2) {
+            pl_fill(P->c, sw.x, sw.y, sw.w, sw.h, PL_FRAME);
+            pl_fill(P->c, sw.x + 1, sw.y + 1, sw.w - 2, sw.h - 2,
+                 color_value(l_attr(&b->b, au_atom_lookup("value", 5))));
+        }
+        break;
+    }
     case LR_CHECKBOX:
     case LR_RADIO: {
+        if (!native)
+            break; /* appearance: none: only the CSS box */
         AuRect bx = {ox, oy, b->w, b->h};
-        bool checked = b->b.node && au_is_element(b->b.node) &&
-                       ((au_as_element(b->b.node)->state & AU_STATE_CHECKED_SET)
-                            ? (au_as_element(b->b.node)->state & AU_STATE_CHECKED) != 0
-                            : l_attr(&b->b, au_atom_lookup("checked", 7)) != NULL);
-        uint32_t edge = AU_RGB(0x76, 0x76, 0x76);
-        if (b->b.replaced == LR_RADIO) {
-            AuPath p;
-            au_path_init(&p);
-            float rr = l_min(bx.w, bx.h) / 2;
-            au_path_ellipse(&p, bx.x + bx.w / 2, bx.y + bx.h / 2, rr, rr);
-            au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(255, 255, 255));
-            AuPath st;
-            au_path_init(&st);
-            au_path_stroke(&p, 1, &st);
-            au_fill_path(P->c, &st, AU_FILL_NONZERO, edge);
-            au_path_free(&st);
-            if (checked) {
-                au_path_clear(&p);
-                au_path_ellipse(&p, bx.x + bx.w / 2, bx.y + bx.h / 2, rr * 0.45f, rr * 0.45f);
-                au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(0x10, 0x60, 0xE0));
-            }
-            au_path_free(&p);
-        } else {
-            AuRadii rr = {{2, 2, 2, 2}, {2, 2, 2, 2}};
-            au_fill_rounded_rect(P->c, bx, &rr, checked ? AU_RGB(0x10, 0x60, 0xE0) : AU_RGB(255, 255, 255));
-            float w1[4] = {1, 1, 1, 1};
-            uint32_t es[4] = {edge, edge, edge, edge};
-            uint8_t st[4] = {AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID};
-            if (!checked)
-                draw_borders(P->c, bx, w1, es, st, &rr);
-            if (checked) {
-                AuPath p, sp;
-                au_path_init(&p);
-                au_path_init(&sp);
-                au_path_move_to(&p, bx.x + bx.w * 0.22f, bx.y + bx.h * 0.52f);
-                au_path_line_to(&p, bx.x + bx.w * 0.42f, bx.y + bx.h * 0.72f);
-                au_path_line_to(&p, bx.x + bx.w * 0.78f, bx.y + bx.h * 0.3f);
-                au_path_stroke(&p, l_max(1.5f, bx.w / 7), &sp);
-                au_fill_path(P->c, &sp, AU_FILL_NONZERO, AU_RGB(255, 255, 255));
-                au_path_free(&p);
-                au_path_free(&sp);
-            }
-        }
+        if (b->b.replaced == LR_RADIO)
+            pl_radio(P->c, bx, control_checked(b), control_disabled(b));
+        else
+            pl_checkbox(P->c, bx, control_checked(b), control_disabled(b));
         break;
     }
-    case LR_RANGE: {
-        float cy = cb.y + cb.h / 2;
-        au_fill_rect(P->c, (AuRect){cb.x, cy - 2, cb.w, 4}, AU_RGB(0xC0, 0xC0, 0xC0));
+    case LR_RANGE:
+        paint_range(P, b, cb, native);
+        break;
+    case LR_PROGRESS:
+    case LR_METER:
+        paint_bar(P, b, cb, native);
+        break;
+    case LR_DISCLOSURE_OPEN:
+    case LR_DISCLOSURE_CLOSED: {
+        /* A triangle: closed points right, open points down; sat on the
+         * baseline like the text it precedes. */
+        float em = s->inh->font_size, a = roundf(em * 0.3f);
+        float cx = cb.x + a + em * 0.05f, cy = oy + b->h - a;
         AuPath p;
         au_path_init(&p);
-        au_path_ellipse(&p, cb.x + cb.w / 2, cy, 7, 7);
-        au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(0x10, 0x60, 0xE0));
+        if (b->b.replaced == LR_DISCLOSURE_OPEN) {
+            au_path_move_to(&p, cx - a, cy - a * 0.6f);
+            au_path_line_to(&p, cx + a, cy - a * 0.6f);
+            au_path_line_to(&p, cx, cy + a * 0.9f);
+        } else {
+            au_path_move_to(&p, cx - a * 0.7f, cy - a);
+            au_path_line_to(&p, cx + a * 0.9f, cy);
+            au_path_line_to(&p, cx - a * 0.7f, cy + a);
+        }
+        au_path_close(&p);
+        au_fill_path(P->c, &p, AU_FILL_NONZERO, color);
         au_path_free(&p);
         break;
     }
@@ -914,16 +1368,6 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
         break;
     }
     default:
-        if (l_is_tag(&b->b, AU_ATOM_meter) || l_is_tag(&b->b, AU_ATOM_progress)) {
-            au_fill_rect(P->c, cb, AU_RGB(0xE0, 0xE0, 0xE0));
-            AuAtom va = au_atom_lookup("value", 5), ma = au_atom_lookup("max", 3);
-            const char *v = va ? l_attr(&b->b, va) : NULL, *m = ma ? l_attr(&b->b, ma) : NULL;
-            float fv = v ? (float)atof(v) : 0, fm = m ? (float)atof(m) : 1;
-            if (fm <= 0)
-                fm = 1;
-            float frac = l_max(0, l_min(1, fv / fm));
-            au_fill_rect(P->c, (AuRect){cb.x, cb.y, cb.w * frac, cb.h}, AU_RGB(0x10, 0x60, 0xE0));
-        }
         break;
     }
 }

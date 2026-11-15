@@ -190,7 +190,7 @@ float l_flow_resolve(LFlowRef *fr)
 
 static bool is_flow_child(const LBox *c)
 {
-    return c->kind == LK_BLOCK && !(c->flags & (LF_FLOAT | LF_ABSPOS | LF_MARKER_OUT));
+    return c->kind == LK_BLOCK && !(c->flags & (LF_FLOAT | LF_ABSPOS | LF_MARKER_OUT | LF_LEGEND));
 }
 
 /* Outside list markers: positioned against the item's first line. */
@@ -509,8 +509,8 @@ static void flow_contents(AuLayout *L, LBfc *S, int level, float cb_h)
     }
     l_box_free_layout(&b->b);
     for (LBox *c = b->b.first; c; c = c->next) {
-        if (c->kind != LK_BLOCK || (c->flags & LF_MARKER_OUT))
-            continue;
+        if (c->kind != LK_BLOCK || (c->flags & (LF_MARKER_OUT | LF_LEGEND)))
+            continue; /* a rendered legend was placed by its fieldset */
         LBlock *k = (LBlock *)c;
         FlowFrame *f = &S->fr[level];
         if (c->flags & LF_ABSPOS) {

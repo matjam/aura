@@ -21,6 +21,7 @@ void au_font_metrics(const AuFontFace *f, float size, AuFontMetrics *m)
     m->cap_height = f->cap_height * s;
     uint16_t zero = au_font_glyph(f, '0');
     m->ch_advance = zero ? au_font_advance_units(f, zero) * s : size / 2;
+    m->avg_advance = f->avg_width > 0 ? f->avg_width * s : m->ch_advance;
     m->space_advance = au_font_advance_units(f, au_font_glyph(f, ' ')) * s;
     m->underline_pos = -f->underline_pos * s;
     m->underline_thickness = f->underline_thickness * s;
