@@ -8,6 +8,10 @@
 
 #define AU_VERSION "0.3"
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
+/* What Aura says it is: the Mozilla/5.0 form sites expect, the machine
+ * it runs on, and its own name and version, nothing borrowed from other
+ * browsers. */
+#define AU_DEFAULT_USER_AGENT "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/" AU_VERSION
 
 /* Data is material compiled into Aura or shipped beside it that is not
  * code: the root certificates, the Public Suffix List, the Brotli

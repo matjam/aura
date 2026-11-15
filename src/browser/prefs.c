@@ -1,5 +1,6 @@
 /* Browser preferences. See prefs.h. */
 #include "prefs.h"
+#include "credits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,7 +118,7 @@ void au_prefs_init(AuPrefs *p)
     p->history_days = 30;
     p->http_proxy_port = 8080;
     p->https_proxy_port = 8080;
-    au_prefs_set_str(&p->user_agent, "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/0.1");
+    au_prefs_set_str(&p->user_agent, AU_DEFAULT_USER_AGENT);
     p->memory_cache_kb = 4096;
     p->disk_cache_kb = 20480;
 }

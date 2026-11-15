@@ -2,6 +2,7 @@
  * authentication, proxies, cookies and HSTS on the wire, timeouts, and
  * the event loop pump. See net.h. */
 #include "auth.h"
+#include "../browser/credits.h"
 #include "cache.h"
 #include "cookies.h"
 #include "hsts.h"
@@ -183,7 +184,7 @@ AuNet *au_net_new(const AuNetOps *ops)
     AuNet *net = au_calloc(sizeof *net);
     net->ops = *ops;
     AuNetConfig *c = &net->cfg;
-    au_net_set_config_str(&c->user_agent, "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/0.1");
+    au_net_set_config_str(&c->user_agent, AU_DEFAULT_USER_AGENT);
     au_net_set_config_str(&c->accept_language, "en-US,en;q=0.9");
     au_net_set_config_str(&c->http_proxy_host, "");
     au_net_set_config_str(&c->https_proxy_host, "");
