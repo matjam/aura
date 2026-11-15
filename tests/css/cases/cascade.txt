@@ -1,0 +1,93 @@
+# Cascade order: origins, importance, specificity, order, inline style.
+
+=== ua defaults
+--- html
+html
+  head
+  body
+    div#d "x"
+    p#p
+    span#s
+    h1#h
+    ul#ul
+      li#li
+--- expect
+html -> display: block
+head -> display: none
+body -> margin-top: 8px
+body -> margin-left: 8px
+#d -> display: block
+#s -> display: inline
+#p -> margin-top: 16px
+#h -> font-size: 32px
+#h -> font-weight: 700
+#h -> margin-top: 21.44px
+#li -> display: list-item
+#ul -> padding-left: 40px
+#ul -> list-style-type: disc
+#d -> color: rgb(0, 0, 0)
+#d -> font-size: 16px
+
+=== specificity and order
+--- css
+p { color: red; }
+.a { color: green; }
+#x { color: blue; }
+p.a { background-color: red; }
+.a { background-color: lime; }
+p { margin-top: 1px; }
+p { margin-top: 2px; }
+--- html
+html
+  body
+    p#x.a
+    p#y.a
+    p#z
+--- expect
+#x -> color: rgb(0, 0, 255)
+#y -> color: rgb(0, 128, 0)
+#z -> color: rgb(255, 0, 0)
+#y -> background-color: rgb(255, 0, 0)
+#z -> margin-top: 2px
+
+=== important
+--- css
+#x { color: red; }
+p { color: green !important; }
+p { color: blue !important; }
+.b { color: red !important; }
+#y { color: green !important; }
+--- html
+html
+  body
+    p#x
+    p#y.b[style="color: red"]
+    p#z[style="color: purple !important"]
+--- expect
+#x -> color: rgb(0, 0, 255)
+#y -> color: rgb(0, 128, 0)
+#z -> color: rgb(128, 0, 128)
+
+=== inline style beats id
+--- css
+#x { color: red; width: 10px; }
+--- html
+html
+  body
+    div#x[style="color: lime"]
+--- expect
+#x -> color: rgb(0, 255, 0)
+#x -> width: 10px
+
+=== user origin
+--- css user
+p { color: red; margin-top: 3px !important; }
+--- css
+p { color: green; margin-top: 4px !important; }
+--- html
+html
+  body
+    p#p
+--- expect
+#p -> color: rgb(0, 128, 0)
+#p -> margin-top: 3px
