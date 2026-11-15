@@ -21,7 +21,7 @@ static const uint32_t crc_nibble[16] = {
     0xEDB88320, 0xF00F9344, 0xD6D6A3E8, 0xCB61B38C, 0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C,
 };
 
-uint32_t au_crc32(uint32_t crc, const void *data, size_t len)
+uint32_t au_codec_crc32(uint32_t crc, const void *data, size_t len)
 {
     const uint8_t *p = data;
     crc = ~crc;
@@ -33,7 +33,7 @@ uint32_t au_crc32(uint32_t crc, const void *data, size_t len)
     return ~crc;
 }
 
-uint32_t au_adler32(uint32_t adler, const void *data, size_t len)
+uint32_t au_codec_adler32(uint32_t adler, const void *data, size_t len)
 {
     const uint8_t *p = data;
     uint32_t a = adler & 0xFFFF, b = adler >> 16;
@@ -318,9 +318,9 @@ static void flush(AuInflate *z, uint8_t **out, size_t *out_len)
         memcpy(*out, z->window + start, run);
         if (!z->raw_stream) {
             if (z->gzip)
-                z->check = au_crc32(z->check, *out, run);
+                z->check = au_codec_crc32(z->check, *out, run);
             else
-                z->check = au_adler32(z->check, *out, run);
+                z->check = au_codec_adler32(z->check, *out, run);
         }
         z->isize += run;
         *out += run;
