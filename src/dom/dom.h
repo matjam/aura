@@ -90,7 +90,14 @@ struct AuDocument {
     uint32_t version;          /* incremented by every tree, attribute and text change */
     const struct AuDomHooks *hooks; /* mutation observers of this document, or NULL */
     void *hooks_ctx;
+    /* For src/css: the class names and ids that were added to or removed
+     * from any element since the last style pass, which clears the list.
+     * style_names_n above AU_DOC_STYLE_NAMES means more changed than fit:
+     * which ones is then unknown. */
+    AuAtom style_names[24];
+    uint8_t style_names_n;
 };
+#define AU_DOC_STYLE_NAMES 24
 
 /* ---- Casts. The caller checks node->type first. ---- */
 static inline AuElement *au_as_element(AuNode *n) { return (AuElement *)n; }

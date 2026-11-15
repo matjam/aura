@@ -199,6 +199,12 @@ struct AuCssResolver {
     struct StateDep *deps; /* what a state change must restyle besides the element */
     uint32_t ndeps, deps_cap;
     uint32_t state_used; /* state bits some selector reads */
+    bool deps_unknown;   /* a selector nested too deeply to analyse: changes restyle everything */
+    uint32_t *named;     /* class, id and attribute names selectors use (named_has) */
+    uint32_t named_size, named_count;
+    struct PendingAttr *pending; /* elements whose class or id changed since the last restyle */
+    uint32_t npending, pending_cap;
+    uint32_t styled_count; /* elements styled since creation (au_css_resolver_styled_count) */
     uint32_t stat_computed; /* elements computed since the last css_resolver_take_computed */
 };
 
@@ -335,15 +341,18 @@ static void selector_keys(const AuSelector *s, bool quirks, uint32_t entry, Inde
     }
 }
 
-/* ---- State dependencies ----
+/* ---- State and attribute dependencies ----
  *
  * For targeted invalidation of state changes (hover, active, focus,
- * checked...). Every selector of the index is analysed once: for each state
- * pseudo-class it reads, where the elements it can style lie relative to
- * the element E whose state changes.
+ * checked...) and of class, id and attribute changes. Every selector of
+ * the index is analysed once: for each state pseudo-class it reads and
+ * each class, id and attribute it names, where the elements it can style
+ * lie relative to the element E that changes.
  *
- * - In the subject compound ("a:hover"): E itself. Nothing is recorded;
- *   E is always restyled.
+ * - In the subject compound ("a:hover", "a.on"): E itself. For a state
+ *   nothing is recorded, E is always restyled; a class, id or attribute
+ *   name goes into the set of names some selector uses (a change of a
+ *   name outside it restyles nothing).
  * - Left of a descendant or child combinator (".menu:hover .item"):
  *   descendants of E (REL_DESC).
  * - Left of a sibling combinator ("input:checked + label",
@@ -360,12 +369,17 @@ static void selector_keys(const AuSelector *s, bool quirks, uint32_t entry, Inde
  * A record applies to E only if E has the key (id, class, tag or attribute
  * name) of the compound that reads the state. */
 enum { REL_SELF = 0, REL_DESC, REL_SIB, REL_SIBDESC, REL_ANY };
+enum { F_STATE = 0, F_CLASS, F_ID, F_ATTR };
 #define STATE_OTHER (1u << 31) /* pseudo-classes that follow control values and attributes */
+#define STATE_LINK (1u << 30)  /* :link, :any-link (the href attribute) */
+#define STATE_LANG (1u << 29)  /* :lang() (lang attributes of the element and its ancestors) */
+#define STATE_DIR (1u << 28)   /* :dir() */
 #define STATE_ALL (~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY | AU_STATE_STYLE_SELF_DIRTY))
 
 typedef struct StateDep {
-    uint32_t state; /* AU_STATE_* bits and STATE_OTHER */
+    uint32_t state; /* F_STATE: AU_STATE_* and STATE_* bits; else the class, id or attribute name */
     AuAtom key, anchor;
+    uint8_t fkind;    /* F_* */
     uint8_t rel;      /* REL_*: relative to E, or to the anchor when in_has */
     uint8_t in_has;
     uint8_t has_sib;  /* the anchor may be a preceding sibling */
@@ -406,6 +420,10 @@ static uint32_t pseudo_state(int op)
     case PC_USER_INVALID:
     case PC_IN_RANGE:
     case PC_OUT_OF_RANGE: return STATE_OTHER;
+    case PC_LINK:
+    case PC_ANY_LINK: return STATE_LINK;
+    case PC_LANG: return STATE_LANG;
+    case PC_DIR: return STATE_DIR;
     default: return 0;
     }
 }
@@ -419,12 +437,64 @@ static uint8_t rel_cross(uint8_t rel, int comb)
     return rel == REL_SELF || rel == REL_SIB ? REL_SIB : REL_SIBDESC;
 }
 
-static void dep_add(DepCtx *cx, uint32_t state, uint8_t rel, IndexKey key)
+/* The set of class, id and attribute names selectors use: open
+ * addressing over (name << 2 | F_*). */
+static bool named_has(const AuCssResolver *r, uint8_t fkind, AuAtom a)
+{
+    if (!r->named_size || !a)
+        return false;
+    uint32_t key = (a << 2) | fkind;
+    for (uint32_t h = (key * 2654435761u) & (r->named_size - 1); r->named[h]; h = (h + 1) & (r->named_size - 1))
+        if (r->named[h] == key)
+            return true;
+    return false;
+}
+
+static void named_add(AuCssResolver *r, uint8_t fkind, AuAtom a)
+{
+    if (!a || named_has(r, fkind, a))
+        return;
+    if (r->named_count * 2 >= r->named_size) {
+        uint32_t size = r->named_size ? r->named_size * 2 : 256;
+        uint32_t *t = au_calloc(size * sizeof *t);
+        for (uint32_t i = 0; i < r->named_size; i++) {
+            if (!r->named[i])
+                continue;
+            uint32_t h = (r->named[i] * 2654435761u) & (size - 1);
+            while (t[h])
+                h = (h + 1) & (size - 1);
+            t[h] = r->named[i];
+        }
+        au_free(r->named);
+        r->named = t;
+        r->named_size = size;
+    }
+    uint32_t key = (a << 2) | fkind;
+    uint32_t h = (key * 2654435761u) & (r->named_size - 1);
+    while (r->named[h])
+        h = (h + 1) & (r->named_size - 1);
+    r->named[h] = key;
+    r->named_count++;
+}
+
+static void dep_add(DepCtx *cx, uint8_t fkind, uint32_t state, uint8_t rel, IndexKey key)
 {
     AuCssResolver *r = cx->r;
-    r->state_used |= state;
+    if (fkind == F_STATE) {
+        r->state_used |= state;
+        /* kept in the subject compound too: only elements with the key
+         * of a compound that reads the state are restyled */
+    } else {
+        /* the element that changes may be gaining or losing the key itself */
+        named_add(r, fkind, state);
+        key.kind = KEY_UNIVERSAL;
+        key.atom = 0;
+        if (!cx->in_has && rel == REL_SELF)
+            return;
+    }
     StateDep d;
     memset(&d, 0, sizeof d);
+    d.fkind = fkind;
     d.state = state;
     d.key = key.atom;
     d.key_kind = key.kind;
@@ -435,8 +505,6 @@ static void dep_add(DepCtx *cx, uint32_t state, uint8_t rel, IndexKey key)
         d.has_sib = cx->has_sib;
         d.anchor = cx->anchor.atom;
         d.anchor_kind = cx->anchor.kind;
-    } else if (rel == REL_SELF) {
-        return;
     }
     /* sheets repeat patterns: look at the last few records */
     for (uint32_t i = r->ndeps, n = 0; i-- > 0 && n < 8; n++)
@@ -451,8 +519,7 @@ static void dep_add(DepCtx *cx, uint32_t state, uint8_t rel, IndexKey key)
 static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey outer, int depth)
 {
     if (depth > 8) {
-        IndexKey any = {KEY_UNIVERSAL, 0, 0};
-        dep_add(cx, STATE_ALL, REL_ANY, any);
+        cx->r->deps_unknown = true;
         return;
     }
     bool quirks = cx->r->quirks;
@@ -468,10 +535,16 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
             const AuSelList *nested = NULL;
             if (c->type == SC_NESTING) {
                 nested = c->u.list;
+            } else if (c->type == SC_CLASS) {
+                dep_add(cx, F_CLASS, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+            } else if (c->type == SC_ID) {
+                dep_add(cx, F_ID, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+            } else if (c->type == SC_ATTR) {
+                dep_add(cx, F_ATTR, c->name, rel, key);
             } else if (c->type == SC_PSEUDO) {
                 uint32_t st = pseudo_state(c->op);
                 if (st) {
-                    dep_add(cx, st, rel, key);
+                    dep_add(cx, F_STATE, st, rel, key);
                 } else if (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT) {
                     nested = c->u.list;
                 } else if (c->op == PC_HAS && c->u.list) {
@@ -505,12 +578,45 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
     }
 }
 
-static int dep_cmp(const void *a, const void *b) { return memcmp(a, b, sizeof(StateDep)); }
+/* By kind, then state or name (ranges are found by binary search). */
+static int dep_cmp(const void *a, const void *b)
+{
+    const StateDep *x = a, *y = b;
+    if (x->fkind != y->fkind)
+        return x->fkind < y->fkind ? -1 : 1;
+    if (x->state != y->state)
+        return x->state < y->state ? -1 : 1;
+    return memcmp(a, b, sizeof(StateDep));
+}
 
-static void deps_build(AuCssResolver *r)
+/* The first record of a class, id or attribute name. */
+static uint32_t dep_find(const AuCssResolver *r, uint8_t fkind, AuAtom a)
+{
+    uint32_t lo = 0, hi = r->ndeps;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        const StateDep *d = &r->deps[mid];
+        if (d->fkind < fkind || (d->fkind == fkind && d->state < a))
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+static void deps_clear(AuCssResolver *r)
 {
     r->ndeps = 0;
     r->state_used = 0;
+    r->deps_unknown = false;
+    au_free(r->named);
+    r->named = NULL;
+    r->named_size = r->named_count = 0;
+}
+
+static void deps_build(AuCssResolver *r)
+{
+    deps_clear(r);
     DepCtx cx;
     memset(&cx, 0, sizeof cx);
     cx.r = r;
@@ -642,11 +748,12 @@ static void index_clear(AuCssResolver *r)
     r->uni_start = r->uni_count = 0;
     r->has_has = false;
     r->nprops = 0;
-    r->ndeps = 0;
-    r->state_used = 0;
+    deps_clear(r);
 }
 
 static void share_clear(AuCssResolver *r);
+static void pending_drop(AuCssResolver *r);
+static void pending_flush(AuCssResolver *r, AuDocument *doc);
 
 static void sort_registrations(AuCssResolver *r);
 
@@ -745,6 +852,8 @@ void au_css_resolver_free(AuCssResolver *r)
     inline_clear(r);
     css_has_index_free(&r->has_idx);
     au_free(r->inl);
+    pending_drop(r);
+    au_free(r->pending);
     au_free(r->deps);
     au_free(r->entries);
     for (int i = 0; i < 3; i++)
@@ -1861,6 +1970,7 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
 {
     prepare(r, el);
     r->stat_computed++;
+    r->styled_count++;
     CssMatchCtx mc = {0};
     mc.bloom = bloom;
     mc.quirks = r->quirks;
@@ -1965,6 +2075,17 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
         if (p) {
             *tail = p;
             tail = &p->next;
+            if (p->flags & AU_STYLE_F_HAS_ATTR) {
+                /* content: attr(x) differs per element: the element's
+                 * style, which carries it, must not be shared */
+                s->flags |= AU_STYLE_F_HAS_ATTR;
+                for (int i = 0; i < SHARE_SLOTS; i++)
+                    if (r->share[i].style == s) {
+                        au_free(r->share[i].entries);
+                        au_style_release(r->share[i].style);
+                        memset(&r->share[i], 0, sizeof r->share[i]);
+                    }
+            }
         }
     }
 }
@@ -2035,6 +2156,38 @@ static bool style_same(const AuStyle *a, const AuStyle *b)
     return !p && !q;
 }
 
+/* Gives a new style the old style's groups where their values are equal
+ * (and likewise for their pseudo-element styles), so that a change of one
+ * property leaves the other groups pointer-equal for whoever compares
+ * styles by group (layout's style_diff). */
+static void adopt_groups(AuStyle *s, const AuStyle *old)
+{
+    for (; s && old; s = s->pseudo ? s->next : s->pseudos, old = old->pseudo ? old->next : old->pseudos) {
+        if (s->pseudo != old->pseudo)
+            break;
+        for (int g = 0; g < G_COUNT; g++) {
+            void *cur = css_style_group(s, g), *og = css_style_group(old, g);
+            if (cur == og || !css_group_same(g, cur, og))
+                continue;
+            if (g == G_INH && !custom_same(s->inh->custom, old->inh->custom))
+                continue;
+            void **slot;
+            switch (g) {
+            case G_INH: slot = (void **)&s->inh; break;
+            case G_INHR: slot = (void **)&s->inhr; break;
+            case G_BOX: slot = (void **)&s->box; break;
+            case G_SURR: slot = (void **)&s->surr; break;
+            case G_BG: slot = (void **)&s->bg; break;
+            case G_FLEX: slot = (void **)&s->flex; break;
+            default: slot = (void **)&s->rare; break;
+            }
+            (*(uint32_t *)og)++;
+            css_group_release(g, cur);
+            *slot = og;
+        }
+    }
+}
+
 /* Styles elements in preorder. With only_dirty, an element is restyled if
  * it or an ancestor is marked AU_STATE_STYLE_DIRTY, or if it is marked
  * AU_STATE_STYLE_SELF_DIRTY; a self-dirty element whose style comes out
@@ -2074,9 +2227,14 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
             if (!pe)
                 r->root_style = s; /* its pseudo-elements may use rem */
             attach_pseudos(r, el, s);
-            if (!forced && style_same(s, au_element_style(el))) {
+            /* Equal values keep the old object, so that what compares
+             * style pointers (layout) sees no change. A marked element
+             * that changed takes its subtree along: descendants inherit. */
+            if (el->style && style_same(s, au_element_style(el))) {
                 au_style_release(s);
             } else {
+                if (el->style)
+                    adopt_groups(s, au_element_style(el));
                 store_style(el, s);
                 forced = true;
             }
@@ -2101,14 +2259,24 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     share_clear(r);
     css_has_index_free(&r->has_idx);
     r->has_root = NULL;
+    doc->style_names_n = 0; /* the class and id changes are styled */
     r->styled_once = true;
     r->full_restyle = false;
 }
 
-void au_css_style_document(AuCssResolver *r, AuDocument *doc) { style_pass(r, doc, false); }
+void au_css_style_document(AuCssResolver *r, AuDocument *doc)
+{
+    pending_drop(r);
+    style_pass(r, doc, false);
+}
+
+uint32_t au_css_resolver_styled_count(const AuCssResolver *r) { return r->styled_count; }
 
 void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 {
+    if (r->styled_once && !r->full_restyle && !r->index_dirty)
+        pending_flush(r, doc);
+    pending_drop(r);
     if (!r->styled_once || r->full_restyle || r->index_dirty)
         style_pass(r, doc, false);
     else
@@ -2186,41 +2354,191 @@ static void dep_apply(AuCssResolver *r, AuElement *el, uint8_t rel)
     }
 }
 
+/* Marks what record d reaches from el, whose state or name changed. */
+static void dep_fire(AuCssResolver *r, AuElement *el, const StateDep *d)
+{
+    if (!d->in_has) {
+        dep_apply(r, el, d->rel);
+        return;
+    }
+    if (d->rel == REL_ANY) {
+        r->full_restyle = true;
+        return;
+    }
+    /* candidate anchors: ancestors of el; with a leading sibling
+     * combinator, preceding siblings of el and of its ancestors */
+    for (AuElement *a = el; a; a = parent_element(a)) {
+        if (d->has_sib) {
+            for (AuNode *p = a->node.prev; p; p = p->prev)
+                if (p->type == AU_NODE_ELEMENT && dep_key_match(r, d->anchor_kind, d->anchor, (AuElement *)p))
+                    dep_apply(r, (AuElement *)p, d->rel);
+        } else if (a != el && dep_key_match(r, d->anchor_kind, d->anchor, a)) {
+            dep_apply(r, a, d->rel);
+        }
+    }
+}
+
 void au_css_invalidate_state(AuCssResolver *r, AuElement *el, uint32_t bits)
 {
     if (!r->styled_once || r->index_dirty || r->full_restyle) {
         r->full_restyle = true; /* the next restyle is a full one, or the records are stale */
         return;
     }
+    if (r->deps_unknown) {
+        r->full_restyle = true;
+        return;
+    }
     bits &= STATE_ALL;
-    if (bits == STATE_ALL)
-        bits |= STATE_OTHER;
     if (!(bits & r->state_used))
         return;
-    dep_apply(r, el, REL_SELF);
-    for (uint32_t i = 0; i < r->ndeps && !r->full_restyle; i++) {
+    for (uint32_t i = 0; i < r->ndeps && r->deps[i].fkind == F_STATE && !r->full_restyle; i++) {
         const StateDep *d = &r->deps[i];
-        if (!(d->state & bits) || !dep_key_match(r, d->key_kind, d->key, el))
-            continue;
-        if (!d->in_has) {
-            dep_apply(r, el, d->rel);
-            continue;
-        }
-        if (d->rel == REL_ANY) {
-            r->full_restyle = true;
+        if ((d->state & bits) && dep_key_match(r, d->key_kind, d->key, el))
+            dep_fire(r, el, d);
+    }
+}
+
+/* A class, id or attribute name changed on el: nothing if no selector
+ * uses the name; else el, and what the records of the name reach. */
+static void invalidate_name(AuCssResolver *r, AuElement *el, uint8_t fkind, AuAtom a)
+{
+    if (!named_has(r, fkind, a))
+        return;
+    dep_apply(r, el, REL_SELF);
+    for (uint32_t i = dep_find(r, fkind, a); i < r->ndeps && !r->full_restyle; i++) {
+        const StateDep *d = &r->deps[i];
+        if (d->fkind != fkind || d->state != a)
             break;
+        dep_fire(r, el, d);
+    }
+}
+
+/* What invalidation did before it was targeted, still used for child
+ * changes and when the changed names are unknown: the whole document when
+ * a :has() rule exists, else the subtrees of el and of its following
+ * siblings. */
+static void invalidate_coarse(AuCssResolver *r, AuElement *el, bool children)
+{
+    if (r->has_has) {
+        r->full_restyle = true;
+        return;
+    }
+    el->state |= AU_STATE_STYLE_DIRTY;
+    for (AuNode *s = el->node.next; s; s = s->next)
+        if (s->type == AU_NODE_ELEMENT)
+            ((AuElement *)s)->state |= AU_STATE_STYLE_DIRTY;
+    if (children) {
+        for (AuNode *c = el->node.first_child; c; c = c->next)
+            if (c->type == AU_NODE_ELEMENT)
+                ((AuElement *)c)->state |= AU_STATE_STYLE_DIRTY;
+    }
+    mark_ancestors(el);
+}
+
+/* Class and id changes are resolved when the restyle starts: the hook that
+ * reports them may run before the attribute changes, and the names that
+ * changed are in AuDocument.style_names only afterwards. */
+typedef struct PendingAttr {
+    AuElement *el; /* referenced */
+} PendingAttr;
+
+static void pending_drop(AuCssResolver *r)
+{
+    for (uint32_t i = 0; i < r->npending; i++)
+        au_node_unref(&r->pending[i].el->node);
+    r->npending = 0;
+}
+
+static void pending_flush(AuCssResolver *r, AuDocument *doc)
+{
+    bool q = r->quirks;
+    for (uint32_t i = 0; i < r->npending && !r->full_restyle; i++) {
+        AuElement *el = r->pending[i].el;
+        if (el->node.doc != doc || !au_node_is_connected(&el->node))
+            continue;
+        if (doc->style_names_n > AU_DOC_STYLE_NAMES) {
+            invalidate_coarse(r, el, false);
+            continue;
         }
-        /* candidate anchors: ancestors of el; with a leading sibling
-         * combinator, preceding siblings of el and of its ancestors */
-        for (AuElement *a = el; a; a = parent_element(a)) {
-            if (d->has_sib) {
-                for (AuNode *p = a->node.prev; p; p = p->prev)
-                    if (p->type == AU_NODE_ELEMENT && dep_key_match(r, d->anchor_kind, d->anchor, (AuElement *)p))
-                        dep_apply(r, (AuElement *)p, d->rel);
-            } else if (a != el && dep_key_match(r, d->anchor_kind, d->anchor, a)) {
-                dep_apply(r, a, d->rel);
-            }
+        for (uint8_t k = 0; k < doc->style_names_n; k++) {
+            AuAtom a = q ? css_atom_lower(doc->style_names[k]) : doc->style_names[k];
+            invalidate_name(r, el, F_CLASS, a);
+            invalidate_name(r, el, F_ID, a);
         }
+        invalidate_name(r, el, F_ATTR, AU_ATOM_class);
+        invalidate_name(r, el, F_ATTR, AU_ATOM_id);
+    }
+    pending_drop(r);
+}
+
+/* The state bits pseudo-classes read from an attribute, 0 for none. */
+static uint32_t attr_state(AuAtom a)
+{
+    if (a == HN(href))
+        return STATE_LINK;
+    if (a == HN(checked) || a == HN(selected) || a == HN(type))
+        return AU_STATE_CHECKED | AU_STATE_CHECKED_SET | STATE_OTHER;
+    if (a == HN(disabled) || a == HN(required) || a == HN(readonly) || a == HN(value) || a == HN(placeholder) ||
+        a == HN(min) || a == HN(max) || a == HN(multiple) || a == HN(contenteditable))
+        return STATE_OTHER;
+    if (a == HN(lang) || a == HN(xml_lang))
+        return STATE_LANG;
+    if (a == HN(dir_attr))
+        return STATE_DIR;
+    return 0;
+}
+
+/* An attribute presentational hints never read. Anything else restyles
+ * the element, which costs one element when nothing comes of it. */
+static bool attr_never_hint(const AuElement *el, AuAtom a)
+{
+    if (el->ns != AU_NS_HTML)
+        return false; /* SVG presentation attributes */
+    const char *n = au_atom_str(a);
+    if (!strncmp(n, "aria-", 5) || !strncmp(n, "data-", 5))
+        return true;
+    if (a == HN(value))
+        return el->tag != HN(li);
+    return a == HN(name) || a == HN(placeholder) || a == HN(href) || a == HN(checked) || a == HN(selected) ||
+           a == HN(disabled) || a == HN(required) || a == HN(readonly) || a == HN(tabindex) || a == HN(title) ||
+           a == HN(min) || a == HN(max) || a == HN(step) || a == HN(multiple) || !strcmp(n, "role") ||
+           !strcmp(n, "autocomplete") || !strcmp(n, "for") || !strcmp(n, "target") || !strcmp(n, "rel");
+}
+
+static void invalidate_attr(AuCssResolver *r, AuElement *el, AuAtom attr)
+{
+    if (attr == AU_ATOM_class || attr == AU_ATOM_id) {
+        if (r->npending && r->pending[r->npending - 1].el == el)
+            return;
+        if (r->npending >= 256) {
+            r->full_restyle = true;
+            pending_drop(r);
+            return;
+        }
+        PendingAttr *p = CSS_PUSH(r->pending, r->npending, r->pending_cap);
+        p->el = el;
+        au_node_ref(&el->node);
+        return;
+    }
+    AuAtom a = css_atom_lower(attr);
+    invalidate_name(r, el, F_ATTR, a);
+    uint32_t bits = attr_state(a);
+    if (bits & r->state_used) {
+        au_css_invalidate_state(r, el, bits);
+        /* these reach descendants: :lang() and :dir() of the subtree,
+         * :disabled in a fieldset or optgroup, :read-write under contenteditable */
+        if (a == HN(lang) || a == HN(xml_lang) || a == HN(dir_attr) || a == HN(contenteditable) ||
+            (a == HN(disabled) && (el->tag == HN(fieldset) || el->tag == HN(optgroup))))
+            dep_apply(r, el, REL_DESC);
+    }
+    const AuStyle *st = au_element_style(el);
+    bool uses_attr = st && (st->flags & AU_STYLE_F_HAS_ATTR);
+    for (const AuStyle *p = st ? st->pseudos : NULL; p && !uses_attr; p = p->next)
+        uses_attr = (p->flags & AU_STYLE_F_HAS_ATTR) != 0;
+    if (uses_attr || !attr_never_hint(el, a)) {
+        /* cells and links take hints from their table and body */
+        bool down = el->ns == AU_NS_HTML && (el->tag == HN(table) || el->tag == HN(body));
+        dep_apply(r, el, down ? REL_DESC : REL_SELF);
     }
 }
 
@@ -2276,29 +2594,31 @@ bool css_resolver_has_has(AuCssResolver *r) { return r->has_has; }
 
 void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAtom attr)
 {
-    (void)attr;
     if (change == AU_CSS_CHANGE_STATE) {
         au_css_invalidate_state(r, el, ~(uint32_t)0);
         return;
     }
-    if (change == AU_CSS_CHANGE_ALL || r->has_has) {
+    if (change == AU_CSS_CHANGE_ALL || !r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown) {
         r->full_restyle = true;
         return;
     }
-    if (change == AU_CSS_CHANGE_INLINE_STYLE)
-        inline_clear(r);
-    /* the element, and following siblings (sibling combinators, nth) */
-    el->state |= AU_STATE_STYLE_DIRTY;
-    for (AuNode *s = el->node.next; s; s = s->next)
-        if (s->type == AU_NODE_ELEMENT)
-            ((AuElement *)s)->state |= AU_STATE_STYLE_DIRTY;
-    if (change == AU_CSS_CHANGE_CHILDREN) {
-        for (AuNode *c = el->node.first_child; c; c = c->next)
-            if (c->type == AU_NODE_ELEMENT)
-                ((AuElement *)c)->state |= AU_STATE_STYLE_DIRTY;
+    switch (change) {
+    case AU_CSS_CHANGE_INLINE_STYLE:
+        /* the element (its subtree follows if its style changes), and
+         * what [style] selectors reach */
+        dep_apply(r, el, REL_SELF);
+        invalidate_name(r, el, F_ATTR, AU_ATOM_style);
+        break;
+    case AU_CSS_CHANGE_ATTR:
+        if (attr)
+            invalidate_attr(r, el, attr);
+        else
+            invalidate_coarse(r, el, false);
+        break;
+    default:
+        invalidate_coarse(r, el, change == AU_CSS_CHANGE_CHILDREN);
+        break;
     }
-    for (AuNode *p = el->node.parent; p && p->type == AU_NODE_ELEMENT; p = p->parent)
-        ((AuElement *)p)->state |= AU_STATE_SUBTREE_DIRTY;
 }
 
 /* ---- Debug and test access ---- */

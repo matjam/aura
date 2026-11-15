@@ -687,15 +687,28 @@ void au_css_style_document(AuCssResolver *r, AuDocument *doc);
 /* Restyles what au_css_invalidate marked; styles everything if nothing
  * was styled before. */
 void au_css_restyle(AuCssResolver *r, AuDocument *doc);
+/* The number of elements styled since the resolver was created (for
+ * tests and timings: how much a change restyled). */
+uint32_t au_css_resolver_styled_count(const AuCssResolver *r);
 /* Releases every AuElement.style in doc. */
 void au_css_clear_document(AuDocument *doc);
 
 /* ---- Invalidation ----
  * Tell the resolver what changed; au_css_restyle then recomputes what is
- * affected. Attribute, child and inline style changes restyle the
- * element's subtree and its following siblings' subtrees, or the whole
- * document when a :has() rule exists or the change is global. State
- * changes are targeted (see au_css_invalidate_state). */
+ * affected. Call it before or after the change, and au_css_restyle after
+ * it.
+ *
+ * State, attribute, class, id and inline style changes are targeted: the
+ * element is restyled, plus the descendants, following siblings and
+ * :has() anchors that some selector reading that state or naming that
+ * class, id or attribute can reach from it. A class, id or attribute no
+ * selector names (and that no presentational hint, attr() or pseudo-class
+ * reads) restyles nothing. An element whose new style has the same values
+ * keeps its old AuStyle object, and its subtree is left alone unless a
+ * selector reaches into it; so equal styles stay pointer-equal.
+ *
+ * Child changes restyle the element's subtree and its following siblings'
+ * subtrees, or the whole document when a :has() rule exists. */
 typedef enum {
     AU_CSS_CHANGE_ATTR,     /* an attribute, class or id changed (attr: its name) */
     AU_CSS_CHANGE_STATE,    /* hover, focus, checked, ... (AU_STATE_* bits) */

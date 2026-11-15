@@ -202,7 +202,15 @@ static const char sheet_plain[] =
     "a:focus + span { color: navy }"
     "a:active { color: orange }"
     ".menu:active .tip { color: pink }"
-    "button:active { padding: 3px } button:hover:not(:active) { margin: 2px }";
+    "button:active { padding: 3px } button:hover:not(:active) { margin: 2px }"
+    /* classes, ids and attributes */
+    ".on { color: red; --c: teal } .on > b { font-weight: 900 } .on + li { top: 1px } .on ~ * span { left: 1px }"
+    "[data-s] { right: 2px } [data-s=b] .tip { bottom: 1px } [data-s]::before { content: attr(data-s) }"
+    "#zap { outline: 1px solid } #zap + div span { color: aqua } :not(.on) > em { padding: 1px }"
+    ":is(.on, #zap) > a { letter-spacing: 2px } .card.on .foot > .mark.on { color: lime }"
+    "[style] > span { word-spacing: 1px } a:link { color: navy } :lang(fr) > code { color: brown }"
+    "input:disabled + label { color: gray } [class~=on] i { color: silver } [id] > h2 { margin: 3px }"
+    "td[bgcolor] + td { color: white }";
 
 static const char sheet_has_plain[] = /* :has() without a state inside */
     ".card:has(.foot) { margin: 4px }"
@@ -229,10 +237,16 @@ static const char sheet_has_state[] =
     "tr:has(td:hover) + tr a { color: maroon }"
     "table:has(a:hover) td.k { color: olive }"
     ".foot:has(#r1:checked) .mark { color: red }"
-    ".foot:has(#r2:checked) { --c: blue } .mark { background: var(--c, white) }";
+    ".foot:has(#r2:checked) { --c: blue } .mark { background: var(--c, white) }"
+    /* classes, ids and attributes in :has() arguments */
+    ".menu:has(.on) .tip { text-indent: 2px } div:has(> [data-s]) { min-width: 3px }"
+    "body:has(#zap) { margin: 9px } span:has(+ .on) { color: fuchsia } .card:has(.foot .on) h2 { top: 2px }"
+    "li:has(~ li.on) a { bottom: 3px } :not(:has([data-s])) > code { color: tan }"
+    "table:has(td[bgcolor]) { border-spacing: 1px } ul:has(a:link) { padding: 4px }";
 
 static void run_page(const char *what, const char *css1, const char *css2, uint32_t *max_hover)
 {
+    const char *label = what;
     AuDocument *doc = au_html_parse(page, sizeof page - 1, NULL);
     AuCssResolver *r = au_css_resolver_new();
     au_css_resolver_add_sheet(r, au_css_sheet_parse(css1, strlen(css1), AU_CSS_ORIGIN_AUTHOR, "http://x/", NULL));
@@ -311,6 +325,65 @@ static void run_page(const char *what, const char *css1, const char *css2, uint3
         restyle_and_compare(r, doc, what, step++);
     }
 
+    /* classes, ids, attributes and inline styles: some named by selectors,
+     * some not; reported before the change (as the DOM hook does) or
+     * after it */
+    AuAtom data_s = au_atom_cstr("data-s"), data_u = au_atom_cstr("data-u"), a_href = au_atom_cstr("href");
+    AuAtom a_lang = au_atom_cstr("lang"), a_dis = au_atom_cstr("disabled"), a_bg = au_atom_cstr("bgcolor");
+    for (uint32_t i = 0; i < 12 * n; i++) {
+        AuElement *t = el[rnd(n)];
+        bool before = rnd(2) == 0;
+        uint32_t kind = rnd(12);
+        AuAtom attr = 0;
+        const char *val = NULL; /* NULL removes */
+        char cls[64];
+        switch (kind) {
+        case 0:
+        case 1:
+        case 2: { /* toggle a class selectors name, or one they do not */
+            const char *name = kind == 2 ? "zz" : "on";
+            AuAtom ca = au_atom_cstr(name);
+            const char *cur = au_element_get_attr(t, AU_ATOM_class);
+            attr = AU_ATOM_class;
+            if (au_element_has_class(t, ca)) {
+                /* drop it: keep the first other class */
+                cls[0] = 0;
+                for (uint32_t k = 0; k < t->nclasses; k++)
+                    if (t->classes[k] != ca && strlen(cls) + strlen(au_atom_str(t->classes[k])) + 2 < sizeof cls) {
+                        strcat(cls, au_atom_str(t->classes[k]));
+                        strcat(cls, " ");
+                    }
+            } else {
+                snprintf(cls, sizeof cls, "%.40s %s", cur ? cur : "", name);
+            }
+            val = cls;
+            break;
+        }
+        case 3: attr = data_s; val = rnd(3) == 0 ? NULL : rnd(2) ? "a" : "b"; break;
+        case 4: attr = data_u; val = rnd(2) ? "x" : NULL; break;
+        case 5: attr = AU_ATOM_id; val = rnd(2) ? "zap" : rnd(2) ? "other" : NULL; break;
+        case 6: attr = AU_ATOM_style; val = rnd(3) == 0 ? NULL : rnd(2) ? "color: green; font-size: 12px" : "top: 4px"; break;
+        case 7: attr = a_href; val = rnd(2) ? "#x" : NULL; break;
+        case 8: attr = a_lang; val = rnd(2) ? "fr" : NULL; break;
+        case 9: attr = a_dis; val = rnd(2) ? "" : NULL; break;
+        case 10: attr = a_bg; val = rnd(2) ? "#ff0000" : NULL; break;
+        default: attr = au_atom_cstr("aria-expanded"); val = rnd(2) ? "true" : "false"; break;
+        }
+        AuCssChange ch = attr == AU_ATOM_style ? AU_CSS_CHANGE_INLINE_STYLE : AU_CSS_CHANGE_ATTR;
+        if (before)
+            au_css_invalidate(r, t, ch, attr);
+        if (val)
+            au_element_set_attr(t, attr, val, strlen(val));
+        else
+            au_element_remove_attr(t, attr);
+        if (!before)
+            au_css_invalidate(r, t, ch, attr);
+        if (i % 3 != 2) /* sometimes two changes before one restyle */
+            restyle_and_compare(r, doc, label, step);
+        step++;
+    }
+    restyle_and_compare(r, doc, what, step++);
+
     au_free(el);
     au_css_clear_document(doc);
     au_node_unref(&doc->node);
@@ -324,7 +397,7 @@ static void test_counts(void)
         "<!doctype html><body><div class=card><p>a <a href=# id=l1>one</a> b <a href=# id=l2>two</a></p>"
         "<ul><li>1<li>2<li>3<li>4<li>5<li>6<li>7<li>8</ul></div><p id=q>tail <b>x</b></p></body>";
     static const char css[] = "a:hover { color: red } .card:has(ul) { margin: 1px } p:hover { background: #eee }"
-                              " li:hover { color: blue }";
+                              " li:hover { color: blue } .noop { margin-left: 0 } .tint { background-color: #abc !important }";
     AuDocument *doc = au_html_parse(html, sizeof html - 1, NULL);
     AuCssResolver *r = au_css_resolver_new();
     au_css_resolver_add_sheet(r, au_css_sheet_parse(css, strlen(css), AU_CSS_ORIGIN_AUTHOR, "http://x/", NULL));
@@ -345,10 +418,10 @@ static void test_counts(void)
     css_resolver_take_computed(r);
     au_css_move_state(r, NULL, l1, AU_STATE_HOVER);
     au_css_restyle(r, doc);
-    /* the link and its ancestors (p, div, body, html); p changes, so its
-     * other link is restyled too */
+    /* the link and its paragraph, the ancestors a :hover rule can match;
+     * p changes, so its other link is restyled too */
     uint32_t c = css_resolver_take_computed(r);
-    CHECK(c == 6);
+    CHECK(c == 3);
     CHECK(l1->state & AU_STATE_HOVER);
     CHECK(parent_of(l1)->state & AU_STATE_HOVER);
     au_css_move_state(r, l1, l2, AU_STATE_HOVER);
@@ -367,6 +440,49 @@ static void test_counts(void)
     au_css_invalidate_state(r, q, AU_STATE_TARGET);
     au_css_restyle(r, doc);
     CHECK(css_resolver_take_computed(r) == 0);
+    /* nor does an attribute or a class no selector names, though the
+     * page has :has() rules; reported before the change, as the DOM hook
+     * does, or after it */
+    uint32_t before = au_css_resolver_styled_count(r);
+    au_css_invalidate(r, l1, AU_CSS_CHANGE_ATTR, au_atom_cstr("aria-expanded"));
+    au_element_set_attr(l1, au_atom_cstr("aria-expanded"), "true", 4);
+    au_css_invalidate(r, q, AU_CSS_CHANGE_ATTR, au_atom_cstr("value"));
+    au_element_set_attr(q, au_atom_cstr("value"), "typed", 5);
+    au_css_restyle(r, doc);
+    CHECK(au_css_resolver_styled_count(r) == before);
+    au_css_invalidate(r, l2, AU_CSS_CHANGE_ATTR, AU_ATOM_class);
+    au_element_set_attr(l2, AU_ATOM_class, "unnamed other", 13);
+    au_element_set_attr(q, AU_ATOM_class, "unnamed", 7);
+    au_css_invalidate(r, q, AU_CSS_CHANGE_ATTR, AU_ATOM_class);
+    au_css_restyle(r, doc);
+    CHECK(au_css_resolver_styled_count(r) == before);
+    /* a class a subject compound names restyles that element only, and a
+     * style that comes out with the same values keeps its object */
+    const AuStyle *q_style = au_element_style(q), *l2_style = au_element_style(l2);
+    const AuStyle *b_style = au_element_style((AuElement *)q->node.last_child);
+    au_css_invalidate(r, q, AU_CSS_CHANGE_ATTR, AU_ATOM_class);
+    au_element_set_attr(q, AU_ATOM_class, "unnamed noop", 12); /* ".noop {}" matches, declares nothing new */
+    au_css_restyle(r, doc);
+    CHECK(au_css_resolver_styled_count(r) == before + 1);
+    CHECK(au_element_style(q) == q_style);
+    CHECK(au_element_style((AuElement *)q->node.last_child) == b_style);
+    /* a real change replaces the element's style and keeps the groups
+     * that did not change, and the styles of elements it does not reach */
+    au_style_retain((AuStyle *)q_style); /* looked at after the element lets go of it */
+    au_css_invalidate(r, q, AU_CSS_CHANGE_ATTR, AU_ATOM_class);
+    au_element_set_attr(q, AU_ATOM_class, "tint", 4);
+    au_css_restyle(r, doc);
+    CHECK(au_element_style(q) != q_style);
+    CHECK(au_element_style(q)->box == q_style->box && au_element_style(q)->surr == q_style->surr);
+    CHECK(au_element_style(q)->inh == q_style->inh);
+    CHECK(au_element_style(q)->bg != q_style->bg);
+    au_style_release((AuStyle *)q_style);
+    CHECK(au_element_style(l2) == l2_style);
+    CHECK(au_element_style((AuElement *)q->node.last_child) == b_style);
+    /* a full restyle with nothing changed keeps every style object */
+    q_style = au_element_style(q);
+    au_css_style_document(r, doc);
+    CHECK(au_element_style(q) == q_style && au_element_style(l2) == l2_style);
     au_free(el);
     au_css_clear_document(doc);
     au_node_unref(&doc->node);

@@ -143,7 +143,7 @@ bool css_group_equal(int g, const void *a, const void *b)
  * property map of G_INH is left to the caller. */
 bool css_group_same(int g, const void *a, const void *b)
 {
-    if (a == b)
+    if (a == b || css_group_equal(g, a, b))
         return true;
     char ta[512], tb[512];
     size_t size = group_sizes[g];
