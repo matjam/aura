@@ -19,6 +19,7 @@ typedef struct Key {
 static const char *const startup_names[] = {"home", "blank", "restore", NULL};
 static const char *const tabpos_names[] = {"top", "left", NULL};
 static const char *const cookie_names[] = {"all", "same-site", "none", NULL};
+static const char *const block_update_names[] = {"daily", "weekly", "never", NULL};
 
 #define S(n, f) {n, T_STR, offsetof(AuPrefs, f), 0, 0, NULL}
 #define B(n, f) {n, T_BOOL, offsetof(AuPrefs, f), 0, 0, NULL}
@@ -66,6 +67,12 @@ static const Key keys[] = {
     S("zoom.sites", zoom_sites),
     S("cookies.sites", cookie_sites),
     B("links.external_new_window", external_new_window),
+    S("blocking.lists", block_lists),
+    S("blocking.custom", block_custom),
+    S("blocking.allow", block_allow),
+    S("blocking.block", block_deny),
+    S("blocking.sites_off", block_sites_off),
+    E("blocking.update", block_update, block_update_names),
 };
 
 #define NKEYS (sizeof keys / sizeof keys[0])
@@ -113,6 +120,8 @@ void au_prefs_init(AuPrefs *p)
     p->send_gpc = true;
     p->https_first = true;
     p->block_trackers = true;
+    au_prefs_set_str(&p->block_lists, "light");
+    p->block_update = AU_BLOCK_UPDATE_DAILY;
     p->warn_app_downloads = true;
     p->history_enabled = true;
     p->history_days = 30;

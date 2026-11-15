@@ -47,4 +47,12 @@ int au_host_fetch_main(int argc, char **argv);
 bool au_host_net_render_wanted(int argc, char **argv);
 int au_host_net_render_main(int argc, char **argv);
 
+/* aura-host blocklist ... (blocklist_tool.c; argv[1] is "blocklist"). */
+int au_host_blocklist_main(int argc, char **argv);
+/* For --blocklist FILE: a set holding the compiled or text list at path,
+ * or NULL with a message; and its counts, printed after a run. */
+struct AuBlocklist;
+struct AuBlocklist *au_host_blocklist_open(const char *path);
+void au_host_blocklist_report(struct AuBlocklist *bl);
+
 #endif

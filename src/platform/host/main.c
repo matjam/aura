@@ -21,6 +21,7 @@
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
+#include "net/blocklist.h"
 #include "net/cache.h"
 #include "net/loader.h"
 #include "net/net_prefs.h"
@@ -61,6 +62,10 @@ static int usage(void)
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
             "                        repainting the page for each, then moving pixels; --no-shift only\n"
             "                        the first)\n"
+            "                        (--blocklist FILE with --net: requests to hosts in the compiled or\n"
+            "                        text list FILE are blocked; the counts are printed at the end)\n"
+            "       aura-host blocklist compile IN OUT | check FILE HOST... | bench LIST.txt [N] |\n"
+            "                        update DIR [--lists \"ID...\"] [--url URL]... [--now]\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n"
             "       aura-host image FILE [-o out.png] [--scale N] [--target WxH] [--chunk N] [--frames]\n"
@@ -293,6 +298,7 @@ typedef struct ChromeOpts {
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
+    const char *blocklist; /* --blocklist FILE: a compiled or text list requests are checked against */
 } ChromeOpts;
 
 /* ---- The scroll benchmark: the Mac shell's flush on the host ----
@@ -627,6 +633,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     AuHostSession ses;
     AuNetLoader *loader = NULL;
     AuNetPageFetcher *pf = NULL;
+    struct AuBlocklist *blocklist = NULL;
     memset(&ses, 0, sizeof ses);
     if (o->net) {
         if (!au_host_session_open(&ses, true, false)) {
@@ -638,6 +645,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         o->cache = au_cache_new(au_net_cache_bytes_from_prefs(&b->prefs));
         au_net_set_cache(ses.net, o->cache);
         loader = au_net_loader_new(ses.net);
+        if (o->blocklist && (blocklist = au_host_blocklist_open(o->blocklist)) != NULL)
+            au_net_loader_set_blocklist(loader, blocklist);
         pf = au_net_page_fetcher_new(loader);
         AuPageFetcher f;
         au_net_page_fetcher_interface(pf, &f);
@@ -749,6 +758,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     au_surface_free(s);
     au_browser_free(b);
     if (o->net) {
+        if (blocklist) {
+            au_host_blocklist_report(blocklist);
+            au_blocklist_free(blocklist);
+        }
         au_net_page_fetcher_free(pf);
         au_net_loader_free(loader);
         au_host_session_close(&ses);
@@ -764,6 +777,8 @@ int main(int argc, char **argv)
     const char *cmd = argv[1];
     if (!strcmp(cmd, "fetch"))
         return au_host_fetch_main(argc, argv);
+    if (!strcmp(cmd, "blocklist"))
+        return au_host_blocklist_main(argc, argv);
     if ((!strcmp(cmd, "render") || !strcmp(cmd, "dump")) && au_host_net_render_wanted(argc, argv))
         return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
@@ -811,6 +826,8 @@ int main(int argc, char **argv)
                 o.loading = true;
             else if (!strcmp(a, "--net"))
                 o.net = true;
+            else if (!strcmp(a, "--blocklist") && i + 1 < argc)
+                o.blocklist = argv[++i];
             else if (!strcmp(a, "--hover") && i + 1 < argc)
                 o.hover = argv[++i];
             else if (!strcmp(a, "--scroll") && i + 1 < argc)

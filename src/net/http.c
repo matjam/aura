@@ -107,6 +107,7 @@ struct AuHttpTransfer {
     char *top_level;
     bool user_activated, reload, omit_credentials, manual_redirect, allow_http_fallback;
     bool history; /* AuHttpRequest.history */
+    bool no_cache; /* AuHttpRequest.no_cache */
     bool https_first_upgrade; /* this attempt is an HTTPS-first upgrade */
     int64_t range_start, range_end;
     uint32_t total_timeout, started_ms, last_ms;
@@ -371,6 +372,7 @@ AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbac
     t->reload = rq->reload;
     t->history = rq->history && !rq->reload;
     t->omit_credentials = rq->omit_credentials;
+    t->no_cache = rq->no_cache;
     t->manual_redirect = rq->manual_redirect;
     t->allow_http_fallback = rq->allow_http_fallback;
     t->range_start = rq->range_start;
@@ -1466,7 +1468,8 @@ static void deliver_response(AuHttpTransfer *t)
  * a range. */
 static bool cache_applies(const AuHttpTransfer *t)
 {
-    return t->net->cache && !strcmp(t->method, "GET") && !t->body && t->range_start < 0 && !t->aia_internal;
+    return t->net->cache && !strcmp(t->method, "GET") && !t->body && t->range_start < 0 && !t->aia_internal &&
+           !t->no_cache;
 }
 
 static void cache_key(const AuUrl *u, AuBuf *out)

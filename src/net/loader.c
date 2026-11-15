@@ -1,5 +1,6 @@
 /* The resource loader (see loader.h). */
 #include "loader.h"
+#include "blocklist.h"
 #include "dataurl.h"
 #include "policy.h"
 #include "../url/url.h"
@@ -47,6 +48,8 @@ struct Req {
     AuCertInfo cert;
     bool have_cert;
     AuNetError fallback_cause;
+    char blocked[96]; /* "blocked: LIST" when a blocklist refused it */
+    char *top;        /* the top-level URL, for redirects (NULL: a navigation) */
     /* holding the first bytes for sniffing / encoding detection */
     AuBuf hold;
     size_t hold_need;
@@ -61,6 +64,7 @@ struct AuNetLoader {
     AuNet *net;
     Req *reqs;
     uint32_t next_id;
+    AuBlocklist *blocklist;
 };
 
 AuNetLoader *au_net_loader_new(AuNet *net)
@@ -71,10 +75,13 @@ AuNetLoader *au_net_loader_new(AuNet *net)
 }
 
 AuNet *au_net_loader_net(AuNetLoader *l) { return l->net; }
+void au_net_loader_set_blocklist(AuNetLoader *l, AuBlocklist *bl) { l->blocklist = bl; }
+AuBlocklist *au_net_loader_blocklist(AuNetLoader *l) { return l->blocklist; }
 
 static void req_free(Req *r)
 {
     au_free(r->url);
+    au_free(r->top);
     au_buf_free(&r->mime);
     au_buf_free(&r->charset);
     au_buf_free(&r->filename);
@@ -131,6 +138,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->cipher = r->cipher;
     i->fallback_cause = r->fallback_cause;
     i->mixed = r->mixed;
+    i->blocked_reason = r->blocked[0] ? r->blocked : NULL;
 }
 
 /* ---- windows-1252 to UTF-8 ---- */
@@ -284,6 +292,17 @@ static void parse_disposition(Req *r, const char *v)
 static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
 {
     Req *r = ctx;
+    if (r->blocked[0]) {
+        /* A redirect to a listed host (t_redirect): r->url names it. */
+        au_http_cancel(t);
+        r->t = NULL;
+        r->finished = true;
+        AuLoadInfo info;
+        fill_info(r, &info);
+        if (r->cb.done)
+            r->cb.done(r->cb.ctx, r->id, AU_NET_ERR_BLOCKED, &info);
+        return;
+    }
     au_free(r->url);
     r->url = au_strndup(resp->url, strlen(resp->url));
     r->status = resp->status;
@@ -408,6 +427,25 @@ static void t_done(void *ctx, AuHttpTransfer *t, AuNetError err)
         r->cb.done(r->cb.ctx, r->id, err, &info);
 }
 
+/* A redirect is checked like the request itself: one to a listed host is
+ * not followed, and the request ends as blocked. */
+static bool t_redirect(void *ctx, AuHttpTransfer *t, int status, const char *url)
+{
+    Req *r = ctx;
+    (void)t;
+    (void)status;
+    AuUrl u;
+    if (!r->l->blocklist || r->dl || !au_url_parse(&u, url, NULL))
+        return true;
+    bool blocked = au_blocklist_check(r->l->blocklist, &u, r->top, r->blocked, sizeof r->blocked);
+    if (blocked) {
+        au_free(r->url);
+        r->url = au_strndup(u.href, strlen(u.href));
+    }
+    au_url_free(&u);
+    return !blocked;
+}
+
 /* ---- Requests ---- */
 
 uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLoadCallbacks *cb)
@@ -462,6 +500,19 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
             au_url_free(&doc);
         }
     }
+    /* Blocklists: a listed host is never contacted. A document without a
+     * top-level URL is a navigation (the page shows the interstitial);
+     * everything else is a subresource or a script's request. */
+    if (!r->early && l->blocklist) {
+        if (rq->top_level_url)
+            r->top = au_strndup(rq->top_level_url, strlen(rq->top_level_url));
+        else if (rq->dest != AU_DEST_DOCUMENT && rq->document_url)
+            r->top = au_strndup(rq->document_url, strlen(rq->document_url));
+        if (au_blocklist_check(l->blocklist, &u, r->top, r->blocked, sizeof r->blocked)) {
+            r->early = true;
+            r->early_err = AU_NET_ERR_BLOCKED;
+        }
+    }
     if (r->early) {
         r->pending = true;
         r->url = au_strndup(u.href, strlen(u.href));
@@ -486,7 +537,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     if (rq->revalidate && !rq->reload)
         au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
-    AuHttpCallbacks hc = {r, t_response, t_data, t_done, NULL, NULL};
+    AuHttpCallbacks hc = {r, t_response, t_data, t_done, l->blocklist ? t_redirect : NULL, NULL};
     r->t = au_http_start(l->net, &hr, &hc);
     au_http_request_free(&hr);
     au_url_free(&u);

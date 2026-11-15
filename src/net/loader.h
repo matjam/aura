@@ -80,6 +80,9 @@ typedef struct AuLoadInfo {
      * with _CERT or _CLOCK, cert holds the details, and with _TLS its
      * reason. AU_NET_OK otherwise. */
     AuNetError fallback_cause;
+    /* Refused by a blocklist (err AU_NET_ERR_BLOCKED, no connection was
+     * made): "blocked: LIST NAME". NULL otherwise. */
+    const char *blocked_reason;
 } AuLoadInfo;
 
 typedef struct AuLoadCallbacks {
@@ -98,6 +101,11 @@ typedef struct AuLoadCallbacks {
 AuNetLoader *au_net_loader_new(AuNet *net);
 void au_net_loader_free(AuNetLoader *l); /* cancels everything */
 AuNet *au_net_loader_net(AuNetLoader *l);
+/* The blocklists requests are checked against before anything else
+ * (blocklist.h); NULL for none. The loader does not own it. */
+struct AuBlocklist;
+void au_net_loader_set_blocklist(AuNetLoader *l, struct AuBlocklist *bl);
+struct AuBlocklist *au_net_loader_blocklist(AuNetLoader *l);
 /* Returns a nonzero id; failures are reported through done(). */
 uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLoadCallbacks *cb);
 void au_net_loader_cancel(AuNetLoader *l, uint32_t id);

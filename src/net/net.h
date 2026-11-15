@@ -178,6 +178,7 @@ typedef struct AuHttpRequest {
      * never stored, so they are fetched again. */
     bool history;
     bool omit_credentials; /* no cookies, no HTTP auth */
+    bool no_cache;         /* neither read nor fill the HTTP cache (blocklist downloads) */
     bool manual_redirect;  /* deliver 3xx responses instead of following */
     bool allow_http_fallback; /* HTTPS-first: the user confirmed plain http */
     int64_t range_start, range_end; /* bytes=start-end; -1: none / open */
