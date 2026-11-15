@@ -311,12 +311,54 @@ static void update_classes(AuElement *el, const char *v, size_t len)
     }
 }
 
+/* Notes a class name or id that an element gained or lost (see
+ * AuDocument.style_names). */
+static void style_name_changed(AuElement *el, AuAtom a)
+{
+    AuDocument *d = el->node.doc;
+    if (!d || !a || d->style_names_n > AU_DOC_STYLE_NAMES)
+        return;
+    for (uint8_t i = 0; i < d->style_names_n; i++)
+        if (d->style_names[i] == a)
+            return;
+    if (d->style_names_n == AU_DOC_STYLE_NAMES) {
+        d->style_names_n = AU_DOC_STYLE_NAMES + 1;
+        return;
+    }
+    d->style_names[d->style_names_n++] = a;
+}
+
 static void attr_changed(AuElement *el, AuAtom name, const char *v, size_t len)
 {
-    if (name == AU_ATOM_id)
+    if (name == AU_ATOM_id) {
+        AuAtom old = el->id;
         el->id = au_atom(v, len);
-    else if (name == AU_ATOM_class)
+        if (old != el->id) {
+            style_name_changed(el, old);
+            style_name_changed(el, el->id);
+        }
+    } else if (name == AU_ATOM_class) {
+        AuAtom old[32];
+        uint32_t nold = el->nclasses;
+        if (nold > 32) {
+            if (el->node.doc)
+                el->node.doc->style_names_n = AU_DOC_STYLE_NAMES + 1;
+            nold = 0;
+        }
+        for (uint32_t i = 0; i < nold; i++)
+            old[i] = el->classes[i];
         update_classes(el, v, len);
+        for (uint32_t i = 0; i < nold; i++)
+            if (!au_element_has_class(el, old[i]))
+                style_name_changed(el, old[i]);
+        for (uint32_t i = 0; i < el->nclasses; i++) {
+            bool had = false;
+            for (uint32_t k = 0; k < nold && !had; k++)
+                had = old[k] == el->classes[i];
+            if (!had)
+                style_name_changed(el, el->classes[i]);
+        }
+    }
 }
 
 static void attr_hook(AuElement *el, AuAtom name, uint8_t ns, const AuAttr *old)

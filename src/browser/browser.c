@@ -46,6 +46,7 @@ void au_nav_push(AuNavList *l, const char *url, const char *title)
     e->url = au_strndup(url, strlen(url));
     e->title = au_strndup(title ? title : "", title ? strlen(title) : 0);
     e->scroll_y = 0;
+    e->id = ++l->next_id;
     l->index = l->n - 1;
 }
 
@@ -411,6 +412,70 @@ static void cb_open(void *ctx, AuPage *p, const char *url, bool new_tab)
 
 static void apply_site_zoom(AuTab *t, const char *url);
 
+/* ---- The document cache ---- */
+
+/* Tells the tab's page which entry its next load is for, and which
+ * entries exist (documents kept for entries that are gone are dropped). */
+static void entry_load(AuTab *t)
+{
+    uint32_t ids[AU_NAV_MAX];
+    int n = 0;
+    for (int i = 0; i < t->nav.n && n < AU_NAV_MAX; i++)
+        ids[n++] = t->nav.e[i].id;
+    au_page_retain_entries(t->page, ids, (size_t)n);
+    AuNavEntry *e = au_nav_current(&t->nav);
+    au_page_set_entry(t->page, e ? e->id : 0);
+}
+
+size_t au_browser_kept_documents(const AuBrowser *b, size_t *bytes)
+{
+    size_t n = 0, total = 0;
+    for (int i = 0; i < b->nwindows; i++) {
+        for (int j = 0; j < b->windows[i]->ntabs; j++) {
+            n += au_page_kept_count(b->windows[i]->tabs[j]->page);
+            total += au_page_kept_bytes(b->windows[i]->tabs[j]->page);
+        }
+    }
+    if (bytes)
+        *bytes = total;
+    return n;
+}
+
+bool au_browser_evict_document(AuBrowser *b)
+{
+    /* The document hidden longest ago, in any tab. */
+    AuPage *oldest = NULL;
+    uint32_t best = 0, now_ms = time_ms(b);
+    for (int i = 0; i < b->nwindows; i++) {
+        for (int j = 0; j < b->windows[i]->ntabs; j++) {
+            uint32_t stamp;
+            AuPage *p = b->windows[i]->tabs[j]->page;
+            if (au_page_kept_oldest(p, &stamp) && (!oldest || now_ms - stamp > best)) {
+                oldest = p;
+                best = now_ms - stamp;
+            }
+        }
+    }
+    return oldest && au_page_evict_oldest(oldest);
+}
+
+void au_browser_trim_documents(AuBrowser *b)
+{
+    size_t budget = (size_t)b->prefs.document_cache_kb * 1024, total;
+    while (au_browser_kept_documents(b, &total) && total > budget)
+        if (!au_browser_evict_document(b))
+            break;
+}
+
+size_t au_browser_release_documents(AuBrowser *b)
+{
+    size_t n = 0;
+    for (int i = 0; i < b->nwindows; i++)
+        for (int j = 0; j < b->windows[i]->ntabs; j++)
+            n += au_page_drop_kept(b->windows[i]->tabs[j]->page);
+    return n;
+}
+
 /* A form posted: a new entry in this tab, or a new tab. A history entry
  * for a POST result loads its URL with GET when revisited. */
 static void cb_submit_post(void *ctx, AuPage *p, const char *url, const void *body, size_t len, const char *type,
@@ -441,6 +506,7 @@ static void cb_submit_post(void *ctx, AuPage *p, const char *url, const void *bo
     au_page_set_scroll(t->page, 0, 0);
     record_visit(w->browser, url, NULL);
     w->browser->session_gen++;
+    entry_load(t);
     au_page_navigate_post(t->page, url, body, len, type);
     if (is_active(t))
         changed(w, AU_CHANGED_FOCUS_PAGE);
@@ -948,6 +1014,7 @@ static void load_new(AuTab *t, const char *url)
     au_page_set_scroll(t->page, 0, 0);
     record_visit(t->win->browser, url, NULL);
     t->win->browser->session_gen++;
+    entry_load(t);
     au_page_navigate(t->page, url);
 }
 
@@ -1059,6 +1126,7 @@ AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i)
     AuNavEntry *e = au_nav_current(&t->nav);
     char *url = au_strndup(e ? e->url : "about:blank", strlen(e ? e->url : "about:blank"));
     au_page_set_zoom(t->page, au_page_zoom(src->page));
+    entry_load(t);
     au_page_navigate_entry(t->page, url, src->scroll_x, src->scroll_y);
     au_free(url);
     changed(w, AU_CHANGED_MENUS | AU_CHANGED_FOCUS_PAGE);
@@ -1083,6 +1151,7 @@ static AuTab *tab_from_nav(AuBrowserWindow *w, const AuNavList *nav, int index, 
     AuNavEntry *e = &t->nav.e[index];
     char *url = au_strndup(e->url, strlen(e->url));
     apply_site_zoom(t, url);
+    entry_load(t);
     au_page_navigate_entry(t->page, url, 0, e->scroll_y);
     au_free(url);
     changed(w, AU_CHANGED_MENUS);
@@ -1186,6 +1255,7 @@ static AuTab *new_tab_for(AuBrowserWindow *w, const char *url)
     relayout(w, false);
     au_bw_select_tab(w, tab_index(w, t));
     au_nav_push(&t->nav, url, "");
+    entry_load(t);
     w->browser->session_gen++;
     changed(w, AU_CHANGED_MENUS | AU_CHANGED_FOCUS_PAGE);
     return t;
@@ -1399,6 +1469,7 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     t->scroll_x = t->scroll_y = 0;
     au_page_set_scroll(t->page, 0, 0);
     apply_site_zoom(t, url);
+    entry_load(t);
     au_page_navigate_entry(t->page, url, 0, sy);
     au_free(url);
     clamp_scroll(t);
@@ -1964,6 +2035,7 @@ void au_bw_idle(AuBrowserWindow *w)
         w->rehover_pending = false;
         rehover(w);
     }
+    au_browser_trim_documents(w->browser);
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {
         au_page_idle(w->tabs[i]->page);
@@ -2158,6 +2230,7 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
             /* Back where it was left, once the page is tall enough. */
             char *url = au_strndup(e->url, strlen(e->url));
             apply_site_zoom(t, url);
+            entry_load(t);
             au_page_navigate_entry(t->page, url, 0, e->scroll_y);
             au_free(url);
         }

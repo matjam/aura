@@ -70,6 +70,12 @@ uint32_t au_docscript_due(AuDocScript *s);
 /* The viewport changed size or scrolled. */
 void au_docscript_resized(AuDocScript *s);
 void au_docscript_scrolled(AuDocScript *s);
+/* The document cache: false when window has an unload or beforeunload
+ * listener; pagehide or pageshow (persisted) when the document is hidden
+ * or shown again; the script runtime's memory in bytes. NULL s is fine. */
+bool au_docscript_can_persist(AuDocScript *s);
+void au_docscript_page_transition(AuDocScript *s, bool show);
+size_t au_docscript_memory(const AuDocScript *s);
 /* Layout ran: intersection and resize observers. */
 void au_docscript_layout_done(AuDocScript *s);
 

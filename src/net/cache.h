@@ -70,15 +70,19 @@ typedef struct AuCacheStats {
     unsigned long not_modified; /* revalidations answered 304 */
     unsigned long stored;       /* responses stored */
     unsigned long from_storage; /* entries read back from the second-level storage */
+    unsigned long stale_while_revalidate; /* lookups that may use a stale entry while it is revalidated */
 } AuCacheStats;
 void au_cache_stats(const AuHttpCache *c, AuCacheStats *out);
 
-typedef enum { AU_CACHE_MISS, AU_CACHE_FRESH, AU_CACHE_STALE } AuCacheState;
+typedef enum { AU_CACHE_MISS, AU_CACHE_FRESH, AU_CACHE_STALE, AU_CACHE_STALE_USABLE } AuCacheState;
 
 /* Looks up url (serialized without fragment) for a request with the given
  * headers at time now (seconds). FRESH: usable as is. STALE: usable after
- * revalidation (the entry has a validator), or not at all. On FRESH or
- * STALE *out holds a reference. */
+ * revalidation (the entry has a validator), or not at all. STALE_USABLE:
+ * stale, but within its stale-while-revalidate window (RFC 5861): the
+ * caller may use it now and revalidate it afterwards, or treat it as
+ * STALE (when it has no validator, by fetching it again). On FRESH, STALE
+ * or STALE_USABLE *out holds a reference. */
 AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *req, int64_t now, AuCacheEntry **out);
 /* The lookup for Back and Forward (RFC 9111 section 6: history views
  * need not revalidate): any stored entry matching the request's Vary
@@ -86,6 +90,12 @@ AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *r
  * request that says no-store still misses. */
 AuCacheState au_cache_lookup_history(AuHttpCache *c, const char *url, const AuHeaders *req, AuCacheEntry **out);
 void au_cache_entry_release(AuHttpCache *c, AuCacheEntry *e);
+/* Another reference to an entry a lookup returned. */
+AuCacheEntry *au_cache_entry_ref(AuCacheEntry *e);
+/* A mark for the user of stale-while-revalidate: a background
+ * revalidation of this entry is under way, so another is not started. */
+bool au_cache_entry_revalidating(const AuCacheEntry *e);
+void au_cache_entry_set_revalidating(AuCacheEntry *e, bool on);
 
 int au_cache_entry_status(const AuCacheEntry *e);
 const char *au_cache_entry_reason(const AuCacheEntry *e);
@@ -116,6 +126,7 @@ typedef struct AuCacheControl {
     int64_t s_maxage;  /* -1 when absent */
     int64_t max_stale; /* request: -1 absent; INT64_MAX for "max-stale" without a value */
     int64_t min_fresh; /* request: -1 when absent */
+    int64_t stale_while_revalidate; /* response (RFC 5861): -1 when absent */
 } AuCacheControl;
 void au_cache_control_parse(const AuHeaders *h, AuCacheControl *cc);
 /* Freshness lifetime in seconds (0 when none; heuristic when allowed). */

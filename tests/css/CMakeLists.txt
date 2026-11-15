@@ -12,6 +12,12 @@ add_executable(test_css_api test_css_api.c)
 target_link_libraries(test_css_api aura_engine m)
 add_test(NAME css_api COMMAND test_css_api)
 
+# Targeted invalidation of state changes against full restyles; --bench
+# PAGE.html [SHEET.css ...] times hover moves over a page.
+add_executable(test_css_invalidate test_css_invalidate.c)
+target_link_libraries(test_css_invalidate aura_engine m)
+add_test(NAME css_invalidate COMMAND test_css_invalidate)
+
 # Parse and match timings on a generated sheet (and on files given as
 # arguments). Registered with a small size so it also runs under ctest.
 add_executable(css_bench css_bench.c)

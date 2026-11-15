@@ -1,5 +1,6 @@
 /* The resource loader (see loader.h). */
 #include "loader.h"
+#include "cache.h"
 #include "dataurl.h"
 #include "policy.h"
 #include "../url/url.h"
@@ -42,7 +43,7 @@ struct Req {
     uint16_t tls_version;
     bool mixed;
     int64_t content_length, received;
-    bool from_cache, attachment, nosniff, have_response, response_sent;
+    bool from_cache, attachment, nosniff, have_response, response_sent, no_store;
     AuLoadSecurity security;
     AuCertInfo cert;
     bool have_cert;
@@ -123,6 +124,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->security = r->security;
     i->cert = r->have_cert ? &r->cert : NULL;
     i->from_cache = r->from_cache;
+    i->no_store = r->no_store;
     i->attachment = r->attachment;
     i->filename = au_buf_cstr(&r->filename);
     i->csp = au_buf_cstr(&r->csp);
@@ -296,6 +298,9 @@ static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
         r->content_length = resp->content_length;
     r->from_cache = resp->from_cache;
     r->nosniff = au_headers_has_token(resp->headers, "x-content-type-options", "nosniff");
+    AuCacheControl cc;
+    au_cache_control_parse(resp->headers, &cc);
+    r->no_store = cc.no_store;
     const char *cd = au_headers_get(resp->headers, "content-disposition");
     if (cd)
         parse_disposition(r, cd);

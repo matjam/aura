@@ -17,6 +17,13 @@ void *au_realloc(void *p, size_t n);
 void au_free(void *p);
 char *au_strndup(const char *s, size_t n);
 void au_set_oom_handler(void (*handler)(size_t wanted));
+/* Low memory: when malloc fails, au_alloc and au_realloc first call the
+ * release handler (none by default), which frees what the application
+ * can do without (caches) and returns true if it freed anything; the
+ * allocation is then tried again, and the OOM handler runs only when the
+ * release handler has nothing left to free. The handler is not called
+ * again while it runs. */
+void au_set_release_handler(bool (*release)(size_t wanted));
 
 /* ---- Non-fatal allocation ----
  * For allocators that must survive running out, such as the JavaScript

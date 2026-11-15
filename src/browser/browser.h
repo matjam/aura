@@ -30,12 +30,14 @@
 typedef struct AuNavEntry {
     char *url, *title;
     int scroll_y; /* where the page was scrolled when left */
+    uint32_t id;  /* names the entry to the tab's page (the document cache); unique in its list */
 } AuNavEntry;
 
 typedef struct AuNavList {
     AuNavEntry *e;
     int n, cap;
     int index; /* the current entry; -1 when empty */
+    uint32_t next_id;
 } AuNavList;
 
 #define AU_NAV_MAX 50 /* entries kept per tab; the oldest go first */
@@ -202,6 +204,20 @@ void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetche
 /* Whether Aura opens url itself: about:, file:, view-source:, http:,
  * https:, a scheme with a fetcher, or text without a scheme. */
 bool au_browser_opens_url(const AuBrowser *b, const char *url);
+/* ---- The document cache (page.h) ----
+ * Tabs keep the documents they leave for Back and Forward, up to
+ * prefs.document_cache_pages each. au_browser_trim_documents drops the
+ * oldest kept documents of all tabs until their estimated memory fits
+ * prefs.document_cache_kb; au_bw_idle calls it. au_browser_release_documents
+ * drops them all (low memory, Clear Private Data) and returns how many
+ * went. au_browser_kept_documents counts them and adds up their
+ * estimated bytes (bytes may be NULL). */
+void au_browser_trim_documents(AuBrowser *b);
+/* Drops the kept document hidden longest ago, in any tab (a shell short
+ * of memory calls this); false when none is kept. */
+bool au_browser_evict_document(AuBrowser *b);
+size_t au_browser_release_documents(AuBrowser *b);
+size_t au_browser_kept_documents(const AuBrowser *b, size_t *bytes);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 

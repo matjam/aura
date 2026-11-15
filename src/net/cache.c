@@ -28,6 +28,7 @@ struct AuCacheEntry {
     int64_t request_time, response_time;
     int refs;
     bool linked;
+    bool revalidating; /* a background revalidation is under way (stale-while-revalidate) */
     size_t cost;
 };
 
@@ -191,7 +192,7 @@ static bool parse_seconds(const char *v, size_t n, int64_t *out)
 void au_cache_control_parse(const AuHeaders *h, AuCacheControl *cc)
 {
     memset(cc, 0, sizeof *cc);
-    cc->max_age = cc->s_maxage = cc->max_stale = cc->min_fresh = -1;
+    cc->max_age = cc->s_maxage = cc->max_stale = cc->min_fresh = cc->stale_while_revalidate = -1;
     size_t pos = 0;
     const char *v;
     while ((v = au_headers_next(h, "cache-control", &pos)) != NULL) {
@@ -230,6 +231,8 @@ void au_cache_control_parse(const AuHeaders *h, AuCacheControl *cc)
                 cc->max_stale = (val && parse_seconds(val, vl, &secs)) ? secs : INT64_MAX;
             else if (au_ieq(item, nl, "min-fresh", 9) && val && parse_seconds(val, vl, &secs))
                 cc->min_fresh = secs;
+            else if (au_ieq(item, nl, "stale-while-revalidate", 22) && val && parse_seconds(val, vl, &secs))
+                cc->stale_while_revalidate = secs;
         }
     }
 }
@@ -295,6 +298,22 @@ int64_t au_cache_current_age(const AuHeaders *resp, int64_t request_time, int64_
 }
 
 /* ---- Entries ---- */
+
+bool au_cache_entry_revalidating(const AuCacheEntry *e)
+{
+    return e->revalidating;
+}
+
+void au_cache_entry_set_revalidating(AuCacheEntry *e, bool on)
+{
+    e->revalidating = on;
+}
+
+AuCacheEntry *au_cache_entry_ref(AuCacheEntry *e)
+{
+    e->refs++;
+    return e;
+}
 
 int au_cache_entry_status(const AuCacheEntry *e) { return e->status; }
 const char *au_cache_entry_reason(const AuCacheEntry *e) { return e->reason; }
@@ -491,6 +510,17 @@ AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *r
         fresh = true;
     if (cc.no_cache || rcc.no_cache || pragma_no_cache)
         fresh = false;
+    /* stale-while-revalidate (RFC 5861): within the window a stale
+     * response may be used while it is revalidated, unless the response
+     * or the request forbids stale responses. */
+    if (!fresh && cc.stale_while_revalidate >= 0 && age - lifetime <= cc.stale_while_revalidate &&
+        !cc.no_cache && !cc.must_revalidate && !rcc.no_cache && !pragma_no_cache && rcc.max_age < 0 &&
+        rcc.min_fresh < 0) {
+        best->refs++;
+        *out = best;
+        c->stats.stale_while_revalidate++;
+        return AU_CACHE_STALE_USABLE;
+    }
     if (!fresh && !has_validator(best)) {
         c->stats.misses++;
         return AU_CACHE_MISS;

@@ -8,18 +8,25 @@
 #include "script.h"
 #include "webfont.h"
 
-/* A style sheet source: its text once loaded, and its @import children. */
+/* A style sheet source: a <style>, a <link> or an @import. It is parsed
+ * once, when its text is there; the parsed sheet stays until the source
+ * goes. A source whose media query does not match the device is neither
+ * fetched nor parsed until it matches (deferred). */
 typedef struct SheetSrc SheetSrc;
 struct SheetSrc {
     char *url;    /* base URL for the sheet (absolute) */
     char *media;  /* media attribute or @import media, NULL for all */
-    char *text;   /* NULL while loading (or after a failure) */
-    size_t len;
+    char *text;   /* a <style>'s text, kept to notice edits; a fetched sheet's text is freed once parsed */
+    size_t len;   /* the text's length, also after the text is freed */
     uint32_t req; /* outstanding request, 0 if none */
     bool failed;
+    bool deferred;     /* media does not match: not fetched (a <style>: not parsed) yet */
+    AuCssSheet *sheet; /* parsed, or NULL; owned here, an import's by its parent's sheet */
+    SheetSrc *parent;  /* the importing sheet, NULL for a <style> or <link> */
+    uint32_t index;    /* which @import of the parent */
+    uint32_t depth;    /* imports above this one */
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
-    bool imports_scanned;
 };
 
 /* A <style> or <link> element in document order. */
@@ -54,6 +61,8 @@ struct AuDocView {
     AuLayout *layout;
     SheetSlot *slots;
     uint32_t nslots, slots_cap;
+    AuCssSheet *user_sheet; /* user_css parsed for this document, or NULL */
+    uint32_t ndeferred;     /* sheet sources waiting for their media query to match */
     AuDocImages *imgs; /* docimages.c */
     Request *reqs;
     uint32_t nreqs, reqs_cap;
@@ -67,6 +76,7 @@ struct AuDocView {
     AuElement *hover, *active;
     char hover_link[2048];
     uint32_t scanned_nodes;
+    size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     /* scripts (script.c) */
     AuDocScript *script; /* this document's, while scripting is on */
     bool scripting;      /* the setting, applied at begin */

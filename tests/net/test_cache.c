@@ -561,6 +561,59 @@ static void test_disk_cache(void)
           "HTTP cache through the disk cache: %s", body);
     au_cache_free(c);
     au_cache_free(c2);
+
+    /* Deferred writes: a store only queues; lookups see the queued bytes;
+     * idle writes them oldest first; flush and free write the rest. */
+    MemDir q;
+    memset(&q, 0, sizeof q);
+    AuDiskCacheFiles qfiles = {&q, md_list, md_read, md_write, md_remove};
+    AuDiskCache *dq = au_disk_cache_new(&qfiles, 16 << 20);
+    AuCacheStorage sq;
+    au_disk_cache_storage(dq, &sq);
+    au_disk_cache_set_deferred(dq, true);
+    sq.store(sq.ctx, "http://a.test/", "one", 3);
+    sq.store(sq.ctx, "http://b.test/", "two", 3);
+    sq.store(sq.ctx, "http://c.test/", "three", 5);
+    CHECK(q.writes == 0 && au_disk_cache_pending(dq) == 3 && au_disk_cache_count(dq) == 3, "stores are queued: %d",
+          q.writes);
+    CHECK(sq.load(sq.ctx, "http://b.test/", &b) && b.len == 3 && !memcmp(b.data, "two", 3) && q.writes == 0,
+          "a queued entry is read from the queue");
+    sq.store(sq.ctx, "http://a.test/", "uno", 3);
+    CHECK(au_disk_cache_pending(dq) == 3, "a newer store replaces the queued one");
+    CHECK(au_disk_cache_idle(dq, 1) && q.writes == 1 && md_find(&q, n2) >= 0, "idle writes one, the oldest (b)");
+    sq.remove(sq.ctx, "http://c.test/");
+    CHECK(au_disk_cache_pending(dq) == 1 && !sq.load(sq.ctx, "http://c.test/", &b), "a removed entry is never written");
+    au_disk_cache_flush(dq);
+    CHECK(q.writes == 2 && au_disk_cache_pending(dq) == 0 && md_find(&q, n1) >= 0, "flush writes the rest");
+    CHECK(sq.load(sq.ctx, "http://a.test/", &b) && b.len == 3 && !memcmp(b.data, "uno", 3), "read back from the file");
+    /* A newer queued copy over a file on disk: the queue answers, and a
+     * failed write leaves no stale file. */
+    sq.store(sq.ctx, "http://a.test/", "tres", 4);
+    CHECK(sq.load(sq.ctx, "http://a.test/", &b) && b.len == 4 && q.writes == 2, "the queued copy wins over the file");
+    q.fail_writes = true;
+    CHECK(!au_disk_cache_idle(dq, 4) && md_find(&q, n1) < 0 && !sq.load(sq.ctx, "http://a.test/", &b),
+          "a failed write removes the stale file");
+    q.fail_writes = false;
+    /* The queue is bounded: past the limit the oldest are written at once. */
+    size_t chunk = 200 * 1024;
+    char *blob = malloc(chunk);
+    memset(blob, 'q', chunk);
+    for (int i = 0; i < 12; i++) {
+        char key[32];
+        snprintf(key, sizeof key, "http://q%d.test/", i);
+        sq.store(sq.ctx, key, blob, chunk);
+    }
+    CHECK(q.writes > 2 && au_disk_cache_pending(dq) <= 10, "the queue stays under its limit: %u pending, %d writes",
+          (unsigned)au_disk_cache_pending(dq), q.writes);
+    free(blob);
+    int w0 = q.writes;
+    size_t waiting = au_disk_cache_pending(dq);
+    au_disk_cache_free(dq); /* writes what is left */
+    CHECK(q.writes == w0 + (int)waiting, "free flushes: %d more writes", q.writes - w0);
+    for (int i = 0; i < 16; i++)
+        if (q.used[i])
+            au_buf_free(&q.data[i]);
+
     au_buf_free(&b);
     au_disk_cache_free(dc);
     au_disk_cache_free(dc2);

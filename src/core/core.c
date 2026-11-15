@@ -30,9 +30,31 @@ static void *raw_realloc(void *p, size_t n)
     return au_heap_enabled() ? au_heap_realloc(p, n) : realloc(p, n);
 }
 
+static bool (*release_handler)(size_t);
+static bool releasing;
+
+void au_set_release_handler(bool (*release)(size_t wanted))
+{
+    release_handler = release;
+}
+
+/* Asks the application to free its caches; true when it freed something
+ * (worth trying the allocation again). */
+static bool release(size_t n)
+{
+    if (!release_handler || releasing)
+        return false;
+    releasing = true;
+    bool freed = release_handler(n);
+    releasing = false;
+    return freed;
+}
+
 void *au_alloc(size_t n)
 {
     void *p = raw_alloc(n ? n : 1);
+    while (!p && release(n))
+        p = raw_alloc(n ? n : 1);
     if (!p) {
         oom_handler(n);
         abort(); /* the handler must not return */
@@ -49,7 +71,11 @@ void *au_calloc(size_t n)
 
 void *au_realloc(void *p, size_t n)
 {
-    void *q = raw_realloc(p, n ? n : 1);
+    void *q;
+    /* A failed realloc leaves p valid, so trying again with p is right. */
+    do
+        q = raw_realloc(p, n ? n : 1);
+    while (!q && release(n));
     if (!q) {
         oom_handler(n);
         abort();
