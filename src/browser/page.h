@@ -141,6 +141,14 @@ AuSecurity au_page_security(const AuPage *p);
  * that have none (about:scene). The bytes stay valid until the next
  * load or au_page_free. */
 bool au_page_source(const AuPage *p, const char **data, size_t *len);
+/* The page's script console: its last AU_PAGE_CONSOLE_LINES lines across
+ * loads, oldest first (i from 0 to count - 1). level: 0 log, 1 info,
+ * 2 warn, 3 error, 4 debug. A line stays valid until the next console
+ * line or au_page_free. JavaScript runs when the javascript preference is
+ * on (the default), from the next load. */
+#define AU_PAGE_CONSOLE_LINES 300
+size_t au_page_console_count(const AuPage *p);
+const char *au_page_console_line(const AuPage *p, size_t i, int *level);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */
 void au_page_set_viewport(AuPage *p, int width, int height);

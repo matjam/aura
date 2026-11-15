@@ -23,6 +23,10 @@ void au_docscript_free(AuDocScript *s);
 void au_docscript_script_ready(void *ctx, AuHtmlParser *p, AuElement *script);
 /* The parser has consumed all input (au_html_parser_done). */
 void au_docscript_parse_done(AuDocScript *s);
+/* The response head of an AU_RES_OTHER request (headers are name/value
+ * pairs; final_url NULL for the request URL). */
+void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const char *status_text,
+                                const char *final_url, const char *const *headers, size_t nheaders);
 /* A resource of kind AU_RES_OTHER finished. Returns true if it was the
  * script side's request. */
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok);
@@ -40,6 +44,10 @@ void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, 
 void au_docscript_javascript_url(AuDocScript *s, const char *url);
 /* Runs timers, tasks and animation frames for up to budget_ms. */
 bool au_docscript_run(AuDocScript *s, uint32_t budget_ms);
+/* Evaluates src in the page (tools): the result as a string in out. */
+bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out);
+/* Milliseconds until script work is due (0: now; UINT32_MAX: none). */
+uint32_t au_docscript_due(AuDocScript *s);
 /* The viewport changed size or scrolled. */
 void au_docscript_resized(AuDocScript *s);
 void au_docscript_scrolled(AuDocScript *s);

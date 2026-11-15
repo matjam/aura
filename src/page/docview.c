@@ -368,6 +368,14 @@ static void scan_imports(AuDocView *dv, SheetSrc *s)
     au_css_sheet_free(sh);
 }
 
+void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char *status_text,
+                              const char *final_url, const char *const *headers, size_t nheaders)
+{
+    Request *r = find_request(dv, id);
+    if (r && r->kind == AU_RES_OTHER && !r->font && dv->script)
+        au_docscript_resource_head(dv->script, id, status, status_text, final_url, headers, nheaders);
+}
+
 void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size_t len)
 {
     Request *r = find_request(dv, id);
@@ -1120,6 +1128,16 @@ bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms)
         au_docscript_layout_done(dv->script);
     }
     return dv->script && au_docscript_run(dv->script, budget_ms);
+}
+
+uint32_t au_docview_scripts_due(AuDocView *dv)
+{
+    return dv->script ? au_docscript_due(dv->script) : UINT32_MAX;
+}
+
+bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out)
+{
+    return dv->script && au_docscript_eval(dv->script, src, out);
 }
 
 uint32_t au_dv_request(AuDocView *dv, const char *url, bool background)

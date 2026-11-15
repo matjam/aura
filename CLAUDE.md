@@ -637,10 +637,19 @@ global object is the window, the DOM bindings and the event loop.
   scripts pause the parser, `document.write` feeds it, defer, async,
   module and nomodule scripts run in their order, and the document view
   fires DOMContentLoaded and load. The runtime starts only when a page has
-  a script or an inline event handler. To turn script off for a document
-  view, call `au_docview_set_scripting(dv, false)` before it loads. The
-  embedder calls `au_docview_run_scripts` from its idle loop and acts on
-  the navigations it reports through `open_url` afterwards.
+  a script or an inline event handler. Scripting is off in a bare
+  document view; `au_docview_set_scripting` turns it on from the next
+  load. In the browser, `page_doc.c` sets it from the `content.javascript`
+  preference (on by default) at each load, runs `au_docview_run_scripts`
+  for up to 20 ms in every `au_page_idle` and follows the navigations it
+  reports through `open_url`, and keeps the last 300 console lines
+  (`au_page_console_line`) for a debug view.
+- **Response heads.** A loader that knows a response's status and headers
+  passes them with `au_docview_resource_head` before the data; script
+  then sees them in `fetch` and `XMLHttpRequest`, and an error status
+  fails a script element's load. Without it script sees status 200, no
+  headers and a type guessed from the URL; `page_doc.c` passes the final
+  URL and content type, and status 200 until `AuFetchInfo` has a status.
 - **Ownership.** A node's wrapper holds one reference on the node; the
   node holds its wrapper while the node is in a tree or otherwise
   referenced; a node no script has touched has no wrapper. `js_int.h`

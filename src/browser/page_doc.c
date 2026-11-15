@@ -34,6 +34,7 @@
 #define BUDGET_MS 40
 #define CHUNK 8192
 #define LAYOUT_INTERVAL_MS 300
+#define SCRIPT_BUDGET_MS 20 /* script time per idle call, on top of BUDGET_MS */
 
 typedef enum { K_DOC, K_SCENE } Kind;
 
@@ -114,6 +115,12 @@ struct AuPage {
     int down_x, down_y;
 
     AuPageStats stats;
+
+    /* Script console: the last AU_PAGE_CONSOLE_LINES lines, oldest first
+     * from console_start. */
+    char *console[AU_PAGE_CONSOLE_LINES];
+    uint8_t console_level[AU_PAGE_CONSOLE_LINES];
+    size_t console_start, console_count;
 };
 
 /* ---- Helpers ---- */
@@ -386,6 +393,11 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
         main_done(p, ok, info);
     } else {
         p->completed++;
+        if (ok && info) {
+            /* AuFetchInfo carries no status yet: 200 until it does. */
+            const char *hdrs[2] = {"content-type", info->content_type};
+            au_docview_resource_head(p->dv, f->id, 200, "OK", info->url, hdrs, info->content_type ? 1 : 0);
+        }
         au_docview_resource_done(p->dv, f->id, ok);
         report_progress(p);
     }
@@ -512,6 +524,48 @@ static void request_scroll(AuPage *p, int x, int y)
 {
     if (p->cb.scroll_to)
         p->cb.scroll_to(p->cb.ctx, p, x, y);
+}
+
+/* ---- Script callbacks ---- */
+
+static double dv_now(void *ctx, AuDocView *dv)
+{
+    (void)dv;
+    return now(ctx);
+}
+
+static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
+{
+    (void)dv;
+    request_scroll(ctx, x, y);
+}
+
+static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    size_t i = (p->console_start + p->console_count) % AU_PAGE_CONSOLE_LINES;
+    if (p->console_count == AU_PAGE_CONSOLE_LINES) {
+        au_free(p->console[i]);
+        p->console_start = (p->console_start + 1) % AU_PAGE_CONSOLE_LINES;
+    } else {
+        p->console_count++;
+    }
+    p->console[i] = au_strndup(text, len < 1024 ? len : 1024);
+    p->console_level[i] = (uint8_t)level;
+}
+
+/* Hands a navigation from a link or script to the browser. */
+static bool follow_open_url(AuPage *p)
+{
+    if (!p->open_url)
+        return false;
+    char *u = p->open_url;
+    p->open_url = NULL;
+    if (p->cb.open_url)
+        p->cb.open_url(p->cb.ctx, p, u, p->open_new_tab);
+    au_free(u);
+    return true;
 }
 
 /* Applies a restore position once the document is tall enough, and a
@@ -801,6 +855,7 @@ static void begin_doc(AuPage *p, const char *url)
     if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, "");
     p->kind = K_DOC;
+    au_docview_set_scripting(p->dv, !p->env.prefs || p->env.prefs->javascript);
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_scroll(p->dv, 0, 0);
@@ -1326,6 +1381,9 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     dcb.size_changed = dv_size;
     dcb.status_text = dv_status;
     dcb.open_url = dv_open;
+    dcb.now_ms = dv_now;
+    dcb.scroll_to = dv_scroll_to;
+    dcb.console = dv_console;
     p->dv = au_docview_new(env->fonts, &loader, &dcb);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_clock(p->dv, env->time_ms, env->ctx);
@@ -1347,7 +1405,24 @@ void au_page_free(AuPage *p)
     au_free(p->title);
     au_free(p->fragment);
     au_free(p->open_url);
+    for (size_t i = 0; i < p->console_count; i++)
+        au_free(p->console[(p->console_start + i) % AU_PAGE_CONSOLE_LINES]);
     au_free(p);
+}
+
+size_t au_page_console_count(const AuPage *p)
+{
+    return p->console_count;
+}
+
+const char *au_page_console_line(const AuPage *p, size_t i, int *level)
+{
+    if (i >= p->console_count)
+        return NULL;
+    size_t k = (p->console_start + i) % AU_PAGE_CONSOLE_LINES;
+    if (level)
+        *level = p->console_level[k];
+    return p->console[k];
 }
 
 bool au_page_source(const AuPage *p, const char **data, size_t *len)
@@ -1468,14 +1543,8 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     if (gesture && ev->type == AU_EVENT_MOUSE_UP)
         e.x = e.y = -100000; /* end the press without activating a link */
     bool used = au_docview_mouse(p->dv, &e) || gesture;
-    if (p->open_url) {
-        char *u = p->open_url;
-        p->open_url = NULL;
-        if (p->cb.open_url)
-            p->cb.open_url(p->cb.ctx, p, u, p->open_new_tab);
-        au_free(u);
+    if (follow_open_url(p))
         used = true;
-    }
     return used;
 }
 
@@ -1581,6 +1650,12 @@ void au_page_idle(AuPage *p)
     }
     if (p->kind == K_DOC && p->begun)
         au_docview_animate(p->dv, now(p)); /* animated images */
+    if (p->kind == K_DOC && p->begun) {
+        uint32_t gen0 = p->gen;
+        au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS); /* timers, tasks, frames */
+        if (follow_open_url(p) || gen0 != p->gen)
+            return; /* script navigated */
+    }
     if (!p->nfetches && !p->dirty)
         return;
     uint32_t gen = p->gen;
@@ -1610,13 +1685,16 @@ void au_page_idle(AuPage *p)
     if (gen != p->gen)
         return; /* a callback started another load */
     compact_fetches(p);
+    if (follow_open_url(p))
+        return; /* a script navigated while the document loaded */
     maybe_layout(p, false);
     check_finished(p);
 }
 
 bool au_page_busy(const AuPage *p)
 {
-    return p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv));
+    return p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
+           (p->begun && au_docview_scripts_due(p->dv) < 300);
 }
 
 void au_page_stats(const AuPage *p, AuPageStats *s)

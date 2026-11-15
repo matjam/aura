@@ -36,6 +36,7 @@ struct PendingScript {
     uint32_t req;  /* loader request while loading */
     int kind;      /* AU_JS_SCRIPT_CLASSIC or AU_JS_SCRIPT_MODULE */
     bool ready, failed;
+    bool bad_status; /* the response head had a status outside 200-299 */
     PendingScript *next;
 };
 
@@ -51,6 +52,7 @@ struct AuDocScript {
     struct ScriptFetch {
         uint32_t id;      /* loader id */
         const char *type; /* content type guessed from the URL, or NULL */
+        bool head_sent;   /* the loader reported the response head */
     } *fetches;           /* fetches made by script */
     uint32_t nfetches, fetches_cap;
     uint32_t modules;                  /* module scripts started, not evaluated */
@@ -258,27 +260,37 @@ static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
     }
     s->fetches[s->nfetches].id = id;
     s->fetches[s->nfetches].type = type_of(req->url);
+    s->fetches[s->nfetches].head_sent = false;
     s->nfetches++;
     return id;
 }
 
-/* Removes a script fetch; returns false if id is not one. */
-static bool take_fetch(AuDocScript *s, uint32_t id, const char **type)
+static struct ScriptFetch *find_fetch(AuDocScript *s, uint32_t id)
 {
     for (uint32_t i = 0; i < s->nfetches; i++)
-        if (s->fetches[i].id == id) {
-            if (type)
-                *type = s->fetches[i].type;
-            s->fetches[i] = s->fetches[--s->nfetches];
-            return true;
-        }
-    return false;
+        if (s->fetches[i].id == id)
+            return &s->fetches[i];
+    return NULL;
+}
+
+/* Removes a script fetch; returns false if id is not one. */
+static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *head_sent)
+{
+    struct ScriptFetch *f = find_fetch(s, id);
+    if (!f)
+        return false;
+    if (type)
+        *type = f->type;
+    if (head_sent)
+        *head_sent = f->head_sent;
+    *f = s->fetches[--s->nfetches];
+    return true;
 }
 
 static void f_abort(void *ctx, uint32_t id)
 {
     AuDocScript *s = ctx;
-    if (take_fetch(s, id, NULL))
+    if (take_fetch(s, id, NULL, NULL))
         au_dv_cancel(s->dv, id);
 }
 
@@ -623,18 +635,47 @@ void au_docscript_parse_done(AuDocScript *s)
     leave(s);
 }
 
+void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const char *status_text,
+                                const char *final_url, const char *const *headers, size_t nheaders)
+{
+    struct ScriptFetch *f = find_fetch(s, id);
+    if (f) {
+        f->head_sent = true;
+        if (s->js) {
+            enter(s);
+            au_js_fetch_head(s->js, id, status, status_text ? status_text : "", headers, nheaders, final_url);
+            leave(s);
+        }
+        return;
+    }
+    /* A script element's source: an error status fails the load. */
+    bool bad = status < 200 || status > 299;
+    if (s->blocking && s->blocking->req == id)
+        s->blocking->bad_status = bad;
+    for (PendingScript *q = s->defer; q; q = q->next)
+        if (q->req == id)
+            q->bad_status = bad;
+    for (PendingScript *q = s->async; q; q = q->next)
+        if (q->req == id)
+            q->bad_status = bad;
+}
+
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
 {
     const char *type = NULL;
-    if (take_fetch(s, id, &type)) {
+    bool head_sent = false;
+    if (take_fetch(s, id, &type, &head_sent)) {
         if (!s->js)
             return true;
         enter(s);
         if (ok) {
-            /* The loader gives no status or headers: a delivered body is
-             * a 200 with a type guessed from the URL. */
+            /* PLACEHOLDER HEAD: a loader that never calls
+             * au_docview_resource_head gives no status or headers, so a
+             * delivered body is reported as a 200 with a type guessed
+             * from the URL. */
             const char *hdrs[2] = {"content-type", type};
-            au_js_fetch_head(s->js, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
+            if (!head_sent)
+                au_js_fetch_head(s->js, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
             if (len)
                 au_js_fetch_data(s->js, id, data, len);
         }
@@ -664,7 +705,8 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
         return false;
     p->req = 0;
     p->ready = true;
-    p->failed = !ok;
+    p->failed = !ok || p->bad_status;
+    ok = !p->failed;
     if (ok) {
         p->text = au_strndup(data ? data : "", len);
         p->len = len;
@@ -766,6 +808,33 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
     }
     leave(s);
     return ran;
+}
+
+bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out)
+{
+    if (!s->js)
+        return false;
+    enter(s);
+    bool ok = au_js_eval(s->js, src, strlen(src), out);
+    leave(s);
+    return ok;
+}
+
+uint32_t au_docscript_due(AuDocScript *s)
+{
+    if (!s->js)
+        return UINT32_MAX;
+    if (s->resize_pending || s->scroll_pending)
+        return 0;
+    uint32_t due = au_js_wants_frame(s->js) ? 16 : UINT32_MAX;
+    double t = au_js_next_timer(s->js);
+    if (t >= 0) {
+        double d = t - au_dv_now(s->dv);
+        uint32_t ms = d <= 0 ? 0 : d >= 86400000.0 ? 86400000u : (uint32_t)d;
+        if (ms < due)
+            due = ms;
+    }
+    return due;
 }
 
 void au_docscript_resized(AuDocScript *s)

@@ -87,6 +87,14 @@ void au_docview_finish(AuDocView *dv);
 /* begin + feed + finish. */
 void au_docview_load(AuDocView *dv, const char *bytes, size_t len, const char *url);
 
+/* The response head of request id, before its data (optional). status is
+ * the HTTP status (200 for file: and data:), final_url the URL after
+ * redirects (NULL: unchanged), headers name/value pairs (lower-case names).
+ * Script fetches (fetch, XMLHttpRequest) and script elements use it; a
+ * loader that never calls it makes script see status 200, no headers and
+ * a content type guessed from the URL for every successful load. */
+void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char *status_text,
+                              const char *final_url, const char *const *headers, size_t nheaders);
 void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size_t len);
 void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok);
 /* Parsing is not finished or resources are pending. */
@@ -134,10 +142,17 @@ void au_docview_image_stats(const AuDocView *dv, struct AuImageCacheStats *s);
  * loader as AU_RES_OTHER, and javascript: links run. Script navigation
  * arrives through open_url like a link. The embedder calls
  * au_docview_run_scripts from its idle loop (timers, tasks, animation
- * frames); it returns true if anything ran. */
+ * frames); it returns true if anything ran. au_docview_scripts_due says
+ * how soon it needs calling again (0: now; UINT32_MAX: no timer or frame
+ * is waiting). */
 void au_docview_set_scripting(AuDocView *dv, bool on);
 bool au_docview_scripting(const AuDocView *dv);
 bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms);
+uint32_t au_docview_scripts_due(AuDocView *dv);
+/* Evaluates src as script in the document (debugging tools); the result,
+ * converted to a string, goes in out. False without a runtime or when it
+ * throws (out then holds the error). */
+bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
 
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);

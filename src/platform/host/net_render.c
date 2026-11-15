@@ -4,7 +4,14 @@
  * the file renderer.
  *
  *   aura-host render URL -w W [-h H] [-s scrollY] -o out.png [font options]
- *   aura-host dump URL -w W [-h H]
+ *                    [--script] [--wait MS] [--eval EXPR]...
+ *   aura-host dump URL -w W [-h H] [--script] [--wait MS] [--eval EXPR]...
+ *
+ * --script runs the page's scripts: after the page and its resources
+ * load, timers and fetches run until the page is quiet or MS (default
+ * 5000) have passed. Console lines go to stderr as "console: ...",
+ * navigations print as "navigate: URL" (not followed), and each --eval
+ * prints "eval: RESULT" at the end.
  *
  * Cookies and HSTS state come from and go back to the profile folder
  * (see net_host.h). Prints what was fetched and how long it took. */
@@ -95,6 +102,15 @@ static void main_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *
 
 /* ---- Resources for the document view ---- */
 
+static void res_response(void *ctx, uint32_t id, const AuLoadInfo *info)
+{
+    (void)id;
+    ResReq *r = ctx;
+    const char *hdrs[2] = {"content-type", info->mime};
+    au_docview_resource_head(r->nr->dv, r->docview_id, info->status ? info->status : 200, "", info->url, hdrs,
+                             info->mime && info->mime[0] ? 1 : 0);
+}
+
 static void res_data(void *ctx, uint32_t id, const void *bytes, size_t len)
 {
     (void)id;
@@ -133,7 +149,7 @@ static uint32_t res_request(void *ctx, AuDocView *dv, const char *url, AuResourc
     rq.dest = kind == AU_RES_STYLESHEET ? AU_DEST_STYLE : kind == AU_RES_IMAGE ? AU_DEST_IMAGE : AU_DEST_EMPTY;
     rq.document_url = nr->doc_url;
     rq.top_level_url = nr->doc_url;
-    AuLoadCallbacks cb = {r, NULL, res_data, res_done, NULL};
+    AuLoadCallbacks cb = {r, res_response, res_data, res_done, NULL};
     au_net_loader_start(nr->l, &rq, &cb);
     nr->requested++;
     /* The loader's id is not needed: the document view's id is ours. */
@@ -149,8 +165,57 @@ static bool res_decode(void *ctx, const void *data, size_t len, int *w, int *h, 
 static int usage(void)
 {
     fprintf(stderr, "usage: aura-host render URL -w W [-h H] [-s scrollY] -o out.png [font options]\n"
-                    "       aura-host dump URL -w W [-h H]\n");
+                    "                        [--script] [--wait MS] [--eval EXPR]...\n"
+                    "       aura-host dump URL -w W [-h H] [--script] [--wait MS] [--eval EXPR]...\n");
     return 2;
+}
+
+/* ---- Script callbacks (--script) ---- */
+
+static double cb_now(void *ctx, AuDocView *dv)
+{
+    (void)ctx, (void)dv;
+    return now_ms();
+}
+
+static void cb_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
+{
+    (void)ctx, (void)dv;
+    static const char *const names[] = {"log", "info", "warn", "error", "debug"};
+    fprintf(stderr, "console %s: %.*s\n", names[level >= 0 && level < 5 ? level : 0], (int)len, text);
+}
+
+static void cb_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
+{
+    (void)ctx, (void)dv;
+    printf("navigate%s: %s\n", new_tab ? " (new tab)" : "", url);
+}
+
+/* Fetches resources and runs scripts until nothing is pending and no
+ * script work is due within the wait, or until deadline_ms. */
+static void run_until_quiet(NetRender *nr, AuHostSession *ses, bool scripts, double deadline_ms)
+{
+    for (;;) {
+        au_docview_update(nr->dv);
+        bool any = au_net_loader_poll(nr->l);
+        uint32_t due = UINT32_MAX;
+        if (scripts) {
+            if (au_docview_run_scripts(nr->dv, 50))
+                any = true;
+            due = au_docview_scripts_due(nr->dv);
+        }
+        double t = now_ms();
+        bool net_idle = !au_net_loader_active(nr->l) && !any && au_docview_pending(nr->dv) == 0;
+        if (net_idle && (due == UINT32_MAX || t + due > deadline_ms))
+            break;
+        if (t > deadline_ms) {
+            fprintf(stderr, "aura-host: still busy at the time limit\n");
+            break;
+        }
+        if (!any)
+            au_host_net_wait(ses->host, due < 20 ? (int)due : 20);
+    }
+    au_docview_update(nr->dv);
 }
 
 static const char *security_name(AuLoadSecurity s)
@@ -168,6 +233,10 @@ int au_host_net_render_main(int argc, char **argv)
     const char *cmd = argv[1];
     const char *url = NULL, *out = "page.png";
     int w = 800, h = 0, scroll = 0;
+    bool scripts = false;
+    int wait_ms = 5000;
+    const char *evals[16];
+    int nevals = 0;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
         int used = au_host_font_option(argc, argv, i);
@@ -183,6 +252,12 @@ int au_host_net_render_main(int argc, char **argv)
             h = atoi(argv[++i]);
         else if (!strcmp(a, "-s") && i + 1 < argc)
             scroll = atoi(argv[++i]);
+        else if (!strcmp(a, "--script"))
+            scripts = true;
+        else if (!strcmp(a, "--wait") && i + 1 < argc)
+            wait_ms = atoi(argv[++i]);
+        else if (!strcmp(a, "--eval") && i + 1 < argc && nevals < 16)
+            evals[nevals++] = argv[++i];
         else if (is_http(a) && !url)
             url = a;
         else
@@ -230,24 +305,31 @@ int au_host_net_render_main(int argc, char **argv)
     AuFontSet *fonts = au_fontset_new();
     au_platform_load_fonts(fonts);
     AuLoader li = {&nr, res_request, NULL, res_decode};
-    nr.dv = au_docview_new(fonts, &li, NULL);
-    au_docview_load(nr.dv, nr.body.data ? nr.body.data : "", nr.body.len, nr.doc_url);
+    AuDocViewCallbacks dcb;
+    memset(&dcb, 0, sizeof dcb);
+    dcb.open_url = cb_open;
+    dcb.now_ms = cb_now;
+    dcb.console = cb_console;
+    nr.dv = au_docview_new(fonts, &li, &dcb);
+    au_docview_set_scripting(nr.dv, scripts);
     au_docview_set_viewport(nr.dv, w, h ? h : 600);
-    /* Resources until none is pending (layout requests images). */
+    au_docview_load(nr.dv, nr.body.data ? nr.body.data : "", nr.body.len, nr.doc_url);
+    /* Resources until none is pending (layout requests images), then
+     * scripts until the page is quiet. */
     t0 = now_ms();
-    for (;;) {
-        au_docview_update(nr.dv);
-        bool any = au_net_loader_poll(nr.l);
-        if (!au_net_loader_active(nr.l) && !any && au_docview_pending(nr.dv) == 0)
-            break;
-        if (now_ms() - t0 > MAX_SECONDS * 1000.0) {
-            fprintf(stderr, "aura-host: resources still pending after %d s\n", MAX_SECONDS);
-            break;
+    run_until_quiet(&nr, &ses, false, t0 + MAX_SECONDS * 1000.0);
+    if (scripts) {
+        double ts = now_ms();
+        run_until_quiet(&nr, &ses, true, ts + wait_ms);
+        for (int i = 0; i < nevals; i++) {
+            AuBuf o;
+            au_buf_init(&o);
+            bool ok = au_docview_eval(nr.dv, evals[i], &o);
+            printf("eval%s: %s\n", ok ? "" : " (error)", au_buf_cstr(&o));
+            au_buf_free(&o);
         }
-        if (!any)
-            au_host_net_wait(ses.host, 20);
+        au_docview_update(nr.dv);
     }
-    au_docview_update(nr.dv);
     double t_res = now_ms() - t0;
     printf("  %d resources (%d failed, %d blocked as mixed content or by type), %lld bytes, %.0f ms\n", nr.requested,
            nr.failed, nr.blocked, (long long)nr.res_bytes, t_res);

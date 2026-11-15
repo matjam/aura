@@ -22,10 +22,11 @@ const AuCredit au_credits[] = {
      * {AU_CREDIT_LIBRARY, "BearSSL <version>", "TLS (https:)",
      *  "<copyright line from third_party/bearssl>", "MIT licence",
      *  "<where the licence text ships>"},
-     * {AU_CREDIT_LIBRARY, "QuickJS-ng <version>", "JavaScript",
-     *  "<copyright line from third_party/quickjs-ng>", "MIT licence",
-     *  "<where the licence text ships>"},
      */
+    {AU_CREDIT_LIBRARY, "QuickJS-ng 0.18.0", "JavaScript",
+     "Copyright (c) 2017-2026 Fabrice Bellard\nCopyright (c) 2017-2024 Charlie Gordon\n"
+     "Copyright (c) 2023-2026 Ben Noordhuis\nCopyright (c) 2023-2026 Sa\xc3\xbal Ibarra Corret\xc3\xa9",
+     "MIT licence", "Licences:QuickJS-ng LICENSE"},
 };
 
 const size_t au_ncredits = sizeof au_credits / sizeof au_credits[0];
