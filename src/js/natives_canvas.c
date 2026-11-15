@@ -82,10 +82,11 @@ static AuCanvasSet *cv_set(AuJs *js)
 
 /* ---- The origin-clean rule ----
  * Whether an image fetched from url may be read back by script of js's
- * document once drawn to a canvas. Until CORS-approved responses are
- * known to the bindings, an image is clean only when it is same-origin
- * with the document or comes from a data: or blob: URL. To switch to the
- * CORS answer, replace this function's body. */
+ * document once drawn to a canvas: an image from a data: or blob: URL,
+ * one of the document's origin, or one whose response passed the CORS
+ * check because its <img> has a crossorigin attribute. The embedder
+ * knows the last two (AuJsHooks.image_origin_clean, on
+ * au_docview_image_origin_clean); without the hook the URL decides. */
 bool js_canvas_image_origin_clean(AuJs *js, const char *url);
 bool js_canvas_image_origin_clean(AuJs *js, const char *url)
 {
@@ -93,6 +94,8 @@ bool js_canvas_image_origin_clean(AuJs *js, const char *url)
         return true;
     if (!strncmp(url, "data:", 5) || !strncmp(url, "blob:", 5))
         return true;
+    if (js->hooks.image_origin_clean && (!strncmp(url, "http:", 5) || !strncmp(url, "https:", 6)))
+        return js->hooks.image_origin_clean(js->hooks.ctx, url);
     if (js_same_origin(js, url))
         return true;
     /* Local files are one origin for a document that is a local file. */

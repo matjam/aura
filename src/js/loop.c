@@ -290,6 +290,10 @@ double au_js_next_timer(const AuJs *js)
     for (uint32_t i = 0; i < js->ntimers; i++)
         if (best < 0 || js->timers[i].due < best)
             best = js->timers[i].due;
+    /* a document's workers wake with it */
+    double w = js->workers ? js_workers_next_timer(js) : -1;
+    if (w >= 0 && (best < 0 || w < best))
+        best = w;
     return best;
 }
 
@@ -329,5 +333,5 @@ void au_js_run_frame(AuJs *js)
 bool au_js_idle(const AuJs *js)
 {
     return !au_js_has_tasks(js) && js->ntimers == 0 && js->nframes == 0 && !js_fetch_pending(js) &&
-           !js_modules_pending(js);
+           !js_modules_pending(js) && (js->worker || js_workers_idle(js));
 }

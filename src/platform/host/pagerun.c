@@ -2,7 +2,8 @@
  * scripting on, the way the browser would, and runs its scripts.
  *
  *   aura-host page [--quiet] [--expect-errors N] [--chunk BYTES]
- *                  [--click ID]... [--no-script] [--ref ID FILE.png]... PAGE.html
+ *                  [--click ID]... [--no-script] [--real-time]
+ *                  [--ref ID FILE.png]... PAGE.html
  *
  * The page is fed to the parser in chunks (default 256 bytes, so parser
  * pauses and document.write meet chunk boundaries); resources come from
@@ -10,6 +11,9 @@
  * virtual clock (each round advances it by 50 ms) until the page has
  * loaded and nothing has run for ten virtual seconds. --click ID presses
  * and releases the mouse over the centre of element ID after the load.
+ * --real-time runs on the machine's clock instead (a worker's time slices
+ * need a clock that moves while script runs): the loop ends after half a
+ * second in which nothing ran.
  * --ref ID FILE.png paints the content box of element ID (a canvas, for
  * tests/canvas) as the page shows it and compares it with the PNG: up to
  * 3 levels per channel are allowed anywhere and more than that on at most
@@ -35,7 +39,36 @@ typedef struct PageRun {
     bool quiet;
     int errors, fails;
     bool loaded;
+    bool real_time;
 } PageRun;
+
+#include <time.h>
+static double real_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
+/* crypto for pages: the system's random device. */
+static bool c_random(void *ctx, AuDocView *dv, void *buf, size_t len)
+{
+    (void)ctx;
+    (void)dv;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f)
+        return false;
+    size_t got = fread(buf, 1, len, f);
+    fclose(f);
+    return got == len;
+}
+
+static double c_now(void *ctx, AuDocView *dv)
+{
+    (void)ctx;
+    (void)dv;
+    return real_now_ms();
+}
 
 static void c_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
 {
@@ -79,6 +112,20 @@ static void file_url(const char *path, char *out, size_t cap)
 static void run_loop(AuDocView *dv, AuHostLoader *loader, PageRun *r, int idle_limit)
 {
     int idle = 0;
+    if (r->real_time) {
+        /* at most two minutes; a millisecond's sleep when nothing ran */
+        double end = real_now_ms() + 120000;
+        while (idle < 500 && real_now_ms() < end) {
+            bool did = au_host_loader_pump(loader, dv);
+            au_docview_update(dv);
+            if (au_docview_run_scripts(dv, 20))
+                did = true;
+            idle = did || !r->loaded ? 0 : idle + 1;
+            if (!did)
+                usleep(1000);
+        }
+        return;
+    }
     for (int round = 0; round < 4000 && idle < idle_limit; round++) {
         bool did = au_host_loader_pump(loader, dv);
         au_docview_update(dv);
@@ -200,6 +247,7 @@ int au_host_page_main(int argc, char **argv)
 {
     PageRun run;
     memset(&run, 0, sizeof run);
+    setvbuf(stdout, NULL, _IOLBF, 0); /* lines show as they are printed, also in a pipe */
     int expect = 0;
     size_t chunk = 256;
     bool scripting = true;
@@ -222,6 +270,8 @@ int au_host_page_main(int argc, char **argv)
             refs[nrefs++][1] = argv[++i];
         } else if (!strcmp(argv[i], "--no-script"))
             scripting = false;
+        else if (!strcmp(argv[i], "--real-time"))
+            run.real_time = true;
         else if (argv[i][0] != '-' && !page)
             page = argv[i];
         else {
@@ -250,6 +300,10 @@ int au_host_page_main(int argc, char **argv)
     memset(&cb, 0, sizeof cb);
     cb.ctx = &run;
     cb.console = c_console;
+    cb.coro = au_host_coro_ops();
+    cb.random = c_random;
+    if (run.real_time)
+        cb.now_ms = c_now;
     cb.open_url = c_open;
     cb.load_finished = c_loaded;
     AuDocView *dv = au_docview_new(fonts, &li, &cb);

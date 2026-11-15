@@ -788,6 +788,7 @@ void browserwin_host(AuBrowserHost *h)
     h->confirm = host_confirm;
     h->scroll_area = host_scroll_area;
     h->random = host_random;
+    h->coro = mac_coro_ops();
 }
 
 /* ---- Events ---- */

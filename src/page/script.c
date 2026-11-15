@@ -26,6 +26,7 @@
 #include "docview_int.h"
 
 #include "../js/js.h"
+#include "../net/cors.h"
 #include "../layout/selection.h"
 
 #include <stdio.h>
@@ -41,6 +42,7 @@ struct PendingScript {
     int kind;      /* AU_JS_SCRIPT_CLASSIC or AU_JS_SCRIPT_MODULE */
     bool ready, failed;
     bool bad_status; /* the response head had a status outside 200-299 */
+    bool muted;      /* from another origin without CORS: its errors are muted */
     PendingScript *next;
 };
 
@@ -57,6 +59,7 @@ struct AuDocScript {
         uint32_t id;      /* loader id */
         const char *type; /* content type guessed from the URL, or NULL */
         bool head_sent;   /* the loader reported the response head */
+        AuJs *js;         /* who asked: the document's runtime or a worker's */
     } *fetches;           /* fetches made by script */
     uint32_t nfetches, fetches_cap;
     uint32_t modules;                  /* module scripts started, not evaluated */
@@ -313,6 +316,12 @@ static struct AuCanvasSet *h_canvas_set(void *ctx)
     return au_dv_canvas_set(s->dv);
 }
 
+static bool h_image_origin_clean(void *ctx, const char *url)
+{
+    AuDocScript *s = ctx;
+    return au_docview_image_origin_clean(s->dv, url);
+}
+
 static bool h_canvas_image(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
                            size_t url_cap)
 {
@@ -365,6 +374,10 @@ static AuElement *h_frame_element(void *ctx)
     return au_frames_element(s->dv);
 }
 
+/* How long the workers of a document run in one au_docscript_run, after
+ * the document's own tasks. */
+#define WORKER_BUDGET_MS 12
+
 /* ---- Fetches made by script (fetch, XHR, module and script loads) ---- */
 
 /* The loader reports no headers: the type comes from the URL's suffix. */
@@ -385,32 +398,39 @@ static const char *type_of(const char *url)
 
 static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
 {
-    (void)js;
     AuDocScript *s = ctx;
-    /* GET, and POST with a body when the embedder's loader takes one
-     * (au_docview_set_request_ex); the Content-Type header goes with the
-     * body, other request headers are not sent. */
-    bool post = !strcmp(req->method, "POST");
-    if ((strcmp(req->method, "GET") != 0 && !post) || (req->body_len && !post))
-        return 0;
+    /* One request of a script's fetch (src/js/fetch.c follows redirects
+     * and applies CORS). A loader that takes a request with its context
+     * (au_docview_set_request_ex) sends it as described; without one only
+     * a plain GET can go out. */
+    bool get = !strcmp(req->method, "GET");
     uint32_t id;
-    if (post) {
-        if (!au_dv_top(s->dv)->request_ex)
-            return 0;
+    bool bg = req->dest == AU_FETCH_DEST_EMPTY || req->dest == AU_FETCH_DEST_WORKER;
+    if (au_dv_top(s->dv)->request_ex) {
         AuResourceRequest rq;
         memset(&rq, 0, sizeof rq);
         rq.url = req->url;
         rq.kind = AU_RES_OTHER;
         rq.document_url = au_docview_url(s->dv);
-        rq.method = "POST";
-        rq.body = req->body ? req->body : "";
+        rq.method = req->method;
+        rq.body = req->body;
         rq.body_len = req->body_len;
         for (size_t i = 0; i < req->nheaders; i++)
             if (au_ieq(req->headers[2 * i], strlen(req->headers[2 * i]), "content-type", 12))
                 rq.body_type = req->headers[2 * i + 1];
-        id = au_dv_request_ex(s->dv, &rq, req->dest == AU_FETCH_DEST_EMPTY);
+        rq.headers = req->headers;
+        rq.nheaders = req->nheaders;
+        rq.script_mode = req->mode == AU_FETCH_NO_CORS ? 2 : req->mode == AU_FETCH_SAME_ORIGIN_MODE ? 3 : 1;
+        rq.cache = req->cache == AU_FETCH_CACHE_ONLY_IF_CACHED ? AU_FETCH_CACHE_FORCE : req->cache;
+        rq.omit_credentials = req->credentials != AU_FETCH_INCLUDE;
+        rq.manual_redirect = req->manual_redirect;
+        rq.referrer = req->referrer;
+        rq.referrer_policy = req->referrer_policy;
+        id = au_dv_request_ex(s->dv, &rq, bg);
     } else {
-        id = au_dv_request(s->dv, req->url, req->dest == AU_FETCH_DEST_EMPTY);
+        if (!get || req->body_len)
+            return 0;
+        id = au_dv_request(s->dv, req->url, bg);
     }
     if (!id)
         return 0;
@@ -421,6 +441,7 @@ static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
     s->fetches[s->nfetches].id = id;
     s->fetches[s->nfetches].type = type_of(req->url);
     s->fetches[s->nfetches].head_sent = false;
+    s->fetches[s->nfetches].js = js;
     s->nfetches++;
     return id;
 }
@@ -434,11 +455,13 @@ static struct ScriptFetch *find_fetch(AuDocScript *s, uint32_t id)
 }
 
 /* Removes a script fetch; returns false if id is not one. */
-static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *head_sent)
+static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *head_sent, AuJs **js)
 {
     struct ScriptFetch *f = find_fetch(s, id);
     if (!f)
         return false;
+    if (js)
+        *js = f->js;
     if (type)
         *type = f->type;
     if (head_sent)
@@ -450,7 +473,7 @@ static bool take_fetch(AuDocScript *s, uint32_t id, const char **type, bool *hea
 static void f_abort(void *ctx, uint32_t id)
 {
     AuDocScript *s = ctx;
-    if (take_fetch(s, id, NULL, NULL))
+    if (take_fetch(s, id, NULL, NULL, NULL))
         au_dv_cancel(s->dv, id);
 }
 
@@ -523,6 +546,7 @@ static bool ensure_js(AuDocScript *s)
     h.submit_form = h_submit_form;
     if (au_dv_callbacks(s->dv)->random)
         h.random = h_random;
+    h.coro = au_dv_callbacks(s->dv)->coro;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
@@ -537,6 +561,7 @@ static bool ensure_js(AuDocScript *s)
     h.frame_element = h_frame_element;
     h.canvas_set = h_canvas_set;
     h.canvas_image = h_canvas_image;
+    h.image_origin_clean = h_image_origin_clean;
     AuDocView *dv = s->dv;
     if (dv->parent) {
         /* A nested document: a context in the page's runtime, which the
@@ -627,6 +652,8 @@ static void run_classic(AuDocScript *s, PendingScript *p)
     }
     const char *url = p->url ? p->url : au_docview_url(s->dv);
     snprintf(s->perf_label, sizeof s->perf_label, "%s", url);
+    if (p->muted && p->url)
+        au_js_mute_script(s->js, p->url);
     au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
     if (p->url)
         fire_simple(s, p->el, "load");
@@ -712,7 +739,12 @@ static bool fetch_script(AuDocScript *s, PendingScript *p, const char *src)
     p->url = au_strndup(abs, strlen(abs));
     if (p->kind == AU_JS_SCRIPT_MODULE)
         return true; /* src/js fetches modules itself */
-    p->req = au_dv_request(s->dv, abs, false);
+    /* Until the response says otherwise (a loader that reports no head),
+     * the URL decides whether the script's errors are muted. */
+    uint8_t cors = au_dv_cors_attr(p->el);
+    p->muted = !cors && (!strncmp(abs, "http:", 5) || !strncmp(abs, "https:", 6)) &&
+               !au_cors_same_origin(au_docview_url(s->dv), abs);
+    p->req = au_dv_request_cors(s->dv, abs, cors);
     return p->req != 0;
 }
 
@@ -847,35 +879,44 @@ void au_docscript_parse_done(AuDocScript *s)
 }
 
 void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const char *status_text,
-                                const char *final_url, const char *const *headers, size_t nheaders)
+                                const char *final_url, const char *const *headers, size_t nheaders, bool muted)
 {
     struct ScriptFetch *f = find_fetch(s, id);
     if (f) {
         f->head_sent = true;
         if (s->js) {
+            /* f->js: the document's runtime, or the worker that asked */
+            AuJs *to = f->js;
             enter(s);
-            au_js_fetch_head(s->js, id, status, status_text ? status_text : "", headers, nheaders, final_url);
+            au_js_fetch_head(to, id, status, status_text ? status_text : "", headers, nheaders, final_url);
             leave(s);
         }
         return;
     }
     /* A script element's source: an error status fails the load. */
     bool bad = status < 200 || status > 299;
-    if (s->blocking && s->blocking->req == id)
+    if (s->blocking && s->blocking->req == id) {
         s->blocking->bad_status = bad;
+        s->blocking->muted = muted;
+    }
     for (PendingScript *q = s->defer; q; q = q->next)
-        if (q->req == id)
+        if (q->req == id) {
             q->bad_status = bad;
+            q->muted = muted;
+        }
     for (PendingScript *q = s->async; q; q = q->next)
-        if (q->req == id)
+        if (q->req == id) {
             q->bad_status = bad;
+            q->muted = muted;
+        }
 }
 
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
 {
     const char *type = NULL;
     bool head_sent = false;
-    if (take_fetch(s, id, &type, &head_sent)) {
+    AuJs *to = NULL;
+    if (take_fetch(s, id, &type, &head_sent, &to)) {
         if (!s->js)
             return true;
         enter(s);
@@ -886,11 +927,11 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
              * from the URL. */
             const char *hdrs[2] = {"content-type", type};
             if (!head_sent)
-                au_js_fetch_head(s->js, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
+                au_js_fetch_head(to, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
             if (len)
-                au_js_fetch_data(s->js, id, data, len);
+                au_js_fetch_data(to, id, data, len);
         }
-        au_js_fetch_done(s->js, id, ok);
+        au_js_fetch_done(to, id, ok);
         leave(s);
         return true;
     }
@@ -1079,6 +1120,9 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
         au_js_run_frame(s->js);
         ran = true;
     }
+    /* The document's workers, a slice each in turn. */
+    if (au_js_run_workers(s->js, WORKER_BUDGET_MS))
+        ran = true;
     leave(s);
     return ran;
 }
@@ -1114,7 +1158,7 @@ uint32_t au_docscript_due(AuDocScript *s)
 {
     if (!s->js)
         return UINT32_MAX;
-    if (s->resize_pending || s->scroll_pending)
+    if (s->resize_pending || s->scroll_pending || au_js_workers_busy(s->js))
         return 0;
     uint32_t due = au_js_wants_frame(s->js) ? 16 : UINT32_MAX;
     double t = au_js_next_timer(s->js);

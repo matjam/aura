@@ -216,7 +216,15 @@ promise_test('MessageChannel delivers cloned messages in order, as tasks', async
     await delay(10);
     assert.equal(back.length, 1);
     assert.throws(() => new MessagePort(), TypeError);
-    assert.throws(() => port2.postMessage(1, [new ArrayBuffer(1)]), 'DataCloneError');
+    /* an ArrayBuffer in the transfer list is emptied; anything else cannot be transferred */
+    const buf = new ArrayBuffer(8);
+    port2.postMessage(buf, [buf]);
+    assert.equal(buf.byteLength, 0, 'the transferred buffer is detached');
+    assert.throws(() => port2.postMessage(1, [{}]), 'DataCloneError');
+    const keep = new Uint8Array([1, 2, 3]);
+    const copy = structuredClone(keep, { transfer: [keep.buffer] });
+    assert.equal(keep.byteLength, 0);
+    assert.equal(copy[2], 3);
 });
 
 test('crypto gives random values where the embedder has a source', () => {
@@ -229,7 +237,7 @@ test('crypto gives random values where the embedder has a source', () => {
     const u = crypto.randomUUID();
     assert.ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(u), u);
     assert.notEqual(u, crypto.randomUUID());
-    assert.equal(crypto.subtle, undefined);
+    assert.ok(crypto.subtle instanceof SubtleCrypto);
 });
 
 test('ARIA reflection, sandbox tokens and createCDATASection', () => {
