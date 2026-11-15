@@ -28,6 +28,8 @@ if(AURA_MACOS9)
 endif()
 target_compile_definitions(aura_quickjs PRIVATE _GNU_SOURCE ${AURA_QJS_DEFINES})
 target_link_libraries(aura_engine PUBLIC aura_quickjs)
-if(NOT AURA_MACOS9 AND NOT APPLE)
+# The math library goes after QuickJS on the link line (newlib's libm on
+# Mac OS 9 holds cbrt, hypot, the hyperbolic functions and so on).
+if(NOT APPLE OR AURA_MACOS9)
     target_link_libraries(aura_quickjs PUBLIC m)
 endif()

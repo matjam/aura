@@ -1,6 +1,7 @@
 /* The document view: parser, style sheets, images, resolver, layout,
  * painting, input. */
 #include "page.h"
+#include "script.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,7 @@ typedef struct Request {
     SheetSrc *sheet; /* for style sheets */
     ImageEntry *image;
     AuBuf data;
+    bool background; /* script fetch: does not hold the load event */
 } Request;
 
 struct AuDocView {
@@ -68,6 +70,13 @@ struct AuDocView {
     AuElement *hover, *active;
     char hover_link[2048];
     uint32_t scanned_nodes;
+    /* scripts (script.c) */
+    AuDocScript *script; /* this document's, while scripting is on */
+    bool scripting;      /* the setting, applied at begin */
+    bool sheets_rescan;  /* script changed the tree: look for sheets again */
+    bool layout_ran;     /* layout changed since observers last ran */
+    uint32_t nbg;        /* background requests among reqs */
+    double clock;        /* the fallback clock */
 };
 
 /* ---- Helpers ---- */
@@ -128,6 +137,12 @@ static void free_sheet_src(SheetSrc *s)
 
 static void clear_document(AuDocView *dv)
 {
+    if (dv->script) {
+        AuDocScript *s = dv->script;
+        dv->script = NULL;
+        au_docscript_free(s);
+    }
+    dv->nbg = 0;
     for (uint32_t i = 0; i < dv->nreqs; i++) {
         if (dv->loader.cancel)
             dv->loader.cancel(dv->loader.ctx, dv->reqs[i].id);
@@ -279,6 +294,14 @@ static void maybe_finished(AuDocView *dv)
 {
     if (!au_docview_loading(dv) && !dv->finished_reported) {
         dv->finished_reported = true;
+        if (dv->script) {
+            /* The load event may start more loads (images, scripts). */
+            au_docscript_loaded(dv->script);
+            if (au_docview_loading(dv)) {
+                dv->finished_reported = false;
+                return;
+            }
+        }
         if (dv->cb.load_finished)
             dv->cb.load_finished(dv->cb.ctx, dv);
     }
@@ -291,6 +314,15 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
         return;
     Request req = *r;
     *r = dv->reqs[--dv->nreqs];
+    if (req.background)
+        dv->nbg--;
+    if (req.kind == AU_RES_OTHER) {
+        if (dv->script)
+            au_docscript_resource_done(dv->script, req.id, req.data.data, req.data.len, ok);
+        au_buf_free(&req.data);
+        maybe_finished(dv);
+        return;
+    }
     if (req.kind == AU_RES_STYLESHEET && req.sheet) {
         SheetSrc *s = req.sheet;
         s->req = 0;
@@ -333,7 +365,7 @@ uint32_t au_docview_pending(const AuDocView *dv)
 
 bool au_docview_loading(const AuDocView *dv)
 {
-    return dv->parsing || dv->nreqs > 0;
+    return dv->parsing || dv->nreqs > dv->nbg || (dv->script && au_docscript_busy(dv->script));
 }
 
 /* ---- Layout callbacks ---- */
@@ -541,11 +573,18 @@ void au_docview_begin(AuDocView *dv, const char *url)
     }
     AuHtmlOptions opts;
     memset(&opts, 0, sizeof opts);
-    opts.scripting = false;
+    opts.scripting = dv->scripting;
     opts.encoding = AU_HTML_ENC_SNIFF;
+    if (dv->scripting) {
+        /* The parser keeps opts.ctx; the script object follows it. */
+        opts.script_ready = au_docscript_script_ready;
+        opts.ctx = dv->script = au_docscript_new(dv);
+    }
     dv->parser = au_html_parser_new(&opts);
     dv->doc = au_html_parser_document(dv->parser);
     au_node_ref(&dv->doc->node);
+    if (dv->script)
+        au_docscript_set_parser(dv->script, dv->parser, dv->doc);
     dv->resolver = au_css_resolver_new();
     au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
     au_layout_set_document(dv->layout, dv->doc);
@@ -569,10 +608,18 @@ void au_docview_finish(AuDocView *dv)
     if (!dv->parser)
         au_docview_begin(dv, dv->url);
     au_html_parser_finish(dv->parser);
+    if (dv->script && !au_html_parser_done(dv->parser)) {
+        /* Paused on a script: the end of parsing comes with the resume. */
+        dv->tree_dirty = true;
+        scan_document(dv, false);
+        return;
+    }
     dv->parsing = false;
     dv->tree_dirty = true;
     scan_document(dv, true);
     invalidate_all(dv);
+    if (dv->script)
+        au_docscript_parse_done(dv->script);
     maybe_finished(dv);
 }
 
@@ -615,7 +662,7 @@ static void rebuild_resolver(AuDocView *dv)
     au_css_device_default(&dev);
     dev.width = (float)dv->vw;
     dev.height = (float)dv->vh;
-    dev.scripting = 0;
+    dev.scripting = dv->script ? 2 : 0;
     au_css_resolver_set_device(dv->resolver, &dev);
     if (dv->user_css)
         au_css_resolver_add_sheet(dv->resolver, au_css_sheet_parse(dv->user_css, strlen(dv->user_css),
@@ -629,11 +676,34 @@ static void rebuild_resolver(AuDocView *dv)
     dv->style_all = true;
 }
 
-bool au_docview_update(AuDocView *dv)
+static void prune_slots(AuDocView *dv)
 {
-    if (!dv->doc)
-        return false;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < dv->nslots; i++) {
+        SheetSlot *s = &dv->slots[i];
+        if (au_node_is_connected(&s->el->node)) {
+            dv->slots[k++] = *s;
+            continue;
+        }
+        for (uint32_t j = 0; j < dv->nreqs; j++)
+            if (s->src->req && dv->reqs[j].sheet == s->src)
+                dv->reqs[j].sheet = NULL; /* its data is dropped on arrival */
+        au_node_unref(&s->el->node);
+        free_sheet_src(s->src);
+        dv->sheets_dirty = true;
+    }
+    dv->nslots = k;
+}
+
+/* Brings styles up to date; returns true if the tree was restyled. */
+static bool update_style(AuDocView *dv)
+{
     bool changed = false;
+    if (dv->sheets_rescan) {
+        dv->sheets_rescan = false;
+        prune_slots(dv);
+        scan_document(dv, !dv->parsing);
+    }
     if (dv->sheets_dirty) {
         rebuild_resolver(dv);
         dv->sheets_dirty = false;
@@ -649,12 +719,22 @@ bool au_docview_update(AuDocView *dv)
         au_layout_styles_changed(dv->layout);
         dv->restyle_needed = false;
     }
+    return changed;
+}
+
+bool au_docview_update(AuDocView *dv)
+{
+    if (!dv->doc)
+        return false;
+    bool changed = update_style(dv);
     if (dv->images_dirty) {
         au_layout_images_changed(dv->layout);
         dv->images_dirty = false;
     }
     if (au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh))
         changed = true;
+    if (changed)
+        dv->layout_ran = true;
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
     if ((w != dv->last_w || h != dv->last_h)) {
@@ -681,11 +761,13 @@ void au_docview_set_viewport(AuDocView *dv, int width, int height)
         au_css_device_default(&dev);
         dev.width = (float)width;
         dev.height = (float)height;
-        dev.scripting = 0;
+        dev.scripting = dv->script ? 2 : 0;
         au_css_resolver_set_device(dv->resolver, &dev);
         /* Media queries and viewport units may change. */
         dv->style_all = true;
     }
+    if (dv->script)
+        au_docscript_resized(dv->script);
 }
 
 void au_docview_content_size(AuDocView *dv, int *width, int *height)
@@ -709,6 +791,8 @@ void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int
 
 void au_docview_set_scroll(AuDocView *dv, int scroll_x, int scroll_y)
 {
+    if (dv->script && (scroll_x != dv->scroll_x || scroll_y != dv->scroll_y))
+        au_docscript_scrolled(dv->script);
     dv->scroll_x = scroll_x;
     dv->scroll_y = scroll_y;
 }
@@ -740,6 +824,14 @@ static void set_state(AuDocView *dv, AuElement **slot, AuElement *el, uint32_t b
     dv->restyle_needed = true;
 }
 
+static bool node_contains(const AuNode *a, const AuNode *b)
+{
+    for (; b; b = b->parent)
+        if (a == b)
+            return true;
+    return false;
+}
+
 static void link_url(AuDocView *dv, AuElement *link, char *out, size_t cap)
 {
     out[0] = 0;
@@ -754,6 +846,21 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
         return false;
     AuHitResult r;
     au_docview_hit_test(dv, ev->x, ev->y, &r);
+    if (dv->script) {
+        /* Listeners may change or replace the document; the script side
+         * keeps r.element alive while they run. */
+        static const char *const types[] = {"mousemove", "mousedown", "mouseup"};
+        int t = ev->type == AU_EVENT_MOUSE_MOVE ? 0 : ev->type == AU_EVENT_MOUSE_DOWN ? 1 : ev->type == AU_EVENT_MOUSE_UP ? 2 : -1;
+        if (t >= 0) {
+            if (t == 0 && r.element != dv->hover)
+                au_docscript_hover(dv->script, dv->hover, r.element, ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            if (dv->script)
+                au_docscript_mouse(dv->script, ev, r.element, types[t], ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            if (!dv->doc)
+                return true;
+            au_docview_hit_test(dv, ev->x, ev->y, &r);
+        }
+    }
     bool used = false;
     switch (ev->type) {
     case AU_EVENT_MOUSE_MOVE: {
@@ -786,14 +893,35 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                     break;
                 }
         }
+        bool follow = true;
+        if (dv->script && down && r.element) {
+            /* click goes to the nearest common ancestor of the press and
+             * release targets */
+            AuElement *t = r.element;
+            while (t && !node_contains(&t->node, &down->node))
+                t = au_is_element(t->node.parent) ? au_as_element(t->node.parent) : NULL;
+            if (t) {
+                au_node_ref(&t->node);
+                follow = au_docscript_mouse(dv->script, ev, t, "click", ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+                au_node_unref(&t->node);
+            }
+            if (!dv->doc)
+                return true;
+            au_docview_hit_test(dv, ev->x, ev->y, &r); /* listeners may have changed the page */
+        }
         set_state(dv, &dv->active, NULL, AU_STATE_ACTIVE);
-        if (r.link && r.link == down_link) {
+        if (follow && r.link && r.link == down_link) {
             char url[2048];
             link_url(dv, r.link, url, sizeof url);
             const char *target = attr(r.link, "target");
             bool new_tab = (ev->mods & AU_MOD_COMMAND) || (target && au_ieq(target, strlen(target), "_blank", 6));
-            if (url[0] && dv->cb.open_url)
+            if (au_ieq(url, strlen(url) < 11 ? strlen(url) : 11, "javascript:", 11)) {
+                /* Runs only in this document, and only with scripting on. */
+                if (dv->script)
+                    au_docscript_javascript_url(dv->script, url);
+            } else if (url[0] && dv->cb.open_url) {
                 dv->cb.open_url(dv->cb.ctx, dv, url, new_tab);
+            }
             used = true;
         }
         break;
@@ -867,4 +995,138 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
         return -1;
     }
     return (int)r.y;
+}
+
+/* ---- Scripts (see script.c) ---- */
+
+void au_docview_set_scripting(AuDocView *dv, bool on)
+{
+    dv->scripting = on;
+}
+
+bool au_docview_scripting(const AuDocView *dv)
+{
+    return dv->scripting;
+}
+
+bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms)
+{
+    if (!dv->script)
+        return false;
+    if (!dv->cb.now_ms)
+        dv->clock += budget_ms;
+    if (dv->layout_ran) {
+        dv->layout_ran = false;
+        au_docscript_layout_done(dv->script);
+    }
+    return dv->script && au_docscript_run(dv->script, budget_ms);
+}
+
+uint32_t au_dv_request(AuDocView *dv, const char *url, bool background)
+{
+    Request *r = add_request(dv, url, AU_RES_OTHER);
+    if (!r)
+        return 0;
+    r->background = background;
+    if (background)
+        dv->nbg++;
+    else
+        dv->finished_reported = false;
+    return r->id;
+}
+
+void au_dv_cancel(AuDocView *dv, uint32_t id)
+{
+    Request *r = find_request(dv, id);
+    if (!r)
+        return;
+    if (dv->loader.cancel)
+        dv->loader.cancel(dv->loader.ctx, id);
+    if (r->background)
+        dv->nbg--;
+    au_buf_free(&r->data);
+    *r = dv->reqs[--dv->nreqs];
+}
+
+void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
+{
+    if (!dv->doc)
+        return;
+    AuElement *el = au_is_element(n) ? au_as_element(n) : NULL;
+    if (kind == 2 && el && dv->resolver) { /* attribute */
+        bool style_only = attr_name == AU_ATOM_class || attr_name == AU_ATOM_id || attr_name == AU_ATOM_style;
+        au_css_invalidate(dv->resolver, el,
+                          attr_name == AU_ATOM_style ? AU_CSS_CHANGE_INLINE_STYLE : AU_CSS_CHANGE_ATTR, attr_name);
+        dv->restyle_needed = true;
+        if (!style_only)
+            dv->tree_dirty = true; /* src, colspan, value...: content may change */
+        if (el->tag == AU_ATOM_link || el->tag == AU_ATOM_style || el->tag == AU_ATOM_base)
+            dv->sheets_rescan = true;
+    } else if (kind == 4 && el && dv->resolver) { /* state: checked, focus... */
+        au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
+        dv->restyle_needed = true;
+        dv->tree_dirty = true;
+    } else {
+        dv->tree_dirty = true;
+        dv->sheets_rescan = true;
+    }
+}
+
+void au_dv_parsed_more(AuDocView *dv)
+{
+    if (!dv->parser)
+        return;
+    dv->tree_dirty = true;
+    if (dv->parsing && au_html_parser_done(dv->parser)) {
+        dv->parsing = false;
+        scan_document(dv, true);
+        invalidate_all(dv);
+        if (dv->script)
+            au_docscript_parse_done(dv->script);
+        maybe_finished(dv);
+    } else {
+        scan_document(dv, false);
+    }
+}
+
+void au_dv_check_finished(AuDocView *dv)
+{
+    maybe_finished(dv);
+}
+
+void au_dv_turn_end(AuDocView *dv)
+{
+    if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan)
+        invalidate_all(dv);
+}
+
+void au_dv_update_style(AuDocView *dv)
+{
+    if (dv->doc)
+        update_style(dv);
+}
+
+const AuDocViewCallbacks *au_dv_callbacks(const AuDocView *dv)
+{
+    return &dv->cb;
+}
+
+void au_dv_scroll(const AuDocView *dv, int *x, int *y, int *vw, int *vh)
+{
+    *x = dv->scroll_x;
+    *y = dv->scroll_y;
+    *vw = dv->vw;
+    *vh = dv->vh;
+}
+
+AuCssResolver *au_dv_resolver(const AuDocView *dv)
+{
+    return dv->resolver;
+}
+
+double au_dv_now(AuDocView *dv)
+{
+    if (dv->cb.now_ms)
+        return dv->cb.now_ms(dv->cb.ctx, dv);
+    return dv->clock += 1; /* every read advances it, so time limits still end loops */
 }

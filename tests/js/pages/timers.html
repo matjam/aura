@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Timers, frames, fetch and script-inserted scripts in a page</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<div id="out"></div>
+<script>
+promise_test('setTimeout and requestAnimationFrame run from the view loop', async () => {
+    const order = [];
+    await new Promise((resolve) => {
+        setTimeout(() => order.push('timeout'), 30);
+        requestAnimationFrame((t) => { order.push('frame'); assert.equal(typeof t, 'number'); });
+        setTimeout(resolve, 200);
+    });
+    assert.ok(order.includes('timeout') && order.includes('frame'), order.join());
+});
+promise_test('fetch reads a file through the view loader', async () => {
+    const r = await fetch('res/data.json');
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/json');
+    const j = await r.json();
+    assert.equal(j.answer, 42);
+});
+promise_test('a script inserted by script runs when connected', async () => {
+    const s = document.createElement('script');
+    s.src = 'res/inserted.js';
+    const loaded = once(s, 'load');
+    document.body.appendChild(s);
+    await loaded;
+    assert.equal(window.insertedRan, 1);
+});
+promise_test('innerHTML scripts do not run', async () => {
+    document.getElementById('out').innerHTML = '<script>window.innerRan = 1<\/script>';
+    await delay(50);
+    assert.equal(window.innerRan, undefined);
+});
+promise_test('dynamic import loads a module', async () => {
+    const m = await import('./res/mod1.mjs');
+    assert.equal(m.x, 1);
+});
+window.log = [];
+</script>
+</body>
+</html>

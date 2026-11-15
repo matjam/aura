@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "html/html.h"
+#include "js/js.h"
 
 static int verbose;
 
@@ -281,66 +282,53 @@ static int parse_dat(char *src, size_t len, Test **out)
     return n;
 }
 
-/* ---- A stand-in for script execution ----
- * Until the JavaScript stage exists, scripts that consist only of
- * document.write calls with string-literal arguments (joined with +) are
- * run here, to exercise the parser's insertion point handling. Any other
- * script is ignored. */
+/* ---- Script execution ----
+ * With scripting on, each script runs in the JavaScript engine (src/js)
+ * when the parser reaches its end tag, with the parser as the insertion
+ * point for document.write. The runtime starts at a document's first
+ * script and is freed with the document. */
 
-static const char *skip_ws(const char *s, const char *e)
+typedef struct TreeScript {
+    AuDocument *doc;
+    AuJs *js;
+    double clock;
+} TreeScript;
+
+static double tree_now(void *ctx)
 {
-    while (s < e && (*s == ' ' || *s == '\t' || *s == '\n' || *s == ';'))
-        s++;
-    return s;
+    TreeScript *t = ctx;
+    return t->clock += 1;
 }
 
-static void fake_script(void *ctx, AuHtmlParser *p, AuElement *script)
+static void tree_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)
 {
     (void)ctx;
-    AuBuf src, arg;
+    (void)level; /* many test scripts are not valid JavaScript: errors are expected */
+    if (verbose)
+        fprintf(stderr, "  script: %.*s\n", (int)len, text);
+}
+
+static void run_script(void *ctx, AuHtmlParser *p, AuElement *script)
+{
+    TreeScript *t = ctx;
+    if (!t->js) {
+        AuJsHooks h;
+        memset(&h, 0, sizeof h);
+        h.ctx = t;
+        h.now_ms = tree_now;
+        h.console = tree_console;
+        t->js = au_js_new(t->doc, "about:blank", NULL, &h);
+        if (!t->js)
+            return;
+    }
+    au_js_set_parser(t->js, p);
+    AuBuf src;
     au_buf_init(&src);
-    au_buf_init(&arg);
     for (AuNode *c = script->node.first_child; c; c = c->next)
         if (c->type == AU_NODE_TEXT)
             au_buf_append(&src, ((AuText *)c)->data, ((AuText *)c)->len);
-    const char *s = src.data ? src.data : "", *e = s + src.len;
-    for (;;) {
-        s = skip_ws(s, e);
-        if (s == e || (size_t)(e - s) < 15 || strncmp(s, "document.write(", 15))
-            break;
-        s += 15;
-        arg.len = 0;
-        bool ok = false;
-        for (;;) {
-            s = skip_ws(s, e);
-            if (s == e || (*s != '"' && *s != '\''))
-                break;
-            char q = *s++;
-            while (s < e && *s != q) {
-                if (*s == '\\' && s + 1 < e)
-                    s++;
-                au_buf_putc(&arg, *s++);
-            }
-            if (s == e)
-                break;
-            s++;
-            s = skip_ws(s, e);
-            if (s < e && *s == '+') {
-                s++;
-                continue;
-            }
-            if (s < e && *s == ')') {
-                s++;
-                ok = true;
-            }
-            break;
-        }
-        if (!ok)
-            break;
-        au_html_parser_write(p, arg.data ? arg.data : "", arg.len);
-    }
+    au_js_run_classic(t->js, script, src.data ? src.data : "", src.len, "about:blank", 1);
     au_buf_free(&src);
-    au_buf_free(&arg);
 }
 
 /* ---- Running ---- */
@@ -351,9 +339,14 @@ static char *run_document(const Test *t, bool scripting, bool bytewise)
     memset(&o, 0, sizeof o);
     o.scripting = scripting;
     o.encoding = AU_HTML_ENC_UTF8;
-    if (scripting)
-        o.script_ready = fake_script;
+    TreeScript ts;
+    memset(&ts, 0, sizeof ts);
+    if (scripting) {
+        o.script_ready = run_script;
+        o.ctx = &ts;
+    }
     AuHtmlParser *p = au_html_parser_new(&o);
+    ts.doc = au_html_parser_document(p);
     if (bytewise) {
         for (size_t i = 0; i < t->dlen; i++)
             au_html_parser_feed(p, t->data + i, 1);
@@ -361,6 +354,8 @@ static char *run_document(const Test *t, bool scripting, bool bytewise)
         au_html_parser_feed(p, t->data, t->dlen);
     }
     au_html_parser_finish(p);
+    if (ts.js)
+        au_js_free(ts.js);
     AuBuf b;
     au_buf_init(&b);
     dump_children(&b, &au_html_parser_document(p)->node);

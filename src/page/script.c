@@ -1,0 +1,788 @@
+/* Script execution for the document view: the HTML Standard's script
+ * processing model on top of src/js.
+ *
+ * - Parser-inserted classic scripts run when the parser reaches their end
+ *   tag. An external one without async or defer blocks the parser: the
+ *   parser pauses, the script loads through the view's loader
+ *   (AU_RES_OTHER), runs, and parsing resumes (document.write inserts at
+ *   the parser's insertion point meanwhile).
+ * - defer scripts and non-async module scripts run in document order once
+ *   parsing is done, then DOMContentLoaded fires; async scripts run as
+ *   they arrive. All of them hold the load event, which fires once the
+ *   view has nothing left to load.
+ * - nomodule classic scripts are skipped (modules are supported); import
+ *   maps are handed to src/js; scripts with an unknown type are ignored.
+ * - The runtime starts on the first script, or at the end of parsing when
+ *   an element has an event handler attribute (handlers compile lazily on
+ *   first dispatch, in src/js).
+ * - Script DOM changes only mark style and layout out of date
+ *   (au_dv_dom_changed); one repaint request goes out at the end of each
+ *   script turn and layout runs at the next paint, or earlier when script
+ *   reads geometry (element_rect) or computed style (style only).
+ * - Navigation requested by script reaches the embedder through open_url
+ *   at the end of the turn, never from inside script. */
+#include "script.h"
+
+#include "../js/js.h"
+
+#include <string.h>
+
+typedef struct PendingScript PendingScript;
+struct PendingScript {
+    AuElement *el; /* referenced */
+    char *url;     /* absolute source URL (external), else NULL */
+    char *text;    /* source once known */
+    size_t len;
+    uint32_t req;  /* loader request while loading */
+    int kind;      /* AU_JS_SCRIPT_CLASSIC or AU_JS_SCRIPT_MODULE */
+    bool ready, failed;
+    PendingScript *next;
+};
+
+struct AuDocScript {
+    AuDocView *dv;
+    AuDocument *doc;
+    AuHtmlParser *parser;
+    AuJs *js;
+    bool js_failed;
+    PendingScript *blocking;           /* the script the parser waits for */
+    PendingScript *defer, *defer_tail; /* defer and module scripts, in order */
+    PendingScript *async;              /* async classic scripts, any order */
+    struct ScriptFetch {
+        uint32_t id;      /* loader id */
+        const char *type; /* content type guessed from the URL, or NULL */
+    } *fetches;           /* fetches made by script */
+    uint32_t nfetches, fetches_cap;
+    uint32_t modules;                  /* module scripts started, not evaluated */
+    bool defer_module_running;         /* the head of the defer list is a module in flight */
+    bool parse_done, content_loaded, loaded;
+    bool resize_pending, scroll_pending;
+    int depth;
+    char *nav_url;
+    bool nav_new_tab;
+};
+
+/* ---- Helpers ---- */
+
+static const char *attr(const AuElement *el, const char *name)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    return a ? au_element_get_attr(el, a) : NULL;
+}
+
+static char *script_text(const AuElement *el, size_t *len)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    for (const AuNode *c = el->node.first_child; c; c = c->next)
+        if (c->type == AU_NODE_TEXT)
+            au_buf_append(&b, ((const AuText *)c)->data, ((const AuText *)c)->len);
+    au_buf_cstr(&b);
+    return au_buf_take(&b, len);
+}
+
+static void free_pending(PendingScript *p)
+{
+    if (!p)
+        return;
+    au_node_unref(&p->el->node);
+    au_free(p->url);
+    au_free(p->text);
+    au_free(p);
+}
+
+static void free_list(PendingScript *p)
+{
+    while (p) {
+        PendingScript *n = p->next;
+        free_pending(p);
+        p = n;
+    }
+}
+
+/* ---- Hooks for src/js ---- */
+
+static double h_now(void *ctx)
+{
+    AuDocScript *s = ctx;
+    return au_dv_now(s->dv);
+}
+
+static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    if (cb->console)
+        cb->console(cb->ctx, s->dv, (int)level, text, len);
+}
+
+static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
+{
+    AuDocScript *s = ctx;
+    au_dv_dom_changed(s->dv, node, attr_name, kind);
+}
+
+static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv); /* forced layout: script reads geometry */
+    AuRect r;
+    if (!au_layout_element_rect(au_docview_layout(s->dv), el, &r))
+        return false;
+    out->x = r.x;
+    out->y = r.y;
+    out->w = r.w;
+    out->h = r.h;
+    return true;
+}
+
+static const void *h_computed_style(void *ctx, AuElement *el)
+{
+    AuDocScript *s = ctx;
+    au_dv_update_style(s->dv);
+    return au_element_style(el);
+}
+
+static void h_viewport(void *ctx, int *width, int *height, int *scroll_x, int *scroll_y, int *doc_w, int *doc_h)
+{
+    AuDocScript *s = ctx;
+    au_dv_scroll(s->dv, scroll_x, scroll_y, width, height);
+    au_docview_content_size(s->dv, doc_w, doc_h);
+}
+
+static void h_scroll_to(void *ctx, int x, int y)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    if (cb->scroll_to)
+        cb->scroll_to(cb->ctx, s->dv, x, y);
+}
+
+static bool h_media_matches(void *ctx, const char *query, size_t len)
+{
+    AuDocScript *s = ctx;
+    AuCssResolver *r = au_dv_resolver(s->dv);
+    return r && au_css_media_matches(r, query, len);
+}
+
+static void request_nav(AuDocScript *s, const char *url, bool new_tab)
+{
+    au_free(s->nav_url);
+    s->nav_url = au_strndup(url, strlen(url));
+    s->nav_new_tab = new_tab;
+}
+
+static void h_navigate(void *ctx, const char *url, bool replace)
+{
+    (void)replace; /* the browser's history decides; open_url has no replace flag */
+    request_nav(ctx, url, false);
+}
+
+static void h_reload(void *ctx)
+{
+    AuDocScript *s = ctx;
+    request_nav(s, au_docview_url(s->dv), false);
+}
+
+static bool h_open_window(void *ctx, const char *url, const char *target)
+{
+    AuDocScript *s = ctx;
+    bool self = target && (!strcmp(target, "_self") || !strcmp(target, "_top") || !strcmp(target, "_parent"));
+    request_nav(s, url, !self);
+    return true;
+}
+
+/* Dialogs have no interface in the view yet: they go to the console and
+ * take their default answers. */
+static void dialog_log(AuDocScript *s, const char *what, const char *message)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    au_buf_printf(&b, "%s: %s", what, message ? message : "");
+    h_console(s, AU_JS_INFO, b.data, b.len);
+    au_buf_free(&b);
+}
+
+static void h_alert(void *ctx, const char *origin, const char *message)
+{
+    (void)origin;
+    dialog_log(ctx, "alert", message);
+}
+
+static bool h_confirm(void *ctx, const char *origin, const char *message)
+{
+    (void)origin;
+    dialog_log(ctx, "confirm", message);
+    return false;
+}
+
+static char *h_prompt(void *ctx, const char *origin, const char *message, const char *def)
+{
+    (void)origin;
+    (void)def;
+    dialog_log(ctx, "prompt", message);
+    return NULL;
+}
+
+/* ---- Fetches made by script (fetch, XHR, module and script loads) ---- */
+
+/* The loader reports no headers: the type comes from the URL's suffix. */
+static const char *type_of(const char *url)
+{
+    static const char *const map[] = {".js", "text/javascript", ".mjs", "text/javascript", ".json",
+                                      "application/json", ".html", "text/html", ".htm", "text/html",
+                                      ".css", "text/css", ".txt", "text/plain", ".svg", "image/svg+xml",
+                                      ".xml", "application/xml"};
+    size_t n = strcspn(url, "?#");
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i += 2) {
+        size_t k = strlen(map[i]);
+        if (n >= k && au_ieq(url + n - k, k, map[i], k))
+            return map[i + 1];
+    }
+    return NULL;
+}
+
+static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
+{
+    (void)js;
+    AuDocScript *s = ctx;
+    /* The loader reads with GET and carries no request headers or body. */
+    if (strcmp(req->method, "GET") != 0 || req->body_len)
+        return 0;
+    uint32_t id = au_dv_request(s->dv, req->url, req->dest == AU_FETCH_DEST_EMPTY);
+    if (!id)
+        return 0;
+    if (s->nfetches == s->fetches_cap) {
+        s->fetches_cap = s->fetches_cap ? s->fetches_cap * 2 : 8;
+        s->fetches = au_realloc(s->fetches, s->fetches_cap * sizeof *s->fetches);
+    }
+    s->fetches[s->nfetches].id = id;
+    s->fetches[s->nfetches].type = type_of(req->url);
+    s->nfetches++;
+    return id;
+}
+
+/* Removes a script fetch; returns false if id is not one. */
+static bool take_fetch(AuDocScript *s, uint32_t id, const char **type)
+{
+    for (uint32_t i = 0; i < s->nfetches; i++)
+        if (s->fetches[i].id == id) {
+            if (type)
+                *type = s->fetches[i].type;
+            s->fetches[i] = s->fetches[--s->nfetches];
+            return true;
+        }
+    return false;
+}
+
+static void f_abort(void *ctx, uint32_t id)
+{
+    AuDocScript *s = ctx;
+    if (take_fetch(s, id, NULL))
+        au_dv_cancel(s->dv, id);
+}
+
+/* A script element's kind from its type and language attributes, as the
+ * standard decides it (src/js has the same rule; this one needs no
+ * runtime, so a page whose only scripts are data blocks starts none). */
+static int script_kind(const AuElement *el)
+{
+    static const char *const mimes[] = {"application/ecmascript", "application/javascript",
+        "application/x-ecmascript", "application/x-javascript", "text/ecmascript", "text/javascript",
+        "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3",
+        "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript",
+        "text/x-javascript"};
+    const char *t = attr(el, "type");
+    char buf[64];
+    if (!t || !*t) {
+        const char *lang = attr(el, "language");
+        if (t || !lang || !*lang)
+            return AU_JS_SCRIPT_CLASSIC;
+        if (strlen(lang) > 40)
+            return AU_JS_SCRIPT_NONE;
+        strcpy(buf, "text/");
+        strcat(buf, lang);
+        t = buf;
+    }
+    while (au_is_space((unsigned char)*t))
+        t++;
+    size_t n = strlen(t);
+    while (n && au_is_space((unsigned char)t[n - 1]))
+        n--;
+    for (size_t i = 0; i < sizeof mimes / sizeof mimes[0]; i++)
+        if (au_ieq(t, n, mimes[i], strlen(mimes[i])))
+            return AU_JS_SCRIPT_CLASSIC;
+    if (au_ieq(t, n, "module", 6))
+        return AU_JS_SCRIPT_MODULE;
+    if (au_ieq(t, n, "importmap", 9))
+        return AU_JS_SCRIPT_IMPORTMAP;
+    return AU_JS_SCRIPT_NONE;
+}
+
+/* ---- The runtime ---- */
+
+static bool ensure_js(AuDocScript *s)
+{
+    if (s->js || s->js_failed)
+        return s->js != NULL;
+    AuJsSettings set;
+    au_js_settings_default(&set);
+    AuJsHooks h;
+    memset(&h, 0, sizeof h);
+    h.ctx = s;
+    h.now_ms = h_now;
+    h.console = h_console;
+    h.dom_changed = h_dom_changed;
+    h.element_rect = h_element_rect;
+    h.computed_style = h_computed_style;
+    h.viewport = h_viewport;
+    h.scroll_to = h_scroll_to;
+    h.media_matches = h_media_matches;
+    h.navigate = h_navigate;
+    h.reload = h_reload;
+    h.open_window = h_open_window;
+    h.alert = h_alert;
+    h.confirm = h_confirm;
+    h.prompt = h_prompt;
+    h.fetcher.ctx = s;
+    h.fetcher.start = f_start;
+    h.fetcher.abort = f_abort;
+    s->js = au_js_new(s->doc, au_docview_url(s->dv), &set, &h);
+    if (!s->js) {
+        s->js_failed = true;
+        return false;
+    }
+    if (s->parser && !au_html_parser_done(s->parser))
+        au_js_set_parser(s->js, s->parser);
+    return true;
+}
+
+static void enter(AuDocScript *s)
+{
+    s->depth++;
+    if (s->js && strcmp(au_docview_base_url(s->dv), au_docview_url(s->dv)) != 0)
+        au_js_set_base_url(s->js, au_docview_base_url(s->dv));
+}
+
+/* Ends an entry from the view. At the outermost level, asks for one
+ * repaint and hands a requested navigation to the embedder; s must not be
+ * used after that (the embedder may start a new document). */
+static void leave(AuDocScript *s)
+{
+    if (--s->depth > 0)
+        return;
+    au_dv_turn_end(s->dv);
+    /* A module may have finished (load event) */
+    s->depth++;
+    au_dv_check_finished(s->dv);
+    s->depth--;
+    if (s->nav_url) {
+        char *url = s->nav_url;
+        bool new_tab = s->nav_new_tab;
+        AuDocView *dv = s->dv;
+        s->nav_url = NULL;
+        const AuDocViewCallbacks *cb = au_dv_callbacks(dv);
+        if (cb->open_url)
+            cb->open_url(cb->ctx, dv, url, new_tab);
+        au_free(url);
+    }
+}
+
+static void fire_simple(AuDocScript *s, AuElement *el, const char *type)
+{
+    if (s->js)
+        au_js_fire(s->js, &el->node, type, false, false);
+}
+
+/* Runs a classic script's source. Called inside enter/leave. */
+static void run_classic(AuDocScript *s, PendingScript *p)
+{
+    if (!ensure_js(s))
+        return;
+    if (p->failed) {
+        fire_simple(s, p->el, "error");
+        return;
+    }
+    const char *url = p->url ? p->url : au_docview_url(s->dv);
+    au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
+    if (p->url)
+        fire_simple(s, p->el, "load");
+}
+
+static void run_deferred(AuDocScript *s);
+
+static void module_done(void *ctx, AuElement *el, bool ok)
+{
+    (void)el;
+    (void)ok;
+    AuDocScript *s = ctx;
+    if (s->modules)
+        s->modules--;
+    if (s->defer_module_running && s->defer && s->defer->el == el) {
+        s->defer_module_running = false;
+        PendingScript *p = s->defer;
+        s->defer = p->next;
+        if (!s->defer)
+            s->defer_tail = NULL;
+        free_pending(p);
+        run_deferred(s);
+    }
+}
+
+static void start_module(AuDocScript *s, PendingScript *p)
+{
+    if (!ensure_js(s))
+        return;
+    s->modules++;
+    if (p->url)
+        au_js_run_module(s->js, p->el, NULL, 0, p->url, module_done, s);
+    else
+        au_js_run_module(s->js, p->el, p->text ? p->text : "", p->len, au_docview_url(s->dv), module_done, s);
+}
+
+/* Runs the deferred list in order while its head is ready; then
+ * DOMContentLoaded. Called inside enter/leave. */
+static void run_deferred(AuDocScript *s)
+{
+    while (s->defer && !s->defer_module_running) {
+        PendingScript *p = s->defer;
+        if (p->kind == AU_JS_SCRIPT_MODULE) {
+            s->defer_module_running = true;
+            start_module(s, p);
+            if (!s->js) { /* no runtime: drop it */
+                s->defer_module_running = false;
+                s->defer = p->next;
+                free_pending(p);
+            }
+            continue;
+        }
+        if (!p->ready)
+            return;
+        s->defer = p->next;
+        run_classic(s, p);
+        free_pending(p);
+    }
+    if (!s->defer)
+        s->defer_tail = NULL;
+    if (s->parse_done && !s->defer && !s->content_loaded) {
+        s->content_loaded = true;
+        if (s->js)
+            au_js_set_ready_state(s->js, "contentloaded");
+    }
+}
+
+static PendingScript *new_pending(AuElement *el, int kind)
+{
+    PendingScript *p = au_calloc(sizeof *p);
+    p->el = el;
+    au_node_ref(&el->node);
+    p->kind = kind;
+    return p;
+}
+
+/* Starts loading an external script; false if it cannot be fetched. */
+static bool fetch_script(AuDocScript *s, PendingScript *p, const char *src)
+{
+    char abs[2048];
+    if (!*src || !au_url_resolve(au_docview_base_url(s->dv), src, abs, sizeof abs))
+        return false;
+    p->url = au_strndup(abs, strlen(abs));
+    if (p->kind == AU_JS_SCRIPT_MODULE)
+        return true; /* src/js fetches modules itself */
+    p->req = au_dv_request(s->dv, abs, false);
+    return p->req != 0;
+}
+
+/* ---- docview.c entry points ---- */
+
+AuDocScript *au_docscript_new(AuDocView *dv)
+{
+    AuDocScript *s = au_calloc(sizeof *s);
+    s->dv = dv;
+    return s;
+}
+
+void au_docscript_set_parser(AuDocScript *s, AuHtmlParser *p, AuDocument *doc)
+{
+    s->parser = p;
+    s->doc = doc;
+}
+
+void au_docscript_free(AuDocScript *s)
+{
+    if (!s)
+        return;
+    if (s->js) {
+        s->depth++; /* no turn end or navigation from here */
+        au_js_unload(s->js);
+        au_js_free(s->js);
+    }
+    free_pending(s->blocking);
+    free_list(s->defer);
+    free_list(s->async);
+    au_free(s->fetches);
+    au_free(s->nav_url);
+    au_free(s);
+}
+
+void au_docscript_script_ready(void *ctx, AuHtmlParser *parser, AuElement *el)
+{
+    AuDocScript *s = ctx;
+    int kind = script_kind(el);
+    if (kind == AU_JS_SCRIPT_NONE || !ensure_js(s))
+        return;
+    const char *src = attr(el, "src");
+    enter(s);
+    if (kind == AU_JS_SCRIPT_IMPORTMAP) {
+        size_t len;
+        char *text = script_text(el, &len);
+        au_js_add_import_map(s->js, text, len);
+        au_free(text);
+    } else if (kind == AU_JS_SCRIPT_CLASSIC && attr(el, "nomodule")) {
+        /* skipped: this browser runs modules */
+    } else if (kind == AU_JS_SCRIPT_MODULE) {
+        PendingScript *p = new_pending(el, kind);
+        if (src && !fetch_script(s, p, src)) {
+            fire_simple(s, el, "error");
+            free_pending(p);
+        } else {
+            if (!src)
+                p->text = script_text(el, &p->len);
+            p->ready = true;
+            if (attr(el, "async")) {
+                start_module(s, p);
+                free_pending(p);
+            } else {
+                if (s->defer_tail)
+                    s->defer_tail->next = p;
+                else
+                    s->defer = p;
+                s->defer_tail = p;
+            }
+        }
+    } else if (!src) {
+        PendingScript p;
+        memset(&p, 0, sizeof p);
+        p.el = el;
+        p.text = script_text(el, &p.len);
+        run_classic(s, &p);
+        au_free(p.text);
+    } else {
+        PendingScript *p = new_pending(el, kind);
+        if (!fetch_script(s, p, src)) {
+            /* the error event is a task in the standard */
+            p->failed = true;
+            run_classic(s, p);
+            free_pending(p);
+        } else if (attr(el, "async")) {
+            p->next = s->async;
+            s->async = p;
+        } else if (attr(el, "defer")) {
+            if (s->defer_tail)
+                s->defer_tail->next = p;
+            else
+                s->defer = p;
+            s->defer_tail = p;
+        } else {
+            /* parser-blocking */
+            s->blocking = p;
+            au_html_parser_pause(parser);
+        }
+    }
+    leave(s);
+}
+
+void au_docscript_parse_done(AuDocScript *s)
+{
+    if (s->parse_done)
+        return;
+    s->parse_done = true;
+    if (!s->js) {
+        /* Start the runtime only when an event handler attribute needs it. */
+        bool handlers = false;
+        for (AuNode *n = &s->doc->node; n && !handlers; n = au_node_next(n, &s->doc->node)) {
+            if (n->type != AU_NODE_ELEMENT)
+                continue;
+            const AuElement *el = au_as_element(n);
+            for (uint32_t i = 0; i < el->nattrs && !handlers; i++) {
+                const char *name = au_atom_str(el->attrs[i].name);
+                handlers = (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N');
+            }
+        }
+        if (!handlers) {
+            s->content_loaded = true;
+            return;
+        }
+        if (!ensure_js(s))
+            return;
+    }
+    au_js_set_parser(s->js, NULL);
+    enter(s);
+    au_js_set_ready_state(s->js, "interactive");
+    run_deferred(s);
+    leave(s);
+}
+
+bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
+{
+    const char *type = NULL;
+    if (take_fetch(s, id, &type)) {
+        if (!s->js)
+            return true;
+        enter(s);
+        if (ok) {
+            /* The loader gives no status or headers: a delivered body is
+             * a 200 with a type guessed from the URL. */
+            const char *hdrs[2] = {"content-type", type};
+            au_js_fetch_head(s->js, id, 200, "OK", hdrs, type ? 1 : 0, NULL);
+            if (len)
+                au_js_fetch_data(s->js, id, data, len);
+        }
+        au_js_fetch_done(s->js, id, ok);
+        leave(s);
+        return true;
+    }
+    PendingScript *p = NULL;
+    int where = 0;
+    if (s->blocking && s->blocking->req == id) {
+        p = s->blocking;
+        where = 1;
+    }
+    for (PendingScript *q = s->defer; !p && q; q = q->next)
+        if (q->req == id) {
+            p = q;
+            where = 2;
+        }
+    PendingScript **pp = &s->async;
+    for (; !p && *pp; pp = &(*pp)->next)
+        if ((*pp)->req == id) {
+            p = *pp;
+            where = 3;
+            break;
+        }
+    if (!p)
+        return false;
+    p->req = 0;
+    p->ready = true;
+    p->failed = !ok;
+    if (ok) {
+        p->text = au_strndup(data ? data : "", len);
+        p->len = len;
+    }
+    enter(s);
+    if (where == 1) {
+        s->blocking = NULL;
+        au_html_parser_begin_script(s->parser);
+        run_classic(s, p);
+        au_html_parser_end_script(s->parser);
+        free_pending(p);
+        /* Parsing resumes; it may meet the next blocking script. */
+        au_html_parser_resume(s->parser);
+        au_dv_parsed_more(s->dv);
+    } else if (where == 2) {
+        if (s->parse_done)
+            run_deferred(s);
+    } else {
+        *pp = p->next;
+        run_classic(s, p);
+        free_pending(p);
+    }
+    leave(s);
+    return true;
+}
+
+bool au_docscript_busy(const AuDocScript *s)
+{
+    return s->blocking || s->defer || s->async || s->modules || !s->content_loaded;
+}
+
+void au_docscript_loaded(AuDocScript *s)
+{
+    if (s->loaded)
+        return;
+    s->loaded = true;
+    if (!s->js)
+        return;
+    enter(s);
+    au_js_set_ready_state(s->js, "complete");
+    leave(s);
+}
+
+bool au_docscript_mouse(AuDocScript *s, const AuEvent *ev, AuElement *target, const char *type, int vx, int vy)
+{
+    if (!s->js || !target)
+        return true;
+    enter(s);
+    int detail = ev->clicks > 0 ? ev->clicks : 1;
+    if (!strcmp(type, "mousemove"))
+        detail = 0;
+    bool ok = au_js_fire_mouse(s->js, target, type, vx, vy, ev->button, ev->mods & 15, detail, NULL);
+    leave(s);
+    return ok;
+}
+
+void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy)
+{
+    if (!s->js)
+        return;
+    enter(s);
+    if (from && au_node_is_connected(&from->node))
+        au_js_fire_mouse(s->js, from, "mouseout", vx, vy, 0, 0, 0, to);
+    if (to)
+        au_js_fire_mouse(s->js, to, "mouseover", vx, vy, 0, 0, 0, from);
+    leave(s);
+}
+
+void au_docscript_javascript_url(AuDocScript *s, const char *url)
+{
+    if (!ensure_js(s))
+        return;
+    enter(s);
+    au_js_run_javascript_url(s->js, url);
+    leave(s);
+}
+
+bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
+{
+    if (!s->js)
+        return false;
+    bool ran = false;
+    enter(s);
+    if (s->resize_pending) {
+        s->resize_pending = false;
+        au_js_resized(s->js);
+        ran = true;
+    }
+    if (s->scroll_pending) {
+        s->scroll_pending = false;
+        au_js_scrolled(s->js);
+        ran = true;
+    }
+    if (au_js_run_tasks(s->js, budget_ms))
+        ran = true;
+    if (au_js_wants_frame(s->js)) {
+        au_js_run_frame(s->js);
+        ran = true;
+    }
+    leave(s);
+    return ran;
+}
+
+void au_docscript_resized(AuDocScript *s)
+{
+    s->resize_pending = s->js != NULL;
+}
+
+void au_docscript_scrolled(AuDocScript *s)
+{
+    s->scroll_pending = s->js != NULL;
+}
+
+void au_docscript_layout_done(AuDocScript *s)
+{
+    if (!s->js)
+        return;
+    enter(s);
+    au_js_layout_done(s->js);
+    leave(s);
+}

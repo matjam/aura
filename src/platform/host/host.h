@@ -27,5 +27,6 @@ int au_host_font_option(int argc, char **argv, int i);
 void au_host_set_window_surface(AuSurface *s);
 /* aura-host js (jsrun.c). */
 int au_host_js_main(int argc, char **argv);
+int au_host_page_main(int argc, char **argv);
 
 #endif

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Script order and the document lifecycle</title>
+<script src="../harness.js"></script>
+<script>
+// Everything logs here; the checks run at load.
+window.log = [];
+log.push('inline1:' + document.readyState);
+document.addEventListener('readystatechange', () => log.push('rsc:' + document.readyState));
+document.addEventListener('DOMContentLoaded', () => log.push('DOMContentLoaded'));
+window.addEventListener('load', () => log.push('load'));
+test('currentScript is the running inline script', () => {
+    assert.equal(document.currentScript.tagName, 'SCRIPT');
+    assert.equal(document.currentScript.parentNode, document.head);
+});
+</script>
+<script defer src="res/defer1.js"></script>
+<script async src="res/async1.js"></script>
+<script type="module">log.push('module-inline');</script>
+<script type="module" src="res/mod1.mjs"></script>
+<script defer src="res/defer2.js"></script>
+<script nomodule>log.push('nomodule ran');</script>
+<script type="text/template">log.push('template ran');</script>
+<script type="application/ld+json">{"a": 1}</script>
+</head>
+<body>
+<p id="before">before</p>
+<script src="res/blocking.js"></script>
+<p id="after">after</p>
+<script>
+log.push('inline2:after=' + !!document.getElementById('after') + ':blocking=' + window.blockingRan);
+test('a parser-blocking script ran before the content that follows it', () => {
+    assert.equal(window.blockingSawAfter, false);
+    assert.equal(window.blockingSawBefore, true);
+});
+test('scripting media feature is enabled', () => {
+    assert.ok(matchMedia('(scripting: enabled)').matches);
+});
+</script>
+<noscript id="ns"><b>no script</b></noscript>
+<p id="last">last</p>
+<script>
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        test('order: classic in place, then defer and modules in order, DOMContentLoaded, load', () => {
+            const l = log.filter((x) => !x.startsWith('async'));
+            assert.deepEqual(l, ['inline1:loading', 'blocking', 'inline2:after=true:blocking=true', 'rsc:interactive',
+                'defer1', 'module-inline', 'mod1', 'defer2', 'DOMContentLoaded', 'rsc:complete', 'load']);
+        });
+        test('async ran once, before load', () => {
+            const i = log.indexOf('async1'), j = log.indexOf('load');
+            assert.ok(i >= 0 && i < j, log.join());
+            assert.equal(log.filter((x) => x === 'async1').length, 1);
+        });
+        test('noscript content is raw text with scripting on', () => {
+            const ns = document.getElementById('ns');
+            assert.equal(ns.children.length, 0);
+            assert.ok(ns.textContent.includes('<b>'));
+        });
+        test('currentScript is null outside script',() => assert.equal(document.currentScript, null));
+        test('defer script saw the whole document', () => assert.equal(window.deferSawLast, true));
+    }, 0);
+});
+</script>
+</body>
+</html>

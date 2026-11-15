@@ -2,14 +2,9 @@
 # FILE:N (the Nth test in FILE) and a reason. Listed tests still run; a
 # listed test that starts passing is reported so it can be removed here.
 
-# Tree construction (WPT html/syntax/parsing/resources). These scripts use
-# the DOM API (setAttribute, getElementById, remove, appendChild), which
-# needs the JavaScript engine. Scripts made only of document.write calls
-# are run by the test harness and pass (scripted_webkit01.dat).
-scripted_adoption01.dat:1   # needs JS: element.id = "B" mid-parse
-scripted_ark.dat:1          # needs JS: setAttribute mid-parse
-scripted_foster01.dat:1     # needs JS: documentElement.remove(), appendChild
-scripted_foster01.dat:2     # needs JS: documentElement.remove(), appendChild
+# Tree construction (WPT html/syntax/parsing/resources): none. The
+# scripted_*.dat tests run their scripts in the JavaScript engine
+# (test_tree.c) and pass.
 
 # Tokenizer (html5lib-tests). The input is a lone UTF-16 surrogate, which
 # cannot occur in a byte stream: decoding turns it into U+FFFD, while the

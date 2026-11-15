@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<!-- page args: --click js --click cancel --click nav --click remove --click inner -->
+<html>
+<head>
+<title>Clicks, inline handlers and javascript: links</title>
+<script src="../harness.js"></script>
+<style>
+a { display: block; width: 200px; height: 30px; }
+#box { width: 100px; height: 50px; }
+.wide { width: 300px !important; }
+</style>
+</head>
+<body onload="window.bodyOnload = (window.bodyOnload || 0) + 1">
+<a id="js" href="javascript:window.jsUrlRan = (window.jsUrlRan || 0) + 1; void 0">javascript: link</a>
+<a id="cancel" href="javascript:window.cancelledRan = 1" onclick="window.onclickRan = 1; return false">cancelled</a>
+<a id="nav" href="next.html" onclick="window.navClicks = (window.navClicks || 0) + 1">plain link</a>
+<a id="remove" href="gone.html" onclick="this.remove(); event.preventDefault()">removes itself</a>
+<div id="target"><span id="inner">inner</span></div>
+<div id="box">box</div>
+<script>
+const seen = [];
+for (const t of ['mousedown', 'mouseup', 'click'])
+    document.addEventListener(t, (e) => seen.push(t + ':' + e.target.id));
+test('geometry reads force layout of script changes', () => {
+    const box = document.getElementById('box');
+    assert.equal(box.offsetWidth, 100);
+    box.classList.add('wide');
+    assert.equal(box.offsetWidth, 300);
+    assert.equal(getComputedStyle(box).width, '300px');
+    box.classList.remove('wide');
+    box.style.height = '70px';
+    assert.equal(box.getBoundingClientRect().height, 70);
+});
+test('a style sheet added by script applies, and stops applying when removed', () => {
+    const st = document.createElement('style');
+    st.textContent = '#box { width: 123px }';
+    document.head.appendChild(st);
+    assert.equal(getComputedStyle(document.getElementById('box')).width, '123px');
+    st.remove();
+    assert.equal(getComputedStyle(document.getElementById('box')).width, '100px');
+});
+test('inserted content has geometry', () => {
+    const p = document.createElement('p');
+    p.textContent = 'added';
+    document.body.appendChild(p);
+    assert.ok(p.offsetHeight > 0);
+    p.remove();
+    assert.equal(p.offsetHeight, 0);
+});
+addEventListener('unload', () => {
+    const check = (name, ok, extra) => { if (!ok) console.log('FAIL ' + name + (extra ? ': ' + extra : '')); };
+    check('body onload ran once', window.bodyOnload === 1, window.bodyOnload);
+    check('javascript: link ran once on click', window.jsUrlRan === 1, window.jsUrlRan);
+    check('onclick returning false cancels the link', window.onclickRan === 1 && !window.cancelledRan);
+    check('a plain link click runs its handler', window.navClicks === 1, window.navClicks);
+    check('a handler may remove its own link', !document.getElementById('remove'));
+    check('mouse events reach listeners in order', seen.slice(0, 3).join() === 'mousedown:js,mouseup:js,click:js', seen.join());
+    check('click on a descendant targets it', seen.includes('click:inner'), seen.join());
+});
+</script>
+</body>
+</html>

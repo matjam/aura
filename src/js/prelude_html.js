@@ -1105,13 +1105,20 @@ defProps(DP, {
 /* The document lifecycle: "interactive" fires readystatechange and
  * DOMContentLoaded; "complete" fires readystatechange, load (at window,
  * with the document as target as browsers do) and pageshow. */
+let contentLoaded = false;
 P.setReadyState = function (s) {
+    if (s === 'contentloaded') {
+        if (contentLoaded) return;
+        contentLoaded = true;
+        if (readyState === 'loading') P.setReadyState('interactive');
+        fireSimple(doc, 'DOMContentLoaded', true, false);
+        return;
+    }
     if (s === readyState) return;
+    if (s === 'complete' && !contentLoaded) P.setReadyState('contentloaded');
     readyState = s;
     fireSimple(doc, 'readystatechange', false, false);
-    if (s === 'interactive') {
-        fireSimple(doc, 'DOMContentLoaded', true, false);
-    } else if (s === 'complete') {
+    if (s === 'complete') {
         fire(G, new Event('load'), doc);
         fire(G, new PageTransitionEvent('pageshow', { persisted: false }), doc);
     }

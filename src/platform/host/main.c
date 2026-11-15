@@ -49,7 +49,8 @@ static int usage(void)
             "                        (--tab takes a URL, a path, or file:relative/path)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n"
-            "       aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] FILE.js...\n");
+            "       aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] FILE.js...\n"
+            "       aura-host page [--quiet] [--expect-errors N] [--click ID]... PAGE.html\n");
     return 2;
 }
 
@@ -384,6 +385,8 @@ int main(int argc, char **argv)
         return au_host_render_main(argc, argv);
     if (!strcmp(cmd, "js"))
         return au_host_js_main(argc, argv);
+    if (!strcmp(cmd, "page"))
+        return au_host_page_main(argc, argv);
     if (!strcmp(cmd, "chrome")) {
         ChromeOpts o;
         memset(&o, 0, sizeof o);

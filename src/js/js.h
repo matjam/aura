@@ -231,8 +231,11 @@ bool au_js_fire_mouse(AuJs *js, AuElement *target, const char *type, int x, int 
 /* Keyboard events: key and code as KeyboardEvent names them. */
 bool au_js_fire_key(AuJs *js, AuElement *target, const char *type, const char *key, const char *code,
                     uint32_t mods, bool repeat);
-/* The document reached a readiness state: "interactive" (DOMContentLoaded
- * follows) or "complete" (load follows). */
+/* The document reached a readiness state: "interactive" (parsing is done:
+ * readystatechange; deferred scripts run next), "contentloaded"
+ * (DOMContentLoaded, after the deferred scripts) or "complete"
+ * (readystatechange, load and pageshow). A later state fires the events of
+ * the states skipped. */
 void au_js_set_ready_state(AuJs *js, const char *state);
 /* Before the document is discarded: beforeunload and unload. */
 void au_js_unload(AuJs *js);

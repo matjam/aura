@@ -1,8 +1,8 @@
 /* Aura document view: one HTML document from bytes to pixels.
  *
  * An AuDocView owns a document and everything derived from it: the
- * parser (fed incrementally, scripting off, so <noscript> content shows
- * and <script> is ignored), the style sheets (<style>, <link
+ * parser (fed incrementally; with scripting off, the default, <noscript>
+ * content shows and <script> is ignored; see Scripts), the style sheets (<style>, <link
  * rel=stylesheet>, @import) and images fetched through a loader, the CSS
  * resolver, the layout, hover and active state, and link activation.
  *
@@ -65,6 +65,16 @@ typedef struct AuDocViewCallbacks {
     void (*open_url)(void *ctx, AuDocView *dv, const char *url, bool new_tab);
     /* Parsing finished and no resources are pending. */
     void (*load_finished)(void *ctx, AuDocView *dv);
+    /* The following are used only with scripting on; all are optional. */
+    /* Monotonic milliseconds (timers, script time limits). Without it the
+     * view counts its own clock, which advances by the budget of each
+     * au_docview_run_scripts call. */
+    double (*now_ms)(void *ctx, AuDocView *dv);
+    /* Script asked to scroll the viewport to document point (x, y). */
+    void (*scroll_to)(void *ctx, AuDocView *dv, int x, int y);
+    /* A console line from script (level: 0 log, 1 info, 2 warn, 3 error,
+     * 4 debug). */
+    void (*console)(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);
@@ -96,6 +106,18 @@ AuLayout *au_docview_layout(const AuDocView *dv);
  * cascaded below the author's sheets; NULL removes it. It applies to
  * this and later documents. */
 void au_docview_set_user_css(AuDocView *dv, const char *css);
+
+/* ---- Scripts ----
+ * Scripting is off by default: <script> is ignored and <noscript> shows.
+ * Turned on, it applies from the next au_docview_begin: scripts run as
+ * the parser reaches them (src/js), external scripts load through the
+ * loader as AU_RES_OTHER, and javascript: links run. Script navigation
+ * arrives through open_url like a link. The embedder calls
+ * au_docview_run_scripts from its idle loop (timers, tasks, animation
+ * frames); it returns true if anything ran. */
+void au_docview_set_scripting(AuDocView *dv, bool on);
+bool au_docview_scripting(const AuDocView *dv);
+bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms);
 
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);

@@ -15,11 +15,19 @@ add_test(NAME js_lifetime
          COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/lifetime_setup.js ${JS_DIR}/lifetime_check.js)
 
 # Pages with scripts through src/page (parser-blocking scripts,
-# document.write, defer/async, lifecycle).
+# document.write, defer/async, lifecycle, input), each fed in 256-byte
+# chunks and one byte at a time. A "<!-- page args: ... -->" comment adds
+# options (clicks).
 file(GLOB JS_PAGES CONFIGURE_DEPENDS ${JS_DIR}/pages/*.html)
 foreach(page ${JS_PAGES})
     get_filename_component(stem ${page} NAME_WE)
-    add_test(NAME js_page_${stem} COMMAND ${JS_TOOL} page --quiet ${page})
+    file(READ ${page} body)
+    set(args)
+    if(body MATCHES "<!-- page args: ([^\n]*) -->")
+        separate_arguments(args UNIX_COMMAND "${CMAKE_MATCH_1}")
+    endif()
+    add_test(NAME js_page_${stem} COMMAND ${JS_TOOL} page --quiet ${args} ${page})
+    add_test(NAME js_page_${stem}_bytewise COMMAND ${JS_TOOL} page --quiet --chunk 1 ${args} ${page})
 endforeach()
 
 # QuickJS-ng's own tests that need no qjs:std, qjs:os or worker support

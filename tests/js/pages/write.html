@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>document.write</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<div id="a"><script>document.write('<p id="w1">written</p>');</script></div>
+<script>
+test('written markup lands at the insertion point', () => {
+    const p = document.getElementById('w1');
+    assert.ok(p, 'w1 exists');
+    assert.equal(p.parentNode.id, 'a');
+    assert.equal(p.previousSibling.tagName, 'SCRIPT');
+});
+</script>
+<script>
+document.write('<span id="s1">');
+document.write('one');
+document.write('</span><span id="s2">two</span>');
+</script>
+<script>
+test('several writes are parsed as one stream', () => {
+    assert.equal(document.getElementById('s1').textContent, 'one');
+    assert.equal(document.getElementById('s2').textContent, 'two');
+});
+</script>
+<script>document.write('<script>document.write("<i id=nested>n<\/i>")<\/script>');</script>
+<script>
+test('a written script runs and its own writes nest', () => {
+    const i = document.getElementById('nested');
+    assert.ok(i, 'nested exists');
+    assert.equal(i.textContent, 'n');
+});
+</script>
+<script>document.write('<script src="res/written.js"><\/script><b id="afterwritten">x</b>');</script>
+<script>
+test('a written external script blocks the parser until it ran', () => {
+    assert.equal(window.writtenSawAfter, false);
+    assert.ok(document.getElementById('afterwritten'));
+    assert.equal(document.getElementById('fromwritten').textContent, 'from written.js');
+});
+</script>
+<script>document.writeln('<u id="ln">l</u>');</script>
+<script>
+test('writeln adds a newline', () => {
+    const u = document.getElementById('ln');
+    assert.equal(u.nextSibling.nodeType, Node.TEXT_NODE);
+    assert.ok(u.nextSibling.data.startsWith('\n'));
+});
+window.addEventListener('load', () => {
+    const before = document.body.innerHTML;
+    document.write('<p>after load</p>');
+    test('write after load does not replace the loaded document', () => {
+        assert.equal(document.body.innerHTML, before);
+    });
+});
+</script>
+<script defer src="res/deferwrite.js"></script>
+<p id="end">end</p>
+</body>
+</html>
