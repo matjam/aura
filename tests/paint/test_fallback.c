@@ -82,8 +82,8 @@ static void test_index_and_faces(void)
 
     AuFontSet *set = au_fontset_new();
     AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    EXPECT(au_host_font_dir_count(dir) == 16);
-    EXPECT(au_fontset_count(set) == 16);
+    EXPECT(au_host_font_dir_count(dir) == 17);
+    EXPECT(au_fontset_count(set) == 17);
     /* Registering opens nothing. */
     EXPECT(count_loaded(set) == 0 && au_host_font_dir_loads(dir) == 0);
     for (size_t i = 0; i < au_fontset_count(set); i++) {
@@ -98,7 +98,7 @@ static void test_index_and_faces(void)
         EXPECT(!strcmp(f->family, fam) && f->synth == 0);
         EXPECT(f->cff_len == 0 && f->glyf_len > 0);
         /* Each draws ink: text, or an emoji for the emoji face. */
-        bool emoji = !strcmp(fam, "Noto Emoji");
+        bool emoji = !strcmp(fam, "Noto Emoji") || !strcmp(fam, "Twemoji Mozilla");
         const char *sample = emoji ? "\xF0\x9F\x98\x80" : "Hamburg 0123";
         AuSurface *s = au_surface_new(160, 40);
         au_surface_clear(s, AU_RGB(255, 255, 255));
@@ -179,8 +179,8 @@ static void test_aliases_bundled_only(void)
     EXPECT_FAMILY(set, "ui-monospace", "Aura Mono");
     EXPECT_FAMILY(set, "ui-rounded", "Inter");
     EXPECT_FAMILY(set, "math", "DejaVu Sans");
-    EXPECT_FAMILY(set, "emoji", "Noto Emoji");
-    EXPECT_FAMILY(set, "'Apple Color Emoji'", "Noto Emoji");
+    EXPECT_FAMILY(set, "emoji", "Twemoji Mozilla");
+    EXPECT_FAMILY(set, "'Apple Color Emoji'", "Twemoji Mozilla");
     EXPECT_FAMILY(set, "Nonexistent Family", "Aura Sans");
     EXPECT_FAMILY(set, "", "Aura Sans");
     /* A generic family ends the search: what follows it is not used. */
@@ -291,24 +291,32 @@ static void test_fallback(void)
     EXPECT(r.glyphs[1].cluster == 1 && r.glyphs[2].cluster == 4);
     EXPECT(!loaded(set, "Noto Emoji", 400, false));
 
-    /* Emoji: a supplementary-plane code point, drawn by Noto Emoji. */
+    /* Emoji: a supplementary-plane code point, drawn by the colour emoji
+     * face. */
     EXPECT(shape(l, "x\xF0\x9F\x98\x80y", &r) == 3 && r.missing == 0);
-    EXPECT(!strcmp(glyph_family(&r, 1), "Noto Emoji") && r.glyphs[2].cluster == 5);
+    EXPECT(!strcmp(glyph_family(&r, 1), "Twemoji Mozilla") && r.glyphs[2].cluster == 5);
+    EXPECT(r.glyphs[1].face->color);
     /* U+2764 with U+FE0F: emoji presentation, one glyph (FE0F dropped);
      * without it, text presentation from a text face. */
-    EXPECT(shape(l, "\xE2\x9D\xA4\xEF\xB8\x8F", &r) == 1 && !strcmp(glyph_family(&r, 0), "Noto Emoji"));
+    EXPECT(shape(l, "\xE2\x9D\xA4\xEF\xB8\x8F", &r) == 1 && !strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
     EXPECT(shape(l, "\xE2\x9D\xA4", &r) == 1 && !strcmp(glyph_family(&r, 0), "DejaVu Sans"));
-    /* ...and U+FE0E asks for text presentation of an emoji. */
-    EXPECT(shape(l, "\xE2\x98\x95\xEF\xB8\x8E", &r) == 1 && strcmp(glyph_family(&r, 0), "Noto Emoji"));
-    EXPECT(shape(l, "\xE2\x98\x95", &r) == 1 && !strcmp(glyph_family(&r, 0), "Noto Emoji"));
-    /* A ZWJ sequence draws its components; a skin tone modifier goes. */
-    EXPECT(shape(l, "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB", &r) == 2 && r.missing == 0);
-    EXPECT(!strcmp(glyph_family(&r, 0), "Noto Emoji") && !strcmp(glyph_family(&r, 1), "Noto Emoji"));
+    /* ...and U+FE0E asks for text presentation of an emoji: never the
+     * colour face. */
+    EXPECT(shape(l, "\xE2\x98\x95\xEF\xB8\x8E", &r) == 1 && strcmp(glyph_family(&r, 0), "Noto Emoji") &&
+           strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
+    EXPECT(shape(l, "\xE2\x98\x95", &r) == 1 && !strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
+    /* An emoji only the monochrome face has, in text presentation:
+     * U+1F3F1 (no colour glyph needed) with U+FE0E. */
+    EXPECT(shape(l, "\xF0\x9F\x8F\xB1\xEF\xB8\x8E", &r) == 1 && !r.glyphs[0].face->color);
+    /* A ZWJ sequence the font has becomes its ligature glyph; one it
+     * lacks draws its components; a skin tone joins its base. */
+    EXPECT(shape(l, "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB", &r) == 1 && r.missing == 0);
+    EXPECT(!strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
+    EXPECT(shape(l, "\xF0\x9F\x98\x80\xE2\x80\x8D\xF0\x9F\x8E\x89", &r) == 2 && r.missing == 0);
     EXPECT(shape(l, "\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD", &r) == 1);
-    /* A keycap: the digit and U+20E3 in one face, the keycap centred on
-     * the digit with no advance. */
-    EXPECT(shape(l, "1\xEF\xB8\x8F\xE2\x83\xA3", &r) == 2 && r.missing == 0);
-    EXPECT(r.glyphs[0].face == r.glyphs[1].face && r.glyphs[1].advance == 0);
+    /* A keycap: the font's keycap ligature. */
+    EXPECT(shape(l, "1\xEF\xB8\x8F\xE2\x83\xA3", &r) == 1 && r.missing == 0);
+    EXPECT(!strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
 
     /* Combining marks stay with their base, centred over it. */
     EXPECT(shape(l, "e\xCC\x81z", &r) == 3 && r.missing == 0);
@@ -397,7 +405,7 @@ static void test_fallback(void)
     au_shape_text_list(other, 16, "\xF0\x9F\x98\x80", 4, &r);
     au_fontset_stats(set, &st1);
     EXPECT(st1.fallback_hits == st0.fallback_hits + 1 && st1.fallback_misses == st0.fallback_misses);
-    EXPECT(r.n == 1 && !strcmp(glyph_family(&r, 0), "Noto Emoji"));
+    EXPECT(r.n == 1 && !strcmp(glyph_family(&r, 0), "Twemoji Mozilla"));
     au_shape_text_list(other, 16, "\xF0\x9F\x98\x80\xF0\x9F\x98\x80", 8, &r);
     au_fontset_stats(set, &st0);
     EXPECT(st0.fallback_hits == st1.fallback_hits); /* the list's own cache answered */
@@ -612,7 +620,7 @@ static void test_index_fuzz(void)
     snprintf(path, sizeof path, "%s/fonts.idx", AURA_FONTS_DIR);
     CHECK(au_platform_read_file(path, &idx, &len));
     FuzzCtx fc = {0};
-    EXPECT(au_font_index_parse(idx, len, check_entry, &fc) == 16 && fc.n == 16);
+    EXPECT(au_font_index_parse(idx, len, check_entry, &fc) == 17 && fc.n == 17);
     int rounds = 20000;
     const char *scale = getenv("AURA_FUZZ_SCALE");
     if (scale && atoi(scale) > 0)

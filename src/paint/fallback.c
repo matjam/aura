@@ -1,6 +1,6 @@
 /* Shaping with per-character font fallback: cluster segmentation, the
  * Unicode properties it needs, and the line metrics of fallback faces. */
-#include "font.h"
+#include "font_internal.h"
 
 #include <string.h>
 
@@ -114,11 +114,10 @@ static AuGlyph *push_glyph(AuGlyphRun *r)
     return &r->glyphs[r->n++];
 }
 
-/* Appends one glyph of face f, kerning it with the glyph before when that
+/* Appends glyph id of face f, kerning it with the glyph before when that
  * one is of the same face. */
-static void emit(AuGlyphRun *r, const AuFontFace *f, float size, uint32_t cp, uint32_t cluster, float *pen)
+static void emit_id(AuGlyphRun *r, const AuFontFace *f, float size, uint16_t id, uint32_t cluster, float *pen)
 {
-    uint16_t id = au_font_glyph(f, cp);
     if (!id)
         r->missing++;
     float s = size / f->units_per_em;
@@ -137,6 +136,55 @@ static void emit(AuGlyphRun *r, const AuFontFace *f, float size, uint32_t cp, ui
     }
     g->x = *pen;
     *pen += g->advance;
+}
+
+static void emit(AuGlyphRun *r, const AuFontFace *f, float size, uint32_t cp, uint32_t cluster, float *pen)
+{
+    emit_id(r, f, size, au_font_glyph(f, cp), cluster, pen);
+}
+
+static bool is_regional(uint32_t cp)
+{
+    return cp >= 0x1F1E6 && cp <= 0x1F1FF;
+}
+
+/* An emoji sequence (ZWJ sequence, flag, keycap, modifier or tag
+ * sequence) in face f: the font's ligature for it through GSUB. all holds
+ * every code point of the cluster. Returns true when it emitted glyphs
+ * (a ligature, or the components the font's GSUB left); false when the
+ * font has no GSUB, so the caller draws the components as before. */
+static bool emit_sequence(AuGlyphRun *r, const AuFontFace *f, float size, const uint32_t *all, size_t nall,
+                          uint32_t cluster, float *pen)
+{
+    if (!f->gsub_len || nall < 2)
+        return false;
+    uint16_t g[CLUSTER_MAX * 2];
+    uint32_t tag[CLUSTER_MAX * 2];
+    size_t n = 0;
+    for (size_t i = 0; i < nall; i++) {
+        uint16_t id = au_font_glyph(f, all[i]);
+        if (!id && (au_uc_is_ignorable(all[i]) || is_emoji_modifier(all[i])))
+            continue; /* the font has no glyph for a joiner or selector: leave it out */
+        g[n] = id;
+        tag[n] = all[i];
+        n++;
+    }
+    n = au_gsub_apply(f, g, tag, n);
+    if (n == 1) {
+        emit_id(r, f, size, g[0], cluster, pen);
+        return true;
+    }
+    /* No ligature for the whole sequence: draw what is left, without the
+     * joiners, selectors and modifiers (drawn alone they are swatches and
+     * blanks). */
+    bool any = false;
+    for (size_t i = 0; i < n; i++) {
+        if (tag[i] && (au_uc_is_ignorable(tag[i]) || is_emoji_modifier(tag[i])))
+            continue;
+        emit_id(r, f, size, g[i], cluster, pen);
+        any = true;
+    }
+    return any;
 }
 
 /* Places a combining mark over (or under) the base glyph at index base,
@@ -207,24 +255,36 @@ void au_shape_text_list(AuFontList *l, float size, const char *text, size_t len,
                 continue;
             }
         }
-        /* The cluster: the base, then the code points that extend it. */
-        uint32_t cps[CLUSTER_MAX];
-        size_t ncp = 0;
-        bool vs16 = false, vs15 = false;
+        /* The cluster: the base, then the code points that extend it. An
+         * emoji sequence also takes the code point after a zero width
+         * joiner, and a regional indicator its partner (a flag). cps holds
+         * what must be drawn (for choosing the face), all every code point
+         * (for the font's ligatures). */
+        uint32_t cps[CLUSTER_MAX], all[CLUSTER_MAX * 2];
+        size_t ncp = 0, nall = 0;
+        bool vs16 = false, vs15 = false, seq = false, joined = false;
         bool draw_base = !(base < 0x20 || base == 0x7F || au_uc_is_ignorable(base));
         if (draw_base)
             cps[ncp++] = base;
+        all[nall++] = base;
         while (i < len) {
             uint32_t c = au_utf8_decode(text + i, len - i, &adv);
-            if (!extends(c))
+            bool join = joined && c >= 0x80 && !au_uc_is_ignorable(c);
+            bool flag = is_regional(c) && nall == 1 && is_regional(base);
+            if (!extends(c) && !join && !flag)
                 break;
             i += adv;
+            joined = c == 0x200D;
+            if (nall < CLUSTER_MAX * 2)
+                all[nall++] = c;
+            if (c == 0x200D || flag || c == 0x20E3 || is_emoji_modifier(c) || (c >= 0xE0020 && c <= 0xE007F))
+                seq = true;
             if (c == 0xFE0F)
                 vs16 = true;
             else if (c == 0xFE0E)
                 vs15 = true;
             else if (!au_uc_is_ignorable(c) && !is_emoji_modifier(c) && ncp < CLUSTER_MAX)
-                cps[ncp++] = c; /* a mark to draw; modifiers need colour, so they go */
+                cps[ncp++] = c; /* a mark or joined emoji to draw; modifiers need a ligature, so they go */
         }
         if (!ncp)
             continue;
@@ -236,17 +296,32 @@ void au_shape_text_list(AuFontList *l, float size, const char *text, size_t len,
         }
         if (!f)
             f = primary;
+        if (seq && draw_base && emit_sequence(r, f, size, all, nall, (uint32_t)start, &pen))
+            continue;
         size_t at = r->n;
         emit(r, f, size, cps[0], (uint32_t)start, &pen);
         if (ncp > 1 && draw_base) {
+            /* Marks go over their base; the emoji of a sequence the font
+             * cannot join follow one another. */
             int16_t bb[4];
             int top = 0, bottom = 0;
             if (au_font_glyph_box(f, r->glyphs[at].id, bb)) {
                 top = bb[3];
                 bottom = bb[1];
             }
-            for (size_t k = 1; k < ncp; k++)
-                place_mark(r, f, size, cps[k], (uint32_t)start, at, &top, &bottom);
+            for (size_t k = 1; k < ncp; k++) {
+                if (!seq || au_uc_is_mark(cps[k])) {
+                    place_mark(r, f, size, cps[k], (uint32_t)start, at, &top, &bottom);
+                } else {
+                    at = r->n;
+                    emit(r, f, size, cps[k], (uint32_t)start, &pen);
+                    top = bottom = 0;
+                    if (au_font_glyph_box(f, r->glyphs[at].id, bb)) {
+                        top = bb[3];
+                        bottom = bb[1];
+                    }
+                }
+            }
         } else {
             for (size_t k = 1; k < ncp; k++)
                 emit(r, f, size, cps[k], (uint32_t)start, &pen);

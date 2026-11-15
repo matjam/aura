@@ -57,7 +57,9 @@ typedef enum {
     AU_HIT_PAGE,
     AU_HIT_VSCROLL,
     AU_HIT_STATUS,
-    AU_HIT_GROW
+    AU_HIT_GROW,
+    AU_HIT_HSCROLL,
+    AU_HIT_CORNER       /* the blank square where the two scroll bars meet */
 } AuHitPart;
 
 typedef struct AuHit {
@@ -73,6 +75,7 @@ typedef struct AuChromeLayout {
     AuIRect tabstrip;   /* the strip (top) or column (left) */
     AuIRect tabs_area;  /* where tabs are drawn, inside tabstrip */
     AuIRect toolbar, page, vscroll, status, grow, splitter;
+    AuIRect hscroll, corner; /* empty unless au_chrome_layout_hscroll turned them on */
     AuIRect back, forward, reload, home, address, security, address_text, bookmark, throbber;
     AuIRect new_tab, scroll_back, scroll_fwd;
     int tab_size;   /* width of a top tab, height of a left row */
@@ -85,6 +88,11 @@ typedef struct AuChromeLayout {
  * here); tab_scroll is clamped to the valid range. */
 void au_chrome_layout(AuChromeLayout *l, int width, int height, AuTabPosition pos, int column_width, int ntabs,
                       int tab_scroll);
+/* Adds a horizontal scroll bar along the bottom of the page area (for
+ * content wider than the page): the page and the vertical scroll bar
+ * get shorter, and the square where the two bars meet, beside the grow
+ * box's row, is a blank corner. Call after au_chrome_layout. */
+void au_chrome_layout_hscroll(AuChromeLayout *l);
 /* The rectangle of tab i (may lie partly or wholly outside tabs_area
  * when scrolled), and of its close box. */
 AuIRect au_chrome_tab_rect(const AuChromeLayout *l, int i);
@@ -116,9 +124,14 @@ typedef struct AuChromeState {
     bool draw_field_text;     /* false when a native editor shows it */
     const char *status_text;
     float progress;           /* 0..1, shown while loading */
+    const char *progress_text; /* centred in the status bar ("Loading, 40%"); NULL or "" for none */
     int throbber_frame;       /* advances while loading */
     bool draw_native_standins; /* paint scroll bar and grow box stand-ins */
     bool active_window;       /* inactive windows draw dimmed labels */
+    /* Font lists for labels (Charcoal) and small text (Geneva), so tab
+     * titles and status text get per-character fallback. NULL: the plain
+     * faces, without fallback. */
+    AuFontList *label_list, *small_list;
 } AuChromeState;
 
 /* Paints the chrome (everything but the page area) inside clip. */
@@ -129,6 +142,11 @@ AuFontFace *au_chrome_label_face(AuFontSet *fonts);
 /* Fits text into max_w pixels at size, ending with an ellipsis when cut.
  * Writes into out (cap bytes) and returns it. */
 char *au_chrome_ellipsize(AuFontFace *f, float size, const char *text, float max_w, char *out, size_t cap);
+/* The same, measuring with per-character fallback through a font list. */
+char *au_chrome_ellipsize_list(AuFontList *l, float size, const char *text, float max_w, char *out, size_t cap);
+/* The families the chrome's labels and small text are drawn with. */
+#define AU_CHROME_LABEL_FAMILIES "Charcoal, system-ui"
+#define AU_CHROME_SMALL_FAMILIES "Geneva, system-ui"
 
 /* Rectangle helpers. */
 static inline bool au_irect_contains(AuIRect r, int x, int y)

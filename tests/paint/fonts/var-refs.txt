@@ -1,0 +1,12 @@
+# variable font	static instance (fontTools instancer)	axis values
+intervar.ttf	intervar@opsz14-wght100.ttf	opsz=14,wght=100
+intervar.ttf	intervar@opsz14-wght700.ttf	opsz=14,wght=700
+intervar.ttf	intervar@opsz32-wght900.ttf	opsz=32,wght=900
+intervar.ttf	intervar@opsz20-wght550.ttf	opsz=20,wght=550
+intervar.ttf	intervar@opsz32-wght400.ttf	opsz=32,wght=400
+intervar-nohvar.ttf	intervar-nohvar@opsz14-wght700.ttf	opsz=14,wght=700
+intervar-nohvar.ttf	intervar-nohvar@opsz28-wght250.ttf	opsz=28,wght=250
+opensansvar.ttf	opensansvar@wdth75-wght300.ttf	wdth=75,wght=300
+opensansvar.ttf	opensansvar@wdth100-wght800.ttf	wdth=100,wght=800
+opensansvar.ttf	opensansvar@wdth87-wght600.ttf	wdth=87.5,wght=600
+opensansvar.ttf	opensansvar@wdth75-wght400.ttf	wdth=75,wght=400

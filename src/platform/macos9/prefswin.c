@@ -20,7 +20,7 @@ enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
 /* Field ids: one per control whose value is a preference or an action. */
 typedef enum {
     F_NONE,
-    F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH,
+    F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH, F_EXT_WINDOW, F_DEFAULT_BROWSER,
     F_SERIF, F_SANS, F_MONO, F_SIZE, F_SIZE_MONO, F_SIZE_MIN,
     F_JS, F_IMAGES, F_POPUPS,
     F_DNT, F_GPC, F_HTTPS_FIRST, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
@@ -37,8 +37,13 @@ typedef struct PrefsWin {
     ControlHandle root, tab, panes[NPANES];
     ControlHandle field[F_COUNT];
     bool is_edit[F_COUNT];
+    signed char pane_of[F_COUNT]; /* the pane a control is on, -1 for none */
     int pane;
+    Field focus;          /* the edit field with the keyboard focus, or F_NONE */
+    Field last_click;     /* for double-clicks */
+    unsigned long last_click_ticks;
     AuTabPosition orig_tabs;
+    ControlHandle default_label; /* beside Make Aura the Default Browser */
     char **families;
     int nfamilies;
 } PrefsWin;
@@ -109,6 +114,7 @@ static void edit(PrefsWin *p, int pane, Field f, short x, short y, short w)
     p->field[f] = make(p, pane, kAuControlEditTextProc, (short)(x + 3), (short)(y + 3), (short)(w - 6), 16, NULL, 0,
                        0, 0);
     p->is_edit[f] = true;
+    p->pane_of[f] = (signed char)pane;
 }
 
 static void check(PrefsWin *p, int pane, Field f, short x, short y, short w, const char *title)
@@ -209,6 +215,14 @@ static void build(PrefsWin *p)
     small_label(p, 0, X, y, R - X, 30,
                 "Text in the address field that is not a web address is searched for with this URL; %s stands "
                 "for the words.");
+    y += 36;
+    label(p, 0, L, y, 130, "Links from other");
+    label(p, 0, L, (short)(y + 14), 130, "applications:");
+    check(p, 0, F_EXT_WINDOW, X, (short)(y + 1), R - X, "Open in a new window (else in a new tab)");
+    y += 34;
+    push(p, 0, F_DEFAULT_BROWSER, X, y, 220, "Make Aura the Default Browser");
+    p->default_label = make(p, 0, kAuControlStaticTextProc, (short)(X + 230), (short)(y + 3), R - X - 230, 16, NULL,
+                            0, 0, 0);
 
     /* Fonts */
     y = 52;
@@ -306,7 +320,22 @@ static void build(PrefsWin *p)
     label(p, 5, L, y, 130, "Save files in:");
     edit(p, 5, F_DL_FOLDER, X, y, R - X);
     y += 24;
-    small_label(p, 5, X, y, R - X, 30, "A folder path such as Macintosh HD:Downloads. Leave it empty for the desktop.");
+    {
+        /* Empty means Internet Config's download folder, when set. */
+        char hint[200];
+        FSSpec dl;
+        if (mac_ic_download_folder(&dl)) {
+            char *name = mac_roman_to_utf8((const char *)dl.name + 1, dl.name[0]);
+            snprintf(hint, sizeof hint,
+                     "A folder path such as Macintosh HD:Downloads. Leave it empty for Internet Config's download "
+                     "folder (%s).",
+                     name);
+            au_free(name);
+        } else {
+            snprintf(hint, sizeof hint, "%s", "A folder path such as Macintosh HD:Downloads. Leave it empty for the desktop.");
+        }
+        small_label(p, 5, X, y, R - X, 30, hint);
+    }
     y += 40;
     check(p, 5, F_DECODE, L, y, 400, "Decode MacBinary and BinHex files after downloading");
     y += 30;
@@ -340,6 +369,28 @@ static void select_family(PrefsWin *p, Field f, const char *fam)
             SetControlValue(p->field[f], (short)(i + 1));
 }
 
+/* The text beside the default browser button: whether Aura is the
+ * Internet Config helper for http. Reading the setting changes
+ * nothing; only the button's click writes it. */
+static void show_default_state(PrefsWin *p, bool redraw)
+{
+    const char *text;
+    if (!mac_ic_available()) {
+        text = "Internet Config is not available.";
+        HiliteControl(p->field[F_DEFAULT_BROWSER], 255);
+    } else if (mac_ic_is_default_browser()) {
+        text = "Aura is the default.";
+    } else {
+        text = "";
+    }
+    size_t n;
+    char *r = mac_utf8_to_roman(text, &n);
+    SetControlData(p->default_label, 0, kAuControlStaticTextTextTag, (Size)n, r);
+    au_free(r);
+    if (redraw)
+        Draw1Control(p->default_label);
+}
+
 static void load(PrefsWin *p, const AuPrefs *pr)
 {
     set_text(p->field[F_HOME], pr->home_page);
@@ -347,6 +398,8 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     SetControlValue(p->field[F_TABS_TOP], pr->tab_position == AU_TABS_TOP);
     SetControlValue(p->field[F_TABS_LEFT], pr->tab_position == AU_TABS_LEFT);
     set_text(p->field[F_SEARCH], pr->search_template);
+    SetControlValue(p->field[F_EXT_WINDOW], pr->external_new_window);
+    show_default_state(p, false);
     select_family(p, F_SERIF, pr->font_serif);
     select_family(p, F_SANS, pr->font_sans);
     select_family(p, F_MONO, pr->font_mono);
@@ -404,6 +457,7 @@ static void store(PrefsWin *p, AuPrefs *pr)
     pr->startup = (AuStartup)clampi(GetControlValue(p->field[F_STARTUP]) - 1, 0, 2);
     pr->tab_position = GetControlValue(p->field[F_TABS_LEFT]) ? AU_TABS_LEFT : AU_TABS_TOP;
     store_str(&pr->search_template, p->field[F_SEARCH]);
+    pr->external_new_window = GetControlValue(p->field[F_EXT_WINDOW]) != 0;
     store_family(p, &pr->font_serif, F_SERIF);
     store_family(p, &pr->font_sans, F_SANS);
     store_family(p, &pr->font_mono, F_MONO);
@@ -438,15 +492,114 @@ static void store(PrefsWin *p, AuPrefs *pr)
 
 /* ---- Window ---- */
 
+/* ---- Keyboard focus ----
+ * Aura tracks which edit field has the focus itself rather than leaving
+ * it to AdvanceKeyboardFocus, which walks into the hidden panes: only a
+ * field of the visible pane ever holds the focus (and blinks a caret).
+ * Tab and Shift-Tab move between the visible pane's fields and select the
+ * whole contents, as Mac dialogs do; a click places the caret; a
+ * double-click selects a word, and the whole number in a number field. */
+
+static bool is_number_field(Field f)
+{
+    switch (f) {
+    case F_SIZE: case F_SIZE_MONO: case F_SIZE_MIN: case F_HISTORY_DAYS: case F_HTTP_PORT: case F_HTTPS_PORT:
+    case F_MEM_CACHE: case F_DISK_CACHE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static TEHandle field_te(PrefsWin *p, Field f)
+{
+    TEHandle te = NULL;
+    Size actual;
+    if (f == F_NONE || !p->field[f] ||
+        GetControlData(p->field[f], 0, kAuControlEditTextTEHandleTag, sizeof te, (Ptr)&te, &actual) != noErr)
+        return NULL;
+    return te;
+}
+
+static void drop_focus(PrefsWin *p)
+{
+    ControlHandle cur = NULL;
+    if (GetKeyboardFocus(p->base.win, &cur) == noErr && cur)
+        SetKeyboardFocus(p->base.win, cur, kAuControlFocusNoPart);
+    p->focus = F_NONE;
+}
+
+static void select_all_in(PrefsWin *p, Field f)
+{
+    TEHandle te = field_te(p, f);
+    if (te)
+        TESetSelect(0, 32767, te);
+}
+
+static void focus_edit(PrefsWin *p, Field f, bool select_all)
+{
+    SetPort((GrafPtr)p->base.win);
+    if (p->focus != f) {
+        drop_focus(p);
+        if (SetKeyboardFocus(p->base.win, p->field[f], kAuControlEditTextPart) == noErr)
+            p->focus = f;
+    }
+    if (select_all && p->focus == f)
+        select_all_in(p, f);
+}
+
+/* The next (dir 1) or previous (dir -1) edit field of the visible pane
+ * after the focused one, wrapping; F_NONE when the pane has none. */
+static Field next_edit(PrefsWin *p, int dir)
+{
+    int start = p->focus != F_NONE && p->pane_of[p->focus] == p->pane ? (int)p->focus : (dir > 0 ? 0 : F_COUNT);
+    for (int k = 1; k <= F_COUNT; k++) {
+        int i = ((start + dir * k) % F_COUNT + F_COUNT) % F_COUNT;
+        if (i != F_NONE && p->is_edit[i] && p->pane_of[i] == p->pane)
+            return (Field)i;
+    }
+    return F_NONE;
+}
+
+/* Selects the word around the caret (letters, digits and dots). */
+static void select_word(PrefsWin *p, Field f)
+{
+    TEHandle te = field_te(p, f);
+    if (!te)
+        return;
+    SignedByte st = HGetState((Handle)te);
+    HLock((Handle)te);
+    CharsHandle h = TEGetText(te);
+    SignedByte hs = HGetState((Handle)h);
+    HLock((Handle)h);
+    const unsigned char *s = (const unsigned char *)*h;
+    short n = (**te).teLength, a = (**te).selStart, b = a;
+#define WORDCH(c) (((c) >= '0' && (c) <= '9') || ((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z') || \
+                   (c) == '.' || (c) == '-' || (c) >= 0x80)
+    while (a > 0 && WORDCH(s[a - 1]))
+        a--;
+    while (b < n && WORDCH(s[b]))
+        b++;
+#undef WORDCH
+    HSetState((Handle)h, hs);
+    HSetState((Handle)te, st);
+    if (b > a)
+        TESetSelect(a, b, te);
+}
+
 static void show_pane(PrefsWin *p, int pane)
 {
+    /* Hidden controls must not hold the focus or draw a caret. */
+    drop_focus(p);
     p->pane = pane;
     for (int i = 0; i < NPANES; i++)
         if (i != pane)
             SetControlVisibility(p->panes[i], false, true);
     SetControlVisibility(p->panes[pane], true, true);
-    /* Focus the first edit field of the pane, if any. */
-    SetKeyboardFocus(p->base.win, p->root, kAuControlFocusNoPart);
+    /* The pane's first edit field takes the focus, its text selected. */
+    Field f = next_edit(p, 1);
+    if (f != F_NONE)
+        focus_edit(p, f, true);
 }
 
 static void close_prefs(PrefsWin *p, bool ok)
@@ -520,8 +673,22 @@ static void pw_click(MacWin *mw, EventRecord *ev)
     if (!c)
         return;
     Field f = field_of(p, c);
-    if (f != F_NONE && p->is_edit[f])
-        SetKeyboardFocus(mw->win, c, kAuControlEditTextPart);
+    if (f != F_NONE && p->is_edit[f]) {
+        bool dbl = f == p->last_click && ev->when - p->last_click_ticks <= (unsigned long)GetDblTime();
+        p->last_click = f;
+        p->last_click_ticks = ev->when;
+        focus_edit(p, f, false);
+        HandleControlClick(c, pt, ev->modifiers, (ControlActionUPP)-1);
+        if (dbl) {
+            if (is_number_field(f))
+                select_all_in(p, f);
+            else
+                select_word(p, f);
+            p->last_click = F_NONE; /* a third click starts over */
+        }
+        return;
+    }
+    p->last_click = F_NONE;
     if (!HandleControlClick(c, pt, ev->modifiers, (ControlActionUPP)-1))
         return;
     AuPrefs *pr = &g_browser->prefs;
@@ -548,6 +715,13 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         Draw1Control(p->field[F_HOME]);
         break;
     }
+    case F_DEFAULT_BROWSER:
+        /* The one place Aura writes Internet Config: the http, https and
+         * file helpers become Aura. */
+        if (!mac_ic_make_default_browser())
+            SysBeep(1);
+        show_default_state(p, true);
+        break;
     case F_CLEAR_HISTORY:
         au_history_clear(&g_browser->history);
         au_browser_history_changed(g_browser);
@@ -576,23 +750,21 @@ static bool pw_key(MacWin *mw, EventRecord *ev)
         return true;
     }
     if (ch == 0x09) {
-        AdvanceKeyboardFocus(mw->win);
+        Field f = next_edit(p, (ev->modifiers & shiftKey) ? -1 : 1);
+        if (f != F_NONE)
+            focus_edit(p, f, true);
         return true;
     }
-    ControlHandle focus = NULL;
-    if (GetKeyboardFocus(mw->win, &focus) == noErr && focus)
-        HandleControlKey(focus, (SInt16)((ev->message >> 8) & 0xFF), (SInt16)ch, ev->modifiers);
+    if (p->focus != F_NONE && p->pane_of[p->focus] == p->pane)
+        HandleControlKey(p->field[p->focus], (SInt16)((ev->message >> 8) & 0xFF), (SInt16)ch, ev->modifiers);
     return true;
 }
 
 static bool pw_edit(MacWin *mw, int item)
 {
-    ControlHandle focus = NULL;
-    if (GetKeyboardFocus(mw->win, &focus) != noErr || !focus)
-        return false;
-    TEHandle te = NULL;
-    Size actual;
-    if (GetControlData(focus, 0, kAuControlEditTextTEHandleTag, sizeof te, (Ptr)&te, &actual) != noErr || !te)
+    PrefsWin *p = (PrefsWin *)mw;
+    TEHandle te = p->focus != F_NONE && p->pane_of[p->focus] == p->pane ? field_te(p, p->focus) : NULL;
+    if (!te)
         return false;
     if (item == 0)
         return true;
@@ -610,7 +782,8 @@ static bool pw_edit(MacWin *mw, int item)
 
 static void pw_idle(MacWin *mw)
 {
-    if (mw->win == FrontWindow() && g_in_front) {
+    PrefsWin *p = (PrefsWin *)mw;
+    if (mw->win == FrontWindow() && g_in_front && p->focus != F_NONE) {
         SetPort((GrafPtr)mw->win);
         IdleControls(mw->win);
     }

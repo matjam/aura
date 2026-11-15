@@ -203,9 +203,98 @@ was left at. To plug in networking, register a fetcher per scheme with
 http and https show a placeholder after a simulated load. Images are
 decoded by `src/image` (see Images); `au_page_idle` advances animations.
 The font preferences reach the engine as the generic families of
-the font set and a user style sheet (`html { font-size }`, monospace
-size). `src/css` now has `au_css_resolver_set_font_prefs` (default
-sizes, text zoom, minimum size); the shell does not call it yet.
+the font set and, for the default and monospace sizes, the minimum size
+and the tab's text zoom, `au_docview_set_font_prefs` (which passes them
+to `au_css_resolver_set_font_prefs`). Text zoom is per tab
+(`au_bw_zoom`, View > Zoom In, Zoom Out, Actual Size); the last zoom
+chosen for a site (host, or scheme for `file:`) is kept in the
+`zoom.sites` preference and applied when a tab opens that site again.
+
+Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
+a navigation or a tab switch the page has the focus, unless the user is
+typing in the address field; a tab showing a fresh blank page puts it in
+the field. The model reports the move with `AU_CHANGED_FOCUS_PAGE` or
+`AU_CHANGED_FOCUS_FIELD`.
+
+A horizontal scroll bar appears along the bottom of the page area while
+the active page is wider than it (`au_chrome_layout_hscroll`); the two
+bars meet at a blank corner square above the grow box, and Shift turns
+a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
+
+To change Save Page As, see `au_page_source` (the page keeps the main
+document's bytes as they arrived, until the next load), `au_bw_save_name`
+(the suggested file name) and `mac_save_page` in `storage.c`, which asks
+with `StandardPutFile` and writes the bytes unchanged as a TEXT file with
+creator AURA. Open Location selects the whole address again when the
+field already has the focus, and a paste into the field turns line
+breaks into spaces.
+
+Back and Forward: a Command-click opens that entry in a new tab behind
+(`au_bw_go_new_tab`); holding the button for half a second (30 ticks)
+shows a pop-up of the entries that way (`au_bw_history_items`,
+`history_popup` in `browserwin.c`). File > Reopen Closed Tab
+(Shift-Command-T, mapped in `key_down` because MenuKey ignores Shift)
+brings back the last of up to `AU_MAX_CLOSED_TABS` closed tabs with
+their history and scroll position. While a page loads, the status bar
+shows its progress in the middle (`AuChromeState.progress_text`). Each
+window's position goes into the session (`au_bw_set_position` after a
+drag or zoom) and a restored window returns there when its title bar
+is still on screen.
+
+To change the About box or about:licences, edit the credits table in
+`src/browser/credits.c` (the version, the tagline, and one entry per
+bundled font or third-party library with its licence); `aboutbox.c`
+and `build_licences` in `page_doc.c` both read it. The table has a
+commented slot for the BearSSL and QuickJS-ng entries: add them there
+when those libraries join the build. The About box (DLOG 202) draws
+icon family 128 at 64 pixels with `PlotIconID`; its empty `dctb` gives
+it a colour port, without which the icon draws in black and white.
+
+To change how Aura works with Internet Config, edit
+`src/platform/macos9/internetconfig.c`. Mac OS 9.2.2 has the Internet
+Config component ('PREF', 'ICAp') but no InternetConfigLib shared
+library (GetSharedLibrary fails with -2804 in the stock guest), so
+Retro68's InternetConfigLib stub cannot be used: Aura opens the
+component with `OpenDefaultComponent` and makes each call through
+`CallComponentUPP` with a parameter block, checking every selector with
+`kComponentCanDoSelect` first. `internetconfig.h` declares what the
+Multiversal Interfaces lack (the IC records, in 68K alignment, and the
+Component Manager calls). Addresses Aura does not open itself
+(`au_browser_opens_url`) reach the shell through
+`AuBrowserHost.open_external`, which calls `ICLaunchURL`. The GURL Apple
+event opens its URL in a new tab, or a new window with
+`links.external_new_window`. Preferences > General has the Make Aura
+the Default Browser button, the only place Aura writes Internet Config
+(the http, https and file helpers). `mac_ic_download_folder` and
+`mac_ic_map_filename` are there for downloads. To send a GURL in the
+guest, run `open location "URL"` in Script Editor.
+
+To change what a contextual menu offers, edit `src/browser/context.c`:
+`au_bw_context_menu` builds the items for a window point (link, image,
+page, address field or tab, using `au_page_hit_info` for the page) and
+`au_bw_context_command` runs the commands the model can; the shell does
+the rest (clipboard, field editing, a new window). On Mac OS 9,
+`contextmenu.c` finds the Contextual Menu Manager in the ContextualMenu
+shared library at run time (the Multiversal Interfaces do not declare
+it) and falls back to `PopUpMenuSelect`; Control-click opens the menu,
+and so does holding the button still on the page for 45 ticks.
+
+To change text selection or find, work in `src/layout/selection.c`
+(positions, words, paragraphs, the text of a range, find, and the
+painted highlight; `draw.c` calls `l_select_paint_frag` for each text
+fragment while a selection is set) and in the selection section of
+`page_doc.c`, which turns mouse events into selections: a drag selects
+characters, a double click a word, a triple click a paragraph, Shift
+extends, and a drag that selects does not follow the link it started
+on. `au_page_find` searches the page's text with simple case folding
+(ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
+selection, wrapping. The Mac OS 9 shell counts clicks within the
+double-click time, copies with `mac_put_scrap` (TEXT in Mac Roman with
+transliteration and carriage returns, plus 'utxt'), asks for the text
+with the Find dialog (DLOG 201), maps Shift-Command-G to Find Previous
+itself (MenuKey ignores Shift), and paints selections in the
+Appearance highlight colour (`LMGetHiliteRGB`, passed in
+`AuBrowser.highlight`).
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
@@ -225,7 +314,15 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+`Session` and `Downloads`, and `Running` while it runs. The session
+(windows, tabs, back and forward lists, scroll positions) is saved
+3 seconds after tabs change and every 30 seconds while only scroll
+positions do (`session_gen`, `scroll_gen`). `Running` is made at start
+and deleted after the last save at quit; when Aura finds it at start,
+the last run crashed or ran out of memory, and Aura offers to restore
+the session (ALRT 133) unless the startup preference restores it
+anyway. To test this in the guest, press Command-Option-M (the
+out-of-memory test) and launch Aura again. Each is written to a `.tmp` file and swapped
 in; a file that fails to parse is renamed with ` (damaged)` before a new
 one is written. To start with clean state in the guest, delete that
 folder.
@@ -274,13 +371,14 @@ the system lacks.
   metric-compatible with Arial, Times New Roman and Courier New, renamed
   because Liberation's Reserved Font Name forbids a subset under its own
   name), Inter (modern interface fonts), DejaVu Sans (the last-resort
-  text face) and Noto Emoji (monochrome emoji), about 3.4 MB.
-  `assets/fonts/README.md` records sources, versions, licences, sizes
-  and what was left out.
+  text face), Noto Emoji (monochrome emoji) and Twemoji Mozilla (colour
+  emoji, COLR version 0), about 4.6 MB. `assets/fonts/README.md`
+  records sources, versions, licences, sizes, the choice of Twemoji over
+  Noto Color Emoji, and what was left out.
 - **To add a font**, put its folder (licence included) in
-  `assets/fonts`; reduce it with `tools/fonts-prepare.py` or pyftsubset
-  to TrueType outlines (no CFF, no variable fonts, no colour tables),
-  keeping file and folder names to 31 characters; regenerate the index
+  `assets/fonts`; reduce it with `tools/fonts-prepare.py` (one family:
+  `--only=FAMILY`) or pyftsubset to TrueType outlines (no CFF), keeping
+  file and folder names to 31 characters; regenerate the index
   with `build/host/src/platform/host/aura-host font-index assets/fonts`;
   add its sources to the README; and name it in the alias table or the
   fallback lists if it should stand in for other families. The paint
@@ -306,20 +404,71 @@ the system lacks.
   (DejaVu Sans first, then system faces with wide coverage, including
   CJK faces when a machine has them), the emoji list, then any face
   already loaded. Emoji presentation (by default or with U+FE0F) tries
-  the emoji list first. Default-ignorable code points draw nothing, so
-  U+FE0F is dropped and ZWJ sequences draw their components; skin tone
-  modifiers are dropped. Marks are placed over their base by their ink
-  boxes (the fonts carry no GPOS for Aura to read). Fallback faces keep
-  the requested weight and style, synthesized when missing. A per-list
-  cache and a per-set cache keyed by code point and style keep this
-  fast; a face is loaded only when it is tried.
+  a colour font the page names, then the emoji list (Twemoji Mozilla
+  first); text presentation (U+FE0E) takes the monochrome Noto Emoji.
+  An emoji sequence (ZWJ sequences, flags, keycaps, skin tones, tag
+  sequences) is one cluster: the face's GSUB ligature draws it, and
+  without one its components are drawn. Default-ignorable code points
+  draw nothing. Marks are placed over their base by their ink boxes (the
+  fonts carry no GPOS for Aura to read). Fallback faces keep the
+  requested weight and style, synthesized when missing. A per-list cache
+  and a per-set cache keyed by code point and style keep this fast; a
+  face is loaded only when it is tried.
+- **Variable fonts** (`fontvar.c`): fvar, avar (versions 1 and 2), gvar
+  (with IUP, composite offsets and phantom points), HVAR, MVAR and STAT
+  names. `au_font_face_instance` makes an instance at axis values;
+  `AuFontSet` matching makes instances for the requested weight (wght),
+  italic (ital, else slnt), and, through `au_fontlist_new_style`,
+  stretch (wdth), optical size (opsz) and `font-variation-settings`.
+  Instances are cached per set entry (at most 64). A weight the font
+  cannot reach is synthesized as before. Glyph boxes (`au_font_glyph_box`)
+  are the default instance's.
+- **Colour glyphs** (`colr.c`): CPAL palette 0, COLR version 0 layers
+  and version 1 paint graphs (solid, linear, radial and sweep gradients,
+  transforms, composite modes), with limits on depth (32), paints
+  visited (4096) and cycles. Colour glyphs go in the glyph cache as
+  premultiplied pixels under the same byte limit, keyed with the text
+  colour only when they use it.
+- **GSUB** (`gsub.c`): lookup types 1 (single), 4 (ligature) and 7
+  (extension) of the features ccmp, locl, rlig, liga and clig, for the
+  DFLT, else latn, script. Fallback uses it for emoji sequences only;
+  Latin text is not shaped.
+- **Web fonts.** `au_font_decode` (`woff.c`) turns WOFF 1.0 and WOFF2
+  (transformed glyf, loca and hmtx; collections) into sfnt bytes and
+  refuses CFF-flavoured fonts. `src/page/webfont.c` loads `@font-face`
+  rules for a document view into a font set layered over the platform
+  set (`au_fontset_new_layered`, `au_fontset_add_web`), fetching only
+  faces whose family the styled document uses for text in their
+  `unicode-range`, and lays the document out again when one arrives
+  (font-display: swap). The faces go with the document.
+  `tests/page/samples/webfonts.html` shows a variable WOFF2 font at
+  several weights and a WOFF face limited by `unicode-range`.
+- **Test fonts.** `tests/paint/fonts` holds small subsets of Inter
+  Variable, Open Sans variable, Twemoji Mozilla and Noto Color Emoji
+  (COLR version 1), WOFF and WOFF2 versions, a font with every COLR
+  paint format, and static instances made by fontTools' instancer as
+  references. To rebuild them, run `tools/test-fonts.py fetch`, then
+  `tools/test-fonts.py make` (fontTools and the brotli command needed;
+  building Aura needs neither); `tools/test-fonts.py refs` writes full
+  fonts for `paint_fontvar_full`, which skips without them. To fuzz the
+  font parsers for longer, run the sanitizer build's `fuzz_font
+  ITERATIONS SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*`
+  and `fuzz_webfont ITERATIONS SEED SECONDS`. `test_fontvar DIR --bench`,
+  `test_colr DIR FONTS --bench` and `test_woff DIR --bench FILE` time
+  varied glyphs, colour glyphs and decoding.
 - **Line height.** With `line-height: normal`, a line holding fallback
   glyphs grows to the fallback face's ascent and descent (each with half
   its line gap) where they exceed the primary's, as Blink does; a fixed
   line height ignores fallback faces.
-- **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
-  joining, Indic reordering or bidirectional text; colour emoji; a CJK
-  font pack (see the fonts README for what one needs).
+- **Not done:** OpenType shaping of text (GPOS, and GSUB beyond emoji
+  sequences), so no ligatures, kerning beyond `kern`, Arabic joining,
+  Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
+  sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
+  default instance); a CJK font pack (see the fonts README for what one
+  needs). CSS does not parse `font-variation-settings`,
+  `font-optical-sizing` or `font-tech()`, layout passes only weight and
+  style to the font list, and the CSS parser loses `unicode-range`
+  tokens (webfont.c reads them from the sheet text).
 
 ## Images
 

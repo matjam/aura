@@ -64,7 +64,8 @@ enum {
     AU_CHANGED_LAYOUT = 4, /* chrome rectangles moved: place native controls again */
     AU_CHANGED_SCROLL = 8, /* scroll position or range of the active tab */
     AU_CHANGED_MENUS = 16, /* tab list, history or bookmarks: rebuild menus */
-    AU_CHANGED_FOCUS_FIELD = 32 /* put the keyboard focus in the address field */
+    AU_CHANGED_FOCUS_FIELD = 32, /* put the keyboard focus in the address field */
+    AU_CHANGED_FOCUS_PAGE = 64   /* take it out of the field: keys go to the page */
 };
 
 typedef struct AuBrowserHost {
@@ -79,6 +80,11 @@ typedef struct AuBrowserHost {
     /* The window's last tab closed: the shell closes the window and calls
      * au_browser_window_free. */
     void (*close_window)(void *ctx, AuBrowserWindow *w);
+    /* Optional. An address Aura does not open itself (mailto:, ftp:,
+     * news:...; see au_browser_opens_url) was navigated to: the shell
+     * hands it to a helper application and returns true, or returns
+     * false and the tab shows that Aura cannot open it. */
+    bool (*open_external)(void *ctx, const char *url);
 } AuBrowserHost;
 
 struct AuTab {
@@ -97,6 +103,7 @@ struct AuBrowserWindow {
     AuTab **tabs;
     int ntabs, cap, active;
     int width, height;
+    int x, y; /* the window's position on screen (set by the shell; -1 when not known), for the session */
     int tab_scroll;
     AuChromeLayout layout;
     AuHit hover, pressed;
@@ -113,9 +120,13 @@ struct AuBrowserWindow {
     bool active_window;
     int throbber_frame;
     uint32_t throbber_ms;
+    AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
+    bool painting;      /* inside au_bw_paint */
+    bool hscroll_dirty; /* the page width changed during a paint: check the scroll bar at the next idle */
 };
 
 #define AU_MAX_FETCHERS 8
+#define AU_MAX_CLOSED_TABS 10
 
 struct AuBrowser {
     AuPrefs prefs;
@@ -127,7 +138,13 @@ struct AuBrowser {
     AuBrowserWindow **windows;
     int nwindows;
     uint32_t prefs_gen, session_gen;
+    uint32_t scroll_gen; /* any tab's scroll position changed (saved with the session, less often) */
     uint32_t next_tab_id;
+    uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
+    char *find_text;     /* the last Find, for Find Again; NULL before one */
+    bool find_case;      /* it was case-sensitive */
+    AuNavList closed[AU_MAX_CLOSED_TABS]; /* closed tabs' histories, oldest first */
+    int nclosed;
     struct {
         char scheme[16];
         AuPageFetcher fetcher;
@@ -149,6 +166,9 @@ void au_browser_history_changed(AuBrowser *b);
  * ':'), replacing an earlier one; NULL removes it. A network stack calls
  * this for "http" and "https" at start-up, before windows open. */
 void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f);
+/* Whether Aura opens url itself: about:, file:, view-source:, http:,
+ * https:, a scheme with a fetcher, or text without a scheme. */
+bool au_browser_opens_url(const AuBrowser *b, const char *url);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 
@@ -158,13 +178,37 @@ void au_browser_window_free(AuBrowserWindow *w);
 
 /* ---- Tabs ---- */
 /* Opens url (NULL: about:blank) in a new tab at index (-1: after the
- * active tab), activating it when activate is set. */
+ * active tab), activating it when activate is set. Returns NULL when
+ * the host's open_external took the address instead (the window keeps
+ * its tabs; a window's first tab always opens). */
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index);
 /* Closes tab i. Closing the last tab asks the host to close the window. */
 void au_bw_close_tab(AuBrowserWindow *w, int i);
 void au_bw_select_tab(AuBrowserWindow *w, int i);
 void au_bw_move_tab(AuBrowserWindow *w, int from, int to);
 AuTab *au_bw_active_tab(AuBrowserWindow *w);
+/* Opens a copy of tab i (its back/forward list, scroll position and
+ * zoom) to its right and activates it. */
+AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i);
+/* Command-click on Back or Forward: opens the entry delta steps away
+ * in a new tab behind the active one, with a copy of its history. */
+AuTab *au_bw_go_new_tab(AuBrowserWindow *w, int delta);
+/* The back (dir < 0) or forward (dir > 0) entries of the active tab,
+ * nearest first, for a history pop-up: up to cap items. The strings
+ * belong to the tab and last until it navigates. */
+typedef struct AuHistoryItem {
+    int delta; /* for au_bw_go */
+    const char *title, *url;
+} AuHistoryItem;
+int au_bw_history_items(AuBrowserWindow *w, int dir, AuHistoryItem *out, int cap);
+/* Reopen Closed Tab: the most recently closed tab comes back (its
+ * history and scroll position) after the active tab. The last
+ * AU_MAX_CLOSED_TABS closed tabs are kept, across windows. */
+bool au_browser_can_reopen(const AuBrowser *b);
+AuTab *au_bw_reopen_closed_tab(AuBrowserWindow *w);
+/* Closes every tab but tab keep, which becomes active. */
+void au_bw_close_other_tabs(AuBrowserWindow *w, int keep);
+void au_bw_reload_tab(AuBrowserWindow *w, int i);
 
 /* ---- Navigation (active tab) ---- */
 /* Address-field input: a URL, a path or a search (url.h). */
@@ -181,6 +225,39 @@ void au_bw_home(AuBrowserWindow *w);
  * NULL. */
 AuBookmark *au_bw_bookmark_page(AuBrowserWindow *w, bool toggle);
 bool au_bw_is_bookmarked(AuBrowserWindow *w);
+/* Adds url to the bookmarks (title, else the URL, as its name) unless it
+ * is there already; returns the bookmark. */
+AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *title);
+/* View Source: opens view-source: of the active page in a new tab
+ * (file, http and https pages only). */
+bool au_bw_can_view_source(AuBrowserWindow *w);
+void au_bw_view_source(AuBrowserWindow *w);
+/* Save Page As: the active page's source (au_page_source) and a file
+ * name to suggest (from the URL, else the title, with ".html" when it
+ * has no extension; HFS-safe, cap >= 128). */
+bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len);
+void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap);
+
+/* ---- Selection and find (active tab) ---- */
+bool au_bw_has_selection(AuBrowserWindow *w);
+/* Appends the selected text to out; false when none. */
+bool au_bw_selection_text(AuBrowserWindow *w, AuBuf *out);
+void au_bw_select_all(AuBrowserWindow *w);
+/* Finds text (remembered for au_bw_find_again) forward from the
+ * selection; false when there is no match. */
+bool au_bw_find(AuBrowserWindow *w, const char *text, bool case_sensitive);
+/* Repeats the last find forward or backward; false without a match or
+ * an earlier find. */
+bool au_bw_find_again(AuBrowserWindow *w, bool forward);
+
+/* ---- Text zoom (active tab) ----
+ * dir > 0 zooms in a step, dir < 0 out, 0 back to 100%. The site's zoom
+ * is remembered (prefs.zoom_sites) and applied when a tab next opens a
+ * page of that site. */
+void au_bw_zoom(AuBrowserWindow *w, int dir);
+bool au_bw_can_zoom(AuBrowserWindow *w, int dir);
+/* The remembered zoom for url's site (1 when none). */
+float au_browser_site_zoom(const AuBrowser *b, const char *url);
 
 /* ---- Address field ---- */
 /* The text the field shows: the edit in progress, else the current URL
@@ -189,12 +266,19 @@ const char *au_bw_field_text(AuBrowserWindow *w);
 /* Records an edit (NULL ends editing and shows the URL again). */
 void au_bw_set_field_text(AuBrowserWindow *w, const char *text);
 void au_bw_set_field_focus(AuBrowserWindow *w, bool focused);
+/* The user is typing in the field: it has the focus and holds an edit.
+ * Navigation and tab switches move the focus to the page otherwise (see
+ * AU_CHANGED_FOCUS_PAGE). */
+bool au_bw_typing(const AuBrowserWindow *w);
 /* Inline completion for typed text from history and bookmarks: the full
  * URL whose match key extends typed, or NULL. */
 const char *au_bw_complete(AuBrowserWindow *w, const char *typed);
 
 /* ---- Geometry, painting, input ---- */
 void au_bw_resize(AuBrowserWindow *w, int width, int height);
+/* The shell moved the window (screen position of its content's top
+ * left): remembered with the session. */
+void au_bw_set_position(AuBrowserWindow *w, int x, int y);
 void au_bw_set_active(AuBrowserWindow *w, bool active); /* window activation */
 void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip);
 /* Mouse events in window coordinates. Returns the hit the event was
@@ -216,15 +300,21 @@ AuIRect au_bw_hit_rect(AuBrowserWindow *w, AuHit h);
 /* ---- Session (open windows and tabs, for "restore last tabs") ----
  * File format:
  *     # Aura session 1
- *     window <width> <height> <active tab>
+ *     window <width> <height> <active tab> <x> <y>
  *     tab <current entry>
- *     entry\t<url>\t<title>
- * Windows hold the tab lines that follow, tabs the entry lines. */
+ *     entry\t<url>\t<title>\t<scroll y>
+ * Windows hold the tab lines that follow, tabs the entry lines. The
+ * window position (-1 -1 when not known) and the scroll position are
+ * optional (older files lack them); for the current
+ * entry it is where the tab is scrolled now. session_gen changes with
+ * the windows, tabs and entries; scroll_gen with the scroll positions,
+ * which the shell saves less often. */
 typedef struct AuSessionTab {
     AuNavList nav;
 } AuSessionTab;
 typedef struct AuSessionWindow {
     int width, height, active;
+    int x, y; /* the window's position, -1 when not known */
     AuSessionTab *tabs;
     int ntabs;
 } AuSessionWindow;
@@ -238,7 +328,7 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out);
 bool au_session_parse(AuSession *s, const char *data, size_t len);
 void au_session_free(AuSession *s);
 /* Adds the session window's tabs to w (loading each tab's current
- * entry) and activates its active tab. */
+ * entry, scrolled to where it was) and activates its active tab. */
 void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw);
 
 #endif

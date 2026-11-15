@@ -143,6 +143,24 @@ void au_chrome_layout(AuChromeLayout *l, int W, int H, AuTabPosition pos, int co
     l->address_text = irect(ax0 + 23, l->address.y0 + 3, ax1 - 4, l->address.y1 - 3);
 }
 
+void au_chrome_layout_hscroll(AuChromeLayout *l)
+{
+    if (!au_irect_empty(l->hscroll))
+        return;
+    int sb = AU_CHROME_SCROLL_W - 1;
+    int bottom = l->page.y1;
+    if (bottom - l->page.y0 < AU_CHROME_SCROLL_W + 8)
+        return; /* no room */
+    int top = bottom - sb;
+    /* Like the vertical bar, it overlaps its neighbours' frame lines by
+     * one pixel: the status bar's top line and the splitter or window
+     * edge on the left. */
+    l->hscroll = irect(l->page.x0 - 1, top, l->page.x1 + 1, bottom + 1);
+    l->corner = irect(l->page.x1 + 1, top + 1, l->width, bottom); /* inside both bars' frame lines */
+    l->page.y1 = top;
+    l->vscroll.y1 = top + 1;
+}
+
 AuIRect au_chrome_tab_rect(const AuChromeLayout *l, int i)
 {
     if (l->position == AU_TABS_TOP) {
@@ -219,6 +237,10 @@ AuHit au_chrome_hit(const AuChromeLayout *l, int x, int y)
             h.part = AU_HIT_THROBBER;
     } else if (au_irect_contains(l->grow, x, y))
         h.part = AU_HIT_GROW;
+    else if (au_irect_contains(l->corner, x, y))
+        h.part = AU_HIT_CORNER;
+    else if (au_irect_contains(l->hscroll, x, y))
+        h.part = AU_HIT_HSCROLL;
     else if (au_irect_contains(l->vscroll, x, y))
         h.part = AU_HIT_VSCROLL;
     else if (au_irect_contains(l->page, x, y))
@@ -498,20 +520,47 @@ static void throbber(AuCanvas *c, AuIRect r, bool loading, int frame)
 
 AuFontFace *au_chrome_label_face(AuFontSet *fonts)
 {
-    return au_fontset_match(fonts, "Charcoal, system-ui", 400, false);
+    return au_fontset_match(fonts, AU_CHROME_LABEL_FAMILIES, 400, false);
 }
 
-static AuFontFace *small_face(AuFontSet *fonts)
+
+/* A chrome font: a face, and optionally the font list it heads, through
+ * which text gets per-character fallback (titles in any script). */
+typedef struct ChromeFont {
+    AuFontFace *face;
+    AuFontList *list;
+} ChromeFont;
+
+static float cf_width(ChromeFont f, float size, const char *text, size_t n)
 {
-    return au_fontset_match(fonts, "Geneva, system-ui", 400, false);
+    return f.list ? au_text_width_list(f.list, size, text, n) : au_text_width(f.face, size, text, n);
 }
+
+static bool cf_has(ChromeFont f, uint32_t cp)
+{
+    return f.list ? au_fontlist_face_for(f.list, cp, false) != NULL : au_font_glyph(f.face, cp) != 0;
+}
+
+static char *ellipsize(ChromeFont f, float size, const char *text, float max_w, char *out, size_t cap);
 
 char *au_chrome_ellipsize(AuFontFace *f, float size, const char *text, float max_w, char *out, size_t cap)
+{
+    ChromeFont cf = {f, NULL};
+    return ellipsize(cf, size, text, max_w, out, cap);
+}
+
+char *au_chrome_ellipsize_list(AuFontList *l, float size, const char *text, float max_w, char *out, size_t cap)
+{
+    ChromeFont cf = {l ? au_fontlist_primary(l) : NULL, l};
+    return ellipsize(cf, size, text, max_w, out, cap);
+}
+
+static char *ellipsize(ChromeFont f, float size, const char *text, float max_w, char *out, size_t cap)
 {
     size_t n = strlen(text);
     if (cap == 0)
         return out;
-    if (!f || au_text_width(f, size, text, n) <= max_w) {
+    if (!f.face || cf_width(f, size, text, n) <= max_w) {
         size_t k = n < cap - 1 ? n : cap - 1;
         /* Do not cut a UTF-8 sequence. */
         while (k > 0 && k < n && ((unsigned char)text[k] & 0xC0) == 0x80)
@@ -520,14 +569,16 @@ char *au_chrome_ellipsize(AuFontFace *f, float size, const char *text, float max
         out[k] = 0;
         return out;
     }
-    const char *ell = au_font_glyph(f, 0x2026) ? "\xE2\x80\xA6" : "...";
-    float ew = au_text_width(f, size, ell, strlen(ell));
+    const char *ell = cf_has(f, 0x2026) ? "\xE2\x80\xA6" : "...";
+    float ew = cf_width(f, size, ell, strlen(ell));
     /* Binary search the longest prefix that fits with the ellipsis. */
     /* Invariant: the prefix of lo bytes fits (or lo is 0), hi does not. */
     size_t lo = 0, hi = n;
     while (hi - lo > 1) {
         size_t mid = lo + (hi - lo) / 2;
-        if (au_text_width(f, size, text, mid) + ew <= max_w)
+        while (mid > lo + 1 && ((unsigned char)text[mid] & 0xC0) == 0x80)
+            mid--; /* measure whole characters */
+        if (cf_width(f, size, text, mid) + ew <= max_w)
             lo = mid;
         else
             hi = mid;
@@ -545,24 +596,49 @@ char *au_chrome_ellipsize(AuFontFace *f, float size, const char *text, float max
     return out;
 }
 
-static void text_in(AuCanvas *c, AuFontFace *f, float size, AuIRect r, const char *s, AuColor col, bool centre)
+static void text_in(AuCanvas *c, ChromeFont f, float size, AuIRect r, const char *s, AuColor col, bool centre)
 {
-    if (!f || !*s)
+    if (!f.face || !*s)
         return;
     char buf[512];
     float maxw = (float)(r.x1 - r.x0);
-    au_chrome_ellipsize(f, size, s, maxw, buf, sizeof buf);
+    ellipsize(f, size, s, maxw, buf, sizeof buf);
     AuFontMetrics m;
-    au_font_metrics(f, size, &m);
+    au_font_metrics(f.face, size, &m);
     float th = m.ascent + m.descent;
     float y = (float)r.y0 + ((float)(r.y1 - r.y0) - th) / 2 + m.ascent;
     y = floorf(y + 0.5f);
     float x = (float)r.x0;
     if (centre) {
-        float w = au_text_width(f, size, buf, strlen(buf));
+        float w = cf_width(f, size, buf, strlen(buf));
         x += floorf((maxw - w) / 2);
     }
-    au_draw_text(c, f, size, x, y, buf, strlen(buf), col);
+    if (f.list)
+        au_draw_text_list(c, f.list, size, x, y, buf, strlen(buf), col);
+    else
+        au_draw_text(c, f.face, size, x, y, buf, strlen(buf), col);
+}
+
+static ChromeFont label_font(AuFontSet *fonts, const AuChromeState *s)
+{
+    ChromeFont f = {NULL, s->label_list};
+    f.face = f.list ? au_fontlist_primary(f.list) : NULL;
+    if (!f.face) {
+        f.list = NULL;
+        f.face = au_chrome_label_face(fonts);
+    }
+    return f;
+}
+
+static ChromeFont small_font(AuFontSet *fonts, const AuChromeState *s)
+{
+    ChromeFont f = {NULL, s->small_list};
+    f.face = f.list ? au_fontlist_primary(f.list) : NULL;
+    if (!f.face) {
+        f.list = NULL;
+        f.face = au_fontset_match(fonts, AU_CHROME_SMALL_FAMILIES, 400, false);
+    }
+    return f;
 }
 
 /* ---- Parts ---- */
@@ -584,7 +660,7 @@ static const char *tab_label(const AuChromeTab *t)
     return t->title && *t->title ? t->title : "Untitled";
 }
 
-static void paint_tab_top(AuCanvas *c, AuFontFace *lf, const AuChromeLayout *l, const AuChromeState *s, int i)
+static void paint_tab_top(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, const AuChromeState *s, int i)
 {
     AuIRect r = au_chrome_tab_rect(l, i);
     bool active = i == s->active;
@@ -618,7 +694,7 @@ static void paint_tab_top(AuCanvas *c, AuFontFace *lf, const AuChromeLayout *l, 
                    is(s->hover, AU_HIT_TAB_CLOSE, i) && is(s->pressed, AU_HIT_TAB_CLOSE, i));
 }
 
-static void paint_tab_left(AuCanvas *c, AuFontFace *lf, const AuChromeLayout *l, const AuChromeState *s, int i)
+static void paint_tab_left(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, const AuChromeState *s, int i)
 {
     AuIRect r = au_chrome_tab_rect(l, i);
     bool active = i == s->active;
@@ -654,7 +730,7 @@ static void paint_small_button(AuCanvas *c, const AuChromeState *s, AuIRect r, A
 
 static void paint_tabs(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, const AuChromeState *s)
 {
-    AuFontFace *lf = au_chrome_label_face(fonts);
+    ChromeFont lf = label_font(fonts, s);
     AuIRect st = l->tabstrip;
     if (l->position == AU_TABS_TOP) {
         /* Strip background: a little darker than the toolbar, with a
@@ -743,7 +819,7 @@ static void paint_toolbar(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l
     icon_security(c, l->security, s->security);
     vline(c, l->security.x1 + 1, a.y0 + 4, a.y1 - 4, AU_RGB(210, 210, 210));
     if (s->draw_field_text && s->field_text) {
-        AuFontFace *f = small_face(fonts);
+        ChromeFont f = small_font(fonts, s);
         au_canvas_clip_push(c, frect(l->address_text));
         text_in(c, f, 12, l->address_text, s->field_text, C_INK, false);
         au_canvas_clip_pop(c);
@@ -772,7 +848,17 @@ static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l,
             tr.x1 = p.x0 - 8;
         }
     }
-    AuFontFace *f = small_face(fonts);
+    ChromeFont f = small_font(fonts, s);
+    /* Progress text in the middle; the status text keeps to its left. */
+    if (s->progress_text && *s->progress_text && r.x1 - r.x0 > 320) {
+        int mid = (r.x0 + r.x1) / 2;
+        AuIRect pr = irect(mid - 70, r.y0 + 1, mid + 70, r.y1);
+        if (pr.x1 > tr.x1)
+            pr.x1 = tr.x1;
+        text_in(c, f, 10, pr, s->progress_text, C_INK, true);
+        if (tr.x1 > pr.x0 - 8)
+            tr.x1 = pr.x0 - 8;
+    }
     if (s->status_text && *s->status_text)
         text_in(c, f, 10, tr, s->status_text, C_INK, false);
 }
@@ -789,6 +875,16 @@ static void paint_standins(AuCanvas *c, const AuChromeLayout *l)
     bevel(c, dn, false, false);
     icon_triangle(c, (float)(up.x0 + up.x1) / 2, (float)(up.y0 + up.y1) / 2, 2, C_ICON);
     icon_triangle(c, (float)(dn.x0 + dn.x1) / 2, (float)(dn.y0 + dn.y1) / 2, 3, C_ICON);
+    if (!au_irect_empty(l->hscroll)) {
+        AuIRect hs = l->hscroll;
+        fill_box(c, hs.x0, hs.y0, hs.x1, hs.y1, C_FRAME);
+        fill_box(c, hs.x0 + 1, hs.y0 + 1, hs.x1 - 1, hs.y1 - 1, AU_RGB(204, 204, 204));
+        AuIRect lf = irect(hs.x0, hs.y0, hs.x0 + 16, hs.y1), rt = irect(hs.x1 - 16, hs.y0, hs.x1, hs.y1);
+        bevel(c, lf, false, false);
+        bevel(c, rt, false, false);
+        icon_triangle(c, (float)(lf.x0 + lf.x1) / 2, (float)(lf.y0 + lf.y1) / 2, 0, C_ICON);
+        icon_triangle(c, (float)(rt.x0 + rt.x1) / 2, (float)(rt.y0 + rt.y1) / 2, 1, C_ICON);
+    }
     AuIRect g = l->grow;
     fill_box(c, g.x0, g.y0, g.x1, g.y1, C_FACE);
     hline(c, g.x0, g.x1, g.y0, C_FRAME);
@@ -825,7 +921,10 @@ void au_chrome_paint(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, con
     }
     if (touches(l->status, clip))
         paint_status(c, fonts, l, s);
-    if (s->draw_native_standins && (touches(l->vscroll, clip) || touches(l->grow, clip)))
+    if (!au_irect_empty(l->corner) && touches(l->corner, clip))
+        fill_box(c, l->corner.x0, l->corner.y0, l->corner.x1, l->corner.y1, C_FACE);
+    if (s->draw_native_standins &&
+        (touches(l->vscroll, clip) || touches(l->grow, clip) || touches(l->hscroll, clip)))
         paint_standins(c, l);
     au_canvas_clip_pop(c);
 }

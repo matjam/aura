@@ -1,6 +1,6 @@
 /* Text: metrics, shaping (cmap, advances, kern), the glyph cache and
  * drawing. */
-#include "font.h"
+#include "font_internal.h"
 #include "paint_internal.h"
 
 #include <math.h>
@@ -103,16 +103,24 @@ float au_text_width(const AuFontFace *f, float size, const char *text, size_t le
 #define SUBPIXELS 4
 #define BUCKETS 1024
 
+/* An entry holds an 8-bit coverage mask, or (color) premultiplied ARGB
+ * pixels of a colour glyph. A colour glyph that draws the foreground
+ * colour (uses_fg) is cached per foreground colour; others are shared by
+ * every text colour. */
 typedef struct GlyphEntry {
     struct GlyphEntry *hnext;        /* hash chain */
     struct GlyphEntry *prev, *next;  /* LRU list, most recent first */
     uint32_t face, size_q;
+    uint32_t fg;
     uint16_t glyph;
     uint8_t sub;
+    uint8_t color, uses_fg;
     int16_t left, top; /* bitmap offset from the pen, pixels (top: y down) */
     uint16_t w, h;
-    uint8_t bits[];
+    uint32_t bits_[]; /* aligned for colour pixels */
 } GlyphEntry;
+
+#define ENTRY_BITS(e) ((uint8_t *)(e)->bits_)
 
 static struct {
     GlyphEntry *buckets[BUCKETS];
@@ -132,8 +140,12 @@ static uint32_t glyph_hash(uint32_t face, uint16_t glyph, uint32_t size_q, uint8
 
 static size_t entry_bytes(const GlyphEntry *e)
 {
-    return sizeof(GlyphEntry) + (size_t)e->w * e->h;
+    return sizeof(GlyphEntry) + (size_t)e->w * e->h * (e->color ? 4 : 1);
 }
+
+/* Colour glyphs: sub is always 0 (they are not positioned to subpixels),
+ * so this value marks them in the key. */
+#define SUB_COLOR 0xFF
 
 static void lru_unlink(GlyphEntry *e)
 {
@@ -260,7 +272,7 @@ static GlyphEntry *rasterize(const AuFontFace *f, uint16_t glyph, float size, ui
             e->h = (uint16_t)h;
             e->left = (int16_t)area.x0;
             e->top = (int16_t)area.y0;
-            au_raster_mask(&p, AU_FILL_NONZERO, area, e->bits);
+            au_raster_mask(&p, AU_FILL_NONZERO, area, ENTRY_BITS(e));
         }
     }
     au_path_free(&p);
@@ -271,12 +283,54 @@ static GlyphEntry *rasterize(const AuFontFace *f, uint16_t glyph, float size, ui
     return e;
 }
 
-static const GlyphEntry *cache_get(const AuFontFace *f, uint16_t glyph, float size, uint8_t sub)
+/* The largest colour glyph bitmap: 1 MB of pixels, as a mask may be. */
+#define MAX_COLOR_PIXELS (256 * 1024)
+
+/* A colour glyph's entry, or NULL when the glyph does not render in
+ * colour after all (the caller draws its outline). */
+static GlyphEntry *rasterize_color(const AuFontFace *f, uint16_t glyph, float size, uint32_t size_q, AuColor fg)
 {
-    uint32_t size_q = (uint32_t)(size * 64.0f + 0.5f);
-    uint32_t b = glyph_hash(f->id, glyph, size_q, sub);
+    float s = size / f->units_per_em;
+    AuColrBitmap bm;
+    if (!au_colr_render(f, glyph, s, s, 0, fg, MAX_COLOR_PIXELS, &bm))
+        return NULL;
+    GlyphEntry *e = au_calloc(sizeof *e + (size_t)bm.w * bm.h * 4);
+    memcpy(e->bits_, bm.px, (size_t)bm.w * bm.h * 4);
+    au_free(bm.px);
+    e->w = (uint16_t)bm.w;
+    e->h = (uint16_t)bm.h;
+    e->left = (int16_t)bm.left;
+    e->top = (int16_t)bm.top;
+    e->color = 1;
+    e->uses_fg = bm.uses_fg;
+    e->fg = bm.uses_fg ? fg : 0;
+    e->face = f->id;
+    e->glyph = glyph;
+    e->size_q = size_q;
+    e->sub = SUB_COLOR;
+    return e;
+}
+
+static void cache_insert(GlyphEntry *e, uint32_t b)
+{
+    e->hnext = cache.buckets[b];
+    cache.buckets[b] = e;
+    lru_push_front(e);
+    cache.bytes += entry_bytes(e);
+    cache.entries++;
+    /* Keep the new entry even when it alone exceeds the limit: the caller
+     * is about to draw it. */
+    while (cache.bytes > cache.limit && cache.tail && cache.tail != e) {
+        remove_entry(cache.tail);
+        cache.evictions++;
+    }
+}
+
+static GlyphEntry *cache_find(uint32_t b, uint32_t face, uint16_t glyph, uint32_t size_q, uint8_t sub, AuColor fg)
+{
     for (GlyphEntry *e = cache.buckets[b]; e; e = e->hnext) {
-        if (e->face == f->id && e->glyph == glyph && e->size_q == size_q && e->sub == sub) {
+        if (e->face == face && e->glyph == glyph && e->size_q == size_q && e->sub == sub &&
+            (!e->uses_fg || e->fg == fg)) {
             cache.hits++;
             if (cache.head != e) {
                 lru_unlink(e);
@@ -285,24 +339,69 @@ static const GlyphEntry *cache_get(const AuFontFace *f, uint16_t glyph, float si
             return e;
         }
     }
+    return NULL;
+}
+
+/* The colour bitmap of a glyph, or NULL when it has none. */
+static const GlyphEntry *cache_get_color(const AuFontFace *f, uint16_t glyph, float size, AuColor fg)
+{
+    uint32_t size_q = (uint32_t)(size * 64.0f + 0.5f);
+    uint32_t b = glyph_hash(f->id, glyph, size_q, SUB_COLOR);
+    GlyphEntry *e = cache_find(b, f->id, glyph, size_q, SUB_COLOR, fg);
+    if (e)
+        return e->w ? e : NULL;
+    cache.misses++;
+    e = rasterize_color(f, glyph, size, size_q, fg);
+    if (!e) {
+        /* Remember the failure (an empty colour entry) so the outline is
+         * drawn without trying again. */
+        e = au_calloc(sizeof *e);
+        e->color = 1;
+        e->face = f->id;
+        e->glyph = glyph;
+        e->size_q = size_q;
+        e->sub = SUB_COLOR;
+    }
+    cache_insert(e, b);
+    return e->w ? e : NULL;
+}
+
+static const GlyphEntry *cache_get(const AuFontFace *f, uint16_t glyph, float size, uint8_t sub)
+{
+    uint32_t size_q = (uint32_t)(size * 64.0f + 0.5f);
+    uint32_t b = glyph_hash(f->id, glyph, size_q, sub);
+    GlyphEntry *hit = cache_find(b, f->id, glyph, size_q, sub, 0);
+    if (hit)
+        return hit;
     cache.misses++;
     GlyphEntry *e = rasterize(f, glyph, size, size_q, sub);
-    e->hnext = cache.buckets[b];
-    cache.buckets[b] = e;
-    lru_push_front(e);
-    cache.bytes += entry_bytes(e);
-    cache.entries++;
-    /* Keep the new entry even when it alone exceeds the limit: the caller
-     * is about to draw it. */
-    GlyphEntry *keep = e;
-    while (cache.bytes > cache.limit && cache.tail && cache.tail != keep) {
-        remove_entry(cache.tail);
-        cache.evictions++;
-    }
+    cache_insert(e, b);
     return e;
 }
 
 /* ---- Drawing ---- */
+
+/* Draws premultiplied pixels with their top-left at device pixel (dx, dy)
+ * of the canvas (translation already applied), source over, within the
+ * clip of the current group or layer. */
+static void draw_pixels(AuCanvas *c, const uint32_t *px, int w, int h, int dx, int dy)
+{
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    int x0 = dx - ox, y0 = dy - oy;
+    AuIRect r = au_irect_intersect((AuIRect){x0, y0, x0 + w, y0 + h}, clip);
+    for (int yy = r.y0; yy < r.y1; yy++) {
+        const uint32_t *src = px + (size_t)(yy - y0) * w + (r.x0 - x0);
+        AuPixel *dst = s->pixels + (size_t)yy * s->stride + r.x0;
+        for (int i = 0; i < r.x1 - r.x0; i++) {
+            uint32_t p = src[i];
+            if (!(p >> 24))
+                continue;
+            dst[i] = (p >> 24) == 255 ? p : au_px_over(p, dst[i]);
+        }
+    }
+}
 
 void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGlyphRun *r, float x,
                        float y, AuColor color)
@@ -315,18 +414,30 @@ void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGly
     float by = floorf(y + ty + 0.5f);
     for (size_t i = 0; i < r->n; i++) {
         const AuGlyph *g = &r->glyphs[i];
+        const AuFontFace *gf = g->face ? g->face : f;
         float gx = x + g->x + tx;
+        float gy = g->y ? floorf(g->y + 0.5f) : 0;
+        if (gf->color && au_colr_has(gf, g->id)) {
+            /* Colour glyphs keep their own colours (the text colour is
+             * only the foreground palette entry) and whole-pixel
+             * positions. */
+            const GlyphEntry *ce = cache_get_color(gf, g->id, size, color | 0xFF000000u);
+            if (ce) {
+                int px = (int)floorf(gx + 0.5f) + ce->left, py = (int)(by + gy) + ce->top;
+                draw_pixels(c, ce->bits_, ce->w, ce->h, px, py);
+                continue;
+            }
+        }
         float fx = floorf(gx);
         int sub = (int)((gx - fx) * SUBPIXELS + 0.5f);
         if (sub >= SUBPIXELS) {
             sub = 0;
             fx += 1;
         }
-        const GlyphEntry *e = cache_get(g->face ? g->face : f, g->id, size, (uint8_t)sub);
+        const GlyphEntry *e = cache_get(gf, g->id, size, (uint8_t)sub);
         if (!e->w)
             continue;
-        float gy = g->y ? floorf(g->y + 0.5f) : 0;
-        au_draw_mask(c, e->bits, e->w, e->h, e->w, fx + e->left - tx, by + gy + e->top - ty, color);
+        au_draw_mask(c, ENTRY_BITS(e), e->w, e->h, e->w, fx + e->left - tx, by + gy + e->top - ty, color);
     }
 }
 

@@ -1912,6 +1912,8 @@ static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
         color = pc(s, s->inhr->text_fill_color);
     const char *txt = t->text + f->start;
     uint32_t len = f->len;
+    if (P->L->sel.on)
+        l_select_paint_frag(P->L, P->c, f, font, x, oy + f->y);
     /* Shadows first. */
     if (s->inhr->text_shadow) {
         uint32_t n;
