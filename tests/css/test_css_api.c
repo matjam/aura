@@ -1,6 +1,7 @@
 /* API tests of src/css that do not fit the case files: restyling and
  * invalidation, imports, deep documents, sharing, the typed accessors. */
 #include "../../src/css/css_int.h"
+#include "../../src/dom/control.h"
 
 #include <stdio.h>
 
@@ -292,6 +293,54 @@ static void test_sharing_pseudo(void)
         CHECK(b1->inh->color == AU_COLOR_RGBA(255, 0, 0, 255));
         CHECK(b3->inh->color == AU_COLOR_RGBA(0, 0, 255, 255));
     }
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
+/* :placeholder-shown, :valid, :invalid and :in-range follow the control's
+ * live value, and a value change restyles the control only. */
+static void test_live_value(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *in = add(doc, &body->node, "input", "in", NULL);
+    AuElement *num = add(doc, &body->node, "input", "num", NULL);
+    AuElement *other = add(doc, &body->node, "p", NULL, NULL);
+    au_element_set_attr(in, au_atom_cstr("placeholder"), "name", 4);
+    au_element_set_attr(in, au_atom_cstr("required"), "", 0);
+    au_element_set_attr(num, au_atom_cstr("type"), "number", 6);
+    au_element_set_attr(num, au_atom_cstr("min"), "1", 1);
+    au_element_set_attr(num, au_atom_cstr("max"), "10", 2);
+    au_element_set_attr(num, au_atom_cstr("value"), "5", 1);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet("input { width: 1px; height: 1px; top: 1px }"
+                                       " input:placeholder-shown { width: 10px }"
+                                       " input:invalid { height: 5px } input:valid { height: 7px }"
+                                       " input:in-range { top: 3px } input:out-of-range { top: 4px }"
+                                       " div:has(.x) { color: red }"));
+    au_css_style_document(r, doc);
+    CHECK(prop_is(in, "width", "10px"));
+    CHECK(prop_is(in, "height", "5px"));
+    CHECK(prop_is(num, "top", "3px"));
+    const AuStyle *other_style = au_element_style(other);
+    uint32_t before = au_css_resolver_styled_count(r);
+    au_ctl_set_value(in, "x", 1);
+    au_css_invalidate(r, in, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(in, "width", "1px"));
+    CHECK(prop_is(in, "height", "7px"));
+    CHECK(au_css_resolver_styled_count(r) == before + 1);
+    CHECK(au_element_style(other) == other_style);
+    au_ctl_set_value(num, "42", 2);
+    au_css_invalidate(r, num, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(num, "top", "4px"));
+    au_ctl_set_value(in, "", 0);
+    au_css_invalidate(r, in, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(in, "width", "10px"));
+    CHECK(prop_is(in, "height", "5px"));
+    CHECK(au_css_resolver_styled_count(r) == before + 3);
     free_doc(doc);
     au_css_resolver_free(r);
 }
@@ -733,6 +782,7 @@ int main(void)
     test_sharing();
     test_sharing_pseudo();
     test_scope();
+    test_live_value();
     test_unicode_range();
     test_typed();
     test_inline_api();
