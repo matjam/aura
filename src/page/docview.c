@@ -100,6 +100,7 @@ static void free_sheet_src(SheetSrc *s)
     au_free(s->url);
     au_free(s->media);
     au_free(s->text);
+    au_free(s->om_text);
     au_free(s);
 }
 
@@ -683,10 +684,13 @@ AuLayout *au_docview_layout(const AuDocView *dv) { return dv->layout; }
 
 static AuCssSheet *build_sheet(AuDocView *dv, SheetSrc *s, int depth)
 {
-    AuCssSheet *sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    /* script changed the sheet's rules (CSSOM): its text as it is now */
+    const char *text = s->om_text ? s->om_text : s->text;
+    size_t len = s->om_text ? s->om_len : s->len;
+    AuCssSheet *sh = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
     if (dv->webfonts)
-        au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
-    if (depth < 8) {
+        au_webfonts_add_sheet(dv->webfonts, sh, text, len);
+    if (depth < 8 && !s->om_text) {
         size_t n = au_css_sheet_import_count(sh);
         for (size_t i = 0; i < n && i < s->nimports; i++) {
             SheetSrc *c = s->imports[i];
@@ -716,7 +720,7 @@ static void rebuild_resolver(AuDocView *dv)
                                                                    AU_CSS_ORIGIN_USER, dv->url, NULL));
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSrc *s = dv->slots[i].src;
-        if (s->text)
+        if (s->text && !s->disabled)
             au_css_resolver_add_sheet(dv->resolver, build_sheet(dv, s, 0));
     }
     au_css_resolver_sheets_changed(dv->resolver);
@@ -1236,6 +1240,58 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
         dv->tree_dirty = true;
         dv->sheets_rescan = true;
     }
+}
+
+/* ---- CSSOM (script.c): the sheet of a style or link element ---- */
+
+static SheetSrc *sheet_of(AuDocView *dv, AuElement *el)
+{
+    if (!dv->doc)
+        return NULL;
+    if (dv->sheets_rescan) { /* script changed the tree: find new sheets first */
+        dv->sheets_rescan = false;
+        prune_slots(dv);
+        scan_document(dv, !dv->parsing);
+    }
+    for (uint32_t i = 0; i < dv->nslots; i++)
+        if (dv->slots[i].el == el)
+            return dv->slots[i].src;
+    return NULL;
+}
+
+int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || s->failed)
+        return 0;
+    if (!s->text)
+        return 1;
+    if (s->om_text)
+        au_buf_append(text, s->om_text, s->om_len);
+    else
+        au_buf_append(text, s->text, s->len);
+    au_buf_puts(url, s->url ? s->url : "");
+    return 2;
+}
+
+void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || !s->text)
+        return;
+    au_free(s->om_text);
+    s->om_text = au_strndup(text, len);
+    s->om_len = len;
+    dv->sheets_dirty = true;
+}
+
+void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || s->disabled == disabled)
+        return;
+    s->disabled = disabled;
+    dv->sheets_dirty = true;
 }
 
 void au_dv_parsed_more(AuDocView *dv)

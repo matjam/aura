@@ -136,6 +136,24 @@ static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
     au_dv_dom_changed(s->dv, node, attr_name, kind);
 }
 
+static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
+{
+    AuDocScript *s = ctx;
+    return au_dv_sheet_text(s->dv, el, text, url);
+}
+
+static void h_sheet_set_text(void *ctx, AuElement *el, const char *text, size_t len)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_set_text(s->dv, el, text, len);
+}
+
+static void h_sheet_disable(void *ctx, AuElement *el, bool disabled)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_disable(s->dv, el, disabled);
+}
+
 static void h_focus_changed(void *ctx, AuElement *el)
 {
     AuDocScript *s = ctx;
@@ -382,6 +400,9 @@ static bool ensure_js(AuDocScript *s)
     h.prompt = h_prompt;
     h.focus_changed = h_focus_changed;
     h.submit_form = h_submit_form;
+    h.sheet_text = h_sheet_text;
+    h.sheet_set_text = h_sheet_set_text;
+    h.sheet_disable = h_sheet_disable;
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;

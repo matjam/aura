@@ -561,13 +561,16 @@ const datasetOf = (el) => cachedList(el, 'dataset', () => {
 /* ---------------- CSSStyleDeclaration ---------------- */
 
 let knownProps = null;
+const whiteSpaceNames = { 'collapse wrap': 'normal', 'collapse nowrap': 'nowrap', 'preserve nowrap': 'pre', 'preserve wrap': 'pre-wrap',
+    'preserve-breaks wrap': 'pre-line', 'break-spaces wrap': 'break-spaces', collapse: 'normal', wrap: 'normal', nowrap: 'nowrap',
+    preserve: 'pre-wrap', 'preserve-breaks': 'pre-line' };
 const shorthands = ['margin', 'padding', 'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
     'border-width', 'border-style', 'border-color', 'border-radius', 'background', 'font', 'list-style', 'outline',
     'flex', 'flex-flow', 'grid', 'grid-area', 'grid-row', 'grid-column', 'grid-template', 'gap', 'overflow',
     'text-decoration', 'transition', 'animation', 'columns', 'inset', 'place-items', 'place-content', 'place-self',
     'border-block', 'border-inline', 'margin-block', 'margin-inline', 'padding-block', 'padding-inline'];
 function cssKnown(name) {
-    if (!knownProps) knownProps = new Set(N.cssPropertyNames().concat(shorthands, ['float']));
+    if (!knownProps) knownProps = new Set(N.cssPropertyNames().concat(N.cssPropertyNames(true), shorthands, ['float']));
     return knownProps.has(name) || name.startsWith('--') || name.startsWith('-webkit-');
 }
 const dashed = (p) => {
@@ -587,8 +590,10 @@ class CSSStyleDeclaration {
     _computedText() { return this._names().map((n) => n + ': ' + this.getPropertyValue(n) + ';').join(' '); }
     getPropertyValue(p) {
         p = str(p);
-        if (this._comp) return N.computed(this._comp, p);
-        return N.styleGet(this._el, p, 0);
+        if (!p.startsWith('--')) p = p.toLowerCase();
+        const v = this._comp ? computedValue(this._comp, p, this._pseudo) : N.styleGet(this._el, p, 0);
+        /* white-space reads as its one-keyword form where there is one */
+        return p === 'white-space' && whiteSpaceNames[v] ? whiteSpaceNames[v] : v;
     }
     getPropertyPriority(p) { return this._el ? N.styleGet(this._el, str(p), 1) : ''; }
     setProperty(p, v, prio) {
@@ -627,15 +632,52 @@ const styleHandler = {
     },
     has(t, p) { return typeof p === 'string' && !(p in t) ? cssKnown(dashed(p)) : p in t; },
 };
-function styleDecl(el, comp) {
+function styleDecl(el, comp, pseudo) {
     const o = Object.create(CSSStyleDeclaration.prototype);
-    Object.defineProperties(o, { _el: { value: comp ? null : el }, _comp: { value: comp ? el : null }, _ro: { value: !!comp } });
+    Object.defineProperties(o, { _el: { value: comp ? null : el }, _comp: { value: comp ? el : null }, _ro: { value: !!comp },
+        _pseudo: { value: pseudo | 0 } });
     return new Proxy(o, styleHandler);
+}
+/* A getComputedStyle value. width and height are the used size of the
+ * element's box in pixels, as the standard's resolved values are (not
+ * for inline boxes, display: none or a pseudo-element, which give the
+ * computed value). An element without the pseudo-element asked for has
+ * content: none. Margins, insets and percentages elsewhere stay computed. */
+const replacedTags = /^(img|input|textarea|select|button|canvas|video|iframe|object|embed|svg|meter|progress)$/;
+function computedValue(el, p, pseudo) {
+    if (pseudo) {
+        const v = N.computed(el, p, pseudo);
+        return v === '' && p === 'content' && N.computed(el, 'content', pseudo) === '' ? 'none' : v;
+    }
+    const v = N.computed(el, p);
+    if ((p === 'width' || p === 'height') && el.isConnected) {
+        const display = N.computed(el, 'display');
+        if (display === 'none' || display === 'contents' || (display === 'inline' && !replacedTags.test(el.localName))) return v;
+        const r = N.rect(el);
+        if (!r) return v;
+        let size = p === 'width' ? r[2] : r[3];
+        if (N.computed(el, 'box-sizing') !== 'border-box') {
+            const sides = p === 'width' ? ['left', 'right'] : ['top', 'bottom'];
+            for (const s of sides) {
+                const pad = N.computed(el, 'padding-' + s), bw = N.computed(el, 'border-' + s + '-width');
+                if (!/px$/.test(pad) || !/px$/.test(bw)) return v;
+                size -= parseFloat(pad) + parseFloat(bw);
+            }
+        }
+        return Math.max(0, Math.round(size * 1000) / 1000) + 'px';
+    }
+    return v;
 }
 const styleOf = (el) => cachedList(el, 'style', () => styleDecl(el, false));
 defGlobal('getComputedStyle', function getComputedStyle(el, pseudo) {
     if (!isElement(el)) throw new TypeError("getComputedStyle: argument is not an Element");
-    return styleDecl(el, true);
+    let which = 0;
+    if (pseudo !== undefined && pseudo !== null && pseudo !== '') {
+        const m = /^::?(before|after|marker)$/i.exec(str(pseudo).trim());
+        if (m) which = { before: 1, after: 2, marker: 3 }[m[1].toLowerCase()];
+        else if (/^::/.test(str(pseudo).trim())) which = 4; /* a pseudo-element Aura does not style: every value is "" */
+    }
+    return styleDecl(el, true, which);
 });
 defGlobal('CSS', {
     supports: (a, b) => (b === undefined ? N.cssSupports(str(a)) : N.cssSupports(str(a), str(b))),

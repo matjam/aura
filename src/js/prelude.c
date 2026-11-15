@@ -21,6 +21,8 @@ const char au_js_prelude_src[] = {
     , '\n',
 #embed "prelude_range.js"
     , '\n',
+#embed "prelude_cssom.js"
+    , '\n',
 #embed "prelude_window.js"
     , '\n',
 #embed "prelude_net.js"

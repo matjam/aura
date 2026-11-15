@@ -331,6 +331,17 @@ static JSValue n_computed(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (!prop)
         return JS_EXCEPTION;
     const AuStyle *st = js->hooks.computed_style(js->hooks.ctx, e);
+    /* computed(el, prop, pseudo): 1 ::before, 2 ::after, 3 ::marker. An
+     * element without that pseudo-element gives "" (the prelude answers
+     * content: none). */
+    int32_t pseudo = 0;
+    if (argc > 2)
+        JS_ToInt32(ctx, &pseudo, argv[2]);
+    if (st && pseudo)
+        st = pseudo > 3 ? NULL
+                        : au_style_pseudo(st, pseudo == 1   ? AU_CSS_PSEUDO_BEFORE
+                                              : pseudo == 2 ? AU_CSS_PSEUDO_AFTER
+                                                            : AU_CSS_PSEUDO_MARKER);
     JSValue r = JS_NewString(ctx, "");
     if (st) {
         AuBuf out;
@@ -348,9 +359,11 @@ static JSValue n_computed(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 /* cssPropertyNames(): every longhand name (getComputedStyle iteration). */
 static JSValue n_css_names(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
+    /* cssPropertyNames(true): the shorthands and logical properties instead */
+    bool rest = argc > 0 && JS_ToBool(ctx, argv[0]) > 0;
     JSValue arr = JS_NewArray(ctx);
     uint32_t k = 0;
-    for (int p = 1; p < AU_PROP_LONGHAND_END; p++) {
+    for (int p = rest ? AU_PROP_LONGHAND_END : 1; p < (rest ? AU_PROP_COUNT : AU_PROP_LONGHAND_END); p++) {
         const char *name = au_css_property_name((AuCssProp)p);
         if (name && *name)
             JS_SetPropertyUint32(ctx, arr, k++, JS_NewString(ctx, name));
@@ -389,6 +402,59 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, r.w));
     JS_SetPropertyUint32(ctx, arr, 3, JS_NewFloat64(ctx, r.h));
     return arr;
+}
+
+/* ---- CSSOM: the sheet of a style or link element (prelude_cssom.js) ----
+ * sheetText(el): [text, url] once the sheet has loaded, false while it
+ * loads, null when el has no sheet or the embedder has no sheets. */
+static JSValue n_sheet_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    if (!e || !js->hooks.sheet_text)
+        return JS_NULL;
+    AuBuf text, url;
+    au_buf_init(&text);
+    au_buf_init(&url);
+    int st = js->hooks.sheet_text(js->hooks.ctx, e, &text, &url);
+    JSValue r = JS_NULL;
+    if (st == 1) {
+        r = JS_FALSE;
+    } else if (st == 2) {
+        r = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, r, 0, JS_NewStringLen(ctx, text.data ? text.data : "", text.len));
+        JS_SetPropertyUint32(ctx, r, 1, JS_NewStringLen(ctx, url.data ? url.data : "", url.len));
+    }
+    au_buf_free(&text);
+    au_buf_free(&url);
+    return r;
+}
+
+static JSValue n_sheet_set_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 1 ? arg_el(js, argv[0]) : NULL;
+    if (!e || !js->hooks.sheet_set_text)
+        return JS_UNDEFINED;
+    size_t n = 0;
+    char *t = js_tostr(ctx, argv[1], &n);
+    if (!t)
+        return JS_EXCEPTION;
+    js->hooks.sheet_set_text(js->hooks.ctx, e, t, n);
+    au_free(t);
+    return JS_UNDEFINED;
+}
+
+static JSValue n_sheet_disable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 1 ? arg_el(js, argv[0]) : NULL;
+    if (e && js->hooks.sheet_disable)
+        js->hooks.sheet_disable(js->hooks.ctx, e, JS_ToBool(ctx, argv[1]) > 0);
+    return JS_UNDEFINED;
 }
 
 static JSValue n_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -811,6 +877,9 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssPropertyNames", 0, n_css_names),
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
+    JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
+    JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),
+    JS_CFUNC_DEF("sheetDisable", 2, n_sheet_disable),
     JS_CFUNC_DEF("viewport", 0, n_viewport),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("urlParse", 2, n_url_parse),

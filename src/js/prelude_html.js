@@ -1026,8 +1026,6 @@ defProps(HTMLTitleElement.prototype, {
     get text() { return this.textContent; },
     set text(v) { this.textContent = v; },
 });
-defProps(HTMLStyleElement.prototype, { get sheet() { return null; } });
-defProps(HTMLLinkElement.prototype, { get sheet() { return null; } });
 defProps(HTMLIFrameElement.prototype, {
     get contentDocument() { return null; },
     get contentWindow() { return null; },

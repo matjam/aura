@@ -20,6 +20,12 @@ struct SheetSrc {
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
     bool imports_scanned;
+    /* CSSOM (au_dv_sheet_*): text that replaces the sheet's own for the
+     * cascade after script changed its rules, and sheet.disabled. Its
+     * @import rules are not loaded. */
+    char *om_text;
+    size_t om_len;
+    bool disabled;
 };
 
 /* A <style> or <link> element in document order. */
