@@ -369,7 +369,7 @@ void js_safe_point(AuJs *js)
 static JSValue n_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
-    int level = 0;
+    int32_t level = 0;
     JS_ToInt32(ctx, &level, argv[0]);
     size_t n;
     const char *s = JS_ToCStringLen(ctx, &n, argv[1]);

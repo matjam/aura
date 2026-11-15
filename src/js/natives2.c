@@ -239,7 +239,7 @@ static JSValue n_style_get(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     AuElement *e = argc > 1 ? arg_el(js, argv[0]) : NULL;
     if (!e)
         return JS_NewString(ctx, "");
-    int what = 0;
+    int32_t what = 0;
     if (argc > 2)
         JS_ToInt32(ctx, &what, argv[2]);
     char *prop = lower_prop(ctx, argv[1]);
@@ -452,7 +452,7 @@ static JSValue n_url_parse(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 static JSValue n_doc_url(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
-    int which = 0;
+    int32_t which = 0;
     if (argc > 0)
         JS_ToInt32(ctx, &which, argv[0]);
     return JS_NewString(ctx, which == 0 ? js->url : which == 1 ? js->base : js->origin);
@@ -625,7 +625,7 @@ static JSValue n_history(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     case 0:
         return JS_NewInt32(ctx, js->hooks.history_length ? js->hooks.history_length(js->hooks.ctx) : 1);
     case 1: {
-        int d = 0;
+        int32_t d = 0;
         if (argc > 0)
             JS_ToInt32(ctx, &d, argv[0]);
         if (js->hooks.history_go)

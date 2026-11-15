@@ -118,7 +118,7 @@ static JSValue n_fetch_start(JSContext *ctx, JSValueConst this_val, int argc, JS
         return JS_ThrowTypeError(ctx, "fetchStart: bad arguments");
     char *method = js_tostr(ctx, argv[0], NULL);
     char *url = js_tostr(ctx, argv[1], NULL);
-    int cred = 1, mode = 0, dest = 0;
+    int32_t cred = 1, mode = 0, dest = 0;
     JS_ToInt32(ctx, &cred, argv[4]);
     JS_ToInt32(ctx, &mode, argv[5]);
     JS_ToInt32(ctx, &dest, argv[6]);

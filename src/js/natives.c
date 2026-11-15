@@ -1132,7 +1132,7 @@ static JSValue n_collect(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 {
     AuJs *js = js_of_ctx(ctx);
     AuNode *root = argc > 1 ? arg_node(js, argv[0]) : NULL;
-    int kind;
+    int32_t kind;
     if (!root || JS_ToInt32(ctx, &kind, argv[1]))
         return JS_NewArray(ctx);
     AuAtom tag = 0, tag_lower = 0;
@@ -2193,7 +2193,7 @@ static JSValue n_is(JSContext *ctx, JSValueConst this_val, int argc, JSValueCons
 {
     AuJs *js = js_of_ctx(ctx);
     AuNode *n = argc > 1 ? arg_node(js, argv[0]) : NULL;
-    int k = 0;
+    int32_t k = 0;
     if (!n)
         return JS_FALSE;
     JS_ToInt32(ctx, &k, argv[1]);

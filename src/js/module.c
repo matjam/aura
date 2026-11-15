@@ -174,7 +174,7 @@ static JSValue n_module_eval(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
     char name[1100];
     if (inl)
-        snprintf(name, sizeof name, "%.1000s#inline-module-%u", url, ++m->inline_seq);
+        snprintf(name, sizeof name, "%.1000s#inline-module-%lu", url, (unsigned long)++m->inline_seq);
     else
         snprintf(name, sizeof name, "%.1000s", url);
     clear_missing(m);
