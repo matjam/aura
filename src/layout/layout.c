@@ -444,10 +444,23 @@ float l_used_width(AuLayout *L, LBlock *b, float cb_w, float avail, int mode)
 
 /* ---- Content layout ---- */
 
+/* cb_h only reaches b's layout through b's own percentage heights (its
+ * children resolve theirs against b's content height, passed separately). */
+static bool same_cbh(const LBlock *b, float a, float c)
+{
+    if (a == c)
+        return true;
+    if (lb_anon(&b->b))
+        return true;
+    const AuStyleBox *s = b->b.style->box;
+    return !l_len_pct(&s->height) && !l_len_pct(&s->min_height) && !l_len_pct(&s->max_height);
+}
+
 static bool can_skip(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h)
 {
+    (void)L;
     return (b->b.flags & (LF_HAS_LAYOUT | LF_DIRTY | LF_CHILD_DIRTY | LF_ESCAPES)) == LF_HAS_LAYOUT &&
-           (b->b.flags & LF_BFC) && b->key_w == content_w && b->key_h == content_h && b->key_cbh == cb_h;
+           (b->b.flags & LF_BFC) && b->key_w == content_w && b->key_h == content_h && same_cbh(b, b->key_cbh, cb_h);
 }
 
 /* Lays out b's content at content width content_w (content_h: definite
@@ -465,7 +478,9 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->ov = (LArea){0, 0, b->w, b->h};
         return;
     }
-    if (!L->full_layout && can_skip(L, b, content_w, content_h, cb_h)) {
+    /* A full layout clears every box's cache first (forget_layouts), so a
+     * hit here is from earlier in the same pass. */
+    if (can_skip(L, b, content_w, content_h, cb_h)) {
         L->stats.layouts_skipped++;
         b->w = content_w + l_bp_h(b);
         float h = content_h >= 0 ? content_h : b->h - l_bp_v(b);
@@ -509,6 +524,24 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         l_flow_after(L, b);
     l_layout_abspos_for(L, &b->b, mark);
     l_finish_overflow(b);
+}
+
+float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h)
+{
+    if (can_skip(L, b, content_w, content_h, cb_h))
+        return content_h >= 0 ? content_h + l_bp_v(b) : b->h;
+    if ((b->b.flags & (LF_MEASURE_OK | LF_DIRTY | LF_CHILD_DIRTY)) == LF_MEASURE_OK && b->mk_w == content_w &&
+        b->mk_h == content_h && same_cbh(b, b->mk_cbh, cb_h)) {
+        L->stats.layouts_skipped++;
+        return b->m_res;
+    }
+    l_layout_content(L, b, content_w, content_h, cb_h);
+    b->mk_w = content_w;
+    b->mk_h = content_h;
+    b->mk_cbh = cb_h;
+    b->m_res = b->h;
+    b->b.flags |= LF_MEASURE_OK;
+    return b->h;
 }
 
 /* Sizes and lays out a box that establishes an independent formatting
@@ -952,15 +985,34 @@ void au_layout_images_changed(AuLayout *L)
     L->need_paint = true;
 }
 
+/* Before a full layout: no box's cached layout, measure or intrinsic
+ * widths may be reused (viewport units and initial-containing-block
+ * percentages may have changed). Within the pass the caches fill again. */
+static void forget_layouts(AuLayout *L)
+{
+    LBox *b = L->root;
+    while (b) {
+        b->flags &= ~(LF_HAS_LAYOUT | LF_MEASURE_OK | LF_INTRINSIC_OK);
+        if (b->first)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
+}
+
 static void mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
-    b->flags &= ~LF_INTRINSIC_OK;
+    b->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
     for (LBox *p = b->parent; p; p = p->parent) {
         if ((p->flags & LF_CHILD_DIRTY) && !(p->flags & LF_INTRINSIC_OK))
             break;
         p->flags |= LF_CHILD_DIRTY;
-        p->flags &= ~LF_INTRINSIC_OK;
+        p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
     }
 }
 
@@ -1185,6 +1237,8 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->built_once = true;
         L->vw = vw;
         L->vh = vh;
+        if (L->full_layout)
+            forget_layouts(L);
         layout_root(L);
         L->full_layout = false;
         L->need_layout = false;

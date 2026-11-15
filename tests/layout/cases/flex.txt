@@ -481,3 +481,11 @@ Flexbox: every property. Container 600px wide unless noted; Ahem text
 ---
 #a w=80 h=32
 #b h=32
+
+=== deeply nested rows and columns lay out in linear time
+<style>.r{display:flex}.c{display:flex;flex-direction:column}.g{flex:1}</style>
+<body style="margin:0">
+<div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><div class=r><div class=g>x</div><div class=c><span id=d>xx</span>
+---
+// without layout caching this takes 4^20 layouts
+#d x=768 y=0

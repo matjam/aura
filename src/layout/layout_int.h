@@ -92,7 +92,8 @@ enum {
     LF_TOO_DEEP = 1u << 24,     /* beyond L_MAX_DEPTH: laid out empty, not painted */
     LF_LIST_ITEM = 1u << 25,
     LF_LINE_CLAMP = 1u << 26,
-    LF_ESCAPES = 1u << 27       /* holds an absolutely positioned box whose containing block is outside it */
+    LF_ESCAPES = 1u << 27,      /* holds an absolutely positioned box whose containing block is outside it */
+    LF_MEASURE_OK = 1u << 28    /* the measure cache (mk_*, m_res) is valid */
 };
 
 typedef struct LBox LBox;
@@ -179,6 +180,7 @@ typedef struct LBlock {
     float sx, sy;       /* absolutely positioned: static position in the geometry parent */
     float min_c, max_c; /* intrinsic content-box widths, valid with LF_INTRINSIC_OK */
     float key_w, key_h, key_cbh; /* constraints of the last layout (incremental) */
+    float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting border-box height */
     float sticky_dx, sticky_dy;  /* sticky offset applied at the last paint */
     LReplaced *rep;     /* replaced content */
 } LBlock;
@@ -306,6 +308,10 @@ float l_spec_height(const LBlock *b, float cb_h); /* content-box height or -1 fo
 float l_spec_width(const LBlock *b, float cb_w);  /* content-box width or -1 for auto */
 void l_layout_independent(AuLayout *L, LBlock *b, float cb_w, float cb_h, float avail_w, int mode);
 void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h);
+/* The border-box height l_layout_content would give, from a one-entry
+ * cache when it can (the box's geometry is then not updated: use it only
+ * where a later l_layout_content call does the final layout). */
+float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h);
 void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 void l_outer_intrinsic(AuLayout *L, LBlock *b, float cb_w, float *min_o, float *max_o);
 float l_edges_h(const LBlock *b); /* horizontal margins + borders + padding */

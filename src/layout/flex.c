@@ -69,8 +69,7 @@ static float measure_h(AuLayout *L, LBlock *k, float wc, float ch)
     float h = l_spec_height(k, ch);
     if (h >= 0)
         h = l_clamp_h(k, h, ch);
-    l_layout_content(L, k, wc, h, ch);
-    return k->h - l_bp_v(k);
+    return l_measure_content(L, k, wc, h, ch) - l_bp_v(k);
 }
 
 /* Row items: the max-content width used for flex-basis: content. */
@@ -437,8 +436,12 @@ float l_flex_layout(AuLayout *L, LBlock *b, const LConstraints *c)
             if (h >= 0)
                 h = l_clamp_h(k, h, ch);
             f->h_spec = h;
-            l_layout_content(L, k, f->target, h, ch);
-            f->cross = k->h - f->bp_c;
+            /* A stretched item is laid out again at its final height: here
+             * only its height is needed. */
+            bool final = !(f->stretch && h < 0);
+            if (final)
+                l_layout_content(L, k, f->target, h, ch);
+            f->cross = (final ? k->h : l_measure_content(L, k, f->target, h, ch)) - f->bp_c;
         } else {
             l_layout_content(L, k, f->cross, f->target, ch);
         }
