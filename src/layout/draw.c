@@ -1310,11 +1310,13 @@ static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy)
     if (in == LI_TABLE_CELL) {
         LTableBox *t = l_table_of(&b->b);
         collapsed = t && l_table_collapsed(t);
-        if (!collapsed && s->inhr->empty_cells == AU_EMPTY_CELLS_HIDE && l_cell_empty(b))
-            return;
         if (!rect_hits(&P->dirty, ox, oy, b->w, b->h))
             return;
         paint_cell_layers(P, (LCellBox *)b, ox, oy);
+        /* empty-cells: hide drops the cell's own background and borders;
+         * the row and column backgrounds still show (as in Chrome). */
+        if (!collapsed && s->inhr->empty_cells == AU_EMPTY_CELLS_HIDE && l_cell_empty(b))
+            return;
     } else if (in == LI_TABLE && !lb_anon(&b->b)) {
         collapsed = l_table_collapsed((LTableBox *)b);
     }
