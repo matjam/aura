@@ -6,14 +6,14 @@
 
 /* ---- Pattern matching (MIME Sniffing 4.1 "pattern matching algorithm") ---- */
 
-typedef struct Pattern {
+typedef struct SniffPattern {
     const char *pattern, *mask;
     size_t len;
     bool skip_ws;
     const char *type;
-} Pattern;
+} SniffPattern;
 
-static bool match(const uint8_t *d, size_t n, const Pattern *p)
+static bool match(const uint8_t *d, size_t n, const SniffPattern *p)
 {
     size_t s = 0;
     if (p->skip_ws)
@@ -48,7 +48,7 @@ static bool match_html(const uint8_t *d, size_t n, const char *sig)
 
 #define P(pat, msk, ws, t) {pat, msk, sizeof(pat) - 1, ws, t}
 
-static const Pattern image_patterns[] = {
+static const SniffPattern image_patterns[] = {
     P("\x00\x00\x01\x00", "\xFF\xFF\xFF\xFF", false, "image/x-icon"),
     P("\x00\x00\x02\x00", "\xFF\xFF\xFF\xFF", false, "image/x-icon"),
     P("BM", "\xFF\xFF", false, "image/bmp"),
@@ -59,7 +59,7 @@ static const Pattern image_patterns[] = {
     P("\xFF\xD8\xFF", "\xFF\xFF\xFF", false, "image/jpeg"),
 };
 
-static const Pattern other_patterns[] = {
+static const SniffPattern other_patterns[] = {
     P("%PDF-", "\xFF\xFF\xFF\xFF\xFF", false, "application/pdf"),
     P("%!PS-Adobe-", "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", false, "application/postscript"),
     P("\xFE\xFF\x00\x00", "\xFF\xFF\x00\x00", false, "text/plain"),
@@ -100,12 +100,12 @@ static const char *sniff_unknown(const uint8_t *d, size_t n, bool scriptable)
         for (size_t i = 0; i < sizeof html_sigs / sizeof html_sigs[0]; i++)
             if (match_html(d, n, html_sigs[i]))
                 return "text/html";
-        static const Pattern xml = P("<?xml", "\xFF\xFF\xFF\xFF\xFF", true, "text/xml");
+        static const SniffPattern xml = P("<?xml", "\xFF\xFF\xFF\xFF\xFF", true, "text/xml");
         if (match(d, n, &xml))
             return "text/xml";
     }
     for (size_t i = 0; i < sizeof other_patterns / sizeof other_patterns[0]; i++) {
-        const Pattern *p = &other_patterns[i];
+        const SniffPattern *p =&other_patterns[i];
         if (!scriptable && (!strcmp(p->type, "application/pdf") || !strcmp(p->type, "application/postscript")))
             continue;
         if (match(d, n, p))
@@ -162,7 +162,7 @@ const char *au_mime_sniff(const char *supplied, bool nosniff, const uint8_t *dat
         /* text/plain from servers that label everything so: the
          * "distinguishing text or binary" rules. */
         if (!strcmp(supplied, "text/plain")) {
-            static const Pattern boms[] = {P("\xFE\xFF", "\xFF\xFF", false, ""), P("\xFF\xFE", "\xFF\xFF", false, ""),
+            static const SniffPattern boms[] = {P("\xFE\xFF", "\xFF\xFF", false, ""), P("\xFF\xFE", "\xFF\xFF", false, ""),
                                            P("\xEF\xBB\xBF", "\xFF\xFF\xFF", false, "")};
             for (int i = 0; i < 3; i++)
                 if (match(data, len, &boms[i]))
