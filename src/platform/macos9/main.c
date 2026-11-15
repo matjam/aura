@@ -15,7 +15,7 @@ enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMen
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
-       FILE_SAVE_AS = 9, FILE_QUIT = 11 };
+       FILE_REOPEN_TAB, FILE_SAVE_AS = 10, FILE_QUIT = 12 };
 enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
        EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
@@ -272,6 +272,10 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_CLOSE_WINDOW);
     else
         DisableItem(file, FILE_CLOSE_WINDOW);
+    if (au_browser_can_reopen(g_browser))
+        EnableItem(file, FILE_REOPEN_TAB);
+    else
+        DisableItem(file, FILE_REOPEN_TAB);
     const char *src_data;
     size_t src_len;
     if (w && au_bw_page_source(w, &src_data, &src_len))
@@ -428,6 +432,13 @@ static void do_menu(long choice)
                 close_window(FrontWindow());
             break;
         case FILE_CLOSE_WINDOW: close_window(FrontWindow()); break;
+        case FILE_REOPEN_TAB:
+            if (au_browser_can_reopen(g_browser)) {
+                if (!w)
+                    w = browserwin_model(browserwin_new("about:blank", NULL));
+                au_bw_reopen_closed_tab(w);
+            }
+            break;
         case FILE_SAVE_AS:
             if (w)
                 mac_save_page(w);
@@ -664,6 +675,8 @@ static void mouse_down(EventRecord *ev)
         break;
     case inDrag:
         DragWindow(w, ev->where, &qd.screenBits.bounds);
+        if (m && m->kind == WIN_BROWSER)
+            browserwin_moved((BrowserWin *)m);
         break;
     case inGrow: {
         Rect limits;
@@ -688,6 +701,8 @@ static void mouse_down(EventRecord *ev)
             ZoomWindow(w, part, true);
             if (m && m->grow)
                 m->grow(m);
+            if (m && m->kind == WIN_BROWSER)
+                browserwin_moved((BrowserWin *)m);
         }
         break;
     case inContent:
@@ -728,7 +743,15 @@ static void key_down(EventRecord *ev)
         if (ch == '=')
             ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();
-        /* MenuKey ignores Shift: Shift-Command-G is Find Previous. */
+        /* MenuKey ignores Shift: Shift-Command-T is Reopen Closed Tab,
+         * Shift-Command-G Find Previous. */
+        if ((ch == 't' || ch == 'T') && (ev->modifiers & shiftKey)) {
+            if (au_browser_can_reopen(g_browser)) {
+                HiliteMenu(kFileMenu);
+                do_menu(((long)kFileMenu << 16) | FILE_REOPEN_TAB);
+            }
+            return;
+        }
         if ((ch == 'g' || ch == 'G') && (ev->modifiers & shiftKey)) {
             if (b && g_browser->find_text) {
                 HiliteMenu(kEditMenu);

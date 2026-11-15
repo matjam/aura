@@ -44,7 +44,7 @@ resource 'MENU' (128, "Apple") {
 };
 
 resource 'MENU' (129, "File") {
-	129, textMenuProc, 0x7FFFFD6F, enabled, "File",
+	129, textMenuProc, 0x7FFFFAEF, enabled, "File",
 	{
 		"New Window", noIcon, "N", noMark, plain;
 		"New Tab", noIcon, "T", noMark, plain;
@@ -53,6 +53,7 @@ resource 'MENU' (129, "File") {
 		"-", noIcon, noKey, noMark, plain;
 		"Close Tab", noIcon, "W", noMark, plain;
 		"Close Window", noIcon, noKey, noMark, plain;
+		"Reopen Closed Tab", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Save Page As...", noIcon, "S", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;

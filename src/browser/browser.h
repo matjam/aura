@@ -103,6 +103,7 @@ struct AuBrowserWindow {
     AuTab **tabs;
     int ntabs, cap, active;
     int width, height;
+    int x, y; /* the window's position on screen (set by the shell; -1 when not known), for the session */
     int tab_scroll;
     AuChromeLayout layout;
     AuHit hover, pressed;
@@ -125,6 +126,7 @@ struct AuBrowserWindow {
 };
 
 #define AU_MAX_FETCHERS 8
+#define AU_MAX_CLOSED_TABS 10
 
 struct AuBrowser {
     AuPrefs prefs;
@@ -141,6 +143,8 @@ struct AuBrowser {
     uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
     char *find_text;     /* the last Find, for Find Again; NULL before one */
     bool find_case;      /* it was case-sensitive */
+    AuNavList closed[AU_MAX_CLOSED_TABS]; /* closed tabs' histories, oldest first */
+    int nclosed;
     struct {
         char scheme[16];
         AuPageFetcher fetcher;
@@ -186,6 +190,22 @@ AuTab *au_bw_active_tab(AuBrowserWindow *w);
 /* Opens a copy of tab i (its back/forward list, scroll position and
  * zoom) to its right and activates it. */
 AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i);
+/* Command-click on Back or Forward: opens the entry delta steps away
+ * in a new tab behind the active one, with a copy of its history. */
+AuTab *au_bw_go_new_tab(AuBrowserWindow *w, int delta);
+/* The back (dir < 0) or forward (dir > 0) entries of the active tab,
+ * nearest first, for a history pop-up: up to cap items. The strings
+ * belong to the tab and last until it navigates. */
+typedef struct AuHistoryItem {
+    int delta; /* for au_bw_go */
+    const char *title, *url;
+} AuHistoryItem;
+int au_bw_history_items(AuBrowserWindow *w, int dir, AuHistoryItem *out, int cap);
+/* Reopen Closed Tab: the most recently closed tab comes back (its
+ * history and scroll position) after the active tab. The last
+ * AU_MAX_CLOSED_TABS closed tabs are kept, across windows. */
+bool au_browser_can_reopen(const AuBrowser *b);
+AuTab *au_bw_reopen_closed_tab(AuBrowserWindow *w);
 /* Closes every tab but tab keep, which becomes active. */
 void au_bw_close_other_tabs(AuBrowserWindow *w, int keep);
 void au_bw_reload_tab(AuBrowserWindow *w, int i);
@@ -256,6 +276,9 @@ const char *au_bw_complete(AuBrowserWindow *w, const char *typed);
 
 /* ---- Geometry, painting, input ---- */
 void au_bw_resize(AuBrowserWindow *w, int width, int height);
+/* The shell moved the window (screen position of its content's top
+ * left): remembered with the session. */
+void au_bw_set_position(AuBrowserWindow *w, int x, int y);
 void au_bw_set_active(AuBrowserWindow *w, bool active); /* window activation */
 void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip);
 /* Mouse events in window coordinates. Returns the hit the event was
@@ -277,11 +300,12 @@ AuIRect au_bw_hit_rect(AuBrowserWindow *w, AuHit h);
 /* ---- Session (open windows and tabs, for "restore last tabs") ----
  * File format:
  *     # Aura session 1
- *     window <width> <height> <active tab>
+ *     window <width> <height> <active tab> <x> <y>
  *     tab <current entry>
  *     entry\t<url>\t<title>\t<scroll y>
  * Windows hold the tab lines that follow, tabs the entry lines. The
- * scroll position is optional (older files lack it); for the current
+ * window position (-1 -1 when not known) and the scroll position are
+ * optional (older files lack them); for the current
  * entry it is where the tab is scrolled now. session_gen changes with
  * the windows, tabs and entries; scroll_gen with the scroll positions,
  * which the shell saves less often. */
@@ -290,6 +314,7 @@ typedef struct AuSessionTab {
 } AuSessionTab;
 typedef struct AuSessionWindow {
     int width, height, active;
+    int x, y; /* the window's position, -1 when not known */
     AuSessionTab *tabs;
     int ntabs;
 } AuSessionWindow;

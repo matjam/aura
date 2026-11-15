@@ -223,6 +223,18 @@ creator AURA. Open Location selects the whole address again when the
 field already has the focus, and a paste into the field turns line
 breaks into spaces.
 
+Back and Forward: a Command-click opens that entry in a new tab behind
+(`au_bw_go_new_tab`); holding the button for half a second (30 ticks)
+shows a pop-up of the entries that way (`au_bw_history_items`,
+`history_popup` in `browserwin.c`). File > Reopen Closed Tab
+(Shift-Command-T, mapped in `key_down` because MenuKey ignores Shift)
+brings back the last of up to `AU_MAX_CLOSED_TABS` closed tabs with
+their history and scroll position. While a page loads, the status bar
+shows its progress in the middle (`AuChromeState.progress_text`). Each
+window's position goes into the session (`au_bw_set_position` after a
+drag or zoom) and a restored window returns there when its title bar
+is still on screen.
+
 To change the About box or about:licences, edit the credits table in
 `src/browser/credits.c` (the version, the tagline, and one entry per
 bundled font or third-party library with its licence); `aboutbox.c`

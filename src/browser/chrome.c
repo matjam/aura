@@ -849,6 +849,16 @@ static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l,
         }
     }
     ChromeFont f = small_font(fonts, s);
+    /* Progress text in the middle; the status text keeps to its left. */
+    if (s->progress_text && *s->progress_text && r.x1 - r.x0 > 320) {
+        int mid = (r.x0 + r.x1) / 2;
+        AuIRect pr = irect(mid - 70, r.y0 + 1, mid + 70, r.y1);
+        if (pr.x1 > tr.x1)
+            pr.x1 = tr.x1;
+        text_in(c, f, 10, pr, s->progress_text, C_INK, true);
+        if (tr.x1 > pr.x0 - 8)
+            tr.x1 = pr.x0 - 8;
+    }
     if (s->status_text && *s->status_text)
         text_in(c, f, 10, tr, s->status_text, C_INK, false);
 }

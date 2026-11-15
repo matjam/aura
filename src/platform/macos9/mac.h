@@ -94,6 +94,8 @@ void browserwin_benchmark(BrowserWin *bw);
 /* Debug menu: the active page's load and layout times, a timed scroll
  * repaint, and free memory. */
 void browserwin_page_timings(BrowserWin *bw);
+/* The window was dragged: its position is kept for the session. */
+void browserwin_moved(BrowserWin *bw);
 /* Edit > Find: asks for text and finds it in the active page. */
 void browserwin_find(BrowserWin *bw);
 

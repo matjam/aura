@@ -825,6 +825,91 @@ static void test_session_scroll(void)
     au_browser_free(b);
 }
 
+static void window_click(AuBrowserWindow *w, AuIRect r, uint32_t mods)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.x = (r.x0 + r.x1) / 2;
+    e.y = (r.y0 + r.y1) / 2;
+    e.mods = mods;
+    e.clicks = 1;
+    e.type = AU_EVENT_MOUSE_DOWN;
+    au_bw_mouse(w, &e);
+    e.type = AU_EVENT_MOUSE_UP;
+    au_bw_mouse(w, &e);
+}
+
+/* Command-click on Back, the history pop-up's items, Reopen Closed Tab,
+ * and the window position in the session. */
+static void test_conveniences(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/other.html", true, -1);
+    settle(w);
+    au_bw_navigate(w, "file:///mem/sel.html");
+    settle(w);
+    au_bw_navigate(w, "file:///mem/tiny.html");
+    settle(w);
+    AuHistoryItem items[8];
+    CHECK(au_bw_history_items(w, 1, items, 8) == 0);
+    CHECK(au_bw_history_items(w, -1, items, 8) == 2);
+    CHECK(items[0].delta == -1 && items[1].delta == -2);
+    CHECK_STR(items[0].url, "file:///mem/sel.html");
+    CHECK(au_bw_history_items(w, -1, items, 1) == 1);
+
+    /* Command-click Back: the previous page in a new tab behind. */
+    AuTab *t = au_bw_active_tab(w);
+    window_click(w, w->layout.back, AU_MOD_COMMAND);
+    CHECK(w->ntabs == 2 && au_bw_active_tab(w) == t);
+    CHECK_STR(au_page_url(t->page), "file:///mem/tiny.html");
+    CHECK_STR(au_page_url(w->tabs[1]->page), "file:///mem/sel.html");
+    CHECK(au_nav_can_go(&w->tabs[1]->nav, 1) && au_nav_can_go(&w->tabs[1]->nav, -1));
+    settle(w);
+    /* A plain click goes back in place. */
+    window_click(w, w->layout.back, 0);
+    CHECK(w->ntabs == 2);
+    CHECK_STR(au_page_url(t->page), "file:///mem/sel.html");
+    settle(w);
+
+    /* Close the scrolled second tab, then reopen it. */
+    au_bw_select_tab(w, 1);
+    settle(w);
+    au_bw_scroll_to(w, 0, 900);
+    CHECK(!au_browser_can_reopen(b));
+    au_bw_close_tab(w, 1);
+    CHECK(w->ntabs == 1 && au_browser_can_reopen(b));
+    AuTab *r = au_bw_reopen_closed_tab(w);
+    CHECK(r && w->ntabs == 2 && au_bw_active_tab(w) == r);
+    CHECK_STR(au_page_url(r->page), "file:///mem/sel.html");
+    CHECK(r->nav.n == 3 && r->nav.index == 1);
+    settle(w);
+    CHECK(r->scroll_y == 900);
+    CHECK(!au_browser_can_reopen(b) && !au_bw_reopen_closed_tab(w));
+    /* Only the last AU_MAX_CLOSED_TABS are kept. */
+    for (int i = 0; i < AU_MAX_CLOSED_TABS + 3; i++) {
+        au_bw_new_tab(w, "about:blank", false, -1);
+        au_bw_close_tab(w, w->ntabs - 1);
+    }
+    CHECK(b->nclosed == AU_MAX_CLOSED_TABS);
+
+    /* The window's position goes into the session. */
+    au_bw_set_position(w, 40, 60);
+    AuBuf out;
+    au_buf_init(&out);
+    au_browser_session_serialize(b, &out);
+    AuSession s;
+    CHECK(au_session_parse(&s, out.data, out.len));
+    CHECK(s.windows[0].x == 40 && s.windows[0].y == 60 && s.windows[0].width == 800);
+    au_session_free(&s);
+    static const char old[] = "window 700 500 0\ntab 0\nentry\tabout:home\t\n";
+    CHECK(au_session_parse(&s, old, sizeof old - 1) && s.windows[0].x == -1 && s.windows[0].y == -1);
+    au_session_free(&s);
+    au_buf_free(&out);
+    settle(w);
+    au_browser_free(b);
+}
+
 static const char *find_mem(const char *name)
 {
     for (size_t i = 0; i < sizeof mem_files / sizeof mem_files[0]; i++)
@@ -901,6 +986,7 @@ int main(void)
     test_context_menu();
     test_save_source();
     test_session_scroll();
+    test_conveniences();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

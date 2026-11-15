@@ -597,6 +597,34 @@ static void bw_activate(MacWin *mw, bool on)
 static bool bw_edit(MacWin *mw, int item);
 static void context_menu(BrowserWin *b, Point pt, Point global);
 
+enum { kHistoryMenuID = 181, kHistoryItems = 15 };
+
+/* The pop-up under Back (dir -1) or Forward (dir 1): the entries that
+ * way, nearest first; choosing one goes there. */
+static void history_popup(BrowserWin *b, int dir)
+{
+    AuHistoryItem items[kHistoryItems];
+    int n = au_bw_history_items(b->bw, dir, items, kHistoryItems);
+    if (n == 0)
+        return;
+    MenuHandle m = NewMenu(kHistoryMenuID, (ConstStringPtr) "\p");
+    if (!m)
+        return;
+    for (int i = 0; i < n; i++)
+        mac_append_item(m, items[i].title);
+    InsertMenu(m, -1);
+    AuIRect r = dir < 0 ? b->bw->layout.back : b->bw->layout.forward;
+    Point at = {(short)r.y1, (short)r.x0};
+    LocalToGlobal(&at);
+    long choice = PopUpMenuSelect(m, at.v, at.h, 0);
+    DeleteMenu(kHistoryMenuID);
+    DisposeMenu(m);
+    short item = (short)(choice & 0xFFFF);
+    if ((short)(choice >> 16) == kHistoryMenuID && item >= 1 && item <= n)
+        au_bw_go(b->bw, items[item - 1].delta);
+    flush(b);
+}
+
 static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
 {
     AuEvent e;
@@ -620,22 +648,29 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     browserwin_flush_all();
     Point last = pt;
     /* Holding the button still on the page for most of a second opens
-     * the contextual menu, as Control-click does. */
-    bool may_hold = hit.part == AU_HIT_PAGE && b->clicks == 1 && !(ev->modifiers & (shiftKey | cmdKey));
+     * the contextual menu, as Control-click does; on Back or Forward,
+     * after half a second, the pop-up of the entries that way. */
+    bool history = hit.part == AU_HIT_BACK || hit.part == AU_HIT_FORWARD;
+    bool may_hold = (hit.part == AU_HIT_PAGE || history) && b->clicks == 1 && !(ev->modifiers & (shiftKey | cmdKey));
     while (StillDown() && !b->closing) {
         Point p;
         GetMouse(&p);
         if (may_hold && (p.h - pt.h) * (p.h - pt.h) + (p.v - pt.v) * (p.v - pt.v) > 9)
             may_hold = false;
-        if (may_hold && TickCount() - ev->when >= 45) {
-            /* End the press where nothing is, so no link opens. */
+        if (may_hold && TickCount() - ev->when >= (history ? 30u : 45u)) {
+            /* End the press where nothing is, so no link opens and the
+             * button does not act. */
             e.type = AU_EVENT_MOUSE_UP;
             e.x = e.y = -30000;
             au_bw_mouse(b->bw, &e);
-            Point global = pt;
-            LocalToGlobal(&global);
-            context_menu(b, pt, global);
             b->clicks = 0;
+            if (history) {
+                history_popup(b, hit.part == AU_HIT_BACK ? -1 : 1);
+            } else {
+                Point global = pt;
+                LocalToGlobal(&global);
+                context_menu(b, pt, global);
+            }
             return;
         }
         if (p.h != last.h || p.v != last.v) {
@@ -983,6 +1018,17 @@ static void bw_grow(MacWin *mw)
     g_browser->prefs_gen++;
 }
 
+void browserwin_moved(BrowserWin *b)
+{
+    GrafPtr old;
+    GetPort(&old);
+    SetPort((GrafPtr)b->base.win);
+    Point p = {0, 0};
+    LocalToGlobal(&p);
+    SetPort(old);
+    au_bw_set_position(b->bw, p.h, p.v);
+}
+
 static void bw_close(MacWin *mw)
 {
     browserwin_close((BrowserWin *)mw);
@@ -1035,6 +1081,13 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
         ch = sw->height;
     }
     int x = 20 + (count % 8) * 20, y = 50 + (count % 8) * 20;
+    /* A restored window goes back where it was when its title bar is
+     * still on this screen (the screen may have changed since). */
+    if (sw && sw->x >= 0 && sw->y >= GetMBarHeight() + 18 && sw->x <= screen.right - 80 &&
+        sw->y <= screen.bottom - 60) {
+        x = sw->x;
+        y = sw->y;
+    }
     if (cw > screen.right - x - 4)
         cw = screen.right - x - 4;
     if (ch > screen.bottom - y - 26) /* clear of the Control Strip */
@@ -1071,6 +1124,7 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     content_size(b, &iw, &ih);
     b->bw = au_browser_window_new(g_browser, iw, ih);
     b->bw->platform = b;
+    au_bw_set_position(b->bw, x, y);
     b->bw->native_field = true;
     b->next = g_wins;
     g_wins = b;
