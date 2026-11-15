@@ -477,6 +477,11 @@ static void save_store(const char *name, const AuBuf *b)
 
 static bool parse_cookies(void *s, const char *d, size_t n, int64_t now) { return au_cookie_jar_parse(s, d, n, now); }
 static bool parse_hsts(void *s, const char *d, size_t n, int64_t now) { return au_hsts_parse_file(s, d, n, now); }
+static bool parse_intermediates(void *s, const char *d, size_t n, int64_t now)
+{
+    (void)now;
+    return au_net_intermediates_parse(s, d, n);
+}
 
 bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose)
 {
@@ -498,6 +503,7 @@ bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose)
     s->hsts = au_hsts_new();
     load_store("hsts", parse_hsts, s->hsts, now, verbose);
     au_net_set_hsts(s->net, s->hsts);
+    load_store("intermediates", parse_intermediates, s->net, now, verbose);
     return true;
 }
 
@@ -517,6 +523,11 @@ void au_host_session_close(AuHostSession *s)
         au_buf_clear(&b);
         au_hsts_serialize(s->hsts, &b, now);
         save_store("hsts", &b);
+    }
+    if (au_net_intermediates_dirty(s->net)) {
+        au_buf_clear(&b);
+        au_net_intermediates_serialize(s->net, &b);
+        save_store("intermediates", &b);
     }
     au_buf_free(&b);
     au_net_free(s->net);

@@ -655,10 +655,39 @@ policy stores the embedder attaches.
   preferences folder.
 
 TLS is BearSSL 0.6 with the 32-bit implementations: TLS 1.2 only, ECDHE
-with AES-GCM or ChaCha20-Poly1305, SNI, ALPN `http/1.1`, session
-resumption, and certificate errors reported with the chain
-(`au_http_cert_info`). TLS 1.3 is not available in BearSSL; every
-acceptance site still offers TLS 1.2.
+with AES-GCM or ChaCha20-Poly1305, then RSA key exchange with AES-GCM
+as a last resort (www.fsf.org offers no ECDHE, only DHE, which BearSSL
+lacks, and RSA), SNI, ALPN `http/1.1`, session resumption, and
+certificate errors reported with the chain (`au_http_cert_info`). TLS
+1.3 is not available in BearSSL; every acceptance site still offers
+TLS 1.2.
+
+- **Incomplete chains.** Some servers send their certificate without
+  the intermediate (macintoshgarden.org, incomplete-chain.badssl.com).
+  When the chain as sent does not reach a root, the X.509 wrapper in
+  `tls.c` (`complete_chain`) builds a path from the leaf over the
+  server's certificates and the intermediates pool (`certpool.c`) and
+  replays it into BearSSL's minimal engine from `start_chain`, so every
+  check runs on the completed chain as if the server had sent it. Pool
+  certificates are never trust anchors. When the path stops for want of
+  an issuer, `AuCertInfo` names the last certificate's caIssuers URL and
+  the transfer (`aia_begin`, `aia_step` in `http.c`) fetches it over
+  plain http as a child transfer (no cookies, referrer or cache, 16 KB,
+  10 s, at most 4 per transfer, each URL once, failures remembered for
+  the session), adds the DER, PKCS#7 or PEM certificates
+  (`au_cert_bundle_parse`, `certinfo.c`) to the pool and connects again.
+  The pool (32 certificates) is saved as `Intermediates` in the Aura
+  preferences folder and `intermediates` in the `aura-host` profile
+  (`au_net_intermediates_serialize`); a hostile file cannot grant trust.
+  `aura-host fetch -v` says when certificates came from caIssuers URLs.
+- **HTTPS-first failures.** `au_http_fallback_cause` says why the https
+  attempt of an upgraded navigation failed, and reaches the page as
+  `AuFetchInfo.cause`. Refused, timed out, closed or plain-text
+  connections give "This site does not support HTTPS"; certificate and
+  TLS failures give "This site's secure connection failed" with the
+  reason and certificate, Continue to the HTTP Site, and for certificate
+  problems the session exception (`show_https_fallback` in
+  `page_doc.c`).
 
 All network work runs on the main task. Open Transport is called only
 from the main task in asynchronous mode; its notifiers run at deferred
@@ -688,9 +717,17 @@ On the test machine, QEMU sets the guest clock to UTC while the guest's
 Map control panel says UTC-7, so the wall time Aura computes there is
 7 hours ahead. Certificates are still within their dates.
 
+The root store (`assets/net/aura-roots.bin`) was made from curl's
+Mozilla bundle dated 2026-11-05 (118 roots, checked current on
+2026-11-15); it holds the USERTrust and Sectigo Public Server
+Authentication R46/E46 roots and ISRG Root X1/X2. To regenerate it,
+download `https://curl.se/ca/cacert.pem` and run `python3 -I
+src/net/gen_roots.py cacert.pem assets/net/aura-roots.bin`. Never add
+intermediates to it.
+
 Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
-sites that offer only TLS 1.3 or ciphers outside BearSSL's set (for
-example www.fsf.org) fail with "Secure connection failed".
+sites that offer only TLS 1.3, or only DHE or other ciphers outside
+BearSSL's set, fail with "Secure connection failed".
 
 ## JavaScript
 

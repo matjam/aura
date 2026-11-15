@@ -203,8 +203,13 @@ static void pf_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *in
             fi.message = why;
         }
     }
+    fi.cause = error_of(info->fallback_cause);
+    if (err == AU_NET_ERR_HTTPS_FALLBACK && info->fallback_cause == AU_NET_ERR_TLS && info->cert &&
+        info->cert->reason)
+        fi.message = info->cert->reason;
+    AuNetError cert_err = err == AU_NET_ERR_HTTPS_FALLBACK ? info->fallback_cause : err;
     AuFetchCert *cert = NULL;
-    if (info->cert && (err == AU_NET_ERR_CERT || err == AU_NET_ERR_CLOCK)) {
+    if (info->cert && (cert_err == AU_NET_ERR_CERT || cert_err == AU_NET_ERR_CLOCK)) {
         cert = au_alloc(sizeof *cert);
         au_net_fetch_cert_from(cert, info->cert, info->tls_version, info->cipher);
         fi.cert = cert;

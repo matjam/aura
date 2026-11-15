@@ -75,6 +75,10 @@ typedef struct AuLoadInfo {
     uint16_t tls_version;     /* 0x0303 for TLS 1.2; 0 without TLS */
     const char *cipher;       /* the TLS cipher suite ("" without TLS) */
     bool mixed;               /* blocked as mixed content (err AU_NET_ERR_BLOCKED) */
+    /* AU_NET_ERR_HTTPS_FALLBACK: why https failed (au_http_fallback_cause);
+     * with _CERT or _CLOCK, cert holds the details, and with _TLS its
+     * reason. AU_NET_OK otherwise. */
+    AuNetError fallback_cause;
 } AuLoadInfo;
 
 typedef struct AuLoadCallbacks {

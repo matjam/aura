@@ -1452,6 +1452,60 @@ static void error_head(AuPage *p, AuBuf *b, const char *title, const char *headi
     au_buf_puts(b, "</p>");
 }
 
+static const char plain_http_note[] = "On the plain HTTP site, what you send and receive can be read and changed by "
+                                      "others on the network.";
+
+/* HTTPS-first tried https for an http address, and it failed. Two cases
+ * read differently: the site has no HTTPS (nothing answered securely),
+ * or it has HTTPS and that failed (a certificate or TLS problem), which
+ * the page says, with the certificate when there is one. */
+static void show_https_fallback(AuPage *p, AuBuf *b, const AuFetchInfo *info, const char *host, const char **title)
+{
+    AuFetchError cause = info ? info->cause : AU_FETCH_OK;
+    const AuFetchCert *c = info ? info->cert : NULL;
+    const char *http_link = "<p class=action><a href='aura-action:http'>Continue to the HTTP Site</a></p>";
+    if (cause == AU_FETCH_ERR_CERT || cause == AU_FETCH_ERR_CLOCK || cause == AU_FETCH_ERR_TLS) {
+        *title = "Secure connection failed";
+        error_head(p, b, *title, "This site's secure connection failed");
+        au_buf_puts(b, "<p><b>");
+        html_escape_str(b, host);
+        if (cause == AU_FETCH_ERR_CLOCK) {
+            au_buf_puts(b, "</b> has an HTTPS site, but Aura cannot check its certificate because the Mac's clock "
+                           "says <b>");
+            put_date(b, c ? c->checked_at : 0);
+            au_buf_puts(b, "</b>, which is earlier than the certificates Aura knows about were issued. Set the date "
+                           "and time in the Date &amp; Time control panel, then try again.</p>");
+        } else if (cause == AU_FETCH_ERR_CERT) {
+            au_buf_puts(b, "</b> has an HTTPS site, but its certificate is not valid: ");
+            html_escape_str(b, c && c->reason[0] ? c->reason : "the certificate is not valid");
+            au_buf_puts(b, ". Aura cannot confirm that the secure site is the real one.</p>");
+        } else {
+            au_buf_puts(b, "</b> has an HTTPS site, but the secure connection to it failed: ");
+            html_escape_str(b, info && info->message && info->message[0] ? info->message : "the TLS handshake failed");
+            au_buf_puts(b, ". The server may need a protocol or cipher Aura does not offer.</p>");
+        }
+        au_buf_printf(b, "<p>%s</p>", plain_http_note);
+        au_buf_puts(b, http_link);
+        if (cause == AU_FETCH_ERR_CERT && c && c->count > 0 && !c->hsts && !c->clock_wrong && p->main_fetch &&
+            p->main_fetch->fetcher && p->main_fetch->fetcher->allow_cert)
+            au_buf_puts(b, "<p class=action><a href='aura-action:continue'>Continue to the HTTPS Site Anyway</a></p>"
+                           "<p class=note>Continuing trusts this certificate for this site until you quit Aura. "
+                           "The address field then shows that the site is not secure.</p>");
+        if (cause == AU_FETCH_ERR_CERT && c)
+            cert_chain_html(b, c);
+        return;
+    }
+    *title = "HTTPS not available";
+    error_head(p, b, *title, "This site does not support HTTPS");
+    au_buf_puts(b, "<p><b>");
+    html_escape_str(b, host);
+    au_buf_puts(b, cause == AU_FETCH_ERR_TIMEOUT ? "</b> did not answer on the secure (HTTPS) port in time. "
+                   : cause == AU_FETCH_ERR_RESET ? "</b> closed the secure (HTTPS) connection without answering. "
+                                                 : "</b> does not accept secure (HTTPS) connections. ");
+    au_buf_printf(b, "%s</p>", plain_http_note);
+    au_buf_puts(b, http_link);
+}
+
 static void show_net_error(AuPage *p, const AuFetchInfo *info)
 {
     char host[256];
@@ -1509,7 +1563,7 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
         au_buf_puts(&b, "<p>The secure connection to <b>");
         html_escape_str(&b, host);
         au_buf_puts(&b, "</b> failed. The server may need a protocol or cipher Aura does not offer (Aura speaks "
-                        "TLS 1.2 with ECDHE and AES-GCM or ChaCha20-Poly1305).</p>");
+                        "TLS 1.2 with AES-GCM or ChaCha20-Poly1305; it has no TLS 1.3).</p>");
         au_buf_puts(&b, retry);
         break;
     case AU_FETCH_ERR_CLOCK: {
@@ -1545,13 +1599,7 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
         break;
     }
     case AU_FETCH_ERR_HTTPS_FALLBACK:
-        title = "HTTPS not available";
-        error_head(p, &b, title, "This site does not support HTTPS");
-        au_buf_puts(&b, "<p><b>");
-        html_escape_str(&b, host);
-        au_buf_puts(&b, "</b> cannot be reached securely. On the plain HTTP site, what you send and receive "
-                        "can be read and changed by others on the network.</p>"
-                        "<p class=action><a href='aura-action:http'>Continue to the HTTP Site</a></p>");
+        show_https_fallback(p, &b, info, host, &title);
         break;
     case AU_FETCH_ERR_REDIRECTS:
         title = "Too many redirects";

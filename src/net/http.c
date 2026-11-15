@@ -28,6 +28,11 @@
 #define SESSION_CACHE 8
 #define AUTH_CACHE 16
 #define MAX_AUTH_ATTEMPTS 3
+/* Fetching missing intermediates from caIssuers URLs (see tls.h). */
+#define AIA_MAX_DEPTH 4          /* fetches per transfer */
+#define AIA_MAX_BYTES 16384      /* per fetch */
+#define AIA_TIMEOUT_MS 10000     /* per fetch */
+#define AIA_SEEN 32              /* URLs remembered for the session */
 
 /* ---- Structures ---- */
 
@@ -59,7 +64,7 @@ struct Conn {
     bool session_saved;
 };
 
-enum { T_START, T_WAIT_CONN, T_SEND, T_RECV, T_DRAIN, T_WAIT_CRED, T_FAILED, T_FINISHED };
+enum { T_START, T_WAIT_CONN, T_SEND, T_RECV, T_DRAIN, T_WAIT_CRED, T_AIA, T_FAILED, T_FINISHED };
 
 typedef struct AuthEntry {
     char *hostport, *realm, *user, *pass;
@@ -137,7 +142,27 @@ struct AuHttpTransfer {
     AuCacheEntry *cache_entry; /* stale entry being revalidated */
     AuCacheWriter *cache_w;    /* the response being stored */
     int64_t request_wall;      /* when the request went out (seconds) */
+    /* HTTPS-first: the error the https attempt failed with */
+    AuNetError fallback_cause;
+    bool tls_never_spoke;
+    /* Missing intermediates: the caIssuers fetches this transfer made,
+     * the one in progress, and its response. An AIA fetch is itself a
+     * transfer (aia_internal) that never chases AIA or uses the cache. */
+    bool aia_internal;
+    int aia_rounds;
+    char *aia_tried[AIA_MAX_DEPTH];
+    char aia_url[256];
+    AuHttpTransfer *aia_child;
+    bool aia_ready;  /* the fetch ended with certificates: connect again */
+    bool aia_waited; /* another transfer fetched the URL: connect again */
+    int aia_status;
+    AuBuf aia_body;
 };
+
+typedef struct AiaSeen {
+    char *url;
+    bool ok; /* it gave certificates */
+} AiaSeen;
 
 struct AuNet {
     AuNetOps ops;
@@ -161,6 +186,10 @@ struct AuNet {
     size_t n_http_ok;
     AuthEntry auth[AUTH_CACHE];
     int next_auth;
+    /* Intermediates from caIssuers URLs, and the URLs tried this session. */
+    AuCertPool pool;
+    AiaSeen aia_seen[AIA_SEEN];
+    int next_aia_seen;
     AuBrotliDict *brdict;
     int brdict_users;
     bool in_pump;
@@ -351,6 +380,7 @@ AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbac
     au_buf_init(&t->mime);
     au_buf_init(&t->charset);
     au_buf_init(&t->encoding);
+    au_buf_init(&t->aia_body);
     t->state = T_START;
     if (!rq->url || !au_url_parse(&t->url, rq->url, NULL)) {
         memset(&t->url, 0, sizeof t->url);
@@ -621,6 +651,7 @@ static void start_tls(Conn *c)
     const CertException *ex = exception_for(net, c->host);
     if (ex && !au_hsts_is_known(net->hsts, c->host, now))
         au_tls_allow_cert(c->tls_engine, ex->sha256);
+    au_tls_set_pool(c->tls_engine, &net->pool);
     c->state = C_TLS;
 }
 
@@ -1216,8 +1247,22 @@ static void cache_drop(AuHttpTransfer *t)
     }
 }
 
+/* Ends the transfer's caIssuers fetch, if one runs: it is not wanted any
+ * more, and its callbacks name this transfer. */
+static void aia_drop_child(AuHttpTransfer *t)
+{
+    if (t->aia_child) {
+        au_http_cancel(t->aia_child);
+        t->aia_child = NULL;
+    }
+}
+
 static void transfer_free(AuHttpTransfer *t)
 {
+    aia_drop_child(t);
+    for (int i = 0; i < AIA_MAX_DEPTH; i++)
+        au_free(t->aia_tried[i]);
+    au_buf_free(&t->aia_body);
     cache_drop(t);
     release_decoders(t);
     if (t->parser_live)
@@ -1239,6 +1284,7 @@ static void finish(AuHttpTransfer *t, AuNetError err)
 {
     if (t->state == T_FINISHED)
         return;
+    aia_drop_child(t);
     detach_conn(t, err == AU_NET_OK && t->parser_live && t->parser.keep_alive);
     t->state = T_FINISHED;
     if (t->cache_w && err == AU_NET_OK && !t->cancelled) {
@@ -1418,7 +1464,7 @@ static void deliver_response(AuHttpTransfer *t)
  * a range. */
 static bool cache_applies(const AuHttpTransfer *t)
 {
-    return t->net->cache && !strcmp(t->method, "GET") && !t->body && t->range_start < 0;
+    return t->net->cache && !strcmp(t->method, "GET") && !t->body && t->range_start < 0 && !t->aia_internal;
 }
 
 static void cache_key(const AuUrl *u, AuBuf *out)
@@ -1903,10 +1949,163 @@ static bool acquire_conn(AuHttpTransfer *t)
 static AuNetError conn_error_for(AuHttpTransfer *t, AuNetError e)
 {
     if (t->https_first_upgrade &&
-        (e == AU_NET_ERR_CONNECT || e == AU_NET_ERR_TLS || e == AU_NET_ERR_CERT || e == AU_NET_ERR_TIMEOUT ||
-         e == AU_NET_ERR_RESET || e == AU_NET_ERR_DNS))
-        return e == AU_NET_ERR_DNS ? e : AU_NET_ERR_HTTPS_FALLBACK;
+        (e == AU_NET_ERR_CONNECT || e == AU_NET_ERR_TLS || e == AU_NET_ERR_CERT || e == AU_NET_ERR_CLOCK ||
+         e == AU_NET_ERR_TIMEOUT || e == AU_NET_ERR_RESET || e == AU_NET_ERR_DNS)) {
+        if (e == AU_NET_ERR_DNS)
+            return e;
+        t->fallback_cause = e == AU_NET_ERR_TLS && t->tls_never_spoke ? AU_NET_ERR_PROTOCOL : e;
+        return AU_NET_ERR_HTTPS_FALLBACK;
+    }
     return e;
+}
+
+AuNetError au_http_fallback_cause(const AuHttpTransfer *t) { return t->fallback_cause; }
+
+/* ---- Missing intermediates (Authority Information Access) ----
+ * A certificate error whose chain stops for want of an issuer, where the
+ * last certificate names a caIssuers URL: fetch that URL over plain http
+ * (no cookies, no referrer, no cache, a size cap and a timeout), put what
+ * it holds in the intermediates pool, and connect again; the TLS layer
+ * then builds the path with it and validates it in full. At most
+ * AIA_MAX_DEPTH fetches per transfer, each URL once. */
+
+static AiaSeen *aia_seen(AuNet *net, const char *url)
+{
+    for (int i = 0; i < AIA_SEEN; i++)
+        if (net->aia_seen[i].url && !strcmp(net->aia_seen[i].url, url))
+            return &net->aia_seen[i];
+    return NULL;
+}
+
+static void aia_remember(AuNet *net, const char *url, bool ok)
+{
+    AiaSeen *s = aia_seen(net, url);
+    if (!s) {
+        s = &net->aia_seen[net->next_aia_seen];
+        net->next_aia_seen = (net->next_aia_seen + 1) % AIA_SEEN;
+        au_free(s->url);
+        s->url = au_strndup(url, strlen(url));
+    }
+    s->ok = ok;
+}
+
+static void aia_response(void *ctx, AuHttpTransfer *child, const AuHttpResponse *r)
+{
+    (void)child;
+    AuHttpTransfer *t = ctx;
+    t->aia_status = r->status;
+}
+
+static void aia_data(void *ctx, AuHttpTransfer *child, const void *data, size_t len)
+{
+    AuHttpTransfer *t = ctx;
+    if (t->aia_body.len + len > AIA_MAX_BYTES) {
+        /* Too large for a certificate bundle: give up on this URL. */
+        au_http_cancel(child);
+        t->aia_child = NULL;
+        aia_remember(t->net, t->aia_url, false);
+        fail_later(t, conn_error_for(t, AU_NET_ERR_CERT));
+        return;
+    }
+    au_buf_append(&t->aia_body, data, len);
+}
+
+static void aia_add_cert(void *ctx, const uint8_t *der, size_t len)
+{
+    au_cert_pool_add(ctx, der, len);
+}
+
+static void aia_done(void *ctx, AuHttpTransfer *child, AuNetError err)
+{
+    (void)child;
+    AuHttpTransfer *t = ctx;
+    t->aia_child = NULL;
+    int found = 0;
+    if (err == AU_NET_OK && t->aia_status == 200)
+        found = au_cert_bundle_parse((const uint8_t *)t->aia_body.data, t->aia_body.len, 4, aia_add_cert,
+                                     &t->net->pool);
+    au_buf_free(&t->aia_body);
+    au_buf_init(&t->aia_body);
+    aia_remember(t->net, t->aia_url, found > 0);
+    if (found > 0)
+        t->aia_ready = true;
+    else
+        fail_later(t, conn_error_for(t, AU_NET_ERR_CERT));
+}
+
+/* After a certificate error: true when a caIssuers fetch may complete the
+ * chain, and the transfer now waits for it (T_AIA). */
+static bool aia_begin(AuHttpTransfer *t)
+{
+    AuNet *net = t->net;
+    if (t->aia_internal || !t->have_cert || !t->cert.missing_issuer || !t->cert.aia_url[0] ||
+        t->aia_rounds >= AIA_MAX_DEPTH)
+        return false;
+    const char *u = t->cert.aia_url;
+    for (int i = 0; i < t->aia_rounds; i++)
+        if (!strcmp(t->aia_tried[i], u))
+            return false; /* fetched once already and still short: a loop */
+    const AiaSeen *s = aia_seen(net, u);
+    if (s && !s->ok)
+        return false; /* failed earlier this session */
+    t->aia_tried[t->aia_rounds++] = au_strndup(u, strlen(u));
+    snprintf(t->aia_url, sizeof t->aia_url, "%s", u);
+    t->aia_ready = t->aia_waited = false;
+    /* A URL that already gave certificates (another connection's fetch,
+     * finished after this handshake began): connect again at once. */
+    if (s && s->ok)
+        t->aia_waited = true;
+    detach_conn(t, false);
+    reset_attempt(t);
+    t->state = T_AIA;
+    return true;
+}
+
+static bool aia_step(AuHttpTransfer *t)
+{
+    AuNet *net = t->net;
+    if (t->aia_child)
+        return false;
+    if (t->aia_ready || t->aia_waited) {
+        t->aia_ready = t->aia_waited = false;
+        t->state = T_START;
+        return true;
+    }
+    for (AuHttpTransfer *o = net->transfers; o; o = o->next)
+        if (o != t && o->aia_child && !o->cancelled && !strcmp(o->aia_url, t->aia_url)) {
+            t->aia_waited = true; /* connect again once that fetch ends */
+            return false;
+        }
+    AuHttpRequest rq;
+    au_http_request_init(&rq, t->aia_url);
+    rq.dest = AU_DEST_EMPTY;
+    rq.mode = AU_MODE_NO_CORS;
+    rq.omit_credentials = true;
+    rq.allow_http_fallback = true; /* caIssuers URLs are plain http; HTTPS-first does not apply */
+    rq.total_timeout_ms = AIA_TIMEOUT_MS;
+    AuHttpCallbacks cb = {t, aia_response, aia_data, aia_done, NULL, NULL};
+    t->aia_status = 0;
+    au_buf_clear(&t->aia_body);
+    t->aia_child = au_http_start(net, &rq, &cb);
+    t->aia_child->aia_internal = true;
+    au_http_request_free(&rq);
+    return true;
+}
+
+/* ---- Intermediates for the embedder ---- */
+
+bool au_net_intermediates_dirty(const AuNet *net) { return net->pool.dirty; }
+int au_net_intermediates_count(const AuNet *net) { return net->pool.n; }
+
+void au_net_intermediates_serialize(AuNet *net, AuBuf *out)
+{
+    au_cert_pool_serialize(&net->pool, out);
+    net->pool.dirty = false;
+}
+
+bool au_net_intermediates_parse(AuNet *net, const void *data, size_t len)
+{
+    return au_cert_pool_parse(&net->pool, data, len);
 }
 
 /* A connection failed under the transfer: retry once on a fresh one when
@@ -1916,6 +2115,10 @@ static void conn_failed(AuHttpTransfer *t, AuNetError e)
     Conn *c = t->conn;
     if (c && c->tls_engine)
         record_tls(t, c);
+    /* A "TLS failure" from a server that never spoke TLS (it closed, or
+     * answered in plain text) means it has no HTTPS. */
+    if (e == AU_NET_ERR_TLS && c && c->tls_engine && !au_tls_peer_spoke_tls(c->tls_engine))
+        t->tls_never_spoke = true;
     if (c && c->tls_engine && (e == AU_NET_ERR_CERT)) {
         int64_t now = wall(t->net);
         if (t->net->roots && now < au_roots_date(t->net->roots)) {
@@ -1923,6 +2126,8 @@ static void conn_failed(AuHttpTransfer *t, AuNetError e)
             t->cert.clock_wrong = true;
         }
         t->cert.hsts = au_hsts_is_known(t->net->hsts, t->url.host, now);
+        if (e == AU_NET_ERR_CERT && aia_begin(t))
+            return;
     }
     bool safe = method_idempotent(t->method) && (!t->body || (t->body->rewind && t->body->rewind(t->body->ctx)));
     if (t->reused && !t->got_bytes && safe && t->retries < 1 &&
@@ -2034,6 +2239,7 @@ static bool step(AuHttpTransfer *t)
     AuNet *net = t->net;
     uint32_t now = now_ms(net);
     if (t->cancelled) {
+        aia_drop_child(t);
         detach_conn(t, false);
         t->state = T_FINISHED;
         return true;
@@ -2124,6 +2330,8 @@ static bool step(AuHttpTransfer *t)
     }
     case T_WAIT_CRED:
         return false;
+    case T_AIA:
+        return aia_step(t);
     case T_FAILED:
         finish(t, t->fail_err);
         return true;
@@ -2203,6 +2411,9 @@ void au_net_free(AuNet *net)
     }
     au_net_clear_cert_exceptions(net);
     au_net_clear_http_allowed(net);
+    au_cert_pool_free(&net->pool);
+    for (int i = 0; i < AIA_SEEN; i++)
+        au_free(net->aia_seen[i].url);
     for (int i = 0; i < AUTH_CACHE; i++) {
         au_free(net->auth[i].hostport);
         au_free(net->auth[i].realm);
@@ -2241,6 +2452,7 @@ AuHttpPhase au_http_phase(const AuHttpTransfer *t)
             return AU_PHASE_SENDING;
         return t->got_bytes ? AU_PHASE_RECEIVING : AU_PHASE_WAITING;
     case T_WAIT_CRED: return AU_PHASE_WAITING;
+    case T_AIA: return AU_PHASE_SECURING;
     default: return AU_PHASE_DONE;
     }
 }

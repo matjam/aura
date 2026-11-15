@@ -382,6 +382,12 @@ static void load_stores(void)
         au_free(data);
     }
     au_hsts_clear_dirty(N.hsts);
+    /* Intermediates fetched from caIssuers URLs: never trusted by
+     * themselves, so a damaged file only costs a fetch. */
+    if (storage_read_named("Intermediates", &data, &len)) {
+        au_net_intermediates_parse(N.net, data, len);
+        au_free(data);
+    }
 }
 
 void mac_net_save(bool force)
@@ -424,6 +430,13 @@ void mac_net_save(bool force)
             }
             au_buf_free(&b);
         }
+    }
+    if (au_net_intermediates_dirty(N.net)) {
+        AuBuf b;
+        au_buf_init(&b);
+        au_net_intermediates_serialize(N.net, &b);
+        storage_write_named("Intermediates", b.data, b.len);
+        au_buf_free(&b);
     }
 }
 

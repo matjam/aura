@@ -400,7 +400,7 @@ static void net_poll(void *ctx)
     } else if (n->step == 1) {
         s->data(s->ctx, n->id, " page</title><p>hello", 21);
     } else {
-        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, ""};
+        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK};
         n->sink = NULL;
         s->done(s->ctx, n->id, true, &info);
     }

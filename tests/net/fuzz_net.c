@@ -7,7 +7,9 @@
  * dataurl, psl, roots (the root store loader; seeds from ROOTS_FILE),
  * cert (au_cert_parse on mutated test certificates), hsts (header and
  * file parsers), auth (WWW-Authenticate parser), dates (cookie dates),
- * mime (Content-Type), cache (serialized cache entries), or all. Every input is copied to a heap block of
+ * mime (Content-Type), cache (serialized cache entries), aia (caIssuers
+ * bundles: DER, PKCS#7 and PEM; the AIA URL; the intermediates pool
+ * file), or all. Every input is copied to a heap block of
  * exactly its size, so a sanitizer build catches any read past the end. */
 #include "net/auth.h"
 #include "net/cache.h"
@@ -236,6 +238,101 @@ static void run_cert(const Input *in)
     free(p);
 }
 
+/* caIssuers responses and the intermediates pool: names, the AIA URL, the
+ * DER / PKCS#7 / PEM bundle reader, and the pool file. */
+typedef struct AiaSink {
+    const uint8_t *base;
+    size_t n;
+    bool pem;
+    AuCertPool *pool;
+    int calls;
+} AiaSink;
+
+static void aia_sink(void *ctx, const uint8_t *der, size_t len)
+{
+    AiaSink *s = ctx;
+    s->calls++;
+    if (!s->pem && (der < s->base || len > s->n || (size_t)(der - s->base) > s->n - len)) {
+        printf("bundle certificate outside the input\n");
+        abort();
+    }
+    au_cert_pool_add(s->pool, der, len);
+}
+
+static void run_aia(const Input *in)
+{
+    uint8_t *p = exact(in, false);
+    AuDerSpan iss, subj;
+    if (au_x509_names(p, in->n, &iss, &subj) &&
+        (iss.p < p || iss.len > in->n || subj.p < p || subj.len > in->n || (size_t)(subj.p - p) > in->n - subj.len)) {
+        printf("names outside the certificate\n");
+        abort();
+    }
+    char url[64];
+    if (au_x509_ca_issuers(p, in->n, url, sizeof url)) {
+        size_t ul = strnlen(url, sizeof url);
+        bool ok = ul < sizeof url && ul >= 7 && au_lower(url[0]) == 'h' && url[4] == ':';
+        for (size_t i = 0; ok && i < ul; i++)
+            ok = url[i] > 0x20 && url[i] < 0x7F;
+        if (!ok) {
+            printf("bad caIssuers URL\n");
+            abort();
+        }
+    }
+    AuCertPool pool;
+    au_cert_pool_init(&pool);
+    AiaSink s = {p, in->n, in->n > 0 && p[0] != 0x30, &pool, 0};
+    int n = au_cert_bundle_parse(p, in->n, 4, aia_sink, &s);
+    if (n != s.calls || n > 4) {
+        printf("bundle count %d, calls %d\n", n, s.calls);
+        abort();
+    }
+    AuBuf b;
+    au_buf_init(&b);
+    au_cert_pool_serialize(&pool, &b);
+    AuCertPool back;
+    au_cert_pool_init(&back);
+    if (!au_cert_pool_parse(&back, b.data, b.len) || back.n != pool.n) {
+        printf("pool round trip lost entries\n");
+        abort();
+    }
+    au_cert_pool_parse(&back, p, in->n); /* hostile pool file */
+    au_cert_pool_free(&back);
+    au_cert_pool_free(&pool);
+    au_buf_free(&b);
+    free(p);
+}
+
+static void aia_seed(Input *in)
+{
+    int k = (int)(rnd() % 4);
+    const TlsFixture *fx = &tls_fixtures[rnd() % TLS_FIX_COUNT];
+    if (k == 0) {
+        load_seed(in, fx->cert.data, fx->cert.data_len);
+    } else if (k == 1) {
+        load_seed(in, tls_fix_inter2_p7, tls_fix_inter2_p7_len);
+    } else if (k == 2) {
+        AuBuf b;
+        au_buf_init(&b);
+        au_buf_puts(&b, "-----BEGIN CERTIFICATE-----\n");
+        au_base64_encode(fx->cert.data, fx->cert.data_len, &b);
+        au_buf_puts(&b, "\n-----END CERTIFICATE-----\n");
+        load_seed(in, b.data, b.len);
+        au_buf_free(&b);
+    } else {
+        AuCertPool pool;
+        au_cert_pool_init(&pool);
+        au_cert_pool_add(&pool, fx->cert.data, fx->cert.data_len);
+        au_cert_pool_add(&pool, tls_fixtures[TLS_FIX_INTER].cert.data, tls_fixtures[TLS_FIX_INTER].cert.data_len);
+        AuBuf b;
+        au_buf_init(&b);
+        au_cert_pool_serialize(&pool, &b);
+        load_seed(in, b.data, b.len);
+        au_buf_free(&b);
+        au_cert_pool_free(&pool);
+    }
+}
+
 static const char *hsts_seeds[] = {"max-age=31536000; includeSubDomains; preload", "max-age=\"0\"",
                                    "# Aura HSTS 1\na.example\t1900000000\t1\nb.example\t1900000000\t0\n"};
 
@@ -385,7 +482,14 @@ int main(int argc, char **argv)
     }
     long done = 0;
     for (long it = 0; it < iters; it++) {
-        int which = all ? (int)(rnd() % 10) : -1;
+        int which = all ? (int)(rnd() % 11) : -1;
+        if ((all && which == 10) || !strcmp(target, "aia")) {
+            aia_seed(&in);
+            mutate(&in, 8192);
+            run_aia(&in);
+            done++;
+            continue;
+        }
         if ((all && which == 9) || !strcmp(target, "cache")) {
             cache_seed(&in);
             mutate(&in, 4096);

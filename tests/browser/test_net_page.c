@@ -558,6 +558,105 @@ static void test_errors(void)
     env_free(&e);
 }
 
+/* ---- HTTPS-first: no HTTPS, or HTTPS that failed ---- */
+
+/* A host with plain http on 80 and the given https on 443. */
+static FakeServer *dual_server(Env *e, const char *host, int fix)
+{
+    FakeServer *s = fake_server(&e->f, host, 0);
+    s->special_port = 443;
+    if (fix >= 0) {
+        s->tls = true;
+        s->chain = &tls_fixtures[fix].cert;
+        s->chain_len = 1;
+        s->eckey = &tls_fixtures[fix].key;
+    }
+    return s;
+}
+
+static void test_https_first_pages(void)
+{
+    Env e;
+    env_init(&e);
+    e.b->prefs.https_first = true;
+    au_net_config(e.net)->https_first = true;
+    au_net_config(e.net)->connect_timeout_ms = 200;
+    au_bw_new_tab(e.w, "about:blank", true, -1);
+
+    /* No HTTPS: 443 refused. */
+    FakeServer *plain = fake_server(&e.f, "plain.test", 80);
+    respond_html(plain, "<title>Plain</title>");
+    expect_title(&e, "http://plain.test/", "HTTPS not available");
+    CHECK(page_text_has(&e, "does not accept secure (HTTPS) connections") && !page_text_has(&e, "certificate"),
+          "refused: no HTTPS");
+    CHECK(click_link(&e, "aura-action:http") && !click_link(&e, "aura-action:continue"), "refused: http link only");
+
+    /* No HTTPS: 443 never answers. */
+    FakeServer *hang = dual_server(&e, "hang.test", -1);
+    hang->connect_hang = true;
+    expect_title(&e, "http://hang.test/", "HTTPS not available");
+    CHECK(page_text_has(&e, "in time"), "timeout wording");
+
+    /* No HTTPS: plain text on 443 is not a broken HTTPS site. */
+    FakeServer *nt = dual_server(&e, "nottls.test", -1);
+    nt->banner = "hello, this is not TLS\r\n";
+    expect_title(&e, "http://nottls.test/", "HTTPS not available");
+
+    /* HTTPS that failed in TLS after the server spoke it: a valid
+     * certificate (other.test) but the handshake signed with another key. */
+    FakeServer *tf = dual_server(&e, "other.test", TLS_FIX_WRONGHOST);
+    tf->eckey = &tls_fixtures[TLS_FIX_VALID].key;
+    expect_title(&e, "http://other.test/", "Secure connection failed");
+    CHECK(page_text_has(&e, "has an HTTPS site, but the secure connection to it failed"), "TLS failure wording");
+    CHECK(click_link(&e, "aura-action:http") && !click_link(&e, "aura-action:continue"),
+          "TLS failure: http link, no certificate exception");
+
+    /* HTTPS that failed on its certificate: say so, show it, and offer
+     * both ways on. */
+    FakeServer *bad = dual_server(&e, "badcert.test", TLS_FIX_EXPIRED);
+    respond_html(bad, "<title>Secure but expired</title>");
+    expect_title(&e, "http://badcert.test/", "Secure connection failed");
+    CHECK(page_text_has(&e, "has an HTTPS site, but its certificate is not valid") && page_text_has(&e, "expired") &&
+              page_text_has(&e, "SHA-256"),
+          "certificate failure explained, with the certificate");
+    CHECK(!page_text_has(&e, "does not support HTTPS"), "not called missing HTTPS");
+    CHECK(!strcmp(au_page_url(page(&e)), "http://badcert.test/"), "address stays: %s", au_page_url(page(&e)));
+    CHECK(click_link(&e, "aura-action:continue"), "Continue to the HTTPS site link");
+    settle(&e, 1500);
+    CHECK(!strcmp(au_page_title(page(&e)), "Secure but expired"), "continued over https: %s",
+          au_page_title(page(&e)));
+    CHECK(au_page_security(page(&e)) == AU_SECURITY_CERT_ERROR, "marked as a certificate exception: %d",
+          au_page_security(page(&e)));
+    /* The same failure, and the user picks plain http instead. */
+    FakeServer *bad2 = dual_server(&e, "badcert2.test", TLS_FIX_WRONGHOST);
+    respond_html(bad2, "<title>Over http</title>");
+    expect_title(&e, "http://badcert2.test/", "Secure connection failed");
+    CHECK(page_text_has(&e, "different site"), "wrong host reason");
+    CHECK(click_link(&e, "aura-action:http"), "Continue to the HTTP site link");
+    settle(&e, 1500);
+    CHECK(!strcmp(au_page_title(page(&e)), "Over http") && au_page_security(page(&e)) == AU_SECURITY_NOT_SECURE,
+          "http after a broken https: %s", au_page_title(page(&e)));
+    CHECK(au_net_http_allowed(e.net, "badcert2.test"), "the choice is remembered for the host");
+    respond_html(bad2, "<title>Again</title>");
+    expect_title(&e, "http://badcert2.test/two", "Again");
+
+    /* HTTPS-first ends in a secure page when the server's chain is short
+     * and its caIssuers URL completes it: no prompt. */
+    FakeServer *aia = dual_server(&e, "tls.test", TLS_FIX_AIA_LEAF);
+    respond_html(aia, "<title>Completed</title>");
+    FakeServer *ca = fake_server(&e.f, "ca.test", 80);
+    static char ca_resp[2048];
+    const br_x509_certificate *ic = &tls_fixtures[TLS_FIX_INTER].cert;
+    int hl = snprintf(ca_resp, sizeof ca_resp, "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n\r\n", (unsigned)ic->data_len);
+    memcpy(ca_resp + hl, ic->data, ic->data_len);
+    fake_add(ca, ca_resp)->len = (size_t)hl + ic->data_len;
+    expect_title(&e, "http://tls.test/", "Completed");
+    CHECK(au_page_security(page(&e)) == AU_SECURITY_SECURE && !strcmp(au_page_url(page(&e)), "https://tls.test/"),
+          "secure after AIA: %d %s", au_page_security(page(&e)), au_page_url(page(&e)));
+    CHECK(au_page_cert(page(&e)) && au_page_cert(page(&e))->count == 2, "the completed chain is shown");
+    env_free(&e);
+}
+
 /* ---- The entropy wait, Stop, two tabs ---- */
 
 static unsigned entropy_bits(void *ctx)
@@ -612,6 +711,7 @@ int main(void)
     test_downloads();
     test_security();
     test_errors();
+    test_https_first_pages();
     test_entropy_and_stop();
     au_fontset_free(fonts);
     printf("net_page: %d checks, %d failures\n", checks, failures);

@@ -49,6 +49,11 @@ typedef struct FakeServer {
     br_ssl_session_cache_lru cache;
     unsigned char cache_buf[4096];
     bool cache_ready;
+    bool no_resume; /* forget sessions on each connection: every handshake is a full one */
+    /* With port 0 (any port): when set, tls, banner and connect_hang apply
+     * only to connections on this port, so one host can serve plain http
+     * on 80 and a broken https on 443. */
+    uint16_t special_port;
 } FakeServer;
 
 typedef struct FakeNet {
