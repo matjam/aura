@@ -210,6 +210,11 @@ typing in the address field; a tab showing a fresh blank page puts it in
 the field. The model reports the move with `AU_CHANGED_FOCUS_PAGE` or
 `AU_CHANGED_FOCUS_FIELD`.
 
+A horizontal scroll bar appears along the bottom of the page area while
+the active page is wider than it (`au_chrome_layout_hscroll`); the two
+bars meet at a blank corner square above the grow box, and Shift turns
+a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
+
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
 --tab about:home --tab file:tests/page/samples/wiki.html -o

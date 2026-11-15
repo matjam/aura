@@ -57,7 +57,9 @@ typedef enum {
     AU_HIT_PAGE,
     AU_HIT_VSCROLL,
     AU_HIT_STATUS,
-    AU_HIT_GROW
+    AU_HIT_GROW,
+    AU_HIT_HSCROLL,
+    AU_HIT_CORNER       /* the blank square where the two scroll bars meet */
 } AuHitPart;
 
 typedef struct AuHit {
@@ -73,6 +75,7 @@ typedef struct AuChromeLayout {
     AuIRect tabstrip;   /* the strip (top) or column (left) */
     AuIRect tabs_area;  /* where tabs are drawn, inside tabstrip */
     AuIRect toolbar, page, vscroll, status, grow, splitter;
+    AuIRect hscroll, corner; /* empty unless au_chrome_layout_hscroll turned them on */
     AuIRect back, forward, reload, home, address, security, address_text, bookmark, throbber;
     AuIRect new_tab, scroll_back, scroll_fwd;
     int tab_size;   /* width of a top tab, height of a left row */
@@ -85,6 +88,11 @@ typedef struct AuChromeLayout {
  * here); tab_scroll is clamped to the valid range. */
 void au_chrome_layout(AuChromeLayout *l, int width, int height, AuTabPosition pos, int column_width, int ntabs,
                       int tab_scroll);
+/* Adds a horizontal scroll bar along the bottom of the page area (for
+ * content wider than the page): the page and the vertical scroll bar
+ * get shorter, and the square where the two bars meet, beside the grow
+ * box's row, is a blank corner. Call after au_chrome_layout. */
+void au_chrome_layout_hscroll(AuChromeLayout *l);
 /* The rectangle of tab i (may lie partly or wholly outside tabs_area
  * when scrolled), and of its close box. */
 AuIRect au_chrome_tab_rect(const AuChromeLayout *l, int i);

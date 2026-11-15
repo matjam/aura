@@ -198,9 +198,19 @@ static void relayout(AuBrowserWindow *w, bool full)
     au_chrome_layout(&w->layout, w->width, w->height, w->browser->prefs.tab_position,
                      w->browser->prefs.tab_column_width, w->ntabs, w->tab_scroll);
     w->tab_scroll = w->layout.tab_scroll;
+    /* A horizontal scroll bar while the active page is wider than the
+     * page area (its width does not change with the bar). */
+    AuTab *at = au_bw_active_tab(w);
+    if (at) {
+        int cw, ch;
+        au_page_content_size(at->page, &cw, &ch);
+        if (cw > w->layout.page.x1 - w->layout.page.x0)
+            au_chrome_layout_hscroll(&w->layout);
+    }
     bool moved = memcmp(&old.page, &w->layout.page, sizeof old.page) ||
                  memcmp(&old.address, &w->layout.address, sizeof old.address) ||
-                 memcmp(&old.vscroll, &w->layout.vscroll, sizeof old.vscroll) || old.width != w->width ||
+                 memcmp(&old.vscroll, &w->layout.vscroll, sizeof old.vscroll) ||
+                 memcmp(&old.hscroll, &w->layout.hscroll, sizeof old.hscroll) || old.width != w->width ||
                  old.height != w->height;
     if (moved) {
         AuTab *t = au_bw_active_tab(w);
@@ -215,6 +225,20 @@ static void relayout(AuBrowserWindow *w, bool full)
         invalidate_all(w);
     else
         invalidate(w, w->layout.tabstrip);
+}
+
+/* Lays out again when the active page's width needs the horizontal
+ * scroll bar shown or hidden. */
+static void check_hscroll(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return;
+    int cw, ch;
+    au_page_content_size(t->page, &cw, &ch);
+    bool need = cw > w->layout.page.x1 - w->layout.page.x0;
+    if (need != !au_irect_empty(w->layout.hscroll))
+        relayout(w, false);
 }
 
 static void ensure_tab_visible(AuBrowserWindow *w, int i)
@@ -347,8 +371,13 @@ static void cb_content_size(void *ctx, AuPage *p)
 {
     AuTab *t = ctx;
     clamp_scroll(t);
-    if (is_active(t))
+    if (is_active(t)) {
+        if (t->win->painting)
+            t->win->hscroll_dirty = true; /* not in the middle of a paint: at the next idle */
+        else
+            check_hscroll(t->win);
         changed(t->win, AU_CHANGED_SCROLL);
+    }
     (void)p;
 }
 
@@ -758,6 +787,7 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
     AuTab *t = w->tabs[i];
     changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     set_viewport(t);
+    check_hscroll(w);
     clamp_scroll(t);
     ensure_tab_visible(w, i);
     if (old != i) {
@@ -1042,8 +1072,10 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     if (t && !au_irect_empty(pg)) {
         AuIRect p = w->layout.page;
         au_canvas_clip_push(c, (AuRect){(float)pg.x0, (float)pg.y0, (float)(pg.x1 - pg.x0), (float)(pg.y1 - pg.y0)});
+        w->painting = true;
         au_page_paint(t->page, c, (AuRect){(float)p.x0, (float)p.y0, (float)(p.x1 - p.x0), (float)(p.y1 - p.y0)},
                       t->scroll_x, t->scroll_y);
+        w->painting = false;
         au_canvas_clip_pop(c);
     } else if (!au_irect_empty(pg)) {
         au_fill_rect(c, (AuRect){(float)pg.x0, (float)pg.y0, (float)(pg.x1 - pg.x0), (float)(pg.y1 - pg.y0)},
@@ -1281,13 +1313,19 @@ AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
         return h;
     }
     case AU_EVENT_SCROLL: {
-        /* An inner scrolling box under the pointer takes the wheel first. */
+        /* An inner scrolling box under the pointer takes the wheel first.
+         * Shift turns a vertical wheel horizontal. */
         AuTab *t = au_bw_active_tab(w);
+        int dx = ev->dx, dy = ev->dy;
+        if ((ev->mods & AU_MOD_SHIFT) && dx == 0) {
+            dx = dy;
+            dy = 0;
+        }
         if (t && h.part == AU_HIT_PAGE &&
             au_page_scroll(t->page, ev->x - w->layout.page.x0 + t->scroll_x, ev->y - w->layout.page.y0 + t->scroll_y,
-                           ev->dx, ev->dy))
+                           dx, dy))
             return h;
-        au_bw_scroll_by(w, ev->dx, ev->dy);
+        au_bw_scroll_by(w, dx, dy);
         return h;
     }
     default:
@@ -1328,6 +1366,10 @@ bool au_bw_key(AuBrowserWindow *w, const AuEvent *ev)
 
 void au_bw_idle(AuBrowserWindow *w)
 {
+    if (w->hscroll_dirty) {
+        w->hscroll_dirty = false;
+        check_hscroll(w);
+    }
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {
         au_page_idle(w->tabs[i]->page);

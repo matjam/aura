@@ -143,6 +143,24 @@ void au_chrome_layout(AuChromeLayout *l, int W, int H, AuTabPosition pos, int co
     l->address_text = irect(ax0 + 23, l->address.y0 + 3, ax1 - 4, l->address.y1 - 3);
 }
 
+void au_chrome_layout_hscroll(AuChromeLayout *l)
+{
+    if (!au_irect_empty(l->hscroll))
+        return;
+    int sb = AU_CHROME_SCROLL_W - 1;
+    int bottom = l->page.y1;
+    if (bottom - l->page.y0 < AU_CHROME_SCROLL_W + 8)
+        return; /* no room */
+    int top = bottom - sb;
+    /* Like the vertical bar, it overlaps its neighbours' frame lines by
+     * one pixel: the status bar's top line and the splitter or window
+     * edge on the left. */
+    l->hscroll = irect(l->page.x0 - 1, top, l->page.x1 + 1, bottom + 1);
+    l->corner = irect(l->page.x1 + 1, top + 1, l->width, bottom); /* inside both bars' frame lines */
+    l->page.y1 = top;
+    l->vscroll.y1 = top + 1;
+}
+
 AuIRect au_chrome_tab_rect(const AuChromeLayout *l, int i)
 {
     if (l->position == AU_TABS_TOP) {
@@ -219,6 +237,10 @@ AuHit au_chrome_hit(const AuChromeLayout *l, int x, int y)
             h.part = AU_HIT_THROBBER;
     } else if (au_irect_contains(l->grow, x, y))
         h.part = AU_HIT_GROW;
+    else if (au_irect_contains(l->corner, x, y))
+        h.part = AU_HIT_CORNER;
+    else if (au_irect_contains(l->hscroll, x, y))
+        h.part = AU_HIT_HSCROLL;
     else if (au_irect_contains(l->vscroll, x, y))
         h.part = AU_HIT_VSCROLL;
     else if (au_irect_contains(l->page, x, y))
@@ -843,6 +865,16 @@ static void paint_standins(AuCanvas *c, const AuChromeLayout *l)
     bevel(c, dn, false, false);
     icon_triangle(c, (float)(up.x0 + up.x1) / 2, (float)(up.y0 + up.y1) / 2, 2, C_ICON);
     icon_triangle(c, (float)(dn.x0 + dn.x1) / 2, (float)(dn.y0 + dn.y1) / 2, 3, C_ICON);
+    if (!au_irect_empty(l->hscroll)) {
+        AuIRect hs = l->hscroll;
+        fill_box(c, hs.x0, hs.y0, hs.x1, hs.y1, C_FRAME);
+        fill_box(c, hs.x0 + 1, hs.y0 + 1, hs.x1 - 1, hs.y1 - 1, AU_RGB(204, 204, 204));
+        AuIRect lf = irect(hs.x0, hs.y0, hs.x0 + 16, hs.y1), rt = irect(hs.x1 - 16, hs.y0, hs.x1, hs.y1);
+        bevel(c, lf, false, false);
+        bevel(c, rt, false, false);
+        icon_triangle(c, (float)(lf.x0 + lf.x1) / 2, (float)(lf.y0 + lf.y1) / 2, 0, C_ICON);
+        icon_triangle(c, (float)(rt.x0 + rt.x1) / 2, (float)(rt.y0 + rt.y1) / 2, 1, C_ICON);
+    }
     AuIRect g = l->grow;
     fill_box(c, g.x0, g.y0, g.x1, g.y1, C_FACE);
     hline(c, g.x0, g.x1, g.y0, C_FRAME);
@@ -879,7 +911,10 @@ void au_chrome_paint(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, con
     }
     if (touches(l->status, clip))
         paint_status(c, fonts, l, s);
-    if (s->draw_native_standins && (touches(l->vscroll, clip) || touches(l->grow, clip)))
+    if (!au_irect_empty(l->corner) && touches(l->corner, clip))
+        fill_box(c, l->corner.x0, l->corner.y0, l->corner.x1, l->corner.y1, C_FACE);
+    if (s->draw_native_standins &&
+        (touches(l->vscroll, clip) || touches(l->grow, clip) || touches(l->hscroll, clip)))
         paint_standins(c, l);
     au_canvas_clip_pop(c);
 }

@@ -538,6 +538,37 @@ static void test_zoom(void)
     settle(w);
     au_page_content_size(t2->page, &cw, &ch);
     CHECK(cw == 1000);
+    /* Wider than the page: a horizontal scroll bar, sharing the corner. */
+    {
+        const AuChromeLayout *l = &w->layout;
+        int pw = l->page.x1 - l->page.x0;
+        CHECK(pw < 1000);
+        CHECK(!au_irect_empty(l->hscroll) && !au_irect_empty(l->corner));
+        CHECK(l->hscroll.y1 == l->status.y0 + 1 && l->page.y1 == l->hscroll.y0);
+        CHECK(l->vscroll.y1 == l->hscroll.y0 + 1 && l->corner.x0 > l->page.x1);
+        CHECK(au_chrome_hit(l, (l->hscroll.x0 + l->hscroll.x1) / 2, (l->hscroll.y0 + l->hscroll.y1) / 2).part ==
+              AU_HIT_HSCROLL);
+        CHECK(au_chrome_hit(l, (l->corner.x0 + l->corner.x1) / 2, (l->corner.y0 + l->corner.y1) / 2).part ==
+              AU_HIT_CORNER);
+        int mx, my;
+        au_bw_scroll_max(w, &mx, &my);
+        CHECK(mx == 1000 - pw);
+        AuEvent e;
+        memset(&e, 0, sizeof e);
+        e.type = AU_EVENT_SCROLL;
+        e.x = l->page.x0 + 10;
+        e.y = l->page.y0 + 10;
+        e.dy = 48;
+        e.mods = AU_MOD_SHIFT; /* Shift-wheel scrolls sideways */
+        au_bw_mouse(w, &e);
+        CHECK(t2->scroll_x == 48 && t2->scroll_y == 0);
+        paint(w);
+    }
+    au_bw_navigate(w, "file:///mem/other.html");
+    settle(w);
+    CHECK(au_irect_empty(w->layout.hscroll) && t2->scroll_x == 0);
+    au_bw_navigate(w, "file:///mem/tiny.html");
+    settle(w);
     b->prefs.font_size_min = 20;
     au_browser_prefs_changed(b);
     au_page_content_size(t2->page, &cw, &ch);

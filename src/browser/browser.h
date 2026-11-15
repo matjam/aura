@@ -115,6 +115,8 @@ struct AuBrowserWindow {
     int throbber_frame;
     uint32_t throbber_ms;
     AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
+    bool painting;      /* inside au_bw_paint */
+    bool hscroll_dirty; /* the page width changed during a paint: check the scroll bar at the next idle */
 };
 
 #define AU_MAX_FETCHERS 8

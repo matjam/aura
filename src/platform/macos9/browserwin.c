@@ -27,7 +27,7 @@ struct BrowserWin {
     AuBrowserWindow *bw;
     GWorldPtr gw;
     AuSurface *surf;
-    ControlHandle vscroll;
+    ControlHandle vscroll, hscroll;
     TEHandle te;
     bool field_focus;
     bool closing;
@@ -134,6 +134,11 @@ static void blit(BrowserWin *b, AuIRect r)
     Rect gr = qd_rect(l->grow);
     RectRgn(cut, &gr);
     DiffRgn(mask, cut, mask);
+    if (!au_irect_empty(l->hscroll)) {
+        Rect hr = qd_rect(l->hscroll);
+        RectRgn(cut, &hr);
+        DiffRgn(mask, cut, mask);
+    }
     ForeColor(blackColor);
     BackColor(whiteColor);
     CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy | kDitherCopy, mask);
@@ -381,6 +386,12 @@ static void place_controls(BrowserWin *b)
     MoveControl(b->vscroll, (short)l->vscroll.x0, (short)l->vscroll.y0);
     SizeControl(b->vscroll, (short)(l->vscroll.x1 - l->vscroll.x0), (short)(l->vscroll.y1 - l->vscroll.y0));
     ShowControl(b->vscroll);
+    HideControl(b->hscroll);
+    if (!au_irect_empty(l->hscroll)) {
+        MoveControl(b->hscroll, (short)l->hscroll.x0, (short)l->hscroll.y0);
+        SizeControl(b->hscroll, (short)(l->hscroll.x1 - l->hscroll.x0), (short)(l->hscroll.y1 - l->hscroll.y0));
+        ShowControl(b->hscroll);
+    }
     place_field(b);
 }
 
@@ -399,6 +410,15 @@ static void update_scroll(BrowserWin *b)
         SetControlMaximum(b->vscroll, (short)my);
     if (GetControlValue(b->vscroll) != y)
         SetControlValue(b->vscroll, (short)y);
+    if (mx > 32767)
+        mx = 32767;
+    int x = t ? t->scroll_x : 0;
+    if (x > 32767)
+        x = 32767;
+    if (GetControlMaximum(b->hscroll) != mx)
+        SetControlMaximum(b->hscroll, (short)mx);
+    if (GetControlValue(b->hscroll) != x)
+        SetControlValue(b->hscroll, (short)x);
 }
 
 static pascal void scroll_action(ControlHandle c, short part)
@@ -407,17 +427,22 @@ static pascal void scroll_action(ControlHandle c, short part)
     if (!b)
         return;
     const AuChromeLayout *l = &b->bw->layout;
-    int page = (l->page.y1 - l->page.y0) - 40;
+    bool horiz = c == b->hscroll;
+    int page = horiz ? (l->page.x1 - l->page.x0) - 40 : (l->page.y1 - l->page.y0) - 40;
     if (page < 20)
         page = 20;
+    int d = 0;
     switch (part) {
-    case inUpButton: au_bw_scroll_by(b->bw, 0, -16); break;
-    case inDownButton: au_bw_scroll_by(b->bw, 0, 16); break;
-    case inPageUp: au_bw_scroll_by(b->bw, 0, -page); break;
-    case inPageDown: au_bw_scroll_by(b->bw, 0, page); break;
+    case inUpButton: d = -16; break;
+    case inDownButton: d = 16; break;
+    case inPageUp: d = -page; break;
+    case inPageDown: d = page; break;
     }
+    if (horiz)
+        au_bw_scroll_by(b->bw, d, 0);
+    else
+        au_bw_scroll_by(b->bw, 0, d);
     flush(b);
-    (void)c;
 }
 
 /* ---- Host callbacks ---- */
@@ -538,6 +563,7 @@ static void bw_activate(MacWin *mw, bool on)
     BrowserWin *b = (BrowserWin *)mw;
     SetPort((GrafPtr)mw->win);
     HiliteControl(b->vscroll, on ? 0 : 255);
+    HiliteControl(b->hscroll, on ? 0 : 255);
     if (b->field_focus) {
         if (on)
             TEActivate(b->te);
@@ -603,15 +629,18 @@ static void bw_click(MacWin *mw, EventRecord *ev)
         flush(b);
         return;
     }
-    if (h.part == AU_HIT_VSCROLL) {
+    if (h.part == AU_HIT_VSCROLL || h.part == AU_HIT_HSCROLL) {
         ControlHandle c;
         short part = FindControl(pt, mw->win, &c);
-        if (c == b->vscroll && part) {
+        if ((c == b->vscroll || c == b->hscroll) && part) {
             g_tracking = b;
             if (part == inThumb) {
                 TrackControl(c, pt, NULL);
                 AuTab *t = au_bw_active_tab(b->bw);
-                au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
+                if (c == b->hscroll)
+                    au_bw_scroll_to(b->bw, GetControlValue(c), t ? t->scroll_y : 0);
+                else
+                    au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
             } else {
                 static ControlActionUPP action;
                 if (!action)
@@ -864,7 +893,8 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     SetPort((GrafPtr)w);
     Rect sr = {0, 0, 10, 10};
     b->vscroll = NewControl(w, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
-    if (!b->vscroll)
+    b->hscroll = NewControl(w, &sr, (ConstStr255Param) "\p", false, 0, 0, 0, scrollBarProc, 0);
+    if (!b->vscroll || !b->hscroll)
         mac_out_of_memory(256);
     make_gworld(b);
     int iw, ih;
