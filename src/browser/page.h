@@ -352,6 +352,10 @@ bool au_page_source(const AuPage *p, const char **data, size_t *len);
  * on (the default), from the next load. */
 #define AU_PAGE_CONSOLE_LINES 300
 size_t au_page_console_count(const AuPage *p);
+/* Evaluates src as script in the page's document and appends the
+ * result's string form to out (for the host tool and tests). False when
+ * the page runs no script or the script threw. */
+bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
 const char *au_page_console_line(const AuPage *p, size_t i, int *level);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */

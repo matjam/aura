@@ -55,7 +55,8 @@ static int usage(void)
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
-            "                        go:URL back forward cache (the HTTP cache's counts with --net))\n"
+            "                        go:URL back forward cache (the HTTP cache's counts with --net)\n"
+            "                        js:CODE (evaluate in the page) save:FILE (the page source) console)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
@@ -583,6 +584,26 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             au_cache_stats(o->cache, &cs);
         printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored\n",
                cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored);
+    } else if (!strncmp(a, "js:", 3)) {
+        AuTab *t = au_bw_active_tab(w);
+        AuBuf out;
+        au_buf_init(&out);
+        bool ok = t && au_page_eval(t->page, a + 3, &out);
+        printf("js %s: %s\n", ok ? "=" : "failed", au_buf_cstr(&out));
+        au_buf_free(&out);
+        chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "save:", 5)) {
+        AuTab *t = au_bw_active_tab(w);
+        const char *data;
+        size_t len;
+        FILE *f;
+        if (t && au_page_source(t->page, &data, &len) && (f = fopen(a + 5, "wb"))) {
+            fwrite(data, 1, len, f);
+            fclose(f);
+            printf("save: %lu bytes\n", (unsigned long)len);
+        } else {
+            printf("save: no source\n");
+        }
     } else if (!strcmp(a, "console")) {
         AuTab *t = au_bw_active_tab(w);
         size_t n = t ? au_page_console_count(t->page) : 0;
