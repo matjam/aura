@@ -38,11 +38,7 @@ const LFcOps *l_fc_ops(const LBlock *b)
     case LI_FLEX: return &l_fc_flex;
     case LI_TABLE: return &l_fc_table;
     case LI_REPLACED: return &l_fc_replaced;
-    case LI_TABLE_ROW_GROUP:
-    case LI_TABLE_ROW:
-        /* Outside a table: the placeholder table code handles them too. */
-        return &l_fc_table;
-    default: return &l_fc_flow;
+    default: return &l_fc_flow; /* rows, row groups, columns: laid out by their table */
     }
 }
 
@@ -50,6 +46,10 @@ const LFcOps *l_fc_ops(const LBlock *b)
 
 void l_resolve_box_edges(LBlock *b, float cb_w)
 {
+    if (b->b.inner >= LI_TABLE && b->b.inner <= LI_TABLE_COLUMN_GROUP) {
+        l_table_box_edges(b, cb_w);
+        return;
+    }
     if (lb_anon(&b->b)) {
         memset(b->m, 0, sizeof b->m);
         memset(b->p, 0, sizeof b->p);
@@ -278,7 +278,15 @@ void l_shift_content(LBlock *b, float dy)
     /* Block children, and floats reached through inline boxes. */
     LBox *c = b->b.first;
     while (c) {
-        if (c->kind == LK_BLOCK) {
+        if (c->kind == LK_BLOCK && (c->flags & LF_ABSPOS)) {
+            /* Its static position moves; so does the box if it was placed
+             * there (laid out already, with top and bottom auto). */
+            LBlock *k = (LBlock *)c;
+            k->sy += dy;
+            const AuStyleBox *s = c->style->box;
+            if (s->top.kind == AU_LEN_AUTO && s->bottom.kind == AU_LEN_AUTO)
+                k->y += dy;
+        } else if (c->kind == LK_BLOCK) {
             if (!(c->flags & LF_INLINE_LEVEL))
                 ((LBlock *)c)->y += dy;
         } else if (c->kind == LK_INLINE && c->first) {
@@ -541,7 +549,12 @@ void l_outer_intrinsic(AuLayout *L, LBlock *b, float cb_w, float *min_o, float *
     float edges = l_edges_h(b);
     float w = l_spec_width(b, cb_w);
     float mn, mx;
-    if (w >= 0 && b->b.inner != LI_REPLACED) {
+    if (w >= 0 && b->b.inner == LI_TABLE) {
+        /* A table is never narrower than its min-content width. */
+        float imn, imx;
+        l_intrinsic(L, b, &imn, &imx);
+        mn = mx = l_max(w, imn);
+    } else if (w >= 0 && b->b.inner != LI_REPLACED) {
         mn = mx = w;
     } else if (b->b.inner == LI_REPLACED) {
         float rw, rh;
@@ -684,16 +697,21 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         place_legend(L, b, content_w);
     /* A full layout clears every box's cache first (forget_layouts), so a
      * hit here is from earlier in the same pass. */
+    /* Tables and cells size themselves: a table's content_h is the height
+     * of its grid (a minimum), and a cell's is only the percentage base of
+     * its children; the cell's height is its content height, which its
+     * table then stretches to the row. */
+    bool tabular = b->b.inner == LI_TABLE || b->b.inner == LI_TABLE_CELL;
     if (can_skip(L, b, content_w, content_h, cb_h)) {
         L->stats.layouts_skipped++;
         b->w = content_w + l_bp_h(b);
-        float h = content_h >= 0 ? content_h : b->h - l_bp_v(b);
+        float h = content_h >= 0 && !tabular ? content_h : b->h - l_bp_v(b);
         b->h = h + l_bp_v(b);
         return;
     }
     L->depth++;
     b->b.flags &= ~(LF_TOO_DEEP | LF_ESCAPES);
-    LConstraints c = {content_w, content_h, content_w, content_h};
+    LConstraints c = {content_w, b->b.inner == LI_TABLE_CELL ? -1 : content_h, content_w, content_h};
     /* Quirks mode: an auto-height block passes its own percentage base
      * down (the percentage height quirk; see place_block). */
     if (content_h < 0 && b->b.inner == LI_FLOW && L->doc && L->doc->quirks == AU_QUIRKS_FULL &&
@@ -718,8 +736,8 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         int rows = b->rep && b->rep->rows ? b->rep->rows : 2;
         ch = rows * l_control_line(L, b, NULL);
     }
-    float h = content_h >= 0 ? content_h : ch;
-    if (content_h < 0) {
+    float h = content_h >= 0 && !tabular ? content_h : ch;
+    if (content_h < 0 && !tabular) {
         float ah = l_ratio_height(b, content_w);
         /* The ratio gives the height unless the content needs more
          * (min-height: auto behaviour of aspect-ratio). */
@@ -749,7 +767,7 @@ float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h
 {
     /* A definite content height is the answer (l_layout_content uses it
      * as given); no layout needed. */
-    if (content_h >= 0)
+    if (content_h >= 0 && b->b.inner != LI_TABLE && b->b.inner != LI_TABLE_CELL)
         return content_h + l_bp_v(b);
     if (can_skip(L, b, content_w, content_h, cb_h))
         return b->h;
@@ -978,6 +996,14 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy)
     LBox *ref = cb && cb->kind != LK_BLOCK ? &l_geom_parent(cb)->b : cb;
     for (LBox *p = b->b.parent; p && p != ref; p = p->parent)
         p->flags |= LF_ESCAPES;
+    /* Queued again before its containing block finished (a table lays its
+     * cells out twice): one entry, at the latest static position. Two
+     * entries per pass would double at every level of nesting. */
+    for (uint32_t i = L->nabs; i-- > 0;)
+        if (L->abs[i].box == &b->b) {
+            L->abs[i].cb = cb;
+            return;
+        }
     if (L->nabs == L->abs_cap) {
         L->abs_cap = L->abs_cap ? L->abs_cap * 2 : 32;
         L->abs = au_realloc(L->abs, L->abs_cap * sizeof *L->abs);
@@ -1216,6 +1242,7 @@ static void forget_layouts(AuLayout *L)
     LBox *b = L->root;
     while (b) {
         b->flags &= ~(LF_HAS_LAYOUT | LF_MEASURE_OK | LF_INTRINSIC_OK);
+        l_table_forget(b);
         if (b->first)
             b = b->first;
         else {
@@ -1231,11 +1258,13 @@ static void mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
     b->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
+    l_table_forget(b);
     for (LBox *p = b->parent; p; p = p->parent) {
         if ((p->flags & LF_CHILD_DIRTY) && !(p->flags & LF_INTRINSIC_OK))
             break;
         p->flags |= LF_CHILD_DIRTY;
         p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
+        l_table_forget(p);
     }
 }
 
@@ -1462,6 +1491,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->vh = vh;
         if (L->full_layout)
             forget_layouts(L);
+        L->gen++;
         layout_root(L);
         L->full_layout = false;
         L->need_layout = false;

@@ -8,4 +8,4 @@ toolchain/build/
 qemu/src/
 qemu/build/
 run-net/
-run-fonts/
+run-*/

@@ -17,7 +17,7 @@ static void chunk(AuBuf *out, const char *type, const uint8_t *data, size_t n)
     au_buf_append(out, type, 4);
     if (n)
         au_buf_append(out, data, n);
-    put32(out, au_crc32(0, (const uint8_t *)out->data + start, n + 4));
+    put32(out, au_codec_crc32(0, (const uint8_t *)out->data + start, n + 4));
 }
 
 void au_png_encode(const AuSurface *s, AuBuf *out)
@@ -62,7 +62,7 @@ void au_png_encode(const AuSurface *s, AuBuf *out)
         au_buf_append(&z, raw + pos, n);
         pos += n;
     } while (pos < rawlen);
-    put32(&z, au_adler32(1, raw, rawlen));
+    put32(&z, au_codec_adler32(1, raw, rawlen));
     chunk(out, "IDAT", (const uint8_t *)z.data, z.len);
     chunk(out, "IEND", NULL, 0);
     au_buf_free(&z);
