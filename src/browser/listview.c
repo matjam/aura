@@ -76,18 +76,19 @@ void au_listview_from_bookmarks(AuListView *lv, const AuBookmarks *bm)
 void au_listview_from_history(AuListView *lv, const AuHistory *h, AuTime now)
 {
     au_listview_clear(lv);
-    int64_t today = au_day_of(now);
+    int64_t today = au_day_of(now + h->utc_offset);
     int64_t day = 0;
     char label[96], when[16];
     for (size_t i = 0; i < h->n; i++) {
         const AuHistoryEntry *e = &h->e[i];
-        int64_t d = au_day_of(e->last_visit);
+        AuTime local = e->last_visit + h->utc_offset;
+        int64_t d = au_day_of(local);
         if (i == 0 || d != day) {
             day = d;
             au_day_label(d, today, label, sizeof label);
             au_listview_add(lv, AU_ROW_HEADER, 0, true, label, NULL, 0);
         }
-        int64_t secs = e->last_visit - d * 86400;
+        int64_t secs = local - d * 86400;
         snprintf(when, sizeof when, "%02d:%02d", (int)(secs / 3600), (int)(secs / 60 % 60));
         AuBuf detail;
         au_buf_init(&detail);

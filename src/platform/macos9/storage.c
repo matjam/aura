@@ -19,6 +19,7 @@
  * with the one last saved and writes it a few seconds after the first
  * unsaved change, or at once when forced (quitting). */
 #include "mac.h"
+#include "clock_mac.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -56,10 +57,9 @@ static void cpstr(const char *s, Str255 out)
 
 AuTime mac_now(void)
 {
-    ULONGINT secs = 0;
-    ReadDateTime(&secs);
-    /* Mac OS counts local seconds from 1904; AuTime from 1970. */
-    return (AuTime)secs - (AuTime)2082844800;
+    /* UTC, as cookies and certificates see it (clock_mac.c applies the
+     * Map control panel's offset to the local system clock). */
+    return (AuTime)au_mac_wall_time();
 }
 
 bool storage_init(void)
@@ -233,6 +233,7 @@ void storage_load_all(void)
     AuBrowser *b = g_browser;
     char *data;
     size_t len;
+    b->history.utc_offset = au_mac_gmt_offset();
     if (read_file(F_PREFS, &data, &len)) {
         if (!au_prefs_parse(&b->prefs, data, len))
             keep_aside(F_PREFS);

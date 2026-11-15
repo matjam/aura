@@ -197,9 +197,9 @@ size_t au_history_groups(const AuHistory *h, AuHistoryGroup *out, size_t max)
 {
     size_t ng = 0;
     for (size_t i = 0; i < h->n;) {
-        int64_t day = au_day_of(h->e[i].last_visit);
+        int64_t day = au_day_of(h->e[i].last_visit + h->utc_offset);
         size_t j = i + 1;
-        while (j < h->n && au_day_of(h->e[j].last_visit) == day)
+        while (j < h->n && au_day_of(h->e[j].last_visit + h->utc_offset) == day)
             j++;
         if (ng < max) {
             out[ng].day = day;

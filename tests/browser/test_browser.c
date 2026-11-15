@@ -512,6 +512,15 @@ static void test_history(void)
     CHECK_STR(label, "Wednesday");
     au_day_label(au_day_of(t0) - 30, au_day_of(t0), label, sizeof label);
     CHECK_STR(label, "Thursday, 15 October 2026");
+    /* Times are UTC; days are local (here UTC-7). */
+    AuHistory z;
+    au_history_init(&z, 10);
+    z.utc_offset = -7 * 3600;
+    au_history_visit(&z, "late", "", t0 - 7 * 3600 - 60); /* 02:59 UTC: 19:59 the day before, local */
+    au_history_visit(&z, "early", "", t0 - 3 * 3600);     /* 07:00 UTC: 00:00 local */
+    ng = au_history_groups(&z, groups, 8);
+    CHECK(ng == 2 && groups[0].day == au_day_of(t0) && groups[1].day == au_day_of(t0) - 1);
+    au_history_free(&z);
     int y, m, d, wd;
     au_date_of_day(au_day_of(t0), &y, &m, &d, &wd);
     CHECK(y == 2026 && m == 11 && d == 14 && wd == 6);
