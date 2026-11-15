@@ -1,0 +1,174 @@
+Floats and clear (CSS 2.1 9.5).
+
+=== left and right floats
+<body style="margin:0">
+<div id=l style="float:left;width:100px;height:50px"></div>
+<div id=r style="float:right;width:100px;height:50px"></div>
+---
+#l x=0 y=0
+#r x=700 y=0
+
+=== floats stack horizontally
+<body style="margin:0">
+<div id=a style="float:left;width:100px;height:50px"></div>
+<div id=b style="float:left;width:100px;height:50px"></div>
+<div id=c style="float:right;width:100px;height:50px"></div>
+<div id=d style="float:right;width:100px;height:50px"></div>
+---
+#a x=0
+#b x=100
+#c x=700
+#d x=600
+
+=== a float that does not fit moves down
+<body style="margin:0">
+<div style="width:300px">
+<div id=a style="float:left;width:200px;height:50px"></div>
+<div id=b style="float:left;width:200px;height:30px"></div>
+</div>
+---
+#b x=0 y=50
+
+=== a float moves below the shortest blocking float
+<body style="margin:0">
+<div style="width:300px">
+<div id=a style="float:left;width:100px;height:50px"></div>
+<div id=b style="float:left;width:100px;height:20px"></div>
+<div id=c style="float:left;width:150px;height:10px"></div>
+</div>
+---
+#c x=100 y=20
+
+=== float margins
+<body style="margin:0">
+<div id=a style="float:left;width:100px;height:50px;margin:10px 20px"></div>
+<div id=b style="float:left;width:100px;height:50px;margin:5px"></div>
+---
+#a x=20 y=10
+#b x=145 y=5
+
+=== text wraps around a float
+<body style="margin:0;width:200px">
+<div id=f style="float:left;width:100px;height:32px"></div>
+<p id=p style="margin:0">xx xx xx xx</p>
+---
+#p y=0 h=32 lines=2
+
+=== line boxes shorten next to a float
+<body style="margin:0;width:200px">
+<div style="float:left;width:100px;height:16px"></div>
+<div id=t>xxxxxx xxxxxxx</div>
+---
+#t h=32 lines=2
+
+=== a block's box ignores the float, its lines do not
+<body style="margin:0">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=b style="height:10px"></div>
+---
+#b x=0 w=800
+
+=== a BFC root avoids floats
+<body style="margin:0">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=b style="overflow:hidden;height:10px"></div>
+---
+#b x=100 w=700
+
+=== a BFC root too wide for the space goes below
+<body style="margin:0;width:300px">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=b style="overflow:hidden;width:250px;height:10px"></div>
+---
+#b x=0 y=100
+
+=== a BFC root contains its floats
+<body style="margin:0">
+<div id=p style="overflow:hidden"><div style="float:left;width:10px;height:70px"></div></div>
+<div id=q><div style="float:left;width:10px;height:70px"></div></div>
+---
+#p h=70
+#q h=0
+
+=== clear left, right and both
+<body style="margin:0">
+<div style="float:left;width:100px;height:40px"></div>
+<div style="float:right;width:100px;height:60px"></div>
+<div id=a style="clear:left;height:5px"></div>
+<div id=b style="clear:right;height:5px"></div>
+<div id=c style="clear:both;height:5px"></div>
+---
+#a y=40
+#b y=60
+#c y=65
+
+=== a float clears earlier floats
+<body style="margin:0">
+<div style="float:left;width:100px;height:40px"></div>
+<div id=f style="float:left;clear:left;width:100px;height:40px"></div>
+---
+#f x=0 y=40
+
+=== a float's top is not above an earlier block
+<body style="margin:0">
+<div style="height:30px"></div>
+<div id=f style="float:left;width:10px;height:10px"></div>
+---
+#f y=30
+
+=== a float is not above an earlier float
+<body style="margin:0">
+<div style="float:right;width:100px;height:100px"></div>
+<div style="float:left;width:750px;height:10px"></div>
+<div id=f style="float:left;width:10px;height:10px"></div>
+---
+#f x=750 y=100
+
+=== a float inside a line
+<body style="margin:0;width:300px">
+<div id=p>xx<span id=f style="float:right;width:50px;height:50px"></span>xx</div>
+---
+#f x=250 y=0
+#p lines=1
+
+=== a float after text on the line goes beside it when it fits
+<body style="margin:0;width:200px">
+<div>xxxx <span id=f style="float:left;width:50px;height:10px"></span>yyyy</div>
+---
+#f x=0 y=0
+
+=== shrink-to-fit float width
+<body style="margin:0">
+<div id=f style="float:left">xx xxx</div>
+<div id=g style="float:left;clear:left;width:min-content">xx xxx</div>
+---
+#f w=96
+#g w=48
+
+=== float with percentage width
+<body style="margin:0">
+<div id=f style="float:right;width:25%;height:10px"></div>
+---
+#f x=600 w=200
+
+=== nested float in an inline-block
+<body style="margin:0">
+<div><span id=ib style="display:inline-block"><span style="float:left;width:30px;height:30px"></span>xx</span></div>
+---
+#ib w=62 h=30
+
+=== empty block after a float collapses its margins through
+<body style="margin:0">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=e style="margin:20px 0"></div>
+<div id=b style="height:10px"></div>
+---
+#b y=20
+
+=== a line moved below floats does not place its floats twice
+<body style="margin:0;width:200px">
+<div id=p><div style="float:left;width:150px;height:20px"></div><span id=f style="float:left;width:100px;height:10px"></span>xxxxxxxxxx</div>
+<div id=n style="float:left;width:10px;height:10px"></div>
+---
+#f x=0 y=20
+#p h=46 lines=1

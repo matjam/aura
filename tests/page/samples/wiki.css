@@ -1,0 +1,45 @@
+@import url("wiki-print.css") print;
+body { margin: 0; background: #f6f6f6; font-family: sans-serif; font-size: 14px; color: #202122; }
+a { color: #0645ad; text-decoration: none; }
+a:hover { text-decoration: underline; }
+#mw-head { height: 80px; position: relative; }
+#mw-head .logo { position: absolute; left: 10px; top: 12px; width: 140px; font-family: Georgia, serif; font-size: 18px; color: #000; line-height: 1.1; }
+#mw-head .search { position: absolute; right: 16px; top: 10px; }
+#mw-head .search input { width: 200px; }
+#mw-head .tabs { position: absolute; left: 176px; right: 0; bottom: 0; margin: 0; padding: 0; list-style: none; }
+#mw-head .tabs li { float: left; margin: 0 1px 0 0; padding: 6px 10px 4px; background: linear-gradient(#fff, #eaf3ff); border: 1px solid #a7d7f9; border-bottom: 0; font-size: 12px; }
+#mw-head .tabs li.selected { background: #fff; }
+#mw-head .tabs li.right { float: right; }
+#mw-panel { position: absolute; top: 80px; left: 0; width: 160px; font-size: 12px; }
+#mw-panel ul { list-style: none; margin: 0 0 0 10px; padding: 4px 0; }
+#mw-panel li { padding: 3px 0; }
+#mw-panel h3 { font-size: 12px; color: #54595d; font-weight: normal; margin: 8px 0 0 10px; border-bottom: 1px solid #c8ccd1; }
+.mw-body { margin-left: 176px; padding: 16px 24px 24px; background: #fff; border: 1px solid #a7d7f9; border-right: 0; line-height: 1.6; }
+.mw-body h2 { font-family: Georgia, serif; font-weight: normal; font-size: 1.5em; margin: 1em 0 .25em; border-bottom: 1px solid #a2a9b1; line-height: 1.3; }
+.mw-body h3 { font-size: 1.2em; margin: .3em 0 0; }
+.mw-body p { margin: .5em 0; }
+.sub { font-size: 12px; color: #54595d; margin-bottom: 8px; }
+sup.ref { font-size: 10px; line-height: 1; }
+.infobox { float: right; clear: right; width: 22em; margin: 0 0 1em 1em; border: 1px solid #a2a9b1; background: #f8f9fa; font-size: 12px; line-height: 1.5; border-spacing: 3px; }
+.infobox caption { font-size: 1.25em; font-weight: bold; padding: .2em; }
+.infobox .hdr { background: #d3ffd3; text-align: center; }
+.infobox .image, .infobox .c { text-align: center; }
+.infobox td { vertical-align: top; padding: 0 4px; }
+.toc { display: table; border: 1px solid #a2a9b1; background: #f8f9fa; padding: 7px; font-size: 13px; margin: .5em 0; }
+.toc h2 { display: inline; border: 0; font-size: 14px; font-weight: bold; font-family: sans-serif; margin: 0; }
+.toctitle { text-align: center; }
+.toc ul { list-style: none; margin: .3em 0 0; padding: 0; }
+.toc ul ul { margin-left: 2em; }
+.tocnumber { color: #202122; padding-right: .3em; }
+.thumb { margin-bottom: .5em; }
+.tright { float: right; clear: right; margin: .5em 0 1.3em 1.4em; }
+.thumbinner { border: 1px solid #c8ccd1; padding: 3px; background: #f8f9fa; font-size: 12px; text-align: center; overflow: hidden; }
+.thumbinner .ph { background: #ccd; color: #666; line-height: 120px; }
+.thumbcaption { text-align: left; line-height: 1.4; padding: 3px; }
+.wikitable { background: #f8f9fa; border: 1px solid #a2a9b1; border-collapse: collapse; margin: 1em 0; }
+.wikitable th, .wikitable td { border: 1px solid #a2a9b1; padding: .2em .4em; }
+.wikitable th { background: #eaecf0; text-align: center; }
+blockquote { margin: 1em 2em; padding: 0 1em; border-left: 4px solid #eaecf0; font-style: italic; }
+.references { font-size: 12px; }
+.catlinks { border: 1px solid #a2a9b1; background: #f8f9fa; padding: 5px; margin-top: 1em; clear: both; font-size: 12px; }
+#footer { margin-left: 176px; padding: 12px 24px; font-size: 11px; color: #54595d; }

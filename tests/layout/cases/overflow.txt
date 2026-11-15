@@ -1,0 +1,208 @@
+Overflow, clipping, scroll extents and painting order (CSS 2.1 Appendix E).
+
+=== document size follows content
+<body style="margin:0">
+<div style="height:1500px;width:1200px"></div>
+---
+doc w=1200 h=1500
+
+=== overflow hidden clips painting and hit testing
+<body style="margin:0">
+<div id=o style="overflow:hidden;width:50px;height:50px">
+<div id=c style="width:200px;height:200px;background:#ff0000"></div>
+</div>
+---
+pixel 25 25 ff0000
+pixel 100 25 ffffff
+pixel 25 100 ffffff
+hit 25 25 #c
+hit 100 25 <body>
+
+=== overflow visible paints outside
+<body style="margin:0">
+<div style="width:50px;height:50px">
+<div style="width:200px;height:200px;background:#ff0000"></div>
+</div>
+---
+pixel 100 100 ff0000
+
+=== clipped content does not grow the document
+<body style="margin:0">
+<div style="overflow:hidden;width:50px;height:50px"><div style="width:3000px;height:3000px"></div></div>
+---
+doc w=800 h=600
+
+=== the document scrolls
+<body style="margin:0">
+<div style="height:500px"></div>
+<div id=r style="height:100px;background:#ff0000"></div>
+<div style="height:1000px"></div>
+---
+pixel 10 520 ff0000
+scroll 400
+pixel 10 120 ff0000
+pixel 10 520 ffffff
+hit 10 120 #r
+
+=== backgrounds paint below floats, floats below text
+<body style="margin:0">
+<div style="background:#ff0000;height:40px;margin-bottom:-40px"></div>
+<div style="float:left;width:30px;height:30px;background:#00ff00"></div>
+<div style="color:#0000ff;text-indent:-30px">x</div>
+---
+pixel 5 5 0000ff
+pixel 20 20 00ff00
+pixel 60 20 ff0000
+
+=== positioned boxes paint above in-flow ones
+<body style="margin:0">
+<div style="position:relative;width:50px;height:50px;background:#00ff00"></div>
+<div style="width:50px;height:50px;margin-top:-25px;background:#ff0000"></div>
+---
+pixel 10 30 00ff00
+hit 10 30 <div>
+
+=== z-index orders positioned boxes
+<body style="margin:0">
+<div id=a style="position:absolute;z-index:2;left:0;top:0;width:50px;height:50px;background:#ff0000"></div>
+<div id=b style="position:absolute;z-index:1;left:25px;top:25px;width:50px;height:50px;background:#00ff00"></div>
+---
+pixel 30 30 ff0000
+pixel 60 60 00ff00
+hit 30 30 #a
+hit 60 60 #b
+
+=== negative z-index paints below in-flow blocks
+<body style="margin:0">
+<div style="position:relative;z-index:0">
+<div id=n style="position:absolute;z-index:-1;left:0;top:0;width:50px;height:50px;background:#ff0000"></div>
+<div id=f style="width:30px;height:30px;background:#00ff00"></div>
+</div>
+---
+pixel 10 10 00ff00
+pixel 40 40 ff0000
+hit 10 10 #f
+hit 40 40 #n
+
+=== stacking contexts are atomic
+<body style="margin:0">
+<div style="position:relative;z-index:1">
+<div id=a style="position:absolute;z-index:100;left:0;top:0;width:50px;height:50px;background:#ff0000"></div>
+</div>
+<div id=b style="position:absolute;z-index:2;left:25px;top:25px;width:50px;height:50px;background:#00ff00"></div>
+---
+pixel 30 30 00ff00
+hit 30 30 #b
+
+=== opacity creates a stacking context and blends
+<body style="margin:0">
+<div style="opacity:0.5;width:50px;height:50px;background:#000000"></div>
+---
+pixel 10 10 808080
+
+=== a scroll container clips and reports its extent
+<body style="margin:0">
+<div id=s style="overflow:auto;width:100px;height:100px">
+<div style="height:300px;width:50px;background:#ff0000"></div>
+</div>
+---
+#s h=100
+pixel 10 10 ff0000
+
+=== scrolling a container moves its content, clamped to the extent
+<body style="margin:0">
+<div id=s style="overflow:auto;width:100px;height:100px;padding:10px;box-sizing:border-box">
+<div id=a style="height:50px;background:#ff0000"></div>
+<div id=b style="height:50px;background:#00ff00"></div>
+<div id=c style="height:50px;background:#0000ff"></div>
+</div>
+---
+pixel 50 15 ff0000
+hit 50 15 #a
+// extent: 10 + 150 + 10 bottom padding = 170, so at most 70 of scrolling
+scrollat 50 50 0 1000 yes
+pixel 50 85 0000ff
+hit 50 85 #c
+hit 50 95 #s
+pixel 50 20 00ff00
+hit 50 20 #b
+scrollat 50 50 0 10 no
+scrollat 50 50 0 -1000 yes
+hit 50 15 #a
+
+=== a container that fits does not scroll
+<body style="margin:0">
+<div style="overflow:auto;width:100px;height:100px;padding:20px">
+<div style="height:100px;width:100px"></div>
+</div>
+---
+scrollat 50 50 0 50 no
+scrollat 50 50 50 0 no
+
+=== horizontal scroll extent includes the end padding
+<body style="margin:0">
+<div style="overflow:auto;width:100px;height:50px;padding-right:10px;white-space:nowrap">
+<span style="display:inline-block;width:150px;height:10px;background:#ff0000"></span>
+</div>
+---
+pixel 95 5 ff0000
+pixel 105 5 ff0000
+scrollat 50 5 1000 0 yes
+// extent 160 in a 110 padding box: 50 of scrolling; the span ends at 100
+pixel 95 5 ff0000
+pixel 105 5 ffffff
+
+=== visibility hidden paints nothing and is not hit
+<body style="margin:0">
+<div style="visibility:hidden;width:50px;height:50px;background:#ff0000"><span id=v style="visibility:visible;display:inline-block;width:10px;height:10px;background:#00ff00"></span></div>
+---
+pixel 30 30 ffffff
+hit 30 30 <body>
+pixel 5 5 00ff00
+
+=== the root background covers the canvas
+<html style="background:#00ff00"><body style="margin:0;height:10px">
+---
+pixel 400 500 00ff00
+
+=== the body background propagates to the canvas
+<body style="background:#0000ff;margin:0;height:10px">
+---
+pixel 400 500 0000ff
+
+=== borders paint
+<body style="margin:0">
+<div style="width:50px;height:50px;border:10px solid #ff0000;background:#00ff00"></div>
+---
+pixel 5 5 ff0000
+pixel 30 30 00ff00
+pixel 65 30 ff0000
+
+=== outline paints outside the border box
+<body style="margin:0">
+<div style="margin:20px;width:50px;height:50px;outline:5px solid #ff0000"></div>
+---
+pixel 17 40 ff0000
+pixel 25 40 ffffff
+
+=== box-shadow paints
+<body style="margin:0">
+<div style="width:50px;height:50px;box-shadow:20px 20px 0 #ff0000"></div>
+---
+pixel 60 60 ff0000
+
+=== translate moves painting and hit testing
+<body style="margin:0">
+<div id=t style="width:50px;height:50px;background:#ff0000;transform:translate(100px,10px)"></div>
+---
+pixel 120 30 ff0000
+pixel 10 30 ffffff
+hit 120 30 #t
+
+=== links are found by hit testing
+<body style="margin:0">
+<base href="http://example.com/dir/">
+<p style="margin:0"><a href="page.html">xxxx</a> <a href="../up.html#f">xxxx</a></p>
+---
+link 10 8 http://example.com/dir/page.html
+link 100 8 http://example.com/up.html#f

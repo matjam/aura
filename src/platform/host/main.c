@@ -15,6 +15,7 @@
 #include "browser/browser.h"
 #include "browser/scene.h"
 #include "browser/url.h"
+#include "render.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +37,9 @@ static int usage(void)
             "       aura-host bench [--font F]...\n"
             "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
-            "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n");
+            "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
+            "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
+            "       aura-host dump page.html -w W\n");
     return 2;
 }
 
@@ -307,6 +310,8 @@ int main(int argc, char **argv)
     if (argc < 2)
         return usage();
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
+        return au_host_render_main(argc, argv);
     if (!strcmp(cmd, "chrome")) {
         ChromeOpts o;
         memset(&o, 0, sizeof o);

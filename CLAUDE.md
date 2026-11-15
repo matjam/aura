@@ -33,7 +33,8 @@ what you need to build, test and change Aura.
 | `src/dom` | the node tree |
 | `src/html` | HTML tokenizer and tree builder |
 | `src/css` | CSS parser, selectors, cascade |
-| `src/layout` | box tree and layout |
+| `src/layout` | box tree, layout, painting, hit testing |
+| `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its stub |
 | `src/platform/host` | host tools: headless render to PNG, tree dumps |

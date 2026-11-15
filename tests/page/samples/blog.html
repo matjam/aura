@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Why I still write C for old Macs - a sample blog</title>
+<style>
+body { margin: 0; background: #fdfdfc; color: #222; font: 18px/1.65 Georgia, "Times New Roman", serif; }
+.site-header { border-bottom: 1px solid #eee; padding: 18px 0; }
+.wrap { max-width: 680px; margin: 0 auto; padding: 0 20px; }
+.site-header .wrap { display: flex; justify-content: space-between; align-items: baseline; }
+.site-title { font: bold 22px/1 "Helvetica Neue", Arial, sans-serif; color: #111; text-decoration: none; letter-spacing: -0.5px; }
+.site-nav a { font: 15px "Helvetica Neue", Arial, sans-serif; color: #666; text-decoration: none; margin-left: 18px; }
+article { padding: 40px 0 20px; }
+article header h1 { font: bold 40px/1.15 "Helvetica Neue", Arial, sans-serif; letter-spacing: -1px; margin: 0 0 10px; }
+.meta { font: 14px "Helvetica Neue", Arial, sans-serif; color: #888; margin-bottom: 30px; }
+.meta .tag { display: inline-block; background: #eef4ff; color: #3a5fcd; border-radius: 10px; padding: 0 9px; margin-left: 6px; font-size: 12px; line-height: 20px; }
+article p { margin: 0 0 1.2em; }
+article p:first-of-type::first-letter { float: left; font-size: 3.4em; line-height: .9; margin: 4px 8px 0 0; }
+article h2 { font: bold 26px/1.3 "Helvetica Neue", Arial, sans-serif; margin: 1.6em 0 .6em; }
+a { color: #3a5fcd; }
+code { font: 15px Menlo, Monaco, Consolas, "Courier New", monospace; background: #f3f3f1; padding: 1px 4px; border-radius: 3px; }
+pre { background: #272822; color: #f8f8f2; font: 14px/1.5 Menlo, Monaco, Consolas, "Courier New", monospace; padding: 16px 18px; border-radius: 6px; overflow-x: auto; margin: 0 -18px 1.4em; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+pre code { background: none; padding: 0; font: inherit; }
+.k { color: #f92672; } .t { color: #66d9ef; } .s { color: #e6db74; } .c { color: #75715e; font-style: italic; } .n { color: #ae81ff; }
+blockquote { margin: 1.5em 0; padding: .2em 1.2em; border-left: 4px solid #3a5fcd; color: #555; font-style: italic; background: #f7f9ff; }
+figure { margin: 2em 0; text-align: center; }
+figure .img { height: 200px; background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 50%, #a5b4fc 100%); border-radius: 6px; }
+figcaption { font: 14px "Helvetica Neue", Arial, sans-serif; color: #777; margin-top: 8px; }
+ul.points { padding-left: 1.2em; }
+ul.points li { margin-bottom: .4em; }
+hr { border: 0; height: 1px; background: #e5e5e5; margin: 2.5em 0; }
+.author { display: flex; gap: 16px; align-items: center; font: 15px/1.5 "Helvetica Neue", Arial, sans-serif; color: #555; }
+.author .avatar { flex: none; width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #ffd29d, #e07b39); }
+.author strong { color: #222; display: block; }
+footer.site { border-top: 1px solid #eee; margin-top: 40px; padding: 24px 0 40px; font: 13px "Helvetica Neue", Arial, sans-serif; color: #999; text-align: center; }
+</style>
+</head>
+<body>
+<header class="site-header"><div class="wrap"><a class="site-title" href="/">notes.sample</a><nav class="site-nav"><a href="/archive">Archive</a><a href="/about">About</a><a href="/feed.xml">RSS</a></nav></div></header>
+<main class="wrap">
+<article>
+<header>
+<h1>Why I still write C for old Macs</h1>
+<div class="meta">March 3, 2001 &middot; 7 min read <span class="tag">retro</span><span class="tag">c</span></div>
+</header>
+<p>Every few months someone asks why I bother. The machine on my desk has a 400&nbsp;MHz processor, 256&nbsp;MB of memory and an operating system that has not been updated in twenty years. And yet it is the most pleasant computer I own to program for, because it forces every decision into the open.</p>
+<p>There is no garbage collector to hide allocation from you, no threads to paper over a slow loop, and no gigabytes of headroom. When something is slow you can usually point to the line that does it.</p>
+<h2>A small example</h2>
+<p>Here is the inner loop of a text measurer, simplified. It walks UTF-8 bytes, looks each code point up in a cache and adds the advance:</p>
+<pre><code><span class="c">/* Width of a run of text in 26.6 fixed point. */</span>
+<span class="k">static</span> <span class="t">int32_t</span> measure(<span class="k">const</span> <span class="t">Font</span> *f, <span class="k">const</span> <span class="t">char</span> *s, <span class="t">size_t</span> n)
+{
+    <span class="t">int32_t</span> w = <span class="n">0</span>;
+    <span class="k">for</span> (<span class="t">size_t</span> i = <span class="n">0</span>; i &lt; n;) {
+        <span class="t">uint32_t</span> cp = utf8_next(s, n, &amp;i);
+        <span class="t">Glyph</span> *g = cache_get(f-&gt;cache, cp);
+        <span class="k">if</span> (!g)
+            g = cache_fill(f, cp); <span class="c">/* rasterizes on a miss */</span>
+        w += g-&gt;advance;
+    }
+    <span class="k">return</span> w;
+}</code></pre>
+<p>The interesting part is not the loop, it is what is <em>not</em> there: no allocation, no locking, and a single branch on the common path. On a G3 this runs at roughly <code>40</code> cycles per character with a warm cache.</p>
+<blockquote>Constraints are a gift. They tell you which problems you do not get to have.</blockquote>
+<h2>What it teaches</h2>
+<ul class="points">
+<li>Measure before guessing: the profiler on a slow machine is brutally honest.</li>
+<li>Prefer flat arrays to pointer-chasing structures; caches are tiny.</li>
+<li>Keep recursion shallow. The default stack is <code>32 KB</code>, and a deeply nested document will find its end.</li>
+<li>Write the boring version first. It is usually fast enough.</li>
+</ul>
+<figure><div class="img"></div><figcaption>Figure 1. A gradient standing in for a photo of the desk.</figcaption></figure>
+<p>None of this is new, of course. But it is easy to forget on a machine where everything is fast enough until suddenly it is not. A very long word like <code>supercalifragilisticexpialidocious_function_name_that_does_not_fit</code> should overflow or wrap gracefully depending on the style.</p>
+<hr>
+<div class="author"><div class="avatar"></div><div><strong>Sam Sample</strong>Writes about small computers and the software that runs on them. <a href="/about">More about me</a>.</div></div>
+</article>
+</main>
+<footer class="site">&copy; 2001 notes.sample &middot; <a href="/feed.xml">RSS</a></footer>
+</body>
+</html>

@@ -1,0 +1,220 @@
+Margin collapsing (CSS 2.1 8.3.1).
+
+=== adjacent siblings: larger positive wins
+<body style="margin:0">
+<div id=a style="height:50px;margin-bottom:20px"></div>
+<div id=b style="height:10px;margin-top:30px"></div>
+---
+#a y=0 h=50
+#b y=80
+
+=== positive and negative add
+<body style="margin:0">
+<div id=a style="height:50px;margin-bottom:20px"></div>
+<div id=b style="height:10px;margin-top:-5px"></div>
+---
+#b y=65
+
+=== two negatives: most negative wins
+<body style="margin:0">
+<div style="height:100px"></div>
+<div id=a style="height:50px;margin-bottom:-10px"></div>
+<div id=b style="height:10px;margin-top:-20px"></div>
+---
+#a y=100
+#b y=130
+
+=== parent and first child top margins
+<body style="margin:0">
+<div id=p style="margin-top:10px"><div id=c style="margin-top:20px;height:10px"></div></div>
+---
+#p y=20 h=10
+#c y=20
+
+=== border separates parent and child
+<body style="margin:0">
+<div id=p style="margin-top:10px;border-top:1px solid"><div id=c style="margin-top:20px;height:10px"></div></div>
+---
+#p y=10 h=31
+#c y=31
+
+=== padding separates parent and child
+<body style="margin:0">
+<div id=p style="margin-top:10px;padding-top:5px"><div id=c style="margin-top:20px;height:10px"></div></div>
+---
+#p y=10 h=35
+#c y=35
+
+=== last child bottom collapses with parent bottom
+<body style="margin:0">
+<div id=p style="margin-bottom:10px"><div id=c style="height:10px;margin-bottom:30px"></div></div>
+<div id=s style="height:10px"></div>
+---
+#p y=0 h=10
+#s y=40
+
+=== fixed height stops bottom collapsing
+<body style="margin:0">
+<div id=p style="height:50px;margin-bottom:10px"><div id=c style="height:10px;margin-bottom:30px"></div></div>
+<div id=s style="height:10px"></div>
+---
+#p h=50
+#s y=60
+
+=== bottom padding stops bottom collapsing
+<body style="margin:0">
+<div id=p style="padding-bottom:1px;margin-bottom:10px"><div style="height:10px;margin-bottom:30px"></div></div>
+<div id=s style="height:10px"></div>
+---
+#p h=41
+#s y=51
+
+=== collapsing through an empty block
+<body style="margin:0">
+<div id=a style="height:10px;margin-bottom:10px"></div>
+<div id=e style="margin-top:20px;margin-bottom:30px"></div>
+<div id=b style="height:10px;margin-top:15px"></div>
+---
+#e h=0
+#b y=40
+
+=== several empty blocks in a row
+<body style="margin:0">
+<div id=a style="height:10px"></div>
+<div style="margin:5px 0"></div><div style="margin:25px 0"></div><div style="margin:-5px 0"></div>
+<div id=b style="height:10px"></div>
+---
+#b y=30
+
+=== an empty block with height does not collapse through
+<body style="margin:0">
+<div id=a style="height:10px;margin-bottom:10px"></div>
+<div id=e style="height:5px;margin-top:20px;margin-bottom:30px"></div>
+<div id=b style="height:10px;margin-top:15px"></div>
+---
+#e y=30
+#b y=65
+
+=== an empty block with padding does not collapse through
+<body style="margin:0">
+<div style="height:10px"></div>
+<div id=e style="padding-top:1px;margin:20px 0"></div>
+<div id=b style="height:10px;margin-top:5px"></div>
+---
+#e y=30 h=1
+#b y=51
+
+=== nested first children all collapse
+<body style="margin:0">
+<div id=a style="margin-top:10px"><div id=b style="margin-top:20px"><div id=c style="margin-top:30px;height:5px"></div></div></div>
+---
+#a y=30 h=5
+#b y=30
+#c y=30
+
+=== negative child margin with positive parent margin
+<body style="margin:0">
+<div style="height:100px"></div>
+<div id=p style="margin-top:20px"><div id=c style="margin-top:-30px;height:10px"></div></div>
+---
+#p y=90
+#c y=90
+
+=== empty parent collapses its children through
+<body style="margin:0">
+<div style="height:10px"></div>
+<div id=p style="margin-top:5px"><div style="margin-top:20px;margin-bottom:8px"></div></div>
+<div id=b style="height:10px"></div>
+---
+#b y=30
+
+=== overflow hidden: no collapse with children, collapses with siblings
+<body style="margin:0">
+<div style="height:10px;margin-bottom:15px"></div>
+<div id=p style="overflow:hidden;margin-top:10px"><div id=c style="margin-top:20px;height:10px"></div></div>
+---
+#p y=25 h=30
+#c y=45
+
+=== flow-root contains child margins
+<body style="margin:0">
+<div id=p style="display:flow-root"><div id=c style="margin:20px 0;height:10px"></div></div>
+<div id=s style="height:5px"></div>
+---
+#p y=0 h=50
+#c y=20
+#s y=50
+
+=== inline-block margins do not collapse
+<body style="margin:0">
+<div id=p><span id=ib style="display:inline-block;margin-top:20px;width:10px;height:10px"></span></div>
+---
+#ib y=20
+#p y=0
+
+=== clearance puts the border edge below the float
+<body style="margin:0">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=c style="clear:left;margin-top:10px;height:10px"></div>
+---
+#c y=100
+
+=== no clearance when the margin already clears
+<body style="margin:0">
+<div style="float:left;width:100px;height:100px"></div>
+<div id=c style="clear:left;margin-top:150px;height:10px"></div>
+---
+#c y=150
+
+=== clearance and the previous sibling's margin
+<body style="margin:0">
+<div id=a style="height:20px;margin-bottom:30px"></div>
+<div style="float:left;width:100px;height:100px"></div>
+<div id=c style="clear:both;height:10px"></div>
+---
+#c y=150
+
+=== float between siblings does not stop collapsing
+<body style="margin:0">
+<div id=a style="height:10px;margin-bottom:20px"></div>
+<div style="float:left;width:10px;height:10px"></div>
+<div id=b style="height:10px;margin-top:20px"></div>
+---
+#b y=30
+
+=== absolutely positioned boxes take no part
+<body style="margin:0">
+<div id=a style="height:10px;margin-bottom:20px"></div>
+<div style="position:absolute;margin:100px"></div>
+<div id=b style="height:10px;margin-top:20px"></div>
+---
+#b y=30
+
+=== body margin collapses with first child
+<body style="margin:8px">
+<p id=p style="margin:16px 0">x</p>
+---
+#p y=16 x=8 h=16
+
+=== min-height keeps the bottom margin inside
+<body style="margin:0">
+<div id=p style="min-height:50px"><div style="height:10px;margin-bottom:20px"></div></div>
+<div id=s style="height:5px"></div>
+---
+#p h=50
+#s y=50
+
+=== text content resolves pending margins
+<body style="margin:0">
+<div id=p style="margin-top:10px"><span>x</span></div>
+---
+#p y=10 h=16
+
+=== empty inline content does not resolve margins
+<body style="margin:0">
+<div style="height:10px"></div>
+<div id=p style="margin-top:10px">   </div>
+<div id=b style="height:5px;margin-top:5px"></div>
+---
+#p h=0
+#b y=20

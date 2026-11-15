@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Configuration - Sample Docs</title>
+<style>
+:root { --accent: #3b6fd8; --border: #e3e6ea; --code-bg: #f4f5f7; --text: #1f2328; --muted: #59636e; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 15px/1.6 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; color: var(--text); display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 24px; height: 56px; padding: 0 24px; border-bottom: 1px solid var(--border); background: #fff; position: sticky; top: 0; z-index: 10; }
+header .brand { font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 8px; }
+header .brand .mark { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #5b8def, #2747b0); }
+header nav { display: flex; gap: 18px; flex: 1; }
+header nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+header nav a.active { color: var(--accent); font-weight: 600; }
+header .search { width: 220px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 13px; background: #fafbfc; }
+.layout { display: flex; flex: 1; min-height: 0; }
+aside { flex: 0 0 240px; border-right: 1px solid var(--border); padding: 20px 12px; background: #fafbfc; overflow: auto; }
+aside h4 { margin: 16px 8px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+aside h4:first-child { margin-top: 0; }
+aside ul { list-style: none; margin: 0; padding: 0; }
+aside li a { display: block; padding: 4px 8px; border-radius: 4px; color: var(--text); text-decoration: none; font-size: 14px; }
+aside li a.current { background: #e8effc; color: var(--accent); font-weight: 600; }
+main { flex: 1; min-width: 0; padding: 32px 48px; max-width: 860px; }
+.toc { flex: 0 0 200px; padding: 32px 16px; font-size: 13px; }
+.toc p { margin: 0 0 8px; font-weight: 600; color: var(--muted); }
+.toc a { display: block; color: var(--muted); text-decoration: none; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); }
+.toc a.on { color: var(--accent); border-left-color: var(--accent); }
+.breadcrumbs { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.breadcrumbs a { color: var(--muted); }
+h1 { font-size: 32px; line-height: 1.2; margin: 0 0 16px; }
+h2 { font-size: 22px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+code { font-family: Menlo, Monaco, "Courier New", monospace; font-size: 85%; background: var(--code-bg); padding: 2px 5px; border-radius: 4px; }
+pre { background: #0d1117; color: #e6edf3; padding: 14px 16px; border-radius: 8px; overflow: auto; font-size: 13px; line-height: 1.5; }
+pre code { background: none; padding: 0; font-size: 100%; }
+.callout { display: flex; gap: 12px; padding: 12px 16px; border: 1px solid #f0d58c; background: #fff8e1; border-radius: 8px; margin: 16px 0; }
+.callout .icon { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #e3a008; color: #fff; text-align: center; font-weight: 700; line-height: 22px; }
+.callout p { margin: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 12px 0; }
+th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f6f8fa; }
+.cards { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+.card { flex: 1 1 220px; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.card h4 { margin: 0 0 4px; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; }
+.pager { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border); }
+.pager a { display: flex; flex-direction: column; text-decoration: none; color: var(--accent); padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; min-width: 180px; }
+.pager a.next { text-align: right; }
+.pager small { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><span class="mark"></span>Sample</a>
+  <nav><a href="/guide" class="active">Guide</a><a href="/api">API</a><a href="/examples">Examples</a><a href="/blog">Blog</a></nav>
+  <div class="search">Search docs&hellip;</div>
+</header>
+<div class="layout">
+<aside>
+  <h4>Getting started</h4>
+  <ul><li><a href="#">Introduction</a></li><li><a href="#">Installation</a></li><li><a href="#">Quick start</a></li></ul>
+  <h4>Guide</h4>
+  <ul><li><a href="#" class="current">Configuration</a></li><li><a href="#">Routing</a></li><li><a href="#">Data loading</a></li><li><a href="#">Styling</a></li><li><a href="#">Deployment</a></li></ul>
+  <h4>Reference</h4>
+  <ul><li><a href="#">CLI</a></li><li><a href="#">Config file</a></li><li><a href="#">Plugins</a></li><li><a href="#">Environment variables</a></li></ul>
+</aside>
+<main>
+  <div class="breadcrumbs"><a href="/guide">Guide</a> / Configuration</div>
+  <h1>Configuration</h1>
+  <p>Sample reads its settings from <code>sample.config.json</code> in the project root. Every key is optional; the defaults suit most projects.</p>
+  <div class="callout"><div class="icon">!</div><p>Restart the development server after changing the configuration file. Changes to <code>env</code> are read only at start-up.</p></div>
+  <h2 id="file">The configuration file</h2>
+  <p>A minimal file sets the output folder and the base path:</p>
+<pre><code>{
+  "outDir": "dist",
+  "base": "/docs/",
+  "plugins": ["sample-plugin-images", "sample-plugin-feeds"],
+  "server": { "port": 4000, "open": true }
+}</code></pre>
+  <h3 id="keys">Keys</h3>
+  <table>
+    <tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr>
+    <tr><td><code>outDir</code></td><td>string</td><td><code>"dist"</code></td><td>Folder the build writes to, relative to the project root.</td></tr>
+    <tr><td><code>base</code></td><td>string</td><td><code>"/"</code></td><td>Public path the site is served from.</td></tr>
+    <tr><td><code>plugins</code></td><td>string[]</td><td><code>[]</code></td><td>Plugins to load, in order.</td></tr>
+    <tr><td><code>server.port</code></td><td>number</td><td><code>3000</code></td><td>Port of the development server.</td></tr>
+  </table>
+  <h2 id="plugins">Plugins</h2>
+  <p>Plugins extend the build. Each one is a package that exports a function returning hooks.</p>
+  <div class="cards">
+    <div class="card"><h4>Images</h4><p>Resizes and converts images at build time.</p></div>
+    <div class="card"><h4>Feeds</h4><p>Generates RSS and Atom feeds from your posts.</p></div>
+    <div class="card"><h4>Search</h4><p>Builds a client-side search index.</p></div>
+  </div>
+  <h2 id="env">Environment variables</h2>
+  <p>Variables prefixed with <code>SAMPLE_</code> are exposed to pages as <code>env.NAME</code>. Others stay on the server.</p>
+  <div class="pager"><a href="#" class="prev"><small>Previous</small>Quick start</a><a href="#" class="next"><small>Next</small>Routing</a></div>
+</main>
+<nav class="toc"><p>On this page</p><a href="#file" class="on">The configuration file</a><a href="#keys">Keys</a><a href="#plugins">Plugins</a><a href="#env">Environment variables</a></nav>
+</div>
+</body>
+</html>
