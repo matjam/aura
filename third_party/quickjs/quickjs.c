@@ -49497,7 +49497,20 @@ static const JSCFunctionListEntry js_math_obj[] = {
 
 /* OS dependent. d = argv[0] is in ms from 1970. Return the difference
    between UTC time and local time 'd' in minutes */
+static JSTimeNowFunc *js_time_now_func;
+static JSTimeZoneOffsetFunc *js_time_tz_func;
+static void *js_time_opaque;
+
+void JS_SetTimeSource(JSTimeNowFunc *now_ms, JSTimeZoneOffsetFunc *tz_offset, void *opaque)
+{
+    js_time_now_func = now_ms;
+    js_time_tz_func = tz_offset;
+    js_time_opaque = opaque;
+}
+
 static int getTimezoneOffset(int64_t time) {
+    if (js_time_tz_func)
+        return js_time_tz_func(js_time_opaque, time);
 #if defined(_WIN32)
     DWORD r;
     TIME_ZONE_INFORMATION t;
@@ -58066,7 +58079,19 @@ static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
 
 /* OS dependent: return the UTC time in ms since 1970. */
 static int64_t date_now(void) {
+    if (js_time_now_func)
+        return js_time_now_func(js_time_opaque);
     return js__gettimeofday_us() / 1000;
+}
+
+int64_t JS_GetTimeNow(void)
+{
+    return date_now();
+}
+
+int JS_GetTimeZoneOffset(int64_t time_ms)
+{
+    return getTimezoneOffset(time_ms);
 }
 
 static JSValue js_date_constructor(JSContext *ctx, JSValueConst new_target,

@@ -20,6 +20,8 @@
 #include "entropy.h"
 #include "net_ot.h"
 
+#include "js/clock.h"
+
 #include "net/cache.h"
 #include "net/cookies.h"
 #include "net/disk_cache.h"
@@ -493,8 +495,37 @@ static void apply_prefs(void)
     }
 }
 
+/* Script's Date takes its time and zone from the clock the network stack
+ * uses, so Date.now() agrees with cookie expiry and certificate checks.
+ * Mac OS 9 has one zone offset and no zone database: every date, past or
+ * future, gets the offset set now (daylight saving hour included). The
+ * offset is read from parameter RAM at most once a minute. */
+static int64_t script_wall_ms(void *ctx)
+{
+    (void)ctx;
+    return au_mac_wall_ms();
+}
+
+static int32_t script_utc_offset(void *ctx, int64_t utc_ms)
+{
+    (void)ctx;
+    (void)utc_ms;
+    static bool have;
+    static uint32_t read_ms;
+    static int32_t off;
+    uint32_t now = au_mac_clock_ms();
+    if (!have || now - read_ms >= 60000u) {
+        off = au_mac_gmt_offset();
+        read_ms = now;
+        have = true;
+    }
+    return off;
+}
+
 void mac_net_init(void)
 {
+    AuJsClock clock = {NULL, script_wall_ms, script_utc_offset};
+    au_js_set_clock(&clock);
     N.entropy = au_mac_entropy_new();
     N.ops.ctx = NULL;
     N.ops.resolve_start = w_resolve_start;
@@ -601,12 +632,47 @@ void mac_net_clear_cache(void)
 
 AuCookieJar *mac_net_cookie_jar(void) { return N.jar; }
 
+/* "2026-11-15T20:01:02" for seconds since 1970 (sep 'T' or ' '). */
+static void format_time(int64_t t, char sep, char out[40])
+{
+    int64_t day = t / 86400;
+    int32_t rem = (int32_t)(t - day * 86400);
+    if (rem < 0) {
+        rem += 86400;
+        day--;
+    }
+    int y, mo, d, wd;
+    au_date_of_day(day, &y, &mo, &d, &wd);
+    snprintf(out, 40, "%04d-%02d-%02d%c%02u:%02u:%02u", y, mo, d, sep, (unsigned)(rem / 3600) % 24u,
+             (unsigned)(rem / 60) % 60u, (unsigned)rem % 60u);
+}
+
+/* The clock line of Network Status: the UTC time the network stack uses
+ * (cookie expiry, certificate dates, cache freshness), what script's Date
+ * gives, and the Mac's clock and zone they are worked out from. A wrong
+ * zone in the Date & Time control panel shows here as a wrong UTC time. */
+static void clock_status(char *out, size_t cap)
+{
+    char utc[40], script[40], local[40];
+    format_time(au_mac_wall_time(), 'T', utc);
+    format_time(au_js_clock_now_ms() / 1000, 'T', script);
+    format_time(au_mac_local_time(), ' ', local);
+    int32_t off = au_mac_gmt_offset();
+    int32_t a = off < 0 ? -off : off;
+    int32_t soff = au_js_clock_utc_offset_s(au_js_clock_now_ms());
+    snprintf(out, cap, "Clock: UTC %sZ (script %sZ%s). Mac local time %s, zone %c%d.%02d hours from UTC, daylight saving %s.\r",
+             utc, script, soff == off ? "" : ", other zone", local, off < 0 ? '-' : '+', (int)(a / 3600),
+             (int)(a % 3600 * 100 / 3600), au_mac_daylight_saving() ? "on" : "off");
+}
+
 void mac_net_status(char lines[4][256])
 {
     unsigned seed = 0, startup = 0, jitter = 0, input = 0;
     if (N.entropy)
         au_mac_entropy_sources(N.entropy, &seed, &startup, &jitter, &input);
-    snprintf(lines[0], 256, "Entropy: %u of %u bits (seed %u, start-up %u, jitter %u, input %u).",
+    clock_status(lines[0], 256);
+    size_t n = strlen(lines[0]);
+    snprintf(lines[0] + n, 256 - n, "Entropy: %u of %u bits (seed %u, start-up %u, jitter %u, input %u).",
              N.entropy ? au_mac_entropy_bits(N.entropy) : 0, (unsigned)AU_MAC_ENTROPY_THRESHOLD, seed, startup,
              jitter, input);
     if (N.ot) {

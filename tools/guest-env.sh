@@ -14,6 +14,17 @@
 #                stock     os9-novm.qcow2: the base install with virtual
 #                          memory off, no Enforcer
 #              Each base has its own overlay in AURA_RUN.
+# AURA_GUEST_UTC_OFFSET
+#              seconds the base image's Mac OS time zone is east of UTC,
+#              daylight saving hour included, as the image's Date & Time
+#              control panel has it. guest-run.sh starts the guest's
+#              hardware clock at UTC plus this, because Mac OS reads the
+#              hardware clock as local time: the guest then shows the
+#              right local time for its zone and Aura works out the right
+#              UTC, whatever the host's zone is. Both images are set to
+#              Cupertino with daylight saving on (UTC-7; Develop > Network
+#              Status in Aura shows the zone). Change the value here if you
+#              change an image's zone.
 # QEMU         the QEMU binary. Default: ~/.local/opt/qemu-os9/bin, where
 #              qemu/build.sh installs it.
 # QEMU_IMG     qemu-img, from the same folder.
@@ -26,8 +37,14 @@ AURA_RUN=${AURA_RUN:-$aura_main/run}
 AURA_DISKS=${AURA_DISKS:-$aura_main/disks}
 BASE=${BASE:-enforcer}
 case "$BASE" in
-  stock) AURA_BASE=$AURA_DISKS/os9-novm.qcow2 ;;
-  enforcer) AURA_BASE=$AURA_DISKS/os9-vmoff.qcow2 ;;
+  stock)
+    AURA_BASE=$AURA_DISKS/os9-novm.qcow2
+    AURA_GUEST_UTC_OFFSET=${AURA_GUEST_UTC_OFFSET:--25200}
+    ;;
+  enforcer)
+    AURA_BASE=$AURA_DISKS/os9-vmoff.qcow2
+    AURA_GUEST_UTC_OFFSET=${AURA_GUEST_UTC_OFFSET:--25200}
+    ;;
   *)
     echo "guest: unknown BASE '$BASE' (stock or enforcer)" >&2
     exit 2

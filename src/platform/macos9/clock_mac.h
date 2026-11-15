@@ -10,6 +10,7 @@
 
 #include <Multiverse.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Milliseconds since startup; wraps after 49 days. */
@@ -21,5 +22,13 @@ uint32_t au_mac_clock_us(void);
 int32_t au_mac_gmt_offset(void);
 /* Seconds since 1970-01-01 00:00 UTC. */
 int64_t au_mac_wall_time(void);
+/* The same in milliseconds, for script's Date: the system clock's
+ * seconds with the milliseconds of the time since startup. */
+int64_t au_mac_wall_ms(void);
+/* The system clock as it is set: local seconds counted from 1970. */
+int64_t au_mac_local_time(void);
+/* Whether the Date & Time control panel has daylight saving on (the
+ * hour is then already in au_mac_gmt_offset). */
+bool au_mac_daylight_saving(void);
 
 #endif

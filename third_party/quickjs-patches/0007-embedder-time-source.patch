@@ -1,0 +1,76 @@
+Let the embedder supply Date's clock and time zone.
+
+Date.now(), new Date() and the local-time methods read the C library
+(gettimeofday, localtime_r). On Mac OS 9 newlib knows nothing of the
+Mac's clock or its time zone setting, so script time disagreed with the
+network stack's and local time was UTC. JS_SetTimeSource installs two
+process-wide functions: the UTC time in milliseconds and the offset of
+local time (UTC minus local, in minutes, as getTimezoneOffset returns
+it). JS_GetTimeNow and JS_GetTimeZoneOffset return what Date uses, for
+diagnostics. Without a call nothing changes. performance.now and the
+random seed keep their own clocks.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -49497,7 +49497,20 @@ static const JSCFunctionListEntry js_math_obj[] = {
+ 
+ /* OS dependent. d = argv[0] is in ms from 1970. Return the difference
+    between UTC time and local time 'd' in minutes */
++static JSTimeNowFunc *js_time_now_func;
++static JSTimeZoneOffsetFunc *js_time_tz_func;
++static void *js_time_opaque;
++
++void JS_SetTimeSource(JSTimeNowFunc *now_ms, JSTimeZoneOffsetFunc *tz_offset, void *opaque)
++{
++    js_time_now_func = now_ms;
++    js_time_tz_func = tz_offset;
++    js_time_opaque = opaque;
++}
++
+ static int getTimezoneOffset(int64_t time) {
++    if (js_time_tz_func)
++        return js_time_tz_func(js_time_opaque, time);
+ #if defined(_WIN32)
+     DWORD r;
+     TIME_ZONE_INFORMATION t;
+@@ -58066,9 +58079,21 @@ static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
+ 
+ /* OS dependent: return the UTC time in ms since 1970. */
+ static int64_t date_now(void) {
++    if (js_time_now_func)
++        return js_time_now_func(js_time_opaque);
+     return js__gettimeofday_us() / 1000;
+ }
+ 
++int64_t JS_GetTimeNow(void)
++{
++    return date_now();
++}
++
++int JS_GetTimeZoneOffset(int64_t time_ms)
++{
++    return getTimezoneOffset(time_ms);
++}
++
+ static JSValue js_date_constructor(JSContext *ctx, JSValueConst new_target,
+                                    int argc, JSValueConst *argv)
+ {
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -513,6 +513,16 @@ JS_EXTERN JSRuntime *JS_NewRuntime(void);
+ JS_EXTERN void JS_SetRuntimeInfo(JSRuntime *rt, const char *info);
+ /* use 0 to disable memory limit */
+ JS_EXTERN void JS_SetMemoryLimit(JSRuntime *rt, size_t limit);
++/* The clock and the time zone Date uses, for the whole process. now_ms
++   returns UTC milliseconds since 1970; tz_offset returns UTC minus local
++   time in minutes at time_ms (what Date.prototype.getTimezoneOffset
++   returns). NULL for either keeps the C library's. */
++typedef int64_t JSTimeNowFunc(void *opaque);
++typedef int JSTimeZoneOffsetFunc(void *opaque, int64_t time_ms);
++JS_EXTERN void JS_SetTimeSource(JSTimeNowFunc *now_ms, JSTimeZoneOffsetFunc *tz_offset, void *opaque);
++/* What Date.now() returns, and the offset Date uses at time_ms. */
++JS_EXTERN int64_t JS_GetTimeNow(void);
++JS_EXTERN int JS_GetTimeZoneOffset(int64_t time_ms);
+ JS_EXTERN void JS_SetDumpFlags(JSRuntime *rt, uint64_t flags);
+ JS_EXTERN uint64_t JS_GetDumpFlags(JSRuntime *rt);
+ JS_EXTERN size_t JS_GetGCThreshold(JSRuntime *rt);

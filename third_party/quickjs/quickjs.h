@@ -513,6 +513,16 @@ JS_EXTERN JSRuntime *JS_NewRuntime(void);
 JS_EXTERN void JS_SetRuntimeInfo(JSRuntime *rt, const char *info);
 /* use 0 to disable memory limit */
 JS_EXTERN void JS_SetMemoryLimit(JSRuntime *rt, size_t limit);
+/* The clock and the time zone Date uses, for the whole process. now_ms
+   returns UTC milliseconds since 1970; tz_offset returns UTC minus local
+   time in minutes at time_ms (what Date.prototype.getTimezoneOffset
+   returns). NULL for either keeps the C library's. */
+typedef int64_t JSTimeNowFunc(void *opaque);
+typedef int JSTimeZoneOffsetFunc(void *opaque, int64_t time_ms);
+JS_EXTERN void JS_SetTimeSource(JSTimeNowFunc *now_ms, JSTimeZoneOffsetFunc *tz_offset, void *opaque);
+/* What Date.now() returns, and the offset Date uses at time_ms. */
+JS_EXTERN int64_t JS_GetTimeNow(void);
+JS_EXTERN int JS_GetTimeZoneOffset(int64_t time_ms);
 JS_EXTERN void JS_SetDumpFlags(JSRuntime *rt, uint64_t flags);
 JS_EXTERN uint64_t JS_GetDumpFlags(JSRuntime *rt);
 JS_EXTERN size_t JS_GetGCThreshold(JSRuntime *rt);

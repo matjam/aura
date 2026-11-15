@@ -1,7 +1,12 @@
 /* aura-host js: runs JavaScript files against a document.
  *
  *   aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS]
- *                [--stack KB] [--expect-errors N] [--module] [--negative TYPE] [--stats] FILE.js...
+ *                [--stack KB] [--expect-errors N] [--module] [--negative TYPE] [--stats]
+ *                [--clock MS] [--zone SECONDS] FILE.js...
+ *
+ * --clock gives Date a fixed time (UTC milliseconds since 1970) and --zone
+ * a fixed zone (seconds east of UTC) through au_js_set_clock, as the Mac
+ * OS 9 application supplies its own; without them Date reads the host.
  *
  * --stats prints the runtime's start-up time and memory, and its memory
  * after the run.
@@ -22,6 +27,7 @@
  * The garbage collector runs between files. */
 #include "host.h"
 #include "js/js.h"
+#include "js/clock.h"
 #include "html/html.h"
 
 #include <stdio.h>
@@ -210,7 +216,8 @@ static bool deliver_one(JsRun *r, AuJs *js)
 static int usage(void)
 {
     fprintf(stderr, "usage: aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] [--stack KB]\n"
-                    "                    [--expect-errors N] [--module] [--negative TYPE] [--stats] FILE.js...\n");
+                    "                    [--expect-errors N] [--module] [--negative TYPE] [--stats]\n"
+                    "                    [--clock MS] [--zone SECONDS] FILE.js...\n");
     return 2;
 }
 
@@ -272,8 +279,26 @@ static bool h_deliver(void *ctx, AuJs *js)
     return deliver_one(ctx, js);
 }
 
+/* The fixed clock and zone of --clock and --zone. */
+static int64_t g_fake_ms;
+static int32_t g_fake_zone;
+
+static int64_t fake_wall_ms(void *ctx)
+{
+    (void)ctx;
+    return g_fake_ms;
+}
+
+static int32_t fake_zone(void *ctx, int64_t utc_ms)
+{
+    (void)ctx;
+    (void)utc_ms;
+    return g_fake_zone;
+}
+
 static int js_main(int argc, char **argv)
 {
+    AuJsClock clock = {0};
     JsRun run;
     memset(&run, 0, sizeof run);
     run.tail = &run.reqs;
@@ -308,6 +333,13 @@ static int js_main(int argc, char **argv)
             run.negative = argv[++i];
         else if (!strcmp(argv[i], "--stats"))
             stats = true;
+        else if (!strcmp(argv[i], "--clock") && i + 1 < argc) {
+            g_fake_ms = strtoll(argv[++i], NULL, 10);
+            clock.wall_ms = fake_wall_ms;
+        } else if (!strcmp(argv[i], "--zone") && i + 1 < argc) {
+            g_fake_zone = (int32_t)atoi(argv[++i]);
+            clock.utc_offset_s = fake_zone;
+        }
         else if (argv[i][0] == '-')
             return usage();
         else if (!first)
@@ -315,6 +347,8 @@ static int js_main(int argc, char **argv)
     }
     if (!first)
         return usage();
+    if (clock.wall_ms || clock.utc_offset_s)
+        au_js_set_clock(&clock);
     AuDocument *doc;
     char *doc_url;
     if (html) {
@@ -371,7 +405,8 @@ static int js_main(int argc, char **argv)
     for (int i = first; i < argc; i++) {
         if (argv[i][0] == '-') {
             if (!strcmp(argv[i], "--html") || !strcmp(argv[i], "--mem") || !strcmp(argv[i], "--kill") ||
-                !strcmp(argv[i], "--stack") || !strcmp(argv[i], "--expect-errors"))
+                !strcmp(argv[i], "--stack") || !strcmp(argv[i], "--expect-errors") || !strcmp(argv[i], "--clock") ||
+                !strcmp(argv[i], "--zone"))
                 i++;
             continue;
         }

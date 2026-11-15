@@ -693,8 +693,8 @@ change and at quit (session cookies are dropped); the disk cache is the
 preference). The Cookies window (Window > Cookies, or Preferences >
 Privacy) lists `src/net/cookie_view.c`'s model; per-site rules (allow,
 session only, block) live in the `cookies.sites` preference. Develop >
-Network Status shows entropy, Open Transport counters, roots, cookies
-and cache use. The out-of-memory handler closes Open Transport
+Network Status shows the clock (see Networking), entropy, Open Transport
+counters, roots, cookies and cache use. The out-of-memory handler closes Open Transport
 before ExitToShell: with providers open at exit the guest froze.
 
 Engine code must not use `%lld` or `%llu`: newlib on Mac OS 9 lacks
@@ -1768,9 +1768,27 @@ no Apple glue library. `src/platform/macos9/ot.h` declares the calls
 used, and `net_ot.c` calls the exported `Priv` routines with its own
 client record, as Apple's glue did.
 
-On the test machine, QEMU sets the guest clock to UTC while the guest's
-Map control panel says UTC-7, so the wall time Aura computes there is
-7 hours ahead. Certificates are still within their dates.
+Mac OS keeps local time, and Aura works out UTC as the clock minus the
+zone offset of the Date & Time control panel (`au_mac_wall_time`,
+`clock_mac.c`), so a wrong zone or daylight saving setting makes cookie
+expiry, certificate dates and cache freshness wrong by hours. To see
+the clock Aura uses, choose Develop > Network Status: its first line
+shows the UTC time Aura computes, script's `Date.now()` as UTC, the
+Mac's local time, the zone offset in hours and whether daylight saving
+is on.
+
+On the test machine both base images are set to Cupertino with daylight
+saving on (UTC-7, measured on 2026-11-15). QEMU would start the guest's
+hardware clock at UTC, which Mac OS takes for local time (Aura's UTC was
+then 7 hours ahead, and a cookie with a 30-minute `Expires` was dropped
+as expired). `tools/guest-run.sh` therefore passes `-rtc
+base=` the current UTC plus `AURA_GUEST_UTC_OFFSET`
+(`tools/guest-env.sh`, -25200 for both images), so the guest's menu bar
+clock shows Cupertino daylight time and Aura's UTC matches the host's
+`date -u` to the second. If you change an image's zone or daylight
+saving setting, change that value (or set it in the environment for a
+`PERSIST=1` overlay whose zone differs from its base image's). A guest
+started before this change keeps its old clock until it is restarted.
 
 The root store (`assets/net/aura-roots.bin`, 127 KB) was made from
 curl's Mozilla bundle dated 2026-11-05 (118 roots, checked current on
@@ -1933,6 +1951,23 @@ of one top-level page share one runtime (see Frames).
   scripted page through the document view (`--click ID` clicks an
   element, `--chunk N` feeds the parser N bytes at a time, `--no-script`
   turns script off). The `tests/js` scripts and pages run under ctest.
+- **Date and the clock.** Script's `Date` reads the embedder's clock
+  when one is installed with `au_js_set_clock` (`src/js/clock.h`,
+  process-wide; QuickJS patch 0007): UTC milliseconds for `Date.now()`,
+  `new Date()` and `performance.timeOrigin`, and the zone offset for the
+  local-time methods (`getHours`, `toString`, `getTimezoneOffset`,
+  `toLocaleString`). The Mac OS 9 application installs the network
+  stack's clock (`au_mac_wall_ms`: the system clock's seconds with
+  milliseconds from the time since startup) and the Date & Time control
+  panel's offset (`mac_net_init` in `network.c`). Mac OS 9 has no zone
+  database, so every date, past or future, gets the offset set now,
+  daylight saving hour included; the offset is read again at most once
+  a minute. Without a clock (the host tools, JSTest) `Date` reads the C
+  library, which on Mac OS 9 knows neither the Mac's clock nor its
+  zone. `performance.now()` and timers use the monotonic
+  `AuJsHooks.now_ms`. To test with a fixed time and zone, run
+  `aura-host js --clock MS --zone SECONDS` (UTC milliseconds since 1970;
+  seconds east of UTC), as `tests/js/clock.js` does (ctest `js_clock`).
 - **To change QuickJS-ng**, add or edit a patch in
   `third_party/quickjs-patches` and rebuild the tree with `apply.sh` (see
   `third_party/README.md`); never edit `third_party/quickjs` alone.
