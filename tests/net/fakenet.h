@@ -49,6 +49,7 @@ typedef struct FakeServer {
     br_ssl_session_cache_lru cache;
     unsigned char cache_buf[4096];
     bool cache_ready;
+    bool no_resume; /* forget sessions on each connection: every handshake is a full one */
 } FakeServer;
 
 typedef struct FakeNet {

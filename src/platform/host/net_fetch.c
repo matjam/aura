@@ -74,6 +74,12 @@ static void print_cert(const AuCertInfo *ci)
         fprintf(stderr, "* the system clock is wrong (before the root store's date)\n");
     if (ci->hsts)
         fprintf(stderr, "* HSTS host: the error cannot be overridden\n");
+    if (ci->added)
+        fprintf(stderr, "* the server's chain was incomplete: the last %d certificate(s) came from caIssuers URLs\n",
+                ci->added);
+    if (bad && ci->missing_issuer)
+        fprintf(stderr, "* the chain stops for want of an issuer; caIssuers URL: %s\n",
+                ci->aia_url[0] ? ci->aia_url : "(none)");
     int n = ci->count < AU_CERT_MAX_CHAIN ? ci->count : AU_CERT_MAX_CHAIN;
     for (int i = 0; i < n; i++) {
         const AuCertEntry *e = &ci->chain[i];

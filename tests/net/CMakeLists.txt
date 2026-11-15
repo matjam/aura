@@ -44,5 +44,7 @@ add_executable(fuzz_net fuzz_net.c tls_fixtures.c)
 target_link_libraries(fuzz_net aura_engine)
 target_include_directories(fuzz_net PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME net_parsers_fuzz COMMAND fuzz_net all 30000 1 ${CMAKE_SOURCE_DIR}/assets/net/aura-roots.bin)
+# caIssuers bundles, the AIA extension and the intermediates pool file.
+add_test(NAME net_aia_fuzz COMMAND fuzz_net aia 20000 1)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/more.cmake OPTIONAL)

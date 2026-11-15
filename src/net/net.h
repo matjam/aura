@@ -289,5 +289,25 @@ void au_net_clear_cert_exceptions(AuNet *net);
 bool au_net_http_allowed(const AuNet *net, const char *host);
 void au_net_allow_http(AuNet *net, const char *host);
 void au_net_clear_http_allowed(AuNet *net);
+/* After AU_NET_ERR_HTTPS_FALLBACK: why the https attempt failed
+ * (AU_NET_ERR_CONNECT, _TIMEOUT, _RESET: the site has no HTTPS; _TLS,
+ * _CERT, _CLOCK: its HTTPS is broken, and au_http_cert_info has the
+ * details). AU_NET_OK otherwise. Valid until done() returns. */
+AuNetError au_http_fallback_cause(const AuHttpTransfer *t);
+
+/* ---- Intermediate certificates ----
+ * Servers that send their certificate without its intermediate are
+ * completed from the certificate's caIssuers URL (Authority Information
+ * Access): the stack fetches it over http, keeps the certificates in a
+ * pool for the session, and validates the completed chain in full up to
+ * a bundled root (tls.h). Pool certificates are never trusted by
+ * themselves, so the pool may be saved and loaded from a file that is
+ * not protected: a damaged or hostile file cannot grant trust. */
+bool au_net_intermediates_dirty(const AuNet *net);
+int au_net_intermediates_count(const AuNet *net);
+/* Appends the file form (tls.h, au_cert_pool_serialize) and clears dirty. */
+void au_net_intermediates_serialize(AuNet *net, AuBuf *out);
+/* Replaces the pool from a file; false when it is not one. */
+bool au_net_intermediates_parse(AuNet *net, const void *data, size_t len);
 
 #endif

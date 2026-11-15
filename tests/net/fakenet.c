@@ -89,7 +89,7 @@ static uint32_t f_connect(void *ctx, const AuNetAddr *addr, uint16_t port)
             seed[5] = (uint8_t)s->connections;
             seed[6] = (uint8_t)(s - f->servers);
             br_ssl_engine_inject_entropy(&k->sc->eng, seed, sizeof seed);
-            if (!s->cache_ready) {
+            if (!s->cache_ready || s->no_resume) {
                 br_ssl_session_cache_lru_init(&s->cache, s->cache_buf, sizeof s->cache_buf);
                 s->cache_ready = true;
             }

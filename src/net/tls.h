@@ -12,13 +12,80 @@
  * Certificates are checked against the root store (roots.h) with
  * BearSSL's X.509 minimal engine: chain to a trust anchor, validity at
  * the time given, key usage, and the host name (SNI name). The chain the
- * server sent is recorded for the certificate viewer (AuCertInfo). */
+ * server sent is recorded for the certificate viewer (AuCertInfo).
+ *
+ * Incomplete chains. Some servers send their certificate without the
+ * intermediate that links it to a root. When the chain as sent does not
+ * reach a trust anchor, the X.509 wrapper builds a path from the leaf:
+ * each next certificate is one the server sent, else one from the
+ * intermediates pool (AuCertPool, filled from caIssuers URLs), whose
+ * subject is the previous certificate's issuer. The path is then replayed
+ * into the same minimal engine, from start_chain, exactly as if the
+ * server had sent it: every check (signatures, dates, CA flags, key
+ * usage, the host name, and the trust anchor at the end) runs again on
+ * the completed chain. Pool certificates are never trust anchors; a path
+ * that does not end at a bundled root fails as before. When the path
+ * stops for want of an issuer, AuCertInfo names the last certificate's
+ * caIssuers URL (aia_url), and the HTTP layer may fetch it into the pool
+ * and connect again. */
 #ifndef AURA_NET_TLS_H
 #define AURA_NET_TLS_H
 
 #include "net.h"
 
 #define AU_CERT_MAX_CHAIN 8
+
+/* ---- The intermediates pool ----
+ * Certificates fetched from caIssuers URLs (untrusted input that only
+ * helps build a path to a root). At most AU_POOL_MAX certificates of at
+ * most AU_POOL_CERT_MAX bytes; the oldest goes first. */
+#define AU_POOL_MAX 32
+#define AU_POOL_CERT_MAX 8192
+
+typedef struct AuPoolCert {
+    uint8_t *der;
+    size_t len;
+    size_t iss_off, iss_len;   /* the issuer Name (TLV) within der */
+    size_t subj_off, subj_len; /* the subject Name (TLV) within der */
+} AuPoolCert;
+
+typedef struct AuCertPool {
+    AuPoolCert certs[AU_POOL_MAX];
+    int n;
+    bool dirty; /* changed since au_cert_pool_clear_dirty */
+} AuCertPool;
+
+void au_cert_pool_init(AuCertPool *p);
+void au_cert_pool_free(AuCertPool *p);
+/* Adds a copy of a DER certificate. Returns true when it was new; false
+ * when it is malformed, too large, or already there. */
+bool au_cert_pool_add(AuCertPool *p, const uint8_t *der, size_t len);
+/* File form: "AURI", u8 version 1, u8 0, u16 count, then count times
+ * u16 length and the DER bytes. Parsing replaces the pool's contents and
+ * skips certificates that do not parse; false when the file is not one. */
+void au_cert_pool_serialize(const AuCertPool *p, AuBuf *out);
+bool au_cert_pool_parse(AuCertPool *p, const void *data, size_t len);
+
+/* ---- DER helpers for path building (certinfo.c) ---- */
+typedef struct AuDerSpan {
+    const uint8_t *p;
+    size_t len;
+} AuDerSpan;
+
+/* The issuer and subject Names of a certificate, as whole TLVs (the bytes
+ * BearSSL compares). False when the certificate is malformed or has
+ * trailing bytes. */
+bool au_x509_names(const uint8_t *der, size_t len, AuDerSpan *issuer, AuDerSpan *subject);
+/* The first http: caIssuers URL of the Authority Information Access
+ * extension, NUL-terminated in url (at most cap - 1 printable ASCII
+ * characters). False when there is none, it is not http:, or too long. */
+bool au_x509_ca_issuers(const uint8_t *der, size_t len, char *url, size_t cap);
+/* Certificates in a caIssuers response: a DER certificate, a PKCS#7
+ * SignedData (DER, "certs-only") or PEM (CERTIFICATE or PKCS7 blocks).
+ * Calls sink with each certificate's DER (at most max), and returns how
+ * many were found. Every length is bounded by len. */
+int au_cert_bundle_parse(const uint8_t *data, size_t len, int max,
+                         void (*sink)(void *ctx, const uint8_t *der, size_t len), void *ctx);
 
 typedef struct AuCertEntry {
     char subject[192];   /* "CN=example.com, O=Example, C=US" */
@@ -31,8 +98,11 @@ typedef struct AuCertEntry {
 
 struct AuCertInfo {
     char host[256];      /* the name that was checked */
-    int count;           /* certificates the server sent (at most AU_CERT_MAX_CHAIN kept) */
+    int count;           /* certificates in the chain (at most AU_CERT_MAX_CHAIN kept) */
     AuCertEntry chain[AU_CERT_MAX_CHAIN];
+    int added;           /* of count, the last ones came from the intermediates pool, not the server */
+    bool missing_issuer; /* the chain stops at a certificate whose issuer Aura does not have */
+    char aia_url[256];   /* with missing_issuer: that certificate's caIssuers URL, or "" */
     int error;           /* BearSSL error code, 0 when valid */
     const char *reason;  /* English text for the error page */
     bool clock_wrong;    /* the system date is before the root store's date */
@@ -66,6 +136,9 @@ AuTlsState au_tls_state(AuTls *t);
  * arrive (right after au_tls_new). The stack never calls it for an HSTS
  * host. */
 void au_tls_allow_cert(AuTls *t, const uint8_t sha256[32]);
+/* Intermediates that may complete a chain the server sent short (read
+ * when the server's certificates arrive; the pool must outlive t). */
+void au_tls_set_pool(AuTls *t, const AuCertPool *pool);
 
 /* Ciphertext to send: a pointer and length (0 when none); then report how
  * much the socket took. */

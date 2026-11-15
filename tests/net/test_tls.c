@@ -4,6 +4,7 @@
  * root store's date, session resumption, HSTS, waiting for entropy, a
  * server that does not speak TLS, and a bulk transfer timing. */
 #include "fakenet.h"
+#include "net/auth.h"
 #include "net/hsts.h"
 #include "net/net.h"
 #include "net/roots.h"
@@ -347,8 +348,248 @@ static void test_bulk_timing(void)
     fake_free(&f);
 }
 
+/* ---- Incomplete chains: caIssuers (Authority Information Access) ---- */
+
+static char *held[64];
+static int nheld;
+
+/* Queues a 200 response carrying body on s (the bytes outlive the test). */
+static void serve_bytes(FakeServer *s, const void *body, size_t len, const char *status)
+{
+    char head[160];
+    int hl = snprintf(head, sizeof head, "HTTP/1.1 %s\r\nContent-Type: application/pkix-cert\r\nContent-Length: %u\r\n\r\n",
+                      status, (unsigned)len);
+    char *resp = malloc((size_t)hl + len + 1);
+    memcpy(resp, head, (size_t)hl);
+    memcpy(resp + hl, body, len);
+    if (nheld < 64)
+        held[nheld++] = resp;
+    FakeResponse *r = fake_add(s, resp);
+    r->len = (size_t)hl + len;
+}
+
+static void serve_fix(FakeServer *s, int fix)
+{
+    serve_bytes(s, tls_fixtures[fix].cert.data, tls_fixtures[fix].cert.data_len, "200 OK");
+}
+
+static void free_held(void)
+{
+    for (int i = 0; i < nheld; i++)
+        free(held[i]);
+    nheld = 0;
+}
+
+typedef struct AiaEnv {
+    FakeNet f;
+    AuRootStore *roots;
+    AuNet *net;
+    FakeServer *tls, *ca;
+} AiaEnv;
+
+static void aia_env(AiaEnv *e, int leaf)
+{
+    fake_init(&e->f);
+    e->roots = test_roots();
+    e->net = au_net_new(&e->f.ops);
+    au_net_set_roots(e->net, e->roots);
+    e->tls = tls_server(&e->f, "tls.test", leaf);
+    e->ca = fake_server(&e->f, "ca.test", 80);
+}
+
+static void aia_env_free(AiaEnv *e)
+{
+    au_net_free(e->net);
+    au_roots_free(e->roots);
+    fake_free(&e->f);
+    free_held();
+}
+
+static void test_aia_fetch(void)
+{
+    AiaEnv e;
+    aia_env(&e, TLS_FIX_AIA_LEAF);
+    fake_respond(e.tls, OK_RESP);
+    serve_fix(e.ca, TLS_FIX_INTER);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200, "AIA: err %s status %d", au_net_error_name(r.err),
+          r.status);
+    CHECK(r.have_cert && r.cert.count == 2 && r.cert.added == 1 && strstr(r.cert.chain[1].subject, "Intermediate"),
+          "AIA: completed chain shown: count %d added %d", r.cert.count, r.cert.added);
+    CHECK(e.ca->nreq == 1, "AIA: one fetch: %d", e.ca->nreq);
+    if (e.ca->nreq >= 1) {
+        const char *q = e.ca->requests[0];
+        CHECK(!strncmp(q, "GET /inter.crt HTTP/1.1\r\n", 25), "AIA request line: %.40s", q);
+        CHECK(!strstr(q, "Cookie:") && !strstr(q, "Referer:") && !strstr(q, "Authorization:"),
+              "AIA request carries no cookies or referrer: %s", q);
+    }
+    CHECK(au_net_intermediates_count(e.net) == 1 && au_net_intermediates_dirty(e.net), "pool holds it: %d",
+          au_net_intermediates_count(e.net));
+    /* A new full handshake (the server forgets sessions; the pooled
+     * connection is closed) uses the pool without fetching again. */
+    e.tls->no_resume = true;
+    au_net_close_idle(e.net);
+    fake_respond(e.tls, OK_RESP);
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.have_cert && r.cert.count == 2 && !r.sec.resumed, "full handshake again: count %d resumed %d",
+          r.cert.count, r.sec.resumed);
+    CHECK(r.err == AU_NET_OK && e.ca->nreq == 1, "pooled intermediate: err %s fetches %d", au_net_error_name(r.err),
+          e.ca->nreq);
+    /* The pool survives a save and load into another stack. */
+    AuBuf b;
+    au_buf_init(&b);
+    au_net_intermediates_serialize(e.net, &b);
+    CHECK(!au_net_intermediates_dirty(e.net), "saved: not dirty");
+    AuNet *net2 = au_net_new(&e.f.ops);
+    au_net_set_roots(net2, e.roots);
+    CHECK(au_net_intermediates_parse(net2, b.data, b.len) && au_net_intermediates_count(net2) == 1, "loaded pool");
+    fake_respond(e.tls, OK_RESP);
+    get(&e.f, net2, &r, "https://tls.test/", 2000);
+    CHECK(r.err == AU_NET_OK && e.ca->nreq == 1, "loaded pool completes the chain: %s fetches %d",
+          au_net_error_name(r.err), e.ca->nreq);
+    au_net_free(net2);
+    au_buf_free(&b);
+    aia_env_free(&e);
+}
+
+static void test_aia_depth_pkcs7(void)
+{
+    AiaEnv e;
+    aia_env(&e, TLS_FIX_AIA_LEAF2);
+    fake_respond(e.tls, OK_RESP);
+    serve_bytes(e.ca, tls_fix_inter2_p7, tls_fix_inter2_p7_len, "200 OK");
+    serve_fix(e.ca, TLS_FIX_INTER);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 4000);
+    CHECK(r.err == AU_NET_OK && r.cert.count == 3 && r.cert.added == 2, "two levels (PKCS#7, then DER): %s count %d",
+          au_net_error_name(r.err), r.cert.count);
+    CHECK(e.ca->nreq == 2 && e.ca->requests[0] && strstr(e.ca->requests[0], "/inter2.p7c") && e.ca->requests[1] &&
+              strstr(e.ca->requests[1], "/inter.crt"),
+          "fetch order: %d", e.ca->nreq);
+    aia_env_free(&e);
+}
+
+static void test_aia_pem(void)
+{
+    AiaEnv e;
+    aia_env(&e, TLS_FIX_AIA_LEAF);
+    fake_respond(e.tls, OK_RESP);
+    AuBuf pem;
+    au_buf_init(&pem);
+    au_buf_puts(&pem, "-----BEGIN CERTIFICATE-----\n");
+    au_base64_encode(tls_fixtures[TLS_FIX_INTER].cert.data, tls_fixtures[TLS_FIX_INTER].cert.data_len, &pem);
+    au_buf_puts(&pem, "\n-----END CERTIFICATE-----\n");
+    serve_bytes(e.ca, pem.data, pem.len, "200 OK");
+    au_buf_free(&pem);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.err == AU_NET_OK, "PEM caIssuers: %s", au_net_error_name(r.err));
+    aia_env_free(&e);
+}
+
+/* What AIA must not rescue, and the limits on what it fetches. */
+static void aia_expect_fail(int leaf, const char *what, int body_kind, int want_fetches, const char *reason)
+{
+    AiaEnv e;
+    aia_env(&e, leaf);
+    fake_respond(e.tls, OK_RESP);
+    if (body_kind == 1)
+        serve_fix(e.ca, TLS_FIX_OTHER_CA);
+    else if (body_kind == 2)
+        serve_fix(e.ca, leaf); /* the leaf itself: no progress */
+    else if (body_kind == 3) {
+        static char big[20000];
+        memset(big, 0x30, sizeof big);
+        serve_bytes(e.ca, big, sizeof big, "200 OK");
+    } else if (body_kind == 4)
+        serve_bytes(e.ca, "gone", 4, "404 Not Found");
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 3000);
+    CHECK(r.done && r.err == AU_NET_ERR_CERT, "%s: err %s", what, au_net_error_name(r.err));
+    CHECK(e.ca->nreq == want_fetches, "%s: fetches %d, want %d", what, e.ca->nreq, want_fetches);
+    CHECK(r.have_cert && r.cert.reason && strstr(r.cert.reason, reason), "%s: reason %s", what,
+          r.cert.reason ? r.cert.reason : "(none)");
+    CHECK(r.cert.added == 0, "%s: nothing added", what);
+    if (body_kind == 4) {
+        /* A URL that failed is not fetched again this session. */
+        fake_respond(e.tls, OK_RESP);
+        get(&e.f, e.net, &r, "https://tls.test/", 3000);
+        CHECK(r.err == AU_NET_ERR_CERT && e.ca->nreq == 1, "%s: not fetched again: %d", what, e.ca->nreq);
+    }
+    aia_env_free(&e);
+}
+
+static void test_aia_chain_order(void)
+{
+    /* The complete chain sent out of order (leaf, inter, inter2): the path
+     * is rebuilt from what the server sent, with no fetch. */
+    AiaEnv e;
+    aia_env(&e, TLS_FIX_AIA_LEAF2);
+    br_x509_certificate chain[3] = {tls_fixtures[TLS_FIX_AIA_LEAF2].cert, tls_fixtures[TLS_FIX_INTER].cert,
+                                    tls_fixtures[TLS_FIX_INTER2].cert};
+    e.tls->chain = chain;
+    e.tls->chain_len = 3;
+    fake_respond(e.tls, OK_RESP);
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.err == AU_NET_OK && e.ca->nreq == 0 && r.cert.count == 3 && r.cert.added == 0 &&
+              strstr(r.cert.chain[1].subject, "Intermediate 2"),
+          "reordered chain: %s fetches %d count %d", au_net_error_name(r.err), e.ca->nreq, r.cert.count);
+    aia_env_free(&e);
+    /* The complete chain in order needs nothing. */
+    aia_env(&e, TLS_FIX_AIA_LEAF);
+    br_x509_certificate full[2] = {tls_fixtures[TLS_FIX_AIA_LEAF].cert, tls_fixtures[TLS_FIX_INTER].cert};
+    e.tls->chain = full;
+    e.tls->chain_len = 2;
+    fake_respond(e.tls, OK_RESP);
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.err == AU_NET_OK && e.ca->nreq == 0 && r.cert.added == 0, "full chain: %s", au_net_error_name(r.err));
+    aia_env_free(&e);
+}
+
+static void test_aia_hostile_pool(void)
+{
+    /* A pool file holding the untrusted root and a leaf does not make an
+     * untrusted chain valid, and junk entries are skipped. */
+    AiaEnv e;
+    aia_env(&e, TLS_FIX_UNTRUSTED);
+    fake_respond(e.tls, OK_RESP);
+    AuCertPool p;
+    au_cert_pool_init(&p);
+    au_cert_pool_add(&p, tls_fixtures[TLS_FIX_OTHER_CA].cert.data, tls_fixtures[TLS_FIX_OTHER_CA].cert.data_len);
+    au_cert_pool_add(&p, tls_fixtures[TLS_FIX_VALID].cert.data, tls_fixtures[TLS_FIX_VALID].cert.data_len);
+    CHECK(!au_cert_pool_add(&p, (const uint8_t *)"\x30\x03\x02\x01\x00", 5), "junk refused");
+    AuBuf b;
+    au_buf_init(&b);
+    au_cert_pool_serialize(&p, &b);
+    au_buf_append(&b, "\x00\x05garbage", 9);
+    CHECK(au_net_intermediates_parse(e.net, b.data, b.len) && au_net_intermediates_count(e.net) == 2,
+          "hostile pool loads (%d)", au_net_intermediates_count(e.net));
+    Result r;
+    get(&e.f, e.net, &r, "https://tls.test/", 2000);
+    CHECK(r.err == AU_NET_ERR_CERT && r.cert.reason && strstr(r.cert.reason, "trusted"),
+          "pool cannot grant trust: %s", au_net_error_name(r.err));
+    CHECK(!au_net_intermediates_parse(e.net, "AURX", 4), "not a pool file");
+    au_buf_free(&b);
+    au_cert_pool_free(&p);
+    aia_env_free(&e);
+}
+
 int main(void)
 {
+    test_aia_fetch();
+    test_aia_depth_pkcs7();
+    test_aia_pem();
+    test_aia_chain_order();
+    test_aia_hostile_pool();
+    aia_expect_fail(TLS_FIX_UNTRUSTED_AIA, "untrusted root via AIA", 1, 1, "trusted");
+    aia_expect_fail(TLS_FIX_AIA_LEAF, "caIssuers serves the leaf", 2, 1, "trusted");
+    aia_expect_fail(TLS_FIX_AIA_LEAF, "caIssuers response too large", 3, 1, "trusted");
+    aia_expect_fail(TLS_FIX_AIA_LEAF, "caIssuers 404", 4, 1, "trusted");
+    aia_expect_fail(TLS_FIX_EXPIRED_AIA, "expired leaf with AIA", 0, 0, "expired");
+    aia_expect_fail(TLS_FIX_WRONGHOST_AIA, "wrong host with AIA", 0, 0, "different site");
+    aia_expect_fail(TLS_FIX_NOAIA_LEAF, "no AIA extension", 0, 0, "trusted");
     test_valid();
     expect_cert_error(TLS_FIX_EXPIRED, "expired", "expired");
     expect_cert_error(TLS_FIX_WRONGHOST, "wrong host", "different site");
