@@ -114,6 +114,11 @@ the chrome, View > Debug > Font List shows the fonts it found, and View
 layout times, times ten 32-pixel scroll repaints, and shows free heap
 and temporary memory.
 
+The Finder ignores `guest-qmp.py drag` (it moves in one step). To drag
+a file in the Finder (onto the Aura icon, or a copy to the hard disk),
+hold the button for most of a second and move in about ten steps of
+0.15 s each, with the QMP class from `tools/guest-qmp.py`.
+
 To open a local page in the guest, push it with the application (for
 example `tools/guest-push.sh -n AuraTest Aura.bin
 tests/page/samples/*`) and choose File > Open File, drop it on the Aura
