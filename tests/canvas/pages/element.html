@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>The canvas element: contexts, sizes, encoding, limits</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+<style>#styled { width: 200px; } #both { width: 50px; height: 80px; }</style>
+</head>
+<body>
+<canvas id="plain"></canvas>
+<canvas id="sized" width="120" height="40"><p id="fallback">fallback text</p></canvas>
+<canvas id="styled" width="100" height="50"></canvas>
+<canvas id="both" width="100" height="50"></canvas>
+<canvas id="junk" width="abc" height="-5"></canvas>
+<script>
+const $ = (id) => document.getElementById(id);
+test('getContext', () => {
+    const c = $('plain');
+    assert.equal(c.getContext('webgl'), null);
+    assert.equal(c.getContext('webgl2'), null);
+    assert.equal(c.getContext('bitmaprenderer'), null);
+    assert.equal(c.getContext('nonsense'), null);
+    const ctx = c.getContext('2d');
+    assert.ok(ctx instanceof CanvasRenderingContext2D);
+    assert.equal(c.getContext('2d'), ctx, 'the same object each time');
+    assert.equal(c.getContext('2d', { alpha: false }), ctx, 'options are read once');
+    assert.equal(ctx.canvas, c);
+    assert.equal(String(ctx), '[object CanvasRenderingContext2D]');
+    assert.equal(c.getContext('webgl'), null, 'still no webgl after 2d');
+    assert.equal(c.captureStream, undefined);
+    assert.throws(() => new CanvasRenderingContext2D(), TypeError);
+    const attrs = ctx.getContextAttributes();
+    assert.equal(attrs.alpha, true);
+    assert.equal(ctx.isContextLost(), false);
+});
+test('default and attribute sizes', () => {
+    assert.equal($('plain').width, 300);
+    assert.equal($('plain').height, 150);
+    assert.equal($('sized').width, 120);
+    assert.equal($('junk').width, 300, 'an invalid width is the default');
+    assert.equal($('junk').height, 150);
+    let r = $('plain').getBoundingClientRect();
+    assert.equal(r.width, 300);
+    assert.equal(r.height, 150);
+    r = $('sized').getBoundingClientRect();
+    assert.equal(r.width, 120);
+    assert.equal(r.height, 40);
+    r = $('styled').getBoundingClientRect();
+    assert.equal(r.width, 200, 'CSS width');
+    assert.equal(r.height, 100, 'height follows the ratio of the attributes');
+    r = $('both').getBoundingClientRect();
+    assert.equal(r.width, 50);
+    assert.equal(r.height, 80);
+    r = $('junk').getBoundingClientRect();
+    assert.equal(r.width, 300);
+});
+test('fallback content is not rendered with script on', () => {
+    const r = $('fallback').getBoundingClientRect();
+    assert.equal(r.width, 0);
+    assert.equal(r.height, 0);
+    assert.equal($('sized').firstElementChild, $('fallback'), 'it stays in the tree');
+});
+test('the bitmap is the attribute size, whatever CSS says', () => {
+    const ctx = $('styled').getContext('2d');
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 1000, 1000);
+    isPx(ctx, 99, 49, RED);
+    assert.deepEqual(px(ctx, 100, 50), CLEAR, 'outside the bitmap reads as transparent');
+    assert.equal(ctx.getImageData(0, 0, 100, 50).data.length, 100 * 50 * 4);
+});
+test('width and height setters reset the bitmap and the state', () => {
+    const ctx = mk(20, 20);
+    const c = ctx.canvas;
+    ctx.fillStyle = '#00f';
+    ctx.lineWidth = 9;
+    ctx.translate(5, 5);
+    ctx.fillRect(0, 0, 10, 10);
+    isPx(ctx, 6, 6, BLUE);
+    c.width = 30;
+    assert.equal(c.getAttribute('width'), '30');
+    assert.deepEqual(px(ctx, 6, 6), CLEAR, 'cleared');
+    assert.equal(ctx.fillStyle, '#000000');
+    assert.equal(ctx.lineWidth, 1);
+    assert.equal(ctx.getTransform().e, 0);
+    ctx.fillRect(25, 0, 5, 5);
+    isPx(ctx, 29, 0, BLACK, 0, 'the new size');
+    c.width = c.width; /* the same value still clears */
+    assert.deepEqual(px(ctx, 29, 0), CLEAR);
+    ctx.fillRect(0, 0, 5, 5);
+    c.setAttribute('height', '8');
+    assert.equal(c.height, 8);
+    assert.deepEqual(px(ctx, 0, 0), CLEAR, 'setAttribute resets too');
+    ctx.fillRect(0, 0, 30, 30);
+    isPx(ctx, 0, 7, BLACK);
+    assert.deepEqual(px(ctx, 0, 8), CLEAR);
+    c.removeAttribute('height');
+    assert.equal(c.height, 150);
+    ctx.fillRect(0, 0, 30, 300);
+    isPx(ctx, 0, 149, BLACK);
+    assert.throws(() => { c.width = -1; }, 'IndexSizeError');
+    c.width = 0;
+    assert.equal(c.toDataURL(), 'data:,');
+    ctx.fillRect(0, 0, 10, 10); /* nothing to draw on */
+});
+promise_test('toDataURL and toBlob', async () => {
+    const ctx = mk(16, 8);
+    ctx.fillStyle = 'rgb(10, 200, 30)';
+    ctx.fillRect(0, 0, 8, 8);
+    const url = ctx.canvas.toDataURL();
+    assert.ok(url.startsWith('data:image/png;base64,iVBORw0KGgo'), url.slice(0, 40));
+    assert.equal(ctx.canvas.toDataURL('image/jpeg', 0.5).slice(0, 22), 'data:image/png;base64,', 'no JPEG encoder: PNG');
+    assert.equal(ctx.canvas.toDataURL('image/webp').slice(0, 22), 'data:image/png;base64,');
+    /* the PNG decodes to the same pixels */
+    const img = await loadImage(url);
+    assert.equal(img.naturalWidth, 16);
+    assert.equal(img.naturalHeight, 8);
+    const back = mk(16, 8);
+    back.drawImage(img, 0, 0);
+    isPx(back, 3, 3, [10, 200, 30, 255]);
+    assert.deepEqual(px(back, 12, 3), CLEAR);
+    /* a canvas without a context encodes as a blank one */
+    const blank = document.createElement('canvas');
+    blank.width = 3;
+    blank.height = 2;
+    const bimg = await loadImage(blank.toDataURL());
+    assert.equal(bimg.naturalWidth, 3);
+    assert.equal(bimg.naturalHeight, 2);
+    const blob = await new Promise((resolve) => ctx.canvas.toBlob(resolve, 'image/png'));
+    assert.ok(blob instanceof Blob);
+    assert.equal(blob.type, 'image/png');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    assert.deepEqual(Array.from(bytes.slice(0, 8)), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    assert.throws(() => ctx.canvas.toBlob(), TypeError);
+    const empty = document.createElement('canvas');
+    empty.height = 0;
+    assert.equal(await new Promise((resolve) => empty.toBlob(resolve)), null);
+});
+test('alpha: false gives an opaque canvas', () => {
+    const ctx = mk(4, 4, { alpha: false });
+    assert.equal(ctx.getContextAttributes().alpha, false);
+    isPx(ctx, 1, 1, BLACK, 0, 'starts opaque black');
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+    ctx.fillRect(0, 0, 2, 2);
+    isPx(ctx, 0, 0, [128, 0, 0, 255], 1);
+    ctx.clearRect(0, 0, 4, 4);
+    isPx(ctx, 0, 0, BLACK);
+});
+test('sizes over the limits', () => {
+    const ctx = mk(5000, 10);
+    assert.equal(ctx.canvas.width, 5000);
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 10, 10); /* no effect */
+    ctx.beginPath();
+    ctx.arc(5, 5, 3, 0, 7);
+    ctx.fill();
+    ctx.fillText('x', 1, 1);
+    assert.deepEqual(px(ctx, 1, 1), CLEAR, 'reads as transparent');
+    assert.equal(ctx.canvas.toDataURL(), 'data:,');
+    assert.equal(mk(4096, 4096).canvas.toDataURL(), 'data:,', '4096 x 4096 is over 16 MB');
+    /* back within the limits it works again */
+    ctx.canvas.width = 20;
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 10, 10);
+    isPx(ctx, 1, 1, RED);
+});
+test('the memory budget of a page', () => {
+    /* 2048 x 1024 is 8 MB: three fit in 32 MB beside this page's other
+     * canvases, a fourth does not allocate */
+    const list = [];
+    for (let i = 0; i < 4; i++) {
+        const ctx = mk(2048, 1024);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(0, 0, 4, 4);
+        list.push(ctx);
+    }
+    for (let i = 0; i < 3; i++) isPx(list[i], 1, 1, RED, 0, 'canvas ' + i);
+    assert.deepEqual(px(list[3], 1, 1), CLEAR, 'over the budget: drawing does nothing');
+    assert.equal(list[3].canvas.toDataURL().slice(0, 22), 'data:image/png;base64,', 'it still encodes, blank');
+    /* releasing one lets the fourth draw */
+    list[0].canvas.width = 1;
+    list[3].fillRect(0, 0, 4, 4);
+    isPx(list[3], 1, 1, RED);
+    for (const ctx of list) ctx.canvas.width = 1;
+});
+promise_test('OffscreenCanvas', async () => {
+    const off = new OffscreenCanvas(20, 10);
+    assert.equal(off.width, 20);
+    assert.equal(off.getContext('webgl'), null);
+    const ctx = off.getContext('2d');
+    assert.equal(off.getContext('2d'), ctx);
+    assert.equal(ctx.canvas, off);
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(0, 0, 10, 10);
+    isPx(ctx, 5, 5, BLUE);
+    /* drawn onto an element's canvas */
+    const dst = mk(20, 10);
+    dst.drawImage(off, 0, 0);
+    isPx(dst, 5, 5, BLUE);
+    assert.deepEqual(px(dst, 15, 5), CLEAR);
+    const blob = await off.convertToBlob();
+    assert.equal(blob.type, 'image/png');
+    const bm = off.transferToImageBitmap();
+    assert.ok(bm instanceof ImageBitmap);
+    assert.equal(bm.width, 20);
+    assert.deepEqual(px(ctx, 5, 5), CLEAR, 'transferring leaves a blank canvas');
+    off.width = 5;
+    ctx.fillRect(0, 0, 10, 10);
+    assert.deepEqual(px(ctx, 6, 0), CLEAR);
+    assert.throws(() => new OffscreenCanvas(1), TypeError);
+});
+</script>
+</body>
+</html>

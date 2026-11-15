@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Canvas reference scenes</title>
+<style>
+body { margin: 0; background: #fff; }
+canvas { display: block; margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<!-- Each canvas is compared with tests/canvas/golden/ID.png (tests/canvas/CMakeLists.txt).
+     Every scene says what a correct picture shows, so that a reference can be checked by eye. -->
+<canvas id="shapes" width="320" height="200"></canvas>
+<canvas id="strokes" width="320" height="200"></canvas>
+<canvas id="gradients" width="320" height="200"></canvas>
+<canvas id="compositing" width="330" height="240"></canvas>
+<canvas id="text" width="320" height="200"></canvas>
+<canvas id="images" width="320" height="200"></canvas>
+<script>
+const ctx = (id) => document.getElementById(id).getContext('2d');
+const label = (c, s, x, y) => { c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
+    c.shadowColor = 'transparent'; c.fillStyle = '#000'; c.font = '9px sans-serif'; c.textAlign = 'left'; c.textBaseline = 'alphabetic'; c.fillText(s, x, y); c.restore(); };
+
+/* shapes: on white. Row 1: a red square; a blue circle; a green ring (the
+ * centre shows white: evenodd); a yellow triangle with a 1px black
+ * outline; an orange rounded rectangle whose corners are quarter circles
+ * of radius 15. Row 2: a purple ellipse rotated 30 degrees clockwise; a
+ * teal shape with one cubic and one quadratic side; a pink square with
+ * its top-right corner rounded by arcTo; a grey square clipped to a
+ * circle (a disc) with a darker square over its lower right, also inside
+ * the disc only; a half-transparent blue square over a red one (purple
+ * where they overlap). */
+(function () {
+    const c = ctx('shapes');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 320, 200);
+    c.fillStyle = '#e02020'; c.fillRect(10, 10, 50, 50);
+    c.fillStyle = '#2040d0'; c.beginPath(); c.arc(95, 35, 25, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#209020'; c.beginPath(); c.arc(155, 35, 25, 0, Math.PI * 2); c.arc(155, 35, 12, 0, Math.PI * 2); c.fill('evenodd');
+    c.fillStyle = '#f0d020'; c.strokeStyle = '#000'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(215, 10); c.lineTo(240, 60); c.lineTo(190, 60); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle = '#f08020'; c.beginPath(); c.roundRect(255, 10, 55, 50, 15); c.fill();
+    c.fillStyle = '#8030a0'; c.beginPath(); c.ellipse(40, 110, 30, 14, Math.PI / 6, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#209090'; c.beginPath(); c.moveTo(80, 135); c.bezierCurveTo(80, 75, 130, 75, 130, 110); c.quadraticCurveTo(130, 135, 105, 135); c.closePath(); c.fill();
+    c.fillStyle = '#f090b0'; c.beginPath(); c.moveTo(145, 85); c.arcTo(195, 85, 195, 135, 25); c.lineTo(195, 135); c.lineTo(145, 135); c.closePath(); c.fill();
+    c.save(); c.beginPath(); c.arc(230, 110, 25, 0, Math.PI * 2); c.clip();
+    c.fillStyle = '#b0b0b0'; c.fillRect(200, 80, 60, 60); c.fillStyle = '#505050'; c.fillRect(230, 110, 40, 40); c.restore();
+    c.fillStyle = '#e02020'; c.fillRect(265, 85, 30, 30); c.fillStyle = 'rgba(32, 64, 208, 0.5)'; c.fillRect(280, 100, 30, 30);
+    label(c, 'square circle ring(evenodd) triangle roundRect', 10, 75);
+    label(c, 'ellipse 30deg, curves, arcTo, clip, alpha', 10, 155);
+    /* row 3: the same square under transforms: translated; scaled 1.5 x 0.5; rotated 45 degrees; skewed in x */
+    c.fillStyle = '#404040';
+    c.save(); c.translate(20, 165); c.fillRect(0, 0, 20, 20); c.restore();
+    c.save(); c.translate(70, 165); c.scale(1.5, 0.5); c.fillRect(0, 0, 20, 20); c.restore();
+    c.save(); c.translate(140, 162); c.rotate(Math.PI / 4); c.fillRect(0, 0, 20, 20); c.restore();
+    c.save(); c.transform(1, 0, 0.5, 1, 180, 165); c.fillRect(0, 0, 20, 20); c.restore();
+    label(c, 'translate scale rotate skew', 215, 180);
+})();
+
+/* strokes: on white. Three thick horizontal lines with butt, round and
+ * square caps (thin red guides mark the end points: the butt line ends at
+ * them, the other two extend half the width past them). Three chevrons
+ * with miter (a sharp point), round and bevel (a cut point) joins. Lines
+ * of width 1, 2, 4, 8. A dashed line 12 on 6 off; the same shifted by an
+ * offset of 6; a dash-dot line 10,4,2,4; a dashed circle; a dashed
+ * rectangle from strokeRect. A closed path with a 6px stroke in a
+ * left-to-right gradient from blue to red. */
+(function () {
+    const c = ctx('strokes');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 320, 200);
+    c.strokeStyle = '#203060';
+    ['butt', 'round', 'square'].forEach((cap, i) => {
+        c.lineCap = cap; c.lineWidth = 12;
+        c.beginPath(); c.moveTo(25, 18 + i * 20); c.lineTo(95, 18 + i * 20); c.stroke();
+    });
+    c.lineCap = 'butt'; c.strokeStyle = '#e02020'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(25.5, 6); c.lineTo(25.5, 70); c.moveTo(95.5, 6); c.lineTo(95.5, 70); c.stroke();
+    c.strokeStyle = '#203060';
+    ['miter', 'round', 'bevel'].forEach((join, i) => {
+        c.lineJoin = join; c.lineWidth = 10;
+        c.beginPath(); c.moveTo(125 + i * 45, 62); c.lineTo(145 + i * 45, 18); c.lineTo(165 + i * 45, 62); c.stroke();
+    });
+    c.lineJoin = 'miter';
+    [1, 2, 4, 8].forEach((w, i) => { c.lineWidth = w; c.beginPath(); c.moveTo(265, 12.5 + i * 14); c.lineTo(310, 12.5 + i * 14); c.stroke(); });
+    c.lineWidth = 3;
+    c.setLineDash([12, 6]); c.beginPath(); c.moveTo(10, 90); c.lineTo(200, 90); c.stroke();
+    c.lineDashOffset = 6; c.beginPath(); c.moveTo(10, 100); c.lineTo(200, 100); c.stroke();
+    c.lineDashOffset = 0; c.setLineDash([10, 4, 2, 4]); c.beginPath(); c.moveTo(10, 110); c.lineTo(200, 110); c.stroke();
+    c.setLineDash([6, 4]); c.beginPath(); c.arc(240, 100, 22, 0, Math.PI * 2); c.stroke();
+    c.strokeRect(272, 80, 40, 40);
+    c.setLineDash([]);
+    const g = c.createLinearGradient(20, 0, 300, 0);
+    g.addColorStop(0, '#2040d0'); g.addColorStop(1, '#e02020');
+    c.strokeStyle = g; c.lineWidth = 6; c.lineJoin = 'round';
+    c.beginPath(); c.moveTo(20, 180); c.bezierCurveTo(80, 120, 120, 200, 160, 150); c.lineTo(300, 180); c.closePath(); c.stroke();
+})();
+
+/* gradients: a horizontal rainbow (red, yellow, green, cyan, blue) in a
+ * bar; a vertical black-to-white bar; a diagonal red-to-transparent
+ * square over a grey checker (the checker shows through bottom right); a
+ * concentric radial gradient white centre, orange, dark edge; a radial
+ * gradient with the inner circle off centre (a highlight top left, like a
+ * lit ball); a conic gradient in a disc starting red at 3 o'clock and
+ * going clockwise through yellow, green, cyan, blue, magenta back to red;
+ * a bar with hard stops: red, white, blue thirds. */
+(function () {
+    const c = ctx('gradients');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 320, 200);
+    let g = c.createLinearGradient(10, 0, 210, 0);
+    ['#f00', '#ff0', '#0f0', '#0ff', '#00f'].forEach((col, i) => g.addColorStop(i / 4, col));
+    c.fillStyle = g; c.fillRect(10, 10, 200, 30);
+    g = c.createLinearGradient(0, 10, 0, 90);
+    g.addColorStop(0, '#000'); g.addColorStop(1, '#fff');
+    c.fillStyle = g; c.fillRect(220, 10, 30, 80);
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) { c.fillStyle = (x + y) % 2 ? '#999' : '#ddd'; c.fillRect(260 + x * 10, 10 + y * 10, 10, 10); }
+    g = c.createLinearGradient(260, 10, 310, 60);
+    g.addColorStop(0, 'rgba(255, 0, 0, 1)'); g.addColorStop(1, 'rgba(255, 0, 0, 0)');
+    c.fillStyle = g; c.fillRect(260, 10, 50, 50);
+    g = c.createRadialGradient(55, 100, 0, 55, 100, 45);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.5, '#f90'); g.addColorStop(1, '#402');
+    c.fillStyle = g; c.fillRect(10, 55, 90, 90);
+    g = c.createRadialGradient(140, 85, 3, 155, 100, 45);
+    g.addColorStop(0, '#fff'); g.addColorStop(1, '#26a');
+    c.fillStyle = g; c.beginPath(); c.arc(155, 100, 45, 0, Math.PI * 2); c.fill();
+    g = c.createConicGradient(0, 255, 145);
+    ['red', 'yellow', 'lime', 'cyan', 'blue', 'magenta', 'red'].forEach((col, i) => g.addColorStop(i / 6, col));
+    c.fillStyle = g; c.beginPath(); c.arc(255, 145, 45, 0, Math.PI * 2); c.fill();
+    g = c.createLinearGradient(10, 0, 190, 0);
+    g.addColorStop(0, '#d00'); g.addColorStop(1 / 3, '#d00'); g.addColorStop(1 / 3, '#fff'); g.addColorStop(2 / 3, '#fff'); g.addColorStop(2 / 3, '#00d'); g.addColorStop(1, '#00d');
+    c.fillStyle = g; c.fillRect(10, 160, 180, 30);
+    c.strokeStyle = '#000'; c.lineWidth = 1; c.strokeRect(10.5, 160.5, 179, 29);
+})();
+
+/* compositing: 26 cells on a transparent canvas over the white page, in
+ * the order of the specification, 7 per row. Each cell: a red square (the
+ * backdrop, drawn first) and a blue circle half over it (the source,
+ * drawn with the operator, inside the cell's clip). Row 1: source-over
+ * (circle over square), source-in (only the overlap, blue),
+ * source-out (only the circle outside the square), source-atop (square
+ * with the overlap blue), destination-over (square over circle),
+ * destination-in (only the overlap, red), destination-out (square with
+ * the overlap cut out). Row 2: destination-atop (circle with the overlap
+ * red), lighter (overlap magenta), copy (only the circle), xor (overlap
+ * cut out of both), multiply (overlap black), screen (overlap magenta),
+ * overlay. Rows 3 and 4: the blend modes on the overlap. */
+(function () {
+    const c = ctx('compositing');
+    const ops = ['source-over', 'source-in', 'source-out', 'source-atop', 'destination-over', 'destination-in', 'destination-out',
+        'destination-atop', 'lighter', 'copy', 'xor', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn',
+        'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'];
+    ops.forEach((op, i) => {
+        const x = 4 + (i % 7) * 46, y = 4 + Math.floor(i / 7) * 58;
+        c.save();
+        c.beginPath(); c.rect(x, y, 42, 42); c.clip();
+        c.fillStyle = '#e03030'; c.fillRect(x + 2, y + 2, 26, 26);
+        c.globalCompositeOperation = op;
+        c.fillStyle = '#3050e0'; c.beginPath(); c.arc(x + 26, y + 26, 14, 0, Math.PI * 2); c.fill();
+        c.restore();
+        label(c, op.replace('destination', 'dest').replace('source', 'src'), x, y + 52);
+    });
+})();
+
+/* text: on white, with the bundled fonts. "Sans 24" in the sans face;
+ * "Serif italic" slanted in the serif face; "Mono bold" in the monospace
+ * face, bold. A vertical grey line at x = 160 with "left" starting at it,
+ * "center" centred on it and "right" ending at it. A horizontal grey line
+ * at y = 130 with the word "Hg" drawn six times: its baseline on the line
+ * (alphabetic), hanging from it (top, hanging), centred (middle), above
+ * (ideographic, bottom). "outline" stroked 1px blue, not filled. "fit"
+ * text condensed into a 60px grey box. Text in a gradient, with a soft
+ * grey shadow. */
+(function () {
+    const c = ctx('text');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 320, 200);
+    c.fillStyle = '#000';
+    c.font = '24px sans-serif'; c.fillText('Sans 24', 8, 28);
+    c.font = 'italic 20px serif'; c.fillText('Serif italic', 110, 28);
+    c.font = 'bold 16px monospace'; c.fillText('Mono bold', 222, 28);
+    c.strokeStyle = '#999'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(160.5, 38); c.lineTo(160.5, 96); c.moveTo(4, 130.5); c.lineTo(316, 130.5); c.stroke();
+    c.font = '15px sans-serif';
+    ['left', 'center', 'right'].forEach((a, i) => { c.textAlign = a; c.fillText(a, 160, 54 + i * 18); });
+    c.textAlign = 'left';
+    c.font = '20px serif';
+    ['alphabetic', 'top', 'hanging', 'middle', 'ideographic', 'bottom'].forEach((b, i) => { c.textBaseline = b; c.fillText('Hg', 10 + i * 52, 130); });
+    c.textBaseline = 'alphabetic';
+    c.font = 'bold 26px sans-serif'; c.strokeStyle = '#2040d0'; c.lineWidth = 1; c.strokeText('outline', 10, 185);
+    c.fillStyle = '#ddd'; c.fillRect(120, 162, 60, 28);
+    c.fillStyle = '#000'; c.font = '20px sans-serif'; c.fillText('condensed to fit', 120, 183, 60);
+    const g = c.createLinearGradient(195, 0, 315, 0);
+    g.addColorStop(0, '#d02020'); g.addColorStop(1, '#2020d0');
+    c.fillStyle = g; c.shadowColor = 'rgba(0, 0, 0, 0.5)'; c.shadowBlur = 3; c.shadowOffsetX = 2; c.shadowOffsetY = 2;
+    c.font = 'bold 22px serif'; c.fillText('Shadowed', 195, 185);
+})();
+
+/* images: on white. A 4 x 4 source (red, blue / green, white quarters)
+ * drawn: at its size (tiny, top left); enlarged 12 times with smoothing
+ * off (hard squares) and on (blended seams); its top-right quarter alone
+ * (blue); rotated 45 degrees; at half alpha over black stripes; as a
+ * repeating pattern in a circle; as a pattern scaled 3 times and rotated;
+ * with a red shadow offset 6 right and down; and a box filled by a
+ * pattern through putImageData-made noise (a regular two-tone grid). */
+(function () {
+    const c = ctx('images');
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 320, 200);
+    const s = document.createElement('canvas');
+    s.width = s.height = 4;
+    const q = s.getContext('2d');
+    q.fillStyle = '#e02020'; q.fillRect(0, 0, 2, 2);
+    q.fillStyle = '#2040d0'; q.fillRect(2, 0, 2, 2);
+    q.fillStyle = '#209020'; q.fillRect(0, 2, 2, 2);
+    q.fillStyle = '#fff'; q.fillRect(2, 2, 2, 2);
+    c.strokeStyle = '#000'; c.lineWidth = 1;
+    c.drawImage(s, 6, 6);
+    c.imageSmoothingEnabled = false;
+    c.drawImage(s, 20, 6, 48, 48); c.strokeRect(19.5, 5.5, 49, 49);
+    c.imageSmoothingEnabled = true;
+    c.drawImage(s, 80, 6, 48, 48); c.strokeRect(79.5, 5.5, 49, 49);
+    c.imageSmoothingEnabled = false;
+    c.drawImage(s, 2, 0, 2, 2, 140, 6, 48, 48); c.strokeRect(139.5, 5.5, 49, 49);
+    c.save(); c.translate(230, 30); c.rotate(Math.PI / 4); c.drawImage(s, -17, -17, 34, 34); c.restore();
+    c.fillStyle = '#000';
+    for (let i = 0; i < 6; i++) c.fillRect(264 + i * 8, 6, 4, 48);
+    c.save(); c.globalAlpha = 0.5; c.drawImage(s, 264, 6, 48, 48); c.restore();
+    c.fillStyle = c.createPattern(s, 'repeat');
+    c.beginPath(); c.arc(40, 110, 34, 0, Math.PI * 2); c.fill();
+    const p = c.createPattern(s, 'repeat');
+    p.setTransform(new DOMMatrix().translateSelf(120, 110).rotateSelf(30).scaleSelf(3));
+    c.fillStyle = p; c.fillRect(86, 76, 68, 68);
+    c.save(); c.shadowColor = '#e02020'; c.shadowOffsetX = 6; c.shadowOffsetY = 6; c.drawImage(s, 170, 80, 40, 40); c.restore();
+    const d = c.createImageData(60, 60);
+    for (let y = 0; y < 60; y++) for (let x = 0; x < 60; x++) {
+        const on = ((x >> 2) + (y >> 2)) % 2, i = (y * 60 + x) * 4;
+        d.data[i] = on ? 240 : 40; d.data[i + 1] = on ? 200 : 80; d.data[i + 2] = on ? 60 : 160; d.data[i + 3] = 255;
+    }
+    c.putImageData(d, 240, 80);
+    label(c, '1:1, x12 nearest, x12 smooth, crop, rotated, alpha', 6, 66);
+    label(c, 'pattern in circle, pattern transformed, shadow, putImageData', 6, 158);
+})();
+</script>
+</body>
+</html>

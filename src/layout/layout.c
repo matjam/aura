@@ -786,10 +786,18 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     if (b->b.inner == LI_REPLACED) {
         float w, h;
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);
-        float r;
-        if (l_spec_width(b, content_w) < 0 && l_spec_height(b, cb_h) < 0 && l_aspect_ratio(b, &r) && r > 0)
+        float r = 0;
+        bool has_r = l_aspect_ratio(b, &r) && r > 0;
+        if (!has_r && b->b.replaced == LR_CANVAS) {
+            /* A canvas has no LReplaced record: its ratio is that of its
+             * width and height attributes. */
+            float iw, ih;
+            replaced_intrinsic_size(L, b, &iw, &ih, &r);
+            has_r = r > 0;
+        }
+        if (l_spec_width(b, content_w) < 0 && l_spec_height(b, cb_h) < 0 && has_r)
             h = content_w / r;
-        else if (l_spec_height(b, cb_h) < 0 && l_aspect_ratio(b, &r) && r > 0)
+        else if (l_spec_height(b, cb_h) < 0 && has_r)
             h = l_clamp_h(b, content_w / r, cb_h);
         ch = h;
         b->baseline = b->last_baseline = NAN;

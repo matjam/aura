@@ -1883,8 +1883,11 @@ static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px)
     if (!dv->script)
         return -1; /* script is off: the fallback content shows */
     AuCanvas2D *c = au_canvas_set_find(dv->canvases, el);
-    if (c)
+    if (c) {
+        if (!au_c2d_alpha(c))
+            au_c2d_materialize(c); /* a canvas without alpha is opaque black from the start */
         *px = au_c2d_surface(c);
+    }
     return 0;
 }
 

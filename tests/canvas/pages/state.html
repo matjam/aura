@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: the drawing state, transforms, attribute values</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+</head>
+<body style="color: rgb(1, 2, 3)">
+<canvas id="styled" style="color: rgb(40, 50, 60); font-size: 30px"></canvas>
+<script>
+/* Every attribute with its default, a value to set, and values that must
+ * be ignored. */
+const attrs = [
+    ['globalAlpha', 1, 0.25, [-1, 2, NaN, Infinity]],
+    ['globalCompositeOperation', 'source-over', 'multiply', ['bogus', '', 'Source-Over']],
+    ['imageSmoothingEnabled', true, false, []],
+    ['imageSmoothingQuality', 'low', 'high', ['best']],
+    ['fillStyle', '#000000', '#ff8000', ['not a colour', 'rgb(1,2']],
+    ['strokeStyle', '#000000', '#0080ff', ['#12', 'url(x)']],
+    ['lineWidth', 1, 4.5, [0, -3, NaN, Infinity]],
+    ['lineCap', 'butt', 'round', ['flat']],
+    ['lineJoin', 'miter', 'bevel', ['sharp']],
+    ['miterLimit', 10, 2, [0, -1, NaN]],
+    ['lineDashOffset', 0, 7, [NaN, Infinity]],
+    ['shadowColor', 'rgba(0, 0, 0, 0)', '#102030', ['nope']],
+    ['shadowBlur', 0, 6, [-1, NaN, Infinity]],
+    ['shadowOffsetX', 0, -3, [NaN, Infinity]],
+    ['shadowOffsetY', 0, 5, [NaN, -Infinity]],
+    ['font', '10px sans-serif', 'italic bold 22px serif', ['22px', 'bold', 'inherit', '10 sans-serif']],
+    ['textAlign', 'start', 'center', ['middle']],
+    ['textBaseline', 'alphabetic', 'top', ['center']],
+    ['direction', 'inherit', 'rtl', ['up']],
+    ['letterSpacing', '0px', '3px', ['3', 'wide']],
+    ['wordSpacing', '0px', '1.5px', ['big']],
+    ['fontKerning', 'auto', 'none', ['some']],
+];
+test('defaults, setting, and values that are ignored', () => {
+    const ctx = mk(10, 10);
+    for (const [name, def, value, bad] of attrs) {
+        assert.equal(ctx[name], def, name + ' default');
+        ctx[name] = value;
+        assert.equal(ctx[name], value, name + ' set');
+        for (const b of bad) {
+            ctx[name] = b;
+            assert.equal(ctx[name], value, name + ' keeps its value when set to ' + String(b));
+        }
+    }
+    assert.equal(ctx.filter, 'none');
+    ctx.filter = 'blur(2px)'; /* accepted, not applied */
+    assert.equal(ctx.filter, 'none');
+    assert.equal(ctx.fontStretch, 'normal');
+    assert.equal(ctx.fontVariantCaps, 'normal');
+    assert.equal(ctx.textRendering, 'auto');
+});
+test('save and restore every attribute', () => {
+    const ctx = mk(10, 10);
+    for (const [name, , value] of attrs) ctx[name] = value;
+    ctx.setLineDash([2, 3]);
+    ctx.save();
+    ctx.reset === undefined || true;
+    for (const [name, def] of attrs) ctx[name] = def;
+    ctx.setLineDash([]);
+    for (const [name, def] of attrs) assert.equal(ctx[name], def, name + ' changed after save');
+    ctx.restore();
+    for (const [name, , value] of attrs) assert.equal(ctx[name], value, name + ' restored');
+    assert.deepEqual(ctx.getLineDash(), [2, 3]);
+    ctx.restore(); /* nothing saved */
+    assert.equal(ctx.lineWidth, 4.5);
+    ctx.reset();
+    for (const [name, def] of attrs) assert.equal(ctx[name], def, name + ' after reset');
+    assert.deepEqual(ctx.getLineDash(), []);
+});
+test('nested saves', () => {
+    const ctx = mk(10, 10);
+    for (let i = 1; i <= 5; i++) { ctx.lineWidth = i; ctx.save(); }
+    ctx.lineWidth = 99;
+    for (let i = 5; i >= 1; i--) { ctx.restore(); assert.equal(ctx.lineWidth, i); }
+    /* many saves do not exhaust memory */
+    for (let i = 0; i < 10000; i++) ctx.save();
+    for (let i = 0; i < 10000; i++) ctx.restore();
+});
+test('transforms', () => {
+    const ctx = mk(10, 10);
+    const m = (o) => [o.a, o.b, o.c, o.d, o.e, o.f];
+    assert.deepEqual(m(ctx.getTransform()), [1, 0, 0, 1, 0, 0]);
+    assert.ok(ctx.getTransform() instanceof DOMMatrix);
+    assert.ok(ctx.getTransform().isIdentity);
+    ctx.translate(10, 20);
+    ctx.scale(2, 3);
+    assert.deepEqual(m(ctx.getTransform()), [2, 0, 0, 3, 10, 20]);
+    ctx.save();
+    ctx.transform(1, 0, 0, 1, 5, 5);
+    assert.deepEqual(m(ctx.getTransform()), [2, 0, 0, 3, 20, 35]);
+    ctx.restore();
+    assert.deepEqual(m(ctx.getTransform()), [2, 0, 0, 3, 10, 20]);
+    ctx.setTransform(1, 2, 3, 4, 5, 6);
+    assert.deepEqual(m(ctx.getTransform()), [1, 2, 3, 4, 5, 6]);
+    assert.equal(ctx.getTransform().m11, 1);
+    assert.equal(ctx.getTransform().m42, 6);
+    ctx.setTransform({ a: 2, d: 2, e: 7 });
+    assert.deepEqual(m(ctx.getTransform()), [2, 0, 0, 2, 7, 0]);
+    ctx.setTransform({ m11: 3, m22: 4, m41: 1, m42: 2 });
+    assert.deepEqual(m(ctx.getTransform()), [3, 0, 0, 4, 1, 2]);
+    ctx.setTransform(new DOMMatrix([1, 0, 0, 1, 9, 8]));
+    assert.deepEqual(m(ctx.getTransform()), [1, 0, 0, 1, 9, 8]);
+    ctx.setTransform();
+    assert.deepEqual(m(ctx.getTransform()), [1, 0, 0, 1, 0, 0]);
+    ctx.rotate(Math.PI / 2);
+    const r = ctx.getTransform();
+    assert.ok(Math.abs(r.a) < 1e-6 && Math.abs(r.b - 1) < 1e-6 && Math.abs(r.c + 1) < 1e-6 && Math.abs(r.d) < 1e-6);
+    ctx.resetTransform();
+    assert.ok(ctx.getTransform().isIdentity);
+    /* a value that is not finite: the call is ignored */
+    ctx.translate(5, 5);
+    ctx.scale(NaN, 1);
+    ctx.translate(Infinity, 0);
+    ctx.rotate(NaN);
+    ctx.transform(1, 0, 0, 1, 0, Infinity);
+    ctx.setTransform(1, 0, 0, NaN, 0, 0);
+    assert.deepEqual(m(ctx.getTransform()), [1, 0, 0, 1, 5, 5]);
+    assert.throws(() => ctx.scale(1), TypeError);
+    assert.throws(() => ctx.setTransform(1, 2), TypeError);
+    /* the transform applies to what is drawn */
+    ctx.resetTransform();
+    ctx.translate(4, 4);
+    ctx.scale(2, 2);
+    ctx.fillRect(0, 0, 2, 2);
+    isPx(ctx, 4, 4, BLACK);
+    isPx(ctx, 7, 7, BLACK);
+    assert.deepEqual(px(ctx, 3, 3), CLEAR);
+    assert.deepEqual(px(ctx, 8, 8), CLEAR);
+});
+test('DOMMatrix', () => {
+    const a = new DOMMatrix([2, 0, 0, 2, 10, 0]);
+    const b = a.translate(1, 1);
+    assert.equal(b.e, 12);
+    assert.equal(a.e, 10, 'translate returns a new matrix');
+    const inv = a.inverse();
+    assert.equal(inv.a, 0.5);
+    assert.equal(inv.e, -5);
+    const p = a.transformPoint({ x: 1, y: 1 });
+    assert.equal(p.x, 12);
+    assert.equal(p.y, 2);
+    assert.equal(String(new DOMMatrix()), 'matrix(1, 0, 0, 1, 0, 0)');
+    assert.equal(new DOMMatrix('matrix(1, 2, 3, 4, 5, 6)').f, 6);
+    assert.throws(() => new DOMMatrix([1, 2, 3]), TypeError);
+});
+test('line dashes', () => {
+    const ctx = mk(10, 10);
+    ctx.setLineDash([5]);
+    assert.deepEqual(ctx.getLineDash(), [5, 5], 'an odd list is doubled');
+    ctx.setLineDash([1, 2, 3]);
+    assert.deepEqual(ctx.getLineDash(), [1, 2, 3, 1, 2, 3]);
+    ctx.setLineDash([4, -1]);
+    assert.deepEqual(ctx.getLineDash(), [1, 2, 3, 1, 2, 3], 'a negative entry: ignored');
+    ctx.setLineDash([4, NaN]);
+    assert.deepEqual(ctx.getLineDash(), [1, 2, 3, 1, 2, 3]);
+    ctx.setLineDash(new Array(1000).fill(1)); /* over the cap: ignored */
+    assert.equal(ctx.getLineDash().length, 6);
+    ctx.setLineDash([]);
+    assert.deepEqual(ctx.getLineDash(), []);
+    assert.throws(() => ctx.setLineDash(5), TypeError);
+});
+test('colours', () => {
+    const ctx = mk(4, 4);
+    const cases = [
+        ['#f00', '#ff0000'], ['#FF8800', '#ff8800'], ['#12345678', 'rgba(18, 52, 86, 0.47)'], ['red', '#ff0000'],
+        ['RED', '#ff0000'], ['rebeccapurple', '#663399'], ['rgb(1, 2, 3)', '#010203'], ['rgb(1 2 3)', '#010203'],
+        ['rgba(10, 20, 30, 0.5)', 'rgba(10, 20, 30, 0.5)'], ['rgb(10 20 30 / 50%)', 'rgba(10, 20, 30, 0.5)'],
+        ['rgb(100%, 0%, 0%)', '#ff0000'], ['hsl(120, 100%, 25%)', '#008000'], ['hsla(0, 100%, 50%, 0.2)', 'rgba(255, 0, 0, 0.2)'],
+        ['transparent', 'rgba(0, 0, 0, 0)'], ['  blue  ', '#0000ff'], ['hwb(0 0% 0%)', '#ff0000'],
+    ];
+    for (const [input, want] of cases) {
+        ctx.fillStyle = '#000';
+        ctx.fillStyle = input;
+        assert.equal(ctx.fillStyle, want, input);
+        ctx.strokeStyle = input;
+        assert.equal(ctx.strokeStyle, want, input + ' (stroke)');
+    }
+    ctx.fillStyle = 'rgba(0, 0, 255, 1)';
+    assert.equal(ctx.fillStyle, '#0000ff');
+    ctx.fillStyle = 5; /* not a colour */
+    assert.equal(ctx.fillStyle, '#0000ff');
+    /* currentcolor is the canvas element's colour; black off the document */
+    ctx.fillStyle = 'currentcolor';
+    assert.equal(ctx.fillStyle, '#000000');
+    const styled = document.getElementById('styled').getContext('2d');
+    styled.fillStyle = 'currentColor';
+    assert.equal(styled.fillStyle, '#28323c');
+    styled.shadowColor = 'currentcolor';
+    assert.equal(styled.shadowColor, '#28323c');
+});
+test('the font attribute', () => {
+    const ctx = mk(4, 4);
+    const cases = [
+        ['12px Arial', '12px Arial'], ['bold 12px Arial', 'bold 12px Arial'], ['italic 12px "Times New Roman", serif', 'italic 12px "Times New Roman", serif'],
+        ['normal normal 400 12px/20px monospace', '12px monospace'], ['600 15.5px serif', '600 15.5px serif'],
+        ['small-caps 10pt serif', 'small-caps 13.3333px serif'], ['x-large sans-serif', '24px sans-serif'],
+        ['2em serif', '20px serif'], ['150% serif', '15px serif'], ['oblique 9px fantasy', 'oblique 9px fantasy'],
+    ];
+    for (const [input, want] of cases) {
+        ctx.font = '10px sans-serif';
+        ctx.font = input;
+        assert.equal(ctx.font, want, input);
+    }
+    /* relative sizes take the canvas element's font size when it is in the document */
+    const styled = document.getElementById('styled').getContext('2d');
+    styled.font = '2em serif';
+    assert.equal(styled.font, '60px serif');
+    styled.font = 'bolder 50% serif';
+    assert.equal(styled.font, 'bold 15px serif');
+});
+</script>
+</body>
+</html>

@@ -80,11 +80,19 @@ static inline int img_coord(int v, int lo, int hi, bool repeat, bool clamp)
     return -1;
 }
 
+/* Weights are 0..256 per axis; each channel is rounded, so a flat colour
+ * comes out as it went in (the page painter's faster version truncates,
+ * which script reading pixels back would see). */
 static inline uint32_t bilerp(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11, uint32_t fx, uint32_t fy)
 {
-    uint32_t top = au_px_scale_trunc(p00, 256 - fx) + au_px_scale_trunc(p10, fx);
-    uint32_t bot = au_px_scale_trunc(p01, 256 - fx) + au_px_scale_trunc(p11, fx);
-    return au_px_scale_trunc(top, 256 - fy) + au_px_scale_trunc(bot, fy);
+    uint32_t w11 = fx * fy, w10 = fx * (256 - fy), w01 = (256 - fx) * fy, w00 = (256 - fx) * (256 - fy);
+    uint32_t out = 0;
+    for (int sh = 0; sh < 32; sh += 8) {
+        uint32_t v = ((p00 >> sh) & 255) * w00 + ((p10 >> sh) & 255) * w10 + ((p01 >> sh) & 255) * w01 +
+                     ((p11 >> sh) & 255) * w11;
+        out |= ((v + 32768) >> 16) << sh;
+    }
+    return out;
 }
 
 /* The source pixels for n destination pixels from (x, y). */
@@ -1141,7 +1149,7 @@ void au_c2d_measure_text(AuCanvas2D *c, const char *text, size_t len, AuTextMetr
     out->font_descent = t.descent + t.base;
     out->em_ascent = t.em_ascent - t.base;
     out->em_descent = t.em_descent + t.base;
-    out->alphabetic = -t.base;
+    out->alphabetic = 0 - t.base; /* 0, not -0, for the alphabetic baseline */
     out->hanging = t.ascent * 0.8f - t.base;
     out->ideographic = -t.em_descent - t.base;
     text_done(&t);
@@ -1296,9 +1304,20 @@ void au_c2d_draw_image(AuCanvas2D *c, const AuSurface *src, int nat_w, int nat_h
     float r[4];
     AuIRect box = clip_box_of(c);
     bool plain = st->op == OP_SOURCE_OVER && st->alpha >= 1 && !st->clip && !shadow_on(c, st->op);
-    if (plain && st->m.a > 0 && st->m.d > 0 && axis_rect(&st->m, dx, dy, dw, dh, r) && near_int(r[0]) &&
-        near_int(r[1]) && near_int(r[2]) && near_int(r[3]) && near_int((float)ssx) && near_int((float)ssy) &&
-        near_int((float)ssw) && near_int((float)ssh)) {
+    bool whole = plain && st->m.a > 0 && st->m.d > 0 && axis_rect(&st->m, dx, dy, dw, dh, r) && near_int(r[0]) &&
+                 near_int(r[1]) && near_int(r[2]) && near_int(r[3]) && near_int((float)ssx) && near_int((float)ssy) &&
+                 near_int((float)ssw) && near_int((float)ssh);
+    if (whole) {
+        /* Whole pixels: a copy when unscaled; the page painter's scaler
+         * when it does not interpolate (nearest, or an averaging
+         * reduction by 2 or more). Interpolation goes the general way,
+         * which rounds. */
+        float tw = r[2] - r[0], th = r[3] - r[1];
+        bool same = fabsf(tw - (float)ssw) < 1e-3f && fabsf(th - (float)ssh) < 1e-3f;
+        bool reduce = (float)ssw >= 2 * tw || (float)ssh >= 2 * th;
+        whole = same || !st->smoothing || reduce;
+    }
+    if (whole) {
         AuIRect d = {(int)floorf(r[0] + 0.5f), (int)floorf(r[1] + 0.5f), (int)floorf(r[2] + 0.5f),
                      (int)floorf(r[3] + 0.5f)};
         AuIRect sr = {(int)floor(ssx + 0.5), (int)floor(ssy + 0.5), (int)floor(ssx + ssw + 0.5),

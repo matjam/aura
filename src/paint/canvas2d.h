@@ -103,6 +103,10 @@ int au_c2d_height(const AuCanvas2D *c);
 bool au_c2d_alpha(const AuCanvas2D *c);
 /* The bitmap, or NULL while nothing was drawn (or the canvas is inert). */
 const AuSurface *au_c2d_surface(const AuCanvas2D *c);
+/* Allocates the bitmap now, as the first draw would: for a canvas
+ * without alpha, which shows opaque black before anything is drawn.
+ * False when it cannot be allocated. */
+bool au_c2d_materialize(AuCanvas2D *c);
 /* True when the size is over the limits. */
 bool au_c2d_inert(const AuCanvas2D *c);
 /* The origin-clean flag. */

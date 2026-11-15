@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: text measured against layout, alignment, baselines, drawing</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+<style>
+@font-face { font-family: "Sample Inter"; src: url(../../page/samples/sample-inter.woff2) format("woff2"); font-weight: 100 900; }
+span.m { white-space: pre; position: absolute; left: 0; top: 0; }
+#web { font: 24px "Sample Inter"; }
+</style>
+</head>
+<body>
+<span id="web" class="m">Web font text</span>
+<script>
+/* The ink of a canvas: the box of pixels with alpha over 40. */
+function ink(c) {
+    const w = c.canvas.width, h = c.canvas.height, d = c.getImageData(0, 0, w, h).data;
+    let x0 = w, x1 = -1, y0 = h, y1 = -1;
+    for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++)
+            if (d[(y * w + x) * 4 + 3] > 40) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+    return { x0, x1, y0, y1, none: x1 < 0 };
+}
+/* The width layout gives the same string in the same font. */
+function layoutWidth(font, text) {
+    const s = document.createElement('span');
+    s.className = 'm';
+    s.style.font = font;
+    s.textContent = text;
+    document.body.appendChild(s);
+    const w = s.getBoundingClientRect().width;
+    s.remove();
+    return w;
+}
+test('measureText is layout\'s measurement of the same string', () => {
+    const c = mk(10, 10);
+    const fonts = ['16px sans-serif', '13px serif', 'bold 20px sans-serif', 'italic 18px serif', '14px monospace',
+        '700 italic 31px sans-serif', '9px sans-serif', '48px serif'];
+    const texts = ['Hello, world', 'The quick brown fox jumps over the lazy dog', 'AVAVAV Wa To', 'x', '1234567890', 'déjà vu — naïve'];
+    for (const font of fonts)
+        for (const text of texts) {
+            c.font = font;
+            const m = c.measureText(text).width, l = layoutWidth(font, text);
+            assert.ok(l > 0, 'layout measured ' + text);
+            /* Layout measures word by word, so it applies no kerning
+             * between a space and its neighbours (Liberation Serif kerns
+             * space-A, space-T and space-W by up to 0.06 em); the canvas
+             * kerns the whole string, as browsers do. */
+            const size = parseFloat(/(\d+)px/.exec(font)[1]), spaces = text.split(' ').length - 1;
+            assert.ok(Math.abs(m - l) < 0.75 + spaces * 0.12 * size, font + ' "' + text + '": canvas ' + m + ', layout ' + l);
+            if (!spaces) assert.ok(Math.abs(m - l) < 0.75, font + ' "' + text + '" (one word): canvas ' + m + ', layout ' + l);
+        }
+    assert.equal(c.measureText('').width, 0);
+    assert.ok(c.measureText('a b').width > c.measureText('ab').width, 'a space has width');
+    /* line breaks and tabs measure as spaces */
+    assert.equal(c.measureText('a\nb').width, c.measureText('a b').width);
+    assert.equal(c.measureText('a\tb').width, c.measureText('a b').width);
+    assert.throws(() => c.measureText(), TypeError);
+});
+test('TextMetrics', () => {
+    const c = mk(10, 10);
+    c.font = '40px sans-serif';
+    const m = c.measureText('Hxg');
+    assert.ok(m instanceof TextMetrics);
+    for (const k of ['width', 'actualBoundingBoxLeft', 'actualBoundingBoxRight', 'actualBoundingBoxAscent', 'actualBoundingBoxDescent',
+        'fontBoundingBoxAscent', 'fontBoundingBoxDescent', 'emHeightAscent', 'emHeightDescent', 'hangingBaseline', 'alphabeticBaseline',
+        'ideographicBaseline'])
+        assert.equal(typeof m[k], 'number', k);
+    assert.ok(m.actualBoundingBoxAscent > 24 && m.actualBoundingBoxAscent < 34, 'cap height of 40px text: ' + m.actualBoundingBoxAscent);
+    assert.ok(m.actualBoundingBoxDescent > 4 && m.actualBoundingBoxDescent < 14, 'the g descends: ' + m.actualBoundingBoxDescent);
+    assert.ok(m.fontBoundingBoxAscent >= m.actualBoundingBoxAscent);
+    assert.ok(m.fontBoundingBoxDescent >= m.actualBoundingBoxDescent - 1);
+    assert.ok(Math.abs(m.emHeightAscent + m.emHeightDescent - 40) < 0.01, 'the em box is the font size');
+    assert.equal(m.alphabeticBaseline, 0);
+    assert.ok(m.hangingBaseline > 0 && m.ideographicBaseline < 0);
+    assert.ok(Math.abs(m.actualBoundingBoxRight - m.width) < 6);
+    /* with another baseline the vertical metrics move by the same amount */
+    c.textBaseline = 'top';
+    const t = c.measureText('Hxg');
+    assert.ok(t.alphabeticBaseline < 0, 'the alphabetic baseline is below a top baseline');
+    assert.ok(Math.abs((t.actualBoundingBoxAscent - m.actualBoundingBoxAscent) - t.alphabeticBaseline) < 0.01);
+    assert.ok(Math.abs(t.emHeightAscent) < 0.01, 'the top baseline is the top of the em box');
+    /* alignment moves the box sideways */
+    c.textBaseline = 'alphabetic';
+    c.textAlign = 'right';
+    const r = c.measureText('Hxg');
+    assert.ok(Math.abs(r.actualBoundingBoxLeft - m.actualBoundingBoxRight) < 0.01 + 6 && r.actualBoundingBoxLeft > m.width - 6);
+    c.textAlign = 'center';
+    const k = c.measureText('Hxg');
+    assert.ok(Math.abs(k.actualBoundingBoxLeft - m.width / 2) < 6);
+});
+test('fillText draws inside the measured box', () => {
+    const c = mk(300, 80);
+    c.font = '30px sans-serif';
+    const m = c.measureText('Canvas');
+    c.fillText('Canvas', 20, 50);
+    const b = ink(c);
+    assert.ok(!b.none, 'ink');
+    assert.ok(b.x0 >= 20 - m.actualBoundingBoxLeft - 1.5 && b.x1 <= 20 + m.actualBoundingBoxRight + 1.5, 'x ' + b.x0 + '..' + b.x1);
+    assert.ok(b.y0 >= 50 - m.actualBoundingBoxAscent - 1.5 && b.y1 <= 50 + m.actualBoundingBoxDescent + 1.5, 'y ' + b.y0 + '..' + b.y1);
+    assert.ok(b.x1 - b.x0 > m.width - 8, 'and fills it');
+    assert.ok(b.y0 < 50 - m.actualBoundingBoxAscent + 3, 'the top of the C reaches the ascent');
+    /* the fill style colours it */
+    c.reset();
+    c.font = 'bold 60px sans-serif';
+    c.fillStyle = '#ff0000';
+    c.fillText('I', 30, 60);
+    const bb = ink(c);
+    isPx(c, Math.round((bb.x0 + bb.x1) / 2), 40, RED, 0, 'the stem of the I');
+});
+test('textAlign and direction', () => {
+    const w = (() => { const c = mk(10, 10); c.font = '20px sans-serif'; return c.measureText('align').width; })();
+    const draw = (align, dir) => {
+        const c = mk(300, 40);
+        c.font = '20px sans-serif';
+        c.textAlign = align;
+        if (dir) c.direction = dir;
+        c.fillText('align', 150, 30);
+        return ink(c);
+    };
+    const left = draw('left'), right = draw('right'), center = draw('center'), start = draw('start'), end = draw('end');
+    assert.ok(Math.abs(left.x0 - 150) < 3, 'left starts at the point: ' + left.x0);
+    assert.ok(Math.abs(right.x1 - 150) < 3, 'right ends at it: ' + right.x1);
+    assert.ok(Math.abs((center.x0 + center.x1) / 2 - 150) < 3, 'center straddles it');
+    assert.equal(start.x0, left.x0);
+    assert.equal(end.x1, right.x1);
+    assert.equal(draw('start', 'rtl').x1, right.x1, 'start is the right edge in rtl');
+    assert.equal(draw('end', 'rtl').x0, left.x0);
+    assert.ok(Math.abs((left.x1 - left.x0) - w) < 4);
+});
+test('textBaseline', () => {
+    const draw = (baseline) => {
+        const c = mk(100, 100);
+        c.font = '40px sans-serif';
+        c.textBaseline = baseline;
+        c.fillText('H', 10, 50);
+        return ink(c);
+    };
+    const alpha = draw('alphabetic'), top = draw('top'), middle = draw('middle'), bottom = draw('bottom'), hanging = draw('hanging'),
+        ideo = draw('ideographic');
+    assert.ok(Math.abs(alpha.y1 - 49) <= 1, 'the H sits on the alphabetic baseline: ' + alpha.y1);
+    assert.ok(top.y0 >= 50 && top.y0 < 62, 'top: the ink starts below the point: ' + top.y0);
+    assert.ok(bottom.y1 < 50 && bottom.y1 > 36, 'bottom: the ink ends above it: ' + bottom.y1);
+    assert.ok(middle.y0 < 50 && middle.y1 > 50, 'middle: around it');
+    assert.ok(hanging.y0 >= 48 && hanging.y0 < 56, 'hanging: near the top of the capitals: ' + hanging.y0);
+    assert.equal(ideo.y1, bottom.y1);
+    assert.ok(top.y0 > hanging.y0 - 1 && middle.y0 < hanging.y0 && alpha.y0 < middle.y0, 'in order from top to alphabetic');
+});
+test('maxWidth, strokeText, spacing', () => {
+    let c = mk(300, 60);
+    c.font = '30px sans-serif';
+    const full = c.measureText('condensed text').width;
+    c.fillText('condensed text', 10, 40, 80);
+    let b = ink(c);
+    assert.ok(b.x1 <= 91 && b.x1 >= 82, 'ends at the maximum width: ' + b.x1);
+    c.reset();
+    c.font = '30px sans-serif';
+    c.fillText('condensed text', 10, 40, 1000);
+    b = ink(c);
+    assert.ok(b.x1 - b.x0 > full - 8, 'a maximum width over the text width changes nothing');
+    c.reset();
+    c.fillText('nothing', 10, 40, 0);
+    c.fillText('nothing', 10, 40, -5);
+    c.fillText('nothing', 10, 40, NaN);
+    c.fillText('nothing', NaN, 40);
+    assert.ok(ink(c).none, 'a maximum width of zero or less, or a position that is not a number, draws nothing');
+    /* strokeText draws the outline: the middle of a thick stem stays clear */
+    c = mk(120, 120);
+    c.font = 'bold 110px sans-serif';
+    c.lineWidth = 2;
+    c.strokeStyle = 'blue';
+    c.strokeText('I', 40, 100);
+    b = ink(c);
+    assert.ok(!b.none);
+    const midx = Math.round((b.x0 + b.x1) / 2), midy = Math.round((b.y0 + b.y1) / 2);
+    assert.deepEqual(px(c, midx, midy), CLEAR, 'inside the outline');
+    isPx(c, b.x0 + 1, midy, BLUE, 80, 'the left edge of the stem is stroked');
+    assert.equal(px(c, b.x0 + 1, midy)[3] > 150, true);
+    /* letterSpacing and wordSpacing widen the text */
+    c = mk(10, 10);
+    c.font = '20px sans-serif';
+    const plain = c.measureText('ab cd').width;
+    c.letterSpacing = '2px';
+    assert.ok(Math.abs(c.measureText('ab cd').width - (plain + 10)) < 0.01);
+    c.letterSpacing = '0px';
+    c.wordSpacing = '7px';
+    assert.ok(Math.abs(c.measureText('ab cd').width - (plain + 7)) < 0.01);
+    assert.throws(() => c.fillText('x', 1), TypeError);
+});
+test('the transform applies to text; shadows too', () => {
+    const c = mk(200, 200);
+    c.font = '20px sans-serif';
+    c.fillText('scaled', 10, 30);
+    const one = ink(c);
+    c.reset();
+    c.font = '20px sans-serif';
+    c.scale(3, 3);
+    c.fillText('scaled', 10, 30);
+    const three = ink(c);
+    assert.ok(Math.abs((three.x1 - three.x0) - 3 * (one.x1 - one.x0)) < 6, 'three times as wide');
+    assert.ok(Math.abs(three.y1 - 3 * one.y1) < 4);
+    c.reset();
+    c.font = '20px sans-serif';
+    c.fillText('gone', 10, 30);
+    c.reset();
+    c.font = 'bold 40px sans-serif';
+    c.shadowColor = 'red';
+    c.shadowOffsetY = 100;
+    c.fillText('II', 10, 60);
+    const b = ink(c);
+    assert.ok(b.y1 > 140, 'the shadow of the text, 100 below');
+});
+promise_test('a web font of the page', async () => {
+    /* wait for the face to arrive: layout then measures with it */
+    const el = document.getElementById('web');
+    const c = mk(10, 10);
+    c.font = '24px serif';
+    const serif = c.measureText('Web font text').width;
+    for (let i = 0; i < 40 && Math.abs(el.getBoundingClientRect().width - serif) < 0.5; i++) await delay(25);
+    c.font = '24px "Sample Inter"';
+    const m = c.measureText('Web font text').width, l = el.getBoundingClientRect().width;
+    assert.ok(Math.abs(l - serif) > 0.5, 'the web font loaded (layout width ' + l + ', serif ' + serif + ')');
+    assert.ok(Math.abs(m - l) < 0.75, 'canvas ' + m + ', layout ' + l);
+    const d = mk(200, 40);
+    d.font = '24px "Sample Inter"';
+    d.fillText('Web font text', 2, 30);
+    assert.ok(!ink(d).none);
+});
+</script>
+</body>
+</html>

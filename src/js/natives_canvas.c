@@ -523,6 +523,8 @@ static int image_source(JSContext *ctx, JSValueConst v, Src *s)
             throw_dom(ctx, "InvalidStateError", "The canvas has no pixels");
             return -1;
         }
+        if (!au_c2d_alpha(c))
+            au_c2d_materialize(c); /* opaque black even when nothing was drawn */
         s->surf = au_c2d_surface(c);
         s->nat_w = au_c2d_width(c);
         s->nat_h = au_c2d_height(c);

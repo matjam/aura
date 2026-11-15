@@ -640,6 +640,7 @@ void au_c2d_resize(AuCanvas2D *c, int w, int h)
     c->nst = 0;
     drop_surface(c);
     set_size(c, w, h);
+    c->clean = true; /* a new bitmap holds nothing from another origin */
     au_cpath_clear(&c->path);
     states_reset(c);
     if (had) {
@@ -676,6 +677,11 @@ bool c2d_ensure_surface(AuCanvas2D *c)
     c->surf->opaque = !c->alpha;
     clear_all(c);
     return true;
+}
+
+bool au_c2d_materialize(AuCanvas2D *c)
+{
+    return c2d_ensure_surface(c);
 }
 
 void c2d_touch(AuCanvas2D *c, AuIRect r)
@@ -1076,19 +1082,37 @@ void au_c2d_row_from_rgba(const uint8_t *rgba, AuPixel *dst, size_t n, bool big_
     }
 }
 
+/* A run of n pixels a canvas without alpha shows before anything was
+ * drawn: opaque black. */
+static void opaque_black(uint8_t *out, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        out[4 * i] = out[4 * i + 1] = out[4 * i + 2] = 0;
+        out[4 * i + 3] = 255;
+    }
+}
+
 void au_c2d_get_image_data(AuCanvas2D *c, int x, int y, int w, int h, uint8_t *rgba)
 {
     if (w <= 0 || h <= 0)
         return;
     bool be = au_c2d_native_big_endian();
     const AuSurface *s = c->surf;
-    /* The part of the request that lies on the bitmap. */
-    AuIRect r = {x, y, x + w, y + h};
-    AuIRect in = s ? au_irect_intersect(r, (AuIRect){0, 0, c->w, c->h}) : (AuIRect){0, 0, 0, 0};
-    bool any = s && !au_irect_empty(in);
+    /* The part of the request that lies on the canvas. An inert canvas
+     * has no pixels at all. */
+    AuIRect in = {0, 0, 0, 0};
+    if (!c->inert) {
+        /* 64-bit: x + w may pass INT_MAX */
+        int64_t x1 = (int64_t)x + w, y1 = (int64_t)y + h;
+        in.x0 = x > 0 ? x : 0;
+        in.y0 = y > 0 ? y : 0;
+        in.x1 = x1 < c->w ? (int)x1 : c->w;
+        in.y1 = y1 < c->h ? (int)y1 : c->h;
+    }
+    bool any = in.x1 > in.x0 && in.y1 > in.y0;
     for (int row = 0; row < h; row++) {
         uint8_t *out = rgba + (size_t)row * (size_t)w * 4;
-        int sy = y + row;
+        int64_t sy = (int64_t)y + row;
         if (!any || sy < in.y0 || sy >= in.y1) {
             memset(out, 0, (size_t)w * 4);
             continue;
@@ -1096,7 +1120,13 @@ void au_c2d_get_image_data(AuCanvas2D *c, int x, int y, int w, int h, uint8_t *r
         int left = in.x0 - x, n = in.x1 - in.x0;
         if (left > 0)
             memset(out, 0, (size_t)left * 4);
-        au_c2d_row_to_rgba(s->pixels + (size_t)sy * s->stride + in.x0, out + (size_t)left * 4, (size_t)n, !c->alpha, be);
+        if (s)
+            au_c2d_row_to_rgba(s->pixels + (size_t)sy * s->stride + in.x0, out + (size_t)left * 4, (size_t)n, !c->alpha,
+                               be);
+        else if (c->alpha)
+            memset(out + (size_t)left * 4, 0, (size_t)n * 4);
+        else
+            opaque_black(out + (size_t)left * 4, (size_t)n);
         if (left + n < w)
             memset(out + (size_t)(left + n) * 4, 0, (size_t)(w - left - n) * 4);
     }
