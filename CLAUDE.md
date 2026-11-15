@@ -98,3 +98,7 @@ Down in the guest.
 
 The decisions and milestones are in the Gandalf vault,
 `project:aura:decisions`.
+
+The scope of version 1 (acceptance sites, required features, what is left
+out) is in `docs/v1-scope.md`. Check a feature against it before building
+it.
