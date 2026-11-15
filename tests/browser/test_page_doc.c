@@ -278,7 +278,8 @@ static void test_links(void)
     CHECK(t->scroll_y == 0);
     au_bw_scroll_to(w, 0, 900);
     au_bw_back(w);
-    CHECK(t->loading);
+    /* The document was kept (the document cache): shown at once. */
+    CHECK(!t->loading && au_page_kept_count(t->page) == 1);
     settle(w);
     CHECK_STR(au_page_title(t->page), "Links");
     CHECK(t->scroll_y == 400);

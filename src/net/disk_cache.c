@@ -13,6 +13,13 @@ typedef struct DcFile {
     size_t size;
     uint32_t mtime;
     uint32_t use; /* larger: used more recently */
+    /* Deferred writes: the file's bytes while they wait to be written
+     * (NULL once written), and whether a file of this name is on disk
+     * (an older copy, while pend is set). */
+    char *pend;
+    size_t pend_len;
+    uint32_t pend_seq; /* queue order */
+    bool on_disk;
 } DcFile;
 
 struct AuDiskCache {
@@ -22,6 +29,8 @@ struct AuDiskCache {
     size_t n, cap;
     uint32_t clock;
     bool listed;
+    bool deferred;
+    size_t npending, pending_bytes;
 };
 
 void au_disk_cache_name(const char *key, char out[19])
@@ -59,6 +68,11 @@ static DcFile *find(AuDiskCache *d, const char *name)
 
 static void drop_index(AuDiskCache *d, size_t i)
 {
+    if (d->f[i].pend) {
+        d->npending--;
+        d->pending_bytes -= d->f[i].pend_len;
+        au_free(d->f[i].pend);
+    }
     d->total -= d->f[i].size;
     memmove(d->f + i, d->f + i + 1, (d->n - i - 1) * sizeof *d->f);
     d->n--;
@@ -75,6 +89,7 @@ static DcFile *add_index(AuDiskCache *d, const char *name, size_t size, uint32_t
     memcpy(f->name, name, 18);
     f->size = size;
     f->mtime = mtime;
+    f->on_disk = true;
     d->total += size;
     return f;
 }
@@ -117,10 +132,59 @@ static void evict(AuDiskCache *d, size_t max)
         for (size_t i = 1; i < d->n; i++)
             if (d->f[i].use < d->f[victim].use)
                 victim = i;
-        if (d->files.remove)
+        if (d->files.remove && d->f[victim].on_disk)
             d->files.remove(d->files.ctx, d->f[victim].name);
         drop_index(d, victim);
     }
+}
+
+/* Writes the pending file that has waited longest. */
+static void write_one(AuDiskCache *d)
+{
+    DcFile *f = NULL;
+    for (size_t i = 0; i < d->n; i++)
+        if (d->f[i].pend && (!f || d->f[i].pend_seq < f->pend_seq))
+            f = &d->f[i];
+    if (!f)
+        return;
+    if (d->files.write(d->files.ctx, f->name, f->pend, f->pend_len)) {
+        d->npending--;
+        d->pending_bytes -= f->pend_len;
+        au_free(f->pend);
+        f->pend = NULL;
+        f->pend_len = 0;
+        f->on_disk = true;
+    } else {
+        /* No stale copy may remain. */
+        if (f->on_disk && d->files.remove)
+            d->files.remove(d->files.ctx, f->name);
+        drop_index(d, (size_t)(f - d->f));
+    }
+}
+
+void au_disk_cache_set_deferred(AuDiskCache *d, bool on)
+{
+    d->deferred = on;
+    if (!on)
+        au_disk_cache_flush(d);
+}
+
+size_t au_disk_cache_pending(const AuDiskCache *d)
+{
+    return d->npending;
+}
+
+bool au_disk_cache_idle(AuDiskCache *d, int max_writes)
+{
+    for (int i = 0; i < max_writes && d->npending; i++)
+        write_one(d);
+    return d->npending > 0;
+}
+
+void au_disk_cache_flush(AuDiskCache *d)
+{
+    while (d->npending)
+        write_one(d);
 }
 
 AuDiskCache *au_disk_cache_new(const AuDiskCacheFiles *files, size_t max_bytes)
@@ -135,6 +199,7 @@ void au_disk_cache_free(AuDiskCache *d)
 {
     if (!d)
         return;
+    au_disk_cache_flush(d);
     au_free(d->f);
     au_free(d);
 }
@@ -148,12 +213,13 @@ static void dc_store(void *ctx, const char *key, const void *data, size_t len)
     size_t klen = strlen(key);
     size_t total = MAGIC_LEN + klen + 1 + len;
     DcFile *old = find(d, name);
+    bool had_file = old && old->on_disk;
     if (old)
         drop_index(d, (size_t)(old - d->f));
     if (total > d->max / 4 || !d->files.write) {
         /* Too large for the budget (or nowhere to write): no stale copy
          * may remain. */
-        if (old && d->files.remove)
+        if (had_file && d->files.remove)
             d->files.remove(d->files.ctx, name);
         return;
     }
@@ -164,10 +230,25 @@ static void dc_store(void *ctx, const char *key, const void *data, size_t len)
     au_buf_append(&b, key, klen);
     au_buf_putc(&b, '\n');
     au_buf_append(&b, data, len);
+    if (d->deferred) {
+        /* Queued: written from au_disk_cache_idle. Until then lookups are
+         * answered from these bytes, and the older file stays on disk. */
+        DcFile *f = add_index(d, name, total, 0);
+        f->use = ++d->clock;
+        f->on_disk = had_file;
+        f->pend_len = b.len;
+        f->pend_seq = ++d->clock;
+        f->pend = au_buf_take(&b, NULL);
+        d->npending++;
+        d->pending_bytes += f->pend_len;
+        while (d->pending_bytes > AU_DISK_CACHE_PENDING_MAX && d->npending > 1)
+            write_one(d);
+        return;
+    }
     if (d->files.write(d->files.ctx, name, b.data, b.len)) {
         DcFile *f = add_index(d, name, total, 0);
         f->use = ++d->clock;
-    } else if (old && d->files.remove) {
+    } else if (had_file && d->files.remove) {
         d->files.remove(d->files.ctx, name);
     }
     au_buf_free(&b);
@@ -180,11 +261,21 @@ static bool dc_load(void *ctx, const char *key, AuBuf *out)
     char name[19];
     au_disk_cache_name(key, name);
     DcFile *f = find(d, name);
+    size_t klen = strlen(key);
+    if (f && f->pend) {
+        /* Not written yet: the queued bytes are the entry. */
+        if (f->pend_len < MAGIC_LEN + klen + 1 || memcmp(f->pend + MAGIC_LEN, key, klen) != 0 ||
+            f->pend[MAGIC_LEN + klen] != '\n')
+            return false; /* another key with the same hash */
+        au_buf_clear(out);
+        au_buf_append(out, f->pend + MAGIC_LEN + klen + 1, f->pend_len - MAGIC_LEN - klen - 1);
+        f->use = ++d->clock;
+        return true;
+    }
     if (!f || !d->files.read)
         return false;
     AuBuf b;
     au_buf_init(&b);
-    size_t klen = strlen(key);
     bool ok = d->files.read(d->files.ctx, name, &b) && b.len >= MAGIC_LEN + klen + 1 &&
               !memcmp(b.data, MAGIC, MAGIC_LEN) && !memcmp(b.data + MAGIC_LEN, key, klen) &&
               b.data[MAGIC_LEN + klen] == '\n';
@@ -216,7 +307,7 @@ static void dc_remove(void *ctx, const char *key)
     DcFile *f = find(d, name);
     if (!f)
         return;
-    if (d->files.remove)
+    if (d->files.remove && f->on_disk)
         d->files.remove(d->files.ctx, name);
     drop_index(d, (size_t)(f - d->f));
 }

@@ -396,6 +396,75 @@ bool au_docview_loading(const AuDocView *dv)
     return dv->parsing || dv->nreqs > dv->nbg || (dv->script && au_docscript_busy(dv->script));
 }
 
+/* ---- Keeping a document while it is not shown ---- */
+
+bool au_docview_can_persist(AuDocView *dv)
+{
+    if (!dv->doc || au_docview_loading(dv) || dv->nreqs)
+        return false;
+    return au_docscript_can_persist(dv->script);
+}
+
+void au_docview_set_hidden(AuDocView *dv, bool hidden)
+{
+    au_docscript_page_transition(dv->script, !hidden);
+    /* A hidden document gives up its decoded image pixels (the compressed
+     * bytes stay, and images decode again when they are next painted):
+     * they are most of a kept document's memory. A new visibility frame
+     * marks every image unused, and a budget of one byte evicts them. */
+    AuImageCache *c = au_docimages_cache(dv->imgs);
+    if (hidden) {
+        AuImageCacheStats st;
+        au_image_cache_stats(c, &st);
+        dv->hidden_image_budget = st.budget;
+        au_image_cache_frame_begin(c);
+        au_image_cache_set_budget(c, 1);
+    } else if (dv->hidden_image_budget) {
+        au_image_cache_set_budget(c, dv->hidden_image_budget);
+        dv->hidden_image_budget = 0;
+    }
+}
+
+static void sheet_bytes(const SheetSrc *s, size_t *n)
+{
+    /* @import nesting is shallow and capped by the loader; one level of
+     * recursion per import depth. */
+    *n += s->len;
+    for (uint32_t i = 0; i < s->nimports; i++)
+        if (s->imports[i])
+            sheet_bytes(s->imports[i], n);
+}
+
+size_t au_docview_memory_estimate(AuDocView *dv)
+{
+    size_t n = sizeof *dv;
+    if (dv->doc) {
+        /* Per element: the node, its attributes and its computed style;
+         * per text node: the node and its characters. */
+        for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+            if (c->type == AU_NODE_ELEMENT)
+                n += 480;
+            else if (c->type == AU_NODE_TEXT)
+                n += 64 + ((const AuText *)c)->len;
+            else
+                n += 64;
+        }
+    }
+    size_t css = 0;
+    for (uint32_t i = 0; i < dv->nslots; i++)
+        if (dv->slots[i].src)
+            sheet_bytes(dv->slots[i].src, &css);
+    n += css * 3; /* the text and the rules parsed from it */
+    AuLayoutStats ls;
+    au_layout_stats(dv->layout, &ls);
+    n += ls.tree_bytes + ls.frag_bytes;
+    AuImageCacheStats is;
+    au_image_cache_stats(au_docimages_cache(dv->imgs), &is);
+    n += is.decoded_bytes + is.decoder_bytes + is.compressed_bytes;
+    n += au_docscript_memory(dv->script);
+    return n;
+}
+
 /* ---- Layout callbacks ---- */
 
 static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap)

@@ -258,6 +258,12 @@ int au_js_pattern_test(AuJs *js, const char *pattern, const char *value);
 void au_js_set_ready_state(AuJs *js, const char *state);
 /* Before the document is discarded: beforeunload and unload. */
 void au_js_unload(AuJs *js);
+/* The document cache. Whether window has an unload or beforeunload
+ * listener (such a document is discarded, not kept, when the tab leaves
+ * it), and the events of a document that is kept and later shown again:
+ * pagehide (show false) and pageshow (show true), persisted true. */
+bool au_js_has_unload_handler(AuJs *js);
+void au_js_page_transition(AuJs *js, bool show);
 /* The viewport changed size (resize event, matchMedia listeners). */
 void au_js_resized(AuJs *js);
 /* The document scrolled (scroll event). */
