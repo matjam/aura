@@ -64,19 +64,37 @@ in `run/` of the main checkout (set `AURA_RUN` to use another folder);
 `tools/guest-env.sh` holds the settings.
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
-the background. The first start copies os9-protect's
-`disks/os9-vmoff.qcow2` (read only) into `run/os9-base.qcow2` and boots an
-overlay on the copy. Disk writes are discarded when QEMU exits; set
-`PERSIST=1` to keep them. Mac OS takes about a minute to boot.
+the background. `BASE` picks the system: `stock` (the default) is Mac OS
+9.2.2 with virtual memory off and no Enforcer, from os9-protect's
+`disks/os9-novm.qcow2`; `enforcer` (`BASE=enforcer tools/guest-run.sh
+start`) is `disks/os9-vmoff.qcow2`, which has the os9-enforcer kernel and
+extension installed. The first start of a base copies its image (read
+only) into `run/os9-base-BASE.qcow2` and boots an overlay on the copy
+(`run/os9-aura-BASE.qcow2`). One guest runs at a time; `status` names the
+running base. Disk writes are discarded when QEMU exits; set `PERSIST=1`
+to keep them. Mac OS takes about a minute to boot.
+
+Test on the stock base first. Use the Enforcer base to check Aura under
+Enforcer; its own bugs show there too (see the scroll bar thumb note
+under Browser chrome). To read Enforcer's state and offense log, run
+os9-enforcer's `tools/xlog-read.py` with
+`QMP_SOCK=run/qmp.sock`; the extension on that disk is older than the
+script, so the script may report a different layout.
 
 To copy the application in, build it with `./build.sh ppc` and run
 `tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
-The files arrive as a CD named AuraTest on the guest's desktop.
+The files arrive as a CD named AuraTest on the guest's desktop. The
+previous disc is ejected first through the Finder; the script types
+nothing until the guest's current application (`CurApName`) is the
+Finder, and fails if an application on the disc is still open, so quit
+Aura before pushing a new build.
 
 To launch it, run `tools/guest-qmp.py open AuraTest Aura`. To take a
 screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`. To type, use
-`tools/guest-qmp.py key cmd-q` or `type TEXT`; to click or drag, use
-`click X Y` or `drag X1 Y1 X2 Y2` (guest screen pixels).
+`tools/guest-qmp.py key cmd-q` (any character works as the key, as in
+`'cmd-['`) or `type TEXT`; to click or drag, use `click X Y` or `drag X1
+Y1 X2 Y2` (guest screen pixels). `front-app` prints the current
+application.
 
 To compare the window with the host rendering, render the scene at the
 window's size (the title shows it) and compare the content area, which
@@ -88,8 +106,8 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 ```
 
 To change the screen depth, click the Monitor BitDepth module in the
-guest's Control Strip (the eighth icon) and pick 256 Colors, Thousands or
-Millions. In Aura, View > Debug > Benchmark times the scene, fills and
+guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
+and pick 256 Colors, Thousands or Millions. In Aura, View > Debug > Benchmark times the scene, fills and
 the chrome, and View > Debug > Font List shows the fonts it found.
 
 To stop the guest, run `tools/guest-run.sh stop`, or choose Special > Shut
@@ -138,10 +156,16 @@ Toolbox points learned the hard way:
 - Do not call `TEGetPoint` from PowerPC code; it crashed the guest. The
   caret position comes from `TextWidth` with the TextEdit handles
   locked.
-- After Aura has drawn a scroll bar thumb and quit, the next launch in
-  the same guest boot can draw thumbs as coloured noise until another
-  application draws one. Launching SimpleText and scrolling once clears
-  it. The cause is not known yet.
+- Scroll bar thumbs drawn as coloured noise on the second launch of
+  Aura in a guest boot come from Enforcer, not Aura: they appear only on
+  the Enforcer base, at any depth, with or without dithering. The
+  Appearance theme draws thumbs through a 16x17 GWorld it keeps in the
+  system heap, with its pixels in temporary memory, made the first time
+  a thumb is drawn in the boot. Enforcer's temporary memory pool puts
+  those pixels in a chunk of the current application (Aura) and frees
+  the chunk when Aura quits; the stock Process Manager keeps them. The
+  next Aura launch gets a chunk at the same address, and the theme's
+  handle then names Aura's font data.
 
 ## Design
 

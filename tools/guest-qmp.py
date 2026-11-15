@@ -19,6 +19,7 @@ Usage:
   tools/guest-qmp.py open DISC ITEM       open ITEM (an application, say) on
                                           the mounted disc DISC, by keyboard
   tools/guest-qmp.py screen-size          print the screen size
+  tools/guest-qmp.py front-app            print the current application's name
 
 Guest UI (coordinates are guest screen pixels, x right, y down):
   tools/guest-qmp.py pos                  print the cursor position
@@ -27,7 +28,9 @@ Guest UI (coordinates are guest screen pixels, x right, y down):
   tools/guest-qmp.py dclick X Y           move there and double-click
   tools/guest-qmp.py drag X1 Y1 X2 Y2     press at X1,Y1, move, release
   tools/guest-qmp.py key cmd-e            press a key combination
-                                          (modifiers: cmd, shift, opt, ctrl)
+                                          (modifiers: cmd, shift, opt, ctrl;
+                                          the key may be a character, as in
+                                          cmd-[ or cmd--)
   tools/guest-qmp.py type 'some text'     type text on a US keyboard layout
 
 The socket is QMP_SOCK, else AURA_RUN/qmp.sock, else run/qmp.sock in the
@@ -66,6 +69,7 @@ SOCK = os.environ.get("QMP_SOCK") or os.path.join(RUN, "qmp.sock")
 # Low-memory globals, as Point (v, h) pairs of 16-bit big-endian values.
 MTEMP = 0x828
 RAWMOUSE = 0x82C
+CURAPNAME = 0x910  # Str31, the current application's name
 
 
 class QMP:
@@ -106,6 +110,68 @@ class QMP:
     def close(self):
         self.sock.close()
 
+    # Guest memory -------------------------------------------------------
+
+    def read_words(self, addr, count, size="h"):
+        """Read count values of size b, h or w at the guest's logical addr.
+
+        Returns None when the monitor cannot read it now: the read goes
+        through the CPU's current address translation, and while code other
+        than Mac OS's runs (the nanokernel, say) low memory may not be
+        mapped, so the monitor answers "Cannot access memory".
+        """
+        out = self.hmp(f"x /{count}{size}x {addr:#x}")
+        values = []
+        try:
+            for line in out.splitlines():
+                if ":" not in line:
+                    continue
+                values += [int(w, 16) for w in line.split(":", 1)[1].split()]
+        except ValueError:
+            return None
+        return values if len(values) == count else None
+
+    def front_app(self):
+        """Return the name of the current application (CurApName, 0x910),
+        or None when it cannot be read."""
+        for _ in range(50):
+            b = self.read_words(CURAPNAME, 32, "b")
+            if b is not None and 0 < b[0] < 32:
+                return bytes(b[1:1 + b[0]]).decode("mac_roman")
+            time.sleep(0.01)
+        return None
+
+    def bring_finder_forward(self):
+        """Make the Finder the front application, or raise SystemExit.
+
+        Clicks the desktop near the bottom left corner, which brings the
+        Finder forward when no window covers that point; otherwise switches
+        applications with Command-Tab until the Finder is in front. Nothing
+        is typed until CurApName says the Finder is current.
+        """
+        _, height = self.screen_size()
+        if self.finder_in_front():
+            return
+        self.click(20, height - 40)
+        time.sleep(0.5)
+        for _ in range(8):
+            if self.finder_in_front():
+                return
+            self.keys(combo("cmd-tab"))
+            time.sleep(1.0)
+        raise SystemExit("could not bring the Finder to the front "
+                         f"(front application: {self.front_app()})")
+
+    def finder_in_front(self):
+        """True when CurApName names the Finder; any other name must hold
+        for a second, since it changes for a moment while a background
+        process (an extension's, say) runs."""
+        for _ in range(4):
+            if self.front_app() == "Finder":
+                return True
+            time.sleep(0.25)
+        return False
+
     # Guest UI -----------------------------------------------------------
 
     def pos(self):
@@ -116,8 +182,10 @@ class QMP:
         accepted only when MTemp and RawMouse agree and are on screen.
         """
         for _ in range(50):
-            out = self.hmp(f"x /4hx {MTEMP:#x}")
-            words = [int(w, 16) for w in out.split(":", 1)[1].split()]
+            words = self.read_words(MTEMP, 4)
+            if words is None:
+                time.sleep(0.01)
+                continue
             mv, mh, rv, rh = words
             if (mv, mh) == (rv, rh) and mv < 4096 and mh < 4096:
                 return rh, rv
@@ -199,12 +267,11 @@ class QMP:
     def open_item(self, disc, item):
         """Open item on the mounted disc from the Finder, by keyboard.
 
-        Brings the Finder forward with a click on the desktop, selects the
-        disc on the desktop by typing its name, opens its window (Cmd-O),
+        Brings the Finder forward (bring_finder_forward), selects the disc
+        on the desktop by typing its name, opens its window (Cmd-O),
         selects the item by typing its name and opens it (Cmd-O).
         """
-        _, height = self.screen_size()
-        self.click(20, height - 40)
+        self.bring_finder_forward()
         self.keys(combo("cmd-shift-up"))
         time.sleep(0.3)
         self.type_text(disc)
@@ -218,12 +285,12 @@ class QMP:
     def guest_eject(self, name, timeout=15):
         """Eject the mounted disc called name from inside the guest.
 
-        Clicks the desktop near the bottom left corner to bring the Finder
-        forward, makes the desktop active (Cmd-Shift-Up), selects the disc
-        by typing its name, and puts it away with Cmd-E.
+        Brings the Finder forward (bring_finder_forward, which types
+        nothing until the Finder is current), makes the desktop active
+        (Cmd-Shift-Up), selects the disc by typing its name, and puts it
+        away with Cmd-E.
         """
-        _, height = self.screen_size()
-        self.click(20, height - 40)
+        self.bring_finder_forward()
         self.keys(combo("cmd-shift-up"))
         time.sleep(0.3)
         self.type_text(name)
@@ -235,8 +302,13 @@ class QMP:
             if not inserted or not locked:
                 return
             time.sleep(0.25)
-        raise SystemExit(f'the guest did not eject "{name}"; '
-                         "eject it in the guest, then push again")
+        # The Finder says why in an alert (an application on the disc is
+        # open, say); Return dismisses it when the Finder is still in front.
+        if self.finder_in_front():
+            self.keys(combo("return"))
+        raise SystemExit(f'the guest did not eject "{name}" (is an '
+                         "application on it still open?); quit it or eject "
+                         "the disc in the guest, then push again")
 
 
 def step(d):
@@ -272,11 +344,31 @@ SHIFTED = {"_": "minus", "+": "equal", "{": "bracket_left",
 
 
 def combo(spec):
-    """Turn 'cmd-shift-e' into QEMU qcodes."""
-    parts = spec.lower().split("-")
-    codes = [MODIFIERS[p] for p in parts[:-1]]
-    last = parts[-1]
-    codes.append(NAMED.get(last, last))
+    """Turn 'cmd-shift-e' into QEMU qcodes.
+
+    The key is a letter, digit, a name from NAMED, or a character on a US
+    layout ('cmd-[', 'cmd--', 'cmd-shift-/'; a shifted character such as
+    'cmd-?' adds Shift itself).
+    """
+    spec = spec.lower()
+    if spec.endswith("--"):
+        mods, last = spec[:-2], "-"
+    elif "-" in spec:
+        mods, last = spec.rsplit("-", 1)
+    else:
+        mods, last = "", spec
+    try:
+        codes = [MODIFIERS[p] for p in mods.split("-") if p]
+    except KeyError as e:
+        raise SystemExit(f"unknown modifier {e.args[0]!r} in {spec!r}")
+    if last in NAMED:
+        codes.append(NAMED[last])
+    elif len(last) == 1:
+        for c in char_codes(last):
+            if c not in codes:
+                codes.append(c)
+    else:
+        codes.append(last)  # a QEMU qcode name, such as f1
     return codes
 
 
@@ -343,6 +435,8 @@ def main(argv):
             q.open_item(args[0], args[1])
         elif op == "screen-size" and not args:
             print("%d %d" % q.screen_size())
+        elif op == "front-app" and not args:
+            print(q.front_app())
         else:
             raise SystemExit(__doc__)
     finally:
