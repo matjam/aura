@@ -38,7 +38,8 @@ what you need to build, test and change Aura.
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
-| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO), the per-document image cache |
+| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO, SVG through `src/svg`), the per-document image cache |
+| `src/svg` | XML parser, SVG path and transform grammars, the static SVG renderer, SVG documents |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
 | `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
 | `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders |
@@ -537,6 +538,49 @@ test and a fuzz run under the sanitizers.
   colours images band; nothing dithers them.
 - Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
   `FInfo` collide with Toolbox types. Prefix types with `Au`.
+
+## SVG
+
+`src/svg/svg.h` describes what the renderer supports and what it does
+not. One renderer serves inline SVG and SVG documents; it reads the
+elements' computed styles, so page CSS applies to inline SVG, and
+presentation attributes reach the cascade as presentational hints
+(`svg_hints` in `src/css/ua.c`).
+
+- **Inline SVG.** Layout makes an outer `svg` element a replaced box
+  (`LR_SVG`): its size comes from the width and height attributes, its
+  ratio from them or the viewBox, else 300 x 150. `paint_svg` in
+  `src/layout/draw.c` draws it into the content box with
+  `au_svg_paint`, at the size it is shown. References (`use`, gradients,
+  clip paths, masks) resolve through a document id index the layout keeps
+  until the tree changes.
+- **SVG as an image.** `src/image/svgimg.c` is the codec: markup is
+  sniffed as SVG, the bytes are held to the end, and the document is
+  drawn at the target size rather than reduced. The cache keeps SVG bytes
+  and draws the image again when it is shown larger or in another shape;
+  layout asks for each paint size through `AuLayoutEnv.image_use`. An SVG
+  image loads nothing: only `data:` URLs in `<image>` draw, nested SVG to
+  depth 2.
+- **Masks.** `mask-image` and `-webkit-mask-image` layers draw into a
+  canvas mask group (`paint_mask` in `draw.c`), alpha by default,
+  luminance with `mask-mode: luminance`.
+- **Limits.** The XML parser caps depth (256), nodes (100000) and
+  attributes (256), skips the doctype and never expands entities beyond
+  the predefined five and character references. The renderer caps
+  nesting (48), `use` depth (12) and cycles, elements per paint, href
+  chains and text length. Clip pieces and text layout go on the heap
+  because the renderer recurses.
+- **To try a file**, run `build/host/src/platform/host/aura-host image
+  FILE.svg --target WxH -o out.png`. `tests/page/samples/svg.html` shows
+  each feature.
+- **Tests.** `tests/svg` holds `test_svg` (grammars, XML, pixels,
+  the image pipeline; `--bench` times 200 icons) and `fuzz_svg`. To fuzz
+  longer, run the sanitizer build's `fuzz_svg ITERATIONS SEED [SECONDS]
+  tests/svg/corpus/*`. Layout cases are in `tests/layout/cases/svg.txt`.
+- **Not done:** filters, patterns, markers, textPath, foreignObject,
+  multi-line text, animation, CSS basic shapes in `clip-path`,
+  `mask: url(#id)` on HTML elements, and one raster per SVG image URL
+  (an image shown at two shapes on one page shares the larger raster).
 
 ## Networking
 
