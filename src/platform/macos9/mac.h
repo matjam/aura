@@ -82,6 +82,9 @@ void browserwin_flush_all(void);
 void browserwin_host(AuBrowserHost *h);
 /* Debug menu: benchmark the scene in the front window. */
 void browserwin_benchmark(BrowserWin *bw);
+/* Debug menu: the active page's load and layout times, a timed scroll
+ * repaint, and free memory. */
+void browserwin_page_timings(BrowserWin *bw);
 
 /* ---- listwin.c ---- */
 void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY or WIN_DOWNLOADS */
