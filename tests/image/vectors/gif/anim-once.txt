@@ -1,0 +1,1 @@
+frames 2 loop 1 delays 500 500

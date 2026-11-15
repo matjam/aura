@@ -7,6 +7,8 @@
 
 /* aura-host render|dump ...: argv[1] is the command. */
 int au_host_render_main(int argc, char **argv);
+/* aura-host image FILE ...: decodes one image (image_tool.c). */
+int au_host_image_main(int argc, char **argv);
 
 /* A loader for file: URLs. Requests are queued; au_host_loader_pump
  * delivers every queued request (data, then done) and returns true if it

@@ -1,6 +1,7 @@
 /* The document view: parser, style sheets, images, resolver, layout,
  * painting, input. */
 #include "page.h"
+#include "docimages.h"
 #include "webfont.h"
 
 #include <stdio.h>
@@ -26,21 +27,12 @@ typedef struct SheetSlot {
     SheetSrc *src;
 } SheetSlot;
 
-typedef struct ImageEntry {
-    char *url;
-    uint32_t req;
-    int w, h;
-    AuSurface *pixels;
-    AuBuf data;
-    bool loaded, failed;
-} ImageEntry;
-
 typedef struct Request {
     uint32_t id;
     AuResourceKind kind;
     SheetSrc *sheet; /* for style sheets */
-    ImageEntry *image;
-    bool font; /* an @font-face source */
+    AuImageEntry *image; /* for images: bytes go straight to the image cache */
+    bool font;           /* an @font-face source */
     AuBuf data;
 } Request;
 
@@ -60,8 +52,7 @@ struct AuDocView {
     AuLayout *layout;
     SheetSlot *slots;
     uint32_t nslots, slots_cap;
-    ImageEntry **images;
-    uint32_t nimages, images_cap;
+    AuDocImages *imgs; /* docimages.c */
     Request *reqs;
     uint32_t nreqs, reqs_cap;
     int vw, vh;
@@ -134,6 +125,9 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
         dv->loader = *loader;
     if (cb)
         dv->cb = *cb;
+    /* The image cache lives outside the layout, so a new layout (a web
+     * font arriving) keeps every image and its animation. */
+    dv->imgs = au_docimages_new();
     new_layout(dv, fonts);
     dv->url = dup("about:blank");
     dv->base = dup("about:blank");
@@ -170,15 +164,7 @@ static void clear_document(AuDocView *dv)
         free_sheet_src(dv->slots[i].src);
     }
     dv->nslots = 0;
-    for (uint32_t i = 0; i < dv->nimages; i++) {
-        ImageEntry *e = dv->images[i];
-        au_free(e->url);
-        if (e->pixels)
-            au_surface_free(e->pixels);
-        au_buf_free(&e->data);
-        au_free(e);
-    }
-    dv->nimages = 0;
+    au_docimages_clear(dv->imgs);
     if (dv->hover)
         au_node_unref(&dv->hover->node);
     if (dv->active)
@@ -213,8 +199,8 @@ void au_docview_free(AuDocView *dv)
         return;
     clear_document(dv);
     au_layout_free(dv->layout);
+    au_docimages_free(dv->imgs);
     au_free(dv->slots);
-    au_free(dv->images);
     au_free(dv->reqs);
     au_free(dv->url);
     au_free(dv->base);
@@ -230,6 +216,61 @@ void au_docview_set_user_css(AuDocView *dv, const char *css)
     au_free(dv->user_css);
     dv->user_css = css ? dup(css) : NULL;
     dv->sheets_dirty = true;
+}
+
+/* ---- Images (the cache and its bookkeeping are in docimages.c) ---- */
+
+static void invalidate_fn(void *ctx, AuIRect r)
+{
+    AuDocView *dv = ctx;
+    if (dv->cb.invalidate)
+        dv->cb.invalidate(dv->cb.ctx, dv, r);
+}
+
+/* Reports images whose size became known (layout rebuilds) and repaints
+ * images whose pixels changed. */
+static void images_changed(AuDocView *dv)
+{
+    if (au_docimages_take_layout_changed(dv->imgs)) {
+        dv->images_dirty = true;
+        invalidate_all(dv);
+    }
+    float w, h;
+    au_layout_document_size(dv->layout, &w, &h);
+    au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, (int)w + 1, (int)h + 1}, invalidate_fn, dv);
+}
+
+static void images_data(AuDocView *dv, AuImageEntry *e, const void *data, size_t len)
+{
+    au_image_entry_data(au_docimages_cache(dv->imgs), e, data, len);
+    images_changed(dv);
+}
+
+void au_docview_set_image_budget(AuDocView *dv, size_t bytes)
+{
+    au_docimages_set_budget(dv->imgs, bytes);
+}
+
+void au_docview_set_clock(AuDocView *dv, uint32_t (*now_ms)(void *ctx), void *ctx)
+{
+    au_docimages_set_clock(dv->imgs, now_ms, ctx);
+}
+
+uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms)
+{
+    uint32_t next = au_docimages_tick(dv->imgs, now_ms);
+    images_changed(dv);
+    return next;
+}
+
+bool au_docview_animating(const AuDocView *dv)
+{
+    return au_docimages_animating(dv->imgs);
+}
+
+void au_docview_image_stats(const AuDocView *dv, AuImageCacheStats *s)
+{
+    au_image_cache_stats(au_docimages_cache(dv->imgs), s);
 }
 
 void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p)
@@ -317,6 +358,10 @@ void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size
     Request *r = find_request(dv, id);
     if (!r)
         return;
+    if (r->kind == AU_RES_IMAGE && r->image) {
+        images_data(dv, r->image, data, len);
+        return;
+    }
     if (r->data.len + len > (size_t)64 * 1024 * 1024)
         return; /* refuse absurd resources */
     au_buf_append(&r->data, data, len);
@@ -351,22 +396,8 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
         }
         dv->sheets_dirty = true;
     } else if (req.kind == AU_RES_IMAGE && req.image) {
-        ImageEntry *e = req.image;
-        e->req = 0;
-        int w = 0, h = 0;
-        AuSurface *px = NULL;
-        if (ok && dv->loader.decode_image && dv->loader.decode_image(dv->loader.ctx, req.data.data, req.data.len, &w, &h, &px) &&
-            w > 0 && h > 0 && w < 30000 && h < 30000) {
-            e->w = w;
-            e->h = h;
-            e->pixels = px;
-            e->loaded = true;
-        } else {
-            if (px)
-                au_surface_free(px);
-            e->failed = true;
-        }
-        dv->images_dirty = true;
+        au_image_entry_done(au_docimages_cache(dv->imgs), req.image, ok);
+        images_changed(dv);
     } else if (req.font && dv->webfonts) {
         au_webfonts_done(dv->webfonts, req.id, req.data.data, req.data.len, ok, fetch_font, dv);
     }
@@ -393,38 +424,33 @@ static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap)
     return au_url_resolve(dv->base, url, out, cap);
 }
 
+/* Layout's image lookup. A pending image reports a size of 0 x 0 and a
+ * transparent surface (an empty box, or the size the page gives it); a
+ * failed one returns false, so layout shows its alt text. */
 static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels)
 {
     AuDocView *dv = ctx;
-    for (uint32_t i = 0; i < dv->nimages; i++) {
-        ImageEntry *e = dv->images[i];
-        if (strcmp(e->url, url) == 0) {
-            if (!e->loaded)
-                return false;
-            *w = e->w;
-            *h = e->h;
-            *pixels = e->pixels;
-            return true;
+    AuImageEntry *e;
+    bool created;
+    AuDocImageResult res = au_docimages_lookup(dv->imgs, url, w, h, pixels, &e, &created);
+    if (created) {
+        Request *r = add_request(dv, url, AU_RES_IMAGE);
+        if (r) {
+            r->image = e;
+            dv->finished_reported = false;
+        } else {
+            au_image_entry_done(au_docimages_cache(dv->imgs), e, false);
+            au_docimages_take_layout_changed(dv->imgs);
+            return false;
         }
     }
-    if (dv->nimages >= 4096)
+    if (res == AU_DOCIMG_FAILED)
         return false;
-    ImageEntry *e = au_calloc(sizeof *e);
-    e->url = dup(url);
-    au_buf_init(&e->data);
-    if (dv->nimages == dv->images_cap) {
-        dv->images_cap = dv->images_cap ? dv->images_cap * 2 : 32;
-        dv->images = au_realloc(dv->images, dv->images_cap * sizeof *dv->images);
+    if (res == AU_DOCIMG_PENDING) {
+        *w = *h = 0;
+        *pixels = au_image_entry_surface(e);
     }
-    dv->images[dv->nimages++] = e;
-    Request *r = add_request(dv, url, AU_RES_IMAGE);
-    if (r) {
-        r->image = e;
-        e->req = r->id;
-        dv->finished_reported = false;
-    } else
-        e->failed = true;
-    return false;
+    return true;
 }
 
 /* ---- Document scanning: sheets, base, title ---- */
@@ -703,6 +729,7 @@ bool au_docview_update(AuDocView *dv)
     if (dv->style_all || dv->tree_dirty) {
         au_css_style_document(dv->resolver, dv->doc);
         au_layout_tree_changed(dv->layout);
+        au_docimages_tree_changed(dv->imgs);
         dv->style_all = dv->tree_dirty = false;
         dv->restyle_needed = false;
         changed = true;
@@ -713,6 +740,8 @@ bool au_docview_update(AuDocView *dv)
         au_layout_styles_changed(dv->layout);
         dv->restyle_needed = false;
     }
+    if (au_docimages_take_layout_changed(dv->imgs))
+        dv->images_dirty = true;
     if (dv->images_dirty) {
         au_layout_images_changed(dv->layout);
         dv->images_dirty = false;
@@ -766,7 +795,14 @@ void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int
     au_docview_update(dv);
     dv->scroll_x = scroll_x;
     dv->scroll_y = scroll_y;
+    /* Images near the viewport (not just this paint's rectangle) decode
+     * now, at the size they are shown. */
+    au_docimages_prepare(dv->imgs, dv->doc, dv->layout, dv->base,
+                         (AuRect){(float)scroll_x, (float)scroll_y, (float)dv->vw, (float)dv->vh});
+    au_docimages_paint_begin(dv->imgs);
     au_layout_paint(dv->layout, c, view, (float)scroll_x, (float)scroll_y);
+    au_docimages_paint_end(dv->imgs);
+    images_changed(dv); /* an image found broken while painting */
 }
 
 /* ---- Input ---- */

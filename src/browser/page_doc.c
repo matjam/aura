@@ -276,6 +276,8 @@ static void apply_font_prefs(AuPage *p)
     au_docview_set_font_prefs(p->dv, &fp);
     /* The initial family: the reader's serif face, as browsers default. */
     au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
+    /* Decoded images get the memory cache size as their budget. */
+    au_docview_set_image_budget(p->dv, pr ? (size_t)pr->memory_cache_kb * 1024 : 0);
 }
 
 /* ---- Image sizes ----
@@ -1977,6 +1979,7 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     dcb.open_url = dv_open;
     p->dv = au_docview_new(env->fonts, &loader, &dcb);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
+    au_docview_set_clock(p->dv, env->time_ms, env->ctx);
     apply_font_prefs(p);
     return p;
 }
@@ -2365,6 +2368,8 @@ void au_page_idle(AuPage *p)
         }
         return;
     }
+    if (p->kind == K_DOC && p->begun)
+        au_docview_animate(p->dv, now(p)); /* animated images */
     if (!p->nfetches && !p->dirty)
         return;
     uint32_t gen = p->gen;
@@ -2402,7 +2407,7 @@ void au_page_idle(AuPage *p)
 
 bool au_page_busy(const AuPage *p)
 {
-    return p->loading || p->nfetches > 0 || (p->dirty && p->begun);
+    return p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv));
 }
 
 void au_page_stats(const AuPage *p, AuPageStats *s)

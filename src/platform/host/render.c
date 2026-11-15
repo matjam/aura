@@ -154,6 +154,12 @@ int au_host_render_main(int argc, char **argv)
             t_paint_view = now_ms() - t0;
             au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)ph}, 0, scroll);
         }
+        /* Background images are requested when first painted: deliver
+         * them and paint again. */
+        for (int round = 0; round < 5 && au_host_loader_pump(loader, dv); round++) {
+            au_docview_update(dv);
+            au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)ph}, 0, scroll);
+        }
         if (!au_png_write(out, s)) {
             fprintf(stderr, "aura-host: cannot write %s\n", out);
             rc = 1;

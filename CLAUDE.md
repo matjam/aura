@@ -38,6 +38,7 @@ what you need to build, test and change Aura.
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
+| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO), the per-document image cache |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
 | `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
 | `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders |
@@ -199,9 +200,9 @@ that differs from the current one only by its fragment scrolls instead
 of loading, and back and forward restore the scroll position each entry
 was left at. To plug in networking, register a fetcher per scheme with
 `au_browser_set_fetcher` (see `AuPageFetcher` in `page.h`); without one,
-http and https show a placeholder after a simulated load. Image sizes
-come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
-yet. The font preferences reach the engine as the generic families of
+http and https show a placeholder after a simulated load. Images are
+decoded by `src/image` (see Images); `au_page_idle` advances animations.
+The font preferences reach the engine as the generic families of
 the font set and, for the default and monospace sizes, the minimum size
 and the tab's text zoom, `au_docview_set_font_prefs` (which passes them
 to `au_css_resolver_set_font_prefs`). Text zoom is per tab
@@ -468,6 +469,74 @@ the system lacks.
   `font-optical-sizing` or `font-tech()`, layout passes only weight and
   style to the font list, and the CSS parser loses `unicode-range`
   tokens (webfont.c reads them from the sheet text).
+
+## Images
+
+The decoders in `src/image` parse hostile data on a machine without
+memory protection. Every length comes from the file and is checked
+before use; every size computation is checked for overflow; dimensions
+are capped at 32768 and source pixels at 64 million (`AuImageOptions`);
+the decoded canvas never exceeds `max_bytes` (16 MB by default), and a
+larger image decodes at 1/2, 1/4 and so on down to 1/256, or fails.
+Keep it that way: a change to a decoder needs a vector, a truncation
+test and a fuzz run under the sanitizers.
+
+- **To decode bytes**, create an `AuImageDecoder` with
+  `au_image_decoder_new` and call `au_image_decode` with each chunk as
+  it arrives (`image.h`). The size is known as soon as the header
+  arrives (`au_image_info`), rows fill in as they decode
+  (`au_image_take_dirty`), and each animation frame returns
+  `AU_IMAGE_FRAME`. Output is a premultiplied `AuSurface`; its `opaque`
+  flag lets painting copy instead of blend. `au_image_decode_buffer`
+  decodes a whole file, `au_image_probe` reads only the header, and
+  `au_image_decode_favicon` picks and scales an icon.
+- **Formats.** One file per format: `png.c` (all colour types and
+  depths, Adam7, APNG, CRCs checked), `jpeg.c` (baseline and
+  progressive Huffman, CMYK and YCCK, restarts, EXIF orientation,
+  reduced decoding by IDCT scaling), `gif.c`, `webp.c` with
+  `webp_vp8.c` and `webp_vp8l.c` (lossy, lossless, alpha, animation),
+  `bmp.c` (BMP and ICO). `image.c` holds what they share: sniffing, the
+  limits, row reduction, orientation and frame composition. Each codec
+  is a state machine that consumes every byte it is given, so chunk
+  boundaries never matter.
+- **The cache** (`cache.h`) holds one document's images by URL. Layout
+  gets the size from the header; pixels are decoded only when an image
+  is used in a paint (`au_image_entry_use`), at the smallest power-of-two
+  reduction that still covers the displayed size. The budget comes from
+  the memory cache preference (`au_docview_set_image_budget`, 4 MB by
+  default in the browser, 8 MB otherwise). Over the budget, images not
+  used in the last paint lose their pixels, oldest first, and keep their
+  compressed bytes to decode again. One image may use at most half the
+  budget (at least 1 MB, at most 16 MB). A still image whose bytes are
+  larger than its pixels keeps only the pixels. Animations decode frame
+  by frame from the compressed bytes, keep one canvas, and pause when
+  not painted; delays of 10 ms or less play at 100 ms, as browsers do.
+- **The document view** (`src/page/docimages.c`) decodes images within
+  a viewport above or below the visible area before they scroll in,
+  invalidates only the rectangles of images that changed, and passes
+  pixels to layout through the image callback. A pending image is an
+  empty box; a failed one shows its alt text.
+- **To try a file**, run `build/host/src/platform/host/aura-host image
+  FILE -o out.png`. It prints the format, size, decode time and peak
+  memory; `--scale N`, `--target WxH`, `--chunk N` (feed N bytes at a
+  time), `--frames`, `--repeat N` and `--favicon SIZE` change what it
+  does. `tests/page/samples/images.html` shows every format; its images
+  are drawn by `tests/page/make-sample-images.py`.
+- **Tests.** `tests/image` has one test per format with committed
+  vectors and references made by the host's own decoders (the
+  generator scripts and their headers say how). PngSuite and the libwebp
+  test images are fetched into `build/` by
+  `tests/image/fetch-pngsuite.sh` and a `git clone` of
+  `https://chromium.googlesource.com/webm/libwebp-test-data` into
+  `build/webp-testdata`; their tests skip without them. To fuzz longer,
+  build with the sanitizers and run `build/asan/tests/image/fuzz_image
+  ITERATIONS SEED tests/image/vectors/*/*`.
+- **Not done:** arithmetic-coded, lossless and 12-bit JPEG; colour
+  management (gamma, ICC profiles and colour spaces are ignored);
+  object-fit, border-image and list-style-image in layout. At 256
+  colours images band; nothing dithers them.
+- Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
+  `FInfo` collide with Toolbox types. Prefix types with `Au`.
 
 ## Networking
 

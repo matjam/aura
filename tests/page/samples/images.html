@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Images</title>
+<link rel="icon" href="img/favicon.ico">
+<style>
+body { font-family: Helvetica, Arial, sans-serif; margin: 12px; background: url("img/tile.png"); color: #222; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 15px; margin: 14px 0 6px; border-bottom: 1px solid #bba; }
+.fig { display: inline-block; vertical-align: top; margin: 0 8px 8px 0; padding: 4px; background: #fff; border: 1px solid #ccb; font-size: 11px; text-align: center; }
+.fig img { display: block; margin: 0 auto 3px; }
+.pix { image-rendering: pixelated; }
+ul.bullets { list-style-image: url("img/bullet.gif"); font-size: 13px; }
+.banner { height: 60px; background: url("img/landscape.jpg") center / cover; color: #fff; font-weight: bold; padding: 6px; }
+</style>
+</head>
+<body>
+<h1>Images in every format</h1>
+
+<h2>JPEG</h2>
+<div class="fig"><img src="img/landscape.jpg" width="240" height="160" alt="Landscape (baseline JPEG)">baseline 4:2:0</div>
+<div class="fig"><img src="img/progressive.jpg" width="240" height="160" alt="Landscape (progressive JPEG)">progressive</div>
+<div class="fig"><img src="img/exif-rotated.jpg" alt="Upright landscape (EXIF orientation 6)">EXIF orientation 6</div>
+<div class="fig"><img src="img/grey.jpg" width="120" height="80" alt="Greyscale JPEG">greyscale, half size</div>
+<div class="fig"><img src="img/large.jpg" width="240" height="160" alt="960x640 JPEG shown at 240x160">960x640 at 1/4</div>
+
+<h2>PNG</h2>
+<div class="fig"><img src="img/alpha.png" alt="Translucent shapes (RGBA PNG)">RGBA</div>
+<div class="fig"><img src="img/interlaced.png" alt="Translucent shapes (Adam7 PNG)">Adam7 interlaced</div>
+<div class="fig"><img src="img/palette.png" width="180" height="120" alt="Palette PNG">64-colour palette</div>
+<div class="fig"><img class="pix" src="img/pixel.png" width="64" height="64" alt="Pixel face">8x8, pixelated</div>
+<div class="fig"><img src="img/pixel.png" width="64" height="64" alt="Pixel face">8x8, smooth</div>
+
+<h2>GIF, APNG and WebP animations</h2>
+<div class="fig"><img src="img/spinner.gif" alt="Spinner (GIF)">GIF</div>
+<div class="fig"><img src="img/spinner.png" alt="Spinner (APNG)">APNG</div>
+<div class="fig"><img src="img/spinner.webp" alt="Spinner (WebP)">WebP</div>
+<div class="fig"><img src="img/bounce.gif" alt="Bouncing ball (GIF)">GIF, optimized frames</div>
+
+<h2>WebP</h2>
+<div class="fig"><img src="img/lossy.webp" alt="Landscape (lossy WebP)">lossy</div>
+<div class="fig"><img src="img/lossy-alpha.webp" alt="Shapes (lossy WebP with alpha)">lossy with alpha</div>
+<div class="fig"><img src="img/lossless.webp" alt="Shapes (lossless WebP)">lossless</div>
+
+<h2>BMP and ICO</h2>
+<div class="fig"><img src="img/landscape.bmp" width="120" height="80" alt="Landscape (24-bit BMP)">24-bit BMP, half size</div>
+<div class="fig"><img src="img/favicon.ico" alt="Icon (ICO)">ICO, largest entry</div>
+<div class="fig"><img src="img/favicon.ico" width="16" height="16" alt="Icon (ICO)">ICO at 16x16</div>
+
+<h2>CSS and forms</h2>
+<div class="banner">background-image with background-size: cover</div>
+<ul class="bullets">
+<li>list-style-image</li>
+<li>from a 9x9 GIF</li>
+</ul>
+<form action="#"><input type="image" src="img/button.png" alt="Go"> input type=image</form>
+
+<h2>Missing</h2>
+<div class="fig"><img src="img/no-such-image.png" alt="A broken image shows its alt text" width="160" height="40">broken, with alt</div>
+<div class="fig"><img src="img/no-such-image.png" width="40" height="40" alt="">broken, empty alt</div>
+</body>
+</html>
