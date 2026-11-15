@@ -136,6 +136,13 @@ static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
     au_dv_dom_changed(s->dv, node, attr_name, kind);
 }
 
+static bool h_random(void *ctx, void *buf, size_t len)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    return cb->random && cb->random(cb->ctx, s->dv, buf, len);
+}
+
 static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
 {
     AuDocScript *s = ctx;
@@ -400,6 +407,8 @@ static bool ensure_js(AuDocScript *s)
     h.prompt = h_prompt;
     h.focus_changed = h_focus_changed;
     h.submit_form = h_submit_form;
+    if (au_dv_callbacks(s->dv)->random)
+        h.random = h_random;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;

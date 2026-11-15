@@ -84,6 +84,10 @@ typedef struct AuDocViewCallbacks {
     /* A console line from script (level: 0 log, 1 info, 2 warn, 3 error,
      * 4 debug). */
     void (*console)(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
+    /* Cryptographically strong random bytes for script (crypto
+     * .getRandomValues); false when the source is not ready. Optional:
+     * without it pages have no crypto object. */
+    bool (*random)(void *ctx, AuDocView *dv, void *buf, size_t len);
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */

@@ -184,6 +184,10 @@ typedef struct AuJsHooks {
     int (*sheet_text)(void *ctx, AuElement *el, AuBuf *text, AuBuf *url);
     void (*sheet_set_text)(void *ctx, AuElement *el, const char *text, size_t len);
     void (*sheet_disable)(void *ctx, AuElement *el, bool disabled);
+    /* Cryptographically strong random bytes for crypto.getRandomValues
+     * and crypto.randomUUID. Returns false when the source cannot give
+     * them yet. Without this hook the window has no crypto object. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */

@@ -434,6 +434,89 @@ function structuredClone(value, options) {
 }
 defGlobal('structuredClone', structuredClone);
 
+/* ---------------- MessageChannel ----------------
+ * Two entangled ports in this document. A message is cloned when posted
+ * and delivered as a task once the receiving port has started (start(),
+ * or setting onmessage). Ports cannot be transferred: there is no other
+ * context to send them to. */
+class MessagePort extends EventTarget {
+    constructor(key) {
+        if (key !== S.owner) throw new TypeError('Illegal constructor');
+        super();
+        this._other = null; this._queue = []; this._started = false; this._closed = false;
+    }
+    postMessage(data, transfer) {
+        if (!arguments.length) throw new TypeError('postMessage: 1 argument required');
+        const list = Array.isArray(transfer) ? transfer : transfer && transfer.transfer;
+        if (list && list.length) throw domErr('Transferring objects is not supported', 'DataCloneError');
+        const to = this._other;
+        if (this._closed || !to || to._closed) return;
+        to._queue.push(structuredClone(data));
+        if (to._started) to._drain();
+    }
+    _drain() {
+        N.queueTask(() => {
+            while (this._started && !this._closed && this._queue.length)
+                fire(this, new MessageEvent('message', { data: this._queue.shift() }));
+        });
+    }
+    start() { if (this._started) return; this._started = true; if (this._queue.length) this._drain(); }
+    close() {
+        if (this._closed) return;
+        this._closed = true;
+        const o = this._other;
+        this._other = null;
+        if (o && !o._closed) { o._other = null; N.queueTask(() => fire(o, new Event('close'))); }
+    }
+    get onmessage() { return this._onmessage || null; }
+    set onmessage(fn) {
+        if (this._onmessage) this.removeEventListener('message', this._onmessage);
+        this._onmessage = typeof fn === 'function' ? fn : null;
+        if (this._onmessage) this.addEventListener('message', this._onmessage);
+        this.start();
+    }
+}
+defineHandlers(MessagePort.prototype, ['messageerror', 'close']);
+class MessageChannel {
+    constructor() {
+        const a = new MessagePort(S.owner), b = new MessagePort(S.owner);
+        a._other = b; b._other = a;
+        Object.defineProperties(this, { port1: { value: a, enumerable: true }, port2: { value: b, enumerable: true } });
+    }
+}
+/* ---------------- crypto ----------------
+ * Present only when the embedder has a strong random source
+ * (AuJsHooks.random). There is no crypto.subtle. */
+if (N.random(0) !== null) {
+    class Crypto {
+        constructor() { throw new TypeError('Illegal constructor'); }
+        getRandomValues(a) {
+            if (!ArrayBuffer.isView(a) || a instanceof DataView || a instanceof Float32Array || a instanceof Float64Array ||
+                (typeof Float16Array === 'function' && a instanceof Float16Array))
+                throw domErr('getRandomValues: the argument is not an integer typed array', 'TypeMismatchError');
+            if (a.byteLength > 65536) throw domErr('getRandomValues: more than 65536 bytes', 'QuotaExceededError');
+            const b = N.random(a.byteLength);
+            if (!b) throw domErr('The random source is not ready', 'OperationError');
+            new Uint8Array(a.buffer, a.byteOffset, a.byteLength).set(new Uint8Array(b));
+            return a;
+        }
+        randomUUID() {
+            const b = new Uint8Array(16);
+            this.getRandomValues(b);
+            b[6] = (b[6] & 0x0f) | 0x40;
+            b[8] = (b[8] & 0x3f) | 0x80;
+            const h = Array.from(b, (x) => (x < 16 ? '0' : '') + x.toString(16)).join('');
+            return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+        }
+    }
+    tag(Crypto);
+    defGlobal('Crypto', Crypto);
+    defGlobal('crypto', Object.create(Crypto.prototype));
+}
+tag(MessagePort); tag(MessageChannel);
+defGlobal('MessagePort', MessagePort);
+defGlobal('MessageChannel', MessageChannel);
+
 /* ---------------- URL, URLSearchParams ---------------- */
 
 /* The parser is N.urlParse (src/js/url.c, the WHATWG parser of src/url):

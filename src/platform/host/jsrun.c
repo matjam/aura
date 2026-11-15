@@ -61,6 +61,18 @@ static double h_now(void *ctx)
     return real_ms() - r->start + r->skipped;
 }
 
+/* crypto.getRandomValues: the system's random device. */
+static bool h_random(void *ctx, void *buf, size_t len)
+{
+    (void)ctx;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f)
+        return false;
+    size_t got = len ? fread(buf, 1, len, f) : 0;
+    fclose(f);
+    return got == len;
+}
+
 static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)
 {
     JsRun *r = ctx;
@@ -324,6 +336,7 @@ static int js_main(int argc, char **argv)
     h.ctx = &run;
     h.now_ms = h_now;
     h.console = h_console;
+    h.random = h_random;
     h.fetcher.ctx = &run;
     h.fetcher.start = h_fetch_start;
     h.fetcher.abort = h_fetch_abort;

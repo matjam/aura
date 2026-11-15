@@ -231,7 +231,7 @@ const ifaceRows = {
     HTMLHeadingElement: [['align', 's']],
     HTMLHRElement: [['align', 's'], ['color', 's'], ['noShade', 'b', 'noshade'], ['size', 's'], ['width', 's']],
     HTMLHtmlElement: [['version', 's']],
-    HTMLIFrameElement: [['src', 'u'], ['srcdoc', 's'], ['name', 's'], ['sandbox', 't'], ['allow', 's'],
+    HTMLIFrameElement: [['src', 'u'], ['srcdoc', 's'], ['name', 's'], ['sandbox', 't', 'sandbox', []], ['allow', 's'],
         ['allowFullscreen', 'b', 'allowfullscreen'], ['width', 's'], ['height', 's'], ['referrerPolicy', 's', 'referrerpolicy'],
         ['loading', 'e', 0, [['lazy', 'eager'], 'eager', 'eager']], ['align', 's'], ['scrolling', 's'],
         ['frameBorder', 's', 'frameborder'], ['longDesc', 'u', 'longdesc'], ['marginHeight', 's', 'marginheight'],
@@ -1438,4 +1438,23 @@ class DOMImplementation {
 tag(DOMImplementation);
 defGlobal('DOMImplementation', DOMImplementation);
 const theImpl = Object.create(DOMImplementation.prototype);
-defProps(DP, { get implementation() { return theImpl; } });
+defProps(DP, {
+    get implementation() { return theImpl; },
+    /* HTML documents have no CDATA sections, as the standard says */
+    createCDATASection() { throw domErr('This is an HTML document', 'NotSupportedError'); },
+});
+
+/* ARIA attributes as properties (ARIAMixin): the attribute's value, or
+ * null when it is absent. */
+for (const name of ['role', 'ariaAtomic', 'ariaAutoComplete', 'ariaBusy', 'ariaChecked', 'ariaColCount', 'ariaColIndex', 'ariaColSpan',
+    'ariaCurrent', 'ariaDescription', 'ariaDisabled', 'ariaExpanded', 'ariaHasPopup', 'ariaHidden', 'ariaInvalid', 'ariaKeyShortcuts',
+    'ariaLabel', 'ariaLevel', 'ariaLive', 'ariaModal', 'ariaMultiLine', 'ariaMultiSelectable', 'ariaOrientation', 'ariaPlaceholder',
+    'ariaPosInSet', 'ariaPressed', 'ariaReadOnly', 'ariaRequired', 'ariaRoleDescription', 'ariaRowCount', 'ariaRowIndex', 'ariaRowSpan',
+    'ariaSelected', 'ariaSetSize', 'ariaSort', 'ariaValueMax', 'ariaValueMin', 'ariaValueNow', 'ariaValueText']) {
+    const attr = name === 'role' ? 'role' : 'aria-' + name.slice(4).toLowerCase();
+    Object.defineProperty(EP, name, {
+        get() { return this.getAttribute(attr); },
+        set(v) { if (v === null || v === undefined) this.removeAttribute(attr); else this.setAttribute(attr, str(v)); },
+        configurable: true, enumerable: true,
+    });
+}

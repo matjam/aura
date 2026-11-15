@@ -404,6 +404,26 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return arr;
 }
 
+/* random(n): an ArrayBuffer of n random bytes (n at most 65536) from the
+ * embedder's source; false when the source is not ready; null when the
+ * embedder has none. */
+static JSValue n_random(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    uint32_t n = 0;
+    if (!js->hooks.random)
+        return JS_NULL;
+    if (argc < 1 || JS_ToUint32(ctx, &n, argv[0]) || n > 65536)
+        return JS_ThrowRangeError(ctx, "random: at most 65536 bytes");
+    uint8_t *buf = au_alloc(n ? n : 1);
+    JSValue r = JS_FALSE;
+    if (js->hooks.random(js->hooks.ctx, buf, n))
+        r = JS_NewArrayBufferCopy(ctx, buf, n);
+    au_free(buf);
+    return r;
+}
+
 /* ---- CSSOM: the sheet of a style or link element (prelude_cssom.js) ----
  * sheetText(el): [text, url] once the sheet has loaded, false while it
  * loads, null when el has no sheet or the embedder has no sheets. */
@@ -877,6 +897,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssPropertyNames", 0, n_css_names),
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
+    JS_CFUNC_DEF("random", 1, n_random),
     JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
     JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),
     JS_CFUNC_DEF("sheetDisable", 2, n_sheet_disable),
