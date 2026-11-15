@@ -249,11 +249,14 @@ static bool is_word_char(uint32_t c)
            (c >= 0xC0 && c != 0xD7 && c != 0xF7 && c != 0x2019);
 }
 
-/* Processes the text of one text node into B->tmp: text-transform, then
- * white space per white-space-collapse (CSS Text 3, 4.1). */
-static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
+/* Processes the text of one text node into out: text-transform, then
+ * white space per white-space-collapse (CSS Text 3, 4.1). *last_space
+ * says whether the inline content before it ends in a collapsible space,
+ * and is updated. With map (n + 1 entries), map[i] receives the offset in
+ * out of what source byte i became (the place before the character it
+ * belongs to; map[n] is the length), never decreasing. */
+void l_text_process(const AuStyle *s, const char *t, size_t n, bool *last_space, AuBuf *out, uint32_t *map)
 {
-    AuBuf *out = &B->tmp;
     au_buf_clear(out);
     int collapse = s->inh->white_space_collapse;
     int transform = s->inhr->text_transform;
@@ -262,6 +265,9 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
     while (i < n) {
         size_t adv;
         uint32_t c = au_utf8_decode(t + i, n - i, &adv);
+        if (map)
+            for (size_t k = 0; k < adv && i + k < n; k++)
+                map[i + k] = (uint32_t)out->len;
         i += adv;
         if (c == '\r') {
             if (i < n && t[i] == '\n')
@@ -272,9 +278,9 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
             c = ' ';
         bool ws = c == ' ' || c == '\t' || c == '\n';
         if (ws && collapse == AU_WHITE_SPACE_COLLAPSE_COLLAPSE) {
-            if (!B->last_space)
+            if (!*last_space)
                 au_buf_putc(out, ' ');
-            B->last_space = true;
+            *last_space = true;
             prev_word = false;
             continue;
         }
@@ -284,17 +290,17 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
                 while (out->len && out->data[out->len - 1] == ' ')
                     out->len--;
                 au_buf_putc(out, '\n');
-                B->last_space = true;
-            } else if (!B->last_space) {
+                *last_space = true;
+            } else if (!*last_space) {
                 au_buf_putc(out, ' ');
-                B->last_space = true;
+                *last_space = true;
             }
             prev_word = false;
             continue;
         }
         if (collapse == AU_WHITE_SPACE_COLLAPSE_PRESERVE_SPACES && c == '\n')
             c = ' ';
-        B->last_space = false;
+        *last_space = false;
         switch (transform) {
         case AU_TEXT_TRANSFORM_UPPERCASE:
             if (c == 0xDF) {
@@ -324,6 +330,18 @@ static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
             prev_word = false;
         au_buf_put_utf8(out, c);
     }
+    if (map) {
+        /* Spaces removed before a preserved break: keep the map monotonic. */
+        map[n] = (uint32_t)out->len;
+        for (size_t k = n; k-- > 0;)
+            if (map[k] > map[k + 1])
+                map[k] = map[k + 1];
+    }
+}
+
+static void process_text(Builder *B, const AuStyle *s, const char *t, size_t n)
+{
+    l_text_process(s, t, n, &B->last_space, &B->tmp, NULL);
 }
 
 static void add_text(Builder *B, LBox *parent, AuNode *node, const AuStyle *s, const char *t, size_t n)

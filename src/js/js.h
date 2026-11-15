@@ -133,6 +133,12 @@ typedef struct AuJsHooks {
     /* Brings layout up to date (forced synchronous layout) and returns the
      * border box of el in document coordinates; false if el has no box. */
     bool (*element_rect)(void *ctx, AuElement *el, AuJsRect *out);
+    /* Brings layout up to date and writes the rectangles (document
+     * coordinates, one per line) of text node text's data from UTF-16
+     * offset start to end, at most max. Returns how many there are (one of
+     * no width when start equals end), or -1 when the node has no box.
+     * Optional: without it Range rectangles are those of elements. */
+    int (*text_rects)(void *ctx, AuNode *text, uint32_t start, uint32_t end, AuJsRect *out, int max);
     /* Brings style up to date and returns el's computed style (an AuStyle
      * from src/css), or NULL. */
     const void *(*computed_style)(void *ctx, AuElement *el);

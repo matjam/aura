@@ -48,6 +48,42 @@ test('a range has rectangles', () => {
     r.collapse(true);
     assert.equal(r.getBoundingClientRect().width, 0);
 });
+test('a range in text has the rectangles of its characters', () => {
+    const span = document.getElementById('inner'), t = span.firstChild; /* "inner" */
+    const whole = document.createRange();
+    whole.selectNodeContents(t);
+    const w = whole.getBoundingClientRect(), box = span.getBoundingClientRect();
+    assert.ok(Math.abs(w.width - box.width) < 0.01 && Math.abs(w.left - box.left) < 0.01, 'the whole text: ' + w.left + '+' + w.width);
+    const r = document.createRange();
+    r.setStart(t, 1);
+    r.setEnd(t, 3);
+    const rs = r.getClientRects();
+    assert.equal(rs.length, 1);
+    assert.ok(rs[0].left > w.left && rs[0].right < w.right && rs[0].width > 0, 'inside the text: ' + rs[0].left + '+' + rs[0].width);
+    assert.equal(rs[0].top, w.top);
+    /* the parts add up */
+    const a = document.createRange(), b = document.createRange();
+    a.setStart(t, 0); a.setEnd(t, 1);
+    b.setStart(t, 3); b.setEnd(t, 5);
+    const sum = a.getBoundingClientRect().width + rs[0].width + b.getBoundingClientRect().width;
+    assert.ok(Math.abs(sum - w.width) < 0.01, 'parts: ' + sum + ' of ' + w.width);
+    /* a collapsed range in text: one rectangle of no width, at the character */
+    r.collapse(true);
+    const c = r.getClientRects();
+    assert.equal(c.length, 1);
+    assert.equal(c[0].width, 0);
+    assert.equal(c[0].left, rs[0].left);
+    assert.equal(r.getBoundingClientRect().left, rs[0].left);
+    /* text that is not rendered has none */
+    const hidden = document.createElement('span');
+    hidden.style.display = 'none';
+    hidden.textContent = 'hidden';
+    document.body.appendChild(hidden);
+    const h = document.createRange();
+    h.selectNodeContents(hidden.firstChild);
+    assert.equal(h.getClientRects().length, 0);
+    hidden.remove();
+});
 test('inserted content has geometry', () => {
     const p = document.createElement('p');
     p.textContent = 'added';

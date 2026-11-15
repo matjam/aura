@@ -447,6 +447,135 @@ bool au_layout_range_rect(AuLayout *L, const AuTextRange *r, AuRect *out)
 
 /* ---- The painted selection ---- */
 
+static float frag_width(AuLayout *L, const LFrag *f, LFont *font, const char *s, uint32_t n);
+
+int au_layout_range_rects(AuLayout *L, const AuTextRange *r, AuRect *out, int max)
+{
+    if (!L->root || !r || !r->start.node)
+        return 0;
+    int n = 0;
+    for (LBox *b = L->root; b; b = next_box(b, L->root, false)) {
+        if (b->kind != LK_BLOCK || !(b->flags & LF_INLINES))
+            continue;
+        LBlock *k = (LBlock *)b;
+        float ox = 0, oy = 0;
+        bool have_origin = false;
+        for (uint32_t i = 0; i < k->nfrags; i++) {
+            LFrag *f = &k->frags[i];
+            if (f->kind != FR_TEXT || !f->box->node)
+                continue;
+            int a = au_node_order(f->box->node, r->start.node), e = au_node_order(f->box->node, r->end.node);
+            if (a < 0 || e > 0)
+                continue;
+            uint32_t lo = a == 0 ? r->start.offset : 0, hi = e == 0 ? r->end.offset : UINT32_MAX;
+            uint32_t fs = f->start, fe = f->start + f->len;
+            if (lo < fs)
+                lo = fs;
+            if (hi > fe)
+                hi = fe;
+            /* An empty range still has a place: a caret at its offset. */
+            bool caret = a == 0 && e == 0 && r->start.offset == r->end.offset;
+            if (lo > hi || (lo == hi && !caret))
+                continue;
+            if (caret && (r->start.offset < fs || r->start.offset > fe))
+                continue;
+            if (!have_origin) {
+                l_box_origin(b, &ox, &oy);
+                have_origin = true;
+            }
+            LFont *font = l_font(L, f->box->style);
+            const char *s = ((LText *)f->box)->text + fs;
+            float x0 = frag_width(L, f, font, s, lo - fs);
+            float x1 = hi == fe ? f->w : frag_width(L, f, font, s, hi - fs);
+            if (n < max)
+                out[n] = (AuRect){ox + f->x + x0, oy + f->y, l_max(0, x1 - x0), f->h};
+            n++;
+            if (caret)
+                return n; /* the first fragment that holds it */
+        }
+    }
+    return n;
+}
+
+/* The source text of a text box and the map from its bytes to the
+ * box's processed text. The map (len + 1 entries) is allocated; false
+ * when n is not a text node with a box. */
+static bool source_map(AuLayout *L, const AuNode *n, LText **box, uint32_t **map)
+{
+    LText *t = text_box(L, n);
+    if (!t)
+        return false;
+    const AuText *src = au_as_text((AuNode *)n);
+    uint32_t *m = au_alloc(((size_t)src->len + 1) * sizeof *m);
+    AuBuf out;
+    au_buf_init(&out);
+    /* The box does not record whether the content before it ended in a
+     * collapsible space: the processing that gives the box's text does. */
+    bool ok = false;
+    for (int first = 0; first < 2 && !ok; first++) {
+        bool last_space = first == 1;
+        l_text_process(t->b.style, src->data, src->len, &last_space, &out, m);
+        ok = out.len == t->len && (t->len == 0 || !memcmp(out.data, t->text, t->len));
+    }
+    au_buf_free(&out);
+    if (!ok) {
+        /* The box is out of date (the node's data changed since the tree
+         * was built). */
+        au_free(m);
+        return false;
+    }
+    *box = t;
+    *map = m;
+    return true;
+}
+
+bool au_layout_text_pos_from_dom(AuLayout *L, AuNode *text, uint32_t utf16_offset, AuTextPos *out)
+{
+    LText *t;
+    uint32_t *map;
+    if (!source_map(L, text, &t, &map))
+        return false;
+    const AuText *src = au_as_text(text);
+    size_t i = 0;
+    uint32_t units = 0;
+    while (i < src->len && units < utf16_offset) {
+        size_t adv;
+        uint32_t c = au_utf8_decode(src->data + i, src->len - i, &adv);
+        uint32_t w = c >= 0x10000 ? 2 : 1;
+        if (units + w > utf16_offset)
+            break; /* between the halves of a surrogate pair: its start */
+        units += w;
+        i += adv;
+    }
+    if (i > src->len)
+        i = src->len;
+    out->node = text;
+    out->offset = map[i];
+    au_free(map);
+    return true;
+}
+
+bool au_layout_text_pos_to_dom(AuLayout *L, const AuTextPos *p, uint32_t *utf16_offset)
+{
+    LText *t;
+    uint32_t *map;
+    if (!p || !p->node || !source_map(L, p->node, &t, &map))
+        return false;
+    const AuText *src = au_as_text(p->node);
+    /* The first source character that comes out at or after the offset. */
+    size_t i = 0;
+    uint32_t units = 0;
+    while (i < src->len && map[i] < p->offset) {
+        size_t adv;
+        uint32_t c = au_utf8_decode(src->data + i, src->len - i, &adv);
+        units += c >= 0x10000 ? 2 : 1;
+        i += adv;
+    }
+    au_free(map);
+    *utf16_offset = units;
+    return true;
+}
+
 void au_layout_set_selection(AuLayout *L, const AuTextRange *r, uint32_t argb)
 {
     if (!r || au_text_range_empty(r)) {

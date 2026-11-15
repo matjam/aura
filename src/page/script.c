@@ -24,6 +24,7 @@
 #include "script.h"
 
 #include "../js/js.h"
+#include "../layout/selection.h"
 
 #include <string.h>
 
@@ -185,6 +186,25 @@ static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
     out->w = r.w;
     out->h = r.h;
     return true;
+}
+
+static int h_text_rects(void *ctx, AuNode *text, uint32_t start, uint32_t end, AuJsRect *out, int max)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv); /* forced layout: script reads geometry */
+    AuLayout *L = au_docview_layout(s->dv);
+    AuTextPos a, b;
+    if (!au_layout_text_pos_from_dom(L, text, start, &a) || !au_layout_text_pos_from_dom(L, text, end, &b))
+        return -1;
+    AuTextRange r = au_text_range_make(a, b);
+    AuRect rc[16];
+    AuRect *buf = max > 16 ? au_alloc((size_t)max * sizeof *buf) : rc;
+    int n = au_layout_range_rects(L, &r, buf, max);
+    for (int i = 0; i < n && i < max; i++)
+        out[i] = (AuJsRect){buf[i].x, buf[i].y, buf[i].w, buf[i].h};
+    if (buf != rc)
+        au_free(buf);
+    return n;
 }
 
 static const void *h_computed_style(void *ctx, AuElement *el)
@@ -395,6 +415,7 @@ static bool ensure_js(AuDocScript *s)
     h.console = h_console;
     h.dom_changed = h_dom_changed;
     h.element_rect = h_element_rect;
+    h.text_rects = h_text_rects;
     h.computed_style = h_computed_style;
     h.viewport = h_viewport;
     h.scroll_to = h_scroll_to;

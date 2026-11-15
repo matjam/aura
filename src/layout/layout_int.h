@@ -489,6 +489,7 @@ LBlock *l_geom_parent(LBox *b);
 /* Space between a list-style-image marker and the list item's content,
  * part of the marker box's width (Blink's kCMarkerPaddingPx). */
 #define L_MARKER_IMAGE_GAP 7
+void l_text_process(const AuStyle *s, const char *t, size_t n, bool *last_space, AuBuf *out, uint32_t *map);
 /* The style makes its box the containing block of fixed descendants. */
 bool l_style_contains_fixed(const AuStyle *s);
 /* Asks the loader about rep's image again. Returns 0 when nothing
