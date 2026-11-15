@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Aura's mascot, the laughing kookaburra, for the About box and the
+     documentation: perched on a branch with the rising sun behind its head
+     as a halo. Drawn from circles, ellipses, polygons and straight strokes
+     only (no gradients, filters or curves), so Aura's own rasterizer can
+     draw it. Coordinates are the 32x32 icon's design scaled by 8; light
+     comes from the upper left. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- the sun: rim, bands, highlight -->
+  <circle cx="144" cy="104" r="94" fill="#CC3300"/>
+  <circle cx="144" cy="104" r="87" fill="#FF6633"/>
+  <circle cx="144" cy="104" r="74" fill="#FF9933"/>
+  <circle cx="144" cy="104" r="54" fill="#FFCC33"/>
+  <circle cx="122" cy="80" r="30" fill="#FFFF66"/>
+
+  <!-- tail, hanging behind the branch -->
+  <polygon points="160,176 190,176 204,250 176,252"
+           fill="#CC6633" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <g stroke="#663300" stroke-width="6">
+    <line x1="168" y1="214" x2="196" y2="212"/>
+    <line x1="172" y1="234" x2="200" y2="232"/>
+  </g>
+
+  <!-- body: cream breast, shaded on the right -->
+  <ellipse cx="140" cy="150" rx="46" ry="50"
+           fill="#FFFFCC" stroke="#000" stroke-width="6"/>
+  <polygon points="122,108 150,104 176,140 170,190 132,198 128,150"
+           fill="#CCCC99"/>
+  <!-- wing, with its blue spots -->
+  <polygon points="122,114 172,112 194,146 206,196 152,194 130,158"
+           fill="#996633" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="186,140 206,196 156,194 178,170" fill="#663300"/>
+  <g fill="#33CCFF">
+    <circle cx="146" cy="134" r="5"/>
+    <circle cx="170" cy="130" r="5"/>
+    <circle cx="160" cy="152" r="5"/>
+    <circle cx="180" cy="156" r="5"/>
+    <circle cx="150" cy="172" r="5"/>
+  </g>
+
+  <!-- head: cream face, brown crown with streaks -->
+  <circle cx="124" cy="80" r="45" fill="#FFFFCC" stroke="#000" stroke-width="6"/>
+  <polygon points="134,48 160,70 166,92 140,96" fill="#CCCC99"/>
+  <polygon points="88,52 104,40 124,35 146,38 162,50 160,62 90,62"
+           fill="#996633"/>
+  <g stroke="#663300" stroke-width="5" stroke-linecap="round">
+    <line x1="106" y1="46" x2="104" y2="58"/>
+    <line x1="126" y1="40" x2="124" y2="56"/>
+    <line x1="146" y1="44" x2="144" y2="58"/>
+  </g>
+  <circle cx="124" cy="80" r="45" fill="none" stroke="#000" stroke-width="6"/>
+  <!-- eye stripe, trailing back from the eye -->
+  <polygon points="108,74 168,70 168,88 116,86" fill="#663300"/>
+  <circle cx="104" cy="74" r="8" fill="#000"/>
+  <circle cx="101" cy="71" r="3" fill="#FFF"/>
+
+  <!-- bill: dark upper mandible, pale lower -->
+  <polygon points="92,80 50,86 24,92 4,100 92,102"
+           fill="#333333" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="4,100 92,102 90,116 28,114"
+           fill="#CCCCCC" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- branch -->
+  <polygon points="18,200 238,200 242,212 238,226 18,226 14,212"
+           fill="#996633" stroke="#000" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="18,214 240,214 238,224 18,224" fill="#663333"/>
+  <g stroke="#663333" stroke-width="4">
+    <line x1="52" y1="206" x2="52" y2="212"/>
+    <line x1="188" y1="206" x2="188" y2="212"/>
+  </g>
+  <!-- feet gripping the branch -->
+  <polygon points="118,190 132,190 136,204 114,204"
+           fill="#333333" stroke="#000" stroke-width="4" stroke-linejoin="round"/>
+  <polygon points="140,190 154,190 158,204 136,204"
+           fill="#333333" stroke="#000" stroke-width="4" stroke-linejoin="round"/>
+</svg>
