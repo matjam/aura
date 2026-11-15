@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { kW = 560, kH = 392 }; /* fits a 640 by 480 screen */
+enum { kW = 616, kH = 392 }; /* fits a 640 by 480 screen; seven tabs need the width */
 enum { NPANES = 7 };
 enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
 

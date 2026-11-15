@@ -515,8 +515,11 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     } else {
         if (info && info->mixed && p->have_security)
             p->mixed = true;
-        if (info && info->blocked_reason)
+        if (info && info->blocked_reason) {
             p->stats.blocked++;
+            if (p->cb.load_progress) /* the status bar shows the count */
+                p->cb.load_progress(p->cb.ctx, p);
+        }
         p->completed++;
         au_docview_resource_done(p->dv, f->id, ok);
         report_progress(p);
