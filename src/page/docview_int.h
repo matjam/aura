@@ -132,6 +132,9 @@ struct AuDocView {
     bool frames_work;    /* something waits for au_frames_idle */
     bool in_frames_idle;
     AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
+    /* canvas elements (docview.c, "Canvases") */
+    struct AuCanvasSet *canvases; /* the document's canvas bitmaps, made when script first asks */
+    AuFontSet *cur_fonts;         /* the font set the layout draws with */
 };
 
 /* ---- frames.c: nested documents ----
@@ -220,6 +223,9 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r);
  * script, the bindings run it). */
 void au_forms_activate(AuDocView *dv, AuElement *target, int x, int y);
 void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
+/* Invalidates a document rectangle that belongs to el's box (twice for a
+ * fixed element, as au_dv_invalidate_element does). */
+void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect r);
 void au_dv_invalidate_all(AuDocView *dv);
 
 #endif

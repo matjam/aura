@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: globalCompositeOperation, every operator against computed values</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+</head>
+<body>
+<script>
+/* The formulas of Compositing and Blending Level 1, on premultiplied
+ * colours in 0..1: [r, g, b, a]. */
+const PD = {
+    'source-over': (sa, da) => [1, 1 - sa], 'source-in': (sa, da) => [da, 0], 'source-out': (sa, da) => [1 - da, 0],
+    'source-atop': (sa, da) => [da, 1 - sa], 'destination-over': (sa, da) => [1 - da, 1], 'destination-in': (sa, da) => [0, sa],
+    'destination-out': (sa, da) => [0, 1 - sa], 'destination-atop': (sa, da) => [1 - da, sa], 'lighter': () => [1, 1],
+    'copy': () => [1, 0], 'xor': (sa, da) => [1 - da, 1 - sa],
+};
+const lum = (c) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+const sat = (c) => Math.max(...c) - Math.min(...c);
+function clipColor(c) {
+    const l = lum(c), n = Math.min(...c), x = Math.max(...c);
+    if (n < 0) c = c.map((v) => l + (v - l) * l / (l - n));
+    if (x > 1) c = c.map((v) => l + (v - l) * (1 - l) / (x - l));
+    return c;
+}
+const setLum = (c, l) => { const d = l - lum(c); return clipColor(c.map((v) => v + d)); };
+function setSat(c, s) {
+    const idx = [0, 1, 2].sort((a, b) => c[a] - c[b]);
+    const [mn, mid, mx] = idx, out = [0, 0, 0];
+    if (c[mx] > c[mn]) {
+        out[mid] = (c[mid] - c[mn]) * s / (c[mx] - c[mn]);
+        out[mx] = s;
+    }
+    return out;
+}
+const SEP = {
+    multiply: (b, s) => b * s, screen: (b, s) => b + s - b * s,
+    overlay: (b, s) => (b <= 0.5 ? 2 * b * s : 1 - 2 * (1 - b) * (1 - s)),
+    darken: Math.min, lighten: Math.max,
+    'color-dodge': (b, s) => (b === 0 ? 0 : s >= 1 ? 1 : Math.min(1, b / (1 - s))),
+    'color-burn': (b, s) => (b >= 1 ? 1 : s <= 0 ? 0 : 1 - Math.min(1, (1 - b) / s)),
+    'hard-light': (b, s) => (s <= 0.5 ? 2 * b * s : 1 - 2 * (1 - b) * (1 - s)),
+    'soft-light': (b, s) => {
+        if (s <= 0.5) return b - (1 - 2 * s) * b * (1 - b);
+        const d = b <= 0.25 ? ((16 * b - 12) * b + 4) * b : Math.sqrt(b);
+        return b + (2 * s - 1) * (d - b);
+    },
+    difference: (b, s) => Math.abs(b - s), exclusion: (b, s) => b + s - 2 * b * s,
+};
+const NONSEP = {
+    hue: (cb, cs) => setLum(setSat(cs, sat(cb)), lum(cb)), saturation: (cb, cs) => setLum(setSat(cb, sat(cs)), lum(cb)),
+    color: (cb, cs) => setLum(cs, lum(cb)), luminosity: (cb, cs) => setLum(cb, lum(cs)),
+};
+function expected(op, s, d) {
+    const sa = s[3], da = d[3];
+    if (PD[op]) {
+        const [fa, fb] = PD[op](sa, da);
+        return s.map((v, i) => Math.min(1, v * fa + d[i] * fb));
+    }
+    const cs = s.slice(0, 3).map((v) => (sa ? v / sa : 0)), cb = d.slice(0, 3).map((v) => (da ? v / da : 0));
+    const bl = SEP[op] ? cs.map((v, i) => SEP[op](cb[i], v)) : NONSEP[op](cb, cs);
+    const out = bl.map((v, i) => (1 - da) * s[i] + (1 - sa) * d[i] + sa * da * v);
+    out.push(sa + da - sa * da);
+    return out;
+}
+const OPS = Object.keys(PD).concat(Object.keys(SEP), Object.keys(NONSEP));
+/* The premultiplied value of a canvas pixel, 0..1. */
+function premul(ctx, x, y) {
+    const p = px(ctx, x, y), a = p[3] / 255;
+    return [p[0] / 255 * a, p[1] / 255 * a, p[2] / 255 * a, a];
+}
+test('all 26 operators are accepted', () => {
+    assert.equal(OPS.length, 26);
+    const c = mk(4, 4);
+    for (const op of OPS) {
+        c.globalCompositeOperation = op;
+        assert.equal(c.globalCompositeOperation, op);
+    }
+    c.globalCompositeOperation = 'plus-darker';
+    assert.equal(c.globalCompositeOperation, 'luminosity', 'an unknown operator leaves the value');
+});
+const colours = [
+    ['rgb(255, 0, 0)', 'rgb(0, 0, 255)'], ['rgb(200, 150, 40)', 'rgb(30, 90, 210)'], ['rgba(255, 128, 0, 0.5)', 'rgb(40, 200, 120)'],
+    ['rgb(10, 240, 100)', 'rgba(250, 30, 60, 0.5)'], ['rgba(60, 60, 220, 0.25)', 'rgba(220, 200, 20, 0.75)'],
+    ['rgb(255, 255, 255)', 'rgb(0, 0, 0)'], ['rgb(128, 128, 128)', 'rgb(255, 255, 255)'], ['rgba(0, 0, 0, 0)', 'rgb(90, 20, 150)'],
+    ['rgb(20, 180, 90)', 'rgba(0, 0, 0, 0)'],
+];
+for (const op of OPS) {
+    test(op + ' against the specification formula', () => {
+        for (const [sc, dc] of colours) {
+            const c = mk(3, 1);
+            /* pixel 0: destination then source with the operator; pixels
+             * 1 and 2: each alone, to read the premultiplied inputs */
+            c.fillStyle = dc;
+            c.fillRect(0, 0, 1, 1);
+            c.fillRect(2, 0, 1, 1);
+            c.fillStyle = sc;
+            c.fillRect(1, 0, 1, 1);
+            c.save();
+            c.beginPath();
+            c.rect(0, 0, 1, 1);
+            c.clip();
+            c.globalCompositeOperation = op;
+            c.fillRect(0, 0, 1, 1);
+            c.restore();
+            const want = expected(op, premul(c, 1, 0), premul(c, 2, 0)), got = premul(c, 0, 0);
+            for (let i = 0; i < 4; i++)
+                if (Math.abs(got[i] - want[i]) > 3.5 / 255)
+                    throw new Error(sc + ' over ' + dc + ': premultiplied [' + got.map((v) => Math.round(v * 255)) + '], expected [' +
+                        want.map((v) => Math.round(v * 255)) + ']');
+        }
+    });
+}
+test('operators that change uncovered pixels act on the whole clip', () => {
+    for (const [op, outside] of [['source-in', CLEAR], ['source-out', CLEAR], ['destination-in', CLEAR], ['destination-atop', CLEAR],
+        ['copy', CLEAR], ['source-over', RED], ['source-atop', RED], ['destination-over', RED], ['destination-out', RED],
+        ['lighter', RED], ['xor', RED], ['multiply', RED]]) {
+        const c = mk(30, 30);
+        c.fillStyle = 'red';
+        c.fillRect(0, 0, 30, 30);
+        c.globalCompositeOperation = op;
+        c.fillStyle = 'blue';
+        c.fillRect(10, 10, 10, 10);
+        assert.deepEqual(px(c, 2, 2), outside, op + ' outside the shape');
+    }
+    /* limited by the clip */
+    const c = mk(30, 30);
+    c.fillStyle = 'red';
+    c.fillRect(0, 0, 30, 30);
+    c.beginPath();
+    c.rect(0, 0, 15, 30);
+    c.clip();
+    c.globalCompositeOperation = 'copy';
+    c.fillStyle = 'blue';
+    c.fillRect(5, 5, 5, 5);
+    isPx(c, 7, 7, BLUE);
+    assert.deepEqual(px(c, 12, 12), CLEAR);
+    isPx(c, 20, 20, RED, 0, 'outside the clip');
+});
+test('operators apply to paths, strokes, images and text', () => {
+    const c = mk(40, 40);
+    c.fillStyle = 'red';
+    c.fillRect(0, 0, 40, 40);
+    c.globalCompositeOperation = 'destination-out';
+    c.beginPath();
+    c.arc(20, 20, 10, 0, 7);
+    c.fill();
+    assert.deepEqual(px(c, 20, 20), CLEAR, 'a hole punched by a path');
+    isPx(c, 2, 2, RED);
+    const src = mk(10, 10);
+    src.fillStyle = 'blue';
+    src.fillRect(0, 0, 10, 10);
+    c.globalCompositeOperation = 'destination-over';
+    c.drawImage(src.canvas, 15, 15);
+    isPx(c, 20, 20, BLUE, 0, 'an image drawn behind shows through the hole');
+    isPx(c, 2, 2, RED);
+    c.globalCompositeOperation = 'xor';
+    c.drawImage(src.canvas, 0, 0);
+    assert.deepEqual(px(c, 5, 5), CLEAR, 'xor of two opaque pixels');
+    c.globalCompositeOperation = 'lighter';
+    c.lineWidth = 6;
+    c.strokeStyle = '#0f0';
+    c.beginPath();
+    c.moveTo(0, 35);
+    c.lineTo(40, 35);
+    c.stroke();
+    isPx(c, 30, 35, [255, 255, 0, 255], 0, 'lighter adds');
+});
+</script>
+</body>
+</html>

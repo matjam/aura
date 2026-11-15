@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: drawImage, ImageBitmap, createImageBitmap</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+</head>
+<body>
+<img id="doc" src="../../page/samples/img/pixel.png" width="16" height="16">
+<img id="jpg" src="../../page/samples/img/landscape.jpg">
+<img id="svg" src="../../page/samples/img/badge.svg">
+<script>
+/* A 4 x 4 source: red, blue / green, white quarters. */
+function quad() {
+    const s = mk(4, 4);
+    s.fillStyle = '#f00'; s.fillRect(0, 0, 2, 2);
+    s.fillStyle = '#00f'; s.fillRect(2, 0, 2, 2);
+    s.fillStyle = '#008000'; s.fillRect(0, 2, 2, 2);
+    s.fillStyle = '#fff'; s.fillRect(2, 2, 2, 2);
+    return s.canvas;
+}
+function dst() { const c = mk(40, 40); c.imageSmoothingEnabled = false; return c; }
+test('drawImage(image, dx, dy)', () => {
+    const c = dst();
+    c.drawImage(quad(), 10, 20);
+    isPx(c, 10, 20, RED);
+    isPx(c, 12, 20, BLUE);
+    isPx(c, 10, 22, GREEN);
+    isPx(c, 13, 23, WHITE);
+    assert.deepEqual(px(c, 14, 20), CLEAR);
+    assert.deepEqual(px(c, 9, 20), CLEAR);
+    /* partly off the canvas */
+    c.drawImage(quad(), -2, -2);
+    isPx(c, 0, 0, WHITE);
+    c.drawImage(quad(), 38, 38);
+    isPx(c, 39, 39, RED);
+    /* a fractional position blends across pixels */
+    const f = mk(10, 10);
+    f.drawImage(quad(), 2.5, 2);
+    near(px(f, 2, 2), [255, 0, 0, 128], 3);
+});
+test('drawImage(image, dx, dy, dw, dh)', () => {
+    const c = dst();
+    c.drawImage(quad(), 0, 0, 40, 40);
+    isPx(c, 5, 5, RED);
+    isPx(c, 35, 5, BLUE);
+    isPx(c, 5, 35, GREEN);
+    isPx(c, 35, 35, WHITE);
+    isPx(c, 19, 19, RED);
+    isPx(c, 20, 20, WHITE, 0, 'nearest: a hard edge');
+    /* a negative size is the same rectangle, not a mirror image */
+    c.reset();
+    c.imageSmoothingEnabled = false;
+    c.drawImage(quad(), 40, 40, -40, -40);
+    isPx(c, 5, 5, RED);
+    isPx(c, 35, 35, WHITE);
+    /* smoothing blends at the seam */
+    const s = mk(40, 40);
+    assert.equal(s.imageSmoothingEnabled, true);
+    s.drawImage(quad(), 0, 0, 40, 40);
+    isPx(s, 3, 3, RED);
+    const seam = px(s, 20, 5);
+    assert.ok(seam[0] > 60 && seam[0] < 200 && seam[2] > 60 && seam[2] < 200, 'between red and blue: ' + seam);
+    isPx(s, 36, 4, BLUE);
+    /* scaled down by a lot */
+    const big = mk(200, 200);
+    big.fillStyle = '#f00';
+    big.fillRect(0, 0, 100, 200);
+    big.fillStyle = '#00f';
+    big.fillRect(100, 0, 100, 200);
+    const small = mk(10, 10);
+    small.drawImage(big.canvas, 0, 0, 10, 10);
+    isPx(small, 2, 5, RED);
+    isPx(small, 7, 5, BLUE);
+    /* zero size draws nothing */
+    c.reset();
+    c.drawImage(quad(), 0, 0, 0, 10);
+    assert.deepEqual(px(c, 0, 0), CLEAR);
+});
+test('drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh)', () => {
+    const c = dst();
+    c.drawImage(quad(), 2, 0, 2, 2, 0, 0, 20, 20); /* the blue quarter */
+    isPx(c, 1, 1, BLUE);
+    isPx(c, 18, 18, BLUE);
+    assert.deepEqual(px(c, 21, 5), CLEAR);
+    c.reset();
+    c.imageSmoothingEnabled = false;
+    c.drawImage(quad(), 1, 1, 2, 2, 0, 0, 20, 20); /* the middle: one pixel of each */
+    isPx(c, 2, 2, RED);
+    isPx(c, 17, 2, BLUE);
+    isPx(c, 2, 17, GREEN);
+    isPx(c, 17, 17, WHITE);
+    /* a source rectangle reaching outside the image is cut, and the destination with it */
+    c.reset();
+    c.imageSmoothingEnabled = false;
+    c.drawImage(quad(), -4, 0, 8, 4, 0, 0, 40, 20); /* the image is the right half of the source */
+    assert.deepEqual(px(c, 10, 5), CLEAR, 'the part outside the image draws nothing');
+    isPx(c, 22, 2, RED);
+    isPx(c, 38, 18, WHITE);
+    /* entirely outside: nothing */
+    c.reset();
+    c.drawImage(quad(), 10, 10, 4, 4, 0, 0, 40, 40);
+    assert.deepEqual(px(c, 20, 20), CLEAR);
+    assert.throws(() => c.drawImage(quad(), 0, 0, 1), TypeError);
+    assert.throws(() => c.drawImage(quad()), TypeError);
+    assert.throws(() => c.drawImage({}, 0, 0), TypeError);
+    assert.throws(() => c.drawImage(null, 0, 0), TypeError);
+    /* not finite: no drawing, no exception */
+    c.drawImage(quad(), NaN, 0);
+    c.drawImage(quad(), 0, 0, Infinity, 5);
+    c.drawImage(quad(), 0, 0, 2, 2, 0, NaN, 5, 5);
+    assert.deepEqual(px(c, 2, 2), CLEAR);
+});
+test('transforms, alpha, operators and clips apply to images', () => {
+    let c = dst();
+    c.translate(20, 20);
+    c.rotate(Math.PI / 2);
+    c.drawImage(quad(), -10, -10, 20, 20);
+    /* a quarter turn clockwise: red moves to the top right */
+    isPx(c, 25, 15, RED);
+    isPx(c, 25, 25, BLUE);
+    isPx(c, 15, 15, GREEN);
+    isPx(c, 15, 25, WHITE);
+    c = dst();
+    c.scale(-1, 1);
+    c.drawImage(quad(), -40, 0, 40, 40); /* mirrored */
+    isPx(c, 35, 5, RED);
+    isPx(c, 5, 5, BLUE);
+    c = dst();
+    c.globalAlpha = 0.5;
+    c.drawImage(quad(), 0, 0);
+    near(px(c, 0, 0), [255, 0, 0, 128], 1);
+    c = dst();
+    c.fillStyle = '#ff0';
+    c.fillRect(0, 0, 40, 40);
+    c.globalCompositeOperation = 'destination-out';
+    c.drawImage(quad(), 10, 10);
+    assert.deepEqual(px(c, 11, 11), CLEAR);
+    isPx(c, 20, 20, [255, 255, 0, 255]);
+    c = dst();
+    c.beginPath();
+    c.arc(20, 20, 10, 0, 7);
+    c.clip();
+    c.drawImage(quad(), 0, 0, 40, 40);
+    assert.deepEqual(px(c, 2, 2), CLEAR);
+    isPx(c, 16, 16, RED);
+});
+test('a canvas as the source', () => {
+    const c = dst();
+    /* a canvas with no context yet: blank, no exception */
+    const blank = document.createElement('canvas');
+    c.drawImage(blank, 0, 0);
+    assert.deepEqual(px(c, 0, 0), CLEAR);
+    const zero = document.createElement('canvas');
+    zero.width = 0;
+    assert.throws(() => c.drawImage(zero, 0, 0), 'InvalidStateError');
+    /* the canvas onto itself */
+    c.fillStyle = 'red';
+    c.fillRect(0, 0, 10, 10);
+    c.drawImage(c.canvas, 0, 0, 10, 10, 5, 5, 10, 10);
+    isPx(c, 12, 12, RED);
+    assert.deepEqual(px(c, 16, 16), CLEAR);
+    c.drawImage(c.canvas, 20, 0);
+    isPx(c, 32, 12, RED);
+    /* an opaque canvas draws opaque */
+    const o = mk(4, 4, { alpha: false });
+    const t = dst();
+    t.fillStyle = 'red';
+    t.fillRect(0, 0, 40, 40);
+    t.drawImage(o.canvas, 0, 0);
+    isPx(t, 1, 1, BLACK);
+});
+promise_test('images', async () => {
+    /* an image script loaded */
+    const img = await loadImage(checkerUrl());
+    assert.equal(img.naturalWidth, 4);
+    let c = dst();
+    c.drawImage(img, 0, 0);
+    isPx(c, 0, 0, RED);
+    isPx(c, 3, 3, BLUE);
+    c.drawImage(img, 0, 0, 2, 4, 10, 10, 20, 20);
+    isPx(c, 25, 25, RED, 0, 'the red half, enlarged');
+    /* drawn again: the decoded bitmap is reused */
+    c.drawImage(img, 30, 0);
+    isPx(c, 30, 0, RED);
+    /* not loaded, or broken: nothing drawn, no exception */
+    c = dst();
+    c.drawImage(new Image(), 0, 0);
+    const broken = new Image();
+    await new Promise((resolve) => { broken.onerror = resolve; broken.src = 'data:image/png;base64,AAAA'; });
+    c.drawImage(broken, 0, 0);
+    assert.deepEqual(px(c, 0, 0), CLEAR);
+    /* a file the page fetched: JPEG */
+    const jpg = await loadImage('../../page/samples/img/landscape.jpg');
+    c = mk(240, 160);
+    c.drawImage(jpg, 0, 0);
+    const sky = px(c, 20, 10);
+    assert.equal(sky[3], 255);
+    assert.ok(sky[2] > sky[0], 'the sky is blue: ' + sky);
+    /* changing src drops the old pixels */
+    await new Promise((resolve) => { img.onload = resolve; img.src = '../../page/samples/img/pixel.png'; });
+    c = dst();
+    c.drawImage(img, 0, 0, 4, 4);
+    assert.notEqual(String(px(c, 3, 3)), String(BLUE));
+});
+promise_test('images of the document', async () => {
+    await new Promise((resolve) => { if (document.readyState === 'complete') resolve(); else window.addEventListener('load', resolve); });
+    const jpg = document.getElementById('jpg');
+    let c = mk(240, 160);
+    c.drawImage(jpg, 0, 0);
+    const sky = px(c, 20, 10);
+    assert.equal(sky[3], 255, 'the image the parser loaded draws');
+    assert.ok(sky[2] > sky[0], 'blue sky: ' + sky);
+    /* its natural size, not the size it is shown at */
+    const small = document.getElementById('doc');
+    c = mk(40, 40);
+    c.drawImage(small, 0, 0);
+    assert.equal(px(c, 0, 0)[3], 255);
+    assert.deepEqual(px(c, 8, 8), CLEAR, 'pixel.png is drawn at its natural size, smaller than its 16 x 16 box');
+    /* an SVG image */
+    const svg = document.getElementById('svg');
+    c = mk(100, 100);
+    c.drawImage(svg, 0, 0, 100, 100);
+    const d = c.getImageData(0, 0, 100, 100).data;
+    let inked = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 128) inked++;
+    assert.ok(inked > 500, 'the SVG image drew: ' + inked + ' pixels');
+});
+promise_test('createImageBitmap', async () => {
+    const src = quad();
+    const bm = await createImageBitmap(src);
+    assert.ok(bm instanceof ImageBitmap);
+    assert.equal(String(bm), '[object ImageBitmap]');
+    assert.equal(bm.width, 4);
+    assert.equal(bm.height, 4);
+    let c = dst();
+    c.drawImage(bm, 0, 0);
+    isPx(c, 0, 0, RED);
+    isPx(c, 3, 3, WHITE);
+    /* a snapshot: the source may change */
+    src.getContext('2d').clearRect(0, 0, 4, 4);
+    c.drawImage(bm, 10, 10);
+    isPx(c, 10, 10, RED);
+    /* cropped */
+    const crop = await createImageBitmap(quad(), 2, 2, 2, 2);
+    assert.equal(crop.width, 2);
+    c = dst();
+    c.drawImage(crop, 0, 0);
+    isPx(c, 0, 0, WHITE);
+    isPx(c, 1, 1, WHITE);
+    assert.deepEqual(px(c, 2, 2), CLEAR);
+    /* a crop reaching outside is transparent there */
+    const out = await createImageBitmap(quad(), 2, 2, 4, 4);
+    assert.equal(out.width, 4);
+    c = dst();
+    c.drawImage(out, 0, 0);
+    isPx(c, 1, 1, WHITE);
+    assert.deepEqual(px(c, 3, 3), CLEAR);
+    /* from an image, a Blob, ImageData and another ImageBitmap */
+    const img = await loadImage(checkerUrl());
+    const fromImg = await createImageBitmap(img);
+    assert.equal(fromImg.width, 4);
+    const blob = await new Promise((resolve) => quad().toBlob(resolve));
+    const fromBlob = await createImageBitmap(blob);
+    assert.equal(fromBlob.width, 4);
+    c = dst();
+    c.drawImage(fromBlob, 0, 0);
+    isPx(c, 0, 0, RED);
+    isPx(c, 2, 0, BLUE);
+    isPx(c, 0, 2, GREEN);
+    const data = new ImageData(new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 128]), 2, 1);
+    const fromData = await createImageBitmap(data);
+    assert.equal(fromData.width, 2);
+    assert.equal(fromData.height, 1);
+    c = dst();
+    c.drawImage(fromData, 0, 0);
+    isPx(c, 0, 0, RED);
+    near(px(c, 1, 0), [0, 0, 255, 128], 2);
+    const again = await createImageBitmap(fromData, 1, 0, 1, 1);
+    assert.equal(again.width, 1);
+    /* errors reject */
+    for (const bad of [() => createImageBitmap({}), () => createImageBitmap(new Image()), () => createImageBitmap(new Blob(['not an image'])),
+        () => createImageBitmap(quad(), 0, 0, 0, 4)]) {
+        let err = null;
+        try { await bad(); } catch (e) { err = e; }
+        assert.ok(err, 'rejected');
+    }
+    /* close releases the pixels; a closed bitmap cannot be drawn */
+    bm.close();
+    assert.equal(bm.width, 0);
+    assert.throws(() => c.drawImage(bm, 0, 0), 'InvalidStateError');
+    bm.close();
+});
+</script>
+</body>
+</html>

@@ -184,6 +184,8 @@ static void h_attr(void *ctx, AuElement *el, AuAtom name, uint8_t ns, const char
     if (js->closing)
         return;
     changed(js, &el->node, name, AU_JS_CHANGE_ATTR);
+    if (el->tag == AU_ATOM_canvas)
+        js_canvas_attr_changing(js, el, name);
     if (js->observers)
         push_mut(js, 2, &el->node, NULL, NULL, NULL, NULL, name, old, old_len);
     if (js->ce_defs && is_custom_candidate(&el->node))

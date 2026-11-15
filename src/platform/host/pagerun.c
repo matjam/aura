@@ -2,7 +2,7 @@
  * scripting on, the way the browser would, and runs its scripts.
  *
  *   aura-host page [--quiet] [--expect-errors N] [--chunk BYTES]
- *                  [--click ID]... [--no-script] PAGE.html
+ *                  [--click ID]... [--no-script] [--ref ID FILE.png]... PAGE.html
  *
  * The page is fed to the parser in chunks (default 256 bytes, so parser
  * pauses and document.write meet chunk boundaries); resources come from
@@ -10,12 +10,20 @@
  * virtual clock (each round advances it by 50 ms) until the page has
  * loaded and nothing has run for ten virtual seconds. --click ID presses
  * and releases the mouse over the centre of element ID after the load.
+ * --ref ID FILE.png paints the content box of element ID (a canvas, for
+ * tests/canvas) as the page shows it and compares it with the PNG: up to
+ * 3 levels per channel are allowed anywhere and more than that on at most
+ * 0.5% of the pixels (float rounding differs between compilers and CPUs);
+ * a mismatch prints a FAIL line and writes FILE-actual.png. With
+ * AURA_UPDATE_GOLDEN=1 in the environment it writes FILE instead.
  *
  * console output goes to stdout ("error: ", "warn: " prefixes); the view's
  * link requests print as "open: URL". The exit status is 1 when the
  * number of console errors differs from --expect-errors (default 0) or a
  * line starts with "FAIL". */
 #include "host.h"
+#include "image/image.h"
+#include "image/pngenc.h"
 #include "render.h"
 
 #include <stdio.h>
@@ -100,6 +108,94 @@ static void click(AuDocView *dv, const char *id)
     au_docview_mouse(dv, &ev);
 }
 
+/* Writes s as a compressed PNG (the engine's encoder, so references stay
+ * small in the repository). */
+static void ref_row(void *ctx, int y, uint8_t *rgba)
+{
+    const AuSurface *s = ctx;
+    for (int x = 0; x < s->width; x++) {
+        AuColor c = au_surface_get(s, x, y);
+        rgba[4 * x] = (uint8_t)(c >> 16);
+        rgba[4 * x + 1] = (uint8_t)(c >> 8);
+        rgba[4 * x + 2] = (uint8_t)c;
+        rgba[4 * x + 3] = (uint8_t)(c >> 24);
+    }
+}
+
+static bool ref_write(const char *path, AuSurface *s)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    bool ok = au_png_encode_rgba(s->width, s->height, ref_row, s, &b);
+    FILE *f = ok ? fopen(path, "wb") : NULL;
+    ok = f && fwrite(b.data, 1, b.len, f) == b.len;
+    if (f && fclose(f) != 0)
+        ok = false;
+    au_buf_free(&b);
+    return ok;
+}
+
+/* --ref: the element's content box, painted, against a PNG. Returns
+ * false after printing a FAIL line. */
+static bool check_ref(AuDocView *dv, const char *id, const char *file)
+{
+    AuElement *el = au_docview_find_fragment(dv, id);
+    AuRect rc;
+    au_docview_update(dv);
+    if (!el || !au_layout_element_content_rect(au_docview_layout(dv), el, &rc) || rc.w < 1 || rc.h < 1) {
+        printf("FAIL --ref %s: no such element with a box\n", id);
+        return false;
+    }
+    int w = (int)rc.w, h = (int)rc.h;
+    AuSurface *s = au_surface_new(w, h);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)h}, (int)rc.x, (int)rc.y);
+    au_canvas_free(c);
+    const char *update = getenv("AURA_UPDATE_GOLDEN");
+    bool ok = true;
+    if (update && *update == '1') {
+        ok = ref_write(file, s);
+        printf("%s %s (%dx%d)\n", ok ? "wrote" : "FAIL cannot write", file, w, h);
+    } else {
+        char *data;
+        size_t len;
+        AuSurface *g = au_platform_read_file(file, &data, &len) ? au_image_decode_buffer(data, len, NULL, NULL) : NULL;
+        if (!g || g->width != w || g->height != h) {
+            printf("FAIL --ref %s: %s is missing or not %dx%d\n", id, file, w, h);
+            ok = false;
+        } else {
+            long over = 0;
+            int maxd = 0;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    uint32_t a = s->pixels[(size_t)y * s->stride + x], b = g->pixels[(size_t)y * g->stride + x];
+                    int d = 0;
+                    for (int k = 0; k < 32; k += 8) {
+                        int e = abs((int)((a >> k) & 255) - (int)((b >> k) & 255));
+                        if (e > d)
+                            d = e;
+                    }
+                    if (d > 3)
+                        over++;
+                    if (d > maxd)
+                        maxd = d;
+                }
+            if (over > (long)w * h / 200) {
+                char actual[2100];
+                snprintf(actual, sizeof actual, "%s-actual.png", file);
+                ref_write(actual, s);
+                printf("FAIL --ref %s: %ld pixels differ from %s by more than 3 levels (most %d); wrote %s\n", id, over,
+                       file, maxd, actual);
+                ok = false;
+            }
+        }
+        if (g)
+            au_surface_free(g);
+    }
+    au_surface_free(s);
+    return ok;
+}
+
 int au_host_page_main(int argc, char **argv)
 {
     PageRun run;
@@ -110,6 +206,8 @@ int au_host_page_main(int argc, char **argv)
     const char *page = NULL;
     const char *clicks[16];
     int nclicks = 0;
+    const char *refs[32][2];
+    int nrefs = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--quiet"))
             run.quiet = true;
@@ -119,13 +217,16 @@ int au_host_page_main(int argc, char **argv)
             chunk = (size_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--click") && i + 1 < argc && nclicks < 16)
             clicks[nclicks++] = argv[++i];
-        else if (!strcmp(argv[i], "--no-script"))
+        else if (!strcmp(argv[i], "--ref") && i + 2 < argc && nrefs < 32) {
+            refs[nrefs][0] = argv[++i];
+            refs[nrefs++][1] = argv[++i];
+        } else if (!strcmp(argv[i], "--no-script"))
             scripting = false;
         else if (argv[i][0] != '-' && !page)
             page = argv[i];
         else {
             fprintf(stderr, "usage: aura-host page [--quiet] [--expect-errors N] [--chunk BYTES] [--click ID]... "
-                            "[--no-script] PAGE.html\n");
+                            "[--no-script] [--ref ID FILE.png]... PAGE.html\n");
             return 2;
         }
     }
@@ -168,6 +269,9 @@ int au_host_page_main(int argc, char **argv)
         click(dv, clicks[i]);
         run_loop(dv, loader, &run, 200);
     }
+    for (int i = 0; i < nrefs; i++)
+        if (!check_ref(dv, refs[i][0], refs[i][1]))
+            run.fails++;
     if (!run.loaded)
         printf("FAIL the page never finished loading\n");
     if (run.fails == 0 && !run.loaded)

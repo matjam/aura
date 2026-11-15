@@ -201,6 +201,9 @@ void js_leave(AuJs *js)
         r->interrupted = false;
         r->oom = false;
         js_safe_point(js);
+        for (AuJs *g = r; g; g = g->group_next)
+            if (g->canvas_pending)
+                js_canvas_sync(g); /* width or height attributes script changed */
     }
 }
 
@@ -635,6 +638,7 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     js_module_init(js);
     js_module_natives(js, N);
     js_frames_natives(js, N);
+    js_canvas_init(js, N);
     bool ok = load_prelude(js, N);
     JS_FreeValue(ctx, N);
     js_leave(js);
@@ -667,6 +671,7 @@ void au_js_free(AuJs *js)
         AuJs *root = js->root;
         JS_FreeValue(ctx, js->P);
         js->P = JS_UNDEFINED;
+        js_canvas_free(js);
         js_wrap_free_child(js);
         JS_SetContextOpaque(ctx, root);
         JS_FreeContext(ctx);
@@ -717,6 +722,7 @@ void au_js_free(AuJs *js)
     au_free(js->rejections);
     JS_FreeValue(ctx, js->P);
     js->P = JS_UNDEFINED;
+    js_canvas_free(js);
     js_wrap_free_all(js); /* drops the nodes' references to their wrappers */
     JS_FreeContext(ctx);
     JS_FreeRuntime(js->rt);

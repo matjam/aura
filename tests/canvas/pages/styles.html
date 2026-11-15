@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Canvas: gradients, patterns, shadows, global alpha</title>
+<script src="../../js/harness.js"></script>
+<script src="util.js"></script>
+</head>
+<body>
+<script>
+test('linear gradients', () => {
+    const c = mk(100, 20);
+    const g = c.createLinearGradient(0, 0, 100, 0);
+    assert.ok(g instanceof CanvasGradient);
+    assert.equal(String(g), '[object CanvasGradient]');
+    g.addColorStop(0, '#000');
+    g.addColorStop(1, '#fff');
+    c.fillStyle = g;
+    assert.equal(c.fillStyle, g, 'the attribute returns the gradient object');
+    c.fillRect(0, 0, 100, 20);
+    near(px(c, 0, 5), [1, 1, 1, 255], 2);
+    near(px(c, 25, 5), [65, 65, 65, 255], 3);
+    near(px(c, 50, 5), [129, 129, 129, 255], 3);
+    near(px(c, 99, 5), [254, 254, 254, 255], 2);
+    /* beyond the ends the end colours continue; stops added later count */
+    const g2 = c.createLinearGradient(40, 0, 60, 0);
+    g2.addColorStop(0, 'red');
+    g2.addColorStop(1, 'blue');
+    c.fillStyle = g2;
+    c.fillRect(0, 0, 100, 20);
+    isPx(c, 10, 5, RED);
+    isPx(c, 90, 5, BLUE);
+    near(px(c, 50, 5), [121, 0, 134, 255], 3, 'the pixel centre 50.5 is 52.5% along');
+    /* a hard stop */
+    const g3 = c.createLinearGradient(0, 0, 100, 0);
+    g3.addColorStop(0, 'red');
+    g3.addColorStop(0.5, 'red');
+    g3.addColorStop(0.5, 'blue');
+    g3.addColorStop(1, 'blue');
+    c.fillStyle = g3;
+    c.fillRect(0, 0, 100, 20);
+    isPx(c, 45, 5, RED);
+    isPx(c, 55, 5, BLUE);
+    /* interpolation is not premultiplied: red to transparent blue keeps the hue mix */
+    c.clearRect(0, 0, 100, 20);
+    const g4 = c.createLinearGradient(0, 0, 100, 0);
+    g4.addColorStop(0, 'rgba(255, 0, 0, 1)');
+    g4.addColorStop(1, 'rgba(0, 0, 255, 0)');
+    c.fillStyle = g4;
+    c.fillRect(0, 0, 100, 20);
+    near(px(c, 50, 5), [126, 0, 129, 126], 6);
+    /* the transform moves the gradient with the shapes */
+    c.reset();
+    c.translate(50, 0);
+    c.fillStyle = g3;
+    c.fillRect(-50, 0, 100, 20);
+    isPx(c, 95, 5, RED, 0, 'the gradient starts at x = 50 now');
+    /* a gradient of no length paints nothing; one without stops neither */
+    c.reset();
+    const none = c.createLinearGradient(5, 5, 5, 5);
+    none.addColorStop(0, 'red');
+    c.fillStyle = none;
+    c.fillRect(0, 0, 100, 20);
+    assert.deepEqual(px(c, 5, 5), CLEAR);
+    c.fillStyle = c.createLinearGradient(0, 0, 10, 0);
+    c.fillRect(0, 0, 100, 20);
+    assert.deepEqual(px(c, 5, 5), CLEAR);
+    assert.throws(() => g.addColorStop(1.5, 'red'), 'IndexSizeError');
+    assert.throws(() => g.addColorStop(-0.1, 'red'), 'IndexSizeError');
+    assert.throws(() => g.addColorStop(NaN, 'red'), 'IndexSizeError');
+    assert.throws(() => g.addColorStop(0.5, 'not a colour'), 'SyntaxError');
+    assert.throws(() => c.createLinearGradient(0, 0, Infinity, 0), TypeError);
+    assert.throws(() => c.createLinearGradient(0, 0, 1), TypeError);
+    /* many stops are accepted without growing without bound */
+    const many = c.createLinearGradient(0, 0, 100, 0);
+    for (let i = 0; i < 2000; i++) many.addColorStop(i / 2000, i % 2 ? 'red' : 'blue');
+    c.fillStyle = many;
+    c.fillRect(0, 0, 100, 20);
+});
+test('radial and conic gradients', () => {
+    const c = mk(100, 100);
+    const g = c.createRadialGradient(50, 50, 10, 50, 50, 40);
+    g.addColorStop(0, 'red');
+    g.addColorStop(1, 'blue');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 100, 100);
+    isPx(c, 50, 50, RED, 0, 'inside the start circle');
+    isPx(c, 55, 50, RED);
+    isPx(c, 95, 50, BLUE, 0, 'outside the end circle');
+    isPx(c, 2, 2, BLUE);
+    near(px(c, 75, 50), [126, 0, 129, 255], 8, 'half way');
+    near(px(c, 50, 75), [126, 0, 129, 255], 8, 'the same below');
+    /* two circles apart: a cone; outside it nothing is painted */
+    c.reset();
+    const cone = c.createRadialGradient(20, 50, 5, 70, 50, 20);
+    cone.addColorStop(0, 'red');
+    cone.addColorStop(1, 'blue');
+    c.fillStyle = cone;
+    c.fillRect(0, 0, 100, 100);
+    near(px(c, 16, 50), [244, 0, 11, 255], 6, 'the far side of the start circle: 4% along');
+    near(px(c, 20, 50), [215, 0, 40, 255], 6, 'its centre lies on the circle 16% along');
+    isPx(c, 70, 50, BLUE);
+    assert.deepEqual(px(c, 5, 5), CLEAR, 'outside the cone');
+    assert.throws(() => c.createRadialGradient(0, 0, -1, 0, 0, 1), 'IndexSizeError');
+    assert.throws(() => c.createRadialGradient(0, 0, 1, 0, NaN, 1), TypeError);
+    /* equal circles paint nothing */
+    c.reset();
+    const same = c.createRadialGradient(50, 50, 10, 50, 50, 10);
+    same.addColorStop(0, 'red');
+    c.fillStyle = same;
+    c.fillRect(0, 0, 100, 100);
+    assert.deepEqual(px(c, 50, 50), CLEAR);
+    /* conic: from the +x axis, clockwise */
+    c.reset();
+    const k = c.createConicGradient(0, 50, 50);
+    k.addColorStop(0, 'red');
+    k.addColorStop(0.25, 'red');
+    k.addColorStop(0.25, 'blue');
+    k.addColorStop(1, 'blue');
+    c.fillStyle = k;
+    c.fillRect(0, 0, 100, 100);
+    isPx(c, 80, 70, RED, 0, 'the first quarter turn is below and right');
+    isPx(c, 20, 70, BLUE);
+    isPx(c, 80, 30, BLUE);
+    /* a start angle of a quarter turn moves it to below and left */
+    c.reset();
+    const k2 = c.createConicGradient(Math.PI / 2, 50, 50);
+    k2.addColorStop(0, 'red');
+    k2.addColorStop(0.25, 'red');
+    k2.addColorStop(0.25, 'blue');
+    k2.addColorStop(1, 'blue');
+    c.fillStyle = k2;
+    c.fillRect(0, 0, 100, 100);
+    isPx(c, 20, 70, RED);
+    isPx(c, 80, 70, BLUE);
+});
+test('gradients as stroke style and with global alpha', () => {
+    const c = mk(100, 20);
+    const g = c.createLinearGradient(0, 0, 100, 0);
+    g.addColorStop(0, 'red');
+    g.addColorStop(1, 'red');
+    c.strokeStyle = g;
+    c.lineWidth = 10;
+    c.globalAlpha = 0.5;
+    c.beginPath();
+    c.moveTo(0, 10);
+    c.lineTo(100, 10);
+    c.stroke();
+    near(px(c, 50, 10), [255, 0, 0, 128], 2);
+    c.save();
+    c.fillStyle = 'blue';
+    c.restore();
+    assert.equal(c.strokeStyle, g);
+});
+promise_test('patterns', async () => {
+    const tile = mk(4, 4);
+    tile.fillStyle = 'red';
+    tile.fillRect(0, 0, 2, 4);
+    tile.fillStyle = 'blue';
+    tile.fillRect(2, 0, 2, 4);
+    const c = mk(40, 40);
+    const p = c.createPattern(tile.canvas, 'repeat');
+    assert.ok(p instanceof CanvasPattern);
+    c.fillStyle = p;
+    assert.equal(c.fillStyle, p);
+    c.fillRect(0, 0, 40, 40);
+    isPx(c, 0, 0, RED);
+    isPx(c, 2, 0, BLUE);
+    isPx(c, 4, 20, RED);
+    isPx(c, 38, 39, BLUE);
+    /* the pattern is a snapshot: later drawing on the source does not change it */
+    tile.fillStyle = 'green';
+    tile.fillRect(0, 0, 4, 4);
+    c.clearRect(0, 0, 40, 40);
+    c.fillRect(0, 0, 40, 40);
+    isPx(c, 0, 0, RED);
+    /* repeat modes */
+    for (const [mode, right, below] of [['repeat-x', true, false], ['repeat-y', false, true], ['no-repeat', false, false], ['', true, true], [null, true, true]]) {
+        c.reset();
+        c.fillStyle = c.createPattern(tile.canvas, mode);
+        c.fillRect(0, 0, 40, 40);
+        assert.equal(px(c, 1, 1)[3], 255, String(mode) + ' origin');
+        assert.equal(px(c, 21, 1)[3] === 255, right, String(mode) + ' to the right');
+        assert.equal(px(c, 1, 21)[3] === 255, below, String(mode) + ' below');
+    }
+    assert.throws(() => c.createPattern(tile.canvas, 'sideways'), 'SyntaxError');
+    assert.throws(() => c.createPattern({}, 'repeat'), TypeError);
+    assert.throws(() => c.createPattern(tile.canvas), TypeError);
+    /* setTransform on the pattern: doubled and moved */
+    const t2 = mk(2, 2);
+    t2.fillStyle = 'red';
+    t2.fillRect(0, 0, 1, 2);
+    t2.fillStyle = 'blue';
+    t2.fillRect(1, 0, 1, 2);
+    c.reset();
+    c.imageSmoothingEnabled = false;
+    const big = c.createPattern(t2.canvas, 'repeat');
+    big.setTransform({ a: 10, d: 10, e: 5 });
+    c.fillStyle = big;
+    c.fillRect(0, 0, 40, 40);
+    isPx(c, 8, 8, RED, 0, 'the tile starts at x = 5 and each cell is 10 wide');
+    isPx(c, 18, 8, BLUE);
+    isPx(c, 28, 8, RED);
+    isPx(c, 2, 8, BLUE, 0, 'and repeats to the left');
+    /* from an image, and from an ImageBitmap */
+    const img = await loadImage(checkerUrl());
+    c.reset();
+    c.fillStyle = c.createPattern(img, 'repeat');
+    c.fillRect(0, 0, 40, 40);
+    isPx(c, 1, 1, RED);
+    isPx(c, 3, 1, BLUE);
+    isPx(c, 5, 30, RED);
+    const bm = await createImageBitmap(img);
+    c.reset();
+    c.fillStyle = c.createPattern(bm, 'no-repeat');
+    c.fillRect(0, 0, 40, 40);
+    isPx(c, 3, 3, BLUE);
+    assert.deepEqual(px(c, 10, 10), CLEAR);
+    /* an image that never loaded gives null */
+    assert.equal(c.createPattern(new Image(), 'repeat'), null);
+    /* a pattern as a stroke, under a transform */
+    c.reset();
+    c.translate(1, 0);
+    c.strokeStyle = c.createPattern(img, 'repeat');
+    c.lineWidth = 8;
+    c.beginPath();
+    c.moveTo(0, 20);
+    c.lineTo(40, 20);
+    c.stroke();
+    isPx(c, 1, 20, RED, 0, 'the pattern moves with the transform');
+    isPx(c, 3, 20, BLUE);
+});
+test('shadows', () => {
+    let c = mk(60, 60);
+    c.shadowColor = 'blue';
+    c.fillStyle = 'red';
+    c.fillRect(10, 10, 10, 10);
+    assert.deepEqual(px(c, 22, 22), CLEAR, 'no blur and no offset: no shadow');
+    c.shadowOffsetX = 20;
+    c.shadowOffsetY = 20;
+    c.fillRect(10, 10, 10, 10);
+    isPx(c, 15, 15, RED);
+    isPx(c, 35, 35, BLUE, 0, 'the shadow, moved by the offsets');
+    assert.deepEqual(px(c, 28, 35), CLEAR);
+    assert.deepEqual(px(c, 42, 35), CLEAR);
+    /* the transform does not move the shadow offset */
+    c = mk(60, 60);
+    c.shadowColor = 'blue';
+    c.shadowOffsetX = 20;
+    c.fillStyle = 'red';
+    c.scale(2, 2);
+    c.fillRect(5, 5, 5, 5);
+    isPx(c, 35, 15, BLUE, 0, 'offset 20, not 40');
+    assert.deepEqual(px(c, 52, 15), CLEAR);
+    /* blur spreads and fades */
+    c = mk(60, 60);
+    c.shadowColor = 'blue';
+    c.shadowBlur = 10;
+    c.fillStyle = 'red';
+    c.fillRect(20, 20, 20, 20);
+    const a1 = px(c, 18, 30)[3], a2 = px(c, 14, 30)[3], a3 = px(c, 4, 30)[3];
+    assert.ok(a1 > a2 && a2 > a3, 'fades with distance: ' + [a1, a2, a3]);
+    assert.ok(a1 > 40 && a1 < 220, 'partial near the edge: ' + a1);
+    assert.equal(a3, 0, 'and ends');
+    isPx(c, 30, 30, RED);
+    /* a transparent shadow colour draws nothing; the shadow takes the shape's alpha */
+    c = mk(60, 60);
+    c.shadowColor = 'rgba(0, 0, 255, 0)';
+    c.shadowOffsetX = 20;
+    c.fillRect(10, 10, 10, 10);
+    assert.deepEqual(px(c, 35, 15), CLEAR);
+    c.shadowColor = 'blue';
+    c.fillStyle = 'rgba(255, 0, 0, 0.5)';
+    c.fillRect(10, 30, 10, 10);
+    near(px(c, 35, 35), [0, 0, 255, 128], 2);
+    c.globalAlpha = 0.5;
+    c.fillStyle = 'red';
+    c.fillRect(10, 45, 10, 10);
+    near(px(c, 35, 50), [0, 0, 255, 128], 2, 'global alpha applies to the shadow');
+    /* strokes, text and images cast shadows too; clearRect does not */
+    c = mk(60, 60);
+    c.shadowColor = 'blue';
+    c.shadowOffsetY = 20;
+    c.lineWidth = 6;
+    c.strokeStyle = 'red';
+    c.beginPath();
+    c.moveTo(5, 10);
+    c.lineTo(55, 10);
+    c.stroke();
+    isPx(c, 30, 30, BLUE);
+    const src = mk(10, 10);
+    src.fillStyle = 'red';
+    src.fillRect(0, 0, 10, 10);
+    c.drawImage(src.canvas, 40, 35);
+    isPx(c, 45, 57, BLUE, 0, 'an image casts a shadow');
+    c.clearRect(0, 0, 60, 60);
+    assert.deepEqual(px(c, 30, 30), CLEAR, 'clearRect has no shadow');
+    /* hostile values */
+    c.shadowBlur = 1e9;
+    c.shadowOffsetX = 1e30;
+    c.shadowOffsetY = -1e30;
+    c.fillRect(0, 0, 60, 60);
+    c.shadowOffsetX = 0;
+    c.shadowOffsetY = 0;
+    c.fillRect(0, 0, 60, 60);
+});
+test('global alpha', () => {
+    const c = mk(10, 10);
+    c.globalAlpha = 0.5;
+    c.fillStyle = '#f00';
+    c.fillRect(0, 0, 10, 10);
+    near(px(c, 5, 5), [255, 0, 0, 128], 1);
+    c.fillStyle = '#00f';
+    c.fillRect(0, 0, 10, 10);
+    near(px(c, 5, 5), [85, 0, 170, 191], 2, 'blue at half alpha over red at half alpha');
+    c.globalAlpha = 0;
+    c.fillStyle = '#0f0';
+    c.fillRect(0, 0, 10, 10);
+    near(px(c, 5, 5), [85, 0, 170, 191], 2, 'alpha 0 draws nothing');
+});
+</script>
+</body>
+</html>
