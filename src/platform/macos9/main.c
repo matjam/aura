@@ -78,6 +78,15 @@ static void oom_handler(size_t wanted)
     mac_out_of_memory(wanted);
 }
 
+/* Low memory: before au_alloc gives up, the documents kept for Back and
+ * Forward go (au_set_release_handler). Kept documents are hidden, so no
+ * code on the stack is using one. */
+static bool release_caches(size_t wanted)
+{
+    (void)wanted;
+    return g_browser && au_browser_release_documents(g_browser) > 0;
+}
+
 MacWin *mac_win_of(WindowPtr w)
 {
     if (!w || GetWindowKind(w) != userKind)
@@ -861,6 +870,7 @@ int main(void)
 
     reserve = NewHandle(64 * 1024);
     au_set_oom_handler(oom_handler);
+    au_set_release_handler(release_caches);
 
     AEInstallEventHandler(kCoreEventClass, kAEOpenApplication, NewAEEventHandlerUPP(ae_open_app), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);

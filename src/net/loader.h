@@ -69,6 +69,7 @@ typedef struct AuLoadInfo {
     AuLoadSecurity security;
     const AuCertInfo *cert;   /* certificate details (https), or NULL */
     bool from_cache;
+    bool no_store;            /* Cache-Control: no-store on the response */
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* suggested file name for a download ("" when none) */
     const char *csp;          /* Content-Security-Policy ("" when none) */

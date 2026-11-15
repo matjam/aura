@@ -170,6 +170,7 @@ typedef struct AuFetchResponse {
     AuSecurity security;
     const AuFetchCert *cert;  /* https: the certificate details, or NULL */
     bool from_cache;
+    bool no_store;            /* Cache-Control: no-store (a document with it is never kept for Back) */
 } AuFetchResponse;
 
 /* The end of a fetch. Strings and cert are valid during the call. */
@@ -324,6 +325,43 @@ void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_
  * url, without fetching anything. */
 void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len);
 
+/* ---- The document cache ----
+ * A page keeps the documents it leaves, so that Back and Forward show
+ * them again at once: the document view with its tree, layout, images,
+ * script runtime and form contents. The browser names each back/forward
+ * entry with a nonzero id: au_page_set_entry before a navigation says
+ * which entry the load is for (a load without it belongs to no entry and
+ * its document is never kept; a reload stays with the entry).
+ * au_page_navigate_entry for an entry whose document is kept shows that
+ * document without loading: load_started, url_changed, title_changed,
+ * content_size_changed, scroll_to and load_finished are still called,
+ * and AuPageStats.restored is set.
+ *
+ * A document is kept when the tab leaves it for another entry, unless it
+ * is still loading or has fetches outstanding, failed, is an internal
+ * page, was the result of a POST, came with Cache-Control: no-store, or
+ * has an unload or beforeunload listener. A kept document does nothing:
+ * its timers, animation frames and image animations wait, and it gets
+ * pagehide and pageshow with persisted true. A reload or a fresh load of
+ * its entry discards it.
+ *
+ * Limits: at most prefs.document_cache_pages documents per page, the
+ * oldest dropped first, and none larger than prefs.document_cache_kb.
+ * The browser keeps the total of all pages under that figure with
+ * au_page_kept_bytes, au_page_kept_oldest and au_page_evict_oldest. */
+void au_page_set_entry(AuPage *p, uint32_t entry);
+/* Drops the kept documents whose entry is not among the n ids (the
+ * browser's back/forward list lost entries). */
+void au_page_retain_entries(AuPage *p, const uint32_t *ids, size_t n);
+size_t au_page_kept_count(const AuPage *p);
+size_t au_page_kept_bytes(const AuPage *p); /* estimated */
+/* When the oldest kept document was hidden (the page's clock); false
+ * when the page keeps none. */
+bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp);
+bool au_page_evict_oldest(AuPage *p);
+/* Drops every kept document; returns how many. */
+size_t au_page_drop_kept(AuPage *p);
+
 const char *au_page_url(const AuPage *p);   /* never NULL */
 const char *au_page_title(const AuPage *p); /* "" when the page has none */
 bool au_page_loading(const AuPage *p);
@@ -459,6 +497,7 @@ typedef struct AuPageStats {
     uint32_t boxes;          /* layout boxes */
     uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
     uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
+    uint32_t restored;       /* times this document was shown again from the document cache */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);
 

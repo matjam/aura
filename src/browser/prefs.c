@@ -59,6 +59,8 @@ static const Key keys[] = {
     S("network.user_agent", user_agent),
     I("cache.memory_kb", memory_cache_kb, 0, 1 << 20),
     I("cache.disk_kb", disk_cache_kb, 0, 1 << 22),
+    I("cache.documents", document_cache_pages, 0, 16),
+    I("cache.documents_kb", document_cache_kb, 0, 1 << 20),
     S("downloads.folder", download_folder),
     B("downloads.decode", decode_downloads),
     I("window.width", window_width, 0, 8192),
@@ -125,6 +127,10 @@ void au_prefs_init(AuPrefs *p)
      * same figure. */
     p->memory_cache_kb = 8192;
     p->disk_cache_kb = 20480;
+    /* Back and Forward keep up to 3 documents per tab, 16 MB in all (the
+     * estimate for a long Wikipedia article is about 10 MB). */
+    p->document_cache_pages = 3;
+    p->document_cache_kb = 16384;
 }
 
 void au_prefs_free(AuPrefs *p)

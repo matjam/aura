@@ -928,6 +928,26 @@ void au_docscript_scrolled(AuDocScript *s)
     s->scroll_pending = s->js != NULL;
 }
 
+bool au_docscript_can_persist(AuDocScript *s)
+{
+    return !s || !s->js || !au_js_has_unload_handler(s->js);
+}
+
+void au_docscript_page_transition(AuDocScript *s, bool show)
+{
+    if (s && s->js)
+        au_js_page_transition(s->js, show);
+}
+
+size_t au_docscript_memory(const AuDocScript *s)
+{
+    if (!s || !s->js)
+        return 0;
+    AuJsStats st;
+    au_js_stats(s->js, &st);
+    return st.memory_used;
+}
+
 void au_docscript_layout_done(AuDocScript *s)
 {
     if (!s->js)
