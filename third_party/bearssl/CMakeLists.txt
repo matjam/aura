@@ -21,3 +21,13 @@ target_compile_definitions(bearssl PRIVATE BR_USE_URANDOM=0 BR_USE_WIN32_RAND=0 
                                            BR_AES_X86NI=0 BR_SSE2=0)
 # Third-party code keeps its own style; do not apply Aura's warning flags.
 target_compile_options(bearssl PRIVATE -w -O2)
+# Under the sanitizers (a host build with -fsanitize in CMAKE_C_FLAGS),
+# leave out two checks BearSSL fails by design: it reads unaligned words
+# on x86, and calls hash functions through pointers of a compatible but
+# different type (Clang's function check).
+if(CMAKE_C_FLAGS MATCHES "-fsanitize")
+    target_compile_options(bearssl PRIVATE -fno-sanitize=alignment)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        target_compile_options(bearssl PRIVATE -fno-sanitize=function)
+    endif()
+endif()

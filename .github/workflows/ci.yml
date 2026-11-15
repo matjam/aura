@@ -40,7 +40,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Ninja
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
@@ -60,7 +60,7 @@ jobs:
       group: sanitize-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Ninja
         run: |
           sudo apt-get update -q
@@ -69,15 +69,14 @@ jobs:
         run: >-
           cmake -S . -B build/asan -G Ninja
           -DCMAKE_C_COMPILER=clang
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-sanitize-recover=undefined"
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
       - name: Build
         run: cmake --build build/asan
       - name: Test
         env:
           # Leak detection is off, as it is on macOS, where the sanitizer
           # build is run by hand: several tests do not free everything at
-          # exit. -fno-sanitize=function is for BearSSL, which calls hash
-          # functions through pointers of another type.
+          # exit.
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build/asan --output-on-failure
@@ -92,10 +91,10 @@ jobs:
       group: toolchain-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Look for the toolchain in the cache
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.local/opt/retro68
           key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
@@ -110,7 +109,7 @@ jobs:
         run: toolchain/build.sh
       - name: Save the toolchain
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ~/.local/opt/retro68
           key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
@@ -124,9 +123,9 @@ jobs:
       group: ppc-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Restore the toolchain
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.local/opt/retro68
           key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
@@ -143,13 +142,13 @@ jobs:
           echo "version=$(tools/version.sh)" >>"$GITHUB_OUTPUT"
           echo "short=$(git rev-parse --short=7 HEAD)" >>"$GITHUB_OUTPUT"
       - name: Upload the BinHex archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Aura-${{ steps.names.outputs.version }}-${{ steps.names.outputs.short }}-hqx
           path: build/ppc/dist/Aura-${{ steps.names.outputs.version }}.hqx
           if-no-files-found: error
       - name: Upload the MacBinary archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Aura-${{ steps.names.outputs.version }}-${{ steps.names.outputs.short }}-sea-bin
           path: build/ppc/dist/Aura-${{ steps.names.outputs.version }}.sea.bin
@@ -164,7 +163,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the tag against the version
         run: |
           version=$(tools/version.sh)
@@ -173,7 +172,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >>"$GITHUB_ENV"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
