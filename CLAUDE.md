@@ -35,6 +35,7 @@ what you need to build, test and change Aura.
 | `src/css` | CSS parser, selectors, cascade |
 | `src/layout` | box tree and layout |
 | `src/paint` | surfaces, rasterizer, fonts |
+| `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its stub |
 | `src/platform/host` | host tools: headless render to PNG, tree dumps |
 | `src/platform/macos9` | the Mac OS 9 application |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
@@ -88,11 +89,59 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 
 To change the screen depth, click the Monitor BitDepth module in the
 guest's Control Strip (the eighth icon) and pick 256 Colors, Thousands or
-Millions. In Aura, File > Benchmark times the scene, fills and text, and
-File > Font List shows the fonts it found.
+Millions. In Aura, View > Debug > Benchmark times the scene, fills and
+the chrome, and View > Debug > Font List shows the fonts it found.
 
 To stop the guest, run `tools/guest-run.sh stop`, or choose Special > Shut
 Down in the guest.
+
+## Browser chrome
+
+To change how a browser window looks or behaves, work in `src/browser`:
+`chrome.c` lays out, paints and hit-tests the tab strip (or left tab
+column), toolbar and status bar; `browser.c` holds windows, tabs and
+back/forward lists and routes input; `page.h` is the interface a page
+implements, and `page_stub.c` implements it until the real engine
+replaces it. The model never calls the OS; the shells pass events in and
+show the rectangles it reports through `AuBrowserHost.invalidate`.
+
+To render a browser window on the host, run
+`build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
+--tab about:home --tab http://example.com/ -o run/chrome.png`. Run
+`aura-host` without arguments for the other options (tab overflow,
+hover, address field text).
+
+The Mac OS 9 shell (`src/platform/macos9`) keeps one module per kind of
+window (`browserwin.c`, `listwin.c`, `prefswin.c`), with menus and the
+event loop in `main.c` and files in `storage.c`. The address field is a
+TextEdit record placed over the field the engine draws; the scroll bars
+and menus are native; the Preferences window uses Appearance Manager
+controls, declared in `appearance.h` because the Multiversal Interfaces
+lack them, from AppearanceLib.
+
+Aura keeps its files in the Aura folder of the system Preferences folder:
+`Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
+`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+in; a file that fails to parse is renamed with ` (damaged)` before a new
+one is written. To start with clean state in the guest, delete that
+folder.
+
+Downloads use a simulated transfer source (`au_sim_source` in
+`downloads.c`) until networking exists; View > Debug > Start Simulated
+Downloads adds a few.
+
+Toolbox points learned the hard way:
+
+- In a Rez `MENU`, the enable flags put item k at bit k-1 (the menu's
+  own flag is the separate `enabled` field). A separator at item 5
+  clears bit 4.
+- Do not call `TEGetPoint` from PowerPC code; it crashed the guest. The
+  caret position comes from `TextWidth` with the TextEdit handles
+  locked.
+- After Aura has drawn a scroll bar thumb and quit, the next launch in
+  the same guest boot can draw thumbs as coloured noise until another
+  application draws one. Launching SimpleText and scrolling once clears
+  it. The cause is not known yet.
 
 ## Design
 

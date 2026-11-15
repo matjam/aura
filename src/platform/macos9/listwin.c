@@ -144,7 +144,7 @@ static void lw_paint(ListWin *lw, bool bar)
     DiffRgn(mask, cut, mask);
     ForeColor(blackColor);
     BackColor(whiteColor);
-    CopyBits(&((GrafPtr)lw->gw)->portBits, &((GrafPtr)lw->base.win)->portBits, &src, &src, srcCopy, mask);
+    CopyBits(&((GrafPtr)lw->gw)->portBits, &((GrafPtr)lw->base.win)->portBits, &src, &src, srcCopy | kDitherCopy, mask);
     DisposeRgn(mask);
     DisposeRgn(cut);
     lw->last_paint_ms = au_platform_time_ms();
@@ -199,6 +199,11 @@ static void enable_buttons(ListWin *lw)
                 on = d != NULL;
             else if (i == D_REVEAL)
                 on = false; /* simulated downloads write no file */
+            else if (i == D_CLEAR) {
+                on = false;
+                for (int k = 0; k < dl->n && !on; k++)
+                    on = dl->items[k]->state >= AU_DL_DONE;
+            }
             break;
         }
         default: break;

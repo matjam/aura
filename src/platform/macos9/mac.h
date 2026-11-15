@@ -24,7 +24,10 @@ enum {
     kZoomDocProc = 8, /* documentProc with a zoom box */
     kMovableModalProc = 5,
     kScrollBarWidth = 16,
-    kGrowBox = 15
+    kGrowBox = 15,
+    /* CopyBits mode flag: dither when the screen has fewer colours than
+     * the GWorld (256 colours), so gradients do not collapse into bands. */
+    kDitherCopy = 64
 };
 
 typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS } WinKind;

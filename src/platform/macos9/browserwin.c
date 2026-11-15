@@ -136,7 +136,7 @@ static void blit(BrowserWin *b, AuIRect r)
     DiffRgn(mask, cut, mask);
     ForeColor(blackColor);
     BackColor(whiteColor);
-    CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy, mask);
+    CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy | kDitherCopy, mask);
     DisposeRgn(mask);
     DisposeRgn(cut);
     if (b->te && !au_irect_empty(au_irect_intersect(r, l->address_text))) {
