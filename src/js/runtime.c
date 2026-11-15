@@ -177,6 +177,30 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
     return 1;
 }
 
+/* The engine asks interrupt_cb only once in ten thousand steps (loop
+ * iterations and calls). That is often enough for script that computes,
+ * but a native that forces a layout can take a large part of a second,
+ * and ten thousand of those before the first check is longer than anyone
+ * waits: a mutation observer that read the page's size on every change
+ * ran for minutes. Natives that can be slow call js_out_of_time first
+ * and, when it is true, return js_throw_stopped: the same uncatchable
+ * error the interrupt raises. */
+bool js_out_of_time(AuJs *js)
+{
+    AuJs *r = js->root;
+    if (r->depth == 0 || r->closing)
+        return false;
+    return interrupt_cb(r->ctx, r) != 0;
+}
+
+JSValue js_throw_stopped(JSContext *ctx)
+{
+    JS_ThrowInternalError(ctx, "interrupted");
+    JSValue e = JS_GetException(ctx);
+    JS_SetUncatchableError(ctx, e);
+    return JS_Throw(ctx, e);
+}
+
 /* The entry depth, the budget and the interrupt state belong to the
  * runtime, so they live in the root AuJs: a frame's script that runs
  * inside its parent's call shares the parent's budget. root->entered
