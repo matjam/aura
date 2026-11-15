@@ -181,7 +181,8 @@ static void emit(AuJs *js, JsFetch *f, FetchEvent *ev)
         if (ev->kind == 0) {
             f->sync_status = ev->status;
             au_buf_clear(&f->sync_head);
-            au_buf_append(&f->sync_head, ev->headers.data, ev->headers.len);
+            if (ev->headers.len)
+                au_buf_append(&f->sync_head, ev->headers.data, ev->headers.len);
         } else if (ev->kind == 1) {
             au_buf_append(&f->sync_body, ev->data, ev->len);
         } else {
