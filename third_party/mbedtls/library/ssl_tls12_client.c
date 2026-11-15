@@ -1830,6 +1830,16 @@ static int ssl_parse_server_key_exchange(mbedtls_ssl_context *ssl)
 
     MBEDTLS_SSL_DEBUG_MSG(2, ("=> parse server key exchange"));
 
+#if defined(AURA_MBEDTLS_KEY_EXCHANGE_RSA)
+    /* Aura patch: with RSA key transport the server sends no
+     * ServerKeyExchange. */
+    if (ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_RSA) {
+        MBEDTLS_SSL_DEBUG_MSG(2, ("<= skip parse server key exchange"));
+        mbedtls_ssl_handshake_increment_state(ssl);
+        return 0;
+    }
+#endif
+
 #if defined(MBEDTLS_SSL_ECP_RESTARTABLE_ENABLED)
     if (ssl->handshake->ecrs_enabled &&
         ssl->handshake->ecrs_state == ssl_ecrs_ske_start_processing) {
@@ -2362,6 +2372,74 @@ static int ssl_parse_server_hello_done(mbedtls_ssl_context *ssl)
     return 0;
 }
 
+#if defined(AURA_MBEDTLS_KEY_EXCHANGE_RSA)
+/*
+ * Aura patch (after ssl_write_encrypted_pms of Mbed TLS 3.6): generate a
+ * premaster secret and encrypt it to the server certificate's RSA key
+ * with PKCS#1 v1.5 (RFC 5246 section 7.4.7.1).
+ */
+MBEDTLS_CHECK_RETURN_CRITICAL
+static int ssl_write_encrypted_pms(mbedtls_ssl_context *ssl,
+                                   size_t offset, size_t *olen)
+{
+    int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+    psa_status_t status;
+    unsigned char *p = ssl->handshake->premaster;
+    mbedtls_pk_context *peer_pk;
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+    size_t enc_len = 0;
+
+    if (offset + 2 > MBEDTLS_SSL_OUT_CONTENT_LEN) {
+        return MBEDTLS_ERR_SSL_BUFFER_TOO_SMALL;
+    }
+
+    /*
+     *  struct {
+     *      ProtocolVersion client_version;
+     *      opaque random[46];
+     *  } PreMasterSecret;
+     *
+     * client_version is the version offered in the ClientHello's
+     * legacy version field, which is TLS 1.2 whatever else is offered.
+     */
+    mbedtls_ssl_write_version(p, ssl->conf->transport,
+                              MBEDTLS_SSL_VERSION_TLS1_2);
+    if ((status = psa_generate_random(p + 2, 46)) != PSA_SUCCESS) {
+        return MBEDTLS_ERR_SSL_HW_ACCEL_FAILED;
+    }
+    ssl->handshake->pmslen = 48;
+
+    if (ssl->session_negotiate->peer_cert == NULL) {
+        return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
+    }
+    peer_pk = &ssl->session_negotiate->peer_cert->pk;
+
+    /* Fails with a type mismatch when the certificate's key is not RSA. */
+    if ((ret = mbedtls_pk_get_psa_attributes(peer_pk, PSA_KEY_USAGE_ENCRYPT,
+                                             &attributes)) != 0) {
+        return MBEDTLS_ERR_SSL_PK_TYPE_MISMATCH;
+    }
+    psa_set_key_algorithm(&attributes, PSA_ALG_RSA_PKCS1V15_CRYPT);
+    if ((ret = mbedtls_pk_import_into_psa(peer_pk, &attributes, &key)) != 0) {
+        return ret;
+    }
+    status = psa_asymmetric_encrypt(key, PSA_ALG_RSA_PKCS1V15_CRYPT,
+                                    p, ssl->handshake->pmslen, NULL, 0,
+                                    ssl->out_msg + offset + 2,
+                                    MBEDTLS_SSL_OUT_CONTENT_LEN - offset - 2,
+                                    &enc_len);
+    psa_destroy_key(key);
+    if (status != PSA_SUCCESS) {
+        return MBEDTLS_ERR_SSL_HW_ACCEL_FAILED;
+    }
+
+    MBEDTLS_PUT_UINT16_BE(enc_len, ssl->out_msg, offset);
+    *olen = enc_len + 2;
+    return 0;
+}
+#endif /* AURA_MBEDTLS_KEY_EXCHANGE_RSA */
+
 MBEDTLS_CHECK_RETURN_CRITICAL
 static int ssl_write_client_key_exchange(mbedtls_ssl_context *ssl)
 {
@@ -2522,7 +2600,7 @@ static int ssl_write_client_key_exchange(mbedtls_ssl_context *ssl)
         status = psa_generate_key(&key_attributes,
                                   &handshake->xxdh_psa_privkey);
         if (status != PSA_SUCCESS) {
-            return PSA_TO_MBEDTLS_ERR(status);
+            return MBEDTLS_ERR_SSL_HW_ACCEL_FAILED;
         }
 
         /* Export the public part of the ECDH private key from PSA.
@@ -2539,7 +2617,7 @@ static int ssl_write_client_key_exchange(mbedtls_ssl_context *ssl)
         if (status != PSA_SUCCESS) {
             psa_destroy_key(handshake->xxdh_psa_privkey);
             handshake->xxdh_psa_privkey = MBEDTLS_SVC_KEY_ID_INIT;
-            return PSA_TO_MBEDTLS_ERR(status);
+            return MBEDTLS_ERR_SSL_HW_ACCEL_FAILED;
         }
 
         *p = (unsigned char) own_pubkey_len;
@@ -2571,7 +2649,7 @@ static int ssl_write_client_key_exchange(mbedtls_ssl_context *ssl)
         handshake->xxdh_psa_privkey = MBEDTLS_SVC_KEY_ID_INIT;
 
         if (status != PSA_SUCCESS) {
-            return PSA_TO_MBEDTLS_ERR(status);
+            return MBEDTLS_ERR_SSL_HW_ACCEL_FAILED;
         } else if (destruction_status != PSA_SUCCESS) {
             return PSA_TO_MBEDTLS_ERR(destruction_status);
         }
@@ -2640,6 +2718,16 @@ static int ssl_write_client_key_exchange(mbedtls_ssl_context *ssl)
         }
     } else
 #endif /* MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED */
+#if defined(AURA_MBEDTLS_KEY_EXCHANGE_RSA)
+    if (ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_RSA) {
+        /* Aura patch */
+        header_len = 4;
+        if ((ret = ssl_write_encrypted_pms(ssl, header_len,
+                                           &content_len)) != 0) {
+            return ret;
+        }
+    } else
+#endif /* AURA_MBEDTLS_KEY_EXCHANGE_RSA */
     {
         ((void) ciphersuite_info);
         MBEDTLS_SSL_DEBUG_MSG(1, ("should never happen"));

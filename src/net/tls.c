@@ -84,6 +84,24 @@ static const int suites[] = {
     0,
 };
 
+/* The same with RSA key exchange at the end (au_tls_allow_legacy_kex):
+ * no forward secrecy, for old servers that offer nothing else. A server
+ * with any suite above takes that one. */
+static const int suites_legacy[] = {
+    MBEDTLS_TLS1_3_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+    MBEDTLS_TLS1_3_AES_256_GCM_SHA384,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
+    MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384,
+    0,
+};
+
 /* The first group is the one a key share is sent for; a server that
  * wants another asks with a HelloRetryRequest. */
 static const uint16_t groups[] = {
@@ -597,6 +615,15 @@ void au_tls_allow_cert(AuTls *t, const uint8_t sha256[32])
 
 void au_tls_set_pool(AuTls *t, const AuCertPool *pool) { t->pool = pool; }
 
+void au_tls_allow_legacy_kex(AuTls *t)
+{
+    /* The list is read when the ClientHello is written, at the first step. */
+    if (!t->failed)
+        mbedtls_ssl_conf_ciphersuites(&t->conf, suites_legacy);
+}
+
+bool au_tls_cipher_is_legacy(const char *cipher) { return cipher && !strncmp(cipher, "RSA-", 4); }
+
 void au_tls_free(AuTls *t)
 {
     if (!t)
@@ -813,6 +840,8 @@ static const char *suite_name(int s)
     case MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: return "ECDHE-RSA-AES128-GCM-SHA256";
     case MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384: return "ECDHE-ECDSA-AES256-GCM-SHA384";
     case MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: return "ECDHE-RSA-AES256-GCM-SHA384";
+    case MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256: return "RSA-AES128-GCM-SHA256";
+    case MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384: return "RSA-AES256-GCM-SHA384";
     default: return "unknown";
     }
 }
@@ -831,6 +860,7 @@ void au_tls_security(AuTls *t, AuSecurityInfo *si)
     const char *p = mbedtls_ssl_get_alpn_protocol(&t->ssl);
     si->alpn = p ? p : "";
     si->resumed = t->resumed;
+    si->legacy_kex = au_tls_cipher_is_legacy(si->cipher);
 }
 
 bool au_tls_save_session(AuTls *t, AuTlsSession *out)

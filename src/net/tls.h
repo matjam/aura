@@ -175,6 +175,15 @@ AuTlsState au_tls_state(AuTls *t);
  * arrive (right after au_tls_new). The stack never calls it for an HSTS
  * host. */
 void au_tls_allow_cert(AuTls *t, const uint8_t sha256[32]);
+/* Also offers the TLS 1.2 suites with RSA key exchange
+ * (TLS_RSA_WITH_AES_128_GCM_SHA256, TLS_RSA_WITH_AES_256_GCM_SHA384),
+ * after every other suite, so a server takes them only when it has
+ * nothing with forward secrecy. Off unless called; call right after
+ * au_tls_new. They come from a patch to the library
+ * (third_party/mbedtls-patches). */
+void au_tls_allow_legacy_kex(AuTls *t);
+/* Whether a cipher name (AuSecurityInfo.cipher) is one of those suites. */
+bool au_tls_cipher_is_legacy(const char *cipher);
 /* Intermediates that may complete a chain the server sent short (read
  * when the server's certificates arrive; the pool must outlive t). */
 void au_tls_set_pool(AuTls *t, const AuCertPool *pool);

@@ -1510,9 +1510,9 @@ TLS 1.3 and TLS 1.2, X25519 (the key share sent), P-256 and P-384,
 ChaCha20-Poly1305 first and then AES-GCM, ECDSA and RSA certificates
 (RSA-PSS and PKCS#1 v1.5), SNI, ALPN `http/1.1`, session resumption
 (tickets and the TLS 1.2 session id, TLS 1.3 tickets), and certificate
-errors reported with the chain (`au_http_cert_info`). It has no RSA key
-exchange and no DHE: a server that offers only those in TLS 1.2
-(www.fsf.org) fails with "Secure connection failed".
+errors reported with the chain (`au_http_cert_info`). The library has no
+DHE, and no RSA key exchange except through Aura's patch (see "Old
+servers" below).
 `docs/tls13-feasibility.md` records why BearSSL was replaced.
 
 - **To change what Aura offers** (versions, cipher suites, groups,
@@ -1536,6 +1536,28 @@ exchange and no DHE: a server that offers only those in TLS 1.2
   host, untrusted, weak key, unsupported algorithm, key usage. Do not
   change the mode to "none": the library then checks nothing, including
   key usage.
+- **Old servers** (`security.legacy_tls`, "Allow old servers without
+  forward secrecy" in Preferences > Privacy, on by default). Some
+  servers offer TLS 1.2 with RSA key exchange and nothing Aura has with
+  forward secrecy (www.fsf.org: RSA or DHE only). Mbed TLS 4 removed RSA
+  key exchange, so `third_party/mbedtls-patches/0001-tls12-rsa-key-transport.patch`
+  puts the client side back (and the server side for the tests): the
+  suites `TLS_RSA_WITH_AES_128_GCM_SHA256` and `..._256_GCM_SHA384`,
+  TLS 1.2 only. `au_tls_allow_legacy_kex` adds them at the end of the
+  ClientHello's list, so a server with ECDHE or TLS 1.3 never takes
+  them; `http.c` calls it while `AuNetConfig.legacy_tls` is set. A
+  connection that used them has a cipher name starting `RSA-` and
+  `AuSecurityInfo.legacy_kex`; `aura-host fetch -v`, the Network
+  window's details and the certificate viewer say "RSA key exchange (no
+  forward secrecy)", and a document loaded that way shows the amber
+  lock that mixed content gets (`AU_SECURITY_MIXED`). With the
+  preference off such a server fails with "Secure connection failed",
+  and the page names the preference. No CBC suites and no DHE were
+  added: no server found needed CBC, and the library's finite-field
+  Diffie-Hellman takes only the RFC 7919 groups, not a server's own
+  parameters. To drop the patch, follow the steps in its header. When
+  updating Mbed TLS, expect to fix the patch by hand if the TLS 1.2
+  handshake files changed, and run `test_legacy_kex` and `fuzz_net tls`.
 - **Trust anchors** come from the root store through `ca_cb`: the
   library asks who may have signed a certificate, and `roots.c` offers
   the roots with that subject name, which are parsed then (one per
@@ -1654,9 +1676,8 @@ src/net/gen_roots.py cacert.pem assets/net/aura-roots.bin`. Never add
 intermediates to it.
 
 Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
-sites that offer only TLS 1.2 with RSA key exchange or DHE, or only
-ciphers other than AES-GCM and ChaCha20-Poly1305, fail with "Secure
-connection failed". No post-quantum key exchange, no revocation
+sites that offer only DHE, or only ciphers other than AES-GCM and
+ChaCha20-Poly1305 (CBC suites), fail with "Secure connection failed". No post-quantum key exchange, no revocation
 checking, no client certificates.
 
 ## Content blocking

@@ -88,8 +88,15 @@ records where the code came from and how to update it.
 - **Do not enable `MBEDTLS_ECDH_VARIANT_EVEREST_ENABLED`.** With it,
   X25519 gave wrong shared secrets on big-endian PowerPC and every
   handshake failed its first integrity check.
-- **Changes:** none. Any change goes in `mbedtls-patches/` as a patch,
-  applied in name order by `apply.sh`. To update Mbed TLS, download the
+- **Changes:** one patch, `mbedtls-patches/0001-tls12-rsa-key-transport.patch`:
+  it restores RSA key transport for TLS 1.2 (the two
+  `TLS_RSA_WITH_AES_*_GCM_*` suites), which Mbed TLS 4.0 removed, for
+  old servers that offer nothing with forward secrecy. It is 250 added
+  lines in seven files, all under the option
+  `AURA_MBEDTLS_KEY_EXCHANGE_RSA`, and follows Mbed TLS 3.6's code; its
+  header says why it exists and how to drop it. The vendored tree is
+  the release with the patches applied. Any change goes in
+  `mbedtls-patches/` as a patch, applied in name order by `apply.sh`. To update Mbed TLS, download the
   new release of the 4.1 branch, check its SHA-256, and run
   `third_party/mbedtls-patches/apply.sh UNPACKED_DIR`, which replaces
   `third_party/mbedtls` and applies the patches; update this file and

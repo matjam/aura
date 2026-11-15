@@ -28,7 +28,7 @@ typedef enum {
     F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH, F_EXT_WINDOW, F_DEFAULT_BROWSER,
     F_SERIF, F_SANS, F_MONO, F_SIZE, F_SIZE_MONO, F_SIZE_MIN,
     F_JS, F_IMAGES, F_POPUPS,
-    F_DNT, F_GPC, F_HTTPS_FIRST, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
+    F_DNT, F_GPC, F_HTTPS_FIRST, F_LEGACY_TLS, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
     F_HISTORY_ON, F_HISTORY_DAYS, F_CLEAR_H_QUIT, F_CLEAR_CK_QUIT, F_CLEAR_CA_QUIT,
     F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE, F_SHOW_COOKIES,
     F_HTTP_HOST, F_HTTP_PORT, F_HTTPS_HOST, F_HTTPS_PORT, F_UA, F_MEM_CACHE, F_DISK_CACHE,
@@ -271,6 +271,7 @@ static void build(PrefsWin *p)
     check(p, 3, F_GPC, 290, y, 240, "Send Global Privacy Control");
     y += 22;
     check(p, 3, F_HTTPS_FIRST, L, y, 240, "HTTPS-first mode");
+    check(p, 3, F_LEGACY_TLS, 290, y, 300, "Allow old servers without forward secrecy");
     y += 22;
     check(p, 3, F_WARN_APPS, L, y, 300, "Warn before downloading applications");
     y += 30;
@@ -432,6 +433,7 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     SetControlValue(p->field[F_DNT], pr->send_dnt);
     SetControlValue(p->field[F_GPC], pr->send_gpc);
     SetControlValue(p->field[F_HTTPS_FIRST], pr->https_first);
+    SetControlValue(p->field[F_LEGACY_TLS], pr->legacy_tls);
     SetControlValue(p->field[F_TRACKERS], pr->block_trackers);
     SetControlValue(p->field[F_WARN_APPS], pr->warn_app_downloads);
     SetControlValue(p->field[F_COOKIES], (short)(pr->cookies + 1));
@@ -494,6 +496,7 @@ static void store(PrefsWin *p, AuPrefs *pr)
     pr->send_dnt = GetControlValue(p->field[F_DNT]) != 0;
     pr->send_gpc = GetControlValue(p->field[F_GPC]) != 0;
     pr->https_first = GetControlValue(p->field[F_HTTPS_FIRST]) != 0;
+    pr->legacy_tls = GetControlValue(p->field[F_LEGACY_TLS]) != 0;
     pr->block_trackers = GetControlValue(p->field[F_TRACKERS]) != 0;
     pr->warn_app_downloads = GetControlValue(p->field[F_WARN_APPS]) != 0;
     pr->cookies = (AuCookiePolicy)clampi(GetControlValue(p->field[F_COOKIES]) - 1, 0, 2);

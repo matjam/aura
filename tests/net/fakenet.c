@@ -111,6 +111,19 @@ static bool srv_start(FakeSock *k)
         static const char *const protos[] = {"http/1.1", NULL};
         mbedtls_ssl_conf_alpn_protocols(&t->conf, protos);
     }
+    if (s->rsa_kex) {
+        static const int rsa_only[] = {MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
+                                       MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384, 0};
+        static const int rsa_too[] = {MBEDTLS_TLS1_3_CHACHA20_POLY1305_SHA256,
+                                      MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+                                      MBEDTLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                                      MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                                      MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
+                                      MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384, 0};
+        mbedtls_ssl_conf_ciphersuites(&t->conf, s->rsa_kex == 1 ? rsa_only : rsa_too);
+        if (s->rsa_kex == 1)
+            mbedtls_ssl_conf_max_tls_version(&t->conf, MBEDTLS_SSL_VERSION_TLS1_2);
+    }
     if (s->p256_only) {
         t->groups[0] = MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1;
         t->groups[1] = MBEDTLS_SSL_IANA_TLS_GROUP_NONE;

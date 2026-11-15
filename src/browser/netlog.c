@@ -439,7 +439,8 @@ void au_netlog_detail(const AuNetRecord *r, AuBuf *out)
         au_buf_printf(out, ", %s", r->remote);
     au_buf_putc(out, '\n');
     if (r->protocol[0])
-        au_buf_printf(out, "Security: %s, %s\n", r->protocol, r->cipher[0] ? r->cipher : "cipher not recorded");
+        au_buf_printf(out, "Security: %s, %s%s\n", r->protocol, r->cipher[0] ? r->cipher : "cipher not recorded",
+                      !strncmp(r->cipher, "RSA-", 4) ? ", RSA key exchange (no forward secrecy)" : "");
     au_buf_puts(out, "Size: ");
     if (r->have_net && r->source == AU_FETCH_FROM_NETWORK) {
         au_put_size(out, r->transfer);

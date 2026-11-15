@@ -54,6 +54,7 @@ static inline int mbedtls_ssl_ciphersuite_no_pfs(const mbedtls_ssl_ciphersuite_t
 static inline int mbedtls_ssl_ciphersuite_cert_req_allowed(const mbedtls_ssl_ciphersuite_t *info)
 {
     switch (info->MBEDTLS_PRIVATE(key_exchange)) {
+        case MBEDTLS_KEY_EXCHANGE_RSA: /* Aura patch */
         case MBEDTLS_KEY_EXCHANGE_ECDHE_RSA:
         case MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA:
             return 1;
@@ -66,6 +67,7 @@ static inline int mbedtls_ssl_ciphersuite_cert_req_allowed(const mbedtls_ssl_cip
 static inline int mbedtls_ssl_ciphersuite_uses_srv_cert(const mbedtls_ssl_ciphersuite_t *info)
 {
     switch (info->MBEDTLS_PRIVATE(key_exchange)) {
+        case MBEDTLS_KEY_EXCHANGE_RSA: /* Aura patch */
         case MBEDTLS_KEY_EXCHANGE_ECDHE_RSA:
         case MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA:
             return 1;

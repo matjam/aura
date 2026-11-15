@@ -70,6 +70,9 @@ typedef struct AuNetConfig {
     char *accept_language;
     bool send_dnt, send_gpc;
     bool https_first;
+    /* Offer TLS 1.2 with RSA key exchange (no forward secrecy) as the last
+     * choice, for old servers that have nothing better (default true). */
+    bool legacy_tls;
     AuNetCookiePolicy cookie_policy;
     bool block_third_party_cookies;
     char *http_proxy_host;  /* "" for none */
@@ -197,10 +200,11 @@ void au_http_request_free(AuHttpRequest *rq); /* frees headers (and body if neve
 /* Security state of a response. */
 typedef struct AuSecurityInfo {
     bool tls;
-    uint16_t version;       /* 0x0303 for TLS 1.2 */
+    uint16_t version;       /* 0x0304 for TLS 1.3, 0x0303 for TLS 1.2 */
     const char *cipher;     /* "ECDHE-RSA-AES128-GCM-SHA256", ... */
     const char *alpn;       /* "http/1.1" or "" */
     bool resumed;
+    bool legacy_kex;        /* RSA key exchange: no forward secrecy (the cipher name starts "RSA-") */
 } AuSecurityInfo;
 
 typedef struct AuHttpResponse {

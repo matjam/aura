@@ -665,6 +665,9 @@ union mbedtls_ssl_premaster_secret {
 #if defined(MBEDTLS_KEY_EXCHANGE_ECJPAKE_ENABLED)
     unsigned char _pms_ecjpake[32];     /* Thread spec: SHA-256 output */
 #endif
+#if defined(AURA_MBEDTLS_KEY_EXCHANGE_RSA)
+    unsigned char _pms_rsa[48];         /* RFC 5246 8.1.1 */
+#endif
 };
 
 #define MBEDTLS_PREMASTER_SIZE     sizeof(union mbedtls_ssl_premaster_secret)
