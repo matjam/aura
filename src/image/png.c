@@ -81,6 +81,7 @@ typedef struct {
     bool frame_pending; /* rows_done; FRAME not yet returned */
     AuInflate *z;
     bool z_done;
+    bool z_error; /* inflate failed after producing the bytes in the row buffer */
     size_t excess; /* bytes inflated after the last row */
     int pass, pass_w, pass_h, pass_y;
     size_t rowbytes; /* this pass, without the filter byte */
@@ -184,6 +185,7 @@ static bool start_frame_rows(Png *p, AuImageDecoder *d)
         au_inflate_reset(p->z);
     }
     p->z_done = false;
+    p->z_error = false;
     p->excess = 0;
     p->rows_done = false;
     p->in_frame = true;
@@ -353,7 +355,11 @@ static bool feed_data(Png *p, AuImageDecoder *d, const uint8_t *data, size_t n, 
 {
     const uint8_t *in = data;
     size_t inl = n;
-    while (inl && !p->z_done) {
+    /* Inflate may hold output it had no room for: keep calling while a
+     * call makes progress, even after the input is used up, so the
+     * result does not depend on how the input was split. */
+    while (!p->z_done) {
+        size_t inl0 = inl;
         if (p->rows_done) {
             /* Trailing data (the Adler-32, or excess image data). */
             uint8_t sink[256];
@@ -365,14 +371,23 @@ static bool feed_data(Png *p, AuImageDecoder *d, const uint8_t *data, size_t n, 
                 p->z_done = true;
             else if (cs == AU_CODEC_ERROR)
                 p->z_done = true; /* the image is complete; a bad trailer is ignored */
+            if (inl == inl0 && ol == sizeof sink)
+                break;
             continue;
         }
         uint8_t *o = p->cur + p->rowfill;
         size_t want = p->rowbytes + 1 - p->rowfill, ol = want;
         AuCodecStatus cs = au_inflate_run(p->z, &in, &inl, &o, &ol);
+        if (cs == AU_CODEC_OK && inl == inl0 && ol == want)
+            break; /* needs more input */
         p->rowfill += want - ol;
-        if (cs == AU_CODEC_ERROR)
+        /* An error found past the output this call produced (inflate
+         * reads ahead into the next block's header when it has input)
+         * counts only once the rows it would hold are needed. */
+        if (cs == AU_CODEC_ERROR && p->rowfill < p->rowbytes + 1)
             return au_img_fail(d, "corrupt image data"), false;
+        if (cs == AU_CODEC_ERROR)
+            p->z_error = true;
         if (p->rowfill == p->rowbytes + 1) {
             if (!unfilter(p))
                 return au_img_fail(d, "bad filter type"), false;
@@ -385,11 +400,13 @@ static bool feed_data(Png *p, AuImageDecoder *d, const uint8_t *data, size_t n, 
             if (++p->pass_y >= p->pass_h && !next_pass(p)) {
                 p->rows_done = true;
                 p->frame_pending = true;
-                if (cs == AU_CODEC_DONE)
+                if (cs == AU_CODEC_DONE || p->z_error)
                     p->z_done = true;
                 break;
             }
         }
+        if (p->z_error)
+            return au_img_fail(d, "corrupt image data"), false;
         if (cs == AU_CODEC_DONE) {
             p->z_done = true;
             if (!p->rows_done)
@@ -688,10 +705,10 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
                 p->hold.len = 0;
             } else if (p->ctype == T_IHDR || p->ctype == T_PLTE || p->ctype == T_tRNS || p->ctype == T_acTL ||
                        p->ctype == T_fcTL) {
-                if (p->clen > MAX_HOLD)
-                    return critical(p->ctype) ? au_img_fail(d, "chunk too long") : (p->state = S_SKIP, AU_IMAGE_MORE);
+                if (p->clen > MAX_HOLD && critical(p->ctype))
+                    return au_img_fail(d, "chunk too long");
                 p->hold.len = 0;
-                p->state = S_HOLD;
+                p->state = p->clen > MAX_HOLD ? S_SKIP : S_HOLD;
             } else if (p->ctype == T_IEND || p->ctype == T_fdAT) {
                 p->state = S_SKIP;
             } else {

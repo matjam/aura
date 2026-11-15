@@ -19,8 +19,8 @@ AuImageFormat au_image_sniff(const void *data, size_t len)
         return AU_IMAGE_FORMAT_WEBP;
     /* BMP: "BM", then a pixel data offset that lands after the 14-byte
      * file header and a known info header size. */
-    if (len >= 18 && p[0] == 'B' && p[1] == 'M') {
-        uint32_t hs = au_img_le32(p + 14);
+    if (len >= 16 && p[0] == 'B' && p[1] == 'M') {
+        uint32_t hs = au_img_le16(p + 14); /* the low half of the 32-bit size: 16 bytes are sniffed */
         if (hs == 12 || hs == 16 || hs == 40 || hs == 52 || hs == 56 || hs == 64 || hs == 108 || hs == 124)
             return AU_IMAGE_FORMAT_BMP;
     }
@@ -154,6 +154,20 @@ static AuImageStatus run_codec(AuImageDecoder *d, const uint8_t **in, size_t *le
     return st;
 }
 
+/* header_only: once the size is known the decode is done, whatever came
+ * after it in the same call (so the result does not depend on how the
+ * input was split). */
+static AuImageStatus header_stop(AuImageDecoder *d, AuImageStatus st)
+{
+    if (d->opt.header_only && d->info.ready) {
+        d->done = true;
+        d->failed = false;
+        d->err[0] = 0;
+        return AU_IMAGE_DONE;
+    }
+    return st;
+}
+
 AuImageStatus au_image_decode(AuImageDecoder *d, const uint8_t **in, size_t *in_len, bool final)
 {
     if (d->failed)
@@ -191,16 +205,12 @@ AuImageStatus au_image_decode(AuImageDecoder *d, const uint8_t **in, size_t *in_
             if (st == AU_IMAGE_MORE)
                 st = au_img_fail(d, "corrupt image");
             update_mem(d);
-            return st;
+            return header_stop(d, st);
         }
     }
     st = run_codec(d, in, in_len, final);
-    if (d->opt.header_only && d->info.ready && st != AU_IMAGE_ERROR) {
-        d->done = true;
-        st = AU_IMAGE_DONE;
-    }
     update_mem(d);
-    return st;
+    return header_stop(d, st);
 }
 
 /* ---- Header and canvas ---- */
@@ -644,6 +654,124 @@ void au_img_hold_free(AuImgHold *h)
     au_free(h->buf);
     h->buf = NULL;
     h->len = h->cap = 0;
+}
+
+/* ---- Resampling ---- */
+
+typedef struct {
+    int *first, *n; /* per output index: first source index and tap count */
+    float *w;       /* taps, out * stride */
+    int stride;
+} Taps;
+
+static void make_taps(Taps *t, int in, int out)
+{
+    double scale = (double)in / out;
+    t->stride = scale > 1 ? (int)scale + 3 : 2;
+    t->first = au_alloc((size_t)out * sizeof *t->first);
+    t->n = au_alloc((size_t)out * sizeof *t->n);
+    t->w = au_calloc((size_t)out * (size_t)t->stride * sizeof *t->w);
+    for (int i = 0; i < out; i++) {
+        float *w = t->w + (size_t)i * t->stride;
+        if (scale > 1) {
+            /* Area: output i covers [i * scale, (i + 1) * scale). */
+            double a = i * scale, b = (i + 1) * scale;
+            int j0 = (int)a, j1 = (int)b;
+            if (j1 >= in)
+                j1 = in - 1;
+            int n = 0;
+            for (int j = j0; j <= j1 && n < t->stride; j++) {
+                double lo = j > a ? j : a, hi = j + 1 < b ? j + 1 : b;
+                if (hi > lo)
+                    w[n] = (float)((hi - lo) / scale);
+                if (n == 0)
+                    t->first[i] = j;
+                n++;
+            }
+            t->n[i] = n;
+        } else {
+            double s = (i + 0.5) * scale - 0.5;
+            int j = s < 0 ? 0 : (int)s;
+            double f = s - j;
+            if (s < 0)
+                f = 0;
+            if (j >= in - 1) {
+                j = in - 1;
+                f = 0;
+            }
+            t->first[i] = j;
+            t->n[i] = f > 0 ? 2 : 1;
+            w[0] = (float)(1 - f);
+            w[1] = (float)f;
+        }
+    }
+}
+
+static void free_taps(Taps *t)
+{
+    au_free(t->first);
+    au_free(t->n);
+    au_free(t->w);
+}
+
+AuSurface *au_image_resample(const AuSurface *src, int w, int h)
+{
+    if (!src || w <= 0 || h <= 0 || w > AU_IMAGE_MAX_DIM || h > AU_IMAGE_MAX_DIM || src->width <= 0 ||
+        src->height <= 0)
+        return NULL;
+    AuSurface *dst = au_surface_new(w, h);
+    dst->opaque = src->opaque;
+    Taps tx, ty;
+    make_taps(&tx, src->width, w);
+    make_taps(&ty, src->height, h);
+    float *acc = au_alloc((size_t)w * 4 * sizeof *acc);
+    for (int oy = 0; oy < h; oy++) {
+        memset(acc, 0, (size_t)w * 4 * sizeof *acc);
+        const float *wy = ty.w + (size_t)oy * ty.stride;
+        for (int k = 0; k < ty.n[oy]; k++) {
+            int sy = ty.first[oy] + k;
+            if (sy >= src->height)
+                break;
+            float fy = wy[k];
+            if (fy == 0)
+                continue;
+            const AuPixel *row = src->pixels + (size_t)sy * src->stride;
+            for (int ox = 0; ox < w; ox++) {
+                const float *wx = tx.w + (size_t)ox * tx.stride;
+                float a = 0, r = 0, g = 0, b = 0;
+                for (int m = 0; m < tx.n[ox]; m++) {
+                    int sx = tx.first[ox] + m;
+                    if (sx >= src->width)
+                        break;
+                    uint32_t p = row[sx];
+                    float f = wx[m];
+                    a += f * (float)(p >> 24);
+                    r += f * (float)((p >> 16) & 255);
+                    g += f * (float)((p >> 8) & 255);
+                    b += f * (float)(p & 255);
+                }
+                float *o = acc + 4 * ox;
+                o[0] += a * fy;
+                o[1] += r * fy;
+                o[2] += g * fy;
+                o[3] += b * fy;
+            }
+        }
+        AuPixel *out = dst->pixels + (size_t)oy * dst->stride;
+        for (int ox = 0; ox < w; ox++) {
+            const float *o = acc + 4 * ox;
+            int a = (int)(o[0] + 0.5f), r = (int)(o[1] + 0.5f), g = (int)(o[2] + 0.5f), b = (int)(o[3] + 0.5f);
+            a = a < 0 ? 0 : a > 255 ? 255 : a;
+            r = r < 0 ? 0 : r > a ? a : r;
+            g = g < 0 ? 0 : g > a ? a : g;
+            b = b < 0 ? 0 : b > a ? a : b;
+            out[ox] = (uint32_t)a << 24 | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+        }
+    }
+    au_free(acc);
+    free_taps(&tx);
+    free_taps(&ty);
+    return dst;
 }
 
 /* ---- Whole buffers ---- */

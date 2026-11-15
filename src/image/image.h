@@ -128,6 +128,12 @@ AuSurface *au_image_decode_buffer(const void *data, size_t len, const AuImageOpt
 /* Reads only the header: true when the size is known. */
 bool au_image_probe(const void *data, size_t len, AuImageInfo *info);
 
+/* A copy of src (premultiplied) resampled to w x h: area averaging where
+ * it shrinks (every source pixel counts, so photos do not alias), linear
+ * interpolation where it grows. NULL for an empty size or one over
+ * AU_IMAGE_MAX_DIM. The opaque flag carries over. */
+AuSurface *au_image_resample(const AuSurface *src, int w, int h);
+
 /* ---- Favicons ----
  * Decodes an icon (ICO with BMP or PNG entries, or any other format) to a
  * size x size bitmap for a tab or a bookmark: the ICO entry closest to
