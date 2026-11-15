@@ -287,6 +287,26 @@ void au_forms_script_focus(AuDocView *dv, AuElement *el)
     focus_el(dv, el, false, true);
 }
 
+/* At the end of parsing: the first focusable element with autofocus gets
+ * the focus, unless something already has it. */
+void au_forms_autofocus(AuDocView *dv)
+{
+    if (!dv->doc || dv->focus)
+        return;
+    AuAtom af = au_atom_lookup("autofocus", 9);
+    AuElement *cand = NULL;
+    for (AuNode *n = au_node_next(&dv->doc->node, &dv->doc->node); n; n = au_node_next(n, &dv->doc->node))
+        if (n->type == AU_NODE_ELEMENT && au_element_get_attr(au_as_element(n), af)) {
+            cand = au_as_element(n);
+            break;
+        }
+    if (!cand)
+        return;
+    au_docview_update(dv);
+    if (alive(dv, cand) && focusable(cand) && !dv->focus)
+        focus_el(dv, cand, false, false);
+}
+
 void au_forms_clear(AuDocView *dv)
 {
     set_ref(&dv->focus, NULL);

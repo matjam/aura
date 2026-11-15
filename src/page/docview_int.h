@@ -90,6 +90,7 @@ struct AuDocView {
 /* forms.c */
 /* Forgets the focus and drag state (the document is going). */
 void au_forms_clear(AuDocView *dv);
+void au_forms_autofocus(AuDocView *dv);
 /* Mouse handling for form controls; returns true when the event was
  * used by a control (no link or selection then). Called before the
  * view's own handling, after script mouse events. */

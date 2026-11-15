@@ -645,6 +645,7 @@ void au_docview_finish(AuDocView *dv)
     dv->tree_dirty = true;
     scan_document(dv, true);
     invalidate_all(dv);
+    au_forms_autofocus(dv);
     if (dv->script)
         au_docscript_parse_done(dv->script);
     maybe_finished(dv);
@@ -1190,6 +1191,7 @@ void au_dv_parsed_more(AuDocView *dv)
         dv->parsing = false;
         scan_document(dv, true);
         invalidate_all(dv);
+        au_forms_autofocus(dv);
         if (dv->script)
             au_docscript_parse_done(dv->script);
         maybe_finished(dv);
