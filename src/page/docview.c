@@ -408,6 +408,21 @@ bool au_docview_can_persist(AuDocView *dv)
 void au_docview_set_hidden(AuDocView *dv, bool hidden)
 {
     au_docscript_page_transition(dv->script, !hidden);
+    /* A hidden document gives up its decoded image pixels (the compressed
+     * bytes stay, and images decode again when they are next painted):
+     * they are most of a kept document's memory. A new visibility frame
+     * marks every image unused, and a budget of one byte evicts them. */
+    AuImageCache *c = au_docimages_cache(dv->imgs);
+    if (hidden) {
+        AuImageCacheStats st;
+        au_image_cache_stats(c, &st);
+        dv->hidden_image_budget = st.budget;
+        au_image_cache_frame_begin(c);
+        au_image_cache_set_budget(c, 1);
+    } else if (dv->hidden_image_budget) {
+        au_image_cache_set_budget(c, dv->hidden_image_budget);
+        dv->hidden_image_budget = 0;
+    }
 }
 
 static void sheet_bytes(const SheetSrc *s, size_t *n)

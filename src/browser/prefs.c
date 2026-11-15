@@ -127,10 +127,12 @@ void au_prefs_init(AuPrefs *p)
      * same figure. */
     p->memory_cache_kb = 8192;
     p->disk_cache_kb = 20480;
-    /* Back and Forward keep up to 3 documents per tab, 16 MB in all (the
-     * estimate for a long Wikipedia article is about 10 MB). */
+    /* Back and Forward keep up to 3 documents per tab, 24 MB in all: a
+     * Wikipedia article is estimated at 12 to 15 MB, most of it its
+     * script heap, so one or two fit. The Mac shell also drops kept
+     * documents while the free heap is low. */
     p->document_cache_pages = 3;
-    p->document_cache_kb = 16384;
+    p->document_cache_kb = 24576;
 }
 
 void au_prefs_free(AuPrefs *p)

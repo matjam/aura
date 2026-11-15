@@ -193,7 +193,8 @@ bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
  * beforeunload listener. */
 bool au_docview_can_persist(AuDocView *dv);
 /* The view is about to be hidden (pagehide) or was shown again
- * (pageshow), both with persisted true. */
+ * (pageshow), both with persisted true. A hidden view drops its decoded
+ * image pixels; images decode again from their bytes when next painted. */
 void au_docview_set_hidden(AuDocView *dv, bool hidden);
 /* An estimate of the memory the document holds, in bytes: the tree, its
  * style sheets, the layout, images (decoded and compressed) and the

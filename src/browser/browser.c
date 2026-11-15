@@ -432,26 +432,30 @@ size_t au_browser_kept_documents(const AuBrowser *b, size_t *bytes)
     return n;
 }
 
+bool au_browser_evict_document(AuBrowser *b)
+{
+    /* The document hidden longest ago, in any tab. */
+    AuPage *oldest = NULL;
+    uint32_t best = 0, now_ms = time_ms(b);
+    for (int i = 0; i < b->nwindows; i++) {
+        for (int j = 0; j < b->windows[i]->ntabs; j++) {
+            uint32_t stamp;
+            AuPage *p = b->windows[i]->tabs[j]->page;
+            if (au_page_kept_oldest(p, &stamp) && (!oldest || now_ms - stamp > best)) {
+                oldest = p;
+                best = now_ms - stamp;
+            }
+        }
+    }
+    return oldest && au_page_evict_oldest(oldest);
+}
+
 void au_browser_trim_documents(AuBrowser *b)
 {
     size_t budget = (size_t)b->prefs.document_cache_kb * 1024, total;
-    while (au_browser_kept_documents(b, &total) && total > budget) {
-        /* The document hidden longest ago, in any tab. */
-        AuPage *oldest = NULL;
-        uint32_t best = 0, now_ms = time_ms(b);
-        for (int i = 0; i < b->nwindows; i++) {
-            for (int j = 0; j < b->windows[i]->ntabs; j++) {
-                uint32_t stamp;
-                AuPage *p = b->windows[i]->tabs[j]->page;
-                if (au_page_kept_oldest(p, &stamp) && (!oldest || now_ms - stamp > best)) {
-                    oldest = p;
-                    best = now_ms - stamp;
-                }
-            }
-        }
-        if (!oldest || !au_page_evict_oldest(oldest))
+    while (au_browser_kept_documents(b, &total) && total > budget)
+        if (!au_browser_evict_document(b))
             break;
-    }
 }
 
 size_t au_browser_release_documents(AuBrowser *b)

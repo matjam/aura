@@ -1256,7 +1256,7 @@ static size_t keep_max(const AuPage *p)
 
 static size_t keep_budget(const AuPage *p)
 {
-    return p->env.prefs ? (size_t)p->env.prefs->document_cache_kb * 1024 : (size_t)16 << 20;
+    return p->env.prefs ? (size_t)p->env.prefs->document_cache_kb * 1024 : (size_t)24 << 20;
 }
 
 /* Removes kept[i] from the list first, then frees it: freeing can run

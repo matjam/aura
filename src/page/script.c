@@ -935,8 +935,11 @@ bool au_docscript_can_persist(AuDocScript *s)
 
 void au_docscript_page_transition(AuDocScript *s, bool show)
 {
-    if (s && s->js)
-        au_js_page_transition(s->js, show);
+    if (!s || !s->js)
+        return;
+    au_js_page_transition(s->js, show);
+    if (!show)
+        au_js_gc(s->js); /* a hidden document holds no garbage */
 }
 
 size_t au_docscript_memory(const AuDocScript *s)

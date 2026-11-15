@@ -834,8 +834,16 @@ static bool any_field_focused(void)
     return m && (m->kind == WIN_BROWSER || m->kind == WIN_PREFS);
 }
 
+/* The documents kept for Back and Forward are the first thing to go when
+ * the heap runs low: one per pass while less than LOW_HEAP is free or no
+ * block of LOW_BLOCK is left (a page load needs both). */
+#define LOW_HEAP (6L * 1024 * 1024)
+#define LOW_BLOCK (2L * 1024 * 1024)
+
 static void idle_all(void)
 {
+    if (au_browser_kept_documents(g_browser, NULL) && (FreeMem() < LOW_HEAP || MaxBlock() < LOW_BLOCK))
+        au_browser_evict_document(g_browser);
     mac_net_idle();
     au_downloads_idle(&g_browser->downloads, au_platform_time_ms());
     for (WindowPtr w = FrontWindow(); w;) {

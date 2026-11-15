@@ -213,6 +213,9 @@ bool au_browser_opens_url(const AuBrowser *b, const char *url);
  * went. au_browser_kept_documents counts them and adds up their
  * estimated bytes (bytes may be NULL). */
 void au_browser_trim_documents(AuBrowser *b);
+/* Drops the kept document hidden longest ago, in any tab (a shell short
+ * of memory calls this); false when none is kept. */
+bool au_browser_evict_document(AuBrowser *b);
 size_t au_browser_release_documents(AuBrowser *b);
 size_t au_browser_kept_documents(const AuBrowser *b, size_t *bytes);
 /* Whether any page is loading (the shell then idles more often). */

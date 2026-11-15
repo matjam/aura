@@ -329,7 +329,7 @@ static void test_limits(void)
     CHECK(au_browser_kept_documents(e.b, NULL) == 0, "a budget below one document keeps none: %u",
           (unsigned)au_browser_kept_documents(e.b, NULL));
     /* With the cache off nothing is kept. */
-    e.b->prefs.document_cache_kb = 16384;
+    e.b->prefs.document_cache_kb = 24576;
     e.b->prefs.document_cache_pages = 0;
     respond_html(s, "<!DOCTYPE html><title>e</title><p>page e");
     go(&e, "http://site.test/e");
@@ -489,14 +489,19 @@ static void test_edges(void)
     go(&e, "http://other.test/two");
     CHECK(au_browser_kept_documents(e.b, NULL) == 2, "both tabs keep one: %u",
           (unsigned)au_browser_kept_documents(e.b, NULL));
+    /* The oldest over all tabs goes first: the first tab's. */
+    CHECK(au_browser_evict_document(e.b) && au_page_kept_count(e.w->tabs[0]->page) == 0 &&
+              au_page_kept_count(page(&e)) == 1,
+          "evicting one document takes the oldest");
     /* A resize while hidden: the document is laid out for the new width. */
     au_bw_resize(e.w, 500, 400);
     au_bw_back(e.w);
     settle(&e, 500);
     paint(e.w);
     CHECK(page_text_has(&e, "tab two first") && o->nreq == 3, "Back in the second tab");
+    CHECK(au_browser_kept_documents(e.b, NULL) == 1, "the second tab keeps the document it left");
     au_bw_close_tab(e.w, e.w->active);
-    CHECK(au_browser_kept_documents(e.b, NULL) == 1, "closing the tab frees its kept documents");
+    CHECK(au_browser_kept_documents(e.b, NULL) == 0, "closing the tab frees its kept documents");
     /* Reopen Closed Tab loads through the history cache mode as before. */
     respond_html(o, "<!DOCTYPE html><p>tab two reopened");
     CHECK(au_bw_reopen_closed_tab(e.w) != NULL, "reopen");
