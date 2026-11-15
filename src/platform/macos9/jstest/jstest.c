@@ -66,6 +66,16 @@ static const char *const jt_selftest[] = {
     "dom events", "(()=>{let c=0;const e=document.createElement('i');document.body.appendChild(e);"
                   "document.body.addEventListener('x',()=>c++);e.dispatchEvent(new Event('x',{bubbles:true}));"
                   "e.remove();return c===1;})()",
+    /* regular expression literals, numbers and strings inside the prelude,
+     * which is loaded from bytecode written on a little-endian host */
+    "prelude regexp", "(()=>{const d=document.createElement('div');d.dataset.fooBar='1';d.className=' a  b ';"
+                      "const r=[d.getAttribute('data-foo-bar')==='1',d.classList.length===2,"
+                      "CSS.escape('a b')==='a\\\\ b',new URLSearchParams('a=1&b=%20x').get('b')===' x'];"
+                      "return r.every((x)=>x)||r.join()+' '+d.getAttribute('data-foo-bar')+' '+d.classList.length+' '+"
+                      "CSS.escape('a b')+' ['+new URLSearchParams('a=1&b=%20x').get('b')+']';})()",
+    "prelude forms", "(()=>{const d=document.createElement('div');d.style.cssText='color: red; margin-top: 2px';"
+                     "d.innerHTML='<input type=email value=\"a@b.c\">';return d.style.marginTop==='2px'&&"
+                     "d.firstChild.validity.valid===true&&d.firstChild.checkValidity();})()",
     "url", "new URL('../b?c=1#d','http://h.example/a/x').href==='http://h.example/b?c=1#d'",
     "textencoder", "new TextEncoder().encode('\\u00e9').length===2&&"
                    "new TextDecoder().decode(new Uint8Array([0xc3,0xa9]))==='\\u00e9'",
