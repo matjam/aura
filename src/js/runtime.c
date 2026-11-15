@@ -457,13 +457,27 @@ static const JSCFunctionListEntry base_natives[] = {
 
 /* ---- Creation ---- */
 
+#ifdef AU_JS_PRELUDE_SOURCE
 extern const char au_js_prelude_src[];
 extern const size_t au_js_prelude_len;
+#else
+extern const unsigned char au_js_prelude_bc[];
+extern const size_t au_js_prelude_bc_len;
+#endif
 
 static bool load_prelude(AuJs *js, JSValue N)
 {
     JSContext *ctx = js->ctx;
+#ifdef AU_JS_PRELUDE_SOURCE
     JSValue fn = JS_Eval(ctx, au_js_prelude_src, au_js_prelude_len, "aura:prelude", JS_EVAL_TYPE_GLOBAL);
+#else
+    /* The bytecode is the compiled script; running it gives the prelude
+     * function, as evaluating the source does. JS_EvalFunction frees the
+     * script. */
+    JSValue fn = JS_ReadObject(ctx, au_js_prelude_bc, au_js_prelude_bc_len, JS_READ_OBJ_BYTECODE);
+    if (!JS_IsException(fn))
+        fn = JS_EvalFunction(ctx, fn);
+#endif
     if (JS_IsException(fn)) {
         js_report_exception(js);
         return false;

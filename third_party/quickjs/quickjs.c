@@ -38592,6 +38592,7 @@ typedef struct BCWriterState {
     bool allow_reference;
     bool allow_source;
     bool allow_debug;
+    bool byte_swap; /* write for a machine of the other byte order */
     uint32_t first_atom;
     uint32_t *atom_to_idx;
     int atom_to_idx_size;
@@ -38648,16 +38649,22 @@ static void bc_put_u8(BCWriterState *s, uint8_t v)
 
 static void bc_put_u16(BCWriterState *s, uint16_t v)
 {
+    if (s->byte_swap)
+        v = bswap16(v);
     dbuf_put_u16(&s->dbuf, v);
 }
 
 static __maybe_unused void bc_put_u32(BCWriterState *s, uint32_t v)
 {
+    if (s->byte_swap)
+        v = bswap32(v);
     dbuf_put_u32(&s->dbuf, v);
 }
 
 static void bc_put_u64(BCWriterState *s, uint64_t v)
 {
+    if (s->byte_swap)
+        v = bswap64(v);
     dbuf_put(&s->dbuf, (uint8_t *)&v, sizeof(v));
 }
 
@@ -38732,14 +38739,18 @@ static int bc_put_atom(BCWriterState *s, JSAtom atom)
     return 0;
 }
 
-static uint32_t bc_csum(const uint8_t *p, size_t n)
+/* byte_swap: the sum a machine of the other byte order computes */
+static uint32_t bc_csum2(const uint8_t *p, size_t n, bool byte_swap)
 {
-    uint32_t a, b, c, h;
+    uint32_t a, b, c, h, w;
     size_t i;
 
     h = 0;
     for (i = 0; i+4 < n; i += 4) {
-        h += get_u32(p+i);
+        w = get_u32(p+i);
+        if (byte_swap)
+            w = bswap32(w);
+        h += w;
         h *= 0x9e370001;
     }
     a = b = c = 0;
@@ -38756,6 +38767,128 @@ static uint32_t bc_csum(const uint8_t *p, size_t n)
     h += a | b<<8 | c<<16;
     h *= 0x9e370001;
     return h;
+}
+
+static uint32_t bc_csum(const uint8_t *p, size_t n)
+{
+    return bc_csum2(p, n, false);
+}
+
+/* Swaps the operands of the bytecode in place for a machine of the other
+   byte order. The operand widths come from the opcode format and are
+   checked against the opcode size. Returns -1 on a format it does not
+   know. */
+static int bc_byte_swap(uint8_t *bc_buf, int bc_len)
+{
+    int pos, len, op, i, k, n;
+    uint8_t w[4];
+
+    pos = 0;
+    while (pos < bc_len) {
+        op = bc_buf[pos];
+        len = short_opcode_info(op).size;
+        n = 0;
+        switch(short_opcode_info(op).fmt) {
+        case OP_FMT_none:
+        case OP_FMT_none_int:
+        case OP_FMT_none_loc:
+        case OP_FMT_none_arg:
+        case OP_FMT_none_var_ref:
+        case OP_FMT_npopx:
+            break;
+        case OP_FMT_u8:
+        case OP_FMT_i8:
+        case OP_FMT_loc8:
+        case OP_FMT_const8:
+        case OP_FMT_label8:
+            w[n++] = 1;
+            break;
+        case OP_FMT_u16:
+        case OP_FMT_i16:
+        case OP_FMT_label16:
+        case OP_FMT_npop:
+        case OP_FMT_loc:
+        case OP_FMT_arg:
+        case OP_FMT_var_ref:
+            w[n++] = 2;
+            break;
+        case OP_FMT_npop_u16:
+            w[n++] = 2;
+            w[n++] = 2;
+            break;
+        case OP_FMT_u32:
+        case OP_FMT_i32:
+        case OP_FMT_const:
+        case OP_FMT_label:
+        case OP_FMT_atom:
+            w[n++] = 4;
+            break;
+        case OP_FMT_u32x2:
+            w[n++] = 4;
+            w[n++] = 4;
+            break;
+        case OP_FMT_atom_u8:
+            w[n++] = 4;
+            w[n++] = 1;
+            break;
+        case OP_FMT_atom_u16:
+        case OP_FMT_label_u16:
+            w[n++] = 4;
+            w[n++] = 2;
+            break;
+        case OP_FMT_atom_label_u8:
+            w[n++] = 4;
+            w[n++] = 4;
+            w[n++] = 1;
+            break;
+        case OP_FMT_atom_label_u16:
+            w[n++] = 4;
+            w[n++] = 4;
+            w[n++] = 2;
+            break;
+        default:
+            return -1;
+        }
+        k = 1;
+        for(i = 0; i < n; i++)
+            k += w[i];
+        if (k != len || pos + len > bc_len)
+            return -1;
+        k = pos + 1;
+        for(i = 0; i < n; i++) {
+            if (w[i] == 2)
+                put_u16(bc_buf + k, bswap16(get_u16(bc_buf + k)));
+            else if (w[i] == 4)
+                put_u32(bc_buf + k, bswap32(get_u32(bc_buf + k)));
+            k += w[i];
+        }
+        pos += len;
+    }
+    return 0;
+}
+
+/* Writes the compiled regular expression 'p' (libregexp bytecode in an
+   8 bit string) as a string, for a machine of the other byte order. */
+static int JS_WriteRegExpBytecodeSwapped(BCWriterState *s, JSString *p)
+{
+    uint8_t *buf;
+    int ret;
+
+    if (p->is_wide_char)
+        return -1;
+    buf = js_malloc(s->ctx, p->len + 1);
+    if (!buf)
+        return -1;
+    memcpy(buf, str8(p), p->len);
+    ret = lre_byte_swap(buf, p->len);
+    if (ret == 0) {
+        dbuf_put_leb128(&s->dbuf, (uint32_t)p->len << 1);
+        dbuf_put(&s->dbuf, buf, p->len);
+    } else {
+        JS_ThrowInternalError(s->ctx, "cannot byte swap a regular expression");
+    }
+    js_free(s->ctx, buf);
+    return ret;
 }
 
 static int JS_WriteFunctionBytecode(BCWriterState *s,
@@ -38793,6 +38926,10 @@ static int JS_WriteFunctionBytecode(BCWriterState *s,
         pos += len;
     }
 
+    if (s->byte_swap && bc_byte_swap(bc_buf, bc_len)) {
+        JS_ThrowInternalError(s->ctx, "cannot byte swap the bytecode");
+        goto fail;
+    }
     dbuf_put(&s->dbuf, bc_buf, bc_len);
 
     js_free(s->ctx, bc_buf);
@@ -38930,6 +39067,55 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
 
     // write constant pool before code so code can be disassembled
     // on the fly at read time
+    if (s->byte_swap) {
+        /* A regular expression literal keeps its compiled form in a
+           constant pool string, which holds 16 and 32 bit words: find
+           those strings (the constant pushed just before OP_regexp) and
+           write them swapped. */
+        uint8_t *is_re = NULL;
+        int pos, op, last_const, ret;
+        const JSOpCode *oi;
+
+        if (b->cpool_count > 0) {
+            is_re = js_mallocz(s->ctx, b->cpool_count);
+            if (!is_re)
+                goto fail;
+        }
+        last_const = -1;
+        for(pos = 0; pos < b->byte_code_len; pos += oi->size) {
+            op = b->byte_code_buf[pos];
+            oi = &short_opcode_info(op);
+            if (op == OP_regexp) {
+                if (last_const < 0 || last_const >= b->cpool_count ||
+                    JS_VALUE_GET_TAG(b->cpool[last_const]) != JS_TAG_STRING) {
+                    js_free(s->ctx, is_re);
+                    JS_ThrowInternalError(s->ctx, "cannot byte swap a regular expression literal");
+                    goto fail;
+                }
+                is_re[last_const] = 1;
+                last_const = -1;
+            } else if (op == OP_push_const) {
+                last_const = get_u32(b->byte_code_buf + pos + 1);
+            } else if (op == OP_push_const8) {
+                last_const = b->byte_code_buf[pos + 1];
+            } else {
+                last_const = -1;
+            }
+        }
+        for(i = 0; i < b->cpool_count; i++) {
+            if (is_re[i]) {
+                bc_put_u8(s, BC_TAG_STRING);
+                ret = JS_WriteRegExpBytecodeSwapped(s, JS_VALUE_GET_STRING(b->cpool[i]));
+            } else {
+                ret = JS_WriteObjectRec(s, b->cpool[i]);
+            }
+            if (ret) {
+                js_free(s->ctx, is_re);
+                goto fail;
+            }
+        }
+        js_free(s->ctx, is_re);
+    } else
     for(i = 0; i < b->cpool_count; i++) {
         if (JS_WriteObjectRec(s, b->cpool[i]))
             goto fail;
@@ -39091,6 +39277,11 @@ static int JS_WriteTypedArray(BCWriterState *s, JSValueConst obj)
     JSObject *p = JS_VALUE_GET_OBJ(obj);
     JSTypedArray *ta = p->u.typed_array;
 
+    if (s->byte_swap) {
+        /* the elements would need swapping by type */
+        JS_ThrowInternalError(s->ctx, "typed arrays cannot be written byte swapped");
+        return -1;
+    }
     bc_put_u8(s, BC_TAG_TYPED_ARRAY);
     bc_put_u8(s, p->class_id - JS_CLASS_UINT8C_ARRAY);
     bc_put_leb128(s, p->u.array.count);
@@ -39137,6 +39328,8 @@ static int JS_WriteRegExp(BCWriterState *s, JSRegExp regexp)
     JSString *bc = regexp.bytecode;
     assert(!bc->is_wide_char);
     JS_WriteString(s, regexp.pattern);
+    if (s->byte_swap)
+        return JS_WriteRegExpBytecodeSwapped(s, bc);
     JS_WriteString(s, bc);
     return 0;
 }
@@ -39373,6 +39566,7 @@ uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
     s->allow_reference = ((flags & JS_WRITE_OBJ_REFERENCE) != 0);
     s->allow_source = ((flags & JS_WRITE_OBJ_STRIP_SOURCE) == 0);
     s->allow_debug = ((flags & JS_WRITE_OBJ_STRIP_DEBUG) == 0);
+    s->byte_swap = ((flags & JS_WRITE_OBJ_BSWAP) != 0);
     /* XXX: could use a different version when bytecode is included */
     if (s->allow_bytecode)
         s->first_atom = JS_ATOM_END;
@@ -39397,8 +39591,8 @@ uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
     }
     // don't include version and checksum fields in checksum
     d = &s->dbuf;
-    h = bc_csum(&d->buf[5], d->size - 5);
-    put_u32(&d->buf[1], h);
+    h = bc_csum2(&d->buf[5], d->size - 5, s->byte_swap);
+    put_u32(&d->buf[1], s->byte_swap ? bswap32(h) : h);
     return d->buf;
  fail:
     js_object_list_end(ctx, &s->object_list);
