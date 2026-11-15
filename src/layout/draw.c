@@ -1737,13 +1737,43 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
         break;
     case LR_IMAGE:
         if (r && r->pixels) {
-            if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
-                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(cb.w), (int)ceilf(cb.h));
+            /* object-fit and object-position (CSS Images 3, section 5.5):
+             * the image is drawn at its concrete object size, placed in
+             * the content box and clipped to it. */
+            if (r->marker)
+                cb.w = l_max(0, cb.w - L_MARKER_IMAGE_GAP);
+            AuRect ob = cb;
+            int fit = r->marker ? AU_OBJECT_FIT_FILL : s->rare->object_fit;
+            if (fit != AU_OBJECT_FIT_FILL && r->iw > 0 && r->ih > 0 && cb.w > 0 && cb.h > 0) {
+                float sx = cb.w / r->iw, sy = cb.h / r->ih;
+                float sc = fit == AU_OBJECT_FIT_COVER ? l_max(sx, sy) : fit == AU_OBJECT_FIT_NONE ? 1 : l_min(sx, sy);
+                if (fit == AU_OBJECT_FIT_SCALE_DOWN && sc > 1)
+                    sc = 1;
+                ob.w = r->iw * sc;
+                ob.h = r->ih * sc;
+                const AuCssValue *px_ = NULL, *py_ = NULL;
+                const AuCssBlob *op = s->rare->object_position;
+                if (op && op->value.type == AU_CSSV_LIST && op->value.n == 2) {
+                    px_ = &op->value.u.items[0];
+                    py_ = &op->value.u.items[1];
+                }
+                ob.x = cb.x + (px_ ? bg_len(px_, cb.w - ob.w) : (cb.w - ob.w) / 2);
+                ob.y = cb.y + (py_ ? bg_len(py_, cb.h - ob.h) : (cb.h - ob.h) / 2);
+            }
+            bool crop = ob.x < cb.x - 0.01f || ob.y < cb.y - 0.01f || ob.x + ob.w > cb.x + cb.w + 0.01f ||
+                        ob.y + ob.h > cb.y + cb.h + 0.01f;
+            if (r->url && P->L->env.image_use && ob.w >= 1 && ob.h >= 1 && ob.w <= 8192 && ob.h <= 8192)
+                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(ob.w), (int)ceilf(ob.h));
             const AuSurface *px = r->pixels;
-            au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, cb,
-                          s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
-                                                                                 : AU_FILTER_BILINEAR,
-                          1);
+            if (crop)
+                au_canvas_clip_push(P->c, cb);
+            if (ob.w > 0 && ob.h > 0)
+                au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, ob,
+                              s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
+                                                                                     : AU_FILTER_BILINEAR,
+                              1);
+            if (crop)
+                au_canvas_clip_pop(P->c);
         } else if (cb.w >= 1 && cb.h >= 1) {
             /* Placeholder: a light frame, and the alt text. */
             float w1[4] = {1, 1, 1, 1};

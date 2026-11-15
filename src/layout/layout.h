@@ -89,6 +89,13 @@ void au_layout_styles_changed(AuLayout *L);
  * box tree is kept. The tree is built again only when its shape depends
  * on images (an object or embed element with a resource). */
 void au_layout_images_changed(AuLayout *L);
+/* Appends to out the URL (as written, not resolved) that el shows: for
+ * an <img>, the choice among srcset candidates (density 1; width
+ * descriptors against sizes and the viewport of the last layout) and
+ * the <source> elements of a <picture> parent, else src; for other
+ * elements the src attribute. Returns false when there is none. Layout
+ * asks the loader for the same URL. */
+bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out);
 /* Calls fn with the document rectangle of each box that shows the image
  * at absolute URL url: image boxes, boxes with it as a background or
  * mask layer, and every inline SVG (one may hold it in an <image>).

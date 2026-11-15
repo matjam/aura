@@ -351,7 +351,11 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
     *ratio = 0;
     switch (b->b.replaced) {
     case LR_IMAGE:
-        if (r && r->loaded) {
+        if (r && r->loaded && r->marker) {
+            /* A marker image: its own size, then the gap. */
+            *w = r->iw > 0 ? r->iw + L_MARKER_IMAGE_GAP : 0;
+            *h = r->ih;
+        } else if (r && r->loaded) {
             *w = r->iw;
             *h = r->ih;
             *ratio = r->ratio;
@@ -1362,7 +1366,8 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
             r = 2;
     }
     if (a->inhr != b->inhr) {
-        if (a->inhr->text_transform != b->inhr->text_transform || a->inhr->quotes != b->inhr->quotes)
+        if (a->inhr->text_transform != b->inhr->text_transform || a->inhr->quotes != b->inhr->quotes ||
+            a->inhr->list_style_image != b->inhr->list_style_image)
             return 3;
         r = 2;
     }
@@ -1569,7 +1574,11 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (vh < 1)
         vh = 1;
     bool changed = false;
+    if (L->src_viewport && (vw != L->src_vw || vh != L->src_vh))
+        L->need_build = true; /* another srcset candidate may apply */
     if (L->need_build) {
+        L->src_vw = vw;
+        L->src_vh = vh;
         /* Keep inner scroll offsets across the rebuild. */
         l_build_tree(L);
         L->build_count++;

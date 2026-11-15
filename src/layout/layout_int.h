@@ -188,6 +188,8 @@ typedef struct LReplaced {
     uint16_t rows, cols; /* textarea and list box size */
     bool loaded;      /* the image is known (size from the loader) */
     bool placeholder; /* text input: label is the placeholder */
+    float density;    /* image: device pixels per CSS pixel of the srcset candidate; 0 means 1 */
+    bool marker;      /* image: a list-style-image marker, with L_MARKER_IMAGE_GAP after it */
 } LReplaced;
 
 typedef struct LBlock {
@@ -364,6 +366,11 @@ struct AuLayout {
     /* A box painted a background layer with background-attachment: fixed
      * since the tree was built: a scroll cannot move its pixels. */
     bool fixed_backgrounds;
+    /* The viewport the tree's image sources were chosen for (srcset width
+     * descriptors, sizes, <source media>), and whether any choice depends
+     * on it: the tree is then built again when the viewport changes. */
+    float src_vw, src_vh;
+    bool src_viewport;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */
@@ -479,6 +486,9 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy);
 void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark);
 void l_apply_relative(LBlock *b, float cb_w, float cb_h);
 LBlock *l_geom_parent(LBox *b);
+/* Space between a list-style-image marker and the list item's content,
+ * part of the marker box's width (Blink's kCMarkerPaddingPx). */
+#define L_MARKER_IMAGE_GAP 7
 /* The style makes its box the containing block of fixed descendants. */
 bool l_style_contains_fixed(const AuStyle *s);
 /* Asks the loader about rep's image again. Returns 0 when nothing
