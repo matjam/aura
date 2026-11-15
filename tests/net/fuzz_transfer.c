@@ -37,8 +37,8 @@ static const char *const heads[] = {
     "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: text/css\r\n",
     "HTTP/1.1 304 Not Modified\r\nETag: \"a\"\r\nCache-Control: max-age=1, stale-while-revalidate=60\r\n",
     "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4/10\r\nAccept-Ranges: bytes\r\n",
-    "HTTP/1.1 200 OK\r\nRefresh: 0; url=/r\r\nLink: </s.css>; rel=preload\r\nExpires: Thu, 01 Jan 2099 00:00:00 GMT\r\n"
-    "Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\nAge: 5\r\nDate: Sun, 15 Nov 2026 00:00:00 GMT\r\n",
+    ("HTTP/1.1 200 OK\r\nRefresh: 0; url=/r\r\nLink: </s.css>; rel=preload\r\nExpires: Thu, 01 Jan 2099 00:00:00 GMT\r\n"
+     "Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\nAge: 5\r\nDate: Sun, 15 Nov 2026 00:00:00 GMT\r\n"),
     "HTTP/1.1 204 No Content\r\n",
     "HTTP/1.1 503 Busy\r\nRetry-After: 1\r\nConnection: close\r\n",
 };

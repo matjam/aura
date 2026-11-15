@@ -17,7 +17,6 @@
  *        fuzz_css replay FILE... */
 #include "../fuzz.h"
 #include "../layout/ahem.h"
-#include "css/css.h"
 #include "page/page.h"
 
 static const char *const dict[] = {
@@ -67,8 +66,8 @@ static const char *const snippets[] = {
     "div{display:flex;flex-wrap:wrap;gap:1e9px}div>*{flex:1e9 1e9 -1px;order:-2147483648;min-width:0;max-width:0}",
     "@layer a{div{color:red}}@layer b,a;@layer{p{color:blue}}div{& span{color:green;& a{color:red}}}",
     "img{aspect-ratio:1e38/1e-38;width:auto;height:1e9px;object-fit:cover}input{width:1e9px;height:-5px}",
-    "div{background:linear-gradient(1e38deg, red -1e30px, blue 1e30px), radial-gradient(circle 0px at 1e9px 1e9px, red, blue);"
-    "background-size:0 0, 1e9px 1e-9px;border-radius:1e9px / 0}",
+    ("div{background:linear-gradient(1e38deg, red -1e30px, blue 1e30px), radial-gradient(circle 0px at 1e9px 1e9px, red, blue);"
+     "background-size:0 0, 1e9px 1e-9px;border-radius:1e9px / 0}"),
     "p{columns:1e9;line-height:1e9;tab-size:1e9;white-space:pre-wrap;overflow:scroll;height:0;width:0}",
     "@keyframes k{from{width:0}50%{width:calc(1px/0)}to{width:1e38px}}div{animation:k 0s infinite}",
     "@font-face{font-family:x;src:url(f.woff2) format('woff2');unicode-range:U+0-7F,U+1e3??}p{font-family:x}",
