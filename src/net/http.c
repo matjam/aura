@@ -194,6 +194,7 @@ struct AuNet {
     AuBrotliDict *brdict;
     int brdict_users;
     bool in_pump;
+    AuDns *dns; /* name lookups, cached and shared (dns.h) */
 };
 
 const char *au_net_error_name(AuNetError e)
@@ -217,6 +218,7 @@ AuNet *au_net_new(const AuNetOps *ops)
 {
     AuNet *net = au_calloc(sizeof *net);
     net->ops = *ops;
+    net->dns = au_dns_new(ops);
     AuNetConfig *c = &net->cfg;
     au_net_set_config_str(&c->user_agent, AU_DEFAULT_USER_AGENT);
     au_net_set_config_str(&c->accept_language, "en-US,en;q=0.9");
@@ -235,6 +237,16 @@ AuNet *au_net_new(const AuNetOps *ops)
 }
 
 AuNetConfig *au_net_config(AuNet *net) { return &net->cfg; }
+
+void au_net_clear_dns(AuNet *net)
+{
+    au_dns_clear(net->dns);
+}
+
+void au_net_dns_stats(const AuNet *net, AuDnsStats *out)
+{
+    au_dns_stats(net->dns, out);
+}
 const AuNetOps *au_net_ops(AuNet *net) { return &net->ops; }
 void au_net_set_cookie_jar(AuNet *net, AuCookieJar *jar) { net->jar = jar; }
 void au_net_set_hsts(AuNet *net, AuHsts *hsts) { net->hsts = hsts; }
@@ -427,7 +439,7 @@ static void conn_free(Conn *c)
 {
     AuNet *net = c->net;
     if (c->resolve_req)
-        net->ops.resolve_cancel(net->ops.ctx, c->resolve_req);
+        au_dns_cancel(net->dns, c->resolve_req);
     if (c->sock)
         net->ops.close(net->ops.ctx, c->sock);
     au_tls_free(c->tls_engine);
@@ -617,7 +629,7 @@ static Conn *conn_new(AuNet *net, const char *host, uint16_t port, bool tls)
         bare[rl - 2] = 0;
         rh = bare;
     }
-    c->resolve_req = net->ops.resolve_start(net->ops.ctx, rh);
+    c->resolve_req = au_dns_start(net->dns, rh);
     if (!c->resolve_req)
         conn_kill(c, AU_NET_ERR_DNS);
     c->next = net->conns;
@@ -800,6 +812,21 @@ static bool conn_io(Conn *c)
     return any;
 }
 
+/* The connection to the cached address failed: the next lookup of the
+ * host asks the resolver again (the host may have moved). */
+static void forget_address(Conn *c)
+{
+    const char *rh = c->proxy ? c->proxy : c->host;
+    char bare[300];
+    size_t rl = strlen(rh);
+    if (rh[0] == '[' && rl >= 2 && rl < sizeof bare) {
+        memcpy(bare, rh + 1, rl - 2);
+        bare[rl - 2] = 0;
+        rh = bare;
+    }
+    au_dns_forget(c->net->dns, rh);
+}
+
 /* Advances a connection through resolve, connect, proxy CONNECT and the
  * TLS handshake. Returns true if anything happened. */
 static bool conn_step(Conn *c)
@@ -809,13 +836,13 @@ static bool conn_step(Conn *c)
     switch (c->state) {
     case C_RESOLVE: {
         AuNetAddr a;
-        int r = net->ops.resolve_poll(net->ops.ctx, c->resolve_req, &a);
+        int r = au_dns_poll(net->dns, c->resolve_req, &a);
         if (r == 0) {
             if (elapsed(now, c->started_ms) > net->cfg.connect_timeout_ms)
                 conn_kill(c, AU_NET_ERR_TIMEOUT);
             return false;
         }
-        net->ops.resolve_cancel(net->ops.ctx, c->resolve_req);
+        au_dns_cancel(net->dns, c->resolve_req);
         c->resolve_req = 0;
         if (r < 0) {
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_DNS);
@@ -823,6 +850,7 @@ static bool conn_step(Conn *c)
         }
         c->sock = net->ops.connect(net->ops.ctx, &a, c->proxy ? c->proxy_port : c->port);
         if (!c->sock) {
+            forget_address(c);
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_CONNECT);
             return true;
         }
@@ -837,6 +865,7 @@ static bool conn_step(Conn *c)
             return false;
         }
         if (r < 0) {
+            forget_address(c);
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_CONNECT);
             return true;
         }
@@ -2408,6 +2437,7 @@ void au_net_free(AuNet *net)
     }
     while (net->conns)
         conn_remove(net, net->conns);
+    au_dns_free(net->dns);
     for (int i = 0; i < SESSION_CACHE; i++) {
         au_free(net->sessions[i].hostport);
         au_free(net->sessions[i].cert);

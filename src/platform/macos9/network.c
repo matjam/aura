@@ -510,6 +510,9 @@ void mac_net_init(void)
     if (storage_subfolder("Cache", &N.cache_vref, &N.cache_dir)) {
         AuDiskCacheFiles files = {NULL, dc_list, dc_read, dc_write, dc_remove};
         N.disk = au_disk_cache_new(&files, 0);
+        /* A file write takes about 9 ms here: queue them (mac_net_idle
+         * writes them while nothing is loading). */
+        au_disk_cache_set_deferred(N.disk, true);
     }
     load_stores();
     apply_prefs();
@@ -547,6 +550,9 @@ void mac_net_idle(void)
     au_net_loader_poll(N.loader);
     if (N.ot)
         au_ot_net_idle(N.ot);
+    /* Queued cache files: one per pass, while no transfer is under way. */
+    if (N.disk && au_disk_cache_pending(N.disk) && au_net_loader_active(N.loader) == 0)
+        au_disk_cache_idle(N.disk, 1);
 }
 
 bool mac_net_busy(void)
@@ -554,7 +560,8 @@ bool mac_net_busy(void)
     /* A load in progress (including one waiting for entropy, which the
      * loop's jitter feeds), or Open Transport finishing a lookup or a
      * connection. */
-    return N.net && (au_net_loader_active(N.loader) > 0 || (N.ot && au_ot_net_busy(N.ot)));
+    return N.net && (au_net_loader_active(N.loader) > 0 || (N.ot && au_ot_net_busy(N.ot)) ||
+                     (N.disk && au_disk_cache_pending(N.disk) > 0));
 }
 
 void mac_net_prefs_changed(void)
@@ -575,6 +582,8 @@ void mac_net_clear_cache(void)
         au_cache_clear(N.cache);
     if (N.disk)
         au_disk_cache_clear(N.disk);
+    if (N.net)
+        au_net_clear_dns(N.net);
 }
 
 AuCookieJar *mac_net_cookie_jar(void) { return N.jar; }
