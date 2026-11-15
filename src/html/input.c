@@ -4,12 +4,12 @@
  *
  * Encoding detection beyond the BOM: with AU_HTML_ENC_SNIFF, the <meta
  * charset> prescan (HTML 13.2.3.2, au_html_prescan_charset below) examines
- * the first 1024 bytes when the first chunk fed holds that many (or is
- * the whole input); a label it finds that this decoder supports (UTF-8,
- * UTF-16 meaning UTF-8, the windows-1252 family) decides the encoding.
- * Otherwise the default is UTF-8. A network loader that buffers the
- * first 1024 bytes and passes an explicit encoding gets the full
- * algorithm (src/net: au_detect_encoding). */
+ * the first 1024 bytes, which the decoder holds back (in any number of
+ * chunks) until it has them or the input ends; a label it finds that this
+ * decoder supports (UTF-8, UTF-16 meaning UTF-8, the windows-1252 family)
+ * decides the encoding. Otherwise the default is UTF-8. A network loader
+ * that passes an explicit encoding gets the full algorithm (src/net:
+ * au_detect_encoding). */
 #include "html_internal.h"
 
 #include <string.h>
@@ -23,7 +23,7 @@ void html_decoder_init(HtmlDecoder *d, AuHtmlEncoding enc)
     d->enc = AU_HTML_ENC_SNIFF;
     d->fallback = (uint8_t)(enc == AU_HTML_ENC_SNIFF ? (AU_HTML_ENC_UTF8 | FALLBACK_SNIFFED) : enc);
     d->last_cr = false;
-    d->nbom = 0;
+    d->nhold = 0;
     d->need = d->seen = 0;
     d->lower = 0x80;
     d->upper = 0xBF;
@@ -431,24 +431,13 @@ size_t au_html_prescan_charset(const uint8_t *data, size_t len, bool (*valid)(vo
     return 0;
 }
 
-/* Runs the prescan when the decoder may (SNIFF) and enough bytes are at
- * hand: held BOM bytes plus this chunk. */
-static void prescan_fallback(HtmlDecoder *d, const unsigned char *s, size_t len, bool last)
+/* Runs the prescan over the held bytes (the first 1024, or the whole
+ * input when it is shorter). */
+static void prescan_fallback(HtmlDecoder *d)
 {
-    if (!(d->fallback & FALLBACK_SNIFFED))
-        return;
     d->fallback &= (uint8_t)~FALLBACK_SNIFFED;
-    size_t total = d->nbom + len;
-    if (total < 1024 && !last)
-        return; /* too little to decide; keep the default */
-    uint8_t buf[1024];
-    size_t n = 0;
-    for (size_t i = 0; i < d->nbom && n < sizeof buf; i++)
-        buf[n++] = d->bom[i];
-    for (size_t i = 0; i < len && n < sizeof buf; i++)
-        buf[n++] = s[i];
     char label[64];
-    size_t ll = au_html_prescan_charset(buf, n, NULL, NULL, label, sizeof label);
+    size_t ll = au_html_prescan_charset(d->hold, d->nhold, NULL, NULL, label, sizeof label);
     if (ll) {
         int e = label_encoding(label, ll);
         if (e >= 0)
@@ -460,28 +449,39 @@ void html_decode(HtmlDecoder *d, const char *bytes, size_t len, bool last, AuBuf
 {
     const unsigned char *s = (const unsigned char *)bytes;
     if (d->enc == AU_HTML_ENC_SNIFF) {
-        /* BOM sniffing: hold up to three bytes until decided. */
-        while (len && d->nbom < 3) {
-            d->bom[d->nbom++] = *s++;
-            len--;
-        }
+        /* Hold the first bytes: up to three to find a BOM, and, when the
+         * encoding is sniffed, up to 1024 for the prescan, until the input
+         * ends. Nothing is decoded before the encoding is decided. */
+        size_t room = sizeof d->hold - d->nhold;
+        size_t take = len < room ? len : room;
+        memcpy(d->hold + d->nhold, s, take);
+        d->nhold = (uint16_t)(d->nhold + take);
+        s += take;
+        len -= take;
         size_t skip = 0;
-        if (d->nbom >= 3 && d->bom[0] == 0xEF && d->bom[1] == 0xBB && d->bom[2] == 0xBF) {
+        const unsigned char *h = d->hold;
+        if (d->nhold >= 3 && h[0] == 0xEF && h[1] == 0xBB && h[2] == 0xBF) {
             d->enc = AU_HTML_ENC_UTF8;
             skip = 3;
-        } else if (d->nbom >= 2 && d->bom[0] == 0xFE && d->bom[1] == 0xFF) {
+        } else if (d->nhold >= 2 && h[0] == 0xFE && h[1] == 0xFF) {
             d->enc = AU_HTML_ENC_UTF16BE;
             skip = 2;
-        } else if (d->nbom >= 2 && d->bom[0] == 0xFF && d->bom[1] == 0xFE) {
+        } else if (d->nhold >= 2 && h[0] == 0xFF && h[1] == 0xFE) {
             d->enc = AU_HTML_ENC_UTF16LE;
             skip = 2;
-        } else if (d->nbom == 3 || last) {
-            prescan_fallback(d, s, len, last);
-            d->enc = d->fallback & (uint8_t)~FALLBACK_SNIFFED;
+        } else if (d->nhold < 3 && !last) {
+            return; /* need more bytes to look for a BOM */
+        } else if (!(d->fallback & FALLBACK_SNIFFED)) {
+            d->enc = d->fallback;
+        } else if (d->nhold < sizeof d->hold && !last) {
+            return; /* hold the bytes the prescan looks at */
         } else {
-            return; /* need more bytes to decide */
+            prescan_fallback(d);
+            d->enc = d->fallback;
         }
-        decode_bytes(d, d->bom + skip, d->nbom - skip, out);
+        size_t n = d->nhold;
+        d->nhold = 0;
+        decode_bytes(d, d->hold + skip, n - skip, out);
     }
     decode_bytes(d, s, len, out);
     if (last) {
