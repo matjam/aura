@@ -32,6 +32,7 @@ typedef struct FakeServer {
     char host[64];
     uint16_t port;
     bool dns_fail, refuse, connect_hang;
+    const char *banner; /* sent as soon as a (non-TLS) connection opens */
     FakeResponse resp[FAKE_MAX_RESP];
     int nresp, next;
     /* What the server received, one entry per request. */
@@ -43,6 +44,10 @@ typedef struct FakeServer {
     const br_x509_certificate *chain;
     size_t chain_len;
     const br_ec_private_key *eckey;
+    /* Session cache, so clients can resume (set up on first connect). */
+    br_ssl_session_cache_lru cache;
+    unsigned char cache_buf[4096];
+    bool cache_ready;
 } FakeServer;
 
 typedef struct FakeNet {

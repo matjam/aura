@@ -14,6 +14,11 @@ add_executable(test_cookies test_cookies.c)
 target_link_libraries(test_cookies aura_fakenet)
 add_test(NAME net_cookies COMMAND test_cookies)
 
+add_executable(test_tls test_tls.c tls_fixtures.c)
+target_link_libraries(test_tls aura_fakenet)
+add_test(NAME net_tls COMMAND test_tls)
+set_tests_properties(net_tls PROPERTIES TIMEOUT 120)
+
 # To run a long session, build with sanitizers and run
 #   fuzz_cookies ITERATIONS SEED
 add_executable(fuzz_cookies fuzz_cookies.c)

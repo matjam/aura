@@ -79,10 +79,22 @@ static uint32_t f_connect(void *ctx, const AuNetAddr *addr, uint16_t port)
             br_ssl_server_init_full_ec(k->sc, s->chain, s->chain_len, BR_KEYTYPE_EC, s->eckey);
             k->iobuf = malloc(BR_SSL_BUFSIZE_BIDI);
             br_ssl_engine_set_buffer(&k->sc->eng, k->iobuf, BR_SSL_BUFSIZE_BIDI, 1);
+            /* A different seed per connection: with a repeated seed the
+             * server would issue the same session ID again, which the
+             * client takes for an accepted resumption. */
             uint8_t seed[32] = {1, 2, 3};
             seed[4] = (uint8_t)i;
+            seed[5] = (uint8_t)s->connections;
+            seed[6] = (uint8_t)(s - f->servers);
             br_ssl_engine_inject_entropy(&k->sc->eng, seed, sizeof seed);
+            if (!s->cache_ready) {
+                br_ssl_session_cache_lru_init(&s->cache, s->cache_buf, sizeof s->cache_buf);
+                s->cache_ready = true;
+            }
+            br_ssl_server_set_cache(k->sc, &s->cache.vtable);
             br_ssl_server_reset(k->sc);
+        } else if (s->banner) {
+            au_buf_puts(&k->resp, s->banner);
         }
         f->socks[i] = k;
         return i;
