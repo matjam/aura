@@ -7,6 +7,7 @@
  *   storage.c     files in the Preferences folder, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
  *   contextmenu.c contextual menus (Contextual Menu Manager or pop-up)
+ *   internetconfig.c  helper applications, download folder, file mappings
  *
  * Every window Aura opens carries a MacWin (its refCon), whose function
  * pointers the event loop calls; that is how several kinds of window
@@ -127,6 +128,27 @@ bool mac_context_click(const EventRecord *ev);
 /* Shows the menu at a global point; returns the chosen item's index in
  * m->items, or -1. */
 int mac_context_select(const AuContextMenu *m, Point global);
+
+/* ---- internetconfig.c ---- */
+bool mac_ic_available(void);
+/* Opens url with its Internet Config helper (mailto:, ftp:, ...). */
+bool mac_ic_launch_url(const char *url);
+/* Whether a helper application is set for scheme (lower case, no ':'). */
+bool mac_ic_has_helper(const char *scheme);
+/* Aura as the http helper; making it the http, https and file helper.
+ * Only the Preferences button calls the second. */
+bool mac_ic_is_default_browser(void);
+bool mac_ic_make_default_browser(void);
+/* The user's download folder (Internet Config's DownloadFolder). */
+bool mac_ic_download_folder(FSSpec *out);
+/* File type, creator and MIME type for a file name, from Internet
+ * Config's file mappings (for downloads). */
+typedef struct MacFileMap {
+    OSType type, creator;
+    char mime[64];
+    bool binary; /* transfer as binary */
+} MacFileMap;
+bool mac_ic_map_filename(const char *name, MacFileMap *out);
 
 /* ---- text.c ---- */
 /* UTF-8 to a Pascal string in Mac Roman ('?' for characters it lacks),

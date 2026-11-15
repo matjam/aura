@@ -223,6 +223,25 @@ creator AURA. Open Location selects the whole address again when the
 field already has the focus, and a paste into the field turns line
 breaks into spaces.
 
+To change how Aura works with Internet Config, edit
+`src/platform/macos9/internetconfig.c`. Mac OS 9.2.2 has the Internet
+Config component ('PREF', 'ICAp') but no InternetConfigLib shared
+library (GetSharedLibrary fails with -2804 in the stock guest), so
+Retro68's InternetConfigLib stub cannot be used: Aura opens the
+component with `OpenDefaultComponent` and makes each call through
+`CallComponentUPP` with a parameter block, checking every selector with
+`kComponentCanDoSelect` first. `internetconfig.h` declares what the
+Multiversal Interfaces lack (the IC records, in 68K alignment, and the
+Component Manager calls). Addresses Aura does not open itself
+(`au_browser_opens_url`) reach the shell through
+`AuBrowserHost.open_external`, which calls `ICLaunchURL`. The GURL Apple
+event opens its URL in a new tab, or a new window with
+`links.external_new_window`. Preferences > General has the Make Aura
+the Default Browser button, the only place Aura writes Internet Config
+(the http, https and file helpers). `mac_ic_download_folder` and
+`mac_ic_map_filename` are there for downloads. To send a GURL in the
+guest, run `open location "URL"` in Script Editor.
+
 To change what a contextual menu offers, edit `src/browser/context.c`:
 `au_bw_context_menu` builds the items for a window point (link, image,
 page, address field or tab, using `au_page_hit_info` for the page) and

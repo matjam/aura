@@ -605,6 +605,41 @@ static pascal OSErr ae_open_docs(const AppleEvent *e, AppleEvent *reply, long re
     return noErr;
 }
 
+/* GURL ('GURL' 'GURL'): another application (through Internet Config,
+ * or a script) asks Aura to open a URL, the direct object as text. It
+ * opens in a new tab of the front window, or in a new window when the
+ * preference says so. */
+static pascal OSErr ae_get_url(const AppleEvent *e, AppleEvent *reply, long refcon)
+{
+    (void)reply, (void)refcon;
+    DescType type;
+    Size size = 0;
+    if (AESizeOfParam((AppleEvent *)e, keyDirectObject, &type, &size) != noErr || size <= 0 || size > 32767)
+        return errAEEventNotHandled;
+    char *buf = au_alloc((size_t)size + 1);
+    Size actual = 0;
+    OSErr err = AEGetParamPtr((AppleEvent *)e, keyDirectObject, typeChar, &type, buf, size, &actual);
+    if (err == noErr && actual > 0 && actual <= size) {
+        char *u = mac_roman_to_utf8(buf, (size_t)actual);
+        /* Trim the spaces and line breaks scripts leave around it. */
+        char *s = u;
+        while (*s == ' ' || *s == '\r' || *s == '\n' || *s == '\t')
+            s++;
+        size_t n = strlen(s);
+        while (n && (s[n - 1] == ' ' || s[n - 1] == '\r' || s[n - 1] == '\n' || s[n - 1] == '\t'))
+            s[--n] = 0;
+        if (*s) {
+            if (g_browser->prefs.external_new_window)
+                browserwin_new(s, NULL);
+            else
+                mac_open_url(s, true);
+        }
+        au_free(u);
+    }
+    au_free(buf);
+    return err == noErr ? noErr : errAEEventNotHandled;
+}
+
 static pascal OSErr ae_quit(const AppleEvent *e, AppleEvent *reply, long refcon)
 {
     (void)e, (void)reply, (void)refcon;
@@ -800,6 +835,7 @@ int main(void)
     AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEPrintDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, NewAEEventHandlerUPP(ae_quit), 0, false);
+    AEInstallEventHandler('GURL', 'GURL', NewAEEventHandlerUPP(ae_get_url), 0, false);
 
     Handle mbar = GetNewMBar(128);
     if (!mbar)

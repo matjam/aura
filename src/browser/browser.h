@@ -80,6 +80,11 @@ typedef struct AuBrowserHost {
     /* The window's last tab closed: the shell closes the window and calls
      * au_browser_window_free. */
     void (*close_window)(void *ctx, AuBrowserWindow *w);
+    /* Optional. An address Aura does not open itself (mailto:, ftp:,
+     * news:...; see au_browser_opens_url) was navigated to: the shell
+     * hands it to a helper application and returns true, or returns
+     * false and the tab shows that Aura cannot open it. */
+    bool (*open_external)(void *ctx, const char *url);
 } AuBrowserHost;
 
 struct AuTab {
@@ -156,6 +161,9 @@ void au_browser_history_changed(AuBrowser *b);
  * ':'), replacing an earlier one; NULL removes it. A network stack calls
  * this for "http" and "https" at start-up, before windows open. */
 void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f);
+/* Whether Aura opens url itself: about:, file:, view-source:, http:,
+ * https:, a scheme with a fetcher, or text without a scheme. */
+bool au_browser_opens_url(const AuBrowser *b, const char *url);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 
@@ -165,7 +173,9 @@ void au_browser_window_free(AuBrowserWindow *w);
 
 /* ---- Tabs ---- */
 /* Opens url (NULL: about:blank) in a new tab at index (-1: after the
- * active tab), activating it when activate is set. */
+ * active tab), activating it when activate is set. Returns NULL when
+ * the host's open_external took the address instead (the window keeps
+ * its tabs; a window's first tab always opens). */
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index);
 /* Closes tab i. Closing the last tab asks the host to close the window. */
 void au_bw_close_tab(AuBrowserWindow *w, int i);

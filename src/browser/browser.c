@@ -761,6 +761,7 @@ bool au_bw_can_zoom(AuBrowserWindow *w, int dir)
 }
 
 static bool fresh_blank(AuTab *t);
+static bool hand_off(AuBrowser *b, const char *url);
 
 /* Loads url into tab t as a new back/forward entry. */
 static void load_new(AuTab *t, const char *url)
@@ -779,6 +780,8 @@ static void load_new(AuTab *t, const char *url)
 
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index)
 {
+    if (w->ntabs > 0 && hand_off(w->browser, url))
+        return NULL;
     if (index < 0)
         index = w->active >= 0 ? w->active + 1 : w->ntabs;
     AuTab *t = make_tab(w, index);
@@ -987,10 +990,33 @@ void au_bw_move_tab(AuBrowserWindow *w, int from, int to)
 
 /* ---- Navigation ---- */
 
+bool au_browser_opens_url(const AuBrowser *b, const char *url)
+{
+    size_t n = au_url_scheme_len(url, strlen(url));
+    if (!n)
+        return true;
+    static const char *const own[] = {"about", "file", "view-source", "http", "https"};
+    for (size_t i = 0; i < sizeof own / sizeof own[0]; i++)
+        if (au_url_scheme_is(url, own[i]))
+            return true;
+    for (int i = 0; i < b->nfetchers; i++)
+        if (strlen(b->fetchers[i].scheme) == n && !strncmp(b->fetchers[i].scheme, url, n))
+            return true;
+    return false;
+}
+
+/* An address Aura does not open itself goes to the host (a helper
+ * application); true when the host took it. */
+static bool hand_off(AuBrowser *b, const char *url)
+{
+    return url && b->host.open_external && !au_browser_opens_url(b, url) &&
+           b->host.open_external(b->host.ctx, url);
+}
+
 void au_bw_navigate(AuBrowserWindow *w, const char *url)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (!t)
+    if (!t || hand_off(w->browser, url))
         return;
     bool typing = au_bw_typing(w);
     if (!typing) {
@@ -1006,10 +1032,19 @@ void au_bw_navigate(AuBrowserWindow *w, const char *url)
 void au_bw_navigate_input(AuBrowserWindow *w, const char *text)
 {
     char *url = au_url_from_input(text, w->browser->prefs.search_template, NULL);
-    if (url) {
+    if (!url)
+        return;
+    if (au_bw_active_tab(w) && hand_off(w->browser, url)) {
+        /* A helper application took it: the field shows the page's
+         * address again and the page keeps the focus. */
+        au_free(w->field);
+        w->field = NULL;
+        invalidate(w, w->layout.toolbar);
+        changed(w, AU_CHANGED_FIELD | AU_CHANGED_FOCUS_PAGE);
+    } else {
         au_bw_navigate(w, url);
-        au_free(url);
     }
+    au_free(url);
 }
 
 void au_bw_go(AuBrowserWindow *w, int delta)

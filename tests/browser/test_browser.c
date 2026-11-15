@@ -166,7 +166,7 @@ static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 
 static AuBrowser *make_browser(AuFontSet *fonts)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close};
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL};
     return au_browser_new(fonts, &h);
 }
 
@@ -283,6 +283,55 @@ static void test_tabs(AuFontSet *fonts)
 /* The focus rule: the page has the focus after navigation and tab
  * switches unless the user is typing in the field; a fresh blank tab puts
  * it in the field. */
+static char external_url[256];
+static bool external_ok;
+static bool t_external(void *ctx, const char *url)
+{
+    (void)ctx;
+    snprintf(external_url, sizeof external_url, "%s", url);
+    return external_ok;
+}
+
+/* Addresses Aura does not open go to the host's helper applications. */
+static void test_external(AuFontSet *fonts)
+{
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, t_external};
+    AuBrowser *b = au_browser_new(fonts, &h);
+    CHECK(au_browser_opens_url(b, "http://a/") && au_browser_opens_url(b, "HTTPS://a/") &&
+          au_browser_opens_url(b, "file:///x") && au_browser_opens_url(b, "about:home") &&
+          au_browser_opens_url(b, "view-source:http://a/") && au_browser_opens_url(b, "no scheme"));
+    CHECK(!au_browser_opens_url(b, "mailto:a@b.c") && !au_browser_opens_url(b, "ftp://h/f") &&
+          !au_browser_opens_url(b, "news:comp.sys.mac"));
+    AuPageFetcher f;
+    memset(&f, 0, sizeof f);
+    au_browser_set_fetcher(b, "gopher", &f);
+    CHECK(au_browser_opens_url(b, "gopher://h/"));
+
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "about:home", true, -1);
+    external_ok = true;
+    external_url[0] = 0;
+    au_bw_navigate(w, "mailto:someone@example.com");
+    CHECK_STR(external_url, "mailto:someone@example.com");
+    CHECK_STR(au_page_url(au_bw_active_tab(w)->page), "about:home"); /* stays */
+    CHECK(au_bw_active_tab(w)->nav.n == 1);
+    CHECK(au_bw_new_tab(w, "ftp://h/f", false, -1) == NULL && w->ntabs == 1);
+    CHECK_STR(external_url, "ftp://h/f");
+    /* Typed in the address field: the field shows the page again. */
+    au_bw_set_field_focus(w, true);
+    au_bw_set_field_text(w, "mailto:x@y.z");
+    focus_last = 0;
+    au_bw_navigate_input(w, "mailto:x@y.z");
+    CHECK_STR(external_url, "mailto:x@y.z");
+    CHECK_STR(au_bw_field_text(w), "about:home");
+    CHECK(focus_last == AU_CHANGED_FOCUS_PAGE);
+    /* Without a helper the tab shows that it cannot open the address. */
+    external_ok = false;
+    au_bw_navigate(w, "news:comp.sys.mac");
+    CHECK_STR(au_page_url(au_bw_active_tab(w)->page), "news:comp.sys.mac");
+    au_browser_free(b);
+}
+
 static void test_focus(AuFontSet *fonts)
 {
     AuBrowser *b = make_browser(fonts);
@@ -1110,6 +1159,7 @@ int main(void)
     test_nav();
     test_tabs(fonts);
     test_focus(fonts);
+    test_external(fonts);
     test_mouse(fonts);
     test_history();
     test_bookmarks();

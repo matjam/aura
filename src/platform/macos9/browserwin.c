@@ -508,6 +508,13 @@ static void host_close(void *ctx, AuBrowserWindow *w)
         b->closing = true;
 }
 
+/* mailto:, ftp: and other addresses go to their Internet Config helper. */
+static bool host_external(void *ctx, const char *url)
+{
+    (void)ctx;
+    return mac_ic_launch_url(url);
+}
+
 static uint32_t host_ms(void *ctx)
 {
     (void)ctx;
@@ -535,6 +542,7 @@ void browserwin_host(AuBrowserHost *h)
     h->invalidate = host_invalidate;
     h->changed = host_changed;
     h->close_window = host_close;
+    h->open_external = host_external;
 }
 
 /* ---- Events ---- */

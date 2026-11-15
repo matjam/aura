@@ -20,7 +20,7 @@ enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
 /* Field ids: one per control whose value is a preference or an action. */
 typedef enum {
     F_NONE,
-    F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH,
+    F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH, F_EXT_WINDOW, F_DEFAULT_BROWSER,
     F_SERIF, F_SANS, F_MONO, F_SIZE, F_SIZE_MONO, F_SIZE_MIN,
     F_JS, F_IMAGES, F_POPUPS,
     F_DNT, F_GPC, F_HTTPS_FIRST, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
@@ -43,6 +43,7 @@ typedef struct PrefsWin {
     Field last_click;     /* for double-clicks */
     unsigned long last_click_ticks;
     AuTabPosition orig_tabs;
+    ControlHandle default_label; /* beside Make Aura the Default Browser */
     char **families;
     int nfamilies;
 } PrefsWin;
@@ -214,6 +215,14 @@ static void build(PrefsWin *p)
     small_label(p, 0, X, y, R - X, 30,
                 "Text in the address field that is not a web address is searched for with this URL; %s stands "
                 "for the words.");
+    y += 36;
+    label(p, 0, L, y, 130, "Links from other");
+    label(p, 0, L, (short)(y + 14), 130, "applications:");
+    check(p, 0, F_EXT_WINDOW, X, (short)(y + 1), R - X, "Open in a new window (else in a new tab)");
+    y += 34;
+    push(p, 0, F_DEFAULT_BROWSER, X, y, 220, "Make Aura the Default Browser");
+    p->default_label = make(p, 0, kAuControlStaticTextProc, (short)(X + 230), (short)(y + 3), R - X - 230, 16, NULL,
+                            0, 0, 0);
 
     /* Fonts */
     y = 52;
@@ -311,7 +320,22 @@ static void build(PrefsWin *p)
     label(p, 5, L, y, 130, "Save files in:");
     edit(p, 5, F_DL_FOLDER, X, y, R - X);
     y += 24;
-    small_label(p, 5, X, y, R - X, 30, "A folder path such as Macintosh HD:Downloads. Leave it empty for the desktop.");
+    {
+        /* Empty means Internet Config's download folder, when set. */
+        char hint[200];
+        FSSpec dl;
+        if (mac_ic_download_folder(&dl)) {
+            char *name = mac_roman_to_utf8((const char *)dl.name + 1, dl.name[0]);
+            snprintf(hint, sizeof hint,
+                     "A folder path such as Macintosh HD:Downloads. Leave it empty for Internet Config's download "
+                     "folder (%s).",
+                     name);
+            au_free(name);
+        } else {
+            snprintf(hint, sizeof hint, "%s", "A folder path such as Macintosh HD:Downloads. Leave it empty for the desktop.");
+        }
+        small_label(p, 5, X, y, R - X, 30, hint);
+    }
     y += 40;
     check(p, 5, F_DECODE, L, y, 400, "Decode MacBinary and BinHex files after downloading");
     y += 30;
@@ -345,6 +369,28 @@ static void select_family(PrefsWin *p, Field f, const char *fam)
             SetControlValue(p->field[f], (short)(i + 1));
 }
 
+/* The text beside the default browser button: whether Aura is the
+ * Internet Config helper for http. Reading the setting changes
+ * nothing; only the button's click writes it. */
+static void show_default_state(PrefsWin *p, bool redraw)
+{
+    const char *text;
+    if (!mac_ic_available()) {
+        text = "Internet Config is not available.";
+        HiliteControl(p->field[F_DEFAULT_BROWSER], 255);
+    } else if (mac_ic_is_default_browser()) {
+        text = "Aura is the default.";
+    } else {
+        text = "";
+    }
+    size_t n;
+    char *r = mac_utf8_to_roman(text, &n);
+    SetControlData(p->default_label, 0, kAuControlStaticTextTextTag, (Size)n, r);
+    au_free(r);
+    if (redraw)
+        Draw1Control(p->default_label);
+}
+
 static void load(PrefsWin *p, const AuPrefs *pr)
 {
     set_text(p->field[F_HOME], pr->home_page);
@@ -352,6 +398,8 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     SetControlValue(p->field[F_TABS_TOP], pr->tab_position == AU_TABS_TOP);
     SetControlValue(p->field[F_TABS_LEFT], pr->tab_position == AU_TABS_LEFT);
     set_text(p->field[F_SEARCH], pr->search_template);
+    SetControlValue(p->field[F_EXT_WINDOW], pr->external_new_window);
+    show_default_state(p, false);
     select_family(p, F_SERIF, pr->font_serif);
     select_family(p, F_SANS, pr->font_sans);
     select_family(p, F_MONO, pr->font_mono);
@@ -409,6 +457,7 @@ static void store(PrefsWin *p, AuPrefs *pr)
     pr->startup = (AuStartup)clampi(GetControlValue(p->field[F_STARTUP]) - 1, 0, 2);
     pr->tab_position = GetControlValue(p->field[F_TABS_LEFT]) ? AU_TABS_LEFT : AU_TABS_TOP;
     store_str(&pr->search_template, p->field[F_SEARCH]);
+    pr->external_new_window = GetControlValue(p->field[F_EXT_WINDOW]) != 0;
     store_family(p, &pr->font_serif, F_SERIF);
     store_family(p, &pr->font_sans, F_SANS);
     store_family(p, &pr->font_mono, F_MONO);
@@ -666,6 +715,13 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         Draw1Control(p->field[F_HOME]);
         break;
     }
+    case F_DEFAULT_BROWSER:
+        /* The one place Aura writes Internet Config: the http, https and
+         * file helpers become Aura. */
+        if (!mac_ic_make_default_browser())
+            SysBeep(1);
+        show_default_state(p, true);
+        break;
     case F_CLEAR_HISTORY:
         au_history_clear(&g_browser->history);
         au_browser_history_changed(g_browser);
