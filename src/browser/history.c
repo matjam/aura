@@ -251,7 +251,7 @@ void au_history_serialize(const AuHistory *h, AuBuf *out)
 
 static bool parse_num(const char *s, size_t n, int64_t *out)
 {
-    if (n == 0 || n > 19)
+    if (n == 0)
         return false;
     bool neg = false;
     size_t i = 0;
@@ -261,6 +261,9 @@ static bool parse_num(const char *s, size_t n, int64_t *out)
         if (n == 1)
             return false;
     }
+    /* 18 digits always fit an int64_t; 19 can overflow it. */
+    if (n - i > 18)
+        return false;
     int64_t v = 0;
     for (; i < n; i++) {
         if (!au_is_digit((unsigned char)s[i]))

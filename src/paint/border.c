@@ -117,8 +117,8 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
     AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
     au_canvas_get_translation(c, &tx, &ty);
     float dx = tx - ox, dy = ty - oy;
-    AuIRect area = {(int)floorf(box.x + dx), (int)floorf(box.y + dy), (int)ceilf(box.x + box.w + dx) + 1,
-                    (int)ceilf(box.y + box.h + dy) + 1};
+    AuIRect area = {au_f2px(floorf(box.x + dx)), au_f2px(floorf(box.y + dy)), au_f2px(ceilf(box.x + box.w + dx)) + 1,
+                    au_f2px(ceilf(box.y + box.h + dy)) + 1};
     area = au_irect_intersect(area, clip);
     if (au_irect_empty(area)) {
         au_path_free(&ring);

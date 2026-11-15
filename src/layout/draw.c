@@ -919,8 +919,8 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     const AuSurface *px = NULL;
     if (gradient) {
         /* No intrinsic size: auto is the origin box (CSS Backgrounds 3). */
-        iw = (int)ceilf(origin_box.w);
-        ih = (int)ceilf(origin_box.h);
+        iw = au_f2px(ceilf(origin_box.w));
+        ih = au_f2px(ceilf(origin_box.h));
         if (iw <= 0 || ih <= 0)
             return;
     } else {
@@ -964,7 +964,7 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         /* A vector image is drawn at the tile size. */
         char abs[2048];
         if (P->L->env.resolve_url && P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs))
-            P->L->env.image_use(P->L->env.ctx, abs, (int)ceilf(tw), (int)ceilf(th));
+            P->L->env.image_use(P->L->env.ctx, abs, au_f2px(ceilf(tw)), au_f2px(ceilf(th)));
     }
     float px0 = origin_box.x + bg_len(ly->position_x, origin_box.w - tw) * 1;
     float py0 = origin_box.y + bg_len(ly->position_y, origin_box.h - th);
@@ -1731,7 +1731,7 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     case LR_IMAGE:
         if (r && r->pixels) {
             if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
-                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(cb.w), (int)ceilf(cb.h));
+                P->L->env.image_use(P->L->env.ctx, r->url, au_f2px(ceilf(cb.w)), au_f2px(ceilf(cb.h)));
             const AuSurface *px = r->pixels;
             au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, cb,
                           s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST

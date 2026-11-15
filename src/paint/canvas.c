@@ -66,7 +66,7 @@ static int round_px(float v)
         return 100000000;
     if (v < -1e8f)
         return -100000000;
-    return (int)floorf(v + 0.5f);
+    return au_f2px(floorf(v + 0.5f));
 }
 
 void au_canvas_clip_push(AuCanvas *c, AuRect r)
@@ -117,8 +117,8 @@ AuSurface *au_canvas_current(AuCanvas *c, int *ox, int *oy, AuIRect *clip)
 
 void au_canvas_group_begin(AuCanvas *c, AuRect bounds)
 {
-    AuIRect b = {(int)floorf(bounds.x + c->tx), (int)floorf(bounds.y + c->ty),
-                 (int)ceilf(bounds.x + bounds.w + c->tx), (int)ceilf(bounds.y + bounds.h + c->ty)};
+    AuIRect b = {au_f2px(floorf(bounds.x + c->tx)), au_f2px(floorf(bounds.y + c->ty)),
+                 au_f2px(ceilf(bounds.x + bounds.w + c->tx)), au_f2px(ceilf(bounds.y + bounds.h + c->ty))};
     b = au_irect_intersect(b, c->clips[c->nclips - 1]);
     if (c->ngroups) {
         Group *pg = &c->groups[c->ngroups - 1];
@@ -220,7 +220,7 @@ bool au_canvas_layer_begin(AuCanvas *c, AuRect bounds)
     /* Written so that NaN fails. */
     if (!(x0 > -1e6f && y0 > -1e6f && x1 < 1e6f && y1 < 1e6f && bounds.w > 0 && bounds.h > 0))
         return false;
-    AuIRect b = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1)};
+    AuIRect b = {au_f2px(floorf(x0)), au_f2px(floorf(y0)), au_f2px(ceilf(x1)), au_f2px(ceilf(y1))};
     if ((double)(b.x1 - b.x0) * (b.y1 - b.y0) > 4.0 * 1024 * 1024)
         return false;
     if (c->ngroups == c->group_cap) {
@@ -283,8 +283,8 @@ void au_canvas_layer_end(AuCanvas *c, const AuMatrix *m, float opacity)
         }
         if (minx < -1e6f || miny < -1e6f || maxx > 1e6f || maxy > 1e6f)
             minx = miny = maxx = maxy = 0; /* absurd: draw nothing */
-        AuIRect r = {(int)floorf(minx) - ox, (int)floorf(miny) - oy, (int)ceilf(maxx) - ox + 1,
-                     (int)ceilf(maxy) - oy + 1};
+        AuIRect r = {au_f2px(floorf(minx)) - ox, au_f2px(floorf(miny)) - oy, au_f2px(ceilf(maxx)) - ox + 1,
+                     au_f2px(ceilf(maxy)) - oy + 1};
         r = au_irect_intersect(r, clip);
         for (int y = r.y0; y < r.y1; y++) {
             AuPixel *row = dst->pixels + (size_t)y * dst->stride;
@@ -397,7 +397,7 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
     /* Horizontal coverage of the first and last columns. */
     float lc = 1.0f - (x0 - floorf(x0)); /* left column, if partial */
     float rc = x1 - floorf(x1);           /* right column, if partial */
-    int lcol = (int)floorf(x0), rcol = (int)floorf(x1);
+    int lcol = au_f2px(floorf(x0)), rcol = au_f2px(floorf(x1));
     for (int y = ir.y0; y < ir.y1; y++) {
         float top = (float)y > y0 ? (float)y : y0;
         float bot = (float)(y + 1) < y1 ? (float)(y + 1) : y1;
