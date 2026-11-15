@@ -175,6 +175,8 @@ struct AuJs {
     /* statistics */
     uint32_t errors, interrupts;
     size_t live_bytes; /* bytes the runtime holds (runtime.c allocator) */
+    size_t gc_base;   /* live_bytes after the last collection the bindings ran */
+    double last_ran;  /* when a task or timer last ran (now_ms clock) */
     bool oom;          /* an allocation was refused: the reserve is open */
 };
 

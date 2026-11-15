@@ -704,6 +704,10 @@ bool au_js_eval(AuJs *js, const char *src, size_t len, AuBuf *out)
         au_js_memory_report(js, out); /* for aura-host chrome --do js:aura:memory */
         return true;
     }
+    if (len == 7 && !memcmp(src, "aura:gc", 7)) {
+        au_js_gc(js); /* --do js:aura:gc */
+        return true;
+    }
     js_enter(js);
     char *copy = au_strndup(src, len);
     JSValue r = JS_Eval(ctx, copy, len, "<eval>", JS_EVAL_TYPE_GLOBAL);
@@ -742,6 +746,7 @@ void au_js_gc(AuJs *js)
     js_drain_pending(js);
     JS_RunGC(js->rt);
     js_drain_pending(js);
+    js->gc_base = js->live_bytes;
 }
 
 void au_js_stats(const AuJs *js, AuJsStats *s)
