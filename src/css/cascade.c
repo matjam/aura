@@ -163,6 +163,16 @@ struct AuCssResolver {
     bool has_has;
     bool styled_once;
     bool full_restyle;
+    /* What depends on the viewport. media_deps holds every media query
+     * the index evaluated, with its result (the lists belong to the
+     * sheets and are valid while the index is). viewport_styles is set
+     * once a computed style used a viewport unit. viewport_pending: the
+     * viewport changed without flipping a media query, and the styles
+     * that use viewport units are not yet computed again. */
+    struct MediaDep *media_deps;
+    uint32_t nmedia_deps, media_deps_cap;
+    bool viewport_styles;
+    bool viewport_pending;
 
     RuleEntry *entries;
     uint32_t nentries, entries_cap;
@@ -660,10 +670,26 @@ static void add_entries(AuCssResolver *r, const AuSelList *sel, const AuCssDeclB
     }
 }
 
+typedef struct MediaDep {
+    const AuCssMediaList *media;
+    bool result;
+} MediaDep;
+
+/* Evaluates a media query for the index and records it, so that a
+ * viewport change can tell whether any result changes. */
+static bool media_dep(AuCssResolver *r, const AuCssMediaList *m)
+{
+    bool ok = css_media_eval(m, &r->dev);
+    MediaDep *d = CSS_PUSH(r->media_deps, r->nmedia_deps, r->media_deps_cap);
+    d->media = m;
+    d->result = ok;
+    return ok;
+}
+
 static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer, uint32_t *order, Frame **stack,
                        uint32_t *sn, uint32_t *scap)
 {
-    if (sheet->media && !css_media_eval(sheet->media, &r->dev))
+    if (sheet->media && !media_dep(r, sheet->media))
         return;
     LayerTree *lt = &r->layers[sheet->origin];
     for (uint32_t i = 0; i < sheet->nprops; i++)
@@ -700,7 +726,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             add_entries(r, ru->sel, &ru->decls, f.sheet->origin, f.layer, order, true);
             break;
         case RULE_MEDIA:
-            descend = css_media_eval(ru->media, &r->dev);
+            descend = media_dep(r, ru->media);
             break;
         case RULE_SUPPORTS:
             descend = ru->ok;
@@ -715,7 +741,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             break;
         case RULE_IMPORT: {
             const AuCssImport *im = &f.sheet->imports[ru->index];
-            if (!im->sheet || !ru->ok || (ru->media && !css_media_eval(ru->media, &r->dev)))
+            if (!im->sheet || !ru->ok || (ru->media && !media_dep(r, ru->media)))
                 break;
             int32_t il = f.layer;
             if (ru->nlayers)
@@ -748,6 +774,7 @@ static void index_clear(AuCssResolver *r)
     r->uni_start = r->uni_count = 0;
     r->has_has = false;
     r->nprops = 0;
+    r->nmedia_deps = 0;
     deps_clear(r);
 }
 
@@ -856,6 +883,7 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->pending);
     au_free(r->deps);
     au_free(r->entries);
+    au_free(r->media_deps);
     for (int i = 0; i < 3; i++)
         au_free(r->layers[i].n);
     au_free(r->props);
@@ -870,11 +898,45 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r);
 }
 
+/* The devices differ in nothing but the viewport size. */
+static bool device_same_but_viewport(const AuCssDevice *a, const AuCssDevice *b)
+{
+    return a->device_width == b->device_width && a->device_height == b->device_height &&
+           a->resolution == b->resolution && a->print == b->print && a->color_bits == b->color_bits &&
+           a->monochrome_bits == b->monochrome_bits && a->dark == b->dark && a->reduced_motion == b->reduced_motion &&
+           a->reduced_transparency == b->reduced_transparency && a->contrast_more == b->contrast_more &&
+           a->hover == b->hover && a->pointer == b->pointer && a->any_hover == b->any_hover &&
+           a->any_pointer == b->any_pointer && a->scripting == b->scripting && a->forced_colors == b->forced_colors &&
+           a->grid == b->grid;
+}
+
 void au_css_resolver_set_device(AuCssResolver *r, const AuCssDevice *d)
 {
+    bool tracked = r->styled_once && !r->index_dirty && !r->full_restyle && device_same_but_viewport(&r->dev, d);
+    bool same_size = r->dev.width == d->width && r->dev.height == d->height;
     r->dev = *d;
+    if (tracked && same_size)
+        return;
+    if (tracked) {
+        /* Only the viewport changed: the index stands unless a media
+         * query it evaluated has another result now. */
+        bool flipped = false;
+        for (uint32_t i = 0; i < r->nmedia_deps && !flipped; i++)
+            flipped = css_media_eval(r->media_deps[i].media, &r->dev) != r->media_deps[i].result;
+        if (!flipped) {
+            r->viewport_pending = r->viewport_pending || r->viewport_styles;
+            return;
+        }
+    }
     r->index_dirty = true;
     r->full_restyle = true;
+}
+
+int au_css_resolver_viewport_restyle(const AuCssResolver *r)
+{
+    if (!r->styled_once || r->index_dirty || r->full_restyle)
+        return AU_CSS_VIEWPORT_ALL;
+    return r->viewport_pending ? AU_CSS_VIEWPORT_UNITS : AU_CSS_VIEWPORT_NONE;
 }
 
 const AuCssDevice *au_css_resolver_device(const AuCssResolver *r) { return &r->dev; }
@@ -1866,8 +1928,10 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     css_compute_finish(&cs.cc, pdisp);
     if (cs.cc.is_root)
         s->flags |= AU_STYLE_F_ROOT;
-    if (cs.cc.flags & 2)
+    if (cs.cc.flags & 2) {
         s->flags |= AU_STYLE_F_VIEWPORT_UNITS;
+        r->viewport_styles = true;
+    }
     if (cs.cc.flags & 4)
         s->flags |= AU_STYLE_F_HAS_ATTR;
     share_groups(s, parent, NULL);
@@ -2266,21 +2330,54 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
 
 void au_css_style_document(AuCssResolver *r, AuDocument *doc)
 {
+    r->viewport_pending = false;
+    r->viewport_styles = false; /* set again by the styles this pass computes */
     pending_drop(r);
     style_pass(r, doc, false);
 }
 
 uint32_t au_css_resolver_styled_count(const AuCssResolver *r) { return r->styled_count; }
 
+static void mark_ancestors(AuElement *el);
+
+/* Marks the elements whose style (or a pseudo-element's) used a viewport
+ * unit. Their subtrees follow: a descendant can depend on the value only
+ * through inheritance, and the pass goes below an element whose style
+ * changed. */
+static void mark_viewport_styles(AuDocument *doc)
+{
+    const AuNode *root = &doc->node;
+    for (AuNode *n = root->first_child; n; n = au_node_next(n, root)) {
+        if (n->type != AU_NODE_ELEMENT)
+            continue;
+        AuElement *el = (AuElement *)n;
+        const AuStyle *st = au_element_style(el);
+        if (!st)
+            continue;
+        bool uses = (st->flags & AU_STYLE_F_VIEWPORT_UNITS) != 0;
+        for (const AuStyle *ps = st->pseudos; ps && !uses; ps = ps->next)
+            uses = (ps->flags & AU_STYLE_F_VIEWPORT_UNITS) != 0;
+        if (uses) {
+            el->state |= AU_STATE_STYLE_DIRTY;
+            mark_ancestors(el);
+        }
+    }
+}
+
 void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 {
+    if (r->viewport_pending && r->styled_once && !r->full_restyle && !r->index_dirty)
+        mark_viewport_styles(doc);
+    r->viewport_pending = false;
     if (r->styled_once && !r->full_restyle && !r->index_dirty)
         pending_flush(r, doc);
     pending_drop(r);
-    if (!r->styled_once || r->full_restyle || r->index_dirty)
+    if (!r->styled_once || r->full_restyle || r->index_dirty) {
+        r->viewport_styles = false; /* set again by the styles this pass computes */
         style_pass(r, doc, false);
-    else
+    } else {
         style_pass(r, doc, true);
+    }
 }
 
 void au_css_clear_document(AuDocument *doc)

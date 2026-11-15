@@ -969,12 +969,19 @@ static bool update_style(AuDocView *dv)
         /* Only the viewport changed: the document is the same, so the
          * layout compares each box's style and keeps the box tree unless
          * a media query changed what is displayed. */
-        au_css_style_document(dv->resolver, dv->doc);
-        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
-        au_layout_styles_changed(dv->layout);
+        /* The resolver knows what the viewport change reaches: nothing
+         * (no media query changed its result, no style uses viewport
+         * units), the elements that use viewport units, or everything. */
+        if (dv->restyle_needed || au_css_resolver_viewport_restyle(dv->resolver) != AU_CSS_VIEWPORT_NONE) {
+            au_css_restyle(dv->resolver, dv->doc);
+            dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
+            au_layout_styles_changed(dv->layout);
+            changed = true;
+        } else {
+            dv->stats.style_passes--; /* counted above; none ran */
+        }
         dv->viewport_restyle = false;
         dv->restyle_needed = false;
-        changed = true;
     } else if (dv->style_all || dv->tree_dirty) {
         dv->viewport_restyle = false;
         au_css_style_document(dv->resolver, dv->doc);

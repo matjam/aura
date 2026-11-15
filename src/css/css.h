@@ -640,7 +640,20 @@ typedef struct AuCssResolver AuCssResolver;
 
 AuCssResolver *au_css_resolver_new(void);
 void au_css_resolver_free(AuCssResolver *r);
+/* Sets the device. When only the viewport size differs from the current
+ * device and the document has been styled, the resolver evaluates again
+ * the media queries its rule index read: if none has another result, the
+ * index is kept and au_css_restyle computes again only the elements whose
+ * styles use viewport units (and what inherits from them), or nothing.
+ * Any other difference restyles the document. */
 void au_css_resolver_set_device(AuCssResolver *r, const AuCssDevice *d);
+/* What the next au_css_restyle computes because of device changes. */
+enum {
+    AU_CSS_VIEWPORT_NONE = 0, /* nothing */
+    AU_CSS_VIEWPORT_UNITS,    /* the elements whose styles use viewport units */
+    AU_CSS_VIEWPORT_ALL       /* every element */
+};
+int au_css_resolver_viewport_restyle(const AuCssResolver *r);
 const AuCssDevice *au_css_resolver_device(const AuCssResolver *r);
 void au_css_resolver_set_metrics(AuCssResolver *r, AuCssMetricsFn fn, void *ctx);
 /* Sets the font preferences (copied) and restyles everything. A new
