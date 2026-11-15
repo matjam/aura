@@ -64,6 +64,7 @@ void mac_out_of_memory(size_t wanted)
         DisposeHandle(reserve);
         reserve = NULL;
     }
+    mac_net_emergency_close();
     Str255 num;
     NumToString((long)wanted, num);
     ParamText(num, (ConstStringPtr) "\p", (ConstStringPtr) "\p", (ConstStringPtr) "\p");

@@ -161,6 +161,9 @@ void mac_net_save(bool force);
 /* At quit, after the last page is gone: privacy clearing, the last save,
  * then everything is freed in reverse order. */
 void mac_net_quit(void);
+/* Closes Open Transport at once, allocating nothing: before ExitToShell
+ * on the out-of-memory path, so no notifier outlives the heap. */
+void mac_net_emergency_close(void);
 void mac_net_clear_cookies(void);
 void mac_net_clear_cache(void);
 struct AuCookieJar;

@@ -583,6 +583,21 @@ void mac_net_rules_changed(void)
     g_browser->prefs_gen++;
 }
 
+/* Open Transport's notifiers point into Aura's heap, and with Apple's
+ * glue absent nothing closes Aura's client at ExitToShell: an exit with
+ * providers open leaves the system calling into freed memory (the guest
+ * froze after the out-of-memory alert). Closing allocates nothing. */
+void mac_net_emergency_close(void)
+{
+    if (N.ot) {
+        au_ot_net_free(N.ot);
+        N.ot = NULL;
+        N.ot_tried = true;
+        N.ot_tried_ms = au_mac_clock_ms();
+        snprintf(N.offline, sizeof N.offline, "Open Transport was closed.");
+    }
+}
+
 void mac_net_quit(void)
 {
     if (!N.net)
