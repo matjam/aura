@@ -2449,6 +2449,12 @@ static void main_done(AuPage *p, bool ok, const AuFetchInfo *info)
         p->failed = true;
     p->main_done = true;
     p->dirty = true;
+    /* The source is complete: give back the room its buffer grew beyond
+     * its length (up to as much again). */
+    if (p->source.cap > p->source.len + 1 && p->source.len) {
+        p->source.data = au_realloc(p->source.data, p->source.len + 1);
+        p->source.cap = p->source.len + 1;
+    }
     report_progress(p);
 }
 
