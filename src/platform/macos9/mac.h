@@ -115,6 +115,9 @@ bool mac_read_file_url(const char *url, char **data, size_t *len);
 /* Asks for a file with the standard Open dialog; returns a file: URL to
  * free with au_free, or NULL. */
 char *mac_choose_file_url(void);
+/* File > Save Page As: asks for a file (StandardPutFile) and writes the
+ * active page's source to it, type TEXT, creator AURA. */
+void mac_save_page(AuBrowserWindow *w);
 
 /* ---- contextmenu.c ---- */
 /* Finds the Contextual Menu Manager (call once at start-up). */

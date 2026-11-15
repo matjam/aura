@@ -136,6 +136,11 @@ const char *au_page_title(const AuPage *p); /* "" when the page has none */
 bool au_page_loading(const AuPage *p);
 float au_page_progress(const AuPage *p);    /* 0..1 while loading */
 AuSecurity au_page_security(const AuPage *p);
+/* The main document's bytes as they arrived (for Save Page As): false
+ * while it is loading, after a failed or stopped load, and for pages
+ * that have none (about:scene). The bytes stay valid until the next
+ * load or au_page_free. */
+bool au_page_source(const AuPage *p, const char **data, size_t *len);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */
 void au_page_set_viewport(AuPage *p, int width, int height);

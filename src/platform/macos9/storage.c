@@ -320,6 +320,65 @@ bool mac_read_file_url(const char *url, char **data, size_t *len)
     return ok;
 }
 
+static OSErr write_spec(FSSpec *spec, const char *data, size_t len)
+{
+    OSErr err = FSpCreate(spec, 'AURA', 'TEXT', smSystemScript);
+    if (err == dupFNErr) {
+        /* Replacing: keep the file, give it Aura's type and creator. */
+        FInfo fi;
+        err = FSpGetFInfo(spec, &fi);
+        if (err == noErr) {
+            fi.fdType = 'TEXT';
+            fi.fdCreator = 'AURA';
+            err = FSpSetFInfo(spec, &fi);
+        }
+    }
+    if (err != noErr)
+        return err;
+    short ref;
+    err = FSpOpenDF(spec, fsRdWrPerm, &ref);
+    if (err != noErr)
+        return err;
+    long count = (long)len;
+    err = SetEOF(ref, 0);
+    if (err == noErr)
+        err = FSWrite(ref, &count, data);
+    OSErr cerr = FSClose(ref);
+    if (err == noErr)
+        err = cerr;
+    if (err == noErr)
+        FlushVol(NULL, spec->vRefNum);
+    return err;
+}
+
+void mac_save_page(AuBrowserWindow *w)
+{
+    char name[128];
+    au_bw_save_name(w, name, sizeof name);
+    Str255 pname;
+    mac_pstr(name, pname);
+    if (pname[0] > 31)
+        pname[0] = 31;
+    StandardFileReply reply;
+    memset(&reply, 0, sizeof reply);
+    StandardPutFile((ConstStringPtr) "\pSave page source as:", pname, &reply);
+    if (!reply.sfGood)
+        return;
+    /* Fetch the bytes after the dialog: nothing loads while it is up,
+     * but the page could have changed before. */
+    const char *data;
+    size_t len;
+    OSErr err = au_bw_page_source(w, &data, &len) ? write_spec(&reply.sfFile, data, len) : fnfErr;
+    if (err != noErr) {
+        Str255 msg;
+        char line[96];
+        snprintf(line, sizeof line, "The page could not be saved (error %d).", (int)err);
+        mac_pstr(line, msg);
+        ParamText(msg, (ConstStringPtr) "\p", (ConstStringPtr) "\p", (ConstStringPtr) "\p");
+        StopAlert(132, NULL);
+    }
+}
+
 char *mac_choose_file_url(void)
 {
     StandardFileReply reply;

@@ -44,7 +44,7 @@ resource 'MENU' (128, "Apple") {
 };
 
 resource 'MENU' (129, "File") {
-	129, textMenuProc, 0x7FFFFF6F, enabled, "File",
+	129, textMenuProc, 0x7FFFFD6F, enabled, "File",
 	{
 		"New Window", noIcon, "N", noMark, plain;
 		"New Tab", noIcon, "T", noMark, plain;
@@ -53,6 +53,8 @@ resource 'MENU' (129, "File") {
 		"-", noIcon, noKey, noMark, plain;
 		"Close Tab", noIcon, "W", noMark, plain;
 		"Close Window", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Save Page As...", noIcon, "S", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Quit", noIcon, "Q", noMark, plain
 	}
@@ -234,6 +236,25 @@ resource 'DITL' (130) {
 		{12, 70, 70, 346}, StaticText { disabled,
 			"Aura ran out of memory (^0 bytes requested) and has to quit. "
 			"Give it a larger partition in the Finder's Get Info window." }
+	}
+};
+
+/* 132: a file error; ^0 says what failed. */
+resource 'ALRT' (132) {
+	{0, 0, 100, 360}, 132,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (132) {
+	{
+		{68, 278, 88, 346}, Button { enabled, "OK" };
+		{12, 70, 60, 346}, StaticText { disabled, "^0" }
 	}
 };
 

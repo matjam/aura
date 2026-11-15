@@ -15,7 +15,7 @@ enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMen
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
-       FILE_QUIT = 9 };
+       FILE_SAVE_AS = 9, FILE_QUIT = 11 };
 enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
        EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
@@ -272,6 +272,12 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_CLOSE_WINDOW);
     else
         DisableItem(file, FILE_CLOSE_WINDOW);
+    const char *src_data;
+    size_t src_len;
+    if (w && au_bw_page_source(w, &src_data, &src_len))
+        EnableItem(file, FILE_SAVE_AS);
+    else
+        DisableItem(file, FILE_SAVE_AS);
     /* Undo, Cut, Copy, Paste, Clear and Select All need a text field (or
      * a desk accessory, which takes them through SystemEdit). */
     WindowPtr fw = FrontWindow();
@@ -422,6 +428,10 @@ static void do_menu(long choice)
                 close_window(FrontWindow());
             break;
         case FILE_CLOSE_WINDOW: close_window(FrontWindow()); break;
+        case FILE_SAVE_AS:
+            if (w)
+                mac_save_page(w);
+            break;
         case FILE_QUIT: g_quitting = true; break;
         }
         break;

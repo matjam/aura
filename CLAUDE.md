@@ -215,6 +215,14 @@ the active page is wider than it (`au_chrome_layout_hscroll`); the two
 bars meet at a blank corner square above the grow box, and Shift turns
 a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 
+To change Save Page As, see `au_page_source` (the page keeps the main
+document's bytes as they arrived, until the next load), `au_bw_save_name`
+(the suggested file name) and `mac_save_page` in `storage.c`, which asks
+with `StandardPutFile` and writes the bytes unchanged as a TEXT file with
+creator AURA. Open Location selects the whole address again when the
+field already has the focus, and a paste into the field turns line
+breaks into spaces.
+
 To change what a contextual menu offers, edit `src/browser/context.c`:
 `au_bw_context_menu` builds the items for a window point (link, image,
 page, address field or tab, using `au_page_hit_info` for the page) and

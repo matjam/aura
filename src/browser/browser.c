@@ -926,6 +926,38 @@ void au_bw_view_source(AuBrowserWindow *w)
     au_buf_free(&u);
 }
 
+bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_source(t->page, data, len);
+}
+
+void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap)
+{
+    AuTab *t = au_bw_active_tab(w);
+    char name[256], host[256];
+    name[0] = host[0] = 0;
+    if (t) {
+        const char *u = au_page_url(t->page);
+        if (!strncmp(u, "view-source:", 12))
+            u += 12;
+        au_url_host(u, host, sizeof host);
+        au_download_name_from_url(u, name, sizeof name);
+        /* A directory URL names its host: use the title instead. */
+        const char *title = au_page_title(t->page);
+        if ((!name[0] || !strcmp(name, host)) && *title)
+            snprintf(name, sizeof name, "%s", title);
+    }
+    if (!name[0])
+        snprintf(name, sizeof name, "%s", "page");
+    if (!strchr(name, '.') || !strcmp(name, host)) {
+        size_t n = strlen(name);
+        if (n + 6 < sizeof name)
+            memcpy(name + n, ".html", 6);
+    }
+    au_hfs_sanitize(name, NULL, NULL, out, cap);
+}
+
 AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *title)
 {
     AuBookmark *have = au_bookmark_find_url(&b->bookmarks, url);

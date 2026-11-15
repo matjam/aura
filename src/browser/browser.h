@@ -201,6 +201,11 @@ AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *t
  * (file, http and https pages only). */
 bool au_bw_can_view_source(AuBrowserWindow *w);
 void au_bw_view_source(AuBrowserWindow *w);
+/* Save Page As: the active page's source (au_page_source) and a file
+ * name to suggest (from the URL, else the title, with ".html" when it
+ * has no extension; HFS-safe, cap >= 128). */
+bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len);
+void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap);
 
 /* ---- Selection and find (active tab) ---- */
 bool au_bw_has_selection(AuBrowserWindow *w);

@@ -312,6 +312,13 @@ static void focus_field(BrowserWin *b, bool on)
 
 void browserwin_focus_field(BrowserWin *b)
 {
+    /* Open Location (Command-L) selects the whole address again when the
+     * field already has the focus, ready to type over. */
+    if (b->field_focus) {
+        SetPort((GrafPtr)b->base.win);
+        field_scroll_home(b);
+        TESetSelect(0, 32767, b->te);
+    }
     focus_field(b, true);
     flush(b);
 }
@@ -888,11 +895,23 @@ static bool bw_edit(MacWin *mw, int item)
         ZeroScrap();
         TEToScrap();
         return true;
-    case 5:
+    case 5: {
         undo_snapshot(b);
         TEFromScrap();
+        /* The field is one line: pasted line breaks and tabs become
+         * spaces (an address copied across lines still works). */
+        Handle scrap = TEScrapHandle();
+        long n = TEGetScrapLength();
+        if (scrap && *scrap) {
+            for (long i = 0; i < n; i++) {
+                char c = (*scrap)[i];
+                if (c == '\r' || c == '\n' || c == '\t')
+                    (*scrap)[i] = ' ';
+            }
+        }
         TEPaste(b->te);
         break;
+    }
     case 6:
         undo_snapshot(b);
         TEDelete(b->te);

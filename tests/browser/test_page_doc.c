@@ -790,6 +790,53 @@ static void test_context_menu(void)
     au_browser_free(b);
 }
 
+static const char *find_mem(const char *name)
+{
+    for (size_t i = 0; i < sizeof mem_files / sizeof mem_files[0]; i++)
+        if (!strcmp(mem_files[i].name, name))
+            return mem_files[i].text;
+    return NULL;
+}
+
+/* Save Page As: the bytes as they arrived, and the suggested name. */
+static void test_save_source(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/ctx.html", true, -1);
+    const char *data;
+    size_t len;
+    CHECK(!au_bw_page_source(w, &data, &len)); /* still loading */
+    settle(w);
+    CHECK(au_bw_page_source(w, &data, &len));
+    const char *want = find_mem("ctx.html");
+    CHECK(want && len == strlen(want) && !memcmp(data, want, len));
+    char name[128];
+    au_bw_save_name(w, name, sizeof name);
+    CHECK_STR(name, "ctx.html");
+
+    /* view-source: saves the source too, under the page's name. */
+    au_bw_view_source(w);
+    settle(w);
+    CHECK(au_bw_page_source(w, &data, &len) && len == strlen(want) && !memcmp(data, want, len));
+    au_bw_save_name(w, name, sizeof name);
+    CHECK_STR(name, "ctx.html");
+
+    /* Generated pages have their HTML; a missing file has none. */
+    au_bw_navigate(w, "about:home");
+    settle(w);
+    CHECK(au_bw_page_source(w, &data, &len) && len > 0);
+    au_bw_save_name(w, name, sizeof name);
+    CHECK(strstr(name, ".html") != NULL);
+    au_bw_navigate(w, "file:///mem/missing.html");
+    settle(w);
+    CHECK(!au_bw_page_source(w, &data, &len));
+    au_bw_navigate(w, "about:scene");
+    settle(w);
+    CHECK(!au_bw_page_source(w, &data, &len));
+    au_browser_free(b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -803,6 +850,7 @@ int main(void)
     test_zoom();
     test_selection();
     test_context_menu();
+    test_save_source();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

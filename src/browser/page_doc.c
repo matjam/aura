@@ -103,6 +103,8 @@ struct AuPage {
 
     float zoom; /* text zoom, 1 for none */
 
+    AuBuf source; /* the main document's bytes as they arrived (Save Page As) */
+
     /* Text selection: anchor and focus hold a reference to their node. */
     AuTextPos anchor, focus;
     AuTextRange sel_base; /* the word or paragraph a double or triple click chose */
@@ -807,6 +809,7 @@ static void begin_doc(AuPage *p, const char *url)
 static void load_html_now(AuPage *p, const char *html, size_t len, const char *title)
 {
     begin_doc(p, p->url);
+    au_buf_append(&p->source, html, len);
     au_docview_feed(p->dv, html, len);
     au_docview_finish(p->dv);
     if (title)
@@ -1010,6 +1013,7 @@ static void main_data(AuPage *p, const char *bytes, size_t len)
 {
     if (!p->begun)
         start_main_doc(p, bytes, len, NULL);
+    au_buf_append(&p->source, bytes, len);
     if (p->plain)
         feed_plain(p, bytes, len);
     else
@@ -1098,6 +1102,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
+    au_buf_free(&p->source);
     p->gen++;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     au_free(p->url);
@@ -1278,6 +1283,7 @@ void au_page_free(AuPage *p)
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
+    au_buf_free(&p->source);
     au_docview_free(p->dv); /* cancels nothing more: the fetches are gone */
     au_free(p->fetches);
     au_free(p->url);
@@ -1285,6 +1291,15 @@ void au_page_free(AuPage *p)
     au_free(p->fragment);
     au_free(p->open_url);
     au_free(p);
+}
+
+bool au_page_source(const AuPage *p, const char **data, size_t *len)
+{
+    if (p->kind != K_DOC || !p->main_done || p->failed || !p->source.len)
+        return false;
+    *data = p->source.data;
+    *len = p->source.len;
+    return true;
 }
 
 const char *au_page_url(const AuPage *p) { return p->url; }
