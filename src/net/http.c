@@ -2,6 +2,7 @@
  * authentication, proxies, cookies and HSTS on the wire, timeouts, and
  * the event loop pump. See net.h. */
 #include "auth.h"
+#include "cache.h"
 #include "cookies.h"
 #include "hsts.h"
 #include "http_parse.h"
@@ -123,6 +124,10 @@ struct AuHttpTransfer {
     AuSecurityInfo security;
     char cipher[64];
     char alpn[16];
+    /* cache */
+    AuCacheEntry *cache_entry; /* stale entry being revalidated */
+    AuCacheWriter *cache_w;    /* the response being stored */
+    int64_t request_wall;      /* when the request went out (seconds) */
 };
 
 struct AuNet {
@@ -975,6 +980,16 @@ static void build_request(AuHttpTransfer *t, Conn *c)
         au_buf_puts(&b, "Upgrade-Insecure-Requests: 1\r\n");
     if (t->reload)
         au_buf_puts(&b, "Cache-Control: no-cache\r\nPragma: no-cache\r\n");
+    /* Revalidating a stale cached response. */
+    if (t->cache_entry) {
+        const char *etag = au_cache_entry_etag(t->cache_entry);
+        const char *lm = au_cache_entry_last_modified(t->cache_entry);
+        if (etag && !au_headers_get(&t->extra, "if-none-match"))
+            au_buf_printf(&b, "If-None-Match: %s\r\n", etag);
+        if (lm && !au_headers_get(&t->extra, "if-modified-since"))
+            au_buf_printf(&b, "If-Modified-Since: %s\r\n", lm);
+    }
+    t->request_wall = wall(net);
     /* Cookies */
     if (net->jar && !t->omit_credentials) {
         AuCookieRequest cr;
@@ -1107,8 +1122,21 @@ static void detach_conn(AuHttpTransfer *t, bool reusable)
     c->in.len = c->in_off = 0;
 }
 
+static void cache_drop(AuHttpTransfer *t)
+{
+    if (t->cache_w) {
+        au_cache_abort(t->cache_w);
+        t->cache_w = NULL;
+    }
+    if (t->cache_entry) {
+        au_cache_entry_release(t->net->cache, t->cache_entry);
+        t->cache_entry = NULL;
+    }
+}
+
 static void transfer_free(AuHttpTransfer *t)
 {
+    cache_drop(t);
     release_decoders(t);
     if (t->parser_live)
         au_http_parser_free(&t->parser);
@@ -1131,6 +1159,11 @@ static void finish(AuHttpTransfer *t, AuNetError err)
         return;
     detach_conn(t, err == AU_NET_OK && t->parser_live && t->parser.keep_alive);
     t->state = T_FINISHED;
+    if (t->cache_w && err == AU_NET_OK && !t->cancelled) {
+        au_cache_commit(t->cache_w);
+        t->cache_w = NULL;
+    }
+    cache_drop(t);
     if (!t->cancelled && t->cb.done)
         t->cb.done(t->cb.ctx, t, err);
 }
@@ -1139,6 +1172,10 @@ static void finish(AuHttpTransfer *t, AuNetError err)
 
 static void reset_attempt(AuHttpTransfer *t)
 {
+    if (t->cache_w) {
+        au_cache_abort(t->cache_w);
+        t->cache_w = NULL;
+    }
     release_decoders(t);
     if (t->parser_live)
         au_http_parser_free(&t->parser);
@@ -1170,6 +1207,8 @@ static bool emit(AuHttpTransfer *t, const uint8_t *data, size_t len)
         fail_later(t, AU_NET_ERR_TOO_LARGE);
         return false;
     }
+    if (t->cache_w && !au_cache_write(t->cache_w, data, len))
+        t->cache_w = NULL; /* too large: the writer aborted itself */
     if (!t->cancelled && t->cb.data)
         t->cb.data(t->cb.ctx, t, data, len);
     return true;
@@ -1291,6 +1330,175 @@ static void deliver_response(AuHttpTransfer *t)
         t->cb.response(t->cb.ctx, t, &r);
 }
 
+/* ---- Cache ---- */
+
+/* Whether the request may use and fill the cache: GET without a body or
+ * a range. */
+static bool cache_applies(const AuHttpTransfer *t)
+{
+    return t->net->cache && !strcmp(t->method, "GET") && !t->body && t->range_start < 0;
+}
+
+static void cache_key(const AuUrl *u, AuBuf *out)
+{
+    au_buf_clear(out);
+    au_url_serialize_no_fragment(u, out);
+    au_buf_cstr(out);
+}
+
+/* The request's fields as sent, for Vary matching. */
+static void request_fields(AuHttpTransfer *t, AuHeaders *out)
+{
+    AuNet *net = t->net;
+    au_headers_copy(out, &t->extra);
+    if (!au_headers_get(out, "accept"))
+        au_headers_add(out, "Accept", au_accept_for(t->dest));
+    if (net->cfg.accept_language[0] && !au_headers_get(out, "accept-language"))
+        au_headers_add(out, "Accept-Language", net->cfg.accept_language);
+    au_headers_add(out, "Accept-Encoding", "gzip, deflate, br");
+    au_headers_add(out, "User-Agent", net->cfg.user_agent);
+    if (net->jar && !t->omit_credentials) {
+        AuCookieRequest cr;
+        AuUrl site, init;
+        bool hs, hi;
+        AuBuf tmp;
+        au_buf_init(&tmp);
+        cookie_request(t, &cr, &site, &init, &hs, &hi);
+        if (au_cookie_jar_header(net->jar, &cr, &tmp))
+            au_headers_add(out, "Cookie", au_buf_cstr(&tmp));
+        if (hs)
+            au_url_free(&site);
+        if (hi)
+            au_url_free(&init);
+        au_buf_free(&tmp);
+    }
+}
+
+/* Delivers a cached entry's response and body through the callbacks. */
+static void deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
+{
+    au_headers_free(&t->resp_headers);
+    au_headers_copy(&t->resp_headers, au_cache_entry_headers(e));
+    t->status = au_cache_entry_status(e);
+    snprintf(t->resp_reason, sizeof t->resp_reason, "%s", au_cache_entry_reason(e));
+    const char *ct = au_headers_get(&t->resp_headers, "content-type");
+    if (!ct || !au_http_parse_mime(ct, &t->mime, &t->charset)) {
+        au_buf_clear(&t->mime);
+        au_buf_clear(&t->charset);
+    }
+    au_buf_clear(&t->encoding);
+    size_t len;
+    const uint8_t *body = au_cache_entry_body(e, &len);
+    AuHttpResponse r;
+    memset(&r, 0, sizeof r);
+    r.status = t->status;
+    r.reason = t->resp_reason;
+    r.headers = &t->resp_headers;
+    r.url = t->url.href;
+    r.redirects = t->redirects;
+    r.content_length = (int64_t)len;
+    r.mime = au_buf_cstr(&t->mime);
+    r.charset = au_buf_cstr(&t->charset);
+    r.content_encoding = au_buf_cstr(&t->encoding);
+    r.from_cache = true;
+    r.revalidated = revalidated;
+    if (revalidated) {
+        r.security = t->security; /* from the connection that revalidated */
+    } else {
+        r.security.tls = !strcmp(t->url.scheme, "https");
+        r.security.version = r.security.tls ? 0x0303 : 0;
+        r.security.cipher = "";
+        r.security.alpn = "";
+    }
+    if (!t->cancelled && t->cb.response)
+        t->cb.response(t->cb.ctx, t, &r);
+    /* The body in pieces, as the network would deliver it. */
+    size_t off = 0;
+    while (off < len && !t->cancelled) {
+        size_t n = len - off > 16384 ? 16384 : len - off;
+        t->delivered += n;
+        if (t->cb.data)
+            t->cb.data(t->cb.ctx, t, body + off, n);
+        off += n;
+    }
+}
+
+/* Looks the request up before connecting. Returns true when a fresh entry
+ * was delivered (the transfer is finished). */
+static bool cache_try(AuHttpTransfer *t)
+{
+    if (!cache_applies(t) || t->reload)
+        return false;
+    AuNet *net = t->net;
+    AuBuf key;
+    au_buf_init(&key);
+    cache_key(&t->url, &key);
+    AuHeaders req;
+    request_fields(t, &req);
+    AuCacheEntry *e = NULL;
+    AuCacheState st = au_cache_lookup(net->cache, au_buf_cstr(&key), &req, wall(net), &e);
+    au_headers_free(&req);
+    au_buf_free(&key);
+    if (st == AU_CACHE_FRESH) {
+        deliver_cached(t, e, false);
+        au_cache_entry_release(net->cache, e);
+        finish(t, AU_NET_OK);
+        return true;
+    }
+    if (st == AU_CACHE_STALE)
+        t->cache_entry = e; /* revalidate */
+    return false;
+}
+
+/* After a successful unsafe request: drop the cached responses it may
+ * have changed (RFC 9111 4.4). */
+static void cache_invalidate_for(AuHttpTransfer *t)
+{
+    AuNet *net = t->net;
+    AuBuf key;
+    au_buf_init(&key);
+    cache_key(&t->url, &key);
+    au_cache_invalidate(net->cache, au_buf_cstr(&key));
+    static const char *fields[] = {"location", "content-location"};
+    for (int i = 0; i < 2; i++) {
+        const char *v = au_headers_get(&t->parser.headers, fields[i]);
+        AuUrl u;
+        if (v && au_url_parse(&u, v, &t->url)) {
+            AuOrigin a, b;
+            au_url_origin(&t->url, &a);
+            au_url_origin(&u, &b);
+            if (au_origin_same(&a, &b)) {
+                cache_key(&u, &key);
+                au_cache_invalidate(net->cache, au_buf_cstr(&key));
+            }
+            au_origin_free(&a);
+            au_origin_free(&b);
+            au_url_free(&u);
+        }
+    }
+    au_buf_free(&key);
+}
+
+/* Starts storing the response just delivered, when allowed. */
+static void cache_begin(AuHttpTransfer *t)
+{
+    if (!cache_applies(t))
+        return;
+    /* A coding left undecoded would be stored without its label. */
+    if (t->encoding.len && t->ndec == 0)
+        return;
+    AuNet *net = t->net;
+    AuBuf key;
+    au_buf_init(&key);
+    cache_key(&t->url, &key);
+    AuHeaders req;
+    request_fields(t, &req);
+    t->cache_w = au_cache_begin(net->cache, au_buf_cstr(&key), &req, t->parser.status, t->parser.reason,
+                                &t->parser.headers, t->request_wall, wall(net));
+    au_headers_free(&req);
+    au_buf_free(&key);
+}
+
 /* Starts the request again at the (new) URL on a fresh attempt. */
 static void restart(AuHttpTransfer *t, bool keep_conn)
 {
@@ -1333,6 +1541,23 @@ static bool handle_head(AuHttpTransfer *t)
     const char *rp = au_headers_get(&t->parser.headers, "referrer-policy");
     if (rp)
         t->rpolicy = au_referrer_policy_parse(rp, t->rpolicy);
+    /* Cache: invalidation after unsafe methods; a 304 confirming the
+     * stale entry being revalidated. */
+    if (net->cache && !method_safe(t->method) && st < 400)
+        cache_invalidate_for(t);
+    if (st == 304 && t->cache_entry) {
+        int64_t now = wall(net);
+        au_cache_update(net->cache, t->cache_entry, &t->parser.headers, t->request_wall, now);
+        deliver_cached(t, t->cache_entry, true);
+        au_cache_entry_release(net->cache, t->cache_entry);
+        t->cache_entry = NULL;
+        t->state = T_RECV; /* the 304 has no body; DONE finishes */
+        return true;
+    }
+    if (t->cache_entry && st != 401 && st != 407) { /* (an auth retry asks for the same URL again) */
+        au_cache_entry_release(net->cache, t->cache_entry);
+        t->cache_entry = NULL;
+    }
     /* Redirects */
     if ((st == 301 || st == 302 || st == 303 || st == 307 || st == 308) && !t->manual_redirect) {
         const char *loc = au_headers_get(&t->parser.headers, "location");
@@ -1620,6 +1845,7 @@ static bool recv_step(AuHttpTransfer *t)
                     return true;
                 setup_decoders(t);
                 deliver_response(t);
+                cache_begin(t);
                 t->state = T_RECV;
             } else if (t->state != T_DRAIN) {
                 return true;
@@ -1701,6 +1927,8 @@ static bool step(AuHttpTransfer *t)
     switch (t->state) {
     case T_START:
         hsts_upgrade(t);
+        if (!t->cache_entry && cache_try(t))
+            return true;
         t->state = T_WAIT_CONN;
         return true;
     case T_WAIT_CONN:

@@ -7,9 +7,10 @@
  * dataurl, psl, roots (the root store loader; seeds from ROOTS_FILE),
  * cert (au_cert_parse on mutated test certificates), hsts (header and
  * file parsers), auth (WWW-Authenticate parser), dates (cookie dates),
- * mime (Content-Type), or all. Every input is copied to a heap block of
+ * mime (Content-Type), cache (serialized cache entries), or all. Every input is copied to a heap block of
  * exactly its size, so a sanitizer build catches any read past the end. */
 #include "net/auth.h"
+#include "net/cache.h"
 #include "net/dataurl.h"
 #include "net/headers.h"
 #include "net/hsts.h"
@@ -299,6 +300,52 @@ static void run_dates(const Input *in)
     free(p);
 }
 
+/* Cache entries: a serialized seed entry, mutated. */
+static void cache_seed(Input *in)
+{
+    AuHttpCache *c = au_cache_new(1 << 20);
+    AuHeaders req, resp;
+    au_headers_init(&req);
+    au_headers_init(&resp);
+    au_headers_add(&req, "Accept", "text/html");
+    au_headers_add(&resp, "Date", "Fri, 15 Jan 2027 08:00:00 GMT");
+    au_headers_add(&resp, "Cache-Control", "max-age=60");
+    au_headers_add(&resp, "ETag", "\"abc\"");
+    au_headers_add(&resp, "Vary", "Accept");
+    AuCacheWriter *w = au_cache_begin(c, "https://x.test/a?b", &req, 200, "OK", &resp, 1800000000, 1800000000);
+    au_cache_write(w, "<p>cached body</p>", 18);
+    au_cache_commit(w);
+    AuCacheEntry *e;
+    au_cache_lookup(c, "https://x.test/a?b", &req, 1800000000, &e);
+    AuBuf b;
+    au_buf_init(&b);
+    au_cache_entry_serialize(e, &b);
+    au_cache_entry_release(c, e);
+    load_seed(in, b.data, b.len);
+    au_buf_free(&b);
+    au_headers_free(&req);
+    au_headers_free(&resp);
+    au_cache_free(c);
+}
+
+static void run_cache(const Input *in)
+{
+    uint8_t *p = exact(in, false);
+    AuCacheEntry *e = au_cache_entry_parse(p, in->n);
+    if (e) {
+        size_t n;
+        au_cache_entry_body(e, &n);
+        au_cache_entry_etag(e);
+        au_cache_freshness_lifetime(au_cache_entry_status(e), au_cache_entry_headers(e));
+        AuBuf b;
+        au_buf_init(&b);
+        au_cache_entry_serialize(e, &b);
+        au_buf_free(&b);
+        au_cache_entry_free(e);
+    }
+    free(p);
+}
+
 typedef struct Target {
     const char *name;
     const char **seeds;
@@ -338,7 +385,14 @@ int main(int argc, char **argv)
     }
     long done = 0;
     for (long it = 0; it < iters; it++) {
-        int which = all ? (int)(rnd() % 9) : -1;
+        int which = all ? (int)(rnd() % 10) : -1;
+        if ((all && which == 9) || !strcmp(target, "cache")) {
+            cache_seed(&in);
+            mutate(&in, 4096);
+            run_cache(&in);
+            done++;
+            continue;
+        }
         if ((all && which == 0) || !strcmp(target, "http")) {
             const char *s = http_seeds[rnd() % N(http_seeds)];
             load_seed(&in, s, strlen(s));
