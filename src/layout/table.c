@@ -1031,16 +1031,38 @@ static float layout_captions(AuLayout *L, LTableBox *t, float wb, float y, int s
     return y;
 }
 
+/* After a measuring layout that used cached table heights, the boxes under
+ * root may hold geometry from other constraints: none may be reused. */
+static void forget_subtree(LBox *root)
+{
+    LBox *b = root;
+    while (b) {
+        b->flags &= ~LF_HAS_LAYOUT;
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && b != root && !b->next)
+                b = b->parent;
+            b = b && b != root ? b->next : NULL;
+        }
+    }
+}
+
 /* Does a percentage height inside cell cb resolve against its final
- * height? When the cell, its row or the table has a specified height. */
+ * height? When the cell, its row or the table has a specified height. A
+ * percentage on the cell or row counts only when the table's height is
+ * definite (as in Chrome); this also keeps nested tables with percentage
+ * heights from laying out every level twice per pass of the level above. */
 static bool cell_height_definite(const LTableBox *t, const LCellBox *cb, float target)
 {
+    if (target >= 0)
+        return true;
     const LBox *k = &cb->k.b, *r = &t->g->rows[cb->row].box->b;
-    if (!lb_anon(k) && k->style->box->height.kind != AU_LEN_AUTO)
+    if (!lb_anon(k) && (k->style->box->height.kind == AU_LEN_PX || k->style->box->height.kind == AU_LEN_FIT_CONTENT_PX))
         return true;
-    if (!lb_anon(r) && r->style->box->height.kind != AU_LEN_AUTO)
+    if (!lb_anon(r) && (r->style->box->height.kind == AU_LEN_PX || r->style->box->height.kind == AU_LEN_FIT_CONTENT_PX))
         return true;
-    return target >= 0;
+    return false;
 }
 
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
@@ -1050,6 +1072,21 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         return 0;
     LTableBox *t = (LTableBox *)b;
     LTableGrid *g = t->g;
+    /* Inside a cell's measuring layout, a table laid out again in this
+     * layout generation with the same constraints answers with its height
+     * and leaves its parts as they are; the cell is then laid out again
+     * for real (see stale). Without this, tables nested in cells that are
+     * laid out twice take time exponential in the nesting depth. */
+    if (L->measuring) {
+        for (int i = 0; i < 2; i++) {
+            const LTableMeasure *m = &t->mc[i];
+            if (m->gen == L->gen && m->w == cons->avail_w && m->h == cons->avail_h && m->cbh == cons->cb_h) {
+                b->baseline = b->last_baseline = m->baseline;
+                L->measure_hits++;
+                return m->res;
+            }
+        }
+    }
     float imn, imx;
     l_intrinsic(L, b, &imn, &imx); /* column constraints (cached) */
     ensure_arrays(t);
@@ -1107,7 +1144,14 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
             if (sh >= 0)
                 base = l_max(0, sh - l_bp_v(k));
         }
+        uint32_t hits = L->measure_hits;
+        L->measuring++;
         l_layout_content(L, k, l_max(0, cw - l_bp_h(k)), base, -1);
+        L->measuring--;
+        cb->base1 = base;
+        cb->stale = L->measure_hits != hits;
+        if (cb->stale)
+            forget_subtree(&k->b);
         cb->nat_h = k->h - l_bp_v(k);
         k->w = l_max(cw, l_bp_h(k));
     }
@@ -1235,9 +1279,11 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         float cw = t->colx[last] + t->colw[last] - t->colx[cb->col];
         float h = span_height(t, cb->row, cb->rowspan, vs);
         float bpv = l_bp_v(k), inner = l_max(0, h - bpv);
-        if (cell_height_definite(t, cb, target) && fabsf(inner - cb->nat_h) > 0.001f) {
-            l_layout_content(L, k, l_max(0, cw - l_bp_h(k)), inner, -1);
+        bool definite = cell_height_definite(t, cb, target);
+        if ((definite && fabsf(inner - cb->nat_h) > 0.001f) || cb->stale) {
+            l_layout_content(L, k, l_max(0, cw - l_bp_h(k)), definite ? inner : cb->base1, -1);
             cb->nat_h = k->h - bpv;
+            cb->stale = false;
         }
         k->x = t->colx[cb->col] - rax;
         k->y = 0;
@@ -1357,7 +1403,16 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
     t->grid_y = cap_top;
     t->grid_h = gh;
     float cap_bot = layout_captions(L, t, wb, cap_top + gh, AU_CAPTION_SIDE_BOTTOM) - (cap_top + gh);
-    return cap_top + grid_content + cap_bot;
+    float res = cap_top + grid_content + cap_bot;
+    int slot = t->mc_next;
+    for (int i = 0; i < 2; i++)
+        if (t->mc[i].gen == L->gen && t->mc[i].w == cons->avail_w && t->mc[i].h == cons->avail_h &&
+            t->mc[i].cbh == cons->cb_h)
+            slot = i;
+    t->mc[slot] = (LTableMeasure){cons->avail_w, cons->avail_h, cons->cb_h, res, b->baseline, L->gen};
+    if (slot == t->mc_next)
+        t->mc_next ^= 1;
+    return res;
 }
 
 bool l_cell_empty(const LBlock *k)

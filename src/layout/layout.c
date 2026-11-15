@@ -278,7 +278,15 @@ void l_shift_content(LBlock *b, float dy)
     /* Block children, and floats reached through inline boxes. */
     LBox *c = b->b.first;
     while (c) {
-        if (c->kind == LK_BLOCK) {
+        if (c->kind == LK_BLOCK && (c->flags & LF_ABSPOS)) {
+            /* Its static position moves; so does the box if it was placed
+             * there (laid out already, with top and bottom auto). */
+            LBlock *k = (LBlock *)c;
+            k->sy += dy;
+            const AuStyleBox *s = c->style->box;
+            if (s->top.kind == AU_LEN_AUTO && s->bottom.kind == AU_LEN_AUTO)
+                k->y += dy;
+        } else if (c->kind == LK_BLOCK) {
             if (!(c->flags & LF_INLINE_LEVEL))
                 ((LBlock *)c)->y += dy;
         } else if (c->kind == LK_INLINE && c->first) {
@@ -988,6 +996,14 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy)
     LBox *ref = cb && cb->kind != LK_BLOCK ? &l_geom_parent(cb)->b : cb;
     for (LBox *p = b->b.parent; p && p != ref; p = p->parent)
         p->flags |= LF_ESCAPES;
+    /* Queued again before its containing block finished (a table lays its
+     * cells out twice): one entry, at the latest static position. Two
+     * entries per pass would double at every level of nesting. */
+    for (uint32_t i = L->nabs; i-- > 0;)
+        if (L->abs[i].box == &b->b) {
+            L->abs[i].cb = cb;
+            return;
+        }
     if (L->nabs == L->abs_cap) {
         L->abs_cap = L->abs_cap ? L->abs_cap * 2 : 32;
         L->abs = au_realloc(L->abs, L->abs_cap * sizeof *L->abs);
@@ -1475,6 +1491,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->vh = vh;
         if (L->full_layout)
             forget_layouts(L);
+        L->gen++;
         layout_root(L);
         L->full_layout = false;
         L->need_layout = false;

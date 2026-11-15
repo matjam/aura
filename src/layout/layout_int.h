@@ -225,7 +225,16 @@ typedef struct LCellBox {
     uint16_t col, colspan; /* first column; columns spanned (clamped to the grid) */
     float nat_h;           /* content height from the last content layout */
     float shift;           /* vertical-align offset applied to the content */
+    float base1;           /* the content height the measuring layout used (-1: indefinite) */
+    bool stale;            /* the measuring layout used cached table heights: lay out again */
 } LCellBox;
+
+/* A table's height for one set of constraints, from a layout in the
+ * current layout generation (see l_table_layout). */
+typedef struct LTableMeasure {
+    float w, h, cbh, res, baseline;
+    uint32_t gen;
+} LTableMeasure;
 
 typedef struct LTableRow {
     LBlock *box;      /* the row */
@@ -269,6 +278,8 @@ typedef struct LTableBox {
     float cbw[4]; /* the table's collapsed border widths (half the outer edges) */
     bool edges_ok;
     bool fixed;   /* the last layout used the fixed table layout */
+    LTableMeasure mc[2]; /* heights for the last two constraint sets */
+    uint8_t mc_next;
 } LTableBox;
 
 static inline bool lb_is_block(const LBox *b) { return b->kind == LK_BLOCK; }
@@ -331,6 +342,12 @@ struct AuLayout {
     bool need_paint;
     bool need_restack;
     bool full_layout; /* the viewport changed: no subtree may be reused */
+    /* Table measuring: gen counts layout passes of the document; measuring
+     * is nonzero inside a cell's measuring layout, where nested tables may
+     * answer from their measure cache; measure_hits counts those answers. */
+    uint32_t gen;
+    int measuring;
+    uint32_t measure_hits;
 };
 
 /* ---- Style access with anonymous boxes ---- */
