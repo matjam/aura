@@ -1209,8 +1209,8 @@ defProps(DP, {
     /* document.open() and close(): during parsing, write() inserts at the
      * parser's insertion point and open() has nothing to do; after
      * parsing, write() itself replaces the document (natives.c). */
-    open() { return this; },
-    close() {},
+    open() { if (arguments.length > 2) return G.open.apply(G, arguments); N.docOpen(this, false); return this; },
+    close() { N.docOpen(this, true); },
     execCommand() { return false; },
     queryCommandSupported() { return false; },
     queryCommandEnabled() { return false; },
@@ -1441,8 +1441,23 @@ class DOMImplementation {
         }
         return d;
     }
-    createDocument() { throw domErr('Creating documents is not supported', 'NotSupportedError'); }
-    createDocumentType() { throw domErr('Creating document types is not supported', 'NotSupportedError'); }
+    /* An empty document with the root element and doctype asked for. It
+     * is a plain document: nothing renders it and no script runs in it. */
+    createDocument(ns, qname, doctype) {
+        const d = N.newDocument();
+        if (doctype !== undefined && doctype !== null) {
+            if (!isNode(doctype) || doctype.nodeType !== 10) throw new TypeError('createDocument: the doctype is not a DocumentType');
+            d.appendChild(doctype);
+        }
+        if (qname !== undefined && qname !== null && str(qname) !== '') d.appendChild(d.createElementNS(ns === undefined ? null : ns, qname));
+        return d;
+    }
+    createDocumentType(name, publicId, systemId) {
+        if (arguments.length < 3) throw new TypeError('createDocumentType: 3 arguments required');
+        name = str(name);
+        if (name === '' || /[\s>]/.test(name) || /^[-.0-9]/.test(name)) throw domErr("'" + name + "' is not a valid name", 'InvalidCharacterError');
+        return N.newDoctype(name, str(publicId), str(systemId));
+    }
 }
 tag(DOMImplementation);
 defGlobal('DOMImplementation', DOMImplementation);

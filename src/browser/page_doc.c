@@ -27,6 +27,7 @@
 #include "history.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
+#include "../net/dataurl.h"
 #include "../page/page.h"
 
 #include <stdio.h>
@@ -64,6 +65,7 @@ struct Fetch {
     AuFetchKind kind;
     bool done, ok, cancelled;
     char *doc_url; /* the nested document that asked (a frame's resources), NULL for the page's own */
+    char *mime;    /* a data: URL's type, reported as the response head before its bytes */
 };
 
 /* A document that is not shown: the view and what the page knows about
@@ -395,6 +397,7 @@ static void fetch_free(Fetch *f)
     au_free(f->url);
     au_free(f->data);
     au_free(f->doc_url);
+    au_free(f->mime);
     au_free(f);
 }
 
@@ -571,6 +574,23 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
         Fetch *f = fetch_new(p, url, main);
         f->is_file = true;
         f->kind = kind;
+        return f;
+    }
+    if (!main && au_url_scheme_is(url, "data")) {
+        /* A data: URL (a script, a frame's document): decoded here and
+         * delivered from idle like a file that has been read. */
+        AuDataUrl d;
+        au_data_url_init(&d);
+        if (!au_data_url_decode(url, &d)) {
+            au_data_url_free(&d);
+            return NULL;
+        }
+        Fetch *f = fetch_new(p, "data:", main);
+        f->is_file = f->read = true;
+        f->kind = kind;
+        f->mime = au_strndup(au_buf_cstr(&d.mime), d.mime.len);
+        f->data = au_buf_take(&d.body, &f->len);
+        au_data_url_free(&d);
         return f;
     }
     const AuPageFetcher *fe = fetcher_for(p, url);
@@ -3191,6 +3211,12 @@ static bool file_step(AuPage *p)
         }
         if (f->main)
             p->main_total = (uint32_t)f->len;
+    }
+    if (f->mime && !f->main && !f->off) {
+        const char *hdrs[2] = {"content-type", f->mime};
+        au_docview_resource_head(p->dv, f->id, 200, "", NULL, hdrs, 1);
+        if (f->done || f->cancelled)
+            return true;
     }
     size_t n = f->len - f->off;
     if (f->main && n > CHUNK)

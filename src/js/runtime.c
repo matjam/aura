@@ -642,6 +642,7 @@ void au_js_free(AuJs *js)
     js_module_free(js);
     js_mutations_free(js);
     js_ranges_free(js);
+    au_buf_free(&js->open_buf);
     if (js->root != js) {
         /* A frame's context. The runtime, the wrappers and whatever script
          * in other documents still holds of this one live on: objects of

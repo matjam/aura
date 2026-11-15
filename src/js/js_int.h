@@ -135,6 +135,10 @@ struct AuJs {
     AuDocument **docs;
     uint32_t ndocs, docs_cap;
     AuHtmlParser *parser;
+    /* document.open() after parsing ended: everything written since, which
+     * the document is parsed from again at each write (natives.c). */
+    AuBuf open_buf;
+    bool opened;
     AuJsSettings settings;
     AuJsHooks hooks;
     char *url, *base, *origin;
