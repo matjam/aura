@@ -652,12 +652,20 @@ const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r);
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s);
 /* Removes and frees a sheet. */
 void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s);
+/* Removes every added sheet without freeing it: the caller owns them
+ * again. To keep parsed sheets across changes of the sheet list, detach,
+ * then add the current ones in order. Detach before freeing the resolver
+ * when the sheets must outlive it. */
+void au_css_resolver_detach_sheets(AuCssResolver *r);
 /* Call after attaching imports or otherwise changing sheets. */
 void au_css_resolver_sheets_changed(AuCssResolver *r);
 /* Finds @keyframes by name across the author sheets (last one wins). */
 const AuCssKeyframes *au_css_resolver_keyframes(AuCssResolver *r, AuAtom name);
 /* True if the media query list matches the current device (matchMedia). */
 bool au_css_media_matches(AuCssResolver *r, const char *query, size_t len);
+/* The same against a device, without a resolver: whether a sheet with
+ * this media attribute applies now. */
+bool au_css_media_text_matches(const char *query, size_t len, const AuCssDevice *dev);
 /* True if the condition is supported (CSS.supports(condition)). */
 bool au_css_supports(const char *cond, size_t len);
 /* CSS.supports(property, value). */

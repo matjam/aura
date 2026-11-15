@@ -173,20 +173,20 @@ static void test_sample(void)
     CHECK(!t->loading);
     CHECK_STR(au_page_title(t->page), "Platypus - Encyclopedia sample");
     CHECK_STR(au_bw_field_text(w), "file:///samples/wiki.html");
-    /* The document first, then its style sheet, its image; the sheet's
-     * @import (print media) is read after the sheet itself. */
+    /* The document first, then its style sheet, its image. The sheet's
+     * @import has print media, which does not match the screen: it is
+     * not read. */
     const char *doc = strstr(read_log, "file:///samples/wiki.html");
     const char *css = strstr(read_log, "file:///samples/wiki.css");
     const char *img = strstr(read_log, "file:///samples/missing-platypus.jpg");
     const char *imp = strstr(read_log, "file:///samples/wiki-print.css");
-    CHECK(doc == read_log && css && img && imp);
-    CHECK(css < imp);
+    CHECK(doc == read_log && css && img && !imp);
     int cw, ch;
     au_page_content_size(t->page, &cw, &ch);
     CHECK(cw >= w->layout.page.x1 - w->layout.page.x0 && ch > 1500);
     AuPageStats st;
     au_page_stats(t->page, &st);
-    CHECK(st.load_ms > 0 && st.layouts >= 1 && st.resources == 3 && st.boxes > 50);
+    CHECK(st.load_ms > 0 && st.layouts >= 1 && st.resources == 2 && st.boxes > 50);
     paint(w);
     au_page_stats(t->page, &st);
     CHECK(st.first_paint_ms > 0);

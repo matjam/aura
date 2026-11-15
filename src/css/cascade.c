@@ -825,6 +825,24 @@ void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s)
     au_css_resolver_sheets_changed(r);
 }
 
+void au_css_resolver_detach_sheets(AuCssResolver *r)
+{
+    /* the index points into the sheets */
+    index_clear(r);
+    share_clear(r);
+    r->nsheets = 0;
+    au_css_resolver_sheets_changed(r);
+}
+
+bool au_css_media_text_matches(const char *query, size_t len, const AuCssDevice *dev)
+{
+    au_css_init();
+    AuCssMediaList *m = css_media_parse_text(query, len);
+    bool ok = css_media_eval(m, dev);
+    css_media_free(m);
+    return ok;
+}
+
 void au_css_resolver_sheets_changed(AuCssResolver *r)
 {
     r->index_dirty = true;

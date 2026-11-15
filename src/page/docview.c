@@ -85,12 +85,24 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
     return dv;
 }
 
-static void free_sheet_src(SheetSrc *s)
+/* Frees a sheet source and its imports (at most SHEET_IMPORT_DEPTH deep).
+ * The resolver must not hold the parsed sheet any more
+ * (au_css_resolver_detach_sheets). */
+#define SHEET_IMPORT_DEPTH 8
+static void free_sheet_src(AuDocView *dv, SheetSrc *s)
 {
     if (!s)
         return;
     for (uint32_t i = 0; i < s->nimports; i++)
-        free_sheet_src(s->imports[i]);
+        free_sheet_src(dv, s->imports[i]);
+    if (s->req)
+        for (uint32_t j = 0; j < dv->nreqs; j++)
+            if (dv->reqs[j].sheet == s)
+                dv->reqs[j].sheet = NULL; /* its data is dropped on arrival */
+    if (s->deferred && dv->ndeferred)
+        dv->ndeferred--;
+    if (!s->parent)
+        au_css_sheet_free(s->sheet); /* frees the attached imports' sheets */
     au_free(s->imports);
     au_free(s->url);
     au_free(s->media);
@@ -114,11 +126,16 @@ static void clear_document(AuDocView *dv)
     }
     dv->nreqs = 0;
     au_layout_set_document(dv->layout, NULL);
+    if (dv->resolver)
+        au_css_resolver_detach_sheets(dv->resolver); /* the sources own the sheets */
     for (uint32_t i = 0; i < dv->nslots; i++) {
         au_node_unref(&dv->slots[i].el->node);
-        free_sheet_src(dv->slots[i].src);
+        free_sheet_src(dv, dv->slots[i].src);
     }
     dv->nslots = 0;
+    dv->ndeferred = 0;
+    au_css_sheet_free(dv->user_sheet);
+    dv->user_sheet = NULL;
     au_docimages_clear(dv->imgs);
     if (dv->hover)
         au_node_unref(&dv->hover->node);
@@ -170,6 +187,10 @@ void au_docview_set_user_css(AuDocView *dv, const char *css)
         return;
     au_free(dv->user_css);
     dv->user_css = css ? dup(css) : NULL;
+    if (dv->resolver)
+        au_css_resolver_detach_sheets(dv->resolver);
+    au_css_sheet_free(dv->user_sheet);
+    dv->user_sheet = NULL;
     dv->sheets_dirty = true;
 }
 
@@ -280,16 +301,67 @@ static void request_sheet(AuDocView *dv, SheetSrc *s)
     s->req = r->id;
 }
 
-/* Parses a loaded sheet once to find its @imports and requests them. */
-static void scan_imports(AuDocView *dv, SheetSrc *s)
+/* The device media queries are evaluated against. */
+static void view_device(const AuDocView *dv, AuCssDevice *dev)
 {
-    if (s->imports_scanned || !s->text)
+    au_css_device_default(dev);
+    dev->width = (float)dv->vw;
+    dev->height = (float)dv->vh;
+    dev->scripting = dv->script ? 2 : 0;
+}
+
+static bool media_matches(const AuDocView *dv, const SheetSrc *s)
+{
+    if (!s->media)
+        return true;
+    AuCssDevice dev;
+    view_device(dv, &dev);
+    return au_css_media_text_matches(s->media, strlen(s->media), &dev);
+}
+
+/* Fetches a sheet source, or defers it while its media query does not
+ * match (a sheet for print, for a dark scheme or for another width is
+ * neither fetched nor parsed until the device changes so that it
+ * matches; see undefer_sheets). */
+static void start_sheet(AuDocView *dv, SheetSrc *s)
+{
+    if (!media_matches(dv, s)) {
+        s->deferred = true;
+        dv->ndeferred++;
         return;
-    s->imports_scanned = true;
+    }
+    request_sheet(dv, s);
+}
+
+/* Parses a source whose text is there, once; attaches an import to its
+ * parent's sheet; and starts the sheet's own @imports. A fetched sheet's
+ * text is freed: nothing reads it again. */
+static void parse_sheet(AuDocView *dv, SheetSrc *s, bool keep_text)
+{
+    if (s->sheet || !s->text)
+        return;
     AuCssSheet *sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    if (dv->webfonts)
+        au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
+    if (!keep_text) {
+        au_free(s->text);
+        s->text = NULL;
+        s->len = 0;
+    }
+    dv->sheets_dirty = true;
+    if (s->parent) {
+        if (!s->parent->sheet) {
+            au_css_sheet_free(sh);
+            return;
+        }
+        au_css_sheet_set_import(s->parent->sheet, s->index, sh);
+    }
+    s->sheet = sh;
     size_t n = au_css_sheet_import_count(sh);
     if (n > 64)
         n = 64;
+    if (s->depth + 1 >= SHEET_IMPORT_DEPTH)
+        n = 0;
     s->imports = n ? au_calloc(n * sizeof *s->imports) : NULL;
     s->nimports = (uint32_t)n;
     for (size_t i = 0; i < n; i++) {
@@ -302,10 +374,37 @@ static void scan_imports(AuDocView *dv, SheetSrc *s)
         SheetSrc *c = au_calloc(sizeof *c);
         c->url = dup(abs);
         c->media = im->media && *im->media ? dup(im->media) : NULL;
+        c->parent = s;
+        c->index = (uint32_t)i;
+        c->depth = s->depth + 1;
         s->imports[i] = c;
-        request_sheet(dv, c);
+        start_sheet(dv, c);
     }
-    au_css_sheet_free(sh);
+}
+
+/* Starts the deferred sources whose media query matches now. */
+static void undefer_sheet(AuDocView *dv, SheetSrc *s)
+{
+    if (!s)
+        return;
+    if (s->deferred && media_matches(dv, s)) {
+        s->deferred = false;
+        dv->ndeferred--;
+        if (s->text) {
+            parse_sheet(dv, s, true); /* a <style> */
+        } else {
+            request_sheet(dv, s);
+            dv->finished_reported = false;
+        }
+    }
+    for (uint32_t i = 0; i < s->nimports; i++)
+        undefer_sheet(dv, s->imports[i]);
+}
+
+static void undefer_sheets(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nslots && dv->ndeferred; i++)
+        undefer_sheet(dv, dv->slots[i].src);
 }
 
 void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char *status_text,
@@ -370,7 +469,9 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
             size_t n;
             s->text = au_buf_take(&req.data, &n);
             s->len = n;
-            scan_imports(dv, s);
+            if (!s->text) /* an empty response */
+                s->text = dup("");
+            parse_sheet(dv, s, false);
         } else {
             s->failed = true;
         }
@@ -494,14 +595,21 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
         size_t n;
         s->src->text = au_buf_take(&t, &n);
         s->src->len = n;
+        if (!s->src->text)
+            s->src->text = dup("");
         s->src->url = dup(dv->base);
-        scan_imports(dv, s->src);
+        if (media_matches(dv, s->src)) {
+            parse_sheet(dv, s->src, true);
+        } else {
+            s->src->deferred = true;
+            dv->ndeferred++;
+        }
     } else {
         char abs[2048];
         const char *href = attr(el, "href");
         if (href && au_url_resolve(dv->base, href, abs, sizeof abs)) {
             s->src->url = dup(abs);
-            request_sheet(dv, s->src);
+            start_sheet(dv, s->src);
             dv->finished_reported = false;
         } else {
             s->src->url = dup(dv->base);
@@ -666,43 +774,33 @@ AuLayout *au_docview_layout(const AuDocView *dv) { return dv->layout; }
 
 /* ---- Styles ---- */
 
-static AuCssSheet *build_sheet(AuDocView *dv, SheetSrc *s, int depth)
-{
-    AuCssSheet *sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
-    if (dv->webfonts)
-        au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
-    if (depth < 8) {
-        size_t n = au_css_sheet_import_count(sh);
-        for (size_t i = 0; i < n && i < s->nimports; i++) {
-            SheetSrc *c = s->imports[i];
-            if (c && c->text)
-                au_css_sheet_set_import(sh, i, build_sheet(dv, c, depth + 1));
-        }
-    }
-    return sh;
-}
-
+/* Gives the resolver the sheets as they are now: the user sheet, then the
+ * parsed sources in document order. Sheets are parsed once, as they
+ * arrive (parse_sheet); the resolver borrows them and only builds its
+ * index again. */
 static void rebuild_resolver(AuDocView *dv)
 {
-    if (dv->resolver)
-        au_css_resolver_free(dv->resolver);
-    dv->resolver = au_css_resolver_new();
-    au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
-    if (dv->has_font_prefs)
-        au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
+    if (!dv->resolver) {
+        dv->resolver = au_css_resolver_new();
+        au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+        if (dv->has_font_prefs)
+            au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
+    } else {
+        au_css_resolver_detach_sheets(dv->resolver);
+    }
     AuCssDevice dev;
-    au_css_device_default(&dev);
-    dev.width = (float)dv->vw;
-    dev.height = (float)dv->vh;
-    dev.scripting = dv->script ? 2 : 0;
+    view_device(dv, &dev);
     au_css_resolver_set_device(dv->resolver, &dev);
-    if (dv->user_css)
-        au_css_resolver_add_sheet(dv->resolver, au_css_sheet_parse(dv->user_css, strlen(dv->user_css),
-                                                                   AU_CSS_ORIGIN_USER, dv->url, NULL));
+    undefer_sheets(dv); /* the device may have changed (scripting) */
+    if (dv->user_css) {
+        if (!dv->user_sheet)
+            dv->user_sheet = au_css_sheet_parse(dv->user_css, strlen(dv->user_css), AU_CSS_ORIGIN_USER, dv->url, NULL);
+        au_css_resolver_add_sheet(dv->resolver, dv->user_sheet);
+    }
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSrc *s = dv->slots[i].src;
-        if (s->text)
-            au_css_resolver_add_sheet(dv->resolver, build_sheet(dv, s, 0));
+        if (s->sheet)
+            au_css_resolver_add_sheet(dv->resolver, s->sheet);
     }
     au_css_resolver_sheets_changed(dv->resolver);
     dv->style_all = true;
@@ -746,11 +844,10 @@ static void prune_slots(AuDocView *dv)
             dv->slots[k++] = *s;
             continue;
         }
-        for (uint32_t j = 0; j < dv->nreqs; j++)
-            if (s->src->req && dv->reqs[j].sheet == s->src)
-                dv->reqs[j].sheet = NULL; /* its data is dropped on arrival */
+        if (dv->resolver)
+            au_css_resolver_detach_sheets(dv->resolver); /* until rebuild_resolver, which follows */
         au_node_unref(&s->el->node);
-        free_sheet_src(s->src);
+        free_sheet_src(dv, s->src);
         dv->sheets_dirty = true;
     }
     dv->nslots = k;
@@ -829,14 +926,12 @@ void au_docview_set_viewport(AuDocView *dv, int width, int height)
     dv->vh = height;
     if (dv->resolver) {
         AuCssDevice dev;
-        au_css_device_default(&dev);
-        dev.width = (float)width;
-        dev.height = (float)height;
-        dev.scripting = dv->script ? 2 : 0;
+        view_device(dv, &dev);
         au_css_resolver_set_device(dv->resolver, &dev);
         /* Media queries and viewport units may change. */
         dv->style_all = true;
     }
+    undefer_sheets(dv); /* sheets whose media query matches at this size */
     if (dv->script)
         au_docscript_resized(dv->script);
 }
