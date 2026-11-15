@@ -218,14 +218,54 @@ by its own scripts or kept in git-ignored folders here.
 - **Disk images.** The test machine's base images are in `disks/`
   (git-ignored): `os9-novm.qcow2` is a stock Mac OS 9.2.2 with virtual
   memory off, and `os9-vmoff.qcow2` is the same system with Enforcer
-  installed. Both are standalone qcow2 files with no backing file. To
-  update Enforcer on the second, install a new Enforcer build in that
-  guest with `PERSIST=1` and fold the overlay into the image.
+  installed. Both are standalone qcow2 files with no backing file.
+- **The Enforcer on `os9-vmoff.qcow2`** is version 0.1.0, installed on
+  2026-11-15 from that project's `dist/` as built at 12:58 that day:
+  commit 6ba015b plus changes not yet committed there (`common/engine.c`,
+  `common/kcb.h`, `installer/kpatch.h`, `kernel/nanokernel.s`). Enforcer's
+  files carry no version resource; the installed extension is 96,498
+  bytes. `disks/os9-vmoff.before-update.qcow2` is the image before that
+  update (an Enforcer of 2026-11-14). To go back to it, stop every guest
+  and copy it over `os9-vmoff.qcow2`; `guest-run.sh` then sets aside the
+  overlays made on the newer image.
+- **To update Enforcer on `os9-vmoff.qcow2`**, use a run folder of your
+  own (`export AURA_RUN=$PWD/run-enf`) and these steps. Enforcer's
+  installer updates an installed Enforcer in place.
+  1. Stop every guest that runs the Enforcer base, and copy
+     `disks/os9-vmoff.qcow2` to `disks/os9-vmoff.before-update.qcow2`.
+  2. Run `BASE=enforcer PERSIST=1 tools/guest-run.sh start`, wait for the
+     Finder, and push the three MacBinary files of Enforcer's `dist/`
+     together: `tools/guest-push.sh -n EnfNew "DIST/Enforcer
+     Installer.bin" "DIST/Enforcer Extension.bin" DIST/Enforcer.bin`.
+  3. Run `tools/guest-qmp.py open EnfNew "Enforcer Installer"`, wait
+     until `front-app` prints Enforcer Installer, and click Install (at
+     486,366 on a 640x480 screen). When the text says Enforcer is
+     installed, click Restart (the same button).
+  4. QEMU's mac99 firmware stays on a black screen after a guest
+     restart. Wait 20 seconds for the guest to finish writing, run
+     `tools/guest-run.sh stop`, and start again with `BASE=enforcer
+     PERSIST=1`.
+  5. Check the install: open OS > System Folder > Control Panels >
+     Enforcer (click the desktop, then type each name and press
+     Command-O). It says "Protecting N applications" and "NanoKernel
+     owner check on" when the kernel patch and the extension both run.
+     Get Info on System Folder > Extensions > Enforcer Extension shows
+     the size, which matches the sum of the two forks `guest-push.sh`
+     printed.
+  6. Choose Special > Shut Down (the menu title is at 246,10, the item
+     at 270,136); QEMU exits. Then fold the overlay into the image and
+     check it:
+     `~/.local/opt/qemu-os9/bin/qemu-img commit
+     run-enf/os9-overlay-enforcer.qcow2`, then `qemu-img info
+     disks/os9-vmoff.qcow2` (no backing file) and `qemu-img check
+     disks/os9-vmoff.qcow2`. Delete the overlay.
+  7. Change the version, date and commit in the paragraph above.
 - **hfsutils** (`hformat`, `hcopy`) for `tools/guest-push.sh`:
   `brew install hfsutils`.
 
 The install scripts, the QEMU patch and the two disk images were copied
-from the os9-enforcer project on 2026-11-14.
+from the os9-enforcer project on 2026-11-14. The Enforcer image was
+updated on 2026-11-15 as described above.
 
 ## Guest testing
 
@@ -235,12 +275,18 @@ checkout (set `AURA_RUN` to use another folder, for example to run a
 second guest beside the first); `tools/guest-env.sh` holds the settings.
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
-the background. `BASE` picks the system: `stock` (the default) is
-`disks/os9-novm.qcow2`, Mac OS 9.2.2 with virtual memory off and no
-Enforcer; `enforcer` (`BASE=enforcer tools/guest-run.sh start`) is
-`disks/os9-vmoff.qcow2`, which has the Enforcer kernel and extension
-installed. The guest boots an overlay on the base image
-(`run/os9-overlay-BASE.qcow2`), so the base is never written. One guest
+the background. `BASE` picks the system: `enforcer` (the default) is
+`disks/os9-vmoff.qcow2`, Mac OS 9.2.2 with virtual memory off and the
+Enforcer kernel and extension installed; `stock` (`BASE=stock
+tools/guest-run.sh start`) is `disks/os9-novm.qcow2`, the same system
+without Enforcer. The guest boots an overlay on the base image
+(`run/os9-overlay-BASE.qcow2`), so the base is never written. An overlay
+is valid only for the base image it was made on, and booting it on a
+changed image damages the guest's disk: `guest-run.sh` records the base
+image's modification time and size beside the overlay
+(`os9-overlay-BASE.qcow2.base`), and when they differ at `start` or
+`reset` it renames the overlay `os9-overlay-BASE.stale.qcow2` and makes
+a new one. One guest
 runs per run folder; `status` names the running base. Disk writes are
 discarded when QEMU exits; set `PERSIST=1` to keep them in the overlay.
 Mac OS takes about a minute to boot. `GEOMETRY` sets the largest screen
@@ -248,10 +294,22 @@ mode the guest offers (default `1024x768x32`; for example
 `GEOMETRY=1440x1050x32`); Mac OS starts at 640x480 or the last mode
 chosen, and the Control Strip's resolution module switches to it.
 
-Test on the stock base first. Use the Enforcer base to check Aura under
-Enforcer; its own bugs show there too (see the scroll bar thumb note
-under Browser chrome). Enforcer's state and offense log are read with
-that project's own tools, which Aura does not carry.
+Test on the Enforcer base day to day: Enforcer stops Aura, or logs it,
+when Aura writes into another application's memory, so such a bug shows
+there and not on the stock system. Before a release, test on the stock
+base as well (`BASE=stock`), because most users run without Enforcer.
+Enforcer's own bugs show on its base too; to tell one from an Aura bug,
+repeat the test on the stock base. To see what Enforcer caught, quit
+Aura and open the Enforcer control panel (OS > System Folder > Control
+Panels > Enforcer): its Caught list names each write it blocked, and
+the lines below it count the writes checked, stopped and blocked. Writes
+into the system heap are logged only when "Also log writes into the
+system heap" is on. Enforcer's state and offense log can also be read
+from the host with that project's own tools, which Aura does not carry.
+On 2026-11-15, with Enforcer 0.1.0 (see Disk images), Aura at 3df6ecc
+loaded a local page, Hacker News and a Wikipedia article, scrolled,
+typed in a search field, showed Develop > Performance and was launched
+three times in one boot: the control panel reported nothing caught.
 
 To copy the application in, build it with `./build.sh ppc` and run
 `tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*`, which puts the
@@ -658,7 +716,10 @@ Toolbox points learned the hard way:
   those pixels in a chunk of the current application (Aura) and frees
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
-  handle then names Aura's font data.
+  handle then names Aura's font data. That was the Enforcer of
+  2026-11-14 (matjam/os9-enforcer#1). With the build installed on
+  2026-11-15 the thumbs of a second and a third launch were drawn
+  correctly, pixel for pixel as on the first.
 
 ## Developer tools
 

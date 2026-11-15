@@ -7,7 +7,7 @@
 #   tools/guest-run.sh stop    quit the guest started here
 #   tools/guest-run.sh status  say whether it runs
 #   tools/guest-run.sh reset   throw away the guest's disk changes
-#   BASE=enforcer tools/guest-run.sh start   boot the Enforcer system
+#   BASE=stock tools/guest-run.sh start      boot the system without Enforcer
 #   WINDOW=1 tools/guest-run.sh start        boot with a window, to use by hand
 #
 # MEM sets the RAM in megabytes (default 512). The guest's disk writes are
@@ -18,10 +18,14 @@
 # largest mode the display offers; GEOMETRY=1440x1050x32 allows the size
 # of a large screen.
 #
-# BASE picks the system: stock (default, Mac OS 9.2.2 without Enforcer)
-# or enforcer (with the Enforcer kernel and extension). The guest boots an
+# BASE picks the system: enforcer (default, Mac OS 9.2.2 with the Enforcer
+# kernel and extension) or stock (without Enforcer). The guest boots an
 # overlay in AURA_RUN on the base image in disks/, so the base image is
-# never written. See tools/guest-env.sh for the settings.
+# never written. An overlay is valid only for the base image it was made
+# on: when the base image has changed since (a new Enforcer was folded
+# into it, or an older image was restored), start and reset set the old
+# overlay aside as os9-overlay-BASE.stale.qcow2 and make a new one. See
+# tools/guest-env.sh for the settings.
 set -eu
 . "$(dirname "$0")/guest-env.sh"
 
@@ -34,9 +38,32 @@ prepare_disk() {
     echo "guest-run: no base image $AURA_BASE (see Guest testing in CLAUDE.md)" >&2
     exit 1
   fi
+  stamp=$(base_stamp)
+  if [ -f "$AURA_DISK" ]; then
+    if [ -f "$AURA_DISK_STAMP" ]; then
+      [ "$(cat "$AURA_DISK_STAMP")" = "$stamp" ] || stale=1
+    elif [ "$AURA_BASE" -nt "$AURA_DISK" ]; then
+      # An overlay from before stamps were written: the base is newer.
+      stale=1
+    fi
+    if [ "${stale:-}" = 1 ]; then
+      # Booting an overlay on a changed base damages the guest's disk.
+      aside=$AURA_RUN/os9-overlay-$BASE.stale.qcow2
+      mv -f "$AURA_DISK" "$aside"
+      echo "guest-run: $AURA_BASE changed since the overlay was made;" \
+        "the old overlay is now $aside" >&2
+    fi
+  fi
   if [ ! -f "$AURA_DISK" ]; then
     "$QEMU_IMG" create -q -f qcow2 -F qcow2 -b "$AURA_BASE" "$AURA_DISK"
   fi
+  printf '%s\n' "$stamp" > "$AURA_DISK_STAMP"
+}
+
+# The base image's modification time and size, which identify the image
+# an overlay was made on. GNU stat takes -c, BSD stat -f.
+base_stamp() {
+  stat -c '%Y %s' "$AURA_BASE" 2>/dev/null || stat -f '%m %z' "$AURA_BASE"
 }
 
 case "${1:-}" in
