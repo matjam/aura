@@ -197,9 +197,19 @@ int au_host_render_main(int argc, char **argv)
  * 656) with a viewport H high (default 900): a layout from scratch, a
  * layout after only the width changed (through the document view, as a
  * window resize does, and in the layout alone), a paint of the viewport,
- * of a 32-pixel strip, and of page downs over content not painted before.
- * Each figure is the best of N runs (default 3). --phase relayout, resize
- * or paint first runs that one step N times, for a profiler. */
+ * of a 32-pixel strip, of one pixel (what a paint costs whatever its area)
+ * and of page downs over content not painted before.
+ * Each figure is the best of N runs (default 3). --phase relayout, resize,
+ * paint or strip first runs that one step N times, for a profiler. */
+/* The bench times the process's CPU time, which other work on the machine
+ * disturbs less than the wall clock. */
+static double cpu_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
 static double best_of(double *v, int n)
 {
     double b = v[0];
@@ -237,7 +247,7 @@ int au_host_layout_bench_main(int argc, char **argv)
     }
     if (!page || w <= 0 || w > 8192 || w2 <= 0 || w2 > 8192 || h <= 0 || h > 16384 || repeat < 1 || repeat > 4096) {
         fprintf(stderr, "usage: aura-host layout-bench page.html [-w W] [-w2 W2] [-h H] [--repeat N]\n"
-                        "       [--phase relayout|resize|paint] [font options]\n");
+                        "       [--phase relayout|resize|paint|strip] [font options]\n");
         return 2;
     }
     char *data;
@@ -272,30 +282,31 @@ int au_host_layout_bench_main(int argc, char **argv)
     int widths[2] = {w, w2};
     if (phase && !strcmp(phase, "relayout")) {
         /* For a profiler: only width changes in the layout. */
-        double t0 = now_ms();
+        double t0 = cpu_ms();
         for (int i = 0; i < repeat; i++)
             au_layout_update(L, (float)widths[i & 1], (float)h);
-        printf("%d relayouts: %.2f ms each\n", repeat, (now_ms() - t0) / repeat);
+        printf("%d relayouts: %.2f ms each\n", repeat, (cpu_ms() - t0) / repeat);
         repeat = 1;
     } else if (phase && !strcmp(phase, "resize")) {
-        double t0 = now_ms();
+        double t0 = cpu_ms();
         for (int i = 0; i < repeat; i++) {
             au_docview_set_viewport(dv, widths[i & 1], h);
             au_docview_update(dv);
         }
-        printf("%d resizes: %.2f ms each\n", repeat, (now_ms() - t0) / repeat);
+        printf("%d resizes: %.2f ms each\n", repeat, (cpu_ms() - t0) / repeat);
         repeat = 1;
-    } else if (phase && !strcmp(phase, "paint")) {
+    } else if (phase && (!strcmp(phase, "paint") || !strcmp(phase, "strip"))) {
         AuSurface *s = au_surface_new(w, h);
         AuCanvas *c = au_canvas_new(s);
-        double t0 = now_ms();
-        for (int i = 0; i < repeat; i++)
+        double t0 = cpu_ms();
+        for (int i = 0; i < repeat && phase[0] == 'p'; i++)
             au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)h}, 0, (i % 20) * (h - 40));
-        printf("%d paints: %.3f ms each\n", repeat, (now_ms() - t0) / repeat);
-        t0 = now_ms();
+        if (phase[0] == 'p')
+            printf("%d paints: %.3f ms each\n", repeat, (cpu_ms() - t0) / repeat);
+        t0 = cpu_ms();
         for (int i = 0; i < repeat; i++)
             au_docview_paint(dv, c, (AuRect){0, (float)(h - 32), (float)w, 32}, 0, (i % 80) * 200);
-        printf("%d strips: %.3f ms each\n", repeat, (now_ms() - t0) / repeat);
+        printf("%d strips: %.3f ms each\n", repeat, (cpu_ms() - t0) / repeat);
         au_canvas_free(c);
         au_surface_free(s);
         repeat = 1;
@@ -303,10 +314,10 @@ int au_host_layout_bench_main(int argc, char **argv)
     /* A layout from scratch: the box tree is built again. */
     for (int k = 0; k < 2; k++) {
         for (int i = 0; i < repeat; i++) {
-            double t0 = now_ms();
+            double t0 = cpu_ms();
             au_layout_tree_changed(L);
             au_layout_update(L, (float)widths[k], (float)h);
-            v[i] = now_ms() - t0;
+            v[i] = cpu_ms() - t0;
         }
         printf("full layout at %d: %.2f ms\n", widths[k], best_of(v, repeat));
     }
@@ -315,9 +326,9 @@ int au_host_layout_bench_main(int argc, char **argv)
     for (int k = 0; k < 2; k++) {
         for (int i = 0; i < repeat; i++) {
             au_layout_update(L, (float)widths[!k], (float)h);
-            double t0 = now_ms();
+            double t0 = cpu_ms();
             au_layout_update(L, (float)widths[k], (float)h);
-            v[i] = now_ms() - t0;
+            v[i] = cpu_ms() - t0;
         }
         printf("relayout %d -> %d (layout only): %.2f ms\n", widths[!k], widths[k], best_of(v, repeat));
     }
@@ -325,10 +336,10 @@ int au_host_layout_bench_main(int argc, char **argv)
         for (int i = 0; i < repeat; i++) {
             au_docview_set_viewport(dv, widths[!k], h);
             au_docview_update(dv);
-            double t0 = now_ms();
+            double t0 = cpu_ms();
             au_docview_set_viewport(dv, widths[k], h);
             au_docview_update(dv);
-            v[i] = now_ms() - t0;
+            v[i] = cpu_ms() - t0;
         }
         printf("relayout %d -> %d (document view): %.2f ms\n", widths[!k], widths[k], best_of(v, repeat));
     }
@@ -336,10 +347,10 @@ int au_host_layout_bench_main(int argc, char **argv)
     for (int i = 0; i < repeat; i++) {
         au_docview_set_viewport(dv, widths[1], h);
         au_docview_update(dv);
-        double t0 = now_ms();
+        double t0 = cpu_ms();
         au_docview_set_viewport(dv, widths[1], h - 16);
         au_docview_update(dv);
-        v[i] = now_ms() - t0;
+        v[i] = cpu_ms() - t0;
     }
     printf("relayout at %d, height %d -> %d (document view): %.2f ms\n", widths[1], h, h - 16, best_of(v, repeat));
     /* What one change of each kind costs in passes. */
@@ -372,9 +383,9 @@ int au_host_layout_bench_main(int argc, char **argv)
         int pages = 0;
         double t_down = 0;
         for (int y = 0; y + h <= ch && pages < 10; y += h - 40, pages++) {
-            double t0 = now_ms();
+            double t0 = cpu_ms();
             au_docview_paint(dv, c, (AuRect){0, 0, (float)W, (float)h}, 0, y);
-            t_down += now_ms() - t0;
+            t_down += cpu_ms() - t0;
         }
         au_glyph_cache_stats(&g1);
         /* The same pages again: the steady state. */
@@ -384,33 +395,38 @@ int au_host_layout_bench_main(int argc, char **argv)
             double t = 0;
             n = 0;
             for (int y = 0; y + h <= ch && n < 10; y += h - 40, n++) {
-                double t0 = now_ms();
+                double t0 = cpu_ms();
                 au_docview_paint(dv, c, (AuRect){0, 0, (float)W, (float)h}, 0, y);
-                t += now_ms() - t0;
+                t += cpu_ms() - t0;
             }
             if (r == 0 || t < t_warm)
                 t_warm = t;
         }
         /* 32-pixel strips at the bottom of the view, as a scroll step
          * paints them. */
-        double t_strip = 0;
+        double t_strip = 0, t_walk = 0;
         int ns = 0;
         for (int r = 0; r < repeat; r++) {
-            double t = 0;
+            double t = 0, t_dot = 0;
             ns = 0;
             for (int y = 0; y + h <= ch && ns < 40; y += (h - 40) / 4, ns++) {
-                double t0 = now_ms();
+                double t0 = cpu_ms();
                 au_docview_paint(dv, c, (AuRect){0, (float)(h - 32), (float)W, 32}, 0, y);
-                t += now_ms() - t0;
+                t += cpu_ms() - t0;
+                t0 = cpu_ms();
+                au_docview_paint(dv, c, (AuRect){0, (float)(h - 1), 1, 1}, 0, y);
+                t_dot += cpu_ms() - t0;
             }
             if (r == 0 || t < t_strip)
                 t_strip = t;
+            if (r == 0 || t_dot < t_walk)
+                t_walk = t_dot;
         }
         if (pages)
             printf("paint at %dx%d: page down, first time %.2f ms (glyph cache %lu misses per page); again %.2f ms; "
-                   "32-pixel strip %.3f ms\n",
+                   "32-pixel strip %.3f ms; one pixel (the walk alone) %.3f ms\n",
                    W, h, t_down / pages, (unsigned long)((g1.misses - g0.misses) / (unsigned long)pages),
-                   t_warm / (n ? n : 1), t_strip / (ns ? ns : 1));
+                   t_warm / (n ? n : 1), t_strip / (ns ? ns : 1), t_walk / (ns ? ns : 1));
         else
             printf("paint at %dx%d: the page does not scroll\n", W, h);
         au_canvas_free(c);

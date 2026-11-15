@@ -332,6 +332,8 @@ struct AuLayout {
     LWordEntry **words;
     uint32_t nwords, words_cap;
     LArena word_arena;
+    /* scratch for shaping (measuring and drawing text) */
+    AuGlyphRun run;
     /* scratch for inline layout */
     LItem *items;
     uint32_t nitems, items_cap;
