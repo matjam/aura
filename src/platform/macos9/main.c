@@ -268,6 +268,20 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_CLOSE_WINDOW);
     else
         DisableItem(file, FILE_CLOSE_WINDOW);
+    /* Undo, Cut, Copy, Paste, Clear and Select All need a text field (or
+     * a desk accessory, which takes them through SystemEdit). */
+    WindowPtr fw = FrontWindow();
+    MacWin *fm = mac_win_of(fw);
+    bool text = (fw && GetWindowKind(fw) < 0) || (fm && fm->edit && fm->edit(fm, 0));
+    MenuHandle edit = GetMenuHandle(kEditMenu);
+    for (short i = 1; i <= 7; i++) {
+        if (i == 2)
+            continue;
+        if (text)
+            EnableItem(edit, i);
+        else
+            DisableItem(edit, i);
+    }
     if (t && t->loading)
         EnableItem(view, VIEW_STOP);
     else

@@ -594,6 +594,8 @@ static bool pw_edit(MacWin *mw, int item)
     Size actual;
     if (GetControlData(focus, 0, kAuControlEditTextTEHandleTag, sizeof te, (Ptr)&te, &actual) != noErr || !te)
         return false;
+    if (item == 0)
+        return true;
     SetPort((GrafPtr)mw->win);
     switch (item) {
     case 3: TECut(te); ZeroScrap(); TEToScrap(); break;

@@ -92,6 +92,15 @@ static void clear_content(AuPage *p)
     p->hover = p->pressed = -1;
 }
 
+/* Clears the content of a live page; a hovered link's status text goes. */
+static void reset_content(AuPage *p)
+{
+    bool had_hover = p->hover >= 0;
+    clear_content(p);
+    if (had_hover && p->cb.status_text)
+        p->cb.status_text(p->cb.ctx, p, "");
+}
+
 static void add_block(AuPage *p, const char *text, size_t len, Face face, float size, AuColor color, float after,
                       const char *link)
 {
@@ -502,7 +511,7 @@ static void finish(AuPage *p, bool ok)
 
 static void load(AuPage *p)
 {
-    clear_content(p);
+    reset_content(p);
     p->failed = false;
     set_str(&p->title, "");
     const char *u = p->url;
@@ -564,7 +573,7 @@ void au_page_stop(AuPage *p)
         return;
     if (p->kind == K_REMOTE) {
         p->failed = true;
-        clear_content(p);
+        reset_content(p);
         build_remote(p, true);
         relayout(p);
     }
@@ -732,7 +741,7 @@ void au_page_idle(AuPage *p)
     uint32_t t = now(p) - p->load_start;
     float prog = (float)t / SIM_LOAD_MS;
     if (prog >= 1) {
-        clear_content(p);
+        reset_content(p);
         char host[256];
         au_url_host(p->url, host, sizeof host);
         set_str(&p->title, host[0] ? host : p->url);

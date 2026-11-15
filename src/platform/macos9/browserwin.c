@@ -211,9 +211,17 @@ static void field_scroll_home(BrowserWin *b)
 /* Scrolls the field sideways so the selection end is visible. */
 static void field_show_caret(BrowserWin *b)
 {
+    /* The caret's x from the text width (TEGetPoint crashed with an
+     * access fault when called from PowerPC code in the 9.2.2 guest). */
+    SignedByte state = HGetState((Handle)b->te);
+    HLock((Handle)b->te);
     TERec *t = *b->te;
-    long pt = TEGetPoint(t->selEnd, b->te);
-    short h = (short)(pt & 0xFFFF);
+    CharsHandle text = TEGetText(b->te);
+    SignedByte tstate = HGetState((Handle)text);
+    HLock((Handle)text);
+    SetPort((GrafPtr)b->base.win);
+    short h = (short)(t->destRect.left + TextWidth((Ptr)*text, 0, t->selEnd));
+    HSetState((Handle)text, tstate);
     short left = t->viewRect.left, right = t->viewRect.right;
     short dh = 0;
     if (h > right - 3)
@@ -222,6 +230,7 @@ static void field_show_caret(BrowserWin *b)
         dh = (short)(left + 12 - h);
     if (t->destRect.left + dh > left)
         dh = (short)(left - t->destRect.left);
+    HSetState((Handle)b->te, state);
     if (dh)
         TEScroll(dh, 0, b->te);
 }
@@ -679,6 +688,8 @@ static bool bw_edit(MacWin *mw, int item)
     BrowserWin *b = (BrowserWin *)mw;
     if (!b->field_focus)
         return false;
+    if (item == 0)
+        return true;
     SetPort((GrafPtr)mw->win);
     switch (item) {
     case 1: /* Undo: swap the field with the snapshot */
@@ -822,8 +833,8 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     int x = 20 + (count % 8) * 20, y = 50 + (count % 8) * 20;
     if (cw > screen.right - x - 4)
         cw = screen.right - x - 4;
-    if (ch > screen.bottom - y - 4)
-        ch = screen.bottom - y - 4;
+    if (ch > screen.bottom - y - 26) /* clear of the Control Strip */
+        ch = screen.bottom - y - 26;
     if (cw < 300)
         cw = 300;
     if (ch < 200)

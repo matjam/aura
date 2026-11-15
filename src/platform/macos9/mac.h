@@ -42,7 +42,8 @@ struct MacWin {
     void (*grow)(MacWin *w); /* after the window was resized */
     void (*close)(MacWin *w);
     /* Edit menu: 1 undo, 3 cut, 4 copy, 5 paste, 6 clear, 7 select all.
-     * Returns true when handled. NULL when the window has no text. */
+     * Returns true when handled. Item 0 only asks whether a text field
+     * has the focus. NULL when the window has no text. */
     bool (*edit)(MacWin *w, int item);
 };
 

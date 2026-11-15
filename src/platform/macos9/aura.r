@@ -44,7 +44,7 @@ resource 'MENU' (128, "Apple") {
 };
 
 resource 'MENU' (129, "File") {
-	129, textMenuProc, 0x7FFFFEDF, enabled, "File",
+	129, textMenuProc, 0x7FFFFF6F, enabled, "File",
 	{
 		"New Window", noIcon, "N", noMark, plain;
 		"New Tab", noIcon, "T", noMark, plain;
@@ -59,7 +59,7 @@ resource 'MENU' (129, "File") {
 };
 
 resource 'MENU' (130, "Edit") {
-	130, textMenuProc, 0x7FFFFEFB, enabled, "Edit",
+	130, textMenuProc, 0x7FFFFF7D, enabled, "Edit",
 	{
 		"Undo", noIcon, "Z", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
@@ -74,7 +74,7 @@ resource 'MENU' (130, "Edit") {
 };
 
 resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFFB7, enabled, "View",
+	131, textMenuProc, 0x7FFFFFDB, enabled, "View",
 	{
 		"Reload", noIcon, "R", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
@@ -97,7 +97,7 @@ resource 'MENU' (135, "Debug") {
 };
 
 resource 'MENU' (132, "Go") {
-	132, textMenuProc, 0x7FFFFFEF, enabled, "Go",
+	132, textMenuProc, 0x7FFFFFF7, enabled, "Go",
 	{
 		"Back", noIcon, "[", noMark, plain;
 		"Forward", noIcon, "]", noMark, plain;
@@ -108,7 +108,7 @@ resource 'MENU' (132, "Go") {
 };
 
 resource 'MENU' (133, "Bookmarks") {
-	133, textMenuProc, 0x7FFFFFF7, enabled, "Bookmarks",
+	133, textMenuProc, 0x7FFFFFFB, enabled, "Bookmarks",
 	{
 		"Add Bookmark", noIcon, "D", noMark, plain;
 		"Show Bookmarks", noIcon, "B", noMark, plain;
