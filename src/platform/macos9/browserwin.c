@@ -454,6 +454,10 @@ static void host_changed(void *ctx, AuBrowserWindow *w, unsigned what)
         update_scroll(b);
     if (what & AU_CHANGED_MENUS)
         mac_menus_dirty();
+    if ((what & AU_CHANGED_FOCUS_PAGE) && b->field_focus) {
+        focus_field(b, false);
+        field_set(b, au_bw_field_text(w), false);
+    }
     if (what & AU_CHANGED_FOCUS_FIELD)
         focus_field(b, true);
 }

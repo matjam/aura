@@ -51,6 +51,8 @@ struct AuDocView {
     char *url, *base;
     char *title;
     char *user_css; /* the user style sheet, or NULL */
+    AuCssFontPrefs font_prefs; /* au_docview_set_font_prefs */
+    bool has_font_prefs;
     AuCssResolver *resolver;
     AuLayout *layout;
     SheetSlot *slots;
@@ -195,6 +197,18 @@ void au_docview_set_user_css(AuDocView *dv, const char *css)
     au_free(dv->user_css);
     dv->user_css = css ? dup(css) : NULL;
     dv->sheets_dirty = true;
+}
+
+void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p)
+{
+    if (dv->has_font_prefs && !memcmp(&dv->font_prefs, p, sizeof *p))
+        return;
+    dv->font_prefs = *p;
+    dv->has_font_prefs = true;
+    if (dv->resolver) {
+        au_css_resolver_set_font_prefs(dv->resolver, p);
+        dv->style_all = true;
+    }
 }
 
 /* ---- Requests ---- */
@@ -548,6 +562,8 @@ void au_docview_begin(AuDocView *dv, const char *url)
     au_node_ref(&dv->doc->node);
     dv->resolver = au_css_resolver_new();
     au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+    if (dv->has_font_prefs)
+        au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     au_layout_set_document(dv->layout, dv->doc);
     dv->parsing = true;
     dv->tree_dirty = dv->sheets_dirty = true;
@@ -611,6 +627,8 @@ static void rebuild_resolver(AuDocView *dv)
         au_css_resolver_free(dv->resolver);
     dv->resolver = au_css_resolver_new();
     au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+    if (dv->has_font_prefs)
+        au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     AuCssDevice dev;
     au_css_device_default(&dev);
     dev.width = (float)dv->vw;

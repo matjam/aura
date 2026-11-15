@@ -64,7 +64,8 @@ enum {
     AU_CHANGED_LAYOUT = 4, /* chrome rectangles moved: place native controls again */
     AU_CHANGED_SCROLL = 8, /* scroll position or range of the active tab */
     AU_CHANGED_MENUS = 16, /* tab list, history or bookmarks: rebuild menus */
-    AU_CHANGED_FOCUS_FIELD = 32 /* put the keyboard focus in the address field */
+    AU_CHANGED_FOCUS_FIELD = 32, /* put the keyboard focus in the address field */
+    AU_CHANGED_FOCUS_PAGE = 64   /* take it out of the field: keys go to the page */
 };
 
 typedef struct AuBrowserHost {
@@ -182,6 +183,15 @@ void au_bw_home(AuBrowserWindow *w);
 AuBookmark *au_bw_bookmark_page(AuBrowserWindow *w, bool toggle);
 bool au_bw_is_bookmarked(AuBrowserWindow *w);
 
+/* ---- Text zoom (active tab) ----
+ * dir > 0 zooms in a step, dir < 0 out, 0 back to 100%. The site's zoom
+ * is remembered (prefs.zoom_sites) and applied when a tab next opens a
+ * page of that site. */
+void au_bw_zoom(AuBrowserWindow *w, int dir);
+bool au_bw_can_zoom(AuBrowserWindow *w, int dir);
+/* The remembered zoom for url's site (1 when none). */
+float au_browser_site_zoom(const AuBrowser *b, const char *url);
+
 /* ---- Address field ---- */
 /* The text the field shows: the edit in progress, else the current URL
  * ("" for about:blank). */
@@ -189,6 +199,10 @@ const char *au_bw_field_text(AuBrowserWindow *w);
 /* Records an edit (NULL ends editing and shows the URL again). */
 void au_bw_set_field_text(AuBrowserWindow *w, const char *text);
 void au_bw_set_field_focus(AuBrowserWindow *w, bool focused);
+/* The user is typing in the field: it has the focus and holds an edit.
+ * Navigation and tab switches move the focus to the page otherwise (see
+ * AU_CHANGED_FOCUS_PAGE). */
+bool au_bw_typing(const AuBrowserWindow *w);
 /* Inline completion for typed text from history and bookmarks: the full
  * URL whose match key extends typed, or NULL. */
 const char *au_bw_complete(AuBrowserWindow *w, const char *typed);

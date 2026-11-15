@@ -74,11 +74,15 @@ resource 'MENU' (130, "Edit") {
 };
 
 resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFFB7, enabled, "View",
+	131, textMenuProc, 0x7FFFFB77, enabled, "View",
 	{
 		"Reload", noIcon, "R", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
 		"View Source", noIcon, "U", noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Zoom In", noIcon, "+", noMark, plain;
+		"Zoom Out", noIcon, "-", noMark, plain;
+		"Actual Size", noIcon, "0", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Tabs on Top", noIcon, noKey, noMark, plain;
 		"Tabs on Left", noIcon, noKey, noMark, plain;

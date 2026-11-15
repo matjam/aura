@@ -55,6 +55,11 @@ static const struct {
     /* A PNG header for a 40x30 image. */
     {"pic.png", "\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0(\0\0\0\x1e"},
     {"notes.txt", "line <one>\r\nline & two\n"},
+    {"big.html", "<!DOCTYPE html><body style='margin:0'><div style='font-size:50em;line-height:1'>x</div>"},
+    {"tiny.html",
+     "<!DOCTYPE html><body style='margin:0'><div style='white-space:nowrap;font-size:10px;line-height:1'>"
+     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     "</div>"},
     {"scroller.html",
      "<!DOCTYPE html><body style='margin:0'><div style='height:100px;overflow:auto'>"
      "<div style='height:1000px'>inner</div></div><div style='height:3000px'></div>"},
@@ -480,6 +485,67 @@ static void test_stop_scroll_resize(void)
     au_browser_free(b);
 }
 
+/* Font preferences reach the resolver (default size, minimum size), and
+ * text zoom is per tab and remembered per site. */
+static void test_zoom(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/big.html", true, -1);
+    settle(w);
+    AuTab *t = au_bw_active_tab(w);
+    int cw, ch;
+    au_page_content_size(t->page, &cw, &ch);
+    CHECK(ch == 800); /* 50em of a 16px default */
+    b->prefs.font_size = 20;
+    au_browser_prefs_changed(b);
+    au_page_content_size(t->page, &cw, &ch);
+    CHECK(ch == 1000);
+    b->prefs.font_size = 16;
+    au_browser_prefs_changed(b);
+
+    CHECK(!au_bw_can_zoom(w, 0) && au_bw_can_zoom(w, 1) && au_bw_can_zoom(w, -1));
+    au_bw_zoom(w, 1);
+    CHECK(au_page_zoom(t->page) > 1.09f && au_page_zoom(t->page) < 1.11f);
+    au_page_content_size(t->page, &cw, &ch);
+    CHECK(ch == 880);
+    CHECK(au_bw_can_zoom(w, 0));
+    /* The site (file:) keeps its zoom: another page of it, and a new tab. */
+    float sz = au_browser_site_zoom(b, "file:///anything.html");
+    CHECK(sz > 1.09f && sz < 1.11f);
+    au_bw_navigate(w, "file:///mem/links.html");
+    CHECK(au_page_zoom(t->page) > 1.09f);
+    au_bw_new_tab(w, "about:home", true, -1);
+    CHECK(au_page_zoom(au_bw_active_tab(w)->page) == 1.0f);
+    au_bw_new_tab(w, "file:///mem/big.html", true, -1);
+    settle(w);
+    AuTab *t2 = au_bw_active_tab(w);
+    au_page_content_size(t2->page, &cw, &ch);
+    CHECK(ch == 880);
+    /* Actual Size forgets the site. */
+    au_bw_zoom(w, 0);
+    au_page_content_size(t2->page, &cw, &ch);
+    CHECK(ch == 800);
+    CHECK(au_browser_site_zoom(b, "file:///x") == 1.0f);
+    /* Steps stop at the ends. */
+    for (int i = 0; i < 20; i++)
+        au_bw_zoom(w, -1);
+    CHECK(au_page_zoom(t2->page) == AU_PAGE_ZOOM_MIN && !au_bw_can_zoom(w, -1));
+    au_bw_zoom(w, 0);
+
+    /* Minimum font size. */
+    au_bw_navigate(w, "file:///mem/tiny.html");
+    settle(w);
+    au_page_content_size(t2->page, &cw, &ch);
+    CHECK(cw == 1000);
+    b->prefs.font_size_min = 20;
+    au_browser_prefs_changed(b);
+    au_page_content_size(t2->page, &cw, &ch);
+    CHECK(cw == 2000);
+    b->prefs.font_size_min = 0;
+    au_browser_free(b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -490,6 +556,7 @@ int main(void)
     test_about();
     test_network();
     test_stop_scroll_resize();
+    test_zoom();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

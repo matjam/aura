@@ -197,9 +197,18 @@ was left at. To plug in networking, register a fetcher per scheme with
 http and https show a placeholder after a simulated load. Image sizes
 come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
 yet. The font preferences reach the engine as the generic families of
-the font set and a user style sheet (`html { font-size }`, monospace
-size). `src/css` now has `au_css_resolver_set_font_prefs` (default
-sizes, text zoom, minimum size); the shell does not call it yet.
+the font set and, for the default and monospace sizes, the minimum size
+and the tab's text zoom, `au_docview_set_font_prefs` (which passes them
+to `au_css_resolver_set_font_prefs`). Text zoom is per tab
+(`au_bw_zoom`, View > Zoom In, Zoom Out, Actual Size); the last zoom
+chosen for a site (host, or scheme for `file:`) is kept in the
+`zoom.sites` preference and applied when a tab opens that site again.
+
+Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
+a navigation or a tab switch the page has the focus, unless the user is
+typing in the address field; a tab showing a fresh blank page puts it in
+the field. The model reports the move with `AU_CHANGED_FOCUS_PAGE` or
+`AU_CHANGED_FOCUS_FIELD`.
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left

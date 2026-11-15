@@ -37,7 +37,11 @@ typedef struct PrefsWin {
     ControlHandle root, tab, panes[NPANES];
     ControlHandle field[F_COUNT];
     bool is_edit[F_COUNT];
+    signed char pane_of[F_COUNT]; /* the pane a control is on, -1 for none */
     int pane;
+    Field focus;          /* the edit field with the keyboard focus, or F_NONE */
+    Field last_click;     /* for double-clicks */
+    unsigned long last_click_ticks;
     AuTabPosition orig_tabs;
     char **families;
     int nfamilies;
@@ -109,6 +113,7 @@ static void edit(PrefsWin *p, int pane, Field f, short x, short y, short w)
     p->field[f] = make(p, pane, kAuControlEditTextProc, (short)(x + 3), (short)(y + 3), (short)(w - 6), 16, NULL, 0,
                        0, 0);
     p->is_edit[f] = true;
+    p->pane_of[f] = (signed char)pane;
 }
 
 static void check(PrefsWin *p, int pane, Field f, short x, short y, short w, const char *title)
@@ -438,15 +443,114 @@ static void store(PrefsWin *p, AuPrefs *pr)
 
 /* ---- Window ---- */
 
+/* ---- Keyboard focus ----
+ * Aura tracks which edit field has the focus itself rather than leaving
+ * it to AdvanceKeyboardFocus, which walks into the hidden panes: only a
+ * field of the visible pane ever holds the focus (and blinks a caret).
+ * Tab and Shift-Tab move between the visible pane's fields and select the
+ * whole contents, as Mac dialogs do; a click places the caret; a
+ * double-click selects a word, and the whole number in a number field. */
+
+static bool is_number_field(Field f)
+{
+    switch (f) {
+    case F_SIZE: case F_SIZE_MONO: case F_SIZE_MIN: case F_HISTORY_DAYS: case F_HTTP_PORT: case F_HTTPS_PORT:
+    case F_MEM_CACHE: case F_DISK_CACHE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static TEHandle field_te(PrefsWin *p, Field f)
+{
+    TEHandle te = NULL;
+    Size actual;
+    if (f == F_NONE || !p->field[f] ||
+        GetControlData(p->field[f], 0, kAuControlEditTextTEHandleTag, sizeof te, (Ptr)&te, &actual) != noErr)
+        return NULL;
+    return te;
+}
+
+static void drop_focus(PrefsWin *p)
+{
+    ControlHandle cur = NULL;
+    if (GetKeyboardFocus(p->base.win, &cur) == noErr && cur)
+        SetKeyboardFocus(p->base.win, cur, kAuControlFocusNoPart);
+    p->focus = F_NONE;
+}
+
+static void select_all_in(PrefsWin *p, Field f)
+{
+    TEHandle te = field_te(p, f);
+    if (te)
+        TESetSelect(0, 32767, te);
+}
+
+static void focus_edit(PrefsWin *p, Field f, bool select_all)
+{
+    SetPort((GrafPtr)p->base.win);
+    if (p->focus != f) {
+        drop_focus(p);
+        if (SetKeyboardFocus(p->base.win, p->field[f], kAuControlEditTextPart) == noErr)
+            p->focus = f;
+    }
+    if (select_all && p->focus == f)
+        select_all_in(p, f);
+}
+
+/* The next (dir 1) or previous (dir -1) edit field of the visible pane
+ * after the focused one, wrapping; F_NONE when the pane has none. */
+static Field next_edit(PrefsWin *p, int dir)
+{
+    int start = p->focus != F_NONE && p->pane_of[p->focus] == p->pane ? (int)p->focus : (dir > 0 ? 0 : F_COUNT);
+    for (int k = 1; k <= F_COUNT; k++) {
+        int i = ((start + dir * k) % F_COUNT + F_COUNT) % F_COUNT;
+        if (i != F_NONE && p->is_edit[i] && p->pane_of[i] == p->pane)
+            return (Field)i;
+    }
+    return F_NONE;
+}
+
+/* Selects the word around the caret (letters, digits and dots). */
+static void select_word(PrefsWin *p, Field f)
+{
+    TEHandle te = field_te(p, f);
+    if (!te)
+        return;
+    SignedByte st = HGetState((Handle)te);
+    HLock((Handle)te);
+    CharsHandle h = TEGetText(te);
+    SignedByte hs = HGetState((Handle)h);
+    HLock((Handle)h);
+    const unsigned char *s = (const unsigned char *)*h;
+    short n = (**te).teLength, a = (**te).selStart, b = a;
+#define WORDCH(c) (((c) >= '0' && (c) <= '9') || ((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z') || \
+                   (c) == '.' || (c) == '-' || (c) >= 0x80)
+    while (a > 0 && WORDCH(s[a - 1]))
+        a--;
+    while (b < n && WORDCH(s[b]))
+        b++;
+#undef WORDCH
+    HSetState((Handle)h, hs);
+    HSetState((Handle)te, st);
+    if (b > a)
+        TESetSelect(a, b, te);
+}
+
 static void show_pane(PrefsWin *p, int pane)
 {
+    /* Hidden controls must not hold the focus or draw a caret. */
+    drop_focus(p);
     p->pane = pane;
     for (int i = 0; i < NPANES; i++)
         if (i != pane)
             SetControlVisibility(p->panes[i], false, true);
     SetControlVisibility(p->panes[pane], true, true);
-    /* Focus the first edit field of the pane, if any. */
-    SetKeyboardFocus(p->base.win, p->root, kAuControlFocusNoPart);
+    /* The pane's first edit field takes the focus, its text selected. */
+    Field f = next_edit(p, 1);
+    if (f != F_NONE)
+        focus_edit(p, f, true);
 }
 
 static void close_prefs(PrefsWin *p, bool ok)
@@ -520,8 +624,22 @@ static void pw_click(MacWin *mw, EventRecord *ev)
     if (!c)
         return;
     Field f = field_of(p, c);
-    if (f != F_NONE && p->is_edit[f])
-        SetKeyboardFocus(mw->win, c, kAuControlEditTextPart);
+    if (f != F_NONE && p->is_edit[f]) {
+        bool dbl = f == p->last_click && ev->when - p->last_click_ticks <= (unsigned long)GetDblTime();
+        p->last_click = f;
+        p->last_click_ticks = ev->when;
+        focus_edit(p, f, false);
+        HandleControlClick(c, pt, ev->modifiers, (ControlActionUPP)-1);
+        if (dbl) {
+            if (is_number_field(f))
+                select_all_in(p, f);
+            else
+                select_word(p, f);
+            p->last_click = F_NONE; /* a third click starts over */
+        }
+        return;
+    }
+    p->last_click = F_NONE;
     if (!HandleControlClick(c, pt, ev->modifiers, (ControlActionUPP)-1))
         return;
     AuPrefs *pr = &g_browser->prefs;
@@ -576,23 +694,21 @@ static bool pw_key(MacWin *mw, EventRecord *ev)
         return true;
     }
     if (ch == 0x09) {
-        AdvanceKeyboardFocus(mw->win);
+        Field f = next_edit(p, (ev->modifiers & shiftKey) ? -1 : 1);
+        if (f != F_NONE)
+            focus_edit(p, f, true);
         return true;
     }
-    ControlHandle focus = NULL;
-    if (GetKeyboardFocus(mw->win, &focus) == noErr && focus)
-        HandleControlKey(focus, (SInt16)((ev->message >> 8) & 0xFF), (SInt16)ch, ev->modifiers);
+    if (p->focus != F_NONE && p->pane_of[p->focus] == p->pane)
+        HandleControlKey(p->field[p->focus], (SInt16)((ev->message >> 8) & 0xFF), (SInt16)ch, ev->modifiers);
     return true;
 }
 
 static bool pw_edit(MacWin *mw, int item)
 {
-    ControlHandle focus = NULL;
-    if (GetKeyboardFocus(mw->win, &focus) != noErr || !focus)
-        return false;
-    TEHandle te = NULL;
-    Size actual;
-    if (GetControlData(focus, 0, kAuControlEditTextTEHandleTag, sizeof te, (Ptr)&te, &actual) != noErr || !te)
+    PrefsWin *p = (PrefsWin *)mw;
+    TEHandle te = p->focus != F_NONE && p->pane_of[p->focus] == p->pane ? field_te(p, p->focus) : NULL;
+    if (!te)
         return false;
     if (item == 0)
         return true;
@@ -610,7 +726,8 @@ static bool pw_edit(MacWin *mw, int item)
 
 static void pw_idle(MacWin *mw)
 {
-    if (mw->win == FrontWindow() && g_in_front) {
+    PrefsWin *p = (PrefsWin *)mw;
+    if (mw->win == FrontWindow() && g_in_front && p->focus != F_NONE) {
         SetPort((GrafPtr)mw->win);
         IdleControls(mw->win);
     }

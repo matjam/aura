@@ -142,7 +142,14 @@ static int closes, changes, invalidations;
 static uint32_t t_ms(void *ctx) { (void)ctx; return fake_ms; }
 static AuTime t_now(void *ctx) { (void)ctx; return fake_now; }
 static void t_inval(void *ctx, AuBrowserWindow *w, AuIRect r) { (void)ctx, (void)w, (void)r; invalidations++; }
-static void t_changed(void *ctx, AuBrowserWindow *w, unsigned what) { (void)ctx, (void)w, (void)what; changes++; }
+static unsigned focus_last; /* the last focus change reported */
+static void t_changed(void *ctx, AuBrowserWindow *w, unsigned what)
+{
+    (void)ctx, (void)w;
+    changes++;
+    if (what & (AU_CHANGED_FOCUS_FIELD | AU_CHANGED_FOCUS_PAGE))
+        focus_last = what & (AU_CHANGED_FOCUS_FIELD | AU_CHANGED_FOCUS_PAGE);
+}
 static void t_close(void *ctx, AuBrowserWindow *w) { (void)ctx, (void)w; closes++; }
 
 static bool t_read(void *ctx, const char *url, char **data, size_t *len)
@@ -269,6 +276,52 @@ static void test_tabs(AuFontSet *fonts)
     size_t before = b->history.n;
     au_bw_navigate(w, "file:///doc.html?private");
     CHECK(b->history.n == before && au_history_find(&b->history, "file:///doc.html?private") < 0);
+    au_browser_free(b);
+}
+
+/* The focus rule: the page has the focus after navigation and tab
+ * switches unless the user is typing in the field; a fresh blank tab puts
+ * it in the field. */
+static void test_focus(AuFontSet *fonts)
+{
+    AuBrowser *b = make_browser(fonts);
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    focus_last = 0;
+    au_bw_new_tab(w, NULL, true, -1);
+    CHECK(focus_last == AU_CHANGED_FOCUS_FIELD);
+    /* Focused but not edited (the URL selected): navigation moves it. */
+    au_bw_set_field_focus(w, true);
+    au_bw_navigate(w, "about:fonts");
+    CHECK(focus_last == AU_CHANGED_FOCUS_PAGE);
+
+    /* Typing in the field: Back does not take the focus or the edit. */
+    au_bw_set_field_focus(w, true);
+    au_bw_set_field_text(w, "half-typ");
+    CHECK(au_bw_typing(w));
+    focus_last = 0;
+    au_bw_back(w);
+    CHECK(focus_last == 0);
+    CHECK_STR(au_bw_field_text(w), "half-typ");
+
+    /* A tab switch ends the edit and gives the page the focus. */
+    au_bw_new_tab(w, "about:scene", false, -1);
+    au_bw_select_tab(w, 1);
+    CHECK(focus_last == AU_CHANGED_FOCUS_PAGE);
+    CHECK_STR(au_bw_field_text(w), "about:scene");
+    /* So does closing a tab (the defect: the field stayed focused). */
+    au_bw_new_tab(w, "about:home", true, -1);
+    au_bw_set_field_focus(w, true);
+    focus_last = 0;
+    au_bw_close_tab(w, w->active);
+    CHECK(focus_last == AU_CHANGED_FOCUS_PAGE);
+    /* A background tab opened from a link leaves the focus alone. */
+    focus_last = 0;
+    au_bw_new_tab(w, "about:home", false, -1);
+    CHECK(focus_last == 0);
+    /* Switching to a fresh blank tab focuses the field. */
+    au_bw_new_tab(w, NULL, false, w->ntabs);
+    au_bw_select_tab(w, w->ntabs - 1);
+    CHECK(focus_last == AU_CHANGED_FOCUS_FIELD);
     au_browser_free(b);
 }
 
@@ -997,6 +1050,7 @@ int main(void)
     test_url();
     test_nav();
     test_tabs(fonts);
+    test_focus(fonts);
     test_mouse(fonts);
     test_history();
     test_bookmarks();

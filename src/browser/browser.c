@@ -3,6 +3,7 @@
 #include "url.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- Back/forward list ---- */
@@ -553,9 +554,146 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     return t;
 }
 
+/* ---- Text zoom ----
+ * Each tab has a text zoom; the last zoom chosen for a site (host, or
+ * the scheme for URLs without one) is kept in prefs.zoom_sites as
+ * "key=percent" items separated by spaces, and applied when a tab moves
+ * to that site. */
+
+static const float zoom_steps[] = {0.5f, 0.67f, 0.8f, 0.9f, 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f};
+#define NZOOM ((int)(sizeof zoom_steps / sizeof zoom_steps[0]))
+#define MAX_ZOOM_SITES 64
+
+static void zoom_key(const char *url, char *out, size_t cap)
+{
+    if (!strncmp(url, "view-source:", 12))
+        url += 12;
+    au_url_host(url, out, cap);
+    if (!out[0]) {
+        size_t n = au_url_scheme_len(url, strlen(url));
+        if (n + 2 > cap)
+            n = 0;
+        memcpy(out, url, n);
+        out[n] = ':';
+        out[n + 1] = 0;
+    }
+    for (char *p = out; *p; p++)
+        if (*p >= 'A' && *p <= 'Z')
+            *p = (char)(*p + 32);
+}
+
+float au_browser_site_zoom(const AuBrowser *b, const char *url)
+{
+    char key[256];
+    zoom_key(url, key, sizeof key);
+    size_t kn = strlen(key);
+    const char *s = b->prefs.zoom_sites ? b->prefs.zoom_sites : "";
+    while (*s) {
+        while (*s == ' ')
+            s++;
+        const char *e = s;
+        while (*e && *e != ' ')
+            e++;
+        if ((size_t)(e - s) > kn + 1 && !memcmp(s, key, kn) && s[kn] == '=') {
+            int pct = atoi(s + kn + 1);
+            if (pct >= 50 && pct <= 300)
+                return (float)pct / 100.0f;
+        }
+        s = e;
+    }
+    return 1.0f;
+}
+
+static void set_site_zoom(AuBrowser *b, const char *url, float zoom)
+{
+    char key[256];
+    zoom_key(url, key, sizeof key);
+    size_t kn = strlen(key);
+    AuBuf out;
+    au_buf_init(&out);
+    int pct = (int)(zoom * 100.0f + 0.5f);
+    if (pct != 100 && kn && !strchr(key, ' ') && !strchr(key, '='))
+        au_buf_printf(&out, "%s=%d", key, pct);
+    int kept = 1;
+    const char *s = b->prefs.zoom_sites ? b->prefs.zoom_sites : "";
+    while (*s && kept < MAX_ZOOM_SITES) {
+        while (*s == ' ')
+            s++;
+        const char *e = s;
+        while (*e && *e != ' ')
+            e++;
+        if (e > s && !((size_t)(e - s) > kn && !memcmp(s, key, kn) && s[kn] == '=')) {
+            if (out.len)
+                au_buf_putc(&out, ' ');
+            au_buf_append(&out, s, (size_t)(e - s));
+            kept++;
+        }
+        s = e;
+    }
+    au_prefs_set_str(&b->prefs.zoom_sites, au_buf_cstr(&out));
+    au_buf_free(&out);
+    b->prefs_gen++;
+}
+
+/* A tab moving to url takes the site's zoom when the site changes. */
+static void apply_site_zoom(AuTab *t, const char *url)
+{
+    char a[256], c[256];
+    zoom_key(url, a, sizeof a);
+    zoom_key(au_page_url(t->page), c, sizeof c);
+    if (strcmp(a, c) != 0 || !au_nav_current(&t->nav))
+        au_page_set_zoom(t->page, au_browser_site_zoom(t->win->browser, url));
+}
+
+void au_bw_zoom(AuBrowserWindow *w, int dir)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return;
+    float z = au_page_zoom(t->page), nz = 1.0f;
+    if (dir > 0) {
+        nz = zoom_steps[NZOOM - 1];
+        for (int i = 0; i < NZOOM; i++)
+            if (zoom_steps[i] > z + 0.001f) {
+                nz = zoom_steps[i];
+                break;
+            }
+    } else if (dir < 0) {
+        nz = zoom_steps[0];
+        for (int i = NZOOM - 1; i >= 0; i--)
+            if (zoom_steps[i] < z - 0.001f) {
+                nz = zoom_steps[i];
+                break;
+            }
+    }
+    if (nz == z)
+        return;
+    au_page_set_zoom(t->page, nz);
+    set_site_zoom(w->browser, au_page_url(t->page), nz);
+    clamp_scroll(t);
+    invalidate(w, w->layout.page);
+    changed(w, AU_CHANGED_SCROLL);
+}
+
+bool au_bw_can_zoom(AuBrowserWindow *w, int dir)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return false;
+    float z = au_page_zoom(t->page);
+    if (dir > 0)
+        return z < zoom_steps[NZOOM - 1] - 0.001f;
+    if (dir < 0)
+        return z > zoom_steps[0] + 0.001f;
+    return z < 0.999f || z > 1.001f;
+}
+
+static bool fresh_blank(AuTab *t);
+
 /* Loads url into tab t as a new back/forward entry. */
 static void load_new(AuTab *t, const char *url)
 {
+    apply_site_zoom(t, url);
     AuNavEntry *cur = au_nav_current(&t->nav);
     if (cur)
         cur->scroll_y = t->scroll_y;
@@ -577,7 +715,32 @@ AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int ind
         au_bw_select_tab(w, tab_index(w, t));
     load_new(t, url && *url ? url : "about:blank");
     changed(w, AU_CHANGED_MENUS);
+    if (au_bw_active_tab(w) == t)
+        changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     return t;
+}
+
+/* ---- Keyboard focus ----
+ * The rule: after a navigation or a tab switch the page has the focus,
+ * unless the user is typing in the address field (it has the focus and
+ * holds an edit), and except that a tab showing a fresh blank page puts
+ * the focus in the field, ready for an address. The shell moves the
+ * focus when it gets AU_CHANGED_FOCUS_PAGE or AU_CHANGED_FOCUS_FIELD. */
+
+bool au_bw_typing(const AuBrowserWindow *w)
+{
+    return w->field_focused && w->field != NULL;
+}
+
+static bool fresh_blank(AuTab *t)
+{
+    return t->nav.n <= 1 && !strcmp(au_page_url(t->page), "about:blank");
+}
+
+static void focus_after_navigation(AuBrowserWindow *w)
+{
+    if (!au_bw_typing(w))
+        changed(w, AU_CHANGED_FOCUS_PAGE);
 }
 
 void au_bw_select_tab(AuBrowserWindow *w, int i)
@@ -589,6 +752,7 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
     au_free(w->field);
     w->field = NULL;
     AuTab *t = w->tabs[i];
+    changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     set_viewport(t);
     clamp_scroll(t);
     ensure_tab_visible(w, i);
@@ -653,11 +817,15 @@ void au_bw_navigate(AuBrowserWindow *w, const char *url)
     AuTab *t = au_bw_active_tab(w);
     if (!t)
         return;
-    au_free(w->field);
-    w->field = NULL;
+    bool typing = au_bw_typing(w);
+    if (!typing) {
+        au_free(w->field);
+        w->field = NULL;
+    }
     load_new(t, url);
     invalidate(w, w->layout.toolbar);
     changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    focus_after_navigation(w);
 }
 
 void au_bw_navigate_input(AuBrowserWindow *w, const char *text)
@@ -680,12 +848,15 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     AuNavEntry *e = au_nav_go(&t->nav, delta);
     char *url = au_strndup(e->url, strlen(e->url));
     int sy = e->scroll_y;
-    au_free(w->field);
-    w->field = NULL;
+    if (!au_bw_typing(w)) {
+        au_free(w->field);
+        w->field = NULL;
+    }
     record_visit(w->browser, url, e->title);
     /* The page scrolls back to sy once it is loaded far enough. */
     t->scroll_x = t->scroll_y = 0;
     au_page_set_scroll(t->page, 0, 0);
+    apply_site_zoom(t, url);
     au_page_navigate_entry(t->page, url, 0, sy);
     au_free(url);
     clamp_scroll(t);
@@ -693,6 +864,7 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     invalidate(w, w->layout.toolbar);
     invalidate(w, w->layout.page);
     changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    focus_after_navigation(w);
 }
 
 void au_bw_back(AuBrowserWindow *w) { au_bw_go(w, -1); }
@@ -1314,6 +1486,7 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
         AuNavEntry *e = au_nav_current(&t->nav);
         if (e) {
             char *url = au_strndup(e->url, strlen(e->url));
+            apply_site_zoom(t, url);
             au_page_navigate(t->page, url);
             au_free(url);
         }

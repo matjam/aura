@@ -142,6 +142,13 @@ void au_page_content_size(const AuPage *p, int *width, int *height);
 void au_page_set_scroll(AuPage *p, int x, int y);
 /* Font preferences or other settings in env.prefs changed: restyle. */
 void au_page_prefs_changed(AuPage *p);
+/* Text zoom: font sizes are multiplied by zoom (clamped to the range
+ * below); other lengths are not. It applies to this and later documents
+ * of the page until changed. */
+#define AU_PAGE_ZOOM_MIN 0.5f
+#define AU_PAGE_ZOOM_MAX 3.0f
+void au_page_set_zoom(AuPage *p, float zoom);
+float au_page_zoom(const AuPage *p);
 
 /* Paints the document into the canvas rectangle view (canvas
  * coordinates), with the document point (scroll_x, scroll_y) at view's

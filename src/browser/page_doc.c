@@ -100,6 +100,8 @@ struct AuPage {
     char *open_url;
     bool open_new_tab;
 
+    float zoom; /* text zoom, 1 for none */
+
     AuPageStats stats;
 };
 
@@ -210,31 +212,30 @@ static bool font_installed(AuFontSet *fs, const char *family)
 }
 
 /* The preferences' families become the generic families (when they are
- * installed), and the sizes go into the user style sheet. */
+ * installed); the default sizes, the minimum size and the tab's text zoom
+ * go to the resolver's font preferences. */
 static void apply_font_prefs(AuPage *p)
 {
     const AuPrefs *pr = p->env.prefs;
-    if (!pr)
-        return;
-    if (font_installed(p->env.fonts, pr->font_serif))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_SERIF, pr->font_serif);
-    if (font_installed(p->env.fonts, pr->font_sans))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_SANS_SERIF, pr->font_sans);
-    if (font_installed(p->env.fonts, pr->font_mono))
-        au_fontset_set_generic(p->env.fonts, AU_GENERIC_MONOSPACE, pr->font_mono);
-    int size = pr->font_size > 0 ? pr->font_size : 16;
-    int mono = pr->font_size_mono > 0 ? pr->font_size_mono : 13;
-    char css[512];
-    int n = snprintf(css, sizeof css, "html { font-size: %dpx; font-family: serif; }\n", size);
-    if (mono != size && n > 0 && (size_t)n < sizeof css) {
-        /* Monospace text at its own size, without compounding inside <pre>. */
-        int milli = mono * 1000 / size;
-        snprintf(css + n, sizeof css - (size_t)n,
-                 "pre, code, kbd, samp, tt, listing, xmp, plaintext, textarea { font-size: %d.%03dem; }\n"
-                 "pre code, pre kbd, pre samp, pre tt { font-size: 1em; }\n",
-                 milli / 1000, milli % 1000);
+    AuCssFontPrefs fp;
+    au_css_font_prefs_default(&fp);
+    if (pr) {
+        if (font_installed(p->env.fonts, pr->font_serif))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_SERIF, pr->font_serif);
+        if (font_installed(p->env.fonts, pr->font_sans))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_SANS_SERIF, pr->font_sans);
+        if (font_installed(p->env.fonts, pr->font_mono))
+            au_fontset_set_generic(p->env.fonts, AU_GENERIC_MONOSPACE, pr->font_mono);
+        if (pr->font_size > 0)
+            fp.default_size = (float)pr->font_size;
+        if (pr->font_size_mono > 0)
+            fp.default_mono_size = (float)pr->font_size_mono;
+        fp.min_size = pr->font_size_min > 0 ? (float)pr->font_size_min : 0;
     }
-    au_docview_set_user_css(p->dv, css);
+    fp.text_zoom = p->zoom > 0 ? p->zoom : 1;
+    au_docview_set_font_prefs(p->dv, &fp);
+    /* The initial family: the reader's serif face, as browsers default. */
+    au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
 }
 
 /* ---- Image sizes ----
@@ -1040,6 +1041,7 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     p->vh = 480;
     p->content_w = p->vw;
     p->content_h = p->vh;
+    p->zoom = 1;
     AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
@@ -1125,6 +1127,20 @@ void au_page_prefs_changed(AuPage *p)
         invalidate_all(p);
     }
 }
+
+void au_page_set_zoom(AuPage *p, float zoom)
+{
+    if (!(zoom >= AU_PAGE_ZOOM_MIN))
+        zoom = AU_PAGE_ZOOM_MIN;
+    if (zoom > AU_PAGE_ZOOM_MAX)
+        zoom = AU_PAGE_ZOOM_MAX;
+    if (zoom == p->zoom)
+        return;
+    p->zoom = zoom;
+    au_page_prefs_changed(p);
+}
+
+float au_page_zoom(const AuPage *p) { return p->zoom; }
 
 void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
 {

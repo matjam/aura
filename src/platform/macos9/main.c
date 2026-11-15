@@ -17,7 +17,8 @@ enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
        FILE_QUIT = 9 };
 enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_PREFS = 9 };
-enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_TABS_TOP = 5, VIEW_TABS_LEFT, VIEW_DEBUG = 8 };
+enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
+       VIEW_TABS_LEFT, VIEW_DEBUG = 12 };
 enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS, DEBUG_TIMINGS };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
@@ -301,6 +302,14 @@ void mac_adjust_menus(void)
         EnableItem(view, VIEW_SOURCE);
     else
         DisableItem(view, VIEW_SOURCE);
+    static const short zoom_items[3] = {VIEW_ZOOM_IN, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET};
+    static const int zoom_dirs[3] = {1, -1, 0};
+    for (int i = 0; i < 3; i++) {
+        if (w && au_bw_can_zoom(w, zoom_dirs[i]))
+            EnableItem(view, zoom_items[i]);
+        else
+            DisableItem(view, zoom_items[i]);
+    }
     CheckItem(view, VIEW_TABS_TOP, g_browser->prefs.tab_position == AU_TABS_TOP);
     CheckItem(view, VIEW_TABS_LEFT, g_browser->prefs.tab_position == AU_TABS_LEFT);
     if (t && au_nav_can_go(&t->nav, -1))
@@ -436,6 +445,12 @@ static void do_menu(long choice)
             }
             break;
         }
+        case VIEW_ZOOM_IN:
+        case VIEW_ZOOM_OUT:
+        case VIEW_ZOOM_RESET:
+            if (w)
+                au_bw_zoom(w, item == VIEW_ZOOM_IN ? 1 : item == VIEW_ZOOM_OUT ? -1 : 0);
+            break;
         case VIEW_TABS_TOP:
         case VIEW_TABS_LEFT:
             g_browser->prefs.tab_position = item == VIEW_TABS_LEFT ? AU_TABS_LEFT : AU_TABS_TOP;
@@ -651,6 +666,8 @@ static void key_down(EventRecord *ev)
             close_window(FrontWindow());
             return;
         }
+        if (ch == '=')
+            ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();
         long choice = MenuKey(ch);
         if (choice >> 16)
