@@ -22,7 +22,9 @@ promise_test('document.styleSheets lists the style and link sheets in order', as
     assert.ok(l[1] === document.getElementById('link').sheet);
     assert.ok(/res\/green\.css$/.test(l[1].href), l[1].href);
     assert.equal(l[0].cssRules.length, 2);
-    assert.equal(l[1].cssRules[0].style.color, 'rgb(0, 128, 0)');
+    /* a fetched sheet's text is not kept: its rules cannot be read */
+    assert.throws(() => l[1].cssRules, 'NotSupportedError');
+    assert.throws(() => l[1].insertRule('#target { color: rgb(9, 9, 9) }', 0), 'NotSupportedError');
 });
 promise_test('insertRule, a rule change and deleteRule apply', async () => {
     await loaded;
@@ -47,8 +49,12 @@ promise_test('sheet.disabled turns a sheet off and on', async () => {
     assert.equal(document.styleSheets.length, 2, 'a disabled sheet stays in the list');
     link.sheet.disabled = false;
     assert.equal(style().color, 'rgb(0, 128, 0)');
-    link.sheet.insertRule('#target { color: rgb(9, 9, 9) }', 1);
-    assert.equal(style().color, 'rgb(9, 9, 9)');
+    const inline = document.getElementById('inline').sheet;
+    inline.insertRule('#target { text-decoration-line: underline }', 0);
+    inline.disabled = true;
+    assert.equal(style().textDecorationLine, 'none');
+    inline.disabled = false;
+    assert.equal(style().textDecorationLine, 'underline');
 });
 promise_test('getComputedStyle: used width and height, pseudo-elements, white-space', async () => {
     await loaded;

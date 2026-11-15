@@ -425,8 +425,9 @@ static JSValue n_random(JSContext *ctx, JSValueConst this_val, int argc, JSValue
 }
 
 /* ---- CSSOM: the sheet of a style or link element (prelude_cssom.js) ----
- * sheetText(el): [text, url] once the sheet has loaded, false while it
- * loads, null when el has no sheet or the embedder has no sheets. */
+ * sheetText(el): [text, url] once the sheet has loaded ([null, url] when
+ * its text is not kept), false while it loads, null when el has no sheet
+ * or the embedder has no sheets. */
 static JSValue n_sheet_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;
@@ -441,9 +442,9 @@ static JSValue n_sheet_text(JSContext *ctx, JSValueConst this_val, int argc, JSV
     JSValue r = JS_NULL;
     if (st == 1) {
         r = JS_FALSE;
-    } else if (st == 2) {
+    } else if (st == 2 || st == 3) {
         r = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, r, 0, JS_NewStringLen(ctx, text.data ? text.data : "", text.len));
+        JS_SetPropertyUint32(ctx, r, 0, st == 3 ? JS_NULL : JS_NewStringLen(ctx, text.data ? text.data : "", text.len));
         JS_SetPropertyUint32(ctx, r, 1, JS_NewStringLen(ctx, url.data ? url.data : "", url.len));
     }
     au_buf_free(&text);

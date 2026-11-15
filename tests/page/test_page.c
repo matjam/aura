@@ -248,6 +248,56 @@ static void test_sheets(void)
     au_docview_free(dv);
 }
 
+/* A sheet whose media query does not match is neither fetched nor parsed
+ * until the viewport changes so that it matches. */
+static void test_media_sheets(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><html><head>"
+                       "<link rel=stylesheet media=print href=p.css>"
+                       "<link rel=stylesheet media='(min-width: 1000px)' href=wide.css>"
+                       "<link rel=stylesheet media='screen and (max-width: 900px)' href=narrow.css>"
+                       "<style media='(min-width: 1000px)'>#t{width:77px}</style>"
+                       "<style>@import url(i.css) (min-width: 1000px); @import url(j.css) screen;"
+                       " #t{min-height:1px}</style>"
+                       "</head><body style='margin:0'><div id=t></div></body>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    CHECK(f.n == 2, "%d requests at 800px, want 2", f.n);
+    CHECK(fake_find(&f, "http://example.com/narrow.css") != NULL, "narrow.css not requested");
+    CHECK(fake_find(&f, "http://example.com/j.css") != NULL, "j.css not requested");
+    CHECK(fake_find(&f, "http://example.com/p.css") == NULL, "print sheet requested");
+    CHECK(fake_find(&f, "http://example.com/wide.css") == NULL, "wide.css requested at 800px");
+    CHECK(fake_find(&f, "http://example.com/i.css") == NULL, "i.css requested at 800px");
+    fake_deliver(&f, dv, "http://example.com/narrow.css", "#t{height:30px}", true);
+    fake_deliver(&f, dv, "http://example.com/j.css", "#t{margin-top:2px}", true);
+    CHECK(!au_docview_loading(dv) && f.finished == 1, "deferred sheets hold the load: finished %d", f.finished);
+    AuRect r = rect_of(dv, "t");
+    CHECK(r.h == 30 && r.w == 800 && r.y == 2, "at 800px: %gx%g at y %g", r.w, r.h, r.y);
+
+    /* wider: the deferred link and import are fetched, the deferred
+     * <style> is parsed, and narrow.css stops applying */
+    au_docview_set_viewport(dv, 1200, 700);
+    CHECK(f.n == 4, "%d requests at 1200px, want 4", f.n);
+    CHECK(fake_find(&f, "http://example.com/wide.css") != NULL, "wide.css not requested at 1200px");
+    CHECK(fake_find(&f, "http://example.com/i.css") != NULL, "i.css not requested at 1200px");
+    CHECK(fake_find(&f, "http://example.com/p.css") == NULL, "print sheet requested");
+    r = rect_of(dv, "t");
+    CHECK(r.w == 77 && r.h == 1, "deferred <style> at 1200px: %gx%g", r.w, r.h);
+    fake_deliver(&f, dv, "http://example.com/wide.css", "#t{height:40px}", true);
+    fake_deliver(&f, dv, "http://example.com/i.css", "#t{margin-left:3px}", true);
+    r = rect_of(dv, "t");
+    CHECK(r.w == 77 && r.h == 40 && r.x == 3, "at 1200px: %gx%g at x %g", r.w, r.h, r.x);
+
+    /* narrow again: nothing is fetched twice; the sheets stay parsed and
+     * their media queries are evaluated by the cascade */
+    au_docview_set_viewport(dv, 800, 600);
+    CHECK(f.n == 4, "%d requests after narrowing, want 4", f.n);
+    r = rect_of(dv, "t");
+    CHECK(r.w == 800 && r.h == 30 && r.x == 0, "back at 800px: %gx%g at x %g", r.w, r.h, r.x);
+    au_docview_free(dv);
+}
+
 /* ---- Base, title, fragments ---- */
 
 static void test_base_title_fragments(void)
@@ -711,6 +761,7 @@ int main(void)
     fonts = ahem_fontset(fontdata);
     test_urls();
     test_sheets();
+    test_media_sheets();
     test_base_title_fragments();
     test_input();
     test_incremental();

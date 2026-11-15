@@ -177,7 +177,8 @@ typedef struct AuJsHooks {
     AuFetcher fetcher;
     /* CSSOM: the style sheet of a style or link element. sheet_text
      * appends the sheet's text and its URL to the buffers and returns 2;
-     * 1 when the sheet has not loaded yet, 0 when el has no sheet.
+     * 3 (URL only) when the sheet is loaded but its text is not kept; 1
+     * when the sheet has not loaded yet, 0 when el has no sheet.
      * sheet_set_text replaces the text the cascade uses for it (insertRule,
      * deleteRule and rule changes; the element's own text stays), and
      * sheet_disable turns it off or on. All optional. */

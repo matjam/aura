@@ -436,7 +436,7 @@ static void test_search_box_defer(void)
  * :has() rules (where a restyle covers the whole document), with and
  * without script listeners. The first character (the field stops being
  * empty: :placeholder-shown) may restyle. */
-static void keystroke_costs(const char *what, bool script, const char *extra)
+static void keystroke_costs(const char *what, bool script, const char *extra, unsigned may_style)
 {
     Ctx c;
     AuBuf html;
@@ -473,7 +473,8 @@ static void keystroke_costs(const char *what, bool script, const char *extra)
             au_docview_run_scripts(dv, 10);
         au_docview_update(dv);
         au_docview_stats(dv, &s1);
-        CHECK(s1.style_passes == s0.style_passes && s1.styled_elements == s0.styled_elements,
+        /* may_style: elements a listener's attribute changes may restyle */
+        CHECK((may_style || s1.style_passes == s0.style_passes) && s1.styled_elements - s0.styled_elements <= may_style,
               "%s, key %d: %u style passes, %u elements styled", what, (int)k, s1.style_passes - s0.style_passes,
               s1.styled_elements - s0.styled_elements);
         CHECK(s1.tree_builds == s0.tree_builds && s1.layouts == s0.layouts, "%s, key %d: %u tree builds, %u layouts",
@@ -490,7 +491,16 @@ static void keystroke_costs(const char *what, bool script, const char *extra)
 
 static void test_keystroke_cost(void)
 {
-    keystroke_costs("no script", false, "");
+    keystroke_costs("no script", false, "", 0);
+    /* a listener that changes attributes in the document on every key, as
+     * Wikipedia's search field does (a hidden input's value, an aria
+     * attribute): at most those elements restyle, nothing is laid out and
+     * only the field is repainted */
+    keystroke_costs("attribute writers", true,
+                    "<script>var q=document.getElementById('q'),h=document.getElementById('h');"
+                    "q.addEventListener('input',function(){h.value=q.value;h.setAttribute('data-n',q.value.length);"
+                    "q.setAttribute('aria-expanded',q.value.length%2?'true':'false');});</script>",
+                    4);
     /* listeners that read the field and build a detached tree, as a
      * suggestions widget does before it shows anything */
     keystroke_costs("listeners", true,
@@ -500,7 +510,8 @@ static void test_keystroke_cost(void)
                     "q.addEventListener('input',function(){built=document.createElement('ul');"
                     "for(var i=0;i<5;i++){var li=document.createElement('li');li.className='item';"
                     "li.setAttribute('role','option');li.textContent=q.value+i;built.appendChild(li);}});"
-                    "</script>");
+                    "</script>",
+                    0);
 }
 
 static void test_script_events(void)

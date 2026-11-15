@@ -10,6 +10,8 @@
  * sheet with :has() coarsely (cascade.c). */
 #include "css_int.h"
 
+#include "../dom/control.h"
+
 /* ---- Atom caches ---- */
 
 static uint32_t *ci_hash;
@@ -401,8 +403,20 @@ static bool has_text_content(const AuElement *el)
     return false;
 }
 
+/* The control's live value once the user or script has changed it (the
+ * dirty value flag); until then the value is the default, which the
+ * callers read from the value attribute or the textarea's text. */
+static const AuControl *live_control(const AuElement *el)
+{
+    const AuControl *c = au_ctl_peek(el);
+    return c && c->dirty ? c : NULL;
+}
+
 static bool value_empty(const AuElement *el)
 {
+    const AuControl *c = live_control(el);
+    if (c)
+        return c->value.len == 0;
     if (is_html_tag(el, HN(textarea)))
         return !has_text_content(el);
     const char *v = attr_val(el, HN(value));
@@ -495,6 +509,15 @@ static bool range_state(const AuElement *el, bool *in_range)
     const char *mn = attr_val(el, HN(min)), *mx = attr_val(el, HN(max)), *v = attr_val(el, HN(value));
     if (!mn && !mx)
         return false;
+    char live[48];
+    const AuControl *c = live_control(el);
+    if (c) {
+        size_t n = c->value.len < sizeof live - 1 ? c->value.len : sizeof live - 1;
+        if (n)
+            memcpy(live, c->value.data, n);
+        live[n] = 0;
+        v = live;
+    }
     *in_range = true;
     if (v && *v) {
         double x = 0, lo = 0, hi = 0;
@@ -702,11 +725,26 @@ static bool has_match(const AuSelList *l, const AuElement *anchor, const CssMatc
 {
     CssMatchCtx sub = *mc;
     sub.bloom = NULL; /* the filter describes the anchor's ancestors, not the candidates' */
-    uint64_t below = mc->has_index ? has_mask(mc->has_index, anchor) : ~(uint64_t)0;
+    uint64_t below = ~(uint64_t)0;
+    bool have_below = false;
     for (uint32_t k = 0; k < l->n; k++) {
         const AuSelector *s = &l->sel[k];
         int rc = s->rel_comb ? s->rel_comb : COMB_DESCENDANT;
         if (rc == COMB_DESCENDANT || rc == COMB_CHILD) {
+            if (!have_below) {
+                have_below = true;
+                /* an anchor without element children needs no summary */
+                bool kids = false;
+                for (AuNode *n = anchor->node.first_child; n && !kids; n = n->next)
+                    kids = n->type == AU_NODE_ELEMENT;
+                if (!kids)
+                    below = 0;
+                else if (mc->has_index) {
+                    if (!mc->has_index->size && mc->has_root)
+                        css_has_index_build(mc->has_index, mc->has_root);
+                    below = has_mask(mc->has_index, anchor);
+                }
+            }
             uint64_t need = css_has_selector_bits(s);
             if ((below & need) != need)
                 continue;

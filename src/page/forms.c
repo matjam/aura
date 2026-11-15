@@ -1453,6 +1453,7 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
     if (cmd && ev->ch && ev->key == AU_KEY_NONE && !(ev->ch == 'a' || ev->ch == 'A'))
         return false;
     bool used_by_script = false;
+    dv->in_key = true;
     if (dv->script) {
         char key[16], code[24];
         key_names(ev, key, sizeof key, code, sizeof code);
@@ -1467,8 +1468,10 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
                                   ev->mods);
         if (target)
             au_node_unref(&target->node);
-        if (!dv->doc)
+        if (!dv->doc) {
+            dv->in_key = false;
             return true;
+        }
         el = dv->focus && alive(dv, dv->focus) ? dv->focus : NULL;
         if (!ok)
             used_by_script = true;
@@ -1498,8 +1501,19 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
         AuElement *t = dv->focus && alive(dv, dv->focus) ? dv->focus : NULL;
         au_docscript_key(dv->script, t, "keyup", key, code, ev->mods);
     }
-    if (dv->restyle_needed || dv->tree_dirty)
-        au_docview_update(dv);
+    dv->in_key = false;
+    if (dv->restyle_needed || dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan) {
+        /* What listeners and state changes did during the key
+         * (au_dv_turn_end leaves it to here): update now, and repaint the
+         * page only if the update changed something. A restyle that
+         * computes the same values repaints nothing. A change still
+         * waiting for its paint (pending) was invalidated when it was
+         * made. */
+        bool heavy = dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan;
+        bool pending = au_layout_needs_paint(dv->layout);
+        if (au_docview_update(dv) || heavy || (!pending && au_layout_needs_paint(dv->layout)))
+            au_dv_invalidate_all(dv);
+    }
     return used;
 }
 

@@ -66,7 +66,7 @@ void css_push_decl(AuCssDeclBlock *out, uint16_t prop, const AuCssValue *v, uint
         return;
     }
     AuCssDecl *d = new_decl(out, prop, f, DK_BLOB);
-    d->u.blob = css_blob_pack(v, has_url(v) ? base_url : NULL);
+    d->u.blob = has_url(v) ? css_blob_pack(v, base_url) : css_blob_pack_shared(v);
 }
 
 static void push_wide(AuCssDeclBlock *out, uint16_t prop, uint16_t kw, uint8_t flags)

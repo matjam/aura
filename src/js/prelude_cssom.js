@@ -11,6 +11,10 @@
  * never inserted, so they are parsed and serialized by the same code as
  * inline styles; a rule that script has not changed keeps its source text.
  *
+ * A link element's sheet is listed and can be disabled, but its rules
+ * cannot be read or changed (NotSupportedError): the document view frees
+ * a fetched sheet's text once it is parsed.
+ *
  * Not here: constructed sheets (new CSSStyleSheet, adoptedStyleSheets), the
  * sheets of @import rules (CSSImportRule.styleSheet is null), rules nested
  * in a style rule, and the rules of cross-origin sheets (SecurityError,
@@ -315,6 +319,8 @@ class CSSStyleSheet extends StyleSheet {
         if (t) {
             if (this._el.localName === 'link' && !N.sameOrigin(t[1]))
                 throw domErr('The rules of a cross-origin style sheet cannot be read', 'SecurityError');
+            /* the document view frees a fetched sheet's text once it is parsed */
+            if (t[0] === null) throw domErr("The rules of a linked style sheet are not kept: only a style element's can be read", 'NotSupportedError');
             return t[0];
         }
         const own = this._el.localName === 'style' ? this._el.textContent : '';

@@ -8,23 +8,31 @@
 #include "script.h"
 #include "webfont.h"
 
-/* A style sheet source: its text once loaded, and its @import children. */
+/* A style sheet source: a <style>, a <link> or an @import. It is parsed
+ * once, when its text is there; the parsed sheet stays until the source
+ * goes. A source whose media query does not match the device is neither
+ * fetched nor parsed until it matches (deferred). */
 typedef struct SheetSrc SheetSrc;
 struct SheetSrc {
     char *url;    /* base URL for the sheet (absolute) */
     char *media;  /* media attribute or @import media, NULL for all */
-    char *text;   /* NULL while loading (or after a failure) */
-    size_t len;
+    char *text;   /* a <style>'s text, kept to notice edits; a fetched sheet's text is freed once parsed */
+    size_t len;   /* the text's length, also after the text is freed */
     uint32_t req; /* outstanding request, 0 if none */
     bool failed;
+    bool deferred;     /* media does not match: not fetched (a <style>: not parsed) yet */
+    AuCssSheet *sheet; /* parsed, or NULL; owned here, an import's by its parent's sheet */
+    SheetSrc *parent;  /* the importing sheet, NULL for a <style> or <link> */
+    uint32_t index;    /* which @import of the parent */
+    uint32_t depth;    /* imports above this one */
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
-    bool imports_scanned;
-    /* CSSOM (au_dv_sheet_*): text that replaces the sheet's own for the
-     * cascade after script changed its rules, and sheet.disabled. Its
-     * @import rules are not loaded. */
+    /* CSSOM (au_dv_sheet_*): the text script wrote back after changing the
+     * sheet's rules and the sheet parsed from it, which replaces sheet in
+     * the cascade (its @import rules are not loaded); and sheet.disabled. */
     char *om_text;
     size_t om_len;
+    AuCssSheet *om_sheet;
     bool disabled;
 };
 
@@ -60,6 +68,8 @@ struct AuDocView {
     AuLayout *layout;
     SheetSlot *slots;
     uint32_t nslots, slots_cap;
+    AuCssSheet *user_sheet; /* user_css parsed for this document, or NULL */
+    uint32_t ndeferred;     /* sheet sources waiting for their media query to match */
     AuDocImages *imgs; /* docimages.c */
     Request *reqs;
     uint32_t nreqs, reqs_cap;
@@ -78,6 +88,7 @@ struct AuDocView {
     bool scripting;      /* the setting, applied at begin */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
+    bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
     uint32_t dead_builds, dead_layouts; /* counts of layouts replaced by new_layout */
     uint32_t nbg;        /* background requests among reqs */
@@ -108,5 +119,6 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r);
  * script, the bindings run it). */
 void au_forms_activate(AuDocView *dv, AuElement *target, int x, int y);
 void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
+void au_dv_invalidate_all(AuDocView *dv);
 
 #endif

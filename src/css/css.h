@@ -652,12 +652,20 @@ const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r);
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s);
 /* Removes and frees a sheet. */
 void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s);
+/* Removes every added sheet without freeing it: the caller owns them
+ * again. To keep parsed sheets across changes of the sheet list, detach,
+ * then add the current ones in order. Detach before freeing the resolver
+ * when the sheets must outlive it. */
+void au_css_resolver_detach_sheets(AuCssResolver *r);
 /* Call after attaching imports or otherwise changing sheets. */
 void au_css_resolver_sheets_changed(AuCssResolver *r);
 /* Finds @keyframes by name across the author sheets (last one wins). */
 const AuCssKeyframes *au_css_resolver_keyframes(AuCssResolver *r, AuAtom name);
 /* True if the media query list matches the current device (matchMedia). */
 bool au_css_media_matches(AuCssResolver *r, const char *query, size_t len);
+/* The same against a device, without a resolver: whether a sheet with
+ * this media attribute applies now. */
+bool au_css_media_text_matches(const char *query, size_t len, const AuCssDevice *dev);
 /* True if the condition is supported (CSS.supports(condition)). */
 bool au_css_supports(const char *cond, size_t len);
 /* CSS.supports(property, value). */
@@ -687,9 +695,20 @@ void au_css_clear_document(AuDocument *doc);
 
 /* ---- Invalidation ----
  * Tell the resolver what changed; au_css_restyle then recomputes what is
- * affected. The current implementation restyles the element's subtree and
- * its following siblings' subtrees, or the whole document when a :has()
- * rule exists or the change is global. */
+ * affected. Call it before or after the change, and au_css_restyle after
+ * it.
+ *
+ * State, attribute, class, id and inline style changes are targeted: the
+ * element is restyled, plus the descendants, following siblings and
+ * :has() anchors that some selector reading that state or naming that
+ * class, id or attribute can reach from it. A class, id or attribute no
+ * selector names (and that no presentational hint, attr() or pseudo-class
+ * reads) restyles nothing. An element whose new style has the same values
+ * keeps its old AuStyle object, and its subtree is left alone unless a
+ * selector reaches into it; so equal styles stay pointer-equal.
+ *
+ * Child changes restyle the element's subtree and its following siblings'
+ * subtrees, or the whole document when a :has() rule exists. */
 typedef enum {
     AU_CSS_CHANGE_ATTR,     /* an attribute, class or id changed (attr: its name) */
     AU_CSS_CHANGE_STATE,    /* hover, focus, checked, ... (AU_STATE_* bits) */
@@ -698,13 +717,33 @@ typedef enum {
     AU_CSS_CHANGE_ALL       /* sheets, device, fonts */
 } AuCssChange;
 void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAtom attr);
+/* The AU_STATE_* bits in bits changed on el (already set or cleared; call
+ * it for every element whose bits changed, ancestors included). Restyles
+ * el, and only the other elements that selectors reading those states can
+ * reach from el: its descendants or following siblings when a rule has the
+ * state left of a combinator, and the ancestors or preceding siblings that
+ * a :has() argument with the state can anchor on. el's subtree is restyled
+ * when its style comes out different. AU_CSS_CHANGE_STATE is this call
+ * with every bit. */
+void au_css_invalidate_state(AuCssResolver *r, AuElement *el, uint32_t bits);
+/* Moves a state that an element shares with its ancestors (AU_STATE_HOVER,
+ * AU_STATE_ACTIVE) from one element to another; either may be NULL. Sets
+ * and clears the bit and invalidates only the elements whose bit changed:
+ * those below the nearest common ancestor. r may be NULL. */
+void au_css_move_state(AuCssResolver *r, AuElement *from, AuElement *to, uint32_t bit);
 
 /* ---- Selectors (querySelector, matches) ---- */
 typedef struct AuCssSelectorList AuCssSelectorList;
 /* Returns NULL if the selector list is invalid. */
 AuCssSelectorList *au_css_selector_parse(const char *text, size_t len);
 void au_css_selector_free(AuCssSelectorList *l);
+/* Element.matches: :scope is el itself. */
 bool au_css_selector_matches(const AuCssSelectorList *l, AuElement *el);
+/* The same with :scope (and a bare & ) standing for scope: the element
+ * querySelectorAll or closest was called on. A scope that is not an
+ * element (a document or fragment, or NULL) makes :scope match the root
+ * element, as :root does. au_css_query_selector uses its root. */
+bool au_css_selector_matches_scoped(const AuCssSelectorList *l, AuElement *el, const AuNode *scope);
 /* The first matching element in root's subtree (preorder), or NULL. */
 AuElement *au_css_query_selector(const AuCssSelectorList *l, AuNode *root);
 
