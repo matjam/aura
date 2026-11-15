@@ -523,6 +523,12 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
         rq.allow_http_fallback = p->allow_http;
         p->allow_http = false;
     } else {
+        /* HTTPS-first upgrades navigations only. A page that was loaded
+         * over http (the user accepted that) loads its http subresources
+         * as written: upgrading them and dropping the ones whose https
+         * fails left such pages without their style sheets and images.
+         * Hosts known to HSTS are still upgraded. */
+        rq.allow_http_fallback = true;
         rq.document_url = p->url;
         rq.top_level_url = p->url;
         rq.referrer_policy = p->rpolicy;

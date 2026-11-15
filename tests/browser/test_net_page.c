@@ -539,12 +539,15 @@ static void test_errors(void)
     e.b->prefs.https_first = true;
     au_net_config(e.net)->https_first = true;
     FakeServer *plain = fake_server(&e.f, "plain.test", 80);
-    respond_html(plain, "<title>Plain</title>");
+    respond_html(plain, "<title>Plain</title><link rel=stylesheet href=s.css>");
+    fake_respond(plain, "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: 14\r\n\r\nbody{margin:0}");
     expect_title(&e, "http://plain.test/", "HTTPS not available");
     CHECK(click_link(&e, "aura-action:http"), "Continue to the HTTP site link");
     settle(&e, 800);
-    CHECK(!strcmp(au_page_title(page(&e)), "Plain") && plain->nreq == 1, "http after consent: %s",
-          au_page_title(page(&e)));
+    CHECK(!strcmp(au_page_title(page(&e)), "Plain"), "http after consent: %s", au_page_title(page(&e)));
+    /* The page's own http style sheet loads over http too: HTTPS-first
+     * upgrades navigations, not the subresources of an http page. */
+    CHECK(plain->nreq == 2, "the http page's style sheet was fetched over http: %d requests", plain->nreq);
     env_free(&e);
 }
 
