@@ -42,8 +42,13 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
  * of font set or a new web font needs a new one). */
 static void new_layout(AuDocView *dv, AuFontSet *fonts)
 {
-    if (dv->layout)
+    if (dv->layout) {
+        uint32_t b, l;
+        au_layout_pass_counts(dv->layout, &b, &l);
+        dv->dead_builds += b;
+        dv->dead_layouts += l;
         au_layout_free(dv->layout);
+    }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use};
     dv->layout = au_layout_new(&env);
     if (dv->doc)
@@ -107,6 +112,9 @@ static void free_sheet_src(AuDocView *dv, SheetSrc *s)
     au_free(s->url);
     au_free(s->media);
     au_free(s->text);
+    au_free(s->om_text);
+    if (s->om_sheet)
+        au_css_sheet_free(s->om_sheet);
     au_free(s);
 }
 
@@ -242,6 +250,16 @@ uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms)
 bool au_docview_animating(const AuDocView *dv)
 {
     return au_docimages_animating(dv->imgs);
+}
+
+void au_docview_stats(const AuDocView *dv, AuDocViewStats *s)
+{
+    uint32_t b = 0, l = 0;
+    *s = dv->stats;
+    if (dv->layout)
+        au_layout_pass_counts(dv->layout, &b, &l);
+    s->tree_builds = dv->dead_builds + b;
+    s->layouts = dv->dead_layouts + l;
 }
 
 void au_docview_image_stats(const AuDocView *dv, AuImageCacheStats *s)
@@ -867,8 +885,11 @@ static void rebuild_resolver(AuDocView *dv)
     }
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSrc *s = dv->slots[i].src;
-        if (s->sheet)
-            au_css_resolver_add_sheet(dv->resolver, s->sheet);
+        /* CSSOM: a disabled sheet is left out; a sheet whose rules script
+         * changed is the one parsed from the text script wrote back */
+        AuCssSheet *sh = s->om_sheet ? s->om_sheet : s->sheet;
+        if (sh && !s->disabled)
+            au_css_resolver_add_sheet(dv->resolver, sh);
     }
     au_css_resolver_sheets_changed(dv->resolver);
     dv->style_all = true;
@@ -939,11 +960,16 @@ static bool update_style(AuDocView *dv)
         new_layout(dv, au_webfonts_set(dv->webfonts));
         dv->style_all = true; /* ex and ch units */
     }
+    bool any_style = dv->viewport_restyle || dv->style_all || dv->tree_dirty || dv->restyle_needed;
+    uint32_t styled0 = any_style ? au_css_resolver_styled_count(dv->resolver) : 0;
+    if (any_style)
+        dv->stats.style_passes++;
     if (dv->viewport_restyle && !dv->style_all && !dv->tree_dirty) {
         /* Only the viewport changed: the document is the same, so the
          * layout compares each box's style and keeps the box tree unless
          * a media query changed what is displayed. */
         au_css_style_document(dv->resolver, dv->doc);
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
         au_layout_styles_changed(dv->layout);
         dv->viewport_restyle = false;
         dv->restyle_needed = false;
@@ -951,6 +977,7 @@ static bool update_style(AuDocView *dv)
     } else if (dv->style_all || dv->tree_dirty) {
         dv->viewport_restyle = false;
         au_css_style_document(dv->resolver, dv->doc);
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
         au_layout_tree_changed(dv->layout);
         au_docimages_tree_changed(dv->imgs);
         dv->style_all = dv->tree_dirty = false;
@@ -960,6 +987,7 @@ static bool update_style(AuDocView *dv)
             au_webfonts_scan(dv->webfonts, dv->doc, fetch_font, dv);
     } else if (dv->restyle_needed) {
         au_css_restyle(dv->resolver, dv->doc);
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
         au_layout_styles_changed(dv->layout);
         dv->restyle_needed = false;
     }
@@ -1352,7 +1380,18 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
         return;
     AuElement *el = au_is_element(n) ? au_as_element(n) : NULL;
     if (kind == 2 && el && dv->resolver) { /* attribute */
-        bool style_only = attr_name == AU_ATOM_class || attr_name == AU_ATOM_id || attr_name == AU_ATOM_style;
+        /* Attributes the box tree never reads: they reach layout only
+         * through selectors and attr(), which the restyle covers. Scripts
+         * set these on every keystroke (aria-expanded and
+         * aria-activedescendant on a search field, the value of a hidden
+         * input that mirrors it). */
+        const char *an = attr_name ? au_atom_str(attr_name) : "";
+        const char *ty = au_element_get_attr(el, AU_ATOM_type);
+        bool hidden_value = !strcmp(an, "value") && el->ns == AU_NS_HTML && el->tag == AU_ATOM_input && ty &&
+                            (ty[0] == 'h' || ty[0] == 'H') && strlen(ty) == 6;
+        bool style_only = attr_name == AU_ATOM_class || attr_name == AU_ATOM_id || attr_name == AU_ATOM_style ||
+                          !strncmp(an, "aria-", 5) || !strncmp(an, "data-", 5) || !strcmp(an, "role") ||
+                          !strcmp(an, "title") || !strcmp(an, "tabindex") || !strcmp(an, "autocomplete") || hidden_value;
         au_css_invalidate(dv->resolver, el,
                           attr_name == AU_ATOM_style ? AU_CSS_CHANGE_INLINE_STYLE : AU_CSS_CHANGE_ATTR, attr_name);
         dv->restyle_needed = true;
@@ -1371,6 +1410,68 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
         dv->tree_dirty = true;
         dv->sheets_rescan = true;
     }
+}
+
+/* ---- CSSOM (script.c): the sheet of a style or link element ---- */
+
+static SheetSrc *sheet_of(AuDocView *dv, AuElement *el)
+{
+    if (!dv->doc)
+        return NULL;
+    if (dv->sheets_rescan) { /* script changed the tree: find new sheets first */
+        dv->sheets_rescan = false;
+        prune_slots(dv);
+        scan_document(dv, !dv->parsing);
+    }
+    for (uint32_t i = 0; i < dv->nslots; i++)
+        if (dv->slots[i].el == el)
+            return dv->slots[i].src;
+    return NULL;
+}
+
+int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || s->failed)
+        return 0;
+    /* not fetched yet, or held back until its media query matches */
+    if (!s->text && !s->sheet)
+        return 1;
+    au_buf_puts(url, s->url ? s->url : "");
+    if (s->om_text)
+        au_buf_append(text, s->om_text, s->om_len);
+    else if (s->text)
+        au_buf_append(text, s->text, s->len);
+    else
+        return 3; /* a fetched sheet: its text was freed once parsed */
+    return 2;
+}
+
+void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || (!s->text && !s->om_text))
+        return;
+    /* The resolver borrows the parsed sheets: it lets go of them before
+     * one is freed, and update_style hands them back (sheets_dirty). */
+    if (dv->resolver)
+        au_css_resolver_detach_sheets(dv->resolver);
+    if (s->om_sheet)
+        au_css_sheet_free(s->om_sheet);
+    au_free(s->om_text);
+    s->om_text = au_strndup(text, len);
+    s->om_len = len;
+    s->om_sheet = au_css_sheet_parse(s->om_text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    dv->sheets_dirty = true;
+}
+
+void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled)
+{
+    SheetSrc *s = sheet_of(dv, el);
+    if (!s || s->disabled == disabled)
+        return;
+    s->disabled = disabled;
+    dv->sheets_dirty = true;
 }
 
 void au_dv_parsed_more(AuDocView *dv)
@@ -1398,8 +1499,17 @@ void au_dv_check_finished(AuDocView *dv)
 
 void au_dv_turn_end(AuDocView *dv)
 {
+    /* While a key is handled, au_docview_key decides at its end: it
+     * updates, and repaints the page only if something changed. */
+    if (dv->in_key)
+        return;
     if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan)
         invalidate_all(dv);
+}
+
+void au_dv_invalidate_all(AuDocView *dv)
+{
+    invalidate_all(dv);
 }
 
 void au_dv_update_style(AuDocView *dv)

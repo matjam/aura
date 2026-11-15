@@ -2780,6 +2780,19 @@ void au_page_free(AuPage *p)
     au_free(p);
 }
 
+bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
+{
+    return p->dv && au_docview_eval(p->dv, src, out);
+}
+
+bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s)
+{
+    if (!p->dv)
+        return false;
+    au_docview_stats(p->dv, s);
+    return true;
+}
+
 size_t au_page_console_count(const AuPage *p)
 {
     return p->console_count;

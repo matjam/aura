@@ -98,6 +98,11 @@ void au_dv_update_style(AuDocView *dv);
 const AuDocViewCallbacks *au_dv_callbacks(const AuDocView *dv);
 void au_dv_scroll(const AuDocView *dv, int *x, int *y, int *vw, int *vh);
 AuCssResolver *au_dv_resolver(const AuDocView *dv);
+/* CSSOM: the sheet of a style or link element (AuJsHooks.sheet_text,
+ * sheet_set_text and sheet_disable in src/js/js.h say what they do). */
+int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url);
+void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len);
+void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
 /* forms.c: script focused el (NULL: blurred); script submitted form

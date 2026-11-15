@@ -186,3 +186,76 @@ promise_test('postMessage to self', async () => {
     const e = await p;
     assert.equal(e.data.v, 1);
 });
+
+promise_test('MessageChannel delivers cloned messages in order, as tasks', async () => {
+    const { port1, port2 } = new MessageChannel();
+    assert.ok(port1 instanceof MessagePort && port1 instanceof EventTarget);
+    const got = [];
+    const obj = { n: 1 };
+    port1.postMessage(obj);
+    obj.n = 2;
+    port1.postMessage('second');
+    assert.equal(got.length, 0);
+    port2.onmessage = (e) => got.push(e.data);
+    assert.equal(got.length, 0, 'not delivered inside the call');
+    await delay(10);
+    assert.equal(got.length, 2);
+    assert.equal(got[0].n, 1, 'cloned when posted');
+    assert.equal(got[1], 'second');
+    /* addEventListener needs start() */
+    const back = [];
+    port1.addEventListener('message', (e) => back.push(e.data));
+    port2.postMessage('x');
+    await delay(10);
+    assert.equal(back.length, 0);
+    port1.start();
+    await delay(10);
+    assert.equal(back.join(), 'x');
+    port1.close();
+    port2.postMessage('lost');
+    await delay(10);
+    assert.equal(back.length, 1);
+    assert.throws(() => new MessagePort(), TypeError);
+    assert.throws(() => port2.postMessage(1, [new ArrayBuffer(1)]), 'DataCloneError');
+});
+
+test('crypto gives random values where the embedder has a source', () => {
+    const a = crypto.getRandomValues(new Uint8Array(64));
+    assert.ok(a.some((x) => x !== 0), 'bytes were filled');
+    const b = crypto.getRandomValues(new Uint32Array(4));
+    assert.equal(b.length, 4);
+    assert.throws(() => crypto.getRandomValues(new Float64Array(2)), 'TypeMismatchError');
+    assert.throws(() => crypto.getRandomValues(new Uint8Array(65537)), 'QuotaExceededError');
+    const u = crypto.randomUUID();
+    assert.ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(u), u);
+    assert.notEqual(u, crypto.randomUUID());
+    assert.equal(crypto.subtle, undefined);
+});
+
+test('ARIA reflection, sandbox tokens and createCDATASection', () => {
+    const d = document.createElement('div');
+    assert.equal(d.ariaLabel, null);
+    d.ariaLabel = 'Close';
+    assert.equal(d.getAttribute('aria-label'), 'Close');
+    d.role = 'button';
+    assert.equal(d.getAttribute('role'), 'button');
+    d.ariaLabel = null;
+    assert.ok(!d.hasAttribute('aria-label'));
+    d.setAttribute('aria-valuenow', '3');
+    assert.equal(d.ariaValueNow, '3');
+    assert.equal(document.createElement('iframe').sandbox.supports('allow-scripts'), false);
+    assert.throws(() => document.createCDATASection('x'), 'NotSupportedError');
+});
+
+promise_test('postMessage takes a URL as the target origin', async () => {
+    const got = [];
+    const l = (e) => { if (e.data && e.data.tag === 'origin-test') got.push(e.data.n); };
+    addEventListener('message', l);
+    postMessage({ tag: 'origin-test', n: 1 }, location.href);
+    postMessage({ tag: 'origin-test', n: 2 }, 'https://elsewhere.example/');
+    postMessage({ tag: 'origin-test', n: 3 }, { targetOrigin: '*' });
+    await delay(20);
+    removeEventListener('message', l);
+    assert.equal(got.join(), '1,3');
+    assert.throws(() => postMessage(1, 'no url'), 'SyntaxError');
+});

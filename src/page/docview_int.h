@@ -27,6 +27,13 @@ struct SheetSrc {
     uint32_t depth;    /* imports above this one */
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
+    /* CSSOM (au_dv_sheet_*): the text script wrote back after changing the
+     * sheet's rules and the sheet parsed from it, which replaces sheet in
+     * the cascade (its @import rules are not loaded); and sheet.disabled. */
+    char *om_text;
+    size_t om_len;
+    AuCssSheet *om_sheet;
+    bool disabled;
 };
 
 /* A <style> or <link> element in document order. */
@@ -82,6 +89,9 @@ struct AuDocView {
     bool scripting;      /* the setting, applied at begin */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
+    bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
+    AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
+    uint32_t dead_builds, dead_layouts; /* counts of layouts replaced by new_layout */
     uint32_t nbg;        /* background requests among reqs */
     double clock;        /* the fallback clock */
     /* forms (forms.c) */
@@ -110,5 +120,6 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r);
  * script, the bindings run it). */
 void au_forms_activate(AuDocView *dv, AuElement *target, int x, int y);
 void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
+void au_dv_invalidate_all(AuDocView *dv);
 
 #endif
