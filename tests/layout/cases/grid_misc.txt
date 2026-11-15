@@ -1,0 +1,244 @@
+Grid: how a grid container takes part in other layout (inline-grid,
+flex, shrink-to-fit), absolutely positioned children, stacking, limits.
+
+=== an absolutely positioned child uses its grid area as containing block
+<body style="margin:0">
+<div id=g style="display:grid;position:relative;width:300px;padding:10px;grid-template-columns:repeat(3,100px);grid-template-rows:50px 50px">
+<div id=p style="position:absolute;grid-column:2 / 3;grid-row:2;top:0;left:0;width:20px;height:20px"></div>
+<div id=q style="position:absolute;grid-column:2 / 4;grid-row:1 / 2;inset:0"></div>
+<div id=a>x</div><div id=b>x</div>
+</div>
+---
+#p x=110 y=60 w=20 h=20
+#q x=110 y=10 w=200 h=50
+// it takes no cell
+#a x=10 y=10
+#b x=110 y=10
+
+=== an auto line of an absolutely positioned child is the padding edge
+<body style="margin:0">
+<div id=g style="display:grid;position:relative;width:300px;padding:10px;grid-template-columns:repeat(3,100px);grid-template-rows:50px 50px">
+<div id=p style="position:absolute;grid-column-start:3;inset:0"></div>
+<div id=q style="position:absolute;grid-row-end:2;inset:0"></div>
+<div id=r style="position:absolute;inset:0"></div>
+</div>
+---
+#p x=210 y=0 w=110 h=120
+#q x=0 y=0 w=320 h=60
+#r x=0 y=0 w=320 h=120
+
+=== bottom and right offsets measure from the area
+<body style="margin:0">
+<div id=g style="display:grid;position:relative;width:300px;grid-template-columns:repeat(3,100px);grid-template-rows:50px 50px;gap:10px">
+<div id=p style="position:absolute;grid-area:1 / 1 / 2 / 3;right:5px;bottom:5px;width:20px;height:20px"></div>
+</div>
+---
+// the area ends at the end of column 2 (210) and of row 1 (50)
+#p x=185 y=25
+
+=== a grid container that is not positioned is not the containing block
+<body style="margin:0">
+<div style="position:relative;padding:20px;width:400px">
+<div id=g style="display:grid;width:300px;grid-template-columns:repeat(3,100px);grid-template-rows:50px">
+<div id=p style="position:absolute;grid-column:2;left:0;top:0;width:20px;height:20px"></div>
+</div></div>
+---
+#p x=0 y=0
+
+=== inline-grid sits on a line
+<body style="margin:0">
+<div>xx<span id=s style="display:inline-grid;grid-template-columns:20px 30px"><i id=a>x</i><i>x</i></span><span id=t>yy</span></div>
+---
+#s x=32 w=50 h=16
+#t x=82
+
+=== inline-grid shrinks to its content
+<body style="margin:0">
+<div><span id=s style="display:inline-grid;grid-template-columns:auto auto;column-gap:10px"><b>xx</b><b>xxxx</b></span></div>
+---
+#s w=106
+
+=== a floated grid shrinks to fit its tracks
+<body style="margin:0">
+<div id=g style="display:grid;float:left;grid-template-columns:50px auto">
+<div id=a>x</div><div id=b>xxx</div>
+</div>
+---
+#g w=98
+#b x=50 w=48
+
+=== max-content width with fr tracks: every fr holds the largest item
+<body style="margin:0">
+<div id=g style="display:grid;float:left;grid-template-columns:1fr 1fr">
+<div id=a>xx</div><div id=b>xxxx</div>
+</div>
+---
+#g w=128
+#a w=64
+#b x=64 w=64
+
+=== min-content width: fr tracks are as narrow as their items
+<body style="margin:0">
+<div style="width:0">
+<div id=g style="display:grid;float:left;grid-template-columns:1fr 1fr">
+<div id=a>xx xx</div><div id=b>xxxx x</div>
+</div></div>
+---
+#g w=96
+
+=== intrinsic width counts spanning items and gutters
+<body style="margin:0">
+<div id=g style="display:grid;float:left;grid-template-columns:auto auto;column-gap:20px">
+<div id=s style="grid-column:span 2">xxxxxxxxxx</div>
+<div id=a>x</div><div id=b>x</div>
+</div>
+---
+#g w=160
+#a w=70
+#b x=90 w=70
+
+=== percentage tracks are auto for the intrinsic width, then resolve
+<body style="margin:0">
+<div id=g style="display:grid;float:left;grid-template-columns:50% 50%">
+<div id=a>xx</div><div id=b>xxxx</div>
+</div>
+---
+// 7.2.1: 32 + 64 wide, then two tracks of 48; b overflows its track
+#g w=96
+#a w=48
+#b x=48 w=48
+
+=== a grid container as a flex item
+<body style="margin:0">
+<div style="display:flex;width:600px">
+<div style="width:100px"></div>
+<div id=g style="display:grid;flex:1;grid-template-columns:1fr 1fr">
+<div id=a>x</div><div id=b>x</div>
+</div></div>
+---
+#g x=100 w=500
+#a w=250
+#b x=350 w=250
+
+=== a grid container as a flex item sizes to its content
+<body style="margin:0">
+<div style="display:flex;width:600px">
+<div id=g style="display:grid;grid-template-columns:auto 50px">
+<div id=a>xxx</div><div id=b>x</div>
+</div><div id=n>x</div></div>
+---
+#g w=98
+#n x=98
+
+=== a flex container as a grid item
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:200px 1fr;grid-template-rows:60px">
+<div></div>
+<div id=f style="display:flex"><div id=a style="flex:1"></div><div id=b style="flex:1"></div></div>
+</div>
+---
+#f x=200 w=400 h=60
+#a w=200 h=60
+#b x=400 w=200
+
+=== nested grids
+<body style="margin:0">
+<div style="display:grid;width:600px;grid-template-columns:1fr 1fr">
+<div></div>
+<div id=i style="display:grid;grid-template-columns:1fr 2fr;gap:30px">
+<div id=a>x</div><div id=b>x</div><div id=c>x</div>
+</div></div>
+---
+#i x=300 w=300 h=62
+#a x=300 w=90
+#b x=420 w=180
+#c x=300 y=46
+
+=== a nested grid's content sizes the outer track
+<body style="margin:0">
+<div id=o style="display:grid;width:600px;grid-template-columns:auto 1fr">
+<div id=i style="display:grid;grid-template-columns:40px auto"><div>x</div><div>xxx</div></div>
+<div id=r></div>
+</div>
+---
+#i w=88
+#r x=88 w=512
+
+=== a table as a grid item fills its area
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:200px 100px">
+<table id=t style="border-spacing:0"><tr><td style="padding:0">x</td></tr></table>
+</div>
+---
+// stretch: not checked in a browser
+#t w=200
+
+=== z-index on an item makes a stacking context without position
+<body style="margin:0">
+<div style="display:grid;width:100px;grid-template-columns:100px;grid-template-rows:50px">
+<div id=a style="grid-area:1 / 1;z-index:1;background:#f00"></div>
+<div id=b style="grid-area:1 / 1;background:#00f"></div>
+</div>
+---
+hit 50 25 #a
+pixel 50 25 ff0000
+
+=== without z-index the later item is on top
+<body style="margin:0">
+<div style="display:grid;width:100px;grid-template-columns:100px;grid-template-rows:50px">
+<div id=a style="grid-area:1 / 1;background:#f00"></div>
+<div id=b style="grid-area:1 / 1;background:#00f"></div>
+</div>
+---
+hit 50 25 #b
+pixel 50 25 0000ff
+
+=== a relatively positioned item moves from its area
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px 100px">
+<div id=a style="position:relative;left:10px;top:5px">x</div><div id=b>x</div>
+</div>
+---
+#a x=10 y=5
+#b x=100 y=0
+
+=== floats inside a grid do not float
+<body style="margin:0">
+<div style="display:grid;width:300px;grid-template-columns:100px 100px">
+<div id=a style="float:right">x</div><div id=b>x</div>
+</div>
+---
+#a x=0 w=100
+#b x=100
+
+=== overflow on the container: the tracks make the scrollable size
+<body style="margin:0">
+<div id=g style="display:grid;width:100px;height:50px;overflow:auto;grid-template-columns:150px;grid-template-rows:80px">
+<div id=a></div>
+</div>
+---
+#a w=150 h=80
+scrollat 10 10 20 20 yes
+
+=== percentage row gap with an indefinite height
+<body style="margin:0">
+<div id=g style="display:grid;width:100px;grid-template-rows:40px 40px;row-gap:10%">
+<div id=a></div><div id=b></div>
+</div>
+---
+// the gap is 0 while the height is found (80), then 10% of it; the rows
+// then overflow. Not checked in a browser.
+#g h=80
+#b y=48
+
+=== many items and long spans finish quickly
+<body style="margin:0">
+<div id=g style="display:grid;width:1000px;grid-template-columns:repeat(auto-fill,1px);grid-auto-flow:dense;grid-auto-rows:1px">
+<div style="grid-column:span 999;grid-row:span 100000"></div>
+<div style="grid-column:span 100000"></div>
+<div style="grid-row:99999"></div>
+<div style="grid-row:-99999;grid-column:-99999"></div>
+<div id=z></div>
+</div>
+---
+#g w=1000
