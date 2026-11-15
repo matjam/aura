@@ -861,6 +861,9 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         au_free(p->fragment);
         p->fragment = NULL;
         p->restore = false;
+        /* The new entry (and its history item) gets the document's title. */
+        if (p->title[0] && p->cb.title_changed)
+            p->cb.title_changed(p->cb.ctx, p, p->title);
         if (entry) {
             request_scroll(p, rx, ry);
         } else {

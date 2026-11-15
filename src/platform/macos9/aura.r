@@ -245,9 +245,9 @@ resource 'DITL' (200) {
 };
 
 resource 'vers' (1) {
-	0x00, 0x02, development, 0x00, verUS,
-	"0.2",
-	"0.2, Aura browser chrome"
+	0x00, 0x03, development, 0x00, verUS,
+	"0.3",
+	"0.3, Aura with its page engine"
 };
 
 /* The bundle: the application, and the document types it opens, so the
