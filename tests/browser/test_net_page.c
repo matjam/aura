@@ -548,6 +548,13 @@ static void test_errors(void)
     /* The page's own http style sheet loads over http too: HTTPS-first
      * upgrades navigations, not the subresources of an http page. */
     CHECK(plain->nreq == 2, "the http page's style sheet was fetched over http: %d requests", plain->nreq);
+    /* The choice holds for the site: the next page on it loads without
+     * asking again. Another site still asks. */
+    respond_html(plain, "<title>Second</title>");
+    expect_title(&e, "http://plain.test/two", "Second");
+    FakeServer *other = fake_server(&e.f, "other.test", 80);
+    respond_html(other, "<title>Other</title>");
+    expect_title(&e, "http://other.test/", "HTTPS not available");
     env_free(&e);
 }
 

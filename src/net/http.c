@@ -155,6 +155,10 @@ struct AuNet {
     int next_session;
     CertException exceptions[CERT_EXCEPTIONS];
     int next_exception;
+    /* Hosts the user chose to visit over plain http after HTTPS-first's
+     * upgrade failed; not upgraded again this session. Never saved. */
+    char **http_ok;
+    size_t n_http_ok;
     AuthEntry auth[AUTH_CACHE];
     int next_auth;
     AuBrotliDict *brdict;
@@ -1790,6 +1794,33 @@ void au_http_answer_credentials(AuHttpTransfer *t, const char *user, const char 
     t->state = T_START;
 }
 
+/* ---- Hosts accepted over plain http ---- */
+
+bool au_net_http_allowed(const AuNet *net, const char *host)
+{
+    for (size_t i = 0; i < net->n_http_ok; i++)
+        if (!strcmp(net->http_ok[i], host))
+            return true;
+    return false;
+}
+
+void au_net_allow_http(AuNet *net, const char *host)
+{
+    if (!host || !*host || au_net_http_allowed(net, host))
+        return;
+    net->http_ok = au_realloc(net->http_ok, (net->n_http_ok + 1) * sizeof *net->http_ok);
+    net->http_ok[net->n_http_ok++] = au_strndup(host, strlen(host));
+}
+
+void au_net_clear_http_allowed(AuNet *net)
+{
+    for (size_t i = 0; i < net->n_http_ok; i++)
+        au_free(net->http_ok[i]);
+    au_free(net->http_ok);
+    net->http_ok = NULL;
+    net->n_http_ok = 0;
+}
+
 /* ---- The transfer state machine ---- */
 
 static bool hsts_upgrade(AuHttpTransfer *t)
@@ -1798,8 +1829,12 @@ static bool hsts_upgrade(AuHttpTransfer *t)
     if (strcmp(t->url.scheme, "http"))
         return false;
     bool known = t->url.host_type == AU_URL_HOST_DOMAIN && au_hsts_is_known(net->hsts, t->url.host, wall(net));
+    /* A navigation the user confirmed over http: remember the host, so
+     * the next page on that site does not ask again. */
+    if (!known && t->allow_http_fallback && t->dest == AU_DEST_DOCUMENT && t->url.host_type == AU_URL_HOST_DOMAIN)
+        au_net_allow_http(net, t->url.host);
     bool first = net->cfg.https_first && !t->allow_http_fallback && t->url.host_type == AU_URL_HOST_DOMAIN &&
-                 strcmp(t->url.host, "localhost");
+                 strcmp(t->url.host, "localhost") && !au_net_http_allowed(net, t->url.host);
     if (!known && !first)
         return false;
     au_url_upgrade_to_https(&t->url);
@@ -2167,6 +2202,7 @@ void au_net_free(AuNet *net)
         au_free(net->sessions[i].cert);
     }
     au_net_clear_cert_exceptions(net);
+    au_net_clear_http_allowed(net);
     for (int i = 0; i < AUTH_CACHE; i++) {
         au_free(net->auth[i].hostport);
         au_free(net->auth[i].realm);

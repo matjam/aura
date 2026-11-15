@@ -279,4 +279,15 @@ AuHttpPhase au_http_phase(const AuHttpTransfer *t);
 bool au_net_allow_cert(AuNet *net, const char *host, const uint8_t sha256[32]);
 void au_net_clear_cert_exceptions(AuNet *net);
 
+/* ---- Hosts accepted over plain http ----
+ * With HTTPS-first on, a navigation to an http URL is tried over https
+ * first and fails with AU_NET_ERR_HTTPS_FALLBACK when that does not work.
+ * When the user then confirms plain http (a document request with
+ * allow_http_fallback), the host is remembered and later navigations to it
+ * are not upgraded or asked about again, until au_net_clear_http_allowed
+ * or au_net_free. The list is never saved. HSTS hosts are never added. */
+bool au_net_http_allowed(const AuNet *net, const char *host);
+void au_net_allow_http(AuNet *net, const char *host);
+void au_net_clear_http_allowed(AuNet *net);
+
 #endif
