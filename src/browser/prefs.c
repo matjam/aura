@@ -63,6 +63,7 @@ static const Key keys[] = {
     I("window.width", window_width, 0, 8192),
     I("window.height", window_height, 0, 8192),
     S("zoom.sites", zoom_sites),
+    S("cookies.sites", cookie_sites),
     B("links.external_new_window", external_new_window),
 };
 

@@ -10,12 +10,19 @@
 #define MAX_NAME_VALUE 4096
 #define MAX_ATTR 1024
 
+typedef struct CookieRuleEntry {
+    char *site;
+    AuCookieRule rule;
+} CookieRuleEntry;
+
 struct AuCookieJar {
     AuCookie *items;
     size_t n, cap;
     AuNetCookiePolicy policy;
     bool block_third_party;
     bool dirty;
+    CookieRuleEntry *rules;
+    size_t nrules;
 };
 
 AuCookieJar *au_cookie_jar_new(void)
@@ -42,6 +49,9 @@ void au_cookie_jar_free(AuCookieJar *j)
     for (size_t i = 0; i < j->n; i++)
         cookie_free(&j->items[i]);
     au_free(j->items);
+    for (size_t i = 0; i < j->nrules; i++)
+        au_free(j->rules[i].site);
+    au_free(j->rules);
     au_free(j);
 }
 
@@ -232,10 +242,13 @@ bool au_cookie_jar_set(AuCookieJar *j, const AuCookieRequest *rq, const char *li
     au_buf_init(&tmp);
     const AuUrl *u = rq->url;
     bool partitioned_ok = false;
-    if (j->policy == AU_COOKIE_POLICY_NONE)
-        IGNORE("cookies are disabled");
     if (!u->special || strcmp(u->scheme, "file") == 0 || u->host_type == AU_URL_HOST_NULL || !u->host[0])
         IGNORE("no host");
+    AuCookieRule rule = au_cookie_jar_rule(j, u->host);
+    if (rule == AU_COOKIE_RULE_BLOCK)
+        IGNORE("blocked for this site");
+    if (j->policy == AU_COOKIE_POLICY_NONE && rule != AU_COOKIE_RULE_ALLOW)
+        IGNORE("cookies are disabled");
     /* name=value */
     const char *semi = strchr(line, ';');
     size_t nvl = semi ? (size_t)(semi - line) : strlen(line);
@@ -406,7 +419,7 @@ bool au_cookie_jar_set(AuCookieJar *j, const AuCookieRequest *rq, const char *li
         IGNORE("SameSite=None without Secure");
     /* Third-party policy and partitioning. */
     bool third = au_cookie_is_third_party(rq);
-    if (third && (j->block_third_party || j->policy == AU_COOKIE_POLICY_SAME_SITE)) {
+    if (third && rule != AU_COOKIE_RULE_ALLOW && (j->block_third_party || j->policy == AU_COOKIE_POLICY_SAME_SITE)) {
         if (!(c.partitioned && c.secure))
             IGNORE("third-party cookie blocked");
         partitioned_ok = true;
@@ -436,6 +449,9 @@ bool au_cookie_jar_set(AuCookieJar *j, const AuCookieRequest *rq, const char *li
         c.expires = rq->now + AU_COOKIE_MAX_AGE_SECONDS;
     if (c.expires < 0)
         c.expires = 1;
+    /* Session only: kept until quit; an expiry in the past still deletes. */
+    if (rule == AU_COOKIE_RULE_SESSION && c.expires > rq->now)
+        c.expires = 0;
     /* Leave secure cookies alone: a non-secure cookie may not overlay a
      * secure one of the same name whose domain matches and path matches. */
     if (!c.secure && !secure_origin) {
@@ -512,10 +528,14 @@ static void collect(AuCookieJar *j, const AuCookieRequest *rq, bool http_api, Au
 {
     au_buf_clear(out);
     const AuUrl *u = rq->url;
-    if (j->policy == AU_COOKIE_POLICY_NONE || !u->special || u->host_type == AU_URL_HOST_NULL)
+    if (!u->special || u->host_type == AU_URL_HOST_NULL)
+        return;
+    AuCookieRule rule = au_cookie_jar_rule(j, u->host);
+    if (rule == AU_COOKIE_RULE_BLOCK || (j->policy == AU_COOKIE_POLICY_NONE && rule != AU_COOKIE_RULE_ALLOW))
         return;
     bool third = au_cookie_is_third_party(rq);
-    bool block = third && (j->block_third_party || j->policy == AU_COOKIE_POLICY_SAME_SITE);
+    bool block =
+        third && rule != AU_COOKIE_RULE_ALLOW && (j->block_third_party || j->policy == AU_COOKIE_POLICY_SAME_SITE);
     bool same = same_site_request(rq);
     bool secure = is_secure_url(u);
     AuBuf site;
@@ -634,6 +654,153 @@ void au_cookie_jar_remove_domain(AuCookieJar *j, const char *domain)
         else
             i++;
     }
+}
+
+/* ---- Per-site rules ---- */
+
+void au_cookie_site_key(const char *host, AuBuf *out)
+{
+    au_buf_clear(out);
+    if (!host)
+        return;
+    const char *dom = host;
+    size_t len = strlen(host);
+    if (len && host[len - 1] == '.')
+        len--;
+    const char *d;
+    size_t dl;
+    if (au_psl_registrable(host, &d, &dl)) {
+        dom = d;
+        len = dl;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char ch = dom[i];
+        au_buf_putc(out, ch >= 'A' && ch <= 'Z' ? (char)(ch + 32) : ch);
+    }
+}
+
+static CookieRuleEntry *find_rule(const AuCookieJar *j, const char *key)
+{
+    for (size_t i = 0; i < j->nrules; i++)
+        if (!strcmp(j->rules[i].site, key))
+            return &j->rules[i];
+    return NULL;
+}
+
+AuCookieRule au_cookie_jar_rule(const AuCookieJar *j, const char *host)
+{
+    if (!j->nrules || !host || !host[0])
+        return AU_COOKIE_RULE_NONE;
+    AuBuf k;
+    au_buf_init(&k);
+    au_cookie_site_key(host, &k);
+    CookieRuleEntry *e = find_rule(j, au_buf_cstr(&k));
+    au_buf_free(&k);
+    return e ? e->rule : AU_COOKIE_RULE_NONE;
+}
+
+void au_cookie_jar_set_rule(AuCookieJar *j, const char *site, AuCookieRule r)
+{
+    AuBuf k;
+    au_buf_init(&k);
+    au_cookie_site_key(site, &k);
+    const char *key = au_buf_cstr(&k);
+    if (!key[0]) {
+        au_buf_free(&k);
+        return;
+    }
+    CookieRuleEntry *e = find_rule(j, key);
+    if (r == AU_COOKIE_RULE_NONE) {
+        if (e) {
+            size_t i = (size_t)(e - j->rules);
+            au_free(e->site);
+            memmove(j->rules + i, j->rules + i + 1, (j->nrules - i - 1) * sizeof *j->rules);
+            j->nrules--;
+        }
+        au_buf_free(&k);
+        return;
+    }
+    if (!e) {
+        j->rules = au_realloc(j->rules, (j->nrules + 1) * sizeof *j->rules);
+        e = &j->rules[j->nrules++];
+        e->site = au_strndup(key, k.len);
+    }
+    e->rule = r;
+    /* Apply to what is stored: blocked cookies go, session-only ones stop
+     * being written. */
+    AuBuf ck;
+    au_buf_init(&ck);
+    for (size_t i = 0; i < j->n;) {
+        au_cookie_site_key(j->items[i].domain, &ck);
+        if (!strcmp(au_buf_cstr(&ck), key)) {
+            if (r == AU_COOKIE_RULE_BLOCK) {
+                remove_at(j, i);
+                continue;
+            }
+            if (r == AU_COOKIE_RULE_SESSION && j->items[i].expires) {
+                j->items[i].expires = 0;
+                j->dirty = true;
+            }
+        }
+        i++;
+    }
+    au_buf_free(&ck);
+    au_buf_free(&k);
+}
+
+static const char *const rule_names[] = {"", "allow", "session", "block"};
+
+const char *au_cookie_rule_name(AuCookieRule r) { return (unsigned)r < 4 ? rule_names[r] : ""; }
+
+void au_cookie_rules_parse(AuCookieJar *j, const char *text)
+{
+    for (size_t i = 0; i < j->nrules; i++)
+        au_free(j->rules[i].site);
+    j->nrules = 0;
+    if (!text)
+        return;
+    const char *s = text;
+    while (*s) {
+        while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
+            s++;
+        const char *b = s;
+        while (*s && *s != ' ' && *s != '\t' && *s != '\n' && *s != '\r')
+            s++;
+        const char *eq = memchr(b, '=', (size_t)(s - b));
+        if (!eq || eq == b)
+            continue;
+        size_t vl = (size_t)(s - eq - 1);
+        AuCookieRule r = AU_COOKIE_RULE_NONE;
+        for (int k = 1; k < 4; k++)
+            if (strlen(rule_names[k]) == vl && !strncmp(eq + 1, rule_names[k], vl))
+                r = (AuCookieRule)k;
+        if (r == AU_COOKIE_RULE_NONE)
+            continue;
+        char *site = au_strndup(b, (size_t)(eq - b));
+        au_cookie_jar_set_rule(j, site, r);
+        au_free(site);
+    }
+}
+
+void au_cookie_rules_serialize(const AuCookieJar *j, AuBuf *out)
+{
+    au_buf_clear(out);
+    for (size_t i = 0; i < j->nrules; i++) {
+        if (i)
+            au_buf_putc(out, ' ');
+        au_buf_printf(out, "%s=%s", j->rules[i].site, rule_names[j->rules[i].rule]);
+    }
+}
+
+size_t au_cookie_rules_count(const AuCookieJar *j) { return j->nrules; }
+
+const char *au_cookie_rules_at(const AuCookieJar *j, size_t i, AuCookieRule *r)
+{
+    if (i >= j->nrules)
+        return NULL;
+    if (r)
+        *r = j->rules[i].rule;
+    return j->rules[i].site;
 }
 
 bool au_cookie_jar_dirty(const AuCookieJar *j) { return j->dirty; }
