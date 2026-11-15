@@ -1289,12 +1289,6 @@ void au_layout_tree_changed(AuLayout *L)
     L->need_paint = true;
 }
 
-void au_layout_images_changed(AuLayout *L)
-{
-    L->need_build = true;
-    L->need_paint = true;
-}
-
 static void mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
@@ -1306,6 +1300,40 @@ static void mark_dirty(LBox *b)
         p->flags |= LF_CHILD_DIRTY;
         p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
         l_table_forget(p);
+    }
+}
+
+void au_layout_images_changed(AuLayout *L)
+{
+    if (L->need_build || !L->root || L->images_shape) {
+        L->need_build = true;
+        L->need_paint = true;
+        return;
+    }
+    /* The tree keeps its shape: only image boxes read the loader. A box
+     * whose image changed size (or became known, or failed) is laid out
+     * again; backgrounds and masks are looked up when painted. */
+    LBox *b = L->root;
+    while (b) {
+        if (b->kind == LK_BLOCK && b->replaced == LR_IMAGE && ((LBlock *)b)->rep) {
+            int r = l_image_refresh(L, ((LBlock *)b)->rep);
+            /* A width and height in pixels leave nothing to the image. */
+            const AuStyleBox *sb = b->style->box;
+            if (r == 2 && !(sb->width.kind == AU_LEN_PX && sb->height.kind == AU_LEN_PX)) {
+                mark_dirty(b);
+                L->need_layout = true;
+            }
+            if (r)
+                L->need_paint = true;
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
     }
 }
 
@@ -1628,11 +1656,8 @@ void au_layout_stats(const AuLayout *L, AuLayoutStats *s)
     s->intrinsic_runs = L->intrinsic_runs;
 }
 
-bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
+static bool box_rect(LBox *b, AuRect *out)
 {
-    LBox *b = el ? (LBox *)el->box : NULL;
-    if (!b)
-        return false;
     if (b->kind == LK_BLOCK) {
         LBlock *k = (LBlock *)b;
         float x, y;
@@ -1676,4 +1701,109 @@ bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
     }
     *out = (AuRect){gx + x0, gy + y0, x1 - x0, y1 - y0};
     return true;
+}
+
+bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
+{
+    (void)L;
+    LBox *b = el ? (LBox *)el->box : NULL;
+    return b ? box_rect(b, out) : false;
+}
+
+/* The value names url (after resolving) as one of its images. */
+static bool value_names_image(AuLayout *L, const AuCssValue *v, const char *url)
+{
+    if (!v || v->type != AU_CSSV_URL || !v->u.str)
+        return false;
+    char abs[2048];
+    if (!L->env.resolve_url || !L->env.resolve_url(L->env.ctx, v->u.str, abs, sizeof abs))
+        return !strcmp(v->u.str, url);
+    return !strcmp(abs, url);
+}
+
+static bool style_names_image(AuLayout *L, const AuStyle *s, const char *url)
+{
+    AuBgLayer ly;
+    if (s->bg->background_image) {
+        size_t n = au_style_bg_layer_count(s);
+        for (size_t i = 0; i < n; i++) {
+            au_style_bg_layer(s, i, &ly);
+            if (value_names_image(L, ly.image, url))
+                return true;
+        }
+    }
+    if (s->rare->mask_image) {
+        size_t n = au_style_mask_layer_count(s);
+        for (size_t i = 0; i < n; i++) {
+            au_style_mask_layer(s, i, &ly);
+            if (value_names_image(L, ly.image, url))
+                return true;
+        }
+    }
+    return false;
+}
+
+int au_layout_image_users(AuLayout *L, const char *url, void (*fn)(void *ctx, AuRect r), void *ctx)
+{
+    if (!L->root || L->need_build)
+        return -1;
+    int count = 0;
+    const AuStyle *last = NULL;
+    bool last_hit = false;
+    LBox *b = L->root;
+    while (b) {
+        bool hit = false;
+        if (b->kind == LK_BLOCK && b->replaced == LR_IMAGE && ((LBlock *)b)->rep) {
+            const char *src = ((LBlock *)b)->rep->src;
+            hit = src && !strcmp(src, url);
+        } else if (b->kind == LK_BLOCK && b->replaced == LR_SVG) {
+            hit = true; /* an <image> inside may show it */
+        }
+        if (!hit && b->kind != LK_TEXT && b->style && !lb_anon(b) &&
+            (b->style->bg->background_image || b->style->rare->mask_image)) {
+            if (b->style != last) {
+                last = b->style;
+                last_hit = style_names_image(L, b->style, url);
+            }
+            hit = last_hit;
+        }
+        if (hit) {
+            /* The canvas takes the root's or the body's background, and a
+             * box that does not move with the document has no fixed
+             * document rectangle: the caller repaints everything. */
+            if (b == L->root || b->parent == L->root)
+                return -1;
+            for (LBox *p = b; p; p = p->parent) {
+                const AuStyle *ps = p->style;
+                if ((p->flags & LF_FIXED) || (ps && (ps->box->position == AU_POSITION_STICKY || ps->rare->transform ||
+                                                     ps->rare->translate || ps->rare->rotate || ps->rare->scale)))
+                    return -1;
+                if (p->kind == LK_BLOCK && p != L->root &&
+                    (((LBlock *)p)->scroll_x != 0 || ((LBlock *)p)->scroll_y != 0))
+                    return -1;
+            }
+            AuRect r;
+            if (box_rect(b, &r)) {
+                if (b->kind == LK_BLOCK) {
+                    /* Ink outside the border box: an inline SVG with
+                     * visible overflow. */
+                    const LArea *ov = &((LBlock *)b)->ov;
+                    float x0 = l_min(r.x, r.x + ov->x), y0 = l_min(r.y, r.y + ov->y);
+                    float x1 = l_max(r.x + r.w, r.x + ov->x + ov->w), y1 = l_max(r.y + r.h, r.y + ov->y + ov->h);
+                    r = (AuRect){x0, y0, x1 - x0, y1 - y0};
+                }
+                fn(ctx, r);
+                count++;
+            }
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
+    return count;
 }

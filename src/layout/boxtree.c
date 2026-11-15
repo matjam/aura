@@ -564,23 +564,40 @@ static void resolve_url(AuLayout *L, const char *url, char *out, size_t cap)
     }
 }
 
+int l_image_refresh(AuLayout *L, LReplaced *rep)
+{
+    if (!rep->src)
+        return 0;
+    int w = 0, h = 0;
+    const AuSurface *px = NULL;
+    bool loaded = L->env.image && L->env.image(L->env.ctx, rep->src, &w, &h, &px);
+    if (!loaded) {
+        w = h = 0;
+        px = NULL;
+    }
+    int r = 0;
+    if (loaded != rep->loaded || (float)w != rep->iw || (float)h != rep->ih)
+        r = 2;
+    else if (px != rep->pixels)
+        r = 1;
+    rep->loaded = loaded;
+    rep->iw = (float)w;
+    rep->ih = (float)h;
+    rep->ratio = h > 0 ? (float)w / h : 0;
+    rep->pixels = px;
+    rep->url = loaded && L->env.image_use ? rep->src : NULL;
+    rep->label = loaded ? NULL : rep->alt;
+    return r;
+}
+
 static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
 {
     char abs[2048];
     if (!url || !*url)
         return;
     resolve_url(L, url, abs, sizeof abs);
-    int w = 0, h = 0;
-    const AuSurface *px = NULL;
-    if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
-        rep->loaded = true;
-        rep->iw = (float)w;
-        rep->ih = (float)h;
-        rep->ratio = h > 0 ? (float)w / h : 0;
-        rep->pixels = px;
-        if (L->env.image_use)
-            rep->url = ar_strndup(&L->tree, abs, strlen(abs));
-    }
+    rep->src = ar_strndup(&L->tree, abs, strlen(abs));
+    l_image_refresh(L, rep);
 }
 
 /* Content items of a ::before/::after/::marker style into box. */
@@ -848,6 +865,7 @@ static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_chil
     resolve_url(L, url, abs, sizeof abs);
     int w = 0, h = 0;
     const AuSurface *px = NULL;
+    L->images_shape = true;
     if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
         *skip_children = true;
         return LR_IMAGE;
@@ -1083,10 +1101,12 @@ static void setup_replaced(Builder *B, LBlock *k)
     case LR_IMAGE: {
         image_lookup(B->L, rep, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
         const char *alt = attr_s(n, "alt");
-        if (!rep->loaded && !alt && au_is_html_element(n, AU_ATOM_input))
+        if (!alt && au_is_html_element(n, AU_ATOM_input))
             alt = "Submit"; /* image button without alt text */
-        if (!rep->loaded && alt)
-            rep->label = ar_strndup(&B->L->tree, alt, strlen(alt));
+        if (alt)
+            rep->alt = ar_strndup(&B->L->tree, alt, strlen(alt));
+        if (!rep->loaded)
+            rep->label = rep->alt;
         break;
     }
     case LR_BUTTON: {
@@ -1614,6 +1634,7 @@ static void pop(Builder *B)
 void l_build_tree(AuLayout *L)
 {
     l_free_tree(L);
+    L->images_shape = false;
     AuElement *rootel = L->doc ? au_document_element(L->doc) : NULL;
     if (!rootel || !rootel->style)
         return;

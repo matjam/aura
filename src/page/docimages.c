@@ -195,6 +195,17 @@ void au_docimages_paint_end(AuDocImages *m)
 
 uint32_t au_docimages_tick(AuDocImages *m, uint32_t now_ms) { return au_image_cache_tick(m->cache, now_ms); }
 
+typedef struct InvalidateCtx {
+    void (*fn)(void *ctx, AuIRect r);
+    void *ctx;
+} InvalidateCtx;
+
+static void invalidate_user(void *ctx, AuRect r)
+{
+    InvalidateCtx *ic = ctx;
+    ic->fn(ic->ctx, (AuIRect){(int)r.x - 1, (int)r.y - 1, (int)(r.x + r.w) + 2, (int)(r.y + r.h) + 2});
+}
+
 void au_docimages_invalidate(AuDocImages *m, AuLayout *L, AuIRect doc_all, void (*fn)(void *ctx, AuIRect r),
                              void *ctx)
 {
@@ -211,8 +222,14 @@ void au_docimages_invalidate(AuDocImages *m, AuLayout *L, AuIRect doc_all, void 
             any = true;
             fn(ctx, (AuIRect){(int)r.x - 1, (int)r.y - 1, (int)(r.x + r.w) + 2, (int)(r.y + r.h) + 2});
         }
-        if (!any)
-            fn(ctx, doc_all);
+        if (!any) {
+            /* Not an <img>: a background, a mask, generated content, an
+             * image in inline SVG. Layout names the boxes; with none
+             * found, or one without a fixed place, repaint the page. */
+            InvalidateCtx ic = {fn, ctx};
+            if (au_layout_image_users(L, au_image_entry_url(e), invalidate_user, &ic) <= 0)
+                fn(ctx, doc_all);
+        }
     }
 }
 

@@ -181,6 +181,8 @@ typedef struct LReplaced {
     float ratio;      /* intrinsic aspect ratio, 0 when none */
     const AuSurface *pixels; /* decoded image or NULL */
     const char *url;  /* image: the absolute URL (tree arena), for env.image_use */
+    const char *src;  /* image: the absolute URL asked of env.image, or NULL */
+    const char *alt;  /* image: the text shown while the image is not known */
     const char *label; /* image alt, button, select or input text; list box rows */
     const char *aux;   /* placeholder of a text control; file input status text */
     uint16_t rows, cols; /* textarea and list box size */
@@ -355,6 +357,10 @@ struct AuLayout {
     uint32_t nview_boxes;
     bool need_paint;
     bool need_restack;
+    /* The box tree's shape depends on which images are known (an object
+     * or embed shows its fallback content otherwise): an image change
+     * builds the tree again. */
+    bool images_shape;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */
@@ -466,6 +472,9 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy);
 void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark);
 void l_apply_relative(LBlock *b, float cb_w, float cb_h);
 LBlock *l_geom_parent(LBox *b);
+/* Asks the loader about rep's image again. Returns 0 when nothing
+ * changed, 1 when only its pixels did, 2 when its size or presence did. */
+int l_image_refresh(AuLayout *L, LReplaced *rep);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);

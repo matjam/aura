@@ -83,8 +83,20 @@ void au_layout_tree_changed(AuLayout *L);
 /* Styles were recomputed. Call before anything else reads the layout:
  * boxes hold the previous styles until then. */
 void au_layout_styles_changed(AuLayout *L);
-/* An image finished loading: sizes may change. */
+/* The loader's answer for some image changed (its size became known, it
+ * failed, its pixels moved). Image boxes ask the loader again; one whose
+ * size or presence changed is laid out again at the next update, and the
+ * box tree is kept. The tree is built again only when its shape depends
+ * on images (an object or embed element with a resource). */
 void au_layout_images_changed(AuLayout *L);
+/* Calls fn with the document rectangle of each box that shows the image
+ * at absolute URL url: image boxes, boxes with it as a background or
+ * mask layer, and every inline SVG (one may hold it in an <image>).
+ * Returns the number of boxes, or -1 when the caller must repaint the
+ * whole page instead (the canvas background, a box that is fixed, sticky,
+ * transformed or inside a scrolled box, or a box tree that is out of
+ * date). */
+int au_layout_image_users(AuLayout *L, const char *url, void (*fn)(void *ctx, AuRect r), void *ctx);
 
 /* Brings the layout up to date for a viewport of vw x vh. Returns true if
  * any geometry changed (the caller repaints everything); false when the

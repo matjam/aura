@@ -211,14 +211,13 @@ static void invalidate_fn(void *ctx, AuIRect r)
         dv->cb.invalidate(dv->cb.ctx, dv, r);
 }
 
-/* Reports images whose size became known (layout rebuilds) and repaints
- * images whose pixels changed. */
+/* Notes images whose size became known (au_docview_update tells layout,
+ * and repaints the page if geometry changes) and repaints the boxes of
+ * images that changed. */
 static void images_changed(AuDocView *dv)
 {
-    if (au_docimages_take_layout_changed(dv->imgs)) {
+    if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
-        invalidate_all(dv);
-    }
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
     au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, (int)w + 1, (int)h + 1}, invalidate_fn, dv);
@@ -500,7 +499,9 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
         au_webfonts_done(dv->webfonts, req.id, req.data.data, req.data.len, ok, fetch_font, dv);
     }
     au_buf_free(&req.data);
-    invalidate_all(dv);
+    /* images_changed has invalidated where an image shows. */
+    if (!(req.kind == AU_RES_IMAGE && req.image))
+        invalidate_all(dv);
     maybe_finished(dv);
 }
 
@@ -1001,12 +1002,16 @@ bool au_docview_update(AuDocView *dv)
     bool changed = update_style(dv);
     if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
-    if (dv->images_dirty) {
+    bool images = dv->images_dirty;
+    if (images) {
         au_layout_images_changed(dv->layout);
         dv->images_dirty = false;
     }
-    if (au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh))
+    if (au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh)) {
         changed = true;
+        if (images)
+            invalidate_all(dv); /* an image's size moved other boxes */
+    }
     if (changed)
         dv->layout_ran = true;
     float w, h;
