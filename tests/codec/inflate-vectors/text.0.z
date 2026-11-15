@@ -1,0 +1,319 @@
+xB7½È# Aura: development notes
+
+`README.md` describes Aura for its users. Keep it short. This file holds
+what you need to build, test and change Aura.
+
+## Conventions
+
+- C99, portable. Engine code (everything in `src/` outside
+  `src/platform/`) makes no OS calls and includes no OS headers. It must
+  build for the host and for PowerPC Mac OS 9 (big-endian, 32-bit, newlib).
+- Do not recurse over document depth (tree walks, destruction, layout of
+  nested boxes where it can be avoided): Mac OS 9 stacks are small and
+  pages nest deeply. Use explicit loops or an explicit stack.
+- Allocate with `au_alloc`, `au_realloc`, `au_free` (`src/core/core.h`).
+  They do not return NULL.
+- Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
+  atoms. Names known at compile time go in `src/core/atoms_html.def` or
+  `src/core/atoms_css.def`.
+- Public names start with `au_` (functions), `Au` (types), `AU_`
+  (constants).
+- Third-party code is limited to QuickJS-ng (JavaScript) and BearSSL
+  (TLS), in `third_party/`. Everything else is written here. Ask before
+  adding another.
+- Commit each working step to `main`. Commit only our own sources. Fonts,
+  Apple files and downloaded test suites stay out of git.
+- Write docs instruction first ("To X, use Y"), in plain technical prose.
+
+## Layout
+
+| Folder | Holds |
+|---|---|
+| `src/core` | allocation, buffers, UTF-8, atoms |
+| `src/dom` | the node tree |
+| `src/html` | HTML tokenizer and tree builder |
+| `src/css` | CSS parser, selectors, cascade |
+| `src/layout` | box tree, layout, painting, hit testing |
+| `src/page` | the document view: parsing, style sheets, resources, input |
+| `src/paint` | surfaces, rasterizer, fonts |
+| `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its stub |
+| `src/platform/host` | host tools: headless render to PNG, tree dumps |
+| `src/platform/macos9` | the Mac OS 9 application |
+| `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
+
+`CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
+every `tests/*/CMakeLists.txt`, so a new source file or test area needs no
+change to the top-level file.
+
+## Build and test
+
+- `./build.sh test` builds for the host and runs the tests.
+- `./build.sh ppc` builds for Mac OS 9 with Retro68 (GCC 16.1, Multiversal
+  Interfaces). The toolchain is found through `RETRO68`, then in
+  `../os9-protect/toolchain/build/toolchain`.
+
+The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
+(`run.sh`, `tools/push.sh` to copy files in, `tools/qmp.py` for
+screenshots and input). `os9-enforcer/CLAUDE.md` describes how to use it.
+The guest has outbound network access.
+
+## Guest testing
+
+Aura has its own test machine, separate from the one os9-protect runs, so
+the two never share a disk, a socket or a QEMU process. Runtime files go
+in `run/` of the main checkout (set `AURA_RUN` to use another folder);
+`tools/guest-env.sh` holds the settings.
+
+To start the guest, run `tools/guest-run.sh start`. QEMU runs headless in
+the background. `BASE` picks the system: `stock` (the default) is Mac OS
+9.2.2 with virtual memory off and no Enforcer, from os9-protect's
+`disks/os9-novm.qcow2`; `enforcer` (`BASE=enforcer tools/guest-run.sh
+start`) is `disks/os9-vmoff.qcow2`, which has the os9-enforcer kernel and
+extension installed. The first start of a base copies its image (read
+only) into `run/os9-base-BASE.qcow2` and boots an overlay on the copy
+(`run/os9-aura-BASE.qcow2`). One guest runs at a time; `status` names the
+running base. Disk writes are discarded when QEMU exits; set `PERSIST=1`
+to keep them. Mac OS takes about a minute to boot.
+
+Test on the stock base first. Use the Enforcer base to check Aura under
+Enforcer; its own bugs show there too (see the scroll bar thumb note
+under Browser chrome). To read Enforcer's state and offense log, run
+os9-enforcer's `tools/xlog-read.py` with
+`QMP_SOCK=run/qmp.sock`; the extension on that disk is older than the
+script, so the script may report a different layout.
+
+To copy the application in, build it with `./build.sh ppc` and run
+`tools/guest-push.sh -n AuraTest build/ppc/src/platform/macos9/Aura.bin`.
+The files arrive as a CD named AuraTest on the guest's desktop. The
+previous disc is ejected first through the Finder; the script types
+nothing until the guest's current application (`CurApName`) is the
+Finder, and fails if an application on the disc is still open, so quit
+Aura before pushing a new build.
+
+To launch it, run `tools/guest-qmp.py open AuraTest Aura`. To take a
+screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`. To type, use
+`tools/guest-qmp.py key cmd-q` (any character works as the key, as in
+`'cmd-['`) or `type TEXT`; to click or drag, use `click X Y` or `drag X1
+Y1 X2 Y2` (guest screen pixels). `front-app` prints the current
+application.
+
+To compare the window with the host rendering, render the scene at the
+window's size (the title shows it) and compare the content area, which
+starts at 20,50 on the guest screen:
+
+```bash
+build/host/src/platform/host/aura-host scene -w 584 -h 390 -o run/host.png
+tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
+```
+
+To change the screen depth, click the Monitor BitDepth module in the
+guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
+and pick 256 Colors, Thousands or Millions. In Aura, View > Debug > Benchmark times the scene, fills and
+the chrome, and View > Debug > Font List shows the fonts it found.
+
+To stop the guest, run `tools/guest-run.sh stop`, or choose Special > Shut
+Down in the guest.
+
+## Browser chrome
+
+To change how a browser window looks or behaves, work in `src/browser`:
+`chrome.c` lays out, paints and hit-tests the tab strip (or left tab
+column), toolbar and status bar; `browser.c` holds windows, tabs and
+back/forward lists and routes input; `page.h` is the interface a page
+implements, and `page_stub.c` implements it until the real engine
+replaces it. The model never calls the OS; the shells pass events in and
+show the rectangles it reports through `AuBrowserHost.invalidate`.
+
+To render a browser window on the host, run
+`build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left
+--tab about:home --tab http://example.com/ -o run/chrome.png`. Run
+`aura-host` without arguments for the other options (tab overflow,
+hover, address field text).
+
+The Mac OS 9 shell (`src/platform/macos9`) keeps one module per kind of
+window (`browserwin.c`, `listwin.c`, `prefswin.c`), with menus and the
+event loop in `main.c` and files in `storage.c`. The address field is a
+TextEdit record placed over the field the engine draws; the scroll bars
+and menus are native; the Preferences window uses Appearance Manager
+controls, declared in `appearance.h` because the Multiversal Interfaces
+lack them, from AppearanceLib.
+
+Aura keeps its files in the Aura folder of the system Preferences folder:
+`Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
+`Session` and `Downloads`. Each is written to a `.tmp` file and swapped
+in; a file that fails to parse is renamed with ` (damaged)` before a new
+one is written. To start with clean state in the guest, delete that
+folder.
+
+Downloads use a simulated transfer source (`au_sim_source` in
+`downloads.c`) until networking exists; View > Debug > Start Simulated
+Downloads adds a few.
+
+Toolbox points learned the hard way:
+
+- In a Rez `MENU`, the enable flags put item k at bit k-1 (the menu's
+  own flag is the separate `enabled` field). A separator at item 5
+  clears bit 4.
+- Do not call `TEGetPoint` from PowerPC code; it crashed the guest. The
+  caret position comes from `TextWidth` with the TextEdit handles
+  locked.
+- Scroll bar thumbs drawn as coloured noise on the second launch of
+  Aura in a guest boot come from Enforcer, not Aura: they appear only on
+  the Enforcer base, at any depth, with or without dithering. The
+  Appearance theme draws thumbs through a 16x17 GWorld it keeps in the
+  system heap, with its pixels in temporary memory, made the first time
+  a thumb is drawn in the boot. Enforcer's temporary memory pool puts
+  those pixels in a chunk of the current application (Aura) and frees
+  the chunk when Aura quits; the stock Process Manager keeps them. The
+  next Aura launch gets a chunk at the same address, and the theme's
+  handle then names Aura's font data.
+
+## Design
+
+The decisions and milestones are in the Gandalf vault,
+`project:aura:decisions`.
+
+The scope of version 1 (acceptance sites, required features, what is left
+out) is in `docs/v1-scope.md`. Check a feature against it before building
+it.
+# Aura version 1 scope
+
+Agreed on 2026-11-14. To change the scope, edit this file and say why in
+the commit.
+
+Version 1 is a browser a person can use daily on a 1 GHz G4 under
+Mac OS 9.1 to 9.2.2, for server-rendered and moderately scripted sites,
+safely.
+
+## Acceptance sites
+
+Version 1 is done when these work:
+
+- old.reddit.com: browse, log in, vote, comment
+- reddit.com: read
+- Wikipedia
+- Hacker News
+- DuckDuckGo search
+- GitHub: read repositories and issues
+- typical news and documentation sites, and retro Mac sites
+
+Gmail's web application is not a version 1 criterion.
+
+## Targets on a 1 GHz G4
+
+These are to be confirmed by measurement on real hardware.
+
+- The application is under 3 MB on disk.
+- Aura uses under 16 MB when idle.
+- A Wikipedia article is displayed within a few seconds of its bytes
+  arriving.
+- A laid-out page scrolls smoothly.
+
+## Must have
+
+### Engine
+
+- HTML: the full parser, the legacy encodings (windows-1252, ISO-8859-1)
+  and the `<meta charset>` prescan.
+- CSS: cascade, custom properties, media queries.
+- Layout: block, inline, inline-block, floats, positioning (relative,
+  absolute, fixed, sticky), flexbox, grid, tables, lists, overflow and
+  scrolling boxes, `display: contents`, stacking contexts.
+- Text: line breaking, white-space modes, alignment, decorations,
+  ellipsis, font fallback, Unicode as far as the system fonts cover it.
+  Web fonts: TrueType, WOFF, WOFF2.
+- Painting: backgrounds, borders, radii, shadows, gradients, opacity, 2D
+  transforms, clipping.
+- Images: PNG, JPEG, animated GIF, WebP, favicons, SVG as images and
+  inline SVG for icons (basic shapes, paths, fills, strokes).
+- Forms: text fields, textarea, checkbox, radio, select, buttons, file
+  upload, submission (GET, POST, multipart), validation attributes, focus
+  and keyboard navigation.
+- JavaScript (QuickJS-ng): DOM and events, CSSOM basics (`style`,
+  `classList`, `getComputedStyle`, `matchMedia`), timers,
+  `requestAnimationFrame`, `fetch` and XHR, URL and URLSearchParams,
+  `localStorage` and `sessionStorage`, the history API, MutationObserver,
+  IntersectionObserver, ResizeObserver, custom elements and shadow DOM,
+  modules and dynamic import, TextEncoder, `document.cookie`.
+- Incremental rendering: show the page as it arrives, and lay out again
+  only what changed.
+
+### Network
+
+- Open Transport, DNS, HTTP/1.1 with keep-alive, redirects, chunked
+  encoding, gzip, deflate and brotli.
+- HTTP and HTTPS proxy; basic and digest authentication.
+- TLS 1.2 at least, certificate validation, a bundled root store, Aura's
+  own random source, and a check for an implausible system clock.
+- Memory and disk cache with validation.
+- Cookies with Secure, HttpOnly, SameSite, name prefixes and the public
+  suffix list.
+
+### Security and privacy
+
+- HSTS with a stored list and a bundled preload list; mixed content
+  blocking; HTTPS-first mode.
+- Same-origin policy, CORS, Content-Security-Policy, `nosniff`,
+  Referrer-Policy.
+- Do Not Track and Global Privacy Control; third-party cookie blocking;
+  tracker and advertisement blocking from a host list.
+- Script limits: memory cap, stack cap, an interrupt for runaway scripts.
+- Downloads are never opened or run automatically.
+- Security indicator, certificate viewer, certificate error page.
+- Every parser that reads network data is bounds-checked, run under
+  sanitizers on the host, and fuzzed. Mac OS 9 has no memory protection,
+  so this is the largest exposure.
+
+### Application
+
+- Windows and tabs (top row or left column), navigation bar, address
+  field with completion and search, status of hovered links, loading
+  progress, Stop.
+- Bookmarks with a manager and import and export; history with a window;
+  downloads with a manager; cookies with a manager; preferences with all
+  panes.
+- Find in page, text selection and copy, contextual menus (link, image,
+  selection), Save Page As, view source, text zoom, local files, dragging
+  a link or file onto the window.
+- Session restore; recovery from out-of-memory per page.
+- Multiprocessing Services: page work runs off the main task and the
+  interface stays responsive.
+- Internet Config: registration as the default browser, the `GURL` Apple
+  event, helper applications for other schemes.
+
+## Not in version 1
+
+- A JavaScript JIT, and Gmail-class web applications at usable speed. A
+  bytecode cache and lazy compilation go in if they are cheap.
+- Audio and video, WebRTC, WebGL, WebAssembly.
+- Web Workers, service workers, IndexedDB.
+- WebSockets and canvas 2D. These are the first two to pull in if an
+  acceptance site needs them.
+- CSS animations and transitions beyond jumping to the end state, 3D
+  transforms, filters, blend modes, container queries.
+- Right-to-left and vertical text, complex-script shaping (Arabic,
+  Indic).
+- HTTP/2, HTTP/3, TLS client certificates.
+- Printing, private windows, saved passwords in the Keychain, extensions,
+  sync.
+- A Carbon build for Mac OS X; 68k Macs.
+# Aura
+
+A web browser for Mac OS 9 on PowerPC, with its engine written from
+scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
+two third-party libraries, QuickJS-ng for JavaScript and BearSSL for TLS.
+
+Aura is in early development and does not browse the web yet.
+
+## Build
+
+To build and test on the development machine, then build the Mac OS 9
+application, run:
+
+```bash
+./build.sh
+```
+
+The Mac OS 9 build needs Retro68's PowerPC toolchain. Set `RETRO68` to its
+folder, or keep `os9-protect` next to this repository.
+õM…
