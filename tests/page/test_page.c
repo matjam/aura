@@ -470,6 +470,63 @@ static void test_images(void)
     au_docview_free(dv);
 }
 
+/* <object> shows an image or its fallback content; <embed> shows an
+ * image; SVG images size from their width and height. */
+static void test_object_embed(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof f);
+    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    const char *html =
+        "<!DOCTYPE html><body style='margin:0'>"
+        "<p><object id=o1 data='a.png'><span id=f1>fallback one</span></object>"
+        "<p><object id=o2 data='movie.swf' type='application/x-shockwave-flash'><span id=f2>no plugin</span></object>"
+        "<p><object id=o3 data='missing.png'><span id=f3>missing</span></object>"
+        "<p><embed id=e1 src='e.svg'>"
+        "<p><object data='data:application/x-unknown,ERROR'><object data='404/' type='text/html'>"
+        "<object id=o4 data='a.png'></object></object></object>"
+        "<p><img id=s src='s.svg'>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    CHECK(fake_find(&f, "http://example.com/a.png") != NULL, "object image not requested");
+    CHECK(fake_find(&f, "http://example.com/movie.swf") == NULL, "plugin data requested");
+    CHECK(fake_find(&f, "http://example.com/404/") == NULL, "nested document requested");
+    AuRect r = rect_of(dv, "f2");
+    CHECK(r.w > 20, "object with a plugin type shows its fallback: %g wide", r.w);
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 0, 0, 255);
+    deliver_image(&f, dv, "http://example.com/a.png", bmp, n, true);
+    deliver_image(&f, dv, "http://example.com/missing.png", (const uint8_t *)"<html>404</html>", 16, true);
+    const char *svg = "<svg xmlns='http://www.w3.org/2000/svg' width='50' height='20'><rect width='50' height='20' fill='lime'/></svg>";
+    deliver_image(&f, dv, "http://example.com/e.svg", (const uint8_t *)svg, strlen(svg), true);
+    deliver_image(&f, dv, "http://example.com/s.svg", (const uint8_t *)svg, strlen(svg), true);
+    au_docview_update(dv);
+    r = rect_of(dv, "o1");
+    CHECK(r.w == 40 && r.h == 30, "object image %gx%g", r.w, r.h);
+    CHECK(by_id(dv, "f1") && !au_layout_element_rect(au_docview_layout(dv), by_id(dv, "f1"), &r),
+          "an object showing its image does not lay out its fallback");
+    r = rect_of(dv, "f3");
+    CHECK(r.w > 20, "object whose image failed shows its fallback: %g wide", r.w);
+    r = rect_of(dv, "o4");
+    CHECK(r.w == 40 && r.h == 30, "innermost object of a fallback chain shows its image: %gx%g", r.w, r.h);
+    r = rect_of(dv, "e1");
+    CHECK(r.w == 50 && r.h == 20, "embed of an SVG image %gx%g", r.w, r.h);
+    r = rect_of(dv, "s");
+    CHECK(r.w == 50 && r.h == 20, "img of an SVG image %gx%g", r.w, r.h);
+    AuSurface *s = au_surface_new(800, 600);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 800, 600}, 0, 0);
+    int sx = (int)(r.x + r.w / 2), sy = (int)(r.y + r.h / 2);
+    CHECK(au_surface_get(s, sx, sy) == AU_RGB(0, 255, 0), "SVG image pixel %08x", au_surface_get(s, sx, sy));
+    r = rect_of(dv, "o1");
+    CHECK(au_surface_get(s, (int)r.x + 5, (int)r.y + 5) == AU_RGB(0, 0, 255), "object image pixel");
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* ---- User style sheet ---- */
 
 static void test_user_css(void)
@@ -658,6 +715,7 @@ int main(void)
     test_input();
     test_incremental();
     test_images();
+    test_object_embed();
     test_user_css();
     test_webfonts();
     test_images_and_webfonts();

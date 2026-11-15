@@ -189,13 +189,14 @@ static void test_xml(void)
 
     /* Depth limit. */
     char *deep = malloc(300 * 3 + 300 * 4 + 64);
-    char *p = deep;
-    p += sprintf(p, "<svg>");
-    for (int i = 0; i < 300; i++)
-        p += sprintf(p, "<g>");
-    for (int i = 0; i < 300; i++)
-        p += sprintf(p, "</g>");
-    p += sprintf(p, "</svg>");
+    size_t dn = 0;
+    memcpy(deep, "<svg>", 5);
+    dn = 5;
+    for (int i = 0; i < 300; i++, dn += 3)
+        memcpy(deep + dn, "<g>", 3);
+    for (int i = 0; i < 300; i++, dn += 4)
+        memcpy(deep + dn, "</g>", 4);
+    memcpy(deep + dn, "</svg>", 7);
     d = au_xml_parse(deep, strlen(deep), NULL, &err);
     ST_CHECK(!d, "nesting over the limit rejected");
     AuXmlLimits lim = {400, 0, 0};
@@ -402,11 +403,12 @@ static void test_use(void)
 
     /* Exponential use fan-out stays bounded. */
     char buf[4096];
-    char *p = buf;
-    p += sprintf(p, "<svg xmlns='http://www.w3.org/2000/svg'><defs><rect id='l0' width='1' height='1'/>");
+    size_t bn = (size_t)snprintf(buf, sizeof buf, "<svg xmlns='http://www.w3.org/2000/svg'><defs><rect id='l0' width='1' height='1'/>");
     for (int i = 1; i < 20; i++)
-        p += sprintf(p, "<g id='l%d'><use href='#l%d'/><use href='#l%d'/><use href='#l%d'/></g>", i, i - 1, i - 1, i - 1);
-    p += sprintf(p, "</defs><use href='#l19'/></svg>");
+        bn += (size_t)snprintf(buf + bn, sizeof buf - bn,
+                               "<g id='l%d'><use href='#l%d'/><use href='#l%d'/><use href='#l%d'/></g>", i, i - 1, i - 1,
+                               i - 1);
+    snprintf(buf + bn, sizeof buf - bn, "</defs><use href='#l19'/></svg>");
     clock_t t0 = clock();
     s = render(buf, 10, 10);
     double ms = (double)(clock() - t0) * 1000 / CLOCKS_PER_SEC;
