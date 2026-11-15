@@ -196,7 +196,7 @@ static void compare(AuBrowserWindow *w, AuSurface *s, const char *what)
 /* expect_shift: 1 the page must move pixels, 0 it must not, -1 either. */
 static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect_shift)
 {
-    AuBrowserHost host = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, t_scroll};
+    AuBrowserHost host = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, t_scroll, NULL};
     AuBrowser *b = au_browser_new(fonts, &host);
     au_present_init(&pres);
     AuBrowserWindow *bw = au_browser_window_new(b, w, h);

@@ -112,6 +112,14 @@ typedef struct AuBrowserHost {
      * after this call. Without it, a scroll invalidates the whole page.
      * AuPresent (present.h) does the bookkeeping. */
     void (*scroll_area)(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy);
+    /* Optional. Fills buf with len bytes from the platform's
+     * cryptographic random source (the one the network stack uses,
+     * AuNetOps.entropy) and returns true, or returns false when the
+     * source has not gathered enough entropy yet. Pages get
+     * crypto.getRandomValues and crypto.randomUUID from it; a false
+     * return makes the call throw. Never return weaker bytes. Without it
+     * pages have no crypto object. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuBrowserHost;
 
 struct AuTab {

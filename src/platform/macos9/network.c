@@ -171,6 +171,11 @@ static bool w_entropy(void *ctx, void *buf, size_t len)
     return au_mac_entropy_read(N.entropy, buf, len);
 }
 
+bool mac_net_random(void *buf, size_t len)
+{
+    return N.entropy && au_mac_entropy_read(N.entropy, buf, len);
+}
+
 static unsigned entropy_bits(void *ctx)
 {
     (void)ctx;

@@ -647,6 +647,12 @@ static uint32_t env_time(void *ctx)
     return time_ms(ctx);
 }
 
+static bool env_random(void *ctx, void *buf, size_t len)
+{
+    AuBrowser *b = ctx;
+    return b->host.random && b->host.random(b->host.ctx, buf, len);
+}
+
 static bool env_read(void *ctx, const char *url, char **data, size_t *len)
 {
     AuBrowser *b = ctx;
@@ -819,7 +825,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->win = w;
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
-    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
+    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
+                     b->host.random ? env_random : NULL};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};

@@ -877,6 +877,15 @@ static double dv_now(void *ctx, AuDocView *dv)
     return now(ctx);
 }
 
+/* crypto.getRandomValues: bytes from the platform's entropy source, or
+ * false (the call throws) while it is not ready. */
+static bool dv_random(void *ctx, AuDocView *dv, void *buf, size_t len)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->env.random && p->env.random(p->env.ctx, buf, len);
+}
+
 static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
 {
     if (dv == ((AuPage *)ctx)->dv)
@@ -1231,6 +1240,7 @@ static void new_view(AuPage *p)
     dcb.now_ms = dv_now;
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
+    dcb.random = p->env.random ? dv_random : NULL;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;

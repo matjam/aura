@@ -256,6 +256,9 @@ typedef struct AuPageEnv {
     const AuPageFetcher *(*fetcher)(void *ctx, const char *scheme);
     /* The selection highlight colour (paint ARGB); 0 for a default. */
     uint32_t highlight;
+    /* Optional: cryptographically strong random bytes for script
+     * (AuBrowserHost.random); false when the source is not ready. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

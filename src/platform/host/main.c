@@ -123,7 +123,7 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net] [--no-doc-cache] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
@@ -833,9 +833,26 @@ static AuHitPart hit_by_name(const char *s)
     return AU_HIT_NONE;
 }
 
+/* crypto for pages: the system's random device. --no-entropy makes it
+ * answer as the Mac OS 9 pool does before it has gathered enough. */
+static bool host_no_entropy;
+static bool host_random(void *ctx, void *buf, size_t len)
+{
+    (void)ctx;
+    if (host_no_entropy)
+        return false;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f)
+        return false;
+    size_t got = len ? fread(buf, 1, len, f) : 0;
+    fclose(f);
+    return got == len;
+}
+
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    host.random = host_random;
     if (o->scroll_bench) {
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;
@@ -1060,6 +1077,8 @@ int main(int argc, char **argv)
                 o.no_shift = true;
             else if (!strcmp(a, "--no-doc-cache"))
                 o.no_doc_cache = true;
+            else if (!strcmp(a, "--no-entropy"))
+                host_no_entropy = true;
             else if (!strcmp(a, "--mouse") && i + 2 < argc) {
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);
