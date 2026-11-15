@@ -1992,6 +1992,21 @@ static bool clip_radii(const LBlock *b, AuRadii *out)
     inset_radii(&r, b->bw);
     if (au_radii_zero(&r))
         return false;
+    /* In-flow content stays in the content box unless it overflows; a
+     * corner the content cannot reach needs no mask (a code block with
+     * padding wider than its radius, the common case). */
+    float pw = b->w - b->bw[1] - b->bw[3], ph = b->h - b->bw[0] - b->bw[2];
+    bool hfit = b->sw <= pw + 0.5f, vfit = b->sh <= ph + 0.5f;
+    static const int hs[4] = {3, 1, 1, 3}, vs[4] = {0, 0, 2, 2};
+    bool reach = false;
+    for (int i = 0; i < 4 && !reach; i++) {
+        if (r.rx[i] <= 0 || r.ry[i] <= 0)
+            continue;
+        bool safe = (vfit && b->p[vs[i]] >= r.ry[i]) || (hfit && b->p[hs[i]] >= r.rx[i]);
+        reach = !safe;
+    }
+    if (!reach)
+        return false;
     if (out)
         *out = r;
     return true;
