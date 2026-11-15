@@ -997,9 +997,8 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     au_canvas_clip_pop(P->c);
 }
 
-static AuRect box_area(const LBlock *b, float ox, float oy, int which)
+static AuRect box_area_of(const LBlock *b, AuRect r, int which)
 {
-    AuRect r = {ox, oy, b->w, b->h};
     if (which == AU_K_padding_box || which == AU_K_content_box) {
         r.x += b->bw[3];
         r.y += b->bw[0];
@@ -1015,6 +1014,11 @@ static AuRect box_area(const LBlock *b, float ox, float oy, int which)
     return r;
 }
 
+static AuRect box_area(const LBlock *b, float ox, float oy, int which)
+{
+    return box_area_of(b, (AuRect){ox, oy, b->w, b->h}, which);
+}
+
 static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect border_box, bool is_root_canvas)
 {
     (void)is_root_canvas;
@@ -1026,7 +1030,7 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
     AuBgLayer last;
     au_style_bg_layer(s, nl - 1, &last);
     if (bgc >> 24) {
-        AuRect r = box_area(b, border_box.x, border_box.y, last.clip);
+        AuRect r = box_area_of(b, border_box, last.clip);
         if (rounded) {
             AuRadii rr = radii;
             float in[4] = {0};
@@ -1044,8 +1048,8 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
         au_style_bg_layer(s, i, &ly);
         if (!ly.image || (ly.image->type == AU_CSSV_KEYWORD))
             continue;
-        AuRect clip = box_area(b, border_box.x, border_box.y, ly.clip);
-        AuRect origin = box_area(b, border_box.x, border_box.y, ly.origin);
+        AuRect clip = box_area_of(b, border_box, ly.clip);
+        AuRect origin = box_area_of(b, border_box, ly.origin);
         draw_bg_image(P, s, &ly, origin, clip, rounded ? &radii : NULL);
     }
 }
@@ -1254,16 +1258,84 @@ static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
         paint_textarea_placeholder(P, b, ox, oy);
 }
 
+/* The backgrounds of the column group, column, row group and row under
+ * cell k (CSS 2.1 17.5.1 layers 2 to 5), each placed on its own box and
+ * painted only inside the cell's border box, as browsers paint them. */
+static void paint_cell_layers(PCtx *P, LCellBox *cb, float ox, float oy)
+{
+    LBlock *k = &cb->k;
+    LBlock *row = (LBlock *)k->b.parent;
+    LTableBox *t = l_table_of(&k->b);
+    if (!t || !t->g || !row || row->b.inner != LI_TABLE_ROW || cb->row >= t->g->nrows)
+        return;
+    LBlock *grp = t->g->rows[cb->row].group;
+    float rx = ox - k->x, ry = oy - k->y;           /* row origin */
+    float gx = grp ? rx - row->x : 0, gy = grp ? ry - row->y : 0;
+    float tx = grp ? gx - grp->x : rx - row->x, ty = grp ? gy - grp->y : ry - row->y; /* table origin */
+    AuRect cell = {ox, oy, k->w, k->h};
+    au_canvas_clip_push(P->c, cell);
+    LBlock *done_g = NULL, *done_c = NULL;
+    for (int layer = 0; layer < 2; layer++) {
+        for (uint32_t c = cb->col; c < (uint32_t)cb->col + cb->colspan && c < t->g->ncols; c++) {
+            LBlock *cg = t->g->cols[c].group, *col = t->g->cols[c].col;
+            LBlock *x = layer == 0 ? cg : col;
+            if (!x || lb_anon(&x->b) || (x->b.flags & LF_HIDDEN) || x == (layer == 0 ? done_g : done_c))
+                continue;
+            if (layer == 0)
+                done_g = x;
+            else
+                done_c = x;
+            float bx = tx + x->x, by = ty + x->y;
+            if (layer == 1 && cg && col->b.parent == &cg->b)
+                bx += cg->x, by += cg->y;
+            paint_background(P, x->b.style, x, (AuRect){bx, by, x->w, x->h}, false);
+        }
+    }
+    if (grp && !lb_anon(&grp->b) && !(grp->b.flags & LF_HIDDEN))
+        paint_background(P, grp->b.style, grp, (AuRect){gx, gy, grp->w, grp->h}, false);
+    if (!lb_anon(&row->b) && !(row->b.flags & LF_HIDDEN))
+        paint_background(P, row->b.style, row, (AuRect){rx, ry, row->w, row->h}, false);
+    au_canvas_clip_pop(P->c);
+}
+
 static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy)
 {
-    if (lb_anon(&b->b) || (b->b.flags & LF_HIDDEN))
+    int in = b->b.inner;
+    if (in == LI_TABLE_ROW || in == LI_TABLE_ROW_GROUP || in == LI_TABLE_COLUMN || in == LI_TABLE_COLUMN_GROUP)
+        return; /* painted under each cell */
+    if (b->b.flags & LF_HIDDEN)
         return;
     const AuStyle *s = b->b.style;
-    if (b->b.inner == LI_TABLE_CELL && s->inhr->empty_cells == AU_EMPTY_CELLS_HIDE && !b->b.first)
+    bool collapsed = false;
+    if (in == LI_TABLE_CELL) {
+        LTableBox *t = l_table_of(&b->b);
+        collapsed = t && l_table_collapsed(t);
+        if (!collapsed && s->inhr->empty_cells == AU_EMPTY_CELLS_HIDE && l_cell_empty(b))
+            return;
+        if (!rect_hits(&P->dirty, ox, oy, b->w, b->h))
+            return;
+        paint_cell_layers(P, (LCellBox *)b, ox, oy);
+    } else if (in == LI_TABLE && !lb_anon(&b->b)) {
+        collapsed = l_table_collapsed((LTableBox *)b);
+    }
+    if (lb_anon(&b->b))
         return;
     AuRect box = {ox, oy, b->w, b->h};
     if (!rect_hits(&P->dirty, ox + b->ov.x, oy + b->ov.y, b->ov.w, b->ov.h))
         return;
+    if (in == LI_TABLE) {
+        /* The table's border and background go around its grid, not its
+         * captions. */
+        box.y += ((LTableBox *)b)->grid_y;
+        box.h = ((LTableBox *)b)->grid_h;
+    }
+    if (collapsed) {
+        /* Borders are painted on the grid lines by the table. */
+        paint_shadows(P, s, box, NULL, false);
+        paint_background(P, s, b, box, false);
+        paint_shadows(P, s, box, NULL, true);
+        return;
+    }
     /* A fieldset's border runs through the middle of its legend. */
     LBlock *lg = fieldset_legend(b);
     if (lg) {
@@ -2083,10 +2155,19 @@ static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
     }
 }
 
+static void paint_table_children(PCtx *P, LTableBox *t, float ox, float oy, int phase);
+
 /* Descendant walk over b's children for one phase. */
 static void paint_children(PCtx *P, LBox *parent, float ox, float oy, int phase)
 {
+    bool table = parent->kind == LK_BLOCK && parent->inner == LI_TABLE && ((LTableBox *)parent)->g;
+    if (table)
+        paint_table_children(P, (LTableBox *)parent, ox, oy, phase);
     for (LBox *c = parent->first; c; c = c->next) {
+        /* A table's rows and columns are painted through its grid. */
+        if (table && c->kind == LK_BLOCK && c->inner >= LI_TABLE_ROW_GROUP && c->inner <= LI_TABLE_COLUMN_GROUP &&
+            c->inner != LI_TABLE_CELL)
+            continue;
         if (c->kind == LK_INLINE) {
             if (phase == PH_FLOAT && !(c->flags & LF_LAYERED))
                 paint_children(P, c, ox, oy, phase);
@@ -2165,6 +2246,242 @@ static void paint_atomic(PCtx *P, LBlock *k, float ox, float oy)
     pop_clip(P, k, ox, oy, clipped);
     paint_scrollbars(P, k, ox, oy);
     paint_outline(P, &k->b, (AuRect){ox, oy, k->w, k->h});
+}
+
+/* ---- Tables ---- */
+
+/* Origin of cell cb given the table's border-box origin, or false when
+ * the cell is painted elsewhere (a layered row or row group, or a cell
+ * outside the grid). */
+static bool cell_origin(const LTableBox *t, const LCellBox *cb, float tx, float ty, float *x, float *y)
+{
+    const LBlock *k = &cb->k;
+    if ((k->b.flags & (LF_LAYERED | LF_TOO_DEEP)) || !cb->colspan)
+        return false;
+    const LTableRow *r = &t->g->rows[cb->row];
+    if (r->box->b.flags & LF_LAYERED)
+        return false;
+    float ox = tx + r->box->x, oy = ty + r->box->y;
+    if (r->group) {
+        if (r->group->b.flags & LF_LAYERED)
+            return false;
+        ox += r->group->x;
+        oy += r->group->y;
+    }
+    *x = ox + k->x;
+    *y = oy + k->y;
+    return true;
+}
+
+/* Line positions of the grid in table border-box coordinates. */
+static float grid_x(const LTableBox *t, uint32_t c)
+{
+    uint32_t n = t->g->ncols;
+    return c < n ? t->colx[c] : t->colx[n - 1] + t->colw[n - 1];
+}
+
+static float grid_y(const LTableBox *t, uint32_t r)
+{
+    uint32_t n = t->g->nrows;
+    return r < n ? t->rowy[r] : t->rowy[n - 1] + t->rowh[n - 1];
+}
+
+static const LTableEdge *hedge_at(const LTableBox *t, uint32_t r, int64_t c)
+{
+    if (c < 0 || c >= (int64_t)t->g->ncols)
+        return NULL;
+    return &t->hedge[(size_t)r * t->g->ncols + (size_t)c];
+}
+
+static const LTableEdge *vedge_at(const LTableBox *t, int64_t r, uint32_t c)
+{
+    if (r < 0 || r >= (int64_t)t->g->nrows)
+        return NULL;
+    return &t->vedge[(size_t)r * (t->g->ncols + 1) + c];
+}
+
+static int edge_rank(const LTableEdge *e)
+{
+    switch (e->style) {
+    case AU_BORDER_STYLE_DOUBLE: return 8;
+    case AU_BORDER_STYLE_SOLID: return 7;
+    case AU_BORDER_STYLE_DASHED: return 6;
+    case AU_BORDER_STYLE_DOTTED: return 5;
+    case AU_BORDER_STYLE_RIDGE: return 4;
+    case AU_BORDER_STYLE_OUTSET: return 3;
+    case AU_BORDER_STYLE_GROOVE: return 2;
+    case AU_BORDER_STYLE_INSET: return 1;
+    default: return 0;
+    }
+}
+
+static bool edge_beats(const LTableEdge *a, const LTableEdge *b)
+{
+    if (!b || b->w <= 0)
+        return a && a->w > 0;
+    if (!a || a->w <= 0)
+        return false;
+    if (a->w != b->w)
+        return a->w > b->w;
+    if (edge_rank(a) != edge_rank(b))
+        return edge_rank(a) > edge_rank(b);
+    return a->prec >= b->prec;
+}
+
+/* The junction of horizontal line r and vertical line c: the widths of
+ * the widest segments meeting there, and whether a horizontal one wins
+ * the corner (it then runs through it). */
+static void junction(const LTableBox *t, uint32_t r, uint32_t c, float *hw, float *vw, bool *hwin)
+{
+    const LTableEdge *h0 = hedge_at(t, r, (int64_t)c - 1), *h1 = hedge_at(t, r, c);
+    const LTableEdge *v0 = vedge_at(t, (int64_t)r - 1, c), *v1 = vedge_at(t, r, c);
+    const LTableEdge *hb = edge_beats(h0, h1) ? h0 : h1, *vb = edge_beats(v0, v1) ? v0 : v1;
+    *hw = hb ? hb->w : 0;
+    *vw = vb ? vb->w : 0;
+    *hwin = edge_beats(hb, vb);
+}
+
+/* One collapsed border segment: rectangle r, horizontal or vertical. */
+static void paint_edge(PCtx *P, const AuStyle *ts, const LTableEdge *e, AuRect r, bool horiz)
+{
+    if (e->w <= 0 || r.w <= 0 || r.h <= 0)
+        return;
+    uint32_t col = pc(ts, e->color);
+    if (!(col >> 24))
+        return;
+    switch (e->style) {
+    case AU_BORDER_STYLE_DOUBLE:
+        if (e->w >= 3) {
+            float t3 = e->w / 3;
+            AuRect a = r, b = r;
+            if (horiz) {
+                a.h = b.h = t3;
+                b.y = r.y + r.h - t3;
+            } else {
+                a.w = b.w = t3;
+                b.x = r.x + r.w - t3;
+            }
+            au_fill_rect(P->c, a, col);
+            au_fill_rect(P->c, b, col);
+            return;
+        }
+        break;
+    case AU_BORDER_STYLE_DOTTED:
+    case AU_BORDER_STYLE_DASHED: {
+        float dash = e->style == AU_BORDER_STYLE_DOTTED ? e->w : 3 * e->w;
+        float len = horiz ? r.w : r.h;
+        for (float p = 0; p < len; p += 2 * dash) {
+            float l = l_min(dash, len - p);
+            AuRect d = horiz ? (AuRect){r.x + p, r.y, l, r.h} : (AuRect){r.x, r.y + p, r.w, l};
+            au_fill_rect(P->c, d, col);
+        }
+        return;
+    }
+    case AU_BORDER_STYLE_GROOVE:
+    case AU_BORDER_STYLE_RIDGE:
+    case AU_BORDER_STYLE_INSET:
+    case AU_BORDER_STYLE_OUTSET: {
+        /* In the collapsing model inset draws as ridge and outset as
+         * groove (CSS 2.1 17.6.2). */
+        bool groove = e->style == AU_BORDER_STYLE_GROOVE || e->style == AU_BORDER_STYLE_OUTSET;
+        AuRect a = r, b = r;
+        if (horiz) {
+            a.h = b.h = r.h / 2;
+            b.y = r.y + r.h / 2;
+        } else {
+            a.w = b.w = r.w / 2;
+            b.x = r.x + r.w / 2;
+        }
+        au_fill_rect(P->c, a, bevel(col, groove));
+        au_fill_rect(P->c, b, bevel(col, !groove));
+        return;
+    }
+    default: break;
+    }
+    au_fill_rect(P->c, r, col);
+}
+
+/* Collapsed borders, centred on the grid lines, over the cell
+ * backgrounds and under the cells' content. */
+static void paint_collapsed_borders(PCtx *P, LTableBox *t, float tx, float ty)
+{
+    LTableGrid *g = t->g;
+    uint32_t nr = g->nrows, nc = g->ncols;
+    if (!t->edges_ok || !t->hedge || !nr || !nc || (t->k.b.flags & LF_HIDDEN))
+        return;
+    const AuStyle *ts = t->k.b.style;
+    /* Rows near the dirty area: lines are in y order. */
+    float top = P->dirty.y - ty - 50, bottom = P->dirty.y + P->dirty.h - ty + 50;
+    uint32_t lo = 0, hi = nr;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (grid_y(t, mid + 1) < top)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (uint32_t r = lo; r <= nr; r++) {
+        float y = grid_y(t, r);
+        if (y > bottom)
+            break;
+        for (uint32_t c = 0; c < nc; c++) {
+            const LTableEdge *e = hedge_at(t, r, c);
+            if (e->w > 0) {
+                float hw0, vw0, hw1, vw1;
+                bool w0, w1;
+                junction(t, r, c, &hw0, &vw0, &w0);
+                junction(t, r, c + 1, &hw1, &vw1, &w1);
+                float x0 = grid_x(t, c) + (w0 ? -vw0 / 2 : vw0 / 2);
+                float x1 = grid_x(t, c + 1) + (w1 ? vw1 / 2 : -vw1 / 2);
+                paint_edge(P, ts, e, (AuRect){tx + x0, ty + y - e->w / 2, x1 - x0, e->w}, true);
+            }
+        }
+        if (r == nr)
+            break;
+        float y1 = grid_y(t, r + 1);
+        for (uint32_t c = 0; c <= nc; c++) {
+            const LTableEdge *e = vedge_at(t, r, c);
+            if (e->w <= 0)
+                continue;
+            float hw0, vw0, hw1, vw1;
+            bool w0, w1;
+            junction(t, r, c, &hw0, &vw0, &w0);
+            junction(t, r + 1, c, &hw1, &vw1, &w1);
+            float a = y + (w0 ? hw0 / 2 : -hw0 / 2);
+            float b = y1 + (w1 ? -hw1 / 2 : hw1 / 2);
+            float x = grid_x(t, c);
+            paint_edge(P, ts, e, (AuRect){tx + x - e->w / 2, ty + a, e->w, b - a}, false);
+        }
+    }
+}
+
+/* The cells of table t (border-box origin ox, oy) for one phase, without
+ * recursing through the row groups and rows: all cell backgrounds, then
+ * the collapsed borders, then the cells' content. */
+static void paint_table_children(PCtx *P, LTableBox *t, float ox, float oy, int phase)
+{
+    LTableGrid *g = t->g;
+    if (!t->colx)
+        return; /* not laid out */
+    if (phase == PH_BG) {
+        for (uint32_t i = 0; i < g->ncells; i++) {
+            float x, y;
+            LBlock *k = &g->cells[i]->k;
+            if (cell_origin(t, g->cells[i], ox, oy, &x, &y))
+                paint_decor(P, k, x, y);
+        }
+        if (l_table_collapsed(t))
+            paint_collapsed_borders(P, t, ox, oy);
+    }
+    for (uint32_t i = 0; i < g->ncells; i++) {
+        float x, y;
+        LBlock *k = &g->cells[i]->k;
+        if (!cell_origin(t, g->cells[i], ox, oy, &x, &y))
+            continue;
+        if (!rect_hits(&P->dirty, x + k->ov.x, y + k->ov.y, k->ov.w, k->ov.h))
+            continue;
+        paint_flow(P, k, x, y, phase);
+    }
 }
 
 /* ---- Layers ---- */

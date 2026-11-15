@@ -23,7 +23,11 @@ static void name_of(const LBox *b, AuBuf *o)
         if (b->inner == LI_FLEX)
             k = b->flags & LF_INLINE_LEVEL ? "inline-flex" : "flex";
         else if (b->inner == LI_TABLE)
-            k = "table";
+            k = b->flags & LF_INLINE_LEVEL ? "inline-table" : "table";
+        else if (b->inner == LI_TABLE_COLUMN)
+            k = "table-column";
+        else if (b->inner == LI_TABLE_COLUMN_GROUP)
+            k = "table-column-group";
         else if (b->inner == LI_TABLE_ROW)
             k = "table-row";
         else if (b->inner == LI_TABLE_ROW_GROUP)
