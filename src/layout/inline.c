@@ -49,6 +49,14 @@ static uint32_t seg_push(AuLayout *L)
     return L->nsegs++;
 }
 
+/* The leading above the text of an inline box: half of what the line
+ * height leaves over the ascent and descent, rounded down to a whole
+ * pixel; the rest goes below (Blink's CalculateLeadingSpace). */
+static float half_leading(float lh, float a, float d)
+{
+    return floorf((lh - (a + d)) / 2);
+}
+
 static bool wraps(const AuStyle *s)
 {
     return s->inh->text_wrap_mode == AU_TEXT_WRAP_MODE_WRAP;
@@ -107,6 +115,9 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
     uint32_t n = t->len;
     uint32_t i = 0;
     uint32_t prev_cp = 0;
+    int base_bk = BK_NONE;   /* class of the last character that is not BK_EXTEND */
+    uint32_t ri_run = 0;     /* regional indicators in a row, this one included */
+    bool joined = false;     /* no break before the current character */
     while (i < n) {
         uint32_t si = seg_push(L);
         LSeg *sg = &L->segs[si];
@@ -123,6 +134,28 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
             size_t adv;
             uint32_t cp = au_utf8_decode(x + i, n - i, &adv);
             int bk = l_break_class(cp);
+            int cp_bk = bk;
+            if (bk == BK_EXTEND) {
+                /* Part of the cluster before it. After a ZWJ the next
+                 * character joins too (LB8a). */
+                bk = cp == 0x200D ? BK_NONE : base_bk;
+                if (bk == BK_RI)
+                    bk = BK_NONE;
+                joined = false;
+            } else {
+                joined = prev_cp == 0x200D;
+                if (bk == BK_RI) {
+                    /* Regional indicators pair up (LB30a): the second of
+                     * a pair stays with the first. */
+                    ri_run = base_bk == BK_RI ? ri_run + 1 : 1;
+                    if (!(ri_run & 1))
+                        joined = true;
+                    base_bk = BK_RI;
+                    bk = BK_IDEO;
+                } else {
+                    base_bk = bk;
+                }
+            }
             if (bk == BK_SPACE && !break_spaces)
                 break;
             if (bk == BK_NEWLINE && pre_br) {
@@ -147,13 +180,15 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
             if (bk == BK_TAB)
                 break;
             /* A break before an ideograph (not after an opening bracket). */
-            if (wrap && !keep_all && bk == BK_IDEO && i > sg->start && l_break_class(prev_cp) != BK_OPEN) {
+            if (wrap && !keep_all && bk == BK_IDEO && cp_bk != BK_EXTEND && !joined && i > sg->start &&
+                l_break_class(prev_cp) != BK_OPEN) {
                 word_end = i;
                 sg->flags |= SF_BREAK;
                 ended = true;
                 break;
             }
-            if (break_all && i > sg->start && bk != BK_CLOSE && l_break_class(prev_cp) != BK_OPEN) {
+            if (break_all && i > sg->start && bk != BK_CLOSE && cp_bk != BK_EXTEND && !joined &&
+                l_break_class(prev_cp) != BK_OPEN) {
                 word_end = i;
                 sg->flags |= SF_BREAK;
                 ended = true;
@@ -182,8 +217,10 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
                     size_t a2;
                     uint32_t nx = au_utf8_decode(x + i, n - i, &a2);
                     int nb = l_break_class(nx);
-                    if (nb == BK_CLOSE || nb == BK_SPACE || nb == BK_NEWLINE)
+                    if (nb == BK_CLOSE || nb == BK_SPACE || nb == BK_NEWLINE || nb == BK_EXTEND)
                         continue;
+                    if (nb == BK_RI && base_bk == BK_RI && (ri_run & 1))
+                        continue; /* the second of a pair follows */
                 }
                 sg->flags |= SF_BREAK;
                 ended = true;
@@ -290,8 +327,10 @@ static void build_segments(InlineCtx *C)
             L->segs[si].box = b;
             L->segs[si].kind = IT_WBR;
             L->segs[si].depth = depth;
-            if (wraps(b->style))
-                L->segs[si].flags = SF_BREAK;
+            /* A break opportunity whatever white-space says: Blink and
+             * Gecko break at <wbr> inside nowrap text (HTML's sheet has
+             * "nobr wbr { white-space: normal }" for the same reason). */
+            L->segs[si].flags = SF_BREAK;
             break;
         }
         case LK_BLOCK: {
@@ -854,8 +893,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     stack[0].bo = 0;
     stack[0].rdx = stack[0].rdy = 0;
     stack[0].valign = AU_VALIGN_BASELINE;
-    float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
-    float top = -(stack[0].a + half), bottom = stack[0].d + half;
+    float half = half_leading(stack[0].lh, stack[0].a, stack[0].d);
+    float top = -(stack[0].a + half), bottom = stack[0].lh - stack[0].a - half;
     if (lh_quirk) {
         stack[0].qt = top;
         stack[0].qb = bottom;
@@ -886,7 +925,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
                            l_len(&qs->padding[0], C->cw) == 0 && l_len(&qs->padding[2], C->cw) == 0;
             }
             const AuStyleBox *bx = f->box->style->box;
-            float hl = (v->lh - (v->a + v->d)) / 2;
+            float hl = half_leading(v->lh, v->a, v->d), hb = v->lh - (v->a + v->d) - hl;
             v->valign = bx->vertical_align;
             v->rdx = P->rdx;
             v->rdy = P->rdy;
@@ -902,7 +941,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_SUB: v->bo = P->bo + P->fs / 5 + 1; break;
             case AU_VALIGN_SUPER: v->bo = P->bo - P->fs / 3 - 1; break;
             case AU_VALIGN_TEXT_TOP: v->bo = P->bo - P->a + v->a + hl; break;
-            case AU_VALIGN_TEXT_BOTTOM: v->bo = P->bo + P->d - v->d - hl; break;
+            case AU_VALIGN_TEXT_BOTTOM: v->bo = P->bo + P->d - v->d - hb; break;
             case AU_VALIGN_MIDDLE: v->bo = P->bo - P->xh / 2 - (v->d - v->a) / 2; break;
             case AU_VALIGN_LENGTH: v->bo = P->bo - l_len(&bx->vertical_align_len, v->lh); break;
             case AU_VALIGN_TOP:
@@ -925,10 +964,10 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             if (v->valign != AU_VALIGN_TOP && v->valign != AU_VALIGN_BOTTOM) {
                 if (v->quirk) {
                     v->qt = v->bo - v->a - hl;
-                    v->qb = v->bo + v->d + hl;
+                    v->qb = v->bo + v->d + hb;
                 } else {
                     top = l_min(top, v->bo - v->a - hl);
-                    bottom = l_max(bottom, v->bo + v->d + hl);
+                    bottom = l_max(bottom, v->bo + v->d + hb);
                 }
             } else {
                 v->quirk = false;
@@ -1018,11 +1057,11 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             v->bo = bo[j];
             v->rdy = ext[j];
             int va = f->box->style->box->vertical_align;
-            float hl = (v->lh - (v->a + v->d)) / 2;
+            float hl = half_leading(v->lh, v->a, v->d), hb = v->lh - (v->a + v->d) - hl;
             if (va == AU_VALIGN_TOP)
                 v->bo = top + v->a + hl;
             else if (va == AU_VALIGN_BOTTOM)
-                v->bo = bottom - v->d - hl;
+                v->bo = bottom - v->d - hb;
             const AuStyleSurround *sr = f->box->style->surr;
             float bt = sr->border_width[0] + l_max(0, l_len(&sr->padding[0], C->cw));
             float bb = sr->border_width[2] + l_max(0, l_len(&sr->padding[2], C->cw));

@@ -491,6 +491,186 @@ static void test_counts(void)
 
 /* ---- Bench ---- */
 
+/* ---- Viewport changes ----
+ * After a change of the viewport size alone, the resolver keeps its rule
+ * index when no media query changes its result and computes again only
+ * the styles that use viewport units. Each step compares every computed
+ * value with a second document styled from scratch by a new resolver at
+ * that size. */
+
+static const char sheet_viewport[] =
+    "body { margin: 0 } .a { color: red }"
+    "@media (min-width: 600px) { .item { padding: 4px } .x { display: block } }"
+    "@media (min-width: 900px) and (max-height: 800px) { p { margin: 3px } }"
+    "@media (orientation: portrait) { ul { border: 1px solid } }"
+    "@media (min-aspect-ratio: 2/1) { #f { color: green } }"
+    "@media (max-width: 40em) { h1 { font-size: 12px } }"
+    "@media print { p { display: none } }";
+static const char sheet_units[] =
+    ":root { --gap: 2vw } #wrap { font-size: 2vw } #wrap > p { margin-left: 2em }"
+    "ul { width: 50vw; padding: calc(1vh + 2px) } .item::before { content: 'x'; margin-right: 1vmin }"
+    "#f { height: 10dvh; margin: var(--gap) } button { min-width: 5vmax } label { width: 10svw }";
+static const char sheet_static[] = ".item { padding: 1px } p { margin: 2em } #wrap { color: blue }";
+
+typedef struct ViewDoc {
+    AuDocument *doc;
+    AuCssResolver *r;
+} ViewDoc;
+
+static char *read_file(const char *path, size_t *len);
+
+/* Parses html and its <style> elements (plus extra sheets) into a styled
+ * document at w x h. */
+static ViewDoc view_doc(const char *html, size_t len, const char *const *extra, int nextra, float w, float h)
+{
+    ViewDoc v;
+    v.doc = au_html_parse(html, len, NULL);
+    v.r = au_css_resolver_new();
+    uint32_t n;
+    AuElement **el = elements(v.doc, &n);
+    for (uint32_t i = 0; i < n; i++) {
+        if (el[i]->tag != au_atom_cstr("style"))
+            continue;
+        AuBuf t;
+        au_buf_init(&t);
+        for (AuNode *c = el[i]->node.first_child; c; c = c->next)
+            if (c->type == AU_NODE_TEXT)
+                au_buf_append(&t, ((AuText *)c)->data, ((AuText *)c)->len);
+        au_css_resolver_add_sheet(v.r, au_css_sheet_parse(t.data ? t.data : "", t.len, AU_CSS_ORIGIN_AUTHOR, NULL, NULL));
+        au_buf_free(&t);
+    }
+    au_free(el);
+    for (int i = 0; i < nextra; i++)
+        au_css_resolver_add_sheet(v.r, au_css_sheet_parse(extra[i], strlen(extra[i]), AU_CSS_ORIGIN_AUTHOR, NULL, NULL));
+    AuCssDevice dev;
+    au_css_device_default(&dev);
+    dev.width = w;
+    dev.height = h;
+    au_css_resolver_set_device(v.r, &dev);
+    au_css_style_document(v.r, v.doc);
+    return v;
+}
+
+static void view_doc_free(ViewDoc *v)
+{
+    au_css_clear_document(v->doc);
+    au_css_resolver_free(v->r);
+    au_node_unref(&v->doc->node);
+}
+
+/* Resizes through the sizes; expect is the mode every step must report
+ * (-1: any). Returns the largest number of elements one step computed. */
+static uint32_t viewport_steps(const char *what, const char *html, size_t len, const char *const *extra, int nextra,
+                               int expect, int *modes_seen)
+{
+    static const float sizes[][2] = {{1023, 768}, {1024, 767}, {800, 600},  {600, 600}, {599, 600},
+                                     {600, 900},  {320, 480},  {1440, 900}, {1800, 700}, {1024, 100}, {641, 768},
+                                     {640, 768},  {1024, 768}};
+    ViewDoc v = view_doc(html, len, extra, nextra, 1024, 768);
+    uint32_t total;
+    au_free(elements(v.doc, &total));
+    uint32_t most = 0;
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        AuCssDevice dev = *au_css_resolver_device(v.r);
+        dev.width = sizes[i][0];
+        dev.height = sizes[i][1];
+        au_css_resolver_set_device(v.r, &dev);
+        int mode = au_css_resolver_viewport_restyle(v.r);
+        if (modes_seen)
+            *modes_seen |= 1 << mode;
+        css_resolver_take_computed(v.r);
+        au_css_restyle(v.r, v.doc);
+        uint32_t computed = css_resolver_take_computed(v.r);
+        if (computed > most)
+            most = computed;
+        ViewDoc f = view_doc(html, len, extra, nextra, sizes[i][0], sizes[i][1]);
+        AuBuf a, b;
+        au_buf_init(&a);
+        au_buf_init(&b);
+        dump_doc(v.doc, &a);
+        dump_doc(f.doc, &b);
+        checks++;
+        if (a.len != b.len || memcmp(a.data, b.data, a.len) != 0) {
+            failures++;
+            size_t k = 0, line = 0;
+            while (k < a.len && k < b.len && a.data[k] == b.data[k])
+                line += a.data[k++] == '\n';
+            fprintf(stderr, "%s at %gx%g (mode %d): styles differ from a fresh document, style line %u\n", what,
+                    sizes[i][0], sizes[i][1], mode, (unsigned)line);
+        }
+        au_buf_free(&a);
+        au_buf_free(&b);
+        view_doc_free(&f);
+        checks++;
+        if ((mode == AU_CSS_VIEWPORT_NONE && computed != 0) || (expect >= 0 && mode != expect)) {
+            failures++;
+            fprintf(stderr, "%s at %gx%g: mode %d (expected %d), %u of %u elements computed\n", what, sizes[i][0],
+                    sizes[i][1], mode, expect, computed, total);
+        }
+    }
+    view_doc_free(&v);
+    return most;
+}
+
+static int test_viewport(const char *samples)
+{
+    const char *none[] = {sheet_static};
+    const char *units[] = {sheet_static, sheet_units};
+    const char *media[] = {sheet_static, sheet_viewport};
+    const char *both[] = {sheet_viewport, sheet_units};
+    uint32_t total;
+    AuDocument *d = au_html_parse(page, sizeof page - 1, NULL);
+    au_free(elements(d, &total));
+    au_node_unref(&d->node);
+    /* nothing depends on the viewport: no element is ever computed */
+    uint32_t most = viewport_steps("static", page, sizeof page - 1, none, 1, AU_CSS_VIEWPORT_NONE, NULL);
+    CHECK(most == 0);
+    /* viewport units only: the users and what inherits from them */
+    most = viewport_steps("units", page, sizeof page - 1, units, 2, AU_CSS_VIEWPORT_UNITS, NULL);
+    CHECK(most > 0 && most < total);
+    printf("viewport units: at most %u of %u elements computed\n", most, total);
+    /* media queries only: nothing between breakpoints, everything across one */
+    int seen = 0;
+    viewport_steps("media", page, sizeof page - 1, media, 2, -1, &seen);
+    CHECK(seen == ((1 << AU_CSS_VIEWPORT_NONE) | (1 << AU_CSS_VIEWPORT_ALL)));
+    seen = 0;
+    viewport_steps("media+units", page, sizeof page - 1, both, 2, -1, &seen);
+    CHECK(seen == ((1 << AU_CSS_VIEWPORT_UNITS) | (1 << AU_CSS_VIEWPORT_ALL)));
+    /* the sample pages, with wiki.css for the page that links it */
+    static const char *const names[] = {"wiki.html",     "hn.html",       "hn-item.html", "blog.html",   "docs.html",
+                                        "forum.html",    "reddit.html",   "images.html",  "svg.html",    "emoji.html",
+                                        "qa-boxes.html", "qa-edge.html",  "qa-flex.html", "qa-forms.html",
+                                        "qa-inline.html", "qa-quirks.html", "qa-tables.html", "webfonts.html"};
+    for (size_t i = 0; samples && i < sizeof names / sizeof names[0]; i++) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/%s", samples, names[i]);
+        size_t len, clen = 0;
+        char *html = read_file(path, &len);
+        CHECK(html != NULL);
+        if (!html)
+            continue;
+        char *css = NULL;
+        if (!strcmp(names[i], "wiki.html")) {
+            snprintf(path, sizeof path, "%s/wiki.css", samples);
+            css = read_file(path, &clen);
+            CHECK(css != NULL);
+        }
+        /* as written (the samples have no media queries and no viewport
+         * units: nothing may be computed), then with sheets that add both */
+        const char *extra[3] = {sheet_viewport, sheet_units, css};
+        seen = 0;
+        most = viewport_steps(names[i], html, len, extra + 2, css ? 1 : 0, AU_CSS_VIEWPORT_NONE, &seen);
+        CHECK(most == 0);
+        seen = 0;
+        most = viewport_steps(names[i], html, len, extra, css ? 3 : 2, -1, &seen);
+        CHECK(seen & (1 << AU_CSS_VIEWPORT_ALL));
+        free(html);
+        free(css);
+    }
+    printf("%d checks, %d failures\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 static double now_ms(void) { return (double)clock() * 1000.0 / CLOCKS_PER_SEC; }
 
 static char *read_file(const char *path, size_t *len)
@@ -637,6 +817,8 @@ int main(int argc, char **argv)
     init_props();
     if (argc > 1 && strcmp(argv[1], "--bench") == 0)
         return bench(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "--viewport") == 0)
+        return test_viewport(argc > 2 ? argv[2] : NULL);
     uint32_t most = 0;
     run_page("plain", sheet_plain, NULL, &most);
     run_page("has-plain", sheet_plain, sheet_has_plain, &most);

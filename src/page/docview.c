@@ -266,14 +266,13 @@ static void invalidate_fn(void *ctx, AuIRect r)
         dv->cb.invalidate(dv->cb.ctx, dv, r);
 }
 
-/* Reports images whose size became known (layout rebuilds) and repaints
- * images whose pixels changed. */
+/* Notes images whose size became known (au_docview_update tells layout,
+ * and repaints the page if geometry changes) and repaints the boxes of
+ * images that changed. */
 static void images_changed(AuDocView *dv)
 {
-    if (au_docimages_take_layout_changed(dv->imgs)) {
+    if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
-        invalidate_all(dv);
-    }
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
     au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, (int)w + 1, (int)h + 1}, invalidate_fn, dv);
@@ -645,7 +644,9 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
         au_webfonts_done(dv->webfonts, req.id, req.data.data, req.data.len, ok, fetch_font, dv);
     }
     au_buf_free(&req.data);
-    invalidate_all(dv);
+    /* images_changed has invalidated where an image shows. */
+    if (!(req.kind == AU_RES_IMAGE && req.image))
+        invalidate_all(dv);
     maybe_finished(dv);
 }
 
@@ -1152,12 +1153,19 @@ static bool update_style(AuDocView *dv)
         /* Only the viewport changed: the document is the same, so the
          * layout compares each box's style and keeps the box tree unless
          * a media query changed what is displayed. */
-        au_css_style_document(dv->resolver, dv->doc);
-        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
-        au_layout_styles_changed(dv->layout);
+        /* The resolver knows what the viewport change reaches: nothing
+         * (no media query changed its result, no style uses viewport
+         * units), the elements that use viewport units, or everything. */
+        if (dv->restyle_needed || au_css_resolver_viewport_restyle(dv->resolver) != AU_CSS_VIEWPORT_NONE) {
+            au_css_restyle(dv->resolver, dv->doc);
+            dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
+            au_layout_styles_changed(dv->layout);
+            changed = true;
+        } else {
+            dv->stats.style_passes--; /* counted above; none ran */
+        }
         dv->viewport_restyle = false;
         dv->restyle_needed = false;
-        changed = true;
     } else if (dv->style_all || dv->tree_dirty) {
         dv->viewport_restyle = false;
         au_css_style_document(dv->resolver, dv->doc);
@@ -1191,13 +1199,17 @@ bool au_docview_update(AuDocView *dv)
         au_perf_add(&dv->perf, AU_PERF_STYLE, t1 - t0, NULL, t1);
     if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
-    if (dv->images_dirty) {
+    bool images = dv->images_dirty;
+    if (images) {
         au_layout_images_changed(dv->layout);
         dv->images_dirty = false;
     }
     bool laid_out = au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh);
-    if (laid_out)
+    if (laid_out) {
         changed = true;
+        if (images)
+            invalidate_all(dv); /* an image's size moved other boxes */
+    }
     uint32_t t2 = perf_now(dv);
     if (laid_out || t2 != t1)
         au_perf_add(&dv->perf, AU_PERF_LAYOUT, t2 - t1, NULL, t2);

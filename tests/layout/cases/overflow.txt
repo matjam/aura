@@ -275,3 +275,32 @@ hit 35 35 #t
 ---
 link 10 8 http://example.com/dir/page.html
 link 100 8 http://example.com/up.html#f
+
+=== a rounded overflow clip clips positioned descendants
+<body style="margin:0">
+<div style="position:relative;overflow:hidden;border-radius:20px;width:40px;height:40px">
+<div style="position:absolute;left:0;top:0;width:100px;height:100px;background:#ff0000"></div>
+</div>
+<div style="overflow:hidden;border-radius:20px;width:40px;height:40px">
+<div style="position:relative;z-index:1;width:100px;height:100px;background:#0000ff"></div>
+</div>
+---
+pixel 1 1 ffffff
+pixel 38 38 ffffff
+pixel 20 20 ff0000
+pixel 20 1 ff0000
+pixel 1 41 ffffff
+pixel 38 78 ffffff
+pixel 20 60 0000ff
+
+=== a positioned box clear of the rounded corners is painted whole
+<body style="margin:0">
+<div style="position:relative;overflow:hidden;border-radius:10px;width:60px;height:60px;background:#00ff00">
+<div style="position:absolute;left:0;top:20px;width:100px;height:20px;background:#ff0000"></div>
+</div>
+---
+pixel 1 30 ff0000
+pixel 59 30 ff0000
+pixel 61 30 ffffff
+pixel 1 1 ffffff
+pixel 30 5 00ff00
