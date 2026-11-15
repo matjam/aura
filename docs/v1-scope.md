@@ -113,7 +113,8 @@ Keep code small and fast where that costs nothing.
 - A JavaScript JIT, and Gmail-class web applications at usable speed. A
   bytecode cache and lazy compilation go in if they are cheap.
 - Audio and video, WebRTC, WebGL, WebAssembly.
-- Web Workers, service workers, IndexedDB.
+- Shared workers, service workers, IndexedDB. (Dedicated workers are in:
+  bot checks that run a proof of work need them.)
 - WebSockets and canvas 2D. These are the first two to pull in if an
   acceptance site needs them.
 - CSS animations and transitions beyond jumping to the end state, 3D
