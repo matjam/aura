@@ -846,7 +846,7 @@ static const AuCssDecl *best_below(Cascade *cs, uint16_t prop, uint64_t thr, int
         const Matched *mt = &r->matched[m];
         for (uint32_t i = 0; i < mt->decls->n; i++) {
             const AuCssDecl *d = &mt->decls->d[i];
-            if (d->prop == AU_PROP_CUSTOM)
+            if (d->prop == AU_PROP_CUSTOM || ((d->flags & DF_QUIRKS_ONLY) && !r->quirks))
                 continue;
             uint16_t p = d->prop < AU_PROP_LONGHAND_END ? d->prop : phys_of(cs, d->prop);
             if (p != prop)
@@ -1217,6 +1217,8 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
         for (uint32_t i = 0; i < mt->decls->n; i++) {
             const AuCssDecl *d = &mt->decls->d[i];
             if (d->prop == AU_PROP_CUSTOM || d->prop >= AU_PROP_LOGICAL_END)
+                continue;
+            if ((d->flags & DF_QUIRKS_ONLY) && !r->quirks)
                 continue;
             consider(r, d->prop, (d->flags & DF_IMPORTANT) ? mt->key_i : mt->key_n, d);
         }

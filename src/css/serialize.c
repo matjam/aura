@@ -255,13 +255,41 @@ static void calc_expr(const AuCssValue *v, AuBuf *out, int depth, bool in_produc
 
 static void calc_top(const AuCssValue *v, AuBuf *out, int depth)
 {
-    if (v->type == AU_CSSV_CALC && calc_fn_name(v->unit)) {
+    if (v->type == AU_CSSV_CALC && v->kw == CSS_CALC_CLAMP_WRAPPER && v->n == 2)
+        v = &v->u.items[0];
+    if (v->type != AU_CSSV_CALC) {
+        au_buf_puts(out, "calc(");
+        calc_expr(v, out, depth, false);
+        au_buf_putc(out, ')');
+        return;
+    }
+    if (calc_fn_name(v->unit)) {
         calc_expr(v, out, depth, false);
         return;
     }
     au_buf_puts(out, "calc(");
     calc_expr(v, out, depth, false);
     au_buf_putc(out, ')');
+}
+
+/* Function names are keywords (lowercase); transform functions are
+ * written in their canonical mixed case. */
+static const char *function_name(uint16_t kw)
+{
+    static const char *const mixed[] = {"translateX", "translateY", "translateZ", "translate3d", "scaleX",
+                                        "scaleY", "scaleZ", "scale3d", "rotateX", "rotateY", "rotateZ",
+                                        "rotate3d", "skewX", "skewY", "matrix3d"};
+    const char *name = au_css_keyword_name((AuCssKeyword)kw);
+    for (size_t i = 0; i < CSS_ARRAY_LEN(mixed); i++) {
+        const char *a = mixed[i], *b = name;
+        while (*a && (*a | 0x20) == *b) {
+            a++;
+            b++;
+        }
+        if (!*a && !*b)
+            return mixed[i];
+    }
+    return name;
 }
 
 static void ser(const AuCssValue *v, AuBuf *out, int depth)
@@ -316,7 +344,7 @@ static void ser(const AuCssValue *v, AuBuf *out, int depth)
             au_buf_putc(out, ']');
             break;
         }
-        au_buf_puts(out, au_css_keyword_name((AuCssKeyword)v->kw));
+        au_buf_puts(out, function_name(v->kw));
         au_buf_putc(out, '(');
         for (uint32_t i = 0; i < v->n; i++) {
             if (i)
@@ -352,16 +380,72 @@ static void ser(const AuCssValue *v, AuBuf *out, int depth)
 
 void au_css_value_serialize(const AuCssValue *v, AuBuf *out) { ser(v, out, 0); }
 
+/* Shadows are stored as LIST(x y blur spread color inset|none) for
+ * box-shadow and LIST(x y blur color) for text-shadow; they are written
+ * color first, as browsers do. */
+static void ser_shadows(const AuCssValue *v, bool box, AuBuf *out)
+{
+    if (v->type == AU_CSSV_KEYWORD) {
+        ser(v, out, 0);
+        return;
+    }
+    uint32_t n;
+    const AuCssValue *sh = v->type == AU_CSSV_COMMA_LIST ? v->u.items : v;
+    n = v->type == AU_CSSV_COMMA_LIST ? v->n : 1;
+    for (uint32_t i = 0; i < n; i++) {
+        const AuCssValue *s = &sh[i];
+        if (i)
+            au_buf_puts(out, ", ");
+        uint32_t want = box ? 6 : 4;
+        if (s->type != AU_CSSV_LIST || s->n != want) {
+            ser(s, out, 0);
+            continue;
+        }
+        const AuCssValue *it = s->u.items;
+        uint32_t ci = box ? 4 : 3;
+        ser(&it[ci], out, 0);
+        for (uint32_t k = 0; k < ci; k++) {
+            au_buf_putc(out, ' ');
+            ser(&it[k], out, 0);
+        }
+        if (box && css_is_kw(&it[5], AU_K_inset))
+            au_buf_puts(out, " inset");
+    }
+}
+
+static void ser_prop(uint16_t prop, const AuCssValue *v, AuBuf *out)
+{
+    switch (prop) {
+    case AU_PROP_box_shadow:
+    case AU_PROP_text_shadow:
+        ser_shadows(v, prop == AU_PROP_box_shadow, out);
+        return;
+    case AU_PROP_transform_origin:
+        /* the z offset is written only when not zero */
+        if (v->type == AU_CSSV_LIST && v->n == 3 && v->u.items[2].type == AU_CSSV_DIMENSION &&
+            v->u.items[2].u.num == 0) {
+            ser(&v->u.items[0], out, 0);
+            au_buf_putc(out, ' ');
+            ser(&v->u.items[1], out, 0);
+            return;
+        }
+        break;
+    default:
+        break;
+    }
+    ser(v, out, 0);
+}
+
 /* ---- Declarations ---- */
 
 void css_serialize_decl_value(const AuCssDecl *d, AuBuf *out)
 {
     switch (d->kind) {
     case DK_VALUE:
-        ser(&d->u.v, out, 0);
+        ser_prop(d->prop, &d->u.v, out);
         break;
     case DK_BLOB:
-        ser(&d->u.blob->value, out, 0);
+        ser_prop(d->prop, &d->u.blob->value, out);
         break;
     case DK_WIDE:
         au_buf_puts(out, au_css_keyword_name((AuCssKeyword)d->u.v.kw));
@@ -389,6 +473,8 @@ void au_css_decl_block_serialize(const AuCssDeclBlock *b, AuBuf *out)
     bool first = true;
     for (uint32_t i = 0; i < b->n; i++) {
         const AuCssDecl *d = &b->d[i];
+        if (d->flags & DF_QUIRKS_ONLY)
+            continue;
         const char *name = decl_name(d);
         if (d->kind == DK_VAR && d->aux) {
             /* longhands of a shorthand with var(): write the shorthand once */
@@ -416,7 +502,7 @@ void au_css_decl_block_serialize(const AuCssDeclBlock *b, AuBuf *out)
 static const AuCssDecl *find_decl(const AuCssDeclBlock *b, uint16_t prop)
 {
     for (uint32_t i = b->n; i-- > 0;)
-        if (b->d[i].prop == prop)
+        if (b->d[i].prop == prop && !(b->d[i].flags & DF_QUIRKS_ONLY))
             return &b->d[i];
     return NULL;
 }
@@ -847,7 +933,7 @@ void css_serialize_computed(const AuStyle *s, uint16_t prop, AuBuf *out)
         if (!b)
             au_buf_puts(out, pi->initial);
         else
-            ser(&b->value, out, 0);
+            ser_prop(prop, &b->value, out);
         break;
     }
     case T_SPECIAL:

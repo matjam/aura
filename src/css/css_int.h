@@ -145,6 +145,9 @@ void css_calc_simplify(CssArena *a, AuCssValue *v);
 enum { CT_NUMBER = 0, CT_LENGTH = 1, CT_PERCENT = 2, CT_ANGLE = 4, CT_TIME = 8, CT_FREQ = 16, CT_RES = 32,
        CT_FLEX = 64, CT_INVALID = 0x8000 };
 unsigned css_value_type(const AuCssValue *v);
+/* kw of the max(x, 0px) node computing wraps around calc() values of
+ * properties that cannot be negative; serialization shows only x. */
+#define CSS_CALC_CLAMP_WRAPPER 1
 /* Conversion of an absolute unit to its canonical one (px, deg, s, Hz,
  * dppx). Returns false for relative units. */
 bool css_unit_canonical(int unit, float *factor, int *canon);
@@ -167,7 +170,9 @@ static inline bool css_is_kw(const AuCssValue *v, uint16_t kw) { return v && v->
 const AuCssValue *css_items(const AuCssValue *v, uint32_t *n);
 
 /* ---- Declarations ---- */
-enum { DF_IMPORTANT = 1, DF_NEEDS_COMPUTE = 2, DF_HAS_ATTR = 4 };
+/* DF_QUIRKS_ONLY: valid only in quirks mode (unitless lengths); ignored
+ * by the cascade for other documents and by serialization. */
+enum { DF_IMPORTANT = 1, DF_NEEDS_COMPUTE = 2, DF_HAS_ATTR = 4, DF_QUIRKS_ONLY = 8 };
 enum {
     DK_VALUE = 0, /* u.v: a scalar node (keyword, number, percent, dimension, color) */
     DK_BLOB,      /* u.blob */

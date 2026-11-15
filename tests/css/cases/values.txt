@@ -1,0 +1,383 @@
+# Computed values: units, calc(), colors, keywords and complex values.
+
+=== absolute and font-relative lengths
+--- css
+html { font-size: 20px; }
+#a { width: 1in; height: 2.54cm; margin-left: 10mm; margin-right: 40q; padding-left: 12pt; padding-right: 1pc; }
+#b { font-size: 10px; width: 2em; height: 3rem; margin-left: 2ex; margin-right: 2ch; padding-left: 1lh; padding-right: 1rlh; line-height: 15px; }
+#c { font-size: 2em; width: 1em; }
+#d { font-size: 50%; width: 10em; }
+#e { width: 1cap; height: 1ic; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+      div#d
+    div#e
+--- expect
+#a -> width: 96px
+#a -> height: 96px
+#a -> margin-left: 37.7953px
+#a -> margin-right: 37.7953px
+#a -> padding-left: 16px
+#a -> padding-right: 16px
+#b -> width: 20px
+#b -> height: 60px
+#b -> margin-left: 10px
+#b -> margin-right: 10px
+#b -> padding-left: 15px
+#b -> padding-right: 24px
+#c -> font-size: 40px
+#c -> width: 40px
+#d -> font-size: 20px
+#d -> width: 200px
+
+=== viewport units
+--- options
+width 800
+height 600
+--- css
+#a { width: 50vw; height: 10vh; margin-left: 10vmin; margin-right: 10vmax; padding-left: 1dvw; padding-right: 100svh; }
+#b { width: 10vi; height: 10vb; }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> width: 400px
+#a -> height: 60px
+#a -> margin-left: 60px
+#a -> margin-right: 80px
+#a -> padding-left: 8px
+#a -> padding-right: 600px
+#b -> width: 80px
+#b -> height: 60px
+
+=== percentages stay for layout
+--- css
+#a { width: 50%; margin-left: 10%; padding-top: 5%; height: auto; max-width: none; min-height: min-content; }
+#b { width: calc(100% - 20px); }
+#c { width: calc(10px + 2em); font-size: 10px; }
+#d { width: min(50%, 100px); }
+#e { width: fit-content; height: max-content; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+--- expect
+#a -> width: 50%
+#a -> margin-left: 10%
+#a -> padding-top: 5%
+#a -> height: auto
+#a -> max-width: none
+#a -> min-height: min-content
+#b -> width: calc(100% - 20px)
+#c -> width: 30px
+#d -> width: min(50%, 100px)
+#e -> width: fit-content
+#e -> height: max-content
+
+=== calc() arithmetic and math functions
+--- css
+#a { width: calc(2 * 10px + 5px); height: calc((10px + 20px) / 3); margin-left: max(10px, 20px); margin-right: clamp(10px, 50px, 30px); }
+#b { width: calc(10px * 3 - 5px); height: round(17px, 5px); margin-left: abs(-7px); margin-right: calc(sign(-3) * -4px); }
+#c { width: calc(sqrt(16) * 1px); height: calc(pow(2, 3) * 1px); margin-left: calc(hypot(3px, 4px)); margin-right: mod(17px, 5px); }
+#d { width: calc(100px * sin(30deg)); height: calc(1px * e * 0 + 7px); opacity: calc(0.5 + 0.25); z-index: calc(3 * 2); }
+#e { width: -webkit-calc(5px + 5px); height: calc(1px * infinity); margin-left: calc(-5px); padding-left: calc(-5px); }
+#f { width: round(up, 11px, 5px); height: round(down, 14px, 5px); margin-left: round(to-zero, -14px, 5px); margin-right: rem(-17px, 5px); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+    div#f
+--- expect
+#a -> width: 25px
+#a -> height: 10px
+#a -> margin-left: 20px
+#a -> margin-right: 30px
+#b -> width: 25px
+#b -> height: 15px
+#b -> margin-left: 7px
+#b -> margin-right: 4px
+#c -> width: 4px
+#c -> height: 8px
+#c -> margin-left: 5px
+#c -> margin-right: 2px
+#d -> width: 50px
+#d -> height: 7px
+#d -> opacity: 0.75
+#d -> z-index: 6
+#e -> width: 10px
+#e -> margin-left: -5px
+#e -> padding-left: 0px
+#f -> width: 15px
+#f -> height: 10px
+#f -> margin-left: -10px
+#f -> margin-right: -2px
+
+=== invalid calc() drops the declaration
+--- css
+#a { width: 10px; width: calc(10px + 5); }
+#b { width: 10px; width: calc(10px +5px); }
+#c { width: 10px; width: calc(10px / 0px); }
+#d { width: 10px; width: calc(1s + 1px); }
+#e { width: 10px; width: min(); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+--- expect
+#a -> width: 10px
+#b -> width: 10px
+#c -> width: 10px
+#d -> width: 10px
+#e -> width: 10px
+
+=== colors
+--- css
+#a { color: red; background-color: #0f0; border-top-color: #00ff0080; border-left-color: #1234; }
+#b { color: rgb(10 20 30); background-color: rgb(10, 20, 30, 0.5); border-top-color: rgba(100%, 0%, 50%, 50%); border-left-color: rgb(300, -1, 2.6); }
+#c { color: hsl(120, 100%, 50%); background-color: hsl(240deg 100% 50% / 0.25); border-top-color: hwb(0 0% 0%); border-left-color: hsla(0.5turn, 100%, 25%, 1); }
+#d { color: transparent; background-color: currentcolor; border-top-color: ReBeccaPurple; border-left-color: canvastext; }
+#e { color: lab(50% 0 0); background-color: oklch(0.7 0 0); border-top-color: oklab(1 0 0); border-left-color: lch(100% 0 0); }
+#f { color: color(srgb 1 0 0); background-color: color(srgb-linear 0.5 0.5 0.5); border-top-color: color-mix(in srgb, red, blue); border-left-color: color-mix(in srgb, red 25%, blue); }
+#g { color: light-dark(green, red); background-color: rgb(none 0 0); border-top-color: #GGG; border-top-color: rgb(1 2); }
+#h { color: blue; border-top-color: currentcolor; outline-color: inherit; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+    div#f
+    div#g
+    div#h
+--- expect
+#a -> color: rgb(255, 0, 0)
+#a -> background-color: rgb(0, 255, 0)
+#a -> border-top-color: rgba(0, 255, 0, 0.5)
+#a -> border-left-color: rgba(17, 34, 51, 0.267)
+#b -> color: rgb(10, 20, 30)
+#b -> background-color: rgba(10, 20, 30, 0.5)
+#b -> border-top-color: rgba(255, 0, 128, 0.5)
+#b -> border-left-color: rgb(255, 0, 3)
+#c -> color: rgb(0, 255, 0)
+#c -> background-color: rgba(0, 0, 255, 0.25)
+#c -> border-top-color: rgb(255, 0, 0)
+#c -> border-left-color: rgb(0, 128, 128)
+#d -> color: rgba(0, 0, 0, 0)
+#d -> background-color: rgba(0, 0, 0, 0)
+#d -> border-top-color: rgb(102, 51, 153)
+#d -> border-left-color: rgb(0, 0, 0)
+#e -> color: rgb(119, 119, 119)
+#e -> background-color: rgb(158, 158, 158)
+#e -> border-top-color: rgb(255, 255, 255)
+#e -> border-left-color: rgb(255, 255, 255)
+#f -> color: rgb(255, 0, 0)
+#f -> background-color: rgb(188, 188, 188)
+#f -> border-top-color: rgb(128, 0, 128)
+#f -> border-left-color: rgb(64, 0, 191)
+#g -> color: rgb(0, 128, 0)
+#g -> background-color: rgb(0, 0, 0)
+#g -> border-top-color: rgb(0, 128, 0)
+#h -> border-top-color: rgb(0, 0, 255)
+#h -> outline-color: rgb(0, 0, 255)
+
+=== keywords and numbers
+--- css
+#a { display: inline-block; position: relative; float: left; opacity: 0.5; z-index: 3; visibility: hidden; cursor: pointer; box-sizing: border-box; }
+#b { display: inline flow-root; position: -webkit-sticky; opacity: 150%; z-index: auto; overflow: hidden scroll; text-align: -webkit-center; }
+#c { display: flex; flex-grow: 2; flex-shrink: 0.5; order: -1; justify-content: space-between; align-items: last baseline; align-self: safe center; }
+#d { display: grid; grid-auto-flow: column dense; justify-items: legacy center; contain: strict; text-decoration-line: underline line-through; }
+#e { display: list-item; vertical-align: -2px; line-height: 1.5; font-weight: 650; font-style: oblique 10deg; font-stretch: 75%; }
+#f { display: none; vertical-align: text-top; line-height: 150%; font-weight: bolder; letter-spacing: normal; word-spacing: 2px; tab-size: 4; }
+#g { aspect-ratio: 16 / 9; z-index: 2.5; opacity: -1; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+    div#f
+    div#g
+--- expect
+# floats are blockified: inline-block computes to block
+#a -> display: block
+#a -> position: relative
+#a -> float: left
+#a -> opacity: 0.5
+#a -> z-index: 3
+#a -> visibility: hidden
+#a -> cursor: pointer
+#a -> box-sizing: border-box
+#b -> display: inline-block
+#b -> position: sticky
+#b -> opacity: 1
+#b -> z-index: auto
+#b -> overflow-x: hidden
+#b -> overflow-y: scroll
+#b -> overflow: hidden scroll
+#b -> text-align: -webkit-center
+#c -> display: flex
+#c -> flex-grow: 2
+#c -> flex-shrink: 0.5
+#c -> order: -1
+#c -> justify-content: space-between
+#c -> align-items: last baseline
+#c -> align-self: safe center
+#d -> display: grid
+#d -> grid-auto-flow: column dense
+#d -> justify-items: legacy center
+#d -> contain: strict
+#d -> text-decoration-line: underline line-through
+#e -> display: list-item
+#e -> vertical-align: -2px
+#e -> line-height: 1.5
+#e -> font-weight: 650
+#e -> font-style: oblique
+#e -> font-stretch: 75%
+#f -> display: none
+#f -> vertical-align: text-top
+#f -> line-height: 24px
+#f -> font-weight: 700
+#f -> letter-spacing: 0px
+#f -> word-spacing: 2px
+#f -> tab-size: 4
+#g -> aspect-ratio: 1.77778 / 1
+#g -> z-index: auto
+#g -> opacity: 0
+
+=== font sizes and weights
+--- css
+#a { font-size: small; }
+#b { font-size: xx-large; }
+#c { font-size: larger; }
+#d { font-size: smaller; }
+#e { font-weight: lighter; }
+#f { font-weight: bold; }
+#f > p { font-weight: bolder; }
+#g { font-size: 0; }
+#h { font-size: -1px; font-size: calc(-5px); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+    div#f
+      p#fp
+    div#g
+    div#h
+--- expect
+#a -> font-size: 13px
+#b -> font-size: 32px
+#c -> font-size: 19.2px
+#d -> font-size: 13.3333px
+#e -> font-weight: 100
+#f -> font-weight: 700
+#fp -> font-weight: 900
+#g -> font-size: 0px
+#h -> font-size: 0px
+
+=== complex values
+--- css
+#a { box-shadow: 1px 2px 3px red, inset 0 0 5px 1px rgba(0,0,0,.5); text-shadow: 1px 1px blue; transform: rotate(45deg) translateX(10px) scale(2); }
+#b { transform-origin: left top; background-image: linear-gradient(to right, red 10%, blue); filter: blur(2px) brightness(1.5); }
+#c { content: "a" counter(x) attr(data-v) "b"; counter-reset: x 2 y; counter-increment: x; quotes: "<" ">"; }
+#d { font-family: Arial, "Times New Roman", serif; transition: opacity 1s; will-change: transform, opacity; }
+#e { transform: none; box-shadow: none; filter: none; content: none; }
+#f { grid-template-columns: repeat(2, 1fr) 100px; grid-template-areas: "a b" "c d"; grid-row-start: span 2; }
+#g { translate: 10px 20%; rotate: 90deg; scale: 1.5; clip-path: circle(50%); }
+#h { transform: translate(1em, 2em); font-size: 10px; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c[data-v=V]
+    div#d
+    div#e
+    div#f
+    div#g
+    div#h
+--- expect
+#a -> box-shadow: rgb(255, 0, 0) 1px 2px 3px 0px, rgba(0, 0, 0, 0.5) 0px 0px 5px 1px inset
+#a -> text-shadow: rgb(0, 0, 255) 1px 1px 0px
+#a -> transform: rotate(45deg) translateX(10px) scale(2)
+#b -> transform-origin: 0% 0%
+#b -> background-image: linear-gradient(to right, rgb(255, 0, 0) 10%, rgb(0, 0, 255))
+#b -> filter: blur(2px) brightness(1.5)
+#c -> content: "a" counter(x) "V" "b"
+#c -> counter-reset: x 2 y 0
+#c -> counter-increment: x 1
+#c -> quotes: "<" ">"
+#d -> font-family: Arial, "Times New Roman", serif
+#d -> transition-property: opacity
+#d -> transition-duration: 1s
+#d -> will-change: transform, opacity
+#e -> transform: none
+#e -> box-shadow: none
+#e -> filter: none
+#e -> content: none
+#f -> grid-template-columns: repeat(2, 1fr) 100px
+#f -> grid-template-areas: "a b" "c d"
+#f -> grid-row-start: span 2
+#g -> translate: 10px 20%
+#g -> rotate: 90deg
+#g -> scale: 1.5
+#g -> clip-path: circle(50%)
+#h -> transform: translate(10px, 20px)
+
+=== unknown properties and invalid values are dropped
+--- css
+#a { color: red; colr: blue; color: bluish; width: 10px; width: 10; -moz-whatever: 1; }
+#b { color: red; color: green !ie; margin-left: 5px !important !important; }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> color: rgb(255, 0, 0)
+#a -> width: 10px
+#b -> color: rgb(255, 0, 0)
+#b -> margin-left: 0px
+
+=== quirks mode unitless lengths
+--- options
+quirks
+--- css
+#a { width: 100; margin-left: 10; line-height: 2; font-size: 12; }
+#b { width: 10px; opacity: 1; flex-grow: 1; width: 50e; }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> width: 100px
+#a -> margin-left: 10px
+#a -> line-height: 2
+#a -> font-size: 12px
+#b -> width: 10px

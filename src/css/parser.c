@@ -110,8 +110,15 @@ static bool parse_decl(const CssTokens *tk, uint32_t a, uint32_t b, AuCssDeclBlo
         return true;
     }
     uint16_t prop = css_prop_lookup(nm, name->len);
-    if (prop)
-        css_parse_property(prop, tk, i, e, important, out, quirks, base_url);
+    if (prop && !css_parse_property(prop, tk, i, e, important, out, quirks, base_url) && !quirks) {
+        /* A sheet does not know its document's mode when parsed: keep
+         * values valid only in quirks mode (unitless lengths), marked so
+         * the cascade uses them for quirks-mode documents only. */
+        uint32_t before = out->n;
+        if (css_parse_property(prop, tk, i, e, important, out, true, base_url))
+            for (uint32_t k = before; k < out->n; k++)
+                out->d[k].flags |= DF_QUIRKS_ONLY;
+    }
     return true;
 }
 

@@ -1806,15 +1806,17 @@ AuCssValue *pp_content(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
     return main_items ? v : NULL;
 }
 
-static AuCssValue *counter_list(CssParseCtx *cx, AuCssValue *v, bool reset)
+/* A counter list, normalized to name/integer pairs: a LIST of 2n items
+ * with the default integer (dflt) filled in. */
+static AuCssValue *counter_list(CssParseCtx *cx, AuCssValue *v, bool reset, float dflt)
 {
-    (void)cx;
     if (css_is_kw(v, AU_K_none))
         return v;
     uint32_t n;
     const AuCssValue *p = css_items(v, &n);
     if (v->type == AU_CSSV_COMMA_LIST)
         return NULL;
+    uint32_t pairs = 0;
     for (uint32_t i = 0; i < n; i++) {
         bool name = is_custom_ident(&p[i]) && !css_is_kw(&p[i], AU_K_none);
         if (!name && reset && p[i].type == AU_CSSV_FUNCTION && p[i].kw == AU_K_reversed && p[i].n == 1 &&
@@ -1824,19 +1826,29 @@ static AuCssValue *counter_list(CssParseCtx *cx, AuCssValue *v, bool reset)
             return NULL;
         if (i + 1 < n && is_integer(&p[i + 1]))
             i++;
+        pairs++;
     }
-    return v;
+    AuCssValue *l = css_new_list(cx->arena, AU_CSSV_LIST, pairs * 2);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        l->u.items[k++] = p[i];
+        if (i + 1 < n && is_integer(&p[i + 1]))
+            l->u.items[k++] = p[++i];
+        else
+            l->u.items[k++] = *css_new_num(cx->arena, AU_CSSV_NUMBER, dflt, 1);
+    }
+    return l;
 }
 
 AuCssValue *pp_counter_reset(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
 {
-    return counter_list(cx, v, prop == AU_PROP_counter_reset);
+    return counter_list(cx, v, prop == AU_PROP_counter_reset, 0);
 }
 
 AuCssValue *pp_counter_increment(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
 {
     (void)prop;
-    return counter_list(cx, v, false);
+    return counter_list(cx, v, false, 1);
 }
 
 /* ---- Misc ---- */

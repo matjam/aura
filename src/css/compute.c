@@ -235,6 +235,7 @@ static bool compute_len(CssComputeCtx *c, const AuCssValue *v, AuLen *out, bool 
         if (nonneg) {
             AuCssValue *mx = css_new_list(&compute_arena, AU_CSSV_CALC, 2);
             mx->unit = AU_CALC_MAX;
+            mx->kw = CSS_CALC_CLAMP_WRAPPER; /* serialized as its first operand */
             mx->u.items[0] = *t;
             mx->u.items[1] = *css_new_num(&compute_arena, AU_CSSV_DIMENSION, 0, AU_UNIT_PX);
             t = mx;
@@ -854,6 +855,9 @@ static uint16_t blockify(uint16_t d)
     if (inner == AU_DISPLAY_INNER_RUBY)
         return AU_DISPLAY_BLOCK;
     if (au_display_outer(d) == AU_DISPLAY_OUTER_INLINE && inner == AU_DISPLAY_INNER_FLOW && !li)
+        return AU_DISPLAY_BLOCK;
+    /* inline-block becomes block, as browsers compute it */
+    if (au_display_outer(d) == AU_DISPLAY_OUTER_INLINE && inner == AU_DISPLAY_INNER_FLOW_ROOT && !li)
         return AU_DISPLAY_BLOCK;
     return AU_DISPLAY_MAKE(AU_DISPLAY_OUTER_BLOCK, inner, li);
 }
