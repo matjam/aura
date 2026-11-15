@@ -4,6 +4,7 @@
  * with 304, no-store, invalidation by POST, reload). */
 #include "fakenet.h"
 #include "net/cache.h"
+#include "net/disk_cache.h"
 #include "net/net.h"
 
 #include <stdio.h>
@@ -392,6 +393,151 @@ static void test_storage(void)
         au_buf_free(&disk.val[i]);
 }
 
+/* ---- The disk cache over an in-memory folder ---- */
+typedef struct MemDir {
+    char name[16][24];
+    AuBuf data[16];
+    uint32_t mtime[16];
+    bool used[16];
+    int writes, removes;
+    bool fail_writes;
+} MemDir;
+
+static int md_find(MemDir *m, const char *name)
+{
+    for (int i = 0; i < 16; i++)
+        if (m->used[i] && !strcmp(m->name[i], name))
+            return i;
+    return -1;
+}
+
+static void md_list(void *ctx, void (*each)(void *, const char *, size_t, uint32_t), void *ec)
+{
+    MemDir *m = ctx;
+    for (int i = 0; i < 16; i++)
+        if (m->used[i])
+            each(ec, m->name[i], m->data[i].len, m->mtime[i]);
+}
+
+static bool md_read(void *ctx, const char *name, AuBuf *out)
+{
+    MemDir *m = ctx;
+    int i = md_find(m, name);
+    if (i < 0)
+        return false;
+    au_buf_append(out, m->data[i].data, m->data[i].len);
+    return true;
+}
+
+static bool md_write(void *ctx, const char *name, const void *data, size_t len)
+{
+    MemDir *m = ctx;
+    if (m->fail_writes)
+        return false;
+    int i = md_find(m, name);
+    if (i < 0) {
+        for (i = 0; i < 16 && m->used[i]; i++) {
+        }
+        if (i == 16)
+            return false;
+        m->used[i] = true;
+        snprintf(m->name[i], sizeof m->name[i], "%s", name);
+        au_buf_init(&m->data[i]);
+    }
+    au_buf_clear(&m->data[i]);
+    au_buf_append(&m->data[i], data, len);
+    m->writes++;
+    return true;
+}
+
+static void md_remove(void *ctx, const char *name)
+{
+    MemDir *m = ctx;
+    int i = md_find(m, name);
+    if (i >= 0) {
+        au_buf_free(&m->data[i]);
+        m->used[i] = false;
+        m->removes++;
+    }
+}
+
+static void test_disk_cache(void)
+{
+    MemDir m;
+    memset(&m, 0, sizeof m);
+    AuDiskCacheFiles files = {&m, md_list, md_read, md_write, md_remove};
+    AuDiskCache *dc = au_disk_cache_new(&files, 4000);
+    AuCacheStorage st;
+    au_disk_cache_storage(dc, &st);
+    char n1[19], n2[19];
+    au_disk_cache_name("http://a.test/", n1);
+    au_disk_cache_name("http://b.test/", n2);
+    CHECK(strlen(n1) == 17 && n1[0] == 'c' && strcmp(n1, n2), "names: %s %s", n1, n2);
+    char big[600];
+    memset(big, 'x', sizeof big);
+    st.store(st.ctx, "http://a.test/", big, 500);
+    st.store(st.ctx, "http://b.test/", "bee", 3);
+    CHECK(au_disk_cache_count(dc) == 2 && m.writes == 2, "two files");
+    AuBuf b;
+    au_buf_init(&b);
+    CHECK(st.load(st.ctx, "http://b.test/", &b) && b.len == 3 && !memcmp(b.data, "bee", 3), "load");
+    CHECK(!st.load(st.ctx, "http://c.test/", &b), "miss");
+    /* Too large for a quarter of the budget: not written, old copy gone. */
+    st.store(st.ctx, "http://b.test/", big, 1001);
+    CHECK(au_disk_cache_count(dc) == 1 && md_find(&m, n2) < 0, "oversized entry dropped");
+    /* Least recently used goes first. */
+    for (int i = 0; i < 8; i++) {
+        char key[32];
+        snprintf(key, sizeof key, "http://k%d.test/", i);
+        st.store(st.ctx, key, big, 500);
+        if (i == 3)
+            CHECK(st.load(st.ctx, "http://a.test/", &b), "touch a");
+    }
+    CHECK(au_disk_cache_bytes(dc) <= 4000, "within budget: %zu", au_disk_cache_bytes(dc));
+    CHECK(st.load(st.ctx, "http://a.test/", &b), "recently used a kept");
+    CHECK(!st.load(st.ctx, "http://k0.test/", &b), "oldest evicted");
+    /* A damaged file is a miss and is removed. */
+    int ia = md_find(&m, n1);
+    m.data[ia].data[2] = 'X';
+    CHECK(!st.load(st.ctx, "http://a.test/", &b) && md_find(&m, n1) < 0, "damaged file removed");
+    /* A new session indexes the folder by mtime, ignoring strangers. */
+    md_write(&m, "Cache.tmp", "zz", 2);
+    for (int i = 0; i < 16; i++)
+        m.mtime[i] = (uint32_t)i;
+    AuDiskCache *dc2 = au_disk_cache_new(&files, 4000);
+    AuCacheStorage st2;
+    au_disk_cache_storage(dc2, &st2);
+    size_t before = au_disk_cache_count(dc2);
+    CHECK(before == au_disk_cache_count(dc), "listed %zu, had %zu", before, au_disk_cache_count(dc));
+    CHECK(st2.load(st2.ctx, "http://k7.test/", &b), "found by the new session");
+    au_disk_cache_set_max(dc2, 1200);
+    CHECK(au_disk_cache_bytes(dc2) <= 1200 && st2.load(st2.ctx, "http://k7.test/", &b), "shrink keeps newest");
+    st2.remove(st2.ctx, "http://k7.test/");
+    CHECK(!st2.load(st2.ctx, "http://k7.test/", &b), "removed");
+    au_disk_cache_clear(dc2);
+    CHECK(au_disk_cache_count(dc2) == 0 && md_find(&m, "Cache.tmp") >= 0, "clear leaves strangers");
+    /* With the HTTP cache in front. */
+    AuHttpCache *c = au_cache_new(1 << 20);
+    au_cache_set_storage(c, &st2);
+    char d[32], spec[160], body[64];
+    date_str(T0, d);
+    snprintf(spec, sizeof spec, "Date: %s\nCache-Control: max-age=100", d);
+    au_disk_cache_set_max(dc2, 1 << 20);
+    store(c, "http://s.test/", "", 200, spec, "on disk", T0);
+    AuHttpCache *c2 = au_cache_new(1 << 20);
+    au_cache_set_storage(c2, &st2);
+    CHECK(look(c2, "http://s.test/", "", T0 + 1, body, sizeof body) == AU_CACHE_FRESH && !strcmp(body, "on disk"),
+          "HTTP cache through the disk cache: %s", body);
+    au_cache_free(c);
+    au_cache_free(c2);
+    au_buf_free(&b);
+    au_disk_cache_free(dc);
+    au_disk_cache_free(dc2);
+    for (int i = 0; i < 16; i++)
+        if (m.used[i])
+            au_buf_free(&m.data[i]);
+}
+
 /* ---- Through the client ---- */
 typedef struct R {
     bool done, from_cache, revalidated;
@@ -529,6 +675,7 @@ int main(void)
     test_store_lookup();
     test_limits();
     test_storage();
+    test_disk_cache();
     test_client();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
