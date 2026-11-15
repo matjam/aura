@@ -383,6 +383,7 @@ static void test_downloads(void)
     CHECK(!strcmp(au_page_url(t->page), "http://files.test/") && t->nav.n == 1, "tab back on its page: %s",
           au_page_url(t->page));
     CHECK(!strcmp(au_page_title(t->page), "Index"), "title restored");
+    CHECK(au_page_security(t->page) == AU_SECURITY_NOT_SECURE, "security indicator restored");
     CHECK(au_history_find(&e.b->history, "http://files.test/get?id=1") < 0, "no history for the file");
     if (e.b->downloads.n == 1) {
         AuDownload *d = e.b->downloads.items[0];

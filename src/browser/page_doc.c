@@ -131,6 +131,9 @@ struct AuPage {
      * download. */
     char *prev_url, *prev_title;
     bool prev_begun;
+    AuSecurity prev_security;
+    bool prev_have_security, prev_mixed;
+    AuFetchCert *prev_cert;
 
     /* Text selection: anchor and focus hold a reference to their node. */
     AuTextPos anchor, focus;
@@ -1173,6 +1176,12 @@ static void main_data(AuPage *p, const char *bytes, size_t len)
 {
     if (p->image_doc || p->discard)
         return; /* the <img> the page made fetches it; or nothing to show */
+    if (p->prev_cert) {
+        /* The new document is showing, not a download: the previous
+         * one's certificate is no longer needed. */
+        au_free(p->prev_cert);
+        p->prev_cert = NULL;
+    }
     if (!p->begun || p->interim)
         start_main_doc(p, bytes, len, NULL);
     au_buf_append(&p->source, bytes, len);
@@ -1614,6 +1623,13 @@ static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
     set_title(p, p->prev_title ? p->prev_title : "");
     if (!p->begun)
         p->begun = p->prev_begun;
+    /* The document still shown keeps its padlock and certificate. */
+    p->security = p->prev_security;
+    p->have_security = p->prev_have_security;
+    p->mixed = p->prev_mixed;
+    au_free(p->cert);
+    p->cert = p->prev_cert;
+    p->prev_cert = NULL;
     p->main_done = true;
     if (p->main_fetch) {
         p->main_fetch->done = true; /* no more calls from the fetcher */
@@ -1715,7 +1731,6 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
-    au_buf_free(&p->source);
     p->gen++;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     /* What is shown now, in case this load turns out to be a download. */
@@ -1724,6 +1739,13 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->prev_url = p->url;
     p->prev_title = au_strndup(p->title, strlen(p->title));
     p->prev_begun = p->begun;
+    p->prev_security = p->security;
+    p->prev_have_security = p->have_security;
+    p->prev_mixed = p->mixed;
+    au_free(p->prev_cert);
+    p->prev_cert = p->cert;
+    p->cert = NULL;
+    au_buf_free(&p->source);
     p->url = u;
     /* The referrer: this page's own address when one of its links asked
      * for the navigation; none when the user typed or chose it. */
@@ -1736,8 +1758,6 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->link_target = p->link_referrer = NULL;
     p->rpolicy = AU_FETCH_RP_DEFAULT;
     p->have_security = p->mixed = false;
-    au_free(p->cert);
-    p->cert = NULL;
     p->status = 0;
     set_str(&p->content_type, "");
     p->image_doc = p->discard = false;
@@ -1982,6 +2002,7 @@ void au_page_free(AuPage *p)
     au_free(p->content_type);
     au_free(p->prev_url);
     au_free(p->prev_title);
+    au_free(p->prev_cert);
     au_free(p);
 }
 
