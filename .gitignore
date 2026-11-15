@@ -2,6 +2,7 @@ build/
 run/
 .DS_Store
 .claude/
+__pycache__/
 disks/
 toolchain/Retro68/
 toolchain/build/
