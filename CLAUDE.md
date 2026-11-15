@@ -59,6 +59,7 @@ what you need to build, test and change Aura.
 | `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts |
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
+| `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive (see CI and releases) |
 | `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
@@ -78,11 +79,80 @@ change to the top-level file.
   keeps the toolchain it was first configured with; delete it to switch.
   It also assembles the distributable folder `build/ppc/dist/Aura`: the
   application (`Aura.bin`, MacBinary) beside `Fonts` (the family folders
-  of `assets/fonts`, `fonts.idx` and the fonts' README).
+  of `assets/fonts`, `fonts.idx` and the fonts' README). Then it packs
+  that folder as the self-extracting archive, `Aura-VERSION.sea.bin` and
+  `Aura-VERSION.hqx` in `build/ppc/dist` (see CI and releases).
 - To run the tests under AddressSanitizer and UBSan, configure a separate
   folder: `cmake -S . -B build/asan -G Ninja
   -DCMAKE_C_FLAGS="-fsanitize=address,undefined"`, then `cmake --build
   build/asan` and `ctest --test-dir build/asan`.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push to `main`, on pull requests
+and on tags `v*`. It needs nothing outside the repository: no disk
+images, no QEMU, no secrets.
+
+- **Jobs.** `host` runs `./build.sh test` on Ubuntu (GCC) and macOS
+  (Apple Clang). `sanitize` runs the tests on Ubuntu under Clang's
+  AddressSanitizer and UBSan, with leak detection off (several tests do
+  not free everything at exit; macOS, where the sanitizer build is run by
+  hand, does not detect leaks either). `toolchain` builds Retro68 when
+  the cache has none. `ppc` runs `./build.sh ppc` and uploads the two
+  archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and
+  `Aura-VERSION-SHORTHASH-sea-bin`. `release` runs only for a tag.
+- **The toolchain cache.** `~/.local/opt/retro68` is cached under the
+  key `retro68-Linux-` plus the hash of `toolchain/build.sh`. To rebuild
+  the toolchain in CI, change that script (the pinned commit, say). A
+  cold build takes about 15 minutes; a newer push does not cancel it. A
+  cache made on a branch serves that branch only; `main`'s serves every
+  branch and pull request.
+- **To make a release**, set `AU_VERSION` in `src/browser/credits.h`,
+  commit, then tag that commit `vVERSION` (for example `v0.4`) and push
+  the tag. The `release` job checks that the tag matches `AU_VERSION`,
+  then creates the GitHub release with `Aura-VERSION.hqx` and
+  `Aura-VERSION.sea.bin`. It runs after the tests and the PowerPC build
+  pass for the tag.
+- **To build the archive locally**, run `./build.sh ppc`. It writes
+  `build/ppc/dist/Aura-VERSION.sea.bin` (MacBinary) and
+  `Aura-VERSION.hqx` (BinHex 4.0) from `build/ppc/dist/Aura`. To pack
+  another folder or stub, run `tools/make-sea.py DISTFOLDER OUT.bin
+  [--stub AuraSEA.bin] [--date SECONDS]`, then `tools/binhex.py OUT.bin
+  OUT.hqx`. `tools/make-sea.py --list OUT.bin` checks an archive and
+  prints its entries and a SHA-256 of the unpacked contents;
+  `tools/binhex.py --decode IN.hqx OUT.bin` and `--compare IN.hqx
+  REF.bin` read BinHex back.
+- **The archive** is one Mac OS 9 application, "Aura VERSION Installer"
+  (`src/platform/macos9/sea`, creator `AuSX`). `make-sea.py` appends the
+  packed folder to the stub's data fork, after the PowerPC code, and
+  changes the stub's `cfrg` resource from "the code runs to the end of
+  the fork" to the code's length, so that Mac OS does not load the
+  archive with the code. Each file carries its path, type, creator,
+  Finder flags, dates and both forks, each fork as a raw deflate stream
+  with a CRC-32; `sea_archive.h` gives the layout. The packer maps host
+  files as `tools/guest-push.sh` does (`.bin` is MacBinary, fonts become
+  `tfil`/`AURA`, licences become SimpleText documents). Every date is
+  the last commit's (or `SOURCE_DATE_EPOCH`), so one machine builds the
+  same bytes from the same commit. A Linux and a macOS build of one
+  commit differ in the application and the stub: the same code, with
+  functions at other addresses.
+- **The installer** (`sea.c`) asks for the folder with `StandardPutFile`
+  (starting beside itself, with the first free name of "Aura", "Aura 2"
+  and so on; it never replaces an item), writes the files through
+  `sea_archive.c` with two fixed buffers (16 KB in, 32 KB out) and
+  Aura's inflate decoder, sets Finder info and dates, checks every CRC,
+  and sends the Finder an Open Documents event for the new folder. On
+  an error or Command-period it deletes the folder it made and shows
+  what failed. Its partition is 1 MB. `sea_archive.c` is portable:
+  `tests/tools` builds `sea_extract` from it and checks it on the host
+  against the packer, with damaged copies (`tools_sea_extract` in
+  ctest), beside the self-tests of `binhex.py`, `make-sea.py` and
+  `finder-flags.py`.
+- **To test the archive in the guest**, push the `.hqx` with
+  `tools/guest-push.sh` (it arrives as a StuffIt Expander text document)
+  and open it: Expander is on the stock system, asks for a folder
+  because the disc is locked, and writes the installer there. Or push
+  the `.sea.bin`, which arrives as the application.
 
 ## Dependencies outside the repository
 
@@ -96,7 +166,8 @@ by its own scripts or kept in git-ignored folders here.
   `$RETRO68`). It does nothing when that folder's `REVISION` names the
   pinned commit. To move to another commit, change it in the script,
   empty the install folder, and run the script. In CI, cache
-  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`.
+  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`
+  (the workflow does; see CI and releases).
 - **QEMU.** To install the QEMU the test machine runs, run
   `qemu/build.sh`. It clones the release pinned in the script (v11.1.3)
   into `qemu/src`, applies `qemu/patches/*.patch`, and installs in
@@ -148,7 +219,8 @@ bundled fonts). A folder argument is copied with its subfolders; fonts
 get type `tfil` and creator `AURA`, licences and READMEs become
 SimpleText documents, and `.html`, `.css`, `.js` and `.idx` files are
 copied byte for byte (hcopy's text mode would translate UTF-8 as
-Latin-1). HFS names are at most 31 characters.
+Latin-1). A `.hqx` file is copied byte for byte as a StuffIt Expander
+text document, for the guest to decode. HFS names are at most 31 characters.
 The files arrive as a CD named AuraTest on the guest's desktop. The
 previous disc is ejected first through the Finder; the script types
 nothing until the guest's current application (`CurApName`) is the
