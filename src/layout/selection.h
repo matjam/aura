@@ -69,6 +69,27 @@ void au_layout_range_text(AuLayout *L, const AuTextRange *r, AuBuf *out);
  * in it. */
 bool au_layout_range_rect(AuLayout *L, const AuTextRange *r, AuRect *out);
 
+/* The rectangles of r's text in document coordinates, one per text
+ * fragment (a line's part of a text node), each cut to the range. Writes
+ * up to max and returns how many there are. A range that starts and ends
+ * at one position gives one rectangle of no width there (a caret).
+ * Inner scroll offsets and transforms are not applied. */
+int au_layout_range_rects(AuLayout *L, const AuTextRange *r, AuRect *out, int max);
+
+/* DOM text offsets. Script counts a text node's data in UTF-16 code
+ * units; a text position counts bytes of the processed text its box
+ * shows. These convert between them by processing the node's data as
+ * the box tree did (white space collapsing, text-transform).
+ * au_layout_text_pos_from_dom gives the position of the character at
+ * utf16_offset (an offset inside collapsed white space gives the place
+ * where that white space is or would be; one past the end gives the end
+ * of the text). au_layout_text_pos_to_dom gives the first DOM offset
+ * whose character is at or after p. Both return false when the node has
+ * no text box (it is not rendered, or it is all collapsed white space)
+ * or the box tree is older than the node's data. */
+bool au_layout_text_pos_from_dom(AuLayout *L, AuNode *text, uint32_t utf16_offset, AuTextPos *out);
+bool au_layout_text_pos_to_dom(AuLayout *L, const AuTextPos *p, uint32_t *utf16_offset);
+
 /* Sets the range painted as selected, with highlight colour argb (paint
  * colour: alpha in the high byte); NULL or an empty range clears it.
  * Needs a repaint to show. */

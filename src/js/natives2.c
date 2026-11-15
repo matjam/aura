@@ -404,6 +404,43 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return arr;
 }
 
+/* textRects(text, start, end): the rectangles of a text node's data
+ * between two UTF-16 offsets as a flat array of x, y, width, height in
+ * document coordinates, one per line; null when the node has no box,
+ * undefined when the embedder has no layout to ask. */
+static JSValue n_text_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *n = argc > 0 ? js_unwrap(js, argv[0]) : NULL;
+    uint32_t a = 0, b = 0;
+    if (!js->hooks.text_rects)
+        return JS_UNDEFINED;
+    if (!n || n->type != AU_NODE_TEXT || argc < 3 || JS_ToUint32(ctx, &a, argv[1]) || JS_ToUint32(ctx, &b, argv[2]))
+        return JS_NULL;
+    AuJsRect small[16], *r = small;
+    int cnt = js->hooks.text_rects(js->hooks.ctx, n, a, b, r, 16);
+    if (cnt < 0)
+        return JS_NULL;
+    if (cnt > 16) {
+        if (cnt > 4096)
+            cnt = 4096;
+        r = au_alloc((size_t)cnt * sizeof *r);
+        int again = js->hooks.text_rects(js->hooks.ctx, n, a, b, r, cnt);
+        if (again < cnt)
+            cnt = again < 0 ? 0 : again;
+    }
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < cnt; i++) {
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i * 4, JS_NewFloat64(ctx, r[i].x));
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i * 4 + 1, JS_NewFloat64(ctx, r[i].y));
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i * 4 + 2, JS_NewFloat64(ctx, r[i].w));
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i * 4 + 3, JS_NewFloat64(ctx, r[i].h));
+    }
+    if (r != small)
+        au_free(r);
+    return arr;
+}
+
 /* random(n): an ArrayBuffer of n random bytes (n at most 65536) from the
  * embedder's source; false when the source is not ready; null when the
  * embedder has none. */
@@ -686,8 +723,8 @@ static JSValue n_alert(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         au_free(def);
     }
     double spent = js_now(js) - t0;
-    js->run_start += spent;
-    js->next_check += spent;
+    js->root->run_start += spent;
+    js->root->next_check += spent;
     au_free(msg);
     return r;
 }
@@ -898,6 +935,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssPropertyNames", 0, n_css_names),
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
+    JS_CFUNC_DEF("textRects", 3, n_text_rects),
     JS_CFUNC_DEF("random", 1, n_random),
     JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
     JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),

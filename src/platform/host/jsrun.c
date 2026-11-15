@@ -353,6 +353,11 @@ static int js_main(int argc, char **argv)
         t_new = real_ms() - t_new;
         au_js_stats(js, &st);
         printf("stats startup %.2f ms, %zu bytes\n", t_new, st.memory_used);
+        AuBuf rep;
+        au_buf_init(&rep);
+        au_js_memory_report(js, &rep);
+        printf("%s", au_buf_cstr(&rep));
+        au_buf_free(&rep);
     }
     au_js_set_ready_state(js, "interactive");
     for (int i = first; i < argc; i++) {

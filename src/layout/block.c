@@ -134,10 +134,15 @@ typedef struct LMargin {
     float pos, neg;
     float qpos;  /* the largest quirky positive margin */
     bool qstart; /* at the start of a quirky container: quirky margins do not count */
+    /* The margins joining now collapse with the top margin of a box that
+     * clearance has placed: they add nothing (see place_block). */
+    bool absorb;
 } LMargin;
 
 static void mc_add(LMargin *m, float v)
 {
+    if (m->absorb)
+        return;
     if (v > m->pos)
         m->pos = v;
     if (v < m->neg)
@@ -190,6 +195,8 @@ static bool quirky_margin(const LBlock *k, int side)
 /* Adds margin side of k to the pending margin. */
 static void mc_add_side(AuLayout *L, LMargin *m, const LBlock *k, int side)
 {
+    if (m->absorb)
+        return;
     if (L->doc && L->doc->quirks == AU_QUIRKS_FULL && quirky_margin(k, side)) {
         if (!m->qstart && k->m[side] > m->qpos)
             m->qpos = k->m[side];
@@ -547,9 +554,19 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     if (quirky_container(L, k))
         S->pending.qstart = true;
     int lv = push_frame(S, k, bx, by, content_w);
+    /* Clearance put k's top border edge at the floats' bottom. The top
+     * margins of its first children still collapse with k's own (CSS 2.1
+     * 8.3.1: clearance separates k's margin from the margins before it,
+     * not from its children's), and the collapsed margin lies above that
+     * edge: they move nothing. Acid2's smile depends on it. */
+    bool absorbing = clearance && k->bw[0] == 0 && k->p[0] == 0;
+    if (absorbing)
+        S->pending.absorb = true;
     L->depth++;
     flow_contents(L, S, lv, child_cbh);
     L->depth--;
+    if (absorbing && S->pending.absorb)
+        S->pending = (LMargin){0}; /* nothing but empty boxes inside */
     bool empty = finish_block(L, S, lv, k, joined, cb_h);
     S->nfr--;
     f = &S->fr[level];

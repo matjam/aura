@@ -43,6 +43,7 @@ struct BrowserWin {
     /* Debug > Page Timings: time in flush, split into painting into the
      * GWorld and copying to the screen (moves included). */
     uint32_t paint_us, blit_us; /* Page Timings: painting (with shift_us) and copying */
+    uint32_t copy_rem_us;       /* screen copy time not yet added to the page's counters */
     uint32_t shift_us, areas;   /* moving the offscreen pixels; areas painted */
     Point last_mouse;
     char *undo; /* field text before the last edit (Mac Roman) */
@@ -249,6 +250,14 @@ static void flush(BrowserWin *b)
     uint32_t t2 = au_mac_clock_us();
     b->paint_us += t1 - t0;
     b->blit_us += t2 - t1;
+    /* The Performance window's screen copy time: whole milliseconds, the
+     * rest carried to the next flush. */
+    AuTab *tab = au_bw_active_tab(b->bw);
+    b->copy_rem_us += t2 - t1;
+    if (tab) {
+        au_perf_add(au_page_perf(tab->page), AU_PERF_COPY, b->copy_rem_us / 1000, NULL, au_platform_time_ms());
+        b->copy_rem_us %= 1000;
+    }
 }
 
 static void invalidate_all(BrowserWin *b)
@@ -755,6 +764,13 @@ static bool host_read(void *ctx, const char *url, char **data, size_t *len)
     return mac_read_file_url(url, data, len);
 }
 
+/* crypto for pages: the entropy pool the network stack uses. */
+static bool host_random(void *ctx, void *buf, size_t len)
+{
+    (void)ctx;
+    return mac_net_random(buf, len);
+}
+
 void browserwin_host(AuBrowserHost *h)
 {
     memset(h, 0, sizeof *h);
@@ -771,6 +787,7 @@ void browserwin_host(AuBrowserHost *h)
     h->choose_file = host_choose_file;
     h->confirm = host_confirm;
     h->scroll_area = host_scroll_area;
+    h->random = host_random;
 }
 
 /* ---- Events ---- */

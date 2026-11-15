@@ -6,12 +6,27 @@
 
 #include <stddef.h>
 
-#define AU_VERSION "0.3"
+/* The version, for the About box, the user agent, the 'vers' resources and
+ * the release file names. release-please rewrites this line when it
+ * prepares a release (release-please-config.json); do not edit it by hand
+ * between releases. */
+#define AU_VERSION "0.3.0" /* x-release-please-version */
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
-/* What Aura says it is: the Mozilla/5.0 form sites expect, the machine
- * it runs on, and its own name and version, nothing borrowed from other
- * browsers. */
-#define AU_DEFAULT_USER_AGENT "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/" AU_VERSION
+/* What Aura says it is. The string has the shape every Chrome-compatible
+ * browser sends (Edge, Brave, Opera and Vivaldi add their own token to the
+ * same chain), because sites that read the user agent refuse or degrade
+ * browsers they do not recognise. The platform part is true (a PowerPC
+ * Macintosh running Mac OS 9, which sites for old Macs look for), and
+ * Aura's own name and version end the string. AU_UA_CHROME_VERSION is the
+ * current Chrome major version when Aura is released: update it with each
+ * release, since sites also turn away old Chrome versions. */
+#define AU_UA_CHROME_VERSION "156"
+#define AU_DEFAULT_USER_AGENT                                                                              \
+    "Mozilla/5.0 (Macintosh; PPC Mac OS 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/"                 \
+    AU_UA_CHROME_VERSION ".0.0.0 Safari/537.36 Aura/" AU_VERSION
+/* The plain form Aura sent up to version 0.3; a saved preference holding
+ * it is treated as "use the default". */
+#define AU_OLD_USER_AGENT_PREFIX "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/"
 
 /* Data is material compiled into Aura or shipped beside it that is not
  * code: the root certificates, the Public Suffix List, the Brotli

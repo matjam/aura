@@ -116,7 +116,7 @@ static AuTime t_now(void *ctx) { (void)ctx; return 0; }
 
 static AuBrowser *make_browser(void)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     return au_browser_new(fonts, &h);
 }
 
@@ -402,7 +402,7 @@ static void net_poll(void *ctx)
         s->data(s->ctx, n->id, " page</title><p>hello", 21);
     } else {
         AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK,
-                            NULL};
+                            NULL, NULL};
         n->sink = NULL;
         s->done(s->ctx, n->id, true, &info);
     }

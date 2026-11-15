@@ -254,6 +254,8 @@ static void focus_el(AuDocView *dv, AuElement *el, bool keyboard, bool from_scri
         dv->focus = NULL;
     }
     if (el) {
+        if (dv->focus_frame)
+            au_frames_blur(dv); /* the keyboard leaves the nested document */
         set_ref(&dv->focus, el);
         bool text = au_ctl_is_text_field(el);
         dv->focus_visible = keyboard || text;
@@ -501,6 +503,8 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
 {
     if (dv->submitting || !alive(dv, form))
         return;
+    if (dv->sandbox & AU_SANDBOX_FORMS)
+        return; /* a sandboxed frame without allow-forms */
     au_node_ref(&form->node);
     if (submitter)
         au_node_ref(&submitter->node);
@@ -616,10 +620,17 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
             s.body_len = body.len;
         }
         s.url = au_buf_cstr(&target_url);
-        if (dv->cb.submit)
-            dv->cb.submit(dv->cb.ctx, dv, &s);
-        else if (!post && dv->cb.open_url)
-            dv->cb.open_url(dv->cb.ctx, dv, s.url, new_tab);
+        s.target = target;
+        /* Into a frame, the tab or a new tab, as the target says. */
+        AuDocView *to = NULL, *top = au_dv_top(dv);
+        int where = au_frames_route(dv, target, false, true, &to);
+        s.new_tab = where == 3;
+        if (where == 1)
+            au_frames_navigate(to, s.url, &s);
+        else if (where >= 2 && top->cb.submit)
+            top->cb.submit(top->cb.ctx, top, &s);
+        else if (where >= 2 && !post && top->cb.open_url)
+            top->cb.open_url(top->cb.ctx, top, s.url, s.new_tab);
         if (enc == 1 && post)
             au_free((char *)s.body_type);
         au_buf_free(&body);
@@ -1445,6 +1456,12 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
 {
     if (!dv->doc || ev->type != AU_EVENT_KEY_DOWN)
         return false;
+    bool in_frame;
+    if (dv->focus_frame && au_frames_key(dv, ev, &in_frame)) {
+        if (!dv->parent)
+            au_frames_idle(dv);
+        return in_frame;
+    }
     AuElement *el = dv->focus && alive(dv, dv->focus) ? dv->focus : NULL;
     if (dv->focus && !el)
         focus_el(dv, NULL, false, true); /* the focused element went away */

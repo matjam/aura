@@ -171,6 +171,11 @@ static bool w_entropy(void *ctx, void *buf, size_t len)
     return au_mac_entropy_read(N.entropy, buf, len);
 }
 
+bool mac_net_random(void *buf, size_t len)
+{
+    return N.entropy && au_mac_entropy_read(N.entropy, buf, len);
+}
+
 static unsigned entropy_bits(void *ctx)
 {
     (void)ctx;
@@ -479,6 +484,9 @@ static void apply_prefs(void)
             AuCacheStorage st;
             au_disk_cache_storage(N.disk, &st);
             au_cache_set_storage(N.cache, &st);
+            /* The disk has every stored body: memory keeps the last
+             * megabyte used instead of the whole memory cache budget. */
+            au_cache_set_resident(N.cache, 1024u * 1024u);
         } else {
             au_cache_set_storage(N.cache, NULL);
         }
@@ -696,4 +704,25 @@ void mac_net_quit(void)
         au_ot_net_free(N.ot);
     au_mac_entropy_free(N.entropy);
     memset(&N, 0, sizeof N);
+}
+
+/* ---- Developer windows ---- */
+
+void mac_net_dev_info(struct AuDevHostInfo *h, AuBuf *conn)
+{
+    if (N.net)
+        au_net_dev_info(N.net, h, conn);
+}
+
+void mac_net_connections_text(AuBuf *out)
+{
+    int total, busy;
+    if (N.net)
+        au_net_connections_text(N.net, out, &total, &busy);
+}
+
+void mac_net_trace_headers(bool on)
+{
+    if (N.net)
+        au_net_set_trace_headers(N.net, on);
 }

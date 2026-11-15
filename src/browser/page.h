@@ -34,6 +34,7 @@
 #define AURA_BROWSER_PAGE_H
 
 #include "../dom/control.h" /* AuControlFile, AuPopupItem */
+#include "../page/perf.h" /* AuPerf: counters only */
 #include "../paint/font.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct, no OS calls */
 #include "prefs.h"
@@ -67,7 +68,8 @@ typedef enum {
     AU_FETCH_IMAGE,
     AU_FETCH_FONT,
     AU_FETCH_SCRIPT,
-    AU_FETCH_OTHER
+    AU_FETCH_OTHER,
+    AU_FETCH_FRAME       /* the document of a frame (iframe, frame, object, embed) */
 } AuFetchKind;
 
 /* The referrer policy (Referrer-Policy names, in src/net's order). */
@@ -107,6 +109,7 @@ typedef struct AuFetchRequest {
     const void *body;         /* copied; NULL for none */
     size_t body_len;
     const char *body_type;    /* the body's Content-Type */
+    bool omit_credentials;    /* send no cookies and no HTTP authentication (an icon on another host) */
 } AuFetchRequest;
 
 /* Why a fetch failed (src/net's errors, plus what the embedder adds). */
@@ -166,6 +169,7 @@ typedef struct AuFetchResponse {
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* from Content-Disposition; "" when none */
     const char *csp;          /* Content-Security-Policy; "" when none */
+    const char *x_frame_options; /* X-Frame-Options; "" or NULL when none */
     const char *referrer_policy; /* Referrer-Policy; "" when none */
     AuSecurity security;
     const AuFetchCert *cert;  /* https: the certificate details, or NULL */
@@ -190,6 +194,9 @@ typedef struct AuFetchInfo {
     /* AU_FETCH_ERR_BLOCKED by a blocklist (no connection was made):
      * "blocked: LIST NAME". NULL otherwise. */
     const char *blocked_reason;
+    /* How the request went, for the request log (netlog.h); NULL when
+     * the fetcher does not say. Valid during the call. */
+    const struct AuFetchNet *net;
 } AuFetchInfo;
 
 typedef struct AuFetchSink {
@@ -219,6 +226,35 @@ typedef enum {
     AU_FETCH_PHASE_RECEIVING,
     AU_FETCH_PHASE_DONE
 } AuFetchPhase;
+
+/* Where a response came from. */
+typedef enum {
+    AU_FETCH_FROM_NETWORK,
+    AU_FETCH_FROM_MEMORY,  /* the memory cache */
+    AU_FETCH_FROM_DISK,    /* the disk cache */
+    AU_FETCH_FROM_HISTORY, /* a Back or Forward load: the stored copy as it was */
+    AU_FETCH_FROM_304      /* the stored copy, confirmed by the server */
+} AuFetchSource;
+
+/* How a finished request went (AuFetchInfo.net), for the developer
+ * tools' request log. Strings are never NULL and are valid during the
+ * done call. */
+typedef struct AuFetchNet {
+    /* Milliseconds from the request's start to the start of each phase;
+     * -1 for a phase that did not happen. */
+    int32_t at[AU_FETCH_PHASE_DONE + 1];
+    AuFetchSource source;
+    bool reused;              /* sent on a connection already open */
+    uint32_t connection;      /* the connection's number; 0 when none was used */
+    const char *remote;       /* "93.184.215.14:443"; "" when unknown */
+    const char *protocol;     /* "TLS 1.2"; "" without TLS */
+    const char *cipher;
+    int64_t transfer_bytes;   /* body bytes as sent; 0 from a cache */
+    int redirects;
+    const char *request_head;  /* the request line and headers; "" when not recorded */
+    const char *response_head; /* "name: value" lines; "" when not recorded */
+    const char *blocked_reason; /* what refused the request; "" when nothing did */
+} AuFetchNet;
 
 typedef struct AuFetchStatus {
     AuFetchPhase phase;
@@ -256,6 +292,9 @@ typedef struct AuPageEnv {
     const AuPageFetcher *(*fetcher)(void *ctx, const char *scheme);
     /* The selection highlight colour (paint ARGB); 0 for a default. */
     uint32_t highlight;
+    /* Optional: cryptographically strong random bytes for script
+     * (AuBrowserHost.random); false when the source is not ready. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -403,6 +442,12 @@ size_t au_page_console_count(const AuPage *p);
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The URL of the loaded document's site icon, for the caller to free with
+ * au_free: the <link rel=icon> whose sizes fit 16 pixels best (the
+ * smallest of at least 16, else the largest), else /favicon.ico of the
+ * document's origin. NULL for a document that is not http or https, an
+ * internal page, or a failed load. */
+char *au_page_icon_url(AuPage *p);
 /* The document view's update counts (style passes, styled elements, box
  * tree builds, layouts; AuDocViewStats in src/page/page.h), for timings
  * and tests. False for a page without a document view. */
@@ -501,6 +546,27 @@ void au_page_idle(AuPage *p);
 /* Whether the page wants au_page_idle called soon (loading, animating);
  * the shell can sleep longer when no page does. */
 bool au_page_busy(const AuPage *p);
+
+/* ---- Developer tools ----
+ * The request log (netlog.h): one record per request since the last
+ * navigation. The time counters (src/page/perf.h): script, style, layout
+ * and paint, to which the shell adds its screen copies. */
+struct AuNetLog;
+const struct AuNetLog *au_page_netlog(const AuPage *p);
+AuPerf *au_page_perf(AuPage *p);
+/* Bytes the page's script runtime has allocated, and its limit (0, 0
+ * when it has none). */
+void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
+/* The console: lines ever added (a view compares it to see new lines or
+ * a Clear), a line added by a tool (levels 5, the expression typed, and
+ * 6, its result, besides the script levels), and Clear. */
+#define AU_CONSOLE_INPUT 5
+#define AU_CONSOLE_RESULT 6
+uint32_t au_page_console_total(const AuPage *p);
+void au_page_console_add(AuPage *p, int level, const char *text);
+void au_page_console_clear(AuPage *p);
+/* The Console's input line runs through au_page_eval (above), which
+ * starts the script runtime on a page that has no script. */
 
 /* ---- Measurements (Debug menu) ---- */
 typedef struct AuPageStats {

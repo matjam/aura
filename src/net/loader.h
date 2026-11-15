@@ -57,6 +57,7 @@ typedef struct AuLoadRequest {
     AuBodySource *body;           /* ownership passes */
     const char *content_type;     /* of the body */
     bool to_utf8;                 /* transcode HTML documents (see above) */
+    bool omit_credentials;        /* no cookies, no HTTP authentication (AuHttpRequest.omit_credentials) */
 } AuLoadRequest;
 
 typedef struct AuLoadInfo {
@@ -73,6 +74,7 @@ typedef struct AuLoadInfo {
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* suggested file name for a download ("" when none) */
     const char *csp;          /* Content-Security-Policy ("" when none) */
+    const char *x_frame_options; /* X-Frame-Options ("" when none) */
     const char *referrer_policy; /* Referrer-Policy ("" when none) */
     uint16_t tls_version;     /* 0x0303 for TLS 1.2; 0 without TLS */
     const char *cipher;       /* the TLS cipher suite ("" without TLS) */
@@ -81,8 +83,17 @@ typedef struct AuLoadInfo {
      * with _CERT or _CLOCK, cert holds the details, and with _TLS its
      * reason. AU_NET_OK otherwise. */
     AuNetError fallback_cause;
+    /* For the developer tools' request log, in done() only: how the
+     * transfer went (au_http_trace), the response headers and the request
+     * as sent ("" unless au_net_set_trace_headers). trace and
+     * response_headers are NULL when no transfer was made (data: URLs,
+     * requests refused before one). */
+    const AuHttpTrace *trace;
+    const AuHeaders *response_headers;
+    const char *request_head;
     /* Refused by a blocklist (err AU_NET_ERR_BLOCKED, no connection was
-     * made): "blocked: LIST NAME". NULL otherwise. */
+     * made): "blocked: LIST NAME". NULL otherwise. (Mixed content sets
+     * mixed; the request log shows either as the reason.) */
     const char *blocked_reason;
 } AuLoadInfo;
 
@@ -167,6 +178,16 @@ void au_net_page_fetcher_set_offline(AuNetPageFetcher *f, const char *(*why)(voi
 AuNetDownload *au_net_page_fetcher_take_download(AuNetPageFetcher *f, uint32_t token, const AuDownloadSink *sink,
                                                  char **error);
 void au_net_page_fetcher_release_download(AuNetPageFetcher *f, uint32_t token);
+/* ---- Developer tools (net_report.c) ----
+ * The open connections as text, grouped by host: "example.com:443 x2
+ * (1 busy), cdn.example.com:443 x1"; *total and *busy count them. */
+void au_net_connections_text(const AuNet *net, AuBuf *out, int *total, int *busy);
+/* Fills the network part of the Performance report's AuDevHostInfo
+ * (src/browser/devtools.h): the HTTP cache's size and counts and the
+ * connections; conn_text holds the string h then points to. */
+struct AuDevHostInfo;
+void au_net_dev_info(AuNet *net, struct AuDevHostInfo *h, AuBuf *conn_text);
+
 /* Converts certificate details for page.h. */
 void au_net_fetch_cert_from(struct AuFetchCert *out, const AuCertInfo *ci, uint16_t version, const char *cipher);
 

@@ -22,6 +22,8 @@ static void name_of(const LBox *b, AuBuf *o)
             k = "inline-block";
         if (b->inner == LI_FLEX)
             k = b->flags & LF_INLINE_LEVEL ? "inline-flex" : "flex";
+        else if (b->inner == LI_GRID)
+            k = b->flags & LF_INLINE_LEVEL ? "inline-grid" : "grid";
         else if (b->inner == LI_TABLE)
             k = b->flags & LF_INLINE_LEVEL ? "inline-table" : "table";
         else if (b->inner == LI_TABLE_COLUMN)

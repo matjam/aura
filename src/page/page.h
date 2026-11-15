@@ -33,10 +33,27 @@
 #include "../html/html.h"
 #include "../layout/layout.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct */
+#include "perf.h"
 
 typedef struct AuDocView AuDocView;
 
-typedef enum { AU_RES_STYLESHEET, AU_RES_IMAGE, AU_RES_OTHER, AU_RES_FONT } AuResourceKind;
+/* AU_RES_FRAME: the document of a frame (iframe, frame, object, embed). */
+typedef enum { AU_RES_STYLESHEET, AU_RES_IMAGE, AU_RES_OTHER, AU_RES_FONT, AU_RES_FRAME } AuResourceKind;
+
+/* A request with its context (au_docview_set_request_ex). */
+typedef struct AuResourceRequest {
+    const char *url;
+    AuResourceKind kind;
+    /* The URL of the document making the request: a nested document's
+     * own URL for its resources, the embedding document's for a frame's
+     * document. The loader's dv argument is always the top-level view. */
+    const char *document_url;
+    /* AU_RES_FRAME: a form submitted into the frame (NULL method: GET). */
+    const char *method;
+    const void *body;
+    size_t body_len;
+    const char *body_type;
+} AuResourceRequest;
 
 typedef struct AuLoader {
     void *ctx;
@@ -58,6 +75,7 @@ typedef struct AuFormSubmission {
     size_t body_len;
     const char *body_type; /* POST: the Content-Type (with the multipart boundary) */
     bool new_tab;          /* target _blank or another name */
+    const char *target;    /* the target attribute (form, submitter or <base>), or NULL */
 } AuFormSubmission;
 
 typedef struct AuDocViewCallbacks {
@@ -108,6 +126,14 @@ typedef struct AuDocViewCallbacks {
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);
+/* A request function that gets the requesting document and a body
+ * (ctx is the loader's). With it set, every request goes through it
+ * instead of AuLoader.request; without it a frame's form POST loads with
+ * GET. Nested documents load everything through the top-level view's
+ * loader, and their data is delivered to the top-level view
+ * (au_docview_resource_head, _data, _done), which passes it on. */
+typedef uint32_t (*AuLoaderRequestEx)(void *ctx, AuDocView *dv, const AuResourceRequest *rq);
+void au_docview_set_request_ex(AuDocView *dv, AuLoaderRequestEx fn);
 void au_docview_free(AuDocView *dv);
 
 /* ---- Loading ---- */
@@ -188,6 +214,9 @@ void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
  * how soon it needs calling again (0: now; UINT32_MAX: no timer or frame
  * is waiting). */
 void au_docview_set_scripting(AuDocView *dv, bool on);
+/* The string script sees as navigator.userAgent, from the next load. It
+ * must be the one the network sends. NULL or "": the script default. */
+void au_docview_set_user_agent(AuDocView *dv, const char *ua);
 bool au_docview_scripting(const AuDocView *dv);
 bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms);
 uint32_t au_docview_scripts_due(AuDocView *dv);
@@ -195,6 +224,17 @@ uint32_t au_docview_scripts_due(AuDocView *dv);
  * converted to a string, goes in out. False without a runtime or when it
  * throws (out then holds the error). */
 bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
+
+/* ---- Measurements (the developer tools) ---- */
+/* The document's time counters (perf.h): script, style, layout and paint
+ * are timed by the view when the embedder gives a clock (now_ms); the
+ * shell adds the screen copy. Cleared by au_docview_begin. */
+AuPerf *au_docview_perf(AuDocView *dv);
+/* Parsing is over and, with script, DOMContentLoaded has fired. */
+bool au_docview_content_loaded(const AuDocView *dv);
+/* Bytes the document's script runtime has allocated and its limit; 0, 0
+ * without a runtime. */
+void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit);
 
 /* ---- Keeping a document while it is not shown ----
  * An embedder that keeps a view alive while another document is shown
@@ -281,6 +321,36 @@ void au_docview_submit(AuDocView *dv, AuElement *form, AuElement *submitter);
 /* The hovered link's absolute URL, or "". */
 const char *au_docview_hover_link(const AuDocView *dv);
 bool au_docview_hit_test(AuDocView *dv, int x, int y, AuHitResult *r);
+
+/* ---- Nested documents ----
+ * iframe, frame, object and embed elements show documents of their own:
+ * each is an AuDocView owned by the view of the document that holds the
+ * element (src/page/frames.c), painted into the element's content box
+ * with its own scroll offset. The embedder deals with the top-level view
+ * only: nested views load through its loader, report through its
+ * callbacks (with the top-level view as dv) and get input through
+ * au_docview_mouse, _key and _scroll_at. */
+/* The innermost view under document point (*x, *y), and the point in
+ * that view's document coordinates; dv itself when no frame is there. */
+AuDocView *au_docview_view_at(AuDocView *dv, int *x, int *y);
+/* The view that has the keyboard focus: dv, or the nested view of the
+ * focused frame. */
+AuDocView *au_docview_focus_view(AuDocView *dv);
+/* The embedding view (NULL at the top), and r, a rectangle in dv's
+ * document coordinates, in the top-level view's (clipped to the frames
+ * between them). */
+AuDocView *au_docview_parent(const AuDocView *dv);
+AuIRect au_docview_rect_to_top(const AuDocView *dv, AuIRect r);
+/* Whether v is dv or a nested view somewhere below it (a view kept from
+ * an earlier call may have gone with its frame). */
+bool au_docview_contains(AuDocView *dv, const AuDocView *v);
+/* A point in the top-level view's document coordinates, in dv's. */
+void au_docview_point_from_top(const AuDocView *dv, int *x, int *y);
+/* The scroll offset the view was last painted with (a nested view's is
+ * its frame's). */
+void au_docview_scroll_pos(const AuDocView *dv, int *x, int *y);
+/* How many nested documents the page has (all levels). */
+uint32_t au_docview_frame_count(const AuDocView *dv);
 
 /* ---- Fragments ---- */
 /* The element a fragment identifier names (id, or <a name>), or NULL.

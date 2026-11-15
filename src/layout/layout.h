@@ -69,6 +69,15 @@ typedef struct AuLayoutEnv {
      * be drawn at that size; the surface image() returned is then current.
      * Optional. */
     void (*image_use)(void *ctx, const char *url, int dw, int dh);
+    /* Nested documents (both optional). embed_kind says what an iframe,
+     * frame, object or embed element shows: 0 for layout's own rules (an
+     * image when the resource is one, else the fallback content), 1 a
+     * nested document (a replaced box whose content paint_frame draws),
+     * 2 the fallback content (an object's children). */
+    int (*embed_kind)(void *ctx, AuElement *el);
+    /* Paints el's nested document into its content box (canvas
+     * coordinates), clipped to it. */
+    void (*paint_frame)(void *ctx, AuElement *el, AuCanvas *c, AuRect content);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
@@ -83,8 +92,27 @@ void au_layout_tree_changed(AuLayout *L);
 /* Styles were recomputed. Call before anything else reads the layout:
  * boxes hold the previous styles until then. */
 void au_layout_styles_changed(AuLayout *L);
-/* An image finished loading: sizes may change. */
+/* The loader's answer for some image changed (its size became known, it
+ * failed, its pixels moved). Image boxes ask the loader again; one whose
+ * size or presence changed is laid out again at the next update, and the
+ * box tree is kept. The tree is built again only when its shape depends
+ * on images (an object or embed element with a resource). */
 void au_layout_images_changed(AuLayout *L);
+/* Appends to out the URL (as written, not resolved) that el shows: for
+ * an <img>, the choice among srcset candidates (density 1; width
+ * descriptors against sizes and the viewport of the last layout) and
+ * the <source> elements of a <picture> parent, else src; for other
+ * elements the src attribute. Returns false when there is none. Layout
+ * asks the loader for the same URL. */
+bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out);
+/* Calls fn with the document rectangle of each box that shows the image
+ * at absolute URL url: image boxes, boxes with it as a background or
+ * mask layer, and every inline SVG (one may hold it in an <image>).
+ * Returns the number of boxes, or -1 when the caller must repaint the
+ * whole page instead (the canvas background, a box that is fixed, sticky,
+ * transformed or inside a scrolled box, or a box tree that is out of
+ * date). */
+int au_layout_image_users(AuLayout *L, const char *url, void (*fn)(void *ctx, AuRect r), void *ctx);
 
 /* Brings the layout up to date for a viewport of vw x vh. Returns true if
  * any geometry changed (the caller repaints everything); false when the
@@ -133,6 +161,13 @@ bool au_layout_hit_test(AuLayout *L, float x, float y, float scroll_x, float scr
  * elements: the union of their fragments). Returns false if el has no
  * box. */
 bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out);
+
+/* The content box of el's box in document coordinates (a block-level or
+ * replaced element; false for an inline element or one without a box). */
+bool au_layout_element_content_rect(AuLayout *L, const AuElement *el, AuRect *out);
+/* The canvas background is left unpainted (a nested document shows its
+ * parent through, unless its own root or body paints a background). */
+void au_layout_set_transparent(AuLayout *L, bool on);
 
 /* ---- Form fields (controls.c) ----
  * Geometry of text fields (single-line inputs and textareas) for the

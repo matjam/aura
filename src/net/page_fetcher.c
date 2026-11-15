@@ -147,6 +147,7 @@ static void fill_response(AuFetchResponse *r, const AuLoadInfo *i, AuFetchCert *
     r->attachment = i->attachment;
     r->filename = i->filename;
     r->csp = i->csp ? i->csp : "";
+    r->x_frame_options = i->x_frame_options ? i->x_frame_options : "";
     r->referrer_policy = i->referrer_policy ? i->referrer_policy : "";
     r->security = security_of(i->security);
     r->from_cache = i->from_cache;
@@ -154,6 +155,56 @@ static void fill_response(AuFetchResponse *r, const AuLoadInfo *i, AuFetchCert *
     if (i->cert) {
         au_net_fetch_cert_from(cert, i->cert, i->tls_version, i->cipher);
         r->cert = cert;
+    }
+}
+
+typedef char check_sources[(int)AU_FETCH_FROM_304 == (int)AU_HTTP_FROM_304 ? 1 : -1];
+
+/* Converts the loader's trace of a finished request for page.h's request
+ * log. heads receives the response headers as text when with_headers;
+ * remote (64 bytes) and proto (16 bytes) hold the strings out points to. */
+static void fetch_net_from(AuFetchNet *out, const AuLoadInfo *i, bool with_headers, AuBuf *heads, char *remote,
+                           char *proto)
+{
+    memset(out, 0, sizeof *out);
+    for (int k = 0; k <= AU_FETCH_PHASE_DONE; k++)
+        out->at[k] = -1;
+    remote[0] = proto[0] = 0;
+    out->remote = remote;
+    out->protocol = proto;
+    out->cipher = i->cipher ? i->cipher : "";
+    out->request_head = i->request_head ? i->request_head : "";
+    out->response_head = "";
+    out->blocked_reason = i->blocked_reason ? i->blocked_reason : i->mixed ? "mixed content" : "";
+    if (i->tls_version == 0x0303)
+        snprintf(proto, 16, "TLS 1.2");
+    else if (i->tls_version)
+        snprintf(proto, 16, "TLS %04X", (unsigned)i->tls_version);
+    const AuHttpTrace *t = i->trace;
+    if (!t)
+        return;
+    for (int k = 0; k <= AU_FETCH_PHASE_DONE; k++)
+        out->at[k] = t->at[k];
+    out->source = (AuFetchSource)t->source;
+    out->reused = t->reused;
+    out->connection = t->connection;
+    out->transfer_bytes = t->transfer_bytes;
+    out->redirects = t->redirects;
+    const uint8_t *a = t->remote.addr;
+    if (t->remote.family == 4) {
+        snprintf(remote, 64, "%u.%u.%u.%u:%u", a[0], a[1], a[2], a[3], (unsigned)t->remote_port);
+    } else if (t->remote.family == 6) {
+        size_t n = 0;
+        remote[n++] = '[';
+        for (int k = 0; k < 16; k += 2)
+            n += (size_t)snprintf(remote + n, 64 - n, "%s%x", k ? ":" : "", (unsigned)(a[k] << 8 | a[k + 1]));
+        snprintf(remote + n, 64 - n, "]:%u", (unsigned)t->remote_port);
+    }
+    if (with_headers && i->response_headers) {
+        const AuHeaders *h = i->response_headers;
+        for (size_t k = 0; k < h->n && heads->len < 4096; k++)
+            au_buf_printf(heads, "%s: %s\n", h->items[k].name, h->items[k].value);
+        out->response_head = au_buf_cstr(heads);
     }
 }
 
@@ -217,8 +268,16 @@ static void pf_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *in
         au_net_fetch_cert_from(cert, info->cert, info->tls_version, info->cipher);
         fi.cert = cert;
     }
+    /* The request log's description of the transfer. */
+    AuFetchNet fn;
+    AuBuf rh;
+    char remote[64], proto[16];
+    au_buf_init(&rh);
+    fetch_net_from(&fn, info, au_net_trace_headers(au_net_loader_net(f->l)), &rh, remote, proto);
+    fi.net = &fn;
     if (r->sink.done)
         r->sink.done(r->sink.ctx, id, err == AU_NET_OK, &fi);
+    au_buf_free(&rh);
     au_free(cert);
 }
 
@@ -306,6 +365,7 @@ static AuRequestDest dest_of(AuFetchKind k, const char *url)
     case AU_FETCH_IMAGE: return AU_DEST_IMAGE;
     case AU_FETCH_FONT: return AU_DEST_FONT;
     case AU_FETCH_SCRIPT: return AU_DEST_SCRIPT;
+    case AU_FETCH_FRAME: return AU_DEST_IFRAME;
     default: break;
     }
     /* Other: fonts named by their extension (the document view's web
@@ -332,6 +392,7 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
     rq.dest = dest_of(frq->kind, frq->url);
     rq.document_url = frq->document_url;
     rq.top_level_url = frq->top_level_url;
+    rq.omit_credentials = frq->omit_credentials;
     rq.referrer_policy = (AuReferrerPolicy)frq->referrer_policy;
     rq.user_activated = frq->user_activated;
     rq.reload = frq->cache == AU_FETCH_CACHE_BYPASS;
@@ -342,7 +403,7 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
     if (frq->body)
         rq.body = au_body_from_bytes(frq->body, frq->body_len, frq->body_type);
     rq.content_type = frq->body_type;
-    rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT;
+    rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT || frq->kind == AU_FETCH_FRAME;
     AuLoadCallbacks cb = {r, pf_response, pf_data, pf_done, pf_download};
     r->id = au_net_loader_start(f->l, &rq, &cb);
     r->next = f->reqs;

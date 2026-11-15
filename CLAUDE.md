@@ -37,6 +37,19 @@ what you need to build, test and change Aura.
   redistributable bundled fonts in `assets/fonts`, which are committed
   with their licences.
 - Write docs instruction first ("To X, use Y"), in plain technical prose.
+- Commit messages follow Conventional Commits, because release-please
+  works out the next version and the changelog from them: a type, a
+  colon, then the subject as a plain sentence, as before. `fix:` a bug
+  fix (bug-fix digit); `feat:` something a user of Aura can see or use
+  (minor digit); `perf:` faster or smaller; `docs:` documentation only;
+  `test:` tests only; `chore:` tooling, CI, merges and clean-up;
+  `refactor:` no change in behaviour. `feat!:` or `fix!:` marks a change
+  that breaks something users rely on (stored preferences that no longer
+  load, say). Only `feat`, `fix`, `perf` and breaking changes appear in
+  the changelog, and only they cause a release. A merge commit keeps a
+  conventional subject too: `chore: merge main into grid`, or `feat:
+  CSS grid layout` when the merge is what brings the feature to `main`
+  and its own commits were not conventional.
 
 ## Layout
 
@@ -47,7 +60,7 @@ what you need to build, test and change Aura.
 | `src/html` | HTML tokenizer and tree builder |
 | `src/css` | CSS parser, selectors, cascade |
 | `src/layout` | box tree, layout, painting, hit testing |
-| `src/page` | the document view: parsing, style sheets, resources, input |
+| `src/page` | the document view: parsing, style sheets, resources, input, nested documents (`frames.c`) |
 | `src/paint` | surfaces, rasterizer, fonts |
 | `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO, SVG through `src/svg`), the per-document image cache |
 | `src/svg` | XML parser, SVG path and transform grammars, the static SVG renderer, SVG documents |
@@ -59,8 +72,10 @@ what you need to build, test and change Aura.
 | `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts |
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
+| `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive (see CI and releases) |
 | `third_party` | QuickJS-ng (`quickjs`, with `quickjs-patches` and `quickjs.cmake`) and BearSSL 0.6; `third_party/README.md` records sources and licences |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
+| `tests/frames` | nested documents: the document view with a table of pages, and a browser window over the fake transport |
 | `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 | `assets/net` | `aura-roots.bin`, the root certificate store |
@@ -78,11 +93,108 @@ change to the top-level file.
   keeps the toolchain it was first configured with; delete it to switch.
   It also assembles the distributable folder `build/ppc/dist/Aura`: the
   application (`Aura.bin`, MacBinary) beside `Fonts` (the family folders
-  of `assets/fonts`, `fonts.idx` and the fonts' README).
+  of `assets/fonts`, `fonts.idx` and the fonts' README). Then it packs
+  that folder as the self-extracting archive, `Aura-VERSION.sea.bin` and
+  `Aura-VERSION.hqx` in `build/ppc/dist` (see CI and releases).
 - To run the tests under AddressSanitizer and UBSan, configure a separate
   folder: `cmake -S . -B build/asan -G Ninja
   -DCMAKE_C_FLAGS="-fsanitize=address,undefined"`, then `cmake --build
   build/asan` and `ctest --test-dir build/asan`.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull
+requests; `release.yml` makes releases. They need nothing outside the
+repository: no disk images, no QEMU, no secrets.
+
+- **Jobs.** `host` runs `./build.sh test` on Ubuntu (GCC) and macOS
+  (Apple Clang). `sanitize` runs the tests on Ubuntu under Clang's
+  AddressSanitizer and UBSan, with leak detection off (several tests do
+  not free everything at exit; macOS, where the sanitizer build is run by
+  hand, does not detect leaks either). `toolchain` builds Retro68 when
+  the cache has none and `ppc` runs `./build.sh ppc` and uploads the two
+  archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and
+  `Aura-VERSION-SHORTHASH-sea-bin`; both are in `build-ppc.yml`, a
+  reusable workflow.
+- **The toolchain cache.** `~/.local/opt/retro68` is cached under the
+  key `retro68-Linux-` plus the hash of `toolchain/build.sh`. To rebuild
+  the toolchain in CI, change that script (the pinned commit, say). A
+  cold build takes about 15 minutes; a newer push does not cancel it. A
+  cache made on a branch serves that branch only; `main`'s serves every
+  branch and pull request.
+- **To make a release**, merge the pull request release-please keeps
+  open ("chore: release VERSION"). `.github/workflows/release.yml` runs
+  release-please on every push to `main`: it reads the Conventional
+  Commits since the last release and opens or updates that pull request,
+  which sets `AU_VERSION` in `src/browser/credits.h` (the line marked
+  `x-release-please-version`), `version.txt`, `CHANGELOG.md` and
+  `.release-please-manifest.json`. When the pull request is merged, the
+  same workflow tags the merge commit `vVERSION`, creates the GitHub
+  release with the changelog entry as its notes, builds the archive from
+  that commit and attaches `Aura-VERSION.hqx` and
+  `Aura-VERSION.sea.bin`. Do not push a tag or edit `AU_VERSION` by
+  hand. To force a version, add `"release-as": "X.Y.Z"` to the package in
+  `release-please-config.json` and remove it after that release.
+- **The version** lives in one place, `AU_VERSION` (three numbers, with
+  one-digit minor and bug-fix parts so that it fits the BCD byte of a
+  `vers` resource). The About box, the user agent, both applications'
+  `vers` resources (generated by CMake from `aura_vers.r.in` and
+  `sea/sea_vers.r.in`), `tools/version.sh` and the archive's file names
+  read it. A `feat:` raises the minor part, a `fix:` or `perf:` the last
+  part; before 1.0 a breaking change raises the minor part.
+- **release-please's settings** are `release-please-config.json`
+  (release type `simple`; `bootstrap-sha` is the commit where changelog
+  collection starts, so the history before Conventional Commits is not
+  read; `initial-version` makes the first release 0.3.0; both stop
+  mattering after the first release) and `.release-please-manifest.json`
+  (the last released version, written by release-please). It needs the
+  repository setting Settings > Actions > General > "Allow GitHub
+  Actions to create and approve pull requests". A release made with the
+  workflow's token starts no other workflow, which is why the build is a
+  job of `release.yml` (it calls `build-ppc.yml`, as `ci.yml` does).
+- **Actions are pinned** to a commit, with the release in a comment. To
+  update one, look up the release's commit (`gh api
+  repos/OWNER/REPO/commits/TAG -q .sha`) and change both.
+- **To build the archive locally**, run `./build.sh ppc`. It writes
+  `build/ppc/dist/Aura-VERSION.sea.bin` (MacBinary) and
+  `Aura-VERSION.hqx` (BinHex 4.0) from `build/ppc/dist/Aura`. To pack
+  another folder or stub, run `tools/make-sea.py DISTFOLDER OUT.bin
+  [--stub AuraSEA.bin] [--date SECONDS]`, then `tools/binhex.py OUT.bin
+  OUT.hqx`. `tools/make-sea.py --list OUT.bin` checks an archive and
+  prints its entries and a SHA-256 of the unpacked contents;
+  `tools/binhex.py --decode IN.hqx OUT.bin` and `--compare IN.hqx
+  REF.bin` read BinHex back.
+- **The archive** is one Mac OS 9 application, "Aura VERSION Installer"
+  (`src/platform/macos9/sea`, creator `AuSX`). `make-sea.py` appends the
+  packed folder to the stub's data fork, after the PowerPC code, and
+  changes the stub's `cfrg` resource from "the code runs to the end of
+  the fork" to the code's length, so that Mac OS does not load the
+  archive with the code. Each file carries its path, type, creator,
+  Finder flags, dates and both forks, each fork as a raw deflate stream
+  with a CRC-32; `sea_archive.h` gives the layout. The packer maps host
+  files as `tools/guest-push.sh` does (`.bin` is MacBinary, fonts become
+  `tfil`/`AURA`, licences become SimpleText documents). Every date is
+  the last commit's (or `SOURCE_DATE_EPOCH`), so one machine builds the
+  same bytes from the same commit. A Linux and a macOS build of one
+  commit differ in the application and the stub: the same code, with
+  functions at other addresses.
+- **The installer** (`sea.c`) asks for the folder with `StandardPutFile`
+  (starting beside itself, with the first free name of "Aura", "Aura 2"
+  and so on; it never replaces an item), writes the files through
+  `sea_archive.c` with two fixed buffers (16 KB in, 32 KB out) and
+  Aura's inflate decoder, sets Finder info and dates, checks every CRC,
+  and sends the Finder an Open Documents event for the new folder. On
+  an error or Command-period it deletes the folder it made and shows
+  what failed. Its partition is 1 MB. `sea_archive.c` is portable:
+  `tests/tools` builds `sea_extract` from it and checks it on the host
+  against the packer, with damaged copies (`tools_sea_extract` in
+  ctest), beside the self-tests of `binhex.py`, `make-sea.py` and
+  `finder-flags.py`.
+- **To test the archive in the guest**, push the `.hqx` with
+  `tools/guest-push.sh` (it arrives as a StuffIt Expander text document)
+  and open it: Expander is on the stock system, asks for a folder
+  because the disc is locked, and writes the installer there. Or push
+  the `.sea.bin`, which arrives as the application.
 
 ## Dependencies outside the repository
 
@@ -96,7 +208,8 @@ by its own scripts or kept in git-ignored folders here.
   `$RETRO68`). It does nothing when that folder's `REVISION` names the
   pinned commit. To move to another commit, change it in the script,
   empty the install folder, and run the script. In CI, cache
-  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`.
+  `~/.local/opt/retro68` keyed on the hash of `toolchain/build.sh`
+  (the workflow does; see CI and releases).
 - **QEMU.** To install the QEMU the test machine runs, run
   `qemu/build.sh`. It clones the release pinned in the script (v11.1.3)
   into `qemu/src`, applies `qemu/patches/*.patch`, and installs in
@@ -148,7 +261,8 @@ bundled fonts). A folder argument is copied with its subfolders; fonts
 get type `tfil` and creator `AURA`, licences and READMEs become
 SimpleText documents, and `.html`, `.css`, `.js` and `.idx` files are
 copied byte for byte (hcopy's text mode would translate UTF-8 as
-Latin-1). HFS names are at most 31 characters.
+Latin-1). A `.hqx` file is copied byte for byte as a StuffIt Expander
+text document, for the guest to decode. HFS names are at most 31 characters.
 The files arrive as a CD named AuraTest on the guest's desktop. The
 previous disc is ejected first through the Finder; the script types
 nothing until the guest's current application (`CurApName`) is the
@@ -213,11 +327,11 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 
 To change the screen depth, click the Monitor BitDepth module in the
 guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
-and pick 256 Colors, Thousands or Millions. In Aura, View > Debug >
+and pick 256 Colors, Thousands or Millions. In Aura, Develop >
 Benchmark times the scene, fills and the chrome and shows how long font
 registration took (and the bundled part of it) and how much font data
-is loaded; View > Debug > Font List (about:fonts) shows the fonts it
-found, with the bundled ones marked; and View > Debug > Page Timings
+is loaded; Develop > Font List (about:fonts) shows the fonts it
+found, with the bundled ones marked; and Develop > Page Timings
 shows the active page's first paint, load and layout times, image
 decodes, then times scrolling: ten 32-pixel steps (twice: the first pass
 paints content for the first time, the second shows the steady state),
@@ -227,11 +341,11 @@ number of areas painted, and shows free heap, temporary memory and the
 glyph cache. Network Status shows the HTTP cache's lookups (fresh,
 history, revalidated, 304, missed) and the time spent reading and
 writing cache files.
-The Debug submenu opens by dragging (a click closes it); the
-`QMP.button` and `QMP.move` methods of `tools/guest-qmp.py` can hold
-the button through View, Debug and the item. Release on the item's
-own row: the submenu's first item is Test Scene. While Aura is busy
-(a long layout), the drag is lost; wait and try again.
+The Develop menu is in the menu bar (its title is at 298,10 on a 640x480
+screen): click the title, then click the item; the menu stays open
+between the two clicks. While Aura is busy (a long layout), the click
+is lost; wait and try again. The developer windows it opens are
+described under Developer tools.
 
 The Finder ignores `guest-qmp.py drag` (it moves in one step). To drag
 a file in the Finder (onto the Aura icon, or a copy to the hard disk),
@@ -303,6 +417,8 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   beforeunload listener (`au_docview_can_persist`). A reload replaces
   the document. Reopen Closed Tab, duplicated tabs and session restore
   load through the history cache mode, as before.
+- **Frames.** A kept document keeps its nested documents, and they
+  pause and resume with it (see Frames).
 - **While hidden** nothing calls the view, so timers, animation frames,
   image animation and the caret wait, and run again after Back. The
   view's callbacks and loader in `page_doc.c` ignore a view that is not
@@ -328,7 +444,7 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   left, and the page was painted 971 ms after the key; on screen the
   change showed about 3 seconds after the key was sent, because the
   page being left was still running its scripts. Loading the same
-  articles took 30 to 70 seconds. View > Debug > Page Timings shows
+  articles took 30 to 70 seconds. Develop > Page Timings shows
   these times for a page that Back or Forward showed from the kept
   documents, with the number and estimated size of kept documents.
 - **To try it on the host**, run `aura-host chrome --net --tab URL --do
@@ -336,6 +452,30 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   was shown and how long it took, `cache` the kept documents and their
   estimated size. `--no-doc-cache` turns the document cache off.
   `tests/browser/test_back_cache.c` covers it on the fake transport.
+
+Tabs show their site's icon. To change that, work in
+`src/browser/favicon.c` (`favicon.h` describes it): when a document has
+loaded, `cb_finished` in `browser.c` asks the page for its icon URL
+(`au_page_icon_url` in `page_doc.c`: the `<link rel=icon>` whose `sizes`
+suit 16 pixels best, else `/favicon.ico`; http and https documents
+only) and `au_favicons_request` fetches it through the scheme's fetcher
+as an image subresource of the page, so the blocklist, mixed content
+blocking and the HTTP cache apply. An icon on another host is fetched
+without cookies (`AuFetchRequest.omit_credentials`). The bytes (at most
+512 KB) are decoded with `au_image_decode_favicon` to 16 x 16 and kept
+per host, at most 200 hosts; a host is asked again after a week, and a
+host that gave no icon is not asked again while Aura runs.
+`au_bw_idle` polls the fetches and repaints the tab strip when one
+arrives; `chrome.c` draws `AuChromeTab.icon`, and the bookmark and
+history lists draw the icon of each link's host
+(`AuListView.icons`). Fetching is off until the shell sets
+`AuBrowser.site_icons` (the Mac application and `aura-host chrome` do),
+so an embedder or a test with a scripted server gets no request it did
+not expect; the `load_images` preference turns it off too. The Mac
+shell saves the store as `Favicons` in the Aura preferences folder
+(`storage.c`), keeps it in memory only when history is off, and clears
+it wherever it clears the history, because it names visited hosts.
+`tests/browser/test_favicon.c` covers it on the fake transport.
 
 Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
 a navigation or a tab switch the page has the focus, unless the user is
@@ -458,6 +598,21 @@ work in these places:
 - Painting skips boxes outside the canvas clip (`au_layout_paint`), so a
   strip paints only what it shows; box and text ink extents (shadows,
   outlines, inline SVG with visible overflow) must cover what they draw.
+  `rect_hits` in `draw.c` allows one pixel above and below, because a
+  text fragment is as tall as the face's rounded ascent and descent and
+  glyphs reach up to half a pixel past it.
+- Drawing must not depend on the scroll offset, or moved pixels differ
+  from a fresh paint by a coverage level on antialiased edges.
+  `au_layout_paint` puts the whole pixels of the scroll offset in the
+  canvas translation and paints boxes at document coordinates, and
+  `raster()`, `fill_rect_source`, `au_draw_border` and
+  `au_draw_box_shadow` add the whole pixels of the translation to their
+  integer bounds instead of to the coordinates. Keep new drawing code to
+  that rule: take the fraction of the translation into the coordinates
+  and add its whole pixels when writing pixels. `paint_svg` does the same
+  for an inline SVG's place. To check a page, render it with `aura-host
+  render PAGE -s Y` at several offsets and compare the rows that both
+  images show.
 - Hover follows a scroll only after the scroll pauses for
   `AU_REHOVER_MS` (150 ms). The delay dates from when a hover change
   restyled the whole document on pages with `:has()` rules (1.7 s per
@@ -485,7 +640,7 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`, the `Blocklists` folder (see Content
+`Session`, `Downloads` and `Favicons`, the `Blocklists` folder (see Content
 blocking), and `Running` while it runs. The session
 (windows, tabs, back and forward lists, scroll positions) is saved
 3 seconds after tabs change and every 30 seconds while only scroll
@@ -517,9 +672,9 @@ change and at quit (session cookies are dropped); the disk cache is the
 `Cache` folder (`src/net/disk_cache.c`, limited by the disk cache
 preference). The Cookies window (Window > Cookies, or Preferences >
 Privacy) lists `src/net/cookie_view.c`'s model; per-site rules (allow,
-session only, block) live in the `cookies.sites` preference. View >
-Debug > Network Status shows entropy, Open Transport counters, roots,
-cookies and cache use. The out-of-memory handler closes Open Transport
+session only, block) live in the `cookies.sites` preference. Develop >
+Network Status shows entropy, Open Transport counters, roots, cookies
+and cache use. The out-of-memory handler closes Open Transport
 before ExitToShell: with providers open at exit the guest froze.
 
 Engine code must not use `%lld` or `%llu`: newlib on Mac OS 9 lacks
@@ -552,6 +707,91 @@ Toolbox points learned the hard way:
   next Aura launch gets a chunk at the same address, and the theme's
   handle then names Aura's font data.
 
+## Developer tools
+
+Aura has four developer windows, opened from the Develop menu: Page
+Source (also View > Page Source, Command-U), Console, Network and
+Performance. Each shows the active tab of the frontmost browser window
+and follows it. The models are portable and in the engine; the Mac OS 9
+windows are `src/platform/macos9/devwin.c`. The Develop menu also holds
+the debug items (Test Scene, Font List, Benchmark, Network Status, Page
+Timings).
+
+- **To change how the windows draw text**, edit
+  `src/browser/textview.c`: a fixed-width text view (Monaco, else the
+  monospace family, 10 pixels) with optional line numbers, wrapping,
+  colour runs, a character selection or a selected row, find, and
+  scrolling by rows. It owns no text: it asks an `AuTextSource` for one
+  line at a time, reads each line's cell count once per layout and paints
+  only the rows on screen. `AuTextList` is a ready-made source for text
+  made on the spot.
+- **Page Source** is `src/browser/sourceview.c`: one pass over the
+  page's bytes (`au_page_source`) records each line's start and the
+  colouring tokenizer's state there. Lines longer than 2048 bytes are
+  cut into segments, so a minified page stays cheap. The tokenizer
+  colours tags, attribute names, values, comments and `<!DOCTYPE`, and
+  leaves `<script>` and `<style>` text plain; it is not the HTML parser.
+  The window is a native text view, not a page: on the host, laying out
+  a 1.3 MB document as plain text in the engine took 29 ms and would
+  cost far more with colour spans, where the text view lays the same
+  document out in under 1 ms and paints a screen of it in 1 ms. The
+  contextual menu's View Source still opens a `view-source:` tab.
+- **Network** is the page's request log, `src/browser/netlog.c`: a ring
+  of 300 records, cleared by a navigation and freed with the page. A
+  document kept for Back and Forward keeps its log, which returns with
+  it.
+  `page_doc.c` fills it from its fetches (start, response head, data,
+  end). The times, the connection, the remote address, TLS version and
+  cipher and the source (network, memory cache, disk cache, history,
+  304) come from the HTTP layer: every transfer stamps the start of each
+  phase (`au_http_trace` in `net.h`), the loader passes the trace in
+  `AuLoadInfo`, and `page_fetcher.c` turns it into `AuFetchInfo.net`
+  (`AuFetchNet` in `page.h`). The cheap fields are always recorded.
+  Request and response headers are copied (4 KB each at most) only after
+  `au_net_set_trace_headers(net, true)`, which the Network window calls
+  when it first opens, so headers appear for loads made after that.
+  A request refused by policy is logged as blocked with
+  `blocked_reason`: a blocklist's refusal arrives in
+  `AuLoadInfo.blocked_reason` ("blocked: LIST NAME") and mixed content
+  as `AuLoadInfo.mixed`; `page_fetcher.c` passes either on as
+  `AuFetchNet.blocked_reason`. While no request is selected, the
+  window's lower pane lists the page's blocked requests with the list
+  that stopped each (`au_netlog_blocked`).
+- **Console** shows the page's console lines (`au_page_console_line`)
+  through `au_dev_console_lines` in `src/browser/devtools.c`. Uncaught
+  errors and unhandled rejections arrive as error lines with their
+  stack; the first stack frame gives the source URL and line. The input
+  line calls `au_dev_console_eval`, which runs the expression with
+  `au_page_eval` (starting the script runtime on a page that has no
+  script) and adds the expression and its result to the console.
+- **Performance** is `au_dev_perf_report` in `devtools.c`, rebuilt once
+  a second. The time counters are `AuPerf` (`src/page/perf.h`), one per
+  document view, cleared when a document begins: the view times its
+  style and layout passes, its paints and its outermost script entries
+  with the embedder's millisecond clock, and the Mac shell adds each
+  screen copy (`flush` in `browserwin.c`). Tasks of 50 ms or more are
+  kept for the slowest-tasks list, scripts with their URL. The shell
+  supplies free heap and temporary memory, and `au_net_dev_info`
+  (`src/net/net_report.c`) the HTTP cache and the open connections.
+  Copy Report puts the text on the clipboard, for measurements from a
+  real machine.
+- **To see the same text on the host**, run `aura-host chrome` with
+  `--do netlog` (or `netlog:details`), `--do perf`, `--do eval:EXPR`,
+  `--do source` (or `source:FIRST,COUNT` for lines with their colour
+  runs) after the page loads; add `--net` for network pages. `--do
+  devshot:source|console|network|perf:FILE.png` paints that window's
+  text view to a PNG. For example, `aura-host chrome --net --tab
+  https://example.com/ --do netlog:details --do perf`.
+- **Tests.** `tests/browser/test_devtools.c` runs the request log on the
+  fake transport (sources, connections, timings, headers, blocked
+  requests, the ring), the counters and the report, the console and its
+  input line, and the source view and text view (lines, colouring,
+  wrapping, selection, find).
+- **Not done:** a source position for `console.log` lines (only errors
+  carry a stack); a case-sensitive find, a horizontal scroll bar and
+  column sorting in the windows; request bodies and cookies in the
+  Network details; saving the log to a file.
+
 ## Layout and paint speed
 
 To time layout and painting of a page on the host, build a Release tree
@@ -581,7 +821,19 @@ resize:W,H`.
   the elements it left out in `AuLayout.hidden`). Layout then reuses
   every independent subtree whose constraints did not change, and keeps
   intrinsic widths, which do not depend on the viewport. Lengths in
-  viewport units reach layout as style changes.
+  viewport units reach layout as style changes. The restyle itself is
+  skipped or partial when the cascade says so (see CSS, "A viewport
+  change").
+- **An image change** (`au_layout_images_changed`: a size became known,
+  an image failed) keeps the box tree. Each image box asks the loader
+  again (`l_image_refresh`); a box whose size depends on the image is
+  marked for layout, and one with a width and height in pixels is only
+  repainted. The tree is built again only while its shape depends on
+  images (`AuLayout.images_shape`: an object or embed element with a
+  resource, a list-style-image that is not sized yet). The document view
+  repaints the boxes that show a changed image
+  (`au_layout_image_users` names the boxes with it as a background or
+  mask) and the whole page only when layout changed geometry.
 - **Generated text** (a pseudo-element's content, a marker's number) is
   a text box whose node is the element; `current_style` in `layout.c`
   finds its style through the pseudo-element box above it.
@@ -605,22 +857,159 @@ resize:W,H`.
   counters (no tree build or intrinsic run for a height or width change,
   a new measure after a text or font size change).
   `tests/paint/test_shape_cache.c` covers the face caches and the glyph
-  cache.
+  cache. `test_image_arrival_cost` in `tests/page/test_page.c` checks
+  that an arriving image builds no tree, lays out only when its size
+  matters and invalidates the boxes that show it.
 - **Measured** on a Wikipedia article of 18,053 boxes. Host (CPU time):
   width change in layout 2.6 ms (3.7 before), paint of a 1440x900 view
   0.92 ms (1.22), first paint of a page of new text 1.36 ms (1.68), a
   32-pixel strip 0.046 ms (0.061), a one-pixel paint 0.005 ms: painting
   already costs in proportion to what it shows. A width change through
-  the document view takes 18 ms, of which the restyle of every element
-  is 15 ms; the cascade does not yet tell which viewport changes leave
-  styles alone. Guest (emulated, stock base, 600 pixels wide): the last
+  the document view took 18 ms, of which the restyle of every element
+  was 15 ms; on live Wikipedia (`aura-host chrome --do resize:W,H`) a
+  resize that crosses no media query breakpoint now spends 1 to 2 ms in
+  style and layout, and one that crosses a breakpoint 15 to 17 ms. Guest (emulated, stock base, 600 pixels wide): the last
   style and layout pass of the load 465 ms (11,251 ms before the pooled
   allocator), a whole-page paint 4 to 5 ms (54), a page down 4 to 11 ms
   (349), a window zoom two passes of about 280 ms each.
-- **Not done:** an image whose size becomes known still rebuilds the
-  box tree (`au_layout_images_changed`); text is segmented and measured
-  again for each layout of its block (the word cache answers the
-  widths); `l_queue_abspos` searches its queue linearly.
+- **Not done:** text is segmented and measured again for each layout of
+  its block (the word cache answers the widths); `l_layout_abspos_for`
+  removes queue entries with `memmove`; a DOM insertion or removal
+  builds the whole box tree again (the search suggestions on Wikipedia
+  cost a tree build each time the list changes).
+
+## Layout behaviour
+
+Cases are in `tests/layout/cases/*.txt` (format in `test_layout.c`; the
+test loader serves `data:` URLs, so cases can use images). Where a rule
+below names Blink, it comes from reading Blink's source and from CSS
+specifications, not from running Chrome beside Aura.
+
+- **Font metrics are whole pixels.** `l_font` rounds a face's ascent,
+  descent and line gap each to a whole pixel, as Blink's
+  `SimpleFontData::PlatformInit` does, so `line-height: normal` is their
+  sum (16px Aura Sans, with Arial's metrics: 14 + 3 + 1 = 18px, the
+  height Chrome gives 16px Arial). The leading above an inline box is
+  half the difference to the line height rounded down, the rest goes
+  below (`half_leading` in `inline.c`, Blink's `CalculateLeadingSpace`).
+  Fallback faces are rounded the same way in
+  `au_glyph_run_fallback_extents`.
+- **Line breaking.** A `<wbr>` is a break opportunity whatever
+  `white-space` says (Blink and Gecko break there inside nowrap text).
+  Emoji break like ideographs (UAX #14 class ID): before and after each,
+  and between a letter and an emoji. `l_break_class` gives `BK_EXTEND`
+  to combining marks, variation selectors, ZWJ, emoji modifiers and tag
+  characters, which stay with what precedes them (and a ZWJ joins what
+  follows), and `BK_RI` to regional indicators, which break only between
+  pairs. The emoji set is the pictograph blocks U+1F000 to U+1FAFF and
+  the BMP characters with emoji presentation; it is not generated from
+  the Unicode data files.
+- **Containing blocks.** A box with a transform, `translate`, `rotate`,
+  `scale`, `perspective`, a filter, `backdrop-filter`, layout or paint
+  containment, or `will-change` naming one of those is the containing
+  block of its absolutely positioned and fixed descendants
+  (`l_style_contains_fixed`, `LF_TRANSFORM`). A fixed box under one
+  scrolls with the page.
+- **Rounded clips.** A box with `border-radius` and overflow clipped on
+  both axes clips positioned descendants to its rounded padding box:
+  `layer_origin` in `draw.c` paints the layer into a group that
+  `layer_clips_pop` masks, unless the layer's ink stays clear of the
+  corners.
+- **`background-attachment: fixed`** positions a layer against the
+  viewport on any box. Once a box has painted one,
+  `au_layout_scroll_damage` returns -1 and a scroll repaints the page.
+- **Clearance.** A block placed by clearance takes the top margins of
+  its first children into its own top margin, which lies above the edge
+  clearance placed (`LMargin.absorb` in `block.c`); an empty cleared
+  block still lets the next block's margin apply.
+- **Images.** `object-fit` and `object-position` are applied when an
+  image box is painted. `list-style-image` makes the marker an image box
+  with a 7px gap after it (Blink's marker padding), or the
+  `list-style-type` marker when the image fails. `img_source` in
+  `boxtree.c` chooses among `srcset` candidates for one device pixel per
+  CSS pixel (the lowest density of at least 1; width descriptors against
+  `sizes` and the viewport) and among the `<source>` elements of a
+  `<picture>` (media and type), and the natural size is divided by the
+  candidate's density. `au_layout_image_source` gives the document view
+  the same choice. A choice that depends on the viewport makes a
+  viewport change build the box tree again. Not done: `currentSrc` in
+  script, `image-set()`, and `sizes` lengths other than px, vw, vh, em
+  and rem.
+- **Text offsets for script.** `au_layout_text_pos_from_dom` and
+  `au_layout_text_pos_to_dom` (`selection.h`) convert between a text
+  node's UTF-16 offsets and `AuTextPos` by processing the node's data as
+  the box tree did (`l_text_process` with its offset map), and
+  `au_layout_range_rects` gives a range's rectangles per line.
+- **Acid2** (http://acid2.acidtests.org/#top, compared with its
+  reference image at the scroll position of `#top`): the rows that still
+  differ are four rows of the eyes (rows 51, 53, 55 and 57 of the
+  168-pixel face: the Adam7 PNG shows the row above repeated in image
+  rows 1 to 9 in `aura-host render`, though `aura-host image` decodes
+  the file correctly; the cause is not found) and two pixels per row
+  along the nose's diagonal border joins (rows 72 to 95, where the red
+  background shows through the antialiased seam between two border
+  colours).
+
+## Grid
+
+To change grid layout (`display: grid`, `inline-grid`), work in
+`src/layout/grid.c`. It is a formatting context like flex: `l_fc_ops`
+in `layout.c` dispatches `LI_GRID` boxes to `l_grid_layout` and
+`l_grid_intrinsic`, and the box tree treats a grid container's children
+as it treats flex items (blockified, text runs wrapped in anonymous
+items, `LF_FLEX_ITEM | LF_BFC`, so `z-index` makes a stacking context
+and incremental layout reuses an item whose constraints did not
+change). The grid properties share the flex style group
+(`AuStyleFlex`), so a change relays the box out without a tree rebuild.
+
+- **Order of a layout.** `grid_build` expands the track lists
+  (`repeat()`, `auto-fill`, `auto-fit`, line names), reads the named
+  areas, resolves each item's lines (`resolve_lines`) and places the
+  items (`place_items`: definite items, items locked to a row, then the
+  auto-placement cursor, sparse or dense, over an occupancy bitmap).
+  Implicit tracks before the explicit grid shift every index, so tracks
+  count from 0. `size_axis` then sizes columns, each item's width is
+  found (`item_width`), `size_axis` sizes rows, `position_axis` applies
+  `justify-content` and `align-content`, and each item is laid out and
+  aligned in its area.
+- **Track sizing** follows section 11 of the specification: items are
+  taken by span, each phase distributes an item's extra space to the
+  tracks it spans (`dist_item`, up to their limits by `water_fill`, then
+  beyond), then tracks are maximized, flexible tracks expanded
+  (`find_fr`) and auto tracks stretched. `mode` 1 and 2 size under a
+  min-content and a max-content constraint for the container's
+  intrinsic widths.
+- **Measurements.** An item's column contributions come from one
+  `l_outer_intrinsic` call (kept by `LF_INTRINSIC_OK`), its row
+  contribution from one `l_measure_content` call at its used width (kept
+  by the measure cache). A stretched item is laid out a second time at
+  its final height, as in flex.
+- **Percentages.** A percentage track or gap behaves as auto while the
+  container's size in that axis is unknown (intrinsic widths, an auto
+  height); the rows are then sized again against the height found.
+- **Limits.** An axis has at most 1000 tracks (`G_MAX_TRACKS`): `repeat`
+  counts stop there, lines beyond are clamped into the last track and
+  spans are cut. Line names are capped at 4096 per axis and areas at
+  1024. Keep new loops bounded by these.
+- **Absolutely positioned children** of a grid container that is their
+  containing block are positioned against the area their grid lines
+  name; an `auto` line is the padding edge. `abs_area` records the area
+  in `AuLayout.grid_abs`, and `layout_abspos` in `layout.c` takes it
+  with `l_grid_abspos_area`.
+- **Tests.** `tests/layout/cases/grid*.txt` (sizing, placement,
+  alignment, integration; expected values are worked out from the
+  specification, and a comment says where a browser was not consulted),
+  `tests/css/cases/grid.txt`, and `tests/page/samples/grid.html`, which
+  the relayout and scroll-shift tests load.
+- **Measured on the host** (Release, CPU time): a 12-column grid of 200
+  items with spans of 1 to 6 (803 boxes) lays out from scratch in
+  0.93 ms at 1440 pixels and 1.04 ms at 656; a width change takes 0.6
+  to 0.7 ms.
+- **Not done:** `subgrid` (parsed; laid out as `none`), baseline
+  alignment of items (they align at the start), `direction: rtl` and
+  vertical writing modes, `safe` overflow alignment, painting items in
+  `order` order, `masonry`. An item's min-content and max-content
+  heights are both its height at its used width.
 
 ## Fonts
 
@@ -731,7 +1120,8 @@ the system lacks.
 - **Line height.** With `line-height: normal`, a line holding fallback
   glyphs grows to the fallback face's ascent and descent (each with half
   its line gap) where they exceed the primary's, as Blink does; a fixed
-  line height ignores fallback faces.
+  line height ignores fallback faces. Layout rounds these metrics to
+  whole pixels (see Layout behaviour).
 - **Not done:** OpenType shaping of text (GPOS, and GSUB beyond emoji
   sequences), so no ligatures, kerning beyond `kern`, Arabic joining,
   Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
@@ -771,6 +1161,21 @@ and its tests only.
   the document. Child insertions and removals are not targeted: they
   restyle the element's subtree and its following siblings' subtrees,
   or the document when a `:has()` rule exists.
+- **A viewport change.** The rule index records every media query it
+  evaluates with its result (`media_dep` in `cascade.c`), and a computed
+  style that used a viewport unit has `AU_STYLE_F_VIEWPORT_UNITS`.
+  `au_css_resolver_set_device` with a device that differs only in the
+  viewport size evaluates the recorded queries again: when none changed,
+  the index is kept and `au_css_restyle` computes only the elements
+  whose style (or pseudo-element style) has the flag, and what inherits
+  from them; with no such style it computes nothing.
+  `au_css_resolver_viewport_restyle` says which of the three applies,
+  and the document view skips the style pass on `AU_CSS_VIEWPORT_NONE`.
+  Any other device difference, or a media query that changed, restyles
+  the document as before. Container queries are not evaluated, so
+  nothing is recorded for them. `test_css_invalidate --viewport DIR`
+  (ctest `css_viewport`) resizes pages through fourteen sizes and
+  compares every computed value with a document styled from scratch.
 - **Class and id changes** need the names that changed. `src/dom` notes
   them in `AuDocument.style_names` when the attribute changes, and the
   resolver resolves the elements reported for class or id when the
@@ -901,7 +1306,7 @@ test and a fuzz run under the sanitizers.
   ITERATIONS SEED tests/image/vectors/*/*`.
 - **Not done:** arithmetic-coded, lossless and 12-bit JPEG; colour
   management (gamma, ICC profiles and colour spaces are ignored);
-  object-fit, border-image and list-style-image in layout. At 256
+  border-image in layout. At 256
   colours images band; nothing dithers them.
 - Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
   `FInfo` collide with Toolbox types. Prefix types with `Au`.
@@ -1177,7 +1582,7 @@ application).
   (`prefs_blocking.c`; the switch and the three fields are in
   `prefswin.c`) lists the catalogue with each list's size and date or
   what the manager is doing; its checkboxes and Update Now act at once.
-  View > Debug > Network Status shows the totals, where the list memory
+  Develop > Network Status shows the totals, where the list memory
   came from and what the last compile cost.
 - **To try it on the host**, run `aura-host blocklist compile LIST.txt
   OUT` (prints entries, time and peak memory), `aura-host blocklist
@@ -1215,8 +1620,9 @@ application).
 
 The engine is QuickJS-ng (`third_party/quickjs`), reached only through
 `src/js`; no other folder sees a QuickJS type. `src/js/js.h` is the
-interface: one `AuJs` per document, holding a runtime, a context whose
-global object is the window, the DOM bindings and the event loop.
+interface: one `AuJs` per document, holding a context whose global
+object is the window, the DOM bindings and the event loop. The documents
+of one top-level page share one runtime (see Frames).
 
 - **To run script in a document**, create an `AuJs` with `au_js_new`,
   run scripts with `au_js_run_classic` or the module calls, and call
@@ -1232,7 +1638,7 @@ global object is the window, the DOM bindings and the event loop.
   preference (on by default) at each load, runs `au_docview_run_scripts`
   for up to 20 ms in every `au_page_idle` and follows the navigations it
   reports through `open_url`, and keeps the last 300 console lines
-  (`au_page_console_line`) for a debug view.
+  (`au_page_console_line`) for the Console window (see Developer tools).
 - **Response heads.** A loader that knows a response's status and headers
   passes them with `au_docview_resource_head` before the data; script
   then sees them in `fetch` and `XMLHttpRequest`, and an error status
@@ -1281,10 +1687,12 @@ global object is the window, the DOM bindings and the event loop.
   Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
   Do not use `alloca` or variable-length arrays in Aura's own code.
 - **The prelude** is one function expression split over
-  `src/js/prelude*.js`; `prelude.c` embeds the files in order (base, dom,
-  html, range, cssom, window, net, obs). To add a file, add its `#embed`
-  line there. A name declared twice across the files stops the runtime
-  from starting ("invalid redefinition").
+  `src/js/prelude*.js`, joined in order (base, dom, html, range, cssom,
+  window, net, obs). The build compiles it to QuickJS bytecode and the
+  runtime loads that (see "Prelude bytecode" below). To add a file, add
+  it to the list in `third_party/quickjs.cmake` and its `#embed` line in
+  `prelude.c` (the source build). A name declared twice across the files
+  stops the runtime from starting ("invalid redefinition").
 - **To debug a script on a live page**, use `aura-host chrome` actions:
   `--do js:CODE` evaluates CODE in the active tab and prints the result,
   `--do save:FILE` writes the page source, `--do console` prints the
@@ -1296,7 +1704,7 @@ global object is the window, the DOM bindings and the event loop.
   page and the scripts it loads and serve them from a local HTTP server
   (the origin must be http for origin checks to behave as on the site).
 - **window.postMessage** takes any absolute URL as the target origin
-  and compares only its origin. Google's search box defers its submit
+  and compares only its origin (between frames: see Frames). Google's search box defers its submit
   with `postMessage("sbox.df", location.href)`; comparing the string
   with the origin dropped the message and Return did nothing
   (`tests/js/pages/search_defer.html`, `test_search_box_defer` in
@@ -1311,15 +1719,19 @@ global object is the window, the DOM bindings and the event loop.
   the parser are handled in `js_ranges_text` (data only appended moves
   nothing, anything else puts the node's points at offset 0). To change
   a text mutation path in the prelude, keep it going through
-  `replaceData`. Not exact: `getClientRects` and
-  `getBoundingClientRect` return the boxes of the elements a range
-  covers (layout has no query from a DOM text offset to a position),
-  and `normalize()` moves points in merged text nodes to their parent.
+  `replaceData`. `getClientRects` and `getBoundingClientRect` give the
+  rectangles of the selected part of each text node, one per line,
+  through `N.textRects` and the `text_rects` hook (`h_text_rects` in
+  `script.c`, on layout's `au_layout_text_pos_from_dom` and
+  `au_layout_range_rects`); a collapsed range in text gives one
+  rectangle of no width. Not exact: `normalize()` moves points in merged
+  text nodes to their parent.
 - **Selection** is script state with one range and a direction
   (`extend`, `setBaseAndExtent`, `selectionchange`). It is not the
   selection the user makes with the mouse (`page_doc.c`), and it is not
-  painted: joining them needs a mapping between DOM offsets and
-  `AuTextPos` (processed text offsets) in layout.
+  painted. To join them, convert each boundary point with
+  `au_layout_text_pos_from_dom` and `au_layout_text_pos_to_dom`
+  (`src/layout/selection.h`); that is not wired yet.
 - **CSSOM** (`prelude_cssom.js`). `element.sheet` and
   `document.styleSheets` give a `CSSStyleSheet` per style or link
   element. Rules are read from the sheet's text
@@ -1349,18 +1761,48 @@ global object is the window, the DOM bindings and the event loop.
   the `border` and `font` shorthands serialize every part.
 - **crypto** (`getRandomValues`, `randomUUID`; no `subtle`) exists only
   when the embedder passes `AuJsHooks.random`
-  (`AuDocViewCallbacks.random` for a document view). `aura-host js`
-  reads `/dev/urandom`. The browser does not pass one yet: to give pages
-  `crypto`, set the callback in `page_doc.c` from the platform's entropy
-  source (`AuNetOps.entropy`).
-- **Start-up cost.** `aura-host js --stats` reports 21 to 24 ms and
-  1.66 MB to start a runtime on the host; 18 to 21 ms of it compiles the
-  293 KB prelude and 2 to 4 ms runs it. The prelude is not precompiled
-  to bytecode yet: to do it, compile with `JS_EVAL_FLAG_COMPILE_ONLY` in
-  a host tool at build time, write it with `JS_WriteObject`
-  (`JS_WRITE_OBJ_BYTECODE`; QuickJS-ng swaps bytes itself when reading
-  on a big-endian machine), load it with `JS_ReadObject` and
-  `JS_EvalFunction`, and check JSTest in the guest.
+  (`AuDocViewCallbacks.random` for a document view). In the browser the
+  shell passes `AuBrowserHost.random`, which reaches the page through
+  `AuPageEnv.random` and `dv_random` in `page_doc.c`. On Mac OS 9 it is
+  `mac_net_random`, the entropy pool the network stack uses; until the
+  pool has gathered 128 bits it returns false and the calls throw
+  OperationError (they never get weaker bytes). `aura-host chrome` and
+  `aura-host js` read `/dev/urandom`; `aura-host chrome --no-entropy`
+  answers as an unready pool. `tests/browser/test_crypto.c` covers a
+  ready source, an unready one and a host without one (no `crypto`
+  object).
+- **Prelude bytecode.** `tools/jsprelude/jsprelude.c` compiles the
+  prelude with `JS_EVAL_FLAG_COMPILE_ONLY` and writes it with
+  `JS_WriteObject`, without source text or line tables;
+  `third_party/quickjs.cmake` runs it at build time into
+  `build/*/gen/prelude.bc`, `prelude.c` embeds the file, and
+  `load_prelude` in `runtime.c` loads it with `JS_ReadObject` and
+  `JS_EvalFunction`. QuickJS-ng bytecode is in the byte order of the
+  machine that reads it, and v0.18.0 swaps nowhere (its
+  `JS_WRITE_OBJ_BSWAP` was defined as 0). Patch 0005 makes the flag work
+  in the writer: the Mac OS 9 build compiles the tool with the host's C
+  compiler (`AURA_HOST_CC`, found as `cc`) and runs it with `--swap`, so
+  no PowerPC code runs during the build. The tool must be built from the
+  same QuickJS sources as the engine (the bytecode names built-in atoms
+  by number); the build does that. To load the prelude from source
+  instead (errors in it then carry line numbers), configure with
+  `-DAURA_JS_PRELUDE_SOURCE=ON`. Prelude functions print as
+  `function name() { [native code] }` from bytecode. After changing
+  QuickJS or the tool, run JSTest in the guest: its "prelude regexp" and
+  "prelude forms" self-tests use regular expression literals, numbers
+  and strings from the swapped bytecode.
+- **Start-up cost.** `aura-host js --stats` prints the start-up time,
+  the heap, and what the heap holds by kind. Host (RelWithDebInfo): 30 ms
+  and 1.69 MB from source, 5 ms and 1.28 MB from bytecode. Stock guest
+  (JSTest): 1148 ms and 1430 KB from source, 747 ms and 1002 KB from
+  bytecode. The 226 KB of bytecode sit in the application's data instead
+  of 299 KB of source.
+- **Script memory.** See Memory for what a page's script heap holds and
+  how to measure it. A function and the functions nested in it share one
+  copy of their source text (patch 0006). `au_js_run_tasks` runs the
+  collector when script has been idle for a second and the heap has
+  grown by an eighth (at least 512 KB) since the last collection; a
+  hidden document is collected when it is hidden.
 
 ## Forms
 
@@ -1439,7 +1881,7 @@ work with script off, and script reads and writes the same state.
   time in the event, the idle pass and painting, and the counts from
   `au_docview_stats` (style passes, elements styled, tree builds,
   layouts) and the pixels invalidated. In the guest, focus a page field
-  and choose View > Debug > Page Timings: it types 16 keys and shows
+  and choose Develop > Page Timings: it types 16 keys and shows
   milliseconds per key with the restyle and layout counts.
   `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
   with `:has()` rules, with and without script listeners. Measured in
@@ -1455,15 +1897,19 @@ work with script off, and script reads and writes the same state.
   listeners changed: `au_docview_key` updates at its end and invalidates
   the page only if the update changed geometry or raised a paint, so a
   restyle that computes the same values repaints the field only
-  (`test_keystroke_cost`, "attribute writers"). Open: on live Wikipedia
+  (`test_keystroke_cost`, "attribute writers"). On live Wikipedia
   (`aura-host chrome -w 1440 -h 900 --net --tab
-  https://en.wikipedia.org/wiki/Mac_OS_9 --do clickname:search --do
-  keys:abcdef`) a key restyles 2 elements (the hidden inputs whose value
-  the page sets), but a box tree build and a layout still run on every
-  key and the viewport is repainted; no DOM change other than those two
-  attributes is reported, so the build is asked for inside layout
-  (`au_layout_styles_changed` deciding on a rebuild, or
-  `au_layout_images_changed`). Find which before changing anything.
+  https://en.wikipedia.org/wiki/Mac_OS_9 --do wait:4000 --do
+  clickname:search --do wait:3000 --do keys:macint`) the box tree build
+  on a key came from the suggestion list's thumbnails: an image whose
+  size became known made layout build the tree again and the view
+  invalidate the page, at the next update, which a key runs. An image
+  change now keeps the tree (see Layout and paint speed), and a key
+  there restyles 2 elements, builds no tree, runs no layout and
+  invalidates the field (439 x 41 pixels). What remains is the page's
+  own work: when the suggestion list changes, its DOM insertions build
+  the tree again, and keys typed while the page still loads its search
+  module pay for that loading.
 - **Mac OS 9 key handling.** `bw_key` does not paint: the event loop in
   `main.c` handles up to 8 queued keys and then paints once
   (`idle_all`).
@@ -1475,6 +1921,297 @@ work with script off, and script reads and writes the same state.
 - **Not done:** date, time and color pickers (they are text fields), the
   dirname attribute's direction, a resend prompt for POST history
   entries, form-associated custom elements, and IME input.
+
+## Memory
+
+The Mac OS 9 application runs in a 64 MB partition (12 MB at least,
+`aura.r`). Font data, the window's GWorld and the blocklists go to
+temporary memory when there is room; everything else comes from the
+application heap through `au_alloc`.
+
+- **To see which code holds memory on the host**, configure a tree with
+  the allocation counter, `cmake -S . -B build/mem -G Ninja
+  -DAURA_MEM_TRACK=ON`, build `aura-host`, and run `AURA_MEM=1
+  build/mem/src/platform/host/aura-host chrome --bundled-only --tab PAGE
+  -o run/a.png`. After the paint it prints the bytes live per source
+  folder and per source line, with what each held when the total was at
+  its peak. `--do mem` prints the same at any point, and `--do closetab
+  --do mem` shows what a closed tab leaves behind. `AURA_MEM_MIN=BYTES`
+  sets the smallest line listed. The counter (`src/core/core.h`) records
+  the file and line of every allocating call through macros and puts a
+  16-byte header on each block; a buffer is counted for the line that
+  first allocated it. A helper that allocates for its callers takes the
+  caller's line when it calls `(au_realloc)(...)` in parentheses and has
+  a macro of its own, as `css_grow` does.
+- **Use `--bundled-only` for figures that should resemble the Mac.**
+  Without it the host tool reads 22 macOS fonts whole at start (19.6 MB),
+  which the Mac application never does: there a face's data is read on
+  first use, into temporary memory. The host's PNG writer takes 11 MB at
+  the end and the tool's own window surface 3 MB (1024 x 768); the Mac's
+  GWorld is in temporary memory.
+- **To see what a script heap holds**, run `aura-host js --stats FILE`
+  or, for a page, `aura-host chrome --net --tab URL --do wait:4000 --do
+  js:aura:memory` (QuickJS's accounting: atoms, strings, objects,
+  properties, shapes, function records, bytecode, line tables).
+  `--do js:aura:gc` runs the collector.
+- **To measure the Mac application**, choose Develop > Page Timings: it
+  shows the free heap, the largest free block and free temporary memory.
+  Develop > Network Status shows the bytes the HTTP cache holds in
+  memory and on disk. Take the first reading after a page has loaded
+  once: the network stack, the root store and the blocklists start
+  after launch.
+- **What things cost** (host, 64-bit, bundled fonts only, 1024 x 768,
+  KB live after the paint, before and after the work of 2026-11-15; a
+  PowerPC build has 4-byte pointers, so pointer-heavy rows are smaller
+  there):
+
+  | Subsystem | Blank tab | Wikipedia article, no script (1 MB of HTML, 9300 elements, 18,000 boxes) | GitHub home page (2.5 MB of CSS, scripts) |
+  |---|---|---|---|
+  | Layout: boxes, fragments, lines | 66, 66 | 6693, 3357 | 2175, 972 |
+  | DOM: nodes, attributes, text | 1, 1 | 3849, 3657 | 1178, 1090 |
+  | CSS: parsed sheets, rule index, computed styles | 152, 146 | 2238, 2188 | 25638, 24688 |
+  | Page source kept for Save Page As | 6, 7 | 2057, 1082 | 521, 535 |
+  | Script heap | 0, 0 | 0, 0 | 2088, 1548 |
+  | Atoms and other core | 60, 60 | 269, 269 | 724, 724 |
+  | Font tables, shaping caches, glyph cache | 43, 43 | 278, 278 | 776, 753 |
+  | HTML parser, document view, image cache | 11, 12 | 92, 94 | 107, 108 |
+  | Host tool only: font file data | 1024, 1024 | 5376, 5376 | 3840, 3840 |
+  | Host tool only: window surface | 3072, 3072 | 3072, 3072 | 3072, 3072 |
+  | Total live | 4453, 4449 | 23942, 19389 | 40138, 37348 |
+
+  With the system fonts, `/usr/bin/time -l` reports a peak footprint of
+  31.7 MB for a blank tab (31.3 before: fonts, PNG and surface are all of
+  it), 49.2 MB for the Wikipedia article (52.2), 38.7 MB for the GitHub
+  page without its sheets (42.1) and 78.2 MB with them (80.2).
+- **A live Wikipedia article's script heap** was 10.6 MB when the load
+  ended: function records 3.9 MB (bytecode 0.4 MB, the rest mostly
+  source text held once per nesting level), objects 1.6 MB, properties
+  1.2 MB, atoms 0.8 MB, the prelude's own objects about 1 MB. Sharing
+  the source text brought it to 8.7 MB; four seconds later the page's
+  lazy modules have raised it to 11.3 MB, and the idle collection takes
+  0.6 MB off. The kept-document estimate for the article fell from
+  15.3 MB to 12.9 MB.
+- **Measured in the guest** (stock base, merged build, live Wikipedia):
+  free heap 63,718 KB on about:home after launch (405,265 KB of
+  temporary memory free), 45,531 KB with the article loaded (largest
+  block 35,885 KB; temporary 401,738 KB), 60,058 KB after closing its
+  tab (largest block 42,523 KB), and 59,973 KB after loading and closing
+  it a second time. The 3.7 MB between the first and third readings is
+  the network stack that started in between (root store, cookies,
+  blocklist state, 975 KB of HTTP cache in memory) and slabs of the
+  pooled allocator that still hold a live block; a second load returned
+  the heap to within 85 KB, so pages are freed. The 3.5 MB of temporary
+  memory is font data, which stays loaded.
+- **The HTTP cache** holds response bodies in memory up to its budget
+  (8 MB by default). With the disk cache on, the Mac application keeps
+  1 MB of them resident (`au_cache_set_resident`); the rest are read
+  back from disk when asked for.
+- **What was cut on 2026-11-15:** an inline formatting context kept
+  room for 64 fragments and 16 lines whatever it used (3.4 MB of the
+  article); the page source buffer kept its doubled capacity; the rule
+  entry array too; an element's attribute array started at 4 entries;
+  every resolver parsed its own user agent sheets (now shared); the
+  prelude's source and line tables in every runtime; nested function
+  source text; the memory cache duplicating the disk cache.
+- **Not done, largest first.** (1) Parsed style sheets: a rule is five
+  to seven blocks (rule, selector list, selectors, components,
+  declarations, token lists); GitHub's 42,000 rules take 345,000 blocks
+  and 24 MB on the host. Allocating a rule's selector list, selectors
+  and components as one block would save the per-block headers (8 bytes
+  each in the Mac's pooled allocator, about 1 MB there) and
+  `AuSelComp.name_cs` and `AuSelector.hashes` could move out of line.
+  (2) Atoms live for the life of the program: every class, id and custom
+  property name of every page visited stays (270 KB for the article,
+  720 KB for GitHub), so a long session grows. Atoms need a count or a
+  per-document table. (3) `LBlock` is 264 bytes on the host (about 216
+  on PowerPC) and every inline box is one; an inline box needs under
+  half of it. (4) `AuElement` carries `template_content`, `shadow_root`
+  and `control`, which almost no element uses (24 bytes of 160 on the
+  host, 12 of about 92 on PowerPC). (5) The prelude's CSSOM, Range and
+  observer parts (a quarter of its source) are created in every runtime;
+  creating them on first use means splitting the single prelude
+  function, and would save an estimated 150 to 250 KB per runtime.
+  (6) The pooled allocator's slabs are `NewPtr` blocks that do not move:
+  one long-lived block keeps a 32 KB slab, and the largest free block
+  after closing a large page was 42 MB of 60 MB free. (7) A system font
+  is read whole on first use (into temporary memory); reading only the
+  tables used needs a different font data interface.
+
+## Frames
+
+`iframe`, `frame`, `object` and `embed` elements show nested documents.
+To change them, work in `src/page/frames.c` (the frame list, loading,
+painting, input, limits), `src/js/frames.c` and the "windows of other
+documents" part of `src/js/prelude_window.js` (script), and the frame
+parts of `src/browser/page_doc.c` (fetch context, selection, hit
+information).
+
+- **Structure.** Each frame element has an `AuFrame` in the view of the
+  document that holds it (`AuDocView.frames`, tree order). A frame that
+  shows a document owns an `AuDocView` for it, with its own document,
+  style, layout, images and script context. The view is created only
+  when there is content to show or script asks for the frame's window,
+  so an empty iframe costs one record. `au_frames_sync` brings the list
+  in step with the tree: after each parser chunk, before a style pass,
+  and at the end of any script native that inserted, removed or changed
+  a frame element.
+- **The embedder sees one view.** Nested views load through the
+  top-level view's loader and report through its callbacks, always with
+  the top-level view as `dv`. `au_docview_set_request_ex` gives the
+  loader the requesting document's URL and a body (`AuResourceRequest`);
+  data for any request is delivered to the top-level view, which passes
+  it on (`FrameRoute`). Input goes to `au_docview_mouse`, `_key` and
+  `_scroll_at` of the top-level view; `au_docview_view_at` and
+  `au_docview_focus_view` name the nested view under a point or with the
+  keyboard, for code that works on one document (the page's selection,
+  hit information, the Edit commands, the caret).
+- **Loading.** A frame's document is an `AU_RES_FRAME` request of the
+  owner view (`AU_FETCH_FRAME` in the page, `AU_DEST_IFRAME` in the net
+  loader). The response head decides what the element shows: HTML or
+  text is a nested document, an image is a generated document with an
+  `<img>` (iframe) or an image box in layout (object, embed), anything
+  else nothing. `srcdoc`, `about:blank` and `data:` URLs need no
+  network; `page_doc.c` decodes `data:` URLs itself, for scripts too.
+  In `page_doc.c` the requesting document is the referrer and decides
+  mixed content (an http frame in an https page is blocked by the net
+  loader), and the tab's URL is the top-level site for cookies and the
+  blocklist (a listed third-party frame host is not contacted and counts
+  in `AuPageStats.blocked`).
+- **Framing rules** (`framing_allowed`): `X-Frame-Options` DENY and
+  SAMEORIGIN, and the CSP `frame-ancestors` directive with `'none'`,
+  `'self'`, scheme and host sources, each checked against every
+  ancestor; with `frame-ancestors` present `X-Frame-Options` is ignored.
+  A refused frame is empty and the console names it. No other CSP
+  directive is enforced anywhere (`script-src`, `frame-src`, `sandbox`,
+  `default-src` and the rest are ignored), and neither is the
+  `Permissions-Policy` header or the `allow` attribute.
+- **Sandbox.** The `sandbox` attribute turns off scripts (unless
+  `allow-scripts`), form submission (`allow-forms`), the parent's origin
+  (`allow-same-origin`; without it the document's origin is opaque, so
+  it and its parent cannot reach each other), navigation of anything but
+  itself and its descendants (`allow-top-navigation`) and new tabs
+  (`allow-popups`). A nested document inherits its ancestors'
+  restrictions. Other tokens are ignored.
+- **Limits.** 64 nested documents per page (`AU_FRAMES_MAX`), 8 levels
+  (`AU_FRAMES_DEPTH`); a frame whose URL is that of one of its ancestors
+  is refused; `loading=lazy` frames load when they come within a
+  viewport of the visible area or are painted, and do not hold the
+  page's load event. A refused frame stays an empty box and still gets
+  its load event.
+- **Geometry.** Layout makes the element a replaced box (300 x 150 by
+  default) and calls `AuLayoutEnv.paint_frame` with its content box;
+  `au_frames_paint` sets the nested view's viewport to the box, paints
+  it there with the frame's own scroll offset (`AuFrame.sx`, `sy`) and
+  draws the scroll bars (as the page's overflow scrollers, unless
+  `scrolling=no`). A nested document's canvas is transparent unless its
+  root or body has a background (`au_layout_set_transparent`). Rectangles
+  a nested view invalidates are moved into the owner's coordinates and
+  clipped to the box. When the page scrolls by moving pixels a frame
+  moves as a box does; content fixed inside a frame is fixed to the
+  frame (`frames.html` in `tests/browser/test_scroll_shift.c`).
+  `AuLayoutEnv.embed_kind` tells layout whether an object or embed is a
+  nested document, an image or its fallback content. `frameset` is a
+  flex container in the UA sheet: rows or columns of equal size (the
+  `rows` and `cols` lengths are not read).
+- **Input.** A press inside a frame goes to the nested view, which keeps
+  the drag and the release, and gives the frame the keyboard
+  (`AuDocView.focus_frame`) until a press elsewhere. Keys the nested
+  document does not use scroll the frame, and at its end the page. The
+  wheel scrolls the innermost scroller under the pointer, then the
+  frame, then the page. Links and forms follow `target`: a frame's name,
+  `_self`, `_parent`, `_top`, `_blank` (`au_frames_route`); a link in a
+  frame without a target loads in that frame.
+- **Script.** The documents of a top-level page share one QuickJS
+  runtime; each has its own context (`au_js_new_child`), so a
+  same-origin document's objects are reached directly:
+  `contentWindow`, `contentDocument`, `window.parent`, `top`, `frames`,
+  `length`, `frameElement`, indexed and named frames (own accessor
+  properties of the window, set by `P.framesChanged`). The memory limit,
+  the stack limit and the time budget are the runtime's. A node's
+  wrapper takes its prototypes from the realm of the node's document.
+  For a document of another origin `wrapWindow` returns an object with
+  only `postMessage`, `location` (set only), `closed`, `parent`, `top`,
+  `frames`, `length`, indexed frames, child frames by name, `focus`,
+  `blur` and `close`;
+  anything else throws SecurityError, and `contentDocument` is null.
+  `postMessage` checks the target origin, the receiving document clones
+  the data in its own realm, and `event.source` is the sender's window
+  as the receiver may see it. `MessagePort`s in the transfer list move
+  to the receiving document (reCAPTCHA-style widgets hand their parent
+  a port this way). `about:blank` and `srcdoc` frames have their
+  parent's origin. A frame with script off (a sandbox without
+  `allow-scripts`, or the JavaScript preference) has no window object:
+  `contentWindow` is null.
+- **Lifetime.** Script may remove or navigate a frame while that frame's
+  script, or any script of the page, is on the stack. Nothing is freed
+  then. A removed frame leaves its owner's list at once (script sees no
+  window) and waits in the top view's `dead` list; navigations, restarts
+  and load events wait in the frames; `au_frames_idle` does the work
+  when no script of the page runs (`safe`). `au_js_free` of a frame's
+  context leaves the objects other documents still hold valid: wrappers
+  belong to the runtime, the freed context's natives then act for the
+  top-level document (its opaque pointer is set to the root), and the
+  frame's document lives while a wrapper names one of its nodes. So a
+  held reference to a removed frame's function still runs, but
+  `location`, timers and `document.URL` reached through a dead window
+  answer for the top-level document. Free a frame's `AuJs` before the
+  top-level one, and never while `au_js_running`.
+- **The document cache.** A kept document keeps its frames.
+  `au_docview_can_persist`, `au_docview_set_hidden` (pagehide, pageshow,
+  dropped image pixels) and `au_docview_memory_estimate` include them; a
+  page with a frame still loading is not kept.
+- **History.** A frame navigation adds no session history entry: Back
+  leaves the page, and a kept page comes back with each frame's current
+  document. `history.back()` inside a frame acts on the tab.
+- **Also here.** `document.open()` on a loaded document followed by
+  `write` replaces the document's contents with the parse of what was
+  written (the same Document and window; scripts in the written text do
+  not run; a `write` without `open` after load is still ignored).
+  `DOMImplementation.createDocument` and `createDocumentType` make plain
+  documents and doctypes. `fetch` and `XMLHttpRequest` send POST bodies
+  through `request_ex` (the Content-Type header goes with the body;
+  other request headers and other methods are still not sent).
+- **Cost, measured on the host** (Release): a frame without script adds
+  about 6 KB to the estimate and 0.15 ms; a frame with script adds a
+  context with its own copy of the prelude, 1.4 MB and 16 ms (57 ms each
+  with 20 of them, as collections of the growing heap add up). The
+  runtime's 32 MB limit bounds the total: about 20 scripted frames.
+- **To try it**, serve a page with frames from a local HTTP server and
+  run `aura-host chrome --net --tab URL --do wait:500 --do click:X,Y
+  --do type:TEXT -o out.png`; `--do js:CODE` reaches frames through
+  `frames[0]`. `aura-host page PAGE.html` loads file: frames too.
+- **Tests.** `tests/frames/test_frames.c` (the document view with a
+  table of pages: paint against a reference render, scrolling, clicks
+  and keys, script access both ways, postMessage and ports, sandbox,
+  framing headers, limits, lazy loading, objects, removal and navigation
+  while script runs, a kept document, a cross-origin widget) and
+  `test_frames_net.c` (a browser window over the fake transport:
+  referrer, blocklist, X-Frame-Options from a real response, typing and
+  Edit commands in a frame, Back to a kept page with frames). Run both
+  under the sanitizers after a change to lifetimes.
+- **Acid3.** `run/acid3` is not in git: fetch
+  `http://acid3.acidtests.org/` and the files it names once, keep each
+  response's status and Content-Type, and serve them from a local HTTP
+  server (the 404 answers matter). The score went from 59 to 87 with
+  frames. Still failing: 2 (a NodeIterator whose filter removes nodes),
+  21, 23 and 25 (namespace prefixes: `tagName` with a prefix,
+  `createElementNS` name checks), 35 (`:first-child` matches a root
+  without a parent), 46 (a media query case), 69, 74 and 79 (XML and SVG
+  documents in frames: they are shown as text, not parsed into a DOM),
+  72 (`cssRules` is not live), 75 and 77 (SVG DOM interfaces), 80
+  (script in an XHTML document).
+- **Not done:** XML documents in frames (`text/xml`,
+  `application/xhtml+xml`, `image/svg+xml` are shown as text; the XML
+  parser in `src/svg` builds SVG trees only); session history for frame
+  navigations; a nested document's own Referrer-Policy and the
+  `referrerpolicy` attribute (the top-level policy is used); frame
+  scroll bars cannot be dragged (wheel and keys only); `rows` and `cols`
+  sizes of a frameset; Find searches one document (the page, or the
+  frame the selection is in) and Tab does not move between a page and
+  its frames; invalidation rectangles of a frame inside a transformed
+  or scrolled container use the frame's untransformed box; the
+  WindowProxy of a frame is a new object after each navigation; POST
+  into a frame works only with a loader that implements `request_ex`.
 
 ## Fuzzing
 

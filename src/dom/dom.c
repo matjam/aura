@@ -404,7 +404,7 @@ void au_element_set_attr_ns(AuElement *el, AuAtom name, AuAttrNamespace ns, cons
         au_free(a->value);
     } else {
         if (el->nattrs == el->attr_cap) {
-            el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 4;
+            el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 1;
             el->attrs = au_realloc(el->attrs, el->attr_cap * sizeof *el->attrs);
         }
         a = &el->attrs[el->nattrs++];
@@ -529,7 +529,7 @@ void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, cons
 {
     attr_hook(el, name, (uint8_t)ns, NULL);
     if (el->nattrs == el->attr_cap) {
-        el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 4;
+        el->attr_cap = el->attr_cap ? el->attr_cap * 2 : 1;
         el->attrs = au_realloc(el->attrs, el->attr_cap * sizeof *el->attrs);
     }
     AuAttr *a = &el->attrs[el->nattrs++];

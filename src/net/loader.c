@@ -38,7 +38,7 @@ struct Req {
     /* response */
     char *url;
     int status;
-    AuBuf mime, charset, filename, csp, rpolicy;
+    AuBuf mime, charset, filename, csp, rpolicy, xfo;
     char encoding[32];
     char cipher[64];
     uint16_t tls_version;
@@ -87,6 +87,7 @@ static void req_free(Req *r)
     au_buf_free(&r->charset);
     au_buf_free(&r->filename);
     au_buf_free(&r->csp);
+    au_buf_free(&r->xfo);
     au_buf_free(&r->rpolicy);
     au_buf_free(&r->hold);
     if (r->is_data)
@@ -135,11 +136,13 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->attachment = r->attachment;
     i->filename = au_buf_cstr(&r->filename);
     i->csp = au_buf_cstr(&r->csp);
+    i->x_frame_options = au_buf_cstr(&r->xfo);
     i->referrer_policy = au_buf_cstr(&r->rpolicy);
     i->tls_version = r->tls_version;
     i->cipher = r->cipher;
     i->fallback_cause = r->fallback_cause;
     i->mixed = r->mixed;
+    i->request_head = "";
     i->blocked_reason = r->blocked[0] ? r->blocked : NULL;
 }
 
@@ -327,6 +330,10 @@ static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
     au_buf_clear(&r->csp);
     if (v)
         au_buf_append(&r->csp, v, strlen(v) > 4096 ? 4096 : strlen(v));
+    v = au_headers_get(resp->headers, "x-frame-options");
+    au_buf_clear(&r->xfo);
+    if (v)
+        au_buf_append(&r->xfo, v, strlen(v) > 64 ? 64 : strlen(v));
     v = au_headers_get(resp->headers, "referrer-policy");
     au_buf_clear(&r->rpolicy);
     if (v)
@@ -428,6 +435,11 @@ static void t_done(void *ctx, AuHttpTransfer *t, AuNetError err)
         return;
     AuLoadInfo info;
     fill_info(r, &info);
+    AuHttpTrace trace;
+    au_http_trace(t, &trace);
+    info.trace = &trace;
+    info.response_headers = au_http_response_headers(t);
+    info.request_head = au_http_request_head(t);
     if (r->cb.done)
         r->cb.done(r->cb.ctx, r->id, err, &info);
 }
@@ -466,6 +478,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     au_buf_init(&r->charset);
     au_buf_init(&r->filename);
     au_buf_init(&r->csp);
+    au_buf_init(&r->xfo);
     au_buf_init(&r->rpolicy);
     au_buf_init(&r->hold);
     r->next = l->reqs;
@@ -542,6 +555,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     if (rq->revalidate && !rq->reload)
         au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
+    hr.omit_credentials = rq->omit_credentials;
     AuHttpCallbacks hc = {r, t_response, t_data, t_done, l->blocklist ? t_redirect : NULL, NULL};
     r->t = au_http_start(l->net, &hr, &hc);
     au_http_request_free(&hr);

@@ -9,6 +9,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
+# The allocation counter (src/core/core.h): bytes live per source file.
+option(AURA_MEM_TRACK "Count allocations per source file" OFF)
+if(AURA_MEM_TRACK)
+    add_compile_definitions(AU_MEM_TRACK)
+    add_compile_options(-Wno-unsequenced)
+endif()
+
 # Retro68's toolchain file sets CMAKE_SYSTEM_NAME to RetroPPC (or Retro68,
 # RetroCarbon). Anything else is the development host.
 if(CMAKE_SYSTEM_NAME MATCHES "Retro")

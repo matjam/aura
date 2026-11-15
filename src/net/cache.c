@@ -42,6 +42,7 @@ struct AuHttpCache {
     AuCacheEntry *buckets[NBUCKETS];
     AuCacheEntry *head, *tail;
     size_t bytes, count, max;
+    size_t resident; /* with storage: the bytes kept in memory, 0 for max */
     AuCacheStorage storage;
     bool have_storage;
     AuCacheStats stats;
@@ -129,6 +130,20 @@ static void evict_to(AuHttpCache *c, size_t max)
         drop(c, c->tail);
 }
 
+/* Evicts down to the budget. With a second-level storage and a resident
+ * limit below the budget, memory keeps only that much: the storage has
+ * the rest. The newest entry always stays, whatever its size, so the
+ * caller that just inserted it can use it. */
+static void evict(AuHttpCache *c)
+{
+    if (c->have_storage && c->resident && c->resident < c->max) {
+        while (c->bytes > c->resident && c->tail && c->tail != c->head)
+            drop(c, c->tail);
+    } else {
+        evict_to(c, c->max);
+    }
+}
+
 void au_cache_free(AuHttpCache *c)
 {
     if (!c)
@@ -148,6 +163,13 @@ void au_cache_set_storage(AuHttpCache *c, const AuCacheStorage *s)
     c->have_storage = s != NULL;
     if (s)
         c->storage = *s;
+    evict(c);
+}
+
+void au_cache_set_resident(AuHttpCache *c, size_t bytes)
+{
+    c->resident = bytes;
+    evict(c);
 }
 
 void au_cache_clear(AuHttpCache *c)
@@ -461,7 +483,7 @@ static void insert(AuHttpCache *c, AuCacheEntry *e)
     e->linked = true;
     c->bytes += e->cost;
     c->count++;
-    evict_to(c, c->max);
+    evict(c);
 }
 
 static bool has_validator(const AuCacheEntry *e)
@@ -697,7 +719,7 @@ void au_cache_update(AuHttpCache *c, AuCacheEntry *e, const AuHeaders *resp304, 
         c->bytes += e->cost;
         touch(c, e);
         storage_put(c, e);
-        evict_to(c, c->max);
+        evict(c);
     }
 }
 

@@ -1,5 +1,6 @@
 /* Shaping with per-character font fallback: cluster segmentation, the
  * Unicode properties it needs, and the line metrics of fallback faces. */
+#include <math.h>
 #include "font_internal.h"
 
 #include <string.h>
@@ -367,7 +368,10 @@ void au_glyph_run_fallback_extents(const AuGlyphRun *r, const AuFontFace *primar
         last = f;
         AuFontMetrics m;
         au_font_metrics(f, size, &m);
-        float a = m.ascent + m.line_gap / 2, d = m.descent + m.line_gap / 2;
+        /* Whole pixels, with the line gap's odd pixel below, as layout
+         * does for the primary face (see l_font and l_half_leading). */
+        float gap = roundf(m.line_gap), above = floorf(gap / 2);
+        float a = roundf(m.ascent) + above, d = roundf(m.descent) + gap - above;
         if (a > *ascent)
             *ascent = a;
         if (d > *descent)

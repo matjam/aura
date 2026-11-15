@@ -44,7 +44,8 @@ static void push(AuPath *p, uint8_t op, const float *xy, size_t npt)
         p->pts_cap = cap;
     }
     p->ops[p->nops++] = op;
-    memcpy(p->pts + p->npts, xy, npt * 2 * sizeof(float));
+    if (npt) /* xy is NULL for a close */
+        memcpy(p->pts + p->npts, xy, npt * 2 * sizeof(float));
     p->npts += npt * 2;
 }
 

@@ -65,6 +65,12 @@ void au_docscript_javascript_url(AuDocScript *s, const char *url);
 bool au_docscript_run(AuDocScript *s, uint32_t budget_ms);
 /* Evaluates src in the page (tools): the result as a string in out. */
 bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out);
+/* DOMContentLoaded has fired. */
+bool au_docscript_content_loaded(const AuDocScript *s);
+/* The runtime's allocated bytes and limit (0, 0 before it starts). */
+void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit);
+/* The view's clock for the time counters (0 without one). */
+uint32_t au_dv_perf_now(AuDocView *dv);
 /* Milliseconds until script work is due (0: now; UINT32_MAX: none). */
 uint32_t au_docscript_due(AuDocScript *s);
 /* The viewport changed size or scrolled. */
@@ -78,11 +84,21 @@ void au_docscript_page_transition(AuDocScript *s, bool show);
 size_t au_docscript_memory(const AuDocScript *s);
 /* Layout ran: intersection and resize observers. */
 void au_docscript_layout_done(AuDocScript *s);
+/* Frames (frames.c). on_stack: script of the page is running (nothing may
+ * be freed). frames_changed: the document's frame list changed outside
+ * script. flush_nav: hands a navigation script asked for to the embedder
+ * now (true when there was one); for navigations requested through
+ * another document's window. NULL s is fine for all three. */
+bool au_docscript_on_stack(const AuDocScript *s);
+void au_docscript_frames_changed(AuDocScript *s);
+bool au_docscript_flush_nav(AuDocScript *s);
 
 /* ---- script.c to docview.c ---- */
 /* Starts an AU_RES_OTHER request. background requests (fetch, XHR) do
  * not hold the load event. Returns 0 when the URL cannot be fetched. */
 uint32_t au_dv_request(AuDocView *dv, const char *url, bool background);
+/* The same with a method and body (the loader's request_ex is needed). */
+uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool background);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);
@@ -105,6 +121,8 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
 void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
+/* The user agent set with au_docview_set_user_agent, or NULL. */
+const char *au_dv_user_agent(const AuDocView *dv);
 /* forms.c: script focused el (NULL: blurred); script submitted form
  * (form.submit, or requestSubmit after its submit event); script changed
  * a control's value (repaint). */

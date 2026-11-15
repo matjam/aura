@@ -58,7 +58,8 @@ typedef struct AuJsSettings {
                            * The thread must have this much stack free, plus margin. */
     uint32_t slice_ms;    /* long-script check interval; 0: 1000 */
     uint32_t kill_ms;     /* default limit without a long_script hook; 0: 10000 */
-    const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/1" */
+    const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/1".
+                             * Embedders pass the string the network sends (au_docview_set_user_agent). */
     const char *language;   /* navigator.language; NULL: "en-US" */
     bool do_not_track;      /* navigator.doNotTrack "1" */
     bool global_privacy_control;
@@ -66,6 +67,14 @@ typedef struct AuJsSettings {
     bool cookies_enabled;
     uint32_t storage_quota; /* bytes per origin for each storage area; 0: 5 MB */
     int screen_width, screen_height; /* 0: 1024x768 */
+    /* Frames. origin replaces the origin taken from the document URL (an
+     * about:blank or srcdoc frame has its parent's); it is copied.
+     * sandbox_origin gives the document an origin equal to no other (a
+     * sandboxed frame without allow-same-origin). no_top_navigation: the
+     * document may navigate only itself and its descendants. */
+    const char *origin;
+    bool sandbox_origin;
+    bool no_top_navigation;
 } AuJsSettings;
 
 void au_js_settings_default(AuJsSettings *s);
@@ -133,6 +142,12 @@ typedef struct AuJsHooks {
     /* Brings layout up to date (forced synchronous layout) and returns the
      * border box of el in document coordinates; false if el has no box. */
     bool (*element_rect)(void *ctx, AuElement *el, AuJsRect *out);
+    /* Brings layout up to date and writes the rectangles (document
+     * coordinates, one per line) of text node text's data from UTF-16
+     * offset start to end, at most max. Returns how many there are (one of
+     * no width when start equals end), or -1 when the node has no box.
+     * Optional: without it Range rectangles are those of elements. */
+    int (*text_rects)(void *ctx, AuNode *text, uint32_t start, uint32_t end, AuJsRect *out, int max);
     /* Brings style up to date and returns el's computed style (an AuStyle
      * from src/css), or NULL. */
     const void *(*computed_style)(void *ctx, AuElement *el);
@@ -189,6 +204,21 @@ typedef struct AuJsHooks {
      * and crypto.randomUUID. Returns false when the source cannot give
      * them yet. Without this hook the window has no crypto object. */
     bool (*random)(void *ctx, void *buf, size_t len);
+    /* Frames (all optional; without them a window has no frames and is
+     * its own parent). frames_changed: a frame element (iframe, frame,
+     * object, embed) went into or left the document; the embedder brings
+     * its frame list up to date. frame_count and frame_at: the nested
+     * documents in tree order, and the element of each. frame_js: the
+     * AuJs of the document nested in el, created on demand (NULL: none,
+     * or script is off there). parent_js: the AuJs of the embedding
+     * document (NULL at the top). frame_element: the element that holds
+     * this document, in the parent document. */
+    void (*frames_changed)(void *ctx);
+    int (*frame_count)(void *ctx);
+    AuElement *(*frame_at)(void *ctx, int i);
+    AuJs *(*frame_js)(void *ctx, AuElement *el);
+    AuJs *(*parent_js)(void *ctx);
+    AuElement *(*frame_element)(void *ctx);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */
@@ -199,7 +229,24 @@ enum { AU_JS_CHANGE_CHILDREN = 1, AU_JS_CHANGE_ATTR, AU_JS_CHANGE_TEXT, AU_JS_CH
  * document URL (also its origin and base). Returns NULL if QuickJS cannot
  * start (no memory). */
 AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, const AuJsHooks *hooks);
+/* Creates the AuJs of a document nested in a frame: a new context in the
+ * runtime of page (any AuJs of the top-level page), so that objects pass
+ * between the page's documents. The memory limit, the stack limit and the
+ * time budget are the runtime's. Free it before the top-level document's
+ * AuJs, and only while no script of the page runs (au_js_running):
+ * objects of the freed document that other documents still hold stay
+ * valid, and its document lives as long as a wrapper names one of its
+ * nodes. */
+AuJs *au_js_new_child(AuJs *page, AuDocument *doc, const char *url, const AuJsSettings *settings,
+                      const AuJsHooks *hooks);
 void au_js_free(AuJs *js);
+/* The document's origin as script sees it ("null" for an opaque one). */
+const char *au_js_origin(const AuJs *js);
+/* Script of the page (any of its documents) is on the stack. */
+bool au_js_running(const AuJs *js);
+/* The frame list of js's document changed outside script (the parser, a
+ * frame that loaded): gives the window its indexed and named frames. */
+void au_js_frames_changed(AuJs *js);
 
 /* The parser feeding the document, for document.write and the insertion
  * point (NULL when parsing is done). */
@@ -221,6 +268,11 @@ void au_js_run_module(AuJs *js, AuElement *el, const char *src, size_t len, cons
 /* Evaluates src as a script and appends the result's string form to out
  * (for the host tool and tests). Returns false on an exception. */
 bool au_js_eval(AuJs *js, const char *src, size_t len, AuBuf *out);
+/* Appends what the script heap holds by kind (QuickJS's own accounting:
+ * atoms, strings, objects, properties, shapes, function bytecode, line
+ * tables, arrays). au_js_eval with the source "aura:memory" does the
+ * same, so a host tool reaches it through a page. */
+void au_js_memory_report(AuJs *js, AuBuf *out);
 /* A javascript: URL activated by a link. */
 void au_js_run_javascript_url(AuJs *js, const char *url);
 /* An import map (<script type="importmap">): its JSON text. */

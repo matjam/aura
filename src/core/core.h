@@ -33,6 +33,33 @@ void au_set_release_handler(bool (*release)(size_t wanted));
 void *au_try_alloc(size_t n);
 void *au_try_realloc(void *p, size_t n);
 
+/* ---- Allocation counter ----
+ * To see which source files hold memory, build with -DAU_MEM_TRACK (the
+ * CMake option AURA_MEM_TRACK). Every allocating call then records its
+ * source file and line, and each block has a 16-byte header. au_mem_sites
+ * lists the bytes live per site, their peak, and what each held when the total
+ * was last at its peak (to 64 KB). A buffer is counted for the file that
+ * first allocated it. */
+#ifdef AU_MEM_TRACK
+typedef struct AuMemSite {
+    const char *file;
+    size_t live, peak, at_peak, blocks;
+} AuMemSite;
+extern const char *au_mem_site_;
+#define AU_MEM_STR2_(x) #x
+#define AU_MEM_STR_(x) AU_MEM_STR2_(x)
+#define AU_MEM_HERE_ __FILE__ ":" AU_MEM_STR_(__LINE__)
+size_t au_mem_live(void);
+size_t au_mem_peak(void);
+int au_mem_sites(AuMemSite *out, int max);
+#define au_alloc(n) (au_mem_site_ = AU_MEM_HERE_, au_alloc(n))
+#define au_calloc(n) (au_mem_site_ = AU_MEM_HERE_, au_calloc(n))
+#define au_realloc(p, n) (au_mem_site_ = AU_MEM_HERE_, au_realloc(p, n))
+#define au_try_alloc(n) (au_mem_site_ = AU_MEM_HERE_, au_try_alloc(n))
+#define au_try_realloc(p, n) (au_mem_site_ = AU_MEM_HERE_, au_try_realloc(p, n))
+#define au_strndup(s, n) (au_mem_site_ = AU_MEM_HERE_, au_strndup(s, n))
+#endif
+
 /* ---- The pooled allocator (heap.c) ----
  * To make au_alloc and the functions above take small blocks from 32 KB
  * slabs instead of calling malloc for each, call au_heap_enable before the
@@ -77,6 +104,15 @@ char *au_buf_cstr(AuBuf *b);
 /* Returns the NUL-terminated contents and resets the buffer; the caller
  * frees the result with au_free. */
 char *au_buf_take(AuBuf *b, size_t *len);
+#ifdef AU_MEM_TRACK
+#define au_buf_reserve(b, n) (au_mem_site_ = AU_MEM_HERE_, au_buf_reserve(b, n))
+#define au_buf_append(b, p, n) (au_mem_site_ = AU_MEM_HERE_, au_buf_append(b, p, n))
+#define au_buf_puts(b, s) (au_mem_site_ = AU_MEM_HERE_, au_buf_puts(b, s))
+#define au_buf_putc(b, c) (au_mem_site_ = AU_MEM_HERE_, au_buf_putc(b, c))
+#define au_buf_put_utf8(b, c) (au_mem_site_ = AU_MEM_HERE_, au_buf_put_utf8(b, c))
+#define au_buf_printf(...) (au_mem_site_ = AU_MEM_HERE_, au_buf_printf(__VA_ARGS__))
+#define au_buf_cstr(b) (au_mem_site_ = AU_MEM_HERE_, au_buf_cstr(b))
+#endif
 
 /* ---- UTF-8 ----
  * au_utf8_decode reads one code point from s (n bytes available, n > 0),

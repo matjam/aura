@@ -147,7 +147,19 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
 {
     AuEdge *edges;
     float b[4];
-    size_t ne = au_path_flatten(p, dx, dy, &edges, b);
+    /* The whole pixels of the offset move the result and nothing else:
+     * the path is flattened with the fraction only and the area and the
+     * spans are shifted. Adding the offset to the coordinates would round
+     * them differently at each offset, and the same shape painted after a
+     * scroll would differ in a coverage level here and there (scrolling
+     * moves pixels and compares equal to a fresh paint only if drawing
+     * does not depend on where the page is scrolled to). */
+    int ix = (int)floorf(dx), iy = (int)floorf(dy);
+    clip.x0 -= ix;
+    clip.x1 -= ix;
+    clip.y0 -= iy;
+    clip.y1 -= iy;
+    size_t ne = au_path_flatten(p, dx - (float)ix, dy - (float)iy, &edges, b);
     if (ne == 0) {
         au_free(edges);
         return;
@@ -244,13 +256,13 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
                     if (run < 0)
                         run = x;
                 } else if (run >= 0) {
-                    fn(ctx, sy + r, area.x0 + run, x - run, cov + run);
+                    fn(ctx, sy + r + iy, area.x0 + run + ix, x - run, cov + run);
                     run = -1;
                 }
             }
             row[s.w] = row[s.w + 1] = 0;
             if (run >= 0)
-                fn(ctx, sy + r, area.x0 + run, s.w - run, cov + run);
+                fn(ctx, sy + r + iy, area.x0 + run + ix, s.w - run, cov + run);
         }
     }
     if (active != active_stack)

@@ -5,6 +5,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef AU_MEM_TRACK
+/* The definitions below are the functions themselves, not core.h's
+ * site-recording macros. */
+#undef au_alloc
+#undef au_calloc
+#undef au_realloc
+#undef au_try_alloc
+#undef au_try_realloc
+#undef au_strndup
+#undef au_buf_reserve
+#undef au_buf_append
+#undef au_buf_puts
+#undef au_buf_putc
+#undef au_buf_put_utf8
+#undef au_buf_printf
+#undef au_buf_cstr
+#endif
+
 /* ---- Allocation ---- */
 
 static void default_oom(size_t wanted)
@@ -50,7 +68,7 @@ static bool release(size_t n)
     return freed;
 }
 
-void *au_alloc(size_t n)
+static void *base_alloc(size_t n)
 {
     void *p = raw_alloc(n ? n : 1);
     while (!p && release(n))
@@ -62,14 +80,7 @@ void *au_alloc(size_t n)
     return p;
 }
 
-void *au_calloc(size_t n)
-{
-    void *p = au_alloc(n);
-    memset(p, 0, n);
-    return p;
-}
-
-void *au_realloc(void *p, size_t n)
+static void *base_realloc(void *p, size_t n)
 {
     void *q;
     /* A failed realloc leaves p valid, so trying again with p is right. */
@@ -83,7 +94,7 @@ void *au_realloc(void *p, size_t n)
     return q;
 }
 
-void au_free(void *p)
+static void base_free(void *p)
 {
     if (au_heap_enabled())
         au_heap_free(p);
@@ -93,14 +104,174 @@ void au_free(void *p)
 
 /* ---- Non-fatal allocation ---- */
 
-void *au_try_alloc(size_t n)
+static void *base_try_alloc(size_t n)
 {
     return raw_alloc(n ? n : 1);
 }
 
-void *au_try_realloc(void *p, size_t n)
+static void *base_try_realloc(void *p, size_t n)
 {
     return raw_realloc(p, n ? n : 1);
+}
+
+
+#ifndef AU_MEM_TRACK
+
+void *au_alloc(size_t n) { return base_alloc(n); }
+void *au_realloc(void *p, size_t n) { return base_realloc(p, n); }
+void au_free(void *p) { base_free(p); }
+void *au_try_alloc(size_t n) { return base_try_alloc(n); }
+void *au_try_realloc(void *p, size_t n) { return base_try_realloc(p, n); }
+
+#else
+
+/* ---- Allocation counter (AU_MEM_TRACK) ----
+ * Every block carries a header with its size and the call site that
+ * allocated it; core.h's macros record the site (the source file) before
+ * each call. A block keeps the site that first allocated it. */
+const char *au_mem_site_;
+
+typedef struct MemHdr {
+    size_t size;
+    uint32_t site;
+    uint32_t pad;
+} MemHdr;
+
+#define MEM_SITES 4096
+static struct MemSite {
+    const char *file;
+    size_t live, peak, blocks, at_peak;
+} mem_sites[MEM_SITES];
+static int mem_nsites;
+static size_t mem_live, mem_peak;
+
+static uint32_t mem_site(void)
+{
+    const char *f = au_mem_site_ ? au_mem_site_ : "src/core/core.c";
+    au_mem_site_ = NULL;
+    static const char *last_f;
+    static uint32_t last_i;
+    if (f == last_f)
+        return last_i;
+    for (int i = 0; i < mem_nsites; i++)
+        if (mem_sites[i].file == f || !strcmp(mem_sites[i].file, f)) {
+            last_f = f;
+            last_i = (uint32_t)i;
+            return last_i;
+        }
+    if (mem_nsites == MEM_SITES)
+        return MEM_SITES - 1;
+    mem_sites[mem_nsites].file = f;
+    return (uint32_t)mem_nsites++;
+}
+
+static void mem_add(MemHdr *h)
+{
+    struct MemSite *s = &mem_sites[h->site];
+    s->live += h->size;
+    s->blocks++;
+    if (s->live > s->peak)
+        s->peak = s->live;
+    mem_live += h->size;
+    if (mem_live > mem_peak) {
+        mem_peak = mem_live;
+        if ((mem_peak & ~(size_t)0xFFFF) != ((mem_peak - h->size) & ~(size_t)0xFFFF))
+            for (int i = 0; i < mem_nsites; i++)
+                mem_sites[i].at_peak = mem_sites[i].live;
+    }
+}
+
+static void mem_sub(MemHdr *h)
+{
+    mem_sites[h->site].live -= h->size;
+    mem_sites[h->site].blocks--;
+    mem_live -= h->size;
+}
+
+static void *mem_new(void *raw, size_t n)
+{
+    MemHdr *h = raw;
+    if (!h) {
+        au_mem_site_ = NULL;
+        return NULL;
+    }
+    h->size = n;
+    h->site = mem_site();
+    mem_add(h);
+    return h + 1;
+}
+
+static void *mem_moved(void *raw, size_t n, uint32_t site)
+{
+    MemHdr *h = raw;
+    au_mem_site_ = NULL;
+    h->size = n;
+    h->site = site;
+    mem_add(h);
+    return h + 1;
+}
+
+void *au_alloc(size_t n) { return mem_new(base_alloc(n + sizeof(MemHdr)), n); }
+void *au_try_alloc(size_t n) { return mem_new(base_try_alloc(n + sizeof(MemHdr)), n); }
+
+void *au_realloc(void *p, size_t n)
+{
+    if (!p)
+        return au_alloc(n);
+    MemHdr *h = (MemHdr *)p - 1;
+    uint32_t site = h->site;
+    mem_sub(h);
+    return mem_moved(base_realloc(h, n + sizeof(MemHdr)), n, site);
+}
+
+void *au_try_realloc(void *p, size_t n)
+{
+    if (!p)
+        return au_try_alloc(n);
+    MemHdr *h = (MemHdr *)p - 1;
+    MemHdr old = *h;
+    void *q = base_try_realloc(h, n + sizeof(MemHdr));
+    if (!q) {
+        au_mem_site_ = NULL;
+        return NULL;
+    }
+    mem_sub(&old);
+    return mem_moved(q, n, old.site);
+}
+
+void au_free(void *p)
+{
+    if (!p)
+        return;
+    MemHdr *h = (MemHdr *)p - 1;
+    mem_sub(h);
+    base_free(h);
+}
+
+size_t au_mem_live(void) { return mem_live; }
+size_t au_mem_peak(void) { return mem_peak; }
+
+int au_mem_sites(AuMemSite *out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < mem_nsites && n < max; i++) {
+        out[n].file = mem_sites[i].file;
+        out[n].live = mem_sites[i].live;
+        out[n].peak = mem_sites[i].peak;
+        out[n].at_peak = mem_sites[i].at_peak;
+        out[n].blocks = mem_sites[i].blocks;
+        n++;
+    }
+    return n;
+}
+
+#endif
+
+void *au_calloc(size_t n)
+{
+    void *p = au_alloc(n);
+    memset(p, 0, n);
+    return p;
 }
 
 char *au_strndup(const char *s, size_t n)

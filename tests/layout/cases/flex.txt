@@ -316,8 +316,8 @@ Flexbox: every property. Container 600px wide unless noted; Ahem text
 ---
 // baselines: a 25.6, b 12.8, d 22.8 from their tops; the line aligns them at 25.6
 #a y=0
-#b y=12.8
-#d y=2.8
+#b y=13
+#d y=3
 #c h=32
 
 === the flex container's baseline comes from its first item
