@@ -83,6 +83,10 @@ void au_netlog_clear(AuNetLog *l);
  * ring is ignored by them. */
 uint32_t au_netlog_begin(AuNetLog *l, const char *url, const char *method, AuFetchKind kind, uint32_t start_ms);
 void au_netlog_source(AuNetLog *l, uint32_t seq, int source);
+/* The address that answered, when it differs from the one asked for (a
+ * redirect, the HTTPS-first upgrade). au_netlog_end does this from
+ * info->url. */
+void au_netlog_set_url(AuNetLog *l, uint32_t seq, const char *url);
 /* The response head arrived at now_ms. */
 void au_netlog_response(AuNetLog *l, uint32_t seq, int status, const char *type, bool from_cache, uint32_t now_ms);
 /* len decoded bytes reached the page. */

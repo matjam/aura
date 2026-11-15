@@ -97,6 +97,16 @@ uint32_t au_netlog_begin(AuNetLog *l, const char *url, const char *method, AuFet
     return seq;
 }
 
+void au_netlog_set_url(AuNetLog *l, uint32_t seq, const char *url)
+{
+    AuNetRecord *r = find(l, seq);
+    if (!r || !url || !*url || !strcmp(r->url, url))
+        return;
+    size_t n = strlen(url);
+    au_free(r->url);
+    r->url = au_strndup(url, n < 2048 ? n : 2048);
+}
+
 void au_netlog_source(AuNetLog *l, uint32_t seq, int source)
 {
     AuNetRecord *r = find(l, seq);
@@ -158,6 +168,10 @@ void au_netlog_end(AuNetLog *l, uint32_t seq, AuNetRecState state, const AuFetch
     r->state = (uint8_t)state;
     r->total_ms = (int32_t)(now_ms - r->start_ms);
     if (info) {
+        /* After redirects and the HTTPS-first upgrade the record names
+         * the address that answered. */
+        if (info->error != AU_FETCH_ERR_HTTPS_FALLBACK)
+            au_netlog_set_url(l, seq, info->url);
         r->error = (uint8_t)info->error;
         if (info->status)
             r->status = info->status;

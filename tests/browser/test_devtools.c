@@ -313,6 +313,15 @@ static void test_netlog_page(void)
     CHECK(strstr(au_buf_cstr(&b), "Headers: not recorded") != NULL, "detail says so");
     au_buf_free(&b);
 
+    /* A redirect: the record names the address that answered. */
+    fake_respond(s, "HTTP/1.1 301 Moved\r\nLocation: http://log.test/moved-here\r\nContent-Length: 0\r\n\r\n");
+    respond(s, "text/html", "", "<!DOCTYPE html><title>Moved</title><p>moved");
+    au_bw_navigate(e.w, "http://log.test/old");
+    settle(&e, 500);
+    doc = au_netlog_at(au_page_netlog(page(&e)), 0);
+    CHECK(doc && !strcmp(doc->url, "http://log.test/moved-here") && doc->redirects == 1 && doc->status == 200,
+          "redirect: %s after %d", doc ? doc->url : "", doc ? doc->redirects : -1);
+
     /* A file and a failed host. */
     FakeServer *dead = fake_server(&e.f, "dead.test", 80);
     dead->dns_fail = true;

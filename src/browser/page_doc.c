@@ -472,6 +472,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
     if (f->done || f->cancelled)
         return;
     au_netlog_response(&f->page->netlog, f->log, r->status, r->content_type, r->from_cache, log_ms(f->page));
+    au_netlog_set_url(&f->page->netlog, f->log, r->url);
     if (f->main) {
         main_response(f->page, r);
         return;
