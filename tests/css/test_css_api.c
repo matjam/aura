@@ -270,6 +270,84 @@ static void test_sharing(void)
     au_css_resolver_free(r);
 }
 
+/* Siblings with the same element rules but different ::before rules must
+ * not share one style: the pseudo-element styles hang off it. */
+static void test_sharing_pseudo(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *p1 = add(doc, &body->node, "p", NULL, "x");
+    AuElement *p2 = add(doc, &body->node, "p", NULL, "x");
+    AuElement *p3 = add(doc, &body->node, "p", NULL, "x");
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet(".x::before { content: 'a'; color: red; }"
+                                       " .x:last-child::before { color: blue; }"));
+    au_css_style_document(r, doc);
+    const AuStyle *s1 = au_element_style(p1), *s2 = au_element_style(p2), *s3 = au_element_style(p3);
+    CHECK(s1 == s2);
+    CHECK(s1 != s3);
+    const AuStyle *b1 = au_style_pseudo(s1, AU_CSS_PSEUDO_BEFORE), *b3 = au_style_pseudo(s3, AU_CSS_PSEUDO_BEFORE);
+    CHECK(b1 && b3);
+    if (b1 && b3) {
+        CHECK(b1->inh->color == AU_COLOR_RGBA(255, 0, 0, 255));
+        CHECK(b3->inh->color == AU_COLOR_RGBA(0, 0, 255, 255));
+    }
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
+/* ---- :scope ---- */
+
+static AuElement *query(const char *sel, AuNode *root)
+{
+    AuCssSelectorList *l = au_css_selector_parse(sel, strlen(sel));
+    CHECK(l != NULL);
+    if (!l)
+        return NULL;
+    AuElement *e = au_css_query_selector(l, root);
+    au_css_selector_free(l);
+    return e;
+}
+
+static void test_scope(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *a = add(doc, &body->node, "div", "a", NULL);
+    AuElement *deep = add(doc, &a->node, "p", "deep", NULL);
+    AuElement *inner = add(doc, &deep->node, "span", "inner", NULL);
+    AuElement *direct = add(doc, &a->node, "span", "direct", NULL);
+    AuElement *b = add(doc, &body->node, "div", "b", NULL);
+    AuElement *other = add(doc, &b->node, "span", "other", NULL);
+    /* querySelector on an element: :scope is that element */
+    CHECK(query("span", &a->node) == inner);
+    CHECK(query(":scope > span", &a->node) == direct);
+    CHECK(query(":scope > span", &b->node) == other);
+    CHECK(query(":scope span", &deep->node) == inner);
+    CHECK(query(":scope", &a->node) == NULL); /* the scope is not its own descendant */
+    CHECK(query(":scope + div span", &a->node) == NULL); /* matches lie in the scope's subtree */
+    CHECK(query(":not(:scope) > span", &a->node) == inner);
+    CHECK(query(":is(:scope, #deep) > span", &a->node) == inner);
+    CHECK(query("div:has(> :scope) span", &deep->node) == inner);
+    /* on the document, :scope is the root element */
+    CHECK(query(":scope > body", &doc->node) == body);
+    CHECK(query(":scope > span", &doc->node) == NULL);
+    /* matches: :scope is the element; closest: the element it was called on */
+    AuCssSelectorList *l = au_css_selector_parse(":scope", 6);
+    CHECK(au_css_selector_matches(l, a) && au_css_selector_matches(l, inner));
+    CHECK(au_css_selector_matches_scoped(l, a, &a->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &inner->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &doc->node));
+    CHECK(au_css_selector_matches_scoped(l, au_document_element(doc), &doc->node));
+    au_css_selector_free(l);
+    l = au_css_selector_parse("div:has(> p > :scope)", 21);
+    CHECK(au_css_selector_matches_scoped(l, a, &inner->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &direct->node));
+    CHECK(!au_css_selector_matches_scoped(l, b, &inner->node));
+    au_css_selector_free(l);
+    free_doc(doc);
+}
+
 /* ---- Typed access ---- */
 
 static void test_typed(void)
@@ -570,6 +648,8 @@ int main(void)
     test_imports();
     test_deep();
     test_sharing();
+    test_sharing_pseudo();
+    test_scope();
     test_typed();
     test_inline_api();
     test_quirks_ua();

@@ -724,7 +724,13 @@ typedef struct AuCssSelectorList AuCssSelectorList;
 /* Returns NULL if the selector list is invalid. */
 AuCssSelectorList *au_css_selector_parse(const char *text, size_t len);
 void au_css_selector_free(AuCssSelectorList *l);
+/* Element.matches: :scope is el itself. */
 bool au_css_selector_matches(const AuCssSelectorList *l, AuElement *el);
+/* The same with :scope (and a bare & ) standing for scope: the element
+ * querySelectorAll or closest was called on. A scope that is not an
+ * element (a document or fragment, or NULL) makes :scope match the root
+ * element, as :root does. au_css_query_selector uses its root. */
+bool au_css_selector_matches_scoped(const AuCssSelectorList *l, AuElement *el, const AuNode *scope);
 /* The first matching element in root's subtree (preorder), or NULL. */
 AuElement *au_css_query_selector(const AuCssSelectorList *l, AuNode *root);
 

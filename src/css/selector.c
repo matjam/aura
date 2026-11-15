@@ -1124,20 +1124,26 @@ void au_css_selector_free(AuCssSelectorList *l)
     au_free(l);
 }
 
-bool au_css_selector_matches(const AuCssSelectorList *l, AuElement *el)
+bool au_css_selector_matches_scoped(const AuCssSelectorList *l, AuElement *el, const AuNode *scope)
 {
     CssMatchCtx mc = {0};
     mc.quirks = el->node.doc && el->node.doc->quirks == AU_QUIRKS_FULL;
+    mc.scope = scope && scope->type == AU_NODE_ELEMENT ? (const AuElement *)scope : NULL;
     for (uint32_t i = 0; i < l->l->n; i++)
         if (!l->l->sel[i].pseudo && css_selector_match(&l->l->sel[i], el, &mc))
             return true;
     return false;
 }
 
+bool au_css_selector_matches(const AuCssSelectorList *l, AuElement *el)
+{
+    return au_css_selector_matches_scoped(l, el, &el->node);
+}
+
 AuElement *au_css_query_selector(const AuCssSelectorList *l, AuNode *root)
 {
     for (AuNode *n = root->first_child ? root->first_child : NULL; n; n = au_node_next(n, root))
-        if (n->type == AU_NODE_ELEMENT && au_css_selector_matches(l, (AuElement *)n))
+        if (n->type == AU_NODE_ELEMENT && au_css_selector_matches_scoped(l, (AuElement *)n, root))
             return (AuElement *)n;
     return NULL;
 }
