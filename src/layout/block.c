@@ -684,10 +684,16 @@ void l_flow_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
             fsum += cmx;
             mx = l_max(mx, fsum);
         } else {
+            /* As Blink does: a box that avoids floats (a new formatting
+             * context) sits beside the floats before it; any other block
+             * flows under them (its line boxes do not count beside floats
+             * that come later or earlier). Either way the floats end
+             * there. */
             int clear = lb_anon(c) ? AU_CLEAR_NONE : c->style->box->clear;
             if (clear != AU_CLEAR_NONE)
                 fsum = 0;
-            mx = l_max(mx, fsum + cmx);
+            mx = l_max(mx, (c->flags & LF_BFC) ? fsum + cmx : l_max(fsum, cmx));
+            fsum = 0;
         }
     }
     *min_c = mn;
