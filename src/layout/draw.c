@@ -1063,6 +1063,13 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
             continue;
         AuRect clip = box_area_of(b, border_box, ly.clip);
         AuRect origin = box_area_of(b, border_box, ly.origin);
+        if (ly.attachment == AU_K_fixed) {
+            /* Positioned against the viewport and seen through the box's
+             * clip area (CSS Backgrounds 3, 3.5). A scroll then changes
+             * what the box shows: au_layout_scroll_damage repaints. */
+            origin = (AuRect){P->view_x, P->view_y, P->L->vw, P->L->vh};
+            P->L->fixed_backgrounds = true;
+        }
         draw_bg_image(P, s, &ly, origin, clip, rounded ? &radii : NULL);
     }
 }
@@ -2977,6 +2984,8 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     P.c = c;
     P.scroll_x = scroll_x;
     P.scroll_y = scroll_y;
+    P.view_x = view.x;
+    P.view_y = view.y;
     /* Canvas coordinates: document point (x, y) maps to (view.x + x -
      * scroll_x, view.y + y - scroll_y). */
     float dx = view.x - scroll_x, dy = view.y - scroll_y;
@@ -3177,7 +3186,7 @@ int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny,
                 return -1;
         }
     }
-    if (L->nview_boxes > L_VIEW_BOXES)
+    if (L->nview_boxes > L_VIEW_BOXES || L->fixed_backgrounds)
         return -1;
     int n = 0;
     float dx = ox - nx, dy = oy - ny; /* how painted pixels moved */

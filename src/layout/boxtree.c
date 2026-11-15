@@ -1663,6 +1663,7 @@ void l_build_tree(AuLayout *L)
 {
     l_free_tree(L);
     L->images_shape = false;
+    L->fixed_backgrounds = false;
     AuElement *rootel = L->doc ? au_document_element(L->doc) : NULL;
     if (!rootel || !rootel->style)
         return;

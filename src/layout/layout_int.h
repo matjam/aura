@@ -361,6 +361,9 @@ struct AuLayout {
      * or embed shows its fallback content otherwise): an image change
      * builds the tree again. */
     bool images_shape;
+    /* A box painted a background layer with background-attachment: fixed
+     * since the tree was built: a scroll cannot move its pixels. */
+    bool fixed_backgrounds;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */
