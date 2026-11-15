@@ -197,9 +197,9 @@ size_t au_history_groups(const AuHistory *h, AuHistoryGroup *out, size_t max)
 {
     size_t ng = 0;
     for (size_t i = 0; i < h->n;) {
-        int64_t day = au_day_of(h->e[i].last_visit);
+        int64_t day = au_day_of(h->e[i].last_visit + h->utc_offset);
         size_t j = i + 1;
-        while (j < h->n && au_day_of(h->e[j].last_visit) == day)
+        while (j < h->n && au_day_of(h->e[j].last_visit + h->utc_offset) == day)
             j++;
         if (ng < max) {
             out[ng].day = day;
@@ -233,22 +233,6 @@ const AuHistoryEntry *au_history_complete(const AuHistory *h, const char *typed)
             best = e;
     }
     return best;
-}
-
-/* Without printf's %lld, which newlib builds may leave out. */
-void au_put_i64(AuBuf *b, int64_t v)
-{
-    char tmp[24];
-    int n = 0;
-    uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
-    do {
-        tmp[n++] = (char)('0' + u % 10);
-        u /= 10;
-    } while (u);
-    if (v < 0)
-        au_buf_putc(b, '-');
-    while (n)
-        au_buf_putc(b, tmp[--n]);
 }
 
 void au_history_serialize(const AuHistory *h, AuBuf *out)

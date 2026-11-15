@@ -21,8 +21,10 @@ void au_net_apply_prefs(AuNet *net, const AuPrefs *p)
     au_net_set_config_str(&c->https_proxy_host, p->https_proxy_host ? p->https_proxy_host : "");
     c->https_proxy_port = p->https_proxy_port;
     AuCookieJar *jar = au_net_cookie_jar(net);
-    if (jar)
+    if (jar) {
         au_cookie_jar_set_policy(jar, c->cookie_policy, c->block_third_party_cookies);
+        au_cookie_rules_parse(jar, p->cookie_sites);
+    }
 }
 
 size_t au_net_cache_bytes_from_prefs(const AuPrefs *p)

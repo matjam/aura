@@ -22,6 +22,7 @@ typedef struct FakeResponse {
     const char *data;
     size_t len;          /* 0: strlen(data) */
     size_t chunk;        /* bytes per recv; 0 for all */
+    bool paced;          /* plain connections: one chunk per clock tick (FakeNet.now), as a slow link */
     bool close_after;    /* orderly close after the response */
     bool reset_after;    /* error on the next recv after the response */
     bool silent;         /* never answer */

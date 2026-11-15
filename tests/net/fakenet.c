@@ -12,6 +12,8 @@ typedef struct FakeSock {
     AuBuf resp;     /* plaintext to the client */
     size_t resp_off;
     size_t chunk;
+    bool paced;           /* at most one chunk per clock tick */
+    uint32_t last_tick;
     bool close_when_drained, reset_when_drained, closed, reset;
     /* TLS server side */
     br_ssl_server_context *sc;
@@ -176,6 +178,7 @@ static void serve(FakeSock *k)
             return;
         au_buf_append(&k->resp, r->data, r->len ? r->len : strlen(r->data));
         k->chunk = r->chunk;
+        k->paced = r->paced;
         k->close_when_drained = r->close_after;
         k->reset_when_drained = r->reset_after;
     }
@@ -285,6 +288,11 @@ static long f_recv(void *ctx, uint32_t sock, void *buf, size_t cap)
         return AU_NETIO_WOULD_BLOCK;
     }
     size_t n = k->resp.len - k->resp_off;
+    if (n && k->paced) {
+        if (k->last_tick == f->now + 1)
+            return AU_NETIO_WOULD_BLOCK;
+        k->last_tick = f->now + 1;
+    }
     if (n) {
         if (k->chunk && n > k->chunk)
             n = k->chunk;

@@ -8,8 +8,15 @@
 
 #define AU_VERSION "0.3"
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
+/* What Aura says it is: the Mozilla/5.0 form sites expect, the machine
+ * it runs on, and its own name and version, nothing borrowed from other
+ * browsers. */
+#define AU_DEFAULT_USER_AGENT "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/" AU_VERSION
 
-typedef enum { AU_CREDIT_FONT, AU_CREDIT_LIBRARY } AuCreditKind;
+/* Data is material compiled into Aura or shipped beside it that is not
+ * code: the root certificates, the Public Suffix List, the Brotli
+ * dictionary. */
+typedef enum { AU_CREDIT_FONT, AU_CREDIT_LIBRARY, AU_CREDIT_DATA } AuCreditKind;
 
 typedef struct AuCredit {
     AuCreditKind kind;
@@ -17,7 +24,8 @@ typedef struct AuCredit {
     const char *what;      /* what Aura uses it for */
     const char *copyright; /* the copyright line(s), "\n" between */
     const char *licence;   /* the licence's name */
-    const char *file;      /* where the full licence text is, beside Aura */
+    const char *file;      /* where the full licence text is, beside Aura; NULL when text holds it */
+    const char *text;      /* the licence text or notice, shown in about:licences; NULL for none */
 } AuCredit;
 
 extern const AuCredit au_credits[];

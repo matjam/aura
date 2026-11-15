@@ -61,7 +61,8 @@ typedef enum {
     AU_IMAGE_FORMAT_GIF,
     AU_IMAGE_FORMAT_WEBP,
     AU_IMAGE_FORMAT_BMP,
-    AU_IMAGE_FORMAT_ICO
+    AU_IMAGE_FORMAT_ICO,
+    AU_IMAGE_FORMAT_SVG /* see svgimg.c: drawn at the target size, not reduced */
 } AuImageFormat;
 
 typedef enum { AU_IMAGE_MORE, AU_IMAGE_FRAME, AU_IMAGE_DONE, AU_IMAGE_ERROR } AuImageStatus;
@@ -77,6 +78,7 @@ typedef struct AuImageOptions {
     uint32_t max_source_pixels; /* intrinsic width x height cap; 0: the default */
     bool first_frame_only;      /* an animation stops (DONE) after frame 1 */
     bool header_only;           /* stop (DONE) as soon as info.ready */
+    struct AuFontSet *fonts;    /* SVG: the fonts for text (NULL: no text) */
 } AuImageOptions;
 
 typedef struct AuImageInfo {

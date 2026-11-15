@@ -146,7 +146,10 @@ static uint32_t res_request(void *ctx, AuDocView *dv, const char *url, AuResourc
     AuLoadRequest rq;
     memset(&rq, 0, sizeof rq);
     rq.url = url;
-    rq.dest = kind == AU_RES_STYLESHEET ? AU_DEST_STYLE : kind == AU_RES_IMAGE ? AU_DEST_IMAGE : AU_DEST_EMPTY;
+    rq.dest = kind == AU_RES_STYLESHEET ? AU_DEST_STYLE
+              : kind == AU_RES_IMAGE    ? AU_DEST_IMAGE
+              : kind == AU_RES_FONT     ? AU_DEST_FONT
+                                        : AU_DEST_EMPTY;
     rq.document_url = nr->doc_url;
     rq.top_level_url = nr->doc_url;
     AuLoadCallbacks cb = {r, res_response, res_data, res_done, NULL};

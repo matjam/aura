@@ -98,10 +98,8 @@ static void test_parser_sniff(void)
 {
     /* "é" in windows-1252 is 0xE9; with a meta naming windows-1252 the
      * parser decodes it as U+00E9 (C3 A9 in the UTF-8 output). */
-    /* The decoder cannot hold bytes back (HtmlDecoder has no buffer for
-     * it), so it prescans only when the first chunk fed has 1024 bytes or
-     * is the last; au_html_parse feeds the whole document as one chunk
-     * that is not marked last, so the document must be 1024 bytes. */
+    /* The decoder holds back the first 1024 bytes (or the whole input when
+     * shorter) for the prescan. */
     char doc[1200];
     int dl = snprintf(doc, sizeof doc, "<meta charset=windows-1252><p>\xe9</p><!--%1100s-->", "");
     char *s = body_text(doc, (size_t)dl, AU_HTML_ENC_SNIFF);
@@ -109,8 +107,29 @@ static void test_parser_sniff(void)
     au_free(s);
     const char shortdoc[] = "<meta charset=windows-1252><p>\xe9</p>";
     s = body_text(shortdoc, sizeof shortdoc - 1, AU_HTML_ENC_SNIFF);
-    CHECK(strstr(s, "<p>\xef\xbf\xbd</p>") != NULL, "short document: the UTF-8 default (known limit): %s", s);
+    CHECK(strstr(s, "<p>\xc3\xa9</p>") != NULL, "short document: meta honoured: %s", s);
     au_free(s);
+    /* Fed in small chunks, short and long: the same result. */
+    const char *docs[2] = {shortdoc, doc};
+    size_t lens[2] = {sizeof shortdoc - 1, (size_t)dl};
+    for (int k = 0; k < 2; k++) {
+        for (size_t step = 1; step <= 7; step += 3) {
+            AuHtmlOptions o;
+            memset(&o, 0, sizeof o);
+            o.encoding = AU_HTML_ENC_SNIFF;
+            AuHtmlParser *p = au_html_parser_new(&o);
+            for (size_t i = 0; i < lens[k]; i += step)
+                au_html_parser_feed(p, docs[k] + i, lens[k] - i < step ? lens[k] - i : step);
+            au_html_parser_finish(p);
+            AuBuf b;
+            au_buf_init(&b);
+            au_html_serialize(&au_html_parser_document(p)->node, &b, false);
+            CHECK(strstr(au_buf_cstr(&b), "<p>\xc3\xa9</p>") != NULL, "chunks of %zu, doc %d: %.80s", step, k,
+                  au_buf_cstr(&b));
+            au_buf_free(&b);
+            au_html_parser_free(p);
+        }
+    }
     /* An explicit encoding wins over the meta. */
     const char doc2[] = "<meta charset=windows-1252><p>\xc3\xa9</p>";
     s = body_text(doc2, sizeof doc2 - 1, AU_HTML_ENC_UTF8);

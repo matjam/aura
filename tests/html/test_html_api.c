@@ -160,9 +160,12 @@ static void test_scripts(void)
     au_free(s);
     au_node_unref(&d->node);
 
-    /* Pause at the script, keep feeding, then run it and resume. */
+    /* Pause at the script, keep feeding, then run it and resume. The
+     * encoding is given: with SNIFF the decoder holds the first 1024 bytes
+     * for the <meta charset> prescan, so a short chunk is not parsed yet. */
     c.calls = 0;
     c.pause = true;
+    o.encoding = AU_HTML_ENC_UTF8;
     AuHtmlParser *p = au_html_parser_new(&o);
     au_html_parser_feed(p, "a<script src=x></script>b", 25);
     CHECK(au_html_parser_paused(p), "paused at script");

@@ -20,6 +20,8 @@
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
+#include "net/loader.h"
+#include "net/net_prefs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +49,9 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        (--tab takes a URL, a path, or file:relative/path)\n"
+            "                        [--net]\n"
+            "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
+            "                        https over the network, else they show a stand-in)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n"
             "       aura-host image FILE [-o out.png] [--scale N] [--target WxH] [--chunk N] [--frames]\n"
@@ -272,7 +276,7 @@ typedef struct ChromeOpts {
     const char *tabs[64];
     int ntabs, extra_tabs, active;
     const char *field;
-    bool focus, loading, menus;
+    bool focus, loading, menus, net;
     const char *hover;
     int scroll, mouse_x, mouse_y;
 } ChromeOpts;
@@ -293,8 +297,28 @@ static AuHitPart hit_by_name(const char *s)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL};
     AuBrowser *b = au_browser_new(fonts, &host);
+    /* --net: http and https through the network stack and page fetcher,
+     * as the Mac application does; without it they show the stand-in. */
+    AuHostSession ses;
+    AuNetLoader *loader = NULL;
+    AuNetPageFetcher *pf = NULL;
+    memset(&ses, 0, sizeof ses);
+    if (o->net) {
+        if (!au_host_session_open(&ses, true, false)) {
+            fprintf(stderr, "aura-host: cannot set up sockets\n");
+            au_browser_free(b);
+            return 3;
+        }
+        au_net_apply_prefs(ses.net, &b->prefs);
+        loader = au_net_loader_new(ses.net);
+        pf = au_net_page_fetcher_new(loader);
+        AuPageFetcher f;
+        au_net_page_fetcher_interface(pf, &f);
+        au_browser_set_fetcher(b, "http", &f);
+        au_browser_set_fetcher(b, "https", &f);
+    }
     b->prefs.tab_position = o->pos;
     if (o->column)
         b->prefs.tab_column_width = o->column;
@@ -325,13 +349,20 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     for (int i = 0; i < o->extra_tabs; i++)
         au_bw_new_tab(w, fill[i % 6], false, w->ntabs);
     if (!o->loading) {
-        /* Let simulated loads finish. */
-        double t0 = now_ms();
-        while (au_browser_busy(b) && now_ms() - t0 < 5000) {
-            struct timespec ts = {0, 20 * 1000000};
-            nanosleep(&ts, NULL);
+        /* Let loads finish (simulated ones in 5 seconds, network ones in
+         * 60). */
+        double t0 = now_ms(), limit = o->net ? 60000 : 5000;
+        while (au_browser_busy(b) && now_ms() - t0 < limit) {
+            if (o->net) {
+                au_host_net_wait(ses.host, 10);
+            } else {
+                struct timespec ts = {0, 20 * 1000000};
+                nanosleep(&ts, NULL);
+            }
             au_bw_idle(w);
         }
+        if (o->net)
+            printf("loaded in %.0f ms%s\n", now_ms() - t0, au_browser_busy(b) ? " (still busy at the limit)" : "");
     } else {
         double t0 = now_ms();
         while (now_ms() - t0 < 500) {
@@ -376,6 +407,11 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     au_canvas_free(c);
     au_surface_free(s);
     au_browser_free(b);
+    if (o->net) {
+        au_net_page_fetcher_free(pf);
+        au_net_loader_free(loader);
+        au_host_session_close(&ses);
+    }
     return rc;
 }
 
@@ -431,6 +467,8 @@ int main(int argc, char **argv)
                 o.focus = true;
             else if (!strcmp(a, "--loading"))
                 o.loading = true;
+            else if (!strcmp(a, "--net"))
+                o.net = true;
             else if (!strcmp(a, "--hover") && i + 1 < argc)
                 o.hover = argv[++i];
             else if (!strcmp(a, "--scroll") && i + 1 < argc)

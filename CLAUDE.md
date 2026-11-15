@@ -38,7 +38,8 @@ what you need to build, test and change Aura.
 | `src/layout` | box tree, layout, painting, hit testing |
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
-| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO), the per-document image cache |
+| `src/image` | image decoders (PNG and APNG, JPEG, GIF, WebP, BMP, ICO, SVG through `src/svg`), the per-document image cache |
+| `src/svg` | XML parser, SVG path and transform grammars, the static SVG renderer, SVG documents |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
 | `src/js` | JavaScript: the QuickJS-ng runtime wrapper, the event loop, the DOM and window bindings (C natives plus the `prelude*.js` files) |
 | `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
@@ -201,9 +202,11 @@ at the end. Generated about: pages (home, blank, fonts) load inside
 `au_page_navigate`; about:scene paints the test scene directly. A URL
 that differs from the current one only by its fragment scrolls instead
 of loading, and back and forward restore the scroll position each entry
-was left at. To plug in networking, register a fetcher per scheme with
-`au_browser_set_fetcher` (see `AuPageFetcher` in `page.h`); without one,
-http and https show a placeholder after a simulated load. Images are
+was left at. Networking comes through a fetcher per scheme
+(`au_browser_set_fetcher`, `AuPageFetcher` in `page.h`); the Mac OS 9
+shell registers `src/net/page_fetcher.c` for http and https, and
+`aura-host chrome --net` does the same on the host. Without one, http and
+https show a placeholder after a simulated load. Images are
 decoded by `src/image` (see Images); `au_page_idle` advances animations.
 The font preferences reach the engine as the generic families of
 the font set and, for the default and monospace sizes, the minimum size
@@ -246,10 +249,11 @@ is still on screen.
 
 To change the About box or about:licences, edit the credits table in
 `src/browser/credits.c` (the version, the tagline, and one entry per
-bundled font or third-party library with its licence); `aboutbox.c`
-and `build_licences` in `page_doc.c` both read it. The table has a
-commented slot for the BearSSL and QuickJS-ng entries: add them there
-when those libraries join the build. The About box (DLOG 202) draws
+bundled font, third-party library and data set with its licence);
+`aboutbox.c` and `build_licences` in `page_doc.c` both read it. Data
+under the MPL (the root store, the Public Suffix List) carries the MPL
+notice and where its source form is. The table has a commented slot for
+QuickJS-ng: add it there when the library joins the build. The About box (DLOG 202) draws
 icon family 128 at 64 pixels with `PlotIconID`; its empty `dctb` gives
 it a colour port, without which the icon draws in black and white.
 
@@ -330,9 +334,32 @@ in; a file that fails to parse is renamed with ` (damaged)` before a new
 one is written. To start with clean state in the guest, delete that
 folder.
 
-Downloads use a simulated transfer source (`au_sim_source` in
-`downloads.c`) until networking exists; View > Debug > Start Simulated
-Downloads adds a few.
+Downloads go through `src/net/transfer.c` (`au_net_transfer_source_*`)
+over the platform's `AuDownloadFiles`; on Mac OS 9 that is
+`downloads_mac.c`: a partial file ("<id> <name>.part") in the download
+folder (the preference, else Internet Config's, else the desktop),
+renamed and given Internet Config's type and creator when complete,
+resumed with Range. A page's response that turns out to be a download
+(attachment or a type Aura cannot show) continues on its own transfer.
+`au_sim_source` remains for tests.
+
+The network stack in the Mac OS 9 application is `network.c`: the
+entropy pool starts at launch, Open Transport on the first DNS lookup
+(a machine without it gets the No network page with the reason, and a
+failed start is retried after 10 seconds). Cookies and HSTS are saved
+as `Cookies` and `HSTS` in the Aura preferences folder 5 seconds after a
+change and at quit (session cookies are dropped); the disk cache is the
+`Cache` folder (`src/net/disk_cache.c`, limited by the disk cache
+preference). The Cookies window (Window > Cookies, or Preferences >
+Privacy) lists `src/net/cookie_view.c`'s model; per-site rules (allow,
+session only, block) live in the `cookies.sites` preference. View >
+Debug > Network Status shows entropy, Open Transport counters, roots,
+cookies and cache use. The out-of-memory handler closes Open Transport
+before ExitToShell: with providers open at exit the guest froze.
+
+Engine code must not use `%lld` or `%llu`: newlib on Mac OS 9 lacks
+them and writes garbage (the Cookies file was unreadable for that
+reason). Use `au_put_i64` (`history.h`).
 
 Toolbox points learned the hard way:
 
@@ -541,6 +568,49 @@ test and a fuzz run under the sanitizers.
 - Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
   `FInfo` collide with Toolbox types. Prefix types with `Au`.
 
+## SVG
+
+`src/svg/svg.h` describes what the renderer supports and what it does
+not. One renderer serves inline SVG and SVG documents; it reads the
+elements' computed styles, so page CSS applies to inline SVG, and
+presentation attributes reach the cascade as presentational hints
+(`svg_hints` in `src/css/ua.c`).
+
+- **Inline SVG.** Layout makes an outer `svg` element a replaced box
+  (`LR_SVG`): its size comes from the width and height attributes, its
+  ratio from them or the viewBox, else 300 x 150. `paint_svg` in
+  `src/layout/draw.c` draws it into the content box with
+  `au_svg_paint`, at the size it is shown. References (`use`, gradients,
+  clip paths, masks) resolve through a document id index the layout keeps
+  until the tree changes.
+- **SVG as an image.** `src/image/svgimg.c` is the codec: markup is
+  sniffed as SVG, the bytes are held to the end, and the document is
+  drawn at the target size rather than reduced. The cache keeps SVG bytes
+  and draws the image again when it is shown larger or in another shape;
+  layout asks for each paint size through `AuLayoutEnv.image_use`. An SVG
+  image loads nothing: only `data:` URLs in `<image>` draw, nested SVG to
+  depth 2.
+- **Masks.** `mask-image` and `-webkit-mask-image` layers draw into a
+  canvas mask group (`paint_mask` in `draw.c`), alpha by default,
+  luminance with `mask-mode: luminance`.
+- **Limits.** The XML parser caps depth (256), nodes (100000) and
+  attributes (256), skips the doctype and never expands entities beyond
+  the predefined five and character references. The renderer caps
+  nesting (48), `use` depth (12) and cycles, elements per paint, href
+  chains and text length. Clip pieces and text layout go on the heap
+  because the renderer recurses.
+- **To try a file**, run `build/host/src/platform/host/aura-host image
+  FILE.svg --target WxH -o out.png`. `tests/page/samples/svg.html` shows
+  each feature.
+- **Tests.** `tests/svg` holds `test_svg` (grammars, XML, pixels,
+  the image pipeline; `--bench` times 200 icons) and `fuzz_svg`. To fuzz
+  longer, run the sanitizer build's `fuzz_svg ITERATIONS SEED [SECONDS]
+  tests/svg/corpus/*`. Layout cases are in `tests/layout/cases/svg.txt`.
+- **Not done:** filters, patterns, markers, textPath, foreignObject,
+  multi-line text, animation, CSS basic shapes in `clip-path`,
+  `mask: url(#id)` on HTML elements, and one raster per SVG image URL
+  (an image shown at two shapes on one page shares the larger raster).
+
 ## Networking
 
 The network stack is portable engine code that never touches a socket
@@ -619,8 +689,8 @@ Map control panel says UTC-7, so the wall time Aura computes there is
 7 hours ahead. Certificates are still within their dates.
 
 Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
-cookies, HSTS and the cache are kept in memory until the shell saves
-them.
+sites that offer only TLS 1.3 or ciphers outside BearSSL's set (for
+example www.fsf.org) fail with "Secure connection failed".
 
 ## JavaScript
 

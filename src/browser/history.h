@@ -1,9 +1,11 @@
 /* Global browsing history and the calendar helpers it groups by.
  * Portable C99.
  *
- * Times (AuTime) are seconds since 1970-01-01 00:00 in local time: the
- * platform converts its clock (Mac OS keeps local time already). Days for
- * grouping are local days.
+ * Times (AuTime) are seconds since 1970-01-01 00:00 UTC, the same clock
+ * cookies and certificates use (the Mac OS shell converts the system's
+ * local clock with the Map control panel's offset). Days for grouping and
+ * the times shown are local: AuHistory.utc_offset (seconds east of UTC,
+ * set by the shell) is added first.
  *
  * Entries are kept most recent first, one per URL. A visit moves the URL
  * to the front and counts it. The list is capped (oldest dropped first)
@@ -33,8 +35,6 @@ AuTime au_time_of_date(int year, int month, int mday);
  * name within the last week, else "Monday, 3 November 2026". */
 void au_day_label(int64_t day, int64_t today, char *out, size_t cap);
 
-/* Appends v in decimal (the files use it for times). */
-void au_put_i64(AuBuf *b, int64_t v);
 
 /* ---- History ---- */
 
@@ -49,6 +49,7 @@ typedef struct AuHistory {
     size_t n, cap;
     size_t max_entries;
     uint32_t generation; /* bumped on every change, for menus and saving */
+    int32_t utc_offset;  /* seconds east of UTC, for local days (0: UTC) */
 } AuHistory;
 
 #define AU_HISTORY_DEFAULT_MAX 1000

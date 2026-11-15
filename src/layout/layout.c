@@ -437,6 +437,28 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         *w = em * 0.8f;
         *h = f->m.x_height;
         return;
+    case LR_SVG: {
+        /* Absolute width and height attributes, and the ratio from them
+         * or the viewBox. Neither size nor ratio: 300 x 150 (CSS 2.1
+         * 10.3.2). A ratio alone fills the available width (replaced_size). */
+        AuSvgIntrinsic in;
+        au_svg_intrinsic(l_svg_names(L), au_as_element(b->b.node), em, &in);
+        *ratio = in.ratio;
+        *w = in.width;
+        *h = in.height;
+        if (in.ratio > 0) {
+            if (*w > 0 && *h <= 0)
+                *h = *w / in.ratio;
+            else if (*h > 0 && *w <= 0)
+                *w = *h * in.ratio;
+        } else {
+            if (*w <= 0)
+                *w = 300;
+            if (*h <= 0)
+                *h = 150;
+        }
+        return;
+    }
     default: {
         float aw = 300, ah = 150;
         AuAtom wa = au_atom_lookup("width", 5), ha = au_atom_lookup("height", 6);
@@ -1208,6 +1230,7 @@ void au_layout_free(AuLayout *L)
         return;
     l_free_tree(L);
     l_text_free_caches(L);
+    au_svg_names_free(L->svg_names);
     au_free(L->items);
     au_free(L->segs);
     au_free(L->abs);
@@ -1222,8 +1245,17 @@ void au_layout_set_document(AuLayout *L, AuDocument *doc)
     L->need_paint = true;
 }
 
+AuSvgNames *l_svg_names(AuLayout *L)
+{
+    if (!L->svg_names)
+        L->svg_names = au_svg_names_new();
+    return L->svg_names;
+}
+
 void au_layout_tree_changed(AuLayout *L)
 {
+    au_svg_id_index_free(L->svg_ids);
+    L->svg_ids = NULL;
     L->need_build = true;
     L->need_paint = true;
 }
@@ -1348,6 +1380,9 @@ static const AuStyle *current_style(const LBox *b)
 
 void au_layout_styles_changed(AuLayout *L)
 {
+    /* An id attribute may have changed. */
+    au_svg_id_index_free(L->svg_ids);
+    L->svg_ids = NULL;
     if (L->need_build || !L->root) {
         L->need_build = true;
         return;

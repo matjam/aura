@@ -3,6 +3,7 @@
  * blocking, partitioned cookies (CHIPS), limits, eviction, the persistent
  * file, document.cookie, and the store's use by the HTTP client. */
 #include "fakenet.h"
+#include "net/cookie_view.h"
 #include "net/cookies.h"
 #include "net/net.h"
 #include "url/url.h"
@@ -630,8 +631,121 @@ static void test_http_integration(void)
     fake_free(&f);
 }
 
+static void test_rules(void)
+{
+    AuCookieJar *jar = au_cookie_jar_new();
+    /* BLOCK removes stored cookies and refuses new ones, for subdomains too. */
+    CHECK(set_top(jar, "https://www.blocked.example/", "a=1; Max-Age=3600"), "a before rule");
+    au_cookie_jar_set_rule(jar, "WWW.Blocked.Example", AU_COOKIE_RULE_BLOCK);
+    CHECK(au_cookie_jar_rule(jar, "blocked.example") == AU_COOKIE_RULE_BLOCK, "rule keyed by registrable domain");
+    CHECK(au_cookie_jar_count(jar) == 0, "block removes the site's cookies");
+    CHECK(!set_top(jar, "https://shop.blocked.example/", "b=1"), "blocked site refused");
+    EXPECT_HEADER(jar, "https://shop.blocked.example/", "");
+
+    /* SESSION turns stored cookies into session cookies, and new ones too. */
+    CHECK(set_top(jar, "https://s.example/", "p=1; Max-Age=3600"), "persistent p");
+    au_cookie_jar_set_rule(jar, "s.example", AU_COOKIE_RULE_SESSION);
+    CHECK(set_top(jar, "https://s.example/", "q=2; Max-Age=3600"), "q stored");
+    EXPECT_HEADER(jar, "https://s.example/", "p=1; q=2");
+    AuBuf b;
+    au_buf_init(&b);
+    au_cookie_jar_serialize(jar, &b, NOW);
+    CHECK(!strstr(au_buf_cstr(&b), "s.example"), "session-only cookies not written: %s", au_buf_cstr(&b));
+    CHECK(set_top(jar, "https://s.example/", "q=; Max-Age=0"), "expiry still deletes");
+    EXPECT_HEADER(jar, "https://s.example/", "p=1");
+
+    /* ALLOW overrides cookies off and third-party blocking. */
+    au_cookie_jar_set_policy(jar, AU_COOKIE_POLICY_NONE, true);
+    CHECK(!set_top(jar, "https://other.example/", "x=1"), "cookies off");
+    au_cookie_jar_set_rule(jar, "other.example", AU_COOKIE_RULE_ALLOW);
+    CHECK(set_top(jar, "https://other.example/", "x=1"), "allowed site stores with cookies off");
+    EXPECT_HEADER(jar, "https://other.example/", "x=1");
+    au_cookie_jar_set_policy(jar, AU_COOKIE_POLICY_ALL, true);
+    Ctx c;
+    ctx_make(&c, "https://other.example/w", "https://news.example/", NULL, false, true);
+    CHECK(au_cookie_jar_set(jar, &c.rq, "t=1; SameSite=None; Secure", NULL), "allowed third party stored");
+    char *h = header_ctx(jar, &c);
+    CHECK(strstr(h, "t=1") != NULL, "allowed third party sent: %s", h);
+    au_free(h);
+    ctx_free(&c);
+
+    /* Text form round trip; NONE removes. */
+    au_cookie_rules_serialize(jar, &b);
+    CHECK(!strcmp(au_buf_cstr(&b), "blocked.example=block s.example=session other.example=allow"), "serialize: %s",
+          au_buf_cstr(&b));
+    AuCookieJar *j2 = au_cookie_jar_new();
+    au_cookie_rules_parse(j2, " other.example=allow junk =block x.example=maybe s.example=session ");
+    CHECK(au_cookie_rules_count(j2) == 2, "parse skips junk: %zu", au_cookie_rules_count(j2));
+    CHECK(au_cookie_jar_rule(j2, "a.s.example") == AU_COOKIE_RULE_SESSION, "parsed session");
+    au_cookie_jar_set_rule(j2, "other.example", AU_COOKIE_RULE_NONE);
+    CHECK(au_cookie_jar_rule(j2, "other.example") == AU_COOKIE_RULE_NONE, "NONE removes");
+    au_cookie_rules_parse(j2, NULL);
+    CHECK(au_cookie_rules_count(j2) == 0, "parse NULL clears");
+    au_cookie_jar_free(j2);
+    au_buf_free(&b);
+    au_cookie_jar_free(jar);
+}
+
+static void test_cookie_view(void)
+{
+    AuCookieJar *jar = au_cookie_jar_new();
+    set_top(jar, "https://www.b.example/", "one=1; Max-Age=3600; Secure; HttpOnly");
+    set_top(jar, "https://img.b.example/", "two=2");
+    set_top(jar, "https://a.example/", "three=3; Max-Age=60; SameSite=Strict");
+    au_cookie_jar_set_rule(jar, "c.example", AU_COOKIE_RULE_BLOCK);
+    AuCookieView v;
+    au_cookie_view_init(&v, jar);
+    au_cookie_view_refresh(&v, NOW);
+    CHECK(v.list.n == 3, "three sites: %d", v.list.n);
+    CHECK(v.list.n == 3 && !strcmp(v.list.rows[0].text, "a.example") && !strcmp(v.list.rows[1].text, "b.example") &&
+              !strcmp(v.list.rows[2].text, "c.example"),
+          "sorted sites");
+    CHECK(v.list.n == 3 && !strcmp(v.list.rows[1].detail, "2 cookies"), "count: %s", v.list.rows[1].detail);
+    CHECK(v.list.n == 3 && !strcmp(v.list.rows[2].detail, "0 cookies, blocked"), "rule-only site: %s",
+          v.list.rows[2].detail);
+    au_cookie_view_toggle(&v, 1, NOW);
+    CHECK(v.list.n == 5 && v.list.rows[2].kind == AU_ROW_LINK, "expanded: %d rows", v.list.n);
+    const AuCookie *ck = au_cookie_view_cookie(&v, 2);
+    CHECK(ck && !strcmp(ck->name, "one"), "cookie row");
+    CHECK(!strcmp(au_cookie_view_site(&v, 3), "b.example"), "cookie row's site");
+    AuBuf d;
+    au_buf_init(&d);
+    au_cookie_view_describe(&v, 2, &d, NOW);
+    CHECK(strstr(au_buf_cstr(&d), "Name: one\nValue: 1\nHost: www.b.example\nPath: /\n") &&
+              strstr(au_buf_cstr(&d), "Secure: yes\nHttpOnly: yes\nSameSite: not set (Lax)"),
+          "describe: %s", au_buf_cstr(&d));
+    au_cookie_view_describe(&v, 3, &d, NOW);
+    CHECK(strstr(au_buf_cstr(&d), "Expires: at the end of the session"), "session expiry: %s", au_buf_cstr(&d));
+    /* Remove one cookie: the selection moves to its site. */
+    v.list.selected = 2;
+    CHECK(au_cookie_view_remove(&v, 2, NOW) == 1, "remove one");
+    CHECK(au_cookie_jar_count(jar) == 2, "jar has two");
+    CHECK(v.list.selected == 1 && v.list.n == 4, "selection on site: %d", v.list.selected);
+    /* The rule applies through the view. */
+    au_cookie_view_set_rule(&v, 0, AU_COOKIE_RULE_SESSION, NOW);
+    CHECK(!strcmp(v.list.rows[0].detail, "1 cookie, session only"), "rule shown: %s", v.list.rows[0].detail);
+    CHECK(au_cookie_view_remove(&v, 1, NOW) == 1, "remove site");
+    CHECK(v.list.n == 2, "b.example gone: %d", v.list.n);
+    /* Expired cookies are not listed. */
+    au_cookie_view_refresh(&v, NOW + 120);
+    au_cookie_view_describe(&v, 0, &d, NOW + 120);
+    CHECK(strstr(au_buf_cstr(&d), "Cookies: 1"), "session cookie stays: %s", au_buf_cstr(&d));
+    au_cookie_view_remove_all(&v, NOW);
+    CHECK(au_cookie_jar_count(jar) == 0 && v.list.n == 2, "remove all keeps rule sites: %d", v.list.n);
+    char when[32];
+    au_cookie_format_time(0, when, sizeof when);
+    CHECK(!strcmp(when, "1970-01-01 00:00"), "epoch: %s", when);
+    au_cookie_format_time(1803045900LL, when, sizeof when);
+    CHECK(!strcmp(when, "2027-02-19 14:05"), "date: %s", when);
+    au_buf_free(&d);
+    au_cookie_view_free(&v);
+    au_cookie_jar_free(jar);
+}
+
 int main(void)
 {
+    test_rules();
+    test_cookie_view();
     test_rfc_examples();
     test_parsing();
     test_domain_path();

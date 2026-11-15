@@ -80,6 +80,9 @@ typedef struct AuPrefs {
     /* Text zoom remembered per site: "key=percent" items separated by
      * spaces (au_browser_site_zoom). */
     char *zoom_sites;
+    /* Cookie rules per site: "site=allow|session|block" items separated
+     * by spaces, keyed by registrable domain (au_cookie_rules_parse). */
+    char *cookie_sites;
     /* URLs other applications open (the GURL Apple event) go to a new
      * window rather than a new tab in the front window. */
     bool external_new_window;

@@ -27,5 +27,6 @@
     } while (0)
 
 void test_fonts(void);
+void test_stroke(void);
 
 #endif

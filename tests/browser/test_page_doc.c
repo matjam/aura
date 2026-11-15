@@ -116,7 +116,7 @@ static AuTime t_now(void *ctx) { (void)ctx; return 0; }
 
 static AuBrowser *make_browser(void)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, NULL, NULL, NULL, NULL, NULL, NULL};
     return au_browser_new(fonts, &h);
 }
 
@@ -368,10 +368,10 @@ typedef struct FakeNet {
     int step;
 } FakeNet;
 
-static uint32_t net_start(void *ctx, const char *url, const AuFetchSink *sink)
+static uint32_t net_start(void *ctx, const AuFetchRequest *rq, const AuFetchSink *sink)
 {
     FakeNet *n = ctx;
-    (void)url;
+    (void)rq;
     n->in_start = 1;
     n->sink = sink;
     n->step = 0;
@@ -400,7 +400,7 @@ static void net_poll(void *ctx)
     } else if (n->step == 1) {
         s->data(s->ctx, n->id, " page</title><p>hello", 21);
     } else {
-        AuFetchInfo info = {"http://example.net/final", "text/html"};
+        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, ""};
         n->sink = NULL;
         s->done(s->ctx, n->id, true, &info);
     }
@@ -427,7 +427,7 @@ static void test_network(void)
     /* A registered fetcher. */
     FakeNet net;
     memset(&net, 0, sizeof net);
-    AuPageFetcher f = {&net, net_start, net_cancel, net_poll};
+    AuPageFetcher f = {&net, net_start, net_cancel, net_poll, NULL, NULL};
     au_browser_set_fetcher(b, "http", &f);
     au_bw_navigate(w, "http://example.net/start");
     CHECK(t->loading && net.id == 1 && net.polls == 0);
@@ -961,9 +961,14 @@ static void test_save_source(void)
     CHECK_STR(au_page_title(au_bw_active_tab(w)->page), "Licences");
     CHECK(au_bw_page_source(w, &data, &len));
     char *src = au_strndup(data, len);
-    for (size_t i = 0; i < au_ncredits; i++)
-        CHECK(strstr(src, au_credits[i].file) != NULL);
+    for (size_t i = 0; i < au_ncredits; i++) {
+        CHECK(au_credits[i].file || au_credits[i].text); /* every credit says where its licence is */
+        if (au_credits[i].file)
+            CHECK(strstr(src, au_credits[i].file) != NULL);
+    }
     CHECK(strstr(src, "SIL Open Font License 1.1") && strstr(src, "Bitstream Vera"));
+    CHECK(strstr(src, "BearSSL 0.6") && strstr(src, "Public Suffix List") && strstr(src, "Brotli Authors") &&
+          strstr(src, "Twemoji") && strstr(src, "https://mozilla.org/MPL/2.0/"));
     au_free(src);
     au_bw_navigate(w, "about:licenses");
     settle(w);

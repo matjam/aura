@@ -1,5 +1,6 @@
 /* Browser preferences. See prefs.h. */
 #include "prefs.h"
+#include "credits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +64,7 @@ static const Key keys[] = {
     I("window.width", window_width, 0, 8192),
     I("window.height", window_height, 0, 8192),
     S("zoom.sites", zoom_sites),
+    S("cookies.sites", cookie_sites),
     B("links.external_new_window", external_new_window),
 };
 
@@ -95,7 +97,7 @@ void au_prefs_init(AuPrefs *p)
     p->startup = AU_STARTUP_HOME;
     p->tab_position = AU_TABS_TOP;
     p->tab_column_width = 170;
-    au_prefs_set_str(&p->search_template, "https://duckduckgo.com/html/?q=%s");
+    au_prefs_set_str(&p->search_template, "https://html.duckduckgo.com/html/?q=%s");
     au_prefs_set_str(&p->font_serif, "Times New Roman");
     au_prefs_set_str(&p->font_sans, "Helvetica");
     au_prefs_set_str(&p->font_mono, "Courier New");
@@ -116,7 +118,7 @@ void au_prefs_init(AuPrefs *p)
     p->history_days = 30;
     p->http_proxy_port = 8080;
     p->https_proxy_port = 8080;
-    au_prefs_set_str(&p->user_agent, "Mozilla/5.0 (Macintosh; U; PPC Mac OS 9) Aura/0.1");
+    au_prefs_set_str(&p->user_agent, AU_DEFAULT_USER_AGENT);
     p->memory_cache_kb = 4096;
     p->disk_cache_kb = 20480;
 }

@@ -121,7 +121,56 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
     out->ox = g->x0 + tx;
     out->oy = g->y0 + ty;
     out->radial = g->radial;
-    out->repeat = g->repeat;
+    out->repeat = g->repeat || g->spread == AU_SPREAD_REPEAT;
+    out->reflect = !out->repeat && g->spread == AU_SPREAD_REFLECT;
+    out->has_matrix = false;
+    out->focal = false;
+    if (g->has_matrix) {
+        /* Surface pixels to gradient space: the inverse of the canvas
+         * translation after the gradient's matrix. */
+        AuMatrix fwd = {1, 0, 0, 1, tx, ty}, inv;
+        au_matrix_multiply(&fwd, &g->matrix);
+        if (au_matrix_invert(&fwd, &inv)) {
+            out->has_matrix = true;
+            out->m[0] = inv.a, out->m[1] = inv.b, out->m[2] = inv.c;
+            out->m[3] = inv.d, out->m[4] = inv.e, out->m[5] = inv.f;
+            out->ox = g->x0;
+            out->oy = g->y0;
+        } else {
+            /* A degenerate matrix: the gradient collapses to its last
+             * colour (SVG paints the last stop's colour). */
+            out->has_matrix = true;
+            memset(out->m, 0, sizeof out->m);
+            out->ox = g->x0 - 1e9f;
+            out->oy = g->y0;
+        }
+    }
+    if (g->radial && g->focal) {
+        float r = g->rx > 1e-3f ? g->rx : 1e-3f;
+        float fx = g->fx, fy = g->fy;
+        if (!g->has_matrix) {
+            fx += tx;
+            fy += ty;
+        }
+        float ddx = fx - out->ox, ddy = fy - out->oy;
+        float d = sqrtf(ddx * ddx + ddy * ddy);
+        if (d > r * 0.99f) {
+            /* SVG 1.1: a focal point outside the circle moves onto it
+             * (just inside, so the quadratic stays solvable). */
+            float s = r * 0.99f / d;
+            fx = out->ox + ddx * s;
+            fy = out->oy + ddy * s;
+            ddx *= s;
+            ddy *= s;
+        }
+        out->focal = true;
+        out->fx = fx;
+        out->fy = fy;
+        out->r = r;
+        /* e = centre - focal; a = |e|^2 - r^2 (negative inside). */
+        out->fa = ddx * ddx + ddy * ddy - r * r;
+    }
+    out->slow = out->radial || out->repeat || out->reflect || out->has_matrix;
     out->irx = g->rx > 1e-3f ? 1 / g->rx : 1e3f;
     out->iry = g->ry > 1e-3f ? 1 / g->ry : 1e3f;
     if (len2 < 1e-6f) {
@@ -177,6 +226,10 @@ static int lut_index(const AuGradientLut *g, float t)
         int i = (int)(f * 256.0f);
         return i < 0 ? 0 : i > 255 ? 255 : i;
     }
+    if (g->reflect && isfinite(t)) {
+        float f = fmodf(fabsf(t), 2.0f);
+        t = f > 1 ? 2 - f : f;
+    }
     if (!(t > 0))
         return 0;
     return t >= 1 ? 255 : (int)(t * 255.0f);
@@ -185,7 +238,7 @@ static int lut_index(const AuGradientLut *g, float t)
 void au_blend_gradient_span(AuPixel *dst, int x, int y, int n, const AuGradientLut *g,
                             const uint8_t *cov)
 {
-    if (g->radial || g->repeat) {
+    if (g->slow) {
         /* Per-pixel position: elliptical distance or the wrapped line
          * position. Rarer than plain linear gradients; kept simple. */
         float py = ((float)y + 0.5f - g->oy);
@@ -194,8 +247,23 @@ void au_blend_gradient_span(AuPixel *dst, int x, int y, int n, const AuGradientL
             if (c == 0)
                 continue;
             float px = (float)(x + i) + 0.5f - g->ox;
+            if (g->has_matrix) {
+                float sx = (float)(x + i) + 0.5f, sy = (float)y + 0.5f;
+                px = g->m[0] * sx + g->m[2] * sy + g->m[4] - g->ox;
+                py = g->m[1] * sx + g->m[3] * sy + g->m[5] - g->oy;
+            }
             float t;
-            if (g->radial) {
+            if (g->focal) {
+                /* The circle through this point, of the family centred
+                 * f + t (c - f) with radius t r: solve
+                 * (|e|^2 - r^2) t^2 - 2 (d.e) t + |d|^2 = 0 for t >= 0,
+                 * d = p - f, e = c - f. */
+                float dx = px + g->ox - g->fx, dy = py + g->oy - g->fy;
+                float ex = g->ox - g->fx, ey = g->oy - g->fy;
+                float de = dx * ex + dy * ey, dd = dx * dx + dy * dy;
+                float disc = de * de - g->fa * dd;
+                t = disc >= 0 && g->fa < 0 ? (de - sqrtf(disc)) / g->fa : 0;
+            } else if (g->radial) {
                 float u = px * g->irx, v = py * g->iry;
                 t = sqrtf(u * u + v * v);
             } else {

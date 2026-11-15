@@ -2,7 +2,9 @@
  *
  *   main.c        start-up, the event loop, menus, Apple events, saving
  *   browserwin.c  browser windows (GWorld, chrome, page, address field)
- *   listwin.c     the Bookmarks and History windows
+ *   listwin.c     the Bookmarks, History, Downloads and Cookies windows
+ *   network.c     the network stack (Open Transport, stores, fetchers)
+ *   downloads_mac.c  download files, Reveal in Finder
  *   prefswin.c    the Preferences window (Appearance controls)
  *   storage.c     files in the Preferences folder, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
@@ -34,7 +36,7 @@ enum {
     kDitherCopy = 64
 };
 
-typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS } WinKind;
+typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS, WIN_COOKIES } WinKind;
 
 typedef struct MacWin MacWin;
 struct MacWin {
@@ -100,7 +102,9 @@ void browserwin_moved(BrowserWin *bw);
 void browserwin_find(BrowserWin *bw);
 
 /* ---- listwin.c ---- */
-void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY or WIN_DOWNLOADS */
+void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY, WIN_DOWNLOADS or WIN_COOKIES */
+/* The cookie jar changed outside the Cookies window (Clear Cookies). */
+void listwin_cookies_changed(void);
 /* Opens url in the front browser window (one is made if needed). */
 void mac_open_url(const char *url, bool new_tab);
 
@@ -127,6 +131,60 @@ char *mac_choose_file_url(void);
 /* File > Save Page As: asks for a file (StandardPutFile) and writes the
  * active page's source to it, type TEXT, creator AURA. */
 void mac_save_page(AuBrowserWindow *w);
+
+/* Files in the Aura preferences folder by name, written safely (a .tmp
+ * file swapped in); for network.c's Cookies and HSTS. */
+bool storage_read_named(const char *name, char **data, size_t *len);
+bool storage_write_named(const char *name, const char *data, size_t len);
+void storage_keep_aside_named(const char *name);
+/* A folder inside the Aura preferences folder, made when missing. */
+bool storage_subfolder(const char *name, short *vref, long *dir);
+
+/* ---- network.c ----
+ * The network stack: the entropy pool, Open Transport (started on the
+ * first request), the AuNet with its root store, cookie jar, HSTS store
+ * and cache, the loader and page fetcher (registered for http and
+ * https), and real downloads. */
+/* After storage_load_all: creates everything and loads Cookies and HSTS. */
+void mac_net_init(void);
+/* Every event WaitNextEvent returns, null events included. */
+void mac_net_event(const EventRecord *ev);
+/* Once per pass of the event loop. */
+void mac_net_idle(void);
+/* Network work is under way: the loop sleeps only briefly. */
+bool mac_net_busy(void);
+/* The preferences changed (Preferences saved, cookie rules edited). */
+void mac_net_prefs_changed(void);
+/* Saves Cookies and HSTS when they changed (force: now). storage.c calls
+ * it from storage_save_changed. */
+void mac_net_save(bool force);
+/* At quit, after the last page is gone: privacy clearing, the last save,
+ * then everything is freed in reverse order. */
+void mac_net_quit(void);
+/* Closes Open Transport at once, allocating nothing: before ExitToShell
+ * on the out-of-memory path, so no notifier outlives the heap. */
+void mac_net_emergency_close(void);
+void mac_net_clear_cookies(void);
+void mac_net_clear_cache(void);
+struct AuCookieJar;
+struct AuCookieJar *mac_net_cookie_jar(void); /* NULL before init */
+/* The rules in the jar were changed by the Cookies window: copied into
+ * the cookies.sites preference. */
+void mac_net_rules_changed(void);
+/* View > Debug > Network Status: four lines of diagnostics. */
+void mac_net_status(char lines[4][256]);
+
+/* ---- downloads_mac.c ---- */
+struct AuDownloadFiles;
+/* The download folder: the preference, else Internet Config's, else the
+ * desktop. */
+bool mac_download_folder(short *vref, long *dir);
+void mac_download_files(struct AuDownloadFiles *out);
+/* Shows a finished download's file in the Finder. */
+bool mac_download_reveal(const AuDownload *d);
+/* Whether a name or MIME type looks like an application (for the
+ * "warn before downloading applications" preference). */
+bool mac_download_is_app(const char *name, const char *mime);
 
 /* ---- aboutbox.c ---- */
 void mac_about_box(void);

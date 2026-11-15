@@ -26,8 +26,8 @@ typedef struct HtmlDecoder {
     uint8_t enc;          /* AuHtmlEncoding in use; SNIFF until decided */
     uint8_t fallback;     /* encoding to use when there is no BOM */
     bool last_cr;         /* the previous character was a CR */
-    uint8_t nbom;         /* bytes held while looking for a BOM */
-    unsigned char bom[3];
+    uint16_t nhold;       /* bytes held until the BOM and the prescan decide */
+    unsigned char hold[1024];
     /* UTF-8 decoder state (WHATWG Encoding Standard). */
     uint8_t need, seen, lower, upper;
     uint32_t cp;

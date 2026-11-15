@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SVG</title>
+<style>
+body { font-family: Helvetica, Arial, sans-serif; margin: 12px; color: #222; background: #fff; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 15px; margin: 12px 0 6px; border-bottom: 1px solid #bba; }
+.fig { display: inline-block; vertical-align: top; margin: 0 8px 8px 0; padding: 4px; border: 1px solid #ccb; font-size: 11px; text-align: center; width: 132px; }
+.fig > svg, .fig > img, .fig > div { display: block; margin: 0 auto 3px; }
+.icon { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icons { color: #36c; }
+.icons svg { display: inline-block; margin: 2px; }
+.icons svg:nth-child(2n) { color: #c33; }
+.bg { width: 120px; height: 60px; background: url("img/badge.svg") no-repeat center / 100px 50px, #eef; }
+.bgtile { width: 120px; height: 60px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='6' fill='%2336c'/%3E%3C/svg%3E"); }
+.masked { width: 120px; height: 60px; background: linear-gradient(90deg, #c33, #36c);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Ccircle cx='5' cy='5' r='5'/%3E%3C/svg%3E");
+  -webkit-mask-size: 30px 30px; -webkit-mask-repeat: repeat-x; -webkit-mask-position: 0 15px; }
+.masked2 { width: 120px; height: 60px; background: #2a6;
+  mask: linear-gradient(90deg, transparent, #000) no-repeat; }
+</style>
+</head>
+<body>
+<h1>SVG</h1>
+
+<h2>Shapes, strokes and paint</h2>
+<div class="fig"><svg width="120" height="80">
+  <rect x="4" y="4" width="50" height="34" rx="6" fill="#c33" stroke="#600" stroke-width="3"/>
+  <circle cx="90" cy="21" r="17" fill="#36c"/>
+  <ellipse cx="29" cy="60" rx="25" ry="14" fill="#2a6" opacity="0.6"/>
+  <polygon points="66,46 116,46 91,78" fill="#e83" stroke="#333" stroke-width="2" stroke-linejoin="bevel"/>
+</svg>basic shapes</div>
+<div class="fig"><svg width="120" height="80">
+  <path d="M10 14 H110" stroke="#333" stroke-width="6" stroke-linecap="butt"/>
+  <path d="M10 30 H110" stroke="#333" stroke-width="6" stroke-linecap="round"/>
+  <path d="M10 46 H110" stroke="#333" stroke-width="6" stroke-dasharray="12 6 3 6"/>
+  <polyline points="10,74 30,58 50,74 70,58 90,74 110,58" fill="none" stroke="#c33" stroke-width="5" stroke-linejoin="miter"/>
+</svg>caps, dashes, joins</div>
+<div class="fig"><svg width="120" height="80">
+  <path d="M10 70 C 30 0, 90 0, 110 70 Z" fill="#fd8" stroke="#a52" stroke-width="2"/>
+  <path d="M20 40 Q 40 10 60 40 T 100 40" fill="none" stroke="#36c" stroke-width="3"/>
+  <path d="M60 75 a 15 10 30 1 1 30 0" fill="none" stroke="#2a6" stroke-width="3"/>
+</svg>curves and arcs</div>
+<div class="fig"><svg width="120" height="80" viewBox="0 0 12 8">
+  <path d="M1 1h10v6H1z M3 2.5h6v3H3z" fill="#36c" fill-rule="evenodd"/>
+</svg>viewBox, evenodd</div>
+<div class="fig"><svg width="120" height="80">
+  <defs>
+    <linearGradient id="lin"><stop offset="0" stop-color="#c33"/><stop offset="0.5" stop-color="#fd8"/><stop offset="1" stop-color="#36c"/></linearGradient>
+    <radialGradient id="rad" fx="0.3" fy="0.3"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#2a6"/></radialGradient>
+  </defs>
+  <rect x="4" y="4" width="112" height="30" fill="url(#lin)"/>
+  <circle cx="40" cy="58" r="20" fill="url(#rad)"/>
+  <rect x="70" y="40" width="44" height="36" fill="url(#lin)" transform="rotate(10 92 58)"/>
+</svg>gradients</div>
+<div class="fig"><svg width="120" height="80">
+  <defs>
+    <clipPath id="clip"><circle cx="30" cy="40" r="28"/></clipPath>
+    <mask id="mask"><rect x="64" y="4" width="52" height="72" fill="url(#mgrad)"/></mask>
+    <linearGradient id="mgrad" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient>
+  </defs>
+  <g clip-path="url(#clip)"><rect width="60" height="80" fill="#36c"/><rect y="40" width="60" height="40" fill="#c33"/></g>
+  <rect x="64" y="4" width="52" height="72" fill="#e83" mask="url(#mask)"/>
+</svg>clip path, mask</div>
+<div class="fig"><svg width="120" height="80">
+  <defs><symbol id="star" viewBox="0 0 10 10"><path d="M5 0.5 6.3 3.6 9.6 3.8 7 6 7.9 9.3 5 7.5 2.1 9.3 3 6 0.4 3.8 3.7 3.6z"/></symbol>
+  <g id="pair"><rect width="14" height="14"/><rect x="18" width="14" height="14" fill="#2a6"/></g></defs>
+  <use href="#star" x="4" y="4" width="40" height="40" fill="#e83"/>
+  <use href="#star" x="50" y="10" width="28" height="28" fill="#36c"/>
+  <use href="#pair" x="10" y="56" fill="#c33"/>
+  <use href="#pair" x="70" y="56" fill="#36c" opacity="0.5"/>
+</svg>use, symbol</div>
+<div class="fig"><svg width="120" height="80">
+  <g opacity="0.5"><rect x="10" y="10" width="50" height="50" fill="#c33"/><rect x="35" y="25" width="50" height="50" fill="#c33"/></g>
+  <svg x="80" y="10" width="36" height="36" viewBox="0 0 10 10"><circle cx="5" cy="5" r="7" fill="#36c"/></svg>
+  <rect x="88" y="54" width="20" height="20" fill="#2a6" stroke="#000" stroke-width="4" paint-order="stroke" transform="skewX(-10)"/>
+</svg>opacity, nested svg</div>
+<div class="fig"><svg width="120" height="80" style="font-family: Arial, sans-serif">
+  <text x="60" y="26" font-size="20" text-anchor="middle" fill="#36c">Aura</text>
+  <text x="6" y="56" font-size="14" fill="#c33">SVG <tspan font-weight="bold" fill="#2a6">text</tspan><tspan dy="-6" font-size="9">2</tspan></text>
+  <text x="114" y="74" font-size="11" text-anchor="end" stroke="#333" stroke-width="0.5" fill="#fd8">end anchor</text>
+</svg>text and tspan</div>
+
+<h2>Sizing</h2>
+<div class="fig"><svg style="border: 1px dotted #999"><circle cx="150" cy="75" r="60" fill="#36c"/></svg>no size: 300 x 150</div>
+<div class="fig"><svg viewBox="0 0 2 1" style="border: 1px dotted #999"><rect width="1" height="1" fill="#c33"/></svg>viewBox only: fills width</div>
+<div class="fig"><svg width="60" viewBox="0 0 10 20" style="border: 1px dotted #999"><rect width="10" height="20" fill="#2a6"/></svg>width and viewBox ratio</div>
+<div class="fig"><svg width="120" height="40" viewBox="0 0 10 10" preserveAspectRatio="xMaxYMid meet" style="border: 1px dotted #999"><rect width="10" height="10" fill="#e83"/></svg>xMaxYMid meet</div>
+<div class="fig"><svg width="40" height="40" style="overflow: visible; border: 1px dotted #999"><circle cx="40" cy="40" r="20" fill="#36c"/></svg>overflow visible</div>
+
+<h2>Icons (stroke: currentColor)</h2>
+<div class="icons">
+<svg class="icon" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z M2 17l10 5 10-5 M2 12l10 5 10-5"/></svg>
+<svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+<svg class="icon" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+<svg class="icon" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+<svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+</div>
+
+<h2>SVG as an image</h2>
+<div class="fig"><img src="img/badge.svg" alt="badge">img, intrinsic 120 x 60</div>
+<div class="fig"><img src="img/badge.svg" width="60" alt="badge">img, width 60</div>
+<div class="fig"><img src="img/badge.svg" style="width: 132px; height: 40px" alt="badge">img, other ratio</div>
+<div class="fig"><img alt="data" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 2'%3E%3Crect width='2' height='2' fill='%23c33'/%3E%3Crect x='2' width='2' height='2' fill='%2336c'/%3E%3C/svg%3E" style="width: 120px">data: URL, viewBox only</div>
+<div class="fig"><div class="bg"></div>background-size</div>
+<div class="fig"><div class="bgtile"></div>tiled background</div>
+<div class="fig"><div class="masked"></div>-webkit-mask-image SVG</div>
+<div class="fig"><div class="masked2"></div>mask: gradient</div>
+</body>
+</html>

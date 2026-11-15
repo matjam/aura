@@ -353,7 +353,7 @@ char *au_url_from_input(const char *input, const char *search_template, bool *is
 
     if (is_search)
         *is_search = true;
-    const char *t = search_template && *search_template ? search_template : "https://duckduckgo.com/html/?q=%s";
+    const char *t = search_template && *search_template ? search_template : "https://html.duckduckgo.com/html/?q=%s";
     AuBuf b;
     au_buf_init(&b);
     const char *mark = strstr(t, "%s");

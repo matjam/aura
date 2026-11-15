@@ -132,11 +132,19 @@ void au_download_resume(AuDownloads *dl, AuDownload *d)
     dl->generation++;
 }
 
+static void discard(AuDownloads *dl, AuDownload *d)
+{
+    if (dl->src.discard)
+        dl->src.discard(dl->src.ctx, d);
+    d->handoff = 0;
+}
+
 void au_download_cancel(AuDownloads *dl, AuDownload *d)
 {
     if (d->state == AU_DL_DONE || d->state == AU_DL_CANCELLED)
         return;
     stop_transfer(dl, d);
+    discard(dl, d);
     d->state = AU_DL_CANCELLED;
     d->rate = 0;
     dl->generation++;
@@ -147,6 +155,8 @@ void au_download_remove(AuDownloads *dl, AuDownload *d)
     for (int i = 0; i < dl->n; i++) {
         if (dl->items[i] == d) {
             stop_transfer(dl, d);
+            if (d->state != AU_DL_DONE && d->state != AU_DL_CANCELLED)
+                discard(dl, d);
             free_item(d);
             memmove(&dl->items[i], &dl->items[i + 1], (size_t)(dl->n - i - 1) * sizeof *dl->items);
             dl->n--;
@@ -564,7 +574,7 @@ static void sim_stop(void *ctx, void *handle)
 
 const AuTransferSource *au_sim_source(void)
 {
-    static const AuTransferSource src = {NULL, sim_start, sim_poll, sim_stop};
+    static const AuTransferSource src = {NULL, sim_start, sim_poll, sim_stop, NULL};
     return &src;
 }
 

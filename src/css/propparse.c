@@ -953,6 +953,130 @@ static bool bg_origin_item(CssParseCtx *cx, uint16_t prop, AuCssValue *it)
     return KW_IN(it, AU_K_border_box, AU_K_padding_box, AU_K_content_box);
 }
 
+static bool mask_mode_item(CssParseCtx *cx, uint16_t prop, AuCssValue *it)
+{
+    (void)cx;
+    (void)prop;
+    return KW_IN(it, AU_K_alpha, AU_K_luminance, AU_K_match_source);
+}
+
+static bool mask_origin_item(CssParseCtx *cx, uint16_t prop, AuCssValue *it)
+{
+    (void)cx;
+    (void)prop;
+    return KW_IN(it, AU_K_border_box, AU_K_padding_box, AU_K_content_box, AU_K_fill_box, AU_K_stroke_box,
+                 AU_K_view_box);
+}
+
+static bool mask_clip_item(CssParseCtx *cx, uint16_t prop, AuCssValue *it)
+{
+    return mask_origin_item(cx, prop, it) || css_is_kw(it, AU_K_no_clip);
+}
+
+AuCssValue *pp_mask_mode(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, mask_mode_item); }
+AuCssValue *pp_mask_origin(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, mask_origin_item); }
+AuCssValue *pp_mask_clip(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, mask_clip_item); }
+
+/* ---- SVG painting ---- */
+
+/* <paint>: none | <color> | <url> [none | <color>]? | context-fill |
+ * context-stroke. Colours become COLOR nodes (currentcolor keeps
+ * AU_COLOR_CURRENT, resolved where it is used). */
+AuCssValue *pp_svg_paint(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (KW_IN(v, AU_K_none, AU_K_context_fill, AU_K_context_stroke) || v->type == AU_CSSV_URL)
+        return v;
+    if (v->type == AU_CSSV_LIST && v->n == 2 && v->u.items[0].type == AU_CSSV_URL) {
+        AuCssValue *fb = &v->u.items[1];
+        if (css_is_kw(fb, AU_K_none) || norm_color(fb))
+            return v;
+        return NULL;
+    }
+    return norm_color(v) ? v : NULL;
+}
+
+/* none | [<length-percentage> | <number>]#, commas or spaces. */
+AuCssValue *pp_dasharray(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (css_is_kw(v, AU_K_none))
+        return v;
+    uint32_t n;
+    AuCssValue *it = (AuCssValue *)css_items(v, &n);
+    if (v->type != AU_CSSV_LIST && v->type != AU_CSSV_COMMA_LIST) {
+        it = v;
+        n = 1;
+    }
+    if (n == 0 || n > 64)
+        return NULL;
+    for (uint32_t i = 0; i < n; i++) {
+        if (it[i].type == AU_CSSV_LIST) {
+            /* "1 2, 3": a space list inside a comma list */
+            uint32_t m;
+            AuCssValue *in = (AuCssValue *)css_items(&it[i], &m);
+            for (uint32_t k = 0; k < m; k++)
+                if (!norm_lp(&in[k], P_PCT | P_NONNEG | P_NUM))
+                    return NULL;
+            continue;
+        }
+        if (!norm_lp(&it[i], P_PCT | P_NONNEG | P_NUM))
+            return NULL;
+    }
+    return v;
+}
+
+/* normal | [fill || stroke || markers]. */
+AuCssValue *pp_paint_order(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (css_is_kw(v, AU_K_normal))
+        return v;
+    uint32_t n;
+    const AuCssValue *it = css_items(v, &n);
+    if (v->type == AU_CSSV_KEYWORD) {
+        it = v;
+        n = 1;
+    } else if (v->type != AU_CSSV_LIST) {
+        return NULL;
+    }
+    unsigned seen = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        unsigned bit = css_is_kw(&it[i], AU_K_fill) ? 1 : css_is_kw(&it[i], AU_K_stroke) ? 2
+                       : css_is_kw(&it[i], AU_K_markers) ? 4 : 0;
+        if (!bit || (seen & bit))
+            return NULL;
+        seen |= bit;
+    }
+    return v;
+}
+
+/* normal | [<string> <number>]#: four-character axis tags. */
+AuCssValue *pp_font_variation_settings(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)prop;
+    if (css_is_kw(v, AU_K_normal))
+        return v;
+    AuCssValue *l = as_list(cx, v, AU_CSSV_COMMA_LIST);
+    if (l->n > 16)
+        return NULL;
+    for (uint32_t i = 0; i < l->n; i++) {
+        AuCssValue *it = &l->u.items[i];
+        if (it->type != AU_CSSV_LIST || it->n != 2)
+            return NULL;
+        AuCssValue *tag = &it->u.items[0], *num = &it->u.items[1];
+        if (tag->type != AU_CSSV_STRING || tag->n != 4 || !is_number(num, false))
+            return NULL;
+        for (int k = 0; k < 4; k++)
+            if ((unsigned char)tag->u.str[k] < 0x20 || (unsigned char)tag->u.str[k] > 0x7E)
+                return NULL;
+    }
+    return l;
+}
+
 AuCssValue *pp_bg_attachment(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, bg_attach_item); }
 AuCssValue *pp_bg_clip(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, bg_clip_item); }
 AuCssValue *pp_bg_origin(CssParseCtx *cx, uint16_t prop, AuCssValue *v) { return each_item(cx, prop, v, bg_origin_item); }

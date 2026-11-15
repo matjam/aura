@@ -1,0 +1,103 @@
+Inline SVG as a replaced element (sizes from width, height and viewBox,
+the 300 x 150 default, CSS sizes, overflow) and its painting, and
+mask-image painted through a mask group.
+
+=== no size and no viewBox: 300 x 150
+<body style="margin:0">
+<div><svg id="s"></svg></div>
+---
+#s w=300 h=150
+
+=== width and height attributes are presentation hints
+<body style="margin:0">
+<svg id="s" width="40" height="20"></svg>
+---
+#s w=40 h=20
+
+=== CSS sizes win over the attributes
+<body style="margin:0">
+<svg id="s" width="40" height="20" style="width:10px;height:12px"></svg>
+---
+#s w=10 h=12
+
+=== viewBox only: the available width, height from the ratio
+<body style="margin:0">
+<div style="width:200px"><svg id="s" viewBox="0 0 4 1" style="display:block"></svg></div>
+---
+#s w=200 h=50
+
+=== width and viewBox: height from the ratio
+<body style="margin:0">
+<svg id="s" width="30" viewBox="0 0 1 2"></svg>
+---
+#s w=30 h=60
+
+=== CSS width with viewBox ratio
+<body style="margin:0">
+<svg id="s" viewBox="0 0 2 1" style="width:50px;display:block"></svg>
+---
+#s w=50 h=25
+
+=== shapes paint in the content box, with the viewBox scale
+<body style="margin:0">
+<svg width="100" height="50" viewBox="0 0 10 5" style="display:block;padding:10px">
+<rect width="5" height="5" fill="#ff0000"/><circle cx="7.5" cy="2.5" r="2" fill="#0000ff"/></svg>
+---
+pixel 5 5 ffffff
+pixel 15 15 ff0000
+pixel 55 55 ff0000
+pixel 85 35 0000ff
+pixel 62 35 ffffff
+
+=== fill: currentColor follows color, and page CSS styles the shapes
+<body style="margin:0">
+<style>.on { fill: #00ff00 }</style>
+<svg width="40" height="20" style="display:block;color:#0000ff"><rect width="20" height="20" fill="currentColor"/><rect class="on" x="20" width="20" height="20"/></svg>
+---
+pixel 10 10 0000ff
+pixel 30 10 00ff00
+
+=== overflow is hidden by default, visible on request
+<body style="margin:0">
+<svg width="20" height="20" style="display:block"><rect width="40" height="20" fill="#ff0000"/></svg>
+<svg width="20" height="20" style="display:block;overflow:visible"><rect width="40" height="20" fill="#ff0000"/></svg>
+---
+pixel 10 10 ff0000
+pixel 30 10 ffffff
+pixel 30 30 ff0000
+
+=== use references an element elsewhere in the document
+<body style="margin:0">
+<svg width="0" height="0" style="position:absolute"><defs><rect id="r" width="20" height="20"/></defs></svg>
+<svg width="20" height="20" style="display:block"><use href="#r" fill="#0000ff"/></svg>
+---
+pixel 10 10 0000ff
+
+=== transformed and opacity
+<body style="margin:0">
+<svg width="40" height="40" style="display:block"><g transform="translate(20 0)" opacity="0.5"><rect width="20" height="20" fill="#ff0000"/></g></svg>
+---
+pixel 10 10 ffffff
+pixel 30 10 ff8080
+
+=== mask-image with a gradient masks the box
+<body style="margin:0">
+<div style="width:100px;height:20px;background:#0000ff;mask-image:linear-gradient(90deg,transparent 50%,#000 50%)"></div>
+---
+pixel 25 10 ffffff
+pixel 75 10 0000ff
+
+=== -webkit-mask with size and no-repeat
+<body style="margin:0">
+<div style="width:100px;height:20px;background:#ff0000;-webkit-mask:linear-gradient(#000,#000) no-repeat 10px 0 / 20px 20px"></div>
+---
+pixel 5 10 ffffff
+pixel 20 10 ff0000
+pixel 50 10 ffffff
+
+=== mask-mode luminance: white shows, black hides
+<body style="margin:0">
+<div style="width:100px;height:20px;background:#00ff00;mask:linear-gradient(90deg,#000 50%,#fff 50%) luminance"></div>
+---
+pixel 25 10 ffffff
+pixel 75 10 00ff00

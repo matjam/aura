@@ -41,6 +41,10 @@ void au_buf_puts(AuBuf *b, const char *s);
 void au_buf_putc(AuBuf *b, char c);
 void au_buf_put_utf8(AuBuf *b, uint32_t cp);
 void au_buf_printf(AuBuf *b, const char *fmt, ...);
+/* Appends v in decimal. Use this for 64-bit values instead of printf's
+ * %lld: the newlib that Retro68 links for Mac OS 9 does not implement it,
+ * and prints nothing useful. */
+void au_put_i64(AuBuf *b, int64_t v);
 /* NUL-terminates (the NUL is not counted in len) and returns data. */
 char *au_buf_cstr(AuBuf *b);
 /* Returns the NUL-terminated contents and resets the buffer; the caller

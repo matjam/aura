@@ -28,6 +28,13 @@ AuImageFormat au_image_sniff(const void *data, size_t len)
     if (len >= 16 && p[0] == 0 && p[1] == 0 && p[2] == 1 && p[3] == 0 && au_img_le16(p + 4) > 0 &&
         au_img_le16(p + 4) <= 255 && p[9] == 0)
         return AU_IMAGE_FORMAT_ICO;
+    /* SVG: markup ('<' after an optional BOM and whitespace). No other
+     * format starts so; the codec refuses what is not an SVG document. */
+    size_t i = len >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF ? 3 : 0;
+    while (i < len && (p[i] == ' ' || p[i] == '\t' || p[i] == '\n' || p[i] == '\r'))
+        i++;
+    if (i < len && p[i] == '<')
+        return AU_IMAGE_FORMAT_SVG;
     return AU_IMAGE_FORMAT_UNKNOWN;
 }
 
@@ -40,6 +47,7 @@ const char *au_image_format_name(AuImageFormat f)
     case AU_IMAGE_FORMAT_WEBP: return "WebP";
     case AU_IMAGE_FORMAT_BMP: return "BMP";
     case AU_IMAGE_FORMAT_ICO: return "ICO";
+    case AU_IMAGE_FORMAT_SVG: return "SVG";
     default: return "unknown";
     }
 }
@@ -53,6 +61,7 @@ static const AuImgCodec *codec_for(AuImageFormat f)
     case AU_IMAGE_FORMAT_WEBP: return &au_img_webp_codec;
     case AU_IMAGE_FORMAT_BMP: return &au_img_bmp_codec;
     case AU_IMAGE_FORMAT_ICO: return &au_img_ico_codec;
+    case AU_IMAGE_FORMAT_SVG: return &au_img_svg_codec;
     default: return NULL;
     }
 }

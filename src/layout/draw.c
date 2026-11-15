@@ -40,7 +40,8 @@ static bool creates_stacking(const LBox *b, bool flex_item)
         return true;
     const AuStyleRare *r = s->rare;
     if (r->opacity < 1 || r->transform || r->translate || r->rotate || r->scale || r->isolation == AU_ISOLATION_ISOLATE ||
-        r->filter || r->mix_blend_mode != AU_MIX_BLEND_MODE_NORMAL || r->clip_path || (r->contain & AU_CONTAIN_PAINT))
+        r->filter || r->mix_blend_mode != AU_MIX_BLEND_MODE_NORMAL || r->clip_path || (r->contain & AU_CONTAIN_PAINT) ||
+        au_style_mask_layer_count(s) > 0)
         return true;
     return false;
 }
@@ -953,6 +954,12 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     }
     if (tw < 0.5f || th < 0.5f)
         return;
+    if (!gradient && P->L->env.image_use && tw <= 8192 && th <= 8192) {
+        /* A vector image is drawn at the tile size. */
+        char abs[2048];
+        if (P->L->env.resolve_url && P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs))
+            P->L->env.image_use(P->L->env.ctx, abs, (int)ceilf(tw), (int)ceilf(th));
+    }
     float px0 = origin_box.x + bg_len(ly->position_x, origin_box.w - tw) * 1;
     float py0 = origin_box.y + bg_len(ly->position_y, origin_box.h - th);
     if (ly->position_x && ly->position_x->type == AU_CSSV_PERCENT)
@@ -1674,6 +1681,60 @@ static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy)
     au_canvas_clip_pop(P->c);
 }
 
+/* ---- Inline SVG ---- */
+
+/* Resolves url against the document and gets its image, asking for it at
+ * dw x dh first when dw > 0. NULL while it loads or when it failed. */
+static const AuSurface *env_image_at(AuLayout *L, const char *url, int dw, int dh, int *iw, int *ih)
+{
+    if (!L->env.image)
+        return NULL;
+    char abs[2048];
+    if (!L->env.resolve_url || !L->env.resolve_url(L->env.ctx, url, abs, sizeof abs)) {
+        size_t n = strlen(url);
+        if (n >= sizeof abs)
+            return NULL;
+        memcpy(abs, url, n + 1);
+    }
+    const AuSurface *px = NULL;
+    int w = 0, h = 0;
+    if (!L->env.image(L->env.ctx, abs, &w, &h, &px) || !px || w <= 0 || h <= 0)
+        return NULL;
+    if (dw > 0 && dh > 0 && L->env.image_use)
+        L->env.image_use(L->env.ctx, abs, dw, dh);
+    if (iw)
+        *iw = w;
+    if (ih)
+        *ih = h;
+    return px->width > 1 || px->height > 1 || w == 1 ? px : NULL;
+}
+
+static const AuSurface *svg_env_image(void *ctx, const AuElement *el, const char *href, int dw, int dh)
+{
+    (void)el;
+    while (*href == ' ' || *href == '\t' || *href == '\n')
+        href++;
+    return *href ? env_image_at(ctx, href, dw, dh, NULL, NULL) : NULL;
+}
+
+static AuElement *svg_env_find_id(void *ctx, AuAtom id)
+{
+    AuLayout *L = ctx;
+    if (!L->doc)
+        return NULL;
+    if (!L->svg_ids)
+        L->svg_ids = au_svg_id_index_new(&L->doc->node);
+    return au_svg_id_index_find(L->svg_ids, id);
+}
+
+static void paint_svg(PCtx *P, LBlock *b, AuRect cb)
+{
+    if (!b->b.node || !au_is_element(b->b.node) || cb.w <= 0 || cb.h <= 0)
+        return;
+    AuSvgEnv env = {P->L->env.fonts, P->L, svg_env_image, svg_env_find_id};
+    au_svg_paint(P->c, l_svg_names(P->L), au_as_element(b->b.node), cb, &env);
+}
+
 static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
 {
     if (b->b.flags & LF_HIDDEN)
@@ -1685,8 +1746,13 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     LReplaced *r = b->rep;
     bool native = control_native(b);
     switch (b->b.replaced) {
+    case LR_SVG:
+        paint_svg(P, b, cb);
+        break;
     case LR_IMAGE:
         if (r && r->pixels) {
+            if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
+                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(cb.w), (int)ceilf(cb.h));
             const AuSurface *px = r->pixels;
             au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, cb,
                           s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
@@ -2651,6 +2717,32 @@ static void paint_inline_layer(PCtx *P, LBox *b, float ox, float oy)
     paint_children(P, b, ox, oy, PH_FLOAT);
 }
 
+/* mask-image: the layers (images and gradients, placed like background
+ * layers with the mask's size, repeat, position, origin and clip) are
+ * drawn into a mask group and the box's painted group is multiplied by
+ * their alpha, or by their luminance with mask-mode: luminance. A
+ * url(#id) naming an SVG <mask> is not drawn (the element shows
+ * unmasked). */
+static void paint_mask(PCtx *P, LBlock *k, float ox, float oy, AuRect bounds)
+{
+    const AuStyle *s = k->b.style;
+    size_t n = au_style_mask_layer_count(s);
+    AuRect border = {ox, oy, k->w, k->h};
+    bool luminance = false, first = true;
+    au_canvas_group_begin(P->c, bounds);
+    for (size_t i = n; i-- > 0;) {
+        AuBgLayer ly;
+        au_style_mask_layer(s, i, &ly);
+        if (!ly.image || ly.image->type == AU_CSSV_KEYWORD)
+            continue;
+        if (first)
+            luminance = ly.attachment == AU_K_luminance;
+        first = false;
+        draw_bg_image(P, s, &ly, box_area_of(k, border, ly.origin), box_area_of(k, border, ly.clip), NULL);
+    }
+    au_canvas_mask_end(P->c, luminance);
+}
+
 static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
 {
     if (P->depth > L_MAX_DEPTH || (b->flags & LF_TOO_DEEP))
@@ -2711,6 +2803,9 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
     }
     if (group)
         au_canvas_group_begin(P->c, ovr);
+    bool masked = !lb_anon(b) && au_style_mask_layer_count(b->style) > 0;
+    if (masked)
+        au_canvas_group_begin(P->c, ovr);
     if (b != P->L->root)
         paint_decor(P, k, ox, oy);
     else {
@@ -2747,6 +2842,10 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         paint_scrollbars(P, k, ox, oy);
     }
     paint_outline(P, b, (AuRect){ox, oy, k->w, k->h});
+    if (masked) {
+        paint_mask(P, k, ox, oy, ovr);
+        au_canvas_group_end(P->c, 1.0f);
+    }
     if (group)
         au_canvas_group_end(P->c, opacity);
     if (affine)

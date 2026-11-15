@@ -85,6 +85,14 @@ typedef struct AuBrowserHost {
      * hands it to a helper application and returns true, or returns
      * false and the tab shows that Aura cannot open it. */
     bool (*open_external)(void *ctx, const char *url);
+    /* Optional. Asked before a download is added (Save Link As, or a page
+     * that is a file): the shell may warn (for example before an
+     * application) and return false to drop it. name is the sanitized
+     * file name. */
+    bool (*confirm_download)(void *ctx, const char *url, const char *name, const char *mime);
+    /* Optional. A download was added (the shell shows the Downloads
+     * window). */
+    void (*download_added)(void *ctx, AuDownload *d);
 } AuBrowserHost;
 
 struct AuTab {
@@ -95,6 +103,7 @@ struct AuTab {
     char *status;
     int scroll_x, scroll_y;
     bool loading;
+    bool close_pending; /* opened only for a download: closed at the next idle */
 };
 
 struct AuBrowserWindow {
@@ -132,7 +141,7 @@ struct AuBrowser {
     AuPrefs prefs;
     AuHistory history;
     AuBookmarks bookmarks;
-    AuDownloads downloads; /* with the simulated transfer source for now */
+    AuDownloads downloads; /* the shell sets its transfer source (au_sim_source until it does) */
     AuFontSet *fonts;
     AuBrowserHost host;
     AuBrowserWindow **windows;
@@ -218,7 +227,21 @@ void au_bw_back(AuBrowserWindow *w);
 void au_bw_forward(AuBrowserWindow *w);
 void au_bw_go(AuBrowserWindow *w, int delta);
 void au_bw_reload(AuBrowserWindow *w);
+/* Shift- or Option-reload: fetches the page and its resources again,
+ * bypassing the cache. */
+void au_bw_reload_bypass(AuBrowserWindow *w);
 void au_bw_stop(AuBrowserWindow *w);
+/* Opens the certificate viewer (a new tab) for the active page; false
+ * when the page has no certificate. Clicking the security indicator does
+ * this. */
+bool au_bw_show_certificate(AuBrowserWindow *w);
+/* Downloads url into the download folder (Save Link As, Save Image As);
+ * NULL when it is not http or https or the shell declined. */
+AuDownload *au_bw_save_url(AuBrowserWindow *w, const char *url);
+/* Adds a download (asking host.confirm_download first); handoff is a
+ * page's transfer to continue (AuDownload.handoff) or 0. */
+AuDownload *au_browser_download(AuBrowser *b, const char *url, const char *name, const char *mime, int64_t total,
+                                uint32_t handoff);
 void au_bw_home(AuBrowserWindow *w);
 /* Adds the current page to the bookmarks, or removes it when it is
  * bookmarked already and toggle is set. Returns the new bookmark or

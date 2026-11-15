@@ -399,7 +399,17 @@ typedef struct {
     AuCssValue *image, *px, *py, *size, *repeat, *attach, *origin, *clip, *color;
 } BgLayer;
 
-static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool last)
+/* The longhands a layer of the background or mask shorthand sets: image,
+ * size, repeat, attachment (mask-mode for masks), clip, colour (0 for
+ * masks). */
+enum { LI_IMAGE, LI_SIZE, LI_REPEAT, LI_ATTACH, LI_CLIP, LI_COLOR };
+static const uint16_t bg_ids[6] = {AU_PROP_background_image, AU_PROP_background_size, AU_PROP_background_repeat,
+                                   AU_PROP_background_attachment, AU_PROP_background_clip,
+                                   AU_PROP_background_color};
+static const uint16_t mask_ids[6] = {AU_PROP_mask_image, AU_PROP_mask_size, AU_PROP_mask_repeat, AU_PROP_mask_mode,
+                                     AU_PROP_mask_clip, 0};
+
+static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool last, const uint16_t *ids)
 {
     uint32_t n;
     const AuCssValue *it = css_items(item, &n);
@@ -448,14 +458,14 @@ static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool l
                 }
                 if (!ns)
                     return false;
-                x = css_validate_longhand(cx, AU_PROP_background_size, list_of(cx, sz, ns, AU_CSSV_LIST));
+                x = css_validate_longhand(cx, ids[LI_SIZE], list_of(cx, sz, ns, AU_CSSV_LIST));
                 if (!x)
                     return false;
                 L->size = &x->u.items[0];
             }
             continue;
         }
-        if (!L->image && (x = try_lh(cx, AU_PROP_background_image, &it[i]))) {
+        if (!L->image && (x = try_lh(cx, ids[LI_IMAGE], &it[i]))) {
             L->image = &x->u.items[0];
             i++;
             continue;
@@ -474,7 +484,7 @@ static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool l
                     break;
             }
             if (m) {
-                x = css_validate_longhand(cx, AU_PROP_background_repeat, list_of(cx, seq, m, AU_CSSV_LIST));
+                x = css_validate_longhand(cx, ids[LI_REPEAT], list_of(cx, seq, m, AU_CSSV_LIST));
                 if (!x)
                     return false;
                 L->repeat = &x->u.items[0];
@@ -482,14 +492,14 @@ static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool l
                 continue;
             }
         }
-        if (!L->attach && (x = try_lh(cx, AU_PROP_background_attachment, &it[i]))) {
+        if (!L->attach && (x = try_lh(cx, ids[LI_ATTACH], &it[i]))) {
             L->attach = &x->u.items[0];
             i++;
             continue;
         }
-        if ((!L->origin || !L->clip) && (x = try_lh(cx, AU_PROP_background_clip, &it[i]))) {
+        if ((!L->origin || !L->clip) && (x = try_lh(cx, ids[LI_CLIP], &it[i]))) {
             if (!L->origin) {
-                if (css_is_kw(&x->u.items[0], AU_K_text))
+                if (css_is_kw(&x->u.items[0], AU_K_text) || css_is_kw(&x->u.items[0], AU_K_no_clip))
                     L->clip = &x->u.items[0];
                 else
                     L->origin = &x->u.items[0];
@@ -499,7 +509,7 @@ static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool l
             i++;
             continue;
         }
-        if (last && !L->color && (x = try_lh(cx, AU_PROP_background_color, &it[i]))) {
+        if (last && ids[LI_COLOR] && !L->color && (x = try_lh(cx, ids[LI_COLOR], &it[i]))) {
             L->color = x;
             i++;
             continue;
@@ -511,7 +521,9 @@ static bool bg_layer(CssParseCtx *cx, const AuCssValue *item, BgLayer *L, bool l
     return true;
 }
 
-static bool sh_background(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
+/* background, or (mask) the mask shorthand: the same layer grammar
+ * without attachment and colour, with mask-mode. */
+static bool sh_background(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b, bool mask)
 {
     CssParseCtx *cx = s->cx;
     AuCssValue *whole = css_parse_value(cx, tk, a, b);
@@ -525,12 +537,16 @@ static bool sh_background(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
     }
     BgLayer *L = css_arena_alloc(cx->arena, nl * sizeof(BgLayer));
     for (uint32_t i = 0; i < nl; i++)
-        if (!bg_layer(cx, &layers[i], &L[i], i == nl - 1))
+        if (!bg_layer(cx, &layers[i], &L[i], i == nl - 1, mask ? mask_ids : bg_ids))
             return false;
-    static const uint16_t props[8] = {AU_PROP_background_image, AU_PROP_background_position_x,
-                                      AU_PROP_background_position_y, AU_PROP_background_size,
-                                      AU_PROP_background_repeat, AU_PROP_background_attachment,
-                                      AU_PROP_background_origin, AU_PROP_background_clip};
+    static const uint16_t bprops[8] = {AU_PROP_background_image, AU_PROP_background_position_x,
+                                       AU_PROP_background_position_y, AU_PROP_background_size,
+                                       AU_PROP_background_repeat, AU_PROP_background_attachment,
+                                       AU_PROP_background_origin, AU_PROP_background_clip};
+    static const uint16_t mprops[8] = {AU_PROP_mask_image, AU_PROP_mask_position_x, AU_PROP_mask_position_y,
+                                       AU_PROP_mask_size, AU_PROP_mask_repeat, AU_PROP_mask_mode,
+                                       AU_PROP_mask_origin, AU_PROP_mask_clip};
+    const uint16_t *props = mask ? mprops : bprops;
     for (int p = 0; p < 8; p++) {
         AuCssValue *l = css_new_list(cx->arena, AU_CSSV_COMMA_LIST, nl);
         const AuCssValue *init = css_initial_value(props[p]);
@@ -552,11 +568,12 @@ static bool sh_background(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
         }
         emit(s, props[p], l);
     }
-    emit(s, AU_PROP_background_color, L[nl - 1].color);
+    if (!mask)
+        emit(s, AU_PROP_background_color, L[nl - 1].color);
     return true;
 }
 
-static bool sh_background_position(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
+static bool sh_background_position(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b, bool mask)
 {
     CssParseCtx *cx = s->cx;
     AuCssValue *whole = css_parse_value(cx, tk, a, b);
@@ -573,8 +590,8 @@ static bool sh_background_position(Sh *s, const CssTokens *tk, uint32_t a, uint3
         xs->u.items[i] = pos->u.items[0];
         ys->u.items[i] = pos->u.items[1];
     }
-    emit(s, AU_PROP_background_position_x, xs);
-    emit(s, AU_PROP_background_position_y, ys);
+    emit(s, mask ? AU_PROP_mask_position_x : AU_PROP_background_position_x, xs);
+    emit(s, mask ? AU_PROP_mask_position_y : AU_PROP_background_position_y, ys);
     return true;
 }
 
@@ -1376,9 +1393,13 @@ bool css_parse_shorthand(CssParseCtx *cx, uint16_t sh, const CssTokens *tk, uint
     case AU_PROP_outline:
         return sh_outline(&s, tk, a, b);
     case AU_PROP_background:
-        return sh_background(&s, tk, a, b);
+        return sh_background(&s, tk, a, b, false);
     case AU_PROP_background_position:
-        return sh_background_position(&s, tk, a, b);
+        return sh_background_position(&s, tk, a, b, false);
+    case AU_PROP_mask:
+        return sh_background(&s, tk, a, b, true);
+    case AU_PROP_mask_position:
+        return sh_background_position(&s, tk, a, b, true);
     case AU_PROP_font:
         return sh_font(&s, tk, a, b);
     case AU_PROP_font_variant:

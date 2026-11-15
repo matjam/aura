@@ -51,7 +51,7 @@ void mac_about_box(void)
     /* Each line becomes a Pascal string (255 bytes at most, cut there). */
     char fonts[300], libs[300], names[200];
     list_names(AU_CREDIT_FONT, names, sizeof names);
-    snprintf(fonts, sizeof fonts, "Fonts: %s, under the SIL Open Font License and the Bitstream Vera licence.",
+    snprintf(fonts, sizeof fonts, "Fonts: %s. Data: Mozilla's root certificates and the Public Suffix List.",
              names);
     list_names(AU_CREDIT_LIBRARY, names, sizeof names);
     if (names[0])

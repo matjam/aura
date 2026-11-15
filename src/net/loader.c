@@ -36,8 +36,11 @@ struct Req {
     /* response */
     char *url;
     int status;
-    AuBuf mime, charset, filename;
+    AuBuf mime, charset, filename, csp, rpolicy;
     char encoding[32];
+    char cipher[64];
+    uint16_t tls_version;
+    bool mixed;
     int64_t content_length, received;
     bool from_cache, attachment, nosniff, have_response, response_sent;
     AuLoadSecurity security;
@@ -74,6 +77,8 @@ static void req_free(Req *r)
     au_buf_free(&r->mime);
     au_buf_free(&r->charset);
     au_buf_free(&r->filename);
+    au_buf_free(&r->csp);
+    au_buf_free(&r->rpolicy);
     au_buf_free(&r->hold);
     if (r->is_data)
         au_data_url_free(&r->data);
@@ -119,6 +124,11 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->from_cache = r->from_cache;
     i->attachment = r->attachment;
     i->filename = au_buf_cstr(&r->filename);
+    i->csp = au_buf_cstr(&r->csp);
+    i->referrer_policy = au_buf_cstr(&r->rpolicy);
+    i->tls_version = r->tls_version;
+    i->cipher = r->cipher;
+    i->mixed = r->mixed;
 }
 
 /* ---- windows-1252 to UTF-8 ---- */
@@ -287,11 +297,24 @@ static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
     const char *cd = au_headers_get(resp->headers, "content-disposition");
     if (cd)
         parse_disposition(r, cd);
+    const char *v = au_headers_get(resp->headers, "content-security-policy");
+    au_buf_clear(&r->csp);
+    if (v)
+        au_buf_append(&r->csp, v, strlen(v) > 4096 ? 4096 : strlen(v));
+    v = au_headers_get(resp->headers, "referrer-policy");
+    au_buf_clear(&r->rpolicy);
+    if (v)
+        au_buf_append(&r->rpolicy, v, strlen(v) > 256 ? 256 : strlen(v));
     r->security = resp->security.tls ? AU_LOAD_SECURITY_SECURE : AU_LOAD_SECURITY_NOT_SECURE;
+    r->tls_version = resp->security.tls ? resp->security.version : 0;
+    snprintf(r->cipher, sizeof r->cipher, "%s", resp->security.tls && resp->security.cipher ? resp->security.cipher : "");
     const AuCertInfo *ci = au_http_cert_info(t);
     if (ci) {
         r->cert = *ci;
         r->have_cert = true;
+        /* The user's exception let a bad certificate through. */
+        if (ci->overridden)
+            r->security = AU_LOAD_SECURITY_CERT_ERROR;
     }
     r->have_response = true;
     if (r->dl) {
@@ -392,6 +415,8 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     au_buf_init(&r->mime);
     au_buf_init(&r->charset);
     au_buf_init(&r->filename);
+    au_buf_init(&r->csp);
+    au_buf_init(&r->rpolicy);
     au_buf_init(&r->hold);
     r->next = l->reqs;
     l->reqs = r;
@@ -425,6 +450,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
             } else if (mc == AU_MIXED_BLOCKABLE) {
                 r->early = true;
                 r->early_err = AU_NET_ERR_BLOCKED;
+                r->mixed = true;
             }
             au_url_free(&doc);
         }
@@ -449,6 +475,8 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     hr.top_level_url = rq->top_level_url;
     hr.user_activated = rq->user_activated;
     hr.reload = rq->reload;
+    if (rq->revalidate && !rq->reload)
+        au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
     AuHttpCallbacks hc = {r, t_response, t_data, t_done, NULL, NULL};
     r->t = au_http_start(l->net, &hr, &hc);
@@ -551,6 +579,15 @@ bool au_net_loader_progress(const AuNetLoader *l, uint32_t id, int64_t *received
         return false;
     *received = r->received;
     *total = r->content_length;
+    return true;
+}
+
+bool au_net_loader_phase(const AuNetLoader *l, uint32_t id, AuHttpPhase *phase)
+{
+    Req *r = find(l, id);
+    if (!r)
+        return false;
+    *phase = r->t && !r->finished ? au_http_phase(r->t) : AU_PHASE_DONE;
     return true;
 }
 

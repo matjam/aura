@@ -9,6 +9,11 @@
  *     Session            open windows and tabs (browser.h)
  *     Downloads          the downloads list (downloads.h)
  *     Running            exists while Aura runs (unclean exit detection)
+ * and, written by network.c through storage_write_named:
+ *     Cookies            persistent cookies (cookies.h)
+ *     HSTS               Strict-Transport-Security hosts (hsts.h)
+ *     Random Seed        the entropy pool's seed (entropy.c writes it)
+ *     Cache              a folder of disk cache entries (disk_cache.h)
  *
  * A file is written as "<name>.tmp" and then swapped with the old one
  * (FSpExchangeFiles; on volumes without it, delete and rename), so a crash
@@ -19,6 +24,7 @@
  * with the one last saved and writes it a few seconds after the first
  * unsaved change, or at once when forced (quitting). */
 #include "mac.h"
+#include "clock_mac.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -56,10 +62,9 @@ static void cpstr(const char *s, Str255 out)
 
 AuTime mac_now(void)
 {
-    ULONGINT secs = 0;
-    ReadDateTime(&secs);
-    /* Mac OS counts local seconds from 1904; AuTime from 1970. */
-    return (AuTime)secs - (AuTime)2082844800;
+    /* UTC, as cookies and certificates see it (clock_mac.c applies the
+     * Map control panel's offset to the local system clock). */
+    return (AuTime)au_mac_wall_time();
 }
 
 bool storage_init(void)
@@ -98,12 +103,12 @@ bool storage_init(void)
     return true;
 }
 
-static bool read_file(FileId id, char **data, size_t *len)
+bool storage_read_named(const char *fname, char **data, size_t *len)
 {
     if (!g_ok)
         return false;
     Str255 name;
-    cpstr(file_names[id], name);
+    cpstr(fname, name);
     FSSpec spec;
     if (FSMakeFSSpec(g_vref, g_dir, name, &spec) != noErr)
         return false;
@@ -129,12 +134,12 @@ static bool read_file(FileId id, char **data, size_t *len)
     return ok;
 }
 
-static void keep_aside(FileId id)
+void storage_keep_aside_named(const char *fname)
 {
     char aside[64];
-    snprintf(aside, sizeof aside, "%s (damaged)", file_names[id]);
+    snprintf(aside, sizeof aside, "%s (damaged)", fname);
     Str255 name, an;
-    cpstr(file_names[id], name);
+    cpstr(fname, name);
     cpstr(aside, an);
     FSSpec spec, old;
     if (FSMakeFSSpec(g_vref, g_dir, an, &old) == noErr)
@@ -143,14 +148,14 @@ static void keep_aside(FileId id)
         FSpRename(&spec, an);
 }
 
-static bool write_file(FileId id, const char *data, size_t len)
+bool storage_write_named(const char *fname, const char *data, size_t len)
 {
     if (!g_ok)
         return false;
     char tmpname[64];
-    snprintf(tmpname, sizeof tmpname, "%s.tmp", file_names[id]);
+    snprintf(tmpname, sizeof tmpname, "%s.tmp", fname);
     Str255 name, tname;
-    cpstr(file_names[id], name);
+    cpstr(fname, name);
     cpstr(tmpname, tname);
     FSSpec tmp, dst;
     OSErr err = FSMakeFSSpec(g_vref, g_dir, tname, &tmp);
@@ -199,6 +204,45 @@ static bool write_file(FileId id, const char *data, size_t len)
     return true;
 }
 
+static bool read_file(FileId id, char **data, size_t *len) { return storage_read_named(file_names[id], data, len); }
+static void keep_aside(FileId id) { storage_keep_aside_named(file_names[id]); }
+static bool write_file(FileId id, const char *data, size_t len)
+{
+    return storage_write_named(file_names[id], data, len);
+}
+
+bool storage_subfolder(const char *fname, short *vref, long *dir)
+{
+    if (!g_ok)
+        return false;
+    Str255 name;
+    cpstr(fname, name);
+    FSSpec spec;
+    OSErr err = FSMakeFSSpec(g_vref, g_dir, name, &spec);
+    if (err == fnfErr) {
+        long sub = 0;
+        if (FSpDirCreate(&spec, -1, &sub) != noErr)
+            return false;
+        *vref = g_vref;
+        *dir = sub;
+        return true;
+    }
+    if (err != noErr)
+        return false;
+    CInfoPBRec pb;
+    Str255 n2;
+    memcpy(n2, spec.name, spec.name[0] + 1);
+    memset(&pb, 0, sizeof pb);
+    pb.dirInfo.ioNamePtr = n2;
+    pb.dirInfo.ioVRefNum = spec.vRefNum;
+    pb.dirInfo.ioDrDirID = spec.parID;
+    if (PBGetCatInfoSync(&pb) != noErr || !(pb.dirInfo.ioFlAttrib & 0x10))
+        return false;
+    *vref = g_vref;
+    *dir = pb.dirInfo.ioDrDirID;
+    return true;
+}
+
 static uint32_t generation(FileId id)
 {
     AuBrowser *b = g_browser;
@@ -233,6 +277,7 @@ void storage_load_all(void)
     AuBrowser *b = g_browser;
     char *data;
     size_t len;
+    b->history.utc_offset = au_mac_gmt_offset();
     if (read_file(F_PREFS, &data, &len)) {
         if (!au_prefs_parse(&b->prefs, data, len))
             keep_aside(F_PREFS);
@@ -350,6 +395,7 @@ void storage_save_changed(bool force)
         }
         au_buf_free(&out);
     }
+    mac_net_save(force);
 }
 
 bool mac_read_file_url(const char *url, char **data, size_t *len)

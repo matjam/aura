@@ -1,37 +1,48 @@
 /* The browser's AuPageFetcher (src/browser/page.h) on the loader: see the
- * adapter notes in loader.h. Only page.h's fetcher types are used from
+ * notes in loader.h. Only page.h's fetcher types are used from
  * src/browser. */
 #include "loader.h"
 #include "../browser/page.h"
 
+#include <stdio.h>
 #include <string.h>
 
-#define MAX_NAV_HISTORY 8
+/* page.h mirrors three of src/net's enums in the same order. */
+typedef char check_errors[(int)AU_FETCH_ERR_CANCELLED == (int)AU_NET_ERR_CANCELLED ? 1 : -1];
+typedef char check_phases[(int)AU_FETCH_PHASE_DONE == (int)AU_PHASE_DONE ? 1 : -1];
+typedef char check_policies[(int)AU_FETCH_RP_UNSAFE_URL == (int)AU_RP_UNSAFE_URL ? 1 : -1];
 
 typedef struct PfReq {
     struct PfReq *next;
     AuNetPageFetcher *f;
     uint32_t id; /* loader id, also the fetcher id */
-    const AuFetchSink *sink;
-    bool navigation;
+    AuFetchSink sink;
     bool done;
 } PfReq;
 
-typedef struct NavRecord {
-    char *url;
-    AuLoadSecurity security;
-    AuCertInfo cert;
-    bool have_cert;
-} NavRecord;
+/* A document response handed to the download manager: its bytes are held
+ * here until the transfer source attaches the file (au_net_page_fetcher_
+ * take_download), then written straight through. */
+typedef struct Parked {
+    struct Parked *next;
+    AuNetPageFetcher *f;
+    uint32_t token;
+    AuNetDownload *dl;
+    AuBuf held;
+    AuDownloadSink real;
+    bool attached;
+} Parked;
 
 struct AuNetPageFetcher {
     AuNetLoader *l;
     PfReq *reqs;
-    char *doc_url;       /* the current navigation's final URL */
-    uint32_t last_activity;
-    bool any_activity;
-    NavRecord navs[MAX_NAV_HISTORY];
-    int next_nav;
+    Parked *parked;
+    uint32_t next_token;
+    unsigned (*entropy_bits)(void *ctx);
+    void *entropy_ctx;
+    unsigned entropy_needed;
+    const char *(*offline)(void *ctx);
+    void *offline_ctx;
 };
 
 AuNetPageFetcher *au_net_page_fetcher_new(AuNetLoader *l)
@@ -39,6 +50,14 @@ AuNetPageFetcher *au_net_page_fetcher_new(AuNetLoader *l)
     AuNetPageFetcher *f = au_calloc(sizeof *f);
     f->l = l;
     return f;
+}
+
+static void parked_free(Parked *p)
+{
+    if (p->dl)
+        au_net_download_stop(p->dl);
+    au_buf_free(&p->held);
+    au_free(p);
 }
 
 void au_net_page_fetcher_free(AuNetPageFetcher *f)
@@ -51,121 +70,271 @@ void au_net_page_fetcher_free(AuNetPageFetcher *f)
             au_net_loader_cancel(f->l, r->id);
         au_free(r);
     }
-    au_free(f->doc_url);
-    for (int i = 0; i < MAX_NAV_HISTORY; i++)
-        au_free(f->navs[i].url);
+    for (Parked *p = f->parked, *n; p; p = n) {
+        n = p->next;
+        parked_free(p);
+    }
     au_free(f);
 }
 
-static uint32_t now_ms(AuNetPageFetcher *f)
+void au_net_page_fetcher_set_entropy(AuNetPageFetcher *f, unsigned (*bits)(void *ctx), void *ctx, unsigned needed)
 {
-    const AuNetOps *ops = au_net_ops(au_net_loader_net(f->l));
-    return ops->now_ms(ops->ctx);
+    f->entropy_bits = bits;
+    f->entropy_ctx = ctx;
+    f->entropy_needed = needed;
 }
 
-static bool has_ext(const char *url, const char *const *exts)
+void au_net_page_fetcher_set_offline(AuNetPageFetcher *f, const char *(*why)(void *ctx), void *ctx)
 {
-    size_t n = strcspn(url, "?#");
-    for (; *exts; exts++) {
-        size_t e = strlen(*exts);
-        if (n > e && au_ieq(url + n - e, e, *exts, e))
-            return true;
+    f->offline = why;
+    f->offline_ctx = ctx;
+}
+
+/* ---- Conversions ---- */
+
+static AuSecurity security_of(AuLoadSecurity s)
+{
+    switch (s) {
+    case AU_LOAD_SECURITY_SECURE: return AU_SECURITY_SECURE;
+    case AU_LOAD_SECURITY_NOT_SECURE: return AU_SECURITY_NOT_SECURE;
+    case AU_LOAD_SECURITY_CERT_ERROR: return AU_SECURITY_CERT_ERROR;
+    default: return AU_SECURITY_NONE;
     }
-    return false;
 }
 
-static AuRequestDest guess_dest(const char *url)
+void au_net_fetch_cert_from(AuFetchCert *out, const AuCertInfo *ci, uint16_t version, const char *cipher)
 {
-    static const char *const css[] = {".css", NULL};
-    static const char *const js[] = {".js", ".mjs", NULL};
-    static const char *const font[] = {".woff", ".woff2", ".ttf", ".otf", NULL};
-    if (has_ext(url, css))
-        return AU_DEST_STYLE;
-    if (has_ext(url, js))
-        return AU_DEST_SCRIPT;
-    if (has_ext(url, font))
-        return AU_DEST_FONT;
-    return AU_DEST_IMAGE; /* the docview's other requests are images */
+    memset(out, 0, sizeof *out);
+    snprintf(out->host, sizeof out->host, "%s", ci->host);
+    out->count = ci->count;
+    int n = ci->count < AU_CERT_MAX_CHAIN ? ci->count : AU_CERT_MAX_CHAIN;
+    if (n > AU_FETCH_CERT_CHAIN)
+        n = AU_FETCH_CERT_CHAIN;
+    for (int i = 0; i < n; i++) {
+        const AuCertEntry *e = &ci->chain[i];
+        AuFetchCertEntry *o = &out->chain[i];
+        snprintf(o->subject, sizeof o->subject, "%s", e->subject);
+        snprintf(o->issuer, sizeof o->issuer, "%s", e->issuer);
+        o->not_before = e->not_before;
+        o->not_after = e->not_after;
+        memcpy(o->sha256, e->sha256, 32);
+        snprintf(o->san, sizeof o->san, "%s", e->san);
+    }
+    out->error = ci->error != 0 && ci->error != 32 /* BR_ERR_X509_OK */;
+    if (out->error && ci->reason)
+        snprintf(out->reason, sizeof out->reason, "%s", ci->reason);
+    out->clock_wrong = ci->clock_wrong;
+    out->hsts = ci->hsts;
+    out->overridden = ci->overridden;
+    out->checked_at = ci->checked_at;
+    if (version == 0x0303)
+        snprintf(out->protocol, sizeof out->protocol, "TLS 1.2");
+    else if (version)
+        snprintf(out->protocol, sizeof out->protocol, "TLS %04X", (unsigned)version);
+    snprintf(out->cipher, sizeof out->cipher, "%s", cipher ? cipher : "");
 }
 
-static void record_nav(AuNetPageFetcher *f, const AuLoadInfo *info)
+static void fill_response(AuFetchResponse *r, const AuLoadInfo *i, AuFetchCert *cert)
 {
-    NavRecord *n = &f->navs[f->next_nav];
-    f->next_nav = (f->next_nav + 1) % MAX_NAV_HISTORY;
-    au_free(n->url);
-    n->url = au_strndup(info->url, strlen(info->url));
-    n->security = info->security;
-    n->have_cert = info->cert != NULL;
-    if (info->cert)
-        n->cert = *info->cert;
+    memset(r, 0, sizeof *r);
+    r->status = i->status;
+    r->url = i->url;
+    r->content_type = i->mime;
+    r->charset = i->charset;
+    r->encoding = i->encoding;
+    r->content_length = i->content_length;
+    r->attachment = i->attachment;
+    r->filename = i->filename;
+    r->csp = i->csp ? i->csp : "";
+    r->referrer_policy = i->referrer_policy ? i->referrer_policy : "";
+    r->security = security_of(i->security);
+    r->from_cache = i->from_cache;
+    if (i->cert) {
+        au_net_fetch_cert_from(cert, i->cert, i->tls_version, i->cipher);
+        r->cert = cert;
+    }
 }
+
+static AuFetchError error_of(AuNetError e)
+{
+    /* The two enums list the same errors in the same order. */
+    return (AuFetchError)e;
+}
+
+/* ---- Loader callbacks ---- */
 
 static void pf_response(void *ctx, uint32_t id, const AuLoadInfo *info)
 {
-    (void)id;
     PfReq *r = ctx;
-    AuNetPageFetcher *f = r->f;
-    f->last_activity = now_ms(f);
-    if (r->navigation) {
-        au_free(f->doc_url);
-        f->doc_url = au_strndup(info->url, strlen(info->url));
-    }
+    if (!r->sink.response)
+        return;
+    AuFetchCert *cert = au_alloc(sizeof *cert);
+    AuFetchResponse resp;
+    fill_response(&resp, info, cert);
+    r->sink.response(r->sink.ctx, id, &resp);
+    au_free(cert);
 }
 
 static void pf_data(void *ctx, uint32_t id, const void *bytes, size_t len)
 {
     PfReq *r = ctx;
-    r->f->last_activity = now_ms(r->f);
-    if (r->sink->data)
-        r->sink->data(r->sink->ctx, id, bytes, len);
+    if (r->sink.data)
+        r->sink.data(r->sink.ctx, id, bytes, len);
 }
 
 static void pf_done(void *ctx, uint32_t id, AuNetError err, const AuLoadInfo *info)
 {
     PfReq *r = ctx;
     AuNetPageFetcher *f = r->f;
-    f->last_activity = now_ms(f);
     r->done = true;
-    if (r->navigation)
-        record_nav(f, info);
     AuFetchInfo fi;
+    memset(&fi, 0, sizeof fi);
     fi.url = info->url && info->url[0] ? info->url : NULL;
     fi.content_type = info->mime && info->mime[0] ? info->mime : NULL;
-    if (r->sink->done)
-        r->sink->done(r->sink->ctx, id, err == AU_NET_OK, &fi);
+    fi.error = error_of(err);
+    fi.status = info->status;
+    fi.mixed = info->mixed;
+    fi.message = "";
+    /* No TCP/IP at all reads better as such than as a DNS failure. */
+    if (f->offline && (err == AU_NET_ERR_DNS || err == AU_NET_ERR_CONNECT)) {
+        const char *why = f->offline(f->offline_ctx);
+        if (why) {
+            fi.error = AU_FETCH_ERR_NO_NETWORK;
+            fi.message = why;
+        }
+    }
+    AuFetchCert *cert = NULL;
+    if (info->cert && (err == AU_NET_ERR_CERT || err == AU_NET_ERR_CLOCK)) {
+        cert = au_alloc(sizeof *cert);
+        au_net_fetch_cert_from(cert, info->cert, info->tls_version, info->cipher);
+        fi.cert = cert;
+    }
+    if (r->sink.done)
+        r->sink.done(r->sink.ctx, id, err == AU_NET_OK, &fi);
+    au_free(cert);
 }
 
-static uint32_t pf_start(void *ctx, const char *url, const AuFetchSink *sink)
+/* ---- Downloads handed off by a page ---- */
+
+static bool park_write(void *ctx, const void *bytes, size_t len)
+{
+    Parked *p = ctx;
+    if (p->attached)
+        return p->real.write(p->real.ctx, bytes, len);
+    if (p->held.len + len > 1024u * 1024) /* never claimed this far: give up */
+        return false;
+    au_buf_append(&p->held, bytes, len);
+    return true;
+}
+
+static bool pf_download(void *ctx, uint32_t id, const AuLoadInfo *info)
+{
+    PfReq *r = ctx;
+    AuNetPageFetcher *f = r->f;
+    if (!r->sink.download)
+        return false;
+    Parked *p = au_calloc(sizeof *p);
+    p->f = f;
+    p->token = ++f->next_token ? f->next_token : ++f->next_token;
+    au_buf_init(&p->held);
+    AuFetchCert *cert = au_alloc(sizeof *cert);
+    AuFetchResponse resp;
+    fill_response(&resp, info, cert);
+    bool take = r->sink.download(r->sink.ctx, id, &resp, p->token);
+    au_free(cert);
+    if (!take) {
+        au_free(p);
+        return false;
+    }
+    AuDownloadSink ds = {p, park_write};
+    p->dl = au_net_download_adopt(f->l, id, &ds);
+    r->done = true; /* no more sink calls */
+    if (!p->dl) {
+        au_free(p);
+        return true; /* the loader cancels the request */
+    }
+    p->next = f->parked;
+    f->parked = p;
+    return true;
+}
+
+AuNetDownload *au_net_page_fetcher_take_download(AuNetPageFetcher *f, uint32_t token, const AuDownloadSink *sink,
+                                                 char **error)
+{
+    for (Parked *p = f->parked; p; p = p->next) {
+        if (p->token != token || p->attached)
+            continue;
+        p->real = *sink;
+        p->attached = true;
+        if (p->held.len && !sink->write(sink->ctx, p->held.data, p->held.len)) {
+            *error = au_strndup("cannot write the file", 21);
+            return NULL;
+        }
+        au_buf_free(&p->held);
+        return p->dl;
+    }
+    return NULL;
+}
+
+void au_net_page_fetcher_release_download(AuNetPageFetcher *f, uint32_t token)
+{
+    for (Parked **pp = &f->parked; *pp; pp = &(*pp)->next) {
+        if ((*pp)->token == token) {
+            Parked *p = *pp;
+            *pp = p->next;
+            parked_free(p);
+            return;
+        }
+    }
+}
+
+/* ---- The interface ---- */
+
+static AuRequestDest dest_of(AuFetchKind k, const char *url)
+{
+    switch (k) {
+    case AU_FETCH_DOCUMENT: return AU_DEST_DOCUMENT;
+    case AU_FETCH_STYLESHEET: return AU_DEST_STYLE;
+    case AU_FETCH_IMAGE: return AU_DEST_IMAGE;
+    case AU_FETCH_FONT: return AU_DEST_FONT;
+    case AU_FETCH_SCRIPT: return AU_DEST_SCRIPT;
+    default: break;
+    }
+    /* Other: fonts named by their extension (the document view's web
+     * fonts), else an empty destination. */
+    size_t n = strcspn(url, "?#");
+    static const char *const font[] = {".woff", ".woff2", ".ttf", ".otf"};
+    for (size_t i = 0; i < sizeof font / sizeof font[0]; i++) {
+        size_t e = strlen(font[i]);
+        if (n > e && au_ieq(url + n - e, e, font[i], e))
+            return AU_DEST_FONT;
+    }
+    return AU_DEST_EMPTY;
+}
+
+static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink *sink)
 {
     AuNetPageFetcher *f = ctx;
-    uint32_t now = now_ms(f);
-    bool outstanding = false;
-    for (PfReq *r = f->reqs; r; r = r->next)
-        if (!r->done)
-            outstanding = true;
-    bool quiet = !f->any_activity || (uint32_t)(now - f->last_activity) > AU_FETCHER_QUIET_MS;
-    bool navigation = !outstanding && quiet;
-    f->any_activity = true;
-    f->last_activity = now;
     PfReq *r = au_calloc(sizeof *r);
     r->f = f;
-    r->sink = sink;
-    r->navigation = navigation || !f->doc_url;
+    r->sink = *sink;
     AuLoadRequest rq;
     memset(&rq, 0, sizeof rq);
-    rq.url = url;
-    if (r->navigation) {
-        rq.dest = AU_DEST_DOCUMENT;
-        rq.user_activated = true;
-        rq.to_utf8 = true;
-        au_free(f->doc_url);
-        f->doc_url = au_strndup(url, strlen(url));
-    } else {
-        rq.dest = guess_dest(url);
-        rq.document_url = f->doc_url;
-        rq.top_level_url = f->doc_url;
-    }
-    AuLoadCallbacks cb = {r, pf_response, pf_data, pf_done, NULL};
+    rq.url = frq->url;
+    rq.dest = dest_of(frq->kind, frq->url);
+    rq.document_url = frq->document_url;
+    rq.top_level_url = frq->top_level_url;
+    rq.referrer_policy = (AuReferrerPolicy)frq->referrer_policy;
+    rq.user_activated = frq->user_activated;
+    rq.reload = frq->cache == AU_FETCH_CACHE_BYPASS;
+    rq.revalidate = frq->cache == AU_FETCH_CACHE_REVALIDATE;
+    rq.allow_http_fallback = frq->allow_http_fallback;
+    rq.method = frq->method;
+    if (frq->body)
+        rq.body = au_body_from_bytes(frq->body, frq->body_len, frq->body_type);
+    rq.content_type = frq->body_type;
+    rq.to_utf8 = frq->kind == AU_FETCH_DOCUMENT;
+    AuLoadCallbacks cb = {r, pf_response, pf_data, pf_done, pf_download};
     r->id = au_net_loader_start(f->l, &rq, &cb);
     r->next = f->reqs;
     f->reqs = r;
@@ -197,25 +366,41 @@ static void pf_poll(void *ctx)
     }
 }
 
+static bool pf_status(void *ctx, uint32_t id, AuFetchStatus *out)
+{
+    AuNetPageFetcher *f = ctx;
+    memset(out, 0, sizeof *out);
+    AuHttpPhase ph;
+    if (!au_net_loader_phase(f->l, id, &ph))
+        return false;
+    out->phase = (AuFetchPhase)ph; /* same order */
+    if (!au_net_loader_progress(f->l, id, &out->received, &out->total))
+        out->total = -1;
+    if (f->entropy_bits) {
+        out->entropy_bits = f->entropy_bits(f->entropy_ctx);
+        out->entropy_needed = f->entropy_needed;
+    }
+    return true;
+}
+
+static bool pf_allow_cert(void *ctx, const char *host, const uint8_t sha256[32])
+{
+    AuNetPageFetcher *f = ctx;
+    return au_net_allow_cert(au_net_loader_net(f->l), host, sha256);
+}
+
 void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *out)
 {
+    memset(out, 0, sizeof *out);
     out->ctx = f;
     out->start = pf_start;
     out->cancel = pf_cancel;
     out->poll = pf_poll;
+    out->status = pf_status;
+    out->allow_cert = pf_allow_cert;
 }
 
-AuLoadSecurity au_net_page_fetcher_security(const AuNetPageFetcher *f, const char *url, const AuCertInfo **cert)
+AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f)
 {
-    if (cert)
-        *cert = NULL;
-    for (int k = 1; k <= MAX_NAV_HISTORY; k++) {
-        const NavRecord *n = &f->navs[(f->next_nav - k + MAX_NAV_HISTORY) % MAX_NAV_HISTORY];
-        if (n->url && !strcmp(n->url, url)) {
-            if (cert && n->have_cert)
-                *cert = &n->cert;
-            return n->security;
-        }
-    }
-    return AU_LOAD_SECURITY_NONE;
+    return f->l;
 }

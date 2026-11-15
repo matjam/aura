@@ -22,17 +22,10 @@
  * Everything is delivered from au_net_loader_poll (which also pumps the
  * AuNet), never from inside au_net_loader_start. One loader per AuNet.
  *
- * au_net_loader_page_fetcher wraps the loader as the browser's
- * AuPageFetcher (page.h) for http and https. That interface carries no
- * request context (which document asked, what kind of resource), so the
- * adapter infers it: a request that starts when the adapter has nothing
- * outstanding and has been quiet for AU_FETCHER_QUIET_MS is a top-level
- * navigation by the user; requests while a navigation is active, or soon
- * after, are its subresources (the navigation's final URL is their
- * referrer and top-level site, and their kind is guessed from the URL's
- * extension). With one page loading at a time this is exact; a second
- * page loading at the same moment is treated as a subresource of the
- * first, which errs on the side of withholding cookies. */
+ * page_fetcher.c wraps the loader as the browser's AuPageFetcher
+ * (page.h) for http and https. Each request carries its context (kind,
+ * requesting and top-level document, referrer policy, reload mode), which
+ * maps onto AuLoadRequest. */
 #ifndef AURA_NET_LOADER_H
 #define AURA_NET_LOADER_H
 
@@ -41,8 +34,6 @@
 
 typedef struct AuNetLoader AuNetLoader;
 typedef struct AuNetDownload AuNetDownload;
-
-#define AU_FETCHER_QUIET_MS 1500
 
 typedef enum {
     AU_LOAD_SECURITY_NONE,       /* data: URLs, failures before a response */
@@ -58,7 +49,8 @@ typedef struct AuLoadRequest {
     const char *top_level_url;    /* NULL when this is the top-level navigation */
     AuReferrerPolicy referrer_policy;
     bool user_activated;
-    bool reload;
+    bool reload;                  /* bypass the cache (end-to-end reload) */
+    bool revalidate;              /* a reload: revalidate a cached copy (Cache-Control: max-age=0) */
     bool allow_http_fallback;     /* HTTPS-first: the user accepted plain http */
     const char *method;           /* NULL: GET */
     AuBodySource *body;           /* ownership passes */
@@ -78,6 +70,11 @@ typedef struct AuLoadInfo {
     bool from_cache;
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* suggested file name for a download ("" when none) */
+    const char *csp;          /* Content-Security-Policy ("" when none) */
+    const char *referrer_policy; /* Referrer-Policy ("" when none) */
+    uint16_t tls_version;     /* 0x0303 for TLS 1.2; 0 without TLS */
+    const char *cipher;       /* the TLS cipher suite ("" without TLS) */
+    bool mixed;               /* blocked as mixed content (err AU_NET_ERR_BLOCKED) */
 } AuLoadInfo;
 
 typedef struct AuLoadCallbacks {
@@ -104,6 +101,8 @@ bool au_net_loader_poll(AuNetLoader *l);
 int au_net_loader_active(const AuNetLoader *l);
 /* Body bytes received so far and the expected total (-1 when unknown). */
 bool au_net_loader_progress(const AuNetLoader *l, uint32_t id, int64_t *received, int64_t *total);
+/* What request id is doing (AU_PHASE_DONE once its response is complete). */
+bool au_net_loader_phase(const AuNetLoader *l, uint32_t id, AuHttpPhase *phase);
 
 /* ---- Downloads ----
  * Shaped for the browser's AuTransferSource (downloads.h): start, poll,
@@ -130,15 +129,31 @@ void au_net_download_stop(AuNetDownload *d);
 /* ---- The browser's fetcher interface (page_fetcher.c) ---- */
 typedef struct AuNetPageFetcher AuNetPageFetcher;
 struct AuPageFetcher;
+struct AuFetchCert;
 /* An adapter implementing page.h's AuPageFetcher on the loader. Fill an
  * AuPageFetcher with au_net_page_fetcher_interface and register it for
  * "http" and "https" with au_browser_set_fetcher (which copies it). */
 AuNetPageFetcher *au_net_page_fetcher_new(AuNetLoader *l);
 void au_net_page_fetcher_free(AuNetPageFetcher *f);
 void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *out);
-/* The security state the adapter saw for the most recent top-level
- * navigation to url (for the address field's indicator), and its
- * certificate details (NULL when none). */
-AuLoadSecurity au_net_page_fetcher_security(const AuNetPageFetcher *f, const char *url, const AuCertInfo **cert);
+AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f);
+/* The platform's entropy source, for AuFetchStatus while https waits for
+ * it: bits() returns the bits credited so far, needed the threshold. */
+void au_net_page_fetcher_set_entropy(AuNetPageFetcher *f, unsigned (*bits)(void *ctx), void *ctx, unsigned needed);
+/* Optional: why() returns a sentence when the machine has no usable
+ * TCP/IP (Open Transport missing or not configured), else NULL; a DNS or
+ * connection failure is then reported as AU_FETCH_ERR_NO_NETWORK. */
+void au_net_page_fetcher_set_offline(AuNetPageFetcher *f, const char *(*why)(void *ctx), void *ctx);
+/* A document response a page handed to the download manager (sink
+ * download(), its handoff token): attaches the file's sink, writes the
+ * bytes held so far, and returns the transfer (poll it with
+ * au_net_download_poll); NULL when the token is unknown (the caller then
+ * starts the download afresh). Release it with
+ * au_net_page_fetcher_release_download (not au_net_download_stop). */
+AuNetDownload *au_net_page_fetcher_take_download(AuNetPageFetcher *f, uint32_t token, const AuDownloadSink *sink,
+                                                 char **error);
+void au_net_page_fetcher_release_download(AuNetPageFetcher *f, uint32_t token);
+/* Converts certificate details for page.h. */
+void au_net_fetch_cert_from(struct AuFetchCert *out, const AuCertInfo *ci, uint16_t version, const char *cipher);
 
 #endif

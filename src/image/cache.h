@@ -67,6 +67,9 @@ void au_image_cache_free(AuImageCache *c);
 void au_image_cache_set_budget(AuImageCache *c, size_t budget);
 /* An optional millisecond clock, for decode timings in the stats. */
 void au_image_cache_set_clock(AuImageCache *c, uint32_t (*now_ms)(void *ctx), void *ctx);
+/* The fonts text in SVG images is drawn with (NULL: none). The set must
+ * outlive the cache or be replaced first. */
+void au_image_cache_set_fonts(AuImageCache *c, struct AuFontSet *fonts);
 
 AuImageEntry *au_image_cache_find(AuImageCache *c, const char *url);
 AuImageEntry *au_image_cache_add(AuImageCache *c, const char *url); /* or the existing one */

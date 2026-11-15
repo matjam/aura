@@ -283,10 +283,26 @@ static void cb_title(void *ctx, AuPage *p, const char *title)
         changed(t->win, AU_CHANGED_TITLE | AU_CHANGED_MENUS);
 }
 
+/* A redirect replaced the address of the load in progress: the history
+ * keeps the final address only (the visit load_new recorded for the
+ * first address goes, unless it was visited before). */
+static void forget_visit(AuBrowser *b, const char *url)
+{
+    long i = au_history_find(&b->history, url);
+    if (i == 0 && b->history.e[0].visits == 1)
+        au_history_remove(&b->history, 0);
+}
+
 static void cb_url(void *ctx, AuPage *p, const char *url)
 {
     AuTab *t = ctx;
     AuNavEntry *e = au_nav_current(&t->nav);
+    if (e && t->loading && strcmp(e->url, url) != 0) {
+        AuBrowser *b = t->win->browser;
+        forget_visit(b, e->url);
+        record_visit(b, url, NULL);
+        menus_changed_all(b);
+    }
     if (e)
         set_str(&e->url, url);
     t->win->browser->session_gen++;
@@ -344,6 +360,36 @@ static void cb_open(void *ctx, AuPage *p, const char *url, bool new_tab)
         au_bw_navigate(w, url);
     }
     (void)p;
+}
+
+/* The page's load turned out to be a file to save. */
+static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff)
+{
+    AuTab *t = ctx;
+    AuBrowser *b = t->win->browser;
+    (void)p;
+    char name[128];
+    if (r->filename && r->filename[0])
+        snprintf(name, sizeof name, "%s", r->filename);
+    else
+        au_download_name_from_url(r->url, name, sizeof name);
+    /* The load leaves no trace in the tab's history or the global one. */
+    AuNavEntry *e = au_nav_current(&t->nav);
+    if (e) {
+        forget_visit(b, e->url);
+        menus_changed_all(b);
+    }
+    if (t->nav.index > 0) {
+        au_free(t->nav.e[t->nav.index].url);
+        au_free(t->nav.e[t->nav.index].title);
+        t->nav.n = t->nav.index;
+        t->nav.index--;
+    } else if (t->win->ntabs > 1) {
+        t->close_pending = true; /* a tab opened just for the file */
+    }
+    b->session_gen++;
+    au_browser_download(b, r->url, name, r->content_type, r->content_length, handoff);
+    return true;
 }
 
 static void cb_status(void *ctx, AuPage *p, const char *text)
@@ -574,8 +620,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight};
-    AuPageCallbacks cb = {t,           cb_title, cb_url,    cb_started,    cb_progress,     cb_finished,
-                          cb_open,     cb_status, cb_invalidate, cb_content_size, cb_scroll_to};
+    AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
+                          cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download};
     t->page = au_page_new(&env, &cb);
     if (index < 0 || index > w->ntabs)
         index = w->ntabs;
@@ -1012,16 +1058,86 @@ bool au_bw_can_view_source(AuBrowserWindow *w)
     return au_url_scheme_is(u, "file") || au_url_scheme_is(u, "http") || au_url_scheme_is(u, "https");
 }
 
+/* A tab whose page is filled by the caller (not loaded from url). */
+static AuTab *new_tab_for(AuBrowserWindow *w, const char *url)
+{
+    AuTab *t = make_tab(w, w->active >= 0 ? w->active + 1 : w->ntabs);
+    relayout(w, false);
+    au_bw_select_tab(w, tab_index(w, t));
+    au_nav_push(&t->nav, url, "");
+    w->browser->session_gen++;
+    changed(w, AU_CHANGED_MENUS | AU_CHANGED_FOCUS_PAGE);
+    return t;
+}
+
 void au_bw_view_source(AuBrowserWindow *w)
 {
     if (!au_bw_can_view_source(w))
         return;
+    AuTab *cur = au_bw_active_tab(w);
     AuBuf u;
     au_buf_init(&u);
     au_buf_puts(&u, "view-source:");
-    au_buf_puts(&u, au_page_url(au_bw_active_tab(w)->page));
-    au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
+    au_buf_puts(&u, au_page_url(cur->page));
+    const char *data;
+    size_t len;
+    const char *pu = au_page_url(cur->page);
+    if ((au_url_scheme_is(pu, "http") || au_url_scheme_is(pu, "https")) && au_page_source(cur->page, &data, &len)) {
+        /* The bytes kept for Save Page As: nothing is fetched again. */
+        AuTab *t = new_tab_for(w, au_buf_cstr(&u));
+        au_page_navigate_source(t->page, au_buf_cstr(&u), data, len);
+    } else {
+        au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
+    }
     au_buf_free(&u);
+}
+
+bool au_bw_show_certificate(AuBrowserWindow *w)
+{
+    AuTab *cur = au_bw_active_tab(w);
+    if (!cur)
+        return false;
+    AuBuf html;
+    au_buf_init(&html);
+    bool ok = au_page_certificate_html(cur->page, &html);
+    if (ok) {
+        AuTab *t = new_tab_for(w, "about:certificate");
+        au_page_load_internal(t->page, "about:certificate", html.data, html.len);
+    }
+    au_buf_free(&html);
+    return ok;
+}
+
+AuDownload *au_browser_download(AuBrowser *b, const char *url, const char *name, const char *mime, int64_t total,
+                                uint32_t handoff)
+{
+    char clean[128];
+    au_hfs_sanitize(name && *name ? name : "download", NULL, NULL, clean, sizeof clean);
+    if (b->host.confirm_download && !b->host.confirm_download(b->host.ctx, url, clean, mime ? mime : "")) {
+        if (handoff && b->downloads.src.discard) {
+            AuDownload tmp;
+            memset(&tmp, 0, sizeof tmp);
+            tmp.handoff = handoff;
+            tmp.url = (char *)url;
+            tmp.filename = (char *)"";
+            b->downloads.src.discard(b->downloads.src.ctx, &tmp);
+        }
+        return NULL;
+    }
+    AuDownload *d = au_downloads_add(&b->downloads, url, clean, mime ? mime : "", total, now(b));
+    d->handoff = handoff;
+    if (b->host.download_added)
+        b->host.download_added(b->host.ctx, d);
+    return d;
+}
+
+AuDownload *au_bw_save_url(AuBrowserWindow *w, const char *url)
+{
+    if (!url || !(au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https")))
+        return NULL;
+    char name[128];
+    au_download_name_from_url(url, name, sizeof name);
+    return au_browser_download(w->browser, url, name, "", -1, 0);
 }
 
 bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len)
@@ -1182,6 +1298,13 @@ void au_bw_reload(AuBrowserWindow *w)
         au_page_reload(t->page);
 }
 
+void au_bw_reload_bypass(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (t)
+        au_page_reload_bypass(t->page);
+}
+
 void au_bw_stop(AuBrowserWindow *w)
 {
     AuTab *t = au_bw_active_tab(w);
@@ -1336,7 +1459,7 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     s.status_text = t ? t->status : "";
     char status[300];
     if (t && t->loading && !*t->status) {
-        snprintf(status, sizeof status, "Loading %s", au_page_url(t->page));
+        au_page_status_text(t->page, status, sizeof status);
         s.status_text = status;
     }
     s.progress = t ? au_page_progress(t->page) : 0;
@@ -1493,9 +1616,12 @@ static void click(AuBrowserWindow *w, AuHit h, const AuEvent *ev)
     case AU_HIT_RELOAD:
         if (t && t->loading)
             au_bw_stop(w);
+        else if (ev && (ev->mods & (AU_MOD_SHIFT | AU_MOD_OPTION)))
+            au_bw_reload_bypass(w);
         else
             au_bw_reload(w);
         break;
+    case AU_HIT_SECURITY: au_bw_show_certificate(w); break;
     case AU_HIT_HOME: au_bw_home(w); break;
     case AU_HIT_BOOKMARK: au_bw_bookmark_page(w, true); break;
     case AU_HIT_NEW_TAB:
@@ -1676,6 +1802,10 @@ void au_bw_idle(AuBrowserWindow *w)
         if (i < w->ntabs && w->tabs[i]->loading)
             any = true;
     }
+    /* Tabs opened only for a download close once it is handed over. */
+    for (int i = w->ntabs - 1; i >= 0; i--)
+        if (w->tabs[i]->close_pending && w->ntabs > 1)
+            au_bw_close_tab(w, i);
     if (!any)
         return;
     uint32_t t = time_ms(w->browser);

@@ -53,6 +53,20 @@ static void test_utf8(void)
     au_buf_printf(&b, "%d-%s", 42, "x");
     CHECK(strcmp(au_buf_cstr(&b), "\xF0\x9F\x98\x80" "42-x") == 0);
     au_buf_free(&b);
+
+    /* 64-bit decimal output without printf's %lld. */
+    au_buf_init(&b);
+    au_put_i64(&b, 0);
+    au_buf_putc(&b, ' ');
+    au_put_i64(&b, -7);
+    au_buf_putc(&b, ' ');
+    au_put_i64(&b, 1794700800123LL); /* a millisecond time, past 32 bits */
+    au_buf_putc(&b, ' ');
+    au_put_i64(&b, INT64_MAX);
+    au_buf_putc(&b, ' ');
+    au_put_i64(&b, INT64_MIN);
+    CHECK(strcmp(au_buf_cstr(&b), "0 -7 1794700800123 9223372036854775807 -9223372036854775808") == 0);
+    au_buf_free(&b);
 }
 
 static void test_tree(void)

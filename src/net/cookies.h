@@ -85,6 +85,28 @@ void au_cookie_jar_remove_at(AuCookieJar *jar, size_t i);
 /* Removes the cookies of a host and its subdomains. */
 void au_cookie_jar_remove_domain(AuCookieJar *jar, const char *domain);
 
+/* Per-site rules, keyed by registrable domain (the host itself when it
+ * has none), set by the user in the cookie manager:
+ *   - ALLOW: stored and sent even when cookies are off or the request is
+ *     third party;
+ *   - SESSION: stored as session cookies (never written to disk); setting
+ *     the rule turns the site's stored cookies into session cookies;
+ *   - BLOCK: neither stored nor sent; setting it removes the site's
+ *     cookies.
+ * NONE removes a rule. The text form, kept in the "cookies.sites"
+ * preference, is "site=allow|session|block" items separated by spaces;
+ * parse replaces all rules. */
+typedef enum { AU_COOKIE_RULE_NONE, AU_COOKIE_RULE_ALLOW, AU_COOKIE_RULE_SESSION, AU_COOKIE_RULE_BLOCK } AuCookieRule;
+void au_cookie_jar_set_rule(AuCookieJar *jar, const char *site, AuCookieRule rule);
+AuCookieRule au_cookie_jar_rule(const AuCookieJar *jar, const char *host);
+void au_cookie_rules_parse(AuCookieJar *jar, const char *text);
+void au_cookie_rules_serialize(const AuCookieJar *jar, AuBuf *out);
+size_t au_cookie_rules_count(const AuCookieJar *jar);
+const char *au_cookie_rules_at(const AuCookieJar *jar, size_t i, AuCookieRule *rule);
+const char *au_cookie_rule_name(AuCookieRule rule); /* "allow", "session", "block"; "" for NONE */
+/* The rule key of a host or cookie domain (lower case registrable domain). */
+void au_cookie_site_key(const char *host, AuBuf *out);
+
 /* Persistent file (session cookies are not written; expired ones are
  * dropped). Format: UTF-8 text; first line "# Aura cookies 1"; then one
  * cookie per line, tab-separated:

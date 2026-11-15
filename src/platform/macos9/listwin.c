@@ -1,16 +1,21 @@
-/* The Bookmarks, History and Downloads windows.
+/* The Bookmarks, History, Downloads and Cookies windows.
  *
  * Each is a document window with a list painted by the engine
  * (src/browser/listview.c, or the downloads painter in downloads.c) into
  * an offscreen GWorld, a native scroll bar, and a bar of push buttons at
  * the bottom. There is at most one window of each kind; Show brings it
- * forward. The lists rebuild when the data's change counter moves. */
+ * forward. The lists rebuild when the data's change counter moves. The
+ * Cookies window lists the cookie jar through src/net/cookie_view.c and
+ * rebuilds when the number of cookies or rules changes. */
 #include "mac.h"
+
+#include "net/cookie_view.h"
 
 #include <stdio.h>
 #include <string.h>
 
 enum { kBarH = 40, kMaxButtons = 6 };
+enum { kRuleMenuID = 182 }; /* clear of the folder menus (200 to 255) */
 
 typedef struct ListWin {
     MacWin base;
@@ -19,7 +24,10 @@ typedef struct ListWin {
     ControlHandle vscroll;
     ControlHandle buttons[kMaxButtons];
     int nbuttons;
-    AuListView lv;  /* bookmarks and history */
+    AuListView *lv; /* &own, or the cookie view's list */
+    AuListView own; /* bookmarks and history */
+    AuCookieView cv; /* cookies */
+    bool have_cv;
     int dl_sel;     /* downloads: selected row */
     int dl_scroll;
     uint32_t seen_gen;
@@ -28,12 +36,22 @@ typedef struct ListWin {
     int last_click_row;
 } ListWin;
 
-static ListWin *g_list[6]; /* by WinKind */
+static ListWin *g_list[8]; /* by WinKind */
 
 /* Button numbers per window. */
 enum { B_OPEN, B_NEW_FOLDER, B_RENAME, B_DELETE };       /* bookmarks */
 enum { H_OPEN, H_DELETE, H_CLEAR };                      /* history */
 enum { D_STOP, D_RESUME, D_REMOVE, D_CLEAR, D_REVEAL };  /* downloads */
+enum { C_DETAILS, C_REMOVE, C_REMOVE_ALL, C_RULE };      /* cookies */
+
+/* The Cookies window's change signature: cookies plus rules. */
+static uint32_t cookie_sig(void)
+{
+    AuCookieJar *j = mac_net_cookie_jar();
+    return j ? (uint32_t)(au_cookie_jar_count(j) * 1000u + au_cookie_rules_count(j)) : 0;
+}
+
+static uint32_t g_cookie_bump; /* listwin_cookies_changed */
 
 static void list_area(ListWin *lw, Rect *r)
 {
@@ -60,12 +78,12 @@ static int content_h(ListWin *lw)
 {
     if (lw->base.kind == WIN_DOWNLOADS)
         return g_browser->downloads.n * AU_DL_ROW_H;
-    return au_listview_content_height(&lw->lv);
+    return au_listview_content_height(lw->lv);
 }
 
 static int *scroll_of(ListWin *lw)
 {
-    return lw->base.kind == WIN_DOWNLOADS ? &lw->dl_scroll : &lw->lv.scroll;
+    return lw->base.kind == WIN_DOWNLOADS ? &lw->dl_scroll : &lw->lv->scroll;
 }
 
 static void make_gworld(ListWin *lw)
@@ -107,10 +125,10 @@ static void lw_paint(ListWin *lw, bool bar)
     if (lw->base.kind == WIN_DOWNLOADS) {
         au_downloads_paint(&g_browser->downloads, c, g_fonts, w, h, lw->dl_scroll, lw->dl_sel, active);
     } else {
-        lw->lv.width = w;
-        lw->lv.height = h;
-        lw->lv.active = active;
-        au_listview_paint(&lw->lv, c, g_fonts);
+        lw->lv->width = w;
+        lw->lv->height = h;
+        lw->lv->active = active;
+        au_listview_paint(lw->lv, c, g_fonts);
     }
     Rect all;
     GetWindowPortBounds(lw->base.win, &all);
@@ -169,7 +187,7 @@ static void update_scroll(ListWin *lw)
 
 static int selected(ListWin *lw)
 {
-    return lw->base.kind == WIN_DOWNLOADS ? lw->dl_sel : lw->lv.selected;
+    return lw->base.kind == WIN_DOWNLOADS ? lw->dl_sel : lw->lv->selected;
 }
 
 static void enable_buttons(ListWin *lw)
@@ -184,7 +202,7 @@ static void enable_buttons(ListWin *lw)
             break;
         case WIN_HISTORY:
             if (i == H_OPEN || i == H_DELETE)
-                on = sel >= 0 && lw->lv.rows[sel].kind == AU_ROW_LINK;
+                on = sel >= 0 && lw->lv->rows[sel].kind == AU_ROW_LINK;
             if (i == H_CLEAR)
                 on = g_browser->history.n > 0;
             break;
@@ -198,7 +216,7 @@ static void enable_buttons(ListWin *lw)
             else if (i == D_REMOVE)
                 on = d != NULL;
             else if (i == D_REVEAL)
-                on = false; /* simulated downloads write no file */
+                on = d && d->state == AU_DL_DONE;
             else if (i == D_CLEAR) {
                 on = false;
                 for (int k = 0; k < dl->n && !on; k++)
@@ -206,6 +224,12 @@ static void enable_buttons(ListWin *lw)
             }
             break;
         }
+        case WIN_COOKIES:
+            if (i == C_DETAILS || i == C_REMOVE || i == C_RULE)
+                on = sel >= 0;
+            else if (i == C_REMOVE_ALL)
+                on = mac_net_cookie_jar() && au_cookie_jar_count(mac_net_cookie_jar()) > 0;
+            break;
         default: break;
         }
         if (!(lw->base.win == FrontWindow() && g_in_front))
@@ -218,11 +242,11 @@ static void rebuild(ListWin *lw)
 {
     switch (lw->base.kind) {
     case WIN_BOOKMARKS:
-        au_listview_from_bookmarks(&lw->lv, &g_browser->bookmarks);
+        au_listview_from_bookmarks(lw->lv, &g_browser->bookmarks);
         lw->seen_gen = g_browser->bookmarks.generation;
         break;
     case WIN_HISTORY:
-        au_listview_from_history(&lw->lv, &g_browser->history, mac_now());
+        au_listview_from_history(lw->lv, &g_browser->history, mac_now());
         lw->seen_gen = g_browser->history.generation;
         break;
     case WIN_DOWNLOADS:
@@ -230,19 +254,28 @@ static void rebuild(ListWin *lw)
             lw->dl_sel = g_browser->downloads.n - 1;
         lw->seen_gen = g_browser->downloads.generation;
         break;
+    case WIN_COOKIES:
+        if (lw->have_cv) {
+            lw->cv.utc_offset = g_browser->history.utc_offset;
+            au_cookie_view_refresh(&lw->cv, mac_now());
+        }
+        lw->seen_gen = cookie_sig() + g_cookie_bump;
+        break;
     default: break;
     }
-    lw->lv.height = list_h(lw);
+    lw->lv->height = list_h(lw);
     update_scroll(lw);
     enable_buttons(lw);
 }
 
 /* ---- Actions ---- */
 
+static void cookie_details(ListWin *lw, int row);
+
 static void open_row(ListWin *lw, int row)
 {
     if (lw->base.kind == WIN_BOOKMARKS) {
-        AuBookmark *b = au_bookmark_find_id(&g_browser->bookmarks, lw->lv.rows[row].id);
+        AuBookmark *b = au_bookmark_find_id(&g_browser->bookmarks, lw->lv->rows[row].id);
         if (!b)
             return;
         if (b->folder) {
@@ -253,13 +286,57 @@ static void open_row(ListWin *lw, int row)
             mac_open_url(b->url, false);
         }
     } else if (lw->base.kind == WIN_HISTORY) {
-        const AuListRow *r = &lw->lv.rows[row];
+        const AuListRow *r = &lw->lv->rows[row];
         if (r->kind == AU_ROW_LINK && r->id < g_browser->history.n) {
             char *u = au_strndup(g_browser->history.e[r->id].url, strlen(g_browser->history.e[r->id].url));
             mac_open_url(u, false);
             au_free(u);
         }
+    } else if (lw->base.kind == WIN_COOKIES && lw->have_cv) {
+        if (au_cookie_view_cookie(&lw->cv, row)) {
+            cookie_details(lw, row);
+        } else {
+            au_cookie_view_toggle(&lw->cv, row, mac_now());
+            rebuild(lw);
+            lw_paint(lw, false);
+        }
     }
+}
+
+/* ALRT 135 with the row's fields: lines cut to 100 characters, spread
+ * over the four parameters (255 bytes each). */
+static void cookie_details(ListWin *lw, int row)
+{
+    AuBuf d;
+    au_buf_init(&d);
+    au_cookie_view_describe(&lw->cv, row, &d, mac_now());
+    Str255 part[4];
+    int pi = 0;
+    for (int k = 0; k < 4; k++)
+        part[k][0] = 0;
+    const char *s = au_buf_cstr(&d);
+    while (*s && pi < 4) {
+        const char *nl = strchr(s, '\n');
+        size_t n = nl ? (size_t)(nl - s) : strlen(s);
+        char line[128];
+        snprintf(line, sizeof line, "%.*s%s", (int)(n > 100 ? 100 : n), s, n > 100 ? "..." : "");
+        Str255 pl;
+        mac_pstr(line, pl);
+        if (part[pi][0] + pl[0] + 1 > 255)
+            pi++;
+        if (pi < 4) {
+            memcpy(part[pi] + 1 + part[pi][0], pl + 1, pl[0]);
+            part[pi][0] = (unsigned char)(part[pi][0] + pl[0]);
+            part[pi][1 + part[pi][0]] = '\r';
+            part[pi][0]++;
+        }
+        s += n;
+        if (*s == '\n')
+            s++;
+    }
+    au_buf_free(&d);
+    ParamText(part[0], part[1], part[2], part[3]);
+    NoteAlert(135, NULL);
 }
 
 /* A modal dialog asking for a name; returns a UTF-8 string to free, or
@@ -299,8 +376,8 @@ static char *ask_name(const char *prompt, const char *initial)
 static void bookmark_button(ListWin *lw, int which)
 {
     AuBookmarks *bm = &g_browser->bookmarks;
-    int sel = lw->lv.selected;
-    AuBookmark *b = sel >= 0 ? au_bookmark_find_id(bm, lw->lv.rows[sel].id) : NULL;
+    int sel = lw->lv->selected;
+    AuBookmark *b = sel >= 0 ? au_bookmark_find_id(bm, lw->lv->rows[sel].id) : NULL;
     switch (which) {
     case B_OPEN:
         if (sel >= 0)
@@ -314,10 +391,10 @@ static void bookmark_button(ListWin *lw, int which)
                 parent->expanded = true;
             AuBookmark *f = au_bookmark_add_folder(bm, parent, NULL, *name ? name : "New Folder", mac_now());
             au_free(name);
-            au_listview_from_bookmarks(&lw->lv, bm);
-            for (int i = 0; i < lw->lv.n; i++)
-                if (lw->lv.rows[i].id == f->id)
-                    lw->lv.selected = i;
+            au_listview_from_bookmarks(lw->lv, bm);
+            for (int i = 0; i < lw->lv->n; i++)
+                if (lw->lv->rows[i].id == f->id)
+                    lw->lv->selected = i;
             au_browser_bookmarks_changed(g_browser);
         }
         break;
@@ -343,21 +420,21 @@ static void bookmark_button(ListWin *lw, int which)
 
 static void history_button(ListWin *lw, int which)
 {
-    int sel = lw->lv.selected;
+    int sel = lw->lv->selected;
     switch (which) {
     case H_OPEN:
         if (sel >= 0)
             open_row(lw, sel);
         break;
     case H_DELETE:
-        if (sel >= 0 && lw->lv.rows[sel].kind == AU_ROW_LINK) {
-            au_history_remove(&g_browser->history, lw->lv.rows[sel].id);
+        if (sel >= 0 && lw->lv->rows[sel].kind == AU_ROW_LINK) {
+            au_history_remove(&g_browser->history, lw->lv->rows[sel].id);
             au_browser_history_changed(g_browser);
         }
         break;
     case H_CLEAR:
         au_history_clear(&g_browser->history);
-        lw->lv.selected = -1;
+        lw->lv->selected = -1;
         au_browser_history_changed(g_browser);
         break;
     }
@@ -381,6 +458,64 @@ static void download_button(ListWin *lw, int which)
             au_download_remove(dl, d);
         break;
     case D_CLEAR: au_downloads_clear_completed(dl); break;
+    case D_REVEAL:
+        if (d && !mac_download_reveal(d))
+            SysBeep(1);
+        break;
+    default: break;
+    }
+}
+
+/* The Rule button: a pop-up of the site rules under the button. */
+static void cookie_rule(ListWin *lw)
+{
+    int sel = lw->lv->selected;
+    const char *site = au_cookie_view_site(&lw->cv, sel);
+    if (!site)
+        return;
+    MenuHandle m = NewMenu(kRuleMenuID, (ConstStr255Param) "\pRule");
+    if (!m)
+        return;
+    static const char *const items[] = {"Use the cookie preferences", "Always allow", "Session only", "Block"};
+    for (int i = 0; i < 4; i++)
+        mac_append_item(m, items[i]);
+    AuCookieRule cur = au_cookie_jar_rule(lw->cv.jar, site);
+    CheckItem(m, (short)(cur + 1), true);
+    InsertMenu(m, -1);
+    Rect br = (**lw->buttons[C_RULE]).contrlRect;
+    Point pt;
+    pt.h = br.left;
+    pt.v = br.top;
+    SetPort((GrafPtr)lw->base.win);
+    LocalToGlobal(&pt);
+    long choice = PopUpMenuSelect(m, pt.v, pt.h, (short)(cur + 1));
+    DeleteMenu(kRuleMenuID);
+    DisposeMenu(m);
+    short item = (short)(choice & 0xFFFF);
+    if ((choice >> 16) && item >= 1 && item <= 4 && item - 1 != (short)cur) {
+        au_cookie_view_set_rule(&lw->cv, sel, (AuCookieRule)(item - 1), mac_now());
+        mac_net_rules_changed();
+    }
+}
+
+static void cookie_button(ListWin *lw, int which)
+{
+    if (!lw->have_cv)
+        return;
+    int sel = lw->lv->selected;
+    switch (which) {
+    case C_DETAILS:
+        if (sel >= 0)
+            cookie_details(lw, sel);
+        break;
+    case C_REMOVE:
+        if (sel >= 0)
+            au_cookie_view_remove(&lw->cv, sel, mac_now());
+        break;
+    case C_REMOVE_ALL:
+        au_cookie_view_remove_all(&lw->cv, mac_now());
+        break;
+    case C_RULE: cookie_rule(lw); break;
     default: break;
     }
 }
@@ -391,6 +526,7 @@ static void button(ListWin *lw, int which)
     case WIN_BOOKMARKS: bookmark_button(lw, which); break;
     case WIN_HISTORY: history_button(lw, which); break;
     case WIN_DOWNLOADS: download_button(lw, which); break;
+    case WIN_COOKIES: cookie_button(lw, which); break;
     default: break;
     }
     rebuild(lw);
@@ -468,8 +604,8 @@ static void select_row(ListWin *lw, int row)
         else if (row >= 0 && top + AU_DL_ROW_H > lw->dl_scroll + h)
             lw->dl_scroll = top + AU_DL_ROW_H - h;
     } else {
-        lw->lv.selected = row;
-        au_listview_reveal(&lw->lv, row);
+        lw->lv->selected = row;
+        au_listview_reveal(lw->lv, row);
     }
     update_scroll(lw);
     enable_buttons(lw);
@@ -515,7 +651,7 @@ static void lw_click(MacWin *mw, EventRecord *ev)
     if (lw->base.kind == WIN_DOWNLOADS)
         row = au_downloads_hit(&g_browser->downloads, pt.v, lw->dl_scroll);
     else
-        row = au_listview_hit(&lw->lv, pt.h, pt.v, &disclosure);
+        row = au_listview_hit(lw->lv, pt.h, pt.v, &disclosure);
     if (disclosure) {
         open_row(lw, row); /* toggles the folder */
         return;
@@ -534,7 +670,7 @@ static bool lw_key(MacWin *mw, EventRecord *ev)
 {
     ListWin *lw = (ListWin *)mw;
     unsigned char ch = (unsigned char)(ev->message & charCodeMask);
-    int n = lw->base.kind == WIN_DOWNLOADS ? g_browser->downloads.n : lw->lv.n;
+    int n = lw->base.kind == WIN_DOWNLOADS ? g_browser->downloads.n : lw->lv->n;
     int sel = selected(lw);
     switch (ch) {
     case 0x1E: if (n) select_row(lw, sel > 0 ? sel - 1 : 0); return true;
@@ -546,7 +682,10 @@ static bool lw_key(MacWin *mw, EventRecord *ev)
         return true;
     case 0x08:
     case 0x7F:
-        button(lw, lw->base.kind == WIN_BOOKMARKS ? B_DELETE : lw->base.kind == WIN_HISTORY ? H_DELETE : D_REMOVE);
+        button(lw, lw->base.kind == WIN_BOOKMARKS  ? B_DELETE
+                   : lw->base.kind == WIN_HISTORY ? H_DELETE
+                   : lw->base.kind == WIN_COOKIES ? C_REMOVE
+                                                  : D_REMOVE);
         return true;
     }
     return false;
@@ -557,6 +696,7 @@ static void lw_idle(MacWin *mw)
     ListWin *lw = (ListWin *)mw;
     uint32_t gen = lw->base.kind == WIN_BOOKMARKS  ? g_browser->bookmarks.generation
                    : lw->base.kind == WIN_HISTORY ? g_browser->history.generation
+                   : lw->base.kind == WIN_COOKIES ? cookie_sig() + g_cookie_bump
                                                   : g_browser->downloads.generation;
     if (gen == lw->seen_gen)
         return;
@@ -605,9 +745,16 @@ static void lw_close(MacWin *mw)
         au_surface_free(lw->surf);
     if (lw->gw)
         DisposeGWorld(lw->gw);
-    au_listview_free(&lw->lv);
+    au_listview_free(&lw->own);
+    if (lw->have_cv)
+        au_cookie_view_free(&lw->cv);
     au_free(lw);
     mac_menus_dirty();
+}
+
+void listwin_cookies_changed(void)
+{
+    g_cookie_bump++;
 }
 
 static void add_button(ListWin *lw, const char *title, int width)
@@ -639,16 +786,25 @@ void listwin_show(WinKind kind)
     lw->base.close = lw_close;
     lw->dl_sel = -1;
     lw->last_click_row = -1;
-    au_listview_init(&lw->lv);
+    au_listview_init(&lw->own);
+    lw->lv = &lw->own;
+    if (kind == WIN_COOKIES && mac_net_cookie_jar()) {
+        au_cookie_view_init(&lw->cv, mac_net_cookie_jar());
+        lw->have_cv = true;
+        lw->lv = &lw->cv.list;
+    }
     Rect screen = qd.screenBits.bounds, wr;
-    int w = kind == WIN_DOWNLOADS ? 520 : 460, h = 400;
+    int w = kind == WIN_DOWNLOADS || kind == WIN_COOKIES ? 520 : 460, h = 400;
     int x = screen.right - w - 30, y = 70 + (kind - WIN_BOOKMARKS) * 24;
     if (x < 10)
         x = 10;
     if (y + h > screen.bottom - 26) /* clear of the Control Strip */
         h = screen.bottom - 26 - y;
     SetRect(&wr, (short)x, (short)y, (short)(x + w), (short)(y + h));
-    const char *title = kind == WIN_BOOKMARKS ? "Bookmarks" : kind == WIN_HISTORY ? "History" : "Downloads";
+    const char *title = kind == WIN_BOOKMARKS  ? "Bookmarks"
+                        : kind == WIN_HISTORY ? "History"
+                        : kind == WIN_COOKIES ? "Cookies"
+                                              : "Downloads";
     Str255 pt;
     mac_pstr(title, pt);
     WindowPtr win = NewCWindow(NULL, &wr, pt, false, kZoomDocProc, (WindowPtr)-1, true, (long)lw);
@@ -669,6 +825,11 @@ void listwin_show(WinKind kind)
         add_button(lw, "Open", 64);
         add_button(lw, "Delete", 70);
         add_button(lw, "Clear History", 110);
+    } else if (kind == WIN_COOKIES) {
+        add_button(lw, "Details...", 86);
+        add_button(lw, "Remove", 72);
+        add_button(lw, "Remove All", 96);
+        add_button(lw, "Site Rule...", 100);
     } else {
         add_button(lw, "Stop", 58);
         add_button(lw, "Resume", 72);

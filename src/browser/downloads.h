@@ -2,12 +2,12 @@
  * they are saved in, a file name sanitizer for HFS, and the interface to
  * whatever moves the bytes. Portable C99.
  *
- * Transfers are not real yet. AuTransferSource is the interface the
- * network stage will implement (start a transfer, poll how many bytes
- * have arrived, stop it); au_sim_source is a stand-in that pretends to
- * receive data at a modem-to-Ethernet rate, so the Downloads window can
- * be exercised. Nothing is written to disk by this code; the source owns
- * the data (the simulated one throws it away).
+ * AuTransferSource moves the bytes (start a transfer, poll how many bytes
+ * have arrived, stop it, discard a partial file): src/net's
+ * au_net_transfer_source writes real files through the platform;
+ * au_sim_source is a stand-in that pretends to receive data at a
+ * modem-to-Ethernet rate (View > Debug > Start Simulated Downloads).
+ * Nothing is written to disk by this code; the source owns the data.
  *
  * The shell calls au_downloads_idle from the event loop. It starts queued
  * items (up to max_active at once), polls active ones and keeps a rate
@@ -49,6 +49,7 @@ typedef struct AuDownload {
     bool interrupted; /* was active when Aura last quit */
     /* Running state, not saved. */
     void *transfer;
+    uint32_t handoff; /* a page's response handed to downloads (the fetcher's token); 0 for none */
     uint32_t rate;    /* bytes per second, smoothed */
     uint32_t rate_ms; /* time of the last rate sample */
     int64_t rate_bytes;
@@ -64,7 +65,11 @@ typedef struct AuTransferSource {
      * when the size becomes known; sets *done at the end, or *error
      * (au_alloc'd) on failure. */
     int64_t (*poll)(void *ctx, void *handle, uint32_t now_ms, int64_t *total, bool *done, char **error);
+    /* Stops the transfer; a partial file stays for a later resume. */
     void (*stop)(void *ctx, void *handle);
+    /* Optional: d was cancelled or removed before it finished: delete its
+     * partial file and release a handed-off response not yet claimed. */
+    void (*discard)(void *ctx, AuDownload *d);
 } AuTransferSource;
 
 typedef struct AuDownloads {
