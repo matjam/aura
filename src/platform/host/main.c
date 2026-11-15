@@ -10,6 +10,7 @@
 #include "host.h"
 #include "png.h"
 #include "platform/scene.h"
+#include "render.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,6 +185,8 @@ int main(int argc, char **argv)
     if (argc < 2)
         return usage();
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
+        return au_host_render_main(argc, argv);
     const char *out = "scene.png";
     int w = 640, h = AU_SCENE_HEIGHT, scroll = 0;
     for (int i = 2; i < argc; i++) {
