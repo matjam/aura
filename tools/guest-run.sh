@@ -7,6 +7,7 @@
 #   tools/guest-run.sh stop    quit the guest started here
 #   tools/guest-run.sh status  say whether it runs
 #   tools/guest-run.sh reset   throw away the guest's disk changes
+#   BASE=enforcer tools/guest-run.sh start   boot the Enforcer system
 #
 # MEM sets the RAM in megabytes (default 512). The guest's disk writes are
 # discarded when QEMU exits (-snapshot), so every start boots the same
@@ -14,10 +15,12 @@
 # screen size and depth in its own preferences: change them in the guest
 # (Control Strip or Monitors), not on the QEMU command line.
 #
-# The disk: the first start flattens a private copy of os9-protect's
-# AURA_BASE image into AURA_RUN (reading it only), and boots an overlay on
-# that copy, so nothing os9-protect owns is ever written or locked for
-# writing. See tools/guest-env.sh for the settings.
+# BASE picks the system: stock (default, Mac OS 9.2.2 without Enforcer)
+# or enforcer (with the os9-enforcer kernel and extension). The first
+# start of a base flattens a private copy of its os9-protect image into
+# AURA_RUN (reading it only), and boots an overlay on that copy, so
+# nothing os9-protect owns is ever written or locked for writing. See
+# tools/guest-env.sh for the settings.
 set -eu
 . "$(dirname "$0")/guest-env.sh"
 
@@ -41,7 +44,7 @@ prepare_disk() {
 case "${1:-}" in
   start)
     if running; then
-      echo "guest-run: already running (pid $(cat "$AURA_PID"))"
+      echo "guest-run: already running (pid $(cat "$AURA_PID"), base $(cat "$AURA_RUNNING_BASE" 2>/dev/null))"
       exit 0
     fi
     prepare_disk
@@ -64,7 +67,8 @@ case "${1:-}" in
       -display none $snapshot \
       -daemonize -pidfile "$AURA_PID" \
       >"$AURA_LOG" 2>&1
-    echo "guest-run: started (pid $(cat "$AURA_PID")), QMP at $AURA_QMP"
+    printf '%s\n' "$BASE" > "$AURA_RUNNING_BASE"
+    echo "guest-run: started base $BASE (pid $(cat "$AURA_PID")), QMP at $AURA_QMP"
     ;;
   stop)
     if running; then
@@ -73,11 +77,11 @@ case "${1:-}" in
     else
       echo "guest-run: not running"
     fi
-    rm -f "$AURA_PID"
+    rm -f "$AURA_PID" "$AURA_RUNNING_BASE"
     ;;
   status)
     if running; then
-      echo "running (pid $(cat "$AURA_PID"))"
+      echo "running (pid $(cat "$AURA_PID"), base $(cat "$AURA_RUNNING_BASE" 2>/dev/null))"
     else
       echo "not running"
       exit 1
@@ -90,7 +94,7 @@ case "${1:-}" in
     fi
     rm -f "$AURA_DISK"
     prepare_disk
-    echo "guest-run: disk overlay reset"
+    echo "guest-run: disk overlay of base $BASE reset"
     ;;
   *)
     echo "usage: $0 start|stop|status|reset" >&2
