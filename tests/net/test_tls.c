@@ -779,6 +779,72 @@ static void test_alloc_failure(void)
     CHECK(live < 16384, "the library holds %zu bytes after the failures", live);
 }
 
+/* ---- RSA key exchange for old servers (security.legacy_tls) ---- */
+
+static void legacy_get(Env2 *e, Result *r, int fix, int rsa_kex, bool allow)
+{
+    env2_init(e, fix);
+    e->s->rsa_kex = rsa_kex;
+    au_net_config(e->net)->legacy_tls = allow;
+    fake_respond(e->s, OK_RESP);
+    get(&e->f, e->net, r, "https://tls.test/", 500);
+}
+
+static void test_legacy_kex(void)
+{
+    Env2 e;
+    Result r;
+    /* A server with RSA key exchange only connects, and is marked. */
+    legacy_get(&e, &r, TLS_FIX_RSA_KEX, 1, true);
+    CHECK(r.done && r.err == AU_NET_OK && r.status == 200 && r.body == 5, "RSA-only server: %s (%s)",
+          au_net_error_name(r.err), r.have_cert && r.cert.reason ? r.cert.reason : "");
+    CHECK(r.sec.version == 0x0303 && !strcmp(r.cipher, "RSA-AES128-GCM-SHA256") && r.sec.legacy_kex,
+          "RSA-only server: %04x %s legacy %d", r.sec.version, r.cipher, r.sec.legacy_kex);
+    CHECK(e.s->handshakes == 1 && !strcmp(e.s->last_suite, "TLS-RSA-WITH-AES-128-GCM-SHA256"), "server's suite: %s",
+          e.s->last_suite);
+    env2_free(&e);
+    /* With the preference off the suites are not offered: no connection. */
+    legacy_get(&e, &r, TLS_FIX_RSA_KEX, 1, false);
+    CHECK(r.done && r.err == AU_NET_ERR_TLS, "RSA-only server with legacy off: %s", au_net_error_name(r.err));
+    CHECK(e.s->handshakes == 0 && e.s->nreq == 0, "no handshake, no request: %d %d", e.s->handshakes, e.s->nreq);
+    env2_free(&e);
+    /* A server that also has ECDHE gets ECDHE (TLS 1.3 here), unmarked. */
+    legacy_get(&e, &r, TLS_FIX_RSA_KEX, 2, true);
+    CHECK(r.err == AU_NET_OK && r.sec.version == 0x0304 && !r.sec.legacy_kex, "ECDHE wins: %s %04x %s legacy %d",
+          au_net_error_name(r.err), r.sec.version, r.cipher, r.sec.legacy_kex);
+    env2_free(&e);
+    /* The same limited to TLS 1.2: ECDHE-RSA, not RSA key exchange. */
+    env2_init(&e, TLS_FIX_RSA_KEX);
+    e.s->rsa_kex = 2;
+    e.s->tls_max = 12;
+    fake_respond(e.s, OK_RESP);
+    get(&e.f, e.net, &r, "https://tls.test/", 500);
+    CHECK(r.err == AU_NET_OK && r.sec.version == 0x0303 && strstr(r.cipher, "ECDHE-RSA") && !r.sec.legacy_kex,
+          "ECDHE wins in TLS 1.2: %s %s", au_net_error_name(r.err), r.cipher);
+    env2_free(&e);
+    /* A certificate whose key usage allows signatures only must not be
+     * used for RSA key exchange. */
+    legacy_get(&e, &r, TLS_FIX_VALID_RSA, 1, true);
+    CHECK(r.done && r.err != AU_NET_OK && e.s->nreq == 0, "signature-only key refused for RSA key exchange: %s",
+          au_net_error_name(r.err));
+    env2_free(&e);
+    /* An EC certificate cannot do RSA key exchange at all. */
+    legacy_get(&e, &r, TLS_FIX_VALID, 1, true);
+    CHECK(r.done && r.err != AU_NET_OK && e.s->nreq == 0, "EC key with RSA key exchange refused: %s",
+          au_net_error_name(r.err));
+    env2_free(&e);
+    /* Resumption works for such a server too, and keeps the mark. */
+    env2_init(&e, TLS_FIX_RSA_KEX);
+    e.s->rsa_kex = 1;
+    for (int i = 0; i < 2; i++)
+        fake_add(e.s, CLOSE_RESP)->close_after = true;
+    get(&e.f, e.net, &r, "https://tls.test/a", 500);
+    get(&e.f, e.net, &r, "https://tls.test/b", 500);
+    CHECK(r.err == AU_NET_OK && r.sec.resumed && r.sec.legacy_kex, "resumed RSA session: %s resumed %d legacy %d",
+          au_net_error_name(r.err), r.sec.resumed, r.sec.legacy_kex);
+    env2_free(&e);
+}
+
 static void test_old_root_store(void)
 {
     static const uint8_t v1[16] = {'A', 'U', 'R', 'R', 1, 0, 0, 1};
@@ -799,6 +865,7 @@ int main(void)
     test_downgrade();
     test_hello_retry();
     test_alloc_failure();
+    test_legacy_kex();
     test_old_root_store();
     test_https_first_downgrade_redirect();
     test_aia_fetch();

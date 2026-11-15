@@ -83,6 +83,22 @@ int main(void)
             fails++;
         }
     }
+    {
+        /* A NULL pointer with length 0 is accepted. */
+        AuSha256 c;
+        uint8_t d[32];
+        char got[65];
+        au_sha256_init(&c);
+        au_sha256_update(&c, NULL, 0);
+        au_sha256_update(&c, "abc", 3);
+        au_sha256_update(&c, NULL, 0);
+        au_sha256_out(&c, d);
+        hex(d, 32, got);
+        if (strcmp(got, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
+            printf("FAIL sha256 with empty updates\n");
+            fails++;
+        }
+    }
     check_md5("", "d41d8cd98f00b204e9800998ecf8427e");
     check_md5("a", "0cc175b9c0f1b6a831c399e269772661");
     check_md5("abc", "900150983cd24fb0d6963f7d28e17f72");

@@ -461,7 +461,7 @@ static void run_cache(const Input *in)
  * X.509 parsers and tls.c's chain handling; in TLS 1.3 only the
  * ServerHello is in the clear and the rest fails its integrity check.
  * Every request must end, and one whose bytes were not touched must
- * succeed. */
+ * succeed. A quarter of the runs use a server with RSA key exchange only. */
 
 typedef struct Mangle {
     uint32_t rate; /* one byte in rate is damaged; 0 for none */
@@ -513,6 +513,17 @@ static void run_tls(long *completed, long *failed)
     s->key = &tls_fixtures[fix].key;
     s->tls_max = rnd() % 3 ? 12 : 13;
     s->p256_only = (rnd() & 7) == 0;
+    /* One run in four: a server with RSA key exchange only (the patched
+     * path of the library: no ServerKeyExchange, an encrypted premaster). */
+    bool rsa_only = (rnd() & 3) == 0;
+    if (rsa_only) {
+        fix = TLS_FIX_RSA_KEX;
+        chain[0] = tls_fixtures[fix].cert;
+        s->chain_len = 1;
+        s->key = &tls_fixtures[fix].key;
+        s->rsa_kex = 1;
+        s->p256_only = false;
+    }
     Mangle m = {rates[rnd() % N(rates)], rnd() % 3 ? rnd() % 1600 : 0, 0, 0};
     s->mangle = mangle;
     s->mangle_ctx = &m;

@@ -234,6 +234,7 @@ AuNet *au_net_new(const AuNetOps *ops)
     au_net_set_config_str(&c->https_proxy_host, "");
     c->cookie_policy = AU_COOKIE_POLICY_ALL;
     c->block_third_party_cookies = true;
+    c->legacy_tls = true;
     c->max_per_host = 6;
     c->max_total = 16;
     c->connect_timeout_ms = 30000;
@@ -711,6 +712,8 @@ static void start_tls(Conn *c)
     if (ex && !au_hsts_is_known(net->hsts, c->host, now))
         au_tls_allow_cert(c->tls_engine, ex->sha256);
     au_tls_set_pool(c->tls_engine, &net->pool);
+    if (net->cfg.legacy_tls)
+        au_tls_allow_legacy_kex(c->tls_engine);
     c->state = C_TLS;
 }
 

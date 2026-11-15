@@ -79,7 +79,7 @@ typedef struct Kept {
     char *url, *title, *content_type;
     AuFetchCert *cert;
     AuSecurity security;
-    bool have_security, mixed;
+    bool have_security, mixed, legacy_kex;
     int status;
     AuFetchReferrerPolicy rpolicy;
     bool image_doc, plain, source_mode;
@@ -143,7 +143,7 @@ struct AuPage {
     char *referrer;                 /* the current load's referrer (NULL: typed or bookmarked) */
     AuFetchReferrerPolicy rpolicy;  /* the document's Referrer-Policy */
     AuSecurity security;            /* from the main response */
-    bool have_security, mixed;
+    bool have_security, mixed, legacy_kex;
     AuFetchCert *cert;              /* the main document's certificate, or NULL */
     int status;                     /* the main response's status */
     char *content_type;             /* the main response's type, "" before one */
@@ -160,7 +160,7 @@ struct AuPage {
     char *prev_url, *prev_title;
     bool prev_begun;
     AuSecurity prev_security;
-    bool prev_have_security, prev_mixed;
+    bool prev_have_security, prev_mixed, prev_legacy_kex;
     AuFetchCert *prev_cert;
 
     /* Text selection: anchor and focus hold a reference to their node. */
@@ -1573,6 +1573,7 @@ static Kept *kept_capture(AuPage *p)
     k->security = p->security;
     k->have_security = p->have_security;
     k->mixed = p->mixed;
+    k->legacy_kex = p->legacy_kex;
     k->status = p->status;
     k->rpolicy = p->rpolicy;
     k->image_doc = p->image_doc;
@@ -1683,6 +1684,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     p->security = k->security;
     p->have_security = k->have_security;
     p->mixed = k->mixed;
+    p->legacy_kex = k->legacy_kex;
     p->status = k->status;
     set_str(&p->content_type, k->content_type);
     p->rpolicy = k->rpolicy;
@@ -2245,6 +2247,8 @@ bool au_page_certificate_html(const AuPage *p, AuBuf *b)
         html_escape_str(b, c->protocol);
         au_buf_puts(b, "</td></tr><tr><th>Cipher suite</th><td>");
         html_escape_str(b, c->cipher[0] ? c->cipher : "unknown");
+        if (!strncmp(c->cipher, "RSA-", 4))
+            au_buf_puts(b, " (RSA key exchange: no forward secrecy)");
         au_buf_puts(b, "</td></tr><tr><th>Checked</th><td>");
         put_date(b, c->checked_at);
         au_buf_puts(b, "</td></tr></table>");
@@ -2408,7 +2412,11 @@ static void show_net_error(AuPage *p, const AuFetchInfo *info)
         au_buf_puts(&b, "<p>The secure connection to <b>");
         html_escape_str(&b, host);
         au_buf_puts(&b, "</b> failed. The server may need a protocol or cipher Aura does not offer (Aura speaks "
-                        "TLS 1.3 and TLS 1.2 with AES-GCM or ChaCha20-Poly1305 and elliptic-curve key exchange).</p>");
+                        "TLS 1.3 and TLS 1.2 with AES-GCM or ChaCha20-Poly1305).</p>");
+        if (p->env.prefs && !p->env.prefs->legacy_tls)
+            au_buf_puts(&b, "<p>Old servers that offer no forward secrecy are refused while "
+                            "<b>Allow old servers without forward secrecy</b> is off in Preferences, under "
+                            "Privacy.</p>");
         au_buf_puts(&b, retry);
         break;
     case AU_FETCH_ERR_CLOCK: {
@@ -2604,6 +2612,9 @@ static void main_response(AuPage *p, const AuFetchResponse *r)
         p->cert = au_alloc(sizeof *p->cert);
         *p->cert = *r->cert;
     }
+    /* A document that came over RSA key exchange (an old server with no
+     * forward secrecy) gets the "not fully secure" lock mixed content gets. */
+    p->legacy_kex = r->cert && !strncmp(r->cert->cipher, "RSA-", 4);
     if (r->referrer_policy && r->referrer_policy[0])
         p->rpolicy = parse_referrer_policy(r->referrer_policy, p->rpolicy);
     if (!displayable_type(r->content_type) && !p->source_mode) {
@@ -2643,6 +2654,7 @@ static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
     p->security = p->prev_security;
     p->have_security = p->prev_have_security;
     p->mixed = p->prev_mixed;
+    p->legacy_kex = p->prev_legacy_kex;
     au_free(p->cert);
     p->cert = p->prev_cert;
     p->prev_cert = NULL;
@@ -2801,6 +2813,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->prev_security = p->security;
     p->prev_have_security = p->have_security;
     p->prev_mixed = p->mixed;
+    p->prev_legacy_kex = p->legacy_kex;
     au_free(p->prev_cert);
     p->prev_cert = p->cert;
     p->cert = NULL;
@@ -3174,7 +3187,7 @@ AuSecurity au_page_security(const AuPage *p)
     if (starts_with_ci(u, "view-source:"))
         u += 12;
     if (p->have_security) {
-        if (p->security == AU_SECURITY_SECURE && p->mixed)
+        if (p->security == AU_SECURITY_SECURE && (p->mixed || p->legacy_kex))
             return AU_SECURITY_MIXED;
         return p->security;
     }

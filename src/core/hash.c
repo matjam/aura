@@ -58,6 +58,8 @@ void au_sha256_init(AuSha256 *c)
 
 void au_sha256_update(AuSha256 *c, const void *data, size_t len)
 {
+    if (len == 0)
+        return; /* data may be NULL then, which memcpy must not be given */
     const uint8_t *p = data;
     size_t have = (size_t)(c->len & 63);
     c->len += len;
@@ -168,6 +170,8 @@ void au_md5_init(AuMd5 *c)
 
 void au_md5_update(AuMd5 *c, const void *data, size_t len)
 {
+    if (len == 0)
+        return; /* data may be NULL then, which memcpy must not be given */
     const uint8_t *p = data;
     size_t have = (size_t)(c->len & 63);
     c->len += len;
