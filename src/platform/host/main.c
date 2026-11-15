@@ -768,6 +768,8 @@ int main(int argc, char **argv)
         return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
+    if (!strcmp(cmd, "layout-bench"))
+        return au_host_layout_bench_main(argc, argv);
     if (!strcmp(cmd, "image"))
         return au_host_image_main(argc, argv);
     if (!strcmp(cmd, "js"))
