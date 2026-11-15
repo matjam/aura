@@ -558,7 +558,8 @@ static void side_parse(Grid *g, int ax, const AuCssBlob *blob, bool end, GSide *
         } else if (it[i].type == AU_CSSV_NUMBER) {
             float f = it[i].u.num;
             num = true;
-            iv = f > G_MAX_TRACKS + 1 ? G_MAX_TRACKS + 1 : f < -G_MAX_TRACKS - 1 ? -G_MAX_TRACKS - 1 : (int32_t)f;
+            iv = f != f ? 0
+                 : f > G_MAX_TRACKS + 1 ? G_MAX_TRACKS + 1 : f < -G_MAX_TRACKS - 1 ? -G_MAX_TRACKS - 1 : (int32_t)f;
         } else {
             nm = l_val_name(&it[i], &nl);
         }
