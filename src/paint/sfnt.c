@@ -1,8 +1,9 @@
 /* TrueType (sfnt) parsing: the table directory, cmap, metrics, names,
  * kerning and glyf outlines. Every read goes through the bounds-checked
  * readers below; a read outside the data returns 0. */
-#include "font.h"
+#include "font_internal.h"
 
+#include <math.h>
 #include <string.h>
 
 /* ---- Bounds-checked big-endian readers ---- */
@@ -156,6 +157,24 @@ static bool read_name(const AuFontFace *f, uint16_t nameid, char *out, size_t ca
     return n > 0;
 }
 
+bool au_font_name_string(const AuFontFace *f, uint16_t nameid, char *out, size_t cap)
+{
+    if (!cap)
+        return false;
+    char tmp[256];
+    if (!read_name(f, nameid, tmp, sizeof tmp))
+        return false;
+    size_t n = strlen(tmp);
+    if (n >= cap) {
+        n = cap - 1;
+        while (n && (tmp[n] & 0xC0) == 0x80)
+            n--; /* do not cut a UTF-8 sequence */
+    }
+    memcpy(out, tmp, n);
+    out[n] = 0;
+    return n > 0;
+}
+
 /* ---- cmap ---- */
 
 static void choose_cmap(AuFontFace *f)
@@ -286,7 +305,39 @@ int au_font_advance_units(const AuFontFace *f, uint16_t glyph)
     if (!f->num_hmetrics)
         return 0;
     uint16_t i = glyph < f->num_hmetrics ? glyph : (uint16_t)(f->num_hmetrics - 1);
-    return u16(f, f->hmtx + (uint32_t)i * 4);
+    int base = u16(f, f->hmtx + (uint32_t)i * 4);
+    if (!f->varied || glyph >= f->num_glyphs)
+        return base;
+    /* Varied advances are cached per face: HVAR is a few table reads, but
+     * phantom points need the glyph's whole variation data. */
+    AuFontCache *c = au_font_cache(f);
+    if (!c->adv) {
+        c->adv = au_alloc((size_t)f->num_glyphs * sizeof *c->adv);
+        memset(c->adv, 0xFF, (size_t)f->num_glyphs * sizeof *c->adv);
+    }
+    if (c->adv[glyph] != 0xFFFF)
+        return c->adv[glyph];
+    float a = floorf(au_fontvar_advance(f, glyph, base) + 0.5f);
+    int v = a < 0 ? 0 : a > 0xFFFE ? 0xFFFE : (int)a;
+    c->adv[glyph] = (uint16_t)v;
+    return v;
+}
+
+AuFontCache *au_font_cache(const AuFontFace *f)
+{
+    if (!f->cache)
+        ((AuFontFace *)f)->cache = au_calloc(sizeof(AuFontCache));
+    return f->cache;
+}
+
+void au_font_cache_free(AuFontCache *c)
+{
+    if (!c)
+        return;
+    au_free(c->adv);
+    au_gsub_free(c->gsub);
+    au_colr_free(c->colr);
+    au_free(c);
 }
 
 static void find_kern(AuFontFace *f)
@@ -402,6 +453,15 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
         case TAG('n', 'a', 'm', 'e'): o = &f->name, l = &f->name_len; break;
         case TAG('p', 'o', 's', 't'): o = &f->post, l = &f->post_len; break;
         case TAG('C', 'F', 'F', ' '): o = &f->cff, l = &f->cff_len; break;
+        case TAG('f', 'v', 'a', 'r'): o = &f->fvar, l = &f->fvar_len; break;
+        case TAG('a', 'v', 'a', 'r'): o = &f->avar, l = &f->avar_len; break;
+        case TAG('g', 'v', 'a', 'r'): o = &f->gvar, l = &f->gvar_len; break;
+        case TAG('H', 'V', 'A', 'R'): o = &f->hvar, l = &f->hvar_len; break;
+        case TAG('M', 'V', 'A', 'R'): o = &f->mvar, l = &f->mvar_len; break;
+        case TAG('S', 'T', 'A', 'T'): o = &f->stat, l = &f->stat_len; break;
+        case TAG('C', 'O', 'L', 'R'): o = &f->colr, l = &f->colr_len; break;
+        case TAG('C', 'P', 'A', 'L'): o = &f->cpal, l = &f->cpal_len; break;
+        case TAG('G', 'S', 'U', 'B'): o = &f->gsub, l = &f->gsub_len; break;
         }
         if (o) {
             *o = off;
@@ -460,10 +520,12 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
             f->ascender = ta;
             f->descender = td;
             f->line_gap = tg;
+            f->metric_src = 1;
         } else if (!f->ascender && !f->descender) {
             f->ascender = (int16_t)u16(f, f->os2 + 74);
             f->descender = (int16_t)-(int16_t)u16(f, f->os2 + 76);
             f->line_gap = 0;
+            f->metric_src = 2;
         }
         if (u16(f, f->os2) >= 2 && f->os2_len >= 90) {
             f->x_height = s16(f, f->os2 + 86);
@@ -500,6 +562,8 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
     if (!read_name(f, 17, f->subfamily, sizeof f->subfamily))
         read_name(f, 2, f->subfamily, sizeof f->subfamily);
     read_name(f, 4, f->full_name, sizeof f->full_name);
+    au_fontvar_init(f);
+    f->color = f->colr_len >= 14 && f->cpal_len >= 12;
     f->id = next_face_id++;
     return f;
 bad:
@@ -511,6 +575,8 @@ AuFontFace *au_font_face_synthesize(const AuFontFace *f, unsigned synth)
 {
     AuFontFace *v = au_alloc(sizeof *v);
     *v = *f;
+    v->cache = NULL;
+    au_fontvar_retain(v->var);
     v->synth = (uint8_t)(f->synth | (synth & (AU_FONT_SYNTH_BOLD | AU_FONT_SYNTH_ITALIC)));
     if (v->synth & AU_FONT_SYNTH_ITALIC)
         v->italic = true;
@@ -525,6 +591,8 @@ void au_font_face_free(AuFontFace *f)
     if (!f)
         return;
     au_glyph_cache_forget_face(f);
+    au_fontvar_release(f->var);
+    au_font_cache_free(f->cache);
     au_free(f);
 }
 
@@ -581,7 +649,7 @@ static void xf_apply(const Xform *m, float x, float y, float *ox, float *oy)
 #define MAX_POINTS 20000
 #define MAX_COMPOSITE_DEPTH 8
 
-static bool simple_glyph(const AuFontFace *f, uint32_t off, uint32_t len, int ncont, const Xform *m,
+static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t len, int ncont, const Xform *m,
                          AuPath *path)
 {
     uint32_t end = off + len;
@@ -608,8 +676,11 @@ static bool simple_glyph(const AuFontFace *f, uint32_t off, uint32_t len, int nc
     if (p > end)
         return false;
     uint8_t *flags = au_alloc((size_t)npts);
-    float *xs = au_alloc((size_t)npts * 2 * sizeof(float));
-    float *ys = xs + npts;
+    /* Room for the four phantom points that gvar deltas address. */
+    float *xs = au_alloc((size_t)(npts + 4) * 2 * sizeof(float));
+    float *ys = xs + npts + 4;
+    uint16_t *ends = NULL;
+    float *dxs = NULL;
     bool ok = false;
     for (int i = 0; i < npts;) {
         if (p >= end)
@@ -655,6 +726,21 @@ static bool simple_glyph(const AuFontFace *f, uint32_t off, uint32_t len, int nc
             p += 2;
         }
         ys[i] = (float)v;
+    }
+    if (f->varied) {
+        int n = npts + 4;
+        ends = au_alloc((size_t)ncont * sizeof *ends);
+        for (int c = 0; c < ncont; c++)
+            ends[c] = u16(f, endpts + (uint32_t)c * 2);
+        for (int i = npts; i < n; i++)
+            xs[i] = ys[i] = 0;
+        dxs = au_calloc((size_t)n * 2 * sizeof(float));
+        if (!au_fontvar_glyph_deltas(f, g, n, ends, ncont, xs, ys, dxs, dxs + n))
+            goto out;
+        for (int i = 0; i < npts; i++) {
+            xs[i] += dxs[i];
+            ys[i] += dxs[n + i];
+        }
     }
     /* Emit contours. Off-curve points imply on-curve midpoints between
      * them. A contour may start off the curve. */
@@ -710,7 +796,69 @@ static bool simple_glyph(const AuFontFace *f, uint32_t off, uint32_t len, int nc
 out:
     au_free(flags);
     au_free(xs);
+    au_free(ends);
+    au_free(dxs);
     return ok;
+}
+
+/* A composite glyph's component: flags, glyph, offset and 2x2 matrix. */
+#define MAX_COMPONENTS 64
+typedef struct Component {
+    uint16_t flags, glyph;
+    float dx, dy, a, b, c, d;
+} Component;
+
+/* Reads the components of the composite at off (MAX_COMPONENTS at most).
+ * Returns their count, or -1 when the glyph is malformed. */
+static int read_components(const AuFontFace *f, uint32_t off, uint32_t len, Component *out)
+{
+    uint32_t end = off + len, p = off + 10;
+    for (int count = 0; count < MAX_COMPONENTS; count++) {
+        if (p + 4 > end)
+            return -1;
+        Component *k = &out[count];
+        uint16_t flags = u16(f, p);
+        k->flags = flags;
+        k->glyph = u16(f, p + 2);
+        p += 4;
+        if (flags & 1) { /* ARG_1_AND_2_ARE_WORDS */
+            if (p + 4 > end)
+                return -1;
+            k->dx = s16(f, p);
+            k->dy = s16(f, p + 2);
+            p += 4;
+        } else {
+            if (p + 2 > end)
+                return -1;
+            k->dx = (int8_t)f->data[p];
+            k->dy = (int8_t)f->data[p + 1];
+            p += 2;
+        }
+        k->a = 1, k->b = 0, k->c = 0, k->d = 1;
+        if (flags & 8) { /* WE_HAVE_A_SCALE */
+            if (p + 2 > end)
+                return -1;
+            k->a = k->d = s16(f, p) / 16384.0f;
+            p += 2;
+        } else if (flags & 0x40) { /* X_AND_Y_SCALE */
+            if (p + 4 > end)
+                return -1;
+            k->a = s16(f, p) / 16384.0f;
+            k->d = s16(f, p + 2) / 16384.0f;
+            p += 4;
+        } else if (flags & 0x80) { /* TWO_BY_TWO */
+            if (p + 8 > end)
+                return -1;
+            k->a = s16(f, p) / 16384.0f;
+            k->b = s16(f, p + 2) / 16384.0f;
+            k->c = s16(f, p + 4) / 16384.0f;
+            k->d = s16(f, p + 6) / 16384.0f;
+            p += 8;
+        }
+        if (!(flags & 0x20)) /* MORE_COMPONENTS */
+            return count + 1;
+    }
+    return -1; /* more components than any real glyph has */
 }
 
 /* budget counts the components left to visit across the whole glyph, so
@@ -723,73 +871,89 @@ static bool glyph_outline(const AuFontFace *f, uint16_t g, const Xform *m, int d
         return g < f->num_glyphs; /* an empty glyph (space) is fine */
     int16_t ncont = s16(f, off);
     if (ncont >= 0)
-        return simple_glyph(f, off, len, ncont, m, path);
+        return simple_glyph(f, g, off, len, ncont, m, path);
     /* Composite: components with their own transforms. Depth is bounded by
      * MAX_COMPOSITE_DEPTH, so this recursion is bounded by a constant. */
     if (depth >= MAX_COMPOSITE_DEPTH)
         return false;
-    uint32_t end = off + len, p = off + 10;
-    for (int count = 0; count < 256; count++) {
-        if (p + 4 > end)
-            return false;
-        uint16_t flags = u16(f, p), sub = u16(f, p + 2);
-        p += 4;
-        float dx, dy;
-        if (flags & 1) { /* ARG_1_AND_2_ARE_WORDS */
-            if (p + 4 > end)
-                return false;
-            dx = s16(f, p);
-            dy = s16(f, p + 2);
-            p += 4;
-        } else {
-            if (p + 2 > end)
-                return false;
-            dx = (int8_t)f->data[p];
-            dy = (int8_t)f->data[p + 1];
-            p += 2;
-        }
-        if (!(flags & 2)) /* point matching, not offsets: unsupported */
+    /* On the heap: Mac OS 9 stacks are small and composites nest. */
+    Component *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
+    int ncomp = read_components(f, off, len, comp);
+    bool ok = ncomp >= 0;
+    if (ok && f->varied && ncomp) {
+        /* gvar varies each component's offset (one point per component,
+         * then the phantom points). */
+        int n = ncomp + 4;
+        float *d = au_calloc((size_t)n * 2 * sizeof(float));
+        ok = au_fontvar_glyph_deltas(f, g, n, NULL, 0, NULL, NULL, d, d + n);
+        for (int i = 0; ok && i < ncomp; i++)
+            if (comp[i].flags & 2) {
+                comp[i].dx += d[i];
+                comp[i].dy += d[n + i];
+            }
+        au_free(d);
+    }
+    for (int i = 0; ok && i < ncomp; i++) {
+        Component *k = &comp[i];
+        float dx = k->dx, dy = k->dy;
+        if (!(k->flags & 2)) /* point matching, not offsets: unsupported */
             dx = dy = 0;
-        float a = 1, b = 0, c = 0, d = 1;
-        if (flags & 8) { /* WE_HAVE_A_SCALE */
-            if (p + 2 > end)
-                return false;
-            a = d = s16(f, p) / 16384.0f;
-            p += 2;
-        } else if (flags & 0x40) { /* X_AND_Y_SCALE */
-            if (p + 4 > end)
-                return false;
-            a = s16(f, p) / 16384.0f;
-            d = s16(f, p + 2) / 16384.0f;
-            p += 4;
-        } else if (flags & 0x80) { /* TWO_BY_TWO */
-            if (p + 8 > end)
-                return false;
-            a = s16(f, p) / 16384.0f;
-            b = s16(f, p + 2) / 16384.0f;
-            c = s16(f, p + 4) / 16384.0f;
-            d = s16(f, p + 6) / 16384.0f;
-            p += 8;
-        }
-        if (flags & 0x800) { /* SCALED_COMPONENT_OFFSET (Apple) */
-            float tx = a * dx + c * dy, ty = b * dx + d * dy;
+        if (k->flags & 0x800) { /* SCALED_COMPONENT_OFFSET (Apple) */
+            float tx = k->a * dx + k->c * dy, ty = k->b * dx + k->d * dy;
             dx = tx;
             dy = ty;
         }
         /* combined = parent * component */
         Xform cm;
-        cm.a = m->a * a + m->c * b;
-        cm.b = m->b * a + m->d * b;
-        cm.c = m->a * c + m->c * d;
-        cm.d = m->b * c + m->d * d;
+        cm.a = m->a * k->a + m->c * k->b;
+        cm.b = m->b * k->a + m->d * k->b;
+        cm.c = m->a * k->c + m->c * k->d;
+        cm.d = m->b * k->c + m->d * k->d;
         cm.e = m->a * dx + m->c * dy + m->e;
         cm.f = m->b * dx + m->d * dy + m->f;
-        if (--*budget < 0 || !glyph_outline(f, sub, &cm, depth + 1, budget, path))
-            return false;
-        if (!(flags & 0x20)) /* MORE_COMPONENTS */
-            break;
+        if (--*budget < 0 || !glyph_outline(f, k->glyph, &cm, depth + 1, budget, path))
+            ok = false;
     }
+    au_free(comp);
+    return ok;
+}
+
+bool au_font_glyph_point_count(const AuFontFace *f, uint16_t g, int *npoints, bool *composite)
+{
+    uint32_t off, len;
+    *npoints = 0;
+    *composite = false;
+    if (!glyph_loc(f, g, &off, &len))
+        return g < f->num_glyphs;
+    int16_t ncont = s16(f, off);
+    if (ncont >= 0) {
+        if (ncont == 0)
+            return true;
+        if (len < 10 + (uint32_t)ncont * 2)
+            return false;
+        *npoints = u16(f, off + 10 + (uint32_t)(ncont - 1) * 2) + 1;
+        return *npoints <= MAX_POINTS;
+    }
+    Component *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
+    int n = read_components(f, off, len, comp);
+    au_free(comp);
+    if (n < 0)
+        return false;
+    *npoints = n;
+    *composite = true;
     return true;
+}
+
+bool au_font_glyph_path_m(const AuFontFace *f, uint16_t glyph, const float m[6], AuPath *path)
+{
+    Xform x = {m[0], m[1], m[2], m[3], m[4], m[5]};
+    size_t nops = path->nops, npts = path->npts;
+    int budget = 64;
+    if (glyph_outline(f, glyph, &x, 0, &budget, path))
+        return true;
+    path->nops = nops;
+    path->npts = npts;
+    return false;
 }
 
 bool au_font_glyph_path(const AuFontFace *f, uint16_t glyph, float sx, float sy, float x, float y,
