@@ -61,9 +61,11 @@ void *au_calloc(size_t n)
 
 void *au_realloc(void *p, size_t n)
 {
-    void *q = realloc(p, n ? n : 1);
-    while (!q && release(n))
+    void *q;
+    /* A failed realloc leaves p valid, so trying again with p is right. */
+    do
         q = realloc(p, n ? n : 1);
+    while (!q && release(n));
     if (!q) {
         oom_handler(n);
         abort();
