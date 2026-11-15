@@ -12,6 +12,36 @@ Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
 downloaded blocklists, and downloads files. Many sites do not work yet.
 
+## AI use disclosure
+
+Aura was written almost entirely with AI (Anthropic's Claude), working
+under my direction. I am not writing a browser engine by hand for an
+operating system from 1999: that would be crazy. The HTML parser, CSS,
+layout, painting, fonts, image decoders, networking and the Mac OS 9
+application were all written that way, against the web standards and
+Apple's old documentation, and then tested until things held up.
+
+Does it work? It loads real sites, as the screenshot shows. Everything
+here was tested with a few hundred automated test areas on a modern
+machine, with fuzzers on the parsers, and in an emulator (QEMU) running
+Mac OS 9.2.2. What has not happened yet:
+
+- It has not run on a real Mac.
+- It has not been used day to day for any length of time.
+- Nobody has reviewed the code for security.
+
+That last point matters more for a browser than for most programs. Aura
+reads whatever a web server sends it, on a system with no memory
+protection, so a bug in a parser is a bug in your whole Mac. I would not
+use it for banking, or type a password into it that you care about. It
+may eat your dog, copy your homework or burn your house down. No
+warranty; see `LICENSE`.
+
+So yes, it is vibecoded, or whatever other name you like. I am fine with
+that as long as it works and breaks nothing. If you try it on real
+hardware, I would like to hear how it went, good or bad: please open an
+issue. `CONTRIBUTING.md` says what is most useful to report.
+
 ## Download
 
 Releases are on the [releases page](https://github.com/matjam/aura/releases).
