@@ -17,8 +17,8 @@ enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
        FILE_QUIT = 9 };
 enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_PREFS = 9 };
-enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_TABS_TOP = 4, VIEW_TABS_LEFT, VIEW_DEBUG = 7 };
-enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS };
+enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_TABS_TOP = 5, VIEW_TABS_LEFT, VIEW_DEBUG = 8 };
+enum { DEBUG_SCENE = 1, DEBUG_FONTS, DEBUG_BENCH, DEBUG_DOWNLOADS, DEBUG_TIMINGS };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
 enum { WIN_DOWNLOADS_ITEM = 1, WIN_FIRST_WINDOW = 3 };
@@ -246,6 +246,13 @@ static void rebuild_windows(void)
     }
 }
 
+/* View Source works for documents that have bytes: files and network
+ * pages, not generated about: pages or a source view itself. */
+static bool can_view_source(const char *url)
+{
+    return au_url_scheme_is(url, "file") || au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https");
+}
+
 void mac_adjust_menus(void)
 {
     if (menus_dirty) {
@@ -290,6 +297,10 @@ void mac_adjust_menus(void)
         EnableItem(view, VIEW_RELOAD);
     else
         DisableItem(view, VIEW_RELOAD);
+    if (t && can_view_source(au_page_url(t->page)))
+        EnableItem(view, VIEW_SOURCE);
+    else
+        DisableItem(view, VIEW_SOURCE);
     CheckItem(view, VIEW_TABS_TOP, g_browser->prefs.tab_position == AU_TABS_TOP);
     CheckItem(view, VIEW_TABS_LEFT, g_browser->prefs.tab_position == AU_TABS_LEFT);
     if (t && au_nav_can_go(&t->nav, -1))
@@ -413,6 +424,18 @@ static void do_menu(long choice)
             if (w)
                 au_bw_stop(w);
             break;
+        case VIEW_SOURCE: {
+            AuTab *t = w ? au_bw_active_tab(w) : NULL;
+            if (t && can_view_source(au_page_url(t->page))) {
+                AuBuf u;
+                au_buf_init(&u);
+                au_buf_puts(&u, "view-source:");
+                au_buf_puts(&u, au_page_url(t->page));
+                au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
+                au_buf_free(&u);
+            }
+            break;
+        }
         case VIEW_TABS_TOP:
         case VIEW_TABS_LEFT:
             g_browser->prefs.tab_position = item == VIEW_TABS_LEFT ? AU_TABS_LEFT : AU_TABS_TOP;
@@ -429,6 +452,10 @@ static void do_menu(long choice)
                 browserwin_benchmark(b);
             break;
         case DEBUG_DOWNLOADS: start_sim_downloads(); break;
+        case DEBUG_TIMINGS:
+            if (b)
+                browserwin_page_timings(b);
+            break;
         }
         break;
     case kGoMenu:

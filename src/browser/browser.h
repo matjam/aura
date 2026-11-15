@@ -102,6 +102,8 @@ struct AuBrowserWindow {
     AuHit hover, pressed;
     int drag_tab; /* tab being dragged, or -1 */
     int drag_x, drag_y;
+    int mouse_x, mouse_y; /* the pointer's last position (window), for hover after scrolling */
+    bool mouse_in_page;
     bool drag_moved;
     int split_x, split_w; /* splitter drag start */
     char *field;          /* address field text while edited, else NULL */
@@ -112,6 +114,8 @@ struct AuBrowserWindow {
     int throbber_frame;
     uint32_t throbber_ms;
 };
+
+#define AU_MAX_FETCHERS 8
 
 struct AuBrowser {
     AuPrefs prefs;
@@ -124,6 +128,11 @@ struct AuBrowser {
     int nwindows;
     uint32_t prefs_gen, session_gen;
     uint32_t next_tab_id;
+    struct {
+        char scheme[16];
+        AuPageFetcher fetcher;
+    } fetchers[AU_MAX_FETCHERS]; /* see au_browser_set_fetcher */
+    int nfetchers;
 };
 
 AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host);
@@ -136,6 +145,10 @@ void au_browser_prefs_changed(AuBrowser *b);
  * manager windows): updates the bookmark buttons and menus. */
 void au_browser_bookmarks_changed(AuBrowser *b);
 void au_browser_history_changed(AuBrowser *b);
+/* Registers the fetcher pages use for URLs of scheme (lower case, no
+ * ':'), replacing an earlier one; NULL removes it. A network stack calls
+ * this for "http" and "https" at start-up, before windows open. */
+void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 

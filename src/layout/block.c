@@ -190,7 +190,7 @@ float l_flow_resolve(LFlowRef *fr)
 
 static bool is_flow_child(const LBox *c)
 {
-    return c->kind == LK_BLOCK && !(c->flags & (LF_FLOAT | LF_ABSPOS | LF_MARKER_OUT));
+    return c->kind == LK_BLOCK && !(c->flags & (LF_FLOAT | LF_ABSPOS | LF_MARKER_OUT | LF_LEGEND));
 }
 
 /* Outside list markers: positioned against the item's first line. */
@@ -348,7 +348,10 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
         float l, r;
         float est_h = l_max(1, k->h);
         l_floats_avail(&S->floats, y, est_h, cl, cr, &l, &r);
-        float bl = l_max(l, cl + k->m[3]), br = l_min(r, cr - k->m[1]);
+        /* Negative margins pull the box out of its containing block as for
+         * any block; only floats push its border box in. */
+        float bl = l > cl ? l_max(l, cl + k->m[3]) : cl + k->m[3];
+        float br = r < cr ? l_min(r, cr - k->m[1]) : cr - k->m[1];
         float avail = br - bl;
         float w = l_used_width(L, k, cw, avail + k->m[1] + k->m[3], LS_STRETCH);
         float bw = w + l_bp_h(k);
@@ -472,6 +475,11 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     if (spec_h < 0)
         spec_h = l_ratio_height(k, content_w);
     float child_cbh = spec_h >= 0 ? l_clamp_h(k, spec_h, cb_h) : -1;
+    /* Quirks mode: percentage heights look through auto-height blocks to
+     * the nearest ancestor with a height, up to the viewport (the
+     * percentage height quirk of the HTML standard's quirks list). */
+    if (child_cbh < 0 && L->doc && L->doc->quirks == AU_QUIRKS_FULL)
+        child_cbh = cb_h;
     uint32_t mark = L->nabs;
     int lv = push_frame(S, k, bx, by, content_w);
     L->depth++;
@@ -509,17 +517,27 @@ static void flow_contents(AuLayout *L, LBfc *S, int level, float cb_h)
     }
     l_box_free_layout(&b->b);
     for (LBox *c = b->b.first; c; c = c->next) {
-        if (c->kind != LK_BLOCK || (c->flags & LF_MARKER_OUT))
-            continue;
+        if (c->kind != LK_BLOCK || (c->flags & (LF_MARKER_OUT | LF_LEGEND)))
+            continue; /* a rendered legend was placed by its fieldset */
         LBlock *k = (LBlock *)c;
         FlowFrame *f = &S->fr[level];
         if (c->flags & LF_ABSPOS) {
             l_resolve_box_edges(k, cw);
-            l_queue_abspos(L, k, b->bw[3] + b->p[3], b->bw[0] + b->p[0] + f->cursor + mc_val(S->pending));
+            /* While b's top margin is pending with its owner's, b moves when
+             * it resolves: the static position does not add it. */
+            float pend = S->owner && level >= S->owner_level ? 0 : mc_val(S->pending);
+            l_queue_abspos(L, k, b->bw[3] + b->p[3], b->bw[0] + b->p[0] + f->cursor + pend);
             continue;
         }
         if (c->flags & LF_FLOAT) {
             float y = f->bfc_y + f->cursor + mc_val(S->pending);
+            if (S->owner && level >= S->owner_level) {
+                /* This box's top margin is still pending with its owner's,
+                 * and the provisional bfc_y already counts it: place the
+                 * float where resolving the margin now would put the
+                 * content top. */
+                y = S->fr[S->owner_level - 1].bfc_y + S->owner_base + mc_val(S->pending) + f->cursor;
+            }
             float ox = f->bfc_x - b->bw[3] - b->p[3], oy = f->bfc_y - b->bw[0] - b->p[0];
             L->depth++;
             l_place_float(L, &S->floats, k, cw, cb_h, f->bfc_x, f->bfc_x + cw, y, ox, oy);

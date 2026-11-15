@@ -192,6 +192,8 @@ static void test_tabs(AuFontSet *fonts)
     CHECK_STR(au_nav_current(&t->nav)->title, "example.com");
 
     au_bw_navigate(w, "file:///doc.html");
+    CHECK(t->loading && !*au_page_title(t->page)); /* files arrive from idle */
+    settle(w);
     CHECK_STR(au_page_title(t->page), "A Title");
     CHECK(au_page_security(t->page) == AU_SECURITY_NONE);
     au_bw_back(w);
@@ -669,6 +671,7 @@ static void test_session(AuFontSet *fonts)
     au_bw_navigate(w, "about:scene");
     au_bw_back(w);
     au_bw_new_tab(w, "file:///doc.html", true, -1);
+    settle(w);
     AuBrowserWindow *w2 = au_browser_window_new(b, 640, 480);
     au_bw_new_tab(w2, "about:fonts", true, -1);
     AuBuf out;

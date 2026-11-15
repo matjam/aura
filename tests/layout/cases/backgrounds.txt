@@ -1,0 +1,54 @@
+Backgrounds and borders as painted: gradients (repeating, radial, sized
+and positioned tiles), border joins with transparent sides.
+
+=== a CSS triangle: transparent sides keep their widths at the joins
+<body style="margin:0">
+<div style="width:0;height:0;border:10px solid transparent;border-top-width:0;border-bottom:20px solid #ff0000"></div>
+---
+pixel 1 12 ffffff
+pixel 18 12 ffffff
+pixel 10 15 ff0000
+pixel 2 18 ff0000
+
+=== repeating linear gradient repeats its stops
+<body style="margin:0">
+<div style="height:10px;width:100px;background:repeating-linear-gradient(90deg,#ff0000 0 10px,#0000ff 10px 20px)"></div>
+---
+pixel 5 5 ff0000
+pixel 15 5 0000ff
+pixel 45 5 ff0000
+pixel 95 5 0000ff
+
+=== radial gradient: circle with hard stops
+<body style="margin:0">
+<div style="height:100px;width:100px;background:radial-gradient(circle,#ff0000 0 10px,#0000ff 10px)"></div>
+---
+pixel 50 50 ff0000
+pixel 55 52 ff0000
+pixel 70 50 0000ff
+pixel 5 5 0000ff
+
+=== radial gradient position and repeating rings
+<body style="margin:0">
+<div style="height:100px;width:100px;background:repeating-radial-gradient(circle at 0 0,#ff0000 0 10px,#0000ff 10px 20px)"></div>
+---
+pixel 3 3 ff0000
+pixel 14 0 0000ff
+pixel 25 1 ff0000
+
+=== gradient tile with a size, a position and no-repeat
+<body style="margin:0">
+<div style="height:20px;width:100px;background:linear-gradient(#ff0000,#ff0000) 20px 0 / 10px 10px no-repeat"></div>
+---
+pixel 25 5 ff0000
+pixel 5 5 ffffff
+pixel 25 15 ffffff
+pixel 45 5 ffffff
+
+=== gradient tile repeated across
+<body style="margin:0">
+<div style="height:10px;width:100px;background:linear-gradient(90deg,#ff0000 50%,#ffffff 50%) 0 0 / 20px 10px repeat-x"></div>
+---
+pixel 5 5 ff0000
+pixel 15 5 ffffff
+pixel 45 5 ff0000

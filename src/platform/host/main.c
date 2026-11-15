@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static double now_ms(void)
 {
@@ -38,6 +39,8 @@ static int usage(void)
             "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
+            "                        [--scroll Y] [--mouse X Y]\n"
+            "                        (--tab takes a URL, a path, or file:relative/path)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n");
     return 2;
@@ -227,6 +230,7 @@ typedef struct ChromeOpts {
     const char *field;
     bool focus, loading, menus;
     const char *hover;
+    int scroll, mouse_x, mouse_y;
 } ChromeOpts;
 
 static AuHitPart hit_by_name(const char *s)
@@ -255,8 +259,23 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura", "about:home", 0);
     if (o->ntabs == 0 && o->extra_tabs == 0)
         o->tabs[o->ntabs++] = "about:home";
-    for (int i = 0; i < o->ntabs; i++)
-        au_bw_new_tab(w, o->tabs[i], true, w->ntabs);
+    for (int i = 0; i < o->ntabs; i++) {
+        /* "file:relative/path" and plain paths are made absolute file: URLs. */
+        const char *t = o->tabs[i];
+        char *url = NULL;
+        if (!strncmp(t, "file:", 5) && t[5] != '/')
+            t += 5;
+        if (!au_url_scheme_len(t, strlen(t))) {
+            char path[4096];
+            if (t[0] == '/')
+                snprintf(path, sizeof path, "%s", t);
+            else if (getcwd(path, sizeof path - 2))
+                snprintf(path + strlen(path), sizeof path - strlen(path), "/%s", t);
+            url = au_url_from_path(path, '/');
+        }
+        au_bw_new_tab(w, url ? url : o->tabs[i], true, w->ntabs);
+        au_free(url);
+    }
     static const char *fill[] = {"about:home", "http://example.com/", "about:scene", "about:fonts",
                                  "http://www.macintoshrepository.org/", "about:blank"};
     for (int i = 0; i < o->extra_tabs; i++)
@@ -285,6 +304,17 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     if (o->hover) {
         w->hover.part = hit_by_name(o->hover);
         w->hover.index = -1;
+    }
+    if (o->scroll)
+        au_bw_scroll_to(w, 0, o->scroll);
+    if (o->mouse_x >= 0) {
+        /* Move the pointer there (hover state, a link's status text). */
+        AuEvent e;
+        memset(&e, 0, sizeof e);
+        e.type = AU_EVENT_MOUSE_MOVE;
+        e.x = o->mouse_x;
+        e.y = o->mouse_y;
+        au_bw_mouse(w, &e);
     }
     AuSurface *s = au_surface_new(o->w, o->h);
     AuCanvas *c = au_canvas_new(s);
@@ -318,6 +348,7 @@ int main(int argc, char **argv)
         o.w = 800;
         o.h = 600;
         o.active = -1;
+        o.mouse_x = -1;
         const char *out = "chrome.png";
         for (int i = 2; i < argc; i++) {
             const char *a = argv[i];
@@ -345,6 +376,12 @@ int main(int argc, char **argv)
                 o.loading = true;
             else if (!strcmp(a, "--hover") && i + 1 < argc)
                 o.hover = argv[++i];
+            else if (!strcmp(a, "--scroll") && i + 1 < argc)
+                o.scroll = atoi(argv[++i]);
+            else if (!strcmp(a, "--mouse") && i + 2 < argc) {
+                o.mouse_x = atoi(argv[++i]);
+                o.mouse_y = atoi(argv[++i]);
+            }
             else if (!strcmp(a, "--font") && i + 1 < argc)
                 au_host_add_font_path(argv[++i]);
             else if (!strcmp(a, "--no-system-fonts"))

@@ -355,9 +355,108 @@ static void test_quirks_ua(void)
     au_css_resolver_free(r);
 }
 
+/* Author background, border or box-shadow on a form control is flagged
+ * (layout drops the native look); UA styles and border-radius are not. */
+static void test_author_decor(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *plain = add(doc, &body->node, "input", "plain", NULL);
+    AuElement *bg = add(doc, &body->node, "input", "bg", NULL);
+    AuElement *bd = add(doc, &body->node, "button", "bd", NULL);
+    AuElement *lg = add(doc, &body->node, "select", "lg", NULL);
+    AuElement *rad = add(doc, &body->node, "textarea", "rad", NULL);
+    AuElement *div = add(doc, &body->node, "div", "div", NULL);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet("#bg { background: #fff } #bd { border: none } #rad { border-radius: 4px }"
+                                       " #lg { border-inline-start-color: red } div { background: red }"));
+    au_css_style_document(r, doc);
+    CHECK(!(au_element_style(plain)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    CHECK(au_element_style(bg)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(au_element_style(bd)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(au_element_style(lg)->flags & AU_STYLE_F_AUTHOR_DECOR);
+    CHECK(!(au_element_style(rad)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    CHECK(!(au_element_style(div)->flags & AU_STYLE_F_AUTHOR_DECOR));
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
+#define FS(el) (au_element_style(el)->inh->font_size)
+#define NEAR(a, b) ((a) > (b) - 0.01f && (a) < (b) + 0.01f)
+
+/* Default sizes, the monospace default, text zoom and the minimum. */
+static void test_font_prefs(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *mono = add(doc, &body->node, "div", "mono", NULL);
+    AuElement *monoin = add(doc, &mono->node, "span", NULL, NULL);
+    AuElement *pre = add(doc, &body->node, "pre", NULL, NULL);
+    AuElement *px = add(doc, &body->node, "div", "px", NULL);
+    AuElement *code = add(doc, &px->node, "code", NULL, NULL);
+    AuElement *codepx = add(doc, &px->node, "code", "codepx", NULL);
+    AuElement *small = add(doc, &body->node, "div", "small", NULL);
+    AuElement *em = add(doc, &body->node, "div", "em", NULL);
+    AuElement *tiny = add(doc, &body->node, "div", "tiny", NULL);
+    AuElement *tinyem = add(doc, &tiny->node, "div", "tinyem", NULL);
+    AuElement *zero = add(doc, &body->node, "div", "zero", NULL);
+    AuElement *ini = add(doc, &px->node, "div", "ini", NULL);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet("#mono { font-family: monospace } #px { font-size: 10px }"
+                                       " #codepx { font-size: 10px } #small { font-size: small }"
+                                       " #em { font-size: 2em } #tiny { font-size: 6px }"
+                                       " #tinyem { font-size: 0.5em } #zero { font-size: 0 }"
+                                       " #ini { font-size: initial }"));
+    au_css_style_document(r, doc);
+    CHECK(NEAR(FS(body), 16));
+    CHECK(NEAR(FS(mono), 13) && NEAR(FS(monoin), 13) && NEAR(FS(pre), 13));
+    /* A non-keyword size scales by 13/16 into monospace (as Blink),
+     * unless the element sets its own size. */
+    CHECK(NEAR(FS(code), 8.125f) && NEAR(FS(codepx), 10));
+    CHECK(NEAR(FS(small), 13) && NEAR(FS(em), 32) && NEAR(FS(ini), 16));
+
+    AuCssFontPrefs p;
+    au_css_font_prefs_default(&p);
+    p.default_size = 20;
+    p.default_mono_size = 15;
+    au_css_resolver_set_font_prefs(r, &p);
+    au_css_style_document(r, doc);
+    CHECK(NEAR(FS(body), 20) && NEAR(FS(mono), 15) && NEAR(FS(pre), 15));
+    CHECK(NEAR(FS(small), 20 * 8.0f / 9) && NEAR(FS(em), 40) && NEAR(FS(px), 10));
+    CHECK(NEAR(FS(code), 7.5f) && NEAR(FS(ini), 20));
+
+    au_css_font_prefs_default(&p);
+    p.text_zoom = 1.5f;
+    au_css_resolver_set_font_prefs(r, &p);
+    au_css_style_document(r, doc);
+    CHECK(NEAR(FS(body), 24) && NEAR(FS(px), 15) && NEAR(FS(em), 48));
+    CHECK(NEAR(FS(small), 19.5f) && NEAR(FS(pre), 19.5f));
+    CHECK(NEAR(FS(tinyem), 4.5f)); /* 0.5em of the zoomed 9px: not zoomed again */
+
+    au_css_font_prefs_default(&p);
+    p.min_size = 9;
+    au_css_resolver_set_font_prefs(r, &p);
+    au_css_style_document(r, doc);
+    CHECK(NEAR(FS(tiny), 9) && NEAR(au_element_style(tiny)->inh->font_size_spec, 6));
+    /* 0.5em starts from the unclamped 6px: 3px, clamped to 9. */
+    CHECK(NEAR(FS(tinyem), 9) && NEAR(au_element_style(tinyem)->inh->font_size_spec, 3));
+    CHECK(FS(zero) == 0);
+    CHECK(NEAR(FS(body), 16) && NEAR(FS(px), 10));
+
+    /* Nonsense values fall back to the defaults. */
+    p.default_size = -1;
+    p.text_zoom = 0;
+    au_css_resolver_set_font_prefs(r, &p);
+    CHECK(au_css_resolver_font_prefs(r)->default_size == 16 && au_css_resolver_font_prefs(r)->text_zoom == 1);
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
 int main(void)
 {
     au_css_init();
+    test_font_prefs();
+    test_author_decor();
     test_invalidation();
     test_has_invalidation();
     test_device_and_metrics();

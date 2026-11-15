@@ -120,6 +120,10 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
     float len2 = vx * vx + vy * vy;
     out->ox = g->x0 + tx;
     out->oy = g->y0 + ty;
+    out->radial = g->radial;
+    out->repeat = g->repeat;
+    out->irx = g->rx > 1e-3f ? 1 / g->rx : 1e3f;
+    out->iry = g->ry > 1e-3f ? 1 / g->ry : 1e3f;
     if (len2 < 1e-6f) {
         out->dx = out->dy = 0;
     } else {
@@ -145,8 +149,10 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
         col[i] = au_premul(g->stops[i].color);
     }
     int s = 0;
+    /* A repeating gradient's table covers one period [0, 1). */
+    float div = g->repeat ? 256.0f : 255.0f;
     for (int i = 0; i < 256; i++) {
-        float t = i / 255.0f;
+        float t = i / div;
         while (s < n && pos[s] <= t)
             s++;
         uint32_t c;
@@ -163,9 +169,45 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
     }
 }
 
+/* The table index for gradient position t (1.0 = the end of the line). */
+static int lut_index(const AuGradientLut *g, float t)
+{
+    if (g->repeat) {
+        float f = t - floorf(t);
+        int i = (int)(f * 256.0f);
+        return i < 0 ? 0 : i > 255 ? 255 : i;
+    }
+    if (!(t > 0))
+        return 0;
+    return t >= 1 ? 255 : (int)(t * 255.0f);
+}
+
 void au_blend_gradient_span(AuPixel *dst, int x, int y, int n, const AuGradientLut *g,
                             const uint8_t *cov)
 {
+    if (g->radial || g->repeat) {
+        /* Per-pixel position: elliptical distance or the wrapped line
+         * position. Rarer than plain linear gradients; kept simple. */
+        float py = ((float)y + 0.5f - g->oy);
+        for (int i = 0; i < n; i++) {
+            uint32_t c = cov ? cov[i] : 255;
+            if (c == 0)
+                continue;
+            float px = (float)(x + i) + 0.5f - g->ox;
+            float t;
+            if (g->radial) {
+                float u = px * g->irx, v = py * g->iry;
+                t = sqrtf(u * u + v * v);
+            } else {
+                t = px * g->dx + py * g->dy;
+            }
+            uint32_t src = g->lut[lut_index(g, t)];
+            if (c != 255)
+                src = au_px_scale(src, au_a256(c));
+            dst[i] = au_px_over(src, dst[i]);
+        }
+        return;
+    }
     /* t moves by g->dx per pixel; step it in 16.16 fixed point. */
     float t0 = ((float)x + 0.5f - g->ox) * g->dx + ((float)y + 0.5f - g->oy) * g->dy;
     float t0c = t0 * 255.0f * 65536.0f;

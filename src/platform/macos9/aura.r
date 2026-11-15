@@ -74,10 +74,11 @@ resource 'MENU' (130, "Edit") {
 };
 
 resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFFDB, enabled, "View",
+	131, textMenuProc, 0x7FFFFFB7, enabled, "View",
 	{
 		"Reload", noIcon, "R", noMark, plain;
 		"Stop", noIcon, ".", noMark, plain;
+		"View Source", noIcon, "U", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 		"Tabs on Top", noIcon, noKey, noMark, plain;
 		"Tabs on Left", noIcon, noKey, noMark, plain;
@@ -92,7 +93,8 @@ resource 'MENU' (135, "Debug") {
 		"Test Scene", noIcon, noKey, noMark, plain;
 		"Font List", noIcon, noKey, noMark, plain;
 		"Benchmark", noIcon, noKey, noMark, plain;
-		"Start Simulated Downloads", noIcon, noKey, noMark, plain
+		"Start Simulated Downloads", noIcon, noKey, noMark, plain;
+		"Page Timings", noIcon, noKey, noMark, plain
 	}
 };
 
@@ -163,8 +165,27 @@ resource 'DITL' (128) {
 	{
 		{88, 278, 108, 346}, Button { enabled, "OK" };
 		{12, 70, 80, 346}, StaticText { disabled,
-			"Aura 0.2\0x0DA web browser for Mac OS 9.\0x0D"
-			"Browser chrome test build: the page engine is not connected yet." }
+			"Aura 0.3\0x0DA web browser for Mac OS 9.\0x0D"
+			"Test build: local HTML files through Aura's own engine; no networking yet." }
+	}
+};
+
+/* 131: page timings and memory (Debug > Page Timings), ^0 to ^3. */
+resource 'ALRT' (131) {
+	{0, 0, 230, 440}, 131,
+	{
+		OK, visible, silent;
+		OK, visible, silent;
+		OK, visible, silent;
+		OK, visible, silent
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (131) {
+	{
+		{198, 358, 218, 426}, Button { enabled, "OK" };
+		{12, 70, 190, 426}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
 	}
 };
 
@@ -224,21 +245,33 @@ resource 'DITL' (200) {
 };
 
 resource 'vers' (1) {
-	0x00, 0x02, development, 0x00, verUS,
-	"0.2",
-	"0.2, Aura browser chrome"
+	0x00, 0x03, development, 0x00, verUS,
+	"0.3",
+	"0.3, Aura with its page engine"
 };
 
+/* The bundle: the application, and the document types it opens, so the
+   Finder lets text and HTML files be dropped on its icon. Local icon 1
+   (the document types) has no icon of its own: the Finder draws those
+   files with their own creator's icon. */
 resource 'BNDL' (128) {
 	'AURA', 0,
 	{
 		'ICN#', { 0, 128 },
-		'FREF', { 0, 128 }
+		'FREF', { 0, 128; 1, 129; 2, 130 }
 	}
 };
 
 resource 'FREF' (128) {
 	'APPL', 0, ""
+};
+
+resource 'FREF' (129) {
+	'TEXT', 1, ""
+};
+
+resource 'FREF' (130) {
+	'****', 1, ""
 };
 
 data 'AURA' (0) {

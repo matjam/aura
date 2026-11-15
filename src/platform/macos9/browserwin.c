@@ -896,6 +896,67 @@ BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
     return b;
 }
 
+/* ---- Debug > Page Timings ---- */
+
+static void ms10(char *out, size_t cap, uint32_t tenths)
+{
+    snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
+}
+
+void browserwin_page_timings(BrowserWin *b)
+{
+    AuTab *t = au_bw_active_tab(b->bw);
+    if (!t)
+        return;
+    SetCursor(*GetCursor(watchCursor));
+    AuPageStats st;
+    au_page_stats(t->page, &st);
+    /* Scroll repaint: ten steps of 32 pixels down (or up near the end),
+     * each painted and shown, then back. */
+    int mx, my;
+    au_bw_scroll_max(b->bw, &mx, &my);
+    int start = t->scroll_y, step = start + 320 <= my ? 32 : -32, steps = 0;
+    flush(b);
+    uint32_t t0 = au_platform_time_ms();
+    for (int i = 0; i < 10; i++) {
+        int before = t->scroll_y;
+        au_bw_scroll_by(b->bw, 0, step);
+        if (t->scroll_y == before)
+            break;
+        flush(b);
+        steps++;
+    }
+    uint32_t scroll_total = au_platform_time_ms() - t0;
+    au_bw_scroll_to(b->bw, t->scroll_x, start);
+    flush(b);
+    update_scroll(b);
+    long heap_free = FreeMem(), heap_block = MaxBlock();
+    long temp_free = (long)TempFreeMem();
+    char l0[200], l1[200], l2[120], l3[160], a[16];
+    snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).", au_page_title(t->page),
+             (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
+    snprintf(l1, sizeof l1, "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu resources.",
+             (unsigned long)st.layout_ms, (unsigned long)st.layouts, (unsigned long)st.layout_total_ms,
+             (unsigned long)st.paint_ms, (unsigned long)st.boxes, (unsigned long)st.bytes,
+             (unsigned long)st.resources);
+    if (steps) {
+        ms10(a, sizeof a, scroll_total * 10 / (uint32_t)steps);
+        snprintf(l2, sizeof l2, "Scroll repaint: %s ms per 32-pixel step (%d steps).", a, steps);
+    } else {
+        snprintf(l2, sizeof l2, "Scroll repaint: the page does not scroll.");
+    }
+    snprintf(l3, sizeof l3, "Memory: heap %ldK free (largest block %ldK), temporary memory %ldK free.",
+             heap_free / 1024, heap_block / 1024, temp_free / 1024);
+    Str255 p[4];
+    mac_pstr(l0, p[0]);
+    mac_pstr(l1, p[1]);
+    mac_pstr(l2, p[2]);
+    mac_pstr(l3, p[3]);
+    ParamText(p[0], p[1], p[2], p[3]);
+    InitCursor();
+    NoteAlert(131, NULL);
+}
+
 /* ---- Debug > Benchmark ---- */
 
 void browserwin_benchmark(BrowserWin *b)

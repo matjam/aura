@@ -7,8 +7,10 @@
 #   ppc   build the Mac OS 9 application with Retro68 (build/ppc)
 #   all   test, then ppc (default)
 #
-# The Retro68 PowerPC toolchain is found through RETRO68, or in os9-protect
-# (OS9_PROTECT, default ../os9-protect).
+# The Retro68 PowerPC toolchain is found by toolchain/find.sh: RETRO68,
+# else ~/.local/opt/retro68, where toolchain/build.sh installs it. A
+# build/ppc folder keeps the toolchain it was first configured with;
+# delete it to switch.
 set -eu
 cd "$(dirname "$0")"
 
@@ -23,14 +25,8 @@ run_tests() {
 }
 
 ppc() {
-    if [ -z "${RETRO68:-}" ]; then
-        RETRO68=${OS9_PROTECT:-../os9-protect}/toolchain/build/toolchain
-    fi
+    . toolchain/find.sh
     tc=$RETRO68/powerpc-apple-macos/cmake/retroppc.toolchain.cmake
-    if [ ! -f "$tc" ]; then
-        echo "No Retro68 PowerPC toolchain at $RETRO68. Set RETRO68 to its folder." >&2
-        exit 1
-    fi
     cmake -S . -B build/ppc -G Ninja -DCMAKE_TOOLCHAIN_FILE="$tc" >/dev/null
     cmake --build build/ppc
     # Retro68 writes the MacBinary with every Finder flag clear. The Finder

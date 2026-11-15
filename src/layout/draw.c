@@ -13,11 +13,12 @@
  *
  * Coordinates here are canvas coordinates: every box origin is computed
  * explicitly (the canvas translation is set once), with inner scroll
- * offsets and positioned-fixed adjustments applied on the way. Transforms
- * are limited to translations (translate, translateX/Y, matrix(...)
- * offsets, the translate property): the canvas has no affine transform,
- * so scale, rotate and skew are ignored. Clips are rectangles: rounded
- * overflow clipping is drawn as a square clip. */
+ * offsets and positioned-fixed adjustments applied on the way. A
+ * translation moves the origin; a 2D transform with rotation, scale or
+ * skew paints the stacking context into a canvas layer that is drawn
+ * through the matrix (3D functions other than their 2D part are
+ * ignored). Clips are rectangles; rounded overflow clipping masks a
+ * group with the rounded padding box. */
 #include "layout_int.h"
 
 #include <stdlib.h>
@@ -202,57 +203,171 @@ static uint32_t pc(const AuStyle *s, uint32_t css)
     return l_paint_color(au_style_color(s, css));
 }
 
-/* ---- Transforms (translation only) ---- */
+/* ---- Transforms ---- */
 
+/* m = m * n (n applies first to points). */
+static void mat_mul(AuMatrix *m, AuMatrix n)
+{
+    AuMatrix r = {m->a * n.a + m->c * n.b,       m->b * n.a + m->d * n.b,       m->a * n.c + m->c * n.d,
+                  m->b * n.c + m->d * n.d,       m->a * n.e + m->c * n.f + m->e, m->b * n.e + m->d * n.f + m->f};
+    *m = r;
+}
+
+static float deg_rad(float deg)
+{
+    return deg * 3.14159265f / 180;
+}
+
+/* A length or percentage of basis; an angle in degrees; a number. */
+static float tf_arg(const AuCssValue *v, float basis)
+{
+    if (v->type == AU_CSSV_PERCENT)
+        return v->u.num * basis / 100;
+    if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
+        return v->u.num;
+    return 0;
+}
+
+/* The matrix of one transform function over a w x h box. */
+static AuMatrix tf_function(const AuCssValue *f, float w, float h)
+{
+    AuMatrix m = {1, 0, 0, 1, 0, 0};
+    const AuCssValue *a = f->u.items;
+    uint32_t n = f->n;
+    float x = n > 0 ? tf_arg(&a[0], w) : 0;
+    float y = n > 1 ? tf_arg(&a[1], h) : 0;
+    switch (f->kw) {
+    case AU_K_translate:
+    case AU_K_translate3d: m.e = x, m.f = y; break;
+    case AU_K_translatex: m.e = x; break;
+    case AU_K_translatey: m.f = n > 0 ? tf_arg(&a[0], h) : 0; break;
+    case AU_K_scale:
+    case AU_K_scale3d:
+        m.a = n > 0 ? tf_arg(&a[0], 100) : 1;
+        m.d = n > 1 ? tf_arg(&a[1], 100) : m.a;
+        break;
+    case AU_K_scalex: m.a = n > 0 ? tf_arg(&a[0], 100) : 1; break;
+    case AU_K_scaley: m.d = n > 0 ? tf_arg(&a[0], 100) : 1; break;
+    case AU_K_rotate:
+    case AU_K_rotatez: {
+        float r = deg_rad(x);
+        m.a = m.d = cosf(r);
+        m.b = sinf(r);
+        m.c = -m.b;
+        break;
+    }
+    case AU_K_skew: m.c = tanf(deg_rad(x)), m.b = tanf(deg_rad(y)); break;
+    case AU_K_skewx: m.c = tanf(deg_rad(x)); break;
+    case AU_K_skewy: m.b = tanf(deg_rad(x)); break;
+    case AU_K_matrix:
+        if (n >= 6)
+            m = (AuMatrix){a[0].u.num, a[1].u.num, a[2].u.num, a[3].u.num, tf_arg(&a[4], 0), tf_arg(&a[5], 0)};
+        break;
+    case AU_K_matrix3d:
+        if (n >= 16)
+            m = (AuMatrix){a[0].u.num, a[1].u.num, a[4].u.num, a[5].u.num, tf_arg(&a[12], 0), tf_arg(&a[13], 0)};
+        break;
+    default: break; /* 3D rotations and perspective: the identity */
+    }
+    return m;
+}
+
+/* One transform-origin coordinate: a length, percentage or keyword. */
+static float origin_arg(const AuCssValue *v, float len)
+{
+    if (v->type == AU_CSSV_KEYWORD) {
+        switch (v->kw) {
+        case AU_K_left: case AU_K_top: return 0;
+        case AU_K_right: case AU_K_bottom: return len;
+        default: return len / 2;
+        }
+    }
+    return tf_arg(v, len);
+}
+
+/* b's transform as a matrix in its border-box coordinates (CSS Transforms
+ * 2: translate, rotate, scale, then transform, about transform-origin).
+ * Returns false when there is none. */
+bool l_transform_matrix(const LBlock *b, AuMatrix *out)
+{
+    *out = (AuMatrix){1, 0, 0, 1, 0, 0};
+    if (lb_anon(&b->b))
+        return false;
+    const AuStyleRare *r = b->b.style->rare;
+    if (!r->transform && !r->translate && !r->rotate && !r->scale)
+        return false;
+    float w = b->w, h = b->h;
+    float ox = w / 2, oy = h / 2;
+    if (r->transform_origin) {
+        uint32_t n;
+        const AuCssValue *it = l_items(&r->transform_origin->value, &n);
+        /* A lone vertical keyword sets y. */
+        if (n == 1 && it[0].type == AU_CSSV_KEYWORD && (it[0].kw == AU_K_top || it[0].kw == AU_K_bottom))
+            oy = origin_arg(&it[0], h);
+        else {
+            if (n > 0)
+                ox = origin_arg(&it[0], w);
+            if (n > 1)
+                oy = origin_arg(&it[1], h);
+            /* "top left" order */
+            if (n > 1 && it[0].type == AU_CSSV_KEYWORD && (it[0].kw == AU_K_top || it[0].kw == AU_K_bottom)) {
+                oy = origin_arg(&it[0], h);
+                ox = origin_arg(&it[1], w);
+            }
+        }
+    }
+    AuMatrix m = {1, 0, 0, 1, ox, oy};
+    uint32_t n;
+    if (r->translate) {
+        const AuCssValue *it = l_items(&r->translate->value, &n);
+        mat_mul(&m, (AuMatrix){1, 0, 0, 1, n > 0 ? tf_arg(&it[0], w) : 0, n > 1 ? tf_arg(&it[1], h) : 0});
+    }
+    if (r->rotate) {
+        const AuCssValue *it = l_items(&r->rotate->value, &n);
+        /* "angle", or an axis then the angle: only z rotations are 2D. */
+        if (n > 0 && (n == 1 || (n == 2 && it[0].type == AU_CSSV_KEYWORD && it[0].kw == AU_K_z))) {
+            float rad = deg_rad(tf_arg(&it[n - 1], 0));
+            mat_mul(&m, (AuMatrix){cosf(rad), sinf(rad), -sinf(rad), cosf(rad), 0, 0});
+        }
+    }
+    if (r->scale) {
+        const AuCssValue *it = l_items(&r->scale->value, &n);
+        if (n > 0) {
+            float sx = tf_arg(&it[0], 1), sy = n > 1 ? tf_arg(&it[1], 1) : sx;
+            if (it[0].type == AU_CSSV_PERCENT)
+                sx = it[0].u.num / 100;
+            if (n > 1 && it[1].type == AU_CSSV_PERCENT)
+                sy = it[1].u.num / 100;
+            mat_mul(&m, (AuMatrix){sx, 0, 0, sy, 0, 0});
+        }
+    }
+    if (r->transform) {
+        const AuCssValue *it = l_items(&r->transform->value, &n);
+        for (uint32_t i = 0; i < n; i++)
+            if (it[i].type == AU_CSSV_FUNCTION)
+                mat_mul(&m, tf_function(&it[i], w, h));
+    }
+    mat_mul(&m, (AuMatrix){1, 0, 0, 1, -ox, -oy});
+    *out = m;
+    return true;
+}
+
+/* True when m only translates (within rounding). */
+static bool mat_is_translation(const AuMatrix *m)
+{
+    return fabsf(m->a - 1) < 1e-5f && fabsf(m->d - 1) < 1e-5f && fabsf(m->b) < 1e-5f && fabsf(m->c) < 1e-5f;
+}
+
+/* The translation part of b's transform when it is only a translation,
+ * else (0, 0): rotations and scales go through l_transform_matrix. */
 void l_transform_offset(const LBlock *b, float *dx, float *dy);
 void l_transform_offset(const LBlock *b, float *dx, float *dy)
 {
+    AuMatrix m;
     *dx = *dy = 0;
-    if (lb_anon(&b->b))
-        return;
-    const AuStyleRare *r = b->b.style->rare;
-    if (r->translate) {
-        uint32_t n;
-        const AuCssValue *it = l_items(&r->translate->value, &n);
-        for (uint32_t i = 0; i < n && i < 2; i++) {
-            float v = it[i].type == AU_CSSV_PERCENT ? it[i].u.num * (i ? b->h : b->w) / 100
-                                                    : it[i].type == AU_CSSV_DIMENSION ? it[i].u.num : 0;
-            if (i == 0)
-                *dx += v;
-            else
-                *dy += v;
-        }
-    }
-    if (!r->transform)
-        return;
-    uint32_t n;
-    const AuCssValue *it = l_items(&r->transform->value, &n);
-    for (uint32_t i = 0; i < n; i++) {
-        const AuCssValue *f = &it[i];
-        if (f->type != AU_CSSV_FUNCTION)
-            continue;
-        float a[6] = {0};
-        for (uint32_t k = 0; k < f->n && k < 6; k++) {
-            const AuCssValue *v = &f->u.items[k];
-            if (v->type == AU_CSSV_PERCENT)
-                a[k] = v->u.num * ((k == 1 || f->kw == AU_K_translatey) ? b->h : b->w) / 100;
-            else if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
-                a[k] = v->u.num;
-        }
-        switch (f->kw) {
-        case AU_K_translate:
-        case AU_K_translate3d:
-            *dx += a[0];
-            *dy += a[1];
-            break;
-        case AU_K_translatex: *dx += a[0]; break;
-        case AU_K_translatey: *dy += a[0]; break;
-        case AU_K_matrix:
-            *dx += a[4];
-            *dy += a[5];
-            break;
-        default: break; /* scale, rotate, skew: not supported by the canvas */
-        }
+    if (l_transform_matrix(b, &m) && mat_is_translation(&m)) {
+        *dx = m.e;
+        *dy = m.f;
     }
 }
 
@@ -278,25 +393,28 @@ static void inset_radii(AuRadii *r, const float *in)
     }
 }
 
-static uint32_t shade(uint32_t argb, float f)
+/* The dark or light shade of a groove, ridge, inset or outset border, as
+ * Blink computes it: the largest channel v (0..1) moves by 0.33 and the
+ * others scale with it. Black darkens to #545454 and lightens to #a8a8a8
+ * so a black bevel still shows. */
+static uint32_t bevel(uint32_t argb, bool dark)
 {
     uint32_t a = argb >> 24, r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
-    if (f < 1) {
-        r = (uint32_t)(r * f);
-        g = (uint32_t)(g * f);
-        b = (uint32_t)(b * f);
-    } else {
-        r = r + (uint32_t)((255 - r) * (f - 1));
-        g = g + (uint32_t)((255 - g) * (f - 1));
-        b = b + (uint32_t)((255 - b) * (f - 1));
-    }
+    if (!r && !g && !b)
+        return (a << 24) | (dark ? 0x545454u : 0xa8a8a8u);
+    float v = (float)(r > g ? (r > b ? r : b) : (g > b ? g : b)) / 255.0f;
+    float m = dark ? l_max(0, (v - 0.33f) / v) : l_min(1, v + 0.33f) / v;
+    float k = m * 255.99f / 255.0f;
+    r = (uint32_t)l_min(255, r * k);
+    g = (uint32_t)l_min(255, g * k);
+    b = (uint32_t)l_min(255, b * k);
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
 static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col, bool dotted)
 {
     float len = side == AU_SIDE_TOP || side == AU_SIDE_BOTTOM ? box.w : box.h;
-    float dash = dotted ? w : 3 * w, gap = dotted ? w : 2 * w;
+    float dash = dotted ? w : 2 * w, gap = w;
     if (dash <= 0)
         return;
     int n = (int)((len + gap) / (dash + gap));
@@ -322,6 +440,97 @@ static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col
     }
 }
 
+/* One side of a rounded border for draw_rounded_dashes: its length along
+ * the side, its width, and the extent of each end's corner along (e) and
+ * across (d) the side. */
+typedef struct {
+    AuRect box;
+    int side;
+    float len, w, e0, d0, e1, d1;
+} LDashSide;
+
+/* Adds to p the part of the band of side s from a to b along it: as thick
+ * as the corner where it lies inside one, else the border width. */
+static void dash_piece(AuPath *p, const LDashSide *s, float a, float b, bool dot)
+{
+    float cut[4] = {a, l_max(a, l_min(b, s->e0)), l_min(b, l_max(a, s->len - s->e1)), b};
+    float th[3] = {s->d0, s->w, s->d1};
+    for (int k = 0; k < 3; k++) {
+        float u = cut[k], v = cut[k + 1];
+        if (v - u <= 0)
+            continue;
+        float d = th[k];
+        AuRect r;
+        switch (s->side) {
+        case AU_SIDE_TOP: r = (AuRect){s->box.x + u, s->box.y, v - u, d}; break;
+        case AU_SIDE_BOTTOM: r = (AuRect){s->box.x + u, s->box.y + s->box.h - d, v - u, d}; break;
+        case AU_SIDE_LEFT: r = (AuRect){s->box.x, s->box.y + u, d, v - u}; break;
+        default: r = (AuRect){s->box.x + s->box.w - d, s->box.y + u, d, v - u}; break;
+        }
+        if (dot && k == 1 && u == a && v == b) {
+            AuRadii rr = {{s->w / 2, s->w / 2, s->w / 2, s->w / 2}, {s->w / 2, s->w / 2, s->w / 2, s->w / 2}};
+            au_path_rounded_rect(p, r, &rr, false);
+        } else {
+            au_path_rect(p, r);
+        }
+    }
+}
+
+static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col, const uint8_t *st,
+                         const AuRadii *radii);
+
+/* Rounded borders with dashed or dotted sides: the sides are drawn solid
+ * in a group, then masked to dashes spaced over each side's full length
+ * as for square corners. A dash in a corner exposes the curve there. */
+static void draw_rounded_dashes(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col,
+                                const uint8_t *st, const AuRadii *radii)
+{
+    uint8_t solid_st[4];
+    for (int i = 0; i < 4; i++)
+        solid_st[i] = (st[i] == AU_BORDER_STYLE_DASHED || st[i] == AU_BORDER_STYLE_DOTTED)
+                          ? AU_BORDER_STYLE_SOLID
+                          : st[i];
+    au_canvas_group_begin(c, box);
+    draw_borders(c, box, bw, col, solid_st, radii);
+    /* Corner extents: the larger of the radius and the adjacent border. */
+    float cw[4], ch[4];
+    static const int hs[4] = {3, 1, 1, 3}, vs[4] = {0, 0, 2, 2};
+    for (int i = 0; i < 4; i++) {
+        cw[i] = l_max(radii->rx[i], bw[hs[i]]);
+        ch[i] = l_max(radii->ry[i], bw[vs[i]]);
+    }
+    /* Corners at each side's start and end (top-left is 0, clockwise). */
+    static const int c0[4] = {0, 1, 3, 0}, c1[4] = {1, 2, 2, 3};
+    AuPath p;
+    au_path_init(&p);
+    for (int i = 0; i < 4; i++) {
+        if (bw[i] <= 0)
+            continue;
+        bool horiz = i == AU_SIDE_TOP || i == AU_SIDE_BOTTOM;
+        LDashSide s = {box, i, horiz ? box.w : box.h, bw[i], 0, 0, 0, 0};
+        s.e0 = horiz ? cw[c0[i]] : ch[c0[i]];
+        s.d0 = horiz ? ch[c0[i]] : cw[c0[i]];
+        s.e1 = horiz ? cw[c1[i]] : ch[c1[i]];
+        s.d1 = horiz ? ch[c1[i]] : cw[c1[i]];
+        bool dot = st[i] == AU_BORDER_STYLE_DOTTED;
+        if (!dot && st[i] != AU_BORDER_STYLE_DASHED) {
+            dash_piece(&p, &s, 0, s.len, false);
+            continue;
+        }
+        float dash = dot ? s.w : 2 * s.w, gap = s.w;
+        int n = (int)((s.len + gap) / (dash + gap));
+        n = n < 1 ? 1 : n > 4000 ? 4000 : n;
+        if (n == 1)
+            dash = l_min(dash, s.len);
+        float step = n > 1 ? (s.len - dash) / (n - 1) : 0;
+        for (int k = 0; k < n; k++)
+            dash_piece(&p, &s, k * step, k * step + dash, dot);
+    }
+    au_canvas_group_mask(c, &p);
+    au_path_free(&p);
+    au_canvas_group_end(c, 1.0f);
+}
+
 /* Draws borders with widths bw, colours col (paint ARGB) and styles st. */
 static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_t *col, const uint8_t *st,
                          const AuRadii *radii)
@@ -329,7 +538,18 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
     AuBorder solid = {{0}, {0}};
     bool any_solid = false;
     bool has_radii = radii && !au_radii_zero(radii);
+    if (has_radii)
+        for (int i = 0; i < 4; i++)
+            if (bw[i] > 0 && (col[i] >> 24) &&
+                (st[i] == AU_BORDER_STYLE_DASHED || st[i] == AU_BORDER_STYLE_DOTTED)) {
+                draw_rounded_dashes(c, box, bw, col, st, radii);
+                return;
+            }
     for (int i = 0; i < 4; i++) {
+        /* Every side keeps its width, painted or not: the corner joins
+         * depend on the neighbours' widths (CSS triangles are boxes with
+         * transparent sides). */
+        solid.width[i] = bw[i] > 0 ? bw[i] : 0;
         if (bw[i] <= 0 || !(col[i] >> 24))
             continue;
         int s = st[i];
@@ -341,9 +561,9 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
         uint32_t cc = col[i];
         bool tl = i == AU_SIDE_TOP || i == AU_SIDE_LEFT;
         if (s == AU_BORDER_STYLE_INSET)
-            cc = tl ? shade(cc, 0.6f) : cc;
+            cc = bevel(cc, tl);
         else if (s == AU_BORDER_STYLE_OUTSET)
-            cc = tl ? cc : shade(cc, 0.6f);
+            cc = bevel(cc, !tl);
         solid.color[i] = cc;
         any_solid = true;
     }
@@ -375,7 +595,7 @@ static void draw_borders(AuCanvas *c, AuRect box, const float *bw, const uint32_
             outer.width[i] = inner_b.width[i] = solid.width[i] / 2;
             in[i] = solid.width[i] / 2;
             bool tl = i == AU_SIDE_TOP || i == AU_SIDE_LEFT;
-            uint32_t dark = shade(solid.color[i], 0.6f), light = solid.color[i];
+            uint32_t dark = bevel(solid.color[i], true), light = bevel(solid.color[i], false);
             outer.color[i] = (tl == groove) ? dark : light;
             inner_b.color[i] = (tl == groove) ? light : dark;
         }
@@ -401,8 +621,107 @@ static float stop_pos(const AuCssValue *v, float len)
     return -1;
 }
 
-/* Fills r (canvas coordinates) with a linear gradient value. Radial and
- * conic gradients are approximated with the average of their colours. */
+/* A length or percentage of a gradient argument against basis. */
+static float grad_len(const AuCssValue *v, float basis)
+{
+    if (v->type == AU_CSSV_PERCENT)
+        return v->u.num * basis / 100;
+    if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
+        return v->u.num;
+    return 0;
+}
+
+/* The centre and radii of a radial gradient (CSS Images 3, 3.2) from its
+ * [shape || size] [at position] argument over area. */
+static void radial_shape(const AuCssValue *a, uint32_t n, AuRect area, AuGradient *g)
+{
+    bool circle = false;
+    int size_kw = AU_K_farthest_corner;
+    float lens[2];
+    int nlen = 0, npos = 0;
+    const AuCssValue *pos[2] = {NULL, NULL};
+    bool at = false;
+    for (uint32_t i = 0; i < n; i++) {
+        const AuCssValue *v = &a[i];
+        if (v->type == AU_CSSV_KEYWORD && v->kw == AU_K_at) {
+            at = true;
+            continue;
+        }
+        if (at) {
+            if (npos < 2)
+                pos[npos++] = v;
+            continue;
+        }
+        if (v->type == AU_CSSV_KEYWORD) {
+            if (v->kw == AU_K_circle)
+                circle = true;
+            else if (v->kw == AU_K_closest_side || v->kw == AU_K_closest_corner || v->kw == AU_K_farthest_side ||
+                     v->kw == AU_K_farthest_corner)
+                size_kw = v->kw;
+        } else if (nlen < 2) {
+            lens[nlen] = grad_len(v, nlen == 0 ? area.w : area.h);
+            nlen++;
+        }
+    }
+    /* Position: keywords or lengths, x then y (a lone y keyword works). */
+    float cx = area.w / 2, cy = area.h / 2;
+    bool xset = false;
+    for (int i = 0; i < npos; i++) {
+        const AuCssValue *v = pos[i];
+        if (v->type == AU_CSSV_KEYWORD) {
+            switch (v->kw) {
+            case AU_K_left: cx = 0; xset = true; break;
+            case AU_K_right: cx = area.w; xset = true; break;
+            case AU_K_top: cy = 0; break;
+            case AU_K_bottom: cy = area.h; break;
+            default: break; /* center */
+            }
+        } else if (!xset) {
+            cx = grad_len(v, area.w);
+            xset = true;
+        } else {
+            cy = grad_len(v, area.h);
+        }
+    }
+    float dl = cx, dr = area.w - cx, dt = cy, db = area.h - cy;
+    if (dl < 0)
+        dl = -dl;
+    if (dr < 0)
+        dr = -dr;
+    if (dt < 0)
+        dt = -dt;
+    if (db < 0)
+        db = -db;
+    float rx, ry;
+    if (nlen) {
+        rx = lens[0];
+        ry = circle || nlen < 2 ? lens[0] : lens[1];
+    } else {
+        bool closest = size_kw == AU_K_closest_side || size_kw == AU_K_closest_corner;
+        float sx = closest ? l_min(dl, dr) : l_max(dl, dr);
+        float sy = closest ? l_min(dt, db) : l_max(dt, db);
+        bool corner = size_kw == AU_K_closest_corner || size_kw == AU_K_farthest_corner;
+        if (circle) {
+            rx = ry = corner ? sqrtf(sx * sx + sy * sy) : (closest ? l_min(sx, sy) : l_max(sx, sy));
+        } else if (corner) {
+            /* the ellipse through the corner with the sides' aspect ratio */
+            rx = sx * 1.41421356f;
+            ry = sy * 1.41421356f;
+        } else {
+            rx = sx;
+            ry = sy;
+        }
+    }
+    g->radial = true;
+    g->x0 = area.x + cx;
+    g->y0 = area.y + cy;
+    g->rx = l_max(rx, 0.01f);
+    g->ry = l_max(ry, 0.01f);
+}
+
+/* Fills r (canvas coordinates) with a linear or radial gradient value,
+ * repeating or not. Conic gradients are approximated with the average of
+ * their colours. */
 static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect r, const AuRadii *radii,
                           const AuStyle *s)
 {
@@ -457,8 +776,19 @@ static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect
             }
         }
     }
-    au_gradient_css_line(&g, area, angle);
-    float glen = sqrtf((g.x1 - g.x0) * (g.x1 - g.x0) + (g.y1 - g.y0) * (g.y1 - g.y0));
+    bool radial = fn->kw == AU_K_radial_gradient || fn->kw == AU_K_repeating_radial_gradient ||
+                  fn->kw == AU_K__webkit_radial_gradient || fn->kw == AU_K__webkit_repeating_radial_gradient;
+    bool repeating = fn->kw == AU_K_repeating_linear_gradient || fn->kw == AU_K_repeating_radial_gradient ||
+                     fn->kw == AU_K__webkit_repeating_linear_gradient ||
+                     fn->kw == AU_K__webkit_repeating_radial_gradient;
+    float glen;
+    if (radial) {
+        radial_shape(first ? p0 : NULL, first ? n0 : 0, area, &g);
+        glen = g.rx;
+    } else {
+        au_gradient_css_line(&g, area, angle);
+        glen = sqrtf((g.x1 - g.x0) * (g.x1 - g.x0) + (g.y1 - g.y0) * (g.y1 - g.y0));
+    }
     /* Stops: positions where given, the rest spread evenly. */
     float pos[AU_GRADIENT_MAX_STOPS];
     uint32_t col[AU_GRADIENT_MAX_STOPS];
@@ -504,7 +834,28 @@ static void fill_gradient(AuCanvas *c, const AuCssValue *fn, AuRect area, AuRect
             pos[k] = pos[i - 1] + (pos[j] - pos[i - 1]) * (k - i + 1) / (j - i + 1);
         i = j;
     }
-    if (!linear) {
+    if (repeating && (linear || radial)) {
+        /* One period, from the first stop to the last, repeats. */
+        float p0s = radial ? 0 : pos[0], period = pos[ns - 1] - p0s;
+        if (period > 1e-4f) {
+            if (radial) {
+                g.rx *= period;
+                g.ry *= period;
+            } else {
+                float vx = g.x1 - g.x0, vy = g.y1 - g.y0;
+                float x0 = g.x0 + vx * p0s, y0 = g.y0 + vy * p0s;
+                g.x0 = x0;
+                g.y0 = y0;
+                g.x1 = x0 + vx * period;
+                g.y1 = y0 + vy * period;
+            }
+            for (int i = 0; i < ns; i++)
+                pos[i] = (pos[i] - p0s) / period;
+            g.repeat = true;
+        }
+    }
+    if (!linear && !radial) {
+        /* conic-gradient: the average of its colours */
         uint32_t a = 0, rr = 0, gg = 0, bb = 0;
         for (int i = 0; i < ns; i++) {
             a += col[i] >> 24;
@@ -556,33 +907,38 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     const AuCssValue *im = ly->image;
     if (!im)
         return;
-    if (im->type == AU_CSSV_FUNCTION) {
-        fill_gradient(P->c, im, origin_box, clip_box, radii, s);
-        return;
-    }
-    if (im->type != AU_CSSV_URL || !P->L->env.image)
-        return;
-    char abs[2048];
-    const char *base = s->bg->background_image ? s->bg->background_image->base_url : NULL;
-    (void)base;
-    if (!P->L->env.resolve_url || !P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs)) {
-        size_t n = strlen(im->u.str);
-        if (n >= sizeof abs)
-            return;
-        memcpy(abs, im->u.str, n + 1);
-    }
+    bool gradient = im->type == AU_CSSV_FUNCTION;
     int iw = 0, ih = 0;
     const AuSurface *px = NULL;
-    if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0)
-        return;
+    if (gradient) {
+        /* No intrinsic size: auto is the origin box (CSS Backgrounds 3). */
+        iw = (int)ceilf(origin_box.w);
+        ih = (int)ceilf(origin_box.h);
+        if (iw <= 0 || ih <= 0)
+            return;
+    } else {
+        if (im->type != AU_CSSV_URL || !P->L->env.image)
+            return;
+        char abs[2048];
+        if (!P->L->env.resolve_url || !P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs)) {
+            size_t n = strlen(im->u.str);
+            if (n >= sizeof abs)
+                return;
+            memcpy(abs, im->u.str, n + 1);
+        }
+        if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0)
+            return;
+    }
     /* Tile size. */
-    float tw = (float)iw, th = (float)ih;
+    float tw = gradient ? origin_box.w : (float)iw, th = gradient ? origin_box.h : (float)ih;
     const AuCssValue *sz = ly->size;
     if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
-        float sx = origin_box.w / iw, sy = origin_box.h / ih;
-        float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
-        tw = iw * sc;
-        th = ih * sc;
+        if (!gradient) {
+            float sx = origin_box.w / iw, sy = origin_box.h / ih;
+            float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
+            tw = iw * sc;
+            th = ih * sc;
+        }
     } else if (sz && sz->type == AU_CSSV_LIST && sz->n == 2) {
         const AuCssValue *a = &sz->u.items[0], *b = &sz->u.items[1];
         bool aa = a->type == AU_CSSV_KEYWORD, ba = b->type == AU_CSSV_KEYWORD;
@@ -590,9 +946,9 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
             tw = bg_len(a, origin_box.w);
         if (!ba)
             th = bg_len(b, origin_box.h);
-        if (aa && !ba)
+        if (!gradient && aa && !ba)
             tw = th * iw / ih;
-        if (ba && !aa)
+        if (!gradient && ba && !aa)
             th = tw * ih / iw;
     }
     if (tw < 0.5f || th < 0.5f)
@@ -604,6 +960,19 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     if (ly->position_y && ly->position_y->type == AU_CSSV_PERCENT)
         py0 = origin_box.y + (origin_box.h - th) * ly->position_y->u.num / 100;
     bool rx = ly->repeat_x != AU_K_no_repeat, ry = ly->repeat_y != AU_K_no_repeat;
+    if (gradient && fabsf(tw - origin_box.w) < 0.01f && fabsf(th - origin_box.h) < 0.01f &&
+        fabsf(px0 - origin_box.x) < 0.01f && fabsf(py0 - origin_box.y) < 0.01f &&
+        (rx && ry ? true
+                  : clip_box.x >= origin_box.x - 0.01f && clip_box.y >= origin_box.y - 0.01f &&
+                        clip_box.x + clip_box.w <= origin_box.x + origin_box.w + 0.01f &&
+                        clip_box.y + clip_box.h <= origin_box.y + origin_box.h + 0.01f)) {
+        /* One tile over the origin box (the usual case). A repeated tile
+         * of the full box fills the clip with the same gradient extended,
+         * which is close enough when the clip box is only a little larger
+         * (border-box clip with padding-box origin). */
+        fill_gradient(P->c, im, origin_box, clip_box, radii, s);
+        return;
+    }
     au_canvas_clip_push(P->c, (AuRect){clip_box.x, clip_box.y, clip_box.w, clip_box.h});
     float x0 = px0, y0 = py0;
     if (rx)
@@ -617,6 +986,11 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         for (float x = x0; x < x1 && count < 20000; x += tw, count++) {
             if (!rect_hits(&P->dirty, x, y, tw, th))
                 continue;
+            if (gradient) {
+                AuRect t = {x, y, tw, th};
+                fill_gradient(P->c, im, t, t, NULL, s);
+                continue;
+            }
             au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, (AuRect){x, y, tw, th},
                           AU_FILTER_BILINEAR, 1);
         }
@@ -701,8 +1075,186 @@ static void paint_shadows(PCtx *P, const AuStyle *s, AuRect box, const AuRadii *
     }
 }
 
+/* ---- Form controls: native (Platinum) look ----
+ *
+ * A control keeps its native look while the author leaves its appearance
+ * alone: appearance is not none, and no author style sets its background,
+ * border or box-shadow (AU_STYLE_F_AUTHOR_DECOR). Checkboxes, radio
+ * buttons, sliders and meters stay native unless appearance is none, as in
+ * browsers. A restyled control is painted as its CSS box plus its content
+ * (text, arrow). The colours are the Platinum greys of the browser chrome. */
+
+#define PL_FACE AU_RGB(221, 221, 221)
+#define PL_LIGHT AU_RGB(255, 255, 255)
+#define PL_SHADOW AU_RGB(153, 153, 153)
+#define PL_FRAME AU_RGB(102, 102, 102)
+#define PL_DARK AU_RGB(68, 68, 68)
+#define PL_INK AU_RGB(0, 0, 0)
+#define PL_OFF AU_RGB(170, 170, 170)
+#define PL_HILITE AU_RGB(204, 204, 255)
+#define PL_BAR AU_RGB(102, 102, 204)
+#define PL_BAR_LIGHT AU_RGB(153, 153, 238)
+
+static bool control_native(const LBlock *b)
+{
+    if (lb_anon(&b->b) || !l_is_control_kind(b->b.replaced))
+        return false;
+    const AuStyle *s = b->b.style;
+    if (s->rare->appearance == AU_APPEARANCE_NONE)
+        return false;
+    switch (b->b.replaced) {
+    case LR_CHECKBOX:
+    case LR_RADIO:
+    case LR_RANGE:
+    case LR_METER:
+    case LR_FILE:
+        return true;
+    default:
+        return !(s->flags & AU_STYLE_F_AUTHOR_DECOR);
+    }
+}
+
+static bool control_disabled(const LBlock *b)
+{
+    /* Its own disabled attribute, or a disabled fieldset around it. */
+    for (AuNode *n = b->b.node; n && au_is_element(n); n = n->parent)
+        if ((n == b->b.node || au_is_html_element(n, AU_ATOM_fieldset)) &&
+            au_element_get_attr(au_as_element(n), AU_ATOM_disabled))
+            return true;
+    return false;
+}
+
+static void pl_fill(AuCanvas *c, float x, float y, float w, float h, uint32_t col)
+{
+    if (w > 0 && h > 0)
+        au_fill_rect(c, (AuRect){x, y, w, h}, col);
+}
+
+/* r rounded to whole pixels, so one-pixel lines stay sharp. */
+static AuRect snap(AuRect r)
+{
+    float x0 = roundf(r.x), y0 = roundf(r.y), x1 = roundf(r.x + r.w), y1 = roundf(r.y + r.h);
+    return (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+/* A sunken edit field frame of width bw (1 or 2) around r, filled. */
+static void pl_field(AuCanvas *c, AuRect r, float bw, uint32_t face, bool off)
+{
+    r = snap(r);
+    pl_fill(c, r.x, r.y, r.w, r.h, face);
+    if (bw >= 2) {
+        uint32_t o1 = off ? PL_OFF : PL_SHADOW, i1 = off ? PL_OFF : PL_DARK;
+        pl_fill(c, r.x, r.y, r.w, 1, o1);
+        pl_fill(c, r.x, r.y, 1, r.h, o1);
+        pl_fill(c, r.x, r.y + r.h - 1, r.w, 1, PL_LIGHT);
+        pl_fill(c, r.x + r.w - 1, r.y, 1, r.h, PL_LIGHT);
+        pl_fill(c, r.x + 1, r.y + 1, r.w - 2, 1, i1);
+        pl_fill(c, r.x + 1, r.y + 1, 1, r.h - 2, i1);
+        pl_fill(c, r.x + 1, r.y + r.h - 2, r.w - 2, 1, PL_FACE);
+        pl_fill(c, r.x + r.w - 2, r.y + 1, 1, r.h - 2, PL_FACE);
+    } else if (bw >= 1) {
+        uint32_t f = off ? PL_OFF : PL_FRAME;
+        pl_fill(c, r.x, r.y, r.w, 1, f);
+        pl_fill(c, r.x, r.y + r.h - 1, r.w, 1, f);
+        pl_fill(c, r.x, r.y, 1, r.h, f);
+        pl_fill(c, r.x + r.w - 1, r.y, 1, r.h, f);
+    }
+}
+
+/* A raised Platinum push button: a dark rounded frame, a grey face with a
+ * light top-left and a shadowed bottom-right edge. */
+static void pl_button(AuCanvas *c, AuRect r, bool off, float radius)
+{
+    r = snap(r);
+    if (r.w < 2 || r.h < 2)
+        return;
+    float rd = l_min(radius, l_min(r.w, r.h) / 2);
+    AuRadii ro = {{rd, rd, rd, rd}, {rd, rd, rd, rd}};
+    au_fill_rounded_rect(c, r, &ro, off ? PL_OFF : PL_DARK);
+    AuRect in = {r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+    float ri = l_max(0, rd - 1);
+    AuRadii rr = {{ri, ri, ri, ri}, {ri, ri, ri, ri}};
+    au_fill_rounded_rect(c, in, &rr, off ? AU_RGB(232, 232, 232) : PL_FACE);
+    if (in.w > 4 && in.h > 4) {
+        float k = l_max(1, ri / 2);
+        pl_fill(c, in.x + k, in.y, in.w - 2 * k, 1, PL_LIGHT);
+        pl_fill(c, in.x, in.y + k, 1, in.h - 2 * k, PL_LIGHT);
+        if (!off) {
+            pl_fill(c, in.x + k, in.y + in.h - 1, in.w - 2 * k, 1, PL_SHADOW);
+            pl_fill(c, in.x + in.w - 1, in.y + k, 1, in.h - 2 * k, PL_SHADOW);
+        }
+    }
+}
+
+static void tri_down(AuCanvas *c, float cx, float cy, float a, uint32_t col)
+{
+    AuPath p;
+    au_path_init(&p);
+    au_path_move_to(&p, cx - a, cy - a / 2);
+    au_path_line_to(&p, cx + a, cy - a / 2);
+    au_path_line_to(&p, cx, cy + a / 2);
+    au_path_close(&p);
+    au_fill_path(c, &p, AU_FILL_NONZERO, col);
+    au_path_free(&p);
+}
+
+/* The native frame of control b (border box r), in place of its CSS
+ * background and border. */
+static void paint_native_frame(PCtx *P, LBlock *b, AuRect r)
+{
+    bool off = control_disabled(b);
+    const AuStyle *s = b->b.style;
+    uint32_t field = pc(s, s->bg->background_color);
+    if (!(field >> 24))
+        field = PL_LIGHT;
+    switch (b->b.replaced) {
+    case LR_TEXT_INPUT:
+    case LR_TEXTAREA:
+    case LR_LISTBOX:
+        pl_field(P->c, r, l_max(1, l_min(b->bw[0], 2)), off ? AU_RGB(238, 238, 238) : field, off);
+        break;
+    case LR_BUTTON:
+    case LR_COLOR:
+        pl_button(P->c, r, off, 4);
+        break;
+    case LR_SELECT: {
+        pl_button(P->c, r, off, 3);
+        AuRect sr = snap(r);
+        float aw = l_select_arrow_w(b);
+        float x = roundf(sr.x + sr.w - b->bw[1] - aw);
+        if (aw > 0 && sr.h > 6) {
+            pl_fill(P->c, x, sr.y + 2, 1, sr.h - 4, PL_SHADOW);
+            pl_fill(P->c, x + 1, sr.y + 2, 1, sr.h - 4, PL_LIGHT);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 /* Background, shadows and borders of a block box at (ox, oy). */
+static LBlock *fieldset_legend(const LBlock *b)
+{
+    if (b->b.inner != LI_FLOW || lb_anon(&b->b) || !l_is_tag(&b->b, AU_ATOM_fieldset))
+        return NULL;
+    for (LBox *c = b->b.first; c; c = c->next)
+        if (c->kind == LK_BLOCK && (c->flags & LF_LEGEND))
+            return (LBlock *)c;
+    return NULL;
+}
+
+static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy);
+static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy);
+
 static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
+{
+    paint_decor_box(P, b, ox, oy);
+    if (b->b.replaced == LR_TEXTAREA)
+        paint_textarea_placeholder(P, b, ox, oy);
+}
+
+static void paint_decor_box(PCtx *P, LBlock *b, float ox, float oy)
 {
     if (lb_anon(&b->b) || (b->b.flags & LF_HIDDEN))
         return;
@@ -712,10 +1264,22 @@ static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
     AuRect box = {ox, oy, b->w, b->h};
     if (!rect_hits(&P->dirty, ox + b->ov.x, oy + b->ov.y, b->ov.w, b->ov.h))
         return;
+    /* A fieldset's border runs through the middle of its legend. */
+    LBlock *lg = fieldset_legend(b);
+    if (lg) {
+        float lt = l_max(0, (lg->h + lg->m[0] + lg->m[2] - b->bw[0]) / 2);
+        box.y += lt;
+        box.h = l_max(0, box.h - lt);
+    }
     AuRadii radii;
-    box_radii(b, &radii, b->w, b->h);
+    box_radii(b, &radii, box.w, box.h);
     bool rounded = !au_radii_zero(&radii);
     paint_shadows(P, s, box, rounded ? &radii : NULL, false);
+    if (control_native(b)) {
+        paint_native_frame(P, b, box);
+        paint_shadows(P, s, box, rounded ? &radii : NULL, true);
+        return;
+    }
     if (b != (LBlock *)P->L->root && b != P->canvas_box)
         paint_background(P, s, b, box, false);
     paint_shadows(P, s, box, rounded ? &radii : NULL, true);
@@ -723,7 +1287,22 @@ static void paint_decor(PCtx *P, LBlock *b, float ox, float oy)
     uint32_t col[4];
     for (int i = 0; i < 4; i++)
         col[i] = pc(s, sr->border_color[i]);
-    draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+    if (!lg) {
+        draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+        return;
+    }
+    /* Leave out the top border behind the legend's border box. */
+    float gx0 = ox + lg->x, gx1 = gx0 + lg->w;
+    AuRect parts[3] = {{box.x - 50, box.y - 50, gx0 - box.x + 50, box.h + 100},
+                       {gx1, box.y - 50, box.x + box.w + 50 - gx1, box.h + 100},
+                       {gx0, box.y + b->bw[0], gx1 - gx0, box.h + 50}};
+    for (int i = 0; i < 3; i++) {
+        if (parts[i].w <= 0)
+            continue;
+        au_canvas_clip_push(P->c, parts[i]);
+        draw_borders(P->c, box, b->bw, col, sr->border_style, rounded ? &radii : NULL);
+        au_canvas_clip_pop(P->c);
+    }
 }
 
 static void paint_outline(PCtx *P, LBox *bx, AuRect box)
@@ -746,9 +1325,11 @@ static void paint_outline(PCtx *P, LBox *bx, AuRect box)
 
 /* ---- Replaced content ---- */
 
-static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t color, int align)
+/* Draws one line of text t in area: vertically centred as a control's
+ * inner line, aligned 0 left, 1 centre, 2 right, clipped to clip. */
+static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t color, int align, AuRect clip)
 {
-    if (!t || !*t)
+    if (!t || !*t || clip.w <= 0 || clip.h <= 0)
         return;
     LFont *f = l_font(P->L, b->b.style);
     size_t n = strlen(t);
@@ -756,9 +1337,266 @@ static void paint_label(PCtx *P, LBlock *b, const char *t, AuRect area, uint32_t
     float x = area.x;
     if (align == 1)
         x = area.x + (area.w - w) / 2;
-    float y = area.y + (area.h - (f->m.ascent + f->m.descent)) / 2 + f->m.ascent;
-    au_canvas_clip_push(P->c, area);
+    else if (align == 2)
+        x = area.x + area.w - w;
+    float asc, lh = l_control_line(P->L, b, &asc);
+    float y = area.y + (area.h - lh) / 2 + asc;
+    au_canvas_clip_push(P->c, clip);
     l_draw_text(P->L, P->c, f, b->b.style, t, n, x, y, color, 0);
+    au_canvas_clip_pop(P->c);
+}
+
+/* The text alignment of a control's label: 0 left, 1 centre, 2 right. */
+static int label_align(const AuStyle *s, int dflt)
+{
+    switch (s->inh->text_align) {
+    case AU_TEXT_ALIGN_CENTER:
+    case AU_TEXT_ALIGN_WEBKIT_CENTER: return 1;
+    case AU_TEXT_ALIGN_RIGHT:
+    case AU_TEXT_ALIGN_WEBKIT_RIGHT:
+    case AU_TEXT_ALIGN_END: return 2;
+    case AU_TEXT_ALIGN_LEFT:
+    case AU_TEXT_ALIGN_WEBKIT_LEFT: return 0;
+    default: return dflt;
+    }
+}
+
+static uint32_t placeholder_color(const AuStyle *s)
+{
+    const AuStyle *ps = au_style_pseudo(s, AU_CSS_PSEUDO_PLACEHOLDER);
+    return ps ? pc(ps, ps->inh->color) : AU_RGB(0x75, 0x75, 0x75);
+}
+
+static bool control_checked(const LBlock *b)
+{
+    if (!b->b.node || !au_is_element(b->b.node))
+        return false;
+    const AuElement *e = au_as_element(b->b.node);
+    if (e->state & AU_STATE_CHECKED_SET)
+        return (e->state & AU_STATE_CHECKED) != 0;
+    return l_attr(&b->b, au_atom_lookup("checked", 7)) != NULL;
+}
+
+static float num_attr(const LBlock *b, const char *name, float dflt, bool *present)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a ? l_attr(&b->b, a) : NULL;
+    char *end = NULL;
+    float f = v ? strtof(v, &end) : 0;
+    bool ok = v && end != v && isfinite(f);
+    if (present)
+        *present = ok;
+    return ok ? f : dflt;
+}
+
+static void pl_checkbox(AuCanvas *c, AuRect r, bool checked, bool off)
+{
+    r = snap(r);
+    if (r.w < 4 || r.h < 4)
+        return;
+    pl_fill(c, r.x, r.y, r.w, r.h, off ? PL_OFF : PL_INK);
+    pl_fill(c, r.x + 1, r.y + 1, r.w - 2, r.h - 2, off ? AU_RGB(238, 238, 238) : PL_FACE);
+    if (!off) {
+        pl_fill(c, r.x + 1, r.y + 1, r.w - 3, 1, PL_LIGHT);
+        pl_fill(c, r.x + 1, r.y + 1, 1, r.h - 3, PL_LIGHT);
+        pl_fill(c, r.x + 2, r.y + r.h - 2, r.w - 3, 1, PL_SHADOW);
+        pl_fill(c, r.x + r.w - 2, r.y + 2, 1, r.h - 3, PL_SHADOW);
+    }
+    if (checked) {
+        AuPath p, sp;
+        au_path_init(&p);
+        au_path_init(&sp);
+        au_path_move_to(&p, r.x + r.w * 0.22f, r.y + r.h * 0.50f);
+        au_path_line_to(&p, r.x + r.w * 0.44f, r.y + r.h * 0.76f);
+        au_path_line_to(&p, r.x + r.w * 0.86f, r.y + r.h * 0.10f);
+        au_path_stroke(&p, l_max(1.6f, r.w / 6.5f), &sp);
+        au_fill_path(c, &sp, AU_FILL_NONZERO, off ? PL_SHADOW : PL_INK);
+        au_path_free(&p);
+        au_path_free(&sp);
+    }
+}
+
+static void pl_radio(AuCanvas *c, AuRect r, bool checked, bool off)
+{
+    float d = l_min(r.w, r.h);
+    if (d < 4)
+        return;
+    float cx = r.x + r.w / 2, cy = r.y + r.h / 2, rr = d / 2;
+    AuPath p;
+    au_path_init(&p);
+    au_path_ellipse(&p, cx, cy, rr, rr);
+    au_fill_path(c, &p, AU_FILL_NONZERO, off ? PL_OFF : PL_INK);
+    au_path_clear(&p);
+    au_path_ellipse(&p, cx, cy, rr - 1, rr - 1);
+    au_fill_path(c, &p, AU_FILL_NONZERO, off ? AU_RGB(238, 238, 238) : PL_FACE);
+    if (!off) {
+        au_path_clear(&p);
+        au_path_ellipse(&p, cx - rr * 0.22f, cy - rr * 0.22f, rr * 0.5f, rr * 0.5f);
+        au_fill_path(c, &p, AU_FILL_NONZERO, PL_LIGHT);
+    }
+    if (checked) {
+        au_path_clear(&p);
+        au_path_ellipse(&p, cx, cy, rr * 0.42f, rr * 0.42f);
+        au_fill_path(c, &p, AU_FILL_NONZERO, off ? PL_SHADOW : PL_INK);
+    }
+    au_path_free(&p);
+}
+
+/* Parses #rgb or #rrggbb (an input's colour value); black otherwise. */
+static uint32_t color_value(const char *v)
+{
+    unsigned rgb[3] = {0, 0, 0};
+    size_t n = v ? strlen(v) : 0;
+    if (n == 7 && v[0] == '#') {
+        for (int i = 0; i < 3; i++) {
+            char h[3] = {v[1 + 2 * i], v[2 + 2 * i], 0};
+            char *e;
+            unsigned long x = strtoul(h, &e, 16);
+            if (*e)
+                return AU_RGB(0, 0, 0);
+            rgb[i] = (unsigned)x;
+        }
+    }
+    return AU_RGB(rgb[0], rgb[1], rgb[2]);
+}
+
+/* Progress and meter bars: a framed track and its filled part. */
+static void paint_bar(PCtx *P, LBlock *b, AuRect cb, bool native)
+{
+    bool has_value;
+    float frac;
+    uint32_t fillc = PL_BAR;
+    if (b->b.replaced == LR_PROGRESS) {
+        float mx = num_attr(b, "max", 1, NULL);
+        if (mx <= 0)
+            mx = 1;
+        float v = num_attr(b, "value", 0, &has_value);
+        frac = l_max(0, l_min(1, v / mx));
+    } else {
+        /* HTML, "The meter element": the gauge regions. */
+        float mn = num_attr(b, "min", 0, NULL), mx = num_attr(b, "max", 1, NULL);
+        if (mx < mn)
+            mx = mn;
+        float v = l_max(mn, l_min(mx, num_attr(b, "value", 0, NULL)));
+        float lo = l_max(mn, l_min(mx, num_attr(b, "low", mn, NULL)));
+        float hi = l_max(lo, l_min(mx, num_attr(b, "high", mx, NULL)));
+        float opt = l_max(mn, l_min(mx, num_attr(b, "optimum", (mn + mx) / 2, NULL)));
+        frac = mx > mn ? (v - mn) / (mx - mn) : 0;
+        has_value = true;
+        int region; /* 0 optimum, 1 suboptimum, 2 even less good */
+        if (opt < lo)
+            region = v <= lo ? 0 : v <= hi ? 1 : 2;
+        else if (opt > hi)
+            region = v >= hi ? 0 : v >= lo ? 1 : 2;
+        else
+            region = (v >= lo && v <= hi) ? 0 : 1;
+        fillc = region == 0 ? AU_RGB(51, 170, 51) : region == 1 ? AU_RGB(230, 180, 0) : AU_RGB(204, 51, 51);
+    }
+    AuRect r = snap(cb);
+    if (r.w < 2 || r.h < 2)
+        return;
+    if (native) {
+        pl_fill(P->c, r.x, r.y, r.w, r.h, PL_FRAME);
+        r = (AuRect){r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+        pl_fill(P->c, r.x, r.y, r.w, r.h, AU_RGB(238, 238, 238));
+    }
+    if (!has_value) {
+        /* Indeterminate: Platinum's diagonal stripes. */
+        au_canvas_clip_push(P->c, r);
+        float step = l_max(4, r.h);
+        for (float x = r.x - r.h; x < r.x + r.w; x += step * 2) {
+            AuPath p;
+            au_path_init(&p);
+            au_path_move_to(&p, x, r.y + r.h);
+            au_path_line_to(&p, x + step, r.y + r.h);
+            au_path_line_to(&p, x + step + r.h, r.y);
+            au_path_line_to(&p, x + r.h, r.y);
+            au_path_close(&p);
+            au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(170, 170, 221));
+            au_path_free(&p);
+        }
+        au_canvas_clip_pop(P->c);
+        return;
+    }
+    float w = roundf(r.w * frac);
+    pl_fill(P->c, r.x, r.y, w, r.h, fillc);
+    if (fillc == PL_BAR)
+        pl_fill(P->c, r.x, r.y, w, 1, PL_BAR_LIGHT);
+}
+
+static void paint_listbox(PCtx *P, LBlock *b, AuRect pb, uint32_t color)
+{
+    LReplaced *r = b->rep;
+    if (!r || !r->label)
+        return;
+    const AuStyle *s = b->b.style;
+    LFont *f = l_font(P->L, s);
+    float rh = l_listbox_row(P->L, b), asc;
+    l_control_line(P->L, b, &asc);
+    float em = s->inh->font_size;
+    au_canvas_clip_push(P->c, pb);
+    const char *t = r->label;
+    float y = pb.y + b->p[0];
+    float x0 = pb.x + b->p[3] + 2;
+    while (*t && y < pb.y + pb.h) {
+        const char *e = strchr(t, '\n');
+        size_t n = e ? (size_t)(e - t) : strlen(t);
+        uint8_t fl = (uint8_t)t[0] & 15;
+        if (fl & LB_SELECTED)
+            pl_fill(P->c, pb.x, y, pb.w, rh, control_disabled(b) ? AU_RGB(221, 221, 221) : PL_HILITE);
+        float x = x0 + ((fl & LB_INDENT) ? roundf(em * 0.75f) : 0);
+        uint32_t col = (fl & LB_DISABLED) ? AU_RGB(128, 128, 128) : color;
+        if (n > 1) {
+            l_draw_text(P->L, P->c, f, s, t + 1, n - 1, x, y + 1 + asc, col, 0);
+            if (fl & LB_GROUP) /* bold, by overstriking */
+                l_draw_text(P->L, P->c, f, s, t + 1, n - 1, x + 0.6f, y + 1 + asc, col, 0);
+        }
+        y += rh;
+        t += n + (e ? 1 : 0);
+    }
+    au_canvas_clip_pop(P->c);
+}
+
+static void paint_range(PCtx *P, LBlock *b, AuRect cb, bool native)
+{
+    float mn = num_attr(b, "min", 0, NULL), mx = num_attr(b, "max", 100, NULL);
+    if (mx < mn)
+        mx = mn;
+    float v = num_attr(b, "value", mn + (mx - mn) / 2, NULL);
+    float frac = mx > mn ? l_max(0, l_min(1, (v - mn) / (mx - mn))) : 0;
+    bool off = control_disabled(b);
+    float tw = 11, th = l_min(cb.h, 15);
+    float cy = roundf(cb.y + cb.h / 2);
+    pl_field(P->c, (AuRect){cb.x + 2, cy - 2, cb.w - 4, 5}, 2, AU_RGB(204, 204, 204), off);
+    float tx = cb.x + (cb.w - tw) * frac;
+    AuRect th_r = snap((AuRect){tx, cy - th / 2, tw, th});
+    if (native)
+        pl_button(P->c, th_r, off, 2);
+    else
+        pl_fill(P->c, th_r.x, th_r.y, th_r.w, th_r.h, PL_FRAME);
+}
+
+/* The placeholder of an empty textarea, at its content box. */
+static void paint_textarea_placeholder(PCtx *P, LBlock *b, float ox, float oy)
+{
+    if (b->b.replaced != LR_TEXTAREA || !b->rep || !b->rep->aux || (b->b.flags & LF_HIDDEN))
+        return;
+    const AuStyle *s = b->b.style;
+    LFont *f = l_font(P->L, s);
+    float asc, lh = l_control_line(P->L, b, &asc);
+    AuRect cb = box_area(b, ox, oy, AU_K_content_box);
+    AuRect pbx = box_area(b, ox, oy, AU_K_padding_box);
+    uint32_t col = placeholder_color(s);
+    au_canvas_clip_push(P->c, pbx);
+    const char *t = b->rep->aux;
+    float y = cb.y + asc;
+    while (*t && y - asc < pbx.y + pbx.h) {
+        const char *e = strchr(t, '\n');
+        size_t n = e ? (size_t)(e - t) : strlen(t);
+        l_draw_text(P->L, P->c, f, s, t, n, cb.x, y, col, 0);
+        y += lh;
+        t += n + (e ? 1 : 0);
+    }
     au_canvas_clip_pop(P->c);
 }
 
@@ -767,9 +1605,11 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     if (b->b.flags & LF_HIDDEN)
         return;
     AuRect cb = box_area(b, ox, oy, AU_K_content_box);
+    AuRect pbx = box_area(b, ox, oy, AU_K_padding_box);
     const AuStyle *s = b->b.style;
     uint32_t color = pc(s, s->inh->color);
     LReplaced *r = b->rep;
+    bool native = control_native(b);
     switch (b->b.replaced) {
     case LR_IMAGE:
         if (r && r->pixels) {
@@ -788,103 +1628,91 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
                 au_fill_rect(P->c, cb, AU_RGB(0xEE, 0xEE, 0xEE));
             draw_borders(P->c, cb, w1, gs, st, NULL);
             if (r && r->label)
-                paint_label(P, b, r->label, (AuRect){cb.x + 2, cb.y, cb.w - 4, cb.h}, color, 0);
+                paint_label(P, b, r->label, (AuRect){cb.x + 2, cb.y, cb.w - 4, cb.h}, color, 0, cb);
         }
         break;
     case LR_TEXT_INPUT: {
-        bool placeholder = !l_attr(&b->b, au_atom_lookup("value", 5)) || !*l_attr(&b->b, au_atom_lookup("value", 5));
-        paint_label(P, b, r ? r->label : NULL, cb, placeholder ? AU_RGB(0x75, 0x75, 0x75) : color, 0);
+        /* Clipped to the content box across, the padding box down. */
+        AuRect clip = {cb.x, pbx.y, cb.w, pbx.h};
+        paint_label(P, b, r ? r->label : NULL, cb, r && r->placeholder ? placeholder_color(s) : color,
+                    label_align(s, 0), clip);
         break;
     }
     case LR_BUTTON:
-        paint_label(P, b, r ? r->label : NULL, cb, color, 1);
+        paint_label(P, b, r ? r->label : NULL, cb, color, label_align(s, 1), pbx);
         break;
     case LR_SELECT: {
-        float aw = s->inh->font_size * 1.2f;
-        paint_label(P, b, r ? r->label : NULL, (AuRect){cb.x, cb.y, cb.w - aw, cb.h}, color, 0);
-        AuPath p;
-        au_path_init(&p);
-        float cx = cb.x + cb.w - aw / 2, cy = cb.y + cb.h / 2, a = s->inh->font_size * 0.25f;
-        au_path_move_to(&p, cx - a, cy - a / 2);
-        au_path_line_to(&p, cx + a, cy - a / 2);
-        au_path_line_to(&p, cx, cy + a / 2);
-        au_path_close(&p);
-        au_fill_path(P->c, &p, AU_FILL_NONZERO, color);
-        au_path_free(&p);
-        break;
-    }
-    case LR_TEXTAREA:
-        if (r && r->label) {
-            LFont *f = l_font(P->L, s);
-            float lh = l_line_height(s, f);
-            const char *t = r->label;
-            float y = cb.y + f->m.ascent + (lh - f->m.ascent - f->m.descent) / 2;
-            au_canvas_clip_push(P->c, cb);
-            while (*t && y < cb.y + cb.h + lh) {
-                const char *e = strchr(t, '\n');
-                size_t n = e ? (size_t)(e - t) : strlen(t);
-                l_draw_text(P->L, P->c, f, s, t, n, cb.x, y, color, 0);
-                y += lh;
-                t += n + (e ? 1 : 0);
-            }
-            au_canvas_clip_pop(P->c);
+        float aw = l_select_arrow_w(b);
+        AuRect area = {cb.x, cb.y, l_max(0, cb.w - aw), cb.h};
+        paint_label(P, b, r ? r->label : NULL, area, color, 0, (AuRect){cb.x, pbx.y, area.w, pbx.h});
+        if (aw > 0) {
+            float a = l_max(2.5f, roundf(s->inh->font_size * 0.25f));
+            float cx = roundf(cb.x + cb.w - aw / 2 + b->p[1] / 2), cy = roundf(cb.y + cb.h / 2) + 0.5f;
+            tri_down(P->c, cx, cy, a, native && control_disabled(b) ? PL_SHADOW : color);
         }
         break;
+    }
+    case LR_LISTBOX:
+        paint_listbox(P, b, pbx, color);
+        break;
+    case LR_FILE: {
+        float asc, lh = l_control_line(P->L, b, &asc);
+        float bh = lh + 6, bw = l_file_button_w(P->L, b);
+        AuRect br = {cb.x, cb.y + (cb.h - bh) / 2, bw, bh};
+        bool off = control_disabled(b);
+        if (s->rare->appearance != AU_APPEARANCE_NONE)
+            pl_button(P->c, br, off, 4);
+        paint_label(P, b, r ? r->label : NULL, br, off ? AU_RGB(128, 128, 128) : color, 1, br);
+        AuRect tr = {cb.x + bw + 4, cb.y, l_max(0, cb.w - bw - 4), cb.h};
+        paint_label(P, b, r ? r->aux : NULL, tr, color, 0, (AuRect){tr.x, pbx.y, tr.w, pbx.h});
+        break;
+    }
+    case LR_COLOR: {
+        AuRect sw = snap((AuRect){cb.x + 2, cb.y + 2, cb.w - 4, cb.h - 4});
+        if (sw.w > 2 && sw.h > 2) {
+            pl_fill(P->c, sw.x, sw.y, sw.w, sw.h, PL_FRAME);
+            pl_fill(P->c, sw.x + 1, sw.y + 1, sw.w - 2, sw.h - 2,
+                 color_value(l_attr(&b->b, au_atom_lookup("value", 5))));
+        }
+        break;
+    }
     case LR_CHECKBOX:
     case LR_RADIO: {
+        if (!native)
+            break; /* appearance: none: only the CSS box */
         AuRect bx = {ox, oy, b->w, b->h};
-        bool checked = b->b.node && au_is_element(b->b.node) &&
-                       ((au_as_element(b->b.node)->state & AU_STATE_CHECKED_SET)
-                            ? (au_as_element(b->b.node)->state & AU_STATE_CHECKED) != 0
-                            : l_attr(&b->b, au_atom_lookup("checked", 7)) != NULL);
-        uint32_t edge = AU_RGB(0x76, 0x76, 0x76);
-        if (b->b.replaced == LR_RADIO) {
-            AuPath p;
-            au_path_init(&p);
-            float rr = l_min(bx.w, bx.h) / 2;
-            au_path_ellipse(&p, bx.x + bx.w / 2, bx.y + bx.h / 2, rr, rr);
-            au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(255, 255, 255));
-            AuPath st;
-            au_path_init(&st);
-            au_path_stroke(&p, 1, &st);
-            au_fill_path(P->c, &st, AU_FILL_NONZERO, edge);
-            au_path_free(&st);
-            if (checked) {
-                au_path_clear(&p);
-                au_path_ellipse(&p, bx.x + bx.w / 2, bx.y + bx.h / 2, rr * 0.45f, rr * 0.45f);
-                au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(0x10, 0x60, 0xE0));
-            }
-            au_path_free(&p);
-        } else {
-            AuRadii rr = {{2, 2, 2, 2}, {2, 2, 2, 2}};
-            au_fill_rounded_rect(P->c, bx, &rr, checked ? AU_RGB(0x10, 0x60, 0xE0) : AU_RGB(255, 255, 255));
-            float w1[4] = {1, 1, 1, 1};
-            uint32_t es[4] = {edge, edge, edge, edge};
-            uint8_t st[4] = {AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID, AU_BORDER_STYLE_SOLID};
-            if (!checked)
-                draw_borders(P->c, bx, w1, es, st, &rr);
-            if (checked) {
-                AuPath p, sp;
-                au_path_init(&p);
-                au_path_init(&sp);
-                au_path_move_to(&p, bx.x + bx.w * 0.22f, bx.y + bx.h * 0.52f);
-                au_path_line_to(&p, bx.x + bx.w * 0.42f, bx.y + bx.h * 0.72f);
-                au_path_line_to(&p, bx.x + bx.w * 0.78f, bx.y + bx.h * 0.3f);
-                au_path_stroke(&p, l_max(1.5f, bx.w / 7), &sp);
-                au_fill_path(P->c, &sp, AU_FILL_NONZERO, AU_RGB(255, 255, 255));
-                au_path_free(&p);
-                au_path_free(&sp);
-            }
-        }
+        if (b->b.replaced == LR_RADIO)
+            pl_radio(P->c, bx, control_checked(b), control_disabled(b));
+        else
+            pl_checkbox(P->c, bx, control_checked(b), control_disabled(b));
         break;
     }
-    case LR_RANGE: {
-        float cy = cb.y + cb.h / 2;
-        au_fill_rect(P->c, (AuRect){cb.x, cy - 2, cb.w, 4}, AU_RGB(0xC0, 0xC0, 0xC0));
+    case LR_RANGE:
+        paint_range(P, b, cb, native);
+        break;
+    case LR_PROGRESS:
+    case LR_METER:
+        paint_bar(P, b, cb, native);
+        break;
+    case LR_DISCLOSURE_OPEN:
+    case LR_DISCLOSURE_CLOSED: {
+        /* A triangle: closed points right, open points down; sat on the
+         * baseline like the text it precedes. */
+        float em = s->inh->font_size, a = roundf(em * 0.3f);
+        float cx = cb.x + a + em * 0.05f, cy = oy + b->h - a;
         AuPath p;
         au_path_init(&p);
-        au_path_ellipse(&p, cb.x + cb.w / 2, cy, 7, 7);
-        au_fill_path(P->c, &p, AU_FILL_NONZERO, AU_RGB(0x10, 0x60, 0xE0));
+        if (b->b.replaced == LR_DISCLOSURE_OPEN) {
+            au_path_move_to(&p, cx - a, cy - a * 0.6f);
+            au_path_line_to(&p, cx + a, cy - a * 0.6f);
+            au_path_line_to(&p, cx, cy + a * 0.9f);
+        } else {
+            au_path_move_to(&p, cx - a * 0.7f, cy - a);
+            au_path_line_to(&p, cx + a * 0.9f, cy);
+            au_path_line_to(&p, cx - a * 0.7f, cy + a);
+        }
+        au_path_close(&p);
+        au_fill_path(P->c, &p, AU_FILL_NONZERO, color);
         au_path_free(&p);
         break;
     }
@@ -914,16 +1742,6 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
         break;
     }
     default:
-        if (l_is_tag(&b->b, AU_ATOM_meter) || l_is_tag(&b->b, AU_ATOM_progress)) {
-            au_fill_rect(P->c, cb, AU_RGB(0xE0, 0xE0, 0xE0));
-            AuAtom va = au_atom_lookup("value", 5), ma = au_atom_lookup("max", 3);
-            const char *v = va ? l_attr(&b->b, va) : NULL, *m = ma ? l_attr(&b->b, ma) : NULL;
-            float fv = v ? (float)atof(v) : 0, fm = m ? (float)atof(m) : 1;
-            if (fm <= 0)
-                fm = 1;
-            float frac = l_max(0, l_min(1, fv / fm));
-            au_fill_rect(P->c, (AuRect){cb.x, cb.y, cb.w * frac, cb.h}, AU_RGB(0x10, 0x60, 0xE0));
-        }
         break;
     }
 }
@@ -957,6 +1775,53 @@ static int collect_decos(const LBox *t, Deco *out, int max)
             break;
     }
     return n;
+}
+
+/* One text decoration line from x to x + w with its top at y: solid,
+ * double, dotted, dashed or wavy (CSS Text Decoration 3). Dots and dashes
+ * are phased from x = 0 so neighbouring fragments continue the pattern. */
+static void deco_line(AuCanvas *c, float x, float y, float w, float th, uint32_t col, int style)
+{
+    if (w <= 0)
+        return;
+    switch (style) {
+    case AU_TEXT_DECORATION_STYLE_DOUBLE:
+        au_fill_rect(c, (AuRect){x, y, w, th}, col);
+        au_fill_rect(c, (AuRect){x, y + th * 2, w, th}, col);
+        return;
+    case AU_TEXT_DECORATION_STYLE_DOTTED:
+    case AU_TEXT_DECORATION_STYLE_DASHED: {
+        float on = style == AU_TEXT_DECORATION_STYLE_DOTTED ? th : th * 3, period = on * 2;
+        float start = floorf(x / period) * period;
+        au_canvas_clip_push(c, (AuRect){x, y - th, w, th * 3});
+        for (float p = start; p < x + w && p - start < 40000; p += period)
+            au_fill_rect(c, (AuRect){p, y, on, th}, col);
+        au_canvas_clip_pop(c);
+        return;
+    }
+    case AU_TEXT_DECORATION_STYLE_WAVY: {
+        /* A zigzag of period 4 * th around the line, stroked th wide. */
+        float amp = l_max(1, th), step = l_max(2, th * 2);
+        float start = floorf(x / (2 * step)) * (2 * step);
+        AuPath p, s;
+        au_path_init(&p);
+        au_path_init(&s);
+        au_path_move_to(&p, start, y + amp);
+        int k = 0;
+        for (float px = start + step; px <= x + w + step && k < 20000; px += step, k++)
+            au_path_line_to(&p, px, (k & 1) ? y + amp : y - amp);
+        au_path_stroke(&p, th, &s);
+        au_canvas_clip_push(c, (AuRect){x, y - amp - th, w, 2 * (amp + th)});
+        au_fill_path(c, &s, AU_FILL_NONZERO, col);
+        au_canvas_clip_pop(c);
+        au_path_free(&p);
+        au_path_free(&s);
+        return;
+    }
+    default:
+        au_fill_rect(c, (AuRect){x, y, w, th}, col);
+        return;
+    }
 }
 
 static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
@@ -1011,14 +1876,14 @@ static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
         float w = f->w;
         if (d[i].lines & AU_TDL_UNDERLINE) {
             float y = roundf(base + l_max(1, font->m.underline_pos));
-            au_fill_rect(P->c, (AuRect){x, y, w, th}, d[i].color);
-            if (d[i].style == AU_TEXT_DECORATION_STYLE_DOUBLE)
-                au_fill_rect(P->c, (AuRect){x, y + th * 2, w, th}, d[i].color);
+            if (d[i].style == AU_TEXT_DECORATION_STYLE_WAVY)
+                y = roundf(base + l_max(1, font->m.underline_pos) + th);
+            deco_line(P->c, x, y, w, th, d[i].color, d[i].style);
         }
         if (d[i].lines & AU_TDL_OVERLINE)
-            au_fill_rect(P->c, (AuRect){x, roundf(base - font->m.ascent), w, th}, d[i].color);
+            deco_line(P->c, x, roundf(base - font->m.ascent), w, th, d[i].color, d[i].style);
         if (d[i].lines & AU_TDL_LINE_THROUGH)
-            au_fill_rect(P->c, (AuRect){x, roundf(base - font->m.strike_pos - th / 2), w, th}, d[i].color);
+            deco_line(P->c, x, roundf(base - font->m.strike_pos - th / 2), w, th, d[i].color, d[i].style);
     }
 }
 
@@ -1117,8 +1982,38 @@ static void paint_lines(PCtx *P, LBlock *b, float ox, float oy, LBox *owner)
 
 static void paint_flow(PCtx *P, LBlock *b, float ox, float oy, int phase);
 
+/* The padding-box radii of b's overflow clip, if any corner is rounded. */
+static bool clip_radii(const LBlock *b, AuRadii *out)
+{
+    AuRadii r;
+    box_radii(b, &r, b->w, b->h);
+    if (au_radii_zero(&r))
+        return false;
+    inset_radii(&r, b->bw);
+    if (au_radii_zero(&r))
+        return false;
+    /* In-flow content stays in the content box unless it overflows; a
+     * corner the content cannot reach needs no mask (a code block with
+     * padding wider than its radius, the common case). */
+    float pw = b->w - b->bw[1] - b->bw[3], ph = b->h - b->bw[0] - b->bw[2];
+    bool hfit = b->sw <= pw + 0.5f, vfit = b->sh <= ph + 0.5f;
+    static const int hs[4] = {3, 1, 1, 3}, vs[4] = {0, 0, 2, 2};
+    bool reach = false;
+    for (int i = 0; i < 4 && !reach; i++) {
+        if (r.rx[i] <= 0 || r.ry[i] <= 0)
+            continue;
+        bool safe = (vfit && b->p[vs[i]] >= r.ry[i]) || (hfit && b->p[hs[i]] >= r.rx[i]);
+        reach = !safe;
+    }
+    if (!reach)
+        return false;
+    if (out)
+        *out = r;
+    return true;
+}
+
 /* Pushes b's overflow clip; returns the origin offset for its content. */
-static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *cy)
+static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *cy, bool shaped)
 {
     *cx = ox;
     *cy = oy;
@@ -1135,9 +2030,32 @@ static bool push_clip(PCtx *P, LBlock *b, float ox, float oy, float *cx, float *
         r.h += 200000;
     }
     au_canvas_clip_push(P->c, r);
+    /* A rounded padding box clips through a group masked at pop_clip. */
+    if (shaped && s->overflow_x != AU_OVERFLOW_VISIBLE && s->overflow_y != AU_OVERFLOW_VISIBLE &&
+        clip_radii(b, NULL))
+        au_canvas_group_begin(P->c, r);
     *cx = ox - b->scroll_x;
     *cy = oy - b->scroll_y;
     return true;
+}
+
+/* Undoes push_clip (clipped is its result; ox, oy the box origin). */
+static void pop_clip(PCtx *P, LBlock *b, float ox, float oy, bool clipped)
+{
+    if (!clipped)
+        return;
+    const AuStyleBox *s = b->b.style->box;
+    AuRadii rr;
+    if (s->overflow_x != AU_OVERFLOW_VISIBLE && s->overflow_y != AU_OVERFLOW_VISIBLE &&
+        clip_radii(b, &rr)) {
+        AuPath p;
+        au_path_init(&p);
+        au_path_rounded_rect(&p, box_area(b, ox, oy, AU_K_padding_box), &rr, false);
+        au_canvas_group_mask(P->c, &p);
+        au_path_free(&p);
+        au_canvas_group_end(P->c, 1.0f);
+    }
+    au_canvas_clip_pop(P->c);
 }
 
 static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
@@ -1209,12 +2127,11 @@ static void paint_flow(PCtx *P, LBlock *b, float ox, float oy, int phase)
         return;
     P->depth++;
     float cx, cy;
-    bool clipped = push_clip(P, b, ox, oy, &cx, &cy);
+    bool clipped = push_clip(P, b, ox, oy, &cx, &cy, true);
     if (phase == PH_INLINE && (b->b.flags & LF_INLINES))
         paint_lines(P, b, cx, cy, NULL);
     paint_children(P, &b->b, cx, cy, phase);
-    if (clipped)
-        au_canvas_clip_pop(P->c);
+    pop_clip(P, b, ox, oy, clipped);
     if (phase == PH_INLINE) {
         paint_scrollbars(P, b, ox, oy);
         /* outlines of in-flow descendants */
@@ -1239,14 +2156,13 @@ static void paint_atomic(PCtx *P, LBlock *k, float ox, float oy)
         return;
     }
     float cx, cy;
-    bool clipped = push_clip(P, k, ox, oy, &cx, &cy);
+    bool clipped = push_clip(P, k, ox, oy, &cx, &cy, true);
     paint_children(P, &k->b, cx, cy, PH_BG);
     paint_children(P, &k->b, cx, cy, PH_FLOAT);
     if (k->b.flags & LF_INLINES)
         paint_lines(P, k, cx, cy, NULL);
     paint_children(P, &k->b, cx, cy, PH_INLINE);
-    if (clipped)
-        au_canvas_clip_pop(P->c);
+    pop_clip(P, k, ox, oy, clipped);
     paint_scrollbars(P, k, ox, oy);
     paint_outline(P, &k->b, (AuRect){ox, oy, k->w, k->h});
 }
@@ -1363,7 +2279,7 @@ static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *o
         }
         if (applies[i] && (a->flags & LF_CLIPS)) {
             float cx, cy;
-            push_clip(P, k, x, y, &cx, &cy);
+            push_clip(P, k, x, y, &cx, &cy, false);
             pushed++;
             x = cx;
             y = cy;
@@ -1426,14 +2342,38 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         return;
     }
     LBlock *k = (LBlock *)b;
-    float tdx, tdy;
-    l_transform_offset(k, &tdx, &tdy);
-    ox += tdx;
-    oy += tdy;
+    AuMatrix tm;
+    bool affine = false;
     LArea saved = P->dirty;
-    bool cull = !rect_hits(&P->dirty, ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h);
+    AuRect ovr;
+    if (l_transform_matrix(k, &tm)) {
+        if (mat_is_translation(&tm)) {
+            ox += tm.e;
+            oy += tm.f;
+        } else {
+            /* In canvas coordinates: about the box origin (ox, oy). */
+            tm.e += ox - (tm.a * ox + tm.c * oy);
+            tm.f += oy - (tm.b * ox + tm.d * oy);
+            affine = true;
+        }
+    }
+    ovr = (AuRect){ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h};
+    bool cull;
+    if (affine) {
+        /* Cull by the transformed extent; inside, paint everything. */
+        float xs[4] = {ovr.x, ovr.x + ovr.w, ovr.x + ovr.w, ovr.x};
+        float ys[4] = {ovr.y, ovr.y, ovr.y + ovr.h, ovr.y + ovr.h};
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (int i = 0; i < 4; i++) {
+            float X = tm.a * xs[i] + tm.c * ys[i] + tm.e, Y = tm.b * xs[i] + tm.d * ys[i] + tm.f;
+            x0 = l_min(x0, X), x1 = l_max(x1, X), y0 = l_min(y0, Y), y1 = l_max(y1, Y);
+        }
+        cull = !rect_hits(&P->dirty, x0, y0, x1 - x0, y1 - y0);
+    } else {
+        cull = !rect_hits(&P->dirty, ovr.x, ovr.y, ovr.w, ovr.h);
+    }
     bool sc = (b->flags & LF_STACKING) != 0;
-    if (cull && !(sc && k->layers && k->layers->n))
+    if (cull && (affine || !(sc && k->layers && k->layers->n)))
         return;
     P->depth++;
     float opacity = lb_anon(b) ? 1 : b->style->rare->opacity;
@@ -1442,8 +2382,14 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         P->depth--;
         return;
     }
+    if (affine && au_canvas_layer_begin(P->c, ovr)) {
+        P->dirty = (LArea){ovr.x, ovr.y, ovr.w, ovr.h};
+        group = false; /* the layer applies the opacity */
+    } else {
+        affine = false;
+    }
     if (group)
-        au_canvas_group_begin(P->c, (AuRect){ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h});
+        au_canvas_group_begin(P->c, ovr);
     if (b != P->L->root)
         paint_decor(P, k, ox, oy);
     else {
@@ -1464,7 +2410,7 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         paint_replaced(P, k, ox, oy);
     } else {
         float cx, cy;
-        bool clipped = push_clip(P, k, ox, oy, &cx, &cy);
+        bool clipped = push_clip(P, k, ox, oy, &cx, &cy, true);
         if (sc && k->layers)
             paint_layer_list(P, k, cx, cy, 0, k->layers->nneg);
         if (!cull) {
@@ -1476,13 +2422,14 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         }
         if (sc && k->layers)
             paint_layer_list(P, k, cx, cy, k->layers->nneg, k->layers->n);
-        if (clipped)
-            au_canvas_clip_pop(P->c);
+        pop_clip(P, k, ox, oy, clipped);
         paint_scrollbars(P, k, ox, oy);
     }
     paint_outline(P, b, (AuRect){ox, oy, k->w, k->h});
     if (group)
         au_canvas_group_end(P->c, opacity);
+    if (affine)
+        au_canvas_layer_end(P->c, &tm, opacity);
     P->dirty = saved;
     P->depth--;
 }

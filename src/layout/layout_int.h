@@ -59,9 +59,24 @@ enum {
     LI_COUNT
 };
 
-/* Replaced content kinds. */
+/* Replaced content kinds (b->replaced). Form controls are replaced boxes
+ * (LI_REPLACED) except LR_BUTTON on a <button> element and LR_TEXTAREA,
+ * which are block containers (LI_FLOW) laid out from their content: for
+ * those, replaced names the control kind and rep holds its data. */
 enum { LR_NONE, LR_IMAGE, LR_TEXT_INPUT, LR_CHECKBOX, LR_RADIO, LR_BUTTON, LR_SELECT, LR_TEXTAREA,
-       LR_RANGE, LR_OTHER, LR_DISC, LR_CIRCLE, LR_SQUARE /* list marker shapes */ };
+       LR_RANGE, LR_OTHER, LR_DISC, LR_CIRCLE, LR_SQUARE, /* list marker shapes */
+       LR_LISTBOX, LR_FILE, LR_COLOR, LR_PROGRESS, LR_METER,
+       LR_DISCLOSURE_OPEN, LR_DISCLOSURE_CLOSED /* marker shapes */ };
+
+/* True for the kinds that are form controls. */
+static inline bool l_is_control_kind(int r)
+{
+    return (r >= LR_TEXT_INPUT && r <= LR_RANGE) || (r >= LR_LISTBOX && r <= LR_METER);
+}
+
+/* List box rows (LReplaced.label of an LR_LISTBOX): one line per row,
+ * each starting with a flags byte 0x40 | LB_*. */
+enum { LB_SELECTED = 1, LB_GROUP = 2, LB_INDENT = 4, LB_DISABLED = 8 };
 
 enum {
     LF_ANON = 1u << 0,          /* anonymous box: box-model properties are initial */
@@ -93,7 +108,8 @@ enum {
     LF_LIST_ITEM = 1u << 25,
     LF_LINE_CLAMP = 1u << 26,
     LF_ESCAPES = 1u << 27,      /* holds an absolutely positioned box whose containing block is outside it */
-    LF_MEASURE_OK = 1u << 28    /* the measure cache (mk_*, m_res) is valid */
+    LF_MEASURE_OK = 1u << 28,   /* the measure cache (mk_*, m_res) is valid */
+    LF_LEGEND = 1u << 29        /* the rendered legend of its fieldset parent: placed on the top border */
 };
 
 typedef struct LBox LBox;
@@ -159,8 +175,11 @@ typedef struct LReplaced {
     float iw, ih;     /* intrinsic size, 0 when unknown */
     float ratio;      /* intrinsic aspect ratio, 0 when none */
     const AuSurface *pixels; /* decoded image or NULL */
-    const char *label; /* placeholder or button text */
+    const char *label; /* image alt, button, select or input text; list box rows */
+    const char *aux;   /* placeholder of a text control; file input status text */
+    uint16_t rows, cols; /* textarea and list box size */
     bool loaded;      /* the image is known (size from the loader) */
+    bool placeholder; /* text input: label is the placeholder */
 } LReplaced;
 
 typedef struct LBlock {
@@ -325,6 +344,15 @@ LBlock *l_geom_parent(LBox *b);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);
+/* The baseline of atomic inline k from its margin-box top. */
+float l_atomic_baseline(const LBlock *k);
+void l_shift_content(LBlock *b, float dy);
+/* Form controls: the inner line height (and the baseline in it), list box
+ * row height, select arrow width, file input button width. */
+float l_control_line(AuLayout *L, const LBlock *b, float *ascent);
+float l_listbox_row(AuLayout *L, const LBlock *b);
+float l_select_arrow_w(const LBlock *b);
+float l_file_button_w(AuLayout *L, const LBlock *b);
 
 /* block.c */
 float l_flow_layout(AuLayout *L, LBlock *b, const LConstraints *c);
@@ -372,6 +400,9 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
 /* stack.c / draw.c / hit.c */
 void l_build_stacking(AuLayout *L);
 void l_paint(AuLayout *L, AuCanvas *c, LArea dirty);
+/* b's transform (translate, rotate, scale, transform about its origin) as a
+ * matrix in its border-box coordinates; false when it has none (draw.c). */
+bool l_transform_matrix(const LBlock *b, AuMatrix *out);
 bool l_hit(AuLayout *L, float x, float y, AuHitResult *r);
 void l_dump(AuLayout *L, AuBuf *out);
 float l_sticky_offset(AuLayout *L, LBlock *b, float *dx);

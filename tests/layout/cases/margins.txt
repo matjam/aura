@@ -218,3 +218,12 @@ Margin collapsing (CSS 2.1 8.3.1).
 ---
 #p h=0
 #b y=20
+
+=== negative side margins widen a block formatting context root
+<body style="margin:0;padding:0 20px;width:100px">
+<div id=b style="overflow:auto;margin:0 -10px;height:5px"></div>
+<div id=f style="float:left;width:30px;height:20px"></div>
+<div id=c style="overflow:hidden;margin-left:-10px;height:5px"></div>
+---
+#b x=10 w=120
+#c x=50 w=70

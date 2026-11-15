@@ -443,6 +443,9 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
     if (mac_style & 1)
         f->weight = 700;
     if (f->os2_len >= 78) {
+        int16_t aw = s16(f, f->os2 + 2);
+        if (aw > 0 && aw < f->units_per_em * 2)
+            f->avg_width = aw;
         uint16_t w = u16(f, f->os2 + 4);
         if (w >= 1 && w <= 1000)
             f->weight = w;
@@ -502,6 +505,19 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
 bad:
     au_free(f);
     return NULL;
+}
+
+AuFontFace *au_font_face_synthesize(const AuFontFace *f, unsigned synth)
+{
+    AuFontFace *v = au_alloc(sizeof *v);
+    *v = *f;
+    v->synth = (uint8_t)(f->synth | (synth & (AU_FONT_SYNTH_BOLD | AU_FONT_SYNTH_ITALIC)));
+    if (v->synth & AU_FONT_SYNTH_ITALIC)
+        v->italic = true;
+    if ((v->synth & AU_FONT_SYNTH_BOLD) && v->weight < 700)
+        v->weight = 700;
+    v->id = next_face_id++;
+    return v;
 }
 
 void au_font_face_free(AuFontFace *f)
@@ -774,11 +790,25 @@ static bool glyph_outline(const AuFontFace *f, uint16_t g, const Xform *m, int d
 bool au_font_glyph_path(const AuFontFace *f, uint16_t glyph, float sx, float sy, float x, float y,
                         AuPath *path)
 {
-    Xform m = {sx, 0, 0, -sy, x, y};
+    /* Synthetic italic shears: x moves right by 0.2 per unit of height. */
+    Xform m = {sx, 0, (f->synth & AU_FONT_SYNTH_ITALIC) ? 0.2f * sy : 0, -sy, x, y};
     size_t nops = path->nops, npts = path->npts;
     int budget = 64; /* real composites use a handful of components */
-    if (glyph_outline(f, glyph, &m, 0, &budget, path))
+    if (glyph_outline(f, glyph, &m, 0, &budget, path)) {
+        if (f->synth & AU_FONT_SYNTH_BOLD) {
+            /* Strike again to the right; nonzero filling unions the two. */
+            float size = sx * f->units_per_em;
+            float t = size <= 9 ? 0 : size >= 36 ? 1 : (size - 9) / 27;
+            m.e += size * (1.0f / 24 + t * (1.0f / 32 - 1.0f / 24));
+            budget = 64;
+            size_t pn = path->nops, pp = path->npts;
+            if (!glyph_outline(f, glyph, &m, 0, &budget, path)) {
+                path->nops = pn;
+                path->npts = pp;
+            }
+        }
         return true;
+    }
     path->nops = nops;
     path->npts = npts;
     return false;

@@ -32,7 +32,7 @@ mb=$(( (bytes + bytes / 4) / 1048576 + 2 ))
 dd if=/dev/zero of="$image" bs=1048576 count="$mb" 2>/dev/null
 
 # hfsutils keeps its current volume in $HOME/.hcwd; a private HOME keeps
-# this from mixing with any other hfsutils use (os9-protect's push.sh).
+# this from mixing with any other hfsutils use on this machine.
 HOME=$AURA_RUN hformat -l "$name" "$image" >/dev/null
 for f in "$@"; do
   HOME=$AURA_RUN hcopy -a "$f" :

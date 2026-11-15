@@ -215,26 +215,7 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     au_free(T);
 }
 
-static void shift_content(LBlock *cell, float dy)
-{
-    if (dy == 0)
-        return;
-    for (uint32_t i = 0; i < cell->nlines; i++)
-        cell->lines[i].y += dy;
-    for (uint32_t i = 0; i < cell->nfrags; i++) {
-        cell->frags[i].y += dy;
-        if (cell->frags[i].kind == FR_ATOMIC)
-            ((LBlock *)cell->frags[i].box)->y += dy;
-    }
-    for (LBox *c = cell->b.first; c; c = c->next) {
-        if (c->kind == LK_BLOCK && !(c->flags & LF_INLINE_LEVEL))
-            ((LBlock *)c)->y += dy;
-    }
-    if (!isnan(cell->baseline))
-        cell->baseline += dy;
-    if (!isnan(cell->last_baseline))
-        cell->last_baseline += dy;
-}
+#define shift_content l_shift_content
 
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
 {
@@ -348,9 +329,9 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
             float cw = l_max(0, w - l_bp_h(k));
             float h = l_spec_height(k, -1);
             l_layout_content(L, k, cw, -1, -1);
-            if (h >= 0 && h + l_bp_v(k) > k->h)
-                k->h = h + l_bp_v(k);
-            rowh = l_max(rowh, k->h);
+            /* k->h stays the content height, so a cell made taller by its
+             * height property still aligns its content below. */
+            rowh = l_max(rowh, h >= 0 ? l_max(k->h, h + l_bp_v(k)) : k->h);
             k->x = x;
             col += span;
             x += w + sh;

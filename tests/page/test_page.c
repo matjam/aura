@@ -423,6 +423,27 @@ static void test_images(void)
     au_docview_free(dv);
 }
 
+/* ---- User style sheet ---- */
+
+static void test_user_css(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    au_docview_set_user_css(dv, "html { font-size: 20px } #b { height: 3px }");
+    const char *html = "<!DOCTYPE html><style>#b{height:9px}</style><body style='margin:0'>"
+                       "<div id=a style='height:2em'></div><div id=b></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    CHECK(rect_of(dv, "a").h == 40, "user font size: 2em = %g, want 40", rect_of(dv, "a").h);
+    CHECK(rect_of(dv, "b").h == 9, "author rule must beat the user rule: %g", rect_of(dv, "b").h);
+    /* Changing it restyles the loaded document; NULL removes it. */
+    au_docview_set_user_css(dv, "html { font-size: 10px }");
+    CHECK(rect_of(dv, "a").h == 20, "changed user sheet: %g", rect_of(dv, "a").h);
+    au_docview_set_user_css(dv, NULL);
+    CHECK(rect_of(dv, "a").h == 32, "removed user sheet: %g", rect_of(dv, "a").h);
+    au_docview_free(dv);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -433,6 +454,7 @@ int main(void)
     test_input();
     test_incremental();
     test_images();
+    test_user_css();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

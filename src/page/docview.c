@@ -50,6 +50,7 @@ struct AuDocView {
     AuDocument *doc;
     char *url, *base;
     char *title;
+    char *user_css; /* the user style sheet, or NULL */
     AuCssResolver *resolver;
     AuLayout *layout;
     SheetSlot *slots;
@@ -183,7 +184,17 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->url);
     au_free(dv->base);
     au_free(dv->title);
+    au_free(dv->user_css);
     au_free(dv);
+}
+
+void au_docview_set_user_css(AuDocView *dv, const char *css)
+{
+    if ((!css && !dv->user_css) || (css && dv->user_css && strcmp(css, dv->user_css) == 0))
+        return;
+    au_free(dv->user_css);
+    dv->user_css = css ? dup(css) : NULL;
+    dv->sheets_dirty = true;
 }
 
 /* ---- Requests ---- */
@@ -606,6 +617,9 @@ static void rebuild_resolver(AuDocView *dv)
     dev.height = (float)dv->vh;
     dev.scripting = 0;
     au_css_resolver_set_device(dv->resolver, &dev);
+    if (dv->user_css)
+        au_css_resolver_add_sheet(dv->resolver, au_css_sheet_parse(dv->user_css, strlen(dv->user_css),
+                                                                   AU_CSS_ORIGIN_USER, dv->url, NULL));
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSrc *s = dv->slots[i].src;
         if (s->text)

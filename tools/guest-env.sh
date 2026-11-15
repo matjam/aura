@@ -2,55 +2,48 @@
 #
 # AURA_RUN     runtime folder (disk overlays, sockets, screenshots, HFS
 #              images). Default: run/ in the main checkout of this repo, so
-#              it survives git worktrees being removed.
-# OS9_PROTECT  the os9-protect checkout whose disk images and QEMU build
-#              are used, read-only (default ../os9-protect beside the main
-#              checkout).
+#              it survives git worktrees being removed. To run a second
+#              guest beside the first, give it another folder.
+# AURA_DISKS   folder of the base disk images. Default: disks/ in the main
+#              checkout. The images are standalone (no backing file) and
+#              git-ignored; CLAUDE.md says where they came from.
 # BASE         which Mac OS 9.2.2 system the guest boots:
-#                stock     disks/os9-novm.qcow2: the base install with
-#                          virtual memory off, no Enforcer (default)
-#                enforcer  disks/os9-vmoff.qcow2: virtual memory off, with
-#                          the os9-enforcer kernel and extension installed
-#              Each base has its own private copy and overlay in AURA_RUN.
-# AURA_BASE    the os9-protect disk to copy, overriding the one BASE names
-#              (give BASE a new name too, so the copy is not mixed up with
-#              another base's).
-# QEMU         the QEMU binary (default: os9-protect's local build, else
-#              qemu-system-ppc from PATH).
+#                stock     os9-novm.qcow2: the base install with virtual
+#                          memory off, no Enforcer (default)
+#                enforcer  os9-vmoff.qcow2: virtual memory off, with the
+#                          Enforcer kernel and extension installed
+#              Each base has its own overlay in AURA_RUN.
+# QEMU         the QEMU binary. Default: ~/.local/opt/qemu-os9/bin, where
+#              qemu/build.sh installs it.
+# QEMU_IMG     qemu-img, from the same folder.
 
 aura_repo=$(cd "$(dirname "$0")/.." && pwd)
 # The main checkout: the parent of the shared .git directory.
 aura_main=$(cd "$(git -C "$aura_repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$aura_repo/.git")/.." && pwd)
 
 AURA_RUN=${AURA_RUN:-$aura_main/run}
-OS9_PROTECT=${OS9_PROTECT:-$(cd "$aura_main/.." && pwd)/os9-protect}
+AURA_DISKS=${AURA_DISKS:-$aura_main/disks}
 BASE=${BASE:-stock}
-if [ -z "${AURA_BASE:-}" ]; then
-  case "$BASE" in
-    stock) AURA_BASE=$OS9_PROTECT/disks/os9-novm.qcow2 ;;
-    enforcer) AURA_BASE=$OS9_PROTECT/disks/os9-vmoff.qcow2 ;;
-    *)
-      echo "guest: unknown BASE '$BASE' (stock or enforcer; or set AURA_BASE)" >&2
-      exit 2
-      ;;
-  esac
-fi
-if [ -z "${QEMU:-}" ]; then
-  if [ -x "$OS9_PROTECT/qemu/build/qemu-system-ppc" ]; then
-    QEMU=$OS9_PROTECT/qemu/build/qemu-system-ppc
-  else
-    QEMU=qemu-system-ppc
-  fi
-fi
-QEMU_IMG=${QEMU_IMG:-qemu-img}
-if [ -x "$OS9_PROTECT/qemu/build/qemu-img" ]; then
-  QEMU_IMG=$OS9_PROTECT/qemu/build/qemu-img
+case "$BASE" in
+  stock) AURA_BASE=$AURA_DISKS/os9-novm.qcow2 ;;
+  enforcer) AURA_BASE=$AURA_DISKS/os9-vmoff.qcow2 ;;
+  *)
+    echo "guest: unknown BASE '$BASE' (stock or enforcer)" >&2
+    exit 2
+    ;;
+esac
+
+QEMU_PREFIX=${QEMU_PREFIX:-$HOME/.local/opt/qemu-os9}
+QEMU=${QEMU:-$QEMU_PREFIX/bin/qemu-system-ppc}
+QEMU_IMG=${QEMU_IMG:-$QEMU_PREFIX/bin/qemu-img}
+if [ ! -x "$QEMU" ]; then
+  echo "guest: no QEMU at $QEMU. To install it, run qemu/build.sh." >&2
+  exit 1
 fi
 
-# Aura's own files in AURA_RUN. One guest runs at a time, so the socket,
-# pid and log are shared; the disks are per base.
-AURA_DISK_COPY=$AURA_RUN/os9-base-$BASE.qcow2 # private flattened copy of AURA_BASE
-AURA_DISK=$AURA_RUN/os9-aura-$BASE.qcow2      # overlay the guest writes to
+# Aura's own files in AURA_RUN. One guest runs per AURA_RUN, so the
+# socket, pid and log are shared; the overlay is per base.
+AURA_DISK=$AURA_RUN/os9-overlay-$BASE.qcow2 # what the guest writes to
 AURA_QMP=$AURA_RUN/qmp.sock
 AURA_PID=$AURA_RUN/qemu.pid
 AURA_LOG=$AURA_RUN/qemu.log

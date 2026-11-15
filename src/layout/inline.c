@@ -636,6 +636,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         }
     }
     bool line_start = true;
+    float hang = 0; /* hanging preserved spaces of the last text segment */
+    bool after_tab = false;
     for (uint32_t i = a; i <= e; i++) {
         LSeg *s = &L->segs[i];
         switch (s->kind) {
@@ -697,8 +699,10 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             }
             LFrag *prev = S->fb.n > first ? &S->fb.f[S->fb.n - 1] : NULL;
             if (vis || (s->flags & SF_CONTENT)) {
+                /* A tab is a fragment of its own: its width is the distance
+                 * to the next tab stop, not its glyph's advance. */
                 if (prev && prev->kind == FR_TEXT && prev->box == s->box && prev->start + prev->len == s->start &&
-                    !(prev->flags & FRF_HYPHEN)) {
+                    !(prev->flags & FRF_HYPHEN) && !(s->flags & SF_TAB) && !after_tab) {
                     prev->len += vis;
                     prev->w += w + (trim_trail || lead_skip ? 0 : s->trail_w);
                 } else if (vis) {
@@ -721,8 +725,15 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
                 }
             }
             x += w + (trim_trail || lead_skip ? 0 : s->trail_w);
+            after_tab = (s->flags & SF_TAB) != 0;
             if (vis)
                 line_start = false;
+            /* Preserved spaces at the end of a wrapped line hang: they
+             * take no room for alignment or overflow (CSS Text 3, 4.1.3). */
+            hang = at_end && (s->flags & SF_PRESERVED) && !lead_skip && S->fb.n > first &&
+                           S->fb.f[S->fb.n - 1].box == s->box
+                       ? s->trail_w
+                       : 0;
             break;
         }
         case IT_ATOMIC: {
@@ -760,6 +771,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         }
     }
     float line_w = x;
+    if (hang > 0 && S->fb.n > first && S->fb.f[S->fb.n - 1].kind == FR_TEXT) {
+        LFrag *hf = &S->fb.f[S->fb.n - 1];
+        float cut = l_min(hang, hf->w);
+        hf->w -= cut;
+        line_w -= cut;
+    }
     uint32_t nfr = S->fb.n - first;
 
     /* text-overflow: ellipsis / line-clamp. */
@@ -828,10 +845,12 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
     float top = -(stack[0].a + half), bottom = stack[0].d + half;
     bool any_top_bottom = false;
-    float tb_max = 0;
     /* per-fragment temporary: baseline offset (from root baseline) and top/bottom flags */
-    float *bo = au_alloc((nfr + 1) * sizeof(float) * 2);
+    float *bo = au_alloc((nfr + 1) * sizeof(float) * 3);
     float *ext = bo + nfr + 1;
+    /* top-aligned height (positive) or bottom-aligned height (negative), else 0 */
+    float *tbh = ext + nfr + 1;
+    memset(tbh, 0, (nfr + 1) * sizeof(float));
     for (uint32_t j = 0; j < nfr; j++) {
         LFrag *f = &S->fb.f[first + j];
         if (sp > f->depth)
@@ -866,7 +885,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_BOTTOM:
                 v->bo = 0;
                 any_top_bottom = true;
-                tb_max = l_max(tb_max, v->lh);
+                tbh[j] = bx->vertical_align == AU_VALIGN_TOP ? v->lh : -v->lh;
                 break;
             default: v->bo = P->bo; break;
             }
@@ -891,10 +910,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
         if (f->kind == FR_ATOMIC) {
             LBlock *k = (LBlock *)f->box;
             float mh = k->h + k->m[0] + k->m[2];
-            bool use_bottom = isnan(k->last_baseline) || (k->b.flags & LF_CLIPS) || k->b.inner == LI_REPLACED;
-            float bl = use_bottom ? mh : k->m[0] + k->last_baseline;
-            if (k->b.inner == LI_FLEX && !isnan(k->baseline))
-                bl = k->m[0] + k->baseline;
+            float bl = l_atomic_baseline(k);
             int va = k->b.style->box->vertical_align;
             if (P->valign == AU_VALIGN_TOP || P->valign == AU_VALIGN_BOTTOM)
                 va = AU_VALIGN_BASELINE;
@@ -912,7 +928,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_TOP:
             case AU_VALIGN_BOTTOM:
                 any_top_bottom = true;
-                tb_max = l_max(tb_max, mh);
+                tbh[j] = va == AU_VALIGN_TOP ? mh : -mh;
                 tp = 0;
                 break;
             default: tp = P->bo - bl; break;
@@ -925,11 +941,19 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             }
         }
     }
-    float lh = bottom - top;
-    if (any_top_bottom && tb_max > lh) {
-        bottom += tb_max - lh;
-        lh = tb_max;
+    /* Top and bottom aligned boxes taller than the line extend it, in
+     * order: a top one below the baseline group, a bottom one above it
+     * (as Blink and Gecko do). */
+    for (uint32_t j = 0; any_top_bottom && j < nfr; j++) {
+        float h = tbh[j] < 0 ? -tbh[j] : tbh[j];
+        if (h <= bottom - top)
+            continue;
+        if (tbh[j] > 0)
+            bottom = top + h;
+        else
+            top = bottom - h;
     }
+    float lh = bottom - top;
     float baseline = -top;
     /* Positions. */
     sp = 0;

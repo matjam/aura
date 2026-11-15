@@ -39,7 +39,8 @@ inline-block, spacing. Ahem: every glyph is 1em square; 16px font gives
 
 x</pre>
 ---
-#t h=64 lines=4
+// pre is monospace: 13px by default
+#t h=52 lines=4
 
 === pre-wrap wraps and keeps spaces
 <body style="margin:0;width:80px">
@@ -128,6 +129,17 @@ x</div>
 #t y=0
 #b y=33.2
 
+=== a tall bottom-aligned box pushes the baseline group down
+<body style="margin:0">
+<div id=p>x<span style="display:inline-block;width:10px;height:40px;vertical-align:bottom"></span><span id=a style="display:inline-block;width:10px;height:5px"></span></div>
+<div id=q>x<span style="display:inline-block;width:10px;height:40px;vertical-align:top"></span><span id=c style="display:inline-block;width:10px;height:5px"></span></div>
+---
+// bottom: the line's top moves up, so the baseline is at 40 - 3.2
+#p h=40
+#a y=31.8
+// top: the line's bottom moves down; the baseline stays at 12.8
+#c y=47.8
+
 === vertical-align middle
 <body style="margin:0">
 <div style="line-height:100px">x<span id=m style="display:inline-block;width:10px;height:20px;vertical-align:middle"></span></div>
@@ -199,7 +211,8 @@ x</div>
 <body style="margin:0">
 <pre style="margin:0;tab-size:4">	<span id=a style="display:inline-block;width:5px;height:5px"></span></pre>
 ---
-#a x=64
+// 4 spaces of the 13px monospace default
+#a x=52
 
 === text-transform does not change Ahem widths
 <body style="margin:0">
@@ -238,3 +251,25 @@ x</div>
 ---
 hit 60 8 #b
 hit 10 8 <p>
+
+=== a tab advances to the next tab stop
+<body style="margin:0">
+<pre style="margin:0">x	x	<span id=s>x</span></pre>
+---
+// 13px monospace: tab stops every 8 x 13 = 104px
+#s x=208
+pixel 6 6 000000
+pixel 40 6 ffffff
+pixel 110 6 000000
+pixel 150 6 ffffff
+pixel 214 6 000000
+
+=== dashed and wavy text decorations
+<body style="margin:0">
+<div style="color:transparent;text-decoration:line-through dashed #ff0000 2px">xxxx</div>
+<div style="color:transparent;text-decoration:line-through wavy #0000ff 2px">xxxx</div>
+---
+pixel 2 5 ff0000
+pixel 9 5 ffffff
+pixel 14 5 ff0000
+pixel 30 18 ffffff
