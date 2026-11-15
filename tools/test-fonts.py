@@ -4,9 +4,11 @@
 Usage:
   tools/test-fonts.py fetch [DIR]   download the upstream fonts into DIR
                                     (default build/test-fonts)
-  tools/test-fonts.py make [DIR] [all|var|color|web]
+  tools/test-fonts.py make [DIR] [all|var|color|web|samples]
                                     rebuild tests/paint/fonts from DIR
-                                    (web: WOFF and WOFF2 of the var subsets)
+                                    (web: WOFF and WOFF2 of the var subsets;
+                                    samples: the web fonts of
+                                    tests/page/samples/webfonts.html)
   tools/test-fonts.py refs [DIR]    write full-size reference instances
                                     into DIR/refs (optional test)
 
@@ -350,6 +352,30 @@ def make_web(d):
                      os.path.join(OUT, 'collection.woff2'))
 
 
+SAMPLES = os.path.join(ROOT, 'tests', 'page', 'samples')
+
+
+def make_samples(d):
+    """The web fonts of tests/page/samples/webfonts.html: Inter Variable
+    (wght and opsz axes) reduced to ASCII as WOFF2, and Open Sans variable
+    (wdth and wght) reduced to digits as WOFF."""
+    import shutil
+    from fontTools.ttLib import TTFont
+    ascii_text = ''.join(chr(c) for c in range(0x20, 0x7F)) + '’“”—'
+    tmp = os.path.join(d, 'sample-inter.ttf')
+    subset_var(os.path.join(d, 'InterVariable.ttf'), tmp, ascii_text)
+    woff2_path = os.path.join(SAMPLES, 'sample-inter.woff2')
+    from fontTools.ttLib import woff2
+    woff2.compress(tmp, woff2_path)
+    tmp = os.path.join(d, 'sample-digits.ttf')
+    subset_var(os.path.join(d, 'OpenSans[wdth,wght].ttf'), tmp, '0123456789')
+    f = TTFont(tmp)
+    f.flavor = 'woff'
+    f.save(os.path.join(SAMPLES, 'sample-digits.woff'))
+    shutil.copy(os.path.join(d, 'Inter-LICENSE.txt'), os.path.join(SAMPLES, 'sample-inter-OFL.txt'))
+    shutil.copy(os.path.join(d, 'OpenSans-OFL.txt'), os.path.join(SAMPLES, 'sample-digits-OFL.txt'))
+
+
 def refs(d):
     out = os.path.join(d, 'refs')
     os.makedirs(out, exist_ok=True)
@@ -378,6 +404,8 @@ def main():
             make_color(d)
         if what in ('all', 'web'):
             make_web(d)
+        if what in ('all', 'samples'):
+            make_samples(d)
     else:
         refs(d)
     return 0

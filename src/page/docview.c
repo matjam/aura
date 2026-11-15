@@ -1,6 +1,7 @@
 /* The document view: parser, style sheets, images, resolver, layout,
  * painting, input. */
 #include "page.h"
+#include "webfont.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -39,11 +40,13 @@ typedef struct Request {
     AuResourceKind kind;
     SheetSrc *sheet; /* for style sheets */
     ImageEntry *image;
+    bool font; /* an @font-face source */
     AuBuf data;
 } Request;
 
 struct AuDocView {
     AuFontSet *fonts;
+    AuWebFonts *webfonts; /* the document's @font-face faces, over fonts */
     AuLoader loader;
     AuDocViewCallbacks cb;
     AuHtmlParser *parser;
@@ -94,6 +97,32 @@ static void invalidate_all(AuDocView *dv)
 
 static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels);
 static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap);
+static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind);
+
+/* A new layout drawing with fonts (the layout caches faces, so a change
+ * of font set or a new web font needs a new one). */
+static void new_layout(AuDocView *dv, AuFontSet *fonts)
+{
+    if (dv->layout)
+        au_layout_free(dv->layout);
+    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve};
+    dv->layout = au_layout_new(&env);
+    if (dv->doc)
+        au_layout_set_document(dv->layout, dv->doc);
+    if (dv->resolver)
+        au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+}
+
+static uint32_t fetch_font(void *ctx, const char *url)
+{
+    AuDocView *dv = ctx;
+    Request *r = add_request(dv, url, AU_RES_OTHER);
+    if (!r)
+        return 0;
+    r->font = true;
+    dv->finished_reported = false;
+    return r->id;
+}
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb)
 {
@@ -103,8 +132,7 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
         dv->loader = *loader;
     if (cb)
         dv->cb = *cb;
-    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve};
-    dv->layout = au_layout_new(&env);
+    new_layout(dv, fonts);
     dv->url = dup("about:blank");
     dv->base = dup("about:blank");
     dv->title = dup("");
@@ -168,6 +196,11 @@ static void clear_document(AuDocView *dv)
     if (dv->resolver) {
         au_css_resolver_free(dv->resolver);
         dv->resolver = NULL;
+    }
+    if (dv->webfonts) {
+        new_layout(dv, dv->fonts); /* drops the faces of the old set */
+        au_webfonts_free(dv->webfonts);
+        dv->webfonts = NULL;
     }
     dv->scanned_nodes = 0;
 }
@@ -320,6 +353,8 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
             e->failed = true;
         }
         dv->images_dirty = true;
+    } else if (req.font && dv->webfonts) {
+        au_webfonts_done(dv->webfonts, req.id, req.data.data, req.data.len, ok, fetch_font, dv);
     }
     au_buf_free(&req.data);
     invalidate_all(dv);
@@ -529,6 +564,8 @@ static void scan_document(AuDocView *dv, bool final)
 void au_docview_begin(AuDocView *dv, const char *url)
 {
     clear_document(dv);
+    dv->webfonts = au_webfonts_new(dv->fonts);
+    new_layout(dv, au_webfonts_set(dv->webfonts));
     au_free(dv->url);
     au_free(dv->base);
     dv->url = dup(url);
@@ -591,15 +628,17 @@ AuLayout *au_docview_layout(const AuDocView *dv) { return dv->layout; }
 
 /* ---- Styles ---- */
 
-static AuCssSheet *build_sheet(SheetSrc *s, int depth)
+static AuCssSheet *build_sheet(AuDocView *dv, SheetSrc *s, int depth)
 {
     AuCssSheet *sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    if (dv->webfonts)
+        au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
     if (depth < 8) {
         size_t n = au_css_sheet_import_count(sh);
         for (size_t i = 0; i < n && i < s->nimports; i++) {
             SheetSrc *c = s->imports[i];
             if (c && c->text)
-                au_css_sheet_set_import(sh, i, build_sheet(c, depth + 1));
+                au_css_sheet_set_import(sh, i, build_sheet(dv, c, depth + 1));
         }
     }
     return sh;
@@ -623,7 +662,7 @@ static void rebuild_resolver(AuDocView *dv)
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSrc *s = dv->slots[i].src;
         if (s->text)
-            au_css_resolver_add_sheet(dv->resolver, build_sheet(s, 0));
+            au_css_resolver_add_sheet(dv->resolver, build_sheet(dv, s, 0));
     }
     au_css_resolver_sheets_changed(dv->resolver);
     dv->style_all = true;
@@ -638,12 +677,19 @@ bool au_docview_update(AuDocView *dv)
         rebuild_resolver(dv);
         dv->sheets_dirty = false;
     }
+    if (dv->webfonts && au_webfonts_take_changed(dv->webfonts)) {
+        /* A web font arrived: lay out again with it (font-display: swap). */
+        new_layout(dv, au_webfonts_set(dv->webfonts));
+        dv->style_all = true; /* ex and ch units */
+    }
     if (dv->style_all || dv->tree_dirty) {
         au_css_style_document(dv->resolver, dv->doc);
         au_layout_tree_changed(dv->layout);
         dv->style_all = dv->tree_dirty = false;
         dv->restyle_needed = false;
         changed = true;
+        if (dv->webfonts)
+            au_webfonts_scan(dv->webfonts, dv->doc, fetch_font, dv);
     } else if (dv->restyle_needed) {
         au_css_restyle(dv->resolver, dv->doc);
         au_layout_styles_changed(dv->layout);

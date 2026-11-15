@@ -444,6 +444,98 @@ static void test_user_css(void)
     au_docview_free(dv);
 }
 
+/* ---- @font-face ---- */
+
+static char *read_sample(const char *name, size_t *len)
+{
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", AURA_PAGE_SAMPLES_DIR, name);
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+        return NULL;
+    fseek(fp, 0, SEEK_END);
+    long n = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *d = malloc(n > 0 ? (size_t)n : 1);
+    *len = fread(d, 1, (size_t)n, fp);
+    fclose(fp);
+    return d;
+}
+
+static void deliver_bytes(Fake *f, AuDocView *dv, const char *url, const char *data, size_t len, bool ok)
+{
+    FakeReq *r = fake_find(f, url);
+    CHECK(r != NULL, "no request for %s", url);
+    if (!r)
+        return;
+    CHECK(r->kind == AU_RES_OTHER, "font fetched as kind %d", (int)r->kind);
+    if (data)
+        au_docview_resource_data(dv, r->id, data, len);
+    au_docview_resource_done(dv, r->id, ok);
+}
+
+static void test_webfonts(void)
+{
+    size_t wlen;
+    char *woff2 = read_sample("sample-inter.woff2", &wlen);
+    CHECK(woff2 != NULL, "cannot read sample-inter.woff2");
+    if (!woff2)
+        return;
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html =
+        "<!DOCTYPE html><style>"
+        "@font-face{font-family:W;src:url(missing.woff2) format('woff2'),url(w.woff2) format('woff2');"
+        "font-weight:100 900}"
+        "@font-face{font-family:W;src:url(cyr.woff2);unicode-range:U+0400-045F}"
+        "@font-face{font-family:Unused;src:url(unused.woff2)}"
+        "@font-face{font-family:Bad;src:url(svg.woff2) tech(color-svg),url(bad.woff2),url(cff.otf)}"
+        "</style><body style='margin:0;font:20px W'>"
+        "<span id=a>iiii</span><br><span id=l style='font-weight:300'>mmmm</span><br>"
+        "<span id=h style='font-weight:800'>mmmm</span><br><span id=b style='font-family:Bad'>x</span>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    AuRect before = rect_of(dv, "a");
+    CHECK(before.w == 80, "Ahem before the web font arrives: %g", before.w);
+    CHECK(fake_find(&f, "http://example.com/missing.woff2") != NULL, "first source not requested");
+    CHECK(fake_find(&f, "http://example.com/w.woff2") == NULL, "second source requested before the first failed");
+    CHECK(fake_find(&f, "http://example.com/cyr.woff2") == NULL, "face outside the text's unicode-range requested");
+    CHECK(fake_find(&f, "http://example.com/unused.woff2") == NULL, "unused family requested");
+    CHECK(fake_find(&f, "http://example.com/svg.woff2") == NULL, "unsupported technology requested");
+    CHECK(fake_find(&f, "http://example.com/bad.woff2") != NULL, "Bad face not requested");
+    /* Fonts are requested when the document is first styled, after parsing
+     * may already have reported the load finished (as images are). */
+    CHECK(au_docview_loading(dv), "not loading while fonts are pending");
+    int finished_before = f.finished;
+    deliver_bytes(&f, dv, "http://example.com/missing.woff2", NULL, 0, false);
+    CHECK(fake_find(&f, "http://example.com/w.woff2") != NULL, "next source not requested after a failure");
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    AuRect after = rect_of(dv, "a");
+    CHECK(after.w > 5 && after.w < 40, "web font laid out: iiii is %g wide", after.w);
+    AuRect l = rect_of(dv, "l"), h = rect_of(dv, "h");
+    CHECK(h.w > l.w + 4, "variable weights: 800 is %g wide, 300 is %g", h.w, l.w);
+    /* Corrupt data and a CFF font fall through to the fallback font. */
+    deliver_bytes(&f, dv, "http://example.com/bad.woff2", "wOF2 not really a font", 22, true);
+    CHECK(fake_find(&f, "http://example.com/cff.otf") != NULL, "source after corrupt data not requested");
+    static const char otto[] = "OTTO\0\0\0\0\0\0\0\0";
+    deliver_bytes(&f, dv, "http://example.com/cff.otf", otto, sizeof otto, true);
+    CHECK(rect_of(dv, "b").w == 20, "CFF face must fall back: %g", rect_of(dv, "b").w);
+    CHECK(!au_docview_loading(dv) && f.finished == finished_before + 1, "load finished %d times after fonts",
+          f.finished - finished_before);
+    CHECK(rect_of(dv, "a").w == after.w, "web font kept");
+    /* A new document drops the faces. */
+    const char *plain = "<!DOCTYPE html><body style='margin:0;font:20px W'><span id=a>iiii</span>";
+    au_docview_load(dv, plain, strlen(plain), "http://example.com/2");
+    CHECK(rect_of(dv, "a").w == 80, "web font outlived its document: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+    /* Freed while a font is still loading. */
+    dv = new_view(&f);
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_update(dv);
+    au_docview_free(dv);
+    free(woff2);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -455,6 +547,7 @@ int main(void)
     test_incremental();
     test_images();
     test_user_css();
+    test_webfonts();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

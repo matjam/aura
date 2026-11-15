@@ -182,6 +182,7 @@ bool au_fontset_add_web(AuFontSet *s, void *data, size_t len, const char *family
         e->nranges = nranges;
     }
     note_axes(e);
+    memset(s->fb, 0, sizeof s->fb); /* the new face may cover cached code points */
     return true;
 }
 

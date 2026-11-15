@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Web fonts</title>
+<style>
+/* Inter Variable (wght 100-900), ASCII only. The first source does not
+   exist; the second needs a technology Aura lacks; the third loads. */
+@font-face {
+  font-family: "Sample Inter";
+  src: url(missing-font.woff2) format("woff2"),
+       url(sample-inter.woff2) format("woff2") tech(color-svg),
+       url(sample-inter.woff2) format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+/* Open Sans digits, used for digits only. */
+@font-face {
+  font-family: "Sample Digits";
+  src: local("No Such Face"), url(sample-digits.woff) format("woff");
+  font-weight: 100 900;
+  unicode-range: U+0030-0039;
+}
+/* Never loaded: the page has no Cyrillic text. */
+@font-face {
+  font-family: "Sample Inter";
+  src: url(cyrillic-not-used.woff2) format("woff2");
+  font-weight: 100 900;
+  unicode-range: U+0400-045F;
+}
+body { font-family: "Sample Digits", "Sample Inter", serif; margin: 24px; color: #222; background: #fdfcf8; }
+h1 { font-weight: 800; font-size: 40px; margin: 0 0 8px; }
+.light { font-weight: 300; font-size: 22px; }
+.medium { font-weight: 500; font-size: 22px; }
+.heavy { font-weight: 800; font-size: 22px; }
+.scale span { display: inline-block; width: 120px; font-size: 26px; }
+.fallback { font-family: serif; font-size: 18px; color: #666; }
+</style>
+</head>
+<body>
+<h1>Variable web fonts</h1>
+<p class="light">Light 300: The quick brown fox jumps over the lazy dog 0123456789.</p>
+<p class="medium">Medium 500: The quick brown fox jumps over the lazy dog 0123456789.</p>
+<p class="heavy">Heavy 800: The quick brown fox jumps over the lazy dog 0123456789.</p>
+<p class="scale">
+<span style="font-weight:100">Aa 100</span><span style="font-weight:200">Aa 200</span><span style="font-weight:300">Aa 300</span><span style="font-weight:400">Aa 400</span><span style="font-weight:500">Aa 500</span><br>
+<span style="font-weight:600">Aa 600</span><span style="font-weight:700">Aa 700</span><span style="font-weight:800">Aa 800</span><span style="font-weight:900">Aa 900</span>
+</p>
+<p class="medium">Digits come from Open Sans through unicode-range: 2026-11-14, 3.14159, 42.</p>
+<p class="fallback">This line uses the serif family of the system, for comparison.</p>
+</body>
+</html>
