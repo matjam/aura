@@ -9,6 +9,12 @@ foreach(name dom_tree events collections html_elements loop window net observers
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
 
+# Workers on their own stacks (the host's coroutines), and without them.
+add_test(NAME js_workers
+         COMMAND ${JS_TOOL} js --quiet --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers.js)
+add_test(NAME js_workers_inline
+         COMMAND ${JS_TOOL} js --quiet --no-coro --kill 300 --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers_inline.js)
+
 add_test(NAME js_limits
          COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
 add_test(NAME js_lifetime

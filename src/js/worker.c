@@ -85,6 +85,7 @@ typedef struct JsWorker {
     bool terminate; /* the page ended it */
     bool closing;   /* it called close() */
     bool busy;      /* it yielded with work left */
+    bool loading;   /* a module worker whose script has not finished loading: messages wait */
     double slice_end;
     size_t stack;
 } JsWorker;
@@ -438,6 +439,8 @@ static JSValue n_worker_terminate(JSContext *ctx, JSValueConst this_val, int arg
     if (w) {
         w->terminate = true;
         w->busy = true;
+        if (!w->started) /* its script never arrived: it never ran */
+            w->started = w->finished = true;
         /* nothing more reaches the page from it */
         queue_free(w->out);
         w->out = w->out_tail = NULL;
@@ -495,6 +498,18 @@ static JSValue n_worker_error(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+/* workerReady(): a module worker's script has run (or failed): its
+ * messages are delivered from now on. */
+static JSValue n_worker_ready(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    if (js->worker) {
+        js->wk->loading = false;
+        js->wk->busy = true;
+    }
+    return JS_UNDEFINED;
+}
+
 /* workerInfo(): [name, can wait for the network]. */
 static JSValue n_worker_info(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -525,6 +540,7 @@ static const JSCFunctionListEntry inside_natives[] = {
     JS_CFUNC_DEF("workerClose", 0, n_worker_close),
     JS_CFUNC_DEF("workerError", 3, n_worker_error),
     JS_CFUNC_DEF("workerInfo", 0, n_worker_info),
+    JS_CFUNC_DEF("workerReady", 0, n_worker_ready),
 };
 
 void js_worker_natives(AuJs *js, JSValue N)
@@ -666,6 +682,7 @@ static bool worker_boot(JsWorker *w)
     if (!js)
         return false;
     w->js = js;
+    w->loading = w->module;
     JSContext *ctx = js->ctx;
     JSValue args[3] = {JS_NewStringLen(ctx, w->source, w->source_len), JS_NewString(ctx, w->url),
                        JS_NewBool(ctx, w->module)};
@@ -695,7 +712,7 @@ static bool worker_step(JsWorker *w)
         w->busy = false;
         drain_fetch(w);
         JsWkMsg *m;
-        while (!w->terminate && !w->closing && (m = pop(&w->in, &w->in_tail))) {
+        while (!w->terminate && !w->closing && !w->loading && (m = pop(&w->in, &w->in_tail))) {
             deliver_js(js, m->kind == WM_PORT ? 1 : 0, m->id, m);
             msg_free(m);
             drain_fetch(w);
@@ -703,7 +720,7 @@ static bool worker_step(JsWorker *w)
         uint32_t slice = w->owner->root->settings.worker_slice_ms ? w->owner->root->settings.worker_slice_ms : 8;
         if (!w->terminate && !w->closing && au_js_run_tasks(js, slice))
             w->busy = true;
-        if (au_js_has_tasks(js) || w->in)
+        if (au_js_has_tasks(js) || (w->in && !w->loading))
             w->busy = true;
     }
     if (!w->terminate && !w->closing)
@@ -837,7 +854,7 @@ static bool worker_due(const JsWorker *w, double now)
 {
     if (!w->started || w->finished)
         return false;
-    if (w->busy || w->terminate || w->in || !w->js)
+    if (w->busy || w->terminate || (w->in && !w->loading) || !w->js)
         return true;
     double t = au_js_next_timer(w->js);
     return t >= 0 && t <= now;

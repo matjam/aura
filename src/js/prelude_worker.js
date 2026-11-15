@@ -128,7 +128,7 @@ P.workerDeliver = function (kind, id, tree, cids) {
 };
 /* Runs the worker's script. */
 P.startWorker = function (source, url, module) {
-    if (module) runModuleScript(url, source, null);
+    if (module) runModuleScript(url, source, null).then(() => N.workerReady());
     else N.runScript(source, url);
 };
 

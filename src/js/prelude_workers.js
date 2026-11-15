@@ -22,7 +22,7 @@ class Worker extends EventTarget {
         this._id = N.workerCreate(href, name, type === 'module', /^data:/i.test(href));
         const fail = (msg) => {
             if (this._id) { N.workerSource(this._id, null); workersById.delete(this._id); this._id = 0; }
-            N.print(3, 'Worker: ' + msg);
+            N.print(2, 'Worker: ' + msg);
             fire(this, new Event('error', { cancelable: true }));
         };
         if (!this._id) { N.queueTask(() => fail('too many workers in this page')); return; }
