@@ -67,8 +67,17 @@ defProps(WP, {
     getComputedStyle: G.getComputedStyle,
     matchMedia(q) { return new MediaQueryList(str(q)); },
     postMessage(data, origin) {
-        const o = typeof origin === 'object' && origin ? origin.targetOrigin || '/' : str(origin === undefined ? '/' : origin);
-        if (o !== '*' && o !== '/' && o !== N.docUrl(2)) return;
+        if (!arguments.length) throw new TypeError('postMessage: 1 argument required');
+        let o = typeof origin === 'object' && origin ? (origin.targetOrigin === undefined ? '/' : str(origin.targetOrigin))
+            : str(origin === undefined ? '/' : origin);
+        /* targetOrigin is "*", "/" or any absolute URL, of which only the
+         * origin counts (Google's search box passes location.href). */
+        if (o !== '*' && o !== '/') {
+            let u;
+            try { u = new URL(o); } catch (e) { throw new DOMException("postMessage: invalid target origin '" + o + "'", 'SyntaxError'); }
+            const mine = N.docUrl(2);
+            if (u.origin !== mine && !(u.protocol === 'file:' && mine === 'file://')) return;
+        }
         const cloned = structuredClone(data);
         N.queueTask(() => fire(G, new MessageEvent('message', { data: cloned, origin: N.docUrl(2), source: G })));
     },

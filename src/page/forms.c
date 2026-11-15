@@ -1447,7 +1447,9 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
         if (target)
             au_node_ref(&target->node);
         bool ok = au_docscript_key(dv->script, target, "keydown", key, code, ev->mods);
-        if (ok && ev->ch >= 0x20 && !cmd && dv->doc)
+        /* keypress goes to character keys and to Enter (code 13), as in
+         * browsers; scripts submit on it. */
+        if (ok && (ev->ch >= 0x20 || ev->key == AU_KEY_RETURN) && !cmd && dv->doc)
             ok = au_docscript_key(dv->script, target && alive(dv, target) ? target : NULL, "keypress", key, code,
                                   ev->mods);
         if (target)

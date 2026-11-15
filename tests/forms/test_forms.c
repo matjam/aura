@@ -358,6 +358,61 @@ static void test_validation(void)
     au_docview_free(dv);
 }
 
+/* Google's search box, reduced: the keydown listener cancels Enter, then
+ * defers the submission through window.postMessage with location.href as
+ * the target origin (only its origin counts) and calls form.submit() from
+ * the message listener. Enter also gets a keypress with code 13. */
+static void test_search_box_defer(void)
+{
+    Ctx c;
+    AuDocView *dv = view(&c,
+                         "<form id=f action=/search><input id=q name=q><input type=submit name=btnG value=Go></form>"
+                         "<script>var f=document.getElementById('f'),q=document.getElementById('q'),queue=[],log=[];"
+                         "window.addEventListener('message',function(e){"
+                         "if(e.source===window&&e.data==='sbox.df'&&queue.length)queue.shift()();},false);"
+                         "function defer(fn){queue.push(fn);window.postMessage('sbox.df',window.location.href);}"
+                         "q.addEventListener('keypress',function(e){log.push('keypress:'+e.keyCode+':'+e.charCode+':'+e.which);});"
+                         "q.addEventListener('keydown',function(e){if(e.keyCode==13){e.stopPropagation();"
+                         "e.preventDefault();e.returnValue=false;defer(function(){f.submit();});}});"
+                         "</script>",
+                         true);
+    click(dv, "q");
+    type(dv, "mac");
+    key(dv, AU_KEY_RETURN, 0, 0);
+    for (int i = 0; i < 20; i++)
+        au_docview_run_scripts(dv, 10);
+    CHECK(c.submits == 1, "deferred submit through postMessage(data, location.href): %d submits", c.submits);
+    au_docview_free(dv);
+
+    dv = view(&c,
+              "<form id=f action=/s><input id=q name=q></form><script>var log=[];"
+              "document.getElementById('q').addEventListener('keypress',function(e){"
+              "log.push(e.key+':'+e.keyCode+':'+e.charCode+':'+e.which);});"
+              "document.getElementById('f').addEventListener('submit',function(e){log.push('submit');e.preventDefault();});"
+              "</script>",
+              true);
+    click(dv, "q");
+    type(dv, "a");
+    key(dv, AU_KEY_RETURN, 0, 0);
+    AuBuf out;
+    au_buf_init(&out);
+    au_docview_eval(dv, "log.join(' ')", &out);
+    CHECK(!strcmp(au_buf_cstr(&out), "a:97:97:97 Enter:13:13:13 submit"), "keypress for Enter: %s", au_buf_cstr(&out));
+    au_buf_clear(&out);
+    au_docview_free(dv);
+
+    /* a cancelled Enter keypress stops implicit submission */
+    dv = view(&c,
+              "<form id=f action=/s><input id=q name=q></form><script>"
+              "document.getElementById('q').addEventListener('keypress',function(e){e.preventDefault();});</script>",
+              true);
+    click(dv, "q");
+    key(dv, AU_KEY_RETURN, 0, 0);
+    CHECK(c.submits == 0, "cancelled keypress submits");
+    au_buf_free(&out);
+    au_docview_free(dv);
+}
+
 static void test_script_events(void)
 {
     Ctx c;
@@ -437,6 +492,7 @@ int main(void)
     test_radio_and_select();
     test_validation();
     test_script_events();
+    test_search_box_defer();
     test_edit_commands();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);

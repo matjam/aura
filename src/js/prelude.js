@@ -708,7 +708,9 @@ function reportError(err) {
         N.print(3, 'Uncaught ' + describeError(err));
         return;
     }
+    /* A report the page cancels still goes to the console, at debug level. */
     if (P.reportException(err)) N.print(3, 'Uncaught ' + describeError(err));
+    else N.print(4, 'Uncaught (handled by the page) ' + describeError(err));
 }
 function describeError(err) {
     try {
@@ -739,7 +741,7 @@ P.unhandledRejection = function (promise, reason) {
         return true;
     }
 };
-defGlobal('reportError', (e) => { if (P.reportException(e)) N.print(3, 'Uncaught ' + describeError(e)); });
+defGlobal('reportError', (e) => { reportError(e); });
 
 /* ---------------- AbortController ---------------- */
 
