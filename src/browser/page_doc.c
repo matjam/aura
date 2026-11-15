@@ -922,20 +922,20 @@ static void build_home(AuBuf *b)
 {
     page_head(b, "Aura");
     au_buf_puts(b, "<h1>Aura</h1>"
-                   "<p class=note>A web browser for Mac OS 9. This version renders local HTML files with its own "
-                   "engine (HTML, CSS, layout and painting). Networking, images and scripts are still to come.</p>"
+                   "<p class=note>A web browser for Mac OS 9, with its own engine (HTML, CSS, layout, painting "
+                   "and networking over HTTP and HTTPS).</p>"
                    "<h2>Open a page</h2>"
-                   "<p>Choose File &gt; Open File to open an HTML or text file, drop one on the Aura icon, or "
-                   "type a path or a <span class=url>file:</span> URL in the address field.</p>"
+                   "<p>Type an address or words to search for in the address field. Choose File &gt; Open File "
+                   "to open an HTML or text file, or drop one on the Aura icon.</p>"
                    "<h2>Built-in pages</h2><ul>"
                    "<li><a href='about:scene'>Paint and font test scene</a></li>"
                    "<li><a href='about:fonts'>Installed fonts</a></li>"
                    "<li><a href='about:blank'>Blank page</a></li>"
                    "<li><a href='about:licences'>Licences</a></li></ul>"
-                   "<h2>Placeholders for network pages</h2><ul>"
+                   "<h2>Sites to try</h2><ul>"
                    "<li><a href='http://example.com/'>http://example.com/</a></li>"
-                   "<li><a href='http://www.macintoshrepository.org/'>http://www.macintoshrepository.org/</a></li>"
-                   "<li><a href='https://www.w3.org/TR/css-2023/'>https://www.w3.org/TR/css-2023/</a></li></ul>"
+                   "<li><a href='https://en.wikipedia.org/'>https://en.wikipedia.org/</a></li>"
+                   "<li><a href='http://www.macintoshrepository.org/'>http://www.macintoshrepository.org/</a></li></ul>"
                    "<p class=note style='margin-top:18px'>Command-click a link to open it in a new tab.</p>"
                    "</body></html>");
 }
@@ -964,9 +964,30 @@ static void credit_rows(AuBuf *b, AuCreditKind kind)
         }
         au_buf_puts(b, "</p><p>Licence: ");
         html_escape_str(b, c->licence);
-        au_buf_puts(b, ". The full text is in <span class=url>");
-        html_escape_str(b, c->file);
-        au_buf_puts(b, "</span> beside the Aura application.</p>");
+        if (c->file) {
+            au_buf_puts(b, ". The full text is in <span class=url>");
+            html_escape_str(b, c->file);
+            au_buf_puts(b, "</span> beside the Aura application.</p>");
+        } else {
+            au_buf_puts(b, ".</p>");
+        }
+        if (c->text) {
+            au_buf_puts(b, "<p class=note>");
+            for (const char *s = c->text; *s;) {
+                size_t n = strcspn(s, "\n");
+                AuBuf line;
+                au_buf_init(&line);
+                au_buf_append(&line, s, n);
+                html_escape_str(b, au_buf_cstr(&line));
+                au_buf_free(&line);
+                s += n;
+                if (*s == '\n') {
+                    au_buf_puts(b, "<br>");
+                    s++;
+                }
+            }
+            au_buf_puts(b, "</p>");
+        }
     }
 }
 
@@ -985,6 +1006,8 @@ static void build_licences(AuBuf *b)
         credit_rows(b, AU_CREDIT_LIBRARY);
     else
         au_buf_puts(b, "<p>This build contains no third-party libraries.</p>");
+    au_buf_puts(b, "<h2>Data</h2>");
+    credit_rows(b, AU_CREDIT_DATA);
     au_buf_puts(b, "</body></html>");
 }
 

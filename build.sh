@@ -50,6 +50,8 @@ dist() {
     mkdir -p "$d/Fonts"
     cp build/ppc/src/platform/macos9/Aura.bin "$d/"
     cp assets/net/aura-roots.bin "$d/aura-roots"
+    mkdir -p "$d/Licences"
+    cp third_party/bearssl/LICENSE.txt "$d/Licences/BearSSL.txt"
     for fam in assets/fonts/*/; do
         cp -R "$fam" "$d/Fonts/$(basename "$fam")"
     done

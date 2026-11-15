@@ -961,9 +961,14 @@ static void test_save_source(void)
     CHECK_STR(au_page_title(au_bw_active_tab(w)->page), "Licences");
     CHECK(au_bw_page_source(w, &data, &len));
     char *src = au_strndup(data, len);
-    for (size_t i = 0; i < au_ncredits; i++)
-        CHECK(strstr(src, au_credits[i].file) != NULL);
+    for (size_t i = 0; i < au_ncredits; i++) {
+        CHECK(au_credits[i].file || au_credits[i].text); /* every credit says where its licence is */
+        if (au_credits[i].file)
+            CHECK(strstr(src, au_credits[i].file) != NULL);
+    }
     CHECK(strstr(src, "SIL Open Font License 1.1") && strstr(src, "Bitstream Vera"));
+    CHECK(strstr(src, "BearSSL 0.6") && strstr(src, "Public Suffix List") && strstr(src, "Brotli Authors") &&
+          strstr(src, "Twemoji") && strstr(src, "https://mozilla.org/MPL/2.0/"));
     au_free(src);
     au_bw_navigate(w, "about:licenses");
     settle(w);
