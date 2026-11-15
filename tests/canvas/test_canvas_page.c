@@ -32,6 +32,7 @@ typedef struct Page {
     const char *body;
     size_t len; /* 0: strlen(body) */
     const char *type;
+    const char *allow_origin; /* Access-Control-Allow-Origin, or NULL */
 } Page;
 
 typedef struct Req {
@@ -122,8 +123,9 @@ static void pump(World *w)
                 au_docview_resource_done(w->dv, r->id, false);
                 continue;
             }
-            const char *hdrs[2] = {"content-type", p->type ? p->type : "text/html"};
-            au_docview_resource_head(w->dv, r->id, 200, "", NULL, hdrs, 1);
+            const char *hdrs[4] = {"content-type", p->type ? p->type : "text/html", "access-control-allow-origin",
+                                   p->allow_origin};
+            au_docview_resource_head(w->dv, r->id, 200, "", NULL, hdrs, p->allow_origin ? 2 : 1);
             au_docview_resource_data(w->dv, r->id, p->body, p->len ? p->len : strlen(p->body));
             au_docview_resource_done(w->dv, r->id, true);
         }
@@ -320,6 +322,7 @@ static void png_row(void *ctx, int y, uint8_t *rgba)
 static const char taint_html[] =
     "<!DOCTYPE html><body>"
     "<img id=same src='/img.png'><img id=cross src='http://other.test/img.png'>"
+    "<img id=corsok crossorigin src='http://cdn.test/ok.png'><img id=corsno crossorigin src='http://cdn.test/no.png'>"
     "<script>"
     "function mk() { var c = document.createElement('canvas'); c.width = c.height = 8; return c.getContext('2d'); }"
     "function load(url) { return new Promise(function (ok, bad) { var i = new Image(); i.onload = function () { ok(i); };"
@@ -343,6 +346,8 @@ static void test_taint(void)
                    {"http://site.test/img.png", png.data, png.len, "image/png"},
                    {"http://other.test/img.png", png.data, png.len, "image/png"},
                    {"http://site.test:8080/img.png", png.data, png.len, "image/png"},
+                   {"http://cdn.test/ok.png", png.data, png.len, "image/png", "http://site.test"},
+                   {"http://cdn.test/no.png", png.data, png.len, "image/png"},
                    {NULL}};
     World w;
     world_open(&w, site, "http://site.test/taint.html", true);
@@ -375,6 +380,12 @@ static void test_taint(void)
     JS_IS(&w, "var e = mk(); e.drawImage(document.getElementById('same'), 0, 0); read(e)", "ok");
     JS_IS(&w, "e.getImageData(0, 0, 1, 1).data[0] + ',' + e.getImageData(3, 0, 1, 1).data[2]", "255,255");
     JS_IS(&w, "var f = mk(); f.drawImage(document.getElementById('cross'), 0, 0); read(f)", "SecurityError");
+    /* an <img crossorigin> of another origin whose response passed the
+     * CORS check does not taint; without the attribute (above) it does */
+    JS_IS(&w, "var g = mk(); g.drawImage(document.getElementById('corsok'), 0, 0); read(g) + ' ' + url(g)", "ok data:image/png");
+    JS_IS(&w, "g.getImageData(0, 0, 1, 1).data[0]", "255");
+    /* the one whose response failed the check has no pixels to draw */
+    JS_IS(&w, "var n = mk(); try { n.drawImage(document.getElementById('corsno'), 0, 0); } catch (e) {} n.getImageData(0, 0, 1, 1).data[3]", "0");
     /* a tainted canvas still draws and measures; resetting its bitmap makes it clean */
     JS_IS(&w, "x.fillRect(0, 0, 2, 2); x.measureText('a').width >= 0", "true");
     JS_IS(&w, "x.canvas.width = 8; read(x)", "ok");

@@ -77,7 +77,8 @@ what you need to build, test and change Aura.
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `tests/frames` | nested documents: the document view with a table of pages, and a browser window over the fake transport |
 | `tests/canvas` | the canvas element and its 2D context: the context in C, a fuzzer, the document view over made-up origins, script pages, reference pictures |
-| `tests/js` | binding, loop, limit, lifetime and security scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
+| `tests/js` | binding, loop, limit, lifetime, security and worker scripts for `aura-host js`, scripted pages for `aura-host page`, the benchmark |
+| `tests/webapi` | script requests over the fake transport (methods, headers, CORS, redirects), the CORS rules and the digests |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
 | `assets/net` | `aura-roots.bin`, the root certificate store |
 
@@ -1994,11 +1995,17 @@ of one top-level page share one runtime (see Frames).
   Do not use `alloca` or variable-length arrays in Aura's own code.
 - **The prelude** is one function expression split over
   `src/js/prelude*.js`, joined in order (base, dom, html, range, cssom,
-  window, net, canvas, obs). The build compiles it to QuickJS bytecode and the
-  runtime loads that (see "Prelude bytecode" below). To add a file, add
-  it to the list in `third_party/quickjs.cmake` and its `#embed` line in
-  `prelude.c` (the source build). A name declared twice across the files
-  stops the runtime from starting ("invalid redefinition").
+  window, web, net, canvas, workers, obs). The build compiles it to QuickJS
+  bytecode and the runtime loads that (see "Prelude bytecode" below). To
+  add a file, add it to the list in `third_party/quickjs.cmake` and its
+  `#embed` line in `prelude.c` (the source build). A name declared twice
+  across the files stops the runtime from starting ("invalid
+  redefinition"). A worker has a second, smaller prelude built from
+  `prelude.js`, `prelude_web.js`, `prelude_net.js` and
+  `prelude_worker.js` (`prelude_worker.bc`): code in the first three must
+  run without a document (`doc` is null there, and only the natives of
+  `js_natives_shared_init`, the loop, fetch, module and worker natives
+  exist), so put anything that touches the DOM in another file.
 - **To debug a script on a live page**, use `aura-host chrome` actions:
   `--do js:CODE` evaluates CODE in the active tab and prints the result,
   `--do save:FILE` writes the page source, `--do console` prints the
@@ -2065,7 +2072,7 @@ of one top-level page share one runtime (see Frames).
   `white-space` as one keyword. Margins, insets and percentages in other
   properties are still computed values, `transform` is not a matrix, and
   the `border` and `font` shorthands serialize every part.
-- **crypto** (`getRandomValues`, `randomUUID`; no `subtle`) exists only
+- **crypto** (`getRandomValues`, `randomUUID`, `subtle`) exists only
   when the embedder passes `AuJsHooks.random`
   (`AuDocViewCallbacks.random` for a document view). In the browser the
   shell passes `AuBrowserHost.random`, which reaches the page through
@@ -2076,7 +2083,13 @@ of one top-level page share one runtime (see Frames).
   `aura-host js` read `/dev/urandom`; `aura-host chrome --no-entropy`
   answers as an unready pool. `tests/browser/test_crypto.c` covers a
   ready source, an unready one and a host without one (no `crypto`
-  object).
+  object). `crypto.subtle` has `digest` (SHA-1, SHA-256, SHA-384,
+  SHA-512) and HMAC with raw keys (`importKey`, `generateKey`,
+  `exportKey`, `sign`, `verify`); every other algorithm and operation
+  rejects with NotSupportedError (AES, RSA, ECDSA, PBKDF2 and HKDF are
+  what pages ask for next). The digests are `src/net/digest.c`: SHA-256
+  is the engine's own, the others come from the TLS library's PSA hash
+  interface, which `src/js` reaches only through that file.
 - **Prelude bytecode.** `tools/jsprelude/jsprelude.c` compiles the
   prelude with `JS_EVAL_FLAG_COMPILE_ONLY` and writes it with
   `JS_WriteObject`, without source text or line tables;
@@ -2109,6 +2122,156 @@ of one top-level page share one runtime (see Frames).
   collector when script has been idle for a second and the heap has
   grown by an eighth (at least 512 KB) since the last collection; a
   hidden document is collected when it is hidden.
+
+## Script requests and CORS
+
+`fetch`, `XMLHttpRequest`, module loads, `navigator.sendBeacon` and
+workers' requests all go through `src/js/fetch.c`, which is where one
+origin is kept from reading another. To change what script may send or
+read, work there and in `src/net/cors.c` (the rules as functions);
+`src/js/prelude_net.js` holds the interfaces (`Headers`, `Request`,
+`Response`, `fetch`, `XMLHttpRequest`).
+
+- **One hop at a time.** `fetch.c` asks the embedder (`AuFetcher.start`,
+  `AuFetchRequest` in `js.h`) for one request with `manual_redirect`
+  set, and gets back the status and every response header
+  (`au_js_fetch_head`). It follows redirects itself, so each hop is
+  checked like the first. The request passes down as
+  `AuResourceRequest` (`src/page/page.h`, sent by `f_start` in
+  `script.c`), `AuFetchRequest` (`src/browser/page.h`), `AuLoadRequest`
+  and `AuHttpRequest`, each of which carries the method, the request
+  headers, the body, `omit_credentials`, `manual_redirect`, the cache
+  mode and the referrer. A loader without `au_docview_set_request_ex`
+  can send only a plain GET.
+- **The rules** (the comment at the top of `fetch.c` lists them): the
+  forbidden methods and request headers; same-origin requests as they
+  are; mode `same-origin` fails across origins; mode `no-cors` gives an
+  opaque response (status 0, no headers, no body) and obeys
+  `Cross-Origin-Resource-Policy`; mode `cors` sends `Origin`, sends a
+  preflight `OPTIONS` request when the method or a header is not
+  safelisted (or an `XMLHttpRequest` has upload listeners), and fails
+  unless the response passes the CORS check. A refused preflight means
+  the request itself is never sent. The preflight cache is per page
+  (`AuCorsCache`, 32 entries, `Access-Control-Max-Age` capped at two
+  hours, 5 seconds when absent). A `cors` response shows script the
+  safelisted headers and those in `Access-Control-Expose-Headers`; no
+  response shows `Set-Cookie`.
+- **Credentials.** A hop carries cookies and HTTP authentication when
+  the credentials mode is `include`, or `same-origin` and the hop is
+  same-origin; the network layer then still applies SameSite and
+  third-party cookie blocking. With `include` across origins the
+  response needs `Access-Control-Allow-Credentials: true` and an
+  `Access-Control-Allow-Origin` that names the origin.
+- **Redirects.** A redirect to another origin makes the request a CORS
+  request from then on; a cross-origin redirect from a cross-origin URL
+  sends `Origin: null`; 301, 302 and 303 change the method as HTTP says;
+  `Authorization` does not cross origins. `redirect: "error"` fails and
+  `"manual"` gives an `opaqueredirect` response.
+- **Cache modes** map onto the HTTP cache: `no-store` neither reads nor
+  fills it, `reload` fetches again, `no-cache` revalidates, `force-cache`
+  and `only-if-cached` use any stored copy (`only-if-cached` does not
+  fail when there is none). `referrer` and `referrerPolicy` are sent as
+  given; `keepalive` is accepted and changes nothing; `integrity` is
+  checked for sha256, sha384 and sha512 once the body is complete.
+- **Resources of the page.** A script, image or style sheet element with
+  a `crossorigin` attribute is fetched with `Origin`, and the document
+  view fails the load when the response does not pass the CORS check
+  (`gate_head` in `docview.c`). Without the attribute a response of
+  another origin obeys `Cross-Origin-Resource-Policy`. A classic script
+  from another origin loaded without CORS runs, and its errors reach
+  `window.onerror` as "Script error." with no location
+  (`au_js_mute_script`); the console still shows them. Redirects of
+  these resources are followed by the network layer and only the final
+  response is checked.
+- **Images and a canvas.** To decide whether drawing an image taints a
+  canvas, call `au_docview_image_origin_clean(dv, url)` (`page.h`): it
+  is true for an image of the document's origin, a `data:` image, and an
+  `<img crossorigin>` whose response passed the CORS check. An image made
+  by script and never put in the document is fetched without CORS.
+- **XMLHttpRequest.** Asynchronous requests follow the standard's states
+  and events (`loadstart`, upload events, `readystatechange`, `progress`,
+  `load` or `error`, `timeout`, `abort`, `loadend`). A synchronous
+  request works for `data:` and `blob:` URLs anywhere and for network
+  URLs in a worker with its own stack, which waits while the page runs.
+  In a document `send()` throws NetworkError: delivering network data
+  inside a script call would re-enter the parser and every loader.
+  `responseType` `document` parses HTML only.
+- **Not done:** `ReadableStream` bodies and `Response.body` (undefined:
+  there are no streams), so `EventSource` is not there either and a
+  response reaches script when it is complete (one `progress` event);
+  XML for `responseXML`; a `keepalive` request does not outlive its
+  document; `blob:` URLs work in `fetch`, `XMLHttpRequest`, `Worker` and
+  `importScripts` but not as an image source or a download link.
+- **To try it**, serve two origins from a local HTTP server
+  (`127.0.0.1` and `localhost` are different origins) and run
+  `aura-host chrome --net --tab URL --do wait:1500 --do js:CODE`.
+- **Tests.** `tests/webapi/test_cors_net.c` (a browser window over the
+  fake transport: what goes out, unreadable responses, the CORS check,
+  preflight and its cache, redirects, `crossorigin` scripts, muted
+  errors), `tests/webapi/test_cors.c` (the rules and the digests) and
+  `tests/js/net.js`.
+
+## Workers
+
+`new Worker(url)` starts a dedicated worker. To change workers, work in
+`src/js/worker.c` (the runtime, scheduling, messages),
+`src/js/prelude_worker.js` (the worker global) and
+`src/js/prelude_workers.js` (the `Worker` object in the page).
+`SharedWorker` and `ServiceWorker` are not defined, and a worker cannot
+start workers.
+
+- **A runtime of its own.** Each worker is a QuickJS runtime with the
+  worker prelude and no document, with its own memory limit
+  (`AuJsSettings.worker_memory_limit`, 8 MB). The page fetches the
+  script (same origin, or a `blob:` or `data:` URL) and hands the text
+  over. Messages cross as bytes: `scEncode` in `prelude_web.js` turns a
+  value into a plain tree, `JS_WriteObject` writes it, and the other
+  side reads it and builds the value. An `ArrayBuffer` in the transfer
+  list is copied and then emptied in the sender. A `MessagePort` crosses
+  as a channel number (`JsPortChan` in `worker.c`), in either direction.
+- **Scheduling.** Workers run only inside `au_js_run_workers`, which
+  `au_docscript_run` calls after the document's own tasks, 12 ms per
+  call for all of a document's workers in turn. With coroutines
+  (`AuCoroOps`, `src/core/coro.h`) each worker has its own stack: when
+  its 8 ms slice is used up, the script engine's interrupt check yields
+  to the event loop from wherever the script is, and the next slice
+  goes on from there. `importScripts` and a synchronous `XMLHttpRequest`
+  park the stack the same way until the network answers. `terminate()`
+  and the end of the document set a flag and resume the worker, whose
+  interrupt check then unwinds the script. Without coroutines a worker
+  runs one task per slice on the caller's stack: a long task blocks the
+  page until the long-script limit stops it, and nothing can wait for
+  the network.
+- **Coroutines come from the platform**, as sockets do:
+  `AuBrowserHost.coro`, then `AuPageEnv.coro`,
+  `AuDocViewCallbacks.coro` and `AuJsHooks.coro`. Mac OS 9 uses the
+  Thread Manager's cooperative threads (`coro_mac.c`: a worker's thread
+  is stopped except while it is resumed); the host tools use a thread
+  that runs only while its resumer waits (`coro_host.c`). Only one stack
+  runs at a time, so engine code needs no locks. Everything that touches
+  a worker's runtime runs on the worker's stack; the page's side only
+  appends C data to the worker's queue (what the embedder reports for a
+  worker's requests is kept and replayed there, `js_worker_defer_fetch`).
+- **Limits.** 8 workers per page (`max_workers`; a ninth fires `error`),
+  a 256 KB stack each (`worker_stack`). Workers end with their document,
+  wait while the document is hidden (a kept document is not called), and
+  count in `au_js_stats` and so in the page's memory estimate.
+- **Measured.** Host (RelWithDebInfo): a worker adds 587 KB of script
+  heap and its 256 KB stack; the worker prelude is 98 KB of bytecode
+  (the page's is 258 KB, a document's context 1.4 MB). A SHA-256 search
+  of 34,765 hashes in a worker took 778 ms while a 5 ms page timer fired
+  47 times. Guest (Enforcer base): 14,083 hashes took 13.3 s while a
+  250 ms page timer fired 49 times of a possible 53.
+- **To try it on the host**, run `aura-host js FILE.js` (`--no-coro`
+  runs workers without their own stacks) or `aura-host page --real-time
+  PAGE.html`: the page tool's default clock moves only between rounds,
+  and a worker's slices need one that moves while script runs.
+- **Tests.** `tests/js/workers.js` (messages, clones, transfers, ports,
+  the worker global, `importScripts`, `blob:`, `data:` and module
+  workers, errors, `close`, `terminate` of an endless loop, the limit),
+  `tests/js/workers_inline.js` (without coroutines) and
+  `tests/js/pages/worker_pow.html` (a proof of work while page timers
+  fire). Run them under the sanitizers after a change to lifetimes.
 
 ## Forms
 
@@ -2474,9 +2637,8 @@ information).
   written (the same Document and window; scripts in the written text do
   not run; a `write` without `open` after load is still ignored).
   `DOMImplementation.createDocument` and `createDocumentType` make plain
-  documents and doctypes. `fetch` and `XMLHttpRequest` send POST bodies
-  through `request_ex` (the Content-Type header goes with the body;
-  other request headers and other methods are still not sent).
+  documents and doctypes. `location.ancestorOrigins` lists the origins
+  of the documents a frame is nested in.
 - **Cost, measured on the host** (Release): a frame without script adds
   about 6 KB to the estimate and 0.15 ms; a frame with script adds a
   context with its own copy of the prelude, 1.4 MB and 16 ms (57 ms each

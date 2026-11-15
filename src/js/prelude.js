@@ -8,7 +8,8 @@
 'use strict';
 
 const P = Object.create(null);
-const doc = N.document();
+/* null in a worker, which has no document and none of the DOM natives */
+const doc = N.document ? N.document() : null;
 const S = {
     listeners: Symbol('listeners'), handlers: Symbol('handlers'), ev: Symbol('event'),
     list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'), range: Symbol('range'),
@@ -27,8 +28,8 @@ const defGlobal = (name, value) =>
     Object.defineProperty(G, name, { value, writable: true, configurable: true, enumerable: false });
 const tag = (C, name) =>
     Object.defineProperty(C.prototype, Symbol.toStringTag, { value: name || C.name, configurable: true });
-const isNode = (v) => v !== null && typeof v === 'object' && N.is(v, 0);
-const isElement = (v) => v !== null && typeof v === 'object' && N.is(v, 1);
+const isNode = doc ? (v) => v !== null && typeof v === 'object' && N.is(v, 0) : () => false;
+const isElement = doc ? (v) => v !== null && typeof v === 'object' && N.is(v, 1) : () => false;
 const str = (v) => (typeof v === 'string' ? v : String(v));
 const domErr = (msg, name) => new DOMException(msg, name);
 const timeOriginNow = N.now();
@@ -396,6 +397,8 @@ for (const C of [Event, CustomEvent, UIEvent, MouseEvent, WheelEvent, PointerEve
 
 /* ---- EventTarget ---- */
 
+/* C makes EventTarget for a document (wrap.c); a worker's is made here. */
+if (!doc) defGlobal('EventTarget', class EventTarget {});
 const ET = EventTarget.prototype;
 const listenersOf = (t, create) => {
     let l = t[S.listeners];
@@ -429,7 +432,7 @@ defProps(ET, {
         for (const l of list) if (l.callback === callback && l.capture === o.capture) return;
         const passive = o.passive !== undefined ? !!o.passive :
             (type === 'touchstart' || type === 'touchmove' || type === 'wheel' || type === 'mousewheel') &&
-            (target === G || target === doc || target === doc.documentElement || target === doc.body);
+            !!doc && (target === G || target === doc || target === doc.documentElement || target === doc.body);
         const entry = { callback, capture: o.capture, once: !!o.once, passive, removed: false };
         list.push(entry);
         if (o.signal) o.signal.addEventListener('abort', () => target.removeEventListener(type, callback, o.capture));
@@ -641,7 +644,7 @@ function ensureHandlerEntry(t, type, front) {
  * window handlers. */
 function handlerAttrHost(t, type) {
     if (isElement(t)) return t;
-    if (t === G && windowReflectedHandlers.has(type)) return doc.body;
+    if (doc && t === G && windowReflectedHandlers.has(type)) return doc.body;
     return null;
 }
 
@@ -686,10 +689,12 @@ function defineHandlers(proto, types) {
     }
     return props;
 }
-defineHandlers(HTMLElement.prototype, handlerTypes);
-defineHandlers(SVGElement.prototype, handlerTypes);
-defineHandlers(Document.prototype, handlerTypes.concat(['readystatechange', 'visibilitychange', 'DOMContentLoaded']));
-defineHandlers(Window.prototype, handlerTypes.concat(windowOnlyTypes));
+if (doc) {
+    defineHandlers(HTMLElement.prototype, handlerTypes);
+    defineHandlers(SVGElement.prototype, handlerTypes);
+    defineHandlers(Document.prototype, handlerTypes.concat(['readystatechange', 'visibilitychange', 'DOMContentLoaded']));
+    defineHandlers(Window.prototype, handlerTypes.concat(windowOnlyTypes));
+}
 
 /* Attribute handlers exist from the moment the attribute does: the entry
  * is put first in the listener list when an event first looks. */
@@ -724,8 +729,18 @@ P.reportException = function (err) {
     if (inErrorReport) return true;
     inErrorReport = true;
     try {
-        const ev = new ErrorEvent('error', { cancelable: true, message: err instanceof Error ? String(err) : inspect(err, 0, new Set()),
-            filename: err && err.fileName || N.docUrl(0), lineno: err && err.lineNumber || 0, colno: err && err.columnNumber || 0,
+        /* An error thrown by a script of another origin that was loaded
+         * without CORS tells the page nothing but that it happened. */
+        let muted = false, file = null, line = 0, col = 0;
+        if (err instanceof Error && typeof err.stack === 'string') {
+            /* the first frame that names a script (not the prelude or a native) */
+            const m = /^\s*at (?:.*? \()?(.*?):(\d+)(?::(\d+))?\)?$/m.exec(err.stack.replace(/^.*(<null>|\(native\)).*$/gm, ''));
+            if (m) { file = m[1]; line = +m[2]; col = +m[3] || 0; }
+            muted = !!m && N.scriptMuted(m[1]);
+        }
+        const ev = muted ? new ErrorEvent('error', { cancelable: true, message: 'Script error.', filename: '', lineno: 0, colno: 0, error: null })
+            : new ErrorEvent('error', { cancelable: true, message: err instanceof Error ? String(err) : inspect(err, 0, new Set()),
+            filename: err && err.fileName || file || N.docUrl(0), lineno: err && err.lineNumber || line, colno: err && err.columnNumber || col,
             error: err });
         return fire(G, ev);
     } catch (e) {

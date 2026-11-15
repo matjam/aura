@@ -19,6 +19,7 @@
 #define AURA_BROWSER_BROWSER_H
 
 #include "bookmarks.h"
+#include "../core/coro.h"
 #include "chrome.h"
 #include "downloads.h"
 #include "history.h"
@@ -120,6 +121,11 @@ typedef struct AuBrowserHost {
      * return makes the call throw. Never return weaker bytes. Without it
      * pages have no crypto object. */
     bool (*random)(void *ctx, void *buf, size_t len);
+    /* Optional. Coroutines (core/coro.h), which let a page's workers run
+     * on their own stacks and yield to the event loop. Without them a
+     * worker runs one task at a time on the caller's stack. The struct
+     * must outlive the browser. */
+    const AuCoroOps *coro;
 } AuBrowserHost;
 
 struct AuTab {

@@ -1,6 +1,7 @@
 /* The document view: parser, style sheets, images, resolver, layout,
  * painting, input. */
 #include "docview_int.h"
+#include "../net/cors.h"
 
 #include "../paint/canvas2d.h"
 
@@ -190,8 +191,14 @@ static void clear_document(AuDocView *dv)
     for (uint32_t i = 0; i < dv->nreqs; i++) {
         loader_cancel(dv, dv->reqs[i].id);
         au_buf_free(&dv->reqs[i].data);
+        au_free(dv->reqs[i].img_url);
     }
     dv->nreqs = 0;
+    for (uint32_t i = 0; i < dv->ntainted; i++)
+        au_free(dv->tainted_imgs[i]);
+    au_free(dv->tainted_imgs);
+    dv->tainted_imgs = NULL;
+    dv->ntainted = 0;
     au_layout_set_document(dv->layout, NULL);
     if (dv->resolver)
         au_css_resolver_detach_sheets(dv->resolver); /* the sources own the sheets */
@@ -376,6 +383,8 @@ static uint32_t loader_start(AuDocView *dv, const AuResourceRequest *rq)
     return id;
 }
 
+static bool is_network_url(const char *url);
+
 static Request *add_request_ex(AuDocView *dv, const AuResourceRequest *rq)
 {
     uint32_t id = loader_start(dv, rq);
@@ -389,8 +398,154 @@ static Request *add_request_ex(AuDocView *dv, const AuResourceRequest *rq)
     memset(r, 0, sizeof *r);
     r->id = id;
     r->kind = rq->kind;
+    r->script = rq->script_mode != 0 && !rq->cors_resource;
+    r->cors = rq->cors_resource;
+    r->cross = rq->kind != AU_RES_FRAME && is_network_url(rq->url) && !au_cors_same_origin(dv->url, rq->url);
     au_buf_init(&r->data);
     return r;
+}
+
+/* ---- Resources of other origins ----
+ * A resource of the page (a style sheet, an image, a script element's
+ * source, a font) is fetched without CORS unless its element has a
+ * crossorigin attribute. Three rules apply when its response head
+ * arrives (gate_head):
+ * - with a crossorigin attribute and another origin, the response must
+ *   pass the CORS check, else the load fails;
+ * - without one, a response of another origin with
+ *   Cross-Origin-Resource-Policy same-origin or same-site (and another
+ *   site) is refused;
+ * - an image of another origin that was not fetched with CORS is
+ *   recorded as tainted, for au_docview_image_origin_clean.
+ * Redirects of such a resource are followed by the network layer; the
+ * check is made against the final response. Script's own requests (fetch,
+ * XMLHttpRequest, workers) are checked hop by hop in src/js/fetch.c. */
+static bool is_network_url(const char *url)
+{
+    return url && (!strncmp(url, "http:", 5) || !strncmp(url, "https:", 6));
+}
+
+/* The crossorigin attribute as a CORS mode: 0 none, 1 anonymous, 2
+ * use-credentials. */
+uint8_t au_dv_cors_attr(const AuElement *el)
+{
+    const char *v = el ? attr(el, "crossorigin") : NULL;
+    if (!v)
+        return 0;
+    return au_ieq(v, strlen(v), "use-credentials", 15) ? 2 : 1;
+}
+
+/* Requests url for an element's resource with the element's CORS mode
+ * (0: a plain request). A cross-origin CORS request carries Origin and,
+ * in anonymous mode, no credentials. */
+static Request *add_request_cors(AuDocView *dv, const char *url, AuResourceKind kind, uint8_t cors)
+{
+    if (!cors || !is_network_url(url) || !is_network_url(dv->url) || au_cors_same_origin(dv->url, url))
+        return add_request(dv, url, kind);
+    AuBuf origin;
+    au_buf_init(&origin);
+    au_cors_origin_of(dv->url, &origin);
+    const char *hv[2] = {"Origin", au_buf_cstr(&origin)};
+    AuResourceRequest rq;
+    memset(&rq, 0, sizeof rq);
+    rq.url = url;
+    rq.kind = kind;
+    rq.document_url = dv->url;
+    rq.headers = hv;
+    rq.nheaders = 1;
+    rq.script_mode = 1;
+    rq.cors_resource = cors;
+    rq.omit_credentials = cors == 1;
+    Request *r = add_request_ex(dv, &rq);
+    au_buf_free(&origin);
+    return r;
+}
+
+uint32_t au_dv_request_cors(AuDocView *dv, const char *url, uint8_t cors)
+{
+    Request *r = add_request_cors(dv, url, AU_RES_OTHER, cors);
+    if (!r)
+        return 0;
+    dv->finished_reported = false;
+    return r->id;
+}
+
+static void taint_image(AuDocView *dv, const char *url, bool tainted)
+{
+    for (uint32_t i = 0; i < dv->ntainted; i++)
+        if (!strcmp(dv->tainted_imgs[i], url)) {
+            if (!tainted) {
+                au_free(dv->tainted_imgs[i]);
+                dv->tainted_imgs[i] = dv->tainted_imgs[--dv->ntainted];
+            }
+            return;
+        }
+    if (!tainted)
+        return;
+    dv->tainted_imgs = au_realloc(dv->tainted_imgs, (dv->ntainted + 1) * sizeof *dv->tainted_imgs);
+    dv->tainted_imgs[dv->ntainted++] = dup(url);
+}
+
+bool au_docview_image_origin_clean(AuDocView *dv, const char *url)
+{
+    if (!url)
+        return false;
+    for (uint32_t i = 0; i < dv->ntainted; i++)
+        if (!strcmp(dv->tainted_imgs[i], url))
+            return false;
+    /* An image that was never requested here (or is still loading) is
+     * clean only when its URL is of the document's origin or carries its
+     * own data. */
+    for (uint32_t i = 0; i < dv->nreqs; i++)
+        if (dv->reqs[i].img_url && !strcmp(dv->reqs[i].img_url, url))
+            return !dv->reqs[i].cross;
+    return !is_network_url(url) || au_cors_same_origin(dv->url, url) || au_docimages_known(dv->imgs, url);
+}
+
+static void gate_console(AuDocView *dv, const char *what, const char *url)
+{
+    AuDocView *top = au_dv_top(dv);
+    if (!top->cb.console)
+        return;
+    AuBuf m;
+    au_buf_init(&m);
+    au_buf_printf(&m, "%s: %s", what, url ? url : "");
+    top->cb.console(top->cb.ctx, top, 2, au_buf_cstr(&m), m.len);
+    au_buf_free(&m);
+}
+
+/* The response head of a page resource: false when the response may not
+ * be used (the caller fails the request). */
+static bool gate_head(AuDocView *dv, Request *r, const char *final_url, const char *const *headers, size_t n)
+{
+    if (r->script || r->kind == AU_RES_FRAME)
+        return true;
+    bool cross = r->cross;
+    if (final_url && is_network_url(final_url))
+        cross = !au_cors_same_origin(dv->url, final_url);
+    bool ok = true, clean = !cross;
+    if (cross && r->cors) {
+        AuBuf origin;
+        au_buf_init(&origin);
+        au_cors_origin_of(dv->url, &origin);
+        ok = clean = au_cors_check(au_buf_cstr(&origin), r->cors == 2, headers, n);
+        au_buf_free(&origin);
+        if (!ok)
+            gate_console(dv, "Blocked by CORS (the response has no matching Access-Control-Allow-Origin)", final_url);
+    } else if (cross && final_url) {
+        AuBuf origin;
+        au_buf_init(&origin);
+        au_cors_origin_of(dv->url, &origin);
+        ok = au_corp_allows(au_cors_header(headers, n, "cross-origin-resource-policy"), au_buf_cstr(&origin),
+                            final_url);
+        au_buf_free(&origin);
+        if (!ok)
+            gate_console(dv, "Blocked by Cross-Origin-Resource-Policy", final_url);
+    }
+    if (r->img_url)
+        taint_image(dv, r->img_url, !clean);
+    r->cross = cross;
+    return ok;
 }
 
 uint32_t au_dv_start_request(AuDocView *dv, const AuResourceRequest *rq, AuFrame *f)
@@ -437,7 +592,7 @@ static Request *find_request(AuDocView *dv, uint32_t id)
 
 static void request_sheet(AuDocView *dv, SheetSrc *s)
 {
-    Request *r = add_request(dv, s->url, AU_RES_STYLESHEET);
+    Request *r = add_request_cors(dv, s->url, AU_RES_STYLESHEET, s->cors);
     if (!r) {
         s->failed = true;
         return;
@@ -566,8 +721,15 @@ void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char
             au_frames_head(dv, r->frame, status, final_url, headers, nheaders);
         return;
     }
+    if (!gate_head(dv, r, final_url, headers, nheaders)) {
+        /* Not to be used: the transfer stops and the load fails. */
+        loader_cancel(dv, id);
+        au_docview_resource_done(dv, id, false);
+        return;
+    }
     if (r->kind == AU_RES_OTHER && !r->font && dv->script)
-        au_docscript_resource_head(dv->script, id, status, status_text, final_url, headers, nheaders);
+        au_docscript_resource_head(dv->script, id, status, status_text, final_url, headers, nheaders,
+                                   r->cross && !r->cors);
 }
 
 void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size_t len)
@@ -624,6 +786,12 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
     *r = dv->reqs[--dv->nreqs];
     if (req.background)
         dv->nbg--;
+    if (req.img_url) {
+        /* a loader that reports no head: the URL decides */
+        if (req.cross && !req.cors)
+            taint_image(dv, req.img_url, true);
+        au_free(req.img_url);
+    }
     if (req.kind == AU_RES_FRAME) {
         if (req.frame)
             au_frames_done(dv, req.frame, ok);
@@ -757,6 +925,28 @@ static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap)
     return au_url_resolve(dv->base, url, out, cap);
 }
 
+/* The CORS mode an image is fetched with: that of the first <img> with a
+ * crossorigin attribute whose src is this URL (0 when there is none). The
+ * scan runs only in documents where some element has the attribute. */
+static uint8_t image_cors_mode(AuDocView *dv, const char *url)
+{
+    AuAtom co = au_atom_lookup("crossorigin", 11);
+    if (!co || !dv->doc || !is_network_url(url))
+        return 0;
+    for (AuNode *n = au_node_next(&dv->doc->node, &dv->doc->node); n; n = au_node_next(n, &dv->doc->node)) {
+        if (!au_is_html_element(n, AU_ATOM_img))
+            continue;
+        AuElement *el = au_as_element(n);
+        if (!au_element_get_attr(el, co))
+            continue;
+        char abs[2048];
+        const char *src = attr(el, "src");
+        if (src && au_url_resolve(dv->base, src, abs, sizeof abs) && !strcmp(abs, url))
+            return au_dv_cors_attr(el);
+    }
+    return 0;
+}
+
 /* Layout's image lookup. A pending image reports a size of 0 x 0 and a
  * transparent surface (an empty box, or the size the page gives it); a
  * failed one returns false, so layout shows its alt text. */
@@ -767,9 +957,10 @@ static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSur
     bool created;
     AuDocImageResult res = au_docimages_lookup(dv->imgs, url, w, h, pixels, &e, &created);
     if (created) {
-        Request *r = add_request(dv, url, AU_RES_IMAGE);
+        Request *r = add_request_cors(dv, url, AU_RES_IMAGE, image_cors_mode(dv, url));
         if (r) {
             r->image = e;
+            r->img_url = dup(url);
             dv->finished_reported = false;
         } else {
             au_image_entry_done(au_docimages_cache(dv->imgs), e, false);
@@ -861,6 +1052,7 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
         const char *href = attr(el, "href");
         if (href && au_url_resolve(dv->base, href, abs, sizeof abs)) {
             s->src->url = dup(abs);
+            s->src->cors = au_dv_cors_attr(el);
             start_sheet(dv, s->src);
             dv->finished_reported = false;
         } else {
@@ -1703,6 +1895,7 @@ void au_dv_cancel(AuDocView *dv, uint32_t id)
     if (r->background)
         dv->nbg--;
     au_buf_free(&r->data);
+    au_free(r->img_url);
     *r = dv->reqs[--dv->nreqs];
 }
 

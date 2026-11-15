@@ -178,16 +178,28 @@ const headerValue = (v) => {
     if (/[\0\r\n]/.test(v)) throw new TypeError('Invalid header value');
     return v;
 };
+/* The forbidden request headers (the engine drops them again: fetch.c). */
 const forbiddenRequest = new Set(['accept-charset', 'accept-encoding', 'access-control-request-headers',
     'access-control-request-method', 'connection', 'content-length', 'cookie', 'cookie2', 'date', 'dnt', 'expect', 'host',
     'keep-alive', 'origin', 'referer', 'set-cookie', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'via']);
-const isForbiddenRequest = (n) => forbiddenRequest.has(n) || n.startsWith('proxy-') || n.startsWith('sec-');
+const isForbiddenRequest = (n, v) => forbiddenRequest.has(n) || n.startsWith('proxy-') || n.startsWith('sec-') ||
+    (/^x-(http-method|http-method-override|method-override)$/.test(n) && /(^|,)\s*(connect|trace|track)\s*(,|$)/i.test(v || ''));
+const noCorsSafe = (n, v) => {
+    if (v.length > 128) return false;
+    if (n === 'accept') return !/[\0-\x08\x0a-\x1f"():<>?@[\\\]{}\x7f]/.test(v);
+    if (n === 'accept-language' || n === 'content-language') return /^[0-9A-Za-z *,\-.;=]*$/.test(v);
+    if (n === 'content-type') return !/[\0-\x08\x0a-\x1f"():<>?@[\\\]{}\x7f]/.test(v) &&
+        /^\s*(application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)\s*(;|$)/i.test(v);
+    return false;
+};
 class Headers {
     constructor(init) {
         this._l = [];
         this._guard = 'none';
-        if (init === undefined || init === null) return;
-        if (init instanceof Headers) { this._l = init._l.map((p) => p.slice()); return; }
+        if (init !== undefined && init !== null) this._fill(init);
+    }
+    _fill(init) {
+        if (init instanceof Headers) { for (const [k, v] of init._l) this.append(k, v); return; }
         if (typeof init !== 'object') throw new TypeError('Headers: invalid init');
         if (typeof init[Symbol.iterator] === 'function') {
             for (const pair of init) {
@@ -197,16 +209,28 @@ class Headers {
             }
         } else for (const k of Object.keys(init)) this.append(k, init[k]);
     }
-    _check(n) {
+    /* True when the guard refuses the header (it is then left out). */
+    _check(n, v) {
         if (this._guard === 'immutable') throw new TypeError('The headers are immutable');
-        return this._guard === 'request' && isForbiddenRequest(n);
+        if (this._guard === 'request' || this._guard === 'request-no-cors') { if (isForbiddenRequest(n, v)) return true; }
+        if (this._guard === 'request-no-cors' && v !== undefined) {
+            const cur = this.get(n);
+            if (!noCorsSafe(n, cur === null ? v : cur + ', ' + v)) return true;
+        }
+        if (this._guard === 'response' && (n === 'set-cookie' || n === 'set-cookie2')) return true;
+        return false;
     }
     append(n, v) {
         n = headerName(n); v = headerValue(v);
-        if (this._check(n)) return;
+        if (this._check(n, v)) return;
         this._l.push([n, v]);
     }
-    delete(n) { n = headerName(n); if (this._check(n)) return; this._l = this._l.filter((p) => p[0] !== n); }
+    delete(n) {
+        n = headerName(n);
+        if (this._check(n)) return;
+        if (this._guard === 'request-no-cors' && !['accept', 'accept-language', 'content-language', 'content-type'].includes(n)) return;
+        this._l = this._l.filter((p) => p[0] !== n);
+    }
     get(n) {
         n = headerName(n);
         const vs = this._l.filter((p) => p[0] === n).map((p) => p[1]);
@@ -216,7 +240,10 @@ class Headers {
     has(n) { n = headerName(n); return this._l.some((p) => p[0] === n); }
     set(n, v) {
         n = headerName(n); v = headerValue(v);
-        if (this._check(n)) return;
+        if (this._guard === 'immutable') throw new TypeError('The headers are immutable');
+        if ((this._guard === 'request' || this._guard === 'request-no-cors') && isForbiddenRequest(n, v)) return;
+        if (this._guard === 'request-no-cors' && !noCorsSafe(n, v)) return;
+        if (this._guard === 'response' && (n === 'set-cookie' || n === 'set-cookie2')) return;
         const i = this._l.findIndex((p) => p[0] === n);
         if (i < 0) this._l.push([n, v]);
         else { this._l[i][1] = v; this._l = this._l.filter((p, j) => j <= i || p[0] !== n); }
@@ -264,10 +291,45 @@ function extractBody(body) {
         parts.push(N.utf8Encode('--' + boundary + '--\r\n'));
         return [concatBytes(parts), 'multipart/form-data; boundary=' + boundary];
     }
+    if (body !== null && typeof body === 'object' && typeof body.getReader === 'function')
+        throw new TypeError('A ReadableStream body is not supported');
     return [N.utf8Encode(str(body).toWellFormed()), 'text/plain;charset=UTF-8'];
 }
+/* Parses a multipart/form-data body (bytes) with its boundary. */
+function parseMultipart(bytes, boundary) {
+    const fd = new FormData();
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    const delim = '--' + boundary;
+    let pos = s.indexOf(delim);
+    if (pos < 0) throw new TypeError('The body is not valid multipart/form-data');
+    const latin = (t) => { const b = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i); return b; };
+    for (;;) {
+        pos += delim.length;
+        if (s.startsWith('--', pos)) break;
+        const hs = s.indexOf('\r\n', pos) + 2;
+        const he = s.indexOf('\r\n\r\n', hs - 2);
+        if (hs < 2 || he < 0) throw new TypeError('The body is not valid multipart/form-data');
+        const next = s.indexOf('\r\n' + delim, he + 4);
+        if (next < 0) throw new TypeError('The body is not valid multipart/form-data');
+        const headers = s.slice(hs, he);
+        const cd = /^content-disposition:\s*form-data\s*;(.*)$/im.exec(headers);
+        if (!cd) throw new TypeError('The body is not valid multipart/form-data');
+        const nm = /(?:^|;)\s*name="([^"]*)"/i.exec(cd[1]);
+        const fnm = /(?:^|;)\s*filename="([^"]*)"/i.exec(cd[1]);
+        const ct = /^content-type:\s*(.*)$/im.exec(headers);
+        const un = (t) => N.utf8Decode(latin(t.replace(/%0A/g, '\n').replace(/%0D/g, '\r').replace(/%22/g, '"')), false, false);
+        const raw = latin(s.slice(he + 4, next));
+        if (!nm) throw new TypeError('The body is not valid multipart/form-data');
+        if (fnm) fd.append(un(nm[1]), new File([raw], un(fnm[1]), { type: ct ? ct[1].trim() : '' }));
+        else fd.append(un(nm[1]), N.utf8Decode(raw, false, false));
+        pos = next + 2;
+    }
+    return fd;
+}
 const bodyMixin = {
-    get body() { return null; },
+    /* Streams are not implemented: body is undefined, never a ReadableStream. */
+    get body() { return undefined; },
     get bodyUsed() { return !!this._used; },
     _consume() {
         if (this._used) return Promise.reject(new TypeError('The body has already been read'));
@@ -280,11 +342,13 @@ const bodyMixin = {
     json() { return this.text().then((t) => JSON.parse(t)); },
     blob() { return this._consume().then((b) => { const x = new Blob([], { type: (this.headers.get('content-type') || '') }); x._b = b; return x; }); },
     formData() {
-        return this.text().then((t) => {
+        return this._consume().then((b) => {
             const ct = this.headers.get('content-type') || '';
-            if (!/^application\/x-www-form-urlencoded/i.test(ct)) throw new TypeError('Only urlencoded form bodies can be parsed');
+            const m = /^multipart\/form-data\s*;.*?boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ct);
+            if (m) return parseMultipart(b, m[1] || m[2]);
+            if (!/^application\/x-www-form-urlencoded/i.test(ct)) throw new TypeError('The body is not a form');
             const fd = new FormData();
-            for (const [k, v] of new URLSearchParams(t)) fd.append(k, v);
+            for (const [k, v] of new URLSearchParams(N.utf8Decode(b, false, false))) fd.append(k, v);
             return fd;
         });
     },
@@ -292,39 +356,77 @@ const bodyMixin = {
 
 const modeNum = { cors: 0, 'no-cors': 1, 'same-origin': 2, navigate: 3 };
 const credNum = { omit: 0, 'same-origin': 1, include: 2 };
+const cacheNum = { default: 0, 'no-store': 1, reload: 2, 'no-cache': 3, 'force-cache': 4, 'only-if-cached': 5 };
+const redirectNum = { follow: 0, error: 1, manual: 2 };
+const policyNum = { '': 0, 'no-referrer': 1, 'no-referrer-when-downgrade': 2, 'same-origin': 3, origin: 4,
+    'strict-origin': 5, 'origin-when-cross-origin': 6, 'strict-origin-when-cross-origin': 7, 'unsafe-url': 8 };
+const methodToken = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const normalMethod = (m) => (/^(DELETE|GET|HEAD|OPTIONS|POST|PUT|PATCH)$/i.test(m) ? m.toUpperCase() : m);
+const enumOf = (table, v, what) => { v = str(v); if (!(v in table)) throw new TypeError('Invalid ' + what + ': ' + v); return v; };
 class Request {
     constructor(input, init = {}) {
-        let src = null;
-        if (input instanceof Request) src = input;
-        const url = src ? src.url : new URL(str(input), N.docUrl(1)).href;
-        if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(url)) throw new TypeError('A request URL must not include credentials');
-        init = init || {};
-        let method = init.method !== undefined ? str(init.method) : src ? src.method : 'GET';
-        if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(method)) throw new TypeError('Invalid method');
-        const up = method.toUpperCase();
-        if (/^(CONNECT|TRACE|TRACK)$/.test(up)) throw new TypeError('Forbidden method: ' + method);
-        if (/^(DELETE|GET|HEAD|OPTIONS|POST|PUT|PATCH)$/.test(up)) method = up;
+        if (!arguments.length) throw new TypeError('Request: 1 argument required');
+        const src = input instanceof Request ? input : null;
+        let url;
+        if (src) url = src._url;
+        else {
+            try { url = new URL(str(input), N.docUrl(1)); } catch (e) { throw new TypeError('Invalid request URL: ' + str(input)); }
+            if (url.username || url.password) throw new TypeError('A request URL must not include credentials');
+            url = url.href;
+        }
+        if (init === null || init === undefined) init = {};
+        if (typeof init !== 'object') throw new TypeError('Request: the init is not an object');
+        const has = (k) => init[k] !== undefined;
+        if (has('window') && init.window !== null) throw new TypeError('Request: window must be null');
+        let method = src ? src._method : 'GET';
+        if (has('method')) {
+            method = str(init.method);
+            if (!methodToken.test(method)) throw new TypeError('Invalid method');
+            if (/^(CONNECT|TRACE|TRACK)$/i.test(method)) throw new TypeError('Forbidden method: ' + method);
+            method = normalMethod(method);
+        }
         this._url = url;
         this._method = method;
-        this._mode = init.mode !== undefined ? str(init.mode) : src ? src.mode : 'cors';
-        if (!(this._mode in modeNum) || this._mode === 'navigate') throw new TypeError('Invalid mode');
-        this._cred = init.credentials !== undefined ? str(init.credentials) : src ? src.credentials : 'same-origin';
-        if (!(this._cred in credNum)) throw new TypeError('Invalid credentials');
-        this._cache = init.cache || (src ? src.cache : 'default');
-        this._redirect = init.redirect || (src ? src.redirect : 'follow');
-        this._signal = init.signal || (src ? src.signal : null) || new AbortController().signal;
-        this.headers = new Headers(init.headers !== undefined ? init.headers : src ? src.headers : undefined);
+        this._mode = has('mode') ? enumOf(modeNum, init.mode, 'mode') : src ? src._mode : 'cors';
+        if (has('mode') && this._mode === 'navigate') throw new TypeError('Invalid mode: navigate');
+        /* a request made from a navigation request starts over as same-origin */
+        if (src && src._mode === 'navigate' && Object.keys(init).length) this._mode = 'same-origin';
+        this._cred = has('credentials') ? enumOf(credNum, init.credentials, 'credentials') : src ? src._cred : 'same-origin';
+        this._cache = has('cache') ? enumOf(cacheNum, init.cache, 'cache') : src ? src._cache : 'default';
+        if (this._cache === 'only-if-cached' && this._mode !== 'same-origin') throw new TypeError('only-if-cached needs mode same-origin');
+        this._redirect = has('redirect') ? enumOf(redirectNum, init.redirect, 'redirect') : src ? src._redirect : 'follow';
+        this._integrity = has('integrity') ? str(init.integrity) : src ? src._integrity : '';
+        this._keepalive = has('keepalive') ? !!init.keepalive : src ? src._keepalive : false;
+        this._policy = has('referrerPolicy') ? enumOf(policyNum, init.referrerPolicy, 'referrerPolicy') : src ? src._policy : '';
+        this._referrer = src ? src._referrer : 'about:client';
+        if (has('referrer')) {
+            const r = str(init.referrer);
+            if (r === '') this._referrer = '';
+            else {
+                let ru;
+                try { ru = new URL(r, N.docUrl(1)); } catch (e) { throw new TypeError('Invalid referrer'); }
+                this._referrer = ru.href === 'about:client' || ru.origin !== N.docUrl(2) ? 'about:client' : ru.href;
+            }
+        }
+        if (has('signal') && init.signal !== null && !(init.signal instanceof AbortSignal)) throw new TypeError('Request: signal is not an AbortSignal');
+        const parent = has('signal') ? init.signal : src ? src._signal : null;
+        this._signal = AbortSignal.any(parent ? [parent] : []);
+        if (this._mode === 'no-cors' && !/^(GET|HEAD|POST)$/.test(method)) throw new TypeError('A no-cors request must be GET, HEAD or POST');
+        this.headers = new Headers();
         this.headers._guard = this._mode === 'no-cors' ? 'request-no-cors' : 'request';
-        for (const [k] of this.headers._l.slice()) if (isForbiddenRequest(k)) this.headers._l = this.headers._l.filter((p) => p[0] !== k);
-        const body = init.body !== undefined ? init.body : null;
-        if (body !== null && (method === 'GET' || method === 'HEAD')) throw new TypeError('A GET or HEAD request cannot have a body');
+        const hinit = has('headers') ? init.headers : src ? src.headers : undefined;
+        if (hinit !== undefined) this.headers._fill(hinit);
+        const body = has('body') && init.body !== null ? init.body : null;
+        if ((body !== null || (src && src._bytes)) && (method === 'GET' || method === 'HEAD'))
+            throw new TypeError('A GET or HEAD request cannot have a body');
         if (body !== null) {
             const [bytes, type] = extractBody(body);
             this._bytes = bytes;
-            if (type && !this.headers.has('content-type')) this.headers._l.push(['content-type', type]);
+            if (type && !this.headers.has('content-type')) this.headers.append('content-type', type);
         } else if (src) {
             if (src._used) throw new TypeError('The source request body has been used');
             this._bytes = src._bytes;
+            if (src._bytes && Object.keys(init).length === 0) { /* a plain copy shares the bytes */ }
         } else this._bytes = null;
     }
     get url() { return this._url; }
@@ -335,10 +437,13 @@ class Request {
     get redirect() { return this._redirect; }
     get signal() { return this._signal; }
     get destination() { return ''; }
-    get referrer() { return 'about:client'; }
-    get referrerPolicy() { return ''; }
-    get integrity() { return ''; }
-    get keepalive() { return false; }
+    get referrer() { return this._referrer; }
+    get referrerPolicy() { return this._policy; }
+    get integrity() { return this._integrity; }
+    get keepalive() { return this._keepalive; }
+    get isHistoryNavigation() { return false; }
+    get isReloadNavigation() { return false; }
+    get duplex() { return 'half'; }
     clone() { if (this._used) throw new TypeError('The body has been used'); return new Request(this); }
 }
 defProps(Request.prototype, bodyMixin);
@@ -348,17 +453,20 @@ defGlobal('Request', Request);
 const redirectStatus = new Set([301, 302, 303, 307, 308]);
 class Response {
     constructor(body = null, init = {}) {
-        init = init || {};
+        if (init === null || init === undefined) init = {};
         const status = init.status !== undefined ? Number(init.status) : 200;
         if (!(status >= 200 && status <= 599) || status !== (status | 0)) throw new RangeError('Invalid status');
         this._status = status;
         this._statusText = init.statusText !== undefined ? str(init.statusText) : '';
-        this.headers = new Headers(init.headers);
+        if (/[^\t\x20-\x7e\x80-\xff]/.test(this._statusText)) throw new TypeError('Invalid status text');
+        this.headers = new Headers();
+        this.headers._guard = 'response';
+        if (init.headers !== undefined) this.headers._fill(init.headers);
         this._type = 'default';
         this._url = '';
         this._redirected = false;
-        if (body !== null) {
-            if (status === 101 || status === 204 || status === 205 || status === 304) throw new TypeError('This status cannot have a body');
+        if (body !== null && body !== undefined) {
+            if (status === 101 || status === 103 || status === 204 || status === 205 || status === 304) throw new TypeError('This status cannot have a body');
             const [bytes, type] = extractBody(body);
             this._bytes = bytes;
             if (type && !this.headers.has('content-type')) this.headers.append('content-type', type);
@@ -366,9 +474,11 @@ class Response {
     }
     static error() { const r = new Response(); r._type = 'error'; r._status = 0; r.headers._guard = 'immutable'; return r; }
     static redirect(url, status = 302) {
+        let u;
+        try { u = new URL(str(url), N.docUrl(1)).href; } catch (e) { throw new TypeError('Invalid URL'); }
         if (!redirectStatus.has(status)) throw new RangeError('Invalid redirect status');
         const r = new Response(null, { status });
-        r.headers.set('location', new URL(str(url), N.docUrl(1)).href);
+        r.headers.set('location', u);
         r.headers._guard = 'immutable';
         return r;
     }
@@ -376,7 +486,7 @@ class Response {
         const s = JSON.stringify(data);
         if (s === undefined) throw new TypeError('The value cannot be serialized as JSON');
         const r = new Response(s, init);
-        r.headers.set('content-type', 'application/json');
+        if (!(init && init.headers !== undefined && new Headers(init.headers).has('content-type'))) r.headers.set('content-type', 'application/json');
         return r;
     }
     get type() { return this._type; }
@@ -402,47 +512,85 @@ defProps(Response.prototype, bodyMixin);
 tag(Response);
 defGlobal('Response', Response);
 
-/* Starts a request through the embedder. Calls onHead(status, text,
- * headers, finalUrl, opaque), onData(bytes), onDone(ok, message). Returns
- * an abort function. data: and blob: URLs are answered here. */
-function startFetch(method, url, headerList, bytes, cred, mode, dest, cb) {
+/* Decodes a data: URL: [bytes, type] or null. */
+function decodeDataUrl(url) {
+    const m = /^data:([^,]*?)(;\s*base64)?,([^#]*)/is.exec(url);
+    if (!m) return null;
+    try {
+        const raw = m[3].replace(/%([0-9a-f]{2})/gi, (x, h) => String.fromCharCode(parseInt(h, 16)));
+        let body;
+        if (m[2]) { const bin = atob(raw.replace(/[\t\n\f\r ]/g, '')); body = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) body[i] = bin.charCodeAt(i); }
+        else { body = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) body[i] = raw.charCodeAt(i) & 0xff; }
+        let type = m[1].trim();
+        if (!type || !/^[^/;\s]+\/[^/;\s]+/.test(type)) type = type.startsWith(';') ? 'text/plain' + type : 'text/plain;charset=US-ASCII';
+        return [body, type];
+    } catch (e) { return null; }
+}
+const typeNames = ['basic', 'cors', 'opaque', 'opaqueredirect'];
+
+/* Starts a request through the engine (src/js/fetch.c applies the
+ * same-origin policy and CORS and follows redirects). Calls
+ * cb.head(status, text, headers, finalUrl, type, redirected), cb.data(bytes),
+ * cb.done(ok, message). opts: cache, redirect, referrerPolicy (numbers),
+ * referrer, preflight. Returns an abort function. data: and blob: URLs
+ * are answered here. */
+function startFetch(method, url, headerList, bytes, cred, mode, dest, cb, opts) {
     if (/^data:/i.test(url)) {
-        const m = /^data:([^,]*?)(;base64)?,(.*)$/is.exec(url);
+        const d = decodeDataUrl(url);
+        let live = true;
         N.queueTask(() => {
-            if (!m) { cb.done(false, 'invalid data: URL'); return; }
-            let body;
-            try {
-                if (m[2]) { const bin = atob(decodeURIComponent(m[3]).replace(/\s/g, '')); body = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) body[i] = bin.charCodeAt(i); }
-                else body = N.utf8Encode(decodeURIComponent(m[3]));
-            } catch (e) { cb.done(false, 'invalid data: URL'); return; }
-            cb.head(200, 'OK', [['content-type', m[1] || 'text/plain;charset=US-ASCII']], url, false);
-            cb.data(body);
+            if (!live) return;
+            if (!d) { cb.done(false, 'invalid data: URL'); return; }
+            cb.head(200, 'OK', [['content-type', d[1]]], url, 'basic', false);
+            cb.data(d[0]);
             cb.done(true);
         });
-        return () => {};
+        return () => { live = false; };
     }
     if (/^blob:/i.test(url)) {
         const blob = blobUrls.get(url);
+        let live = true;
         N.queueTask(() => {
+            if (!live) return;
             if (!blob || method !== 'GET') { cb.done(false, 'the blob URL is not valid'); return; }
-            cb.head(200, 'OK', [['content-type', blob.type], ['content-length', String(blob.size)]], url, false);
+            cb.head(200, 'OK', [['content-type', blob.type], ['content-length', String(blob.size)]], url, 'basic', false);
             cb.data(blob._b);
             cb.done(true);
         });
-        return () => {};
+        return () => { live = false; };
     }
     let id = 0;
     let finished = false;
     id = N.fetchStart(method, url, headerList, bytes, cred, mode, dest, (msg) => {
         if (finished) return;
         switch (msg[0]) {
-        case 'head': cb.head(msg[1], msg[2], msg[3], msg[4] || url, msg[5]); break;
+        case 'head': cb.head(msg[1], msg[2], msg[3], msg[4], typeNames[msg[5]], msg[6]); break;
         case 'data': cb.data(msg[1]); break;
         case 'done': finished = true; cb.done(true); break;
         case 'error': finished = true; cb.done(false, msg[1] || 'network error'); break;
         }
-    });
+    }, opts);
     return () => { if (!finished) { finished = true; N.fetchAbort(id); } };
+}
+/* A request's options for startFetch. */
+const fetchOpts = (req) => ({
+    cache: cacheNum[req._cache], redirect: redirectNum[req._redirect], referrerPolicy: policyNum[req._policy],
+    referrer: req._referrer === 'about:client' ? undefined : req._referrer,
+});
+
+/* Subresource integrity: whether bytes match the metadata ("sha256-..."
+ * entries; the strongest algorithm present decides; metadata without a
+ * known algorithm allows everything). */
+function integrityOk(meta, bytes) {
+    const items = [];
+    for (const tok of str(meta).split(/[\t\n\f\r ]+/)) {
+        const m = /^(sha256|sha384|sha512)-([A-Za-z0-9+/_-]+={0,2})(\?.*)?$/i.exec(tok);
+        if (m) items.push([m[1].toLowerCase(), m[2].replace(/-/g, '+').replace(/_/g, '/')]);
+    }
+    if (!items.length) return true;
+    const best = ['sha512', 'sha384', 'sha256'].find((a) => items.some((i) => i[0] === a));
+    const got = bytesToBase64(new Uint8Array(N.digest('SHA-' + best.slice(3), bytes)));
+    return items.some((i) => i[0] === best && i[1] === got);
 }
 
 defGlobal('fetch', function fetch(input, init) {
@@ -453,60 +601,101 @@ defGlobal('fetch', function fetch(input, init) {
         return Promise.reject(e);
     }
     return new Promise((resolve, reject) => {
-        const signal = req.signal;
-        if (signal && signal.aborted) { reject(signal.reason); return; }
+        const signal = req._signal;
+        if (signal.aborted) { reject(signal.reason); return; }
         const chunks = [];
-        let response = null;
+        let response = null, pendingHead = null;
         let bodyResolve, bodyReject;
         const bodyP = new Promise((a, b) => { bodyResolve = a; bodyReject = b; });
         bodyP.catch(() => {});
-        let abort;
+        let abort = () => {};
         const onAbort = () => {
             abort();
             const reason = signal.reason;
             if (!response) reject(reason); else bodyReject(reason);
         };
+        const makeResponse = (status, text, headers, finalUrl, type, redirected) => {
+            const r = Object.create(Response.prototype);
+            r._status = status;
+            r._statusText = text;
+            r.headers = new Headers();
+            for (const [k, v] of headers) { try { r.headers.append(k, v); } catch (e) { /* malformed header: dropped */ } }
+            r.headers._guard = 'immutable';
+            r._type = type;
+            r._url = finalUrl.replace(/#.*$/, '');
+            r._redirected = !!redirected;
+            r._bodyPromise = () => bodyP;
+            response = r;
+            resolve(r);
+        };
         try {
-            abort = startFetch(req.method, req.url, req.headers._l, req._bytes, credNum[req.credentials], modeNum[req.mode], 0, {
-                head(status, text, headers, finalUrl, opaque) {
-                    const r = Object.create(Response.prototype);
-                    r._status = status;
-                    r._statusText = text;
-                    r.headers = new Headers();
-                    for (const [k, v] of headers) { try { r.headers.append(k, v); } catch (e) { /* malformed header: dropped */ } }
-                    r.headers._guard = 'immutable';
-                    r._type = opaque ? 'opaque' : N.sameOrigin(finalUrl) ? 'basic' : 'cors';
-                    r._url = opaque ? '' : finalUrl;
-                    r._redirected = finalUrl !== req.url;
-                    r._bodyPromise = () => bodyP;
-                    response = r;
-                    resolve(r);
+            abort = startFetch(req._method, req._url.replace(/#.*$/, ''), req.headers._l, req._bytes, credNum[req._cred], modeNum[req._mode], 0, {
+                head(...a) {
+                    /* with integrity metadata the response waits for its whole body */
+                    if (req._integrity) pendingHead = a; else makeResponse(...a);
                 },
                 data(b) { chunks.push(b); },
                 done(ok, msg) {
-                    if (signal) signal.removeEventListener('abort', onAbort);
+                    signal.removeEventListener('abort', onAbort);
                     if (ok) {
-                        if (!response) this.head(200, 'OK', [], req.url, false);
-                        bodyResolve(concatBytes(chunks));
+                        const all = concatBytes(chunks);
+                        if (req._integrity) {
+                            const opaque = pendingHead && (pendingHead[4] === 'opaque' || pendingHead[4] === 'opaqueredirect');
+                            if (opaque || !integrityOk(req._integrity, all)) {
+                                reject(new TypeError('Failed to fetch: the response does not match the integrity metadata'));
+                                return;
+                            }
+                        }
+                        if (!response) makeResponse(...(pendingHead || [200, 'OK', [], req._url, 'basic', false]));
+                        bodyResolve(all);
                     } else {
                         const e = new TypeError('Failed to fetch: ' + (msg || 'network error'));
                         if (!response) reject(e); else bodyReject(e);
                     }
                 },
-            });
+            }, fetchOpts(req));
         } catch (e) {
             reject(e);
             return;
         }
-        if (signal) signal.addEventListener('abort', onAbort);
+        signal.addEventListener('abort', onAbort);
     });
 });
+
+/* navigator.sendBeacon(url, data): a POST that outlives nothing here (a
+ * document that goes cancels its requests), sent with credentials. */
+function sendBeacon(url, data) {
+    let u;
+    try { u = new URL(str(url), N.docUrl(1)); } catch (e) { throw new TypeError('sendBeacon: invalid URL'); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new TypeError('sendBeacon: the URL is not http or https');
+    const [bytes, type] = extractBody(data === undefined ? null : data);
+    if (bytes && bytes.length > 65536) return false;
+    const headers = type ? [['content-type', type]] : [];
+    const simple = !type || noCorsSafe('content-type', type);
+    try {
+        startFetch('POST', u.href, headers, bytes || new Uint8Array(0), 2, simple ? 1 : 0, 0, { head() {}, data() {}, done() {} });
+    } catch (e) { return false; }
+    return true;
+}
 
 /* ---------------- XMLHttpRequest ---------------- */
 
 class XMLHttpRequestEventTarget extends EventTarget {}
 defineHandlers(XMLHttpRequestEventTarget.prototype, ['loadstart', 'progress', 'abort', 'error', 'load', 'timeout', 'loadend']);
 class XMLHttpRequestUpload extends XMLHttpRequestEventTarget {}
+const hasListeners = (t) => {
+    const map = t[S.listeners];
+    if (map) for (const list of map.values()) if (list.length) return true;
+    return false;
+};
+const mimeOf = (ct) => {
+    const m = /^\s*([^;\s]+)/.exec(ct || '');
+    return m ? m[1].toLowerCase() : '';
+};
+const charsetOf = (ct) => {
+    const m = /;\s*charset\s*=\s*(?:"([^"]*)"|([^;\s]*))/i.exec(ct || '');
+    return m ? (m[1] || m[2] || '') : '';
+};
 class XMLHttpRequest extends XMLHttpRequestEventTarget {
     constructor() {
         super();
@@ -518,6 +707,7 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
         this._respHeaders = [];
         this._type = '';
         this._chunks = [];
+        this._bytes = null;
         this._abort = null;
         this._timeout = 0;
         this._timer = 0;
@@ -527,22 +717,32 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
         this._send = false;
         this._error = false;
         this._mime = null;
+        this._sync = false;
+        this._finalUrl = '';
+        this._loaded = 0;
+        this._started = 0;
+        this._uploading = false;
     }
     get readyState() { return this._state; }
     get status() { return this._error ? 0 : this._status; }
     get statusText() { return this._error ? '' : this._statusText; }
-    get responseURL() { return this._error ? '' : this._finalUrl || ''; }
+    get responseURL() { return this._error ? '' : this._finalUrl.replace(/#.*$/, ''); }
     get upload() { return this._upload; }
     get timeout() { return this._timeout; }
-    set timeout(v) { this._timeout = v >>> 0; }
+    set timeout(v) {
+        if (this._sync && doc) throw domErr('A synchronous request of a document has no timeout', 'InvalidAccessError');
+        this._timeout = v >>> 0;
+        if (this._send && this._abort) this._arm();
+    }
     get withCredentials() { return this._cred; }
     set withCredentials(v) {
-        if (this._state > 1 || this._send) throw domErr('The request has started', 'InvalidStateError');
+        if ((this._state !== 0 && this._state !== 1) || this._send) throw domErr('The request has started', 'InvalidStateError');
         this._cred = !!v;
     }
     get responseType() { return this._type; }
     set responseType(v) {
         if (this._state === 3 || this._state === 4) throw domErr('The response is loading or done', 'InvalidStateError');
+        if (this._sync && doc) throw domErr('A synchronous request of a document has no response type', 'InvalidAccessError');
         if (['', 'text', 'json', 'arraybuffer', 'blob', 'document'].includes(v)) this._type = v;
     }
     _setState(s) {
@@ -550,103 +750,198 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
         fireSimple(this, 'readystatechange', false, false);
     }
     open(method, url, async = true, user, password) {
+        if (arguments.length < 2) throw new TypeError('open: 2 arguments required');
         method = str(method);
-        if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(method)) throw domErr('Invalid method', 'SyntaxError');
-        const up = method.toUpperCase();
-        if (/^(CONNECT|TRACE|TRACK)$/.test(up)) throw domErr('Forbidden method', 'SecurityError');
-        if (/^(DELETE|GET|HEAD|OPTIONS|POST|PUT|PATCH)$/.test(up)) method = up;
+        if (!methodToken.test(method)) throw domErr('Invalid method', 'SyntaxError');
+        if (/^(CONNECT|TRACE|TRACK)$/i.test(method)) throw domErr('Forbidden method', 'SecurityError');
+        method = normalMethod(method);
         let u;
         try { u = new URL(str(url), N.docUrl(1)); } catch (e) { throw domErr('Invalid URL', 'SyntaxError'); }
-        if (async === false) throw domErr('Synchronous XMLHttpRequest is not supported', 'InvalidAccessError');
+        if (arguments.length > 2 && !async && doc && (this._timeout || this._type !== ''))
+            throw domErr('A synchronous request of a document has no timeout or response type', 'InvalidAccessError');
+        if (user !== undefined && user !== null && u.hostname) u.username = str(user);
+        if (password !== undefined && password !== null && u.hostname) u.password = str(password);
         if (this._abort) { this._abort(); this._abort = null; }
+        this._disarm();
         this._method = method;
         this._url = u.href;
+        this._sync = arguments.length > 2 && !async;
         this._headers = [];
         this._send = false;
+        this._uploading = false;
         this._resp = null;
         this._chunks = [];
+        this._bytes = null;
         this._status = 0;
         this._statusText = '';
         this._respHeaders = [];
+        this._finalUrl = '';
         this._error = false;
-        this._setState(1);
+        this._loaded = 0;
+        if (this._state !== 1) this._setState(1);
     }
     setRequestHeader(n, v) {
         if (this._state !== 1 || this._send) throw domErr('The request is not opened', 'InvalidStateError');
-        n = headerName(n); v = headerValue(v);
-        if (isForbiddenRequest(n)) return;
-        const h = this._headers.find((p) => p[0] === n);
+        if (arguments.length < 2) throw new TypeError('setRequestHeader: 2 arguments required');
+        n = str(n); v = str(v).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, '');
+        if (!methodToken.test(n)) throw domErr('Invalid header name', 'SyntaxError');
+        if (/[\0\r\n]/.test(v)) throw domErr('Invalid header value', 'SyntaxError');
+        if (isForbiddenRequest(n.toLowerCase(), v)) return;
+        const h = this._headers.find((p) => p[0].toLowerCase() === n.toLowerCase());
         if (h) h[1] += ', ' + v; else this._headers.push([n, v]);
     }
-    overrideMimeType(m) { this._mime = str(m); }
+    overrideMimeType(m) {
+        if (this._state === 3 || this._state === 4) throw domErr('The response is loading or done', 'InvalidStateError');
+        this._mime = /^\s*[^;\s/]+\/[^;\s/]+/.test(str(m)) ? str(m) : 'application/octet-stream';
+    }
+    _arm() {
+        this._disarm();
+        if (!this._timeout) return;
+        const left = Math.max(0, this._timeout - (N.now() - this._started));
+        this._timer = N.setTimeout(() => {
+            this._timer = 0;
+            if (!this._send) return;
+            if (this._abort) { this._abort(); this._abort = null; }
+            this._fail('timeout');
+        }, left);
+    }
+    _disarm() { if (this._timer) { N.clearTimer(this._timer); this._timer = 0; } }
     send(body = null) {
         if (this._state !== 1 || this._send) throw domErr('The request is not opened', 'InvalidStateError');
         if (this._method === 'GET' || this._method === 'HEAD') body = null;
         let bytes = null;
-        if (body !== null) {
-            const [b, type] = extractBody(body);
-            bytes = b;
-            if (type && !this._headers.some((p) => p[0] === 'content-type')) this._headers.push(['content-type', type]);
+        if (body !== null && body !== undefined) {
+            let type;
+            if (isNode(body) && body.nodeType === 9) {
+                bytes = N.utf8Encode(body.documentElement ? body.documentElement.outerHTML : '');
+                type = 'text/html;charset=UTF-8';
+            } else [bytes, type] = extractBody(body);
+            const own = this._headers.find((p) => p[0].toLowerCase() === 'content-type');
+            if (!own) { if (type) this._headers.push(['Content-Type', type]); }
+            else if (typeof body === 'string' || (isNode(body) && body.nodeType === 9))
+                own[1] = own[1].replace(/(;\s*charset\s*=\s*)("[^"]*"|[^;\s]*)/i, '$1UTF-8');
         }
+        this._uploading = !!bytes && bytes.length > 0;
+        const preflight = hasListeners(this._upload);
         this._send = true;
+        this._error = false;
+        this._started = N.now();
+        if (this._sync) { this._sendSync(bytes, preflight); return; }
         const xhr = this;
-        fire(this, new ProgressEvent('loadstart', { total: 0 }));
+        const upTotal = bytes ? bytes.length : 0;
+        fire(this, new ProgressEvent('loadstart', { loaded: 0, total: 0 }));
         if (this._state !== 1 || !this._send) return;
-        let loaded = 0;
+        if (this._uploading) fire(this._upload, new ProgressEvent('loadstart', { lengthComputable: true, loaded: 0, total: upTotal }));
+        if (this._state !== 1 || !this._send) return;
+        let total = 0;
         try {
-            this._abort = startFetch(this._method, this._url, this._headers, bytes,
+            this._abort = startFetch(this._method, this._url.replace(/#.*$/, ''), this._headers, bytes,
                 this._cred ? 2 : 1, 0, 0, {
-                    head(status, text, headers, finalUrl, opaque) {
+                    head(status, text, headers, finalUrl) {
+                        if (xhr._uploading) {
+                            xhr._uploading = false;
+                            const pe = { lengthComputable: true, loaded: upTotal, total: upTotal };
+                            fire(xhr._upload, new ProgressEvent('progress', pe));
+                            fire(xhr._upload, new ProgressEvent('load', pe));
+                            fire(xhr._upload, new ProgressEvent('loadend', pe));
+                        }
                         xhr._status = status; xhr._statusText = text; xhr._respHeaders = headers; xhr._finalUrl = finalUrl;
+                        const cl = headers.find((p) => p[0].toLowerCase() === 'content-length');
+                        const ce = headers.find((p) => p[0].toLowerCase() === 'content-encoding');
+                        total = cl && !ce && /^\d+$/.test(cl[1]) ? +cl[1] : 0;
                         xhr._setState(2);
                     },
                     data(b) {
+                        if (xhr._state < 2) this.head(200, 'OK', [], xhr._url);
+                        if (!xhr._send) return;
                         xhr._chunks.push(b);
-                        loaded += b.length;
-                        if (xhr._state === 2) xhr._setState(3);
-                        else fireSimple(xhr, 'readystatechange', false, false);
-                        fire(xhr, new ProgressEvent('progress', { loaded, total: 0 }));
+                        xhr._loaded += b.length;
+                        if (xhr._state === 2) xhr._state = 3;
+                        fireSimple(xhr, 'readystatechange', false, false);
+                        if (!xhr._send) return;
+                        fire(xhr, new ProgressEvent('progress', { lengthComputable: total > 0, loaded: xhr._loaded, total }));
                     },
                     done(ok, msg) {
-                        if (xhr._timer) { G.clearTimeout(xhr._timer); xhr._timer = 0; }
+                        xhr._disarm();
                         xhr._abort = null;
+                        if (!xhr._send) return;
                         if (!ok) { xhr._fail('error'); return; }
-                        if (xhr._state < 2) xhr._setState(2);
-                        if (xhr._state < 3) xhr._setState(3);
-                        xhr._send = false;
-                        xhr._bytes = concatBytes(xhr._chunks);
-                        xhr._chunks = [];
-                        xhr._setState(4);
-                        fire(xhr, new ProgressEvent('load', { lengthComputable: true, loaded, total: loaded }));
-                        fire(xhr, new ProgressEvent('loadend', { lengthComputable: true, loaded, total: loaded }));
+                        if (xhr._state < 2) this.head(200, 'OK', [], xhr._url);
+                        if (!xhr._send) return;
+                        xhr._finish(total);
                     },
-                });
+                }, { preflight });
         } catch (e) {
-            N.queueTask(() => this._fail('error'));
+            this._abort = null;
+            N.queueTask(() => { if (this._send) this._fail('error'); });
             return;
         }
-        if (this._timeout) this._timer = G.setTimeout(() => { if (this._abort) { this._abort(); this._abort = null; } this._fail('timeout'); }, this._timeout);
+        this._arm();
+    }
+    _finish(total) {
+        const loaded = this._loaded;
+        if (this._state < 3) this._state = 3;
+        this._send = false;
+        this._bytes = concatBytes(this._chunks);
+        this._chunks = [];
+        const pe = { lengthComputable: total > 0, loaded, total };
+        if (!this._sync) fire(this, new ProgressEvent('progress', pe));
+        this._setState(4);
+        fire(this, new ProgressEvent('load', pe));
+        fire(this, new ProgressEvent('loadend', pe));
+    }
+    /* A synchronous request. data: and blob: URLs are answered at once.
+     * A worker on its own stack waits for the network while the page
+     * runs (N.fetchSync). A document cannot wait: delivering network data
+     * inside a script call would re-enter the parser and every loader, so
+     * the request fails with NetworkError. */
+    _sendSync(bytes, preflight) {
+        const url = this._url.replace(/#.*$/, '');
+        let r = null;
+        if (/^data:/i.test(url)) {
+            const d = decodeDataUrl(url);
+            if (d) r = [200, [['content-type', d[1]]], d[0], url, 'OK'];
+        } else if (/^blob:/i.test(url)) {
+            const blob = blobUrls.get(url);
+            if (blob && this._method === 'GET') r = [200, [['content-type', blob.type]], blob._b, url, 'OK'];
+        } else {
+            try { r = N.fetchSync(this._method, url, this._headers, bytes, this._cred ? 2 : 1, 0, 0, null, { preflight }); }
+            catch (e) { r = null; }
+        }
+        if (!r) {
+            this._error = true;
+            this._send = false;
+            this._state = 4;
+            this._bytes = new Uint8Array(0);
+            fireSimple(this, 'readystatechange', false, false);
+            throw domErr('The synchronous request failed', 'NetworkError');
+        }
+        this._status = r[0]; this._respHeaders = r[1]; this._finalUrl = r[3]; this._statusText = r[4] || '';
+        this._chunks = [r[2]];
+        this._loaded = r[2].length;
+        this._finish(r[2].length);
     }
     _fail(kind) {
+        this._disarm();
         this._error = true;
         this._send = false;
         this._bytes = new Uint8Array(0);
+        this._chunks = [];
         this._status = 0;
         this._respHeaders = [];
         this._setState(4);
+        if (this._uploading) {
+            this._uploading = false;
+            fire(this._upload, new ProgressEvent(kind));
+            fire(this._upload, new ProgressEvent('loadend'));
+        }
         fire(this, new ProgressEvent(kind));
         fire(this, new ProgressEvent('loadend'));
     }
     abort() {
         if (this._abort) { this._abort(); this._abort = null; }
-        if ((this._state === 1 && this._send) || this._state === 2 || this._state === 3) {
-            this._error = true;
-            this._send = false;
-            this._setState(4);
-            fire(this, new ProgressEvent('abort'));
-            fire(this, new ProgressEvent('loadend'));
-        }
-        if (this._state === 4) this._state = 0;
+        if ((this._state === 1 && this._send) || this._state === 2 || this._state === 3) this._fail('abort');
+        if (this._state === 4) { this._state = 0; this._send = false; }
     }
     getResponseHeader(n) {
         if (this._state < 2 || this._error) return null;
@@ -659,26 +954,48 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
         const h = new Headers();
         for (const [k, v] of this._respHeaders) { try { h.append(k, v); } catch (e) { /* dropped */ } }
         let s = '';
-        for (const [k, v] of h) if (k !== 'set-cookie') s += k + ': ' + v + '\r\n';
+        for (const [k, v] of h) if (k !== 'set-cookie' && k !== 'set-cookie2') s += k + ': ' + v + '\r\n';
         return s;
     }
+    /* The final type: overrideMimeType's, else Content-Type's. */
+    _finalType() { return this._mime !== null ? this._mime : (this.getResponseHeader('content-type') || ''); }
     _text() {
         const b = this._bytes || concatBytes(this._chunks);
+        let enc = charsetOf(this._finalType());
+        if (b.length >= 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) enc = 'utf-8';
+        else if (b.length >= 2 && b[0] === 0xff && b[1] === 0xfe) enc = 'utf-16le';
+        else if (b.length >= 2 && b[0] === 0xfe && b[1] === 0xff) enc = 'utf-16be';
+        if (enc && !/^utf-?8$/i.test(enc)) { try { return new TextDecoder(enc).decode(b); } catch (e) { /* unknown label: UTF-8 */ } }
         return N.utf8Decode(b, false, false);
     }
     get responseText() {
         if (this._type !== '' && this._type !== 'text') throw domErr('responseText needs responseType "" or "text"', 'InvalidStateError');
-        if (this._state < 3) return '';
+        if (this._state < 3 || this._error) return '';
         return this._text();
     }
-    get responseXML() { return null; }
+    _document() {
+        if (this._state !== 4 || this._error) return null;
+        if (this._doc !== undefined) return this._doc;
+        this._doc = null;
+        const mime = mimeOf(this._finalType());
+        /* HTML only, and only for responseType "document": Aura has no XML parser for documents. */
+        if (this._type === 'document' && (mime === 'text/html' || mime === '') && typeof DOMParser === 'function') {
+            try { this._doc = new DOMParser().parseFromString(this._text(), 'text/html'); } catch (e) { this._doc = null; }
+        }
+        return this._doc;
+    }
+    get responseXML() {
+        if (this._type !== '' && this._type !== 'document') throw domErr('responseXML needs responseType "" or "document"', 'InvalidStateError');
+        return this._document();
+    }
     get response() {
         if (this._type === '' || this._type === 'text') return this.responseText;
         if (this._state !== 4 || this._error) return null;
         if (this._resp !== null) return this._resp;
-        if (this._type === 'json') { try { this._resp = JSON.parse(this._text()); } catch (e) { this._resp = null; } }
+        if (this._type === 'json') { try { this._resp = JSON.parse(N.utf8Decode(this._bytes, false, true)); } catch (e) { this._resp = null; } }
         else if (this._type === 'arraybuffer') this._resp = this._bytes.slice().buffer;
-        else if (this._type === 'blob') { const b = new Blob([], { type: this._mime || this.getResponseHeader('content-type') || '' }); b._b = this._bytes; this._resp = b; }
+        else if (this._type === 'blob') { const b = new Blob([], { type: this._finalType() }); b._b = this._bytes; this._resp = b; }
+        else if (this._type === 'document') this._resp = this._document();
         return this._resp;
     }
 }
@@ -691,17 +1008,23 @@ for (const C of [XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest
 
 /* Script loads for the page (external classic scripts loaded by src/page
  * go through the embedder's loader directly; this is for dynamically
- * inserted scripts and modules). */
-P.fetchText = function (url, dest, cb) {
+ * inserted scripts and modules). dest 2 (a module) is fetched with CORS,
+ * a classic script without. cb(text or null, message, finalUrl,
+ * crossOrigin): crossOrigin is true when the script came from another
+ * origin without CORS, and its errors are then muted. */
+P.fetchText = function (url, dest, cb, cors) {
     const chunks = [];
-    let status = 0;
+    let status = 0, final = url, type = 'basic';
     try {
-        startFetch('GET', url, [], null, 1, dest === 2 ? 0 : 1, dest, {
-            head(s) { status = s; },
+        startFetch('GET', url, [], null, cors === 2 ? 2 : 1, dest === 2 || cors ? 0 : 1, dest, {
+            head(s, t, h, u, ty) { status = s; if (u) final = u; type = ty; },
             data(b) { chunks.push(b); },
-            done(ok, msg) { cb(ok && (status === 0 || (status >= 200 && status < 300)) ? N.utf8Decode(concatBytes(chunks), false, false) : null, msg); },
+            done(ok, msg) {
+                cb(ok && (status === 0 || (status >= 200 && status < 300)) ? N.utf8Decode(concatBytes(chunks), false, false) : null,
+                    msg, final, type === 'opaque');
+            },
         });
     } catch (e) {
-        N.queueTask(() => cb(null, e.message));
+        N.queueTask(() => cb(null, e.message, url, false));
     }
 };

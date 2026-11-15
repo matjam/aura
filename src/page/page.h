@@ -30,6 +30,7 @@
 #define AURA_PAGE_H
 
 #include "../dom/control.h"
+#include "../core/coro.h"
 #include "../html/html.h"
 #include "../layout/layout.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct */
@@ -53,6 +54,26 @@ typedef struct AuResourceRequest {
     const void *body;
     size_t body_len;
     const char *body_type;
+    /* A request made by script (fetch, XMLHttpRequest, a worker) or a
+     * resource fetched with CORS (a crossorigin attribute); zero for the
+     * rest. method is then any method. headers: name, value pairs to send
+     * as given. script_mode: 0 for a resource of the page, else 1 cors,
+     * 2 no-cors, 3 same-origin. cache: 0 the page's mode, 1 no-store,
+     * 2 reload, 3 no-cache (revalidate), 4 force-cache and only-if-cached
+     * (any stored copy). referrer: NULL for the document's URL, "" for
+     * none, else the URL to send. */
+    const char *const *headers;
+    size_t nheaders; /* pairs */
+    uint8_t script_mode;
+    uint8_t cache;
+    bool omit_credentials;
+    bool manual_redirect; /* deliver a 3xx response instead of following it */
+    const char *referrer;
+    uint8_t referrer_policy; /* 0: the document's; else 1 no-referrer ... 8 unsafe-url, as AuReferrerPolicy */
+    /* A resource of the page fetched with CORS (an element with a
+     * crossorigin attribute): 1 anonymous, 2 with credentials. The view
+     * checks the response itself. */
+    uint8_t cors_resource;
 } AuResourceRequest;
 
 typedef struct AuLoader {
@@ -106,6 +127,9 @@ typedef struct AuDocViewCallbacks {
      * .getRandomValues); false when the source is not ready. Optional:
      * without it pages have no crypto object. */
     bool (*random)(void *ctx, AuDocView *dv, void *buf, size_t len);
+    /* Coroutines for workers (core/coro.h). Optional: without them a
+     * worker runs on the caller's stack, a task at a time. */
+    const AuCoroOps *coro;
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */
@@ -159,6 +183,16 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok);
 bool au_docview_loading(const AuDocView *dv);
 /* Requests still outstanding. */
 uint32_t au_docview_pending(const AuDocView *dv);
+
+/* Whether the image at url (absolute) may be read by the document's
+ * script, for a canvas: true when it came from the document's origin (and
+ * no redirect left it), from a data: URL, or passed the CORS check because
+ * its <img> has a crossorigin attribute. A canvas that draws an image for
+ * which this is false becomes tainted: its pixels must not be read back
+ * (getImageData, toDataURL, toBlob). An image script made but never put
+ * in the document (new Image) is fetched without CORS, whatever its
+ * crossOrigin property says. */
+bool au_docview_image_origin_clean(AuDocView *dv, const char *url);
 
 const char *au_docview_url(const AuDocView *dv);      /* never NULL */
 const char *au_docview_base_url(const AuDocView *dv); /* never NULL */

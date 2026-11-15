@@ -30,14 +30,35 @@ const char au_js_prelude_src[] = {
     , '\n',
 #embed "prelude_window.js"
     , '\n',
+#embed "prelude_web.js"
+    , '\n',
 #embed "prelude_net.js"
     , '\n',
 #embed "prelude_canvas.js"
+    , '\n',
+#embed "prelude_workers.js"
     , '\n',
 #embed "prelude_obs.js"
     , 0};
 
 const size_t au_js_prelude_len = sizeof au_js_prelude_src - 1;
+
+/* A worker's prelude: prelude.js, prelude_web.js, prelude_net.js and
+ * prelude_worker.js. */
+extern const char au_js_worker_prelude_src[];
+extern const size_t au_js_worker_prelude_len;
+
+const char au_js_worker_prelude_src[] = {
+#embed "prelude.js"
+    , '\n',
+#embed "prelude_web.js"
+    , '\n',
+#embed "prelude_net.js"
+    , '\n',
+#embed "prelude_worker.js"
+    , 0};
+
+const size_t au_js_worker_prelude_len = sizeof au_js_worker_prelude_src - 1;
 
 #else
 
@@ -52,5 +73,14 @@ const unsigned char au_js_prelude_bc[] = {
 };
 
 const size_t au_js_prelude_bc_len = sizeof au_js_prelude_bc;
+
+extern const unsigned char au_js_worker_prelude_bc[];
+extern const size_t au_js_worker_prelude_bc_len;
+
+const unsigned char au_js_worker_prelude_bc[] = {
+#embed "prelude_worker.bc"
+};
+
+const size_t au_js_worker_prelude_bc_len = sizeof au_js_worker_prelude_bc;
 
 #endif

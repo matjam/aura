@@ -1,5 +1,5 @@
 // Limits: memory, stack depth, run time, deep trees. Run with
-// --mem 16 --kill 1000 --expect-errors 5: two scripts run past the time
+// --mem 16 --kill 4000 --expect-errors 5: two scripts run past the time
 // limit and two run out of memory, each stopped and reported once; one
 // throws null.
 

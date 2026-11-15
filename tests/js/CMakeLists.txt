@@ -9,8 +9,19 @@ foreach(name dom_tree events collections html_elements loop window net observers
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
 
+# Workers on their own stacks (the host's coroutines), and without them.
+add_test(NAME js_workers
+         COMMAND ${JS_TOOL} js --quiet --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers.js)
+add_test(NAME js_workers_inline
+         COMMAND ${JS_TOOL} js --quiet --no-coro --kill 300 --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers_inline.js)
+
+# The kill timer is 4 s: the scripts that must finish (deep trees, filling
+# the heap) take well under 100 ms on an idle machine, and with 1 s a busy
+# machine or a sanitizer build stopped one of them as running too long.
+# The two endless loops then take 4 s each.
 add_test(NAME js_limits
-         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 4000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+set_tests_properties(js_limits PROPERTIES TIMEOUT 300)
 # Date with the embedder's clock and zone (au_js_set_clock): a fixed time,
 # 2023-11-14T22:13:20.000Z, in a zone 8 hours west of UTC.
 add_test(NAME js_clock

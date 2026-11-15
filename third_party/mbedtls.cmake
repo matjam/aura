@@ -84,3 +84,4 @@ set_source_files_properties(${AURA_MBEDTLS_PROTOCOL_SOURCES} PROPERTIES COMPILE_
 # the engine comes before the library on the link line, so a one-pass
 # linker finds them.
 target_link_libraries(aura_engine PUBLIC aura_mbedtls)
+

@@ -3,6 +3,11 @@
 #define AURA_HOST_H
 
 #include "platform/platform.h"
+#include "core/coro.h"
+
+/* Coroutines for the host tools (coro_host.c): a thread per coroutine,
+ * run one at a time. */
+const AuCoroOps *au_host_coro_ops(void);
 
 /* Fonts named on the command line; au_platform_load_fonts loads them
  * before the system fonts. */

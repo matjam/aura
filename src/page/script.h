@@ -25,8 +25,10 @@ void au_docscript_script_ready(void *ctx, AuHtmlParser *p, AuElement *script);
 void au_docscript_parse_done(AuDocScript *s);
 /* The response head of an AU_RES_OTHER request (headers are name/value
  * pairs; final_url NULL for the request URL). */
+/* muted: the response is of another origin and was fetched without CORS
+ * (a classic script from it runs with its errors muted). */
 void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const char *status_text,
-                                const char *final_url, const char *const *headers, size_t nheaders);
+                                const char *final_url, const char *const *headers, size_t nheaders, bool muted);
 /* A resource of kind AU_RES_OTHER finished. Returns true if it was the
  * script side's request. */
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok);
@@ -99,6 +101,11 @@ bool au_docscript_flush_nav(AuDocScript *s);
 uint32_t au_dv_request(AuDocView *dv, const char *url, bool background);
 /* The same with a method and body (the loader's request_ex is needed). */
 uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool background);
+/* A script element's source, fetched with the CORS mode of its
+ * crossorigin attribute (au_dv_cors_attr: 0 none, 1 anonymous, 2
+ * use-credentials); the view fails the load when the CORS check does. */
+uint32_t au_dv_request_cors(AuDocView *dv, const char *url, uint8_t cors);
+uint8_t au_dv_cors_attr(const AuElement *el);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);
