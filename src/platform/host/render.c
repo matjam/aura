@@ -198,7 +198,8 @@ int au_host_render_main(int argc, char **argv)
  * layout after only the width changed (through the document view, as a
  * window resize does, and in the layout alone), a paint of the viewport,
  * of a 32-pixel strip, and of page downs over content not painted before.
- * Each figure is the best of N runs (default 3). */
+ * Each figure is the best of N runs (default 3). --phase relayout, resize
+ * or paint first runs that one step N times, for a profiler. */
 static double best_of(double *v, int n)
 {
     double b = v[0];
@@ -210,7 +211,7 @@ static double best_of(double *v, int n)
 
 int au_host_layout_bench_main(int argc, char **argv)
 {
-    const char *page = NULL;
+    const char *page = NULL, *phase = NULL;
     int w = 1440, w2 = 656, h = 900, repeat = 3;
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
@@ -227,13 +228,16 @@ int au_host_layout_bench_main(int argc, char **argv)
             h = atoi(argv[++i]);
         else if (!strcmp(a, "--repeat") && i + 1 < argc)
             repeat = atoi(argv[++i]);
+        else if (!strcmp(a, "--phase") && i + 1 < argc)
+            phase = argv[++i];
         else if (a[0] != '-' && !page)
             page = a;
         else
             page = NULL, i = argc;
     }
-    if (!page || w <= 0 || w > 8192 || w2 <= 0 || w2 > 8192 || h <= 0 || h > 16384 || repeat < 1 || repeat > 64) {
-        fprintf(stderr, "usage: aura-host layout-bench page.html [-w W] [-w2 W2] [-h H] [--repeat N] [font options]\n");
+    if (!page || w <= 0 || w > 8192 || w2 <= 0 || w2 > 8192 || h <= 0 || h > 16384 || repeat < 1 || repeat > 4096) {
+        fprintf(stderr, "usage: aura-host layout-bench page.html [-w W] [-w2 W2] [-h H] [--repeat N]\n"
+                        "       [--phase relayout|resize|paint] [font options]\n");
         return 2;
     }
     char *data;
@@ -264,8 +268,38 @@ int au_host_layout_bench_main(int argc, char **argv)
     au_docview_content_size(dv, &cw, &ch);
     printf("%s: %u boxes, %u lines, %u fragments; document %dx%d at width %d\n", page, st.boxes, st.lines, st.frags,
            cw, ch, w);
-    double v[64];
+    static double v[4096];
     int widths[2] = {w, w2};
+    if (phase && !strcmp(phase, "relayout")) {
+        /* For a profiler: only width changes in the layout. */
+        double t0 = now_ms();
+        for (int i = 0; i < repeat; i++)
+            au_layout_update(L, (float)widths[i & 1], (float)h);
+        printf("%d relayouts: %.2f ms each\n", repeat, (now_ms() - t0) / repeat);
+        repeat = 1;
+    } else if (phase && !strcmp(phase, "resize")) {
+        double t0 = now_ms();
+        for (int i = 0; i < repeat; i++) {
+            au_docview_set_viewport(dv, widths[i & 1], h);
+            au_docview_update(dv);
+        }
+        printf("%d resizes: %.2f ms each\n", repeat, (now_ms() - t0) / repeat);
+        repeat = 1;
+    } else if (phase && !strcmp(phase, "paint")) {
+        AuSurface *s = au_surface_new(w, h);
+        AuCanvas *c = au_canvas_new(s);
+        double t0 = now_ms();
+        for (int i = 0; i < repeat; i++)
+            au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)h}, 0, (i % 20) * (h - 40));
+        printf("%d paints: %.3f ms each\n", repeat, (now_ms() - t0) / repeat);
+        t0 = now_ms();
+        for (int i = 0; i < repeat; i++)
+            au_docview_paint(dv, c, (AuRect){0, (float)(h - 32), (float)w, 32}, 0, (i % 80) * 200);
+        printf("%d strips: %.3f ms each\n", repeat, (now_ms() - t0) / repeat);
+        au_canvas_free(c);
+        au_surface_free(s);
+        repeat = 1;
+    }
     /* A layout from scratch: the box tree is built again. */
     for (int k = 0; k < 2; k++) {
         for (int i = 0; i < repeat; i++) {
