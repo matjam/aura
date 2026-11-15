@@ -125,8 +125,15 @@ void l_place_float(AuLayout *L, LFloats *fl, LBlock *f, float cb_w, float cb_h, 
 
 /* ---- Block flow ---- */
 
+/* qpos and qstart carry the margin quirk of quirks mode (as Blink does
+ * it): a positive margin that is the user agent's default for its element
+ * (a paragraph's, a heading's, a list's) is ignored at the start of a
+ * table cell or the body, through every margin that collapses with it,
+ * and dropped at their end. */
 typedef struct LMargin {
     float pos, neg;
+    float qpos;  /* the largest quirky positive margin */
+    bool qstart; /* at the start of a quirky container: quirky margins do not count */
 } LMargin;
 
 static void mc_add(LMargin *m, float v)
@@ -137,7 +144,59 @@ static void mc_add(LMargin *m, float v)
         m->neg = v;
 }
 
-static float mc_val(LMargin m) { return m.pos + m.neg; }
+static float mc_val(LMargin m) { return l_max(m.pos, m.qpos) + m.neg; }
+
+/* A table cell or the body in quirks mode. */
+static bool quirky_container(AuLayout *L, const LBlock *k)
+{
+    if (!L->doc || L->doc->quirks != AU_QUIRKS_FULL || lb_anon(&k->b))
+        return false;
+    if (k->b.inner == LI_TABLE_CELL)
+        return true;
+    return au_is_html_element(k->b.node, AU_ATOM_body);
+}
+
+/* Whether margin side (0 top, 2 bottom) of k is the user agent style
+ * sheet's default, which Blink marks as quirky: the elements and factors
+ * of its em-based block margins. An author margin of the same length
+ * counts as the default. */
+static bool quirky_margin(const LBlock *k, int side)
+{
+    if (lb_anon(&k->b) || !k->b.node || k->m[side] <= 0)
+        return false;
+    const AuNode *n = k->b.node;
+    static const AuAtom one[] = {AU_ATOM_p,    AU_ATOM_blockquote, AU_ATOM_dl,  AU_ATOM_ol,
+                                 AU_ATOM_ul,   AU_ATOM_menu,       AU_ATOM_dir, AU_ATOM_pre,
+                                 AU_ATOM_xmp,  AU_ATOM_plaintext,  AU_ATOM_listing};
+    static const AuAtom heads[] = {AU_ATOM_h1, AU_ATOM_h2, AU_ATOM_h3, AU_ATOM_h4, AU_ATOM_h5, AU_ATOM_h6};
+    static const float factors[] = {0.67f, 0.83f, 1.0f, 1.33f, 1.67f, 2.33f};
+    const AuStyleSurround *s = k->b.style->surr;
+    if (s->margin[side].kind != AU_LEN_PX)
+        return false;
+    float fs = k->b.style->inh->font_size, v = s->margin[side].u.px;
+    for (size_t i = 0; i < sizeof one / sizeof one[0]; i++)
+        if (au_is_html_element(n, one[i]))
+            return fabsf(v - fs) < 0.01f;
+    for (size_t i = 0; i < sizeof heads / sizeof heads[0]; i++)
+        if (au_is_html_element(n, heads[i])) {
+            for (size_t j = 0; j < sizeof factors / sizeof factors[0]; j++)
+                if (fabsf(v - fs * factors[j]) < 0.01f)
+                    return true;
+            return false;
+        }
+    return false;
+}
+
+/* Adds margin side of k to the pending margin. */
+static void mc_add_side(AuLayout *L, LMargin *m, const LBlock *k, int side)
+{
+    if (L->doc && L->doc->quirks == AU_QUIRKS_FULL && quirky_margin(k, side)) {
+        if (!m->qstart && k->m[side] > m->qpos)
+            m->qpos = k->m[side];
+        return;
+    }
+    mc_add(m, k->m[side]);
+}
 
 typedef struct FlowFrame {
     LBlock *box;
@@ -179,7 +238,7 @@ static void resolve(LBfc *S)
     } else {
         S->fr[S->nfr - 1].cursor += mc_val(S->pending);
     }
-    S->pending = (LMargin){0, 0};
+    S->pending = (LMargin){0};
 }
 
 float l_flow_resolve(LFlowRef *fr)
@@ -278,6 +337,10 @@ static void block_width(AuLayout *L, LBlock *k, LBlock *parent, float cw)
 static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined, float cb_h)
 {
     FlowFrame *f = &S->fr[level];
+    if (quirky_container(L, k)) {
+        S->pending.qpos = 0; /* the margin quirk: dropped at its end */
+        S->pending.qstart = false;
+    }
     float bpv = l_bp_v(k);
     float spec = l_spec_height(k, cb_h);
     bool auto_h = spec < 0;
@@ -300,7 +363,7 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
             k->y = S->owner_base + mc_val(S->pending);
         h = 0;
         k->h = bpv;
-        mc_add(&S->pending, k->m[2]);
+        mc_add_side(L, &S->pending, k, 2);
         if (S->owner == k)
             S->owner = NULL;
         /* Otherwise an ancestor still waits: k sits at the top of its parent. */
@@ -316,15 +379,15 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
                 content = S->fr[level].cursor;
             }
             h = l_clamp_h(k, l_max(content, ratio_h), cb_h);
-            S->pending = (LMargin){0, 0};
+            S->pending = (LMargin){0};
         }
     } else {
         h = l_clamp_h(k, spec, cb_h);
-        S->pending = (LMargin){0, 0};
+        S->pending = (LMargin){0};
         S->owner = NULL;
     }
     k->h = h + bpv;
-    mc_add(&S->pending, k->m[2]);
+    mc_add_side(L, &S->pending, k, 2);
     return false;
 }
 
@@ -336,7 +399,7 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
     LBlock *parent = f->box;
     float cw = f->content_w;
     l_resolve_box_edges(k, cw);
-    mc_add(&S->pending, k->m[0]);
+    mc_add_side(L, &S->pending, k, 0);
     resolve(S);
     f = &S->fr[level];
     float top = f->cursor; /* border-top, content coordinates */
@@ -393,8 +456,8 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
         break;
     }
     f->cursor = k->y + k->h;
-    S->pending = (LMargin){0, 0};
-    mc_add(&S->pending, k->m[2]);
+    S->pending = (LMargin){0};
+    mc_add_side(L, &S->pending, k, 2);
 }
 
 static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
@@ -414,7 +477,7 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
         if (clear != AU_CLEAR_NONE && S->floats.n) {
             l_resolve_box_edges(k, cw);
             LMargin saved = S->pending;
-            mc_add(&S->pending, k->m[0]);
+            mc_add_side(L, &S->pending, k, 0);
             float hyp = f->bfc_y + f->cursor + mc_val(S->pending);
             float cy = l_floats_clear_y(&S->floats, clear);
             S->pending = saved;
@@ -433,7 +496,7 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     bool clearance = false;
     if (clear != AU_CLEAR_NONE && S->floats.n) {
         LMargin saved = S->pending;
-        mc_add(&S->pending, k->m[0]);
+        mc_add_side(L, &S->pending, k, 0);
         float hyp = f->bfc_y + f->cursor + mc_val(S->pending);
         float cy = l_floats_clear_y(&S->floats, clear);
         if (hyp < cy) {
@@ -451,7 +514,7 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     if (clearance) {
         provisional_y = k->y;
     } else {
-        mc_add(&S->pending, k->m[0]);
+        mc_add_side(L, &S->pending, k, 0);
         if (k->bw[0] == 0 && k->p[0] == 0) {
             /* Its top margin collapses with its first child's. */
             joined = true;
@@ -481,6 +544,8 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     if (child_cbh < 0 && L->doc && L->doc->quirks == AU_QUIRKS_FULL)
         child_cbh = cb_h;
     uint32_t mark = L->nabs;
+    if (quirky_container(L, k))
+        S->pending.qstart = true;
     int lv = push_frame(S, k, bx, by, content_w);
     L->depth++;
     flow_contents(L, S, lv, child_cbh);
@@ -563,7 +628,11 @@ float l_flow_layout(AuLayout *L, LBlock *b, const LConstraints *c)
     LBfc S;
     memset(&S, 0, sizeof S);
     push_frame(&S, b, 0, 0, c->avail_w);
+    bool quirky = quirky_container(L, b);
+    S.pending.qstart = quirky;
     flow_contents(L, &S, 0, c->avail_h >= 0 ? c->avail_h : c->cb_h);
+    if (quirky)
+        S.pending.qpos = 0;
     float h;
     if (S.owner) {
         /* Only empty boxes: their margins collapse into one, contained. */
