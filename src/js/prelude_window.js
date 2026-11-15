@@ -89,7 +89,9 @@ defProps(WP, {
          * then comes from that document. */
         const src = N.enteredWindow();
         if (src !== G && o === '/' && N.windowInfo(src, 4) !== N.docUrl(2)) return;
-        P.receiveMessage(data, src, src === G ? N.docUrl(2) : N.windowInfo(src, 4), transferOf(origin, arguments[2]));
+        /* its ports are known to its own realm */
+        const ends = src === G ? transferOf(origin, arguments[2]) : N.transferFrom(src, origin, arguments[2]);
+        P.receiveMessage(data, src, src === G ? N.docUrl(2) : N.windowInfo(src, 4), ends);
     },
     captureEvents() {}, releaseEvents() {},
     requestIdleCallback(cb, opts) {
@@ -481,6 +483,7 @@ function transferOf(opts, list) {
     for (const p of ports) { const e = portEnds.get(p); e.wake = null; e.onclose = null; portEnds.delete(p); }
     return ends;
 }
+P.transferOf = transferOf;
 /* Ports of this realm for ends that arrived with a message. */
 const adoptEnds = (ends) => {
     const out = [];

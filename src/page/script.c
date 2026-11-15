@@ -23,8 +23,11 @@
  *   at the end of the turn, never from inside script. */
 #include "script.h"
 
+#include "docview_int.h"
+
 #include "../js/js.h"
 
+#include <stdio.h>
 #include <string.h>
 
 typedef struct PendingScript PendingScript;
@@ -221,6 +224,9 @@ static void request_nav(AuDocScript *s, const char *url, bool new_tab)
     au_free(s->nav_url);
     s->nav_url = au_strndup(url, strlen(url));
     s->nav_new_tab = new_tab;
+    /* When another document's script asked (through this window), no
+     * turn of this document ends: au_frames_idle hands it over. */
+    au_dv_top(s->dv)->frames_work = true;
 }
 
 static void h_navigate(void *ctx, const char *url, bool replace)
@@ -273,6 +279,55 @@ static char *h_prompt(void *ctx, const char *origin, const char *message, const 
     (void)def;
     dialog_log(ctx, "prompt", message);
     return NULL;
+}
+
+/* ---- Frames ---- */
+
+static bool ensure_js(AuDocScript *s);
+
+static void h_frames_changed(void *ctx)
+{
+    AuDocScript *s = ctx;
+    s->dv->frames_dirty = true;
+    au_frames_sync(s->dv);
+}
+
+static int h_frame_count(void *ctx)
+{
+    AuDocScript *s = ctx;
+    return au_frames_window_count(s->dv);
+}
+
+static AuElement *h_frame_at(void *ctx, int i)
+{
+    AuDocScript *s = ctx;
+    return au_frames_window_at(s->dv, i);
+}
+
+/* The script context of the document nested in el, started on demand (a
+ * frame whose document has no script of its own still has a window). */
+static AuJs *h_frame_js(void *ctx, AuElement *el)
+{
+    AuDocScript *s = ctx;
+    AuDocView *c = au_frames_view_of(s->dv, el);
+    if (!c || !c->script || !ensure_js(c->script))
+        return NULL;
+    return c->script->js;
+}
+
+static AuJs *h_parent_js(void *ctx)
+{
+    AuDocScript *s = ctx;
+    AuDocView *p = s->dv->parent;
+    if (!p || !p->script || !ensure_js(p->script))
+        return NULL;
+    return p->script->js;
+}
+
+static AuElement *h_frame_element(void *ctx)
+{
+    AuDocScript *s = ctx;
+    return au_frames_element(s->dv);
 }
 
 /* ---- Fetches made by script (fetch, XHR, module and script loads) ---- */
@@ -415,19 +470,49 @@ static bool ensure_js(AuDocScript *s)
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
-    s->js = au_js_new(s->doc, au_docview_url(s->dv), &set, &h);
+    h.frames_changed = h_frames_changed;
+    h.frame_count = h_frame_count;
+    h.frame_at = h_frame_at;
+    h.frame_js = h_frame_js;
+    h.parent_js = h_parent_js;
+    h.frame_element = h_frame_element;
+    AuDocView *dv = s->dv;
+    if (dv->parent) {
+        /* A nested document: a context in the page's runtime, which the
+         * top-level document owns and so starts first. */
+        AuDocView *top = au_dv_top(dv);
+        if (!top->script || !ensure_js(top->script)) {
+            s->js_failed = true;
+            return false;
+        }
+        const char *url = au_docview_url(dv);
+        char origin[512];
+        set.sandbox_origin = (dv->sandbox & AU_SANDBOX_ORIGIN) != 0;
+        set.no_top_navigation = (dv->sandbox & AU_SANDBOX_TOP_NAV) != 0;
+        if (!strncmp(url, "about:", 6) && dv->parent->script && dv->parent->script->js) {
+            /* about:blank and srcdoc documents have their parent's origin */
+            snprintf(origin, sizeof origin, "%s", au_js_origin(dv->parent->script->js));
+            set.origin = origin;
+        }
+        s->js = au_js_new_child(top->script->js, s->doc, url, &set, &h);
+    } else {
+        s->js = au_js_new(s->doc, au_docview_url(s->dv), &set, &h);
+    }
     if (!s->js) {
         s->js_failed = true;
         return false;
     }
     if (s->parser && !au_html_parser_done(s->parser))
         au_js_set_parser(s->js, s->parser);
+    if (dv->nframes)
+        au_js_frames_changed(s->js); /* frames the parser made before the runtime started */
     return true;
 }
 
 static void enter(AuDocScript *s)
 {
     s->depth++;
+    au_dv_top(s->dv)->script_depth++;
     if (s->js && strcmp(au_docview_base_url(s->dv), au_docview_url(s->dv)) != 0)
         au_js_set_base_url(s->js, au_docview_base_url(s->dv));
 }
@@ -437,6 +522,7 @@ static void enter(AuDocScript *s)
  * used after that (the embedder may start a new document). */
 static void leave(AuDocScript *s)
 {
+    au_dv_top(s->dv)->script_depth--;
     if (--s->depth > 0)
         return;
     au_dv_turn_end(s->dv);
@@ -930,7 +1016,7 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
 
 bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out)
 {
-    if (!s->js)
+    if (!ensure_js(s)) /* a tool asks: start the runtime of a page without script */
         return false;
     enter(s);
     bool ok = au_js_eval(s->js, src, strlen(src), out);
@@ -963,6 +1049,32 @@ void au_docscript_resized(AuDocScript *s)
 void au_docscript_scrolled(AuDocScript *s)
 {
     s->scroll_pending = s->js != NULL;
+}
+
+bool au_docscript_on_stack(const AuDocScript *s)
+{
+    return s && s->js && au_js_running(s->js);
+}
+
+void au_docscript_frames_changed(AuDocScript *s)
+{
+    if (s && s->js)
+        au_js_frames_changed(s->js);
+}
+
+bool au_docscript_flush_nav(AuDocScript *s)
+{
+    if (!s || !s->nav_url || s->depth > 0)
+        return false;
+    char *url = s->nav_url;
+    bool new_tab = s->nav_new_tab;
+    AuDocView *dv = s->dv;
+    s->nav_url = NULL;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(dv);
+    if (cb->open_url)
+        cb->open_url(cb->ctx, dv, url, new_tab);
+    au_free(url);
+    return true;
 }
 
 bool au_docscript_can_persist(AuDocScript *s)

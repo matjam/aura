@@ -69,6 +69,15 @@ typedef struct AuLayoutEnv {
      * be drawn at that size; the surface image() returned is then current.
      * Optional. */
     void (*image_use)(void *ctx, const char *url, int dw, int dh);
+    /* Nested documents (both optional). embed_kind says what an iframe,
+     * frame, object or embed element shows: 0 for layout's own rules (an
+     * image when the resource is one, else the fallback content), 1 a
+     * nested document (a replaced box whose content paint_frame draws),
+     * 2 the fallback content (an object's children). */
+    int (*embed_kind)(void *ctx, AuElement *el);
+    /* Paints el's nested document into its content box (canvas
+     * coordinates), clipped to it. */
+    void (*paint_frame)(void *ctx, AuElement *el, AuCanvas *c, AuRect content);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
@@ -133,6 +142,13 @@ bool au_layout_hit_test(AuLayout *L, float x, float y, float scroll_x, float scr
  * elements: the union of their fragments). Returns false if el has no
  * box. */
 bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out);
+
+/* The content box of el's box in document coordinates (a block-level or
+ * replaced element; false for an inline element or one without a box). */
+bool au_layout_element_content_rect(AuLayout *L, const AuElement *el, AuRect *out);
+/* The canvas background is left unpainted (a nested document shows its
+ * parent through, unless its own root or body paints a background). */
+void au_layout_set_transparent(AuLayout *L, bool on);
 
 /* ---- Form fields (controls.c) ----
  * Geometry of text fields (single-line inputs and textareas) for the

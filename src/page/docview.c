@@ -18,6 +18,13 @@ static const char *attr(const AuElement *el, const char *name)
     return a ? au_element_get_attr(el, a) : NULL;
 }
 
+AuDocView *au_dv_top(AuDocView *dv)
+{
+    while (dv->parent)
+        dv = dv->parent;
+    return dv;
+}
+
 static void invalidate_all(AuDocView *dv)
 {
     if (dv->cb.invalidate) {
@@ -38,6 +45,16 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
     au_docimages_use(dv->imgs, url, dw, dh);
 }
 
+static int layout_embed_kind(void *ctx, AuElement *el)
+{
+    return au_frames_embed_kind(ctx, el);
+}
+
+static void layout_paint_frame(void *ctx, AuElement *el, AuCanvas *c, AuRect content)
+{
+    au_frames_paint(ctx, el, c, content);
+}
+
 /* A new layout drawing with fonts (the layout caches faces, so a change
  * of font set or a new web font needs a new one). */
 static void new_layout(AuDocView *dv, AuFontSet *fonts)
@@ -49,8 +66,11 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         dv->dead_layouts += l;
         au_layout_free(dv->layout);
     }
-    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use};
+    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
+                       layout_paint_frame};
     dv->layout = au_layout_new(&env);
+    if (dv->parent)
+        au_layout_set_transparent(dv->layout, true); /* a nested document shows its parent through */
     if (dv->doc)
         au_layout_set_document(dv->layout, dv->doc);
     if (dv->resolver)
@@ -90,6 +110,11 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
     return dv;
 }
 
+void au_docview_set_request_ex(AuDocView *dv, AuLoaderRequestEx fn)
+{
+    dv->request_ex = fn;
+}
+
 /* Frees a sheet source and its imports (at most SHEET_IMPORT_DEPTH deep).
  * The resolver must not hold the parsed sheet any more
  * (au_css_resolver_detach_sheets). */
@@ -118,8 +143,32 @@ static void free_sheet_src(AuDocView *dv, SheetSrc *s)
     au_free(s);
 }
 
+/* Stops request id of dv. A nested view's requests were made through
+ * the top view's loader. */
+static void loader_cancel(AuDocView *dv, uint32_t id)
+{
+    AuDocView *top = au_dv_top(dv);
+    if (top->loader.cancel)
+        top->loader.cancel(top->loader.ctx, id);
+    for (uint32_t i = 0; i < top->nroutes; i++)
+        if (top->routes[i].id == id) {
+            top->routes[i] = top->routes[--top->nroutes];
+            break;
+        }
+}
+
+void au_dv_drop_routes(AuDocView *top, AuDocView *dv)
+{
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < top->nroutes; i++)
+        if (top->routes[i].dv != dv)
+            top->routes[k++] = top->routes[i];
+    top->nroutes = k;
+}
+
 static void clear_document(AuDocView *dv)
 {
+    au_frames_clear(dv); /* nested documents first: their script contexts go before this one's */
     au_forms_clear(dv);
     if (dv->script) {
         AuDocScript *s = dv->script;
@@ -128,8 +177,7 @@ static void clear_document(AuDocView *dv)
     }
     dv->nbg = 0;
     for (uint32_t i = 0; i < dv->nreqs; i++) {
-        if (dv->loader.cancel)
-            dv->loader.cancel(dv->loader.ctx, dv->reqs[i].id);
+        loader_cancel(dv, dv->reqs[i].id);
         au_buf_free(&dv->reqs[i].data);
     }
     dv->nreqs = 0;
@@ -178,6 +226,11 @@ void au_docview_free(AuDocView *dv)
     if (!dv)
         return;
     clear_document(dv);
+    if (dv->parent)
+        au_dv_drop_routes(au_dv_top(dv), dv);
+    au_free(dv->frames);
+    au_free(dv->routes);
+    au_free(dv->dead);
     au_layout_free(dv->layout);
     au_docimages_free(dv->imgs);
     au_free(dv->slots);
@@ -200,6 +253,7 @@ void au_docview_set_user_css(AuDocView *dv, const char *css)
     au_css_sheet_free(dv->user_sheet);
     dv->user_sheet = NULL;
     dv->sheets_dirty = true;
+    au_frames_settings_changed(dv);
 }
 
 /* ---- Images (the cache and its bookkeeping are in docimages.c) ---- */
@@ -244,12 +298,13 @@ uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms)
 {
     uint32_t next = au_docimages_tick(dv->imgs, now_ms);
     images_changed(dv);
-    return next;
+    uint32_t fn = au_frames_animate(dv, now_ms);
+    return fn < next ? fn : next;
 }
 
 bool au_docview_animating(const AuDocView *dv)
 {
-    return au_docimages_animating(dv->imgs);
+    return au_docimages_animating(dv->imgs) || au_frames_animating(dv);
 }
 
 void au_docview_stats(const AuDocView *dv, AuDocViewStats *s)
@@ -277,15 +332,37 @@ void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p)
         au_css_resolver_set_font_prefs(dv->resolver, p);
         dv->style_all = true;
     }
+    au_frames_settings_changed(dv);
 }
 
 /* ---- Requests ---- */
 
-static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind)
+/* Asks the loader. Every request of the page goes through the top view's
+ * loader, with the top view as its dv; a nested view's id is noted in the
+ * top view's routes so the data finds its way (au_docview_resource_*). */
+static uint32_t loader_start(AuDocView *dv, const AuResourceRequest *rq)
 {
-    if (!dv->loader.request)
-        return NULL;
-    uint32_t id = dv->loader.request(dv->loader.ctx, dv, url, kind);
+    AuDocView *top = au_dv_top(dv);
+    uint32_t id = 0;
+    if (top->request_ex)
+        id = top->request_ex(top->loader.ctx, top, rq);
+    else if (top->loader.request)
+        id = top->loader.request(top->loader.ctx, top, rq->url, rq->kind);
+    if (id && top != dv) {
+        if (top->nroutes == top->routes_cap) {
+            top->routes_cap = top->routes_cap ? top->routes_cap * 2 : 16;
+            top->routes = au_realloc(top->routes, top->routes_cap * sizeof *top->routes);
+        }
+        top->routes[top->nroutes].id = id;
+        top->routes[top->nroutes].dv = dv;
+        top->nroutes++;
+    }
+    return id;
+}
+
+static Request *add_request_ex(AuDocView *dv, const AuResourceRequest *rq)
+{
+    uint32_t id = loader_start(dv, rq);
     if (!id)
         return NULL;
     if (dv->nreqs == dv->reqs_cap) {
@@ -295,9 +372,43 @@ static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind)
     Request *r = &dv->reqs[dv->nreqs++];
     memset(r, 0, sizeof *r);
     r->id = id;
-    r->kind = kind;
+    r->kind = rq->kind;
     au_buf_init(&r->data);
     return r;
+}
+
+uint32_t au_dv_start_request(AuDocView *dv, const AuResourceRequest *rq, AuFrame *f)
+{
+    Request *r = add_request_ex(dv, rq);
+    if (!r)
+        return 0;
+    r->frame = f;
+    dv->finished_reported = false;
+    return r->id;
+}
+
+static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind)
+{
+    AuResourceRequest rq;
+    memset(&rq, 0, sizeof rq);
+    rq.url = url;
+    rq.kind = kind;
+    rq.document_url = dv->url;
+    return add_request_ex(dv, &rq);
+}
+
+
+/* The nested view a request of the top view was made for, or NULL. */
+static AuDocView *route_of(AuDocView *dv, uint32_t id, bool remove)
+{
+    for (uint32_t i = 0; i < dv->nroutes; i++)
+        if (dv->routes[i].id == id) {
+            AuDocView *t = dv->routes[i].dv;
+            if (remove)
+                dv->routes[i] = dv->routes[--dv->nroutes];
+            return t;
+        }
+    return NULL;
 }
 
 static Request *find_request(AuDocView *dv, uint32_t id)
@@ -428,15 +539,35 @@ void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char
                               const char *final_url, const char *const *headers, size_t nheaders)
 {
     Request *r = find_request(dv, id);
-    if (r && r->kind == AU_RES_OTHER && !r->font && dv->script)
+    if (!r) {
+        AuDocView *t = route_of(dv, id, false);
+        if (t)
+            au_docview_resource_head(t, id, status, status_text, final_url, headers, nheaders);
+        return;
+    }
+    if (r->kind == AU_RES_FRAME) {
+        if (r->frame)
+            au_frames_head(dv, r->frame, status, final_url, headers, nheaders);
+        return;
+    }
+    if (r->kind == AU_RES_OTHER && !r->font && dv->script)
         au_docscript_resource_head(dv->script, id, status, status_text, final_url, headers, nheaders);
 }
 
 void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size_t len)
 {
     Request *r = find_request(dv, id);
-    if (!r)
+    if (!r) {
+        AuDocView *t = route_of(dv, id, false);
+        if (t)
+            au_docview_resource_data(t, id, data, len);
         return;
+    }
+    if (r->kind == AU_RES_FRAME) {
+        if (r->frame)
+            au_frames_data(dv, r->frame, data, len);
+        return;
+    }
     if (r->kind == AU_RES_IMAGE && r->image) {
         images_data(dv, r->image, data, len);
         return;
@@ -466,12 +597,25 @@ static void maybe_finished(AuDocView *dv)
 void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
 {
     Request *r = find_request(dv, id);
-    if (!r)
+    if (!r) {
+        AuDocView *t = route_of(dv, id, true);
+        if (t)
+            au_docview_resource_done(t, id, ok);
+        au_frames_idle(dv);
         return;
+    }
     Request req = *r;
     *r = dv->reqs[--dv->nreqs];
     if (req.background)
         dv->nbg--;
+    if (req.kind == AU_RES_FRAME) {
+        if (req.frame)
+            au_frames_done(dv, req.frame, ok);
+        au_buf_free(&req.data);
+        maybe_finished(dv);
+        au_frames_idle(dv);
+        return;
+    }
     if (req.kind == AU_RES_OTHER && !req.font) {
         if (dv->script)
             au_docscript_resource_done(dv->script, req.id, req.data.data, req.data.len, ok);
@@ -511,7 +655,8 @@ uint32_t au_docview_pending(const AuDocView *dv)
 
 bool au_docview_loading(const AuDocView *dv)
 {
-    return dv->parsing || dv->nreqs > dv->nbg || (dv->script && au_docscript_busy(dv->script));
+    return dv->parsing || dv->nreqs > dv->nbg || (dv->script && au_docscript_busy(dv->script)) ||
+           au_frames_loading(dv);
 }
 
 /* ---- Keeping a document while it is not shown ---- */
@@ -520,11 +665,12 @@ bool au_docview_can_persist(AuDocView *dv)
 {
     if (!dv->doc || au_docview_loading(dv) || dv->nreqs)
         return false;
-    return au_docscript_can_persist(dv->script);
+    return au_docscript_can_persist(dv->script) && au_frames_can_persist(dv);
 }
 
 void au_docview_set_hidden(AuDocView *dv, bool hidden)
 {
+    au_frames_set_hidden(dv, hidden); /* its frames pause and resume with it */
     au_docscript_page_transition(dv->script, !hidden);
     /* A hidden document gives up its decoded image pixels (the compressed
      * bytes stay, and images decode again when they are next painted):
@@ -580,6 +726,7 @@ size_t au_docview_memory_estimate(AuDocView *dv)
     au_image_cache_stats(au_docimages_cache(dv->imgs), &is);
     n += is.decoded_bytes + is.decoder_bytes + is.compressed_bytes;
     n += au_docscript_memory(dv->script);
+    n += au_frames_memory(dv);
     return n;
 }
 
@@ -822,6 +969,8 @@ void au_docview_feed(AuDocView *dv, const char *bytes, size_t len)
     au_html_parser_feed(dv->parser, bytes, len);
     dv->tree_dirty = true;
     scan_document(dv, false);
+    dv->frames_dirty = true;
+    au_frames_sync(dv);
 }
 
 void au_docview_finish(AuDocView *dv)
@@ -838,6 +987,8 @@ void au_docview_finish(AuDocView *dv)
     dv->parsing = false;
     dv->tree_dirty = true;
     scan_document(dv, true);
+    dv->frames_dirty = true;
+    au_frames_sync(dv);
     invalidate_all(dv);
     au_forms_autofocus(dv);
     if (dv->script)
@@ -946,6 +1097,8 @@ static void prune_slots(AuDocView *dv)
 static bool update_style(AuDocView *dv)
 {
     bool changed = false;
+    if (dv->frames_dirty)
+        au_frames_sync(dv); /* what an object or embed shows decides its box */
     if (dv->sheets_rescan) {
         dv->sheets_rescan = false;
         prune_slots(dv);
@@ -1009,6 +1162,8 @@ bool au_docview_update(AuDocView *dv)
         changed = true;
     if (changed)
         dv->layout_ran = true;
+    if (dv->nframes)
+        au_frames_layout(dv);
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
     if ((w != dv->last_w || h != dv->last_h)) {
@@ -1053,6 +1208,8 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height)
 
 void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
 {
+    if (!dv->parent)
+        au_frames_idle(dv);
     au_docview_update(dv);
     dv->scroll_x = scroll_x;
     dv->scroll_y = scroll_y;
@@ -1137,10 +1294,72 @@ static void link_url(AuDocView *dv, AuElement *link, char *out, size_t cap)
         out[0] = 0;
 }
 
+void au_dv_set_hover(AuDocView *dv, AuElement *el)
+{
+    if (dv->doc && dv->resolver)
+        set_state(dv, &dv->hover, el, AU_STATE_HOVER);
+}
+
+/* The pointer left the view (it moved out of the frame). */
+void au_dv_mouse_leave(AuDocView *dv)
+{
+    if (!dv->doc)
+        return;
+    bool f;
+    AuEvent ev;
+    memset(&ev, 0, sizeof ev);
+    ev.type = AU_EVENT_MOUSE_MOVE;
+    ev.x = ev.y = -100000;
+    if (dv->hover_frame)
+        au_frames_mouse(dv, &ev, &f);
+    if (dv->script && dv->hover)
+        au_docscript_hover(dv->script, dv->hover, NULL, -1, -1);
+    if (!dv->doc)
+        return;
+    set_state(dv, &dv->hover, NULL, AU_STATE_HOVER);
+    if (dv->hover_link[0]) {
+        dv->hover_link[0] = 0;
+        if (dv->cb.status_text)
+            dv->cb.status_text(dv->cb.ctx, dv, "");
+    }
+    if (dv->restyle_needed) {
+        au_docview_update(dv);
+        if (au_layout_needs_paint(dv->layout))
+            invalidate_all(dv);
+    }
+}
+
+void au_dv_tree_dirty(AuDocView *dv)
+{
+    dv->tree_dirty = true;
+    invalidate_all(dv);
+}
+
+/* Follows a link: into a frame, in the tab or in a new tab, as its
+ * target says. */
+static void follow_link(AuDocView *dv, const char *url, const char *target, bool new_tab)
+{
+    AuDocView *to = NULL;
+    int where = au_frames_route(dv, target, new_tab, false, &to);
+    if (where == 1) {
+        au_frames_navigate(to, url, NULL);
+    } else if (where >= 2) {
+        AuDocView *top = au_dv_top(dv);
+        if (top->cb.open_url)
+            top->cb.open_url(top->cb.ctx, top, url, where == 3);
+    }
+}
+
 bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
 {
     if (!dv->doc)
         return false;
+    bool in_frame;
+    if (au_frames_mouse(dv, ev, &in_frame)) {
+        if (!dv->parent)
+            au_frames_idle(dv);
+        return in_frame;
+    }
     AuHitResult r;
     au_docview_hit_test(dv, ev->x, ev->y, &r);
     if (dv->script) {
@@ -1235,8 +1454,8 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                 /* Runs only in this document, and only with scripting on. */
                 if (dv->script)
                     au_docscript_javascript_url(dv->script, url);
-            } else if (url[0] && dv->cb.open_url) {
-                dv->cb.open_url(dv->cb.ctx, dv, url, new_tab);
+            } else if (url[0]) {
+                follow_link(dv, url, target, new_tab);
             }
             used = true;
         }
@@ -1256,6 +1475,8 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
 bool au_docview_scroll_at(AuDocView *dv, int x, int y, int dx, int dy)
 {
     au_docview_update(dv);
+    if (dv->nframes && au_frames_scroll(dv, x, y, dx, dy))
+        return true;
     bool ok = au_layout_scroll_at(dv->layout, (float)(x - dv->scroll_x), (float)(y - dv->scroll_y),
                                   (float)dv->scroll_x, (float)dv->scroll_y, (float)dx, (float)dy);
     if (ok)
@@ -1327,20 +1548,31 @@ bool au_docview_scripting(const AuDocView *dv)
 
 bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms)
 {
+    if (!dv->parent)
+        au_frames_idle(dv);
+    bool ran = dv->nframes && au_frames_run_scripts(dv, budget_ms);
     if (!dv->script)
-        return false;
+        return ran;
     if (!dv->cb.now_ms)
         dv->clock += budget_ms;
     if (dv->layout_ran) {
         dv->layout_ran = false;
         au_docscript_layout_done(dv->script);
     }
-    return dv->script && au_docscript_run(dv->script, budget_ms);
+    if (dv->script && au_docscript_run(dv->script, budget_ms))
+        ran = true;
+    if (!dv->parent)
+        au_frames_idle(dv);
+    return ran;
 }
 
 uint32_t au_docview_scripts_due(AuDocView *dv)
 {
-    return dv->script ? au_docscript_due(dv->script) : UINT32_MAX;
+    uint32_t due = dv->script ? au_docscript_due(dv->script) : UINT32_MAX;
+    uint32_t fd = dv->nframes ? au_frames_scripts_due(dv) : UINT32_MAX;
+    if (au_dv_top(dv)->frames_work)
+        return 0;
+    return fd < due ? fd : due;
 }
 
 bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out)
@@ -1366,8 +1598,7 @@ void au_dv_cancel(AuDocView *dv, uint32_t id)
     Request *r = find_request(dv, id);
     if (!r)
         return;
-    if (dv->loader.cancel)
-        dv->loader.cancel(dv->loader.ctx, id);
+    loader_cancel(dv, id);
     if (r->background)
         dv->nbg--;
     au_buf_free(&r->data);
@@ -1379,6 +1610,12 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
     if (!dv->doc)
         return;
     AuElement *el = au_is_element(n) ? au_as_element(n) : NULL;
+    /* Frame elements may have come or gone (children), or changed what
+     * they show (an attribute of one). */
+    if (kind == 1 || (kind == 2 && el && el->ns == AU_NS_HTML &&
+                      (el->tag == AU_ATOM_iframe || el->tag == AU_ATOM_frame || el->tag == AU_ATOM_object ||
+                       el->tag == AU_ATOM_embed)))
+        dv->frames_dirty = true;
     if (kind == 2 && el && dv->resolver) { /* attribute */
         /* Attributes the box tree never reads: they reach layout only
          * through selectors and attr(), which the restyle covers. Scripts

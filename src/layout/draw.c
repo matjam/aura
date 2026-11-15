@@ -1728,6 +1728,11 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
     case LR_SVG:
         paint_svg(P, b, cb);
         break;
+    case LR_OTHER:
+        /* A nested document (iframe, frame, object, embed). */
+        if (P->L->env.paint_frame && b->b.node && au_is_element(b->b.node) && cb.w >= 1 && cb.h >= 1)
+            P->L->env.paint_frame(P->L->env.ctx, au_as_element(b->b.node), P->c, cb);
+        break;
     case LR_IMAGE:
         if (r && r->pixels) {
             if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
@@ -2875,7 +2880,8 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     float tx0, ty0;
     au_canvas_get_translation(c, &tx0, &ty0);
     if (!L->root) {
-        au_fill_rect(c, view, AU_RGB(255, 255, 255));
+        if (!L->transparent)
+            au_fill_rect(c, view, AU_RGB(255, 255, 255));
         au_canvas_clip_pop(c);
         return;
     }
@@ -2899,7 +2905,8 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     LBlock *bgbox;
     const AuStyle *cs = canvas_style(L, &bgbox);
     uint32_t bg = pc(cs, cs->bg->background_color);
-    au_fill_rect(c, view, AU_RGB(255, 255, 255));
+    if (!L->transparent)
+        au_fill_rect(c, view, AU_RGB(255, 255, 255));
     if (bg >> 24)
         au_fill_rect(c, view, bg);
     LBlock *root = (LBlock *)L->root;

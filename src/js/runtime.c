@@ -204,6 +204,11 @@ void js_leave(AuJs *js)
     }
 }
 
+const char *au_js_origin(const AuJs *js)
+{
+    return js->origin;
+}
+
 bool au_js_running(const AuJs *js)
 {
     return js->root->depth > 0;
@@ -566,7 +571,9 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
         JS_AddIntrinsicRegExp(ctx) || JS_AddIntrinsicJSON(ctx) || JS_AddIntrinsicProxy(ctx) ||
         JS_AddIntrinsicMapSet(ctx) || JS_AddIntrinsicTypedArrays(ctx) || JS_AddIntrinsicPromise(ctx) ||
-        JS_AddIntrinsicWeakRef(ctx) || JS_AddIntrinsicAToB(ctx)) {
+        JS_AddIntrinsicWeakRef(ctx) || JS_AddIntrinsicDOMException(ctx) || JS_AddIntrinsicAToB(ctx)) {
+        /* DOMException by name: JS_AddIntrinsicAToB adds it only to the
+         * first context of a runtime. */
         if (ctx)
             JS_FreeContext(ctx);
         if (!root)

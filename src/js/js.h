@@ -233,6 +233,8 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
 AuJs *au_js_new_child(AuJs *page, AuDocument *doc, const char *url, const AuJsSettings *settings,
                       const AuJsHooks *hooks);
 void au_js_free(AuJs *js);
+/* The document's origin as script sees it ("null" for an opaque one). */
+const char *au_js_origin(const AuJs *js);
 /* Script of the page (any of its documents) is on the stack. */
 bool au_js_running(const AuJs *js);
 /* The frame list of js's document changed outside script (the parser, a

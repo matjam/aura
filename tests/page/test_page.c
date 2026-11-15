@@ -542,7 +542,11 @@ static void test_object_embed(void)
     au_docview_update(dv);
     CHECK(fake_find(&f, "http://example.com/a.png") != NULL, "object image not requested");
     CHECK(fake_find(&f, "http://example.com/movie.swf") == NULL, "plugin data requested");
-    CHECK(fake_find(&f, "http://example.com/404/") == NULL, "nested document requested");
+    /* An object whose resource may be a document asks for it; while it
+     * waits it shows neither the document nor its fallback. */
+    CHECK(fake_find(&f, "http://example.com/404/") != NULL, "nested document not requested");
+    fake_deliver(&f, dv, "http://example.com/404/", "", false);
+    au_docview_update(dv);
     AuRect r = rect_of(dv, "f2");
     CHECK(r.w > 20, "object with a plugin type shows its fallback: %g wide", r.w);
     static uint8_t bmp[54 + 120 * 30];

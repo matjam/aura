@@ -78,6 +78,14 @@ void au_docscript_page_transition(AuDocScript *s, bool show);
 size_t au_docscript_memory(const AuDocScript *s);
 /* Layout ran: intersection and resize observers. */
 void au_docscript_layout_done(AuDocScript *s);
+/* Frames (frames.c). on_stack: script of the page is running (nothing may
+ * be freed). frames_changed: the document's frame list changed outside
+ * script. flush_nav: hands a navigation script asked for to the embedder
+ * now (true when there was one); for navigations requested through
+ * another document's window. NULL s is fine for all three. */
+bool au_docscript_on_stack(const AuDocScript *s);
+void au_docscript_frames_changed(AuDocScript *s);
+bool au_docscript_flush_nav(AuDocScript *s);
 
 /* ---- script.c to docview.c ---- */
 /* Starts an AU_RES_OTHER request. background requests (fetch, XHR) do

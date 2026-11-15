@@ -230,6 +230,22 @@ static JSValue n_post_message_to(JSContext *ctx, JSValueConst this_val, int argc
     return r; /* a DataCloneError reaches the sender */
 }
 
+/* transferFrom(global, options, list): the ends of the ports in a
+ * transfer list, taken in the realm of the window that owns the ports (a
+ * same-origin caller of this window's postMessage). */
+static JSValue n_transfer_from(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuJs *t = argc > 0 ? js_of_global(js, argv[0]) : NULL;
+    if (!t || JS_IsUndefined(t->P))
+        return JS_NewArray(ctx);
+    JSValue fn = JS_GetPropertyStr(t->ctx, t->P, "transferOf");
+    JSValueConst args[2] = {argc > 1 ? argv[1] : JS_UNDEFINED, argc > 2 ? argv[2] : JS_UNDEFINED};
+    JSValue r = JS_IsFunction(t->ctx, fn) ? JS_Call(t->ctx, fn, JS_UNDEFINED, 2, args) : JS_NewArray(ctx);
+    JS_FreeValue(ctx, fn);
+    return r;
+}
+
 /* navigateWindow(global, url): sets another window's location. Any
  * origin may do this, except a sandboxed document without
  * allow-top-navigation, which may navigate only itself and the documents
@@ -273,6 +289,7 @@ static const JSCFunctionListEntry frame_natives[] = {
     JS_CFUNC_DEF("windowFrameAt", 2, n_window_frame_at),
     JS_CFUNC_DEF("enteredWindow", 0, n_entered_window),
     JS_CFUNC_DEF("postMessageTo", 4, n_post_message_to),
+    JS_CFUNC_DEF("transferFrom", 3, n_transfer_from),
     JS_CFUNC_DEF("navigateWindow", 2, n_navigate_window),
 };
 

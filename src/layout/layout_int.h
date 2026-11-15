@@ -354,6 +354,7 @@ struct AuLayout {
     LBox *view_boxes[L_VIEW_BOXES];
     uint32_t nview_boxes;
     bool need_paint;
+    bool transparent;      /* a nested document: the canvas gets no white (au_layout_set_transparent) */
     bool need_restack;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
