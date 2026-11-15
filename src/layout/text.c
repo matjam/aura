@@ -197,28 +197,19 @@ static void shape(LFont *f, const char *t, size_t n, AuGlyphRun *r)
 /* Width of t with per-character fallback, no spacing. */
 static float measure_uncached(AuLayout *L, LFont *f, const char *t, size_t n)
 {
-    (void)L;
     if (!f->face)
         return n * f->size * 0.5f;
-    AuGlyphRun r;
-    au_glyph_run_init(&r);
-    shape(f, t, n, &r);
-    float w = r.width;
-    au_glyph_run_free(&r);
-    return w;
+    shape(f, t, n, &L->run);
+    return L->run.width;
 }
 
 bool l_text_fallback_extents(AuLayout *L, LFont *f, const char *t, size_t n, float *ascent, float *descent)
 {
-    (void)L;
     *ascent = *descent = 0;
     if (!f->face || !f->fallback || !n)
         return false;
-    AuGlyphRun r;
-    au_glyph_run_init(&r);
-    shape(f, t, n, &r);
-    au_glyph_run_fallback_extents(&r, f->face, f->size, ascent, descent);
-    au_glyph_run_free(&r);
+    shape(f, t, n, &L->run);
+    au_glyph_run_fallback_extents(&L->run, f->face, f->size, ascent, descent);
     return *ascent > 0 || *descent > 0;
 }
 
@@ -313,6 +304,7 @@ float l_measure(AuLayout *L, LFont *f, const AuStyle *s, const char *t, size_t n
 
 void l_text_free_caches(AuLayout *L)
 {
+    au_glyph_run_free(&L->run);
     ar_free_all(&L->word_arena);
     au_free(L->words);
     L->words = NULL;
@@ -339,8 +331,7 @@ void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const cha
     if (!f->face || !n)
         return;
     float ls = s->inhr->letter_spacing, ws = s->inhr->word_spacing + spacing;
-    AuGlyphRun r;
-    au_glyph_run_init(&r);
+    AuGlyphRun *run = &L->run; /* kept between calls: no allocation per fragment */
     float pen = x;
     size_t i = 0;
     while (i < n) {
@@ -360,24 +351,23 @@ void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const cha
                 break;
             j += a2;
         }
-        shape(f, t + i, j - i, &r);
-        L->stats.missing_glyphs += (uint32_t)r.missing;
+        shape(f, t + i, j - i, run);
+        L->stats.missing_glyphs += (uint32_t)run->missing;
         if (ls != 0 || ws != 0) {
             float extra = 0;
-            for (size_t g = 0; g < r.n; g++) {
-                r.glyphs[g].x += extra;
-                const char *ch = t + i + r.glyphs[g].cluster;
+            for (size_t g = 0; g < run->n; g++) {
+                run->glyphs[g].x += extra;
+                const char *ch = t + i + run->glyphs[g].cluster;
                 extra += ls;
                 if (*ch == ' ' || ((unsigned char)ch[0] == 0xC2 && (unsigned char)ch[1] == 0xA0))
                     extra += ws;
             }
-            r.width += extra;
+            run->width += extra;
         }
-        au_draw_glyph_run(c, f->face, f->size, &r, pen, y, color);
-        pen += r.width;
+        au_draw_glyph_run(c, f->face, f->size, run, pen, y, color);
+        pen += run->width;
         i = j;
     }
-    au_glyph_run_free(&r);
 }
 
 /* ---- Line-break classes (a pragmatic subset of UAX #14) ---- */

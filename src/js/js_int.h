@@ -162,6 +162,13 @@ struct AuJs {
     bool slots_dirty;
     bool delivery_queued; /* a mutation delivery microtask is queued */
     uint32_t mut_batch;   /* advanced at the end of each mutating native */
+    /* live ranges (ranges.c) */
+    struct JsRange *ranges;
+    uint32_t nranges, live_ranges; /* slots, and slots in use */
+    const AuNode *range_text_node; /* the prelude is replacing this text node's data */
+    AuNode *range_pend_node;       /* a text node whose data changed (referenced), to settle */
+    char *range_pend_old;          /* its data before the change */
+    size_t range_pend_len;
     /* fetches and modules */
     JsFetch *fetches;
     void *modules;
@@ -203,6 +210,17 @@ int js_iface_of(const AuNode *n);
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
 void js_natives_forms_init(AuJs *js, JSValue N);
+
+/* ---- ranges.c ---- */
+typedef struct JsRange JsRange;
+void js_natives_ranges_init(AuJs *js, JSValue N);
+/* From the DOM hooks: child went into parent, or left it (prev: its
+ * previous sibling before the removal). They move live ranges' boundary
+ * points and run no script. */
+void js_ranges_inserted(AuJs *js, AuNode *parent, AuNode *child);
+void js_ranges_removed(AuJs *js, AuNode *parent, AuNode *child, AuNode *prev);
+void js_ranges_text(AuJs *js, AuText *t, const char *old, size_t old_len);
+void js_ranges_free(AuJs *js);
 
 /* ---- mutation.c ---- */
 void js_hooks_install(AuJs *js);

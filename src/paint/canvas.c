@@ -509,17 +509,42 @@ void au_fill_rounded_rect(AuCanvas *c, AuRect r, const AuRadii *radii, AuColor c
 static uint8_t text_gamma[256];
 static bool text_gamma_ready;
 
+const uint8_t *au_text_gamma(void)
+{
+    if (!text_gamma_ready) {
+        for (int i = 0; i < 256; i++)
+            text_gamma[i] = (uint8_t)(powf(i / 255.0f, 1.0f / 1.2f) * 255.0f + 0.5f);
+        text_gamma_ready = true;
+    }
+    return text_gamma;
+}
+
+void au_draw_coverage(AuCanvas *c, const uint8_t *cov, int w, int h, int stride, float x, float y, AuColor color)
+{
+    uint32_t src = au_premul(color);
+    if (!(src >> 24) || w <= 0 || h <= 0)
+        return;
+    int ox, oy;
+    AuIRect clip;
+    AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
+    int px = round_px(x + c->tx) - ox, py = round_px(y + c->ty) - oy;
+    AuIRect r = {px, py, px + w, py + h};
+    r = au_irect_intersect(r, clip);
+    if (au_irect_empty(r))
+        return;
+    int n = r.x1 - r.x0;
+    for (int yy = r.y0; yy < r.y1; yy++)
+        au_blend_solid_span(s->pixels + (size_t)yy * s->stride + r.x0, n, src,
+                            cov + (size_t)(yy - py) * stride + (r.x0 - px));
+}
+
 void au_draw_mask(AuCanvas *c, const uint8_t *mask, int w, int h, int stride, float x, float y,
                   AuColor color)
 {
     uint32_t src = au_premul(color);
     if (!(src >> 24) || w <= 0 || h <= 0)
         return;
-    if (!text_gamma_ready) {
-        for (int i = 0; i < 256; i++)
-            text_gamma[i] = (uint8_t)(powf(i / 255.0f, 1.0f / 1.2f) * 255.0f + 0.5f);
-        text_gamma_ready = true;
-    }
+    au_text_gamma();
     int ox, oy;
     AuIRect clip;
     AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);

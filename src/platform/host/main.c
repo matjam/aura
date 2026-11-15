@@ -57,7 +57,9 @@ static int usage(void)
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
             "                        go:URL back forward cache (the HTTP cache's counts with --net,\n"
-            "                        the documents kept for Back and Forward, DNS lookups);\n"
+            "                        the documents kept for Back and Forward, DNS lookups)\n"
+            "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
+            "                        in the page) save:FILE (the page source) console;\n"
             "                        --no-doc-cache makes Back and Forward load again)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
@@ -454,6 +456,33 @@ static void chrome_shot(AuBrowserWindow *w, int width, int height, const char *p
     au_surface_free(s);
 }
 
+/* What the window invalidated since the record was cleared (--do keys:). */
+static struct {
+    int n;
+    long area;
+    AuIRect u;
+    AuIRect r[16];
+} key_inv;
+
+static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
+{
+    (void)ctx, (void)w;
+    if (r.x1 <= r.x0 || r.y1 <= r.y0)
+        return;
+    if (key_inv.n < 16)
+        key_inv.r[key_inv.n] = r;
+    if (!key_inv.n) {
+        key_inv.u = r;
+    } else {
+        if (r.x0 < key_inv.u.x0) key_inv.u.x0 = r.x0;
+        if (r.y0 < key_inv.u.y0) key_inv.u.y0 = r.y0;
+        if (r.x1 > key_inv.u.x1) key_inv.u.x1 = r.x1;
+        if (r.y1 > key_inv.u.y1) key_inv.u.y1 = r.y1;
+    }
+    key_inv.n++;
+    key_inv.area += (long)(r.x1 - r.x0) * (r.y1 - r.y0);
+}
+
 static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
 {
     AuEvent e;
@@ -577,6 +606,34 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
     } else if (!strncmp(a, "shot:", 5)) {
         chrome_settle(b, w, ses, o->net, 0, 200);
         chrome_shot(w, o->w, o->h, a + 5);
+    } else if (!strncmp(a, "resize:", 7)) {
+        /* resize:W,H: the window is resized as the shell does (resize,
+         * paint, idle), and the layout passes it cost are printed. */
+        int nw = o->w, nh = o->h;
+        sscanf(a + 7, "%d,%d", &nw, &nh);
+        AuTab *t = au_bw_active_tab(w);
+        AuPageStats s0, s1;
+        memset(&s0, 0, sizeof s0);
+        memset(&s1, 0, sizeof s1);
+        if (t)
+            au_page_stats(t->page, &s0);
+        double t0 = now_ms();
+        au_bw_resize(w, nw, nh);
+        o->w = nw;
+        o->h = nh;
+        AuSurface *sf = au_surface_new(nw, nh);
+        AuCanvas *c = au_canvas_new(sf);
+        au_bw_paint(w, c, (AuIRect){0, 0, nw, nh});
+        double t1 = now_ms();
+        chrome_settle(b, w, ses, o->net, 20, 400);
+        au_bw_paint(w, c, (AuIRect){0, 0, nw, nh});
+        au_canvas_free(c);
+        au_surface_free(sf);
+        if (t)
+            au_page_stats(t->page, &s1);
+        printf("resize to %dx%d: %lu style and layout passes, %lu ms in them; %.1f ms to the first paint\n", nw, nh,
+               (unsigned long)(s1.layouts - s0.layouts), (unsigned long)(s1.layout_total_ms - s0.layout_total_ms),
+               t1 - t0);
     } else if (!strcmp(a, "field")) {
         au_bw_set_field_focus(w, true);
     } else if (!strncmp(a, "go:", 3)) {
@@ -615,6 +672,64 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             printf("dns: %lu lookups, %lu from the cache, %lu shared, %lu requests\n", ds.lookups, ds.hits, ds.shared,
                    ds.requests);
         }
+    } else if (!strncmp(a, "keys:", 5)) {
+        /* Types TEXT one key at a time and prints what each key cost:
+         * the time in the key event and the idle pass after it, the
+         * document view's update counts, the rectangles invalidated, and
+         * the time to paint them. */
+        const char *s = a + 5;
+        size_t n = strlen(s), i = 0;
+        AuTab *t = au_bw_active_tab(w);
+        AuSurface *surf = au_surface_new(o->w, o->h);
+        AuCanvas *cv = au_canvas_new(surf);
+        au_bw_paint(w, cv, (AuIRect){0, 0, o->w, o->h});
+        while (t && i < n) {
+            size_t adv = 1;
+            uint32_t cp = au_utf8_decode(s + i, n - i, &adv);
+            i += adv ? adv : 1;
+            AuDocViewStats s0, s1;
+            memset(&s0, 0, sizeof s0);
+            memset(&s1, 0, sizeof s1);
+            au_page_update_stats(t->page, &s0);
+            memset(&key_inv, 0, sizeof key_inv);
+            double t0 = now_ms();
+            chrome_key(w, 0, cp, 0);
+            double t1 = now_ms();
+            au_bw_idle(w);
+            double t2 = now_ms();
+            au_page_update_stats(t->page, &s1);
+            for (int k = 0; k < key_inv.n && k < 16; k++)
+                au_bw_paint(w, cv, key_inv.r[k]);
+            double t3 = now_ms();
+            printf("key %c: event %.2f ms, idle %.2f ms, paint %.2f ms; %u style passes, %u elements styled, "
+                   "%u tree builds, %u layouts; %d invalidations, %ld px, union %d,%d %dx%d\n",
+                   cp < 127 ? (char)cp : '?', t1 - t0, t2 - t1, t3 - t2, s1.style_passes - s0.style_passes,
+                   s1.styled_elements - s0.styled_elements, s1.tree_builds - s0.tree_builds, s1.layouts - s0.layouts,
+                   key_inv.n, key_inv.area, key_inv.u.x0, key_inv.u.y0, key_inv.u.x1 - key_inv.u.x0,
+                   key_inv.u.y1 - key_inv.u.y0);
+        }
+        au_canvas_free(cv);
+        au_surface_free(surf);
+    } else if (!strncmp(a, "js:", 3)) {
+        AuTab *t = au_bw_active_tab(w);
+        AuBuf out;
+        au_buf_init(&out);
+        bool ok = t && au_page_eval(t->page, a + 3, &out);
+        printf("js %s: %s\n", ok ? "=" : "failed", au_buf_cstr(&out));
+        au_buf_free(&out);
+        chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "save:", 5)) {
+        AuTab *t = au_bw_active_tab(w);
+        const char *data;
+        size_t len;
+        FILE *f;
+        if (t && au_page_source(t->page, &data, &len) && (f = fopen(a + 5, "wb"))) {
+            fwrite(data, 1, len, f);
+            fclose(f);
+            printf("save: %lu bytes\n", (unsigned long)len);
+        } else {
+            printf("save: no source\n");
+        }
     } else if (!strcmp(a, "console")) {
         AuTab *t = au_bw_active_tab(w);
         size_t n = t ? au_page_console_count(t->page) : 0;
@@ -652,6 +767,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;
         host.scroll_area = bench_scroll;
+    } else {
+        host.invalidate = key_inval;
     }
     AuBrowser *b = au_browser_new(fonts, &host);
     if (o->no_doc_cache)
@@ -811,6 +928,8 @@ int main(int argc, char **argv)
         return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
+    if (!strcmp(cmd, "layout-bench"))
+        return au_host_layout_bench_main(argc, argv);
     if (!strcmp(cmd, "image"))
         return au_host_image_main(argc, argv);
     if (!strcmp(cmd, "js"))

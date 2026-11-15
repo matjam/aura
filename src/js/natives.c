@@ -1062,7 +1062,7 @@ static JSValue m_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         return JS_EXCEPTION;
     AuNode *r = NULL;
     for (AuNode *p = &e->node; p && p->type == AU_NODE_ELEMENT; p = p->parent)
-        if (au_css_selector_matches(l, (AuElement *)p)) {
+        if (au_css_selector_matches_scoped(l, (AuElement *)p, &e->node)) {
             r = p;
             break;
         }
@@ -1097,7 +1097,7 @@ static JSValue m_query_selector_all(JSContext *ctx, JSValueConst this_val, int a
     AuNode **found = NULL;
     uint32_t nf = 0, cap = 0;
     for (AuNode *c = root->first_child; c; c = au_node_next(c, root))
-        if (c->type == AU_NODE_ELEMENT && au_css_selector_matches(l, (AuElement *)c)) {
+        if (c->type == AU_NODE_ELEMENT && au_css_selector_matches_scoped(l, (AuElement *)c, root)) {
             if (nf == cap) {
                 cap = cap ? cap * 2 : 16;
                 found = au_realloc(found, cap * sizeof *found);

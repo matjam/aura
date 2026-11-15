@@ -20,3 +20,12 @@ foreach(case ${LAYOUT_CASES})
     # Some cases guard against exponential layout time: fail, do not hang.
     set_tests_properties(layout_${name} PROPERTIES TIMEOUT 60)
 endforeach()
+
+# A resized document view matches one loaded at that size (boxes and
+# pixels), and viewport changes keep the box tree and intrinsic widths.
+if(TARGET aura_host_platform)
+    add_executable(test_relayout test_relayout.c ${CMAKE_SOURCE_DIR}/src/platform/host/render_loader.c)
+    target_link_libraries(test_relayout aura_host_platform aura_engine m)
+    add_test(NAME layout_relayout COMMAND test_relayout ${CMAKE_SOURCE_DIR}/tests/page/samples)
+    set_tests_properties(layout_relayout PROPERTIES TIMEOUT 300)
+endif()

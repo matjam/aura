@@ -16,6 +16,14 @@ what you need to build, test and change Aura.
   release handler (`au_set_release_handler`), which frees caches, and
   try again; the out-of-memory handler runs when nothing is left to
   free.
+- On Mac OS 9, `au_alloc` takes small blocks from the pooled allocator
+  (`src/core/heap.c`, turned on by `au_heap_enable` at the start of
+  `main`): 32 KB slabs per size class, and one `NewPtr` only for a slab
+  or a block over 2 KB. Retro68's `malloc` is one `NewPtr` per block, and
+  the Memory Manager took tens of seconds per layout with the 90,000
+  blocks of a large page. Do not call `malloc` in engine code, and
+  enable the pool before the first allocation in a new Mac OS 9
+  program. `tests/core/test_heap.c` covers it on the host.
 - Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
   atoms. Names known at compile time go in `src/core/atoms_html.def` or
   `src/core/atoms_css.def`.
@@ -34,7 +42,7 @@ what you need to build, test and change Aura.
 
 | Folder | Holds |
 |---|---|
-| `src/core` | allocation, buffers, UTF-8, atoms |
+| `src/core` | allocation (and the pooled allocator), buffers, UTF-8, atoms |
 | `src/dom` | the node tree |
 | `src/html` | HTML tokenizer and tree builder |
 | `src/css` | CSS parser, selectors, cascade |
@@ -411,8 +419,11 @@ work in these places:
   strip paints only what it shows; box and text ink extents (shadows,
   outlines, inline SVG with visible overflow) must cover what they draw.
 - Hover follows a scroll only after the scroll pauses for
-  `AU_REHOVER_MS` (150 ms): on Wikipedia a hover change restyles the
-  whole document (`:has()` rules), 1.7 s per scroll step in the guest.
+  `AU_REHOVER_MS` (150 ms). The delay dates from when a hover change
+  restyled the whole document on pages with `:has()` rules (1.7 s per
+  scroll step on Wikipedia in the guest); a hover change now restyles
+  about two elements there (see CSS), and the delay has not been
+  measured again in the guest.
 
 `tests/browser/test_scroll_shift.c` scrolls sample pages and inline
 pages with fixed, sticky and transformed boxes both ways and compares
@@ -492,6 +503,76 @@ Toolbox points learned the hard way:
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
   handle then names Aura's font data.
+
+## Layout and paint speed
+
+To time layout and painting of a page on the host, build a Release tree
+(`cmake -S . -B build/rel -G Ninja -DCMAKE_BUILD_TYPE=Release`) and run
+`build/rel/src/platform/host/aura-host layout-bench PAGE --bundled-only`.
+It prints, as CPU time, a layout from scratch at two widths (`-w`,
+`-w2`), a width change in the layout alone and through the document
+view (style included), a height change, what each change cost (box tree
+builds, layout passes, intrinsic width runs, subtrees reused), and
+painting: page downs over new content, the same pages again, a
+32-pixel strip and a one-pixel paint (the cost that does not depend on
+the area). `--phase relayout|resize|paint|paint-cold|strip --repeat N`
+runs one step N times for a profiler (`sample aura-host 3`). To count
+the passes a window resize costs, run `aura-host chrome --tab PAGE --do
+resize:W,H`.
+
+- **Mac OS 9 is not the host.** Host timings did not show the allocator
+  problem above: a layout pass that took 6 ms on the host took 11 s in
+  the guest. When a guest figure is far from the host's, look for what
+  differs there (the Memory Manager, newlib's byte-wise `memcpy`)
+  before tuning the engine.
+- **A viewport change** is an incremental layout. The document view
+  restyles and calls `au_layout_styles_changed`, not
+  `au_layout_tree_changed`; the box tree is rebuilt only when a style
+  difference needs it (display, position, float, overflow, generated
+  content) or an element that had `display: none` is shown (layout keeps
+  the elements it left out in `AuLayout.hidden`). Layout then reuses
+  every independent subtree whose constraints did not change, and keeps
+  intrinsic widths, which do not depend on the viewport. Lengths in
+  viewport units reach layout as style changes.
+- **Generated text** (a pseudo-element's content, a marker's number) is
+  a text box whose node is the element; `current_style` in `layout.c`
+  finds its style through the pseudo-element box above it.
+- **Overflow** (`l_finish_overflow`) leaves out an absolutely positioned
+  box whose containing block is outside the box: it is laid out later,
+  so its geometry there is the previous layout's.
+- **The horizontal scroll bar** keeps its state across a change of the
+  page area's width (`relayout` in `browser.c`), and `check_hscroll`
+  corrects it after the layout. Deciding from the old content width cost
+  a second pass on every resize of a page that follows the window.
+- **Text painting.** A face caches the glyph of each code point below
+  U+0250 and recent kerning pairs (`AuFontCache` in `font_internal.h`).
+  The glyph cache stores masks with the text coverage table already
+  applied; `au_draw_coverage` draws them, `au_draw_mask` still applies
+  the table for other callers. The rasterizer uses stack work areas for
+  paths up to 62 pixels wide and writes masks without the span
+  callback. Layout shapes into one kept glyph run (`AuLayout.run`).
+- **Tests.** `tests/layout/test_relayout.c` resizes each sample page and
+  several inline pages through ten viewports and compares boxes and
+  pixels with a fresh document view at each size, then checks the
+  counters (no tree build or intrinsic run for a height or width change,
+  a new measure after a text or font size change).
+  `tests/paint/test_shape_cache.c` covers the face caches and the glyph
+  cache.
+- **Measured** on a Wikipedia article of 18,053 boxes. Host (CPU time):
+  width change in layout 2.6 ms (3.7 before), paint of a 1440x900 view
+  0.92 ms (1.22), first paint of a page of new text 1.36 ms (1.68), a
+  32-pixel strip 0.046 ms (0.061), a one-pixel paint 0.005 ms: painting
+  already costs in proportion to what it shows. A width change through
+  the document view takes 18 ms, of which the restyle of every element
+  is 15 ms; the cascade does not yet tell which viewport changes leave
+  styles alone. Guest (emulated, stock base, 600 pixels wide): the last
+  style and layout pass of the load 465 ms (11,251 ms before the pooled
+  allocator), a whole-page paint 4 to 5 ms (54), a page down 4 to 11 ms
+  (349), a window zoom two passes of about 280 ms each.
+- **Not done:** an image whose size becomes known still rebuilds the
+  box tree (`au_layout_images_changed`); text is segmented and measured
+  again for each layout of its block (the word cache answers the
+  widths); `l_queue_abspos` searches its queue linearly.
 
 ## Fonts
 
@@ -608,10 +689,106 @@ the system lacks.
   Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
   sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
   default instance); a CJK font pack (see the fonts README for what one
-  needs). CSS does not parse `font-variation-settings`,
-  `font-optical-sizing` or `font-tech()`, layout passes only weight and
-  style to the font list, and the CSS parser loses `unicode-range`
-  tokens (webfont.c reads them from the sheet text).
+  needs). CSS does not parse `font-tech()`, and layout passes only
+  weight and style to the font list (`font-variation-settings` and
+  `font-optical-sizing` are computed, in `AuStyleInhRare`). webfont.c
+  still reads `unicode-range` from the sheet text, which it gets once,
+  when the sheet is parsed; the parsed descriptor is there to replace
+  that (see CSS).
+
+## CSS
+
+`src/css/css.h` is the interface: sheets, the resolver, computed styles,
+invalidation, selectors. `css_int.h` is shared by the files of `src/css`
+and its tests only.
+
+- **To restyle after a change**, call `au_css_invalidate` (before or
+  after the change) and then `au_css_restyle`. For a state bit use
+  `au_css_invalidate_state` with the `AU_STATE_*` bits that changed, on
+  every element whose bits changed; for hover and active use
+  `au_css_move_state`, which sets the bits and reports only the elements
+  below the common ancestor of the old and the new element.
+- **What a change restyles.** When the rule index is built
+  (`deps_build` in `cascade.c`), every selector is analysed for the
+  states it reads and the classes, ids and attributes it names, and for
+  where the elements it can style lie from the element that changes:
+  the element itself, its descendants, its following siblings, or the
+  ancestors and preceding siblings a `:has()` argument can anchor on.
+  A change marks only those (`AU_STATE_STYLE_SELF_DIRTY` for one
+  element, `AU_STATE_STYLE_DIRTY` for a subtree). A class, id or
+  attribute that no selector names, no presentational hint reads and no
+  `attr()` or pseudo-class depends on restyles nothing. Selectors the
+  analysis cannot follow (`:nth-child(... of S)` with a state or name
+  in S, a complex selector nested inside a `:has()` argument) restyle
+  the document. Child insertions and removals are not targeted: they
+  restyle the element's subtree and its following siblings' subtrees,
+  or the document when a `:has()` rule exists.
+- **Class and id changes** need the names that changed. `src/dom` notes
+  them in `AuDocument.style_names` when the attribute changes, and the
+  resolver resolves the elements reported for class or id when the
+  restyle starts (the DOM mutation hook reports before the change). To
+  add an attribute that a pseudo-class or a presentational hint reads,
+  add it to `attr_state` or leave it out of `attr_never_hint` in
+  `cascade.c`.
+- **Equal styles keep their object.** A style pass compares each newly
+  computed style with the element's old one by value (`style_same`) and
+  keeps the old `AuStyle` when they are equal; a changed style takes
+  over the old groups whose values are equal (`adopt_groups`). Code that
+  compares style or group pointers (layout's `style_diff`) then sees
+  only what changed. A marked element whose style is unchanged does not
+  restyle its subtree.
+- **Sharing.** Elements with the same parent style, tag and matched
+  rules share one `AuStyle`; the key includes the matched `::before`,
+  `::after` and `::marker` rules, and an element whose pseudo-element
+  uses `attr()` is not shared. Custom property maps are layered: a map
+  holds the element's own entries and refers to the parent's map
+  (`AuCustomProps.base`, chains of at most 12).
+- **Sheets in a document** (`src/page/docview.c`, "Requests" and
+  "Styles"): each `<style>`, `<link>` and `@import` is a `SheetSrc`. It
+  is parsed once, when its text arrives (`parse_sheet`); the resolver
+  borrows the parsed sheets, and a change of the sheet list detaches and
+  adds them again (`au_css_resolver_detach_sheets`) without parsing. A
+  fetched sheet's text is freed after parsing; a `<style>`'s is kept to
+  notice edits. A source whose media query does not match the device is
+  neither fetched nor parsed (`start_sheet`); `undefer_sheets` starts it
+  when the viewport changes so that it matches. A sheet that has been
+  parsed stays, and the cascade evaluates its media query.
+- **Memory of parsed sheets.** During a sheet parse equal `var()` and
+  custom property token lists share one list
+  (`css_toklist_intern_begin`) and equal declared values one blob
+  (`css_blob_intern_begin`); arrays are trimmed to their length. To see
+  what sheets cost, run `build/host/tests/css/css_bench --mem
+  FILE.css...` (macOS only): it prints the heap each parsed sheet keeps
+  and the index size.
+- **Selector queries.** `au_css_query_selector` and
+  `au_css_selector_matches_scoped` take the element `:scope` stands for
+  (the element querySelector, querySelectorAll or closest was called
+  on); with a document or NULL, `:scope` is the root element.
+- **`@font-face` descriptors** are generic value trees
+  (`au_css_font_face_descriptor`), except `unicode-range`: a COMMA_LIST
+  of LISTs of two integer NUMBERs, the first and last code point of
+  each range; an invalid `unicode-range` is dropped. The tokenizer keeps
+  each number as written (`css_tok_num_text`) for this, since
+  `U+0025-00FF` and `U+1e3` are number tokens.
+- **Tests.** `tests/css/cases/*.txt` (one ctest per file, format in
+  `test_css.c`), `test_css_api.c` (API tests), and
+  `test_css_invalidate.c`, which changes states, classes, ids,
+  attributes and inline styles on a page with and without `:has()`
+  rules and checks every computed value of every element against a full
+  restyle. To time hover moves over a page, run
+  `build/host/tests/css/test_css_invalidate --bench [--verify]
+  PAGE.html [SHEET.css ...]`: it prints elements restyled and time per
+  move, first with the old coarse invalidation, then targeted.
+- **Measured on the host.** A saved Wikipedia article (9301 elements,
+  `:has()` rules): a hover move restyled 9301 elements in 12 ms, now 2
+  on average (8 at most) in 0.012 ms. The GitHub home page (20 sheets,
+  2.5 MB of CSS, 2157 custom properties): `aura-host chrome` peaked at
+  147 MB, now 79 MB; the parsed sheets take 10.3 MB instead of 17.1 MB,
+  and the computed styles 5.8 MB instead of 44 MB.
+- **Not done:** targeted invalidation of child insertions and removals;
+  `@container`, `@scope` and `@starting-style` are parsed and never
+  apply; preference changes (dark scheme, reduced motion) do not reach
+  the device, so sheets deferred for them stay deferred.
 
 ## Images
 
@@ -952,6 +1129,87 @@ global object is the window, the DOM bindings and the event loop.
   iterators never advanced), and patch 0004 pads every `alloca`, because
   Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
   Do not use `alloca` or variable-length arrays in Aura's own code.
+- **The prelude** is one function expression split over
+  `src/js/prelude*.js`; `prelude.c` embeds the files in order (base, dom,
+  html, range, cssom, window, net, obs). To add a file, add its `#embed`
+  line there. A name declared twice across the files stops the runtime
+  from starting ("invalid redefinition").
+- **To debug a script on a live page**, use `aura-host chrome` actions:
+  `--do js:CODE` evaluates CODE in the active tab and prints the result,
+  `--do save:FILE` writes the page source, `--do console` prints the
+  console. Uncaught errors, errors in event listeners and unhandled
+  promise rejections go to the console at error level; one that the
+  page's `error` or `unhandledrejection` listener cancels (Google's
+  `window.onerror` returns true) goes there at debug level, marked
+  "handled by the page". To work on a site's scripts offline, save the
+  page and the scripts it loads and serve them from a local HTTP server
+  (the origin must be http for origin checks to behave as on the site).
+- **window.postMessage** takes any absolute URL as the target origin
+  and compares only its origin. Google's search box defers its submit
+  with `postMessage("sbox.df", location.href)`; comparing the string
+  with the origin dropped the message and Return did nothing
+  (`tests/js/pages/search_defer.html`, `test_search_box_defer` in
+  `tests/forms`).
+- **Range** (`prelude_range.js`, `ranges.c`). Boundary points live in C
+  so that the DOM mutation hooks can move them without running script:
+  `js_ranges_inserted` and `js_ranges_removed` follow the DOM standard's
+  insert and remove steps. Offsets in text are UTF-16 code units, which
+  only script knows, so `replaceData` and `splitText` in
+  `prelude_dom.js` report their edits with `N.rangeText` and
+  `N.rangeSplit`; the `data`, `nodeValue` and `textContent` setters and
+  the parser are handled in `js_ranges_text` (data only appended moves
+  nothing, anything else puts the node's points at offset 0). To change
+  a text mutation path in the prelude, keep it going through
+  `replaceData`. Not exact: `getClientRects` and
+  `getBoundingClientRect` return the boxes of the elements a range
+  covers (layout has no query from a DOM text offset to a position),
+  and `normalize()` moves points in merged text nodes to their parent.
+- **Selection** is script state with one range and a direction
+  (`extend`, `setBaseAndExtent`, `selectionchange`). It is not the
+  selection the user makes with the mouse (`page_doc.c`), and it is not
+  painted: joining them needs a mapping between DOM offsets and
+  `AuTextPos` (processed text offsets) in layout.
+- **CSSOM** (`prelude_cssom.js`). `element.sheet` and
+  `document.styleSheets` give a `CSSStyleSheet` per style or link
+  element. Rules are read from the sheet's text
+  (`AuJsHooks.sheet_text`, `au_dv_sheet_text` in `docview.c`) by a
+  splitter in script; `insertRule`, `deleteRule` and changes to a rule
+  write the whole text back (`au_dv_sheet_set_text`, kept in
+  `SheetSrc.om_text`), and the document view parses it again, so the
+  element's own text does not change. `sheet.disabled` sets
+  `SheetSrc.disabled`. A rule's declarations are the `style` attribute
+  of an element that is never inserted, so they share the inline style
+  code. The text script writes back is parsed into `SheetSrc.om_sheet`,
+  which replaces the sheet's own in the cascade; the resolver borrows
+  sheets, so `au_dv_sheet_set_text` detaches them before it frees the
+  old one. A link element's sheet is listed and can be disabled, but its
+  rules throw NotSupportedError: the document view frees a fetched
+  sheet's text once it is parsed (`parse_sheet`), so there is nothing to
+  read them from. Not done: constructed sheets and
+  `adoptedStyleSheets`, the sheets of `@import` rules, rules nested in a
+  style rule, `@font-face` rules added through the CSSOM (they are not
+  given to the web font loader); a cross-origin sheet's rules throw
+  SecurityError.
+- **getComputedStyle** returns the used width and height in pixels
+  (`computedValue` in `prelude_dom.js`, through `N.rect`, which forces a
+  layout), takes `::before`, `::after` and `::marker`, and reads
+  `white-space` as one keyword. Margins, insets and percentages in other
+  properties are still computed values, `transform` is not a matrix, and
+  the `border` and `font` shorthands serialize every part.
+- **crypto** (`getRandomValues`, `randomUUID`; no `subtle`) exists only
+  when the embedder passes `AuJsHooks.random`
+  (`AuDocViewCallbacks.random` for a document view). `aura-host js`
+  reads `/dev/urandom`. The browser does not pass one yet: to give pages
+  `crypto`, set the callback in `page_doc.c` from the platform's entropy
+  source (`AuNetOps.entropy`).
+- **Start-up cost.** `aura-host js --stats` reports 21 to 24 ms and
+  1.66 MB to start a runtime on the host; 18 to 21 ms of it compiles the
+  293 KB prelude and 2 to 4 ms runs it. The prelude is not precompiled
+  to bytecode yet: to do it, compile with `JS_EVAL_FLAG_COMPILE_ONLY` in
+  a host tool at build time, write it with `JS_WriteObject`
+  (`JS_WRITE_OBJ_BYTECODE`; QuickJS-ng swaps bytes itself when reading
+  on a big-endian machine), load it with `JS_ReadObject` and
+  `JS_EvalFunction`, and check JSTest in the guest.
 
 ## Forms
 
@@ -1019,6 +1277,45 @@ work with script off, and script reads and writes the same state.
   `wait:MS`, `shot:FILE.png` and `console`. For example, `aura-host
   chrome --net --tab https://html.duckduckgo.com/html/ --do clickname:q
   --do "type:mac os 9" --do key:return --do wait:3000 -o run/ddg.png`.
+- **What a keystroke costs.** A character typed into, or deleted from,
+  a text field that stays non-empty restyles nothing, builds no box
+  tree, runs no layout and invalidates the field's rectangle only.
+  `edited` in `forms.c` restyles only when `field_style_state` changes:
+  the field becomes empty or stops being empty (`:placeholder-shown`),
+  or its validity bits change. Enter also fires keypress (code 13)
+  before implicit submission. To measure, run `aura-host chrome --tab
+  PAGE --do clickname:NAME --do keys:TEXT`: for each key it prints the
+  time in the event, the idle pass and painting, and the counts from
+  `au_docview_stats` (style passes, elements styled, tree builds,
+  layouts) and the pixels invalidated. In the guest, focus a page field
+  and choose View > Debug > Page Timings: it types 16 keys and shows
+  milliseconds per key with the restyle and layout counts.
+  `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
+  with `:has()` rules, with and without script listeners. Measured in
+  the guest on a 400-paragraph page with `:has()` rules: 61 to 124 ms
+  per key before (a restyle of every element and a layout per key),
+  4.5 ms after.
+- **What script does per key still costs.** A change in a subtree that
+  is not in the document marks nothing dirty (`h_dom_changed` in
+  `script.c`), and attributes the box tree never reads (`aria-*`,
+  `data-*`, `role`, `title`, `tabindex`, a hidden input's `value`)
+  restyle without a box tree rebuild (`au_dv_dom_changed`). While a key
+  is handled, `au_dv_turn_end` does not invalidate the page for what
+  listeners changed: `au_docview_key` updates at its end and invalidates
+  the page only if the update changed geometry or raised a paint, so a
+  restyle that computes the same values repaints the field only
+  (`test_keystroke_cost`, "attribute writers"). Open: on live Wikipedia
+  (`aura-host chrome -w 1440 -h 900 --net --tab
+  https://en.wikipedia.org/wiki/Mac_OS_9 --do clickname:search --do
+  keys:abcdef`) a key restyles 2 elements (the hidden inputs whose value
+  the page sets), but a box tree build and a layout still run on every
+  key and the viewport is repainted; no DOM change other than those two
+  attributes is reported, so the build is asked for inside layout
+  (`au_layout_styles_changed` deciding on a rebuild, or
+  `au_layout_images_changed`). Find which before changing anything.
+- **Mac OS 9 key handling.** `bw_key` does not paint: the event loop in
+  `main.c` handles up to 8 queued keys and then paints once
+  (`idle_all`).
 - **Tests.** `tests/forms` (editing, encodings, focus, submission,
   validation, event order), `tests/js/forms.js` (bindings and named
   access), the forms part of `tests/browser/test_net_page.c` (GET and

@@ -1073,16 +1073,29 @@ static double range_num(AuElement *el, const char *name, double dflt)
 
 /* ---- Text editing ---- */
 
-/* After an edit: input event, scroll the caret into view, repaint. */
-static void edited(AuDocView *dv, AuElement *el, const char *input_type, const char *data)
+/* What selectors can see of a text field's value: whether it is empty
+ * (:placeholder-shown) and its validity bits (:valid, :invalid,
+ * :in-range). An edit restyles only when this changes; typing one more
+ * character into a field does not. */
+static unsigned field_style_state(AuDocView *dv, AuElement *el)
+{
+    size_t n = 0;
+    au_ctl_value(el, &n);
+    return (n ? 0u : 1u) | (au_form_validity(el, pattern_test, dv) << 1);
+}
+
+/* After an edit: input event, scroll the caret into view, repaint the
+ * field. before is field_style_state from before the edit. */
+static void edited(AuDocView *dv, AuElement *el, const char *input_type, const char *data, unsigned before)
 {
     AuControl *c = au_ctl(el);
     c->user_interacted = true;
     au_layout_field_reveal(dv->layout, el);
     show_caret(dv);
-    au_dv_invalidate_element(dv, el);
-    if (dv->resolver) /* :placeholder-shown, :invalid */
-        state_changed(dv, el);
+    if (dv->resolver && field_style_state(dv, el) != before)
+        state_changed(dv, el); /* restyles, and repaints the field */
+    else
+        au_dv_invalidate_element(dv, el);
     if (dv->script)
         au_docscript_input(dv->script, el, "input", input_type, data);
 }
@@ -1116,9 +1129,9 @@ static bool insert_text(AuDocView *dv, AuElement *el, const char *s, size_t n, i
     bool ok = false;
     if (before_input(dv, el, input_type, data)) {
         AuControl *c = au_ctl(el);
-        au_ctl_value(el, NULL);
+        unsigned before = field_style_state(dv, el);
         if (au_edit_insert(c, s, n, max_chars(el), au_ctl_is_single_line(el), kind)) {
-            edited(dv, el, input_type, data);
+            edited(dv, el, input_type, data, before);
             ok = true;
         }
     }
@@ -1137,14 +1150,14 @@ static bool delete_text(AuDocView *dv, AuElement *el, int dir, bool word, bool t
     if (!before_input(dv, el, it, NULL))
         return false;
     c = au_ctl(el);
-    au_ctl_value(el, NULL);
+    unsigned before = field_style_state(dv, el);
     bool done;
     if (to_line && !au_edit_has_selection(c))
         done = au_edit_delete_to(c, au_layout_field_line_edge(dv->layout, el, c->caret, dir));
     else
         done = au_edit_delete(c, dir, word);
     if (done)
-        edited(dv, el, it, NULL);
+        edited(dv, el, it, NULL, before);
     return done;
 }
 
@@ -1440,6 +1453,7 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
     if (cmd && ev->ch && ev->key == AU_KEY_NONE && !(ev->ch == 'a' || ev->ch == 'A'))
         return false;
     bool used_by_script = false;
+    dv->in_key = true;
     if (dv->script) {
         char key[16], code[24];
         key_names(ev, key, sizeof key, code, sizeof code);
@@ -1447,13 +1461,17 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
         if (target)
             au_node_ref(&target->node);
         bool ok = au_docscript_key(dv->script, target, "keydown", key, code, ev->mods);
-        if (ok && ev->ch >= 0x20 && !cmd && dv->doc)
+        /* keypress goes to character keys and to Enter (code 13), as in
+         * browsers; scripts submit on it. */
+        if (ok && (ev->ch >= 0x20 || ev->key == AU_KEY_RETURN) && !cmd && dv->doc)
             ok = au_docscript_key(dv->script, target && alive(dv, target) ? target : NULL, "keypress", key, code,
                                   ev->mods);
         if (target)
             au_node_unref(&target->node);
-        if (!dv->doc)
+        if (!dv->doc) {
+            dv->in_key = false;
             return true;
+        }
         el = dv->focus && alive(dv, dv->focus) ? dv->focus : NULL;
         if (!ok)
             used_by_script = true;
@@ -1483,8 +1501,19 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
         AuElement *t = dv->focus && alive(dv, dv->focus) ? dv->focus : NULL;
         au_docscript_key(dv->script, t, "keyup", key, code, ev->mods);
     }
-    if (dv->restyle_needed || dv->tree_dirty)
-        au_docview_update(dv);
+    dv->in_key = false;
+    if (dv->restyle_needed || dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan) {
+        /* What listeners and state changes did during the key
+         * (au_dv_turn_end leaves it to here): update now, and repaint the
+         * page only if the update changed something. A restyle that
+         * computes the same values repaints nothing. A change still
+         * waiting for its paint (pending) was invalidated when it was
+         * made. */
+        bool heavy = dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan;
+        bool pending = au_layout_needs_paint(dv->layout);
+        if (au_docview_update(dv) || heavy || (!pending && au_layout_needs_paint(dv->layout)))
+            au_dv_invalidate_all(dv);
+    }
     return used;
 }
 
@@ -1543,10 +1572,13 @@ bool au_docview_edit(AuDocView *dv, int cmd, const char *text, size_t len, AuBuf
     case AU_EDITCMD_UNDO:
         if (readonly(el) || !before_input(dv, el, "historyUndo", NULL))
             return false;
+    {
+        unsigned before = field_style_state(dv, el);
         if (!au_edit_undo(au_ctl(el)))
             return false;
-        edited(dv, el, "historyUndo", NULL);
+        edited(dv, el, "historyUndo", NULL, before);
         return true;
+    }
     default:
         return false;
     }
