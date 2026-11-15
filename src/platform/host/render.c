@@ -247,7 +247,7 @@ int au_host_layout_bench_main(int argc, char **argv)
     }
     if (!page || w <= 0 || w > 8192 || w2 <= 0 || w2 > 8192 || h <= 0 || h > 16384 || repeat < 1 || repeat > 4096) {
         fprintf(stderr, "usage: aura-host layout-bench page.html [-w W] [-w2 W2] [-h H] [--repeat N]\n"
-                        "       [--phase relayout|resize|paint|strip] [font options]\n");
+                        "       [--phase relayout|resize|paint|paint-cold|strip] [font options]\n");
         return 2;
     }
     char *data;
@@ -295,12 +295,15 @@ int au_host_layout_bench_main(int argc, char **argv)
         }
         printf("%d resizes: %.2f ms each\n", repeat, (cpu_ms() - t0) / repeat);
         repeat = 1;
-    } else if (phase && (!strcmp(phase, "paint") || !strcmp(phase, "strip"))) {
+    } else if (phase && (!strcmp(phase, "paint") || !strcmp(phase, "paint-cold") || !strcmp(phase, "strip"))) {
         AuSurface *s = au_surface_new(w, h);
         AuCanvas *c = au_canvas_new(s);
         double t0 = cpu_ms();
-        for (int i = 0; i < repeat && phase[0] == 'p'; i++)
+        for (int i = 0; i < repeat && phase[0] == 'p'; i++) {
+            if (!strcmp(phase, "paint-cold"))
+                au_glyph_cache_clear(); /* every glyph is rasterized again */
             au_docview_paint(dv, c, (AuRect){0, 0, (float)w, (float)h}, 0, (i % 20) * (h - 40));
+        }
         if (phase[0] == 'p')
             printf("%d paints: %.3f ms each\n", repeat, (cpu_ms() - t0) / repeat);
         t0 = cpu_ms();
