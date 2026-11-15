@@ -462,13 +462,14 @@ static void scan_document(AuDocView *dv, bool final)
             continue;
         bool complete = final || n->next || (n->parent && n->parent->next);
         if (el->tag == AU_ATOM_style || (el->tag == AU_ATOM_link && is_stylesheet_link(el))) {
-            if (!complete && el->tag == AU_ATOM_style) {
+            /* index counts the slots before this element: slots are kept in
+             * document order, an incomplete <style> has none yet. */
+            if (has_slot(dv, el)) {
                 index++;
-                continue;
-            }
-            if (!has_slot(dv, el))
+            } else if (complete || el->tag != AU_ATOM_style) {
                 add_slot(dv, el, index);
-            index++;
+                index++;
+            }
         } else if (el->tag == AU_ATOM_base && !base_seen) {
             const char *href = attr(el, "href");
             if (href) {
