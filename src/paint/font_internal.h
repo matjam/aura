@@ -133,7 +133,21 @@ bool au_colr_has(const AuFontFace *f, uint16_t g);
 bool au_colr_render(const AuFontFace *f, uint16_t g, float sx, float sy, float ox, AuColor fg, size_t max_pixels,
                     AuColrBitmap *out);
 
+/* Shaping looks up the same few code points and glyph pairs for every
+ * word, at layout and again at every paint. The face remembers the glyph
+ * of each code point below AU_FONT_CMAP_DIRECT and the last kerning
+ * answers (a direct-mapped table keyed by the glyph pair). */
+#define AU_FONT_CMAP_DIRECT 0x250 /* Latin, Latin-1, Latin Extended-A and B */
+#define AU_FONT_KERN_SLOTS 1024
+typedef struct AuKernSlot {
+    uint32_t key;  /* left << 16 | right; valid when used */
+    int16_t value; /* font units */
+    uint8_t used;
+} AuKernSlot;
+
 struct AuFontCache {
+    uint16_t *glyph_of; /* AU_FONT_CMAP_DIRECT entries; 0xFFFF: not looked up */
+    AuKernSlot *kern;   /* AU_FONT_KERN_SLOTS entries */
     uint16_t *adv;   /* varied advances (0xFFFF: not computed), num_glyphs entries */
     AuGsub *gsub;    /* parsed GSUB lookups, or NULL */
     bool gsub_done;

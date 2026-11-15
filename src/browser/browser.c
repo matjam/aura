@@ -243,7 +243,16 @@ static void relayout(AuBrowserWindow *w, bool full)
     if (at) {
         int cw, ch;
         au_page_content_size(at->page, &cw, &ch);
-        if (cw > w->layout.page.x1 - w->layout.page.x0)
+        int pw = w->layout.page.x1 - w->layout.page.x0;
+        bool want = cw > pw;
+        /* When the page area's width changes, the content width known here
+         * is the old one: a page that fitted will usually fit again, so
+         * the bar stays only where it was shown. A wrong guess costs a
+         * second layout (check_hscroll); guessing from the old width was
+         * wrong on every resize of a page that follows the window. */
+        if (pw != old.page.x1 - old.page.x0 && au_irect_empty(old.hscroll))
+            want = false;
+        if (want)
             au_chrome_layout_hscroll(&w->layout);
     }
     bool moved = memcmp(&old.page, &w->layout.page, sizeof old.page) ||

@@ -110,4 +110,10 @@ typedef struct AuEdge {
  * bounding box of all points goes in *bounds (x0, y0, x1, y1). */
 size_t au_path_flatten(const AuPath *p, float dx, float dy, AuEdge **edges, float bounds[4]);
 
+/* The coverage table au_draw_mask applies to text masks (256 entries),
+ * and a mask draw without it: for masks stored with the table applied (the
+ * glyph cache), so each draw reads the mask once. */
+const uint8_t *au_text_gamma(void);
+void au_draw_coverage(AuCanvas *c, const uint8_t *cov, int w, int h, int stride, float x, float y, AuColor color);
+
 #endif

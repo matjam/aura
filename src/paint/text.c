@@ -273,6 +273,12 @@ static GlyphEntry *rasterize(const AuFontFace *f, uint16_t glyph, float size, ui
             e->left = (int16_t)area.x0;
             e->top = (int16_t)area.y0;
             au_raster_mask(&p, AU_FILL_NONZERO, area, ENTRY_BITS(e));
+            /* Stored with the text coverage table applied, once, instead
+             * of at every draw. */
+            const uint8_t *gamma = au_text_gamma();
+            uint8_t *bits = ENTRY_BITS(e);
+            for (size_t i = 0; i < (size_t)w * (size_t)h; i++)
+                bits[i] = gamma[bits[i]];
         }
     }
     au_path_free(&p);
@@ -437,7 +443,7 @@ void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGly
         const GlyphEntry *e = cache_get(gf, g->id, size, (uint8_t)sub);
         if (!e->w)
             continue;
-        au_draw_mask(c, ENTRY_BITS(e), e->w, e->h, e->w, fx + e->left - tx, by + gy + e->top - ty, color);
+        au_draw_coverage(c, ENTRY_BITS(e), e->w, e->h, e->w, fx + e->left - tx, by + gy + e->top - ty, color);
     }
 }
 

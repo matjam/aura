@@ -939,7 +939,17 @@ static bool update_style(AuDocView *dv)
         new_layout(dv, au_webfonts_set(dv->webfonts));
         dv->style_all = true; /* ex and ch units */
     }
-    if (dv->style_all || dv->tree_dirty) {
+    if (dv->viewport_restyle && !dv->style_all && !dv->tree_dirty) {
+        /* Only the viewport changed: the document is the same, so the
+         * layout compares each box's style and keeps the box tree unless
+         * a media query changed what is displayed. */
+        au_css_style_document(dv->resolver, dv->doc);
+        au_layout_styles_changed(dv->layout);
+        dv->viewport_restyle = false;
+        dv->restyle_needed = false;
+        changed = true;
+    } else if (dv->style_all || dv->tree_dirty) {
+        dv->viewport_restyle = false;
         au_css_style_document(dv->resolver, dv->doc);
         au_layout_tree_changed(dv->layout);
         au_docimages_tree_changed(dv->imgs);
@@ -997,7 +1007,7 @@ void au_docview_set_viewport(AuDocView *dv, int width, int height)
         view_device(dv, &dev);
         au_css_resolver_set_device(dv->resolver, &dev);
         /* Media queries and viewport units may change. */
-        dv->style_all = true;
+        dv->viewport_restyle = true;
     }
     undefer_sheets(dv); /* sheets whose media query matches at this size */
     if (dv->script)

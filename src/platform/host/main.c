@@ -571,6 +571,34 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
     } else if (!strncmp(a, "shot:", 5)) {
         chrome_settle(b, w, ses, o->net, 0, 200);
         chrome_shot(w, o->w, o->h, a + 5);
+    } else if (!strncmp(a, "resize:", 7)) {
+        /* resize:W,H: the window is resized as the shell does (resize,
+         * paint, idle), and the layout passes it cost are printed. */
+        int nw = o->w, nh = o->h;
+        sscanf(a + 7, "%d,%d", &nw, &nh);
+        AuTab *t = au_bw_active_tab(w);
+        AuPageStats s0, s1;
+        memset(&s0, 0, sizeof s0);
+        memset(&s1, 0, sizeof s1);
+        if (t)
+            au_page_stats(t->page, &s0);
+        double t0 = now_ms();
+        au_bw_resize(w, nw, nh);
+        o->w = nw;
+        o->h = nh;
+        AuSurface *sf = au_surface_new(nw, nh);
+        AuCanvas *c = au_canvas_new(sf);
+        au_bw_paint(w, c, (AuIRect){0, 0, nw, nh});
+        double t1 = now_ms();
+        chrome_settle(b, w, ses, o->net, 20, 400);
+        au_bw_paint(w, c, (AuIRect){0, 0, nw, nh});
+        au_canvas_free(c);
+        au_surface_free(sf);
+        if (t)
+            au_page_stats(t->page, &s1);
+        printf("resize to %dx%d: %lu style and layout passes, %lu ms in them; %.1f ms to the first paint\n", nw, nh,
+               (unsigned long)(s1.layouts - s0.layouts), (unsigned long)(s1.layout_total_ms - s0.layout_total_ms),
+               t1 - t0);
     } else if (!strcmp(a, "field")) {
         au_bw_set_field_focus(w, true);
     } else if (!strncmp(a, "go:", 3)) {
@@ -796,6 +824,8 @@ int main(int argc, char **argv)
         return au_host_net_render_main(argc, argv);
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
+    if (!strcmp(cmd, "layout-bench"))
+        return au_host_layout_bench_main(argc, argv);
     if (!strcmp(cmd, "image"))
         return au_host_image_main(argc, argv);
     if (!strcmp(cmd, "js"))

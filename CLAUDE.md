@@ -16,6 +16,14 @@ what you need to build, test and change Aura.
   release handler (`au_set_release_handler`), which frees caches, and
   try again; the out-of-memory handler runs when nothing is left to
   free.
+- On Mac OS 9, `au_alloc` takes small blocks from the pooled allocator
+  (`src/core/heap.c`, turned on by `au_heap_enable` at the start of
+  `main`): 32 KB slabs per size class, and one `NewPtr` only for a slab
+  or a block over 2 KB. Retro68's `malloc` is one `NewPtr` per block, and
+  the Memory Manager took tens of seconds per layout with the 90,000
+  blocks of a large page. Do not call `malloc` in engine code, and
+  enable the pool before the first allocation in a new Mac OS 9
+  program. `tests/core/test_heap.c` covers it on the host.
 - Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
   atoms. Names known at compile time go in `src/core/atoms_html.def` or
   `src/core/atoms_css.def`.
@@ -34,7 +42,7 @@ what you need to build, test and change Aura.
 
 | Folder | Holds |
 |---|---|
-| `src/core` | allocation, buffers, UTF-8, atoms |
+| `src/core` | allocation (and the pooled allocator), buffers, UTF-8, atoms |
 | `src/dom` | the node tree |
 | `src/html` | HTML tokenizer and tree builder |
 | `src/css` | CSS parser, selectors, cascade |
@@ -495,6 +503,76 @@ Toolbox points learned the hard way:
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
   handle then names Aura's font data.
+
+## Layout and paint speed
+
+To time layout and painting of a page on the host, build a Release tree
+(`cmake -S . -B build/rel -G Ninja -DCMAKE_BUILD_TYPE=Release`) and run
+`build/rel/src/platform/host/aura-host layout-bench PAGE --bundled-only`.
+It prints, as CPU time, a layout from scratch at two widths (`-w`,
+`-w2`), a width change in the layout alone and through the document
+view (style included), a height change, what each change cost (box tree
+builds, layout passes, intrinsic width runs, subtrees reused), and
+painting: page downs over new content, the same pages again, a
+32-pixel strip and a one-pixel paint (the cost that does not depend on
+the area). `--phase relayout|resize|paint|paint-cold|strip --repeat N`
+runs one step N times for a profiler (`sample aura-host 3`). To count
+the passes a window resize costs, run `aura-host chrome --tab PAGE --do
+resize:W,H`.
+
+- **Mac OS 9 is not the host.** Host timings did not show the allocator
+  problem above: a layout pass that took 6 ms on the host took 11 s in
+  the guest. When a guest figure is far from the host's, look for what
+  differs there (the Memory Manager, newlib's byte-wise `memcpy`)
+  before tuning the engine.
+- **A viewport change** is an incremental layout. The document view
+  restyles and calls `au_layout_styles_changed`, not
+  `au_layout_tree_changed`; the box tree is rebuilt only when a style
+  difference needs it (display, position, float, overflow, generated
+  content) or an element that had `display: none` is shown (layout keeps
+  the elements it left out in `AuLayout.hidden`). Layout then reuses
+  every independent subtree whose constraints did not change, and keeps
+  intrinsic widths, which do not depend on the viewport. Lengths in
+  viewport units reach layout as style changes.
+- **Generated text** (a pseudo-element's content, a marker's number) is
+  a text box whose node is the element; `current_style` in `layout.c`
+  finds its style through the pseudo-element box above it.
+- **Overflow** (`l_finish_overflow`) leaves out an absolutely positioned
+  box whose containing block is outside the box: it is laid out later,
+  so its geometry there is the previous layout's.
+- **The horizontal scroll bar** keeps its state across a change of the
+  page area's width (`relayout` in `browser.c`), and `check_hscroll`
+  corrects it after the layout. Deciding from the old content width cost
+  a second pass on every resize of a page that follows the window.
+- **Text painting.** A face caches the glyph of each code point below
+  U+0250 and recent kerning pairs (`AuFontCache` in `font_internal.h`).
+  The glyph cache stores masks with the text coverage table already
+  applied; `au_draw_coverage` draws them, `au_draw_mask` still applies
+  the table for other callers. The rasterizer uses stack work areas for
+  paths up to 62 pixels wide and writes masks without the span
+  callback. Layout shapes into one kept glyph run (`AuLayout.run`).
+- **Tests.** `tests/layout/test_relayout.c` resizes each sample page and
+  several inline pages through ten viewports and compares boxes and
+  pixels with a fresh document view at each size, then checks the
+  counters (no tree build or intrinsic run for a height or width change,
+  a new measure after a text or font size change).
+  `tests/paint/test_shape_cache.c` covers the face caches and the glyph
+  cache.
+- **Measured** on a Wikipedia article of 18,053 boxes. Host (CPU time):
+  width change in layout 2.6 ms (3.7 before), paint of a 1440x900 view
+  0.92 ms (1.22), first paint of a page of new text 1.36 ms (1.68), a
+  32-pixel strip 0.046 ms (0.061), a one-pixel paint 0.005 ms: painting
+  already costs in proportion to what it shows. A width change through
+  the document view takes 18 ms, of which the restyle of every element
+  is 15 ms; the cascade does not yet tell which viewport changes leave
+  styles alone. Guest (emulated, stock base, 600 pixels wide): the last
+  style and layout pass of the load 465 ms (11,251 ms before the pooled
+  allocator), a whole-page paint 4 to 5 ms (54), a page down 4 to 11 ms
+  (349), a window zoom two passes of about 280 ms each.
+- **Not done:** an image whose size becomes known still rebuilds the
+  box tree (`au_layout_images_changed`); text is segmented and measured
+  again for each layout of its block (the word cache answers the
+  widths); `l_queue_abspos` searches its queue linearly.
 
 ## Fonts
 

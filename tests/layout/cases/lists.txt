@@ -139,3 +139,15 @@ li::before{content:counters(item, ".") " "}
 <span>x<div id=d style="height:10px"></div>x</span>
 ---
 #d y=16 w=800
+=== pseudo-element rules differ between siblings that share a style
+<style>
+body { margin: 0 }
+li { display: inline }
+li::after { content: "xx" }
+li:last-child::after { content: none }
+</style>
+<ul style="margin:0;padding:0;width:400px" id=u><li id=a>a</li><li id=b>b</li><li id=c>c</li></ul>
+---
+#a x=0 w=48
+#b x=48 w=48
+#c x=96 w=16
