@@ -34,6 +34,7 @@
 #define AURA_BROWSER_PAGE_H
 
 #include "../dom/control.h" /* AuControlFile, AuPopupItem */
+#include "../page/perf.h" /* AuPerf: counters only */
 #include "../paint/font.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct, no OS calls */
 #include "prefs.h"
@@ -186,6 +187,9 @@ typedef struct AuFetchInfo {
      * or _CLOCK (cert has the details): it has HTTPS, and that failed.
      * AU_FETCH_OK otherwise. */
     AuFetchError cause;
+    /* How the request went, for the request log (netlog.h); NULL when
+     * the fetcher does not say. Valid during the call. */
+    const struct AuFetchNet *net;
 } AuFetchInfo;
 
 typedef struct AuFetchSink {
@@ -215,6 +219,35 @@ typedef enum {
     AU_FETCH_PHASE_RECEIVING,
     AU_FETCH_PHASE_DONE
 } AuFetchPhase;
+
+/* Where a response came from. */
+typedef enum {
+    AU_FETCH_FROM_NETWORK,
+    AU_FETCH_FROM_MEMORY,  /* the memory cache */
+    AU_FETCH_FROM_DISK,    /* the disk cache */
+    AU_FETCH_FROM_HISTORY, /* a Back or Forward load: the stored copy as it was */
+    AU_FETCH_FROM_304      /* the stored copy, confirmed by the server */
+} AuFetchSource;
+
+/* How a finished request went (AuFetchInfo.net), for the developer
+ * tools' request log. Strings are never NULL and are valid during the
+ * done call. */
+typedef struct AuFetchNet {
+    /* Milliseconds from the request's start to the start of each phase;
+     * -1 for a phase that did not happen. */
+    int32_t at[AU_FETCH_PHASE_DONE + 1];
+    AuFetchSource source;
+    bool reused;              /* sent on a connection already open */
+    uint32_t connection;      /* the connection's number; 0 when none was used */
+    const char *remote;       /* "93.184.215.14:443"; "" when unknown */
+    const char *protocol;     /* "TLS 1.2"; "" without TLS */
+    const char *cipher;
+    int64_t transfer_bytes;   /* body bytes as sent; 0 from a cache */
+    int redirects;
+    const char *request_head;  /* the request line and headers; "" when not recorded */
+    const char *response_head; /* "name: value" lines; "" when not recorded */
+    const char *blocked_reason; /* what refused the request; "" when nothing did */
+} AuFetchNet;
 
 typedef struct AuFetchStatus {
     AuFetchPhase phase;
@@ -445,6 +478,28 @@ void au_page_idle(AuPage *p);
 /* Whether the page wants au_page_idle called soon (loading, animating);
  * the shell can sleep longer when no page does. */
 bool au_page_busy(const AuPage *p);
+
+/* ---- Developer tools ----
+ * The request log (netlog.h): one record per request since the last
+ * navigation. The time counters (src/page/perf.h): script, style, layout
+ * and paint, to which the shell adds its screen copies. */
+struct AuNetLog;
+const struct AuNetLog *au_page_netlog(const AuPage *p);
+AuPerf *au_page_perf(AuPage *p);
+/* Bytes the page's script runtime has allocated, and its limit (0, 0
+ * when it has none). */
+void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
+/* The console: lines ever added (a view compares it to see new lines or
+ * a Clear), a line added by a tool (levels 5, the expression typed, and
+ * 6, its result, besides the script levels), and Clear. */
+#define AU_CONSOLE_INPUT 5
+#define AU_CONSOLE_RESULT 6
+uint32_t au_page_console_total(const AuPage *p);
+void au_page_console_add(AuPage *p, int level, const char *text);
+void au_page_console_clear(AuPage *p);
+/* Evaluates src as script in the page; the result as a string, or the
+ * error, goes in out. False when it threw or the page runs no script. */
+bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
 
 /* ---- Measurements (Debug menu) ---- */
 typedef struct AuPageStats {

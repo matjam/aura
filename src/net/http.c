@@ -62,6 +62,8 @@ struct Conn {
     AuHttpParser proxy_parser; /* CONNECT response */
     bool proxy_parser_live;
     bool session_saved;
+    uint32_t id;      /* for the request log (au_http_trace) */
+    AuNetAddr addr;   /* the address connected to (family 0 before DNS answers) */
 };
 
 enum { T_START, T_WAIT_CONN, T_SEND, T_RECV, T_DRAIN, T_WAIT_CRED, T_AIA, T_FAILED, T_FINISHED };
@@ -153,6 +155,8 @@ struct AuHttpTransfer {
     int aia_rounds;
     char *aia_tried[AIA_MAX_DEPTH];
     char aia_url[256];
+    AuHttpTrace trace;   /* au_http_trace: phase times, the connection used */
+    char *request_head;  /* the request as sent, kept only with au_net_set_trace_headers */
     AuHttpTransfer *aia_child;
     bool aia_ready;  /* the fetch ended with certificates: connect again */
     bool aia_waited; /* another transfer fetched the URL: connect again */
@@ -194,6 +198,8 @@ struct AuNet {
     AuBrotliDict *brdict;
     int brdict_users;
     bool in_pump;
+    bool trace_headers;    /* au_net_set_trace_headers */
+    uint32_t next_conn_id;
 };
 
 const char *au_net_error_name(AuNetError e)
@@ -253,6 +259,9 @@ static uint32_t elapsed(uint32_t now, uint32_t since)
     return d > 0 ? (uint32_t)d : 0;
 }
 static int64_t wall(AuNet *net) { return net->ops.wall_time(net->ops.ctx); }
+
+static void trace_init(AuHttpTransfer *t);
+static void trace_note(AuHttpTransfer *t);
 
 /* ---- Body sources ---- */
 
@@ -377,6 +386,7 @@ AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbac
     t->range_end = rq->range_end;
     t->total_timeout = rq->total_timeout_ms;
     t->started_ms = t->last_ms = now_ms(net);
+    trace_init(t);
     t->original_url = dupz(rq->url ? rq->url : "");
     au_headers_init(&t->resp_headers);
     au_buf_init(&t->mime);
@@ -606,6 +616,7 @@ static Conn *conn_new(AuNet *net, const char *host, uint16_t port, bool tls)
     au_buf_init(&c->in);
     au_buf_init(&c->out);
     c->started_ms = c->last_ms = now_ms(net);
+    c->id = ++net->next_conn_id;
     c->state = C_RESOLVE;
     /* IPv6 literal hosts come bracketed from the URL parser; resolvers
      * want them bare. */
@@ -821,6 +832,7 @@ static bool conn_step(Conn *c)
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_DNS);
             return true;
         }
+        c->addr = a;
         c->sock = net->ops.connect(net->ops.ctx, &a, c->proxy ? c->proxy_port : c->port);
         if (!c->sock) {
             conn_kill(c, c->proxy ? AU_NET_ERR_PROXY : AU_NET_ERR_CONNECT);
@@ -1163,6 +1175,13 @@ static void build_request(AuHttpTransfer *t, Conn *c)
     }
     au_buf_puts(&b, "\r\n");
     conn_queue(c, b.data, b.len);
+    t->trace.connection = c->id;
+    t->trace.remote = c->addr;
+    t->trace.remote_port = c->proxy ? c->proxy_port : c->port;
+    if (net->trace_headers) {
+        au_free(t->request_head);
+        t->request_head = au_strndup(b.data, b.len < 4096 ? b.len : 4096);
+    }
     au_buf_free(&b);
     au_buf_free(&tmp);
     au_buf_free(&target);
@@ -1279,6 +1298,7 @@ static void transfer_free(AuHttpTransfer *t)
     au_buf_free(&t->mime);
     au_buf_free(&t->charset);
     au_buf_free(&t->encoding);
+    au_free(t->request_head);
     au_free(t);
 }
 
@@ -1294,6 +1314,7 @@ static void finish(AuHttpTransfer *t, AuNetError err)
         t->cache_w = NULL;
     }
     cache_drop(t);
+    trace_note(t);
     if (!t->cancelled && t->cb.done)
         t->cb.done(t->cb.ctx, t, err);
 }
@@ -1566,11 +1587,17 @@ static bool cache_try(AuHttpTransfer *t)
     AuHeaders req;
     request_fields(t, &req);
     AuCacheEntry *e = NULL;
+    AuCacheStats before, after;
+    au_cache_stats(net->cache, &before);
     AuCacheState st = t->history ? au_cache_lookup_history(net->cache, au_buf_cstr(&key), &req, &e)
                                  : au_cache_lookup(net->cache, au_buf_cstr(&key), &req, wall(net), &e);
     au_headers_free(&req);
     au_buf_free(&key);
     if (st == AU_CACHE_FRESH) {
+        au_cache_stats(net->cache, &after);
+        t->trace.source = t->history                                   ? AU_HTTP_FROM_HISTORY
+                          : after.from_storage != before.from_storage ? AU_HTTP_FROM_DISK
+                                                                      : AU_HTTP_FROM_MEMORY;
         deliver_cached(t, e, false);
         au_cache_entry_release(net->cache, e);
         finish(t, AU_NET_OK);
@@ -1685,6 +1712,7 @@ static bool handle_head(AuHttpTransfer *t)
     if (st == 304 && t->cache_entry) {
         int64_t now = wall(net);
         au_cache_update(net->cache, t->cache_entry, &t->parser.headers, t->request_wall, now);
+        t->trace.source = AU_HTTP_FROM_304;
         deliver_cached(t, t->cache_entry, true);
         au_cache_entry_release(net->cache, t->cache_entry);
         t->cache_entry = NULL;
@@ -2369,6 +2397,7 @@ bool au_net_pump(AuNet *net)
                 break;
             else
                 any = true;
+        trace_note(t);
     }
     /* Reap. */
     for (AuHttpTransfer **pp = &net->transfers; *pp;) {
@@ -2458,4 +2487,64 @@ AuHttpPhase au_http_phase(const AuHttpTransfer *t)
     case T_AIA: return AU_PHASE_SECURING;
     default: return AU_PHASE_DONE;
     }
+}
+
+/* ---- Tracing (the developer tools' request log) ---- */
+
+static void trace_init(AuHttpTransfer *t)
+{
+    for (int i = 0; i <= AU_PHASE_DONE; i++)
+        t->trace.at[i] = -1;
+    t->trace.at[AU_PHASE_QUEUED] = 0;
+    t->trace.phase = AU_PHASE_QUEUED;
+}
+
+/* Stamps the phase the transfer is in when it changed since the last
+ * look. A phase earlier than the last one is a new attempt (a redirect,
+ * a retry): the later stamps are dropped. */
+static void trace_note(AuHttpTransfer *t)
+{
+    AuHttpPhase ph = au_http_phase(t);
+    AuHttpTrace *tr = &t->trace;
+    if (ph == tr->phase)
+        return;
+    int32_t dt = (int32_t)elapsed(now_ms(t->net), t->started_ms);
+    if (ph < tr->phase)
+        for (int i = ph + 1; i <= AU_PHASE_DONE; i++)
+            tr->at[i] = -1;
+    if (ph != AU_PHASE_QUEUED)
+        tr->at[ph] = dt;
+    tr->phase = ph;
+}
+
+void au_http_trace(const AuHttpTransfer *t, AuHttpTrace *out)
+{
+    *out = t->trace;
+    out->reused = t->reused && t->trace.connection != 0;
+    out->transfer_bytes = t->trace.source == AU_HTTP_FROM_NETWORK ? t->received : 0;
+    out->redirects = t->redirects;
+}
+
+const AuHeaders *au_http_response_headers(const AuHttpTransfer *t) { return &t->resp_headers; }
+const char *au_http_request_head(const AuHttpTransfer *t) { return t->request_head ? t->request_head : ""; }
+void au_net_set_trace_headers(AuNet *net, bool on) { net->trace_headers = on; }
+bool au_net_trace_headers(const AuNet *net) { return net->trace_headers; }
+
+int au_net_connections(const AuNet *net, AuNetConnInfo *out, int max)
+{
+    int n = 0;
+    for (const Conn *c = net->conns; c; c = c->next) {
+        if (c->state == C_DEAD)
+            continue;
+        if (n < max) {
+            snprintf(out[n].host, sizeof out[n].host, "%s", c->host);
+            out[n].port = c->port;
+            out[n].tls = c->tls;
+            out[n].busy = c->owner != NULL;
+            out[n].id = c->id;
+            out[n].served = c->served;
+        }
+        n++;
+    }
+    return n;
 }

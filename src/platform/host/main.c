@@ -591,7 +591,7 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             const char *line = au_page_console_line(t->page, i, &level);
             printf("console %d: %s\n", level, line ? line : "");
         }
-    } else {
+    } else if (!au_host_dev_action(w, o->net ? ses->net : NULL, a)) { /* netlog, perf, eval:, source, devshot: */
         fprintf(stderr, "aura-host: unknown --do action %s\n", a);
     }
     AuTab *t = au_bw_active_tab(w);
@@ -637,6 +637,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_net_apply_prefs(ses.net, &b->prefs);
         o->cache = au_cache_new(au_net_cache_bytes_from_prefs(&b->prefs));
         au_net_set_cache(ses.net, o->cache);
+        au_net_set_trace_headers(ses.net, true); /* --do netlog:details shows headers */
         loader = au_net_loader_new(ses.net);
         pf = au_net_page_fetcher_new(loader);
         AuPageFetcher f;

@@ -84,6 +84,7 @@ struct AuDocView {
     float goal_x;        /* textarea: the x kept by up and down (-1: none) */
     AuElement *pressed;  /* a button held down (referenced), or NULL */
     bool submitting;     /* a submission is being made (no nesting) */
+    AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
 };
 
 

@@ -25,6 +25,7 @@
 
 #include "credits.h"
 #include "history.h"
+#include "netlog.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../page/page.h"
@@ -63,6 +64,7 @@ struct Fetch {
     AuFetchSink sink;
     AuFetchKind kind;
     bool done, ok, cancelled;
+    uint32_t log; /* its record in the page's request log (netlog.h) */
 };
 
 struct AuPage {
@@ -163,7 +165,25 @@ struct AuPage {
     char *console[AU_PAGE_CONSOLE_LINES];
     uint8_t console_level[AU_PAGE_CONSOLE_LINES];
     size_t console_start, console_count;
+    uint32_t console_total; /* lines ever added, so a view sees new ones */
+
+    AuNetLog netlog; /* the requests since the last navigation (netlog.h) */
 };
+
+/* Milliseconds since the navigation, for the request log. */
+static uint32_t log_ms(AuPage *p)
+{
+    return p->env.time_ms ? p->env.time_ms(p->env.ctx) - p->load_start : 0;
+}
+
+static void log_begin(AuPage *p, Fetch *f, const char *method)
+{
+    f->log = au_netlog_begin(&p->netlog, f->url, method, f->kind, log_ms(p));
+    if (f->is_file)
+        au_netlog_source(&p->netlog, f->log, AU_NETREC_FROM_FILE);
+    else if (au_url_scheme_is(f->url, "data"))
+        au_netlog_source(&p->netlog, f->log, AU_NETREC_FROM_DATA);
+}
 
 /* ---- Helpers ---- */
 
@@ -384,6 +404,7 @@ static void fetch_cancel(Fetch *f)
     if (f->done || f->cancelled)
         return;
     f->cancelled = true;
+    au_netlog_end(&f->page->netlog, f->log, AU_NETREC_CANCELLED, NULL, log_ms(f->page));
     if (f->fetcher && f->fetcher->cancel)
         f->fetcher->cancel(f->fetcher->ctx, f->fid);
 }
@@ -416,6 +437,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
     (void)id;
     if (f->done || f->cancelled)
         return;
+    au_netlog_response(&f->page->netlog, f->log, r->status, r->content_type, r->from_cache, log_ms(f->page));
     if (f->main) {
         main_response(f->page, r);
         return;
@@ -461,6 +483,7 @@ static void sink_data(void *ctx, uint32_t id, const void *bytes, size_t len)
     if (f->done || f->cancelled)
         return;
     f->off += len;
+    au_netlog_data(&f->page->netlog, f->log, len);
     if (f->main)
         main_data(f->page, bytes, len);
     else
@@ -477,6 +500,7 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     f->done = true;
     f->ok = ok;
     AuPage *p = f->page;
+    au_netlog_end(&p->netlog, f->log, ok ? AU_NETREC_DONE : AU_NETREC_FAILED, info, log_ms(p));
     if (f->main) {
         main_done(p, ok, info);
     } else {
@@ -512,6 +536,7 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
         Fetch *f = fetch_new(p, url, main);
         f->is_file = true;
         f->kind = kind;
+        log_begin(p, f, NULL);
         return f;
     }
     const AuPageFetcher *fe = fetcher_for(p, url);
@@ -555,8 +580,10 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
                        ? p->cache_mode
                        : AU_FETCH_CACHE_NORMAL;
     }
+    log_begin(p, f, rq.method);
     f->fid = fe->start(fe->ctx, &rq, &f->sink);
     if (!f->fid) {
+        au_netlog_end(&p->netlog, f->log, AU_NETREC_FAILED, NULL, log_ms(p));
         f->cancelled = true; /* removed at the next compaction */
         return NULL;
     }
@@ -847,6 +874,7 @@ static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, si
     }
     p->console[i] = au_strndup(text, len < 1024 ? len : 1024);
     p->console_level[i] = (uint8_t)level;
+    p->console_total++;
 }
 
 static void internal_action(AuPage *p, const char *what);
@@ -936,6 +964,7 @@ static void finish(AuPage *p, bool ok)
     p->stats.load_ms = now(p) - p->load_start;
     if (!p->stats.load_ms)
         p->stats.load_ms = 1;
+    au_netlog_mark(&p->netlog, p->netlog.dcl_ms ? 0 : p->stats.load_ms, p->stats.load_ms);
     if (p->cb.load_finished)
         p->cb.load_finished(p->cb.ctx, p, ok);
 }
@@ -1965,6 +1994,7 @@ static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
     p->prev_cert = NULL;
     p->main_done = true;
     if (p->main_fetch) {
+        au_netlog_end(&p->netlog, p->main_fetch->log, AU_NETREC_DONE, NULL, log_ms(p));
         p->main_fetch->done = true; /* no more calls from the fetcher */
         p->main_fetch = NULL;
     }
@@ -2105,6 +2135,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->loading = true;
     p->progress = 0;
     p->load_start = now(p);
+    au_netlog_clear(&p->netlog);
     memset(&p->stats, 0, sizeof p->stats);
     au_free(p->fragment);
     p->fragment = NULL;
@@ -2359,7 +2390,60 @@ void au_page_free(AuPage *p)
     au_free(p->prev_cert);
     for (size_t i = 0; i < p->console_count; i++)
         au_free(p->console[(p->console_start + i) % AU_PAGE_CONSOLE_LINES]);
+    au_netlog_free(&p->netlog);
     au_free(p);
+}
+
+/* ---- Developer tools ---- */
+
+const AuNetLog *au_page_netlog(const AuPage *p)
+{
+    return &p->netlog;
+}
+
+AuPerf *au_page_perf(AuPage *p)
+{
+    return au_docview_perf(p->dv);
+}
+
+void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit)
+{
+    au_docview_script_memory(p->dv, used, limit);
+}
+
+uint32_t au_page_console_total(const AuPage *p)
+{
+    return p->console_total;
+}
+
+void au_page_console_add(AuPage *p, int level, const char *text)
+{
+    dv_console(p, p->dv, level, text, strlen(text));
+}
+
+void au_page_console_clear(AuPage *p)
+{
+    for (size_t i = 0; i < p->console_count; i++)
+        au_free(p->console[(p->console_start + i) % AU_PAGE_CONSOLE_LINES]);
+    p->console_start = p->console_count = 0;
+    p->console_total++;
+}
+
+bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
+{
+    if (p->kind != K_DOC || !p->begun) {
+        au_buf_puts(out, "This page has no document to run script in");
+        return false;
+    }
+    if (!au_docview_scripting(p->dv)) {
+        au_buf_puts(out, "JavaScript is turned off (Preferences), or was when this page loaded");
+        return false;
+    }
+    uint32_t gen = p->gen;
+    bool ok = au_docview_eval(p->dv, src, out);
+    if (gen == p->gen)
+        follow_open_url(p); /* the expression may have navigated */
+    return ok;
 }
 
 size_t au_page_console_count(const AuPage *p)
@@ -2776,6 +2860,8 @@ void au_page_idle(AuPage *p)
         return; /* a script navigated while the document loaded */
     update_interim(p);
     maybe_layout(p, false);
+    if (!p->netlog.dcl_ms && p->main_done && p->begun && !p->internal && au_docview_content_loaded(p->dv))
+        au_netlog_mark(&p->netlog, log_ms(p) ? log_ms(p) : 1, 0);
     check_finished(p);
     report_status(p);
 }
