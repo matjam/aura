@@ -69,11 +69,16 @@ jobs:
         run: >-
           cmake -S . -B build/asan -G Ninja
           -DCMAKE_C_COMPILER=clang
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-sanitize-recover=undefined"
       - name: Build
         run: cmake --build build/asan
       - name: Test
         env:
+          # Leak detection is off, as it is on macOS, where the sanitizer
+          # build is run by hand: several tests do not free everything at
+          # exit. -fno-sanitize=function is for BearSSL, which calls hash
+          # functions through pointers of another type.
+          ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build/asan --output-on-failure
 
