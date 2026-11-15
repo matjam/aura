@@ -119,6 +119,12 @@ AuCssResolver *au_dv_resolver(const AuDocView *dv);
 int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url);
 void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len);
 void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
+/* Canvases (AuJsHooks.canvas_set and canvas_image in src/js/js.h): the
+ * document's canvas set, made on first use, and the decoded pixels of an
+ * image element the document loaded. */
+struct AuCanvasSet *au_dv_canvas_set(AuDocView *dv);
+bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, char *url,
+                        size_t url_cap);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
 /* The user agent set with au_docview_set_user_agent, or NULL. */

@@ -68,6 +68,14 @@ endif()
 # built for speed; the protocol and X.509 code (library/), which runs a
 # few times per connection, for size.
 target_compile_options(aura_mbedtls PRIVATE -w -O2)
+# Under the sanitizers: the library calls memcmp and memcpy with a null
+# pointer and length 0 (x509_crt.c compares an empty OID that way), which
+# the C standard forbids and every C library accepts. UBSan's check of
+# nonnull arguments is turned off for this target only; our own code is
+# still checked, and AddressSanitizer still checks every access here.
+if(CMAKE_C_FLAGS MATCHES "-fsanitize")
+    target_compile_options(aura_mbedtls PRIVATE -fno-sanitize=nonnull-attribute)
+endif()
 file(GLOB AURA_MBEDTLS_PROTOCOL_SOURCES CONFIGURE_DEPENDS ${AURA_MBEDTLS_DIR}/library/*.c)
 set_source_files_properties(${AURA_MBEDTLS_PROTOCOL_SOURCES} PROPERTIES COMPILE_OPTIONS "-Os")
 # The library calls three functions of the engine (the clocks and the

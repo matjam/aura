@@ -343,6 +343,26 @@ static void place_legend(AuLayout *L, LBlock *b, float content_w)
 
 /* ---- Replaced elements ---- */
 
+/* A canvas size attribute: a non-negative integer, else def. */
+static int l_canvas_attr(const AuNode *n, const char *name, int def)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a && n && au_is_element(n) ? au_element_get_attr((const AuElement *)n, a) : NULL;
+    if (!v)
+        return def;
+    while (au_is_space((unsigned char)*v))
+        v++;
+    if (*v == '+')
+        v++;
+    if (!au_is_digit((unsigned char)*v))
+        return def;
+    long r = 0;
+    for (; au_is_digit((unsigned char)*v); v++)
+        if (r < 1000000)
+            r = r * 10 + (*v - '0');
+    return (int)r;
+}
+
 static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, float *ratio)
 {
     LReplaced *r = b->rep;
@@ -449,6 +469,15 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         *w = em * 0.8f;
         *h = f->m.x_height;
         return;
+    case LR_CANVAS: {
+        /* The bitmap's size: the width and height attributes, 300 x 150
+         * by default (HTML, "The canvas element"); the ratio follows. */
+        *w = (float)l_canvas_attr(b->b.node, "width", 300);
+        *h = (float)l_canvas_attr(b->b.node, "height", 150);
+        if (*w > 0 && *h > 0)
+            *ratio = *w / *h;
+        return;
+    }
     case LR_SVG: {
         /* Absolute width and height attributes, and the ratio from them
          * or the viewBox. Neither size nor ratio: 300 x 150 (CSS 2.1
@@ -757,10 +786,18 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     if (b->b.inner == LI_REPLACED) {
         float w, h;
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);
-        float r;
-        if (l_spec_width(b, content_w) < 0 && l_spec_height(b, cb_h) < 0 && l_aspect_ratio(b, &r) && r > 0)
+        float r = 0;
+        bool has_r = l_aspect_ratio(b, &r) && r > 0;
+        if (!has_r && b->b.replaced == LR_CANVAS) {
+            /* A canvas has no LReplaced record: its ratio is that of its
+             * width and height attributes. */
+            float iw, ih;
+            replaced_intrinsic_size(L, b, &iw, &ih, &r);
+            has_r = r > 0;
+        }
+        if (l_spec_width(b, content_w) < 0 && l_spec_height(b, cb_h) < 0 && has_r)
             h = content_w / r;
-        else if (l_spec_height(b, cb_h) < 0 && l_aspect_ratio(b, &r) && r > 0)
+        else if (l_spec_height(b, cb_h) < 0 && has_r)
             h = l_clamp_h(b, content_w / r, cb_h);
         ch = h;
         b->baseline = b->last_baseline = NAN;

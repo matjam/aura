@@ -1251,8 +1251,15 @@ static int replaced_kind(AuLayout *L, AuNode *node, bool *skip_children, bool *f
     }
     if (t == AU_ATOM_object || t == AU_ATOM_embed)
         return embedded_kind(L, e, t == AU_ATOM_object, skip_children);
-    if (t == AU_ATOM_canvas || t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio ||
-        t == AU_ATOM_frame) {
+    if (t == AU_ATOM_canvas) {
+        /* With script off a canvas shows its children (the fallback). */
+        const AuSurface *px = NULL;
+        if (L->env.canvas && L->env.canvas(L->env.ctx, e, &px) < 0)
+            return LR_NONE;
+        *skip_children = true;
+        return LR_CANVAS;
+    }
+    if (t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio || t == AU_ATOM_frame) {
         *skip_children = true;
         return LR_OTHER;
     }

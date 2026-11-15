@@ -193,6 +193,9 @@ struct AuJs {
     size_t gc_base;   /* live_bytes after the last collection the bindings ran */
     double last_ran;  /* when a task or timer last ran (now_ms clock) */
     bool oom;          /* an allocation was refused: the reserve is open */
+    /* canvas (natives_canvas.c) */
+    struct JsCanvas *canvas;
+    bool canvas_pending; /* a canvas element's width or height attribute is changing */
 };
 
 /* ---- runtime.c ---- */
@@ -243,6 +246,14 @@ int js_iface_of(const AuNode *n);
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
 void js_natives_forms_init(AuJs *js, JSValue N);
+
+/* ---- natives_canvas.c ---- */
+void js_canvas_init(AuJs *js, JSValue N);
+void js_canvas_free(AuJs *js);
+/* From the DOM hook: an attribute of el is about to change. */
+void js_canvas_attr_changing(AuJs *js, AuElement *el, AuAtom name);
+/* Resizes the bitmaps of canvases whose size attributes changed. */
+void js_canvas_sync(AuJs *js);
 
 /* ---- ranges.c ---- */
 typedef struct JsRange JsRange;

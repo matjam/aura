@@ -39,7 +39,10 @@ static void acc_line(Strip *s, float x0, float y0, float x1, float y1)
         t = y0, y0 = y1, y1 = t;
         dir = -1.0f;
     }
-    if (y1 <= 0 || y0 >= s->rows || y0 == y1)
+    /* An edge flatter than this covers nothing that shows, and its
+     * slope would overflow: dx / dy must stay finite, or the cell indices
+     * below are not numbers (coordinates are below 1e6, see add_edge). */
+    if (y1 <= 0 || y0 >= s->rows || !(y1 - y0 > 1e-7f))
         return;
     float dxdy = (x1 - x0) / (y1 - y0);
     int ys = y0 < 0 ? 0 : (int)y0;
@@ -230,7 +233,7 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
                     float a = sum < 0 ? -sum : sum;
                     if (a >= 1.0f) {
                         out[x] = 255;
-                    } else if (a != 0) {
+                    } else if (a > 0) {
                         uint8_t c = (uint8_t)(a * 255.0f + 0.5f);
                         if (c)
                             out[x] = c;
@@ -250,6 +253,8 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
                 } else if (a > 1.0f) {
                     a = 1.0f;
                 }
+                if (!(a >= 0))
+                    a = 0; /* not a number: nothing */
                 uint8_t c = (uint8_t)(a * 255.0f + 0.5f);
                 cov[x] = c;
                 if (c) {

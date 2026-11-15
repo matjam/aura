@@ -568,6 +568,24 @@ typedef struct AuCssKeyframes {
     uint32_t nframes;
 } AuCssKeyframes;
 
+/* ---- Values given as text (canvasval.c) ----
+ * For the canvas context. A colour: any CSS <color> a declaration takes;
+ * false when the text is not one. *current (optional) is set for
+ * currentcolor, whose value the caller resolves. */
+bool au_css_parse_color_text(const char *s, size_t len, AuColor *out, bool *current);
+/* A font shorthand. base is the style relative sizes and weights refer to
+ * (NULL: 10px, weight 400). The caller initializes and frees the two
+ * buffers: families is a font-family value for au_fontlist_parse, text
+ * the shorthand as it reads back. False (out unchanged) when the text is
+ * not a font value; line-height is parsed and ignored. */
+typedef struct AuCssCanvasFont {
+    float size; /* px */
+    int weight;
+    bool italic, small_caps;
+    AuBuf families, text;
+} AuCssCanvasFont;
+bool au_css_parse_font_text(const char *s, size_t len, const AuStyle *base, AuCssCanvasFont *out);
+
 /* ---- Declaration blocks (inline style, CSSOM) ---- */
 AuCssDeclBlock *au_css_parse_inline_style(const char *css, size_t len, const char *base_url);
 void au_css_decl_block_free(AuCssDeclBlock *b);

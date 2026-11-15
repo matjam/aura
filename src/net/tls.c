@@ -210,7 +210,8 @@ static int vrfy_cb(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
         if (t->nder < AU_CERT_MAX_CHAIN) {
             int k = t->nder++;
             if (c->raw.len <= CERT_KEEP_MAX && (t->der[k] = au_try_alloc(c->raw.len ? c->raw.len : 1)) != NULL) {
-                memcpy(t->der[k], c->raw.p, c->raw.len);
+                if (c->raw.len) /* an empty certificate has a null pointer */
+                    memcpy(t->der[k], c->raw.p, c->raw.len);
                 t->der_len[k] = c->raw.len;
             }
         }
@@ -283,14 +284,17 @@ typedef struct PathCert {
     bool from_pool;
 } PathCert;
 
-static bool span_eq(AuDerSpan a, AuDerSpan b) { return a.len == b.len && !memcmp(a.p, b.p, a.len); }
+static bool span_eq(AuDerSpan a, AuDerSpan b)
+{
+    return a.len == b.len && (a.len == 0 || !memcmp(a.p, b.p, a.len));
+}
 
 static bool is_anchor_dn(const AuTls *t, AuDerSpan dn) { return au_roots_has_subject(t->roots, dn.p, dn.len); }
 
 static bool path_has(const PathCert *path, int n, const uint8_t *der, size_t len)
 {
     for (int i = 0; i < n; i++)
-        if (path[i].len == len && !memcmp(path[i].der, der, len))
+        if (path[i].len == len && (len == 0 || !memcmp(path[i].der, der, len)))
             return true;
     return false;
 }

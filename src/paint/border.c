@@ -205,7 +205,8 @@ static void box_pass(uint8_t *p, int n, int stride, int r, uint8_t *tmp)
     }
 }
 
-static void blur_mask(uint8_t *m, int w, int h, float sigma)
+void au_blur_mask(uint8_t *m, int w, int h, float sigma);
+void au_blur_mask(uint8_t *m, int w, int h, float sigma)
 {
     if (!(sigma > 0.25f))
         return;
@@ -304,7 +305,7 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     au_path_rounded_rect(&p, b, radii ? &br : NULL, false);
     au_raster_mask(&p, AU_FILL_NONZERO, work, boxm);
     au_path_free(&p);
-    blur_mask(shape, ww, wh, sigma);
+    au_blur_mask(shape, ww, wh, sigma);
 
     int n = vis.x1 - vis.x0;
     uint8_t *cov = au_alloc((size_t)n);

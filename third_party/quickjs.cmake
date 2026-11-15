@@ -54,7 +54,7 @@ else()
     set(AURA_PRELUDE_BC ${AURA_PRELUDE_DIR}/prelude.bc)
     # The order prelude.c joins the files in.
     set(AURA_PRELUDE_JS)
-    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_net prelude_obs)
+    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_net prelude_canvas prelude_obs)
         list(APPEND AURA_PRELUDE_JS ${CMAKE_SOURCE_DIR}/src/js/${part}.js)
     endforeach()
     set(AURA_JSPRELUDE_SRC ${CMAKE_SOURCE_DIR}/tools/jsprelude/jsprelude.c)
