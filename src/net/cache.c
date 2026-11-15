@@ -160,7 +160,10 @@ size_t au_cache_count(const AuHttpCache *c) { return c->count; }
 
 size_t au_cache_entry_limit(const AuHttpCache *c)
 {
-    size_t l = c->max / 8;
+    /* A quarter of the budget: a Wikipedia article's HTML (1.3 MB for
+     * "Mac (computer)") did not fit an eighth of the 4 MB default, so Back
+     * fetched it again. */
+    size_t l = c->max / 4;
     return l > ENTRY_LIMIT_MAX ? ENTRY_LIMIT_MAX : l;
 }
 
@@ -590,11 +593,9 @@ AuCacheWriter *au_cache_begin(AuHttpCache *c, const char *url, const AuHeaders *
     e->reason = dupz(reason ? reason : "");
     e->request_time = request_time;
     e->response_time = response_time;
-    /* Worth keeping only when it can be reused or revalidated. */
-    if (au_cache_freshness_lifetime(status, &e->resp) == 0 && !has_validator(e)) {
-        au_cache_entry_free(e);
-        return NULL;
-    }
+    /* Kept even when it can be neither reused nor revalidated (no
+     * freshness, no validator, as Hacker News pages are): a normal lookup
+     * misses it, and Back shows it (au_cache_lookup_history). */
     AuCacheWriter *w = au_calloc(sizeof *w);
     w->cache = c;
     w->e = e;

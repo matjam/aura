@@ -21,6 +21,7 @@
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
+#include "net/cache.h"
 #include "net/loader.h"
 #include "net/net_prefs.h"
 
@@ -53,7 +54,8 @@ static int usage(void)
             "                        [--net] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
-            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field)\n"
+            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
+            "                        go:URL back forward cache (the HTTP cache's counts with --net))\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
@@ -290,6 +292,7 @@ typedef struct ChromeOpts {
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
+    AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
 } ChromeOpts;
 
 /* ---- The scroll benchmark: the Mac shell's flush on the host ----
@@ -567,6 +570,19 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         chrome_shot(w, o->w, o->h, a + 5);
     } else if (!strcmp(a, "field")) {
         au_bw_set_field_focus(w, true);
+    } else if (!strncmp(a, "go:", 3)) {
+        au_bw_navigate(w, a + 3);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strcmp(a, "back") || !strcmp(a, "forward")) {
+        au_bw_go(w, a[0] == 'b' ? -1 : 1);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strcmp(a, "cache")) {
+        AuCacheStats cs;
+        memset(&cs, 0, sizeof cs);
+        if (o->cache)
+            au_cache_stats(o->cache, &cs);
+        printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored\n",
+               cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored);
     } else if (!strcmp(a, "console")) {
         AuTab *t = au_bw_active_tab(w);
         size_t n = t ? au_page_console_count(t->page) : 0;
@@ -619,6 +635,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
             return 3;
         }
         au_net_apply_prefs(ses.net, &b->prefs);
+        o->cache = au_cache_new(au_net_cache_bytes_from_prefs(&b->prefs));
+        au_net_set_cache(ses.net, o->cache);
         loader = au_net_loader_new(ses.net);
         pf = au_net_page_fetcher_new(loader);
         AuPageFetcher f;
@@ -734,6 +752,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_net_page_fetcher_free(pf);
         au_net_loader_free(loader);
         au_host_session_close(&ses);
+        au_cache_free(o->cache);
     }
     return rc;
 }

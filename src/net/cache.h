@@ -19,8 +19,10 @@
  * no-store, the request said no-store, the request carried Authorization
  * (unless the response says public, must-revalidate or s-maxage), the
  * response has Vary: *, or the body is larger than the per-entry limit
- * (an eighth of the budget, at most 8 MB). Set-Cookie and hop-by-hop
- * fields are not kept.
+ * (a quarter of the budget, at most 8 MB). Set-Cookie and hop-by-hop
+ * fields are not kept. A response with neither freshness nor a validator
+ * is stored too: only au_cache_lookup_history (Back and Forward) uses
+ * it.
  *
  * Freshness: max-age, else Expires minus Date, else (for the statuses
  * above, with Last-Modified) 10 % of the time since Last-Modified, capped

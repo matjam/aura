@@ -119,7 +119,11 @@ void au_prefs_init(AuPrefs *p)
     p->http_proxy_port = 8080;
     p->https_proxy_port = 8080;
     au_prefs_set_str(&p->user_agent, AU_DEFAULT_USER_AGENT);
-    p->memory_cache_kb = 4096;
+    /* 8 MB: the HTTP cache keeps entries up to a quarter of it, and a
+     * Wikipedia article's HTML (1.3 MB) and script bundle must fit for
+     * Back to be served from memory. The image budget per page is the
+     * same figure. */
+    p->memory_cache_kb = 8192;
     p->disk_cache_kb = 20480;
 }
 

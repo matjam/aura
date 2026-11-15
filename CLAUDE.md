@@ -585,8 +585,8 @@ test and a fuzz run under the sanitizers.
   gets the size from the header; pixels are decoded only when an image
   is used in a paint (`au_image_entry_use`), at the smallest power-of-two
   reduction that still covers the displayed size. The budget comes from
-  the memory cache preference (`au_docview_set_image_budget`, 4 MB by
-  default in the browser, 8 MB otherwise). Over the budget, images not
+  the memory cache preference (`au_docview_set_image_budget`, 8 MB by
+  default, as without a browser). Over the budget, images not
   used in the last paint lose their pixels, oldest first, and keep their
   compressed bytes to decode again. One image may use at most half the
   budget (at least 1 MB, at most 16 MB). A still image whose bytes are
@@ -696,9 +696,13 @@ policy stores the embedder attaches.
   duplicated tabs, session restore) uses `AU_FETCH_CACHE_HISTORY` for
   the document and its subresources, which serves any stored response
   as it is, stale, no-cache or must-revalidate, without a request
-  (`au_cache_lookup_history`, RFC 9111 section 6). no-store responses
-  are never stored, so history fetches them again, and Vary (Cookie
-  included) still selects the variant. `au_cache_stats` counts lookups,
+  (`au_cache_lookup_history`, RFC 9111 section 6). Responses with
+  neither freshness nor a validator are stored for this alone. no-store
+  responses are never stored, so history fetches them again, and Vary
+  (Cookie included) still selects the variant. An entry may take a
+  quarter of the memory cache (8 MB by default), so a large article's
+  HTML fits. To count hits on the host, run `aura-host chrome --net
+  --tab URL --do cache --do go:URL2 --do back --do cache`. `au_cache_stats` counts lookups,
   304s, stores and disk reads. The page is parsed and laid out again on
   Back: there is no cache of documents.
 - **To persist state**, serialize the stores with

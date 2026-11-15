@@ -229,7 +229,18 @@ static void test_store_lookup(void)
     CHECK(!store(c, "http://a.test/p", "", 500, spec, "x", T0), "500");
     CHECK(store(c, "http://a.test/404", "", 404, spec, "x", T0) != NULL, "404 with max-age");
     snprintf(spec, sizeof spec, "Date: %s", d);
-    CHECK(!store(c, "http://a.test/none", "", 200, spec, "x", T0), "neither freshness nor validator");
+    CHECK(store(c, "http://a.test/none", "", 200, spec, "x", T0) != NULL, "neither freshness nor validator: kept");
+    CHECK(look(c, "http://a.test/none", "", T0, NULL, 0) == AU_CACHE_MISS, "neither freshness nor validator: miss");
+    {
+        AuHeaders hq;
+        au_headers_init(&hq);
+        AuCacheEntry *he = NULL;
+        CHECK(au_cache_lookup_history(c, "http://a.test/none", &hq, &he) == AU_CACHE_FRESH,
+              "neither freshness nor validator: history hit");
+        if (he)
+            au_cache_entry_release(c, he);
+        au_headers_free(&hq);
+    }
     snprintf(spec, sizeof spec, "Date: %s\nCache-Control: max-age=100\nVary: *", d);
     CHECK(!store(c, "http://a.test/vs", "", 200, spec, "x", T0), "Vary: *");
 
@@ -276,8 +287,8 @@ static void test_store_lookup(void)
 
 static void test_limits(void)
 {
-    /* Budget 64 KB: entry limit 8 KB. */
-    AuHttpCache *c = au_cache_new(64 * 1024);
+    /* Budget 32 KB: entry limit 8 KB. */
+    AuHttpCache *c = au_cache_new(32 * 1024);
     CHECK(au_cache_entry_limit(c) == 8192, "entry limit %zu", au_cache_entry_limit(c));
     char d[32], spec[128], url[64];
     date_str(T0, d);
@@ -293,8 +304,8 @@ static void test_limits(void)
         if (i == 1) /* keep entry 0 recently used */
             look(c, "http://l.test/0", "", T0, NULL, 0);
     }
-    CHECK(au_cache_bytes(c) <= 64 * 1024, "within budget: %zu", au_cache_bytes(c));
-    CHECK(au_cache_count(c) < 20 && au_cache_count(c) >= 8, "evicted some: %zu", au_cache_count(c));
+    CHECK(au_cache_bytes(c) <= 32 * 1024, "within budget: %zu", au_cache_bytes(c));
+    CHECK(au_cache_count(c) < 20 && au_cache_count(c) >= 3, "evicted some: %zu", au_cache_count(c));
     CHECK(look(c, "http://l.test/19", "", T0, NULL, 0) == AU_CACHE_FRESH, "newest kept");
     CHECK(look(c, "http://l.test/2", "", T0, NULL, 0) == AU_CACHE_MISS, "least recently used evicted");
     /* An entry in use survives eviction. */
@@ -656,15 +667,27 @@ static void test_history(void)
     req_mode(&f, net, &r, "GET", "http://h.test/ns", false, true);
     CHECK(!r.from_cache && s->nreq == 4, "history: no-store goes out, nreq %d", s->nreq);
 
+    /* max-age=0 and no validator (Hacker News): a normal load goes out,
+     * Back does not. */
+    snprintf(resp, sizeof resp,
+             "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: private; max-age=0\r\nContent-Length: 2\r\n\r\nhn", d);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/hn", false);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/hn", false);
+    CHECK(!r.from_cache && s->nreq == 6, "max-age=0 without validator: a normal load goes out");
+    req_mode(&f, net, &r, "GET", "http://h.test/hn", false, true);
+    CHECK(r.from_cache && s->nreq == 6 && r.body.len == 2, "max-age=0 without validator: history from the cache");
+
     /* Not cached at all: goes out. */
     fake_respond(s, resp);
     req_mode(&f, net, &r, "GET", "http://h.test/new", false, true);
-    CHECK(!r.from_cache && s->nreq == 5, "history: a miss goes out");
+    CHECK(!r.from_cache && s->nreq == 7, "history: a miss goes out");
 
     /* A reload is never served from history. */
     fake_respond(s, resp);
     req_mode(&f, net, &r, "GET", "http://h.test/nc", true, true);
-    CHECK(!r.from_cache && s->nreq == 6, "reload wins over history");
+    CHECK(!r.from_cache && s->nreq == 8, "reload wins over history");
 
     au_buf_free(&r.body);
     au_net_free(net);
