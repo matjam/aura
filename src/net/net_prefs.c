@@ -12,6 +12,7 @@ void au_net_apply_prefs(AuNet *net, const AuPrefs *p)
     c->send_dnt = p->send_dnt;
     c->send_gpc = p->send_gpc;
     c->https_first = p->https_first;
+    c->legacy_tls = p->legacy_tls;
     c->cookie_policy = p->cookies == AU_COOKIES_NONE        ? AU_COOKIE_POLICY_NONE
                        : p->cookies == AU_COOKIES_SAME_SITE ? AU_COOKIE_POLICY_SAME_SITE
                                                             : AU_COOKIE_POLICY_ALL;

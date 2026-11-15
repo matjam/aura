@@ -46,6 +46,7 @@ static const Key keys[] = {
     B("privacy.do_not_track", send_dnt),
     B("privacy.global_privacy_control", send_gpc),
     B("privacy.https_first", https_first),
+    B("security.legacy_tls", legacy_tls),
     B("privacy.block_trackers", block_trackers),
     B("privacy.warn_app_downloads", warn_app_downloads),
     B("privacy.clear_history_on_quit", clear_history_on_quit),
@@ -121,6 +122,7 @@ void au_prefs_init(AuPrefs *p)
     p->send_dnt = false;
     p->send_gpc = true;
     p->https_first = true;
+    p->legacy_tls = true;
     p->block_trackers = true;
     au_prefs_set_str(&p->block_lists, "light");
     p->block_update = AU_BLOCK_UPDATE_DAILY;

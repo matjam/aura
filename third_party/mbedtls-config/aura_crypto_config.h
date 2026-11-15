@@ -19,6 +19,9 @@
 #define PSA_WANT_ALG_HKDF_EXTRACT 1
 #define PSA_WANT_ALG_HKDF_EXPAND 1
 #define PSA_WANT_ALG_HMAC 1
+/* Encryption of the premaster secret for RSA key transport (the patch
+ * in third_party/mbedtls-patches). */
+#define PSA_WANT_ALG_RSA_PKCS1V15_CRYPT 1
 #define PSA_WANT_ALG_RSA_PKCS1V15_SIGN 1
 #define PSA_WANT_ALG_RSA_PSS 1
 /* SHA-1 only so that root certificates with a SHA-1 self-signature parse

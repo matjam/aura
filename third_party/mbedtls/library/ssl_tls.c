@@ -8664,6 +8664,10 @@ int mbedtls_ssl_check_cert_usage(const mbedtls_x509_crt *cert,
                 usage = MBEDTLS_X509_KU_DIGITAL_SIGNATURE;
                 break;
 
+            case MBEDTLS_KEY_EXCHANGE_RSA: /* Aura patch: the key decrypts the premaster */
+                usage = MBEDTLS_X509_KU_KEY_ENCIPHERMENT;
+                break;
+
             /* Don't use default: we want warnings when adding new values */
             case MBEDTLS_KEY_EXCHANGE_NONE:
             case MBEDTLS_KEY_EXCHANGE_PSK:
