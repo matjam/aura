@@ -6,6 +6,8 @@ A web browser for Mac OS 9 on PowerPC, with its engine written from
 scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
 two third-party libraries, QuickJS-ng for JavaScript and Mbed TLS for TLS.
 
+![Aura on Mac OS 9.2.2 showing Wikipedia's Kookaburra article](docs/images/aura-kookaburra.png)
+
 Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
 downloaded blocklists, and downloads files. Many sites do not work yet.
