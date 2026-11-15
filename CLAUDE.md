@@ -55,7 +55,7 @@ what you need to build, test and change Aura.
 | `src/js` | JavaScript: the QuickJS-ng runtime wrapper, the event loop, the DOM and window bindings (C natives plus the `prelude*.js` files) |
 | `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
 | `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders |
-| `src/net` | HTTP/1.1 client, TLS glue, cookies, HSTS, PSL, cache, sniffing, encodings, the resource loader |
+| `src/net` | HTTP/1.1 client, TLS glue, cookies, HSTS, PSL, cache, sniffing, encodings, the resource loader, blocklists |
 | `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts |
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 |
@@ -445,7 +445,8 @@ lack them, from AppearanceLib.
 
 Aura keeps its files in the Aura folder of the system Preferences folder:
 `Aura Preferences`, `Bookmarks.html` (Netscape format), `History`,
-`Session` and `Downloads`, and `Running` while it runs. The session
+`Session` and `Downloads`, the `Blocklists` folder (see Content
+blocking), and `Running` while it runs. The session
 (windows, tabs, back and forward lists, scroll positions) is saved
 3 seconds after tabs change and every 30 seconds while only scroll
 positions do (`session_gen`, `scroll_gen`). `Running` is made at start
@@ -1059,6 +1060,109 @@ intermediates to it.
 Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
 sites that offer only TLS 1.3, or only DHE or other ciphers outside
 BearSSL's set, fail with "Secure connection failed".
+
+## Content blocking
+
+Aura blocks by domain: a request to a host on a blocklist is never made
+(no DNS lookup, no connection). Aura carries no list. It downloads the
+lists the user turns on from their publishers and keeps a compiled copy
+(HaGeZi's lists are GPL-3.0; do not add a list to the repository or the
+application).
+
+- **To change matching or the file format**, work in
+  `src/net/blocklist.c` (`blocklist.h` describes both). A compiled list
+  is a sorted array of 48-bit hashes of lower-case domains, searched by
+  bisection; a host is listed when it or a parent domain down to its
+  registrable domain is in a list (never a bare public suffix), unless
+  an exception covers it. Order: the personal allow entries, the
+  personal block entries, any list's exceptions, the lists. Verdicts are
+  cached per host (512 slots). With n entries a probe of an unlisted
+  name hits by chance with probability n / 2^48 (3.2e-10 for Light), and
+  a host takes two or three probes; the personal allow entries are kept
+  as text and clear a false hit.
+- **The parser** (`AuBlockBuilder`) takes plain domains, hosts files,
+  adblock domain rules (`||domain^`, `@@||domain^`), `*.domain` and
+  dnsmasq rules in any mix, streaming, with lines capped at 512 bytes
+  and names validated; non-ASCII names go through
+  `au_url_host_parse`. It sorts in chunks of 16384 entries and merges in
+  slices (`au_block_builder_finish` with a budget), so a shell compiles
+  at idle time. Every allocation may fail; the builder then fails and
+  the old list stays.
+- **Where it applies.** `au_net_loader_start` (`loader.c`) asks
+  `au_blocklist_check` before anything else, and again for each redirect
+  (`t_redirect`). A request with a top-level URL (subresources, fetch,
+  XMLHttpRequest, frames) is blocked when its host is listed, unless it
+  is first-party (the page's registrable domain) or the page's site is
+  switched off. A document request without one is a navigation: it ends
+  with `AU_NET_ERR_BLOCKED` and `page_doc.c` shows the blocked-site page
+  (`show_net_error`), whose Visit Anyway calls
+  `AuPageFetcher.allow_blocked` (the site is then allowed as a
+  navigation until Aura quits) and whose Go Back calls
+  `AuPageCallbacks.go_back`. A blocked request reports
+  `AuLoadInfo.blocked_reason` and `AuFetchInfo.blocked_reason`
+  ("blocked: LIST NAME"); the page counts them in `AuPageStats.blocked`
+  and the status bar shows a shield and the count
+  (`AuChromeState.blocked`).
+- **Lists and updates** are `src/net/blocklist_store.c`
+  (`AuBlockManager`): the catalogue (HaGeZi Light, Normal, Pro, Pro++
+  and the Threat Intelligence Feeds in three sizes, in the wildcard
+  domains format, at the jsDelivr URLs the project's README gives), the
+  lists added by https URL, conditional requests (ETag, Last-Modified)
+  at most once per list per interval, started only from
+  `au_block_manager_idle` while nothing loads, outside the HTTP cache
+  (`AuHttpRequest.no_cache`) and without cookies. A download that fails,
+  leaves https, holds no domains or under a quarter of the old (or
+  expected) count keeps the old list and is tried again after 6 hours
+  (10 minutes when there is no old list). The platform supplies an
+  `AuBlockStore` (files) and an `AuBlockMem` (large blocks).
+- **Preferences:** `privacy.block_trackers` (the switch, on),
+  `blocking.lists` (catalogue ids, "light"), `blocking.custom` (https
+  URLs), `blocking.allow`, `blocking.block`, `blocking.sites_off`
+  (registrable domains, set by Turn Off Blocking for This Site in the
+  page's contextual menu, `au_bw_toggle_site_blocking` in `context.c`)
+  and `blocking.update` (daily, weekly, never).
+- **Mac OS 9.** `blocking_mac.c` keeps the lists in temporary memory
+  (`TempNewHandle`, else the heap through `au_try_alloc`; a list that
+  fits in neither is not loaded and the Preferences pane says so) and
+  the compiled files in the `Blocklists` folder of the Aura preferences
+  folder (one file per list, named by its id, and `Index`). Downloads
+  start 4 seconds after launch at the earliest. Preferences > Blocking
+  (`prefs_blocking.c`; the switch and the three fields are in
+  `prefswin.c`) lists the catalogue with each list's size and date or
+  what the manager is doing; its checkboxes and Update Now act at once.
+  View > Debug > Network Status shows the totals, where the list memory
+  came from and what the last compile cost.
+- **To try it on the host**, run `aura-host blocklist compile LIST.txt
+  OUT` (prints entries, time and peak memory), `aura-host blocklist
+  check FILE HOST...`, `aura-host blocklist bench LIST.txt` (lookups per
+  second) and `aura-host blocklist update DIR` (the manager against a
+  folder, over the network). `aura-host chrome --net --blocklist FILE`
+  and `aura-host render URL --blocklist FILE` check requests against a
+  compiled or text list and print the counts.
+- **Measured on the host** (lists of 2026-11-15): Light compiles to
+  549 KB from 1.96 MB of text in 24 ms (91,414 entries); Normal 1.34 MB
+  (223,018); Pro 1.42 MB (237,247); Pro++ 1.56 MB (259,753) in 63 ms;
+  the full threat feeds 8.7 MB (1,455,489) in 387 ms. Compiling peaks at
+  twice the compiled size. About 600,000 uncached lookups per second.
+  arstechnica.com with scripts made 77 requests for 9.8 MB without
+  blocking and 61 for 4.4 MB with Light; theguardian.com made the same
+  118 either way.
+- **Measured in the guest** (stock base): the first launch fetched Light
+  10 seconds after the download began (653 KB on the wire; the time
+  includes the wait for the entropy pool), merged it in 30 ms over 5
+  idle calls and held it in 535 KB of temporary memory; Normal took
+  0.8 s to fetch and parse and 73 ms to merge. Both lists use 1.8 MB.
+- **Tests.** `tests/blocklist`: `test_blocklist` (formats and junk,
+  matching, the public suffix guard, exceptions, collisions, damaged
+  files, allocation failures, the request decision),
+  `test_blocklist_net` (the loader, a browser window and the update
+  manager on the fake transport) and `fuzz_blocklist ITERATIONS SEED
+  [SECONDS]` (the parser, compiled files and the store's index; it
+  prints the iterations done).
+- **Not done:** lists per element or URL path (cosmetic and path rules
+  are ignored), a list of the requests blocked on a page, IDN mapping
+  beyond the URL parser's, and removing the compiled file of a catalogue
+  list that was turned off.
 
 ## JavaScript
 
