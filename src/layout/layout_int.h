@@ -316,6 +316,7 @@ void l_apply_relative(LBlock *b, float cb_w, float cb_h);
 LBlock *l_geom_parent(LBox *b);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
+float l_ratio_height(const LBlock *b, float content_w);
 
 /* block.c */
 float l_flow_layout(AuLayout *L, LBlock *b, const LConstraints *c);

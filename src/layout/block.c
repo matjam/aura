@@ -248,7 +248,7 @@ static void block_width(AuLayout *L, LBlock *k, LBlock *parent, float cw)
     float w = l_used_width(L, k, cw, cw, LS_STRETCH);
     if (lb_anon(&k->b)) {
         k->x = parent->bw[3] + parent->p[3];
-        k->w = w;
+        k->w = w + l_bp_h(k);
         return;
     }
     const AuStyleSurround *s = k->b.style->surr;
@@ -269,7 +269,7 @@ static void block_width(AuLayout *L, LBlock *k, LBlock *parent, float cw)
         k->m[3] += free;
     }
     k->x = parent->bw[3] + parent->p[3] + k->m[3];
-    k->w = w;
+    k->w = w + l_bp_h(k);
 }
 
 /* Height of a box after its content is laid out; decides whether the
@@ -281,13 +281,14 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
     float bpv = l_bp_v(k);
     float spec = l_spec_height(k, cb_h);
     bool auto_h = spec < 0;
-    bool can_pass = auto_h && k->bw[2] == 0 && k->p[2] == 0 && !(k->b.flags & LF_BFC);
+    float ratio_h = auto_h ? l_ratio_height(k, f->content_w) : -1;
+    bool can_pass = auto_h && ratio_h < 0 && k->bw[2] == 0 && k->p[2] == 0 && !(k->b.flags & LF_BFC);
     bool empty = joined && S->owner != NULL;
     float content = f->cursor;
     float h;
     if (empty) {
         /* Nothing placed inside: collapse through unless it has height. */
-        h = auto_h ? l_clamp_h(k, 0, cb_h) : l_clamp_h(k, spec, cb_h);
+        h = auto_h ? l_clamp_h(k, l_max(0, ratio_h), cb_h) : l_clamp_h(k, spec, cb_h);
         if (h + bpv > 0) {
             resolve(S);
             empty = false;
@@ -306,7 +307,7 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
         return true;
     }
     if (auto_h) {
-        h = l_clamp_h(k, content, cb_h);
+        h = l_clamp_h(k, l_max(content, ratio_h), cb_h);
         if (h > content + 0.001f || !can_pass) {
             /* min-height grew it, or a bottom edge separates: the pending
              * margin stays inside. */
@@ -314,7 +315,7 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
                 resolve(S);
                 content = S->fr[level].cursor;
             }
-            h = l_clamp_h(k, content, cb_h);
+            h = l_clamp_h(k, l_max(content, ratio_h), cb_h);
             S->pending = (LMargin){0, 0};
         }
     } else {
@@ -425,7 +426,7 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
         return;
     }
     block_width(L, k, parent, cw);
-    float content_w = k->w;
+    float content_w = k->w - l_bp_h(k);
     bool clearance = false;
     if (clear != AU_CLEAR_NONE && S->floats.n) {
         LMargin saved = S->pending;
@@ -468,6 +469,8 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     float bx = f->bfc_x + (k->x - parent->bw[3] - parent->p[3]) + k->bw[3] + k->p[3];
     float by = f->bfc_y + provisional_y + k->bw[0] + k->p[0];
     float spec_h = l_spec_height(k, cb_h);
+    if (spec_h < 0)
+        spec_h = l_ratio_height(k, content_w);
     float child_cbh = spec_h >= 0 ? l_clamp_h(k, spec_h, cb_h) : -1;
     uint32_t mark = L->nabs;
     int lv = push_frame(S, k, bx, by, content_w);
@@ -525,6 +528,14 @@ static void flow_contents(AuLayout *L, LBfc *S, int level, float cb_h)
         }
         place_block(L, S, level, k, cb_h);
     }
+    /* Flow children were placed in content coordinates (the cursor); move
+     * them to the border-box coordinates the geometry uses. Floats are
+     * already placed against the border box. */
+    float top = b->bw[0] + b->p[0];
+    if (top != 0)
+        for (LBox *c = b->b.first; c; c = c->next)
+            if (is_flow_child(c))
+                ((LBlock *)c)->y += top;
     set_block_baselines(b);
 }
 

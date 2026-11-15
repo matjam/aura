@@ -156,6 +156,17 @@ bool l_aspect_ratio(const LBlock *b, float *ratio)
     return false;
 }
 
+/* The content height a non-replaced box's aspect-ratio gives at content
+ * width content_w, or -1. */
+float l_ratio_height(const LBlock *b, float content_w)
+{
+    float ratio;
+    if (b->b.inner == LI_REPLACED || !l_aspect_ratio(b, &ratio) || ratio <= 0)
+        return -1;
+    float h = border_box_sizing(b) ? (content_w + l_bp_h(b)) / ratio - l_bp_v(b) : content_w / ratio;
+    return l_max(0, h);
+}
+
 /* ---- Replaced elements ---- */
 
 static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, float *ratio)
@@ -480,13 +491,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     L->depth--;
     float h = content_h >= 0 ? content_h : ch;
     if (content_h < 0) {
-        float ratio;
-        if (b->b.inner != LI_REPLACED && l_aspect_ratio(b, &ratio) && ratio > 0) {
-            float ah = border_box_sizing(b) ? (content_w + l_bp_h(b)) / ratio - l_bp_v(b) : content_w / ratio;
-            /* The ratio gives the height unless the content needs more
-             * (min-height: auto behaviour of aspect-ratio). */
+        float ah = l_ratio_height(b, content_w);
+        /* The ratio gives the height unless the content needs more
+         * (min-height: auto behaviour of aspect-ratio). */
+        if (ah >= 0)
             h = l_max(ah, ch);
-        }
         h = l_clamp_h(b, h, cb_h);
     }
     b->w = content_w + l_bp_h(b);
