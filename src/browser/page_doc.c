@@ -2519,3 +2519,12 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     au_layout_stats(au_docview_layout(p->dv), &ls);
     s->boxes = ls.boxes;
 }
+
+/* ---- Scrolling by moving pixels ---- */
+
+int au_page_scroll_damage(AuPage *p, int ox, int oy, int nx, int ny, AuIRect *out, int max)
+{
+    if (p->kind != K_DOC || p->dirty || !au_docview_document(p->dv))
+        return -1;
+    return au_docview_scroll_damage(p->dv, ox, oy, nx, ny, out, max);
+}

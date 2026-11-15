@@ -932,6 +932,30 @@ void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int
     images_changed(dv); /* an image found broken while painting */
 }
 
+int au_docview_scroll_damage(AuDocView *dv, int ox, int oy, int nx, int ny, AuIRect *out, int max)
+{
+    if (!dv->doc || max <= 0)
+        return -1;
+    if (au_docview_update(dv))
+        return -1; /* geometry moved: everything is painted again */
+    if (au_layout_needs_paint(dv->layout))
+        return -1; /* a change not painted yet */
+    AuRect r[32];
+    int n = au_layout_scroll_damage(dv->layout, (float)ox, (float)oy, (float)nx, (float)ny, r, max < 32 ? max : 32);
+    for (int i = 0; i < n; i++) {
+        /* Outward to whole pixels (one more than needed on exact edges),
+         * clamped to keep the conversion defined. */
+        float v[4] = {r[i].x, r[i].y, r[i].x + r[i].w, r[i].y + r[i].h};
+        int iv[4];
+        for (int k = 0; k < 4; k++) {
+            float f = v[k] < -1e6f ? -1e6f : v[k] > 1e6f ? 1e6f : v[k];
+            iv[k] = (int)f + (k < 2 ? -1 : 1);
+        }
+        out[i] = (AuIRect){iv[0], iv[1], iv[2], iv[3]};
+    }
+    return n;
+}
+
 /* ---- Input ---- */
 
 void au_docview_set_scroll(AuDocView *dv, int scroll_x, int scroll_y)

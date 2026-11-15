@@ -351,6 +351,16 @@ float au_page_zoom(const AuPage *p);
  * coordinates), with the document point (scroll_x, scroll_y) at view's
  * top-left. Paints every pixel of view (and nothing outside it). */
 void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll_y);
+/* Scrolling by moving pixels: the browser scrolled the page from (ox, oy)
+ * to (nx, ny) and moves the pixels it painted by the difference. Writes
+ * the areas (page pixels, at the new position) that are then wrong and
+ * must be painted again besides the exposed strips: where viewport-fixed
+ * and sticky boxes were moved to and where they are now, at most max (32
+ * at most). Returns how many, or -1 when the pixels cannot be moved
+ * (layout out of date, a fixed canvas background, a page that is not a
+ * document): the browser then paints the whole page. */
+#define AU_PAGE_SCROLL_DAMAGE 32
+int au_page_scroll_damage(AuPage *p, int ox, int oy, int nx, int ny, AuIRect *out, int max);
 
 /* Input in document coordinates. Return true when the page used it. */
 bool au_page_mouse(AuPage *p, const AuEvent *ev);

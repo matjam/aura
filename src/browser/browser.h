@@ -93,6 +93,13 @@ typedef struct AuBrowserHost {
     /* Optional. A download was added (the shell shows the Downloads
      * window). */
     void (*download_added)(void *ctx, AuDownload *d);
+    /* Optional. The page scrolled and the pixels already painted in area
+     * (the page rectangle) stay right moved by (dx, dy): the shell moves
+     * them (in its surface and on screen) before painting what is
+     * invalidated next. The model invalidates the exposed strips itself
+     * after this call. Without it, a scroll invalidates the whole page.
+     * AuPresent (present.h) does the bookkeeping. */
+    void (*scroll_area)(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy);
 } AuBrowserHost;
 
 struct AuTab {

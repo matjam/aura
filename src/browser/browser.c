@@ -90,6 +90,44 @@ static void invalidate_all(AuBrowserWindow *w)
     invalidate(w, (AuIRect){0, 0, w->width, w->height});
 }
 
+/* The active tab t scrolled from (ox, oy) to its current position. When
+ * may_shift is set and the shell can move pixels (scroll_area), the page
+ * says which areas besides the exposed strips are then wrong (fixed and
+ * sticky boxes; au_page_scroll_damage): the shell moves the pixels and
+ * only those areas and the strips are painted. Otherwise the whole page
+ * area is. */
+static void page_scrolled(AuBrowserWindow *w, AuTab *t, int ox, int oy, bool may_shift)
+{
+    AuBrowserHost *h = &w->browser->host;
+    AuIRect pg = w->layout.page;
+    int nx = t->scroll_x, ny = t->scroll_y;
+    int dx = ox - nx, dy = oy - ny; /* how the pixels move */
+    int pw = pg.x1 - pg.x0, ph = pg.y1 - pg.y0;
+    if (!may_shift || !h->scroll_area || w->painting || au_irect_empty(pg) || abs(dx) >= pw || abs(dy) >= ph) {
+        invalidate(w, pg);
+        return;
+    }
+    AuIRect boxes[AU_PAGE_SCROLL_DAMAGE];
+    int n = au_page_scroll_damage(t->page, ox, oy, nx, ny, boxes, AU_PAGE_SCROLL_DAMAGE);
+    if (n < 0 || t->scroll_x != nx || t->scroll_y != ny) {
+        invalidate(w, pg);
+        return;
+    }
+    h->scroll_area(h->ctx, w, pg, dx, dy);
+    for (int i = 0; i < n; i++) {
+        AuIRect r = {boxes[i].x0 + pg.x0, boxes[i].y0 + pg.y0, boxes[i].x1 + pg.x0, boxes[i].y1 + pg.y0};
+        invalidate(w, au_irect_intersect(r, pg));
+    }
+    if (dy > 0)
+        invalidate(w, (AuIRect){pg.x0, pg.y0, pg.x1, pg.y0 + dy});
+    else if (dy < 0)
+        invalidate(w, (AuIRect){pg.x0, pg.y1 + dy, pg.x1, pg.y1});
+    if (dx > 0)
+        invalidate(w, (AuIRect){pg.x0, pg.y0, pg.x0 + dx, pg.y1});
+    else if (dx < 0)
+        invalidate(w, (AuIRect){pg.x1 + dx, pg.y0, pg.x1, pg.y1});
+}
+
 static void changed(AuBrowserWindow *w, unsigned what)
 {
     AuBrowserHost *h = &w->browser->host;
@@ -433,13 +471,15 @@ static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
 {
     AuTab *t = ctx;
     int ox = t->scroll_x, oy = t->scroll_y;
+    /* A fragment or restored position: the page asks from inside its own
+     * work (loading, script), so its pixels are not trusted to move. */
     t->scroll_x = x;
     t->scroll_y = y;
     clamp_scroll(t);
     if (t->scroll_x != ox || t->scroll_y != oy)
         t->win->browser->scroll_gen++;
     if (is_active(t) && (t->scroll_x != ox || t->scroll_y != oy)) {
-        invalidate(t->win, t->win->layout.page);
+        page_scrolled(t->win, t, ox, oy, false);
         changed(t->win, AU_CHANGED_SCROLL);
         rehover(t->win);
     }
@@ -1556,7 +1596,7 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
     clamp_scroll(t);
     if (t->scroll_x != ox || t->scroll_y != oy) {
         w->browser->scroll_gen++;
-        invalidate(w, w->layout.page);
+        page_scrolled(w, t, ox, oy, true);
         changed(w, AU_CHANGED_SCROLL);
         rehover(w);
     }

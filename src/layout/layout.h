@@ -102,6 +102,17 @@ void au_layout_document_size(const AuLayout *L, float *w, float *h);
  * the canvas rectangle view. Every pixel of view is painted (the canvas
  * background is the root's background or white). */
 void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, float scroll_y);
+/* For scrolling by moving pixels: the view scrolled from (ox, oy) to
+ * (nx, ny) and the pixels painted before moved by the difference. Writes
+ * the viewport areas (new viewport coordinates) that are then wrong and
+ * must be painted again: where viewport-fixed boxes, and sticky boxes
+ * whose offset changed, were moved to with the pixels, and where they
+ * are now. Everything else paints at the same document position whatever
+ * the scroll. Returns how many (at most max), or -1 when the pixels
+ * cannot be moved at all (the layout is out of date, the canvas
+ * background is fixed or a gradient over the view, too many boxes, or a
+ * transform that makes an area unknown). */
+int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny, AuRect *out, int max);
 
 /* ---- Hit testing ---- */
 typedef struct AuHitResult {

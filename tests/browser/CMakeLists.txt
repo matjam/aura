@@ -13,6 +13,14 @@ if(TARGET aura_host_platform)
     target_link_libraries(test_chrome_fonts aura_host_platform aura_engine m)
     target_compile_definitions(test_chrome_fonts PRIVATE AURA_FONTS_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
     add_test(NAME chrome_fonts COMMAND test_chrome_fonts)
+
+    # Scrolling by moving pixels matches a fresh paint.
+    add_executable(test_scroll_shift test_scroll_shift.c)
+    target_link_libraries(test_scroll_shift aura_host_platform aura_host_png aura_engine m)
+    target_compile_definitions(test_scroll_shift PRIVATE AURA_FONTS_DIR="${CMAKE_SOURCE_DIR}/assets/fonts"
+                               AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    add_test(NAME scroll_shift COMMAND test_scroll_shift)
+    set_tests_properties(scroll_shift PROPERTIES TIMEOUT 300)
 endif()
 
 # The fetcher path on src/net's fake transport (no network).
