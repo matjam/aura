@@ -518,11 +518,21 @@ static void flow_contents(AuLayout *L, LBfc *S, int level, float cb_h)
         FlowFrame *f = &S->fr[level];
         if (c->flags & LF_ABSPOS) {
             l_resolve_box_edges(k, cw);
-            l_queue_abspos(L, k, b->bw[3] + b->p[3], b->bw[0] + b->p[0] + f->cursor + mc_val(S->pending));
+            /* While b's top margin is pending with its owner's, b moves when
+             * it resolves: the static position does not add it. */
+            float pend = S->owner && level >= S->owner_level ? 0 : mc_val(S->pending);
+            l_queue_abspos(L, k, b->bw[3] + b->p[3], b->bw[0] + b->p[0] + f->cursor + pend);
             continue;
         }
         if (c->flags & LF_FLOAT) {
             float y = f->bfc_y + f->cursor + mc_val(S->pending);
+            if (S->owner && level >= S->owner_level) {
+                /* This box's top margin is still pending with its owner's,
+                 * and the provisional bfc_y already counts it: place the
+                 * float where resolving the margin now would put the
+                 * content top. */
+                y = S->fr[S->owner_level - 1].bfc_y + S->owner_base + mc_val(S->pending) + f->cursor;
+            }
             float ox = f->bfc_x - b->bw[3] - b->p[3], oy = f->bfc_y - b->bw[0] - b->p[0];
             L->depth++;
             l_place_float(L, &S->floats, k, cw, cb_h, f->bfc_x, f->bfc_x + cw, y, ox, oy);
