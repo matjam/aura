@@ -57,3 +57,12 @@ target_include_directories(test_favicon PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 target_compile_definitions(test_favicon PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME browser_favicon COMMAND test_favicon)
 set_tests_properties(browser_favicon PROPERTIES TIMEOUT 120)
+
+# The files Aura keeps on disk (session, bookmarks, history, preferences,
+# downloads, cookie rules, the disk cache folder), damaged (see
+# fuzz_files.c). For a long run use the sanitizer build:
+#   fuzz_files 100000000 SEED 600
+add_executable(fuzz_files fuzz_files.c)
+target_link_libraries(fuzz_files aura_engine m)
+add_test(NAME browser_files_fuzz COMMAND fuzz_files 20000 1 20)
+set_tests_properties(browser_files_fuzz PROPERTIES TIMEOUT 120)

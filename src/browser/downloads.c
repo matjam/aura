@@ -302,11 +302,12 @@ void au_downloads_serialize(const AuDownloads *dl, AuBuf *out)
 
 static bool num(const char *s, size_t n, int64_t *out)
 {
-    if (n == 0 || n > 19)
+    if (n == 0)
         return false;
     size_t i = 0;
     bool neg = s[0] == '-';
-    if (neg && n == 1)
+    /* 18 digits always fit an int64_t; 19 can overflow it. */
+    if ((neg && n == 1) || n - neg > 18)
         return false;
     int64_t v = 0;
     for (i = neg; i < n; i++) {

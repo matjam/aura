@@ -421,7 +421,8 @@ static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll
         r->node = b->node;
         LFrag *f = H.frag;
         LFont *font = l_font(L, b->style);
-        uint32_t k = 0;
+        float skipped;
+        uint32_t k = l_prefix_seek(L, font, b->style, t->text + f->start, f->len, H.fx, &skipped);
         while (k < f->len) {
             size_t adv;
             au_utf8_decode(t->text + f->start + k, f->len - k, &adv);

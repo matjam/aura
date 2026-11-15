@@ -284,8 +284,60 @@ static void test_many_attributes(void)
     }
 }
 
+/* Text given to document.write and to the fragment parser is not checked
+ * UTF-8. A sequence cut short at its end made the tokenizer read past the
+ * buffer and move its position beyond the input's length; the next write
+ * then moved a negative number of bytes (found by fuzz_html). */
+static void cut_script(void *ctx, AuHtmlParser *p, AuElement *script)
+{
+    (void)ctx;
+    (void)script;
+    au_html_parser_write(p, "a \xF0\x9F", 4);
+    au_html_parser_pause(p);
+}
+
+static void test_cut_sequences(void)
+{
+    AuHtmlOptions o;
+    memset(&o, 0, sizeof o);
+    o.scripting = true;
+    o.encoding = AU_HTML_ENC_UTF8;
+    o.script_ready = cut_script;
+    AuHtmlParser *p = au_html_parser_new(&o);
+    au_html_parser_feed(p, "<script>x</script>", 18);
+    CHECK(au_html_parser_paused(p), "paused by the script");
+    au_html_parser_begin_script(p);
+    au_html_parser_write(p, "<p>w</p>\xF4", 9);
+    au_html_parser_end_script(p);
+    au_html_parser_resume(p);
+    au_html_parser_finish(p);
+    CHECK(au_html_parser_done(p), "parser done after cut sequences");
+    char *got = serialize(&au_html_parser_document(p)->node);
+    CHECK(strstr(got, "<p>w</p>") != NULL, "the written paragraph is in the tree: %s", got);
+    au_free(got);
+    au_html_parser_free(p);
+
+    /* The fragment parser, with every cut length of a 4-byte sequence, in
+     * a block of exactly the input's size. */
+    AuDocument *d = au_html_parse("<div>", 5, NULL);
+    for (size_t cut = 1; cut <= 3; cut++) {
+        char *in = au_alloc(2 + cut);
+        memcpy(in, "<b", 2);
+        memcpy(in + 2, "\xF0\x9F\x98", cut);
+        AuNode *frag = au_html_parse_fragment(au_document_body(d), in, 2 + cut, NULL);
+        CHECK(frag != NULL, "fragment with a cut sequence");
+        au_node_unref(frag);
+        memcpy(in, "x>", 2);
+        frag = au_html_parse_fragment(au_document_body(d), in, 2 + cut, NULL);
+        au_node_unref(frag);
+        au_free(in);
+    }
+    au_node_unref(&d->node);
+}
+
 int main(void)
 {
+    test_cut_sequences();
     test_many_attributes();
     test_serialize();
     test_fragment();

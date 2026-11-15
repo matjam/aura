@@ -119,14 +119,14 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
     au_canvas_get_translation(c, &tx, &ty);
     /* Work with the fraction of the translation; its whole pixels are
      * added when blending (see raster() in raster.c). */
-    int ix = (int)floorf(tx - (float)ox), iy = (int)floorf(ty - (float)oy);
+    int ix = au_f2px(floorf(tx - (float)ox)), iy = au_f2px(floorf(ty - (float)oy));
     float dx = tx - (float)ox - (float)ix, dy = ty - (float)oy - (float)iy;
     clip.x0 -= ix;
     clip.x1 -= ix;
     clip.y0 -= iy;
     clip.y1 -= iy;
-    AuIRect area = {(int)floorf(box.x + dx), (int)floorf(box.y + dy), (int)ceilf(box.x + box.w + dx) + 1,
-                    (int)ceilf(box.y + box.h + dy) + 1};
+    AuIRect area = {au_f2px(floorf(box.x + dx)), au_f2px(floorf(box.y + dy)), au_f2px(ceilf(box.x + box.w + dx)) + 1,
+                    au_f2px(ceilf(box.y + box.h + dy)) + 1};
     area = au_irect_intersect(area, clip);
     if (au_irect_empty(area)) {
         au_path_free(&ring);
@@ -248,8 +248,11 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     uint32_t src = au_premul(color);
     if (!(src >> 24) || !(box.w > 0 && box.h > 0))
         return;
-    if (blur < 0)
+    if (!(blur >= 0))
         blur = 0;
+    /* The work area grows with the blur: a page must not size it. */
+    if (blur > AU_SHADOW_MAX_BLUR)
+        blur = AU_SHADOW_MAX_BLUR;
     int ox, oy;
     AuIRect clip;
     float tx, ty;
@@ -280,10 +283,10 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
 
     AuIRect area;
     if (inset) {
-        area = (AuIRect){(int)floorf(b.x), (int)floorf(b.y), (int)ceilf(b.x + b.w), (int)ceilf(b.y + b.h)};
+        area = (AuIRect){au_f2px(floorf(b.x)), au_f2px(floorf(b.y)), au_f2px(ceilf(b.x + b.w)), au_f2px(ceilf(b.y + b.h))};
     } else {
-        area = (AuIRect){(int)floorf(sh.x) - pad, (int)floorf(sh.y) - pad, (int)ceilf(sh.x + sh.w) + pad,
-                         (int)ceilf(sh.y + sh.h) + pad};
+        area = (AuIRect){au_f2px(floorf(sh.x)) - pad, au_f2px(floorf(sh.y)) - pad, au_f2px(ceilf(sh.x + sh.w)) + pad,
+                         au_f2px(ceilf(sh.y + sh.h)) + pad};
     }
     AuIRect vis = au_irect_intersect(area, clip);
     if (au_irect_empty(vis))

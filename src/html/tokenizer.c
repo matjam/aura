@@ -257,7 +257,17 @@ static int peek(HtmlTokenizer *t, size_t *n)
         return (t->pos >= t->len && input_final(t)) ? C_EOF : C_NEED;
     const unsigned char *u = (const unsigned char *)t->buf + t->pos;
     int c;
-    if (u[0] < 0x80) {
+    /* A sequence cut short by the end of the input. Fed bytes come from
+     * the decoder, which never ends on a partial sequence, but text given
+     * to au_html_parser_write or the fragment parser is taken as it is:
+     * without this the bytes after the buffer were read and pos moved
+     * past len, and the next insertion moved a negative number of
+     * bytes. It reads as U+FFFD. */
+    size_t need = u[0] < 0x80 ? 1 : u[0] < 0xE0 ? 2 : u[0] < 0xF0 ? 3 : 4;
+    if (need > end - t->pos) {
+        *n = 1;
+        c = 0xFFFD;
+    } else if (u[0] < 0x80) {
         *n = 1;
         c = u[0];
     } else if (u[0] < 0xE0) {

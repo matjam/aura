@@ -6,6 +6,7 @@
  * not stall, and both decodes must agree.
  *
  * Usage: fuzz_brotli [ITERATIONS [SEED]] VECTOR.br... */
+#include "../fuzz.h"
 #include "brotli_util.h"
 
 #define OUT_CAP (8u << 20)
@@ -148,6 +149,10 @@ int main(int argc, char **argv)
     r.s = seed * 2654435761u + 1;
 
     for (it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = (unsigned long)it;
+            break;
+        }
         Buf b;
         BrRng in_rng, out_rng;
         BrResult whole, chunked;
