@@ -254,17 +254,18 @@ typedef struct TRun {
  * union bbox. */
 static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs, uint32_t *nruns, float bbox[4])
 {
-    TLayout t;
     *nruns = 0;
     x->text_spans = NULL;
     if (!x->env || !x->env->fonts)
         return false;
-    if (!collect(x, el, f, &t)) {
-        tl_free(&t);
+    /* On the heap: the spans hold frames, too large for a small stack. */
+    TLayout *t = au_alloc(sizeof *t);
+    if (!collect(x, el, f, t)) {
+        tl_free(t);
+        au_free(t);
         return false;
     }
-    AuFontList *lists[MAX_SPANS];
-    memset(lists, 0, sizeof lists);
+    AuFontList **lists = au_calloc(MAX_SPANS * sizeof *lists);
     float pen_x = 0, pen_y = 0;
     uint32_t chunk_run = 0; /* first run of the current chunk */
     float chunk_x0 = 0;
@@ -273,8 +274,8 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
     AuGlyphRun gr;
     au_glyph_run_init(&gr);
     uint32_t i = 0;
-    while (i < t.nchars && *nruns < MAX_RUNS) {
-        TChar *c0 = &t.chars[i];
+    while (i < t->nchars && *nruns < MAX_RUNS) {
+        TChar *c0 = &t->chars[i];
         bool new_chunk = i == 0 || !isnan(c0->x) || !isnan(c0->y);
         if (new_chunk) {
             /* Close the previous chunk: shift it by its anchor. */
@@ -291,7 +292,7 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
                 pen_y = c0->y;
             chunk_run = *nruns;
             chunk_x0 = pen_x;
-            chunk_anchor = t.spans[c0->span].f.st.anchor;
+            chunk_anchor = t->spans[c0->span].f.st.anchor;
         }
         if (!isnan(c0->dx))
             pen_x += c0->dx;
@@ -300,10 +301,10 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
         /* The run: following characters of the same span with no
          * positions. */
         uint32_t j = i + 1;
-        while (j < t.nchars && t.chars[j].span == c0->span && isnan(t.chars[j].x) && isnan(t.chars[j].y) &&
-               isnan(t.chars[j].dx) && isnan(t.chars[j].dy))
+        while (j < t->nchars && t->chars[j].span == c0->span && isnan(t->chars[j].x) && isnan(t->chars[j].y) &&
+               isnan(t->chars[j].dx) && isnan(t->chars[j].dy))
             j++;
-        TSpan *sp = &t.spans[c0->span];
+        TSpan *sp = &t->spans[c0->span];
         if (!lists[c0->span])
             lists[c0->span] = span_fonts(x, &sp->f.st);
         AuFontList *fl = lists[c0->span];
@@ -316,8 +317,8 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
         AuFontMetrics m;
         au_font_metrics(pf, size, &m);
         float by = pen_y + baseline_shift(sp->baseline, &m);
-        uint32_t off = c0->off, end = t.chars[j - 1].off + t.chars[j - 1].len;
-        au_shape_text_list(fl, size, t.text + off, end - off, &gr);
+        uint32_t off = c0->off, end = t->chars[j - 1].off + t->chars[j - 1].len;
+        au_shape_text_list(fl, size, t->text + off, end - off, &gr);
         TRun *run = &runs[(*nruns)++];
         run->span = c0->span;
         au_path_init(&run->path);
@@ -340,9 +341,10 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
             au_path_transform(&runs[r].path, &m);
     }
     au_glyph_run_free(&gr);
-    for (uint32_t k = 0; k < t.nspans; k++)
+    for (uint32_t k = 0; k < t->nspans; k++)
         if (lists[k])
             au_fontlist_free(lists[k]);
+    au_free(lists);
     /* The bbox: the union of outline bounds. */
     bool hb = false;
     for (uint32_t r = 0; r < *nruns; r++) {
@@ -361,10 +363,11 @@ static bool layout_text(SvgCtx *x, AuElement *el, const SvgFrame *f, TRun *runs,
     }
     /* Spans' frames are needed by the caller: keep the states by
      * copying them into the runs' order (the caller re-derives frames). */
-    x->text_spans = au_alloc(t.nspans * sizeof(SvgFrame));
-    for (uint32_t k = 0; k < t.nspans; k++)
-        x->text_spans[k] = t.spans[k].f;
-    tl_free(&t);
+    x->text_spans = au_alloc(t->nspans * sizeof(SvgFrame));
+    for (uint32_t k = 0; k < t->nspans; k++)
+        x->text_spans[k] = t->spans[k].f;
+    tl_free(t);
+    au_free(t);
     return hb;
 }
 

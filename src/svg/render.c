@@ -1265,12 +1265,21 @@ static void render(SvgCtx *x, AuElement *el, const SvgFrame *parent)
     }
     if (kind == K_IMAGE && !mk)
         fold = true; /* an image draws with its opacity */
-    AuPath clip_paths[MAX_CLIP_PIECES];
-    AuFillRule clip_rules[MAX_CLIP_PIECES];
+    /* Clip pieces live on the heap: this function recurses (stacks are
+     * small on Mac OS 9). */
+    AuPath *clip_paths = NULL;
+    AuFillRule *clip_rules = NULL;
     int nclip = 0;
     bool clip_rect = false;
-    if (cp && !clip_prepare(x, el, cp, &f, clip_paths, clip_rules, &nclip, &clip_rect))
-        return; /* an empty clip path hides the element */
+    if (cp) {
+        clip_paths = au_alloc(MAX_CLIP_PIECES * sizeof *clip_paths);
+        clip_rules = au_alloc(MAX_CLIP_PIECES * sizeof *clip_rules);
+        if (!clip_prepare(x, el, cp, &f, clip_paths, clip_rules, &nclip, &clip_rect)) {
+            au_free(clip_paths);
+            au_free(clip_rules);
+            return; /* an empty clip path hides the element */
+        }
+    }
     bool group = (opacity < 1 && !fold) || mk || nclip > 0;
     x->depth++;
     if (group)
@@ -1284,6 +1293,8 @@ static void render(SvgCtx *x, AuElement *el, const SvgFrame *parent)
     }
     for (int i = 0; i < nclip; i++)
         au_path_free(&clip_paths[i]);
+    au_free(clip_paths);
+    au_free(clip_rules);
     if (mk)
         mask_render(x, el, mk, &f);
     if (group)
