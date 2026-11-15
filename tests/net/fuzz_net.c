@@ -11,6 +11,7 @@
  * bundles: DER, PKCS#7 and PEM; the AIA URL; the intermediates pool
  * file), or all. Every input is copied to a heap block of
  * exactly its size, so a sanitizer build catches any read past the end. */
+#include "../fuzz.h"
 #include "net/auth.h"
 #include "net/cache.h"
 #include "net/dataurl.h"
@@ -482,6 +483,10 @@ int main(int argc, char **argv)
     }
     long done = 0;
     for (long it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = it;
+            break;
+        }
         int which = all ? (int)(rnd() % 11) : -1;
         if ((all && which == 10) || !strcmp(target, "aia")) {
             aia_seed(&in);

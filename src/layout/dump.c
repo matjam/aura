@@ -96,15 +96,15 @@ static void quoted(AuBuf *o, const char *t, uint32_t n)
 
 static void num(AuBuf *o, float v)
 {
-    if (v == (float)(int)v)
-        au_buf_printf(o, "%d", (int)v);
+    if (v == (float)au_f2i(v))
+        au_buf_printf(o, "%d", au_f2i(v));
     else
         au_buf_printf(o, "%.2f", v);
 }
 
 void l_dump(AuLayout *L, AuBuf *o)
 {
-    au_buf_printf(o, "viewport %dx%d document %dx%d\n", (int)L->vw, (int)L->vh, (int)L->doc_w, (int)L->doc_h);
+    au_buf_printf(o, "viewport %dx%d document %dx%d\n", (int)L->vw, (int)L->vh, au_f2i(L->doc_w), au_f2i(L->doc_h));
     LBox *b = L->root;
     int d = 0;
     while (b) {

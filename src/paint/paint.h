@@ -262,6 +262,8 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
 /* CSS box-shadow for a box with the given radii (NULL for square). blur is
  * the CSS blur radius; the shadow is approximated with three box blurs.
  * An outer shadow is not drawn under the box; an inset one only inside. */
+/* The largest blur radius drawn; a larger one is drawn as this. */
+#define AU_SHADOW_MAX_BLUR 300.0f
 void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx, float dy,
                         float blur, float spread, AuColor color, bool inset);
 

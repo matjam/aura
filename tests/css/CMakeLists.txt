@@ -23,3 +23,15 @@ add_test(NAME css_invalidate COMMAND test_css_invalidate)
 add_executable(css_bench css_bench.c)
 target_link_libraries(css_bench aura_engine m)
 add_test(NAME css_bench COMMAND css_bench --small)
+
+# Tokenizer, parser, cascade, layout and paint on hostile sheets (see
+# fuzz_css.c). For a long run use the sanitizer build:
+#   fuzz_css 100000000 SEED 600 tests/page/samples/*.css tests/css/cases/*.txt
+add_executable(fuzz_css fuzz_css.c)
+target_link_libraries(fuzz_css aura_engine m)
+add_test(NAME css_fuzz COMMAND fuzz_css 300 1 20 ${CMAKE_SOURCE_DIR}/tests/page/samples/wiki.css ${CSS_CASES})
+set_tests_properties(css_fuzz PROPERTIES TIMEOUT 120)
+
+# Inputs the fuzzer found, reduced: each must run to the end.
+file(GLOB CSS_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*)
+add_test(NAME css_fuzz_regress COMMAND fuzz_css replay ${CSS_REGRESS})

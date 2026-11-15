@@ -239,8 +239,11 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     uint32_t src = au_premul(color);
     if (!(src >> 24) || !(box.w > 0 && box.h > 0))
         return;
-    if (blur < 0)
+    if (!(blur >= 0))
         blur = 0;
+    /* The work area grows with the blur: a page must not size it. */
+    if (blur > AU_SHADOW_MAX_BLUR)
+        blur = AU_SHADOW_MAX_BLUR;
     int ox, oy;
     AuIRect clip;
     float tx, ty;
@@ -264,10 +267,10 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
 
     AuIRect area;
     if (inset) {
-        area = (AuIRect){(int)floorf(b.x), (int)floorf(b.y), (int)ceilf(b.x + b.w), (int)ceilf(b.y + b.h)};
+        area = (AuIRect){au_f2px(floorf(b.x)), au_f2px(floorf(b.y)), au_f2px(ceilf(b.x + b.w)), au_f2px(ceilf(b.y + b.h))};
     } else {
-        area = (AuIRect){(int)floorf(sh.x) - pad, (int)floorf(sh.y) - pad, (int)ceilf(sh.x + sh.w) + pad,
-                         (int)ceilf(sh.y + sh.h) + pad};
+        area = (AuIRect){au_f2px(floorf(sh.x)) - pad, au_f2px(floorf(sh.y)) - pad, au_f2px(ceilf(sh.x + sh.w)) + pad,
+                         au_f2px(ceilf(sh.y + sh.h)) + pad};
     }
     AuIRect vis = au_irect_intersect(area, clip);
     if (au_irect_empty(vis))

@@ -818,7 +818,7 @@ bool css_compute_apply(CssComputeCtx *c, uint16_t prop, const AuCssValue *v, AuC
             iv = INT32_MIN;
         else {
             float f = compute_number(c, v);
-            iv = (int32_t)(f < 0 ? f - 0.5f : f + 0.5f);
+            iv = (int32_t)au_f2i(f < 0 ? f - 0.5f : f + 0.5f);
             if ((pi->flags & F_NONNEG) && iv < 1)
                 iv = 1;
         }

@@ -387,7 +387,7 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
         x1 = 1e7f;
     if (y1 > 1e7f)
         y1 = 1e7f;
-    AuIRect ir = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1)};
+    AuIRect ir = {au_f2px(floorf(x0)), au_f2px(floorf(y0)), au_f2px(ceilf(x1)), au_f2px(ceilf(y1))};
     ir = au_irect_intersect(ir, clip);
     if (au_irect_empty(ir))
         return;

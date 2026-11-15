@@ -23,7 +23,7 @@ static void invalidate_all(AuDocView *dv)
     if (dv->cb.invalidate) {
         float w, h;
         au_layout_document_size(dv->layout, &w, &h);
-        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, (int)w + 1, (int)h + 1});
+        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, au_f2px(w) + 1, au_f2px(h) + 1});
     }
 }
 
@@ -221,7 +221,7 @@ static void images_changed(AuDocView *dv)
     }
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
-    au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, (int)w + 1, (int)h + 1}, invalidate_fn, dv);
+    au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, au_f2px(w) + 1, au_f2px(h) + 1}, invalidate_fn, dv);
 }
 
 static void images_data(AuDocView *dv, AuImageEntry *e, const void *data, size_t len)
@@ -1047,8 +1047,8 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height)
     au_docview_update(dv);
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
-    *width = (int)(w + 0.99f);
-    *height = (int)(h + 0.99f);
+    *width = au_f2px(w + 0.99f);
+    *height = au_f2px(h + 0.99f);
 }
 
 void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
