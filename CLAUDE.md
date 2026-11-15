@@ -2560,6 +2560,7 @@ and run them from there.
 | `fuzz_layout` | style, layout at two sizes, paint, hit tests, mouse and keys, scroll damage, selection and find on mutated pages, script off | `page/fuzz_layout N SEED SECONDS tests/page/samples/*.html tests/page/samples/*.css tests/page/samples/*.gif` | sample pages, sheets and images, built-in layout snippets |
 | `fuzz_page` | the same pipeline on generated documents (floats, tables, flex, deep nesting) | `page/fuzz_page N SEED` | generated |
 | `fuzz_dom` | the DOM bindings with script on: generated scripts (tree edits, innerHTML, ranges, shadow roots, custom elements, observers, timers) with layout, paint and input between steps | `js/fuzz_dom N SEED SECONDS` | generated |
+| `fuzz_canvas2d` | the canvas 2D context: random drawing calls with extreme arguments | `canvas/fuzz_canvas2d N SEED SECONDS` | generated |
 | `fuzz_svg` | XML parser, path grammar, the SVG image pipeline | `svg/fuzz_svg N SEED SECONDS tests/svg/corpus/*` | `tests/svg/corpus` |
 | `fuzz_image` | PNG, JPEG, GIF, WebP, BMP and ICO decoders, whole and in chunks | `image/fuzz_image N SEED tests/image/vectors/*/*` (one format: `tests/image/vectors/png/*`) | `tests/image/vectors` |
 | `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2 | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |

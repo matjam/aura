@@ -59,6 +59,7 @@ css|css/fuzz_css|BIG SEED SECS tests/page/samples/*.css tests/css/cases/*.txt
 layout|page/fuzz_layout|BIG SEED SECS tests/page/samples/*.html tests/page/samples/*.css tests/page/samples/*.gif
 page|page/fuzz_page|BIG SEED
 dom|js/fuzz_dom|BIG SEED SECS
+canvas|canvas/fuzz_canvas2d|BIG SEED SECS
 url|url/fuzz_url|BIG SEED
 transfer|net/fuzz_transfer|BIG SEED SECS tests/codec/inflate-vectors/* tests/codec/brotli-vectors/*.br
 net|net/fuzz_net|all BIG SEED assets/net/aura-roots.bin
