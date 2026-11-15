@@ -54,6 +54,12 @@ static const uint16_t suites[] = {
     BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
     BR_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
     BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    /* Last resort, for servers with no ECDHE (www.fsf.org offers only
+     * DHE, which BearSSL lacks, and RSA key exchange): no forward secrecy,
+     * but authenticated and AEAD. Servers choose these only when they
+     * share none of the above; the Finished messages protect the choice. */
+    BR_TLS_RSA_WITH_AES_128_GCM_SHA256,
+    BR_TLS_RSA_WITH_AES_256_GCM_SHA384,
 };
 
 /* ---- The recording X.509 wrapper ---- */
@@ -559,6 +565,8 @@ static const char *suite_name(uint16_t s)
     case BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: return "ECDHE-RSA-AES128-GCM-SHA256";
     case BR_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384: return "ECDHE-ECDSA-AES256-GCM-SHA384";
     case BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: return "ECDHE-RSA-AES256-GCM-SHA384";
+    case BR_TLS_RSA_WITH_AES_128_GCM_SHA256: return "RSA-AES128-GCM-SHA256";
+    case BR_TLS_RSA_WITH_AES_256_GCM_SHA384: return "RSA-AES256-GCM-SHA384";
     default: return "unknown";
     }
 }

@@ -3,7 +3,8 @@
  *
  * Configuration (fixed): TLS 1.2 only; ECDHE key exchange with ECDSA or
  * RSA certificates; ChaCha20-Poly1305 first (fastest without AES
- * hardware), then AES-128-GCM and AES-256-GCM; curves X25519, P-256,
+ * hardware), then AES-128-GCM and AES-256-GCM; RSA key exchange with
+ * AES-GCM last, for servers without ECDHE; curves X25519, P-256,
  * P-384; SNI; ALPN "http/1.1"; secure renegotiation refused. Only the
  * 32-bit BearSSL implementations are used (i31/m31, aes_ct,
  * ghash_ctmul32, chacha20_ct, poly1305_ctmul), so the host runs the same
