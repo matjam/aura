@@ -493,7 +493,7 @@ static bool rebuild_glyf(const uint8_t *s, size_t slen, size_t max_out, Table *g
     bbox_s->at = bm_len;
     const uint8_t *overlap_bm = NULL;
     if (options & 1) {
-        if ((ng + 7) / 8 > slen - at)
+        if (((size_t)ng + 7) / 8 > slen - at)
             return false;
         overlap_bm = s + at;
     }

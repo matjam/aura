@@ -273,13 +273,14 @@ the system lacks.
   metric-compatible with Arial, Times New Roman and Courier New, renamed
   because Liberation's Reserved Font Name forbids a subset under its own
   name), Inter (modern interface fonts), DejaVu Sans (the last-resort
-  text face) and Noto Emoji (monochrome emoji), about 3.4 MB.
-  `assets/fonts/README.md` records sources, versions, licences, sizes
-  and what was left out.
+  text face), Noto Emoji (monochrome emoji) and Twemoji Mozilla (colour
+  emoji, COLR version 0), about 4.6 MB. `assets/fonts/README.md`
+  records sources, versions, licences, sizes, the choice of Twemoji over
+  Noto Color Emoji, and what was left out.
 - **To add a font**, put its folder (licence included) in
-  `assets/fonts`; reduce it with `tools/fonts-prepare.py` or pyftsubset
-  to TrueType outlines (no CFF, no variable fonts, no colour tables),
-  keeping file and folder names to 31 characters; regenerate the index
+  `assets/fonts`; reduce it with `tools/fonts-prepare.py` (one family:
+  `--only=FAMILY`) or pyftsubset to TrueType outlines (no CFF), keeping
+  file and folder names to 31 characters; regenerate the index
   with `build/host/src/platform/host/aura-host font-index assets/fonts`;
   add its sources to the README; and name it in the alias table or the
   fallback lists if it should stand in for other families. The paint
@@ -305,20 +306,71 @@ the system lacks.
   (DejaVu Sans first, then system faces with wide coverage, including
   CJK faces when a machine has them), the emoji list, then any face
   already loaded. Emoji presentation (by default or with U+FE0F) tries
-  the emoji list first. Default-ignorable code points draw nothing, so
-  U+FE0F is dropped and ZWJ sequences draw their components; skin tone
-  modifiers are dropped. Marks are placed over their base by their ink
-  boxes (the fonts carry no GPOS for Aura to read). Fallback faces keep
-  the requested weight and style, synthesized when missing. A per-list
-  cache and a per-set cache keyed by code point and style keep this
-  fast; a face is loaded only when it is tried.
+  a colour font the page names, then the emoji list (Twemoji Mozilla
+  first); text presentation (U+FE0E) takes the monochrome Noto Emoji.
+  An emoji sequence (ZWJ sequences, flags, keycaps, skin tones, tag
+  sequences) is one cluster: the face's GSUB ligature draws it, and
+  without one its components are drawn. Default-ignorable code points
+  draw nothing. Marks are placed over their base by their ink boxes (the
+  fonts carry no GPOS for Aura to read). Fallback faces keep the
+  requested weight and style, synthesized when missing. A per-list cache
+  and a per-set cache keyed by code point and style keep this fast; a
+  face is loaded only when it is tried.
+- **Variable fonts** (`fontvar.c`): fvar, avar (versions 1 and 2), gvar
+  (with IUP, composite offsets and phantom points), HVAR, MVAR and STAT
+  names. `au_font_face_instance` makes an instance at axis values;
+  `AuFontSet` matching makes instances for the requested weight (wght),
+  italic (ital, else slnt), and, through `au_fontlist_new_style`,
+  stretch (wdth), optical size (opsz) and `font-variation-settings`.
+  Instances are cached per set entry (at most 64). A weight the font
+  cannot reach is synthesized as before. Glyph boxes (`au_font_glyph_box`)
+  are the default instance's.
+- **Colour glyphs** (`colr.c`): CPAL palette 0, COLR version 0 layers
+  and version 1 paint graphs (solid, linear, radial and sweep gradients,
+  transforms, composite modes), with limits on depth (32), paints
+  visited (4096) and cycles. Colour glyphs go in the glyph cache as
+  premultiplied pixels under the same byte limit, keyed with the text
+  colour only when they use it.
+- **GSUB** (`gsub.c`): lookup types 1 (single), 4 (ligature) and 7
+  (extension) of the features ccmp, locl, rlig, liga and clig, for the
+  DFLT, else latn, script. Fallback uses it for emoji sequences only;
+  Latin text is not shaped.
+- **Web fonts.** `au_font_decode` (`woff.c`) turns WOFF 1.0 and WOFF2
+  (transformed glyf, loca and hmtx; collections) into sfnt bytes and
+  refuses CFF-flavoured fonts. `src/page/webfont.c` loads `@font-face`
+  rules for a document view into a font set layered over the platform
+  set (`au_fontset_new_layered`, `au_fontset_add_web`), fetching only
+  faces whose family the styled document uses for text in their
+  `unicode-range`, and lays the document out again when one arrives
+  (font-display: swap). The faces go with the document.
+  `tests/page/samples/webfonts.html` shows a variable WOFF2 font at
+  several weights and a WOFF face limited by `unicode-range`.
+- **Test fonts.** `tests/paint/fonts` holds small subsets of Inter
+  Variable, Open Sans variable, Twemoji Mozilla and Noto Color Emoji
+  (COLR version 1), WOFF and WOFF2 versions, a font with every COLR
+  paint format, and static instances made by fontTools' instancer as
+  references. To rebuild them, run `tools/test-fonts.py fetch`, then
+  `tools/test-fonts.py make` (fontTools and the brotli command needed;
+  building Aura needs neither); `tools/test-fonts.py refs` writes full
+  fonts for `paint_fontvar_full`, which skips without them. To fuzz the
+  font parsers for longer, run the sanitizer build's `fuzz_font
+  ITERATIONS SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*`
+  and `fuzz_webfont ITERATIONS SEED SECONDS`. `test_fontvar DIR --bench`,
+  `test_colr DIR FONTS --bench` and `test_woff DIR --bench FILE` time
+  varied glyphs, colour glyphs and decoding.
 - **Line height.** With `line-height: normal`, a line holding fallback
   glyphs grows to the fallback face's ascent and descent (each with half
   its line gap) where they exceed the primary's, as Blink does; a fixed
   line height ignores fallback faces.
-- **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
-  joining, Indic reordering or bidirectional text; colour emoji; a CJK
-  font pack (see the fonts README for what one needs).
+- **Not done:** OpenType shaping of text (GPOS, and GSUB beyond emoji
+  sequences), so no ligatures, kerning beyond `kern`, Arabic joining,
+  Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
+  sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
+  default instance); a CJK font pack (see the fonts README for what one
+  needs). CSS does not parse `font-variation-settings`,
+  `font-optical-sizing` or `font-tech()`, layout passes only weight and
+  style to the font list, and the CSS parser loses `unicode-range`
+  tokens (webfont.c reads them from the sheet text).
 
 ## Networking
 
