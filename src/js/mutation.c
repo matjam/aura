@@ -136,6 +136,7 @@ static void h_inserted(void *ctx, AuNode *parent, AuNode *child)
     AuJs *js = ctx;
     if (js->closing)
         return;
+    js_ranges_inserted(js, parent, child);
     changed(js, parent, 0, AU_JS_CHANGE_CHILDREN);
     if (js->observers)
         push_mut(js, 1, parent, child, NULL, child->prev, child->next, 0, NULL, 0);
@@ -151,6 +152,7 @@ static void h_removed(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, Au
     AuJs *js = ctx;
     if (js->closing)
         return;
+    js_ranges_removed(js, parent, child, prev);
     changed(js, parent, 0, AU_JS_CHANGE_CHILDREN);
     if (js->observers)
         push_mut(js, 1, parent, NULL, child, prev, next, 0, NULL, 0);
@@ -178,6 +180,7 @@ static void h_text(void *ctx, AuText *t, const char *old, size_t old_len)
     AuJs *js = ctx;
     if (js->closing)
         return;
+    js_ranges_text(js, t, old, old_len);
     changed(js, &t->node, 0, AU_JS_CHANGE_TEXT);
     if (js->observers)
         push_mut(js, 3, &t->node, NULL, NULL, NULL, NULL, 0, old, old_len);

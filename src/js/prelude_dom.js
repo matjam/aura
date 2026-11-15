@@ -260,14 +260,20 @@ const cdData = (t) => {
 defProps(CDP, {
     get length() { return cdData(this).length; },
     substringData(off, count) { const d = cdData(this); off >>>= 0; checkOffset(d.length, off); return d.substr(off, count >>> 0); },
-    appendData(s) { this.data = cdData(this) + str(s); },
-    insertData(off, s) { const d = cdData(this); off >>>= 0; checkOffset(d.length, off); this.data = d.slice(0, off) + str(s) + d.slice(off); },
-    deleteData(off, count) { const d = cdData(this); off >>>= 0; checkOffset(d.length, off); this.data = d.slice(0, off) + d.slice(off + (count >>> 0)); },
-    replaceData(off, count, s) {
-        const d = cdData(this); off >>>= 0; checkOffset(d.length, off);
-        this.data = d.slice(0, off) + str(s) + d.slice(off + (count >>> 0));
-    },
+    appendData(s) { replaceData(this, cdData(this).length, 0, str(s)); },
+    insertData(off, s) { replaceData(this, off >>> 0, 0, str(s)); },
+    deleteData(off, count) { replaceData(this, off >>> 0, count >>> 0, ''); },
+    replaceData(off, count, s) { replaceData(this, off >>> 0, count >>> 0, str(s)); },
 });
+/* The standard's "replace data": live ranges in the node move with the
+ * edit (N.rangeText), then the data is set. */
+function replaceData(node, off, count, s) {
+    const d = cdData(node);
+    checkOffset(d.length, off);
+    if (off + count > d.length) count = d.length - off;
+    N.rangeText(node, off, count, s.length);
+    try { node.data = d.slice(0, off) + s + d.slice(off + count); } finally { N.rangeText(); }
+}
 defProps(Text.prototype, {
     splitText(off) {
         if (!N.is(this, 5)) throw new TypeError('Illegal invocation');
@@ -275,8 +281,11 @@ defProps(Text.prototype, {
         off >>>= 0;
         checkOffset(d.length, off);
         const t = (this.ownerDocument || doc).createTextNode(d.slice(off));
-        this.data = d.slice(0, off);
-        if (this.parentNode) this.parentNode.insertBefore(t, this.nextSibling);
+        if (this.parentNode) {
+            this.parentNode.insertBefore(t, this.nextSibling);
+            N.rangeSplit(this, off, t);
+        }
+        replaceData(this, off, d.length - off, '');
         return t;
     },
     get wholeText() {

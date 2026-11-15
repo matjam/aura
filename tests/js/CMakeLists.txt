@@ -5,7 +5,7 @@ set(JS_TOOL $<TARGET_FILE:aura-host>)
 set(JS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 foreach(name dom_tree events collections html_elements loop window net observers custom_elements shadow
-             modules security forms)
+             modules security forms ranges)
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
 

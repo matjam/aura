@@ -11,7 +11,7 @@ const P = Object.create(null);
 const doc = N.document();
 const S = {
     listeners: Symbol('listeners'), handlers: Symbol('handlers'), ev: Symbol('event'),
-    list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'),
+    list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'), range: Symbol('range'),
 };
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const defProps = (proto, props) => {

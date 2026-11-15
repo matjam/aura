@@ -548,6 +548,7 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     js_natives_init(js, N);
     js_natives2_init(js, N);
     js_natives_forms_init(js, N);
+    js_natives_ranges_init(js, N);
     js_loop_init(js, N);
     js_fetch_init(js, N);
     js_module_init(js);
@@ -572,6 +573,7 @@ void au_js_free(AuJs *js)
     js_fetch_free(js);
     js_module_free(js);
     js_mutations_free(js);
+    js_ranges_free(js);
     for (uint32_t i = 0; i < js->nrejections; i++) {
         JS_FreeValue(ctx, js->rejections[i].promise);
         JS_FreeValue(ctx, js->rejections[i].reason);
