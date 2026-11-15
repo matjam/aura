@@ -377,7 +377,13 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
     int ox, oy;
     AuIRect clip;
     AuSurface *s = au_canvas_current(c, &ox, &oy, &clip);
-    float x0 = r.x + c->tx - ox, y0 = r.y + c->ty - oy;
+    /* The whole pixels of the translation are added to the integer
+     * bounds, not to the coordinates: the coverage of a fractional edge
+     * is then the same wherever the rectangle is translated to (see
+     * raster()). */
+    float tx = c->tx - (float)ox, ty = c->ty - (float)oy;
+    int ix = (int)floorf(tx), iy = (int)floorf(ty);
+    float x0 = r.x + (tx - (float)ix), y0 = r.y + (ty - (float)iy);
     float x1 = x0 + r.w, y1 = y0 + r.h;
     if (x0 < -1e7f)
         x0 = -1e7f;
@@ -387,6 +393,11 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
         x1 = 1e7f;
     if (y1 > 1e7f)
         y1 = 1e7f;
+    /* ir is in surface pixels; x0..y1 are ix, iy short of them. */
+    clip.x0 -= ix;
+    clip.x1 -= ix;
+    clip.y0 -= iy;
+    clip.y1 -= iy;
     AuIRect ir = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1)};
     ir = au_irect_intersect(ir, clip);
     if (au_irect_empty(ir))
@@ -406,7 +417,7 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
             continue;
         bool partial = vy < 0.999f || (lcol >= ir.x0 && lc < 0.999f) || (rcol < ir.x1 && rc > 0.001f);
         if (!partial) {
-            blend_row(s, ir.x0, y, n, src, NULL);
+            blend_row(s, ir.x0 + ix, y + iy, n, src, NULL);
             continue;
         }
         uint8_t full = (uint8_t)(vy * 255.0f + 0.5f);
@@ -421,7 +432,7 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
             if (rcol >= ir.x0 && rcol < ir.x1)
                 cov[rcol - ir.x0] = (uint8_t)(rc * vy * 255.0f + 0.5f);
         }
-        blend_row(s, ir.x0, y, n, src, cov);
+        blend_row(s, ir.x0 + ix, y + iy, n, src, cov);
     }
     if (cov != stackbuf)
         au_free(cov);

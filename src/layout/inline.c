@@ -49,6 +49,14 @@ static uint32_t seg_push(AuLayout *L)
     return L->nsegs++;
 }
 
+/* The leading above the text of an inline box: half of what the line
+ * height leaves over the ascent and descent, rounded down to a whole
+ * pixel; the rest goes below (Blink's CalculateLeadingSpace). */
+static float half_leading(float lh, float a, float d)
+{
+    return floorf((lh - (a + d)) / 2);
+}
+
 static bool wraps(const AuStyle *s)
 {
     return s->inh->text_wrap_mode == AU_TEXT_WRAP_MODE_WRAP;
@@ -885,8 +893,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
     stack[0].bo = 0;
     stack[0].rdx = stack[0].rdy = 0;
     stack[0].valign = AU_VALIGN_BASELINE;
-    float half = (stack[0].lh - (stack[0].a + stack[0].d)) / 2;
-    float top = -(stack[0].a + half), bottom = stack[0].d + half;
+    float half = half_leading(stack[0].lh, stack[0].a, stack[0].d);
+    float top = -(stack[0].a + half), bottom = stack[0].lh - stack[0].a - half;
     if (lh_quirk) {
         stack[0].qt = top;
         stack[0].qb = bottom;
@@ -917,7 +925,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
                            l_len(&qs->padding[0], C->cw) == 0 && l_len(&qs->padding[2], C->cw) == 0;
             }
             const AuStyleBox *bx = f->box->style->box;
-            float hl = (v->lh - (v->a + v->d)) / 2;
+            float hl = half_leading(v->lh, v->a, v->d), hb = v->lh - (v->a + v->d) - hl;
             v->valign = bx->vertical_align;
             v->rdx = P->rdx;
             v->rdy = P->rdy;
@@ -933,7 +941,7 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             case AU_VALIGN_SUB: v->bo = P->bo + P->fs / 5 + 1; break;
             case AU_VALIGN_SUPER: v->bo = P->bo - P->fs / 3 - 1; break;
             case AU_VALIGN_TEXT_TOP: v->bo = P->bo - P->a + v->a + hl; break;
-            case AU_VALIGN_TEXT_BOTTOM: v->bo = P->bo + P->d - v->d - hl; break;
+            case AU_VALIGN_TEXT_BOTTOM: v->bo = P->bo + P->d - v->d - hb; break;
             case AU_VALIGN_MIDDLE: v->bo = P->bo - P->xh / 2 - (v->d - v->a) / 2; break;
             case AU_VALIGN_LENGTH: v->bo = P->bo - l_len(&bx->vertical_align_len, v->lh); break;
             case AU_VALIGN_TOP:
@@ -956,10 +964,10 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             if (v->valign != AU_VALIGN_TOP && v->valign != AU_VALIGN_BOTTOM) {
                 if (v->quirk) {
                     v->qt = v->bo - v->a - hl;
-                    v->qb = v->bo + v->d + hl;
+                    v->qb = v->bo + v->d + hb;
                 } else {
                     top = l_min(top, v->bo - v->a - hl);
-                    bottom = l_max(bottom, v->bo + v->d + hl);
+                    bottom = l_max(bottom, v->bo + v->d + hb);
                 }
             } else {
                 v->quirk = false;
@@ -1049,11 +1057,11 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             v->bo = bo[j];
             v->rdy = ext[j];
             int va = f->box->style->box->vertical_align;
-            float hl = (v->lh - (v->a + v->d)) / 2;
+            float hl = half_leading(v->lh, v->a, v->d), hb = v->lh - (v->a + v->d) - hl;
             if (va == AU_VALIGN_TOP)
                 v->bo = top + v->a + hl;
             else if (va == AU_VALIGN_BOTTOM)
-                v->bo = bottom - v->d - hl;
+                v->bo = bottom - v->d - hb;
             const AuStyleSurround *sr = f->box->style->surr;
             float bt = sr->border_width[0] + l_max(0, l_len(&sr->padding[0], C->cw));
             float bb = sr->border_width[2] + l_max(0, l_len(&sr->padding[2], C->cw));

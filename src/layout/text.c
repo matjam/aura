@@ -124,6 +124,14 @@ LFont *l_font(AuLayout *L, const AuStyle *s)
         f->m.strike_pos = size * 0.3f;
         f->m.strike_thickness = size / 14;
     }
+    /* Blink rounds a face's ascent, descent and line gap each to whole
+     * pixels (SimpleFontData::PlatformInit: FontMetrics::
+     * AscentDescentWithHacks rounds the first two, and the line spacing
+     * is lroundf(ascent) + lroundf(descent) + lroundf(line gap)). Lines
+     * with line-height: normal and every baseline follow from these. */
+    f->m.ascent = roundf(f->m.ascent);
+    f->m.descent = roundf(f->m.descent);
+    f->m.line_gap = roundf(f->m.line_gap);
     if (f->m.underline_thickness <= 0)
         f->m.underline_thickness = size / 14;
     if (f->m.strike_thickness <= 0)

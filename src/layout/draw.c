@@ -200,9 +200,13 @@ typedef struct PCtx {
 
 enum { PH_BG, PH_FLOAT, PH_INLINE };
 
+/* Whether a box's ink may reach the dirty area. One pixel of slack above
+ * and below: text fragments are as tall as the face's ascent and descent
+ * rounded to whole pixels (l_font), and glyphs reach up to half a pixel
+ * past them. */
 static bool rect_hits(const LArea *d, float x, float y, float w, float h)
 {
-    return x < d->x + d->w && x + w > d->x && y < d->y + d->h && y + h > d->y;
+    return x < d->x + d->w && x + w > d->x && y - 1 < d->y + d->h && y + h + 1 > d->y;
 }
 
 static uint32_t pc(const AuStyle *s, uint32_t css)
@@ -1718,7 +1722,16 @@ static void paint_svg(PCtx *P, LBlock *b, AuRect cb)
     if (!b->b.node || !au_is_element(b->b.node) || cb.w <= 0 || cb.h <= 0)
         return;
     AuSvgEnv env = {P->L->env.fonts, P->L, svg_env_image, svg_env_find_id};
+    /* The whole pixels of the box's place go into the canvas translation
+     * and the drawing gets the fraction: its coordinates, and so every
+     * antialiased edge, are then the same wherever the page is scrolled
+     * to (the rasterizer keeps whole pixels of the translation apart). */
+    float ix = floorf(cb.x), iy = floorf(cb.y);
+    au_canvas_translate(P->c, ix, iy);
+    cb.x -= ix;
+    cb.y -= iy;
     au_svg_paint(P->c, l_svg_names(P->L), au_as_element(b->b.node), cb, &env);
+    au_canvas_translate(P->c, -ix, -iy);
 }
 
 static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
@@ -3016,8 +3029,8 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     P.scroll_y = scroll_y;
     P.view_x = view.x;
     P.view_y = view.y;
-    /* Canvas coordinates: document point (x, y) maps to (view.x + x -
-     * scroll_x, view.y + y - scroll_y). */
+    /* Document point (x, y) maps to (view.x + x - scroll_x, view.y + y -
+     * scroll_y) in the caller's coordinates. */
     float dx = view.x - scroll_x, dy = view.y - scroll_y;
     /* Cull against the canvas clip (the damaged part of the view), not the
      * whole view: a scroll paints only the exposed strip. */
@@ -3027,6 +3040,22 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
         au_canvas_clip_pop(c);
         return;
     }
+    /* The whole pixels of that offset go into the canvas translation, so
+     * boxes are painted at their document coordinates wherever the page
+     * is scrolled to: an antialiased edge at a fractional coordinate then
+     * gets the same coverage at every scroll offset, which moving pixels
+     * on a scroll relies on (the canvas and the rasterizer keep whole
+     * pixels of the translation apart from the coordinates). */
+    float tdx = floorf(dx), tdy = floorf(dy);
+    au_canvas_translate(c, tdx, tdy);
+    dx -= tdx;
+    dy -= tdy;
+    view.x -= tdx;
+    view.y -= tdy;
+    P.view_x = view.x;
+    P.view_y = view.y;
+    P.dirty.x -= tdx;
+    P.dirty.y -= tdy;
     LBlock *bgbox;
     const AuStyle *cs = canvas_style(L, &bgbox);
     uint32_t bg = pc(cs, cs->bg->background_color);
@@ -3057,6 +3086,7 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     /* The propagated background is not painted again on its own box. */
     P.canvas_box = bgbox;
     paint_layer(&P, &root->b, dx + root->x, dy + root->y);
+    au_canvas_translate(c, -tdx, -tdy);
     au_canvas_clip_pop(c);
 }
 
@@ -3126,7 +3156,8 @@ static bool view_box_extent(LBox *b, AuRect *out)
     LBlock *k = (LBlock *)b;
     float bx, by;
     l_box_origin(b, &bx, &by);
-    AuRect r = {bx + k->ov.x, by + k->ov.y, k->ov.w, k->ov.h};
+    /* One pixel above and below for glyph ink (see rect_hits). */
+    AuRect r = {bx + k->ov.x, by + k->ov.y - 1, k->ov.w, k->ov.h + 2};
     bool any = true;
     /* Descendants: positioned ones are layers, outside b's overflow. A
      * transformed descendant counts with its transformed overflow when
@@ -3143,7 +3174,7 @@ static bool view_box_extent(LBox *b, AuRect *out)
             LBlock *dk = (LBlock *)d;
             float dx, dy;
             l_box_origin(d, &dx, &dy);
-            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y, dk->ov.w, dk->ov.h};
+            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y - 1, dk->ov.w, dk->ov.h + 2};
             AuMatrix m;
             if (l_transform_matrix(dk, &m)) {
                 if (subtree_has(d, LF_POSITIONED | LF_ABSPOS | LF_FIXED, true))

@@ -33,9 +33,9 @@ checked; cases that depend on the Ahem-like font say "no-chrome". Ahem:
 <!-- no-chrome -->
 ---
 // content is one 16px line; the row is 50px tall
-#b y=41.8
-#m y=24.8
-#t y=7.8
+#b y=42
+#m y=25
+#t y=8
 
 === fixup: table-cell divs get an anonymous table and row
 <body style="margin:0">

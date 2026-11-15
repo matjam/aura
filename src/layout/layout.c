@@ -184,7 +184,7 @@ float l_control_line(AuLayout *L, const LBlock *b, float *ascent)
     LFont *f = l_font(L, s);
     float lh = l_line_height(s, f);
     if (ascent)
-        *ascent = (lh - (f->m.ascent + f->m.descent)) / 2 + f->m.ascent;
+        *ascent = floorf((lh - (f->m.ascent + f->m.descent)) / 2) + f->m.ascent;
     return lh;
 }
 

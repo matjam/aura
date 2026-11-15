@@ -106,7 +106,7 @@ x</div>
 <div id=p>x<span id=ib style="display:inline-block;width:20px;height:40px"></span></div>
 ---
 #ib y=0 h=40
-#p h=43.2
+#p h=43
 
 === inline-block baseline is its last line
 <body style="margin:0">
@@ -120,14 +120,14 @@ x</div>
 <div id=p>x<span id=ib style="display:inline-block;overflow:hidden;width:40px">x<br>x</span></div>
 ---
 #ib y=0
-#p h=35.2
+#p h=35
 
 === vertical-align top and bottom
 <body style="margin:0">
 <div id=p>x<span id=a style="display:inline-block;width:10px;height:40px"></span><span id=t style="display:inline-block;width:10px;height:10px;vertical-align:top"></span><span id=b style="display:inline-block;width:10px;height:10px;vertical-align:bottom"></span></div>
 ---
 #t y=0
-#b y=33.2
+#b y=33
 
 === a tall bottom-aligned box pushes the baseline group down
 <body style="margin:0">
@@ -136,16 +136,16 @@ x</div>
 ---
 // bottom: the line's top moves up, so the baseline is at 40 - 3.2
 #p h=40
-#a y=31.8
+#a y=32
 // top: the line's bottom moves down; the baseline stays at 12.8
-#c y=47.8
+#c y=48
 
 === vertical-align middle
 <body style="margin:0">
 <div style="line-height:100px">x<span id=m style="display:inline-block;width:10px;height:20px;vertical-align:middle"></span></div>
 ---
 // Ahem's x-height is 0.8em: the middle is 6.4px above the baseline (54.8).
-#m y=38.4
+#m y=38.6
 
 === vertical-align length and percentage
 <body style="margin:0">
@@ -159,7 +159,7 @@ x</div>
 <div id=p style="line-height:16px">x<span id=s style="display:inline-block;width:10px;height:10px;vertical-align:super"></span></div>
 ---
 // super raises by font-size / 3 + 1 (as WebKit).
-#p h=19.533
+#p h=19.33
 
 === line-height sets the line box height
 <body style="margin:0">
@@ -231,7 +231,7 @@ x</div>
 <div id=p>x<img id=i width=20 height=30></div>
 ---
 #i y=0
-#p h=33.2
+#p h=33
 
 === an empty inline-block
 <body style="margin:0">
@@ -269,9 +269,9 @@ pixel 214 6 000000
 <div style="color:transparent;text-decoration:line-through dashed #ff0000 2px">xxxx</div>
 <div style="color:transparent;text-decoration:line-through wavy #0000ff 2px">xxxx</div>
 ---
-pixel 2 5 ff0000
-pixel 9 5 ffffff
-pixel 14 5 ff0000
+pixel 2 6 ff0000
+pixel 9 6 ffffff
+pixel 14 6 ff0000
 pixel 30 18 ffffff
 
 === wbr breaks inside white-space nowrap
