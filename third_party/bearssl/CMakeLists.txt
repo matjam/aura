@@ -10,12 +10,14 @@
 # certificate validation and the seed for the DRBG itself, so the library
 # makes no system calls (no /dev/urandom, no time()).
 file(GLOB_RECURSE BEARSSL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
-# CPU-specific variants (x86 AES-NI/SSE2/PCLMUL, POWER8) are empty on both
-# targets; leave them out.
+# CPU-specific variants (x86 AES-NI/SSE2/PCLMUL, POWER8) are left out, and
+# turned off below (BR_AES_X86NI, BR_SSE2, BR_POWER8) so that no other file
+# refers to them on an x86 host, where BearSSL would turn them on.
 list(FILTER BEARSSL_SOURCES EXCLUDE REGEX "_(x86ni|pwr8|sse2|pclmul)\\.c$")
 add_library(bearssl STATIC ${BEARSSL_SOURCES})
 target_include_directories(bearssl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(bearssl PRIVATE BR_USE_URANDOM=0 BR_USE_WIN32_RAND=0 BR_USE_UNIX_TIME=0
-                                           BR_USE_WIN32_TIME=0 BR_RDRAND=0 BR_POWER8=0)
+                                           BR_USE_WIN32_TIME=0 BR_RDRAND=0 BR_POWER8=0
+                                           BR_AES_X86NI=0 BR_SSE2=0)
 # Third-party code keeps its own style; do not apply Aura's warning flags.
 target_compile_options(bearssl PRIVATE -w -O2)
