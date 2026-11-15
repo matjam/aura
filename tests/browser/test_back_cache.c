@@ -122,11 +122,16 @@ static bool page_text_has(Env *e, const char *needle)
     return has;
 }
 
+static char *responses[128];
+static int nresponses;
+
 /* A 200 response with the given extra header lines ("" for none). */
 static FakeResponse *respond(FakeServer *s, const char *type, const char *extra, const char *body)
 {
     size_t cap = strlen(body) + strlen(extra) + 256;
-    char *b = malloc(cap); /* lives as long as the test; the fake keeps the pointer */
+    char *b = malloc(cap); /* the fake keeps the pointer: freed at the end of main */
+    if (nresponses < 128)
+        responses[nresponses++] = b;
     snprintf(b, cap, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n%sContent-Length: %u\r\n\r\n%s", type, extra,
              (unsigned)strlen(body), body);
     return fake_add(s, b);
@@ -519,6 +524,8 @@ int main(void)
     test_limits();
     test_excluded();
     test_edges();
+    for (int i = 0; i < nresponses; i++)
+        free(responses[i]);
     au_fontset_free(fonts);
     printf("back_cache: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
