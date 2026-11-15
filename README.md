@@ -43,6 +43,22 @@ it works and breaks nothing. If you try it on real
 hardware, I would like to hear how it went, good or bad: please open an
 issue. `CONTRIBUTING.md` says what is most useful to report.
 
+## Performance
+
+This is a browser written to use the modern web on machines that are
+over 20 years old. Some things are just not going to work well.
+
+Websites with highly unoptimized JavaScript will be slow to load and
+use. Aura has web tracker blocking built in to help with that, because a
+large share of slow page loads comes from third-party tracking.
+
+That said, even well optimized sites are just heavy, so do not expect
+Google Docs or Gmail to work well, if they work at all. They expect to
+run on machines with 8 GB or more of RAM, not machines with 256 MB.
+
+So your mileage may vary. We do as much as we can to optimize for
+memory and CPU, but there is only so much we can do there.
+
 ## Download
 
 Releases are on the [releases page](https://github.com/matjam/aura/releases).
