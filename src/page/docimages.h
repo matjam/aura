@@ -51,6 +51,8 @@ void au_docimages_tree_changed(AuDocImages *m);
 /* Before painting the document rectangle view (document coordinates). */
 void au_docimages_prepare(AuDocImages *m, AuDocument *doc, AuLayout *L, const char *base_url, AuRect view);
 void au_docimages_paint_begin(AuDocImages *m);
+/* After painting. Images decoded during the paint stay marked changed
+ * (au_docimages_invalidate repaints them). */
 void au_docimages_paint_end(AuDocImages *m);
 
 /* Advances animations; returns ms until the next frame (UINT32_MAX for

@@ -855,10 +855,12 @@ static void shadow_extent(const LBlock *b, LArea *r)
             if (it[i].type != AU_CSSV_LIST || it[i].n < 4)
                 continue;
             const AuCssValue *v = it[i].u.items;
-            if (it[i].n >= 6 && v[5].type == AU_CSSV_KEYWORD)
+            if (it[i].n >= 6 && v[5].type == AU_CSSV_KEYWORD && v[5].kw == AU_K_inset)
                 continue; /* inset */
             float dx = v[0].u.num, dy = v[1].u.num, blur = v[2].u.num, spread = v[3].u.num;
-            float e = blur + spread;
+            /* As far as au_draw_box_shadow paints: three box blurs reach
+             * about 1.5 times the blur radius. */
+            float e = (blur > 0 ? blur * 1.5f + 2 : 0) + spread;
             add_rect(r, dx - e, dy - e, b->w + 2 * e, b->h + 2 * e);
         }
     }
@@ -901,6 +903,13 @@ void l_finish_overflow(LBlock *b)
 {
     LArea ink = {0, 0, b->w, b->h};
     shadow_extent(b, &ink);
+    /* Inline SVG with overflow visible draws outside its box by an amount
+     * only the drawing knows: allow its own size again on every side. */
+    if (b->b.replaced == LR_SVG && !lb_anon(&b->b) &&
+        (b->b.style->box->overflow_x == AU_OVERFLOW_VISIBLE || b->b.style->box->overflow_y == AU_OVERFLOW_VISIBLE)) {
+        float e = l_max(b->w, b->h);
+        add_rect(&ink, -e, -e, b->w + 2 * e, b->h + 2 * e);
+    }
     /* Content extent, for scroll containers: starts as the content box; the
      * end padding is added below and the padding box is the minimum. */
     LArea content = {b->bw[3] + b->p[3], b->bw[0] + b->p[0], l_max(0, b->w - l_bp_h(b)), l_max(0, b->h - l_bp_v(b))};

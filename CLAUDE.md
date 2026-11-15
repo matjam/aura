@@ -119,7 +119,10 @@ installed. The guest boots an overlay on the base image
 (`run/os9-overlay-BASE.qcow2`), so the base is never written. One guest
 runs per run folder; `status` names the running base. Disk writes are
 discarded when QEMU exits; set `PERSIST=1` to keep them in the overlay.
-Mac OS takes about a minute to boot.
+Mac OS takes about a minute to boot. `GEOMETRY` sets the largest screen
+mode the guest offers (default `1024x768x32`; for example
+`GEOMETRY=1440x1050x32`); Mac OS starts at 640x480 or the last mode
+chosen, and the Control Strip's resolution module switches to it.
 
 Test on the stock base first. Use the Enforcer base to check Aura under
 Enforcer; its own bugs show there too (see the scroll bar thumb note
@@ -164,11 +167,20 @@ Benchmark times the scene, fills and the chrome and shows how long font
 registration took (and the bundled part of it) and how much font data
 is loaded; View > Debug > Font List (about:fonts) shows the fonts it
 found, with the bundled ones marked; and View > Debug > Page Timings
-shows the active page's first paint, load and layout times, times ten
-32-pixel scroll repaints, and shows free heap and temporary memory.
+shows the active page's first paint, load and layout times, image
+decodes, then times scrolling: ten 32-pixel steps (twice: the first pass
+paints content for the first time, the second shows the steady state),
+five page downs and three repaints of the whole page, each split into
+moving the offscreen pixels, painting, copying to the screen and the
+number of areas painted, and shows free heap, temporary memory and the
+glyph cache. Network Status shows the HTTP cache's lookups (fresh,
+history, revalidated, 304, missed) and the time spent reading and
+writing cache files.
 The Debug submenu opens by dragging (a click closes it); the
 `QMP.button` and `QMP.move` methods of `tools/guest-qmp.py` can hold
-the button through View, Debug and the item.
+the button through View, Debug and the item. Release on the item's
+own row: the submenu's first item is Test Scene. While Aura is busy
+(a long layout), the drag is lost; wait and try again.
 
 The Finder ignores `guest-qmp.py drag` (it moves in one step). To drag
 a file in the Finder (onto the Aura icon, or a copy to the hard disk),
@@ -310,6 +322,46 @@ run/chrome.png`. `--tab` takes a URL, a path or `file:` with a relative
 path; `--scroll Y` scrolls the active tab and `--mouse X Y` moves the
 pointer (hover, a link's status text). Run `aura-host` without arguments
 for the other options (tab overflow, hover, address field text).
+
+Scrolling moves pixels instead of repainting the page. To change it,
+work in these places:
+
+- `browser.c` (`page_scrolled`): a scroll by the user (`au_bw_scroll_to`
+  and everything built on it: wheel, arrows, page keys, the scroll bars)
+  calls `AuBrowserHost.scroll_area` with the page area and the distance,
+  then invalidates the strip that scrolled in and the rectangles
+  `au_page_scroll_damage` returns. Script scrolls, scrolls of at least
+  the page's size and hosts without `scroll_area` repaint the page.
+- `au_page_scroll_damage` (`page_doc.c`, `au_docview_scroll_damage`,
+  `au_layout_scroll_damage` in `draw.c`) returns the rectangles that do
+  not move with the page: fixed boxes (old and new place), sticky boxes
+  whose offset changed, and their shadows and outlines; or -1 when the
+  whole page must be repainted (layout pending, a fixed or gradient
+  canvas background, more than `AU_PAGE_SCROLL_DAMAGE` rectangles, or a
+  viewport box under a transformed ancestor). Layout records the fixed
+  and sticky boxes while building stacking contexts (`view_boxes`).
+- `present.c` (`AuPresent`) is the shells' damage list: up to 8
+  rectangles merged by least added area, and the pending shift.
+  `au_present_begin` moves the surface's pixels and hands over the
+  rectangles to paint; the shell then moves the screen (Mac OS 9:
+  `ScrollRect`, then `CopyBits` from the GWorld into the region it
+  reports) and copies the painted rectangles.
+- Painting skips boxes outside the canvas clip (`au_layout_paint`), so a
+  strip paints only what it shows; box and text ink extents (shadows,
+  outlines, inline SVG with visible overflow) must cover what they draw.
+- Hover follows a scroll only after the scroll pauses for
+  `AU_REHOVER_MS` (150 ms): on Wikipedia a hover change restyles the
+  whole document (`:has()` rules), 1.7 s per scroll step in the guest.
+
+`tests/browser/test_scroll_shift.c` scrolls sample pages and inline
+pages with fixed, sticky and transformed boxes both ways and compares
+the moved result with a full repaint pixel for pixel; `SHIFT_DUMP=1`
+writes both images when they differ. To time scrolling on the host, run
+`aura-host chrome -w 1440 -h 1050 --tab PAGE --scroll-bench 20` (add
+`--bundled-only` for reproducible fonts): it times 32-pixel steps and
+page downs by repainting, then by moving pixels (`--no-shift` skips
+that), through the Mac shell's paint path, with pixels painted and
+copied, glyph cache counts and image decodes.
 
 The Mac OS 9 shell (`src/platform/macos9`) keeps one module per kind of
 window (`browserwin.c`, `listwin.c`, `prefswin.c`), with menus and the
@@ -533,8 +585,8 @@ test and a fuzz run under the sanitizers.
   gets the size from the header; pixels are decoded only when an image
   is used in a paint (`au_image_entry_use`), at the smallest power-of-two
   reduction that still covers the displayed size. The budget comes from
-  the memory cache preference (`au_docview_set_image_budget`, 4 MB by
-  default in the browser, 8 MB otherwise). Over the budget, images not
+  the memory cache preference (`au_docview_set_image_budget`, 8 MB by
+  default, as without a browser). Over the budget, images not
   used in the last paint lose their pixels, oldest first, and keep their
   compressed bytes to decode again. One image may use at most half the
   budget (at least 1 MB, at most 16 MB). A still image whose bytes are
@@ -636,6 +688,23 @@ policy stores the embedder attaches.
   `src/net/page_fetcher.c` adapts it to the browser's `AuPageFetcher`:
   `au_net_page_fetcher_interface` fills one, and the shell registers it
   for `http` and `https` with `au_browser_set_fetcher`.
+- **The HTTP cache** (`src/net/cache.h` describes what is stored and
+  when it is fresh) is used through the page's cache mode
+  (`AuFetchCacheMode`): a navigation uses it as HTTP says; Reload
+  revalidates the document; Shift- or Option-Reload bypasses it; and a
+  history navigation (Back, Forward, the history pop-up, reopened or
+  duplicated tabs, session restore) uses `AU_FETCH_CACHE_HISTORY` for
+  the document and its subresources, which serves any stored response
+  as it is, stale, no-cache or must-revalidate, without a request
+  (`au_cache_lookup_history`, RFC 9111 section 6). Responses with
+  neither freshness nor a validator are stored for this alone. no-store
+  responses are never stored, so history fetches them again, and Vary
+  (Cookie included) still selects the variant. An entry may take a
+  quarter of the memory cache (8 MB by default), so a large article's
+  HTML fits. To count hits on the host, run `aura-host chrome --net
+  --tab URL --do cache --do go:URL2 --do back --do cache`. `au_cache_stats` counts lookups,
+  304s, stores and disk reads. The page is parsed and laid out again on
+  Back: there is no cache of documents.
 - **To persist state**, serialize the stores with
   `au_cookie_jar_serialize`, `au_hsts_serialize` and the cache's
   `AuCacheStorage`, and parse them back at start. `aura-host fetch` keeps

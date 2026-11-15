@@ -163,7 +163,7 @@ resource 'tab#' (128) {
 
 /* 131: page timings and memory (Debug > Page Timings), ^0 to ^3. */
 resource 'ALRT' (131) {
-	{0, 0, 230, 440}, 131,
+	{0, 0, 330, 520}, 131,
 	{
 		OK, visible, silent;
 		OK, visible, silent;
@@ -175,8 +175,8 @@ resource 'ALRT' (131) {
 
 resource 'DITL' (131) {
 	{
-		{198, 358, 218, 426}, Button { enabled, "OK" };
-		{12, 70, 190, 426}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
+		{298, 438, 318, 506}, Button { enabled, "OK" };
+		{12, 70, 290, 506}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
 	}
 };
 

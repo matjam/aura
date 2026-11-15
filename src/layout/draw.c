@@ -97,6 +97,7 @@ static void sort_layers(LLayers *ls)
 void l_build_stacking(AuLayout *L)
 {
     LBox *root = L->root;
+    L->nview_boxes = 0;
     if (!root)
         return;
     /* Clear old lists and flags. */
@@ -142,6 +143,11 @@ void l_build_stacking(AuLayout *L)
         if (layered) {
             b->flags |= LF_LAYERED;
             layers_add(sc, b);
+            if ((b->flags & LF_STICKY) || (b->kind == LK_BLOCK && (b->flags & LF_FIXED) && !((LBlock *)b)->cb)) {
+                if (L->nview_boxes < L_VIEW_BOXES)
+                    L->view_boxes[L->nview_boxes] = b;
+                L->nview_boxes++;
+            }
         }
         bool descend = b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP);
         if (descend) {
@@ -2882,7 +2888,14 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     /* Canvas coordinates: document point (x, y) maps to (view.x + x -
      * scroll_x, view.y + y - scroll_y). */
     float dx = view.x - scroll_x, dy = view.y - scroll_y;
-    P.dirty = (LArea){view.x, view.y, view.w, view.h};
+    /* Cull against the canvas clip (the damaged part of the view), not the
+     * whole view: a scroll paints only the exposed strip. */
+    AuIRect cl = au_canvas_clip(c);
+    P.dirty = (LArea){(float)cl.x0 - tx0, (float)cl.y0 - ty0, (float)(cl.x1 - cl.x0), (float)(cl.y1 - cl.y0)};
+    if (P.dirty.w <= 0 || P.dirty.h <= 0) {
+        au_canvas_clip_pop(c);
+        return;
+    }
     LBlock *bgbox;
     const AuStyle *cs = canvas_style(L, &bgbox);
     uint32_t bg = pc(cs, cs->bg->background_color);
@@ -2914,8 +2927,213 @@ void au_layout_paint(AuLayout *L, AuCanvas *c, AuRect view, float scroll_x, floa
     P.canvas_box = bgbox;
     paint_layer(&P, &root->b, dx + root->x, dy + root->y);
     au_canvas_clip_pop(c);
-    (void)tx0;
-    (void)ty0;
+}
+
+/* ---- Viewport-placed boxes (scrolling by moving pixels) ---- */
+
+static void rect_union(AuRect *r, AuRect a, bool *any)
+{
+    if (a.w <= 0 || a.h <= 0)
+        return;
+    if (!*any) {
+        *r = a;
+        *any = true;
+        return;
+    }
+    float x0 = l_min(r->x, a.x), y0 = l_min(r->y, a.y);
+    float x1 = l_max(r->x + r->w, a.x + a.w), y1 = l_max(r->y + r->h, a.y + a.h);
+    *r = (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+/* The bounding box of r drawn through m, a transform about (ox, oy). */
+static AuRect transformed_bbox(AuRect r, float ox, float oy, const AuMatrix *m)
+{
+    float xs[4] = {r.x, r.x + r.w, r.x + r.w, r.x}, ys[4] = {r.y, r.y, r.y + r.h, r.y + r.h};
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int i = 0; i < 4; i++) {
+        float lx = xs[i] - ox, ly = ys[i] - oy;
+        float X = ox + m->a * lx + m->c * ly + m->e, Y = oy + m->b * lx + m->d * ly + m->f;
+        x0 = l_min(x0, X), x1 = l_max(x1, X), y0 = l_min(y0, Y), y1 = l_max(y1, Y);
+    }
+    return (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+/* Whether a box below b (not b) has one of flags, or a transform. */
+static bool subtree_has(LBox *b, uint32_t flags, bool transforms)
+{
+    LBox *d = b->first;
+    int visited = 0;
+    while (d && d != b) {
+        if (++visited > 20000 || (d->flags & flags))
+            return true;
+        AuMatrix m;
+        if (transforms && d->kind == LK_BLOCK && l_transform_matrix((LBlock *)d, &m))
+            return true;
+        if (d->first && d->kind != LK_TEXT && !(d->flags & LF_TOO_DEEP)) {
+            d = d->first;
+            continue;
+        }
+        while (d && d != b && !d->next)
+            d = d->parent;
+        if (d && d != b)
+            d = d->next;
+    }
+    return false;
+}
+
+/* Where b and everything it paints can reach, in the frame of
+ * l_box_origin (no scroll, no sticky offset), through b's own transform.
+ * False when a transform elsewhere (an ancestor or a descendant) makes
+ * that unknown. */
+static bool view_box_extent(LBox *b, AuRect *out)
+{
+    for (LBox *p = b->parent; p; p = p->parent) {
+        AuMatrix m;
+        if (p->kind == LK_BLOCK && l_transform_matrix((LBlock *)p, &m))
+            return false;
+    }
+    LBlock *k = (LBlock *)b;
+    float bx, by;
+    l_box_origin(b, &bx, &by);
+    AuRect r = {bx + k->ov.x, by + k->ov.y, k->ov.w, k->ov.h};
+    bool any = true;
+    /* Descendants: positioned ones are layers, outside b's overflow. A
+     * transformed descendant counts with its transformed overflow when
+     * nothing inside it is positioned or transformed; the content of a
+     * box clipping both ways stays inside it unless something in it is
+     * absolutely positioned. */
+    LBox *d = b->first;
+    int visited = 0;
+    while (d && d != b) {
+        if (++visited > 20000)
+            return false;
+        bool skip = false;
+        if (d->kind == LK_BLOCK) {
+            LBlock *dk = (LBlock *)d;
+            float dx, dy;
+            l_box_origin(d, &dx, &dy);
+            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y, dk->ov.w, dk->ov.h};
+            AuMatrix m;
+            if (l_transform_matrix(dk, &m)) {
+                if (subtree_has(d, LF_POSITIONED | LF_ABSPOS | LF_FIXED, true))
+                    return false;
+                dr = transformed_bbox(dr, dx, dy, &m);
+                skip = true;
+            } else if ((d->flags & LF_CLIPS) && d->style->box->overflow_x != AU_OVERFLOW_VISIBLE &&
+                       d->style->box->overflow_y != AU_OVERFLOW_VISIBLE &&
+                       !subtree_has(d, LF_ABSPOS | LF_FIXED, false)) {
+                skip = true;
+            }
+            rect_union(&r, dr, &any);
+        }
+        if (!skip && d->first && d->kind != LK_TEXT && !(d->flags & LF_TOO_DEEP)) {
+            d = d->first;
+            continue;
+        }
+        while (d && d != b && !d->next)
+            d = d->parent;
+        if (d && d != b)
+            d = d->next;
+    }
+    AuMatrix tm;
+    if (l_transform_matrix(k, &tm))
+        r = transformed_bbox(r, bx, by, &tm);
+    /* Anti-aliased edges. */
+    out->x = r.x - 2;
+    out->y = r.y - 2;
+    out->w = r.w + 4;
+    out->h = r.h + 4;
+    return true;
+}
+
+static bool has_scroller_ancestor(const LBox *b)
+{
+    for (const LBox *p = b->parent; p; p = p->parent)
+        if (p->kind == LK_BLOCK && (p->flags & LF_SCROLLER))
+            return true;
+    return false;
+}
+
+static bool add_view_rect(AuLayout *L, AuRect r, AuRect *out, int max, int *n)
+{
+    if (r.x >= L->vw || r.y >= L->vh || r.x + r.w <= 0 || r.y + r.h <= 0)
+        return true; /* out of view */
+    if (*n >= max)
+        return false;
+    out[(*n)++] = r;
+    return true;
+}
+
+int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny, AuRect *out, int max)
+{
+    if (!L->root)
+        return 0;
+    if (L->need_build || L->need_layout || L->need_restack)
+        return -1;
+    /* A fixed canvas background, or a gradient over the view, moves with
+     * the viewport everywhere. */
+    LBlock *bgbox;
+    const AuStyle *cs = canvas_style(L, &bgbox);
+    if (has_bg_image(cs)) {
+        size_t nl = au_style_bg_layer_count(cs);
+        for (size_t i = 0; i < nl; i++) {
+            AuBgLayer ly;
+            au_style_bg_layer(cs, i, &ly);
+            if (!ly.image || ly.image->type == AU_CSSV_KEYWORD)
+                continue;
+            if (ly.attachment == AU_K_fixed || ly.image->type == AU_CSSV_FUNCTION)
+                return -1;
+        }
+    }
+    if (L->nview_boxes > L_VIEW_BOXES)
+        return -1;
+    int n = 0;
+    float dx = ox - nx, dy = oy - ny; /* how painted pixels moved */
+    float save_x = L->view_scroll_x, save_y = L->view_scroll_y;
+    for (uint32_t i = 0; i < L->nview_boxes && n >= 0; i++) {
+        LBox *b = L->view_boxes[i];
+        if (b->kind != LK_BLOCK) {
+            n = -1; /* a sticky inline box */
+            break;
+        }
+        bool sticky = (b->flags & LF_STICKY) != 0;
+        if (sticky && has_scroller_ancestor(b))
+            continue; /* follows its scroller, not the viewport */
+        float sox = 0, soy = 0, snx = 0, sny = 0;
+        if (sticky) {
+            /* Not stuck, or stuck the same way, at both positions: it
+             * moved with the document. */
+            L->view_scroll_x = ox;
+            L->view_scroll_y = oy;
+            soy = l_sticky_offset(L, (LBlock *)b, &sox);
+            L->view_scroll_x = nx;
+            L->view_scroll_y = ny;
+            sny = l_sticky_offset(L, (LBlock *)b, &snx);
+            if (sox == snx && soy == sny)
+                continue;
+        }
+        AuRect r;
+        if (!view_box_extent(b, &r)) {
+            n = -1;
+            break;
+        }
+        /* Fixed: the same viewport place before and after. Sticky: the
+         * document place plus the offset, in the viewport. */
+        AuRect was = r, now = r;
+        if (sticky) {
+            was.x += sox - ox;
+            was.y += soy - oy;
+            now.x += snx - nx;
+            now.y += sny - ny;
+        }
+        was.x += dx;
+        was.y += dy;
+        if (!add_view_rect(L, was, out, max, &n) || !add_view_rect(L, now, out, max, &n))
+            n = -1;
+    }
+    L->view_scroll_x = save_x;
+    L->view_scroll_y = save_y;
+    return n;
 }
 
 /* paint_decor skips the body background when it was propagated. */

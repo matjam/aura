@@ -25,6 +25,7 @@
 
 #include "credits.h"
 #include "history.h"
+#include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../page/page.h"
 
@@ -550,7 +551,9 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
         rq.document_url = p->url;
         rq.top_level_url = p->url;
         rq.referrer_policy = p->rpolicy;
-        rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS ? AU_FETCH_CACHE_BYPASS : AU_FETCH_CACHE_NORMAL;
+        rq.cache = p->cache_mode == AU_FETCH_CACHE_BYPASS || p->cache_mode == AU_FETCH_CACHE_HISTORY
+                       ? p->cache_mode
+                       : AU_FETCH_CACHE_NORMAL;
     }
     f->fid = fe->start(fe->ctx, &rq, &f->sink);
     if (!f->fid) {
@@ -2207,7 +2210,7 @@ void au_page_navigate(AuPage *p, const char *url)
 
 void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll_y)
 {
-    p->cache_mode = AU_FETCH_CACHE_NORMAL;
+    p->cache_mode = AU_FETCH_CACHE_HISTORY;
     clear_post(p);
     start_load(p, url, true, scroll_x, scroll_y, false);
 }
@@ -2789,4 +2792,19 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     AuLayoutStats ls;
     au_layout_stats(au_docview_layout(p->dv), &ls);
     s->boxes = ls.boxes;
+    AuImageCacheStats is;
+    au_docview_image_stats(p->dv, &is);
+    s->image_decodes = is.decodes;
+    s->image_evictions = is.evictions;
+    s->image_kb = (uint32_t)(is.decoded_bytes / 1024);
+    s->image_budget_kb = (uint32_t)(is.budget / 1024);
+}
+
+/* ---- Scrolling by moving pixels ---- */
+
+int au_page_scroll_damage(AuPage *p, int ox, int oy, int nx, int ny, AuIRect *out, int max)
+{
+    if (p->kind != K_DOC || p->dirty || !au_docview_document(p->dv))
+        return -1;
+    return au_docview_scroll_damage(p->dv, ox, oy, nx, ny, out, max);
 }

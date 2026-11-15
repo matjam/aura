@@ -16,10 +16,12 @@
 #include "fontdir.h"
 #include "png.h"
 #include "browser/browser.h"
+#include "browser/present.h"
 #include "browser/scene.h"
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
+#include "net/cache.h"
 #include "net/loader.h"
 #include "net/net_prefs.h"
 
@@ -49,12 +51,16 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net] [--do ACTION]...\n"
+            "                        [--net] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
-            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field)\n"
+            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
+            "                        go:URL back forward cache (the HTTP cache's counts with --net))\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
-            "                        https over the network, else they show a stand-in)\n"
+            "                        https over the network, else they show a stand-in; --scroll-bench times\n"
+            "                        32-pixel steps and page downs through the Mac shell's paint path,\n"
+            "                        repainting the page for each, then moving pixels; --no-shift only\n"
+            "                        the first)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
             "       aura-host dump page.html -w W\n"
             "       aura-host image FILE [-o out.png] [--scale N] [--target WxH] [--chunk N] [--frames]\n"
@@ -282,9 +288,129 @@ typedef struct ChromeOpts {
     bool focus, loading, menus, net;
     const char *hover;
     int scroll, mouse_x, mouse_y;
+    int scroll_bench; /* steps of the scroll benchmark; 0 for none */
+    bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
+    AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
 } ChromeOpts;
+
+/* ---- The scroll benchmark: the Mac shell's flush on the host ----
+ * The window lives in a surface (the GWorld) and a second surface stands
+ * for the screen. Each step scrolls, then flushes as browserwin.c does:
+ * the pending shift moves the surface's pixels and the screen's, the
+ * damaged rectangles are painted, and they are copied to the screen. */
+
+static AuPresent bench_pres;
+
+static void bench_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
+{
+    (void)ctx, (void)w;
+    au_present_invalidate(&bench_pres, r);
+}
+
+static void bench_scroll(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy)
+{
+    (void)ctx, (void)w;
+    au_present_scroll(&bench_pres, area, dx, dy);
+}
+
+static void copy_rect(AuSurface *dst, const AuSurface *src, AuIRect r)
+{
+    for (int y = r.y0; y < r.y1; y++)
+        memcpy(dst->pixels + (size_t)y * (size_t)dst->stride + (size_t)r.x0,
+               src->pixels + (size_t)y * (size_t)src->stride + (size_t)r.x0, (size_t)(r.x1 - r.x0) * sizeof(AuPixel));
+}
+
+typedef struct BenchTimes {
+    double model, paint, blit; /* scrolling in the model (hover, layout), painting, copying */
+    long painted, copied; /* pixels */
+} BenchTimes;
+
+static void bench_flush(AuBrowserWindow *w, AuSurface *s, AuSurface *screen, BenchTimes *bt)
+{
+    double t0 = now_ms();
+    AuPresentRound r;
+    au_present_begin(&bench_pres, s, &r);
+    AuCanvas *c = au_canvas_new(s);
+    for (int i = 0; i < r.n; i++) {
+        au_bw_paint(w, c, r.rects[i]);
+        bt->painted += (long)(r.rects[i].x1 - r.rects[i].x0) * (r.rects[i].y1 - r.rects[i].y0);
+    }
+    au_canvas_free(c);
+    double t1 = now_ms();
+    if (r.shifted)
+        au_present_shift_pixels(screen, r.area, r.dx, r.dy);
+    for (int i = 0; i < r.n; i++) {
+        copy_rect(screen, s, r.rects[i]);
+        bt->copied += (long)(r.rects[i].x1 - r.rects[i].x0) * (r.rects[i].y1 - r.rects[i].y0);
+    }
+    double t2 = now_ms();
+    bt->paint += t1 - t0;
+    bt->blit += t2 - t1;
+}
+
+static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
+{
+    AuSurface *s = au_surface_new(W, H), *screen = au_surface_new(W, H);
+    BenchTimes bt;
+    memset(&bt, 0, sizeof bt);
+    au_present_invalidate(&bench_pres, (AuIRect){0, 0, W, H});
+    bench_flush(w, s, screen, &bt);
+    printf("first paint: %.2f ms\n", bt.paint);
+    AuTab *t = au_bw_active_tab(w);
+    int mx, my;
+    au_bw_scroll_max(w, &mx, &my);
+    int page = (w->layout.page.y1 - w->layout.page.y0) - 40;
+    static const char *names[] = {"32-pixel step", "page down"};
+    for (int kind = 0; kind < 2; kind++) {
+        int d = kind == 0 ? 32 : page;
+        au_bw_scroll_to(w, 0, 0);
+        bench_flush(w, s, screen, &bt);
+        AuGlyphCacheStats g0, g1;
+        au_glyph_cache_stats(&g0);
+        memset(&bt, 0, sizeof bt);
+        int n = 0;
+        for (int i = 0; i < steps; i++) {
+            int before = t->scroll_y;
+            double s0 = now_ms();
+            au_bw_scroll_by(w, 0, d);
+            bt.model += now_ms() - s0;
+            if (t->scroll_y == before)
+                break;
+            bench_flush(w, s, screen, &bt);
+            n++;
+        }
+        au_glyph_cache_stats(&g1);
+        if (!n) {
+            printf("%s: the page does not scroll\n", names[kind]);
+            continue;
+        }
+        printf("%s: %.2f ms scroll + %.2f ms paint + %.2f ms copy per step (%d steps; %ld pixels painted, %ld copied per step; "
+               "glyph cache %lu hits, %lu misses, %lu evictions, %lu KB)\n",
+               names[kind], bt.model / n, bt.paint / n, bt.blit / n, n, bt.painted / n, bt.copied / n,
+               (unsigned long)(g1.hits - g0.hits), (unsigned long)(g1.misses - g0.misses),
+               (unsigned long)(g1.evictions - g0.evictions), (unsigned long)(g1.bytes / 1024));
+    }
+    /* Images: page downs to the end and back up, as a reader does. */
+    AuPageStats p0, p1;
+    au_page_stats(t->page, &p0);
+    for (int dir = 1; dir >= -1; dir -= 2)
+        for (int i = 0; i < 400; i++) {
+            int before = t->scroll_y;
+            au_bw_scroll_by(w, 0, dir * page);
+            if (t->scroll_y == before)
+                break;
+            bench_flush(w, s, screen, &bt);
+        }
+    au_page_stats(t->page, &p1);
+    printf("images, down to the end and back: %lu decodes, %lu evictions; %lu KB decoded of a %lu KB budget\n",
+           (unsigned long)(p1.image_decodes - p0.image_decodes),
+           (unsigned long)(p1.image_evictions - p0.image_evictions), (unsigned long)p1.image_kb,
+           (unsigned long)p1.image_budget_kb);
+    au_surface_free(s);
+    au_surface_free(screen);
+}
 
 /* Runs the idle loop for at least min_ms and then until nothing is busy,
  * at most limit_ms in all. */
@@ -444,6 +570,19 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         chrome_shot(w, o->w, o->h, a + 5);
     } else if (!strcmp(a, "field")) {
         au_bw_set_field_focus(w, true);
+    } else if (!strncmp(a, "go:", 3)) {
+        au_bw_navigate(w, a + 3);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strcmp(a, "back") || !strcmp(a, "forward")) {
+        au_bw_go(w, a[0] == 'b' ? -1 : 1);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strcmp(a, "cache")) {
+        AuCacheStats cs;
+        memset(&cs, 0, sizeof cs);
+        if (o->cache)
+            au_cache_stats(o->cache, &cs);
+        printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored\n",
+               cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored);
     } else if (!strcmp(a, "console")) {
         AuTab *t = au_bw_active_tab(w);
         size_t n = t ? au_page_console_count(t->page) : 0;
@@ -476,7 +615,12 @@ static AuHitPart hit_by_name(const char *s)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    if (o->scroll_bench) {
+        au_present_init(&bench_pres);
+        host.invalidate = bench_inval;
+        host.scroll_area = bench_scroll;
+    }
     AuBrowser *b = au_browser_new(fonts, &host);
     /* --net: http and https through the network stack and page fetcher,
      * as the Mac application does; without it they show the stand-in. */
@@ -491,6 +635,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
             return 3;
         }
         au_net_apply_prefs(ses.net, &b->prefs);
+        o->cache = au_cache_new(au_net_cache_bytes_from_prefs(&b->prefs));
+        au_net_set_cache(ses.net, o->cache);
         loader = au_net_loader_new(ses.net);
         pf = au_net_page_fetcher_new(loader);
         AuPageFetcher f;
@@ -574,6 +720,18 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         e.y = o->mouse_y;
         au_bw_mouse(w, &e);
     }
+    if (o->scroll_bench) {
+        /* Repainting the page for each step (as before pixels were moved),
+         * then moving pixels. */
+        b->host.scroll_area = NULL;
+        printf("%dx%d, scrolling by repainting the page\n", o->w, o->h);
+        scroll_bench(w, o->w, o->h, o->scroll_bench);
+        if (!o->no_shift) {
+            b->host.scroll_area = bench_scroll;
+            printf("%dx%d, scrolling by moving pixels\n", o->w, o->h);
+            scroll_bench(w, o->w, o->h, o->scroll_bench);
+        }
+    }
     AuSurface *s = au_surface_new(o->w, o->h);
     AuCanvas *c = au_canvas_new(s);
     double t0 = now_ms();
@@ -594,6 +752,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_net_page_fetcher_free(pf);
         au_net_loader_free(loader);
         au_host_session_close(&ses);
+        au_cache_free(o->cache);
     }
     return rc;
 }
@@ -656,6 +815,10 @@ int main(int argc, char **argv)
                 o.hover = argv[++i];
             else if (!strcmp(a, "--scroll") && i + 1 < argc)
                 o.scroll = atoi(argv[++i]);
+            else if (!strcmp(a, "--scroll-bench") && i + 1 < argc)
+                o.scroll_bench = atoi(argv[++i]);
+            else if (!strcmp(a, "--no-shift"))
+                o.no_shift = true;
             else if (!strcmp(a, "--mouse") && i + 2 < argc) {
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);

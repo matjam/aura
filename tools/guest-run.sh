@@ -14,7 +14,9 @@
 # discarded when QEMU exits (-snapshot), so every start boots the same
 # system; PERSIST=1 keeps them in the overlay instead. Mac OS keeps the
 # screen size and depth in its own preferences: change them in the guest
-# (Control Strip or Monitors), not on the QEMU command line.
+# (Control Strip or Monitors). GEOMETRY (default 1024x768x32) is the
+# largest mode the display offers; GEOMETRY=1440x1050x32 allows the size
+# of a large screen.
 #
 # BASE picks the system: stock (default, Mac OS 9.2.2 without Enforcer)
 # or enforcer (with the Enforcer kernel and extension). The guest boots an
@@ -58,7 +60,7 @@ case "${1:-}" in
         -boot c \
         -drive file="$AURA_DISK",format=qcow2,media=disk \
         -drive if=ide,index=2,media=cdrom \
-        -g 1024x768x32 \
+        -g "${GEOMETRY:-1024x768x32}" \
         -prom-env 'vga-ndrv?=true' \
         -prom-env 'auto-boot?=true' \
         -nic user,model=sungem \
@@ -80,7 +82,7 @@ case "${1:-}" in
       -boot c \
       -drive file="$AURA_DISK",format=qcow2,media=disk \
       -drive if=ide,index=2,media=cdrom \
-      -g 1024x768x32 \
+      -g "${GEOMETRY:-1024x768x32}" \
       -prom-env 'vga-ndrv?=true' \
       -prom-env 'auto-boot?=true' \
       -nic user,model=sungem \

@@ -173,6 +173,10 @@ typedef struct AuHttpRequest {
     const char *top_level_url;
     bool user_activated; /* Sec-Fetch-User: ?1 for navigations by the user */
     bool reload;         /* bypass the cache (end-to-end reload) */
+    /* Back or Forward (RFC 9111 section 6): any stored response is used
+     * as it is, stale or not, without a request. no-store responses are
+     * never stored, so they are fetched again. */
+    bool history;
     bool omit_credentials; /* no cookies, no HTTP auth */
     bool manual_redirect;  /* deliver 3xx responses instead of following */
     bool allow_http_fallback; /* HTTPS-first: the user confirmed plain http */

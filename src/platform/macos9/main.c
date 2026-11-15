@@ -925,17 +925,30 @@ int main(void)
     if (!restored)
         browserwin_new(g_browser->prefs.startup == AU_STARTUP_BLANK ? "about:blank" : NULL, NULL);
 
+    int held = 0; /* idle passes skipped for queued keys */
     while (!g_quitting) {
         long sleep = 20;
         if (au_browser_busy(g_browser) || au_downloads_busy(&g_browser->downloads) || mac_net_busy())
             sleep = 2;
         else if (any_field_focused())
             sleep = 10; /* caret blink */
+        if (held)
+            sleep = 0;
         EventRecord ev;
         bool got = WaitNextEvent(everyEvent, &ev, sleep, NULL);
         mac_net_event(&ev); /* every event, null events included: entropy */
         if (got)
             handle_event(&ev);
+        /* Keys queued behind this one (auto-repeat while a page paints
+         * slowly) are handled before painting, so their scrolls add up to
+         * one move; at most a few passes, so the window still updates. */
+        EventRecord peek;
+        if (got && (ev.what == keyDown || ev.what == autoKey) && held < 8 &&
+            EventAvail(keyDownMask | autoKeyMask, &peek)) {
+            held++;
+            continue;
+        }
+        held = 0;
         idle_all();
     }
 

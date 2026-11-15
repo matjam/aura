@@ -19,8 +19,10 @@
  * no-store, the request said no-store, the request carried Authorization
  * (unless the response says public, must-revalidate or s-maxage), the
  * response has Vary: *, or the body is larger than the per-entry limit
- * (an eighth of the budget, at most 8 MB). Set-Cookie and hop-by-hop
- * fields are not kept.
+ * (a quarter of the budget, at most 8 MB). Set-Cookie and hop-by-hop
+ * fields are not kept. A response with neither freshness nor a validator
+ * is stored too: only au_cache_lookup_history (Back and Forward) uses
+ * it.
  *
  * Freshness: max-age, else Expires minus Date, else (for the statuses
  * above, with Last-Modified) 10 % of the time since Last-Modified, capped
@@ -59,6 +61,18 @@ size_t au_cache_bytes(const AuHttpCache *c);
 size_t au_cache_count(const AuHttpCache *c);
 size_t au_cache_entry_limit(const AuHttpCache *c);
 
+/* Counts since the cache was made, for debug views and tests. */
+typedef struct AuCacheStats {
+    unsigned long fresh;        /* lookups served without a request */
+    unsigned long stale;        /* lookups that needed revalidation */
+    unsigned long misses;       /* lookups that found nothing usable */
+    unsigned long history;      /* Back and Forward lookups served as they were */
+    unsigned long not_modified; /* revalidations answered 304 */
+    unsigned long stored;       /* responses stored */
+    unsigned long from_storage; /* entries read back from the second-level storage */
+} AuCacheStats;
+void au_cache_stats(const AuHttpCache *c, AuCacheStats *out);
+
 typedef enum { AU_CACHE_MISS, AU_CACHE_FRESH, AU_CACHE_STALE } AuCacheState;
 
 /* Looks up url (serialized without fragment) for a request with the given
@@ -66,6 +80,11 @@ typedef enum { AU_CACHE_MISS, AU_CACHE_FRESH, AU_CACHE_STALE } AuCacheState;
  * revalidation (the entry has a validator), or not at all. On FRESH or
  * STALE *out holds a reference. */
 AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *req, int64_t now, AuCacheEntry **out);
+/* The lookup for Back and Forward (RFC 9111 section 6: history views
+ * need not revalidate): any stored entry matching the request's Vary
+ * fields is FRESH, whatever its age, no-cache or must-revalidate. A
+ * request that says no-store still misses. */
+AuCacheState au_cache_lookup_history(AuHttpCache *c, const char *url, const AuHeaders *req, AuCacheEntry **out);
 void au_cache_entry_release(AuHttpCache *c, AuCacheEntry *e);
 
 int au_cache_entry_status(const AuCacheEntry *e);

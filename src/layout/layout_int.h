@@ -343,6 +343,12 @@ struct AuLayout {
     AuLayoutStats stats;
     int depth;
     float view_scroll_x, view_scroll_y; /* during paint and hit testing */
+    /* Boxes placed against the viewport (position: fixed outside any
+     * transform, or sticky), found by l_build_stacking; nview_boxes may
+     * exceed what the array keeps. */
+#define L_VIEW_BOXES 64
+    LBox *view_boxes[L_VIEW_BOXES];
+    uint32_t nview_boxes;
     bool need_paint;
     bool need_restack;
     bool full_layout; /* the viewport changed: no subtree may be reused */

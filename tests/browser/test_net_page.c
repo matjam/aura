@@ -11,6 +11,7 @@
 #include "tls_fixtures.h"
 
 #include "browser/browser.h"
+#include "net/cache.h"
 #include "net/cookies.h"
 #include "net/hsts.h"
 #include "net/loader.h"
@@ -703,6 +704,95 @@ static void test_entropy_and_stop(void)
     env_free(&e);
 }
 
+/* ---- The HTTP cache through the browser ---- */
+
+/* Requests the server saw since *seen, then moves *seen on. */
+static int new_requests(FakeServer *s, int *seen, int *conditional)
+{
+    int n = s->nreq - *seen;
+    for (int i = *seen; i < s->nreq; i++)
+        if (strstr(s->requests[i], "\r\nIf-None-Match:") || strstr(s->requests[i], "\r\nIf-Modified-Since:"))
+            (*conditional)++;
+    *seen = s->nreq;
+    return n;
+}
+
+/* A site whose pages say no-cache with an ETag (as Wikipedia's do) and
+ * whose style sheet is fresh for five minutes: a second page reuses the
+ * style sheet, Back shows the first page from the cache with no request,
+ * and visiting the first page again revalidates it. */
+static void test_cache_navigation(void)
+{
+    Env e;
+    env_init(&e);
+    AuHttpCache *cache = au_cache_new(1 << 20);
+    au_net_set_cache(e.net, cache);
+    FakeServer *s = fake_server(&e.f, "wiki.test", 80);
+    static char pa[512], pb[512], css[256], nm[256];
+    const char *a = "<!DOCTYPE html><title>A</title><link rel=stylesheet href=/s.css><p>page a "
+                    "<a href=\"http://wiki.test/b\">to b</a>";
+    const char *bb = "<!DOCTYPE html><title>B</title><link rel=stylesheet href=/s.css><p>page b";
+    snprintf(pa, sizeof pa,
+             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: private, max-age=0, must-revalidate\r\n"
+             "ETag: \"a1\"\r\nContent-Length: %u\r\n\r\n%s",
+             (unsigned)strlen(a), a);
+    snprintf(pb, sizeof pb,
+             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: private, max-age=0, must-revalidate\r\n"
+             "ETag: \"b1\"\r\nContent-Length: %u\r\n\r\n%s",
+             (unsigned)strlen(bb), bb);
+    snprintf(css, sizeof css,
+             "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nCache-Control: public, max-age=300\r\n"
+             "Content-Length: 19\r\n\r\np { color: green; }");
+    snprintf(nm, sizeof nm, "HTTP/1.1 304 Not Modified\r\nETag: \"a1\"\r\n\r\n");
+    int seen = 0, cond = 0;
+
+    fake_respond(s, pa);
+    fake_respond(s, css);
+    au_bw_new_tab(e.w, "http://wiki.test/a", true, -1);
+    settle(&e, 500);
+    paint(e.w);
+    CHECK(page_text_has(&e, "page a"), "first visit shows a");
+    CHECK(new_requests(s, &seen, &cond) == 2, "first visit: page and style sheet");
+
+    fake_respond(s, pb);
+    CHECK(click_link(&e, "http://wiki.test/b"), "link to b");
+    settle(&e, 500);
+    paint(e.w);
+    int n = new_requests(s, &seen, &cond);
+    CHECK(page_text_has(&e, "page b") && n == 1, "in-site navigation: only the page goes out (%d)", n);
+
+    au_bw_back(e.w);
+    settle(&e, 500);
+    paint(e.w);
+    n = new_requests(s, &seen, &cond);
+    CHECK(page_text_has(&e, "page a") && n == 0, "Back: no request (%d)", n);
+    au_bw_forward(e.w);
+    settle(&e, 500);
+    n = new_requests(s, &seen, &cond);
+    CHECK(page_text_has(&e, "page b") && n == 0, "Forward: no request (%d)", n);
+
+    fake_respond(s, nm);
+    au_bw_navigate(e.w, "http://wiki.test/a");
+    settle(&e, 500);
+    paint(e.w);
+    n = new_requests(s, &seen, &cond);
+    CHECK(page_text_has(&e, "page a") && n == 1 && cond == 1, "a new visit revalidates the page (%d, %d)", n, cond);
+
+    /* Reload revalidates the page; the style sheet stays fresh. */
+    fake_respond(s, nm);
+    au_bw_reload(e.w);
+    settle(&e, 500);
+    n = new_requests(s, &seen, &cond);
+    CHECK(n == 1 && cond == 2, "reload: one conditional request (%d, %d)", n, cond);
+    AuCacheStats cs;
+    au_cache_stats(cache, &cs);
+    CHECK(cs.history == 4 && cs.not_modified == 2 && cs.misses == 3, "cache counts: history %lu, 304 %lu, misses %lu",
+          cs.history, cs.not_modified, cs.misses);
+
+    env_free(&e);
+    au_cache_free(cache);
+}
+
 /* ---- Form submission over the fetcher ---- */
 
 static int confirms;
@@ -781,6 +871,7 @@ int main(void)
     test_errors();
     test_https_first_pages();
     test_entropy_and_stop();
+    test_cache_navigation();
     test_forms();
     au_fontset_free(fonts);
     printf("net_page: %d checks, %d failures\n", checks, failures);

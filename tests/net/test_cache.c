@@ -229,7 +229,18 @@ static void test_store_lookup(void)
     CHECK(!store(c, "http://a.test/p", "", 500, spec, "x", T0), "500");
     CHECK(store(c, "http://a.test/404", "", 404, spec, "x", T0) != NULL, "404 with max-age");
     snprintf(spec, sizeof spec, "Date: %s", d);
-    CHECK(!store(c, "http://a.test/none", "", 200, spec, "x", T0), "neither freshness nor validator");
+    CHECK(store(c, "http://a.test/none", "", 200, spec, "x", T0) != NULL, "neither freshness nor validator: kept");
+    CHECK(look(c, "http://a.test/none", "", T0, NULL, 0) == AU_CACHE_MISS, "neither freshness nor validator: miss");
+    {
+        AuHeaders hq;
+        au_headers_init(&hq);
+        AuCacheEntry *he = NULL;
+        CHECK(au_cache_lookup_history(c, "http://a.test/none", &hq, &he) == AU_CACHE_FRESH,
+              "neither freshness nor validator: history hit");
+        if (he)
+            au_cache_entry_release(c, he);
+        au_headers_free(&hq);
+    }
     snprintf(spec, sizeof spec, "Date: %s\nCache-Control: max-age=100\nVary: *", d);
     CHECK(!store(c, "http://a.test/vs", "", 200, spec, "x", T0), "Vary: *");
 
@@ -247,6 +258,26 @@ static void test_store_lookup(void)
     CHECK(look(c, "http://a.test/v", "Accept-Language: en\nX-Absent: 1", T0, NULL, 0) == AU_CACHE_MISS,
           "vary: a field absent then must stay absent");
 
+    /* History lookups honour Vary (a page that varies on Cookie is not
+     * shown to another cookie) and the request's no-store. */
+    snprintf(spec, sizeof spec, "Date: %s\nCache-Control: no-cache\nETag: \"c\"\nVary: Cookie", d);
+    store(c, "http://a.test/vc", "Cookie: id=alice", 200, spec, "alice", T0);
+    {
+        AuHeaders hq;
+        hdrs(&hq, "Cookie: id=alice");
+        CHECK(au_cache_lookup_history(c, "http://a.test/vc", &hq, &e) == AU_CACHE_FRESH && e, "history hit");
+        if (e)
+            au_cache_entry_release(c, e);
+        au_headers_free(&hq);
+        hdrs(&hq, "Cookie: id=bob");
+        CHECK(au_cache_lookup_history(c, "http://a.test/vc", &hq, &e) == AU_CACHE_MISS && !e,
+              "history: other cookie misses");
+        au_headers_free(&hq);
+        hdrs(&hq, "Cookie: id=alice\nCache-Control: no-store");
+        CHECK(au_cache_lookup_history(c, "http://a.test/vc", &hq, &e) == AU_CACHE_MISS, "history: request no-store");
+        au_headers_free(&hq);
+    }
+
     /* Invalidation removes every variant. */
     au_cache_invalidate(c, "http://a.test/v");
     CHECK(look(c, "http://a.test/v", "Accept-Language: en", T0, NULL, 0) == AU_CACHE_MISS, "invalidated");
@@ -256,8 +287,8 @@ static void test_store_lookup(void)
 
 static void test_limits(void)
 {
-    /* Budget 64 KB: entry limit 8 KB. */
-    AuHttpCache *c = au_cache_new(64 * 1024);
+    /* Budget 32 KB: entry limit 8 KB. */
+    AuHttpCache *c = au_cache_new(32 * 1024);
     CHECK(au_cache_entry_limit(c) == 8192, "entry limit %zu", au_cache_entry_limit(c));
     char d[32], spec[128], url[64];
     date_str(T0, d);
@@ -273,8 +304,8 @@ static void test_limits(void)
         if (i == 1) /* keep entry 0 recently used */
             look(c, "http://l.test/0", "", T0, NULL, 0);
     }
-    CHECK(au_cache_bytes(c) <= 64 * 1024, "within budget: %zu", au_cache_bytes(c));
-    CHECK(au_cache_count(c) < 20 && au_cache_count(c) >= 8, "evicted some: %zu", au_cache_count(c));
+    CHECK(au_cache_bytes(c) <= 32 * 1024, "within budget: %zu", au_cache_bytes(c));
+    CHECK(au_cache_count(c) < 20 && au_cache_count(c) >= 3, "evicted some: %zu", au_cache_count(c));
     CHECK(look(c, "http://l.test/19", "", T0, NULL, 0) == AU_CACHE_FRESH, "newest kept");
     CHECK(look(c, "http://l.test/2", "", T0, NULL, 0) == AU_CACHE_MISS, "least recently used evicted");
     /* An entry in use survives eviction. */
@@ -566,7 +597,7 @@ static void r_done(void *ctx, AuHttpTransfer *t, AuNetError e)
     ((R *)ctx)->err = e;
 }
 
-static void req(FakeNet *f, AuNet *net, R *r, const char *method, const char *url, bool reload)
+static void req_mode(FakeNet *f, AuNet *net, R *r, const char *method, const char *url, bool reload, bool history)
 {
     au_buf_free(&r->body);
     memset(r, 0, sizeof *r);
@@ -575,12 +606,93 @@ static void req(FakeNet *f, AuNet *net, R *r, const char *method, const char *ur
     au_http_request_init(&rq, url);
     rq.method = method;
     rq.reload = reload;
+    rq.history = history;
     if (strcmp(method, "GET"))
         rq.body = au_body_from_bytes("a=1", 3, "application/x-www-form-urlencoded");
     AuHttpCallbacks cb = {r, r_response, r_data, r_done, NULL, NULL};
     au_http_start(net, &rq, &cb);
     au_http_request_free(&rq);
     fake_run(f, net, 500, 10);
+}
+
+static void req(FakeNet *f, AuNet *net, R *r, const char *method, const char *url, bool reload)
+{
+    req_mode(f, net, r, method, url, reload, false);
+}
+
+/* Back and Forward use stored responses as they are; no-store responses
+ * and other sites' variants are never used. */
+static void test_history(void)
+{
+    FakeNet f;
+    fake_init(&f);
+    AuNet *net = au_net_new(&f.ops);
+    AuHttpCache *c = au_cache_new(1 << 20);
+    au_net_set_cache(net, c);
+    FakeServer *s = fake_server(&f, "h.test", 80);
+    char d[32], resp[512];
+    date_str(f.wall, d);
+    R r;
+    memset(&r, 0, sizeof r);
+    au_buf_init(&r.body);
+
+    /* no-cache with a validator: a normal load revalidates, Back does not. */
+    snprintf(resp, sizeof resp,
+             "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: no-cache\r\nETag: \"a\"\r\nContent-Length: 4\r\n\r\npage",
+             d);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/nc", false);
+    CHECK(r.err == AU_NET_OK && s->nreq == 1, "first load");
+    req_mode(&f, net, &r, "GET", "http://h.test/nc", false, true);
+    CHECK(r.err == AU_NET_OK && r.from_cache && !r.revalidated && s->nreq == 1 && r.body.len == 4,
+          "history: no-cache page from the cache, nreq %d", s->nreq);
+
+    /* Stale, must-revalidate: Back still uses it, an hour later. */
+    snprintf(resp, sizeof resp,
+             "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: max-age=10, must-revalidate\r\nContent-Length: 2\r\n\r\nmr",
+             d);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/mr", false);
+    f.wall += 3600;
+    req_mode(&f, net, &r, "GET", "http://h.test/mr", false, true);
+    CHECK(r.from_cache && s->nreq == 2, "history: stale must-revalidate page from the cache");
+
+    /* no-store: never stored, so Back fetches it again. */
+    date_str(f.wall, d);
+    snprintf(resp, sizeof resp,
+             "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: no-store\r\nContent-Length: 2\r\n\r\nns", d);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/ns", false);
+    fake_respond(s, resp);
+    req_mode(&f, net, &r, "GET", "http://h.test/ns", false, true);
+    CHECK(!r.from_cache && s->nreq == 4, "history: no-store goes out, nreq %d", s->nreq);
+
+    /* max-age=0 and no validator (Hacker News): a normal load goes out,
+     * Back does not. */
+    snprintf(resp, sizeof resp,
+             "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: private; max-age=0\r\nContent-Length: 2\r\n\r\nhn", d);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/hn", false);
+    fake_respond(s, resp);
+    req(&f, net, &r, "GET", "http://h.test/hn", false);
+    CHECK(!r.from_cache && s->nreq == 6, "max-age=0 without validator: a normal load goes out");
+    req_mode(&f, net, &r, "GET", "http://h.test/hn", false, true);
+    CHECK(r.from_cache && s->nreq == 6 && r.body.len == 2, "max-age=0 without validator: history from the cache");
+
+    /* Not cached at all: goes out. */
+    fake_respond(s, resp);
+    req_mode(&f, net, &r, "GET", "http://h.test/new", false, true);
+    CHECK(!r.from_cache && s->nreq == 7, "history: a miss goes out");
+
+    /* A reload is never served from history. */
+    fake_respond(s, resp);
+    req_mode(&f, net, &r, "GET", "http://h.test/nc", true, true);
+    CHECK(!r.from_cache && s->nreq == 8, "reload wins over history");
+
+    au_buf_free(&r.body);
+    au_net_free(net);
+    au_cache_free(c);
+    fake_free(&f);
 }
 
 static void test_client(void)
@@ -677,6 +789,7 @@ int main(void)
     test_storage();
     test_disk_cache();
     test_client();
+    test_history();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

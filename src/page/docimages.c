@@ -186,10 +186,10 @@ void au_docimages_paint_begin(AuDocImages *m) { m->in_paint = true; }
 void au_docimages_paint_end(AuDocImages *m)
 {
     m->in_paint = false;
-    /* What was decoded for this paint has just been painted. */
-    uint32_t n = au_image_cache_count(m->cache);
-    for (uint32_t i = 0; i < n; i++)
-        au_image_entry_take_changed(au_image_cache_entry(m->cache, i));
+    /* Images decoded during this paint keep their changed mark, so that
+     * images_changed repaints them where they show: a paint that started
+     * a decode drew the image without pixels, and a partial paint (a
+     * scrolled strip) did not draw it everywhere. */
     au_image_cache_trim(m->cache);
 }
 

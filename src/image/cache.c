@@ -460,7 +460,9 @@ void au_image_cache_trim(AuImageCache *c)
         total -= entry_bytes(victim);
         drop_pixels(victim);
         victim->state = AU_IMAGE_SIZED;
-        victim->changed = true;
+        /* Not marked changed: what is on screen stays right, and the
+         * image decodes again when it is painted next (marking it would
+         * repaint it at once and decode it again, every frame). */
         c->evictions++;
     }
 }

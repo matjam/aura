@@ -190,6 +190,14 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height);
 /* Paints the document so that document point (scroll_x, scroll_y) is at
  * view's top-left; paints every pixel of view. */
 void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y);
+/* For scrolling by moving pixels: the view scrolled from (ox, oy) to
+ * (nx, ny). Brings the layout up to date and writes the viewport areas
+ * (whole pixels) to paint again after moving the last paint's pixels by
+ * the scroll distance: those of viewport-fixed and sticky boxes (at most
+ * max, 32 at most). Returns how many, or -1 when the pixels cannot be
+ * moved (layout or paint out of date, a fixed canvas background; see
+ * au_layout_scroll_damage). */
+int au_docview_scroll_damage(AuDocView *dv, int ox, int oy, int nx, int ny, AuIRect *out, int max);
 
 /* ---- Input ----
  * Mouse events carry document coordinates in ev->x, ev->y; the view uses

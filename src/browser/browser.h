@@ -103,6 +103,13 @@ typedef struct AuBrowserHost {
     /* A yes or no question (resending a form, sending one from a secure
      * page over plain http). Without it the answer is yes. */
     bool (*confirm)(void *ctx, AuBrowserWindow *w, const char *message);
+    /* Optional. The page scrolled and the pixels already painted in area
+     * (the page rectangle) stay right moved by (dx, dy): the shell moves
+     * them (in its surface and on screen) before painting what is
+     * invalidated next. The model invalidates the exposed strips itself
+     * after this call. Without it, a scroll invalidates the whole page.
+     * AuPresent (present.h) does the bookkeeping. */
+    void (*scroll_area)(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy);
 } AuBrowserHost;
 
 struct AuTab {
@@ -142,7 +149,14 @@ struct AuBrowserWindow {
     AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
     bool painting;      /* inside au_bw_paint */
     bool hscroll_dirty; /* the page width changed during a paint: check the scroll bar at the next idle */
+    /* The page scrolled under a resting pointer: hover follows once the
+     * scrolling has paused (AU_REHOVER_MS after scrolled_ms), not at every
+     * step, since a hover change can restyle the whole document. */
+    bool rehover_pending;
+    uint32_t scrolled_ms;
 };
+
+#define AU_REHOVER_MS 150
 
 #define AU_MAX_FETCHERS 8
 #define AU_MAX_CLOSED_TABS 10

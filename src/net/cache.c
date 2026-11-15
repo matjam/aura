@@ -43,7 +43,10 @@ struct AuHttpCache {
     size_t bytes, count, max;
     AuCacheStorage storage;
     bool have_storage;
+    AuCacheStats stats;
 };
+
+void au_cache_stats(const AuHttpCache *c, AuCacheStats *out) { *out = c->stats; }
 
 static uint32_t hash_str(const char *s)
 {
@@ -157,7 +160,10 @@ size_t au_cache_count(const AuHttpCache *c) { return c->count; }
 
 size_t au_cache_entry_limit(const AuHttpCache *c)
 {
-    size_t l = c->max / 8;
+    /* A quarter of the budget: a Wikipedia article's HTML (1.3 MB for
+     * "Mac (computer)") did not fit an eighth of the 4 MB default, so Back
+     * fetched it again. */
+    size_t l = c->max / 4;
     return l > ENTRY_LIMIT_MAX ? ENTRY_LIMIT_MAX : l;
 }
 
@@ -455,6 +461,8 @@ static void storage_put(AuHttpCache *c, const AuCacheEntry *e)
     au_buf_free(&b);
 }
 
+static AuCacheEntry *find_entry(AuHttpCache *c, const char *url, const AuHeaders *req);
+
 AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *req, int64_t now, AuCacheEntry **out)
 {
     *out = NULL;
@@ -462,31 +470,11 @@ AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *r
     au_cache_control_parse(req, &rcc);
     if (rcc.no_store)
         return AU_CACHE_MISS;
-    uint32_t h = hash_str(url);
-    AuCacheEntry *best = NULL;
-    for (AuCacheEntry *x = c->buckets[h % NBUCKETS]; x; x = x->hnext)
-        if (x->hash == h && !strcmp(x->url, url) && vary_matches(x, req) &&
-            (!best || x->response_time > best->response_time))
-            best = x;
-    if (!best && c->have_storage && c->storage.load) {
-        AuBuf b;
-        au_buf_init(&b);
-        if (c->storage.load(c->storage.ctx, url, &b)) {
-            AuCacheEntry *e = au_cache_entry_parse(b.data, b.len);
-            if (e && !strcmp(e->url, url) && e->len <= au_cache_entry_limit(c)) {
-                insert(c, e);
-                if (e->linked && vary_matches(e, req))
-                    best = e;
-            } else {
-                au_cache_entry_free(e);
-                if (c->storage.remove)
-                    c->storage.remove(c->storage.ctx, url);
-            }
-        }
-        au_buf_free(&b);
-    }
-    if (!best)
+    AuCacheEntry *best = find_entry(c, url, req);
+    if (!best) {
+        c->stats.misses++;
         return AU_CACHE_MISS;
+    }
     touch(c, best);
     AuCacheControl cc;
     au_cache_control_parse(&best->resp, &cc);
@@ -503,11 +491,68 @@ AuCacheState au_cache_lookup(AuHttpCache *c, const char *url, const AuHeaders *r
         fresh = true;
     if (cc.no_cache || rcc.no_cache || pragma_no_cache)
         fresh = false;
-    if (!fresh && !has_validator(best))
+    if (!fresh && !has_validator(best)) {
+        c->stats.misses++;
         return AU_CACHE_MISS;
+    }
     best->refs++;
     *out = best;
+    if (fresh)
+        c->stats.fresh++;
+    else
+        c->stats.stale++;
     return fresh ? AU_CACHE_FRESH : AU_CACHE_STALE;
+}
+
+AuCacheState au_cache_lookup_history(AuHttpCache *c, const char *url, const AuHeaders *req, AuCacheEntry **out)
+{
+    *out = NULL;
+    AuCacheControl rcc;
+    au_cache_control_parse(req, &rcc);
+    if (rcc.no_store)
+        return AU_CACHE_MISS;
+    AuCacheEntry *best = find_entry(c, url, req);
+    if (!best) {
+        c->stats.misses++;
+        return AU_CACHE_MISS;
+    }
+    touch(c, best);
+    best->refs++;
+    *out = best;
+    c->stats.history++;
+    return AU_CACHE_FRESH;
+}
+
+/* The newest entry for url whose Vary fields match req, from memory or
+ * the second-level storage. */
+static AuCacheEntry *find_entry(AuHttpCache *c, const char *url, const AuHeaders *req)
+{
+    uint32_t h = hash_str(url);
+    AuCacheEntry *best = NULL;
+    for (AuCacheEntry *x = c->buckets[h % NBUCKETS]; x; x = x->hnext)
+        if (x->hash == h && !strcmp(x->url, url) && vary_matches(x, req) &&
+            (!best || x->response_time > best->response_time))
+            best = x;
+    if (!best && c->have_storage && c->storage.load) {
+        AuBuf b;
+        au_buf_init(&b);
+        if (c->storage.load(c->storage.ctx, url, &b)) {
+            AuCacheEntry *e = au_cache_entry_parse(b.data, b.len);
+            if (e && !strcmp(e->url, url) && e->len <= au_cache_entry_limit(c)) {
+                insert(c, e);
+                if (e->linked && vary_matches(e, req)) {
+                    best = e;
+                    c->stats.from_storage++;
+                }
+            } else {
+                au_cache_entry_free(e);
+                if (c->storage.remove)
+                    c->storage.remove(c->storage.ctx, url);
+            }
+        }
+        au_buf_free(&b);
+    }
+    return best;
 }
 
 AuCacheWriter *au_cache_begin(AuHttpCache *c, const char *url, const AuHeaders *req, int status, const char *reason,
@@ -548,11 +593,9 @@ AuCacheWriter *au_cache_begin(AuHttpCache *c, const char *url, const AuHeaders *
     e->reason = dupz(reason ? reason : "");
     e->request_time = request_time;
     e->response_time = response_time;
-    /* Worth keeping only when it can be reused or revalidated. */
-    if (au_cache_freshness_lifetime(status, &e->resp) == 0 && !has_validator(e)) {
-        au_cache_entry_free(e);
-        return NULL;
-    }
+    /* Kept even when it can be neither reused nor revalidated (no
+     * freshness, no validator, as Hacker News pages are): a normal lookup
+     * misses it, and Back shows it (au_cache_lookup_history). */
     AuCacheWriter *w = au_calloc(sizeof *w);
     w->cache = c;
     w->e = e;
@@ -586,6 +629,7 @@ void au_cache_commit(AuCacheWriter *w)
     e->body = (uint8_t *)au_buf_take(&w->body, &e->len);
     au_free(w);
     insert(c, e);
+    c->stats.stored++;
     if (e->linked)
         storage_put(c, e);
 }
@@ -594,6 +638,7 @@ void au_cache_update(AuHttpCache *c, AuCacheEntry *e, const AuHeaders *resp304, 
                      int64_t response_time)
 {
     bool linked = e->linked;
+    c->stats.not_modified++;
     if (linked) {
         c->bytes -= e->cost;
     }

@@ -333,6 +333,7 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
     rq.user_activated = frq->user_activated;
     rq.reload = frq->cache == AU_FETCH_CACHE_BYPASS;
     rq.revalidate = frq->cache == AU_FETCH_CACHE_REVALIDATE;
+    rq.history = frq->cache == AU_FETCH_CACHE_HISTORY;
     rq.allow_http_fallback = frq->allow_http_fallback;
     rq.method = frq->method;
     if (frq->body)
