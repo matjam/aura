@@ -7,8 +7,10 @@
 #   ppc   build the Mac OS 9 application with Retro68 (build/ppc)
 #   all   test, then ppc (default)
 #
-# The Retro68 PowerPC toolchain is found through RETRO68, or in os9-protect
-# (OS9_PROTECT, default ../os9-protect).
+# The Retro68 PowerPC toolchain is found through RETRO68, then in
+# ~/.local/opt/retro68, then in os9-protect (OS9_PROTECT, default
+# ../os9-protect). A build/ppc folder keeps the toolchain it was first
+# configured with; delete it to switch.
 set -eu
 cd "$(dirname "$0")"
 
@@ -24,7 +26,10 @@ run_tests() {
 
 ppc() {
     if [ -z "${RETRO68:-}" ]; then
-        RETRO68=${OS9_PROTECT:-../os9-protect}/toolchain/build/toolchain
+        RETRO68=$HOME/.local/opt/retro68
+        if [ ! -f "$RETRO68/powerpc-apple-macos/cmake/retroppc.toolchain.cmake" ]; then
+            RETRO68=${OS9_PROTECT:-../os9-protect}/toolchain/build/toolchain
+        fi
     fi
     tc=$RETRO68/powerpc-apple-macos/cmake/retroppc.toolchain.cmake
     if [ ! -f "$tc" ]; then

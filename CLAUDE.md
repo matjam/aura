@@ -50,7 +50,12 @@ change to the top-level file.
 - `./build.sh test` builds for the host and runs the tests.
 - `./build.sh ppc` builds for Mac OS 9 with Retro68 (GCC 16.1, Multiversal
   Interfaces). The toolchain is found through `RETRO68`, then in
-  `../os9-protect/toolchain/build/toolchain`.
+  `~/.local/opt/retro68`, then in
+  `../os9-protect/toolchain/build/toolchain`. A `build/ppc` folder keeps
+  the toolchain it was first configured with; delete it to switch.
+  The guest scripts find QEMU through `QEMU`, then in
+  `~/.local/opt/qemu-os9/bin`, then in os9-protect's local build. The
+  guest's disk images still come from os9-protect (`OS9_PROTECT`).
 
 The test machine is the QEMU Mac OS 9.2.2 guest in `os9-protect`
 (`run.sh`, `tools/push.sh` to copy files in, `tools/qmp.py` for
@@ -152,8 +157,8 @@ http and https show a placeholder after a simulated load. Image sizes
 come from the file headers (PNG, GIF, JPEG, BMP); there are no decoders
 yet. The font preferences reach the engine as the generic families of
 the font set and a user style sheet (`html { font-size }`, monospace
-size); the minimum font size and text zoom have no hook in `src/css`
-yet.
+size). `src/css` now has `au_css_resolver_set_font_prefs` (default
+sizes, text zoom, minimum size); the shell does not call it yet.
 
 To render a browser window on the host, run
 `build/host/src/platform/host/aura-host chrome -w 800 -h 600 --tabs left

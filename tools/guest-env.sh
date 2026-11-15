@@ -15,8 +15,9 @@
 # AURA_BASE    the os9-protect disk to copy, overriding the one BASE names
 #              (give BASE a new name too, so the copy is not mixed up with
 #              another base's).
-# QEMU         the QEMU binary (default: os9-protect's local build, else
-#              qemu-system-ppc from PATH).
+# QEMU         the QEMU binary (default: ~/.local/opt/qemu-os9/bin, then
+#              os9-protect's local build, then qemu-system-ppc from PATH).
+# QEMU_IMG     qemu-img, found the same way.
 
 aura_repo=$(cd "$(dirname "$0")/.." && pwd)
 # The main checkout: the parent of the shared .git directory.
@@ -35,16 +36,24 @@ if [ -z "${AURA_BASE:-}" ]; then
       ;;
   esac
 fi
+AURA_QEMU_OPT=$HOME/.local/opt/qemu-os9/bin
 if [ -z "${QEMU:-}" ]; then
-  if [ -x "$OS9_PROTECT/qemu/build/qemu-system-ppc" ]; then
+  if [ -x "$AURA_QEMU_OPT/qemu-system-ppc" ]; then
+    QEMU=$AURA_QEMU_OPT/qemu-system-ppc
+  elif [ -x "$OS9_PROTECT/qemu/build/qemu-system-ppc" ]; then
     QEMU=$OS9_PROTECT/qemu/build/qemu-system-ppc
   else
     QEMU=qemu-system-ppc
   fi
 fi
-QEMU_IMG=${QEMU_IMG:-qemu-img}
-if [ -x "$OS9_PROTECT/qemu/build/qemu-img" ]; then
-  QEMU_IMG=$OS9_PROTECT/qemu/build/qemu-img
+if [ -z "${QEMU_IMG:-}" ]; then
+  if [ -x "$AURA_QEMU_OPT/qemu-img" ]; then
+    QEMU_IMG=$AURA_QEMU_OPT/qemu-img
+  elif [ -x "$OS9_PROTECT/qemu/build/qemu-img" ]; then
+    QEMU_IMG=$OS9_PROTECT/qemu/build/qemu-img
+  else
+    QEMU_IMG=qemu-img
+  fi
 fi
 
 # Aura's own files in AURA_RUN. One guest runs at a time, so the socket,
