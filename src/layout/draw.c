@@ -424,7 +424,7 @@ static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col
     float dash = dotted ? w : 2 * w, gap = w;
     if (dash <= 0)
         return;
-    int n = (int)((len + gap) / (dash + gap));
+    int n = au_f2px((len + gap) / (dash + gap));
     if (n < 1)
         n = 1;
     if (n > 4000)

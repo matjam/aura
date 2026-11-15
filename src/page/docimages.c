@@ -209,7 +209,7 @@ void au_docimages_invalidate(AuDocImages *m, AuLayout *L, AuIRect doc_all, void 
             if (m->t[k].entry != e || !au_layout_element_rect(L, m->t[k].el, &r))
                 continue;
             any = true;
-            fn(ctx, (AuIRect){(int)r.x - 1, (int)r.y - 1, (int)(r.x + r.w) + 2, (int)(r.y + r.h) + 2});
+            fn(ctx, (AuIRect){au_f2px(r.x) - 1, au_f2px(r.y) - 1, au_f2px(r.x + r.w) + 2, au_f2px(r.y + r.h) + 2});
         }
         if (!any)
             fn(ctx, doc_all);
