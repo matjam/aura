@@ -479,6 +479,9 @@ static void apply_prefs(void)
             AuCacheStorage st;
             au_disk_cache_storage(N.disk, &st);
             au_cache_set_storage(N.cache, &st);
+            /* The disk has every stored body: memory keeps the last
+             * megabyte used instead of the whole memory cache budget. */
+            au_cache_set_resident(N.cache, 1024u * 1024u);
         } else {
             au_cache_set_storage(N.cache, NULL);
         }
