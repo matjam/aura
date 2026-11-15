@@ -303,7 +303,8 @@ typedef struct AuCustomProps AuCustomProps;
 typedef struct AuStyleInh { /* inherited, common */
     uint32_t refs;
     AuColor color;
-    float font_size;    /* px */
+    float font_size;    /* px: the used size, after the minimum font size */
+    float font_size_spec; /* px before the minimum: what relative sizes of children start from */
     float font_stretch; /* percent */
     AuLen line_height;  /* NORMAL, NUMBER or PX */
     AuCssBlob *font_family;     /* COMMA_LIST of STRING/IDENT/KEYWORD (generic families) */
@@ -319,6 +320,7 @@ typedef struct AuStyleInh { /* inherited, common */
     uint8_t writing_mode;
     uint8_t visibility;
     uint8_t list_style_position;
+    uint8_t font_size_kw; /* 1..8 for xx-small..xxx-large when the size comes from a keyword, else 0 */
 } AuStyleInh;
 
 typedef struct AuStyleInhRare { /* inherited, rarely set */
@@ -583,6 +585,33 @@ void au_css_device_default(AuCssDevice *d);
  * and the advance of "0" in px. Without a callback both are 0.5em. */
 typedef void (*AuCssMetricsFn)(void *ctx, const AuStyle *style, float *ex_px, float *ch_px);
 
+/* ---- Font preferences ----
+ * The user's font size settings, applied while computing font-size (they
+ * follow Chrome's behaviour):
+ * - default_size is the size of "medium". The other absolute keywords
+ *   come from Chrome's table for a 16px default, else from its scale
+ *   factors (xx-small 3/5, x-small 3/4, small 8/9, large 6/5, x-large
+ *   3/2, xx-large 2, xxx-large 3).
+ * - default_mono_size replaces default_size when font-family is exactly
+ *   "monospace" (so <pre> and <code> get 13px). An element that changes
+ *   between monospace and other families without setting font-size
+ *   recomputes a keyword size from the other default, and scales any
+ *   other inherited size by the ratio of the two defaults.
+ * - text_zoom multiplies absolute font sizes (keywords and absolute
+ *   lengths); relative sizes (em, %, larger) follow from their parent,
+ *   so nothing is zoomed twice. Other properties are not zoomed.
+ * - min_size clamps the computed font-size (what layout and em lengths
+ *   use) but not font_size_spec, which children's relative sizes start
+ *   from, so nesting does not compound the clamp. A size of 0 stays 0. */
+typedef struct AuCssFontPrefs {
+    float default_size;      /* px, 16 */
+    float default_mono_size; /* px, 13 */
+    float text_zoom;         /* 1 */
+    float min_size;          /* px, 0 for none */
+} AuCssFontPrefs;
+
+void au_css_font_prefs_default(AuCssFontPrefs *p);
+
 /* ---- The resolver ---- */
 typedef struct AuCssResolver AuCssResolver;
 
@@ -591,6 +620,11 @@ void au_css_resolver_free(AuCssResolver *r);
 void au_css_resolver_set_device(AuCssResolver *r, const AuCssDevice *d);
 const AuCssDevice *au_css_resolver_device(const AuCssResolver *r);
 void au_css_resolver_set_metrics(AuCssResolver *r, AuCssMetricsFn fn, void *ctx);
+/* Sets the font preferences (copied) and restyles everything. A new
+ * resolver uses au_css_font_prefs_default. Values out of range (sizes
+ * not above 0, zoom not above 0) fall back to the defaults. */
+void au_css_resolver_set_font_prefs(AuCssResolver *r, const AuCssFontPrefs *p);
+const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r);
 /* Adds a user or author sheet after the existing ones; r owns it. */
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s);
 /* Removes and frees a sheet. */

@@ -155,6 +155,7 @@ struct AuCssResolver {
     AuCssSheet **sheets;
     uint32_t nsheets, sheets_cap;
     AuCssDevice dev;
+    AuCssFontPrefs fprefs;
     AuCssMetricsFn metrics;
     void *metrics_ctx;
     bool index_dirty;
@@ -499,6 +500,7 @@ AuCssResolver *au_css_resolver_new(void)
     au_css_init();
     AuCssResolver *r = au_calloc(sizeof *r);
     au_css_device_default(&r->dev);
+    au_css_font_prefs_default(&r->fprefs);
     r->ua = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false);
     r->ua_quirks = css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true);
     r->index_dirty = true;
@@ -567,6 +569,33 @@ void au_css_resolver_set_metrics(AuCssResolver *r, AuCssMetricsFn fn, void *ctx)
     r->metrics_ctx = ctx;
     r->full_restyle = true;
 }
+
+void au_css_font_prefs_default(AuCssFontPrefs *p)
+{
+    p->default_size = 16;
+    p->default_mono_size = 13;
+    p->text_zoom = 1;
+    p->min_size = 0;
+}
+
+void au_css_resolver_set_font_prefs(AuCssResolver *r, const AuCssFontPrefs *p)
+{
+    AuCssFontPrefs d;
+    au_css_font_prefs_default(&d);
+    /* Written so NaN fails each test. */
+    if (p->default_size > 0 && p->default_size < 1000)
+        d.default_size = p->default_size;
+    if (p->default_mono_size > 0 && p->default_mono_size < 1000)
+        d.default_mono_size = p->default_mono_size;
+    if (p->text_zoom > 0 && p->text_zoom < 100)
+        d.text_zoom = p->text_zoom;
+    if (p->min_size >= 0 && p->min_size < 1000)
+        d.min_size = p->min_size;
+    r->fprefs = d;
+    r->full_restyle = true;
+}
+
+const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r) { return &r->fprefs; }
 
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s)
 {
@@ -1256,7 +1285,7 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
 }
 
 /* Properties computed first, in this order. */
-static const uint16_t priority_props[] = {AU_PROP_direction, AU_PROP_writing_mode, AU_PROP_font_size,
+static const uint16_t priority_props[] = {AU_PROP_direction, AU_PROP_writing_mode, AU_PROP_font_family, AU_PROP_font_size,
                                           AU_PROP_line_height};
 
 static bool is_priority(uint16_t p)
@@ -1349,6 +1378,7 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     cs.cc.style = s;
     cs.cc.parent = parent;
     cs.cc.dev = &r->dev;
+    cs.cc.fp = &r->fprefs;
     cs.cc.root = r->root_style && r->root_style != s ? r->root_style : NULL;
     cs.cc.metrics = r->metrics;
     cs.cc.metrics_ctx = r->metrics_ctx;
@@ -1390,6 +1420,8 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     /* priority properties */
     for (size_t k = 0; k < CSS_ARRAY_LEN(priority_props); k++) {
         uint16_t p = priority_props[k];
+        if (p == AU_PROP_line_height) /* line-height may use the final font size */
+            css_compute_font_size_fixup(&cs.cc, r->winners[AU_PROP_font_size].gen == r->gen);
         if (r->winners[p].gen == r->gen)
             apply_decl(&cs, p, r->winners[p].decl, r->winners[p].key);
     }

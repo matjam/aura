@@ -39,7 +39,8 @@ inline-block, spacing. Ahem: every glyph is 1em square; 16px font gives
 
 x</pre>
 ---
-#t h=64 lines=4
+// pre is monospace: 13px by default
+#t h=52 lines=4
 
 === pre-wrap wraps and keeps spaces
 <body style="margin:0;width:80px">
@@ -199,7 +200,8 @@ x</div>
 <body style="margin:0">
 <pre style="margin:0;tab-size:4">	<span id=a style="display:inline-block;width:5px;height:5px"></span></pre>
 ---
-#a x=64
+// 4 spaces of the 13px monospace default
+#a x=52
 
 === text-transform does not change Ahem widths
 <body style="margin:0">
@@ -243,11 +245,13 @@ hit 10 8 <p>
 <body style="margin:0">
 <pre style="margin:0">x	x	<span id=s>x</span></pre>
 ---
-#s x=256
-pixel 8 8 000000
-pixel 40 8 ffffff
-pixel 136 8 000000
-pixel 264 8 000000
+// 13px monospace: tab stops every 8 x 13 = 104px
+#s x=208
+pixel 6 6 000000
+pixel 40 6 ffffff
+pixel 110 6 000000
+pixel 150 6 ffffff
+pixel 214 6 000000
 
 === dashed and wavy text decorations
 <body style="margin:0">

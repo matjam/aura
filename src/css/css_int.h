@@ -535,6 +535,7 @@ typedef struct CssComputeCtx {
     const AuStyle *parent;
     const AuCssDevice *dev;
     const AuStyle *root; /* the root element's style, for rem; NULL when computing the root */
+    const AuCssFontPrefs *fp; /* NULL: the defaults */
     AuCssMetricsFn metrics;
     void *metrics_ctx;
     const AuElement *el;
@@ -542,6 +543,7 @@ typedef struct CssComputeCtx {
     bool quirks;
     float ex, ch; /* cached font metrics, < 0 until asked */
     float font_size_for_em; /* the parent's font size while computing font-size */
+    bool font_size_mode;    /* computing font-size: em is the parent's, absolute units zoom */
     uint8_t flags;
 } CssComputeCtx;
 
@@ -553,6 +555,10 @@ float css_length_px(CssComputeCtx *c, float v, int unit);
 bool css_compute_apply(CssComputeCtx *c, uint16_t prop, const AuCssValue *v, AuCssBlob *blob);
 void css_compute_inherit(CssComputeCtx *c, uint16_t prop);
 void css_compute_initial(CssComputeCtx *c, uint16_t prop);
+/* After font-family and font-size: keyword sizes and monospace switches
+ * for an element that did not declare font-size (declared false), then
+ * the minimum font size. */
+void css_compute_font_size_fixup(CssComputeCtx *c, bool declared);
 void *css_mut_group(AuStyle *s, int g);
 /* Fixups after all longhands: blockification, border widths, overflow. */
 void css_compute_finish(CssComputeCtx *c, uint16_t parent_display);

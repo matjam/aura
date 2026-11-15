@@ -413,7 +413,8 @@ void css_style_init_defaults(void)
         *(uint32_t *)grp = 1;
         *group_slot(s, g) = grp;
     }
-    s->inh->font_size = 16;
+    s->inh->font_size = s->inh->font_size_spec = 16;
+    s->inh->font_size_kw = 4; /* medium */
     CssComputeCtx c;
     memset(&c, 0, sizeof c);
     AuCssDevice dev;
