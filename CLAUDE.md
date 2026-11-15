@@ -275,6 +275,14 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   450 to 800 ms. An article is estimated at 12 to 15 MB (its script heap
   is most of it), a very long one (World War II, 2 MB of HTML) at over
   30 MB, which is not kept.
+- **Measured in the guest** (stock base, Wikipedia, live): Back to a
+  kept article took 56 ms in the engine, 46 ms of it hiding the page
+  left, and the page was painted 971 ms after the key; on screen the
+  change showed about 3 seconds after the key was sent, because the
+  page being left was still running its scripts. Loading the same
+  articles took 30 to 70 seconds. View > Debug > Page Timings shows
+  these times for a page that Back or Forward showed from the kept
+  documents, with the number and estimated size of kept documents.
 - **To try it on the host**, run `aura-host chrome --net --tab URL --do
   go:URL2 --do back --do cache`: `back` prints whether the kept document
   was shown and how long it took, `cache` the kept documents and their
