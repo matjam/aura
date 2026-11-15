@@ -135,6 +135,7 @@ typedef struct AuLayoutStats {
     size_t frag_bytes;     /* heap bytes of lines and fragments */
     uint32_t word_hits, word_misses; /* text measurement cache */
     uint32_t layouts_skipped;        /* independent subtrees reused by the last layout */
+    uint32_t missing_glyphs;         /* drawn as missing-glyph boxes (no face had them), since creation */
 } AuLayoutStats;
 void au_layout_stats(const AuLayout *L, AuLayoutStats *s);
 

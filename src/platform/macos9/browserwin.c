@@ -995,7 +995,11 @@ void browserwin_benchmark(BrowserWin *b)
              (unsigned long)(fill % 10));
     snprintf(l2, sizeof l2, "Chrome (toolbar and tabs): %lu.%lu ms", (unsigned long)(chrome / 10),
              (unsigned long)(chrome % 10));
-    snprintf(l3, sizeof l3, "Fonts: %u faces", (unsigned)au_fontset_count(g_fonts));
+    AuFontSetStats fst;
+    au_fontset_stats(g_fonts, &fst);
+    snprintf(l3, sizeof l3, "Fonts: %u faces in %lu ms (%d bundled, %lu ms); %u loaded, %lu KB",
+             (unsigned)au_fontset_count(g_fonts), (unsigned long)mac_fonts_ms(), mac_fonts_bundled(),
+             (unsigned long)mac_fonts_bundled_ms(), (unsigned)fst.loaded, (unsigned long)(fst.loaded_bytes / 1024));
     Str255 p[4];
     mac_pstr(l0, p[0]);
     mac_pstr(l1, p[1]);

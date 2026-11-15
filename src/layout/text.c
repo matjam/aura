@@ -361,6 +361,7 @@ void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const cha
             j += a2;
         }
         shape(f, t + i, j - i, &r);
+        L->stats.missing_glyphs += (uint32_t)r.missing;
         if (ls != 0 || ws != 0) {
             float extra = 0;
             for (size_t g = 0; g < r.n; g++) {
