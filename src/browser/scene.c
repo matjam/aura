@@ -53,7 +53,9 @@ void au_scene_draw(AuCanvas *c, AuFontSet *fonts, int width, int height, int scr
     AuFontFace *georgia = au_fontset_match(fonts, "Georgia, serif", 400, false);
     AuFontFace *verdana = au_fontset_match(fonts, "Verdana, sans-serif", 400, false);
 
-    au_surface_clear(au_canvas_target(c), AU_RGB(250, 250, 247));
+    /* Fill only the scene's own area: the browser draws it inside the page
+     * area of a window whose chrome shares the surface. */
+    au_fill_rect(c, (AuRect){0, 0, (float)width, (float)height}, AU_RGB(250, 250, 247));
     au_canvas_translate(c, 0, (float)-scroll_y);
     float W = (float)width;
 
