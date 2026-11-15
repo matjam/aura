@@ -113,6 +113,20 @@ defGlobal('cancelAnimationFrame', function cancelAnimationFrame(id) { N.cancelAn
 
 /* ---------------- location ---------------- */
 
+class DOMStringList {
+    constructor() { throw new TypeError('Illegal constructor'); }
+    item(i) { i >>>= 0; return i < this.length ? this[i] : null; }
+    contains(s) { return Array.prototype.includes.call(this, str(s)); }
+    [Symbol.iterator]() { return Array.prototype[Symbol.iterator].call(this); }
+}
+tag(DOMStringList);
+defGlobal('DOMStringList', DOMStringList);
+const originList = (items) => {
+    const l = Object.create(DOMStringList.prototype);
+    items.forEach((v, i) => Object.defineProperty(l, i, { value: v, enumerable: true }));
+    Object.defineProperty(l, 'length', { value: items.length });
+    return Object.freeze(l);
+};
 class Location {
     constructor() { throw new TypeError('Illegal constructor'); }
     get href() { return N.docUrl(0); }
@@ -121,7 +135,18 @@ class Location {
     replace(v) { navigateTo(str(v), true); }
     reload() { N.reload(); }
     toString() { return N.docUrl(0); }
-    get ancestorOrigins() { return makeList(NodeList, doc, -1, null, []); }
+    /* The origins of the documents this one is nested in, the parent's first. */
+    get ancestorOrigins() {
+        const out = [];
+        let g = G;
+        for (let i = 0; i < 64; i++) {
+            const p = N.windowInfo(g, 1);
+            if (p === null || p === g) break;
+            out.push(N.windowInfo(p, 4));
+            g = p;
+        }
+        return originList(out);
+    }
 }
 function navigateTo(url, replace) {
     const t = url.trim();

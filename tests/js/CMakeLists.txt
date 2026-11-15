@@ -15,8 +15,13 @@ add_test(NAME js_workers
 add_test(NAME js_workers_inline
          COMMAND ${JS_TOOL} js --quiet --no-coro --kill 300 --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers_inline.js)
 
+# The kill timer is 4 s: the scripts that must finish (deep trees, filling
+# the heap) take well under 100 ms on an idle machine, and with 1 s a busy
+# machine or a sanitizer build stopped one of them as running too long.
+# The two endless loops then take 4 s each.
 add_test(NAME js_limits
-         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 4000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+set_tests_properties(js_limits PROPERTIES TIMEOUT 300)
 add_test(NAME js_lifetime
          COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/lifetime_setup.js ${JS_DIR}/lifetime_check.js)
 
