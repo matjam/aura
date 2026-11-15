@@ -193,6 +193,10 @@ static void set_failed(AuImageCache *c, AuImageEntry *e)
     e->state = AU_IMAGE_FAILED;
     drop_pixels(e);
     sync_view(e);
+    /* A failed image is never decoded again: its bytes are not needed. */
+    au_buf_free(&e->data);
+    au_buf_init(&e->data);
+    e->dec_pos = 0;
 }
 
 /* The decoder is finished with: its canvas becomes the entry's pixels. */
