@@ -1737,6 +1737,19 @@ bool au_frames_can_persist(AuDocView *dv)
     return au_dv_top(dv)->ndead == 0 || dv->parent;
 }
 
+/* Brings the frame list of dv and of every nested view up to date. Script
+ * calls it before it runs, so that window.frames, window[0] and
+ * window["name"] name the frames the parser has made so far: a frame's
+ * script reads parent.frames["sibling"] as soon as it starts. The depth
+ * is bounded by the nesting limit. */
+void au_frames_sync_all(AuDocView *dv)
+{
+    au_frames_sync(dv);
+    for (uint32_t i = 0; i < dv->nframes; i++)
+        if (dv->frames[i]->dv && dv->frames[i]->dv->doc)
+            au_frames_sync_all(dv->frames[i]->dv);
+}
+
 void au_frames_set_hidden(AuDocView *dv, bool hidden)
 {
     for (uint32_t i = 0; i < dv->nframes; i++)

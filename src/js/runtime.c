@@ -718,7 +718,7 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     js->wk = wk;
     js->settings = root->settings;
     js->settings.origin = NULL;
-    js->settings.memory_limit = root->settings.worker_memory_limit ? root->settings.worker_memory_limit : 8u << 20;
+    js->settings.memory_limit = root->settings.worker_memory_limit ? root->settings.worker_memory_limit : 24u << 20;
     size_t stack = root->settings.worker_stack ? root->settings.worker_stack : AU_JS_WORKER_STACK;
     js->settings.stack_limit = owner->hooks.coro ? stack - stack / 5 : root->settings.stack_limit;
     js->hooks.ctx = owner->hooks.ctx;

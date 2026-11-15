@@ -601,6 +601,10 @@ static void enter(AuDocScript *s)
     if (s->depth++ == 0) { /* the outermost entry is timed (perf.h) */
         s->perf_t0 = au_dv_perf_now(s->dv);
         s->perf_label[0] = 0;
+        /* Frames the parser has made since the last update are known to
+         * script from its first statement (window.frames, parent.frames). */
+        if (au_dv_top(s->dv)->script_depth == 1)
+            au_frames_sync_all(au_dv_top(s->dv));
     }
     if (s->js && strcmp(au_docview_base_url(s->dv), au_docview_url(s->dv)) != 0)
         au_js_set_base_url(s->js, au_docview_base_url(s->dv));

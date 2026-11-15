@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>A frame's window.name, and finding a sibling frame by name</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<!-- A widget made of two frames (reCAPTCHA's anchor and challenge frames
+     are named "a-ID" and "c-ID"): the second frame reads its own
+     window.name, derives its sibling's name from it and looks the sibling
+     up with parent.frames[name]. Aura's window.name was always "", so the
+     lookup gave undefined and the widget's postMessage threw. -->
+<div id="host"></div>
+<script>
+const host = document.getElementById('host');
+const d = document.createElement('div');
+d.innerHTML = '<iframe name="a-abc123" srcdoc="<script>window.ready = 1;<\/script>"></iframe>';
+host.appendChild(d);
+test('the top window has an empty name until script sets one', () => {
+    assert.equal(window.name, '');
+    window.name = 'mine';
+    assert.equal(window.name, 'mine');
+    window.name = '';
+});
+promise_test('a frame reads its name and finds its sibling by name', async () => {
+    const got = new Promise((resolve) => addEventListener('message', (e) => {
+        if (e.data && e.data.from === 'c') resolve(e.data);
+    }));
+    await delay(50);
+    const f = document.createElement('iframe');
+    f.name = 'c-abc123';
+    f.srcdoc = '<script>' +
+        'var mine = window.name;' +
+        'var w = parent.frames["a-" + mine.slice(2)];' +
+        'window.name = "renamed";' +
+        'parent.postMessage({ from: "c", name: mine, found: !!w, ready: w && w.ready, after: window.name }, "*");' +
+        '<\/script>';
+    document.body.appendChild(f);
+    const r = await got;
+    assert.equal(r.name, 'c-abc123');
+    assert.equal(r.found, true);
+    assert.equal(r.ready, 1);
+    assert.equal(r.after, 'renamed');
+    assert.equal(f.name, 'c-abc123');
+});
+</script>
+</body>
+</html>

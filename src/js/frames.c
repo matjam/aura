@@ -142,6 +142,19 @@ static JSValue n_frame_element(JSContext *ctx, JSValueConst this_val, int argc, 
     return el ? js_wrap(p, &el->node) : JS_NULL;
 }
 
+/* frameName(): the name attribute of the element holding this document,
+ * "" for the top. It is the window's initial name (window.name), which a
+ * document may read whatever its parent's origin. */
+static JSValue n_frame_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    if (!parent_of(js) || !js->hooks.frame_element)
+        return JS_NewString(ctx, "");
+    AuElement *el = js->hooks.frame_element(js->hooks.ctx);
+    const char *v = el ? au_element_get_attr(el, au_atom("name", 4)) : NULL;
+    return JS_NewString(ctx, v ? v : "");
+}
+
 /* windowAccess(global): true when this document may reach into that
  * window (same origin). */
 static JSValue n_window_access(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -310,6 +323,7 @@ static const JSCFunctionListEntry frame_natives[] = {
     JS_CFUNC_DEF("frameWindow", 1, n_frame_window),
     JS_CFUNC_DEF("windowRel", 1, n_window_rel),
     JS_CFUNC_DEF("frameElement", 0, n_frame_element),
+    JS_CFUNC_DEF("frameName", 0, n_frame_name),
     JS_CFUNC_DEF("windowAccess", 1, n_window_access),
     JS_CFUNC_DEF("windowInfo", 2, n_window_info),
     JS_CFUNC_DEF("windowFrameAt", 2, n_window_frame_at),

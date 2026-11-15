@@ -162,6 +162,7 @@ AuDocView *au_dv_top(AuDocView *dv);
  * loads of new frames and notes the ones whose element is gone. Safe
  * while script runs: nothing is freed here. */
 void au_frames_sync(AuDocView *dv);
+void au_frames_sync_all(AuDocView *dv);
 /* The document is going: frees its frames (never while script runs). */
 void au_frames_clear(AuDocView *dv);
 /* After a layout: the frames' boxes, viewports and lazy loads. */

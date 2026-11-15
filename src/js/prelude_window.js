@@ -3,6 +3,7 @@
 
 const WP = Window.prototype;
 const settings = N.settings();
+let winName = null; /* window.name once script has set it */
 defProps(WP, {
     get window() { return G; },
     get self() { return G; },
@@ -15,8 +16,10 @@ defProps(WP, {
     get frameElement() { return N.frameElement(); },
     get length() { return N.frameCount(); },
     get closed() { return false; },
-    get name() { return ''; },
-    set name(v) {},
+    /* The window's name: what script last set, else the name attribute of
+     * the frame element holding the document ("" for the top). */
+    get name() { return winName !== null ? winName : N.frameName(); },
+    set name(v) { winName = String(v); },
     get status() { return ''; },
     set status(v) {},
     get document() { return doc; },
