@@ -186,6 +186,7 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->base);
     au_free(dv->title);
     au_free(dv->user_css);
+    au_free(dv->user_agent);
     au_free(dv);
 }
 
@@ -1364,6 +1365,19 @@ void au_docview_set_scripting(AuDocView *dv, bool on)
 {
     dv->scripting = on;
 }
+
+void au_docview_set_user_agent(AuDocView *dv, const char *ua)
+{
+    au_free(dv->user_agent);
+    dv->user_agent = NULL;
+    if (ua && ua[0]) {
+        size_t n = strlen(ua) + 1;
+        dv->user_agent = au_alloc(n);
+        memcpy(dv->user_agent, ua, n);
+    }
+}
+
+const char *au_dv_user_agent(const AuDocView *dv) { return dv->user_agent; }
 
 bool au_docview_scripting(const AuDocView *dv)
 {

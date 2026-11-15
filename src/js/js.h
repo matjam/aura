@@ -58,7 +58,8 @@ typedef struct AuJsSettings {
                            * The thread must have this much stack free, plus margin. */
     uint32_t slice_ms;    /* long-script check interval; 0: 1000 */
     uint32_t kill_ms;     /* default limit without a long_script hook; 0: 10000 */
-    const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/1" */
+    const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/1".
+                             * Embedders pass the string the network sends (au_docview_set_user_agent). */
     const char *language;   /* navigator.language; NULL: "en-US" */
     bool do_not_track;      /* navigator.doNotTrack "1" */
     bool global_privacy_control;

@@ -1613,6 +1613,7 @@ static void begin_doc(AuPage *p, const char *url)
     p->internal = false;
     p->interim = false;
     au_docview_set_scripting(p->dv, !p->env.prefs || p->env.prefs->javascript);
+    au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_scroll(p->dv, 0, 0);

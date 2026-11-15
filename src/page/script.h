@@ -111,6 +111,8 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
 void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
+/* The user agent set with au_docview_set_user_agent, or NULL. */
+const char *au_dv_user_agent(const AuDocView *dv);
 /* forms.c: script focused el (NULL: blurred); script submitted form
  * (form.submit, or requestSubmit after its submit event); script changed
  * a control's value (repaint). */

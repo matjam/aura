@@ -391,6 +391,8 @@ static bool ensure_js(AuDocScript *s)
         return s->js != NULL;
     AuJsSettings set;
     au_js_settings_default(&set);
+    if (au_dv_user_agent(s->dv))
+        set.user_agent = au_dv_user_agent(s->dv);
     AuJsHooks h;
     memset(&h, 0, sizeof h);
     h.ctx = s;
