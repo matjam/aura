@@ -146,9 +146,26 @@ static bool is_out_of_flow(const LBox *b)
 
 /* Inserts c into parent. A block-level box going into an inline box
  * splits the inline boxes up to the block container. */
+/* Table-internal boxes: they go into an anonymous table in fixup. */
+static bool is_table_internal(const LBox *b)
+{
+    if (b->kind != LK_BLOCK)
+        return false;
+    switch (b->inner) {
+    case LI_TABLE_ROW_GROUP:
+    case LI_TABLE_ROW:
+    case LI_TABLE_CELL:
+    case LI_TABLE_COLUMN:
+    case LI_TABLE_COLUMN_GROUP: return true;
+    default: return l_is_caption(b);
+    }
+}
+
 static void insert_child(Builder *B, LBox *parent, LBox *c)
 {
-    if (parent->kind != LK_INLINE || !is_block_level(c)) {
+    /* Table parts in an inline box get an anonymous inline table there
+     * (CSS Tables 3, fixup), so they do not split it. */
+    if (parent->kind != LK_INLINE || !is_block_level(c) || is_table_internal(c)) {
         append(parent, c);
         return;
     }
@@ -1131,7 +1148,12 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
         b = new_box(B, LK_INLINE, node, s, sizeof(LBox));
         B->L->stats.inlines++;
     } else {
-        LBlock *k = (LBlock *)new_box(B, LK_BLOCK, node, s, sizeof(LBlock));
+        size_t size = sizeof(LBlock);
+        if (inner == AU_DISPLAY_INNER_TABLE)
+            size = sizeof(LTableBox);
+        else if (inner == AU_DISPLAY_INNER_TABLE_CELL)
+            size = sizeof(LCellBox);
+        LBlock *k = (LBlock *)new_box(B, LK_BLOCK, node, s, size);
         b = &k->b;
         B->L->stats.blocks++;
         if (rk == LR_TEXTAREA) {
@@ -1159,10 +1181,10 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
             case AU_DISPLAY_INNER_TABLE_CELL: b->inner = LI_TABLE_CELL; b->flags |= LF_BFC; break;
             case AU_DISPLAY_INNER_TABLE_CAPTION: b->inner = LI_FLOW; b->flags |= LF_BFC; break;
             case AU_DISPLAY_INNER_TABLE_COLUMN:
-            case AU_DISPLAY_INNER_TABLE_COLUMN_GROUP:
-                b->inner = LI_FLOW;
+                b->inner = LI_TABLE_COLUMN;
                 *skip_children = true;
                 break;
+            case AU_DISPLAY_INNER_TABLE_COLUMN_GROUP: b->inner = LI_TABLE_COLUMN_GROUP; break;
             case AU_DISPLAY_INNER_WEBKIT_BOX:
                 b->inner = LI_FLOW;
                 b->flags |= LF_BFC;
@@ -1182,7 +1204,13 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
             /* overflow: clip does not establish a BFC; the others do. */
             if (bx->overflow_x != AU_OVERFLOW_CLIP || bx->overflow_y != AU_OVERFLOW_CLIP)
                 b->flags |= LF_BFC;
-            if (b->inner != LI_REPLACED) {
+            /* Overflow does not apply to tables, rows and row groups (as
+             * in browsers); cells clip. */
+            bool tabular = b->inner == LI_TABLE || b->inner == LI_TABLE_ROW || b->inner == LI_TABLE_ROW_GROUP ||
+                           b->inner == LI_TABLE_COLUMN || b->inner == LI_TABLE_COLUMN_GROUP;
+            if (tabular && b->inner != LI_TABLE)
+                b->flags &= ~LF_BFC;
+            if (b->inner != LI_REPLACED && !tabular) {
                 b->flags |= LF_CLIPS;
                 if (bx->overflow_x == AU_OVERFLOW_SCROLL || bx->overflow_x == AU_OVERFLOW_AUTO ||
                     bx->overflow_y == AU_OVERFLOW_SCROLL || bx->overflow_y == AU_OVERFLOW_AUTO)
@@ -1294,13 +1322,193 @@ static void wrap_inline_runs(Builder *B, LBox *parent, bool flex)
     }
 }
 
+/* ---- Table fixup (CSS 2.1 17.2.1, CSS Tables 3 "Fixup") ----
+ *
+ * Children of a table that are not captions, columns, column groups, row
+ * groups or rows are wrapped in anonymous rows; children of a row group
+ * that are not rows likewise; children of a row that are not cells in
+ * anonymous cells. A run of table-internal boxes anywhere else is wrapped
+ * in an anonymous table (inline-level inside an inline box), whose own
+ * fixup then adds the rows. White space between table parts is dropped. */
+
+static bool is_tabular(const LBox *b)
+{
+    return b->kind == LK_BLOCK && (b->inner == LI_TABLE || b->inner == LI_TABLE_ROW_GROUP || b->inner == LI_TABLE_ROW);
+}
+
+/* Is c a proper child of tabular container p? */
+static bool proper_child(const LBox *p, const LBox *c)
+{
+    if (c->kind != LK_BLOCK)
+        return false;
+    switch (p->inner) {
+    case LI_TABLE:
+        return c->inner == LI_TABLE_ROW_GROUP || c->inner == LI_TABLE_ROW || c->inner == LI_TABLE_COLUMN ||
+               c->inner == LI_TABLE_COLUMN_GROUP || l_is_caption(c);
+    case LI_TABLE_ROW_GROUP: return c->inner == LI_TABLE_ROW;
+    default: return c->inner == LI_TABLE_CELL;
+    }
+}
+
+static LBox *new_anon_table_part(Builder *B, LBox *parent, int inner)
+{
+    size_t size = inner == LI_TABLE ? sizeof(LTableBox) : inner == LI_TABLE_CELL ? sizeof(LCellBox) : sizeof(LBlock);
+    LBlock *k = (LBlock *)new_box(B, LK_BLOCK, NULL, parent->style, size);
+    k->b.flags = LF_ANON;
+    k->b.inner = (uint8_t)inner;
+    if (inner == LI_TABLE || inner == LI_TABLE_CELL)
+        k->b.flags |= LF_BFC;
+    if (parent->flags & LF_HIDDEN)
+        k->b.flags |= LF_HIDDEN;
+    B->L->stats.blocks++;
+    return &k->b;
+}
+
+/* Releases a box removed from the tree, and its subtree (the memory stays
+ * in the arena). */
+static void drop_box(LBox *root)
+{
+    root->next = NULL;
+    root->parent = NULL;
+    LBox *b = root;
+    while (b) {
+        LBox *next;
+        if (b->first) {
+            next = b->first;
+            b->first = NULL;
+        } else {
+            if (b->node && au_is_element(b->node) && au_as_element(b->node)->box == b)
+                au_as_element(b->node)->box = NULL;
+            if (b->node)
+                au_node_unref(b->node);
+            b->node = NULL;
+            au_style_release(b->style);
+            b->style = NULL;
+            next = b == root ? NULL : (b->next ? b->next : b->parent);
+        }
+        b = next;
+    }
+}
+
+static void fix_table_children(Builder *B, LBox *p)
+{
+    LBox *c = p->first;
+    p->first = p->last = NULL;
+    if (p->kind == LK_BLOCK && p->inner == LI_TABLE_COLUMN) {
+        while (c) { /* a column has no content */
+            LBox *nx = c->next;
+            drop_box(c);
+            c = nx;
+        }
+        return;
+    }
+    if (p->kind == LK_BLOCK && p->inner == LI_TABLE_COLUMN_GROUP) {
+        /* Only columns stay; anything else in a column group is dropped. */
+        while (c) {
+            LBox *nx = c->next;
+            if (c->kind == LK_BLOCK && c->inner == LI_TABLE_COLUMN)
+                append(p, c);
+            else
+                drop_box(c);
+            c = nx;
+        }
+        return;
+    }
+    bool tabular = is_tabular(p);
+    while (c) {
+        LBox *next = c->next;
+        if (tabular) {
+            if (proper_child(p, c) || (c->kind == LK_BLOCK && (c->flags & LF_ABSPOS))) {
+                append(p, c);
+                c = next;
+                continue;
+            }
+            /* The run of children that are not proper. */
+            LBox *end = c;
+            bool content = false;
+            while (end && !proper_child(p, end)) {
+                if (!collapsible_ws_text(end) && !(end->kind == LK_BLOCK && (end->flags & LF_ABSPOS)))
+                    content = true;
+                end = end->next;
+            }
+            if (!content) {
+                while (c != end) {
+                    LBox *nx = c->next;
+                    if (c->kind != LK_TEXT)
+                        append(p, c);
+                    else
+                        drop_box(c);
+                    c = nx;
+                }
+                continue;
+            }
+            int inner = p->inner == LI_TABLE_ROW ? LI_TABLE_CELL : LI_TABLE_ROW;
+            LBox *anon = new_anon_table_part(B, p, inner);
+            append(p, anon);
+            while (c != end) {
+                LBox *nx = c->next;
+                append(anon, c);
+                c = nx;
+            }
+            continue;
+        }
+        if (!is_table_internal(c)) {
+            append(p, c);
+            c = next;
+            continue;
+        }
+        /* A run of table-internal boxes, with the white space between them. */
+        LBox *last = c, *end = c->next;
+        while (end && (is_table_internal(end) || collapsible_ws_text(end))) {
+            if (is_table_internal(end))
+                last = end;
+            end = end->next;
+        }
+        end = last->next;
+        LBox *anon = new_anon_table_part(B, p, LI_TABLE);
+        if (p->kind == LK_INLINE)
+            anon->flags |= LF_INLINE_LEVEL;
+        append(p, anon);
+        while (c != end) {
+            LBox *nx = c->next;
+            append(anon, c);
+            c = nx;
+        }
+    }
+}
+
+static void table_fixup(Builder *B)
+{
+    LBox *b = B->L->root;
+    while (b) {
+        if ((b->kind == LK_BLOCK && b->inner != LI_REPLACED) || b->kind == LK_INLINE) {
+            bool any = is_tabular(b) || (b->kind == LK_BLOCK && b->inner == LI_TABLE_COLUMN_GROUP);
+            for (LBox *c = b->first; c && !any; c = c->next)
+                any = is_table_internal(c);
+            if (any)
+                fix_table_children(B, b);
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
+}
+
 static void normalize(Builder *B)
 {
     /* Postorder is not needed: each container's fix-up only looks at its
      * own children. Preorder walk with an explicit next-pointer loop. */
     LBox *b = B->L->root;
     while (b) {
-        if (b->kind == LK_BLOCK && b->inner != LI_REPLACED) {
+        if (b->kind == LK_BLOCK && (is_tabular(b) || b->inner == LI_TABLE_COLUMN ||
+                                    b->inner == LI_TABLE_COLUMN_GROUP)) {
+            /* Children are table parts after the fixup. */
+        } else if (b->kind == LK_BLOCK && b->inner != LI_REPLACED) {
             bool any_block = false, any_inline = false;
             for (LBox *c = b->first; c; c = c->next) {
                 if (is_block_level(c))
@@ -1494,7 +1702,20 @@ void l_build_tree(AuLayout *L)
     au_free(B.st);
     au_free(B.ctr);
     au_buf_free(&B.tmp);
+    table_fixup(&B);
     normalize(&B);
+    for (LBox *b = L->root; b;) {
+        if (b->kind == LK_BLOCK && b->inner == LI_TABLE)
+            l_table_build_grid(L, (LTableBox *)b);
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
     L->stats.tree_bytes = L->tree.total;
 }
 
@@ -1510,6 +1731,8 @@ void l_box_free_layout(LBox *b)
     k->lines = NULL;
     k->frags = NULL;
     k->nlines = k->nfrags = 0;
+    if (b->inner == LI_TABLE)
+        l_table_free((LTableBox *)b);
     if (k->layers) {
         au_free(k->layers->items);
         au_free(k->layers);
