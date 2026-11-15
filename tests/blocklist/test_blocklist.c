@@ -200,7 +200,8 @@ static void test_matching(void)
      * exception in either clears both. */
     AuBlockBuilder *b = au_block_builder_new(NULL);
     au_block_builder_set_title(b, "Second");
-    au_block_builder_feed(b, "second.example\ntracker.net\n@@||x.ads.example.com^\n", 52);
+    static const char second[] = "second.example\ntracker.net\n@@||x.ads.example.com^\n";
+    au_block_builder_feed(b, second, sizeof second - 1);
     uint8_t *data = NULL;
     size_t len = 0;
     CHECK(au_block_builder_finish(b, 0) == 1 && au_block_builder_take(b, &data, &len), "second list");
