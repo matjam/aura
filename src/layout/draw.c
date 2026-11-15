@@ -2599,17 +2599,60 @@ float l_sticky_offset(AuLayout *L, LBlock *b, float *dx)
     return dy;
 }
 
+/* A rounded overflow clip pushed for a layer by layer_origin. */
+#define LAYER_SHAPED_MAX 4
+typedef struct LayerClips {
+    int pushed;  /* clips pushed */
+    int nshaped; /* of them, groups to mask with a rounded padding box */
+    struct {
+        LBlock *k;
+        float x, y;
+        int at; /* index among the pushed clips */
+    } shaped[LAYER_SHAPED_MAX];
+} LayerClips;
+
+/* The radii of k's overflow clip for a layer whose ink is ink (canvas
+ * coordinates), with k's border box at (x, y). False when the clip is
+ * square or the ink stays clear of the rounded corners: inside the band
+ * between the top and bottom corners, or between the left and right
+ * ones. */
+static bool layer_clip_radii(const LBlock *k, float x, float y, AuRect ink, AuRadii *out)
+{
+    const AuStyleBox *s = k->b.style->box;
+    if (s->overflow_x == AU_OVERFLOW_VISIBLE || s->overflow_y == AU_OVERFLOW_VISIBLE)
+        return false;
+    AuRadii r;
+    box_radii(k, &r, k->w, k->h);
+    if (au_radii_zero(&r))
+        return false;
+    inset_radii(&r, k->bw);
+    if (au_radii_zero(&r))
+        return false;
+    float px = x + k->bw[3], py = y + k->bw[0];
+    float pw = k->w - k->bw[1] - k->bw[3], ph = k->h - k->bw[0] - k->bw[2];
+    float top = l_max(r.ry[0], r.ry[1]), bottom = l_max(r.ry[2], r.ry[3]);
+    float left = l_max(r.rx[0], r.rx[3]), right = l_max(r.rx[1], r.rx[2]);
+    if ((ink.y >= py + top && ink.y + ink.h <= py + ph - bottom) ||
+        (ink.x >= px + left && ink.x + ink.w <= px + pw - right))
+        return false;
+    *out = r;
+    return true;
+}
+
 /* Origin of layered box b in canvas coordinates, given its stacking
  * context sc at (sx, sy); pushes the clips of the ancestors that clip it
- * and returns how many were pushed. */
-static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *ox, float *oy)
+ * (pop them with layer_clips_pop). An ancestor with rounded corners and
+ * overflow clipped on both axes clips its positioned descendants to the
+ * rounded padding box, as it does its in-flow content (CSS Backgrounds 3,
+ * "Corner Clipping"): the layer is painted into a group that is masked
+ * when the clip is popped. */
+static void layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *ox, float *oy, LayerClips *lc)
 {
     LBox *chain[L_MAX_DEPTH + 1];
     int n = 0;
     for (LBox *p = b->parent; p && p != sc && n < L_MAX_DEPTH; p = p->parent)
         chain[n++] = p;
-    float x = sx, y = sy;
-    int pushed = 0;
+    lc->pushed = lc->nshaped = 0;
     bool fixed = (b->flags & LF_FIXED) && ((LBlock *)b)->cb == NULL;
     /* Which ancestors clip and scroll b: those in its containing block chain. */
     bool applies[L_MAX_DEPTH + 1];
@@ -2631,42 +2674,91 @@ static int layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *o
                 need = a;
         }
     }
-    for (int i = n; i-- > 0;) {
-        LBox *a = chain[i];
-        if (a->kind != LK_BLOCK)
-            continue;
-        LBlock *k = (LBlock *)a;
-        x += k->x;
-        y += k->y;
-        if ((a->flags & LF_STICKY) && !(a->flags & LF_LAYERED)) {
-            /* not reached: sticky boxes are layers */
+    /* Two passes: the first finds the layer's place (the ink decides
+     * which rounded clips need a group), the second pushes. */
+    AuRect ink = {0, 0, 0, 0};
+    bool have_ink = false;
+    for (int pass = 0; pass < 2; pass++) {
+        float x = sx, y = sy;
+        for (int i = n; i-- > 0;) {
+            LBox *a = chain[i];
+            if (a->kind != LK_BLOCK)
+                continue;
+            LBlock *k = (LBlock *)a;
+            x += k->x;
+            y += k->y;
+            if (applies[i] && (a->flags & LF_CLIPS)) {
+                float cx = x - k->scroll_x, cy = y - k->scroll_y;
+                if (pass == 1) {
+                    AuRadii rr;
+                    push_clip(P, k, x, y, &cx, &cy, false);
+                    if (lc->nshaped < LAYER_SHAPED_MAX && (!have_ink || layer_clip_radii(k, x, y, ink, &rr))) {
+                        AuRadii any;
+                        AuRect all = {x - 1, y - 1, k->w + 2, k->h + 2};
+                        if (layer_clip_radii(k, x, y, all, &any)) {
+                            au_canvas_group_begin(P->c, box_area(k, x, y, AU_K_padding_box));
+                            lc->shaped[lc->nshaped].k = k;
+                            lc->shaped[lc->nshaped].x = x;
+                            lc->shaped[lc->nshaped].y = y;
+                            lc->shaped[lc->nshaped].at = lc->pushed;
+                            lc->nshaped++;
+                        }
+                    }
+                    lc->pushed++;
+                }
+                x = cx;
+                y = cy;
+            }
         }
-        if (applies[i] && (a->flags & LF_CLIPS)) {
-            float cx, cy;
-            push_clip(P, k, x, y, &cx, &cy, false);
-            pushed++;
-            x = cx;
-            y = cy;
+        if (b->kind == LK_BLOCK) {
+            LBlock *k = (LBlock *)b;
+            x += k->x;
+            y += k->y;
+            if (b->flags & LF_STICKY) {
+                float dx;
+                float dy = l_sticky_offset(P->L, k, &dx);
+                x += dx;
+                y += dy;
+            }
+            if (fixed) {
+                x += P->scroll_x;
+                y += P->scroll_y;
+            }
+            /* The ink is known for an untransformed block; anything else
+             * takes the group whenever a corner is rounded. */
+            const AuStyleRare *r = b->style->rare;
+            if (!r->transform && !r->translate && !r->rotate && !r->scale) {
+                float x0 = l_min(0, k->ov.x), y0 = l_min(0, k->ov.y);
+                float x1 = l_max(k->w, k->ov.x + k->ov.w), y1 = l_max(k->h, k->ov.y + k->ov.h);
+                ink = (AuRect){x + x0, y + y0, x1 - x0, y1 - y0};
+                have_ink = true;
+            }
         }
+        *ox = x;
+        *oy = y;
     }
-    if (b->kind == LK_BLOCK) {
-        LBlock *k = (LBlock *)b;
-        x += k->x;
-        y += k->y;
-        if (b->flags & LF_STICKY) {
-            float dx;
-            float dy = l_sticky_offset(P->L, k, &dx);
-            x += dx;
-            y += dy;
+}
+
+static void layer_clips_pop(PCtx *P, LayerClips *lc)
+{
+    for (int i = lc->pushed; i-- > 0;) {
+        if (lc->nshaped && lc->shaped[lc->nshaped - 1].at == i) {
+            LBlock *k = lc->shaped[lc->nshaped - 1].k;
+            float x = lc->shaped[lc->nshaped - 1].x, y = lc->shaped[lc->nshaped - 1].y;
+            AuRadii rr;
+            AuRect all = {x - 1, y - 1, k->w + 2, k->h + 2};
+            if (layer_clip_radii(k, x, y, all, &rr)) {
+                AuPath p;
+                au_path_init(&p);
+                au_path_rounded_rect(&p, box_area(k, x, y, AU_K_padding_box), &rr, false);
+                au_canvas_group_mask(P->c, &p);
+                au_path_free(&p);
+            }
+            au_canvas_group_end(P->c, 1.0f);
+            lc->nshaped--;
         }
-        if (fixed) {
-            x += P->scroll_x;
-            y += P->scroll_y;
-        }
+        au_canvas_clip_pop(P->c);
     }
-    *ox = x;
-    *oy = y;
-    return pushed;
 }
 
 static void paint_layer_list(PCtx *P, LBlock *sc, float sx, float sy, uint32_t from, uint32_t to)
@@ -2675,10 +2767,10 @@ static void paint_layer_list(PCtx *P, LBlock *sc, float sx, float sy, uint32_t f
     for (uint32_t i = from; i < to; i++) {
         LBox *b = ls->items[i];
         float ox, oy;
-        int pushed = layer_origin(P, &sc->b, sx, sy, b, &ox, &oy);
+        LayerClips lc;
+        layer_origin(P, &sc->b, sx, sy, b, &ox, &oy, &lc);
         paint_layer(P, b, ox, oy);
-        while (pushed--)
-            au_canvas_clip_pop(P->c);
+        layer_clips_pop(P, &lc);
     }
 }
 
