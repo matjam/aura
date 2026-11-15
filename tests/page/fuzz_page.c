@@ -204,6 +204,7 @@ static int replay(const char *path)
         fprintf(stderr, "%d\n", w);
         au_docview_set_viewport(dv, w, 600);
         au_docview_update(dv);
+        au_docview_fragment_y(dv, "e3");
     }
     au_docview_free(dv);
     au_fontset_free(fonts);

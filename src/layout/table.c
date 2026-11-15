@@ -1276,6 +1276,8 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         LBlock *k = (LBlock *)c;
         k->x = k->y = k->w = k->h = 0;
         for (LBox *cc = c->first; cc; cc = cc->next) {
+            if (cc->kind != LK_BLOCK)
+                continue; /* the box tree leaves only columns here */
             LBlock *kk = (LBlock *)cc;
             kk->x = kk->y = kk->w = kk->h = 0;
         }

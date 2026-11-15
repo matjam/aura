@@ -1482,7 +1482,10 @@ static void table_fixup(Builder *B)
     LBox *b = B->L->root;
     while (b) {
         if ((b->kind == LK_BLOCK && b->inner != LI_REPLACED) || b->kind == LK_INLINE) {
-            bool any = is_tabular(b) || (b->kind == LK_BLOCK && b->inner == LI_TABLE_COLUMN_GROUP);
+            /* Columns and column groups always: their content (generated
+             * content included) is dropped. */
+            bool any = is_tabular(b) || (b->kind == LK_BLOCK && (b->inner == LI_TABLE_COLUMN_GROUP ||
+                                                                 b->inner == LI_TABLE_COLUMN));
             for (LBox *c = b->first; c && !any; c = c->next)
                 any = is_table_internal(c);
             if (any)
