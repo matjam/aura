@@ -578,6 +578,8 @@ static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
         rep->ih = (float)h;
         rep->ratio = h > 0 ? (float)w / h : 0;
         rep->pixels = px;
+        if (L->env.image_use)
+            rep->url = ar_strndup(&L->tree, abs, strlen(abs));
     }
 }
 
@@ -817,9 +819,45 @@ static bool is_listbox(const AuElement *e)
     return sz && atoi(sz) > 1;
 }
 
+static bool starts_ci(const char *s, const char *prefix)
+{
+    size_t n = strlen(prefix);
+    return strlen(s) >= n && au_ieq(s, n, prefix, n);
+}
+
+/* <object> and <embed> (HTML, "The object element"): an image when the
+ * resource is one (its type attribute, else a data: URL's type, says
+ * image/..., or nothing says otherwise) and it loads or is loading. An
+ * object that is not an image, or whose image failed, shows its fallback
+ * content (its children); an embed then shows an empty box. Nested
+ * documents and plugins are not supported, so text/html and plugin types
+ * take the fallback. */
+static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_children)
+{
+    const char *url = attr_s(&e->node, object ? "data" : "src");
+    const char *type = au_element_get_attr(e, AU_ATOM_type);
+    int none = object ? LR_NONE : LR_OTHER;
+    *skip_children = !object;
+    if (!url || !*url)
+        return none;
+    if (type && *type && !starts_ci(type, "image/"))
+        return none;
+    if ((!type || !*type) && starts_ci(url, "data:") && !starts_ci(url + 5, "image/"))
+        return none;
+    char abs[2048];
+    resolve_url(L, url, abs, sizeof abs);
+    int w = 0, h = 0;
+    const AuSurface *px = NULL;
+    if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
+        *skip_children = true;
+        return LR_IMAGE;
+    }
+    return none;
+}
+
 /* The replaced or control kind of an element box. *flow is set for the
  * controls laid out as block containers (<button>, <textarea>). */
-static int replaced_kind(AuNode *node, bool *skip_children, bool *flow)
+static int replaced_kind(AuLayout *L, AuNode *node, bool *skip_children, bool *flow)
 {
     *flow = false;
     if (!au_is_element(node))
@@ -827,7 +865,7 @@ static int replaced_kind(AuNode *node, bool *skip_children, bool *flow)
     AuElement *e = au_as_element(node);
     if (e->ns == AU_NS_SVG && e->tag == AU_ATOM_svg) {
         *skip_children = true;
-        return LR_OTHER;
+        return LR_SVG;
     }
     if (e->ns != AU_NS_HTML)
         return LR_NONE;
@@ -871,8 +909,9 @@ static int replaced_kind(AuNode *node, bool *skip_children, bool *flow)
         *skip_children = true;
         return t == AU_ATOM_progress ? LR_PROGRESS : LR_METER;
     }
-    if (t == AU_ATOM_canvas || t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_embed ||
-        t == AU_ATOM_object || t == AU_ATOM_audio) {
+    if (t == AU_ATOM_object || t == AU_ATOM_embed)
+        return embedded_kind(L, e, t == AU_ATOM_object, skip_children);
+    if (t == AU_ATOM_canvas || t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio) {
         *skip_children = true;
         return LR_OTHER;
     }
@@ -1041,7 +1080,7 @@ static void setup_replaced(Builder *B, LBlock *k)
     au_buf_init(&t);
     switch (k->b.replaced) {
     case LR_IMAGE: {
-        image_lookup(B->L, rep, attr_s(n, "src"));
+        image_lookup(B->L, rep, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
         const char *alt = attr_s(n, "alt");
         if (!rep->loaded && !alt && au_is_html_element(n, AU_ATOM_input))
             alt = "Submit"; /* image button without alt text */
@@ -1121,7 +1160,7 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
     int outer = au_display_outer(d), inner = au_display_inner(d);
     *skip_children = false;
     bool flow_control = false;
-    int rk = pseudo ? LR_NONE : replaced_kind(node, skip_children, &flow_control);
+    int rk = pseudo ? LR_NONE : replaced_kind(B->L, node, skip_children, &flow_control);
     LBox *b;
     if (!pseudo && au_is_html_element(node, AU_ATOM_br)) {
         b = new_box(B, LK_BR, node, s, sizeof(LBox));
@@ -1745,6 +1784,8 @@ void l_box_free_layout(LBox *b)
 
 void l_free_tree(AuLayout *L)
 {
+    au_svg_id_index_free(L->svg_ids);
+    L->svg_ids = NULL;
     LBox *b = L->root;
     while (b) {
         LBox *next;

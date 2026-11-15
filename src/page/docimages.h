@@ -33,6 +33,11 @@ void au_docimages_free(AuDocImages *m);
 void au_docimages_clear(AuDocImages *m);
 void au_docimages_set_budget(AuDocImages *m, size_t bytes);
 void au_docimages_set_clock(AuDocImages *m, uint32_t (*now_ms)(void *ctx), void *ctx);
+/* The fonts text in SVG images is drawn with. */
+void au_docimages_set_fonts(AuDocImages *m, AuFontSet *fonts);
+/* While painting: the image at url is drawn at dw x dh (an SVG image is
+ * drawn again at that size when needed). */
+void au_docimages_use(AuDocImages *m, const char *url, int dw, int dh);
 AuImageCache *au_docimages_cache(AuDocImages *m);
 
 /* *created is set when the URL is new: the caller requests it and feeds

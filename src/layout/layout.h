@@ -64,6 +64,11 @@ typedef struct AuLayoutEnv {
      * (cap bytes) and returns false when it cannot. Optional; without it
      * URLs are passed through as written. */
     bool (*resolve_url)(void *ctx, const char *url, char *out, size_t cap);
+    /* Called before an image is painted at dw x dh pixels (backgrounds,
+     * masks, list markers, images in inline SVG), so a vector image can
+     * be drawn at that size; the surface image() returned is then current.
+     * Optional. */
+    void (*image_use)(void *ctx, const char *url, int dw, int dh);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);

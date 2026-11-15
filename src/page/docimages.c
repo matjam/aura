@@ -15,6 +15,7 @@ struct AuDocImages {
     size_t budget;
     uint32_t (*clock)(void *ctx);
     void *clock_ctx;
+    AuFontSet *fonts; /* text in SVG images */
     Tracked *t;
     uint32_t nt, tcap;
     bool scan_needed;
@@ -54,7 +55,21 @@ void au_docimages_clear(AuDocImages *m)
     m->cache = au_image_cache_new(m->budget);
     if (m->clock)
         au_image_cache_set_clock(m->cache, m->clock, m->clock_ctx);
+    au_image_cache_set_fonts(m->cache, m->fonts);
     m->scan_needed = true;
+}
+
+void au_docimages_set_fonts(AuDocImages *m, AuFontSet *fonts)
+{
+    m->fonts = fonts;
+    au_image_cache_set_fonts(m->cache, fonts);
+}
+
+void au_docimages_use(AuDocImages *m, const char *url, int dw, int dh)
+{
+    AuImageEntry *e = au_image_cache_find(m->cache, url);
+    if (e && m->in_paint)
+        au_image_entry_use(m->cache, e, dw, dh);
 }
 
 void au_docimages_set_budget(AuDocImages *m, size_t bytes)

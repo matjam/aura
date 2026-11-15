@@ -56,6 +56,7 @@ extern const AuImgCodec au_img_gif_codec;
 extern const AuImgCodec au_img_webp_codec;
 extern const AuImgCodec au_img_bmp_codec;
 extern const AuImgCodec au_img_ico_codec;
+extern const AuImgCodec au_img_svg_codec;
 
 enum {
     AU_IMG_BLEND_SRC,  /* replace the canvas pixel */

@@ -8,8 +8,16 @@
  * specificity. */
 #include "css_int.h"
 
+#include <stdlib.h>
+
 const char css_ua_sheet[] =
     "@namespace url(http://www.w3.org/1999/xhtml);\n"
+    "@namespace svg url(http://www.w3.org/2000/svg);\n"
+    /* SVG (Blink's svg.css): an inner svg clips; transforms of SVG
+     * elements other than the outer svg turn about the user-space
+     * origin. */
+    "svg|svg:not(:root), svg|symbol, svg|image, svg|marker, svg|pattern { overflow: hidden; }\n"
+    "svg|*:not(svg|svg), svg|svg svg|svg { transform-origin: 0 0; }\n"
     /* hidden elements */
     "area, base, basefont, datalist, head, link, meta, noembed, noframes, param, rp, script, style, template,"
     " title { display: none; }\n"
@@ -180,8 +188,7 @@ const char css_ua_sheet[] =
     "::backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.1); }\n"
     "audio:not([controls]) { display: none !important; }\n"
     "audio { width: 300px; height: 54px; }\n"
-    "video, canvas, img, iframe, embed, object { overflow: clip; }\n"
-    "svg:not(:root) { overflow: hidden; }\n";
+    "video, canvas, img, iframe, embed, object { overflow: clip; }\n";
 
 const char css_ua_quirks_sheet[] =
     "@namespace url(http://www.w3.org/1999/xhtml);\n"
@@ -567,8 +574,108 @@ static void table_cell_hints(AuBuf *b, const AuElement *el, bool quirks)
     }
 }
 
+/* ---- SVG presentation attributes ----
+ * SVG presentation attributes are presentational hints (author level,
+ * below every author rule). The value is CSS text; attributes whose value
+ * could close the declaration are skipped, and each becomes its own
+ * declaration so one invalid value does not drop the others. Lengths
+ * written as plain numbers are user units (px). width and height map only
+ * on the svg element (the outer one sizes the CSS box). transform is read
+ * by the SVG renderer itself (its attribute grammar differs from CSS). */
+static const char *const svg_pres_attrs[] = {
+    /* sorted for bsearch */
+    "alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation",
+    "cursor", "direction", "display", "dominant-baseline", "fill", "fill-opacity", "fill-rule", "filter",
+    "flood-color", "flood-opacity", "font-family", "font-size", "font-size-adjust", "font-stretch",
+    "font-style", "font-variant", "font-weight", "image-rendering", "letter-spacing", "lighting-color",
+    "mask", "mask-type", "opacity", "overflow", "paint-order", "pointer-events", "shape-rendering",
+    "stop-color", "stop-opacity", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap",
+    "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor",
+    "text-decoration", "text-rendering", "unicode-bidi", "vector-effect", "visibility", "word-spacing",
+    "writing-mode"};
+
+static int svg_attr_cmp(const void *a, const void *b)
+{
+    return strcmp((const char *)a, *(const char *const *)b);
+}
+
+static bool plain_number(const char *v)
+{
+    while (is_ws(*v))
+        v++;
+    if (*v == '+' || *v == '-')
+        v++;
+    bool digits = false;
+    while (*v >= '0' && *v <= '9')
+        v++, digits = true;
+    if (*v == '.') {
+        v++;
+        while (*v >= '0' && *v <= '9')
+            v++, digits = true;
+    }
+    if (digits && (*v == 'e' || *v == 'E')) {
+        v++;
+        if (*v == '+' || *v == '-')
+            v++;
+        if (!(*v >= '0' && *v <= '9'))
+            return false;
+        while (*v >= '0' && *v <= '9')
+            v++;
+    }
+    while (is_ws(*v))
+        v++;
+    return digits && !*v;
+}
+
+static void svg_hints(const AuElement *el, AuBuf *b)
+{
+    bool outer_svg = el->tag == AU_ATOM_svg;
+    for (uint32_t i = 0; i < el->nattrs; i++) {
+        const AuAttr *a = &el->attrs[i];
+        if (a->ns != AU_ATTR_NS_NONE || a->len > 4096)
+            continue;
+        const char *name = au_atom_str(a->name);
+        bool size = outer_svg && (!strcmp(name, "width") || !strcmp(name, "height"));
+        if (!size && !bsearch(name, svg_pres_attrs, CSS_ARRAY_LEN(svg_pres_attrs), sizeof svg_pres_attrs[0],
+                              svg_attr_cmp))
+            continue;
+        const char *v = a->value;
+        if (strpbrk(v, ";{}!\\\n\r"))
+            continue;
+        const char *p = v;
+        while (is_ws(*p))
+            p++;
+        if (!*p)
+            continue;
+        au_buf_printf(b, "%s:%s", name, v);
+        if ((size || !strcmp(name, "font-size") || !strcmp(name, "letter-spacing") ||
+             !strcmp(name, "word-spacing") || !strcmp(name, "baseline-shift")) && plain_number(v))
+            au_buf_puts(b, "px");
+        au_buf_putc(b, ';');
+    }
+}
+
 bool css_presentational_hints(const AuElement *el, AuCssDeclBlock *out, bool quirks)
 {
+    if (el->ns == AU_NS_SVG) {
+        if (!el->nattrs)
+            return false;
+        AuBuf b;
+        au_buf_init(&b);
+        svg_hints(el, &b);
+        bool any = false;
+        if (b.len) {
+            CssTokens tk = {0};
+            css_tokenize(b.data, b.len, &tk);
+            uint32_t before = out->n;
+            const char *base = el->node.doc ? el->node.doc->url : NULL;
+            css_parse_decl_list(&tk, 0, tk.n, out, false, base);
+            css_tokens_free(&tk);
+            any = out->n > before;
+        }
+        au_buf_free(&b);
+        return any;
+    }
     if (el->ns != AU_NS_HTML)
         return false;
     AuAtom tag = el->tag;

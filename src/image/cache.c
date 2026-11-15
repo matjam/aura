@@ -1,6 +1,7 @@
 /* The per-document image cache. See cache.h. */
 #include "cache.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 struct AuImageEntry {
@@ -39,7 +40,10 @@ struct AuImageCache {
     uint32_t decodes, evictions, decode_ms;
     uint32_t (*clock)(void *ctx);
     void *clock_ctx;
+    struct AuFontSet *fonts; /* text in SVG images */
 };
+
+void au_image_cache_set_fonts(AuImageCache *c, struct AuFontSet *fonts) { c->fonts = fonts; }
 
 AuImageCache *au_image_cache_new(size_t budget)
 {
@@ -214,8 +218,10 @@ static void finalize(AuImageCache *c, AuImageEntry *e)
     au_surface_free(e->pixels);
     e->pixels = s;
     sync_view(e);
-    /* Keep whichever is smaller: the bytes or full-size still pixels. */
-    if (s && !e->animated && !e->loading && denom == 1 && e->data.len > (size_t)s->width * s->height * 4) {
+    /* Keep whichever is smaller: the bytes or full-size still pixels. An
+     * SVG keeps its bytes: it is drawn again at each new size. */
+    if (s && !e->animated && !e->loading && denom == 1 && e->format != AU_IMAGE_FORMAT_SVG &&
+        e->data.len > (size_t)s->width * s->height * 4) {
         au_buf_free(&e->data);
         au_buf_init(&e->data);
         e->data_dropped = true;
@@ -272,6 +278,7 @@ static void pump(AuImageCache *c, AuImageEntry *e)
             o.target_w = e->tw;
             o.target_h = e->th;
             o.max_bytes = image_cap(c);
+            o.fonts = c->fonts;
             au_image_decoder_free(e->dec);
             e->dec = au_image_decoder_new(&o);
             e->dec_pos = 0;
@@ -303,6 +310,7 @@ static void start_decode(AuImageCache *c, AuImageEntry *e, int tw, int th)
     o.target_w = tw;
     o.target_h = th;
     o.max_bytes = image_cap(c);
+    o.fonts = c->fonts;
     au_image_decoder_free(e->dec);
     e->dec = au_image_decoder_new(&o);
     e->dec_pos = 0;
@@ -402,8 +410,20 @@ void au_image_entry_use(AuImageCache *c, AuImageEntry *e, int dw, int dh)
         }
         return;
     }
-    /* Shown larger than decoded (and decoded reduced): decode again. */
     const AuSurface *s = &e->view;
+    if (e->format == AU_IMAGE_FORMAT_SVG) {
+        /* A vector image is drawn again when it is shown at another size
+         * than it was drawn at: larger (to stay sharp) or of another
+         * shape (the document fits its viewBox into the box). */
+        if (!e->loading && e->pixels && e->want_w > 0 && e->want_h > 0 &&
+            (e->want_w > s->width + 1 || e->want_h > s->height + 1 ||
+             abs(e->want_w * s->height - e->want_h * s->width) > (s->width + s->height) * 2)) {
+            start_decode(c, e, e->want_w, e->want_h);
+            au_image_cache_trim(c);
+        }
+        return;
+    }
+    /* Shown larger than decoded (and decoded reduced): decode again. */
     bool reduced = s->width < e->iw || s->height < e->ih;
     if (reduced && !e->loading && !e->data_dropped && ((dw && s->width < dw) || (dh && s->height < dh) || (!dw && !dh))) {
         start_decode(c, e, e->want_w, e->want_h);

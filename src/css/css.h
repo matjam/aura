@@ -336,9 +336,20 @@ typedef struct AuStyleInhRare { /* inherited, rarely set */
     AuCssBlob *text_shadow;  /* NULL for none; COMMA_LIST of LIST(x y blur color) */
     AuCssBlob *list_style_image; /* NULL for none */
     AuCssBlob *cursor_images;    /* NULL or COMMA_LIST of LIST(url [x y]) */
+    /* NULL for normal; COMMA_LIST of LIST(STRING tag, NUMBER value) */
+    AuCssBlob *font_variation_settings;
+    /* SVG paint: NULL for none; COLOR (rgba AU_COLOR_CURRENT for
+     * currentcolor), URL, LIST(URL, fallback COLOR or none keyword), or
+     * the keyword context-fill / context-stroke. */
+    AuCssBlob *fill, *stroke;
+    AuCssBlob *stroke_dasharray; /* NULL for none; COMMA_LIST or LIST of px DIMENSION, NUMBER, PERCENT */
+    AuCssBlob *paint_order;      /* KEYWORD normal, or LIST of fill / stroke / markers keywords */
+    AuLen stroke_width, stroke_dashoffset; /* PX, PCT, CALC or NUMBER (user units) */
+    float fill_opacity, stroke_opacity, stroke_miterlimit;
     uint8_t text_transform, text_align_last, text_wrap_style, word_break, overflow_wrap, hyphens,
         line_break, border_collapse, caption_side, empty_cells, pointer_events, cursor, font_kerning,
-        text_rendering, image_rendering;
+        text_rendering, image_rendering, font_optical_sizing, fill_rule, clip_rule, stroke_linecap,
+        stroke_linejoin, text_anchor;
 } AuStyleInhRare;
 
 typedef struct AuStyleBox {
@@ -400,9 +411,15 @@ typedef struct AuStyleRare {
         *animation_iteration_count, *animation_direction, *animation_fill_mode, *animation_play_state;
     AuCssBlob *filter, *backdrop_filter, *box_shadow, *content, *counter_reset, *counter_increment,
         *counter_set, *object_position, *will_change, *clip_path, *clip;
+    /* CSS masks: COMMA_LISTs with one item per layer, like the background
+     * lists (au_style_mask_layer). */
+    AuCssBlob *mask_image, *mask_mode, *mask_position_x, *mask_position_y, *mask_size, *mask_repeat,
+        *mask_origin, *mask_clip;
+    AuColor stop_color;
+    float stop_opacity;
     uint8_t outline_style, transform_style, backface_visibility, object_fit, resize, appearance,
         scroll_behavior, contain, isolation, mix_blend_mode, text_decoration_line, text_decoration_style,
-        text_overflow, user_select, box_orient;
+        text_overflow, user_select, box_orient, vector_effect, mask_type, dominant_baseline;
 } AuStyleRare;
 
 typedef enum {
@@ -469,6 +486,12 @@ typedef struct AuBgLayer {
 } AuBgLayer;
 size_t au_style_bg_layer_count(const AuStyle *s);
 void au_style_bg_layer(const AuStyle *s, size_t i, AuBgLayer *out);
+
+/* One mask layer (mask-image and its lists), in the background layer's
+ * shape: attachment holds the mask-mode keyword (alpha, luminance or
+ * match-source). The count is 0 when mask-image is none for every layer. */
+size_t au_style_mask_layer_count(const AuStyle *s);
+void au_style_mask_layer(const AuStyle *s, size_t i, AuBgLayer *out);
 
 /* ---- Custom properties ---- */
 /* Returns the computed (substituted) value text of --name, or NULL. */

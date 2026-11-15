@@ -156,6 +156,24 @@
     X(BOX_ORIENT, HORIZONTAL, horizontal) X(BOX_ORIENT, VERTICAL, vertical)                       \
     X(BOX_ORIENT, INLINE_AXIS, inline_axis) X(BOX_ORIENT, BLOCK_AXIS, block_axis)
 
+#define AU_KWL_FILL_RULE(X) X(FILL_RULE, NONZERO, nonzero) X(FILL_RULE, EVENODD, evenodd)
+#define AU_KWL_STROKE_LINECAP(X) X(STROKE_LINECAP, BUTT, butt) X(STROKE_LINECAP, ROUND, round) X(STROKE_LINECAP, SQUARE, square)
+/* miter-clip and arcs draw as miter. */
+#define AU_KWL_STROKE_LINEJOIN(X)                                                                 \
+    X(STROKE_LINEJOIN, MITER, miter) X(STROKE_LINEJOIN, ROUND, round) X(STROKE_LINEJOIN, BEVEL, bevel) \
+    X(STROKE_LINEJOIN, MITER_CLIP, miter_clip) X(STROKE_LINEJOIN, ARCS, arcs)
+#define AU_KWL_TEXT_ANCHOR(X) X(TEXT_ANCHOR, START, start) X(TEXT_ANCHOR, MIDDLE, middle) X(TEXT_ANCHOR, END, end)
+#define AU_KWL_VECTOR_EFFECT(X) X(VECTOR_EFFECT, NONE, none) X(VECTOR_EFFECT, NON_SCALING_STROKE, non_scaling_stroke)
+#define AU_KWL_MASK_TYPE(X) X(MASK_TYPE, LUMINANCE, luminance) X(MASK_TYPE, ALPHA, alpha)
+#define AU_KWL_FONT_OPTICAL_SIZING(X) X(FONT_OPTICAL_SIZING, AUTO, auto_) X(FONT_OPTICAL_SIZING, NONE, none)
+#define AU_KWL_DOMINANT_BASELINE(X)                                                               \
+    X(DOMINANT_BASELINE, AUTO, auto_) X(DOMINANT_BASELINE, ALPHABETIC, alphabetic)                \
+    X(DOMINANT_BASELINE, MIDDLE, middle) X(DOMINANT_BASELINE, CENTRAL, central)                   \
+    X(DOMINANT_BASELINE, HANGING, hanging) X(DOMINANT_BASELINE, IDEOGRAPHIC, ideographic)         \
+    X(DOMINANT_BASELINE, MATHEMATICAL, mathematical) X(DOMINANT_BASELINE, TEXT_TOP, text_top)     \
+    X(DOMINANT_BASELINE, TEXT_BOTTOM, text_bottom)                                                \
+    X(DOMINANT_BASELINE, TEXT_BEFORE_EDGE, text_before_edge) X(DOMINANT_BASELINE, TEXT_AFTER_EDGE, text_after_edge)
+
 /* Every list, for code that walks all of them. */
 #define AU_KWL_ALL(Y)                                                                             \
     Y(FONT_STYLE) Y(FONT_VARIANT_CAPS) Y(TEXT_ALIGN) Y(WHITE_SPACE_COLLAPSE) Y(TEXT_WRAP_MODE)    \
@@ -166,6 +184,7 @@
     Y(UNICODE_BIDI) Y(TABLE_LAYOUT) Y(BORDER_STYLE) Y(OUTLINE_STYLE) Y(FLEX_DIRECTION)            \
     Y(FLEX_WRAP) Y(TRANSFORM_STYLE) Y(BACKFACE_VISIBILITY) Y(OBJECT_FIT) Y(RESIZE) Y(APPEARANCE)  \
     Y(SCROLL_BEHAVIOR) Y(ISOLATION) Y(MIX_BLEND_MODE) Y(TEXT_DECORATION_STYLE) Y(TEXT_OVERFLOW)   \
-    Y(USER_SELECT) Y(BOX_ORIENT)
+    Y(USER_SELECT) Y(BOX_ORIENT) Y(FILL_RULE) Y(STROKE_LINECAP) Y(STROKE_LINEJOIN) Y(TEXT_ANCHOR)  \
+    Y(VECTOR_EFFECT) Y(MASK_TYPE) Y(FONT_OPTICAL_SIZING) Y(DOMINANT_BASELINE)
 
 #endif

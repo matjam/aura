@@ -405,6 +405,7 @@ int main(void)
     test_border_and_image();
     test_golden();
     test_fonts();
+    test_stroke();
     printf("paint: ok\n");
     return 0;
 }

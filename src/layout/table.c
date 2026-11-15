@@ -963,13 +963,19 @@ static float spec_bb_height(AuLayout *L, const LBlock *k, float pct_base, bool c
 }
 
 /* The baseline of a laid-out cell from its border-box top, before any
- * alignment shift: its first line or row, else its content-box bottom. */
-static float cell_baseline(const LCellBox *cb)
+ * alignment shift: its first line or row, else its content-box bottom,
+ * where the content box is as tall as the cell's specified height when
+ * that is more than its content (CSS 2.1 17.5.3; Blink and Gecko agree:
+ * an empty cell with height: 1em has its baseline 1em down). */
+static float cell_baseline(AuLayout *L, const LCellBox *cb, float pct_base)
 {
     const LBlock *k = &cb->k;
     if (!isnan(k->baseline))
         return k->baseline;
-    return k->bw[0] + k->p[0] + cb->nat_h;
+    float content = cb->nat_h, sh = spec_bb_height(L, k, pct_base, true);
+    if (sh >= 0 && sh - l_bp_v(k) > content)
+        content = sh - l_bp_v(k);
+    return k->bw[0] + k->p[0] + content;
 }
 
 /* Adds extra to rows [r0, r0 + n): to the rows without a specified height
@@ -1179,7 +1185,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
             con[cb->row] = 1;
         int va;
         if (valign_baseline(k, &va)) {
-            float bl = cell_baseline(cb);
+            float bl = cell_baseline(L, cb, target);
             asc[cb->row] = l_max(asc[cb->row], bl);
             if (cb->rowspan == 1)
                 desc[cb->row] = l_max(desc[cb->row], h - bl);
@@ -1206,7 +1212,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
                 h = sh;
             int va;
             if (valign_baseline(k, &va))
-                h += asc[cb->row] - cell_baseline(cb);
+                h += asc[cb->row] - cell_baseline(L, cb, target);
             float have = span_height(t, cb->row, cb->rowspan, vs);
             if (h > have + 0.001f)
                 grow_rows(t, con, cb->row, cb->rowspan, h - have, false);
@@ -1291,7 +1297,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         int va;
         float shift = 0;
         if (valign_baseline(k, &va))
-            shift = asc[cb->row] - cell_baseline(cb);
+            shift = asc[cb->row] - cell_baseline(L, cb, target);
         else if (va == AU_VALIGN_MIDDLE)
             shift = (inner - cb->nat_h) / 2;
         else if (va == AU_VALIGN_BOTTOM)

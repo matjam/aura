@@ -92,13 +92,20 @@ static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSur
 static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap);
 static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind);
 
+/* Layout paints an image at a size: an SVG image is drawn at it. */
+static void layout_image_use(void *ctx, const char *url, int dw, int dh)
+{
+    AuDocView *dv = ctx;
+    au_docimages_use(dv->imgs, url, dw, dh);
+}
+
 /* A new layout drawing with fonts (the layout caches faces, so a change
  * of font set or a new web font needs a new one). */
 static void new_layout(AuDocView *dv, AuFontSet *fonts)
 {
     if (dv->layout)
         au_layout_free(dv->layout);
-    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve};
+    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use};
     dv->layout = au_layout_new(&env);
     if (dv->doc)
         au_layout_set_document(dv->layout, dv->doc);
@@ -128,6 +135,7 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
     /* The image cache lives outside the layout, so a new layout (a web
      * font arriving) keeps every image and its animation. */
     dv->imgs = au_docimages_new();
+    au_docimages_set_fonts(dv->imgs, fonts); /* text in SVG images */
     new_layout(dv, fonts);
     dv->url = dup("about:blank");
     dv->base = dup("about:blank");

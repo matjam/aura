@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">
+  <text x="10 20 30" y="20" dx="1" dy="0 2 -2" font-family="Arial, sans-serif" font-size="16" letter-spacing="1"
+        font-weight="bold" dominant-baseline="middle">Hello <tspan fill="red" font-style="italic" x="100">world</tspan>
+    <a href="#x"><tspan dy="10" text-anchor="end">&#x263A; &amp; 漢字</tspan></a></text>
+  <text x="100" y="50" text-anchor="middle" stroke="blue" fill="none" font-size="2em" style="font-variation-settings: 'wght' 700">mid</text>
+  <svg x="150" y="0" width="50" height="50" viewBox="0 0 10 10" overflow="visible">
+    <image width="10" height="10" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle r='5' cx='5' cy='5'/%3E%3C/svg%3E"/>
+    <image x="5" width="10" height="10" preserveAspectRatio="none" transform="skewX(20)" xlink:href="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs="/>
+  </svg>
+</svg>

@@ -400,6 +400,46 @@ void au_style_bg_layer(const AuStyle *s, size_t i, AuBgLayer *out)
     out->origin = o ? o->kw : AU_K_padding_box;
 }
 
+size_t au_style_mask_layer_count(const AuStyle *s)
+{
+    const AuCssBlob *b = s->rare->mask_image;
+    if (!b)
+        return 0;
+    uint32_t n;
+    const AuCssValue *it = css_items(&b->value, &n);
+    if (b->value.type != AU_CSSV_COMMA_LIST) {
+        n = 1;
+        it = &b->value;
+    }
+    for (uint32_t i = 0; i < n; i++)
+        if (!css_is_kw(&it[i], AU_K_none))
+            return n;
+    return 0;
+}
+
+void au_style_mask_layer(const AuStyle *s, size_t i, AuBgLayer *out)
+{
+    const AuStyleRare *r = s->rare;
+    memset(out, 0, sizeof *out);
+    out->image = layer_item(r->mask_image, i);
+    out->position_x = layer_item(r->mask_position_x, i);
+    out->position_y = layer_item(r->mask_position_y, i);
+    out->size = layer_item(r->mask_size, i);
+    const AuCssValue *rp = layer_item(r->mask_repeat, i);
+    if (rp && rp->type == AU_CSSV_LIST && rp->n == 2) {
+        out->repeat_x = rp->u.items[0].kw;
+        out->repeat_y = rp->u.items[1].kw;
+    } else {
+        out->repeat_x = out->repeat_y = AU_K_repeat;
+    }
+    const AuCssValue *m = layer_item(r->mask_mode, i);
+    out->attachment = m ? m->kw : AU_K_match_source;
+    const AuCssValue *c = layer_item(r->mask_clip, i);
+    out->clip = c ? c->kw : AU_K_border_box;
+    const AuCssValue *o = layer_item(r->mask_origin, i);
+    out->origin = o ? o->kw : AU_K_border_box;
+}
+
 /* ---- Initial style ---- */
 
 void css_style_init_defaults(void)

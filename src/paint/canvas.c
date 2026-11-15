@@ -171,6 +171,46 @@ void au_canvas_group_end(AuCanvas *c, float opacity)
     au_surface_free(g.surface);
 }
 
+void au_canvas_mask_end(AuCanvas *c, bool luminance)
+{
+    if (c->ngroups < 2) {
+        au_canvas_group_end(c, 1.0f);
+        return;
+    }
+    Group mg = c->groups[--c->ngroups];
+    c->nclips = mg.clip_depth;
+    Group *g = &c->groups[c->ngroups - 1];
+    AuSurface *s = g->surface;
+    for (int y = 0; y < s->height; y++) {
+        AuPixel *row = s->pixels + (size_t)y * s->stride;
+        int my = y + g->oy - mg.oy;
+        bool in_y = my >= 0 && my < mg.surface->height;
+        const AuPixel *mrow = in_y ? mg.surface->pixels + (size_t)my * mg.surface->stride : NULL;
+        for (int x = 0; x < s->width; x++) {
+            if (!row[x])
+                continue;
+            int mx = x + g->ox - mg.ox;
+            uint32_t m = 0;
+            if (mrow && mx >= 0 && mx < mg.surface->width) {
+                uint32_t p = mrow[mx];
+                if (luminance) {
+                    /* Premultiplied channels: luminance times alpha. */
+                    uint32_t r = (p >> 16) & 255, gg = (p >> 8) & 255, b = p & 255;
+                    m = (r * 13933u + gg * 46884u + b * 4725u + 32768u) >> 16; /* 0.2125, 0.7154, 0.0721 */
+                    if (m > 255)
+                        m = 255;
+                } else {
+                    m = p >> 24;
+                }
+            }
+            if (m == 255)
+                continue;
+            row[x] = m ? au_px_scale(row[x], au_a256(m)) : 0;
+        }
+    }
+    au_surface_free(mg.surface);
+}
+
 /* ---- Transformed layers ---- */
 
 bool au_canvas_layer_begin(AuCanvas *c, AuRect bounds)
