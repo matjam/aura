@@ -1053,11 +1053,14 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy)
     /* Queued again before its containing block finished (a table lays its
      * cells out twice): one entry, at the latest static position. Two
      * entries per pass would double at every level of nesting. */
-    for (uint32_t i = L->nabs; i-- > 0;)
-        if (L->abs[i].box == &b->b) {
-            L->abs[i].cb = cb;
-            return;
-        }
+    if (b->b.flags & LF_ABS_QUEUED) {
+        for (uint32_t i = L->nabs; i-- > 0;)
+            if (L->abs[i].box == &b->b) {
+                L->abs[i].cb = cb;
+                return;
+            }
+    }
+    b->b.flags |= LF_ABS_QUEUED;
     if (L->nabs == L->abs_cap) {
         L->abs_cap = L->abs_cap ? L->abs_cap * 2 : 32;
         L->abs = au_realloc(L->abs, L->abs_cap * sizeof *L->abs);
@@ -1235,6 +1238,7 @@ void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark)
         /* Remove it, then lay it out (which may queue more after it). */
         memmove(&L->abs[i], &L->abs[i + 1], (L->nabs - i - 1) * sizeof *L->abs);
         L->nabs--;
+        e.box->flags &= ~LF_ABS_QUEUED;
         if (!cb && e.cb) {
             /* A containing block that never finished (too deep): use it anyway. */
         }
@@ -1526,7 +1530,7 @@ void au_layout_styles_changed(AuLayout *L)
 static void layout_root(AuLayout *L)
 {
     LBlock *root = (LBlock *)L->root;
-    L->nabs = 0;
+    L->nabs = 0; /* empty after a finished pass; a new tree has no queued boxes */
     L->depth = 0;
     L->stats.layouts_skipped = 0;
     l_resolve_box_edges(root, L->vw);

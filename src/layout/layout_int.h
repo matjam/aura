@@ -114,7 +114,8 @@ enum {
     LF_LINE_CLAMP = 1u << 26,
     LF_ESCAPES = 1u << 27,      /* holds an absolutely positioned box whose containing block is outside it */
     LF_MEASURE_OK = 1u << 28,   /* the measure cache (mk_*, m_res) is valid */
-    LF_LEGEND = 1u << 29        /* the rendered legend of its fieldset parent: placed on the top border */
+    LF_LEGEND = 1u << 29,       /* the rendered legend of its fieldset parent: placed on the top border */
+    LF_ABS_QUEUED = 1u << 31    /* in AuLayout.abs, waiting for its containing block to finish */
 };
 
 typedef struct LBox LBox;
