@@ -232,6 +232,7 @@ resource 'vers' (1) {
 resource 'BNDL' (128) {
 	'AURA', 0,
 	{
+		'ICN#', { 0, 128 },
 		'FREF', { 0, 128 }
 	}
 };
