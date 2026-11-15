@@ -56,6 +56,8 @@ static int usage(void)
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
             "                        go:URL back forward cache (the HTTP cache's counts with --net))\n"
+            "                        (developer tools: netlog[:details] perf eval:EXPR source[:FIRST,COUNT]\n"
+            "                        devshot:source|console|network|perf:FILE.png)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in; --scroll-bench times\n"
             "                        32-pixel steps and page downs through the Mac shell's paint path,\n"

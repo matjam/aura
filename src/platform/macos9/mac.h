@@ -3,6 +3,7 @@
  *   main.c        start-up, the event loop, menus, Apple events, saving
  *   browserwin.c  browser windows (GWorld, chrome, page, address field)
  *   listwin.c     the Bookmarks, History, Downloads and Cookies windows
+ *   devwin.c      the Page Source, Console, Network and Performance windows
  *   network.c     the network stack (Open Transport, stores, fetchers)
  *   downloads_mac.c  download files, Reveal in Finder
  *   prefswin.c    the Preferences window (Appearance controls)

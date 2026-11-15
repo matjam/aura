@@ -338,7 +338,9 @@ void au_netlog_row(const AuNetRecord *r, AuBuf *out)
     else
         snprintf(t, sizeof t, "-");
     pad(out, t, W_CONN + 1);
-    au_buf_puts(out, r->url);
+    /* "https://" is left out so more of the address fits a narrow window;
+     * other schemes (http: among them) are shown. */
+    au_buf_puts(out, !strncmp(r->url, "https://", 8) ? r->url + 8 : r->url);
     au_buf_free(&b);
 }
 
