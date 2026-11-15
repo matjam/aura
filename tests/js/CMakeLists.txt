@@ -10,7 +10,7 @@ foreach(name dom_tree events collections html_elements loop window net observers
 endforeach()
 
 add_test(NAME js_limits
-         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 3 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+         COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
 add_test(NAME js_lifetime
          COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/lifetime_setup.js ${JS_DIR}/lifetime_check.js)
 

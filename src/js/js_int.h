@@ -163,6 +163,7 @@ struct AuJs {
     /* statistics */
     uint32_t errors, interrupts;
     size_t live_bytes; /* bytes the runtime holds (runtime.c allocator) */
+    bool oom;          /* an allocation was refused: the reserve is open */
 };
 
 /* ---- runtime.c ---- */

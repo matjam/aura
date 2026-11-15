@@ -14,9 +14,26 @@
 #define HDR 16
 
 /* opaque is the AuJs: live counts what the runtime holds, so au_js_free
- * can report a leak (QuickJS only asserts in debug builds). */
+ * can report a leak (QuickJS only asserts in debug builds), and enforces
+ * the memory limit. After the first refusal a small reserve opens, so
+ * QuickJS can build its "out of memory" error (without it the error
+ * object itself fails and script sees a catchable null); js_leave closes
+ * it again. */
+#define OOM_RESERVE (64u << 10)
+
+static bool over_limit(AuJs *js, size_t more)
+{
+    size_t limit = js->settings.memory_limit + (js->oom ? OOM_RESERVE : 0);
+    if (js->live_bytes + more <= limit && more <= limit)
+        return false;
+    js->oom = true;
+    return true;
+}
+
 static void *qa_malloc(void *opaque, size_t size)
 {
+    if (over_limit(opaque, size))
+        return NULL;
     char *p = au_try_alloc(size + HDR);
     if (!p)
         return NULL;
@@ -53,6 +70,8 @@ static void *qa_realloc(void *opaque, void *ptr, size_t size)
         return NULL;
     }
     size_t old = *(size_t *)((char *)ptr - HDR);
+    if (size > old && over_limit(opaque, size - old))
+        return NULL;
     char *p = au_try_realloc((char *)ptr - HDR, size + HDR);
     if (!p)
         return NULL;
@@ -172,6 +191,7 @@ void js_leave(AuJs *js)
 {
     if (--js->depth == 0) {
         js->interrupted = false;
+        js->oom = false;
         js_safe_point(js);
     }
 }
@@ -225,10 +245,8 @@ void js_report_exception(AuJs *js)
 {
     JSContext *ctx = js->ctx;
     JSValue exc = JS_GetException(ctx);
-    if (JS_IsUninitialized(exc) || JS_IsNull(exc)) {
-        JS_FreeValue(ctx, exc);
+    if (JS_IsUninitialized(exc)) /* none pending ("throw null" is reported) */
         return;
-    }
     /* window.onerror and error listeners first (they may cancel the
      * report); not for interrupts, which must not run more script. */
     bool report = true;
@@ -490,7 +508,8 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
         return NULL;
     }
     JS_SetRuntimeOpaque(js->rt, js);
-    JS_SetMemoryLimit(js->rt, js->settings.memory_limit);
+    /* The memory limit is the allocator's (over_limit), not
+     * JS_SetMemoryLimit's, so the out-of-memory error can be built. */
     JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
     JS_SetInterruptHandler(js->rt, interrupt_cb, js);
     JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);

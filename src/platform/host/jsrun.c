@@ -1,8 +1,10 @@
 /* aura-host js: runs JavaScript files against a document.
  *
  *   aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS]
- *                [--stack KB] [--expect-errors N] [--module] [--negative TYPE] FILE.js...
+ *                [--stack KB] [--expect-errors N] [--module] [--negative TYPE] [--stats] FILE.js...
  *
+ * --stats prints the runtime's start-up time and memory, and its memory
+ * after the run.
  * --module loads the last file with import(); --negative TYPE passes only
  * when exactly one uncaught TYPE error is reported (test262's negative
  * tests).
@@ -193,7 +195,8 @@ static bool deliver_one(JsRun *r, AuJs *js)
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] FILE.js...\n");
+    fprintf(stderr, "usage: aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] [--stack KB]\n"
+                    "                    [--expect-errors N] [--module] [--negative TYPE] [--stats] FILE.js...\n");
     return 2;
 }
 
@@ -266,7 +269,7 @@ static int js_main(int argc, char **argv)
     s.online = true;
     int first = 0;
     int expect_errors = 0;
-    bool as_module = false;
+    bool as_module = false, stats = false;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--html") && i + 1 < argc)
             html = argv[++i];
@@ -284,6 +287,8 @@ static int js_main(int argc, char **argv)
             as_module = true;
         else if (!strcmp(argv[i], "--negative") && i + 1 < argc)
             run.negative = argv[++i];
+        else if (!strcmp(argv[i], "--stats"))
+            stats = true;
         else if (argv[i][0] == '-')
             return usage();
         else if (!first)
@@ -322,12 +327,19 @@ static int js_main(int argc, char **argv)
     h.fetcher.ctx = &run;
     h.fetcher.start = h_fetch_start;
     h.fetcher.abort = h_fetch_abort;
+    double t_new = real_ms();
     AuJs *js = au_js_new(doc, doc_url, &s, &h);
     if (!js) {
         fprintf(stderr, "aura-host js: cannot start the JavaScript runtime\n");
         au_node_unref(&doc->node);
         au_free(doc_url);
         return 1;
+    }
+    AuJsStats st;
+    if (stats) {
+        t_new = real_ms() - t_new;
+        au_js_stats(js, &st);
+        printf("stats startup %.2f ms, %zu bytes\n", t_new, st.memory_used);
     }
     au_js_set_ready_state(js, "interactive");
     for (int i = first; i < argc; i++) {
@@ -367,6 +379,13 @@ static int js_main(int argc, char **argv)
     }
     au_js_set_ready_state(js, "complete");
     au_host_js_loop(js, &run, h_now, h_skip, h_deliver);
+    if (stats) {
+        au_js_stats(js, &st);
+        printf("stats after run %zu bytes, %u wrappers", st.memory_used, st.wrappers);
+        au_js_gc(js);
+        au_js_stats(js, &st);
+        printf(", after gc %zu bytes\n", st.memory_used);
+    }
     au_js_unload(js);
     au_js_free(js);
     while (run.reqs)

@@ -1,6 +1,7 @@
 // Limits: memory, stack depth, run time, deep trees. Run with
-// --mem 16 --kill 1000 --expect-errors 3: two scripts run past the time
-// limit and one runs out of memory; each is stopped and reported once.
+// --mem 16 --kill 1000 --expect-errors 5: two scripts run past the time
+// limit and two run out of memory, each stopped and reported once; one
+// throws null.
 
 test('stack overflow is a catchable error', () => {
     let depth = 0;
@@ -43,6 +44,18 @@ setTimeout(() => {
     d.textContent = 'alive';
     window.__after.push(d.textContent);
 }, 5);
+// Many small allocations up to the limit: the out-of-memory error itself
+// must still be built (it once came through as a catchable null).
+setTimeout(() => {
+    window.__caught = 'nothing';
+    try {
+        const parts = [];
+        for (let i = 0; i < 1e7; i++) parts.push('item' + i);
+    } catch (e) {
+        window.__caught = e;
+    }
+}, 7);
+setTimeout(() => { throw null; }, 8); /* reported as "Uncaught null" */
 setTimeout(() => { for (;;) {} }, 10);
 setTimeout(() => window.__after.push('after kill'), 15);
 setTimeout(() => { for (;;) { [].concat([1]); } }, 20);
@@ -50,4 +63,5 @@ setTimeout(() => { for (;;) { [].concat([1]); } }, 20);
 promise_test('the page keeps running after stopped scripts', async () => {
     await delay(50);
     assert.deepEqual(window.__after, ['alive', 'after kill']);
+    assert.equal(window.__caught, 'nothing', 'out of memory is not catchable');
 }, 60000);
