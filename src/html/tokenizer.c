@@ -370,8 +370,11 @@ static void flush_chars(HtmlTokenizer *t)
     t->emit(t->sink, &tok);
 }
 
+static void set_clear(HtmlTokenizer *t);
+
 static void new_tag(HtmlTokenizer *t, bool end)
 {
+    set_clear(t); /* a tag abandoned at end of input may have left names */
     t->end_tag = end;
     t->self_closing = false;
     t->name.len = 0;
@@ -403,19 +406,15 @@ static void set_insert(HtmlTokenizer *t, AuAtom a)
     t->attr_set[i] = a;
 }
 
-/* Removes the names of the current tag from the hash set, newest first,
- * so every probe sequence stays intact while it is emptied. */
+/* Empties the hash set if it holds a tag's names. The set is filled only
+ * when a ninth attribute name is looked up, so a tag with eight attributes
+ * or fewer never fills it; attr_set_live records whether it was. */
 static void set_clear(HtmlTokenizer *t)
 {
-    if (!t->attr_set || t->nattrs < 8)
+    if (!t->attr_set_live)
         return;
-    for (uint32_t k = t->nattrs; k-- > 0;) {
-        AuAtom a = t->attrs[k].name;
-        uint32_t i = set_slot(a, t->attr_set_size);
-        while (t->attr_set[i] != a)
-            i = (i + 1) & (t->attr_set_size - 1);
-        t->attr_set[i] = 0;
-    }
+    memset(t->attr_set, 0, t->attr_set_size * sizeof *t->attr_set);
+    t->attr_set_live = false;
 }
 
 static bool attr_exists(HtmlTokenizer *t, AuAtom a)
@@ -438,10 +437,11 @@ static bool attr_exists(HtmlTokenizer *t, AuAtom a)
             t->attr_set_size = size;
             for (uint32_t i = 0; i < t->nattrs; i++)
                 set_insert(t, t->attrs[i].name);
-        } else if (t->nattrs == 8) {
+        } else if (!t->attr_set_live) {
             for (uint32_t i = 0; i < t->nattrs; i++)
                 set_insert(t, t->attrs[i].name);
         }
+        t->attr_set_live = true;
     }
     uint32_t i = set_slot(a, t->attr_set_size);
     while (t->attr_set[i]) {

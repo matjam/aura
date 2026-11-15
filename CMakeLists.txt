@@ -24,6 +24,9 @@ file(GLOB_RECURSE AURA_ENGINE_SOURCES CONFIGURE_DEPENDS src/*.c)
 list(FILTER AURA_ENGINE_SOURCES EXCLUDE REGEX "/src/platform/")
 add_library(aura_engine STATIC ${AURA_ENGINE_SOURCES})
 target_include_directories(aura_engine PUBLIC src)
+# BearSSL (TLS and its primitives), used by src/net.
+add_subdirectory(third_party/bearssl)
+target_link_libraries(aura_engine PUBLIC bearssl)
 
 if(AURA_MACOS9)
     if(EXISTS ${CMAKE_SOURCE_DIR}/src/platform/macos9/CMakeLists.txt)

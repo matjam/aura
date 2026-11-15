@@ -1,18 +1,25 @@
-Tables, as far as the placeholder table layout goes (src/layout/table.c):
-columns from cell widths, colspan, border-spacing, vertical-align in
-cells. Ahem: 16px lines.
+Tables (src/layout/table.c): box tree fixup, the slot grid, the automatic
+and fixed width algorithms, heights and vertical alignment, both border
+models, captions, nested tables, visibility: collapse, hit testing.
+
+Content is mostly inline-blocks (<i>, 16px tall, top aligned) so the same
+cases give the same geometry in Chrome, where the expectations were
+checked; cases that depend on the Ahem-like font say "no-chrome". Ahem:
+16px lines.
 
 === cells sit side by side in content-sized columns
 <body style="margin:0">
-<table style="border-spacing:0"><tr><td id=a style="padding:0">xx</td><td id=b style="padding:0">xxx</td></tr></table>
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td id=a><i style="width:32px"></i></td><td id=b><i style="width:48px"></i></td></tr></table>
 ---
-#a x=0 w=32
+#a x=0 w=32 h=16
 #b x=32 w=48
 
 === colspan spans columns
 <body style="margin:0">
-<table style="border-spacing:0"><tr><td style="padding:0">xx</td><td style="padding:0">xx</td></tr>
-<tr><td id=c colspan=2 style="padding:0">x</td></tr></table>
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td><i style="width:32px"></i></td><td><i style="width:32px"></i></td></tr>
+<tr><td id=c colspan=2><i></i></td></tr></table>
 ---
 #c w=64
 
@@ -23,8 +30,743 @@ cells. Ahem: 16px lines.
 <td style="padding:0;vertical-align:middle"><span id=m style="display:inline-block;width:5px;height:5px"></span></td>
 <td style="padding:0;vertical-align:top"><span id=t style="display:inline-block;width:5px;height:5px"></span></td>
 </tr></table>
+<!-- no-chrome -->
 ---
 // content is one 16px line; the row is 50px tall
 #b y=41.8
 #m y=24.8
 #t y=7.8
+
+=== fixup: table-cell divs get an anonymous table and row
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<div id=d><div id=a style="display:table-cell;padding:2px"><i style="width:30px"></i></div>
+<div id=b style="display:table-cell;padding:2px"><i style="width:10px"></i></div></div><div id=after><i></i></div>
+---
+#d x=0 y=0 w=800 h=20
+#a x=0 y=0 w=34 h=20
+#b x=34 y=0 w=14 h=20
+#after x=0 y=20 w=800 h=16
+
+=== fixup: table-row divs separated by white space share one table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<div><div style="display:table-row"><div id=a style="display:table-cell"><i style="width:40px"></i></div></div>
+<div style="display:table-row"><div id=b style="display:table-cell"><i style="width:20px"></i></div><div id=c style="display:table-cell"><i></i></div></div></div>
+---
+#a x=0 y=0 w=40 h=16
+#b x=0 y=16 w=40 h=16
+#c x=40 y=16 w=16 h=16
+
+=== fixup: content directly in a table gets an anonymous row and cell
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<div id=t style="display:table;border-spacing:3px"><i id=x style="width:30px"></i><div id=c style="display:table-cell"><i></i></div></div>
+---
+#t x=0 y=0 w=55 h=22
+#x x=3 y=3 w=30 h=16
+#c x=36 y=3 w=16 h=16
+
+=== fixup: cells inside an inline box form an inline table on the line
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<div style="line-height:16px"><span><i></i><span id=a style="display:table-cell"><i style="width:20px"></i></span><span id=b style="display:table-cell"><i style="width:20px"></i></span><i id=z></i></span></div>
+---
+#a x=16 y=0 w=20 h=16
+#b x=36 y=0 w=20 h=16
+#z x=56 y=0 w=16 h=16
+
+=== fixup: the first header group goes first and the first footer group last
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0">
+<tfoot><tr><td id=f><i></i></td></tr></tfoot>
+<tbody><tr><td id=b><i></i></td></tr></tbody>
+<thead><tr><td id=h><i></i></td></tr></thead>
+<thead><tr><td id=h2><i></i></td></tr></thead>
+</table>
+---
+#h x=0 y=0 w=16 h=16
+#b x=0 y=16 w=16 h=16
+#h2 x=0 y=32 w=16 h=16
+#f x=0 y=48 w=16 h=16
+
+=== captions: above and below, outside the border, as wide as the table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border:3px solid;border-spacing:0;margin:5px">
+<caption id=c1 style="padding:1px"><i></i></caption>
+<caption id=c2 style="caption-side:bottom;margin-top:4px"><i></i></caption>
+<tr><td id=a><i style="width:60px"></i></td></tr></table>
+---
+#t x=5 y=5 w=66 h=60
+#c1 x=5 y=5 w=66 h=18
+#a x=8 y=26 w=60 h=16
+#c2 x=5 y=49 w=66 h=16
+
+=== captions: a wide caption widens the table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:0"><caption><i style="width:100px"></i></caption><tr><td id=a><i></i></td><td id=b><i></i></td></tr></table>
+---
+#t x=0 y=0 w=100 h=32
+#a x=0 y=16 w=50 h=16
+#b x=50 y=16 w=50 h=16
+
+=== grid: rowspan=0 spans to the end of its row group; rowspan stops at the group end
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0">
+<tbody><tr><td id=a rowspan=0><i></i></td><td><i></i></td></tr><tr><td><i></i></td></tr><tr><td><i></i></td></tr></tbody>
+<tbody><tr><td id=b rowspan=5><i></i></td><td id=c><i></i></td></tr><tr><td id=d><i></i></td></tr></tbody>
+</table>
+---
+#a x=0 y=0 w=16 h=48
+#b x=0 y=48 w=16 h=32
+#c x=16 y=48 w=16 h=16
+#d x=16 y=64 w=16 h=16
+
+=== grid: a cell skips slots covered from above and may overlap a rowspan
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0">
+<tr><td id=a><i style="width:25px"></i></td><td id=b rowspan=2><i style="width:25px;height:32px"></i></td></tr>
+<tr><td id=c colspan=2><i style="width:50px"></i></td></tr>
+<tr><td id=d><i></i></td><td id=e rowspan=2><i></i></td><td id=f><i></i></td></tr>
+<tr><td id=g><i></i></td><td id=h><i></i></td></tr>
+</table>
+---
+#a x=0 y=0 w=25 h=16
+#b x=25 y=0 w=25 h=32
+#c x=0 y=16 w=50 h=16
+#d x=0 y=32 w=25 h=16
+#e x=25 y=32 w=25 h=32
+#f x=50 y=32 w=16 h=16
+#g x=0 y=48 w=25 h=16
+#h x=50 y=48 w=16 h=16
+
+=== grid: a row without cells still takes the vertical spacing
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:4px"><tr><td id=a><i></i></td></tr><tr id=r></tr><tr><td id=b><i></i></td></tr></table>
+---
+#t x=0 y=0 w=24 h=48
+#r x=4 y=24 w=16 h=0
+#b x=4 y=28 w=16 h=16
+
+=== grid: columns that only col elements name do not count
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:5px"><col span=4><tr><td id=a><i></i></td></tr></table>
+---
+#t x=0 y=0 w=26 h=26
+#a x=5 y=5 w=16 h=16
+
+=== grid: an empty table is its border and padding
+<body style="margin:0">
+<table id=t style="border:3px solid;padding:4px;border-spacing:2px"></table>
+---
+#t x=0 y=0 w=14 h=14
+
+=== auto layout: percentage, auto and fixed columns in a fixed-width table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;width:300px"><tr><td id=a style="width:30%"><i></i></td><td id=b><i></i></td><td id=c style="width:100px"><i></i></td></tr></table>
+---
+#a x=0 y=0 w=90 h=16
+#b x=90 y=0 w=110 h=16
+#c x=200 y=0 w=100 h=16
+
+=== auto layout: a percentage column widens an auto-width table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:0"><tr><td id=a style="width:30%"><i style="width:60px"></i></td><td id=b><i style="width:60px"></i></td></tr></table>
+---
+#t x=0 y=0 w=200 h=16
+#a x=0 y=0 w=60 h=16
+#b x=60 y=0 w=140 h=16
+
+=== auto layout: percentages beyond 100% are cut in column order
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;width:400px"><tr><td id=a style="width:60%"><i></i></td><td id=b style="width:60%"><i></i></td><td id=c><i></i></td></tr></table>
+---
+#a x=0 y=0 w=230.25 h=16
+#b x=230.25 y=0 w=153.75 h=16
+#c x=384 y=0 w=16 h=16
+
+=== auto layout: a spanning cell spreads its width in proportion to the max widths
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td id=a><i style="width:50px"></i></td><td id=b><i style="width:100px"></i></td></tr><tr><td id=c colspan=2><i style="width:300px"></i></td></tr></table>
+---
+#a x=0 y=0 w=100 h=16
+#b x=100 y=0 w=200 h=16
+#c x=0 y=16 w=300 h=16
+
+=== auto layout: a spanning cell over fixed columns grows them
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td id=a style="width:100px"><i style="width:50px"></i></td><td id=b style="width:60px"><i></i></td></tr><tr><td colspan=2><i style="width:320px"></i></td></tr></table>
+---
+#a x=0 y=0 w=200 h=16
+#b x=200 y=0 w=120 h=16
+
+=== auto layout: spanning cells with border spacing
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:10px"><tr><td id=a><i style="width:20px"></i></td><td id=b><i style="width:20px"></i></td><td id=c><i style="width:20px"></i></td></tr>
+<tr><td id=d colspan=3><i style="width:200px"></i></td></tr><tr><td id=e colspan=2><i style="width:150px"></i></td><td><i></i></td></tr></table>
+---
+#a x=10 y=10 w=78.75 h=16
+#b x=98.75 y=10 w=78.75 h=16
+#c x=187.5 y=10 w=22.5 h=16
+#d x=10 y=36 w=200 h=16
+#e x=10 y=62 w=167.5 h=16
+
+=== auto layout: extra width goes to fixed columns when all are fixed
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;width:500px"><tr><td id=a style="width:100px"><i></i></td><td id=b style="width:50px"><i></i></td></tr></table>
+---
+#a x=0 y=0 w=333.33 h=16
+#b x=333.33 y=0 w=166.67 h=16
+
+=== auto layout: extra width goes to auto columns in proportion to their max widths
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;width:400px"><tr><td id=a><i style="width:50px"></i></td><td id=b style="width:50px"><i></i></td><td id=c><i style="width:150px"></i></td></tr></table>
+---
+#a x=0 y=0 w=87.5 h=16
+#b x=87.5 y=0 w=50 h=16
+#c x=137.5 y=0 w=262.5 h=16
+
+=== auto layout: a narrow table divides between min and max widths
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;width:100px"><tr><td id=a><i style="width:60px"></i><wbr><i style="width:60px"></i></td><td id=b><i style="width:30px"></i><wbr><i style="width:30px"></i></td></tr></table>
+---
+#a x=0 y=0 w=66.66 h=32
+#b x=66.66 y=0 w=33.34 h=32
+
+=== auto layout: the table is never narrower than its min-content width
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<div style="width:100px"><table id=t style="width:100%;border-spacing:0"><tr><td id=a><i style="width:150px"></i></td></tr></table></div>
+<table id=u style="width:10px;max-width:5px;border-spacing:0"><tr><td><i style="width:40px"></i></td></tr></table>
+---
+#t x=0 y=0 w=150 h=16
+#u x=0 y=16 w=40 h=16
+
+=== auto layout: min-width and max-width on an auto-width table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="min-width:200px;border-spacing:0"><tr><td id=a><i></i></td><td><i style="width:48px"></i></td></tr></table>
+<table id=u style="max-width:100px;border-spacing:0"><tr><td><i style="width:80px"></i><wbr><i style="width:80px"></i></td></tr></table>
+---
+#t x=0 y=0 w=200 h=16
+#a x=0 y=0 w=50 h=16
+#u x=0 y=16 w=100 h=32
+
+=== auto layout: shrink-to-fit in a float and an inline-block
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<div id=f style="float:left"><table style="border-spacing:2px"><tr><td><i style="width:40px"></i></td><td><i style="width:40px"></i></td></tr></table></div>
+<div id=g style="display:inline-block"><table style="width:100%;border-spacing:0"><tr><td><i style="width:30px"></i></td></tr></table></div>
+---
+#f x=0 y=0 w=86 h=20
+#g x=86 y=0 w=30 h=16
+
+=== auto layout: a centred table (align=center)
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t align=center style="border-spacing:0"><tr><td><i style="width:100px"></i></td></tr></table>
+---
+#t x=350 y=0 w=100 h=16
+
+=== auto layout: nested tables size from the inside out
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=o style="border-spacing:2px"><tr><td id=a><table id=n style="border-spacing:2px"><tr><td><i style="width:50px"></i></td><td><i style="width:30px"></i></td></tr></table></td><td id=b><i></i></td></tr></table>
+---
+#o x=0 y=0 w=108 h=24
+#a x=2 y=2 w=86 h=20
+#n x=2 y=2 w=86 h=20
+#b x=90 y=2 w=16 h=20
+
+=== fixed layout: col elements and the first row decide
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="table-layout:fixed;width:400px;border-spacing:0"><col style="width:100px"><col><col style="width:80px"><tr><td id=a><i style="width:200px"></i></td><td id=b><i></i></td><td id=c><i></i></td></tr></table>
+---
+#a x=0 y=0 w=100 h=16
+#b x=100 y=0 w=220 h=16
+#c x=320 y=0 w=80 h=16
+
+=== fixed layout: a spanning first-row cell divides its width; later rows are ignored
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="table-layout:fixed;width:300px;border-spacing:2px"><tr><td id=a colspan=2 style="width:100px"><i></i></td><td id=b style="width:50px"><i></i></td><td id=c><i></i></td></tr><tr><td id=d style="width:200px"><i></i></td><td><i></i></td><td><i></i></td><td><i></i></td></tr></table>
+---
+#a x=2 y=2 w=100 h=16
+#b x=104 y=2 w=50 h=16
+#c x=156 y=2 w=142 h=16
+#d x=2 y=20 w=49 h=16
+
+=== fixed layout: columns wider than the table widen it
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="table-layout:fixed;width:100px;border-spacing:0"><tr><td style="width:80px"><i></i></td><td style="width:70px"><i></i></td><td id=c><i></i></td></tr></table>
+---
+#t x=0 y=0 w=150 h=16
+#c x=150 y=0 w=0 h=16
+
+=== heights: a rowspan cell's excess goes to its rows in proportion to their heights
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr id=r1><td><i style="height:20px"></i></td><td rowspan=2 id=x><i style="height:100px"></i></td></tr><tr id=r2><td><i style="height:40px"></i></td></tr></table>
+---
+#r1 x=0 y=0 w=32 h=33.33
+#r2 x=0 y=33.33 w=32 h=66.67
+#x x=16 y=0 w=16 h=100
+
+=== heights: a taller table gives the excess to its body rows only
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0;height:200px"><thead><tr id=h><td><i></i></td></tr></thead><tbody><tr id=r1><td><i style="height:20px"></i></td></tr><tr id=r2><td><i style="height:40px"></i></td></tr></tbody><tfoot><tr id=f><td><i></i></td></tr></tfoot></table>
+---
+#h x=0 y=0 w=16 h=16
+#r1 x=0 y=16 w=16 h=56
+#r2 x=0 y=72 w=16 h=112
+#f x=0 y=184 w=16 h=16
+
+=== heights: cell and row heights are minimums; a cell's height is content-box
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr id=r style="height:30px"><td id=a><i></i></td></tr><tr><td id=b style="height:50px;padding:5px"><i></i></td></tr><tr><td id=c style="height:5px"><i style="height:40px"></i></td></tr></table>
+---
+#r x=0 y=0 w=26 h=30
+#a x=0 y=0 w=26 h=30
+#b x=0 y=30 w=26 h=60
+#c x=0 y=90 w=26 h=40
+
+=== heights: vertical-align top, middle, bottom and baseline in cells
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr>
+<td style="vertical-align:top"><i id=t></i></td>
+<td style="vertical-align:middle"><i id=m></i></td>
+<td style="vertical-align:bottom"><i id=b></i></td>
+<td style="vertical-align:top"><i style="height:60px"></i></td>
+</tr></table>
+---
+#t x=0 y=0 w=16 h=16
+#m x=16 y=22 w=16 h=16
+#b x=32 y=44 w=16 h=16
+
+=== heights: baseline-aligned cells line up their first lines
+<body style="margin:0">
+<style>i{display:inline-block;width:16px;height:16px}td{padding:0;vertical-align:baseline;line-height:20px;font-size:0}</style>
+<table style="border-spacing:0"><tr>
+<td style="padding-top:10px"><i id=a></i></td>
+<td><i id=b style="height:30px"></i></td>
+<td style="padding-top:3px"><i id=c style="height:5px"></i></td>
+</tr></table>
+---
+#a x=0 y=14 w=16 h=16
+#b x=16 y=0 w=16 h=30
+#c x=32 y=25 w=16 h=5
+
+=== heights: a percentage height in a cell with a specified height
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td style="height:80px"><div id=d style="height:50%;width:10px"></div></td><td><i style="height:120px"></i></td></tr></table>
+---
+#d x=0 y=30 w=10 h=60
+
+=== heights: a percentage height in a cell without one is auto
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td><div id=d style="height:50%;width:10px"><i></i></div></td><td><i style="height:120px"></i></td></tr></table>
+---
+#d x=0 y=52 w=10 h=16
+
+=== borders: separated borders with two spacing values
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border:2px solid;padding:3px;border-spacing:4px 6px"><tr><td id=a style="border:1px solid"><i></i></td><td id=b><i></i></td></tr><tr><td id=c><i></i></td><td><i></i></td></tr></table>
+---
+#t x=0 y=0 w=56 h=62
+#a x=9 y=11 w=18 h=18
+#b x=31 y=11 w=16 h=18
+#c x=9 y=35 w=18 h=16
+
+=== borders: collapsed widths size cells by half their own segments
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:20px;height:18px}td{padding:0}</style>
+<table id=t style="border-collapse:collapse"><tr><td id=a style="border:1px solid"><i></i></td><td id=b style="border:3px solid"><i></i></td></tr><tr><td id=c style="border:5px solid"><i></i></td><td id=d><i></i></td></tr></table>
+---
+#t x=0 y=0 w=52 h=48
+#a x=2.5 y=1.5 w=25 h=21
+#b x=27.5 y=1.5 w=23 h=21
+#c x=2.5 y=22.5 w=25 h=23
+#d x=27.5 y=22.5 w=23 h=23
+
+=== borders: collapsed conflicts: hidden wins, then the wider border, then the table's last
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:20px;height:20px}td{padding:0}</style>
+<table id=t style="border-collapse:collapse;border:6px solid"><tr><td id=a style="border-left:2px solid;border-right:4px solid"><i></i></td><td id=b style="border-left:hidden"><i></i></td><td id=c style="border:8px solid"><i></i></td></tr></table>
+---
+#t x=0 y=0 w=82 h=36
+#a x=3 y=4 w=23 h=28
+#b x=26 y=4 w=24 h=28
+#c x=50 y=4 w=28 h=28
+
+=== borders: row, row group and column borders take part in collapsing
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:20px;height:20px}td{padding:0}</style>
+<table id=t style="border-collapse:collapse"><col style="border-left:10px solid"><col><tbody style="border-top:4px solid"><tr style="border-bottom:6px solid"><td id=a><i></i></td><td id=b><i></i></td></tr><tr><td id=c><i></i></td><td id=d><i></i></td></tr></tbody></table>
+---
+#t x=0 y=0 w=50 h=50
+#a x=5 y=2 w=25 h=25
+#b x=30 y=2 w=20 h=25
+#c x=5 y=27 w=25 h=23
+#d x=30 y=27 w=20 h=23
+
+=== visibility collapse: a collapsed row takes no space
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:3px"><tr><td id=a><i></i></td><td><i style="width:40px"></i></td></tr><tr id=r style="visibility:collapse"><td><i style="height:30px"></i></td><td><i></i></td></tr><tr><td id=c><i></i></td><td><i></i></td></tr></table>
+---
+#t x=0 y=0 w=65 h=41
+#r x=3 y=19 w=59 h=0
+#c x=3 y=22 w=16 h=16
+
+=== visibility collapse: a collapsed column takes no space
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t style="border-spacing:3px"><col><col style="visibility:collapse"><col><tr><td id=a><i></i></td><td id=b><i style="width:40px"></i></td><td id=c><i></i></td></tr></table>
+---
+#t x=0 y=0 w=41 h=22
+#a x=3 y=3 w=16 h=16
+#b x=19 y=3 w=0 h=16
+#c x=22 y=3 w=16 h=16
+
+=== a table as a flex item and in a table cell
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<div style="display:flex;width:300px"><table id=t style="border-spacing:0"><tr><td><i style="width:50px"></i></td></tr></table><div id=d style="flex:1;height:5px"></div></div>
+---
+#t x=0 y=0 w=50 h=16
+#d x=50 y=0 w=250 h=5
+
+=== an inline table sits on its first row's baseline
+<body style="margin:0">
+<style>i{display:inline-block;width:16px;height:16px}td{padding:0}</style>
+<div style="font-size:0;line-height:0"><i id=x style="height:40px"></i><table id=t style="display:inline-table;border-spacing:0"><tr><td style="vertical-align:top"><i style="height:30px"></i></td><td style="padding-top:5px"><i id=y></i></td></tr></table></div>
+---
+#x x=0 y=0 w=16 h=40
+#t x=16 y=10 w=32 h=30
+#y x=32 y=19.5 w=16 h=16
+
+=== positioned cells and a scrolling cell
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table style="border-spacing:0"><tr><td id=a style="position:relative;left:5px;top:3px"><i></i></td><td style="position:relative"><div id=p style="position:absolute;left:2px;top:2px;width:4px;height:4px"></div><i></i></td><td style="width:20px;max-width:20px;overflow:hidden"><div id=w style="width:50px;height:10px"></div></td></tr></table>
+---
+#a x=5 y=3 w=16 h=16
+#p x=18 y=2 w=4 h=4
+#w x=32 y=3 w=50 h=10
+
+=== quirks: a cell's height includes its padding and border
+<!-- quirks --><body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<table cellspacing=0><tr><td id=a height=50 style="padding:5px;border:2px solid"><i></i></td></tr></table>
+---
+#a x=0 y=0 w=30 h=50
+
+=== quirks: nowrap with a width makes that width the cell's minimum
+<!-- quirks --><body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table width=10 cellspacing=0><tr><td id=a nowrap width=100><i style="width:60px"></i><wbr><i style="width:60px"></i></td><td id=b><i style="width:30px"></i><wbr><i style="width:30px"></i></td></tr></table>
+---
+#a x=0 y=0 w=100 h=32
+#b x=100 y=0 w=30 h=32
+
+=== attributes: border, cellpadding and cellspacing
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<table id=t border=2 cellpadding=4 cellspacing=3><tr><td id=a><i></i></td><td id=b width=50><i></i></td></tr></table>
+---
+#t x=0 y=0 w=99 h=36
+#a x=5 y=5 w=26 h=26
+#b x=34 y=5 w=60 h=26
+
+=== attributes: width percentages on cells and the table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t width="50%" cellspacing=0><tr><td id=a width="25%"><i></i></td><td id=b><i></i></td></tr></table>
+---
+#t x=0 y=0 w=400 h=16
+#a x=0 y=0 w=100 h=16
+#b x=100 y=0 w=300 h=16
+
+=== attributes: height on the table and a row
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t height=100 cellspacing=0><tr id=r1 height=30><td><i></i></td></tr><tr id=r2><td><i></i></td></tr></table>
+---
+#t x=0 y=0 w=16 h=100
+#r1 x=0 y=0 w=16 h=30
+#r2 x=0 y=30 w=16 h=70
+
+=== attributes: valign and align
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table cellspacing=0><tr valign=bottom><td width=100 align=right><i id=a></i></td><td valign=top><i id=b></i></td><td><i style="height:50px"></i></td></tr></table>
+---
+#a x=84 y=34 w=16 h=16
+#b x=100 y=0 w=16 h=16
+
+=== hit testing: cells, the spacing in a row, and the caption
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}</style>
+<table id=t style="border-spacing:10px"><caption id=cap><i></i></caption><tbody id=g><tr id=r><td id=a style="padding:0"><i style="width:40px"></i></td><td id=b style="padding:0"><i style="width:40px"></i></td></tr></tbody></table>
+---
+hit 15 30 #a
+hit 75 30 #b
+hit 55 30 #t
+hit 5 30 #t
+hit 30 5 #cap
+
+=== hit testing: a nested table's cell
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table cellspacing=0><tr><td><table cellspacing=0><tr><td><i></i></td><td id=x><i></i></td></tr></table></td><td id=y><i></i></td></tr></table>
+---
+hit 20 5 #x
+hit 40 5 #y
+
+=== hit testing: a rowspan cell over the next row
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table cellspacing=0><tr><td id=a rowspan=2><i style="height:40px"></i></td><td><i></i></td></tr><tr><td><i></i></td></tr></table>
+---
+hit 5 30 #a
+
+=== visibility collapse: cells of a collapsed row are not hit
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table id=t cellspacing=0><tr><td id=a><i></i></td></tr><tr style="visibility:collapse"><td id=b><i></i></td></tr><tr><td id=c><i></i></td></tr></table>
+---
+hit 5 20 #c
+#t x=0 y=0 w=16 h=32
+
+=== painting: table, row and cell backgrounds; the spacing shows the table
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table style="border-spacing:10px;background:#0000ff"><tr style="background:#00ff00"><td><i></i></td><td style="background:#ff0000"><i></i></td></tr></table>
+---
+pixel 5 5 0000ff
+pixel 30 30 00ff00
+pixel 55 30 0000ff
+pixel 80 30 ff0000
+
+=== painting: column and column group backgrounds are under row backgrounds
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table style="border-spacing:0"><colgroup style="background:#ffff00"><col style="background:#00ffff"><col></colgroup><col style="background:#ff00ff"><tr><td><i></i></td><td><i></i></td><td><i></i></td></tr><tr style="background:#808080"><td><i></i></td><td><i></i></td><td><i></i></td></tr></table>
+---
+pixel 20 20 00ffff
+pixel 60 20 ffff00
+pixel 100 20 ff00ff
+pixel 20 60 808080
+
+=== painting: the table border goes around the grid, not the caption
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table style="border:4px solid #000;border-spacing:0;background:#ff0000"><caption><i style="height:20px"></i></caption><tr><td><i></i></td></tr></table>
+---
+pixel 2 10 ffffff
+pixel 2 22 000000
+pixel 20 40 ff0000
+
+=== painting: empty-cells hide
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0;background:#ff0000;width:40px;height:40px}</style>
+<table style="border-spacing:0;empty-cells:hide"><tr style="background:#00ff00"><td><i></i></td><td></td><td> </td></tr></table>
+---
+pixel 20 20 ff0000
+pixel 60 20 00ff00
+pixel 100 20 00ff00
+
+=== painting: collapsed borders: the wider border wins and is centred on the grid line
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table style="border-collapse:collapse;border:2px solid #0000ff"><tr><td style="border:10px solid #ff0000"><i></i></td><td style="border:2px solid #00ff00"><i></i></td></tr></table>
+---
+pixel 2 30 ff0000
+pixel 7 30 ff0000
+pixel 55 30 ff0000
+pixel 62 30 ffffff
+pixel 80 2 ffffff
+pixel 80 7 ffffff
+pixel 115 30 ffffff
+
+=== painting: collapsed borders: on equal widths the style decides, then the cell over the table
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table style="border-collapse:collapse;border:6px solid #0000ff"><tr><td style="border:6px double #ff0000"><i></i></td><td style="border-left:6px dashed #00ff00;border-right:6px solid #ff00ff"><i></i></td></tr></table>
+---
+pixel 1 30 ff0000
+pixel 50 30 ff0000
+pixel 52 30 ffffff
+pixel 97 30 ff00ff
+
+=== painting: bgcolor on table, row and cell
+<body style="margin:0;background:#fff">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:40px}td{padding:0}</style>
+<table bgcolor="#f6f6ef" cellspacing=4><tr bgcolor="#ff6600"><td><i></i></td><td bgcolor="#000080"><i></i></td></tr></table>
+---
+pixel 2 2 f6f6ef
+pixel 20 20 ff6600
+pixel 60 20 000080
+
+=== guard: 40 nested tables with percentage heights lay out in linear time
+<!-- quirks --><body style="margin:0"><div id=o><table width="100%" height="100%"><tr><td height=10><div style="height:410px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:400px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:390px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:380px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:370px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:360px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:350px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:340px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:330px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:320px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:310px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:300px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:290px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:280px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:270px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:260px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:250px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:240px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:230px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:220px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:210px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:200px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:190px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:180px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:170px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:160px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:150px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:140px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:130px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:120px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:110px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:100px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:90px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:80px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:70px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:60px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:50px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:40px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:30px;width:5px"></div></td><td height=10><table width="100%" height="100%"><tr><td height=10><div style="height:20px;width:5px"></div></td><td height=10><i>x</i></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></td></tr><tr><td colspan=2 height="50%">z</td></tr></table></div>
+<!-- no-chrome -->
+---
+#o x=0 y=0 w=800
+
+=== guard: 60 nested shrink-to-fit tables with spanning cells lay out in linear time
+<body style="margin:0"><div id=o style="float:left"><table><tr><td>a b c</td><td colspan=2 style="width:69%"><table><tr><td>a b c</td><td colspan=2 style="width:68%"><table><tr><td>a b c</td><td colspan=2 style="width:67%"><table><tr><td>a b c</td><td colspan=2 style="width:66%"><table><tr><td>a b c</td><td colspan=2 style="width:65%"><table><tr><td>a b c</td><td colspan=2 style="width:64%"><table><tr><td>a b c</td><td colspan=2 style="width:63%"><table><tr><td>a b c</td><td colspan=2 style="width:62%"><table><tr><td>a b c</td><td colspan=2 style="width:61%"><table><tr><td>a b c</td><td colspan=2 style="width:60%"><table><tr><td>a b c</td><td colspan=2 style="width:59%"><table><tr><td>a b c</td><td colspan=2 style="width:58%"><table><tr><td>a b c</td><td colspan=2 style="width:57%"><table><tr><td>a b c</td><td colspan=2 style="width:56%"><table><tr><td>a b c</td><td colspan=2 style="width:55%"><table><tr><td>a b c</td><td colspan=2 style="width:54%"><table><tr><td>a b c</td><td colspan=2 style="width:53%"><table><tr><td>a b c</td><td colspan=2 style="width:52%"><table><tr><td>a b c</td><td colspan=2 style="width:51%"><table><tr><td>a b c</td><td colspan=2 style="width:50%"><table><tr><td>a b c</td><td colspan=2 style="width:49%"><table><tr><td>a b c</td><td colspan=2 style="width:48%"><table><tr><td>a b c</td><td colspan=2 style="width:47%"><table><tr><td>a b c</td><td colspan=2 style="width:46%"><table><tr><td>a b c</td><td colspan=2 style="width:45%"><table><tr><td>a b c</td><td colspan=2 style="width:44%"><table><tr><td>a b c</td><td colspan=2 style="width:43%"><table><tr><td>a b c</td><td colspan=2 style="width:42%"><table><tr><td>a b c</td><td colspan=2 style="width:41%"><table><tr><td>a b c</td><td colspan=2 style="width:40%"><table><tr><td>a b c</td><td colspan=2 style="width:39%"><table><tr><td>a b c</td><td colspan=2 style="width:38%"><table><tr><td>a b c</td><td colspan=2 style="width:37%"><table><tr><td>a b c</td><td colspan=2 style="width:36%"><table><tr><td>a b c</td><td colspan=2 style="width:35%"><table><tr><td>a b c</td><td colspan=2 style="width:34%"><table><tr><td>a b c</td><td colspan=2 style="width:33%"><table><tr><td>a b c</td><td colspan=2 style="width:32%"><table><tr><td>a b c</td><td colspan=2 style="width:31%"><table><tr><td>a b c</td><td colspan=2 style="width:30%"><table><tr><td>a b c</td><td colspan=2 style="width:29%"><table><tr><td>a b c</td><td colspan=2 style="width:28%"><table><tr><td>a b c</td><td colspan=2 style="width:27%"><table><tr><td>a b c</td><td colspan=2 style="width:26%"><table><tr><td>a b c</td><td colspan=2 style="width:25%"><table><tr><td>a b c</td><td colspan=2 style="width:24%"><table><tr><td>a b c</td><td colspan=2 style="width:23%"><table><tr><td>a b c</td><td colspan=2 style="width:22%"><table><tr><td>a b c</td><td colspan=2 style="width:21%"><table><tr><td>a b c</td><td colspan=2 style="width:20%"><table><tr><td>a b c</td><td colspan=2 style="width:19%"><table><tr><td>a b c</td><td colspan=2 style="width:18%"><table><tr><td>a b c</td><td colspan=2 style="width:17%"><table><tr><td>a b c</td><td colspan=2 style="width:16%"><table><tr><td>a b c</td><td colspan=2 style="width:15%"><table><tr><td>a b c</td><td colspan=2 style="width:14%"><table><tr><td>a b c</td><td colspan=2 style="width:13%"><table><tr><td>a b c</td><td colspan=2 style="width:12%"><table><tr><td>a b c</td><td colspan=2 style="width:11%"><table><tr><td>a b c</td><td colspan=2 style="width:10%"><i>x</i></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></td></tr><tr><td colspan=2>d</td><td>e</td></tr></table></div>
+<!-- no-chrome -->
+---
+#o x=0 y=0
+
+=== quirks: a line with only an image is as tall as the image (spacer cells)
+<!-- quirks --><body style="margin:0">
+<table cellspacing=0 cellpadding=0><tr><td id=a><img id=s width=1 height=3 style="background:red"></td></tr><tr><td id=b><img width=20 height=10><table id=t cellspacing=0><tr><td>&nbsp;</td></tr></table></td></tr></table>
+---
+#a x=0 y=0 w=20 h=3
+#s x=0 y=0 w=1 h=3
+#b x=0 y=3
+#t x=0 y=13
+
+=== standards: the same line keeps the strut
+<body style="margin:0">
+<table cellspacing=0 cellpadding=0><tr><td id=a><img width=1 height=3 style="background:red"></td></tr></table>
+---
+#a h=16
+
+=== quirks: small text in a span is not held apart by the cell's strut
+<!-- quirks --><body style="margin:0">
+<table cellspacing=0 cellpadding=0 style="line-height:30px"><tr><td id=a><span style="font-size:10px;line-height:10px">small</span></td></tr><tr><td id=b><span style="font-size:10px;line-height:10px">small<br>two</span></td></tr><tr><td id=c>x<span style="font-size:10px;line-height:10px">small</span></td></tr><tr><td id=d><span style="font-size:10px;line-height:10px;padding-top:1px">small</span></td></tr></table>
+---
+#a x=0 y=0 h=10
+#b x=0 y=10 h=20
+#c x=0 y=30 h=30
+#d x=0 y=60 h=10
+
+=== grid: a column group between rows of the table does not place them twice
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0}</style>
+<div style="display:table;border-spacing:0" id=t><div style="display:table-row"><div style="display:table-cell" id=a><i></i></div></div><div style="display:table-column-group"></div><div style="display:table-row"><div style="display:table-cell" id=b><i></i></div></div></div>
+---
+#t x=0 y=0 w=40 h=40
+#a x=0 y=0 w=40 h=20
+#b x=0 y=20 w=40 h=20
+
+=== quirks: default margins at the start and end of a cell are dropped
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><p id=p1><i></i></p><p id=p2><i></i></p></td></tr></table>
+---
+#a x=0 y=0 w=40 h=50
+#p1 x=0 y=0 w=40 h=20
+#p2 x=0 y=30 w=40 h=20
+
+=== quirks: through collapsing parents too, but not author margins
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><div><h1 id=h><i></i></h1></div></td><td id=b><p style="margin:12px 0" id=p><i></i></p></td><td id=c><div style="margin:5px 0"><p id=q><i></i></p></div></td></tr></table>
+---
+#a x=0 y=0 w=40 h=44
+#h x=0 y=0 w=40 h=20
+#b x=40 y=0 w=40 h=44
+#p x=40 y=12 w=40 h=20
+#c x=80 y=0 w=40 h=44
+#q x=80 y=5 w=40 h=20
+
+=== quirks: default margins in the body
+<!-- quirks --><body style="margin:0" id=bd>
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}</style>
+<div style="height:0"></div><p id=p1><i></i></p><p id=p2><i></i></p>
+---
+#p1 x=0 y=0 w=800 h=20
+#p2 x=0 y=30 w=800 h=20
+
+=== standards: default margins stay in cells
+<body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><p id=p1><i></i></p></td></tr></table>
+---
+#a x=0 y=0 w=40 h=40
+#p1 x=0 y=10 w=40 h=20
+
+=== quirks: a default margin after text, or an empty paragraph
+<!-- quirks --><body style="margin:0">
+<style>p,h1,ul{font-size:10px;line-height:10px}i{display:inline-block;vertical-align:top;width:40px;height:20px}td{padding:0;vertical-align:top;font-size:16px;line-height:16px}</style>
+<table cellspacing=0 cellpadding=0><tr><td id=a><i></i><p id=p1><i></i></p>x</td><td id=b><p></p><p id=p2><i></i></p><p></p></td><td id=c><ul id=u><li><i></i></ul></td></tr></table>
+---
+#a x=0 y=0 w=40 h=76
+#p1 x=0 y=30 w=40 h=20
+#b x=40 y=0 w=40 h=76
+#p2 x=40 y=0 w=40 h=20
+#c x=80 y=0 w=80 h=76
+#u x=80 y=0 w=80 h=20
+
+=== fixup: a column's generated content is dropped
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:40px;height:20px}</style>
+<q style="display:table-column" id=q></q><div id=d><i></i></div><table style="border-spacing:0"><col id=c><tr><td style="padding:0"><i></i></td></tr></table><style>#c::before{content:"x";display:block;height:50px}</style>
+---
+#q x=0 y=0 w=0 h=0
+#d x=0 y=0 w=800 h=20
+#c x=0 y=20 w=40 h=20
+
+=== heights: a percentage cell height in an auto-height table does not resolve its content's percentages
+<body style="margin:0">
+<style>td{padding:0}</style>
+<table style="border-spacing:0"><tr><td style="height:50%;width:20px"><div id=a style="height:100%;background:red"></div></td><td style="width:20px"><div style="height:100px"></div></td></tr><tr style="height:50%"><td style="width:20px"><div id=b style="height:100%"></div></td><td><div style="height:40px"></div></td></tr></table>
+---
+#a x=0 y=50 w=20 h=0
+#b x=0 y=120 w=20 h=0
+
+=== heights: in a table with a height it does
+<body style="margin:0">
+<style>td{padding:0}</style>
+<table style="border-spacing:0;height:200px"><tr><td style="height:50%;width:20px"><div id=a style="height:100%;background:red"></div></td><td style="width:20px"><div style="height:10px"></div></td></tr><tr><td style="width:20px"><div id=b style="height:100%"></div></td><td><div style="height:40px"></div></td></tr></table>
+---
+#a x=0 y=0 w=20 h=100
+#b x=0 y=100 w=20 h=100
+
+=== positioning: an absolutely positioned box's static position follows the cell's vertical alignment
+<body style="margin:0"><table style="height:100px;border-spacing:0"><tr><td style="padding:0"><div id=a style="position:absolute;width:5px;height:5px"></div></td></tr></table>
+---
+#a x=0 y=50 w=5 h=5
+
+=== guard: 60 nested tables with min-height and percentage heights lay out in linear time
+<body style="margin:0"><style>*{height:100%;min-height:10px}table{margin-top:-4px;border-spacing:0}td{padding:0}</style><div style="height:400px"><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><i id=e style="display:inline-block;width:10px;height:10px"></i></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></div>
+---
+#e x=0 w=10 h=10
+
+=== guard: 61 nested fixed tables with a percentage height, in middle-aligned cells
+<body style="margin:0"><style>table{position:fixed;height:100%;border-spacing:0}td{padding:0}</style><div style="position:relative;height:400px;transform:translate(0)"><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><i id=e style="display:inline-block;width:10px;height:10px;vertical-align:top"></i></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></div>
+---
+#e x=0 w=10
+
+=== guard: 61 nested absolute tables with a percentage height, in middle-aligned cells
+<body style="margin:0"><style>table{position:absolute;height:100%;border-spacing:0}td{padding:0}</style><div style="position:relative;height:400px;transform:translate(0)"><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><i id=e style="display:inline-block;width:10px;height:10px;vertical-align:top"></i></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></div>
+---
+#e x=0 y=12192 w=10 h=10

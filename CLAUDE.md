@@ -39,10 +39,15 @@ what you need to build, test and change Aura.
 | `src/page` | the document view: parsing, style sheets, resources, input |
 | `src/paint` | surfaces, rasterizer, fonts |
 | `src/browser` | browser model and chrome: tabs, history, bookmarks, downloads, preferences, the page interface and its implementation on the document view |
-| `src/platform/host` | host tools: headless render to PNG, tree dumps |
-| `src/platform/macos9` | the Mac OS 9 application |
+| `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) |
+| `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders |
+| `src/net` | HTTP/1.1 client, TLS glue, cookies, HSTS, PSL, cache, sniffing, encodings, the resource loader |
+| `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack |
+| `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` |
+| `third_party` | BearSSL 0.6 (`third_party/README.md` records sources and licences) |
 | `tests/<area>` | one test area per folder, each with a `CMakeLists.txt` |
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` |
+| `assets/net` | `aura-roots.bin`, the root certificate store |
 
 `CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and adds
 every `tests/*/CMakeLists.txt`, so a new source file or test area needs no
@@ -314,6 +319,87 @@ the system lacks.
 - **Not done:** OpenType shaping (GSUB, GPOS), so no ligatures, Arabic
   joining, Indic reordering or bidirectional text; colour emoji; a CJK
   font pack (see the fonts README for what one needs).
+
+## Networking
+
+The network stack is portable engine code that never touches a socket
+itself. `src/net` talks to the platform through `AuNetOps`
+(`src/platform/platform.h`): DNS, non-blocking TCP, a monotonic and a
+wall clock, and an entropy source. The host implements it with BSD
+sockets (`src/platform/host/net_host.c`); Mac OS 9 with Open Transport
+(`src/platform/macos9/net_ot.c`). There is no global state: one `AuNet`
+per application holds the connection pool, TLS configuration and the
+policy stores the embedder attaches.
+
+- **To fetch with the engine**, create the platform's ops, then
+  `au_net_new(ops)`, attach a root store (`au_roots_load` on
+  `assets/net/aura-roots.bin`), and optionally a cookie jar, HSTS store
+  and cache (`au_net_set_cookie_jar`, `au_net_set_hsts`,
+  `au_net_set_cache`). Start requests with `au_http_start` and call
+  `au_net_pump` on every pass of the event loop; callbacks run only from
+  the pump. `au_net_apply_prefs` copies the browser preferences in.
+- **To load pages and resources**, use the loader (`src/net/loader.h`):
+  it adds mixed content blocking, MIME sniffing with `nosniff`, encoding
+  detection and conversion to UTF-8, `data:` URLs, HTTPS-first, and the
+  download hand-off (`au_net_download_*`, shaped for `AuTransferSource`).
+  `src/net/page_fetcher.c` adapts it to the browser's `AuPageFetcher`:
+  `au_net_page_fetcher_interface` fills one, and the shell registers it
+  for `http` and `https` with `au_browser_set_fetcher`.
+- **To persist state**, serialize the stores with
+  `au_cookie_jar_serialize`, `au_hsts_serialize` and the cache's
+  `AuCacheStorage`, and parse them back at start. `aura-host fetch` keeps
+  `cookies` and `hsts` in `$AURA_PROFILE` (default `~/.aura-host`).
+- **To try a URL on the host**, run `build/host/src/platform/host/aura-host
+  fetch -v URL`. It prints the response headers, the TLS version, cipher
+  and certificate chain, and timings. `aura-host render URL -w 800 -o
+  out.png` loads a page and its resources over the network and renders
+  it. Set `AURA_FAKE_TIME` (seconds since 1970) to test the clock check.
+- **To try the stack on Mac OS 9**, build with `./build.sh ppc` and push
+  `build/ppc/src/platform/macos9/nettest/NetTest.bin` with a copy of
+  `assets/net/aura-roots.bin` named `aura-roots` (`guest-push.sh` would
+  decode a `.bin` file as MacBinary). NetTest times the crypto
+  primitives, a DNS lookup and a TCP connection, then fetches a URL list
+  twice and prints status, cipher and timings; a `NetTest URLs` file
+  beside it replaces the list. It also writes `NetTest Log` in the Aura
+  preferences folder.
+
+TLS is BearSSL 0.6 with the 32-bit implementations: TLS 1.2 only, ECDHE
+with AES-GCM or ChaCha20-Poly1305, SNI, ALPN `http/1.1`, session
+resumption, and certificate errors reported with the chain
+(`au_http_cert_info`). TLS 1.3 is not available in BearSSL; every
+acceptance site still offers TLS 1.2.
+
+All network work runs on the main task. Open Transport is called only
+from the main task in asynchronous mode; its notifiers run at deferred
+task time and only record which completion arrived, and the next pump
+acts on it. Do not call Open Transport or the engine from an MP task or
+a Time Manager task: Apple's MP documentation (TN2006) lists Open
+Transport among the services that are not MP-safe, and the Toolbox is
+not reentrant.
+
+The Mac OS 9 entropy pool (`src/platform/macos9/entropy.c`) gathers
+loop timing jitter, user input, the mouse, clocks and free memory into a
+SHA-256 pool and refuses output until it has credited 128 bits, so the
+first TLS handshake waits for it (about 15 s from a cold start with no
+user input, less with a seed file or input). The credit rules are in the
+file's header. A seed file, `Random Seed` in the Aura preferences folder,
+carries state between runs and is rewritten at start, when the pool
+first fills, and at exit. The shell calls `au_mac_entropy_event` for
+every event, `au_mac_entropy_idle` once per loop pass, and
+`au_ot_net_idle` with them.
+
+Open Transport has no headers in the Multiversal Interfaces, and Aura has
+no Apple glue library. `src/platform/macos9/ot.h` declares the calls
+used, and `net_ot.c` calls the exported `Priv` routines with its own
+client record, as Apple's glue did.
+
+On the test machine, QEMU sets the guest clock to UTC while the guest's
+Map control panel says UTC-7, so the wall time Aura computes there is
+7 hours ahead. Certificates are still within their dates.
+
+Limits: IPv4 only on Mac OS 9; no HTTP/2; no proxy auto-configuration;
+cookies, HSTS and the cache are kept in memory until the shell saves
+them.
 
 ## Design
 

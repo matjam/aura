@@ -120,6 +120,56 @@ static bool hit_lines(HCtx *H, LBlock *b, float ox, float oy, LBox *owner)
     return false;
 }
 
+static bool hit_flow(HCtx *H, LBox *parent, float ox, float oy, int phase);
+
+/* One in-flow block child c of a block at (ox, oy). */
+static bool hit_block_child(HCtx *H, LBox *c, float kx, float ky, int phase)
+{
+    LBlock *k = (LBlock *)c;
+    float cx, cy;
+    if (clip_content(H, k, kx, ky, &cx, &cy)) {
+        if (hit_flow(H, c, cx, cy, phase) ||
+            (phase == PH_INLINE && (c->flags & LF_INLINES) && hit_lines(H, k, cx, cy, NULL)))
+            return true;
+    }
+    if (phase == PH_BG && inside(H, kx, ky, k->w, k->h) && targetable(c) && !lb_anon(c)) {
+        H->box = c;
+        H->bx = kx;
+        H->by = ky;
+        return true;
+    }
+    return false;
+}
+
+/* The cells of table t at (ox, oy), in reverse painting order, without
+ * recursing through rows and row groups. The spacing between cells hits
+ * the table, as in Chrome. */
+static bool hit_table(HCtx *H, LTableBox *t, float ox, float oy, int phase)
+{
+    LTableGrid *g = t->g;
+    if (!t->colx)
+        return false;
+    for (uint32_t i = g->ncells; i-- > 0;) {
+        LCellBox *cb = g->cells[i];
+        LBlock *k = &cb->k;
+        if ((k->b.flags & (LF_LAYERED | LF_TOO_DEEP)) || !cb->colspan)
+            continue;
+        const LTableRow *r = &g->rows[cb->row];
+        if ((r->box->b.flags & LF_LAYERED) || (r->group && (r->group->b.flags & LF_LAYERED)))
+            continue;
+        float x = ox + r->box->x + k->x, y = oy + r->box->y + k->y;
+        if (r->group) {
+            x += r->group->x;
+            y += r->group->y;
+        }
+        if (!inside(H, x + k->ov.x, y + k->ov.y, k->ov.w, k->ov.h))
+            continue;
+        if (hit_block_child(H, &k->b, x, y, phase))
+            return true;
+    }
+    return false;
+}
+
 static bool hit_flow(HCtx *H, LBox *parent, float ox, float oy, int phase)
 {
     if (H->depth > L_MAX_DEPTH)
@@ -129,8 +179,12 @@ static bool hit_flow(HCtx *H, LBox *parent, float ox, float oy, int phase)
     int n;
     LBox **arr = children(parent, local, 32, &n, &heap);
     bool hit = false;
+    bool table = parent->kind == LK_BLOCK && parent->inner == LI_TABLE && ((LTableBox *)parent)->g;
     for (int i = n; i-- > 0 && !hit;) {
         LBox *c = arr[i];
+        if (table && c->kind == LK_BLOCK && c->inner >= LI_TABLE_ROW_GROUP && c->inner <= LI_TABLE_COLUMN_GROUP &&
+            c->inner != LI_TABLE_CELL)
+            continue;
         if (c->kind == LK_INLINE) {
             if (phase == PH_FLOAT && !(c->flags & LF_LAYERED))
                 hit = hit_flow(H, c, ox, oy, phase);
@@ -152,21 +206,11 @@ static bool hit_flow(HCtx *H, LBox *parent, float ox, float oy, int phase)
         }
         if (c->flags & LF_INLINE_LEVEL)
             continue;
-        float cx, cy;
-        if (clip_content(H, k, kx, ky, &cx, &cy)) {
-            if (hit_flow(H, c, cx, cy, phase) ||
-                (phase == PH_INLINE && (c->flags & LF_INLINES) && hit_lines(H, k, cx, cy, NULL))) {
-                hit = true;
-                break;
-            }
-        }
-        if (phase == PH_BG && inside(H, kx, ky, k->w, k->h) && targetable(c) && !lb_anon(c)) {
-            H->box = c;
-            H->bx = kx;
-            H->by = ky;
+        if (hit_block_child(H, c, kx, ky, phase))
             hit = true;
-        }
     }
+    if (!hit && table)
+        hit = hit_table(H, (LTableBox *)parent, ox, oy, phase);
     au_free(heap);
     H->depth--;
     return hit;

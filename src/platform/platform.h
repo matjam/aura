@@ -99,4 +99,70 @@ typedef struct AuEvent {
     int width, height; /* resize */
 } AuEvent;
 
+/* ---- Networking, clocks and entropy ----
+ *
+ * The network stack (src/net) is portable and makes no OS calls. The
+ * platform hands it an AuNetOps table: non-blocking sockets, asynchronous
+ * DNS, a monotonic clock, the wall clock and an entropy source. The stack
+ * calls these only from au_net_pump (and au_net_free), which the shell
+ * calls from its event loop on the main task, so implementations need not
+ * be reentrant. No call may block: an operation that cannot complete at
+ * once returns "pending" or "would block" and is polled again on the next
+ * pump. src/platform/host/net_host.c implements this with BSD sockets;
+ * src/platform/macos9/net_ot.c with Open Transport.
+ *
+ * Handles are small positive integers chosen by the platform (0 is
+ * never a valid handle). */
+
+typedef struct AuNetAddr {
+    uint8_t family; /* 4 or 6 */
+    uint8_t addr[16]; /* network byte order; IPv4 in the first 4 bytes */
+} AuNetAddr;
+
+enum {
+    AU_NETIO_WOULD_BLOCK = 0, /* send/recv: nothing transferred now */
+    AU_NETIO_CLOSED = -1,     /* recv: the peer closed the connection (orderly) */
+    AU_NETIO_ERROR = -2       /* reset, unreachable, or any other failure */
+};
+
+typedef struct AuNetOps {
+    void *ctx;
+    /* DNS. resolve_start begins resolving host (an ASCII host name or
+     * address literal) and returns a request handle, or 0 on immediate
+     * failure. resolve_poll returns 1 and fills *addr when done, 0 while
+     * pending, -1 on failure (the request is then finished). resolve_cancel
+     * ends a pending or finished request; every handle from resolve_start
+     * is passed to resolve_cancel exactly once. */
+    uint32_t (*resolve_start)(void *ctx, const char *host);
+    int (*resolve_poll)(void *ctx, uint32_t req, AuNetAddr *addr);
+    void (*resolve_cancel)(void *ctx, uint32_t req);
+    /* TCP. connect starts a non-blocking connection and returns a socket
+     * handle, or 0 on immediate failure. connect_poll returns 1 when
+     * connected, 0 while pending, -1 on failure. send returns the number
+     * of bytes accepted (0: would block) or AU_NETIO_ERROR. recv returns
+     * the number of bytes read (> 0), AU_NETIO_WOULD_BLOCK, AU_NETIO_CLOSED
+     * or AU_NETIO_ERROR. close releases the handle (it may abort the
+     * connection; Aura does not need a graceful close). */
+    uint32_t (*connect)(void *ctx, const AuNetAddr *addr, uint16_t port);
+    int (*connect_poll)(void *ctx, uint32_t sock);
+    long (*send)(void *ctx, uint32_t sock, const void *data, size_t len);
+    long (*recv)(void *ctx, uint32_t sock, void *buf, size_t cap);
+    void (*close)(void *ctx, uint32_t sock);
+    /* Milliseconds from an arbitrary start, monotonic; wraps after 49
+     * days (the stack compares with unsigned differences). */
+    uint32_t (*now_ms)(void *ctx);
+    /* Seconds since 1970-01-01 00:00 UTC, from the system clock (which on
+     * Mac OS 9 is local time: the platform applies the time zone from the
+     * Map control panel). */
+    int64_t (*wall_time)(void *ctx);
+    /* Fills buf with len bytes of seed material from the platform's
+     * entropy source and returns true, or returns false when the source
+     * has not gathered enough entropy yet (the stack then waits before
+     * starting a TLS handshake and asks again on a later pump). Each call
+     * must return fresh output. The host uses the system's generator; Mac
+     * OS 9 has none, so its implementation keeps a pool fed by timing
+     * jitter and user input (see src/platform/macos9/entropy.c). */
+    bool (*entropy)(void *ctx, void *buf, size_t len);
+} AuNetOps;
+
 #endif

@@ -619,7 +619,10 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
     Png *p = st;
     (void)final;
     for (;;) {
-        if (p->frame_pending && finish_frame(p, d) == AU_IMAGE_FRAME)
+        /* A frame is reported once the CRC of the chunk holding its last
+         * row has been checked. */
+        if (p->frame_pending && p->state != S_DATA && p->state != S_SKIP && p->state != S_CRC &&
+            finish_frame(p, d) == AU_IMAGE_FRAME)
             return AU_IMAGE_FRAME;
         if (p->state == S_END)
             return AU_IMAGE_DONE;
@@ -656,7 +659,7 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
                     return au_img_fail(d, "bad chunk type");
             }
             p->cleft = p->clen;
-            p->crc = au_crc32(0, p->hdr + 4, 4);
+            p->crc = au_codec_crc32(0, p->hdr + 4, 4);
             if (!p->have_ihdr && p->ctype != T_IHDR)
                 return au_img_fail(d, "missing IHDR");
             p->held = false;
@@ -705,7 +708,7 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
         case S_HOLD:
             if (!au_img_hold(&p->hold, p->clen, in, len))
                 return AU_IMAGE_MORE;
-            p->crc = au_crc32(p->crc, p->hold.buf, p->clen);
+            p->crc = au_codec_crc32(p->crc, p->hold.buf, p->clen);
             p->held = true;
             p->cleft = 0;
             p->state = S_CRC;
@@ -713,7 +716,7 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
         case S_SEQ: {
             if (!au_img_hold(&p->hold, 4, in, len))
                 return AU_IMAGE_MORE;
-            p->crc = au_crc32(p->crc, p->hold.buf, 4);
+            p->crc = au_codec_crc32(p->crc, p->hold.buf, 4);
             p->cleft -= 4;
             if (au_img_be32(p->hold.buf) != p->next_seq)
                 return au_img_fail(d, "APNG sequence error");
@@ -736,7 +739,7 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
             }
             if (!feed_data(p, d, *in, n, &used))
                 return AU_IMAGE_ERROR;
-            p->crc = au_crc32(p->crc, *in, used);
+            p->crc = au_codec_crc32(p->crc, *in, used);
             *in += used;
             *len -= used;
             p->cleft -= (uint32_t)used;
@@ -748,7 +751,7 @@ static AuImageStatus run(void *st, AuImageDecoder *d, const uint8_t **in, size_t
         }
         case S_SKIP: {
             size_t n = p->cleft < *len ? p->cleft : *len;
-            p->crc = au_crc32(p->crc, *in, n);
+            p->crc = au_codec_crc32(p->crc, *in, n);
             *in += n;
             *len -= n;
             p->cleft -= (uint32_t)n;

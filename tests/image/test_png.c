@@ -6,6 +6,8 @@
  * usage: test_png VECTOR_DIR [PNGSUITE_DIR] */
 #include "imgtest.h"
 
+#include "codec/codec.h"
+
 #include <dirent.h>
 
 static char vdir[1024];
@@ -257,7 +259,7 @@ static size_t make_png(uint8_t *out, uint32_t w, uint32_t h, int depth, int ct, 
         memcpy(out + n + 4, types[i], 4);
         if (lens[i])
             memcpy(out + n + 8, datas[i], lens[i]);
-        put32(out + n + 8 + lens[i], au_crc32(0, out + n + 4, lens[i] + 4));
+        put32(out + n + 8 + lens[i], au_codec_crc32(0, out + n + 4, lens[i] + 4));
         n += 12 + lens[i];
     }
     return n;
@@ -308,7 +310,7 @@ static void test_hostile(void)
     z[zn++] = 0xEF;
     memset(z + zn, 0, 4096);
     zn += 4096;
-    uint32_t ad = au_adler32(1, z + 7, 4096);
+    uint32_t ad = au_codec_adler32(1, z + 7, 4096);
     put32(z + zn, ad);
     zn += 4;
     size_t fn = make_png(file, 30000, 30000, 8, 0, z, zn);

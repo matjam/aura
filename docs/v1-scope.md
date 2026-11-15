@@ -21,15 +21,20 @@ Version 1 is done when these work:
 
 Gmail's web application is not a version 1 criterion.
 
-## Targets on a 1 GHz G4
+## Performance on a 1 GHz G4
 
-These are to be confirmed by measurement on real hardware.
+Version 1 has no size, memory or speed targets. Get the features working
+first; optimize afterwards, from measurements on real hardware.
 
-- The application is under 3 MB on disk.
-- Aura uses under 16 MB when idle.
-- A Wikipedia article is displayed within a few seconds of its bytes
-  arriving.
-- A laid-out page scrolls smoothly.
+Until then, measure and report, without cutting a feature to meet a
+number:
+
+- the application's size on disk, when it changes
+- memory in use when idle and with a page loaded
+- the time to display a Wikipedia article after its bytes arrive
+- whether a laid-out page scrolls smoothly
+
+Keep code small and fast where that costs nothing.
 
 ## Must have
 
