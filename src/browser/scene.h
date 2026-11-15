@@ -12,8 +12,9 @@
  * right). */
 #define AU_SCENE_HEIGHT 720
 
-/* Fills the canvas's surface (width by height pixels) with the scene,
- * scrolled up by scroll_y pixels. */
+/* Fills the rectangle (0, 0, width, height) in canvas coordinates with
+ * the scene, scrolled up by scroll_y pixels. The browser's about:scene
+ * page draws it this way inside the page area. */
 void au_scene_draw(AuCanvas *c, AuFontSet *fonts, int width, int height, int scroll_y);
 
 #endif

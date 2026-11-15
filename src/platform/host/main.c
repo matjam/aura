@@ -6,10 +6,15 @@
  *   aura-host fonts [--font file.ttf]...
  *       Lists the registered font faces and the generic families.
  *   aura-host bench [--font file.ttf]...
- *       Times the rasterizer, compositing and text. */
+ *       Times the rasterizer, compositing and text.
+ *   aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--tab URL]...
+ *       Renders a browser window (chrome and stub page) as a PNG. See
+ *       usage() for the options. */
 #include "host.h"
 #include "png.h"
-#include "platform/scene.h"
+#include "browser/browser.h"
+#include "browser/scene.h"
+#include "browser/url.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +33,10 @@ static int usage(void)
     fprintf(stderr,
             "usage: aura-host scene [-o out.png] [-w W] [-h H] [-s scroll] [--font F]... [--no-system-fonts]\n"
             "       aura-host fonts [--font F]...\n"
-            "       aura-host bench [--font F]...\n");
+            "       aura-host bench [--font F]...\n"
+            "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
+            "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
+            "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n");
     return 2;
 }
 
@@ -179,11 +187,174 @@ static int cmd_bench(AuFontSet *fonts)
     return 0;
 }
 
+/* ---- chrome: a browser window rendered to PNG ---- */
+
+static uint32_t host_ms(void *ctx)
+{
+    (void)ctx;
+    return au_platform_time_ms();
+}
+
+static AuTime host_now(void *ctx)
+{
+    (void)ctx;
+    time_t t = time(NULL);
+    struct tm lt;
+    localtime_r(&t, &lt);
+    return (AuTime)t + (AuTime)lt.tm_gmtoff;
+}
+
+static bool host_read_url(void *ctx, const char *url, char **data, size_t *len)
+{
+    (void)ctx;
+    char *path = au_url_to_path(url, '/');
+    if (!path)
+        return false;
+    bool ok = au_platform_read_file(path, data, len);
+    au_free(path);
+    return ok;
+}
+
+typedef struct ChromeOpts {
+    int w, h;
+    AuTabPosition pos;
+    int column;
+    const char *tabs[64];
+    int ntabs, extra_tabs, active;
+    const char *field;
+    bool focus, loading, menus;
+    const char *hover;
+} ChromeOpts;
+
+static AuHitPart hit_by_name(const char *s)
+{
+    static const struct {
+        const char *name;
+        AuHitPart part;
+    } names[] = {{"back", AU_HIT_BACK},       {"forward", AU_HIT_FORWARD}, {"reload", AU_HIT_RELOAD},
+                 {"home", AU_HIT_HOME},       {"bookmark", AU_HIT_BOOKMARK}, {"newtab", AU_HIT_NEW_TAB},
+                 {"splitter", AU_HIT_SPLITTER}};
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(names[i].name, s))
+            return names[i].part;
+    return AU_HIT_NONE;
+}
+
+static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
+{
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL};
+    AuBrowser *b = au_browser_new(fonts, &host);
+    b->prefs.tab_position = o->pos;
+    if (o->column)
+        b->prefs.tab_column_width = o->column;
+    AuBrowserWindow *w = au_browser_window_new(b, o->w, o->h);
+    w->native_standins = true;
+    au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura", "about:home", 0);
+    if (o->ntabs == 0 && o->extra_tabs == 0)
+        o->tabs[o->ntabs++] = "about:home";
+    for (int i = 0; i < o->ntabs; i++)
+        au_bw_new_tab(w, o->tabs[i], true, w->ntabs);
+    static const char *fill[] = {"about:home", "http://example.com/", "about:scene", "about:fonts",
+                                 "http://www.macintoshrepository.org/", "about:blank"};
+    for (int i = 0; i < o->extra_tabs; i++)
+        au_bw_new_tab(w, fill[i % 6], false, w->ntabs);
+    if (!o->loading) {
+        /* Let simulated loads finish. */
+        double t0 = now_ms();
+        while (au_browser_busy(b) && now_ms() - t0 < 5000) {
+            struct timespec ts = {0, 20 * 1000000};
+            nanosleep(&ts, NULL);
+            au_bw_idle(w);
+        }
+    } else {
+        double t0 = now_ms();
+        while (now_ms() - t0 < 500) {
+            struct timespec ts = {0, 20 * 1000000};
+            nanosleep(&ts, NULL);
+            au_bw_idle(w);
+        }
+    }
+    if (o->active >= 0 && o->active < w->ntabs)
+        au_bw_select_tab(w, o->active);
+    if (o->field)
+        au_bw_set_field_text(w, o->field);
+    au_bw_set_field_focus(w, o->focus);
+    if (o->hover) {
+        w->hover.part = hit_by_name(o->hover);
+        w->hover.index = -1;
+    }
+    AuSurface *s = au_surface_new(o->w, o->h);
+    AuCanvas *c = au_canvas_new(s);
+    double t0 = now_ms();
+    au_bw_paint(w, c, (AuIRect){0, 0, o->w, o->h});
+    double t1 = now_ms();
+    int rc = 0;
+    if (!au_png_write(out, s)) {
+        fprintf(stderr, "aura-host: cannot write %s\n", out);
+        rc = 1;
+    } else {
+        printf("%s: %dx%d, %d tabs (%s), painted in %.2f ms\n", out, o->w, o->h, w->ntabs,
+               o->pos == AU_TABS_LEFT ? "left" : "top", t1 - t0);
+    }
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_browser_free(b);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
         return usage();
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "chrome")) {
+        ChromeOpts o;
+        memset(&o, 0, sizeof o);
+        o.w = 800;
+        o.h = 600;
+        o.active = -1;
+        const char *out = "chrome.png";
+        for (int i = 2; i < argc; i++) {
+            const char *a = argv[i];
+            if (!strcmp(a, "-o") && i + 1 < argc)
+                out = argv[++i];
+            else if (!strcmp(a, "-w") && i + 1 < argc)
+                o.w = atoi(argv[++i]);
+            else if (!strcmp(a, "-h") && i + 1 < argc)
+                o.h = atoi(argv[++i]);
+            else if (!strcmp(a, "--tabs") && i + 1 < argc)
+                o.pos = !strcmp(argv[++i], "left") ? AU_TABS_LEFT : AU_TABS_TOP;
+            else if (!strcmp(a, "--column") && i + 1 < argc)
+                o.column = atoi(argv[++i]);
+            else if (!strcmp(a, "--tab") && i + 1 < argc && o.ntabs < 64)
+                o.tabs[o.ntabs++] = argv[++i];
+            else if (!strcmp(a, "--more-tabs") && i + 1 < argc)
+                o.extra_tabs = atoi(argv[++i]);
+            else if (!strcmp(a, "--active") && i + 1 < argc)
+                o.active = atoi(argv[++i]);
+            else if (!strcmp(a, "--field") && i + 1 < argc)
+                o.field = argv[++i];
+            else if (!strcmp(a, "--focus"))
+                o.focus = true;
+            else if (!strcmp(a, "--loading"))
+                o.loading = true;
+            else if (!strcmp(a, "--hover") && i + 1 < argc)
+                o.hover = argv[++i];
+            else if (!strcmp(a, "--font") && i + 1 < argc)
+                au_host_add_font_path(argv[++i]);
+            else if (!strcmp(a, "--no-system-fonts"))
+                au_host_use_system_fonts(false);
+            else
+                return usage();
+        }
+        if (o.w <= 0 || o.h <= 0 || o.w > 8192 || o.h > 8192)
+            return usage();
+        AuFontSet *fonts = au_fontset_new();
+        au_platform_load_fonts(fonts);
+        int rc = cmd_chrome(fonts, out, &o);
+        au_fontset_free(fonts);
+        return rc;
+    }
     const char *out = "scene.png";
     int w = 640, h = AU_SCENE_HEIGHT, scroll = 0;
     for (int i = 2; i < argc; i++) {

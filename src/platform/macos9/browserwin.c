@@ -1,0 +1,948 @@
+/* Browser windows.
+ *
+ * The chrome and the page are painted by the engine (src/browser) into an
+ * offscreen 32-bit GWorld the size of the content area; its pixmap is the
+ * engine's surface (big-endian xRGB is the engine's pixel layout, see
+ * src/paint/paint.h), and CopyBits puts damaged rectangles on screen at
+ * whatever depth the screen has. Native parts sit on top: the vertical
+ * scroll bar, the grow box, and a TextEdit record placed over the
+ * address field's text area, which edits the URL (selection, clipboard,
+ * arrow keys, drag selection). The engine leaves the field's text to
+ * TextEdit (AuBrowserWindow.native_field).
+ *
+ * Redraws are cheap: the model reports damaged rectangles through
+ * AuBrowserHost.invalidate, they are unioned per window, and flush()
+ * paints only that rectangle into the GWorld and copies only it to the
+ * screen, clipped so the scroll bar and grow box are never covered. The
+ * caret blink is TEIdle in the field and repaints nothing else. */
+#include "mac.h"
+
+#include "browser/scene.h"
+
+#include <stdio.h>
+#include <string.h>
+
+struct BrowserWin {
+    MacWin base;
+    AuBrowserWindow *bw;
+    GWorldPtr gw;
+    AuSurface *surf;
+    ControlHandle vscroll;
+    TEHandle te;
+    bool field_focus;
+    bool closing;
+    AuIRect damage;
+    Point last_mouse;
+    char *undo; /* field text before the last edit (Mac Roman) */
+    size_t undo_len;
+    BrowserWin *next;
+};
+
+static BrowserWin *g_wins;
+static BrowserWin *g_tracking; /* window whose scroll bar is being tracked */
+
+static const AuIRect kEmpty = {0, 0, 0, 0};
+
+/* ---- Helpers ---- */
+
+static Rect qd_rect(AuIRect r)
+{
+    Rect q;
+    SetRect(&q, (short)r.x0, (short)r.y0, (short)r.x1, (short)r.y1);
+    return q;
+}
+
+static void content_size(BrowserWin *b, int *w, int *h)
+{
+    Rect r;
+    GetWindowPortBounds(b->base.win, &r);
+    *w = r.right - r.left;
+    *h = r.bottom - r.top;
+}
+
+AuBrowserWindow *browserwin_model(BrowserWin *b)
+{
+    return b->bw;
+}
+
+BrowserWin *browserwin_front(void)
+{
+    for (WindowPtr w = FrontWindow(); w; w = mac_next_window(w)) {
+        MacWin *m = mac_win_of(w);
+        if (m && m->kind == WIN_BROWSER && ((BrowserWin *)m)->closing == false)
+            return (BrowserWin *)m;
+    }
+    return NULL;
+}
+
+/* ---- GWorld ---- */
+
+static void make_gworld(BrowserWin *b)
+{
+    int w, h;
+    content_size(b, &w, &h);
+    if (w < 1)
+        w = 1;
+    if (h < 1)
+        h = 1;
+    if (b->surf) {
+        au_surface_free(b->surf);
+        b->surf = NULL;
+    }
+    if (b->gw) {
+        DisposeGWorld(b->gw);
+        b->gw = NULL;
+    }
+    Rect r;
+    SetRect(&r, 0, 0, (short)w, (short)h);
+    /* Temporary memory first, so the window size does not eat into the
+     * application heap; the application heap if that fails. */
+    QDErr err = NewGWorld(&b->gw, 32, &r, NULL, NULL, useTempMem);
+    if (err != noErr || !b->gw)
+        err = NewGWorld(&b->gw, 32, &r, NULL, NULL, 0);
+    if (err != noErr || !b->gw)
+        mac_out_of_memory((size_t)w * (size_t)h * 4);
+    PixMapHandle pm = GetGWorldPixMap(b->gw);
+    if (!LockPixels(pm))
+        mac_out_of_memory((size_t)w * (size_t)h * 4);
+    Ptr base = GetPixBaseAddr(pm);
+    int rowbytes = (**pm).rowBytes & 0x3FFF;
+    b->surf = au_surface_wrap(base, w, h, rowbytes);
+    au_surface_clear(b->surf, AU_RGB(255, 255, 255)); /* not left as random memory */
+}
+
+/* ---- Showing ---- */
+
+/* Copies r of the GWorld to the window, leaving out the scroll bar and
+ * grow box, and redraws the address field's text when r covers it. */
+static void blit(BrowserWin *b, AuIRect r)
+{
+    if (!b->gw || au_irect_empty(r))
+        return;
+    GrafPtr saved;
+    GetPort(&saved);
+    SetPort((GrafPtr)b->base.win);
+    const AuChromeLayout *l = &b->bw->layout;
+    RgnHandle mask = NewRgn(), cut = NewRgn();
+    if (!mask || !cut)
+        mac_out_of_memory(64);
+    Rect q = qd_rect(r);
+    RectRgn(mask, &q);
+    Rect sb = qd_rect(l->vscroll);
+    RectRgn(cut, &sb);
+    DiffRgn(mask, cut, mask);
+    Rect gr = qd_rect(l->grow);
+    RectRgn(cut, &gr);
+    DiffRgn(mask, cut, mask);
+    ForeColor(blackColor);
+    BackColor(whiteColor);
+    CopyBits(&((GrafPtr)b->gw)->portBits, &((GrafPtr)b->base.win)->portBits, &q, &q, srcCopy | kDitherCopy, mask);
+    DisposeRgn(mask);
+    DisposeRgn(cut);
+    if (b->te && !au_irect_empty(au_irect_intersect(r, l->address_text))) {
+        Rect view = qd_rect(l->address_text);
+        ClipRect(&view);
+        TEUpdate(&view, b->te);
+        Rect all;
+        GetWindowPortBounds(b->base.win, &all);
+        ClipRect(&all);
+    }
+    SetPort(saved);
+}
+
+static void paint_damage(BrowserWin *b)
+{
+    if (au_irect_empty(b->damage) || !b->surf)
+        return;
+    AuCanvas *c = au_canvas_new(b->surf);
+    au_bw_paint(b->bw, c, b->damage);
+    au_canvas_free(c);
+}
+
+static void flush(BrowserWin *b)
+{
+    if (au_irect_empty(b->damage))
+        return;
+    paint_damage(b);
+    AuIRect r = b->damage;
+    b->damage = kEmpty;
+    blit(b, r);
+}
+
+static void invalidate_all(BrowserWin *b)
+{
+    int w, h;
+    content_size(b, &w, &h);
+    b->damage = (AuIRect){0, 0, w, h};
+}
+
+static void draw_grow_box(BrowserWin *b)
+{
+    /* Clip so DrawGrowIcon draws only the box, not the scroll bar lines
+     * across the content. */
+    Rect r, g;
+    GetWindowPortBounds(b->base.win, &r);
+    SetRect(&g, (short)(r.right - kGrowBox), (short)(r.bottom - kGrowBox), r.right, r.bottom);
+    ClipRect(&g);
+    DrawGrowIcon(b->base.win);
+    ClipRect(&r);
+}
+
+/* ---- Address field (TextEdit) ---- */
+
+static char *field_text(BrowserWin *b)
+{
+    CharsHandle h = TEGetText(b->te);
+    long n = (**b->te).teLength;
+    SignedByte st = HGetState((Handle)h);
+    HLock((Handle)h);
+    char *s = mac_roman_to_utf8((const char *)*h, (size_t)n);
+    HSetState((Handle)h, st);
+    return s;
+}
+
+static void field_scroll_home(BrowserWin *b)
+{
+    TERec *t = *b->te;
+    short dh = t->viewRect.left - t->destRect.left;
+    if (dh)
+        TEScroll(dh, 0, b->te);
+}
+
+/* Scrolls the field sideways so the selection end is visible. */
+static void field_show_caret(BrowserWin *b)
+{
+    /* The caret's x from the text width (TEGetPoint crashed with an
+     * access fault when called from PowerPC code in the 9.2.2 guest). */
+    SignedByte state = HGetState((Handle)b->te);
+    HLock((Handle)b->te);
+    TERec *t = *b->te;
+    CharsHandle text = TEGetText(b->te);
+    SignedByte tstate = HGetState((Handle)text);
+    HLock((Handle)text);
+    SetPort((GrafPtr)b->base.win);
+    short h = (short)(t->destRect.left + TextWidth((Ptr)*text, 0, t->selEnd));
+    HSetState((Handle)text, tstate);
+    short left = t->viewRect.left, right = t->viewRect.right;
+    short dh = 0;
+    if (h > right - 3)
+        dh = (short)(right - 12 - h);
+    else if (h < left + 1)
+        dh = (short)(left + 12 - h);
+    if (t->destRect.left + dh > left)
+        dh = (short)(left - t->destRect.left);
+    HSetState((Handle)b->te, state);
+    if (dh)
+        TEScroll(dh, 0, b->te);
+}
+
+static void field_set(BrowserWin *b, const char *utf8, bool select_all)
+{
+    size_t n;
+    char *r = mac_utf8_to_roman(utf8, &n);
+    SetPort((GrafPtr)b->base.win);
+    TESetText(r, (long)n, b->te);
+    au_free(r);
+    field_scroll_home(b);
+    TESetSelect(select_all ? 0 : (short)n, (short)n, b->te);
+    Rect view = (**b->te).viewRect;
+    ClipRect(&view);
+    BackColor(whiteColor);
+    EraseRect(&view);
+    TEUpdate(&view, b->te);
+    Rect all;
+    GetWindowPortBounds(b->base.win, &all);
+    ClipRect(&all);
+}
+
+static void place_field(BrowserWin *b)
+{
+    const AuChromeLayout *l = &b->bw->layout;
+    Rect view = qd_rect(l->address_text);
+    TERec *t = *b->te;
+    short lh = t->lineHeight;
+    short top = (short)(view.top + (view.bottom - view.top - lh) / 2);
+    t->viewRect = view;
+    SetRect(&t->destRect, view.left, top, (short)(view.left + 4000), (short)(top + lh));
+    TECalText(b->te);
+}
+
+static void field_sync_model(BrowserWin *b)
+{
+    char *s = field_text(b);
+    au_bw_set_field_text(b->bw, s);
+    au_free(s);
+}
+
+static void undo_snapshot(BrowserWin *b)
+{
+    CharsHandle h = TEGetText(b->te);
+    long n = (**b->te).teLength;
+    au_free(b->undo);
+    b->undo = au_alloc((size_t)n + 1);
+    /* au_alloc may move memory: copy after it, with nothing in between. */
+    memcpy(b->undo, *h, (size_t)n);
+    b->undo_len = (size_t)n;
+}
+
+static void focus_field(BrowserWin *b, bool on)
+{
+    if (b->field_focus == on)
+        return;
+    b->field_focus = on;
+    SetPort((GrafPtr)b->base.win);
+    if (on) {
+        if (b->base.win == FrontWindow() && g_in_front)
+            TEActivate(b->te);
+        TESetSelect(0, 32767, b->te);
+    } else {
+        TEDeactivate(b->te);
+    }
+    au_bw_set_field_focus(b->bw, on);
+}
+
+void browserwin_focus_field(BrowserWin *b)
+{
+    focus_field(b, true);
+    flush(b);
+}
+
+static bool has_scheme(const char *s)
+{
+    return au_url_scheme_len(s, strlen(s)) != 0;
+}
+
+/* Inline completion: after typing at the end of the field, the best
+ * history or bookmark match is filled in and the added part selected. */
+static void autocomplete(BrowserWin *b)
+{
+    TERec *t = *b->te;
+    if (t->selStart != t->selEnd || t->selEnd != t->teLength)
+        return;
+    char *typed = field_text(b);
+    size_t tn = strlen(typed);
+    const char *url = tn ? au_bw_complete(b->bw, typed) : NULL;
+    if (url) {
+        const char *key = url;
+        size_t kn = strlen(url);
+        if (!has_scheme(typed)) {
+            size_t k = au_url_scheme_len(url, kn);
+            key = url + (k ? k + 1 : 0);
+            if (!strncmp(key, "//", 2))
+                key += 2;
+            if (strncmp(typed, "www.", 4) != 0 && !strncmp(key, "www.", 4))
+                key += 4;
+            kn = strlen(key);
+        }
+        if (kn > tn && au_ieq(key, tn, typed, tn)) {
+            AuBuf full;
+            au_buf_init(&full);
+            au_buf_puts(&full, typed);
+            au_buf_puts(&full, key + tn);
+            size_t rn, fn;
+            char *rt = mac_utf8_to_roman(typed, &rn);
+            char *rf = mac_utf8_to_roman(au_buf_cstr(&full), &fn);
+            TESetText(rf, (long)fn, b->te);
+            TESetSelect((short)rn, (short)fn, b->te);
+            Rect view = (**b->te).viewRect;
+            BackColor(whiteColor);
+            EraseRect(&view);
+            TEUpdate(&view, b->te);
+            au_free(rt);
+            au_free(rf);
+            au_buf_free(&full);
+        }
+    }
+    au_free(typed);
+}
+
+static void field_commit(BrowserWin *b)
+{
+    char *s = field_text(b);
+    focus_field(b, false);
+    au_bw_navigate_input(b->bw, s);
+    au_free(s);
+    field_set(b, au_bw_field_text(b->bw), false);
+}
+
+static void field_revert(BrowserWin *b)
+{
+    au_bw_set_field_text(b->bw, NULL);
+    field_set(b, au_bw_field_text(b->bw), true);
+}
+
+/* ---- Scroll bar ---- */
+
+static void place_controls(BrowserWin *b)
+{
+    const AuChromeLayout *l = &b->bw->layout;
+    SetPort((GrafPtr)b->base.win);
+    HideControl(b->vscroll);
+    MoveControl(b->vscroll, (short)l->vscroll.x0, (short)l->vscroll.y0);
+    SizeControl(b->vscroll, (short)(l->vscroll.x1 - l->vscroll.x0), (short)(l->vscroll.y1 - l->vscroll.y0));
+    ShowControl(b->vscroll);
+    place_field(b);
+}
+
+static void update_scroll(BrowserWin *b)
+{
+    int mx, my;
+    au_bw_scroll_max(b->bw, &mx, &my);
+    if (my > 32767)
+        my = 32767; /* Control Manager values are 16-bit */
+    AuTab *t = au_bw_active_tab(b->bw);
+    int y = t ? t->scroll_y : 0;
+    if (y > 32767)
+        y = 32767;
+    SetPort((GrafPtr)b->base.win);
+    if (GetControlMaximum(b->vscroll) != my)
+        SetControlMaximum(b->vscroll, (short)my);
+    if (GetControlValue(b->vscroll) != y)
+        SetControlValue(b->vscroll, (short)y);
+}
+
+static pascal void scroll_action(ControlHandle c, short part)
+{
+    BrowserWin *b = g_tracking;
+    if (!b)
+        return;
+    const AuChromeLayout *l = &b->bw->layout;
+    int page = (l->page.y1 - l->page.y0) - 40;
+    if (page < 20)
+        page = 20;
+    switch (part) {
+    case inUpButton: au_bw_scroll_by(b->bw, 0, -16); break;
+    case inDownButton: au_bw_scroll_by(b->bw, 0, 16); break;
+    case inPageUp: au_bw_scroll_by(b->bw, 0, -page); break;
+    case inPageDown: au_bw_scroll_by(b->bw, 0, page); break;
+    }
+    flush(b);
+    (void)c;
+}
+
+/* ---- Host callbacks ---- */
+
+static void host_invalidate(void *ctx, AuBrowserWindow *w, AuIRect r)
+{
+    BrowserWin *b = w->platform;
+    (void)ctx;
+    if (b)
+        b->damage = au_irect_union(b->damage, r);
+}
+
+static void host_changed(void *ctx, AuBrowserWindow *w, unsigned what)
+{
+    BrowserWin *b = w->platform;
+    (void)ctx;
+    if (!b)
+        return;
+    if (what & AU_CHANGED_LAYOUT)
+        place_controls(b);
+    if (what & AU_CHANGED_FIELD) {
+        if (!(b->field_focus && w->field))
+            field_set(b, au_bw_field_text(w), b->field_focus);
+    }
+    if (what & AU_CHANGED_TITLE) {
+        char title[256];
+        au_bw_window_title(w, title, sizeof title);
+        Str255 p;
+        mac_pstr(title, p);
+        SetWTitle(b->base.win, p);
+        mac_menus_dirty();
+    }
+    if (what & AU_CHANGED_SCROLL)
+        update_scroll(b);
+    if (what & AU_CHANGED_MENUS)
+        mac_menus_dirty();
+    if (what & AU_CHANGED_FOCUS_FIELD)
+        focus_field(b, true);
+}
+
+static void host_close(void *ctx, AuBrowserWindow *w)
+{
+    BrowserWin *b = w->platform;
+    (void)ctx;
+    /* Closing now would free the model under the caller; the event loop
+     * closes it after this event (browserwin_flush_all). */
+    if (b)
+        b->closing = true;
+}
+
+static uint32_t host_ms(void *ctx)
+{
+    (void)ctx;
+    return au_platform_time_ms();
+}
+
+static AuTime host_now(void *ctx)
+{
+    (void)ctx;
+    return mac_now();
+}
+
+static bool host_read(void *ctx, const char *url, char **data, size_t *len)
+{
+    (void)ctx;
+    return mac_read_file_url(url, data, len);
+}
+
+void browserwin_host(AuBrowserHost *h)
+{
+    memset(h, 0, sizeof *h);
+    h->time_ms = host_ms;
+    h->now = host_now;
+    h->read_file_url = host_read;
+    h->invalidate = host_invalidate;
+    h->changed = host_changed;
+    h->close_window = host_close;
+}
+
+/* ---- Events ---- */
+
+static uint32_t mods_of(AuEventModifiers m)
+{
+    uint32_t r = 0;
+    if (m & shiftKey)
+        r |= AU_MOD_SHIFT;
+    if (m & cmdKey)
+        r |= AU_MOD_COMMAND;
+    if (m & optionKey)
+        r |= AU_MOD_OPTION;
+    if (m & ControlKey)
+        r |= AU_MOD_CONTROL;
+    return r;
+}
+
+static void bw_update(MacWin *mw)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    WindowPtr w = mw->win;
+    SetPort((GrafPtr)w);
+    BeginUpdate(w);
+    paint_damage(b);
+    b->damage = kEmpty;
+    int cw, ch;
+    content_size(b, &cw, &ch);
+    blit(b, (AuIRect){0, 0, cw, ch});
+    DrawControls(w);
+    draw_grow_box(b);
+    EndUpdate(w);
+}
+
+static void bw_activate(MacWin *mw, bool on)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    SetPort((GrafPtr)mw->win);
+    HiliteControl(b->vscroll, on ? 0 : 255);
+    if (b->field_focus) {
+        if (on)
+            TEActivate(b->te);
+        else
+            TEDeactivate(b->te);
+    }
+    au_bw_set_active(b->bw, on);
+    draw_grow_box(b);
+    flush(b);
+}
+
+static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_MOUSE_DOWN;
+    e.x = pt.h;
+    e.y = pt.v;
+    e.mods = mods_of(ev->modifiers);
+    e.clicks = 1;
+    e.time_ms = au_platform_time_ms();
+    au_bw_mouse(b->bw, &e);
+    browserwin_flush_all();
+    Point last = pt;
+    while (StillDown() && !b->closing) {
+        Point p;
+        GetMouse(&p);
+        if (p.h != last.h || p.v != last.v) {
+            last = p;
+            e.type = AU_EVENT_MOUSE_MOVE;
+            e.x = p.h;
+            e.y = p.v;
+            au_bw_mouse(b->bw, &e);
+            flush(b);
+        }
+    }
+    if (b->closing)
+        return;
+    e.type = AU_EVENT_MOUSE_UP;
+    e.x = last.h;
+    e.y = last.v;
+    au_bw_mouse(b->bw, &e);
+    b->last_mouse = last;
+}
+
+static void bw_click(MacWin *mw, EventRecord *ev)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    SetPort((GrafPtr)mw->win);
+    Point pt = ev->where;
+    GlobalToLocal(&pt);
+    AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
+    if (h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY) {
+        if (!b->field_focus) {
+            /* The first click selects the whole URL, as browsers do. */
+            focus_field(b, true);
+            while (StillDown())
+                ;
+        } else {
+            TEClick(pt, (ev->modifiers & shiftKey) != 0, b->te);
+            field_show_caret(b);
+        }
+        flush(b);
+        return;
+    }
+    if (h.part == AU_HIT_VSCROLL) {
+        ControlHandle c;
+        short part = FindControl(pt, mw->win, &c);
+        if (c == b->vscroll && part) {
+            g_tracking = b;
+            if (part == inThumb) {
+                TrackControl(c, pt, NULL);
+                AuTab *t = au_bw_active_tab(b->bw);
+                au_bw_scroll_to(b->bw, t ? t->scroll_x : 0, GetControlValue(c));
+            } else {
+                static ControlActionUPP action;
+                if (!action)
+                    action = NewControlActionUPP(scroll_action);
+                TrackControl(c, pt, action);
+            }
+            g_tracking = NULL;
+            flush(b);
+        }
+        return;
+    }
+    if (b->field_focus && h.part == AU_HIT_PAGE) {
+        field_revert(b);
+        focus_field(b, false);
+    }
+    track_mouse(b, ev, pt);
+}
+
+static void page_key(BrowserWin *b, int key, uint32_t ch, uint32_t mods)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_KEY_DOWN;
+    e.key = key;
+    e.ch = ch;
+    e.mods = mods;
+    au_bw_key(b->bw, &e);
+}
+
+static bool bw_key(MacWin *mw, EventRecord *ev)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    unsigned char ch = (unsigned char)(ev->message & charCodeMask);
+    SetPort((GrafPtr)mw->win);
+    if (b->field_focus) {
+        switch (ch) {
+        case 0x0D: /* Return */
+        case 0x03: /* Enter */
+            field_commit(b);
+            return true;
+        case 0x1B: /* Escape */
+            field_revert(b);
+            return true;
+        case 0x09: /* Tab: leave the field */
+            field_revert(b);
+            focus_field(b, false);
+            return true;
+        default:
+            break;
+        }
+        bool printable = ch >= 0x20 && ch != 0x7F;
+        undo_snapshot(b);
+        TEKey((CharParameter)ch, b->te);
+        field_sync_model(b);
+        if (printable)
+            autocomplete(b);
+        field_show_caret(b);
+        return true;
+    }
+    uint32_t mods = mods_of(ev->modifiers);
+    switch (ch) {
+    case 0x1E: page_key(b, AU_KEY_UP, 0, mods); break;
+    case 0x1F: page_key(b, AU_KEY_DOWN, 0, mods); break;
+    case 0x1C: page_key(b, AU_KEY_LEFT, 0, mods); break;
+    case 0x1D: page_key(b, AU_KEY_RIGHT, 0, mods); break;
+    case 0x0B: page_key(b, AU_KEY_PAGE_UP, 0, mods); break;
+    case 0x0C: page_key(b, AU_KEY_PAGE_DOWN, 0, mods); break;
+    case 0x01: page_key(b, AU_KEY_HOME, 0, mods); break;
+    case 0x04: page_key(b, AU_KEY_END, 0, mods); break;
+    case ' ': page_key(b, 0, ' ', mods); break;
+    case 0x1B: au_bw_stop(b->bw); break;
+    default: return false;
+    }
+    return true;
+}
+
+static bool bw_edit(MacWin *mw, int item)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    if (!b->field_focus)
+        return false;
+    if (item == 0)
+        return true;
+    SetPort((GrafPtr)mw->win);
+    switch (item) {
+    case 1: /* Undo: swap the field with the snapshot */
+        if (b->undo) {
+            char *u = mac_roman_to_utf8(b->undo, b->undo_len);
+            undo_snapshot(b);
+            field_set(b, u, false);
+            au_free(u);
+        }
+        break;
+    case 3:
+        undo_snapshot(b);
+        TECut(b->te);
+        ZeroScrap();
+        TEToScrap();
+        break;
+    case 4:
+        TECopy(b->te);
+        ZeroScrap();
+        TEToScrap();
+        return true;
+    case 5:
+        undo_snapshot(b);
+        TEFromScrap();
+        TEPaste(b->te);
+        break;
+    case 6:
+        undo_snapshot(b);
+        TEDelete(b->te);
+        break;
+    case 7: TESetSelect(0, 32767, b->te); return true;
+    default: return false;
+    }
+    field_sync_model(b);
+    field_show_caret(b);
+    return true;
+}
+
+static void bw_idle(MacWin *mw)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    au_bw_idle(b->bw);
+    if (mw->win == FrontWindow() && g_in_front) {
+        SetPort((GrafPtr)mw->win);
+        if (b->field_focus)
+            TEIdle(b->te);
+        Point p;
+        GetMouse(&p);
+        Rect r;
+        GetWindowPortBounds(mw->win, &r);
+        if (p.h != b->last_mouse.h || p.v != b->last_mouse.v) {
+            b->last_mouse = p;
+            if (PtInRect(p, &r)) {
+                AuEvent e;
+                memset(&e, 0, sizeof e);
+                e.type = AU_EVENT_MOUSE_MOVE;
+                e.x = p.h;
+                e.y = p.v;
+                au_bw_mouse(b->bw, &e);
+            }
+            Rect field = qd_rect(b->bw->layout.address_text);
+            if (PtInRect(p, &field))
+                SetCursor(*GetCursor(iBeamCursor));
+            else
+                InitCursor();
+        }
+    }
+    flush(b);
+}
+
+static void bw_grow(MacWin *mw)
+{
+    BrowserWin *b = (BrowserWin *)mw;
+    SetPort((GrafPtr)mw->win);
+    make_gworld(b);
+    int w, h;
+    content_size(b, &w, &h);
+    au_bw_resize(b->bw, w, h);
+    place_controls(b);
+    invalidate_all(b);
+    Rect r;
+    GetWindowPortBounds(mw->win, &r);
+    InvalRect(&r);
+    /* The size is remembered for new windows. */
+    g_browser->prefs.window_width = w;
+    g_browser->prefs.window_height = h;
+    g_browser->prefs_gen++;
+}
+
+static void bw_close(MacWin *mw)
+{
+    browserwin_close((BrowserWin *)mw);
+}
+
+void browserwin_close(BrowserWin *b)
+{
+    for (BrowserWin **p = &g_wins; *p; p = &(*p)->next) {
+        if (*p == b) {
+            *p = b->next;
+            break;
+        }
+    }
+    au_browser_window_free(b->bw);
+    if (b->te)
+        TEDispose(b->te);
+    DisposeWindow(b->base.win); /* disposes the scroll bar too */
+    if (b->surf)
+        au_surface_free(b->surf);
+    if (b->gw)
+        DisposeGWorld(b->gw);
+    au_free(b->undo);
+    au_free(b);
+    mac_menus_dirty();
+}
+
+void browserwin_flush_all(void)
+{
+    BrowserWin *b = g_wins;
+    while (b) {
+        BrowserWin *next = b->next;
+        if (b->closing)
+            browserwin_close(b);
+        else
+            flush(b);
+        b = next;
+    }
+}
+
+BrowserWin *browserwin_new(const char *url, const AuSessionWindow *sw)
+{
+    Rect screen = qd.screenBits.bounds;
+    int count = 0;
+    for (BrowserWin *x = g_wins; x; x = x->next)
+        count++;
+    int cw = g_browser->prefs.window_width > 0 ? g_browser->prefs.window_width : 640;
+    int ch = g_browser->prefs.window_height > 0 ? g_browser->prefs.window_height : 480;
+    if (sw && sw->width >= 300 && sw->height >= 200) {
+        cw = sw->width;
+        ch = sw->height;
+    }
+    int x = 20 + (count % 8) * 20, y = 50 + (count % 8) * 20;
+    if (cw > screen.right - x - 4)
+        cw = screen.right - x - 4;
+    if (ch > screen.bottom - y - 26) /* clear of the Control Strip */
+        ch = screen.bottom - y - 26;
+    if (cw < 300)
+        cw = 300;
+    if (ch < 200)
+        ch = 200;
+    BrowserWin *b = au_calloc(sizeof *b);
+    b->base.kind = WIN_BROWSER;
+    b->base.update = bw_update;
+    b->base.activate = bw_activate;
+    b->base.click = bw_click;
+    b->base.key = bw_key;
+    b->base.idle = bw_idle;
+    b->base.grow = bw_grow;
+    b->base.close = bw_close;
+    b->base.edit = bw_edit;
+    Rect wr;
+    SetRect(&wr, (short)x, (short)y, (short)(x + cw), (short)(y + ch));
+    WindowPtr w = NewCWindow(NULL, &wr, (ConstStr255Param) "\pAura", false, kZoomDocProc, (WindowPtr)-1, true,
+                             (long)b);
+    if (!w)
+        mac_out_of_memory(sizeof(WindowRecord));
+    b->base.win = w;
+    SetPort((GrafPtr)w);
+    Rect sr = {0, 0, 10, 10};
+    b->vscroll = NewControl(w, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
+    if (!b->vscroll)
+        mac_out_of_memory(256);
+    make_gworld(b);
+    int iw, ih;
+    content_size(b, &iw, &ih);
+    b->bw = au_browser_window_new(g_browser, iw, ih);
+    b->bw->platform = b;
+    b->bw->native_field = true;
+    b->next = g_wins;
+    g_wins = b;
+    /* The field: Geneva 12, one line that never wraps. */
+    TextFont(3);
+    TextSize(12);
+    TextFace(0);
+    Rect fr = qd_rect(b->bw->layout.address_text);
+    b->te = TENew(&fr, &fr);
+    if (!b->te)
+        mac_out_of_memory(1024);
+    (**b->te).crOnly = -1;
+    place_controls(b);
+    if (sw && sw->ntabs)
+        au_bw_restore(b->bw, sw);
+    else
+        au_bw_new_tab(b->bw, url ? url : g_browser->prefs.home_page, true, -1);
+    field_set(b, au_bw_field_text(b->bw), false);
+    update_scroll(b);
+    host_changed(NULL, b->bw, AU_CHANGED_TITLE);
+    invalidate_all(b);
+    paint_damage(b);
+    b->damage = kEmpty;
+    ShowWindow(w);
+    SelectWindow(w);
+    mac_menus_dirty();
+    return b;
+}
+
+/* ---- Debug > Benchmark ---- */
+
+void browserwin_benchmark(BrowserWin *b)
+{
+    SetCursor(*GetCursor(watchCursor));
+    AuSurface *s = b->surf;
+    AuCanvas *c = au_canvas_new(s);
+    const AuChromeLayout *l = &b->bw->layout;
+    int w = l->page.x1 - l->page.x0, h = l->page.y1 - l->page.y0;
+    au_canvas_translate(c, (float)l->page.x0, (float)l->page.y0);
+    uint32_t t0 = au_platform_time_ms();
+    for (int i = 0; i < 10; i++)
+        au_scene_draw(c, g_fonts, w, h, 0);
+    uint32_t warm = (au_platform_time_ms() - t0) * 10 / 10;
+    t0 = au_platform_time_ms();
+    for (int i = 0; i < 3; i++) {
+        au_glyph_cache_clear();
+        au_scene_draw(c, g_fonts, w, h, 0);
+    }
+    uint32_t cold = (au_platform_time_ms() - t0) * 10 / 3;
+    t0 = au_platform_time_ms();
+    for (int i = 0; i < 20; i++)
+        au_fill_rect(c, (AuRect){0.5f, 0.5f, (float)w, (float)h}, AU_RGBA(10, 20, 30, 128));
+    uint32_t fill = (au_platform_time_ms() - t0) * 10 / 20;
+    au_canvas_translate(c, (float)-l->page.x0, (float)-l->page.y0);
+    t0 = au_platform_time_ms();
+    for (int i = 0; i < 10; i++)
+        au_bw_paint(b->bw, c, (AuIRect){0, 0, l->width, l->page.y0});
+    uint32_t chrome = (au_platform_time_ms() - t0) * 10 / 10;
+    au_canvas_free(c);
+    char l0[96], l1[96], l2[96], l3[96];
+    snprintf(l0, sizeof l0, "Scene %dx%d: %lu.%lu ms (cached glyphs), %lu.%lu ms (cold)", w, h,
+             (unsigned long)(warm / 10), (unsigned long)(warm % 10), (unsigned long)(cold / 10),
+             (unsigned long)(cold % 10));
+    snprintf(l1, sizeof l1, "Alpha fill %dx%d: %lu.%lu ms", w, h, (unsigned long)(fill / 10),
+             (unsigned long)(fill % 10));
+    snprintf(l2, sizeof l2, "Chrome (toolbar and tabs): %lu.%lu ms", (unsigned long)(chrome / 10),
+             (unsigned long)(chrome % 10));
+    snprintf(l3, sizeof l3, "Fonts: %u faces", (unsigned)au_fontset_count(g_fonts));
+    Str255 p[4];
+    mac_pstr(l0, p[0]);
+    mac_pstr(l1, p[1]);
+    mac_pstr(l2, p[2]);
+    mac_pstr(l3, p[3]);
+    ParamText(p[0], p[1], p[2], p[3]);
+    InitCursor();
+    invalidate_all(b);
+    flush(b);
+    NoteAlert(129, NULL);
+}
