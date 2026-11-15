@@ -382,6 +382,20 @@ void css_sellist_free(AuSelList *l);
 void css_sellist_serialize(const AuSelList *l, AuBuf *out);
 uint32_t css_sellist_max_spec(const AuSelList *l);
 
+/* For :has(): a 64-bit summary of each element's descendants (hashes of
+ * their tags, ids, classes and attribute names, and state bits), built
+ * once per style pass. A relative selector whose bits are not all in the
+ * anchor's summary cannot match, which saves the subtree walk. */
+typedef struct CssHasIndex {
+    const AuElement **keys;
+    uint64_t *masks;
+    uint32_t size; /* power of two */
+} CssHasIndex;
+uint64_t css_has_element_bits(const AuElement *el);
+uint64_t css_has_selector_bits(const AuSelector *s);
+void css_has_index_build(CssHasIndex *x, const AuNode *root);
+void css_has_index_free(CssHasIndex *x);
+
 /* Element state the matcher needs besides the DOM. */
 typedef struct CssBloom CssBloom;
 typedef struct CssMatchCtx {
@@ -389,6 +403,7 @@ typedef struct CssMatchCtx {
     bool quirks;
     const AuElement *scope; /* :scope; NULL means the root element */
     uint32_t has_used;
+    const CssHasIndex *has_index; /* or NULL */
 } CssMatchCtx;
 
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc);

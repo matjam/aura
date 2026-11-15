@@ -570,14 +570,153 @@ static bool list_match(const AuSelList *l, const AuElement *el, const CssMatchCt
     return false;
 }
 
+/* ---- The :has() descendant summary ---- */
+
+enum { HB_CHECKED = 60, HB_FOCUS = 61, HB_HOVER = 62 };
+
+static uint64_t hbit(uint32_t h) { return (uint64_t)1 << (h % 60); }
+
+uint64_t css_has_element_bits(const AuElement *el)
+{
+    uint64_t m = hbit(css_hash_atom(el->tag, 3));
+    if (el->id)
+        m |= hbit(css_hash_atom(el->id, 1));
+    for (uint32_t i = 0; i < el->nclasses; i++)
+        m |= hbit(css_hash_atom(el->classes[i], 2));
+    for (uint32_t i = 0; i < el->nattrs; i++) {
+        AuAtom n = el->attrs[i].name;
+        m |= hbit(css_hash_atom(n, 4));
+        if (n == HN(checked) || n == HN(selected))
+            m |= (uint64_t)1 << HB_CHECKED;
+    }
+    if (el->state & AU_STATE_CHECKED)
+        m |= (uint64_t)1 << HB_CHECKED;
+    if (el->state & (AU_STATE_FOCUS | AU_STATE_FOCUS_VISIBLE | AU_STATE_FOCUS_WITHIN))
+        m |= (uint64_t)1 << HB_FOCUS;
+    if (el->state & (AU_STATE_HOVER | AU_STATE_ACTIVE))
+        m |= (uint64_t)1 << HB_HOVER;
+    return m;
+}
+
+/* The bits every compound of a relative selector needs: each of them
+ * matches a descendant of the anchor. */
+uint64_t css_has_selector_bits(const AuSelector *s)
+{
+    uint64_t m = 0;
+    for (uint32_t i = 0; i < s->ncomp; i++) {
+        const AuSelComp *c = &s->comp[i];
+        switch (c->type) {
+        case SC_TAG: m |= hbit(css_hash_atom(c->name, 3)); break;
+        case SC_ID: m |= hbit(css_hash_atom(c->name, 1)); break;
+        case SC_CLASS: m |= hbit(css_hash_atom(c->name, 2)); break;
+        case SC_ATTR: m |= hbit(css_hash_atom(c->name, 4)); break;
+        case SC_PSEUDO:
+            if (c->op == PC_CHECKED)
+                m |= (uint64_t)1 << HB_CHECKED;
+            else if (c->op == PC_FOCUS || c->op == PC_FOCUS_VISIBLE || c->op == PC_FOCUS_WITHIN)
+                m |= (uint64_t)1 << HB_FOCUS;
+            else if (c->op == PC_HOVER || c->op == PC_ACTIVE)
+                m |= (uint64_t)1 << HB_HOVER;
+            break;
+        default: break;
+        }
+    }
+    return m;
+}
+
+static uint32_t ptr_hash(const void *p) { return (uint32_t)((uintptr_t)p >> 3) * 2654435761u; }
+
+void css_has_index_build(CssHasIndex *x, const AuNode *root)
+{
+    css_has_index_free(x);
+    uint32_t n = 0;
+    for (AuNode *c = root->first_child; c; c = au_node_next(c, root))
+        n += c->type == AU_NODE_ELEMENT;
+    uint32_t size = 16;
+    while (size < n * 2)
+        size *= 2;
+    x->size = size;
+    x->keys = au_calloc(size * sizeof *x->keys);
+    x->masks = au_calloc(size * sizeof *x->masks);
+    /* elements in preorder, then folded bottom-up into their parents */
+    const AuElement **order = au_alloc((n ? n : 1) * sizeof *order);
+    uint32_t k = 0;
+    for (AuNode *c = root->first_child; c; c = au_node_next(c, root))
+        if (c->type == AU_NODE_ELEMENT)
+            order[k++] = (const AuElement *)c;
+    for (uint32_t i = 0; i < k; i++) {
+        uint32_t h = ptr_hash(order[i]) & (size - 1);
+        while (x->keys[h])
+            h = (h + 1) & (size - 1);
+        x->keys[h] = order[i];
+    }
+    for (uint32_t i = k; i-- > 0;) {
+        const AuElement *el = order[i];
+        const AuNode *p = el->node.parent;
+        if (!p || p->type != AU_NODE_ELEMENT)
+            continue;
+        uint64_t sub = 0;
+        uint32_t h = ptr_hash(el) & (size - 1);
+        while (x->keys[h] != el)
+            h = (h + 1) & (size - 1);
+        sub = x->masks[h] | css_has_element_bits(el);
+        h = ptr_hash(p) & (size - 1);
+        while (x->keys[h] && x->keys[h] != (const AuElement *)p)
+            h = (h + 1) & (size - 1);
+        if (x->keys[h])
+            x->masks[h] |= sub;
+    }
+    au_free(order);
+}
+
+void css_has_index_free(CssHasIndex *x)
+{
+    au_free(x->keys);
+    au_free(x->masks);
+    memset(x, 0, sizeof *x);
+}
+
+/* The summary of el's descendants, or all bits if el is not indexed. */
+static uint64_t has_mask(const CssHasIndex *x, const AuElement *el)
+{
+    if (!x || !x->size)
+        return ~(uint64_t)0;
+    uint32_t h = ptr_hash(el) & (x->size - 1);
+    while (x->keys[h]) {
+        if (x->keys[h] == el)
+            return x->masks[h];
+        h = (h + 1) & (x->size - 1);
+    }
+    return ~(uint64_t)0;
+}
+
+static bool single_compound(const AuSelector *s)
+{
+    for (uint32_t i = 0; i < s->ncomp; i++)
+        if (s->comp[i].type == SC_COMBINATOR)
+            return false;
+    return true;
+}
+
 static bool has_match(const AuSelList *l, const AuElement *anchor, const CssMatchCtx *mc)
 {
     CssMatchCtx sub = *mc;
     sub.bloom = NULL; /* the filter describes the anchor's ancestors, not the candidates' */
+    uint64_t below = mc->has_index ? has_mask(mc->has_index, anchor) : ~(uint64_t)0;
     for (uint32_t k = 0; k < l->n; k++) {
         const AuSelector *s = &l->sel[k];
         int rc = s->rel_comb ? s->rel_comb : COMB_DESCENDANT;
         if (rc == COMB_DESCENDANT || rc == COMB_CHILD) {
+            uint64_t need = css_has_selector_bits(s);
+            if ((below & need) != need)
+                continue;
+            if (rc == COMB_CHILD && single_compound(s)) {
+                /* only children can match */
+                for (AuNode *n = anchor->node.first_child; n; n = n->next)
+                    if (n->type == AU_NODE_ELEMENT && match_from(s, 0, (const AuElement *)n, &sub, anchor))
+                        return true;
+                continue;
+            }
             const AuNode *root = &anchor->node;
             for (AuNode *n = root->first_child; n; n = au_node_next(n, root)) {
                 if (n->type != AU_NODE_ELEMENT)

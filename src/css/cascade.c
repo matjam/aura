@@ -112,8 +112,10 @@ typedef struct {
     uint32_t size; /* power of two, 0 if empty */
 } AtomMap;
 
+enum { KEY_ID, KEY_CLASS, KEY_TAG, KEY_ATTR, KEY_UNIVERSAL };
+
 typedef struct {
-    uint8_t kind; /* 0 id, 1 class, 2 tag, 3 universal */
+    uint8_t kind; /* KEY_* */
     AuAtom atom;
     uint32_t entry;
 } IndexKey;
@@ -136,6 +138,7 @@ typedef struct {
 } InlineEntry;
 
 #define SHARE_SLOTS 64
+#define RECENT_GROUPS 8
 typedef struct {
     const AuStyle *parent;
     AuAtom tag;
@@ -163,7 +166,7 @@ struct AuCssResolver {
     RuleEntry *entries;
     uint32_t nentries, entries_cap;
     uint32_t *sorted; /* entry indices grouped by key */
-    AtomMap maps[3];
+    AtomMap maps[KEY_UNIVERSAL]; /* by id, class, tag, attribute name */
     uint32_t uni_start, uni_count;
     LayerTree layers[3];
 
@@ -183,8 +186,11 @@ struct AuCssResolver {
     uint32_t ninl, inl_cap;
 
     ShareSlot share[SHARE_SLOTS];
+    void *recent[G_COUNT][RECENT_GROUPS]; /* referenced groups for intern_groups */
+    uint8_t recent_pos[G_COUNT];
     const AuStyle *root_style;
     CssBloom bloom;
+    CssHasIndex has_idx; /* during a style pass when :has() rules exist */
 };
 
 static void map_free(AtomMap *m)
@@ -250,26 +256,72 @@ static bool map_get(const AtomMap *m, AuAtom a, uint32_t *start, uint32_t *count
     return false;
 }
 
-/* The index key of a selector: its rightmost compound's id, class or tag. */
-static IndexKey selector_key(const AuSelector *s, bool quirks)
+/* The best key of one compound (components [0, end) of s): id, else
+ * class, else tag, else attribute name; KEY_UNIVERSAL if none. */
+static IndexKey compound_key(const AuSelector *s, bool quirks)
 {
-    IndexKey k = {3, 0, 0};
+    IndexKey k = {KEY_UNIVERSAL, 0, 0};
     for (uint32_t i = 0; i < s->ncomp && s->comp[i].type != SC_COMBINATOR; i++) {
         const AuSelComp *c = &s->comp[i];
         if (c->type == SC_ID) {
-            k.kind = 0;
+            k.kind = KEY_ID;
             k.atom = quirks ? css_atom_lower(c->name) : c->name;
             return k;
         }
-        if (c->type == SC_CLASS && k.kind > 1) {
-            k.kind = 1;
+        if (c->type == SC_CLASS && k.kind > KEY_CLASS) {
+            k.kind = KEY_CLASS;
             k.atom = quirks ? css_atom_lower(c->name) : c->name;
-        } else if (c->type == SC_TAG && k.kind > 2) {
-            k.kind = 2;
+        } else if (c->type == SC_TAG && k.kind > KEY_TAG) {
+            k.kind = KEY_TAG;
+            k.atom = c->name;
+        } else if (c->type == SC_ATTR && k.kind > KEY_ATTR) {
+            k.kind = KEY_ATTR;
             k.atom = c->name;
         }
     }
     return k;
+}
+
+/* Appends the keys under which a selector's subject must be found and
+ * returns true, or appends nothing and returns false if it has none. A
+ * subject compound without an id, class, tag or attribute of its own is
+ * keyed through an :is(), :where() or & whose selectors all have keys
+ * (":where(.btn, .link)", "&:hover" nested in ".card"), since the subject
+ * must match the subject of one of them. */
+static bool subject_keys(const AuSelector *s, bool quirks, uint32_t entry, IndexKey **keys, uint32_t *n,
+                         uint32_t *cap, int depth)
+{
+    IndexKey k = compound_key(s, quirks);
+    if (k.kind != KEY_UNIVERSAL) {
+        k.entry = entry;
+        *CSS_PUSH(*keys, *n, *cap) = k;
+        return true;
+    }
+    if (depth >= 4)
+        return false;
+    for (uint32_t i = 0; i < s->ncomp && s->comp[i].type != SC_COMBINATOR; i++) {
+        const AuSelComp *c = &s->comp[i];
+        bool list = (c->type == SC_PSEUDO && (c->op == PC_IS || c->op == PC_WHERE)) || c->type == SC_NESTING;
+        if (!list || !c->u.list || !c->u.list->n)
+            continue;
+        uint32_t mark = *n;
+        bool ok = true;
+        for (uint32_t j = 0; j < c->u.list->n && ok; j++)
+            ok = subject_keys(&c->u.list->sel[j], quirks, entry, keys, n, cap, depth + 1);
+        if (ok)
+            return true;
+        *n = mark;
+    }
+    return false;
+}
+
+static void selector_keys(const AuSelector *s, bool quirks, uint32_t entry, IndexKey **keys, uint32_t *n,
+                          uint32_t *cap)
+{
+    if (!subject_keys(s, quirks, entry, keys, n, cap, 0)) {
+        IndexKey k = {KEY_UNIVERSAL, 0, entry};
+        *CSS_PUSH(*keys, *n, *cap) = k;
+    }
 }
 
 typedef struct {
@@ -380,7 +432,7 @@ static void index_clear(AuCssResolver *r)
     r->nentries = 0;
     au_free(r->sorted);
     r->sorted = NULL;
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < KEY_UNIVERSAL; i++)
         map_free(&r->maps[i]);
     for (int i = 0; i < 3; i++)
         r->layers[i].count = 0;
@@ -390,6 +442,8 @@ static void index_clear(AuCssResolver *r)
 }
 
 static void share_clear(AuCssResolver *r);
+
+static void sort_registrations(AuCssResolver *r);
 
 static void index_build(AuCssResolver *r, bool quirks)
 {
@@ -407,25 +461,26 @@ static void index_build(AuCssResolver *r, bool quirks)
     for (uint32_t i = 0; i < r->nsheets; i++)
         walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap);
     au_free(stack);
+    sort_registrations(r);
     for (int i = 0; i < 3; i++)
         layer_rank(&r->layers[i]);
     for (uint32_t i = 0; i < r->nentries; i++)
         r->entries[i].layer = r->layers[r->entries[i].origin].n[r->entries[i].layer].rank;
-    IndexKey *keys = au_alloc((r->nentries ? r->nentries : 1) * sizeof(IndexKey));
-    for (uint32_t i = 0; i < r->nentries; i++) {
-        keys[i] = selector_key(r->entries[i].sel, quirks);
-        keys[i].entry = i;
-    }
-    qsort(keys, r->nentries, sizeof(IndexKey), key_cmp);
-    r->sorted = au_alloc((r->nentries ? r->nentries : 1) * sizeof(uint32_t));
+    IndexKey *keys = NULL;
+    uint32_t nkeys = 0, kcap = 0;
     for (uint32_t i = 0; i < r->nentries; i++)
+        selector_keys(r->entries[i].sel, quirks, i, &keys, &nkeys, &kcap);
+    if (nkeys > 1)
+        qsort(keys, nkeys, sizeof(IndexKey), key_cmp);
+    r->sorted = au_alloc((nkeys ? nkeys : 1) * sizeof(uint32_t));
+    for (uint32_t i = 0; i < nkeys; i++)
         r->sorted[i] = keys[i].entry;
     uint32_t a = 0;
-    for (int kind = 0; kind < 4; kind++) {
+    for (int kind = 0; kind <= KEY_UNIVERSAL; kind++) {
         uint32_t b = a;
-        while (b < r->nentries && keys[b].kind == kind)
+        while (b < nkeys && keys[b].kind == kind)
             b++;
-        if (kind < 3)
+        if (kind < KEY_UNIVERSAL)
             map_build(&r->maps[kind], keys, a, b);
         else {
             r->uni_start = a;
@@ -457,6 +512,12 @@ static void share_clear(AuCssResolver *r)
         au_style_release(r->share[i].style);
         memset(&r->share[i], 0, sizeof r->share[i]);
     }
+    for (int g = 0; g < G_COUNT; g++)
+        for (int k = 0; k < RECENT_GROUPS; k++)
+            if (r->recent[g][k]) {
+                css_group_release(g, r->recent[g][k]);
+                r->recent[g][k] = NULL;
+            }
 }
 
 static void inline_clear(AuCssResolver *r)
@@ -475,6 +536,7 @@ void au_css_resolver_free(AuCssResolver *r)
     share_clear(r);
     index_clear(r);
     inline_clear(r);
+    css_has_index_free(&r->has_idx);
     au_free(r->inl);
     au_free(r->entries);
     for (int i = 0; i < 3; i++)
@@ -628,11 +690,22 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
             match_bucket(r, s, n, el, mc, want, pseudo_bits);
     }
     AuAtom tag = el->ns == AU_NS_HTML ? el->tag : css_atom_lower(el->tag);
-    if (map_get(&r->maps[2], tag, &s, &n))
+    if (map_get(&r->maps[KEY_TAG], tag, &s, &n))
         match_bucket(r, s, n, el, mc, want, pseudo_bits);
+    if (r->maps[KEY_ATTR].size)
+        for (uint32_t i = 0; i < el->nattrs; i++)
+            if (map_get(&r->maps[KEY_ATTR], css_atom_lower(el->attrs[i].name), &s, &n))
+                match_bucket(r, s, n, el, mc, want, pseudo_bits);
     match_bucket(r, r->uni_start, r->uni_count, el, mc, want, pseudo_bits);
-    if (r->nme > 1)
+    if (r->nme > 1) {
         qsort(r->matched_entries, r->nme, sizeof(uint32_t), u32_cmp);
+        /* an entry indexed under several keys can be found twice */
+        uint32_t k = 1;
+        for (uint32_t i = 1; i < r->nme; i++)
+            if (r->matched_entries[i] != r->matched_entries[k - 1])
+                r->matched_entries[k++] = r->matched_entries[i];
+        r->nme = k;
+    }
     r->nmatched = 0;
     for (uint32_t i = 0; i < r->nme; i++) {
         const RuleEntry *e = &r->entries[r->matched_entries[i]];
@@ -977,13 +1050,64 @@ static int cw_cmp(const void *a, const void *b)
     return x->key < y->key ? -1 : x->key > y->key;
 }
 
+/* r->props is sorted by name with one entry per name (index_build). */
 static const CssPropertyRule *registered(AuCssResolver *r, AuAtom name)
 {
-    const CssPropertyRule *p = NULL;
+    uint32_t lo = 0, hi = r->nprops;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (r->props[mid].name < name)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < r->nprops && r->props[lo].name == name ? &r->props[lo] : NULL;
+}
+
+/* True if children of an element with custom properties parent start
+ * from exactly parent: every non-inherited registered property has its
+ * initial value there and every registered initial value is present. */
+static bool parent_map_passes_down(AuCssResolver *r, const AuCustomProps *parent)
+{
+    for (uint32_t i = 0; i < r->nprops; i++) {
+        const CssPropertyRule *p = &r->props[i];
+        CssTokList *v = css_custom_get(parent, p->name);
+        if (!p->inherits ? v != p->initial : (p->initial && !v))
+            return false;
+    }
+    return true;
+}
+
+/* Sorts the @property registrations by name; for a name registered more
+ * than once the last registration wins. */
+static int prop_rule_cmp(const void *a, const void *b)
+{
+    const CssPropertyRule *x = *(const CssPropertyRule *const *)a, *y = *(const CssPropertyRule *const *)b;
+    if (x->name != y->name)
+        return x->name < y->name ? -1 : 1;
+    return x < y ? -1 : x > y; /* array order = document order */
+}
+
+static void sort_registrations(AuCssResolver *r)
+{
+    if (r->nprops < 2)
+        return;
+    const CssPropertyRule **ptrs = au_alloc(r->nprops * sizeof *ptrs);
     for (uint32_t i = 0; i < r->nprops; i++)
-        if (r->props[i].name == name)
-            p = &r->props[i];
-    return p;
+        ptrs[i] = &r->props[i];
+    qsort(ptrs, r->nprops, sizeof *ptrs, prop_rule_cmp);
+    CssPropertyRule *out = au_alloc(r->nprops * sizeof *out);
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < r->nprops; i++) {
+        if (n && out[n - 1].name == ptrs[i]->name)
+            out[n - 1] = *ptrs[i];
+        else
+            out[n++] = *ptrs[i];
+    }
+    memcpy(r->props, out, n * sizeof *out);
+    r->nprops = n;
+    au_free(out);
+    au_free(ptrs);
 }
 
 static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
@@ -1003,20 +1127,13 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
             x->d = d;
         }
     }
-    /* non-inherited registered properties do not come from the parent */
-    bool parent_filtered = false;
-    for (uint32_t i = 0; i < r->nprops && parent; i++)
-        if (!r->props[i].inherits && css_custom_get(parent, r->props[i].name))
-            parent_filtered = true;
-    bool need_initials = false;
-    for (uint32_t i = 0; i < r->nprops; i++)
-        if (r->props[i].initial && (!parent || !css_custom_get(parent, r->props[i].name) || !r->props[i].inherits))
-            need_initials = true;
-    if (!nw && !parent_filtered && !need_initials) {
+    bool passes = parent ? parent_map_passes_down(r, parent) : r->nprops == 0;
+    if (!nw && passes) {
         au_free(w);
         return css_custom_retain((AuCustomProps *)parent);
     }
-    qsort(w, nw, sizeof *w, cw_cmp);
+    if (nw > 1)
+        qsort(w, nw, sizeof *w, cw_cmp);
     /* one winner per name: the last of each run */
     uint32_t k = 0;
     for (uint32_t i = 0; i < nw; i++) {
@@ -1026,6 +1143,23 @@ static AuCustomProps *build_custom(Cascade *cs, const AuCustomProps *parent)
             w[k++] = w[i];
     }
     nw = k;
+    /* Declarations that repeat the parent's values (a universal rule
+     * setting the same properties on every element) change nothing. */
+    if (passes && parent) {
+        bool same = true;
+        for (uint32_t i = 0; i < nw && same; i++) {
+            const AuCssDecl *d = w[i].d;
+            const CssTokList *t = d->u.toks;
+            const CssPropertyRule *reg = r->nprops ? registered(r, w[i].name) : NULL;
+            same = d->kind == DK_CUSTOM && !t->has_var && !(t->tk.n == 1 && t->tk.t[0].type == TK_IDENT &&
+                                                            t->tk.t[0].kw) &&
+                   css_custom_get(parent, w[i].name) == t && (!reg || reg->inherits);
+        }
+        if (same) {
+            au_free(w);
+            return css_custom_retain((AuCustomProps *)parent);
+        }
+    }
     /* merge with the parent's map into a new sorted map */
     AuCustomProps *c = au_calloc(sizeof *c);
     c->refs = 1;
@@ -1149,6 +1283,8 @@ static void consider(AuCssResolver *r, uint16_t p, uint64_t key, const AuCssDecl
 }
 
 static void share_groups(AuStyle *s, const AuStyle *parent, const AuStyle *prev);
+static void intern_groups(AuCssResolver *r, AuStyle *s);
+static void swap_group(AuStyle *s, int g, void *other);
 
 /* Runs the cascade over r->matched (plus inline style and hints) and
  * computes the style. */
@@ -1258,7 +1394,35 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     if (cs.cc.flags & 4)
         s->flags |= AU_STYLE_F_HAS_ATTR;
     share_groups(s, parent, NULL);
+    intern_groups(r, s);
     return s;
+}
+
+/* Shares groups equal to one of the last few new groups of their kind
+ * (siblings with the same values in a group but different rules). */
+static void intern_groups(AuCssResolver *r, AuStyle *s)
+{
+    for (int g = 0; g < G_COUNT; g++) {
+        void *cur = css_style_group(s, g);
+        if (*(uint32_t *)cur > 1)
+            continue; /* already shared */
+        bool found = false;
+        for (int k = 0; k < RECENT_GROUPS && !found; k++) {
+            void *o = r->recent[g][k];
+            if (o && css_group_equal(g, cur, o)) {
+                swap_group(s, g, o);
+                found = true;
+            }
+        }
+        if (found)
+            continue;
+        uint8_t pos = r->recent_pos[g];
+        if (r->recent[g][pos])
+            css_group_release(g, r->recent[g][pos]);
+        (*(uint32_t *)cur)++;
+        r->recent[g][pos] = cur;
+        r->recent_pos[g] = (uint8_t)((pos + 1) % RECENT_GROUPS);
+    }
 }
 
 /* Replaces groups equal to the parent's (inherited) or the initial ones
@@ -1331,6 +1495,7 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     CssMatchCtx mc = {0};
     mc.bloom = bloom;
     mc.quirks = r->quirks;
+    mc.has_index = r->has_idx.size ? &r->has_idx : NULL;
     uint16_t bits = 0;
     collect(r, el, &mc, AU_CSS_PSEUDO_NONE, &bits);
     const AuCssDeclBlock *inl = inline_style(r, el);
@@ -1390,6 +1555,7 @@ AuStyle *au_css_compute_pseudo(AuCssResolver *r, AuElement *el, const AuStyle *e
     prepare(r, el);
     CssMatchCtx mc = {0};
     mc.quirks = r->quirks;
+    mc.has_index = r->has_idx.size ? &r->has_idx : NULL;
     collect(r, el, &mc, (uint8_t)p, NULL);
     if (!r->nmatched && p != AU_CSS_PSEUDO_MARKER)
         return NULL;
@@ -1447,6 +1613,8 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     prepare(r, de);
     share_clear(r);
     css_bloom_clear(&r->bloom);
+    if (r->has_has)
+        css_has_index_build(&r->has_idx, &doc->node);
     r->root_style = NULL;
     PathEntry *path = NULL;
     uint32_t np = 0, pcap = 0;
@@ -1474,13 +1642,14 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
         } else if (!pe) {
             r->root_style = au_element_style(el);
         }
+        /* invalidation marks the ancestors of dirty elements subtree-dirty */
+        bool sub_dirty = (el->state & AU_STATE_SUBTREE_DIRTY) != 0;
         el->state &= ~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY);
-        bool descend = n->first_child != NULL &&
-                       (!only_dirty || forced || (el->state & AU_STATE_SUBTREE_DIRTY) || true);
+        bool descend = n->first_child != NULL && (!only_dirty || forced || sub_dirty);
         if (descend) {
             PathEntry *pe2 = CSS_PUSH(path, np, pcap);
             pe2->el = el;
-            pe2->forced = forced && only_dirty ? true : forced;
+            pe2->forced = forced;
             css_bloom_push(&r->bloom, el, r->quirks);
             n = n->first_child;
         } else {
@@ -1489,6 +1658,7 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     }
     au_free(path);
     share_clear(r);
+    css_has_index_free(&r->has_idx);
     r->styled_once = true;
     r->full_restyle = false;
 }
@@ -1539,10 +1709,13 @@ void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAt
 
 /* ---- Debug and test access ---- */
 
-size_t css_resolver_entry_count(AuCssResolver *r);
-size_t css_resolver_entry_count(AuCssResolver *r)
+/* The number of rule entries (one per selector) and of those in the
+ * universal bucket, matched against every element. */
+void css_resolver_index_stats(AuCssResolver *r, size_t *entries, size_t *universal);
+void css_resolver_index_stats(AuCssResolver *r, size_t *entries, size_t *universal)
 {
     if (r->index_dirty)
         index_build(r, r->quirks);
-    return r->nentries;
+    *entries = r->nentries;
+    *universal = r->uni_count;
 }
