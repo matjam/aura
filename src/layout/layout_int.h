@@ -419,7 +419,11 @@ void l_text_free_caches(AuLayout *L);
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,
                  uint32_t color, float spacing);
 int l_break_class(uint32_t cp);
-enum { BK_NONE, BK_SPACE, BK_IDEO, BK_HYPHEN, BK_ZWSP, BK_SHY, BK_CLOSE, BK_OPEN, BK_NEWLINE, BK_TAB };
+enum {
+    BK_NONE, BK_SPACE, BK_IDEO, BK_HYPHEN, BK_ZWSP, BK_SHY, BK_CLOSE, BK_OPEN, BK_NEWLINE, BK_TAB,
+    BK_EXTEND, /* stays with what precedes it: combining marks, variation selectors, ZWJ, emoji modifiers, tags */
+    BK_RI      /* a regional indicator: breaks only between pairs */
+};
 
 /* boxtree.c */
 void l_build_tree(AuLayout *L);

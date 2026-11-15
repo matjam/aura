@@ -107,6 +107,9 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
     uint32_t n = t->len;
     uint32_t i = 0;
     uint32_t prev_cp = 0;
+    int base_bk = BK_NONE;   /* class of the last character that is not BK_EXTEND */
+    uint32_t ri_run = 0;     /* regional indicators in a row, this one included */
+    bool joined = false;     /* no break before the current character */
     while (i < n) {
         uint32_t si = seg_push(L);
         LSeg *sg = &L->segs[si];
@@ -123,6 +126,28 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
             size_t adv;
             uint32_t cp = au_utf8_decode(x + i, n - i, &adv);
             int bk = l_break_class(cp);
+            int cp_bk = bk;
+            if (bk == BK_EXTEND) {
+                /* Part of the cluster before it. After a ZWJ the next
+                 * character joins too (LB8a). */
+                bk = cp == 0x200D ? BK_NONE : base_bk;
+                if (bk == BK_RI)
+                    bk = BK_NONE;
+                joined = false;
+            } else {
+                joined = prev_cp == 0x200D;
+                if (bk == BK_RI) {
+                    /* Regional indicators pair up (LB30a): the second of
+                     * a pair stays with the first. */
+                    ri_run = base_bk == BK_RI ? ri_run + 1 : 1;
+                    if (!(ri_run & 1))
+                        joined = true;
+                    base_bk = BK_RI;
+                    bk = BK_IDEO;
+                } else {
+                    base_bk = bk;
+                }
+            }
             if (bk == BK_SPACE && !break_spaces)
                 break;
             if (bk == BK_NEWLINE && pre_br) {
@@ -147,13 +172,15 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
             if (bk == BK_TAB)
                 break;
             /* A break before an ideograph (not after an opening bracket). */
-            if (wrap && !keep_all && bk == BK_IDEO && i > sg->start && l_break_class(prev_cp) != BK_OPEN) {
+            if (wrap && !keep_all && bk == BK_IDEO && cp_bk != BK_EXTEND && !joined && i > sg->start &&
+                l_break_class(prev_cp) != BK_OPEN) {
                 word_end = i;
                 sg->flags |= SF_BREAK;
                 ended = true;
                 break;
             }
-            if (break_all && i > sg->start && bk != BK_CLOSE && l_break_class(prev_cp) != BK_OPEN) {
+            if (break_all && i > sg->start && bk != BK_CLOSE && cp_bk != BK_EXTEND && !joined &&
+                l_break_class(prev_cp) != BK_OPEN) {
                 word_end = i;
                 sg->flags |= SF_BREAK;
                 ended = true;
@@ -182,8 +209,10 @@ static void text_segments(AuLayout *L, LText *t, uint16_t depth)
                     size_t a2;
                     uint32_t nx = au_utf8_decode(x + i, n - i, &a2);
                     int nb = l_break_class(nx);
-                    if (nb == BK_CLOSE || nb == BK_SPACE || nb == BK_NEWLINE)
+                    if (nb == BK_CLOSE || nb == BK_SPACE || nb == BK_NEWLINE || nb == BK_EXTEND)
                         continue;
+                    if (nb == BK_RI && base_bk == BK_RI && (ri_run & 1))
+                        continue; /* the second of a pair follows */
                 }
                 sg->flags |= SF_BREAK;
                 ended = true;
@@ -290,8 +319,10 @@ static void build_segments(InlineCtx *C)
             L->segs[si].box = b;
             L->segs[si].kind = IT_WBR;
             L->segs[si].depth = depth;
-            if (wraps(b->style))
-                L->segs[si].flags = SF_BREAK;
+            /* A break opportunity whatever white-space says: Blink and
+             * Gecko break at <wbr> inside nowrap text (HTML's sheet has
+             * "nobr wbr { white-space: normal }" for the same reason). */
+            L->segs[si].flags = SF_BREAK;
             break;
         }
         case LK_BLOCK: {

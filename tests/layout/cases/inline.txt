@@ -273,3 +273,36 @@ pixel 2 5 ff0000
 pixel 9 5 ffffff
 pixel 14 5 ff0000
 pixel 30 18 ffffff
+
+=== wbr breaks inside white-space nowrap
+<body style="margin:0;width:100px">
+<div id=t style="white-space:nowrap">xxxx xx<wbr>xxxxxx</div>
+<nobr id=n>xxxx xx<wbr>xxxxxx</nobr>
+---
+#t h=32 lines=2
+
+=== a line breaks between emoji
+<body style="margin:0;width:48px">
+<div id=t>xx😀😁😂</div>
+---
+#t lines=2
+
+=== a line breaks between a letter and an emoji, both ways
+<body style="margin:0;width:32px">
+<div id=a>xx😀</div>
+<div id=b>😀😁xx</div>
+---
+#a lines=2
+#b lines=2
+
+=== no break inside an emoji sequence
+<body style="margin:0;width:16px">
+<div id=zwj>👨‍👩‍👧</div>
+<div id=tone>👍🏽</div>
+<div id=vs>☕️</div>
+<div id=flags>🇫🇷🇩🇪</div>
+---
+#zwj lines=1
+#tone lines=1
+#vs lines=1
+#flags lines=2

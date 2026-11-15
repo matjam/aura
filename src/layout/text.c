@@ -388,6 +388,29 @@ int l_break_class(uint32_t cp)
         return BK_SHY;
     if (cp == 0x200B)
         return BK_ZWSP;
+    /* UAX #14 classes CM, ZWJ and EM: no break before them (LB9, LB30b). */
+    if ((cp >= 0x300 && cp <= 0x36F) || cp == 0x200D || (cp >= 0x20D0 && cp <= 0x20FF) ||
+        (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x1F3FB && cp <= 0x1F3FF) || (cp >= 0xE0020 && cp <= 0xE007F) ||
+        (cp >= 0xE0100 && cp <= 0xE01EF))
+        return BK_EXTEND;
+    if (cp >= 0x1F1E6 && cp <= 0x1F1FF)
+        return BK_RI;
+    /* Emoji are class ID (or EB, which breaks like ID): the pictograph
+     * blocks of plane 1, and the BMP characters with emoji presentation. */
+    if (cp >= 0x1F000 && cp <= 0x1FAFF)
+        return BK_IDEO;
+    if (cp >= 0x231A && cp <= 0x2B55) {
+        static const uint16_t bmp[][2] = {
+            {0x231A, 0x231B}, {0x23E9, 0x23F3}, {0x25FD, 0x25FE}, {0x2614, 0x2615}, {0x2648, 0x2653},
+            {0x267F, 0x267F}, {0x2693, 0x2693}, {0x26A1, 0x26A1}, {0x26AA, 0x26AB}, {0x26BD, 0x26BE},
+            {0x26C4, 0x26C5}, {0x26CE, 0x26CE}, {0x26D4, 0x26D4}, {0x26EA, 0x26EA}, {0x26F2, 0x26F5},
+            {0x26FA, 0x26FA}, {0x26FD, 0x26FD}, {0x2705, 0x2705}, {0x270A, 0x270D}, {0x2728, 0x2728},
+            {0x274C, 0x274C}, {0x274E, 0x274E}, {0x2753, 0x2755}, {0x2757, 0x2757}, {0x2795, 0x2797},
+            {0x27B0, 0x27B0}, {0x27BF, 0x27BF}, {0x2B1B, 0x2B1C}, {0x2B50, 0x2B50}, {0x2B55, 0x2B55}};
+        for (size_t i = 0; i < sizeof bmp / sizeof bmp[0]; i++)
+            if (cp >= bmp[i][0] && cp <= bmp[i][1])
+                return BK_IDEO;
+    }
     if (cp == 0x2010 || cp == 0x2013)
         return BK_HYPHEN;
     if (cp == 0x3001 || cp == 0x3002 || cp == 0xFF0C || cp == 0xFF0E || cp == 0x300D || cp == 0x300F ||
