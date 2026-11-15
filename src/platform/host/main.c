@@ -48,7 +48,9 @@ static int usage(void)
             "                        [--scroll Y] [--mouse X Y]\n"
             "                        (--tab takes a URL, a path, or file:relative/path)\n"
             "       aura-host render page.html -w W [-h H] [-s scrollY] -o out.png\n"
-            "       aura-host dump page.html -w W\n");
+            "       aura-host dump page.html -w W\n"
+            "       aura-host image FILE [-o out.png] [--scale N] [--target WxH] [--chunk N] [--frames]\n"
+            "                        [--repeat N] [--max-bytes N] [--favicon SIZE]\n");
     return 2;
 }
 
@@ -381,6 +383,8 @@ int main(int argc, char **argv)
     const char *cmd = argv[1];
     if (!strcmp(cmd, "render") || !strcmp(cmd, "dump"))
         return au_host_render_main(argc, argv);
+    if (!strcmp(cmd, "image"))
+        return au_host_image_main(argc, argv);
     if (!strcmp(cmd, "chrome")) {
         ChromeOpts o;
         memset(&o, 0, sizeof o);

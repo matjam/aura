@@ -4,43 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static uint32_t crc_table[256];
-static bool crc_ready;
-
-uint32_t au_crc32(uint32_t crc, const uint8_t *p, size_t n)
-{
-    if (!crc_ready) {
-        for (uint32_t i = 0; i < 256; i++) {
-            uint32_t c = i;
-            for (int k = 0; k < 8; k++)
-                c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            crc_table[i] = c;
-        }
-        crc_ready = true;
-    }
-    crc = ~crc;
-    for (size_t i = 0; i < n; i++)
-        crc = crc_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
-    return ~crc;
-}
-
-uint32_t au_adler32(uint32_t adler, const uint8_t *p, size_t n)
-{
-    uint32_t a = adler & 0xFFFF, b = adler >> 16;
-    while (n) {
-        /* 5552 bytes keep b below 2^32 before the modulo. */
-        size_t k = n < 5552 ? n : 5552;
-        n -= k;
-        while (k--) {
-            a += *p++;
-            b += a;
-        }
-        a %= 65521;
-        b %= 65521;
-    }
-    return (b << 16) | a;
-}
-
 static void put32(AuBuf *b, uint32_t v)
 {
     uint8_t x[4] = {(uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v};
