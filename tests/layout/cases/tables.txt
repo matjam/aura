@@ -477,3 +477,87 @@ checked; cases that depend on the Ahem-like font say "no-chrome". Ahem:
 #a x=5 y=3 w=16 h=16
 #p x=18 y=2 w=4 h=4
 #w x=32 y=3 w=50 h=10
+
+=== quirks: a cell's height includes its padding and border
+<!-- quirks --><body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<table cellspacing=0><tr><td id=a height=50 style="padding:5px;border:2px solid"><i></i></td></tr></table>
+---
+#a x=0 y=0 w=30 h=50
+
+=== quirks: nowrap with a width makes that width the cell's minimum
+<!-- quirks --><body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table width=10 cellspacing=0><tr><td id=a nowrap width=100><i style="width:60px"></i><wbr><i style="width:60px"></i></td><td id=b><i style="width:30px"></i><wbr><i style="width:30px"></i></td></tr></table>
+---
+#a x=0 y=0 w=100 h=32
+#b x=100 y=0 w=30 h=32
+
+=== attributes: border, cellpadding and cellspacing
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}</style>
+<table id=t border=2 cellpadding=4 cellspacing=3><tr><td id=a><i></i></td><td id=b width=50><i></i></td></tr></table>
+---
+#t x=0 y=0 w=99 h=36
+#a x=5 y=5 w=26 h=26
+#b x=34 y=5 w=60 h=26
+
+=== attributes: width percentages on cells and the table
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t width="50%" cellspacing=0><tr><td id=a width="25%"><i></i></td><td id=b><i></i></td></tr></table>
+---
+#t x=0 y=0 w=400 h=16
+#a x=0 y=0 w=100 h=16
+#b x=100 y=0 w=300 h=16
+
+=== attributes: height on the table and a row
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table id=t height=100 cellspacing=0><tr id=r1 height=30><td><i></i></td></tr><tr id=r2><td><i></i></td></tr></table>
+---
+#t x=0 y=0 w=16 h=100
+#r1 x=0 y=0 w=16 h=30
+#r2 x=0 y=30 w=16 h=70
+
+=== attributes: valign and align
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<table cellspacing=0><tr valign=bottom><td width=100 align=right><i id=a></i></td><td valign=top><i id=b></i></td><td><i style="height:50px"></i></td></tr></table>
+---
+#a x=84 y=34 w=16 h=16
+#b x=100 y=0 w=16 h=16
+
+=== hit testing: cells, the spacing in a row, and the caption
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}</style>
+<table id=t style="border-spacing:10px"><caption id=cap><i></i></caption><tbody id=g><tr id=r><td id=a style="padding:0"><i style="width:40px"></i></td><td id=b style="padding:0"><i style="width:40px"></i></td></tr></tbody></table>
+---
+hit 15 30 #a
+hit 75 30 #b
+hit 55 30 #t
+hit 5 30 #t
+hit 30 5 #cap
+
+=== hit testing: a nested table's cell
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table cellspacing=0><tr><td><table cellspacing=0><tr><td><i></i></td><td id=x><i></i></td></tr></table></td><td id=y><i></i></td></tr></table>
+---
+hit 20 5 #x
+hit 40 5 #y
+
+=== hit testing: a rowspan cell over the next row
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table cellspacing=0><tr><td id=a rowspan=2><i style="height:40px"></i></td><td><i></i></td></tr><tr><td><i></i></td></tr></table>
+---
+hit 5 30 #a
+
+=== visibility collapse: cells of a collapsed row are not hit
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px;pointer-events:none}td{padding:0}</style>
+<table id=t cellspacing=0><tr><td id=a><i></i></td></tr><tr style="visibility:collapse"><td id=b><i></i></td></tr><tr><td id=c><i></i></td></tr></table>
+---
+hit 5 20 #c
+#t x=0 y=0 w=16 h=32

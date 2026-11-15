@@ -971,28 +971,35 @@ static float cell_baseline(const LCellBox *cb)
     return k->bw[0] + k->p[0] + cb->nat_h;
 }
 
-/* Adds extra to rows [r0, r0 + n) in proportion to their heights (equally
- * when they have none), skipping collapsed rows and, when body_only, the
- * header and footer group rows. Returns false if no row could take it. */
-static bool grow_rows(LTableBox *t, uint32_t r0, uint32_t n, float extra, bool body_only)
+/* Adds extra to rows [r0, r0 + n): to the rows without a specified height
+ * (con[r] 0) in proportion to their heights, or equally when they have
+ * none; when every row has one, to all of them. Collapsed rows and, when
+ * body_only, header and footer group rows take nothing. Returns false if
+ * no row could take it. */
+static bool grow_rows(LTableBox *t, const uint8_t *con, uint32_t r0, uint32_t n, float extra, bool body_only)
 {
     const LTableRow *rows = t->g->rows;
-    float total = 0;
-    uint32_t cnt = 0;
-    for (uint32_t r = r0; r < r0 + n; r++) {
-        if ((rows[r].flags & LTR_COLLAPSED) || (body_only && (rows[r].flags & LTR_HEADFOOT)))
+    for (int pass = 0; pass < 2; pass++) {
+        float total = 0;
+        uint32_t cnt = 0;
+        for (uint32_t r = r0; r < r0 + n; r++) {
+            if ((rows[r].flags & LTR_COLLAPSED) || (body_only && (rows[r].flags & LTR_HEADFOOT)) ||
+                (pass == 0 && con[r]))
+                continue;
+            total += t->rowh[r];
+            cnt++;
+        }
+        if (!cnt)
             continue;
-        total += t->rowh[r];
-        cnt++;
+        for (uint32_t r = r0; r < r0 + n; r++) {
+            if ((rows[r].flags & LTR_COLLAPSED) || (body_only && (rows[r].flags & LTR_HEADFOOT)) ||
+                (pass == 0 && con[r]))
+                continue;
+            t->rowh[r] += total > 0 ? extra * t->rowh[r] / total : extra / cnt;
+        }
+        return true;
     }
-    if (!cnt)
-        return false;
-    for (uint32_t r = r0; r < r0 + n; r++) {
-        if ((rows[r].flags & LTR_COLLAPSED) || (body_only && (rows[r].flags & LTR_HEADFOOT)))
-            continue;
-        t->rowh[r] += total > 0 ? extra * t->rowh[r] / total : extra / cnt;
-    }
-    return true;
+    return false;
 }
 
 static float span_height(const LTableBox *t, uint32_t r0, uint32_t n, float vs)
@@ -1105,12 +1112,14 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
     }
 
     /* Row heights. */
-    float *asc = au_alloc((nr ? nr : 1) * 2 * sizeof(float)), *desc = asc + nr;
+    float *asc = au_alloc((nr ? nr : 1) * (2 * sizeof(float) + 1)), *desc = asc + nr;
+    uint8_t *con = (uint8_t *)(desc + nr); /* the row has a specified height */
     for (uint32_t r = 0; r < nr; r++) {
         asc[r] = -1;
         desc[r] = 0;
         float sh = spec_bb_height(L, g->rows[r].box, target, false);
         t->rowh[r] = sh > 0 ? sh : 0;
+        con[r] = sh >= 0;
     }
     Span *spans = NULL;
     uint32_t nspans = 0;
@@ -1121,6 +1130,8 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         float sh = spec_bb_height(L, k, target, true);
         if (sh > h)
             h = sh;
+        if (sh >= 0 && cb->rowspan == 1)
+            con[cb->row] = 1;
         int va;
         if (valign_baseline(k, &va)) {
             float bl = cell_baseline(cb);
@@ -1153,7 +1164,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
                 h += asc[cb->row] - cell_baseline(cb);
             float have = span_height(t, cb->row, cb->rowspan, vs);
             if (h > have + 0.001f)
-                grow_rows(t, cb->row, cb->rowspan, h - have, false);
+                grow_rows(t, con, cb->row, cb->rowspan, h - have, false);
         }
         au_free(spans);
     }
@@ -1163,8 +1174,8 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
     /* A taller table gives the excess to its body rows. */
     float content_h = span_height(t, 0, nr, vs) + (visr ? 2 * vs : 0);
     if (target > content_h + 0.001f && nr) {
-        if (!grow_rows(t, 0, nr, target - content_h, true))
-            grow_rows(t, 0, nr, target - content_h, false);
+        if (!grow_rows(t, con, 0, nr, target - content_h, true))
+            grow_rows(t, con, 0, nr, target - content_h, false);
     }
     float y = gy0;
     for (uint32_t r = 0; r < nr; r++) {

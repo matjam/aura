@@ -142,8 +142,8 @@ static bool hit_block_child(HCtx *H, LBox *c, float kx, float ky, int phase)
 }
 
 /* The cells of table t at (ox, oy), in reverse painting order, without
- * recursing through rows and row groups; then the rows and row groups
- * themselves (the spacing between cells). */
+ * recursing through rows and row groups. The spacing between cells hits
+ * the table, as in Chrome. */
 static bool hit_table(HCtx *H, LTableBox *t, float ox, float oy, int phase)
 {
     LTableGrid *g = t->g;
@@ -166,27 +166,6 @@ static bool hit_table(HCtx *H, LTableBox *t, float ox, float oy, int phase)
             continue;
         if (hit_block_child(H, &k->b, x, y, phase))
             return true;
-    }
-    if (phase != PH_BG)
-        return false;
-    for (uint32_t r = g->nrows; r-- > 0;) {
-        LBlock *rb = g->rows[r].box, *grp = g->rows[r].group;
-        if (rb->b.flags & LF_LAYERED)
-            continue;
-        float x = ox + rb->x + (grp ? grp->x : 0), y = oy + rb->y + (grp ? grp->y : 0);
-        if (inside(H, x, y, rb->w, rb->h) && targetable(&rb->b) && !lb_anon(&rb->b)) {
-            H->box = &rb->b;
-            H->bx = x;
-            H->by = y;
-            return true;
-        }
-        if (grp && !(grp->b.flags & LF_LAYERED) && inside(H, ox + grp->x, oy + grp->y, grp->w, grp->h) &&
-            targetable(&grp->b) && !lb_anon(&grp->b)) {
-            H->box = &grp->b;
-            H->bx = ox + grp->x;
-            H->by = oy + grp->y;
-            return true;
-        }
     }
     return false;
 }
