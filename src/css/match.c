@@ -702,11 +702,26 @@ static bool has_match(const AuSelList *l, const AuElement *anchor, const CssMatc
 {
     CssMatchCtx sub = *mc;
     sub.bloom = NULL; /* the filter describes the anchor's ancestors, not the candidates' */
-    uint64_t below = mc->has_index ? has_mask(mc->has_index, anchor) : ~(uint64_t)0;
+    uint64_t below = ~(uint64_t)0;
+    bool have_below = false;
     for (uint32_t k = 0; k < l->n; k++) {
         const AuSelector *s = &l->sel[k];
         int rc = s->rel_comb ? s->rel_comb : COMB_DESCENDANT;
         if (rc == COMB_DESCENDANT || rc == COMB_CHILD) {
+            if (!have_below) {
+                have_below = true;
+                /* an anchor without element children needs no summary */
+                bool kids = false;
+                for (AuNode *n = anchor->node.first_child; n && !kids; n = n->next)
+                    kids = n->type == AU_NODE_ELEMENT;
+                if (!kids)
+                    below = 0;
+                else if (mc->has_index) {
+                    if (!mc->has_index->size && mc->has_root)
+                        css_has_index_build(mc->has_index, mc->has_root);
+                    below = has_mask(mc->has_index, anchor);
+                }
+            }
             uint64_t need = css_has_selector_bits(s);
             if ((below & need) != need)
                 continue;

@@ -138,6 +138,39 @@ bool css_group_equal(int g, const void *a, const void *b)
                   group_sizes[g] - sizeof(uint32_t)) == 0;
 }
 
+/* Like css_group_equal, but blobs and calc lengths are compared by value
+ * (a computed blob is a new allocation each time), and the custom
+ * property map of G_INH is left to the caller. */
+bool css_group_same(int g, const void *a, const void *b)
+{
+    if (a == b)
+        return true;
+    char ta[512], tb[512];
+    size_t size = group_sizes[g];
+    if (size > sizeof ta)
+        return false;
+    memcpy(ta, a, size);
+    memcpy(tb, b, size);
+    for (int i = 0; i < nblob[g]; i++) {
+        AuCssBlob **x = (AuCssBlob **)(void *)(ta + blob_off[g][i]), **y = (AuCssBlob **)(void *)(tb + blob_off[g][i]);
+        if (*x != *y && (!*x || !*y || !css_value_equal(&(*x)->value, &(*y)->value)))
+            return false;
+        *x = *y = NULL;
+    }
+    for (int i = 0; i < nlen[g]; i++) {
+        AuLen *x = (AuLen *)(void *)(ta + len_off[g][i]), *y = (AuLen *)(void *)(tb + len_off[g][i]);
+        if (x->kind != AU_LEN_CALC || y->kind != AU_LEN_CALC)
+            continue;
+        if (x->u.calc != y->u.calc &&
+            (!x->u.calc || !y->u.calc || !css_value_equal(&x->u.calc->value, &y->u.calc->value)))
+            return false;
+        x->u.calc = y->u.calc = NULL;
+    }
+    if (g == G_INH)
+        ((AuStyleInh *)(void *)ta)->custom = ((AuStyleInh *)(void *)tb)->custom = NULL;
+    return memcmp(ta + sizeof(uint32_t), tb + sizeof(uint32_t), size - sizeof(uint32_t)) == 0;
+}
+
 void *css_mut_group(AuStyle *s, int g)
 {
     void **slot = group_slot(s, g);

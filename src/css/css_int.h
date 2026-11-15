@@ -403,7 +403,11 @@ typedef struct CssMatchCtx {
     bool quirks;
     const AuElement *scope; /* :scope; NULL means the root element */
     uint32_t has_used;
-    const CssHasIndex *has_index; /* or NULL */
+    /* The :has() summary, or NULL. An empty index is built from has_root
+     * (a document) the first time a :has() needs it; with has_root NULL
+     * an empty index is not used. */
+    CssHasIndex *has_index;
+    const AuNode *has_root;
 } CssMatchCtx;
 
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc);
@@ -515,6 +519,7 @@ void css_group_release_fields(int g, void *grp);
 void css_group_release(int g, void *grp);
 void *css_group_clone(int g, const void *grp);
 bool css_group_equal(int g, const void *a, const void *b);
+bool css_group_same(int g, const void *a, const void *b);
 AuStyle *css_style_new(void);
 
 struct AuCustomProps {

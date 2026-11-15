@@ -684,9 +684,10 @@ void au_css_clear_document(AuDocument *doc);
 
 /* ---- Invalidation ----
  * Tell the resolver what changed; au_css_restyle then recomputes what is
- * affected. The current implementation restyles the element's subtree and
- * its following siblings' subtrees, or the whole document when a :has()
- * rule exists or the change is global. */
+ * affected. Attribute, child and inline style changes restyle the
+ * element's subtree and its following siblings' subtrees, or the whole
+ * document when a :has() rule exists or the change is global. State
+ * changes are targeted (see au_css_invalidate_state). */
 typedef enum {
     AU_CSS_CHANGE_ATTR,     /* an attribute, class or id changed (attr: its name) */
     AU_CSS_CHANGE_STATE,    /* hover, focus, checked, ... (AU_STATE_* bits) */
@@ -695,6 +696,20 @@ typedef enum {
     AU_CSS_CHANGE_ALL       /* sheets, device, fonts */
 } AuCssChange;
 void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAtom attr);
+/* The AU_STATE_* bits in bits changed on el (already set or cleared; call
+ * it for every element whose bits changed, ancestors included). Restyles
+ * el, and only the other elements that selectors reading those states can
+ * reach from el: its descendants or following siblings when a rule has the
+ * state left of a combinator, and the ancestors or preceding siblings that
+ * a :has() argument with the state can anchor on. el's subtree is restyled
+ * when its style comes out different. AU_CSS_CHANGE_STATE is this call
+ * with every bit. */
+void au_css_invalidate_state(AuCssResolver *r, AuElement *el, uint32_t bits);
+/* Moves a state that an element shares with its ancestors (AU_STATE_HOVER,
+ * AU_STATE_ACTIVE) from one element to another; either may be NULL. Sets
+ * and clears the bit and invalidates only the elements whose bit changed:
+ * those below the nearest common ancestor. r may be NULL. */
+void au_css_move_state(AuCssResolver *r, AuElement *from, AuElement *to, uint32_t bit);
 
 /* ---- Selectors (querySelector, matches) ---- */
 typedef struct AuCssSelectorList AuCssSelectorList;

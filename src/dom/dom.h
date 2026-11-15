@@ -192,7 +192,8 @@ enum {
     AU_STATE_TARGET = 1u << 8,
     AU_STATE_DEFINED = 1u << 9, /* a custom element (name with '-') that is defined */
     AU_STATE_STYLE_DIRTY = 1u << 16,
-    AU_STATE_SUBTREE_DIRTY = 1u << 17
+    AU_STATE_SUBTREE_DIRTY = 1u << 17,
+    AU_STATE_STYLE_SELF_DIRTY = 1u << 18 /* restyle the element; its subtree only if its style changes */
 };
 void au_element_set_state(AuElement *el, uint32_t bits, bool on);
 

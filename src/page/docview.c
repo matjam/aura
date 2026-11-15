@@ -910,19 +910,13 @@ static void set_state(AuDocView *dv, AuElement **slot, AuElement *el, uint32_t b
 {
     if (*slot == el)
         return;
-    if (*slot) {
-        au_element_set_state(*slot, bit, false);
-        if (dv->resolver)
-            au_css_invalidate(dv->resolver, *slot, AU_CSS_CHANGE_STATE, 0);
+    /* only the elements below the common ancestor change state */
+    au_css_move_state(dv->resolver, *slot, el, bit);
+    if (*slot)
         au_node_unref(&(*slot)->node);
-    }
     *slot = el;
-    if (el) {
+    if (el)
         au_node_ref(&el->node);
-        au_element_set_state(el, bit, true);
-        if (dv->resolver)
-            au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
-    }
     dv->restyle_needed = true;
 }
 

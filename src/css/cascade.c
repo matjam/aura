@@ -144,8 +144,8 @@ typedef struct {
     AuAtom tag;
     uint8_t ns;
     uint16_t pseudo_bits;
-    uint32_t n;
-    uint32_t *entries;
+    uint32_t n, npe;
+    uint32_t *entries; /* n matched entries, then npe pseudo-element entries */
     uint32_t hash;
     AuStyle *style;
 } ShareSlot;
@@ -178,6 +178,8 @@ struct AuCssResolver {
     uint32_t nmatched, matched_cap;
     uint32_t *matched_entries;
     uint32_t nme, me_cap;
+    uint32_t *pseudo_entries; /* matched ::before, ::after and ::marker rules of the element */
+    uint32_t npe, pe_cap;
     Winner winners[AU_PROP_LOGICAL_END];
     uint32_t gen;
     uint16_t touched[AU_PROP_LOGICAL_END];
@@ -191,7 +193,13 @@ struct AuCssResolver {
     uint8_t recent_pos[G_COUNT];
     const AuStyle *root_style;
     CssBloom bloom;
-    CssHasIndex has_idx; /* during a style pass when :has() rules exist */
+    CssHasIndex has_idx; /* built on first use in a style pass when :has() rules exist */
+    const AuNode *has_root; /* the document being styled, while has_idx may be built */
+
+    struct StateDep *deps; /* what a state change must restyle besides the element */
+    uint32_t ndeps, deps_cap;
+    uint32_t state_used; /* state bits some selector reads */
+    uint32_t stat_computed; /* elements computed since the last css_resolver_take_computed */
 };
 
 static void map_free(AtomMap *m)
@@ -257,12 +265,12 @@ static bool map_get(const AtomMap *m, AuAtom a, uint32_t *start, uint32_t *count
     return false;
 }
 
-/* The best key of one compound (components [0, end) of s): id, else
- * class, else tag, else attribute name; KEY_UNIVERSAL if none. */
-static IndexKey compound_key(const AuSelector *s, bool quirks)
+/* The best key of the compound of s that starts at component from: id,
+ * else class, else tag, else attribute name; KEY_UNIVERSAL if none. */
+static IndexKey compound_key_at(const AuSelector *s, uint32_t from, bool quirks)
 {
     IndexKey k = {KEY_UNIVERSAL, 0, 0};
-    for (uint32_t i = 0; i < s->ncomp && s->comp[i].type != SC_COMBINATOR; i++) {
+    for (uint32_t i = from; i < s->ncomp && s->comp[i].type != SC_COMBINATOR; i++) {
         const AuSelComp *c = &s->comp[i];
         if (c->type == SC_ID) {
             k.kind = KEY_ID;
@@ -282,6 +290,8 @@ static IndexKey compound_key(const AuSelector *s, bool quirks)
     }
     return k;
 }
+
+static IndexKey compound_key(const AuSelector *s, bool quirks) { return compound_key_at(s, 0, quirks); }
 
 /* Appends the keys under which a selector's subject must be found and
  * returns true, or appends nothing and returns false if it has none. A
@@ -322,6 +332,198 @@ static void selector_keys(const AuSelector *s, bool quirks, uint32_t entry, Inde
     if (!subject_keys(s, quirks, entry, keys, n, cap, 0)) {
         IndexKey k = {KEY_UNIVERSAL, 0, entry};
         *CSS_PUSH(*keys, *n, *cap) = k;
+    }
+}
+
+/* ---- State dependencies ----
+ *
+ * For targeted invalidation of state changes (hover, active, focus,
+ * checked...). Every selector of the index is analysed once: for each state
+ * pseudo-class it reads, where the elements it can style lie relative to
+ * the element E whose state changes.
+ *
+ * - In the subject compound ("a:hover"): E itself. Nothing is recorded;
+ *   E is always restyled.
+ * - Left of a descendant or child combinator (".menu:hover .item"):
+ *   descendants of E (REL_DESC).
+ * - Left of a sibling combinator ("input:checked + label",
+ *   "input:checked ~ div p"): following siblings of E (REL_SIB) or their
+ *   subtrees (REL_SIBDESC).
+ * - Inside a :has() argument (".card:has(a:hover)"): the :has() anchor is
+ *   an ancestor of E, or with a leading + or ~ a preceding sibling of E
+ *   or of an ancestor of E. The record keeps the key of the anchor's
+ *   compound and where styled elements lie relative to the anchor.
+ * - Anywhere the analysis cannot follow (:nth-child(of ...), a complex
+ *   selector nested in a :has() argument, :has() in :has()): REL_ANY,
+ *   the whole document.
+ *
+ * A record applies to E only if E has the key (id, class, tag or attribute
+ * name) of the compound that reads the state. */
+enum { REL_SELF = 0, REL_DESC, REL_SIB, REL_SIBDESC, REL_ANY };
+#define STATE_OTHER (1u << 31) /* pseudo-classes that follow control values and attributes */
+#define STATE_ALL (~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY | AU_STATE_STYLE_SELF_DIRTY))
+
+typedef struct StateDep {
+    uint32_t state; /* AU_STATE_* bits and STATE_OTHER */
+    AuAtom key, anchor;
+    uint8_t rel;      /* REL_*: relative to E, or to the anchor when in_has */
+    uint8_t in_has;
+    uint8_t has_sib;  /* the anchor may be a preceding sibling */
+    uint8_t key_kind, anchor_kind; /* KEY_* */
+} StateDep;
+
+typedef struct {
+    AuCssResolver *r;
+    bool in_has, has_sib, has_nested;
+    uint8_t has_rel;
+    IndexKey anchor;
+} DepCtx;
+
+/* The state bits a pseudo-class reads, or 0. */
+static uint32_t pseudo_state(int op)
+{
+    switch (op) {
+    case PC_HOVER: return AU_STATE_HOVER;
+    case PC_ACTIVE: return AU_STATE_ACTIVE;
+    case PC_FOCUS: return AU_STATE_FOCUS;
+    case PC_FOCUS_VISIBLE: return AU_STATE_FOCUS_VISIBLE;
+    case PC_FOCUS_WITHIN: return AU_STATE_FOCUS_WITHIN | AU_STATE_FOCUS;
+    case PC_CHECKED: return AU_STATE_CHECKED | AU_STATE_CHECKED_SET;
+    case PC_INDETERMINATE: return AU_STATE_INDETERMINATE | STATE_OTHER;
+    case PC_TARGET: return AU_STATE_TARGET;
+    case PC_DEFINED: return AU_STATE_DEFINED;
+    case PC_VALID:
+    case PC_INVALID: return AU_STATE_CHECKED | AU_STATE_CHECKED_SET | STATE_OTHER;
+    case PC_DEFAULT:
+    case PC_DISABLED:
+    case PC_ENABLED:
+    case PC_REQUIRED:
+    case PC_OPTIONAL:
+    case PC_READ_ONLY:
+    case PC_READ_WRITE:
+    case PC_PLACEHOLDER_SHOWN:
+    case PC_USER_VALID:
+    case PC_USER_INVALID:
+    case PC_IN_RANGE:
+    case PC_OUT_OF_RANGE: return STATE_OTHER;
+    default: return 0;
+    }
+}
+
+static uint8_t rel_cross(uint8_t rel, int comb)
+{
+    if (rel == REL_ANY)
+        return REL_ANY;
+    if (comb == COMB_DESCENDANT || comb == COMB_CHILD)
+        return REL_DESC;
+    return rel == REL_SELF || rel == REL_SIB ? REL_SIB : REL_SIBDESC;
+}
+
+static void dep_add(DepCtx *cx, uint32_t state, uint8_t rel, IndexKey key)
+{
+    AuCssResolver *r = cx->r;
+    r->state_used |= state;
+    StateDep d;
+    memset(&d, 0, sizeof d);
+    d.state = state;
+    d.key = key.atom;
+    d.key_kind = key.kind;
+    d.rel = rel;
+    if (cx->in_has) {
+        d.in_has = 1;
+        d.rel = rel == REL_ANY ? REL_ANY : cx->has_rel;
+        d.has_sib = cx->has_sib;
+        d.anchor = cx->anchor.atom;
+        d.anchor_kind = cx->anchor.kind;
+    } else if (rel == REL_SELF) {
+        return;
+    }
+    /* sheets repeat patterns: look at the last few records */
+    for (uint32_t i = r->ndeps, n = 0; i-- > 0 && n < 8; n++)
+        if (memcmp(&r->deps[i], &d, sizeof d) == 0)
+            return;
+    *CSS_PUSH(r->deps, r->ndeps, r->deps_cap) = d;
+}
+
+/* Analyses selector s, whose subject lies at rel. outer is the key the
+ * subject is known to have from an enclosing compound. Recursion follows
+ * selector nesting only. */
+static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey outer, int depth)
+{
+    if (depth > 8) {
+        IndexKey any = {KEY_UNIVERSAL, 0, 0};
+        dep_add(cx, STATE_ALL, REL_ANY, any);
+        return;
+    }
+    bool quirks = cx->r->quirks;
+    for (uint32_t i = 0; i < s->ncomp;) {
+        uint32_t k = i;
+        while (k < s->ncomp && s->comp[k].type != SC_COMBINATOR)
+            k++;
+        IndexKey key = compound_key_at(s, i, quirks);
+        if (key.kind == KEY_UNIVERSAL && i == 0)
+            key = outer;
+        for (uint32_t j = i; j < k; j++) {
+            const AuSelComp *c = &s->comp[j];
+            const AuSelList *nested = NULL;
+            if (c->type == SC_NESTING) {
+                nested = c->u.list;
+            } else if (c->type == SC_PSEUDO) {
+                uint32_t st = pseudo_state(c->op);
+                if (st) {
+                    dep_add(cx, st, rel, key);
+                } else if (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT) {
+                    nested = c->u.list;
+                } else if (c->op == PC_HAS && c->u.list) {
+                    DepCtx h = *cx;
+                    h.in_has = true;
+                    h.has_rel = cx->in_has ? REL_ANY : rel;
+                    h.anchor = key;
+                    for (uint32_t m = 0; m < c->u.list->n; m++) {
+                        const AuSelector *a = &c->u.list->sel[m];
+                        h.has_sib = a->rel_comb == COMB_NEXT || a->rel_comb == COMB_SUBSEQUENT;
+                        IndexKey none = {KEY_UNIVERSAL, 0, 0};
+                        dep_selector(&h, a, cx->in_has ? REL_ANY : REL_SELF, none, depth + 1);
+                    }
+                } else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.nth.of) {
+                    /* a sibling's state changes the index of the others */
+                    IndexKey none = {KEY_UNIVERSAL, 0, 0};
+                    for (uint32_t m = 0; m < c->u.nth.of->n; m++)
+                        dep_selector(cx, &c->u.nth.of->sel[m], REL_ANY, none, depth + 1);
+                }
+            }
+            if (nested) {
+                DepCtx n = *cx;
+                n.has_nested = cx->in_has;
+                for (uint32_t m = 0; m < nested->n; m++)
+                    dep_selector(&n, &nested->sel[m], rel, key, depth + 1);
+            }
+        }
+        if (k < s->ncomp)
+            rel = cx->has_nested ? REL_ANY : rel_cross(rel, s->comp[k].op);
+        i = k + 1;
+    }
+}
+
+static int dep_cmp(const void *a, const void *b) { return memcmp(a, b, sizeof(StateDep)); }
+
+static void deps_build(AuCssResolver *r)
+{
+    r->ndeps = 0;
+    r->state_used = 0;
+    DepCtx cx;
+    memset(&cx, 0, sizeof cx);
+    cx.r = r;
+    IndexKey none = {KEY_UNIVERSAL, 0, 0};
+    for (uint32_t i = 0; i < r->nentries; i++)
+        dep_selector(&cx, r->entries[i].sel, REL_SELF, none, 0);
+    if (r->ndeps > 1) {
+        qsort(r->deps, r->ndeps, sizeof(StateDep), dep_cmp);
+        uint32_t k = 1;
+        for (uint32_t i = 1; i < r->ndeps; i++)
+            if (memcmp(&r->deps[i], &r->deps[k - 1], sizeof(StateDep)) != 0)
+                r->deps[k++] = r->deps[i];
+        r->ndeps = k;
     }
 }
 
@@ -440,6 +642,8 @@ static void index_clear(AuCssResolver *r)
     r->uni_start = r->uni_count = 0;
     r->has_has = false;
     r->nprops = 0;
+    r->ndeps = 0;
+    r->state_used = 0;
 }
 
 static void share_clear(AuCssResolver *r);
@@ -490,6 +694,7 @@ static void index_build(AuCssResolver *r, bool quirks)
         a = b;
     }
     au_free(keys);
+    deps_build(r);
     r->index_dirty = false;
 }
 
@@ -540,12 +745,14 @@ void au_css_resolver_free(AuCssResolver *r)
     inline_clear(r);
     css_has_index_free(&r->has_idx);
     au_free(r->inl);
+    au_free(r->deps);
     au_free(r->entries);
     for (int i = 0; i < 3; i++)
         au_free(r->layers[i].n);
     au_free(r->props);
     au_free(r->matched);
     au_free(r->matched_entries);
+    au_free(r->pseudo_entries);
     au_css_sheet_free(r->ua);
     au_css_sheet_free(r->ua_quirks);
     for (uint32_t i = 0; i < r->nsheets; i++)
@@ -680,10 +887,18 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
         if (e->pseudo != want) {
             if (want != AU_CSS_PSEUDO_NONE || !pseudo_bits || e->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
                 continue;
-            if (*pseudo_bits & (1u << e->pseudo))
+            /* The ::before, ::after and ::marker styles hang off the
+             * element's style, so the rules that give them are part of
+             * what a shared style stands for: find them all. */
+            bool attached = e->pseudo == AU_CSS_PSEUDO_BEFORE || e->pseudo == AU_CSS_PSEUDO_AFTER ||
+                            e->pseudo == AU_CSS_PSEUDO_MARKER;
+            if (!attached && (*pseudo_bits & (1u << e->pseudo)))
                 continue; /* already known to match */
-            if (css_selector_match(e->sel, el, mc))
+            if (css_selector_match(e->sel, el, mc)) {
                 *pseudo_bits |= (uint16_t)(1u << e->pseudo);
+                if (attached)
+                    *CSS_PUSH(r->pseudo_entries, r->npe, r->pe_cap) = ei;
+            }
             continue;
         }
         if (!css_selector_match(e->sel, el, mc))
@@ -704,6 +919,7 @@ static int u32_cmp(const void *a, const void *b)
 static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc, uint8_t want, uint16_t *pseudo_bits)
 {
     r->nme = 0;
+    r->npe = 0;
     uint32_t s, n;
     bool q = r->quirks;
     if (el->id && map_get(&r->maps[0], q ? css_atom_lower(el->id) : el->id, &s, &n))
@@ -734,6 +950,14 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
             if (r->matched_entries[i] != r->matched_entries[k - 1])
                 r->matched_entries[k++] = r->matched_entries[i];
         r->nme = k;
+    }
+    if (r->npe > 1) {
+        qsort(r->pseudo_entries, r->npe, sizeof(uint32_t), u32_cmp);
+        uint32_t k = 1;
+        for (uint32_t i = 1; i < r->npe; i++)
+            if (r->pseudo_entries[i] != r->pseudo_entries[k - 1])
+                r->pseudo_entries[k++] = r->pseudo_entries[i];
+        r->npe = k;
     }
     r->nmatched = 0;
     for (uint32_t i = 0; i < r->nme; i++) {
@@ -1553,10 +1777,12 @@ static void prepare(AuCssResolver *r, const AuElement *el)
 static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *parent, const CssBloom *bloom)
 {
     prepare(r, el);
+    r->stat_computed++;
     CssMatchCtx mc = {0};
     mc.bloom = bloom;
     mc.quirks = r->quirks;
-    mc.has_index = r->has_idx.size ? &r->has_idx : NULL;
+    mc.has_index = &r->has_idx;
+    mc.has_root = r->has_root;
     uint16_t bits = 0;
     collect(r, el, &mc, AU_CSS_PSEUDO_NONE, &bits);
     const AuCssDeclBlock *inl = inline_style(r, el);
@@ -1569,14 +1795,18 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     ShareSlot *slot = NULL;
     if (eligible) {
         h = share_hash(parent, el, bits, r->matched_entries, r->nme);
+        for (uint32_t i = 0; i < r->npe; i++)
+            h = (h ^ r->pseudo_entries[i]) * 16777619u;
         slot = &r->share[h % SHARE_SLOTS];
         if (slot->style && slot->hash == h && slot->parent == parent && slot->tag == el->tag && slot->ns == el->ns &&
-            slot->pseudo_bits == bits && slot->n == r->nme &&
-            memcmp(slot->entries, r->matched_entries, r->nme * sizeof(uint32_t)) == 0) {
+            slot->pseudo_bits == bits && slot->n == r->nme && slot->npe == r->npe &&
+            memcmp(slot->entries, r->matched_entries, r->nme * sizeof(uint32_t)) == 0 &&
+            memcmp(slot->entries + r->nme, r->pseudo_entries, r->npe * sizeof(uint32_t)) == 0) {
             css_decl_block_clear(&hints);
             return au_style_retain(slot->style);
         }
     }
+    uint32_t npe = r->npe; /* the cascade leaves the match lists alone */
     AuStyle *s = cascade(r, el, parent, inl, &hints, AU_CSS_PSEUDO_NONE);
     s->pseudo_bits = bits;
     css_decl_block_clear(&hints);
@@ -1588,8 +1818,11 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
         slot->ns = el->ns;
         slot->pseudo_bits = bits;
         slot->n = r->nme;
-        slot->entries = au_alloc((r->nme ? r->nme : 1) * sizeof(uint32_t));
+        slot->npe = npe;
+        slot->entries = au_alloc((r->nme + npe + 1) * sizeof(uint32_t));
         memcpy(slot->entries, r->matched_entries, r->nme * sizeof(uint32_t));
+        if (npe)
+            memcpy(slot->entries + r->nme, r->pseudo_entries, npe * sizeof(uint32_t));
         slot->hash = h;
         slot->style = au_style_retain(s);
     }
@@ -1616,7 +1849,8 @@ AuStyle *au_css_compute_pseudo(AuCssResolver *r, AuElement *el, const AuStyle *e
     prepare(r, el);
     CssMatchCtx mc = {0};
     mc.quirks = r->quirks;
-    mc.has_index = r->has_idx.size ? &r->has_idx : NULL;
+    mc.has_index = &r->has_idx;
+    mc.has_root = r->has_root;
     collect(r, el, &mc, (uint8_t)p, NULL);
     if (!r->nmatched && p != AU_CSS_PSEUDO_MARKER)
         return NULL;
@@ -1663,8 +1897,66 @@ typedef struct {
     bool forced;
 } PathEntry;
 
+/* Custom property maps with the same names and values. */
+static bool custom_same(const AuCustomProps *a, const AuCustomProps *b)
+{
+    if (a == b)
+        return true;
+    if (!a || !b || a->n != b->n)
+        return false;
+    for (uint32_t i = 0; i < a->n; i++) {
+        const CssTokList *x = a->e[i].value, *y = b->e[i].value;
+        if (a->e[i].name != b->e[i].name)
+            return false;
+        if (x == y)
+            continue;
+        if (!x || !y || x->tk.n != y->tk.n || x->tk.pool.len != y->tk.pool.len)
+            return false;
+        if (x->tk.n && memcmp(x->tk.t, y->tk.t, x->tk.n * sizeof(CssToken)) != 0)
+            return false;
+        if (x->tk.pool.len && memcmp(x->tk.pool.data, y->tk.pool.data, x->tk.pool.len) != 0)
+            return false;
+    }
+    return true;
+}
+
+static bool style_same_one(const AuStyle *a, const AuStyle *b)
+{
+    if (a->flags != b->flags || a->pseudo_bits != b->pseudo_bits || a->pseudo != b->pseudo)
+        return false;
+    for (int g = 0; g < G_COUNT; g++) {
+        const char *x = css_style_group(a, g), *y = css_style_group(b, g);
+        if (x == y)
+            continue;
+        if (!css_group_same(g, x, y))
+            return false;
+        if (g == G_INH && !custom_same(a->inh->custom, b->inh->custom))
+            return false;
+    }
+    return true;
+}
+
+/* True when two computed styles, with their pseudo-element styles, hold
+ * the same values. Values kept in separately computed blobs compare as
+ * different, which only costs a restyle of the subtree. */
+static bool style_same(const AuStyle *a, const AuStyle *b)
+{
+    if (a == b)
+        return true;
+    if (!a || !b || !style_same_one(a, b))
+        return false;
+    const AuStyle *p = a->pseudos, *q = b->pseudos;
+    for (; p && q; p = p->next, q = q->next)
+        if (p != q && !style_same_one(p, q))
+            return false;
+    return !p && !q;
+}
+
 /* Styles elements in preorder. With only_dirty, an element is restyled if
- * it or an ancestor is marked dirty; otherwise every element is. */
+ * it or an ancestor is marked AU_STATE_STYLE_DIRTY, or if it is marked
+ * AU_STATE_STYLE_SELF_DIRTY; a self-dirty element whose style comes out
+ * different has its subtree restyled, since descendants inherit from it.
+ * Otherwise every element is restyled. */
 static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
 {
     au_css_init();
@@ -1674,8 +1966,8 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     prepare(r, de);
     share_clear(r);
     css_bloom_clear(&r->bloom);
-    if (r->has_has)
-        css_has_index_build(&r->has_idx, &doc->node);
+    css_has_index_free(&r->has_idx);
+    r->has_root = r->has_has ? &doc->node : NULL;
     r->root_style = NULL;
     PathEntry *path = NULL;
     uint32_t np = 0, pcap = 0;
@@ -1693,19 +1985,24 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
         }
         const AuElement *pe = np ? path[np - 1].el : NULL;
         bool forced = !only_dirty || (np && path[np - 1].forced) || (el->state & AU_STATE_STYLE_DIRTY) || !el->style;
-        if (forced) {
+        if (forced || (el->state & AU_STATE_STYLE_SELF_DIRTY)) {
             const AuStyle *ps = pe ? au_element_style(pe) : NULL;
             AuStyle *s = compute_element(r, el, ps, &r->bloom);
             if (!pe)
-                r->root_style = s;
-            store_style(el, s);
+                r->root_style = s; /* its pseudo-elements may use rem */
             attach_pseudos(r, el, s);
-        } else if (!pe) {
-            r->root_style = au_element_style(el);
+            if (!forced && style_same(s, au_element_style(el))) {
+                au_style_release(s);
+            } else {
+                store_style(el, s);
+                forced = true;
+            }
         }
+        if (!pe)
+            r->root_style = au_element_style(el);
         /* invalidation marks the ancestors of dirty elements subtree-dirty */
         bool sub_dirty = (el->state & AU_STATE_SUBTREE_DIRTY) != 0;
-        el->state &= ~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY);
+        el->state &= ~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY | AU_STATE_STYLE_SELF_DIRTY);
         bool descend = n->first_child != NULL && (!only_dirty || forced || sub_dirty);
         if (descend) {
             PathEntry *pe2 = CSS_PUSH(path, np, pcap);
@@ -1720,6 +2017,7 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     au_free(path);
     share_clear(r);
     css_has_index_free(&r->has_idx);
+    r->has_root = NULL;
     r->styled_once = true;
     r->full_restyle = false;
 }
@@ -1745,9 +2043,161 @@ void au_css_clear_document(AuDocument *doc)
         }
 }
 
+static AuElement *parent_element(const AuElement *el)
+{
+    AuNode *p = el->node.parent;
+    return p && p->type == AU_NODE_ELEMENT ? (AuElement *)p : NULL;
+}
+
+static void mark_ancestors(AuElement *el)
+{
+    for (AuElement *p = parent_element(el); p; p = parent_element(p))
+        p->state |= AU_STATE_SUBTREE_DIRTY;
+}
+
+static bool dep_key_match(const AuCssResolver *r, uint8_t kind, AuAtom atom, const AuElement *el)
+{
+    bool q = r->quirks;
+    switch (kind) {
+    case KEY_ID:
+        return el->id && (q ? css_atom_lower(el->id) : el->id) == atom;
+    case KEY_CLASS:
+        for (uint32_t i = 0; i < el->nclasses; i++)
+            if ((q ? css_atom_lower(el->classes[i]) : el->classes[i]) == atom)
+                return true;
+        return false;
+    case KEY_TAG:
+        return (el->ns == AU_NS_HTML ? el->tag : css_atom_lower(el->tag)) == atom;
+    case KEY_ATTR:
+        for (uint32_t i = 0; i < el->nattrs; i++)
+            if (css_atom_lower(el->attrs[i].name) == atom)
+                return true;
+        return false;
+    default:
+        return true;
+    }
+}
+
+/* Marks what lies at rel from el. */
+static void dep_apply(AuCssResolver *r, AuElement *el, uint8_t rel)
+{
+    switch (rel) {
+    case REL_SELF:
+        el->state |= AU_STATE_STYLE_SELF_DIRTY;
+        mark_ancestors(el);
+        break;
+    case REL_DESC:
+        el->state |= AU_STATE_STYLE_DIRTY;
+        mark_ancestors(el);
+        break;
+    case REL_SIB:
+    case REL_SIBDESC:
+        for (AuNode *s = el->node.next; s; s = s->next)
+            if (s->type == AU_NODE_ELEMENT)
+                ((AuElement *)s)->state |= rel == REL_SIB ? AU_STATE_STYLE_SELF_DIRTY : AU_STATE_STYLE_DIRTY;
+        mark_ancestors(el);
+        break;
+    default:
+        r->full_restyle = true;
+        break;
+    }
+}
+
+void au_css_invalidate_state(AuCssResolver *r, AuElement *el, uint32_t bits)
+{
+    if (!r->styled_once || r->index_dirty || r->full_restyle) {
+        r->full_restyle = true; /* the next restyle is a full one, or the records are stale */
+        return;
+    }
+    bits &= STATE_ALL;
+    if (bits == STATE_ALL)
+        bits |= STATE_OTHER;
+    if (!(bits & r->state_used))
+        return;
+    dep_apply(r, el, REL_SELF);
+    for (uint32_t i = 0; i < r->ndeps && !r->full_restyle; i++) {
+        const StateDep *d = &r->deps[i];
+        if (!(d->state & bits) || !dep_key_match(r, d->key_kind, d->key, el))
+            continue;
+        if (!d->in_has) {
+            dep_apply(r, el, d->rel);
+            continue;
+        }
+        if (d->rel == REL_ANY) {
+            r->full_restyle = true;
+            break;
+        }
+        /* candidate anchors: ancestors of el; with a leading sibling
+         * combinator, preceding siblings of el and of its ancestors */
+        for (AuElement *a = el; a; a = parent_element(a)) {
+            if (d->has_sib) {
+                for (AuNode *p = a->node.prev; p; p = p->prev)
+                    if (p->type == AU_NODE_ELEMENT && dep_key_match(r, d->anchor_kind, d->anchor, (AuElement *)p))
+                        dep_apply(r, (AuElement *)p, d->rel);
+            } else if (a != el && dep_key_match(r, d->anchor_kind, d->anchor, a)) {
+                dep_apply(r, a, d->rel);
+            }
+        }
+    }
+}
+
+void au_css_move_state(AuCssResolver *r, AuElement *from, AuElement *to, uint32_t bit)
+{
+    /* the nearest common ancestor-or-self keeps the bit */
+    AuElement *a = from, *b = to;
+    uint32_t da = 0, db = 0;
+    for (AuElement *p = a; p; p = parent_element(p))
+        da++;
+    for (AuElement *p = b; p; p = parent_element(p))
+        db++;
+    for (; da > db; da--)
+        a = parent_element(a);
+    for (; db > da; db--)
+        b = parent_element(b);
+    while (a != b) {
+        a = parent_element(a);
+        b = parent_element(b);
+    }
+    AuElement *common = a;
+    for (AuElement *p = from; p && p != common; p = parent_element(p))
+        if (p->state & bit) {
+            p->state &= ~bit;
+            if (r)
+                au_css_invalidate_state(r, p, bit);
+        }
+    for (AuElement *p = to; p && p != common; p = parent_element(p))
+        if (!(p->state & bit)) {
+            p->state |= bit;
+            if (r)
+                au_css_invalidate_state(r, p, bit);
+        }
+    /* ancestors that lost the bit while detached get it back */
+    for (AuElement *p = common; p && to; p = parent_element(p))
+        if (!(p->state & bit)) {
+            p->state |= bit;
+            if (r)
+                au_css_invalidate_state(r, p, bit);
+        }
+}
+
+uint32_t css_resolver_take_computed(AuCssResolver *r);
+uint32_t css_resolver_take_computed(AuCssResolver *r)
+{
+    uint32_t n = r->stat_computed;
+    r->stat_computed = 0;
+    return n;
+}
+
+bool css_resolver_has_has(AuCssResolver *r);
+bool css_resolver_has_has(AuCssResolver *r) { return r->has_has; }
+
 void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAtom attr)
 {
     (void)attr;
+    if (change == AU_CSS_CHANGE_STATE) {
+        au_css_invalidate_state(r, el, ~(uint32_t)0);
+        return;
+    }
     if (change == AU_CSS_CHANGE_ALL || r->has_has) {
         r->full_restyle = true;
         return;
