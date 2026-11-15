@@ -22,6 +22,8 @@ have, set `RETRO68` to its folder.
 The build leaves the application in `build/ppc/dist/Aura`, beside a
 `Fonts` folder. Keep the two together: Aura draws pages with your
 system's fonts first and uses these open source fonts (Liberation-based
-Aura Sans, Serif and Mono, Inter, DejaVu Sans and Noto Emoji) for
-families and characters the system lacks. Each font's licence is in its
-folder; `assets/fonts/README.md` lists their sources.
+Aura Sans, Serif and Mono, Inter, DejaVu Sans, Noto Emoji and the colour
+emoji font Twemoji Mozilla) for families and characters the system lacks.
+Each font's licence is in its folder; `assets/fonts/README.md` lists their
+sources. Pages can also bring their own fonts with `@font-face` (WOFF2,
+WOFF or TrueType, variable fonts included).

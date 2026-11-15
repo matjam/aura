@@ -803,20 +803,20 @@ out:
 
 /* A composite glyph's component: flags, glyph, offset and 2x2 matrix. */
 #define MAX_COMPONENTS 64
-typedef struct Component {
+typedef struct GlyphComp { /* not "Component": a Component Manager type */
     uint16_t flags, glyph;
     float dx, dy, a, b, c, d;
-} Component;
+} GlyphComp;
 
 /* Reads the components of the composite at off (MAX_COMPONENTS at most).
  * Returns their count, or -1 when the glyph is malformed. */
-static int read_components(const AuFontFace *f, uint32_t off, uint32_t len, Component *out)
+static int read_components(const AuFontFace *f, uint32_t off, uint32_t len, GlyphComp *out)
 {
     uint32_t end = off + len, p = off + 10;
     for (int count = 0; count < MAX_COMPONENTS; count++) {
         if (p + 4 > end)
             return -1;
-        Component *k = &out[count];
+        GlyphComp *k = &out[count];
         uint16_t flags = u16(f, p);
         k->flags = flags;
         k->glyph = u16(f, p + 2);
@@ -877,7 +877,7 @@ static bool glyph_outline(const AuFontFace *f, uint16_t g, const Xform *m, int d
     if (depth >= MAX_COMPOSITE_DEPTH)
         return false;
     /* On the heap: Mac OS 9 stacks are small and composites nest. */
-    Component *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
+    GlyphComp *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
     int ncomp = read_components(f, off, len, comp);
     bool ok = ncomp >= 0;
     if (ok && f->varied && ncomp) {
@@ -894,7 +894,7 @@ static bool glyph_outline(const AuFontFace *f, uint16_t g, const Xform *m, int d
         au_free(d);
     }
     for (int i = 0; ok && i < ncomp; i++) {
-        Component *k = &comp[i];
+        GlyphComp *k = &comp[i];
         float dx = k->dx, dy = k->dy;
         if (!(k->flags & 2)) /* point matching, not offsets: unsupported */
             dx = dy = 0;
@@ -934,7 +934,7 @@ bool au_font_glyph_point_count(const AuFontFace *f, uint16_t g, int *npoints, bo
         *npoints = u16(f, off + 10 + (uint32_t)(ncont - 1) * 2) + 1;
         return *npoints <= MAX_POINTS;
     }
-    Component *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
+    GlyphComp *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
     int n = read_components(f, off, len, comp);
     au_free(comp);
     if (n < 0)

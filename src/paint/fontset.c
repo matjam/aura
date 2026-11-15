@@ -315,17 +315,17 @@ static bool entry_italic(const Entry *e)
 }
 
 /* The internal style a match carries. */
-typedef struct Style {
+typedef struct FStyle { /* not "Style": a QuickDraw type */
     int weight;
     bool italic;
     float stretch, size;
     const AuFontVariation *settings;
     size_t nsettings;
-} Style;
+} FStyle;
 
-static Style plain_style(int weight, bool italic)
+static FStyle plain_style(int weight, bool italic)
 {
-    Style st;
+    FStyle st;
     memset(&st, 0, sizeof st);
     st.weight = weight;
     st.italic = italic;
@@ -348,7 +348,7 @@ static void var_set(AuFontVariation *v, uint8_t *nv, uint32_t tag, float value)
 
 /* The face for a variable entry at the style's axis positions, with the
  * styles the axes cannot give synthesized. */
-static AuFontFace *var_instance(Entry *e, const Style *st)
+static AuFontFace *var_instance(Entry *e, const FStyle *st)
 {
     AuFontFace *f = e->face;
     AuFontVariation v[INST_VARS];
@@ -433,7 +433,7 @@ static AuFontFace *var_instance(Entry *e, const Style *st)
  * when an italic or oblique style was asked for and f is upright; bold
  * when 600 or more was asked for and f is 500 or lighter (Blink's
  * rule). */
-static AuFontFace *synthesize(Entry *e, const Style *st)
+static AuFontFace *synthesize(Entry *e, const FStyle *st)
 {
     if (e->var)
         return var_instance(e, st);
@@ -475,7 +475,7 @@ static bool entry_covers(const Entry *e, const uint32_t *cps, size_t n)
  * With cps, only faces whose unicode-range covers them are considered;
  * without, faces covering the space (the face CSS takes metrics from) are
  * preferred. The set's own faces come before its parent's. */
-static AuFontFace *match_family_cps(AuFontSet *s, const char *family, size_t flen, const Style *st,
+static AuFontFace *match_family_cps(AuFontSet *s, const char *family, size_t flen, const FStyle *st,
                                     const uint32_t *cps, size_t ncps)
 {
     for (;;) {
@@ -512,7 +512,7 @@ static AuFontFace *match_family_cps(AuFontSet *s, const char *family, size_t fle
     return s->parent ? match_family_cps(s->parent, family, flen, st, cps, ncps) : NULL;
 }
 
-static AuFontFace *match_family(AuFontSet *s, const char *family, size_t flen, const Style *st)
+static AuFontFace *match_family(AuFontSet *s, const char *family, size_t flen, const FStyle *st)
 {
     return match_family_cps(s, family, flen, st, NULL, 0);
 }
@@ -653,7 +653,7 @@ static void build_cands(AuFontSet *s, const Name *names, size_t n, Cands *c)
     add_generic(s, c, au_font_generic("sans-serif", 10), 0);
 }
 
-static AuFontFace *any_face(AuFontSet *s, const Style *st)
+static AuFontFace *any_face(AuFontSet *s, const FStyle *st)
 {
     for (size_t i = 0; i < s->n; i++)
         if (!s->e[i].ranges && load_entry(s, &s->e[i]))
@@ -661,7 +661,7 @@ static AuFontFace *any_face(AuFontSet *s, const Style *st)
     return s->parent ? any_face(s->parent, st) : NULL;
 }
 
-static AuFontFace *match_names(AuFontSet *s, const Name *names, size_t n, const Style *st)
+static AuFontFace *match_names(AuFontSet *s, const Name *names, size_t n, const FStyle *st)
 {
     Cands c;
     build_cands(s, names, n, &c);
@@ -685,13 +685,13 @@ AuFontFace *au_fontset_match_list(AuFontSet *s, const char *const *families, siz
         names[k].quoted = false;
         k++;
     }
-    Style st = plain_style(weight, italic);
+    FStyle st = plain_style(weight, italic);
     return match_names(s, names, k, &st);
 }
 
-static Style from_public(const AuFontStyle *p)
+static FStyle from_public(const AuFontStyle *p)
 {
-    Style st = plain_style(p->weight, p->italic);
+    FStyle st = plain_style(p->weight, p->italic);
     st.stretch = p->stretch;
     st.size = p->size;
     st.settings = p->settings;
@@ -706,7 +706,7 @@ AuFontFace *au_fontset_match_style(AuFontSet *s, const char *families, const AuF
     const char *p = families ? families : "";
     while (k < MAX_NAMES && next_name(&p, &names[k]))
         k++;
-    Style st = from_public(ps);
+    FStyle st = from_public(ps);
     return match_names(s, names, k, &st);
 }
 
@@ -730,7 +730,7 @@ typedef struct ListCand {
 
 struct AuFontList {
     AuFontSet *set;
-    Style st;
+    FStyle st;
     AuFontVariation settings[INST_VARS];
     AuFontFace *primary;
     bool primary_ranged; /* the primary family has unicode-range faces */
@@ -744,7 +744,7 @@ struct AuFontList {
 
 static bool family_ranged(const AuFontSet *s, const char *family, size_t flen);
 
-static AuFontList *list_new(AuFontSet *s, const Name *names, size_t n, const Style *st)
+static AuFontList *list_new(AuFontSet *s, const Name *names, size_t n, const FStyle *st)
 {
     AuFontList *l = au_calloc(sizeof *l);
     l->set = s;
@@ -790,7 +790,7 @@ AuFontList *au_fontlist_new(AuFontSet *s, const char *const *families, size_t n,
     Name names[MAX_NAMES];
     size_t k;
     split_names(families, n, names, &k);
-    Style st = plain_style(weight, italic);
+    FStyle st = plain_style(weight, italic);
     return list_new(s, names, k, &st);
 }
 
@@ -799,7 +799,7 @@ AuFontList *au_fontlist_new_style(AuFontSet *s, const char *const *families, siz
     Name names[MAX_NAMES];
     size_t k;
     split_names(families, n, names, &k);
-    Style st = from_public(ps);
+    FStyle st = from_public(ps);
     return list_new(s, names, k, &st);
 }
 
@@ -810,7 +810,7 @@ AuFontList *au_fontlist_parse(AuFontSet *s, const char *families, int weight, bo
     const char *p = families ? families : "";
     while (k < MAX_NAMES && next_name(&p, &names[k]))
         k++;
-    Style st = plain_style(weight, italic);
+    FStyle st = plain_style(weight, italic);
     return list_new(s, names, k, &st);
 }
 
@@ -845,7 +845,7 @@ static bool draws_color(const AuFontFace *f, const uint32_t *cps)
 /* The first face of a comma-separated fallback list that has cps; with
  * mono, faces that would draw it in colour are passed over (text
  * presentation). */
-static AuFontFace *from_names_mode(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const Style *st,
+static AuFontFace *from_names_mode(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const FStyle *st,
                                    bool mono)
 {
     const char *p = names;
@@ -858,13 +858,13 @@ static AuFontFace *from_names_mode(AuFontSet *s, const char *names, const uint32
     return NULL;
 }
 
-static AuFontFace *from_names(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const Style *st)
+static AuFontFace *from_names(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const FStyle *st)
 {
     return from_names_mode(s, names, cps, n, st, false);
 }
 
 /* A loaded face of s (or its parents) that has cps. */
-static AuFontFace *any_loaded(AuFontSet *s, const uint32_t *cps, size_t n, const Style *st)
+static AuFontFace *any_loaded(AuFontSet *s, const uint32_t *cps, size_t n, const FStyle *st)
 {
     for (; s; s = s->parent)
         for (size_t i = 0; i < s->n; i++) {
@@ -879,9 +879,9 @@ static AuFontFace *any_loaded(AuFontSet *s, const uint32_t *cps, size_t n, const
  * fallback list, the emoji list, then any face already loaded (none is
  * loaded only to look). Optical size and variation settings stay with the
  * page's own families. */
-static AuFontFace *global_face(AuFontSet *s, const uint32_t *cps, size_t n, const Style *full, bool emoji)
+static AuFontFace *global_face(AuFontSet *s, const uint32_t *cps, size_t n, const FStyle *full, bool emoji)
 {
-    Style st = plain_style(full->weight, full->italic);
+    FStyle st = plain_style(full->weight, full->italic);
     st.stretch = full->stretch;
     if (emoji)
         return from_names(s, au_font_emoji_fallbacks(), cps, n, &st);
@@ -896,7 +896,7 @@ static AuFontFace *global_face(AuFontSet *s, const uint32_t *cps, size_t n, cons
     return f;
 }
 
-static AuFontFace *global_cached(AuFontSet *s, uint32_t cp, const Style *st, bool emoji)
+static AuFontFace *global_cached(AuFontSet *s, uint32_t cp, const FStyle *st, bool emoji)
 {
     uint16_t key = (uint16_t)(((st->weight / 100) << 2) | (st->italic ? 2 : 0) | (emoji ? 1 : 0));
     uint32_t h = (cp * 2654435761u) ^ (key * 40503u);

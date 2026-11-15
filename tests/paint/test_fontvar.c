@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int failures;
 
@@ -195,11 +196,69 @@ static void test_matching(const char *dir)
     au_free(data);
 }
 
+static double now_ms(void)
+{
+    return (double)clock() * 1000.0 / CLOCKS_PER_SEC;
+}
+
+/* Outline extraction and a cold-cache draw of every glyph: the default
+ * (static) instance against a varied one, and the static instance file
+ * fontTools made at the same position. */
+static void bench(const char *dir)
+{
+    size_t vl, sl;
+    char *vd = load(dir, "intervar.ttf", &vl), *sd = load(dir, "intervar@opsz14-wght700.ttf", &sl);
+    CHECK(vd && sd);
+    AuFontFace *def = au_font_face_new(vd, vl, 0), *stat = au_font_face_new(sd, sl, 0);
+    AuFontVariation v[2] = {{AU_FONT_TAG('w', 'g', 'h', 't'), 700}, {AU_FONT_TAG('o', 'p', 's', 'z'), 14}};
+    AuFontFace *var = au_font_face_instance(def, v, 2);
+    CHECK(def && stat && var);
+    AuFontFace *faces[3] = {def, stat, var};
+    const char *names[3] = {"default instance", "static file (fontTools)", "varied (wght 700, opsz 14)"};
+    AuSurface *s = au_surface_new(64, 64);
+    AuCanvas *c = au_canvas_new(s);
+    for (int k = 0; k < 3; k++) {
+        AuFontFace *f = faces[k];
+        int reps = 400;
+        double t0 = now_ms();
+        for (int r = 0; r < reps; r++)
+            for (unsigned g = 0; g < f->num_glyphs; g++) {
+                AuPath p;
+                au_path_init(&p);
+                au_font_glyph_path(f, (uint16_t)g, 0.016f, 0.016f, 0, 0, &p);
+                au_path_free(&p);
+            }
+        double path = (now_ms() - t0) / (reps * (double)f->num_glyphs);
+        AuGlyphRun run;
+        au_glyph_run_init(&run);
+        au_shape_text(f, 16, "AQRSaegxy&@", 11, &run);
+        t0 = now_ms();
+        for (int r = 0; r < reps; r++) {
+            au_glyph_cache_clear();
+            au_draw_glyph_run(c, f, 16, &run, 2, 40, 0xFF000000);
+        }
+        double draw = (now_ms() - t0) / (reps * (double)run.n);
+        au_glyph_run_free(&run);
+        printf("%-28s outline %.4f ms per glyph; 16 px rasterize + draw %.4f ms per glyph\n", names[k], path, draw);
+    }
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_font_face_free(var);
+    au_font_face_free(stat);
+    au_font_face_free(def);
+    au_free(vd);
+    au_free(sd);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
         return 2;
     const char *dir = argv[1];
+    if (argc > 2 && !strcmp(argv[2], "--bench")) {
+        bench(dir);
+        return 0;
+    }
     bool optional = argc > 2 && !strcmp(argv[2], "--optional");
     size_t len;
     char *refs = load(dir, "var-refs.txt", &len);

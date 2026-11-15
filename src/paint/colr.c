@@ -196,7 +196,7 @@ static M mul(const M *p, const M *q) /* p after q: p(q(x)) */
     return r;
 }
 
-static bool invert(const M *m, M *out)
+static bool mat_invert(const M *m, M *out)
 {
     float det = m->a * m->d - m->b * m->c;
     if (!(fabsf(det) > 1e-12f) || det != det)
@@ -249,25 +249,26 @@ static uint32_t palette_color(Ctx *x, uint16_t idx, float alpha)
     return au_premul(c);
 }
 
-static bool enter(Ctx *x, uint32_t paint)
+static bool enter(Ctx *x, uint32_t node)
 {
     if (x->depth >= MAX_DEPTH || ++x->visits > MAX_VISITS)
         return false;
     for (int i = 0; i < x->depth; i++)
-        if (x->stack[i] == paint)
+        if (x->stack[i] == node)
             return false; /* a cycle */
-    x->stack[x->depth++] = paint;
+    x->stack[x->depth++] = node;
     return true;
 }
 
-/* A colour line evaluated through a 256-entry table over its stop range. */
-typedef struct Line {
+/* A colour line evaluated through a 256-entry table over its stop range.
+ * (Not "Line": that is a QuickDraw call.) */
+typedef struct ColorLine {
     uint32_t lut[256];
     float t0, t1;
     uint8_t extend; /* 0 pad, 1 repeat, 2 reflect */
-} Line;
+} ColorLine;
 
-static bool read_line(Ctx *x, uint32_t at, bool var, Line *L)
+static bool read_line(Ctx *x, uint32_t at, bool var, ColorLine *L)
 {
     const AuFontFace *f = x->f;
     L->extend = au_fd_u8(f, at);
@@ -323,7 +324,7 @@ static bool read_line(Ctx *x, uint32_t at, bool var, Line *L)
     return true;
 }
 
-static uint32_t line_at(const Line *L, float t)
+static uint32_t line_at(const ColorLine *L, float t)
 {
     float span = L->t1 - L->t0;
     if (!(span > 0))
@@ -349,7 +350,7 @@ static uint32_t line_at(const Line *L, float t)
 typedef struct Fill {
     int kind; /* 2 solid, 4 linear, 6 radial, 8 sweep */
     uint32_t solid;
-    Line line;
+    ColorLine line;
     float x0, y0, dx, dy, inv_len2;        /* linear */
     float cx0, cy0, r0, cdx, cdy, dr, a;   /* radial */
     float sa, ea;                          /* sweep: radians */
@@ -472,9 +473,9 @@ static bool read_fill(Ctx *x, uint32_t p, Fill *F)
  * over. m maps glyph space to pixels. */
 static void fill_into(Ctx *x, uint32_t *dst, const uint8_t *mask, const Fill *F, const M *m)
 {
-    M inv;
+    M inv = {1, 0, 0, 1, 0, 0};
     bool solid = F->kind == 2;
-    if (!solid && !invert(m, &inv))
+    if (!solid && !mat_invert(m, &inv))
         return;
     if (solid && !(F->solid >> 24))
         return;
@@ -662,7 +663,7 @@ pack:;
 
 /* ---- The paint graph ---- */
 
-static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst);
+static void paint_node(Ctx *x, uint32_t p, const M *m, uint32_t *dst);
 
 /* A glyph outline as a coverage mask of the bitmap (au_alloc'd), or NULL
  * when it is empty; in the bounds pass, grows the bounds instead. */
@@ -712,14 +713,14 @@ static void paint_masked(Ctx *x, uint32_t child, const M *m, const uint8_t *mask
         return;
     }
     if (x->bounds_only) {
-        paint(x, child, m, dst);
+        paint_node(x,child, m, dst);
         return;
     }
     if (x->layers >= MAX_LAYERS)
         return;
     x->layers++;
     uint32_t *tmp = au_calloc((size_t)x->w * x->h * 4);
-    paint(x, child, m, tmp);
+    paint_node(x, child, m, tmp);
     layer_over(x, dst, tmp, mask);
     au_free(tmp);
     x->layers--;
@@ -764,7 +765,7 @@ static M around(M t, float cx, float cy)
     return mul(&r, &back);
 }
 
-static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
+static void paint_node(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
 {
     const AuFontFace *f = x->f;
     if (!p || !au_fd_in(f, p, 1) || !enter(x, p))
@@ -780,7 +781,7 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
                 break;
             uint32_t off = au_fd_u32(f, x->k->layer_list + 4 + li * 4);
             if (off)
-                paint(x, au_fd_add(x->k->layer_list, off), m, dst);
+                paint_node(x,au_fd_add(x->k->layer_list, off), m, dst);
         }
         break;
     }
@@ -811,14 +812,14 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
             if (x->layers < MAX_LAYERS) {
                 x->layers++;
                 uint32_t *tmp = au_calloc((size_t)x->w * x->h * 4);
-                paint(x, base, m, tmp);
+                paint_node(x,base, m, tmp);
                 layer_over(x, dst, tmp, mask);
                 au_free(tmp);
                 x->layers--;
             }
             au_free(mask);
         } else {
-            paint(x, base, m, dst);
+            paint_node(x,base, m, dst);
         }
         break;
     }
@@ -831,7 +832,7 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
                 au_fd_s32(f, t + 8) / 65536.0f,  au_fd_s32(f, t + 12) / 65536.0f,
                 au_fd_s32(f, t + 16) / 65536.0f, au_fd_s32(f, t + 20) / 65536.0f};
         M r = mul(m, &tm);
-        paint(x, child, &r, dst);
+        paint_node(x,child, &r, dst);
         break;
     }
     case 14: case 15: case 16: case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 24: case 25:
@@ -863,7 +864,7 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
         }
         }
         M r = mul(m, &t);
-        paint(x, child, &r, dst);
+        paint_node(x,child, &r, dst);
         break;
     }
     case 32: { /* PaintComposite */
@@ -871,8 +872,8 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
         uint8_t mode = au_fd_u8(f, p + 4);
         uint32_t back = au_fd_add(p, au_fd_u24(f, p + 5));
         if (x->bounds_only) {
-            paint(x, src, m, dst);
-            paint(x, back, m, dst);
+            paint_node(x,src, m, dst);
+            paint_node(x,back, m, dst);
             break;
         }
         if (mode > 27 || x->layers + 2 > MAX_LAYERS)
@@ -880,8 +881,8 @@ static void paint(Ctx *x, uint32_t p, const M *m, uint32_t *dst)
         x->layers += 2;
         size_t n = (size_t)x->w * x->h;
         uint32_t *s = au_calloc(n * 4), *d = au_calloc(n * 4);
-        paint(x, back, m, d);
-        paint(x, src, m, s);
+        paint_node(x,back, m, d);
+        paint_node(x,src, m, s);
         for (size_t i = 0; i < n; i++)
             if (s[i] || mode != 3)
                 d[i] = mode == 3 ? au_px_over(s[i], d[i]) : composite_px(mode, s[i], d[i]);
@@ -947,7 +948,7 @@ bool au_colr_render(const AuFontFace *f, uint16_t g, float sx, float sy, float o
     } else {
         x.bounds_only = true;
         if (p1)
-            paint(&x, p1, &m0, NULL);
+            paint_node(&x, p1, &m0, NULL);
         else
             paint_v0(&x, r0, &m0, NULL);
         if (!x.have_bounds)
@@ -970,7 +971,7 @@ bool au_colr_render(const AuFontFace *f, uint16_t g, float sx, float sy, float o
     m.f -= top;
     uint32_t *px = au_calloc((size_t)w * h * 4);
     if (p1)
-        paint(&x, p1, &m, px);
+        paint_node(&x, p1, &m, px);
     else
         paint_v0(&x, r0, &m, px);
     out->left = left;
