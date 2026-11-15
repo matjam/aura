@@ -579,6 +579,9 @@ static void bw_activate(MacWin *mw, bool on)
     flush(b);
 }
 
+static bool bw_edit(MacWin *mw, int item);
+static void context_menu(BrowserWin *b, Point pt, Point global);
+
 static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
 {
     AuEvent e;
@@ -598,12 +601,28 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     b->click_at = pt;
     e.clicks = b->clicks;
     e.time_ms = au_platform_time_ms();
-    au_bw_mouse(b->bw, &e);
+    AuHit hit = au_bw_mouse(b->bw, &e);
     browserwin_flush_all();
     Point last = pt;
+    /* Holding the button still on the page for most of a second opens
+     * the contextual menu, as Control-click does. */
+    bool may_hold = hit.part == AU_HIT_PAGE && b->clicks == 1 && !(ev->modifiers & (shiftKey | cmdKey));
     while (StillDown() && !b->closing) {
         Point p;
         GetMouse(&p);
+        if (may_hold && (p.h - pt.h) * (p.h - pt.h) + (p.v - pt.v) * (p.v - pt.v) > 9)
+            may_hold = false;
+        if (may_hold && TickCount() - ev->when >= 45) {
+            /* End the press where nothing is, so no link opens. */
+            e.type = AU_EVENT_MOUSE_UP;
+            e.x = e.y = -30000;
+            au_bw_mouse(b->bw, &e);
+            Point global = pt;
+            LocalToGlobal(&global);
+            context_menu(b, pt, global);
+            b->clicks = 0;
+            return;
+        }
         if (p.h != last.h || p.v != last.v) {
             last = p;
             e.type = AU_EVENT_MOUSE_MOVE;
@@ -622,12 +641,106 @@ static void track_mouse(BrowserWin *b, EventRecord *ev, Point pt)
     b->last_mouse = last;
 }
 
+static bool clipboard_has_text(void)
+{
+    long off = 0;
+    return GetScrap(NULL, 'TEXT', &off) > 0;
+}
+
+/* Paste and Go: the clipboard's text, line breaks as spaces, as typed
+ * address-field input. */
+static void paste_and_go(BrowserWin *b)
+{
+    Handle h = NewHandle(0);
+    long off = 0;
+    if (!h)
+        return;
+    long n = GetScrap(h, 'TEXT', &off);
+    if (n > 0) {
+        HLock(h);
+        char *u = mac_roman_to_utf8(*h, (size_t)n);
+        HUnlock(h);
+        for (char *p = u; *p; p++)
+            if (*p == '\r' || *p == '\n' || *p == '\t')
+                *p = ' ';
+        char *s = u;
+        while (*s == ' ')
+            s++;
+        size_t len = strlen(s);
+        while (len && s[len - 1] == ' ')
+            s[--len] = 0;
+        if (*s) {
+            field_revert(b);
+            focus_field(b, false);
+            au_bw_navigate_input(b->bw, s);
+        }
+        au_free(u);
+    }
+    DisposeHandle(h);
+}
+
+/* The contextual menu for local point pt. */
+static void context_menu(BrowserWin *b, Point pt, Point global)
+{
+    AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
+    bool field = h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY;
+    if (field && !b->field_focus)
+        focus_field(b, true);
+    unsigned flags = 0;
+    if (b->field_focus) {
+        TEPtr te = *b->te;
+        if (te->selStart != te->selEnd)
+            flags |= AU_CONTEXT_FIELD_SELECTION;
+        if (te->teLength > 0)
+            flags |= AU_CONTEXT_FIELD_TEXT;
+    }
+    if (clipboard_has_text())
+        flags |= AU_CONTEXT_CLIPBOARD_TEXT;
+    AuContextMenu m;
+    if (!au_bw_context_menu(b->bw, pt.h, pt.v, flags, &m))
+        return;
+    flush(b);
+    int i = mac_context_select(&m, global);
+    AuCommand cmd = i >= 0 ? m.items[i].cmd : AU_CMD_NONE;
+    SetPort((GrafPtr)b->base.win);
+    if (!au_bw_context_command(b->bw, &m, cmd)) {
+        switch (cmd) {
+        case AU_CMD_OPEN_LINK_WINDOW:
+            if (m.link)
+                browserwin_new(m.link, NULL);
+            break;
+        case AU_CMD_COPY_LINK:
+            if (m.link)
+                mac_put_scrap(m.link, strlen(m.link));
+            break;
+        case AU_CMD_COPY_IMAGE:
+            if (m.image)
+                mac_put_scrap(m.image, strlen(m.image));
+            break;
+        case AU_CMD_COPY: bw_edit(&b->base, 4); break;
+        case AU_CMD_CUT: bw_edit(&b->base, 3); break;
+        case AU_CMD_FIELD_COPY: bw_edit(&b->base, 4); break;
+        case AU_CMD_PASTE: bw_edit(&b->base, 5); break;
+        case AU_CMD_SELECT_ALL: bw_edit(&b->base, 7); break;
+        case AU_CMD_PASTE_GO: paste_and_go(b); break;
+        default: break;
+        }
+    }
+    au_context_menu_free(&m);
+    if (!b->closing)
+        flush(b);
+}
+
 static void bw_click(MacWin *mw, EventRecord *ev)
 {
     BrowserWin *b = (BrowserWin *)mw;
     SetPort((GrafPtr)mw->win);
     Point pt = ev->where;
     GlobalToLocal(&pt);
+    if (mac_context_click(ev)) {
+        context_menu(b, pt, ev->where);
+        return;
+    }
     AuHit h = au_chrome_hit(&b->bw->layout, pt.h, pt.v);
     if (h.part == AU_HIT_ADDRESS || h.part == AU_HIT_SECURITY) {
         if (!b->field_focus) {

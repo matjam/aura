@@ -866,6 +866,76 @@ void au_bw_close_tab(AuBrowserWindow *w, int i)
     w->browser->session_gen++;
 }
 
+AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i)
+{
+    if (i < 0 || i >= w->ntabs)
+        return NULL;
+    AuTab *src = w->tabs[i];
+    AuTab *t = make_tab(w, i + 1);
+    for (int k = 0; k < src->nav.n; k++) {
+        au_nav_push(&t->nav, src->nav.e[k].url, src->nav.e[k].title);
+        t->nav.e[k].scroll_y = src->nav.e[k].scroll_y;
+    }
+    t->nav.index = src->nav.index;
+    relayout(w, false);
+    au_bw_select_tab(w, i + 1);
+    AuNavEntry *e = au_nav_current(&t->nav);
+    char *url = au_strndup(e ? e->url : "about:blank", strlen(e ? e->url : "about:blank"));
+    au_page_set_zoom(t->page, au_page_zoom(src->page));
+    au_page_navigate_entry(t->page, url, src->scroll_x, src->scroll_y);
+    au_free(url);
+    changed(w, AU_CHANGED_MENUS | AU_CHANGED_FOCUS_PAGE);
+    return t;
+}
+
+void au_bw_close_other_tabs(AuBrowserWindow *w, int keep)
+{
+    if (keep < 0 || keep >= w->ntabs)
+        return;
+    AuTab *k = w->tabs[keep];
+    au_bw_select_tab(w, keep);
+    for (int i = w->ntabs - 1; i >= 0; i--)
+        if (w->tabs[i] != k)
+            au_bw_close_tab(w, i);
+}
+
+void au_bw_reload_tab(AuBrowserWindow *w, int i)
+{
+    if (i >= 0 && i < w->ntabs)
+        au_page_reload(w->tabs[i]->page);
+}
+
+bool au_bw_can_view_source(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return false;
+    const char *u = au_page_url(t->page);
+    return au_url_scheme_is(u, "file") || au_url_scheme_is(u, "http") || au_url_scheme_is(u, "https");
+}
+
+void au_bw_view_source(AuBrowserWindow *w)
+{
+    if (!au_bw_can_view_source(w))
+        return;
+    AuBuf u;
+    au_buf_init(&u);
+    au_buf_puts(&u, "view-source:");
+    au_buf_puts(&u, au_page_url(au_bw_active_tab(w)->page));
+    au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
+    au_buf_free(&u);
+}
+
+AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *title)
+{
+    AuBookmark *have = au_bookmark_find_url(&b->bookmarks, url);
+    if (have)
+        return have;
+    AuBookmark *made = au_bookmark_add(&b->bookmarks, NULL, NULL, title && *title ? title : url, url, now(b));
+    au_browser_bookmarks_changed(b);
+    return made;
+}
+
 void au_bw_move_tab(AuBrowserWindow *w, int from, int to)
 {
     if (from < 0 || from >= w->ntabs || to < 0 || to >= w->ntabs || from == to)

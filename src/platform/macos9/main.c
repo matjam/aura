@@ -250,11 +250,6 @@ static void rebuild_windows(void)
 
 /* View Source works for documents that have bytes: files and network
  * pages, not generated about: pages or a source view itself. */
-static bool can_view_source(const char *url)
-{
-    return au_url_scheme_is(url, "file") || au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https");
-}
-
 void mac_adjust_menus(void)
 {
     if (menus_dirty) {
@@ -315,7 +310,7 @@ void mac_adjust_menus(void)
         EnableItem(view, VIEW_RELOAD);
     else
         DisableItem(view, VIEW_RELOAD);
-    if (t && can_view_source(au_page_url(t->page)))
+    if (w && au_bw_can_view_source(w))
         EnableItem(view, VIEW_SOURCE);
     else
         DisableItem(view, VIEW_SOURCE);
@@ -460,18 +455,10 @@ static void do_menu(long choice)
             if (w)
                 au_bw_stop(w);
             break;
-        case VIEW_SOURCE: {
-            AuTab *t = w ? au_bw_active_tab(w) : NULL;
-            if (t && can_view_source(au_page_url(t->page))) {
-                AuBuf u;
-                au_buf_init(&u);
-                au_buf_puts(&u, "view-source:");
-                au_buf_puts(&u, au_page_url(t->page));
-                au_bw_new_tab(w, au_buf_cstr(&u), true, w->active + 1);
-                au_buf_free(&u);
-            }
+        case VIEW_SOURCE:
+            if (w)
+                au_bw_view_source(w);
             break;
-        }
         case VIEW_ZOOM_IN:
         case VIEW_ZOOM_OUT:
         case VIEW_ZOOM_RESET:
@@ -817,6 +804,7 @@ int main(void)
         SetItemMark(view, VIEW_DEBUG, (CharParameter)kDebugMenu);
     }
     DrawMenuBar();
+    mac_context_init();
 
     SetCursor(*GetCursor(watchCursor));
     g_fonts = au_fontset_new();

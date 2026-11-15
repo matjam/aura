@@ -6,6 +6,7 @@
  *   prefswin.c    the Preferences window (Appearance controls)
  *   storage.c     files in the Preferences folder, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
+ *   contextmenu.c contextual menus (Contextual Menu Manager or pop-up)
  *
  * Every window Aura opens carries a MacWin (its refCon), whose function
  * pointers the event loop calls; that is how several kinds of window
@@ -17,6 +18,7 @@
 
 #include "appearance.h"
 #include "browser/browser.h"
+#include "browser/context.h"
 #include "browser/listview.h"
 #include "browser/url.h"
 
@@ -113,6 +115,15 @@ bool mac_read_file_url(const char *url, char **data, size_t *len);
 /* Asks for a file with the standard Open dialog; returns a file: URL to
  * free with au_free, or NULL. */
 char *mac_choose_file_url(void);
+
+/* ---- contextmenu.c ---- */
+/* Finds the Contextual Menu Manager (call once at start-up). */
+void mac_context_init(void);
+/* Whether a mouse-down asks for a contextual menu (Control-click). */
+bool mac_context_click(const EventRecord *ev);
+/* Shows the menu at a global point; returns the chosen item's index in
+ * m->items, or -1. */
+int mac_context_select(const AuContextMenu *m, Point global);
 
 /* ---- text.c ---- */
 /* UTF-8 to a Pascal string in Mac Roman ('?' for characters it lacks),

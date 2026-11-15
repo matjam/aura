@@ -172,6 +172,12 @@ void au_bw_close_tab(AuBrowserWindow *w, int i);
 void au_bw_select_tab(AuBrowserWindow *w, int i);
 void au_bw_move_tab(AuBrowserWindow *w, int from, int to);
 AuTab *au_bw_active_tab(AuBrowserWindow *w);
+/* Opens a copy of tab i (its back/forward list, scroll position and
+ * zoom) to its right and activates it. */
+AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i);
+/* Closes every tab but tab keep, which becomes active. */
+void au_bw_close_other_tabs(AuBrowserWindow *w, int keep);
+void au_bw_reload_tab(AuBrowserWindow *w, int i);
 
 /* ---- Navigation (active tab) ---- */
 /* Address-field input: a URL, a path or a search (url.h). */
@@ -188,6 +194,13 @@ void au_bw_home(AuBrowserWindow *w);
  * NULL. */
 AuBookmark *au_bw_bookmark_page(AuBrowserWindow *w, bool toggle);
 bool au_bw_is_bookmarked(AuBrowserWindow *w);
+/* Adds url to the bookmarks (title, else the URL, as its name) unless it
+ * is there already; returns the bookmark. */
+AuBookmark *au_browser_bookmark_url(AuBrowser *b, const char *url, const char *title);
+/* View Source: opens view-source: of the active page in a new tab
+ * (file, http and https pages only). */
+bool au_bw_can_view_source(AuBrowserWindow *w);
+void au_bw_view_source(AuBrowserWindow *w);
 
 /* ---- Selection and find (active tab) ---- */
 bool au_bw_has_selection(AuBrowserWindow *w);

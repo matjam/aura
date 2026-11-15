@@ -160,6 +160,10 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
 /* Input in document coordinates. Return true when the page used it. */
 bool au_page_mouse(AuPage *p, const AuEvent *ev);
 bool au_page_key(AuPage *p, const AuEvent *ev);
+/* What is at document point (x, y), for a contextual menu: appends the
+ * absolute URL of the link under it to link and of the image under it to
+ * image (nothing when there is none; either may be NULL). */
+void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image);
 /* ---- Text selection and find ----
  * The user selects text with the mouse through au_page_mouse: dragging
  * selects characters, a double click a word, a triple click a paragraph

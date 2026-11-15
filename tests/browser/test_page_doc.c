@@ -7,6 +7,7 @@
  * so every glyph is a 1em square. */
 #include "../layout/ahem.h"
 #include "browser/browser.h"
+#include "browser/context.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +60,10 @@ static const struct {
      "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:20px'>"
      "<p style='margin:0'>alpha <a href='other.html'>beta</a> gamma</p><p style='margin:0'>delta findme</p>"
      "<div style='height:3000px'></div><p style='margin:0'>far findme</p>"},
+    {"ctx.html",
+     "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:30px'>"
+     "<p style='margin:0'><a href='other.html'>link</a> <img src='pic.gif' width=40 height=20> "
+     "<a href='tiny.html'><img src='dir/p2.gif' width=40 height=20></a></p><p style='margin:0'>text</p>"},
     {"big.html", "<!DOCTYPE html><body style='margin:0'><div style='font-size:50em;line-height:1'>x</div>"},
     {"tiny.html",
      "<!DOCTYPE html><body style='margin:0'><div style='white-space:nowrap;font-size:10px;line-height:1'>"
@@ -673,6 +678,118 @@ static void test_selection(void)
     au_browser_free(b);
 }
 
+static bool has_item(const AuContextMenu *m, AuCommand cmd, bool enabled)
+{
+    for (int i = 0; i < m->n; i++)
+        if (m->items[i].cmd == cmd)
+            return m->items[i].enabled == enabled;
+    return false;
+}
+
+static int item_count(const AuContextMenu *m)
+{
+    int n = 0;
+    for (int i = 0; i < m->n; i++)
+        n += m->items[i].cmd != AU_CMD_SEPARATOR;
+    return n;
+}
+
+/* Contextual menus: what each target offers and the model's commands. */
+static void test_context_menu(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/ctx.html", true, -1);
+    settle(w);
+    AuTab *t = au_bw_active_tab(w);
+    AuContextMenu m;
+    int px = w->layout.page.x0, py = w->layout.page.y0;
+
+    /* A link. */
+    CHECK(au_bw_context_menu(w, px + 15, py + 15, 0, &m));
+    CHECK(m.kind == AU_CONTEXT_PAGE && m.link && !m.image);
+    CHECK_STR(m.link ? m.link : "", "file:///mem/other.html");
+    CHECK(has_item(&m, AU_CMD_OPEN_LINK, true) && has_item(&m, AU_CMD_OPEN_LINK_TAB, true) &&
+          has_item(&m, AU_CMD_OPEN_LINK_WINDOW, true) && has_item(&m, AU_CMD_COPY_LINK, true) &&
+          has_item(&m, AU_CMD_BOOKMARK_LINK, true));
+    CHECK(item_count(&m) == 5 && !has_item(&m, AU_CMD_RELOAD, true));
+    CHECK(!au_bw_context_command(w, &m, AU_CMD_COPY_LINK));         /* the shell's */
+    CHECK(!au_bw_context_command(w, &m, AU_CMD_OPEN_LINK_WINDOW)); /* the shell's */
+    CHECK(au_bw_context_command(w, &m, AU_CMD_BOOKMARK_LINK));
+    CHECK(au_bookmark_find_url(&b->bookmarks, "file:///mem/other.html") != NULL);
+    CHECK(au_bw_context_command(w, &m, AU_CMD_OPEN_LINK_TAB));
+    CHECK(w->ntabs == 2 && au_bw_active_tab(w) == t); /* opened behind */
+    CHECK_STR(au_page_url(w->tabs[1]->page), "file:///mem/other.html");
+    au_context_menu_free(&m);
+
+    /* An image; an image inside a link offers both. */
+    CHECK(au_bw_context_menu(w, px + 70, py + 15, 0, &m));
+    CHECK(!m.link && m.image);
+    CHECK_STR(m.image ? m.image : "", "file:///mem/pic.gif");
+    CHECK(has_item(&m, AU_CMD_OPEN_IMAGE_TAB, true) && has_item(&m, AU_CMD_COPY_IMAGE, true) && item_count(&m) == 2);
+    CHECK(m.items[0].cmd != AU_CMD_SEPARATOR);
+    au_context_menu_free(&m);
+    CHECK(au_bw_context_menu(w, px + 120, py + 15, 0, &m));
+    CHECK(m.link && m.image && item_count(&m) == 7);
+    CHECK_STR(m.image ? m.image : "", "file:///mem/dir/p2.gif");
+    CHECK_STR(m.link ? m.link : "", "file:///mem/tiny.html");
+    au_context_menu_free(&m);
+
+    /* The page: Back greyed on the first page, Copy only with a selection. */
+    CHECK(au_bw_context_menu(w, px + 400, py + 200, 0, &m));
+    CHECK(!m.link && !m.image);
+    CHECK(has_item(&m, AU_CMD_BACK, false) && has_item(&m, AU_CMD_FORWARD, false) && has_item(&m, AU_CMD_RELOAD, true) &&
+          has_item(&m, AU_CMD_VIEW_SOURCE, true) && has_item(&m, AU_CMD_BOOKMARK_PAGE, true));
+    CHECK(!has_item(&m, AU_CMD_COPY, true));
+    CHECK(m.items[m.n - 1].cmd != AU_CMD_SEPARATOR);
+    au_context_menu_free(&m);
+    au_bw_select_all(w);
+    CHECK(au_bw_context_menu(w, px + 400, py + 200, 0, &m));
+    CHECK(has_item(&m, AU_CMD_COPY, true));
+    CHECK(!au_bw_context_command(w, &m, AU_CMD_COPY));
+    CHECK(au_bw_context_command(w, &m, AU_CMD_VIEW_SOURCE));
+    CHECK(w->ntabs == 3 && w->active == 1);
+    CHECK_STR(au_page_url(au_bw_active_tab(w)->page), "view-source:file:///mem/ctx.html");
+    au_context_menu_free(&m);
+    settle(w);
+
+    /* The address field: by what the shell reports. */
+    AuIRect a = w->layout.address_text;
+    CHECK(au_bw_context_menu(w, a.x0 + 5, a.y0 + 3, AU_CONTEXT_FIELD_TEXT, &m));
+    CHECK(m.kind == AU_CONTEXT_FIELD);
+    CHECK(has_item(&m, AU_CMD_CUT, false) && has_item(&m, AU_CMD_FIELD_COPY, false) && has_item(&m, AU_CMD_PASTE, false) &&
+          has_item(&m, AU_CMD_PASTE_GO, false) && has_item(&m, AU_CMD_SELECT_ALL, true));
+    CHECK(!au_bw_context_command(w, &m, AU_CMD_PASTE_GO));
+    au_context_menu_free(&m);
+    CHECK(au_bw_context_menu(w, a.x0 + 5, a.y0 + 3, AU_CONTEXT_FIELD_SELECTION | AU_CONTEXT_CLIPBOARD_TEXT, &m));
+    CHECK(has_item(&m, AU_CMD_CUT, true) && has_item(&m, AU_CMD_PASTE_GO, true) && has_item(&m, AU_CMD_SELECT_ALL, false));
+    au_context_menu_free(&m);
+
+    /* Tabs: duplicate keeps the history; close others. */
+    AuIRect r0 = au_chrome_tab_rect(&w->layout, 0);
+    CHECK(au_bw_context_menu(w, r0.x0 + 10, (r0.y0 + r0.y1) / 2, 0, &m));
+    CHECK(m.kind == AU_CONTEXT_TAB && m.tab == 0 && has_item(&m, AU_CMD_CLOSE_OTHER_TABS, true));
+    au_bw_scroll_to(w, 0, 0);
+    CHECK(au_bw_context_command(w, &m, AU_CMD_DUPLICATE_TAB));
+    CHECK(w->ntabs == 4 && w->active == 1);
+    CHECK_STR(au_page_url(w->tabs[1]->page), "file:///mem/ctx.html");
+    CHECK(w->tabs[1]->nav.n == w->tabs[0]->nav.n);
+    au_context_menu_free(&m);
+    settle(w);
+    CHECK(au_bw_context_menu(w, r0.x0 + 10, (r0.y0 + r0.y1) / 2, 0, &m));
+    CHECK(au_bw_context_command(w, &m, AU_CMD_CLOSE_OTHER_TABS));
+    CHECK(w->ntabs == 1 && w->active == 0 && w->tabs[0] == t);
+    au_context_menu_free(&m);
+    CHECK(au_bw_context_menu(w, r0.x0 + 10, (r0.y0 + r0.y1) / 2, 0, &m));
+    CHECK(has_item(&m, AU_CMD_CLOSE_OTHER_TABS, false));
+    au_context_menu_free(&m);
+
+    /* The toolbar offers nothing. */
+    CHECK(!au_bw_context_menu(w, w->layout.toolbar.x1 - 2, w->layout.toolbar.y0 + 1, 0, &m) && m.n == 0);
+    settle(w);
+    au_browser_free(b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -685,6 +802,7 @@ int main(void)
     test_stop_scroll_resize();
     test_zoom();
     test_selection();
+    test_context_menu();
     au_fontset_free(fonts);
     printf("page_doc: all tests passed\n");
     return 0;

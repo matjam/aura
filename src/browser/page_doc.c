@@ -1407,6 +1407,28 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     return used;
 }
 
+static void put_resolved(AuPage *p, const AuElement *el, const char *name, AuBuf *out)
+{
+    AuAtom a = au_atom_lookup(name, strlen(name));
+    const char *v = a ? au_element_get_attr(el, a) : NULL;
+    char abs[2048];
+    if (v && *v && au_url_resolve(au_docview_base_url(p->dv), v, abs, sizeof abs))
+        au_buf_puts(out, abs);
+}
+
+void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image)
+{
+    if (p->kind != K_DOC || !p->begun)
+        return;
+    AuHitResult r;
+    if (!au_docview_hit_test(p->dv, x, y, &r))
+        return;
+    if (link && r.link)
+        put_resolved(p, r.link, "href", link);
+    if (image && r.element && r.element->tag == AU_ATOM_img)
+        put_resolved(p, r.element, "src", image);
+}
+
 bool au_page_key(AuPage *p, const AuEvent *ev)
 {
     (void)p;

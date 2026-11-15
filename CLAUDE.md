@@ -215,6 +215,16 @@ the active page is wider than it (`au_chrome_layout_hscroll`); the two
 bars meet at a blank corner square above the grow box, and Shift turns
 a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 
+To change what a contextual menu offers, edit `src/browser/context.c`:
+`au_bw_context_menu` builds the items for a window point (link, image,
+page, address field or tab, using `au_page_hit_info` for the page) and
+`au_bw_context_command` runs the commands the model can; the shell does
+the rest (clipboard, field editing, a new window). On Mac OS 9,
+`contextmenu.c` finds the Contextual Menu Manager in the ContextualMenu
+shared library at run time (the Multiversal Interfaces do not declare
+it) and falls back to `PopUpMenuSelect`; Control-click opens the menu,
+and so does holding the button still on the page for 45 ticks.
+
 To change text selection or find, work in `src/layout/selection.c`
 (positions, words, paragraphs, the text of a range, find, and the
 painted highlight; `draw.c` calls `l_select_paint_frag` for each text
