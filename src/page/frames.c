@@ -1682,6 +1682,34 @@ AuIRect au_docview_rect_to_top(const AuDocView *dv, AuIRect r)
     return r;
 }
 
+bool au_docview_contains(AuDocView *dv, const AuDocView *v)
+{
+    if (dv == v)
+        return true;
+    for (uint32_t i = 0; i < dv->nframes; i++)
+        if (dv->frames[i]->dv && au_docview_contains(dv->frames[i]->dv, v))
+            return true;
+    return false;
+}
+
+void au_docview_point_from_top(const AuDocView *dv, int *x, int *y)
+{
+    const AuFrame *chain[AU_FRAMES_DEPTH + 1];
+    int n = 0;
+    for (; dv->parent && dv->in_frame && n <= AU_FRAMES_DEPTH; dv = dv->parent)
+        chain[n++] = dv->in_frame;
+    while (n--) {
+        *x = *x - (int)chain[n]->box.x + chain[n]->sx;
+        *y = *y - (int)chain[n]->box.y + chain[n]->sy;
+    }
+}
+
+void au_docview_scroll_pos(const AuDocView *dv, int *x, int *y)
+{
+    *x = dv->in_frame ? dv->in_frame->sx : dv->scroll_x;
+    *y = dv->in_frame ? dv->in_frame->sy : dv->scroll_y;
+}
+
 uint32_t au_docview_frame_count(const AuDocView *dv)
 {
     while (dv->parent)

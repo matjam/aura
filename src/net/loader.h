@@ -73,6 +73,7 @@ typedef struct AuLoadInfo {
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* suggested file name for a download ("" when none) */
     const char *csp;          /* Content-Security-Policy ("" when none) */
+    const char *x_frame_options; /* X-Frame-Options ("" when none) */
     const char *referrer_policy; /* Referrer-Policy ("" when none) */
     uint16_t tls_version;     /* 0x0303 for TLS 1.2; 0 without TLS */
     const char *cipher;       /* the TLS cipher suite ("" without TLS) */

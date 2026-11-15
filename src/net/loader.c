@@ -38,7 +38,7 @@ struct Req {
     /* response */
     char *url;
     int status;
-    AuBuf mime, charset, filename, csp, rpolicy;
+    AuBuf mime, charset, filename, csp, rpolicy, xfo;
     char encoding[32];
     char cipher[64];
     uint16_t tls_version;
@@ -87,6 +87,7 @@ static void req_free(Req *r)
     au_buf_free(&r->charset);
     au_buf_free(&r->filename);
     au_buf_free(&r->csp);
+    au_buf_free(&r->xfo);
     au_buf_free(&r->rpolicy);
     au_buf_free(&r->hold);
     if (r->is_data)
@@ -135,6 +136,7 @@ static void fill_info(Req *r, AuLoadInfo *i)
     i->attachment = r->attachment;
     i->filename = au_buf_cstr(&r->filename);
     i->csp = au_buf_cstr(&r->csp);
+    i->x_frame_options = au_buf_cstr(&r->xfo);
     i->referrer_policy = au_buf_cstr(&r->rpolicy);
     i->tls_version = r->tls_version;
     i->cipher = r->cipher;
@@ -327,6 +329,10 @@ static void t_response(void *ctx, AuHttpTransfer *t, const AuHttpResponse *resp)
     au_buf_clear(&r->csp);
     if (v)
         au_buf_append(&r->csp, v, strlen(v) > 4096 ? 4096 : strlen(v));
+    v = au_headers_get(resp->headers, "x-frame-options");
+    au_buf_clear(&r->xfo);
+    if (v)
+        au_buf_append(&r->xfo, v, strlen(v) > 64 ? 64 : strlen(v));
     v = au_headers_get(resp->headers, "referrer-policy");
     au_buf_clear(&r->rpolicy);
     if (v)
@@ -466,6 +472,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
     au_buf_init(&r->charset);
     au_buf_init(&r->filename);
     au_buf_init(&r->csp);
+    au_buf_init(&r->xfo);
     au_buf_init(&r->rpolicy);
     au_buf_init(&r->hold);
     r->next = l->reqs;

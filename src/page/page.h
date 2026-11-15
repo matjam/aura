@@ -326,6 +326,14 @@ AuDocView *au_docview_focus_view(AuDocView *dv);
  * between them). */
 AuDocView *au_docview_parent(const AuDocView *dv);
 AuIRect au_docview_rect_to_top(const AuDocView *dv, AuIRect r);
+/* Whether v is dv or a nested view somewhere below it (a view kept from
+ * an earlier call may have gone with its frame). */
+bool au_docview_contains(AuDocView *dv, const AuDocView *v);
+/* A point in the top-level view's document coordinates, in dv's. */
+void au_docview_point_from_top(const AuDocView *dv, int *x, int *y);
+/* The scroll offset the view was last painted with (a nested view's is
+ * its frame's). */
+void au_docview_scroll_pos(const AuDocView *dv, int *x, int *y);
 /* How many nested documents the page has (all levels). */
 uint32_t au_docview_frame_count(const AuDocView *dv);
 

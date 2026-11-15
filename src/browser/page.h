@@ -67,7 +67,8 @@ typedef enum {
     AU_FETCH_IMAGE,
     AU_FETCH_FONT,
     AU_FETCH_SCRIPT,
-    AU_FETCH_OTHER
+    AU_FETCH_OTHER,
+    AU_FETCH_FRAME       /* the document of a frame (iframe, frame, object, embed) */
 } AuFetchKind;
 
 /* The referrer policy (Referrer-Policy names, in src/net's order). */
@@ -166,6 +167,7 @@ typedef struct AuFetchResponse {
     bool attachment;          /* Content-Disposition: attachment */
     const char *filename;     /* from Content-Disposition; "" when none */
     const char *csp;          /* Content-Security-Policy; "" when none */
+    const char *x_frame_options; /* X-Frame-Options; "" or NULL when none */
     const char *referrer_policy; /* Referrer-Policy; "" when none */
     AuSecurity security;
     const AuFetchCert *cert;  /* https: the certificate details, or NULL */
