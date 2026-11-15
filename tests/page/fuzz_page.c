@@ -92,8 +92,34 @@ static void gen(AuBuf *b, int depth, int budget)
     }
 }
 
+/* fuzz_page replay FILE: lays a saved document out at every width from 1
+ * to 1000 (prints each width first, to find one that hangs). */
+static int replay(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 1;
+    static char buf[1 << 20];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    static uint8_t fontdata[16384];
+    AuFontSet *fonts = ahem_fontset(fontdata);
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    au_docview_load(dv, buf, n, "http://fuzz.example/dir/page.html");
+    for (int w = 1; w <= 1000; w++) {
+        fprintf(stderr, "%d\n", w);
+        au_docview_set_viewport(dv, w, 600);
+        au_docview_update(dv);
+    }
+    au_docview_free(dv);
+    au_fontset_free(fonts);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 2 && !strcmp(argv[1], "replay"))
+        return replay(argv[2]);
     int iters = argc > 1 ? atoi(argv[1]) : 100;
     rng = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 12345u;
     if (!rng)

@@ -528,8 +528,12 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
 
 float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h)
 {
+    /* A definite content height is the answer (l_layout_content uses it
+     * as given); no layout needed. */
+    if (content_h >= 0)
+        return content_h + l_bp_v(b);
     if (can_skip(L, b, content_w, content_h, cb_h))
-        return content_h >= 0 ? content_h + l_bp_v(b) : b->h;
+        return b->h;
     if ((b->b.flags & (LF_MEASURE_OK | LF_DIRTY | LF_CHILD_DIRTY)) == LF_MEASURE_OK && b->mk_w == content_w &&
         b->mk_h == content_h && same_cbh(b, b->mk_cbh, cb_h)) {
         L->stats.layouts_skipped++;

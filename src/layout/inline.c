@@ -1130,6 +1130,7 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
     int clamp = (b->b.flags & LF_LINE_CLAMP) ? rs->rare->line_clamp : 0;
     uint32_t i = base;
     int pending_clear = AU_CLEAR_NONE;
+    uint32_t retries = 0; /* lines moved below floats: bounded */
     while (i < L->nsegs) {
         if (clamp && (int)S.nlines >= clamp)
             break;
@@ -1170,15 +1171,17 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
                     fw = sw >= 0 ? sw + l_edges_h(f) : l_min(l_max(mn, avail), mx);
                 }
                 if (x + fw <= avail + 0.01f || !has_content) {
+                    /* Laying the float out can grow L->segs: s is stale
+                     * after this call. */
                     place_float_seg(&S, f, S.y);
-                    s->flags |= SF_PLACED;
+                    L->segs[j].flags |= SF_PLACED;
                     line_band(&S, strut, &l, &r);
                     avail = r - l;
                 } else if (S.ndeferred < 64) {
                     S.deferred[S.ndeferred++] = j;
                 } else {
                     place_float_seg(&S, f, S.y);
-                    s->flags |= SF_PLACED;
+                    L->segs[j].flags |= SF_PLACED;
                 }
                 end = j;
                 j++;
@@ -1229,8 +1232,12 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
             if (!leading_space && x + w > avail + 0.01f && !has_content && (l > S.cl + 0.01f || r < S.cr - 0.01f)) {
                 /* Nothing fits beside the floats: move below the next one. */
                 float nb = l_floats_next_bottom(fl, S.bfc_y + S.y);
-                if (isfinite(nb)) {
-                    S.y = nb - S.bfc_y;
+                if (isfinite(nb) && retries < 10000) {
+                    /* Always move down: with large coordinates or very
+                     * thin floats, nb - bfc_y can round back to S.y. */
+                    float ny = nb - S.bfc_y;
+                    S.y = ny > S.y + 0.001f ? ny : S.y + 0.01f;
+                    retries++;
                     retry = true;
                     break;
                 }

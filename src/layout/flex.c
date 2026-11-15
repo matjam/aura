@@ -438,7 +438,7 @@ float l_flex_layout(AuLayout *L, LBlock *b, const LConstraints *c)
             f->h_spec = h;
             /* A stretched item is laid out again at its final height: here
              * only its height is needed. */
-            bool final = !(f->stretch && h < 0);
+            bool final = !f->stretch;
             if (final)
                 l_layout_content(L, k, f->target, h, ch);
             f->cross = (final ? k->h : l_measure_content(L, k, f->target, h, ch)) - f->bp_c;
@@ -525,8 +525,8 @@ float l_flex_layout(AuLayout *L, LBlock *b, const LConstraints *c)
                 float v = l_max(0, ln->cross - f->cs - f->ce - f->bp_c);
                 v = row ? l_clamp_h(k, v, ch) : l_clamp_w(k, v, cw);
                 if (row) {
-                    if (f->h_spec < 0 || fabsf(v - f->cross) > 0.001f)
-                        l_layout_content(L, k, f->target, v, ch);
+                    /* Stretched row items were only measured so far. */
+                    l_layout_content(L, k, f->target, v, ch);
                 } else if (fabsf(v - f->cross) > 0.001f) {
                     l_layout_content(L, k, v, f->target, ch);
                 }
