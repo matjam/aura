@@ -1,0 +1,76 @@
+# Aura icon, concept 3: platypus.
+# A platypus swimming, inside the ripples of the electric field it senses
+# with its bill: the aura as the field around every living thing.
+
+name Platypus
+
+palette
+# ch rgb    alpha c4 bw
+.    -      0     -  0
+K    000000 255   15 1
+W    FFFFFF 255   0  0
+s    666666 255   13 m
+g    333333 255   14 1
+L    CC9966 255   11 0
+h    996633 255   11 0
+b    663300 255   10 l
+B    330000 255   14 m
+t    663300 255   10 m
+T    330000 255   14 d
+a    33CCFF 255   7  1
+A    99FFFF 200   7  0
+end
+
+icon 32
+............aaaaaaaa............
+.........aaaaa....aaaaa.........
+.......Kaa............aaa.......
+.....KKsKK..............aa......
+....KsssssKAAAAAAAAAA....aa.....
+...KgsssssKA........AAA...aa....
+...KggsssssK....KKK...AA...aa...
+..KggggssssK...KggK....AA...aa..
+..aKggggsssK...KggK.....AA...a..
+.aaKgggggssKKKKKKKK......AA..aa.
+.a..KKggggKhhhLLKK........A...a.
+.a..AAKKKKbhhhhLLLK.......AA..a.
+aa..A....KbbhhhhLLLK.......A..aa
+aa..A....KbbbhhhhLLLK..KK..A..aa
+a...A....KBbbbhhhhLLhKKggK.A...a
+a...A..KKKBBbbbhhhhhhhKggK.A...a
+a...A.KggKKBBbbbhhhhhhKKKK.A...a
+a...A.KggKKBBBbbbhhhhhhK...A...a
+aa..A.KKKK.KBBBbbbhhhhhK...A..aa
+aa..A.......KBBBbbbhhhhK...A..aa
+.a..AA.......KBBBbbbhhhKKKAA..a.
+.a...A........KBBBbbbhhKttK...a.
+.aa..AA.......KKKBBbbbKttttK.aa.
+..a...AA.....KggKKKKKKTTtttK.a..
+..aa...AA....KggK...KTTTTttKaa..
+...aa...AA....KKK...KTTTTTtKa...
+....aa...AAA........AKTTTTKa....
+.....aa....AAAAAAAAAA.KKKKa.....
+......aa................aa......
+.......aaa............aaa.......
+.........aaaaa....aaaaa.........
+............aaaaaaaa............
+end
+
+icon 16
+.....aaaaaa.....
+.KKKaa....aaa...
+KsssK.......aa..
+KsssgK...KK..aa.
+KssggKK.KggK..a.
+aKggKLLKKgK...aa
+a.KKhhLLLK.....a
+a..KbhhhLLK....a
+aKggKbhhhhLKK..a
+aKgKKBbhhhhKgK.a
+aaK..KBbbhhKgKaa
+.a....KBBbbhKKa.
+.aa...KgKBBttKa.
+..aa..KKKKtTTtK.
+...aaa....KTTTK.
+.....aaaaaaKKK..
+end

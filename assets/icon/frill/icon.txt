@@ -1,0 +1,135 @@
+# Aura icon, concept 1: frill-necked lizard.
+# The lizard stands in profile, facing left, mouth open, frill raised: the
+# frill is the aura, a disc of warm light around its head, brightest at the
+# centre and upper left (the light source) and deep red at the rim. In the
+# 32-bit icons a faint halo (z, Z) glows around the frill; it is less than
+# half opaque, so the 8-bit, 4-bit and 1-bit icons leave it out.
+
+name Frill-necked lizard
+
+palette
+# ch rgb    alpha c4 bw
+.    -      0     -  0
+K    000000 255   15 1
+W    FFFFFF 255   0  0
+w    FFFF66 255   1  0
+y    FFCC00 255   1  0
+Y    FF9900 255   2  0
+o    FF6600 255   2  l
+r    CC3300 255   3  m
+R    993300 255   3  d
+d    990000 255   10 1
+z    FFCC33 110   -  0
+Z    FFCC33 45    -  0
+L    CCCC99 255   11 0
+h    999966 255   11 0
+H    666633 255   10 l
+g    333300 255   14 1
+p    FFCCCC 255   0  0
+P    CC6666 255   3  1
+end
+
+icon 32
+........ZZZzzzzzzzzzzzzZZZ......
+.......ZZzzzzKKKKKKKKzzzzZZ.....
+......ZZzzzKKrdrrrrrrKKzzzZZ....
+.....ZZzzKKrrYdYYYYYYrrKKzzZZ...
+....ZZzzKrrYYYYdYYYYYYdrrKzzZZ..
+....ZzzKrrYYYYYdYYYYYddorrKzzZ..
+...ZZzKddYYYYYwdwyyyYdooorRKzZZ.
+...ZzzKrddYYwwwwwwyydyooooRKzzZ.
+..ZZzKrrKKKKKwwwwwwyyyyoooRRKzZZ
+..ZzzKKKLLLhhKwwwwwyyyyooooRKzzZ
+..ZKKLLLLLWKhhKwwwwyyyyyooddKzzZ
+.KKgLLLLhhKKhhKwwwwyyyyyddooKzzZ
+KLhhhhhhhhhhhhKwwwwyyyydooooRKzZ
+KKKKKKKKKKKKKhKwwwyyyyyyyoooRKzZ
+.KPPPPPPPPPPhhKwwyyyyyyyooooRKzZ
+..KppppppppKKhKyyyyyyyyyooooKzzZ
+..KpppKKKKhhhhKyyyyyyyydoooRKzzZ
+..KKKKhhhhhhHHKyyyyyyyyoddddKzzZ
+..ZKKHHHHHHHHHKyyyyyyyyoooRRKzZZ
+...ZzzKKKKKKKKyyyyyddyooooRKzzZ.
+...ZZzKrrooodoyydyyydooooRRKzZZ.
+....ZzzKrrodoooodoooodooRRKKKZ..
+....ZZzzKrdooooodooooodRRKhhKZ..
+.....ZZzzKKRRooodooooRRKKhhHK...
+......ZZzzzKKRRRdRRRRKKzzKhhHK..
+.......ZZzzzzKKKKKKKKzzzzKhHHK..
+........ZZZzzKhHK...KHHKZZKhHK..
+..........ZZZKhHK..KHHK....KhHK.
+............KhhHK.KHHK......KHK.
+..........KhhhHK..KHHHK......KHK
+.......KhhhhHK..KHHHHHK.......KH
+......KKKKKK...KKKKKKK.........K
+end
+
+icon 16
+....zzKKKKKKzz..
+...zzKrrdrrrKzz.
+..zzKrYYdYYrrKzz
+..zKrYwwwyYoorKz
+.zKKKKKwwyyYooRK
+.KKLLKhKwyyyooRK
+KLhhhhhKyyyyoddK
+KKKKKKhKyyyyooRK
+.KpppphKyyyoooRK
+.KKhhhHKyyooddRK
+..KKKKKKoodooRKz
+..zzKrooodooRKhK
+...zzKrRdRRRKKhK
+....zzKKKKKKzzKh
+......KhK.KHK..K
+.....KKKK.KKKK..
+end
+
+icon 48
+.............ZZZZZzzzzzzzzzzzzzzzZZZZZ..........
+............ZZZZzzzzzzzKKKKKzzzzzzzZZZZ.........
+..........ZZZZzzzzzKKKKrrrrrKKKKzzzzzZZZZ.......
+.........ZZZZzzzzKKrrrdrrrrrrrrrKKzzzzZZZZ......
+........ZZZzzzzKKrrrrYdYYYYYYYrrrrKKzzzzZZZ.....
+.......ZZZzzzzKrrrYYYYdYYYYYYYYYYrdrKzzzzZZZ....
+.......ZZzzzzKrrYYYYYYdYYYYYYYYYYddrrKzzzzZZ....
+......ZZZzzzKrrYYYYYYYdYYYYYYYYYYdoorrKzzzZZZ...
+.....ZZZzzzKrrYYYYYYYYdyyyyyYYYYdYooorrKzzzZZZ..
+.....ZZzzzKddYYYYYYYwwdwyyyyyyyYdooooorrKzzzZZ..
+....ZZZzzKrrKKKKKKKKwwwdwwyyyyydyooooooRRKzzZZZ.
+....ZZzzzKKKLLLLLhhhhKwwwwwyyyddyyoooooRRKzzzZZ.
+....ZZzKKLLLLLLLLhhhhhKwwwwwyydyyyyoooooRRKzzZZ.
+...ZZKKLLLLLLLLWKhhhhhKwwwwwyyyyyyyyooooRRKzzZZZ
+...KKLLLLLLLLhhKKhhhhhKwwwwwyyyyyyyyoooooRRKzzZZ
+.KKLgLLLLLLhhhhhhhhhhhKwwwwwyyyyyyyyyooooddKzzZZ
+KLhhhhhhhhhhhhhhhhhhhhKwwwwwyyyyyyyyyodddoRKzzZZ
+KhhhhhhhhhhhhhhhhhhhhhKwwwwwyyyyyyyydddoooRKzzZZ
+KKKKKKKKKKKKKKKKKKKKhhKwwwwwyyyyyyddyoooooRKzzzZ
+.KKPPPPPPPPPPPPPPPhhhhKwwwwyyyyyyyyyyyooooRKzzzZ
+..KppppppppppppppKKhhhhKwwyyyyyyyyyyyyooooRRKzzZ
+..ZKpppppppppKKKhhhhhhKwwyyyyyyyyyyyyyooooRKzzzZ
+..ZKppppppKKKhhhhhhhhhKyyyyyyyyyyyyyyoooooRKzzZZ
+..ZKpppKKKhhhhhhhhhhhhKyyyyyyyyyyyyyyoooooRKzzZZ
+...KKKKKhhhhhhhhhhHHHHKyyyyyyyyyyyyyyooooRRKzzZZ
+...ZKKKHHHHHHHHHHHHHHHKyyyyyyyyyyyddddoooRRKzzZZ
+...ZZzKKKHHHHHHHHHHHHHKyyyyyyyyyyyyyooddddKzzzZZ
+...ZZZzzKKKKKKKKKKKKKKKyyyyyyyyyyyyoooooRdKzzZZZ
+....ZZzzKrrYYYoooyyddyyyyyyyydyyyyooooooRRKzzZZ.
+....ZZZzzKrrooooooydyyyydyyyyydyyooooooRRKzzZZZ.
+.....ZZzzzKrrooooodyyyyydyyyyyddooooooRRKzzzZZ..
+.....ZZZzzKrrrooodoooyyydyyyyyodoooooRRRKzzZZZ..
+......ZZzzzKrrroddoooooodooooooodoooRRRKhKzZZ...
+......ZZZzzzKrrddooooooodoooooooodoRRRKhhhKZZ...
+.......ZZZzzzKrdRooooooodooooooooddRRKhhhhKZ....
+........ZZZzzzKKRRRooooodoooooooRRdKKzKhhhHK....
+.........ZZZzzzzKKRRRRRodoooRRRRRKKzzzzKhhHK....
+..........ZZZzzzzzKKKRRRdRRRRRKKKHKzzzZKhHHHK...
+...........ZZZZzzzzzKKKKKKKKKKKKKzzzZZZZKHHHK...
+............ZZZZZzzzKhhHK......KHHHKZZZ..KHHK...
+..............ZZZZZZKhhHK.....KHHHKZZ.....KHHK..
+................ZZZZKhhHK....KHHHKZ.......KHHK..
+...................KhhhHK...KHHHK..........KHHK.
+.................KhhhhHK...KHHHK............KHK.
+...............KhhhhhHK....KHHHHK............KHK
+............KhhhhhhHK...KHHHHHHHK............KHK
+..........KhhhhhhHK.......KHHHHHHHHK..........KK
+..........KKKKKKKK........KKKKKKKKKK...........K
+end

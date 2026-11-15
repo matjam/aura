@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Aura's mascot, the frill-necked lizard, for the About box and the
+     documentation. Drawn from circles, polygons and straight strokes only
+     (no gradients, filters or curves), so Aura's own rasterizer can draw
+     it. Coordinates are the 32x32 icon's design scaled by 8; light comes
+     from the upper left. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- halo -->
+  <circle cx="136" cy="108" r="122" fill="#FFCC33" opacity="0.18"/>
+  <circle cx="136" cy="108" r="112" fill="#FFCC33" opacity="0.30"/>
+
+  <!-- tail, behind the frill -->
+  <polygon points="196,160 216,166 236,212 254,252 246,254 222,222 196,186"
+           fill="#999966" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="214,170 236,212 252,250 242,250 222,220"
+           fill="#666633"/>
+
+  <!-- legs -->
+  <polygon points="106,196 132,196 132,226 122,240 104,248 70,248 56,252 56,240 76,236 98,232 106,222"
+           fill="#999966" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="160,196 184,196 168,226 172,246 176,252 126,252 128,242 150,238 152,224"
+           fill="#666633" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- frill: rim, middle band, inner glow, highlight -->
+  <circle cx="136" cy="108" r="101" fill="#CC3300" stroke="#000" stroke-width="6"/>
+  <polygon points="214,52 238,108 214,170 136,209 64,180 136,108" fill="#993300"/>
+  <circle cx="136" cy="108" r="88" fill="#FF6600"/>
+  <polygon points="58,60 136,20 190,32 136,108" fill="#FF9900"/>
+  <circle cx="136" cy="108" r="64" fill="#FFCC00"/>
+  <circle cx="114" cy="80" r="40" fill="#FFFF66"/>
+
+  <!-- ribs: spines of the frill, from the neck outward -->
+  <g stroke="#990000" stroke-width="5" stroke-linecap="round">
+    <line x1="129" y1="60" x2="122" y2="10"/>
+    <line x1="102" y1="86" x2="62" y2="40"/>
+    <line x1="160" y1="72" x2="186" y2="20"/>
+    <line x1="178" y1="96" x2="230" y2="74"/>
+    <line x1="182" y1="132" x2="230" y2="146"/>
+    <line x1="164" y1="160" x2="194" y2="196"/>
+    <line x1="132" y1="168" x2="132" y2="206"/>
+    <line x1="104" y1="160" x2="78" y2="190"/>
+  </g>
+
+  <!-- head: upper jaw and skull -->
+  <polygon points="0,98 22,80 46,68 66,58 104,58 120,70 122,108 0,108"
+           fill="#999966" stroke="#000" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="10,94 26,82 48,72 66,64 92,64 92,84 40,88"
+           fill="#CCCC99"/>
+  <!-- lower jaw -->
+  <polygon points="16,118 90,118 122,104 122,150 50,150 30,140 16,132"
+           fill="#999966" stroke="#000" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="40,142 122,130 122,150 50,150" fill="#666633"/>
+  <!-- open mouth -->
+  <polygon points="6,108 118,108 92,118 50,126 26,132 16,124"
+           fill="#FFCCCC" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+  <polygon points="10,110 116,110 100,116 14,118" fill="#CC6666"/>
+  <!-- eye and nostril -->
+  <circle cx="90" cy="78" r="9" fill="#000"/>
+  <circle cx="86" cy="74" r="3" fill="#FFF"/>
+  <circle cx="26" cy="86" r="3" fill="#333300"/>
+</svg>

@@ -1,0 +1,74 @@
+# Aura icon, concept 4: spotted-tailed quoll.
+# A quoll on the prowl at night inside a soft moonlit glow; its white
+# spots read as stars. The glow is partly transparent, so it shows only in
+# the 32-bit icons (Mac OS 8.5 and later); the 8-bit and 4-bit icons show
+# the quoll alone.
+
+name Quoll
+
+palette
+# ch rgb    alpha c4 bw
+.    -      0     -  0
+K    000000 255   15 1
+W    FFFFFF 255   0  0
+L    CC9966 255   11 0
+h    996633 255   11 l
+H    663300 255   10 m
+n    FF9999 255   4  0
+Q    FFCC66 120   0  0
+q    FFCC66 56    0  0
+end
+
+icon 32
+..............qqqq..............
+..........qqqqqqqqqqqq..........
+........qqqqqqqqqqqqqqqq........
+.......qqqqqqqqqqqqqqqqqq.......
+.....qqqqqqqqqqqqqqqqqqqqqq.....
+....qqqqqqqqQQQQQQQQqqqqKKKq....
+....qqqqqqQQQQQQQQQQQQqKhhhK....
+...qqqqqqQQQQQQQQQQQQQQqKKWhK...
+..qqqKKqQKKQQQQQQQQQQQQQqKhhKq..
+..qqKnhKKnhKQQQQQQQQQQQQQqKhhK..
+.qqqKhhhhhhhKQQQQQQQQQQQQQKWhKq.
+.qqKLLLLhhhhhKQQQQQQQQQQQQKhhKq.
+.qKLLWKLLLhhhhKQQQQQQQQQQKhhHKq.
+.KLLLKKLLLLhhhhKQQQQQQQQKhWhKqq.
+qKLLLLLLLLLLhhhhKKKKKKKKKhhhKqqq
+nLLLLLLLLLLLLhhhLLWLLLWLLhhhKqqq
+KKKhhhhhhhhhhhhhhhWhhhhhWhhhKqqq
+qqqKhhhhhhhhWhhhhhhhhWhhhhhKqqqq
+.qqqKKhhhhhhhhhhWhhhhhhhhhKqqqq.
+.qqqqQKhhhhWhhhhhhhhhWhhhKQqqqq.
+.qqqqqKHHhhhhhhhhhWhhhhhHHKqqqq.
+.qqqqqKHHHHHHHHHHHHHHHHHHHKqqqq.
+..qqqqKhhKKHHKKKKKKhhKKHHKqqqq..
+..qqqqKhhKKHHKQQQQKhhKKHHKqqqq..
+...qqqKhhKKHHKQQQQKhhKKHHKqqq...
+....KhhhhKHHHKQQKhhhhKHHHKqq....
+....KKKKKKKKKKQQKKKKKKKKKKqq....
+.....qqqqqqqqqqqqqqqqqqqqqq.....
+.......qqqqqqqqqqqqqqqqqq.......
+........qqqqqqqqqqqqqqqq........
+..........qqqqqqqqqqqq..........
+..............qqqq..............
+end
+
+icon 16
+.......qq.......
+....qqqqqqqq....
+...qqqqqqqqqKK..
+.KKqKKQQQQQqKhK.
+.KnKnKQQQQQQqKhK
+KhhhhhKQQQQQQKWK
+KLWKLhhKQQQQKhhK
+nLLLLhhhKKKKhhKq
+KKhhhhhhhWhhhhKq
+.qKhhWhhhhhWhKq.
+.qKHHHHHHHHHHKq.
+.qKhKHKQQKhKHKq.
+.KhhKHHKQKhhKHK.
+.KKKKKKKqKKKKKK.
+....qqqqqqqq....
+.......qq.......
+end
