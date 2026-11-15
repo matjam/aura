@@ -370,7 +370,15 @@ struct AuLayout {
      * the box tree. */
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
+    /* The focused element (not referenced; the document view clears it
+     * before the element can go) and whether its caret shows now. */
+    AuElement *focus;
+    bool caret_on;
 };
+
+/* controls.c: the value, placeholder, selection and caret of a text field
+ * (content box cb, padding box pb, canvas coordinates). */
+void l_paint_field(AuLayout *L, AuCanvas *c, LBlock *b, AuRect cb, AuRect pb, uint32_t color, uint32_t ph_color);
 
 /* The SVG names of the layout (made on first use). */
 struct AuSvgNames *l_svg_names(AuLayout *L);

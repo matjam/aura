@@ -283,6 +283,26 @@ resource 'DITL' (134) {
 	}
 };
 
+/* 136: a yes or no question from a page (resending a form); ^0 is it. */
+resource 'ALRT' (136) {
+	{0, 0, 130, 400}, 136,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (136) {
+	{
+		{98, 296, 118, 386}, Button { enabled, "Continue" };
+		{98, 196, 118, 284}, Button { enabled, "Cancel" };
+		{12, 70, 90, 386}, StaticText { disabled, "^0" }
+	}
+};
+
 /* 135: a cookie's or site's details in the Cookies window, ^0 to ^3. */
 resource 'ALRT' (135) {
 	{0, 0, 250, 460}, 135,

@@ -1,4 +1,5 @@
 #include "dom.h"
+#include "control.h"
 
 #include <string.h>
 
@@ -98,6 +99,7 @@ static void node_free(AuNode *n)
             au_free(e->attrs[i].value);
         au_free(e->attrs);
         au_free(e->classes);
+        au_ctl_free(e);
         if (e->shadow_root) {
             AuNode *sr = e->shadow_root;
             e->shadow_root = NULL;

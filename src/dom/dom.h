@@ -67,6 +67,7 @@ typedef struct AuElement {
     void *box;                /* layout data, owned by src/layout */
     uint32_t state;           /* AU_STATE_* bits (see the end of this file) */
     AuNode *shadow_root;      /* an AuShadowRoot attached to this element, or NULL (referenced) */
+    void *control;            /* form control state (an AuControl, control.h), or NULL */
 } AuElement;
 
 /* Text and comment nodes. */

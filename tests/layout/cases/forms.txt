@@ -100,11 +100,11 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 #t y=0 w=139.33 h=46
 #s y=33.2
 
-=== textarea content wraps and scrolls inside rows
+=== textarea size does not depend on its content (controls.c paints the value)
 <body style="margin:0">
 <textarea id=t style="display:block" cols=2 rows=1>xx xx xx</textarea>
 ---
-#t w=32.67 h=19.33 lines=3
+#t w=32.67 h=19.33
 
 === textarea as a block keeps its cols width
 <body style="margin:0">

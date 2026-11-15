@@ -633,6 +633,103 @@ static bool host_confirm_download(void *ctx, const char *url, const char *name, 
     return CautionAlert(134, NULL) == 1;
 }
 
+/* ---- Forms ---- */
+
+enum { kFormPopupID = 182 };
+
+/* A select's pop-up: a menu of the options over the control, the chosen
+ * one under the pointer. Group labels are disabled items; options in a
+ * group are indented. */
+static int host_popup(void *ctx, AuBrowserWindow *w, const AuPopupItem *items, int n, int selected, AuIRect at)
+{
+    (void)ctx;
+    BrowserWin *b = (BrowserWin *)w->platform;
+    if (!b || n <= 0)
+        return -2;
+    MenuHandle m = NewMenu(kFormPopupID, (ConstStringPtr) "\p");
+    if (!m)
+        return -2;
+    int shown = n < 250 ? n : 250; /* a menu holds at most this many usefully */
+    AuBuf t;
+    au_buf_init(&t);
+    for (int i = 0; i < shown; i++) {
+        au_buf_clear(&t);
+        if (items[i].indent)
+            au_buf_puts(&t, "   ");
+        au_buf_puts(&t, items[i].label && items[i].label[0] ? items[i].label : " ");
+        mac_append_item(m, au_buf_cstr(&t));
+        if (items[i].disabled)
+            DisableItem(m, (short)(i + 1));
+        if (i == selected)
+            CheckItem(m, (short)(i + 1), true);
+    }
+    au_buf_free(&t);
+    InsertMenu(m, -1);
+    SetPort((GrafPtr)b->base.win);
+    Point p = {(short)at.y0, (short)at.x0};
+    LocalToGlobal(&p);
+    InitCursor();
+    long choice = PopUpMenuSelect(m, p.v, p.h, (short)(selected >= 0 && selected < shown ? selected + 1 : 1));
+    DeleteMenu(kFormPopupID);
+    DisposeMenu(m);
+    short item = (short)(choice & 0xFFFF);
+    if ((short)(choice >> 16) != kFormPopupID || item < 1 || item > shown)
+        return -1;
+    return item - 1;
+}
+
+/* An input type=file: StandardGetFile, then the file's data fork read
+ * whole (at most 8 MB). */
+static bool host_choose_file(void *ctx, bool multiple, AuControlFile **files, uint32_t *n)
+{
+    (void)ctx, (void)multiple;
+    StandardFileReply reply;
+    memset(&reply, 0, sizeof reply);
+    InitCursor();
+    StandardGetFile(NULL, -1, NULL, &reply);
+    if (!reply.sfGood)
+        return false;
+    short ref;
+    OSErr err = FSpOpenDF(&reply.sfFile, fsRdPerm, &ref);
+    if (err != noErr)
+        return false;
+    long len = 0;
+    err = GetEOF(ref, &len);
+    if (err != noErr || len < 0 || len > 8L * 1024 * 1024) {
+        FSClose(ref);
+        return false;
+    }
+    char *data = au_alloc((size_t)len + 1);
+    long count = len;
+    err = len ? FSRead(ref, &count, data) : noErr;
+    FSClose(ref);
+    if (err != noErr || count != len) {
+        au_free(data);
+        return false;
+    }
+    AuControlFile *f = au_calloc(sizeof *f);
+    f->name = mac_roman_to_utf8((const char *)reply.sfFile.name + 1, reply.sfFile.name[0]);
+    MacFileMap map;
+    const char *mime = mac_ic_map_filename(f->name, &map) && map.mime[0] ? map.mime : "application/octet-stream";
+    f->type = au_strndup(mime, strlen(mime));
+    f->data = data;
+    f->len = (size_t)len;
+    *files = f;
+    *n = 1;
+    return true;
+}
+
+/* A yes or no question: ALRT 136, Continue or Cancel. */
+static bool host_confirm(void *ctx, AuBrowserWindow *w, const char *message)
+{
+    (void)ctx, (void)w;
+    Str255 p;
+    mac_pstr(message, p);
+    ParamText(p, (ConstStringPtr) "\p", (ConstStringPtr) "\p", (ConstStringPtr) "\p");
+    InitCursor();
+    return CautionAlert(136, NULL) == 1;
+}
+
 static void host_download_added(void *ctx, AuDownload *d)
 {
     (void)ctx, (void)d;
@@ -669,6 +766,9 @@ void browserwin_host(AuBrowserHost *h)
     h->open_external = host_external;
     h->confirm_download = host_confirm_download;
     h->download_added = host_download_added;
+    h->popup = host_popup;
+    h->choose_file = host_choose_file;
+    h->confirm = host_confirm;
     h->scroll_area = host_scroll_area;
 }
 
@@ -973,15 +1073,17 @@ static void bw_click(MacWin *mw, EventRecord *ev)
     track_mouse(b, ev, pt);
 }
 
-static void page_key(BrowserWin *b, int key, uint32_t ch, uint32_t mods)
+/* The Unicode code point of a typed Mac Roman character. */
+static uint32_t mac_roman_char(unsigned char c)
 {
-    AuEvent e;
-    memset(&e, 0, sizeof e);
-    e.type = AU_EVENT_KEY_DOWN;
-    e.key = key;
-    e.ch = ch;
-    e.mods = mods;
-    au_bw_key(b->bw, &e);
+    if (c < 0x80)
+        return c;
+    char s[1] = {(char)c};
+    char *u = mac_roman_to_utf8(s, 1);
+    size_t adv = 0;
+    uint32_t cp = u ? au_utf8_decode(u, strlen(u), &adv) : 0;
+    au_free(u);
+    return cp;
 }
 
 static bool bw_key(MacWin *mw, EventRecord *ev)
@@ -1014,26 +1116,98 @@ static bool bw_key(MacWin *mw, EventRecord *ev)
         field_show_caret(b);
         return true;
     }
+    /* The page: its focused field or control, script, then scrolling. */
     uint32_t mods = mods_of(ev->modifiers);
+    int key = 0;
+    uint32_t uc = 0;
     switch (ch) {
-    case 0x1E: page_key(b, AU_KEY_UP, 0, mods); break;
-    case 0x1F: page_key(b, AU_KEY_DOWN, 0, mods); break;
-    case 0x1C: page_key(b, AU_KEY_LEFT, 0, mods); break;
-    case 0x1D: page_key(b, AU_KEY_RIGHT, 0, mods); break;
-    case 0x0B: page_key(b, AU_KEY_PAGE_UP, 0, mods); break;
-    case 0x0C: page_key(b, AU_KEY_PAGE_DOWN, 0, mods); break;
-    case 0x01: page_key(b, AU_KEY_HOME, 0, mods); break;
-    case 0x04: page_key(b, AU_KEY_END, 0, mods); break;
-    case ' ': page_key(b, 0, ' ', mods); break;
-    case 0x1B: au_bw_stop(b->bw); break;
-    default: return false;
+    case 0x1E: key = AU_KEY_UP; break;
+    case 0x1F: key = AU_KEY_DOWN; break;
+    case 0x1C: key = AU_KEY_LEFT; break;
+    case 0x1D: key = AU_KEY_RIGHT; break;
+    case 0x0B: key = AU_KEY_PAGE_UP; break;
+    case 0x0C: key = AU_KEY_PAGE_DOWN; break;
+    case 0x01: key = AU_KEY_HOME; break;
+    case 0x04: key = AU_KEY_END; break;
+    case 0x0D:
+    case 0x03: key = AU_KEY_RETURN; break;
+    case 0x09: key = AU_KEY_TAB; break;
+    case 0x1B: key = AU_KEY_ESCAPE; break;
+    case 0x08: key = AU_KEY_BACKSPACE; break;
+    case 0x7F: key = AU_KEY_DELETE; break;
+    default:
+        if (ch < 0x20)
+            return false;
+        uc = mac_roman_char(ch);
+        break;
     }
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_KEY_DOWN;
+    e.key = key;
+    e.ch = uc;
+    e.mods = mods;
+    if (au_bw_key(b->bw, &e)) {
+        flush(b);
+        return true;
+    }
+    if (ch == 0x1B) {
+        au_bw_stop(b->bw);
+        return true;
+    }
+    return false;
+}
+
+/* The Edit menu on the page's focused text field (item numbers as in
+ * bw_edit). The clipboard holds TEXT in Mac Roman. */
+static bool page_field_edit(BrowserWin *b, int item)
+{
+    static const int cmds[8] = {-1, AU_PAGE_EDIT_UNDO, -1, AU_PAGE_EDIT_CUT, AU_PAGE_EDIT_COPY,
+                                AU_PAGE_EDIT_PASTE, AU_PAGE_EDIT_CLEAR, AU_PAGE_EDIT_SELECT_ALL};
+    if (item == 0)
+        return true;
+    if (item < 1 || item > 7 || cmds[item] < 0)
+        return false;
+    AuBuf out;
+    au_buf_init(&out);
+    char *paste = NULL;
+    size_t paste_len = 0;
+    if (item == 5) {
+        Handle h = NewHandle(0);
+        long off = 0;
+        if (!h)
+            return true;
+        long n = GetScrap(h, 'TEXT', &off);
+        if (n > 0) {
+            HLock(h);
+            paste = mac_roman_to_utf8(*h, (size_t)n);
+            HUnlock(h);
+            /* Mac line breaks are carriage returns */
+            for (char *p = paste; *p; p++)
+                if (*p == '\r')
+                    *p = '\n';
+            paste_len = strlen(paste);
+        }
+        DisposeHandle(h);
+        if (!paste)
+            return true;
+    }
+    au_bw_page_edit(b->bw, cmds[item], paste ? paste : "", paste_len, &out);
+    if ((item == 3 || item == 4) && out.len)
+        mac_put_scrap(out.data, out.len);
+    au_buf_free(&out);
+    au_free(paste);
+    flush(b);
     return true;
 }
 
 static bool bw_edit(MacWin *mw, int item)
 {
     BrowserWin *b = (BrowserWin *)mw;
+    if (!b->field_focus && au_bw_page_editing(b->bw)) {
+        SetPort((GrafPtr)mw->win);
+        return page_field_edit(b, item);
+    }
     if (!b->field_focus) {
         /* The page: Copy the selection, Select All. (Item 0 asks about
          * text editing, which the page does not do; main.c enables
@@ -1128,7 +1302,7 @@ static void bw_idle(MacWin *mw)
                 au_bw_mouse(b->bw, &e);
             }
             Rect field = qd_rect(b->bw->layout.address_text);
-            if (PtInRect(p, &field))
+            if (PtInRect(p, &field) || au_bw_text_field_at(b->bw, p.h, p.v))
                 SetCursor(*GetCursor(iBeamCursor));
             else
                 InitCursor();

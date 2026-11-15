@@ -202,6 +202,7 @@ int js_iface_of(const AuNode *n);
 /* ---- natives.c, natives2.c ---- */
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
+void js_natives_forms_init(AuJs *js, JSValue N);
 
 /* ---- mutation.c ---- */
 void js_hooks_install(AuJs *js);

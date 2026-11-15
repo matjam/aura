@@ -373,6 +373,12 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         *h = l_control_line(L, b, NULL);
         return;
     }
+    case LR_TEXTAREA: {
+        int rows = r && r->rows ? r->rows : 2;
+        *w = textarea_w(L, b);
+        *h = rows * l_control_line(L, b, NULL);
+        return;
+    }
     case LR_BUTTON:
     case LR_COLOR:
         *w = r && r->label ? l_measure(L, f, s, r->label, strlen(r->label)) : 0;

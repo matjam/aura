@@ -864,6 +864,81 @@ global object is the window, the DOM bindings and the event loop.
   Retro68's GCC places spilled locals in the top 8 bytes of alloca space.
   Do not use `alloca` or variable-length arrays in Aura's own code.
 
+## Forms
+
+Form controls keep their state in C, so typing, clicks and submission
+work with script off, and script reads and writes the same state.
+
+- **Control state.** `src/dom/control.c` gives each input, textarea,
+  select and option an `AuControl` on first use (`au_ctl`): the UTF-8
+  value and its dirty flag, the selection as byte offsets (anchor and
+  caret), scroll offsets, one undo step, the value at focus (for
+  change), the custom validity message, chosen files, the list box
+  cursor and the pressed flag. Checkedness is the element state
+  `AU_STATE_CHECKED` with `AU_STATE_CHECKED_SET`. Layout reads the value
+  at paint time, so typing repaints without a box tree rebuild.
+- **Painting.** `src/layout/controls.c` paints text fields and textareas
+  (placeholder, password bullets, selection, a one-pixel caret, soft
+  wrapping and scrolling) and maps points to offsets
+  (`au_layout_field_offset_at`, `au_layout_field_caret_rect`). A
+  textarea is a replaced box; its children are not laid out.
+- **Editing.** `src/page/editing.c` is the portable model: insertion
+  with maxlength and single-line rules, deletion by character and word,
+  movement, word and line boundaries, and undo (Undo twice redoes).
+- **Input.** `src/page/forms.c` turns keys and mouse events into focus
+  changes, edits and activation: click and Tab focus (positive tabindex
+  first, then tree order), autofocus at the end of parsing, the caret
+  blink (`au_docview_blink`, which repaints only the caret), checkbox,
+  radio group, select, list box, range, file, details and label
+  behaviour, implicit submission, and the Edit commands
+  (`au_docview_edit`). With the JavaScript runtime running, a click's
+  activation runs in the bindings and reaches C through `N.submitForm`;
+  without it `au_forms_activate` does the same in C.
+- **Submission.** `src/page/formdata.c` builds the entry list
+  (`au_form_entries_build`) and encodes it (urlencoded, multipart with
+  file parts, text/plain), and checks validity (`au_form_validity`;
+  pattern goes through the script RegExp when the runtime runs).
+  `form_submit` in `forms.c` applies the formaction, formmethod,
+  formenctype, formtarget and formnovalidate attributes, asks before an
+  https page sends a form over http, and passes an `AuFormSubmission` to
+  `AuDocViewCallbacks.submit`. `page_doc.c` sends GET through
+  `open_url` and POST to the browser (`submit_post`), which adds a
+  history entry and calls `au_page_navigate_post`; the fetcher sends the
+  body. Reloading a POST result asks first (`AuBrowserHost.confirm`); a
+  history entry of a POST result loads with GET.
+- **Script.** `src/js/natives_forms.c` exposes the control state
+  (`N.ctlValue`, `N.ctlSel`, `N.ctlFiles` and so on), converting
+  selection offsets between UTF-16 and UTF-8. `prelude_html.js` builds
+  the DOM API on them (value, selectionStart, setRangeText, files,
+  validity, requestSubmit) and the legacy named access
+  (`document.formName`, `form.controlName`, `form[0]`, RadioNodeList)
+  through a proxy between `Node.prototype` and `EventTarget.prototype`.
+  Events go in the standard order: keydown, beforeinput, input, keyup,
+  change at blur or implicit submission, submit.
+- **Mac OS 9 shell.** `browserwin.c` maps typed Mac Roman characters
+  to Unicode and passes every key to the page when the address field
+  does not have the focus; `main.c` routes Command-arrows and
+  Command-Delete to the window instead of MenuKey. The Edit menu acts on
+  a focused page field (`page_field_edit`, TEXT scrap in Mac Roman).
+  Selects use `PopUpMenuSelect` (`host_popup`), file inputs
+  `StandardGetFile`, confirms ALRT 136, and the I-beam shows over text
+  fields (`au_bw_text_field_at`).
+- **To drive forms on the host**, use `aura-host chrome` with `--do`
+  actions, run in order after the page loads: `clickname:NAME` (the
+  element with that name attribute), `click:X,Y`, `type:TEXT`,
+  `key:[cmd-][shift-][opt-]NAME`, `edit:copy|cut|paste:TEXT`,
+  `wait:MS`, `shot:FILE.png` and `console`. For example, `aura-host
+  chrome --net --tab https://html.duckduckgo.com/html/ --do clickname:q
+  --do "type:mac os 9" --do key:return --do wait:3000 -o run/ddg.png`.
+- **Tests.** `tests/forms` (editing, encodings, focus, submission,
+  validation, event order), `tests/js/forms.js` (bindings and named
+  access), the forms part of `tests/browser/test_net_page.c` (GET and
+  POST over the fake transport) and `tests/page/samples/qa-forms.html`
+  (every control, and a Try it form that shows what it sent).
+- **Not done:** date, time and color pickers (they are text fields), the
+  dirname attribute's direction, a resend prompt for POST history
+  entries, form-associated custom elements, and IME input.
+
 ## Design
 
 The decisions and milestones are in the Gandalf vault,
