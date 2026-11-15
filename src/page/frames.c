@@ -1098,16 +1098,25 @@ void au_frames_sync(AuDocView *dv)
     uint32_t n = 0, cap = 0;
     bool changed = false;
     /* The document's frame elements in tree order. */
+    uint32_t left = nold; /* old records not met yet */
     for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+        /* Every old record is placed and no new one may be made: the rest
+         * of the document changes nothing. Without this each sync looked
+         * every further frame element up in the old list, and a script
+         * that kept inserting iframes (one sync per insertion) slowed
+         * down so fast that its time limit was never checked. */
+        if (left == 0 && n >= 4 * AU_FRAMES_MAX)
+            break;
         int kind = frame_kind(c);
         if (kind < 0)
             continue;
         AuElement *el = au_as_element(c);
         AuFrame *f = NULL;
-        for (uint32_t i = 0; i < nold; i++)
+        for (uint32_t i = 0; left && i < nold; i++)
             if (old[i] && old[i]->el == el) {
                 f = old[i];
                 old[i] = NULL;
+                left--;
                 if (i != n)
                     changed = true;
                 break;

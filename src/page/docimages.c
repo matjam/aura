@@ -180,7 +180,7 @@ void au_docimages_prepare(AuDocImages *m, AuDocument *doc, AuLayout *L, const ch
             continue;
         if (r.x + r.w < x0 || r.x > x1 || r.y + r.h < y0 || r.y > y1)
             continue;
-        int dw = (int)(r.w + 0.5f), dh = (int)(r.h + 0.5f);
+        int dw = au_f2px(r.w + 0.5f), dh = au_f2px(r.h + 0.5f);
         au_image_entry_use(m->cache, m->t[i].entry, dw > 0 ? dw : 1, dh > 0 ? dh : 1);
     }
 }
@@ -207,7 +207,7 @@ typedef struct InvalidateCtx {
 static void invalidate_user(void *ctx, AuRect r)
 {
     InvalidateCtx *ic = ctx;
-    ic->fn(ic->ctx, (AuIRect){(int)r.x - 1, (int)r.y - 1, (int)(r.x + r.w) + 2, (int)(r.y + r.h) + 2});
+    ic->fn(ic->ctx, (AuIRect){au_f2px(r.x) - 1, au_f2px(r.y) - 1, au_f2px(r.x + r.w) + 2, au_f2px(r.y + r.h) + 2});
 }
 
 void au_docimages_invalidate(AuDocImages *m, AuLayout *L, AuIRect doc_all, void (*fn)(void *ctx, AuIRect r),

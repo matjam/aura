@@ -18,6 +18,11 @@
 # (UBSan reports a site once and goes on, so a run can pass with reports)
 # and the AddressSanitizer errors. Exit status 1 if any fuzzer failed or
 # reported anything.
+#
+# FUZZ_ONLY="css layout" runs only the named fuzzers (the names are the
+# table's first column). Under AddressSanitizer one allocation over 256 MB
+# and a process over 4 GB are errors (ASAN_OPTIONS, unless it is set): no
+# input here should need either.
 set -u
 cd "$(dirname "$0")/.."
 secs=${1:-600}
@@ -37,7 +42,7 @@ mkdir -p "$run/bin"
 # name | program (under BUILD/tests) | arguments. SECS, SEED and BIG are
 # replaced; a fuzzer without a SECONDS argument takes the cap from
 # AURA_FUZZ_SECONDS, which is set for all of them.
-list() {
+all() {
   cat <<EOF
 svg|svg/fuzz_svg|BIG SEED SECS tests/svg/corpus/*
 image|image/fuzz_image|BIG SEED tests/image/vectors/*/*
@@ -64,6 +69,21 @@ brotli|codec/fuzz_brotli|BIG SEED tests/codec/brotli-vectors/*.br
 files|browser/fuzz_files|BIG SEED SECS
 EOF
 }
+
+list() {
+  if [ -z "${FUZZ_ONLY:-}" ]; then
+    all
+  else
+    all | while IFS='|' read -r name prog args; do
+      for want in $FUZZ_ONLY; do
+        [ "$want" = "$name" ] && echo "$name|$prog|$args"
+      done
+    done
+  fi
+}
+
+ASAN_OPTIONS=${ASAN_OPTIONS:-max_allocation_size_mb=256:hard_rss_limit_mb=4096}
+export ASAN_OPTIONS
 
 one() { # name program args
   name=$1

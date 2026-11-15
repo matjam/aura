@@ -65,6 +65,7 @@ target_link_libraries(fuzz_dom aura_engine m)
 add_test(NAME js_dom_fuzz COMMAND fuzz_dom 60 1 20)
 set_tests_properties(js_dom_fuzz PROPERTIES TIMEOUT 120)
 file(GLOB DOM_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*.js)
-if(DOM_REGRESS)
-    add_test(NAME js_dom_fuzz_regress COMMAND fuzz_dom replay ${DOM_REGRESS})
-endif()
+# A script that never ends must be stopped by its time limit: one that
+# is not shows as a timeout here.
+add_test(NAME js_dom_fuzz_regress COMMAND fuzz_dom replay ${DOM_REGRESS})
+set_tests_properties(js_dom_fuzz_regress PROPERTIES TIMEOUT 120)

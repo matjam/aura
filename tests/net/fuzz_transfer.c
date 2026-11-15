@@ -9,7 +9,7 @@
  * given as arguments, framed with Content-Length, chunked or to the
  * close; then the whole mutated), serves them from one fake host and
  * fetches a URL through the HTTP client or the loader. The transfer must
- * finish within the round limit, and the body delivered for one response
+ * finish within the round limit (twenty minutes of fake time), and the body delivered for one response
  * must stay under BODY_CAP.
  *
  * usage: fuzz_transfer ITERATIONS SEED SECONDS [BODY...]
@@ -144,6 +144,12 @@ static void run_one(const FzBuf *in)
     FakeServer *s, *b;
     const uint8_t *p = in->d, *end = in->d + in->n;
     int nresp = 0, pass;
+    /* Rounds of half a second of fake time: twenty minutes. The client's
+     * timeouts add up: an HTTPS-first navigation to a server that sends
+     * 100 Continue a byte at a time and then nothing took 317 s to fail
+     * (the handshake's timeout, then the fallback's). AURA_FUZZ_ROUNDS
+     * changes it. */
+    int rounds = getenv("AURA_FUZZ_ROUNDS") ? atoi(getenv("AURA_FUZZ_ROUNDS")) : 2400;
     fake_init(&f);
     net = au_net_new(&f.ops);
     au_net_set_cookie_jar(net, jar);
@@ -192,9 +198,11 @@ static void run_one(const FzBuf *in)
             rq.manual_redirect = fz_rnd(8) == 0;
             au_http_start(net, &rq, &cb);
             au_http_request_free(&rq);
-            fake_run(&f, net, 600, 500);
+            fake_run(&f, net, rounds, 500);
+            if (getenv("AURA_FUZZ_VERBOSE"))
+                printf("transfer: done %d, %d requests to a.test, %d to b.test\n", run.done, s->nreq, b->nreq);
             /* A server that stops answering is ended by the client's
-             * timeouts: five minutes of fake time is more than any. */
+             * timeouts. */
             if (!run.done)
                 fail("the transfer did not finish");
         } else {
@@ -214,10 +222,12 @@ static void run_one(const FzBuf *in)
             cb.data = l_data;
             cb.done = l_done;
             au_net_loader_start(l, &rq, &cb);
-            for (i = 0; i < 600 && !run.done; i++) {
+            for (i = 0; i < rounds && !run.done; i++) {
                 au_net_loader_poll(l);
                 f.now += 500;
             }
+            if (getenv("AURA_FUZZ_VERBOSE"))
+                printf("load: done %d after %d s, %d requests and %d connections to a.test, %d requests to b.test\n", run.done, i / 2, s->nreq, s->connections, b->nreq);
             if (!run.done)
                 fail("the load did not finish");
             au_net_loader_free(l);
