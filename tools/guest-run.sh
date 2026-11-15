@@ -8,6 +8,7 @@
 #   tools/guest-run.sh status  say whether it runs
 #   tools/guest-run.sh reset   throw away the guest's disk changes
 #   BASE=enforcer tools/guest-run.sh start   boot the Enforcer system
+#   WINDOW=1 tools/guest-run.sh start        boot with a window, to use by hand
 #
 # MEM sets the RAM in megabytes (default 512). The guest's disk writes are
 # discarded when QEMU exits (-snapshot), so every start boots the same
@@ -46,6 +47,31 @@ case "${1:-}" in
     snapshot=-snapshot
     [ "${PERSIST:-}" = 1 ] && snapshot=
     rm -f "$AURA_QMP"
+    if [ "${WINDOW:-}" = 1 ]; then
+      # A window on the host's screen, for using the guest by hand. The
+      # Cocoa display cannot daemonize, so QEMU runs as a background job.
+      # shellcheck disable=SC2086
+      "$QEMU" \
+        -name "Aura test machine" \
+        -M mac99,via=pmu \
+        -m "${MEM:-512}" \
+        -boot c \
+        -drive file="$AURA_DISK",format=qcow2,media=disk \
+        -drive if=ide,index=2,media=cdrom \
+        -g 1024x768x32 \
+        -prom-env 'vga-ndrv?=true' \
+        -prom-env 'auto-boot?=true' \
+        -nic user,model=sungem \
+        -qmp unix:"$AURA_QMP",server=on,wait=off \
+        -display cocoa,zoom-integer=on $snapshot \
+        -pidfile "$AURA_PID" \
+        >"$AURA_LOG" 2>&1 &
+      i=0
+      while [ ! -s "$AURA_PID" ] && [ $i -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
+      printf '%s\n' "$BASE" > "$AURA_RUNNING_BASE"
+      echo "guest-run: started base $BASE in a window (pid $(cat "$AURA_PID")), QMP at $AURA_QMP"
+      exit 0
+    fi
     # shellcheck disable=SC2086
     "$QEMU" \
       -name "Aura test machine" \
