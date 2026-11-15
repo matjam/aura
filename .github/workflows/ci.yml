@@ -1,31 +1,24 @@
-# Build and test Aura.
+# Build and test Aura on every push to main and every pull request.
 #
-#   host       configure, build and run the tests (Ubuntu with GCC, macOS
-#              with Apple Clang)
-#   sanitize   the tests under AddressSanitizer and UBSan (Ubuntu, Clang)
-#   toolchain  build Retro68 with toolchain/build.sh when the cache has no
-#              copy for this version of the script
-#   ppc        build the Mac OS 9 application and the self-extracting
-#              archive (BinHex and MacBinary), and upload them
-#   release    on a tag v*, attach the two archives to a GitHub release
+#   host      configure, build and run the tests (Ubuntu with GCC, macOS
+#             with Apple Clang)
+#   sanitize  the tests under AddressSanitizer and UBSan (Ubuntu, Clang)
+#   ppc       the Mac OS 9 application and the self-extracting archive
+#             (build-ppc.yml), uploaded as artifacts
 #
-# Nothing here needs the guest disk images, QEMU or a secret.
+# Releases are made by release.yml. Nothing here needs the guest disk
+# images, QEMU or a secret. Actions are pinned to a commit; the comment
+# names the release.
 name: CI
 
 on:
   push:
     branches: [main, ci]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-env:
-  RETRO68_DEPS: >-
-    cmake ninja-build g++ libgmp-dev libmpfr-dev libmpc-dev
-    libboost-all-dev bison flex texinfo ruby
 
 jobs:
   host:
@@ -40,7 +33,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Ninja
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
@@ -60,7 +53,7 @@ jobs:
       group: sanitize-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Ninja
         run: |
           sudo apt-get update -q
@@ -81,105 +74,6 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build/asan --output-on-failure
 
-  # A cold build takes about an hour, so a newer push does not cancel it:
-  # the group lets one build finish while the newest waits.
-  toolchain:
-    name: Retro68 toolchain
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    concurrency:
-      group: toolchain-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      - name: Look for the toolchain in the cache
-        id: cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.local/opt/retro68
-          key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
-          lookup-only: true
-      - name: Install what Retro68 needs
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q $RETRO68_DEPS
-      - name: Build Retro68
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: toolchain/build.sh
-      - name: Save the toolchain
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.local/opt/retro68
-          key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
-
   ppc:
-    name: Mac OS 9 build and archive
-    needs: toolchain
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    concurrency:
-      group: ppc-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v7
-      - name: Restore the toolchain
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.local/opt/retro68
-          key: retro68-${{ runner.os }}-${{ hashFiles('toolchain/build.sh') }}
-          fail-on-cache-miss: true
-      - name: Install what the toolchain runs with
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q $RETRO68_DEPS
-      - name: Build
-        run: ./build.sh ppc
-      - name: Name the artifacts
-        id: names
-        run: |
-          echo "version=$(tools/version.sh)" >>"$GITHUB_OUTPUT"
-          echo "short=$(git rev-parse --short=7 HEAD)" >>"$GITHUB_OUTPUT"
-      - name: Upload the BinHex archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: Aura-${{ steps.names.outputs.version }}-${{ steps.names.outputs.short }}-hqx
-          path: build/ppc/dist/Aura-${{ steps.names.outputs.version }}.hqx
-          if-no-files-found: error
-      - name: Upload the MacBinary archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: Aura-${{ steps.names.outputs.version }}-${{ steps.names.outputs.short }}-sea-bin
-          path: build/ppc/dist/Aura-${{ steps.names.outputs.version }}.sea.bin
-          if-no-files-found: error
-
-  release:
-    name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [host, sanitize, ppc]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - name: Check the tag against the version
-        run: |
-          version=$(tools/version.sh)
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "The tag is $GITHUB_REF_NAME, but src/browser/credits.h says $version." >&2
-            exit 1
-          fi
-          echo "version=$version" >>"$GITHUB_ENV"
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          "artifacts/Aura-$version.hqx" "artifacts/Aura-$version.sea.bin"
-          --repo "$GITHUB_REPOSITORY" --title "Aura $version" --generate-notes
+    name: Mac OS 9
+    uses: ./.github/workflows/build-ppc.yml

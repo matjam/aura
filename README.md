@@ -20,7 +20,9 @@ Each has one self-extracting archive in two forms:
 - `Aura-VERSION.sea.bin`, MacBinary, for tools that keep resource forks.
 
 Either gives the application "Aura VERSION Installer". Open it on Mac OS
-9.1 to 9.2.2 and choose where the Aura folder goes. The build of every
+9.1 to 9.2.2 and choose where the Aura folder goes. The folder holds
+Aura, its fonts, the root certificates and the licences (Aura's own is
+MIT, in `Licences`). The build of every
 commit is attached to its
 [CI run](https://github.com/matjam/aura/actions/workflows/ci.yml) in the
 same two forms.

@@ -72,7 +72,7 @@ def crc16(data):
 
 def version():
     with open(os.path.join(ROOT, "src", "browser", "credits.h")) as f:
-        m = re.search(r'^#define AU_VERSION "(.*)"$', f.read(), re.M)
+        m = re.search(r'^#define AU_VERSION "([^"]*)"', f.read(), re.M)
     if not m:
         raise Error("no AU_VERSION in src/browser/credits.h")
     return m.group(1)
