@@ -1,0 +1,179 @@
+# Selector matching against a document. Results list the ids (or tags) of
+# matching elements in document order.
+
+=== combinators and structure
+--- html
+html#html
+  head#head
+  body#body
+    div#d1.a
+      p#p1.b
+        span#s1
+      p#p2
+      ul#ul
+        li#l1
+        li#l2.x
+        li#l3
+        li#l4.x
+        li#l5
+    div#d2.a.c
+      em#e1
+--- matches
+p => p1 p2
+div p => p1 p2
+div > p => p1 p2
+body > p => (none)
+#p1 + p => p2
+#p1 ~ ul => ul
+#p1 ~ * => p2 ul
+.a.c => d2
+.a > * > span => s1
+div span => s1
+html > body > div:first-child => d1
+li:first-child => l1
+li:last-child => l5
+li:only-child => (none)
+em:only-child => e1
+li:nth-child(2n) => l2 l4
+li:nth-child(odd) => l1 l3 l5
+li:nth-child(-n+2) => l1 l2
+li:nth-last-child(1) => l5
+li:nth-child(2 of .x) => l4
+li:nth-last-child(1 of .x) => l4
+p:first-of-type => p1
+p:last-of-type => p2
+p:nth-of-type(2) => p2
+:root => html
+li:not(.x) => l1 l3 l5
+li:not(.x, :first-child) => l3 l5
+:is(#p1, #p2) span => s1
+:where(div) > p => p1 p2
+div:has(span) => d1
+div:has(> em) => d2
+ul:has(> li.x + li) => ul
+p:has(+ p) => p1
+:has(~ ul) => p1 p2
+body :empty => s1 p2 l1 l2 l3 l4 l5 e1
+* > #s1 => s1
+
+=== attribute selectors
+--- html
+html
+  body
+    a#a1[href=http://x.org/a.png][lang=en-US][title="one two"]
+    a#a2[href=https://y.org/][lang=en][class=Foo]
+    a#a3[data-x=""][lang=fr]
+    input#i1[type=TEXT]
+--- matches
+[href] => a1 a2
+[href^="https"] => a2
+[href$=".png"] => a1
+[href*="y.org"] => a2
+[title~=two] => a1
+[title~="one two"] => (none)
+[lang|=en] => a1 a2
+# lang is one of the HTML attributes compared case-insensitively
+[lang=EN] => a2
+[lang=EN s] => (none)
+[lang^=EN i] => a1 a2
+[title="ONE TWO"] => (none)
+[title="ONE TWO" i] => a1
+[data-x] => a3
+[data-x=""] => a3
+[data-x^=""] => (none)
+[type=text] => i1
+[type=text s] => (none)
+[class=foo] => (none)
+[HREF] => a1 a2
+
+=== case sensitivity of ids and classes
+--- html
+html
+  body
+    div#Foo.Bar
+--- matches
+#Foo => Foo
+#foo => (none)
+.Bar => Foo
+.bar => (none)
+DIV => Foo
+
+=== quirks mode ids and classes are ASCII case-insensitive
+--- options
+quirks
+--- html
+html
+  body
+    div#Foo.Bar
+--- matches
+#foo => Foo
+.bar => Foo
+
+=== links, states and forms
+--- html
+html
+  body
+    a#l1[href=x]
+    a#l2
+    area#l3[href=y]
+    input#c1[type=checkbox][checked]
+    input#c2[type=checkbox]
+    input#t1[disabled]
+    input#t2[readonly]
+    input#t3[required][value=""]
+    input#t4[placeholder=hi]
+    textarea#ta
+    select#se
+      option#o1[selected]
+      option#o2
+    fieldset#fs[disabled]
+      legend#lg
+        input#t5
+      input#t6
+    button#b1
+--- matches
+:link => l1 l3
+:any-link => l1 l3
+:visited => (none)
+a:not(:link) => l2
+:checked => c1 o1
+:disabled => t1 fs t6
+:enabled => c1 c2 t2 t3 t4 ta se o1 o2 t5 b1
+:read-only => html body l1 l2 l3 c1 c2 t1 t2 se o1 o2 fs lg t6 b1
+input:read-write => t3 t4 t5
+textarea:read-write => ta
+:required => t3
+input:optional => c1 c2 t1 t2 t4 t5 t6
+:placeholder-shown => t4
+:invalid => t3
+# b1 is not in a form, so it is no form's default button
+:default => c1 o1
+
+=== language and direction
+--- html
+html#h[lang=en]
+  body#b
+    div#d1[lang=fr-CA]
+      p#p1
+    div#d2[dir=rtl]
+      p#p2
+      p#p3[dir=ltr]
+    div#d3[lang=""]
+--- matches
+:lang(en) => h b d2 p2 p3
+:lang(fr) => d1 p1
+:lang("fr-CA") => d1 p1
+:lang(fr, en) => h b d1 p1 d2 p2 p3
+:dir(rtl) => d2 p2
+:dir(ltr) => h b d1 p1 p3 d3
+
+=== namespaces in matching
+--- html
+html
+  body
+    svg:svg#s
+      svg:a#sa
+    a#ha
+--- matches
+a => sa ha
+svg => s

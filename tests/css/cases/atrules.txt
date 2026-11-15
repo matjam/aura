@@ -1,0 +1,223 @@
+# At-rules, nesting and error recovery in style sheets.
+
+=== @media and @supports blocks
+--- options
+width 800
+--- css
+@media (min-width: 600px) { #a { color: green; } }
+@media (min-width: 900px) { #a { color: red; } }
+@media print { #b { color: red; } }
+@supports (display: grid) { #b { width: 5px; } }
+@supports (display: nonsense) { #b { width: 9px; } }
+@supports not (display: nonsense) { #b { height: 6px; } }
+@media screen { @supports (color: red) { #c { color: green; } } }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+--- expect
+#a -> color: rgb(0, 128, 0)
+#b -> color: rgb(0, 0, 0)
+#b -> width: 5px
+#b -> height: 6px
+#c -> color: rgb(0, 128, 0)
+--- rules
+7
+
+=== @container and @scope are kept but never apply
+--- css
+@container (min-width: 1px) { #a { color: red; } }
+@container card (width > 0) { #a { width: 9px; } }
+@scope (.x) { #a { color: red; } }
+@starting-style { #a { color: red; } }
+#a { color: green; }
+--- html
+html
+  body
+    div#a.x
+--- expect
+#a -> color: rgb(0, 128, 0)
+#a -> width: auto
+
+=== unknown at-rules and errors are skipped
+--- css
+@foo bar { #a { color: red; } }
+@unknown;
+#a { color: green; }
+#b { color: red; ; ; color: green; }
+#d {{ color: red; }}
+#e { color: green; } } #f { color: green; }
+#g { color: red; @media screen { color: green; } }
+#h { color: red;
+  !important: x; color: green; }
+@media screen { #i { color: green; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+    div#f
+    div#g
+    div#h
+    div#i
+--- expect
+#a -> color: rgb(0, 128, 0)
+#b -> color: rgb(0, 128, 0)
+#d -> color: rgb(0, 0, 0)
+#e -> color: rgb(0, 128, 0)
+#g -> color: rgb(0, 128, 0)
+#h -> color: rgb(0, 128, 0)
+#i -> color: rgb(0, 128, 0)
+
+=== a bad url consumes up to the next close paren
+--- css
+#a { color: red; background: url(x y); color: green; }
+#b { color: green; background: url(x"y); width: 3px; }
+#c { color: red; background: url(x; color: green; }
+#d { color: green; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#d
+--- expect
+#a -> color: rgb(0, 128, 0)
+#b -> width: 3px
+#d -> color: rgb(0, 0, 0)
+
+=== invalid selectors drop the whole rule
+--- css
+#a, !!! { color: red; }
+#a:unknown, #a { color: red; }
+#a { color: green; }
+--- html
+html
+  body
+    div#a
+--- expect
+#a -> color: rgb(0, 128, 0)
+--- rules
+1
+
+=== @charset, @namespace and @import order
+--- css
+@charset "utf-8";
+@import url(a.css);
+@namespace svg url(http://www.w3.org/2000/svg);
+@namespace url(http://www.w3.org/1999/xhtml);
+svg|a { color: green; }
+a { width: 4px; }
+*|a { height: 2px; }
+@import url(ignored.css);
+--- html
+html
+  body
+    a#ha
+    svg:svg
+      svg:a#sa
+--- expect
+#sa -> color: rgb(0, 128, 0)
+#ha -> color: rgb(0, 0, 0)
+#ha -> width: 4px
+#sa -> width: auto
+#sa -> height: 2px
+#ha -> height: 2px
+--- imports
+a.css |  | (none) | (none) | true
+
+=== nesting
+--- css
+.card {
+  color: green;
+  & > p { color: blue; }
+  .title { font-size: 20px; }
+  &.big { width: 10px; }
+  &:hover { width: 99px; }
+  @media (min-width: 1px) { margin-top: 3px; }
+  p & { height: 7px; }
+  + .card { padding-top: 1px; }
+}
+#x { & { color: red; } color: green; }
+.a, .b { & .c { width: 2px; } }
+--- html
+html
+  body
+    div.card.big
+      p#p
+      div.title#t
+    div.card#second
+    section
+      div.card#third
+    p
+      div.card#nested
+    div#x
+    div.a
+      span.c#c1
+    div.b
+      span.c#c2
+--- expect
+.card -> color: rgb(0, 128, 0)
+#p -> color: rgb(0, 0, 255)
+#t -> font-size: 20px
+.big -> width: 10px
+#second -> width: auto
+.card -> margin-top: 3px
+#nested -> height: 7px
+#second -> padding-top: 1px
+#x -> color: rgb(0, 128, 0)
+#c1 -> width: 2px
+#c2 -> width: 2px
+
+=== nesting specificity uses :is() of the parent
+--- css
+#p, .q { & span { color: red; } }
+div span { color: green; }
+.r { & span { width: 1px; } }
+div span { width: 2px; }
+--- html
+html
+  body
+    div.q.r
+      span#s
+--- expect
+#s -> color: rgb(255, 0, 0)
+#s -> width: 1px
+
+=== @font-face
+--- css
+@font-face { font-family: "My Font"; src: url(a.woff2) format("woff2"), local(Arial); font-weight: 400 700; }
+@font-face { font-family: Other; src: url("b.ttf"); unicode-range: U+0-7F; }
+@font-face { color: red; }
+--- fontfaces
+"My Font" | url("a.woff2") format("woff2"), local(Arial)
+Other | url("b.ttf")
+ |
+
+=== @keyframes
+--- css
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@-webkit-keyframes pulse { 0%, 50% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes bad { 10% { color: red } nonsense { color: blue } }
+@keyframes "quoted" { 25% { opacity: 1 !important; } }
+--- keyframes
+spin: 0 1
+pulse: 0 0.5 1
+bad: 0.1
+quoted: 0.25
+
+=== comments and CDO/CDC at the top level
+--- css
+<!-- #a { color: green; } -->
+/* #a { color: red; } */
+--- html
+html
+  body
+    div#a
+--- expect
+#a -> color: rgb(0, 128, 0)

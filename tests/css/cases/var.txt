@@ -1,0 +1,154 @@
+# Custom properties and var().
+
+=== basic substitution and inheritance
+--- css
+:root { --main: red; --size: 10px; --empty:; }
+#a { color: var(--main); width: calc(var(--size) * 2); }
+#b { --main: blue; color: var(--main); }
+#c { margin: var(--size) 0; }
+--- html
+html
+  body
+    div#a
+      div#b
+        div#c
+--- expect
+#a -> color: rgb(255, 0, 0)
+#a -> width: 20px
+#b -> color: rgb(0, 0, 255)
+#c -> margin-top: 10px
+#c -> margin-right: 0px
+#c -> --main: blue
+#c -> --size: 10px
+#a -> --undefined:
+
+=== fallbacks
+--- css
+#a { color: var(--nope, green); width: var(--nope, var(--also-nope, 7px)); margin-left: var(--nope,); }
+#b { --x: 3px; padding-left: var(--x, 9px); font-family: var(--f, Arial, sans-serif); }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> color: rgb(0, 128, 0)
+#a -> width: 7px
+#a -> margin-left: 0px
+#b -> padding-left: 3px
+#b -> font-family: Arial, sans-serif
+
+=== invalid at computed-value time becomes unset
+--- css
+#p { color: blue; }
+#a { color: red; color: var(--n); width: 5px; width: var(--bad); --bad: red; }
+#b { --len: foo; margin-left: 3px; margin-left: var(--len); }
+--- html
+html
+  body
+    div#p
+      div#a
+      div#b
+--- expect
+#a -> color: rgb(0, 0, 255)
+#a -> width: auto
+#b -> margin-left: 0px
+
+=== cycles make the properties invalid
+--- css
+#a { --a: var(--b); --b: var(--a); --c: var(--c); --d: 1px; color: green; color: var(--a, red); width: var(--c, 4px); height: var(--d); }
+#b { --x: var(--y, 2px); --y: var(--x, 3px); padding-left: var(--x, 5px); }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> --a:
+#a -> --c:
+#a -> color: rgb(255, 0, 0)
+#a -> width: 4px
+#a -> height: 1px
+#b -> padding-left: 5px
+
+=== custom property values are tokens
+--- css
+#a { --t: { a: b }; --u:  1px   2px ; --v: "str"; --w: rgb(1,2,3); }
+--- html
+html
+  body
+    div#a
+--- expect
+#a -> --t: { a: b }
+# whitespace runs are one token, written as one space
+#a -> --u: 1px 2px
+#a -> --v: "str"
+#a -> --w: rgb(1,2,3)
+
+=== custom properties and the CSS-wide keywords
+--- css
+:root { --x: 1px; }
+#a { --x: initial; width: var(--x, 8px); }
+#b { --x: 2px; }
+#b > div { --x: inherit; width: var(--x); }
+#c { --x: unset; width: var(--x); }
+--- html
+html
+  body
+    div#a
+    div#b
+      div#bb
+    div#c
+--- expect
+#a -> width: 8px
+#bb -> width: 2px
+#c -> width: 1px
+
+=== var() in shorthands
+--- css
+:root { --b: 2px dashed red; --pad: 1px 2px; }
+#a { border: var(--b); padding: var(--pad); }
+#b { border-top: 1px solid var(--color, blue); margin: var(--m, 4px); }
+#c { font: var(--font, bold 20px serif); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+--- expect
+#a -> border-left-width: 2px
+#a -> border-left-style: dashed
+#a -> border-left-color: rgb(255, 0, 0)
+#a -> padding-top: 1px
+#a -> padding-right: 2px
+#b -> border-top-color: rgb(0, 0, 255)
+#b -> margin-bottom: 4px
+#c -> font-size: 20px
+#c -> font-weight: 700
+
+=== var() names are case-sensitive
+--- css
+#a { --Foo: green; --foo: red; color: var(--Foo); }
+--- html
+html
+  body
+    div#a
+--- expect
+#a -> color: rgb(0, 128, 0)
+
+=== @property registrations
+--- css
+@property --reg { syntax: "<length>"; inherits: false; initial-value: 5px; }
+@property --inh { syntax: "*"; inherits: true; }
+#p { --reg: 9px; --inh: 1; }
+#a { width: var(--reg); --other: var(--inh); }
+--- html
+html
+  body
+    div#p
+      div#a
+--- expect
+#a -> width: 5px
+#a -> --other: 1
+#p -> --reg: 9px

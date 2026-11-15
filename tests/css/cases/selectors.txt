@@ -1,0 +1,83 @@
+# Selector parsing, serialization and specificity.
+
+=== simple selectors
+--- selectors
+* => * (0,0,0)
+div => div (0,0,1)
+DIV => DIV (0,0,1)
+#a => #a (1,0,0)
+.b => .b (0,1,0)
+div.b#a => div.b#a (1,1,1)
+[href] => [href] (0,1,0)
+a[href="x"] => a[href="x"] (0,1,1)
+[lang|=en] => [lang|="en"] (0,1,0)
+[class~=a i] => [class~="a" i] (0,1,0)
+[data-x$='y' s] => [data-x$="y" s] (0,1,0)
+::before => ::before (0,0,1)
+:before => ::before (0,0,1)
+p::first-line => p::first-line (0,0,2)
+a:hover => a:hover (0,1,1)
+
+=== combinators
+--- selectors
+a b => a b (0,0,2)
+a > b => a > b (0,0,2)
+a>b => a > b (0,0,2)
+a + b => a + b (0,0,2)
+a ~ b => a ~ b (0,0,2)
+ul li.x > a:hover => ul li.x > a:hover (0,2,3)
+
+=== lists
+--- selectors
+a, b => a, b (0,0,1)
+#x, .y => #x, .y (1,0,0)
+
+=== functional pseudo-classes
+--- selectors
+:is(#a, .b) => :is(#a, .b) (1,0,0)
+:where(#a, .b) => :where(#a, .b) (0,0,0)
+:not(.a, #b) => :not(.a, #b) (1,0,0)
+:has(> img) => :has(> img) (0,0,1)
+li:nth-child(2n+1) => li:nth-child(2n+1) (0,1,1)
+li:nth-child(odd) => li:nth-child(2n+1) (0,1,1)
+li:nth-child(even) => li:nth-child(2n) (0,1,1)
+li:nth-child(-n+3) => li:nth-child(-n+3) (0,1,1)
+li:nth-child(5) => li:nth-child(5) (0,1,1)
+:nth-child(2n of .a) => :nth-child(2n of .a) (0,2,0)
+:nth-last-of-type(n) => :nth-last-of-type(n) (0,1,0)
+:lang(en) => :lang(en) (0,1,0)
+:dir(rtl) => :dir(rtl) (0,1,0)
+:is(:not(#a)) => :is(:not(#a)) (1,0,0)
+
+=== forgiving lists
+--- selectors
+:is(.a, !!!) => :is(.a) (0,1,0)
+:where(!!!) => :where() (0,0,0)
+
+=== invalid selectors
+--- selectors
+a, !!! => invalid
+#1 => invalid
+a > => invalid
+> a => invalid
+:unknown-pseudo => invalid
+::unknown-element => invalid
+a::before.b => invalid
+:not(::before) => invalid
+[x=] => invalid
+:nth-child(foo) => invalid
+. => invalid
+:has(:has(a)) => invalid
+
+=== -webkit- pseudo-elements are valid, others are not
+--- selectors
+::-webkit-scrollbar => ::-webkit-scrollbar (0,0,1)
+input::-webkit-input-placeholder => input::placeholder (0,0,2)
+input::-moz-placeholder => invalid
+::part(x) => ::part(x) (0,0,1)
+:is(a::before, b) => :is(b) (0,0,1)
+
+=== namespaces
+--- selectors
+*|a => *|a (0,0,1)
+|a => |a (0,0,1)

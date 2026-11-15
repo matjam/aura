@@ -1,0 +1,78 @@
+# Flow-relative properties map to physical ones after direction and
+# writing-mode are known; the later or more important declaration wins.
+
+=== horizontal-tb ltr and rtl
+--- css
+#a { margin-inline-start: 5px; padding-block-end: 3px; inset-inline-end: 1px; inline-size: 50px; max-block-size: 9px; }
+#b { direction: rtl; margin-inline-start: 5px; border-inline-end: 2px solid red; border-start-end-radius: 4px; }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> margin-left: 5px
+#a -> padding-bottom: 3px
+#a -> right: 1px
+#a -> width: 50px
+#a -> max-height: 9px
+#a -> margin-inline-start: 5px
+#b -> margin-right: 5px
+#b -> border-left-width: 2px
+#b -> border-left-style: solid
+#b -> border-top-left-radius: 4px
+
+=== vertical writing modes
+--- css
+#a { writing-mode: vertical-rl; margin-block-start: 1px; margin-inline-start: 2px; inline-size: 30px; block-size: 40px; }
+#b { writing-mode: vertical-lr; direction: rtl; margin-block-end: 1px; margin-inline-end: 2px; }
+--- html
+html
+  body
+    div#a
+    div#b
+--- expect
+#a -> margin-right: 1px
+#a -> margin-top: 2px
+#a -> height: 30px
+#a -> width: 40px
+#b -> margin-right: 1px
+#b -> margin-top: 2px
+
+=== logical and physical compete by cascade order
+--- css
+#a { margin-left: 1px; margin-inline-start: 2px; }
+#b { margin-inline-start: 2px; margin-left: 1px; }
+#c { margin-inline-start: 2px !important; margin-left: 1px; }
+#d { margin-inline: 3px; }
+#e { direction: rtl; }
+#e > div { margin-inline-start: 6px; }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+    div#e
+      div#f
+--- expect
+#a -> margin-left: 2px
+#b -> margin-left: 1px
+#c -> margin-left: 2px
+#d -> margin-left: 3px
+#d -> margin-right: 3px
+#f -> margin-right: 6px
+
+=== the dir attribute and the UA sheet
+--- html
+html
+  body
+    div#a[dir=rtl]
+      p#b
+    ul#c[dir=rtl]
+--- expect
+#a -> direction: rtl
+#b -> direction: rtl
+#c -> padding-right: 40px
+#c -> padding-left: 0px

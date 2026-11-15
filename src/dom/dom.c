@@ -399,3 +399,27 @@ void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, cons
     if (ns == AU_ATTR_NS_NONE)
         attr_changed(el, name, a->value, len);
 }
+
+/* ---- Element state ---- */
+
+static void set_bits(AuElement *el, uint32_t bits, bool on)
+{
+    if (on)
+        el->state |= bits;
+    else
+        el->state &= ~bits;
+}
+
+void au_element_set_state(AuElement *el, uint32_t bits, bool on)
+{
+    set_bits(el, bits, on);
+    uint32_t up = bits & (AU_STATE_HOVER | AU_STATE_ACTIVE);
+    if (bits & AU_STATE_FOCUS) {
+        up |= AU_STATE_FOCUS_WITHIN;
+        set_bits(el, AU_STATE_FOCUS_WITHIN, on);
+    }
+    if (!up)
+        return;
+    for (AuNode *p = el->node.parent; p && p->type == AU_NODE_ELEMENT; p = p->parent)
+        set_bits((AuElement *)p, up, on);
+}

@@ -1,0 +1,135 @@
+# Inheritance and the CSS-wide keywords.
+
+=== inherited and non-inherited properties
+--- css
+#a { color: red; font-size: 20px; border-top: 3px solid; width: 50px; line-height: 2; letter-spacing: 1px; visibility: hidden; cursor: help; }
+--- html
+html
+  body
+    div#a
+      p#b
+        span#c
+--- expect
+#b -> color: rgb(255, 0, 0)
+#c -> font-size: 20px
+#b -> border-top-width: 0px
+#b -> width: auto
+#c -> line-height: 2
+#c -> letter-spacing: 1px
+#c -> visibility: hidden
+#c -> cursor: help
+#a -> border-top-color: rgb(255, 0, 0)
+
+=== inherit, initial, unset
+--- css
+#a { color: red; width: 50px; border: 2px solid blue; margin: 7px; }
+#b { width: inherit; color: initial; border-top-style: inherit; margin-left: unset; }
+#c { color: unset; font-size: inherit; display: inherit; padding: inherit; }
+--- html
+html
+  body
+    div#a
+      p#b
+        span#c
+--- expect
+#b -> width: 50px
+#b -> color: rgb(0, 0, 0)
+#b -> border-top-style: solid
+# the initial medium width is kept once the style is not none
+#b -> border-top-width: 3px
+#b -> border-left-width: 0px
+#b -> margin-left: 0px
+#c -> color: rgb(0, 0, 0)
+#c -> display: block
+#c -> font-size: 16px
+
+=== inherited em and percentages use computed values
+--- css
+#a { font-size: 10px; line-height: 150%; text-indent: 2em; }
+#b { font-size: 20px; }
+--- html
+html
+  body
+    div#a
+      div#b
+--- expect
+#a -> line-height: 15px
+#b -> line-height: 15px
+#b -> text-indent: 20px
+
+=== currentcolor inherits as a keyword
+--- css
+#a { color: red; border-top: 1px solid currentcolor; text-decoration-color: currentcolor; }
+#b { color: blue; border-top-color: inherit; }
+--- html
+html
+  body
+    div#a
+      div#b
+--- expect
+#a -> border-top-color: rgb(255, 0, 0)
+#b -> border-top-color: rgb(0, 0, 255)
+
+=== revert goes back to the UA origin
+--- css
+p { margin-top: 30px; display: inline; color: red; }
+#a { margin-top: revert; display: revert; color: revert; }
+#b { all: revert; }
+--- html
+html
+  body
+    p#a
+    p#b
+    p#c
+--- expect
+#a -> margin-top: 16px
+#a -> display: block
+#a -> color: rgb(0, 0, 0)
+#b -> display: block
+#b -> margin-top: 16px
+#c -> margin-top: 30px
+
+=== revert in the user origin
+--- css user
+p { color: green; }
+--- css
+p { color: red; }
+#a { color: revert; }
+--- html
+html
+  body
+    p#a
+--- expect
+#a -> color: rgb(0, 128, 0)
+
+=== all
+--- css
+#a { color: red; margin: 5px; direction: rtl; }
+#a { all: initial; }
+#b { all: inherit; }
+#c { all: unset; color: green; }
+--- html
+html
+  body
+    div#a
+      div#b
+    div#c[dir=rtl]
+--- expect
+#a -> color: rgb(0, 0, 0)
+#a -> margin-left: 0px
+#a -> display: inline
+#a -> direction: rtl
+#b -> display: inline
+#c -> color: rgb(0, 128, 0)
+#c -> display: inline
+#c -> direction: rtl
+
+=== the root inherits initial values
+--- css
+html { color: inherit; font-size: inherit; }
+--- html
+html
+  body
+--- expect
+html -> color: rgb(0, 0, 0)
+html -> font-size: 16px

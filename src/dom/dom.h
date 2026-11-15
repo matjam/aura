@@ -64,6 +64,7 @@ typedef struct AuElement {
     AuNode *template_content; /* <template>: a fragment, else NULL */
     void *style;              /* computed style, owned by src/css */
     void *box;                /* layout data, owned by src/layout */
+    uint32_t state;           /* AU_STATE_* bits (see the end of this file) */
 } AuElement;
 
 /* Text and comment nodes. */
@@ -159,5 +160,33 @@ AuNode *au_pi_new(AuDocument *doc, AuAtom target, const char *data, size_t len);
  * tokenizer removes duplicates), which keeps building an element with n
  * attributes O(n). */
 void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len);
+
+/* ---- Element state ----
+ * Dynamic state that selectors such as :hover and :checked match. Event
+ * and form code sets it with au_element_set_state and then tells the style
+ * resolver (au_css_invalidate with AU_CSS_CHANGE_STATE).
+ *
+ * AU_STATE_HOVER and AU_STATE_ACTIVE set on an element are also set on
+ * (and cleared from) its ancestors, as :hover and :active require.
+ * AU_STATE_FOCUS sets AU_STATE_FOCUS_WITHIN on the element and its
+ * ancestors. AU_STATE_CHECKED is the current checkedness of an input or
+ * the selectedness of an option; it is used instead of the checked or
+ * selected attribute once AU_STATE_CHECKED_SET is on. The bits from
+ * AU_STATE_STYLE_DIRTY up belong to src/css. */
+enum {
+    AU_STATE_HOVER = 1u << 0,
+    AU_STATE_ACTIVE = 1u << 1,
+    AU_STATE_FOCUS = 1u << 2,
+    AU_STATE_FOCUS_VISIBLE = 1u << 3,
+    AU_STATE_FOCUS_WITHIN = 1u << 4,
+    AU_STATE_CHECKED = 1u << 5,
+    AU_STATE_CHECKED_SET = 1u << 6,
+    AU_STATE_INDETERMINATE = 1u << 7,
+    AU_STATE_TARGET = 1u << 8,
+    AU_STATE_DEFINED = 1u << 9, /* a custom element (name with '-') that is defined */
+    AU_STATE_STYLE_DIRTY = 1u << 16,
+    AU_STATE_SUBTREE_DIRTY = 1u << 17
+};
+void au_element_set_state(AuElement *el, uint32_t bits, bool on);
 
 #endif
