@@ -752,6 +752,22 @@ P.unload = function () {
     fire(G, new PageTransitionEvent('pagehide', { persisted: false }), doc);
     fire(G, new Event('unload'), doc);
 };
+/* The document cache (Back and Forward keep the document): whether an
+ * unload or beforeunload listener forbids keeping it, and the pagehide
+ * and pageshow events of a kept document (persisted true). */
+P.hasUnloadHandler = function () {
+    const map = listenersOf(G, false);
+    for (const type of ['unload', 'beforeunload']) {
+        const list = map && map.get(type);
+        if (list && list.some((l) => !l.removed)) return true;
+    }
+    const body = doc.body;
+    if (body && (body.hasAttribute('onunload') || body.hasAttribute('onbeforeunload'))) return true;
+    return false;
+};
+P.pageTransition = function (show) {
+    fire(G, new PageTransitionEvent(show ? 'pageshow' : 'pagehide', { persisted: true }), doc);
+};
 P.runJavascriptUrl = function (code) {
     code = str(code).replace(/^\s*javascript:/i, '');
     try { code = decodeURIComponent(code); } catch (e) { /* not percent-encoded: use as is */ }

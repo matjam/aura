@@ -65,6 +65,25 @@ struct Fetch {
     bool done, ok, cancelled;
 };
 
+/* A document that is not shown: the view and what the page knows about
+ * its document (see "Kept documents"). */
+typedef struct Kept {
+    uint32_t entry; /* the browser's back/forward entry */
+    AuDocView *dv;  /* NULL while the document is still the one shown (AuPage.leaving) */
+    char *url, *title, *content_type;
+    AuFetchCert *cert;
+    AuSecurity security;
+    bool have_security, mixed;
+    int status;
+    AuFetchReferrerPolicy rpolicy;
+    bool image_doc, plain, source_mode;
+    AuBuf source;
+    int content_w, content_h;
+    AuPageStats stats;
+    uint32_t stamp; /* when it was hidden */
+    size_t bytes;   /* estimated memory */
+} Kept;
+
 struct AuPage {
     AuPageEnv env;
     AuPageCallbacks cb;
@@ -157,6 +176,16 @@ struct AuPage {
     char *post_type;
     uint32_t blink_due;
     bool ctl_press; /* the button went down on a form control: no text selection */
+
+    /* The document cache. */
+    uint32_t next_entry; /* the entry the next load is for (au_page_set_entry) */
+    uint32_t doc_entry;  /* the entry of the current load (the shown document once begun) */
+    uint32_t prev_entry; /* the entry shown before this load */
+    Kept *leaving;       /* the shown document, to be kept when the load under way replaces it */
+    Kept **kept;         /* hidden documents, oldest first */
+    size_t nkept;
+    bool no_store;       /* the main response said Cache-Control: no-store */
+    bool no_keep;        /* the document shown was a POST result (set until the next load starts) */
 
     /* Script console: the last AU_PAGE_CONSOLE_LINES lines, oldest first
      * from console_start. */
@@ -407,6 +436,10 @@ static void compact_fetches(AuPage *p)
 
 static void main_data(AuPage *p, const char *bytes, size_t len);
 static void main_done(AuPage *p, bool ok, const AuFetchInfo *info);
+static void hide_leaving(AuPage *p);
+static void kept_drop(AuPage *p, uint32_t entry);
+static void kept_trim(AuPage *p);
+static void new_view(AuPage *p);
 static void main_response(AuPage *p, const AuFetchResponse *r);
 static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff);
 
@@ -569,7 +602,8 @@ static Fetch *start_fetch(AuPage *p, const char *url, bool main, AuFetchKind kin
 static uint32_t loader_request(void *ctx, AuDocView *dv, const char *url, AuResourceKind kind)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return 0; /* a hidden document fetches nothing */
     if (p->nfetches > 2000)
         return 0;
     AuFetchKind fk = kind == AU_RES_STYLESHEET ? AU_FETCH_STYLESHEET
@@ -598,7 +632,8 @@ static void loader_cancel(void *ctx, uint32_t id)
 static void dv_title(void *ctx, AuDocView *dv, const char *title)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     if (p->kind == K_DOC)
         set_title(p, title);
 }
@@ -606,7 +641,8 @@ static void dv_title(void *ctx, AuDocView *dv, const char *title)
 static void dv_invalidate(void *ctx, AuDocView *dv, AuIRect r)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     if (p->in_idle) {
         p->dirty = true; /* laid out and repainted at the end of the slice */
         return;
@@ -618,6 +654,8 @@ static void dv_invalidate(void *ctx, AuDocView *dv, AuIRect r)
 static void dv_size(void *ctx, AuDocView *dv)
 {
     AuPage *p = ctx;
+    if (dv != p->dv)
+        return; /* a hidden document */
     float w, h;
     au_layout_document_size(au_docview_layout(dv), &w, &h);
     int iw = (int)(w + 0.99f), ih = (int)(h + 0.99f);
@@ -632,7 +670,8 @@ static void dv_size(void *ctx, AuDocView *dv)
 static void dv_status(void *ctx, AuDocView *dv, const char *text)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     if (p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, text);
 }
@@ -640,7 +679,8 @@ static void dv_status(void *ctx, AuDocView *dv, const char *text)
 static void dv_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     set_str(&p->open_url, url);
     p->open_new_tab = new_tab;
 }
@@ -661,6 +701,8 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
 
 static void clear_post(AuPage *p)
 {
+    if (p->post)
+        p->no_keep = true; /* the document shown is a POST result: never kept */
     p->post = false;
     au_buf_free(&p->post_body);
     au_free(p->post_type);
@@ -672,7 +714,8 @@ static void clear_post(AuPage *p)
 static void dv_submit(void *ctx, AuDocView *dv, const AuFormSubmission *s)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     if (!s->method || strcmp(s->method, "POST") != 0) {
         set_str(&p->open_url, s->url);
         p->open_new_tab = s->new_tab;
@@ -711,7 +754,8 @@ static bool dv_confirm(void *ctx, AuDocView *dv, const char *message)
 static void dv_message(void *ctx, AuDocView *dv, const char *text)
 {
     AuPage *p = ctx;
-    (void)dv;
+    if (dv != p->dv)
+        return; /* a hidden document */
     if (p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, text);
 }
@@ -743,7 +787,7 @@ static bool follow_submit(AuPage *p)
 void au_page_navigate_post(AuPage *p, const char *url, const void *body, size_t len, const char *type)
 {
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
-    clear_post(p);
+    clear_post(p); /* notes whether the document shown was a POST result */
     p->post = true;
     au_buf_append(&p->post_body, body, len);
     p->post_type = au_strndup(type ? type : "", type ? strlen(type) : 0);
@@ -832,8 +876,8 @@ static double dv_now(void *ctx, AuDocView *dv)
 
 static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
 {
-    (void)dv;
-    request_scroll(ctx, x, y);
+    if (dv == ((AuPage *)ctx)->dv)
+        request_scroll(ctx, x, y);
 }
 
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
@@ -1157,6 +1201,355 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
     }
 }
 
+/* ---- Kept documents ----
+ * The document cache for Back and Forward (page.h). A document that the
+ * tab leaves moves, with its view, into p->kept, and the page gets a new
+ * view for the next document. The old document stays on screen until the
+ * new one begins, so the move happens in two steps: start_load records
+ * what the page knows about the shown document in p->leaving, and the
+ * first begin_doc of the load (hide_leaving) moves the view. A load that
+ * never begins (a download, a stop) leaves the document where it is.
+ *
+ * Nothing calls a hidden view, so its timers, frames and animations
+ * wait; the view's callbacks and loader ignore a view that is not p->dv,
+ * so script that runs in pagehide cannot change the page or fetch. */
+
+static void new_view(AuPage *p)
+{
+    AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
+    AuDocViewCallbacks dcb;
+    memset(&dcb, 0, sizeof dcb);
+    dcb.ctx = p;
+    dcb.title_changed = dv_title;
+    dcb.invalidate = dv_invalidate;
+    dcb.size_changed = dv_size;
+    dcb.status_text = dv_status;
+    dcb.open_url = dv_open;
+    dcb.now_ms = dv_now;
+    dcb.scroll_to = dv_scroll_to;
+    dcb.console = dv_console;
+    dcb.submit = dv_submit;
+    dcb.popup = dv_popup;
+    dcb.choose_file = dv_choose_file;
+    dcb.confirm = dv_confirm;
+    dcb.message = dv_message;
+    p->dv = au_docview_new(p->env.fonts, &loader, &dcb);
+    au_docview_set_viewport(p->dv, p->vw, p->vh);
+    au_docview_set_clock(p->dv, p->env.time_ms, p->env.ctx);
+    apply_font_prefs(p);
+}
+
+static void kept_free(Kept *k)
+{
+    if (k->dv)
+        au_docview_free(k->dv);
+    au_free(k->url);
+    au_free(k->title);
+    au_free(k->content_type);
+    au_free(k->cert);
+    au_buf_free(&k->source);
+    au_free(k);
+}
+
+static size_t keep_max(const AuPage *p)
+{
+    return p->env.prefs ? (size_t)p->env.prefs->document_cache_pages : 3;
+}
+
+static size_t keep_budget(const AuPage *p)
+{
+    return p->env.prefs ? (size_t)p->env.prefs->document_cache_kb * 1024 : (size_t)24 << 20;
+}
+
+/* Removes kept[i] from the list first, then frees it: freeing can run
+ * out of memory, and the low-memory path drops kept documents. */
+static void kept_remove(AuPage *p, size_t i)
+{
+    Kept *k = p->kept[i];
+    memmove(&p->kept[i], &p->kept[i + 1], (p->nkept - i - 1) * sizeof *p->kept);
+    p->nkept--;
+    kept_free(k);
+}
+
+static void kept_drop(AuPage *p, uint32_t entry)
+{
+    if (!entry)
+        return;
+    for (size_t i = p->nkept; i-- > 0;)
+        if (p->kept[i]->entry == entry)
+            kept_remove(p, i);
+}
+
+/* Applies the limits: the count per page, and no document over the budget. */
+static void kept_trim(AuPage *p)
+{
+    size_t max = keep_max(p), budget = keep_budget(p);
+    for (size_t i = p->nkept; i-- > 0;)
+        if (p->kept[i]->bytes > budget)
+            kept_remove(p, i);
+    while (p->nkept > max)
+        kept_remove(p, 0);
+}
+
+/* Whether the document shown may be kept when the tab leaves it. */
+static bool can_keep(AuPage *p)
+{
+    if (!p->doc_entry || !keep_max(p))
+        return false;
+    if (p->kind != K_DOC || !p->begun || p->loading || p->failed || p->internal || p->interim || p->no_keep ||
+        p->no_store)
+        return false;
+    if (p->nfetches) /* transfers under way (a script's fetch, a late image) */
+        return false;
+    return au_docview_can_persist(p->dv);
+}
+
+/* Records what the page knows about the shown document, before a load
+ * overwrites it. The view follows in hide_leaving. */
+static Kept *kept_capture(AuPage *p)
+{
+    Kept *k = au_calloc(sizeof *k);
+    k->entry = p->doc_entry;
+    k->url = au_strndup(p->url, strlen(p->url));
+    k->title = au_strndup(p->title, strlen(p->title));
+    k->content_type = au_strndup(p->content_type ? p->content_type : "", p->content_type ? strlen(p->content_type) : 0);
+    if (p->cert) {
+        k->cert = au_alloc(sizeof *k->cert);
+        *k->cert = *p->cert;
+    }
+    k->security = p->security;
+    k->have_security = p->have_security;
+    k->mixed = p->mixed;
+    k->status = p->status;
+    k->rpolicy = p->rpolicy;
+    k->image_doc = p->image_doc;
+    k->plain = p->plain;
+    k->source_mode = p->source_mode;
+    k->source = p->source;
+    au_buf_init(&p->source);
+    k->content_w = p->content_w;
+    k->content_h = p->content_h;
+    k->stats = p->stats;
+    return k;
+}
+
+/* Hides view dv, the document of k, and adds it to the kept list. p->dv
+ * is already another view. */
+static void kept_add(AuPage *p, Kept *k, AuDocView *dv)
+{
+    k->dv = dv;
+    au_docview_set_hidden(dv, true); /* pagehide */
+    k->stamp = now(p);
+    k->bytes = au_docview_memory_estimate(dv) + k->source.len;
+    kept_drop(p, k->entry);
+    p->kept = au_realloc(p->kept, (p->nkept + 1) * sizeof *p->kept);
+    p->kept[p->nkept++] = k;
+    kept_trim(p);
+}
+
+/* The load under way begins its document: the one shown until now moves
+ * aside with its view, and the page gets a new view. */
+static void hide_leaving(AuPage *p)
+{
+    Kept *k = p->leaving;
+    if (!k)
+        return;
+    p->leaving = NULL;
+    AuDocView *old = p->dv;
+    new_view(p);
+    kept_add(p, k, old);
+}
+
+/* A back/forward navigation to an entry whose document is kept: shows it
+ * again without loading. keep says whether the document shown now may be
+ * kept in turn. Returns false when there is none (the caller loads). */
+static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
+{
+    uint32_t entry = p->next_entry;
+    if (!entry)
+        return false;
+    Kept *k = NULL;
+    bool in_place = false;
+    if (p->leaving && p->leaving->entry == entry) {
+        k = p->leaving; /* still on screen: the load that was to replace it never began */
+        in_place = true;
+    } else {
+        for (size_t i = 0; i < p->nkept; i++)
+            if (p->kept[i]->entry == entry)
+                k = p->kept[i];
+    }
+    if (!k)
+        return false;
+    size_t a = base_len(url);
+    if (a != base_len(k->url) || memcmp(url, k->url, a) != 0) {
+        /* The entry names another address now: load it. */
+        if (in_place) {
+            kept_free(k);
+            p->leaving = NULL;
+        } else {
+            kept_drop(p, entry);
+        }
+        return false;
+    }
+    uint32_t t0 = now(p), hide_ms = 0;
+    if (in_place) {
+        p->leaving = NULL;
+    } else {
+        for (size_t i = 0; i < p->nkept; i++) {
+            if (p->kept[i] == k) {
+                memmove(&p->kept[i], &p->kept[i + 1], (p->nkept - i - 1) * sizeof *p->kept);
+                p->nkept--;
+                break;
+            }
+        }
+        /* The document shown now is kept or freed, and k's view shown. */
+        Kept *cur = p->leaving;
+        p->leaving = NULL;
+        if (!cur && keep)
+            cur = kept_capture(p);
+        if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
+            p->cb.status_text(p->cb.ctx, p, "");
+        AuDocView *old = p->dv;
+        p->dv = k->dv;
+        k->dv = NULL;
+        if (cur)
+            kept_add(p, cur, old);
+        else
+            au_docview_free(old);
+        hide_ms = now(p) - t0;
+    }
+    /* The page's state becomes the kept document's. */
+    set_str(&p->url, url);
+    au_free(p->cert);
+    p->cert = k->cert;
+    k->cert = NULL;
+    au_free(p->prev_cert);
+    p->prev_cert = NULL;
+    p->security = k->security;
+    p->have_security = k->have_security;
+    p->mixed = k->mixed;
+    p->status = k->status;
+    set_str(&p->content_type, k->content_type);
+    p->rpolicy = k->rpolicy;
+    p->image_doc = k->image_doc;
+    p->plain = k->plain;
+    p->source_mode = k->source_mode;
+    au_buf_free(&p->source);
+    p->source = k->source;
+    au_buf_init(&k->source);
+    /* The timings now describe the restore: load_ms the whole of it,
+     * first_paint_ms up to the next paint. */
+    p->stats = k->stats;
+    p->stats.restored++;
+    p->stats.hide_ms = hide_ms;
+    p->stats.first_paint_ms = 0;
+    p->kind = K_DOC;
+    p->internal = p->interim = p->failed = p->discard = false;
+    p->no_store = false;
+    p->begun = true;
+    p->main_done = true;
+    p->main = MAIN_NONE;
+    p->main_total = 0;
+    p->requested = p->completed = 0;
+    p->last_status[0] = 0;
+    p->dirty = false;
+    p->restore = false;
+    au_free(p->fragment);
+    p->fragment = NULL;
+    au_free(p->referrer);
+    p->referrer = NULL;
+    au_free(p->link_target);
+    au_free(p->link_referrer);
+    p->link_target = p->link_referrer = NULL;
+    p->doc_entry = entry;
+    p->next_entry = 0;
+    p->loading = true;
+    p->progress = 0;
+    p->load_start = t0;
+    if (p->cb.load_started)
+        p->cb.load_started(p->cb.ctx, p);
+    if (p->cb.url_changed)
+        p->cb.url_changed(p->cb.ctx, p, p->url);
+    set_str(&p->title, k->title);
+    if (p->cb.title_changed)
+        p->cb.title_changed(p->cb.ctx, p, p->title);
+    /* The window may have been resized and the zoom or fonts changed
+     * while the document was hidden. */
+    au_docview_set_viewport(p->dv, p->vw, p->vh);
+    apply_font_prefs(p);
+    p->content_w = k->content_w;
+    p->content_h = k->content_h;
+    au_docview_update(p->dv);
+    float w, h;
+    au_layout_document_size(au_docview_layout(p->dv), &w, &h);
+    p->content_w = (int)(w + 0.99f);
+    p->content_h = (int)(h + 0.99f);
+    if (p->cb.content_size_changed)
+        p->cb.content_size_changed(p->cb.ctx, p);
+    kept_free(k);
+    request_scroll(p, rx, ry);
+    if (!in_place)
+        au_docview_set_hidden(p->dv, false); /* pageshow */
+    invalidate_all(p);
+    finish(p, true);
+    return true;
+}
+
+void au_page_set_entry(AuPage *p, uint32_t entry)
+{
+    p->next_entry = entry;
+}
+
+void au_page_retain_entries(AuPage *p, const uint32_t *ids, size_t n)
+{
+    for (size_t i = p->nkept; i-- > 0;) {
+        bool live = false;
+        for (size_t k = 0; k < n && !live; k++)
+            live = ids[k] == p->kept[i]->entry;
+        if (!live)
+            kept_remove(p, i);
+    }
+}
+
+size_t au_page_kept_count(const AuPage *p)
+{
+    return p->nkept;
+}
+
+size_t au_page_kept_bytes(const AuPage *p)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < p->nkept; i++)
+        n += p->kept[i]->bytes;
+    return n;
+}
+
+bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp)
+{
+    if (!p->nkept)
+        return false;
+    *stamp = p->kept[0]->stamp;
+    return true;
+}
+
+bool au_page_evict_oldest(AuPage *p)
+{
+    if (!p->nkept)
+        return false;
+    kept_remove(p, 0);
+    return true;
+}
+
+size_t au_page_drop_kept(AuPage *p)
+{
+    size_t n = 0;
+    while (p->nkept) {
+        kept_remove(p, p->nkept - 1);
+        n++;
+    }
+    return n;
+}
+
 /* ---- Documents ---- */
 
 /* Starts the new document in the view (the old one stays visible until
@@ -1166,6 +1559,7 @@ static void begin_doc(AuPage *p, const char *url)
     au_page_clear_selection(p);
     if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, "");
+    hide_leaving(p); /* the document shown until now is kept, in a view of its own */
     p->kind = K_DOC;
     p->internal = false;
     p->interim = false;
@@ -1933,6 +2327,8 @@ static void main_response(AuPage *p, const AuFetchResponse *r)
 {
     adopt_url(p, r->url);
     p->status = r->status;
+    p->no_store = r->no_store;
+    p->stats.document_cached = r->from_cache;
     set_str(&p->content_type, r->content_type);
     p->security = r->security;
     p->have_security = true;
@@ -1986,6 +2382,17 @@ static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
     p->cert = p->prev_cert;
     p->prev_cert = NULL;
     p->main_done = true;
+    /* The document shown stays: it is not kept aside after all, and gets
+     * its entry and its source back. */
+    p->doc_entry = p->prev_entry;
+    if (p->leaving) {
+        au_buf_free(&p->source);
+        p->source = p->leaving->source;
+        au_buf_init(&p->leaving->source);
+        p->no_store = false;
+        kept_free(p->leaving);
+        p->leaving = NULL;
+    }
     if (p->main_fetch) {
         p->main_fetch->done = true; /* no more calls from the fetcher */
         p->main_fetch = NULL;
@@ -2081,12 +2488,35 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
             if (y >= 0)
                 request_scroll(p, 0, y);
         }
+        /* The document now belongs to the new entry too. */
+        if (p->next_entry) {
+            kept_drop(p, p->next_entry);
+            p->doc_entry = p->next_entry;
+        }
+        p->next_entry = 0;
         return;
     }
+    /* Whether the document shown may be kept, judged before its fetches
+     * are cancelled. */
+    compact_fetches(p);
+    bool keep = !p->leaving && p->next_entry != p->doc_entry && can_keep(p);
+    p->no_keep = false;
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
     p->gen++;
+    if (entry && !force && show_kept(p, url, rx, ry, keep))
+        return;
+    /* While an earlier load has not begun, the document shown is still
+     * the one that load set aside. */
+    if (!p->leaving && keep)
+        p->leaving = kept_capture(p);
+    kept_drop(p, p->next_entry); /* the entry is loaded afresh */
+    if (p->begun)
+        p->prev_entry = p->doc_entry; /* the entry of the document on screen */
+    p->doc_entry = p->next_entry;
+    p->next_entry = 0;
+    p->no_store = false;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     /* What is shown now, in case this load turns out to be a download. */
     au_free(p->prev_url);
@@ -2151,6 +2581,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         if (wn == 5 && !memcmp(what, "scene", 5)) {
             if (au_docview_hover_link(p->dv)[0] && p->cb.status_text)
                 p->cb.status_text(p->cb.ctx, p, "");
+            hide_leaving(p);
             au_docview_load(p->dv, "", 0, "about:blank");
             p->kind = K_SCENE;
             p->begun = true;
@@ -2239,12 +2670,14 @@ void au_page_navigate_entry(AuPage *p, const char *url, int scroll_x, int scroll
 
 void au_page_reload(AuPage *p)
 {
+    p->next_entry = p->doc_entry; /* the same entry: its document is replaced, not kept */
     p->cache_mode = AU_FETCH_CACHE_REVALIDATE;
     start_load(p, p->url, true, p->scroll_x, p->scroll_y, true);
 }
 
 void au_page_reload_bypass(AuPage *p)
 {
+    p->next_entry = p->doc_entry;
     p->cache_mode = AU_FETCH_CACHE_BYPASS;
     start_load(p, p->url, true, p->scroll_x, p->scroll_y, true);
 }
@@ -2329,27 +2762,7 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     p->content_w = p->vw;
     p->content_h = p->vh;
     p->zoom = 1;
-    AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
-    AuDocViewCallbacks dcb;
-    memset(&dcb, 0, sizeof dcb);
-    dcb.ctx = p;
-    dcb.title_changed = dv_title;
-    dcb.invalidate = dv_invalidate;
-    dcb.size_changed = dv_size;
-    dcb.status_text = dv_status;
-    dcb.open_url = dv_open;
-    dcb.now_ms = dv_now;
-    dcb.scroll_to = dv_scroll_to;
-    dcb.console = dv_console;
-    dcb.submit = dv_submit;
-    dcb.popup = dv_popup;
-    dcb.choose_file = dv_choose_file;
-    dcb.confirm = dv_confirm;
-    dcb.message = dv_message;
-    p->dv = au_docview_new(env->fonts, &loader, &dcb);
-    au_docview_set_viewport(p->dv, p->vw, p->vh);
-    au_docview_set_clock(p->dv, env->time_ms, env->ctx);
-    apply_font_prefs(p);
+    new_view(p);
     return p;
 }
 
@@ -2361,6 +2774,11 @@ void au_page_free(AuPage *p)
     compact_fetches(p);
     au_page_clear_selection(p);
     au_buf_free(&p->source);
+    if (p->leaving)
+        kept_free(p->leaving);
+    p->leaving = NULL;
+    au_page_drop_kept(p);
+    au_free(p->kept);
     au_docview_free(p->dv); /* cancels nothing more: the fetches are gone */
     au_free(p->fetches);
     au_free(p->url);
@@ -2467,6 +2885,7 @@ void au_page_set_scroll(AuPage *p, int x, int y)
 
 void au_page_prefs_changed(AuPage *p)
 {
+    kept_trim(p);
     apply_font_prefs(p);
     if (p->kind == K_DOC && p->begun) {
         run_layout(p);

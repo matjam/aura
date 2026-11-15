@@ -368,12 +368,12 @@ static void test_browser(void)
           "the page names the site and the list");
     CHECK(listed->connections == 0, "nothing was sent to it");
     CHECK(!strcmp(au_page_url(page(&e)), "http://listed.test/welcome"), "the address stays");
-    /* A web page cannot use the action. */
-    /* Go Back returns to the page before. */
+    /* Go Back returns to the page before (its kept document: no request). */
     CHECK(click_link(&e, "aura-action:back"), "Go Back link");
-    respond(site, "text/html", "<title>Site again</title>");
     settle(&e, 800);
     CHECK(!strncmp(au_page_url(page(&e)), "http://www.site.test/", 21), "back at the site: %s", au_page_url(page(&e)));
+    CHECK(!strncmp(au_page_title(page(&e)), "Site", 4) && blocked_on_page(&e) == 4, "the page as it was left: %s",
+          au_page_title(page(&e)));
 
     /* Visit Anyway: the site loads, now and for the session. */
     au_bw_navigate(e.w, "http://listed.test/welcome");

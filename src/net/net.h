@@ -26,6 +26,7 @@
 #define AURA_NET_H
 
 #include "../platform/platform.h"
+#include "dns.h"
 #include "headers.h"
 
 typedef struct AuNet AuNet;
@@ -87,6 +88,11 @@ typedef struct AuNetConfig {
 AuNet *au_net_new(const AuNetOps *ops);
 void au_net_free(AuNet *net); /* cancels everything, closes sockets */
 AuNetConfig *au_net_config(AuNet *net);
+/* The DNS cache (dns.h): answers are kept for 5 minutes, failures for 10
+ * seconds, and lookups of one host that overlap share one request.
+ * au_net_clear_dns forgets every answer (Clear Cache). */
+void au_net_clear_dns(AuNet *net);
+void au_net_dns_stats(const AuNet *net, AuDnsStats *out);
 const AuNetOps *au_net_ops(AuNet *net);
 void au_net_set_config_str(char **field, const char *value);
 
