@@ -50,7 +50,8 @@ static int usage(void)
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
             "                        [--net] [--do ACTION]...\n"
-            "                        (--do: click:X,Y dclick:X,Y tclick:X,Y type:TEXT key:[cmd-][shift-]NAME\n"
+            "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
+            "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
             "                        https over the network, else they show a stand-in)\n"
@@ -336,6 +337,23 @@ static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
  * address field takes the keyboard). */
 static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, ChromeOpts *o, const char *a)
 {
+    char buf[64];
+    if (!strncmp(a, "clickname:", 10)) {
+        /* click the middle of the element named so (scrolled into view) */
+        AuTab *t = au_bw_active_tab(w);
+        AuIRect r;
+        if (!t || !au_page_control_rect(t->page, a + 10, &r)) {
+            printf("clickname: no element named %s\n", a + 10);
+            return;
+        }
+        int ph = w->layout.page.y1 - w->layout.page.y0;
+        if (r.y0 < t->scroll_y || r.y1 > t->scroll_y + ph)
+            au_bw_scroll_to(w, t->scroll_x, r.y0 - ph / 3);
+        int x = (r.x0 + r.x1) / 2 - t->scroll_x + w->layout.page.x0;
+        int y = (r.y0 + r.y1) / 2 - t->scroll_y + w->layout.page.y0;
+        snprintf(buf, sizeof buf, "click:%d,%d", x, y);
+        a = buf;
+    }
     if (!strncmp(a, "click:", 6) || !strncmp(a, "dclick:", 7) || !strncmp(a, "tclick:", 7)) {
         int clicks = a[0] == 'd' ? 2 : a[0] == 't' ? 3 : 1;
         int x = 0, y = 0;
@@ -426,6 +444,14 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         chrome_shot(w, o->w, o->h, a + 5);
     } else if (!strcmp(a, "field")) {
         au_bw_set_field_focus(w, true);
+    } else if (!strcmp(a, "console")) {
+        AuTab *t = au_bw_active_tab(w);
+        size_t n = t ? au_page_console_count(t->page) : 0;
+        for (size_t i = 0; i < n; i++) {
+            int level;
+            const char *line = au_page_console_line(t->page, i, &level);
+            printf("console %d: %s\n", level, line ? line : "");
+        }
     } else {
         fprintf(stderr, "aura-host: unknown --do action %s\n", a);
     }

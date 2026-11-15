@@ -325,6 +325,8 @@ bool au_bw_key(AuBrowserWindow *w, const AuEvent *ev);
  * see au_page_edit. */
 bool au_bw_page_editing(AuBrowserWindow *w);
 bool au_bw_page_can_edit(AuBrowserWindow *w, int cmd);
+/* Window point (x, y) is over a text field in the page (I-beam cursor). */
+bool au_bw_text_field_at(AuBrowserWindow *w, int x, int y);
 bool au_bw_page_edit(AuBrowserWindow *w, int cmd, const char *text, size_t len, AuBuf *out);
 void au_bw_scroll_to(AuBrowserWindow *w, int x, int y);
 void au_bw_scroll_by(AuBrowserWindow *w, int dx, int dy);

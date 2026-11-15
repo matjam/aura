@@ -1389,6 +1389,15 @@ bool au_bw_page_editing(AuBrowserWindow *w)
     return t && !w->field_focused && au_page_editing(t->page);
 }
 
+bool au_bw_text_field_at(AuBrowserWindow *w, int x, int y)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuIRect pg = w->layout.page;
+    if (!t || x < pg.x0 || y < pg.y0 || x >= pg.x1 || y >= pg.y1)
+        return false;
+    return au_page_text_field_at(t->page, x - pg.x0 + t->scroll_x, y - pg.y0 + t->scroll_y);
+}
+
 bool au_bw_page_can_edit(AuBrowserWindow *w, int cmd)
 {
     AuTab *t = au_bw_active_tab(w);

@@ -642,10 +642,12 @@ static void dv_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
 
 /* ---- Forms ---- */
 
-typedef char au_edit_cmds_match[(AU_PAGE_EDIT_UNDO == AU_EDITCMD_UNDO && AU_PAGE_EDIT_CUT == AU_EDITCMD_CUT &&
-                                 AU_PAGE_EDIT_COPY == AU_EDITCMD_COPY && AU_PAGE_EDIT_PASTE == AU_EDITCMD_PASTE &&
-                                 AU_PAGE_EDIT_CLEAR == AU_EDITCMD_CLEAR &&
-                                 AU_PAGE_EDIT_SELECT_ALL == AU_EDITCMD_SELECT_ALL)
+typedef char au_edit_cmds_match[((int)AU_PAGE_EDIT_UNDO == (int)AU_EDITCMD_UNDO &&
+                                 (int)AU_PAGE_EDIT_CUT == (int)AU_EDITCMD_CUT &&
+                                 (int)AU_PAGE_EDIT_COPY == (int)AU_EDITCMD_COPY &&
+                                 (int)AU_PAGE_EDIT_PASTE == (int)AU_EDITCMD_PASTE &&
+                                 (int)AU_PAGE_EDIT_CLEAR == (int)AU_EDITCMD_CLEAR &&
+                                 (int)AU_PAGE_EDIT_SELECT_ALL == (int)AU_EDITCMD_SELECT_ALL)
                                     ? 1
                                     : -1];
 
@@ -767,6 +769,38 @@ bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out)
     bool ok = au_docview_edit(p->dv, cmd, text, len, out);
     follow_open_url(p);
     return ok;
+}
+
+bool au_page_text_field_at(AuPage *p, int x, int y)
+{
+    AuHitResult r;
+    if (p->kind != K_DOC || !p->begun || !au_docview_hit_test(p->dv, x, y, &r))
+        return false;
+    for (AuElement *e = r.element; e; e = au_is_element(e->node.parent) ? au_as_element(e->node.parent) : NULL)
+        if (au_ctl_is_text_field(e))
+            return true;
+    return false;
+}
+
+bool au_page_control_rect(AuPage *p, const char *name, AuIRect *r)
+{
+    if (p->kind != K_DOC || !p->begun || !au_docview_document(p->dv))
+        return false;
+    AuDocument *d = au_docview_document(p->dv);
+    au_docview_update(p->dv);
+    AuAtom an = au_atom_lookup("name", 4);
+    for (AuNode *c = au_node_next(&d->node, &d->node); c; c = au_node_next(c, &d->node)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        AuElement *el = au_as_element(c);
+        const char *v = au_element_get_attr(el, an);
+        AuRect b;
+        if (v && !strcmp(v, name) && au_layout_element_rect(au_docview_layout(p->dv), el, &b) && b.w > 0) {
+            *r = (AuIRect){(int)b.x, (int)b.y, (int)(b.x + b.w), (int)(b.y + b.h)};
+            return true;
+        }
+    }
+    return false;
 }
 
 void au_page_blur(AuPage *p)

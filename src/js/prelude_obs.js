@@ -720,9 +720,11 @@ P.fireKey = function (target, type, key, code, mods, repeat) {
     const kc = key.length === 1 ? key.toUpperCase().charCodeAt(0) :
         { Enter: 13, Tab: 9, Backspace: 8, Escape: 27, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
             Delete: 46, Home: 36, End: 35, PageUp: 33, PageDown: 34, Shift: 16, Control: 17, Alt: 18, Meta: 91 }[key] || 0;
+    /* keypress carries the character code (13 for Enter) in keyCode,
+     * charCode and which, as browsers do. */
+    const cc = type !== 'keypress' ? 0 : key.length === 1 ? key.charCodeAt(0) : key === 'Enter' ? 13 : 0;
     const init = Object.assign({ bubbles: true, cancelable: true, composed: true, view: G, key, code, repeat,
-        keyCode: type === 'keypress' ? (key.length === 1 ? key.charCodeAt(0) : kc) : kc,
-        charCode: type === 'keypress' && key.length === 1 ? key.charCodeAt(0) : 0 }, modsOf(mods));
+        keyCode: type === 'keypress' ? (cc || kc) : kc, charCode: cc }, modsOf(mods));
     const t = target || focused || doc.body || doc.documentElement;
     const ev = new KeyboardEvent(type, init);
     ev[S.ev].trusted = true;

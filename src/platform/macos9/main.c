@@ -738,6 +738,15 @@ static void key_down(EventRecord *ev)
             close_window(FrontWindow());
             return;
         }
+        /* Command-arrows, Command-Delete and Command-Home/End edit or move
+         * in a text field (the address field or the page's); no menu has
+         * them. */
+        unsigned char uch = (unsigned char)ch;
+        if (b && m == (MacWin *)b && m->key &&
+            ((uch >= 0x1C && uch <= 0x1F) || uch == 0x08 || uch == 0x7F || uch == 0x01 || uch == 0x04)) {
+            m->key(m, ev);
+            return;
+        }
         if (ch == '=')
             ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();

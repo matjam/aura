@@ -383,6 +383,11 @@ enum { AU_PAGE_EDIT_UNDO, AU_PAGE_EDIT_CUT, AU_PAGE_EDIT_COPY, AU_PAGE_EDIT_PAST
 bool au_page_editing(const AuPage *p);
 bool au_page_can_edit(const AuPage *p, int cmd);
 bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out);
+/* Document point (x, y) is over a text field (for the I-beam cursor). */
+bool au_page_text_field_at(AuPage *p, int x, int y);
+/* The document rectangle of the first element with a box whose name
+ * attribute is name (for scripted input in tests). */
+bool au_page_control_rect(AuPage *p, const char *name, AuIRect *r);
 /* Takes the focus away from the page's focused element (the address
  * field took the keyboard). */
 void au_page_blur(AuPage *p);
