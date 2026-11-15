@@ -2393,7 +2393,7 @@ and run them from there.
 | `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2 | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |
 | `fuzz_webfont` | `@font-face` loading with mutated WOFF2 answers | `page/fuzz_webfont N SEED SECONDS` | `sample-inter.woff2` |
 | `fuzz_url` | URL parser and serializer | `url/fuzz_url N SEED` | built-in URLs |
-| `fuzz_net` | HTTP response parser, data URLs, PSL, root store, certificates, HSTS header and file, authentication, dates, MIME types, cache entries; `aia`: certificate bundles and the intermediates pool file | `net/fuzz_net all N SEED assets/net/aura-roots.bin`, `net/fuzz_net aia N SEED` | built-in seeds, the root store, test certificates |
+| `fuzz_net` | HTTP response parser, data URLs, PSL, root store, certificates, HSTS header and file, authentication, dates, MIME types, cache entries; `aia`: certificate bundles and the intermediates pool file; `tls`: the TLS handshake through `tls.c` | `net/fuzz_net all N SEED assets/net/aura-roots.bin`, `net/fuzz_net aia N SEED`, `net/fuzz_net tls N SEED SECONDS` | built-in seeds, the root store, test certificates |
 | `fuzz_transfer` | the HTTP client and the loader on mutated responses from the fake transport: framing, chunked bodies, gzip, deflate and Brotli decoding, redirects, cookies, HSTS, the cache, sniffing | `net/fuzz_transfer N SEED SECONDS tests/codec/inflate-vectors/* tests/codec/brotli-vectors/*.br` | built-in response heads, the codec vectors as bodies |
 | `fuzz_inflate`, `fuzz_brotli` | the decoders alone | `codec/fuzz_inflate N SEED tests/codec/inflate-vectors/*`, `codec/fuzz_brotli N SEED tests/codec/brotli-vectors/*.br` | the codec vectors |
 | `fuzz_cookies` | Set-Cookie parsing, the cookie file | `net/fuzz_cookies N SEED` | built-in cookies |
@@ -2438,6 +2438,13 @@ and run them from there.
 - **Do not rebuild a tree while its fuzzers run:** macOS kills a
   process whose program file is replaced (exit status 137 or 138 with
   no report). Run long sessions from a copy, as `fuzz-all.sh` does.
+- **Script that does not end** is stopped by its time limit, which the
+  engine checks once in ten thousand steps. A native that can take
+  long (it forces a layout, say) must ask `js_out_of_time` first and
+  return `js_throw_stopped` (`runtime.c`), and code that calls script
+  on the way out of a native must not do so while
+  `js->root->interrupted` is set (`window_frames` in `js/frames.c`
+  dropped the interrupt and the loop went on).
 - **Rules the fuzzers enforce, for new code.** Convert a float that a
   page controls to an integer with `au_f2i` or `au_f2px` (`core.h`),
   not a cast: a cast of 1e38 or NaN is undefined. Do not let a function
@@ -2448,8 +2455,8 @@ and run them from there.
   `inline.c`). Do not size an allocation from a page's number without a
   cap (`AU_SHADOW_MAX_BLUR`). Do not measure a text prefix from its
   start in a loop over its characters; start from `l_prefix_seek`.
-- **Not fuzzed:** TLS records and handshakes (BearSSL's own parser;
-  `fuzz_net` covers Aura's certificate code only), the JavaScript
+- **Not fuzzed:** TLS record parsing inside the TLS library beyond what
+  `fuzz_net tls` reaches through the handshake, the JavaScript
   engine itself (QuickJS-ng), `fetch` and `XMLHttpRequest` bodies
   through script, the Mac OS 9 shell (resource and Internet Config
   data), font files through the Mac OS 9 loader, and the browser model

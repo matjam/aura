@@ -63,6 +63,7 @@ url|url/fuzz_url|BIG SEED
 transfer|net/fuzz_transfer|BIG SEED SECS tests/codec/inflate-vectors/* tests/codec/brotli-vectors/*.br
 net|net/fuzz_net|all BIG SEED assets/net/aura-roots.bin
 net-aia|net/fuzz_net|aia BIG SEED
+net-tls|net/fuzz_net|tls BIG SEED SECS
 cookies|net/fuzz_cookies|BIG SEED
 inflate|codec/fuzz_inflate|BIG SEED tests/codec/inflate-vectors/*
 brotli|codec/fuzz_brotli|BIG SEED tests/codec/brotli-vectors/*.br
