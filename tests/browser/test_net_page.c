@@ -212,7 +212,7 @@ static bool page_text_has(Env *e, const char *needle)
     AuBuf b;
     au_buf_init(&b);
     au_bw_selection_text(e->w, &b);
-    bool has = b.data && strstr(b.data, needle) != NULL;
+    bool has = strstr(au_buf_cstr(&b), needle) != NULL; /* au_buf_cstr: the data is not NUL-terminated */
     au_buf_free(&b);
     au_page_clear_selection(page(e));
     return has;
@@ -227,7 +227,7 @@ static bool click_link(Env *e, const char *href)
             AuBuf link;
             au_buf_init(&link);
             au_page_hit_info(t->page, x, y, &link, NULL);
-            bool hit = link.data && !strcmp(link.data, href);
+            bool hit = !strcmp(au_buf_cstr(&link), href);
             au_buf_free(&link);
             if (!hit)
                 continue;
