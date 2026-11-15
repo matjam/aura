@@ -694,6 +694,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     L->depth++;
     b->b.flags &= ~(LF_TOO_DEEP | LF_ESCAPES);
     LConstraints c = {content_w, content_h, content_w, content_h};
+    /* Quirks mode: an auto-height block passes its own percentage base
+     * down (the percentage height quirk; see place_block). */
+    if (content_h < 0 && b->b.inner == LI_FLOW && L->doc && L->doc->quirks == AU_QUIRKS_FULL &&
+        !(b->b.flags & LF_FLOAT) && !(b->b.flags & LF_ABSPOS))
+        c.cb_h = cb_h;
     if (b->b.inner == LI_REPLACED) {
         float w, h;
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);

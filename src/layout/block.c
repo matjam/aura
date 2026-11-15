@@ -475,6 +475,11 @@ static void place_block(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_h)
     if (spec_h < 0)
         spec_h = l_ratio_height(k, content_w);
     float child_cbh = spec_h >= 0 ? l_clamp_h(k, spec_h, cb_h) : -1;
+    /* Quirks mode: percentage heights look through auto-height blocks to
+     * the nearest ancestor with a height, up to the viewport (the
+     * percentage height quirk of the HTML standard's quirks list). */
+    if (child_cbh < 0 && L->doc && L->doc->quirks == AU_QUIRKS_FULL)
+        child_cbh = cb_h;
     uint32_t mark = L->nabs;
     int lv = push_frame(S, k, bx, by, content_w);
     L->depth++;
