@@ -8,10 +8,11 @@
 #              checkout. The images are standalone (no backing file) and
 #              git-ignored; CLAUDE.md says where they came from.
 # BASE         which Mac OS 9.2.2 system the guest boots:
-#                stock     os9-novm.qcow2: the base install with virtual
-#                          memory off, no Enforcer (default)
 #                enforcer  os9-vmoff.qcow2: virtual memory off, with the
 #                          Enforcer kernel and extension installed
+#                          (default)
+#                stock     os9-novm.qcow2: the base install with virtual
+#                          memory off, no Enforcer
 #              Each base has its own overlay in AURA_RUN.
 # QEMU         the QEMU binary. Default: ~/.local/opt/qemu-os9/bin, where
 #              qemu/build.sh installs it.
@@ -23,7 +24,7 @@ aura_main=$(cd "$(git -C "$aura_repo" rev-parse --path-format=absolute --git-com
 
 AURA_RUN=${AURA_RUN:-$aura_main/run}
 AURA_DISKS=${AURA_DISKS:-$aura_main/disks}
-BASE=${BASE:-stock}
+BASE=${BASE:-enforcer}
 case "$BASE" in
   stock) AURA_BASE=$AURA_DISKS/os9-novm.qcow2 ;;
   enforcer) AURA_BASE=$AURA_DISKS/os9-vmoff.qcow2 ;;
@@ -44,6 +45,7 @@ fi
 # Aura's own files in AURA_RUN. One guest runs per AURA_RUN, so the
 # socket, pid and log are shared; the overlay is per base.
 AURA_DISK=$AURA_RUN/os9-overlay-$BASE.qcow2 # what the guest writes to
+AURA_DISK_STAMP=$AURA_DISK.base # the base image the overlay was made on
 AURA_QMP=$AURA_RUN/qmp.sock
 AURA_PID=$AURA_RUN/qemu.pid
 AURA_LOG=$AURA_RUN/qemu.log
