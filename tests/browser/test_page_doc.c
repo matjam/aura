@@ -173,20 +173,20 @@ static void test_sample(void)
     CHECK(!t->loading);
     CHECK_STR(au_page_title(t->page), "Platypus - Encyclopedia sample");
     CHECK_STR(au_bw_field_text(w), "file:///samples/wiki.html");
-    /* The document first, then its style sheet, its image; the sheet's
-     * @import (print media) is read after the sheet itself. */
+    /* The document first, then its style sheet, its image. The sheet's
+     * @import has print media, which does not match the screen: it is
+     * not read. */
     const char *doc = strstr(read_log, "file:///samples/wiki.html");
     const char *css = strstr(read_log, "file:///samples/wiki.css");
     const char *img = strstr(read_log, "file:///samples/missing-platypus.jpg");
     const char *imp = strstr(read_log, "file:///samples/wiki-print.css");
-    CHECK(doc == read_log && css && img && imp);
-    CHECK(css < imp);
+    CHECK(doc == read_log && css && img && !imp);
     int cw, ch;
     au_page_content_size(t->page, &cw, &ch);
     CHECK(cw >= w->layout.page.x1 - w->layout.page.x0 && ch > 1500);
     AuPageStats st;
     au_page_stats(t->page, &st);
-    CHECK(st.load_ms > 0 && st.layouts >= 1 && st.resources == 3 && st.boxes > 50);
+    CHECK(st.load_ms > 0 && st.layouts >= 1 && st.resources == 2 && st.boxes > 50);
     paint(w);
     au_page_stats(t->page, &st);
     CHECK(st.first_paint_ms > 0);
@@ -278,7 +278,8 @@ static void test_links(void)
     CHECK(t->scroll_y == 0);
     au_bw_scroll_to(w, 0, 900);
     au_bw_back(w);
-    CHECK(t->loading);
+    /* The document was kept (the document cache): shown at once. */
+    CHECK(!t->loading && au_page_kept_count(t->page) == 1);
     settle(w);
     CHECK_STR(au_page_title(t->page), "Links");
     CHECK(t->scroll_y == 400);
@@ -400,7 +401,8 @@ static void net_poll(void *ctx)
     } else if (n->step == 1) {
         s->data(s->ctx, n->id, " page</title><p>hello", 21);
     } else {
-        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK};
+        AuFetchInfo info = {"http://example.net/final", "text/html", AU_FETCH_OK, 200, NULL, false, "", AU_FETCH_OK,
+                            NULL};
         n->sink = NULL;
         s->done(s->ctx, n->id, true, &info);
     }

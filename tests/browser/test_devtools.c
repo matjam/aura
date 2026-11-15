@@ -269,15 +269,34 @@ static void test_netlog_page(void)
     CHECK(strstr(au_buf_cstr(&b), "memory") != NULL, "row: %s", au_buf_cstr(&b));
     au_buf_free(&b);
 
-    /* Back and Forward serve stored copies: source history. */
+    /* Back to a kept document shows that document's own log again. */
     respond(s, "text/html", "", "<!DOCTYPE html><title>Two</title><p>second");
     au_bw_navigate(e.w, "http://log.test/two");
     settle(&e, 500);
+    l = au_page_netlog(page(&e));
+    uint32_t gen_two = l->generation;
+    CHECK(l->requests == 1 && rec_for(l, "/two"), "the next page has its own log");
     au_bw_back(e.w);
     settle(&e, 500);
     l = au_page_netlog(page(&e));
     doc = au_netlog_at(l, 0);
-    CHECK(doc && doc->source == AU_FETCH_FROM_HISTORY, "Back: source %d", doc ? doc->source : -1);
+    CHECK(l->requests == 3 && doc && doc->source == AU_FETCH_FROM_304 && rec_for(l, "/s.css") &&
+              l->generation != gen_two,
+          "Back to a kept document: its log returns (%u requests)", (unsigned)l->requests);
+    au_bw_forward(e.w);
+    settle(&e, 500);
+    l = au_page_netlog(page(&e));
+    CHECK(l->requests == 1 && rec_for(l, "/two"), "Forward: the other document's log");
+    /* Without the document cache, Back loads through the HTTP cache's
+     * history mode: source history. */
+    e.b->prefs.document_cache_pages = 0;
+    au_page_drop_kept(page(&e));
+    au_bw_back(e.w);
+    settle(&e, 500);
+    l = au_page_netlog(page(&e));
+    doc = au_netlog_at(l, 0);
+    CHECK(doc && doc->source == AU_FETCH_FROM_HISTORY, "Back without a kept document: source %d",
+          doc ? doc->source : -1);
 
     /* Without header tracing nothing is copied. */
     au_net_set_trace_headers(e.net, false);

@@ -149,6 +149,7 @@ static void fill_response(AuFetchResponse *r, const AuLoadInfo *i, AuFetchCert *
     r->referrer_policy = i->referrer_policy ? i->referrer_policy : "";
     r->security = security_of(i->security);
     r->from_cache = i->from_cache;
+    r->no_store = i->no_store;
     if (i->cert) {
         au_net_fetch_cert_from(cert, i->cert, i->tls_version, i->cipher);
         r->cert = cert;

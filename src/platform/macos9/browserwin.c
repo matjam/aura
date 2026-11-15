@@ -1530,6 +1530,13 @@ void browserwin_find(BrowserWin *b)
 
 /* ---- Debug > Page Timings ---- */
 
+static size_t kept_bytes(AuBrowser *b)
+{
+    size_t n = 0;
+    au_browser_kept_documents(b, &n);
+    return n;
+}
+
 static void ms10(char *out, size_t cap, uint32_t tenths)
 {
     snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
@@ -1642,8 +1649,17 @@ void browserwin_page_timings(BrowserWin *b)
     AuPageStats st2;
     au_page_stats(t->page, &st2);
     char l0[200], l1[300], l2[512], l3[256], a[4][96];
-    snprintf(l0, sizeof l0, "%s: first paint %lu ms, loaded in %lu ms (emulated timings vary).", au_page_title(t->page),
-             (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
+    if (st.restored)
+        /* Back or Forward showed the kept document: the times are that showing's. */
+        snprintf(l0, sizeof l0,
+                 "%.60s: kept document shown in %lu ms (%lu ms of it hiding the page left), painted after %lu ms. "
+                 "Kept documents: %lu, about %luK.",
+                 au_page_title(t->page), (unsigned long)st.load_ms, (unsigned long)st.hide_ms,
+                 (unsigned long)st.first_paint_ms, (unsigned long)au_browser_kept_documents(g_browser, NULL),
+                 (unsigned long)(kept_bytes(g_browser) / 1024));
+    else
+        snprintf(l0, sizeof l0, "%.80s: first paint %lu ms, loaded in %lu ms (emulated timings vary).",
+                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
     snprintf(l1, sizeof l1,
              "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu "
              "resources. Images: %luK of %luK, %lu decodes.",

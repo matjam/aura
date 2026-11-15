@@ -12,7 +12,10 @@ what you need to build, test and change Aura.
   nested boxes where it can be avoided): Mac OS 9 stacks are small and
   pages nest deeply. Use explicit loops or an explicit stack.
 - Allocate with `au_alloc`, `au_realloc`, `au_free` (`src/core/core.h`).
-  They do not return NULL.
+  They do not return NULL. When malloc fails they first call the
+  release handler (`au_set_release_handler`), which frees caches, and
+  try again; the out-of-memory handler runs when nothing is left to
+  free.
 - Text is UTF-8. Names (tags, attributes, CSS properties and keywords) are
   atoms. Names known at compile time go in `src/core/atoms_html.def` or
   `src/core/atoms_css.def`.
@@ -228,6 +231,64 @@ to `au_css_resolver_set_font_prefs`). Text zoom is per tab
 chosen for a site (host, or scheme for `file:`) is kept in the
 `zoom.sites` preference and applied when a tab opens that site again.
 
+Back and Forward show a kept document instead of loading the page again.
+To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
+("The document cache"); `page.h` describes the interface.
+
+- **What is kept.** When a tab leaves a document for another entry, the
+  page moves the document view (tree, layout, images, script runtime,
+  form contents) into its kept list and makes a new view for the next
+  document. The move happens when the new document begins, so the old
+  one stays on screen until then; a load that never begins (a download,
+  a Stop) leaves it in place. `au_page_navigate_entry` for an entry
+  whose document is kept shows it without a load and sets
+  `AuPageStats.restored`.
+- **Entries.** The browser names each back/forward entry with an id
+  (`AuNavEntry.id`) and calls `au_page_set_entry` before every
+  navigation (`entry_load` in `browser.c`). A navigation path that skips
+  it gets documents that are never kept. `au_page_retain_entries` drops
+  the documents of entries that are gone.
+- **What is not kept:** a document still loading or with fetches under
+  way, a failed load, an internal page, a POST result,
+  `Cache-Control: no-store` on the main document
+  (`AuFetchResponse.no_store`), and a window with an unload or
+  beforeunload listener (`au_docview_can_persist`). A reload replaces
+  the document. Reopen Closed Tab, duplicated tabs and session restore
+  load through the history cache mode, as before.
+- **While hidden** nothing calls the view, so timers, animation frames,
+  image animation and the caret wait, and run again after Back. The
+  view's callbacks and loader in `page_doc.c` ignore a view that is not
+  the page's current one. `au_docview_set_hidden` fires pagehide and
+  pageshow with `persisted` true, drops decoded image pixels (they
+  decode again when painted) and runs the script collector.
+- **Limits.** `cache.documents` (3 per tab, 0 turns the cache off) and
+  `cache.documents_kb` (24 MB over all tabs, by
+  `au_docview_memory_estimate`; a document larger than that is not
+  kept). `au_bw_idle` evicts the oldest over the budget
+  (`au_browser_trim_documents`). On Mac OS 9, `idle_all` in `main.c`
+  drops the oldest kept document while less than 6 MB of heap is free,
+  and `au_alloc` calls the release handler (`au_set_release_handler`,
+  `release_caches` in `main.c`) to drop them all before the
+  out-of-memory alert. Clear Cache in Preferences drops them too.
+- **Measured on the host** (Wikipedia, live): Back to a kept article
+  takes 7 to 10 ms; the same Back through the history cache mode takes
+  450 to 800 ms. An article is estimated at 12 to 15 MB (its script heap
+  is most of it), a very long one (World War II, 2 MB of HTML) at over
+  30 MB, which is not kept.
+- **Measured in the guest** (stock base, Wikipedia, live): Back to a
+  kept article took 56 ms in the engine, 46 ms of it hiding the page
+  left, and the page was painted 971 ms after the key; on screen the
+  change showed about 3 seconds after the key was sent, because the
+  page being left was still running its scripts. Loading the same
+  articles took 30 to 70 seconds. View > Debug > Page Timings shows
+  these times for a page that Back or Forward showed from the kept
+  documents, with the number and estimated size of kept documents.
+- **To try it on the host**, run `aura-host chrome --net --tab URL --do
+  go:URL2 --do back --do cache`: `back` prints whether the kept document
+  was shown and how long it took, `cache` the kept documents and their
+  estimated size. `--no-doc-cache` turns the document cache off.
+  `tests/browser/test_back_cache.c` covers it on the fake transport.
+
 Keyboard focus follows one rule (`browser.c`, "Keyboard focus"): after
 a navigation or a tab switch the page has the focus, unless the user is
 typing in the address field; a tab showing a fresh blank page puts it in
@@ -350,8 +411,11 @@ work in these places:
   strip paints only what it shows; box and text ink extents (shadows,
   outlines, inline SVG with visible overflow) must cover what they draw.
 - Hover follows a scroll only after the scroll pauses for
-  `AU_REHOVER_MS` (150 ms): on Wikipedia a hover change restyles the
-  whole document (`:has()` rules), 1.7 s per scroll step in the guest.
+  `AU_REHOVER_MS` (150 ms). The delay dates from when a hover change
+  restyled the whole document on pages with `:has()` rules (1.7 s per
+  scroll step on Wikipedia in the guest); a hover change now restyles
+  about two elements there (see CSS), and the delay has not been
+  measured again in the guest.
 
 `tests/browser/test_scroll_shift.c` scrolls sample pages and inline
 pages with fixed, sticky and transformed boxes both ways and compares
@@ -462,7 +526,9 @@ Timings).
   document out in under 1 ms and paints a screen of it in 1 ms. The
   contextual menu's View Source still opens a `view-source:` tab.
 - **Network** is the page's request log, `src/browser/netlog.c`: a ring
-  of 300 records, cleared by a navigation and freed with the page.
+  of 300 records, cleared by a navigation and freed with the page. A
+  document kept for Back and Forward keeps its log, which returns with
+  it.
   `page_doc.c` fills it from its fetches (start, response head, data,
   end). The times, the connection, the remote address, TLS version and
   cipher and the source (network, memory cache, disk cache, history,
@@ -627,10 +693,106 @@ the system lacks.
   Indic reordering or bidirectional text; CFF and CFF2 outlines; SVG,
   sbix and CBDT colour glyphs; COLR variations (version 1 draws at the
   default instance); a CJK font pack (see the fonts README for what one
-  needs). CSS does not parse `font-variation-settings`,
-  `font-optical-sizing` or `font-tech()`, layout passes only weight and
-  style to the font list, and the CSS parser loses `unicode-range`
-  tokens (webfont.c reads them from the sheet text).
+  needs). CSS does not parse `font-tech()`, and layout passes only
+  weight and style to the font list (`font-variation-settings` and
+  `font-optical-sizing` are computed, in `AuStyleInhRare`). webfont.c
+  still reads `unicode-range` from the sheet text, which it gets once,
+  when the sheet is parsed; the parsed descriptor is there to replace
+  that (see CSS).
+
+## CSS
+
+`src/css/css.h` is the interface: sheets, the resolver, computed styles,
+invalidation, selectors. `css_int.h` is shared by the files of `src/css`
+and its tests only.
+
+- **To restyle after a change**, call `au_css_invalidate` (before or
+  after the change) and then `au_css_restyle`. For a state bit use
+  `au_css_invalidate_state` with the `AU_STATE_*` bits that changed, on
+  every element whose bits changed; for hover and active use
+  `au_css_move_state`, which sets the bits and reports only the elements
+  below the common ancestor of the old and the new element.
+- **What a change restyles.** When the rule index is built
+  (`deps_build` in `cascade.c`), every selector is analysed for the
+  states it reads and the classes, ids and attributes it names, and for
+  where the elements it can style lie from the element that changes:
+  the element itself, its descendants, its following siblings, or the
+  ancestors and preceding siblings a `:has()` argument can anchor on.
+  A change marks only those (`AU_STATE_STYLE_SELF_DIRTY` for one
+  element, `AU_STATE_STYLE_DIRTY` for a subtree). A class, id or
+  attribute that no selector names, no presentational hint reads and no
+  `attr()` or pseudo-class depends on restyles nothing. Selectors the
+  analysis cannot follow (`:nth-child(... of S)` with a state or name
+  in S, a complex selector nested inside a `:has()` argument) restyle
+  the document. Child insertions and removals are not targeted: they
+  restyle the element's subtree and its following siblings' subtrees,
+  or the document when a `:has()` rule exists.
+- **Class and id changes** need the names that changed. `src/dom` notes
+  them in `AuDocument.style_names` when the attribute changes, and the
+  resolver resolves the elements reported for class or id when the
+  restyle starts (the DOM mutation hook reports before the change). To
+  add an attribute that a pseudo-class or a presentational hint reads,
+  add it to `attr_state` or leave it out of `attr_never_hint` in
+  `cascade.c`.
+- **Equal styles keep their object.** A style pass compares each newly
+  computed style with the element's old one by value (`style_same`) and
+  keeps the old `AuStyle` when they are equal; a changed style takes
+  over the old groups whose values are equal (`adopt_groups`). Code that
+  compares style or group pointers (layout's `style_diff`) then sees
+  only what changed. A marked element whose style is unchanged does not
+  restyle its subtree.
+- **Sharing.** Elements with the same parent style, tag and matched
+  rules share one `AuStyle`; the key includes the matched `::before`,
+  `::after` and `::marker` rules, and an element whose pseudo-element
+  uses `attr()` is not shared. Custom property maps are layered: a map
+  holds the element's own entries and refers to the parent's map
+  (`AuCustomProps.base`, chains of at most 12).
+- **Sheets in a document** (`src/page/docview.c`, "Requests" and
+  "Styles"): each `<style>`, `<link>` and `@import` is a `SheetSrc`. It
+  is parsed once, when its text arrives (`parse_sheet`); the resolver
+  borrows the parsed sheets, and a change of the sheet list detaches and
+  adds them again (`au_css_resolver_detach_sheets`) without parsing. A
+  fetched sheet's text is freed after parsing; a `<style>`'s is kept to
+  notice edits. A source whose media query does not match the device is
+  neither fetched nor parsed (`start_sheet`); `undefer_sheets` starts it
+  when the viewport changes so that it matches. A sheet that has been
+  parsed stays, and the cascade evaluates its media query.
+- **Memory of parsed sheets.** During a sheet parse equal `var()` and
+  custom property token lists share one list
+  (`css_toklist_intern_begin`) and equal declared values one blob
+  (`css_blob_intern_begin`); arrays are trimmed to their length. To see
+  what sheets cost, run `build/host/tests/css/css_bench --mem
+  FILE.css...` (macOS only): it prints the heap each parsed sheet keeps
+  and the index size.
+- **Selector queries.** `au_css_query_selector` and
+  `au_css_selector_matches_scoped` take the element `:scope` stands for
+  (the element querySelector, querySelectorAll or closest was called
+  on); with a document or NULL, `:scope` is the root element.
+- **`@font-face` descriptors** are generic value trees
+  (`au_css_font_face_descriptor`), except `unicode-range`: a COMMA_LIST
+  of LISTs of two integer NUMBERs, the first and last code point of
+  each range; an invalid `unicode-range` is dropped. The tokenizer keeps
+  each number as written (`css_tok_num_text`) for this, since
+  `U+0025-00FF` and `U+1e3` are number tokens.
+- **Tests.** `tests/css/cases/*.txt` (one ctest per file, format in
+  `test_css.c`), `test_css_api.c` (API tests), and
+  `test_css_invalidate.c`, which changes states, classes, ids,
+  attributes and inline styles on a page with and without `:has()`
+  rules and checks every computed value of every element against a full
+  restyle. To time hover moves over a page, run
+  `build/host/tests/css/test_css_invalidate --bench [--verify]
+  PAGE.html [SHEET.css ...]`: it prints elements restyled and time per
+  move, first with the old coarse invalidation, then targeted.
+- **Measured on the host.** A saved Wikipedia article (9301 elements,
+  `:has()` rules): a hover move restyled 9301 elements in 12 ms, now 2
+  on average (8 at most) in 0.012 ms. The GitHub home page (20 sheets,
+  2.5 MB of CSS, 2157 custom properties): `aura-host chrome` peaked at
+  147 MB, now 79 MB; the parsed sheets take 10.3 MB instead of 17.1 MB,
+  and the computed styles 5.8 MB instead of 44 MB.
+- **Not done:** targeted invalidation of child insertions and removals;
+  `@container`, `@scope` and `@starting-style` are parsed and never
+  apply; preference changes (dark scheme, reduced motion) do not reach
+  the device, so sheets deferred for them stay deferred.
 
 ## Images
 
@@ -782,9 +944,33 @@ policy stores the embedder attaches.
   (Cookie included) still selects the variant. An entry may take a
   quarter of the memory cache (8 MB by default), so a large article's
   HTML fits. To count hits on the host, run `aura-host chrome --net
-  --tab URL --do cache --do go:URL2 --do back --do cache`. `au_cache_stats` counts lookups,
-  304s, stores and disk reads. The page is parsed and laid out again on
-  Back: there is no cache of documents.
+  --no-doc-cache --tab URL --do cache --do go:URL2 --do back --do cache`
+  (without `--no-doc-cache`, Back shows the kept document and the HTTP
+  cache is not asked; see Browser chrome). `au_cache_stats` counts
+  lookups, 304s, stores and disk reads.
+- **stale-while-revalidate** (RFC 5861): inside the window
+  `au_cache_lookup` returns `AU_CACHE_STALE_USABLE`. For a subresource,
+  `cache_try` in `http.c` delivers the stale entry at once and starts a
+  transfer of its own to revalidate it (`revalidate_in_background`, one
+  per entry at a time, no callbacks); a document waits for the
+  revalidation. must-revalidate, no-cache and a request's no-cache or
+  max-age turn it off. `tests/net/test_swr.c` covers it.
+- **Disk cache writes are queued.** With
+  `au_disk_cache_set_deferred`, a store only keeps the file's bytes;
+  `au_disk_cache_idle` writes them oldest first and
+  `au_disk_cache_flush` (also `au_disk_cache_free`) writes the rest. A
+  lookup for a queued key is answered from the queue, and more than
+  2 MB of queued bytes are written at once. The Mac OS 9 shell turns it
+  on and writes one file per event loop pass while no transfer is under
+  way (`mac_net_idle`); a write takes about 9 ms there.
+- **The DNS cache** (`src/net/dns.c`) sits between the HTTP client and
+  `AuNetOps.resolve_*`: an answer is used for 5 minutes and a failure
+  for 10 seconds (the platforms give no TTL), at most 64 hosts, and
+  lookups of one host that overlap share one platform request. A
+  refused or failed connection forgets the host's answer.
+  `au_net_clear_dns` clears it (Clear Cache in Preferences does);
+  `au_net_dns_stats` counts lookups, and `aura-host chrome --do cache`
+  prints them. `tests/net/test_dns.c` covers it.
 - **To persist state**, serialize the stores with
   `au_cookie_jar_serialize`, `au_hsts_serialize` and the cache's
   `AuCacheStorage`, and parse them back at start. `aura-host fetch` keeps

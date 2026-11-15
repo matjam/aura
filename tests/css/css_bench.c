@@ -182,9 +182,64 @@ static void bench(const char *label, const char *css, size_t len, int elements, 
     au_css_resolver_free(r);
 }
 
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+static size_t heap_in_use(void)
+{
+    malloc_statistics_t st;
+    malloc_zone_statistics(NULL, &st);
+    return st.size_in_use;
+}
+#else
+static size_t heap_in_use(void) { return 0; }
+#endif
+
+/* css_bench --mem file.css...: the heap each parsed sheet keeps (macOS
+ * only; elsewhere the sizes print as 0), and the heap of a resolver
+ * holding them all with its index built. */
+static int mem_report(int argc, char **argv)
+{
+    AuCssResolver *r = au_css_resolver_new();
+    size_t nent, nuni;
+    css_resolver_index_stats(r, &nent, &nuni); /* interns the UA sheet's names */
+    size_t base = heap_in_use(), text = 0;
+    for (int i = 2; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        if (!f) {
+            fprintf(stderr, "cannot read %s\n", argv[i]);
+            continue;
+        }
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        char *buf = malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, f);
+        fclose(f);
+        size_t before = heap_in_use();
+        AuCssSheet *s = au_css_sheet_parse(buf, got, AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+        size_t after = heap_in_use();
+        free(buf);
+        const char *slash = strrchr(argv[i], '/');
+        printf("%-52.52s %8zu bytes of text, %6zu style rules, %9zu bytes parsed (%.1fx)\n",
+               slash ? slash + 1 : argv[i], got, au_css_sheet_rule_count(s), after - before,
+               got ? (double)(after - before) / (double)got : 0.0);
+        text += got;
+        au_css_resolver_add_sheet(r, s);
+    }
+    size_t sheets = heap_in_use();
+    css_resolver_index_stats(r, &nent, &nuni);
+    size_t indexed = heap_in_use();
+    printf("total: %zu bytes of text, %zu bytes parsed (%.1fx), index %zu bytes for %zu selector entries\n", text,
+           sheets - base, text ? (double)(sheets - base) / (double)text : 0.0, indexed - sheets, nent);
+    au_css_resolver_free(r);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     au_css_init();
+    if (argc > 1 && strcmp(argv[1], "--mem") == 0)
+        return mem_report(argc, argv);
     bool small = argc > 1 && strcmp(argv[1], "--small") == 0;
     int rules = small ? 2000 : 20000, elements = small ? 2000 : 20000, classes = small ? 300 : 3000;
     AuBuf b;

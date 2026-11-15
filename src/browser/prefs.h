@@ -68,6 +68,9 @@ typedef struct AuPrefs {
     int https_proxy_port;
     char *user_agent;
     int memory_cache_kb, disk_cache_kb;
+    /* The document cache for Back and Forward: documents kept per tab
+     * (0 turns it off) and the memory all kept documents may take. */
+    int document_cache_pages, document_cache_kb;
 
     /* Downloads */
     char *download_folder; /* platform path; "" for the default */

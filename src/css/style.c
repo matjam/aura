@@ -138,6 +138,39 @@ bool css_group_equal(int g, const void *a, const void *b)
                   group_sizes[g] - sizeof(uint32_t)) == 0;
 }
 
+/* Like css_group_equal, but blobs and calc lengths are compared by value
+ * (a computed blob is a new allocation each time), and the custom
+ * property map of G_INH is left to the caller. */
+bool css_group_same(int g, const void *a, const void *b)
+{
+    if (a == b || css_group_equal(g, a, b))
+        return true;
+    char ta[512], tb[512];
+    size_t size = group_sizes[g];
+    if (size > sizeof ta)
+        return false;
+    memcpy(ta, a, size);
+    memcpy(tb, b, size);
+    for (int i = 0; i < nblob[g]; i++) {
+        AuCssBlob **x = (AuCssBlob **)(void *)(ta + blob_off[g][i]), **y = (AuCssBlob **)(void *)(tb + blob_off[g][i]);
+        if (*x != *y && (!*x || !*y || !css_value_equal(&(*x)->value, &(*y)->value)))
+            return false;
+        *x = *y = NULL;
+    }
+    for (int i = 0; i < nlen[g]; i++) {
+        AuLen *x = (AuLen *)(void *)(ta + len_off[g][i]), *y = (AuLen *)(void *)(tb + len_off[g][i]);
+        if (x->kind != AU_LEN_CALC || y->kind != AU_LEN_CALC)
+            continue;
+        if (x->u.calc != y->u.calc &&
+            (!x->u.calc || !y->u.calc || !css_value_equal(&x->u.calc->value, &y->u.calc->value)))
+            return false;
+        x->u.calc = y->u.calc = NULL;
+    }
+    if (g == G_INH)
+        ((AuStyleInh *)(void *)ta)->custom = ((AuStyleInh *)(void *)tb)->custom = NULL;
+    return memcmp(ta + sizeof(uint32_t), tb + sizeof(uint32_t), size - sizeof(uint32_t)) == 0;
+}
+
 void *css_mut_group(AuStyle *s, int g)
 {
     void **slot = group_slot(s, g);
@@ -205,29 +238,68 @@ AuCustomProps *css_custom_retain(AuCustomProps *c)
 
 void css_custom_release(AuCustomProps *c)
 {
-    if (!c || --c->refs)
-        return;
-    for (uint32_t i = 0; i < c->n; i++)
-        css_toklist_release(c->e[i].value);
-    au_free(c->e);
-    au_free(c);
+    while (c && !--c->refs) {
+        AuCustomProps *base = c->base;
+        for (uint32_t i = 0; i < c->n; i++)
+            css_toklist_release(c->e[i].value);
+        au_free(c->e);
+        au_free(c);
+        c = base;
+    }
 }
 
 CssTokList *css_custom_get(const AuCustomProps *c, AuAtom name)
 {
-    if (!c)
-        return NULL;
-    uint32_t lo = 0, hi = c->n;
-    while (lo < hi) {
-        uint32_t mid = (lo + hi) / 2;
-        if (c->e[mid].name == name)
-            return c->e[mid].value;
-        if (c->e[mid].name < name)
-            lo = mid + 1;
-        else
-            hi = mid;
+    for (; c; c = c->base) {
+        uint32_t lo = 0, hi = c->n;
+        while (lo < hi) {
+            uint32_t mid = (lo + hi) / 2;
+            if (c->e[mid].name == name)
+                return c->e[mid].value;
+            if (c->e[mid].name < name)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
     }
     return NULL;
+}
+
+struct CssCustomEntry *css_custom_flatten(const AuCustomProps *c, uint32_t *n)
+{
+    const AuCustomProps *chain[16];
+    uint32_t depth = 0, total = 0;
+    for (const AuCustomProps *p = c; p && depth < 16; p = p->base) {
+        chain[depth++] = p;
+        total += p->n;
+    }
+    struct CssCustomEntry *cur = au_alloc((total + 1) * sizeof *cur), *next = au_alloc((total + 1) * sizeof *next);
+    uint32_t cn = 0;
+    /* from the deepest base up: each layer's entries replace those below */
+    for (uint32_t d = depth; d-- > 0;) {
+        const AuCustomProps *p = chain[d];
+        uint32_t a = 0, b = 0, k = 0;
+        while (a < cn || b < p->n) {
+            if (b >= p->n || (a < cn && cur[a].name < p->e[b].name)) {
+                next[k++] = cur[a++];
+            } else {
+                if (a < cn && cur[a].name == p->e[b].name)
+                    a++;
+                next[k++] = p->e[b++];
+            }
+        }
+        struct CssCustomEntry *t = cur;
+        cur = next;
+        next = t;
+        cn = k;
+    }
+    au_free(next);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < cn; i++)
+        if (cur[i].value)
+            cur[k++] = cur[i];
+    *n = k;
+    return cur;
 }
 
 const char *au_style_custom_property(const AuStyle *s, AuAtom name, size_t *len)

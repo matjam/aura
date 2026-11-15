@@ -1,6 +1,7 @@
 /* API tests of src/css that do not fit the case files: restyling and
  * invalidation, imports, deep documents, sharing, the typed accessors. */
 #include "../../src/css/css_int.h"
+#include "../../src/dom/control.h"
 
 #include <stdio.h>
 
@@ -268,6 +269,215 @@ static void test_sharing(void)
     CHECK(s1->bg == css_initial_style.bg);
     free_doc(doc);
     au_css_resolver_free(r);
+}
+
+/* Siblings with the same element rules but different ::before rules must
+ * not share one style: the pseudo-element styles hang off it. */
+static void test_sharing_pseudo(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *p1 = add(doc, &body->node, "p", NULL, "x");
+    AuElement *p2 = add(doc, &body->node, "p", NULL, "x");
+    AuElement *p3 = add(doc, &body->node, "p", NULL, "x");
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet(".x::before { content: 'a'; color: red; }"
+                                       " .x:last-child::before { color: blue; }"));
+    au_css_style_document(r, doc);
+    const AuStyle *s1 = au_element_style(p1), *s2 = au_element_style(p2), *s3 = au_element_style(p3);
+    CHECK(s1 == s2);
+    CHECK(s1 != s3);
+    const AuStyle *b1 = au_style_pseudo(s1, AU_CSS_PSEUDO_BEFORE), *b3 = au_style_pseudo(s3, AU_CSS_PSEUDO_BEFORE);
+    CHECK(b1 && b3);
+    if (b1 && b3) {
+        CHECK(b1->inh->color == AU_COLOR_RGBA(255, 0, 0, 255));
+        CHECK(b3->inh->color == AU_COLOR_RGBA(0, 0, 255, 255));
+    }
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
+/* :placeholder-shown, :valid, :invalid and :in-range follow the control's
+ * live value, and a value change restyles the control only. */
+static void test_live_value(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *in = add(doc, &body->node, "input", "in", NULL);
+    AuElement *num = add(doc, &body->node, "input", "num", NULL);
+    AuElement *other = add(doc, &body->node, "p", NULL, NULL);
+    au_element_set_attr(in, au_atom_cstr("placeholder"), "name", 4);
+    au_element_set_attr(in, au_atom_cstr("required"), "", 0);
+    au_element_set_attr(num, au_atom_cstr("type"), "number", 6);
+    au_element_set_attr(num, au_atom_cstr("min"), "1", 1);
+    au_element_set_attr(num, au_atom_cstr("max"), "10", 2);
+    au_element_set_attr(num, au_atom_cstr("value"), "5", 1);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet("input { width: 1px; height: 1px; top: 1px }"
+                                       " input:placeholder-shown { width: 10px }"
+                                       " input:invalid { height: 5px } input:valid { height: 7px }"
+                                       " input:in-range { top: 3px } input:out-of-range { top: 4px }"
+                                       " div:has(.x) { color: red }"));
+    au_css_style_document(r, doc);
+    CHECK(prop_is(in, "width", "10px"));
+    CHECK(prop_is(in, "height", "5px"));
+    CHECK(prop_is(num, "top", "3px"));
+    const AuStyle *other_style = au_element_style(other);
+    uint32_t before = au_css_resolver_styled_count(r);
+    au_ctl_set_value(in, "x", 1);
+    au_css_invalidate(r, in, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(in, "width", "1px"));
+    CHECK(prop_is(in, "height", "7px"));
+    CHECK(au_css_resolver_styled_count(r) == before + 1);
+    CHECK(au_element_style(other) == other_style);
+    au_ctl_set_value(num, "42", 2);
+    au_css_invalidate(r, num, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(num, "top", "4px"));
+    au_ctl_set_value(in, "", 0);
+    au_css_invalidate(r, in, AU_CSS_CHANGE_STATE, 0);
+    au_css_restyle(r, doc);
+    CHECK(prop_is(in, "width", "10px"));
+    CHECK(prop_is(in, "height", "5px"));
+    CHECK(au_css_resolver_styled_count(r) == before + 3);
+    free_doc(doc);
+    au_css_resolver_free(r);
+}
+
+/* ---- unicode-range ---- */
+
+/* The ranges of the n-th @font-face as "first-last first-last", "none"
+ * without the descriptor. */
+static const char *ranges_of(const AuCssSheet *s, size_t i)
+{
+    static char buf[256];
+    const AuCssValue *v = au_css_font_face_descriptor(au_css_sheet_font_face(s, i), "unicode-range");
+    if (!v)
+        return "none";
+    buf[0] = 0;
+    if (v->type != AU_CSSV_COMMA_LIST)
+        return "bad";
+    for (uint32_t k = 0; k < v->n; k++) {
+        const AuCssValue *r = &v->u.items[k];
+        if (r->type != AU_CSSV_LIST || r->n != 2 || r->u.items[0].type != AU_CSSV_NUMBER)
+            return "bad";
+        snprintf(buf + strlen(buf), sizeof buf - strlen(buf), "%s%X-%X", k ? " " : "",
+                 (unsigned)r->u.items[0].u.num, (unsigned)r->u.items[1].u.num);
+    }
+    return buf;
+}
+
+static void test_unicode_range(void)
+{
+    static const char *const cases[][2] = {
+        {"U+26", "26-26"},
+        {"u+0-7F", "0-7F"},
+        {"U+0025-00FF", "25-FF"},
+        {"U+4??", "400-4FF"},
+        {"U+??????", "bad-range"}, /* past U+10FFFF */
+        {"U+????", "0-FFFF"},
+        {"U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+FEFF, U+FFFD", "0-FF 131-131 152-153 2BB-2BC 2000-206F FEFF-FEFF FFFD-FFFD"},
+        {"U+1F00-1FFF", "1F00-1FFF"},
+        {"U+1e3", "1E3-1E3"},
+        {"U+2e5-2e9", "2E5-2E9"},
+        {"U+a-f", "A-F"},
+        {"U+A5 , U+10FFFF", "A5-A5 10FFFF-10FFFF"},
+        {"U+abcdef", "bad-range"},
+        {"U+110000", "bad-range"},
+        {"U+1e-5", "bad-range"}, /* first above last */
+        {"U+0-7F,", "bad-range"},
+        {"U+ 26", "bad-range"},
+        {"U+1234567", "bad-range"},
+        {"U+12?-34", "bad-range"},
+        {"26", "bad-range"},
+        {"U+3.5", "bad-range"},
+        {"/* c */ U+41-5A /* d */", "41-5A"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char css[512];
+        snprintf(css, sizeof css, "@font-face { font-family: F; unicode-range: %s; src: url(f.woff) }", cases[i][0]);
+        AuCssSheet *s = sheet(css);
+        const char *got = ranges_of(s, 0);
+        const char *want = strcmp(cases[i][1], "bad-range") == 0 ? "none" : cases[i][1];
+        checks++;
+        if (strcmp(got, want) != 0) {
+            failures++;
+            fprintf(stderr, "unicode-range: %s: got %s, want %s\n", cases[i][0], got, want);
+        }
+        /* the descriptors around it are kept either way */
+        CHECK(au_css_font_face_descriptor(au_css_sheet_font_face(s, 0), "src") != NULL);
+        au_css_sheet_free(s);
+    }
+    /* declarations and custom properties keep working with the numbers'
+     * source text in the token pool */
+    AuCssDeclBlock *b = au_css_parse_inline_style("width: +0025px; --x: 1e3 +7% 2.50em", 35, NULL);
+    AuBuf out;
+    au_buf_init(&out);
+    au_css_decl_block_serialize(b, &out);
+    CHECK(strcmp(au_buf_cstr(&out), "width: 25px; --x: 1000 +7% 2.5em;") == 0);
+    if (failures)
+        fprintf(stderr, "    serialized: %s\n", au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_css_decl_block_free(b);
+    /* a NUL byte is read as U+FFFD and the tokenizer goes on (it used to
+     * loop forever) */
+    static const char nul[] = "a\0b { color: red } #x\0 { width: 1px } p { height: 2px\0 }";
+    AuCssSheet *s = au_css_sheet_parse(nul, sizeof nul, AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+    CHECK(au_css_sheet_rule_count(s) >= 2);
+    au_css_sheet_free(s);
+}
+
+/* ---- :scope ---- */
+
+static AuElement *query(const char *sel, AuNode *root)
+{
+    AuCssSelectorList *l = au_css_selector_parse(sel, strlen(sel));
+    CHECK(l != NULL);
+    if (!l)
+        return NULL;
+    AuElement *e = au_css_query_selector(l, root);
+    au_css_selector_free(l);
+    return e;
+}
+
+static void test_scope(void)
+{
+    AuElement *body;
+    AuDocument *doc = skeleton(&body);
+    AuElement *a = add(doc, &body->node, "div", "a", NULL);
+    AuElement *deep = add(doc, &a->node, "p", "deep", NULL);
+    AuElement *inner = add(doc, &deep->node, "span", "inner", NULL);
+    AuElement *direct = add(doc, &a->node, "span", "direct", NULL);
+    AuElement *b = add(doc, &body->node, "div", "b", NULL);
+    AuElement *other = add(doc, &b->node, "span", "other", NULL);
+    /* querySelector on an element: :scope is that element */
+    CHECK(query("span", &a->node) == inner);
+    CHECK(query(":scope > span", &a->node) == direct);
+    CHECK(query(":scope > span", &b->node) == other);
+    CHECK(query(":scope span", &deep->node) == inner);
+    CHECK(query(":scope", &a->node) == NULL); /* the scope is not its own descendant */
+    CHECK(query(":scope + div span", &a->node) == NULL); /* matches lie in the scope's subtree */
+    CHECK(query(":not(:scope) > span", &a->node) == inner);
+    CHECK(query(":is(:scope, #deep) > span", &a->node) == inner);
+    CHECK(query("div:has(> :scope) span", &deep->node) == inner);
+    /* on the document, :scope is the root element */
+    CHECK(query(":scope > body", &doc->node) == body);
+    CHECK(query(":scope > span", &doc->node) == NULL);
+    /* matches: :scope is the element; closest: the element it was called on */
+    AuCssSelectorList *l = au_css_selector_parse(":scope", 6);
+    CHECK(au_css_selector_matches(l, a) && au_css_selector_matches(l, inner));
+    CHECK(au_css_selector_matches_scoped(l, a, &a->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &inner->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &doc->node));
+    CHECK(au_css_selector_matches_scoped(l, au_document_element(doc), &doc->node));
+    au_css_selector_free(l);
+    l = au_css_selector_parse("div:has(> p > :scope)", 21);
+    CHECK(au_css_selector_matches_scoped(l, a, &inner->node));
+    CHECK(!au_css_selector_matches_scoped(l, a, &direct->node));
+    CHECK(!au_css_selector_matches_scoped(l, b, &inner->node));
+    au_css_selector_free(l);
+    free_doc(doc);
 }
 
 /* ---- Typed access ---- */
@@ -570,6 +780,10 @@ int main(void)
     test_imports();
     test_deep();
     test_sharing();
+    test_sharing_pseudo();
+    test_scope();
+    test_live_value();
+    test_unicode_range();
     test_typed();
     test_inline_api();
     test_quirks_ua();

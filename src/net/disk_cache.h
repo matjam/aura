@@ -39,6 +39,20 @@ void au_disk_cache_set_max(AuDiskCache *d, size_t max_bytes);
 void au_disk_cache_clear(AuDiskCache *d);
 size_t au_disk_cache_bytes(AuDiskCache *d);
 size_t au_disk_cache_count(AuDiskCache *d);
+/* Deferred writes. A file write is slow on Mac OS 9 (about 9 ms), and a
+ * page stores dozens of entries as it loads. With deferred on, store only
+ * queues the file's bytes: the shell calls au_disk_cache_idle from its
+ * idle time to write up to max_writes of them, oldest first (true while
+ * more wait), and au_disk_cache_flush before quitting
+ * (au_disk_cache_free also flushes). A lookup for a queued key is
+ * answered from the queued bytes; a remove or a newer store drops them.
+ * More than AU_DISK_CACHE_PENDING_MAX queued bytes are written at once.
+ * Off by default (every store writes its file before returning). */
+#define AU_DISK_CACHE_PENDING_MAX ((size_t)2 << 20)
+void au_disk_cache_set_deferred(AuDiskCache *d, bool on);
+size_t au_disk_cache_pending(const AuDiskCache *d);
+bool au_disk_cache_idle(AuDiskCache *d, int max_writes);
+void au_disk_cache_flush(AuDiskCache *d);
 /* The file name for a key (at least 19 bytes). */
 void au_disk_cache_name(const char *key, char out[19]);
 

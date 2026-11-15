@@ -68,7 +68,7 @@ bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out);
 /* DOMContentLoaded has fired. */
 bool au_docscript_content_loaded(const AuDocScript *s);
 /* The runtime's allocated bytes and limit (0, 0 before it starts). */
-void au_docscript_memory(const AuDocScript *s, size_t *used, size_t *limit);
+void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit);
 /* The view's clock for the time counters (0 without one). */
 uint32_t au_dv_perf_now(AuDocView *dv);
 /* Milliseconds until script work is due (0: now; UINT32_MAX: none). */
@@ -76,6 +76,12 @@ uint32_t au_docscript_due(AuDocScript *s);
 /* The viewport changed size or scrolled. */
 void au_docscript_resized(AuDocScript *s);
 void au_docscript_scrolled(AuDocScript *s);
+/* The document cache: false when window has an unload or beforeunload
+ * listener; pagehide or pageshow (persisted) when the document is hidden
+ * or shown again; the script runtime's memory in bytes. NULL s is fine. */
+bool au_docscript_can_persist(AuDocScript *s);
+void au_docscript_page_transition(AuDocScript *s, bool show);
+size_t au_docscript_memory(const AuDocScript *s);
 /* Layout ran: intersection and resize observers. */
 void au_docscript_layout_done(AuDocScript *s);
 
