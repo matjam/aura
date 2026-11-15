@@ -39,6 +39,15 @@ test('a style sheet added by script applies, and stops applying when removed', (
     st.remove();
     assert.equal(getComputedStyle(document.getElementById('box')).width, '100px');
 });
+test('a range has rectangles', () => {
+    const r = document.createRange();
+    r.selectNodeContents(document.getElementById('target'));
+    const b = r.getBoundingClientRect();
+    assert.ok(b.width > 0 && b.height > 0, 'a rectangle with area: ' + b.width + 'x' + b.height);
+    assert.ok(r.getClientRects().length >= 1);
+    r.collapse(true);
+    assert.equal(r.getBoundingClientRect().width, 0);
+});
 test('inserted content has geometry', () => {
     const p = document.createElement('p');
     p.textContent = 'added';

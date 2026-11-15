@@ -1,6 +1,7 @@
 /* Contextual menus (context.h). */
 #include "context.h"
 #include "url.h"
+#include "../net/blocklist.h"
 
 #include <string.h>
 
@@ -36,6 +37,47 @@ static char *take(AuBuf *b)
 static bool saveable(const char *url)
 {
     return au_url_scheme_is(url, "http") || au_url_scheme_is(url, "https");
+}
+
+bool au_bw_site_blocking(AuBrowserWindow *w, bool *off)
+{
+    AuTab *t = au_bw_active_tab(w);
+    const AuPrefs *p = &w->browser->prefs;
+    *off = false;
+    if (!t || !p->block_trackers)
+        return false;
+    const char *url = au_page_url(t->page);
+    if (!au_url_scheme_is(url, "http") && !au_url_scheme_is(url, "https"))
+        return false;
+    AuBuf site;
+    au_buf_init(&site);
+    bool ok = au_block_site_of(url, &site);
+    if (ok)
+        *off = au_block_words_has(p->block_sites_off, au_buf_cstr(&site));
+    au_buf_free(&site);
+    return ok;
+}
+
+void au_bw_toggle_site_blocking(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    AuBrowser *b = w->browser;
+    bool off;
+    if (!au_bw_site_blocking(w, &off))
+        return;
+    AuBuf site, out;
+    au_buf_init(&site);
+    au_buf_init(&out);
+    if (au_block_site_of(au_page_url(t->page), &site)) {
+        au_block_words_set(b->prefs.block_sites_off, au_buf_cstr(&site), !off, &out);
+        au_prefs_set_str(&b->prefs.block_sites_off, au_buf_cstr(&out));
+        b->prefs_gen++;
+        if (b->blocking_changed)
+            b->blocking_changed(b->blocking_ctx);
+        au_bw_reload(w);
+    }
+    au_buf_free(&site);
+    au_buf_free(&out);
 }
 
 bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuContextMenu *m)
@@ -104,6 +146,12 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
             sep(m);
             add(m, AU_CMD_VIEW_SOURCE, "View Source", au_bw_can_view_source(w));
             add(m, AU_CMD_BOOKMARK_PAGE, "Bookmark Page", true);
+            bool off;
+            if (au_bw_site_blocking(w, &off)) {
+                sep(m);
+                add(m, AU_CMD_TOGGLE_BLOCKING,
+                    off ? "Turn On Blocking for This Site" : "Turn Off Blocking for This Site", true);
+            }
         }
         if (au_page_has_selection(t->page)) {
             sep(m);
@@ -166,6 +214,7 @@ bool au_bw_context_command(AuBrowserWindow *w, const AuContextMenu *m, AuCommand
     case AU_CMD_CLOSE_OTHER_TABS: au_bw_close_other_tabs(w, m->tab); return true;
     case AU_CMD_RELOAD_TAB: au_bw_reload_tab(w, m->tab); return true;
     case AU_CMD_DUPLICATE_TAB: au_bw_duplicate_tab(w, m->tab); return true;
+    case AU_CMD_TOGGLE_BLOCKING: au_bw_toggle_site_blocking(w); return true;
     case AU_CMD_NONE:
     case AU_CMD_SEPARATOR: return true;
     default: return false;

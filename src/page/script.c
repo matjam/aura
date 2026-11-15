@@ -129,7 +129,39 @@ static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
             au_forms_changed(s->dv, au_as_element(node));
         return;
     }
+    /* A change in a subtree that is not in the document (a fragment or
+     * element a script is still building, a template's content) changes
+     * nothing on screen. Inserting or removing it reports its connected
+     * parent. Without this, scripts that build detached trees restyled
+     * and laid out the whole page for each attribute they set. */
+    if (au_node_shadow_including_root(node) != &s->doc->node)
+        return;
     au_dv_dom_changed(s->dv, node, attr_name, kind);
+}
+
+static bool h_random(void *ctx, void *buf, size_t len)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    return cb->random && cb->random(cb->ctx, s->dv, buf, len);
+}
+
+static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
+{
+    AuDocScript *s = ctx;
+    return au_dv_sheet_text(s->dv, el, text, url);
+}
+
+static void h_sheet_set_text(void *ctx, AuElement *el, const char *text, size_t len)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_set_text(s->dv, el, text, len);
+}
+
+static void h_sheet_disable(void *ctx, AuElement *el, bool disabled)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_disable(s->dv, el, disabled);
 }
 
 static void h_focus_changed(void *ctx, AuElement *el)
@@ -378,6 +410,11 @@ static bool ensure_js(AuDocScript *s)
     h.prompt = h_prompt;
     h.focus_changed = h_focus_changed;
     h.submit_form = h_submit_form;
+    if (au_dv_callbacks(s->dv)->random)
+        h.random = h_random;
+    h.sheet_text = h_sheet_text;
+    h.sheet_set_text = h_sheet_set_text;
+    h.sheet_disable = h_sheet_disable;
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;

@@ -853,6 +853,19 @@ static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l,
         }
     }
     ChromeFont f = small_font(fonts, s);
+    /* Blocked requests: a small shield and "N blocked" at the right (left
+     * of the progress bar while loading). */
+    if (s->blocked > 0 && tr.x1 - tr.x0 > 200) {
+        char text[32];
+        snprintf(text, sizeof text, "%d blocked", s->blocked);
+        int w = (int)(cf_width(f, 10, text, strlen(text)) + 0.99f);
+        AuIRect br = irect(tr.x1 - w, r.y0 + 1, tr.x1, r.y1);
+        text_in(c, f, 10, br, text, C_INK, false);
+        float sx = (float)(br.x0 - 9), sy = (float)(r.y0 + r.y1) / 2 + 0.5f;
+        const float shield[] = {-4, -4.5f, 4, -4.5f, 4, 0.5f, 0, 5, -4, 0.5f};
+        poly(c, shield, 5, sx, sy, AU_RGB(70, 110, 70));
+        tr.x1 = br.x0 - 20;
+    }
     /* Progress text in the middle; the status text keeps to its left. */
     if (s->progress_text && *s->progress_text && r.x1 - r.x0 > 320) {
         int mid = (r.x0 + r.x1) / 2;

@@ -134,8 +134,16 @@ static int cmp_edge_top(const void *a, const void *b)
 static inline float etop(const AuEdge *e) { return e->y0 < e->y1 ? e->y0 : e->y1; }
 static inline float ebot(const AuEdge *e) { return e->y0 < e->y1 ? e->y1 : e->y0; }
 
-void au_raster_path(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect clip, AuSpanFn fn,
-                    void *ctx)
+/* Small paths (glyphs, most of all) use work areas on the stack: up to
+ * RASTER_STACK_W pixels wide and RASTER_STACK_EDGES edges. */
+#define RASTER_STACK_W 62
+#define RASTER_STACK_EDGES 96
+
+/* Rasterizes p. Spans go to fn, or, when mask is not NULL, coverage bytes
+ * go straight into mask: one byte per pixel of clip, rows of clip's
+ * width. Only covered pixels are written, as the span callback does. */
+static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect clip, AuSpanFn fn, void *ctx,
+                   uint8_t *mask)
 {
     AuEdge *edges;
     float b[4];
@@ -155,9 +163,19 @@ void au_raster_path(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRec
     Strip s;
     s.w = area.x1 - area.x0;
     s.stride = s.w + 2;
-    s.acc = au_calloc((size_t)s.stride * STRIP * sizeof(float));
-    uint8_t *cov = au_alloc((size_t)s.w);
-    size_t *active = au_alloc(ne * sizeof(size_t));
+    float acc_stack[(RASTER_STACK_W + 2) * STRIP];
+    uint8_t cov_stack[RASTER_STACK_W];
+    size_t active_stack[RASTER_STACK_EDGES];
+    bool small = s.w <= RASTER_STACK_W;
+    if (small) {
+        s.acc = acc_stack;
+        memset(acc_stack, 0, (size_t)s.stride * STRIP * sizeof(float));
+    } else {
+        s.acc = au_calloc((size_t)s.stride * STRIP * sizeof(float));
+    }
+    uint8_t *cov = small ? cov_stack : au_alloc((size_t)s.w);
+    size_t *active = ne <= RASTER_STACK_EDGES ? active_stack : au_alloc(ne * sizeof(size_t));
+    int mask_w = clip.x1 - clip.x0;
     size_t nactive = 0, next = 0;
     bool evenodd = rule == AU_FILL_EVENODD;
     float fx0 = (float)area.x0;
@@ -189,6 +207,26 @@ void au_raster_path(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRec
             float *row = s.acc + (size_t)r * s.stride;
             float sum = 0;
             int run = -1;
+            if (mask && !evenodd) {
+                /* Bytes straight into the mask. Empty and full cells, most
+                 * of a glyph's box, skip the conversion to an integer (the
+                 * same value either way). */
+                uint8_t *out = mask + (size_t)(sy + r - clip.y0) * (size_t)mask_w + (size_t)(area.x0 - clip.x0);
+                for (int x = 0; x < s.w; x++) {
+                    sum += row[x];
+                    row[x] = 0;
+                    float a = sum < 0 ? -sum : sum;
+                    if (a >= 1.0f) {
+                        out[x] = 255;
+                    } else if (a != 0) {
+                        uint8_t c = (uint8_t)(a * 255.0f + 0.5f);
+                        if (c)
+                            out[x] = c;
+                    }
+                }
+                row[s.w] = row[s.w + 1] = 0;
+                continue;
+            }
             for (int x = 0; x < s.w; x++) {
                 sum += row[x];
                 row[x] = 0;
@@ -215,10 +253,19 @@ void au_raster_path(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRec
                 fn(ctx, sy + r, area.x0 + run, s.w - run, cov + run);
         }
     }
-    au_free(active);
-    au_free(cov);
-    au_free(s.acc);
+    if (active != active_stack)
+        au_free(active);
+    if (!small) {
+        au_free(cov);
+        au_free(s.acc);
+    }
     au_free(edges);
+}
+
+void au_raster_path(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect clip, AuSpanFn fn,
+                    void *ctx)
+{
+    raster(p, dx, dy, rule, clip, fn, ctx, NULL);
 }
 
 typedef struct {
@@ -236,5 +283,5 @@ static void mask_span(void *ctx, int y, int x, int n, const uint8_t *cov)
 void au_raster_mask(const AuPath *p, AuFillRule rule, AuIRect area, uint8_t *mask)
 {
     MaskCtx m = {mask, area};
-    au_raster_path(p, 0, 0, rule, area, mask_span, &m);
+    raster(p, 0, 0, rule, area, mask_span, &m, mask);
 }

@@ -188,6 +188,9 @@ typedef struct AuFetchInfo {
      * or _CLOCK (cert has the details): it has HTTPS, and that failed.
      * AU_FETCH_OK otherwise. */
     AuFetchError cause;
+    /* AU_FETCH_ERR_BLOCKED by a blocklist (no connection was made):
+     * "blocked: LIST NAME". NULL otherwise. */
+    const char *blocked_reason;
     /* How the request went, for the request log (netlog.h); NULL when
      * the fetcher does not say. Valid during the call. */
     const struct AuFetchNet *net;
@@ -267,6 +270,9 @@ typedef struct AuPageFetcher {
      * host, for the certificate with this fingerprint, for this session.
      * False when refused (an HSTS host). */
     bool (*allow_cert)(void *ctx, const char *host, const uint8_t sha256[32]);
+    /* Optional: the user chose to visit the blocked site of url anyway,
+     * for this session ("Visit Anyway" on the blocked-site page). */
+    void (*allow_blocked)(void *ctx, const char *url);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {
@@ -329,6 +335,9 @@ typedef struct AuPageCallbacks {
     /* Yes or no (sending a form from a secure page over plain http).
      * Without it the answer is yes. */
     bool (*confirm)(void *ctx, AuPage *p, const char *message);
+    /* Go Back on one of Aura's own pages (the blocked-site page): return
+     * to the previous history entry. Optional. */
+    void (*go_back)(void *ctx, AuPage *p);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */
@@ -423,6 +432,15 @@ bool au_page_source(const AuPage *p, const char **data, size_t *len);
  * on (the default), from the next load. */
 #define AU_PAGE_CONSOLE_LINES 300
 size_t au_page_console_count(const AuPage *p);
+/* Evaluates src as script in the page's document and appends the
+ * result's string form to out (for the host tool and tests). False when
+ * the page runs no script or the script threw. */
+bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The document view's update counts (style passes, styled elements, box
+ * tree builds, layouts; AuDocViewStats in src/page/page.h), for timings
+ * and tests. False for a page without a document view. */
+struct AuDocViewStats;
+bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s);
 const char *au_page_console_line(const AuPage *p, size_t i, int *level);
 
 /* The viewport size in CSS pixels; layout wraps to its width. */
@@ -535,9 +553,8 @@ void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
 uint32_t au_page_console_total(const AuPage *p);
 void au_page_console_add(AuPage *p, int level, const char *text);
 void au_page_console_clear(AuPage *p);
-/* Evaluates src as script in the page; the result as a string, or the
- * error, goes in out. False when it threw or the page runs no script. */
-bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The Console's input line runs through au_page_eval (above), which
+ * starts the script runtime on a page that has no script. */
 
 /* ---- Measurements (Debug menu) ---- */
 typedef struct AuPageStats {
@@ -552,6 +569,7 @@ typedef struct AuPageStats {
     uint32_t boxes;          /* layout boxes */
     uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
     uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
+    uint32_t blocked;        /* requests of this load a blocklist refused */
     uint32_t restored;       /* times this document was shown again from the document cache; load_ms and
                               * first_paint_ms then time the last showing */
     uint32_t hide_ms;        /* of load_ms after a restore: hiding (or freeing) the document that was left */

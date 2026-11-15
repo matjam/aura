@@ -7,6 +7,8 @@
 
 /* aura-host render|dump ...: argv[1] is the command. */
 int au_host_render_main(int argc, char **argv);
+/* aura-host layout-bench: layout and paint timings of one page. */
+int au_host_layout_bench_main(int argc, char **argv);
 /* aura-host image FILE ...: decodes one image (image_tool.c). */
 int au_host_image_main(int argc, char **argv);
 

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CSSOM changes reach the cascade</title>
+<script src="../harness.js"></script>
+<style id="inline">#target { background-color: rgb(255, 0, 0); } #other { top: 1px }</style>
+<link id="link" rel="stylesheet" href="res/green.css">
+</head>
+<body>
+<p id="target">x</p>
+<script>
+const target = document.getElementById('target');
+const style = () => getComputedStyle(target);
+const loaded = new Promise((resolve) => window.addEventListener('load', resolve));
+
+promise_test('document.styleSheets lists the style and link sheets in order', async () => {
+    await loaded;
+    const l = document.styleSheets;
+    assert.equal(l.length, 2);
+    assert.ok(l[0].ownerNode === document.getElementById('inline'));
+    assert.ok(l[1].ownerNode === document.getElementById('link'));
+    assert.ok(l[1] === document.getElementById('link').sheet);
+    assert.ok(/res\/green\.css$/.test(l[1].href), l[1].href);
+    assert.equal(l[0].cssRules.length, 2);
+    /* a fetched sheet's text is not kept: its rules cannot be read */
+    assert.throws(() => l[1].cssRules, 'NotSupportedError');
+    assert.throws(() => l[1].insertRule('#target { color: rgb(9, 9, 9) }', 0), 'NotSupportedError');
+});
+promise_test('insertRule, a rule change and deleteRule apply', async () => {
+    await loaded;
+    const sh = document.getElementById('inline').sheet;
+    assert.equal(style().backgroundColor, 'rgb(255, 0, 0)');
+    sh.insertRule('#target { background-color: rgb(0, 0, 255) }', sh.cssRules.length);
+    assert.equal(style().backgroundColor, 'rgb(0, 0, 255)');
+    sh.cssRules[sh.cssRules.length - 1].style.backgroundColor = 'rgb(1, 2, 3)';
+    assert.equal(style().backgroundColor, 'rgb(1, 2, 3)');
+    sh.cssRules[sh.cssRules.length - 1].selectorText = '#nothing';
+    assert.equal(style().backgroundColor, 'rgb(255, 0, 0)');
+    sh.deleteRule(0);
+    assert.equal(style().backgroundColor, 'rgba(0, 0, 0, 0)');
+    assert.ok(/rgb\(255, 0, 0\)/.test(document.getElementById('inline').textContent), 'the element keeps its text');
+});
+promise_test('sheet.disabled turns a sheet off and on', async () => {
+    await loaded;
+    const link = document.getElementById('link');
+    assert.equal(style().color, 'rgb(0, 128, 0)');
+    link.sheet.disabled = true;
+    assert.notEqual(style().color, 'rgb(0, 128, 0)');
+    assert.equal(document.styleSheets.length, 2, 'a disabled sheet stays in the list');
+    link.sheet.disabled = false;
+    assert.equal(style().color, 'rgb(0, 128, 0)');
+    const inline = document.getElementById('inline').sheet;
+    inline.insertRule('#target { text-decoration-line: underline }', 0);
+    inline.disabled = true;
+    assert.equal(style().textDecorationLine, 'none');
+    inline.disabled = false;
+    assert.equal(style().textDecorationLine, 'underline');
+});
+promise_test('getComputedStyle: used width and height, pseudo-elements, white-space', async () => {
+    await loaded;
+    const s = document.createElement('style');
+    s.textContent = '#box { width: 50%; padding: 5px; border: 2px solid; white-space: pre-line }' +
+        ' #box::before { content: "x"; color: rgb(1, 1, 1) } #wrap { width: 300px } #bb { width: 100px; padding: 10px; box-sizing: border-box }';
+    document.head.appendChild(s);
+    const w = document.createElement('div');
+    w.id = 'wrap';
+    w.innerHTML = '<div id="box">text</div><div id="bb">b</div><span id="in">inline</span><div id="gone" style="display:none;width:40%">n</div>';
+    document.body.appendChild(w);
+    const cs = getComputedStyle(document.getElementById('box'));
+    assert.equal(cs.width, '150px', 'a percentage resolves to the used width');
+    assert.ok(/^\d+(\.\d+)?px$/.test(cs.height) && parseFloat(cs.height) > 0, 'auto height resolves: ' + cs.height);
+    assert.equal(cs.getPropertyValue('WIDTH'), '150px');
+    assert.equal(getComputedStyle(document.getElementById('bb')).width, '100px', 'border-box');
+    assert.equal(getComputedStyle(document.getElementById('in')).width, 'auto', 'an inline box');
+    assert.equal(getComputedStyle(document.getElementById('gone')).width, '40%', 'display: none');
+    assert.equal(cs.whiteSpace, 'pre-line');
+    const before = getComputedStyle(document.getElementById('box'), '::before');
+    assert.equal(before.content, '"x"');
+    assert.equal(before.color, 'rgb(1, 1, 1)');
+    assert.equal(getComputedStyle(document.getElementById('box'), ':after').content, 'none');
+    assert.equal(getComputedStyle(document.getElementById('box'), '::unknown-thing').color, '');
+    w.remove();
+    s.remove();
+});
+promise_test('a style element added by script has a sheet at once', async () => {
+    await loaded;
+    const s = document.createElement('style');
+    s.textContent = '#target { text-indent: 7px }';
+    document.head.appendChild(s);
+    assert.equal(s.sheet.cssRules.length, 1);
+    s.sheet.insertRule('#target { text-indent: 11px }', 1);
+    assert.equal(style().textIndent, '11px');
+    s.remove();
+    assert.equal(style().textIndent, '0px');
+});
+</script>
+</body>
+</html>

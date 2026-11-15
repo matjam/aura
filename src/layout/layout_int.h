@@ -323,7 +323,8 @@ struct AuLayout {
     LBox *root;        /* the root element's box, or NULL */
     float vw, vh;      /* viewport */
     float doc_w, doc_h;
-    bool need_build, need_layout, built_once;
+    bool need_build, need_layout;
+    uint32_t build_count, layout_count; /* box tree builds and layout passes since creation */
     /* fonts */
     LFont *font_hash[64];
     LArena font_arena;
@@ -331,6 +332,8 @@ struct AuLayout {
     LWordEntry **words;
     uint32_t nwords, words_cap;
     LArena word_arena;
+    /* scratch for shaping (measuring and drawing text) */
+    AuGlyphRun run;
     /* scratch for inline layout */
     LItem *items;
     uint32_t nitems, items_cap;
@@ -341,6 +344,7 @@ struct AuLayout {
     uint32_t nabs, abs_cap;
     /* statistics */
     AuLayoutStats stats;
+    uint32_t intrinsic_runs; /* since creation (stats is cleared with the tree) */
     int depth;
     float view_scroll_x, view_scroll_y; /* during paint and hit testing */
     /* Boxes placed against the viewport (position: fixed outside any
@@ -351,7 +355,6 @@ struct AuLayout {
     uint32_t nview_boxes;
     bool need_paint;
     bool need_restack;
-    bool full_layout; /* the viewport changed: no subtree may be reused */
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */
@@ -370,6 +373,11 @@ struct AuLayout {
      * the box tree. */
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
+    /* Elements the box tree build left out for display: none (their
+     * descendants are not listed). Not referenced: read only while the
+     * tree is current (au_layout_styles_changed). */
+    AuElement **hidden;
+    uint32_t nhidden, hidden_cap;
     /* The focused element (not referenced; the document view clears it
      * before the element can go) and whether its caret shows now. */
     AuElement *focus;

@@ -175,6 +175,20 @@ typedef struct AuJsHooks {
     AuHtmlParser *(*parser)(void *ctx);
     /* The fetch interface. */
     AuFetcher fetcher;
+    /* CSSOM: the style sheet of a style or link element. sheet_text
+     * appends the sheet's text and its URL to the buffers and returns 2;
+     * 3 (URL only) when the sheet is loaded but its text is not kept; 1
+     * when the sheet has not loaded yet, 0 when el has no sheet.
+     * sheet_set_text replaces the text the cascade uses for it (insertRule,
+     * deleteRule and rule changes; the element's own text stays), and
+     * sheet_disable turns it off or on. All optional. */
+    int (*sheet_text)(void *ctx, AuElement *el, AuBuf *text, AuBuf *url);
+    void (*sheet_set_text)(void *ctx, AuElement *el, const char *text, size_t len);
+    void (*sheet_disable)(void *ctx, AuElement *el, bool disabled);
+    /* Cryptographically strong random bytes for crypto.getRandomValues
+     * and crypto.randomUUID. Returns false when the source cannot give
+     * them yet. Without this hook the window has no crypto object. */
+    bool (*random)(void *ctx, void *buf, size_t len);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */

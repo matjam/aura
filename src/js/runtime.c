@@ -212,7 +212,11 @@ static void append_value(JSContext *ctx, AuBuf *b, JSValueConst v)
     }
 }
 
-static void report_value(AuJs *js, JSValueConst exc, const char *prefix)
+/* Writes an uncaught error to the console. handled: the page's error or
+ * unhandledrejection listener cancelled the report; the line then goes
+ * out at debug level and is not counted, so that a failure a page hides
+ * (Google's window.onerror returns true) still shows in the console. */
+static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool handled)
 {
     JSContext *ctx = js->ctx;
     AuBuf b;
@@ -236,8 +240,9 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix)
             JS_FreeValue(ctx, st);
         }
     }
-    js->errors++;
-    js_console(js, AU_JS_ERROR, b.data ? b.data : "", b.len);
+    if (!handled)
+        js->errors++;
+    js_console(js, handled ? AU_JS_DEBUG : AU_JS_ERROR, b.data ? b.data : "", b.len);
     au_buf_free(&b);
 }
 
@@ -264,8 +269,7 @@ void js_report_exception(AuJs *js)
         }
         JS_FreeValue(ctx, fn);
     }
-    if (report)
-        report_value(js, exc, "Uncaught ");
+    report_value(js, exc, report ? "Uncaught " : "Uncaught (handled by the page) ", !report);
     JS_FreeValue(ctx, exc);
 }
 
@@ -330,8 +334,7 @@ static void report_rejections(AuJs *js)
         JSValue h = js_call_prelude(js, "unhandledRejection", 2, args);
         bool log = !(JS_IsBool(h) && !JS_ToBool(js->ctx, h));
         JS_FreeValue(js->ctx, h);
-        if (log)
-            report_value(js, r.reason, "Uncaught (in promise) ");
+        report_value(js, r.reason, log ? "Uncaught (in promise) " : "Uncaught (in promise, handled by the page) ", !log);
         JS_FreeValue(js->ctx, r.promise);
         JS_FreeValue(js->ctx, r.reason);
     }
@@ -545,6 +548,7 @@ AuJs *au_js_new(AuDocument *doc, const char *url, const AuJsSettings *settings, 
     js_natives_init(js, N);
     js_natives2_init(js, N);
     js_natives_forms_init(js, N);
+    js_natives_ranges_init(js, N);
     js_loop_init(js, N);
     js_fetch_init(js, N);
     js_module_init(js);
@@ -569,6 +573,7 @@ void au_js_free(AuJs *js)
     js_fetch_free(js);
     js_module_free(js);
     js_mutations_free(js);
+    js_ranges_free(js);
     for (uint32_t i = 0; i < js->nrejections; i++) {
         JS_FreeValue(ctx, js->rejections[i].promise);
         JS_FreeValue(ctx, js->rejections[i].reason);

@@ -4,6 +4,7 @@
 #include "textview.h"
 
 #include "../image/cache.h"
+#include "../page/page.h" /* AuDocViewStats */
 #include "../page/perf.h"
 
 #include <stdio.h>
@@ -65,8 +66,12 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     for (int k = 0; k < AU_PERF_KINDS; k++)
         put_row(out, au_perf_kind_name(k), pf->last_ms[k], pf->last_count[k], pf->ms[k], pf->count[k]);
     au_buf_printf(out, "  pixels painted: %lu thousand", (unsigned long)pf->kpixels);
-    if (pf->elements_styled)
-        au_buf_printf(out, "; elements styled: %lu", (unsigned long)pf->elements_styled);
+    AuDocViewStats ds;
+    if (au_page_update_stats(p, &ds))
+        au_buf_printf(out, "\n  since the view was made: %lu style passes, %lu elements styled, %lu box tree builds, "
+                           "%lu layouts",
+                      (unsigned long)ds.style_passes, (unsigned long)ds.styled_elements,
+                      (unsigned long)ds.tree_builds, (unsigned long)ds.layouts);
     au_buf_puts(out, "\n  (script time includes the style and layout that script forces)\n\n");
 
     au_buf_puts(out, "Memory\n");

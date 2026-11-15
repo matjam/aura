@@ -33,7 +33,6 @@ typedef struct AuPerfTask {
 typedef struct AuPerf {
     uint32_t ms[AU_PERF_KINDS];    /* since the document began */
     uint32_t count[AU_PERF_KINDS]; /* passes (style, layout, paint, copy) or entries (script) */
-    uint32_t elements_styled;      /* elements given a computed style, over every style pass */
     uint32_t kpixels;              /* thousands of pixels painted */
     uint32_t pixel_rem;
     /* The last sample interval. */

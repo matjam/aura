@@ -178,6 +178,11 @@ struct AuBrowser {
     uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
     char *find_text;     /* the last Find, for Find Again; NULL before one */
     bool find_case;      /* it was case-sensitive */
+    /* Optional, set by the shell: the blocking preferences changed in the
+     * model (the per-site switch); pass them to the blocklists before the
+     * page reloads. */
+    void (*blocking_changed)(void *ctx);
+    void *blocking_ctx;
     AuNavList closed[AU_MAX_CLOSED_TABS]; /* closed tabs' histories, oldest first */
     int nclosed;
     struct {

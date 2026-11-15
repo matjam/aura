@@ -85,6 +85,10 @@ typedef struct AuDocViewCallbacks {
     /* A console line from script (level: 0 log, 1 info, 2 warn, 3 error,
      * 4 debug). */
     void (*console)(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
+    /* Cryptographically strong random bytes for script (crypto
+     * .getRandomValues); false when the source is not ready. Optional:
+     * without it pages have no crypto object. */
+    bool (*random)(void *ctx, AuDocView *dv, void *buf, size_t len);
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */
@@ -163,6 +167,16 @@ uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms);
 bool au_docview_animating(const AuDocView *dv);
 struct AuImageCacheStats;
 void au_docview_image_stats(const AuDocView *dv, struct AuImageCacheStats *s);
+/* What updates have cost since the view was created: to see what one
+ * event costs (a keystroke, a hover change), read the counts before and
+ * after it. A keystroke in a text field should add nothing here. */
+typedef struct AuDocViewStats {
+    uint32_t style_passes;    /* restyles, whole or partial */
+    uint32_t styled_elements; /* elements whose style was computed */
+    uint32_t tree_builds;     /* box tree builds */
+    uint32_t layouts;         /* layout passes */
+} AuDocViewStats;
+void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
 
 /* ---- Scripts ----
  * Scripting is off by default: <script> is ignored and <noscript> shows.

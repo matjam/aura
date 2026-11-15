@@ -15,6 +15,7 @@
  * for each event and mac_net_idle once per pass. */
 #include "mac.h"
 
+#include "blocking_mac.h"
 #include "clock_mac.h"
 #include "entropy.h"
 #include "net_ot.h"
@@ -518,6 +519,7 @@ void mac_net_init(void)
     apply_prefs();
 
     N.loader = au_net_loader_new(N.net);
+    mac_blocking_init(N.net, N.loader);
     N.pf = au_net_page_fetcher_new(N.loader);
     au_net_page_fetcher_set_entropy(N.pf, entropy_bits, NULL, AU_MAC_ENTROPY_THRESHOLD);
     au_net_page_fetcher_set_offline(N.pf, offline_why, NULL);
@@ -553,6 +555,8 @@ void mac_net_idle(void)
     /* Queued cache files: one per pass, while no transfer is under way. */
     if (N.disk && au_disk_cache_pending(N.disk) && au_net_loader_active(N.loader) == 0)
         au_disk_cache_idle(N.disk, 1);
+    /* Blocklist updates start only while nothing loads. */
+    mac_blocking_idle(au_net_loader_active(N.loader) > 0);
 }
 
 bool mac_net_busy(void)
@@ -561,13 +565,14 @@ bool mac_net_busy(void)
      * loop's jitter feeds), or Open Transport finishing a lookup or a
      * connection. */
     return N.net && (au_net_loader_active(N.loader) > 0 || (N.ot && au_ot_net_busy(N.ot)) ||
-                     (N.disk && au_disk_cache_pending(N.disk) > 0));
+                     (N.disk && au_disk_cache_pending(N.disk) > 0) || mac_blocking_busy());
 }
 
 void mac_net_prefs_changed(void)
 {
     if (N.net)
         apply_prefs();
+    mac_blocking_prefs_changed();
 }
 
 void mac_net_clear_cookies(void)
@@ -623,6 +628,7 @@ void mac_net_status(char lines[4][256])
              N.disk ? (unsigned)au_disk_cache_count(N.disk) : 0, cs.fresh, cs.history, cs.stale, cs.not_modified,
              cs.misses, cs.from_storage, N.dc_reads, (unsigned long)(N.dc_read_us / 1000), N.dc_writes,
              (unsigned long)(N.dc_write_us / 1000));
+    mac_blocking_status(lines[2] + strlen(lines[2]), 256 - strlen(lines[2]));
 }
 
 void mac_net_rules_changed(void)
@@ -679,6 +685,7 @@ void mac_net_quit(void)
     au_browser_set_fetcher(g_browser, "https", NULL);
     au_net_page_fetcher_free(N.pf);
     au_net_loader_free(N.loader);
+    mac_blocking_quit();
     au_net_free(N.net);
     au_cache_free(N.cache);
     au_disk_cache_free(N.disk);

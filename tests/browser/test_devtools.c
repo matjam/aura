@@ -13,6 +13,7 @@
 #include "browser/netlog.h"
 #include "browser/sourceview.h"
 #include "browser/textview.h"
+#include "net/blocklist.h"
 #include "net/cache.h"
 #include "net/loader.h"
 #include "net/roots.h"
@@ -380,7 +381,23 @@ static void test_netlog_tls_and_blocked(void)
     CHECK(strstr(au_buf_cstr(&b), "block") && strstr(au_buf_cstr(&b), "Blocked: mixed content"), "blocked text: %s",
           au_buf_cstr(&b));
     au_buf_free(&b);
-    /* Another agent's content blocker fills the same field. */
+    /* A blocklist's refusal is logged with the list's name. */
+    AuBlocklist *bl = au_blocklist_new();
+    au_blocklist_set_user(bl, "", "ads.test", "");
+    au_net_loader_set_blocklist(e.l, bl);
+    FakeServer *site = fake_server(&e.f, "site.test", 80);
+    respond(site, "text/html", "", "<!DOCTYPE html><title>Ads</title><img src=\"http://ads.test/pixel.gif\"><p>page");
+    au_bw_navigate(e.w, "http://site.test/");
+    settle(&e, 500);
+    l = au_page_netlog(page(&e));
+    const AuNetRecord *ad = rec_for(l, "/pixel.gif");
+    CHECK(ad && ad->state == AU_NETREC_BLOCKED && !strncmp(ad->blocked_reason, "blocked: ", 9) &&
+              ad->connection == 0,
+          "blocklist: state %d, reason \"%s\"", ad ? ad->state : -1, ad ? ad->blocked_reason : "");
+    au_net_loader_set_blocklist(e.l, NULL);
+    au_blocklist_free(bl);
+
+    /* A reason given through AuFetchNet alone is kept too. */
     AuNetLog own;
     au_netlog_init(&own);
     uint32_t q = au_netlog_begin(&own, "http://ads.test/a.js", NULL, AU_FETCH_SCRIPT, 0);

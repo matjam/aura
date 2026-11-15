@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- page args: --click go -->
+<html>
+<head>
+<title>A search box that defers its submission through postMessage</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<!-- Google's search box, reduced. Its handler cancels the default action,
+     queues the submission, and wakes itself with
+     window.postMessage("sbox.df", location.href): the target origin is a
+     whole URL, of which only the origin counts. Aura compared the string
+     with the origin and dropped the message, so nothing was submitted and
+     nothing was reported. -->
+<form id="f" action="javascript:window.submitted = (window.submitted || 0) + 1; void 0">
+<input name="q" value="mac os 9">
+<input id="go" type="submit" value="Search" style="display:block;width:100px;height:30px">
+</form>
+<script>
+const f = document.getElementById('f');
+const queue = [];
+window.addEventListener('message', (e) => {
+    if (e.source === window && e.data === 'sbox.df' && queue.length) queue.shift()();
+});
+function defer(fn) {
+    queue.push(fn);
+    window.postMessage('sbox.df', window.location.href);
+}
+window.deferred = 0;
+f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    defer(() => { window.deferred++; });
+});
+test('postMessage rejects a target origin that is not a URL', () => {
+    assert.throws(() => window.postMessage('x', 'not a url'), 'SyntaxError');
+    assert.throws(() => window.postMessage(), TypeError);
+});
+promise_test('postMessage takes "/", "*" and the options form', async () => {
+    const got = [];
+    const l = (e) => { if (typeof e.data === 'number') got.push(e.data); };
+    window.addEventListener('message', l);
+    window.postMessage(1, '/');
+    window.postMessage(2, '*');
+    window.postMessage(3, { targetOrigin: window.location.href });
+    window.postMessage(4, 'https://elsewhere.example/page');
+    window.postMessage(5);
+    await delay(50);
+    window.removeEventListener('message', l);
+    assert.equal(got.join(), '1,2,3,5');
+});
+addEventListener('unload', () => {
+    if (window.deferred !== 1) console.log('FAIL the deferred submission ran once: ' + window.deferred);
+});
+</script>
+</body>
+</html>

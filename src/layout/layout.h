@@ -185,8 +185,14 @@ typedef struct AuLayoutStats {
     uint32_t word_hits, word_misses; /* text measurement cache */
     uint32_t layouts_skipped;        /* independent subtrees reused by the last layout */
     uint32_t missing_glyphs;         /* drawn as missing-glyph boxes (no face had them), since creation */
+    uint32_t tree_builds;            /* box tree builds, since creation */
+    uint32_t layout_passes;          /* layout passes over the document, since creation */
+    uint32_t intrinsic_runs;         /* intrinsic size computations (cache misses), since creation */
 } AuLayoutStats;
 void au_layout_stats(const AuLayout *L, AuLayoutStats *s);
+/* Box tree builds and layout passes since the layout was created (for
+ * tests and timings: what a change cost). */
+void au_layout_pass_counts(const AuLayout *L, uint32_t *builds, uint32_t *layouts);
 
 /* Font metrics for the CSS resolver's ex and ch units
  * (au_css_resolver_set_metrics with ctx = the AuLayout). */

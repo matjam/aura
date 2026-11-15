@@ -1690,8 +1690,18 @@ void l_build_tree(AuLayout *L)
                 continue;
             AuElement *e = au_as_element(c);
             const AuStyle *s = au_element_style(e);
-            if (!s || s->box->display == AU_DISPLAY_NONE)
+            if (!s || s->box->display == AU_DISPLAY_NONE) {
+                /* Remembered, so a restyle that shows it rebuilds the tree
+                 * (au_layout_styles_changed sees only elements with boxes). */
+                if (s && !f->skip_children) {
+                    if (L->nhidden == L->hidden_cap) {
+                        L->hidden_cap = L->hidden_cap ? L->hidden_cap * 2 : 64;
+                        L->hidden = au_realloc(L->hidden, L->hidden_cap * sizeof *L->hidden);
+                    }
+                    L->hidden[L->nhidden++] = e;
+                }
                 continue;
+            }
             bool li = au_display_list_item(s->box->display);
             bool rev = false;
             if (li && c->parent && au_is_html_element(c->parent, AU_ATOM_ol) && attr_s(c->parent, "reversed"))
@@ -1805,5 +1815,6 @@ void l_free_tree(AuLayout *L)
     }
     ar_free_all(&L->tree);
     L->root = NULL;
+    L->nhidden = 0;
     memset(&L->stats, 0, sizeof L->stats);
 }

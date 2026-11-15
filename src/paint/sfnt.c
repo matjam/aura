@@ -271,7 +271,27 @@ static uint16_t cmap12(const AuFontFace *f, uint32_t sub, uint32_t cp)
     return 0;
 }
 
+static uint16_t glyph_lookup(const AuFontFace *f, uint32_t cp);
+
 uint16_t au_font_glyph(const AuFontFace *f, uint32_t cp)
+{
+    if (cp >= AU_FONT_CMAP_DIRECT)
+        return glyph_lookup(f, cp);
+    AuFontCache *c = f->cache ? f->cache : au_font_cache(f);
+    if (!c->glyph_of) {
+        c->glyph_of = au_alloc(AU_FONT_CMAP_DIRECT * sizeof *c->glyph_of);
+        memset(c->glyph_of, 0xFF, AU_FONT_CMAP_DIRECT * sizeof *c->glyph_of);
+    }
+    uint16_t g = c->glyph_of[cp];
+    if (g == 0xFFFF) {
+        g = glyph_lookup(f, cp);
+        /* (Glyph 0xFFFF itself is looked up every time.) */
+        c->glyph_of[cp] = g;
+    }
+    return g;
+}
+
+static uint16_t glyph_lookup(const AuFontFace *f, uint32_t cp)
 {
     if (!f->cmap_sub)
         return 0;
@@ -335,6 +355,8 @@ void au_font_cache_free(AuFontCache *c)
     if (!c)
         return;
     au_free(c->adv);
+    au_free(c->glyph_of);
+    au_free(c->kern);
     au_gsub_free(c->gsub);
     au_colr_free(c->colr);
     au_free(c);
@@ -386,11 +408,28 @@ static void find_kern(AuFontFace *f)
     }
 }
 
+static int kern_lookup(const AuFontFace *f, uint32_t key);
+
 int au_font_kern_units(const AuFontFace *f, uint16_t left, uint16_t right)
 {
     if (!f->kern_npairs)
         return 0;
     uint32_t key = ((uint32_t)left << 16) | right;
+    AuFontCache *c = f->cache ? f->cache : au_font_cache(f);
+    if (!c->kern)
+        c->kern = au_calloc(AU_FONT_KERN_SLOTS * sizeof *c->kern);
+    AuKernSlot *slot = &c->kern[((key * 0x9E3779B1u) >> 16) & (AU_FONT_KERN_SLOTS - 1)];
+    if (slot->used && slot->key == key)
+        return slot->value;
+    int v = kern_lookup(f, key);
+    slot->key = key;
+    slot->value = (int16_t)v;
+    slot->used = 1;
+    return v;
+}
+
+static int kern_lookup(const AuFontFace *f, uint32_t key)
+{
     uint32_t lo = 0, hi = f->kern_npairs;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;

@@ -36,3 +36,9 @@ set_tests_properties(paint_woff PROPERTIES TIMEOUT 300)
 add_executable(test_colr test_colr.c)
 target_link_libraries(test_colr aura_host_platform aura_engine m)
 add_test(NAME paint_colr COMMAND test_colr ${CMAKE_CURRENT_SOURCE_DIR}/fonts ${CMAKE_SOURCE_DIR}/assets/fonts)
+
+# The per-face glyph and kerning lookup caches and the glyph cache's
+# stored text coverage.
+add_executable(test_shape_cache test_shape_cache.c)
+target_link_libraries(test_shape_cache aura_host_platform aura_engine m)
+add_test(NAME paint_shape_cache COMMAND test_shape_cache ${CMAKE_SOURCE_DIR}/assets/fonts)

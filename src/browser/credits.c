@@ -64,6 +64,13 @@ const AuCredit au_credits[] = {
      "EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER "
      "IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE "
      "USE OR OTHER DEALINGS IN THE SOFTWARE."},
+    {AU_CREDIT_DATA, "Blocklists (downloaded, not part of Aura)",
+     "Content blocking: the lists turned on in Preferences, Blocking",
+     "HaGeZi's DNS Blocklists, https://github.com/hagezi/dns-blocklists, and any list added by its address.",
+     "Each list's own licence (HaGeZi's lists: GNU General Public License 3.0)", NULL,
+     "Aura contains no blocklist and distributes none. It downloads the lists you turn on from their publishers "
+     "to this Macintosh, under each list's own licence, and keeps a compiled copy for its own use in the "
+     "Blocklists folder of the Aura preferences folder. The lists are not part of Aura."},
 };
 
 const size_t au_ncredits = sizeof au_credits / sizeof au_credits[0];
