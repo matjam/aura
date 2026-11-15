@@ -552,9 +552,13 @@ static void table_cell_hints(AuBuf *b, const AuElement *el, bool quirks)
 
 bool css_presentational_hints(const AuElement *el, AuCssDeclBlock *out, bool quirks)
 {
-    if (el->ns != AU_NS_HTML || !el->nattrs)
+    if (el->ns != AU_NS_HTML)
         return false;
     AuAtom tag = el->tag;
+    /* Cells take hints from their table (cellpadding, border) even when
+     * they have no attributes of their own. */
+    if (!el->nattrs && tag != HN(td) && tag != HN(th))
+        return false;
     AuBuf b;
     au_buf_init(&b);
 

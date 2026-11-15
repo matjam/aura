@@ -106,3 +106,15 @@ html
 --- expect
 #a -> color: rgb(0, 0, 0)
 #a -> font-family: "x; color: red"
+
+=== table attributes reach cells that have no attributes
+--- html
+html
+  body
+    table#t[border=0][cellpadding=0]
+      tbody
+        tr
+          td
+--- expect
+#t td -> padding-left: 0px
+#t td -> border-top-width: 0px
