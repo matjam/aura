@@ -118,6 +118,9 @@ void au_prefs_set_str(char **field, const char *value);
  * and the caller keeps the damaged file aside rather than overwriting it
  * silently. */
 bool au_prefs_parse(AuPrefs *p, const char *data, size_t len);
+/* The user agent to send and to show script: the preference, or Aura's
+ * default (AU_DEFAULT_USER_AGENT) when the preference is empty. */
+const char *au_prefs_user_agent(const AuPrefs *p);
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out);
 
 /* Reads or writes one setting by its file key, as text. Returns false
