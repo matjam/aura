@@ -1,0 +1,217 @@
+Share the source text of nested functions.
+
+Every function keeps its source text for Function.prototype.toString.
+QuickJS copies each function's own text (js_strndup when its parse ends),
+so the text of a function nested n levels deep is held n times. Scripts
+written as one outer function around everything (module wrappers, IIFE
+bundles) held their text twice or more: on a Wikipedia article the
+function records took 3.9 MB, of which bytecode was 0.4 MB.
+
+The text now lives in a reference-counted JSSourceText made for the
+outermost function that has source. js_create_function runs
+js_fd_share_source for a function before it creates the child functions;
+a child whose text lies inside the nearest enclosing function's text
+(offsets in the parser's buffer, then compared byte for byte) takes a
+reference and an offset instead of its own copy. JSFunctionBytecode.source
+points into the shared text; toString and the bytecode writer read it as
+before. A function read from bytecode gets a text of its own.
+
+Measured: the same article's script heap fell from 10.6 MB to 8.7 MB.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -899,9 +899,22 @@
+     int source_len;
+     int pc2line_len;
+     uint8_t *pc2line_buf;
+-    char *source;
++    char *source; /* points into source_text */
++    struct JSSourceText *source_text; /* NULL if no source */
+ } JSFunctionBytecode;
+ 
++/* The source text of an outermost function, shared with the functions
++   nested in it: each one's text is a part of it. Before, every function
++   kept a copy of its own text, so text nested n levels deep was held n
++   times. */
++typedef struct JSSourceText {
++    int ref_count;
++    int len;
++    char buf[]; /* len bytes, then a NUL */
++} JSSourceText;
++
++static void js_source_text_free(JSRuntime *rt, JSSourceText *st);
++
+ typedef struct JSBoundFunction {
+     JSValue func_obj;
+     JSValue this_val;
+@@ -7566,8 +7579,11 @@
+     if (b->byte_code_buf) {
+         hp->js_func_code_size += b->byte_code_len;
+     }
+-    memory_used_count++;
+-    js_func_size += b->source_len + 1;
++    /* a shared source text is counted with the function it starts with */
++    if (b->source_text && b->source == b->source_text->buf) {
++        memory_used_count++;
++        js_func_size += sizeof(JSSourceText) + b->source_text->len + 1;
++    }
+     if (b->pc2line_len) {
+         memory_used_count++;
+         hp->js_func_pc2line_count += 1;
+@@ -22406,6 +22422,9 @@
+ 
+     char *source;  /* raw source, utf-8 encoded */
+     int source_len;
++    int source_pos1; /* 1 + the offset of 'source' in the parser's buffer, 0 if unknown */
++    struct JSSourceText *source_text; /* set by js_create_function() from 'source' */
++    int source_ofs;  /* offset of the function's text in 'source_text' */
+ 
+     JSModuleDef *module; /* != NULL when parsing a module */
+ } JSFunctionDef;
+@@ -25996,6 +26015,7 @@
+     /* store the class source code in the constructor. */
+     js_free(ctx, ctor_fd->source);
+     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
++    ctor_fd->source_pos1 = 1 + (int)(class_start_ptr - s->buf_start);
+     ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
+     if (!ctor_fd->source)
+         goto fail;
+@@ -33192,6 +33212,8 @@
+     dbuf_free(&fd->pc2line);
+ 
+     js_free(ctx, fd->source);
++    if (fd->source_text)
++        js_source_text_free(ctx->rt, fd->source_text);
+ 
+     if (fd->parent) {
+         /* remove in parent list */
+@@ -37028,8 +37050,65 @@
+                 return -1;
+             }
+             me->u.local.var_idx = idx;
++        }
++    }
++    return 0;
++}
++
++static void js_source_text_free(JSRuntime *rt, JSSourceText *st)
++{
++    if (--st->ref_count == 0)
++        js_free_rt(rt, st);
++}
++
++static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len)
++{
++    JSSourceText *st = js_malloc(ctx, sizeof(*st) + len + 1);
++    if (!st)
++        return NULL;
++    st->ref_count = 1;
++    st->len = len;
++    if (buf)
++        memcpy(st->buf, buf, len);
++    st->buf[len] = '\0';
++    return st;
++}
++
++/* Moves fd->source into a shared text: the nearest enclosing function's,
++   when this function's text is a part of it (same parser buffer, checked
++   byte for byte), else a new one. The enclosing function runs this before
++   its child functions are created. */
++static int js_fd_share_source(JSContext *ctx, JSFunctionDef *fd)
++{
++    JSFunctionDef *p;
++    JSSourceText *st;
++    int ofs;
++
++    for (p = fd->parent; p; p = p->parent) {
++        st = p->source_text;
++        if (!st)
++            continue;
++        if (fd->source_pos1 && p->source_pos1 && fd->source_pos1 >= p->source_pos1) {
++            ofs = p->source_ofs + (fd->source_pos1 - p->source_pos1);
++            if (ofs <= st->len && fd->source_len <= st->len - ofs &&
++                !memcmp(st->buf + ofs, fd->source, fd->source_len)) {
++                st->ref_count++;
++                fd->source_text = st;
++                fd->source_ofs = ofs;
++                js_free(ctx, fd->source);
++                fd->source = NULL;
++                return 0;
++            }
+         }
++        break;
+     }
++    st = js_source_text_new(ctx, fd->source, fd->source_len);
++    if (!st)
++        return -1;
++    fd->source_text = st;
++    fd->source_ofs = 0;
++    js_free(ctx, fd->source);
++    fd->source = NULL;
+     return 0;
+ }
+ 
+@@ -37086,6 +37165,9 @@
+             goto fail;
+     }
+ 
++    if (fd->source && js_fd_share_source(ctx, fd))
++        goto fail;
++
+     /* first create all the child functions */
+     list_for_each_safe(el, el1, &fd->child_list) {
+         JSFunctionDef *fd1;
+@@ -37191,8 +37273,10 @@
+     if (!b->pc2line_buf)
+         b->pc2line_buf = fd->pc2line.buf;
+     b->pc2line_len = fd->pc2line.size;
+-    b->source = fd->source;
+-    b->source_len = fd->source_len;
++    b->source_text = fd->source_text;
++    b->source = fd->source_text ? fd->source_text->buf + fd->source_ofs : NULL;
++    b->source_len = fd->source_text ? fd->source_len : 0;
++    fd->source_text = NULL;
+ 
+     if (fd->scopes != fd->def_scope_array)
+         js_free(ctx, fd->scopes);
+@@ -37265,7 +37349,8 @@
+     JS_FreeAtomRT(rt, b->func_name);
+     JS_FreeAtomRT(rt, b->filename);
+     js_free_rt(rt, b->pc2line_buf);
+-    js_free_rt(rt, b->source);
++    if (b->source_text)
++        js_source_text_free(rt, b->source_text);
+ 
+     remove_gc_object(&b->header);
+     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(b) != 0) {
+@@ -37865,6 +37950,7 @@
+             /* the end of the function source code is after the last
+                 token of the function source stored into s->last_ptr */
+             fd->source_len = s->last_ptr - ptr;
++            fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+             fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
+             if (!fd->source)
+                 goto fail;
+@@ -37903,6 +37989,7 @@
+ 
+         /* save the function source code */
+         fd->source_len = s->buf_ptr - ptr;
++        fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+         fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
+         if (!fd->source)
+             goto fail;
+@@ -40199,10 +40286,11 @@
+         if (s->ptr_last)
+             s->ptr_last += b->source_len;  // omit source code hex dump
+         /* b->source is a UTF-8 encoded null terminated C string */
+-        b->source = js_mallocz(ctx, b->source_len + 1);
+-        if (!b->source)
++        b->source_text = js_source_text_new(ctx, NULL, b->source_len);
++        if (!b->source_text)
+             goto fail;
+-        if (bc_get_buf(s, b->source, b->source_len))
++        b->source = b->source_text->buf;
++        if (bc_get_buf(s, (uint8_t *)b->source, b->source_len))
+             goto fail;
+     }
+     bc_read_trace(s, "}\n");

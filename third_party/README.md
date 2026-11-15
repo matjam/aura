@@ -28,10 +28,15 @@ records where the code came from and how to update it.
   `0001` newlib portability (no pthreads or C11 atomics, big-endian
   checks), `0002` a retry hook in module resolution so the embedder can
   fetch a missing module and resolve again, `0003` a GC mark for
-  WeakMap values with symbol keys (fixes a realm leak), and `0004` 16
+  WeakMap values with symbol keys (fixes a realm leak), `0004` 16
   bytes of padding on every `alloca` on Mac OS 9, because Retro68's GCC
   places spilled locals in the top 8 bytes of alloca space (the patch
-  header has a reproduction).
+  header has a reproduction), `0005` a working `JS_WRITE_OBJ_BSWAP`:
+  bytecode is in the byte order of the machine that reads it and
+  v0.18.0 swaps nowhere, so the build tool `tools/jsprelude` writes the
+  prelude's bytecode byte-swapped for the PowerPC build, and `0006`
+  one shared copy of the source text for a function and the functions
+  nested in it (each used to keep its own copy).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
