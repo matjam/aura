@@ -173,11 +173,11 @@ tools/png-compare.py run/guest.png 20 50 run/host.png run/diff.png
 
 To change the screen depth, click the Monitor BitDepth module in the
 guest's Control Strip (the seventh icon, at 197,466 on a 640x480 screen)
-and pick 256 Colors, Thousands or Millions. In Aura, View > Debug >
+and pick 256 Colors, Thousands or Millions. In Aura, Develop >
 Benchmark times the scene, fills and the chrome and shows how long font
 registration took (and the bundled part of it) and how much font data
-is loaded; View > Debug > Font List (about:fonts) shows the fonts it
-found, with the bundled ones marked; and View > Debug > Page Timings
+is loaded; Develop > Font List (about:fonts) shows the fonts it
+found, with the bundled ones marked; and Develop > Page Timings
 shows the active page's first paint, load and layout times, image
 decodes, then times scrolling: ten 32-pixel steps (twice: the first pass
 paints content for the first time, the second shows the steady state),
@@ -187,11 +187,11 @@ number of areas painted, and shows free heap, temporary memory and the
 glyph cache. Network Status shows the HTTP cache's lookups (fresh,
 history, revalidated, 304, missed) and the time spent reading and
 writing cache files.
-The Debug submenu opens by dragging (a click closes it); the
-`QMP.button` and `QMP.move` methods of `tools/guest-qmp.py` can hold
-the button through View, Debug and the item. Release on the item's
-own row: the submenu's first item is Test Scene. While Aura is busy
-(a long layout), the drag is lost; wait and try again.
+The Develop menu is in the menu bar (its title is at 298,10 on a 640x480
+screen): click the title, then click the item; the menu stays open
+between the two clicks. While Aura is busy (a long layout), the click
+is lost; wait and try again. The developer windows it opens are
+described under Developer tools.
 
 The Finder ignores `guest-qmp.py drag` (it moves in one step). To drag
 a file in the Finder (onto the Aura icon, or a copy to the hard disk),
@@ -288,7 +288,7 @@ To change that, work in `page_doc.c` ("Kept documents") and `browser.c`
   left, and the page was painted 971 ms after the key; on screen the
   change showed about 3 seconds after the key was sent, because the
   page being left was still running its scripts. Loading the same
-  articles took 30 to 70 seconds. View > Debug > Page Timings shows
+  articles took 30 to 70 seconds. Develop > Page Timings shows
   these times for a page that Back or Forward showed from the kept
   documents, with the number and estimated size of kept documents.
 - **To try it on the host**, run `aura-host chrome --net --tab URL --do
@@ -477,9 +477,9 @@ change and at quit (session cookies are dropped); the disk cache is the
 `Cache` folder (`src/net/disk_cache.c`, limited by the disk cache
 preference). The Cookies window (Window > Cookies, or Preferences >
 Privacy) lists `src/net/cookie_view.c`'s model; per-site rules (allow,
-session only, block) live in the `cookies.sites` preference. View >
-Debug > Network Status shows entropy, Open Transport counters, roots,
-cookies and cache use. The out-of-memory handler closes Open Transport
+session only, block) live in the `cookies.sites` preference. Develop >
+Network Status shows entropy, Open Transport counters, roots, cookies
+and cache use. The out-of-memory handler closes Open Transport
 before ExitToShell: with providers open at exit the guest froze.
 
 Engine code must not use `%lld` or `%llu`: newlib on Mac OS 9 lacks
@@ -504,6 +504,91 @@ Toolbox points learned the hard way:
   the chunk when Aura quits; the stock Process Manager keeps them. The
   next Aura launch gets a chunk at the same address, and the theme's
   handle then names Aura's font data.
+
+## Developer tools
+
+Aura has four developer windows, opened from the Develop menu: Page
+Source (also View > Page Source, Command-U), Console, Network and
+Performance. Each shows the active tab of the frontmost browser window
+and follows it. The models are portable and in the engine; the Mac OS 9
+windows are `src/platform/macos9/devwin.c`. The Develop menu also holds
+the debug items (Test Scene, Font List, Benchmark, Network Status, Page
+Timings).
+
+- **To change how the windows draw text**, edit
+  `src/browser/textview.c`: a fixed-width text view (Monaco, else the
+  monospace family, 10 pixels) with optional line numbers, wrapping,
+  colour runs, a character selection or a selected row, find, and
+  scrolling by rows. It owns no text: it asks an `AuTextSource` for one
+  line at a time, reads each line's cell count once per layout and paints
+  only the rows on screen. `AuTextList` is a ready-made source for text
+  made on the spot.
+- **Page Source** is `src/browser/sourceview.c`: one pass over the
+  page's bytes (`au_page_source`) records each line's start and the
+  colouring tokenizer's state there. Lines longer than 2048 bytes are
+  cut into segments, so a minified page stays cheap. The tokenizer
+  colours tags, attribute names, values, comments and `<!DOCTYPE`, and
+  leaves `<script>` and `<style>` text plain; it is not the HTML parser.
+  The window is a native text view, not a page: on the host, laying out
+  a 1.3 MB document as plain text in the engine took 29 ms and would
+  cost far more with colour spans, where the text view lays the same
+  document out in under 1 ms and paints a screen of it in 1 ms. The
+  contextual menu's View Source still opens a `view-source:` tab.
+- **Network** is the page's request log, `src/browser/netlog.c`: a ring
+  of 300 records, cleared by a navigation and freed with the page. A
+  document kept for Back and Forward keeps its log, which returns with
+  it.
+  `page_doc.c` fills it from its fetches (start, response head, data,
+  end). The times, the connection, the remote address, TLS version and
+  cipher and the source (network, memory cache, disk cache, history,
+  304) come from the HTTP layer: every transfer stamps the start of each
+  phase (`au_http_trace` in `net.h`), the loader passes the trace in
+  `AuLoadInfo`, and `page_fetcher.c` turns it into `AuFetchInfo.net`
+  (`AuFetchNet` in `page.h`). The cheap fields are always recorded.
+  Request and response headers are copied (4 KB each at most) only after
+  `au_net_set_trace_headers(net, true)`, which the Network window calls
+  when it first opens, so headers appear for loads made after that.
+  A request refused by policy is logged as blocked with
+  `blocked_reason`: a blocklist's refusal arrives in
+  `AuLoadInfo.blocked_reason` ("blocked: LIST NAME") and mixed content
+  as `AuLoadInfo.mixed`; `page_fetcher.c` passes either on as
+  `AuFetchNet.blocked_reason`. While no request is selected, the
+  window's lower pane lists the page's blocked requests with the list
+  that stopped each (`au_netlog_blocked`).
+- **Console** shows the page's console lines (`au_page_console_line`)
+  through `au_dev_console_lines` in `src/browser/devtools.c`. Uncaught
+  errors and unhandled rejections arrive as error lines with their
+  stack; the first stack frame gives the source URL and line. The input
+  line calls `au_dev_console_eval`, which runs the expression with
+  `au_page_eval` (starting the script runtime on a page that has no
+  script) and adds the expression and its result to the console.
+- **Performance** is `au_dev_perf_report` in `devtools.c`, rebuilt once
+  a second. The time counters are `AuPerf` (`src/page/perf.h`), one per
+  document view, cleared when a document begins: the view times its
+  style and layout passes, its paints and its outermost script entries
+  with the embedder's millisecond clock, and the Mac shell adds each
+  screen copy (`flush` in `browserwin.c`). Tasks of 50 ms or more are
+  kept for the slowest-tasks list, scripts with their URL. The shell
+  supplies free heap and temporary memory, and `au_net_dev_info`
+  (`src/net/net_report.c`) the HTTP cache and the open connections.
+  Copy Report puts the text on the clipboard, for measurements from a
+  real machine.
+- **To see the same text on the host**, run `aura-host chrome` with
+  `--do netlog` (or `netlog:details`), `--do perf`, `--do eval:EXPR`,
+  `--do source` (or `source:FIRST,COUNT` for lines with their colour
+  runs) after the page loads; add `--net` for network pages. `--do
+  devshot:source|console|network|perf:FILE.png` paints that window's
+  text view to a PNG. For example, `aura-host chrome --net --tab
+  https://example.com/ --do netlog:details --do perf`.
+- **Tests.** `tests/browser/test_devtools.c` runs the request log on the
+  fake transport (sources, connections, timings, headers, blocked
+  requests, the ring), the counters and the report, the console and its
+  input line, and the source view and text view (lines, colouring,
+  wrapping, selection, find).
+- **Not done:** a source position for `console.log` lines (only errors
+  carry a stack); a case-sensitive find, a horizontal scroll bar and
+  column sorting in the windows; request bodies and cookies in the
+  Network details; saving the log to a file.
 
 ## Layout and paint speed
 
@@ -1130,7 +1215,7 @@ application).
   (`prefs_blocking.c`; the switch and the three fields are in
   `prefswin.c`) lists the catalogue with each list's size and date or
   what the manager is doing; its checkboxes and Update Now act at once.
-  View > Debug > Network Status shows the totals, where the list memory
+  Develop > Network Status shows the totals, where the list memory
   came from and what the last compile cost.
 - **To try it on the host**, run `aura-host blocklist compile LIST.txt
   OUT` (prints entries, time and peak memory), `aura-host blocklist
@@ -1185,7 +1270,7 @@ global object is the window, the DOM bindings and the event loop.
   preference (on by default) at each load, runs `au_docview_run_scripts`
   for up to 20 ms in every `au_page_idle` and follows the navigations it
   reports through `open_url`, and keeps the last 300 console lines
-  (`au_page_console_line`) for a debug view.
+  (`au_page_console_line`) for the Console window (see Developer tools).
 - **Response heads.** A loader that knows a response's status and headers
   passes them with `au_docview_resource_head` before the data; script
   then sees them in `fetch` and `XMLHttpRequest`, and an error status
@@ -1392,7 +1477,7 @@ work with script off, and script reads and writes the same state.
   time in the event, the idle pass and painting, and the counts from
   `au_docview_stats` (style passes, elements styled, tree builds,
   layouts) and the pixels invalidated. In the guest, focus a page field
-  and choose View > Debug > Page Timings: it types 16 keys and shows
+  and choose Develop > Page Timings: it types 16 keys and shows
   milliseconds per key with the restyle and layout counts.
   `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
   with `:has()` rules, with and without script listeners. Measured in

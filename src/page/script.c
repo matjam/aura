@@ -25,6 +25,7 @@
 
 #include "../js/js.h"
 
+#include <stdio.h>
 #include <string.h>
 
 typedef struct PendingScript PendingScript;
@@ -60,6 +61,8 @@ struct AuDocScript {
     bool parse_done, content_loaded, loaded;
     bool resize_pending, scroll_pending;
     int depth;
+    uint32_t perf_t0;    /* when the outermost entry began */
+    char perf_label[72]; /* the script it ran, for the slow task list */
     char *nav_url;
     bool nav_new_tab;
 };
@@ -427,7 +430,10 @@ static bool ensure_js(AuDocScript *s)
 
 static void enter(AuDocScript *s)
 {
-    s->depth++;
+    if (s->depth++ == 0) { /* the outermost entry is timed (perf.h) */
+        s->perf_t0 = au_dv_perf_now(s->dv);
+        s->perf_label[0] = 0;
+    }
     if (s->js && strcmp(au_docview_base_url(s->dv), au_docview_url(s->dv)) != 0)
         au_js_set_base_url(s->js, au_docview_base_url(s->dv));
 }
@@ -439,6 +445,10 @@ static void leave(AuDocScript *s)
 {
     if (--s->depth > 0)
         return;
+    if (s->js) {
+        uint32_t t1 = au_dv_perf_now(s->dv);
+        au_perf_add(au_docview_perf(s->dv), AU_PERF_SCRIPT, t1 - s->perf_t0, s->perf_label, t1);
+    }
     au_dv_turn_end(s->dv);
     /* A module may have finished (load event) */
     s->depth++;
@@ -472,6 +482,7 @@ static void run_classic(AuDocScript *s, PendingScript *p)
         return;
     }
     const char *url = p->url ? p->url : au_docview_url(s->dv);
+    snprintf(s->perf_label, sizeof s->perf_label, "%s", url);
     au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
     if (p->url)
         fire_simple(s, p->el, "load");
@@ -928,9 +939,26 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
     return ran;
 }
 
+bool au_docscript_content_loaded(const AuDocScript *s)
+{
+    return s->content_loaded;
+}
+
+void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit)
+{
+    *used = *limit = 0;
+    if (!s->js)
+        return;
+    AuJsStats st;
+    au_js_stats(s->js, &st);
+    *used = st.memory_used;
+    *limit = st.memory_limit;
+}
+
 bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out)
 {
-    if (!s->js)
+    /* The console may be the first script a page without scripts runs. */
+    if (!s->js && !ensure_js(s))
         return false;
     enter(s);
     bool ok = au_js_eval(s->js, src, strlen(src), out);

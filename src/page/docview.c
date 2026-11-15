@@ -778,6 +778,7 @@ static void scan_document(AuDocView *dv, bool final)
 void au_docview_begin(AuDocView *dv, const char *url)
 {
     clear_document(dv);
+    au_perf_reset(&dv->perf);
     dv->webfonts = au_webfonts_new(dv->fonts);
     new_layout(dv, au_webfonts_set(dv->webfonts));
     au_free(dv->url);
@@ -942,6 +943,35 @@ static void prune_slots(AuDocView *dv)
     dv->nslots = k;
 }
 
+/* The embedder's clock for the time counters; 0 without one (the fallback
+ * clock advances when read, so it is not used for measuring). */
+static uint32_t perf_now(AuDocView *dv)
+{
+    return dv->cb.now_ms ? (uint32_t)dv->cb.now_ms(dv->cb.ctx, dv) : 0;
+}
+
+AuPerf *au_docview_perf(AuDocView *dv)
+{
+    return &dv->perf;
+}
+
+uint32_t au_dv_perf_now(AuDocView *dv)
+{
+    return perf_now(dv);
+}
+
+bool au_docview_content_loaded(const AuDocView *dv)
+{
+    return dv->doc && !dv->parsing && (!dv->script || au_docscript_content_loaded(dv->script));
+}
+
+void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit)
+{
+    *used = *limit = 0;
+    if (dv->script)
+        au_docscript_heap(dv->script, used, limit);
+}
+
 /* Brings styles up to date; returns true if the tree was restyled. */
 static bool update_style(AuDocView *dv)
 {
@@ -998,15 +1028,25 @@ bool au_docview_update(AuDocView *dv)
 {
     if (!dv->doc)
         return false;
+    /* Timed for the Performance window: a pass counts when it had work. */
+    bool style_work = dv->sheets_rescan || dv->sheets_dirty || dv->style_all || dv->tree_dirty || dv->restyle_needed;
+    uint32_t t0 = perf_now(dv);
     bool changed = update_style(dv);
+    uint32_t t1 = perf_now(dv);
+    if (style_work)
+        au_perf_add(&dv->perf, AU_PERF_STYLE, t1 - t0, NULL, t1);
     if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
     if (dv->images_dirty) {
         au_layout_images_changed(dv->layout);
         dv->images_dirty = false;
     }
-    if (au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh))
+    bool laid_out = au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh);
+    if (laid_out)
         changed = true;
+    uint32_t t2 = perf_now(dv);
+    if (laid_out || t2 != t1)
+        au_perf_add(&dv->perf, AU_PERF_LAYOUT, t2 - t1, NULL, t2);
     if (changed)
         dv->layout_ran = true;
     float w, h;
@@ -1060,9 +1100,14 @@ void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int
      * now, at the size they are shown. */
     au_docimages_prepare(dv->imgs, dv->doc, dv->layout, dv->base,
                          (AuRect){(float)scroll_x, (float)scroll_y, (float)dv->vw, (float)dv->vh});
+    uint32_t t0 = perf_now(dv);
     au_docimages_paint_begin(dv->imgs);
     au_layout_paint(dv->layout, c, view, (float)scroll_x, (float)scroll_y);
     au_docimages_paint_end(dv->imgs);
+    uint32_t t1 = perf_now(dv);
+    au_perf_add(&dv->perf, AU_PERF_PAINT, t1 - t0, NULL, t1);
+    if (view.w > 0 && view.h > 0)
+        au_perf_pixels(&dv->perf, (uint32_t)view.w * (uint32_t)view.h);
     images_changed(dv); /* an image found broken while painting */
 }
 
