@@ -267,6 +267,18 @@ int au_host_net_render_main(int argc, char **argv)
         AuSurface *s = au_surface_new(w, ph);
         AuCanvas *c = au_canvas_new(s);
         au_docview_paint(nr.dv, c, (AuRect){0, 0, (float)w, (float)ph}, 0, scroll);
+        /* Background images are requested when first painted: fetch them
+         * and paint again. */
+        for (int round = 0; round < 3 && au_docview_pending(nr.dv) > 0; round++) {
+            double tp = now_ms();
+            while (au_docview_pending(nr.dv) > 0 && now_ms() - tp < MAX_SECONDS * 1000.0) {
+                bool any = au_net_loader_poll(nr.l);
+                if (!any)
+                    au_host_net_wait(ses.host, 20);
+            }
+            au_docview_update(nr.dv);
+            au_docview_paint(nr.dv, c, (AuRect){0, 0, (float)w, (float)ph}, 0, scroll);
+        }
         if (!au_png_write(out, s)) {
             fprintf(stderr, "aura-host: cannot write %s\n", out);
             rc = 1;
