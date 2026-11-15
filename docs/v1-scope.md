@@ -114,8 +114,9 @@ Keep code small and fast where that costs nothing.
   bytecode cache and lazy compilation go in if they are cheap.
 - Audio and video, WebRTC, WebGL, WebAssembly.
 - Web Workers, service workers, IndexedDB.
-- WebSockets and canvas 2D. These are the first two to pull in if an
-  acceptance site needs them.
+- WebSockets. The first to pull in if an acceptance site needs it.
+  (Canvas 2D was listed here and has since been built: see Canvas in
+  `CLAUDE.md`.)
 - CSS animations and transitions beyond jumping to the end state, 3D
   transforms, filters, blend modes, container queries.
 - Right-to-left and vertical text, complex-script shaping (Arabic,

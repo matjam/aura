@@ -863,8 +863,113 @@ static void test_text(AuCanvasSet *set, AuFontSet *fonts)
     au_c2d_free(c);
 }
 
-int main(void)
+/* ---- Timings: test_canvas2d --bench ---- */
+
+#include <time.h>
+
+static double now_ms(void)
 {
+    return (double)clock() * 1000.0 / CLOCKS_PER_SEC;
+}
+
+#define TIME(label, reps, body)                                                  \
+    do {                                                                         \
+        double t0 = now_ms();                                                    \
+        for (int i_ = 0; i_ < (reps); i_++) {                                    \
+            body;                                                                \
+        }                                                                        \
+        double dt = now_ms() - t0;                                               \
+        printf("  %-46s %9.2f us per call\n", label, dt * 1000.0 / (reps));     \
+    } while (0)
+
+static void bench(AuFontSet *fonts)
+{
+    AuCanvasSet *set = au_canvas_set_new(0);
+    au_canvas_set_fonts(set, fonts);
+    AuCanvas2D *c = au_c2d_new(set, NULL, 300, 150, true), *src = au_c2d_new(set, NULL, 100, 100, true);
+    au_c2d_set_color(src, AU_C2D_FILL, 0xFF336699u);
+    au_c2d_fill_rect(src, 0, 0, 100, 100);
+    au_c2d_set_color(src, AU_C2D_FILL, 0x80FF0000u);
+    au_c2d_fill_rect(src, 20, 20, 60, 60);
+    static uint8_t data[300 * 150 * 4];
+    printf("canvas2d timings on a 300 x 150 canvas (CPU time):\n");
+    au_c2d_set_color(c, AU_C2D_FILL, 0xFF204080u);
+    TIME("fillRect 100 x 100, opaque", 20000, au_c2d_fill_rect(c, 10, 10, 100, 100));
+    au_c2d_set_color(c, AU_C2D_FILL, 0x80204080u);
+    TIME("fillRect 100 x 100, half alpha", 20000, au_c2d_fill_rect(c, 10, 10, 100, 100));
+    TIME("fillRect 100 x 100 at a fractional place", 20000, au_c2d_fill_rect(c, 10.5, 10.5, 100, 100));
+    TIME("clearRect 300 x 150", 20000, au_c2d_clear_rect(c, 0, 0, 300, 150));
+    TIME("drawImage 100 x 100 unscaled, with alpha", 20000,
+         au_c2d_draw_image(c, au_c2d_surface(src), 100, 100, false, 0, 0, 100, 100, 5, 5, 100, 100));
+    TIME("drawImage 100 x 100 unscaled, opaque source", 20000,
+         au_c2d_draw_image(c, au_c2d_surface(src), 100, 100, true, 0, 0, 100, 100, 5, 5, 100, 100));
+    TIME("drawImage 100 x 100 to 150 x 75, smoothed", 2000,
+         au_c2d_draw_image(c, au_c2d_surface(src), 100, 100, false, 0, 0, 100, 100, 5, 5, 150, 75));
+    TIME("drawImage 100 x 100 to 50 x 50 (averaged)", 5000,
+         au_c2d_draw_image(c, au_c2d_surface(src), 100, 100, false, 0, 0, 100, 100, 5, 5, 50, 50));
+    au_c2d_save(c);
+    au_c2d_translate(c, 150, 75);
+    au_c2d_rotate(c, 0.3);
+    TIME("drawImage 100 x 100 rotated", 2000,
+         au_c2d_draw_image(c, au_c2d_surface(src), 100, 100, false, 0, 0, 100, 100, -50, -50, 100, 100));
+    au_c2d_restore(c);
+    TIME("getImageData 300 x 150", 5000, au_c2d_get_image_data(c, 0, 0, 300, 150, data));
+    TIME("putImageData 300 x 150", 5000, au_c2d_put_image_data(c, data, 300, 150, 0, 0, 0, 0, 300, 150));
+    AuCanvasPath *p = au_c2d_path(c);
+    const AuMatrix *m = au_c2d_matrix(c);
+    au_c2d_set_color(c, AU_C2D_FILL, 0xFF208040u);
+    TIME("arc radius 40 and fill", 5000, {
+        au_c2d_begin_path(c);
+        au_cpath_arc(p, m, 150, 75, 40, 0, 6.2831853, false);
+        au_c2d_fill(c, NULL, AU_FILL_NONZERO);
+    });
+    au_c2d_set_line_width(c, 2);
+    TIME("a 20-point line chart stroked, width 2", 2000, {
+        au_c2d_begin_path(c);
+        for (int k = 0; k < 20; k++)
+            au_cpath_line_to(p, m, 10 + k * 14, 75 + ((k * 37) % 50) - 25);
+        au_c2d_stroke(c, NULL);
+    });
+    AuCanvasGradient *g = au_cgradient_linear(0, 0, 300, 0);
+    au_cgradient_add_stop(g, 0, 0xFFFF0000u);
+    au_cgradient_add_stop(g, 1, 0xFF0000FFu);
+    au_c2d_set_gradient(c, AU_C2D_FILL, g);
+    TIME("fillRect 300 x 150, linear gradient", 2000, au_c2d_fill_rect(c, 0, 0, 300, 150));
+    au_cgradient_unref(g);
+    g = au_cgradient_radial(150, 75, 5, 150, 75, 120);
+    au_cgradient_add_stop(g, 0, 0xFFFF0000u);
+    au_cgradient_add_stop(g, 1, 0xFF0000FFu);
+    au_c2d_set_gradient(c, AU_C2D_FILL, g);
+    TIME("fillRect 300 x 150, radial gradient", 500, au_c2d_fill_rect(c, 0, 0, 300, 150));
+    au_cgradient_unref(g);
+    au_c2d_set_color(c, AU_C2D_FILL, 0xFF000000u);
+    au_c2d_set_font(c, "sans-serif", 400, false, 12, "12px sans-serif");
+    TIME("fillText, 12 characters at 12px", 5000, au_c2d_draw_text(c, "Hello canvas", 12, 10, 60, -1, false));
+    AuTextMetrics2D tm;
+    TIME("measureText, 12 characters", 20000, au_c2d_measure_text(c, "Hello canvas", 12, &tm));
+    au_c2d_set_composite(c, "multiply");
+    au_c2d_set_color(c, AU_C2D_FILL, 0xFF8090A0u);
+    TIME("fillRect 100 x 100, multiply", 2000, au_c2d_fill_rect(c, 10, 10, 100, 100));
+    au_c2d_set_composite(c, "source-over");
+    au_c2d_set_shadow_color(c, 0x80000000u);
+    au_c2d_set_shadow_blur(c, 6);
+    TIME("fillRect 100 x 100 with a blurred shadow", 500, au_c2d_fill_rect(c, 30, 30, 100, 100));
+    au_canvas_set_fonts(set, NULL);
+    au_c2d_free(c);
+    au_c2d_free(src);
+    au_canvas_set_free(set);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "--bench")) {
+        AuFontSet *bf = au_fontset_new();
+        au_host_use_system_fonts(false);
+        au_platform_load_fonts(bf);
+        bench(bf);
+        au_fontset_free(bf);
+        return 0;
+    }
     AuFontSet *fonts = au_fontset_new();
     au_host_use_system_fonts(false);
     au_platform_load_fonts(fonts);

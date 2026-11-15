@@ -62,6 +62,17 @@ static inline uint32_t img_px(const Paint *p, int x, int y)
     return p->opaque ? v | 0xFF000000u : v;
 }
 
+/* A sample coordinate as an integer; values no image reaches (and
+ * values that are not numbers) become far ones that still fit. */
+static inline int sample_int(float v)
+{
+    if (!(v > -1e9f))
+        return -1000000000;
+    if (v > 1e9f)
+        return 1000000000;
+    return (int)v;
+}
+
 /* Wraps or clamps a sample coordinate into [lo, hi); -1 when the sample
  * lies outside an image that does not repeat. */
 static inline int img_coord(int v, int lo, int hi, bool repeat, bool clamp)
@@ -80,19 +91,20 @@ static inline int img_coord(int v, int lo, int hi, bool repeat, bool clamp)
     return -1;
 }
 
-/* Weights are 0..256 per axis; each channel is rounded, so a flat colour
- * comes out as it went in (the page painter's faster version truncates,
- * which script reading pixels back would see). */
+/* a and b mixed by t (0..256), two channels per multiply, each rounded:
+ * a flat colour comes out as it went in (the page painter's faster
+ * version truncates, which script reading pixels back would see). */
+static inline uint32_t lerp_px(uint32_t a, uint32_t b, uint32_t t)
+{
+    uint32_t u = 256 - t;
+    uint32_t rb = (((a & 0x00FF00FFu) * u + (b & 0x00FF00FFu) * t + 0x00800080u) >> 8) & 0x00FF00FFu;
+    uint32_t ag = (((a >> 8) & 0x00FF00FFu) * u + ((b >> 8) & 0x00FF00FFu) * t + 0x00800080u) & 0xFF00FF00u;
+    return rb | ag;
+}
+
 static inline uint32_t bilerp(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11, uint32_t fx, uint32_t fy)
 {
-    uint32_t w11 = fx * fy, w10 = fx * (256 - fy), w01 = (256 - fx) * fy, w00 = (256 - fx) * (256 - fy);
-    uint32_t out = 0;
-    for (int sh = 0; sh < 32; sh += 8) {
-        uint32_t v = ((p00 >> sh) & 255) * w00 + ((p10 >> sh) & 255) * w10 + ((p01 >> sh) & 255) * w01 +
-                     ((p11 >> sh) & 255) * w11;
-        out |= ((v + 32768) >> 16) << sh;
-    }
-    return out;
+    return lerp_px(lerp_px(p00, p10, fx), lerp_px(p01, p11, fx), fy);
 }
 
 /* The source pixels for n destination pixels from (x, y). */
@@ -157,17 +169,42 @@ static void paint_fetch(const Paint *p, int x, int y, int n, uint32_t *out)
     case PK_IMAGE:
         if (!p->smooth) {
             for (int i = 0; i < n; i++, u += du, v += dv) {
-                int sx = img_coord((int)floorf(u), p->ix0, p->ix1, p->rep_x, p->clamp);
-                int sy = img_coord((int)floorf(v), p->iy0, p->iy1, p->rep_y, p->clamp);
+                int sx = img_coord(sample_int(floorf(u)), p->ix0, p->ix1, p->rep_x, p->clamp);
+                int sy = img_coord(sample_int(floorf(v)), p->iy0, p->iy1, p->rep_y, p->clamp);
                 out[i] = sx < 0 || sy < 0 ? 0 : img_px(p, sx, sy);
+            }
+        } else if (dv == 0 && fabsf(u) < 16000 && fabsf(u + du * (float)n) < 16000 && fabsf(v) < 1e8f) {
+            /* No rotation: the two source rows and the vertical weight are
+             * the same along the run, and x steps in 16.16 fixed point. */
+            v -= 0.5f;
+            float fv = floorf(v);
+            int iy = (int)fv;
+            uint32_t wy = (uint32_t)((v - fv) * 256.0f);
+            int ya = img_coord(iy, p->iy0, p->iy1, p->rep_y, p->clamp);
+            int yb = img_coord(iy + 1, p->iy0, p->iy1, p->rep_y, p->clamp);
+            const AuPixel *ra = ya < 0 ? NULL : p->img->pixels + (size_t)ya * p->img->stride;
+            const AuPixel *rb = yb < 0 ? NULL : p->img->pixels + (size_t)yb * p->img->stride;
+            int32_t fx = (int32_t)floorf((u - 0.5f) * 65536.0f), step = (int32_t)floorf(du * 65536.0f + 0.5f);
+            uint32_t opq = p->opaque ? 0xFF000000u : 0;
+            for (int i = 0; i < n; i++, fx += step) {
+                int ix = fx >= 0 ? fx >> 16 : -((-fx + 65535) >> 16);
+                uint32_t wx = (uint32_t)(fx - ix * 65536) >> 8;
+                int xa = img_coord(ix, p->ix0, p->ix1, p->rep_x, p->clamp);
+                int xb = img_coord(ix + 1, p->ix0, p->ix1, p->rep_x, p->clamp);
+                uint32_t p00 = xa < 0 || !ra ? 0 : ra[xa] | opq, p10 = xb < 0 || !ra ? 0 : ra[xb] | opq;
+                uint32_t p01 = xa < 0 || !rb ? 0 : rb[xa] | opq, p11 = xb < 0 || !rb ? 0 : rb[xb] | opq;
+                out[i] = bilerp(p00, p10, p01, p11, wx, wy) | opq;
             }
         } else {
             u -= 0.5f;
             v -= 0.5f;
             for (int i = 0; i < n; i++, u += du, v += dv) {
                 float fu = floorf(u), fv = floorf(v);
-                int ix = (int)fu, iy = (int)fv;
-                uint32_t wx = (uint32_t)((u - fu) * 256.0f), wy = (uint32_t)((v - fv) * 256.0f);
+                int ix = sample_int(fu), iy = sample_int(fv);
+                /* u - fu is in 0..1 for a number; anything else samples whole pixels */
+                float tx = u - fu, ty = v - fv;
+                uint32_t wx = tx > 0 && tx <= 1 ? (uint32_t)(tx * 256.0f) : 0;
+                uint32_t wy = ty > 0 && ty <= 1 ? (uint32_t)(ty * 256.0f) : 0;
                 int xa = img_coord(ix, p->ix0, p->ix1, p->rep_x, p->clamp);
                 int xb = img_coord(ix + 1, p->ix0, p->ix1, p->rep_x, p->clamp);
                 int ya = img_coord(iy, p->iy0, p->iy1, p->rep_y, p->clamp);
@@ -450,7 +487,7 @@ static uint32_t blend_px(int op, uint32_t s, uint32_t d)
             int sh = 16 - 8 * i;
             uint32_t S = (s >> sh) & 255, D = (d >> sh) & 255;
             float mix = (float)(sa * da) * r[i] / 255.0f;
-            uint32_t v = div255(S * (255 - da) + D * (255 - sa)) + (uint32_t)(mix < 0 ? 0 : mix + 0.5f);
+            uint32_t v = div255(S * (255 - da) + D * (255 - sa)) + (uint32_t)(mix > 0 ? mix + 0.5f : 0);
             out |= (v > ao ? ao : v) << sh;
         }
         return out;
@@ -475,7 +512,7 @@ static uint32_t blend_px(int op, uint32_t s, uint32_t d)
             float m = 0;
             if (sa && da)
                 m = (float)(sa * da) * blend_sep(op, (float)D / (float)da, (float)S / (float)sa) / 255.0f;
-            mix = (uint32_t)(m < 0 ? 0 : m + 0.5f);
+            mix = (uint32_t)(m > 0 ? m + 0.5f : 0);
             break;
         }
         }
@@ -508,6 +545,13 @@ static void comp_run(const Comp *k, int y, int x, int n, const uint8_t *cov, uin
             au_blend_solid_span(d, n, p->solid, cov);
         else if (ucov)
             au_blend_solid_span(d, n, au_px_scale(p->solid, au_a256(ucov)), NULL);
+        return;
+    }
+    if (op == OP_DEST_OUT && !cm && !cov && ucov == 255 && p->kind == PK_SOLID && (p->solid >> 24) == 255) {
+        /* clearRect over whole pixels: a store. */
+        uint32_t v = k->force_opaque ? 0xFF000000u : 0;
+        for (int i = 0; i < n; i++)
+            d[i] = v;
         return;
     }
     bool unbounded = op_unbounded(op);
