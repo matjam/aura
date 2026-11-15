@@ -1,0 +1,231 @@
+Form controls: intrinsic sizes, baselines, centring, fieldset and legend,
+details, author restyling. Ahem: every glyph is 1em square (ascent 0.8em).
+Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
+2px border and 1px 2px padding; buttons 2px border and 1px 6px padding.
+
+=== text input, button and checkbox share the text baseline
+<body style="margin:0">
+<div id=d><span id=s>x</span><input id=t value=x><button id=b>x</button><input id=c type=checkbox></div>
+---
+#d h=21.67
+#s y=3.2 h=16
+#t y=2.33 w=274.67 h=19.33
+#b y=2.33 w=29.33 h=19.33
+#c y=3 w=13 h=13
+
+=== radio sits on the baseline with no bottom margin
+<body style="margin:0">
+<div id=d><span id=s>x</span><input id=r type=radio></div>
+---
+#r y=3 w=13 h=13
+#s y=3.2
+
+=== input buttons are border-box and centre their label
+<body style="margin:0">
+<div><span id=s>x</span><input id=b type=submit value=xx style="height:40px"></div>
+---
+#b y=0 w=42.67 h=40
+#s y=11.2
+
+=== text input with a height centres its text line
+<body style="margin:0">
+<div id=d><span id=s>x</span><input id=t style="height:40px" value=x></div>
+---
+#t y=0 h=46
+#s y=14.2
+
+=== text input line-height sets its content height
+<body style="margin:0">
+<div><input id=t style="line-height:30px"></div>
+---
+#t h=36
+
+=== size sets a text input's width in average characters
+<body style="margin:0">
+<input id=t size=4><input id=u size=0>
+---
+#t w=61.33
+#u w=274.67
+
+=== button element with a height centres its content
+<body style="margin:0">
+<div><span id=s>x</span><button id=b style="height:40px"><span id=i>x</span></button></div>
+---
+#b y=0 h=40
+#i y=13.33
+#s y=11.2
+
+=== button element is fit-content as a block
+<body style="margin:0">
+<button id=b style="display:block">xx</button>
+---
+#b x=0 w=42.67
+
+=== empty button aligns by its content box
+<body style="margin:0">
+<div><span id=s>x</span><button id=b></button></div>
+---
+#b h=6
+#s y=0
+
+=== select is as wide as its widest option plus the arrow
+<body style="margin:0">
+<select id=s><option>x</option><option selected>xxxx</option></select>
+---
+#s w=79.33 h=17.33
+
+=== select without arrow when appearance is none
+<body style="margin:0">
+<select id=s style="appearance:none"><option>xxxx</option></select>
+---
+#s w=63.33
+
+=== list box: four rows by default
+<body style="margin:0">
+<select id=l multiple><option>x</option><option>xx</option></select>
+---
+#l w=32.67 h=63.33
+
+=== list box size and its last row's baseline
+<body style="margin:0">
+<div><span id=s>x</span><select id=l size=2><option>x</option></select></div>
+---
+#l y=0 h=32.67
+#s y=15.2
+
+=== textarea: cols and rows, aligned by its bottom edge
+<body style="margin:0">
+<div id=d><span id=s>x</span><textarea id=t cols=10 rows=3>x</textarea></div>
+---
+#t y=0 w=139.33 h=46
+#s y=33.2
+
+=== textarea content wraps and scrolls inside rows
+<body style="margin:0">
+<textarea id=t style="display:block" cols=2 rows=1>xx xx xx</textarea>
+---
+#t w=32.67 h=19.33 lines=3
+
+=== textarea as a block keeps its cols width
+<body style="margin:0">
+<textarea id=t style="display:block" cols=4></textarea>
+---
+#t x=0 w=59.33 h=32.67
+
+=== progress and meter sizes and baseline
+<body style="margin:0">
+<div><span id=s>x</span><progress id=p></progress><meter id=m></meter></div>
+---
+#p w=160 h=16
+#m w=80 h=16
+#s y=0
+
+=== file input: a button and its status text
+<body style="margin:0">
+<input id=f type=file>
+---
+#f h=19.33 w=353.33
+
+=== color input box
+<body style="margin:0">
+<input id=c type=color>
+---
+#c w=50 h=27
+
+=== hidden input makes no box
+<body style="margin:0">
+<div id=d><input type=hidden value=x></div>
+---
+#d h=0
+
+=== checkbox with appearance none is a plain box on the bottom margin edge
+<body style="margin:0">
+<div><span id=s>x</span><input id=c type=checkbox style="appearance:none;width:20px;height:20px;border:1px solid"></div>
+---
+#c y=3 w=20 h=20
+#s y=13.2
+
+=== flex baseline alignment uses the control's text baseline
+<body style="margin:0">
+<div style="display:flex;align-items:baseline"><input id=t><span id=s style="font-size:32px">x</span></div>
+---
+#t y=11.93
+#s y=0
+
+=== flex stretch makes controls as tall as the line
+<body style="margin:0">
+<div style="display:flex"><input id=t><span style="font-size:32px">x</span></div>
+---
+#t h=32
+
+=== block input with width 100%
+<body style="margin:0;width:300px">
+<input id=t style="display:block;width:100%;box-sizing:border-box">
+---
+#t x=0 w=300 h=19.33
+
+=== fieldset: the legend sits on the top border
+<body style="margin:0">
+<fieldset id=f style="margin:0;padding:10px;border:2px solid"><legend id=l style="padding:0">x</legend><div id=c>y</div></fieldset>
+---
+#l x=12 y=0 w=16 h=16
+#c x=12 y=26
+#f h=54
+
+=== fieldset: a legend thinner than the border is centred on it
+<body style="margin:0">
+<fieldset id=f style="margin:0;padding:10px;border:20px solid"><legend id=l style="padding:0;font-size:8px">x</legend><div id=c>y</div></fieldset>
+---
+#l x=30 y=6 h=8
+#c y=30
+
+=== fieldset: a second legend is ordinary content
+<body style="margin:0">
+<fieldset id=f style="margin:0;padding:0;border:0"><legend id=a style="padding:0">x</legend><legend id=b style="padding:0">y</legend></fieldset>
+---
+#a y=0
+#b y=16
+#f h=32
+
+=== legend centred by its margins
+<body style="margin:0;width:200px">
+<fieldset style="margin:0;padding:0;border:0"><legend id=l style="padding:0;margin:0 auto">xx</legend></fieldset>
+---
+#l x=84
+
+=== closed details shows only the summary
+<body style="margin:0">
+<details id=d><summary>s</summary><div>hidden</div>more text</details>
+---
+#d h=16
+
+=== open details shows its content
+<body style="margin:0">
+<details id=d open><summary>s</summary><div>shown</div></details>
+---
+#d h=32
+
+=== preserved trailing spaces hang at the end of a line
+<body style="margin:0;width:64px">
+<div style="white-space:pre-wrap;text-align:right"><span id=s>xx  </span></div>
+---
+#s x=32
+
+=== native text field frame, restyled field border
+<body style="margin:0">
+<input style="display:block" value="">
+<input style="display:block;border:3px solid #ff0000;background:#00ff00">
+---
+pixel 0 8 999999
+pixel 1 8 444444
+pixel 10 8 ffffff
+pixel 1 28 ff0000
+pixel 10 28 00ff00
+
+=== native checkbox frame and its check mark
+<body style="margin:0">
+<input type=checkbox checked style="margin:0;display:block;width:20px;height:20px">
+---
+pixel 0 10 000000
+pixel 2 10 dddddd
+pixel 9 15 000000

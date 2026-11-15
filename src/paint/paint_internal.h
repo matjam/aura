@@ -79,6 +79,8 @@ typedef struct AuGradientLut {
     uint32_t lut[256];
     float ox, oy;   /* gradient start, surface pixels */
     float dx, dy;   /* t = (px - ox) * dx + (py - oy) * dy, 0..1 */
+    float irx, iry; /* radial: t = |((px - ox) * irx, (py - oy) * iry)| */
+    bool radial, repeat;
 } AuGradientLut;
 
 void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut *out);

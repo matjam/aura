@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Edge cases</title>
+<style>
+body { font: 14px sans-serif; margin: 10px; }
+.box { background: #def; margin: 4px 0; }
+.z { width: 0; height: 0; border: 10px solid #c33; display: inline-block; }
+.neg { margin-left: -10px; background: #fdd; }
+.negtop { margin-top: -8px; background: #dfd; position: relative; }
+.empty { min-height: 0; background: #f99; }
+.counter { counter-reset: sec; list-style: none; padding: 0; }
+.counter li { counter-increment: sec; }
+.counter li::before { content: counter(sec, decimal-leading-zero) ". "; color: #c60; }
+.nested { counter-reset: item; list-style: none; padding-left: 10px; }
+.nested li::before { counter-increment: item; content: counters(item, ".") " "; color: #369; }
+dl.inline dt { float: left; clear: left; width: 80px; font-weight: bold; }
+dl.inline dd { margin-left: 90px; }
+.wide { width: 2000px; background: #ffe; }
+.pct { width: 50%; padding: 0 10%; background: #eef; box-sizing: border-box; }
+.minmax { width: 50%; min-width: 300px; max-width: 200px; background: #fef; }
+.abs-empty { position: relative; height: 30px; background: #eee; }
+.abs-empty span { position: absolute; inset: 5px 10px; background: #9cf; }
+</style></head><body>
+<div class="box">Zero-size boxes with borders: <span class="z"></span> <span class="z" style="border-width:0 10px 10px"></span> <span style="display:inline-block;width:0;height:0"></span>end</div>
+<div class="box"></div>
+<div class="box empty"></div>
+<div class="box" style="height:0;overflow:visible">overflowing a zero-height box</div>
+<div class="box" style="margin-top:20px">After a zero-height box</div>
+<div class="box neg">Negative left margin pulls this box out of the body padding</div>
+<div class="box">Box above</div>
+<div class="box negtop">Negative top margin overlaps the box above</div>
+<p style="margin:0">Paragraph <span style="margin:0 -6px;background:#cfc">negative inline margins</span> squeeze text</p>
+<ol class="counter"><li>first</li><li>second</li><li>third</li></ol>
+<ol class="nested"><li>one<ol class="nested"><li>one.one</li><li>one.two<ol class="nested"><li>deep</li></ol></li></ol></li><li>two</li></ol>
+<ul style="list-style:square inside"><li>square inside</li></ul>
+<ol style="list-style:lower-alpha"><li>alpha</li><li>beta</li></ol>
+<ol reversed><li>three</li><li>two</li><li>one</li></ol>
+<ol style="list-style:lower-greek"><li>greek</li></ol>
+<ul style="list-style:none"><li>no marker</li></ul>
+<dl class="inline"><dt>Term</dt><dd>Definition beside the floated term</dd><dt>Longer term</dt><dd>Second</dd></dl>
+<div class="pct">50% width with 10% padding, border-box</div>
+<div class="minmax">min-width beats max-width</div>
+<div class="abs-empty"><span></span></div>
+<div style="width:120px;background:#eee">Averyveryverylongunbrokenwordinanarrowbox and text</div>
+<div style="width:120px;background:#eee;word-break:break-all">breakallbreakallbreakall</div>
+<div style="width:120px;background:#eee;hyphens:auto">extraordinarily</div>
+<div><span></span><b></b><i></i>Empty inlines before text</div>
+<div style="font-size:0">font-size zero<span style="font-size:14px">visible child</span></div>
+<div style="line-height:0;background:#fcc">line-height zero</div>
+<div style="display:none">hidden</div>
+<div style="visibility:hidden;height:10px;background:red">invisible</div>
+<div class="wide">A 2000px wide box makes the document scroll horizontally</div>
+</body></html>

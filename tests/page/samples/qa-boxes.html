@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Boxes</title>
+<style>
+body { font: 14px sans-serif; margin: 10px; width: 760px; background: #f0f4f8; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.b { width: 80px; height: 50px; background: #fff; font-size: 11px; padding: 4px; }
+.radius { border-radius: 12px; }
+.clipr { overflow: hidden; border-radius: 20px; border: 3px solid #333; width: 80px; height: 60px; }
+.clipr div { background: #c33; height: 100px; }
+.shadow { box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+.ishadow { box-shadow: inset 0 0 8px #06c; }
+.outline { outline: 3px dashed #c60; outline-offset: 2px; }
+ol, ul { background: #fff; margin: 4px 0; }
+.inside { list-style-position: inside; }
+.float { float: left; width: 100px; height: 60px; background: #9c9; margin: 0 10px 4px 0; }
+.rel { position: relative; height: 80px; background: #fff; border: 1px solid #999; }
+.abs { position: absolute; right: 10px; bottom: 10px; width: 60px; height: 30px; background: #f96; }
+.z1 { position: absolute; left: 20px; top: 10px; width: 60px; height: 40px; background: rgba(0,0,200,.6); z-index: 2; }
+.z2 { position: absolute; left: 50px; top: 25px; width: 60px; height: 40px; background: rgba(200,0,0,.6); z-index: 1; }
+.zneg { position: absolute; left: 150px; top: 5px; width: 60px; height: 60px; background: #ccc; z-index: -1; }
+.scroll { height: 60px; overflow: auto; background: #fff; border: 1px solid #999; width: 200px; }
+dl { background: #fff; }
+blockquote { background: #fff; }
+hr { margin: 6px 0; }
+</style></head><body>
+<div class="row">
+ <div class="b" style="border:4px solid #333">solid</div>
+ <div class="b" style="border:4px dashed #333">dashed</div>
+ <div class="b" style="border:4px dotted #333">dotted</div>
+ <div class="b" style="border:6px double #333">double</div>
+ <div class="b" style="border:6px groove #888">groove</div>
+ <div class="b" style="border:6px ridge #888">ridge</div>
+ <div class="b" style="border:6px inset #888">inset</div>
+ <div class="b" style="border:6px outset #888">outset</div>
+</div>
+<div class="row">
+ <div class="b" style="border-width:2px 8px 14px 4px;border-style:solid;border-color:red green blue orange">mixed</div>
+ <div class="b radius" style="border:10px solid #369">radius thick</div>
+ <div class="b" style="border:6px dashed #c33;border-radius:16px">dashed round</div>
+ <div class="b" style="border-radius:50%;background:#69c">circle</div>
+ <div class="clipr"><div>clip</div></div>
+ <div class="b shadow">shadow</div>
+ <div class="b ishadow">inset</div>
+ <div class="b outline">outline</div>
+</div>
+<div class="row">
+ <div class="b" style="background:linear-gradient(to right,#f00,#00f)">lin</div>
+ <div class="b" style="background:radial-gradient(#ff0,#f80,#800)">radial</div>
+ <div class="b" style="background:repeating-linear-gradient(45deg,#fff 0 6px,#ccc 6px 12px)">stripes</div>
+ <div class="b" style="background:linear-gradient(#c00,#c00) center/20px 20px no-repeat,#eee">center tile</div>
+ <div class="b" style="background:linear-gradient(#06c,#06c) bottom/100% 4px no-repeat #fff">bottom bar</div>
+ <div class="b" style="padding:10px;border:5px dashed #999;background:#ffc content-box">content-box</div>
+ <div class="b" style="padding:10%;margin-left:5%;background:#cff">pct pad</div>
+</div>
+<div style="background:#fff;overflow:hidden;margin-bottom:10px">
+ <div class="float">float</div>
+ Text flows around the float on the left. Text flows around the float on the left. Text flows around the float on the left. Text flows around the float on the left.
+ <div style="overflow:hidden;background:#eef;margin-top:4px">A BFC beside the float takes the remaining width.</div>
+</div>
+<ol><li>One</li><li style="font-size:22px">Big item</li><li style="line-height:2">Tall line</li><li>Four<ul><li>Nested disc</li><li>Again<ul><li>Square</li></ul></li></ul></li></ol>
+<ul class="inside"><li>Inside marker with text that wraps around to show where the next line starts relative to the marker in this list item</li></ul>
+<ol start="9" style="list-style:upper-roman"><li>nine</li><li>ten</li></ol>
+<div class="rel"><div class="abs">abs</div><div class="z1">z2</div><div class="z2">z1</div><div class="zneg">neg</div></div>
+<div class="scroll">Scrolling box with lots of content. Scrolling box with lots of content. Scrolling box with lots of content. Scrolling box with lots of content. Scrolling box with lots of content.</div>
+<dl><dt>Term</dt><dd>Definition indented 40px</dd></dl>
+<blockquote>Blockquote with 40px side margins.</blockquote>
+<hr>
+<address>Address in italics</address>
+<h1>H1</h1><h2>H2</h2><h3>H3</h3><h4>H4</h4><h5>H5</h5><h6>H6</h6>
+<div style="position:sticky;top:0;background:#ff0">sticky</div>
+<div style="transform:rotate(10deg);width:100px;background:#9cf;margin:20px">rotated</div>
+<div style="transform:scale(1.5);width:100px;background:#fc9;margin:20px 40px">scaled</div>
+</body></html>

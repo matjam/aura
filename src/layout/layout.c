@@ -167,6 +167,170 @@ float l_ratio_height(const LBlock *b, float content_w)
     return l_max(0, h);
 }
 
+/* ---- Form controls ----
+ *
+ * Sizes and baselines follow current browsers (checked against Chrome):
+ * a single-line control's content box holds one line of its font at its
+ * line-height, centred vertically when the box is taller, and the control's
+ * baseline is that line's baseline. Checkboxes, radio buttons and range
+ * sliders put the bottom of their border box on the baseline (their bottom
+ * margin hangs below it). Textareas, progress and meter bars align by
+ * their bottom margin edge, as inline-blocks without a usable line. A list
+ * box's baseline is that of the text in its last visible row. */
+
+float l_control_line(AuLayout *L, const LBlock *b, float *ascent)
+{
+    const AuStyle *s = b->b.style;
+    LFont *f = l_font(L, s);
+    float lh = l_line_height(s, f);
+    if (ascent)
+        *ascent = (lh - (f->m.ascent + f->m.descent)) / 2 + f->m.ascent;
+    return lh;
+}
+
+/* A list box row: the line and 1px above and below. */
+float l_listbox_row(AuLayout *L, const LBlock *b) { return l_control_line(L, b, NULL) + 2; }
+
+/* Width of the drop-down arrow area of a single-line select. */
+float l_select_arrow_w(const LBlock *b)
+{
+    if (b->b.style->rare->appearance == AU_APPEARANCE_NONE)
+        return 0;
+    return roundf(b->b.style->inh->font_size * 1.2f);
+}
+
+/* The file input's button width, for its label. */
+float l_file_button_w(AuLayout *L, const LBlock *b)
+{
+    LFont *f = l_font(L, b->b.style);
+    const char *t = b->rep && b->rep->label ? b->rep->label : "";
+    return l_measure(L, f, b->b.style, t, strlen(t)) + 16;
+}
+
+/* Baseline of a laid-out replaced control from its border-box top (ch is
+ * its content height), or NAN to align by the bottom margin edge. */
+static float control_baseline(AuLayout *L, const LBlock *b, float ch)
+{
+    float top = b->bw[0] + b->p[0], asc, lh;
+    switch (b->b.replaced) {
+    case LR_TEXT_INPUT:
+    case LR_BUTTON:
+    case LR_SELECT:
+    case LR_COLOR:
+        lh = l_control_line(L, b, &asc);
+        return top + (ch - lh) / 2 + asc;
+    case LR_FILE:
+        lh = l_control_line(L, b, &asc);
+        return top + (ch - lh) / 2 + asc;
+    case LR_LISTBOX: {
+        int rows = b->rep && b->rep->rows ? b->rep->rows : 4;
+        float rh = l_listbox_row(L, b);
+        l_control_line(L, b, &asc);
+        return top + (rows - 1) * rh + 1 + asc;
+    }
+    case LR_CHECKBOX:
+    case LR_RADIO:
+    case LR_RANGE:
+        /* With appearance: none they are plain empty inline-blocks. */
+        if (b->b.style->rare->appearance == AU_APPEARANCE_NONE)
+            return NAN;
+        return ch + l_bp_v(b);
+    default:
+        return NAN;
+    }
+}
+
+float l_atomic_baseline(const LBlock *k)
+{
+    float mh = k->h + k->m[0] + k->m[2];
+    if (k->b.replaced == LR_BUTTON && k->b.inner != LI_REPLACED) {
+        /* A <button>: its first line; with no line, its content-box bottom. */
+        float bl = !isnan(k->baseline) ? k->baseline : k->h - k->bw[2] - k->p[2];
+        return k->m[0] + bl;
+    }
+    if (k->b.inner == LI_FLEX && !isnan(k->baseline))
+        return k->m[0] + k->baseline;
+    if (isnan(k->last_baseline) || (k->b.flags & LF_CLIPS))
+        return mh;
+    return k->m[0] + k->last_baseline;
+}
+
+/* Auto content width of a textarea: cols average characters. */
+static float textarea_w(AuLayout *L, const LBlock *b)
+{
+    LFont *f = l_font(L, b->b.style);
+    int cols = b->rep && b->rep->cols ? b->rep->cols : 20;
+    return cols * f->m.avg_advance;
+}
+
+/* Moves the content of b (lines, fragments, child boxes) down by dy. */
+void l_shift_content(LBlock *b, float dy)
+{
+    if (dy == 0)
+        return;
+    for (uint32_t i = 0; i < b->nlines; i++)
+        b->lines[i].y += dy;
+    for (uint32_t i = 0; i < b->nfrags; i++) {
+        b->frags[i].y += dy;
+        if (b->frags[i].kind == FR_ATOMIC)
+            ((LBlock *)b->frags[i].box)->y += dy;
+    }
+    /* Block children, and floats reached through inline boxes. */
+    LBox *c = b->b.first;
+    while (c) {
+        if (c->kind == LK_BLOCK) {
+            if (!(c->flags & LF_INLINE_LEVEL))
+                ((LBlock *)c)->y += dy;
+        } else if (c->kind == LK_INLINE && c->first) {
+            c = c->first;
+            continue;
+        }
+        while (c && !c->next) {
+            c = c->parent;
+            if (c == &b->b)
+                c = NULL;
+        }
+        if (c)
+            c = c->next;
+    }
+    if (!isnan(b->baseline))
+        b->baseline += dy;
+    if (!isnan(b->last_baseline))
+        b->last_baseline += dy;
+}
+
+/* The rendered legend of fieldset b, laid out and placed on its top
+ * border; the space it takes is added to b's top padding (HTML, "The
+ * fieldset and legend elements"). */
+static void place_legend(AuLayout *L, LBlock *b, float content_w)
+{
+    LBlock *lg = NULL;
+    for (LBox *c = b->b.first; c; c = c->next)
+        if (c->kind == LK_BLOCK && (c->flags & LF_LEGEND)) {
+            lg = (LBlock *)c;
+            break;
+        }
+    if (!lg)
+        return;
+    l_layout_independent(L, lg, content_w, -1, content_w, LS_FIT);
+    const AuStyleSurround *ls = lg->b.style->surr;
+    float free = content_w - lg->w - lg->m[1] - lg->m[3];
+    float x = b->bw[3] + b->p[3] + lg->m[3];
+    bool la = ls->margin[3].kind == AU_LEN_AUTO, ra = ls->margin[1].kind == AU_LEN_AUTO;
+    const char *al = l_attr(&lg->b, au_atom_lookup("align", 5));
+    if (al && au_ieq(al, strlen(al), "center", 6))
+        la = ra = true;
+    else if (al && au_ieq(al, strlen(al), "right", 5))
+        la = true, ra = false;
+    if (free > 0 && la)
+        x += ra ? free / 2 : free;
+    float mh = lg->h + lg->m[0] + lg->m[2];
+    float bt = b->bw[0];
+    lg->x = x;
+    lg->y = (mh >= bt ? 0 : (bt - mh) / 2) + lg->m[0];
+    b->p[0] += l_max(mh, bt) - bt;
+}
+
 /* ---- Replaced elements ---- */
 
 static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, float *ratio)
@@ -191,32 +355,54 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         }
         return;
     case LR_TEXT_INPUT: {
+        /* size (default 20) average characters (HTML, "The input element
+         * as a text entry widget"). */
         const char *sz = l_attr(&b->b, AU_ATOM_size);
         int n = sz ? atoi(sz) : 20;
         if (n <= 0 || n > 1000)
             n = 20;
-        *w = (float)n * em * 0.55f;
-        *h = lh;
+        *w = (float)n * f->m.avg_advance;
+        *h = l_control_line(L, b, NULL);
         return;
     }
     case LR_BUTTON:
+    case LR_COLOR:
         *w = r && r->label ? l_measure(L, f, s, r->label, strlen(r->label)) : 0;
-        *h = lh;
+        if (b->b.replaced == LR_COLOR)
+            *w = 44;
+        *h = l_control_line(L, b, NULL);
         return;
-    case LR_SELECT:
-        *w = (r && r->label ? l_measure(L, f, s, r->label, strlen(r->label)) : 0) + em * 1.5f;
-        *h = lh;
+    case LR_FILE: {
+        float bw = l_file_button_w(L, b);
+        const char *t = r && r->aux ? r->aux : "";
+        *w = bw + 4 + l_measure(L, f, s, t, strlen(t));
+        *h = l_control_line(L, b, NULL) + 6;
         return;
-    case LR_TEXTAREA: {
-        AuAtom ac = au_atom_lookup("cols", 4), ar = au_atom_lookup("rows", 4);
-        const char *cs = ac ? l_attr(&b->b, ac) : NULL, *rs = ar ? l_attr(&b->b, ar) : NULL;
-        int cols = cs ? atoi(cs) : 20, rows = rs ? atoi(rs) : 2;
-        if (cols <= 0 || cols > 1000)
-            cols = 20;
-        if (rows <= 0 || rows > 1000)
-            rows = 2;
-        *w = cols * f->m.ch_advance;
-        *h = rows * l_line_height(s, f);
+    }
+    case LR_SELECT: {
+        const char *t = r && r->aux ? r->aux : "";
+        *w = l_measure(L, f, s, t, strlen(t)) + l_select_arrow_w(b);
+        *h = l_control_line(L, b, NULL);
+        return;
+    }
+    case LR_LISTBOX: {
+        float mw = 0;
+        const char *t = r && r->label ? r->label : "";
+        while (*t) {
+            const char *e = strchr(t, '\n');
+            size_t n = e ? (size_t)(e - t) : strlen(t);
+            uint8_t fl = (uint8_t)t[0] & 15;
+            float tw = n > 1 ? l_measure(L, f, s, t + 1, n - 1) : 0;
+            if (fl & LB_GROUP)
+                tw *= 1.1f; /* bold */
+            if (fl & LB_INDENT)
+                tw += roundf(em * 0.75f);
+            mw = l_max(mw, tw);
+            t += n + (e ? 1 : 0);
+        }
+        int rows = r && r->rows ? r->rows : 4;
+        *w = mw + 4;
+        *h = rows * l_listbox_row(L, b);
         return;
     }
     case LR_CHECKBOX:
@@ -227,9 +413,19 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         *w = 129;
         *h = 16;
         return;
+    case LR_PROGRESS:
+        *w = em * 10;
+        *h = em;
+        return;
+    case LR_METER:
+        *w = em * 5;
+        *h = em;
+        return;
     case LR_DISC:
     case LR_CIRCLE:
     case LR_SQUARE:
+    case LR_DISCLOSURE_OPEN:
+    case LR_DISCLOSURE_CLOSED:
         *w = em * 0.8f;
         *h = f->m.x_height;
         return;
@@ -241,10 +437,6 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
             aw = (float)atof(ws);
         if (hs && atof(hs) > 0)
             ah = (float)atof(hs);
-        if (l_is_tag(&b->b, AU_ATOM_meter) || l_is_tag(&b->b, AU_ATOM_progress)) {
-            aw = em * 10;
-            ah = em;
-        }
         *w = aw;
         *h = ah;
         *ratio = ah > 0 ? aw / ah : 0;
@@ -326,6 +518,8 @@ void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
         if (sh >= 0 && r > 0)
             w = sh * r;
         mn = mx = w;
+    } else if (b->b.replaced == LR_TEXTAREA) {
+        mn = mx = textarea_w(L, b);
     } else {
         l_fc_ops(b)->intrinsic(L, b, &mn, &mx);
     }
@@ -380,6 +574,14 @@ float l_used_width(AuLayout *L, LBlock *b, float cb_w, float avail, int mode)
 {
     if (mode == LS_STRETCH && b->b.inner == LI_TABLE)
         mode = LS_FIT; /* auto-width tables shrink to fit */
+    /* An auto-width button is fit-content even as a block (HTML, "The
+     * button element"); a textarea's auto width comes from cols, like a
+     * replaced element's. */
+    if (mode == LS_STRETCH && b->b.replaced == LR_BUTTON)
+        mode = LS_FIT;
+    if (b->b.replaced == LR_TEXTAREA && mode != LS_GIVEN && !lb_anon(&b->b) &&
+        b->b.style->box->width.kind == AU_LEN_AUTO)
+        return l_clamp_w(b, textarea_w(L, b), cb_w);
     float edges = l_edges_h(b);
     float avail_c = l_max(0, avail - edges);
     if (b->b.inner == LI_REPLACED) {
@@ -478,6 +680,8 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->ov = (LArea){0, 0, b->w, b->h};
         return;
     }
+    if (b->b.inner == LI_FLOW && !lb_anon(&b->b) && l_is_tag(&b->b, AU_ATOM_fieldset))
+        place_legend(L, b, content_w);
     /* A full layout clears every box's cache first (forget_layouts), so a
      * hit here is from earlier in the same pass. */
     if (can_skip(L, b, content_w, content_h, cb_h)) {
@@ -490,6 +694,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     L->depth++;
     b->b.flags &= ~(LF_TOO_DEEP | LF_ESCAPES);
     LConstraints c = {content_w, content_h, content_w, content_h};
+    /* Quirks mode: an auto-height block passes its own percentage base
+     * down (the percentage height quirk; see place_block). */
+    if (content_h < 0 && b->b.inner == LI_FLOW && L->doc && L->doc->quirks == AU_QUIRKS_FULL &&
+        !(b->b.flags & LF_FLOAT) && !(b->b.flags & LF_ABSPOS))
+        c.cb_h = cb_h;
     if (b->b.inner == LI_REPLACED) {
         float w, h;
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);
@@ -504,6 +713,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         ch = l_fc_ops(b)->layout(L, b, &c);
     }
     L->depth--;
+    if (b->b.replaced == LR_TEXTAREA && content_h < 0) {
+        /* rows lines; more content scrolls */
+        int rows = b->rep && b->rep->rows ? b->rep->rows : 2;
+        ch = rows * l_control_line(L, b, NULL);
+    }
     float h = content_h >= 0 ? content_h : ch;
     if (content_h < 0) {
         float ah = l_ratio_height(b, content_w);
@@ -513,6 +727,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
             h = l_max(ah, ch);
         h = l_clamp_h(b, h, cb_h);
     }
+    /* A button centres its content vertically in a taller box. */
+    if (b->b.replaced == LR_BUTTON && b->b.inner == LI_FLOW && h > ch)
+        l_shift_content(b, (h - ch) / 2);
+    if (b->b.inner == LI_REPLACED && b->b.replaced)
+        b->baseline = b->last_baseline = control_baseline(L, b, h);
     b->w = content_w + l_bp_h(b);
     b->h = h + l_bp_v(b);
     b->key_w = content_w;

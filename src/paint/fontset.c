@@ -9,6 +9,7 @@ typedef struct Entry {
     bool italic;
     int index; /* face index in its file */
     AuFontFace *face;
+    AuFontFace *synth[3]; /* variants by AU_FONT_SYNTH_* - 1, made on first match */
     const void *data; /* when registered with data */
     size_t len;
     AuFontLoader load;
@@ -31,8 +32,11 @@ void au_fontset_free(AuFontSet *s)
 {
     if (!s)
         return;
-    for (size_t i = 0; i < s->n; i++)
+    for (size_t i = 0; i < s->n; i++) {
+        for (int k = 0; k < 3; k++)
+            au_font_face_free(s->e[i].synth[k]);
         au_font_face_free(s->e[i].face);
+    }
     au_free(s->e);
     au_free(s);
 }
@@ -211,15 +215,45 @@ static AuFontFace *fallback(AuFontSet *s, int weight, bool italic)
     return f;
 }
 
+/* The matched face f, or a variant of it that synthesizes the italic or
+ * bold it lacks: italic when an italic or oblique style was asked for and
+ * f is upright; bold when 600 or more was asked for and f is 500 or
+ * lighter (Blink's rule). */
+static AuFontFace *synthesize(AuFontSet *s, AuFontFace *f, int weight, bool italic)
+{
+    if (!f)
+        return NULL;
+    for (size_t i = 0; i < s->n; i++) {
+        Entry *e = &s->e[i];
+        if (e->face != f)
+            continue;
+        /* The entry's style, as registered, is what the face provides. */
+        unsigned want = 0;
+        if (italic && !e->italic)
+            want |= AU_FONT_SYNTH_ITALIC;
+        if (weight >= 600 && e->weight <= 500)
+            want |= AU_FONT_SYNTH_BOLD;
+        if (!want)
+            return f;
+        if (!e->synth[want - 1]) {
+            e->synth[want - 1] = au_font_face_synthesize(f, want);
+            if (e->italic)
+                e->synth[want - 1]->italic = true;
+        }
+        return e->synth[want - 1];
+    }
+    return f;
+}
+
 AuFontFace *au_fontset_match_list(AuFontSet *s, const char *const *families, size_t n, int weight,
                                   bool italic)
 {
     for (size_t i = 0; i < n; i++) {
         AuFontFace *f = match_one(s, families[i], strlen(families[i]), false, weight, italic);
         if (f)
-            return f;
+            return synthesize(s, f, weight, italic);
     }
-    return fallback(s, weight, italic);
+    return synthesize(s, fallback(s, weight, italic), weight, italic);
 }
 
 AuFontFace *au_fontset_match(AuFontSet *s, const char *families, int weight, bool italic)
@@ -255,7 +289,7 @@ AuFontFace *au_fontset_match(AuFontSet *s, const char *families, int weight, boo
         }
         AuFontFace *f = match_one(s, start, (size_t)(end - start), quoted, weight, italic);
         if (f)
-            return f;
+            return synthesize(s, f, weight, italic);
     }
-    return fallback(s, weight, italic);
+    return synthesize(s, fallback(s, weight, italic), weight, italic);
 }

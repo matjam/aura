@@ -46,11 +46,14 @@ void au_draw_border(AuCanvas *c, AuRect box, const AuBorder *b, const AuRadii *r
         return;
     float w[4];
     bool any = false, same = true;
+    int ref = -1; /* the first side with a width: the others compare with it */
     for (int i = 0; i < 4; i++) {
         w[i] = b->width[i] > 0 ? b->width[i] : 0;
         if (w[i] > 0 && (b->color[i] >> 24))
             any = true;
-        if (b->color[i] != b->color[0] && w[i] > 0)
+        if (w[i] > 0 && ref < 0)
+            ref = i;
+        if (w[i] > 0 && b->color[i] != b->color[ref])
             same = false;
     }
     if (!any)

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Inline layout</title>
+<style>
+body { font: 16px sans-serif; margin: 10px; width: 600px; }
+p { margin: 6px 0; border-left: 2px solid #ddd; padding-left: 4px; }
+.big { font-size: 28px; }
+.ib { display: inline-block; width: 40px; height: 20px; background: #9cf; }
+.ibt { display: inline-block; background: #fc9; padding: 2px; }
+.box { background: #ffd; border: 2px solid #c90; padding: 2px 4px; }
+.mid { vertical-align: middle; }
+.top { vertical-align: top; }
+.bot { vertical-align: bottom; }
+.tt { vertical-align: text-top; }
+.tb { vertical-align: text-bottom; }
+.just { text-align: justify; }
+.ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 200px; }
+.u { text-decoration: underline; }
+.uc { text-decoration: underline wavy red; }
+.ls { letter-spacing: 3px; }
+.img { display: inline-block; width: 30px; height: 30px; background: #c9f; }
+</style></head><body>
+<p>Mixed <span class="big">Big</span> small <sup>sup</sup> and <sub>sub</sub> x<sup>2</sup> H<sub>2</sub>O <small>small</small> <span class="big mid">mid</span></p>
+<p>Line height <span style="line-height:40px;background:#eee">tall inline</span> normal <span style="font-size:10px;line-height:1">tiny</span></p>
+<p>Inline-blocks <span class="ib"></span> <span class="ibt">text<br>two lines</span> <span class="ib mid"></span> mid <span class="ib top"></span> top <span class="ib bot"></span> bottom <span class="ib tt"></span> tt <span class="ib tb"></span> tb</p>
+<p>Images <span class="img"></span> on the baseline, <span class="img mid"></span> middle, <img alt="alt text" width="40" height="20"> placeholder.</p>
+<p class="u">Underlined paragraph with <span class="ibt">an inline-block</span> that skips the decoration, and <span style="text-decoration:line-through">struck</span> and <span class="uc">wavy</span> text.</p>
+<p>Border on an inline box split across lines: <span class="box">this inline box has a border and padding and it wraps across more than one line of text in the paragraph</span> end.</p>
+<p class="ls">Letter spacing applies here.</p>
+<p class="just">Justified text spreads the words of every line but the last so that both edges line up with the container, which is what newspapers do with their columns of text.</p>
+<p class="ell">Ellipsis cuts this long line that does not fit in two hundred pixels</p>
+<p style="white-space:nowrap;width:200px;overflow:hidden">Nowrap line that keeps going past the edge and is clipped</p>
+<pre style="background:#f4f4f4">pre   keeps    spaces
+and newlines	and tabs</pre>
+<p style="width:200px">Soft hy&shy;phen&shy;ation in a nar&shy;row col&shy;umn with super&shy;cali&shy;fragi&shy;listic words</p>
+<p style="width:150px">Averyveryverylongunbrokenwordthatoverflowsthebox and more</p>
+<p style="width:150px;overflow-wrap:anywhere">Averyveryverylongunbrokenwordthatwraps</p>
+<p>Missing glyphs: ✓ ☃ 漢字 → ★ €</p>
+<p dir="ltr">Quotes <q>nested <q>inner</q></q> and <code>code</code> <kbd>kbd</kbd> <abbr title="t">abbr</abbr> <mark>mark</mark></p>
+</body></html>

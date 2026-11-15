@@ -1,0 +1,30 @@
+Tables, as far as the placeholder table layout goes (src/layout/table.c):
+columns from cell widths, colspan, border-spacing, vertical-align in
+cells. Ahem: 16px lines.
+
+=== cells sit side by side in content-sized columns
+<body style="margin:0">
+<table style="border-spacing:0"><tr><td id=a style="padding:0">xx</td><td id=b style="padding:0">xxx</td></tr></table>
+---
+#a x=0 w=32
+#b x=32 w=48
+
+=== colspan spans columns
+<body style="margin:0">
+<table style="border-spacing:0"><tr><td style="padding:0">xx</td><td style="padding:0">xx</td></tr>
+<tr><td id=c colspan=2 style="padding:0">x</td></tr></table>
+---
+#c w=64
+
+=== a cell's height property still aligns its content
+<body style="margin:0">
+<table style="border-spacing:0"><tr>
+<td style="height:50px;padding:0;vertical-align:bottom"><span id=b style="display:inline-block;width:5px;height:5px"></span></td>
+<td style="padding:0;vertical-align:middle"><span id=m style="display:inline-block;width:5px;height:5px"></span></td>
+<td style="padding:0;vertical-align:top"><span id=t style="display:inline-block;width:5px;height:5px"></span></td>
+</tr></table>
+---
+// content is one 16px line; the row is 50px tall
+#b y=41.8
+#m y=24.8
+#t y=7.8

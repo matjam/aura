@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Tables</title>
+<style>
+body { font: 14px sans-serif; margin: 10px; width: 760px; }
+table { margin-bottom: 12px; }
+.grid { border-collapse: collapse; }
+.grid td, .grid th { border: 1px solid #999; padding: 3px 6px; }
+.grid th { background: #eee; }
+.sep { border: 2px solid #369; border-spacing: 4px; }
+.sep td { background: #def; padding: 4px; }
+.fixed { table-layout: fixed; width: 400px; border-collapse: collapse; }
+.fixed td { border: 1px solid #c99; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.full { width: 100%; border-collapse: collapse; }
+.full td { border: 1px solid #9c9; }
+caption { font-weight: bold; caption-side: top; }
+.va td { height: 50px; border: 1px solid #ccc; }
+</style></head><body>
+<table class="grid"><caption>Caption above</caption>
+<thead><tr><th>Name</th><th>Size</th><th>Description</th></tr></thead>
+<tbody><tr><td>alpha</td><td align="right">12</td><td>Short</td></tr>
+<tr><td>beta</td><td align="right">1234</td><td>A longer description that wraps when the table is narrow</td></tr>
+<tr><td colspan="2">colspan two</td><td>after</td></tr>
+<tr><td rowspan="2">rowspan</td><td>x</td><td>y</td></tr><tr><td>x2</td><td>y2</td></tr></tbody>
+<tfoot><tr><td colspan="3">footer row</td></tr></tfoot></table>
+<table class="sep"><tr><td>separated</td><td>borders</td><td>with spacing</td></tr></table>
+<table class="fixed"><col style="width:100px"><col><col style="width:80px">
+<tr><td>fixed 100</td><td>auto column takes the rest of the fixed table width</td><td>80px clipped text here</td></tr></table>
+<table class="full"><tr><td style="width:30%">30%</td><td>auto</td><td style="width:100px">100px</td></tr></table>
+<table class="grid va"><tr><td style="vertical-align:top">top</td><td style="vertical-align:middle">middle</td><td style="vertical-align:bottom">bottom</td><td>baseline <span style="font-size:24px">Big</span></td></tr></table>
+<table class="grid"><tr><td>Averyveryverylongunbrokenword</td><td>short</td></tr></table>
+<table border="1" cellpadding="4" cellspacing="0" width="300"><tr><td bgcolor="#ffffcc">HTML attrs</td><td nowrap>nowrap cell text</td></tr></table>
+<table class="grid"><tr><td><table class="grid"><tr><td>nested</td><td>table</td></tr></table></td><td>outer</td></tr></table>
+<table class="grid" style="empty-cells:hide;border-collapse:separate"><tr><td>a</td><td></td><td>c</td></tr></table>
+</body></html>

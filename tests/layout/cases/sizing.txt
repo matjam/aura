@@ -55,6 +55,15 @@ aspect-ratio.
 ---
 #a h=30
 
+=== quirks mode: percentage heights look through auto-height blocks
+<!-- quirks --><body style="margin:0">
+<div><div id=a style="height:50%"></div></div>
+<div style="height:100px"><div id=b style="height:50%"></div></div>
+---
+// 50% of the 600px viewport; a definite parent still wins
+#a h=300
+#b h=50
+
 === min-height and max-height
 <body style="margin:0">
 <div id=a style="min-height:40px"></div>

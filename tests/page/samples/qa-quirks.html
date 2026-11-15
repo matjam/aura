@@ -1,0 +1,20 @@
+<html><head><title>Quirks mode</title>
+<style>
+body { font-family: sans-serif; font-size: 14px; background: #fafafa; }
+.pct { height: 50%; background: #def; width: 200px; }
+td { border: 1px solid #999; }
+.img { display: inline-block; width: 40px; height: 20px; background: #c9f; }
+</style></head>
+<body bgcolor="#ffffff" text="#202020" link="#0000cc">
+<p>Quirks mode: no doctype.</p>
+<table><tr><td>Table text does not inherit the body font size in quirks mode</td></tr></table>
+<table cellspacing="0"><tr><td><span class="img"></span></td><td><img width="40" height="20" alt=""></td></tr></table>
+<div class="pct">50% of the viewport height (quirk)</div>
+<p><font size="5" color="#990000">font size 5</font> <font face="Georgia" size="2">size 2 Georgia</font> <font size="+1">+1</font></p>
+<center>centred with &lt;center&gt;</center>
+<p><a href="#">a link coloured by the body link attribute</a></p>
+<table width="300" border="1"><tr><td width="50%">half</td><td>rest</td></tr></table>
+<ul><li>list in quirks mode</li></ul>
+<p style="margin:0">paragraph<br>with<br>breaks</p>
+<div style="width:200px;height:30px;background:#eee;line-height:30px"><img width="20" height="20" alt="" style="background:#f96">image line</div>
+</body></html>

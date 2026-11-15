@@ -24,17 +24,27 @@ static void need_metrics(CssComputeCtx *c)
         c->metrics(c->metrics_ctx, c->style, &c->ex, &c->ch);
 }
 
-static bool computing_font_size;
+static const AuCssFontPrefs css_default_font_prefs = {16, 13, 1, 0};
+
+static const AuCssFontPrefs *font_prefs(const CssComputeCtx *c)
+{
+    return c->fp ? c->fp : &css_default_font_prefs;
+}
+
+static float font_zoom(const CssComputeCtx *c)
+{
+    return font_prefs(c)->text_zoom;
+}
 
 float css_length_px(CssComputeCtx *c, float v, int unit)
 {
     float f;
     int canon;
     if (css_unit_canonical(unit, &f, &canon))
-        return v * f;
+        return v * f * (c->font_size_mode ? font_zoom(c) : 1);
     const AuCssDevice *d = c->dev;
-    float em = computing_font_size ? c->font_size_for_em : c->style->inh->font_size;
-    float rem = c->root ? c->root->inh->font_size : (computing_font_size ? 16 : c->style->inh->font_size);
+    float em = c->font_size_mode ? c->font_size_for_em : c->style->inh->font_size;
+    float rem = c->root ? c->root->inh->font_size : (c->font_size_mode ? font_prefs(c)->default_size * font_zoom(c) : c->style->inh->font_size);
     float vw = d->width / 100, vh = d->height / 100;
     bool horiz = c->style->inh->writing_mode == AU_WRITING_MODE_HORIZONTAL_TB;
     switch (unit) {
@@ -42,7 +52,7 @@ float css_length_px(CssComputeCtx *c, float v, int unit)
     case AU_UNIT_REM: return v * rem;
     case AU_UNIT_EX:
     case AU_UNIT_CH:
-        if (computing_font_size)
+        if (c->font_size_mode)
             return v * em * 0.5f;
         need_metrics(c);
         return v * (unit == AU_UNIT_EX ? c->ex : c->ch);
@@ -58,7 +68,7 @@ float css_length_px(CssComputeCtx *c, float v, int unit)
         const AuStyle *s = unit == AU_UNIT_RLH && c->root ? c->root : c->style;
         float fs = unit == AU_UNIT_RLH ? rem : em;
         const AuLen *lh = &s->inh->line_height;
-        if (computing_font_size || (unit == AU_UNIT_LH && c->flags & 1)) {
+        if (c->font_size_mode || (unit == AU_UNIT_LH && c->flags & 1)) {
             /* line-height of the parent while computing font-size or line-height */
             lh = c->parent ? &c->parent->inh->line_height : &css_initial_style.inh->line_height;
             fs = c->parent ? c->parent->inh->font_size : 16;
@@ -293,40 +303,102 @@ static float compute_number(CssComputeCtx *c, const AuCssValue *v)
 bool css_display_code(const AuCssValue *v, uint16_t *out);
 bool css_align_code(uint16_t prop, const AuCssValue *v, uint16_t *out);
 
-static float abs_font_size(uint16_t kw)
+/* The index (1..8) of an absolute font-size keyword, else 0. */
+static int font_kw_index(uint16_t kw)
 {
     switch (kw) {
-    case AU_K_xx_small: return 9;
-    case AU_K_x_small: return 10;
-    case AU_K_small: return 13;
-    case AU_K_medium: return 16;
-    case AU_K_large: return 18;
-    case AU_K_x_large: return 24;
-    case AU_K_xx_large: return 32;
-    case AU_K_xxx_large: return 48;
-    default: return -1;
+    case AU_K_xx_small: return 1;
+    case AU_K_x_small: return 2;
+    case AU_K_small: return 3;
+    case AU_K_medium: return 4;
+    case AU_K_large: return 5;
+    case AU_K_x_large: return 6;
+    case AU_K_xx_large: return 7;
+    case AU_K_xxx_large: return 8;
+    default: return 0;
     }
+}
+
+/* The size of keyword index k (1..8) for a medium of def px, unzoomed:
+ * Blink's table for whole defaults 9..16, else its scale factors. */
+static float font_kw_size(int k, float def)
+{
+    static const uint8_t table[8][8] = {
+        {9, 9, 9, 9, 11, 14, 18, 27},    {9, 9, 9, 10, 12, 15, 20, 30},   {9, 9, 9, 11, 13, 17, 22, 33},
+        {9, 9, 10, 12, 14, 18, 24, 36},  {9, 10, 11, 13, 16, 20, 26, 39}, {9, 10, 12, 14, 17, 21, 28, 42},
+        {9, 10, 13, 15, 18, 23, 30, 45}, {9, 10, 13, 16, 18, 24, 32, 48}};
+    static const float scale[8] = {0.6f, 0.75f, 8.0f / 9, 1, 1.2f, 1.5f, 2, 3};
+    int d = (int)def;
+    if ((float)d == def && d >= 9 && d <= 16)
+        return table[d - 9][k - 1];
+    return def * scale[k - 1];
+}
+
+/* True when the family list is exactly the generic monospace. */
+static bool family_is_mono(const AuStyle *s)
+{
+    const AuCssBlob *b = s->inh->font_family;
+    if (!b)
+        return false;
+    const AuCssValue *v = &b->value;
+    if (v->type == AU_CSSV_COMMA_LIST || v->type == AU_CSSV_LIST) {
+        if (v->n != 1)
+            return false;
+        v = &v->u.items[0];
+    }
+    return v->type == AU_CSSV_KEYWORD && v->kw == AU_K_monospace;
+}
+
+static float font_default(const CssComputeCtx *c, bool mono)
+{
+    const AuCssFontPrefs *p = font_prefs(c);
+    return mono ? p->default_mono_size : p->default_size;
+}
+
+/* The font size relative sizes start from: the parent's before the
+ * minimum, or the zoomed default at the root. */
+static float parent_font_spec(const CssComputeCtx *c)
+{
+    if (c->parent)
+        return c->parent->inh->font_size_spec;
+    return font_default(c, false) * font_zoom(c);
+}
+
+/* Sets the specified (zoomed, unclamped) size and keyword; the used size
+ * is clamped by css_compute_font_size_fixup. */
+static void set_font_size(CssComputeCtx *c, float spec, int kw)
+{
+    if (spec < 0 || spec != spec)
+        spec = 0;
+    AuStyleInh *inh = css_mut_group(c->style, G_INH);
+    inh->font_size = spec;
+    inh->font_size_spec = spec;
+    inh->font_size_kw = (uint8_t)kw;
+    c->ex = -1;
 }
 
 static bool apply_font_size(CssComputeCtx *c, const AuCssValue *v)
 {
-    float parent = c->parent ? c->parent->inh->font_size : 16;
+    float parent = parent_font_spec(c);
     float px;
+    int kw = 0;
     if (v->type == AU_CSSV_KEYWORD) {
         if (v->kw == AU_K_larger)
             px = parent * 1.2f;
         else if (v->kw == AU_K_smaller)
             px = parent / 1.2f;
-        else if ((px = abs_font_size(v->kw)) < 0)
+        else if ((kw = font_kw_index(v->kw)) != 0)
+            px = font_kw_size(kw, font_default(c, family_is_mono(c->style))) * font_zoom(c);
+        else
             return false;
     } else if (v->type == AU_CSSV_PERCENT) {
         px = parent * v->u.num / 100;
     } else {
-        computing_font_size = true;
+        c->font_size_mode = true;
         c->font_size_for_em = parent;
         AuLen l;
         bool ok = compute_len(c, v, &l, true);
-        computing_font_size = false;
+        c->font_size_mode = false;
         if (!ok)
             return false;
         if (l.kind == AU_LEN_PCT)
@@ -339,13 +411,38 @@ static bool apply_font_size(CssComputeCtx *c, const AuCssValue *v)
         else
             return false;
     }
-    if (px < 0 || px != px)
-        px = 0;
-    AuStyleInh *inh = css_mut_group(c->style, G_INH);
-    inh->font_size = px;
-    c->ex = -1;
+    set_font_size(c, px, kw);
     return true;
 }
+
+void css_compute_font_size_fixup(CssComputeCtx *c, bool declared)
+{
+    const AuStyleInh *inh = c->style->inh;
+    if (!declared) {
+        bool mono = family_is_mono(c->style);
+        bool pmono = c->parent ? family_is_mono(c->parent) : false;
+        if (inh->font_size_kw && (!c->parent || mono != pmono)) {
+            /* A keyword size (the root's initial medium included) follows
+             * the default for this element's family. */
+            float px = font_kw_size(inh->font_size_kw, font_default(c, mono)) * font_zoom(c);
+            if (px != inh->font_size_spec)
+                set_font_size(c, px, inh->font_size_kw);
+        } else if (c->parent && mono != pmono) {
+            /* Blink scales an inherited size by the ratio of the defaults. */
+            float ratio = font_default(c, mono) / font_default(c, pmono);
+            set_font_size(c, inh->font_size_spec * ratio, 0);
+        }
+        inh = c->style->inh;
+    }
+    float min = font_prefs(c)->min_size;
+    float used = inh->font_size_spec > 0 && inh->font_size_spec < min ? min : inh->font_size_spec;
+    if (used != inh->font_size) {
+        AuStyleInh *m = css_mut_group(c->style, G_INH);
+        m->font_size = used;
+        c->ex = -1;
+    }
+}
+
 
 static bool apply_font_weight(CssComputeCtx *c, const AuCssValue *v)
 {
@@ -824,9 +921,14 @@ static void copy_prop(AuStyle *dst, const AuStyle *src, uint16_t prop)
 void css_compute_inherit(CssComputeCtx *c, uint16_t prop)
 {
     const AuStyle *src = c->parent ? c->parent : &css_initial_style;
+    if (prop == AU_PROP_font_size) {
+        if (c->parent)
+            set_font_size(c, c->parent->inh->font_size_spec, c->parent->inh->font_size_kw);
+        else
+            css_compute_initial(c, prop);
+        return;
+    }
     copy_prop(c->style, src, prop);
-    if (prop == AU_PROP_font_size)
-        c->ex = -1;
 }
 
 void css_compute_initial(CssComputeCtx *c, uint16_t prop)
@@ -835,9 +937,11 @@ void css_compute_initial(CssComputeCtx *c, uint16_t prop)
         ((AuStyleInh *)css_mut_group(c->style, G_INH))->color = css_initial_style.inh->color;
         return;
     }
+    if (prop == AU_PROP_font_size) {
+        set_font_size(c, font_kw_size(4, font_default(c, family_is_mono(c->style))) * font_zoom(c), 4);
+        return;
+    }
     copy_prop(c->style, &css_initial_style, prop);
-    if (prop == AU_PROP_font_size)
-        c->ex = -1;
 }
 
 /* ---- Fixups ---- */
