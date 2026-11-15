@@ -195,6 +195,8 @@ struct AuJs {
     bool worker;
     struct JsWorker *wk;
     struct JsWorker *workers;
+    char **muted; /* URLs of scripts whose errors are muted (au_js_mute_script) */
+    uint32_t nmuted;
     /* statistics */
     uint32_t errors, interrupts;
     size_t live_bytes; /* bytes the runtime holds (runtime.c allocator) */

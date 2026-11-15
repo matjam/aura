@@ -69,6 +69,10 @@ typedef struct AuResourceRequest {
     bool manual_redirect; /* deliver a 3xx response instead of following it */
     const char *referrer;
     uint8_t referrer_policy; /* 0: the document's; else 1 no-referrer ... 8 unsafe-url, as AuReferrerPolicy */
+    /* A resource of the page fetched with CORS (an element with a
+     * crossorigin attribute): 1 anonymous, 2 with credentials. The view
+     * checks the response itself. */
+    uint8_t cors_resource;
 } AuResourceRequest;
 
 typedef struct AuLoader {
@@ -175,6 +179,16 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok);
 bool au_docview_loading(const AuDocView *dv);
 /* Requests still outstanding. */
 uint32_t au_docview_pending(const AuDocView *dv);
+
+/* Whether the image at url (absolute) may be read by the document's
+ * script, for a canvas: true when it came from the document's origin (and
+ * no redirect left it), from a data: URL, or passed the CORS check because
+ * its <img> has a crossorigin attribute. A canvas that draws an image for
+ * which this is false becomes tainted: its pixels must not be read back
+ * (getImageData, toDataURL, toBlob). An image script made but never put
+ * in the document (new Image) is fetched without CORS, whatever its
+ * crossOrigin property says. */
+bool au_docview_image_origin_clean(AuDocView *dv, const char *url);
 
 const char *au_docview_url(const AuDocView *dv);      /* never NULL */
 const char *au_docview_base_url(const AuDocView *dv); /* never NULL */

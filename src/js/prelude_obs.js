@@ -428,11 +428,13 @@ function scriptConnected(el) {
             runModuleScript(url, null, el).then((ok) => fireSimple(el, ok ? 'load' : 'error'));
             return;
         }
-        P.fetchText(url, 1, (body) => {
+        const co = el.getAttribute('crossorigin');
+        P.fetchText(url, 1, (body, msg, finalUrl, crossOrigin) => {
             if (body === null) { fireSimple(el, 'error'); return; }
+            if (crossOrigin) N.muteScript(url);
             N.runScript(body, url, el);
             fireSimple(el, 'load');
-        });
+        }, co === null ? 0 : co.toLowerCase() === 'use-credentials' ? 2 : 1);
         return;
     }
     if (kind === 'module') { runModuleScript(N.docUrl(0), text, el); return; }

@@ -475,7 +475,45 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_NewBool(ctx, ok);
 }
 
+void au_js_mute_script(AuJs *js, const char *url)
+{
+    for (uint32_t i = 0; i < js->nmuted; i++)
+        if (!strcmp(js->muted[i], url))
+            return;
+    if (js->nmuted >= 512)
+        return;
+    js->muted = au_realloc(js->muted, (js->nmuted + 1) * sizeof *js->muted);
+    js->muted[js->nmuted++] = au_strndup(url, strlen(url));
+}
+
+static void free_muted(AuJs *js)
+{
+    for (uint32_t i = 0; i < js->nmuted; i++)
+        au_free(js->muted[i]);
+    au_free(js->muted);
+}
+
+/* muteScript(url) marks a script muted; scriptMuted(url) asks. */
+static JSValue n_mute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    AuJs *js = js_of_ctx(ctx);
+    const char *url = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    if (!url)
+        return JS_FALSE;
+    bool r = false;
+    if (magic) {
+        au_js_mute_script(js, url);
+    } else {
+        for (uint32_t i = 0; i < js->nmuted && !r; i++)
+            r = !strcmp(js->muted[i], url);
+    }
+    JS_FreeCString(ctx, url);
+    return JS_NewBool(ctx, r);
+}
+
 static const JSCFunctionListEntry base_natives[] = {
+    JS_CFUNC_MAGIC_DEF("scriptMuted", 1, n_mute, 0),
+    JS_CFUNC_MAGIC_DEF("muteScript", 1, n_mute, 1),
     JS_CFUNC_DEF("print", 2, n_print),
     JS_CFUNC_DEF("now", 0, n_now),
     JS_CFUNC_DEF("runScript", 3, n_run_script),
@@ -695,6 +733,7 @@ void au_js_free(AuJs *js)
         for (size_t i = 0; i < JS_COUNTOF(root->entered); i++)
             if (root->entered[i] == js)
                 root->entered[i] = root;
+        free_muted(js);
         au_free(js->url);
         au_free(js->base);
         au_free(js->origin);
@@ -736,6 +775,7 @@ void au_js_free(AuJs *js)
         au_node_unref(&js->docs[i]->node);
     au_free(js->docs);
     au_node_unref(&js->doc->node);
+    free_muted(js);
     au_free(js->url);
     au_free(js->base);
     au_free(js->origin);

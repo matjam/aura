@@ -724,7 +724,15 @@ P.reportException = function (err) {
     if (inErrorReport) return true;
     inErrorReport = true;
     try {
-        const ev = new ErrorEvent('error', { cancelable: true, message: err instanceof Error ? String(err) : inspect(err, 0, new Set()),
+        /* An error thrown by a script of another origin that was loaded
+         * without CORS tells the page nothing but that it happened. */
+        let muted = false;
+        if (err instanceof Error && typeof err.stack === 'string') {
+            const m = /^\s*at (?:.*? \()?(.*?):\d+(?::\d+)?\)?$/m.exec(err.stack.replace(/^.*<null>.*$/gm, ''));
+            muted = !!m && N.scriptMuted(m[1]);
+        }
+        const ev = muted ? new ErrorEvent('error', { cancelable: true, message: 'Script error.', filename: '', lineno: 0, colno: 0, error: null })
+            : new ErrorEvent('error', { cancelable: true, message: err instanceof Error ? String(err) : inspect(err, 0, new Set()),
             filename: err && err.fileName || N.docUrl(0), lineno: err && err.lineNumber || 0, colno: err && err.columnNumber || 0,
             error: err });
         return fire(G, ev);

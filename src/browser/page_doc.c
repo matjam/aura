@@ -757,7 +757,7 @@ static uint32_t loader_request_ex(void *ctx, AuDocView *dv, const AuResourceRequ
     Fetch *f = start_fetch(p, url, false, fk, rq);
     if (!f)
         return 0;
-    f->script = rq->script_mode != 0;
+    f->script = rq->script_mode != 0 && !rq->cors_resource;
     f->id = ++p->next_id;
     p->requested++;
     p->stats.resources++;

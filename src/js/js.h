@@ -277,6 +277,11 @@ void au_js_set_base_url(AuJs *js, const char *base);
  * allowed) and then a microtask checkpoint. url and line name the source
  * in error reports. Returns false if it threw (the error is reported). */
 bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, const char *url, int line);
+/* The classic script at url came from another origin without CORS: errors
+ * thrown by its code reach the page's error handlers as "Script error."
+ * with no message, location or error object (the console still shows
+ * them). Call before running it. */
+void au_js_mute_script(AuJs *js, const char *url);
 /* Runs a module script (inline when src is given, else fetched from url
  * through the fetcher); its dependencies load asynchronously. done is
  * called once the module has evaluated (or failed); it may be NULL. */

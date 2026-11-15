@@ -26,6 +26,7 @@
 #include "docview_int.h"
 
 #include "../js/js.h"
+#include "../net/cors.h"
 #include "../layout/selection.h"
 
 #include <stdio.h>
@@ -41,6 +42,7 @@ struct PendingScript {
     int kind;      /* AU_JS_SCRIPT_CLASSIC or AU_JS_SCRIPT_MODULE */
     bool ready, failed;
     bool bad_status; /* the response head had a status outside 200-299 */
+    bool muted;      /* from another origin without CORS: its errors are muted */
     PendingScript *next;
 };
 
@@ -623,6 +625,8 @@ static void run_classic(AuDocScript *s, PendingScript *p)
     }
     const char *url = p->url ? p->url : au_docview_url(s->dv);
     snprintf(s->perf_label, sizeof s->perf_label, "%s", url);
+    if (p->muted && p->url)
+        au_js_mute_script(s->js, p->url);
     au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
     if (p->url)
         fire_simple(s, p->el, "load");
@@ -708,7 +712,12 @@ static bool fetch_script(AuDocScript *s, PendingScript *p, const char *src)
     p->url = au_strndup(abs, strlen(abs));
     if (p->kind == AU_JS_SCRIPT_MODULE)
         return true; /* src/js fetches modules itself */
-    p->req = au_dv_request(s->dv, abs, false);
+    /* Until the response says otherwise (a loader that reports no head),
+     * the URL decides whether the script's errors are muted. */
+    uint8_t cors = au_dv_cors_attr(p->el);
+    p->muted = !cors && (!strncmp(abs, "http:", 5) || !strncmp(abs, "https:", 6)) &&
+               !au_cors_same_origin(au_docview_url(s->dv), abs);
+    p->req = au_dv_request_cors(s->dv, abs, cors);
     return p->req != 0;
 }
 
@@ -843,7 +852,7 @@ void au_docscript_parse_done(AuDocScript *s)
 }
 
 void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const char *status_text,
-                                const char *final_url, const char *const *headers, size_t nheaders)
+                                const char *final_url, const char *const *headers, size_t nheaders, bool muted)
 {
     struct ScriptFetch *f = find_fetch(s, id);
     if (f) {
@@ -859,14 +868,20 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
     }
     /* A script element's source: an error status fails the load. */
     bool bad = status < 200 || status > 299;
-    if (s->blocking && s->blocking->req == id)
+    if (s->blocking && s->blocking->req == id) {
         s->blocking->bad_status = bad;
+        s->blocking->muted = muted;
+    }
     for (PendingScript *q = s->defer; q; q = q->next)
-        if (q->req == id)
+        if (q->req == id) {
             q->bad_status = bad;
+            q->muted = muted;
+        }
     for (PendingScript *q = s->async; q; q = q->next)
-        if (q->req == id)
+        if (q->req == id) {
             q->bad_status = bad;
+            q->muted = muted;
+        }
 }
 
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
