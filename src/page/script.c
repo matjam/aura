@@ -126,6 +126,13 @@ static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
             au_forms_changed(s->dv, au_as_element(node));
         return;
     }
+    /* A change in a subtree that is not in the document (a fragment or
+     * element a script is still building, a template's content) changes
+     * nothing on screen. Inserting or removing it reports its connected
+     * parent. Without this, scripts that build detached trees restyled
+     * and laid out the whole page for each attribute they set. */
+    if (au_node_shadow_including_root(node) != &s->doc->node)
+        return;
     au_dv_dom_changed(s->dv, node, attr_name, kind);
 }
 

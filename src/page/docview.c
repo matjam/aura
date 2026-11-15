@@ -42,8 +42,13 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
  * of font set or a new web font needs a new one). */
 static void new_layout(AuDocView *dv, AuFontSet *fonts)
 {
-    if (dv->layout)
+    if (dv->layout) {
+        uint32_t b, l;
+        au_layout_pass_counts(dv->layout, &b, &l);
+        dv->dead_builds += b;
+        dv->dead_layouts += l;
         au_layout_free(dv->layout);
+    }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use};
     dv->layout = au_layout_new(&env);
     if (dv->doc)
@@ -221,6 +226,16 @@ uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms)
 bool au_docview_animating(const AuDocView *dv)
 {
     return au_docimages_animating(dv->imgs);
+}
+
+void au_docview_stats(const AuDocView *dv, AuDocViewStats *s)
+{
+    uint32_t b = 0, l = 0;
+    *s = dv->stats;
+    if (dv->layout)
+        au_layout_pass_counts(dv->layout, &b, &l);
+    s->tree_builds = dv->dead_builds + b;
+    s->layouts = dv->dead_layouts + l;
 }
 
 void au_docview_image_stats(const AuDocView *dv, AuImageCacheStats *s)
@@ -774,8 +789,13 @@ static bool update_style(AuDocView *dv)
         new_layout(dv, au_webfonts_set(dv->webfonts));
         dv->style_all = true; /* ex and ch units */
     }
+    uint32_t styled0 = dv->style_all || dv->tree_dirty || dv->restyle_needed
+                           ? au_css_resolver_styled_count(dv->resolver) : 0;
+    if (dv->style_all || dv->tree_dirty || dv->restyle_needed)
+        dv->stats.style_passes++;
     if (dv->style_all || dv->tree_dirty) {
         au_css_style_document(dv->resolver, dv->doc);
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
         au_layout_tree_changed(dv->layout);
         au_docimages_tree_changed(dv->imgs);
         dv->style_all = dv->tree_dirty = false;
@@ -785,6 +805,7 @@ static bool update_style(AuDocView *dv)
             au_webfonts_scan(dv->webfonts, dv->doc, fetch_font, dv);
     } else if (dv->restyle_needed) {
         au_css_restyle(dv->resolver, dv->doc);
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
         au_layout_styles_changed(dv->layout);
         dv->restyle_needed = false;
     }
@@ -1185,7 +1206,18 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
         return;
     AuElement *el = au_is_element(n) ? au_as_element(n) : NULL;
     if (kind == 2 && el && dv->resolver) { /* attribute */
-        bool style_only = attr_name == AU_ATOM_class || attr_name == AU_ATOM_id || attr_name == AU_ATOM_style;
+        /* Attributes the box tree never reads: they reach layout only
+         * through selectors and attr(), which the restyle covers. Scripts
+         * set these on every keystroke (aria-expanded and
+         * aria-activedescendant on a search field, the value of a hidden
+         * input that mirrors it). */
+        const char *an = attr_name ? au_atom_str(attr_name) : "";
+        const char *ty = au_element_get_attr(el, AU_ATOM_type);
+        bool hidden_value = !strcmp(an, "value") && el->ns == AU_NS_HTML && el->tag == AU_ATOM_input && ty &&
+                            (ty[0] == 'h' || ty[0] == 'H') && strlen(ty) == 6;
+        bool style_only = attr_name == AU_ATOM_class || attr_name == AU_ATOM_id || attr_name == AU_ATOM_style ||
+                          !strncmp(an, "aria-", 5) || !strncmp(an, "data-", 5) || !strcmp(an, "role") ||
+                          !strcmp(an, "title") || !strcmp(an, "tabindex") || !strcmp(an, "autocomplete") || hidden_value;
         au_css_invalidate(dv->resolver, el,
                           attr_name == AU_ATOM_style ? AU_CSS_CHANGE_INLINE_STYLE : AU_CSS_CHANGE_ATTR, attr_name);
         dv->restyle_needed = true;

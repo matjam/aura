@@ -162,6 +162,16 @@ uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms);
 bool au_docview_animating(const AuDocView *dv);
 struct AuImageCacheStats;
 void au_docview_image_stats(const AuDocView *dv, struct AuImageCacheStats *s);
+/* What updates have cost since the view was created: to see what one
+ * event costs (a keystroke, a hover change), read the counts before and
+ * after it. A keystroke in a text field should add nothing here. */
+typedef struct AuDocViewStats {
+    uint32_t style_passes;    /* restyles, whole or partial */
+    uint32_t styled_elements; /* elements whose style was computed */
+    uint32_t tree_builds;     /* box tree builds */
+    uint32_t layouts;         /* layout passes */
+} AuDocViewStats;
+void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
 
 /* ---- Scripts ----
  * Scripting is off by default: <script> is ignored and <noscript> shows.

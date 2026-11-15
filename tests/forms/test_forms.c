@@ -135,7 +135,23 @@ typedef struct Ctx {
     char type[128];
     int submits;
     char message[256];
+    int invals;     /* invalidations since it was cleared */
+    AuIRect inval;  /* their union */
 } Ctx;
+
+static void cb_invalidate(void *ctx, AuDocView *dv, AuIRect r)
+{
+    Ctx *c = ctx;
+    (void)dv;
+    if (!c->invals++) {
+        c->inval = r;
+        return;
+    }
+    if (r.x0 < c->inval.x0) c->inval.x0 = r.x0;
+    if (r.y0 < c->inval.y0) c->inval.y0 = r.y0;
+    if (r.x1 > c->inval.x1) c->inval.x1 = r.x1;
+    if (r.y1 > c->inval.y1) c->inval.y1 = r.y1;
+}
 
 static void cb_submit(void *ctx, AuDocView *dv, const AuFormSubmission *s)
 {
@@ -163,6 +179,7 @@ static AuDocView *view(Ctx *c, const char *html, bool script)
     cb.ctx = c;
     cb.submit = cb_submit;
     cb.message = cb_message;
+    cb.invalidate = cb_invalidate;
     AuDocView *dv = au_docview_new(fonts, NULL, &cb);
     au_docview_set_scripting(dv, script);
     au_docview_set_viewport(dv, 800, 600);
@@ -413,6 +430,79 @@ static void test_search_box_defer(void)
     au_docview_free(dv);
 }
 
+/* What a keystroke in a text field costs. Once the field is not empty, a
+ * character typed or deleted restyles nothing, builds no box tree, runs no
+ * layout and invalidates the field's rectangle only, on a page with
+ * :has() rules (where a restyle covers the whole document), with and
+ * without script listeners. The first character (the field stops being
+ * empty: :placeholder-shown) may restyle. */
+static void keystroke_costs(const char *what, bool script, const char *extra)
+{
+    Ctx c;
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_puts(&html, "<style>section:has(input:focus){background:#eee} p:has(+ p){margin:2px}"
+                       " input:placeholder-shown{color:gray} input:invalid{outline:1px solid red}</style>"
+                       "<section><form action=/s><input id=q name=q placeholder=Search required>"
+                       "<input type=hidden id=h name=h></form></section>");
+    for (int i = 0; i < 200; i++)
+        au_buf_puts(&html, "<p>Paragraph <b>bold</b> <i>italic</i> text</p>");
+    au_buf_puts(&html, extra);
+    AuDocView *dv = view(&c, au_buf_cstr(&html), script);
+    au_buf_free(&html);
+    click(dv, "q");
+    type(dv, "a");
+    for (int i = 0; i < 5; i++)
+        au_docview_run_scripts(dv, 10);
+    au_docview_update(dv);
+    AuRect fr;
+    CHECK(au_layout_element_rect(au_docview_layout(dv), by_id(dv, "q"), &fr), "%s: the field has a box", what);
+    static const struct {
+        const char *text;
+        int key;
+    } keys[] = {{"b", 0}, {"c", 0}, {" ", 0}, {NULL, AU_KEY_BACKSPACE}, {"d", 0}, {NULL, AU_KEY_LEFT}, {"e", 0}};
+    for (size_t k = 0; k < sizeof keys / sizeof keys[0]; k++) {
+        AuDocViewStats s0, s1;
+        au_docview_stats(dv, &s0);
+        c.invals = 0;
+        if (keys[k].text)
+            type(dv, keys[k].text);
+        else
+            key(dv, keys[k].key, 0, 0);
+        for (int i = 0; i < 5; i++)
+            au_docview_run_scripts(dv, 10);
+        au_docview_update(dv);
+        au_docview_stats(dv, &s1);
+        CHECK(s1.style_passes == s0.style_passes && s1.styled_elements == s0.styled_elements,
+              "%s, key %d: %u style passes, %u elements styled", what, (int)k, s1.style_passes - s0.style_passes,
+              s1.styled_elements - s0.styled_elements);
+        CHECK(s1.tree_builds == s0.tree_builds && s1.layouts == s0.layouts, "%s, key %d: %u tree builds, %u layouts",
+              what, (int)k, s1.tree_builds - s0.tree_builds, s1.layouts - s0.layouts);
+        CHECK(c.invals >= 1 && c.inval.x0 >= (int)fr.x - 5 && c.inval.y0 >= (int)fr.y - 5 &&
+                  c.inval.x1 <= (int)(fr.x + fr.w) + 6 && c.inval.y1 <= (int)(fr.y + fr.h) + 6,
+              "%s, key %d: invalidated %d,%d-%d,%d, field %d,%d-%d,%d", what, (int)k, c.inval.x0, c.inval.y0,
+              c.inval.x1, c.inval.y1, (int)fr.x, (int)fr.y, (int)(fr.x + fr.w), (int)(fr.y + fr.h));
+    }
+    size_t n;
+    CHECK(!strcmp(au_ctl_value(by_id(dv, "q"), &n), "abced"), "%s: value %s", what, au_ctl_value(by_id(dv, "q"), &n));
+    au_docview_free(dv);
+}
+
+static void test_keystroke_cost(void)
+{
+    keystroke_costs("no script", false, "");
+    /* listeners that read the field and build a detached tree, as a
+     * suggestions widget does before it shows anything */
+    keystroke_costs("listeners", true,
+                    "<script>var q=document.getElementById('q'),seen=0,built;"
+                    "['keydown','keypress','beforeinput','input','keyup'].forEach(function(t){"
+                    "q.addEventListener(t,function(e){seen+=q.value.length;});});"
+                    "q.addEventListener('input',function(){built=document.createElement('ul');"
+                    "for(var i=0;i<5;i++){var li=document.createElement('li');li.className='item';"
+                    "li.setAttribute('role','option');li.textContent=q.value+i;built.appendChild(li);}});"
+                    "</script>");
+}
+
 static void test_script_events(void)
 {
     Ctx c;
@@ -493,6 +583,7 @@ int main(void)
     test_validation();
     test_script_events();
     test_search_box_defer();
+    test_keystroke_cost();
     test_edit_commands();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);

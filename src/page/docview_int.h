@@ -71,6 +71,8 @@ struct AuDocView {
     bool scripting;      /* the setting, applied at begin */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
+    AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
+    uint32_t dead_builds, dead_layouts; /* counts of layouts replaced by new_layout */
     uint32_t nbg;        /* background requests among reqs */
     double clock;        /* the fallback clock */
     /* forms (forms.c) */
