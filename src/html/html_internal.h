@@ -130,6 +130,7 @@ typedef struct HtmlTokenizer {
     uint32_t nattrs, attr_cap;
     AuAtom *attr_set;      /* hash set of attribute names, for long tags */
     uint32_t attr_set_size;
+    bool attr_set_live;    /* the set holds the current tag's names */
 
     /* Sink: the tree builder, or a test harness. */
     void (*emit)(void *sink, HtmlToken *tok);
