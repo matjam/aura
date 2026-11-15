@@ -732,6 +732,67 @@ resize:W,H`.
   again for each layout of its block (the word cache answers the
   widths); `l_queue_abspos` searches its queue linearly.
 
+## Grid
+
+To change grid layout (`display: grid`, `inline-grid`), work in
+`src/layout/grid.c`. It is a formatting context like flex: `l_fc_ops`
+in `layout.c` dispatches `LI_GRID` boxes to `l_grid_layout` and
+`l_grid_intrinsic`, and the box tree treats a grid container's children
+as it treats flex items (blockified, text runs wrapped in anonymous
+items, `LF_FLEX_ITEM | LF_BFC`, so `z-index` makes a stacking context
+and incremental layout reuses an item whose constraints did not
+change). The grid properties share the flex style group
+(`AuStyleFlex`), so a change relays the box out without a tree rebuild.
+
+- **Order of a layout.** `grid_build` expands the track lists
+  (`repeat()`, `auto-fill`, `auto-fit`, line names), reads the named
+  areas, resolves each item's lines (`resolve_lines`) and places the
+  items (`place_items`: definite items, items locked to a row, then the
+  auto-placement cursor, sparse or dense, over an occupancy bitmap).
+  Implicit tracks before the explicit grid shift every index, so tracks
+  count from 0. `size_axis` then sizes columns, each item's width is
+  found (`item_width`), `size_axis` sizes rows, `position_axis` applies
+  `justify-content` and `align-content`, and each item is laid out and
+  aligned in its area.
+- **Track sizing** follows section 11 of the specification: items are
+  taken by span, each phase distributes an item's extra space to the
+  tracks it spans (`dist_item`, up to their limits by `water_fill`, then
+  beyond), then tracks are maximized, flexible tracks expanded
+  (`find_fr`) and auto tracks stretched. `mode` 1 and 2 size under a
+  min-content and a max-content constraint for the container's
+  intrinsic widths.
+- **Measurements.** An item's column contributions come from one
+  `l_outer_intrinsic` call (kept by `LF_INTRINSIC_OK`), its row
+  contribution from one `l_measure_content` call at its used width (kept
+  by the measure cache). A stretched item is laid out a second time at
+  its final height, as in flex.
+- **Percentages.** A percentage track or gap behaves as auto while the
+  container's size in that axis is unknown (intrinsic widths, an auto
+  height); the rows are then sized again against the height found.
+- **Limits.** An axis has at most 1000 tracks (`G_MAX_TRACKS`): `repeat`
+  counts stop there, lines beyond are clamped into the last track and
+  spans are cut. Line names are capped at 4096 per axis and areas at
+  1024. Keep new loops bounded by these.
+- **Absolutely positioned children** of a grid container that is their
+  containing block are positioned against the area their grid lines
+  name; an `auto` line is the padding edge. `abs_area` records the area
+  in `AuLayout.grid_abs`, and `layout_abspos` in `layout.c` takes it
+  with `l_grid_abspos_area`.
+- **Tests.** `tests/layout/cases/grid*.txt` (sizing, placement,
+  alignment, integration; expected values are worked out from the
+  specification, and a comment says where a browser was not consulted),
+  `tests/css/cases/grid.txt`, and `tests/page/samples/grid.html`, which
+  the relayout and scroll-shift tests load.
+- **Measured on the host** (Release, CPU time): a 12-column grid of 200
+  items with spans of 1 to 6 (803 boxes) lays out from scratch in
+  0.93 ms at 1440 pixels and 1.04 ms at 656; a width change takes 0.6
+  to 0.7 ms.
+- **Not done:** `subgrid` (parsed; laid out as `none`), baseline
+  alignment of items (they align at the start), `direction: rtl` and
+  vertical writing modes, `safe` overflow alignment, painting items in
+  `order` order, `masonry`. An item's min-content and max-content
+  heights are both its height at its used width.
+
 ## Fonts
 
 Aura draws with the system's fonts first and with the fonts bundled in
