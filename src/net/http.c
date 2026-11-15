@@ -2,6 +2,7 @@
  * authentication, proxies, cookies and HSTS on the wire, timeouts, and
  * the event loop pump. See net.h. */
 #include "auth.h"
+#include "../browser/history.h" /* au_put_i64 */
 #include "../browser/credits.h"
 #include "cache.h"
 #include "cookies.h"
@@ -1013,10 +1014,15 @@ static void build_request(AuHttpTransfer *t, Conn *c)
         au_buf_printf(&b, "Accept-Language: %s\r\n", net->cfg.accept_language);
     if (t->range_start < 0)
         au_buf_puts(&b, "Accept-Encoding: gzip, deflate, br\r\n");
-    else if (t->range_end >= 0)
-        au_buf_printf(&b, "Range: bytes=%lld-%lld\r\n", (long long)t->range_start, (long long)t->range_end);
-    else
-        au_buf_printf(&b, "Range: bytes=%lld-\r\n", (long long)t->range_start);
+    else {
+        /* au_put_i64, not %lld: newlib on Mac OS 9 has no %lld. */
+        au_buf_puts(&b, "Range: bytes=");
+        au_put_i64(&b, t->range_start);
+        au_buf_putc(&b, '-');
+        if (t->range_end >= 0)
+            au_put_i64(&b, t->range_end);
+        au_buf_puts(&b, "\r\n");
+    }
     if (net->cfg.send_dnt)
         au_buf_puts(&b, "DNT: 1\r\n");
     if (net->cfg.send_gpc)
@@ -1110,9 +1116,11 @@ static void build_request(AuHttpTransfer *t, Conn *c)
     if (t->body) {
         if (t->body->content_type && !au_headers_get(&t->extra, "content-type"))
             au_buf_printf(&b, "Content-Type: %s\r\n", t->body->content_type);
-        if (t->body->length >= 0)
-            au_buf_printf(&b, "Content-Length: %lld\r\n", (long long)t->body->length);
-        else
+        if (t->body->length >= 0) {
+            au_buf_puts(&b, "Content-Length: ");
+            au_put_i64(&b, t->body->length);
+            au_buf_puts(&b, "\r\n");
+        } else
             au_buf_puts(&b, "Transfer-Encoding: chunked\r\n");
     } else if (!strcmp(t->method, "POST") || !strcmp(t->method, "PUT")) {
         au_buf_puts(&b, "Content-Length: 0\r\n");

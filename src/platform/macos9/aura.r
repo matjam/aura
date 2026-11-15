@@ -298,7 +298,7 @@ resource 'ALRT' (135) {
 resource 'DITL' (135) {
 	{
 		{218, 378, 238, 446}, Button { enabled, "OK" };
-		{12, 20, 210, 446}, StaticText { disabled, "^0^1^2^3" }
+		{12, 70, 210, 446}, StaticText { disabled, "^0^1^2^3" }
 	}
 };
 

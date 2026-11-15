@@ -1,5 +1,6 @@
 /* The cookie store. See cookies.h. */
 #include "cookies.h"
+#include "../browser/history.h" /* au_put_i64 */
 
 #include "policy.h"
 #include "psl.h"
@@ -838,8 +839,14 @@ void au_cookie_jar_serialize(const AuCookieJar *j, AuBuf *out, int64_t now)
         put_field(out, c->path);
         au_buf_printf(out, "\t%d\t%d\t%s\t%d\t", c->secure, c->http_only, ss_names[c->same_site], c->partitioned);
         put_field(out, c->partition);
-        au_buf_printf(out, "\t%lld\t%lld\t%lld\t", (long long)c->expires, (long long)c->creation,
-                      (long long)c->last_access);
+        /* au_put_i64, not %lld: newlib on Mac OS 9 has no %lld. */
+        au_buf_putc(out, '\t');
+        au_put_i64(out, c->expires);
+        au_buf_putc(out, '\t');
+        au_put_i64(out, c->creation);
+        au_buf_putc(out, '\t');
+        au_put_i64(out, c->last_access);
+        au_buf_putc(out, '\t');
         put_field(out, c->name);
         au_buf_putc(out, '\t');
         put_field(out, c->value);

@@ -1,5 +1,6 @@
 /* HSTS store, header parsing and preload list. */
 #include "hsts.h"
+#include "../browser/history.h" /* au_put_i64 */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,9 +218,12 @@ void au_hsts_serialize(const AuHsts *h, AuBuf *out, int64_t now)
 {
     au_buf_puts(out, "# Aura HSTS 1\n");
     for (size_t i = 0; i < h->n; i++)
-        if (h->items[i].expires > now)
-            au_buf_printf(out, "%s\t%lld\t%d\n", h->items[i].host, (long long)h->items[i].expires,
-                          h->items[i].include_subdomains ? 1 : 0);
+        if (h->items[i].expires > now) {
+            /* au_put_i64, not %lld: newlib on Mac OS 9 has no %lld. */
+            au_buf_printf(out, "%s\t", h->items[i].host);
+            au_put_i64(out, h->items[i].expires);
+            au_buf_printf(out, "\t%d\n", h->items[i].include_subdomains ? 1 : 0);
+        }
 }
 
 bool au_hsts_parse_file(AuHsts *h, const char *data, size_t len, int64_t now)
@@ -256,9 +260,14 @@ bool au_hsts_parse_file(AuHsts *h, const char *data, size_t len, int64_t now)
                 char host[256];
                 memcpy(host, l, (size_t)(t1 - l));
                 host[t1 - l] = 0;
-                char val[64];
-                snprintf(val, sizeof val, "max-age=%lld%s", (long long)(exp - now), t2[1] == '1' ? "; includeSubDomains" : "");
-                au_hsts_process(h, host, val, now);
+                AuBuf val;
+                au_buf_init(&val);
+                au_buf_puts(&val, "max-age=");
+                au_put_i64(&val, exp - now);
+                if (t2[1] == '1')
+                    au_buf_puts(&val, "; includeSubDomains");
+                au_hsts_process(h, host, au_buf_cstr(&val), now);
+                au_buf_free(&val);
             } else if (!good) {
                 ok = false;
             }
