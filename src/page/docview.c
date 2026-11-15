@@ -587,7 +587,7 @@ static void scan_document(AuDocView *dv, bool final)
         if (el->ns != AU_NS_HTML)
             continue;
         bool complete = final || n->next || (n->parent && n->parent->next);
-        if (el->tag == AU_ATOM_style || (el->tag == AU_ATOM_link && is_stylesheet_link(el))) {
+        if (el->tag == AU_ATOM_style || (el->tag == AU_ATOM_link && is_stylesheet_link(el) && !attr(el, "disabled"))) {
             /* index counts the slots before this element: slots are kept in
              * document order, an incomplete <style> has none yet. */
             if (has_slot(dv, el)) {
@@ -767,12 +767,41 @@ static void rebuild_resolver(AuDocView *dv)
     dv->style_all = true;
 }
 
+static bool same_str(const char *a, const char *b)
+{
+    return !strcmp(a ? a : "", b ? b : "");
+}
+
+/* A slot whose element no longer matches it: a <style> whose text or
+ * media changed, a <link> whose href, rel, media or disabled changed. */
+static bool slot_stale(AuDocView *dv, const SheetSlot *s)
+{
+    const char *media = attr(s->el, "media");
+    if (!same_str(media && *media ? media : NULL, s->src->media))
+        return true;
+    if (s->el->tag == AU_ATOM_style) {
+        AuBuf t;
+        au_buf_init(&t);
+        text_content(&s->el->node, &t);
+        bool changed = t.len != s->src->len || (t.len && memcmp(t.data, s->src->text, t.len) != 0);
+        au_buf_free(&t);
+        return changed;
+    }
+    if (!is_stylesheet_link(s->el) || attr(s->el, "disabled"))
+        return true;
+    char abs[2048];
+    const char *href = attr(s->el, "href");
+    if (!href || !au_url_resolve(dv->base, href, abs, sizeof abs))
+        return !s->src->failed;
+    return !same_str(abs, s->src->url);
+}
+
 static void prune_slots(AuDocView *dv)
 {
     uint32_t k = 0;
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSlot *s = &dv->slots[i];
-        if (au_node_is_connected(&s->el->node)) {
+        if (au_node_is_connected(&s->el->node) && !slot_stale(dv, s)) {
             dv->slots[k++] = *s;
             continue;
         }
