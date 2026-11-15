@@ -11,6 +11,10 @@ endforeach()
 
 add_test(NAME js_limits
          COMMAND ${JS_TOOL} js --quiet --mem 16 --kill 1000 --expect-errors 5 ${JS_DIR}/harness.js ${JS_DIR}/limits.js)
+# Date with the embedder's clock and zone (au_js_set_clock): a fixed time,
+# 2023-11-14T22:13:20.000Z, in a zone 8 hours west of UTC.
+add_test(NAME js_clock
+         COMMAND ${JS_TOOL} js --quiet --clock 1700000000000 --zone -28800 ${JS_DIR}/harness.js ${JS_DIR}/clock.js)
 add_test(NAME js_lifetime
          COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/lifetime_setup.js ${JS_DIR}/lifetime_check.js)
 
