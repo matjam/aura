@@ -731,14 +731,16 @@ P.reportException = function (err) {
     try {
         /* An error thrown by a script of another origin that was loaded
          * without CORS tells the page nothing but that it happened. */
-        let muted = false;
+        let muted = false, file = null, line = 0, col = 0;
         if (err instanceof Error && typeof err.stack === 'string') {
-            const m = /^\s*at (?:.*? \()?(.*?):\d+(?::\d+)?\)?$/m.exec(err.stack.replace(/^.*<null>.*$/gm, ''));
+            /* the first frame that names a script (not the prelude or a native) */
+            const m = /^\s*at (?:.*? \()?(.*?):(\d+)(?::(\d+))?\)?$/m.exec(err.stack.replace(/^.*(<null>|\(native\)).*$/gm, ''));
+            if (m) { file = m[1]; line = +m[2]; col = +m[3] || 0; }
             muted = !!m && N.scriptMuted(m[1]);
         }
         const ev = muted ? new ErrorEvent('error', { cancelable: true, message: 'Script error.', filename: '', lineno: 0, colno: 0, error: null })
             : new ErrorEvent('error', { cancelable: true, message: err instanceof Error ? String(err) : inspect(err, 0, new Set()),
-            filename: err && err.fileName || N.docUrl(0), lineno: err && err.lineNumber || 0, colno: err && err.columnNumber || 0,
+            filename: err && err.fileName || file || N.docUrl(0), lineno: err && err.lineNumber || line, colno: err && err.columnNumber || col,
             error: err });
         return fire(G, ev);
     } catch (e) {

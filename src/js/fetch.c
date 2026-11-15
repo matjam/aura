@@ -804,7 +804,7 @@ void au_js_fetch_head(AuJs *js, uint32_t id, int status, const char *status_text
                 pack_header(&ev.headers, name, headers[2 * i + 1]);
         }
     }
-    ev.redirected = f->redirected;
+    ev.redirected = f->redirected && ev.type < 2; /* an opaque response has no URL list */
     emit(js, f, &ev);
 }
 
