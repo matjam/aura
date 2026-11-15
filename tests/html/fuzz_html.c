@@ -275,6 +275,7 @@ static int fuzz_main(int argc, char **argv)
         for (i = first; i < argc; i++) {
             if (!fz_read_file(argv[i], &in, 0))
                 continue;
+            fz_replay_seed(argv[i]);
             fz_corpus_add(&corpus, in.d, in.n);
             run_one(&in, &corpus);
             printf("%s: ok\n", argv[i]);

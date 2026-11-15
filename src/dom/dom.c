@@ -155,6 +155,33 @@ static void destroy_subtree(AuNode *root)
             }
             continue;
         }
+        if (n->type == AU_NODE_ELEMENT) {
+            /* A shadow root or template contents that this element alone
+             * holds is freed here, as if it were a child: node_free would
+             * release it by a nested call, once per level of templates
+             * nested in templates, which a page can make as deep as it
+             * likes. */
+            AuElement *e = (AuElement *)n;
+            AuNode *x = NULL;
+            if (e->shadow_root) {
+                x = e->shadow_root;
+                e->shadow_root = NULL;
+                ((AuShadowRoot *)x)->host = NULL;
+            } else if (e->template_content) {
+                x = e->template_content;
+                e->template_content = NULL;
+            }
+            if (x) {
+                if (x->refs > 0)
+                    x->refs--;
+                hold_changed(x);
+                if (x->refs == 0 && !x->parent) {
+                    x->parent = n; /* the way back up */
+                    n = x;
+                }
+                continue;
+            }
+        }
         AuNode *up = (n == root) ? NULL : n->parent;
         node_free(n);
         n = up;

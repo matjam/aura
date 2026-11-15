@@ -440,6 +440,7 @@ static int fuzz_main(int argc, char **argv)
         for (i = first + 1; i < argc; i++) {
             if (!fz_read_file(argv[i], &in, 0))
                 continue;
+            fz_replay_seed(argv[i]);
             run_kind(kind, &in);
             printf("%s: ok\n", argv[i]);
         }

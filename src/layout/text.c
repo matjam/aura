@@ -302,6 +302,27 @@ float l_measure(AuLayout *L, LFont *f, const AuStyle *s, const char *t, size_t n
     return w;
 }
 
+uint32_t l_prefix_seek(AuLayout *L, LFont *f, const AuStyle *s, const char *t, uint32_t n, float x, float *w)
+{
+    uint32_t k = 0, hi = n;
+    *w = 0;
+    while (hi - k > 64) {
+        uint32_t mid = k + (hi - k) / 2;
+        while (mid > k && ((unsigned char)t[mid] & 0xC0) == 0x80)
+            mid--;
+        if (mid == k)
+            break;
+        float mw = l_measure(L, f, s, t, mid);
+        if (mw > x)
+            hi = mid;
+        else {
+            k = mid;
+            *w = mw;
+        }
+    }
+    return k;
+}
+
 void l_text_free_caches(AuLayout *L)
 {
     au_glyph_run_free(&L->run);

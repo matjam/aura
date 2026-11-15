@@ -1083,7 +1083,7 @@ int au_docview_scroll_damage(AuDocView *dv, int ox, int oy, int nx, int ny, AuIR
         int iv[4];
         for (int k = 0; k < 4; k++) {
             float f = v[k] < -1e6f ? -1e6f : v[k] > 1e6f ? 1e6f : v[k];
-            iv[k] = (int)f + (k < 2 ? -1 : 1);
+            iv[k] = au_f2px(f) + (k < 2 ? -1 : 1);
         }
         out[i] = (AuIRect){iv[0], iv[1], iv[2], iv[3]};
     }
@@ -1214,8 +1214,8 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                     AuRect b;
                     int ix = 0, iy = 0;
                     if (au_layout_element_rect(dv->layout, t, &b)) {
-                        ix = ev->x - (int)b.x;
-                        iy = ev->y - (int)b.y;
+                        ix = ev->x - au_f2px(b.x);
+                        iy = ev->y - au_f2px(b.y);
                     }
                     au_forms_activate(dv, t, ix, iy);
                 }
@@ -1307,10 +1307,10 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
         /* No box (display: contents or none): try the first descendant with one. */
         for (AuNode *c = au_node_next(&el->node, &el->node); c; c = au_node_next(c, &el->node))
             if (au_is_element(c) && au_layout_element_rect(dv->layout, au_as_element(c), &r))
-                return (int)r.y;
+                return au_f2px(r.y);
         return -1;
     }
-    return (int)r.y;
+    return au_f2px(r.y);
 }
 
 /* ---- Scripts (see script.c) ---- */

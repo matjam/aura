@@ -113,6 +113,9 @@ static uint32_t frag_offset_at(AuLayout *L, const LFrag *f, float fx)
     const char *s = t->text + f->start;
     uint32_t k = 0;
     float prev = 0;
+    /* A click on a line of 90,000 characters without a break took
+     * minutes without this (see l_prefix_seek). */
+    k = l_prefix_seek(L, font, f->box->style, s, f->len, fx, &prev);
     while (k < f->len) {
         size_t adv;
         au_utf8_decode(s + k, f->len - k, &adv);

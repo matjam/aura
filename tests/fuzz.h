@@ -11,8 +11,9 @@
  * comes first, and prints the iterations done. The environment variable
  * AURA_FUZZ_SECONDS caps a fuzzer that takes no SECONDS argument. With
  * AURA_FUZZ_SAVE=PATH each input is written to PATH before it is used, so
- * after a crash or a hang PATH holds the input; `replay` runs saved
- * inputs unchanged. With AURA_FUZZ_STACK_KB=N the fuzzer runs on a thread
+ * after a crash or a hang PATH holds the input and PATH.seed the PRNG
+ * state; `replay` runs saved inputs unchanged (with the state from
+ * FILE.seed when that exists). With AURA_FUZZ_STACK_KB=N the fuzzer runs on a thread
  * whose stack is N KB, so recursion over input nesting overflows it as it
  * would on Mac OS 9 (256 KB there; sanitizer frames are several times
  * larger, so use a plain build for this). Run the fuzzers from the
@@ -26,7 +27,10 @@
 #include <string.h>
 #include <time.h>
 
+#include <execinfo.h>
 #include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
 
 static uint32_t fz_state = 1;
 
@@ -205,7 +209,7 @@ static inline void fz_mutate(FzBuf *b, const char *const *dict, int ndict, const
                 /* the same token many times: nesting */
                 const char *t = dict[fz_rnd((uint32_t)ndict)];
                 size_t tl = strlen(t);
-                int reps = 1 << fz_rnd(11), r;
+                int reps = 1 << fz_rnd(14), r;
                 if (fz_rnd(4))
                     reps = 1 + (int)fz_rnd(40);
                 for (r = 0; r < reps && b->n + tl <= max; r++)
@@ -288,6 +292,34 @@ static inline void fz_save(const void *d, size_t n)
         fwrite(d, 1, n, f);
         fclose(f);
     }
+    /* The PRNG state too: what a fuzzer does with an input (viewport
+     * sizes, chunk boundaries) comes from it. */
+    {
+        char sp[1024];
+        snprintf(sp, sizeof sp, "%s.seed", path);
+        f = fopen(sp, "w");
+        if (f) {
+            fprintf(f, "%lu\n", (unsigned long)fz_state);
+            fclose(f);
+        }
+    }
+}
+
+/* For replay: takes the PRNG state from PATH.seed when that file exists
+ * (AURA_FUZZ_SAVE writes it), else starts from seed 1. */
+static inline void fz_replay_seed(const char *path)
+{
+    char sp[1024];
+    FILE *f;
+    unsigned long v = 1;
+    snprintf(sp, sizeof sp, "%s.seed", path);
+    f = fopen(sp, "r");
+    if (f) {
+        if (fscanf(f, "%lu", &v) != 1)
+            v = 1;
+        fclose(f);
+    }
+    fz_seed((uint32_t)v);
 }
 
 /* The common command line. Returns 1 for `replay` (argv[2..] are the files
@@ -316,9 +348,36 @@ typedef struct FzMain {
     int rc;
 } FzMain;
 
+/* A bad access on the small stack is most often its overflow: print the
+ * innermost frames (from a signal stack of its own) and die by the
+ * signal. */
+static inline void fz_on_fault(int sig)
+{
+    void *frames[48];
+    int n = backtrace(frames, 48);
+    static const char msg[] = "fuzz: bad access (stack overflow?); innermost frames:\n";
+    if (write(2, msg, sizeof msg - 1) < 0)
+        n = 0;
+    backtrace_symbols_fd(frames, n, 2);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 static inline void *fz_thread(void *p)
 {
     FzMain *m = (FzMain *)p;
+    static char alt[1 << 16];
+    stack_t ss;
+    struct sigaction sa;
+    memset(&ss, 0, sizeof ss);
+    ss.ss_sp = alt;
+    ss.ss_size = sizeof alt;
+    sigaltstack(&ss, NULL);
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = fz_on_fault;
+    sa.sa_flags = SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
     m->rc = m->fn(m->argc, m->argv);
     return NULL;
 }

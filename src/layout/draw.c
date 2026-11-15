@@ -2216,8 +2216,14 @@ static void paint_children(PCtx *P, LBox *parent, float ox, float oy, int phase)
             c->inner != LI_TABLE_CELL)
             continue;
         if (c->kind == LK_INLINE) {
-            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED))
+            /* Inline boxes nest as deeply as the page's markup: the same
+             * depth limit as blocks, or thousands of nested spans
+             * overflow the stack. */
+            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED) && P->depth <= L_MAX_DEPTH) {
+                P->depth++;
                 paint_children(P, c, ox, oy, phase);
+                P->depth--;
+            }
             continue;
         }
         if (c->kind != LK_BLOCK)

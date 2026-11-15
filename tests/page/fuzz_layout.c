@@ -338,6 +338,7 @@ static int fuzz_main(int argc, char **argv)
         for (i = first; i < argc; i++) {
             if (!fz_read_file(argv[i], &in, 0))
                 continue;
+            fz_replay_seed(argv[i]);
             run_one(&in);
             printf("%s: ok\n", argv[i]);
         }
@@ -356,9 +357,9 @@ static int fuzz_main(int argc, char **argv)
     for (it = 0; it < iters && !fz_expired(); it++) {
         const FzBuf *src = &pages.v[fz_rnd((uint32_t)pages.n)];
         fz_set(&in, src->d, src->n);
-        fz_mutate(&in, dict, NDICT, &pages, 40 << 10);
+        fz_mutate(&in, dict, NDICT, &pages, 96 << 10);
         if (fz_rnd(3) == 0)
-            fz_mutate(&in, dict, NDICT, &pages, 40 << 10);
+            fz_mutate(&in, dict, NDICT, &pages, 96 << 10);
         fz_save(in.d, in.n);
         run_one(&in);
     }

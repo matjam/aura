@@ -11,7 +11,9 @@
  * forces a layout, paints, hit tests, sends mouse and key events and
  * runs timers, so layout and input see every intermediate tree.
  *
- * The document view is freed at the end with script objects alive.
+ * The document view is freed at the end with script objects alive. An
+ * iteration over AURA_FUZZ_SLOW_MS (default 60000) of CPU time aborts;
+ * with AURA_FUZZ_VERBOSE set, scripts that take over 3 s are saved.
  * Run it under AddressSanitizer: the bugs it looks for are uses of freed
  * nodes and wrappers.
  *
@@ -238,6 +240,7 @@ static void generate(FzBuf *b)
 
 static AuFontSet *fonts;
 static AuSurface *surface;
+static long slow_ms = 60000;
 
 static double fake_now;
 static double now_ms(void *ctx, AuDocView *dv)
@@ -333,21 +336,43 @@ static int fuzz_main(int argc, char **argv)
     static uint8_t fontdata[16384];
     int replay = fz_args(argc, argv, &iters, &first);
 
+    if (getenv("AURA_FUZZ_SLOW_MS"))
+        slow_ms = atol(getenv("AURA_FUZZ_SLOW_MS"));
     fonts = ahem_fontset(fontdata);
     surface = au_surface_new(200, 150);
     if (replay) {
         for (i = first; i < argc; i++) {
             if (!fz_read_file(argv[i], &in, 0))
                 continue;
+            fz_replay_seed(argv[i]);
             run_one(&in);
             printf("%s: ok\n", argv[i]);
         }
         return 0;
     }
     for (it = 0; it < iters && !fz_expired(); it++) {
+        clock_t t0 = clock();
+        long ms;
         generate(&in);
         fz_save(in.d, in.n);
         run_one(&in);
+        ms = (long)((double)(clock() - t0) * 1000 / CLOCKS_PER_SEC);
+        if (ms > 3000 && getenv("AURA_FUZZ_VERBOSE")) {
+            char name[64];
+            FILE *f;
+            snprintf(name, sizeof name, "fuzz-dom-slow-%ld.js", it);
+            f = fopen(name, "wb");
+            if (f) {
+                fwrite(in.d, 1, in.n, f);
+                fclose(f);
+            }
+            printf("iteration %ld took %ld ms (saved as %s)\n", it, ms, name);
+            fflush(stdout);
+        }
+        if (ms > slow_ms) {
+            printf("fuzz_dom: a script of %lu bytes took %ld ms\n", (unsigned long)in.n, ms);
+            abort();
+        }
     }
     printf("fuzz_dom: %ld iterations\n", it);
     au_surface_free(surface);
