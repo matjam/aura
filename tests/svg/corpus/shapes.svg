@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="64" height="48" viewBox="0 0 64 48" preserveAspectRatio="xMidYMid slice">
+  <title>shapes</title>
+  <rect x="1" y="1" width="20" height="14" rx="3" fill="#c33" stroke="#300" stroke-width="1.5"/>
+  <circle cx="32" cy="8" r="7" fill="none" stroke="navy" stroke-dasharray="3 1.5" stroke-dashoffset="2"/>
+  <ellipse cx="52" cy="8" rx="9" ry="5" fill="green" opacity="0.6"/>
+  <line x1="2" y1="20" x2="62" y2="22" stroke="black" stroke-linecap="round" stroke-width="3"/>
+  <polyline points="2,30 10,26 18,34 26,26" fill="none" stroke="purple" stroke-linejoin="bevel" stroke-width="2"/>
+  <polygon points="34,26 44,26 39,36" fill="orange" fill-rule="evenodd"/>
+  <path d="M48 26c4-4 8 0 8 4s-4 8-8 4zM2 40h10v6H2zm12 0a3 3 0 1 0 6 0 3 3 0 0 0-6 0" fill="teal" transform="rotate(5 32 40) scale(1 .95)"/>
+  <g transform="translate(40 38)" stroke="#000" stroke-width="0.5" vector-effect="non-scaling-stroke" paint-order="stroke">
+    <rect width="8" height="8" fill="yellow"/>
+    <rect x="10" width="8" height="8" fill="pink" visibility="hidden"/>
+  </g>
+</svg>

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1" spreadMethod="reflect" gradientTransform="rotate(10)">
+      <stop offset="0" stop-color="#f00"/>
+      <stop offset="50%" stop-color="#0f0" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#00f"/>
+    </linearGradient>
+    <linearGradient id="lg2" xlink:href="#lg" gradientUnits="userSpaceOnUse" x1="10" x2="90"/>
+    <radialGradient id="rg" cx="50%" cy="50%" r="50%" fx="30%" fy="30%" spreadMethod="repeat">
+      <stop offset="0" stop-color="white"/>
+      <stop offset="1" stop-color="black"/>
+    </radialGradient>
+    <clipPath id="cp" clipPathUnits="objectBoundingBox">
+      <circle cx=".5" cy=".5" r=".5"/>
+      <text x="0" y="1" font-size=".5">A</text>
+    </clipPath>
+    <clipPath id="cr"><rect x="0" y="0" width="50" height="50"/></clipPath>
+    <mask id="mk" maskContentUnits="objectBoundingBox">
+      <rect width="1" height="1" fill="url(#rg)"/>
+    </mask>
+    <mask id="ma" style="mask-type: alpha"><path d="M0 0h100v50z"/></mask>
+    <symbol id="sym" viewBox="0 0 10 10" preserveAspectRatio="xMaxYMax meet">
+      <circle cx="5" cy="5" r="5" fill="url(#lg)"/>
+    </symbol>
+  </defs>
+  <style>.a { fill: url(#lg2); stroke: currentColor } #b { opacity: .5 } rect:first-child { stroke-width: 2px }</style>
+  <rect class="a" width="50" height="50" clip-path="url(#cp)" style="color: maroon"/>
+  <rect id="b" x="50" width="50" height="50" fill="url(#rg)" mask="url(#mk)"/>
+  <g clip-path="url(#cr)" mask="url(#ma)" opacity=".8">
+    <use xlink:href="#sym" x="0" y="50" width="50" height="50" fill="red"/>
+  </g>
+  <use href="#b" x="-50" y="50"/>
+  <switch>
+    <g requiredExtensions="http://example.com/x"><rect width="10" height="10"/></g>
+    <g systemLanguage="en-US,fr"><circle cx="75" cy="75" r="10" fill="url(#missing) blue"/></g>
+  </switch>
+</svg>
