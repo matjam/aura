@@ -508,6 +508,10 @@ void au_browser_window_free(AuBrowserWindow *w)
         free_tab(w->tabs[i]);
     au_free(w->tabs);
     au_free(w->field);
+    if (w->label_list)
+        au_fontlist_free(w->label_list);
+    if (w->small_list)
+        au_fontlist_free(w->small_list);
     for (int i = 0; i < b->nwindows; i++) {
         if (b->windows[i] == w) {
             memmove(&b->windows[i], &b->windows[i + 1], (size_t)(b->nwindows - i - 1) * sizeof *b->windows);
@@ -1027,6 +1031,12 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     s.throbber_frame = w->throbber_frame;
     s.draw_native_standins = w->native_standins;
     s.active_window = w->active_window;
+    if (!w->label_list && w->browser->fonts) {
+        w->label_list = au_fontlist_parse(w->browser->fonts, AU_CHROME_LABEL_FAMILIES, 400, false);
+        w->small_list = au_fontlist_parse(w->browser->fonts, AU_CHROME_SMALL_FAMILIES, 400, false);
+    }
+    s.label_list = w->label_list;
+    s.small_list = w->small_list;
     au_chrome_paint(c, w->browser->fonts, &w->layout, &s, clip);
     AuIRect pg = au_irect_intersect(w->layout.page, clip);
     if (t && !au_irect_empty(pg)) {

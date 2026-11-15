@@ -114,6 +114,7 @@ struct AuBrowserWindow {
     bool active_window;
     int throbber_frame;
     uint32_t throbber_ms;
+    AuFontList *label_list, *small_list; /* the chrome's fonts, made on first paint */
 };
 
 #define AU_MAX_FETCHERS 8

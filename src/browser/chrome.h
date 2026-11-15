@@ -119,6 +119,10 @@ typedef struct AuChromeState {
     int throbber_frame;       /* advances while loading */
     bool draw_native_standins; /* paint scroll bar and grow box stand-ins */
     bool active_window;       /* inactive windows draw dimmed labels */
+    /* Font lists for labels (Charcoal) and small text (Geneva), so tab
+     * titles and status text get per-character fallback. NULL: the plain
+     * faces, without fallback. */
+    AuFontList *label_list, *small_list;
 } AuChromeState;
 
 /* Paints the chrome (everything but the page area) inside clip. */
@@ -129,6 +133,11 @@ AuFontFace *au_chrome_label_face(AuFontSet *fonts);
 /* Fits text into max_w pixels at size, ending with an ellipsis when cut.
  * Writes into out (cap bytes) and returns it. */
 char *au_chrome_ellipsize(AuFontFace *f, float size, const char *text, float max_w, char *out, size_t cap);
+/* The same, measuring with per-character fallback through a font list. */
+char *au_chrome_ellipsize_list(AuFontList *l, float size, const char *text, float max_w, char *out, size_t cap);
+/* The families the chrome's labels and small text are drawn with. */
+#define AU_CHROME_LABEL_FAMILIES "Charcoal, system-ui"
+#define AU_CHROME_SMALL_FAMILIES "Geneva, system-ui"
 
 /* Rectangle helpers. */
 static inline bool au_irect_contains(AuIRect r, int x, int y)

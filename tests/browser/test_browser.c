@@ -3,6 +3,7 @@
  * and hit testing. Exits non-zero on the first failure. */
 #include "browser/browser.h"
 #include "browser/listview.h"
+#include "browser/macroman.h"
 #include "browser/url.h"
 
 #include <stdio.h>
@@ -1044,6 +1045,64 @@ static void test_downloads(void)
     au_downloads_free(&dl);
 }
 
+/* ---- Mac Roman ---- */
+
+static void check_roman(const char *utf8, const char *want, unsigned flags)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    au_macroman_from_utf8(utf8, strlen(utf8), &b, '?', flags);
+    au_buf_cstr(&b);
+    if (strcmp(b.data, want) != 0) {
+        fprintf(stderr, "roman \"%s\": got \"", utf8);
+        for (size_t i = 0; i < b.len; i++)
+            fprintf(stderr, (unsigned char)b.data[i] < 0x80 ? "%c" : "\\x%02X", (unsigned char)b.data[i]);
+        fprintf(stderr, "\"\n");
+        exit(1);
+    }
+    au_buf_free(&b);
+}
+
+static void test_macroman(void)
+{
+    /* Characters Mac Roman has map to it, including curly quotes, dashes
+     * and the ellipsis. */
+    check_roman("caf\xC3\xA9 \xE2\x80\x9Cquoted\xE2\x80\x9D \xE2\x80\x94 \xE2\x80\xA6", "caf\x8E \xD2quoted\xD3 \xD1 \xC9", 0);
+    check_roman("it\xE2\x80\x99s \xE2\x82\xAC" "5 \xE2\x80\xA2", "it\xD5s \xDB" "5 \xA5", 0);
+    /* Transliterated: other dashes, primes, spaces, arrows, fractions,
+     * letters with other diacritics, fullwidth forms. */
+    check_roman("a\xE2\x80\x90" "b\xE2\x80\x95" "c", "a-b\xD1" "c", 0);
+    check_roman("5\xE2\x80\xB2" "3\xE2\x80\xB3", "5'3\"", 0);
+    check_roman("a\xE2\x80\x83" "b\xE3\x80\x80" "c", "a b c", 0);
+    check_roman("x \xE2\x86\x92 y", "x -> y", 0);
+    check_roman("\xC2\xBD", " 1/2", 0);
+    check_roman("\xC5\x81\xC3\xB3" "d\xC5\xBA \xC4\x8D" "e\xC5\xA1ka", "L\x97" "dz ceska", 0);
+    check_roman("\xEF\xBC\xA1\xEF\xBC\x91", "A1", 0);
+    check_roman("\xC4\xB2", "IJ", 0);
+    /* Invisible characters vanish; decomposed accents keep their base. */
+    check_roman("a\xE2\x80\x8B" "b\xC2\xAD" "c\xEF\xBB\xBF" "e\xCC\x81", "abce", 0);
+    /* The rest: one replacement each, never garbage. */
+    check_roman("\xE6\x97\xA5\xE6\x9C\xAC", "??", 0);
+    check_roman("\xF0\x9F\x98\x80!", "?!", 0);
+    check_roman("bad\xFF\xFE" "end", "bad??end", 0);
+    check_roman("\xCE\xB1\xCE\xB2", "??", 0);
+    /* Line breaks for the clipboard. */
+    check_roman("a\nb\r\nc", "a\rb\rc", AU_MR_CR_LINES);
+    check_roman("a\nb", "a\nb", 0);
+
+    AuBuf b;
+    au_buf_init(&b);
+    au_macroman_to_utf8("\x8E\xD2\rx", 4, &b, AU_MR_CR_LINES);
+    au_buf_cstr(&b);
+    CHECK_STR(b.data, "\xC3\xA9\xE2\x80\x9C\nx");
+    au_buf_clear(&b);
+    au_utf16be_from_utf8("A\xC3\xA9\n\xF0\x9F\x98\x80", 8, &b, AU_MR_CR_LINES);
+    CHECK(b.len == 10);
+    CHECK(!memcmp(b.data, "\0A\0\xE9\0\r\xD8\x3D\xDE\x00", 10));
+    au_buf_free(&b);
+    CHECK(au_macroman_byte(0x2014) == 0xD1 && au_macroman_byte(0x4E00) == -1);
+}
+
 int main(void)
 {
     AuFontSet *fonts = au_fontset_new(); /* empty: the code must cope */
@@ -1059,6 +1118,7 @@ int main(void)
     test_layout();
     test_ellipsize(fonts);
     test_downloads();
+    test_macroman();
     au_fontset_free(fonts);
     printf("browser: all tests passed\n");
     return 0;
