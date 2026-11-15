@@ -252,14 +252,14 @@ int au_chrome_drop_index(const AuChromeLayout *l, int x, int y)
 #define C_TAB_OFF AU_RGB(200, 200, 200)
 #define C_FOCUS AU_RGB(128, 128, 204)
 
-static void fill(AuCanvas *c, int x0, int y0, int x1, int y1, AuColor col)
+static void fill_box(AuCanvas *c, int x0, int y0, int x1, int y1, AuColor col)
 {
     if (x1 > x0 && y1 > y0)
         au_fill_rect(c, (AuRect){(float)x0, (float)y0, (float)(x1 - x0), (float)(y1 - y0)}, col);
 }
 
-static void hline(AuCanvas *c, int x0, int x1, int y, AuColor col) { fill(c, x0, y, x1, y + 1, col); }
-static void vline(AuCanvas *c, int x, int y0, int y1, AuColor col) { fill(c, x, y0, x + 1, y1, col); }
+static void hline(AuCanvas *c, int x0, int x1, int y, AuColor col) { fill_box(c, x0, y, x1, y + 1, col); }
+static void vline(AuCanvas *c, int x, int y0, int y1, AuColor col) { fill_box(c, x, y0, x + 1, y1, col); }
 
 /* A raised (or pressed) Platinum bevel with a frame. */
 static void bevel(AuCanvas *c, AuIRect r, bool pressed, bool hover)
@@ -267,7 +267,7 @@ static void bevel(AuCanvas *c, AuIRect r, bool pressed, bool hover)
     AuColor face = pressed ? AU_RGB(150, 150, 150) : hover ? AU_RGB(232, 232, 232) : C_FACE;
     AuColor hi = pressed ? AU_RGB(120, 120, 120) : C_LIGHT;
     AuColor lo = pressed ? AU_RGB(180, 180, 180) : C_SHADOW;
-    fill(c, r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1, face);
+    fill_box(c, r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1, face);
     hline(c, r.x0 + 1, r.x1 - 1, r.y0 + 1, hi);
     vline(c, r.x0 + 1, r.y0 + 1, r.y1 - 1, hi);
     hline(c, r.x0 + 1, r.x1 - 1, r.y1 - 2, lo);
@@ -593,11 +593,11 @@ static void paint_tab_top(AuCanvas *c, AuFontFace *lf, const AuChromeLayout *l, 
     int x0 = r.x0, x1 = r.x1 - 1; /* a 1-pixel gap between tabs */
     AuColor face = active ? C_FACE : hover ? AU_RGB(214, 214, 214) : C_TAB_OFF;
     int y1 = active ? r.y1 : r.y1 - 1;
-    fill(c, x0 + 1, y0 + 1, x1 - 1, y1, face);
+    fill_box(c, x0 + 1, y0 + 1, x1 - 1, y1, face);
     /* Frame: top with cut corners, sides. */
     hline(c, x0 + 2, x1 - 2, y0, C_FRAME);
-    fill(c, x0 + 1, y0 + 1, x0 + 2, y0 + 2, C_FRAME);
-    fill(c, x1 - 2, y0 + 1, x1 - 1, y0 + 2, C_FRAME);
+    fill_box(c, x0 + 1, y0 + 1, x0 + 2, y0 + 2, C_FRAME);
+    fill_box(c, x1 - 2, y0 + 1, x1 - 1, y0 + 2, C_FRAME);
     vline(c, x0, y0 + 2, y1, C_FRAME);
     vline(c, x1 - 1, y0 + 2, y1, C_FRAME);
     /* Inner highlight and shadow. */
@@ -626,9 +626,9 @@ static void paint_tab_left(AuCanvas *c, AuFontFace *lf, const AuChromeLayout *l,
     if (active) {
         AuIRect b = irect(r.x0 + 3, r.y0 + 1, r.x1 - 3, r.y1 - 1);
         bevel(c, b, false, false);
-        fill(c, b.x0 + 2, b.y0 + 2, b.x1 - 2, b.y1 - 2, AU_RGB(236, 236, 236));
+        fill_box(c, b.x0 + 2, b.y0 + 2, b.x1 - 2, b.y1 - 2, AU_RGB(236, 236, 236));
     } else if (hover) {
-        fill(c, r.x0 + 3, r.y0 + 1, r.x1 - 3, r.y1 - 1, AU_RGB(214, 214, 214));
+        fill_box(c, r.x0 + 3, r.y0 + 1, r.x1 - 3, r.y1 - 1, AU_RGB(214, 214, 214));
     }
     if (s->tabs[i].loading)
         throbber(c, irect(r.x0 + 4, r.y0, r.x0 + 24, r.y1), true, s->throbber_frame);
@@ -659,11 +659,11 @@ static void paint_tabs(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, c
     if (l->position == AU_TABS_TOP) {
         /* Strip background: a little darker than the toolbar, with a
          * frame line along the bottom that the active tab opens. */
-        fill(c, st.x0, st.y0, st.x1, st.y1, AU_RGB(190, 190, 190));
+        fill_box(c, st.x0, st.y0, st.x1, st.y1, AU_RGB(190, 190, 190));
         hline(c, st.x0, st.x1, st.y0, AU_RGB(170, 170, 170));
         hline(c, st.x0, st.x1, st.y1 - 1, C_FRAME);
     } else {
-        fill(c, st.x0, st.y0, st.x1, st.y1, AU_RGB(210, 210, 210));
+        fill_box(c, st.x0, st.y0, st.x1, st.y1, AU_RGB(210, 210, 210));
         vline(c, st.x1 - 1, st.y0, st.y1, AU_RGB(190, 190, 190));
         /* The new-tab row is a button with a label. */
         bool hover = is(s->hover, AU_HIT_NEW_TAB, -1);
@@ -702,7 +702,7 @@ static void paint_tabs(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, c
 static void paint_toolbar(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, const AuChromeState *s)
 {
     AuIRect t = l->toolbar;
-    fill(c, t.x0, t.y0, t.x1, t.y1, C_FACE);
+    fill_box(c, t.x0, t.y0, t.x1, t.y1, C_FACE);
     if (l->position == AU_TABS_LEFT)
         hline(c, t.x0, t.x1, t.y0, C_LIGHT);
     hline(c, t.x0, t.x1, t.y1 - 1, C_FRAME);
@@ -733,7 +733,7 @@ static void paint_toolbar(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l
 
     /* Address field. */
     AuIRect a = l->address;
-    fill(c, a.x0 + 2, a.y0 + 2, a.x1 - 2, a.y1 - 2, C_LIGHT);
+    fill_box(c, a.x0 + 2, a.y0 + 2, a.x1 - 2, a.y1 - 2, C_LIGHT);
     sunken(c, a);
     if (s->field_focused) {
         AuIRect f = irect(a.x0 - 2, a.y0 - 2, a.x1 + 2, a.y1 + 2);
@@ -755,7 +755,7 @@ static void paint_toolbar(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l
 static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, const AuChromeState *s)
 {
     AuIRect r = l->status;
-    fill(c, r.x0, r.y0, r.x1, r.y1, C_FACE);
+    fill_box(c, r.x0, r.y0, r.x1, r.y1, C_FACE);
     hline(c, r.x0, r.x1, r.y0, C_FRAME);
     hline(c, r.x0, r.x1, r.y0 + 1, C_LIGHT);
     AuIRect tr = irect(r.x0 + 6, r.y0 + 1, r.x1 - 6, r.y1);
@@ -763,11 +763,11 @@ static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l,
         int pw = 100;
         if (r.x1 - r.x0 > pw + 80) {
             AuIRect p = irect(r.x1 - pw - 6, r.y0 + 4, r.x1 - 6, r.y1 - 3);
-            fill(c, p.x0, p.y0, p.x1, p.y1, C_FRAME);
-            fill(c, p.x0 + 1, p.y0 + 1, p.x1 - 1, p.y1 - 1, AU_RGB(238, 238, 238));
+            fill_box(c, p.x0, p.y0, p.x1, p.y1, C_FRAME);
+            fill_box(c, p.x0 + 1, p.y0 + 1, p.x1 - 1, p.y1 - 1, AU_RGB(238, 238, 238));
             float pr = s->progress < 0 ? 0 : s->progress > 1 ? 1 : s->progress;
             int w = (int)((float)(p.x1 - p.x0 - 2) * pr);
-            fill(c, p.x0 + 1, p.y0 + 1, p.x0 + 1 + w, p.y1 - 1, AU_RGB(102, 102, 204));
+            fill_box(c, p.x0 + 1, p.y0 + 1, p.x0 + 1 + w, p.y1 - 1, AU_RGB(102, 102, 204));
             hline(c, p.x0 + 1, p.x0 + 1 + w, p.y0 + 1, AU_RGB(153, 153, 238));
             tr.x1 = p.x0 - 8;
         }
@@ -782,15 +782,15 @@ static void paint_standins(AuCanvas *c, const AuChromeLayout *l)
     /* A plain Platinum scroll bar track and an empty grow box, for host
      * renders; the Mac shell has native controls here. */
     AuIRect v = l->vscroll;
-    fill(c, v.x0, v.y0, v.x1, v.y1, C_FRAME);
-    fill(c, v.x0 + 1, v.y0 + 1, v.x1 - 1, v.y1 - 1, AU_RGB(204, 204, 204));
+    fill_box(c, v.x0, v.y0, v.x1, v.y1, C_FRAME);
+    fill_box(c, v.x0 + 1, v.y0 + 1, v.x1 - 1, v.y1 - 1, AU_RGB(204, 204, 204));
     AuIRect up = irect(v.x0, v.y0, v.x1, v.y0 + 16), dn = irect(v.x0, v.y1 - 16, v.x1, v.y1);
     bevel(c, up, false, false);
     bevel(c, dn, false, false);
     icon_triangle(c, (float)(up.x0 + up.x1) / 2, (float)(up.y0 + up.y1) / 2, 2, C_ICON);
     icon_triangle(c, (float)(dn.x0 + dn.x1) / 2, (float)(dn.y0 + dn.y1) / 2, 3, C_ICON);
     AuIRect g = l->grow;
-    fill(c, g.x0, g.y0, g.x1, g.y1, C_FACE);
+    fill_box(c, g.x0, g.y0, g.x1, g.y1, C_FACE);
     hline(c, g.x0, g.x1, g.y0, C_FRAME);
     vline(c, g.x0, g.y0, g.y1, C_FRAME);
     for (int i = 0; i < 3; i++) {
@@ -815,7 +815,7 @@ void au_chrome_paint(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l, con
     if (!au_irect_empty(l->splitter) && touches(l->splitter, clip)) {
         AuIRect sp = l->splitter;
         bool hot = is(s->hover, AU_HIT_SPLITTER, -1) || is(s->pressed, AU_HIT_SPLITTER, -1);
-        fill(c, sp.x0, sp.y0, sp.x1, sp.y1, hot ? AU_RGB(200, 200, 200) : C_FACE);
+        fill_box(c, sp.x0, sp.y0, sp.x1, sp.y1, hot ? AU_RGB(200, 200, 200) : C_FACE);
         vline(c, sp.x0, sp.y0, sp.y1, C_LIGHT);
         vline(c, sp.x1 - 1, sp.y0, sp.y1, C_FRAME);
         /* A grip: three short dashes in the middle. */
