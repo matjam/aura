@@ -1,0 +1,16 @@
+Twemoji Mozilla, as bundled with Aura
+
+Emoji graphics: Twemoji, copyright 2020 Twitter, Inc and other
+contributors, licensed under the Creative Commons Attribution 4.0
+International licence (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+Source of the graphics: https://github.com/twitter/twemoji
+
+Font build: Twemoji Mozilla 0.7.0, copyright Mozilla Foundation,
+licensed under the Apache License 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+Source: https://github.com/mozilla/twemoji-colr/releases/tag/v0.7.0
+
+Changes made for Aura: hinting, glyph names and the FFTM, gasp and GDEF
+tables were removed (tools/fonts-prepare.py). The emoji graphics are
+unchanged.

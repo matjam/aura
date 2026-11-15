@@ -288,8 +288,7 @@ float l_measure(AuLayout *L, LFont *f, const AuStyle *s, const char *t, size_t n
             i += 2;
             start = i;
         } else if (c == 0xE2 && i + 2 < n && (unsigned char)t[i + 1] == 0x80 &&
-                   ((unsigned char)t[i + 2] == 0x8B || (unsigned char)t[i + 2] == 0x8C ||
-                    (unsigned char)t[i + 2] == 0x8D)) {
+                   ((unsigned char)t[i + 2] == 0x8B || (unsigned char)t[i + 2] == 0x8C)) {
             w += l_measure_raw(L, f, t + start, i - start);
             i += 3;
             start = i;
@@ -327,10 +326,11 @@ void l_text_free_caches(AuLayout *L)
 
 /* ---- Drawing ---- */
 
+/* U+200D (zero width joiner) is left to the shaper, which draws nothing
+ * for it but needs it to join emoji sequences. */
 static bool skip_char(uint32_t cp)
 {
-    return cp == 0xAD || cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0xFEFF || cp == '\n' ||
-           cp == '\r' || cp == '\t';
+    return cp == 0xAD || cp == 0x200B || cp == 0x200C || cp == 0xFEFF || cp == '\n' || cp == '\r' || cp == '\t';
 }
 
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,

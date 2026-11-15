@@ -149,6 +149,29 @@ static void exercise(const uint8_t *data, size_t len)
         au_font_face_free(faces[1]);
         au_font_face_free(f);
     }
+    /* Clusters, GSUB and colour glyphs through a font list. */
+    AuFontSet *set = au_fontset_new();
+    if (au_fontset_add_data(set, data, len) > 0) {
+        const char *fam = au_fontset_entry(set, 0, NULL, NULL);
+        AuFontList *l = au_fontlist_new(set, &fam, 1, 100 + 100 * (int)rnd(9), rnd(2));
+        static const char *seqs =
+            "\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD \xF0\x9F\x87\xAF\xF0\x9F\x87\xB5 1\xEF\xB8\x8F\xE2\x83\xA3 "
+            "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7 \xF0\x9F\x8F\xB3\xEF\xB8\x8F"
+            "\xE2\x80\x8D\xF0\x9F\x8C\x88 \xEE\x80\x80\xEE\x80\x81\xEE\x80\x82\xEE\x80\x83\xEE\x80\x84\xEE\x80\x85"
+            "\xEE\x80\x86\xEE\x80\x87\xEE\x80\x88\xEE\x80\x89\xEE\x80\x8A\xEE\x80\x8B\xEE\x80\x8C\xEE\x80\x8D"
+            "\xEE\x80\x8E\xEE\x80\x8F \xE2\x98\xBA\xEF\xB8\x8E Ab\xCC\x81";
+        AuGlyphRun r;
+        au_glyph_run_init(&r);
+        au_shape_text_list(l, 20, seqs, strlen(seqs), &r);
+        AuSurface *s = au_surface_new(64, 32);
+        AuCanvas *c = au_canvas_new(s);
+        au_draw_glyph_run(c, au_fontlist_primary(l), 8 + (float)rnd(40), &r, -(float)rnd(200), 24, 0xFF336699);
+        au_canvas_free(c);
+        au_surface_free(s);
+        au_glyph_run_free(&r);
+        au_fontlist_free(l);
+    }
+    au_fontset_free(set);
 }
 
 static double now(void)

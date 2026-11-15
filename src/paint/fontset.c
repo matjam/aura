@@ -835,17 +835,31 @@ static bool has_all(const AuFontFace *f, const uint32_t *cps, size_t n)
     return true;
 }
 
-/* The first face of a comma-separated fallback list that has cps. */
-static AuFontFace *from_names(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const Style *st)
+/* Whether f would draw cps[0] in colour. */
+static bool draws_color(const AuFontFace *f, const uint32_t *cps)
+{
+    return f->color && au_colr_has(f, au_font_glyph(f, cps[0]));
+}
+
+/* The first face of a comma-separated fallback list that has cps; with
+ * mono, faces that would draw it in colour are passed over (text
+ * presentation). */
+static AuFontFace *from_names_mode(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const Style *st,
+                                   bool mono)
 {
     const char *p = names;
     Name nm;
     while (next_name(&p, &nm)) {
         AuFontFace *f = match_family_cps(s, nm.s, nm.n, st, cps, n);
-        if (f && has_all(f, cps, n))
+        if (f && has_all(f, cps, n) && !(mono && draws_color(f, cps)))
             return f;
     }
     return NULL;
+}
+
+static AuFontFace *from_names(AuFontSet *s, const char *names, const uint32_t *cps, size_t n, const Style *st)
+{
+    return from_names_mode(s, names, cps, n, st, false);
 }
 
 /* A loaded face of s (or its parents) that has cps. */
@@ -871,6 +885,9 @@ static AuFontFace *global_face(AuFontSet *s, const uint32_t *cps, size_t n, cons
     if (emoji)
         return from_names(s, au_font_emoji_fallbacks(), cps, n, &st);
     AuFontFace *f = from_names(s, au_font_text_fallbacks(), cps, n, &st);
+    /* Text presentation: a monochrome emoji face before a colour one. */
+    if (!f)
+        f = from_names_mode(s, au_font_emoji_fallbacks(), cps, n, &st, true);
     if (!f)
         f = from_names(s, au_font_emoji_fallbacks(), cps, n, &st);
     if (!f)
@@ -908,8 +925,10 @@ static bool family_ranged(const AuFontSet *s, const char *family, size_t flen)
 }
 
 /* The faces of the list itself, in order, that have cps. A family split
- * over several faces by unicode-range gives the face covering cps. */
-static AuFontFace *from_list(AuFontList *l, const uint32_t *cps, size_t n)
+ * over several faces by unicode-range gives the face covering cps. With
+ * color_only, only colour fonts count (a page naming a colour emoji font
+ * for emoji). */
+static AuFontFace *from_list_any(AuFontList *l, const uint32_t *cps, size_t n, bool color_only)
 {
     for (size_t i = 0; i < l->ncand; i++) {
         ListCand *lc = &l->cand[i];
@@ -920,13 +939,20 @@ static AuFontFace *from_list(AuFontList *l, const uint32_t *cps, size_t n)
         if (lc->state <= 0)
             continue;
         AuFontFace *f = lc->face;
+        if (color_only && !f->color)
+            continue;
         size_t len = strlen(lc->name);
         if (family_ranged(l->set, lc->name, len))
             f = match_family_cps(l->set, lc->name, len, &l->st, cps, n);
-        if (f && has_all(f, cps, n))
+        if (f && has_all(f, cps, n) && (!color_only || f->color))
             return f;
     }
     return NULL;
+}
+
+static AuFontFace *from_list(AuFontList *l, const uint32_t *cps, size_t n)
+{
+    return from_list_any(l, cps, n, false);
 }
 
 AuFontFace *au_fontlist_face_for_cluster(AuFontList *l, const uint32_t *cps, size_t n, bool emoji)
@@ -944,8 +970,13 @@ AuFontFace *au_fontlist_face_for_cluster(AuFontList *l, const uint32_t *cps, siz
             return l->cache[slot].face;
     }
     AuFontFace *f = NULL;
-    if (emoji)
-        f = n == 1 ? global_cached(l->set, cps[0], &l->st, true) : global_face(l->set, cps, n, &l->st, true);
+    if (emoji) {
+        /* Emoji: a colour font the page names, then the emoji fallback
+         * faces (colour first), then the page's other faces. */
+        f = from_list_any(l, cps, n, true);
+        if (!f)
+            f = n == 1 ? global_cached(l->set, cps[0], &l->st, true) : global_face(l->set, cps, n, &l->st, true);
+    }
     if (!f)
         f = from_list(l, cps, n);
     if (!f)

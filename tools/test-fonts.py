@@ -48,6 +48,8 @@ SOURCES = {
                         'Noto-COLRv1.ttf'),
     'Twemoji.Mozilla.ttf': ('raw', 'https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/'
                             'Twemoji.Mozilla.ttf'),
+    'twemoji-colr-LICENSE.md': ('raw', 'https://raw.githubusercontent.com/mozilla/twemoji-colr/v0.7.0/LICENSE.md'),
+    'noto-emoji-LICENSE': ('raw', 'https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/fonts/LICENSE'),
 }
 
 
@@ -154,6 +156,113 @@ def make(d):
     ])
 
 
+EMOJI_TEXT = ('😀🎉🚀❤👍🏽🏻🇯🇵🇬🇧1#⃣️‍👨👩👧🏳🌈☺🦄'
+              '\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F')
+
+
+def subset_color(src, dst, text):
+    from fontTools import subset
+    from fontTools.ttLib import TTFont
+    f = TTFont(src)
+    opts = subset.Options()
+    opts.hinting = False
+    opts.layout_features = ['ccmp', 'liga', 'rlig', 'locl', 'clig']
+    opts.glyph_names = False
+    opts.notdef_outline = True
+    opts.drop_tables += ['vhea', 'vmtx', 'FFTM', 'gasp']
+    s = subset.Subsetter(opts)
+    s.populate(text=text)
+    s.subset(f)
+    f.save(dst)
+
+
+def build_colr_test(dst):
+    """A COLR v0 + v1 test font: every paint format, composite modes,
+    clip boxes, the foreground colour, a cycle and deep nesting, on
+    private-use code points U+E000 onwards."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.colorLib.builder import buildCOLR, buildCPAL
+
+    def rect(x0, y0, x1, y1):
+        p = TTGlyphPen(None)
+        p.moveTo((x0, y0))
+        p.lineTo((x0, y1))
+        p.lineTo((x1, y1))
+        p.lineTo((x1, y0))
+        p.closePath()
+        return p.glyph()
+
+    names = ['.notdef', 'square', 'left', 'right', 'small']
+    glyphs = {'.notdef': rect(0, 0, 500, 700), 'square': rect(0, 0, 1000, 1000), 'left': rect(0, 0, 500, 1000),
+              'right': rect(500, 0, 1000, 1000), 'small': rect(250, 250, 750, 750)}
+    bases = ['uniE%03X' % i for i in range(16)]
+    for b in bases:
+        glyphs[b] = TTGlyphPen(None).glyph()
+    order = names + bases
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0xE000 + i: b for i, b in enumerate(bases)})
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics({g: (1000, 0) for g in order})
+    fb.setupHorizontalHeader(ascent=1000, descent=0)
+    fb.setupOS2(sTypoAscender=1000, sTypoDescender=0, usWinAscent=1000, usWinDescent=0)
+    fb.setupNameTable({'familyName': 'Aura COLR Test', 'styleName': 'Regular'})
+    fb.setupPost()
+    # Palette: 0 red, 1 blue, 2 green, 3 half-transparent white.
+    fb.font['CPAL'] = buildCPAL([[(1, 0, 0, 1), (0, 0, 1, 1), (0, 1, 0, 1), (1, 1, 1, 0.5)]])
+
+    def solid(i, a=1.0):
+        return {'Format': 2, 'PaletteIndex': i, 'Alpha': a}
+
+    def glyph(g, paint):
+        return {'Format': 10, 'Paint': paint, 'Glyph': g}
+
+    line = {'Extend': 'pad', 'ColorStop': [{'StopOffset': 0, 'PaletteIndex': 0, 'Alpha': 1},
+                                           {'StopOffset': 1, 'PaletteIndex': 1, 'Alpha': 1}]}
+    reflect = dict(line, Extend='reflect')
+    chain = glyph('square', solid(2))
+    for _ in range(60):
+        chain = {'Format': 14, 'Paint': chain, 'dx': 0, 'dy': 0}
+    color_glyphs = {
+        'uniE000': [('left', 0), ('right', 1)],                       # v0 layers
+        'uniE001': glyph('square', solid(0)),                         # solid
+        'uniE002': glyph('square', {'Format': 4, 'ColorLine': line, 'x0': 0, 'y0': 0, 'x1': 1000, 'y1': 0,
+                                    'x2': 0, 'y2': 1000}),            # linear, left red to right blue
+        'uniE003': glyph('square', {'Format': 6, 'ColorLine': line, 'x0': 500, 'y0': 500, 'r0': 0,
+                                    'x1': 500, 'y1': 500, 'r1': 500}),  # radial, red centre
+        'uniE004': glyph('square', {'Format': 8, 'ColorLine': line, 'centerX': 500, 'centerY': 500,
+                                    'startAngle': 0, 'endAngle': 360}),  # sweep
+        'uniE005': {'Format': 32, 'SourcePaint': glyph('small', solid(1)), 'CompositeMode': 'src_in',
+                    'BackdropPaint': glyph('left', solid(0))},        # composite: blue only over the left half
+        'uniE006': {'Format': 26, 'Paint': glyph('left', solid(2)), 'angle': 180, 'centerX': 500,
+                    'centerY': 500},                                  # rotate: green on the right
+        'uniE007': {'Format': 14, 'Paint': {'Format': 11, 'Glyph': 'uniE001'}, 'dx': 0, 'dy': 0},  # colr glyph
+        'uniE008': glyph('square', solid(0xFFFF)),                    # foreground
+        'uniE009': {'Format': 11, 'Glyph': 'uniE009'},                # a cycle
+        'uniE00A': chain,                                             # deep nesting
+        'uniE00B': {'Format': 1, 'Layers': [glyph('square', solid(0)), glyph('small', solid(1))]},
+        'uniE00C': glyph('square', solid(1)),                         # clipped to the left half
+        'uniE00D': {'Format': 28, 'Paint': glyph('small', solid(0)), 'xSkewAngle': 20, 'ySkewAngle': 0},
+        'uniE00E': {'Format': 32, 'SourcePaint': glyph('square', solid(1)), 'CompositeMode': 'multiply',
+                    'BackdropPaint': glyph('square', solid(0))},      # multiply: black
+        'uniE00F': glyph('square', {'Format': 4, 'ColorLine': reflect, 'x0': 0, 'y0': 0, 'x1': 500, 'y1': 0,
+                                    'x2': 0, 'y2': 1000}),            # reflect: red, blue, red
+    }
+    fb.font['COLR'] = buildCOLR(color_glyphs, glyphMap=fb.font.getReverseGlyphMap(),
+                                clipBoxes={'uniE00C': (0, 0, 500, 1000)})
+    fb.save(dst)
+
+
+def make_color(d):
+    import shutil
+    shutil.copy(os.path.join(d, 'twemoji-colr-LICENSE.md'), os.path.join(OUT, 'Twemoji-LICENSE.md'))
+    shutil.copy(os.path.join(d, 'noto-emoji-LICENSE'), os.path.join(OUT, 'NotoColorEmoji-OFL.txt'))
+    subset_color(os.path.join(d, 'Twemoji.Mozilla.ttf'), os.path.join(OUT, 'twemoji-sub.ttf'), EMOJI_TEXT)
+    subset_color(os.path.join(d, 'Noto-COLRv1.ttf'), os.path.join(OUT, 'notocolr-sub.ttf'), EMOJI_TEXT)
+    build_colr_test(os.path.join(OUT, 'colr-test.ttf'))
+
+
 def refs(d):
     out = os.path.join(d, 'refs')
     os.makedirs(out, exist_ok=True)
@@ -175,7 +284,11 @@ def main():
         fetch(d)
     elif sys.argv[1] == 'make':
         brotli_shim()
-        make(d)
+        what = sys.argv[3] if len(sys.argv) > 3 else 'all'
+        if what in ('all', 'var'):
+            make(d)
+        if what in ('all', 'color'):
+            make_color(d)
     else:
         refs(d)
     return 0
