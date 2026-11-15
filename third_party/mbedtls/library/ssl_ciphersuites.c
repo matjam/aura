@@ -189,6 +189,23 @@ static const mbedtls_ssl_ciphersuite_t ciphersuite_definitions[] =
 #endif /* PSA_WANT_ALG_CHACHA20_POLY1305 && PSA_WANT_ALG_SHA_256 */
 #endif /* MBEDTLS_SSL_PROTO_TLS1_3 */
 
+#if defined(AURA_MBEDTLS_KEY_EXCHANGE_RSA) && defined(MBEDTLS_SSL_PROTO_TLS1_2) && \
+    defined(PSA_WANT_KEY_TYPE_AES) && defined(PSA_WANT_ALG_GCM)
+    /* Aura patch: RSA key transport (no forward secrecy), TLS 1.2 only. */
+#if defined(PSA_WANT_ALG_SHA_384)
+    { MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384, "TLS-RSA-WITH-AES-256-GCM-SHA384",
+      MBEDTLS_CIPHER_AES_256_GCM, MBEDTLS_MD_SHA384, MBEDTLS_KEY_EXCHANGE_RSA,
+      0,
+      MBEDTLS_SSL_VERSION_TLS1_2, MBEDTLS_SSL_VERSION_TLS1_2 },
+#endif
+#if defined(PSA_WANT_ALG_SHA_256)
+    { MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256, "TLS-RSA-WITH-AES-128-GCM-SHA256",
+      MBEDTLS_CIPHER_AES_128_GCM, MBEDTLS_MD_SHA256, MBEDTLS_KEY_EXCHANGE_RSA,
+      0,
+      MBEDTLS_SSL_VERSION_TLS1_2, MBEDTLS_SSL_VERSION_TLS1_2 },
+#endif
+#endif /* AURA_MBEDTLS_KEY_EXCHANGE_RSA */
+
 #if defined(PSA_WANT_ALG_CHACHA20_POLY1305) && \
     defined(PSA_WANT_ALG_SHA_256) && \
     defined(MBEDTLS_SSL_PROTO_TLS1_2)
@@ -926,6 +943,9 @@ psa_algorithm_t mbedtls_ssl_get_ciphersuite_sig_pk_psa_alg(const mbedtls_ssl_cip
         case MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA:
             return MBEDTLS_PK_ALG_ECDSA(mbedtls_md_psa_alg_from_type((mbedtls_md_type_t) info->mac));
 
+        case MBEDTLS_KEY_EXCHANGE_RSA: /* Aura patch: the server decrypts with its key */
+            return PSA_ALG_RSA_PKCS1V15_CRYPT;
+
         default:
             return PSA_ALG_NONE;
     }
@@ -937,6 +957,9 @@ psa_key_usage_t mbedtls_ssl_get_ciphersuite_sig_pk_psa_usage(const mbedtls_ssl_c
         case MBEDTLS_KEY_EXCHANGE_ECDHE_RSA:
         case MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA:
             return PSA_KEY_USAGE_SIGN_HASH;
+
+        case MBEDTLS_KEY_EXCHANGE_RSA: /* Aura patch */
+            return PSA_KEY_USAGE_DECRYPT;
 
         default:
             return 0;

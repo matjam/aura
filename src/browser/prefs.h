@@ -56,6 +56,7 @@ typedef struct AuPrefs {
     bool send_dnt;      /* DNT: 1 */
     bool send_gpc;      /* Sec-GPC: 1 */
     bool https_first;   /* try HTTPS, warn before falling back to HTTP */
+    bool legacy_tls;    /* allow old servers without forward secrecy (TLS 1.2 RSA key exchange) */
     bool block_trackers; /* host list of trackers and advertisers */
     bool warn_app_downloads;
     bool clear_history_on_quit, clear_cookies_on_quit, clear_cache_on_quit;

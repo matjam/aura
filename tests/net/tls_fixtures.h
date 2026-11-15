@@ -10,7 +10,9 @@ enum { TLS_FIX_CA, TLS_FIX_OTHER_CA, TLS_FIX_VALID, TLS_FIX_EXPIRED, TLS_FIX_WRO
        TLS_FIX_UNTRUSTED_AIA, TLS_FIX_EXPIRED_AIA, TLS_FIX_WRONGHOST_AIA,
        /* Other key types: an RSA leaf and a P-384 leaf under the EC root,
         * and an RSA root with an RSA leaf. */
-       TLS_FIX_VALID_RSA, TLS_FIX_VALID_P384, TLS_FIX_RSA_ROOT, TLS_FIX_RSA_LEAF, TLS_FIX_COUNT };
+       TLS_FIX_VALID_RSA, TLS_FIX_VALID_P384, TLS_FIX_RSA_ROOT, TLS_FIX_RSA_LEAF,
+       /* An RSA leaf whose key usage allows key encipherment (RSA key exchange). */
+       TLS_FIX_RSA_KEX, TLS_FIX_COUNT };
 
 /* A certificate in DER. */
 typedef struct TlsCert {
