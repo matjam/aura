@@ -113,6 +113,8 @@ struct AuBrowserWindow {
     uint32_t throbber_ms;
 };
 
+#define AU_MAX_FETCHERS 8
+
 struct AuBrowser {
     AuPrefs prefs;
     AuHistory history;
@@ -124,6 +126,11 @@ struct AuBrowser {
     int nwindows;
     uint32_t prefs_gen, session_gen;
     uint32_t next_tab_id;
+    struct {
+        char scheme[16];
+        AuPageFetcher fetcher;
+    } fetchers[AU_MAX_FETCHERS]; /* see au_browser_set_fetcher */
+    int nfetchers;
 };
 
 AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host);
@@ -136,6 +143,10 @@ void au_browser_prefs_changed(AuBrowser *b);
  * manager windows): updates the bookmark buttons and menus. */
 void au_browser_bookmarks_changed(AuBrowser *b);
 void au_browser_history_changed(AuBrowser *b);
+/* Registers the fetcher pages use for URLs of scheme (lower case, no
+ * ':'), replacing an earlier one; NULL removes it. A network stack calls
+ * this for "http" and "https" at start-up, before windows open. */
+void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 

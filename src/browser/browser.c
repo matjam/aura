@@ -186,6 +186,7 @@ static void clamp_scroll(AuTab *t)
         t->scroll_x = 0;
     if (t->scroll_y < 0)
         t->scroll_y = 0;
+    au_page_set_scroll(t->page, t->scroll_x, t->scroll_y);
 }
 
 /* Recomputes the layout; reports a layout change when anything the shell
@@ -350,6 +351,20 @@ static void cb_content_size(void *ctx, AuPage *p)
     (void)p;
 }
 
+static void cb_scroll_to(void *ctx, AuPage *p, int x, int y)
+{
+    AuTab *t = ctx;
+    int ox = t->scroll_x, oy = t->scroll_y;
+    t->scroll_x = x;
+    t->scroll_y = y;
+    clamp_scroll(t);
+    if (is_active(t) && (t->scroll_x != ox || t->scroll_y != oy)) {
+        invalidate(t->win, t->win->layout.page);
+        changed(t->win, AU_CHANGED_SCROLL);
+    }
+    (void)p;
+}
+
 static uint32_t env_time(void *ctx)
 {
     return time_ms(ctx);
@@ -359,6 +374,35 @@ static bool env_read(void *ctx, const char *url, char **data, size_t *len)
 {
     AuBrowser *b = ctx;
     return b->host.read_file_url && b->host.read_file_url(b->host.ctx, url, data, len);
+}
+
+static const AuPageFetcher *env_fetcher(void *ctx, const char *scheme)
+{
+    AuBrowser *b = ctx;
+    for (int i = 0; i < b->nfetchers; i++)
+        if (!strcmp(b->fetchers[i].scheme, scheme))
+            return &b->fetchers[i].fetcher;
+    return NULL;
+}
+
+void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f)
+{
+    for (int i = 0; i < b->nfetchers; i++) {
+        if (!strcmp(b->fetchers[i].scheme, scheme)) {
+            if (f) {
+                b->fetchers[i].fetcher = *f;
+            } else {
+                b->fetchers[i] = b->fetchers[b->nfetchers - 1];
+                b->nfetchers--;
+            }
+            return;
+        }
+    }
+    if (!f || b->nfetchers == AU_MAX_FETCHERS || strlen(scheme) >= sizeof b->fetchers[0].scheme)
+        return;
+    snprintf(b->fetchers[b->nfetchers].scheme, sizeof b->fetchers[0].scheme, "%s", scheme);
+    b->fetchers[b->nfetchers].fetcher = *f;
+    b->nfetchers++;
 }
 
 /* ---- Browser ---- */
@@ -394,10 +438,11 @@ void au_browser_prefs_changed(AuBrowser *b)
     for (int i = 0; i < b->nwindows; i++) {
         AuBrowserWindow *w = b->windows[i];
         relayout(w, true);
-        /* Rewrap pages for changed font settings. */
+        /* Restyle pages for changed font settings. */
+        for (int j = 0; j < w->ntabs; j++)
+            au_page_prefs_changed(w->tabs[j]->page);
         AuTab *t = au_bw_active_tab(w);
         if (t) {
-            au_page_set_viewport(t->page, 1, 1);
             set_viewport(t);
             clamp_scroll(t);
         }
@@ -485,9 +530,9 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->win = w;
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
-    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read};
-    AuPageCallbacks cb = {t,         cb_title,     cb_url,        cb_started,     cb_progress,
-                          cb_finished, cb_open,     cb_status,     cb_invalidate, cb_content_size};
+    AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher};
+    AuPageCallbacks cb = {t,           cb_title, cb_url,    cb_started,    cb_progress,     cb_finished,
+                          cb_open,     cb_status, cb_invalidate, cb_content_size, cb_scroll_to};
     t->page = au_page_new(&env, &cb);
     if (index < 0 || index > w->ntabs)
         index = w->ntabs;
@@ -513,6 +558,7 @@ static void load_new(AuTab *t, const char *url)
         cur->scroll_y = t->scroll_y;
     au_nav_push(&t->nav, url, "");
     t->scroll_x = t->scroll_y = 0;
+    au_page_set_scroll(t->page, 0, 0);
     record_visit(t->win->browser, url, NULL);
     t->win->browser->session_gen++;
     au_page_navigate(t->page, url);
@@ -634,10 +680,11 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     au_free(w->field);
     w->field = NULL;
     record_visit(w->browser, url, e->title);
-    au_page_navigate(t->page, url);
+    /* The page scrolls back to sy once it is loaded far enough. */
+    t->scroll_x = t->scroll_y = 0;
+    au_page_set_scroll(t->page, 0, 0);
+    au_page_navigate_entry(t->page, url, 0, sy);
     au_free(url);
-    t->scroll_x = 0;
-    t->scroll_y = sy;
     clamp_scroll(t);
     w->browser->session_gen++;
     invalidate(w, w->layout.toolbar);
@@ -1026,9 +1073,16 @@ AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
             click(w, h, ev);
         return h;
     }
-    case AU_EVENT_SCROLL:
+    case AU_EVENT_SCROLL: {
+        /* An inner scrolling box under the pointer takes the wheel first. */
+        AuTab *t = au_bw_active_tab(w);
+        if (t && h.part == AU_HIT_PAGE &&
+            au_page_scroll(t->page, ev->x - w->layout.page.x0 + t->scroll_x, ev->y - w->layout.page.y0 + t->scroll_y,
+                           ev->dx, ev->dy))
+            return h;
         au_bw_scroll_by(w, ev->dx, ev->dy);
         return h;
+    }
     default:
         return h;
     }
