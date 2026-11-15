@@ -78,7 +78,9 @@ void au_js_settings_default(AuJsSettings *s);
  * policy before calling start; CORS checks are marked in fetch.c. */
 typedef enum { AU_FETCH_OMIT, AU_FETCH_SAME_ORIGIN, AU_FETCH_INCLUDE } AuFetchCredentials;
 typedef enum { AU_FETCH_CORS, AU_FETCH_NO_CORS, AU_FETCH_SAME_ORIGIN_MODE, AU_FETCH_NAVIGATE } AuFetchMode;
-typedef enum { AU_FETCH_DEST_EMPTY, AU_FETCH_DEST_SCRIPT, AU_FETCH_DEST_MODULE } AuFetchDest;
+/* AU_FETCH_DEST_IMAGE: an <img> loaded from script; the bytes reach only
+ * the bindings, which expose the size and load or error. */
+typedef enum { AU_FETCH_DEST_EMPTY, AU_FETCH_DEST_SCRIPT, AU_FETCH_DEST_MODULE, AU_FETCH_DEST_IMAGE } AuFetchDest;
 
 typedef struct AuFetchRequest {
     const char *method;  /* upper case */

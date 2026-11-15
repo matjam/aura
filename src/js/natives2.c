@@ -524,6 +524,21 @@ static const uint8_t *bytes_of(JSContext *ctx, JSValueConst v, size_t *len)
     return NULL;
 }
 
+/* imageSize(bytes): [width, height] from an image file's header (any
+ * format src/image decodes), or null. */
+static JSValue n_image_size(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    size_t n = 0;
+    const uint8_t *p = argc > 0 ? bytes_of(ctx, argv[0], &n) : NULL;
+    int w, h;
+    if (!p || !js_image_size(p, n, &w, &h))
+        return JS_NULL;
+    JSValue r = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, r, 0, JS_NewInt32(ctx, w));
+    JS_SetPropertyUint32(ctx, r, 1, JS_NewInt32(ctx, h));
+    return r;
+}
+
 /* utf8Decode(bytes, fatal, ignoreBOM, stream?): malformed sequences become
  * U+FFFD, or a TypeError when fatal. */
 static JSValue n_utf8_decode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -805,6 +820,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("originOf", 1, n_origin_of),
     JS_CFUNC_DEF("utf8Encode", 1, n_utf8_encode),
     JS_CFUNC_DEF("utf8Decode", 3, n_utf8_decode),
+    JS_CFUNC_DEF("imageSize", 1, n_image_size),
     JS_CFUNC_MAGIC_DEF("alert", 1, n_alert, 0),
     JS_CFUNC_MAGIC_DEF("confirm", 1, n_alert, 1),
     JS_CFUNC_MAGIC_DEF("prompt", 2, n_alert, 2),

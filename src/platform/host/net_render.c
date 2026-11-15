@@ -209,8 +209,11 @@ static void run_until_quiet(NetRender *nr, AuHostSession *ses, bool scripts, dou
         }
         double t = now_ms();
         bool net_idle = !au_net_loader_active(nr->l) && !any && au_docview_pending(nr->dv) == 0;
-        if (net_idle && (due == UINT32_MAX || t + due > deadline_ms))
+        if (net_idle && (due == UINT32_MAX || t + due > deadline_ms)) {
+            if (scripts && getenv("AURA_DEBUG_QUIET"))
+                fprintf(stderr, "quiet: due %u, %.0f ms before the limit\n", (unsigned)due, deadline_ms - t);
             break;
+        }
         if (t > deadline_ms) {
             fprintf(stderr, "aura-host: still busy at the time limit\n");
             break;

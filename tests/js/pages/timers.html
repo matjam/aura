@@ -36,6 +36,22 @@ promise_test('innerHTML scripts do not run', async () => {
     await delay(50);
     assert.equal(window.innerRan, undefined);
 });
+promise_test('an image loaded from script fires load with its size, or error', async () => {
+    const img = new Image();
+    const loaded = once(img, 'load');
+    /* a 1x1 GIF */
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+    assert.equal(img.complete, false);
+    await loaded;
+    assert.equal(img.naturalWidth, 1);
+    assert.equal(img.naturalHeight, 1);
+    assert.ok(img.complete);
+    const bad = new Image();
+    const failed = once(bad, 'error');
+    bad.src = 'res/data.json';
+    await failed;
+    assert.equal(bad.naturalWidth, 0);
+});
 promise_test('dynamic import loads a module', async () => {
     const m = await import('./res/mod1.mjs');
     assert.equal(m.x, 1);

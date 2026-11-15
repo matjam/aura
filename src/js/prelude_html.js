@@ -436,7 +436,7 @@ defProps(HTMLInputElement.prototype, {
     set checked(v) { setChecked(this, !!v); },
     get indeterminate() { return !!(N.state(this) & 128); },
     set indeterminate(v) { ctrlState(this).indeterminate = !!v; },
-    get files() { return inputType(this) === 'file' ? Object.freeze([]) : null; },
+    get files() { return inputType(this) === 'file' ? cachedList(this, 'files', emptyFileList) : null; },
     get list() { const id = this.getAttribute('list'); const e = id && doc.getElementById(id); return e && e.localName === 'datalist' ? e : null; },
     select() { const s = ctrlState(this); s.selStart = 0; s.selEnd = this.value.length; fireSimple(this, 'select', true, false); },
     get selectionStart() { return ctrlState(this).selStart ?? this.value.length; },
@@ -826,14 +826,56 @@ defProps(HTMLImageElement.prototype, {
     set width(v) { this.setAttribute('width', String(v >>> 0)); },
     get height() { const r = N.rect(this); return r ? Math.round(r[3]) : (parseInt(this.getAttribute('height'), 10) || 0); },
     set height(v) { this.setAttribute('height', String(v >>> 0)); },
-    get naturalWidth() { return 0; },
-    get naturalHeight() { return 0; },
-    get complete() { return true; },
+    get naturalWidth() { return this._isz ? this._isz[0] : 0; },
+    get naturalHeight() { return this._isz ? this._isz[1] : 0; },
+    get complete() { return !this._iload; },
     get currentSrc() { return this.src; },
     get x() { const r = N.rect(this); return r ? r[0] : 0; },
     get y() { const r = N.rect(this); return r ? r[1] : 0; },
     decode() { return Promise.resolve(); },
 });
+/* Setting src from script loads the image here: its header gives
+ * naturalWidth and naturalHeight, then load (or error) fires. Images the
+ * parser made load through the document view and fire no events yet. */
+{
+    const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        get: d.get,
+        set(v) {
+            d.set.call(this, v);
+            const img = this, url = this.src;
+            if (img._iabort) img._iabort();
+            img._isz = null;
+            if (!url) { img._iload = false; return; }
+            img._iload = true;
+            const chunks = [];
+            let status = 0;
+            const fail = () => { img._iload = false; img.dispatchEvent(new Event('error')); };
+            /* credentials same-origin (1), mode no-cors (1), dest image (3) */
+            try { img._iabort = startFetch('GET', url, [], null, 1, 1, 3, {
+                head(s) { status = s; },
+                data(b) { chunks.push(b); },
+                done(ok) {
+                    img._iabort = null;
+                    img._iload = false;
+                    let size = null;
+                    if (ok && status >= 200 && status < 300) {
+                        let n = 0;
+                        for (const c of chunks) n += c.length;
+                        const all = new Uint8Array(n);
+                        n = 0;
+                        for (const c of chunks) { all.set(c, n); n += c.length; }
+                        size = N.imageSize(all);
+                    }
+                    img._isz = size;
+                    img.dispatchEvent(new Event(size ? 'load' : 'error'));
+                },
+            }); } catch (e) { img._iabort = null; N.queueTask(fail); }
+        },
+        configurable: true,
+        enumerable: true,
+    });
+}
 function Image(w, h) {
     const e = doc.createElement('img');
     if (w !== undefined) e.setAttribute('width', String(w >>> 0));

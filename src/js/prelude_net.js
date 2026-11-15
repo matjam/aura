@@ -54,6 +54,16 @@ class File extends Blob {
 }
 tag(File);
 defGlobal('File', File);
+/* FileList: what <input type=file>.files holds (always empty: Aura has no
+ * file picker for pages yet). */
+class FileList {
+    constructor() { throw new TypeError('Illegal constructor'); }
+    item(i) { return this[i] || null; }
+    *[Symbol.iterator]() { for (let i = 0; i < this.length; i++) yield this[i]; }
+}
+tag(FileList);
+defGlobal('FileList', FileList);
+const emptyFileList = () => Object.freeze(Object.create(FileList.prototype, { length: { value: 0, enumerable: true } }));
 
 class FileReader extends EventTarget {
     constructor() { super(); this._state = 0; this._result = null; this._error = null; }

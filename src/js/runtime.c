@@ -591,6 +591,9 @@ void au_js_free(AuJs *js)
     js_hooks_remove(js);
     if (js->current_script)
         au_node_unref(&js->current_script->node);
+    for (uint32_t i = 0; i < js->ndocs; i++)
+        au_node_unref(&js->docs[i]->node);
+    au_free(js->docs);
     au_node_unref(&js->doc->node);
     au_free(js->url);
     au_free(js->base);

@@ -118,6 +118,11 @@ struct AuJs {
     JSRuntime *rt;
     JSContext *ctx;
     AuDocument *doc;
+    /* Documents script created (DOMParser, createHTMLDocument, a cloned
+     * document), referenced until au_js_free so that no node outlives its
+     * document while a wrapper holds it. */
+    AuDocument **docs;
+    uint32_t ndocs, docs_cap;
     AuHtmlParser *parser;
     AuJsSettings settings;
     AuJsHooks hooks;
@@ -227,6 +232,11 @@ void js_module_natives(AuJs *js, JSValue N);
 void js_module_free(AuJs *js);
 bool js_modules_pending(const AuJs *js);
 bool js_module_probing(const AuJs *js);
+
+/* An image file's size from its header (imagesize.c). */
+bool js_image_size(const void *data, size_t len, int *w, int *h);
+/* Keeps a document script created alive until au_js_free (natives.c). */
+void js_keep_doc(AuJs *js, AuDocument *d);
 
 /* ---- url.c: src/url's parser in the URL API's terms ---- */
 typedef struct JsUrl {

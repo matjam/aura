@@ -581,6 +581,8 @@ static JSValue m_clone_node(JSContext *ctx, JSValueConst this_val, int argc, JSV
         return throw_dom(ctx, "NotSupportedError", "shadow roots cannot be cloned");
     bool deep = argc > 0 && JS_ToBool(ctx, argv[0]);
     AuNode *c = clone_node(n->doc, n, deep);
+    if (c && c->type == AU_NODE_DOCUMENT)
+        js_keep_doc(js, (AuDocument *)c);
     JSValue r = js_wrap(js, c);
     au_node_unref(c);
     js_ce_flush(js);
@@ -2186,6 +2188,16 @@ static JSValue n_document(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return js_wrap(js, &js->doc->node);
 }
 
+void js_keep_doc(AuJs *js, AuDocument *d)
+{
+    if (js->ndocs == js->docs_cap) {
+        js->docs_cap = js->docs_cap ? js->docs_cap * 2 : 4;
+        js->docs = au_realloc(js->docs, js->docs_cap * sizeof *js->docs);
+    }
+    au_node_ref(&d->node);
+    js->docs[js->ndocs++] = d;
+}
+
 /* parseHTMLDocument(text): a new, inert document parsed from text with
  * scripting off (DOMParser, createHTMLDocument). Its mutations reach no
  * observers and nothing renders it. */
@@ -2201,6 +2213,7 @@ static JSValue n_parse_html_document(JSContext *ctx, JSValueConst this_val, int 
     o.scripting = false;
     AuDocument *d = au_html_parse(s ? s : "", n, &o);
     au_free(s);
+    js_keep_doc(js, d);
     JSValue r = js_wrap(js, &d->node);
     au_node_unref(&d->node);
     return r;

@@ -181,7 +181,7 @@ static JSValue n_fetch_start(JSContext *ctx, JSValueConst this_val, int argc, JS
         else if (mode == AU_FETCH_NO_CORS) {
             if (strcmp(method, "GET") && strcmp(method, "HEAD") && strcmp(method, "POST"))
                 refusal = "no-cors requests must be GET, HEAD or POST";
-            opaque = dest != AU_FETCH_DEST_SCRIPT;
+            opaque = dest != AU_FETCH_DEST_SCRIPT && dest != AU_FETCH_DEST_IMAGE;
         } else if (!strncmp(url, "file:", 5) || !strncmp(js->origin, "file:", 5)) {
             refusal = "cross-origin request between file: and network origins";
         } else if (!simple) {
