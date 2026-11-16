@@ -79,7 +79,19 @@ whole one, run the fuzzers that change a document (`fuzz_dom`,
 update that rebuilt a subtree is compared with a whole build, and a
 difference aborts with the path of the first box that differs. The
 check costs a whole build per update, so give the run a time cap and
-expect fewer iterations.
+expect fewer iterations. `fuzz_page` has no time cap of its own: run it
+under `timeout` or kill it from a script.
+
+To reduce a `fuzz_page` failure to a small case:
+
+1. Run `fuzz_page N SEED FILE`. It writes each generated document to
+   FILE before processing it and the generator's state to FILE.seed, so
+   after a failure FILE holds the document that failed.
+2. Run `fuzz_page process STATE FILE` to process FILE again with the
+   mutations that STATE (the contents of FILE.seed) chose.
+3. Run `tools/fuzz-reduce.py -t SECS -m TEXT FILE OUT fuzz_page process
+   STATE`, where TEXT is part of the failure message. It writes the
+   smallest document that still fails with TEXT to OUT.
 
 ## To find recursion over input nesting
 

@@ -40,14 +40,20 @@ specifications, not from running Chrome beside Aura.
 
 ## Incremental layout
 
-**A viewport change** is an incremental layout.
+**A viewport change** is an incremental layout, and so is **a style
+sheet that arrives or changes** after the first layout.
 
 - The document view restyles and calls `au_layout_styles_changed`, not
   `au_layout_tree_changed`; a box whose style difference changes the
   boxes (display, position, float, overflow, generated content, list
-  markers, counters), and an element that had `display: none` and is
-  shown (layout keeps the elements it left out in `AuLayout.hidden`),
-  are rebuilt with their parent's subtree, as a DOM change is (below).
+  markers, counters), an element that had `display: none` and is shown,
+  and a `display: contents` element whose new style builds something
+  else are rebuilt with their parent's subtree, as a DOM change is
+  (below). Layout keeps the elements it built no box for, with the
+  style they had, in `AuLayout.hidden`.
+- Only a DOM change the document view did not record (`tree_dirty`,
+  such as the parser's insertions after the first layout) builds the
+  whole tree with the restyle.
 - Layout then reuses every independent subtree whose constraints did
   not change, and keeps intrinsic widths, which do not depend on the
   viewport.
@@ -112,24 +118,54 @@ whole tree from the same document and styles in a second layout, lays
 it out at the same viewport and compares the two trees box by box
 (kind, node, style, flags, text, replaced content, geometry, overflow,
 scroll extent, counter scope, lines, fragments and table grids), the
-element box pointers and the list of `display: none` elements.
+element box pointers and the list of elements without a box. A
+difference in a tree of fewer than 300 boxes prints both trees
+(`au_layout_dump`) under `AURA_INCR_CHECK`.
 `au_docview_check_failures` returns the count and the first difference.
 The check also runs after an update whose recorded changes needed no
 rebuild, which catches a change dropped wrongly. Geometry (positions,
 sizes, overflow, lines, fragments, the document size) is compared only
 while nothing but subtree rebuilds has asked for layout since the last
 whole build (`AuLayout.other_relayout`): a relayout after a viewport
-change or a style change that keeps the boxes is not always exact
-([`known-gaps.md`](known-gaps.md)), and the check would blame the
-rebuild for it. The tree itself is always compared.
+change or a style change that keeps the boxes differs in the two cases
+above, and the check would blame the rebuild for it. The tree itself is
+always compared. To compare geometry anyway while working on those two
+cases, set `geom` to true in `l_check_incremental`.
 
-**Relative offsets in reused content.** `relative_pass` offsets every
-relatively positioned box after a layout. A block whose content was
-reused (`can_skip`, or the measure cache) keeps its descendants'
-positions, offsets included, so the pass does not descend into a block
-whose `skip_gen` is the current generation unless it was also laid out
-in it (`lay_gen`). Before this, a relatively positioned box inside a
-reused block moved by its offset again on each relayout.
+**A relayout must give what a layout from scratch gives.** These rules
+keep it so:
+
+- A block's content is reused (`can_skip`) only when its width, height,
+  containing block height and the offset of its content box (padding
+  plus border, `key_top` and `key_left`) are what they were. A
+  percentage padding or border that changed moves the content even when
+  the width did not.
+- A reused block takes its content height from `key_ch`, and the measure
+  cache (`m_res`) stores a content height, so a changed padding or
+  border is added to it again.
+- `l_mark_dirty` marks every ancestor: an ancestor laid out since the
+  last mark (by the measure pass, say) has lost its mark, and stopping at
+  the first marked one left it reused.
+- `relative_pass` offsets every relatively positioned box after a
+  layout. A block whose content was reused (`can_skip`, or the measure
+  cache) keeps its descendants' positions, offsets included, so the pass
+  does not descend into a block whose `skip_gen` is the current
+  generation unless it was also laid out in it (`lay_gen`).
+- An absolutely positioned box whose containing block is the initial
+  one is laid out after the relative pass, so `relative_pass_late` gives
+  the relatively positioned boxes inside it their offsets.
+
+Two differences remain, so the differential check compares geometry
+only after subtree rebuilds (`other_relayout`, below):
+
+- A percentage height inside a table cell resolves against the cell's
+  height from the previous layout, which the table fixes only after
+  laying out the cell. A layout from scratch has no previous height.
+- Overflow and the document size are found before relative offsets are
+  applied, so a relatively positioned box that sticks out reaches them
+  only at the next relayout.
+
+[`known-gaps.md`](known-gaps.md) has the reduced cases.
 
 **To extend it** to shadow trees, make `find_root` and the recording in
 `au_layout_node_changed` follow the flat tree (a slotted node's slot,

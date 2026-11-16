@@ -100,9 +100,19 @@ the `keys:` output). Network pages vary between runs.
 | Wikipedia Mac_OS_9 load | page load 271 ms; 4 tree builds; style 22 ms, layout 6 ms | page load 171 ms; 4 tree builds, 0 subtree rebuilds; style 21 ms, layout 6 ms |
 | GitHub home, first 60 s (still busy) | 63 style passes, 126,327 elements styled, 61 tree builds; style 1,125 ms, layout 127 ms | 61 style passes, 48,149 elements styled, 10 tree builds, 49 subtree rebuilds (31,280 boxes); style 503 ms, layout 66 ms |
 
-- The Wikipedia load builds the whole tree 4 times on both: no subtree
-  rebuild applied during that load, and why was not traced. The page
-  load times differ by the network.
+- The Wikipedia load built the whole tree 4 times on both. One build
+  was the first layout, one the end of parsing (the parser's insertions
+  are not recorded as DOM changes), and the rest came from style sheets
+  that arrived later: the document view built the whole tree after any
+  restyle of the whole document. It now builds it only when the DOM
+  changed and otherwise compares styles (`au_layout_styles_changed`).
+  Measured again (2026-11-16, three runs): page load 160 to 174 ms, 3
+  tree builds, 0 subtree rebuilds, layout 5 to 6 ms. The late sheets
+  then need only a relayout, or nothing. The third build is an image or
+  script change recorded at `<html>`, which has no rebuild root but the
+  whole tree; on some runs it is a subtree rebuild of `<body>` instead
+  (3,439 boxes), by the order the resources arrive. The page load times
+  differ by the network.
 - A key on typeahead.html still invalidates the whole page (1,191,469
   pixels): the update changed geometry, and the view invalidates the
   page for that.

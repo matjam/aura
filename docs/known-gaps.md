@@ -70,18 +70,24 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   or when the rebuilt box changes its outer kind ([`layout.md`](layout.md),
   "A DOM change").
 - A relayout after a viewport change or a style change that keeps the
-  boxes does not always give what a layout from scratch gives: forcing
-  the differential check after every update of `fuzz_page` (seeds 7 and
-  21, 2026-11-16) finds overflow and document heights that differ. So
-  the check compares geometry only while no such relayout has run since
-  the last whole build ([`layout.md`](layout.md), "A DOM change").
-- Open differences the check still finds (2026-11-16): a table's
-  percentage margins are resolved against 0 by some table paths and
-  against the containing block by others, so the last layout to run
-  decides them (Domato seeds 41 page 121 and 42 page 286, reduced to a
-  table with `margin-right: 9%` or `margin-bottom: 29%`); `fuzz_page`
-  seed 21 lists one `display: none` element fewer than a whole build,
-  and seed 22 gives a table another width; these two were not reduced.
+  boxes differs from a layout from scratch in two cases, so the
+  differential check compares geometry only while no such relayout has
+  run since the last whole build ([`layout.md`](layout.md), "A relayout
+  must give what a layout from scratch gives"). Forcing geometry on
+  finds them in `fuzz_page` seeds 41 to 48 (2026-11-16).
+  - A percentage height inside a table cell resolves against the cell's
+    height from the previous layout. Reduced cases:
+    `<table style="height:0px"><td style="height:0%;display:flex"><table><th><table><td><v style="position:absolute">`
+    and
+    `<b style="display:flex"><table><td><table style="height:1%"><caption>x</caption></table></td></table><h style="position:fixed">`.
+    To fix it, give a cell's content a definite height only from the
+    current table layout (CSS 2.1 17.5.3 leaves this undefined; Chrome
+    resolves such a percentage against the cell's specified height).
+  - Overflow and the document size are found before relative offsets
+    are applied: in a table, a relatively positioned input with `inset:
+    3px` gives a document 302 pixels wide in a layout from scratch and
+    305 in the relayout after it. To fix it, apply the offsets to the
+    overflow of each containing box in `relative_pass`.
 - After a subtree rebuild, layout lays out again every block on the path
   to the root and the in-flow siblings that do not establish a block
   formatting context, not only the rebuilt subtree.
