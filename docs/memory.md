@@ -342,6 +342,24 @@ hold a live block; a second load returned the heap to within 85 KB, so
 pages are freed. The 3.5 MB of temporary memory is font data, which
 stays loaded.
 
+Stock base, 2026-11-15, a copy of the GitHub home page without its
+scripts and with its 20 style sheets (2.5 MB), opened from the disc;
+`main` at 1971abb against the style sheet work (Develop > Performance):
+
+| Reading | `main` | With the style sheet work |
+|---|---|---|
+| Free heap, about:home after launch | 61.29 MB | 61.29 MB |
+| Free heap, the page loaded | 33.64 MB | 48.94 MB |
+| Largest free block | 29.58 MB | 46.63 MB |
+| Free heap after 45 s of mouse moves (the texts packed) | 33.54 MB | 51.50 MB |
+| Page load | 3.05 s | 1.57 s |
+| Style | 683 ms in 4 passes | 349 ms in 3 passes |
+
+The page takes 27.7 MB of heap on `main` and 9.8 MB with the work.
+With the live page and its scripts the script heap (36 MB) decides the
+reading, and the heap takes temporary memory when it is full, so the
+two builds cannot be compared that way.
+
 ## Cold memory
 
 Memory held by things that are not looked at, or rarely read, is given
@@ -353,6 +371,7 @@ up or compressed. To change any of these, start at the place named.
 | A background tab | is unloaded when memory is short: its document is freed and loads again when the tab is selected | `browser.c`, "Unloaded tabs" ([`browser-chrome.md`](browser-chrome.md)) |
 | The page source (Page Source, View Source, Save Page As) | is deflated once the load is over and inflated when asked for | `page_doc.c`, "The page source" |
 | HTTP cache entries | hold the body as it arrived (gzip, deflate, brotli) and decode it when served | `cache.h`, `deliver_cached` in `http.c` ([`networking.md`](networking.md)) |
+| The text a parsed style sheet keeps | is deflated in 4 KB pieces once the page has loaded and five seconds have passed without a block parsed late; a piece is inflated when a block is parsed or the CSSOM reads the sheet | `au_docview_pack_sheets`, `css_sheet_text_at` ([`css.md`](css.md), "How a parsed sheet is stored") |
 
 Computed styles stay with a kept document: an article's are 0.7 MB and
 a full style pass is 12 ms on the host. Canvas bitmaps stay (they

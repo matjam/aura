@@ -271,15 +271,28 @@ SVG presentation attributes reach the cascade as presentational hints
 links 28 sheets (20 distinct, 2.5 MB of text; 2078 elements); the
 Wikipedia article has 2 (220 KB; 9306 elements).
 
-| Step | GitHub: sheets, index, styles (MB) | total | parse, index, first style (ms) | Wikipedia: total (MB) | parse, index, first style (ms) |
-|---|---|---|---|---|---|
-| before | 23.73, 1.94, 4.41 | 30.08 | 128, 5.7, 40 | 1.78 | 4.0, 0.4, 10.8 |
-| equal sheets of a document shared | 10.30, 1.94, 4.43 | 16.67 | 49, 5.3, 30 | 1.78 | 4.0, 0.4, 10.8 |
-| blocks of declarations stay text | 9.08, 2.24, 5.39 | 16.71 | 38, 5.8, 38 | 1.87 | 3.4, 0.4, 12.5 |
-| arena, packed records | 6.75, 1.95, 5.36 | 14.06 | 31, 4.9, 32 | 1.59 | 2.8, 0.4, 11.3 |
-| `@media` blocks stay text, dead groups dropped | 5.37, 2.17, 5.29 | 12.83 | 30, 7.4, 32 | 1.58 | 2.4, 1.5, 12.0 |
-| repeated sheets indexed once, token lists one block, aliases shared | 5.37, 1.34, 3.52 | 10.22 | 32, 5.1, 22 | 1.47 | 2.5, 1.6, 12.3 |
-| the texts packed once the page has loaded | 3.41, 1.34, 3.52 | 8.27 | packing: 16 | 1.31 | packing: 1.3 |
+| Step | GitHub: sheets, index, styles (MB) | total | Wikipedia: total (MB) |
+|---|---|---|---|
+| before | 23.73, 1.94, 4.41 | 30.08 | 1.78 |
+| equal sheets of a document shared | 10.30, 1.94, 4.43 | 16.67 | 1.78 |
+| blocks of declarations stay text | 9.08, 2.24, 5.39 | 16.71 | 1.87 |
+| arena, packed records | 6.75, 1.95, 5.36 | 14.06 | 1.59 |
+| `@media` blocks stay text, dead groups dropped | 5.37, 2.17, 5.29 | 12.83 | 1.58 |
+| repeated sheets indexed once, token lists one block, aliases shared | 5.37, 1.34, 3.52 | 10.22 | 1.47 |
+| the texts packed once the page has loaded | 3.41, 1.34, 3.52 | 8.27 | 1.31 |
+
+Times on a quiet host, milliseconds:
+
+| | GitHub: parse, index, first style | sum | Wikipedia: parse, index, first style | sum |
+|---|---|---|---|---|
+| before | 113, 5.2, 30.2 | 148 | 3.7, 0.4, 10.0 | 14.1 |
+| now | 30.5, 4.9, 21.1 | 57 | 2.4, 1.5, 11.5 | 15.4 |
+
+The Wikipedia article matches a third of its rules and applies half
+its `@media` blocks, so the text of those is tokenized twice (once
+with the sheet, once when the block is parsed): 1.3 ms more in all,
+where a sheet whose rules mostly do not match gains. Packing the texts
+takes 17 ms for GitHub and 1.3 ms for the article, after the load.
 
 "Styles" includes what styling parses: the blocks of the rules that
 matched. The sheets figure includes the text they keep (2.56 MB and
