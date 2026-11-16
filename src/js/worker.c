@@ -684,10 +684,16 @@ static bool worker_boot(JsWorker *w)
     w->js = js;
     w->loading = w->module;
     JSContext *ctx = js->ctx;
-    JSValue args[3] = {JS_NewStringLen(ctx, w->source, w->source_len), JS_NewString(ctx, w->url),
+    /* A classic worker's script stays here until N.runScript(null) takes
+     * it: making a script string of it would hold it twice more while it
+     * compiles. A module's source goes through the module loader. */
+    JSValue args[3] = {w->module ? JS_NewStringLen(ctx, w->source, w->source_len) : JS_NULL, JS_NewString(ctx, w->url),
                        JS_NewBool(ctx, w->module)};
-    au_free(w->source);
-    w->source = NULL;
+    if (w->module) {
+        au_free(w->source);
+        w->source = NULL;
+        w->source_len = 0;
+    }
     JSValue r = js_call_prelude(js, "startWorker", 3, (JSValueConst *)args);
     JS_FreeValue(ctx, r);
     for (int i = 0; i < 3; i++)
@@ -832,6 +838,18 @@ size_t js_workers_memory(const AuJs *js)
     for (const JsWorker *w = js->workers; w; w = w->next)
         n += (w->js ? w->js->live_bytes : 0) + w->stack + w->source_len;
     return n;
+}
+
+char *js_worker_take_source(AuJs *js, size_t *len)
+{
+    JsWorker *w = js->wk;
+    if (!w || !w->source)
+        return NULL;
+    char *s = w->source;
+    *len = w->source_len;
+    w->source = NULL;
+    w->source_len = 0;
+    return s;
 }
 
 size_t js_workers_peak(const AuJs *js)

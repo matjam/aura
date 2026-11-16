@@ -31,7 +31,7 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
                                 const char *final_url, const char *const *headers, size_t nheaders, bool muted);
 /* A resource of kind AU_RES_OTHER finished. Returns true if it was the
  * script side's request. */
-bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok);
+bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok);
 /* Scripts still hold the load event (a pending or deferred script, or
  * DOMContentLoaded not yet fired). */
 bool au_docscript_busy(const AuDocScript *s);

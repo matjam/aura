@@ -343,6 +343,8 @@ void js_workers_free(AuJs *js);
 int js_worker_interrupt(AuJs *js);
 bool js_worker_terminating(const AuJs *js);
 size_t js_workers_memory(const AuJs *js);
+/* A worker's own script text, handed to the caller (NULL when taken). */
+char *js_worker_take_source(AuJs *js, size_t *len);
 size_t js_workers_peak(const AuJs *js);                 /* the largest peak of a live worker */
 void js_workers_summary(const AuJs *js, AuBuf *out);    /* a line per live worker */
 /* The earliest timer of a document's workers (-1: none), and whether

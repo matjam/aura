@@ -526,6 +526,8 @@ void js_safe_point(AuJs *js)
 
 /* ---- Natives every part uses ---- */
 
+static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line, char *owned);
+
 static JSValue n_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
@@ -545,14 +547,65 @@ static JSValue n_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
     return JS_NewFloat64(ctx, js_now(js_of_ctx(ctx)));
 }
 
+/* The UTF-8 bytes of a typed array or ArrayBuffer as a C string (without
+ * a byte order mark); the buffer is then detached, which frees its
+ * memory in the script heap. NULL when v is neither. */
+static char *take_script_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+{
+    size_t n = 0, off = 0, blen = 0;
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, NULL);
+    if (JS_IsException(buf)) {
+        JSValue e = JS_GetException(ctx);
+        JS_FreeValue(ctx, e);
+        buf = JS_DupValue(ctx, v);
+        const uint8_t *q = JS_GetArrayBuffer(ctx, &n, buf);
+        if (!q) {
+            e = JS_GetException(ctx);
+            JS_FreeValue(ctx, e);
+            JS_FreeValue(ctx, buf);
+            return NULL;
+        }
+        blen = n;
+    }
+    const uint8_t *p = JS_GetArrayBuffer(ctx, &n, buf);
+    char *out = NULL;
+    if (p && off <= n && blen <= n - off) {
+        p += off;
+        if (blen >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) {
+            p += 3;
+            blen -= 3;
+        }
+        out = au_strndup((const char *)p, blen);
+        *len = blen;
+        JS_DetachArrayBuffer(ctx, buf);
+    } else if (!p) {
+        JSValue e = JS_GetException(ctx);
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, buf);
+    return out;
+}
+
 /* runScript(source, url, element or null): runs a classic script inserted
  * by script, with element as currentScript. Errors are reported, not
- * thrown. Returns whether it completed. */
+ * thrown. Returns whether it completed. source is a string; or the
+ * script's UTF-8 bytes in a typed array, which is emptied (importScripts:
+ * a large script is then held once while it compiles, not as bytes, a
+ * string and a copy); or null in a worker, for the worker's own script
+ * (worker.c keeps it). The text is freed once compiled. */
 static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
-    size_t len;
-    char *src = argc > 0 ? js_tostr(ctx, argv[0], &len) : NULL;
+    size_t len = 0;
+    char *src = NULL;
+    if (argc > 0 && JS_IsString(argv[0]))
+        src = js_tostr(ctx, argv[0], &len);
+    else if (argc > 0 && JS_IsNull(argv[0]) && js->worker)
+        src = js_worker_take_source(js, &len);
+    else if (argc > 0 && JS_IsObject(argv[0]))
+        src = take_script_bytes(ctx, argv[0], &len);
+    else if (argc > 0)
+        src = js_tostr(ctx, argv[0], &len);
     char *url = argc > 1 && JS_IsString(argv[1]) ? js_tostr(ctx, argv[1], NULL) : NULL;
     if (!src) {
         au_free(url);
@@ -562,7 +615,7 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     AuElement *el = n && n->type == AU_NODE_ELEMENT ? (AuElement *)au_node_ref(n) : NULL;
     AuElement *prev = js->current_script;
     js->current_script = el;
-    JSValue r = js_eval_classic(js, src, len, url, 1);
+    JSValue r = eval_classic(js, src, len, url, 1, src);
     bool ok = !JS_IsException(r);
     if (!ok) {
         /* An interrupt must keep unwinding to the embedder. */
@@ -571,7 +624,6 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
             js->current_script = prev;
             if (el)
                 au_node_unref(&el->node);
-            au_free(src);
             au_free(url);
             return JS_Throw(ctx, e);
         }
@@ -582,7 +634,6 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     js->current_script = prev;
     if (el)
         au_node_unref(&el->node);
-    au_free(src);
     au_free(url);
     return JS_NewBool(ctx, ok);
 }
@@ -1032,6 +1083,12 @@ AuJs *au_js_of(const AuDocument *doc)
 
 JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line)
 {
+    return eval_classic(js, src, len, url, line, NULL);
+}
+
+/* owned: src is the caller's au_alloc'd block, freed once compiled. */
+static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line, char *owned)
+{
     AuJs *r = js->root;
     JSContext *ctx = js->ctx;
     if (len >= JS_LARGE_SCRIPT && r->live_bytes > r->gc_base + (512u << 10)) {
@@ -1044,6 +1101,7 @@ JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, 
                        line > 0 ? line : 1};
     JSValue fn = JS_Eval2(ctx, src, len, &o);
     r->compiling = prev;
+    au_free(owned);
     if (JS_IsException(fn))
         return fn;
     return JS_EvalFunction(ctx, fn);
@@ -1051,18 +1109,23 @@ JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, 
 
 bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, const char *url, int line)
 {
-    if (js->closing)
+    /* QuickJS wants a NUL-terminated source; src may not be. */
+    return au_js_run_classic_take(js, el, au_strndup(src, len), len, url, line);
+}
+
+bool au_js_run_classic_take(AuJs *js, AuElement *el, char *src, size_t len, const char *url, int line)
+{
+    if (js->closing) {
+        au_free(src);
         return false;
+    }
     JSContext *ctx = js->ctx;
     AuElement *prev = js->current_script;
     if (el)
         au_node_ref(&el->node);
     js->current_script = el;
     js_enter(js);
-    /* QuickJS wants a NUL-terminated source; src may not be. */
-    char *copy = au_strndup(src, len);
-    JSValue r = js_eval_classic(js, copy, len, url, line);
-    au_free(copy);
+    JSValue r = eval_classic(js, src, len, url, line, src);
     bool ok = !JS_IsException(r);
     if (!ok)
         js_report_exception(js);

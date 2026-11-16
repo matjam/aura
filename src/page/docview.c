@@ -802,7 +802,7 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
     }
     if (req.kind == AU_RES_OTHER && !req.font) {
         if (dv->script)
-            au_docscript_resource_done(dv->script, req.id, req.data.data, req.data.len, ok);
+            au_docscript_resource_done(dv->script, req.id, &req.data, ok);
         au_buf_free(&req.data);
         maybe_finished(dv);
         return;

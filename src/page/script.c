@@ -692,7 +692,11 @@ static void run_classic(AuDocScript *s, PendingScript *p)
     snprintf(s->perf_label, sizeof s->perf_label, "%s", url);
     if (p->muted && p->url)
         au_js_mute_script(s->js, p->url);
-    au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
+    /* The runtime takes the text and frees it once it is compiled. */
+    size_t len = p->text ? p->len : 0;
+    char *text = p->text ? p->text : au_strndup("", 0);
+    p->text = NULL;
+    au_js_run_classic_take(s->js, p->el, text, len, url, 1);
     if (p->url)
         fire_simple(s, p->el, "load");
 }
@@ -949,8 +953,10 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
         }
 }
 
-bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
+bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok)
 {
+    const void *data = body->data;
+    size_t len = body->len;
     const char *type = NULL;
     bool head_sent = false;
     AuJs *to = NULL;
@@ -998,8 +1004,12 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
     p->failed = !ok || p->bad_status;
     ok = !p->failed;
     if (ok) {
-        p->text = au_strndup(data ? data : "", len);
-        p->len = len;
+        /* the response's buffer becomes the script's text: no second copy */
+        p->text = au_buf_take(body, &p->len);
+        if (!p->text) {
+            p->text = au_strndup("", 0);
+            p->len = 0;
+        }
     }
     enter(s);
     if (where == 1) {
