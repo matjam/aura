@@ -109,14 +109,13 @@ static bool safe_root(const AuLayout *L, const AuElement *el)
 static AuElement *find_root(AuLayout *L, AuNode *n, bool *full)
 {
     *full = false;
-    AuNode *top = n;
-    while (top->parent)
-        top = top->parent;
-    if (top != &L->doc->node)
-        return NULL; /* detached, or in a shadow tree (not rendered) */
+    bool flat = L->doc->has_shadow;
+    if ((flat ? au_node_shadow_including_root(n) : au_node_root(n)) != &L->doc->node)
+        return NULL; /* detached */
     AuElement *found = NULL;
     bool hidden = false;
-    for (AuNode *p = n; p; p = p->parent) {
+    /* up the flat tree: a slotted node's slot, a shadow root's host */
+    for (AuNode *p = n; p; p = flat ? au_flat_parent(p) : p->parent) {
         if (p->type == AU_NODE_DOCUMENT)
             break;
         if (p->type != AU_NODE_ELEMENT)
@@ -190,7 +189,11 @@ static bool in_place(const AuLayout *L, const LBox *b)
         pb = pb->parent;
     if (!pb || !b->node)
         return false;
-    for (const AuNode *p = b->node->parent; p; p = p->parent) {
+    bool flat = L->doc && L->doc->has_shadow;
+    if (flat && !au_node_in_flat_tree(b->node))
+        return false; /* a slot no longer takes it */
+    for (const AuNode *p = flat ? au_flat_parent(b->node) : b->node->parent; p;
+         p = flat ? au_flat_parent(p) : p->parent) {
         if (p == pb->node)
             return true;
         if (p->type == AU_NODE_ELEMENT && ((const AuElement *)p)->box)
@@ -598,14 +601,18 @@ void l_check_incremental(AuLayout *L)
         return;
     L->rebuilt = false;
     L->check_runs++;
-    /* The whole build sets the element box pointers: keep the real ones. */
+    /* The whole build sets the element box pointers: keep the real ones.
+     * It reaches the elements of the flat tree, which with shadow trees
+     * is what these walks follow. */
     const AuNode *top = &L->doc->node;
+    bool flat = L->doc->has_shadow;
+#define NEXT_EL(n) (flat ? au_flat_next((n), top) : au_node_next((n), top))
     uint32_t nel = 0;
-    for (AuNode *n = top->first_child; n; n = au_node_next(n, top))
+    for (AuNode *n = top->first_child; n; n = NEXT_EL(n))
         nel += n->type == AU_NODE_ELEMENT;
     void **saved = au_alloc((nel ? nel : 1) * sizeof *saved);
     uint32_t i = 0;
-    for (AuNode *n = top->first_child; n; n = au_node_next(n, top))
+    for (AuNode *n = top->first_child; n; n = NEXT_EL(n))
         if (n->type == AU_NODE_ELEMENT) {
             saved[i++] = au_as_element(n)->box;
             au_as_element(n)->box = NULL;
@@ -664,7 +671,7 @@ void l_check_incremental(AuLayout *L)
     if (ok) {
         qsort(pairs, npairs, sizeof *pairs, cpair_cmp);
         i = 0;
-        for (AuNode *n = top->first_child; n && ok; n = au_node_next(n, top)) {
+        for (AuNode *n = top->first_child; n && ok; n = NEXT_EL(n)) {
             if (n->type != AU_NODE_ELEMENT)
                 continue;
             const LBox *fb = au_as_element(n)->box, *mine = saved[i++];
@@ -735,9 +742,10 @@ void l_check_incremental(AuLayout *L)
 #endif
     au_layout_free(F);
     i = 0;
-    for (AuNode *n = top->first_child; n; n = au_node_next(n, top))
+    for (AuNode *n = top->first_child; n && i < nel; n = NEXT_EL(n))
         if (n->type == AU_NODE_ELEMENT)
             au_as_element(n)->box = saved[i++];
+#undef NEXT_EL
     au_free(saved);
     if (!ok) {
         L->check_failures++;

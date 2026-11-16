@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Shadow trees: scoped styles, constructed sheets, layout</title>
+<script src="../harness.js"></script>
+<style>
+p { color: rgb(255, 0, 0); }
+#host { color: rgb(0, 0, 255); }
+#host::part(label) { background-color: rgb(9, 9, 9); }
+.light { border-top: 3px solid rgb(4, 5, 6); }
+</style>
+</head>
+<body>
+<div id="host"><span class="light" slot="a">light a</span><b>light default</b></div>
+<script>
+const host = document.getElementById('host');
+const root = host.attachShadow({ mode: 'open' });
+root.innerHTML = '<style>p { color: rgb(0, 128, 0); } :host { display: block; padding-left: 7px; }' +
+    ' ::slotted(span) { font-weight: 700; border-top: 1px solid rgb(1, 1, 1); } ::slotted(*) { text-decoration: underline; }' +
+    ' div { color: inherit; }</style>' +
+    '<p id="inner">inner</p><div id="wrap"><slot name="a"></slot></div><slot id="def"></slot><em part="label">label</em>';
+const cs = (el) => getComputedStyle(el);
+const inner = root.getElementById('inner');
+const span = host.querySelector('span');
+const bold = host.querySelector('b');
+
+test('shadow styles stay inside, document styles stay outside', () => {
+    assert.equal(cs(inner).color, 'rgb(0, 128, 0)');
+    const outside = document.createElement('p');
+    document.body.appendChild(outside);
+    assert.equal(cs(outside).color, 'rgb(255, 0, 0)');
+    outside.remove();
+});
+
+test(':host applies to the host, outer rules win over it', () => {
+    assert.equal(cs(host).display, 'block');
+    assert.equal(cs(host).paddingLeft, '7px');
+    host.style.paddingLeft = '3px';
+    assert.equal(cs(host).paddingLeft, '3px');
+    host.style.paddingLeft = '';
+});
+
+test('::slotted applies to assigned nodes; outer rules win', () => {
+    assert.equal(cs(span).fontWeight, '700');
+    assert.equal(cs(bold).textDecorationLine, 'underline');
+    /* the document's .light rule beats the shadow's ::slotted rule */
+    assert.equal(cs(span).borderTopWidth, '3px');
+    assert.equal(cs(span).borderTopColor, 'rgb(4, 5, 6)');
+});
+
+test('inheritance follows the flat tree', () => {
+    /* span is slotted into #wrap, which inherits the host's color */
+    assert.equal(cs(span).color, 'rgb(0, 0, 255)');
+    root.getElementById('wrap').style.color = 'rgb(7, 7, 7)';
+    assert.equal(cs(span).color, 'rgb(7, 7, 7)');
+    root.getElementById('wrap').style.color = '';
+});
+
+test('::part matches from the outer tree', () => {
+    assert.equal(cs(root.querySelector('em')).backgroundColor, 'rgb(9, 9, 9)');
+    root.querySelector('em').setAttribute('part', 'other');
+    assert.equal(cs(root.querySelector('em')).backgroundColor, 'rgba(0, 0, 0, 0)');
+    root.querySelector('em').setAttribute('part', 'label');
+    assert.equal(cs(root.querySelector('em')).backgroundColor, 'rgb(9, 9, 9)');
+});
+
+test('slot changes restyle and relayout', () => {
+    span.slot = 'none';
+    assert.equal(span.getBoundingClientRect().height, 0);
+    span.slot = 'a';
+    assert.ok(span.getBoundingClientRect().height > 0);
+    const late = document.createElement('i');
+    late.textContent = 'late';
+    host.appendChild(late);
+    assert.ok(late.getBoundingClientRect().height > 0);
+    assert.equal(cs(late).textDecorationLine, 'underline');
+    late.remove();
+});
+
+test('unassigned light children have no box', () => {
+    const h = document.createElement('div');
+    h.innerHTML = '<span>hidden</span>';
+    document.body.appendChild(h);
+    const r = h.attachShadow({ mode: 'open' });
+    r.innerHTML = '<p>shown</p>';
+    assert.equal(h.querySelector('span').getBoundingClientRect().height, 0);
+    assert.ok(r.querySelector('p').getBoundingClientRect().height > 0);
+    r.innerHTML = '<slot>fallback</slot>';
+    assert.ok(h.querySelector('span').getBoundingClientRect().height > 0);
+    h.remove();
+});
+
+test('custom properties cross the boundary', () => {
+    const h = document.createElement('div');
+    h.style.setProperty('--c', 'rgb(3, 3, 3)');
+    document.body.appendChild(h);
+    const r = h.attachShadow({ mode: 'open' });
+    r.innerHTML = '<style>p { color: var(--c); }</style><p>x</p>';
+    assert.equal(cs(r.querySelector('p')).color, 'rgb(3, 3, 3)');
+    h.remove();
+});
+
+test(':host() and :host-context()', () => {
+    const outer = document.createElement('section');
+    outer.className = 'dark';
+    const h = document.createElement('div');
+    h.className = 'big';
+    outer.appendChild(h);
+    document.body.appendChild(outer);
+    const r = h.attachShadow({ mode: 'open' });
+    r.innerHTML = '<style>:host(.big) { margin-top: 5px; } :host(.small) { margin-top: 1px; }' +
+        ' :host-context(.dark) p { color: rgb(2, 2, 2); }</style><p>x</p>';
+    assert.equal(cs(h).marginTop, '5px');
+    assert.equal(cs(r.querySelector('p')).color, 'rgb(2, 2, 2)');
+    h.className = 'small';
+    assert.equal(cs(h).marginTop, '1px');
+    outer.className = '';
+    assert.notEqual(cs(r.querySelector('p')).color, 'rgb(2, 2, 2)');
+    outer.remove();
+});
+
+test('constructed sheets: replaceSync, insertRule, adoptedStyleSheets', () => {
+    const sheet = new CSSStyleSheet();
+    assert.equal(sheet.ownerNode, null);
+    sheet.replaceSync('p { margin-left: 11px; }');
+    assert.equal(sheet.cssRules.length, 1);
+    root.adoptedStyleSheets = [sheet];
+    assert.equal(cs(inner).marginLeft, '11px');
+    sheet.insertRule('p { margin-left: 12px; }', 1);
+    assert.equal(cs(inner).marginLeft, '12px');
+    sheet.deleteRule(1);
+    assert.equal(cs(inner).marginLeft, '11px');
+    /* adopted sheets come after the tree's own sheets */
+    sheet.replaceSync('p { color: rgb(6, 6, 6); }');
+    assert.equal(cs(inner).color, 'rgb(6, 6, 6)');
+    sheet.disabled = true;
+    assert.equal(cs(inner).color, 'rgb(0, 128, 0)');
+    sheet.disabled = false;
+    root.adoptedStyleSheets.pop();
+    assert.equal(cs(inner).color, 'rgb(0, 128, 0)');
+    assert.throws(() => sheet.insertRule('@import url(x.css);'), 'SyntaxError');
+    assert.throws(() => { root.adoptedStyleSheets = [document.styleSheets[0]]; }, TypeError);
+});
+
+promise_test('replace resolves; document adoption applies outside only', async () => {
+    const sheet = new CSSStyleSheet({ media: 'screen' });
+    const s = await sheet.replace('p { letter-spacing: 2px; }');
+    assert.equal(s, sheet);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    const outside = document.createElement('p');
+    document.body.appendChild(outside);
+    assert.equal(cs(outside).letterSpacing, '2px');
+    assert.notEqual(cs(inner).letterSpacing, '2px');
+    sheet.media.mediaText = 'print';
+    assert.notEqual(cs(outside).letterSpacing, '2px');
+    document.adoptedStyleSheets = [];
+    outside.remove();
+});
+
+test('a shared constructed sheet styles several roots', () => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('b { color: rgb(8, 8, 8); }');
+    const roots = [];
+    for (let i = 0; i < 3; i++) {
+        const h = document.createElement('div');
+        document.body.appendChild(h);
+        const r = h.attachShadow({ mode: 'open' });
+        r.innerHTML = '<b>x</b>';
+        r.adoptedStyleSheets = [sheet];
+        roots.push(r);
+    }
+    for (const r of roots) assert.equal(cs(r.querySelector('b')).color, 'rgb(8, 8, 8)');
+    sheet.replaceSync('b { color: rgb(9, 8, 7); }');
+    for (const r of roots) assert.equal(cs(r.querySelector('b')).color, 'rgb(9, 8, 7)');
+    for (const r of roots) r.host.remove();
+});
+
+test('nested shadow trees and exportparts', () => {
+    const outer = document.createElement('div');
+    outer.id = 'nest';
+    document.body.appendChild(outer);
+    const r1 = outer.attachShadow({ mode: 'open' });
+    r1.innerHTML = '<span exportparts="inner-part: thing"></span>';
+    const r2 = r1.querySelector('span').attachShadow({ mode: 'open' });
+    r2.innerHTML = '<i part="inner-part">deep</i>';
+    const st = document.createElement('style');
+    st.textContent = '#nest::part(thing) { color: rgb(5, 4, 3); }';
+    document.head.appendChild(st);
+    assert.equal(cs(r2.querySelector('i')).color, 'rgb(5, 4, 3)');
+    st.remove();
+    outer.remove();
+});
+</script>
+</body>
+</html>

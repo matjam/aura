@@ -1276,7 +1276,10 @@ defProps(HTMLEmbedElement.prototype, { getSVGDocument() { return null; } });
 defProps(HTMLSlotElement.prototype, {
     assignedNodes(opts) { return N.assigned(this, !!(opts && opts.flatten)); },
     assignedElements(opts) { return N.assigned(this, !!(opts && opts.flatten)).filter(isElement); },
-    assign() { throw domErr('Manual slot assignment is not supported', 'NotSupportedError'); },
+    assign(...nodes) {
+        for (const n of nodes) if (!(n instanceof Element) && !(n instanceof Text)) throw new TypeError('slot.assign takes elements and text nodes');
+        N.slotAssign(this, nodes);
+    },
 });
 defProps(HTMLDataListElement.prototype, { get options() { return makeList(HTMLCollection, this, 6); } });
 defProps(HTMLMapElement.prototype, { get areas() { return makeList(HTMLCollection, this, 2, 'area'); } });
@@ -1450,8 +1453,19 @@ defProps(DP, {
     queryCommandState() { return false; },
     queryCommandValue() { return ''; },
     getSelection() { return G.getSelection(); },
-    elementFromPoint() { return null; },
-    elementsFromPoint() { return []; },
+    /* the element under the point, retargeted to this document's tree (a
+     * node in a shadow tree reports its host) */
+    elementFromPoint(x, y) {
+        if (this !== doc) return null;
+        const e = N.hitTest(+x, +y);
+        return e ? retarget(e, this) : null;
+    },
+    elementsFromPoint(x, y) {
+        const e = this.elementFromPoint(x, y);
+        const out = [];
+        for (let n = e; n; n = n.parentNode) if (isElement(n)) out.push(n);
+        return out;
+    },
     exitFullscreen() { return Promise.reject(new TypeError('Fullscreen is not supported')); },
     clear() {},
     captureEvents() {},
@@ -1663,6 +1677,12 @@ class DOMParser {
     }
 }
 defGlobal('DOMParser', DOMParser);
+/* Document.parseHTMLUnsafe: DOMParser's document with declarative shadow
+ * roots. */
+Object.defineProperty(Document, 'parseHTMLUnsafe', {
+    value: function parseHTMLUnsafe(html) { return N.parseHTMLDocument(str(html), true); },
+    configurable: true, writable: true,
+});
 class DOMImplementation {
     hasFeature() { return true; }
     createHTMLDocument(title) {

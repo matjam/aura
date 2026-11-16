@@ -460,7 +460,11 @@ static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll
         r->text_offset = f->start + k;
     }
     AuAtom href = au_atom_lookup("href", 4);
-    for (AuElement *e = r->element; e && href; e = au_is_element(e->node.parent) ? au_as_element(e->node.parent) : NULL)
+    /* up the flat tree: a link around a slot holds what the slot shows */
+    bool flat = L->doc && L->doc->has_shadow;
+    for (AuElement *e = r->element; e && href;
+         e = flat ? au_flat_parent_element(&e->node)
+                  : au_is_element(e->node.parent) ? au_as_element(e->node.parent) : NULL)
         if ((au_is_html_element(&e->node, AU_ATOM_a) || au_is_html_element(&e->node, AU_ATOM_area)) &&
             au_element_get_attr(e, href)) {
             r->link = e;

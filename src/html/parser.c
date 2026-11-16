@@ -68,6 +68,7 @@ AuHtmlParser *au_html_parser_new(const AuHtmlOptions *opts)
     html_decoder_init(&p->dec, (AuHtmlEncoding)p->opts.encoding);
     html_tok_init(&p->tok);
     p->tb = html_tb_new(p->doc, &p->tok, p->opts.scripting);
+    html_tb_set_declarative_shadow(p->tb, p->opts.declarative_shadow);
     html_tb_set_script_hook(p->tb, on_script, p);
     p->tok.emit = html_tb_emit;
     p->tok.cdata_ok = html_tb_cdata_ok;
@@ -197,6 +198,7 @@ AuNode *au_html_parse_fragment(AuElement *context, const char *bytes, size_t len
     HtmlTokenizer tok;
     html_tok_init(&tok);
     HtmlTreeBuilder *tb = html_tb_new(tmpdoc, &tok, o.scripting);
+    html_tb_set_declarative_shadow(tb, o.declarative_shadow);
     tok.emit = html_tb_emit;
     tok.cdata_ok = html_tb_cdata_ok;
     tok.sink = tb;

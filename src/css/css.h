@@ -434,6 +434,8 @@ typedef enum {
     AU_CSS_PSEUDO_BACKDROP,
     AU_CSS_PSEUDO_FILE_SELECTOR_BUTTON,
     AU_CSS_PSEUDO_UNKNOWN_WEBKIT, /* ::-webkit-*: valid, never matches */
+    AU_CSS_PSEUDO_SLOTTED,        /* ::slotted(): styles the slot's assigned elements */
+    AU_CSS_PSEUDO_PART,           /* ::part(): styles elements of the host's shadow tree */
     AU_CSS_PSEUDO_COUNT
 } AuCssPseudo;
 
@@ -705,6 +707,15 @@ void au_css_resolver_set_font_prefs(AuCssResolver *r, const AuCssFontPrefs *p);
 const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r);
 /* Adds a user or author sheet after the existing ones; r owns it. */
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s);
+/* The same for an author sheet of a tree scope: scope is the shadow root
+ * whose <style>, <link> or adoptedStyleSheets gave it (NULL, or anything
+ * else that is not a shadow root, for the document). Its rules apply
+ * only to that shadow tree, its host (:host) and the elements slotted
+ * into it (::slotted()). The caller keeps scope alive while the sheet is
+ * added (r compares the pointer). A shadow root's sheets are given in
+ * the order they apply: its own sheets in tree order, then its adopted
+ * sheets. */
+void au_css_resolver_add_scoped_sheet(AuCssResolver *r, AuCssSheet *s, const AuNode *scope);
 /* Removes and frees a sheet. */
 void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s);
 /* Removes every added sheet without freeing it: the caller owns them
@@ -714,6 +725,12 @@ void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s);
 void au_css_resolver_detach_sheets(AuCssResolver *r);
 /* Call after attaching imports or otherwise changing sheets. */
 void au_css_resolver_sheets_changed(AuCssResolver *r);
+/* After the sheets were given again (detach, add) when only the sheets
+ * of the shadow roots in roots changed: the next au_css_restyle builds the
+ * index again and restyles the hosts' flat subtrees, not the document.
+ * A root that is not a shadow root with a host makes it a full restyle,
+ * as does anything that asked for one. */
+void au_css_resolver_sheets_changed_in(AuCssResolver *r, AuNode *const *roots, size_t n);
 /* Finds @keyframes by name across the author sheets (last one wins). */
 const AuCssKeyframes *au_css_resolver_keyframes(AuCssResolver *r, AuAtom name);
 /* True if the media query list matches the current device (matchMedia). */
@@ -785,6 +802,9 @@ void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAt
  * above whose state follows their descendants. Comments change nothing. */
 void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next,
                                 bool inserted);
+/* Restyles el and its flat subtree: what a slot assignment or a shadow
+ * root's children changed below el reaches. */
+void au_css_invalidate_subtree(AuCssResolver *r, AuElement *el);
 /* The data of text node text changed: :empty of its parent, :has()
  * arguments with :empty, a textarea's :placeholder-shown. */
 void au_css_invalidate_text(AuCssResolver *r, AuNode *text);

@@ -152,6 +152,12 @@ AuCssResolver *au_dv_resolver(const AuDocView *dv);
 int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url);
 void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len);
 void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
+/* Constructed sheets and adoptedStyleSheets (AuJsHooks.sheet_construct,
+ * sheet_destroy and sheets_adopt in src/js/js.h). */
+void au_dv_sheet_construct(AuDocView *dv, uint32_t id, const char *text, size_t len, const char *media,
+                           int disabled);
+void au_dv_sheet_destroy(AuDocView *dv, uint32_t id);
+void au_dv_sheets_adopt(AuDocView *dv, AuNode *scope, const uint32_t *ids, size_t n);
 /* Canvases (AuJsHooks.canvas_set and canvas_image in src/js/js.h): the
  * document's canvas set, made on first use, and the decoded pixels of an
  * image element the document loaded. */

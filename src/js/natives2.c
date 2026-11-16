@@ -410,6 +410,23 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return arr;
 }
 
+/* hitTest(x, y): the element under a viewport point, or null (the
+ * prelude retargets it). */
+static JSValue n_hit_test(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
+    double x, y;
+    if (argc < 2 || !js->hooks.hit_test || JS_ToFloat64(ctx, &x, argv[0]) < 0 || JS_ToFloat64(ctx, &y, argv[1]) < 0)
+        return JS_NULL;
+    if (x != x || y != y)
+        return JS_NULL;
+    AuElement *e = js->hooks.hit_test(js->hooks.ctx, x, y);
+    return e ? js_wrap(js, &e->node) : JS_NULL;
+}
+
 /* textRects(text, start, end): the rectangles of a text node's data
  * between two UTF-16 offsets as a flat array of x, y, width, height in
  * document coordinates, one per line; null when the node has no box,
@@ -520,6 +537,92 @@ static JSValue n_sheet_disable(JSContext *ctx, JSValueConst this_val, int argc, 
     AuElement *e = argc > 1 ? arg_el(js, argv[0]) : NULL;
     if (e && js->hooks.sheet_disable)
         js->hooks.sheet_disable(js->hooks.ctx, e, JS_ToBool(ctx, argv[1]) > 0);
+    return JS_UNDEFINED;
+}
+
+/* sheetConstruct(id, text, media, disabled): makes or changes constructed
+ * sheet id (prelude_cssom.js). text or media null keeps it; disabled null
+ * keeps it. */
+static JSValue n_sheet_construct(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    if (argc < 4 || !js->hooks.sheet_construct)
+        return JS_UNDEFINED;
+    uint32_t id;
+    if (JS_ToUint32(ctx, &id, argv[0]) < 0)
+        return JS_EXCEPTION;
+    size_t n = 0;
+    char *t = NULL, *m = NULL;
+    if (!JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
+        t = js_tostr(ctx, argv[1], &n);
+        if (!t)
+            return JS_EXCEPTION;
+    }
+    if (!JS_IsNull(argv[2]) && !JS_IsUndefined(argv[2])) {
+        size_t mn = 0;
+        m = js_tostr(ctx, argv[2], &mn);
+        if (!m) {
+            au_free(t);
+            return JS_EXCEPTION;
+        }
+    }
+    int dis = -1;
+    if (!JS_IsNull(argv[3]) && !JS_IsUndefined(argv[3]))
+        dis = JS_ToBool(ctx, argv[3]) > 0;
+    js->hooks.sheet_construct(js->hooks.ctx, id, t, n, m, dis);
+    au_free(t);
+    au_free(m);
+    return JS_UNDEFINED;
+}
+
+static JSValue n_sheet_destroy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    uint32_t id;
+    if (argc < 1 || !js->hooks.sheet_destroy || JS_ToUint32(ctx, &id, argv[0]) < 0)
+        return JS_UNDEFINED;
+    js->hooks.sheet_destroy(js->hooks.ctx, id);
+    return JS_UNDEFINED;
+}
+
+/* sheetsAdopt(scope, ids): the adoptedStyleSheets of a document or shadow
+ * root, as constructed sheet ids in order (at most 1024). */
+#define MAX_ADOPTED 1024
+static JSValue n_sheets_adopt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *scope = argc > 1 ? js_unwrap(js, argv[0]) : NULL;
+    if (!scope || !js->hooks.sheets_adopt)
+        return JS_UNDEFINED;
+    if (scope->type != AU_NODE_DOCUMENT && !(scope->flags & AU_NODEF_SHADOW_ROOT))
+        return JS_UNDEFINED;
+    int64_t len = 0;
+    JSValue lv = JS_GetPropertyStr(ctx, argv[1], "length");
+    int bad_len = JS_ToInt64(ctx, &len, lv);
+    JS_FreeValue(ctx, lv);
+    if (bad_len < 0)
+        return JS_EXCEPTION;
+    if (len < 0)
+        len = 0;
+    if (len > MAX_ADOPTED)
+        len = MAX_ADOPTED;
+    uint32_t *ids = len ? au_alloc((size_t)len * sizeof *ids) : NULL;
+    if (len && !ids)
+        return JS_ThrowOutOfMemory(ctx);
+    for (int64_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        int bad = JS_ToUint32(ctx, &ids[i], v);
+        JS_FreeValue(ctx, v);
+        if (bad < 0) {
+            au_free(ids);
+            return JS_EXCEPTION;
+        }
+    }
+    js->hooks.sheets_adopt(js->hooks.ctx, scope, ids, (size_t)len);
+    au_free(ids);
     return JS_UNDEFINED;
 }
 
@@ -1107,10 +1210,14 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssPropertyNames", 0, n_css_names),
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
+    JS_CFUNC_DEF("hitTest", 2, n_hit_test),
     JS_CFUNC_DEF("textRects", 3, n_text_rects),
     JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
     JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),
     JS_CFUNC_DEF("sheetDisable", 2, n_sheet_disable),
+    JS_CFUNC_DEF("sheetConstruct", 4, n_sheet_construct),
+    JS_CFUNC_DEF("sheetDestroy", 1, n_sheet_destroy),
+    JS_CFUNC_DEF("sheetsAdopt", 2, n_sheets_adopt),
     JS_CFUNC_DEF("viewport", 0, n_viewport),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),

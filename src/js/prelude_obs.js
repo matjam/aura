@@ -159,8 +159,20 @@ MutationObserver.prototype.takeRecords = function () {
 
 const shadowRoots = [];
 const slotSnapshots = new WeakMap();
-function trackShadowRoot(r) { if (r) shadowRoots.push(new WeakRef(r)); return r; }
+const trackedRoots = new WeakSet();
+function trackShadowRoot(r) {
+    if (r && !trackedRoots.has(r)) { trackedRoots.add(r); shadowRoots.push(new WeakRef(r)); }
+    return r;
+}
+/* Declarative shadow roots come from the parser: picked up when the
+ * document's count of them changes. */
+let declarativeSeen = 0;
 function signalSlots() {
+    const found = N.declarativeRoots(declarativeSeen);
+    if (found) {
+        declarativeSeen = found[0];
+        for (let i = 1; i < found.length; i++) trackShadowRoot(found[i]);
+    }
     for (let i = shadowRoots.length - 1; i >= 0; i--) {
         const r = shadowRoots[i].deref();
         if (!r) { shadowRoots.splice(i, 1); continue; }
@@ -177,12 +189,6 @@ const attachShadow0 = EP.attachShadow;
 defProps(EP, {
     attachShadow(init) { return trackShadowRoot(attachShadow0.call(this, init)); },
 });
-/* Declarative shadow roots from the parser: converted after each parse
- * chunk and at the end (P.declarativeShadow is called by the page). */
-P.declarativeShadow = function (final) {
-    const roots = N.declarativeShadow(doc, !!final);
-    if (Array.isArray(roots)) for (const r of roots) trackShadowRoot(r);
-};
 
 /* ---------------- custom elements ---------------- */
 

@@ -176,6 +176,76 @@ and `@import` is a `SheetSrc`.
 Script reaches sheets through the CSSOM
 ([`javascript.md`](javascript.md), "CSSOM").
 
+## Shadow trees and scoped styles
+
+To give the resolver a sheet of a shadow tree, call
+`au_css_resolver_add_scoped_sheet(r, sheet, shadow_root)`; a sheet added
+with `au_css_resolver_add_sheet` belongs to the document. The document
+view does this for each `<style>` and `<link>` in a shadow tree and for
+`adoptedStyleSheets`, which come after the tree's own sheets.
+
+To restyle after a shadow tree's sheets change, call
+`au_css_resolver_sheets_changed_in(r, roots, n)`: the index is built
+again and only the hosts of those roots are restyled. A change to the
+document's sheets still restyles everything.
+
+To restyle a host's whole flat subtree (a slot assignment changed),
+call `au_css_invalidate_subtree`.
+
+Everything below runs only when the document has a shadow root
+(`AuDocument.has_shadow`); a page without one walks the same code as
+before.
+
+- **Scopes.** The index records a scope per sheet. Shadow roots whose
+  sheet lists are equal share one scope (a page with 200 copies of one
+  component indexes its sheet once). A rule matches an element only
+  when its scope is the element's tree; each scope is walked under an
+  anonymous cascade layer of its own.
+- **The style pass walks the flat tree** (`au_flat_next`): a host's
+  shadow tree in place of its children, a slot's assigned nodes in
+  place of its fallback. Inheritance and custom properties follow the
+  flat tree. Children of a host that no slot takes get no style
+  (`clear_unshown` releases what they had).
+- **`:host`, `:host()`, `:host-context()`** match the host from inside
+  its shadow tree. There the host is featureless: a compound must hold
+  one of these to match it (`*` alone does not). A combinator steps from
+  the top of the shadow tree to the host and stops there (`m_parent`).
+- **`::slotted()` and `::part()`** rules are kept out of the selector
+  maps (`shadow_entries`). `collect_scoped` matches `::slotted()` rules
+  of the trees of the slots a node is assigned to (a chain, for slots
+  slotted again) and `::part()` rules of the trees above an element's
+  tree, mapping names through `exportparts` (at most 16 names a step).
+- **Cascade order** (CSS Scoping, "shadow cascade order"): the key
+  holds a context code above the layer. For normal declarations an
+  outer tree's rule beats an inner tree's rule (`:host` and
+  `::slotted()` lose to the page's rules for the same element); for
+  `!important` the inner tree wins.
+- **Invalidation.** `:host` and `::slotted()` dependencies are keyed
+  universally; `:host-context()` and `::part()` mark descendants. A
+  change to a host's children, a slot's `name`, a node's `slot`, `part`
+  or `exportparts` restyles the host's flat subtree
+  (`au_dv_dom_changed`, `au_dv_child_changed`).
+
+### Cost for a page without shadow trees, 2026-11-16
+
+`css_bench --page` on a saved Wikipedia article (2742 elements, 2
+sheets), Release build on the host, best of 12 runs, milliseconds and
+bytes:
+
+| | parse | index | first style | style again | heap total |
+|---|---|---|---|---|---|
+| before shadow trees | 2.0 | 1.4 | 5.0 | 4.5 | 1278864 |
+| after | 2.0 | 1.4 | 5.2 | 4.6 | 1278912 |
+
+400 restyles of the article took 1.91 s before and 1.90 s after. The
+first version cost 8%: `match_pseudo` and `match_simple` gained a second
+caller and the compiler stopped inlining them into `match_rest`. The
+shadow cases are now out of line (`match_shadow_pseudo`,
+`match_on_part`, `host_compound_ok`, all `AU_NOINLINE`), and a
+pseudo-class after `::part()` is matched through `match_from`, so that
+each of the hot functions keeps one caller. Keep it that way when adding
+a selector feature.
+
 ## How a parsed sheet is stored
 
 A sheet keeps its source text and parses as little of it as it can.

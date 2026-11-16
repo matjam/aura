@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Declarative shadow roots, hit testing and focus through shadow trees</title>
+<script src="../harness.js"></script>
+<style>body { margin: 0; } #host { display: block; width: 200px; }</style>
+</head>
+<body>
+<div id="host"><template shadowrootmode="open"><style>p { margin: 0; height: 40px; color: rgb(0, 128, 0); }</style><p id="sp">shadow</p><a id="link" href="#x"><slot></slot></a></template><span id="light">light text</span></div>
+<div id="closed"><template shadowrootmode="closed" shadowrootdelegatesfocus><button id="b">b</button></template></div>
+<script>
+const host = document.getElementById('host');
+const root = host.shadowRoot;
+
+test('the parser makes declarative shadow roots', () => {
+    assert.ok(root);
+    assert.equal(root.mode, 'open');
+    assert.equal(host.querySelector('template'), null);
+    assert.equal(getComputedStyle(root.getElementById('sp')).color, 'rgb(0, 128, 0)');
+    assert.equal(document.getElementById('closed').shadowRoot, null);
+    assert.equal(document.getElementById('closed').children.length, 0);
+});
+
+test('shadow content is laid out, unslotted light content is not', () => {
+    const r = root.getElementById('sp').getBoundingClientRect();
+    assert.equal(r.height, 40);
+    assert.ok(document.getElementById('light').getBoundingClientRect().height > 0);
+    assert.ok(document.getElementById('light').getBoundingClientRect().top >= 40);
+});
+
+test('elementFromPoint is retargeted to the host', () => {
+    assert.equal(document.elementFromPoint(10, 10), host);
+    assert.equal(root.elementFromPoint(10, 10), root.getElementById('sp'));
+    const lr = document.getElementById('light').getBoundingClientRect();
+    /* slotted light content is in the document's tree: no retargeting */
+    assert.equal(document.elementFromPoint(lr.left + 2, lr.top + 2), document.getElementById('light'));
+    assert.equal(document.elementFromPoint(-5, -5), null);
+    const all = document.elementsFromPoint(10, 10);
+    assert.equal(all[0], host);
+    assert.equal(all[all.length - 1], document.documentElement);
+});
+
+test('getRootNode and composed getRootNode', () => {
+    const sp = root.getElementById('sp');
+    assert.equal(sp.getRootNode(), root);
+    assert.equal(sp.getRootNode({ composed: true }), document);
+});
+
+test('a closed declarative root with delegatesFocus takes the focus', () => {
+    const c = document.getElementById('closed');
+    c.focus();
+    assert.equal(document.activeElement, c);
+    assert.notEqual(document.activeElement, document.body);
+});
+</script>
+</body>
+</html>

@@ -158,12 +158,6 @@ void au_js_add_import_map(AuJs *js, const char *src, size_t len)
     call_bool(js, "addImportMap", 1, a);
 }
 
-void au_js_declarative_shadow(AuJs *js, bool final)
-{
-    JSValue a[1] = {JS_NewBool(js->ctx, final)};
-    call_bool(js, "declarativeShadow", 1, a);
-}
-
 void au_js_pop_state(AuJs *js, const char *url)
 {
     JSValue a[2] = {url ? JS_NewString(js->ctx, url) : JS_NULL, JS_UNDEFINED};

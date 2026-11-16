@@ -404,6 +404,15 @@ static void reveal_element(AuDocView *dv, AuElement *el)
         dv->cb.scroll_to(dv->cb.ctx, dv, x, y);
 }
 
+/* n and its ancestors up the flat tree are all in it. */
+static bool in_flat_tree(const AuNode *n)
+{
+    for (const AuNode *p = n; p && p->type != AU_NODE_DOCUMENT; p = au_flat_parent(p))
+        if (!au_node_in_flat_tree(p))
+            return false;
+    return true;
+}
+
 /* Tab order: positive tabindex ascending (tree order among equals), then
  * the rest in tree order. */
 static AuElement *next_tab(AuDocView *dv, AuElement *from, bool back)
@@ -412,8 +421,13 @@ static AuElement *next_tab(AuDocView *dv, AuElement *from, bool back)
     AuElement **all = au_alloc(cap * sizeof *all);
     int *key = au_alloc(cap * sizeof *key);
     AuNode *root = &dv->doc->node;
-    for (AuNode *c = root; c; c = au_node_next(c, root)) {
+    /* with shadow trees: shadow-including tree order (a host, its shadow
+     * tree, its children), skipping what the flat tree does not show */
+    bool shadow = dv->doc->has_shadow;
+    for (AuNode *c = root; c; c = shadow ? au_node_next_including_shadow(c, root) : au_node_next(c, root)) {
         if (c->type != AU_NODE_ELEMENT || !tabbable(au_as_element(c)))
+            continue;
+        if (shadow && !in_flat_tree(c))
             continue;
         if (n == cap) {
             cap *= 2;
@@ -1818,7 +1832,10 @@ static void field_drag(AuDocView *dv, AuElement *el, const AuEvent *ev)
  * target (a label's control when it is a text field or select). */
 static AuElement *focus_target(AuElement *e)
 {
-    for (; e; e = parent_el(e)) {
+    /* up the flat tree (a press on slotted content reaches the focusable
+     * element around its slot, then the host) */
+    bool flat = e && e->node.doc && e->node.doc->has_shadow;
+    for (; e; e = flat ? au_flat_parent_element(&e->node) : parent_el(e)) {
         if (focusable(e))
             return e;
         if (is_html(e, AU_ATOM_label)) {

@@ -184,6 +184,9 @@ typedef struct AuJsHooks {
     /* Brings layout up to date (forced synchronous layout) and returns the
      * border box of el in document coordinates; false if el has no box. */
     bool (*element_rect)(void *ctx, AuElement *el, AuJsRect *out);
+    /* Brings layout up to date and returns the element under viewport
+     * point (x, y), or NULL (document.elementFromPoint). Optional. */
+    AuElement *(*hit_test)(void *ctx, double x, double y);
     /* Brings layout up to date and writes the rectangles (document
      * coordinates, one per line) of text node text's data from UTF-16
      * offset start to end, at most max. Returns how many there are (one of
@@ -245,6 +248,14 @@ typedef struct AuJsHooks {
     int (*sheet_text)(void *ctx, AuElement *el, AuBuf *text, AuBuf *url);
     void (*sheet_set_text)(void *ctx, AuElement *el, const char *text, size_t len);
     void (*sheet_disable)(void *ctx, AuElement *el, bool disabled);
+    /* Constructed sheets (new CSSStyleSheet): sheet_construct makes sheet
+     * id (ids grow) or changes it: text (NULL: keep it), media (NULL: keep
+     * it), disabled (-1: keep it). sheet_destroy: script let go of it.
+     * sheets_adopt sets the adoptedStyleSheets of scope (the document or
+     * a shadow root) to ids, in order. All optional. */
+    void (*sheet_construct)(void *ctx, uint32_t id, const char *text, size_t len, const char *media, int disabled);
+    void (*sheet_destroy)(void *ctx, uint32_t id);
+    void (*sheets_adopt)(void *ctx, AuNode *scope, const uint32_t *ids, size_t n);
     /* Cryptographically strong random bytes for crypto.getRandomValues
      * and crypto.randomUUID. Returns false when the source cannot give
      * them yet. Without this hook the window has no crypto object. */
@@ -363,9 +374,6 @@ void au_js_add_import_map(AuJs *js, const char *src, size_t len);
 /* What a script element is, from its type and language attributes. */
 enum { AU_JS_SCRIPT_NONE, AU_JS_SCRIPT_CLASSIC, AU_JS_SCRIPT_MODULE, AU_JS_SCRIPT_IMPORTMAP };
 int au_js_script_kind(AuJs *js, AuElement *el);
-/* Converts parsed <template shadowrootmode> elements into shadow roots
- * (call after each parse chunk, and with final at the end). */
-void au_js_declarative_shadow(AuJs *js, bool final);
 /* The embedder moved through history to an entry made by pushState (url
  * is its URL): popstate. */
 void au_js_pop_state(AuJs *js, const char *url);

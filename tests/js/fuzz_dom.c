@@ -51,7 +51,11 @@ static const char page[] =
     "</select><textarea id=ta>text</textarea><button id=bu>go</button></form>"
     "<template id=tp><p>tpl <b>b</b></p></template><svg id=sv width=20 height=20><rect id=r1 width=5 height=5></rect></svg>"
     "<div id=host></div><p id=last>last paragraph of text</p>"
-    "<script>var E=[],R=[],T=[],L=[],O=[],W=[],C=[],n=0;"
+    "<div id=dh><template shadowrootmode=open><style>:host{display:block}::slotted(*){color:blue}</style>"
+    "<slot name=a></slot><b part=x>sh</b><slot></slot></template><i slot=a>slotted</i>light</div>"
+    "<script>var E=[],R=[],T=[],L=[],O=[],W=[],C=[],CS=[],n=0;"
+    "function sr(i){var x=e(i);return x&&x.shadowRoot||document}"
+    "function cs(i){if(!CS.length)CS.push(new CSSStyleSheet());return CS[i%CS.length]}"
     "function e(i){return E.length?E[i%E.length]:document.body}"
     "function r(i){return R.length?R[i%R.length]:document.createRange()}"
     "function t(i){return T.length?T[i%T.length]:document.createTextNode('t')}"
@@ -67,7 +71,8 @@ static const char *const tags[] = {"div", "span", "p", "b", "a", "ul", "li", "ta
 static const char *const attrs[] = {"id", "class", "style", "title", "href", "src", "value", "type", "name", "hidden", "colspan",
                                     "rowspan", "width", "height", "dir", "open", "selected", "checked", "disabled", "for",
                                     "tabindex", "slot", "is", "contenteditable", "start", "size", "multiple", "rows", "cols",
-                                    "data-x", "aria-label", "onclick", "media", "rel", "align", "bgcolor"};
+                                    "data-x", "aria-label", "onclick", "media", "rel", "align", "bgcolor", "part",
+                                    "exportparts"};
 static const char *const values[] = {"", "a", "c", "d", "c d", "p1", "x y z", "1", "0", "-1", "99999", "text", "checkbox",
                                      "radio", "hidden", "display:none", "display:block;float:left", "position:absolute;top:1e9px",
                                      "display:table-cell", "display:contents", "width:1e38px", "#a", "x.css", "rtl", "true",
@@ -80,6 +85,23 @@ static const char *const html[] = {
     "<img src=x onerror=n++>", "<select><option>1<option>2</select>", "text only &amp; entity", "<details open><summary>s</summary>d</details>",
     "<a href=#last>link</a>", "<p id=p1>dup id</p>", "<iframe></iframe>", "<form><button>b</button></form>",
     "<div style=display:contents><span>c</span></div>", "<ol><li><ol><li>deep</ol></ol>",
+    "<slot name=a>fb</slot><slot></slot>", "<span slot=a>sa</span><b part=x exportparts=x:y>p</b>",
+    "<div><template shadowrootmode=open><slot></slot><p part=x>d</p></template>dl</div>",
+};
+/* What shadow trees hold: slots, styles with the scoping selectors. */
+static const char *const shadow_html[] = {
+    "<slot></slot>", "<slot name=a></slot><slot></slot>", "<p>no slot</p>",
+    "<style>:host{display:flex}::slotted(*){display:block;width:10px}</style><slot></slot>",
+    "<style>:host(.c){color:red}:host-context(ul) p{display:none}p{float:left}</style><p part=x>p</p><slot name=a>fb</slot>",
+    "<div><slot></slot></div><span part=\"x y\" exportparts=\"x\">s</span><slot name=a></slot>",
+    "<link rel=stylesheet href=x.css><slot></slot><x-el></x-el>",
+    "<table><tr><td><slot></slot></td></tr></table>", "<ul><li><slot name=a></slot></li></ul><input>",
+};
+static const char *const scoped_css[] = {
+    ":host{display:block;padding:1px}", "::slotted(*){float:left}", "::slotted(span){display:none}",
+    ":host(.c) slot{display:block}", "p{display:inline-block;width:5px}", ":host-context(div){color:red}",
+    "slot{display:block}", "*{display:contents}", "@media (min-width:1px){:host{display:none}}",
+    "::part(x){display:table}", "#a::part(y){width:1e9px}", "b{position:absolute}",
 };
 static const char *const props[] = {"display", "position", "float", "width", "height", "margin", "padding", "border", "font-size",
                                     "overflow", "visibility", "content", "transform", "opacity", "z-index", "flex", "top",
@@ -248,7 +270,7 @@ static void gen_callback(FzBuf *b, int depth)
 
 static void gen_op(FzBuf *b, int depth)
 {
-    uint32_t op = fz_rnd(depth > 1 ? 40 : 84);
+    uint32_t op = fz_rnd(depth > 1 ? 40 : 94);
     fz_puts(b, "try{");
     switch (op) {
     case 0: put(b, "add(document.createElement('%s'))", PICK(tags)); break;
@@ -410,6 +432,36 @@ static void gen_op(FzBuf *b, int depth)
         break;
     case 82:
     case 83: put(b, "var f=document.querySelectorAll('iframe')[%u%%(document.querySelectorAll('iframe').length||1)];%s", fz_rnd(4), PICK(frame_ops)); break;
+    /* ---- shadow trees: attach, slots, scoped and adopted sheets ---- */
+    case 84:
+        put(b, "var x=e(%u).attachShadow({mode:'%s',slotAssignment:'%s',delegatesFocus:%s});add(x);x.innerHTML='%s'",
+            N(), fz_rnd(2) ? "open" : "closed", fz_rnd(3) ? "named" : "manual", fz_rnd(2) ? "true" : "false", PICK(shadow_html));
+        break;
+    case 85: put(b, "var s=sr(%u).querySelector('slot');if(s){s.assign(e(%u),t(%u));add(s)}", N(), N(), N()); break;
+    case 86: put(b, "var s=sr(%u).querySelectorAll('slot');for(var q of s){add(q);q.assignedNodes({flatten:true})}", N()); break;
+    case 87:
+        put(b, "var c=new CSSStyleSheet();c.replaceSync('%s %s');if(CS.length<8)CS.push(c);sr(%u).adoptedStyleSheets=[c,cs(%u)]",
+            PICK(scoped_css), PICK(scoped_css), N(), N());
+        break;
+    case 88: {
+        static const char *const sheet_ops[] = {
+            "insertRule('%s',0)", "replaceSync('%s')", "disabled=!x.disabled;x.replace('%s')", "media.mediaText='print';x.insertRule('%s')",
+            "cssRules.length&&x.deleteRule(0);'%s'",
+        };
+        put(b, "var x=cs(%u);x.", N());
+        put(b, PICK(sheet_ops), PICK(scoped_css));
+        break;
+    }
+    case 89:
+        put(b, "var a=sr(%u).adoptedStyleSheets;%s", N(),
+            fz_rnd(2) ? "a.push(cs(1))" : fz_rnd(2) ? "a.pop()" : "a.splice(0,1,cs(2))");
+        break;
+    case 90: put(b, "e(%u).setHTMLUnsafe('<div><template shadowrootmode=open>%s</template>x</div>');all()", N(), PICK(shadow_html)); break;
+    case 91: put(b, "e(%u).setAttribute('%s','%s')", N(), fz_rnd(2) ? "slot" : fz_rnd(2) ? "name" : "part", fz_rnd(2) ? "a" : "x"); break;
+    case 92: put(b, "var r=sr(%u);for(var q of r.querySelectorAll('*'))add(q);add(r.firstChild)", N()); break;
+    case 93:
+        put(b, "add(document.elementFromPoint(%u,%u));document.activeElement;sr(%u).activeElement", fz_rnd(300), fz_rnd(300), N());
+        break;
     default: put(b, "document.title='t%u';document.documentElement.appendChild(e(%u))", N(), N()); break;
     }
     fz_puts(b, "}catch(_){}\n");

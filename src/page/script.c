@@ -224,6 +224,25 @@ static void h_sheet_disable(void *ctx, AuElement *el, bool disabled)
     au_dv_sheet_disable(s->dv, el, disabled);
 }
 
+static void h_sheet_construct(void *ctx, uint32_t id, const char *text, size_t len, const char *media,
+                              int disabled)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_construct(s->dv, id, text, len, media, disabled);
+}
+
+static void h_sheet_destroy(void *ctx, uint32_t id)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_destroy(s->dv, id);
+}
+
+static void h_sheets_adopt(void *ctx, AuNode *scope, const uint32_t *ids, size_t n)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheets_adopt(s->dv, scope, ids, n);
+}
+
 static void h_focus_changed(void *ctx, AuElement *el)
 {
     AuDocScript *s = ctx;
@@ -248,6 +267,20 @@ static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
     out->w = r.w;
     out->h = r.h;
     return true;
+}
+
+static AuElement *h_hit_test(void *ctx, double x, double y)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    int sx, sy, vw, vh;
+    au_dv_scroll(s->dv, &sx, &sy, &vw, &vh);
+    if (x < 0 || y < 0 || x >= vw || y >= vh)
+        return NULL;
+    AuHitResult r;
+    if (!au_layout_hit_test(au_docview_layout(s->dv), (float)x, (float)y, (float)sx, (float)sy, &r) && !r.element)
+        return NULL;
+    return r.element;
 }
 
 static int h_text_rects(void *ctx, AuNode *text, uint32_t start, uint32_t end, AuJsRect *out, int max)
@@ -605,6 +638,7 @@ static bool ensure_js(AuDocScript *s)
     h.child_changed = h_child_changed;
     h.element_rect = h_element_rect;
     h.text_rects = h_text_rects;
+    h.hit_test = h_hit_test;
     h.computed_style = h_computed_style;
     h.viewport = h_viewport;
     h.scroll_to = h_scroll_to;
@@ -627,6 +661,9 @@ static bool ensure_js(AuDocScript *s)
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
+    h.sheet_construct = h_sheet_construct;
+    h.sheet_destroy = h_sheet_destroy;
+    h.sheets_adopt = h_sheets_adopt;
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;

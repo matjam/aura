@@ -390,7 +390,11 @@ static void set_doc_subtree(AuNode *root, AuDocument *doc)
     for (;;) {
         if (root->doc != doc) {
             for (AuNode *n = root; n; n = au_node_next(n, root)) {
+                if ((n->flags & AU_NODEF_MANUAL) && n->doc)
+                    au_manual_slots_removed(n->doc, n); /* the old document's pairs hold no references */
                 n->doc = doc;
+                if (n->type == AU_NODE_ELEMENT && ((AuElement *)n)->shadow_root)
+                    doc->has_shadow = true;
                 if (n->type == AU_NODE_ELEMENT) {
                     AuElement *e = (AuElement *)n;
                     if (e->template_content)
@@ -1797,14 +1801,22 @@ static JSValue g_outer_html(JSContext *ctx, JSValueConst this_val)
 
 /* Parses html with context as the context element; returns a fragment
  * (owned by the caller). */
-static AuNode *parse_fragment(AuElement *context, const char *html, size_t len)
+static AuNode *parse_fragment_ex(AuElement *context, const char *html, size_t len, bool declarative)
 {
     AuHtmlOptions o;
     memset(&o, 0, sizeof o);
     o.scripting = true;
     o.encoding = AU_HTML_ENC_UTF8;
+    o.declarative_shadow = declarative;
     return au_html_parse_fragment(context, html, len, &o);
 }
+
+static AuNode *parse_fragment(AuElement *context, const char *html, size_t len)
+{
+    return parse_fragment_ex(context, html, len, false);
+}
+
+static JSValue set_inner(JSContext *ctx, JSValueConst this_val, JSValueConst val, bool declarative);
 
 /* Moves the fragment's children before ref in parent (ref NULL: append). */
 static void splice_fragment(AuNode *parent, AuNode *frag, AuNode *ref)
@@ -1816,6 +1828,17 @@ static void splice_fragment(AuNode *parent, AuNode *frag, AuNode *ref)
 }
 
 static JSValue s_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst val)
+{
+    return set_inner(ctx, this_val, val, false);
+}
+
+/* setHTMLUnsafe(html): innerHTML with declarative shadow roots. */
+static JSValue m_set_html_unsafe(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    return set_inner(ctx, this_val, argc > 0 ? argv[0] : JS_UNDEFINED, true);
+}
+
+static JSValue set_inner(JSContext *ctx, JSValueConst this_val, JSValueConst val, bool declarative)
 {
     JSTHIS(n);
     AuElement *context;
@@ -1841,7 +1864,7 @@ static JSValue s_inner_html(JSContext *ctx, JSValueConst this_val, JSValueConst 
         au_node_unref(tmp);
         return JS_EXCEPTION;
     }
-    AuNode *frag = parse_fragment(context, s, len);
+    AuNode *frag = parse_fragment_ex(context, s, len, declarative);
     au_free(s);
     au_node_unref(tmp);
     au_node_ref(target);
@@ -1964,6 +1987,7 @@ static void doc_reparse(AuJs *js, AuDocument *d)
     AuHtmlOptions o;
     memset(&o, 0, sizeof o);
     o.scripting = true; /* as the document was parsed: noscript content stays text */
+    o.declarative_shadow = true;
     AuDocument *nd = au_html_parse(js->open_buf.data ? js->open_buf.data : "", js->open_buf.len, &o);
     remove_all_children(&d->node);
     d->quirks = nd->quirks;
@@ -2087,17 +2111,7 @@ static JSValue m_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 
 static bool valid_shadow_host(const AuElement *e)
 {
-    if (e->ns != AU_NS_HTML)
-        return false;
-    static const char *const ok[] = {"article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3",
-                                     "h4", "h5", "h6", "header", "main", "nav", "p", "section", "span"};
-    const char *s = au_atom_str(e->tag);
-    if (strchr(s, '-'))
-        return true;
-    for (size_t i = 0; i < JS_COUNTOF(ok); i++)
-        if (!strcmp(s, ok[i]))
-            return true;
-    return false;
+    return au_element_can_host_shadow(e);
 }
 
 static JSValue m_attach_shadow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -2207,6 +2221,58 @@ static JSValue g_assigned_slot(JSContext *ctx, JSValueConst this_val)
     return js_wrap(js, s ? &s->node : NULL);
 }
 
+/* Pushes what slot s offers onto a stack in reverse: its assigned nodes,
+ * or with none its element and text children (the fallback). */
+static bool push_offered(AuElement *s, AuNode ***st, size_t *n, size_t *cap)
+{
+    size_t cnt = au_slot_assigned_nodes(s, NULL, 0);
+    size_t start = *n;
+    if (cnt) {
+        if (*n + cnt > *cap) {
+            *cap = (*n + cnt) * 2;
+            *st = au_realloc(*st, *cap * sizeof **st);
+        }
+        au_slot_assigned_nodes(s, *st + *n, cnt);
+        *n += cnt;
+    } else {
+        for (AuNode *c = s->node.first_child; c; c = c->next) {
+            if (c->type != AU_NODE_ELEMENT && c->type != AU_NODE_TEXT)
+                continue;
+            if (*n == *cap) {
+                *cap = *cap ? *cap * 2 : 16;
+                *st = au_realloc(*st, *cap * sizeof **st);
+            }
+            (*st)[(*n)++] = c;
+        }
+    }
+    for (size_t i = start, j = *n; i + 1 < j; i++, j--) {
+        AuNode *t = (*st)[i];
+        (*st)[i] = (*st)[j - 1];
+        (*st)[j - 1] = t;
+    }
+    return true;
+}
+
+/* assignedNodes({flatten: true}): slots among the assigned nodes (in
+ * shadow trees) are replaced by what they offer, with an explicit stack. */
+static JSValue assigned_flat(JSContext *ctx, AuJs *js, AuElement *slot, JSValue arr)
+{
+    AuNode **st = NULL;
+    size_t n = 0, cap = 0;
+    uint32_t out = 0;
+    push_offered(slot, &st, &n, &cap);
+    while (n) {
+        AuNode *c = st[--n];
+        if (au_is_html_element(c, AU_ATOM_slot) && au_is_shadow_root(au_node_root(c))) {
+            push_offered((AuElement *)c, &st, &n, &cap);
+            continue;
+        }
+        JS_SetPropertyUint32(ctx, arr, out++, js_wrap(js, c));
+    }
+    au_free(st);
+    return arr;
+}
+
 /* assigned(slot, flatten): the assigned nodes as an array. */
 static JSValue n_assigned(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -2215,6 +2281,8 @@ static JSValue n_assigned(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     JSValue arr = JS_NewArray(ctx);
     if (!n || !au_is_html_element(n, AU_ATOM_slot))
         return arr;
+    if (argc > 1 && JS_ToBool(ctx, argv[1]) > 0)
+        return assigned_flat(ctx, js, (AuElement *)n, arr);
     size_t cnt = au_slot_assigned_nodes((AuElement *)n, NULL, 0);
     if (!cnt)
         return arr;
@@ -2228,6 +2296,58 @@ static JSValue n_assigned(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     }
     au_free(v);
     return arr;
+}
+
+/* slotAssign(slot, nodes): manual slot assignment (slot.assign). At most
+ * 4096 nodes are taken. */
+#define MAX_MANUAL_ASSIGN 4096
+static void host_changed(AuJs *js, AuElement *host)
+{
+    if (host && host->shadow_root && js->hooks.dom_changed)
+        js->hooks.dom_changed(js->hooks.ctx, &host->node, 0, AU_JS_CHANGE_CHILDREN);
+}
+
+static JSValue n_slot_assign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *s = argc > 1 ? arg_node(js, argv[0]) : NULL;
+    if (!s || !au_is_html_element(s, AU_ATOM_slot))
+        return JS_UNDEFINED;
+    int64_t len = 0;
+    JSValue lv = JS_GetPropertyStr(ctx, argv[1], "length");
+    int bad = JS_ToInt64(ctx, &len, lv);
+    JS_FreeValue(ctx, lv);
+    if (bad < 0)
+        return JS_EXCEPTION;
+    if (len < 0)
+        len = 0;
+    if (len > MAX_MANUAL_ASSIGN)
+        len = MAX_MANUAL_ASSIGN;
+    AuNode **v = len ? au_alloc((size_t)len * sizeof *v) : NULL;
+    size_t n = 0;
+    for (int64_t i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        AuNode *c = js_unwrap(js, e);
+        JS_FreeValue(ctx, e);
+        if (c)
+            v[n++] = au_node_ref(c); /* held across the getters' script */
+    }
+    /* the hosts whose children move: the slot's, and those of the nodes
+     * (taken from other slots) */
+    AuElement *slot = (AuElement *)s;
+    for (size_t i = 0; i < n; i++)
+        if (v[i]->parent && v[i]->parent->type == AU_NODE_ELEMENT && v[i]->parent != (AuNode *)au_node_tree_host(s))
+            host_changed(js, (AuElement *)v[i]->parent);
+    size_t old = au_slot_assigned_nodes(slot, NULL, 0);
+    au_slot_assign(slot, v, n);
+    for (size_t i = 0; i < n; i++)
+        au_node_unref(v[i]);
+    au_free(v);
+    host_changed(js, au_node_tree_host(s));
+    if (old || n)
+        js_slots_touched(js);
+    return JS_UNDEFINED;
 }
 
 /* host(node): the shadow host when node is a shadow root, else null. */
@@ -2249,41 +2369,28 @@ static JSValue g_template_content(JSContext *ctx, JSValueConst this_val)
     return js_wrap(js, e->template_content);
 }
 
-/* Declarative shadow roots: converts <template shadowrootmode> elements
- * in root's subtree that are complete (the parser has moved past them or
- * final is set) into shadow roots of their parents. */
-static JSValue n_declarative_shadow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* declarativeRoots(seen): the parser makes declarative shadow roots
+ * without script; the prelude tracks them for slotchange. null when the
+ * document's count is still seen, else [count, ...declarative roots of
+ * the document]. */
+static JSValue n_declarative_roots(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
+    (void)this_val;
     AuJs *js = js_of_ctx(ctx);
-    AuNode *root = argc > 0 ? arg_node(js, argv[0]) : &js->doc->node;
-    if (!root)
-        root = &js->doc->node;
-    bool final = argc > 1 && JS_ToBool(ctx, argv[1]);
-    AuAtom mode_attr = au_atom("shadowrootmode", 14);
-    int done = 0;
-    for (AuNode *c = root->first_child; c;) {
-        AuNode *nx = au_node_next(c, root);
-        if (au_is_html_element(c, AU_ATOM_template) && c->parent && c->parent->type == AU_NODE_ELEMENT &&
-            (final || c->next)) {
-            AuElement *t = (AuElement *)c;
-            const char *m = au_element_get_attr(t, mode_attr);
-            AuElement *host = (AuElement *)c->parent;
-            if (m && (!strcmp(m, "open") || !strcmp(m, "closed")) && !host->shadow_root && valid_shadow_host(host)) {
-                AuShadowRoot *sr = au_element_attach_shadow(host, !strcmp(m, "open") ? AU_SHADOW_OPEN : AU_SHADOW_CLOSED);
-                sr->declarative = 1;
-                sr->delegates_focus = au_element_get_attr(t, au_atom("shadowrootdelegatesfocus", 24)) != NULL;
-                sr->clonable = au_element_get_attr(t, au_atom("shadowrootclonable", 18)) != NULL;
-                sr->serializable = au_element_get_attr(t, au_atom("shadowrootserializable", 22)) != NULL;
-                if (t->template_content)
-                    splice_fragment(&sr->node, t->template_content, NULL);
-                nx = au_node_next_skip(c, root);
-                au_node_remove(c);
-                done++;
-            }
-        }
-        c = nx;
-    }
-    return JS_NewInt32(ctx, done);
+    uint32_t seen = 0;
+    if (!js->doc || (argc > 0 && JS_ToUint32(ctx, &seen, argv[0]) < 0))
+        return JS_NULL;
+    AuNode *root = &js->doc->node;
+    if (js->doc->declarative_roots == seen)
+        return JS_NULL;
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t k = 0;
+    JS_SetPropertyUint32(ctx, arr, k++, JS_NewUint32(ctx, js->doc->declarative_roots));
+    for (AuNode *c = root; c; c = au_node_next_including_shadow(c, root))
+        if (c->type == AU_NODE_ELEMENT && ((AuElement *)c)->shadow_root &&
+            ((AuShadowRoot *)((AuElement *)c)->shadow_root)->declarative)
+            JS_SetPropertyUint32(ctx, arr, k++, js_wrap(js, ((AuElement *)c)->shadow_root));
+    return arr;
 }
 
 /* ---- Custom element support ---- */
@@ -2446,6 +2553,7 @@ static JSValue n_parse_html_document(JSContext *ctx, JSValueConst this_val, int 
     AuHtmlOptions o;
     memset(&o, 0, sizeof o);
     o.scripting = false;
+    o.declarative_shadow = argc > 1 && JS_ToBool(ctx, argv[1]) > 0; /* Document.parseHTMLUnsafe */
     AuDocument *d = au_html_parse(s ? s : "", n, &o);
     au_free(s);
     js_keep_doc(js, d);
@@ -2565,6 +2673,7 @@ static const JSCFunctionListEntry element_proto[] = {
     JS_CFUNC_DEF("webkitMatchesSelector", 1, m_matches),
     JS_CFUNC_DEF("closest", 1, m_closest),
     JS_CGETSET_DEF("innerHTML", g_inner_html, s_inner_html),
+    JS_CFUNC_DEF("setHTMLUnsafe", 1, m_set_html_unsafe),
     JS_CGETSET_DEF("outerHTML", g_outer_html, s_outer_html),
     JS_CFUNC_DEF("insertAdjacentHTML", 2, m_insert_adjacent_html),
     JS_CFUNC_DEF("attachShadow", 1, m_attach_shadow),
@@ -2618,6 +2727,7 @@ static const JSCFunctionListEntry shadow_proto[] = {
     JS_CGETSET_MAGIC_DEF("clonable", g_sr_prop, NULL, 3),
     JS_CGETSET_MAGIC_DEF("serializable", g_sr_prop, NULL, 4),
     JS_CGETSET_DEF("innerHTML", g_inner_html, s_inner_html),
+    JS_CFUNC_DEF("setHTMLUnsafe", 1, m_set_html_unsafe),
 };
 
 static const JSCFunctionListEntry doctype_proto[] = {
@@ -2641,8 +2751,9 @@ static const JSCFunctionListEntry dom_natives[] = {
     JS_CFUNC_DEF("version", 1, n_version),
     JS_CFUNC_DEF("shadowRootOf", 1, n_shadow_root_of),
     JS_CFUNC_DEF("assigned", 1, n_assigned),
+    JS_CFUNC_DEF("slotAssign", 2, n_slot_assign),
     JS_CFUNC_DEF("hostOf", 1, n_host_of),
-    JS_CFUNC_DEF("declarativeShadow", 2, n_declarative_shadow),
+    JS_CFUNC_DEF("declarativeRoots", 1, n_declarative_roots),
     JS_CFUNC_DEF("setDefined", 2, n_set_defined),
     JS_CFUNC_DEF("setTopLayer", 3, n_set_top_layer),
     JS_CFUNC_DEF("topLayer", 0, n_top_layer),

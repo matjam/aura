@@ -161,6 +161,7 @@ struct HtmlTreeBuilder {
     uint32_t nselectedcontent; /* selectedcontent elements created */
     uint8_t mode, orig_mode;
     bool scripting, frameset_ok, foster, skip_lf, stopped;
+    bool declarative_shadow; /* <template shadowrootmode> makes shadow roots */
     AuElement *head, *form, *context;
     AuBuf pending;        /* pending table character tokens */
 
@@ -1404,6 +1405,43 @@ static bool token_has_attr(const HtmlToken *t, AuAtom name)
     return false;
 }
 
+/* A <template shadowrootmode> start tag (HTML 13.2.6.4.4): when
+ * declarative shadow roots are allowed and the adjusted current node is
+ * not the html element, the template goes on the stack only and its
+ * contents are a new shadow root of that node, into which the parser
+ * then inserts. A node that cannot take one (it already has a shadow
+ * root, or attachShadow would refuse it) gets the template as a child.
+ * Returns false when the tag is an ordinary template. */
+static bool declarative_template(HtmlTreeBuilder *tb, const HtmlToken *t)
+{
+    AuAtom mode_attr = au_atom_lookup("shadowrootmode", 14);
+    AuElement *host = adjusted_cur(tb);
+    if (!tb->declarative_shadow || !mode_attr || !host || !tb->depth || host == tb->stack[0])
+        return false;
+    int mode = has_attr_ci(t, mode_attr, "open") ? AU_SHADOW_OPEN : has_attr_ci(t, mode_attr, "closed") ? AU_SHADOW_CLOSED : -1;
+    if (mode < 0)
+        return false;
+    AuElement *tmpl = create_element(tb, AU_ATOM_template, AU_NS_HTML, t);
+    if (host->shadow_root || !au_element_can_host_shadow(host)) {
+        insert_and_push(tb, tmpl);
+        return true;
+    }
+    AuShadowRoot *sr = au_element_attach_shadow(host, (AuShadowMode)mode);
+    sr->declarative = 1;
+    if (host->node.doc)
+        host->node.doc->declarative_roots++;
+    AuAtom a;
+    sr->clonable = (a = au_atom_lookup("shadowrootclonable", 18)) && token_has_attr(t, a);
+    sr->serializable = (a = au_atom_lookup("shadowrootserializable", 22)) && token_has_attr(t, a);
+    sr->delegates_focus = (a = au_atom_lookup("shadowrootdelegatesfocus", 24)) && token_has_attr(t, a);
+    if (tmpl->template_content)
+        au_node_unref(tmpl->template_content);
+    tmpl->template_content = au_node_ref(&sr->node);
+    push(tb, tmpl);
+    au_node_unref(&tmpl->node);
+    return true;
+}
+
 static void merge_attrs(AuElement *e, const HtmlToken *t)
 {
     for (uint32_t i = 0; i < t->nattrs; i++)
@@ -2029,7 +2067,8 @@ static void in_head(HtmlTreeBuilder *tb, HtmlToken *t)
             tb->frameset_ok = false;
             tb->mode = M_IN_TEMPLATE;
             push_tmpl_mode(tb, M_IN_TEMPLATE);
-            /* Declarative shadow roots are not enabled: a plain template. */
+            if (declarative_template(tb, t))
+                return;
             insert_html(tb, t);
             return;
         }
@@ -3294,6 +3333,11 @@ HtmlTreeBuilder *html_tb_new(AuDocument *doc, HtmlTokenizer *tok, bool scripting
     tb->afe_tag_count = au_calloc(AU_ATOM_STATIC_COUNT * sizeof *tb->afe_tag_count);
     au_buf_init(&tb->pending);
     return tb;
+}
+
+void html_tb_set_declarative_shadow(HtmlTreeBuilder *tb, bool on)
+{
+    tb->declarative_shadow = on;
 }
 
 void html_tb_set_fragment_context(HtmlTreeBuilder *tb, AuElement *context)

@@ -170,13 +170,18 @@ relatively positioned box that sticks out reaches them only at the next
 relayout, which keeps the offset positions of reused content.
 [`known-gaps.md`](known-gaps.md) has the reduced case.
 
-**To extend it** to shadow trees, make `find_root` and the recording in
-`au_layout_node_changed` follow the flat tree (a slotted node's slot,
-a shadow root's host) instead of `parent`; today a node in a shadow tree
-is ignored, as shadow trees have no boxes. A restyle that depends on a
-box's size (container queries) can feed the boxes whose style changed
-to `au_layout_styles_changed` as it is; a difference that changes the
-boxes is then rebuilt there, not in the whole tree.
+**Shadow trees.** In a document with a shadow root, `find_root` and
+`in_place` follow the flat tree (`au_flat_parent`: a slotted node's
+slot, a shadow root's host), and a box whose node no slot takes any
+more is not in place. The document view records a change to a host's
+children, to a shadow root's children or to a subtree with a slot in a
+shadow tree on the host's parent, so the host's boxes are built again
+("Shadow trees" below). The differential check walks the flat tree.
+
+A restyle that depends on a box's size (container queries) can feed the
+boxes whose style changed to `au_layout_styles_changed` as it is; a
+difference that changes the boxes is then rebuilt there, not in the
+whole tree.
 To run the tests and fuzzers under it, configure a tree with
 `cmake -S . -B build/check -G Ninja -DCMAKE_C_FLAGS=-DAURA_INCR_CHECK`
 and run `ctest --test-dir build/check` or a fuzzer from it. The check
@@ -371,6 +376,32 @@ no top layer, the test returns at once.
 
 The cases are in `tests/layout/cases/top_layer.txt`; a `script` line
 before a case's HTML runs its scripts.
+
+### Shadow trees
+
+To lay out a document with shadow trees, nothing extra is needed: the
+box tree is built from the flat tree (`boxtree.c`, `Builder.flat`)
+whenever `AuDocument.has_shadow` is set.
+
+- A host's boxes come from its shadow root's children; its own children
+  get boxes only where a slot takes them.
+- A slot is `display: contents` (the UA sheet), so its assigned nodes,
+  or its fallback children when nothing is assigned, lay out in the
+  slot's parent.
+- Text takes the style of its flat parent (`current_style`).
+- Hit testing reports the element of the box under the point; the link
+  of a hit is the nearest `<a href>` up the flat tree, so text slotted
+  into a link of a shadow tree is a link. Script sees the result
+  retargeted (`elementFromPoint`, [`javascript.md`](javascript.md),
+  "Shadow DOM").
+- Selection order (`au_node_order`) follows the flat tree; find in page
+  searches the text boxes, so it finds text in shadow trees.
+- `src/dom/shadow.c` holds the flat tree walks: `au_flat_first_child`,
+  `au_flat_next_sibling`, `au_flat_parent`, `au_flat_next` (preorder,
+  iterative) and `au_node_in_flat_tree`.
+
+The cases are in `tests/layout/cases/shadow.txt` (declarative shadow
+roots, so they need no script).
 
 ### Hit testing follows the paint order and its clips
 

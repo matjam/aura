@@ -289,31 +289,71 @@ function makeMediaList(get, set) {
 class StyleSheet {
     constructor(key) { if (key !== S.owner) throw new TypeError('Illegal constructor'); }
     get type() { return 'text/css'; }
-    get ownerNode() { return this._el; }
+    get ownerNode() { return this._el || null; }
     get parentStyleSheet() { return null; }
-    get title() { return this._el.getAttribute('title') || null; }
+    get title() { return this._el ? this._el.getAttribute('title') || null : null; }
     get href() {
-        if (this._el.localName !== 'link') return null;
+        if (!this._el || this._el.localName !== 'link') return null;
         const t = N.sheetText(this._el);
         return t ? t[1] : this._el.href;
     }
-    get media() { return makeMediaList(() => this._el.getAttribute('media') || '', (v) => this._el.setAttribute('media', v)); }
+    get media() {
+        if (!this._el) return makeMediaList(() => this._media, (v) => { this._media = v; N.sheetConstruct(this._cid, null, v, null); });
+        return makeMediaList(() => this._el.getAttribute('media') || '', (v) => this._el.setAttribute('media', v));
+    }
+    set media(v) { this.media.mediaText = v; }
     get disabled() { return this._disabled; }
     set disabled(v) {
         v = !!v;
         if (v === this._disabled) return;
         this._disabled = v;
-        N.sheetDisable(this._el, v);
+        if (this._el) N.sheetDisable(this._el, v);
+        else N.sheetConstruct(this._cid, null, null, v);
     }
 }
+/* Constructed sheets (new CSSStyleSheet()) have an id the document view
+ * knows them by; adoptedStyleSheets names them by id. The view frees a
+ * sheet when its object is collected and no tree adopts it. */
+let nextSheetId = 0;
+const sheetGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry((id) => N.sheetDestroy(id)) : null;
+const dropImports = (s) => {
+    const before = s._rules().length;
+    s._list = s._list.filter((r) => r._kind !== 'import');
+    if (s._list.length !== before) s._sync();
+};
 class CSSStyleSheet extends StyleSheet {
+    constructor(opts) {
+        super(S.owner);
+        if (opts === S.owner) return;
+        opts = opts == null ? {} : opts;
+        const media = opts.media === undefined ? '' : typeof opts.media === 'string' ? opts.media : str(Array.from(opts.media).join(', '));
+        const id = ++nextSheetId;
+        Object.defineProperties(this, {
+            _cid: { value: id }, _ctext: { value: '', writable: true }, _media: { value: media, writable: true },
+            _disabled: { value: !!opts.disabled, writable: true }, _list: { value: [], writable: true },
+            _parsed: { value: null, writable: true },
+        });
+        N.sheetConstruct(id, '', media, !!opts.disabled);
+        if (sheetGone) sheetGone.register(this, id);
+    }
     get ownerRule() { return null; }
     get cssRules() { return makeRuleList(this._rules()); }
     get rules() { return this.cssRules; }
+    replaceSync(text) {
+        if (!this._cid) throw domErr('Only a constructed style sheet can be replaced', 'NotAllowedError');
+        this._ctext = str(text);
+        N.sheetConstruct(this._cid, this._ctext, null, null);
+        dropImports(this);
+    }
+    replace(text) {
+        try { this.replaceSync(text); } catch (e) { return Promise.reject(e); }
+        return Promise.resolve(this);
+    }
     /* The sheet's text now: the document view's (which holds what script
      * wrote back), or for a style element in an embedder without sheets
      * its text content. */
     _source() {
+        if (this._cid) return this._ctext;
         const t = N.sheetText(this._el);
         if (t) {
             if (this._el.localName === 'link' && !N.sameOrigin(t[1]))
@@ -338,12 +378,13 @@ class CSSStyleSheet extends StyleSheet {
     _sync() {
         const text = this._list.map((r) => r.cssText).join('\n');
         this._parsed = text;
-        if (N.sheetText(this._el)) N.sheetSetText(this._el, text);
+        if (this._cid) { this._ctext = text; N.sheetConstruct(this._cid, text, null, null); } else if (N.sheetText(this._el)) N.sheetSetText(this._el, text);
         else this._written = text;
     }
     insertRule(text, index = 0) {
         const rules = this._rules();
         const r = parseOneRule(text, this, null);
+        if (this._cid && r._kind === 'import') throw domErr('A constructed style sheet cannot have @import rules', 'SyntaxError');
         index >>>= 0;
         if (index > rules.length) throw domErr('The index is past the end of the rules', 'IndexSizeError');
         const isImport = (x) => x._kind === 'import';
@@ -406,6 +447,55 @@ defProps(DP, {
         return arrayLike(StyleSheetList.prototype, out);
     },
 });
+/* adoptedStyleSheets: an array (a proxy) whose changes reach the view. */
+const adoptedLists = new WeakMap();
+const checkAdoptable = (s) => {
+    if (!(s instanceof CSSStyleSheet) || !s._cid) throw new TypeError('Only constructed style sheets can be adopted');
+    return s;
+};
+function adoptedOf(scope) {
+    let l = adoptedLists.get(scope);
+    if (!l) {
+        const arr = [];
+        const sync = () => N.sheetsAdopt(scope, arr.map((s) => s._cid));
+        l = new Proxy(arr, {
+            set(t, k, v) {
+                if (typeof k === 'string' && /^\d+$/.test(k)) checkAdoptable(v);
+                const ok = Reflect.set(t, k, v);
+                sync();
+                return ok;
+            },
+            deleteProperty(t, k) { const ok = Reflect.deleteProperty(t, k); sync(); return ok; },
+        });
+        l = { arr, proxy: l };
+        adoptedLists.set(scope, l);
+    }
+    return l;
+}
+const adoptedProps = {
+    get adoptedStyleSheets() { return adoptedOf(this).proxy; },
+    set adoptedStyleSheets(v) {
+        const items = Array.from(v, checkAdoptable);
+        const { arr } = adoptedOf(this);
+        arr.length = 0;
+        arr.push(...items);
+        N.sheetsAdopt(this, items.map((s) => s._cid));
+    },
+};
+defProps(DP, adoptedProps);
+if (typeof ShadowRoot === 'function') {
+    defProps(ShadowRoot.prototype, adoptedProps);
+    defProps(ShadowRoot.prototype, {
+        get styleSheets() {
+            const out = [];
+            for (const el of this.querySelectorAll('style, link')) {
+                const s = sheetFor(el);
+                if (s) out.push(s);
+            }
+            return arrayLike(StyleSheetList.prototype, out);
+        },
+    });
+}
 for (const C of [CSSRule, CSSStyleRule, CSSGroupingRule, CSSConditionRule, CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule,
     CSSImportRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSRuleList, MediaList, StyleSheet,
     CSSStyleSheet, StyleSheetList]) {
