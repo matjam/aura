@@ -21,7 +21,8 @@
 
 enum { kW = 616, kH = 392 }; /* fits a 640 by 480 screen; seven tabs need the width */
 enum { NPANES = 7 };
-enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO, M_SMEM, M_WMEM };
+/* 155 is the Blocking pane's update menu (prefs_blocking.c). */
+enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO, M_SMEM = 156, M_WMEM };
 
 /* Field ids: one per control whose value is a preference or an action. */
 typedef enum {
@@ -115,6 +116,18 @@ static void small_label(PrefsWin *p, int pane, short x, short y, short w, short 
     st.flags = kAuControlUseFontMask;
     st.font = kAuControlFontSmallSystemFont;
     SetControlFontStyle(c, &st);
+}
+
+/* A line of small text whose words are set later. */
+static ControlHandle small_note(PrefsWin *p, int pane, short x, short y, short w)
+{
+    ControlHandle c = make(p, pane, kAuControlStaticTextProc, x, y, w, 14, NULL, 0, 0, 0);
+    AuControlFontStyleRec st;
+    memset(&st, 0, sizeof st);
+    st.flags = kAuControlUseFontMask;
+    st.font = kAuControlFontSmallSystemFont;
+    SetControlFontStyle(c, &st);
+    return c;
 }
 
 static void edit(PrefsWin *p, int pane, Field f, short x, short y, short w)
@@ -264,23 +277,23 @@ static void build(PrefsWin *p)
     check(p, 2, F_POPUPS, L, y, 300, "Block pop-up windows");
     y += 40;
     /* Script memory: Automatic, or the user's own limit in megabytes. */
-    label(p, 2, L, y, 170, "Script memory per page:");
+    label(p, 2, L, y, 190, "Script memory per page:");
     m = popup_menu(M_SMEM);
     mac_append_item(m, "Automatic");
     mac_append_item(m, "Custom");
-    popup(p, 2, F_SMEM_MODE, 200, y, 120, M_SMEM, m);
-    edit(p, 2, F_SMEM_MB, 328, y, 50);
-    label(p, 2, 384, y, 30, "MB");
-    p->smem_auto = make(p, 2, kAuControlStaticTextProc, 416, (short)(y + 2), 190, 16, NULL, 0, 0, 0);
+    popup(p, 2, F_SMEM_MODE, 222, y, 112, M_SMEM, m);
+    edit(p, 2, F_SMEM_MB, 340, y, 46);
+    label(p, 2, 390, y, 26, "MB");
+    p->smem_auto = small_note(p, 2, 420, (short)(y + 4), 186);
     y += 30;
-    label(p, 2, L, y, 170, "Script memory per worker:");
+    label(p, 2, L, y, 190, "Script memory per worker:");
     m = popup_menu(M_WMEM);
     mac_append_item(m, "Automatic");
     mac_append_item(m, "Custom");
-    popup(p, 2, F_WMEM_MODE, 200, y, 120, M_WMEM, m);
-    edit(p, 2, F_WMEM_MB, 328, y, 50);
-    label(p, 2, 384, y, 30, "MB");
-    p->wmem_auto = make(p, 2, kAuControlStaticTextProc, 416, (short)(y + 2), 190, 16, NULL, 0, 0, 0);
+    popup(p, 2, F_WMEM_MODE, 222, y, 112, M_WMEM, m);
+    edit(p, 2, F_WMEM_MB, 340, y, 46);
+    label(p, 2, 390, y, 26, "MB");
+    p->wmem_auto = small_note(p, 2, 420, (short)(y + 4), 186);
     y += 28;
     small_label(p, 2, L, y, R - L, 58,
                 "How much memory the scripts of one page, and of each worker a page starts, may use. Automatic "

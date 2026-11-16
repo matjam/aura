@@ -241,8 +241,27 @@ block has an 8-byte header that says which kind it is. This applies to
 every allocation, not only to script. Develop > Performance shows how
 much temporary memory the heap has taken.
 
-Not verified: this path has been compiled for PowerPC but not run in
-the guest or on a real machine.
+Not verified: the temporary memory path has been compiled for PowerPC
+and Aura ran in the stock guest with the new block headers, but the
+guest's heap never ran short (47 MB free), so no block came from
+temporary memory there. To exercise it, lower Aura's partition in Get
+Info to 12 MB and load a heavy page; Develop > Performance then shows
+"KB taken by Aura's heap" above 0.
+
+### Measured in the guest
+
+Stock base, 2026-11-15, the generated 830 KB script of
+`tests/browser/test_script_memory.c` loaded by a page, two `srcdoc`
+frames and a worker (`run/guest/mem.html`, pushed with the
+application): the page, both frames and the worker computed the same
+value, so bytecode written by one context and read by another, and by
+a worker's runtime, works on PowerPC. Develop > Performance showed the
+page's runtime at 10,766 KB with a peak of 12,585 KB (limit 98,304 KB:
+Automatic with 47 MB of heap and 404 MB of temporary memory free), the
+page's document at 4,555 KB, each frame at about 3,100 KB with a peak
+of 4,500 KB, and the worker at 3,631 KB with a peak of 3,785 KB (limit
+32,768 KB). The load took 1.35 s. With "Script memory per page" set to
+Custom, 48 MB, the next load showed a limit of 49,152 KB.
 
 ### Tests
 
