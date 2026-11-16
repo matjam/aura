@@ -48,7 +48,9 @@ typedef enum AuCommand {
     AU_CMD_SAVE_LINK,
     AU_CMD_SAVE_IMAGE,
     /* the page: "Turn Off (On) Blocking for This Site" */
-    AU_CMD_TOGGLE_BLOCKING
+    AU_CMD_TOGGLE_BLOCKING,
+    /* a tab: "Unload Tab" (au_bw_unload_tab) */
+    AU_CMD_UNLOAD_TAB
 } AuCommand;
 
 typedef enum AuContextKind {

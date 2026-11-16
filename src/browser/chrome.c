@@ -671,6 +671,15 @@ static const char *tab_label(const AuChromeTab *t)
     return t->title && *t->title ? t->title : "Untitled";
 }
 
+/* A tab's title: dimmed for an unloaded tab (its document was freed and
+ * loads again when the tab is selected). */
+static AuColor tab_ink(const AuChromeState *s, int i)
+{
+    if (s->tabs[i].unloaded)
+        return AU_RGB(142, 142, 142);
+    return s->active_window ? C_INK : AU_RGB(110, 110, 110);
+}
+
 static void paint_tab_top(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, const AuChromeState *s, int i)
 {
     AuIRect r = au_chrome_tab_rect(l, i);
@@ -701,7 +710,7 @@ static void paint_tab_top(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, c
         icon_page(c, (float)x0 + 7, (float)y0 + 5, AU_RGB(100, 100, 100));
     AuIRect cr = au_chrome_tab_close_rect(l, i);
     AuIRect tr = irect(x0 + 21, y0 + 1, cr.x0 - 2, y1);
-    text_in(c, lf, 12, tr, tab_label(&s->tabs[i]), s->active_window ? C_INK : AU_RGB(110, 110, 110), false);
+    text_in(c, lf, 12, tr, tab_label(&s->tabs[i]), tab_ink(s, i), false);
     if (active || hover)
         icon_close(c, cr, is(s->hover, AU_HIT_TAB_CLOSE, i),
                    is(s->hover, AU_HIT_TAB_CLOSE, i) && is(s->pressed, AU_HIT_TAB_CLOSE, i));
@@ -727,7 +736,7 @@ static void paint_tab_left(AuCanvas *c, ChromeFont lf, const AuChromeLayout *l, 
         icon_page(c, (float)r.x0 + 9, (float)r.y0 + 5, AU_RGB(100, 100, 100));
     AuIRect cr = au_chrome_tab_close_rect(l, i);
     AuIRect tr = irect(r.x0 + 25, r.y0, (active || hover) ? cr.x0 - 2 : r.x1 - 6, r.y1);
-    text_in(c, lf, 12, tr, tab_label(&s->tabs[i]), s->active_window ? C_INK : AU_RGB(110, 110, 110), false);
+    text_in(c, lf, 12, tr, tab_label(&s->tabs[i]), tab_ink(s, i), false);
     if (active || hover)
         icon_close(c, cr, is(s->hover, AU_HIT_TAB_CLOSE, i),
                    is(s->hover, AU_HIT_TAB_CLOSE, i) && is(s->pressed, AU_HIT_TAB_CLOSE, i));

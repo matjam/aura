@@ -1297,6 +1297,11 @@ bool au_docscript_can_persist(AuDocScript *s)
     return !s || !s->js || !au_js_has_unload_handler(s->js);
 }
 
+int au_docscript_workers(const AuDocScript *s)
+{
+    return s && s->js ? au_js_worker_count(s->js) : 0;
+}
+
 void au_docscript_page_transition(AuDocScript *s, bool show)
 {
     if (!s || !s->js)

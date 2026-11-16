@@ -7,10 +7,14 @@
  *     STALE entries with a validator (ETag, Last-Modified) are
  *     revalidated with If-None-Match / If-Modified-Since, and a 304
  *     updates the entry (au_cache_update) and delivers it.
- *   - au_cache_begin on a final response; au_cache_write for each decoded
- *     body chunk; au_cache_commit when the body is complete (or
- *     au_cache_abort). Bodies are stored decoded, without
- *     Content-Encoding.
+ *   - au_cache_begin on a final response; au_cache_write for each body
+ *     chunk; au_cache_commit when the body is complete (or
+ *     au_cache_abort). A body that arrived with a Content-Encoding the
+ *     client decodes (gzip, deflate, br) is stored as it arrived, with
+ *     its codings recorded in the entry (au_cache_writer_set_coding),
+ *     and decoded each time it is served; other bodies are stored as
+ *     they are. The stored response fields never include
+ *     Content-Encoding or Content-Length.
  *   - au_cache_invalidate after a successful unsafe request (POST, ...)
  *     for its URL and its same-origin Location / Content-Location.
  *
@@ -107,7 +111,13 @@ void au_cache_entry_set_revalidating(AuCacheEntry *e, bool on);
 int au_cache_entry_status(const AuCacheEntry *e);
 const char *au_cache_entry_reason(const AuCacheEntry *e);
 const AuHeaders *au_cache_entry_headers(const AuCacheEntry *e);
+/* The body as it is held: decoded, or, when au_cache_entry_coding is not
+ * NULL, still in those content codings (the response's Content-Encoding
+ * list, "gzip" or "br" usually), to be decoded by whoever serves it.
+ * au_cache_entry_plain_len is its decoded length either way. */
 const uint8_t *au_cache_entry_body(const AuCacheEntry *e, size_t *len);
+const char *au_cache_entry_coding(const AuCacheEntry *e);
+size_t au_cache_entry_plain_len(const AuCacheEntry *e);
 const char *au_cache_entry_etag(const AuCacheEntry *e);          /* NULL when none */
 const char *au_cache_entry_last_modified(const AuCacheEntry *e); /* NULL when none */
 bool au_cache_entry_immutable(const AuCacheEntry *e);
@@ -117,6 +127,13 @@ AuCacheWriter *au_cache_begin(AuHttpCache *c, const char *url, const AuHeaders *
                               const AuHeaders *resp, int64_t request_time, int64_t response_time);
 /* Returns false (and aborts the writer) when the body outgrows the limit. */
 bool au_cache_write(AuCacheWriter *w, const void *data, size_t len);
+/* To store the body as it arrived instead of decoded (a third to a fifth
+ * of the bytes for text): name its content codings before the first
+ * write, pass the bytes as they came off the wire to au_cache_write, and
+ * report the decoded bytes with au_cache_writer_plain as they are
+ * produced. The entry limit then applies to the bytes as stored. */
+void au_cache_writer_set_coding(AuCacheWriter *w, const char *coding);
+void au_cache_writer_plain(AuCacheWriter *w, size_t n);
 void au_cache_commit(AuCacheWriter *w);
 void au_cache_abort(AuCacheWriter *w);
 
@@ -145,7 +162,9 @@ int64_t au_cache_current_age(const AuHeaders *resp, int64_t request_time, int64_
 /* Serialization of one entry for AuCacheStorage (and its parser, which
  * returns NULL for damaged data). The format: "AURC1\n", then
  * status, reason, url, times and the stored request (Vary) and response
- * fields as length-prefixed strings, then the body. */
+ * fields as length-prefixed strings, then the body. An entry whose body
+ * is held encoded is "AURC2\n": the same, with the coding list and the
+ * decoded length before the body. The parser reads both. */
 void au_cache_entry_serialize(const AuCacheEntry *e, AuBuf *out);
 AuCacheEntry *au_cache_entry_parse(const void *data, size_t len);
 void au_cache_entry_free(AuCacheEntry *e); /* for a parsed entry not given to a cache */

@@ -95,6 +95,29 @@ void au_layout_free(AuLayout *L);
  * first). NULL clears it. */
 void au_layout_set_document(AuLayout *L, AuDocument *doc);
 
+/* Frees everything the layout can build again from the document and its
+ * styles: the box tree with its lines and fragments, the stacking data,
+ * the word width cache, the font lists and the scratch buffers. The
+ * selection, the focus and the pass counts stay. The next
+ * au_layout_update builds and lays out the whole tree. For a document
+ * that is kept but not shown; inner scroll offsets live in the tree, so
+ * save them first (au_layout_scroll_save). */
+void au_layout_release(AuLayout *L);
+/* The scroll offsets of the document's scroll containers (overflow:
+ * auto or scroll boxes of elements), which are lost when the tree goes.
+ * au_layout_scroll_save returns an au_alloc'd array of the containers
+ * that are scrolled, each holding a reference to its element, and sets
+ * *n (NULL and 0 when none is scrolled). au_layout_scroll_restore puts
+ * them back on a tree that is laid out, clamped to what each box can
+ * scroll now; au_layout_scroll_free drops the references and the array. */
+typedef struct AuLayoutScroll {
+    AuElement *el;
+    float x, y;
+} AuLayoutScroll;
+AuLayoutScroll *au_layout_scroll_save(AuLayout *L, uint32_t *n);
+void au_layout_scroll_restore(AuLayout *L, const AuLayoutScroll *s, uint32_t n);
+void au_layout_scroll_free(AuLayoutScroll *s, uint32_t n);
+
 /* The DOM changed (nodes inserted or removed, text changed). */
 void au_layout_tree_changed(AuLayout *L);
 /* Styles were recomputed. Call before anything else reads the layout:

@@ -103,7 +103,8 @@ limit and never reaches the fatal handler
 ([`javascript.md`](javascript.md)).
 
 In the Mac application the release handler is `release_caches` in
-`main.c`, which drops the kept documents; the out-of-memory handler
+`main.c`, which drops the kept documents and, when there are none, the
+background tabs that can be unloaded (`au_browser_release_memory`); the out-of-memory handler
 closes Open Transport before ExitToShell
 ([`mac-os-9-shell.md`](mac-os-9-shell.md)). Command-Option-M is the
 out-of-memory test.
@@ -161,6 +162,7 @@ one platform block each (they are over the pooled allocator's 2 KB).
 |---|---|---|
 | The application partition | 64 MB (12 MB at least) | |
 | Kept documents | 3 per tab, 24 MB over all tabs; the oldest is dropped while less than 6 MB of heap is free | [`browser-chrome.md`](browser-chrome.md) |
+| Background tabs | unloaded, least recently shown first, while less than 6 MB is free (heap and temporary memory together), or after 30 minutes in the background while less than 16 MB is free | [`browser-chrome.md`](browser-chrome.md) |
 | The image cache | 8 MB per document by default; one image at most half of it | [`images.md`](images.md) |
 | A decoded image | 16 MB | [`images.md`](images.md) |
 | The HTTP memory cache | 8 MB by default; 1 MB resident with the disk cache on | [`networking.md`](networking.md) |
@@ -337,6 +339,85 @@ of HTTP cache in memory) and slabs of the pooled allocator that still
 hold a live block; a second load returned the heap to within 85 KB, so
 pages are freed. The 3.5 MB of temporary memory is font data, which
 stays loaded.
+
+## Cold memory
+
+Memory held by things that are not looked at, or rarely read, is given
+up or compressed. To change any of these, start at the place named.
+
+| What | What happens | Where |
+|---|---|---|
+| A document kept for Back and Forward | frees its layout (boxes, lines, fragments, stacking data, measured words, font lists) when hidden and builds it again before the first paint on return | `au_docview_set_hidden`, `au_layout_release` ([`browser-chrome.md`](browser-chrome.md)) |
+| A background tab | is unloaded when memory is short: its document is freed and loads again when the tab is selected | `browser.c`, "Unloaded tabs" ([`browser-chrome.md`](browser-chrome.md)) |
+| The page source (Page Source, View Source, Save Page As) | is deflated once the load is over and inflated when asked for | `page_doc.c`, "The page source" |
+| HTTP cache entries | hold the body as it arrived (gzip, deflate, brotli) and decode it when served | `cache.h`, `deliver_cached` in `http.c` ([`networking.md`](networking.md)) |
+
+Computed styles stay with a kept document: an article's are 0.7 MB and
+a full style pass is 12 ms on the host. Canvas bitmaps stay (they
+cannot be made again). The DOM and the script heap are not compressed.
+
+Measured on the host (64-bit, bundled fonts, live Wikipedia,
+2026-11-15), before and after:
+
+| What | Before | After |
+|---|---|---|
+| Layout held by a kept article (Mac (computer), 11,300 boxes) | 2548 KB | 0 (68 KB for the empty layout) |
+| The same for a shorter article (Mac OS 9, 3000 boxes) | 874 KB | 0 |
+| The kept article's estimate (`au_docview_memory_estimate`) | 22.5 MB | 20.8 MB |
+| Back to a kept article, in the call | 4 ms (the shorter article; 7 to 10 ms recorded earlier) | 9 ms for the shorter article, 26 to 28 ms for the longer (22 to 24 ms of it building the layout) |
+| A background tab's article after Unload Tab | 14.8 MB estimated; 16.0 MB live | 3 KB |
+| Selecting the unloaded tab (reload from the HTTP cache) | | 550 ms |
+| Page source of the article (1085 KB of HTML) | 1060 KB | 180 KB (deflated in 6 ms, level 1) |
+| HTTP memory cache after loading the article (46 entries) | 4362 KB | 870 KB |
+| Live bytes with the one article loaded | 35.7 MB | 31.3 MB |
+
+In the guest (stock base, QEMU, 2026-11-15, live Wikipedia; the
+unload threshold was raised for the test, see
+[`browser-chrome.md`](browser-chrome.md)):
+
+| Point | Free heap | Free temporary memory |
+|---|---|---|
+| one tab, Mac OS 9 article loaded | 45,560 KB | 401,938 KB |
+| two tabs, PowerPC loaded | 29,552 KB | 401,805 KB |
+| three tabs, Mac (computer) loaded; the two background tabs were unloaded as it loaded | 34,703 KB | 401,717 KB |
+| the first tab selected (it loads again in 1.5 s; the third, now in the background, is unloaded) | 40,498 KB | 401,717 KB |
+| the same tab after going to another article and Back (one kept document, 12.0 MB estimated) | 29,498 KB | 401,717 KB |
+
+- Back to the kept article took 48 ms in the engine there (10 ms hiding
+  the page left, 31 ms building the layout again) and the page was
+  painted 220 ms after the key.
+- The page source of the Mac (computer) article (1060 KB) was held in
+  179 KB and compressed in 90 ms; the Mac OS 9 article's 303 KB in
+  53 KB, 14 ms.
+
+### The deflate encoder
+
+`src/codec/deflate.c` compresses to raw deflate, zlib or gzip
+(`codec.h` describes the interface): `au_deflate_all(fmt, level, data,
+len, &out)` for a buffer, or `au_deflate_new`, `au_deflate_run(z, &in,
+&in_len, &out, &out_len, finish)` and `au_deflate_free` for a stream.
+Level 1 is greedy matching with short chains, level 2 lazy matching;
+blocks are stored, fixed or dynamic Huffman, whichever is smallest. An
+encoder takes about 300 KB while it lives.
+
+To see sizes and speed, run `build/host/tests/codec/test_deflate
+--bench FILE...`. Measured on the host (Apple silicon, `-O2`,
+2026-11-15) on the 1085 KB article:
+
+| | Size | Deflate | Inflate |
+|---|---|---|---|
+| level 1 | 183,659 bytes (16.9%) | 245 MB/s | 435 MB/s |
+| level 2 | 159,419 bytes (14.7%) | 94 MB/s | 468 MB/s |
+| zlib level 1, for comparison | 200,446 bytes (18.5%) | 230 MB/s | |
+| zlib level 6 | 159,824 bytes (14.7%) | 89 MB/s | |
+
+In the QEMU guest level 1 ran at 11.8 MB/s (1060 KB in 90 ms), a
+twentieth of the host; no real G4 has been measured. By that ratio
+level 2 would take about 230 ms for the article and inflating it 45 ms.
+
+Tests: `tests/codec/test_deflate.c` (round trips through Aura's
+inflate), `check-deflate.py` (the same streams decoded by Python's
+zlib) and `fuzz_deflate.c` ([`fuzzing.md`](fuzzing.md)).
 
 ## What was cut on 2026-11-15
 

@@ -87,6 +87,8 @@ void au_docscript_scrolled(AuDocScript *s);
  * listener; pagehide or pageshow (persisted) when the document is hidden
  * or shown again; the script runtime's memory in bytes. NULL s is fine. */
 bool au_docscript_can_persist(AuDocScript *s);
+/* How many workers the document has (0 without a runtime). */
+int au_docscript_workers(const AuDocScript *s);
 void au_docscript_page_transition(AuDocScript *s, bool show);
 size_t au_docscript_memory(const AuDocScript *s);
 /* Layout ran: intersection and resize observers. */

@@ -727,11 +727,34 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         memset(&ps, 0, sizeof ps);
         if (bt)
             au_page_stats(bt->page, &ps);
+        if (ps.restored)
+            printf("%s: hiding the page left took %lu ms, building the layout again %lu ms\n", a,
+                   (unsigned long)ps.hide_ms, (unsigned long)ps.rebuild_ms);
         printf("%s: %s, %.1f ms in the call, %.0f ms until idle\n", a,
                ps.restored          ? "the kept document was shown"
                : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
                                     : "the page was loaded again, its document from the network",
                shown, now_ms() - t0);
+    } else if (!strncmp(a, "tab:", 4)) {
+        /* Selects tab N (from 0), timed until the tab is idle again: an
+         * unloaded tab loads here. */
+        double t0 = now_ms();
+        int n = atoi(a + 4);
+        bool was = n >= 0 && n < w->ntabs && au_page_discarded(w->tabs[n]->page);
+        au_bw_select_tab(w, n);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+        printf("tab %d selected%s, %.0f ms until idle\n", n, was ? " (it was unloaded and loaded again)" : "",
+               now_ms() - t0);
+    } else if (!strncmp(a, "unload:", 7)) {
+        /* Unloads background tab N (the tab's Unload Tab command). */
+        int n = atoi(a + 7);
+        size_t before = n >= 0 && n < w->ntabs ? au_page_memory_estimate(w->tabs[n]->page) +
+                                                     au_page_kept_bytes(w->tabs[n]->page)
+                                               : 0;
+        bool ok = au_bw_unload_tab(w, n);
+        printf("unload %d: %s; the tab held about %lu KB, now %lu KB\n", n,
+               ok ? "unloaded" : "not unloaded (active, loading, or it holds state)", (unsigned long)(before / 1024),
+               (unsigned long)(n >= 0 && n < w->ntabs ? au_page_memory_estimate(w->tabs[n]->page) / 1024 : 0));
     } else if (!strcmp(a, "mem")) {
         au_host_mem_report("now");
     } else if (!strcmp(a, "closetab")) {
@@ -751,6 +774,14 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         size_t kept = au_browser_kept_documents(b, &kept_bytes);
         printf("documents kept for Back and Forward: %lu, about %lu KB\n", (unsigned long)kept,
                (unsigned long)(kept_bytes / 1024));
+        AuTab *ct = au_bw_active_tab(w);
+        if (ct) {
+            AuPageStats ps;
+            au_page_stats(ct->page, &ps);
+            printf("page source: %lu bytes, %lu held (compressed in %lu ms); the document is about %lu KB\n",
+                   (unsigned long)ps.source_bytes, (unsigned long)ps.source_held, (unsigned long)ps.source_pack_ms,
+                   (unsigned long)(au_page_memory_estimate(ct->page) / 1024));
+        }
         if (ses->net) {
             AuDnsStats ds;
             au_net_dns_stats(ses->net, &ds);
