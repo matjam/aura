@@ -10,7 +10,7 @@
  *
  * The Mac OS 9 implementation uses the Thread Manager's cooperative
  * threads (src/platform/macos9/coro_mac.c); the host one uses a thread
- * that runs only while its resumer waits (src/platform/host/coro_host.c).
+ * that runs only while its resumer waits (src/platform/posix/coro_posix.c).
  * Without AuCoroOps a worker runs on the caller's stack, one task at a
  * time, and a long task blocks the page until it returns. */
 #ifndef AURA_CORE_CORO_H

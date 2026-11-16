@@ -1128,8 +1128,12 @@ static void add_auth_header(AuHttpTransfer *t, AuBuf *b, AuthEntry *e, const cha
                 r[4 + i] = (uint8_t)(b >> (8 * i));
             }
         }
-        for (int i = 0; i < 8; i++)
-            sprintf(cnonce + 2 * i, "%02x", r[i]);
+        static const char hex[] = "0123456789abcdef";
+        for (int i = 0; i < 8; i++) {
+            cnonce[2 * i] = hex[r[i] >> 4];
+            cnonce[2 * i + 1] = hex[r[i] & 15];
+        }
+        cnonce[16] = 0;
         e->nc++;
         au_auth_digest(&e->params, e->user, e->pass, t->method, target, e->nc, cnonce, b);
     } else {

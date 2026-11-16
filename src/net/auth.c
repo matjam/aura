@@ -219,8 +219,11 @@ static void hexdigest(bool sha256, const char *s, size_t n, char *out)
         au_md5_out(&c, d);
         dl = 16;
     }
-    for (size_t i = 0; i < dl; i++)
-        sprintf(out + 2 * i, "%02x", d[i]);
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < dl; i++) {
+        out[2 * i] = hex[d[i] >> 4];
+        out[2 * i + 1] = hex[d[i] & 15];
+    }
     out[2 * dl] = 0;
 }
 

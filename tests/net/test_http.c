@@ -358,7 +358,7 @@ static void test_pathological(void)
     /* Oversized headers */
     size_t big = 120 * 1024;
     char *h = malloc(big + 100);
-    int n = sprintf(h, "HTTP/1.1 200 OK\r\nX-Big: ");
+    int n = snprintf(h, big + 100, "HTTP/1.1 200 OK\r\nX-Big: ");
     memset(h + n, 'a', big);
     memcpy(h + n + big, "\r\n\r\n", 5);
     expect_err("oversized header", h, strlen(h), 0, false, AU_NET_ERR_TOO_LARGE);
