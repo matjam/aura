@@ -13,7 +13,7 @@ before changing anything under `src/platform/macos9`.
 |---|---|
 | `main.c` | menus and the event loop (`idle_all`, `key_down`, `release_caches`) |
 | `browserwin.c` | browser windows |
-| `listwin.c` | list windows (bookmarks, history) |
+| `listwin.c` | the Bookmarks, History, Downloads and Cookies windows, built from the list models ([`browser-chrome.md`](browser-chrome.md), "The list windows") |
 | `prefswin.c`, `prefs_blocking.c` | the Preferences window |
 | `devwin.c` | the developer windows ([`developer-tools.md`](developer-tools.md)) |
 | `storage.c` | files ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
@@ -143,10 +143,36 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 - [`forms.md`](forms.md) says how typed characters, the Edit menu,
   pop-up menus and file dialogs reach page fields.
 
+## The list windows
+
+To change a list window's rows, buttons or actions, change the model
+in `src/browser/lists.c` ([`browser-chrome.md`](browser-chrome.md),
+"The list windows"), not `listwin.c`. `listwin.c` holds only what is
+about the Toolbox:
+
+- the window, its GWorld and the copy to the screen, with the rows
+  painted by `au_listview_paint` (filled from the model with
+  `au_listview_from_list`) or, for Downloads, by `au_downloads_paint`;
+- the scroll bar, the push buttons made from `au_list_buttons` and
+  enabled with `au_list_can` (all are disabled while the window is not
+  in front), and the selection, double clicks and arrow keys;
+- the `AuListHost` callbacks: DLOG 200 asks for a name, ALRT 135 shows a
+  cookie's details (its lines cut to 100 characters over the four
+  parameters), a pop-up menu (MENU 182) under the Site Rule button
+  chooses the rule, `mac_download_reveal` reveals a download, and
+  `mac_net_rules_changed` saves the rules;
+- the idle check: `lw_idle` refreshes a window when `au_list_stale`
+  says its data changed, and repaints Downloads at most every 250 ms.
+
+`listwin_cookies_changed` (called after Clear Cookies) marks the Cookies
+window's model stale with `au_list_touch`.
+
 ## Resources by number
 
 | Resource | Use |
 |---|---|
+| DLOG 200 | asks for a name (New Folder, Rename in the Bookmarks window) |
+| ALRT 135 | a cookie's or site's details in the Cookies window |
 | DLOG 201 | the Find dialog |
 | DLOG 202 | the About box (icon family 128) |
 | ALRT 133 | offer to restore the session after a crash |
