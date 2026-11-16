@@ -39,15 +39,16 @@ static int failures, checks;
     } while (0)
 
 /* The bounds, in KB, on a 64-bit host (pointers are half the size on
- * Mac OS 9, where the same page takes about 60% of this). Measured when
- * written: the page's runtime peaked at PEAK_PAGE_MEASURED and the worker
- * at PEAK_WORKER_MEASURED; the bounds leave about 15% for compiler and
- * library differences. Before the work of 2026-11-15 the same page
- * peaked at about 24 MB and the worker at about 13 MB. */
-#define PEAK_PAGE_BOUND_KB 21000
-#define PEAK_WORKER_BOUND_KB 9500
-#define LIMIT_PAGE_KB 24576
-#define LIMIT_WORKER_KB 16384
+ * Mac OS 9, where pointer-heavy memory is smaller). Measured when
+ * written: the page's runtime peaked at 15,468 KB and the worker at
+ * 4,535 KB; the bounds leave 13% and 21% for compiler and library
+ * differences. With each context compiling the script for itself (before
+ * the compiled-script cache in src/js/runtime.c) the same page peaked at
+ * 20,625 KB and the worker at 10,581 KB, which the limits below refuse. */
+#define PEAK_PAGE_BOUND_KB 17500
+#define PEAK_WORKER_BOUND_KB 5500
+#define LIMIT_PAGE_KB 20480
+#define LIMIT_WORKER_KB 8192
 
 static AuFontSet *fonts;
 
@@ -232,7 +233,7 @@ static void test_shared_script(void)
     const char *t = au_buf_cstr(&rep);
     CHECK(strstr(t, "script runtime of http://a.test/: ") && strstr(t, "    document http://a.test/: ") &&
               strstr(t, "    frame about:srcdoc: ") && strstr(t, "  worker http://a.test/big.js: ") &&
-              strstr(t, ", peak ") && strstr(t, "limit 24576 KB") && strstr(t, "limit 16384 KB"),
+              strstr(t, ", peak ") && strstr(t, "limit 20480 KB") && strstr(t, "limit 8192 KB"),
           "summary:\n%s", t);
     au_buf_free(&rep);
     free(script);
