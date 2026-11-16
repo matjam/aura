@@ -693,6 +693,17 @@ static void run_classic(AuDocScript *s, PendingScript *p)
 {
     if (!ensure_js(s))
         return;
+    /* Frame elements the parser has inserted since the frame list was
+     * last brought up to date (that happens between parser chunks, and
+     * the parser's insertions do not mark the list): a script right
+     * after an iframe must see its window (frames.length, window[0], a
+     * frame by name, contentWindow), which the standard gives an initial
+     * about:blank document at once. The check walks the document, so it
+     * is made only while the parser runs. */
+    if (s->parser && !au_html_parser_done(s->parser)) {
+        s->dv->frames_dirty = true;
+        au_frames_sync(s->dv);
+    }
     if (p->failed) {
         fire_simple(s, p->el, "error");
         return;

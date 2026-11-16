@@ -1159,6 +1159,11 @@ void au_frames_sync(AuDocView *dv)
     dv->frames = list;
     dv->nframes = n;
     dv->frames_cap = cap;
+    /* The window gets its indexed and named frames before any frame's
+     * document starts: a srcdoc document's script runs inside the loop
+     * below and may look its siblings up through parent.frames[name]. */
+    if (changed && dv->script)
+        au_docscript_frames_changed(dv->script);
     /* New frames and frames whose attributes changed load. */
     for (uint32_t i = 0; i < dv->nframes; i++) {
         AuFrame *f = dv->frames[i];
