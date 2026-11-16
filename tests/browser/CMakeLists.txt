@@ -91,6 +91,12 @@ target_include_directories(test_bugreport PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_bugreport COMMAND test_bugreport)
 set_tests_properties(browser_bugreport PROPERTIES TIMEOUT 120)
 
+# The Preferences window's descriptions and editing session: values,
+# the old window's clamping rules, live items, Cancel and OK.
+add_executable(test_prefs_ui test_prefs_ui.c)
+target_link_libraries(test_prefs_ui aura_engine m)
+add_test(NAME browser_prefs_ui COMMAND test_prefs_ui)
+
 # Script memory: a page, two frames and a worker that share one large
 # script stay under stated peaks; out-of-memory in a worker or a page is
 # reported with the runtime, its limit and the preference to raise.
