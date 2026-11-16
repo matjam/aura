@@ -35,8 +35,9 @@ main task").
 - `aura-host render URL -w 800 -o out.png` loads a page and its
   resources over the network and renders it.
 - Set `AURA_FAKE_TIME` (seconds since 1970) to test the clock check.
-- `aura-host fetch` keeps `cookies` and `hsts` in `$AURA_PROFILE`
-  (default `~/.aura-host`).
+- `aura-host fetch` keeps `Cookies`, `HSTS` and `Intermediates` in
+  `$AURA_PROFILE` (default `~/.aura-host`), loaded and saved by
+  `au_app_load_stores` and `au_app_save_stores`.
 
 ## To try the stack on Mac OS 9
 
@@ -80,10 +81,11 @@ for `http` and `https` with `au_browser_set_fetcher`
 
 Serialize the stores with `au_cookie_jar_serialize`,
 `au_hsts_serialize` and the cache's `AuCacheStorage`, and parse them
-back at start. The Mac OS 9 application saves cookies and HSTS as
-`Cookies` and `HSTS` 5 seconds after a change and at quit, and keeps
-the disk cache in the `Cache` folder
-([`mac-os-9-shell.md`](mac-os-9-shell.md)).
+back at start. In the application this is `src/browser/app_net.c`
+(`au_app_net_start`): it saves cookies and HSTS as `Cookies` and `HSTS`
+5 seconds after a change and at quit, and keeps the disk cache in the
+`Cache` folder ([`browser-chrome.md`](browser-chrome.md), "Files Aura
+keeps").
 
 ## Cookies and `document.cookie`
 

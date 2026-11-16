@@ -23,6 +23,7 @@ The Mac OS 9 side of each feature is named here; Toolbox lessons are in
 | `credits.c` | the About box and about:licences table |
 | `lists.c` | the models of the Bookmarks, History, Downloads and Cookies windows |
 | `listview.c` | the painted list the Mac OS 9 list windows show |
+| `app.c`, `app_net.c` | the application services: the files Aura keeps, loading and saving them, session restore, the network stack set up from the preferences ("Files Aura keeps") |
 
 The model never calls the OS; the shells pass events in and show the
 rectangles it reports through `AuBrowserHost.invalidate`.
@@ -672,38 +673,98 @@ with pixels painted and copied, glyph cache counts and image decodes.
 
 ## Files Aura keeps
 
-Aura keeps its files in the Aura folder of the system Preferences
-folder:
+Aura keeps its files in a profile folder: on Mac OS 9 the Aura folder
+of the system Preferences folder. Which files there are, how each is
+parsed, the order they are loaded in, what happens to a damaged one and
+when each is saved is decided in `src/browser/app.c` and `app_net.c`
+(`browser/app.h`); the port gives only the folder primitives (see
+"To keep the files in a port" below).
 
-| File | Holds | Written by |
+| File | Holds | Kept by |
 |---|---|---|
-| `Aura Preferences` | preferences | `storage.c` |
-| `Bookmarks.html` | bookmarks (Netscape format) | `storage.c` |
-| `History` | history | `storage.c` |
-| `Session` | windows, tabs, back and forward lists, scroll positions | `storage.c` |
-| `Downloads` | the download list | `storage.c` |
-| `Favicons` | site icons | `storage.c` |
-| `Running` | exists while Aura runs | `storage.c` |
-| `Cookies`, `HSTS` | cookies and HSTS hosts | `network.c` ([`networking.md`](networking.md)) |
-| `Cache` (folder) | the disk cache | `src/net/disk_cache.c` |
-| `Intermediates` | the intermediate certificate pool | [`tls.md`](tls.md) |
-| `Random Seed` | entropy carried between runs | [`mac-os-9-shell.md`](mac-os-9-shell.md) |
-| `Blocklists` (folder) | compiled blocklists | [`content-blocking.md`](content-blocking.md) |
+| `Aura Preferences` | preferences | `app.c` |
+| `Bookmarks.html` | bookmarks (Netscape format) | `app.c` |
+| `History` | history | `app.c` |
+| `Session` | windows, tabs, back and forward lists, scroll positions | `app.c` |
+| `Downloads` | the download list | `app.c` |
+| `Favicons` | site icons | `app.c` |
+| `Running` | exists while Aura runs | `app.c` |
+| `Cookies`, `HSTS` | cookies and HSTS hosts | `app_net.c` ([`networking.md`](networking.md)) |
+| `Intermediates` | the intermediate certificate pool | `app_net.c` ([`tls.md`](tls.md)) |
+| `Cache` (folder) | the disk cache | `app_net.c`, `src/net/disk_cache.c` |
+| `Local Storage` (folder) | web storage | `app_net.c` ([`web-storage.md`](web-storage.md)) |
+| `Random Seed` | entropy carried between runs | the port ([`mac-os-9-shell.md`](mac-os-9-shell.md)) |
+| `Blocklists` (folder) | compiled blocklists | the port ([`content-blocking.md`](content-blocking.md)) |
 | `NetTest Log` | NetTest's output | [`networking.md`](networking.md) |
 
-- **Safe writes.** Each is written to a `.tmp` file and swapped in; a
-  file that fails to parse is renamed with ` (damaged)` before a new
-  one is written.
-- **The session** is saved 3 seconds after tabs change and every
-  30 seconds while only scroll positions do (`session_gen`,
-  `scroll_gen`).
+On Mac OS 9 the files have creator `AURA`: type `TEXT` in the Aura
+folder (`SEED` for `Random Seed`), `AuCa` in `Cache`, `AuLS` in
+`Local Storage`.
+
+- **Loading.** `au_app_load` reads the preferences first, then the
+  bookmarks (a missing file gives the first-run bookmarks), the history
+  (expired by the preference), the downloads and the site icons, then
+  marks Aura as running. `au_app_net_start` reads `Cookies`, `HSTS` and
+  `Intermediates` when it makes the network stack.
+- **Damaged files.** A file that fails to parse is renamed
+  `<name> (damaged)` (replacing an older one) before anything can write
+  over it, and the defaults are used. A damaged `Favicons` or
+  `Intermediates` file is only dropped: its contents are fetched again.
+- **Safe writes.** Each file is written to `<name>.tmp` and then
+  replaced (Mac OS 9: `FSpExchangeFiles`, then the volume is flushed).
+- **When to save.** `au_app_save` compares each data set's change
+  counter (`prefs_gen`, `bookmarks.generation`, `history.generation`,
+  `session_gen` with `scroll_gen`, `downloads.generation`) with the one
+  last saved, and writes a set 3 seconds after its first unsaved
+  change. Only changed sets are written; a failed write is tried again
+  after the delay. The session waits 30 seconds while only scroll
+  positions changed; site icons are written at most every 30 seconds;
+  cookies and HSTS 5 seconds after a change; web storage as
+  [`web-storage.md`](web-storage.md) says. `au_app_save(app, true)`
+  writes every changed set at once: the Mac port calls it when Aura goes
+  to the background, and `au_app_quit` at quit.
 - **Crash recovery.** `Running` is made at start and deleted after the
   last save at quit; when Aura finds it at start, the last run crashed
-  or ran out of memory, and Aura offers to restore the session
-  (ALRT 133) unless the startup preference restores it anyway. To test
-  this in the guest, press Command-Option-M (the out-of-memory test)
-  and launch Aura again.
+  or ran out of memory, and `au_app_session` returns
+  `AU_APP_RESTORE_ASK`: the Mac port offers to restore the session
+  (ALRT 133). With the startup preference set to restore it returns
+  `AU_APP_RESTORE_YES` and nothing is asked. To test this in the guest,
+  press Command-Option-M (the out-of-memory test) and launch Aura
+  again.
 - **To start with clean state in the guest**, delete that folder.
+- **On the host**, `aura-host chrome --profile DIR` loads and saves the
+  same files in `DIR` (`app_host.c`); `aura-host fetch` and `--net`
+  keep `Cookies`, `HSTS`, `Intermediates` and `Local Storage` in
+  `$AURA_PROFILE` (default `~/.aura-host`).
+
+### To keep the files in a port
+
+Fill an `AuAppPort` (`browser/app.h`): the `AuAppFiles` table, whose
+calls take a folder (NULL for the profile folder itself, else
+`AU_APP_FOLDER_CACHE` or `AU_APP_FOLDER_LOCAL_STORAGE`) and a name of
+at most 31 bytes (`read` appending to an `AuBuf` up to a size limit,
+`write` safely, `rename` replacing the target, `remove`, `exists`,
+`make_folder`, `list`), and the clocks (`ms`, `wall_time`,
+`utc_offset`; optional `wall_ms` installs script's clock, optional `us`
+times file work for System Status). Then:
+
+1. `app = au_app_new(browser, &port)`, and `unclean = au_app_load(app)`
+   when the profile folder exists;
+2. `au_app_net_start(app, &net)` with an `AuAppNet`: the port's
+   `AuNetOps` and its optional hooks (entropy, the offline reason, the
+   root store's bytes, download files, deferred cache writes, `started`
+   and `stopping` around the loader for content blocking, its own
+   System Status lines);
+3. `au_app_session(app, unclean, &session)`, asking the user on
+   `AU_APP_RESTORE_ASK`; with no session, open one window at
+   `au_app_start_url(app)`;
+4. once per pass of the event loop, `au_app_net_idle(app)` and
+   `au_app_save(app, false)`;
+5. at quit, `au_app_quit(app)` while the windows are open, then
+   `au_app_net_stop(app)` after the pages are gone, then
+   `au_app_free(app)`.
+
+`tests/browser/test_app.c` runs all of this over an in-memory port.
 
 ## Downloads
 

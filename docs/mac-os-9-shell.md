@@ -11,13 +11,13 @@ before changing anything under `src/platform/macos9`.
 
 | File | Holds |
 |---|---|
-| `main.c` | the menu bar built from the command table, the `AuCommandHost`, and the event loop (`idle_all`, `key_down`, `release_caches`) |
+| `main.c` | the menu bar built from the command table, the `AuCommandHost`, start-up and quit through the application services (`g_app`), and the event loop (`idle_all`, `key_down`, `release_caches`) |
 | `browserwin.c` | browser windows |
 | `listwin.c` | the Bookmarks, History, Downloads and Cookies windows, built from the list models ([`browser-chrome.md`](browser-chrome.md), "The list windows") |
 | `prefswin.c`, `prefs_blocking.c` | the Preferences window |
 | `devwin.c` | the developer windows ([`developer-tools.md`](developer-tools.md)) |
-| `storage.c` | files ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
-| `network.c` | the network stack's start-up, cookies and HSTS files |
+| `storage.c` | the Aura folder's files and the clocks for the application services (`storage_port`), file: URLs, the Open and Save dialogs ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
+| `network.c` | the Mac side of the network stack: Open Transport started on demand, the entropy pool, the root store, download files and content blocking, given to `au_app_net_start` |
 | `net_ot.c`, `ot.h` | Open Transport sockets |
 | `entropy.c` | the entropy pool |
 | `clock_mac.c` | the wall clock |
@@ -30,7 +30,32 @@ before changing anything under `src/platform/macos9`.
 | `nettest/`, `jstest/`, `sea/` | NetTest, JSTest, the installer |
 
 The shell keeps one module per kind of window, with menus and the event
-loop in `main.c` and files in `storage.c`.
+loop in `main.c` and the folder primitives in `storage.c`.
+
+## Start-up, saving and quit
+
+Which files Aura keeps, how they load and when they are saved is shared
+code (`src/browser/app.c`, [`browser-chrome.md`](browser-chrome.md),
+"Files Aura keeps"). The shell drives it:
+
+- `main` makes the browser, then `g_app = au_app_new(g_browser, &port)`
+  with the port from `storage_port`, calls `au_app_load` when
+  `storage_init` found or made the Aura folder, then `mac_net_init`
+  (which starts the entropy pool and calls `au_app_net_start`), then
+  `au_app_session`: on `AU_APP_RESTORE_ASK` it shows ALRT 133.
+- `idle_all` calls `mac_net_idle` (entropy, `au_app_net_idle`, Open
+  Transport, blocklists) and ends with `au_app_save(g_app, false)`.
+  A suspend event calls `au_app_save(g_app, true)`.
+- At quit, `au_app_quit` runs while the windows are open, the windows
+  close, `mac_net_quit` calls `au_app_net_stop` and then frees Open
+  Transport and the entropy pool (which writes its seed file), and
+  `au_app_free` goes last.
+
+`storage.c` writes a file of the Aura folder as `<name>.tmp` swapped in
+with `FSpExchangeFiles` (delete and rename on volumes without it) and
+flushes the volume; a file of `Cache` or `Local Storage` is written as
+`<name>.tmp` and renamed over the old one without a flush. Folder
+listings delete leftover `.tmp` files.
 
 - The address field is a TextEdit record placed over the field the
   engine draws.
@@ -107,11 +132,18 @@ reentrant.
 
 ## The network stack in the application
 
-The network stack in the Mac OS 9 application is `network.c`.
+`src/browser/app_net.c` sets up the network stack; `network.c` gives
+it what is Mac OS 9's own through an `AuAppNet`.
 
 - The entropy pool starts at launch, Open Transport on the first DNS
-  lookup. A machine without it gets the No network page with the
-  reason, and a failed start is retried after 10 seconds.
+  lookup (the `AuNetOps` is a wrapper that starts it). A machine
+  without it gets the No network page with the reason (the
+  `offline_why` hook), and a failed start is retried after 10 seconds.
+- The root store is read from `aura-roots` beside the application
+  (`read_roots`). Content blocking attaches to the loader from the
+  `started` hook and goes from `stopping`, before the `AuNet` is
+  freed. Disk cache writes are deferred (`defer_cache_writes`): a file
+  write takes about 9 ms.
 - Cookies and HSTS are saved as `Cookies` and `HSTS` in the Aura
   preferences folder 5 seconds after a change and at quit (session
   cookies are dropped).

@@ -66,6 +66,7 @@ functions:
 | Fonts | the platform font set | `platform_host.c` | `platform_mac.c` |
 | Coroutines for workers | `AuCoroOps` (`src/core/coro.h`) | `coro_host.c` | `coro_mac.c` (Thread Manager) |
 | Download files | `AuDownloadFiles` | | `downloads_mac.c` |
+| The profile folder's files, clocks, network hooks | `AuAppPort`, `AuAppNet` (`src/browser/app.h`) | `app_host.c` | `storage.c`, `network.c` |
 | Blocklist files and memory | `AuBlockStore`, `AuBlockMem` | | `blocking_mac.c` |
 
 The host tools (`aura-host`) run the same engine headless, so most

@@ -17,7 +17,7 @@ Aura keeps are in [`browser-chrome.md`](browser-chrome.md).
   Reload, open it in a second tab, quit and open Aura again.
 - On the host, run `aura-host chrome --profile DIR --tab PAGE --do
   reload --do storage`: `--profile DIR` keeps the storage files in
-  `DIR/local-storage` (so a second run finds them), `--do storage`
+  `DIR/Local Storage` (so a second run finds them), `--do storage`
   prints the service's counts and its areas. `--net` keeps them in
   `$AURA_PROFILE` (default `~/.aura-host`), beside the cookies. Without
   either the service lives in memory for the run.
@@ -128,8 +128,10 @@ service is inside a call: the handler runs from any allocation.
 
 ## Files
 
-The Mac OS 9 application keeps a `Local Storage` folder in the Aura
-preferences folder (`network.c`, "Web storage's files"):
+Aura keeps a `Local Storage` folder in its profile folder (the Aura
+preferences folder on Mac OS 9). `src/browser/app.c` gives the service
+the folder as an `AuAppFolder` over the port's files
+([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps"):
 
 | File | Holds |
 |---|---|
@@ -148,7 +150,7 @@ before it. It needs no escaping.
   shell writes marked areas, one file per event-loop pass while nothing
   loads, 5 seconds after the last change (30 seconds after the first,
   for a page that never stops writing), and all of them at quit
-  (`mac_net_save`, on `au_web_storage_pending` and
+  (`au_app_save`, on `au_web_storage_pending` and
   `au_web_storage_change_gen`). Each file is written as `NAME.tmp` and
   renamed over the old one.
 - **Damage.** Every length is checked against what is left of the
@@ -164,8 +166,8 @@ before it. It needs no escaping.
   runs. A change to `sessionStorage` puts the file out of date as a
   scroll position does (saved within 30 seconds).
 
-On the host the same files are in `local-storage` of the profile
-folder, and a damaged file is renamed `NAME.damaged`.
+On the host the same files are in `Local Storage` of the profile
+folder, with the same names.
 
 ## How script reaches the service
 
