@@ -2,8 +2,9 @@
 
 This document covers `src/js`: the QuickJS-ng runtime wrapper, how
 script runs in pages, the prelude and its bytecode, limits, `Date` and
-the clock, and the bindings that have rules of their own (Range,
-Selection, CSSOM, getComputedStyle, crypto, postMessage). Read it
+the clock, and the bindings that have rules of their own
+(`document.cookie`, postMessage, Range, Selection, CSSOM,
+getComputedStyle, crypto). Read it
 before changing a binding or the runtime, or when a site's script
 fails. Requests made by script are in
 [`script-requests-and-cors.md`](script-requests-and-cors.md), workers
@@ -38,6 +39,8 @@ Use `aura-host chrome` actions:
 | `--do save:FILE` | writes the page source |
 | `--do console` | prints the console |
 | `--do js:aura:memory`, `--do js:aura:gc` | script heap accounting, the collector ([`memory.md`](memory.md)) |
+| `--do perf` | the Performance report, with each runtime's, document's and worker's script memory, peak and limit ([`memory.md`](memory.md)) |
+| `--script-mem MB`, `--worker-mem MB` (options, not actions) | set the script memory limits ("Script memory limits" below) |
 
 - Uncaught errors, errors in event listeners and unhandled promise
   rejections go to the console at error level; one that the page's
@@ -47,6 +50,9 @@ Use `aura-host chrome` actions:
 - To work on a site's scripts offline, save the page and the scripts it
   loads and serve them from a local HTTP server (the origin must be
   http for origin checks to behave as on the site).
+- A script that is refused memory stops with a console line that names
+  the limit and the preference to change ("What an out-of-memory line
+  says" below).
 - In the application, the Console window shows the same lines and takes
   expressions ([`developer-tools.md`](developer-tools.md)).
 
@@ -71,6 +77,11 @@ Patches this document refers to:
 | 0005 | makes the byte-swap flag work in the bytecode writer |
 | 0006 | a function and the functions nested in it share one copy of their source text |
 | 0007 | `Date` reads the embedder's clock |
+| 0008 | one source text per script (`0008-one-source-text-per-script`): the parser copies no function text, and the contexts of a runtime share a script's text |
+| 0009 | bytecode that names positions in the script's text (`0009-bytecode-source-positions`: `JS_WRITE_OBJ_SOURCE_REF`, `JS_ReadObjectSource`), and a parser that trims each function's buffers (`js_fd_trim`) |
+
+`third_party/README.md` lists every patch. After changing any of them,
+run JSTest in the guest.
 
 ## To test on Mac OS 9
 
@@ -138,18 +149,179 @@ refused allocation is an uncatchable out-of-memory error, with a 64 KB
 reserve so the error can be reported), a C stack limit (deep recursion
 is a RangeError) and a time budget (`AuJsHooks.long_script` decides
 whether a long script goes on). Allocation failures never reach
-`au_alloc`'s fatal handler. A page's runtime may allocate 32 MB.
+`au_alloc`'s fatal handler. The memory limits are set by the policy in
+"Script memory limits" below.
 On Mac OS 9 script may use 512 KB of the application's 1 MB stack
 ([`mac-os-9-shell.md`](mac-os-9-shell.md)). A native that can take long
 must check the time limit itself ([`fuzzing.md`](fuzzing.md), "Script
 that does not end").
 
 **Script memory.** See [`memory.md`](memory.md) for what a page's
-script heap holds and how to measure it. A function and the functions
-nested in it share one copy of their source text (patch 0006).
-`au_js_run_tasks` runs the collector when script has been idle for a
-second and the heap has grown by an eighth (at least 512 KB) since the
-last collection; a hidden document is collected when it is hidden.
+script heap holds and how to measure it, and "How script memory is kept
+down" below for what the runtime does about it. `au_js_run_tasks` runs
+the collector when script has been idle for a second and the heap has
+grown by an eighth (at least 512 KB) since the last collection; a
+hidden document is collected when it is hidden.
+
+## Script memory limits
+
+To change the limits or the policy, edit `src/browser/scriptmem.h` and
+`scriptmem.c`. The limits are two preferences:
+
+| Preference | Limits | In Preferences > Content |
+|---|---|---|
+| `content.script_memory_kb` | one page's runtime, shared by its frames | Script memory per page |
+| `content.worker_memory_kb` | each worker | Script memory per worker |
+
+The value 0 is Automatic and is the default; it is stored as 0, so it
+follows the policy of the Aura that reads it. Any other value is the
+user's own limit in KB, clamped to the custom range
+(`au_script_memory_clamp`). `au_script_memory_limits` gives the limits
+in force. The policy:
+
+| | Automatic | Unknown machine (host tools, tests) | Custom range |
+|---|---|---|---|
+| Page | half of the memory free, at least 8 MB, at most 96 MB | 64 MB | 4 to 256 MB |
+| Worker | a quarter of the memory free, at least 4 MB, at most 32 MB | 32 MB | 4 to 256 MB |
+
+- **"Memory free"** is `AuBrowserHost.memory_free_kb`: on Mac OS 9 the
+  free application heap plus free temporary memory
+  (`mac_memory_free_kb`), read when a document begins (`begin_doc` in
+  `page_doc.c`, which calls `au_docview_set_script_memory`). A change
+  of preference applies to pages loaded afterwards.
+- **Half and a quarter:** the page's documents, styles, layout and
+  images need the rest, and tabs share it. The limits are caps, not
+  reservations.
+- **The ceilings** bound what one runaway page takes on a machine with
+  much memory. The widget page that prompted the policy held 16 MB in
+  its runtime with a 19 MB peak before the widget ran (64-bit host),
+  and reached the earlier fixed 32 MB when it ran; 64 MB and 96 MB
+  leave two to three times that.
+- **The floors:** a document's context is 1.7 MB before any page
+  script, and compiling a 1 MB script needs about 9 MB.
+- **Examples.** The stock test machine (60 MB of heap and 400 MB of
+  temporary memory free) gets 96 MB and 32 MB. A Mac with 20 MB of heap
+  and 5 MB of temporary memory free gets 12 MB and 6 MB, and a heavy
+  page fails there with the out-of-memory console line.
+- **The engine's own defaults** (`au_js_settings_default`: 32 MB for a
+  page's runtime; `AU_JS_WORKER_MEMORY`, 24 MB, for a worker) apply
+  only to an embedder that sets nothing.
+- **To set the limits on the host**, pass `--script-mem MB` and
+  `--worker-mem MB` to `aura-host chrome`.
+- **In Preferences > Content** (`prefswin.c`) each limit is a pop-up
+  (Automatic, Custom) with an MB field that is active for Custom, and a
+  line that says what Automatic gives on this Mac now. The pane's note
+  says that changes apply to pages loaded afterwards.
+
+**The low-memory check.** The engine asks `au_memory_low(n)` (`core.h`)
+before it takes an arena or a larger block. The Mac shell answers yes
+when less than 3 MB would be left (`low_memory` in `main.c`), and the
+script then gets the out-of-memory error while there is still memory
+for the page itself. `au_alloc` running out is still fatal. On
+Mac OS 9 the script heap can also come from temporary memory
+([`memory.md`](memory.md), "Temporary memory for the heap").
+
+**Workers count.** `au_js_stats` adds each worker's heap, stack,
+pending script and bytecode to the document's figure, so
+`au_docview_memory_estimate` and the kept-document budget include them
+(`test_shared_script` asserts it).
+
+### What an out-of-memory line says
+
+A script that is refused memory stops with a console line at error
+level that names the runtime, its limit, its use, what it was doing and
+the preference to change:
+
+    Script stopped: out of memory. The page http://a.test/ reached its
+    script memory limit of 4096 KB (4087 KB in use, 829 KB more asked
+    for) while compiling http://a.test/big.js. To allow more, raise
+    "Script memory per page" in Preferences > Content (the
+    content.script_memory_kb preference).
+
+- "The worker URL" replaces "The page URL" for a worker's runtime, with
+  "Script memory per worker" and `content.worker_memory_kb`.
+- "while running script" replaces "while compiling URL" when no compile
+  was under way; "in the frame URL" is added when a frame's script was
+  running.
+- When the limit was not reached but the machine is short of memory
+  (`au_memory_low`), the line says "Aura has too little memory left"
+  and suggests closing tabs or raising Aura's partition.
+- An allocation refused inside the parser is reported as out of memory
+  by `eval_classic`. (It used to surface as a syntax error at the place
+  the parser happened to be.)
+- A worker that runs out of memory ends, and its `Worker` object in the
+  page gets an `error` event ("out of memory: the worker reached its
+  script memory limit of N KB"). The page goes on running
+  (`js_worker_fatal` in `worker.c`). There is no page-level notice: the
+  console line is the report.
+
+### How script memory is kept down
+
+Largest saving first. The measurements are in [`memory.md`](memory.md),
+"Where script memory goes".
+
+- **A large script is compiled once per page.** `runtime.c` ("Compiled
+  scripts") keeps the compiled form of the last four classic scripts of
+  64 KB or more. When another document of the page runs the same URL
+  and bytes, the kept script is written as bytecode (`JS_WriteObject`)
+  and read into that document's context (`JS_ReadObjectSource`) instead
+  of being compiled. When the page starts a worker whose own script is
+  one it has compiled, it writes the bytecode once more and hands it to
+  the worker with the script (`js_code_for_worker`, `JsWorker.code`).
+  Functions keep their text: the bytecode names positions in the
+  script's text (patch 0009). A kept script holds the code that ran
+  once while the script loaded (250 KB for an 860 KB script), so an
+  entry that nothing has read for 20 seconds is dropped
+  (`js_code_expire`, called while the page is idle); a frame added
+  later compiles again. Not covered: module scripts, a script a worker
+  loads with `importScripts`, a script that is mostly data (its
+  functions have texts of their own and the bytecode cannot name
+  positions), and a script the worker compiled before the page did.
+- **One source text per script, shared by the documents of a page**
+  (patch 0008, which extends 0006). The parser does not copy each
+  function's text while parsing. When a script's outermost functions
+  make up half of it or more, one text holds the whole script and every
+  function points into it; otherwise each outermost function gets a
+  text and its nested functions share it. A whole-script text of 1 KB
+  or more is found again by content, so every context of a runtime that
+  compiles or reads the script shares it. `toString` returns the same
+  characters as before (no text is stripped at any size).
+- **A script's text is held once while it compiles.** The response
+  buffer becomes the script's text (`au_docscript_resource_done` takes
+  the buffer) and the engine frees it when the compile ends, before the
+  script runs (`au_js_run_classic_take`). A worker's own script stays
+  in C until `N.runScript(null)` takes it; the bytes fetched for a
+  worker and for `importScripts` go to the native as a typed array,
+  which it empties (`js_take_script_bytes`). (Before, the response
+  buffer, a copy for the pending script and a copy for the engine
+  existed during the run, and a worker held the bytes, a string and a
+  copy while it compiled.)
+- **The collector runs before the limit is reached.** QuickJS collects
+  when the heap is half as large again as after its last collection,
+  which near a limit is past the limit. The allocator lowers the
+  engine's threshold when the heap passes seven eighths of the limit
+  (`gc_pressure`), so the engine collects at its next object creation;
+  it does not collect inside the allocator, where the engine may be in
+  the middle of building an object. `eval_classic` also collects before
+  compiling a script of 64 KB or more when the heap has grown by
+  512 KB, because a compile creates no objects and so triggers no
+  collection.
+- **Parser buffers are trimmed** (patch 0009, `js_fd_trim`): 0.3 to
+  0.9 MB of a compile's peak.
+- `js_workers_memory` no longer counts a worker's script text after it
+  is freed.
+
+**Tests**
+
+- `tests/browser/test_script_memory.c` (ctest `browser_script_memory`):
+  a page, two same-origin frames and a worker that load one generated
+  830 KB script finish under limits of 20 MB and 8 MB with stated bounds
+  on both peaks; a worker that runs out of memory is reported as such,
+  its `Worker` object gets `error`, and the page keeps running; a page
+  that runs out while compiling names the script.
+- `test_script_memory_prefs` in `tests/browser/test_browser.c`: the two
+  preferences (default, round trip, clamping, Automatic stored as 0)
+  and the policy function.
 
 ## Retro68 compiler points
 
@@ -242,6 +414,30 @@ methods (`getHours`, `toString`, `getTimezoneOffset`,
   as `tests/js/clock.js` does (ctest `js_clock`).
 
 [`mac-os-9-shell.md`](mac-os-9-shell.md) describes the Mac's clock.
+
+## document.cookie
+
+`document.cookie` reads and sets the cookies of the document's own URL
+through the network layer's jar. The rules the jar applies, what frames
+and sandboxed documents get, and the tests are in
+[`networking.md`](networking.md), "Cookies and `document.cookie`". The
+path through the layers:
+
+| Layer | Functions |
+|---|---|
+| The native | `n_cookie` (`natives2.c`), which calls `AuJsHooks.get_cookie` and `set_cookie` |
+| The page's script glue | `h_get_cookie` and `h_set_cookie` (`src/page/script.c`) |
+| The document view | `AuDocViewCallbacks.get_cookie` and `set_cookie`; nested views pass them up through `fc_get_cookie` in `frames.c` |
+| The browser | `dv_get_cookie` in `page_doc.c`, then `AuPageFetcher.get_cookie` and `set_cookie` |
+| The network stack | `au_net_document_cookie_get` and `_set` (`http.c`), then the jar's `au_cookie_jar_document_get` and `_set` |
+
+An embedder that implements neither hook gets an empty string and
+dropped writes. (That was the browser's state until 2026-11-15:
+requests carried cookies, because the network layer has its own path to
+the jar, but no test read the getter in a page.)
+
+`document.referrer` is always `""`
+([`known-gaps.md`](known-gaps.md#javascript)).
 
 ## window.postMessage
 

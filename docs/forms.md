@@ -36,9 +36,10 @@ https://html.duckduckgo.com/html/ --do clickname:q --do "type:mac os 9"
   idle pass and painting, and the counts from `au_docview_stats` (style
   passes, elements styled, tree builds, layouts) and the pixels
   invalidated.
-- In the guest, focus a page field and choose Develop > Page Timings:
-  it types 16 keys and shows milliseconds per key with the restyle and
-  layout counts.
+- In the guest, click a text field of the page and choose Develop > Run
+  Timing Test: it types 16 keys, and the "Timing test" section of the
+  Performance window shows milliseconds per key with the restyle and
+  layout counts ([`developer-tools.md`](developer-tools.md)).
 - `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
   with `:has()` rules, with and without script listeners.
 

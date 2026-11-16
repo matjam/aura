@@ -140,7 +140,12 @@ volumes. To wait in a script, use `wait-app APP [SECONDS]` and
 on a 640x480 screen): click the title, then click the item; the menu
 stays open between the two clicks. While Aura is busy (a long layout),
 the click is lost; wait and try again. [`developer-tools.md`](developer-tools.md)
-describes the windows and debug items the menu opens.
+describes the items and the windows the menu opens.
+
+To choose an item of the Develop > Tests submenu, click the Develop
+title, then run `guest-qmp.py move 300 142` (the Tests item), `move 420
+142`, and click the item. A click on the Tests item itself closes the
+menu.
 
 **Dragging in the Finder.** The Finder ignores `guest-qmp.py drag` (it
 moves in one step). To drag a file in the Finder (onto the Aura icon,
@@ -158,6 +163,9 @@ Millions.
 | Thing | At |
 |---|---|
 | Develop menu title | 298,10 |
+| Develop menu items, by y: Page Source, Console, Network | 28, 44, 60 |
+| Develop menu items, by y: Performance, Run Timing Test | 82, 98 |
+| Develop menu items, by y: System Status, Tests, Report a Problem | 120, 142, 164 |
 | Special menu title | 246,10 |
 | Special > Shut Down | 270,136 |
 | Monitor BitDepth module (Control Strip, seventh icon) | 197,466 |
@@ -254,8 +262,9 @@ UTC matches the host's `date -u` to the second.
   zone differs from its base image's).
 - A guest started before this change keeps its old clock until it is
   restarted.
-- To see the clock Aura uses, choose Develop > Network Status
-  ([`mac-os-9-shell.md`](mac-os-9-shell.md), "The clock").
+- To see the clock Aura uses, choose Develop > System Status and read
+  its Clock section ([`mac-os-9-shell.md`](mac-os-9-shell.md), "The
+  clock").
 
 ## The Enforcer image
 

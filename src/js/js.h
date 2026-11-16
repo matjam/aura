@@ -77,7 +77,7 @@ typedef struct AuJsSettings {
     bool sandbox_origin;
     bool no_top_navigation;
     /* Workers (see "Workers" below). */
-    size_t worker_memory_limit; /* bytes one worker's runtime may allocate; 0: 8 MB */
+    size_t worker_memory_limit; /* bytes one worker's runtime may allocate; 0: 24 MB; the browser sets it (scriptmem.h) */
     size_t worker_stack;        /* bytes of stack for a worker's coroutine; 0: 256 KB */
     uint32_t worker_slice_ms;   /* how long a worker runs before it yields to the page; 0: 8 */
     int max_workers;            /* workers alive in one page; 0: 8 */

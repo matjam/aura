@@ -240,9 +240,12 @@ static void test_netlog_page(void)
           au_buf_cstr(&conn));
     au_netlog_dump(l, au_buf_cstr(&conn), true, &b);
     const char *text = au_buf_cstr(&b);
-    CHECK(strstr(text, "Status Meth") && strstr(text, "http://log.test/page") && strstr(text, "404") &&
-              strstr(text, "3 requests") && strstr(text, "DOMContentLoaded") && strstr(text, "connections: log.test") &&
-              strstr(text, "Request headers:") && strstr(text, "Timings: queued"),
+    CHECK(strstr(text, "Status   Method") && strstr(text, "http://log.test/page") && strstr(text, "404") &&
+              strstr(text, "  Requests               3 ") && strstr(text, "DOMContentLoaded") &&
+              strstr(text, "  Connections            log.test") && strstr(text, "Request headers\n") &&
+              strstr(text, "Time in each phase     queued") &&
+              strstr(text, "Failed, blocked and redirected requests (1)") &&
+              strstr(text, "  404       http://log.test/missing.png"),
           "the dump:\n%s", text);
     au_buf_free(&b);
     au_buf_free(&conn);
@@ -311,7 +314,7 @@ static void test_netlog_page(void)
     au_buf_init(&b);
     if (doc)
         au_netlog_detail(doc, &b);
-    CHECK(strstr(au_buf_cstr(&b), "Headers: not recorded") != NULL, "detail says so");
+    CHECK(strstr(au_buf_cstr(&b), "  Headers                not recorded") != NULL, "detail says so");
     au_buf_free(&b);
 
     /* A redirect: the record names the address that answered. */
@@ -338,7 +341,8 @@ static void test_netlog_page(void)
         au_buf_putc(&b, '\n');
         au_netlog_detail(doc, &b);
     }
-    CHECK(strstr(au_buf_cstr(&b), "fail") && strstr(au_buf_cstr(&b), "Failed: host not found"), "failure text: %s",
+    CHECK(strstr(au_buf_cstr(&b), "  failed ") && strstr(au_buf_cstr(&b), "  Failed                 host not found"),
+          "failure text: %s",
           au_buf_cstr(&b));
     au_buf_free(&b);
     env_free(&e);
@@ -378,7 +382,9 @@ static void test_netlog_tls_and_blocked(void)
         au_buf_putc(&b, '\n');
         au_netlog_detail(css, &b);
     }
-    CHECK(strstr(au_buf_cstr(&b), "block") && strstr(au_buf_cstr(&b), "Blocked: mixed content"), "blocked text: %s",
+    CHECK(strstr(au_buf_cstr(&b), "  blocked ") && strstr(au_buf_cstr(&b), "  Blocked by             mixed content") &&
+              !strstr(au_buf_cstr(&b), "transferred"),
+          "blocked text: %s",
           au_buf_cstr(&b));
     au_buf_free(&b);
     /* A blocklist's refusal is logged with the list's name. */
@@ -402,8 +408,25 @@ static void test_netlog_tls_and_blocked(void)
     au_buf_free(&b);
     AuTextList blines;
     au_textlist_init(&blines);
-    au_dev_network_blocked_lines(l, &blines);
-    CHECK(blines.n == 3 && blines.style[0] == AU_TS_HEADING, "blocked lines for the pane (%u)", (unsigned)blines.n);
+    au_dev_network_summary_lines(l, NULL, &blines);
+    bool listed = false;
+    for (uint32_t i = 0; i < blines.n; i++)
+        if (strstr(blines.text[i], "  blocked   http://ads.test/pixel.gif  ("))
+            listed = true;
+    CHECK(blines.n >= 7 && blines.style[0] == AU_TS_HEADING && listed, "the summary pane lists what was blocked (%u)",
+          (unsigned)blines.n);
+    /* The view: only the blocked request, and the filter. */
+    AuNetView nv;
+    au_netview_init(&nv);
+    nv.show = AU_NETSHOW_BLOCKED;
+    au_netview_build(&nv, l);
+    CHECK(nv.n == 1 && au_netlog_at(l, nv.rows[0]) == ad, "the blocked view has the one request (%u)", (unsigned)nv.n);
+    nv.show = AU_NETSHOW_ALL;
+    snprintf(nv.filter, sizeof nv.filter, "SITE.test");
+    au_netview_build(&nv, l);
+    CHECK(nv.n == 1 && au_netlog_at(l, nv.rows[0])->kind == AU_FETCH_DOCUMENT, "the filter ignores case (%u)",
+          (unsigned)nv.n);
+    au_netview_free(&nv);
     au_textlist_free(&blines);
     au_net_loader_set_blocklist(e.l, NULL);
     au_blocklist_free(bl);
@@ -490,6 +513,7 @@ static void test_perf(void)
     h.machine = "test machine";
     h.have_memory = true;
     h.heap_free_kb = 12345;
+    h.partition_kb = 65536;
     au_net_dev_info(e.net, &h, &conn);
     CHECK(h.have_net && h.connections >= 1 && h.cache_stored >= 1, "network info: %d connections, %lu stored",
           h.connections, h.cache_stored);
@@ -499,18 +523,41 @@ static void test_perf(void)
     au_buf_clear(&out);
     au_dev_perf_report(page(&e), &h, e.f.now, &out);
     const char *t = au_buf_cstr(&out);
-    CHECK(strstr(t, "Page: http://perf.test/") && strstr(t, "Machine: test machine") && strstr(t, "(last 1.00 s") &&
-              strstr(t, "  script ") && strstr(t, "  screen copy ") && strstr(t, "12345 KB free") &&
-              strstr(t, "script heap: ") && strstr(t, "glyph cache: ") && strstr(t, "HTTP cache: ") &&
-              strstr(t, "Connections: ") && strstr(t, "perf.test:80") && strstr(t, "Slowest recent tasks") &&
-              strstr(t, "1 requests"),
+    CHECK(strstr(t, "  Page                   http://perf.test/") && strstr(t, "  Machine                test machine") &&
+              strstr(t, "last 1.00 s") && strstr(t, "\nSummary\n") && strstr(t, "  Busy, last 1.00 s") &&
+              strstr(t, "  Free memory            12.05 MB of 64.00 MB") && strstr(t, "  Script ") &&
+              strstr(t, "  Screen copy ") && strstr(t, "  Application heap ") && strstr(t, "  Script heap ") &&
+              strstr(t, "  Glyph cache ") && strstr(t, "  HTTP memory cache ") && strstr(t, "  Connections ") &&
+              strstr(t, "perf.test:80") && strstr(t, "Slowest recent tasks") && strstr(t, "  Requests               1 ") &&
+              strstr(t, "[") && strstr(t, " %\n") && strstr(t, "What the numbers mean"),
           "the report:\n%s", t);
+    /* No line ends in a space, and the table rows line up: every bar
+     * starts in the same column within its table. */
+    bool trailing = false;
+    int bar_col = -1, bars = 0;
+    bool aligned = true;
+    for (const char *ln = t; *ln;) {
+        size_t n = strcspn(ln, "\n");
+        if (n && ln[n - 1] == ' ')
+            trailing = true;
+        const char *bar = memchr(ln, '[', n);
+        if (bar && !strncmp(ln, "  ", 2) && (!strncmp(ln + 2, "Script  ", 8) || !strncmp(ln + 2, "Style ", 6) ||
+                                             !strncmp(ln + 2, "Layout ", 7) || !strncmp(ln + 2, "Paint ", 6))) {
+            if (bar_col >= 0 && bar_col != (int)(bar - ln))
+                aligned = false;
+            bar_col = (int)(bar - ln);
+            bars++;
+        }
+        ln += n + (ln[n] == '\n');
+    }
+    CHECK(!trailing && aligned && bars == 4, "table rows line up (%d bars at column %d), no trailing spaces", bars,
+          bar_col);
     AuTextList list;
     au_textlist_init(&list);
     au_dev_report_lines(t, &list);
     bool heading = false;
     for (uint32_t i = 0; i < list.n; i++)
-        if (!strcmp(list.text[i], "Memory"))
+        if (!strncmp(list.text[i], "Memory ", 7))
             heading = list.style[i] == AU_TS_HEADING;
     CHECK(heading, "section titles become headings");
     au_textlist_free(&list);
@@ -577,19 +624,40 @@ static void test_console(void)
     au_buf_init(&b);
     au_dev_console_text(p, &b);
     const char *t = au_buf_cstr(&b);
-    CHECK(strstr(t, "log   hello 42") && strstr(t, "warn  careful") && strstr(t, ">     1 + 2") &&
-              strstr(t, "<     3") && strstr(t, "(http://con.test/app.js:3)"),
+    CHECK(strstr(t, "log    hello 42") && strstr(t, "warn   careful") && strstr(t, ">      1 + 2") &&
+              strstr(t, "<      3") && strstr(t, "(http://con.test/app.js:3)"),
           "console text:\n%s", t);
     au_buf_free(&b);
     AuTextList list;
     au_textlist_init(&list);
-    au_dev_console_lines(p, &list);
+    au_dev_console_lines(p, NULL, &list);
     bool styled = false;
     for (uint32_t i = 0; i < list.n; i++)
         if (strstr(list.text[i], "Uncaught Error: bad"))
             styled = list.style[i] == AU_TS_ERROR;
     CHECK(styled && list.n > n, "lines for the view: errors styled, stacks on their own lines (%u)",
           (unsigned)list.n);
+    /* The filters: errors only, then a text. Input and results stay. */
+    AuConsoleFilter cf = {AU_CONSOLE_SHOW_ERRORS, NULL};
+    uint32_t all_lines = list.n;
+    uint32_t hidden = au_dev_console_lines(p, &cf, &list);
+    bool has_log = false, has_error = false, has_input = false;
+    for (uint32_t i = 0; i < list.n; i++) {
+        has_log |= strstr(list.text[i], "hello 42") != NULL;
+        has_error |= strstr(list.text[i], "Uncaught Error: bad") != NULL;
+        has_input |= strstr(list.text[i], "1 + 2") != NULL;
+    }
+    CHECK(hidden >= 2 && list.n < all_lines && !has_log && has_error && has_input,
+          "errors only: %u left out, %u of %u lines", (unsigned)hidden, (unsigned)list.n, (unsigned)all_lines);
+    cf.show = AU_CONSOLE_SHOW_ALL;
+    cf.text = "CAREFUL";
+    au_dev_console_lines(p, &cf, &list);
+    bool only = list.n >= 1;
+    for (uint32_t i = 0; i < list.n; i++)
+        if (!strstr(list.text[i], "careful") && list.style[i] != AU_TS_INPUT && list.style[i] != AU_TS_RESULT &&
+            list.style[i] != AU_TS_ERROR)
+            only = false;
+    CHECK(only, "the text filter ignores case (%u lines)", (unsigned)list.n);
     au_textlist_free(&list);
     au_page_console_clear(p);
     CHECK(au_page_console_count(p) == 0 && au_page_console_total(p) != total + 2, "Clear");
@@ -830,6 +898,143 @@ static void test_source(void)
     au_textlist_free(&list);
 }
 
+/* The shared formatting, the request view, the window places and the two
+ * test reports. */
+static void test_formatting(void)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    au_put_count(&b, 0);
+    au_buf_putc(&b, '|');
+    au_put_count(&b, 999);
+    au_buf_putc(&b, '|');
+    au_put_count(&b, 1000);
+    au_buf_putc(&b, '|');
+    au_put_count(&b, 1234567);
+    au_buf_putc(&b, '|');
+    au_put_bar(&b, 1, 4, 8);
+    au_put_bar(&b, 1, 1000, 8);
+    au_put_bar(&b, 0, 0, 4);
+    au_put_bar(&b, 3000000000u, 4000000000u, 4);
+    CHECK(!strcmp(au_buf_cstr(&b), "0|999|1,000|1,234,567|[##......][#.......][....][###.]"), "counts and bars: %s",
+          au_buf_cstr(&b));
+    au_buf_clear(&b);
+    au_report_kv(&b, "Label", "%d of %s", 3, "four");
+    CHECK(!strcmp(au_buf_cstr(&b), "  Label                  3 of four\n"), "a label and its value: \"%s\"", au_buf_cstr(&b));
+
+    /* URLs are cut in the middle to a width; the start and the end stay. */
+    au_buf_clear(&b);
+    au_netlog_url_elide("https://en.wikipedia.org/w/load.php?modules=skins.vector.icons&image=userAvatar&format=original",
+                        40, &b);
+    CHECK(b.len == 40 && !strncmp(au_buf_cstr(&b), "en.wikipedia.org/w/load.", 24) && strstr(au_buf_cstr(&b), "...") &&
+              !strcmp(au_buf_cstr(&b) + 40 - 8, "original"),
+          "elided to 40: \"%s\" (%u)", au_buf_cstr(&b), (unsigned)b.len);
+    au_buf_clear(&b);
+    au_netlog_url_elide("http://short.test/a", 40, &b);
+    CHECK(!strcmp(au_buf_cstr(&b), "http://short.test/a"), "a short URL is whole: %s", au_buf_cstr(&b));
+
+    /* The header's columns: a click's cell finds the column. */
+    au_buf_clear(&b);
+    au_netlog_header(&b);
+    const char *hd = au_buf_cstr(&b);
+    CHECK(au_netlog_column_at((int)(strstr(hd, "Status") - hd)) == AU_NETCOL_STATUS &&
+              au_netlog_column_at((int)(strstr(hd, "Size") - hd)) == AU_NETCOL_SIZE &&
+              au_netlog_column_at((int)(strstr(hd, "URL") - hd) + 30) == AU_NETCOL_URL && au_netlog_column_at(-1) == -1 &&
+              (int)(strstr(hd, "URL") - hd) == au_netlog_fixed_cells(),
+          "header columns: %s", hd);
+
+    /* Sorting: by size, largest first; again turns it round; rows are cut
+     * to the width with the header's columns kept. */
+    AuNetLog l;
+    au_netlog_init(&l);
+    static const struct {
+        const char *url;
+        size_t size;
+        int status;
+    } recs[] = {{"http://sort.test/small", 10, 200}, {"http://sort.test/large", 5000, 200}, {"http://sort.test/mid", 300, 404}};
+    for (int i = 0; i < 3; i++) {
+        AuFetchInfo fi;
+        memset(&fi, 0, sizeof fi);
+        uint32_t q = au_netlog_begin(&l, recs[i].url, NULL, AU_FETCH_IMAGE, (uint32_t)i);
+        au_netlog_response(&l, q, recs[i].status, "image/png", false, 5);
+        au_netlog_data(&l, q, recs[i].size);
+        au_netlog_end(&l, q, AU_NETREC_DONE, NULL, 9);
+    }
+    AuNetView v;
+    au_netview_init(&v);
+    au_netview_build(&v, &l);
+    CHECK(v.n == 3 && v.rows[0] == 0 && v.rows[2] == 2, "the view starts in request order");
+    au_netview_click_column(&v, AU_NETCOL_SIZE);
+    au_netview_build(&v, &l);
+    CHECK(v.desc && v.rows[0] == 1 && v.rows[1] == 2 && v.rows[2] == 0, "by size, largest first: %u %u %u",
+          (unsigned)v.rows[0], (unsigned)v.rows[1], (unsigned)v.rows[2]);
+    au_netview_click_column(&v, AU_NETCOL_SIZE);
+    au_netview_build(&v, &l);
+    CHECK(!v.desc && v.rows[0] == 0 && v.rows[2] == 1, "a second click turns the order round");
+    au_buf_clear(&b);
+    au_netlog_header_sorted(v.sort, v.desc, &b);
+    CHECK(strstr(au_buf_cstr(&b), "^ Size") != NULL, "the sorted column is marked: %s", au_buf_cstr(&b));
+    v.show = AU_NETSHOW_PROBLEMS;
+    au_netview_build(&v, &l);
+    CHECK(v.n == 1 && v.rows[0] == 2, "problems only: the 404");
+    AuTextList list;
+    au_textlist_init(&list);
+    v.show = AU_NETSHOW_ALL;
+    au_netview_build(&v, &l);
+    au_dev_network_lines(&l, &v, 90, &list);
+    bool fits = list.n == 3;
+    for (uint32_t i = 0; i < list.n; i++)
+        if (strlen(list.text[i]) > 90)
+            fits = false;
+    CHECK(fits && list.style[2] != AU_TS_ERROR && strstr(list.text[0], "sort.test/small"), "rows fit the width");
+    au_textlist_free(&list);
+    au_netview_free(&v);
+    au_netlog_free(&l);
+
+    /* Where the windows were left. */
+    int r[4] = {0, 0, 0, 0}, set[4] = {12, 40, 600, 380};
+    au_buf_clear(&b);
+    au_dev_window_set("console=1,2,300,200 network=5,6,700,400", "network", set, &b);
+    CHECK(!strcmp(au_buf_cstr(&b), "console=1,2,300,200 network=12,40,600,380"), "a window's place replaces its old one: %s",
+          au_buf_cstr(&b));
+    CHECK(au_dev_window_get(au_buf_cstr(&b), "network", r) && r[0] == 12 && r[3] == 380 &&
+              au_dev_window_get(au_buf_cstr(&b), "console", r) && r[2] == 300 &&
+              !au_dev_window_get(au_buf_cstr(&b), "status", r) && !au_dev_window_get("status=1,1,5,5", "status", r) &&
+              !au_dev_window_get("status=junk", "status", r) && !au_dev_window_get(NULL, "status", r),
+          "window places are read back, and junk is refused");
+
+    /* The timing test and the benchmark as tables. */
+    AuTimingTest tt;
+    memset(&tt, 0, sizeof tt);
+    au_buf_clear(&b);
+    au_dev_timing_report(&tt, &b);
+    CHECK(b.len == 0, "no timing section before a test ran");
+    tt.ran = true;
+    tt.small = (AuTimedSteps){10, 42000, 2000, 29000, 5000, 20};
+    tt.full = (AuTimedSteps){3, 25200, 0, 24600, 600, 3};
+    tt.glyph_hits = 2378;
+    au_dev_timing_report(&tt, &b);
+    CHECK(strstr(au_buf_cstr(&b), "Timing test") && strstr(au_buf_cstr(&b), "  Scroll 32 px, new         10      4.2      0.2      2.7      0.5       2") &&
+              strstr(au_buf_cstr(&b), "  Whole page repaint         3      8.4") && strstr(au_buf_cstr(&b), "2,378 hits") &&
+              strstr(au_buf_cstr(&b), "click a text field") && !strstr(au_buf_cstr(&b), "Page down"),
+          "the timing table:\n%s", au_buf_cstr(&b));
+    AuPaintBench pb = {true, 601, 333, 91, 536, 39, 31};
+    au_buf_clear(&b);
+    au_dev_bench_report(&pb, &b);
+    CHECK(strstr(au_buf_cstr(&b), "Paint benchmark") && strstr(au_buf_cstr(&b), "9.1 ms   601 x 333 pixels") &&
+              strstr(au_buf_cstr(&b), "53.6 ms\n"),
+          "the benchmark table:\n%s", au_buf_cstr(&b));
+
+    /* Markdown lines: headings and dimmed fences. */
+    au_textlist_init(&list);
+    au_dev_markdown_lines("## Title\n\ntext\n```\ncode\n```\n<details>\n", &list);
+    CHECK(list.n == 7 && list.style[0] == AU_TS_HEADING && list.style[2] == AU_TS_PLAIN && list.style[3] == AU_TS_DIM &&
+              list.style[4] == AU_TS_PLAIN && list.style[6] == AU_TS_DIM,
+          "markdown lines (%u)", (unsigned)list.n);
+    au_textlist_free(&list);
+    au_buf_free(&b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -840,6 +1045,7 @@ int main(void)
     test_perf();
     test_console();
     test_source();
+    test_formatting();
     au_fontset_free(fonts);
     printf("devtools: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

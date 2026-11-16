@@ -20,6 +20,8 @@
 
 #include "clock_mac.h"
 
+#include "browser/netlog.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -219,23 +221,29 @@ void mac_blocking_quit(void)
 
 AuBlockManager *mac_blocking_manager(void) { return B.mgr; }
 
-void mac_blocking_status(char *out, size_t cap)
+void mac_blocking_status_text(AuBuf *out)
 {
+    au_buf_puts(out, "\nContent blocking\n");
     if (!B.bl) {
-        snprintf(out, cap, " Blocking: not started.");
+        au_report_kv(out, "State", "not started");
         return;
     }
     AuBlockStats s;
     AuBlockCompileStats c;
     au_blocklist_stats(B.bl, &s);
     au_block_manager_compile_stats(B.mgr, &c);
-    /* Short: the alert's line holds 255 characters with what precedes. */
-    int n = snprintf(out, cap, " Blocking %s: %lu lists, %lu domains, %lu KB (temp %lu, heap %lu); checked %lu, blocked %lu, pages %lu.",
-                     au_blocklist_enabled(B.bl) ? "on" : "off", (unsigned long)s.lists, (unsigned long)s.entries,
-                     (unsigned long)(s.bytes / 1024), B.temp_bytes / 1024, B.heap_bytes / 1024,
-                     (unsigned long)s.checked, (unsigned long)s.blocked, (unsigned long)s.navigations);
-    if (c.id[0] && n > 0 && (size_t)n < cap)
-        snprintf(out + n, cap - (size_t)n, " Compiled %s: %lu KB text, fetch+parse %lu ms, merge %lu ms/%lu.", c.id,
-                 (unsigned long)(c.text_bytes / 1024), (unsigned long)c.download_ms, (unsigned long)c.merge_ms,
-                 (unsigned long)c.merge_calls);
+    au_report_kv(out, "State", "%s", au_blocklist_enabled(B.bl) ? "on" : "off");
+    AuBuf n;
+    au_buf_init(&n);
+    au_put_count(&n, (unsigned long)s.entries);
+    au_report_kv(out, "Lists", "%lu list%s, %s domains", (unsigned long)s.lists, s.lists == 1 ? "" : "s", au_buf_cstr(&n));
+    au_buf_free(&n);
+    au_report_kv(out, "Memory", "%lu KB   (%lu KB temporary memory, %lu KB heap)", (unsigned long)(s.bytes / 1024),
+                 B.temp_bytes / 1024, B.heap_bytes / 1024);
+    au_report_kv(out, "Requests", "%lu checked, %lu blocked, %lu pages stopped", (unsigned long)s.checked,
+                 (unsigned long)s.blocked, (unsigned long)s.navigations);
+    if (c.id[0])
+        au_report_kv(out, "Last list compiled", "%s: %lu KB of text, fetch and parse %lu ms, merge %lu ms in %lu passes", c.id,
+                     (unsigned long)(c.text_bytes / 1024), (unsigned long)c.download_ms, (unsigned long)c.merge_ms,
+                     (unsigned long)c.merge_calls);
 }
