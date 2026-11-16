@@ -207,12 +207,35 @@ struct AuJs {
     size_t gc_base;   /* live_bytes after the last collection the bindings ran */
     double last_ran;  /* when a task or timer last ran (now_ms clock) */
     bool oom;          /* an allocation was refused: the reserve is open */
+    /* Memory accounting (runtime.c allocator), all in the root. Every
+     * block is charged to the context that was entered when it was
+     * allocated (slot 0: none, the runtime's own setup and collections);
+     * a freed context's slot stays, for the blocks that outlive it. */
+    size_t peak_bytes;          /* the most live_bytes has been */
+    struct JsMemSlot *slots;
+    uint32_t nslots, cur_slot;
+    uint32_t slot;              /* every AuJs: its slot in root->slots */
+    size_t gc_force_at;         /* live_bytes past which the next object creation collects */
+    char *compiling;            /* the URL of the script being compiled; NULL: running */
+    /* The last refused allocation: what was in use, what was asked for,
+     * and what was being compiled ("" when script was running). */
+    size_t oom_live, oom_asked;
+    char oom_url[200];
+    bool oom_noted;             /* the numbers above are of an error not yet reported */
     /* canvas (natives_canvas.c) */
     struct JsCanvas *canvas;
     bool canvas_pending; /* a canvas element's width or height attribute is changing */
 };
 
 /* ---- runtime.c ---- */
+typedef struct JsMemSlot {
+    size_t live, peak;
+} JsMemSlot;
+/* Compiles and runs a classic script in js's context (the caller has
+ * entered js). Notes what is being compiled for the out-of-memory report
+ * and collects before a large compile. Returns the script's value or
+ * JS_EXCEPTION. */
+JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line);
 AuJs *js_of_ctx(JSContext *ctx);
 void js_report_exception(AuJs *js);
 void js_console(AuJs *js, AuJsLogLevel level, const char *text, size_t len);
@@ -320,6 +343,8 @@ void js_workers_free(AuJs *js);
 int js_worker_interrupt(AuJs *js);
 bool js_worker_terminating(const AuJs *js);
 size_t js_workers_memory(const AuJs *js);
+size_t js_workers_peak(const AuJs *js);                 /* the largest peak of a live worker */
+void js_workers_summary(const AuJs *js, AuBuf *out);    /* a line per live worker */
 /* The earliest timer of a document's workers (-1: none), and whether
  * every one of them only waits for a message. */
 double js_workers_next_timer(const AuJs *js);
@@ -353,6 +378,7 @@ void js_url_free(JsUrl *u);
 /* A worker coroutine's stack unless the settings say otherwise. The
  * sanitizers' frames are far larger (see au_js_settings_default). */
 #define AU_JS_WORKER_STACK ((size_t)256 << 10)
+#define AU_JS_WORKER_MEMORY ((size_t)24 << 20) /* a worker's memory limit when the embedder sets none */
 
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 

@@ -3131,6 +3131,16 @@ void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit)
     au_docview_script_memory(p->dv, used, limit);
 }
 
+void au_page_script_summary(const AuPage *p, AuBuf *out)
+{
+    au_docview_script_summary(p->dv, out);
+}
+
+void au_page_script_peaks(const AuPage *p, size_t *page_peak, size_t *worker_peak)
+{
+    au_docview_script_peaks(p->dv, page_peak, worker_peak);
+}
+
 uint32_t au_page_console_total(const AuPage *p)
 {
     return p->console_total;

@@ -1,0 +1,287 @@
+One source text per script, shared by its functions and by contexts.
+
+The parser copied each function's text when the function's parse ended
+(js_strndup) and kept the copies until the whole script was parsed and
+js_create_function shared them (patch 0006). The text of a function
+nested n levels deep was therefore held n times while a script compiled:
+an 860 KB bundle wrapped in one function held 2.2 MB of such copies at
+its peak. Every context that compiled the same script also kept its own
+copy of the text.
+
+The parser now only notes where a function's text lies in its buffer.
+When the script is parsed, js_fd_assign_sources gives each function its
+text: when the outermost functions make up half of the script or more,
+one JSSourceText holds the whole script and every function points into
+it; otherwise each outermost function gets a text and its nested
+functions share it, as before. A whole-script text of 1 KB or more is
+found again by its content (length, hash, bytes) through
+JSRuntime.source_text_list, so the documents of one page that load the
+same script share one text. Function.prototype.toString returns the same
+characters as before.
+
+JS_ComputeMemoryUsage counts each text once (js_func_source_count,
+js_func_source_size, included in js_func_size).
+
+Measured on the host with an 860 KB minified script: the peak of one
+compile fell from 11.6 MB to 9.4 MB, and three documents with that
+script settle at 16.4 MB instead of 18.2 MB.
+
+diff --git a/quickjs.c b/quickjs.c
+index 1e35698..153f10d 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -363,6 +363,7 @@ struct JSRuntime {
+     JSClass *class_array;
+ 
+     struct list_head context_list; /* list of JSContext.link */
++    struct list_head source_text_list; /* list of JSSourceText.link */
+     /* list of JSGCObjectHeader.link. List of allocated GC objects (used
+        by the garbage collector) */
+     struct list_head gc_obj_list;
+@@ -908,8 +909,11 @@ typedef struct JSFunctionBytecode {
+    kept a copy of its own text, so text nested n levels deep was held n
+    times. */
+ typedef struct JSSourceText {
++    struct list_head link; /* JSRuntime.source_text_list */
+     int ref_count;
+     int len;
++    uint32_t hash;  /* of buf, when 'cached' */
++    bool cached;    /* a whole script's text, found again by its content */
+     char buf[]; /* len bytes, then a NUL */
+ } JSSourceText;
+ 
+@@ -2360,6 +2364,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
+     rt->malloc_gc_threshold = 256 * 1024;
+ 
+     init_list_head(&rt->context_list);
++    init_list_head(&rt->source_text_list);
+     init_list_head(&rt->gc_obj_list);
+     init_list_head(&rt->gc_zero_ref_count_list);
+     rt->gc_phase = JS_GC_PHASE_NONE;
+@@ -7579,11 +7584,6 @@ static void compute_bytecode_size(JSFunctionBytecode *b, JSMemoryUsage_helper *h
+     if (b->byte_code_buf) {
+         hp->js_func_code_size += b->byte_code_len;
+     }
+-    /* a shared source text is counted with the function it starts with */
+-    if (b->source_text && b->source == b->source_text->buf) {
+-        memory_used_count++;
+-        js_func_size += sizeof(JSSourceText) + b->source_text->len + 1;
+-    }
+     if (b->pc2line_len) {
+         memory_used_count++;
+         hp->js_func_pc2line_count += 1;
+@@ -7889,6 +7889,14 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
+     s->js_func_code_size = mem.js_func_code_size;
+     s->js_func_pc2line_count = mem.js_func_pc2line_count;
+     s->js_func_pc2line_size = mem.js_func_pc2line_size;
++    /* source texts, each counted once however many functions share it */
++    list_for_each(el, &rt->source_text_list) {
++        JSSourceText *st = list_entry(el, JSSourceText, link);
++        s->js_func_source_count++;
++        s->js_func_source_size += sizeof(*st) + st->len + 1;
++    }
++    s->memory_used_count += s->js_func_source_count;
++    s->js_func_size += s->js_func_source_size;
+     s->memory_used_count += round(mem.memory_used_count) +
+         s->atom_count + s->str_count +
+         s->obj_count + s->shape_count +
+@@ -26013,12 +26021,12 @@ static __exception int js_parse_class(JSParseState *s, bool is_class_expr,
+     put_u32(fd->byte_code.buf + ctor_cpool_offset, ctor_fd->parent_cpool_idx);
+ 
+     /* store the class source code in the constructor. */
++    /* (the text is taken from the parser's buffer when the whole script
++       has been parsed: js_fd_assign_sources) */
+     js_free(ctx, ctor_fd->source);
++    ctor_fd->source = NULL;
+     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
+     ctor_fd->source_pos1 = 1 + (int)(class_start_ptr - s->buf_start);
+-    ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
+-    if (!ctor_fd->source)
+-        goto fail;
+ 
+     /* consume the '}' */
+     if (next_token(s))
+@@ -37057,8 +37065,10 @@ static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
+ 
+ static void js_source_text_free(JSRuntime *rt, JSSourceText *st)
+ {
+-    if (--st->ref_count == 0)
++    if (--st->ref_count == 0) {
++        list_del(&st->link);
+         js_free_rt(rt, st);
++    }
+ }
+ 
+ static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len)
+@@ -37068,12 +37078,130 @@ static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len
+         return NULL;
+     st->ref_count = 1;
+     st->len = len;
++    st->hash = 0;
++    st->cached = false;
+     if (buf)
+         memcpy(st->buf, buf, len);
+     st->buf[len] = '\0';
++    list_add_tail(&st->link, &ctx->rt->source_text_list);
++    return st;
++}
++
++/* The text of a whole script, with a new reference. Every context of the
++   runtime that compiles the same bytes (documents of one page that load
++   the same library) gets the same text. */
++static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int len)
++{
++    struct list_head *el;
++    JSSourceText *st;
++    uint32_t h = 2166136261u;
++    int i;
++
++    /* a short text is not worth the search */
++    if (len < 1024)
++        return js_source_text_new(ctx, buf, len);
++    for (i = 0; i < len; i++)
++        h = (h ^ (uint8_t)buf[i]) * 16777619u;
++    list_for_each(el, &ctx->rt->source_text_list) {
++        st = list_entry(el, JSSourceText, link);
++        if (st->cached && st->len == len && st->hash == h && !memcmp(st->buf, buf, len)) {
++            st->ref_count++;
++            return st;
++        }
++    }
++    st = js_source_text_new(ctx, buf, len);
++    if (st) {
++        st->hash = h;
++        st->cached = true;
++    }
+     return st;
+ }
+ 
++/* Gives every function of a parsed script its source text. The parser
++   only notes where each function's text lies in its buffer
++   (source_pos1, source_len); nothing is copied while parsing, where a
++   copy per function was held until the end of the parse, nested text
++   once per level.
++
++   When the script's outermost functions make up half of it or more (a
++   bundle wrapped in one function, a library of declarations), one text
++   holds the whole script and every function points into it. Otherwise
++   each outermost function gets a text of its own, which the functions
++   nested in it share, and the rest of the script (data, statements) is
++   not kept. */
++static int js_fd_assign_sources(JSContext *ctx, JSFunctionDef *top,
++                                const char *input, size_t input_len)
++{
++    JSFunctionDef *fd, *p;
++    struct list_head *el;
++    JSSourceText *script = NULL, *st;
++    size_t covered = 0;
++    bool whole;
++    int ofs;
++
++    if (input_len > INT32_MAX / 2)
++        input_len = 0; /* no function gets a text */
++    list_for_each(el, &top->child_list) {
++        fd = list_entry(el, JSFunctionDef, link);
++        if (fd->source_pos1)
++            covered += fd->source_len;
++    }
++    whole = (covered >= input_len / 2);
++    fd = top;
++    for (;;) {
++        if (fd != top && fd->source_pos1 && !fd->source && !fd->source_text) {
++            ofs = fd->source_pos1 - 1;
++            if (ofs < 0 || fd->source_len < 0 || (size_t)ofs > input_len ||
++                (size_t)fd->source_len > input_len - ofs) {
++                fd->source_pos1 = 0;
++                fd->source_len = 0;
++            } else if (whole) {
++                if (!script) {
++                    script = js_source_text_script(ctx, input, input_len);
++                    if (!script)
++                        return -1;
++                }
++                script->ref_count++;
++                fd->source_text = script;
++                fd->source_ofs = ofs;
++            } else {
++                st = NULL;
++                for (p = fd->parent; p && p != top; p = p->parent) {
++                    if (!p->source_text)
++                        continue;
++                    if (fd->source_pos1 >= p->source_pos1 &&
++                        fd->source_pos1 + fd->source_len <= p->source_pos1 + p->source_len) {
++                        st = p->source_text;
++                        st->ref_count++;
++                        fd->source_ofs = p->source_ofs + (fd->source_pos1 - p->source_pos1);
++                    }
++                    break;
++                }
++                if (!st) {
++                    st = js_source_text_new(ctx, input + ofs, fd->source_len);
++                    if (!st)
++                        return -1;
++                    fd->source_ofs = 0;
++                }
++                fd->source_text = st;
++            }
++        }
++        /* the next function in tree order */
++        if (!list_empty(&fd->child_list)) {
++            fd = list_entry(fd->child_list.next, JSFunctionDef, link);
++        } else {
++            while (fd != top && fd->link.next == &fd->parent->child_list)
++                fd = fd->parent;
++            if (fd == top)
++                break;
++            fd = list_entry(fd->link.next, JSFunctionDef, link);
++        }
++    }
++    if (script)
++        js_source_text_free(ctx->rt, script);
++    return 0;
++}
++
+ /* Moves fd->source into a shared text: the nearest enclosing function's,
+    when this function's text is a part of it (same parser buffer, checked
+    byte for byte), else a new one. The enclosing function runs this before
+@@ -37951,9 +38079,6 @@ static __exception int js_parse_function_decl2(JSParseState *s,
+                 token of the function source stored into s->last_ptr */
+             fd->source_len = s->last_ptr - ptr;
+             fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+-            fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
+-            if (!fd->source)
+-                goto fail;
+ 
+             goto done;
+         }
+@@ -37990,9 +38115,6 @@ static __exception int js_parse_function_decl2(JSParseState *s,
+         /* save the function source code */
+         fd->source_len = s->buf_ptr - ptr;
+         fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+-        fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
+-        if (!fd->source)
+-            goto fail;
+ 
+         if (next_token(s)) {
+             /* consume the '}' */
+@@ -38397,6 +38519,8 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
+     fd->body_scope = fd->scope_level;
+ 
+     err = js_parse_program(s);
++    if (!err)
++        err = js_fd_assign_sources(ctx, fd, input, input_len);
+     if (err) {
+     fail:
+         free_token(s, &s->token);
+diff --git a/quickjs.h b/quickjs.h
+index 918725d..f284f17 100644
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -611,6 +611,7 @@ typedef struct JSMemoryUsage {
+     int64_t shape_count, shape_size;
+     int64_t js_func_count, js_func_size, js_func_code_size;
+     int64_t js_func_pc2line_count, js_func_pc2line_size;
++    int64_t js_func_source_count, js_func_source_size; /* source texts, counted in js_func_size */
+     int64_t c_func_count, array_count;
+     int64_t fast_array_count, fast_array_elements;
+     int64_t binary_object_count, binary_object_size;

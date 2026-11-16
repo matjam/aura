@@ -89,7 +89,9 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     } else {
         au_buf_puts(out, "no runtime");
     }
-    au_buf_printf(out, "\n  images: %lu KB decoded of %lu KB (%lu decodes, %lu evictions)\n",
+    au_buf_putc(out, '\n');
+    au_page_script_summary(p, out);
+    au_buf_printf(out, "  images: %lu KB decoded of %lu KB (%lu decodes, %lu evictions)\n",
                   (unsigned long)st.image_kb, (unsigned long)st.image_budget_kb, (unsigned long)st.image_decodes,
                   (unsigned long)st.image_evictions);
     au_buf_printf(out, "  documents kept for Back and Forward: %lu, about %lu KB",

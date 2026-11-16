@@ -71,6 +71,11 @@ bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out);
 bool au_docscript_content_loaded(const AuDocScript *s);
 /* The runtime's allocated bytes and limit (0, 0 before it starts). */
 void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit);
+/* A line per script runtime, document and worker of the page (bytes,
+ * peak, limit), and the peaks alone: the page's runtime and the largest
+ * worker. For the top-level document's script. */
+void au_docscript_memory_summary(const AuDocScript *s, AuBuf *out);
+void au_docscript_peaks(const AuDocScript *s, size_t *page_peak, size_t *worker_peak);
 /* The view's clock for the time counters (0 without one). */
 uint32_t au_dv_perf_now(AuDocView *dv);
 /* Milliseconds until script work is due (0: now; UINT32_MAX: none). */

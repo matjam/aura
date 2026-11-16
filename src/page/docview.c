@@ -1334,6 +1334,19 @@ void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit)
         au_docscript_heap(dv->script, used, limit);
 }
 
+void au_docview_script_summary(const AuDocView *dv, AuBuf *out)
+{
+    if (dv->script)
+        au_docscript_memory_summary(dv->script, out);
+}
+
+void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *worker_peak)
+{
+    *page_peak = *worker_peak = 0;
+    if (dv->script)
+        au_docscript_peaks(dv->script, page_peak, worker_peak);
+}
+
 /* Brings styles up to date; returns true if the tree was restyled. */
 static bool update_style(AuDocView *dv)
 {

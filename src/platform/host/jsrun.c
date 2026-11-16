@@ -445,7 +445,12 @@ static int js_main(int argc, char **argv)
         printf("stats after run %zu bytes, %u wrappers", st.memory_used, st.wrappers);
         au_js_gc(js);
         au_js_stats(js, &st);
-        printf(", after gc %zu bytes\n", st.memory_used);
+        printf(", after gc %zu bytes, peak %zu bytes\n", st.memory_used, st.memory_peak);
+        AuBuf rep;
+        au_buf_init(&rep);
+        au_js_memory_report(js, &rep);
+        printf("%s", au_buf_cstr(&rep));
+        au_buf_free(&rep);
     }
     au_js_unload(js);
     au_js_free(js);

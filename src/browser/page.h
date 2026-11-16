@@ -584,6 +584,10 @@ AuPerf *au_page_perf(AuPage *p);
 /* Bytes the page's script runtime has allocated, and its limit (0, 0
  * when it has none). */
 void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
+/* A line per script runtime, document and worker of the page (bytes now,
+ * peak, limit), for the Performance report; and the peaks alone. */
+void au_page_script_summary(const AuPage *p, AuBuf *out);
+void au_page_script_peaks(const AuPage *p, size_t *page_peak, size_t *worker_peak);
 /* The console: lines ever added (a view compares it to see new lines or
  * a Clear), a line added by a tool (levels 5, the expression typed, and
  * 6, its result, besides the script levels), and Clear. */

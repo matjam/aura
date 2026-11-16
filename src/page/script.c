@@ -1181,6 +1181,23 @@ void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit)
     *limit = st.memory_limit;
 }
 
+void au_docscript_memory_summary(const AuDocScript *s, AuBuf *out)
+{
+    if (s && s->js)
+        au_js_memory_summary(s->js, out);
+}
+
+void au_docscript_peaks(const AuDocScript *s, size_t *page_peak, size_t *worker_peak)
+{
+    *page_peak = *worker_peak = 0;
+    if (!s || !s->js)
+        return;
+    AuJsStats st;
+    au_js_stats(s->js, &st);
+    *page_peak = st.memory_peak;
+    *worker_peak = st.worker_peak;
+}
+
 bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out)
 {
     /* The console may be the first script a page without scripts runs. */

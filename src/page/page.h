@@ -275,6 +275,11 @@ bool au_docview_content_loaded(const AuDocView *dv);
 /* Bytes the document's script runtime has allocated and its limit; 0, 0
  * without a runtime. */
 void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit);
+/* Script memory in detail: a line per runtime, document and worker of
+ * the page (bytes now, peak, limit), and the peaks alone (the page's
+ * runtime; the largest live worker). */
+void au_docview_script_summary(const AuDocView *dv, AuBuf *out);
+void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *worker_peak);
 
 /* ---- Keeping a document while it is not shown ----
  * An embedder that keeps a view alive while another document is shown

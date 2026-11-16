@@ -437,11 +437,18 @@ int au_js_worker_count(const AuJs *js);
 typedef struct AuJsStats {
     size_t memory_used;  /* bytes allocated by the runtime, and by the document's workers (with their stacks) */
     size_t memory_limit;
+    size_t memory_peak;  /* the most the page's runtime has held (workers not included) */
+    size_t worker_peak;  /* the most any one live worker of the document has held */
+    size_t worker_limit; /* a worker's limit */
     uint32_t wrappers;   /* live node wrappers */
     uint32_t errors;     /* uncaught exceptions reported */
     uint32_t interrupted; /* scripts stopped by the time limit */
 } AuJsStats;
 void au_js_stats(const AuJs *js, AuJsStats *s);
+/* Appends one line per script runtime of js's page and per document in
+ * it: bytes held now, the most held, and the limit; then the same for
+ * each worker. js is the top-level document's. */
+void au_js_memory_summary(const AuJs *js, AuBuf *out);
 
 /* The AuJs of a document, or NULL. */
 AuJs *au_js_of(const AuDocument *doc);

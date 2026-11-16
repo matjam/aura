@@ -18,16 +18,75 @@
  * the memory limit. After the first refusal a small reserve opens, so
  * QuickJS can build its "out of memory" error (without it the error
  * object itself fails and script sees a catchable null); js_leave closes
- * it again. */
+ * it again.
+ *
+ * The header holds the block's size and, 8 bytes in, the slot of the
+ * context it is charged to (JsMemSlot in js_int.h). */
 #define OOM_RESERVE (64u << 10)
+#define HDR_SLOT(p) (*(uint32_t *)((char *)(p) + 8))
+
+/* Nearing the limit, the collector must run before the limit refuses an
+ * allocation: QuickJS collects only when the heap has grown by half since
+ * the last collection, which with a 20 MB heap is past a 24 MB limit. A
+ * collection inside the allocator is not safe (the engine may be in the
+ * middle of building an object), so the allocator lowers the engine's
+ * threshold instead, and the engine collects at its next object creation.
+ * Each time, the level moves half way to the limit, so a heap that really
+ * is that full is collected a few times, not at every allocation. */
+static void gc_pressure(AuJs *js, size_t more)
+{
+    size_t limit = js->settings.memory_limit;
+    if (!js->gc_force_at || js->live_bytes < limit / 4 * 3)
+        js->gc_force_at = limit / 8 * 7;
+    if (js->live_bytes + more <= js->gc_force_at || !js->rt)
+        return;
+    size_t gap = limit > js->live_bytes ? limit - js->live_bytes : 0;
+    if (gap < (128u << 10)) {
+        js->gc_force_at = (size_t)-1 / 2; /* full: no more forced collections until it empties */
+        return;
+    }
+    js->gc_force_at = js->live_bytes + gap / 2;
+    JS_SetGCThreshold(js->rt, 0);
+}
 
 static bool over_limit(AuJs *js, size_t more)
 {
     size_t limit = js->settings.memory_limit + (js->oom ? OOM_RESERVE : 0);
-    if (js->live_bytes + more <= limit && more <= limit)
+    if (js->live_bytes + more <= limit && more <= limit) {
+        gc_pressure(js, more);
         return false;
+    }
+    if (!js->oom) {
+        js->oom_live = js->live_bytes;
+        js->oom_asked = more;
+        snprintf(js->oom_url, sizeof js->oom_url, "%s", js->compiling ? js->compiling : "");
+        js->oom_noted = true;
+    }
     js->oom = true;
     return true;
+}
+
+static void charge(AuJs *js, char *p, size_t size)
+{
+    js->live_bytes += size;
+    if (js->live_bytes > js->peak_bytes)
+        js->peak_bytes = js->live_bytes;
+    uint32_t slot = js->cur_slot < js->nslots ? js->cur_slot : 0;
+    HDR_SLOT(p) = slot;
+    if (js->nslots) {
+        JsMemSlot *m = &js->slots[slot];
+        m->live += size;
+        if (m->live > m->peak)
+            m->peak = m->live;
+    }
+}
+
+static void uncharge(AuJs *js, const char *p, size_t size)
+{
+    js->live_bytes -= size;
+    uint32_t slot = HDR_SLOT(p);
+    if (slot < js->nslots)
+        js->slots[slot].live -= size;
 }
 
 static void *qa_malloc(void *opaque, size_t size)
@@ -38,7 +97,7 @@ static void *qa_malloc(void *opaque, size_t size)
     if (!p)
         return NULL;
     *(size_t *)p = size;
-    ((AuJs *)opaque)->live_bytes += size;
+    charge(opaque, p, size);
     return p + HDR;
 }
 
@@ -56,7 +115,7 @@ static void qa_free(void *opaque, void *ptr)
 {
     if (ptr) {
         char *p = (char *)ptr - HDR;
-        ((AuJs *)opaque)->live_bytes -= *(size_t *)p;
+        uncharge(opaque, p, *(size_t *)p);
         au_free(p);
     }
 }
@@ -69,20 +128,44 @@ static void *qa_realloc(void *opaque, void *ptr, size_t size)
         qa_free(opaque, ptr);
         return NULL;
     }
+    AuJs *js = opaque;
     size_t old = *(size_t *)((char *)ptr - HDR);
-    if (size > old && over_limit(opaque, size - old))
+    if (size > old && over_limit(js, size - old))
         return NULL;
     char *p = au_try_realloc((char *)ptr - HDR, size + HDR);
     if (!p)
         return NULL;
+    /* the block stays with the context that first allocated it */
+    uint32_t slot = HDR_SLOT(p);
     *(size_t *)p = size;
-    ((AuJs *)opaque)->live_bytes += size - old;
+    js->live_bytes += size - old;
+    if (js->live_bytes > js->peak_bytes)
+        js->peak_bytes = js->live_bytes;
+    if (slot < js->nslots) {
+        JsMemSlot *m = &js->slots[slot];
+        m->live += size - old;
+        if (m->live > m->peak)
+            m->peak = m->live;
+    }
     return p + HDR;
 }
 
 static size_t qa_usable(const void *ptr)
 {
     return ptr ? *(const size_t *)((const char *)ptr - HDR) : 0;
+}
+
+/* Gives js a slot of its own in the runtime's accounting. */
+static void slot_new(AuJs *js)
+{
+    AuJs *r = js->root;
+    uint32_t n = r->nslots ? r->nslots : 1; /* slot 0: no context */
+    r->slots = au_realloc(r->slots, (n + 1) * sizeof *r->slots);
+    if (!r->nslots)
+        memset(&r->slots[0], 0, sizeof r->slots[0]);
+    memset(&r->slots[n], 0, sizeof r->slots[n]);
+    r->nslots = n + 1;
+    js->slot = n;
 }
 
 static const JSMallocFunctions qa_funcs = {qa_calloc, qa_malloc, qa_free, qa_realloc, qa_usable};
@@ -191,6 +274,7 @@ void js_enter(AuJs *js)
     AuJs *r = js->root;
     if (r->depth < (int)JS_COUNTOF(r->entered))
         r->entered[r->depth] = js;
+    r->cur_slot = js->slot;
     if (r->depth++ == 0) {
         JS_UpdateStackTop(r->rt);
         r->run_start = js_now(r);
@@ -202,9 +286,13 @@ void js_enter(AuJs *js)
 void js_leave(AuJs *js)
 {
     AuJs *r = js->root;
-    if (--r->depth == 0) {
+    if (--r->depth > 0 && r->depth <= (int)JS_COUNTOF(r->entered))
+        r->cur_slot = r->entered[r->depth - 1]->slot;
+    if (r->depth == 0) {
+        r->cur_slot = 0;
         r->interrupted = false;
         r->oom = false;
+        r->oom_noted = false;
         js_safe_point(js);
         for (AuJs *g = r; g; g = g->group_next)
             if (g->canvas_pending)
@@ -251,6 +339,21 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
     au_buf_init(&b);
     if (js->root->interrupted || js->closing) {
         au_buf_puts(&b, "Script stopped: it ran too long or the page was closed");
+    } else if (JS_IsUncatchableError(exc) && js->root->oom_noted) {
+        /* Which runtime hit its limit, how full it was and what it was
+         * doing, so that the line says what to change. */
+        AuJs *r = js->root;
+        r->oom_noted = false;
+        au_buf_printf(&b, "Script stopped: out of memory. The %s %s reached its script memory limit of %lu KB (%lu KB in use, %lu KB more asked for) ",
+                      r->worker ? "worker" : "page", r->url, (unsigned long)(r->settings.memory_limit / 1024),
+                      (unsigned long)(r->oom_live / 1024), (unsigned long)((r->oom_asked + 1023) / 1024));
+        if (r->oom_url[0])
+            au_buf_printf(&b, "while compiling %s", r->oom_url);
+        else
+            au_buf_puts(&b, "while running script");
+        if (js != r)
+            au_buf_printf(&b, " in the frame %s", js->url);
+        au_buf_printf(&b, ". To allow more, raise \"Script memory per %s\" in Preferences.", r->worker ? "worker" : "page");
     } else if (JS_IsUncatchableError(exc)) {
         au_buf_puts(&b, "Script stopped: ");
         append_value(ctx, &b, exc);
@@ -459,8 +562,7 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     AuElement *el = n && n->type == AU_NODE_ELEMENT ? (AuElement *)au_node_ref(n) : NULL;
     AuElement *prev = js->current_script;
     js->current_script = el;
-    JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL, url ? url : js->url, 1};
-    JSValue r = JS_Eval2(ctx, src, len, &o);
+    JSValue r = js_eval_classic(js, src, len, url, 1);
     bool ok = !JS_IsException(r);
     if (!ok) {
         /* An interrupt must keep unwinding to the embedder. */
@@ -623,6 +725,9 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     if (hooks)
         js->hooks = *hooks;
     js->P = JS_UNDEFINED;
+    slot_new(js);
+    uint32_t slot_before = js->root->cur_slot;
+    js->root->cur_slot = js->slot;
     const char *origin_set = js->settings.origin;
     js->settings.origin = NULL; /* the caller's string: copied below */
     if (root) {
@@ -631,6 +736,7 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     } else {
         js->rt = JS_NewRuntime2(&qa_funcs, js);
         if (!js->rt) {
+            au_free(js->slots);
             au_free(js);
             return NULL;
         }
@@ -652,6 +758,10 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
             JS_FreeContext(ctx);
         if (!root)
             JS_FreeRuntime(js->rt);
+        if (root)
+            root->cur_slot = slot_before;
+        else
+            au_free(js->slots);
         au_free(js);
         return NULL;
     }
@@ -716,9 +826,11 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     js->root = js;
     js->worker = true;
     js->wk = wk;
+    slot_new(js);
+    js->cur_slot = js->slot;
     js->settings = root->settings;
     js->settings.origin = NULL;
-    js->settings.memory_limit = root->settings.worker_memory_limit ? root->settings.worker_memory_limit : 24u << 20;
+    js->settings.memory_limit = root->settings.worker_memory_limit ? root->settings.worker_memory_limit : AU_JS_WORKER_MEMORY;
     size_t stack = root->settings.worker_stack ? root->settings.worker_stack : AU_JS_WORKER_STACK;
     js->settings.stack_limit = owner->hooks.coro ? stack - stack / 5 : root->settings.stack_limit;
     js->hooks.ctx = owner->hooks.ctx;
@@ -732,6 +844,7 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     js->P = JS_UNDEFINED;
     js->rt = JS_NewRuntime2(&qa_funcs, js);
     if (!js->rt) {
+        au_free(js->slots);
         au_free(js);
         return NULL;
     }
@@ -747,6 +860,7 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
         if (ctx)
             JS_FreeContext(ctx);
         JS_FreeRuntime(js->rt);
+        au_free(js->slots);
         au_free(js);
         return NULL;
     }
@@ -880,6 +994,7 @@ void au_js_free(AuJs *js)
     au_free(js->url);
     au_free(js->base);
     au_free(js->origin);
+    au_free(js->slots);
     au_free(js);
 }
 
@@ -909,6 +1024,31 @@ AuJs *au_js_of(const AuDocument *doc)
 
 /* ---- Running scripts ---- */
 
+/* A script at least this long is "large": the collector runs before it is
+ * compiled when the heap has grown, because a compile makes no objects
+ * and so never triggers a collection itself, while its working memory is
+ * several times the script's length. */
+#define JS_LARGE_SCRIPT (64u << 10)
+
+JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line)
+{
+    AuJs *r = js->root;
+    JSContext *ctx = js->ctx;
+    if (len >= JS_LARGE_SCRIPT && r->live_bytes > r->gc_base + (512u << 10)) {
+        JS_RunGC(r->rt);
+        r->gc_base = r->live_bytes;
+    }
+    char *prev = r->compiling;
+    r->compiling = (char *)(url ? url : js->url);
+    JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY, url ? url : js->url,
+                       line > 0 ? line : 1};
+    JSValue fn = JS_Eval2(ctx, src, len, &o);
+    r->compiling = prev;
+    if (JS_IsException(fn))
+        return fn;
+    return JS_EvalFunction(ctx, fn);
+}
+
 bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, const char *url, int line)
 {
     if (js->closing)
@@ -919,10 +1059,9 @@ bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, con
         au_node_ref(&el->node);
     js->current_script = el;
     js_enter(js);
-    JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL, url ? url : js->url, line > 0 ? line : 1};
     /* QuickJS wants a NUL-terminated source; src may not be. */
     char *copy = au_strndup(src, len);
-    JSValue r = JS_Eval2(ctx, copy, len, &o);
+    JSValue r = js_eval_classic(js, copy, len, url, line);
     au_free(copy);
     bool ok = !JS_IsException(r);
     if (!ok)
@@ -943,6 +1082,13 @@ void au_js_memory_report(AuJs *js, AuBuf *out)
     au_buf_printf(out, "script heap %lu KB in %lu blocks (limit %lu KB), %lu wrappers\n",
                   (unsigned long)(js->live_bytes / 1024), (unsigned long)m.malloc_count,
                   (unsigned long)(js->settings.memory_limit / 1024), (unsigned long)js->nwraps);
+    /* The engine takes blocks of up to 512 bytes from 4 KB arenas of its
+     * own: "in use" is what its blocks hold, the rest of the heap is free
+     * blocks inside arenas that still hold a live one. */
+    au_buf_printf(out, "  in use %lu KB (accounted for below: %lu KB), free inside the engine's arenas %lu KB, peak %lu KB\n",
+                  (unsigned long)(m.malloc_size / 1024), (unsigned long)(m.memory_used_size / 1024),
+                  (unsigned long)((js->live_bytes > (size_t)m.malloc_size ? js->live_bytes - (size_t)m.malloc_size : 0) / 1024),
+                  (unsigned long)(js->peak_bytes / 1024));
     au_buf_printf(out, "  atoms       %7lu  %7lu KB\n", (unsigned long)m.atom_count, (unsigned long)(m.atom_size / 1024));
     au_buf_printf(out, "  strings     %7lu  %7lu KB\n", (unsigned long)m.str_count, (unsigned long)(m.str_size / 1024));
     au_buf_printf(out, "  objects     %7lu  %7lu KB\n", (unsigned long)m.obj_count, (unsigned long)(m.obj_size / 1024));
@@ -950,6 +1096,8 @@ void au_js_memory_report(AuJs *js, AuBuf *out)
     au_buf_printf(out, "  shapes      %7lu  %7lu KB\n", (unsigned long)m.shape_count, (unsigned long)(m.shape_size / 1024));
     au_buf_printf(out, "  functions   %7lu  %7lu KB, of which bytecode %lu KB\n", (unsigned long)m.js_func_count,
                   (unsigned long)(m.js_func_size / 1024), (unsigned long)(m.js_func_code_size / 1024));
+    au_buf_printf(out, "  source text %7lu  %7lu KB (counted in functions)\n", (unsigned long)m.js_func_source_count,
+                  (unsigned long)(m.js_func_source_size / 1024));
     au_buf_printf(out, "  line tables %7lu  %7lu KB\n", (unsigned long)m.js_func_pc2line_count,
                   (unsigned long)(m.js_func_pc2line_size / 1024));
     au_buf_printf(out, "  C functions %7lu, arrays %lu (fast %lu, %lu elements, %lu KB)\n", (unsigned long)m.c_func_count,
@@ -1013,18 +1161,45 @@ void au_js_gc(AuJs *js)
     js->gc_base = js->live_bytes;
 }
 
+void au_js_memory_summary(const AuJs *js, AuBuf *out)
+{
+    const AuJs *r = js->root;
+    au_buf_printf(out, "  script runtime of %s: %lu KB, peak %lu KB, limit %lu KB\n", r->url,
+                  (unsigned long)(r->live_bytes / 1024), (unsigned long)(r->peak_bytes / 1024),
+                  (unsigned long)(r->settings.memory_limit / 1024));
+    size_t named = 0;
+    for (const AuJs *g = r; g; g = g->group_next) {
+        if (g->slot >= r->nslots)
+            continue;
+        const JsMemSlot *m = &r->slots[g->slot];
+        named += m->live;
+        au_buf_printf(out, "    %s %s: %lu KB, peak %lu KB\n", g == r ? "document" : "frame", g->url,
+                      (unsigned long)(m->live / 1024), (unsigned long)(m->peak / 1024));
+    }
+    if (r->live_bytes > named)
+        au_buf_printf(out, "    documents that have gone, and the runtime itself: %lu KB\n",
+                      (unsigned long)((r->live_bytes - named) / 1024));
+    for (const AuJs *g = r; g; g = g->group_next)
+        js_workers_summary(g, out);
+}
+
 void au_js_stats(const AuJs *js, AuJsStats *s)
 {
     /* The runtime's memory is counted once, for the root; a frame's
      * context reports none of its own. */
     s->memory_used = 0;
-    if (js->root == js) {
-        JSMemoryUsage mu;
-        JS_ComputeMemoryUsage(js->rt, &mu);
-        s->memory_used = (size_t)mu.malloc_size;
-    }
+    if (js->root == js)
+        s->memory_used = js->live_bytes; /* what the allocator gave the engine, its arenas' free blocks included */
     s->memory_used += js_workers_memory(js);
     s->memory_limit = js->root->settings.memory_limit;
+    s->memory_peak = js->root->peak_bytes;
+    s->worker_peak = 0;
+    for (const AuJs *g = js->root; g; g = g->group_next) {
+        size_t p = js_workers_peak(g);
+        if (p > s->worker_peak)
+            s->worker_peak = p;
+    }
+    s->worker_limit = js->root->settings.worker_memory_limit ? js->root->settings.worker_memory_limit : AU_JS_WORKER_MEMORY;
     s->wrappers = js->root->nwraps;
     s->errors = js->errors;
     s->interrupted = js->interrupts;
