@@ -8,6 +8,13 @@ add_executable(test_commands test_commands.c)
 target_link_libraries(test_commands aura_engine m)
 add_test(NAME browser_commands COMMAND test_commands)
 
+# The application services over an in-memory port: the files Aura
+# keeps, damaged files, when each is saved, the Running marker and
+# session restore, and the network stack set up from the preferences.
+add_executable(test_app test_app.c)
+target_link_libraries(test_app aura_engine m)
+add_test(NAME browser_app COMMAND test_app)
+
 # The list windows' models: rows, actions and their enable rules, the
 # callbacks for actions that ask, and the change notice.
 add_executable(test_lists test_lists.c)
