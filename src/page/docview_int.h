@@ -96,6 +96,10 @@ struct AuDocView {
     char hover_link[2048];
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
+    /* A hidden view frees its layout (au_docview_set_hidden); the scroll
+     * offsets of its scroll containers wait here for the next layout. */
+    AuLayoutScroll *slim_scrolls;
+    uint32_t nslim_scrolls;
     /* scripts (script.c) */
     AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
@@ -204,6 +208,7 @@ AuDocView *au_frames_view_of(AuDocView *dv, AuElement *el);
 AuElement *au_frames_element(const AuDocView *dv);
 /* Sums and state over the frames, for the view's own functions. */
 bool au_frames_can_persist(AuDocView *dv);
+bool au_frames_has_state(AuDocView *dv);
 void au_frames_set_hidden(AuDocView *dv, bool hidden);
 void au_frames_storage_event(AuDocView *dv, const AuDocStorageEvent *ev);
 size_t au_frames_memory(AuDocView *dv);

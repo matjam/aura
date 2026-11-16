@@ -320,6 +320,12 @@ void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *wor
  * still loading, has requests outstanding, or window has an unload or
  * beforeunload listener. */
 bool au_docview_can_persist(AuDocView *dv);
+/* True when the document holds something a reload would not bring back:
+ * a form control the user changed (or chose files for), a canvas that
+ * has a bitmap, or a worker; in the document or a nested one. An
+ * embedder that frees background documents to save memory (the
+ * browser's unloaded tabs) leaves such a document alone. */
+bool au_docview_has_state(AuDocView *dv);
 /* The view is about to be hidden (pagehide) or was shown again
  * (pageshow), both with persisted true. A hidden view drops its decoded
  * image pixels; images decode again from their bytes when next painted. */

@@ -418,6 +418,29 @@ void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_
  * url, without fetching anything. */
 void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len);
 
+/* ---- Discarding the document (unloaded tabs) ----
+ * A page that is not shown can give up its document to save memory and
+ * load it again later: au_page_discard frees the document view, the kept
+ * documents, the page source, the request log and the console, and keeps
+ * the URL, the title, the zoom and the security state. The page then
+ * paints white and does nothing until the browser navigates it again
+ * (au_page_navigate_entry with the page's URL loads it through the
+ * history cache mode). No pagehide or unload event fires.
+ *
+ * au_page_can_discard says whether nothing would be lost: false while
+ * the page loads or has transfers under way, for a POST result, an
+ * internal or interim page, a document with an unload or beforeunload
+ * listener, a worker, a canvas with a bitmap, or a form control the user
+ * changed (au_docview_has_state), and for a page that is discarded
+ * already. au_page_discard does not check.
+ *
+ * au_page_set_discarded puts a page that has not loaded anything into
+ * the discarded state with a URL and title to show (session restore). */
+bool au_page_can_discard(AuPage *p);
+void au_page_discard(AuPage *p);
+bool au_page_discarded(const AuPage *p);
+void au_page_set_discarded(AuPage *p, const char *url, const char *title);
+
 /* ---- The document cache ----
  * A page keeps the documents it leaves, so that Back and Forward show
  * them again at once: the document view with its tree, layout, images,
@@ -448,6 +471,10 @@ void au_page_set_entry(AuPage *p, uint32_t entry);
 void au_page_retain_entries(AuPage *p, const uint32_t *ids, size_t n);
 size_t au_page_kept_count(const AuPage *p);
 size_t au_page_kept_bytes(const AuPage *p); /* estimated */
+/* An estimate of what the document shown holds (the view's
+ * au_docview_memory_estimate and the page source), without the kept
+ * documents. A kept document holds less: it frees its layout. */
+size_t au_page_memory_estimate(const AuPage *p);
 /* When the oldest kept document was hidden (the page's clock); false
  * when the page keeps none. */
 bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp);
@@ -473,9 +500,14 @@ bool au_page_certificate_html(const AuPage *p, AuBuf *out);
 void au_page_status_text(const AuPage *p, char *out, size_t cap);
 /* The main document's bytes as they arrived (for Save Page As): false
  * while it is loading, after a failed or stopped load, and for pages
- * that have none (about:scene). The bytes stay valid until the next
- * load or au_page_free. */
+ * that have none (about:scene). Once the load is over the page holds
+ * the bytes compressed and inflates them for this call: use or copy
+ * them before returning to the event loop (au_page_idle drops the
+ * inflated copy ten seconds after the last call, and a load or
+ * au_page_free frees it). au_page_has_source says whether there are
+ * any without inflating them (menus). */
 bool au_page_source(const AuPage *p, const char **data, size_t *len);
+bool au_page_has_source(const AuPage *p);
 /* The page's script console: its last AU_PAGE_CONSOLE_LINES lines across
  * loads, oldest first (i from 0 to count - 1). level: 0 log, 1 info,
  * 2 warn, 3 error, 4 debug. A line stays valid until the next console
@@ -637,6 +669,10 @@ typedef struct AuPageStats {
     uint32_t restored;       /* times this document was shown again from the document cache; load_ms and
                               * first_paint_ms then time the last showing */
     uint32_t hide_ms;        /* of load_ms after a restore: hiding (or freeing) the document that was left */
+    uint32_t rebuild_ms;     /* of load_ms after a restore: building the layout the kept document had freed */
+    uint32_t source_bytes;   /* the page source's length */
+    uint32_t source_held;    /* bytes held for it now (compressed, plus the inflated copy while one is out) */
+    uint32_t source_pack_ms; /* how long compressing it took */
     bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);

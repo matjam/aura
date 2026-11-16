@@ -52,7 +52,7 @@ document's origin and, for a nested document, the tab's URL:
 - **sessionStorage** is one area per tab and storage key. The tab owns
   a namespace of the service (`AuTab.storage_ns`), not the document, so
   the area outlives navigations, reloads, Back and Forward, a kept
-  document and a discarded page. A tab opened from another (a link
+  document and an unloaded tab. A tab opened from another (a link
   opened in a new tab, `window.open`, `target=_blank`, a duplicated
   tab, Command-click on Back) starts with a copy of the opener's
   namespace (`au_bw_open_from`, `au_web_storage_ns_copy`); a tab opened
@@ -122,7 +122,9 @@ in memory and loses its file at the next save.
 | `sessionStorage` in the Session file | 256 KB per tab (`AU_WEB_STORAGE_SESSION_SAVE_BYTES`); 64 storage lines read per tab | an area that does not fit is left out of the file (it stays in memory) |
 
 The low-memory release handler of the Mac OS 9 application also unloads
-the saved areas (`au_web_storage_release`).
+the saved areas (`au_web_storage_release`), except the one used last
+(script may be copying a string out of it), and nothing while the
+service is inside a call: the handler runs from any allocation.
 
 ## Files
 

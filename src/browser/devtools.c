@@ -222,11 +222,17 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
             au_buf_putc(&v, ')');
         }
         if (st.restored)
-            au_buf_printf(&v, "   shown again from the kept documents; hiding the last page took %lu ms",
-                          (unsigned long)st.hide_ms);
+            au_buf_printf(&v,
+                          "   shown again from the kept documents; hiding the last page took %lu ms, building the "
+                          "layout again %lu ms",
+                          (unsigned long)st.hide_ms, (unsigned long)st.rebuild_ms);
         au_report_kv(out, "Page load", "%s", au_buf_cstr(&v));
         au_buf_free(&v);
     }
+    if (st.source_bytes)
+        au_report_kv(out, "Page source", "%lu KB, held in %lu KB (compressed in %lu ms)",
+                     (unsigned long)(st.source_bytes / 1024), (unsigned long)(st.source_held / 1024),
+                     (unsigned long)st.source_pack_ms);
     au_report_kv(out, "Requests", "%s   (%s decoded, %s blocked, %s failed)", s_count(a, sizeof a, nl->requests),
                  s_size(b, sizeof b, nl->decoded_bytes), s_count(c, sizeof c, nl->blocked),
                  s_count(d, sizeof d, nl->failed));

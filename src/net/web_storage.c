@@ -280,6 +280,7 @@ struct AuWebStorage {
     size_t total, resident;
     uint32_t next_ns, stamp, generation, change_gen, session_gen;
     bool index_dirty;
+    int busy; /* inside a call that reads or changes an area: au_web_storage_release must wait */
     char (*doomed)[9]; /* files to delete at the next save */
     size_t ndoomed;
     /* The last key worked out, so that a run of calls from one document
@@ -812,9 +813,16 @@ uint32_t au_web_storage_save(AuWebStorage *ws, uint32_t max)
 
 size_t au_web_storage_release(AuWebStorage *ws)
 {
+    /* The low-memory handler calls this from any allocation, also one
+     * made while an area is being read from its file or changed: then
+     * nothing may be unloaded. */
+    if (ws->busy)
+        return 0;
     size_t before = ws->resident;
+    /* The area used last stays: script may still be copying a string
+     * out of it (a call's result is valid until the next call). */
     for (size_t i = 0; i < ws->n; i++)
-        if (pick_clean(ws->areas[i]))
+        if (pick_clean(ws->areas[i]) && ws->areas[i] != ws->last_area)
             unload(ws, ws->areas[i]);
     return before - ws->resident;
 }
@@ -921,8 +929,8 @@ AuStorageResult au_web_storage_key(AuWebStorage *ws, const char *origin, const c
     return r;
 }
 
-AuStorageResult au_web_storage_open(AuWebStorage *ws, int kind, uint32_t ns, const char *origin, const char *top_url,
-                                    bool create, AuStorageArea **area)
+static AuStorageResult open_area(AuWebStorage *ws, int kind, uint32_t ns, const char *origin, const char *top_url,
+                                 bool create, AuStorageArea **area)
 {
     *area = NULL;
     const char *key;
@@ -976,6 +984,15 @@ AuStorageResult au_web_storage_open(AuWebStorage *ws, int kind, uint32_t ns, con
     return AU_STORAGE_OK;
 }
 
+AuStorageResult au_web_storage_open(AuWebStorage *ws, int kind, uint32_t ns, const char *origin, const char *top_url,
+                                    bool create, AuStorageArea **area)
+{
+    ws->busy++;
+    AuStorageResult r = open_area(ws, kind, ns, origin, top_url, create, area);
+    ws->busy--;
+    return r;
+}
+
 AuStorageMap *au_storage_area_map(AuStorageArea *a) { return a->map; }
 const char *au_storage_area_key(const AuStorageArea *a) { return a->key; }
 
@@ -1000,8 +1017,8 @@ static void tell(AuWebStorage *ws, const AuStorageArea *a, const char *k, size_t
     ws->listener(ws->listener_ctx, &c);
 }
 
-AuStorageResult au_web_storage_set(AuWebStorage *ws, AuStorageArea *a, const char *k, size_t klen, const char *v,
-                                   size_t vlen, const char *url, const void *writer)
+static AuStorageResult set_item(AuWebStorage *ws, AuStorageArea *a, const char *k, size_t klen, const char *v,
+                                size_t vlen, const char *url, const void *writer)
 {
     const char *ov = NULL;
     size_t olen = 0;
@@ -1030,6 +1047,15 @@ AuStorageResult au_web_storage_set(AuWebStorage *ws, AuStorageArea *a, const cha
     return AU_STORAGE_OK;
 }
 
+AuStorageResult au_web_storage_set(AuWebStorage *ws, AuStorageArea *a, const char *k, size_t klen, const char *v,
+                                   size_t vlen, const char *url, const void *writer)
+{
+    ws->busy++;
+    AuStorageResult r = set_item(ws, a, k, klen, v, vlen, url, writer);
+    ws->busy--;
+    return r;
+}
+
 void au_web_storage_remove(AuWebStorage *ws, AuStorageArea *a, const char *k, size_t klen, const char *url,
                            const void *writer)
 {
@@ -1037,18 +1063,22 @@ void au_web_storage_remove(AuWebStorage *ws, AuStorageArea *a, const char *k, si
     size_t olen = 0;
     if (!au_storage_map_get(a->map, k, klen, &ov, &olen))
         return;
+    ws->busy++;
     tell(ws, a, k, klen, ov, olen, NULL, 0, url, writer);
     au_storage_map_remove(a->map, k, klen);
     changed(ws, a);
     if (!a->items)
         remove_area(ws, a);
+    ws->busy--;
 }
 
 void au_web_storage_clear_area(AuWebStorage *ws, AuStorageArea *a, const char *url, const void *writer)
 {
+    ws->busy++;
     if (a->items)
         tell(ws, a, NULL, 0, NULL, 0, NULL, 0, url, writer);
     remove_area(ws, a);
+    ws->busy--;
 }
 
 int au_web_storage_call(AuWebStorage *ws, uint32_t ns, AuJsStorageCall *c)

@@ -45,6 +45,13 @@ target_include_directories(test_back_cache PRIVATE ${CMAKE_SOURCE_DIR}/tests/net
 add_test(NAME browser_back_cache COMMAND test_back_cache)
 set_tests_properties(browser_back_cache PROPERTIES TIMEOUT 120)
 
+# Unloaded tabs, on the fake transport.
+add_executable(test_unload test_unload.c)
+target_link_libraries(test_unload aura_fakenet m)
+target_include_directories(test_unload PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_unload COMMAND test_unload)
+set_tests_properties(browser_unload PROPERTIES TIMEOUT 120)
+
 # crypto.getRandomValues and randomUUID from AuBrowserHost.random.
 add_executable(test_crypto test_crypto.c)
 target_link_libraries(test_crypto aura_engine m)

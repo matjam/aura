@@ -36,7 +36,7 @@ every face parses and draws.
   renders, close to a Mac OS 9 machine without the system's fonts),
   `--no-bundled-fonts` and `--fonts-dir D`; `$AURA_FONTS` also names
   the folder.
-- In the guest, Develop > Font List (about:fonts) shows them
+- In the guest, Develop > Tests > Font List (about:fonts) shows them
   ([`developer-tools.md`](developer-tools.md)).
 
 ## Where faces come from

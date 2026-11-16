@@ -40,6 +40,22 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   yet ([`tls.md`](tls.md)).
 - Acid2: the cause of the four differing rows of the eyes is not found
   ([`layout.md`](layout.md), "Acid2").
+- The allocator's temporary memory path on Mac OS 9 has not supplied a
+  block in the guest: the heap never ran short there
+  ([`memory.md`](memory.md), "Temporary memory for the heap").
+- Developer windows, in the guest
+  ([`developer-tools.md`](developer-tools.md)):
+  - the contextual menu's View Source opening the Page Source window
+    (the guest tool has no Control-click);
+  - the contents of the file Save Report wrote: the file appeared on
+    the desktop with its name, and was not opened;
+  - pasting the copied report into another application: Copy All of the
+    Console window was pasted into the Console's input line, which uses
+    the same `mac_put_scrap`; the report itself is longer than that
+    line accepts;
+  - Report a Problem and System Status on the stock base
+    (`BASE=stock`), where the Enforcer line should read "not
+    installed", and on any real Mac.
 
 ## Layout
 
@@ -147,7 +163,18 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - **Console:** a source position for `console.log` lines (only errors
   carry a stack).
 - **Start-up:** the prelude's CSSOM, Range and observer parts are
-  created in every runtime (see [Memory](#memory)).
+  created in every context (see [Memory](#memory)).
+- **`document.referrer`** is always `""`.
+- **`document.cookie`** in a sandboxed frame without
+  `allow-same-origin` reads `""` and sets nothing; the standard throws
+  SecurityError ([`networking.md`](networking.md), "Cookies and
+  `document.cookie`").
+- **The compile-once cache** does not cover module scripts, a script a
+  worker loads with `importScripts`, a script that is mostly data, or a
+  script the worker compiled before the page did
+  ([`javascript.md`](javascript.md), "How script memory is kept down").
+- **An out-of-memory script** gets a console line and no page-level
+  notice.
 
 ## Script requests and CORS
 
@@ -185,7 +212,12 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   in) and Tab does not move between a page and its frames.
 - Invalidation rectangles of a frame inside a transformed or scrolled
   container use the frame's untransformed box.
-- The WindowProxy of a frame is a new object after each navigation.
+- The WindowProxy of a frame is a new object for each document,
+  including the first real document after the initial `about:blank`:
+  a reference taken earlier is not equal to `frames[i]` or
+  `contentWindow` read again, still shows the blank document, and does
+  not receive messages for the new window ([`frames.md`](frames.md),
+  "Script").
 - POST into a frame works only with a loader that implements
   `request_ex`.
 - No CSP directive other than `frame-ancestors` is enforced anywhere
@@ -240,12 +272,19 @@ failing:
 
 - A source position for `console.log` lines (only errors carry a
   stack).
-- A case-sensitive find, a horizontal scroll bar and column sorting in
-  the windows.
+- A time for each console line (the page stores none).
+- A case-sensitive find in the developer windows.
+- A horizontal scroll bar: the Network window cuts URLs to fit instead,
+  and the other windows wrap.
 - Request bodies and cookies in the Network details.
-- Saving the log to a file.
+- Saving the request log to a file (Copy All copies it).
 - Request headers appear only for loads made after the Network window
   first opened.
+- The developer windows are not part of the session: they are not
+  reopened at the next launch, only placed where they were.
+- The timing test and the paint benchmark exist only in the Mac shell.
+- `README.md` does not mention Report a Problem (`CONTRIBUTING.md`
+  does).
 
 ## Memory
 
@@ -267,20 +306,89 @@ Largest first.
 4. **`AuElement`** carries `template_content`, `shadow_root` and
    `control`, which almost no element uses (24 bytes of 160 on the
    host, 12 of about 92 on PowerPC).
-5. **The prelude's CSSOM, Range and observer parts** (a quarter of its
-   source) are created in every runtime; creating them on first use
-   means splitting the single prelude function, and would save an
-   estimated 150 to 250 KB per runtime.
-6. **The pooled allocator's slabs** are `NewPtr` blocks that do not
+5. **The prelude is created in every context** (1.4 MB per document,
+   0.6 MB per worker). Its classes and prototypes must be per realm
+   (`frame.contentWindow.Node !== Node`), and a function's bytecode
+   belongs to one realm, so only the 109 KB of prelude bytecode and its
+   function records could be shared, and only by teaching QuickJS to
+   share bytecode between realms. The cheaper step: create the CSSOM,
+   Range and observer parts (a quarter of its source) on first use,
+   which means splitting the single prelude function and would save an
+   estimated 150 to 250 KB per context.
+6. **Compiling a script** holds about 4 MB beyond its result for an
+   860 KB script (a record per function and all first-pass bytecode
+   until the script ends). That is how QuickJS resolves variables
+   ([`memory.md`](memory.md), "Where script memory goes").
+7. **Line tables are kept** (153 KB per document for that script, 3%).
+   Error locations in the Console depend on them.
+8. **The pooled allocator's slabs** are `NewPtr` blocks that do not
    move: one long-lived block keeps a 32 KB slab, and the largest free
    block after closing a large page was 42 MB of 60 MB free.
-7. **A system font is read whole on first use** (into temporary
+9. **A system font is read whole on first use** (into temporary
    memory); reading only the tables used needs a different font data
    interface.
 
 Also: a document estimated at more than 24 MB is not kept for Back (a
-very long Wikipedia article is over 30 MB), and about 20 scripted
-frames fill a page's 32 MB script limit.
+very long Wikipedia article is over 30 MB), and scripted frames cost
+1.4 MB each against the page's script memory limit, so about 5 fill the
+8 MB a Mac with little free memory gets
+([`javascript.md`](javascript.md), "Script memory limits").
+
+### Cold memory: what is not done
+
+Kept documents free their layout, background tabs are unloaded, and the
+page source and the HTTP cache hold compressed bytes
+([`memory.md`](memory.md), "Cold memory"). These remain, with what each
+would save for a Wikipedia article (host figures, 2026-11-15):
+
+1. **Script source text** kept for `Function.prototype.toString` (992 KB
+   in 8 texts for an article). Deflated it would be about 300 KB, a
+   saving of 0.7 MB per document. It needs a QuickJS patch:
+   `JSFunctionBytecode.source` is a pointer into `JSSourceText.buf`
+   (patch 0008), read by `js_function_toString` and the bytecode dump,
+   and patch 0008 finds a script's text again by comparing its bytes.
+   The pointer would become an offset, the readers would inflate
+   through a hook the embedder sets (QuickJS cannot call `src/codec`),
+   and the content lookup would compare length and hash first. No hot
+   path reads the text.
+2. **Layout of the parts of a visible page that are off screen.** The
+   box tree is one arena, so freeing part of it needs per-subtree
+   arenas or a layout that builds lines only for blocks near the
+   viewport. An article's layout is 2.5 MB and most of the page is off
+   screen; how much could go was not measured (an estimate: 1 to 2 MB
+   per visible article). Scrolling would then lay out as it goes.
+3. **Layout of background tabs.** A background tab still runs its
+   timers, so its layout is rebuilt whenever script asks for geometry;
+   freeing it when the tab has been in the background for a while (as
+   a kept document does) saves 0.9 to 2.5 MB per tab at the cost of a
+   25 to 30 ms rebuild (host) on return.
+4. **Function bytecode that has not run for a while** (464 KB per
+   article, with 72 KB of line tables). QuickJS would have to compile a
+   function again from its source text on the next call, which it has
+   no path for; with item 1 the text would also have to be inflated
+   first. About 0.4 MB per document, and the riskiest of these.
+5. **The prelude per context** (1.7 MB for each document context, frames
+   included). Its bytecode is shared; what each context holds is the
+   objects the prelude creates (constructors, prototypes, 500 C
+   functions). Creating the CSSOM, Range and observer parts on first
+   use (item 5 of the list above) saves 150 to 250 KB; creating
+   interface objects on first lookup of their global name would save
+   perhaps half of the 1.7 MB for a frame that uses few of them.
+6. **Atoms** (item 2 of the list above): 873 KB of script atoms per
+   runtime go with the runtime, but the engine's own atoms (270 KB per
+   article visited) never go.
+7. **Free space inside the script heap's arenas** (1.9 MB of 12.8 MB
+   after an article loads): a kept or background document cannot give
+   it back while live blocks share its slabs.
+8. **The page source and the cache entry are two compressed copies** of
+   an article's HTML (180 KB each); the page could hold a reference to
+   the cache entry instead when there is one.
+9. **Image bytes are held twice** while a document is loaded: by the
+   image cache (to decode again) and by the HTTP memory cache. With the
+   disk cache on the HTTP cache keeps 1 MB resident, which bounds it
+   there; the host tool holds both in full.
+10. **Text selection is not kept across Back** (it never was: a
+   navigation clears it).
 
 ## Fuzzing
 

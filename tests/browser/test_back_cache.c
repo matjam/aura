@@ -253,6 +253,153 @@ static void test_back_keeps(void)
     env_free(&e);
 }
 
+/* ---- A kept document frees its layout and builds it again ---- */
+
+static AuSurface *snap(AuBrowserWindow *w)
+{
+    AuSurface *s = au_surface_new(w->width, w->height);
+    AuCanvas *c = au_canvas_new(s);
+    au_bw_paint(w, c, (AuIRect){0, 0, w->width, w->height});
+    au_canvas_free(c);
+    return s;
+}
+
+static void test_slim(void)
+{
+    Env e;
+    env_init(&e);
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    /* A scroll container, a text field and enough text for the layout
+     * to be most of the document. */
+    AuBuf h;
+    au_buf_init(&h);
+    au_buf_puts(&h, "<!DOCTYPE html><title>A</title><form><input name=q></form>"
+                    "<div id=sc style='height:100px;width:300px;overflow:auto'>");
+    for (int i = 0; i < 60; i++)
+        au_buf_printf(&h, "<p>inner line %d", i);
+    au_buf_puts(&h, "</div>");
+    for (int i = 0; i < 400; i++)
+        au_buf_printf(&h, "<p>paragraph %d of the page <b>bold</b> and <i>more</i> words to lay out", i);
+    respond_html(s, au_buf_cstr(&h));
+    au_buf_free(&h);
+    respond_html(s, "<!DOCTYPE html><title>B</title><p>page b");
+    au_bw_new_tab(e.w, "http://site.test/a", true, -1);
+    settle(&e, 500);
+    paint(e.w);
+    bw_key(&e, AU_KEY_TAB, 0);
+    for (const char *c = "typed"; *c; c++)
+        bw_key(&e, 0, (unsigned char)*c);
+    CHECK(au_page_scroll(page(&e), 50, 80, 0, 230), "the inner container scrolls");
+    au_bw_scroll_to(e.w, 0, 20);
+    run_for(&e, 2000); /* the caret's blink phase is the same at both snapshots */
+    AuSurface *before = snap(e.w);
+    AuPageStats st0, st1;
+    au_page_stats(page(&e), &st0);
+    size_t shown_bytes = au_page_memory_estimate(page(&e));
+    CHECK(st0.boxes > 1000, "the layout holds %u boxes while shown", (unsigned)st0.boxes);
+
+    go(&e, "http://site.test/b");
+    size_t kept = au_page_kept_bytes(page(&e));
+    /* A box is over 100 bytes; its lines and fragments come on top. */
+    CHECK(au_page_kept_count(page(&e)) == 1 && kept + (size_t)st0.boxes * 100 < shown_bytes,
+          "the kept document is smaller by its layout: %u shown, %u kept, %u boxes", (unsigned)shown_bytes,
+          (unsigned)kept, (unsigned)st0.boxes);
+
+    au_bw_back(e.w);
+    settle(&e, 500);
+    CHECK(restored(&e) == 1 && s->nreq == 2, "Back shows the kept document");
+    au_page_stats(page(&e), &st1);
+    CHECK(st1.boxes == st0.boxes, "the layout is built again: %u boxes, %u before", (unsigned)st1.boxes,
+          (unsigned)st0.boxes);
+    CHECK(au_page_memory_estimate(page(&e)) == shown_bytes, "and the document is as large as it was: %u, %u",
+          (unsigned)au_page_memory_estimate(page(&e)), (unsigned)shown_bytes);
+    CHECK(tab(&e)->scroll_y == 20, "scroll position: %d", tab(&e)->scroll_y);
+    CHECK(au_bw_page_editing(e.w), "the field has the focus");
+    run_for(&e, 2000);
+    AuSurface *after = snap(e.w);
+    /* The page area only: the toolbar's Forward button is lit now. */
+    AuIRect pg = e.w->layout.page;
+    int differ = 0;
+    for (int y = pg.y0; y < pg.y1; y++)
+        for (int x = pg.x0; x < pg.x1; x++)
+            differ += before->pixels[y * before->stride + x] != after->pixels[y * after->stride + x];
+    CHECK(pg.y1 - pg.y0 > 300 && differ == 0,
+          "the page paints as it did before leaving (inner scroll offset, field text, caret): %d pixels differ",
+          differ);
+    au_surface_free(before);
+    au_surface_free(after);
+
+    /* Forward and Back again: the same holds a second time. */
+    au_bw_forward(e.w);
+    settle(&e, 500);
+    au_bw_back(e.w);
+    settle(&e, 500);
+    AuBuf v;
+    au_buf_init(&v);
+    au_bw_page_edit(e.w, AU_PAGE_EDIT_SELECT_ALL, NULL, 0, NULL);
+    au_bw_page_edit(e.w, AU_PAGE_EDIT_COPY, NULL, 0, &v);
+    CHECK(!strcmp(au_buf_cstr(&v), "typed"), "field contents after two returns: '%s'", au_buf_cstr(&v));
+    au_buf_free(&v);
+    env_free(&e);
+}
+
+/* ---- The page source is held compressed ---- */
+
+static void test_source(void)
+{
+    Env e;
+    env_init(&e);
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    AuBuf h;
+    au_buf_init(&h);
+    au_buf_puts(&h, "<!DOCTYPE html><title>Long</title>");
+    for (int i = 0; i < 1500; i++)
+        au_buf_printf(&h, "<p class=\"para\">paragraph number %d of a long page</p>\n", i);
+    size_t body_len = h.len;
+    char *body = au_strndup(au_buf_cstr(&h), h.len);
+    au_buf_free(&h);
+    respond_html(s, body);
+    respond_html(s, "<!DOCTYPE html><title>B</title><p>page b");
+    au_bw_new_tab(e.w, "http://site.test/long", true, -1);
+    settle(&e, 500);
+    paint(e.w);
+    run_for(&e, 3000);
+    AuPageStats st;
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_bytes == body_len + 3 && st.source_held * 4 < st.source_bytes,
+          "the source is held compressed: %u bytes in %u", (unsigned)st.source_bytes, (unsigned)st.source_held);
+    CHECK(au_page_has_source(page(&e)), "has a source");
+    const char *src = NULL;
+    size_t len = 0;
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3 && !memcmp(src + 3, body, body_len),
+          "asked for, it is the bytes that arrived (after the BOM): %u bytes", (unsigned)len);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held > st.source_bytes, "the inflated copy is held while in use");
+    run_for(&e, 5000);
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3, "asked again within the time");
+    run_for(&e, 9000);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held > st.source_bytes, "nine seconds after the last reader it is still there");
+    run_for(&e, 2000);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held * 4 < st.source_bytes, "and dropped after ten: %u held", (unsigned)st.source_held);
+
+    /* It goes with the kept document and comes back. */
+    go(&e, "http://site.test/b");
+    CHECK(au_page_kept_count(page(&e)) == 1, "the long page is kept");
+    au_bw_back(e.w);
+    settle(&e, 500);
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3 && !memcmp(src + 3, body, body_len),
+          "the source came back with the document");
+    /* View Source shows the same bytes. */
+    au_bw_view_source(e.w);
+    settle(&e, 500);
+    paint(e.w);
+    CHECK(page_text_has(&e, "paragraph number 1499 of a long page"), "View Source shows the text");
+    au_free(body);
+    env_free(&e);
+}
+
 /* ---- Timers and page transitions ---- */
 
 static void test_timers(void)
@@ -520,6 +667,8 @@ int main(void)
     static uint8_t fontdata[16384];
     fonts = ahem_fontset(fontdata);
     test_back_keeps();
+    test_slim();
+    test_source();
     test_timers();
     test_limits();
     test_excluded();

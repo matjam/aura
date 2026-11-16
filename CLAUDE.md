@@ -69,7 +69,7 @@ Aura for its users; keep it short.
 | blocklists | [`docs/content-blocking.md`](docs/content-blocking.md) |
 | windows, tabs, history, Back and Forward, scrolling, selection, find, contextual menus, Internet Config, downloads, session files | [`docs/browser-chrome.md`](docs/browser-chrome.md) |
 | the Mac OS 9 application, the Toolbox, Open Transport, entropy, the clock | [`docs/mac-os-9-shell.md`](docs/mac-os-9-shell.md) |
-| the Develop menu and its windows | [`docs/developer-tools.md`](docs/developer-tools.md) |
+| the Develop menu and its windows, System Status, Report a Problem and the bug report builder | [`docs/developer-tools.md`](docs/developer-tools.md) |
 | fuzzing, or any code a page's data reaches | [`docs/fuzzing.md`](docs/fuzzing.md) (Aura's fuzzers, Domato, and the rules they enforce) |
 
 | Problem | Read |
@@ -78,7 +78,7 @@ Aura for its users; keep it short.
 | a site's script fails | [`docs/javascript.md`](docs/javascript.md) ("To debug a script on a live page"), [`docs/script-requests-and-cors.md`](docs/script-requests-and-cors.md), [`docs/known-gaps.md`](docs/known-gaps.md) |
 | a site does not load, or its certificate fails | [`docs/networking.md`](docs/networking.md), [`docs/tls.md`](docs/tls.md), [`docs/content-blocking.md`](docs/content-blocking.md) |
 | something is slow | [`docs/performance.md`](docs/performance.md) |
-| running out of memory | [`docs/memory.md`](docs/memory.md) |
+| running out of memory | [`docs/memory.md`](docs/memory.md); for script, [`docs/javascript.md`](docs/javascript.md) ("Script memory limits") |
 | adding a test | [`docs/architecture.md`](docs/architecture.md) ("To add a test"), then the area's document |
 | changing third-party code | [`docs/conventions.md`](docs/conventions.md), then [`docs/javascript.md`](docs/javascript.md) or [`docs/tls.md`](docs/tls.md), and `third_party/README.md` |
 | making a release | [`docs/ci-and-releases.md`](docs/ci-and-releases.md) |

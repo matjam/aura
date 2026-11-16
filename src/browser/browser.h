@@ -144,8 +144,9 @@ struct AuTab {
     bool close_pending; /* opened only for a download: closed at the next idle */
     /* The tab's sessionStorage: a namespace of the browser's storage
      * service. It belongs to the tab, not to a document, so it outlives
-     * navigations, kept documents and a discarded page. */
+     * navigations, kept documents and an unloaded page. */
     uint32_t storage_ns;
+    uint32_t shown_ms;  /* when the tab was last the active one (the host's clock) */
 };
 
 struct AuBrowserWindow {
@@ -226,6 +227,13 @@ struct AuBrowser {
      * gets no requests it did not expect). The load_images preference
      * turns them off too. */
     bool site_icons;
+    /* Unloaded tabs: the page au_bw_idle is calling now and how deep such
+     * calls are nested (its document is in use and stays), when the
+     * memory rule last ran, and how many tabs the rules have unloaded. */
+    AuPage *idle_page;
+    int idle_depth;
+    uint32_t pressure_ms;
+    uint32_t unloaded_count;
 };
 
 AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host);
@@ -264,6 +272,39 @@ void au_browser_trim_documents(AuBrowser *b);
 bool au_browser_evict_document(AuBrowser *b);
 size_t au_browser_release_documents(AuBrowser *b);
 size_t au_browser_kept_documents(const AuBrowser *b, size_t *bytes);
+/* ---- Unloaded tabs ----
+ * A background tab can give up its document to save memory
+ * (au_page_discard): the tab stays with its title (dimmed), icon,
+ * address, back/forward list and scroll position, and loads again
+ * through the history cache mode when it is selected.
+ *
+ * Which tabs: never a window's active tab, a tab that is loading, or one
+ * whose page says something would be lost (au_page_can_discard: a POST
+ * result, a changed form control, an unload listener, a worker, a
+ * canvas with a bitmap, transfers under way).
+ *
+ * When: au_bw_idle applies the memory rules about once a second while
+ * prefs.unload_tabs is on and the host reports free memory
+ * (memory_free_kb). Under prefs.unload_free_kb free, a kept document
+ * goes first (au_browser_evict_document), then the least recently shown
+ * eligible tab, one per pass. Under prefs.unload_idle_kb free, a tab not
+ * shown for prefs.unload_idle_minutes goes. au_browser_release_memory is
+ * for the allocator's release handler: the kept documents, and when
+ * there are none, every eligible tab.
+ *
+ * au_bw_unload_tab is the user's command (the tab's contextual menu) and
+ * ignores the preference; au_bw_can_unload_tab says whether it would do
+ * anything. au_browser_unload_lru unloads the least recently shown
+ * eligible tab of any window; false when there is none. */
+bool au_bw_can_unload_tab(AuBrowserWindow *w, int i);
+bool au_bw_unload_tab(AuBrowserWindow *w, int i);
+bool au_browser_unload_lru(AuBrowser *b);
+/* The memory rules, with free_kb of memory free: returns true when a
+ * kept document or a tab went. au_bw_idle calls it; tests call it with a
+ * figure of their own. */
+bool au_browser_memory_pressure(AuBrowser *b, uint32_t free_kb);
+/* Frees what can be freed at once; returns how many documents went. */
+size_t au_browser_release_memory(AuBrowser *b);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 
@@ -349,6 +390,8 @@ void au_bw_view_source(AuBrowserWindow *w);
  * name to suggest (from the URL, else the title, with ".html" when it
  * has no extension; HFS-safe, cap >= 128). */
 bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len);
+/* Whether the active page has a source to save (au_page_has_source). */
+bool au_bw_has_page_source(AuBrowserWindow *w);
 void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap);
 
 /* ---- Selection and find (active tab) ---- */

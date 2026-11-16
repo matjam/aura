@@ -85,6 +85,38 @@ back at start. The Mac OS 9 application saves cookies and HSTS as
 the disk cache in the `Cache` folder
 ([`mac-os-9-shell.md`](mac-os-9-shell.md)).
 
+## Cookies and `document.cookie`
+
+Script reads and sets cookies through `au_net_document_cookie_get` and
+`_set` (`http.c`), which call the jar's `au_cookie_jar_document_get`
+and `_set`. [`javascript.md`](javascript.md), "document.cookie", lists
+the layers between the native and these calls.
+
+- **The URL** is the document's own. A `srcdoc` or `about:blank` frame
+  uses its parent's (it has its parent's origin).
+- **Frames.** For a nested document the tab's URL is the site for
+  cookies, so third-party blocking and SameSite apply: a cross-site
+  frame reads and sets nothing while third-party cookies are blocked,
+  and with blocking off it still cannot set a Lax cookie (the default)
+  from a cross-site frame.
+- **A sandboxed frame** without `allow-same-origin` reads `""` and sets
+  nothing (the standard throws SecurityError).
+- **A kept document** (hidden for Back and Forward) reads `""`.
+- **Rules the jar applies**, as for response headers: `Secure` is
+  refused on http, except on a loopback address, which is a trustworthy
+  origin; an `HttpOnly` cookie is not readable, cannot be set by script
+  and cannot be replaced by script; `SameSite=None` needs `Secure`;
+  `Path`, `Max-Age` and `Expires` behave as in a response.
+- **To try it**, serve a page from a local HTTP server and run
+  `aura-host chrome --net --tab URL --do wait:300 --do
+  js:document.cookie`.
+- **Tests:** `tests/webapi/test_doc_cookie.c` (ctest
+  `webapi_doc_cookie`): response and script cookies read back, `Path`,
+  `Max-Age` and the clock, `Secure` on http, `HttpOnly`, SameSite,
+  deletion, what a later request carries, a same-site frame, a
+  cross-site frame with and without third-party blocking, a `srcdoc`
+  frame, a sandboxed frame, and cookies turned off.
+
 ## The HTTP cache
 
 `src/net/cache.h` describes what is stored and when it is fresh. The
@@ -103,8 +135,27 @@ cache is used through the page's cache mode (`AuFetchCacheMode`):
   neither freshness nor a validator are stored for this alone. no-store
   responses are never stored, so history fetches them again, and Vary
   (Cookie included) still selects the variant.
+- **Encoded bodies.** A response that arrived gzip, deflate or brotli
+  encoded is stored as it arrived, in memory and on disk, with its
+  coding list in the entry (`au_cache_writer_set_coding`,
+  `au_cache_entry_coding`), and `deliver_cached` in `http.c` decodes it
+  each time it is served: an article's 46 entries take 0.9 MB instead
+  of 4.4 MB. Other bodies (images) are stored as they are. The stored
+  response fields carry neither Content-Encoding nor Content-Length, as
+  before, so readers of a cached response see a decoded body either
+  way. Revalidation (a 304 keeps the stored body and its coding), Vary
+  and the history mode work on the entry and do not look at the body;
+  requests with Range never use the cache.
+- **The entry format.** An entry held decoded is serialized as `AURC1`,
+  as before; one held encoded as `AURC2`, which adds the coding list
+  and the decoded length before the body. `au_cache_entry_parse` reads
+  both, so cache files written by earlier versions stay valid; an
+  earlier version of Aura takes an `AURC2` file for damaged, removes it
+  and fetches again. A stored body that fails to decode (a damaged
+  file) fails that request with a decode error and the entry is
+  removed, so the next request fetches it.
 - **Entry size.** An entry may take a quarter of the memory cache (8 MB
-  by default), so a large article's HTML fits.
+  by default), counted as stored, so a large article's HTML fits.
 - **Resident bytes.** The cache holds response bodies in memory up to
   its budget. With the disk cache on, the Mac application keeps 1 MB of
   them resident (`au_cache_set_resident`); the rest are read back from

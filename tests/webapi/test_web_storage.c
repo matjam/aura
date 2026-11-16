@@ -509,7 +509,13 @@ static void test_session(void)
         answer(e.a, "", PAGE);
     au_bw_restore(e.w, &s.windows[0]);
     settle(&e, 600);
-    EQ(jst(&e, 0, "sessionStorage.getItem('step')+sessionStorage.getItem('later')+(sessionStorage.getItem('u\\ttab')==='x%y\\n\\0z')"),
+    /* Restored tabs load when first shown; an unloaded tab keeps its
+     * sessionStorage, which belongs to the tab. */
+    for (int i = 0; i < 5; i++) {
+        au_bw_select_tab(e.w, i);
+        settle(&e, 300);
+    }
+    EQ(jst(&e, 0,"sessionStorage.getItem('step')+sessionStorage.getItem('later')+(sessionStorage.getItem('u\\ttab')==='x%y\\n\\0z')"),
        "21true", "restored: the first tab");
     EQ(jst(&e, 4, "sessionStorage.length"), "0", "restored: the fresh tab is still empty");
     bool opened = false;
@@ -997,10 +1003,18 @@ static void test_files(void)
     CHECK(files.writes >= 2, "the others were written to make room: %d writes", files.writes);
     EQ(jst(&e, 0, "localStorage.getItem('k').slice(0,6)+localStorage.getItem('k').length"), "a.test4006",
        "an unloaded area is read back");
+    /* With room for all three, the low-memory release unloads the saved ones. */
+    au_web_storage_set_limits(e.ws, 0, 0, 1u << 20);
+    jst(&e, 1, "localStorage.length");
+    jst(&e, 2, "localStorage.length");
+    au_web_storage_stats(e.ws, &st);
+    CHECK(st.loaded == 3, "all three in memory: %u", st.loaded);
     au_web_storage_save(e.ws, 0);
     CHECK(au_web_storage_release(e.ws) > 0, "release unloads saved areas");
     au_web_storage_stats(e.ws, &st);
-    CHECK(st.loaded == 0 && st.resident == 0 && st.bytes > 24000, "nothing resident, the sizes still known");
+    /* the area used last stays: script may hold a string of it */
+    CHECK(st.loaded <= 1 && st.resident < 6000 && st.bytes > 24000, "at most the last area resident (%u), the sizes known",
+          st.loaded);
     EQ(jst(&e, 1, "localStorage.getItem('k').length"), "4006", "and they come back");
     env_free(&e);
     mf_free(&files);
