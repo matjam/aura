@@ -284,7 +284,7 @@ frames fill a page's 32 MB script limit.
 
 ## Fuzzing
 
-What no fuzzer covers is listed in [`fuzzers.md`](fuzzers.md), "Not
+What no fuzzer covers is listed in [`fuzzing.md`](fuzzing.md), "Not
 fuzzed".
 
 ## Performance

@@ -141,7 +141,7 @@ whether a long script goes on). Allocation failures never reach
 `au_alloc`'s fatal handler. A page's runtime may allocate 32 MB.
 On Mac OS 9 script may use 512 KB of the application's 1 MB stack
 ([`mac-os-9-shell.md`](mac-os-9-shell.md)). A native that can take long
-must check the time limit itself ([`fuzzers.md`](fuzzers.md), "Script
+must check the time limit itself ([`fuzzing.md`](fuzzing.md), "Script
 that does not end").
 
 **Script memory.** See [`memory.md`](memory.md) for what a page's

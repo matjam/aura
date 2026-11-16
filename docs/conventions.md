@@ -45,7 +45,7 @@ names the document for each kind of work.
   and [`frames.md`](frames.md). A change to a parser or decoder needs a
   test vector, a truncation test and a fuzz run under the sanitizers
   ([`building.md`](building.md) says how to build with them;
-  [`fuzzers.md`](fuzzers.md) lists the fuzzers and the rules they
+  [`fuzzing.md`](fuzzing.md) lists the fuzzers and the rules they
   enforce on new code: `au_f2i` for floats a page controls, depth
   limits, capped allocations).
 
