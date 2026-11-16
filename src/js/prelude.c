@@ -70,6 +70,26 @@ const char au_js_intl_src[] = {
 
 const size_t au_js_intl_len = sizeof au_js_intl_src - 1;
 
+/* Streams, read when script first touches them (N.streams in runtime.c). */
+extern const char au_js_streams_src[];
+extern const size_t au_js_streams_len;
+
+const char au_js_streams_src[] = {
+#embed "streams.js"
+    , 0};
+
+const size_t au_js_streams_len = sizeof au_js_streams_src - 1;
+
+/* EventSource, read when script first touches it (N.eventSource). */
+extern const char au_js_eventsource_src[];
+extern const size_t au_js_eventsource_len;
+
+const char au_js_eventsource_src[] = {
+#embed "eventsource.js"
+    , 0};
+
+const size_t au_js_eventsource_len = sizeof au_js_eventsource_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -101,5 +121,23 @@ const unsigned char au_js_intl_bc[] = {
 };
 
 const size_t au_js_intl_bc_len = sizeof au_js_intl_bc;
+
+extern const unsigned char au_js_streams_bc[];
+extern const size_t au_js_streams_bc_len;
+
+const unsigned char au_js_streams_bc[] = {
+#embed "streams.bc"
+};
+
+const size_t au_js_streams_bc_len = sizeof au_js_streams_bc;
+
+extern const unsigned char au_js_eventsource_bc[];
+extern const size_t au_js_eventsource_bc_len;
+
+const unsigned char au_js_eventsource_bc[] = {
+#embed "eventsource.bc"
+};
+
+const size_t au_js_eventsource_bc_len = sizeof au_js_eventsource_bc;
 
 #endif

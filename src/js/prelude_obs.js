@@ -694,7 +694,10 @@ P.hasUnloadHandler = function () {
     return false;
 };
 P.pageTransition = function (show) {
+    /* a hidden document holds no EventSource connection (prelude_net.js) */
+    if (!show) P.eventSourcesFreeze(true);
     fire(G, new PageTransitionEvent(show ? 'pageshow' : 'pagehide', { persisted: true }), doc);
+    if (show) P.eventSourcesFreeze(false);
 };
 P.runJavascriptUrl = function (code) {
     code = str(code).replace(/^\s*javascript:/i, '');

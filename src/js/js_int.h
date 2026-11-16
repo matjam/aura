@@ -190,6 +190,10 @@ struct AuJs {
     JsFetch *fetches;
     uint32_t next_fetch_id;
     struct AuCorsCache *cors_cache; /* root: the CORS preflight cache (fetch.c) */
+    /* root: live compression and event stream parser handles
+     * (natives_streams.c), which hold memory outside the script heap */
+    uint32_t nzip, nsse;
+    JSClassID cls_stream_handle;
     void *modules;
     /* workers (worker.c): worker is set in a worker's own AuJs, which has
      * no document; wk is then its record. workers lists the workers a
@@ -313,6 +317,10 @@ void js_natives2_init(AuJs *js, JSValue N);
 void js_storage_free(AuJs *js);
 void js_natives_shared_init(AuJs *js, JSValue N); /* the natives a worker has too */
 void js_natives_forms_init(AuJs *js, JSValue N);
+
+/* ---- natives_streams.c: CompressionStream's codecs and the EventSource
+ * parser, for pages and workers ---- */
+void js_streams_natives_init(AuJs *js, JSValue N);
 
 /* ---- natives_canvas.c ---- */
 void js_canvas_init(AuJs *js, JSValue N);
