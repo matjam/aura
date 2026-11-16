@@ -6,6 +6,14 @@ add_executable(test_selection test_selection.c)
 target_link_libraries(test_selection aura_engine m)
 add_test(NAME layout_selection COMMAND test_selection)
 
+# Layout time grows with the page and not with its square: generated
+# pages at two sizes (test_scaling.c).
+add_executable(test_layout_scaling test_scaling.c)
+target_link_libraries(test_layout_scaling aura_engine m)
+target_include_directories(test_layout_scaling PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME layout_scaling COMMAND test_layout_scaling)
+set_tests_properties(layout_scaling PROPERTIES TIMEOUT 600)
+
 # Mixed scripts, symbols and emoji with the bundled fonts.
 add_executable(test_layout_fonts test_fonts.c)
 target_link_libraries(test_layout_fonts aura_host_platform aura_engine m)

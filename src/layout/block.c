@@ -16,14 +16,140 @@
 
 /* ---- Floats ---- */
 
+/* A formatting context's floats are a list in placement order. Every
+ * line and every float asks it what room a band has and where the next
+ * float ends, so a walk of the whole list per question made a page of n
+ * floats cost n squared (8,000 floats: a quarter of a second on the
+ * host). Up to FLOATS_PLAIN floats the list is walked; beyond that two
+ * indexes answer:
+ *
+ * - tree: the tops never decrease along the list (a float is not placed
+ *   above an earlier one), so the floats that start above a band's
+ *   bottom are a prefix, found by bisection. Of those, the ones that
+ *   reach below the band's top are found through a binary tree over the
+ *   list's indices whose nodes hold the lowest bottom under them: a
+ *   subtree that ends above the band is skipped.
+ * - ends: the bottoms in sorted runs whose lengths are the bits of their
+ *   count (a new bottom is a run of one, and equal runs merge), so the
+ *   first bottom below a line is a bisection in each run.
+ *
+ * The answers are the walk's. */
+#ifdef AURA_FLOATS_CHECK
+#include <stdlib.h>
+#define FLOATS_PLAIN 2
+#else
+#define FLOATS_PLAIN 32
+#endif
+
 void l_floats_free(LFloats *fl)
 {
     au_free(fl->f);
-    fl->f = NULL;
-    fl->n = fl->cap = 0;
+    au_free(fl->tree);
+    au_free(fl->ends);
+    au_free(fl->ends_tmp);
+    memset(fl, 0, sizeof *fl);
 }
 
-void l_floats_avail(const LFloats *fl, float y, float h, float left, float right, float *l, float *r)
+/* What float i holds in the tree: its bottom when it takes room. */
+static float float_reach(const struct LFloatRec *f)
+{
+    return f->h > 0 && f->w > 0 ? f->y + f->h : -INFINITY;
+}
+
+static void ends_add(LFloats *fl, float b)
+{
+    if (fl->nends == fl->ends_cap) {
+        fl->ends_cap = fl->ends_cap ? fl->ends_cap * 2 : 64;
+        fl->ends = au_realloc(fl->ends, fl->ends_cap * sizeof *fl->ends);
+        fl->ends_tmp = au_realloc(fl->ends_tmp, (fl->ends_cap / 2) * sizeof *fl->ends_tmp);
+    }
+    uint32_t m = fl->nends, start = m, len = 1;
+    fl->ends[m] = b;
+    fl->nends++;
+    /* Merge the new run with the run before it while they are as long. */
+    while (m & len) {
+        float *a = fl->ends + start - len, *t = fl->ends_tmp;
+        memcpy(t, a, len * sizeof *t);
+        uint32_t i = 0, j = len, k = 0; /* t[i], a[j] -> a[k] */
+        while (i < len && j < 2 * len)
+            a[k++] = a[j] < t[i] ? a[j++] : t[i++];
+        while (i < len)
+            a[k++] = t[i++];
+        start -= len;
+        len <<= 1;
+    }
+}
+
+static void tree_set(LFloats *fl, uint32_t i)
+{
+    uint32_t node = fl->tree_leaves + i;
+    float v = float_reach(&fl->f[i]);
+    fl->tree[node] = v;
+    for (node >>= 1; node >= 1; node >>= 1) {
+        if (!(v > fl->tree[node]))
+            break;
+        fl->tree[node] = v;
+    }
+}
+
+/* Builds the tree for the list's capacity. */
+static void tree_build(LFloats *fl)
+{
+    uint32_t leaves = 64;
+    while (leaves < fl->cap)
+        leaves <<= 1;
+    au_free(fl->tree);
+    fl->tree = au_alloc(2 * (size_t)leaves * sizeof *fl->tree);
+    fl->tree_leaves = leaves;
+    for (uint32_t i = 0; i < 2 * leaves; i++)
+        fl->tree[i] = -INFINITY;
+    for (uint32_t i = 0; i < fl->n; i++)
+        fl->tree[leaves + i] = float_reach(&fl->f[i]);
+    for (uint32_t i = leaves - 1; i >= 1; i--)
+        fl->tree[i] = l_max(fl->tree[2 * i], fl->tree[2 * i + 1]);
+}
+
+/* Appends a placed float and keeps the summaries and indexes. */
+static void floats_add(LFloats *fl, struct LFloatRec rec)
+{
+    bool grew = false;
+    if (fl->n == fl->cap) {
+        fl->cap = fl->cap ? fl->cap * 2 : 8;
+        fl->f = au_realloc(fl->f, fl->cap * sizeof *fl->f);
+        grew = true;
+    }
+    uint32_t i = fl->n++;
+    fl->f[i] = rec;
+    float b = rec.y + rec.h;
+    fl->max_top = rec.y;
+    fl->bottom = l_max(fl->bottom, b);
+    fl->side_bottom[rec.side] = fl->side_n[rec.side] ? l_max(fl->side_bottom[rec.side], b) : l_max(-INFINITY, b);
+    fl->side_n[rec.side]++;
+    if (fl->n <= FLOATS_PLAIN)
+        return;
+    if (!fl->tree) {
+        /* The list has just outgrown the walk: index all of it. */
+        tree_build(fl);
+        for (uint32_t k = 0; k < fl->n; k++) {
+            float kb = fl->f[k].y + fl->f[k].h;
+            if (fl->f[k].h > 0 && kb == kb) /* not a NaN: the runs are sorted */
+                ends_add(fl, kb);
+        }
+        return;
+    }
+    if (grew && fl->cap > fl->tree_leaves)
+        tree_build(fl);
+    else
+        tree_set(fl, i);
+    if (rec.h > 0 && b == b)
+        ends_add(fl, b);
+}
+
+/* The walks: the answers for a short list, and what the indexes must
+ * give for a long one (a build with -DAURA_FLOATS_CHECK compares them on
+ * every question and indexes from the third float on; run the layout
+ * fuzzers in it after a change here). */
+static void avail_walk(const LFloats *fl, float y, float h, float left, float right, float *l, float *r)
 {
     float lo = left, hi = right;
     for (uint32_t i = 0; fl && i < fl->n; i++) {
@@ -42,7 +168,7 @@ void l_floats_avail(const LFloats *fl, float y, float h, float left, float right
     *r = hi;
 }
 
-float l_floats_next_bottom(const LFloats *fl, float y)
+static float next_bottom_walk(const LFloats *fl, float y)
 {
     float best = INFINITY;
     for (uint32_t i = 0; fl && i < fl->n; i++) {
@@ -53,25 +179,109 @@ float l_floats_next_bottom(const LFloats *fl, float y)
     return best;
 }
 
+void l_floats_avail(const LFloats *fl, float y, float h, float left, float right, float *l, float *r)
+{
+    float lo = left, hi = right;
+    if (fl && fl->tree) {
+        /* The floats that start above the band's bottom: a prefix. */
+        uint32_t a = 0, e = fl->n;
+        while (a < e) {
+            uint32_t mid = a + (e - a) / 2;
+            bool above = h > 0 ? fl->f[mid].y < y + h : fl->f[mid].y <= y;
+            if (above)
+                a = mid + 1;
+            else
+                e = mid;
+        }
+        uint32_t prefix = a, leaves = fl->tree_leaves;
+        uint32_t stack[72];
+        int sp = 0;
+        stack[sp++] = 1;
+        while (sp) {
+            uint32_t node = stack[--sp];
+            if (!(fl->tree[node] > y))
+                continue; /* nothing under it reaches below the band's top */
+            if (node >= leaves) {
+                const struct LFloatRec *f = &fl->f[node - leaves];
+                if (node - leaves >= prefix)
+                    continue;
+                if (f->side == 0)
+                    lo = l_max(lo, f->x + f->w);
+                else
+                    hi = l_min(hi, f->x);
+                continue;
+            }
+            uint32_t first = node;
+            while (first < leaves)
+                first <<= 1;
+            if (first - leaves >= prefix)
+                continue; /* all of it starts below the band */
+            stack[sp++] = 2 * node + 1;
+            stack[sp++] = 2 * node;
+        }
+        *l = lo;
+        *r = hi;
+#ifdef AURA_FLOATS_CHECK
+        float wl, wr;
+        avail_walk(fl, y, h, left, right, &wl, &wr);
+        /* NaN coordinates make either answer depend on the order. */
+        if ((wl != *l && wl == wl && *l == *l) || (wr != *r && wr == wr && *r == *r))
+            abort();
+#endif
+        return;
+    }
+    avail_walk(fl, y, h, left, right, l, r);
+}
+
+float l_floats_next_bottom(const LFloats *fl, float y)
+{
+    float best = INFINITY;
+    if (fl && fl->tree) {
+        /* The first bottom below y in each sorted run. */
+        uint32_t pos = 0;
+        for (uint32_t bit = 0x80000000u; bit; bit >>= 1) {
+            if (!(fl->nends & bit))
+                continue;
+            const float *run = fl->ends + pos;
+            uint32_t a = 0, e = bit;
+            while (a < e) {
+                uint32_t mid = a + (e - a) / 2;
+                if (run[mid] > y)
+                    e = mid;
+                else
+                    a = mid + 1;
+            }
+            if (a < bit && run[a] < best)
+                best = run[a];
+            pos += bit;
+        }
+#ifdef AURA_FLOATS_CHECK
+        float w = next_bottom_walk(fl, y);
+        if (w != best)
+            abort();
+#endif
+        return best;
+    }
+    return next_bottom_walk(fl, y);
+}
+
 float l_floats_clear_y(const LFloats *fl, int clear)
 {
     float y = -INFINITY;
-    for (uint32_t i = 0; fl && i < fl->n; i++) {
-        const struct LFloatRec *f = &fl->f[i];
-        bool match = clear == AU_CLEAR_BOTH || ((clear == AU_CLEAR_LEFT || clear == AU_CLEAR_INLINE_START) && f->side == 0) ||
-                     ((clear == AU_CLEAR_RIGHT || clear == AU_CLEAR_INLINE_END) && f->side == 1);
-        if (match)
-            y = l_max(y, f->y + f->h);
-    }
+    if (!fl)
+        return y;
+    bool left = clear == AU_CLEAR_BOTH || clear == AU_CLEAR_LEFT || clear == AU_CLEAR_INLINE_START;
+    bool right = clear == AU_CLEAR_BOTH || clear == AU_CLEAR_RIGHT || clear == AU_CLEAR_INLINE_END;
+    if (left && fl->side_n[0])
+        y = l_max(y, fl->side_bottom[0]);
+    if (right && fl->side_n[1])
+        y = l_max(y, fl->side_bottom[1]);
     return y;
 }
 
 float l_floats_bottom(const LFloats *fl)
 {
-    float y = 0;
-    for (uint32_t i = 0; fl && i < fl->n; i++)
-        y = l_max(y, fl->f[i].y + fl->f[i].h);
-    return y;
+    return fl ? fl->bottom : 0;
 }
 
 static int float_side(const LBlock *f)
@@ -90,9 +300,9 @@ void l_place_float(AuLayout *L, LFloats *fl, LBlock *f, float cb_w, float cb_h, 
     l_layout_independent(L, f, cb_w, cb_h, cb_w, LS_FIT);
     float mw = f->w + f->m[1] + f->m[3], mh = f->h + f->m[0] + f->m[2];
     int side = float_side(f);
-    /* Not above an earlier float's top. */
-    for (uint32_t i = 0; i < fl->n; i++)
-        y = l_max(y, fl->f[i].y);
+    /* Not above an earlier float's top (the last one's is the lowest). */
+    if (fl->n)
+        y = l_max(y, fl->max_top);
     int clear = f->b.style->box->clear;
     if (clear != AU_CLEAR_NONE)
         y = l_max(y, l_floats_clear_y(fl, clear));
@@ -114,11 +324,7 @@ void l_place_float(AuLayout *L, LFloats *fl, LBlock *f, float cb_w, float cb_h, 
         }
         y = nb;
     }
-    if (fl->n == fl->cap) {
-        fl->cap = fl->cap ? fl->cap * 2 : 8;
-        fl->f = au_realloc(fl->f, fl->cap * sizeof *fl->f);
-    }
-    fl->f[fl->n++] = (struct LFloatRec){x, y, mw, mh, (uint8_t)side};
+    floats_add(fl, (struct LFloatRec){x, y, mw, mh, (uint8_t)side});
     f->x = x + f->m[3] - ox;
     f->y = y + f->m[0] - oy;
 }

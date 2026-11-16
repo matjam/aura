@@ -24,17 +24,23 @@ enum {
     SF_CONTENT = 32,     /* makes the line non-empty */
     SF_SPLITTABLE = 64,  /* may break between any characters if it does not fit */
     SF_PRESERVED = 128,  /* trailing spaces are preserved (pre-wrap): they hang */
-    SF_PLACED = SF_TAB   /* IT_FLOAT: already placed (a line that is retried lower must not place it again) */
+    SF_PLACED = SF_TAB,  /* IT_FLOAT: already placed (a line that is retried lower must not place it again) */
+    SF_LAZY_W = 256      /* the long rest of a split text: w is not measured yet (seg_width) */
 };
 
 struct LSeg {
     LBox *box;
     uint32_t start, end; /* text: bytes [start, end), trailing spaces included */
     uint16_t trail;      /* text: bytes of trailing spaces */
-    uint8_t kind, flags;
+    uint16_t flags;
     uint16_t depth;
+    uint8_t kind;
     float w, trail_w, wmin;
 };
+
+/* A split text's rest longer than this is measured only when a line can
+ * hold it (SF_LAZY_W). */
+#define LAZY_TAIL_BYTES 256
 
 #define INLINE_MAX_DEPTH 64
 
@@ -1169,10 +1175,30 @@ static AU_NOINLINE float finish_line(LineState *S, uint32_t a, uint32_t e, float
 
 /* ---- Line breaking ---- */
 
-static void split_seg(AuLayout *L, uint32_t i, uint32_t at_byte, float w_head)
+/* Splits text segment i at at_byte into a head (which ends the line) and
+ * a tail (which starts the next), and returns the head's index.
+ *
+ * The array needs one more slot. Making it after i moves every later
+ * segment of the paragraph, and a long text that wraps by characters
+ * (break-all, overflow-wrap, a narrow column) is split once per line:
+ * the cost grew with the square of the paragraph (a Domato page took
+ * minutes here). The segments of finished lines are not read again, so
+ * when the line does not begin at the paragraph's first segment the slot
+ * before the line (line_first - 1) is used instead: the line's own
+ * segments move down one, the head lands at i - 1 and the tail stays at
+ * i. That costs the line's length. *moved tells the caller its indices
+ * into the line are one lower. */
+static uint32_t split_seg(AuLayout *L, uint32_t base, uint32_t line_first, uint32_t i, uint32_t at_byte, float w_head,
+                          bool *moved)
 {
-    seg_push(L);
-    memmove(&L->segs[i + 2], &L->segs[i + 1], (L->nsegs - i - 2) * sizeof *L->segs);
+    *moved = line_first > base;
+    if (*moved) {
+        memmove(&L->segs[line_first - 1], &L->segs[line_first], (i - line_first + 1) * sizeof *L->segs);
+        i--;
+    } else {
+        seg_push(L);
+        memmove(&L->segs[i + 2], &L->segs[i + 1], (L->nsegs - i - 2) * sizeof *L->segs);
+    }
     LSeg *h = &L->segs[i], *t = &L->segs[i + 1];
     *t = *h;
     LText *tx = (LText *)h->box;
@@ -1184,8 +1210,46 @@ static void split_seg(AuLayout *L, uint32_t i, uint32_t at_byte, float w_head)
     h->flags = (h->flags & (SF_CONTENT | SF_SPLITTABLE)) | SF_BREAK;
     t->start = at_byte;
     uint32_t wl = t->end - t->trail - t->start;
-    t->w = l_measure(L, f, t->box->style, tx->text + t->start, wl);
-    t->wmin = t->w;
+    if (wl > LAZY_TAIL_BYTES) {
+        /* Measuring the rest here, once per line, made a long text cost
+         * the square of its length. It is measured when a line has room
+         * for all of it (seg_width); until then it only has to be wider
+         * than any room, and not zero (a zero-width text is a space). */
+        t->w = t->wmin = 1;
+        t->flags |= SF_LAZY_W;
+    } else {
+        t->w = l_measure(L, f, t->box->style, tx->text + t->start, wl);
+        t->wmin = t->w;
+        t->flags &= (uint16_t)~SF_LAZY_W;
+    }
+    return i;
+}
+
+/* The width of segment s for a line with room left. For the unmeasured
+ * rest of a split text (SF_LAZY_W) the answer is exact when the text
+ * fits in the room, or nearly does, and otherwise a width that does not
+ * fit: the line breaker then splits it again, or breaks before it, and
+ * asks again on the next line. The cost follows what fits in the room,
+ * not the length of the text. exact forces the measurement (the text
+ * goes on this line whatever its width). */
+static float seg_width(AuLayout *L, LSeg *s, float room, bool exact)
+{
+    if (!(s->flags & SF_LAZY_W))
+        return s->w;
+    LText *t = (LText *)s->box;
+    LFont *f = l_font(L, s->box->style);
+    uint32_t len = s->end - s->trail - s->start;
+    if (!exact) {
+        float pw;
+        uint32_t k = l_prefix_seek(L, f, s->box->style, t->text + s->start, len, room > 0 ? room : 0, &pw);
+        /* l_prefix_seek stops within 64 bytes of the end only when it
+         * found no prefix that is too wide. */
+        if (len - k > 64)
+            return (room > 0 ? room : 0) + 1e6f;
+    }
+    s->w = s->wmin = l_measure(L, f, s->box->style, t->text + s->start, len);
+    s->flags &= (uint16_t)~SF_LAZY_W;
+    return s->w;
 }
 
 /* The longest prefix of text segment i that fits in room (at least one
@@ -1320,7 +1384,7 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
                 j++;
                 continue;
             }
-            float w = s->w;
+            float w = seg_width(L, s, avail - x, false);
             if (s->flags & SF_TAB)
                 w = tab_width(L, s, x);
             if ((s->flags & SF_BREAK_BEFORE) && j > i && has_content)
@@ -1337,8 +1401,14 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
                 float hw;
                 uint32_t at = fit_prefix(L, s, room, &hw);
                 if (at < s->end - s->trail && (hw <= room || !has_content)) {
-                    split_seg(L, j, at, hw);
-                    end = j;
+                    bool moved;
+                    end = split_seg(L, base, i, j, at, hw, &moved);
+                    if (moved) {
+                        /* the line's segments are one slot lower */
+                        i--;
+                        for (int q = 0; q < S.ndeferred; q++)
+                            S.deferred[q]--;
+                    }
                     has_content = true;
                     break;
                 }
@@ -1358,6 +1428,8 @@ float l_inline_layout(AuLayout *L, LBlock *b, float content_w, LFloats *fl, floa
             }
             if (s->flags & SF_CONTENT)
                 has_content = true;
+            if (s->flags & SF_LAZY_W)
+                w = seg_width(L, s, 0, true); /* it stays on this line: its width is needed */
             if (!leading_space) {
                 x += w;
                 if ((s->kind == IT_TEXT && s->w > 0) || s->kind == IT_ATOMIC || s->kind == IT_BR ||

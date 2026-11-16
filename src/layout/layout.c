@@ -1269,22 +1269,27 @@ static void layout_abspos(AuLayout *L, LBlock *b, LBox *cb)
  * remaining entry). */
 void l_layout_abspos_for(AuLayout *L, LBox *cb, uint32_t mark)
 {
-    uint32_t i = mark;
-    while (i < L->nabs) {
+    /* An entry is taken out by clearing its box, and the gaps are closed
+     * once at the end. Moving every later entry down for each one taken
+     * cost the square of their number (a block with thousands of
+     * positioned children). Laying a box out may queue more entries
+     * after it, and may run this function for a block inside it, whose
+     * mark is then behind this loop's place: it closes gaps only from
+     * its mark on, so the entries before stay where they are. */
+    for (uint32_t i = mark; i < L->nabs; i++) {
         LAbsEntry e = L->abs[i];
-        if (cb && ref_block(e.cb) != cb) {
-            i++;
+        if (!e.box || (cb && ref_block(e.cb) != cb))
             continue;
-        }
-        /* Remove it, then lay it out (which may queue more after it). */
-        memmove(&L->abs[i], &L->abs[i + 1], (L->nabs - i - 1) * sizeof *L->abs);
-        L->nabs--;
+        L->abs[i].box = NULL;
         e.box->flags &= ~LF_ABS_QUEUED;
-        if (!cb && e.cb) {
-            /* A containing block that never finished (too deep): use it anyway. */
-        }
+        /* (a containing block that never finished, too deep, is used anyway) */
         layout_abspos(L, (LBlock *)e.box, e.cb);
     }
+    uint32_t n = mark;
+    for (uint32_t i = mark; i < L->nabs; i++)
+        if (L->abs[i].box)
+            L->abs[n++] = L->abs[i];
+    L->nabs = n;
 }
 
 /* ---- Entry points ---- */

@@ -556,6 +556,21 @@ struct LFloats {
         uint8_t side;     /* 0 left, 1 right */
     } *f;
     uint32_t n, cap;
+    /* Kept by l_place_float so that no query walks every float (a page of
+     * thousands of floats cost the square of their number). Tops never
+     * decrease along f. */
+    float max_top;        /* the last float's top (n > 0) */
+    float bottom;         /* the lowest bottom, at least 0 */
+    float side_bottom[2]; /* the lowest bottom per side (side_n > 0) */
+    uint32_t side_n[2];
+    /* Built once there are more than a few floats (block.c, "Floats"):
+     * tree is a binary tree over f's indices that holds, per node, the
+     * lowest bottom of the floats under it that take room; ends holds
+     * the bottoms in sorted runs. */
+    float *tree;
+    uint32_t tree_leaves;
+    float *ends, *ends_tmp;
+    uint32_t nends, ends_cap;
 };
 void l_floats_free(LFloats *fl);
 void l_floats_avail(const LFloats *fl, float y, float h, float left, float right, float *l, float *r);

@@ -80,6 +80,69 @@ page area's width (`relayout` in `browser.c`), and `check_hscroll`
 corrects it after the layout. Deciding from the old content width cost
 a second pass on every resize of a page that follows the window.
 
+## Costs that must stay linear
+
+To check that layout time follows the size of a page, run
+`build/host/tests/layout/test_layout_scaling -v` (ctest:
+`layout_scaling`). It lays 22 generated pages out at a size and at four
+times that size and fails when the larger takes more than ten times as
+long. To cover a new pattern, add a generator to `patterns` in
+`tests/layout/test_scaling.c`. A fuzzer's slow-page check finds such a
+cost only when it happens to make a large page.
+
+Three costs grew with the square of the content and were found by the
+fuzzers' slow-page checks (a Domato page of 0.5 MB took 4 minutes 35
+seconds on the host, and 3.9 seconds afterwards; a `fuzz_layout` input of
+52 KB took 65 seconds, and 0.3 afterwards):
+
+- **Splitting a text segment** (`split_seg` in `inline.c`). A text that
+  wraps between any two characters (`overflow-wrap: anywhere`,
+  `word-break: break-all`, a narrow column) is split once per line.
+  The new segment went into the middle of the paragraph's segment
+  array, which moved every later segment. The segments of finished
+  lines are not read again, so the split now uses the slot before the
+  line and moves the line's own segments down one (the first line of a
+  paragraph still inserts). Keep any index into the current line in
+  step: the line start `i`, and `S.deferred`.
+- **Measuring the rest of a split text.** The rest was measured to its
+  end at every split. A rest longer than `LAZY_TAIL_BYTES` is now
+  marked `SF_LAZY_W` and measured by `seg_width` when a line has room
+  for it; until then `seg_width` only says that it does not fit, at a
+  cost that follows the room. Read a text segment's width through
+  `seg_width` in the line breaker, never `s->w`.
+- **Floats** (`block.c`, "Floats"). Every line and every float asked the
+  formatting context's float list for the room in a band and for the
+  next float's end, and each answer walked the whole list. Beyond 32
+  floats the list now keeps two indexes: a binary tree over the list
+  (the tops never decrease along it) that holds the lowest bottom under
+  each node, and the bottoms in sorted runs. The summaries `max_top`,
+  `bottom` and `side_bottom` answer the rest. A build with
+  `-DAURA_FLOATS_CHECK` compares the indexes with the walk
+  ([`fuzzing.md`](fuzzing.md)). Many floats that overlap one band (a
+  row of thousands, each a fraction of a pixel wide) still cost their
+  number per question.
+
+Measured on the host (plain build, CPU time, 2026-11-15):
+
+| Page | Before | After |
+|---|---|---|
+| 8,000 sibling floats | 0.251 s | 0.019 s |
+| 6,000 floats on both sides | 0.312 s | 0.015 s |
+| 6,000 floats in one paragraph of text | 0.210 s | 0.016 s |
+| a word of 80,000 characters in a five-character column | 17.6 s | 0.017 s |
+| the same word with 10,000 inline boxes after it | 19.3 s | 0.028 s |
+
+A fourth was found by reading: `l_layout_abspos_for` in `layout.c` took
+each absolutely positioned box out of the queue by moving every later
+entry down. It now clears the entry and closes the gaps once at the end
+(not measured before the change; 32,000 positioned spans in one
+paragraph take 0.15 s). `l_queue_abspos` still looks through the queue
+for a box that is queued a second time (a table lays its cells out
+twice).
+
+At four times the test's sizes (`test_layout_scaling -v -x 4`) every
+pattern stays between 3.6 and 5.8 times its smaller size.
+
 ## Text painting
 
 - A face caches the glyph of each code point below U+0250 and recent
