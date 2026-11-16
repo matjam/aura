@@ -184,6 +184,11 @@ static const Case cases[] = {
      ".g { display: grid } .x, .n { display: none } .g.on .n { display: block }",
      "<div><em class=g id=g><td><span class=x>h</span>c</td><b class=n>n</b></em></div>", "g.className='g on'",
      INCR},
+    {"root element of a frame moved into the document", "",
+     "<div id=w>a</div><div id=h style='display:none'></div>",
+     "var f=document.createElement('iframe');f.srcdoc='<input autofocus>';document.body.appendChild(f);@@"
+     "h.appendChild(f.contentDocument.documentElement);@@w.appendChild(h.firstChild)",
+     ANY},
     {"boxless element moved below display: none", ".n { display: none }",
      "<div id=w><p id=p>a<span class=n>x</span></p></div><div>b</div>", "document.head.appendChild(p)", INCR},
     /* ---- Selectors that insertions reach ---- */
