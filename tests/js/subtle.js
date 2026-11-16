@@ -593,6 +593,8 @@ promise_test('algorithm names, CryptoKey objects and bad arguments', async () =>
     const z = await S.encrypt({ name: 'AES-CTR', counter: new Uint8Array(16), length: 64 }, k, new Uint8Array(16));
     assert.equal(hex(await p), hex(z));
     assert.equal((await S.digest('SHA-1', new ArrayBuffer(0))).byteLength, 20, 'empty data');
+    /* keys are not cloned (not done: docs/known-gaps.md) rather than cloned empty */
+    assert.throws(() => structuredClone(k), 'DataCloneError');
 });
 
 lastTest();

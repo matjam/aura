@@ -71,7 +71,8 @@ function structuredClone(value, options) {
             out = v;
         } else if (isNode(v) || v instanceof EventTarget || v instanceof WeakMap || v instanceof WeakSet ||
             v instanceof Promise || (typeof WeakRef === 'function' && v instanceof WeakRef) ||
-            t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' || t === 'Window' || t === 'MessagePort') {
+            t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' || t === 'Window' || t === 'MessagePort' ||
+            t === 'CryptoKey') {
             throw domErr('The object could not be cloned', 'DataCloneError');
         } else {
             out = {};
@@ -131,7 +132,7 @@ function scEncode(value, portIndex) {
         if (v instanceof Error || t === 'Error') return ['E', id, String(v.name), String(v.message), v.stack === undefined ? null : String(v.stack)];
         if (v instanceof Blob) return ['L', id, v instanceof File ? 1 : 0, v._b, v.type, v instanceof File ? v.name : '', v instanceof File ? v.lastModified : 0];
         if (isNode(v) || v instanceof EventTarget || t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' ||
-            t === 'Window' || t === 'MessagePort' || t === 'SharedArrayBuffer') throw no('The object');
+            t === 'Window' || t === 'MessagePort' || t === 'SharedArrayBuffer' || t === 'CryptoKey') throw no('The object');
         const items = [];
         for (const k of Object.keys(v)) items.push(k, enc(v[k]));
         return ['O', id, items];
