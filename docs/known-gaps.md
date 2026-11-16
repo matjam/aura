@@ -15,7 +15,7 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 |---|---|
 | "Secure connection failed" | [Networking and TLS](#networking-and-tls): DHE-only or CBC-only servers |
 | A script error about a missing API | [JavaScript](#javascript), [Script requests and CORS](#script-requests-and-cors), [Canvas](#canvas), [Workers](#workers) |
-| Text without ligatures, wrong order of Arabic or Hebrew, missing CJK | [Fonts](#fonts) |
+| Text without ligatures, wrong order of Arabic or Hebrew, rare CJK characters missing | [Fonts](#fonts) |
 | A layout that depends on container queries, subgrid or baseline alignment in grid | [CSS](#css), [Layout](#layout) |
 | An embedded widget that stays empty | [Frames](#frames) |
 | Missing pictures or icons | [Images](#images), [SVG](#svg) |
@@ -84,7 +84,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - CFF and CFF2 outlines.
 - SVG, sbix and CBDT colour glyphs.
 - COLR variations (version 1 draws at the default instance).
-- A CJK font pack (see the fonts README for what one needs).
+- Regional ideograph shapes: Japanese, Korean and traditional Chinese
+  text uses Noto Sans SC's ideographs, and the fallback does not read
+  `lang`. CJK characters outside the bundled sets (Big5 level 2, the
+  hangul syllables beyond KS X 1001, CJK extension blocks) are missing
+  unless the system has a face for them. Vertical writing is not drawn.
 - CSS does not parse `font-tech()`, and layout passes only weight and
   style to the font list (`font-variation-settings` and
   `font-optical-sizing` are computed, in `AuStyleInhRare`).

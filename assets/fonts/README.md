@@ -24,7 +24,8 @@ assets/fonts`; the paint tests fail when it is out of date.
 | DejaVu Sans 2.37 | `dejavu` | 1 | 502,256 |
 | Noto Emoji 3.002 | `notoemoji` | 1 | 774,144 |
 | Twemoji Mozilla 0.7.0 (colour emoji) | `twemoji` | 1 | 1,171,292 |
-| Total with licences and index |  |  | about 4.6 MB |
+| Noto Sans SC and Noto Sans KR 2.004 (CJK) | `notosanscjk` | 2 | 3,950,712 |
+| Total with licences and index |  |  | about 8.5 MB |
 
 ## Aura Sans, Aura Serif, Aura Mono (from Liberation)
 
@@ -132,6 +133,64 @@ assets/fonts`; the paint tests fail when it is out of date.
   emoji) against 1,418. On a 1 GHz G4 with little memory, size and drawing
   cost decide it.
 
+## Noto Sans SC and Noto Sans KR (Chinese, Japanese, Korean)
+
+- Source: https://github.com/google/fonts at commit
+  cc39c4c2c304bc368c9b7c311ea2bcc6013299fe, `ofl/notosanssc/NotoSansSC[wght].ttf`
+  (17,772,300 bytes, SHA-256
+  a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da) and
+  `ofl/notosanskr/NotoSansKR[wght].ttf` (10,414,588 bytes, SHA-256
+  194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252), font
+  version 2.004, and `ofl/notosanssc/OFL.txt` (SHA-256
+  1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9). These
+  are variable fonts with TrueType outlines; the Noto Sans CJK and Source
+  Han Sans releases are CFF, which Aura does not draw. To fetch them, use
+  `https://raw.githubusercontent.com/google/fonts/COMMIT/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf`
+  (and the same for `notosanskr`), then save them in SRC as
+  `NotoSansSC[wght].ttf`, `NotoSansKR[wght].ttf` and `NotoSansCJK-OFL.txt`
+  for `tools/fonts-prepare.py --only=cjk`.
+- Licence: SIL Open Font License 1.1 (`notosanscjk/OFL.txt`), copyright
+  Adobe, with the Reserved Font Name "Source". The Noto names are not
+  reserved, so the subsets keep them.
+- Files: `NotoSansSC-Regular.ttf` (3,517,076; 10,864 characters) and
+  `NotoSansKR-Regular.ttf` (433,636; 2,506 characters).
+- Changes: the wght=400 instance is taken with fontTools' instancer,
+  subset, and reduced as above (vertical metrics, VORG and BASE go too).
+  Bold is synthesized.
+  - Noto Sans SC keeps the ideographs of GB 2312 (6,763, simplified
+    Chinese), the Big5 common set (level 1, 5,401, traditional Chinese)
+    and the JIS X 0208 kanji: 10,269 together, of which it has every one.
+    It also keeps kana, bopomofo, the CJK punctuation, and the characters
+    of those standards and KS X 1001 in the CJK blocks (U+2E80-33FF,
+    vertical, compatibility and small forms, fullwidth forms), less
+    the Korean letters. Its glyphs are ordered with the ideographs common
+    to GB 2312 level 1, JIS X 0208 level 1 and Big5 level 1 first, because
+    Aura reads this face in blocks (see `docs/fonts.md`, "Paged faces").
+  - Noto Sans KR keeps the 2,350 hangul syllables of KS X 1001, the
+    compatibility jamo, the circled hangul, and the KS X 1001 characters
+    in the CJK blocks that Noto Sans SC lacks. Korean pages take their
+    hanja from Noto Sans SC.
+- Use: the last faces of the text fallback list, after the system's CJK
+  faces (Osaka and others).
+- Han unification lets one face draw the ideographs of all three
+  languages, in that face's regional shapes: Japanese and traditional
+  Chinese text gets the simplified Chinese design for the characters
+  whose shapes differ by region. Measured on 2026-11-15, with the same
+  character sets:
+
+  | Choice | Bytes | Deflated (gzip -9) |
+  |---|---|---|
+  | Noto Sans SC (all ideographs, kana) and Noto Sans KR (hangul), shipped | 3,950,712 | 2,469,567 |
+  | Separate SC, TC, JP and KR faces, each with its own standard | 6,945,536 | 4,237,435 |
+  | One face from Noto Sans JP, without hangul | 2,804,024 | not measured |
+
+  The separate faces cost 3 MB more for regional shapes, and choosing
+  among them needs the element's language, which the fallback code does
+  not see. Noto Sans JP lacks 2,215 of the GB 2312 ideographs and 122 of
+  the Big5 common set; Noto Sans SC has all of them. Big5 level 2 (7,652
+  rarer characters) would add about 2.6 MB, and the other 8,822 modern
+  hangul syllables about 2 MB.
+
 ## Considered and left out
 
 - Gelasio (a Georgia metric match): Mac OS 9.2.2 ships Georgia, and Aura
@@ -142,11 +201,5 @@ assets/fonts`; the paint tests fail when it is out of date.
   box drawing or dingbats, which DejaVu Sans has.
 - Liberation unmodified: 4.4 MB for the three families, and the OFL's
   Reserved Font Name rules out subsetting it under its own name.
-- CJK: too large to bundle. Noto Sans CJK and Source Han Sans are CFF
-  fonts, which the engine does not draw; a pack needs TrueType outlines,
-  such as a static instance of google/fonts' Noto Sans SC, JP, KR or TC
-  (variable glyf fonts of several megabytes each, still megabytes after
-  subsetting to the common characters). A pack is a folder here per font
-  with its lines in `fonts.idx` and its family in the text fallback list
-  in `src/paint/fontalias.c`. Aura already tries the system's CJK faces
-  (Osaka and others) when a machine has them.
+- Noto Sans CJK and Source Han Sans: CFF fonts, which the engine does
+  not draw.
