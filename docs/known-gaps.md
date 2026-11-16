@@ -216,9 +216,18 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## Script requests and CORS
 
-- `ReadableStream` bodies and `Response.body` (undefined: there are no
-  streams), so `EventSource` is not there either and a response reaches
-  script when it is complete (one `progress` event).
+- A `fetch` with a `ReadableStream` body reads the whole stream before
+  it sends anything (a `Content-Length` request, not a chunked upload),
+  so a stream that never ends never sends.
+- A body read with `text()` and the like, or a clone nobody reads, is
+  not paused while it arrives; only a body read through its stream
+  pauses the request ([`script-requests-and-cors.md`](script-requests-and-cors.md#streams-and-streaming-bodies)).
+- `EventSource` keeps at most four connections per document or worker;
+  a fifth source waits. A stream silent for 60 seconds (the loader's
+  idle timeout) or past 64 MB reconnects. After Back or Forward to a
+  kept document its sources reconnect without an `error` event.
+- `TextDecoderStream` decodes UTF-8, UTF-16 and windows-1252 only, the
+  encodings `TextDecoder` knows.
 - XML for `responseXML`; `responseType` `document` parses HTML only.
 - A `keepalive` request does not outlive its document.
 - `blob:` URLs work in `fetch`, `XMLHttpRequest`, `Worker` and
