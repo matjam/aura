@@ -9,6 +9,7 @@
  *
  * Run under the sanitizer build for memory errors; the program itself only
  * checks that nothing crashes or hangs. */
+#include "../fuzz.h"
 #include "../layout/ahem.h"
 #include "page/page.h"
 
@@ -223,6 +224,10 @@ int main(int argc, char **argv)
     AuFontSet *fonts = ahem_fontset(fontdata);
     AuSurface *s = au_surface_new(320, 240);
     for (int it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = (int)it;
+            break;
+        }
         AuBuf b;
         au_buf_init(&b);
         if (rnd(2))

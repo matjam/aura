@@ -159,6 +159,14 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 - **`TEGetPoint`.** Do not call `TEGetPoint` from PowerPC code; it
   crashed the guest. The caret position comes from `TextWidth` with the
   TextEdit handles locked.
+- **The stack is 1 MB** (`SetApplLimit` at the start of `main`). A
+  stack that overflows runs into the heap without any error. Script may
+  use 512 KB of C stack before its RangeError
+  (`AuJsSettings.stack_limit`), and layout called from script needs up
+  to 180 KB more at its depth limit; with the earlier 256 KB a page
+  whose script recursed without end froze the machine. To lower either
+  limit, lower them together. `tools/smoke/recursion.html` checks it in
+  the guest ([`guest-testing.md`](guest-testing.md)).
 - **A dialog's colour port.** The About box's empty `dctb` gives it a
   colour port, without which `PlotIconID` draws the icon in black and
   white.

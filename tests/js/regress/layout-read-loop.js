@@ -1,0 +1,1 @@
+var n=0;while(true){n++;document.body.appendChild(document.createElement("p")).textContent="x";document.documentElement.scrollHeight;}

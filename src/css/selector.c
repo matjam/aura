@@ -13,6 +13,12 @@
 #include "css_int.h"
 
 #define MAX_SEL_DEPTH 16
+/* The most compounds a complex selector may have, and the most components
+ * once a parent selector is inlined for "&". Matching recurses once per
+ * combinator, and the component count is kept in 16 bits; a longer
+ * selector is invalid. */
+#define MAX_SEL_COMPOUNDS 128
+#define MAX_SEL_COMPONENTS 4096
 
 typedef struct {
     AuSelComp *c;
@@ -764,6 +770,10 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
             free_compounds(cs, nc);
             return false;
         }
+        if (nc >= MAX_SEL_COMPOUNDS) {
+            free_compounds(cs, nc);
+            return false;
+        }
         Compound *c = CSS_PUSH(cs, nc, ccap);
         memset(c, 0, sizeof *c);
         c->comb = pending;
@@ -831,6 +841,10 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
         total += cs[k].n + 1;
     if (inline_amp)
         total += ps->ncomp;
+    if (total > MAX_SEL_COMPONENTS) {
+        free_compounds(cs, nc);
+        return false;
+    }
     AuSelComp *out_c = au_alloc(total * sizeof(AuSelComp));
     uint32_t w = 0;
     for (uint32_t k = nc; k-- > 0;) {

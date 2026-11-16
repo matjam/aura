@@ -5,6 +5,7 @@
  * decoder terminates and never writes past the output it was given.
  *
  * usage: fuzz_inflate ITERATIONS SEED VECTOR... */
+#include "../fuzz.h"
 #include "brotli_util.h"
 #include "codec/codec.h"
 
@@ -63,6 +64,10 @@ int main(int argc, char **argv)
     uint8_t *buf = malloc(1 << 17);
     static const AuInflateFormat fmts[] = {AU_INFLATE_RAW, AU_INFLATE_ZLIB, AU_INFLATE_GZIP, AU_INFLATE_HTTP_DEFLATE};
     for (long it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = it;
+            break;
+        }
         size_t n;
         uint32_t r = br_rng_next(&rng);
         if (nv && (r & 7) != 0) {

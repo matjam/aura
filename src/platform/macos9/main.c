@@ -887,9 +887,13 @@ static void idle_all(void)
 int main(void)
 {
     /* The default stack is small, and a stack that overflows runs into
-     * the top of the heap without any error. Give it 256 KB before the
-     * heap takes the rest of the partition. */
-    SetApplLimit(GetApplLimit() - 256 * 1024);
+     * the top of the heap without any error. Give it 1 MB before the
+     * heap takes the rest of the partition: script may use 512 KB of it
+     * before it gets a RangeError (AuJsSettings.stack_limit), and layout
+     * called from script needs up to 180 KB more at its depth limit
+     * (L_MAX_DEPTH nested inline blocks at 1.8 KB a level). With 256 KB
+     * a page whose script recursed without end froze the machine. */
+    SetApplLimit(GetApplLimit() - 1024 * 1024);
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();

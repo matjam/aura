@@ -71,3 +71,26 @@ foreach(t ${QJS_TESTS})
     endif()
     add_test(NAME js_engine_${stem} COMMAND ${JS_TOOL} js --quiet ${mode} ${neg} ${JS_DIR}/engine_setup.js ${t})
 endforeach()
+
+# The DOM bindings under generated scripts, with layout, paint and input
+# between steps (see fuzz_dom.c). For a long run use the sanitizer build:
+#   fuzz_dom 100000000 SEED 600
+add_executable(fuzz_dom fuzz_dom.c)
+target_link_libraries(fuzz_dom aura_engine m)
+add_test(NAME js_dom_fuzz COMMAND fuzz_dom 60 1 20)
+set_tests_properties(js_dom_fuzz PROPERTIES TIMEOUT 120)
+file(GLOB DOM_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*.js)
+# A script that never ends must be stopped by its time limit: one that
+# is not shows as a timeout here.
+add_test(NAME js_dom_fuzz_regress COMMAND fuzz_dom replay ${DOM_REGRESS})
+set_tests_properties(js_dom_fuzz_regress PROPERTIES TIMEOUT 300)
+
+# Pages from Domato (tests/domato) through the document view with script
+# on. Domato is fetched into build/ by tests/domato/fetch-domato.sh; the
+# test skips (exit 77) without it. For a longer run:
+#   tests/domato/run-domato.sh build/asan/tests/js/fuzz_domato build 2000 SEED 600
+add_executable(fuzz_domato fuzz_domato.c)
+target_link_libraries(fuzz_domato aura_engine m)
+add_test(NAME js_domato
+         COMMAND ${CMAKE_SOURCE_DIR}/tests/domato/run-domato.sh $<TARGET_FILE:fuzz_domato> ${CMAKE_SOURCE_DIR}/build 30 1 60)
+set_tests_properties(js_domato PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)

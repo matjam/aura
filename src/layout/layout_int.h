@@ -437,6 +437,13 @@ static inline uint32_t l_paint_color(uint32_t css)
 /* text.c */
 LFont *l_font(AuLayout *L, const AuStyle *s);
 float l_measure(AuLayout *L, LFont *f, const AuStyle *s, const char *t, size_t n);
+/* For loops that look for the first prefix of t wider than x by adding a
+ * character at a time: each step measures from the start, so n bytes cost
+ * n * n / 2 (90,000 characters without a break took minutes). Returns a
+ * character boundary k whose prefix is at most x wide (its width in *w)
+ * and, where widths grow with length, less than 64 bytes before the first
+ * wider prefix. Start the loop there. */
+uint32_t l_prefix_seek(AuLayout *L, LFont *f, const AuStyle *s, const char *t, uint32_t n, float x, float *w);
 float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n);
 float l_line_height(const AuStyle *s, LFont *f);
 bool l_text_fallback_extents(AuLayout *L, LFont *f, const char *t, size_t n, float *ascent, float *descent);

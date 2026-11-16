@@ -62,3 +62,18 @@ add_test(NAME net_tls_fuzz COMMAND fuzz_net tls 1200 1 20)
 set_tests_properties(net_tls_fuzz PROPERTIES TIMEOUT 120)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/more.cmake OPTIONAL)
+
+# The HTTP client and the loader on mutated responses from the fake
+# transport: framing, content decoders, redirects, cookies, HSTS, cache
+# (see fuzz_transfer.c). For a long run use the sanitizer build:
+#   fuzz_transfer 100000000 SEED 600 tests/codec/inflate-vectors/* tests/codec/brotli-vectors/*.br
+add_executable(fuzz_transfer fuzz_transfer.c)
+target_link_libraries(fuzz_transfer aura_fakenet)
+file(GLOB TRANSFER_FUZZ_BODIES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/codec/inflate-vectors/*.gz
+     ${CMAKE_SOURCE_DIR}/tests/codec/inflate-vectors/*.z ${CMAKE_SOURCE_DIR}/tests/codec/brotli-vectors/*.br)
+add_test(NAME net_transfer_fuzz COMMAND fuzz_transfer 1500 1 20 ${TRANSFER_FUZZ_BODIES})
+set_tests_properties(net_transfer_fuzz PROPERTIES TIMEOUT 120)
+file(GLOB TRANSFER_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/transfer-*)
+if(TRANSFER_REGRESS)
+    add_test(NAME net_transfer_fuzz_regress COMMAND fuzz_transfer replay ${TRANSFER_REGRESS})
+endif()

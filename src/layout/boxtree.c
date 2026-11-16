@@ -432,9 +432,15 @@ static void apply_counters(Builder *B, const AuStyle *s, AuNode *el, bool list_i
                 if (reversed)
                     for (AuNode *c = el->first_child; c; c = c->next)
                         items += au_is_html_element(c, AU_ATOM_li);
-                if (st && *st)
-                    v = (int32_t)strtol(st, NULL, 10) + (reversed ? 1 : -1);
-                else if (reversed)
+                if (st && *st) {
+                    /* Clamped so that the step below cannot overflow. */
+                    long sv = strtol(st, NULL, 10);
+                    if (sv > 1000000000L)
+                        sv = 1000000000L;
+                    if (sv < -1000000000L)
+                        sv = -1000000000L;
+                    v = (int32_t)sv + (reversed ? 1 : -1);
+                } else if (reversed)
                     v = items + 1;
             }
             new_counter(B, name, len, v);
@@ -1373,7 +1379,8 @@ static void setup_select(Builder *B, LBlock *k, LReplaced *rep, AuBuf *t)
             float ow = l_measure(B->L, f, k->b.style, w.data + at, w.len - at);
             if (ow > best) {
                 best = ow;
-                memmove(w.data, w.data + at, w.len - at);
+                if (w.len > at) /* an empty label leaves w.data NULL */
+                    memmove(w.data, w.data + at, w.len - at);
                 w.len -= at;
             } else {
                 w.len = at;

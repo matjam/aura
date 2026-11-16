@@ -30,3 +30,25 @@ add_test(NAME html5lib_tree
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/run-suite.sh tree $<TARGET_FILE:test_html_tree>
                  ${CMAKE_SOURCE_DIR}/build ${CMAKE_CURRENT_SOURCE_DIR}/expected-failures.txt)
 set_tests_properties(html5lib_tokenizer html5lib_tree PROPERTIES SKIP_RETURN_CODE 77)
+
+# Tokenizer and tree builder fuzzing over the sample pages and the
+# tree-construction cases (see fuzz_html.c). For a long run use the
+# sanitizer build:
+#   fuzz_html 100000000 SEED 600 tests/page/samples/*.html tests/html/cases/*.dat
+add_executable(fuzz_html fuzz_html.c)
+target_link_libraries(fuzz_html aura_engine)
+file(GLOB HTML_FUZZ_PAGES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/page/samples/*.html)
+add_test(NAME html_fuzz COMMAND fuzz_html 1500 1 20 ${HTML_FUZZ_PAGES} ${HTML_CASES})
+set_tests_properties(html_fuzz PROPERTIES TIMEOUT 120)
+
+# Inputs the fuzzer found, reduced: each must run to the end.
+file(GLOB HTML_REGRESS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/regress/*)
+add_test(NAME html_fuzz_regress COMMAND fuzz_html replay ${HTML_REGRESS})
+
+# In a plain build the fuzzer and its regression inputs run on a thread
+# with a 512 KB stack (about what layout may use on Mac OS 9, where frames
+# are smaller), so recursion over input nesting fails the test. Sanitizer
+# frames are several times larger, so not there.
+if(NOT CMAKE_C_FLAGS MATCHES "sanitize")
+    set_tests_properties(html_fuzz html_fuzz_regress PROPERTIES ENVIRONMENT "AURA_FUZZ_STACK_KB=512")
+endif()

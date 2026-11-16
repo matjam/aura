@@ -69,7 +69,7 @@ Aura for its users; keep it short.
 | windows, tabs, history, Back and Forward, scrolling, selection, find, contextual menus, Internet Config, downloads, session files | [`docs/browser-chrome.md`](docs/browser-chrome.md) |
 | the Mac OS 9 application, the Toolbox, Open Transport, entropy, the clock | [`docs/mac-os-9-shell.md`](docs/mac-os-9-shell.md) |
 | the Develop menu and its windows | [`docs/developer-tools.md`](docs/developer-tools.md) |
-| fuzzing | `docs/fuzzing.md` (written on another branch; it arrives with that branch) |
+| fuzzing, or any code a page's data reaches | [`docs/fuzzers.md`](docs/fuzzers.md) (Aura's fuzzers and the rules they enforce), [`docs/notes-fuzz.md`](docs/notes-fuzz.md) (Domato); `docs/fuzzing.md` is being written on another branch and arrives with it |
 
 | Problem | Read |
 |---|---|
@@ -92,6 +92,9 @@ tools/guest-run.sh start                                   # start the test mach
 tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*      # copy the build in (quit Aura first)
 tools/guest-qmp.py open AuraTest Aura                      # launch it; `screenshot run/NAME.png` to look
 ```
+
+After a merge, `tools/smoke.sh` checks the Mac OS 9 build in a stock
+guest end to end ([`docs/guest-testing.md`](docs/guest-testing.md)).
 
 For code that reads data from the network or a file, also run the tests
 under the sanitizers ([`docs/building.md`](docs/building.md)).

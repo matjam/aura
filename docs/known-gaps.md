@@ -282,6 +282,11 @@ Also: a document estimated at more than 24 MB is not kept for Back (a
 very long Wikipedia article is over 30 MB), and about 20 scripted
 frames fill a page's 32 MB script limit.
 
+## Fuzzing
+
+What no fuzzer covers is listed in [`fuzzers.md`](fuzzers.md), "Not
+fuzzed".
+
 ## Performance
 
 - Keys typed while a page changes its DOM pay for a box tree build (see

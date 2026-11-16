@@ -139,6 +139,10 @@ reserve so the error can be reported), a C stack limit (deep recursion
 is a RangeError) and a time budget (`AuJsHooks.long_script` decides
 whether a long script goes on). Allocation failures never reach
 `au_alloc`'s fatal handler. A page's runtime may allocate 32 MB.
+On Mac OS 9 script may use 512 KB of the application's 1 MB stack
+([`mac-os-9-shell.md`](mac-os-9-shell.md)). A native that can take long
+must check the time limit itself ([`fuzzers.md`](fuzzers.md), "Script
+that does not end").
 
 **Script memory.** See [`memory.md`](memory.md) for what a page's
 script heap holds and how to measure it. A function and the functions

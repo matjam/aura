@@ -26,6 +26,9 @@ another folder, for example to run a second guest beside the first);
 | type text | `tools/guest-qmp.py type TEXT` |
 | click, drag | `tools/guest-qmp.py click X Y`, `drag X1 Y1 X2 Y2` |
 | print the current application | `tools/guest-qmp.py front-app` |
+| print the front window's title | `tools/guest-qmp.py front-window` |
+| wait for an application or a window | `tools/guest-qmp.py wait-app APP [SECONDS]`, `wait-window APP TITLE [SECONDS]` |
+| check a build end to end | `tools/smoke.sh` |
 | stop the guest | `tools/guest-run.sh stop` |
 
 ## Which base to test on
@@ -115,12 +118,23 @@ Aura keeps").
 
 ## To launch Aura and drive the screen
 
-To launch it, run `tools/guest-qmp.py open AuraTest Aura`. To take a
-screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`. To type,
-use `tools/guest-qmp.py key cmd-q` (any character works as the key, as
-in `'cmd-['`) or `type TEXT`; to click or drag, use `click X Y` or
-`drag X1 Y1 X2 Y2` (guest screen pixels). `front-app` prints the
-current application.
+To launch it, run `tools/guest-qmp.py open AuraTest Aura`. It exits 0
+when Aura is the current application and 1 with the reason when a step
+did not happen (the disc is not mounted, the disc or the item could not
+be selected, the application did not come up within `OPEN_TIMEOUT`
+seconds, 120 by default). A third argument names the application to
+wait for when it is not the item's name (a document, say); `-` skips
+the wait.
+
+To take a screenshot, run `tools/guest-qmp.py screenshot run/NAME.png`.
+To type, use `tools/guest-qmp.py key cmd-q` (any character works as the
+key, as in `'cmd-['`) or `type TEXT`; to click or drag, use `click X Y`
+or `drag X1 Y1 X2 Y2` (guest screen pixels).
+
+`front-app` prints the current application, `front-window` the title of
+its front window (for Aura, the page's title) and `volumes` the mounted
+volumes. To wait in a script, use `wait-app APP [SECONDS]` and
+`wait-window APP TITLE [SECONDS]`; both exit 1 on a timeout.
 
 **Menus.** The Develop menu is in the menu bar (its title is at 298,10
 on a 640x480 screen): click the title, then click the item; the menu
@@ -149,6 +163,47 @@ Millions.
 | Monitor BitDepth module (Control Strip, seventh icon) | 197,466 |
 | Aura's content area starts | 20,50 |
 | Enforcer Installer's Install and Restart button | 486,366 |
+
+## To check a build in the guest after a merge (the smoke test)
+
+Run `./build.sh ppc` and then `tools/smoke.sh`.
+
+- It boots a stock guest in its own run folder (`run-smoke` in the main
+  checkout, or `AURA_RUN`), pushes `build/ppc/dist/Aura`, launches
+  Aura, and opens a local sample page, `tools/smoke/recursion.html` (a
+  script that recurses without end and must get a RangeError) and
+  https://news.ycombinator.com/.
+- It waits for each page's window title, takes a screenshot of each
+  (`smoke-local.png`, `smoke-recursion.png`, `smoke-live.png`), checks
+  that Aura is still the current application, quits it and stops the
+  guest.
+- It exits 0 when every step passed and 1 with the failed step
+  otherwise.
+- `SMOKE_LIVE=0` skips the live page; `SMOKE_KEEP=1` leaves the guest
+  running.
+- It takes about four minutes.
+
+## To change how `open` or `guest-eject` drive the Finder
+
+Keep to this rule: check each step before sending the next key.
+
+Typing a name in the Finder selects the nearest name when none matches,
+so "AuraTest" typed before the pushed disc shows on the desktop selects
+Browse the Internet, and Command-O then launches it (Internet Setup
+Assistant, Internet Explorer and Outlook Express were opened this way).
+
+- `open_item` waits for the disc in the volume queue, types the name,
+  and confirms the selection with Get Info (Command-I opens a window
+  titled "NAME Info" and opens nothing; `select_checked`), closes that
+  window, opens the disc, waits until the Finder's front window is the
+  disc's, and confirms the item the same way before Command-O.
+- The window list (`WindowList`, 0x9D6), `CurApName` and the volume
+  queue (0x358) are read from guest memory with the guest stopped (QMP
+  `stop`, then `cont`): they belong to whichever process is switched
+  in, and about three reads in four land in a moment when the monitor
+  cannot read Mac OS's memory at all, so every caller polls.
+- Command-Shift-Up makes the desktop active and selects the startup
+  disk; do not send it between confirming a selection and Command-O.
 
 ## To open a local page in the guest
 

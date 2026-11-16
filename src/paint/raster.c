@@ -167,7 +167,7 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
         au_free(edges);
         return;
     }
-    AuIRect area = {(int)floorf(b[0]), (int)floorf(b[1]), (int)ceilf(b[2]) + 1, (int)ceilf(b[3]) + 1};
+    AuIRect area = {au_f2px(floorf(b[0])), au_f2px(floorf(b[1])), au_f2px(ceilf(b[2])) + 1, au_f2px(ceilf(b[3])) + 1};
     area = au_irect_intersect(area, clip);
     if (au_irect_empty(area)) {
         au_free(edges);
