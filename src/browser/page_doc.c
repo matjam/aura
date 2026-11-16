@@ -27,6 +27,7 @@
 #include "history.h"
 #include "netlog.h"
 #include "scriptmem.h"
+#include "../codec/codec.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../net/dataurl.h"
@@ -72,6 +73,19 @@ struct Fetch {
     uint32_t log; /* its record in the page's request log (netlog.h) */
 };
 
+/* The main document's bytes as they arrived, for Page Source, View Source
+ * and Save Page As ("The page source"). They are read rarely, so once
+ * the load is over they are held compressed: plain is then empty until
+ * something asks for the bytes, and empty again a while after. */
+typedef struct Source {
+    AuBuf plain;   /* the bytes; empty while only z holds them */
+    AuBuf z;       /* raw deflate of the bytes, or empty (loading, small, or not compressible) */
+    size_t len;    /* the length of the bytes when z holds them */
+    uint32_t used; /* when plain was last asked for (the page's clock) */
+    bool tried;    /* compression was tried and did not pay */
+    uint32_t pack_ms; /* how long compressing took */
+} Source;
+
 /* A document that is not shown: the view and what the page knows about
  * its document (see "Kept documents"). */
 typedef struct Kept {
@@ -84,7 +98,7 @@ typedef struct Kept {
     int status;
     AuFetchReferrerPolicy rpolicy;
     bool image_doc, plain, source_mode;
-    AuBuf source;
+    Source src;
     AuNetLog netlog; /* the document's request log goes with it */
     int content_w, content_h;
     AuPageStats stats;
@@ -135,7 +149,7 @@ struct AuPage {
 
     float zoom; /* text zoom, 1 for none */
 
-    AuBuf source; /* the main document's bytes as they arrived (Save Page As) */
+    Source src; /* the main document's bytes as they arrived (Save Page As) */
 
     /* Network documents. */
     AuFetchCacheMode cache_mode;    /* of the current load */
@@ -223,6 +237,79 @@ static void log_begin(AuPage *p, Fetch *f, const char *method)
         au_netlog_source(&p->netlog, f->log, AU_NETREC_FROM_DATA);
 }
 
+/* ---- The page source ----
+ * An article's HTML is about 1 MB and deflates to a sixth of that.
+ * source_pack compresses it (level 1: 0.2 s for a megabyte in the guest
+ * would be too long at level 2 for bytes that may never be read) and
+ * source_open gives the bytes back, inflating them when needed.
+ * au_page_idle packs once the load is over and drops the plain copy
+ * SOURCE_OPEN_MS after it was last asked for. */
+#define SOURCE_PACK_MIN 8192
+#define SOURCE_OPEN_MS 10000
+
+static void source_free(Source *s)
+{
+    au_buf_free(&s->plain);
+    au_buf_free(&s->z);
+    memset(s, 0, sizeof *s);
+}
+
+/* Moves src's bytes to dst (freeing what dst held). */
+static void source_move(Source *dst, Source *src)
+{
+    source_free(dst);
+    *dst = *src;
+    memset(src, 0, sizeof *src);
+}
+
+/* Bytes of memory held. */
+static size_t source_held(const Source *s)
+{
+    return s->plain.len + s->z.len;
+}
+
+static size_t source_len(const Source *s)
+{
+    return s->z.len ? s->len : s->plain.len;
+}
+
+/* The bytes as one buffer (inflated when only the compressed form is
+ * held); false when there are none. */
+static bool source_open(Source *s, uint32_t now_ms)
+{
+    s->used = now_ms;
+    if (s->plain.len)
+        return true;
+    if (!s->z.len)
+        return false;
+    uint8_t *out = NULL;
+    size_t n = 0;
+    if (!au_inflate_all(AU_INFLATE_RAW, s->z.data, s->z.len, s->len, &out, &n) || n != s->len) {
+        au_free(out);
+        return false; /* cannot happen: the stream is our own */
+    }
+    au_buf_free(&s->plain);
+    s->plain.data = (char *)out;
+    s->plain.len = s->plain.cap = n;
+    return true;
+}
+
+static void source_append(Source *s, const void *bytes, size_t len)
+{
+    if (s->z.len) {
+        /* More bytes after packing (not expected): back to the plain form. */
+        source_open(s, 0);
+        au_buf_free(&s->z);
+        s->len = 0;
+    }
+    s->tried = false;
+    au_buf_append(&s->plain, bytes, len);
+}
+
+/* Compresses the bytes and frees the plain copy, when that saves at
+ * least an eighth. */
+static void source_pack(Source *s, AuPage *p);
+
 /* ---- Helpers ---- */
 
 static void set_str(char **f, const char *s)
@@ -235,6 +322,29 @@ static void set_str(char **f, const char *s)
 static uint32_t now(AuPage *p)
 {
     return p->env.time_ms ? p->env.time_ms(p->env.ctx) : 0;
+}
+
+static void source_pack(Source *s, AuPage *p)
+{
+    if (s->z.len || s->tried || s->plain.len < SOURCE_PACK_MIN)
+        return;
+    uint32_t t0 = now(p);
+    AuBuf z;
+    au_buf_init(&z);
+    au_deflate_all(AU_DEFLATE_RAW, 1, s->plain.data, s->plain.len, &z);
+    s->pack_ms = now(p) - t0;
+    if (z.len > s->plain.len - s->plain.len / 8) {
+        au_buf_free(&z);
+        s->tried = true;
+        return;
+    }
+    if (z.cap > z.len + 1) {
+        z.data = au_realloc(z.data, z.len + 1);
+        z.cap = z.len + 1;
+    }
+    s->z = z;
+    s->len = s->plain.len;
+    au_buf_free(&s->plain);
 }
 
 static bool starts_with_ci(const char *s, const char *prefix)
@@ -1512,7 +1622,7 @@ static void kept_free(Kept *k)
     au_free(k->title);
     au_free(k->content_type);
     au_free(k->cert);
-    au_buf_free(&k->source);
+    source_free(&k->src);
     au_netlog_free(&k->netlog);
     au_free(k);
 }
@@ -1603,8 +1713,7 @@ static Kept *kept_capture(AuPage *p)
     k->image_doc = p->image_doc;
     k->plain = p->plain;
     k->source_mode = p->source_mode;
-    k->source = p->source;
-    au_buf_init(&p->source);
+    source_move(&k->src, &p->src);
     k->netlog = p->netlog;
     au_netlog_init(&p->netlog);
     k->content_w = p->content_w;
@@ -1620,7 +1729,9 @@ static void kept_add(AuPage *p, Kept *k, AuDocView *dv)
     k->dv = dv;
     au_docview_set_hidden(dv, true); /* pagehide */
     k->stamp = now(p);
-    k->bytes = au_docview_memory_estimate(dv) + k->source.len;
+    source_pack(&k->src, p); /* left before the page's idle got to it */
+    au_buf_free(k->src.z.len ? &k->src.plain : &k->src.z);
+    k->bytes = au_docview_memory_estimate(dv) + source_held(&k->src);
     kept_drop(p, k->entry);
     p->kept = au_realloc(p->kept, (p->nkept + 1) * sizeof *p->kept);
     p->kept[p->nkept++] = k;
@@ -1715,9 +1826,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     p->image_doc = k->image_doc;
     p->plain = k->plain;
     p->source_mode = k->source_mode;
-    au_buf_free(&p->source);
-    p->source = k->source;
-    au_buf_init(&k->source);
+    source_move(&p->src, &k->src);
     netlog_take(p, &k->netlog);
     /* The timings now describe the restore: load_ms the whole of it,
      * first_paint_ms up to the next paint. */
@@ -1812,7 +1921,7 @@ size_t au_page_kept_bytes(const AuPage *p)
 
 size_t au_page_memory_estimate(const AuPage *p)
 {
-    return (p->dv ? au_docview_memory_estimate(p->dv) : 0) + p->source.len;
+    return (p->dv ? au_docview_memory_estimate(p->dv) : 0) + source_held(&p->src);
 }
 
 bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp)
@@ -1892,8 +2001,7 @@ void au_page_discard(AuPage *p)
     set_discarded(p);
     au_page_drop_kept(p);
     au_docview_free(old);
-    au_buf_free(&p->source);
-    au_buf_init(&p->source);
+    source_free(&p->src);
     uint32_t gen = p->netlog.generation + 1;
     au_netlog_free(&p->netlog);
     au_netlog_init(&p->netlog);
@@ -1955,7 +2063,7 @@ static void begin_doc(AuPage *p, const char *url)
 static void load_html_now(AuPage *p, const char *html, size_t len, const char *title)
 {
     begin_doc(p, p->url);
-    au_buf_append(&p->source, html, len);
+    source_append(&p->src, html, len);
     au_docview_feed(p->dv, html, len);
     au_docview_finish(p->dv);
     if (title)
@@ -2245,7 +2353,7 @@ static void main_data(AuPage *p, const char *bytes, size_t len)
     }
     if (!p->begun || p->interim)
         start_main_doc(p, bytes, len, NULL);
-    au_buf_append(&p->source, bytes, len);
+    source_append(&p->src, bytes, len);
     if (p->plain)
         feed_plain(p, bytes, len);
     else
@@ -2786,9 +2894,7 @@ static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff)
     if (p->main_fetch)
         au_netlog_end(&p->netlog, p->main_fetch->log, AU_NETREC_DONE, NULL, log_ms(p));
     if (p->leaving) {
-        au_buf_free(&p->source);
-        p->source = p->leaving->source;
-        au_buf_init(&p->leaving->source);
+        source_move(&p->src, &p->leaving->src);
         netlog_take(p, &p->leaving->netlog); /* the download's own record goes with its log */
         p->no_store = false;
         kept_free(p->leaving);
@@ -2849,9 +2955,9 @@ static void main_done(AuPage *p, bool ok, const AuFetchInfo *info)
     p->dirty = true;
     /* The source is complete: give back the room its buffer grew beyond
      * its length (up to as much again). */
-    if (p->source.cap > p->source.len + 1 && p->source.len) {
-        p->source.data = au_realloc(p->source.data, p->source.len + 1);
-        p->source.cap = p->source.len + 1;
+    if (p->src.plain.cap > p->src.plain.len + 1 && p->src.plain.len) {
+        p->src.plain.data = au_realloc(p->src.plain.data, p->src.plain.len + 1);
+        p->src.plain.cap = p->src.plain.len + 1;
     }
     report_progress(p);
 }
@@ -2939,7 +3045,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     au_free(p->prev_cert);
     p->prev_cert = p->cert;
     p->cert = NULL;
-    au_buf_free(&p->source);
+    source_free(&p->src);
     p->url = u;
     /* The referrer: this page's own address when one of its links asked
      * for the navigation; none when the user typed or chose it. */
@@ -3035,7 +3141,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         p->preset_source = NULL;
         p->main_done = false;
         start_main_doc(p, src.data ? src.data : "", src.len, NULL);
-        au_buf_append(&p->source, src.data ? src.data : "", src.len);
+        source_append(&p->src, src.data ? src.data : "", src.len);
         feed_plain(p, src.data ? src.data : "", src.len);
         au_buf_free(&src);
         au_docview_feed(p->dv, "</pre></body></html>", 20);
@@ -3184,7 +3290,7 @@ void au_page_free(AuPage *p)
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
-    au_buf_free(&p->source);
+    source_free(&p->src);
     if (p->leaving)
         kept_free(p->leaving);
     p->leaving = NULL;
@@ -3299,12 +3405,22 @@ const char *au_page_console_line(const AuPage *p, size_t i, int *level)
     return p->console[k];
 }
 
+bool au_page_has_source(const AuPage *p)
+{
+    return p->kind == K_DOC && p->main_done && !p->failed && source_len(&p->src) > 0;
+}
+
 bool au_page_source(const AuPage *p, const char **data, size_t *len)
 {
-    if (p->kind != K_DOC || !p->main_done || p->failed || !p->source.len)
+    if (p->kind != K_DOC || !p->main_done || p->failed || !source_len(&p->src))
         return false;
-    *data = p->source.data;
-    *len = p->source.len;
+    /* The bytes may be held compressed: the plain copy made here is the
+     * page's own cache, dropped again by au_page_idle. */
+    AuPage *m = (AuPage *)p;
+    if (!source_open(&m->src, now(m)))
+        return false;
+    *data = p->src.plain.data;
+    *len = p->src.plain.len;
     return true;
 }
 
@@ -3651,6 +3767,17 @@ static void report_status(AuPage *p)
 
 void au_page_idle(AuPage *p)
 {
+    /* The page source goes cold: compressed once the load is over, and
+     * its inflated copy dropped a while after the last reader. */
+    if (p->src.plain.len && !p->loading && p->main_done) {
+        if (p->src.z.len) {
+            if (now(p) - p->src.used >= SOURCE_OPEN_MS)
+                au_buf_free(&p->src.plain);
+        } else if (!p->src.tried && now(p) - p->src.used >= SOURCE_OPEN_MS / 10) {
+            source_pack(&p->src, p);
+            p->src.tried = true;
+        }
+    }
     if (p->main == MAIN_SIM && p->loading) {
         uint32_t t = now(p) - p->load_start;
         float prog = (float)t / SIM_LOAD_MS;
@@ -3745,6 +3872,9 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     s->image_evictions = is.evictions;
     s->image_kb = (uint32_t)(is.decoded_bytes / 1024);
     s->image_budget_kb = (uint32_t)(is.budget / 1024);
+    s->source_bytes = (uint32_t)source_len(&p->src);
+    s->source_held = (uint32_t)source_held(&p->src);
+    s->source_pack_ms = p->src.pack_ms;
 }
 
 /* ---- Scrolling by moving pixels ---- */

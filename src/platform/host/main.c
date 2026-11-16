@@ -774,6 +774,14 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         size_t kept = au_browser_kept_documents(b, &kept_bytes);
         printf("documents kept for Back and Forward: %lu, about %lu KB\n", (unsigned long)kept,
                (unsigned long)(kept_bytes / 1024));
+        AuTab *ct = au_bw_active_tab(w);
+        if (ct) {
+            AuPageStats ps;
+            au_page_stats(ct->page, &ps);
+            printf("page source: %lu bytes, %lu held (compressed in %lu ms); the document is about %lu KB\n",
+                   (unsigned long)ps.source_bytes, (unsigned long)ps.source_held, (unsigned long)ps.source_pack_ms,
+                   (unsigned long)(au_page_memory_estimate(ct->page) / 1024));
+        }
         if (ses->net) {
             AuDnsStats ds;
             au_net_dns_stats(ses->net, &ds);

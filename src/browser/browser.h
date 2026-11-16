@@ -371,6 +371,8 @@ void au_bw_view_source(AuBrowserWindow *w);
  * name to suggest (from the URL, else the title, with ".html" when it
  * has no extension; HFS-safe, cap >= 128). */
 bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len);
+/* Whether the active page has a source to save (au_page_has_source). */
+bool au_bw_has_page_source(AuBrowserWindow *w);
 void au_bw_save_name(AuBrowserWindow *w, char *out, size_t cap);
 
 /* ---- Selection and find (active tab) ---- */

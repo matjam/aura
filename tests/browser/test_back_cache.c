@@ -343,6 +343,63 @@ static void test_slim(void)
     env_free(&e);
 }
 
+/* ---- The page source is held compressed ---- */
+
+static void test_source(void)
+{
+    Env e;
+    env_init(&e);
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    AuBuf h;
+    au_buf_init(&h);
+    au_buf_puts(&h, "<!DOCTYPE html><title>Long</title>");
+    for (int i = 0; i < 1500; i++)
+        au_buf_printf(&h, "<p class=\"para\">paragraph number %d of a long page</p>\n", i);
+    size_t body_len = h.len;
+    char *body = au_strndup(au_buf_cstr(&h), h.len);
+    au_buf_free(&h);
+    respond_html(s, body);
+    respond_html(s, "<!DOCTYPE html><title>B</title><p>page b");
+    au_bw_new_tab(e.w, "http://site.test/long", true, -1);
+    settle(&e, 500);
+    paint(e.w);
+    run_for(&e, 3000);
+    AuPageStats st;
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_bytes == body_len + 3 && st.source_held * 4 < st.source_bytes,
+          "the source is held compressed: %u bytes in %u", (unsigned)st.source_bytes, (unsigned)st.source_held);
+    CHECK(au_page_has_source(page(&e)), "has a source");
+    const char *src = NULL;
+    size_t len = 0;
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3 && !memcmp(src + 3, body, body_len),
+          "asked for, it is the bytes that arrived (after the BOM): %u bytes", (unsigned)len);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held > st.source_bytes, "the inflated copy is held while in use");
+    run_for(&e, 5000);
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3, "asked again within the time");
+    run_for(&e, 9000);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held > st.source_bytes, "nine seconds after the last reader it is still there");
+    run_for(&e, 2000);
+    au_page_stats(page(&e), &st);
+    CHECK(st.source_held * 4 < st.source_bytes, "and dropped after ten: %u held", (unsigned)st.source_held);
+
+    /* It goes with the kept document and comes back. */
+    go(&e, "http://site.test/b");
+    CHECK(au_page_kept_count(page(&e)) == 1, "the long page is kept");
+    au_bw_back(e.w);
+    settle(&e, 500);
+    CHECK(au_bw_page_source(e.w, &src, &len) && len == body_len + 3 && !memcmp(src + 3, body, body_len),
+          "the source came back with the document");
+    /* View Source shows the same bytes. */
+    au_bw_view_source(e.w);
+    settle(&e, 500);
+    paint(e.w);
+    CHECK(page_text_has(&e, "paragraph number 1499 of a long page"), "View Source shows the text");
+    au_free(body);
+    env_free(&e);
+}
+
 /* ---- Timers and page transitions ---- */
 
 static void test_timers(void)
@@ -611,6 +668,7 @@ int main(void)
     fonts = ahem_fontset(fontdata);
     test_back_keeps();
     test_slim();
+    test_source();
     test_timers();
     test_limits();
     test_excluded();

@@ -1501,6 +1501,12 @@ AuDownload *au_bw_save_url(AuBrowserWindow *w, const char *url)
     return au_browser_download(w->browser, url, name, "", -1, 0);
 }
 
+bool au_bw_has_page_source(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && au_page_has_source(t->page);
+}
+
 bool au_bw_page_source(AuBrowserWindow *w, const char **data, size_t *len)
 {
     AuTab *t = au_bw_active_tab(w);

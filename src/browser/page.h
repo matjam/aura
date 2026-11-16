@@ -486,9 +486,14 @@ bool au_page_certificate_html(const AuPage *p, AuBuf *out);
 void au_page_status_text(const AuPage *p, char *out, size_t cap);
 /* The main document's bytes as they arrived (for Save Page As): false
  * while it is loading, after a failed or stopped load, and for pages
- * that have none (about:scene). The bytes stay valid until the next
- * load or au_page_free. */
+ * that have none (about:scene). Once the load is over the page holds
+ * the bytes compressed and inflates them for this call: use or copy
+ * them before returning to the event loop (au_page_idle drops the
+ * inflated copy ten seconds after the last call, and a load or
+ * au_page_free frees it). au_page_has_source says whether there are
+ * any without inflating them (menus). */
 bool au_page_source(const AuPage *p, const char **data, size_t *len);
+bool au_page_has_source(const AuPage *p);
 /* The page's script console: its last AU_PAGE_CONSOLE_LINES lines across
  * loads, oldest first (i from 0 to count - 1). level: 0 log, 1 info,
  * 2 warn, 3 error, 4 debug. A line stays valid until the next console
@@ -648,6 +653,9 @@ typedef struct AuPageStats {
                               * first_paint_ms then time the last showing */
     uint32_t hide_ms;        /* of load_ms after a restore: hiding (or freeing) the document that was left */
     uint32_t rebuild_ms;     /* of load_ms after a restore: building the layout the kept document had freed */
+    uint32_t source_bytes;   /* the page source's length */
+    uint32_t source_held;    /* bytes held for it now (compressed, plus the inflated copy while one is out) */
+    uint32_t source_pack_ms; /* how long compressing it took */
     bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);

@@ -452,9 +452,7 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_REOPEN_TAB);
     else
         DisableItem(file, FILE_REOPEN_TAB);
-    const char *src_data;
-    size_t src_len;
-    if (w && au_bw_page_source(w, &src_data, &src_len))
+    if (w && au_bw_has_page_source(w))
         EnableItem(file, FILE_SAVE_AS);
     else
         DisableItem(file, FILE_SAVE_AS);
