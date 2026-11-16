@@ -129,6 +129,7 @@ keeps the Mac OS 9 build working and looking the same.
 | Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them | in progress |
 | List models for History, Bookmarks, Downloads and Cookies (`src/browser/lists.c`); Mac list windows built from them | done |
 | Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | not started |
-| Developer windows' layout and actions in `src/browser`; Mac `devwin.c` only frames them | not started |
+| Developer windows' layout and actions in `src/browser`; Mac `devwin.c` only frames them | in progress |
+| Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`) | in progress |
 | GTK4 port in `src/platform/gtk`, with a CI build | not started |
 | Packaging for Linux | not started |
