@@ -1,6 +1,7 @@
-/* Aura decompression: inflate (RFC 1951, with zlib RFC 1950 and gzip
- * RFC 1952 framing) and brotli (RFC 7932). Portable C99, no OS calls, no
- * global mutable state.
+/* Aura compression: inflate (RFC 1951, with zlib RFC 1950 and gzip
+ * RFC 1952 framing), brotli decoding (RFC 7932) and a deflate encoder
+ * (at the end of this file). Portable C99, no OS calls, no global
+ * mutable state.
  *
  * Every decoder is a streaming state machine with the same calling
  * convention:

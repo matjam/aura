@@ -123,6 +123,16 @@ estimated size. `--no-doc-cache` turns the document cache off.
   the page's current one. `au_docview_set_hidden` fires pagehide and
   pageshow with `persisted` true, drops decoded image pixels (they
   decode again when painted) and runs the script collector.
+- **A hidden document frees its layout** (`au_layout_release`): the box
+  tree, lines, fragments, stacking data, measured words and font lists.
+  The first `au_docview_update` after it is shown builds them again,
+  before the paint (`AuPageStats.rebuild_ms`). The scroll offsets of
+  inner scroll containers live in the boxes, so they are saved and put
+  back (`au_layout_scroll_save`); the page's scroll position, form
+  contents and focus are in the tab, the tree and the view and are
+  untouched. The estimate below is taken after the layout went.
+  Computed styles, the rule index and canvas bitmaps stay. A text
+  selection does not survive Back (a navigation clears it).
 - **Limits.** `cache.documents` (3 per tab, 0 turns the cache off) and
   `cache.documents_kb` (24 MB over all tabs, by
   `au_docview_memory_estimate`; a document larger than that is not
@@ -141,6 +151,9 @@ Measured (Wikipedia, live):
 | Host | the same Back through the history cache mode | 450 to 800 ms |
 | Guest (stock base) | Back to a kept article, in the engine | 56 ms, 46 ms of it hiding the page left |
 | Guest (stock base) | page painted after the key | 971 ms |
+| Host, with the layout freed (2026-11-15) | Back to a kept article of 3000 boxes; of 11,300 boxes | 9 ms; 26 to 28 ms |
+| Guest (stock base), with the layout freed | Back to a kept article of 3000 boxes, in the engine | 48 ms: 10 ms hiding the page left, 31 ms building the layout |
+| Guest (stock base), with the layout freed | page painted after the key | 220 ms |
 | Guest (stock base) | loading the same articles | 30 to 70 seconds |
 
 - On the host an article is estimated at 12 to 15 MB (its script heap
@@ -152,6 +165,64 @@ Measured (Wikipedia, live):
 - Develop > Page Timings shows these times for a page that Back or
   Forward showed from the kept documents, with the number and estimated
   size of kept documents.
+
+## Unloaded tabs
+
+A background tab can give up its document to save memory. To change
+that, work in `browser.c` ("Unloaded tabs"; `browser.h` describes the
+rules) and `page_doc.c` ("Discarding the document").
+
+**To try it on the host**, run `aura-host chrome --net --tab URL1 --tab
+URL2 --do unload:0 --do tab:0`: `unload:N` is the tab's Unload Tab
+command and prints what the tab held, `tab:N` selects a tab and prints
+how long an unloaded one took to load again. `tests/browser/test_unload.c`
+covers it on the fake transport.
+
+- **What stays:** the tab with its title (drawn dimmed,
+  `AuChromeTab.unloaded`), icon, address, back/forward list, zoom and
+  scroll position; the session file names it as before. The document
+  view, its kept documents, the page source, the request log and the
+  console go (`au_page_discard`). No pagehide or unload event fires.
+- **Coming back:** selecting the tab loads its entry through the
+  history cache mode ([`networking.md`](networking.md)), scrolled to
+  where it was (`load_unloaded`). Reload on an unloaded tab loads it in
+  the background.
+- **Which tabs:** never a window's active tab or a tab that is loading;
+  and none that holds what a reload would lose (`au_page_can_discard`):
+  a POST result, a form control the user changed or gave files
+  (`AuControl.user_interacted`; a value set by script does not count),
+  a window with an unload or beforeunload listener, a worker, a canvas
+  with a bitmap (drawn by script or by the user cannot be told apart),
+  transfers under way, an internal or failed page. Nested documents
+  count (`au_docview_has_state`).
+- **When.** `au_bw_idle` applies the rules once a second while the
+  `tabs.unload_low_memory` preference is on (Preferences > Network,
+  "Unload background tabs when memory is low"; on by default) and the
+  shell reports free memory (`AuBrowserHost.memory_free_kb`: on Mac OS 9
+  the free heap plus free temporary memory, the figure the script
+  memory limits use):
+  - under `tabs.unload_free_kb` (6144) free, the oldest kept document
+    goes first, then the least recently shown eligible tab, one a
+    second;
+  - under `tabs.unload_idle_kb` (16384) free, a tab not shown for
+    `tabs.unload_idle_minutes` (30; 0 turns this rule off) goes.
+- **Before the out-of-memory alert**, the allocator's release handler
+  (`release_caches` in `main.c`, `au_browser_release_memory`) drops the
+  kept documents, and when there are none, every eligible tab. The tab
+  whose page `au_bw_idle` is inside is left alone (`AuBrowser.idle_page`),
+  since its document is on the stack.
+- **By hand:** a tab's contextual menu has Unload Tab (`AU_CMD_UNLOAD_TAB`),
+  enabled when the tab is eligible; it does not ask the preference.
+- **Session restore** loads each window's active tab and brings the
+  others back unloaded (`au_page_set_discarded`), so a session of many
+  tabs starts as fast as one of a single tab; `tabs.unload_restored`
+  set to false loads them all.
+
+**To make the rules act in the guest**, raise `tabs.unload_free_kb`
+above the free memory: the guest has 400 MB of temporary memory, so
+6 MB is never reached there. The measurements in
+[`memory.md`](memory.md) ("Cold memory") were taken with a build whose
+default was 425,000.
 
 ## Back, Forward and closed tabs
 
@@ -222,7 +293,10 @@ a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 ## Save Page As
 
 To change Save Page As, see `au_page_source` (the page keeps the main
-document's bytes as they arrived, until the next load),
+document's bytes as they arrived, until the next load; it holds them
+deflated once the load is over and inflates them for the call, so use
+or copy them before returning to the event loop, and ask
+`au_page_has_source` when only their presence matters),
 `au_bw_save_name` (the suggested file name) and `mac_save_page` in
 `storage.c`, which asks with `StandardPutFile` and writes the bytes
 unchanged as a TEXT file with creator AURA.

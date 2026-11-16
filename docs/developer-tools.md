@@ -47,7 +47,9 @@ menu in the guest.
   repaints of the whole page, each split into moving the offscreen
   pixels, painting, copying to the screen and the number of areas
   painted. It shows free heap, the largest free block, temporary memory
-  and the glyph cache. With a page field focused it types 16 keys and
+  and the glyph cache, and the page source's size, what is held for it
+  and how long compressing it took ([`memory.md`](memory.md), "Cold
+  memory"). With a page field focused it types 16 keys and
   shows milliseconds per key ([`forms.md`](forms.md)); for a page shown
   from the kept documents it shows the Back times
   ([`browser-chrome.md`](browser-chrome.md)).
