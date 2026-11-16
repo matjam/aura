@@ -527,6 +527,13 @@ typedef struct AuCssMediaList AuCssMediaList;
  * invalid parts are dropped as CSS requires. */
 AuCssSheet *au_css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                                const char *media);
+/* The same, taking css, a block from au_alloc: the sheet keeps it instead
+ * of a copy and frees it. */
+AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, const char *base_url,
+                                    const char *media);
+/* The text the sheet was parsed from (the sheet keeps it: blocks of
+ * declarations are parsed from it when a rule first matches), or NULL. */
+const char *au_css_sheet_text(const AuCssSheet *s, size_t *len);
 /* A sheet is freed when its last owner frees it; au_css_sheet_retain adds
  * an owner (a document that links one sheet several times parses it
  * once). */

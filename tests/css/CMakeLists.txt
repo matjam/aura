@@ -18,6 +18,10 @@ add_executable(test_css_invalidate test_css_invalidate.c)
 target_link_libraries(test_css_invalidate aura_engine m)
 add_test(NAME css_invalidate COMMAND test_css_invalidate)
 add_test(NAME css_viewport COMMAND test_css_invalidate --viewport ${CMAKE_SOURCE_DIR}/tests/page/samples)
+# Styles from sheets that keep blocks as text until used against styles
+# from sheets parsed whole; --lazy-page PAGE.html [SHEET.css ...] for a
+# saved page.
+add_test(NAME css_lazy COMMAND test_css_invalidate --lazy ${CMAKE_SOURCE_DIR}/tests/page/samples)
 
 # Parse and match timings on a generated sheet (and on files given as
 # arguments). Registered with a small size so it also runs under ctest.

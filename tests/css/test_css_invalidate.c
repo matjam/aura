@@ -512,6 +512,27 @@ static const char sheet_units[] =
     "#f { height: 10dvh; margin: var(--gap) } button { min-width: 5vmax } label { width: 10svw }";
 static const char sheet_static[] = ".item { padding: 1px } p { margin: 2em } #wrap { color: blue }";
 
+/* Blocks a lazy sheet must read as an eager one does: errors inside a
+ * block, braces in custom properties, nesting, at-rules in blocks,
+ * comments, strings holding braces, !important, an unclosed last block,
+ * conditional groups that do and do not apply. */
+static const char sheet_lazy[] =
+    "p { color: red; colr: blue; margin: 1px 2px 3px 4px 5px; padding: 3px !important; ; }"
+    "div { --x: { a: b; c: d }; --y: 4px; width: calc(var(--y) * 3); color: red }"
+    "ul { content: '}'; quotes: \"{\" \"}\"; /* } */ margin-top: 7px }"
+    "li { color: green; & span { color: blue } margin-left: 2px; @media (min-width: 600px) { padding: 9px } }"
+    "span { color: ; top: 1px; left: (2px; right: 3px }"
+    "a { color: red !important; color: blue; background: url(x.png) no-repeat, linear-gradient(red, blue) }"
+    "h1 { } h2 {;;} h3 { color: } b { top: 1px"
+    "} i { margin: 0 auto !ie; margin: 3px }"
+    "@media screen and (max-width: 700px) { p { text-indent: 5px } @media (min-width: 400px) { p { top: 2px } } }"
+    "@media print { p { text-indent: 50px } em { color: red } }"
+    "@supports (display: grid) { em { letter-spacing: 1px } }"
+    "@supports (display: nothing) { em { letter-spacing: 9px } }"
+    "@layer a, b; @layer b { strong { color: red } } @layer a { strong { color: blue } }"
+    "@media (min-width: 900px) { @layer a { strong { top: 4px } } label { margin: 1px } }"
+    "em { width: 10px; { color: red } height: 5px } u { color: blue";
+
 typedef struct ViewDoc {
     AuDocument *doc;
     AuCssResolver *r;
@@ -688,6 +709,137 @@ static char *read_file(const char *path, size_t *len)
     return buf;
 }
 
+/* ---- Lazy sheets against eager ones ----
+ * A sheet keeps blocks as text until they are used (css_lazy_bodies).
+ * Styles computed from such sheets must equal styles from sheets parsed
+ * whole: at the first size, after each resize, and with a hover moved
+ * over the page (which matches rules for the first time). */
+static void compare_docs(const char *what, const char *step, ViewDoc *a, ViewDoc *b)
+{
+    AuBuf x, y;
+    au_buf_init(&x);
+    au_buf_init(&y);
+    dump_doc(a->doc, &x);
+    dump_doc(b->doc, &y);
+    checks++;
+    if (x.len != y.len || memcmp(x.data, y.data, x.len) != 0) {
+        failures++;
+        size_t k = 0, line = 0;
+        while (k < x.len && k < y.len && x.data[k] == y.data[k])
+            line += x.data[k++] == '\n';
+        fprintf(stderr, "%s, %s: lazy and eager sheets give different styles, style line %u\n", what, step,
+                (unsigned)line);
+        if (getenv("INVALIDATE_DUMP")) {
+            size_t s0 = k > 80 ? k - 80 : 0;
+            fprintf(stderr, "  lazy:  %.*s\n  eager: %.*s\n", (int)(x.len - s0 < 200 ? x.len - s0 : 200), x.data + s0,
+                    (int)(y.len - s0 < 200 ? y.len - s0 : 200), y.data + s0);
+        }
+    }
+    au_buf_free(&x);
+    au_buf_free(&y);
+}
+
+static void lazy_page(const char *what, const char *html, size_t len, const char *const *extra, int nextra)
+{
+    css_lazy_bodies = true;
+    ViewDoc lazy = view_doc(html, len, extra, nextra, 1024, 768);
+    css_lazy_bodies = false;
+    ViewDoc eager = view_doc(html, len, extra, nextra, 1024, 768);
+    css_lazy_bodies = true;
+    compare_docs(what, "first style", &lazy, &eager);
+    static const float sizes[][2] = {{500, 700}, {1440, 900}, {320, 480}, {1024, 768}};
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        ViewDoc *v[2] = {&lazy, &eager};
+        for (int k = 0; k < 2; k++) {
+            AuCssDevice dev = *au_css_resolver_device(v[k]->r);
+            dev.width = sizes[i][0];
+            dev.height = sizes[i][1];
+            au_css_resolver_set_device(v[k]->r, &dev);
+            au_css_restyle(v[k]->r, v[k]->doc);
+        }
+        char step[40];
+        snprintf(step, sizeof step, "at %gx%g", sizes[i][0], sizes[i][1]);
+        compare_docs(what, step, &lazy, &eager);
+    }
+    /* hover on a spread of elements, the same ones in both documents */
+    uint32_t n, m;
+    AuElement **a = elements(lazy.doc, &n), **b = elements(eager.doc, &m);
+    CHECK(n == m);
+    uint32_t steps = n < 24 ? n : 24;
+    AuElement *ca = NULL, *cb = NULL;
+    for (uint32_t s = 0; s < steps && n == m; s++) {
+        uint32_t k = (uint32_t)((uint64_t)s * n / steps);
+        au_css_move_state(lazy.r, ca, a[k], AU_STATE_HOVER);
+        au_css_move_state(eager.r, cb, b[k], AU_STATE_HOVER);
+        ca = a[k];
+        cb = b[k];
+        au_css_restyle(lazy.r, lazy.doc);
+        au_css_restyle(eager.r, eager.doc);
+        compare_docs(what, "hover", &lazy, &eager);
+    }
+    au_free(a);
+    au_free(b);
+    view_doc_free(&lazy);
+    view_doc_free(&eager);
+}
+
+/* --lazy DIR: the sample pages (with wiki.css for the page that links
+ * it), as written and with sheets of media queries and viewport units.
+ * --lazy-page PAGE.html [SHEET.css ...]: one page with the sheets given. */
+static int test_lazy(int argc, char **argv)
+{
+    if (argc > 2 && strcmp(argv[1], "--lazy-page") == 0) {
+        size_t len;
+        char *html = read_file(argv[2], &len);
+        if (!html) {
+            fprintf(stderr, "cannot read %s\n", argv[2]);
+            return 2;
+        }
+        int ns = argc - 3;
+        const char **css = calloc((size_t)ns + 1, sizeof *css);
+        for (int i = 0; i < ns; i++) {
+            size_t n;
+            css[i] = read_file(argv[3 + i], &n);
+            if (!css[i]) {
+                fprintf(stderr, "cannot read %s\n", argv[3 + i]);
+                return 2;
+            }
+        }
+        lazy_page(argv[2], html, len, css, ns);
+        printf("%d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
+    const char *samples = argc > 2 ? argv[2] : NULL;
+    static const char *const names[] = {"wiki.html",     "hn.html",       "hn-item.html", "blog.html",   "docs.html",
+                                        "forum.html",    "reddit.html",   "images.html",  "svg.html",    "emoji.html",
+                                        "qa-boxes.html", "qa-edge.html",  "qa-flex.html", "qa-forms.html",
+                                        "qa-inline.html", "qa-quirks.html", "qa-tables.html", "webfonts.html",
+                                        "grid.html",     "canvas.html"};
+    for (size_t i = 0; samples && i < sizeof names / sizeof names[0]; i++) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/%s", samples, names[i]);
+        size_t len, clen = 0;
+        char *html = read_file(path, &len);
+        CHECK(html != NULL);
+        if (!html)
+            continue;
+        char *css = NULL;
+        if (!strcmp(names[i], "wiki.html")) {
+            snprintf(path, sizeof path, "%s/wiki.css", samples);
+            css = read_file(path, &clen);
+            CHECK(css != NULL);
+        }
+        const char *extra[4] = {sheet_viewport, sheet_units, sheet_lazy, css};
+        lazy_page(names[i], html, len, extra + 3, css ? 1 : 0);
+        lazy_page(names[i], html, len, extra, css ? 4 : 3);
+        free(html);
+        free(css);
+    }
+    lazy_page("built in", page, sizeof page - 1, (const char *const[]){sheet_plain, sheet_has_state, sheet_lazy}, 3);
+    printf("%d checks, %d failures\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 static bool in_body(const AuElement *el)
 {
     for (const AuNode *p = &el->node; p; p = p->parent)
@@ -817,6 +969,8 @@ int main(int argc, char **argv)
     init_props();
     if (argc > 1 && strcmp(argv[1], "--bench") == 0)
         return bench(argc, argv);
+    if (argc > 1 && (strcmp(argv[1], "--lazy") == 0 || strcmp(argv[1], "--lazy-page") == 0))
+        return test_lazy(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--viewport") == 0)
         return test_viewport(argc > 2 ? argv[2] : NULL);
     uint32_t most = 0;

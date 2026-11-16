@@ -459,8 +459,9 @@ static int where_report(int argc, char **argv)
 }
 
 /* css_bench --page PAGE.html SHEET.css...: the sheets parsed in the order
- * given (a file may be given more than once, as a page that links it
- * twice does), then the page styled with them: times, and the heap the
+ * given (a file given more than once is parsed once and shared, as the
+ * document view does for a page that links it twice), then the page
+ * styled with them: times, and the heap the
  * sheets, the index and the styles keep (macOS only). */
 static char *slurp(const char *path, size_t *len)
 {
@@ -511,10 +512,19 @@ static int page_report(int argc, char **argv)
     size_t h0 = heap_in_use();
     double t0 = now_ms();
     size_t rules = 0;
+    AuCssSheet **sheets = calloc((size_t)ns + 1, sizeof *sheets);
+    int shared = 0;
     for (int i = 0; i < ns; i++) {
-        AuCssSheet *s = au_css_sheet_parse(text[i], tlen[i], AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
-        rules += au_css_sheet_rule_count(s);
-        au_css_resolver_add_sheet(r, s);
+        /* a file given again shares the parsed sheet, as in a document */
+        for (int k = 0; k < i && !sheets[i]; k++)
+            if (!strcmp(argv[3 + k], argv[3 + i]))
+                sheets[i] = au_css_sheet_retain(sheets[k]);
+        if (sheets[i])
+            shared++;
+        else
+            sheets[i] = au_css_sheet_parse(text[i], tlen[i], AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+        rules += au_css_sheet_rule_count(sheets[i]);
+        au_css_resolver_add_sheet(r, sheets[i]);
     }
     double t1 = now_ms();
     size_t h1 = heap_in_use();
@@ -526,7 +536,8 @@ static int page_report(int argc, char **argv)
     size_t h3 = heap_in_use();
     au_css_style_document(r, doc);
     double t4 = now_ms();
-    printf("%d sheets, %zu bytes of text, %zu style rules, %d elements\n", ns, total, rules, nel);
+    printf("%d sheets (%d of them given before), %zu bytes of text, %zu style rules, %d elements\n", ns, shared,
+           total, rules, nel);
     printf("  parse %.1f ms; index %.1f ms (%zu entries); first style %.1f ms; style again %.1f ms\n", t1 - t0, t2 - t1,
            nent, t3 - t2, t4 - t3);
     printf("  heap: sheets %zu bytes, index %zu, styles and what styling parsed %zu; total %zu\n", h1 - h0, h2 - h1,

@@ -16,7 +16,13 @@ typedef struct {
     bool quirks;
     bool imports_allowed;
     int depth;
+    bool lazy; /* blocks of declarations stay text until used */
 } Parser;
+
+bool css_lazy_bodies = true;
+
+/* The longest block kept as text; a longer one is parsed with the sheet. */
+#define MAX_LAZY_BODY 0xFFFFu
 
 static bool is_open(int t) { return t == TK_FUNCTION || t == TK_LPAREN || t == TK_LBRACKET || t == TK_LBRACE; }
 
@@ -187,6 +193,62 @@ static AuSelList *parse_selectors(Parser *p, uint32_t a, uint32_t b, const AuSel
     return css_selector_parse(p->tk, a, b, &sc);
 }
 
+static void decls_trim(AuCssDeclBlock *b)
+{
+    if (b->cap > b->n && b->n) {
+        b->d = au_realloc(b->d, b->n * sizeof *b->d);
+        b->cap = b->n;
+    }
+}
+
+/* True if the block at blk, with contents [s, e), is closed by its own }
+ * and holds at least one declaration and nothing but declarations: no
+ * nested rule and no at-rule. Such a block read again from its source
+ * text gives the same tokens, and css_parse_decl_list reads from them
+ * what parse_block_contents does. */
+static bool only_declarations(const CssTokens *tk, uint32_t blk, uint32_t s, uint32_t e)
+{
+    if (tk->t[blk].type != TK_LBRACE || tk->t[blk].len != e + 1 || e >= tk->n || tk->t[e].type != TK_RBRACE)
+        return false;
+    bool any = false;
+    uint32_t i = s;
+    while (i < e) {
+        int ty = tk->t[i].type;
+        if (ty == TK_WS || ty == TK_SEMI) {
+            i++;
+            continue;
+        }
+        if (ty == TK_AT)
+            return false;
+        bool custom = ty == TK_IDENT && css_ident_is_custom_prop(css_tok_str(tk, &tk->t[i]), tk->t[i].len);
+        uint32_t j = i;
+        while (j < e && tk->t[j].type != TK_SEMI) {
+            if (tk->t[j].type == TK_LBRACE && !custom)
+                return false; /* a nested rule */
+            j = skip_cv(tk, j);
+        }
+        if (j > e)
+            return false;
+        any = any || ty == TK_IDENT;
+        i = j;
+    }
+    return any;
+}
+
+const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
+{
+    if (!ru->lazy)
+        return &ru->decls;
+    CssRule *w = (CssRule *)ru; /* the parsed block is a cache of the text */
+    CssTokens tk = {0};
+    css_tokenize(sh->text + w->body_off, w->body_len, &tk);
+    css_parse_decl_list(&tk, 0, tk.n, &w->decls, sh->quirks, sh->base_url);
+    css_tokens_free(&tk);
+    decls_trim(&w->decls);
+    w->lazy = 0;
+    return &w->decls;
+}
+
 /* A style rule: prelude [a, pe), block at blk. */
 static void parse_style_rule(Parser *p, uint32_t a, uint32_t pe, uint32_t blk, const AuSelList *parent,
                              RuleList *out)
@@ -202,18 +264,19 @@ static void parse_style_rule(Parser *p, uint32_t a, uint32_t pe, uint32_t blk, c
     block_range(p->tk, blk, &s, &e);
     if (p->depth >= MAX_RULE_DEPTH)
         return;
+    if (p->lazy && only_declarations(p->tk, blk, s, e)) {
+        uint32_t off = css_tok_src(&p->tk->t[blk]), end = css_tok_src(&p->tk->t[e]);
+        if (end >= off && end - off <= MAX_LAZY_BODY && end <= p->sheet->text_len) {
+            r->lazy = 1;
+            r->body_off = off;
+            r->body_len = end - off;
+            return;
+        }
+    }
     p->depth++;
     RuleList children = {&r->children};
     parse_block_contents(p, s, e, r, &children);
     p->depth--;
-}
-
-static void decls_trim(AuCssDeclBlock *b)
-{
-    if (b->cap > b->n && b->n) {
-        b->d = au_realloc(b->d, b->n * sizeof *b->d);
-        b->cap = b->n;
-    }
 }
 
 /* Contents of a style rule's block (or of a conditional rule nested in
@@ -958,7 +1021,7 @@ static void parse_rule_list(Parser *p, uint32_t a, uint32_t b, RuleList *out, bo
 }
 
 AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
-                            const char *media, bool quirks)
+                            const char *media, bool quirks, int text_mode)
 {
     au_css_init();
     AuCssSheet *sh = au_calloc(sizeof *sh);
@@ -971,7 +1034,21 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
         sh->media = css_media_parse_text(media, strlen(media));
     CssTokens tk = {0};
     css_tokenize(css, len, &tk);
-    Parser p = {&tk, sh, quirks, true, 0};
+    /* The text stays with the sheet (a brace token holds a 32-bit offset
+     * into it, so not a sheet of 4 GB). */
+    if (len < 0xFFFFFFFFu) {
+        if (text_mode == CSS_TEXT_COPY) {
+            sh->text = au_alloc(len + 1);
+            if (len)
+                memcpy(sh->text, css, len);
+            sh->text[len] = 0;
+        } else {
+            sh->text = (char *)css;
+        }
+        sh->text_owned = text_mode != CSS_TEXT_BORROW;
+        sh->text_len = len;
+    }
+    Parser p = {&tk, sh, quirks, true, 0, css_lazy_bodies && sh->text != NULL};
     RuleList l = {&sh->rules};
     /* equal var() and custom property values share one token list, equal
      * declared values one blob */
@@ -981,13 +1058,27 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     css_blob_intern_end();
     css_toklist_intern_end();
     css_tokens_free(&tk);
+    if (!sh->text && text_mode == CSS_TEXT_TAKE)
+        au_free((char *)css);
     return sh;
 }
 
 AuCssSheet *au_css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                                const char *media)
 {
-    return css_sheet_parse(css, len, origin, base_url, media, false);
+    return css_sheet_parse(css, len, origin, base_url, media, false, CSS_TEXT_COPY);
+}
+
+AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, const char *base_url,
+                                    const char *media)
+{
+    return css_sheet_parse(css, len, origin, base_url, media, false, CSS_TEXT_TAKE);
+}
+
+const char *au_css_sheet_text(const AuCssSheet *s, size_t *len)
+{
+    *len = s->text ? s->text_len : 0;
+    return s->text;
 }
 
 /* ---- Freeing ---- */
@@ -1062,6 +1153,8 @@ void au_css_sheet_free(AuCssSheet *s)
     if (s->media)
         css_media_free(s->media);
     au_free(s->base_url);
+    if (s->text_owned)
+        au_free(s->text);
     au_free(s);
 }
 

@@ -257,6 +257,15 @@ static CssToken *push_tok(Lexer *L, int type)
     return t;
 }
 
+/* A brace remembers its place in the source (css_tok_src) in the two
+ * fields braces do not use; offsets past 4 GB wrap, and css_sheet_parse
+ * does not use them for such a sheet. */
+static void tok_set_src(CssToken *t, size_t off)
+{
+    t->unit = (uint16_t)(off >> 16);
+    t->name_len = (uint16_t)off;
+}
+
 static void begin_str(Lexer *L, CssToken *t) { t->str = (uint32_t)L->out->pool.len; }
 static void end_str(Lexer *L, CssToken *t)
 {
@@ -610,11 +619,11 @@ void css_tokenize(const char *src, size_t len, CssTokens *out)
             continue;
         case '{':
             L.i++;
-            push_tok(&L, TK_LBRACE);
+            tok_set_src(push_tok(&L, TK_LBRACE), L.i); /* where its contents start */
             continue;
         case '}':
+            tok_set_src(push_tok(&L, TK_RBRACE), L.i); /* where the contents end */
             L.i++;
-            push_tok(&L, TK_RBRACE);
             continue;
         case ',':
             L.i++;
@@ -749,6 +758,8 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
         }
         if (t.type != TK_FUNCTION)
             t.name_len = 0; /* a number's source text is not copied */
+        if (t.type == TK_LBRACE || t.type == TK_RBRACE)
+            t.unit = 0; /* nor a brace's place in the source */
         if (close_of(t.type)) {
             uint32_t end = t.len > b ? b : t.len;
             t.len = end - a + base;

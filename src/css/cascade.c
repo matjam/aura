@@ -98,7 +98,8 @@ static void layer_rank(LayerTree *t)
 
 typedef struct RuleEntry {
     const AuSelector *sel;
-    const AuCssDeclBlock *decls;
+    const CssRule *rule;      /* its declarations: css_rule_decls */
+    const AuCssSheet *sheet;
     uint32_t order;
     uint32_t spec;
     int32_t layer; /* node in the origin's tree, then its rank */
@@ -649,17 +650,20 @@ typedef struct {
     int32_t layer;
 } Frame;
 
-static void add_entries(AuCssResolver *r, const AuSelList *sel, const AuCssDeclBlock *decls, uint8_t origin,
+static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, const AuCssSheet *sheet,
                         int32_t layer, uint32_t *order, bool nested_decls)
 {
-    if (!sel || !decls->n)
+    uint8_t origin = sheet->origin;
+    /* a block that is still text has at least one declaration to try */
+    if (!sel || (!rule->lazy && !rule->decls.n))
         return;
     uint32_t spec_override = nested_decls ? css_sellist_max_spec(sel) : 0;
     uint32_t ord = (*order)++;
     for (uint32_t i = 0; i < sel->n; i++) {
         RuleEntry *e = CSS_PUSH(r->entries, r->nentries, r->entries_cap);
         e->sel = &sel->sel[i];
-        e->decls = decls;
+        e->rule = rule;
+        e->sheet = sheet;
         e->order = ord;
         e->spec = nested_decls ? spec_override : sel->sel[i].spec;
         e->layer = layer;
@@ -719,11 +723,11 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         bool descend = false;
         switch (ru->type) {
         case RULE_STYLE:
-            add_entries(r, ru->sel, &ru->decls, f.sheet->origin, f.layer, order, false);
+            add_entries(r, ru->sel, ru, f.sheet, f.layer, order, false);
             descend = true;
             break;
         case RULE_NESTED_DECLS:
-            add_entries(r, ru->sel, &ru->decls, f.sheet->origin, f.layer, order, true);
+            add_entries(r, ru->sel, ru, f.sheet, f.layer, order, true);
             break;
         case RULE_MEDIA:
             descend = media_dep(r, ru->media);
@@ -852,9 +856,10 @@ AuCssResolver *au_css_resolver_new(void)
     au_css_device_default(&r->dev);
     au_css_font_prefs_default(&r->fprefs);
     if (!ua_users++) {
-        ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false);
+        ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false, CSS_TEXT_BORROW);
         ua_quirks_shared =
-            css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true);
+            css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true,
+                            CSS_TEXT_BORROW);
     }
     r->ua = ua_shared;
     r->ua_quirks = ua_quirks_shared;
@@ -1173,7 +1178,7 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
         int lvl_n = e->origin;
         int lvl_i = e->origin == AU_CSS_ORIGIN_AUTHOR ? 4 : e->origin == AU_CSS_ORIGIN_USER ? 5 : 6;
         uint32_t layer = (uint32_t)e->layer;
-        push_matched(r, e->decls, make_key(lvl_n, 0, layer, e->spec, e->order),
+        push_matched(r, css_rule_decls(e->sheet, e->rule), make_key(lvl_n, 0, layer, e->spec, e->order),
                      make_key(lvl_i, 0, 4095 - layer, e->spec, e->order));
     }
 }

@@ -633,15 +633,18 @@ static void start_sheet(AuDocView *dv, SheetSrc *s)
     request_sheet(dv, s);
 }
 
-/* Parses a source whose text is there, once; attaches an import to its
- * parent's sheet; and starts the sheet's own @imports. A fetched sheet's
- * text is freed: nothing reads it again. */
-static uint32_t text_hash(const char *p, size_t n)
+/* The text a source was parsed from: its own while it waits to be
+ * parsed, then the parsed sheet's (which keeps it). */
+static const char *src_text(const SheetSrc *s, size_t *len)
 {
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < n; i++)
-        h = (h ^ (unsigned char)p[i]) * 16777619u;
-    return h;
+    if (s->text) {
+        *len = s->len;
+        return s->text;
+    }
+    if (s->sheet)
+        return au_css_sheet_text(s->sheet, len);
+    *len = 0;
+    return NULL;
 }
 
 /* A sheet of this document that was parsed from the same text for the
@@ -655,31 +658,40 @@ static AuCssSheet *same_sheet(AuDocView *dv, const SheetSrc *s)
         return NULL;
     for (uint32_t i = 0; i < dv->nslots; i++) {
         const SheetSrc *o = dv->slots[i].src;
-        if (o == s || !o->sheet || o->nimports || o->len != s->len || o->hash != s->hash)
+        if (o == s || !o->sheet || o->nimports || o->len != s->len)
             continue;
         if (au_css_sheet_import_count(o->sheet) || strcmp(o->url ? o->url : "", s->url ? s->url : "") ||
             strcmp(o->media ? o->media : "", s->media ? s->media : ""))
             continue;
-        return o->sheet;
+        size_t n;
+        const char *t = au_css_sheet_text(o->sheet, &n);
+        if (t && n == s->len && (!n || memcmp(t, s->text, n) == 0))
+            return o->sheet;
     }
     return NULL;
 }
 
-static void parse_sheet(AuDocView *dv, SheetSrc *s, bool keep_text)
+/* Parses a source whose text is there, once; attaches an import to its
+ * parent's sheet; and starts the sheet's own @imports. The parsed sheet
+ * takes the text (it parses blocks of declarations from it when their
+ * rules first match, and the CSSOM reads it: src_text). */
+static void parse_sheet(AuDocView *dv, SheetSrc *s)
 {
     if (s->sheet || !s->text)
         return;
-    s->hash = text_hash(s->text, s->len);
     AuCssSheet *sh = same_sheet(dv, s);
-    if (sh)
+    if (sh) {
         au_css_sheet_retain(sh);
-    else
-        sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
-    if (dv->webfonts)
-        au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
-    if (!keep_text) {
         au_free(s->text);
-        s->text = NULL; /* len stays: the size the sheet had (au_docview_memory_estimate) */
+    } else {
+        /* the buffer grew by doubling: the sheet keeps only the text */
+        sh = au_css_sheet_parse_take(au_realloc(s->text, s->len + 1), s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    }
+    s->text = NULL; /* len stays: the size the sheet has (au_docview_memory_estimate) */
+    if (dv->webfonts) {
+        size_t n;
+        const char *t = au_css_sheet_text(sh, &n);
+        au_webfonts_add_sheet(dv->webfonts, sh, t, n);
     }
     dv->sheets_dirty = true;
     if (s->parent) {
@@ -724,7 +736,7 @@ static void undefer_sheet(AuDocView *dv, SheetSrc *s)
         s->deferred = false;
         dv->ndeferred--;
         if (s->text) {
-            parse_sheet(dv, s, true); /* a <style> */
+            parse_sheet(dv, s); /* a <style> */
         } else {
             request_sheet(dv, s);
             dv->finished_reported = false;
@@ -850,7 +862,7 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
             s->len = n;
             if (!s->text) /* an empty response */
                 s->text = dup("");
-            parse_sheet(dv, s, false);
+            parse_sheet(dv, s);
         } else {
             s->failed = true;
         }
@@ -1076,7 +1088,7 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
             s->src->text = dup("");
         s->src->url = dup(dv->base);
         if (media_matches(dv, s->src)) {
-            parse_sheet(dv, s->src, true);
+            parse_sheet(dv, s->src);
         } else {
             s->src->deferred = true;
             dv->ndeferred++;
@@ -1310,7 +1322,9 @@ static bool slot_stale(AuDocView *dv, const SheetSlot *s)
         AuBuf t;
         au_buf_init(&t);
         text_content(&s->el->node, &t);
-        bool changed = t.len != s->src->len || (t.len && memcmp(t.data, s->src->text, t.len) != 0);
+        size_t n;
+        const char *was = src_text(s->src, &n);
+        bool changed = !was || t.len != n || (t.len && memcmp(t.data, was, t.len) != 0);
         au_buf_free(&t);
         return changed;
     }
@@ -2024,19 +2038,22 @@ int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
     if (!s->text && !s->sheet)
         return 1;
     au_buf_puts(url, s->url ? s->url : "");
-    if (s->om_text)
+    if (s->om_text) {
         au_buf_append(text, s->om_text, s->om_len);
-    else if (s->text)
-        au_buf_append(text, s->text, s->len);
-    else
-        return 3; /* a fetched sheet: its text was freed once parsed */
+        return 2;
+    }
+    size_t n;
+    const char *t = src_text(s, &n);
+    if (!t)
+        return 3; /* a sheet that could not keep its text */
+    au_buf_append(text, t, n);
     return 2;
 }
 
 void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len)
 {
     SheetSrc *s = sheet_of(dv, el);
-    if (!s || (!s->text && !s->om_text))
+    if (!s || (!s->text && !s->sheet && !s->om_text))
         return;
     /* The resolver borrows the parsed sheets: it lets go of them before
      * one is freed, and update_style hands them back (sheets_dirty). */

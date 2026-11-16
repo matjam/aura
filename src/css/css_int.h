@@ -103,6 +103,9 @@ static inline const char *css_tok_num_text(const CssTokens *tk, const CssToken *
     *len = t->type == TK_NUMBER || t->type == TK_PERCENT || t->type == TK_DIMENSION ? t->name_len : 0;
     return tk->pool.data + t->str - *len;
 }
+/* Where the contents of the block of a { token start in the tokenized
+ * text, and where they end for a } token. */
+static inline uint32_t css_tok_src(const CssToken *t) { return ((uint32_t)t->unit << 16) | t->name_len; }
 /* The string length of a token, functions included. */
 static inline uint32_t css_tok_len(const CssToken *t) { return t->type == TK_FUNCTION ? t->name_len : t->len; }
 /* Serializes tokens [a, b) back to CSS text. */
@@ -488,7 +491,18 @@ struct CssRule {
     uint32_t nlayers;
     uint32_t index;          /* @import, @font-face, @keyframes index */
     char *text;              /* condition text (@container, @supports) */
+    /* A style rule whose block holds only declarations keeps the block as
+     * a range of the sheet's text until the rule first matches an element
+     * (css_rule_decls parses it into decls and clears lazy). */
+    uint8_t lazy;
+    uint32_t body_off, body_len;
 };
+
+/* The declarations of a style or nested-declarations rule of sh, parsing
+ * them first if they are still text. */
+const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru);
+/* For tests: false makes a sheet parse every block when it is parsed. */
+extern bool css_lazy_bodies;
 
 struct AuCssFontFace {
     AuCssDeclBlock descs; /* prop = 0, aux = descriptor atom, kind DK_BLOB */
@@ -505,6 +519,12 @@ struct AuCssSheet {
     uint32_t refs; /* owners (au_css_sheet_retain); freed with the last */
     uint8_t origin;
     bool quirks;
+    bool text_owned;
+    /* The sheet's source: lazy rules refer to ranges of it, and the
+     * document view gives it to the CSSOM. NULL for a sheet of 4 GB or
+     * more, which has no lazy rules. */
+    char *text;
+    size_t text_len;
     char *base_url;
     AuCssMediaList *media; /* the sheet's own media list, NULL for all */
     CssRule *rules;
@@ -521,8 +541,11 @@ struct AuCssSheet {
     CssNamespaces ns;
 };
 
+/* How a sheet gets its text: a copy, the caller's au_alloc block (the
+ * sheet frees it), or the caller's storage that outlives the sheet. */
+enum { CSS_TEXT_COPY, CSS_TEXT_TAKE, CSS_TEXT_BORROW };
 AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
-                            const char *media, bool quirks);
+                            const char *media, bool quirks, int text_mode);
 void css_rules_free(CssRule *r);
 
 /* ---- The UA sheet (ua.c) ---- */
