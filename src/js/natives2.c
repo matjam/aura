@@ -410,6 +410,23 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return arr;
 }
 
+/* hitTest(x, y): the element under a viewport point, or null (the
+ * prelude retargets it). */
+static JSValue n_hit_test(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
+    double x, y;
+    if (argc < 2 || !js->hooks.hit_test || JS_ToFloat64(ctx, &x, argv[0]) < 0 || JS_ToFloat64(ctx, &y, argv[1]) < 0)
+        return JS_NULL;
+    if (x != x || y != y)
+        return JS_NULL;
+    AuElement *e = js->hooks.hit_test(js->hooks.ctx, x, y);
+    return e ? js_wrap(js, &e->node) : JS_NULL;
+}
+
 /* textRects(text, start, end): the rectangles of a text node's data
  * between two UTF-16 offsets as a flat array of x, y, width, height in
  * document coordinates, one per line; null when the node has no box,
@@ -1189,6 +1206,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("cssPropertyNames", 0, n_css_names),
     JS_CFUNC_DEF("cssSupports", 2, n_css_supports),
     JS_CFUNC_DEF("rect", 1, n_rect),
+    JS_CFUNC_DEF("hitTest", 2, n_hit_test),
     JS_CFUNC_DEF("textRects", 3, n_text_rects),
     JS_CFUNC_DEF("sheetText", 1, n_sheet_text),
     JS_CFUNC_DEF("sheetSetText", 2, n_sheet_set_text),

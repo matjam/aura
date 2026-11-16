@@ -160,6 +160,8 @@ typedef struct HtmlTreeBuilder HtmlTreeBuilder;
 HtmlTreeBuilder *html_tb_new(AuDocument *doc, HtmlTokenizer *tok, bool scripting);
 /* Sets up the fragment case for context (in context's document). */
 void html_tb_set_fragment_context(HtmlTreeBuilder *tb, AuElement *context);
+/* <template shadowrootmode> makes shadow roots (AuHtmlOptions). */
+void html_tb_set_declarative_shadow(HtmlTreeBuilder *tb, bool on);
 /* The html element of the fragment case. */
 AuNode *html_tb_fragment_root(HtmlTreeBuilder *tb);
 void html_tb_free(HtmlTreeBuilder *tb);

@@ -35,7 +35,16 @@ test('a style element has a sheet while it is in the document', () => {
     document.head.appendChild(other);
     assert.equal(other.sheet, null, 'not CSS');
     other.remove();
-    assert.throws(() => new CSSStyleSheet(), TypeError);
+    /* constructed sheets */
+    const c = new CSSStyleSheet({ media: 'print', disabled: true });
+    assert.equal(c.ownerNode, null);
+    assert.equal(c.media.mediaText, 'print');
+    assert.equal(c.disabled, true);
+    c.replaceSync('@import url(x.css); p { color: red }');
+    assert.equal(c.cssRules.length, 1, '@import rules are dropped');
+    document.head.appendChild(s);
+    assert.throws(() => s.sheet.replaceSync(''), 'NotAllowedError');
+    s.remove();
 });
 
 test('cssRules lists the rules by kind', () => {

@@ -42,6 +42,10 @@ typedef struct AuHtmlOptions {
      * (for example "eof-in-tag") and the 1-based position. Optional. */
     void (*parse_error)(void *ctx, const char *code, int line, int col);
     void *ctx;
+    /* Declarative shadow roots: a <template shadowrootmode> makes a shadow
+     * root of its parent (HTML "allow declarative shadow roots"). A page's
+     * document and setHTMLUnsafe set it; innerHTML and DOMParser do not. */
+    bool declarative_shadow;
 } AuHtmlOptions;
 
 /* Parses a whole document. opts may be NULL. The caller owns the result

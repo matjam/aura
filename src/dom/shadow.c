@@ -3,6 +3,21 @@
 
 #include <string.h>
 
+bool au_element_can_host_shadow(const AuElement *e)
+{
+    if (e->ns != AU_NS_HTML)
+        return false;
+    static const char *const ok[] = {"article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3",
+                                     "h4", "h5", "h6", "header", "main", "nav", "p", "section", "span"};
+    const char *s = au_atom_str(e->tag);
+    if (strchr(s, '-'))
+        return true;
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (!strcmp(s, ok[i]))
+            return true;
+    return false;
+}
+
 AuShadowRoot *au_element_attach_shadow(AuElement *host, AuShadowMode mode)
 {
     if (host->shadow_root)

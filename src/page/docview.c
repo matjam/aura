@@ -1404,6 +1404,7 @@ void au_docview_begin(AuDocView *dv, const char *url)
     memset(&opts, 0, sizeof opts);
     opts.scripting = dv->scripting;
     opts.encoding = AU_HTML_ENC_SNIFF;
+    opts.declarative_shadow = true;
     if (dv->scripting) {
         /* The parser keeps opts.ctx; the script object follows it. */
         opts.script_ready = au_docscript_script_ready;

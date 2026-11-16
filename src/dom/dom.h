@@ -106,9 +106,12 @@ struct AuDocument {
      * style, layout and the event paths walk the plain tree (the flat
      * tree is the same). */
     bool has_shadow;
+    /* How many declarative shadow roots the parser has made (script finds
+     * new ones when it changes, for slotchange). */
+    uint32_t declarative_roots;
     /* Manual slot assignments (slot.assign()), without references: a
-     * pair goes when its node leaves its parent or its slot leaves its
-     * tree (see "Shadow DOM" below). */
+     * pair goes when the node or the slot is freed (see "Shadow DOM"
+     * below). */
     struct AuManualSlot *manual;
     uint32_t nmanual, manual_cap;
 };
@@ -317,6 +320,9 @@ static inline bool au_is_shadow_root(const AuNode *n)
  * NULL if host already has one. The caller checks attachShadow's rules
  * (valid host names). */
 AuShadowRoot *au_element_attach_shadow(AuElement *host, AuShadowMode mode);
+/* e may have a shadow root (attachShadow's valid host names: an HTML
+ * element with a custom element name or one of a fixed list). */
+bool au_element_can_host_shadow(const AuElement *e);
 /* The shadow root of el, or NULL. */
 static inline AuShadowRoot *au_element_shadow_root(const AuElement *el) { return (AuShadowRoot *)el->shadow_root; }
 /* The root of n's tree: a document, shadow root, fragment or detached

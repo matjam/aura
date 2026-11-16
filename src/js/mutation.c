@@ -139,6 +139,12 @@ static void touch_slots(AuJs *js, AuNode *parent)
     }
 }
 
+void js_slots_touched(AuJs *js)
+{
+    js->slots_dirty = true;
+    queue_delivery(js);
+}
+
 /* A frame element (iframe, frame, object, embed) in child's subtree went
  * into or left the document: the frame list is brought up to date at the
  * end of the native that did it (js_frames_flush). */

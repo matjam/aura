@@ -269,6 +269,20 @@ static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
     return true;
 }
 
+static AuElement *h_hit_test(void *ctx, double x, double y)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    int sx, sy, vw, vh;
+    au_dv_scroll(s->dv, &sx, &sy, &vw, &vh);
+    if (x < 0 || y < 0 || x >= vw || y >= vh)
+        return NULL;
+    AuHitResult r;
+    if (!au_layout_hit_test(au_docview_layout(s->dv), (float)x, (float)y, (float)sx, (float)sy, &r) && !r.element)
+        return NULL;
+    return r.element;
+}
+
 static int h_text_rects(void *ctx, AuNode *text, uint32_t start, uint32_t end, AuJsRect *out, int max)
 {
     AuDocScript *s = ctx;
@@ -623,6 +637,7 @@ static bool ensure_js(AuDocScript *s)
     h.child_changed = h_child_changed;
     h.element_rect = h_element_rect;
     h.text_rects = h_text_rects;
+    h.hit_test = h_hit_test;
     h.computed_style = h_computed_style;
     h.viewport = h_viewport;
     h.scroll_to = h_scroll_to;

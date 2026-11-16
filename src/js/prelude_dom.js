@@ -821,18 +821,65 @@ function setFocus(el) {
         fire(el, new FocusEvent('focusin', { bubbles: true, relatedTarget: old, composed: true }));
     }
 }
+/* A host whose shadow root delegates focus hands it to the first
+ * focusable element of its shadow tree (shadow-including order), unless
+ * the focus is already in there. */
+function delegateTarget(host) {
+    const root = N.shadowRootOf(host);
+    if (!root || !root.delegatesFocus) return null;
+    if (focused && focused.isConnected && shadowIncludingAncestor(root, focused)) return focused;
+    const stack = [root];
+    while (stack.length) {
+        const n = stack.pop();
+        if (n !== root && isFocusable(n)) return n;
+        const kids = [];
+        if (n !== root && isElement(n)) { const r = N.shadowRootOf(n); if (r) kids.push(r); }
+        for (let c = n.firstChild; c; c = c.nextSibling) if (isElement(c)) kids.push(c);
+        for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+    return null;
+}
+function focusElement(el) {
+    if (isElement(el) && !el.hasAttribute('tabindex')) {
+        const d = delegateTarget(el);
+        if (d) { if (d !== focused) setFocus(d); return; }
+    }
+    if (isFocusable(el)) setFocus(el);
+}
 defProps(HTMLElement.prototype, {
-    focus() { if (isFocusable(this)) setFocus(this); },
+    focus() { focusElement(this); },
     blur() { if (focused === this) setFocus(null); },
 });
 defProps(SVGElement.prototype, {
-    focus() { if (isFocusable(this)) setFocus(this); },
+    focus() { focusElement(this); },
     blur() { if (focused === this) setFocus(null); },
 });
 defProps(DP, {
     get activeElement() {
         if (focused && !focused.isConnected) focused = null;
-        return focused || doc.body || doc.documentElement;
+        /* the focused element, or its host in this document's tree */
+        return (focused && retarget(focused, this)) || doc.body || doc.documentElement;
     },
     hasFocus() { return true; },
 });
+if (typeof ShadowRoot === 'function') {
+    defProps(ShadowRoot.prototype, {
+        get activeElement() {
+            if (!focused || !focused.isConnected || !shadowIncludingAncestor(this, focused)) return null;
+            const t = retarget(focused, this);
+            return t && t.getRootNode() === this ? t : null;
+        },
+        elementFromPoint(x, y) {
+            const e = N.hitTest(+x, +y);
+            if (!e || !shadowIncludingAncestor(this, e)) return null;
+            const t = retarget(e, this);
+            return t && t.getRootNode() === this ? t : null;
+        },
+        elementsFromPoint(x, y) {
+            const e = this.elementFromPoint(x, y);
+            const out = [];
+            for (let n = e; n && n !== this; n = n.parentNode) if (isElement(n)) out.push(n);
+            return out;
+        },
+    });
+}

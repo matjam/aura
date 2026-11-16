@@ -354,6 +354,9 @@ void js_deliver_mutations(AuJs *js, bool notify);
 void js_run_reactions(AuJs *js);
 void js_ce_flush(AuJs *js);
 void js_mutations_free(AuJs *js);
+/* Slot assignments may have changed (slot.assign): slotchange is checked
+ * at the next delivery. */
+void js_slots_touched(AuJs *js);
 
 /* ---- loop.c ---- */
 void js_loop_init(AuJs *js, JSValue N);
