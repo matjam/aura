@@ -203,6 +203,7 @@ struct AuPage {
     uint8_t console_level[AU_PAGE_CONSOLE_LINES];
     size_t console_start, console_count;
     uint32_t console_total; /* lines ever added, so a view sees new ones */
+    uint32_t console_current; /* lines added since the last navigation began */
 
     AuNetLog netlog; /* the requests since the last navigation (netlog.h) */
 };
@@ -1089,6 +1090,7 @@ static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, si
     p->console[i] = au_strndup(text, len < 1024 ? len : 1024);
     p->console_level[i] = (uint8_t)level;
     p->console_total++;
+    p->console_current++;
 }
 
 static void internal_action(AuPage *p, const char *what);
@@ -2878,6 +2880,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->progress = 0;
     p->load_start = now(p);
     au_netlog_clear(&p->netlog);
+    p->console_current = 0; /* the console keeps the earlier lines; the Console window marks where this page's begin */
     memset(&p->stats, 0, sizeof p->stats);
     au_free(p->fragment);
     p->fragment = NULL;
@@ -3167,6 +3170,7 @@ void au_page_console_clear(AuPage *p)
     for (size_t i = 0; i < p->console_count; i++)
         au_free(p->console[(p->console_start + i) % AU_PAGE_CONSOLE_LINES]);
     p->console_start = p->console_count = 0;
+    p->console_current = 0;
     p->console_total++;
 }
 
@@ -3198,6 +3202,11 @@ bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s)
 size_t au_page_console_count(const AuPage *p)
 {
     return p->console_count;
+}
+
+size_t au_page_console_current(const AuPage *p)
+{
+    return p->console_current < p->console_count ? p->console_current : p->console_count;
 }
 
 const char *au_page_console_line(const AuPage *p, size_t i, int *level)

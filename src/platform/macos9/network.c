@@ -20,6 +20,7 @@
 #include "entropy.h"
 #include "net_ot.h"
 
+#include "browser/netlog.h"
 #include "js/clock.h"
 
 #include "net/cache.h"
@@ -632,77 +633,48 @@ void mac_net_clear_cache(void)
 
 AuCookieJar *mac_net_cookie_jar(void) { return N.jar; }
 
-/* "2026-11-15T20:01:02" for seconds since 1970 (sep 'T' or ' '). */
-static void format_time(int64_t t, char sep, char out[40])
-{
-    int64_t day = t / 86400;
-    int32_t rem = (int32_t)(t - day * 86400);
-    if (rem < 0) {
-        rem += 86400;
-        day--;
-    }
-    int y, mo, d, wd;
-    au_date_of_day(day, &y, &mo, &d, &wd);
-    snprintf(out, 40, "%04d-%02d-%02d%c%02u:%02u:%02u", y, mo, d, sep, (unsigned)(rem / 3600) % 24u,
-             (unsigned)(rem / 60) % 60u, (unsigned)rem % 60u);
-}
-
-/* The clock line of Network Status: the UTC time the network stack uses
- * (cookie expiry, certificate dates, cache freshness), what script's Date
- * gives, and the Mac's clock and zone they are worked out from. A wrong
- * zone in the Date & Time control panel shows here as a wrong UTC time. */
-static void clock_status(char *out, size_t cap)
-{
-    char utc[40], script[40], local[40];
-    format_time(au_mac_wall_time(), 'T', utc);
-    format_time(au_js_clock_now_ms() / 1000, 'T', script);
-    format_time(au_mac_local_time(), ' ', local);
-    int32_t off = au_mac_gmt_offset();
-    int32_t a = off < 0 ? -off : off;
-    int32_t soff = au_js_clock_utc_offset_s(au_js_clock_now_ms());
-    snprintf(out, cap, "Clock: UTC %sZ (script %sZ%s). Mac local time %s, zone %c%d.%02d hours from UTC, daylight saving %s.\r",
-             utc, script, soff == off ? "" : ", other zone", local, off < 0 ? '-' : '+', (int)(a / 3600),
-             (int)(a % 3600 * 100 / 3600), au_mac_daylight_saving() ? "on" : "off");
-}
-
-void mac_net_status(char lines[4][256])
+/* The network sections of the System Status report (browser/sysinfo.h),
+ * in its layout: a title, then "label value" lines. */
+void mac_net_status_text(AuBuf *out)
 {
     unsigned seed = 0, startup = 0, jitter = 0, input = 0;
     if (N.entropy)
         au_mac_entropy_sources(N.entropy, &seed, &startup, &jitter, &input);
-    clock_status(lines[0], 256);
-    size_t n = strlen(lines[0]);
-    snprintf(lines[0] + n, 256 - n, "Entropy: %u of %u bits (seed %u, start-up %u, jitter %u, input %u).",
-             N.entropy ? au_mac_entropy_bits(N.entropy) : 0, (unsigned)AU_MAC_ENTROPY_THRESHOLD, seed, startup,
-             jitter, input);
+    au_buf_puts(out, "Network\n");
+    au_report_kv(out, "Entropy", "%u of %u bits   (seed file %u, start-up %u, timing jitter %u, input %u)",
+                 N.entropy ? au_mac_entropy_bits(N.entropy) : 0, (unsigned)AU_MAC_ENTROPY_THRESHOLD, seed, startup, jitter,
+                 input);
     if (N.ot) {
         AuOtNetStats st;
         au_ot_net_stats(N.ot, &st);
-        snprintf(lines[1], 256,
-                 "Open Transport: started. Lookups %u (%u failed), connections %u (%u failed), %lu KB sent, %lu "
-                 "KB received, last error %ld.",
-                 st.lookups, st.lookups_failed, st.connects, st.connects_failed, st.bytes_sent / 1024,
-                 st.bytes_received / 1024, st.last_error);
+        au_report_kv(out, "Open Transport", "started");
+        au_report_kv(out, "Name lookups", "%u   (%u failed)", st.lookups, st.lookups_failed);
+        au_report_kv(out, "Connections made", "%u   (%u failed)", st.connects, st.connects_failed);
+        au_report_kv(out, "Data", "%lu KB sent, %lu KB received", st.bytes_sent / 1024, st.bytes_received / 1024);
+        au_report_kv(out, "Last error", "%ld", st.last_error);
     } else {
-        snprintf(lines[1], 256, "Open Transport: %s", N.offline[0] ? N.offline : "not started (no request yet).");
+        au_report_kv(out, "Open Transport", "%s", N.offline[0] ? N.offline : "not started (no request yet)");
     }
-    snprintf(lines[2], 256, "Roots: %u certificates. Cookies: %u. HSTS hosts: %u. Loads active: %d.",
-             N.roots ? (unsigned)au_roots_count(N.roots) : 0, N.jar ? (unsigned)au_cookie_jar_count(N.jar) : 0,
-             N.hsts ? (unsigned)au_hsts_count(N.hsts) : 0, N.loader ? au_net_loader_active(N.loader) : 0);
+    au_report_kv(out, "Loads under way", "%d", N.loader ? au_net_loader_active(N.loader) : 0);
+    au_report_kv(out, "Root certificates", "%u", N.roots ? (unsigned)au_roots_count(N.roots) : 0);
+    au_report_kv(out, "Cookies", "%u", N.jar ? (unsigned)au_cookie_jar_count(N.jar) : 0);
+    au_report_kv(out, "HSTS hosts", "%u", N.hsts ? (unsigned)au_hsts_count(N.hsts) : 0);
+
     AuCacheStats cs;
     memset(&cs, 0, sizeof cs);
     if (N.cache)
         au_cache_stats(N.cache, &cs);
-    snprintf(lines[3], 256,
-             "Cache: %lu KB in memory (%u), %lu KB on disk (%u). Lookups %lu fresh, %lu history, %lu revalidated "
-             "(%lu 304), %lu missed, %lu from disk. Disk %u reads %lu ms, %u writes %lu ms.",
-             N.cache ? (unsigned long)(au_cache_bytes(N.cache) / 1024) : 0,
-             N.cache ? (unsigned)au_cache_count(N.cache) : 0,
-             N.disk ? (unsigned long)(au_disk_cache_bytes(N.disk) / 1024) : 0,
-             N.disk ? (unsigned)au_disk_cache_count(N.disk) : 0, cs.fresh, cs.history, cs.stale, cs.not_modified,
-             cs.misses, cs.from_storage, N.dc_reads, (unsigned long)(N.dc_read_us / 1000), N.dc_writes,
-             (unsigned long)(N.dc_write_us / 1000));
-    mac_blocking_status(lines[2] + strlen(lines[2]), 256 - strlen(lines[2]));
+    au_buf_puts(out, "\nHTTP cache\n");
+    au_report_kv(out, "In memory", "%lu KB in %u entries", N.cache ? (unsigned long)(au_cache_bytes(N.cache) / 1024) : 0,
+                 N.cache ? (unsigned)au_cache_count(N.cache) : 0);
+    au_report_kv(out, "On disk", "%lu KB in %u files", N.disk ? (unsigned long)(au_disk_cache_bytes(N.disk) / 1024) : 0,
+                 N.disk ? (unsigned)au_disk_cache_count(N.disk) : 0);
+    au_report_kv(out, "Lookups", "%lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed", cs.fresh,
+                 cs.history, cs.stale, cs.not_modified, cs.misses);
+    au_report_kv(out, "Read from disk", "%lu entries; %u file reads in %lu ms", cs.from_storage, N.dc_reads,
+                 (unsigned long)(N.dc_read_us / 1000));
+    au_report_kv(out, "Written to disk", "%u files in %lu ms", N.dc_writes, (unsigned long)(N.dc_write_us / 1000));
+    mac_blocking_status_text(out);
 }
 
 void mac_net_rules_changed(void)

@@ -22,8 +22,8 @@ bool mac_blocking_busy(void);
 void mac_blocking_prefs_changed(void);
 /* Before the AuNet is freed. */
 void mac_blocking_quit(void);
-/* Appends the totals for View > Debug > Network Status. */
-void mac_blocking_status(char *out, size_t cap);
+/* Appends the "Content blocking" section of the System Status report. */
+void mac_blocking_status_text(AuBuf *out);
 AuBlockManager *mac_blocking_manager(void); /* NULL before init */
 
 /* ---- The Preferences pane ----

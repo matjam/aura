@@ -104,11 +104,66 @@ const AuNetRecord *au_netlog_at(const AuNetLog *l, uint32_t i);
 /* ---- Text ----
  * The Network window and `aura-host chrome --do netlog` show the same
  * text: fixed-width columns, one request per line. */
-/* The column titles. */
+typedef enum {
+    AU_NETCOL_SEQ,
+    AU_NETCOL_STATUS,
+    AU_NETCOL_METHOD,
+    AU_NETCOL_KIND,
+    AU_NETCOL_SIZE,
+    AU_NETCOL_TIME,
+    AU_NETCOL_FROM,
+    AU_NETCOL_URL,
+    AU_NETCOL_COUNT
+} AuNetColumn;
+
+/* The column titles. With a sorted column (AuNetView.sort; -1 for none)
+ * its title carries "^" (rising) or "v" (falling). */
 void au_netlog_header(AuBuf *out);
-/* One line (no line break): number, status, method, kind, transferred
- * and decoded size, time, source, connection, URL. */
+void au_netlog_header_sorted(int sort, bool descending, AuBuf *out);
+/* The column under cell x of the header line (for a click), or -1. */
+int au_netlog_column_at(int cell);
+/* The cells the columns before the URL take. */
+int au_netlog_fixed_cells(void);
+/* One line (no line break): number, status, method, kind, decoded size,
+ * time, source, URL. The status is the HTTP status, or "blocked",
+ * "failed", "stopped", "pending", "ok". au_netlog_row writes the whole
+ * URL; au_netlog_row_fit cuts the middle of the URL ("...") so that the
+ * line fits cells cells; au_netlog_row_url writes url in place of the
+ * record's (NULL: the record's), cut to url_cells when that is not 0. */
 void au_netlog_row(const AuNetRecord *r, AuBuf *out);
+void au_netlog_row_fit(const AuNetRecord *r, int cells, AuBuf *out);
+void au_netlog_row_url(const AuNetRecord *r, const char *url, int url_cells, AuBuf *out);
+/* Appends url without "https://", with its middle replaced by "..." when
+ * it is longer than width cells (0: never cut). */
+void au_netlog_url_elide(const char *url, int width, AuBuf *out);
+const char *au_netlog_status_text(const AuNetRecord *r, char *buf, size_t cap);
+/* Failed, blocked, or answered with status 400 or more. */
+bool au_netrec_problem(const AuNetRecord *r);
+
+/* ---- The view ----
+ * Which records the Network window lists, and in which order: all of
+ * them, only the problems (au_netrec_problem) or only the blocked ones;
+ * those whose address, type, status or blocked reason contains the
+ * filter text (ASCII case-insensitive); sorted by one column. rows[i] is
+ * the index (au_netlog_at) of the record on line i. */
+typedef enum { AU_NETSHOW_ALL, AU_NETSHOW_PROBLEMS, AU_NETSHOW_BLOCKED } AuNetShow;
+typedef struct AuNetView {
+    int show;        /* AuNetShow */
+    char filter[64]; /* "" for none */
+    int sort;        /* AuNetColumn; AU_NETCOL_SEQ is the order the requests started in */
+    bool desc;
+    uint32_t *rows;
+    uint32_t n, cap;
+} AuNetView;
+void au_netview_init(AuNetView *v);
+void au_netview_free(AuNetView *v);
+void au_netview_build(AuNetView *v, const AuNetLog *l);
+/* A click on a column title: sorts by it, or turns the order round when
+ * it is the sorted column already. */
+void au_netview_click_column(AuNetView *v, int col);
+/* Whether text contains needle, ASCII case-insensitive ("" is in
+ * everything). */
+bool au_text_contains_ci(const char *text, const char *needle);
 /* Everything about one request, one fact per line: URL, status, type,
  * source, connection and remote address, TLS, sizes, the phase timings,
  * why it was blocked or failed, and the request and response headers
@@ -122,9 +177,32 @@ void au_netlog_footer(const AuNetLog *l, const char *connections, AuBuf *out);
  * log still holds: a title line with the count, then one line each with
  * the reason and the address. Nothing when none was blocked. */
 void au_netlog_blocked(const AuNetLog *l, AuBuf *out);
-/* Header, every row, the blocked list, footer; with details, each row is followed by its
- * detail lines, indented. */
+/* The summary the Network window shows while no request is selected, and
+ * the bug report repeats: the totals (requests, cache hits, blocked,
+ * failed; sizes; DOMContentLoaded and load; connections when given),
+ * then one line per request that failed, was blocked or was redirected
+ * (au_netlog_problem_line). */
+void au_netlog_summary(const AuNetLog *l, const char *connections, AuBuf *out);
+/* "  blocked   URL  (LIST NAME)", "  404       URL", "  redirect  URL
+ * (after 1 redirect)"; url replaces the record's when not NULL. No line
+ * break. */
+void au_netlog_problem_line(const AuNetRecord *r, const char *url, AuBuf *out);
+/* Header, every row, a blank line, the summary; with details, each row
+ * is followed by its detail lines, indented. */
 void au_netlog_dump(const AuNetLog *l, const char *connections, bool details, AuBuf *out);
+
+/* ---- Report formatting, shared by every developer report ---- */
+#define AU_REPORT_LABEL 22
+
+/* Writes n with thousands separators: "1,234,567". */
+void au_put_count(AuBuf *out, unsigned long n);
+/* A section title, with a blank line before it unless out is empty. */
+void au_report_heading(AuBuf *out, const char *title);
+/* "  label                 value\n": the label padded to
+ * AU_REPORT_LABEL cells. */
+void au_report_kv(AuBuf *out, const char *label, const char *fmt, ...);
+/* "[#####...............]": cells cells, part of whole filled. */
+void au_put_bar(AuBuf *out, uint32_t part, uint32_t whole, int cells);
 
 /* Writes a byte count as "512 B", "12.3 KB" or "4.56 MB". */
 void au_put_size(AuBuf *out, uint32_t bytes);

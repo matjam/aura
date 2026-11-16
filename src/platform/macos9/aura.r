@@ -96,21 +96,39 @@ resource 'MENU' (131, "View") {
 	}
 };
 
-/* Develop: the developer windows, then the debug items that used to be
-   View > Debug. Item 5 is a separator (enable flags: item k is bit k-1). */
+/* Develop, in groups: looking at the page (Page Source, Console,
+   Network), measuring it (Performance, Run Timing Test), the engine and
+   the machine (System Status), test content (the Tests submenu, MENU 190,
+   attached by main.c), and Report a Problem, which the Help menu also
+   has. Items 4, 7, 9 and 11 are separators (enable flags: item k is bit
+   k-1). An ellipsis marks the one item that asks before it does
+   anything further. */
 resource 'MENU' (135, "Develop") {
-	135, textMenuProc, 0x7FFFFFEF, enabled, "Develop",
+	135, textMenuProc, 0x7FFFFAB7, enabled, "Develop",
 	{
 		"Page Source", noIcon, noKey, noMark, plain;
-		"Console", noIcon, noKey, noMark, plain;
-		"Network", noIcon, noKey, noMark, plain;
-		"Performance", noIcon, noKey, noMark, plain;
+		"Console", noIcon, "K", noMark, plain;
+		"Network", noIcon, "E", noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
+		"Performance", noIcon, noKey, noMark, plain;
+		"Run Timing Test", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"System Status", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Tests", noIcon, noKey, noMark, plain;
+		"-", noIcon, noKey, noMark, plain;
+		"Report a Problem...", noIcon, noKey, noMark, plain
+	}
+};
+
+/* Develop > Tests. Item 3 is a separator. */
+resource 'MENU' (190, "Tests") {
+	190, textMenuProc, 0x7FFFFFFB, enabled, "Tests",
+	{
 		"Test Scene", noIcon, noKey, noMark, plain;
 		"Font List", noIcon, noKey, noMark, plain;
-		"Benchmark", noIcon, noKey, noMark, plain;
-		"Network Status", noIcon, noKey, noMark, plain;
-		"Page Timings", noIcon, noKey, noMark, plain
+		"-", noIcon, noKey, noMark, plain;
+		"Paint Benchmark", noIcon, noKey, noMark, plain
 	}
 };
 
@@ -164,44 +182,6 @@ resource 'tab#' (128) {
 		0, "Network";
 		0, "Downloads";
 		0, "Blocking"
-	}
-};
-
-/* 131: page timings and memory (Debug > Page Timings), ^0 to ^3. */
-resource 'ALRT' (131) {
-	{0, 0, 330, 520}, 131,
-	{
-		OK, visible, silent;
-		OK, visible, silent;
-		OK, visible, silent;
-		OK, visible, silent
-	},
-	alertPositionMainScreen
-};
-
-resource 'DITL' (131) {
-	{
-		{298, 438, 318, 506}, Button { enabled, "OK" };
-		{12, 70, 290, 506}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
-	}
-};
-
-/* 129: benchmark results, ^0 to ^3. */
-resource 'ALRT' (129) {
-	{0, 0, 170, 400}, 129,
-	{
-		OK, visible, silent;
-		OK, visible, silent;
-		OK, visible, silent;
-		OK, visible, silent
-	},
-	alertPositionMainScreen
-};
-
-resource 'DITL' (129) {
-	{
-		{138, 318, 158, 386}, Button { enabled, "OK" };
-		{12, 70, 130, 386}, StaticText { disabled, "^0\0x0D^1\0x0D^2\0x0D^3" }
 	}
 };
 
