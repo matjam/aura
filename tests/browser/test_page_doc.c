@@ -360,6 +360,47 @@ static void test_about(void)
     au_browser_free(b);
 }
 
+/* The start page: the search form from the template, most visited sites,
+ * bookmarks. */
+static void test_home(void)
+{
+    AuBrowser *b = make_browser();
+    au_prefs_set_str(&b->prefs.search_template, "https://search.example/find?lang=en&q=%s&safe=a%20b");
+    au_history_visit(&b->history, "https://often.example/page", "Often <visited>", 100);
+    au_history_visit(&b->history, "https://often.example/page", "Often <visited>", 200);
+    au_history_visit(&b->history, "https://once.example/", "Once", 300);
+    au_bookmark_add(&b->bookmarks, NULL, NULL, "Marked", "https://marked.example/x", 0);
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "about:home", true, -1);
+    const char *data;
+    size_t len;
+    CHECK(au_bw_page_source(w, &data, &len));
+    AuBuf s;
+    au_buf_init(&s);
+    au_buf_append(&s, data, len);
+    const char *html = au_buf_cstr(&s);
+    CHECK(strstr(html, "action='https://search.example/find'") != NULL);
+    CHECK(strstr(html, "type=search size=40 placeholder='Search the web' name='q'") != NULL);
+    CHECK(strstr(html, "name='lang' value='en'") != NULL);
+    CHECK(strstr(html, "name='safe' value='a b'") != NULL);
+    CHECK(strstr(html, "Most visited") != NULL);
+    CHECK(strstr(html, "Often &lt;visited&gt;") != NULL);
+    CHECK(strstr(html, "once.example") == NULL); /* one visit is not enough */
+    CHECK(strstr(html, "href='https://marked.example/x'") != NULL);
+    CHECK(strstr(html, "data:image/png;base64,iVBORw0KGgo") != NULL);
+    au_buf_free(&s);
+
+    /* A template without a query parameter holding %s gets no form. */
+    au_prefs_set_str(&b->prefs.search_template, "https://search.example/%s");
+    au_bw_navigate(w, "about:home");
+    CHECK(au_bw_page_source(w, &data, &len));
+    au_buf_init(&s);
+    au_buf_append(&s, data, len);
+    CHECK(strstr(au_buf_cstr(&s), "<form") == NULL);
+    au_buf_free(&s);
+    au_browser_free(b);
+}
+
 /* ---- Network placeholder and fetchers ---- */
 
 typedef struct FakeNet {
@@ -986,6 +1027,7 @@ int main(void)
     test_resources();
     test_links();
     test_about();
+    test_home();
     test_network();
     test_stop_scroll_resize();
     test_zoom();

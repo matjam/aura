@@ -335,6 +335,10 @@ typedef struct AuPageEnv {
      * sessionStorage. Without it each document has storage of its own
      * that ends with it. */
     struct AuWebStorage *(*storage)(void *ctx);
+    /* Optional: the browsing history and the bookmarks, which the start
+     * page (about:home) shows as most visited sites and bookmarks. */
+    const struct AuHistory *(*history)(void *ctx);
+    const struct AuBookmarks *(*bookmarks)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

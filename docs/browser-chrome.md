@@ -302,6 +302,27 @@ or copy them before returning to the event loop, and ask
 `storage.c`, which asks with `StandardPutFile` and writes the bytes
 unchanged as a TEXT file with creator AURA.
 
+## The start page (about:home)
+
+To change the start page, edit `build_home` in `src/browser/page_doc.c`.
+It is generated HTML with no script, built each time it loads:
+- **Header:** the kookaburra, `assets/icon/kookaburra/home.png` (72 px),
+  embedded with `#embed` and sent as a `data:` URL.
+- **Search:** a form made from the search preference's template. The
+  parameter whose value is `%s` becomes the text field and the others
+  hidden fields. A template without such a parameter gets no form.
+- **Most visited:** up to 8 web pages visited at least twice, from the
+  history, most visits first.
+- **Bookmarks:** the first 12 links in the bookmark tree.
+- **Sites that work well:** the `home_sites` table.
+- **Tip:** one entry of `home_tips`, chosen by the clock.
+- **Footer:** the version, the author, and links to GitHub, the licences,
+  the fonts and the test scene.
+
+History and bookmarks reach the page through `AuPageEnv.history` and
+`AuPageEnv.bookmarks`. `test_home` in `tests/browser/test_page_doc.c`
+checks the form, the escaping and the sections.
+
 ## The About box and about:licences
 
 To change the About box or about:licences, edit the credits table in
