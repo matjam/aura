@@ -745,10 +745,13 @@ function fetchModules(urls) {
 /* Loads, links and evaluates a module script. Resolves to true on
  * success. Errors are reported. */
 async function runModuleScript(url, src, el) {
+    const inline = src !== null;
     try {
         for (let round = 0; round < 200; round++) {
-            const r = N.moduleEval(url, src, src !== null);
+            const r = N.moduleEval(url, src, inline);
             if (Array.isArray(r)) {
+                /* the module compiled: later rounds resolve it by name */
+                if (r.module) { url = r.module; src = null; }
                 const failed = await fetchModules(r);
                 if (failed.length) {
                     N.print(3, 'Failed to load module script: ' + failed.join(', '));

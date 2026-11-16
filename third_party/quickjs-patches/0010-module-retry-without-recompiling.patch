@@ -1,0 +1,217 @@
+Resolve a module graph again without compiling its modules again.
+
+Aura's module loader is synchronous: it reports the modules it lacks,
+the embedder fetches them and asks again (patch 0002 makes the retry
+possible). Three things made each retry expensive:
+
+- js_resolve_module stopped at the first import it could not resolve,
+  so a module with twenty missing imports took twenty rounds.
+- A module compiled with JS_Eval was resolved inside the compile, and
+  freed when that failed, so every round compiled the root module
+  again.
+- JS_LoadModule and JS_ResolveModule freed every unresolved module on
+  failure, so a dynamic import compiled its graph again each round.
+
+GitHub's repository page compiled its 980 KB code view module 22 times:
+2.6 s of the page's 3.5 s of script on the host.
+
+Now js_resolve_module tries every import and reports the first error
+(a module that failed once in a pass is not walked again in that pass),
+JS_EVAL_FLAG_NO_RESOLVE returns a compiled module without resolving it,
+unresolved modules stay loaded, and JS_FindLoadedModule finds a loaded
+module by name so that the embedder can resolve it again.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -621,6 +621,9 @@
+     int interrupt_counter;
+ 
+     struct list_head loaded_modules; /* list of JSModuleDef.link */
++    /* Aura: js_resolve_module's nesting and pass number */
++    int module_resolve_depth;
++    uint32_t module_resolve_gen;
+ 
+     /* if NULL, RegExp compilation is not supported */
+     JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
+@@ -1077,6 +1080,7 @@
+     JSModuleInitFunc *init_func; /* only used for C modules */
+     bool has_tla; /* true if func_obj contains await */
+     bool resolved;
++    uint32_t resolve_failed_gen; /* Aura: the pass in which it last failed */
+     bool func_created;
+     JSModuleStatus status : 8;
+     /* temp use during js_module_link() & js_module_evaluate() */
+@@ -31386,11 +31390,21 @@
+ /* Load all the required modules for module 'm' */
+ static int js_resolve_module(JSContext *ctx, JSModuleDef *m)
+ {
+-    int i;
++    int i, ret;
++    bool failed;
+     JSModuleDef *m1;
++    JSValue first_exc, exc;
+ 
+     if (m->resolved)
+         return 0;
++    /* Aura: a module that already failed in this resolution pass fails
++       again without walking its imports a second time (a graph with
++       shared imports would otherwise be walked once per path). */
++    if (ctx->module_resolve_depth > 0 &&
++        m->resolve_failed_gen == ctx->module_resolve_gen)
++        return -1;
++    if (ctx->module_resolve_depth++ == 0)
++        ctx->module_resolve_gen++;
+ #ifdef ENABLE_DUMPS // JS_DUMP_MODULE_RESOLVE
+     if (check_dump_flag(ctx->rt, JS_DUMP_MODULE_RESOLVE)) {
+         char buf1[ATOM_GET_STR_BUF_SIZE];
+@@ -31398,27 +31412,53 @@
+     }
+ #endif
+     m->resolved = true;
+-    /* resolve each requested module */
++    failed = false;
++    first_exc = JS_UNINITIALIZED;
++    /* resolve each requested module. Aura: an import that cannot be
++       resolved does not stop the loop, so that the embedder's loader
++       hears of every module it lacks in one pass and can fetch them all
++       at once; the first error is the one reported. */
+     for(i = 0; i < m->req_module_entries_count; i++) {
+         JSReqModuleEntry *rme = &m->req_module_entries[i];
+         m1 = js_host_resolve_imported_module_atom(ctx, m->module_name,
+                                                   rme->module_name,
+                                                   rme->attributes);
+-        if (!m1)
+-            goto fail;
+-        rme->module = m1;
+-        /* already done in js_host_resolve_imported_module() except if
+-           the module was loaded with JS_EvalBinary() */
+-        if (js_resolve_module(ctx, m1) < 0)
+-            goto fail;
++        if (m1) {
++            rme->module = m1;
++            /* already done in js_host_resolve_imported_module() except if
++               the module was loaded with JS_EvalBinary() */
++            if (js_resolve_module(ctx, m1) == 0)
++                continue;
++        }
++        failed = true;
++        if (!JS_HasException(ctx))
++            continue;
++        exc = JS_GetException(ctx);
++        if (JS_IsUncatchableError(exc)) {
++            JS_FreeValue(ctx, first_exc);
++            first_exc = exc;
++            break;
++        }
++        if (JS_IsUninitialized(first_exc))
++            first_exc = exc;
++        else
++            JS_FreeValue(ctx, exc);
+     }
+-    return 0;
+- fail:
+-    /* Aura: leave the module unresolved so that a later attempt, made
+-       after the embedder has fetched the missing modules, resolves it
+-       again instead of using a half-resolved module. */
+-    m->resolved = false;
+-    return -1;
++    ret = 0;
++    if (failed) {
++        /* Aura: leave the module unresolved so that a later attempt, made
++           after the embedder has fetched the missing modules, resolves it
++           again instead of using a half-resolved module. */
++        m->resolved = false;
++        m->resolve_failed_gen = ctx->module_resolve_gen;
++        if (JS_IsUninitialized(first_exc))
++            JS_ThrowReferenceError(ctx, "could not resolve the imports of a module");
++        else
++            JS_Throw(ctx, first_exc);
++        ret = -1;
++    }
++    ctx->module_resolve_depth--;
++    return ret;
+ }
+ 
+ static JSVarRef *js_create_module_var(JSContext *ctx, bool is_lexical)
+@@ -31901,10 +31941,11 @@
+     if (!m)
+         goto fail;
+ 
+-    if (js_resolve_module(ctx, m) < 0) {
+-        js_free_modules(ctx, JS_FREE_MODULE_NOT_RESOLVED);
++    /* Aura: the modules that could not be resolved stay loaded (they used
++       to be freed here), so that the attempt the embedder makes once it
++       has fetched the missing ones does not compile them again. */
++    if (js_resolve_module(ctx, m) < 0)
+         goto fail;
+-    }
+ 
+     /* Evaluate the module code */
+     func_obj = JS_NewModuleValue(ctx, m);
+@@ -38559,7 +38600,10 @@
+     /* Could add a flag to avoid resolution if necessary */
+     if (m) {
+         m->func_obj = fun_obj;
+-        if (js_resolve_module(ctx, m) < 0)
++        /* Aura: JS_EVAL_FLAG_NO_RESOLVE leaves resolution to the caller
++           (JS_ResolveModule), which keeps the compiled module when an
++           import is not there yet. */
++        if (!(flags & JS_EVAL_FLAG_NO_RESOLVE) && js_resolve_module(ctx, m) < 0)
+             goto fail1;
+         fun_obj = JS_NewModuleValue(ctx, m);
+     }
+@@ -38673,12 +38717,27 @@
+ {
+     if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE) {
+         JSModuleDef *m = JS_VALUE_GET_PTR(obj);
+-        if (js_resolve_module(ctx, m) < 0) {
+-            js_free_modules(ctx, JS_FREE_MODULE_NOT_RESOLVED);
++        /* Aura: unresolved modules stay loaded for the next attempt (see
++           JS_LoadModuleInternal) */
++        if (js_resolve_module(ctx, m) < 0)
+             return -1;
+-        }
+     }
+     return 0;
++}
++
++/* Aura: the module of this name that the context has loaded (compiled),
++   resolved or not, or NULL. */
++JSModuleDef *JS_FindLoadedModule(JSContext *ctx, const char *name)
++{
++    JSAtom atom;
++    JSModuleDef *m;
++
++    atom = JS_NewAtom(ctx, name);
++    if (atom == JS_ATOM_NULL)
++        return NULL;
++    m = js_find_loaded_module_by_name(ctx, atom);
++    JS_FreeAtom(ctx, atom);
++    return m;
+ }
+ 
+ /*******************************************************************/
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -463,6 +463,10 @@
+ /* allow top-level await in normal script. JS_Eval() returns a
+    promise. Only allowed with JS_EVAL_TYPE_GLOBAL */
+ #define JS_EVAL_FLAG_ASYNC (1 << 7)
++/* Aura: with JS_EVAL_TYPE_MODULE and JS_EVAL_FLAG_COMPILE_ONLY, return
++   the compiled module without resolving its imports; resolve it with
++   JS_ResolveModule(). */
++#define JS_EVAL_FLAG_NO_RESOLVE (1 << 8)
+ 
+ typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+ typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+@@ -1348,6 +1352,10 @@
+ /* load the dependencies of the module 'obj'. Useful when JS_ReadObject()
+    returns a module. */
+ JS_EXTERN int JS_ResolveModule(JSContext *ctx, JSValueConst obj);
++/* Aura: the module of this name the context has compiled, resolved or
++   not, or NULL. A module that could not be resolved stays loaded so that
++   a later attempt resolves it without compiling it again. */
++JS_EXTERN JSModuleDef *JS_FindLoadedModule(JSContext *ctx, const char *name);
+ 
+ /* only exported for os.Worker() */
+ JS_EXTERN JSAtom JS_GetScriptOrModuleName(JSContext *ctx, int n_stack_levels);

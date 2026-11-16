@@ -76,3 +76,55 @@ promise_test('classic scripts inserted by script run, innerHTML scripts do not',
     document.body.appendChild(ignored);
     assert.equal(window.__classic.length, 2);
 });
+
+// A module graph is fetched one level of imports at a time, and the
+// modules compiled in an earlier round are resolved again, not compiled
+// again (QuickJS patch 0010). Every module must still run once, in order,
+// with its own import.meta.url.
+promise_test('module graph with shared imports, loaded by two script elements', async () => {
+    window.__graph = [];
+    const a = document.createElement('script');
+    a.type = 'module';
+    a.src = 'resources/mod_graph_root.mjs';
+    const b = document.createElement('script');
+    b.type = 'module';
+    b.src = 'resources/mod_graph_root.mjs';
+    const pa = once(a, 'load'), pb = once(b, 'load');
+    document.head.appendChild(a);
+    document.head.appendChild(b);
+    await pa;
+    await pb;
+    assert.deepEqual(window.__graph, ['leaf', 'shared', 'd1', 'd2', 'd3', 'd4', 'root'],
+                     'each module runs once, imports first');
+    assert.equal(window.__graphResult, '1sl,2sl,3sl3,4sl4');
+    assert.ok(window.__graphMeta.endsWith('/resources/mod_graph_root.mjs'), window.__graphMeta);
+    const metas = window.__graphMetas;
+    assert.ok(metas[0].endsWith('/resources/mod_graph_d1.mjs'), metas[0]);
+    assert.ok(metas[1].endsWith('/resources/mod_graph_shared.mjs'), metas[1]);
+    assert.ok(metas[2].endsWith('/resources/mod_graph_leaf.mjs'), metas[2]);
+    const m = await import('./resources/mod_graph_d4.mjs');
+    assert.equal(m.d4, '4sl4');
+    assert.equal(window.__graph.length, 7, 'importing a loaded module runs nothing');
+});
+
+promise_test('a graph with a syntax error fails every time', async () => {
+    window.__graph = [];
+    for (let i = 0; i < 2; i++) {
+        let err = null;
+        try { await import('./resources/mod_graph_bad.mjs'); } catch (e) { err = e; }
+        assert.ok(err instanceof SyntaxError, String(err));
+    }
+    assert.equal(window.__badRan, undefined);
+});
+
+promise_test('an inline module whose imports arrive in two rounds', async () => {
+    window.__graph = [];
+    window.__inline2 = null;
+    const s = document.createElement('script');
+    s.type = 'module';
+    s.textContent = 'import { shared } from "./resources/mod_graph_shared.mjs?inline";' +
+        'window.__inline2 = shared + ":" + import.meta.url.slice(0, 5);';
+    document.head.appendChild(s);
+    for (let i = 0; i < 50 && window.__inline2 === null; i++) await delay(5);
+    assert.equal(window.__inline2, 'sl:file:');
+});

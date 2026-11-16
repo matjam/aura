@@ -79,6 +79,7 @@ Patches this document refers to:
 | 0007 | `Date` reads the embedder's clock |
 | 0008 | one source text per script (`0008-one-source-text-per-script`): the parser copies no function text, and the contexts of a runtime share a script's text |
 | 0009 | bytecode that names positions in the script's text (`0009-bytecode-source-positions`: `JS_WRITE_OBJ_SOURCE_REF`, `JS_ReadObjectSource`), and a parser that trims each function's buffers (`js_fd_trim`) |
+| 0010 | a module graph is resolved again without compiling its modules again (`0010-module-retry-without-recompiling`; "Module scripts" below) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -136,6 +137,27 @@ Document and window; scripts in the written text do not run; a `write`
 without `open` after load is still ignored).
 `DOMImplementation.createDocument` and `createDocumentType` make plain
 documents and doctypes.
+
+## Module scripts
+
+`src/js/module.c` and `runModuleScript` in `prelude_web.js` load module
+graphs. QuickJS's loader is synchronous, so loading goes in rounds:
+`N.moduleEval` compiles the module and resolves its imports; when
+imports are missing it returns their URLs, the prelude fetches them all
+at once (`fetchModules`) and calls again with the module's name.
+
+- Each module is compiled once (patch 0010). A compiled module stays
+  loaded in its document's context whether or not its imports resolved,
+  and the next round resolves it again by name
+  (`JS_FindLoadedModule`). One pass reports every missing import, so a
+  graph takes one round per level of imports.
+- A module's text is freed when it compiles; the engine keeps its own
+  copy (patch 0008).
+- A module script whose URL is already loaded is that module: it runs
+  once, as the standard's module map says.
+- To change the protocol, keep `tests/js/modules.js` passing: it covers
+  shared imports, two script elements of one URL, `import.meta.url` of
+  modules loaded in later rounds, inline modules and syntax errors.
 
 ## Ownership and limits
 
