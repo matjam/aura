@@ -47,6 +47,10 @@ typedef struct AuPrefs {
 
     /* Content */
     bool javascript;
+    /* Script memory limits in KB (scriptmem.h): 0 is Automatic, which
+     * follows the memory the machine has free; a number is the user's
+     * own limit, 4 MB to 256 MB. They apply to pages loaded afterwards. */
+    int script_memory_kb, worker_memory_kb;
     bool load_images;
     bool block_popups;
 

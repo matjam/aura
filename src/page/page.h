@@ -254,6 +254,11 @@ void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
  * how soon it needs calling again (0: now; UINT32_MAX: no timer or frame
  * is waiting). */
 void au_docview_set_scripting(AuDocView *dv, bool on);
+/* The memory limits of the script runtime of the page and of each of its
+ * workers, in bytes, for runtimes started from now on (set it before
+ * au_docview_begin; the top-level view's values serve its frames). 0
+ * keeps the engine's defaults (32 MB and 24 MB). */
+void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worker_bytes);
 /* The string script sees as navigator.userAgent, from the next load. It
  * must be the one the network sends. NULL or "": the script default. */
 void au_docview_set_user_agent(AuDocView *dv, const char *ua);

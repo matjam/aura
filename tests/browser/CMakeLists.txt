@@ -57,3 +57,13 @@ target_include_directories(test_favicon PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 target_compile_definitions(test_favicon PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME browser_favicon COMMAND test_favicon)
 set_tests_properties(browser_favicon PROPERTIES TIMEOUT 120)
+
+# Script memory: a page, two frames and a worker that share one large
+# script stay under stated peaks; out-of-memory in a worker or a page is
+# reported with the runtime, its limit and the preference to raise.
+add_executable(test_script_memory test_script_memory.c)
+target_link_libraries(test_script_memory aura_fakenet m)
+target_include_directories(test_script_memory PRIVATE ${CMAKE_SOURCE_DIR}/tests/net ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME browser_script_memory COMMAND test_script_memory)
+set_tests_properties(browser_script_memory PROPERTIES TIMEOUT 300)

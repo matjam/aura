@@ -126,6 +126,11 @@ typedef struct AuBrowserHost {
      * worker runs one task at a time on the caller's stack. The struct
      * must outlive the browser. */
     const AuCoroOps *coro;
+    /* Optional. The memory the application can still get, in KB (Mac
+     * OS 9: free application heap plus free temporary memory). The
+     * Automatic script memory limits follow it (scriptmem.h); without it
+     * they take the values for an unknown machine. */
+    uint32_t (*memory_free_kb)(void *ctx);
 } AuBrowserHost;
 
 struct AuTab {

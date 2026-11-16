@@ -556,6 +556,15 @@ static bool ensure_js(AuDocScript *s)
     au_js_settings_default(&set);
     if (au_dv_user_agent(s->dv))
         set.user_agent = au_dv_user_agent(s->dv);
+    /* The limits the embedder set for the page (au_docview_set_script_memory);
+     * a nested document's context lives in the page's runtime. */
+    {
+        AuDocView *topv = au_dv_top(s->dv);
+        if (topv->script_mem)
+            set.memory_limit = topv->script_mem;
+        if (topv->worker_mem)
+            set.worker_memory_limit = topv->worker_mem;
+    }
     AuJsHooks h;
     memset(&h, 0, sizeof h);
     h.ctx = s;

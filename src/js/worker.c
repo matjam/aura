@@ -75,6 +75,8 @@ typedef struct JsWorker {
     uint32_t id;
     char *url, *name, *source;
     size_t source_len;
+    uint8_t *code; /* the script's bytecode, when the page had compiled the same script */
+    size_t code_len;
     bool module, opaque;
     void *co; /* its coroutine, or NULL (it runs on the caller's stack) */
     JsWkMsg *in, *in_tail;   /* for the worker */
@@ -404,6 +406,8 @@ static JSValue n_worker_source(JSContext *ctx, JSValueConst this_val, int argc, 
         au_free(w->url);
         w->url = js_tostr(ctx, argv[2], NULL);
     }
+    if (w->source && w->url && !w->module)
+        w->code = js_code_for_worker(js, w->url, w->source, w->source_len, &w->code_len);
     w->started = true;
     w->busy = true;
     return JS_UNDEFINED;
@@ -496,6 +500,21 @@ static JSValue n_worker_error(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     push(&js->wk->out, &js->wk->out_tail, m);
     return JS_UNDEFINED;
+}
+
+/* The worker's script was stopped by an error it cannot catch (out of
+ * memory): the Worker object gets an error event with text, and the
+ * worker ends, since its script was cut off at an arbitrary point. */
+void js_worker_fatal(AuJs *js, const char *text)
+{
+    JsWorker *w = js->wk;
+    if (!w || w->terminate)
+        return;
+    JsWkMsg *m = msg_new(WM_ERROR);
+    m->text = au_strndup(text, strlen(text));
+    m->url = au_strndup(w->url, strlen(w->url));
+    push(&w->out, &w->out_tail, m);
+    w->terminate = true;
 }
 
 /* workerReady(): a module worker's script has run (or failed): its
@@ -808,6 +827,7 @@ static void worker_free(JsWorker *w)
     au_free(w->url);
     au_free(w->name);
     au_free(w->source);
+    au_free(w->code);
     au_free(w);
 }
 
@@ -836,8 +856,20 @@ size_t js_workers_memory(const AuJs *js)
 {
     size_t n = 0;
     for (const JsWorker *w = js->workers; w; w = w->next)
-        n += (w->js ? w->js->live_bytes : 0) + w->stack + w->source_len;
+        n += (w->js ? w->js->live_bytes : 0) + w->stack + w->source_len + w->code_len;
     return n;
+}
+
+uint8_t *js_worker_take_code(AuJs *js, size_t *len)
+{
+    JsWorker *w = js->wk;
+    if (!w || !w->code)
+        return NULL;
+    uint8_t *c = w->code;
+    *len = w->code_len;
+    w->code = NULL;
+    w->code_len = 0;
+    return c;
 }
 
 char *js_worker_take_source(AuJs *js, size_t *len)

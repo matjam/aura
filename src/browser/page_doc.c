@@ -26,6 +26,7 @@
 #include "credits.h"
 #include "history.h"
 #include "netlog.h"
+#include "scriptmem.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../net/dataurl.h"
@@ -1844,6 +1845,16 @@ static void begin_doc(AuPage *p, const char *url)
     p->internal = false;
     p->interim = false;
     au_docview_set_scripting(p->dv, !p->env.prefs || p->env.prefs->javascript);
+    {
+        /* Script memory limits for this document's runtime and workers:
+         * the preferences, or what Automatic gives with the memory free
+         * now. A change of preference applies from the next load. */
+        uint32_t page_kb, worker_kb;
+        au_script_memory_limits(p->env.prefs ? p->env.prefs->script_memory_kb : 0,
+                                p->env.prefs ? p->env.prefs->worker_memory_kb : 0,
+                                p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0, &page_kb, &worker_kb);
+        au_docview_set_script_memory(p->dv, (size_t)page_kb * 1024, (size_t)worker_kb * 1024);
+    }
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);

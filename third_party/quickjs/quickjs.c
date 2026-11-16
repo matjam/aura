@@ -918,6 +918,7 @@ typedef struct JSSourceText {
 } JSSourceText;
 
 static void js_source_text_free(JSRuntime *rt, JSSourceText *st);
+static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int len);
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -37063,6 +37064,24 @@ static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
     return 0;
 }
 
+/* A function has been parsed: its first-pass bytecode stays until the
+   whole script is parsed, so give back what its buffer has spare (the
+   buffer grows by half each time; over a script's functions the spare
+   part was a quarter of the bytecode). */
+static void js_fd_trim(JSFunctionDef *fd)
+{
+    DynBuf *d = &fd->byte_code;
+    uint8_t *p;
+
+    if (d->error || !d->buf || d->size == 0 || d->allocated_size <= d->size)
+        return;
+    p = d->realloc_func(d->opaque, d->buf, d->size);
+    if (p) {
+        d->buf = p;
+        d->allocated_size = d->size;
+    }
+}
+
 static void js_source_text_free(JSRuntime *rt, JSSourceText *st)
 {
     if (--st->ref_count == 0) {
@@ -38079,6 +38098,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
                 token of the function source stored into s->last_ptr */
             fd->source_len = s->last_ptr - ptr;
             fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+            js_fd_trim(fd);
 
             goto done;
         }
@@ -38115,6 +38135,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
         /* save the function source code */
         fd->source_len = s->buf_ptr - ptr;
         fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+        js_fd_trim(fd);
 
         if (next_token(s)) {
             /* consume the '}' */
@@ -38803,6 +38824,7 @@ typedef struct BCWriterState {
     bool allow_reference;
     bool allow_source;
     bool allow_debug;
+    bool source_ref; /* write where a function's text lies in its script, not the text */
     bool byte_swap; /* write for a machine of the other byte order */
     uint32_t first_atom;
     uint32_t *atom_to_idx;
@@ -39341,7 +39363,16 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
         bc_put_leb128(s, b->col_num);
         bc_put_leb128(s, b->pc2line_len);
         dbuf_put(&s->dbuf, b->pc2line_buf, b->pc2line_len);
-        if (s->allow_source && b->source) {
+        if (s->source_ref && b->source) {
+            /* the reader is given the script's text again
+               (JS_ReadObjectSource) */
+            if (!b->source_text || !b->source_text->cached) {
+                JS_ThrowInternalError(s->ctx, "the function's text is not part of a script text");
+                goto fail;
+            }
+            bc_put_leb128(s, b->source_len);
+            bc_put_leb128(s, (uint32_t)(b->source - b->source_text->buf));
+        } else if (s->allow_source && b->source) {
             bc_put_leb128(s, b->source_len);
             dbuf_put(&s->dbuf, b->source, b->source_len);
         } else {
@@ -39776,6 +39807,7 @@ uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
     s->allow_sab = ((flags & JS_WRITE_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_WRITE_OBJ_REFERENCE) != 0);
     s->allow_source = ((flags & JS_WRITE_OBJ_STRIP_SOURCE) == 0);
+    s->source_ref = ((flags & JS_WRITE_OBJ_SOURCE_REF) != 0);
     s->allow_debug = ((flags & JS_WRITE_OBJ_STRIP_DEBUG) == 0);
     s->byte_swap = ((flags & JS_WRITE_OBJ_BSWAP) != 0);
     /* XXX: could use a different version when bytecode is included */
@@ -39834,6 +39866,7 @@ typedef struct BCReaderState {
     bool allow_sab;
     bool allow_bytecode;
     bool allow_reference;
+    JSSourceText *source_ref; /* JS_ReadObjectSource: the script's text */
     /* object references */
     JSObject **objects;
     int objects_count;
@@ -40409,6 +40442,21 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         bc_read_trace(s, "source: %d bytes\n", b->source_len);
         if (s->ptr_last)
             s->ptr_last += b->source_len;  // omit source code hex dump
+        if (s->source_ref) {
+            /* the text is a part of the script's text */
+            int ofs;
+            if (bc_get_leb128_int(s, &ofs))
+                goto fail;
+            if (ofs < 0 || b->source_len < 0 || ofs > s->source_ref->len ||
+                b->source_len > s->source_ref->len - ofs) {
+                b->source_len = 0;
+                JS_ThrowSyntaxError(ctx, "invalid source position");
+                goto fail;
+            }
+            s->source_ref->ref_count++;
+            b->source_text = s->source_ref;
+            b->source = b->source_text->buf + ofs;
+        } else {
         /* b->source is a UTF-8 encoded null terminated C string */
         b->source_text = js_source_text_new(ctx, NULL, b->source_len);
         if (!b->source_text)
@@ -40416,6 +40464,7 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         b->source = b->source_text->buf;
         if (bc_get_buf(s, (uint8_t *)b->source, b->source_len))
             goto fail;
+        }
     }
     bc_read_trace(s, "}\n");
 
@@ -41097,6 +41146,45 @@ JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     } else {
         js_free(ctx, s->sab_tab);
     }
+    bc_reader_free(s);
+    return obj;
+}
+
+/* Reads bytecode written with JS_WRITE_OBJ_SOURCE_REF: 'source' is the
+   script the bytecode was compiled from, and the functions read point
+   into one text of it, shared with every context of the runtime that
+   compiled or read the same script. */
+JSValue JS_ReadObjectSource(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                            int flags, const char *source, size_t source_len)
+{
+    BCReaderState ss, *s = &ss;
+    JSValue obj;
+
+    if (source_len > INT32_MAX / 2)
+        return JS_ThrowRangeError(ctx, "script too long");
+    memset(s, 0, sizeof(*s));
+    s->ctx = ctx;
+    s->buf_start = buf;
+    s->buf_end = buf + buf_len;
+    s->ptr = buf;
+    s->allow_bytecode = true;
+    s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
+    s->first_atom = JS_ATOM_END;
+    s->source_ref = js_source_text_script(ctx, source, (int)source_len);
+    if (!s->source_ref)
+        return JS_EXCEPTION;
+    /* found again by content even when short */
+    if (!s->source_ref->cached) {
+        js_source_text_free(ctx->rt, s->source_ref);
+        return JS_ThrowRangeError(ctx, "script too short to share");
+    }
+    if (JS_ReadObjectAtoms(s)) {
+        obj = JS_EXCEPTION;
+    } else {
+        obj = JS_ReadObjectRec(s);
+    }
+    js_free(ctx, s->sab_tab);
+    js_source_text_free(ctx->rt, s->source_ref);
     bc_reader_free(s);
     return obj;
 }

@@ -52,11 +52,19 @@ static void gc_pressure(AuJs *js, size_t more)
 static bool over_limit(AuJs *js, size_t more)
 {
     size_t limit = js->settings.memory_limit + (js->oom ? OOM_RESERVE : 0);
+    bool machine = false;
     if (js->live_bytes + more <= limit && more <= limit) {
-        gc_pressure(js, more);
-        return false;
+        /* The engine asks for 4 KB arenas and larger blocks, so this is
+         * not asked for every object. The reserve is exempt: it is what
+         * reports the error. */
+        machine = more >= 2048 && !js->oom && au_memory_low(more);
+        if (!machine) {
+            gc_pressure(js, more);
+            return false;
+        }
     }
     if (!js->oom) {
+        js->oom_machine = machine;
         js->oom_live = js->live_bytes;
         js->oom_asked = more;
         snprintf(js->oom_url, sizeof js->oom_url, "%s", js->compiling ? js->compiling : "");
@@ -344,16 +352,31 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
          * doing, so that the line says what to change. */
         AuJs *r = js->root;
         r->oom_noted = false;
-        au_buf_printf(&b, "Script stopped: out of memory. The %s %s reached its script memory limit of %lu KB (%lu KB in use, %lu KB more asked for) ",
-                      r->worker ? "worker" : "page", r->url, (unsigned long)(r->settings.memory_limit / 1024),
-                      (unsigned long)(r->oom_live / 1024), (unsigned long)((r->oom_asked + 1023) / 1024));
+        if (r->oom_machine)
+            au_buf_printf(&b, "Script stopped: out of memory. Aura has too little memory left to give the %s %s more (its script memory limit is %lu KB; %lu KB in use, %lu KB more asked for) ",
+                          r->worker ? "worker" : "page", r->url, (unsigned long)(r->settings.memory_limit / 1024),
+                          (unsigned long)(r->oom_live / 1024), (unsigned long)((r->oom_asked + 1023) / 1024));
+        else
+            au_buf_printf(&b, "Script stopped: out of memory. The %s %s reached its script memory limit of %lu KB (%lu KB in use, %lu KB more asked for) ",
+                          r->worker ? "worker" : "page", r->url, (unsigned long)(r->settings.memory_limit / 1024),
+                          (unsigned long)(r->oom_live / 1024), (unsigned long)((r->oom_asked + 1023) / 1024));
         if (r->oom_url[0])
             au_buf_printf(&b, "while compiling %s", r->oom_url);
         else
             au_buf_puts(&b, "while running script");
         if (js != r)
             au_buf_printf(&b, " in the frame %s", js->url);
-        au_buf_printf(&b, ". To allow more, raise \"Script memory per %s\" in Preferences.", r->worker ? "worker" : "page");
+        if (r->worker) {
+            char note[160];
+            snprintf(note, sizeof note, "out of memory: the worker %s its script memory limit of %lu KB",
+                     r->oom_machine ? "could not grow to" : "reached", (unsigned long)(r->settings.memory_limit / 1024));
+            js_worker_fatal(r, note);
+        }
+        if (r->oom_machine)
+            au_buf_puts(&b, ". Close other tabs or applications, or give Aura more memory in its Get Info window.");
+        else
+            au_buf_printf(&b, ". To allow more, raise \"Script memory per %s\" in Preferences > Content (the %s preference).",
+                          r->worker ? "worker" : "page", r->worker ? "content.worker_memory_kb" : "content.script_memory_kb");
     } else if (JS_IsUncatchableError(exc)) {
         au_buf_puts(&b, "Script stopped: ");
         append_value(ctx, &b, exc);
@@ -943,6 +966,137 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     return js;
 }
 
+/* A script at least this long is "large": the collector runs before it is
+ * compiled when the heap has grown, because a compile makes no objects
+ * and so never triggers a collection itself, while its working memory is
+ * several times the script's length; and its compiled form is kept for
+ * the page's other documents. */
+#define JS_LARGE_SCRIPT (64u << 10)
+
+/* ---- Compiled scripts ----
+ * Compiling a large script costs far more than the result holds: an
+ * 850 KB library took 46 to 144 ms on the host and 4 to 7 MB of working
+ * memory, where reading its bytecode took 3 ms and no working memory. A
+ * page whose frames (and worker) load the script the page itself loaded
+ * therefore compiles it once: the runtime keeps the compiled script of
+ * each of the last few large classic scripts, and a later request for
+ * the same URL and bytes in another context writes that script as
+ * bytecode (JS_WriteObject, about 1 MB for a moment) and reads it into
+ * the context that asked. Functions keep their source text: the bytecode
+ * names positions in the script's text, which the contexts share
+ * (QuickJS patches 0008 and 0009). A script that is mostly data, whose
+ * functions have texts of their own, cannot be written that way and is
+ * compiled each time. A worker has its own runtime: the page writes the
+ * bytecode when it hands the worker its script (js_code_for_worker). */
+static uint32_t code_hash(const char *src, size_t len)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++)
+        h = (h ^ (uint8_t)src[i]) * 16777619u;
+    return h;
+}
+
+static struct JsCode *code_find(AuJs *r, const char *url, size_t len, uint32_t hash, int line)
+{
+    for (size_t i = 0; i < JS_COUNTOF(r->code); i++) {
+        struct JsCode *c = &r->code[i];
+        if (c->url && c->len == len && c->hash == hash && c->line == line && !strcmp(c->url, url))
+            return c;
+    }
+    return NULL;
+}
+
+static void code_drop(struct JsCode *c)
+{
+    if (!c->url)
+        return;
+    JS_FreeValue(c->owner->ctx, c->fn);
+    au_free(c->url);
+    memset(c, 0, sizeof *c);
+}
+
+/* owner's context is going (NULL: the runtime is). */
+static void code_drop_owner(AuJs *r, const AuJs *owner)
+{
+    for (size_t i = 0; i < JS_COUNTOF(r->code); i++)
+        if (!owner || r->code[i].owner == owner)
+            code_drop(&r->code[i]);
+}
+
+static void code_add(AuJs *js, const char *url, size_t len, uint32_t hash, int line, JSValueConst fn)
+{
+    AuJs *r = js->root;
+    struct JsCode *c = &r->code[0];
+    for (size_t i = 0; i < JS_COUNTOF(r->code); i++) {
+        if (!r->code[i].url) {
+            c = &r->code[i];
+            break;
+        }
+        if (r->code[i].used < c->used)
+            c = &r->code[i];
+    }
+    code_drop(c);
+    c->url = au_strndup(url, strlen(url));
+    c->len = len;
+    c->hash = hash;
+    c->line = line;
+    c->fn = JS_DupValue(js->ctx, fn);
+    c->owner = js;
+    c->used = ++r->code_clock;
+    c->when = js_now(r);
+}
+
+/* A kept script holds the code that ran once while the script loaded (an
+ * outer function's body), which nothing else would: 250 KB for an 860 KB
+ * bundle. Frames and workers that share a script start within seconds of
+ * the page loading it, so an entry nothing has read for 20 seconds goes;
+ * a later frame compiles the script again. */
+void js_code_expire(AuJs *js)
+{
+    AuJs *r = js->root;
+    if (r->depth > 0)
+        return;
+    double now = js_now(r);
+    for (size_t i = 0; i < JS_COUNTOF(r->code); i++)
+        if (r->code[i].url && now - r->code[i].when >= 20000)
+            code_drop(&r->code[i]);
+}
+
+/* The script c as bytecode in a QuickJS block of c's context, or NULL. */
+static uint8_t *code_write(struct JsCode *c, size_t *blen)
+{
+    JSContext *octx = c->owner->ctx;
+    uint8_t *blob = JS_WriteObject(octx, blen, c->fn, JS_WRITE_OBJ_BYTECODE | JS_WRITE_OBJ_SOURCE_REF);
+    if (!blob) {
+        JSValue e = JS_GetException(octx);
+        JS_FreeValue(octx, e);
+    }
+    return blob;
+}
+
+uint8_t *js_code_for_worker(AuJs *js, const char *url, const char *src, size_t len, size_t *code_len)
+{
+    AuJs *r = js->root;
+    if (len < JS_LARGE_SCRIPT || r->worker)
+        return NULL;
+    struct JsCode *c = code_find(r, url, len, code_hash(src, len), 1);
+    if (!c)
+        return NULL;
+    size_t blen = 0;
+    uint8_t *blob = code_write(c, &blen);
+    if (!blob)
+        return NULL;
+    uint8_t *out = au_try_alloc(blen ? blen : 1);
+    if (out) {
+        memcpy(out, blob, blen);
+        *code_len = blen;
+        c->used = ++r->code_clock;
+        c->when = js_now(r);
+    }
+    js_free(c->owner->ctx, blob);
+    return out;
+}
+
 void au_js_free(AuJs *js)
 {
     if (!js)
@@ -965,6 +1119,7 @@ void au_js_free(AuJs *js)
          * stays with the root while a wrapper still names one of its
          * nodes. The embedder calls this only while no script runs. */
         AuJs *root = js->root;
+        code_drop_owner(root, js);
         JS_FreeValue(ctx, js->P);
         js->P = JS_UNDEFINED;
         js_canvas_free(js);
@@ -1017,6 +1172,7 @@ void au_js_free(AuJs *js)
     }
     js->nrejections = 0;
     au_free(js->rejections);
+    code_drop_owner(js, NULL);
     JS_FreeValue(ctx, js->P);
     js->P = JS_UNDEFINED;
     js_canvas_free(js);
@@ -1075,12 +1231,6 @@ AuJs *au_js_of(const AuDocument *doc)
 
 /* ---- Running scripts ---- */
 
-/* A script at least this long is "large": the collector runs before it is
- * compiled when the heap has grown, because a compile makes no objects
- * and so never triggers a collection itself, while its working memory is
- * several times the script's length. */
-#define JS_LARGE_SCRIPT (64u << 10)
-
 JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line)
 {
     return eval_classic(js, src, len, url, line, NULL);
@@ -1096,14 +1246,61 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         r->gc_base = r->live_bytes;
     }
     char *prev = r->compiling;
-    r->compiling = (char *)(url ? url : js->url);
-    JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY, url ? url : js->url,
-                       line > 0 ? line : 1};
-    JSValue fn = JS_Eval2(ctx, src, len, &o);
+    bool oom_before = r->oom;
+    const char *name = url ? url : js->url;
+    if (line < 1)
+        line = 1;
+    r->compiling = (char *)name;
+    JSValue fn = JS_UNINITIALIZED;
+    bool large = len >= JS_LARGE_SCRIPT;
+    uint32_t hash = large ? code_hash(src, len) : 0;
+    if (large && r->worker) {
+        /* the page compiled this script and sent its bytecode along */
+        size_t clen = 0;
+        uint8_t *code = js_worker_take_code(js, &clen);
+        if (code) {
+            fn = JS_ReadObjectSource(ctx, code, clen, JS_READ_OBJ_BYTECODE, src, len);
+            au_free(code);
+        }
+    } else if (large) {
+        struct JsCode *c = code_find(r, name, len, hash, line);
+        size_t blen = 0;
+        uint8_t *blob = c ? code_write(c, &blen) : NULL;
+        if (blob) {
+            fn = JS_ReadObjectSource(ctx, blob, blen, JS_READ_OBJ_BYTECODE, src, len);
+            js_free(c->owner->ctx, blob);
+            c->used = ++r->code_clock;
+            c->when = js_now(r);
+        }
+    }
+    if (JS_IsException(fn)) {
+        /* the bytecode could not be read (memory): compile instead */
+        JSValue e = JS_GetException(ctx);
+        JS_FreeValue(ctx, e);
+        fn = JS_UNINITIALIZED;
+    }
+    if (JS_IsUninitialized(fn)) {
+        JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY, name, line};
+        fn = JS_Eval2(ctx, src, len, &o);
+        if (large && !r->worker && !JS_IsException(fn))
+            code_add(js, name, len, hash, line, fn);
+    }
     r->compiling = prev;
     au_free(owned);
-    if (JS_IsException(fn))
+    if (JS_IsException(fn)) {
+        /* An allocation refused inside the parser can surface as a
+         * syntax error at the place it happened to be: report what it
+         * was. */
+        if (r->oom && !oom_before) {
+            JSValue e = JS_GetException(ctx);
+            if (!JS_IsUncatchableError(e)) {
+                JS_FreeValue(ctx, e);
+                return JS_ThrowOutOfMemory(ctx);
+            }
+            JS_Throw(ctx, e);
+        }
         return fn;
+    }
     return JS_EvalFunction(ctx, fn);
 }
 

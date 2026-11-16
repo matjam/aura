@@ -322,6 +322,10 @@ typedef struct AuPageEnv {
     bool (*random)(void *ctx, void *buf, size_t len);
     /* Optional: coroutines for workers (AuBrowserHost.coro). */
     const AuCoroOps *coro;
+    /* Optional: the memory the application can still get, in KB, or 0
+     * when unknown (AuBrowserHost.memory_free_kb). Read when a document
+     * begins, for the Automatic script memory limits. */
+    uint32_t (*memory_free_kb)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

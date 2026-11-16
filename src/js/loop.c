@@ -278,6 +278,7 @@ bool au_js_run_tasks(AuJs *js, uint32_t budget_ms)
         js->last_ran = js_now(js);
     } else if (!js->closing) {
         size_t step = js->gc_base / 8 > (512u << 10) ? js->gc_base / 8 : (512u << 10);
+        js_code_expire(js);
         if (js->live_bytes > js->gc_base + step && js_now(js) - js->last_ran >= 1000)
             au_js_gc(js);
     }

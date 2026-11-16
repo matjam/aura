@@ -1142,7 +1142,9 @@ void au_docview_begin(AuDocView *dv, const char *url)
     au_free(dv->url);
     au_free(dv->base);
     dv->url = dup(url);
-    dv->base = dup(url);
+    /* A srcdoc or about:blank document in a frame resolves its URLs
+     * against its parent's base URL (HTML: the fallback base URL). */
+    dv->base = dup(dv->parent && (!strcmp(url, "about:srcdoc") || !strcmp(url, "about:blank")) ? dv->parent->base : url);
     if (dv->title[0]) {
         au_free(dv->title);
         dv->title = dup("");
@@ -1819,6 +1821,12 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
 void au_docview_set_scripting(AuDocView *dv, bool on)
 {
     dv->scripting = on;
+}
+
+void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worker_bytes)
+{
+    dv->script_mem = page_bytes;
+    dv->worker_mem = worker_bytes;
 }
 
 void au_docview_set_user_agent(AuDocView *dv, const char *ua)

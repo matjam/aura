@@ -25,6 +25,14 @@ void au_set_oom_handler(void (*handler)(size_t wanted));
  * again while it runs. */
 void au_set_release_handler(bool (*release)(size_t wanted));
 
+/* Whether the platform is too short of memory to give n more bytes to a
+ * user that can do without (the JavaScript engine: it then fails the
+ * script with an out-of-memory error, while there is still memory for the
+ * page itself). The platform installs the check; without one the answer
+ * is always no. */
+void au_set_low_memory_check(bool (*low)(size_t n));
+bool au_memory_low(size_t n);
+
 /* ---- Non-fatal allocation ----
  * For allocators that must survive running out, such as the JavaScript
  * engine's, which turns a failed allocation into a script out-of-memory
