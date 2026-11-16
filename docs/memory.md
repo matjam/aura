@@ -199,7 +199,8 @@ pointers, so pointer-heavy rows are smaller there.
 
 The style sheet work that followed (below, "Parsed style sheets")
 changed the GitHub column: CSS is 6036 KB, the sheets' text adds
-2499 KB to the document view's row, and the total live is 19,126 KB.
+2499 KB to the document view's row until it is packed (about 600 KB
+then), and the total live is 19,126 KB before packing.
 
 With the system fonts, `/usr/bin/time -l` reports a peak footprint of
 (before the style sheet work):
@@ -214,8 +215,9 @@ With the system fonts, `/usr/bin/time -l` reports a peak footprint of
 ### Parsed style sheets
 
 `css_bench --where --style PAGE` after the work of 2026-11-15 on style
-sheets: what the sheets of a page hold once the page is styled, on the
-host and, from the struct layouts, with 32-bit pointers. Before that
+sheets: what the sheets of a page hold once the page is styled and
+their texts are packed, on the host and, from the struct layouts, with
+32-bit pointers. Before that
 work the GitHub home page's sheets (28 linked, 20 distinct) were
 300,000 blocks: 17.6 MB on the host, and 13.9 MB with 32-bit pointers
 plus 2.4 MB of block headers in the pooled allocator. The Wikipedia
@@ -230,18 +232,18 @@ article's were 10,200 blocks, 0.74 MB and 0.59 MB.
 | Declaration blocks of the rules that matched | 166 KB | 137 KB | 44 KB | 36 KB |
 | Media lists, layer names, condition text | 38 KB | 36 KB | 8 KB | 7 KB |
 | The arena that holds the rows above | 2240 KB in 194 chunks | 1323 KB | 308 KB in 27 chunks | 192 KB |
-| The sheets' text | 2559 KB | 2559 KB | 220 KB | 220 KB |
+| The sheets' text, packed (2559 KB and 220 KB as it arrived) | 596 KB | 596 KB | 48 KB | 48 KB |
 | Value trees | 20 KB | 16 KB | 14 KB | 12 KB |
 | Custom property and `var()` token lists | 473 KB | 396 KB | 48 KB | 41 KB |
 | Sheet records, keyframes, font faces | 29 KB | 21 KB | 0.4 KB | 0.2 KB |
-| Total | 5.3 MB in 4300 blocks | 4.3 MB | 0.59 MB in 480 blocks | 0.46 MB |
+| Total | 3.4 MB in 4300 blocks | 2.4 MB | 0.41 MB in 480 blocks | 0.29 MB |
 
 Of GitHub's 16,400 rules, 14,200 blocks of declarations and 280
 `@media` blocks are still text after the page is styled. For the page
 as the browser loads it (`AURA_MEM=1`, host), `src/css` went from
-24.7 MB in 347,000 blocks to 6.0 MB in 19,600, plus the 2.5 MB of sheet
-text that the document view used to free; the picture painted is the
-same, byte for byte. [`css.md`](css.md) has the figures step by step
+24.7 MB in 347,000 blocks to 6.0 MB in 19,600, plus the sheets' text
+(which the document view used to free: 2.5 MB until it is packed,
+0.6 MB after); the picture painted is the same, byte for byte. [`css.md`](css.md) has the figures step by step
 and the times.
 
 ### A live Wikipedia article's script heap

@@ -636,17 +636,23 @@ static void start_sheet(AuDocView *dv, SheetSrc *s)
 }
 
 /* The text a source was parsed from: its own while it waits to be
- * parsed, then the parsed sheet's (which keeps it). */
-static const char *src_text(const SheetSrc *s, size_t *len)
+ * parsed, then the parsed sheet's (which keeps it, packed once the
+ * document has loaded). src_text_get appends it to out; src_text_is
+ * compares it. */
+static bool src_text_get(const SheetSrc *s, AuBuf *out)
 {
     if (s->text) {
-        *len = s->len;
-        return s->text;
+        au_buf_append(out, s->text, s->len);
+        return true;
     }
-    if (s->sheet)
-        return au_css_sheet_text(s->sheet, len);
-    *len = 0;
-    return NULL;
+    return s->sheet && au_css_sheet_text_get(s->sheet, out);
+}
+
+static bool src_text_is(const SheetSrc *s, const char *text, size_t len)
+{
+    if (s->text)
+        return s->len == len && (!len || memcmp(s->text, text, len) == 0);
+    return s->sheet && au_css_sheet_text_is(s->sheet, text, len);
 }
 
 /* A sheet of this document that was parsed from the same text for the
@@ -665,9 +671,7 @@ static AuCssSheet *same_sheet(AuDocView *dv, const SheetSrc *s)
         if (au_css_sheet_import_count(o->sheet) || strcmp(o->url ? o->url : "", s->url ? s->url : "") ||
             strcmp(o->media ? o->media : "", s->media ? s->media : ""))
             continue;
-        size_t n;
-        const char *t = au_css_sheet_text(o->sheet, &n);
-        if (t && n == s->len && (!n || memcmp(t, s->text, n) == 0))
+        if (au_css_sheet_text_is(o->sheet, s->text, s->len))
             return o->sheet;
     }
     return NULL;
@@ -676,7 +680,7 @@ static AuCssSheet *same_sheet(AuDocView *dv, const SheetSrc *s)
 /* Parses a source whose text is there, once; attaches an import to its
  * parent's sheet; and starts the sheet's own @imports. The parsed sheet
  * takes the text (it parses blocks of declarations from it when their
- * rules first match, and the CSSOM reads it: src_text). */
+ * rules first match, and the CSSOM reads it: src_text_get). */
 static void parse_sheet(AuDocView *dv, SheetSrc *s)
 {
     if (s->sheet || !s->text)
@@ -690,11 +694,14 @@ static void parse_sheet(AuDocView *dv, SheetSrc *s)
         sh = au_css_sheet_parse_take(au_realloc(s->text, s->len + 1), s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
     }
     s->text = NULL; /* len stays: the size the sheet has (au_docview_memory_estimate) */
-    if (dv->webfonts) {
-        size_t n;
-        const char *t = au_css_sheet_text(sh, &n);
-        au_webfonts_add_sheet(dv->webfonts, sh, t, n);
+    if (dv->webfonts && au_css_sheet_font_face_count(sh)) {
+        AuBuf t;
+        au_buf_init(&t);
+        au_css_sheet_text_get(sh, &t);
+        au_webfonts_add_sheet(dv->webfonts, sh, t.data, t.len);
+        au_buf_free(&t);
     }
+    dv->sheets_packed = false;
     dv->sheets_dirty = true;
     if (s->parent) {
         if (!s->parent->sheet) {
@@ -949,6 +956,35 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
         au_image_cache_set_budget(c, dv->hidden_image_budget);
         dv->hidden_image_budget = 0;
     }
+}
+
+/* Packs the text of the first sheet of a source (or of its imports) that
+ * is not packed yet; true if it packed one. */
+static bool pack_src(SheetSrc *s)
+{
+    if (!s)
+        return false;
+    if (s->sheet && au_css_sheet_pack_text(s->sheet))
+        return true;
+    if (s->om_sheet && au_css_sheet_pack_text(s->om_sheet))
+        return true;
+    for (uint32_t i = 0; i < s->nimports; i++)
+        if (pack_src(s->imports[i]))
+            return true;
+    return false;
+}
+
+bool au_docview_pack_sheets(AuDocView *dv)
+{
+    if (dv->sheets_packed)
+        return false;
+    for (uint32_t i = 0; i < dv->nslots; i++)
+        if (pack_src(dv->slots[i].src))
+            return true; /* one sheet a call: a large one takes a moment */
+    if (dv->user_sheet && au_css_sheet_pack_text(dv->user_sheet))
+        return true;
+    dv->sheets_packed = true;
+    return false;
 }
 
 static void sheet_bytes(const SheetSrc *s, size_t *n)
@@ -1361,9 +1397,7 @@ static bool slot_stale(AuDocView *dv, const SheetSlot *s)
         AuBuf t;
         au_buf_init(&t);
         text_content(&s->el->node, &t);
-        size_t n;
-        const char *was = src_text(s->src, &n);
-        bool changed = !was || t.len != n || (t.len && memcmp(t.data, was, t.len) != 0);
+        bool changed = !src_text_is(s->src, t.data ? t.data : "", t.len);
         au_buf_free(&t);
         return changed;
     }
@@ -1497,6 +1531,29 @@ static bool update_style(AuDocView *dv)
     return changed;
 }
 
+/* Once the document has loaded, the sheets' texts go cold. They are
+ * packed one sheet a pass, on passes that had nothing else to do, after
+ * SHEET_QUIET_MS in which no block was parsed late (a page that script
+ * builds after its load is still matching rules for the first time, and
+ * each such parse would inflate a piece of packed text). Without a clock:
+ * after SHEET_QUIET_PASSES such passes. */
+#define SHEET_QUIET_MS 5000
+#define SHEET_QUIET_PASSES 32
+static void pack_when_quiet(AuDocView *dv)
+{
+    uint32_t count = au_css_late_parse_count(), t = perf_now(dv);
+    if (!dv->pack_watching || count != dv->pack_seen) {
+        dv->pack_watching = true;
+        dv->pack_seen = count;
+        dv->pack_since = t;
+        dv->pack_passes = 0;
+        return;
+    }
+    dv->pack_passes++;
+    if (dv->cb.now_ms ? t - dv->pack_since >= SHEET_QUIET_MS : dv->pack_passes >= SHEET_QUIET_PASSES)
+        au_docview_pack_sheets(dv);
+}
+
 bool au_docview_update(AuDocView *dv)
 {
     if (!dv->doc)
@@ -1534,6 +1591,8 @@ bool au_docview_update(AuDocView *dv)
         au_perf_add(&dv->perf, AU_PERF_LAYOUT, t2 - t1, NULL, t2);
     if (changed)
         dv->layout_ran = true;
+    if (!style_work && !changed && dv->finished_reported && !dv->sheets_packed && !au_docview_loading(dv))
+        pack_when_quiet(dv);
     if (dv->nframes)
         au_frames_layout(dv);
     float w, h;
@@ -2085,11 +2144,8 @@ int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
     if (!s->text && !s->sheet)
         return 1;
     au_buf_puts(url, s->url ? s->url : "");
-    size_t n;
-    const char *t = s->om_sheet ? au_css_sheet_text(s->om_sheet, &n) : src_text(s, &n);
-    if (!t)
+    if (!(s->om_sheet ? au_css_sheet_text_get(s->om_sheet, text) : src_text_get(s, text)))
         return 3; /* a sheet that could not keep its text */
-    au_buf_append(text, t, n);
     return 2;
 }
 
@@ -2105,6 +2161,7 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
     if (s->om_sheet)
         au_css_sheet_free(s->om_sheet);
     s->om_sheet = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media); /* keeps a copy of the text */
+    dv->sheets_packed = false;
     dv->sheets_dirty = true;
 }
 

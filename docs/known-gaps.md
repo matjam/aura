@@ -290,18 +290,20 @@ failing:
 Largest first.
 
 1. **Parsed style sheets.** What is left of them, for GitHub's home
-   page with 32-bit pointers: 4.3 MB, of which 2.6 MB is the sheets'
-   text ([`memory.md`](memory.md)).
-   - The text is kept as it arrived. Kept deflated in 16 KB pieces
-     (inflated when a block is parsed or the CSSOM reads it) it would
-     be 0.44 MB for GitHub and 33 KB for a Wikipedia article. This
-     needs the deflate encoder.
+   page with 32-bit pointers: 2.4 MB (1.3 MB of rules and selectors,
+   0.6 MB of packed text, 0.4 MB of token lists;
+   [`memory.md`](memory.md)).
    - Each document parses its own sheets: a second tab, a frame or a
-     kept document of the same site holds them again (4.3 MB for
-     GitHub). `au_css_sheet_retain` already lets owners share a sheet;
-     a table of parsed sheets by URL, media and text would let
-     documents share them (not sheets with `@import` rules, whose
-     imports are attached to the sheet).
+     kept document of the same site holds them again.
+     `au_css_sheet_retain` already lets owners share a sheet; a table
+     of parsed sheets by URL, media and text would let documents share
+     them (not sheets with `@import` rules, whose imports are attached
+     to the sheet).
+   - The texts are packed by `au_docview_update`, so a document that
+     stops being updated before its texts are packed (hidden or kept
+     within seconds of loading) keeps them as they arrived. The page
+     layer can call `au_docview_pack_sheets` when a document goes
+     cold.
    - The tokens of a whole sheet exist while it is parsed, then are
      freed: 3.7 MB for GitHub's 800 KB sheet, 1.6 MB for Wikipedia's
      212 KB one (20 bytes a token, and arrays that grow by doubling).

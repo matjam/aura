@@ -310,6 +310,12 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden);
  * style sheets, the layout, images (decoded and compressed) and the
  * script runtime. */
 size_t au_docview_memory_estimate(AuDocView *dv);
+/* Packs the text that one style sheet of the document keeps (deflated;
+ * read back when a rule's block is parsed late or the CSSOM reads the
+ * sheet); false when none is left to pack. au_docview_update does this
+ * for a loaded document, one sheet on each pass that has no other work;
+ * call it for a document that is no longer updated (hidden, kept). */
+bool au_docview_pack_sheets(AuDocView *dv);
 
 /* ---- Geometry and painting ---- */
 void au_docview_set_viewport(AuDocView *dv, int width, int height);

@@ -760,10 +760,14 @@ static void compare_docs(const char *what, const char *step, ViewDoc *a, ViewDoc
     au_buf_free(&y);
 }
 
-static void lazy_page(const char *what, const char *html, size_t len, const char *const *extra, int nextra)
+/* pack: the lazy sheets hold their text packed from the start, so every
+ * block parsed late is read through an inflated piece. */
+static void lazy_page(const char *what, const char *html, size_t len, const char *const *extra, int nextra, bool pack)
 {
     css_lazy_bodies = true;
+    css_pack_at_parse = pack;
     ViewDoc lazy = view_doc(html, len, extra, nextra, 1024, 768);
+    css_pack_at_parse = false;
     css_lazy_bodies = false;
     ViewDoc eager = view_doc(html, len, extra, nextra, 1024, 768);
     /* and with every occurrence of a repeated sheet in the rule index */
@@ -822,7 +826,9 @@ static void lazy_truncations(const char *what, const char *css)
         buf[k] = 0;
         const char *extra[1] = {buf};
         css_lazy_bodies = true;
+        css_pack_at_parse = k % 2 == 1; /* every other cut with the text packed */
         ViewDoc lazy = view_doc(page, sizeof page - 1, extra, 1, 1024, 768);
+        css_pack_at_parse = false;
         css_lazy_bodies = false;
         ViewDoc eager = view_doc(page, sizeof page - 1, extra, 1, 1024, 768);
         css_lazy_bodies = true;
@@ -862,7 +868,8 @@ static int test_lazy(int argc, char **argv)
                 return 2;
             }
         }
-        lazy_page(argv[2], html, len, css, ns);
+        lazy_page(argv[2], html, len, css, ns, false);
+        lazy_page(argv[2], html, len, css, ns, true);
         printf("%d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }
@@ -887,23 +894,26 @@ static int test_lazy(int argc, char **argv)
             CHECK(css != NULL);
         }
         const char *extra[4] = {sheet_viewport, sheet_units, sheet_lazy, css};
-        lazy_page(names[i], html, len, extra + 3, css ? 1 : 0);
-        lazy_page(names[i], html, len, extra, css ? 4 : 3);
+        lazy_page(names[i], html, len, extra + 3, css ? 1 : 0, false);
+        lazy_page(names[i], html, len, extra, css ? 4 : 3, true);
         free(html);
         free(css);
     }
-    lazy_page("built in", page, sizeof page - 1, (const char *const[]){sheet_plain, sheet_has_state, sheet_lazy}, 3);
+    lazy_page("built in", page, sizeof page - 1, (const char *const[]){sheet_plain, sheet_has_state, sheet_lazy}, 3,
+              false);
+    lazy_page("built in, packed", page, sizeof page - 1,
+              (const char *const[]){sheet_plain, sheet_has_state, sheet_lazy}, 3, true);
     /* sheets given twice, with and without layers */
     lazy_page("repeated", page, sizeof page - 1,
               (const char *const[]){sheet_plain, sheet_lazy, sheet_has_state, sheet_plain, sheet_viewport, sheet_lazy,
                                     sheet_plain},
-              7);
+              7, true);
     lazy_page("repeated layers", page, sizeof page - 1,
               (const char *const[]){sheet_layers_between, sheet_layers, sheet_layers_between, sheet_plain,
                                     sheet_layers, sheet_layers_between},
-              6);
+              6, false);
     lazy_page("repeated layers first", page, sizeof page - 1,
-              (const char *const[]){sheet_layers, sheet_layers_between, sheet_layers}, 3);
+              (const char *const[]){sheet_layers, sheet_layers_between, sheet_layers}, 3, true);
     lazy_truncations("cut sheet", sheet_lazy);
     lazy_truncations("cut layers", sheet_layers_between);
     printf("%d checks, %d failures\n", checks, failures);

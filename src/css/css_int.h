@@ -590,6 +590,13 @@ const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru);
 const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru);
 /* For tests: false makes a sheet parse every block when it is parsed. */
 extern bool css_lazy_bodies;
+/* For tests: true packs a sheet's text as soon as it is parsed, whatever
+ * its size. */
+extern bool css_pack_at_parse;
+#define CSS_TEXT_PIECE 4096u
+/* len bytes of the sheet's text at off: a pointer into the text, or,
+ * when the text is packed, into the piece inflated last or into tmp. */
+const char *css_sheet_text_at(const AuCssSheet *sh, uint32_t off, uint32_t len, AuBuf *tmp);
 /* For tests: false makes the rule index hold every occurrence of a sheet
  * that a resolver was given several times. */
 extern bool css_index_skip_repeats;
@@ -618,10 +625,19 @@ struct AuCssSheet {
     bool has_layers;
     bool repeat_matters;
     /* The sheet's source: lazy rules refer to ranges of it, and the
-     * document view gives it to the CSSOM. NULL for a sheet of 4 GB or
-     * more, which has no lazy rules. */
+     * document view gives it to the CSSOM. A sheet of 4 GB or more has
+     * none (has_text false), and no lazy rules. Once the document has
+     * loaded the text is packed (au_css_sheet_pack_text): text is NULL
+     * and ztext holds it deflated in pieces of CSS_TEXT_PIECE bytes, each
+     * a stream of its own, so that one block's text is read by inflating
+     * the piece it is in (css_sheet_text_at). */
+    bool has_text;
+    bool pack_tried;
     char *text;
     size_t text_len;
+    uint8_t *ztext;
+    uint32_t *zoff; /* nz + 1 offsets of the pieces in ztext */
+    uint32_t nz;
     char *base_url;
     AuCssMediaList *media; /* the sheet's own media list, NULL for all */
     CssArena arena;        /* rules, selectors, media lists, parsed declaration arrays */

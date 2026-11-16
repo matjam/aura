@@ -8,6 +8,8 @@
  * MAX_RULE_DEPTH; deeper rules are dropped. */
 #include "css_int.h"
 
+#include "../codec/codec.h"
+
 #define MAX_RULE_DEPTH 24
 
 typedef struct {
@@ -23,6 +25,10 @@ typedef struct {
 } Parser;
 
 bool css_lazy_bodies = true;
+bool css_pack_at_parse = false;
+
+static uint32_t late_parses;
+uint32_t au_css_late_parse_count(void) { return late_parses; }
 
 
 static bool is_open(int t) { return t == TK_FUNCTION || t == TK_LPAREN || t == TK_LBRACKET || t == TK_LBRACE; }
@@ -62,6 +68,130 @@ static char *arena_text(Parser *p, char *heap)
     char *t = css_arena_strndup(&p->sheet->arena, heap ? heap : "", heap ? strlen(heap) : 0);
     au_free(heap);
     return t;
+}
+
+/* ---- The sheet's text, packed ----
+ * A sheet's text is read again only for the blocks that are parsed late
+ * and by the CSSOM, so once the document has loaded it is kept deflated:
+ * in pieces of CSS_TEXT_PIECE bytes, each a raw deflate stream of its
+ * own, with the offset of each piece. One inflater and the piece
+ * inflated last are shared by all sheets (rules that match together are
+ * often next to each other in a sheet). */
+#define TEXT_PACK_MIN 4096u
+static struct {
+    AuInflate *z;
+    uint32_t sheets; /* packed sheets alive: the inflater is freed with the last */
+    const AuCssSheet *sheet;
+    uint32_t piece;
+    char data[CSS_TEXT_PIECE];
+} packed;
+
+/* Inflates piece i of sh into dst (CSS_TEXT_PIECE bytes of room). */
+static void inflate_piece(const AuCssSheet *sh, uint32_t i, char *dst)
+{
+    size_t want = i + 1 < sh->nz ? CSS_TEXT_PIECE : sh->text_len - (size_t)i * CSS_TEXT_PIECE;
+    if (!packed.z)
+        packed.z = au_inflate_new(AU_INFLATE_RAW);
+    else
+        au_inflate_reset(packed.z);
+    const uint8_t *in = sh->ztext + sh->zoff[i];
+    size_t il = sh->zoff[i + 1] - sh->zoff[i];
+    uint8_t *out = (uint8_t *)dst;
+    size_t ol = want;
+    AuCodecStatus st = AU_CODEC_OK;
+    while (st == AU_CODEC_OK && ol) {
+        size_t il0 = il, ol0 = ol;
+        st = au_inflate_run(packed.z, &in, &il, &out, &ol);
+        if (il == il0 && ol == ol0)
+            break; /* no progress */
+    }
+    if (ol)
+        memset(out, ' ', ol); /* cannot happen: the stream is our own */
+}
+
+const char *css_sheet_text_at(const AuCssSheet *sh, uint32_t off, uint32_t len, AuBuf *tmp)
+{
+    if (sh->text)
+        return sh->text + off;
+    if (!sh->ztext || !len)
+        return "";
+    uint32_t first = off / CSS_TEXT_PIECE, last = (off + len - 1) / CSS_TEXT_PIECE;
+    if (first == last) {
+        if (packed.sheet != sh || packed.piece != first) {
+            inflate_piece(sh, first, packed.data);
+            packed.sheet = sh;
+            packed.piece = first;
+        }
+        return packed.data + off % CSS_TEXT_PIECE;
+    }
+    au_buf_reserve(tmp, (size_t)(last - first + 1) * CSS_TEXT_PIECE);
+    for (uint32_t i = first; i <= last; i++)
+        inflate_piece(sh, i, tmp->data + (size_t)(i - first) * CSS_TEXT_PIECE);
+    return tmp->data + (off - first * CSS_TEXT_PIECE);
+}
+
+/* Deflates the text in place. With force, also a small text and one that
+ * does not get smaller (tests). */
+static bool pack_text(AuCssSheet *s, bool force)
+{
+    if (!s->text || !s->text_owned || s->ztext || (s->pack_tried && !force))
+        return false;
+    s->pack_tried = true;
+    if (!s->text_len || s->text_len > 0x7FFFFFFFu || (s->text_len < TEXT_PACK_MIN && !force))
+        return false;
+    uint32_t nz = (uint32_t)((s->text_len + CSS_TEXT_PIECE - 1) / CSS_TEXT_PIECE);
+    uint32_t *zoff = au_alloc(((size_t)nz + 1) * sizeof *zoff);
+    AuBuf out;
+    au_buf_init(&out);
+    AuDeflate *z = au_deflate_new(AU_DEFLATE_RAW, 1);
+    for (uint32_t i = 0; i < nz; i++) {
+        zoff[i] = (uint32_t)out.len;
+        const uint8_t *in = (const uint8_t *)s->text + (size_t)i * CSS_TEXT_PIECE;
+        size_t il = i + 1 < nz ? CSS_TEXT_PIECE : s->text_len - (size_t)i * CSS_TEXT_PIECE;
+        for (;;) {
+            au_buf_reserve(&out, 2048);
+            uint8_t *op = (uint8_t *)out.data + out.len;
+            size_t ol = out.cap - out.len;
+            AuCodecStatus st = au_deflate_run(z, &in, &il, &op, &ol, true);
+            out.len = (size_t)(op - (uint8_t *)out.data);
+            if (st != AU_CODEC_OK)
+                break;
+        }
+        au_deflate_reset(z);
+    }
+    zoff[nz] = (uint32_t)out.len;
+    au_deflate_free(z);
+    /* worth it only if it frees an eighth of the text */
+    if (!force && out.len + ((size_t)nz + 1) * sizeof *zoff > s->text_len - s->text_len / 8) {
+        au_buf_free(&out);
+        au_free(zoff);
+        return false;
+    }
+    s->ztext = au_realloc(out.data, out.len ? out.len : 1);
+    s->zoff = zoff;
+    s->nz = nz;
+    au_free(s->text);
+    s->text = NULL;
+    packed.sheets++;
+    return true;
+}
+
+bool au_css_sheet_pack_text(AuCssSheet *s) { return pack_text(s, false); }
+
+/* A sheet is freed: its packed text goes, and what was shared for it. */
+static void text_unpack(AuCssSheet *s)
+{
+    if (!s->ztext)
+        return;
+    au_free(s->ztext);
+    au_free(s->zoff);
+    s->ztext = NULL;
+    if (packed.sheet == s)
+        packed.sheet = NULL;
+    if (!--packed.sheets && packed.z) {
+        au_inflate_free(packed.z);
+        packed.z = NULL;
+    }
 }
 
 /* The block every rule without declarations shares. */
@@ -265,9 +395,13 @@ const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
     if (!(ru->flags & RF_LAZY))
         return ru->b.decls;
     CssRule *w = (CssRule *)ru; /* the parsed block is a cache of the text */
+    late_parses++;
     AuCssDeclBlock tmp = {0};
     CssTokens tk = {0};
-    css_tokenize(sh->text + w->b.off, w->c.lazy_len, &tk);
+    AuBuf text;
+    au_buf_init(&text);
+    css_tokenize(css_sheet_text_at(sh, w->b.off, w->c.lazy_len, &text), w->c.lazy_len, &tk);
+    au_buf_free(&text);
     css_parse_decl_list(&tk, 0, tk.n, &tmp, sh->quirks, sh->base_url);
     css_tokens_free(&tk);
     w->flags &= (uint8_t)~RF_LAZY;
@@ -287,8 +421,12 @@ const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
     /* A top-level @media block that was kept as text: parse it as the
      * sheet parse would have, one level down. */
     CssRule *w = (CssRule *)ru;
+    late_parses++;
     CssTokens tk = {0};
-    css_tokenize(sh->text + w->b.off, w->c.lazy_len, &tk);
+    AuBuf text;
+    au_buf_init(&text);
+    css_tokenize(css_sheet_text_at(sh, w->b.off, w->c.lazy_len, &text), w->c.lazy_len, &tk);
+    au_buf_free(&text);
     Parser p;
     memset(&p, 0, sizeof p);
     p.tk = &tk;
@@ -1184,6 +1322,7 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
         }
         sh->text_owned = text_mode != CSS_TEXT_BORROW;
         sh->text_len = len;
+        sh->has_text = true;
     }
     Parser p;
     memset(&p, 0, sizeof p);
@@ -1191,7 +1330,7 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     p.sheet = sh;
     p.quirks = quirks;
     p.imports_allowed = true;
-    p.lazy = css_lazy_bodies && sh->text != NULL;
+    p.lazy = css_lazy_bodies && sh->has_text;
     RuleList l = {&sh->rules};
     /* equal var() and custom property values share one token list, equal
      * declared values one blob */
@@ -1201,8 +1340,10 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     css_blob_intern_end();
     css_toklist_intern_end();
     css_tokens_free(&tk);
-    if (!sh->text && text_mode == CSS_TEXT_TAKE)
+    if (!sh->has_text && text_mode == CSS_TEXT_TAKE)
         au_free((char *)css);
+    if (css_pack_at_parse)
+        pack_text(sh, true);
     return sh;
 }
 
@@ -1222,13 +1363,44 @@ size_t au_css_sheet_memory(const AuCssSheet *s)
 {
     size_t bytes, used, chunks;
     css_arena_mem(&s->arena, &bytes, &used, &chunks);
-    return sizeof *s + bytes + (s->text && s->text_owned ? s->text_len : 0);
+    size_t text = s->ztext ? s->zoff[s->nz] + (s->nz + 1) * sizeof(uint32_t) : s->text && s->text_owned ? s->text_len : 0;
+    return sizeof *s + bytes + text;
 }
 
-const char *au_css_sheet_text(const AuCssSheet *s, size_t *len)
+bool au_css_sheet_text_get(const AuCssSheet *s, AuBuf *out)
 {
-    *len = s->text ? s->text_len : 0;
-    return s->text;
+    if (!s->has_text)
+        return false;
+    for (size_t off = 0; off < s->text_len;) {
+        size_t n = s->text_len - off;
+        if (s->ztext && n > CSS_TEXT_PIECE)
+            n = CSS_TEXT_PIECE; /* one piece at a time */
+        AuBuf tmp;
+        au_buf_init(&tmp);
+        au_buf_append(out, css_sheet_text_at(s, (uint32_t)off, (uint32_t)n, &tmp), n);
+        au_buf_free(&tmp);
+        off += n;
+    }
+    return true;
+}
+
+bool au_css_sheet_text_is(const AuCssSheet *s, const char *text, size_t len)
+{
+    if (!s->has_text || s->text_len != len)
+        return false;
+    for (size_t off = 0; off < len;) {
+        size_t n = len - off;
+        if (s->ztext && n > CSS_TEXT_PIECE)
+            n = CSS_TEXT_PIECE;
+        AuBuf tmp;
+        au_buf_init(&tmp);
+        bool same = memcmp(css_sheet_text_at(s, (uint32_t)off, (uint32_t)n, &tmp), text + off, n) == 0;
+        au_buf_free(&tmp);
+        if (!same)
+            return false;
+        off += n;
+    }
+    return true;
 }
 
 /* ---- Freeing ---- */
@@ -1301,6 +1473,7 @@ void au_css_sheet_free(AuCssSheet *s)
     au_free(s->base_url);
     if (s->text_owned)
         au_free(s->text);
+    text_unpack(s);
     au_free(s);
 }
 

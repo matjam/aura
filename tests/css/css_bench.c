@@ -242,8 +242,9 @@ static int mem_report(int argc, char **argv)
  * struct layouts there). Rules, selectors, media lists and parsed
  * declaration arrays live in each sheet's arena (a few chunks per
  * sheet); the rows marked "heap" are allocations of their own. With
- * --style PAGE.html the page is styled first, so the rows show what a
- * page keeps once the rules that match have parsed their blocks. */
+ * --style PAGE.html the page is styled first and the sheets' texts are
+ * packed, so the rows show what a loaded page keeps: the rules that
+ * matched have parsed their blocks, and the text is deflated. */
 typedef struct {
     const char *name;
     size_t bytes, bytes32, blocks;
@@ -426,7 +427,10 @@ static void w_sheet(const AuCssSheet *s)
     w_add(W_OTHER, sizeof *s, 96, 1);
     if (s->base_url)
         w_add(W_OTHER, strlen(s->base_url) + 1, strlen(s->base_url) + 1, 1);
-    if (s->text && s->text_owned)
+    if (s->ztext)
+        w_add(W_TEXT, s->zoff[s->nz] + (s->nz + 1) * sizeof(uint32_t), s->zoff[s->nz] + (s->nz + 1) * sizeof(uint32_t),
+              2);
+    else if (s->text && s->text_owned)
         w_add(W_TEXT, s->text_len + 1, s->text_len + 1, 1);
     w_media(s->media);
     w_rules(s->rules);
@@ -515,8 +519,11 @@ static int where_report(int argc, char **argv)
         bool again = false;
         for (int k = 0; k < i && !again; k++)
             again = sheets[k] == sheets[i];
-        if (!again)
-            w_sheet(sheets[i]);
+        if (again)
+            continue;
+        if (r)
+            au_css_sheet_pack_text(sheets[i]); /* as the document view does once a page has loaded */
+        w_sheet(sheets[i]);
     }
     size_t tb = 0, tb32 = 0, tbl = 0, ab = 0, ab32 = 0;
     printf("%-42s %10s %8s %10s\n", "structure", "bytes", "blocks", "32-bit");
@@ -623,6 +630,14 @@ static int page_report(int argc, char **argv)
     size_t h3 = heap_in_use();
     au_css_style_document(r, doc);
     double t4 = now_ms();
+    /* the document view packs the sheets' texts once the page has loaded */
+    double t5 = now_ms();
+    for (int i = 0; i < ns; i++)
+        au_css_sheet_pack_text(sheets[i]);
+    double t6 = now_ms();
+    size_t h4 = heap_in_use();
+    au_css_style_document(r, doc);
+    double t7 = now_ms();
     printf("%d sheets (%d of them given before), %zu bytes of text, %zu style rules, %d elements\n", ns, shared,
            total, rules, nel);
     printf("  parse %.1f ms; index %.1f ms (%zu entries); first style %.1f ms; style again %.1f ms\n", t1 - t0, t2 - t1,
@@ -630,6 +645,7 @@ static int page_report(int argc, char **argv)
     /* a difference can be negative: a table that grew frees its old block */
     printf("  heap: sheets %ld bytes, index %ld, styles and what styling parsed %ld; total %ld\n", (long)(h1 - h0),
            (long)(h2 - h1), (long)(h3 - h2), (long)(h3 - h0));
+    printf("  texts packed in %.1f ms: total %ld; style again %.1f ms\n", t6 - t5, (long)(h4 - h0), t7 - t6);
     au_css_clear_document(doc);
     au_css_resolver_free(r); /* frees the sheets it was given */
     printf("  after freeing the styles and the sheets: %ld bytes more than before (atoms stay)\n",

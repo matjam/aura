@@ -121,8 +121,14 @@ and `@import` is a `SheetSrc`.
   detaches and adds them again (`au_css_resolver_detach_sheets`)
   without parsing.
 - The parsed sheet takes the text (`au_css_sheet_parse_take`) and keeps
-  it; `src_text` reads it back for the CSSOM and to notice a `<style>`
-  that was edited.
+  it; `src_text_get` and `src_text_is` read it back for the CSSOM and
+  to notice a `<style>` that was edited.
+- Once the document has loaded, the texts are packed
+  (`au_docview_pack_sheets`): `au_docview_update` packs one sheet on a
+  pass with nothing else to do, after five seconds in which no block
+  was parsed late (`pack_when_quiet`). To pack the sheets of a document
+  that is no longer updated (hidden, kept for Back), call
+  `au_docview_pack_sheets` until it returns false.
 - Sources of one document with the same URL, media and text share one
   parsed sheet (`same_sheet`, `au_css_sheet_retain`); a sheet with
   `@import` rules is not shared. GitHub's home page links one 800 KB
@@ -155,6 +161,14 @@ A sheet keeps its source text and parses as little of it as it can.
   differs is in a `CssSelExt` (read through `css_comp_name`,
   `css_comp_name_cs`, `css_comp_value`). A selector's ancestor filter
   hashes follow its components (`css_sel_hashes`).
+- **The text is packed once the page has loaded**
+  (`au_css_sheet_pack_text`): deflated in pieces of 4 KB
+  (`CSS_TEXT_PIECE`), each a stream of its own, so reading one block
+  inflates the piece it is in (`css_sheet_text_at`; one inflater and
+  the last piece are shared by all sheets). A text under 4 KB, one that
+  does not shrink by an eighth and the user agent sheet's stay as they
+  are. Read the text only through `css_sheet_text_at`,
+  `au_css_sheet_text_get` and `au_css_sheet_text_is`.
 - **Blocks of declarations stay text.** A style rule whose block holds
   only declarations records the block's place in the text (`RF_LAZY`)
   and parses it when the rule first matches an element
@@ -196,7 +210,10 @@ To check that lazy sheets style as eager ones do, run
 `test_css_invalidate --lazy tests/page/samples` (ctest `css_lazy`) or,
 for a saved page, `test_css_invalidate --lazy-page PAGE.html
 SHEET.css...`. `css_lazy_bodies` and `css_index_skip_repeats`
-(`css_int.h`) turn the two behaviours off for such tests.
+(`css_int.h`) turn the two behaviours off for such tests, and
+`css_pack_at_parse` packs every text at once, so that each late parse
+reads packed text. `test_page.c` (`test_packed_sheets`) does the same
+through a document view.
 
 [`memory.md`](memory.md) lists what sheets cost.
 
@@ -259,10 +276,12 @@ Wikipedia article has 2 (220 KB; 9306 elements).
 | arena, packed records | 6.75, 1.95, 5.36 | 14.06 | 31, 4.9, 32 | 1.59 | 2.8, 0.4, 11.3 |
 | `@media` blocks stay text, dead groups dropped | 5.37, 2.17, 5.29 | 12.83 | 30, 7.4, 32 | 1.58 | 2.4, 1.5, 12.0 |
 | repeated sheets indexed once, token lists one block, aliases shared | 5.37, 1.34, 3.52 | 10.22 | 32, 5.1, 22 | 1.47 | 2.5, 1.6, 12.3 |
+| the texts packed once the page has loaded | 3.41, 1.34, 3.52 | 8.27 | packing: 16 | 1.31 | packing: 1.3 |
 
 "Styles" includes what styling parses: the blocks of the rules that
 matched. The sheets figure includes the text they keep (2.56 MB and
-0.22 MB) and the atoms their names intern.
+0.22 MB; packed, 0.60 MB and 0.05 MB) and the atoms their names intern.
+Packing is not part of the load: it happens later, a sheet at a time.
 
 ## Not done
 

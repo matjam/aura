@@ -104,6 +104,12 @@ struct AuDocView {
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
+    bool sheets_packed;  /* every sheet's text has been packed (au_docview_pack_sheets) */
+    /* When to pack them (au_docview_update): the count of late parses last
+     * seen, and since when (or for how many passes, without a clock) it
+     * has not moved. */
+    uint32_t pack_seen, pack_since, pack_passes;
+    bool pack_watching;
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
