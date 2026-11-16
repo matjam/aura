@@ -1596,8 +1596,15 @@ static bool update_style(AuDocView *dv)
         dv->viewport_restyle = false;
         au_css_style_document(dv->resolver, dv->doc);
         dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
-        au_layout_tree_changed(dv->layout);
-        au_docimages_tree_changed(dv->imgs);
+        if (dv->tree_dirty) {
+            au_layout_tree_changed(dv->layout);
+            au_docimages_tree_changed(dv->imgs);
+        } else {
+            /* Only the styles changed (a style sheet arrived or was
+             * edited): the layout compares each box's style and rebuilds
+             * only the subtrees whose boxes change. */
+            au_layout_styles_changed(dv->layout);
+        }
         dv->style_all = dv->tree_dirty = false;
         dv->restyle_needed = false;
         changed = true;

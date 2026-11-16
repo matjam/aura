@@ -270,6 +270,32 @@ static void test_sheets(void)
     fake_deliver(&f, dv, "http://example.com/missing.css", NULL, false);
     CHECK(rect_of(dv, "t").h == 7 && !au_docview_loading(dv), "failed sheet");
     au_docview_free(dv);
+
+    /* A sheet that arrives after the first layout restyles the document
+     * without building the whole box tree: a change of size lays out
+     * again, and a change of display rebuilds only that subtree. */
+    dv = new_view(&f);
+    html = "<!DOCTYPE html><link rel=stylesheet href=late.css><link rel=stylesheet href=later.css>"
+           "<body style='margin:0'><div id=t style='width:7px'></div>"
+           "<div id=u><p>one<p id=v>two</div><p>three";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    AuDocViewStats s0, s1;
+    au_docview_stats(dv, &s0);
+    fake_deliver(&f, dv, "http://example.com/late.css", "#t{height:9px}", true);
+    CHECK(rect_of(dv, "t").h == 9, "late sheet applied: h=%g", rect_of(dv, "t").h);
+    au_docview_stats(dv, &s1);
+    CHECK(s1.tree_builds == s0.tree_builds, "late sheet: %u tree builds", s1.tree_builds - s0.tree_builds);
+    s0 = s1;
+    fake_deliver(&f, dv, "http://example.com/later.css", "#v{display:none}", true);
+    CHECK(rect_of(dv, "v").h <= 0 && rect_of(dv, "u").h == 16, "display: none from a late sheet: %g %g",
+          rect_of(dv, "v").h, rect_of(dv, "u").h);
+    au_docview_stats(dv, &s1);
+    CHECK(s1.tree_builds == s0.tree_builds && s1.subtree_builds > s0.subtree_builds,
+          "late display change: %u tree builds, %u subtree rebuilds", s1.tree_builds - s0.tree_builds,
+          s1.subtree_builds - s0.subtree_builds);
+    au_docview_free(dv);
 }
 
 /* A sheet's text is packed once the document has loaded: a rule that
