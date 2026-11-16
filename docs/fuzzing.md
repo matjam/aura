@@ -145,7 +145,9 @@ script"; a failure is an AddressSanitizer report.
       sh -c 'run/test_input_lifetime all {} > run/lifetime-{}.log 2>&1 || echo "event {} failed"'
   ```
 
-  The last case a log names is the one that failed; run it again with its three numbers
+  Each event is 510 cases and took 187–308 s (5,458 s for all 21, about
+  16 minutes of wall time six at a time on an 8-core Mac, 2026-11-15,
+  clean). The last case a log names is the one that failed; run it again with its three numbers
   (`test_input_lifetime EVENT DESTROYER CONTROL`).
 
 **Script garbage and freed nodes.** A script wrapper holds its node, and
@@ -283,6 +285,7 @@ seed; "not recorded" where no log of the count was kept.
 | 2026-11-15 | 101–107, 109–112 | 300 (79–141 s each, four at a time) | nothing |
 | 2026-11-15 | 108 | 1, then 400 after the fix | page 0: `frame_show_html` parsed `srcdoc` text that the old document's unload listener had freed (`tests/js/regress/srcdoc-set-by-unload.js`) |
 | 2026-11-15 | 113–122 | 400 (208–296 s each, four at a time) | nothing |
+| 2026-11-15 | 123–124 | 400 (182 s each, two at a time) | nothing |
 
 ## Not fuzzed
 
