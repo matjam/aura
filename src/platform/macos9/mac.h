@@ -1,15 +1,15 @@
 /* Shared declarations of the Mac OS 9 shell's modules:
  *
- *   main.c        start-up, the event loop, menus, Apple events, saving
+ *   main.c        start-up, the event loop, menus, Apple events
  *   browserwin.c  browser windows (GWorld, chrome, page, address field)
  *   listwin.c     the Bookmarks, History, Downloads and Cookies windows
  *   devwin.c      the developer windows: Page Source, Console, Network,
  *                 Performance, System Status and Report a Problem
  *   sysinfo_mac.c the machine's facts (Gestalt) for those reports
- *   network.c     the network stack (Open Transport, stores, fetchers)
+ *   network.c     Open Transport, entropy and roots for the network stack
  *   downloads_mac.c  download files, Reveal in Finder
  *   prefswin.c    the Preferences window (Appearance controls)
- *   storage.c     files in the Preferences folder, file: URLs, dialogs
+ *   storage.c     the Aura folder's files for browser/app.c, file: URLs, dialogs
  *   text.c        UTF-8 and Mac Roman, Pascal strings
  *   aboutbox.c    the About box
  *   contextmenu.c contextual menus (Contextual Menu Manager or pop-up)
@@ -24,6 +24,7 @@
 #include <Multiverse.h>
 
 #include "appearance.h"
+#include "browser/app.h"
 #include "browser/browser.h"
 #include "browser/favicon.h"
 #include "browser/context.h"
@@ -77,6 +78,7 @@ int mac_fonts_bundled(void);  /* faces registered from the Fonts folder */
 
 /* ---- main.c ---- */
 extern AuBrowser *g_browser;
+extern AuApp *g_app; /* the application services (browser/app.h) */
 extern AuFontSet *g_fonts;
 extern bool g_quitting;
 extern bool g_in_front; /* the application is not suspended */
@@ -150,18 +152,14 @@ bool devwin_can_find_again(MacWin *mw);
 /* ---- prefswin.c ---- */
 void prefswin_show(void);
 
-/* ---- storage.c ---- */
+/* ---- storage.c ----
+ * Which files Aura keeps and when they are saved is decided by
+ * src/browser/app.c (g_app); storage.c gives it the folder and the
+ * clocks. */
 bool storage_init(void); /* finds or makes the Aura preferences folder */
-void storage_load_all(void);
-/* Saves files whose data changed; force saves them even if the change is
- * recent (quitting). */
-void storage_save_changed(bool force);
-bool storage_session(AuSession *s);
-/* Marks Aura as running; returns true when the last run did not quit
- * normally (its mark was still there). */
-bool storage_begin_run(void);
-/* Removes the mark: call after the last save at quit. */
-void storage_end_run(void);
+/* The application services' port: the Aura folder's files (and its
+ * Cache and Local Storage folders) and the Mac clocks. */
+void storage_port(AuAppPort *p);
 AuTime mac_now(void);
 bool mac_read_file_url(const char *url, char **data, size_t *len);
 /* Asks for a file with the standard Open dialog; returns a file: URL to
@@ -175,20 +173,15 @@ void mac_save_page(AuBrowserWindow *w);
  * or when writing failed (an alert says so). */
 bool mac_save_text(const char *prompt, const char *name, const char *text, size_t len);
 
-/* Files in the Aura preferences folder by name, written safely (a .tmp
- * file swapped in); for network.c's Cookies and HSTS. */
-bool storage_read_named(const char *name, char **data, size_t *len);
-bool storage_write_named(const char *name, const char *data, size_t len);
-void storage_keep_aside_named(const char *name);
 /* A folder inside the Aura preferences folder, made when missing. */
 bool storage_subfolder(const char *name, short *vref, long *dir);
 
 /* ---- network.c ----
- * The network stack: the entropy pool, Open Transport (started on the
- * first request), the AuNet with its root store, cookie jar, HSTS store
- * and cache, the loader and page fetcher (registered for http and
- * https), and real downloads. */
-/* After storage_load_all: creates everything and loads Cookies and HSTS. */
+ * The Mac OS 9 side of the network stack: the entropy pool, Open
+ * Transport (started on the first request), the root store beside the
+ * application, download files and content blocking. The stack itself is
+ * set up by src/browser/app_net.c (au_app_net_start). */
+/* After au_app_load: starts the entropy pool and the network stack. */
 void mac_net_init(void);
 /* len bytes from the entropy pool; false until it has gathered enough
  * (and before mac_net_init). */
@@ -201,11 +194,8 @@ void mac_net_idle(void);
 bool mac_net_busy(void);
 /* The preferences changed (Preferences saved, cookie rules edited). */
 void mac_net_prefs_changed(void);
-/* Saves Cookies and HSTS when they changed (force: now). storage.c calls
- * it from storage_save_changed. */
-void mac_net_save(bool force);
 /* At quit, after the last page is gone: privacy clearing, the last save,
- * then everything is freed in reverse order. */
+ * then everything is freed in reverse order (au_app_net_stop). */
 void mac_net_quit(void);
 /* Closes Open Transport at once, allocating nothing: before ExitToShell
  * on the out-of-memory path, so no notifier outlives the heap. */

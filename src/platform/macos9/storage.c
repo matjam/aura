@@ -1,60 +1,29 @@
-/* Aura's files in the Preferences folder, safe saving, file: URLs and the
- * Open dialog.
+/* Aura's folder in the Preferences folder, safe saving, file: URLs and
+ * the Open and Save dialogs.
  *
- * Files live in a folder "Aura" inside the system Preferences folder
- * (FindFolder kPreferencesFolderType), type 'TEXT', creator 'AURA':
- *     Aura Preferences   key=value preferences (src/browser/prefs.h)
- *     Bookmarks.html     Netscape bookmark file (bookmarks.h)
- *     History            history log (history.h)
- *     Favicons           site icons by host (favicon.h)
- *     Session            open windows and tabs (browser.h)
- *     Downloads          the downloads list (downloads.h)
- *     Running            exists while Aura runs (unclean exit detection)
- * and, written by network.c through storage_write_named:
- *     Cookies            persistent cookies (cookies.h)
- *     HSTS               Strict-Transport-Security hosts (hsts.h)
- *     Random Seed        the entropy pool's seed (entropy.c writes it)
- *     Cache              a folder of disk cache entries (disk_cache.h)
+ * Which files Aura keeps, how they are parsed and when they are saved is
+ * decided in src/browser/app.c; this file gives it the Mac OS 9 folder
+ * primitives (AuAppFiles) and the clocks (AuAppPort). The files live in
+ * a folder "Aura" inside the system Preferences folder (FindFolder
+ * kPreferencesFolderType), creator 'AURA'. Files of the folder itself are
+ * type 'TEXT'; files of the Cache folder 'AuCa', of the Local Storage
+ * folder 'AuLS'.
  *
- * A file is written as "<name>.tmp" and then swapped with the old one
- * (FSpExchangeFiles; on volumes without it, delete and rename), so a crash
- * mid-write leaves the old file intact. A file that fails to parse is
- * renamed "<name> (damaged)" before anything overwrites it.
- *
- * Saving: storage_save_changed compares each data set's change counter
- * with the one last saved and writes it a few seconds after the first
- * unsaved change, or at once when forced (quitting). */
+ * A file of the folder itself is written as "<name>.tmp" and then swapped
+ * with the old one (FSpExchangeFiles; on volumes without it, delete and
+ * rename), then the volume is flushed, so a crash mid-write leaves the
+ * old file intact. A file of a subfolder (the cache, web storage) is
+ * written as "<name>.tmp" and renamed over the old one, without a flush:
+ * those writes are many and a lost one costs only a fetch. */
 #include "mac.h"
 #include "clock_mac.h"
 
 #include <stdio.h>
 #include <string.h>
 
-enum { kSaveDelayMs = 3000, kScrollSaveDelayMs = 30000 };
-
-/* The site icons (src/browser/favicon.h), beside the history. */
-#define kFaviconsFile "Favicons"
-static uint32_t favicons_saved_ms;
-
-static uint32_t saved_session_gen; /* session_gen when the Session file was last written */
-
 static short g_vref;
 static long g_dir;
 static bool g_ok;
-
-typedef enum { F_PREFS, F_BOOKMARKS, F_HISTORY, F_SESSION, F_DOWNLOADS, F_COUNT } FileId;
-
-static const char *const file_names[F_COUNT] = {"Aura Preferences", "Bookmarks.html", "History", "Session",
-                                                "Downloads"};
-
-typedef struct SaveState {
-    uint32_t saved_gen;
-    uint32_t seen_gen;
-    uint32_t first_change_ms;
-    bool pending;
-} SaveState;
-
-static SaveState save_state[F_COUNT];
 
 static void cpstr(const char *s, Str255 out)
 {
@@ -108,114 +77,6 @@ bool storage_init(void)
     return true;
 }
 
-bool storage_read_named(const char *fname, char **data, size_t *len)
-{
-    if (!g_ok)
-        return false;
-    Str255 name;
-    cpstr(fname, name);
-    FSSpec spec;
-    if (FSMakeFSSpec(g_vref, g_dir, name, &spec) != noErr)
-        return false;
-    short ref;
-    if (FSpOpenDF(&spec, fsRdPerm, &ref) != noErr)
-        return false;
-    long eof = 0;
-    bool ok = false;
-    if (GetEOF(ref, &eof) == noErr && eof >= 0 && eof < 16L * 1024 * 1024) {
-        char *buf = au_alloc((size_t)eof + 1);
-        long count = eof;
-        OSErr err = FSRead(ref, &count, buf);
-        if ((err == noErr || err == eofErr) && count == eof) {
-            buf[eof] = 0;
-            *data = buf;
-            *len = (size_t)eof;
-            ok = true;
-        } else {
-            au_free(buf);
-        }
-    }
-    FSClose(ref);
-    return ok;
-}
-
-void storage_keep_aside_named(const char *fname)
-{
-    char aside[64];
-    snprintf(aside, sizeof aside, "%s (damaged)", fname);
-    Str255 name, an;
-    cpstr(fname, name);
-    cpstr(aside, an);
-    FSSpec spec, old;
-    if (FSMakeFSSpec(g_vref, g_dir, an, &old) == noErr)
-        FSpDelete(&old);
-    if (FSMakeFSSpec(g_vref, g_dir, name, &spec) == noErr)
-        FSpRename(&spec, an);
-}
-
-bool storage_write_named(const char *fname, const char *data, size_t len)
-{
-    if (!g_ok)
-        return false;
-    char tmpname[64];
-    snprintf(tmpname, sizeof tmpname, "%s.tmp", fname);
-    Str255 name, tname;
-    cpstr(fname, name);
-    cpstr(tmpname, tname);
-    FSSpec tmp, dst;
-    OSErr err = FSMakeFSSpec(g_vref, g_dir, tname, &tmp);
-    if (err == noErr)
-        FSpDelete(&tmp);
-    else if (err != fnfErr)
-        return false;
-    if (FSpCreate(&tmp, 'AURA', 'TEXT', -1) != noErr)
-        return false;
-    short ref;
-    if (FSpOpenDF(&tmp, fsRdWrPerm, &ref) != noErr) {
-        FSpDelete(&tmp);
-        return false;
-    }
-    long count = (long)len;
-    err = FSWrite(ref, &count, data);
-    if (err == noErr && count == (long)len)
-        err = SetEOF(ref, (long)len);
-    else if (err == noErr)
-        err = ioErr;
-    OSErr cerr = FSClose(ref);
-    if (err != noErr || cerr != noErr) {
-        FSpDelete(&tmp);
-        return false;
-    }
-    err = FSMakeFSSpec(g_vref, g_dir, name, &dst);
-    if (err == noErr) {
-        if (FSpExchangeFiles(&tmp, &dst) == noErr) {
-            FSpDelete(&tmp); /* now holds the old contents */
-        } else {
-            if (FSpDelete(&dst) != noErr) {
-                FSpDelete(&tmp);
-                return false;
-            }
-            if (FSpRename(&tmp, name) != noErr)
-                return false;
-        }
-    } else if (err == fnfErr) {
-        if (FSpRename(&tmp, name) != noErr)
-            return false;
-    } else {
-        FSpDelete(&tmp);
-        return false;
-    }
-    FlushVol(NULL, g_vref);
-    return true;
-}
-
-static bool read_file(FileId id, char **data, size_t *len) { return storage_read_named(file_names[id], data, len); }
-static void keep_aside(FileId id) { storage_keep_aside_named(file_names[id]); }
-static bool write_file(FileId id, const char *data, size_t len)
-{
-    return storage_write_named(file_names[id], data, len);
-}
-
 bool storage_subfolder(const char *fname, short *vref, long *dir)
 {
     if (!g_ok)
@@ -248,185 +109,316 @@ bool storage_subfolder(const char *fname, short *vref, long *dir)
     return true;
 }
 
-static uint32_t generation(FileId id)
-{
-    AuBrowser *b = g_browser;
-    switch (id) {
-    case F_PREFS: return b->prefs_gen;
-    case F_BOOKMARKS: return b->bookmarks.generation;
-    case F_HISTORY: return b->history.generation;
-    case F_SESSION: return b->session_gen + b->scroll_gen;
-    case F_DOWNLOADS: return b->downloads.generation;
-    default: return 0;
-    }
-}
+/* ---- The folders: the Aura folder itself (folder NULL), and folders
+ * inside it, found once and remembered ---- */
 
-static void serialize(FileId id, AuBuf *out)
-{
-    AuBrowser *b = g_browser;
-    switch (id) {
-    case F_PREFS: au_prefs_serialize(&b->prefs, out); break;
-    case F_BOOKMARKS: au_bookmarks_serialize(&b->bookmarks, out); break;
-    case F_HISTORY:
-        au_history_expire(&b->history, mac_now(), b->prefs.history_days);
-        au_history_serialize(&b->history, out);
-        break;
-    case F_SESSION: au_browser_session_serialize(b, out); break;
-    case F_DOWNLOADS: au_downloads_serialize(&b->downloads, out); break;
-    default: break;
-    }
-}
+typedef struct MacFolder {
+    char name[32];
+    short vref;
+    long dir;
+    OSType type;
+} MacFolder;
 
-void storage_load_all(void)
-{
-    AuBrowser *b = g_browser;
-    char *data;
-    size_t len;
-    b->history.utc_offset = au_mac_gmt_offset();
-    if (read_file(F_PREFS, &data, &len)) {
-        if (!au_prefs_parse(&b->prefs, data, len))
-            keep_aside(F_PREFS);
-        au_free(data);
-    }
-    if (read_file(F_BOOKMARKS, &data, &len)) {
-        if (!au_bookmarks_parse(&b->bookmarks, data, len))
-            keep_aside(F_BOOKMARKS);
-        au_free(data);
-    } else {
-        /* A first run: a couple of starting points. */
-        AuTime t = mac_now();
-        au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura start page", "about:home", t);
-        AuBookmark *f = au_bookmark_add_folder(&b->bookmarks, NULL, NULL, "Mac OS 9", t);
-        au_bookmark_add(&b->bookmarks, f, NULL, "Macintosh Garden", "http://macintoshgarden.org/", t);
-        au_bookmark_add(&b->bookmarks, f, NULL, "Mac OS 9 Lives!", "http://macos9lives.com/", t);
-        au_bookmark_add(&b->bookmarks, f, NULL, "FrogFind", "http://frogfind.com/", t);
-    }
-    if (read_file(F_HISTORY, &data, &len)) {
-        if (!au_history_parse(&b->history, data, len))
-            keep_aside(F_HISTORY);
-        au_free(data);
-        au_history_expire(&b->history, mac_now(), b->prefs.history_days);
-    }
-    if (read_file(F_DOWNLOADS, &data, &len)) {
-        if (!au_downloads_parse(&b->downloads, data, len))
-            keep_aside(F_DOWNLOADS);
-        au_free(data);
-    }
-    /* Site icons: a damaged file is only dropped (they are fetched
-     * again). */
-    if (storage_read_named(kFaviconsFile, &data, &len)) {
-        au_favicons_parse(b->favicons, data, len);
-        au_free(data);
-    }
-    for (int i = 0; i < F_COUNT; i++) {
-        save_state[i].saved_gen = save_state[i].seen_gen = generation((FileId)i);
-        save_state[i].pending = false;
-    }
-    saved_session_gen = b->session_gen;
-}
+static MacFolder folders[6];
+static int nfolders;
 
-/* ---- Unclean exits ----
- * A file "Running" exists while Aura runs: made at start, deleted after
- * the last save at quit. Found at start, it means the last run crashed
- * or was forced to quit (the out-of-memory handler leaves it too). */
+typedef struct Loc {
+    short vref;
+    long dir;
+    OSType type;
+    bool top; /* the Aura folder itself */
+} Loc;
 
-static bool running_spec(FSSpec *spec)
+static bool locate(const char *folder, Loc *loc)
 {
     if (!g_ok)
         return false;
-    OSErr err = FSMakeFSSpec(g_vref, g_dir, (ConstStr255Param) "\pRunning", spec);
-    return err == noErr || err == fnfErr; /* fnfErr: valid, the file does not exist */
+    if (!folder) {
+        loc->vref = g_vref;
+        loc->dir = g_dir;
+        loc->type = 'TEXT';
+        loc->top = true;
+        return true;
+    }
+    int i;
+    for (i = 0; i < nfolders; i++)
+        if (!strcmp(folders[i].name, folder))
+            break;
+    if (i == nfolders) {
+        short vref;
+        long dir;
+        if (strlen(folder) >= sizeof folders[0].name || nfolders == (int)(sizeof folders / sizeof folders[0]) ||
+            !storage_subfolder(folder, &vref, &dir))
+            return false;
+        MacFolder *f = &folders[nfolders++];
+        snprintf(f->name, sizeof f->name, "%s", folder);
+        f->vref = vref;
+        f->dir = dir;
+        f->type = !strcmp(folder, AU_APP_FOLDER_CACHE)           ? 'AuCa'
+                  : !strcmp(folder, AU_APP_FOLDER_LOCAL_STORAGE) ? 'AuLS'
+                                                                 : 'TEXT';
+    }
+    loc->vref = folders[i].vref;
+    loc->dir = folders[i].dir;
+    loc->type = folders[i].type;
+    loc->top = false;
+    return true;
 }
 
-bool storage_begin_run(void)
+/* A file of a folder; true also when it does not exist (fnfErr). */
+static bool spec_in(const Loc *loc, const char *name, FSSpec *spec)
 {
-    FSSpec spec;
-    if (!running_spec(&spec))
+    Str255 p;
+    if (strlen(name) > 31)
         return false;
+    cpstr(name, p);
+    OSErr err = FSMakeFSSpec(loc->vref, loc->dir, p, spec);
+    return err == noErr || err == fnfErr;
+}
+
+static bool f_read(void *ctx, const char *folder, const char *name, AuBuf *out, size_t max)
+{
+    (void)ctx;
+    Loc loc;
+    FSSpec spec;
+    short ref;
+    if (!locate(folder, &loc) || !spec_in(&loc, name, &spec) || FSpOpenDF(&spec, fsRdPerm, &ref) != noErr)
+        return false;
+    long eof = 0;
+    bool ok = false;
+    if (GetEOF(ref, &eof) == noErr && eof >= 0 && (unsigned long)eof < max) {
+        if (eof == 0) {
+            ok = true;
+        } else {
+            au_buf_reserve(out, (size_t)eof);
+            long count = eof;
+            OSErr err = FSRead(ref, &count, out->data + out->len);
+            if ((err == noErr || err == eofErr) && count == eof) {
+                out->len += (size_t)eof;
+                ok = true;
+            }
+        }
+    }
+    FSClose(ref);
+    return ok;
+}
+
+/* The Aura folder's files: written to "<name>.tmp", then swapped in. */
+static bool write_swapped(const Loc *loc, const char *name, const void *data, size_t len)
+{
+    char tmpname[40];
+    snprintf(tmpname, sizeof tmpname, "%s.tmp", name);
+    Str255 pname;
+    cpstr(name, pname);
+    FSSpec tmp, dst;
+    if (!spec_in(loc, tmpname, &tmp))
+        return false;
+    FSpDelete(&tmp);
+    if (FSpCreate(&tmp, 'AURA', loc->type, smSystemScript) != noErr)
+        return false;
+    short ref;
+    if (FSpOpenDF(&tmp, fsRdWrPerm, &ref) != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    long count = (long)len;
+    OSErr err = FSWrite(ref, &count, data);
+    if (err == noErr && count == (long)len)
+        err = SetEOF(ref, (long)len);
+    else if (err == noErr)
+        err = ioErr;
+    OSErr cerr = FSClose(ref);
+    if (err != noErr || cerr != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    err = FSMakeFSSpec(loc->vref, loc->dir, pname, &dst);
+    if (err == noErr) {
+        if (FSpExchangeFiles(&tmp, &dst) == noErr) {
+            FSpDelete(&tmp); /* now holds the old contents */
+        } else {
+            if (FSpDelete(&dst) != noErr) {
+                FSpDelete(&tmp);
+                return false;
+            }
+            if (FSpRename(&tmp, pname) != noErr)
+                return false;
+        }
+    } else if (err == fnfErr) {
+        if (FSpRename(&tmp, pname) != noErr)
+            return false;
+    } else {
+        FSpDelete(&tmp);
+        return false;
+    }
+    FlushVol(NULL, loc->vref);
+    return true;
+}
+
+/* A subfolder's files: written to "<name>.tmp", then renamed over the
+ * old file. */
+static bool write_renamed(const Loc *loc, const char *name, const void *data, size_t len)
+{
+    char tname[40];
+    snprintf(tname, sizeof tname, "%s.tmp", name);
+    FSSpec tmp, dst;
+    if (!spec_in(loc, tname, &tmp) || !spec_in(loc, name, &dst))
+        return false;
+    FSpDelete(&tmp);
+    if (FSpCreate(&tmp, 'AURA', loc->type, smSystemScript) != noErr)
+        return false;
+    short ref;
+    if (FSpOpenDF(&tmp, fsRdWrPerm, &ref) != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    long count = (long)len;
+    OSErr err = FSWrite(ref, &count, data);
+    if (err == noErr && count != (long)len)
+        err = dskFulErr;
+    OSErr cerr = FSClose(ref);
+    if (err != noErr || cerr != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    FSpDelete(&dst);
+    Str255 p;
+    cpstr(name, p);
+    if (FSpRename(&tmp, p) != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    return true;
+}
+
+static bool f_write(void *ctx, const char *folder, const char *name, const void *data, size_t len)
+{
+    (void)ctx;
+    Loc loc;
+    if (!locate(folder, &loc) || strlen(name) > 27)
+        return false;
+    return loc.top ? write_swapped(&loc, name, data, len) : write_renamed(&loc, name, data, len);
+}
+
+static bool f_rename(void *ctx, const char *folder, const char *name, const char *new_name)
+{
+    (void)ctx;
+    Loc loc;
+    FSSpec spec, old;
+    if (!locate(folder, &loc) || !spec_in(&loc, new_name, &old) || !spec_in(&loc, name, &spec))
+        return false;
+    FSpDelete(&old);
+    Str255 p;
+    cpstr(new_name, p);
+    return FSpRename(&spec, p) == noErr;
+}
+
+static void f_remove(void *ctx, const char *folder, const char *name)
+{
+    (void)ctx;
+    Loc loc;
+    FSSpec spec;
+    if (!locate(folder, &loc) || !spec_in(&loc, name, &spec))
+        return;
+    if (FSpDelete(&spec) == noErr && loc.top)
+        FlushVol(NULL, loc.vref);
+}
+
+static bool f_exists(void *ctx, const char *folder, const char *name)
+{
+    (void)ctx;
+    Loc loc;
+    FSSpec spec;
     FInfo fi;
-    bool unclean = FSpGetFInfo(&spec, &fi) == noErr;
-    if (!unclean && FSpCreate(&spec, 'AURA', 'TEXT', -1) == noErr)
-        FlushVol(NULL, g_vref);
-    return unclean;
+    return locate(folder, &loc) && spec_in(&loc, name, &spec) && FSpGetFInfo(&spec, &fi) == noErr;
 }
 
-void storage_end_run(void)
+static bool f_make_folder(void *ctx, const char *folder)
 {
-    FSSpec spec;
-    if (running_spec(&spec)) {
-        FSpDelete(&spec);
-        FlushVol(NULL, g_vref);
-    }
+    (void)ctx;
+    Loc loc;
+    return locate(folder, &loc);
 }
 
-bool storage_session(AuSession *s)
+static void f_list(void *ctx, const char *folder, void (*each)(void *, const char *, size_t, uint32_t), void *ec)
 {
-    char *data;
-    size_t len;
-    memset(s, 0, sizeof *s);
-    if (!read_file(F_SESSION, &data, &len))
-        return false;
-    if (!au_session_parse(s, data, len))
-        keep_aside(F_SESSION);
-    au_free(data);
-    return s->nwindows > 0;
-}
-
-void storage_save_changed(bool force)
-{
-    uint32_t now = au_platform_time_ms();
-    for (int i = 0; i < F_COUNT; i++) {
-        SaveState *st = &save_state[i];
-        uint32_t g = generation((FileId)i);
-        if (g == st->saved_gen) {
-            st->pending = false;
+    (void)ctx;
+    Loc loc;
+    if (!locate(folder, &loc))
+        return;
+    for (short i = 1; i < 32000; i++) {
+        CInfoPBRec pb;
+        Str255 name;
+        memset(&pb, 0, sizeof pb);
+        name[0] = 0;
+        pb.hFileInfo.ioNamePtr = name;
+        pb.hFileInfo.ioVRefNum = loc.vref;
+        pb.hFileInfo.ioDirID = loc.dir;
+        pb.hFileInfo.ioFDirIndex = i;
+        if (PBGetCatInfoSync(&pb) != noErr)
+            break;
+        if (pb.hFileInfo.ioFlAttrib & 0x10)
+            continue;
+        char cname[32];
+        memcpy(cname, name + 1, name[0]);
+        cname[name[0]] = 0;
+        size_t nl = name[0];
+        if (nl > 4 && !strcmp(cname + nl - 4, ".tmp")) {
+            /* An interrupted write. */
+            FSSpec s;
+            if (spec_in(&loc, cname, &s) && FSpDelete(&s) == noErr)
+                i--; /* the folder's indices moved down */
             continue;
         }
-        if (!st->pending) {
-            st->pending = true;
-            st->first_change_ms = now;
-        }
-        /* The session is saved soon after tabs change, and every half
-         * minute while only scroll positions do. */
-        uint32_t delay = kSaveDelayMs;
-        if (i == F_SESSION && g_browser->session_gen == saved_session_gen)
-            delay = kScrollSaveDelayMs;
-        if (!force && now - st->first_change_ms < delay)
-            continue;
-        AuBuf out;
-        au_buf_init(&out);
-        serialize((FileId)i, &out);
-        if (write_file((FileId)i, out.data ? out.data : "", out.len)) {
-            st->saved_gen = generation((FileId)i);
-            if (i == F_SESSION)
-                saved_session_gen = g_browser->session_gen;
-            st->pending = false;
-        } else {
-            st->first_change_ms = now; /* try again after the delay */
-        }
-        au_buf_free(&out);
+        each(ec, cname, (size_t)pb.hFileInfo.ioFlLgLen, (uint32_t)pb.hFileInfo.ioFlMdDat);
     }
-    /* Site icons, at most every half minute. With history off they are
-     * kept for the run only, and a file from before is emptied. */
-    if (au_favicons_dirty(g_browser->favicons) && (force || now - favicons_saved_ms >= kScrollSaveDelayMs)) {
-        AuBuf out;
-        au_buf_init(&out);
-        if (g_browser->prefs.history_enabled) {
-            au_favicons_serialize(g_browser->favicons, &out);
-        } else {
-            AuFavicons *none = au_favicons_new();
-            au_favicons_serialize(none, &out);
-            au_favicons_free(none);
-            AuBuf scratch;
-            au_buf_init(&scratch);
-            au_favicons_serialize(g_browser->favicons, &scratch); /* clears dirty */
-            au_buf_free(&scratch);
-        }
-        storage_write_named(kFaviconsFile, out.data ? out.data : "", out.len);
-        favicons_saved_ms = now;
-        au_buf_free(&out);
-    }
-    mac_net_save(force);
+}
+
+static uint32_t c_ms(void *ctx)
+{
+    (void)ctx;
+    return au_mac_clock_ms();
+}
+
+static uint32_t c_us(void *ctx)
+{
+    (void)ctx;
+    return au_mac_clock_us();
+}
+
+static int64_t c_wall(void *ctx)
+{
+    (void)ctx;
+    return au_mac_wall_time();
+}
+
+static int64_t c_wall_ms(void *ctx)
+{
+    (void)ctx;
+    return au_mac_wall_ms();
+}
+
+static int32_t c_offset(void *ctx)
+{
+    (void)ctx;
+    return au_mac_gmt_offset();
+}
+
+void storage_port(AuAppPort *p)
+{
+    memset(p, 0, sizeof *p);
+    p->files.read = f_read;
+    p->files.write = f_write;
+    p->files.rename = f_rename;
+    p->files.remove = f_remove;
+    p->files.exists = f_exists;
+    p->files.make_folder = f_make_folder;
+    p->files.list = f_list;
+    p->ms = c_ms;
+    p->us = c_us;
+    p->wall_time = c_wall;
+    p->wall_ms = c_wall_ms;
+    p->utc_offset = c_offset;
 }
 
 bool mac_read_file_url(const char *url, char **data, size_t *len)

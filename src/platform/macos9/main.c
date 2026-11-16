@@ -19,6 +19,7 @@ enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMen
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 AuBrowser *g_browser;
+AuApp *g_app;
 AuFontSet *g_fonts;
 bool g_quitting;
 bool g_in_front = true;
@@ -1025,7 +1026,7 @@ static void handle_event(EventRecord *ev)
             if (m && m->activate)
                 m->activate(m, g_in_front);
             if (!g_in_front)
-                storage_save_changed(true);
+                au_app_save(g_app, true);
         }
         break;
     case kHighLevelEvent:
@@ -1072,7 +1073,7 @@ static void idle_all(void)
         w = next;
     }
     browserwin_flush_all();
-    storage_save_changed(false);
+    au_app_save(g_app, false);
 }
 
 int main(void)
@@ -1130,11 +1131,12 @@ int main(void)
         g_browser->highlight = 0xFF000000u | ((uint32_t)(hl.red >> 8) << 16) | ((uint32_t)(hl.green >> 8) << 8) |
                                (uint32_t)(hl.blue >> 8);
     }
-    bool unclean = false;
-    if (storage_init()) {
-        storage_load_all();
-        unclean = storage_begin_run();
-    }
+    /* The files in the Aura folder (browser/app.c decides which and in
+     * what order), then the network stack. */
+    AuAppPort port;
+    storage_port(&port);
+    g_app = au_app_new(g_browser, &port);
+    bool unclean = storage_init() && au_app_load(g_app);
     mac_net_init();
     InitCursor();
 
@@ -1142,8 +1144,9 @@ int main(void)
      * crash, when the user says so. */
     AuSession session;
     bool restored = false;
-    bool have = (g_browser->prefs.startup == AU_STARTUP_RESTORE || unclean) && storage_session(&session);
-    if (have && g_browser->prefs.startup != AU_STARTUP_RESTORE && CautionAlert(133, NULL) != 1) {
+    AuAppRestore restore = au_app_session(g_app, unclean, &session);
+    bool have = restore != AU_APP_RESTORE_NONE;
+    if (restore == AU_APP_RESTORE_ASK && CautionAlert(133, NULL) != 1) {
         au_session_free(&session);
         have = false;
     }
@@ -1157,7 +1160,7 @@ int main(void)
         au_session_free(&session);
     }
     if (!restored)
-        browserwin_new(g_browser->prefs.startup == AU_STARTUP_BLANK ? "about:blank" : NULL, NULL);
+        browserwin_new(au_app_start_url(g_app), NULL);
 
     int held = 0; /* idle passes skipped for queued keys */
     while (!g_quitting) {
@@ -1187,13 +1190,8 @@ int main(void)
     }
 
     /* Quit: privacy options, then save everything (the session first, while
-     * the windows are still open). */
-    if (g_browser->prefs.clear_history_on_quit) {
-        au_history_clear(&g_browser->history);
-        au_favicons_clear(g_browser->favicons);
-    }
-    storage_save_changed(true);
-    storage_end_run();
+     * the windows are still open), and the Running file goes. */
+    au_app_quit(g_app);
     /* Dispose of the windows (their controls, GWorlds and TextEdit
      * records) and leave the Appearance Manager tidily. */
     WindowPtr w = FrontWindow();
@@ -1208,6 +1206,8 @@ int main(void)
      * cookies and HSTS, and free the network stack (the entropy pool
      * writes its seed file last). */
     mac_net_quit();
+    au_app_free(g_app);
+    g_app = NULL;
     UnregisterAppearanceClient();
     return 0;
 }
