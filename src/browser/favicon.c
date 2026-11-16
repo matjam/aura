@@ -152,11 +152,21 @@ static Icon *entry(AuFavicons *f, const char *host)
     return ic;
 }
 
+/* An icon's surface: kept as long as the store, so in the long-lived zone
+ * although src/paint makes it (docs/memory.md, "Zones"). */
+static AuSurface *icon_surface(void)
+{
+    int h = au_heap_zone_hold(AU_HEAP_ZONE_LONG);
+    AuSurface *s = au_surface_new(AU_FAVICON_SIZE, AU_FAVICON_SIZE);
+    au_heap_zone_unhold(h);
+    return s;
+}
+
 static AuSurface *copy16(const AuSurface *s)
 {
     if (!s || s->width != AU_FAVICON_SIZE || s->height != AU_FAVICON_SIZE)
         return NULL;
-    AuSurface *d = au_surface_new(AU_FAVICON_SIZE, AU_FAVICON_SIZE);
+    AuSurface *d = icon_surface();
     for (int y = 0; y < AU_FAVICON_SIZE; y++)
         memcpy(d->pixels + (size_t)y * (size_t)d->stride, s->pixels + (size_t)y * (size_t)s->stride,
                AU_FAVICON_SIZE * sizeof(AuPixel));
@@ -369,7 +379,7 @@ bool au_favicons_parse(AuFavicons *f, const void *data, size_t len)
         uint64_t t = 0;
         for (int b = 0; b < 8; b++)
             t = (t << 8) | *p++;
-        AuSurface *s = au_surface_new(AU_FAVICON_SIZE, AU_FAVICON_SIZE);
+        AuSurface *s = icon_surface();
         bool opaque = true;
         for (int y = 0; y < AU_FAVICON_SIZE; y++) {
             AuPixel *row = s->pixels + (size_t)y * (size_t)s->stride;

@@ -13,6 +13,7 @@
  *       Renders a browser window (chrome and stub page) as a PNG. See
  *       usage() for the options. */
 #include "browser/scriptmem.h"
+#include "core/region.h"
 #include "host.h"
 #include "fontdir.h"
 #include "png.h"
@@ -109,14 +110,247 @@ void au_host_mem_report(const char *label)
  * Runs au_alloc through the pool the Mac OS 9 application uses
  * (src/core/heap.c), over malloc, so a page exercises it here and
  * --do heap can show what it holds. */
-static void *host_heap_get(size_t n)
+static void *host_heap_get(size_t n, unsigned how)
 {
+    (void)how;
     return malloc(n);
 }
 
 static void host_heap_release(void *p)
 {
     free(p);
+}
+
+/* ---- A stand-in for the Mac's application heap (AURA_HEAP=mac[:MB][:MODE]) ----
+ * The pool's platform blocks come from one region of MB megabytes
+ * (default 160; the host's structures are larger than the Mac's) with
+ * the Memory Manager's placement: NewPtr takes the lowest free space that
+ * fits. Where the long-lived zone goes is MODE:
+ *   (none)  outside the region, as the Mac application keeps it in
+ *           temporary memory (heap_get in src/platform/macos9/main.c)
+ *   top     at the top of the region, highest free space first
+ *   flat    low with the page zone, as before the zones were placed
+ * A block the region has no room for goes outside it too, as the Mac
+ * takes temporary memory when its heap is short. --do heapmap then shows
+ * the free space, the largest free block, and which blocks sit where, so
+ * the blocks that split the free space can be found. Each block's tag
+ * holds its allocation number and how. */
+static AuRegion sim_heap;
+static unsigned long sim_serial;
+static size_t sim_high;     /* the highest end of a page block so far, from the region's start */
+static size_t sim_out_long; /* long-lived bytes outside the region */
+static size_t sim_out_page; /* page bytes outside the region (it had no room) */
+static enum { SIM_OUT, SIM_TOP, SIM_FLAT } sim_mode;
+
+typedef struct SimOut {
+    size_t n, lng; /* two words: the block after it keeps malloc's alignment */
+} SimOut;
+
+static void *sim_heap_get(size_t n, unsigned how)
+{
+    bool lng = (how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG;
+    void *p = NULL;
+    if (!lng || sim_mode != SIM_OUT)
+        p = au_region_alloc(&sim_heap, n, lng && sim_mode == SIM_TOP);
+    if (p) {
+        *au_region_tag(p) = ((size_t)++sim_serial << 8) | (how & 0xFF);
+        size_t end = (size_t)((char *)p - sim_heap.chunk[0].base) + au_region_size(p);
+        if (!(lng && sim_mode == SIM_TOP) && end > sim_high)
+            sim_high = end;
+        return p;
+    }
+    SimOut *o = malloc(sizeof(SimOut) + n);
+    if (!o)
+        return NULL;
+    o->n = n;
+    o->lng = lng;
+    *(lng ? &sim_out_long : &sim_out_page) += n;
+    return o + 1;
+}
+
+static void sim_heap_release(void *p)
+{
+    if (au_region_owns(&sim_heap, p)) {
+        au_region_free(&sim_heap, p);
+        return;
+    }
+    SimOut *o = (SimOut *)p - 1;
+    *(o->lng ? &sim_out_long : &sim_out_page) -= o->n;
+    free(o);
+}
+
+static bool sim_heap_start(const char *spec)
+{
+    if (strncmp(spec, "mac", 3))
+        return false;
+    size_t mb = spec[3] == ':' ? (size_t)atol(spec + 4) : 160;
+    if (mb < 8)
+        mb = 8;
+    sim_mode = strstr(spec, ":flat") ? SIM_FLAT : strstr(spec, ":top") ? SIM_TOP : SIM_OUT;
+    void *mem = malloc(mb * 1024 * 1024);
+    if (!mem)
+        return false;
+    au_region_init(&sim_heap);
+    au_region_add(&sim_heap, mem, mb * 1024 * 1024);
+    au_heap_enable(sim_heap_get, sim_heap_release);
+    return true;
+}
+
+#ifdef AU_MEM_TRACK
+#define SIM_SITES 48
+typedef struct SimSites {
+    struct {
+        const char *site;
+        size_t bytes, count;
+    } s[SIM_SITES];
+    int n;
+    size_t bytes, count;
+    void *last; /* the last block seen, and its size (the counter's header excluded) */
+    size_t last_n;
+} SimSites;
+
+static void sim_site_add(SimSites *ss, const char *site, size_t bytes, size_t count)
+{
+    ss->bytes += bytes;
+    ss->count += count;
+    for (int i = 0; i < ss->n; i++)
+        if (!strcmp(ss->s[i].site, site)) {
+            ss->s[i].bytes += bytes;
+            ss->s[i].count += count;
+            return;
+        }
+    if (ss->n == SIM_SITES)
+        return;
+    ss->s[ss->n].site = site;
+    ss->s[ss->n].bytes = bytes;
+    ss->s[ss->n].count = count;
+    ss->n++;
+}
+
+static void sim_block_site(void *ctx, void *block, size_t n)
+{
+    SimSites *ss = ctx;
+    sim_site_add(ss, au_mem_site_of(block), n, 1);
+    ss->last = block;
+    ss->last_n = n;
+}
+#endif
+
+typedef struct SimMap {
+    FILE *out;
+    char *base;
+    size_t live_bytes, live_blocks, free_bytes;
+    size_t long_low, long_bytes; /* the lowest long-lived block, and what the zone holds */
+    unsigned long since;         /* blocks numbered after this are "new" */
+#ifdef AU_MEM_TRACK
+    SimSites pin; /* platform bytes per site that holds a block's most bytes */
+#endif
+} SimMap;
+
+static void sim_map_block(void *ctx, void *p, size_t n, bool is_free)
+{
+    SimMap *m = ctx;
+    size_t off = (size_t)((char *)p - m->base);
+    if (is_free) {
+        m->free_bytes += n;
+        if (n >= 64 * 1024)
+            fprintf(m->out, "%9.2f MB  free %8lu KB\n", off / 1048576.0, (unsigned long)(n / 1024));
+        return;
+    }
+    size_t tag = *au_region_tag(p);
+    unsigned how = (unsigned)(tag & 0xFF);
+    unsigned long serial = (unsigned long)(tag >> 8);
+    m->live_bytes += n;
+    m->live_blocks++;
+    bool lng = (how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG;
+    if (lng && off < m->long_low)
+        m->long_low = off;
+    if (lng)
+        m->long_bytes += n;
+    fprintf(m->out, "%9.2f MB  %s %-5s %6lu KB  #%lu%s", off / 1048576.0, lng ? "long" : "page",
+            how & AU_HEAP_GET_SLAB ? "slab" : "large", (unsigned long)((n + 1023) / 1024), serial,
+            serial > m->since ? " new" : "");
+#ifdef AU_MEM_TRACK
+    SimSites ss;
+    memset(&ss, 0, sizeof ss);
+    au_heap_walk_platform_block(p, how, sim_block_site, &ss);
+    int best = -1;
+    for (int k = 0; k < 3 && k < ss.n; k++) {
+        int top = -1;
+        for (int i = 0; i < ss.n; i++)
+            if (ss.s[i].count && (top < 0 || ss.s[i].bytes > ss.s[top].bytes))
+                top = i;
+        if (top < 0)
+            break;
+        if (best < 0) {
+            best = top;
+            sim_site_add(&m->pin, ss.s[top].site, n, 1);
+        }
+        fprintf(m->out, "  %s %lu x %lu B", ss.s[top].site, (unsigned long)ss.s[top].count,
+                (unsigned long)ss.s[top].bytes);
+        ss.s[top].count = 0;
+    }
+    fprintf(m->out, "  (%lu blocks, %lu B)", (unsigned long)ss.count, (unsigned long)ss.bytes);
+    if (ss.count == 1 && ss.last_n > 16 && ss.last_n <= 96) {
+        /* a lone small block: its first bytes, after the counter's header */
+        const unsigned char *t = (const unsigned char *)ss.last + 16;
+        fputs("  \"", m->out);
+        for (size_t i = 0; i + 16 < ss.last_n && i < 48; i++)
+            fputc(t[i] >= 32 && t[i] < 127 ? t[i] : '.', m->out);
+        fputc('"', m->out);
+    }
+#endif
+    fputc('\n', m->out);
+}
+
+/* --do heapmap[:FILE]: trims the pool (as the Mac does when idle),
+ * prints the free space and the largest free block, and writes the map to
+ * FILE (or stdout). Blocks numbered after the previous heapmap are
+ * marked new. */
+static void sim_heap_map(const char *file)
+{
+    static unsigned long last;
+    if (!sim_heap.nchunks) {
+        printf("heapmap: needs AURA_HEAP=mac\n");
+        return;
+    }
+    au_heap_trim();
+    size_t freeb, largest;
+    au_region_free_space(&sim_heap, &freeb, &largest);
+    printf("heapmap: %lu KB free of %lu KB, largest free block %lu KB, %lu platform blocks (%lu KB); "
+           "page blocks reached %lu KB; outside: %lu KB long-lived, %lu KB page; block #%lu\n",
+           (unsigned long)(freeb / 1024), (unsigned long)(sim_heap.total / 1024), (unsigned long)(largest / 1024),
+           (unsigned long)sim_heap.blocks, (unsigned long)(sim_heap.used / 1024), (unsigned long)(sim_high / 1024),
+           (unsigned long)(sim_out_long / 1024), (unsigned long)(sim_out_page / 1024), sim_serial);
+    SimMap m;
+    memset(&m, 0, sizeof m);
+    m.out = file ? fopen(file, "w") : NULL;
+    if (!m.out)
+        m.out = stdout;
+    m.base = sim_heap.chunk[0].base;
+    m.since = last;
+    m.long_low = sim_heap.total;
+    au_region_walk(&sim_heap, sim_map_block, &m);
+    if (m.long_bytes)
+        printf("heapmap: long-lived zone in the region %lu KB, its lowest block %lu KB below the top\n",
+               (unsigned long)(m.long_bytes / 1024), (unsigned long)((sim_heap.total - m.long_low) / 1024));
+#ifdef AU_MEM_TRACK
+    fprintf(m.out, "-- platform bytes by the site holding most of each block\n");
+    for (int k = 0; k < m.pin.n; k++) {
+        int top = -1;
+        for (int i = 0; i < m.pin.n; i++)
+            if (m.pin.s[i].count && (top < 0 || m.pin.s[i].bytes > m.pin.s[top].bytes))
+                top = i;
+        if (top < 0)
+            break;
+        fprintf(m.out, "%8lu KB in %4lu blocks  %s\n", (unsigned long)(m.pin.s[top].bytes / 1024),
+                (unsigned long)m.pin.s[top].count, m.pin.s[top].site);
+        m.pin.s[top].count = 0;
+    }
+#endif
+    if (m.out != stdout)
+        fclose(m.out);
+    last = sim_serial;
 }
 
 static void au_host_heap_report(const char *label)
@@ -816,6 +1050,8 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                (unsigned long)(as.table_bytes / 1024));
     } else if (!strcmp(a, "heap")) {
         au_host_heap_report("now");
+    } else if (!strncmp(a, "heapmap", 7)) {
+        sim_heap_map(a[7] == ':' ? a + 8 : NULL);
     } else if (!strcmp(a, "closetab")) {
         /* Closes the active tab (the window keeps at least one). */
         if (w->ntabs > 1)
@@ -1120,6 +1356,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_host_session_close(&ses);
         au_cache_free(o->cache);
     }
+    /* What is left is what the program keeps for good (fonts, atoms, the
+     * user agent sheets, the network stack's tables) and leaks. */
+    if (getenv("AURA_MEM_EXIT"))
+        au_host_mem_report("after everything was freed");
     return rc;
 }
 
@@ -1127,7 +1367,7 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
         return usage();
-    if (getenv("AURA_HEAP"))
+    if (getenv("AURA_HEAP") && !sim_heap_start(getenv("AURA_HEAP")))
         au_heap_enable(host_heap_get, host_heap_release);
     const char *cmd = argv[1];
     if (!strcmp(cmd, "fetch"))

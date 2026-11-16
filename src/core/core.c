@@ -5,9 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef AU_MEM_TRACK
 /* The definitions below are the functions themselves, not core.h's
- * site-recording macros. */
+ * macros that record the site and the zone. */
 #undef au_alloc
 #undef au_calloc
 #undef au_realloc
@@ -21,7 +20,6 @@
 #undef au_buf_put_utf8
 #undef au_buf_printf
 #undef au_buf_cstr
-#endif
 
 /* ---- Allocation ---- */
 
@@ -278,6 +276,12 @@ void au_free(void *p)
     MemHdr *h = (MemHdr *)p - 1;
     mem_sub(h);
     base_free(h);
+}
+
+const char *au_mem_site_of(const void *raw)
+{
+    const MemHdr *h = raw;
+    return h->site < (uint32_t)mem_nsites ? mem_sites[h->site].file : "?";
 }
 
 size_t au_mem_live(void) { return mem_live; }
@@ -543,14 +547,18 @@ static void table_insert(AuAtom a)
     atom_table[i] = a;
 }
 
+/* The atom table and array live as long as the program (docs/memory.md,
+ * "Zones"); the caller's zone is set back after. */
 static void table_grow(void)
 {
+    unsigned zone = au_heap_zone_set(AU_HEAP_ZONE_LONG);
     au_free(atom_table);
     atom_table_size = atom_table_size ? atom_table_size * 2 : 1024;
     atom_table = au_calloc(atom_table_size * sizeof *atom_table);
     for (AuAtom a = 1; a < atom_count; a++)
         if (atom_entries[a].s)
             table_insert(a);
+    au_heap_zone_set(zone);
 }
 
 /* The table again, after entries were freed: as small as the live
@@ -560,12 +568,14 @@ static void table_rebuild(void)
     uint32_t size = 1024;
     while ((atom_live + 1) * 2 > size && size < 0x40000000u)
         size *= 2;
+    unsigned zone = au_heap_zone_set(AU_HEAP_ZONE_LONG);
     au_free(atom_table);
     atom_table_size = size;
     atom_table = au_calloc(atom_table_size * sizeof *atom_table);
     for (AuAtom a = 1; a < atom_count; a++)
         if (atom_entries[a].s)
             table_insert(a);
+    au_heap_zone_set(zone);
 }
 
 static AuAtom add_entry(const char *s, uint32_t len, uint32_t hash, uint32_t holders)
@@ -576,8 +586,10 @@ static AuAtom add_entry(const char *s, uint32_t len, uint32_t hash, uint32_t hol
         atom_free_head = atom_entries[a].hash;
     } else {
         if (atom_count == atom_cap) {
+            unsigned zone = au_heap_zone_set(AU_HEAP_ZONE_LONG);
             atom_cap = atom_cap ? atom_cap * 2 : 512;
             atom_entries = au_realloc(atom_entries, atom_cap * sizeof *atom_entries);
+            au_heap_zone_set(zone);
         }
         a = atom_count++;
     }
@@ -659,7 +671,12 @@ AuAtom au_atom(const char *s, size_t n)
     }
     atom_string_bytes += n + 1;
     uint32_t bits = cur_bits();
+    /* Atom texts are long-lived: a page's atom becomes permanent when
+     * code outside the page looks it up, and its text cannot move then
+     * (docs/memory.md, "Zones"). */
+    unsigned zone = au_heap_zone_set(AU_HEAP_ZONE_LONG);
     a = add_entry(au_strndup(s, n), (uint32_t)n, h, bits);
+    au_heap_zone_set(zone);
     if (atom_set && !(bits & ATOM_PERM))
         set_push(atom_set, a);
     return a;
@@ -744,7 +761,9 @@ static void entries_trim(void)
     while (cap < n)
         cap *= 2;
     if (cap < atom_cap / 2) {
+        unsigned zone = au_heap_zone_set(AU_HEAP_ZONE_LONG);
         atom_entries = au_realloc(atom_entries, cap * sizeof *atom_entries);
+        au_heap_zone_set(zone);
         atom_cap = cap;
     }
     atom_free_head = 0;

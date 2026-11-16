@@ -401,12 +401,28 @@ static AuAtomCollect late_begin(const AuCssSheet *sh)
                                  (w->scopes & au_atom_scope_live()) | au_atom_scope_bits());
 }
 
+/* The user agent sheets are shared by every document and outlive the page
+ * that parses one of their blocks: what that parse allocates goes to the
+ * long-lived zone (docs/memory.md, "Zones"). Returns what late_zone_end
+ * takes. */
+static int late_zone_begin(const AuCssSheet *sh)
+{
+    return sh->origin == AU_CSS_ORIGIN_UA ? au_heap_zone_hold(AU_HEAP_ZONE_LONG) : -2;
+}
+
+static void late_zone_end(int held)
+{
+    if (held != -2)
+        au_heap_zone_unhold(held);
+}
+
 const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
 {
     if (!(ru->flags & RF_LAZY))
         return ru->b.decls;
     CssRule *w = (CssRule *)ru; /* the parsed block is a cache of the text */
     late_parses++;
+    int held = late_zone_begin(sh);
     AuAtomCollect ac = late_begin(sh);
     AuCssDeclBlock tmp = {0};
     CssTokens tk = {0};
@@ -420,6 +436,7 @@ const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
     w->c.children = NULL;
     w->b.decls = decls_pack((AuCssSheet *)sh, &tmp);
     au_atom_collect_end(ac);
+    late_zone_end(held);
     return w->b.decls;
 }
 
@@ -435,6 +452,7 @@ const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
      * sheet parse would have, one level down. */
     CssRule *w = (CssRule *)ru;
     late_parses++;
+    int held = late_zone_begin(sh);
     AuAtomCollect ac = late_begin(sh);
     CssTokens tk = {0};
     AuBuf text;
@@ -460,6 +478,7 @@ const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
     css_toklist_intern_end();
     css_tokens_free(&tk);
     au_atom_collect_end(ac);
+    late_zone_end(held);
     return w->c.children;
 }
 

@@ -85,6 +85,9 @@ void mac_out_of_memory(size_t wanted);
  * temporary memory the allocator holds, in bytes (main.c). */
 uint32_t mac_memory_free_kb(void);
 long mac_heap_temp_bytes(void);
+/* The temporary memory that holds the allocator's long-lived zone, in
+ * bytes (main.c). */
+long mac_heap_long_temp_bytes(void);
 void mac_menus_dirty(void);
 /* Brings the menu bar in step with the front window (enables, checks). */
 void mac_adjust_menus(void);

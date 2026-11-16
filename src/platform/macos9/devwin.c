@@ -460,6 +460,10 @@ static void host_info(AuSysInfo *sys, AuDevHostInfo *h, AuBuf *conn, char *machi
     h->heap_block_kb = sys->heap_block_kb;
     h->temp_free_kb = sys->temp_free_kb;
     h->temp_used_kb = (uint32_t)(mac_heap_temp_bytes() / 1024);
+    AuHeapStats hs;
+    au_heap_stats(&hs);
+    h->long_kb = (uint32_t)(hs.long_bytes / 1024);
+    h->long_temp_kb = (uint32_t)(mac_heap_long_temp_bytes() / 1024);
     mac_net_dev_info(h, conn);
 }
 
