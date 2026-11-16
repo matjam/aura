@@ -135,6 +135,9 @@ void au_download_name_from_url(const char *url, char *out, size_t cap);
 const AuTransferSource *au_sim_source(void);
 
 /* ---- The Downloads window's list ---- */
+/* The status line of a download: "1.2 MB of 3 MB at 40 KB/s, 0:45
+ * left", "Waiting", "Stopped, ...", "Done, 3 MB", "Failed: ...". */
+void au_download_status(const AuDownload *d, char *out, size_t cap);
 #define AU_DL_ROW_H 40
 /* Paints rows into (0, 0, width, height) of the canvas, scrolled by
  * scroll pixels, with row `selected` highlighted. */
