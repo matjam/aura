@@ -205,15 +205,22 @@ typedef struct RRoot {
 } RRoot;
 
 /* Whether an entry of the boxless list from before a rebuild goes: its
- * element left the document, or is below a rebuilt root, whose new
- * subtree listed it again if it is still boxless. */
+ * element left the document, is below a rebuilt root, whose new subtree
+ * listed it again if it is still boxless, or moved below an element with
+ * display: none, which a whole build lists instead. */
 static bool hidden_gone(const AuLayout *L, const RRoot *roots, uint32_t nroots, const AuElement *el)
 {
     const AuNode *p = el->node.parent;
-    for (; p && p->type != AU_NODE_DOCUMENT; p = p->parent)
+    for (; p && p->type != AU_NODE_DOCUMENT; p = p->parent) {
         for (uint32_t i = 0; i < nroots; i++)
             if (p == &roots[i].el->node)
                 return true;
+        if (p->type == AU_NODE_ELEMENT) {
+            const AuStyle *s = au_element_style((const AuElement *)p);
+            if (!s || s->box->display == AU_DISPLAY_NONE)
+                return true;
+        }
+    }
     return p != &L->doc->node;
 }
 

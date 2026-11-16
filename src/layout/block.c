@@ -619,10 +619,13 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
     const AuStyleSurround *s = lb_anon(&k->b) ? NULL : k->b.style->surr;
     bool la = s && s->margin[3].kind == AU_LEN_AUTO, ra = s && s->margin[1].kind == AU_LEN_AUTO;
     float cl = f->bfc_x, cr = f->bfc_x + cw;
+    /* The height is not known before the box is laid out at its width:
+     * start from 1, not from the height a previous layout left in k, so a
+     * relayout places it as a layout from scratch does. */
+    float est_h = 1;
     for (int guard = 0; guard < 1000; guard++) {
         float y = f->bfc_y + top;
         float l, r;
-        float est_h = l_max(1, k->h);
         l_floats_avail(&S->floats, y, est_h, cl, cr, &l, &r);
         /* Negative margins pull the box out of its containing block as for
          * any block; only floats push its border box in. */
@@ -650,6 +653,13 @@ static void place_bfc_root(AuLayout *L, LBfc *S, int level, LBlock *k, float cb_
             float nb = l_floats_next_bottom(&S->floats, y);
             if (isfinite(nb) && bw > r2 - l_max(l2, cl + k->m[3]) - k->m[1] + 0.01f) {
                 top = nb - f->bfc_y;
+                est_h = l_max(1, k->h);
+                continue;
+            }
+            /* It fits beside the floats its full height meets: place it
+             * again with that height. */
+            if (est_h < k->h) {
+                est_h = k->h;
                 continue;
             }
         }

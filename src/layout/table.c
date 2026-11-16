@@ -1082,6 +1082,30 @@ static bool cell_height_definite(const LTableBox *t, const LCellBox *cb, float t
     return false;
 }
 
+/* Whether a box below cell k has a percentage height, min-height or
+ * max-height. Its first layout resolved those against an indefinite
+ * height, so a cell whose final height is definite lays it out again even
+ * when that height equals its content height. */
+static bool cell_has_pct_height(const LBlock *k)
+{
+    const LBox *root = &k->b, *b = root->first;
+    while (b) {
+        if (b->kind == LK_BLOCK && !lb_anon(b) && b->style) {
+            const AuStyleBox *s = b->style->box;
+            if (l_len_pct(&s->height) || l_len_pct(&s->min_height) || l_len_pct(&s->max_height))
+                return true;
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && b != root && !b->next)
+                b = b->parent;
+            b = b && b != root ? b->next : NULL;
+        }
+    }
+    return false;
+}
+
 float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
 {
     b->baseline = b->last_baseline = NAN;
@@ -1297,7 +1321,8 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         float h = span_height(t, cb->row, cb->rowspan, vs);
         float bpv = l_bp_v(k), inner = l_max(0, h - bpv);
         bool definite = cell_height_definite(t, cb, target);
-        if ((definite && fabsf(inner - cb->nat_h) > 0.001f) || cb->stale) {
+        bool again = definite && (fabsf(inner - cb->nat_h) > 0.001f || (cb->base1 != inner && cell_has_pct_height(k)));
+        if (again || cb->stale) {
             l_layout_content(L, k, l_max(0, cw - l_bp_h(k)), definite ? inner : cb->base1, -1);
             cb->nat_h = k->h - bpv;
             cb->stale = false;
