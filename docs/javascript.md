@@ -434,7 +434,9 @@ more than the 512 KB that the host's limit then allowed, so two calls
 failed with a RangeError. The recursion ends: it passes with 1 MB. With
 PowerPC's smaller frame (0.63 of the host's) the same depth is about
 390 KB, inside the Mac's 512 KB. Plain recursion reaches 519 calls at
-512 KB and 1,039 at 1 MB on the host.
+512 KB and 1,039 at 1 MB on the host, and 816 at 512 KB in JSTest in
+the guest (Enforcer base, 2026-11-16, with patch 0013: 35 self-tests
+passed, 0 failed).
 
 ## Retro68 compiler points
 
