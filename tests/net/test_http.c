@@ -39,6 +39,7 @@ typedef struct Result {
     const char *user, *pass;
     int asked;
     bool cancel_on_data;
+    bool pause_on_data; /* au_http_pause on the first piece of body */
     AuHttpTransfer *t;
 } Result;
 
@@ -63,6 +64,10 @@ static void on_data(void *ctx, AuHttpTransfer *t, const void *d, size_t n)
     au_buf_append(&res->body, d, n);
     if (res->cancel_on_data)
         au_http_cancel(t);
+    if (res->pause_on_data) {
+        res->pause_on_data = false;
+        au_http_pause(t, true);
+    }
 }
 
 static void on_done(void *ctx, AuHttpTransfer *t, AuNetError e)
@@ -497,6 +502,46 @@ static void test_cancel(void)
     teardown(&f, net);
 }
 
+/* au_http_pause: a paused transfer reads nothing more, for longer than
+ * the idle timeout, and carries on where it stopped when resumed. */
+static void test_pause(void)
+{
+    FakeNet f;
+    AuNet *net;
+    setup(&f, &net);
+    FakeServer *s = fake_server(&f, "a.test", 80);
+    static char resp[2200];
+    int n = snprintf(resp, sizeof resp, "HTTP/1.1 200 OK\r\nContent-Length: 2000\r\n\r\n");
+    for (int i = 0; i < 2000; i++)
+        resp[n + i] = (char)('a' + i % 26);
+    resp[n + 2000] = 0;
+    FakeResponse *fr = fake_add(s, resp);
+    fr->chunk = 20;
+    fr->paced = true;
+    Result r;
+    result_init(&r);
+    r.pause_on_data = true;
+    AuHttpRequest rq;
+    au_http_request_init(&rq, "http://a.test/");
+    AuHttpCallbacks cb = callbacks(&r);
+    r.t = au_http_start(net, &rq, &cb);
+    au_http_request_free(&rq);
+    for (int i = 0; i < 300; i++)
+        fake_run(&f, net, 1, 1000); /* five minutes */
+    size_t held = r.body.len;
+    CHECK(!r.done && held > 0 && held < 200, "paused: done %d, %zu bytes", r.done, held);
+    au_http_pause(r.t, false);
+    fake_run(&f, net, 2000, 10);
+    CHECK(r.done && r.err == AU_NET_OK && r.body.len == 2000, "resumed: done %d err %d, %zu bytes", r.done, r.err,
+          r.body.len);
+    bool same = r.body.len == 2000;
+    for (size_t i = 0; same && i < 2000; i++)
+        same = r.body.data[i] == (uint8_t)('a' + i % 26);
+    CHECK(same, "the body is whole and in order");
+    result_free(&r);
+    teardown(&f, net);
+}
+
 static void test_auth(void)
 {
     FakeNet f;
@@ -710,6 +755,7 @@ int main(void)
     test_pathological();
     test_errors_and_timeouts();
     test_cancel();
+    test_pause();
     test_auth();
     test_proxy_and_headers();
     test_https_first();
