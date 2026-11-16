@@ -59,6 +59,12 @@ bool au_docscript_submit_event(AuDocScript *s, AuElement *form, AuElement *submi
 /* Tests value against an HTML pattern attribute with the script engine's
  * RegExp: 1 match, 0 no match, -1 no runtime or a bad pattern. */
 int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value);
+/* Escape: closes the topmost modal dialog (after cancel) or auto popover
+ * of the top layer. Returns true when there was one. */
+bool au_docscript_close_request(AuDocScript *s);
+/* Light dismiss of auto popovers at a press (up false) or release (up
+ * true) on target (NULL: none). */
+void au_docscript_light_dismiss(AuDocScript *s, AuElement *target, bool up);
 /* Hover moved from one element to another: mouseout and mouseover. */
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy);
 /* A link with a javascript: URL was activated. */

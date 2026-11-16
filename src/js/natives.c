@@ -2240,22 +2240,54 @@ static JSValue n_set_defined(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
-/* setModal(dialog, on): puts a dialog in the top layer as a modal dialog
- * (showModal) or takes it out (close). */
-static JSValue n_set_modal(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* setTopLayer(el, kind, on): puts an element on top of its document's top
+ * layer or takes it out. kind 1 is a modal dialog (showModal, close:
+ * AU_STATE_MODAL), 2 a showing popover (AU_STATE_POPOVER_OPEN). Only a
+ * connected element goes in. */
+static JSValue n_set_top_layer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
-    AuNode *n = argc > 1 ? arg_node(js, argv[0]) : NULL;
-    if (n && n->type == AU_NODE_ELEMENT) {
-        bool on = JS_ToBool(ctx, argv[1]);
-        AuElement *e = (AuElement *)n;
-        if (((e->state & AU_STATE_MODAL) != 0) != on) {
-            au_element_set_state(e, AU_STATE_MODAL, on);
-            if (js->hooks.dom_changed)
-                js->hooks.dom_changed(js->hooks.ctx, n, 0, AU_JS_CHANGE_STATE);
-        }
-    }
+    AuNode *n = argc > 2 ? arg_node(js, argv[0]) : NULL;
+    int32_t kind = 0;
+    if (!n || n->type != AU_NODE_ELEMENT || JS_ToInt32(ctx, &kind, argv[1]) || (kind != 1 && kind != 2))
+        return JS_UNDEFINED;
+    bool on = JS_ToBool(ctx, argv[2]);
+    AuElement *e = (AuElement *)n;
+    uint32_t bit = kind == 1 ? AU_STATE_MODAL : AU_STATE_POPOVER_OPEN;
+    if (on && !au_node_is_connected(n))
+        return JS_UNDEFINED;
+    if (((e->state & bit) != 0) == on)
+        return JS_UNDEFINED;
+    au_element_set_state(e, bit, on);
+    if (on)
+        au_top_layer_add(e);
+    else if (!(e->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)))
+        au_top_layer_remove(e);
+    if (js->hooks.dom_changed)
+        js->hooks.dom_changed(js->hooks.ctx, n, 0, AU_JS_CHANGE_STATE);
     return JS_UNDEFINED;
+}
+
+/* inert(node): whether the node is inert (au_node_inert). */
+static JSValue n_inert(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *n = argc > 0 ? arg_node(js, argv[0]) : NULL;
+    return JS_NewBool(ctx, n && au_node_inert(n));
+}
+
+/* topLayer(): the elements of the document's top layer, bottom first. */
+static JSValue n_top_layer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    JSValue arr = JS_NewArray(ctx);
+    AuDocument *d = js->doc;
+    if (!d)
+        return arr;
+    uint32_t n = d->ntop;
+    for (uint32_t i = 0; i < n && i < d->ntop; i++)
+        JS_SetPropertyUint32(ctx, arr, i, js_wrap(js, &d->top_layer[i]->node));
+    return arr;
 }
 
 static JSValue n_set_counts(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -2548,7 +2580,9 @@ static const JSCFunctionListEntry dom_natives[] = {
     JS_CFUNC_DEF("hostOf", 1, n_host_of),
     JS_CFUNC_DEF("declarativeShadow", 2, n_declarative_shadow),
     JS_CFUNC_DEF("setDefined", 2, n_set_defined),
-    JS_CFUNC_DEF("setModal", 2, n_set_modal),
+    JS_CFUNC_DEF("setTopLayer", 3, n_set_top_layer),
+    JS_CFUNC_DEF("topLayer", 0, n_top_layer),
+    JS_CFUNC_DEF("inert", 1, n_inert),
     JS_CFUNC_DEF("setCounts", 3, n_set_counts),
     JS_CFUNC_DEF("flushMutations", 0, n_flush_mutations),
     JS_CFUNC_DEF("setObserved", 2, n_set_observed),

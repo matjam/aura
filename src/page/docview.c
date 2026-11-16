@@ -1805,6 +1805,15 @@ static void follow_link(AuDocView *dv, const char *url, const char *target, bool
     }
 }
 
+/* Whether a popover of doc is showing (in the top layer). */
+static bool popover_open(const AuDocument *doc)
+{
+    for (uint32_t i = 0; i < doc->ntop; i++)
+        if (doc->top_layer[i]->state & AU_STATE_POPOVER_OPEN)
+            return true;
+    return false;
+}
+
 bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
 {
     if (!dv->doc)
@@ -1817,6 +1826,19 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
     }
     AuHitResult r;
     au_docview_hit_test(dv, ev->x, ev->y, &r);
+    if (dv->script && (ev->type == AU_EVENT_MOUSE_DOWN || ev->type == AU_EVENT_MOUSE_UP) && popover_open(dv->doc)) {
+        /* Light dismiss: a press and release outside an auto popover
+         * hide it, before the page sees the events. */
+        AuElement *target = r.element;
+        if (target)
+            au_node_ref(&target->node);
+        au_docscript_light_dismiss(dv->script, au_dv_alive(dv, target) ? target : NULL, ev->type == AU_EVENT_MOUSE_UP);
+        if (target)
+            au_node_unref(&target->node);
+        if (!dv->doc)
+            return true;
+        au_docview_hit_test(dv, ev->x, ev->y, &r);
+    }
     if (dv->script) {
         /* Listeners may change or replace the document: the target is
          * held across the hover events (whose listeners may remove it

@@ -364,7 +364,7 @@ typedef enum {
     PC_CHECKED, PC_INDETERMINATE, PC_DEFAULT, PC_DISABLED, PC_ENABLED, PC_REQUIRED, PC_OPTIONAL,
     PC_READ_ONLY, PC_READ_WRITE, PC_PLACEHOLDER_SHOWN, PC_TARGET, PC_DEFINED, PC_LANG, PC_DIR, PC_SCOPE,
     PC_VALID, PC_INVALID, PC_USER_VALID, PC_USER_INVALID, PC_IN_RANGE, PC_OUT_OF_RANGE, PC_MODAL,
-    PC_NEVER /* known pseudo-classes that never match here (:autofill, :fullscreen, ...) */
+    PC_POPOVER_OPEN, PC_NEVER /* known pseudo-classes that never match here (:autofill, :fullscreen, ...) */
 } PseudoClass;
 
 /* What a component needs beyond a name: allocated only for the

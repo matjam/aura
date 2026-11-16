@@ -96,6 +96,58 @@ With the JavaScript runtime running, a click's activation runs in the
 bindings and reaches C through `N.submitForm`; without it
 `au_forms_activate` does the same in C.
 
+Inert elements ([`layout.md`](layout.md), "Inert content") are not
+focusable (`focusable` in `forms.c`, `isFocusable` in the bindings), so
+Tab cycles inside an open modal dialog and a click or `focus()` cannot
+move the focus out of it. A press where only inert content is under
+the pointer leaves the focus where it is.
+
+## Dialogs and popovers
+
+Dialogs and popovers live in the bindings (`prelude_html.js`, "the top
+layer"); C keeps the top layer and the states ([`layout.md`](layout.md),
+"The top layer").
+
+- `showModal()` puts the dialog in the top layer, closes the auto
+  popovers that are not its ancestors and focuses the dialog's
+  autofocus element or first focusable element. `close()` takes it out
+  and gives the focus back to the element that had it.
+- To close by key, press Escape: `au_docview_key` calls
+  `au_docscript_close_request` when the page did not cancel keydown,
+  before a field's own Escape. The topmost modal dialog gets `cancel`
+  and closes unless a listener cancels it; an auto popover on top hides
+  instead.
+- Popovers follow the HTML Standard: `showPopover`, `hidePopover`,
+  `togglePopover`, `beforetoggle` (cancelable when showing), `toggle`
+  in a task with the states coalesced, `auto` (and `hint`) popovers
+  that close the auto popovers that are not their ancestors, `manual`
+  ones that stay, and `popovertarget` buttons with
+  `popovertargetaction`. A page with a `popovertarget` attribute starts
+  the script runtime at the end of parsing.
+- Light dismiss: `au_docview_mouse` calls `au_docscript_light_dismiss`
+  at the press and at the release while a popover shows; when both land
+  in the same popover (or its button), or outside every one, the auto
+  popovers above it hide.
+
+To check a modal dialog on a live page, use a fresh profile folder (the
+default one may have the page's banner hidden) and log the page's
+clicks. On the Wikipedia portal (checked 2026-11-15) the "I already
+donated" link opens the thank-you dialog with `showModal()`:
+
+```bash
+aura-host chrome -w 1024 -h 768 --net --profile run/wp-profile \
+  --tab https://www.wikipedia.org/ --do wait:5000 \
+  --do "js:window.L=[];document.addEventListener('click',function(e){L.push(e.target.tagName)},true);1" \
+  --do click:861,197 --do wait:1500 --do click:371,209 --do click:150,600 \
+  --do "js:L.join(' ')+' '+location.href" --do key:escape \
+  --do "js:document.querySelector('dialog').open"
+```
+
+The clicks outside the dialog go to the dialog (its backdrop), not to
+the links under it, and Escape closes it. The link's place depends on
+the banner; find it with a `js:` action that prints its
+`getBoundingClientRect()` (the page starts 57 pixels down the window).
+
 ## Submission
 
 `src/page/formdata.c` builds the entry list (`au_form_entries_build`)
@@ -187,8 +239,11 @@ still loads its search module pay for that loading.
 ## Tests
 
 - `tests/forms`: editing, encodings, focus, submission, validation,
-  event order.
+  event order, and a modal dialog and popovers driven by clicks and
+  keys (`test_modal_dialog`).
 - `tests/js/forms.js`: bindings and named access.
+- `tests/js/top_layer.js`: dialogs, popovers and the `inert`
+  attribute.
 - The forms part of `tests/browser/test_net_page.c`: GET and POST over
   the fake transport.
 - `tests/page/samples/qa-forms.html`: every control, and a Try it form

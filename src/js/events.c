@@ -71,6 +71,24 @@ bool au_js_fire_submit(AuJs *js, AuElement *form, AuElement *submitter)
     return call_bool(js, "fireSubmit", 2, a);
 }
 
+bool au_js_close_request(AuJs *js)
+{
+    bool r = false;
+    if (!js->closing) {
+        JSValue v = js_call_prelude(js, "closeRequest", 0, NULL);
+        r = JS_IsBool(v) && JS_ToBool(js->ctx, v);
+        JS_FreeValue(js->ctx, v);
+    }
+    au_js_checkpoint(js);
+    return r;
+}
+
+void au_js_light_dismiss(AuJs *js, AuElement *target, bool up)
+{
+    JSValue a[2] = {js_wrap(js, target ? &target->node : NULL), JS_NewBool(js->ctx, up)};
+    call_bool(js, "lightDismiss", 2, a);
+}
+
 int au_js_pattern_test(AuJs *js, const char *pattern, const char *value)
 {
     if (js->closing)

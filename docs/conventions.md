@@ -77,7 +77,8 @@ gone after such a call unless you did the following.
 
 Calls that can run script: every `au_docscript_*` function that fires an
 event or runs code (`_mouse`, `_key`, `_fire`, `_focus`, `_input`,
-`_submit_event`, `_hover`, `_javascript_url`, `_run`, `_eval`,
+`_submit_event`, `_hover`, `_close_request`, `_light_dismiss`,
+`_javascript_url`, `_run`, `_eval`,
 `_loaded`, `_layout_done`), and so everything built on them in
 `forms.c` (`fire`, `focus_el`, `input_change`, `commit_change`,
 `range_set`, `select_choose`, `listbox_pick`, `insert_text`,

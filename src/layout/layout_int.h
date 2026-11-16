@@ -427,11 +427,13 @@ static inline const AuStyle *lb_style(const LBox *b) { return b->style; }
 static inline bool lb_anon(const LBox *b) { return (b->flags & LF_ANON) != 0; }
 
 /* Whether b is rendered in the top layer (CSS Positioned Layout 4,
- * section 6): the box of a modal dialog (AU_STATE_MODAL) or of its
- * ::backdrop, when absolutely positioned or fixed (the UA sheet makes
- * them fixed). Its containing block is the initial containing block
+ * section 6): the box of a modal dialog (AU_STATE_MODAL) or a showing
+ * popover (AU_STATE_POPOVER_OPEN), or of its ::backdrop, when absolutely
+ * positioned or fixed (the cascade makes any other position absolute).
+ * Its containing block is the initial containing block
  * (l_queue_abspos), it is a stacking context painted after the rest of
- * the root's (l_build_stacking), and no ancestor clips it. */
+ * the root's in the order of the document's top layer
+ * (l_build_stacking), and no ancestor clips it. */
 static inline bool l_top_layer(const LBox *b)
 {
     if (b->kind != LK_BLOCK || (b->flags & (LF_ANON | LF_ABSPOS)) != LF_ABSPOS || !b->node ||
@@ -439,7 +441,14 @@ static inline bool l_top_layer(const LBox *b)
         return false;
     if (b->pseudo != AU_CSS_PSEUDO_NONE && b->pseudo != AU_CSS_PSEUDO_BACKDROP)
         return false;
-    return (((const AuElement *)b->node)->state & AU_STATE_MODAL) != 0;
+    return (((const AuElement *)b->node)->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)) != 0;
+}
+
+/* Whether b's node is inert (au_node_inert): it is not hit, selected or
+ * found. A box without a node (anonymous) is not. */
+static inline bool l_box_inert(const LBox *b)
+{
+    return b->node && au_node_inert(b->node);
 }
 
 /* Converts a CSS colour (RGBA, red in the high byte) to a paint colour

@@ -143,6 +143,10 @@ bool au_layout_text_pos_at(AuLayout *L, float x, float y, float scroll_x, float 
         out->offset = (uint32_t)hr.text_offset;
         return true;
     }
+    /* Inert content under the point (outside a modal dialog): no
+     * position, so a press there selects nothing. */
+    if (!hr.element && l_box_inert(L->root))
+        return false;
     /* The nearest place on the nearest line, in document coordinates. */
     float dx = x + scroll_x, dy = y + scroll_y;
     float best_v = 1e30f, best_h = 1e30f;
@@ -168,7 +172,7 @@ bool au_layout_text_pos_at(AuLayout *L, float x, float y, float scroll_x, float 
                 float hd = dx < fl ? fl - dx : dx > fr ? dx - fr : 0;
                 /* Vertical distance first: a point beside a line picks
                  * that line. */
-                if (vd < best_v || (vd == best_v && hd < best_h)) {
+                if ((vd < best_v || (vd == best_v && hd < best_h)) && !l_box_inert(f->box)) {
                     best_v = vd;
                     best_h = hd;
                     out->node = f->box->node;
@@ -265,8 +269,10 @@ bool au_layout_all_text(AuLayout *L, AuTextRange *out)
     LText *first = NULL, *last = NULL;
     if (!L->root)
         return false;
+    /* Select All leaves out inert text: with a modal dialog open, it
+     * selects the dialog's. */
     for (LBox *b = L->root; b; b = next_box(b, L->root, false))
-        if (b->kind == LK_TEXT && ((LText *)b)->len) {
+        if (b->kind == LK_TEXT && ((LText *)b)->len && !l_box_inert(b)) {
             if (!first)
                 first = (LText *)b;
             last = (LText *)b;
@@ -377,7 +383,8 @@ static void walk_range(AuLayout *L, const AuTextRange *r, Walk *w)
                             hi = r->end.offset < t->len ? r->end.offset : t->len;
                     }
                 }
-                if (in)
+                /* Inert text is neither copied nor found. */
+                if (in && !l_box_inert(b))
                     put_text(w, b->node, t->text, lo, hi);
                 if (r && b->node == r->end.node)
                     return;
@@ -628,7 +635,7 @@ void l_select_paint_frag(AuLayout *L, AuCanvas *c, const LFrag *f, LFont *font, 
     if (a < 0)
         return;
     int b = au_node_order(n, L->sel.n1);
-    if (b > 0)
+    if (b > 0 || au_node_inert(n))
         return;
     uint32_t lo = a == 0 ? L->sel.o0 : 0, hi = b == 0 ? L->sel.o1 : UINT32_MAX;
     uint32_t fs = f->start, fe = f->start + f->len;

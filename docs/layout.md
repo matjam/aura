@@ -192,27 +192,54 @@ absolutely positioned and fixed descendants (`l_style_contains_fixed`,
 
 ### The top layer
 
-A dialog opened with `showModal()` is in the top layer (CSS Positioned
-Layout 4, section 6). `showModal()` sets `AU_STATE_MODAL` on the
-element (`N.setModal` in `prelude_html.js`); `close()` and removing the
-`open` attribute clear it (`au_element_remove_attr`). The state makes
-`:modal` match, so the UA sheet's `dialog:modal` rule makes the dialog
-fixed and centres it in the viewport.
+A dialog opened with `showModal()` and a showing popover are in the top
+layer (CSS Positioned Layout 4, section 6). The document keeps the list
+(`AuDocument.top_layer`, `au_top_layer_add` in `dom.c`) in the order
+the elements were added; the element also carries `AU_STATE_MODAL` or
+`AU_STATE_POPOVER_OPEN`, which make `:modal` and `:popover-open`
+match. `N.setTopLayer` in the bindings sets both
+([`forms.md`](forms.md), "Dialogs and popovers"). The UA sheet makes a
+modal dialog and a popover fixed and centres them in the viewport.
 
 - To test whether a box is in the top layer, call `l_top_layer`: the
-  box of an element with `AU_STATE_MODAL`, or of its `::backdrop`, when
-  it is absolutely positioned or fixed.
+  box of an element with either state, or of its `::backdrop`, when it
+  is absolutely positioned or fixed.
+- Any other position computes to `absolute` for such an element and
+  its `::backdrop` (`css_compute_finish` in `compute.c`), so a page's
+  `position: static` does not take a dialog out of the top layer.
 - Its containing block is the initial containing block whatever its
   ancestors (`l_queue_abspos`), so no ancestor clips, moves or fades it.
 - `l_build_stacking` makes it a stacking context in the root's list,
-  and `sort_layers` puts it after every z-index, each element just
-  above its backdrop. Painting and hit testing read the same lists.
+  and `sort_layers` puts it after every z-index, in the order of the
+  document's list (`au_top_layer_index`), each element just above its
+  backdrop. Painting and hit testing read the same lists.
 - `::backdrop` gets a style only for an element in the top layer
   (`attach_pseudos` in `cascade.c`; such an element's style is not
   shared). `make_backdrop` in `boxtree.c` makes its box a child of the
-  element's box; a backdrop that the page makes static or relative gets
-  no box.
-- A click on the backdrop goes to the dialog, as in Chrome.
+  element's box. A popover's backdrop has `pointer-events: none`, so
+  the page stays live around it.
+- A click on a dialog's backdrop goes to the dialog, as in Chrome.
+- An element that leaves the document leaves the list and loses both
+  states (`top_layer_left`, called from `unlink_node`).
+
+### Inert content
+
+To test whether a node is inert, call `au_node_inert` (`dom.h`), or
+`l_box_inert` for a box. A node is inert inside an element with the
+`inert` attribute, and, while the document has a modal dialog, when it
+is outside the topmost modal dialog of the top layer. Until a document
+has had an `inert` attribute (`AuDocument.has_inert`) and while it has
+no top layer, the test returns at once.
+
+- Hit testing (`hit.c`) treats an inert box as `pointer-events: none`
+  and passes over its subtree; only the root is still entered, since
+  top-layer boxes are layers of its list. A point with only inert
+  content under it has no target (`AuHitResult.element` is NULL), so
+  no event, hover, link or contextual menu link reaches the page there.
+- Selection (`selection.c`) gives no text position at a point over
+  inert content, Select All takes only text that is not inert, and the
+  text of a range, find and the painted highlight leave inert text out.
+- Focus is in [`forms.md`](forms.md).
 
 The cases are in `tests/layout/cases/top_layer.txt`; a `script` line
 before a case's HTML runs its scripts.

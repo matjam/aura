@@ -437,6 +437,7 @@ static uint32_t pseudo_state(int op)
     case PC_TARGET: return AU_STATE_TARGET;
     case PC_DEFINED: return AU_STATE_DEFINED;
     case PC_MODAL: return AU_STATE_MODAL;
+    case PC_POPOVER_OPEN: return AU_STATE_POPOVER_OPEN;
     case PC_VALID:
     case PC_INVALID: return AU_STATE_CHECKED | AU_STATE_CHECKED_SET | STATE_OTHER;
     case PC_DEFAULT:
@@ -2133,9 +2134,11 @@ static uint32_t share_hash(const AuStyle *parent, const AuElement *el, uint16_t 
 
 static bool share_eligible(const AuElement *el, const AuCssDeclBlock *inl, const AuCssDeclBlock *hints, bool root)
 {
-    /* A modal dialog carries a ::backdrop style (attach_pseudos) that the
-     * share key does not cover. */
-    return !root && !(inl && inl->n) && !(hints && hints->n) && !(el->state & AU_STATE_MODAL);
+    /* An element in the top layer carries a ::backdrop style
+     * (attach_pseudos) and a forced position (css_compute_finish) that
+     * the share key does not cover. */
+    return !root && !(inl && inl->n) && !(hints && hints->n) &&
+           !(el->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN));
 }
 
 /* ---- Element styles ---- */
@@ -2254,7 +2257,7 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
         if (k == AU_CSS_PSEUDO_MARKER ? !au_display_list_item(s->box->display) : !(s->pseudo_bits & (1u << k)))
             continue;
         /* ::backdrop exists only for an element in the top layer */
-        if (k == AU_CSS_PSEUDO_BACKDROP && !(el->state & AU_STATE_MODAL))
+        if (k == AU_CSS_PSEUDO_BACKDROP && !(el->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)))
             continue;
         AuStyle *p = au_css_compute_pseudo(r, el, s, (AuCssPseudo)k);
         if (p) {

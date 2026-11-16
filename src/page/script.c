@@ -14,7 +14,7 @@
  *   maps are handed to src/js; scripts with an unknown type are ignored.
  * - The runtime starts on the first script, or at the end of parsing when
  *   an element has an event handler attribute (handlers compile lazily on
- *   first dispatch, in src/js).
+ *   first dispatch, in src/js) or a popovertarget attribute.
  * - Script DOM changes only mark style and layout out of date
  *   (au_dv_dom_changed); one repaint request goes out at the end of each
  *   script turn and layout runs at the next paint, or earlier when script
@@ -933,7 +933,8 @@ void au_docscript_parse_done(AuDocScript *s)
         return;
     s->parse_done = true;
     if (!s->js) {
-        /* Start the runtime only when an event handler attribute needs it. */
+        /* Start the runtime only when an event handler attribute needs
+         * it, or a popovertarget button (popovers live in the bindings). */
         bool handlers = false;
         for (AuNode *n = &s->doc->node; n && !handlers; n = au_node_next(n, &s->doc->node)) {
             if (n->type != AU_NODE_ELEMENT)
@@ -941,7 +942,8 @@ void au_docscript_parse_done(AuDocScript *s)
             const AuElement *el = au_as_element(n);
             for (uint32_t i = 0; i < el->nattrs && !handlers; i++) {
                 const char *name = au_atom_str(el->attrs[i].name);
-                handlers = (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N');
+                handlers = ((name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N')) ||
+                           !strcmp(name, "popovertarget");
             }
         }
         if (!handlers) {
@@ -1161,6 +1163,25 @@ int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value)
     if (!s->js)
         return -1;
     return au_js_pattern_test(s->js, pattern, value);
+}
+
+bool au_docscript_close_request(AuDocScript *s)
+{
+    if (!s->js)
+        return false;
+    enter(s);
+    bool r = au_js_close_request(s->js);
+    leave(s);
+    return r;
+}
+
+void au_docscript_light_dismiss(AuDocScript *s, AuElement *target, bool up)
+{
+    if (!s->js)
+        return;
+    enter(s);
+    au_js_light_dismiss(s->js, target, up);
+    leave(s);
 }
 
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy)
