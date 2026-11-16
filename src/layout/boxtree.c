@@ -577,17 +577,6 @@ static const char *quote_str(const AuStyle *s, int depth, bool open)
 
 static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int pseudo, bool *skip_children);
 
-static void resolve_url(AuLayout *L, const char *url, char *out, size_t cap)
-{
-    if (!L->env.resolve_url || !L->env.resolve_url(L->env.ctx, url, out, cap)) {
-        size_t n = strlen(url);
-        if (n >= cap)
-            n = cap - 1;
-        memcpy(out, url, n);
-        out[n] = 0;
-    }
-}
-
 bool l_style_contains_fixed(const AuStyle *s)
 {
     const AuStyleRare *r = s->rare;
@@ -638,11 +627,12 @@ int l_image_refresh(AuLayout *L, LReplaced *rep)
 
 static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
 {
-    char abs[2048];
+    char buf[2048];
     if (!url || !*url)
         return;
-    resolve_url(L, url, abs, sizeof abs);
+    char *abs = l_resolve_url(L, url, buf, sizeof buf);
     rep->src = ar_strndup(&L->tree, abs, strlen(abs));
+    l_url_free(abs, buf);
     l_image_refresh(L, rep);
 }
 
@@ -1202,12 +1192,14 @@ static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_chil
         return none;
     if ((!type || !*type) && starts_ci(url, "data:") && !starts_ci(url + 5, "image/"))
         return none;
-    char abs[2048];
-    resolve_url(L, url, abs, sizeof abs);
+    char buf[2048];
+    char *abs = l_resolve_url(L, url, buf, sizeof buf);
     int w = 0, h = 0;
     const AuSurface *px = NULL;
     L->images_shape = true;
-    if (L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px)) {
+    bool image = L->env.image && L->env.image(L->env.ctx, abs, &w, &h, &px);
+    l_url_free(abs, buf);
+    if (image) {
         *skip_children = true;
         return LR_IMAGE;
     }

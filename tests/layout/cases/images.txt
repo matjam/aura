@@ -1,6 +1,25 @@
 Images: object-fit, object-position, list-style-image, srcset. The cases
 load data: URLs through the test loader.
 
+=== a data: URL longer than 2 KB loads as an image and a background
+script
+<body style="margin:0">
+<div id=d style="width:40px;height:40px;background-color:#0000ff;background-repeat:no-repeat"></div>
+<img id=i alt="" style="display:block">
+<script>
+// a 2x2 PNG followed by 1840 zero bytes: 2600 characters of base64
+var u = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAABnRSTlMAAAAAAABupgeRAAAABmJLR0QA/wD/AP+gvaeTAAAAEUlEQVR42mP4/58BCv7/ZwAAHfAD/abwPj4AAAAASUVORK5CYII' + Array(2454).join('A');
+document.getElementById('d').style.backgroundImage = 'url(' + u + ')';
+document.getElementById('i').src = u;
+</script>
+---
+// URLs were resolved into 2048-byte buffers: the background was never
+// asked for and the image's URL was cut short (reCAPTCHA's check mark is
+// a 3978-byte data: URL in its style sheet)
+pixel 0 0 ffff00
+pixel 10 10 0000ff
+#i y=40 w=2 h=2
+
 
 === object-fit and object-position
 <body style="margin:0">

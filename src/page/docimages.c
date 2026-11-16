@@ -147,11 +147,12 @@ static void scan(AuDocImages *m, AuDocument *doc, AuLayout *L, const char *base)
         if (!img)
             continue;
         /* The URL layout chose (srcset, sizes, <picture>). */
-        char abs[2048];
         au_buf_clear(&chosen);
-        if (!au_layout_image_source(L, el, &chosen) || !au_url_resolve(base, au_buf_cstr(&chosen), abs, sizeof abs))
+        char *abs = au_layout_image_source(L, el, &chosen) ? au_url_resolve_dup(base, au_buf_cstr(&chosen)) : NULL;
+        if (!abs)
             continue;
         AuImageEntry *e = au_image_cache_find(m->cache, abs);
+        au_free(abs);
         if (!e)
             continue; /* layout has not asked for it yet */
         if (m->nt == m->tcap) {

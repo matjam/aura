@@ -1,6 +1,8 @@
 /* Relative URL resolution: a limited subset of the WHATWG URL Standard
- * (see page.h). */
+ * (see page.h). Any length is resolved: a data: URL of an image or a font
+ * is often tens of kilobytes. */
 #include "page.h"
+#include "../url/url.h"
 
 #include <string.h>
 
@@ -18,11 +20,13 @@ static size_t scheme_len(const char *s, size_t n)
     return 0;
 }
 
-/* Appends path to out (at *len) removing dot segments. */
+/* Removes dot segments from path (*plen bytes), in place: each kept
+ * segment moves to an offset no later than where it was read. */
 static void remove_dots(char *path, size_t *plen)
 {
     char *src = path, *end = path + *plen;
-    char out[4096];
+    bool trailing = (end - path >= 2 && end[-1] == '.' && end[-2] == '/') ||
+                    (end - path >= 3 && end[-1] == '.' && end[-2] == '.' && end[-3] == '/');
     size_t o = 0;
     while (src < end) {
         char *seg_end = memchr(src, '/', (size_t)(end - src));
@@ -36,41 +40,48 @@ static void remove_dots(char *path, size_t *plen)
             /* drop the last segment of out (keep the leading '/') */
             if (o > 1) {
                 o--; /* the slash ending the previous segment */
-                while (o > 0 && out[o - 1] != '/')
+                while (o > 0 && path[o - 1] != '/')
                     o--;
             }
         } else {
-            if (o + n + 1 >= sizeof out)
-                break;
-            memcpy(out + o, src, n);
+            memmove(path + o, src, n);
             o += n;
             if (slash)
-                out[o++] = '/';
+                path[o++] = '/';
         }
         src = seg_end + (slash ? 1 : 0);
         if (!slash)
             break;
     }
-    if ((end - path >= 2 && end[-1] == '.' && end[-2] == '/') ||
-        (end - path >= 3 && end[-1] == '.' && end[-2] == '.' && end[-3] == '/')) {
-        /* a trailing "." or ".." leaves a directory */
-        if (o == 0 || out[o - 1] != '/')
-            out[o++] = '/';
-    }
-    memcpy(path, out, o);
+    /* a trailing "." or ".." leaves a directory */
+    if (trailing && (o == 0 || path[o - 1] != '/'))
+        path[o++] = '/';
     *plen = o;
 }
 
-bool au_url_resolve(const char *base, const char *rel, char *out, size_t cap)
+/* Resolves rel against base. The result is NUL-terminated in work when
+ * work (wcap bytes) holds what resolution needs, else in a block from
+ * au_alloc that the caller frees; *len is its length. NULL when an input
+ * is longer than AU_URL_MAX_INPUT. */
+static char *resolve(const char *base, const char *rel, char *work, size_t wcap, size_t *len)
 {
-    char r[4096];
-    size_t rn = 0;
     if (!rel)
         rel = "";
+    if (!base)
+        base = "";
     /* Trim C0 controls and spaces; drop tabs and newlines inside. */
     while (*rel && (unsigned char)*rel <= ' ')
         rel++;
-    for (const char *p = rel; *p && rn < sizeof r - 1; p++) {
+    size_t rl = strlen(rel), bl = strlen(base);
+    if (rl > AU_URL_MAX_INPUT || bl > AU_URL_MAX_INPUT)
+        return NULL;
+    /* The result (at most the base, a slash and rel) and the cleaned rel
+     * share one buffer. */
+    size_t bcap = bl + rl + 2, need = bcap + rl + 1;
+    char *buf = need <= wcap ? work : au_alloc(need);
+    char *r = buf + bcap;
+    size_t rn = 0;
+    for (const char *p = rel; *p; p++) {
         if (*p == '\t' || *p == '\n' || *p == '\r')
             continue;
         r[rn++] = *p == '\\' ? '/' : *p;
@@ -78,13 +89,13 @@ bool au_url_resolve(const char *base, const char *rel, char *out, size_t cap)
     while (rn && (unsigned char)r[rn - 1] <= ' ')
         rn--;
     r[rn] = 0;
-    if (!base)
-        base = "";
-    size_t bl = strlen(base);
     size_t rs = scheme_len(r, rn);
-    char buf[8192];
     size_t n = 0;
-#define PUT(s, len) do { if (n + (len) >= sizeof buf) return false; memcpy(buf + n, (s), (len)); n += (len); } while (0)
+#define PUT(s, l)                                                                                                      \
+    do {                                                                                                               \
+        memcpy(buf + n, (s), (l));                                                                                     \
+        n += (l);                                                                                                      \
+    } while (0)
     if (rs) {
         PUT(r, rn);
     } else {
@@ -135,28 +146,47 @@ bool au_url_resolve(const char *base, const char *rel, char *out, size_t cap)
                         PUT("/", 1);
                     PUT(r, rn);
                 }
-                /* Dot segments in the path part (before ? or #). */
+                /* Dot segments in the path part (before ? or #); the
+                 * query and fragment move down after it. */
                 size_t pend = pstart;
                 while (pend < n && buf[pend] != '?' && buf[pend] != '#')
                     pend++;
-                size_t plen = pend - pstart;
-                char tail[4096];
-                size_t tl = n - pend;
-                if (tl >= sizeof tail)
-                    return false;
-                memcpy(tail, buf + pend, tl);
-                if (plen < 4096) {
-                    remove_dots(buf + pstart, &plen);
-                }
-                n = pstart + plen;
-                PUT(tail, tl);
+                size_t plen = pend - pstart, tl = n - pend;
+                remove_dots(buf + pstart, &plen);
+                memmove(buf + pstart + plen, buf + pend, tl);
+                n = pstart + plen + tl;
             }
         }
     }
 #undef PUT
-    if (n + 1 > cap)
+    buf[n] = 0;
+    *len = n;
+    return buf;
+}
+
+bool au_url_resolve(const char *base, const char *rel, char *out, size_t cap)
+{
+    char work[2048];
+    size_t n;
+    char *s = resolve(base, rel, work, sizeof work, &n);
+    if (!s)
         return false;
-    memcpy(out, buf, n);
-    out[n] = 0;
-    return true;
+    bool ok = n + 1 <= cap;
+    if (ok)
+        memcpy(out, s, n + 1);
+    if (s != work)
+        au_free(s);
+    return ok;
+}
+
+char *au_url_resolve_dup(const char *base, const char *rel)
+{
+    char work[2048];
+    size_t n;
+    char *s = resolve(base, rel, work, sizeof work, &n);
+    if (!s || s != work)
+        return s;
+    char *d = au_alloc(n + 1);
+    memcpy(d, s, n + 1);
+    return d;
 }
