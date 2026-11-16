@@ -332,7 +332,7 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
          * kept out of the heap's free space. */
         if (h->long_kb) {
             char note[64];
-            snprintf(note, sizeof note, "%lu KB of it in temporary memory", (unsigned long)h->long_temp_kb);
+            snprintf(note, sizeof note, "in %lu KB of temporary memory", (unsigned long)h->long_temp_kb);
             mem_row(out, "Long-lived blocks", h->long_kb, 0, note);
         }
     }

@@ -645,7 +645,7 @@ typedef struct ChromeOpts {
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
     bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
-    const char *actions[64]; /* --do: scripted input, in order */
+    const char *actions[256]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
     const char *blocklist; /* --blocklist FILE: a compiled or text list requests are checked against */
@@ -1449,7 +1449,7 @@ int main(int argc, char **argv)
                 o.mouse_x = atoi(argv[++i]);
                 o.mouse_y = atoi(argv[++i]);
             }
-            else if (!strcmp(a, "--do") && i + 1 < argc && o.nactions < 64)
+            else if (!strcmp(a, "--do") && i + 1 < argc && o.nactions < (int)(sizeof o.actions / sizeof o.actions[0]))
                 o.actions[o.nactions++] = argv[++i];
             else
                 return usage();

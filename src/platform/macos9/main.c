@@ -176,12 +176,14 @@ static void *temp_get(size_t n)
  * the network stack, the HTTP cache, TLS, fonts, atoms and this shell.
  * They come from temporary memory, so that they never sit among a page's
  * blocks in the application heap and a closed page leaves its space in
- * one piece: blocks up to LONG_CHUNK / 4 are cut from chunks of
- * LONG_CHUNK (an AuRegion, first fit, so freed space is used again), and
- * larger ones get a handle each. A chunk whose blocks are all freed goes
- * back, except the last one. When temporary memory has no room, the
- * block comes from the heap as a page's does. */
-#define LONG_CHUNK (1024L * 1024)
+ * one piece: slabs (about 32 KB each) are cut from chunks of LONG_CHUNK
+ * (an AuRegion, first fit, so freed space is used again), and large
+ * blocks, which come and go with transfers (receive buffers, TLS records,
+ * bodies), get a handle each, so that they do not leave chunks held by a
+ * few slabs. A chunk whose slabs are all freed goes back, except the last
+ * one. When temporary memory has no room, the block comes from the heap
+ * as a page's does. */
+#define LONG_CHUNK (512L * 1024)
 
 static AuRegion long_region;
 static Handle long_handles[AU_REGION_CHUNKS]; /* the handle of long_region.chunk[i] */
@@ -210,20 +212,11 @@ static void long_handle_free(Handle h)
     DisposeHandle(h);
 }
 
-static void *long_get(size_t n)
+/* A slab from the chunks, adding one when none has room; NULL when the
+ * region has all its chunks or temporary memory has no room. */
+static PlatHdr *long_chunked(long need)
 {
-    long need = (long)((n + sizeof(PlatHdr) + 7) & ~(size_t)7);
-    PlatHdr *hd;
-    if (need > LONG_CHUNK / 4) {
-        Handle h = long_handle(need);
-        if (!h)
-            return NULL;
-        hd = (PlatHdr *)*h;
-        hd->owner = h;
-        hd->chunked = 2;
-        return hd + 1;
-    }
-    hd = au_region_alloc(&long_region, (size_t)need, false);
+    PlatHdr *hd = au_region_alloc(&long_region, (size_t)need, false);
     if (!hd && long_region.nchunks < AU_REGION_CHUNKS) {
         Handle h = long_handle(LONG_CHUNK);
         if (!h)
@@ -235,10 +228,25 @@ static void *long_get(size_t n)
         long_handles[long_region.nchunks - 1] = h;
         hd = au_region_alloc(&long_region, (size_t)need, false);
     }
-    if (!hd)
-        return NULL;
-    hd->owner = &long_region;
-    hd->chunked = 3;
+    if (hd) {
+        hd->owner = &long_region;
+        hd->chunked = 3;
+    }
+    return hd;
+}
+
+static void *long_get(size_t n, bool slab)
+{
+    long need = (long)((n + sizeof(PlatHdr) + 7) & ~(size_t)7);
+    PlatHdr *hd = slab ? long_chunked(need) : NULL;
+    if (!hd) {
+        Handle h = long_handle(need);
+        if (!h)
+            return NULL;
+        hd = (PlatHdr *)*h;
+        hd->owner = h;
+        hd->chunked = 2;
+    }
     return hd + 1;
 }
 
@@ -259,7 +267,7 @@ static void long_release(PlatHdr *hd)
 static void *heap_get(size_t n, unsigned how)
 {
     if ((how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG) {
-        void *t = long_get(n);
+        void *t = long_get(n, (how & AU_HEAP_GET_SLAB) != 0);
         if (t)
             return t;
     }
