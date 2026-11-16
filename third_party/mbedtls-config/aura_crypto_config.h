@@ -58,10 +58,24 @@
 #define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_BASIC 1
 #define PSA_WANT_ALG_RSA_OAEP 1
 #ifdef AURA_MBEDTLS_SERVER
-#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_IMPORT 1
-#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_EXPORT 1
 #define PSA_WANT_ALG_DETERMINISTIC_ECDSA 1
 #endif
+
+/* Script's crypto.subtle (src/net/webcrypto.c, docs/javascript.md):
+ * AES-CBC, AES-CTR, and AES-KW over single ECB blocks (these three bring
+ * in the library's cipher module); PBKDF2 and HKDF; RSA private keys for
+ * signing and decryption, and RSA key generation, which yields through
+ * AURA_MBEDTLS_YIELD (third_party/mbedtls-patches/0002). The tests' TLS
+ * server uses the RSA key pair import and export too. */
+#define PSA_WANT_ALG_CBC_PKCS7 1
+#define PSA_WANT_ALG_CTR 1
+#define PSA_WANT_ALG_ECB_NO_PADDING 1
+#define PSA_WANT_ALG_PBKDF2_HMAC 1
+#define PSA_WANT_ALG_HKDF 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_IMPORT 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_EXPORT 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_GENERATE 1
+#define AURA_MBEDTLS_YIELD
 
 /* Platform. The allocator is set at run time (MBEDTLS_PLATFORM_MEMORY);
  * the wall clock, the millisecond clock, the calendar conversion and the

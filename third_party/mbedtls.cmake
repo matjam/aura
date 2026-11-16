@@ -23,7 +23,7 @@ file(GLOB AURA_MBEDTLS_SOURCES CONFIGURE_DEPENDS
 # change to the configuration turns one of these on, the link fails with
 # undefined symbols: take the file off this list.
 set(AURA_MBEDTLS_UNUSED
-    aesce aesni aria base64 bignum_mod_raw bignum_mod camellia ccm cipher_wrap cipher cmac ctr_drbg debug
+    aesce aesni aria base64 bignum_mod_raw bignum_mod block_cipher camellia ccm cmac ctr_drbg debug
     ecjpake ecp_curves_new error lmots lms md5 memory_buffer_alloc mps_trace net_sockets nist_kw pem pkcs5
     pkcs7 pkwrite psa_crypto_ffdh psa_crypto_pake psa_crypto_storage psa_crypto_xof psa_its_file ripemd160
     sha3 ssl_cookie ssl_debug_helpers_generated tf_psa_crypto_version threading timing version_features

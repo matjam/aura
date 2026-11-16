@@ -242,8 +242,11 @@ promise_test('crypto.subtle: digests and HMAC', async () => {
     try { await crypto.subtle.exportKey('raw', key); } catch (e) { err = e; }
     assert.equal(err && err.name, 'InvalidAccessError');
     err = null;
+    try { await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, key, msg); } catch (e) { err = e; }
+    assert.equal(err && err.name, 'InvalidAccessError', 'an HMAC key does not encrypt');
+    err = null;
     try { await crypto.subtle.encrypt({ name: 'AES-GCM' }, key, msg); } catch (e) { err = e; }
-    assert.equal(err && err.name, 'NotSupportedError');
+    assert.ok(err instanceof TypeError, 'AES-GCM without an iv');
 });
 
 promise_test('XMLHttpRequest: event order, response types, headers', async () => {
