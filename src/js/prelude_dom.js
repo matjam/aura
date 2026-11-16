@@ -797,7 +797,7 @@ defProps(HTMLElement.prototype, {
 let focused = null;
 const focusableTags = /^(a|area|button|input|select|textarea|iframe|summary)$/;
 function isFocusable(el) {
-    if (!isElement(el) || !el.isConnected) return false;
+    if (!isElement(el) || !el.isConnected || N.inert(el)) return false;
     if (el.hasAttribute('tabindex')) return true;
     if (el.hasAttribute('contenteditable')) return true;
     if (!focusableTags.test(el.localName) || el.namespaceURI !== HTML_NS) return false;

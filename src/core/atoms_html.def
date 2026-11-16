@@ -166,3 +166,7 @@ ATOM(content, "content")
 ATOM(selected, "selected")
 ATOM(multiple, "multiple")
 ATOM(disabled, "disabled")
+/* The top layer and inertness (dom.c). */
+ATOM(inert, "inert")
+ATOM(open, "open")
+ATOM(popover, "popover")

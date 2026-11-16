@@ -84,7 +84,7 @@ function reflect(proto, rows) {
 reflect(HEP, [['title', 's'], ['lang', 's'], ['translate', 'e', 0, [['yes', 'no'], 'yes', 'yes']],
     ['dir', 'e', 0, [['ltr', 'rtl', 'auto'], '', '']], ['hidden', 'b'], ['inert', 'b'], ['accessKey', 's', 'accesskey'],
     ['autofocus', 'b'], ['nonce', 's'], ['autocapitalize', 's'], ['enterKeyHint', 's', 'enterkeyhint'],
-    ['inputMode', 's', 'inputmode'], ['popover', 's']]);
+    ['inputMode', 's', 'inputmode']]);
 /* SVG and MathML elements have style, dataset and tabIndex too
  * (ElementCSSInlineStyle, HTMLOrSVGElement); React sets svg.style. */
 for (const proto of [SVGElement.prototype, MathMLElement.prototype]) {
@@ -228,7 +228,7 @@ const ifaceRows = {
     HTMLButtonElement: [['disabled', 'b'], ['formAction', 'u', 'formaction'], ['formEnctype', 's', 'formenctype'],
         ['formMethod', 's', 'formmethod'], ['formNoValidate', 'b', 'formnovalidate'], ['formTarget', 's', 'formtarget'],
         ['name', 's'], ['value', 's'], ['type', 'e', 0, [['submit', 'reset', 'button'], 'submit', 'submit']],
-        ['popoverTargetAction', 's', 'popovertargetaction']],
+        ['popoverTargetAction', 'e', 'popovertargetaction', [['toggle', 'show', 'hide'], 'toggle', 'toggle']]],
     HTMLCanvasElement: [['width', 'n', 0, 300], ['height', 'n', 0, 150]],
     HTMLDListElement: [['compact', 'b']],
     HTMLDataElement: [['value', 's']],
@@ -266,7 +266,8 @@ const ifaceRows = {
         ['height', 'n'], ['max', 's'], ['maxLength', 'n', 'maxlength', -1], ['min', 's'], ['minLength', 'n', 'minlength', -1],
         ['multiple', 'b'], ['name', 's'], ['pattern', 's'], ['placeholder', 's'], ['readOnly', 'b', 'readonly'],
         ['required', 'b'], ['size', 'n', 0, 20], ['src', 'u'], ['step', 's'], ['defaultValue', 's', 'value'], ['width', 'n'],
-        ['align', 's'], ['useMap', 's', 'usemap']],
+        ['align', 's'], ['useMap', 's', 'usemap'],
+        ['popoverTargetAction', 'e', 'popovertargetaction', [['toggle', 'show', 'hide'], 'toggle', 'toggle']]],
     HTMLLIElement: [['value', 'l'], ['type', 's']],
     HTMLLabelElement: [['htmlFor', 's', 'for']],
     HTMLLegendElement: [['align', 's']],
@@ -886,9 +887,15 @@ function runActivation(e, toggled, ev) {
         return;
     }
     const form = formOwner(e);
-    if (!form) return;
-    if (t === 'submit' || t === 'image') form.requestSubmit(e);
-    else if (t === 'reset') form.reset();
+    if (form && (t === 'submit' || t === 'image')) form.requestSubmit(e);
+    else if (form && t === 'reset') form.reset();
+    const pt = popoverTargetOf(e);
+    if (pt && e.isConnected) {
+        /* The popover target attribute's activation behaviour. */
+        const a = e.popoverTargetAction, showing = isOpenPopover(pt);
+        if (showing && a !== 'show') hidePopoverEl(pt, true, true, false);
+        else if (!showing && a !== 'hide') showPopoverEl(pt, e, false);
+    }
 }
 function followHyperlink(a) {
     const href = a.getAttribute('href');
@@ -1012,30 +1019,241 @@ defProps(HTMLMediaElement.prototype, {
     get playbackRate() { return 1; },
     set playbackRate(v) {},
 });
+/* ---------------- the top layer: dialogs and popovers ----------------
+ * A modal dialog and a showing popover are in the document's top layer
+ * (N.setTopLayer, kind 1 and 2), which C keeps in the order they were
+ * added (N.topLayer): they match :modal and :popover-open, and layout
+ * paints them above the rest of the page. While a modal dialog is open
+ * the rest of the document is inert (N.inert). */
+
+/* The dialog focusing steps: the dialog itself when it has autofocus,
+ * else its first focusable descendant with autofocus, else its first
+ * focusable descendant; with none, the focus leaves what is now inert. */
+function dialogFocus(d) {
+    let c = d.hasAttribute('autofocus') && isFocusable(d) ? d : null;
+    if (!c) for (const e of d.querySelectorAll('[autofocus]')) if (isFocusable(e)) { c = e; break; }
+    if (!c) for (const e of d.querySelectorAll('*')) if (isFocusable(e)) { c = e; break; }
+    if (c) c.focus();
+    else if (focused && !d.contains(focused)) setFocus(null);
+}
 defProps(HTMLDialogElement.prototype, {
-    show() { if (!this.hasAttribute('open')) this.setAttribute('open', ''); },
-    /* A modal dialog is in the top layer (N.setModal): it matches :modal
-     * and is painted above the rest of the page. */
+    show() {
+        if (this.hasAttribute('open')) {
+            if (this.matches(':modal')) throw domErr('The dialog is open and modal', 'InvalidStateError');
+            return;
+        }
+        this.setAttribute('open', '');
+    },
     showModal() {
         if (this.hasAttribute('open')) {
             if (this.matches(':modal')) return;
             throw domErr('The dialog is already open', 'InvalidStateError');
         }
         if (!this.isConnected) throw domErr('The dialog is not connected', 'InvalidStateError');
+        if (isOpenPopover(this)) throw domErr('The dialog is a showing popover', 'InvalidStateError');
         this.setAttribute('open', '');
-        N.setModal(this, true);
+        const st = ctrlState(this);
+        st.prevFocus = focused;
+        N.setTopLayer(this, 1, true);
+        /* Popovers that are not ancestors of the dialog close. */
+        hidePopoversUntil(nearestOpenAuto(this.parentElement, autoStack()));
+        dialogFocus(this);
     },
     close(rv) {
         if (!this.hasAttribute('open')) return;
-        N.setModal(this, false);
+        const st = ctrlState(this), prev = st.prevFocus;
+        st.prevFocus = null;
+        N.setTopLayer(this, 1, false);
         this.removeAttribute('open');
-        if (rv !== undefined) ctrlState(this).returnValue = str(rv);
+        if (rv !== undefined) st.returnValue = str(rv);
+        /* The focus goes back to where it was before showModal(). */
+        if (prev && prev.isConnected && (!focused || !focused.isConnected || this.contains(focused))) prev.focus();
         fireSimple(this, 'close', false, false);
     },
     get returnValue() { return (ctrl.get(this) || {}).returnValue || ''; },
     set returnValue(v) { ctrlState(this).returnValue = str(v); },
-    requestClose(rv) { if (fire(this, new Event('cancel', { cancelable: true }))) this.close(rv); },
+    requestClose(rv) {
+        if (!this.hasAttribute('open')) return;
+        if (fire(this, new Event('cancel', { cancelable: true }))) this.close(rv);
+    },
 });
+
+/* Popovers. 'hint' popovers are kept with the auto ones (one stack). */
+function popoverKind(el) {
+    const v = isElement(el) && el.namespaceURI === HTML_NS ? el.getAttribute('popover') : null;
+    if (v === null) return null;
+    const k = v.toLowerCase();
+    return k === '' || k === 'auto' ? 'auto' : k === 'hint' ? 'hint' : 'manual';
+}
+const isOpenPopover = (el) => isElement(el) && el.matches(':popover-open');
+/* The showing auto popovers, bottom first. */
+const autoStack = () => N.topLayer().filter((e) => isOpenPopover(e) && popoverKind(e) !== 'manual');
+/* The nearest inclusive ancestor of n in stack. */
+function nearestOpenAuto(n, stack) {
+    for (let e = n; e; e = e.parentElement) if (stack.includes(e)) return e;
+    return null;
+}
+/* Of two popovers in stack (either may be null), the higher. */
+const higherOf = (stack, a, b) => (!a ? b : !b ? a : stack.indexOf(a) > stack.indexOf(b) ? a : b);
+/* The popover a button or input button shows or hides, or null. */
+function popoverTargetOf(e) {
+    if (!isElement(e) || e.namespaceURI !== HTML_NS) return null;
+    if (e.localName === 'input') {
+        const t = inputType(e);
+        if (t !== 'button' && t !== 'reset' && t !== 'submit' && t !== 'image') return null;
+        if ((t === 'submit' || t === 'image') && formOwner(e)) return null;
+    } else if (e.localName === 'button') {
+        if (e.type === 'submit' && formOwner(e)) return null;
+    } else {
+        return null;
+    }
+    if (isDisabled(e)) return null;
+    let t = ctrl.get(e) && ctrl.get(e).popoverTarget;
+    if (!t || !t.isConnected) {
+        const id = e.getAttribute('popovertarget');
+        t = id === null || !e.isConnected ? null : e.getRootNode().getElementById(id);
+    }
+    return t && popoverKind(t) ? t : null;
+}
+/* Hides the auto popovers above endpoint, the topmost first (all of
+ * them when endpoint is null or not showing). */
+function hidePopoversUntil(endpoint) {
+    for (let guard = 0; guard < 1000; guard++) {
+        const stack = autoStack();
+        if (!stack.length) return;
+        const top = stack[stack.length - 1];
+        if (top === endpoint) return;
+        if (!hidePopoverEl(top, false, true, false)) return;
+    }
+}
+/* The popover that must stay open when el opens: the highest showing
+ * auto popover among el's ancestors and its invoker's. */
+function popoverAncestor(el, invoker) {
+    const stack = autoStack();
+    return higherOf(stack, nearestOpenAuto(el.parentElement, stack), invoker ? nearestOpenAuto(invoker, stack) : null);
+}
+function queueToggle(el, oldState, newState) {
+    const st = ctrlState(el);
+    if (st.toggleTask) { st.toggleTask.newState = newState; return; }
+    const t = st.toggleTask = { oldState, newState };
+    N.queueTask(() => {
+        st.toggleTask = null;
+        if (t.oldState !== t.newState) fire(el, new ToggleEvent('toggle', { oldState: t.oldState, newState: t.newState }));
+    });
+}
+function showPopoverEl(el, invoker, throws) {
+    const fail = (msg, name) => { if (throws) throw domErr(msg, name); return false; };
+    const kind = popoverKind(el);
+    if (!kind) return fail('The element is not a popover', 'NotSupportedError');
+    if (isOpenPopover(el)) return false;
+    if (!el.isConnected) return fail('The popover is not connected', 'InvalidStateError');
+    if (el.localName === 'dialog' && el.hasAttribute('open')) return fail('The dialog is open', 'InvalidStateError');
+    if (!fire(el, new ToggleEvent('beforetoggle', { cancelable: true, oldState: 'closed', newState: 'open' }))) return false;
+    const still = () => !isOpenPopover(el) && el.isConnected && popoverKind(el) === kind;
+    if (!still()) return false;
+    if (kind !== 'manual') {
+        hidePopoversUntil(popoverAncestor(el, invoker));
+        if (!still()) return false;
+    }
+    const st = ctrlState(el);
+    st.invoker = invoker || null;
+    st.prevFocus = focused;
+    N.setTopLayer(el, 2, true);
+    queueToggle(el, 'closed', 'open');
+    /* The popover focusing steps: autofocus only. */
+    const af = el.hasAttribute('autofocus') ? el : el.querySelector('[autofocus]');
+    if (af && isFocusable(af)) af.focus();
+    return true;
+}
+function hidePopoverEl(el, focusBack, events, throws) {
+    if (!popoverKind(el)) {
+        if (throws) throw domErr('The element is not a popover', 'NotSupportedError');
+        return false;
+    }
+    if (!isOpenPopover(el)) return false;
+    if (popoverKind(el) !== 'manual') {
+        hidePopoversUntil(el);
+        if (!isOpenPopover(el)) return false;
+    }
+    const st = ctrlState(el);
+    st.invoker = null;
+    if (events) {
+        fire(el, new ToggleEvent('beforetoggle', { oldState: 'open', newState: 'closed' }));
+        if (!isOpenPopover(el)) return false;
+    }
+    N.setTopLayer(el, 2, false);
+    if (events) queueToggle(el, 'open', 'closed');
+    const prev = st.prevFocus;
+    st.prevFocus = null;
+    if (focusBack && prev && prev.isConnected && focused && el.contains(focused)) prev.focus();
+    return true;
+}
+defProps(HEP, {
+    get popover() { return popoverKind(this); },
+    set popover(v) { if (v === null) this.removeAttribute('popover'); else this.setAttribute('popover', str(v)); },
+    showPopover(opts) {
+        const src = opts && typeof opts === 'object' && isElement(opts.source) ? opts.source : null;
+        showPopoverEl(this, src, true);
+    },
+    hidePopover() { hidePopoverEl(this, true, true, true); },
+    togglePopover(opts) {
+        let force, src = null;
+        if (typeof opts === 'boolean') force = opts;
+        else if (opts && typeof opts === 'object') { force = opts.force; if (isElement(opts.source)) src = opts.source; }
+        if (!popoverKind(this)) throw domErr('The element is not a popover', 'NotSupportedError');
+        const showing = isOpenPopover(this);
+        if (showing && force !== true) hidePopoverEl(this, true, true, true);
+        else if (!showing && force !== false) showPopoverEl(this, src, true);
+        return isOpenPopover(this);
+    },
+});
+for (const proto of [HTMLButtonElement.prototype, HTMLInputElement.prototype]) {
+    defProps(proto, {
+        get popoverTargetElement() {
+            const t = ctrl.get(this) && ctrl.get(this).popoverTarget;
+            if (t && t.isConnected) return t;
+            const id = this.getAttribute('popovertarget');
+            return id === null || !this.isConnected ? null : this.getRootNode().getElementById(id);
+        },
+        set popoverTargetElement(v) {
+            ctrlState(this).popoverTarget = isElement(v) ? v : null;
+            if (v === null) this.removeAttribute('popovertarget');
+            else this.setAttribute('popovertarget', '');
+        },
+    });
+}
+
+/* Entry points: Escape (close request) and light dismiss. */
+P.closeRequest = function () {
+    const top = N.topLayer();
+    for (let i = top.length; i-- > 0;) {
+        const el = top[i];
+        if (el.localName === 'dialog' && el.matches(':modal')) { el.requestClose(); return true; }
+        if (isOpenPopover(el) && popoverKind(el) !== 'manual') { hidePopoverEl(el, true, true, false); return true; }
+    }
+    return false;
+};
+/* A press (up false) and its release (up true) on target: when both are
+ * in the same popover (or outside every one), the auto popovers above it
+ * close. A press on a popover's invoker counts as a press in it. */
+let popoverDown = null;
+function clickedPopover(n, stack) {
+    let inv = null;
+    for (let e = n; e && !inv; e = e.parentElement) {
+        const t = popoverTargetOf(e);
+        if (t && stack.includes(t)) inv = t;
+    }
+    return higherOf(stack, nearestOpenAuto(n, stack), inv);
+}
+P.lightDismiss = function (target, up) {
+    const stack = autoStack();
+    if (!stack.length) { popoverDown = null; return; }
+    const clicked = clickedPopover(isElement(target) ? target : null, stack);
+    if (!up) { popoverDown = clicked; return; }
+    const same = clicked === popoverDown;
+    popoverDown = null;
+    if (same) hidePopoversUntil(clicked);
+};
 defProps(HTMLScriptElement.prototype, {
     get text() { let s = ''; for (let c = this.firstChild; c; c = c.nextSibling) if (c.nodeType === 3) s += c.data; return s; },
     set text(v) { this.textContent = v; },

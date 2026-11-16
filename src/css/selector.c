@@ -222,7 +222,7 @@ static const struct {
     {"scope", PC_SCOPE}, {"valid", PC_VALID}, {"invalid", PC_INVALID}, {"user-valid", PC_USER_VALID},
     {"user-invalid", PC_USER_INVALID}, {"in-range", PC_IN_RANGE}, {"out-of-range", PC_OUT_OF_RANGE},
     {"autofill", PC_NEVER}, {"-webkit-autofill", PC_NEVER}, {"fullscreen", PC_NEVER},
-    {"-webkit-full-screen", PC_NEVER}, {"modal", PC_MODAL}, {"popover-open", PC_NEVER},
+    {"-webkit-full-screen", PC_NEVER}, {"modal", PC_MODAL}, {"popover-open", PC_POPOVER_OPEN},
     {"picture-in-picture", PC_NEVER}, {"playing", PC_NEVER}, {"paused", PC_NEVER}, {"seeking", PC_NEVER},
     {"buffering", PC_NEVER}, {"stalled", PC_NEVER}, {"muted", PC_NEVER}, {"volume-locked", PC_NEVER},
     {"open", PC_NEVER}, {"closed", PC_NEVER}, {"current", PC_NEVER}, {"past", PC_NEVER},

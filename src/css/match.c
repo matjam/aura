@@ -867,6 +867,8 @@ static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatch
         return (el->state & AU_STATE_TARGET) != 0;
     case PC_MODAL:
         return (el->state & AU_STATE_MODAL) != 0;
+    case PC_POPOVER_OPEN:
+        return (el->state & AU_STATE_POPOVER_OPEN) != 0;
     case PC_CHECKED:
         return is_checked(el);
     case PC_INDETERMINATE:

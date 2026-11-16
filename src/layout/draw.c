@@ -72,7 +72,8 @@ static int32_t zof(const LBox *b)
 }
 
 /* Whether a is painted after b in a stacking context's list: the top
- * layer after every z-index, and within it each element just above its
+ * layer after every z-index, in the order of the document's top layer
+ * (the element added last on top), each element just above its
  * ::backdrop (which is a child of the element's box, so comes later in
  * tree order); otherwise by z-index. */
 static bool layer_after(const LBox *a, const LBox *b)
@@ -80,8 +81,11 @@ static bool layer_after(const LBox *a, const LBox *b)
     bool ta = l_top_layer(a), tb = l_top_layer(b);
     if (ta != tb)
         return ta;
-    if (ta)
-        return a->node == b->node && a->pseudo == AU_CSS_PSEUDO_NONE && b->pseudo == AU_CSS_PSEUDO_BACKDROP;
+    if (ta) {
+        if (a->node == b->node)
+            return a->pseudo == AU_CSS_PSEUDO_NONE && b->pseudo == AU_CSS_PSEUDO_BACKDROP;
+        return au_top_layer_index((const AuElement *)a->node) > au_top_layer_index((const AuElement *)b->node);
+    }
     return zof(a) > zof(b);
 }
 

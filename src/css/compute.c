@@ -982,6 +982,16 @@ void css_compute_finish(CssComputeCtx *c, uint16_t parent_display)
 {
     AuStyle *s = c->style;
     const AuStyleBox *b = s->box;
+    /* An element in the top layer and its ::backdrop are absolutely
+     * positioned unless they are fixed (CSS Positioned Layout 4, section
+     * 6): position static, relative or sticky computes to absolute. */
+    if (c->el && (c->el->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)) &&
+        (s->pseudo == AU_CSS_PSEUDO_NONE || s->pseudo == AU_CSS_PSEUDO_BACKDROP) &&
+        b->position != AU_POSITION_ABSOLUTE && b->position != AU_POSITION_FIXED) {
+        AuStyleBox *mb = css_mut_group(s, G_BOX);
+        mb->position = AU_POSITION_ABSOLUTE;
+        b = s->box;
+    }
     uint16_t d = b->display_specified;
     bool out_of_flow = b->position == AU_POSITION_ABSOLUTE || b->position == AU_POSITION_FIXED;
     int pinner = au_display_inner(parent_display);

@@ -96,6 +96,12 @@ struct AuDocument {
      * which ones is then unknown. */
     AuAtom style_names[24];
     uint8_t style_names_n;
+    /* An element of this document has had the inert attribute: until
+     * then au_node_inert looks only for a modal dialog. */
+    bool has_inert;
+    /* The top layer (see "The top layer" below), bottom first. */
+    AuElement **top_layer;
+    uint32_t ntop, top_cap;
 };
 #define AU_DOC_STYLE_NAMES 24
 
@@ -187,8 +193,9 @@ void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, cons
  * the selectedness of an option; it is used instead of the checked or
  * selected attribute once AU_STATE_CHECKED_SET is on. AU_STATE_MODAL is
  * a dialog opened with showModal(): it matches :modal and layout paints
- * it in the top layer. The bits from AU_STATE_STYLE_DIRTY up belong to
- * src/css. */
+ * it in the top layer. AU_STATE_POPOVER_OPEN is a showing popover: it
+ * matches :popover-open and is in the top layer too. The bits from
+ * AU_STATE_STYLE_DIRTY up belong to src/css. */
 enum {
     AU_STATE_HOVER = 1u << 0,
     AU_STATE_ACTIVE = 1u << 1,
@@ -201,11 +208,37 @@ enum {
     AU_STATE_TARGET = 1u << 8,
     AU_STATE_DEFINED = 1u << 9, /* a custom element (name with '-') that is defined */
     AU_STATE_MODAL = 1u << 10,  /* a modal dialog, in the top layer */
+    AU_STATE_POPOVER_OPEN = 1u << 11, /* a showing popover, in the top layer */
     AU_STATE_STYLE_DIRTY = 1u << 16,
     AU_STATE_SUBTREE_DIRTY = 1u << 17,
     AU_STATE_STYLE_SELF_DIRTY = 1u << 18 /* restyle the element; its subtree only if its style changes */
 };
 void au_element_set_state(AuElement *el, uint32_t bits, bool on);
+
+/* ---- The top layer and inertness ----
+ * The top layer (HTML, CSS Positioned Layout 4 section 6) is a list per
+ * document of the modal dialogs and showing popovers, in the order they
+ * were added: layout paints and hit-tests them in that order above the
+ * rest of the page, the last on top. The list does not hold references:
+ * an element that leaves the document (au_node_remove, or a move) leaves
+ * the list, and loses AU_STATE_MODAL and AU_STATE_POPOVER_OPEN.
+ *
+ * A node is inert (HTML, "inert subtrees") when it is in an element with
+ * the inert attribute, or when the document has a modal dialog and the
+ * node is not that dialog or inside it (the topmost modal dialog of the
+ * top layer). Inert nodes are not hit, focused, selected or found. */
+
+/* Adds el on top of its document's top layer (moves it there if it is
+ * in the list already). The caller sets the state bit. */
+void au_top_layer_add(AuElement *el);
+/* Takes el out of the list; nothing when it is not in it. */
+void au_top_layer_remove(AuElement *el);
+/* el's place in its document's top layer (0 is the bottom), or -1. */
+int au_top_layer_index(const AuElement *el);
+/* The topmost modal dialog of doc's top layer, or NULL. */
+AuElement *au_document_modal(const AuDocument *doc);
+/* Whether n is inert. */
+bool au_node_inert(const AuNode *n);
 
 /* ---- Additions for script ----
  *
