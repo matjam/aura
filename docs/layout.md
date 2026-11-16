@@ -163,6 +163,15 @@ keep it so:
   height equals its content height: the first layout resolved those
   percentages against an indefinite height.
 
+- A style change that needs only a repaint but makes or unmakes a
+  stacking context or layer (z-index, clip-path, filter, isolation,
+  mix-blend-mode, masks, contain: paint) builds the layer lists again
+  (`stacking_style_differs`).
+- An element adopted from another document (a frame's) loses its box
+  pointer and its hover, active, focus and target states, which belong
+  to the other document's layout and view (`set_doc_subtree` in
+  `src/js/natives.c`).
+
 One difference remains, so the differential check compares geometry
 only after subtree rebuilds (`other_relayout`, below): overflow and the
 document size are found before relative offsets are applied, so a

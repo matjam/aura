@@ -184,6 +184,9 @@ static const Case cases[] = {
      ".g { display: grid } .x, .n { display: none } .g.on .n { display: block }",
      "<div><em class=g id=g><td><span class=x>h</span>c</td><b class=n>n</b></em></div>", "g.className='g on'",
      INCR},
+    {"a clip-path that only repaints still makes a layer", "",
+     "<div><span id=s>x</span></div><div hidden><p id=p>a</p></div>",
+     "s.style.clipPath='inset(1px)';p.appendChild(document.createElement('b')).textContent='b'", ANY},
     {"root element of a frame moved into the document", "",
      "<div id=w>a</div><div id=h style='display:none'></div>",
      "var f=document.createElement('iframe');f.srcdoc='<input autofocus>';document.body.appendChild(f);@@"
