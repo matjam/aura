@@ -42,7 +42,7 @@ int main(void)
     /* Paint a window's chrome with that title. */
     AuChromeLayout lay;
     au_chrome_layout(&lay, 640, 400, AU_TABS_TOP, 170, 2, 0);
-    AuChromeTab tabs[2] = {{title, false, NULL, false}, {"\xE6\x97\xA5\xE6\x9C\xAC", true, NULL, false}};
+    AuChromeTab tabs[2] = {{title, false, NULL, false, "", 0}, {"\xE6\x97\xA5\xE6\x9C\xAC", true, NULL, false, "", 0}};
     AuChromeState s;
     memset(&s, 0, sizeof s);
     s.tabs = tabs;

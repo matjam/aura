@@ -238,13 +238,17 @@ static void clamp_scroll(AuTab *t)
 static void relayout(AuBrowserWindow *w, bool full)
 {
     AuChromeLayout old = w->layout;
-    au_chrome_layout(&w->layout, w->width, w->height, w->browser->prefs.tab_position,
-                     w->browser->prefs.tab_column_width, w->ntabs, w->tab_scroll);
+    if (w->native_chrome)
+        au_chrome_layout_page_only(&w->layout, w->width, w->height, w->ntabs);
+    else
+        au_chrome_layout(&w->layout, w->width, w->height, w->browser->prefs.tab_position,
+                         w->browser->prefs.tab_column_width, w->ntabs, w->tab_scroll);
     w->tab_scroll = w->layout.tab_scroll;
     /* A horizontal scroll bar while the active page is wider than the
-     * page area (its width does not change with the bar). */
+     * page area (its width does not change with the bar). In native
+     * chrome the port's scroll bars lie outside the page's surface. */
     AuTab *at = au_bw_active_tab(w);
-    if (at) {
+    if (at && !w->native_chrome) {
         int cw, ch;
         au_page_content_size(at->page, &cw, &ch);
         int pw = w->layout.page.x1 - w->layout.page.x0;
@@ -284,7 +288,7 @@ static void relayout(AuBrowserWindow *w, bool full)
 static void check_hscroll(AuBrowserWindow *w)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (!t)
+    if (!t || w->native_chrome)
         return;
     int cw, ch;
     au_page_content_size(t->page, &cw, &ch);
@@ -331,8 +335,7 @@ static void cb_title(void *ctx, AuPage *p, const char *title)
     }
     b->session_gen++;
     invalidate_tab(t->win, tab_index(t->win, t));
-    if (is_active(t))
-        changed(t->win, AU_CHANGED_TITLE | AU_CHANGED_MENUS);
+    changed(t->win, AU_CHANGED_TAB_INFO | (is_active(t) ? AU_CHANGED_TITLE | AU_CHANGED_MENUS : 0));
 }
 
 /* A redirect replaced the address of the load in progress: the history
@@ -358,10 +361,21 @@ static void cb_url(void *ctx, AuPage *p, const char *url)
     if (e)
         set_str(&e->url, url);
     t->win->browser->session_gen++;
-    if (is_active(t) && !t->win->field)
-        changed(t->win, AU_CHANGED_FIELD);
-    (void)p;
+    unsigned what = AU_CHANGED_TAB_INFO;
+    if (is_active(t)) {
+        if (!t->win->field)
+            what |= AU_CHANGED_FIELD;
+        /* The window title shows the address of a page without a title. */
+        if (!*au_page_title(p))
+            what |= AU_CHANGED_TITLE;
+        what |= AU_CHANGED_SECURITY | AU_CHANGED_BOOKMARK;
+    }
+    changed(t->win, what);
 }
+
+/* What depends on the active tab's load: the native chrome's notices. */
+#define LOAD_STATE_CHANGES                                                                                         \
+    (AU_CHANGED_NAV | AU_CHANGED_STATUS | AU_CHANGED_SECURITY | AU_CHANGED_PROGRESS | AU_CHANGED_BOOKMARK)
 
 static void loading_changed(AuTab *t)
 {
@@ -373,6 +387,7 @@ static void loading_changed(AuTab *t)
         invalidate(w, w->layout.status);
         invalidate(w, w->layout.security);
     }
+    changed(w, AU_CHANGED_TAB_INFO | AU_CHANGED_PROGRESS | (is_active(t) ? LOAD_STATE_CHANGES : 0));
 }
 
 static void cb_started(void *ctx, AuPage *p)
@@ -388,6 +403,8 @@ static void cb_progress(void *ctx, AuPage *p)
     AuTab *t = ctx;
     if (is_active(t))
         invalidate(t->win, t->win->layout.status);
+    /* The status text follows the load while no link or page text shows. */
+    changed(t->win, AU_CHANGED_PROGRESS | (is_active(t) && !*t->status ? AU_CHANGED_STATUS : 0));
     (void)p;
 }
 
@@ -518,6 +535,7 @@ static void unload_tab(AuBrowserWindow *w, int i)
     au_page_discard(t->page);
     set_str(&t->status, "");
     invalidate_tab(w, i);
+    changed(w, AU_CHANGED_TAB_INFO);
 }
 
 bool au_bw_can_unload_tab(AuBrowserWindow *w, int i)
@@ -610,6 +628,7 @@ static void load_unloaded(AuTab *t)
     entry_load(t);
     au_page_navigate_entry(t->page, url, sx, sy);
     au_free(url);
+    changed(t->win, AU_CHANGED_TAB_INFO); /* no longer unloaded */
 }
 
 /* A form posted: a new entry in this tab, or a new tab. A history entry
@@ -645,7 +664,7 @@ static void cb_submit_post(void *ctx, AuPage *p, const char *url, const void *bo
     entry_load(t);
     au_page_navigate_post(t->page, url, body, len, type);
     if (is_active(t))
-        changed(w, AU_CHANGED_FOCUS_PAGE);
+        changed(w, AU_CHANGED_FOCUS_PAGE | AU_CHANGED_NAV);
 }
 
 static int cb_popup(void *ctx, AuPage *p, const AuPopupItem *items, int n, int selected, AuIRect at)
@@ -718,6 +737,8 @@ static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t
         t->close_pending = true; /* a tab opened just for the file */
     }
     b->session_gen++;
+    if (is_active(t))
+        changed(t->win, AU_CHANGED_NAV);
     au_browser_download(b, r->url, name, r->content_type, r->content_length, handoff);
     return true;
 }
@@ -725,9 +746,13 @@ static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t
 static void cb_status(void *ctx, AuPage *p, const char *text)
 {
     AuTab *t = ctx;
+    bool same = !strcmp(t->status, text ? text : "");
     set_str(&t->status, text);
-    if (is_active(t))
+    if (is_active(t)) {
         invalidate(t->win, t->win->layout.status);
+        if (!same)
+            changed(t->win, AU_CHANGED_STATUS);
+    }
     (void)p;
 }
 
@@ -935,7 +960,7 @@ void au_browser_bookmarks_changed(AuBrowser *b)
 {
     for (int i = 0; i < b->nwindows; i++) {
         invalidate(b->windows[i], b->windows[i]->layout.bookmark);
-        changed(b->windows[i], AU_CHANGED_MENUS);
+        changed(b->windows[i], AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK);
     }
 }
 
@@ -957,9 +982,22 @@ bool au_browser_busy(const AuBrowser *b)
     return false;
 }
 
+static AuBrowserWindow *window_new(AuBrowser *b, int width, int height, bool native_chrome);
+
 AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height)
 {
+    return window_new(b, width, height, false);
+}
+
+AuBrowserWindow *au_browser_window_new_native(AuBrowser *b, int width, int height)
+{
+    return window_new(b, width, height, true);
+}
+
+static AuBrowserWindow *window_new(AuBrowser *b, int width, int height, bool native_chrome)
+{
     AuBrowserWindow *w = au_calloc(sizeof *w);
+    w->native_chrome = native_chrome;
     w->browser = b;
     w->width = width;
     w->height = height;
@@ -970,7 +1008,10 @@ AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height)
     w->active_window = true;
     b->windows = au_realloc(b->windows, (size_t)(b->nwindows + 1) * sizeof *b->windows);
     b->windows[b->nwindows++] = w;
-    au_chrome_layout(&w->layout, width, height, b->prefs.tab_position, b->prefs.tab_column_width, 0, 0);
+    if (native_chrome)
+        au_chrome_layout_page_only(&w->layout, width, height, 0);
+    else
+        au_chrome_layout(&w->layout, width, height, b->prefs.tab_position, b->prefs.tab_column_width, 0, 0);
     b->session_gen++;
     return w;
 }
@@ -1049,6 +1090,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
         w->active++;
     set_viewport(t);
     b->session_gen++;
+    changed(w, AU_CHANGED_TABS);
     return t;
 }
 
@@ -1241,6 +1283,8 @@ static void load_new(AuTab *t, const char *url)
     record_visit(t->win->browser, url, NULL);
     t->win->browser->session_gen++;
     entry_load(t);
+    if (is_active(t))
+        changed(t->win, AU_CHANGED_NAV); /* the entry pushed: Back is on, Forward off */
     au_page_navigate(t->page, url);
 }
 
@@ -1318,7 +1362,8 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
         invalidate(w, w->layout.status);
         w->browser->session_gen++;
     }
-    changed(w, AU_CHANGED_FIELD | AU_CHANGED_TITLE | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    changed(w, AU_CHANGED_FIELD | AU_CHANGED_TITLE | AU_CHANGED_SCROLL | AU_CHANGED_MENUS | LOAD_STATE_CHANGES |
+                   (old != i ? AU_CHANGED_ACTIVE_TAB : 0));
 }
 
 void au_bw_close_tab(AuBrowserWindow *w, int i)
@@ -1343,6 +1388,7 @@ void au_bw_close_tab(AuBrowserWindow *w, int i)
         next = i < w->ntabs ? i : w->ntabs - 1; /* the tab to the right, else left */
     w->active = -1;
     w->hover.part = w->pressed.part = AU_HIT_NONE;
+    changed(w, AU_CHANGED_TABS);
     relayout(w, true);
     au_bw_select_tab(w, next);
     w->browser->session_gen++;
@@ -1646,7 +1692,7 @@ void au_bw_move_tab(AuBrowserWindow *w, int from, int to)
     w->active = act ? tab_index(w, act) : -1;
     invalidate(w, w->layout.tabstrip);
     w->browser->session_gen++;
-    changed(w, AU_CHANGED_MENUS);
+    changed(w, AU_CHANGED_MENUS | AU_CHANGED_TABS);
 }
 
 /* ---- Navigation ---- */
@@ -1686,7 +1732,8 @@ void au_bw_navigate(AuBrowserWindow *w, const char *url)
     }
     load_new(t, url);
     invalidate(w, w->layout.toolbar);
-    changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS | AU_CHANGED_SECURITY | AU_CHANGED_BOOKMARK |
+                   AU_CHANGED_TAB_INFO);
     focus_after_navigation(w);
 }
 
@@ -1735,7 +1782,8 @@ void au_bw_go(AuBrowserWindow *w, int delta)
     w->browser->session_gen++;
     invalidate(w, w->layout.toolbar);
     invalidate(w, w->layout.page);
-    changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS);
+    changed(w, AU_CHANGED_FIELD | AU_CHANGED_SCROLL | AU_CHANGED_MENUS | AU_CHANGED_NAV | AU_CHANGED_SECURITY |
+                   AU_CHANGED_BOOKMARK | AU_CHANGED_TAB_INFO);
     focus_after_navigation(w);
 }
 
@@ -1946,26 +1994,130 @@ void au_bw_set_active(AuBrowserWindow *w, bool active)
     invalidate(w, w->layout.tabstrip);
 }
 
-void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
+/* ---- What the chrome shows ---- */
+
+int au_bw_tab_count(const AuBrowserWindow *w)
 {
-    clip = au_irect_intersect(clip, (AuIRect){0, 0, w->width, w->height});
-    if (au_irect_empty(clip))
+    return w->ntabs;
+}
+
+int au_bw_active_index(const AuBrowserWindow *w)
+{
+    return w->active >= 0 && w->active < w->ntabs ? w->active : -1;
+}
+
+bool au_bw_tab_info(AuBrowserWindow *w, int i, AuChromeTab *out)
+{
+    memset(out, 0, sizeof *out);
+    if (i < 0 || i >= w->ntabs)
+        return false;
+    AuTab *x = w->tabs[i];
+    const char *u = au_page_url(x->page);
+    bool blank = !strcmp(u, "about:blank");
+    const char *title = au_page_title(x->page);
+    if (!*title)
+        title = blank ? "New Tab" : u;
+    out->title = title;
+    out->url = blank ? "" : u;
+    out->loading = x->loading;
+    out->unloaded = au_page_discarded(x->page);
+    out->icon = au_favicons_for_url(w->browser->favicons, u);
+    if (x->loading) {
+        float p = au_page_progress(x->page);
+        out->progress = p < 0 ? 0 : p > 1 ? 1 : p;
+    }
+    return true;
+}
+
+bool au_bw_can_go(AuBrowserWindow *w, int delta)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && delta && au_nav_can_go(&t->nav, delta);
+}
+
+bool au_bw_loading(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t && t->loading;
+}
+
+float au_bw_progress(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t || !t->loading)
+        return 0;
+    float p = au_page_progress(t->page);
+    return p < 0 ? 0 : p > 1 ? 1 : p;
+}
+
+AuSecurity au_bw_security(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    return t ? au_page_security(t->page) : AU_SECURITY_NONE;
+}
+
+void au_bw_status_text(AuBrowserWindow *w, char *out, size_t cap)
+{
+    if (!cap)
         return;
+    out[0] = 0;
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return;
+    if (t->loading && !*t->status) {
+        au_page_status_text(t->page, out, cap);
+        return;
+    }
+    /* Cut at a character boundary when it does not fit. */
+    size_t n = strlen(t->status);
+    if (n >= cap) {
+        n = cap - 1;
+        while (n > 0 && ((unsigned char)t->status[n] & 0xC0) == 0x80)
+            n--;
+    }
+    memcpy(out, t->status, n);
+    out[n] = 0;
+}
+
+void au_bw_progress_text(AuBrowserWindow *w, char *out, size_t cap)
+{
+    if (!cap)
+        return;
+    out[0] = 0;
+    AuTab *t = au_bw_active_tab(w);
+    if (t && t->loading) {
+        float p = au_page_progress(t->page);
+        p = p < 0 ? 0 : p > 1 ? 1 : p;
+        snprintf(out, cap, "Loading, %d%%", (int)(p * 100.0f + 0.5f));
+    }
+}
+
+int au_bw_blocked_count(AuBrowserWindow *w)
+{
+    AuTab *t = au_bw_active_tab(w);
+    if (!t)
+        return 0;
+    AuPageStats ps;
+    au_page_stats(t->page, &ps);
+    return (int)ps.blocked;
+}
+
+void au_bw_scroll_pos(AuBrowserWindow *w, int *x, int *y)
+{
+    AuTab *t = au_bw_active_tab(w);
+    *x = t ? t->scroll_x : 0;
+    *y = t ? t->scroll_y : 0;
+}
+
+/* Paints the Platinum chrome from the same accessors a native port
+ * reads. */
+static void paint_chrome(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
+{
     AuTab *t = au_bw_active_tab(w);
     AuChromeTab stack_tabs[16];
     AuChromeTab *tabs = w->ntabs <= 16 ? stack_tabs : au_alloc((size_t)w->ntabs * sizeof *tabs);
-    for (int i = 0; i < w->ntabs; i++) {
-        AuTab *x = w->tabs[i];
-        const char *title = au_page_title(x->page);
-        if (!*title) {
-            const char *u = au_page_url(x->page);
-            title = strcmp(u, "about:blank") ? u : "New Tab";
-        }
-        tabs[i].title = title;
-        tabs[i].loading = x->loading;
-        tabs[i].unloaded = au_page_discarded(x->page);
-        tabs[i].icon = au_favicons_for_url(w->browser->favicons, au_page_url(x->page));
-    }
+    for (int i = 0; i < w->ntabs; i++)
+        au_bw_tab_info(w, i, &tabs[i]);
     AuChromeState s;
     memset(&s, 0, sizeof s);
     s.tabs = tabs;
@@ -1973,32 +2125,22 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     s.hover = w->hover;
     s.pressed = w->pressed;
     s.dragging = w->drag_tab;
-    s.can_back = t && au_nav_can_go(&t->nav, -1);
-    s.can_forward = t && au_nav_can_go(&t->nav, 1);
-    s.loading = t && t->loading;
+    s.can_back = au_bw_can_go(w, -1);
+    s.can_forward = au_bw_can_go(w, 1);
+    s.loading = au_bw_loading(w);
     s.bookmarked = au_bw_is_bookmarked(w);
-    s.security = t ? au_page_security(t->page) : AU_SECURITY_NONE;
+    s.security = au_bw_security(w);
     s.field_text = au_bw_field_text(w);
     s.field_focused = w->field_focused;
     s.draw_field_text = !w->native_field;
-    s.status_text = t ? t->status : "";
     char status[300];
-    if (t && t->loading && !*t->status) {
-        au_page_status_text(t->page, status, sizeof status);
-        s.status_text = status;
-    }
+    au_bw_status_text(w, status, sizeof status);
+    s.status_text = t && !(t->loading && !*t->status) ? t->status : status; /* uncut */
     s.progress = t ? au_page_progress(t->page) : 0;
     char progress[32];
-    if (t && t->loading) {
-        float p = s.progress < 0 ? 0 : s.progress > 1 ? 1 : s.progress;
-        snprintf(progress, sizeof progress, "Loading, %d%%", (int)(p * 100.0f + 0.5f));
-        s.progress_text = progress;
-    }
-    if (t) {
-        AuPageStats ps;
-        au_page_stats(t->page, &ps);
-        s.blocked = (int)ps.blocked;
-    }
+    au_bw_progress_text(w, progress, sizeof progress);
+    s.progress_text = progress;
+    s.blocked = au_bw_blocked_count(w);
     s.throbber_frame = w->throbber_frame;
     s.draw_native_standins = w->native_standins;
     s.active_window = w->active_window;
@@ -2009,6 +2151,18 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     s.label_list = w->label_list;
     s.small_list = w->small_list;
     au_chrome_paint(c, w->browser->fonts, &w->layout, &s, clip);
+    if (tabs != stack_tabs)
+        au_free(tabs);
+}
+
+void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
+{
+    clip = au_irect_intersect(clip, (AuIRect){0, 0, w->width, w->height});
+    if (au_irect_empty(clip))
+        return;
+    AuTab *t = au_bw_active_tab(w);
+    if (!w->native_chrome)
+        paint_chrome(w, c, clip);
     AuIRect pg = au_irect_intersect(w->layout.page, clip);
     if (t && !au_irect_empty(pg)) {
         AuIRect p = w->layout.page;
@@ -2022,8 +2176,6 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
         au_fill_rect(c, (AuRect){(float)pg.x0, (float)pg.y0, (float)(pg.x1 - pg.x0), (float)(pg.y1 - pg.y0)},
                      AU_RGB(255, 255, 255));
     }
-    if (tabs != stack_tabs)
-        au_free(tabs);
 }
 
 void au_bw_window_title(AuBrowserWindow *w, char *out, size_t cap)
@@ -2128,42 +2280,70 @@ static void page_event(AuBrowserWindow *w, const AuEvent *ev)
     au_page_mouse(t->page, &e);
 }
 
-static void click(AuBrowserWindow *w, AuHit h, const AuEvent *ev)
+AuTab *au_bw_open_new_tab(AuBrowserWindow *w)
 {
-    AuTab *t = au_bw_active_tab(w);
-    bool cmd = ev && (ev->mods & AU_MOD_COMMAND);
+    AuTab *t = au_bw_new_tab(w, NULL, true, w->ntabs);
+    changed(w, AU_CHANGED_FOCUS_FIELD);
+    return t;
+}
+
+void au_bw_reload_or_stop(AuBrowserWindow *w, bool bypass)
+{
+    if (au_bw_loading(w))
+        au_bw_stop(w);
+    else if (bypass)
+        au_bw_reload_bypass(w);
+    else
+        au_bw_reload(w);
+}
+
+/* What a click on each part of the painted chrome does. The tab strip's
+ * presses (select, drag, scroll) and the splitter act on the press
+ * itself, in au_bw_mouse; AU_HIT_TAB selects here too, for a port. */
+void au_bw_press(AuBrowserWindow *w, AuHit h, uint32_t mods)
+{
+    bool cmd = (mods & AU_MOD_COMMAND) != 0;
     switch (h.part) {
     case AU_HIT_BACK:
+    case AU_HIT_FORWARD: {
+        int d = h.part == AU_HIT_BACK ? -1 : 1;
         if (cmd)
-            au_bw_go_new_tab(w, -1);
+            au_bw_go_new_tab(w, d);
         else
-            au_bw_back(w);
+            au_bw_go(w, d);
         break;
-    case AU_HIT_FORWARD:
-        if (cmd)
-            au_bw_go_new_tab(w, 1);
-        else
-            au_bw_forward(w);
-        break;
-    case AU_HIT_RELOAD:
-        if (t && t->loading)
-            au_bw_stop(w);
-        else if (ev && (ev->mods & (AU_MOD_SHIFT | AU_MOD_OPTION)))
-            au_bw_reload_bypass(w);
-        else
-            au_bw_reload(w);
-        break;
+    }
+    case AU_HIT_RELOAD: au_bw_reload_or_stop(w, (mods & (AU_MOD_SHIFT | AU_MOD_OPTION)) != 0); break;
     case AU_HIT_SECURITY: au_bw_show_certificate(w); break;
     case AU_HIT_HOME: au_bw_home(w); break;
     case AU_HIT_BOOKMARK: au_bw_bookmark_page(w, true); break;
-    case AU_HIT_NEW_TAB:
-        au_bw_new_tab(w, NULL, true, w->ntabs);
-        changed(w, AU_CHANGED_FOCUS_FIELD);
-        break;
+    case AU_HIT_NEW_TAB: au_bw_open_new_tab(w); break;
+    case AU_HIT_TAB: au_bw_select_tab(w, h.index); break;
     case AU_HIT_TAB_CLOSE: au_bw_close_tab(w, h.index); break;
     default: break;
     }
-    (void)ev;
+}
+
+static void click(AuBrowserWindow *w, AuHit h, const AuEvent *ev)
+{
+    if (h.part == AU_HIT_TAB)
+        return; /* selected when pressed */
+    au_bw_press(w, h, ev ? ev->mods : 0);
+}
+
+void au_bw_mouse_leave(AuBrowserWindow *w)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_MOUSE_MOVE;
+    e.x = e.y = -100000;
+    w->mouse_x = e.x;
+    w->mouse_y = e.y;
+    w->mouse_in_page = false;
+    w->rehover_pending = false;
+    set_hover(w, (AuHit){AU_HIT_NONE, -1});
+    if (w->pressed.part == AU_HIT_NONE)
+        page_event(w, &e); /* ends the page's hover and a link's status text */
 }
 
 AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev)
@@ -2350,6 +2530,7 @@ void au_bw_idle(AuBrowserWindow *w)
         if (serial != w->icon_serial) {
             w->icon_serial = serial;
             invalidate(w, w->layout.tabs_area);
+            changed(w, AU_CHANGED_TAB_INFO);
         }
     }
     bool any = false;
