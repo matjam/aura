@@ -85,6 +85,20 @@ reflect(HEP, [['title', 's'], ['lang', 's'], ['translate', 'e', 0, [['yes', 'no'
     ['dir', 'e', 0, [['ltr', 'rtl', 'auto'], '', '']], ['hidden', 'b'], ['inert', 'b'], ['accessKey', 's', 'accesskey'],
     ['autofocus', 'b'], ['nonce', 's'], ['autocapitalize', 's'], ['enterKeyHint', 's', 'enterkeyhint'],
     ['inputMode', 's', 'inputmode'], ['popover', 's']]);
+/* SVG and MathML elements have style, dataset and tabIndex too
+ * (ElementCSSInlineStyle, HTMLOrSVGElement); React sets svg.style. */
+for (const proto of [SVGElement.prototype, MathMLElement.prototype]) {
+    defProps(proto, {
+        get dataset() { return datasetOf(this); },
+        get style() { return styleOf(this); },
+        set style(v) { this.setAttribute('style', str(v)); },
+        get tabIndex() {
+            const v = this.getAttribute('tabindex');
+            return v !== null && /^\s*[+-]?\d+/.test(v) ? parseInt(v, 10) : this.localName === 'a' ? 0 : -1;
+        },
+        set tabIndex(v) { this.setAttribute('tabindex', String(Number(v) | 0)); },
+    });
+}
 defProps(HEP, {
     get dataset() { return datasetOf(this); },
     get style() { return styleOf(this); },
