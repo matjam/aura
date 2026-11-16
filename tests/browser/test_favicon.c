@@ -48,6 +48,17 @@ typedef struct Env {
 static uint32_t t_ms(void *ctx) { return ((Env *)ctx)->f.now; }
 static AuTime t_now(void *ctx) { return ((Env *)ctx)->f.wall; }
 
+/* Set when AU_CHANGED_TAB_INFO arrives while tab 0 has an icon: a port
+ * with native tabs learns of the icon then. */
+static bool icon_notice;
+static void t_changed(void *ctx, AuBrowserWindow *w, unsigned what)
+{
+    AuChromeTab ti;
+    (void)ctx;
+    if ((what & AU_CHANGED_TAB_INFO) && au_bw_tab_info(w, 0, &ti) && ti.icon)
+        icon_notice = true;
+}
+
 static void env_init(Env *e)
 {
     memset(e, 0, sizeof *e);
@@ -68,6 +79,7 @@ static void env_init(Env *e)
     h.ctx = e;
     h.time_ms = t_ms;
     h.now = t_now;
+    h.changed = t_changed;
     e->b = au_browser_new(fonts, &h);
     e->b->prefs.https_first = false;
     e->b->site_icons = true;
@@ -160,7 +172,11 @@ static void test_default_icon(void)
     respond_icon(a);
     /* The tab strip before the icon, to compare. */
     AuSurface *before = au_surface_new(800, 600), *after = au_surface_new(800, 600);
+    icon_notice = false;
     go(&e, "http://a.test/page");
+    AuChromeTab ti;
+    CHECK(icon_notice && au_bw_tab_info(e.w, 0, &ti) && ti.icon == icon_of(&e, "http://a.test/page"),
+          "the icon's arrival is reported (AU_CHANGED_TAB_INFO) and au_bw_tab_info gives it");
     CHECK(a->nreq == 2, "the page, then the icon: %d requests", a->nreq);
     CHECK(request_has(a, 1, "GET /favicon.ico "), "/favicon.ico was asked for: %.60s", a->nreq > 1 ? a->requests[1] : "");
     CHECK(request_has(a, 1, "Cookie: sid=1"), "the site's own icon request carries its cookie");

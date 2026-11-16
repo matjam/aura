@@ -88,6 +88,10 @@ typedef struct AuChromeLayout {
  * here); tab_scroll is clamped to the valid range. */
 void au_chrome_layout(AuChromeLayout *l, int width, int height, AuTabPosition pos, int column_width, int ntabs,
                       int tab_scroll);
+/* The layout of a window in native chrome mode: the page fills the whole
+ * width by height and every other region is empty, so au_chrome_hit
+ * finds the page at every point inside. */
+void au_chrome_layout_page_only(AuChromeLayout *l, int width, int height, int ntabs);
 /* Adds a horizontal scroll bar along the bottom of the page area (for
  * content wider than the page): the page and the vertical scroll bar
  * get shorter, and the square where the two bars meet, beside the grow
@@ -107,11 +111,16 @@ int au_chrome_drop_index(const AuChromeLayout *l, int x, int y);
 
 /* ---- Painting ---- */
 
+/* One tab as the chrome shows it. au_bw_tab_info fills it for a port
+ * that shows tabs with its own widgets; the painter reads only the
+ * first four fields. */
 typedef struct AuChromeTab {
     const char *title; /* "" shows the URL or "Untitled" */
     bool loading;
     const AuSurface *icon; /* the site's 16 x 16 icon, or NULL for the page glyph */
     bool unloaded; /* its document was freed to save memory: the title is dimmed */
+    const char *url;  /* the tab's address ("" for about:blank) */
+    float progress;   /* 0..1 while loading, else 0 */
 } AuChromeTab;
 
 typedef struct AuChromeState {

@@ -48,6 +48,7 @@ typedef struct AuHistoryEntry {
     char *url, *title;
     AuTime last_visit;
     uint32_t visits;
+    uint32_t id; /* 1 to 0x7FFFFFFF, unique while Aura runs (not saved), for the History window */
 } AuHistoryEntry;
 
 typedef struct AuHistory {
@@ -56,6 +57,7 @@ typedef struct AuHistory {
     size_t max_entries;
     uint32_t generation; /* bumped on every change, for menus and saving */
     int32_t utc_offset;  /* seconds east of UTC, for local days (0: UTC) */
+    uint32_t last_id;    /* the last AuHistoryEntry.id given */
 } AuHistory;
 
 #define AU_HISTORY_DEFAULT_MAX 1000

@@ -569,14 +569,7 @@ static void test_history(void)
     CHECK(y == 1970 && m == 1 && d == 1 && wd == 4);
     CHECK(au_day_of(-1) == -1);
 
-    /* The history window list groups by day. */
-    AuListView lv;
-    au_listview_init(&lv);
-    au_listview_from_history(&lv, &g, t0);
-    CHECK(lv.n == 3 + 4);
-    CHECK(lv.rows[0].kind == AU_ROW_HEADER && !strcmp(lv.rows[0].text, "Today"));
-    CHECK(lv.rows[1].kind == AU_ROW_LINK && lv.rows[1].id == 0);
-    au_listview_free(&lv);
+    /* The History window's rows are tested in test_lists.c. */
 
     /* Expiry. */
     au_history_expire(&g, t0, 2);
@@ -663,19 +656,7 @@ static void test_bookmarks(void)
         CHECK_STR(b->title, order[i++]);
     CHECK(i == 7);
 
-    /* Manager list: collapsed folders hide their contents. */
-    AuListView lv;
-    au_listview_init(&lv);
-    au_listview_from_bookmarks(&lv, &bm);
-    CHECK(lv.n == 4); /* Unicode, Apple, Retro (collapsed), Empty */
-    f->expanded = true;
-    lv.selected = 2;
-    au_listview_from_bookmarks(&lv, &bm);
-    CHECK(lv.n == 6 && lv.selected == 2 && lv.rows[2].id == f->id);
-    CHECK(lv.rows[4].kind == AU_ROW_FOLDER && lv.rows[4].indent == 1);
-    bool disc;
-    CHECK(au_listview_hit(&lv, 6 + 16 + 2, 2 + 4 * AU_LIST_ROW_H + 5, &disc) == 4 && disc);
-    au_listview_free(&lv);
+    /* The Bookmarks window's rows are tested in test_lists.c. */
 
     /* Netscape round trip. */
     AuBuf out;

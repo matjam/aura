@@ -587,7 +587,7 @@ int au_downloads_hit(const AuDownloads *dl, int y, int scroll)
     return y + scroll >= 0 && i < dl->n ? i : -1;
 }
 
-static void row_text(const AuDownload *d, char *out, size_t cap)
+void au_download_status(const AuDownload *d, char *out, size_t cap)
 {
     char a[32], b[32];
     au_format_size(d->received, a, sizeof a);
@@ -670,7 +670,7 @@ void au_downloads_paint(const AuDownloads *dl, AuCanvas *c, AuFontSet *fonts, in
             }
         }
         if (small) {
-            row_text(d, buf, sizeof buf);
+            au_download_status(d, buf, sizeof buf);
             au_chrome_ellipsize(small, 10, buf, tw, name, sizeof name);
             au_draw_text(c, small, 10, tx, top + (bar ? 36 : 30), name, strlen(name), dim);
             if (f) {

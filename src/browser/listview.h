@@ -1,7 +1,8 @@
-/* A simple list for the bookmarks and history windows: rows of text with
- * an indent level, folder disclosure triangles, day headings, a
- * selection and a scroll offset, painted with Aura's canvas. Portable
- * C99; the shells put it in a window with a native scroll bar. */
+/* A painted list for the Bookmarks, History and Cookies windows: rows of
+ * text with an indent level, folder disclosure triangles, day headings,
+ * a selection and a scroll offset, painted with Aura's canvas. Portable
+ * C99; the Mac OS 9 shell fills it from the list models (lists.h) and
+ * puts it in a window with a native scroll bar. */
 #ifndef AURA_BROWSER_LISTVIEW_H
 #define AURA_BROWSER_LISTVIEW_H
 
@@ -32,8 +33,8 @@ typedef struct AuListView {
     int width, height;
     bool active;  /* window active: selection drawn highlighted */
     /* Optional, set by the shell after au_listview_init: the browser's
-     * site icons (favicon.h). Link rows filled from bookmarks or history
-     * then show their site's icon when the store has one. */
+     * site icons (favicon.h). Link rows with an icon_host then show
+     * their site's icon when the store still has it. */
     struct AuFavicons *icons;
 } AuListView;
 
@@ -43,12 +44,13 @@ void au_listview_clear(AuListView *lv);
 void au_listview_add(AuListView *lv, AuRowKind kind, int indent, bool expanded, const char *text,
                      const char *detail, uint32_t id);
 
-/* Fills the list from the bookmark tree (folders that are not expanded
- * hide their contents), keeping the selection on the same bookmark. */
-void au_listview_from_bookmarks(AuListView *lv, const AuBookmarks *bm);
-/* Fills the list from history, grouped by day with headings, most recent
- * first. Row ids are history indices. */
-void au_listview_from_history(AuListView *lv, const AuHistory *h, AuTime now);
+/* Fills the list from a list window's model (lists.h): each row's text
+ * is the first column and its detail the row's summary; headings,
+ * folders and entries become AU_ROW_HEADER, AU_ROW_FOLDER and
+ * AU_ROW_LINK, and row ids are the model's. The selection is the
+ * model's. */
+struct AuListModel;
+void au_listview_from_list(AuListView *lv, const struct AuListModel *m);
 
 int au_listview_content_height(const AuListView *lv);
 /* The row at (x, y) in list coordinates (scroll applied), or -1.
