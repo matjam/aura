@@ -117,8 +117,58 @@ static void exercise(const uint8_t *data, size_t len)
     free(e);
 }
 
+/* A paged face reads the file through a callback; reads past the end, and
+ * now and then a read that fails, report failure as a file would. */
+typedef struct MemFile {
+    const uint8_t *data;
+    size_t len;
+    uint32_t fail_every;
+    uint32_t count;
+} MemFile;
+
+static bool mem_read(void *ctx, uint32_t off, void *buf, uint32_t n)
+{
+    MemFile *m = ctx;
+    if (m->fail_every && ++m->count % m->fail_every == 0)
+        return false;
+    if (off > m->len || n > m->len - off)
+        return false;
+    memcpy(buf, m->data + off, n);
+    return true;
+}
+
+static void exercise_paged(const uint8_t *data, size_t len)
+{
+    MemFile mf = {data, len, rnd(4) == 0 ? 1 + rnd(40) : 0, 0};
+    /* Sometimes a length that disagrees with the data. */
+    uint32_t flen = rnd(8) == 0 ? (uint32_t)rnd(0x7FFFFFFF) : (uint32_t)len;
+    AuFontPager *p = au_font_pager_new(mem_read, &mf, flen, (int)rnd(2));
+    AuFontFace *f = au_font_face_new_paged(p);
+    if (f) {
+        unsigned ng = f->num_glyphs < 300 ? f->num_glyphs : 300;
+        for (unsigned g = 0; g < ng; g++) {
+            uint16_t id = (uint16_t)(f->num_glyphs < 300 ? g : rnd(f->num_glyphs));
+            AuPath path;
+            au_path_init(&path);
+            au_font_glyph_path(f, id, 0.05f, 0.05f, 0, 0, &path);
+            au_path_free(&path);
+            int16_t box[4];
+            au_font_glyph_box(f, id, box);
+        }
+        AuFontFace *b = au_font_face_synthesize(f, AU_FONT_SYNTH_BOLD);
+        AuPath path;
+        au_path_init(&path);
+        au_font_glyph_path(b, (uint16_t)rnd(f->num_glyphs), 0.05f, 0.05f, 0, 0, &path);
+        au_path_free(&path);
+        au_font_face_free(b);
+        au_font_face_free(f);
+    }
+    au_font_pager_free(p);
+}
+
 static void exercise_sfnt(const uint8_t *data, size_t len)
 {
+    exercise_paged(data, len);
     int nf = au_font_face_count(data, len);
     for (int fi = 0; fi < nf && fi < 2; fi++) {
         AuFontFace *f = au_font_face_new(data, len, fi);

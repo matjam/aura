@@ -182,6 +182,8 @@ int au_host_render_main(int argc, char **argv)
         au_fontset_stats(fonts, &fst);
         printf("  fonts: %zu of %zu faces loaded (%zu bytes of font data); fallback cache %zu hits %zu misses\n",
                fst.loaded, au_fontset_count(fonts), fst.loaded_bytes, fst.fallback_hits, fst.fallback_misses);
+        if (fst.paged)
+            printf("  paged faces: %zu, %zu glyph blocks read\n", fst.paged, fst.paged_reads);
         au_canvas_free(c);
         au_surface_free(s);
     }

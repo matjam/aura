@@ -371,6 +371,7 @@ up or compressed. To change any of these, start at the place named.
 | A background tab | is unloaded when memory is short: its document is freed and loads again when the tab is selected | `browser.c`, "Unloaded tabs" ([`browser-chrome.md`](browser-chrome.md)) |
 | The page source (Page Source, View Source, Save Page As) | is deflated once the load is over and inflated when asked for | `page_doc.c`, "The page source" |
 | HTTP cache entries | hold the body as it arrived (gzip, deflate, brotli) and decode it when served | `cache.h`, `deliver_cached` in `http.c` ([`networking.md`](networking.md)) |
+| A bundled font file over 2 MB (Noto Sans SC, 3.4 MB) | is paged: its tables (117 KB) are in memory, its glyph outlines are read from the file as they are drawn, with 4 blocks of 16 KB and 256 KB of glyphs kept | `fontpage.c` ([`fonts.md`](fonts.md), "Paged faces") |
 | The text a parsed style sheet keeps | is deflated in 4 KB pieces once the page has loaded and five seconds have passed without a block parsed late; a piece is inflated when a block is parsed or the CSSOM reads the sheet | `au_docview_pack_sheets`, `css_sheet_text_at` ([`css.md`](css.md), "How a parsed sheet is stored") |
 
 Computed styles stay with a kept document: an article's are 0.7 MB and

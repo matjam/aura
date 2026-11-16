@@ -3,7 +3,7 @@
 
 Usage: tools/fonts-prepare.py SRC [OUT] [--only=FAMILY]...
 
-FAMILY is liberation, inter, dejavu, notoemoji or twemoji (all by
+FAMILY is liberation, inter, dejavu, notoemoji, twemoji or cjk (all by
 default).
 
 SRC holds the unpacked upstream downloads (see assets/fonts/README.md for
@@ -16,6 +16,9 @@ the URLs):
   SRC/NotoEmoji-OFL.txt               its OFL.txt from the same folder
   SRC/Twemoji.Mozilla.ttf             mozilla/twemoji-colr release v0.7.0
   SRC/twemoji-colr-LICENSE.md         LICENSE.md of the same tag
+  SRC/NotoSansSC[wght].ttf            Noto Sans SC from google/fonts
+  SRC/NotoSansKR[wght].ttf            Noto Sans KR from google/fonts
+  SRC/NotoSansCJK-OFL.txt             their OFL.txt
 
 OUT defaults to assets/fonts. The script needs fontTools (pyftsubset); it
 is only needed to regenerate the committed fonts, not to build Aura.
@@ -29,6 +32,12 @@ Aura Sans, Aura Serif and Aura Mono as the OFL requires. Noto Emoji is
 published only as a variable font; its wght=400 instance is taken here.
 Twemoji Mozilla (colour emoji) keeps its COLR, CPAL and GSUB tables, and
 gets an ATTRIBUTION.txt for the CC BY 4.0 licence of its graphics.
+
+The CJK faces are the wght=400 instances of Noto Sans SC and Noto Sans KR
+subset to the characters of the common national standards (see cjk()):
+Noto Sans SC holds the ideographs for Chinese, Japanese and Korean (Han
+unification), kana, bopomofo and the CJK punctuation; Noto Sans KR holds
+only hangul. The character sets come from Python's own codecs.
 """
 import os
 import shutil
@@ -64,7 +73,7 @@ def reduce_font(font, unicodes):
     opts.name_IDs = ['*']
     opts.name_languages = [0x0409]
     opts.drop_tables += ['GSUB', 'GPOS', 'GDEF', 'FFTM', 'gasp', 'MATH', 'STAT', 'DSIG', 'vhea', 'vmtx',
-                         'HVAR', 'VVAR', 'MVAR', 'meta']
+                         'HVAR', 'VVAR', 'MVAR', 'meta', 'VORG', 'BASE']
     s = subset.Subsetter(opts)
     s.populate(unicodes=unicodes)
     s.subset(font)
@@ -96,7 +105,7 @@ def main():
     src = args[0]
     out = args[1] if len(args) > 1 else os.path.join(os.path.dirname(__file__), '..', 'assets', 'fonts')
     steps = (('liberation', liberation), ('inter', inter), ('dejavu', dejavu), ('notoemoji', notoemoji),
-             ('twemoji', twemoji))
+             ('twemoji', twemoji), ('cjk', cjk))
     for name, step in steps:
         if not only or name in only:
             step(src, out)
@@ -168,6 +177,104 @@ def twemoji(src, out):
     shutil.copy(os.path.join(src, 'twemoji-colr-LICENSE.md'), os.path.join(out, 'twemoji', 'LICENSE.md'))
     with open(os.path.join(out, 'twemoji', 'ATTRIBUTION.txt'), 'w') as a:
         a.write(TWEMOJI_ATTRIBUTION)
+
+
+def double_byte(codec, leads, trails):
+    """The characters of a double-byte character set, by decoding every
+    lead and trail byte pair with one of Python's codecs."""
+    out = set()
+    for a in leads:
+        for b in trails:
+            try:
+                t = bytes([a, b]).decode(codec)
+            except UnicodeDecodeError:
+                continue
+            if len(t) == 1:
+                out.add(ord(t))
+    return out
+
+
+def is_han(cp):
+    return 0x3400 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x3FFFF
+
+
+# The CJK blocks a CJK face draws beyond the ideographs: radicals,
+# punctuation, kana, bopomofo, enclosed and compatibility characters,
+# vertical, compatibility and small forms, fullwidth and halfwidth forms.
+CJK_BLOCKS = [(0x2E80, 0x33FF), (0xFE10, 0xFE1F), (0xFE30, 0xFE6F), (0xFF00, 0xFFEF)]
+
+
+def cjk_sets():
+    """The characters of the two CJK faces: (Noto Sans SC's, Noto Sans KR's).
+
+    Ideographs: GB 2312 (6,763, simplified Chinese), the Big5 common set
+    (level 1, 5,401, traditional Chinese) and the JIS X 0208 kanji (6,355),
+    10,269 together. Hangul: the 2,350 syllables of KS X 1001. Beyond them,
+    the characters of those standards in the CJK blocks, and all of kana,
+    bopomofo, the CJK punctuation and the compatibility jamo."""
+    big5_trail = list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))
+    gb = double_byte('gb2312', range(0xA1, 0xF8), range(0xA1, 0xFF))
+    big5 = double_byte('big5', range(0xA1, 0xC7), big5_trail)  # symbols and level 1 (to C67E)
+    jis = double_byte('euc_jp', range(0xA1, 0xF5), range(0xA1, 0xFF))
+    ks = double_byte('euc_kr', range(0xA1, 0xFE), range(0xA1, 0xFF))
+    han = {c for c in gb | big5 | jis if is_han(c)}
+    blocks = {c for c in gb | big5 | jis | ks if in_ranges(c, CJK_BLOCKS)}
+    whole = set(range(0x3000, 0x3130)) | set(range(0x31A0, 0x31C0)) | set(range(0x31F0, 0x3200))
+    hangul = {c for c in ks if 0xAC00 <= c <= 0xD7A3}
+    jamo = set(range(0x3131, 0x318F))
+    # Hangul compatibility jamo and the circled hangul stay in the hangul
+    # face, so Korean letters are drawn in one design.
+    korean = jamo | set(range(0x3200, 0x321F)) | set(range(0x3260, 0x327F))
+    return (han | blocks | whole) - korean, hangul | korean | blocks
+
+
+def common_first(font):
+    """Orders the glyphs of a CJK face so the most common characters lie
+    together at the start of glyf, which a paged face reads in blocks:
+    .notdef, the characters that are not ideographs, then ideographs in all
+    three of GB 2312 level 1, JIS X 0208 level 1 and Big5 level 1, in two
+    of them, in one, and the rest; each group in code point order. A whole
+    Japanese or Chinese Wikipedia front page then touches about a third
+    fewer blocks."""
+    from fontTools.ttLib.reorderGlyphs import reorderGlyphs
+    big5_trail = list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))
+    levels = (double_byte('gb2312', range(0xB0, 0xD8), range(0xA1, 0xFF)),
+              double_byte('euc_jp', range(0xB0, 0xD0), range(0xA1, 0xFF)),
+              double_byte('big5', range(0xA4, 0xC7), big5_trail))
+    char_of = {}
+    for cp, name in font.getBestCmap().items():
+        char_of[name] = min(cp, char_of.get(name, cp))
+    order = font.getGlyphOrder()
+
+    def key(name):
+        if name == order[0]:
+            return (0, 0, 0)
+        cp = char_of.get(name)
+        if cp is None or not is_han(cp):
+            return (1, 0, cp or 0)
+        n = sum(cp in level for level in levels)
+        return (2, 3 - n, cp)
+    reorderGlyphs(font, sorted(order, key=key))
+
+
+def cjk(src, out):
+    sc, kr = cjk_sets()
+    d = os.path.join(out, 'notosanscjk')
+    for name, want in (('SC', sc), ('KR', kr)):
+        f = TTFont(os.path.join(src, 'NotoSans%s[wght].ttf' % name))
+        f = instancer.instantiateVariableFont(f, {'wght': 400}, updateFontNames=True)
+        cmap = f.getBestCmap()
+        if name == 'KR':
+            # Hangul and what Noto Sans SC lacks: the SC face is tried first.
+            want = {c for c in want if 0xAC00 <= c <= 0xD7A3 or 0x3131 <= c <= 0x318E or c not in sc_have}
+        cps = sorted(c for c in want if c in cmap)
+        reduce_font(f, cps)
+        if name == 'SC':
+            sc_have = set(cps)
+            common_first(f)
+        save(f, os.path.join(d, 'NotoSans%s-Regular.ttf' % name))
+        print('  %d of %d characters' % (len(cps), len(want)))
+    shutil.copy(os.path.join(src, 'NotoSansCJK-OFL.txt'), os.path.join(d, 'OFL.txt'))
 
 
 TWEMOJI_ATTRIBUTION = """Twemoji Mozilla, as bundled with Aura

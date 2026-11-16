@@ -277,7 +277,10 @@ static void map_generic(AuFontSet *set, AuGenericFamily g, const char *a, const 
  * The folder holds .ttf files (data fork) in a subfolder per family and
  * an index, fonts.idx, naming each face's file, weight, style and family.
  * Faces are registered from the index alone; a face's file is read the
- * first time it is matched, into temporary memory when there is room. */
+ * first time it is matched, into temporary memory when there is room. A
+ * file over AU_FONT_PAGED_MIN (the CJK faces) is paged instead: its data
+ * fork stays open and the font set reads its tables once and its glyph
+ * outlines in 16 KB blocks as they are drawn (fontpage.c). */
 
 typedef struct BundledRef {
     short vref;
@@ -286,6 +289,8 @@ typedef struct BundledRef {
     Handle mem;
     Ptr ptr;
     bool tried;
+    short fork;         /* the open data fork of a paged face, or 0 */
+    bool fork_failed;
 } BundledRef;
 
 static uint32_t fonts_ms, bundled_ms;
@@ -343,6 +348,51 @@ static bool load_bundled(void *ctx, const void **data, size_t *len)
     return true;
 }
 
+/* The data fork's length from the catalog, without opening the file. */
+static bool bundled_size(void *ctx, uint32_t *len)
+{
+    BundledRef *b = ctx;
+    FSSpec spec;
+    if (FSMakeFSSpec(b->vref, b->dir, b->path, &spec) != noErr)
+        return false;
+    CInfoPBRec pb;
+    memset(&pb, 0, sizeof pb);
+    pb.hFileInfo.ioNamePtr = spec.name;
+    pb.hFileInfo.ioVRefNum = spec.vRefNum;
+    pb.hFileInfo.ioDirID = spec.parID;
+    pb.hFileInfo.ioFDirIndex = 0;
+    if (PBGetCatInfoSync(&pb) != noErr || (pb.hFileInfo.ioFlAttrib & 0x10) || pb.hFileInfo.ioFlLgLen < 0)
+        return false;
+    *len = (uint32_t)pb.hFileInfo.ioFlLgLen;
+    return true;
+}
+
+/* Reads n bytes at off of a paged face's file; the fork stays open for
+ * the life of the application (the Process Manager closes it at exit). */
+static bool bundled_read(void *ctx, uint32_t off, void *buf, uint32_t n)
+{
+    BundledRef *b = ctx;
+    if (!b->fork) {
+        FSSpec spec;
+        short ref;
+        if (b->fork_failed)
+            return false;
+        if (FSMakeFSSpec(b->vref, b->dir, b->path, &spec) != noErr || FSpOpenDF(&spec, fsRdPerm, &ref) != noErr) {
+            b->fork_failed = true;
+            return false;
+        }
+        b->fork = ref;
+    }
+    if (n > 0x7FFFFFFFu || off > 0x7FFFFFFFu)
+        return false;
+    long count = (long)n;
+    if (SetFPos(b->fork, fsFromStart, (long)off) != noErr)
+        return false;
+    return FSRead(b->fork, &count, buf) == noErr && count == (long)n;
+}
+
+static const AuFontFileOps bundled_ops = {load_bundled, bundled_size, bundled_read};
+
 typedef struct IndexCtx {
     AuFontSet *set;
     short vref;
@@ -363,7 +413,7 @@ static void add_bundled(void *ctx, const AuFontIndexEntry *e)
     b->path[1] = ':';
     for (size_t i = 0; i < n; i++)
         b->path[2 + i] = e->path[i] == '/' ? ':' : (unsigned char)e->path[i];
-    au_fontset_add_lazy(ic->set, e->family, e->weight, e->italic, e->face_index, AU_FONT_BUNDLED, load_bundled, b);
+    au_fontset_add_file(ic->set, e->family, e->weight, e->italic, e->face_index, AU_FONT_BUNDLED, &bundled_ops, b);
     bundled_faces++;
 }
 

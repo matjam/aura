@@ -47,11 +47,76 @@ every face parses and draws.
 - **Host.** `platform_host.c` loads a fixed list of macOS fonts that
   match Mac OS 9's, then the bundled faces of `assets/fonts`
   (`fontdir.c`), lazily.
+- Both platforms register a bundled face with `au_fontset_add_file`. A
+  file over 2 MB (`AU_FONT_PAGED_MIN`) becomes a paged face (below);
+  a smaller one is read whole, on Mac OS 9 into temporary memory when
+  there is room.
+
+## Paged faces
+
+A paged face keeps its glyph outlines in the file (`src/paint/fontpage.c`).
+On first use the pager reads the table directory and every table but
+`glyf` into one compact sfnt in memory (cmap, metrics, loca, names), and
+reads `glyf` in 16 KB blocks (`AU_FONT_PAGE_SIZE`) as glyphs are drawn,
+keeping the 4 most recently used blocks (`AU_FONT_PAGE_SLOTS`) and a copy
+of each glyph read, up to 256 KB of them (`AU_FONT_GLYPH_CACHE`), least
+recently used out first. A glyph drawn again, at another size or after
+the glyph cache dropped it, reads nothing; a block is read for each
+glyph whose block is not among the 4. Noto Sans SC is the only bundled
+face this large.
+
+- To see what paged faces hold, run `aura-host render PAGE.html -w 1024
+  -h 768 -o run/a.png --bundled-only`: the last lines give the font data
+  loaded and the blocks read. In the application, Develop > System
+  Status shows "Paged faces" with the blocks read.
+- The platform supplies `size` and `read` callbacks (`AuFontFileOps`);
+  on Mac OS 9 the size comes from the catalog and the data fork stays
+  open for reads (`platform_mac.c`), on the host a `FILE` (`fontdir.c`).
+- A read that fails, or a file shorter than its tables say, gives
+  missing glyphs. The pager checks every table range against the file
+  length, at most 256 tables and 16 MB of tables in memory, and a glyph
+  of at most 256 KB.
+- Glyphs are read through `glyph_get` in `sfnt.c`, which returns the
+  glyph's bytes from the face's data or the pager; the outline readers
+  check each read against the glyph's length.
+- `tools/fonts-prepare.py` orders Noto Sans SC's glyphs with the most
+  common ideographs first, so a page's characters share fewer blocks.
+
+Measured on the host (Apple silicon, 2026-11-15, `--bundled-only`,
+1024 x 768):
+
+| What | Without the CJK faces | With them |
+|---|---|---|
+| Live memory after loading the Japanese Wikipedia front page, first screen painted (`AURA_MEM=1`) | 11,514 KB | 12,262 KB |
+| Of which Noto Sans SC: tables, blocks, 76 glyphs kept | | 117 KB, 64 KB, 18 KB |
+| Noto Sans SC if it were read whole | | 3,435 KB |
+| Blocks read to paint the first screen (1024 x 768) of the Japanese, Chinese front page | | 45, 76 |
+| Blocks read to paint the whole Japanese front page (7588 px, 685 distinct CJK characters) | | 573 |
+| Blocks read to paint the whole Chinese front page (12,396 px, 771 characters) | | 725 |
+| The first CJK glyph: fallback, opening the face, reading and drawing the glyph (`test_fallback`, warm file cache) | | 0.1 to 0.4 ms |
+
+Simulated from the glyph offsets, the 685 distinct CJK characters of the
+Japanese front page lie in 339 of the face's 4 KB blocks in Unicode
+order, 252 with the common characters first, and 101 16 KB blocks. A
+whole page reads about one block per distinct character because the
+characters arrive in text order; keeping 16 blocks instead of 4 read
+561 instead of 573, so the blocks are not worth their memory, and the
+repeated reads of a block come from the Mac OS disk cache.
+
+On a 1 GHz G4 (estimated, not measured): the work in memory is about
+2 to 8 ms (twenty times the host, the ratio the QEMU guest showed for
+deflate in [`memory.md`](memory.md)); a disk of the time adds about
+20 ms to read the catalog entry and 120 KB of tables, and about 10 ms
+for a block not in the Mac OS disk cache. The first CJK glyph should
+appear 30 to 40 ms after the page needs it. A first screen reads 45 to
+76 blocks: with the file in the disk cache that is about 0.1 ms each,
+and cold at most the 15 to 30 distinct blocks seek, 0.2 to 0.3 s.
+Reading the whole face at once would take about 0.25 s and 3.4 MB.
 
 ## The bundled set
 
 The bundled set is in `assets/fonts`, one folder per family with its
-licence, about 4.6 MB:
+licence, about 8.5 MB:
 
 | Family | Notes |
 |---|---|
@@ -60,9 +125,12 @@ licence, about 4.6 MB:
 | DejaVu Sans | the last-resort text face |
 | Noto Emoji | monochrome emoji |
 | Twemoji Mozilla | colour emoji, COLR version 0 |
+| Noto Sans SC | the ideographs of Chinese, Japanese and Korean (GB 2312, Big5 level 1, JIS X 0208), kana, bopomofo, CJK punctuation; paged |
+| Noto Sans KR | hangul (the 2,350 syllables of KS X 1001) |
 
 `assets/fonts/README.md` records sources, versions, licences, sizes,
-the choice of Twemoji over Noto Color Emoji, and what was left out.
+the choice of Twemoji over Noto Color Emoji, the choice of one face for
+the ideographs over one face per language, and what was left out.
 
 ## The alias table
 
@@ -90,8 +158,13 @@ all text through its `LFont`.
   the first face that has all of it.
 - **Order.** The primary face, the list's other candidates in matching
   order, the text fallback list (DejaVu Sans first, then system faces
-  with wide coverage, including CJK faces when a machine has them), the
-  emoji list, then any face already loaded.
+  with wide coverage, including CJK faces when a machine has them, then
+  the bundled Noto Sans SC and Noto Sans KR), the emoji list, then any
+  face already loaded.
+- **CJK.** One face draws the ideographs of all three languages (Han
+  unification), so the fallback order is fixed and does not depend on
+  the element's `lang`. Japanese and traditional Chinese text gets Noto
+  Sans SC's shapes for the characters whose design differs by region.
 - **Emoji presentation** (by default or with U+FE0F) tries a colour
   font the page names, then the emoji list (Twemoji Mozilla first);
   text presentation (U+FE0E) takes the monochrome Noto Emoji.
