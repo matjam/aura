@@ -621,6 +621,9 @@ struct JSContext {
     int interrupt_counter;
 
     struct list_head loaded_modules; /* list of JSModuleDef.link */
+    /* Aura: js_resolve_module's nesting and pass number */
+    int module_resolve_depth;
+    uint32_t module_resolve_gen;
 
     /* if NULL, RegExp compilation is not supported */
     JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
@@ -1077,6 +1080,7 @@ struct JSModuleDef {
     JSModuleInitFunc *init_func; /* only used for C modules */
     bool has_tla; /* true if func_obj contains await */
     bool resolved;
+    uint32_t resolve_failed_gen; /* Aura: the pass in which it last failed */
     bool func_created;
     JSModuleStatus status : 8;
     /* temp use during js_module_link() & js_module_evaluate() */
@@ -22364,6 +22368,9 @@ typedef struct JSFunctionDef {
     uint32_t *vars_htab; // indexes into vars[]
     int var_size; /* allocated size for vars[] */
     int var_count;
+    /* Aura: var_count when the scope chains were linked (js_create_function),
+       0 before: see scope_chain_lookup */
+    int linked_var_count;
     JSVarDef *args;
     int arg_size; /* allocated size for args[] */
     int arg_count; /* number of arguments */
@@ -22485,6 +22492,11 @@ typedef struct JSParseState {
     JSFunctionDef *cur_func;
     bool is_module; /* parsing a module */
     bool allow_html_comments;
+    /* Aura: what js_parse_skip_parens_token found for the large brackets
+       it scanned (see skip_memo_put) */
+    uint32_t *skip_memo;
+    uint32_t skip_memo_mask;
+    uint32_t skip_memo_count;
 } JSParseState;
 
 typedef struct JSOpCode {
@@ -25134,22 +25146,132 @@ static bool is_regexp_allowed(int tok)
 #define SKIP_HAS_ELLIPSIS   (1 << 1)
 #define SKIP_HAS_ASSIGNMENT (1 << 2)
 
+/* Aura: js_parse_skip_parens_token looks ahead from a bracket to its
+   match, and the parser calls it at every '(' that might start an arrow
+   function and every '{' or '[' that might be a destructuring target.
+   Scanning a bracket scans the brackets inside it, which are scanned
+   again when the parser reaches them, once per level of nesting: the
+   look-ahead was 29% of the compile time of GitHub's 980 KB code view
+   module. While it scans, the function now records the result for each
+   bracket of SKIP_MEMO_SPAN bytes or more that it sees closed (smaller
+   ones are cheap to scan again; 14,000 entries, 256 KB, for that
+   module), and a later call at that bracket returns the recorded
+   result: compiling GitHub's modules takes 11% less time. The result of
+   a scan from a bracket depends only on the text from that bracket on,
+   so it is the same whichever scan recorded it. Each slot of the table
+   is two words: the bracket's offset + 1 (0 for an empty slot) and the
+   result (the token after the match + 256, the skip bits << 16, and bit
+   19 for a line break before that token). */
+#define SKIP_MEMO_SPAN 32
+#define SKIP_MEMO_MAX  (1u << 16)
+
+static bool skip_memo_get(JSParseState *s, const uint8_t *ptr, uint32_t *pval)
+{
+    uint32_t key, i;
+
+    if (!s->skip_memo)
+        return false;
+    key = (uint32_t)(ptr - s->buf_start) + 1;
+    for (i = (key * 2654435761u) & s->skip_memo_mask;;
+         i = (i + 1) & s->skip_memo_mask) {
+        if (s->skip_memo[2 * i] == 0)
+            return false;
+        if (s->skip_memo[2 * i] == key) {
+            *pval = s->skip_memo[2 * i + 1];
+            return true;
+        }
+    }
+}
+
+static void skip_memo_insert(uint32_t *tab, uint32_t mask, uint32_t key,
+                             uint32_t val)
+{
+    uint32_t i;
+
+    for (i = (key * 2654435761u) & mask; tab[2 * i] != 0 && tab[2 * i] != key;
+         i = (i + 1) & mask)
+        continue;
+    tab[2 * i] = key;
+    tab[2 * i + 1] = val;
+}
+
+/* Records what a scan from the bracket at ptr found. Failing to record
+   (no memory, a full table) only costs speed. */
+static void skip_memo_put(JSParseState *s, const uint8_t *ptr,
+                          const uint8_t *end, int tok, int bits, bool nl)
+{
+    uint32_t key, val, size, i, *tab;
+
+    if (end - ptr < SKIP_MEMO_SPAN || s->buf_end - s->buf_start >= INT32_MAX ||
+        s->skip_memo_count >= SKIP_MEMO_MAX)
+        return;
+    key = (uint32_t)(ptr - s->buf_start) + 1;
+    val = (uint32_t)(tok + 256) | ((uint32_t)bits << 16) | (nl ? 1u << 19 : 0);
+    if (!s->skip_memo || (s->skip_memo_count + 1) * 2 > s->skip_memo_mask + 1) {
+        size = s->skip_memo ? (s->skip_memo_mask + 1) * 2 : 1024;
+        tab = js_mallocz_rt(s->ctx->rt, size * 2 * sizeof(*tab));
+        if (!tab)
+            return;
+        if (s->skip_memo) {
+            for (i = 0; i <= s->skip_memo_mask; i++) {
+                if (s->skip_memo[2 * i])
+                    skip_memo_insert(tab, size - 1, s->skip_memo[2 * i],
+                                     s->skip_memo[2 * i + 1]);
+            }
+            js_free_rt(s->ctx->rt, s->skip_memo);
+        }
+        s->skip_memo = tab;
+        s->skip_memo_mask = size - 1;
+    }
+    skip_memo_insert(s->skip_memo, s->skip_memo_mask, key, val);
+    s->skip_memo_count++;
+}
+
+static void skip_memo_free(JSParseState *s)
+{
+    js_free_rt(s->ctx->rt, s->skip_memo);
+    s->skip_memo = NULL;
+    s->skip_memo_mask = 0;
+    s->skip_memo_count = 0;
+}
+
 /* XXX: improve speed with early bailout */
 /* XXX: no longer works if regexps are present. Could use previous
    regexp parsing heuristics to handle most cases */
 static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_terminator)
 {
     char state[256];
+    /* Aura: per open bracket, where it starts (NULL for a template's
+       '${') and the skip bits a scan from it would return */
+    const uint8_t *eptr[256];
+    uint8_t ebits[256];
+    const uint8_t *closed_ptr;
+    int closed_bits;
+    uint32_t memo;
     size_t level = 0;
     JSParsePos pos;
     int last_tok, tok = TOK_EOF;
     int c, tok_len, bits = 0;
 
+    if ((s->token.val == '(' || s->token.val == '[' || s->token.val == '{') &&
+        skip_memo_get(s, s->token.ptr, &memo)) {
+        if (pbits)
+            *pbits = (memo >> 16) & 7;
+        tok = (int)(memo & 0xffff) - 256;
+        if (no_line_terminator && (memo & (1u << 19)))
+            tok = '\n';
+        return tok;
+    }
+
     /* protect from underflow */
+    eptr[level] = NULL;
+    ebits[level] = 0;
     state[level++] = 0;
 
     js_parse_get_pos(s, &pos);
     last_tok = 0;
+    closed_ptr = NULL;
+    closed_bits = 0;
     for (;;) {
         switch(s->token.val) {
         case '(':
@@ -25157,18 +25279,31 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
         case '{':
             if (level >= sizeof(state))
                 goto done;
+            eptr[level] = s->token.ptr;
+            ebits[level] = 0;
             state[level++] = s->token.val;
             break;
         case ')':
             if (state[--level] != '(')
                 goto done;
-            break;
+            goto closed;
         case ']':
             if (state[--level] != '[')
                 goto done;
+        closed:
+            closed_ptr = eptr[level];
+            closed_bits = ebits[level];
+            ebits[level - 1] |= ebits[level] & SKIP_HAS_ASSIGNMENT;
             break;
         case '}':
             c = state[--level];
+            if (c != '{' && c != '`')
+                goto done; /* level is 0 when c is the sentinel */
+            if (c == '{') {
+                closed_ptr = eptr[level];
+                closed_bits = ebits[level];
+            }
+            ebits[level - 1] |= ebits[level] & SKIP_HAS_ASSIGNMENT;
             if (c == '`') {
                 /* continue the parsing of the template */
                 free_token(s, &s->token);
@@ -25191,6 +25326,8 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
                    parsing the template */
                 if (level >= sizeof(state))
                     goto done;
+                eptr[level] = NULL;
+                ebits[level] = 0;
                 state[level++] = '`';
             }
             break;
@@ -25200,14 +25337,17 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
             if (level == 2) {
                 bits |= SKIP_HAS_SEMI;
             }
+            ebits[level - 1] |= SKIP_HAS_SEMI;
             break;
         case TOK_ELLIPSIS:
             if (level == 2) {
                 bits |= SKIP_HAS_ELLIPSIS;
             }
+            ebits[level - 1] |= SKIP_HAS_ELLIPSIS;
             break;
         case '=':
             bits |= SKIP_HAS_ASSIGNMENT;
+            ebits[level - 1] |= SKIP_HAS_ASSIGNMENT;
             break;
 
         case TOK_DIV_ASSIGN:
@@ -25236,6 +25376,15 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
         if (next_token(s)) {
             /* XXX: should clear the exception generated by next_token() */
             break;
+        }
+        if (closed_ptr) {
+            /* a bracket closed: what a scan from it returns is known */
+            int t = s->token.val;
+            if (token_is_pseudo_keyword(s, JS_ATOM_of))
+                t = TOK_OF;
+            skip_memo_put(s, closed_ptr, s->token.ptr, t, closed_bits,
+                          s->last_line_num != s->token.line_num);
+            closed_ptr = NULL;
         }
         if (level <= 1) {
             tok = s->token.val;
@@ -31386,11 +31535,21 @@ JSValue JS_GetModuleNamespace(JSContext *ctx, JSModuleDef *m)
 /* Load all the required modules for module 'm' */
 static int js_resolve_module(JSContext *ctx, JSModuleDef *m)
 {
-    int i;
+    int i, ret;
+    bool failed;
     JSModuleDef *m1;
+    JSValue first_exc, exc;
 
     if (m->resolved)
         return 0;
+    /* Aura: a module that already failed in this resolution pass fails
+       again without walking its imports a second time (a graph with
+       shared imports would otherwise be walked once per path). */
+    if (ctx->module_resolve_depth > 0 &&
+        m->resolve_failed_gen == ctx->module_resolve_gen)
+        return -1;
+    if (ctx->module_resolve_depth++ == 0)
+        ctx->module_resolve_gen++;
 #ifdef ENABLE_DUMPS // JS_DUMP_MODULE_RESOLVE
     if (check_dump_flag(ctx->rt, JS_DUMP_MODULE_RESOLVE)) {
         char buf1[ATOM_GET_STR_BUF_SIZE];
@@ -31398,27 +31557,53 @@ static int js_resolve_module(JSContext *ctx, JSModuleDef *m)
     }
 #endif
     m->resolved = true;
-    /* resolve each requested module */
+    failed = false;
+    first_exc = JS_UNINITIALIZED;
+    /* resolve each requested module. Aura: an import that cannot be
+       resolved does not stop the loop, so that the embedder's loader
+       hears of every module it lacks in one pass and can fetch them all
+       at once; the first error is the one reported. */
     for(i = 0; i < m->req_module_entries_count; i++) {
         JSReqModuleEntry *rme = &m->req_module_entries[i];
         m1 = js_host_resolve_imported_module_atom(ctx, m->module_name,
                                                   rme->module_name,
                                                   rme->attributes);
-        if (!m1)
-            goto fail;
-        rme->module = m1;
-        /* already done in js_host_resolve_imported_module() except if
-           the module was loaded with JS_EvalBinary() */
-        if (js_resolve_module(ctx, m1) < 0)
-            goto fail;
+        if (m1) {
+            rme->module = m1;
+            /* already done in js_host_resolve_imported_module() except if
+               the module was loaded with JS_EvalBinary() */
+            if (js_resolve_module(ctx, m1) == 0)
+                continue;
+        }
+        failed = true;
+        if (!JS_HasException(ctx))
+            continue;
+        exc = JS_GetException(ctx);
+        if (JS_IsUncatchableError(exc)) {
+            JS_FreeValue(ctx, first_exc);
+            first_exc = exc;
+            break;
+        }
+        if (JS_IsUninitialized(first_exc))
+            first_exc = exc;
+        else
+            JS_FreeValue(ctx, exc);
     }
-    return 0;
- fail:
-    /* Aura: leave the module unresolved so that a later attempt, made
-       after the embedder has fetched the missing modules, resolves it
-       again instead of using a half-resolved module. */
-    m->resolved = false;
-    return -1;
+    ret = 0;
+    if (failed) {
+        /* Aura: leave the module unresolved so that a later attempt, made
+           after the embedder has fetched the missing modules, resolves it
+           again instead of using a half-resolved module. */
+        m->resolved = false;
+        m->resolve_failed_gen = ctx->module_resolve_gen;
+        if (JS_IsUninitialized(first_exc))
+            JS_ThrowReferenceError(ctx, "could not resolve the imports of a module");
+        else
+            JS_Throw(ctx, first_exc);
+        ret = -1;
+    }
+    ctx->module_resolve_depth--;
+    return ret;
 }
 
 static JSVarRef *js_create_module_var(JSContext *ctx, bool is_lexical)
@@ -31901,10 +32086,11 @@ static void JS_LoadModuleInternal(JSContext *ctx, const char *basename,
     if (!m)
         goto fail;
 
-    if (js_resolve_module(ctx, m) < 0) {
-        js_free_modules(ctx, JS_FREE_MODULE_NOT_RESOLVED);
+    /* Aura: the modules that could not be resolved stay loaded (they used
+       to be freed here), so that the attempt the embedder makes once it
+       has fetched the missing ones does not compile them again. */
+    if (js_resolve_module(ctx, m) < 0)
         goto fail;
-    }
 
     /* Evaluate the module code */
     func_obj = JS_NewModuleValue(ctx, m);
@@ -33977,6 +34163,77 @@ static inline void capture_var(JSFunctionDef *s, JSVarDef *vd)
     }
 }
 
+/* Aura: where resolve_scope_var starts walking fd's chain of scoped
+   variables visible from scope_level, looking for var_name.
+
+   The walk visits every lexical variable visible from the scope, inner
+   scopes first and newest first within a scope; in bundles whose
+   functions declare hundreds of names it was 15% of the compile time.
+   When fd has the variable hash table, this finds the variable the walk
+   would stop at from the hash table instead: of the variables named
+   var_name, the one in the innermost scope of the chain, the newest in
+   that scope. The chain of a scope (js_create_function links them) is
+   its own variables, then the chain of its parent, up to and including
+   scope 0 or 1, whose chains end there. Returns that variable's index,
+   or -1 when no variable of the chain has the name: the walk then finds
+   nothing either.
+
+   Otherwise it returns the chain's first variable and the caller walks.
+   That is when there is no hash table (few variables), when fd has a
+   'with' scope (the walk emits code for each one it passes) or parameter
+   expressions (the argument scope's chain ends in ARG_SCOPE_END), for
+   'arguments' (add_arguments_var links a variable into the argument
+   scope's chain later), and before the chains are linked. Variables
+   added after the chains were linked are on no chain and are never
+   returned. */
+static int scope_chain_lookup(JSFunctionDef *fd, int scope_level,
+                              JSAtom var_name)
+{
+    int chain[64];
+    int n, best, best_pos, pos, sc;
+    uint32_t h, j, m, *p;
+    JSVarDef *vd;
+
+    if (!fd->vars_htab || fd->linked_var_count == 0 ||
+        fd->has_parameter_expressions || var_name == JS_ATOM_arguments ||
+        find_var_htab(fd, JS_ATOM__with_) >= 0)
+        return fd->scopes[scope_level].first;
+    n = 0;
+    for (sc = scope_level;;) {
+        if (n == countof(chain))
+            return fd->scopes[scope_level].first;
+        chain[n++] = sc;
+        if (sc < 2)
+            break;
+        sc = fd->scopes[sc].parent;
+        if (sc < 0)
+            break;
+    }
+    best = -1;
+    best_pos = n;
+    h = hash32(var_name);
+    j = 1;
+    m = fd->var_count + fd->var_count/5;
+    m = UINT32_MAX >> clz32(m);
+    for (;;) {
+        p = &fd->vars_htab[h & m];
+        if (*p == UINT32_MAX)
+            break;
+        vd = &fd->vars[*p];
+        if (vd->var_name == var_name && (int)*p < fd->linked_var_count) {
+            for (pos = 0; pos < n && chain[pos] != vd->scope_level; pos++)
+                continue;
+            if (pos < best_pos || (pos == best_pos && pos < n && (int)*p > best)) {
+                best_pos = pos;
+                best = (int)*p;
+            }
+        }
+        h += j;
+        j += 1; // quadratic probing, as find_var_htab
+    }
+    return best;
+}
+
 /* return the position of the next opcode */
 static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
                              JSAtom var_name, int scope_level, int op,
@@ -34000,7 +34257,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
 
     /* resolve local scoped variables */
     var_idx = -1;
-    for (idx = s->scopes[scope_level].first; idx >= 0;) {
+    for (idx = scope_chain_lookup(s, scope_level, var_name); idx >= 0;) {
         vd = &s->vars[idx];
         if (vd->var_name == var_name) {
             if (op == OP_scope_put_var || op == OP_scope_make_ref) {
@@ -34165,7 +34422,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
     for (fd = s; fd->parent;) {
         scope_level = fd->parent_scope_level;
         fd = fd->parent;
-        for (idx = fd->scopes[scope_level].first; idx >= 0;) {
+        for (idx = scope_chain_lookup(fd, scope_level, var_name); idx >= 0;) {
             vd = &fd->vars[idx];
             if (vd->var_name == var_name) {
                 if (op == OP_scope_put_var || op == OP_scope_make_ref) {
@@ -37296,6 +37553,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
             vd->scope_next = fd->scopes[scope].first;
         }
     }
+    fd->linked_var_count = fd->var_count; /* Aura */
 
     /* if the function contains an eval call, the closure variables
        are used to compile the eval and they must be ordered by scope,
@@ -38540,6 +38798,7 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    skip_memo_free(s); /* Aura */
     if (!err)
         err = js_fd_assign_sources(ctx, fd, input, input_len);
     if (err) {
@@ -38559,7 +38818,10 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     /* Could add a flag to avoid resolution if necessary */
     if (m) {
         m->func_obj = fun_obj;
-        if (js_resolve_module(ctx, m) < 0)
+        /* Aura: JS_EVAL_FLAG_NO_RESOLVE leaves resolution to the caller
+           (JS_ResolveModule), which keeps the compiled module when an
+           import is not there yet. */
+        if (!(flags & JS_EVAL_FLAG_NO_RESOLVE) && js_resolve_module(ctx, m) < 0)
             goto fail1;
         fun_obj = JS_NewModuleValue(ctx, m);
     }
@@ -38673,12 +38935,27 @@ int JS_ResolveModule(JSContext *ctx, JSValueConst obj)
 {
     if (JS_VALUE_GET_TAG(obj) == JS_TAG_MODULE) {
         JSModuleDef *m = JS_VALUE_GET_PTR(obj);
-        if (js_resolve_module(ctx, m) < 0) {
-            js_free_modules(ctx, JS_FREE_MODULE_NOT_RESOLVED);
+        /* Aura: unresolved modules stay loaded for the next attempt (see
+           JS_LoadModuleInternal) */
+        if (js_resolve_module(ctx, m) < 0)
             return -1;
-        }
     }
     return 0;
+}
+
+/* Aura: the module of this name that the context has loaded (compiled),
+   resolved or not, or NULL. */
+JSModuleDef *JS_FindLoadedModule(JSContext *ctx, const char *name)
+{
+    JSAtom atom;
+    JSModuleDef *m;
+
+    atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL)
+        return NULL;
+    m = js_find_loaded_module_by_name(ctx, atom);
+    JS_FreeAtom(ctx, atom);
+    return m;
 }
 
 /*******************************************************************/

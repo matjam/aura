@@ -1290,6 +1290,7 @@ void au_js_free(AuJs *js)
     js->nrejections = 0;
     au_free(js->rejections);
     code_drop_owner(js, NULL);
+    js_selectors_free(js);
     JS_FreeValue(ctx, js->P);
     js->P = JS_UNDEFINED;
     js_canvas_free(js);

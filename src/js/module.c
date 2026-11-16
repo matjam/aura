@@ -119,23 +119,41 @@ static void set_meta(JSContext *ctx, JSModuleDef *md, const char *url)
     JS_FreeValue(ctx, meta);
 }
 
+/* Compiles a module without resolving its imports (QuickJS patch 0010):
+ * the module stays in the context's loaded modules, resolved or not, so
+ * an attempt that finds an import missing does not compile it again.
+ * NULL with an exception for a syntax error. */
+static JSModuleDef *compile_module(JSContext *ctx, const char *name, const char *src, size_t len,
+                                   const char *meta_url)
+{
+    JSValue fn = JS_Eval(ctx, src, len, name,
+                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE);
+    if (JS_IsException(fn))
+        return NULL;
+    JSModuleDef *md = JS_VALUE_GET_PTR(fn);
+    set_meta(ctx, md, meta_url);
+    JS_FreeValue(ctx, fn);
+    return md;
+}
+
+/* QuickJS asks for each module it has not loaded. A module's text is
+ * freed once it compiles: the compiled module stays loaded in the
+ * context, and the engine keeps its own copy of the text (patch 0008). */
 static JSModuleDef *loader(JSContext *ctx, const char *name, void *opaque)
 {
     (void)opaque; /* the runtime is shared by frames: the context names the document */
     AuJs *js = js_of_ctx(ctx);
     Modules *m = M(js);
     ModSrc *s = find_src(m, name);
-    if (!s) {
+    if (!s || !s->src) {
         add_missing(m, name);
         JS_ThrowReferenceError(ctx, "module %s is not loaded yet", name);
         return NULL;
     }
-    JSValue fn = JS_Eval(ctx, s->src, s->len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    if (JS_IsException(fn))
-        return NULL;
-    JSModuleDef *md = JS_VALUE_GET_PTR(fn);
-    set_meta(ctx, md, name);
-    JS_FreeValue(ctx, fn);
+    JSModuleDef *md = compile_module(ctx, name, s->src, s->len, name);
+    au_free(s->src);
+    s->src = NULL;
+    s->len = 0;
     return md;
 }
 
@@ -149,9 +167,22 @@ static JSValue missing_array(AuJs *js)
     return arr;
 }
 
-/* moduleEval(url, source or null, inline) -> [missing urls] or
- * {promise}. An inline module gets a unique name based on the document
- * URL, so its relative imports resolve against the document. */
+/* moduleEval(name, source or null, inline) -> [missing urls] or
+ * {promise}.
+ *
+ * The first call for a module script passes its URL and, for an inline
+ * module or one whose text the page already has, its source. An inline
+ * module gets a unique name based on the document URL, so its relative
+ * imports resolve against the document. When imports are missing, the
+ * array of their URLs carries the module's name as `module`; the prelude
+ * fetches them all and calls again with that name and a null source.
+ * The module compiled on the first call is resolved again, not
+ * compiled again: one pass reports every import that is missing (patch
+ * 0010), so a module graph takes one round per level of imports, and
+ * each module is compiled once. (Every round used to compile the root
+ * module again and stop at its first missing import: GitHub's 980 KB
+ * code view module was compiled 22 times, 2.6 s of the page's 3.5 s of
+ * script on the host.) */
 static JSValue n_module_eval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
@@ -159,41 +190,64 @@ static JSValue n_module_eval(JSContext *ctx, JSValueConst this_val, int argc, JS
     char *url = argc > 0 ? js_tostr(ctx, argv[0], NULL) : NULL;
     if (!url)
         return JS_EXCEPTION;
-    char *src = NULL;
-    size_t len = 0;
     bool inl = argc > 2 && JS_ToBool(ctx, argv[2]);
-    if (argc > 1 && JS_IsString(argv[1])) {
-        src = js_tostr(ctx, argv[1], &len);
-    } else {
-        ModSrc *s = find_src(m, url);
-        if (s)
-            src = au_strndup(s->src, s->len), len = s->len;
-    }
-    if (!src) {
-        add_missing(m, url);
-        au_free(url);
-        return missing_array(js);
-    }
+    bool has_src = argc > 1 && JS_IsString(argv[1]);
     char name[1100];
-    if (inl)
+    if (inl && has_src)
         snprintf(name, sizeof name, "%.1000s#inline-module-%lu", url, (unsigned long)++m->inline_seq);
     else
         snprintf(name, sizeof name, "%.1000s", url);
     clear_missing(m);
-    JSValue fn = JS_Eval(ctx, src, len, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    au_free(src);
-    if (JS_IsException(fn)) {
+    /* A module script of a URL already loaded (as another script or as an
+     * import) is that module: it is not compiled or run a second time. */
+    JSModuleDef *md = inl && has_src ? NULL : JS_FindLoadedModule(ctx, name);
+    if (!md && has_src) {
+        size_t len = 0;
+        char *src = js_tostr(ctx, argv[1], &len);
+        if (!src) {
+            au_free(url);
+            return JS_EXCEPTION;
+        }
+        md = compile_module(ctx, name, src, len, inl ? js->url : url);
+        au_free(src);
+        if (!md) {
+            au_free(url);
+            return JS_EXCEPTION;
+        }
+    } else if (!md && inl) {
         au_free(url);
-        if (m->nmissing) {
-            JSValue e = JS_GetException(ctx);
-            JS_FreeValue(ctx, e);
+        return JS_ThrowInternalError(ctx, "inline module %s is gone", name);
+    } else if (!md) {
+        ModSrc *s = find_src(m, url);
+        if (!s || !s->src) {
+            add_missing(m, url);
+            au_free(url);
             return missing_array(js);
         }
-        return JS_EXCEPTION;
+        md = compile_module(ctx, name, s->src, s->len, url);
+        au_free(s->src);
+        s->src = NULL;
+        s->len = 0;
+        if (!md) {
+            au_free(url);
+            return JS_EXCEPTION;
+        }
     }
-    set_meta(ctx, JS_VALUE_GET_PTR(fn), inl ? js->url : url);
     au_free(url);
-    JSValue p = JS_EvalFunction(ctx, fn);
+    JSValue mv = JS_DupValue(ctx, JS_MKPTR(JS_TAG_MODULE, md));
+    if (JS_ResolveModule(ctx, mv) < 0) {
+        JS_FreeValue(ctx, mv);
+        if (!m->nmissing)
+            return JS_EXCEPTION;
+        JSValue e = JS_GetException(ctx);
+        if (JS_IsUncatchableError(e))
+            return JS_Throw(ctx, e);
+        JS_FreeValue(ctx, e);
+        JSValue arr = missing_array(js);
+        JS_SetPropertyStr(ctx, arr, "module", JS_NewString(ctx, name));
+        return arr;
+    }
+    JSValue p = JS_EvalFunction(ctx, mv);
     if (JS_IsException(p))
         return JS_EXCEPTION;
     JSValue o = JS_NewObject(ctx);
@@ -213,12 +267,20 @@ static JSValue n_module_store(JSContext *ctx, JSValueConst this_val, int argc, J
         au_free(src);
         return JS_EXCEPTION;
     }
-    if (find_src(m, url)) {
+    ModSrc *s = find_src(m, url);
+    if (s) {
+        /* text freed after a compile: a module that failed to compile is
+         * asked for again, and gets the new text */
+        if (!s->src && !JS_FindLoadedModule(ctx, url)) {
+            s->src = src;
+            s->len = len;
+        } else {
+            au_free(src);
+        }
         au_free(url);
-        au_free(src);
         return JS_UNDEFINED;
     }
-    ModSrc *s = au_calloc(sizeof *s);
+    s = au_calloc(sizeof *s);
     s->url = url;
     s->src = src;
     s->len = len;
