@@ -255,6 +255,10 @@ JSValue js_eval_classic(AuJs *js, const char *src, size_t len, const char *url, 
  * compiled it, as an au_alloc'd block for a worker to read (see
  * "Compiled scripts" in runtime.c); NULL when it has not. */
 uint8_t *js_code_for_worker(AuJs *js, const char *url, const char *src, size_t len, size_t *code_len);
+/* The UTF-8 bytes of a typed array or ArrayBuffer as an au_alloc'd C
+ * string, without a byte order mark; the buffer is detached (its memory
+ * in the script heap freed). NULL when v is neither. */
+char *js_take_script_bytes(JSContext *ctx, JSValueConst v, size_t *len);
 /* Lets go of compiled scripts nothing has asked for in the last 20
  * seconds (called while the page is idle). */
 void js_code_expire(AuJs *js);

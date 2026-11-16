@@ -76,9 +76,10 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
 
     au_buf_puts(out, "Memory\n");
     if (h && h->have_memory)
-        au_buf_printf(out, "  application heap: %lu KB free (largest block %lu KB); temporary memory: %lu KB free\n",
+        au_buf_printf(out, "  application heap: %lu KB free (largest block %lu KB); temporary memory: %lu KB free, %lu KB "
+                           "taken by Aura's heap\n",
                       (unsigned long)h->heap_free_kb, (unsigned long)h->heap_block_kb,
-                      (unsigned long)h->temp_free_kb);
+                      (unsigned long)h->temp_free_kb, (unsigned long)h->temp_used_kb);
     size_t js_used, js_limit;
     au_page_script_memory(p, &js_used, &js_limit);
     au_buf_puts(out, "  script heap: ");

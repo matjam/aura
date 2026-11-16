@@ -395,13 +395,16 @@ static JSValue n_worker_source(JSContext *ctx, JSValueConst this_val, int argc, 
     JsWorker *w = worker_of(js, id);
     if (!w || w->started)
         return JS_UNDEFINED;
-    if (!JS_IsString(argv[1])) {
+    if (JS_IsString(argv[1]))
+        w->source = js_tostr(ctx, argv[1], &w->source_len);
+    else if (JS_IsObject(argv[1]))
+        w->source = js_take_script_bytes(ctx, argv[1], &w->source_len); /* the fetched bytes */
+    if (!w->source) {
         w->terminate = true;
         w->started = true;
         w->finished = true; /* it never ran: reaped by the next au_js_run_workers */
         return JS_UNDEFINED;
     }
-    w->source = js_tostr(ctx, argv[1], &w->source_len);
     if (argc > 2 && JS_IsString(argv[2])) {
         au_free(w->url);
         w->url = js_tostr(ctx, argv[2], NULL);

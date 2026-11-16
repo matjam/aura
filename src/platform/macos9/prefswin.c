@@ -13,6 +13,7 @@
 #include "mac.h"
 #include "blocking_mac.h"
 #include "browser/credits.h"
+#include "browser/scriptmem.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,14 +21,14 @@
 
 enum { kW = 616, kH = 392 }; /* fits a 640 by 480 screen; seven tabs need the width */
 enum { NPANES = 7 };
-enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO };
+enum { M_STARTUP = 150, M_COOKIES, M_SERIF, M_SANS, M_MONO, M_SMEM, M_WMEM };
 
 /* Field ids: one per control whose value is a preference or an action. */
 typedef enum {
     F_NONE,
     F_HOME, F_USE_CURRENT, F_STARTUP, F_TABS_TOP, F_TABS_LEFT, F_SEARCH, F_EXT_WINDOW, F_DEFAULT_BROWSER,
     F_SERIF, F_SANS, F_MONO, F_SIZE, F_SIZE_MONO, F_SIZE_MIN,
-    F_JS, F_IMAGES, F_POPUPS,
+    F_JS, F_IMAGES, F_POPUPS, F_SMEM_MODE, F_SMEM_MB, F_WMEM_MODE, F_WMEM_MB,
     F_DNT, F_GPC, F_HTTPS_FIRST, F_LEGACY_TLS, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
     F_HISTORY_ON, F_HISTORY_DAYS, F_CLEAR_H_QUIT, F_CLEAR_CK_QUIT, F_CLEAR_CA_QUIT,
     F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE, F_SHOW_COOKIES,
@@ -50,6 +51,7 @@ typedef struct PrefsWin {
     unsigned long last_click_ticks;
     AuTabPosition orig_tabs;
     ControlHandle default_label; /* beside Make Aura the Default Browser */
+    ControlHandle smem_auto, wmem_auto; /* "Automatic is N MB on this Mac" */
     char **families;
     int nfamilies;
 } PrefsWin;
@@ -260,10 +262,30 @@ static void build(PrefsWin *p)
     check(p, 2, F_IMAGES, L, y, 300, "Load images");
     y += 26;
     check(p, 2, F_POPUPS, L, y, 300, "Block pop-up windows");
-    y += 36;
-    small_label(p, 2, L, y, R - L, 44,
-                "Aura's script, image and network engines are not built yet. These settings are kept now and "
-                "take effect when those parts arrive.");
+    y += 40;
+    /* Script memory: Automatic, or the user's own limit in megabytes. */
+    label(p, 2, L, y, 170, "Script memory per page:");
+    m = popup_menu(M_SMEM);
+    mac_append_item(m, "Automatic");
+    mac_append_item(m, "Custom");
+    popup(p, 2, F_SMEM_MODE, 200, y, 120, M_SMEM, m);
+    edit(p, 2, F_SMEM_MB, 328, y, 50);
+    label(p, 2, 384, y, 30, "MB");
+    p->smem_auto = make(p, 2, kAuControlStaticTextProc, 416, (short)(y + 2), 190, 16, NULL, 0, 0, 0);
+    y += 30;
+    label(p, 2, L, y, 170, "Script memory per worker:");
+    m = popup_menu(M_WMEM);
+    mac_append_item(m, "Automatic");
+    mac_append_item(m, "Custom");
+    popup(p, 2, F_WMEM_MODE, 200, y, 120, M_WMEM, m);
+    edit(p, 2, F_WMEM_MB, 328, y, 50);
+    label(p, 2, 384, y, 30, "MB");
+    p->wmem_auto = make(p, 2, kAuControlStaticTextProc, 416, (short)(y + 2), 190, 16, NULL, 0, 0, 0);
+    y += 28;
+    small_label(p, 2, L, y, R - L, 58,
+                "How much memory the scripts of one page, and of each worker a page starts, may use. Automatic "
+                "follows the memory free on this Mac when a page starts. A custom limit is 4 to 256 MB. A page "
+                "that reaches its limit says so in the Console. Changes apply to pages loaded afterwards.");
 
     /* Privacy and Security */
     y = 48;
@@ -412,6 +434,67 @@ static void show_default_state(PrefsWin *p, bool redraw)
         Draw1Control(p->default_label);
 }
 
+static void drop_focus(PrefsWin *p);
+
+/* An MB field takes the keyboard only while its row says Custom. */
+static bool edit_enabled(PrefsWin *p, int f)
+{
+    if (f == F_SMEM_MB)
+        return GetControlValue(p->field[F_SMEM_MODE]) == 2;
+    if (f == F_WMEM_MB)
+        return GetControlValue(p->field[F_WMEM_MODE]) == 2;
+    return true;
+}
+
+/* The script memory rows: the MB field is active only for Custom, and
+ * the text beside it says what Automatic gives on this Mac now. */
+static void script_memory_rows(PrefsWin *p, bool redraw)
+{
+    uint32_t page_kb, worker_kb;
+    au_script_memory_auto(mac_memory_free_kb(), &page_kb, &worker_kb);
+    for (int i = 0; i < 2; i++) {
+        Field mode = i ? F_WMEM_MODE : F_SMEM_MODE, mb = i ? F_WMEM_MB : F_SMEM_MB;
+        ControlHandle note = i ? p->wmem_auto : p->smem_auto;
+        bool custom = GetControlValue(p->field[mode]) == 2;
+        if (custom) {
+            ActivateControl(p->field[mb]);
+        } else {
+            if (p->focus == mb)
+                drop_focus(p);
+            DeactivateControl(p->field[mb]);
+        }
+        char text[64];
+        snprintf(text, sizeof text, "Automatic is %lu MB on this Mac", (unsigned long)((i ? worker_kb : page_kb) / 1024));
+        size_t n;
+        char *r = mac_utf8_to_roman(text, &n);
+        SetControlData(note, 0, kAuControlStaticTextTextTag, (Size)n, r);
+        au_free(r);
+        if (redraw) {
+            Draw1Control(note);
+            Draw1Control(p->field[mb]);
+        }
+    }
+}
+
+static void load_script_memory(PrefsWin *p, Field mode, Field mb, int kb, uint32_t auto_kb)
+{
+    SetControlValue(p->field[mode], kb ? 2 : 1);
+    /* Automatic shows what it gives now, ready to edit after a switch to Custom. */
+    set_num(p->field[mb], (int)((kb ? (uint32_t)kb : auto_kb) / 1024));
+}
+
+static int store_script_memory(PrefsWin *p, Field mode, Field mb, int old_kb)
+{
+    if (GetControlValue(p->field[mode]) != 2)
+        return 0; /* Automatic is stored as 0, so it follows Aura's policy */
+    int v = get_num(p->field[mb], old_kb / 1024);
+    if (v < 1)
+        v = 1;
+    if (v > 4096)
+        v = 4096;
+    return au_script_memory_clamp(v * 1024);
+}
+
 static void load(PrefsWin *p, const AuPrefs *pr)
 {
     set_text(p->field[F_HOME], pr->home_page);
@@ -430,6 +513,13 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     SetControlValue(p->field[F_JS], pr->javascript);
     SetControlValue(p->field[F_IMAGES], pr->load_images);
     SetControlValue(p->field[F_POPUPS], pr->block_popups);
+    {
+        uint32_t page_kb, worker_kb;
+        au_script_memory_auto(mac_memory_free_kb(), &page_kb, &worker_kb);
+        load_script_memory(p, F_SMEM_MODE, F_SMEM_MB, pr->script_memory_kb, page_kb);
+        load_script_memory(p, F_WMEM_MODE, F_WMEM_MB, pr->worker_memory_kb, worker_kb);
+        script_memory_rows(p, false);
+    }
     SetControlValue(p->field[F_DNT], pr->send_dnt);
     SetControlValue(p->field[F_GPC], pr->send_gpc);
     SetControlValue(p->field[F_HTTPS_FIRST], pr->https_first);
@@ -493,6 +583,8 @@ static void store(PrefsWin *p, AuPrefs *pr)
     pr->javascript = GetControlValue(p->field[F_JS]) != 0;
     pr->load_images = GetControlValue(p->field[F_IMAGES]) != 0;
     pr->block_popups = GetControlValue(p->field[F_POPUPS]) != 0;
+    pr->script_memory_kb = store_script_memory(p, F_SMEM_MODE, F_SMEM_MB, pr->script_memory_kb);
+    pr->worker_memory_kb = store_script_memory(p, F_WMEM_MODE, F_WMEM_MB, pr->worker_memory_kb);
     pr->send_dnt = GetControlValue(p->field[F_DNT]) != 0;
     pr->send_gpc = GetControlValue(p->field[F_GPC]) != 0;
     pr->https_first = GetControlValue(p->field[F_HTTPS_FIRST]) != 0;
@@ -541,7 +633,7 @@ static bool is_number_field(Field f)
 {
     switch (f) {
     case F_SIZE: case F_SIZE_MONO: case F_SIZE_MIN: case F_HISTORY_DAYS: case F_HTTP_PORT: case F_HTTPS_PORT:
-    case F_MEM_CACHE: case F_DISK_CACHE:
+    case F_MEM_CACHE: case F_DISK_CACHE: case F_SMEM_MB: case F_WMEM_MB:
         return true;
     default:
         return false;
@@ -592,7 +684,7 @@ static Field next_edit(PrefsWin *p, int dir)
     int start = p->focus != F_NONE && p->pane_of[p->focus] == p->pane ? (int)p->focus : (dir > 0 ? 0 : F_COUNT);
     for (int k = 1; k <= F_COUNT; k++) {
         int i = ((start + dir * k) % F_COUNT + F_COUNT) % F_COUNT;
-        if (i != F_NONE && p->is_edit[i] && p->pane_of[i] == p->pane)
+        if (i != F_NONE && p->is_edit[i] && p->pane_of[i] == p->pane && edit_enabled(p, i))
             return (Field)i;
     }
     return F_NONE;
@@ -661,7 +753,7 @@ static void pw_close(MacWin *mw)
     PrefsWin *p = (PrefsWin *)mw;
     prefs_blocking_close();
     DisposeWindow(mw->win);
-    static const short menus[] = {M_STARTUP, M_COOKIES, M_SERIF, M_SANS, M_MONO};
+    static const short menus[] = {M_STARTUP, M_COOKIES, M_SERIF, M_SANS, M_MONO, M_SMEM, M_WMEM};
     for (size_t i = 0; i < sizeof menus / sizeof menus[0]; i++) {
         MenuHandle m = GetMenuHandle(menus[i]);
         if (m) {
@@ -715,6 +807,8 @@ static void pw_click(MacWin *mw, EventRecord *ev)
     if (!c)
         return;
     Field f = field_of(p, c);
+    if (f != F_NONE && p->is_edit[f] && !edit_enabled(p, f))
+        return;
     if (f != F_NONE && p->is_edit[f]) {
         bool dbl = f == p->last_click && ev->when - p->last_click_ticks <= (unsigned long)GetDblTime();
         p->last_click = f;
@@ -778,6 +872,10 @@ static void pw_click(MacWin *mw, EventRecord *ev)
         au_browser_release_documents(g_browser); /* the documents kept for Back and Forward */
         break;
     case F_SHOW_COOKIES: listwin_show(WIN_COOKIES); break;
+    case F_SMEM_MODE:
+    case F_WMEM_MODE:
+        script_memory_rows(p, true);
+        break;
     case F_TRACKERS:
         /* At once, like the list checkboxes, so their status lines follow. */
         pr->block_trackers = GetControlValue(p->field[F_TRACKERS]) != 0;

@@ -573,7 +573,7 @@ static JSValue n_now(JSContext *ctx, JSValueConst this_val, int argc, JSValueCon
 /* The UTF-8 bytes of a typed array or ArrayBuffer as a C string (without
  * a byte order mark); the buffer is then detached, which frees its
  * memory in the script heap. NULL when v is neither. */
-static char *take_script_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+char *js_take_script_bytes(JSContext *ctx, JSValueConst v, size_t *len)
 {
     size_t n = 0, off = 0, blen = 0;
     JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, NULL);
@@ -626,7 +626,7 @@ static JSValue n_run_script(JSContext *ctx, JSValueConst this_val, int argc, JSV
     else if (argc > 0 && JS_IsNull(argv[0]) && js->worker)
         src = js_worker_take_source(js, &len);
     else if (argc > 0 && JS_IsObject(argv[0]))
-        src = take_script_bytes(ctx, argv[0], &len);
+        src = js_take_script_bytes(ctx, argv[0], &len);
     else if (argc > 0)
         src = js_tostr(ctx, argv[0], &len);
     char *url = argc > 1 && JS_IsString(argv[1]) ? js_tostr(ctx, argv[1], NULL) : NULL;
