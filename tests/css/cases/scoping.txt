@@ -1,0 +1,338 @@
+# CSS Scoping: shadow tree style sheets, :host, :host(), :host-context(),
+# ::slotted(), ::part() and exportparts, inheritance through the flat tree,
+# and the cascade order of shadow and outer rules.
+
+=== shadow sheets apply only inside their tree
+--- css
+p { color: rgb(255, 0, 0); }
+--- css #h
+p { color: rgb(0, 128, 0); }
+span { margin-top: 3px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        p#in "inside"
+      span#light "light"
+    p#out "outside"
+--- expect
+#out -> color: rgb(255, 0, 0)
+#h / #in -> color: rgb(0, 128, 0)
+# no slot takes the light child: it is not in the flat tree
+#light -> (none)
+
+=== document selectors do not reach into shadow trees
+--- css
+div p { color: rgb(255, 0, 0); }
+#h p { margin-left: 9px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        p#in "inside"
+--- expect
+#h / #in -> color: rgb(0, 0, 0)
+#h / #in -> margin-left: 0px
+
+=== :host and :host() match the host from inside
+--- css #h
+:host { display: block; padding-left: 4px; }
+:host(.big) { padding-top: 5px; }
+:host(.small) { padding-top: 1px; }
+:host p { margin-left: 2px; }
+--- html
+html
+  body
+    span#h.big
+      ::shadow
+        p#in
+--- expect
+#h -> display: block
+#h -> padding-left: 4px
+#h -> padding-top: 5px
+#h / #in -> margin-left: 2px
+
+=== :host is featureless to other selectors
+--- css #h
+span { color: rgb(255, 0, 0); }
+.big { padding-top: 7px; }
+* { margin-top: 3px; }
+--- html
+html
+  body
+    span#h.big
+      ::shadow
+        b#in
+--- expect
+#h -> color: rgb(0, 0, 0)
+#h -> padding-top: 0px
+#h -> margin-top: 0px
+#h / #in -> margin-top: 3px
+
+=== :host-context() matches the host's ancestors
+--- css #h
+:host-context(.dark) b { color: rgb(1, 2, 3); }
+:host-context(section) b { margin-top: 6px; }
+:host-context(.none) b { margin-left: 6px; }
+--- html
+html
+  body.dark
+    div#h
+      ::shadow
+        b#in
+--- expect
+#h / #in -> color: rgb(1, 2, 3)
+#h / #in -> margin-top: 0px
+#h / #in -> margin-left: 0px
+
+=== outer rules beat :host rules; !important reverses
+--- css
+#h { padding-left: 1px; padding-right: 1px !important; }
+--- css #h
+:host { padding-left: 9px; padding-right: 9px; padding-top: 9px !important; }
+--- css
+#h { padding-top: 1px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        b
+--- expect
+#h -> padding-left: 1px
+#h -> padding-right: 1px
+#h -> padding-top: 9px
+
+=== ::slotted() matches assigned nodes
+--- css #h
+::slotted(span) { color: rgb(0, 0, 255); }
+::slotted(.x) { margin-top: 4px; }
+slot ::slotted(*) { margin-left: 1px; }
+::slotted(*) { padding-top: 2px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        slot#s
+      span#a.x "a"
+      b#b "b"
+--- expect
+#a -> color: rgb(0, 0, 255)
+#a -> margin-top: 4px
+#b -> color: rgb(0, 0, 0)
+#b -> margin-top: 0px
+#b -> padding-top: 2px
+
+=== ::slotted() loses to the outer tree, wins with !important
+--- css
+#a { color: rgb(255, 0, 0); margin-top: 1px; }
+--- css #h
+::slotted(span) { color: rgb(0, 128, 0); margin-top: 8px !important; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        slot
+      span#a "a"
+--- expect
+#a -> color: rgb(255, 0, 0)
+#a -> margin-top: 8px
+
+=== named slots take the matching children only
+--- css #h
+slot[name=one] { color: rgb(0, 128, 0); }
+slot { color: rgb(0, 0, 255); }
+--- css
+.p { color: inherit; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        slot#one[name=one]
+        slot#def
+      span#a.p[slot=one] "a"
+      span#b.p "b"
+      span#c.p[slot=nowhere] "c"
+--- expect
+#a -> color: rgb(0, 128, 0)
+#b -> color: rgb(0, 0, 255)
+
+=== inheritance follows the flat tree
+--- css
+#h { color: rgb(1, 1, 1); font-size: 20px; }
+--- css #h
+#wrap { color: rgb(2, 2, 2); }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        div#wrap
+          slot
+        p#own
+      span#a "a"
+--- expect
+#a -> color: rgb(2, 2, 2)
+#a -> font-size: 20px
+#h / #own -> color: rgb(1, 1, 1)
+
+=== custom properties cross the boundary
+--- css
+#h { --accent: rgb(4, 4, 4); }
+--- css #h
+p { color: var(--accent); }
+:host { --inner: 5px; }
+--- css
+#a { margin-top: var(--inner); }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        p#in
+        slot
+      span#a
+--- expect
+#h / #in -> color: rgb(4, 4, 4)
+#a -> margin-top: 5px
+
+=== ::part() from the outer tree
+--- css
+#h::part(label) { color: rgb(9, 9, 9); }
+#h::part(label):hover { color: rgb(255, 0, 0); }
+#h::part(a b) { margin-top: 2px; }
+::part(label) { padding-top: 1px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        span#l[part=label]
+        span#ab[part="b a"]
+        span#a[part=a]
+        span#none
+--- expect
+#h / #l -> color: rgb(9, 9, 9)
+#h / #l -> padding-top: 1px
+#h / #ab -> margin-top: 2px
+#h / #a -> margin-top: 0px
+#h / #none -> color: rgb(0, 0, 0)
+
+=== ::part() loses to the inner tree's own rules unless !important
+--- css
+#h::part(p) { color: rgb(255, 0, 0); margin-top: 7px !important; }
+--- css #h
+span { color: rgb(0, 128, 0); margin-top: 1px; }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        span#s[part=p]
+--- expect
+#h / #s -> color: rgb(255, 0, 0)
+#h / #s -> margin-top: 7px
+
+=== exportparts forwards parts of nested trees
+--- css
+#outer::part(thing) { color: rgb(5, 4, 3); }
+#outer::part(inner) { margin-top: 3px; }
+#outer::part(same) { margin-left: 4px; }
+--- html
+html
+  body
+    div#outer
+      ::shadow
+        span#mid[exportparts="inner: thing, same"]
+          ::shadow
+            i#deep[part=inner]
+            b#same[part=same]
+--- expect
+#outer / #mid / #deep -> color: rgb(5, 4, 3)
+#outer / #mid / #deep -> margin-top: 0px
+#outer / #mid / #same -> margin-left: 4px
+
+=== slots are display: contents and unassigned children have no style
+--- css #h
+slot { color: rgb(0, 0, 255); }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        slot#s[name=x]
+      span#a "a"
+--- expect
+#h / #s -> display: contents
+#a -> (none)
+
+=== slot fallback content shows when nothing is assigned
+--- css #h
+slot { color: rgb(0, 0, 255); }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        slot#s
+          b#fb "fallback"
+--- expect
+#h / #fb -> color: rgb(0, 0, 255)
+
+=== the shadow tree's own sheets and the document's in one cascade
+--- css
+b { color: rgb(255, 0, 0) !important; }
+--- css #h
+b { color: rgb(0, 128, 0); }
+--- html
+html
+  body
+    div#h
+      ::shadow
+        b#in
+--- expect
+#h / #in -> color: rgb(0, 128, 0)
+
+=== two hosts with the same sheets share a scope
+--- css #h1
+b { color: rgb(0, 128, 0); }
+--- css #h2
+b { color: rgb(0, 128, 0); }
+--- css #h3
+b { color: rgb(0, 0, 255); }
+--- html
+html
+  body
+    div#h1
+      ::shadow
+        b#x
+    div#h2
+      ::shadow
+        b#y
+    div#h3
+      ::shadow
+        b#z
+--- expect
+#h1 / #x -> color: rgb(0, 128, 0)
+#h2 / #y -> color: rgb(0, 128, 0)
+#h3 / #z -> color: rgb(0, 0, 255)
+
+=== manual slot assignment takes nothing by name
+--- css
+span { color: inherit; }
+--- css #h
+slot { color: rgb(0, 0, 255); }
+--- html
+html
+  body
+    div#h
+      ::shadow manual
+        slot
+      span#a "a"
+--- expect
+#a -> (none)

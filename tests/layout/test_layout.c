@@ -56,7 +56,8 @@ static AuElement *by_id(AuDocument *doc, const char *id)
     AuAtom a = au_atom_lookup(id, strlen(id));
     if (!a)
         return NULL;
-    for (AuNode *n = au_node_next(&doc->node, &doc->node); n; n = au_node_next(n, &doc->node))
+    /* shadow trees too (ids are unique across them in the cases) */
+    for (AuNode *n = &doc->node; n; n = au_node_next_including_shadow(n, &doc->node))
         if (au_is_element(n) && au_as_element(n)->id == a)
             return au_as_element(n);
     return NULL;

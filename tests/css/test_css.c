@@ -3,10 +3,14 @@
  *   === name
  *   --- options        quirks | width N | height N | dark | print | user
  *   --- css            an author style sheet (several css sections add several sheets)
+ *   --- css #ID        a sheet in the shadow tree of the element with that id
  *   --- html           an indented element tree:
  *                        tag#id.class[attr=value][attr="v w"] "text"
  *                        svg:tag for SVG elements, "text" alone for a text node
+ *                        ::shadow (or "::shadow manual") under an element: its
+ *                        shadow root, holding what is indented below
  *   --- expect         SELECTOR -> property: computed value
+ *                      SEL / SEL2 -> ...: SEL2 in the shadow tree of SEL
  *                      SELECTOR::before -> ... for pseudo-elements ("(none)" if absent)
  *   --- decls          inline style text => serialized declaration block
  *   --- get            inline style text | property => declared value ("(unset)")
@@ -122,7 +126,19 @@ static AuDocument *build_dom(const char *text, bool quirks)
             while (sp > 0 && depth_of[sp] >= indent)
                 sp--;
             AuNode *parent = stack[sp];
-            if (*s == '"') {
+            if (!strncmp(s, "::shadow", 8)) {
+                /* a shadow root of the parent element; what is indented
+                 * below it goes into it */
+                if (parent->type == AU_NODE_ELEMENT && sp < 255) {
+                    AuShadowRoot *sr = au_element_attach_shadow((AuElement *)parent, AU_SHADOW_OPEN);
+                    if (sr) {
+                        if (!strncmp(s + 8, " manual", 7))
+                            sr->manual_slots = 1;
+                        stack[++sp] = &sr->node;
+                        depth_of[sp] = indent;
+                    }
+                }
+            } else if (*s == '"') {
                 const char *e = eol;
                 while (e > s + 1 && e[-1] != '"')
                     e--;
@@ -258,7 +274,20 @@ static void parse_options(const char *body, Options *o)
     au_free(dup);
 }
 
-static AuCssResolver *make_resolver(const Case *c, const Options *o, AuCssSheet **first)
+/* The element with id in doc, searching shadow trees too. */
+static AuElement *find_id(AuDocument *doc, const char *id)
+{
+    for (AuNode *n = &doc->node; n; n = au_node_next_including_shadow(n, &doc->node)) {
+        if (n->type != AU_NODE_ELEMENT)
+            continue;
+        const char *v = au_element_get_attr((AuElement *)n, AU_ATOM_id);
+        if (v && !strcmp(v, id))
+            return (AuElement *)n;
+    }
+    return NULL;
+}
+
+static AuCssResolver *make_resolver(const Case *c, const Options *o, AuCssSheet **first, AuDocument *doc)
 {
     AuCssResolver *r = au_css_resolver_new();
     AuCssDevice d;
@@ -278,9 +307,54 @@ static AuCssResolver *make_resolver(const Case *c, const Options *o, AuCssSheet 
                                            NULL);
         if (!*first)
             *first = s;
+        /* "--- css #h": a sheet in the shadow tree of the element with id h */
+        if (c->s[i].arg && c->s[i].arg[0] == '#') {
+            AuElement *h = doc ? find_id(doc, c->s[i].arg + 1) : NULL;
+            if (!h || !h->shadow_root) {
+                fail(c->s[i].line - 1, "no shadow host", c->s[i].arg, "");
+                au_css_resolver_add_sheet(r, s);
+            } else {
+                au_css_resolver_add_scoped_sheet(r, s, h->shadow_root);
+            }
+            continue;
+        }
         au_css_resolver_add_sheet(r, s);
     }
     return r;
+}
+
+/* Matches "SEL / SEL2 / ...": SEL in the document, each next one in the
+ * shadow tree of the element before it. */
+static AuElement *query_path(AuDocument *doc, char *sel, bool *bad)
+{
+    AuNode *scope = &doc->node;
+    AuElement *el = NULL;
+    *bad = false;
+    for (char *part = sel; part;) {
+        char *next = strstr(part, " / ");
+        if (next) {
+            *next = 0;
+            next += 3;
+        }
+        if (el) {
+            if (!el->shadow_root)
+                return NULL;
+            scope = el->shadow_root;
+        }
+        AuCssSelectorList *sl = au_css_selector_parse(part, strlen(part));
+        if (!sl) {
+            *bad = true;
+            return NULL;
+        }
+        el = au_css_query_selector(sl, scope);
+        au_css_selector_free(sl);
+        if (!el)
+            return NULL;
+        if (next)
+            next[-3] = ' ';
+        part = next;
+    }
+    return el;
 }
 
 static const char *default_html = "html\n  head\n  body\n";
@@ -361,13 +435,12 @@ static void run_expect(const Section *sec, AuDocument *doc, AuCssResolver *r)
                 pseudo = AU_CSS_PSEUDO_MARKER;
             *pp = 0;
         }
-        AuCssSelectorList *sl = au_css_selector_parse(sel, strlen(sel));
-        if (!sl) {
+        bool bad;
+        AuElement *el = query_path(doc, sel, &bad);
+        if (bad) {
             fail(ln, "selector does not parse", sel, "");
             continue;
         }
-        AuElement *el = au_css_query_selector(sl, &doc->node);
-        au_css_selector_free(sl);
         if (!el) {
             fail(ln, "no element matches", sel, "");
             continue;
@@ -655,12 +728,12 @@ static void run_case(Case *c)
     AuCssResolver *r = NULL;
     AuCssSheet *first = NULL;
     AuDocument *doc = NULL;
-    if (has_css || needs_doc)
-        r = make_resolver(c, &opt, &first);
-    if (needs_doc) {
+    if (needs_doc)
         doc = build_dom(html ? html : default_html, opt.quirks);
+    if (has_css || needs_doc)
+        r = make_resolver(c, &opt, &first, doc);
+    if (needs_doc)
         au_css_style_document(r, doc);
-    }
     for (int i = 0; i < c->n; i++) {
         Section *s = &c->s[i];
         const char *k = s->kind;

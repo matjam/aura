@@ -1128,12 +1128,18 @@ static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *
 {
     uint32_t k = i;
     bool featureless = mc->host && el == mc->host;
+    bool hosted = false; /* the featureless host needs a :host-like component (a lone * fails) */
     for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++) {
-        if (featureless && !host_comp_ok(&s->comp[k]))
-            return M_FAIL;
+        if (featureless) {
+            if (!host_comp_ok(&s->comp[k]))
+                return M_FAIL;
+            hosted |= s->comp[k].type == SC_PSEUDO;
+        }
         if (!match_simple(&s->comp[k], el, mc))
             return M_FAIL;
     }
+    if (featureless && !hosted)
+        return M_FAIL;
     if (k >= s->ncomp) {
         if (anchor)
             return anchor_rel(el, anchor, s->rel_comb ? s->rel_comb : COMB_DESCENDANT) ? M_MATCH : M_FAIL;

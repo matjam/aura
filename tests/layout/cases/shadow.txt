@@ -1,0 +1,76 @@
+Shadow trees: boxes come from the flat tree (CSS Scoping 3, DOM 4.2.2.4).
+The shadow roots here are declarative (<template shadowrootmode>).
+
+=== a host shows its shadow tree, not its children
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><div id=s style="height:30px"></div></template><div id=light style="height:50px"></div></div>
+<div id=after style="height:10px"></div>
+---
+#s y=0 h=30
+#after y=30
+
+=== a default slot takes the children in order
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><div id=top style="height:10px"></div><slot></slot><div id=bottom style="height:10px"></div></template><div id=a style="height:20px"></div><div id=b style="height:5px"></div></div>
+---
+#top y=0
+#a y=10 h=20
+#b y=30 h=5
+#bottom y=35
+
+=== named slots place children where the slots are
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><slot name=second></slot><slot name=first></slot></template><div id=one slot=first style="height:10px"></div><div id=two slot=second style="height:20px"></div></div>
+---
+#two y=0
+#one y=20
+
+=== slot fallback shows when nothing is assigned
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><slot name=x><div id=fb style="height:15px"></div></slot><div id=after style="height:5px"></div></template><div id=a style="height:20px"></div></div>
+---
+#fb y=0 h=15
+#after y=15
+
+=== a slot is display: contents; its children lay out in the slot's parent
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><div style="display:flex"><slot></slot></div></template><div id=a style="width:30px;height:10px"></div><div id=b style="width:40px;height:10px"></div></div>
+---
+#a x=0 y=0
+#b x=30 y=0
+
+=== styles inside the shadow tree do not reach the light children
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><style>div { height: 40px; }</style><div id=s></div><slot></slot></template><div id=a style="width:10px"></div></div>
+---
+#s h=40
+#a y=40 h=0
+
+=== :host and ::slotted style the host and its slotted children
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><style>:host { display: block; padding-top: 7px; } ::slotted(p) { margin: 0; height: 12px; }</style><slot></slot></template><p id=a></p></div>
+---
+#h h=19
+#a y=7 h=12
+
+=== nested shadow trees
+<body style="margin:0">
+<div id=outer><template shadowrootmode=open><div id=mid style="padding-left:5px"><template shadowrootmode=open><div id=deep style="height:9px"></div><slot></slot></template><slot></slot></div></template><div id=light style="height:3px"></div></div>
+---
+#deep x=5 y=0 h=9
+#light x=5 y=9 h=3
+
+=== hit testing reaches shadow content; a link around a slot holds slotted text
+<body style="margin:0">
+<div id=h><template shadowrootmode=open><div id=s style="height:20px"></div><a href="http://example.com/x" style="display:block"><slot></slot></a></template><div id=a style="height:20px"></div></div>
+---
+hit 5 5 #s
+hit 5 25 #a
+link 5 25 http://example.com/x
+
+=== inline content flows through a slot
+<body style="margin:0;width:200px">
+<p id=p style="margin:0">ab<span id=h><template shadowrootmode=open>[<slot></slot>]</template><b id=b>cd</b></span>ef</p>
+---
+#p h=16 lines=1
+#b x=48
