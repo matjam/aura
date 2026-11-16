@@ -151,6 +151,7 @@ struct AuDocView {
     uint32_t script_runs; /* counts those entries: it moved when script may have run (au_dv_script_runs) */
     bool frames_work;    /* something waits for au_frames_idle */
     bool in_frames_idle;
+    uint32_t idle_docs;  /* documents frames began since au_frames_idle started (AU_FRAMES_IDLE_DOCS) */
     AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
     /* canvas elements (docview.c, "Canvases") */
     struct AuCanvasSet *canvases; /* the document's canvas bitmaps, made when script first asks */
@@ -168,6 +169,7 @@ enum {
 };
 #define AU_FRAMES_MAX 64      /* nested documents per top-level page */
 #define AU_FRAMES_DEPTH 8     /* nesting depth */
+#define AU_FRAMES_IDLE_DOCS 4 /* documents (about:blank, srcdoc) one au_frames_idle call begins */
 
 AuDocView *au_dv_top(AuDocView *dv);
 /* Brings the frame list in step with the document's elements, starts the

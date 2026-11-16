@@ -663,8 +663,9 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
                 snprintf(boundary, sizeof boundary, "----AuraFormBoundary%08lx%08lx", (unsigned long)r,
                          (unsigned long)r2);
                 au_form_multipart(&l, boundary, &body);
-                char *ty = au_alloc(strlen(boundary) + 40);
-                sprintf(ty, "multipart/form-data; boundary=%s", boundary);
+                size_t tyn = strlen(boundary) + 40;
+                char *ty = au_alloc(tyn);
+                snprintf(ty, tyn, "multipart/form-data; boundary=%s", boundary);
                 s.body_type = ty;
             } else if (enc == 2) {
                 au_form_text_plain(&l, &body);

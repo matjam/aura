@@ -107,6 +107,12 @@ are ignored.
 - `loading=lazy` frames load when they come within a viewport of the
   visible area or are painted, and do not hold the page's load event.
 - A refused frame stays an empty box and still gets its load event.
+- One call of `au_frames_idle` begins at most 4 documents that need no
+  request (about:blank, srcdoc; `AU_FRAMES_IDLE_DOCS`) and leaves the
+  rest for the next call. A load listener that navigates its frame to
+  about:blank or sets its `srcdoc` makes a loop that never ends, as in
+  other browsers; without the cap each call began 512 documents (17 s
+  in the sanitizer build from one line of script, found by `fuzz_dom`).
 
 ## Geometry
 

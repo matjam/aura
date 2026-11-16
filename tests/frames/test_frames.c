@@ -728,6 +728,43 @@ static void test_lifetime(void)
     world_close(&w);
 }
 
+/* ---- A load listener that begins the frame again ----
+ * Navigating to about:blank or setting srcdoc needs no request, so the
+ * next load comes at once: the loop never ends (as in other browsers),
+ * but one turn of the event loop may begin only a few documents of it. */
+static void test_reload_loop(void)
+{
+    static const Page site[] = {{"http://a.test/", "<!DOCTYPE html><body><script>var n=0</script>"}, {0}};
+    static const char *const loops[] = {
+        "var f = document.createElement('iframe'); f.onload = function () { n++;"
+        " f.contentWindow.location.href = 'about:blank' }; document.body.appendChild(f)",
+        "var f = document.createElement('iframe'); f.onload = function () { n++;"
+        " f.srcdoc = '<p>' + n }; document.body.appendChild(f)",
+    };
+    for (int k = 0; k < 2; k++) {
+        World w;
+        world_open(&w, site, "http://a.test/", 400, 300);
+        AuBuf out;
+        au_buf_init(&out);
+        au_docview_eval(w.dv, loops[k], &out);
+        au_buf_free(&out);
+        int last = 0;
+        for (int turn = 0; turn < 6; turn++) {
+            au_docview_run_scripts(w.dv, 50);
+            au_buf_init(&out);
+            au_docview_eval(w.dv, "n", &out);
+            int now = atoi(au_buf_cstr(&out));
+            au_buf_free(&out);
+            /* run_scripts calls au_frames_idle twice */
+            CHECK(now - last <= 2 * 4 + 1, "loop %d turn %d: %d loads in one turn", k, turn, now - last);
+            CHECK(turn < 2 || now > last, "loop %d turn %d: the loop stopped at %d", k, turn, now);
+            CHECK(au_docview_scripts_due(w.dv) == 0, "loop %d: more work is announced", k);
+            last = now;
+        }
+        world_close(&w);
+    }
+}
+
 /* ---- A kept document ---- */
 
 static void test_kept(void)
@@ -824,6 +861,7 @@ int main(void)
     test_blocking();
     test_lazy_object();
     test_lifetime();
+    test_reload_loop();
     test_kept();
     test_widget();
     au_fontset_free(fonts);

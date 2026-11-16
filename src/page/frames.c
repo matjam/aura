@@ -505,6 +505,7 @@ static void frame_show_html(AuFrame *f, const char *url, const char *html)
      * (docs/conventions.md, "Pointers across script"). */
     size_t n = strlen(html);
     char *copy = au_strndup(html, n);
+    au_dv_top(f->owner)->idle_docs++;
     au_docview_begin(c, url);
     au_docview_feed(c, copy, n);
     au_docview_finish(c);
@@ -1293,10 +1294,20 @@ void au_frames_idle(AuDocView *dv)
         return;
     top->in_frames_idle = true;
     top->frames_work = false;
+    top->idle_docs = 0;
     for (int guard = 0; guard < 512; guard++) {
         while (top->ndead) {
             AuFrame *f = top->dead[--top->ndead];
             frame_free(f);
+        }
+        /* A frame whose load listener navigates it to about:blank (or
+         * sets its srcdoc) begins a document per load without waiting
+         * for the network: a few per call, and the rest next time, so
+         * such a page costs a few documents per turn of the event loop
+         * and not 512. */
+        if (top->idle_docs >= AU_FRAMES_IDLE_DOCS) {
+            top->frames_work = true;
+            break;
         }
         if (!idle_step(top) && !top->ndead)
             break;
