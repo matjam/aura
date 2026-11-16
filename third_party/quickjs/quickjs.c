@@ -22368,6 +22368,9 @@ typedef struct JSFunctionDef {
     uint32_t *vars_htab; // indexes into vars[]
     int var_size; /* allocated size for vars[] */
     int var_count;
+    /* Aura: var_count when the scope chains were linked (js_create_function),
+       0 before: see scope_chain_lookup */
+    int linked_var_count;
     JSVarDef *args;
     int arg_size; /* allocated size for args[] */
     int arg_count; /* number of arguments */
@@ -34160,6 +34163,77 @@ static inline void capture_var(JSFunctionDef *s, JSVarDef *vd)
     }
 }
 
+/* Aura: where resolve_scope_var starts walking fd's chain of scoped
+   variables visible from scope_level, looking for var_name.
+
+   The walk visits every lexical variable visible from the scope, inner
+   scopes first and newest first within a scope; in bundles whose
+   functions declare hundreds of names it was 15% of the compile time.
+   When fd has the variable hash table, this finds the variable the walk
+   would stop at from the hash table instead: of the variables named
+   var_name, the one in the innermost scope of the chain, the newest in
+   that scope. The chain of a scope (js_create_function links them) is
+   its own variables, then the chain of its parent, up to and including
+   scope 0 or 1, whose chains end there. Returns that variable's index,
+   or -1 when no variable of the chain has the name: the walk then finds
+   nothing either.
+
+   Otherwise it returns the chain's first variable and the caller walks.
+   That is when there is no hash table (few variables), when fd has a
+   'with' scope (the walk emits code for each one it passes) or parameter
+   expressions (the argument scope's chain ends in ARG_SCOPE_END), for
+   'arguments' (add_arguments_var links a variable into the argument
+   scope's chain later), and before the chains are linked. Variables
+   added after the chains were linked are on no chain and are never
+   returned. */
+static int scope_chain_lookup(JSFunctionDef *fd, int scope_level,
+                              JSAtom var_name)
+{
+    int chain[64];
+    int n, best, best_pos, pos, sc;
+    uint32_t h, j, m, *p;
+    JSVarDef *vd;
+
+    if (!fd->vars_htab || fd->linked_var_count == 0 ||
+        fd->has_parameter_expressions || var_name == JS_ATOM_arguments ||
+        find_var_htab(fd, JS_ATOM__with_) >= 0)
+        return fd->scopes[scope_level].first;
+    n = 0;
+    for (sc = scope_level;;) {
+        if (n == countof(chain))
+            return fd->scopes[scope_level].first;
+        chain[n++] = sc;
+        if (sc < 2)
+            break;
+        sc = fd->scopes[sc].parent;
+        if (sc < 0)
+            break;
+    }
+    best = -1;
+    best_pos = n;
+    h = hash32(var_name);
+    j = 1;
+    m = fd->var_count + fd->var_count/5;
+    m = UINT32_MAX >> clz32(m);
+    for (;;) {
+        p = &fd->vars_htab[h & m];
+        if (*p == UINT32_MAX)
+            break;
+        vd = &fd->vars[*p];
+        if (vd->var_name == var_name && (int)*p < fd->linked_var_count) {
+            for (pos = 0; pos < n && chain[pos] != vd->scope_level; pos++)
+                continue;
+            if (pos < best_pos || (pos == best_pos && pos < n && (int)*p > best)) {
+                best_pos = pos;
+                best = (int)*p;
+            }
+        }
+        h += j;
+        j += 1; // quadratic probing, as find_var_htab
+    }
+    return best;
+}
+
 /* return the position of the next opcode */
 static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
                              JSAtom var_name, int scope_level, int op,
@@ -34183,7 +34257,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
 
     /* resolve local scoped variables */
     var_idx = -1;
-    for (idx = s->scopes[scope_level].first; idx >= 0;) {
+    for (idx = scope_chain_lookup(s, scope_level, var_name); idx >= 0;) {
         vd = &s->vars[idx];
         if (vd->var_name == var_name) {
             if (op == OP_scope_put_var || op == OP_scope_make_ref) {
@@ -34348,7 +34422,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
     for (fd = s; fd->parent;) {
         scope_level = fd->parent_scope_level;
         fd = fd->parent;
-        for (idx = fd->scopes[scope_level].first; idx >= 0;) {
+        for (idx = scope_chain_lookup(fd, scope_level, var_name); idx >= 0;) {
             vd = &fd->vars[idx];
             if (vd->var_name == var_name) {
                 if (op == OP_scope_put_var || op == OP_scope_make_ref) {
@@ -37479,6 +37553,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
             vd->scope_next = fd->scopes[scope].first;
         }
     }
+    fd->linked_var_count = fd->var_count; /* Aura */
 
     /* if the function contains an eval call, the closure variables
        are used to compile the eval and they must be ordered by scope,

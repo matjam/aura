@@ -52,7 +52,9 @@ records where the code came from and how to update it.
   unresolved modules stay loaded, and `JS_FindLoadedModule` finds one
   by name (`src/js/module.c`), and `0011` a parser that records what its
   bracket look-ahead (`js_parse_skip_parens_token`) found for each
-  bracket it passed, instead of scanning nested brackets once per level.
+  bracket it passed, instead of scanning nested brackets once per level,
+  and `0012` a parser that finds a scoped variable through the variable
+  hash table instead of walking the scope chain (`scope_chain_lookup`).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
