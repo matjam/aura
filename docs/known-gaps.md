@@ -70,24 +70,19 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   or when the rebuilt box changes its outer kind ([`layout.md`](layout.md),
   "A DOM change").
 - A relayout after a viewport change or a style change that keeps the
-  boxes differs from a layout from scratch in two cases, so the
+  boxes differs from a layout from scratch in one case, so the
   differential check compares geometry only while no such relayout has
   run since the last whole build ([`layout.md`](layout.md), "A relayout
-  must give what a layout from scratch gives"). Forcing geometry on
-  finds them in `fuzz_page` seeds 41 to 48 (2026-11-16).
-  - A percentage height inside a table cell resolves against the cell's
-    height from the previous layout. Reduced cases:
-    `<table style="height:0px"><td style="height:0%;display:flex"><table><th><table><td><v style="position:absolute">`
-    and
-    `<b style="display:flex"><table><td><table style="height:1%"><caption>x</caption></table></td></table><h style="position:fixed">`.
-    To fix it, give a cell's content a definite height only from the
-    current table layout (CSS 2.1 17.5.3 leaves this undefined; Chrome
-    resolves such a percentage against the cell's specified height).
-  - Overflow and the document size are found before relative offsets
-    are applied: in a table, a relatively positioned input with `inset:
-    3px` gives a document 302 pixels wide in a layout from scratch and
-    305 in the relayout after it. To fix it, apply the offsets to the
-    overflow of each containing box in `relative_pass`.
+  must give what a layout from scratch gives"): overflow and the
+  document size are found before relative offsets are applied, and a
+  relayout that reuses content keeps the offset positions. With geometry
+  forced on (2026-11-16), `fuzz_page` seeds 24 and 26 find it, reduced
+  to `<table><td style="position:relative;display:grid;top:1px"><caption><a href><center><table><td><ul>`
+  (a row group's overflow is 2 pixels tall from scratch and 3 after a
+  relayout); seeds 7, 21, 22, 41, 44 and 47 run clean for 150 s each. To
+  fix it, apply each offset to the overflow of the boxes that contain
+  it in `relative_pass`. The percentage heights in table cells that also
+  differed are fixed ([`layout.md`](layout.md)).
 - After a subtree rebuild, layout lays out again every block on the path
   to the root and the in-flow siblings that do not establish a block
   formatting context, not only the rebuilt subtree.

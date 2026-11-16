@@ -378,6 +378,13 @@ static void test_resize(void)
         "<div style='overflow:hidden;width:200px'><p id=q style='position:relative;top:4px'>q</p></div><p>z</p>",
         /* percentage margins of a table */
         "<div><table id=m style='margin:2% 9% 5% 4%'><tr><td>a</td></tr></table><p id=n>n</p></div>",
+        /* a relative box that sticks out of the document */
+        "<table><tr><td><input id=i style='position:relative;inset:3px;width:600px'></td></tr></table>",
+        /* percentage heights in cells */
+        "<table style='height:0'><tr><td id=c style='height:0%;display:flex'><table><tr><th><table><tr><td>"
+        "<span style='position:absolute'>v</span>x</td></tr></table></th></tr></table></td></tr></table>",
+        "<b style='display:flex'><table><tr><td><table id=h style='height:1%'><caption>x</caption></table></td></tr>"
+        "</table><i style='position:fixed'>f</i></b>",
     };
     for (size_t i = 0; i < sizeof bodies / sizeof bodies[0]; i++) {
         AuDocView *a = at_width(bodies[i], 300), *b = at_width(bodies[i], 500);

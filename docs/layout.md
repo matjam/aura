@@ -127,10 +127,10 @@ rebuild, which catches a change dropped wrongly. Geometry (positions,
 sizes, overflow, lines, fragments, the document size) is compared only
 while nothing but subtree rebuilds has asked for layout since the last
 whole build (`AuLayout.other_relayout`): a relayout after a viewport
-change or a style change that keeps the boxes differs in the two cases
-above, and the check would blame the rebuild for it. The tree itself is
-always compared. To compare geometry anyway while working on those two
-cases, set `geom` to true in `l_check_incremental`.
+change or a style change that keeps the boxes differs in the case
+below, and the check would blame the rebuild for it. The tree itself is
+always compared. To compare geometry anyway while working on that case,
+set `geom` to true in `l_check_incremental`.
 
 **A relayout must give what a layout from scratch gives.** These rules
 keep it so:
@@ -154,18 +154,21 @@ keep it so:
 - An absolutely positioned box whose containing block is the initial
   one is laid out after the relative pass, so `relative_pass_late` gives
   the relatively positioned boxes inside it their offsets.
+- A block that avoids floats (`place_bfc_root`) is first placed with a
+  height of 1, not with the height a previous layout left in it, and is
+  placed again with its real height when that height meets floats it
+  fits beside.
+- A table cell whose final height is definite is laid out again at that
+  height when content below it has a percentage height, even when the
+  height equals its content height: the first layout resolved those
+  percentages against an indefinite height.
 
-Two differences remain, so the differential check compares geometry
-only after subtree rebuilds (`other_relayout`, below):
-
-- A percentage height inside a table cell resolves against the cell's
-  height from the previous layout, which the table fixes only after
-  laying out the cell. A layout from scratch has no previous height.
-- Overflow and the document size are found before relative offsets are
-  applied, so a relatively positioned box that sticks out reaches them
-  only at the next relayout.
-
-[`known-gaps.md`](known-gaps.md) has the reduced cases.
+One difference remains, so the differential check compares geometry
+only after subtree rebuilds (`other_relayout`, below): overflow and the
+document size are found before relative offsets are applied, so a
+relatively positioned box that sticks out reaches them only at the next
+relayout, which keeps the offset positions of reused content.
+[`known-gaps.md`](known-gaps.md) has the reduced case.
 
 **To extend it** to shadow trees, make `find_root` and the recording in
 `au_layout_node_changed` follow the flat tree (a slotted node's slot,
