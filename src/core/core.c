@@ -68,15 +68,28 @@ void au_set_release_handler(bool (*release)(size_t wanted))
     release_handler = release;
 }
 
-/* Asks the application to free its caches; true when it freed something
- * (worth trying the allocation again). */
+/* Gives the pooled allocator's empty slabs back to the platform; true when
+ * there were any. */
+static bool trim(void)
+{
+    return au_heap_enabled() && au_heap_trim() > 0;
+}
+
+/* Frees what can be freed; true when it freed something (worth trying the
+ * allocation again). First the pool's empty slabs, which cost nothing to
+ * give back; then the application's caches, and the slabs they emptied. */
 static bool release(size_t n)
 {
-    if (!release_handler || releasing)
+    if (releasing)
+        return false;
+    if (trim())
+        return true;
+    if (!release_handler)
         return false;
     releasing = true;
     bool freed = release_handler(n);
     releasing = false;
+    trim();
     return freed;
 }
 
@@ -116,14 +129,21 @@ static void base_free(void *p)
 
 /* ---- Non-fatal allocation ---- */
 
+/* These free no caches, but give back the pool's empty slabs. */
 static void *base_try_alloc(size_t n)
 {
-    return raw_alloc(n ? n : 1);
+    void *p = raw_alloc(n ? n : 1);
+    if (!p && trim())
+        p = raw_alloc(n ? n : 1);
+    return p;
 }
 
 static void *base_try_realloc(void *p, size_t n)
 {
-    return raw_realloc(p, n ? n : 1);
+    void *q = raw_realloc(p, n ? n : 1);
+    if (!q && trim())
+        q = raw_realloc(p, n ? n : 1);
+    return q;
 }
 
 
