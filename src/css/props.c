@@ -420,6 +420,7 @@ static const uint16_t *const sh_longhands[AU_PROP_COUNT - AU_PROP_LOGICAL_END] =
     SH(white_space) = LH(AU_PROP_white_space_collapse, AU_PROP_text_wrap_mode),
     SH(text_wrap) = LH(AU_PROP_text_wrap_mode, AU_PROP_text_wrap_style),
     SH(overflow) = LH(AU_PROP_overflow_x, AU_PROP_overflow_y),
+    SH(container) = LH(AU_PROP_container_name, AU_PROP_container_type),
     SH(margin_block) = LH(AU_PROP_margin_block_start, AU_PROP_margin_block_end),
     SH(margin_inline) = LH(AU_PROP_margin_inline_start, AU_PROP_margin_inline_end),
     SH(padding_block) = LH(AU_PROP_padding_block_start, AU_PROP_padding_block_end),

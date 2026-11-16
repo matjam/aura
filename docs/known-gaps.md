@@ -16,7 +16,7 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 | "Secure connection failed" | [Networking and TLS](#networking-and-tls): DHE-only or CBC-only servers |
 | A script error about a missing API | [JavaScript](#javascript), [Script requests and CORS](#script-requests-and-cors), [Canvas](#canvas), [Workers](#workers) |
 | Text without ligatures, wrong order of Arabic or Hebrew, rare CJK characters missing | [Fonts](#fonts) |
-| A layout that depends on container queries, subgrid or baseline alignment in grid | [CSS](#css), [Layout](#layout) |
+| A layout that depends on style queries, scoped styles, subgrid or baseline alignment in grid | [CSS](#css), [Layout](#layout) |
 | An embedded widget that stays empty | [Frames](#frames) |
 | Missing pictures or icons | [Images](#images), [SVG](#svg) |
 
@@ -158,8 +158,25 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## CSS
 
-- `@container`, `@scope` and `@starting-style` are parsed and never
-  apply.
+- `@scope` and `@starting-style` are parsed and never apply.
+- Container queries ([`css.md`](css.md), "Container queries"):
+  - `style()` and `scroll-state()` queries are unknown, so a rule that
+    needs one to be true does not apply.
+  - The list form of `@container` (several queries separated by commas)
+    is an invalid prelude and the rule is dropped.
+  - Container names are not tree-scoped: a name set in a shadow tree
+    can be found from outside it, and the reverse.
+  - `container-type` does not imply style containment, so counters and
+    quotes inside a container still affect the page outside it.
+  - In a condition, `cqi`, `cqb`, `cqmin` and `cqmax` resolve against
+    the viewport.
+  - The document view stops after four rounds of query, restyle and
+    layout ([`layout.md`](layout.md), "Container query rounds"); a
+    deeper chain of dependent containers keeps the previous round's
+    styles.
+  - Size containment does not apply to tables or replaced elements
+    (images, form controls), and with no vertical writing modes in
+    layout, `inline-size` always contains the width.
 - Preference changes (dark scheme, reduced motion) do not reach the
   device, so sheets deferred for them stay deferred.
 - `getComputedStyle`: margins, insets and percentages in properties

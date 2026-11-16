@@ -26,7 +26,7 @@ html
 --- rules
 6
 
-=== @container and @scope are kept but never apply
+=== @scope never applies, nor @container without a container (container.txt)
 --- css
 @container (min-width: 1px) { #a { color: red; } }
 @container card (width > 0) { #a { width: 9px; } }

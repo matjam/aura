@@ -129,6 +129,49 @@ test('insertRule and deleteRule', () => {
     s.remove();
 });
 
+test('CSSContainerRule', () => {
+    const s = styleEl(`@container card (min-width: 400px) { .a { top: 1px } .b { top: 2px } }
+        @container (width > 10px) and (height > 10px) { .c { top: 3px } }
+        @container style(--x: 1) { .d { top: 4px } }
+        @container sidebar not (width < 5em) { .e { top: 5px } }
+        @container named { .f { top: 6px } }`);
+    const sh = s.sheet;
+    const [a, b, c, d, e] = sh.cssRules;
+    assert.ok(a instanceof CSSContainerRule && a instanceof CSSConditionRule && a instanceof CSSGroupingRule);
+    assert.equal(a.conditionText, 'card (min-width: 400px)');
+    assert.equal(a.containerName, 'card');
+    assert.equal(a.containerQuery, '(min-width: 400px)');
+    assert.equal(a.cssRules.length, 2);
+    assert.equal(a.cssRules[1].selectorText, '.b');
+    assert.ok(a.cssRules[0].parentRule === a);
+    assert.equal(b.containerName, '');
+    assert.equal(b.containerQuery, '(width > 10px) and (height > 10px)');
+    assert.equal(c.containerName, '', 'style() is a query, not a name');
+    assert.equal(c.containerQuery, 'style(--x: 1)');
+    assert.equal(d.containerName, 'sidebar');
+    assert.equal(d.containerQuery, 'not (width < 5em)');
+    assert.equal(e.containerName, 'named');
+    assert.equal(e.containerQuery, '');
+    /* rules inserted into and deleted from a container rule, and container
+     * rules inserted into and deleted from the sheet */
+    assert.equal(a.insertRule('.z { left: 0 }', 1), 1);
+    assert.equal(Array.from(a.cssRules).map((r) => r.selectorText).join(), '.a,.z,.b');
+    a.deleteRule(0);
+    assert.equal(Array.from(a.cssRules).map((r) => r.selectorText).join(), '.z,.b');
+    assert.throws(() => a.deleteRule(5), 'IndexSizeError');
+    assert.ok(/^@container card \(min-width: 400px\) \{/.test(a.cssText));
+    assert.ok(/\n {2}\.z \{ left: 0 \}\n/.test(a.cssText), 'an unchanged rule keeps its text');
+    assert.equal(sh.insertRule('@container wide (min-width: 900px) { .w { top: 9px } }', 1), 1);
+    const w = sh.cssRules[1];
+    assert.ok(w instanceof CSSContainerRule);
+    assert.equal(w.containerName, 'wide');
+    assert.equal(w.cssRules[0].selectorText, '.w');
+    sh.deleteRule(1);
+    assert.ok(sh.cssRules[1] === b);
+    assert.equal(sh.cssRules.length, 5);
+    s.remove();
+});
+
 test('changing a rule', () => {
     const s = styleEl('a { color: red } @media screen { b { top: 1px } } @keyframes k { from { left: 0 } to { left: 9px } }');
     const sh = s.sheet;

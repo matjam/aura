@@ -9,7 +9,9 @@
 
 #include <math.h>
 
-enum { MQ_QUERY_LIST = 1, MQ_AND, MQ_OR, MQ_NOT, MQ_FEATURE, MQ_TYPE, MQ_CONST };
+/* MQ_UNKNOWN: a container query's <general-enclosed> (style(), an unknown
+ * feature), which is unknown rather than false. */
+enum { MQ_QUERY_LIST = 1, MQ_AND, MQ_OR, MQ_NOT, MQ_FEATURE, MQ_TYPE, MQ_CONST, MQ_UNKNOWN };
 enum { OP_NONE = 0, OP_EQ, OP_LT, OP_LE, OP_GT, OP_GE };
 enum { VT_NONE, VT_LENGTH, VT_NUMBER, VT_RATIO, VT_RES, VT_IDENT };
 
@@ -81,9 +83,19 @@ static const struct {
     {"overflow-inline", FT_DISCRETE},     /* 30 */
     {"-webkit-device-pixel-ratio", FT_RANGE_RES}, /* 31: a number of dppx */
     {"prefers-reduced-data", FT_DISCRETE}, /* 32 */
+    {"inline-size", FT_RANGE_LEN},        /* 33: container queries only */
+    {"block-size", FT_RANGE_LEN},         /* 34: container queries only */
 };
+enum { F_WIDTH = 0, F_HEIGHT = 1, F_ASPECT = 4, F_ORIENTATION = 11, F_INLINE = 33, F_BLOCK = 34 };
 
-static int feature_lookup(const char *s, size_t n, int *prefix)
+/* The features of a container query (CSS Conditional 5, "Size
+ * features"). */
+static bool container_feature(int f)
+{
+    return f == F_WIDTH || f == F_HEIGHT || f == F_ASPECT || f == F_ORIENTATION || f == F_INLINE || f == F_BLOCK;
+}
+
+static int feature_lookup1(const char *s, size_t n, int *prefix)
 {
     char buf[48];
     if (!css_lower(s, n, buf, sizeof buf))
@@ -116,12 +128,22 @@ static int feature_lookup(const char *s, size_t n, int *prefix)
     return -1;
 }
 
+/* A feature of a media query, or with cq one of a container query. */
+static int feature_lookup(const char *s, size_t n, int *prefix, bool cq)
+{
+    int f = feature_lookup1(s, n, prefix);
+    if (f >= 0 && container_feature(f) != cq && (cq || f == F_INLINE || f == F_BLOCK))
+        return -1;
+    return f;
+}
+
 /* ---- Parsing ---- */
 
 typedef struct {
     const CssTokens *tk;
     AuCssMediaList *m;
     int depth;
+    bool cq; /* a container query */
 } MqP;
 
 static int32_t new_node(MqP *p, int kind)
@@ -263,7 +285,7 @@ static int32_t mq_feature(MqP *p, uint32_t a, uint32_t b)
         return -1;
     int prefix;
     if (tk->t[i].type == TK_IDENT) {
-        int f = feature_lookup(css_tok_str(tk, &tk->t[i]), tk->t[i].len, &prefix);
+        int f = feature_lookup(css_tok_str(tk, &tk->t[i]), tk->t[i].len, &prefix, p->cq);
         uint32_t k = sk(tk, i + 1, b);
         if (k >= b) {
             /* boolean context */
@@ -315,7 +337,7 @@ static int32_t mq_feature(MqP *p, uint32_t a, uint32_t b)
     i = sk(tk, i, b);
     if (i >= b || tk->t[i].type != TK_IDENT)
         return -1;
-    int f = feature_lookup(css_tok_str(tk, &tk->t[i]), tk->t[i].len, &prefix);
+    int f = feature_lookup(css_tok_str(tk, &tk->t[i]), tk->t[i].len, &prefix, p->cq);
     if (f < 0 || prefix || features[f].type == FT_DISCRETE)
         return -1;
     i++;
@@ -357,9 +379,10 @@ static int32_t mq_in_parens(MqP *p, uint32_t *i, uint32_t b)
         return -1;
     const CssToken *t = &tk->t[k];
     if (t->type == TK_FUNCTION) {
-        /* general-enclosed: false */
+        /* general-enclosed: false, unknown in a container query (which
+         * is how style() and scroll-state() queries evaluate here) */
         *i = t->len;
-        int32_t n = new_node(p, MQ_CONST);
+        int32_t n = new_node(p, p->cq ? MQ_UNKNOWN : MQ_CONST);
         p->m->n[n].value = false;
         return n;
     }
@@ -385,7 +408,7 @@ static int32_t mq_in_parens(MqP *p, uint32_t *i, uint32_t b)
         r = mq_feature(p, s, e);
     if (r < 0) {
         /* general-enclosed */
-        r = new_node(p, MQ_CONST);
+        r = new_node(p, p->cq ? MQ_UNKNOWN : MQ_CONST);
         p->m->n[r].value = false;
     }
     p->depth--;
@@ -489,7 +512,7 @@ static int32_t mq_query(MqP *p, uint32_t a, uint32_t b)
 AuCssMediaList *css_media_parse(const CssTokens *tk, uint32_t a, uint32_t b)
 {
     AuCssMediaList *m = au_calloc(sizeof *m);
-    MqP p = {tk, m, 0};
+    MqP p = {tk, m, 0, false};
     int32_t root = new_node(&p, MQ_QUERY_LIST);
     int32_t last = -1;
     uint32_t start = a;
@@ -753,6 +776,196 @@ bool css_media_eval(const AuCssMediaList *m, const AuCssDevice *d)
     if (!m)
         return true;
     return eval_node(m, 0, d, 0);
+}
+
+/* ---- Container queries ----
+ * A container query's condition is a media list in container mode: its
+ * features are the size features, and <general-enclosed> is unknown. It
+ * is evaluated in three values (false, true, unknown); unknown counts as
+ * false at the end, as a feature of an axis the container cannot be
+ * queried in does. */
+
+enum { CQ_FALSE = 0, CQ_TRUE = 1, CQ_UNKNOWN = 2 };
+
+static bool cq_name_ok(const CssToken *t)
+{
+    if (t->type != TK_IDENT)
+        return false;
+    switch (t->kw) {
+    case AU_K_none: case AU_K_and_: case AU_K_or_: case AU_K_not_: case AU_K_initial: case AU_K_inherit:
+    case AU_K_unset: case AU_K_revert: case AU_K_revert_layer: case AU_K_default_:
+        return false;
+    default:
+        return true;
+    }
+}
+
+CssContainerQuery *css_container_parse(CssArena *arena, const CssTokens *tk, uint32_t a, uint32_t b)
+{
+    uint32_t i = sk(tk, a, b);
+    while (b > i && tk->t[b - 1].type == TK_WS)
+        b--;
+    if (i >= b)
+        return NULL;
+    AuAtom name = 0;
+    if (tk->t[i].type == TK_IDENT && tk->t[i].kw != AU_K_not_) {
+        if (!cq_name_ok(&tk->t[i]))
+            return NULL;
+        name = au_atom(css_tok_str(tk, &tk->t[i]), tk->t[i].len);
+        i = sk(tk, i + 1, b);
+    }
+    AuCssMediaList *m = NULL;
+    uint8_t axes = 0;
+    if (i < b) {
+        m = au_calloc(sizeof *m);
+        MqP p = {tk, m, 0, true};
+        int32_t root = new_node(&p, MQ_QUERY_LIST);
+        uint32_t k = i;
+        int32_t c = mq_condition(&p, &k, b, true);
+        if (c < 0 || sk(tk, k, b) != b) {
+            css_media_free(m);
+            return NULL;
+        }
+        m->n[root].child = c;
+        for (uint32_t n = 0; n < m->count; n++) {
+            if (m->n[n].kind != MQ_FEATURE)
+                continue;
+            switch (m->n[n].feature) {
+            case F_WIDTH: axes |= CQ_AXIS_WIDTH; break;
+            case F_HEIGHT: axes |= CQ_AXIS_HEIGHT; break;
+            case F_INLINE: axes |= CQ_AXIS_INLINE; break;
+            case F_BLOCK: axes |= CQ_AXIS_BLOCK; break;
+            default: axes |= CQ_AXIS_WIDTH | CQ_AXIS_HEIGHT; break; /* aspect-ratio, orientation */
+            }
+        }
+        AuBuf t;
+        au_buf_init(&t);
+        css_tokens_serialize(tk, i, b, &t);
+        m->text = au_buf_take(&t, NULL);
+    } else if (!name) {
+        return NULL;
+    }
+    CssContainerQuery *q = css_arena_alloc_ptr(arena, sizeof *q);
+    q->name = name;
+    q->axes = axes;
+    q->cond = m ? css_media_pack(arena, m) : NULL;
+    return q;
+}
+
+static float cq_len_px(float v, int unit, const CssCqEnv *e)
+{
+    float f;
+    int c;
+    if (css_unit_canonical(unit, &f, &c))
+        return v * f;
+    switch (unit) {
+    case AU_UNIT_EM: case AU_UNIT_LH: case AU_UNIT_IC: case AU_UNIT_CAP:
+        return v * e->em;
+    case AU_UNIT_EX: case AU_UNIT_CH:
+        return v * e->em * 0.5f;
+    case AU_UNIT_REM: case AU_UNIT_RLH: case AU_UNIT_RIC: case AU_UNIT_RCAP:
+        return v * e->rem;
+    case AU_UNIT_REX: case AU_UNIT_RCH:
+        return v * e->rem * 0.5f;
+    case AU_UNIT_CQW: return v * (e->w >= 0 ? e->w : e->dev->width) / 100;
+    case AU_UNIT_CQH: return v * (e->h >= 0 ? e->h : e->dev->height) / 100;
+    default:
+        return len_px(v, unit, e->dev);
+    }
+}
+
+static int cq_feature(const MqNode *n, const CssCqEnv *e)
+{
+    int f = n->feature;
+    float inl = e->horizontal ? e->w : e->h, blk = e->horizontal ? e->h : e->w;
+    float actual;
+    switch (f) {
+    case F_WIDTH: actual = e->w; break;
+    case F_HEIGHT: actual = e->h; break;
+    case F_INLINE: actual = inl; break;
+    case F_BLOCK: actual = blk; break;
+    case F_ASPECT: actual = e->w < 0 || e->h < 0 ? -1 : e->h > 0 ? e->w / e->h : INFINITY; break;
+    case F_ORIENTATION: actual = e->w < 0 || e->h < 0 ? -1 : 0; break;
+    default: return CQ_UNKNOWN;
+    }
+    if (actual < 0)
+        return CQ_UNKNOWN; /* an axis the container cannot be queried in */
+    if (n->op[0] == OP_NONE) /* boolean context */
+        return f == F_ORIENTATION || actual != 0 ? CQ_TRUE : CQ_FALSE;
+    for (int k = 0; k < 2; k++) {
+        if (n->op[k] == OP_NONE)
+            continue;
+        float want;
+        if (f == F_ORIENTATION) {
+            uint16_t akw = e->h >= e->w ? AU_K_portrait : AU_K_landscape;
+            if (n->vt[k] != VT_IDENT || n->kw[k] != akw)
+                return CQ_FALSE;
+            continue;
+        }
+        if (f == F_ASPECT) {
+            if (n->vt[k] != VT_RATIO && n->vt[k] != VT_NUMBER)
+                return CQ_FALSE;
+            want = n->v[k];
+        } else if (n->vt[k] == VT_NUMBER && n->v[k] == 0) {
+            want = 0;
+        } else if (n->vt[k] == VT_LENGTH) {
+            want = cq_len_px(n->v[k], n->unit[k], e);
+        } else {
+            return CQ_FALSE;
+        }
+        if (!cmp(actual, n->op[k], want))
+            return CQ_FALSE;
+    }
+    return CQ_TRUE;
+}
+
+/* Kleene logic over the condition tree; nesting is at most 32 deep
+ * (mq_in_parens), and depth stops a corrupt tree. */
+static int cq_eval(const AuCssMediaList *m, int32_t i, const CssCqEnv *e, int depth)
+{
+    if (i < 0 || (uint32_t)i >= m->count || depth > 64)
+        return CQ_UNKNOWN;
+    const MqNode *n = &m->n[i];
+    switch (n->kind) {
+    case MQ_QUERY_LIST:
+    case MQ_OR: {
+        int r = CQ_FALSE;
+        for (int32_t c = n->child; c >= 0; c = m->n[c].next) {
+            int x = cq_eval(m, c, e, depth + 1);
+            if (x == CQ_TRUE)
+                return CQ_TRUE;
+            if (x == CQ_UNKNOWN)
+                r = CQ_UNKNOWN;
+        }
+        return r;
+    }
+    case MQ_AND: {
+        int r = CQ_TRUE;
+        for (int32_t c = n->child; c >= 0; c = m->n[c].next) {
+            int x = cq_eval(m, c, e, depth + 1);
+            if (x == CQ_FALSE)
+                return CQ_FALSE;
+            if (x == CQ_UNKNOWN)
+                r = CQ_UNKNOWN;
+        }
+        return r;
+    }
+    case MQ_NOT: {
+        int x = cq_eval(m, n->child, e, depth + 1);
+        return x == CQ_UNKNOWN ? CQ_UNKNOWN : x == CQ_TRUE ? CQ_FALSE : CQ_TRUE;
+    }
+    case MQ_CONST:
+        return n->value ? CQ_TRUE : CQ_FALSE;
+    case MQ_FEATURE:
+        return cq_feature(n, e);
+    default:
+        return CQ_UNKNOWN;
+    }
+}
+
+bool css_container_eval(const CssContainerQuery *q, const CssCqEnv *e)
+{
+    return !q->cond || cq_eval(q->cond, 0, e, 0) == CQ_TRUE;
 }
 
 void au_css_device_default(AuCssDevice *d)

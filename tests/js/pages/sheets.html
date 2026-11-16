@@ -29,6 +29,31 @@ promise_test('a <style> element\'s new text applies', async () => {
     document.getElementById('inline').media = 'print';
     assert.equal(style().backgroundColor, 'rgba(0, 0, 0, 0)');
 });
+promise_test('@container rules inserted and deleted by script apply', async () => {
+    await loaded;
+    const box = document.createElement('div');
+    box.style.cssText = 'container-type: inline-size; width: 300px';
+    const inner = document.createElement('p');
+    box.appendChild(inner);
+    document.body.appendChild(box);
+    const s = document.createElement('style');
+    s.textContent = 'p.x { color: rgb(1, 1, 1); }';
+    document.head.appendChild(s);
+    inner.className = 'x';
+    assert.equal(getComputedStyle(inner).color, 'rgb(1, 1, 1)');
+    s.sheet.insertRule('@container (min-width: 200px) { p.x { color: rgb(0, 128, 0); } }', 1);
+    assert.equal(getComputedStyle(inner).color, 'rgb(0, 128, 0)');
+    s.sheet.cssRules[1].insertRule('p.x { width: 50cqw; }', 1);
+    assert.equal(getComputedStyle(inner).width, '150px');
+    box.style.width = '100px';
+    assert.equal(getComputedStyle(inner).color, 'rgb(1, 1, 1)', 'the container is narrower now');
+    box.style.width = '300px';
+    assert.equal(getComputedStyle(inner).color, 'rgb(0, 128, 0)');
+    s.sheet.deleteRule(1);
+    assert.equal(getComputedStyle(inner).color, 'rgb(1, 1, 1)');
+    s.remove();
+    box.remove();
+});
 promise_test('a <link>\'s disabled and href apply', async () => {
     await loaded;
     const link = document.getElementById('link');

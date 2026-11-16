@@ -21,6 +21,18 @@ bool au_layout_element_content_rect(AuLayout *L, const AuElement *el, AuRect *ou
     return true;
 }
 
+bool au_layout_css_container_size(void *layout, const AuElement *el, float *w, float *h)
+{
+    (void)layout;
+    LBox *b = el ? (LBox *)el->box : NULL;
+    if (!b || b->kind != LK_BLOCK || (b->flags & (LF_DEAD | LF_HAS_LAYOUT)) != LF_HAS_LAYOUT)
+        return false;
+    LBlock *k = (LBlock *)b;
+    *w = l_max(0, k->w - k->bw[1] - k->bw[3] - k->p[1] - k->p[3]);
+    *h = l_max(0, k->h - k->bw[0] - k->bw[2] - k->p[0] - k->p[2]);
+    return true;
+}
+
 void au_layout_set_transparent(AuLayout *L, bool on)
 {
     if (L->transparent != on) {

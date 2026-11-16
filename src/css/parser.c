@@ -525,9 +525,9 @@ static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *sty
                  * contents belong to the parent style rule */
                 parse_rule_list(p, i, end, out, false);
                 CssRule *g = *t0;
-                /* a group that never applies (a false @supports, @container,
-                 * @scope, @starting-style) keeps no contents */
-                if (g && (g->type == RULE_MEDIA || g->type == RULE_LAYER_BLOCK ||
+                /* a group that never applies (a false @supports, @scope,
+                 * @starting-style) keeps no contents */
+                if (g && (g->type == RULE_MEDIA || g->type == RULE_LAYER_BLOCK || g->type == RULE_CONTAINER ||
                           (g->type == RULE_SUPPORTS && (g->flags & RF_OK))) &&
                     p->depth < MAX_RULE_DEPTH) {
                     uint32_t s, e;
@@ -1221,10 +1221,30 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         }
         return end;
     }
-    if (IS("container") || IS("scope") || IS("starting-style")) {
-        /* kept as a rule without contents: container queries, @scope and
-         * @starting-style are not evaluated, so their rules never apply */
-        CssRule *r = new_rule(p, IS("container") ? RULE_CONTAINER : IS("scope") ? RULE_SCOPE : RULE_STARTING_STYLE);
+    if (IS("container")) {
+        /* the condition is evaluated per element by the cascade; a rule
+         * whose prelude is invalid is dropped */
+        CssArenaMark mark = css_arena_mark(&p->sheet->arena);
+        CssContainerQuery *q = css_container_parse(&p->sheet->arena, tk, pa, pe);
+        if (!q) {
+            css_arena_release(&p->sheet->arena, mark);
+            return end;
+        }
+        CssRule *r = new_rule(p, RULE_CONTAINER);
+        r->u.cq = q;
+        append_rule(out, r);
+        if (top && p->depth < MAX_RULE_DEPTH) {
+            p->depth++;
+            RuleList inner = {&r->c.children};
+            parse_rule_list(p, bs, be, &inner, true);
+            p->depth--;
+        }
+        return end;
+    }
+    if (IS("scope") || IS("starting-style")) {
+        /* kept as a rule without contents: @scope and @starting-style are
+         * not evaluated, so their rules never apply */
+        CssRule *r = new_rule(p, IS("scope") ? RULE_SCOPE : RULE_STARTING_STYLE);
         r->flags &= (uint8_t)~RF_OK;
         r->u.text = arena_text(p, range_text(tk, pa, pe));
         append_rule(out, r);

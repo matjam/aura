@@ -558,7 +558,10 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
     float spec = l_spec_height(k, cb_h);
     bool auto_h = spec < 0;
     float ratio_h = auto_h ? l_ratio_height(k, f->content_w) : -1;
-    bool can_pass = auto_h && ratio_h < 0 && k->bw[2] == 0 && k->p[2] == 0 && !(k->b.flags & LF_BFC);
+    /* size containment: the auto height is that of an empty box, and the
+     * content overflows it */
+    bool contained = auto_h && (l_size_contained(k) & 2);
+    bool can_pass = auto_h && ratio_h < 0 && k->bw[2] == 0 && k->p[2] == 0 && !(k->b.flags & LF_BFC) && !contained;
     bool empty = joined && S->owner != NULL;
     float content = f->cursor;
     float h;
@@ -582,7 +585,12 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
         /* Otherwise an ancestor still waits: k sits at the top of its parent. */
         return true;
     }
-    if (auto_h) {
+    if (contained) {
+        if (mc_val(S->pending) != 0 || S->owner)
+            resolve(S);
+        h = l_clamp_h(k, l_max(0, ratio_h), cb_h);
+        S->pending = (LMargin){0};
+    } else if (auto_h) {
         h = l_clamp_h(k, l_max(content, ratio_h), cb_h);
         if (h > content + 0.001f || !can_pass) {
             /* min-height grew it, or a bottom edge separates: the pending

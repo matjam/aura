@@ -295,7 +295,55 @@ struct AuCssResolver {
     uint32_t nhas_anchors, has_anchors_cap;
     uint32_t styled_count; /* elements styled since creation (au_css_resolver_styled_count) */
     uint32_t stat_computed; /* elements computed since the last css_resolver_take_computed */
+
+    /* Container queries. cq_conds[1..ncq) are the @container rules the
+     * index walked, each with the one around it (0 for none); entry_cq
+     * gives each entry's innermost one, and is NULL while no entry is in
+     * an @container rule, so a sheet without them matches as before.
+     * cq_recs is a hash table of the containers whose size a query or a
+     * container unit read, with that size (each holds a reference to its
+     * element). cq_pend: an element whose new style is not stored yet
+     * while its pseudo-elements are computed. */
+    struct CqCond *cq_conds;
+    uint32_t ncq, cq_cap;
+    uint16_t *entry_cq;
+    uint32_t entry_cq_cap;
+    struct CqRec *cq_recs;
+    uint32_t ncq_recs, cq_recs_size; /* size: a power of two, or 0 */
+    AuCssContainerSizeFn cq_size;
+    void *cq_size_ctx;
+    const AuElement *cq_pend_el;
+    const AuStyle *cq_pend_style;
+    uint32_t cq_gen; /* memos of cq_conds older than this are stale */
+    bool cq_pseudo;  /* collect found a pseudo-element rule inside @container */
+    struct CqNear *cq_near; /* CQ_NEAR_SIZE slots, or NULL */
 };
+
+/* The nearest container (ancestor or self of el) with a name and axes,
+ * found in one style pass. Without it a deep document would walk to the
+ * root from every element. */
+#define CQ_NEAR_SIZE 256
+typedef struct CqNear {
+    const AuElement *el, *res;
+    AuAtom name;
+    uint32_t gen;
+    unsigned mask;
+} CqNear;
+
+typedef struct CqCond {
+    const CssContainerQuery *q; /* the sheet's, valid while the index is */
+    uint32_t parent;
+    /* the last result, for the elements whose search starts at memo_el
+     * (siblings share one), within one style pass */
+    const AuElement *memo_el;
+    uint32_t memo_gen;
+    bool memo;
+} CqCond;
+
+typedef struct CqRec {
+    AuElement *el; /* NULL: a free slot */
+    float w, h;
+} CqRec;
 
 static void map_free(AtomMap *m)
 {
@@ -817,11 +865,23 @@ typedef struct {
     const AuCssSheet *sheet;
     uint32_t sheet_index;
     int32_t layer;
+    uint32_t cq; /* the innermost @container rule around it, 0 for none */
 } Frame;
 
-static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, uint32_t sheet_index,
-                        int32_t layer, uint32_t *order, bool nested_decls)
+/* Keeps entry_cq as long as the entries array. */
+static void entry_cq_sync(AuCssResolver *r)
 {
+    if (r->entry_cq_cap >= r->entries_cap)
+        return;
+    r->entry_cq = au_realloc(r->entry_cq, r->entries_cap * sizeof *r->entry_cq);
+    memset(r->entry_cq + r->entry_cq_cap, 0, (r->entries_cap - r->entry_cq_cap) * sizeof *r->entry_cq);
+    r->entry_cq_cap = r->entries_cap;
+}
+
+static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, uint32_t sheet_index,
+                        int32_t layer, uint32_t *order, bool nested_decls, uint32_t cq)
+{
+    uint32_t first = r->nentries;
     uint8_t origin = r->walked[sheet_index]->origin;
     /* a block that is still text has at least one declaration to try */
     if (!sel || (!(rule->flags & RF_LAZY) && !rule->b.decls->n))
@@ -845,6 +905,11 @@ static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *r
         e->pseudo = sel->sel[i].pseudo;
         if (sel->sel[i].flags & SELF_HAS)
             r->has_has = true;
+    }
+    if (cq || r->entry_cq) {
+        entry_cq_sync(r);
+        for (uint32_t i = first; i < r->nentries; i++)
+            r->entry_cq[i] = (uint16_t)cq;
     }
 }
 
@@ -892,6 +957,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         f->sheet = sheet;
         f->sheet_index = sheet_index;
         f->layer = layer;
+        f->cq = 0;
     }
     while (*sn > base) {
         Frame f = (*stack)[*sn - 1];
@@ -906,18 +972,34 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             nf->sheet = f.sheet;
             nf->sheet_index = f.sheet_index;
             nf->layer = f.layer;
+            nf->cq = f.cq;
         }
         int32_t child_layer = f.layer;
+        uint32_t child_cq = f.cq;
         bool descend = false;
         switch (ru->type) {
         case RULE_STYLE:
             if (!layers_only)
-                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false);
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false, f.cq);
             descend = true;
             break;
         case RULE_NESTED_DECLS:
             if (!layers_only)
-                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true);
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true, f.cq);
+            break;
+        case RULE_CONTAINER:
+            /* evaluated per element (cq_match); past 65535 rules the rest
+             * are left out rather than applied without their condition */
+            if (r->ncq < 0xFFFFu) {
+                if (!r->ncq) /* index 0 stands for none */
+                    memset(CSS_PUSH(r->cq_conds, r->ncq, r->cq_cap), 0, sizeof(CqCond));
+                CqCond *cd = CSS_PUSH(r->cq_conds, r->ncq, r->cq_cap);
+                memset(cd, 0, sizeof *cd);
+                cd->q = ru->u.cq;
+                cd->parent = f.cq;
+                child_cq = r->ncq - 1;
+                descend = true;
+            }
             break;
         case RULE_MEDIA:
             descend = media_dep(r, ru->u.media);
@@ -945,7 +1027,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             break;
         }
         default:
-            break; /* @container, @scope, @starting-style: not applied */
+            break; /* @scope, @starting-style: not applied */
         }
         const CssRule *kids = descend ? css_rule_children(f.sheet, ru) : NULL;
         if (kids) {
@@ -954,6 +1036,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             nf->sheet = f.sheet;
             nf->sheet_index = f.sheet_index;
             nf->layer = child_layer;
+            nf->cq = child_cq;
         }
     }
 }
@@ -975,6 +1058,10 @@ static void index_clear(AuCssResolver *r)
     r->nscope_keys = 0;
     r->nshadow_entries = 0;
     r->slotted_rules = r->part_rules = false;
+    r->ncq = 0;
+    au_free(r->entry_cq);
+    r->entry_cq = NULL;
+    r->entry_cq_cap = 0;
     deps_clear(r);
 }
 
@@ -1265,6 +1352,10 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->matched);
     au_free(r->matched_entries);
     au_free(r->pseudo_entries);
+    au_css_resolver_forget_containers(r);
+    au_free(r->cq_recs);
+    au_free(r->cq_conds);
+    au_free(r->cq_near);
     if (!--ua_users) {
         au_css_sheet_free(ua_shared);
         au_css_sheet_free(ua_quirks_shared);
@@ -1460,6 +1551,307 @@ bool au_css_media_matches(AuCssResolver *r, const char *query, size_t len)
     return ok;
 }
 
+/* ---- Container queries ----
+ * The query container of an element is its nearest flat-tree ancestor
+ * (for a pseudo-element, its element first) whose container-name holds
+ * the query's name, if it gives one, and whose container-type allows
+ * querying every axis the condition reads (CSS Conditional 5, "Container
+ * Queries"). Its size comes from the embedder (the last layout) and is
+ * recorded in cq_recs, so that au_css_resolver_containers_changed can
+ * tell after the next layout which containers' descendants were styled
+ * with another size. */
+
+static AuElement *flat_parent_element(const AuElement *el);
+
+void au_css_resolver_set_container_size(AuCssResolver *r, AuCssContainerSizeFn fn, void *ctx)
+{
+    r->cq_size = fn;
+    r->cq_size_ctx = ctx;
+}
+
+bool au_css_resolver_has_containers(const AuCssResolver *r) { return r->ncq_recs != 0; }
+
+static uint32_t cq_hash(const AuElement *el, uint32_t size)
+{
+    uintptr_t p = (uintptr_t)el;
+    return (uint32_t)((p >> 3) * 2654435761u) & (size - 1);
+}
+
+static CqRec *cq_rec_find(AuCssResolver *r, const AuElement *el)
+{
+    if (!r->cq_recs_size)
+        return NULL;
+    for (uint32_t i = cq_hash(el, r->cq_recs_size), k = 0; k < r->cq_recs_size; k++, i = (i + 1) & (r->cq_recs_size - 1)) {
+        if (r->cq_recs[i].el == el)
+            return &r->cq_recs[i];
+        if (!r->cq_recs[i].el)
+            return NULL;
+    }
+    return NULL;
+}
+
+/* Puts an entry in a table of size slots (more than its entries). */
+static CqRec *cq_rec_slot(CqRec *t, uint32_t size, const AuElement *el)
+{
+    uint32_t i = cq_hash(el, size);
+    while (t[i].el && t[i].el != el)
+        i = (i + 1) & (size - 1);
+    return &t[i];
+}
+
+static void cq_rec_rehash(AuCssResolver *r, uint32_t size)
+{
+    CqRec *t = au_calloc(size * sizeof *t);
+    for (uint32_t i = 0; i < r->cq_recs_size; i++)
+        if (r->cq_recs[i].el)
+            *cq_rec_slot(t, size, r->cq_recs[i].el) = r->cq_recs[i];
+    au_free(r->cq_recs);
+    r->cq_recs = t;
+    r->cq_recs_size = size;
+}
+
+/* The content-box size of container a (-1 where it is not known), read
+ * from the embedder and recorded. */
+static void cq_size_of(AuCssResolver *r, const AuElement *a, float *w, float *h)
+{
+    *w = *h = -1;
+    if (!r->cq_size)
+        return;
+    if (!r->cq_size(r->cq_size_ctx, a, w, h) || !(*w >= 0) || !(*h >= 0))
+        *w = *h = -1; /* no box, or not a number */
+    CqRec *rec = cq_rec_find(r, a);
+    if (!rec) {
+        if ((r->ncq_recs + 1) * 2 > r->cq_recs_size)
+            cq_rec_rehash(r, r->cq_recs_size ? r->cq_recs_size * 2 : 16);
+        rec = cq_rec_slot(r->cq_recs, r->cq_recs_size, a);
+        rec->el = (AuElement *)a;
+        au_node_ref(&rec->el->node);
+        r->ncq_recs++;
+    }
+    rec->w = *w;
+    rec->h = *h;
+}
+
+void au_css_resolver_forget_containers(AuCssResolver *r)
+{
+    for (uint32_t i = 0; i < r->cq_recs_size; i++)
+        if (r->cq_recs[i].el)
+            au_node_unref(&r->cq_recs[i].el->node);
+    au_free(r->cq_recs);
+    r->cq_recs = NULL;
+    r->cq_recs_size = r->ncq_recs = 0;
+}
+
+static void mark_ancestors(AuElement *el);
+
+static bool cq_differs(float a, float b) { return a > b + 0.01f || b > a + 0.01f; }
+
+bool au_css_resolver_containers_changed(AuCssResolver *r, AuDocument *doc)
+{
+    bool changed = false, dropped = false;
+    for (uint32_t i = 0; i < r->cq_recs_size; i++) {
+        CqRec *rec = &r->cq_recs[i];
+        AuElement *el = rec->el;
+        if (!el)
+            continue;
+        const AuStyle *s = au_element_style(el);
+        if (el->node.doc != doc || !au_node_is_connected(&el->node) || !s ||
+            (s->rare->container_type == AU_CONTAINER_TYPE_NORMAL && !s->rare->container_name)) {
+            /* gone, or no longer a container: what it styled is restyled
+             * by whatever changed that */
+            au_node_unref(&el->node);
+            rec->el = NULL;
+            r->ncq_recs--;
+            dropped = true;
+            continue;
+        }
+        float w = -1, h = -1;
+        if (!r->cq_size || !r->cq_size(r->cq_size_ctx, el, &w, &h) || !(w >= 0) || !(h >= 0))
+            w = h = -1;
+        if (cq_differs(w, rec->w) || cq_differs(h, rec->h)) {
+            rec->w = w;
+            rec->h = h;
+            el->state |= AU_STATE_STYLE_DIRTY;
+            mark_ancestors(el);
+            changed = true;
+        }
+    }
+    if (dropped)
+        cq_rec_rehash(r, r->cq_recs_size); /* open addressing: no holes in a probe run */
+    return changed;
+}
+
+/* el's style, or the one being computed for it. */
+static const AuStyle *cq_style(const AuCssResolver *r, const AuElement *el)
+{
+    return el == r->cq_pend_el ? r->cq_pend_style : au_element_style(el);
+}
+
+/* The axes a container of this type and writing mode can be queried in. */
+static unsigned cq_axes_of(const AuStyle *s)
+{
+    int t = s->rare->container_type;
+    if (t == AU_CONTAINER_TYPE_SIZE)
+        return CQ_AXIS_WIDTH | CQ_AXIS_HEIGHT | CQ_AXIS_INLINE | CQ_AXIS_BLOCK;
+    if (t == AU_CONTAINER_TYPE_INLINE_SIZE)
+        return CQ_AXIS_INLINE | (s->inh->writing_mode == AU_WRITING_MODE_HORIZONTAL_TB ? CQ_AXIS_WIDTH : CQ_AXIS_HEIGHT);
+    return 0;
+}
+
+static bool cq_has_name(const AuCssBlob *names, AuAtom name)
+{
+    if (!names)
+        return false;
+    uint32_t n;
+    const AuCssValue *it = css_items(&names->value, &n);
+    const char *want = au_atom_str(name);
+    size_t wl = au_atom_len(name);
+    for (uint32_t i = 0; i < n; i++) {
+        const char *s = it[i].type == AU_CSSV_IDENT ? it[i].u.str
+                        : it[i].type == AU_CSSV_KEYWORD ? au_css_keyword_name((AuCssKeyword)it[i].kw) : NULL;
+        size_t sl = it[i].type == AU_CSSV_IDENT ? it[i].n : s ? strlen(s) : 0;
+        if (s && sl == wl && memcmp(s, want, wl) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Whether a is a container with the name (0: any) whose type allows the
+ * axes in mask. A mask of 0 takes a name alone, of any type; CQ_ANY_TYPE
+ * takes any size container. */
+#define CQ_ANY_TYPE 0x10u
+static bool cq_qualifies(const AuCssResolver *r, const AuElement *a, AuAtom name, unsigned mask)
+{
+    const AuStyle *s = cq_style(r, a);
+    if (!s || (name && !cq_has_name(s->rare->container_name, name)))
+        return false;
+    if (!mask)
+        return true;
+    unsigned axes = cq_axes_of(s);
+    return axes && !(mask & ~axes & ~CQ_ANY_TYPE);
+}
+
+static CqNear *cq_near_slot(AuCssResolver *r, const AuElement *el, AuAtom name, unsigned mask)
+{
+    uint32_t i = (cq_hash(el, CQ_NEAR_SIZE) ^ (name * 31u + mask * 7u)) & (CQ_NEAR_SIZE - 1);
+    return &r->cq_near[i];
+}
+
+/* The nearest flat-tree ancestor-or-self of start that qualifies, or
+ * NULL. Within a style pass ancestors are styled before descendants, so
+ * an answer recorded for an ancestor stays good and ends the walk. */
+static const AuElement *cq_find(AuCssResolver *r, const AuElement *start, AuAtom name, unsigned mask)
+{
+    bool memo = r->cur_el != NULL;
+    if (memo && !r->cq_near)
+        r->cq_near = au_calloc(CQ_NEAR_SIZE * sizeof *r->cq_near);
+    if (!r->cq_near)
+        memo = false;
+    const AuElement *res = NULL;
+    for (const AuElement *a = start; a; a = flat_parent_element(a)) {
+        if (cq_qualifies(r, a, name, mask)) {
+            res = a;
+            break;
+        }
+        if (memo) {
+            const CqNear *n = cq_near_slot(r, a, name, mask);
+            if (n->el == a && n->gen == r->cq_gen && n->name == name && n->mask == mask) {
+                res = n->res;
+                break;
+            }
+        }
+    }
+    if (memo && start) {
+        CqNear *n = cq_near_slot(r, start, name, mask);
+        n->el = start;
+        n->res = res;
+        n->name = name;
+        n->mask = mask;
+        n->gen = r->cq_gen;
+    }
+    return res;
+}
+
+/* Evaluates one @container condition for the elements whose search for a
+ * container starts at start (their parent; for a pseudo-element, its
+ * element). */
+static bool cq_eval_one(AuCssResolver *r, const CssContainerQuery *q, const AuElement *start)
+{
+    /* a name alone: the nearest container with it */
+    const AuElement *a = cq_find(r, start, q->name, q->cond ? q->axes | CQ_ANY_TYPE : 0);
+    if (!a)
+        return false;
+    if (!q->cond)
+        return true;
+    const AuStyle *s = cq_style(r, a);
+    unsigned axes = cq_axes_of(s);
+    CssCqEnv e;
+    cq_size_of(r, a, &e.w, &e.h);
+    e.horizontal = s->inh->writing_mode == AU_WRITING_MODE_HORIZONTAL_TB;
+    if (!(axes & CQ_AXIS_BLOCK)) {
+        /* an inline-size container: its block size is not queryable */
+        if (e.horizontal)
+            e.h = -1;
+        else
+            e.w = -1;
+    }
+    e.em = s->inh->font_size;
+    e.rem = r->root_style ? r->root_style->inh->font_size : 16;
+    e.dev = &r->dev;
+    return css_container_eval(q, &e);
+}
+
+/* Whether the @container rules around an entry (innermost c) hold for
+ * el, or for its pseudo-element with self. */
+static bool cq_match(AuCssResolver *r, uint32_t c, const AuElement *el, bool self)
+{
+    const AuElement *start = self ? el : flat_parent_element(el);
+    if (!start)
+        return false;
+    for (uint32_t guard = 0; c && c < r->ncq && guard < 64; guard++) {
+        CqCond *cd = &r->cq_conds[c];
+        bool res;
+        if (r->cur_el && cd->memo_el == start && cd->memo_gen == r->cq_gen) {
+            res = cd->memo;
+        } else {
+            res = cq_eval_one(r, cd->q, start);
+            cd->memo_el = start;
+            cd->memo_gen = r->cq_gen;
+            cd->memo = res;
+        }
+        if (!res)
+            return false;
+        c = cd->parent;
+    }
+    return true;
+}
+
+/* A pseudo-element's container search starts at its element. */
+static bool cq_self(uint8_t pseudo)
+{
+    return pseudo != AU_CSS_PSEUDO_NONE && pseudo != AU_CSS_PSEUDO_SLOTTED && pseudo != AU_CSS_PSEUDO_PART;
+}
+
+bool css_cq_axis_size(CssComputeCtx *c, int axis, float *px)
+{
+    AuCssResolver *r = c->cq;
+    const AuElement *start = c->el ? (c->cq_self ? c->el : flat_parent_element(c->el)) : NULL;
+    const AuElement *a = start ? cq_find(r, start, 0, (unsigned)axis) : NULL;
+    if (a) {
+        const AuStyle *s = cq_style(r, a);
+        float w, h;
+        cq_size_of(r, a, &w, &h);
+        bool horiz = s->inh->writing_mode == AU_WRITING_MODE_HORIZONTAL_TB;
+        bool wide = axis == CQ_AXIS_WIDTH || (axis == CQ_AXIS_INLINE && horiz) || (axis == CQ_AXIS_BLOCK && !horiz);
+        float v = wide ? w : h;
+        if (v < 0)
+            return false; /* not laid out yet: the viewport, until the next round */
+        *px = v;
+        return true;
+    }
+    return false;
+}
+
 /* ---- Matching ---- */
 
 #define KEY_LAYER_SHIFT 45 /* key >> KEY_LAYER_SHIFT: level, context, attached and layer */
@@ -1514,6 +1906,7 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
                          uint8_t want, uint16_t *pseudo_bits, const Pass *ps)
 {
     const uint16_t *walked = r->scoping ? r->walked_scope : NULL; /* NULL: every entry counts */
+    const uint16_t *ecq = r->entry_cq; /* NULL without @container rules */
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ei = r->sorted[start + i];
         const RuleEntry *e = &r->entries[ei];
@@ -1534,7 +1927,12 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
                 continue; /* already known to match */
             if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
                 continue;
+            /* An entry inside @container counts without its condition: el
+             * may be the container, and its style is not known yet; the
+             * pseudo-element's own cascade evaluates it. */
             if (css_selector_match(e->sel, el, mc)) {
+                if (ecq && ecq[ei])
+                    r->cq_pseudo = true; /* its result depends on el: el's style is not shared */
                 *pseudo_bits |= (uint16_t)(1u << e->pseudo);
                 if (attached)
                     *CSS_PUSH(r->pseudo_entries, r->npe, r->pe_cap) = ei | ps->ctx;
@@ -1544,6 +1942,8 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
         if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
             continue; /* an ancestor the selector names is not there */
         if (!css_selector_match(e->sel, el, mc))
+            continue;
+        if (ecq && ecq[ei] && !cq_match(r, ecq[ei], el, cq_self(e->pseudo)))
             continue;
         *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei | ps->ctx;
     }
@@ -1653,8 +2053,13 @@ static void collect_shadow(AuCssResolver *r, const AuElement *target, const CssM
             continue;
         if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
             continue;
-        if (css_selector_match(e->sel, target, mc))
-            *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei | ((uint32_t)code << ME_CTX_SHIFT);
+        if (!css_selector_match(e->sel, target, mc))
+            continue;
+        /* the container is looked for above the slotted or part element */
+        const AuElement *for_el = pe == AU_CSS_PSEUDO_SLOTTED ? mc->slotted : mc->part_el;
+        if (r->entry_cq && r->entry_cq[ei] && (!for_el || !cq_match(r, r->entry_cq[ei], for_el, false)))
+            continue;
+        *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei | ((uint32_t)code << ME_CTX_SHIFT);
     }
 }
 
@@ -1734,6 +2139,7 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
 {
     r->nme = 0;
     r->npe = 0;
+    r->cq_pseudo = false;
     Pass own = {0, true, (uint32_t)CTX_OWN << ME_CTX_SHIFT};
     if (r->scoping) {
         const AuNode *root = root_of(r, el);
@@ -2510,6 +2916,8 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     cs.cc.is_root = el && !pseudo && el->node.parent && el->node.parent->type == AU_NODE_DOCUMENT;
     cs.cc.quirks = r->quirks;
     cs.cc.ex = cs.cc.ch = -1;
+    cs.cc.cq = r;
+    cs.cc.cq_self = cq_self(pseudo);
     if (cs.cc.is_root)
         cs.cc.root = NULL;
 
@@ -2580,6 +2988,8 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
     }
     if (cs.cc.flags & 4)
         s->flags |= AU_STYLE_F_HAS_ATTR;
+    if (cs.cc.flags & 8)
+        s->flags |= AU_STYLE_F_CONTAINER_UNITS;
     share_groups(s, parent, NULL);
     intern_groups(r, s);
     return s;
@@ -2713,7 +3123,7 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     css_decl_block_init(&hints);
     css_presentational_hints(el, &hints, r->quirks);
     bool root = el->node.parent && el->node.parent->type == AU_NODE_DOCUMENT;
-    bool eligible = share_eligible(el, inl, &hints, root) && share_scope_ok(r, el);
+    bool eligible = share_eligible(el, inl, &hints, root) && share_scope_ok(r, el) && !r->cq_pseudo;
     uint32_t h = 0;
     ShareSlot *slot = NULL;
     if (eligible) {
@@ -2733,7 +3143,7 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     AuStyle *s = cascade(r, el, parent, inl, &hints, AU_CSS_PSEUDO_NONE);
     s->pseudo_bits = bits;
     css_decl_block_clear(&hints);
-    if (eligible && !(s->flags & AU_STYLE_F_HAS_ATTR)) {
+    if (eligible && !(s->flags & (AU_STYLE_F_HAS_ATTR | AU_STYLE_F_CONTAINER_UNITS))) {
         au_free(slot->entries);
         au_style_release(slot->style);
         slot->parent = parent;
@@ -2798,6 +3208,10 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
     static const uint8_t kinds[] = {AU_CSS_PSEUDO_BEFORE, AU_CSS_PSEUDO_AFTER, AU_CSS_PSEUDO_MARKER,
                                     AU_CSS_PSEUDO_BACKDROP};
     AuStyle **tail = &s->pseudos;
+    /* el is a candidate container of its pseudo-elements, with the style
+     * computed now (stored after this) */
+    r->cq_pend_el = el;
+    r->cq_pend_style = s;
     for (size_t i = 0; i < CSS_ARRAY_LEN(kinds); i++) {
         uint8_t k = kinds[i];
         if (k == AU_CSS_PSEUDO_MARKER ? !au_display_list_item(s->box->display) : !(s->pseudo_bits & (1u << k)))
@@ -2809,10 +3223,12 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
         if (p) {
             *tail = p;
             tail = &p->next;
-            if (p->flags & AU_STYLE_F_HAS_ATTR) {
-                /* content: attr(x) differs per element: the element's
-                 * style, which carries it, must not be shared */
-                s->flags |= AU_STYLE_F_HAS_ATTR;
+            uint8_t own = p->flags & (AU_STYLE_F_HAS_ATTR | AU_STYLE_F_CONTAINER_UNITS);
+            if (own) {
+                /* content: attr(x) or a container unit differs per
+                 * element: the element's style, which carries it, must
+                 * not be shared */
+                s->flags |= own;
                 for (int i = 0; i < SHARE_SLOTS; i++)
                     if (r->share[i].style == s) {
                         au_free(r->share[i].entries);
@@ -2822,6 +3238,8 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
             }
         }
     }
+    r->cq_pend_el = NULL;
+    r->cq_pend_style = NULL;
 }
 
 static void store_style(AuElement *el, AuStyle *s)
@@ -2978,6 +3396,7 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
         return;
     prepare(r, de);
     share_clear(r);
+    r->cq_gen++; /* container query memos are good for one pass */
     css_bloom_clear(&r->bloom);
     css_has_index_free(&r->has_idx);
     r->has_root = r->has_has ? &doc->node : NULL;

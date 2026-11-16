@@ -95,8 +95,10 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_set_transparent(dv->layout, true); /* a nested document shows its parent through */
     if (dv->doc)
         au_layout_set_document(dv->layout, dv->doc);
-    if (dv->resolver)
+    if (dv->resolver) {
         au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+        au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
+    }
 }
 
 static uint32_t fetch_font(void *ctx, const char *url)
@@ -288,6 +290,8 @@ static void clear_document(AuDocView *dv)
         au_node_unref(&dv->active->node);
     dv->hover = dv->active = NULL;
     dv->hover_link[0] = 0;
+    if (dv->resolver)
+        au_css_resolver_forget_containers(dv->resolver);
     if (dv->doc)
         au_css_clear_document(dv->doc);
     if (dv->parser) {
@@ -1417,6 +1421,7 @@ void au_docview_begin(AuDocView *dv, const char *url)
         au_docscript_set_parser(dv->script, dv->parser, dv->doc);
     dv->resolver = au_css_resolver_new();
     au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+    au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
     if (dv->has_font_prefs)
         au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     au_layout_set_document(dv->layout, dv->doc);
@@ -1485,6 +1490,7 @@ static void rebuild_resolver(AuDocView *dv)
     if (!dv->resolver) {
         dv->resolver = au_css_resolver_new();
         au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
+        au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
         if (dv->has_font_prefs)
             au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     } else {
@@ -1750,6 +1756,28 @@ static void pack_when_quiet(AuDocView *dv)
         au_docview_pack_sheets(dv);
 }
 
+/* Container queries and container units read the sizes of the last
+ * layout. After a layout, the subtrees of the containers whose size is
+ * not the one their styles read are restyled and laid out again, at most
+ * CQ_ROUNDS times: a page whose queries keep changing the sizes they read
+ * stops there, with the styles of the last round. A page without
+ * container queries never gets here (au_css_resolver_has_containers). */
+#define CQ_ROUNDS 4
+static void container_rounds(AuDocView *dv)
+{
+    for (int i = 0; i < CQ_ROUNDS; i++) {
+        if (!au_css_resolver_containers_changed(dv->resolver, dv->doc))
+            break;
+        uint32_t styled0 = au_css_resolver_styled_count(dv->resolver);
+        au_css_restyle(dv->resolver, dv->doc);
+        dv->stats.style_passes++;
+        dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
+        au_layout_styles_changed(dv->layout);
+        if (!au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh))
+            break;
+    }
+}
+
 bool au_docview_update(AuDocView *dv)
 {
     if (!dv->doc)
@@ -1769,6 +1797,8 @@ bool au_docview_update(AuDocView *dv)
         dv->images_dirty = false;
     }
     bool laid_out = au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh);
+    if (laid_out && au_css_resolver_has_containers(dv->resolver))
+        container_rounds(dv);
     if (dv->slim_scrolls) {
         /* The first layout after the view was hidden: its scroll
          * containers return to where they were. */
@@ -2812,8 +2842,13 @@ void au_dv_invalidate_all(AuDocView *dv)
 
 void au_dv_update_style(AuDocView *dv)
 {
-    if (dv->doc)
-        update_style(dv);
+    if (!dv->doc)
+        return;
+    update_style(dv);
+    /* Styles that read a container's size are current only once the
+     * containers are laid out (getComputedStyle forces that layout). */
+    if (au_css_resolver_has_containers(dv->resolver))
+        au_docview_update(dv);
 }
 
 const AuDocViewCallbacks *au_dv_callbacks(const AuDocView *dv)

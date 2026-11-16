@@ -119,7 +119,8 @@ Keep code small and fast where that costs nothing.
   (Canvas 2D was listed here and has since been built: see
   [`canvas.md`](canvas.md).)
 - CSS animations and transitions beyond jumping to the end state, 3D
-  transforms, filters, blend modes, container queries.
+  transforms, filters, blend modes. (Container queries were listed here
+  and have since been built: see [`css.md`](css.md).)
 - Right-to-left and vertical text, complex-script shaping (Arabic,
   Indic).
 - HTTP/2, HTTP/3, TLS client certificates.

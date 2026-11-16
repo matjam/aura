@@ -156,9 +156,15 @@ class CSSMediaRule extends CSSConditionRule {
     set media(v) { this._prelude = str(v); this._touch(); }
 }
 class CSSSupportsRule extends CSSConditionRule {}
+/* "[name] [query]": the name is an identifier followed by a space or the
+ * end (style( is a query), and not one of the condition's words. */
 class CSSContainerRule extends CSSConditionRule {
-    get containerName() { const m = /^([^\s(]+)\s*\(/.exec(this._prelude); return m && !/^(not|and|or)$/i.test(m[1]) ? m[1] : ''; }
-    get containerQuery() { return this._prelude.replace(/^[^\s(]+\s+(?=\()/, ''); }
+    _split() {
+        const m = /^(-?[_a-zA-Z\u0080-￿\\][-\w\u0080-￿\\]*)(?=\s|$)\s*([^]*)$/.exec(this._prelude);
+        return m && !/^(not|and|or|none)$/i.test(m[1]) ? [m[1], m[2]] : ['', this._prelude];
+    }
+    get containerName() { return this._split()[0]; }
+    get containerQuery() { return this._split()[1]; }
 }
 class CSSLayerBlockRule extends CSSGroupingRule {
     get name() { return this._prelude; }

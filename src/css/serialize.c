@@ -544,6 +544,14 @@ static void shorthand_join(uint16_t sh, const uint16_t *lh, char **vals, uint32_
         box_compress(vals, out);
         return;
     }
+    if (sh == AU_PROP_container && n == 2) {
+        au_buf_puts(out, vals[0]);
+        if (strcmp(vals[1], "normal") != 0) {
+            au_buf_puts(out, " / ");
+            au_buf_puts(out, vals[1]);
+        }
+        return;
+    }
     bool all_same = true;
     for (uint32_t i = 1; i < n; i++)
         if (strcmp(vals[i], vals[0]) != 0)

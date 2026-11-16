@@ -43,7 +43,11 @@ static const char *const dict[] = {
     "inline-flex", "grid", "table", "table-cell", "table-row", "list-item", "contents", "flow-root", "absolute", "fixed",
     "sticky", "relative", "hidden", "scroll", "nowrap", "pre-wrap", "@media", "@media (min-width:", "@media not all and",
     "@supports", "@supports (", "@supports selector(", "@import", "@import url(a.css)", "@import 'b.css' layer(x) supports(display:flex) screen;",
-    "@layer", "@layer a,b;", "@container", "@scope", "@starting-style", "@keyframes k{", "from{", "to{", "50%{",
+    "@layer", "@layer a,b;", "@container", "@container (min-width:", "@container card (width > 1e9px) and (height <",
+    "@container not (orientation: portrait) or (aspect-ratio > 1/0)", "@container style(--a: 1)", "@container x y (",
+    "container-type:", "container-type:size", "container-type:inline-size", "container-name:", "container:",
+    "container: card / size", "1cqw", "1e38cqh", "1cqi", "1cqb", "1cqmin", "-1e9cqmax", "(inline-size", "(block-size",
+    "@scope", "@starting-style", "@keyframes k{", "from{", "to{", "50%{",
     "@font-face{", "font-family:", "src:", "unicode-range:U+0-10FFFF", "U+??????", "@namespace", "@page", "@charset \"x\";",
     "@property --a{syntax:'<length>';inherits:false;initial-value:0px}", "@counter-style", "&", "& &", ">", "+", "~", "||",
     "*", ".c", "#i", "div", "p", "span", "a", "td", "li", "[title]", "[a=b i]", "[a^='", "[a|=b]", ":is(", ":not(", ":where(",
@@ -72,6 +76,9 @@ static const char *const snippets[] = {
     "@keyframes k{from{width:0}50%{width:calc(1px/0)}to{width:1e38px}}div{animation:k 0s infinite}",
     "@font-face{font-family:x;src:url(f.woff2) format('woff2');unicode-range:U+0-7F,U+1e3??}p{font-family:x}",
     "div{margin:-1e9px;padding:1e9px;border:1e9px solid;outline:1e9px solid;outline-offset:-1e9px;float:right;clear:both}",
+    ("div{container:card / inline-size;width:1e9cqw}@container card (min-width: 10px) and (not (height > 1e38px)){"
+     "p{width:50cqi;font-size:1e9cqmin}@container (orientation: landscape){span::before{content:'x';width:1cqb}}}"),
+    "p{container-type:size;height:-1cqh}@container (aspect-ratio > 0/0) or style(--x) or (width >= 1e400px){*{width:1cqmax}}",
 };
 
 static const char body[] =

@@ -76,22 +76,41 @@ float css_length_px(CssComputeCtx *c, float v, int unit)
         float px = lh->kind == AU_LEN_PX ? lh->u.px : lh->kind == AU_LEN_NUMBER ? lh->u.num * fs : 1.2f * fs;
         return v * px;
     }
-    case AU_UNIT_VW: case AU_UNIT_SVW: case AU_UNIT_LVW: case AU_UNIT_DVW: case AU_UNIT_CQW:
+    case AU_UNIT_CQW: case AU_UNIT_CQH: case AU_UNIT_CQI: case AU_UNIT_CQB: {
+        /* the nearest container that can be queried in the axis, else the
+         * small viewport unit */
+        int axis = unit == AU_UNIT_CQW ? CQ_AXIS_WIDTH : unit == AU_UNIT_CQH ? CQ_AXIS_HEIGHT
+                 : unit == AU_UNIT_CQI ? CQ_AXIS_INLINE : CQ_AXIS_BLOCK;
+        float px;
+        if (c->cq && css_cq_axis_size(c, axis, &px)) {
+            c->flags |= 8;
+            return v * px / 100;
+        }
+        c->flags |= 2;
+        bool wide = axis == CQ_AXIS_WIDTH || (axis == CQ_AXIS_INLINE) == horiz;
+        return v * (wide ? vw : vh);
+    }
+    case AU_UNIT_CQMIN:
+    case AU_UNIT_CQMAX: {
+        float i = css_length_px(c, 100, AU_UNIT_CQI), b = css_length_px(c, 100, AU_UNIT_CQB);
+        return v * (unit == AU_UNIT_CQMIN ? (i < b ? i : b) : (i > b ? i : b)) / 100;
+    }
+    case AU_UNIT_VW: case AU_UNIT_SVW: case AU_UNIT_LVW: case AU_UNIT_DVW:
         c->flags |= 2;
         return v * vw;
-    case AU_UNIT_VH: case AU_UNIT_SVH: case AU_UNIT_LVH: case AU_UNIT_DVH: case AU_UNIT_CQH:
+    case AU_UNIT_VH: case AU_UNIT_SVH: case AU_UNIT_LVH: case AU_UNIT_DVH:
         c->flags |= 2;
         return v * vh;
-    case AU_UNIT_VI: case AU_UNIT_SVI: case AU_UNIT_LVI: case AU_UNIT_DVI: case AU_UNIT_CQI:
+    case AU_UNIT_VI: case AU_UNIT_SVI: case AU_UNIT_LVI: case AU_UNIT_DVI:
         c->flags |= 2;
         return v * (horiz ? vw : vh);
-    case AU_UNIT_VB: case AU_UNIT_SVB: case AU_UNIT_LVB: case AU_UNIT_DVB: case AU_UNIT_CQB:
+    case AU_UNIT_VB: case AU_UNIT_SVB: case AU_UNIT_LVB: case AU_UNIT_DVB:
         c->flags |= 2;
         return v * (horiz ? vh : vw);
-    case AU_UNIT_VMIN: case AU_UNIT_SVMIN: case AU_UNIT_LVMIN: case AU_UNIT_DVMIN: case AU_UNIT_CQMIN:
+    case AU_UNIT_VMIN: case AU_UNIT_SVMIN: case AU_UNIT_LVMIN: case AU_UNIT_DVMIN:
         c->flags |= 2;
         return v * (vw < vh ? vw : vh);
-    case AU_UNIT_VMAX: case AU_UNIT_SVMAX: case AU_UNIT_LVMAX: case AU_UNIT_DVMAX: case AU_UNIT_CQMAX:
+    case AU_UNIT_VMAX: case AU_UNIT_SVMAX: case AU_UNIT_LVMAX: case AU_UNIT_DVMAX:
         c->flags |= 2;
         return v * (vw > vh ? vw : vh);
     default:

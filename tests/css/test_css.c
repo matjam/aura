@@ -6,6 +6,8 @@
  *   --- css #ID        a sheet in the shadow tree of the element with that id
  *   --- html           an indented element tree:
  *                        tag#id.class[attr=value][attr="v w"] "text"
+ *                        [cqsize="W H"]: the content-box size container
+ *                        queries read for the element (layout's, in a browser)
  *                        svg:tag for SVG elements, "text" alone for a text node
  *                        ::shadow (or "::shadow manual") under an element: its
  *                        shadow root, holding what is indented below
@@ -287,9 +289,19 @@ static AuElement *find_id(AuDocument *doc, const char *id)
     return NULL;
 }
 
+/* Container sizes for container queries, which layout gives in a
+ * browser: an element's cqsize attribute, "W H" (CSS px). */
+static bool test_container_size(void *ctx, const AuElement *el, float *w, float *h)
+{
+    (void)ctx;
+    const char *v = au_element_get_attr(el, au_atom_cstr("cqsize"));
+    return v && sscanf(v, "%f %f", w, h) == 2;
+}
+
 static AuCssResolver *make_resolver(const Case *c, const Options *o, AuCssSheet **first, AuDocument *doc)
 {
     AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_set_container_size(r, test_container_size, NULL);
     AuCssDevice d;
     au_css_device_default(&d);
     d.width = o->width;
@@ -759,6 +771,8 @@ static void run_case(Case *c)
         else if (strcmp(k, "options") != 0 && strcmp(k, "html") != 0 && strcmp(k, "css") != 0)
             fail(s->line - 1, "unknown section", "", k);
     }
+    if (r)
+        au_css_resolver_forget_containers(r);
     if (doc) {
         au_css_clear_document(doc);
         au_node_unref(&doc->node);

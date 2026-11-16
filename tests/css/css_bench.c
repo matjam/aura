@@ -412,6 +412,10 @@ static void w_rules(const CssRule *r)
             for (uint32_t i = 0; i < r->b.nlayers; i++)
                 w_add(W_LAYER, up(r->u.layers[i].n * sizeof(AuAtom), sizeof(void *)),
                       r->u.layers[i].n * sizeof(AuAtom), 0);
+        } else if (r->type == RULE_CONTAINER) {
+            w_add(W_COND, sizeof *r->u.cq, 12, 0);
+            if (r->u.cq->cond)
+                w_media(r->u.cq->cond);
         } else if (r->u.text) {
             w_add(W_COND, up(strlen(r->u.text) + 1, 8), up(strlen(r->u.text) + 1, 8), 0);
         }

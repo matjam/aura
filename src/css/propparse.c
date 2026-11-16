@@ -2017,6 +2017,28 @@ AuCssValue *pp_contain(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
     return v;
 }
 
+/* container-name: none | <custom-ident>+, without the words of the
+ * @container grammar (and, or, not) and default. */
+AuCssValue *pp_container_name(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (css_is_kw(v, AU_K_none))
+        return v;
+    if (v->type == AU_CSSV_COMMA_LIST)
+        return NULL;
+    uint32_t n;
+    const AuCssValue *p = css_items(v, &n);
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_custom_ident(&p[i]))
+            return NULL;
+        if (p[i].type == AU_CSSV_KEYWORD &&
+            (p[i].kw == AU_K_and_ || p[i].kw == AU_K_or_ || p[i].kw == AU_K_not_ || p[i].kw == AU_K_default_))
+            return NULL;
+    }
+    return v;
+}
+
 AuCssValue *pp_text_decoration_line(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
 {
     (void)cx;

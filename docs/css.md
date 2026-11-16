@@ -120,7 +120,8 @@ unit has `AU_STYLE_F_VIEWPORT_UNITS`.
   and the document view skips the style pass on `AU_CSS_VIEWPORT_NONE`.
 - Any other device difference, or a media query that changed, restyles
   the document.
-- Container queries are not evaluated, so nothing is recorded for them.
+- A container query reads a container's size, not the viewport, so a
+  viewport change reaches it through layout: "Container queries" below.
 - `test_css_invalidate --viewport DIR` (ctest `css_viewport`) resizes
   pages through fourteen sizes and compares every computed value with a
   document styled from scratch.
@@ -246,6 +247,85 @@ pseudo-class after `::part()` is matched through `match_from`, so that
 each of the hot functions keeps one caller. Keep it that way when adding
 a selector feature.
 
+## Container queries
+
+To let the resolver read container sizes, call
+`au_css_resolver_set_container_size(r, fn, ctx)`; `fn` returns an
+element's content-box width and height, or false when it has no laid
+out box. The document view passes `au_layout_css_container_size`.
+
+To restyle after a layout, call `au_css_resolver_containers_changed(r,
+doc)`: it reads the size of every container a query or a unit read in
+the last pass, marks those whose size changed by more than 0.01 px
+`STYLE_DIRTY`, and returns whether any did. Then call `au_css_restyle`
+and lay out again. The document view does this in `container_rounds`
+([`layout.md`](layout.md), "Container query rounds").
+
+To drop the records before a document is freed, call
+`au_css_resolver_forget_containers`; the records hold a reference to
+each container element.
+
+What is supported:
+
+- `container-type` (`normal`, `size`, `inline-size`), `container-name`
+  (`none` or idents other than `and`, `or`, `not`, `default`) and the
+  `container` shorthand (`name [/ type]`).
+- `@container [name] condition`, with `width`, `height`, `inline-size`,
+  `block-size`, `aspect-ratio` and `orientation` in range or plain form,
+  combined with `and`, `or` and `not`. A condition is evaluated in three
+  values: a general-enclosed term such as `style(...)` or
+  `scroll-state(...)` is unknown, and an unknown result does not match.
+  `@container` rules nest, and the conditions of all enclosing rules
+  must hold.
+- Units `cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`. With no container
+  for the axis, or one that has no box yet, a unit is the small viewport
+  unit of that axis and the style gets `AU_STYLE_F_VIEWPORT_UNITS`.
+
+How a query is evaluated:
+
+- The rule index keeps a list of conditions (`cq_conds`; index 0 means
+  none) and, parallel to the entries, the innermost condition of each
+  (`entry_cq`). Without `@container` rules `entry_cq` is NULL and
+  matching takes the same path as before.
+- The query container is the nearest flat-tree ancestor that has the
+  query's name, if any, and whose type allows every axis the condition
+  reads (`CssContainerQuery.axes`). For a pseudo-element the search
+  starts at its element (`cq_self`). The element's own style is not
+  stored yet while its pseudo-elements are computed, so the resolver
+  reads it from `cq_pend_el` and `cq_pend_style`.
+- `cq_find` caches the nearest container for each start element, name
+  and set of axes within one style pass (`CqNear`, 256 slots), so a walk
+  up a deep document stops at the first ancestor with an answer. Each
+  condition also keeps its last result per start element (siblings
+  share one).
+- An element with a pseudo-element rule inside `@container`
+  (`cq_pseudo`), and a style that used a container unit
+  (`AU_STYLE_F_CONTAINER_UNITS`), are not shared: two siblings can see
+  different containers or sizes.
+- `getComputedStyle` lays the document out first when the resolver has
+  read a container (`au_css_resolver_has_containers`), so that the
+  result reflects the container's current size.
+
+In a condition, `em` is the container's font size, `cqw` and `cqh`
+resolve against the queried container itself, and the other container
+units against the viewport (`cq_len_px` in `media.c`).
+
+### Cost for a page without container queries, 2026-11-16
+
+The same saved Wikipedia article, Release builds on the host of base
+`b469f56` and of this change, milliseconds and bytes. `css_bench
+--page`, best of 12 runs; `aura-host layout-bench PAGE --bundled-only`,
+best of 16 runs (full layout at 1440 pixels, and a document view
+relayout from 1440 to 656):
+
+| | parse | index | first style | style again | heap total | full layout | relayout |
+|---|---|---|---|---|---|---|---|
+| before container queries | 1.9 | 1.3 | 5.1 | 4.6 | 1279248 | 1.67 | 1.74 |
+| after | 1.9 | 1.3 | 5.1 | 4.6 | 1279248 | 1.69 | 1.74 |
+
+The layout difference is within the spread between runs (1.67 to 1.78
+for both builds).
+
 ## How a parsed sheet is stored
 
 A sheet keeps its source text and parses as little of it as it can.
@@ -293,8 +373,10 @@ A sheet keeps its source text and parses as little of it as it can.
   register with the sheet when parsed) or that is nested in another
   rule, and everything in a sheet of 4 GB or more.
 - **What is not kept:** the contents of an `@supports` whose condition
-  is false and of `@container`, `@scope` and `@starting-style` (which
-  never apply; the rule itself is kept). A selector that cannot match
+  is false and of `@scope` and `@starting-style` (which never apply;
+  the rule itself is kept). An `@container` rule keeps its parsed query
+  (`CssContainerQuery`) and its children; one with an invalid prelude
+  is dropped. A selector that cannot match
   here (`SELF_NEVER`: a pseudo-element Aura does not create, a
   pseudo-class that is never true) is not indexed, so its block is
   never parsed.

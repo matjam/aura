@@ -1,0 +1,333 @@
+# Container queries (CSS Conditional 5, "Container Queries") and container
+# units (CSS Values 4). The size a query reads is the cqsize attribute of
+# the container ("W H"), which stands for its content box in the last
+# layout. Without a container, or for an axis its container-type cannot
+# be queried in, a query is false; container units then fall back to the
+# small viewport units (1024x768 here).
+
+=== container properties
+--- decls
+container-type: size => container-type: size;
+container-type: inline-size => container-type: inline-size;
+container-type: normal => container-type: normal;
+container-type: block-size =>
+container-type: size inline-size =>
+container-name: card => container-name: card;
+container-name: a b => container-name: a b;
+container-name: none => container-name: none;
+container-name: none a =>
+container-name: and =>
+container-name: not =>
+container-name: 1px =>
+container-name: "card" =>
+container: card => container-name: card; container-type: normal;
+container: card / inline-size => container-name: card; container-type: inline-size;
+container: a b / size => container-name: a b; container-type: size;
+container: none / size => container-name: none; container-type: size;
+container: / size =>
+container: card / =>
+container: card / size size =>
+container: card / size / size =>
+--- get
+container: card / size | container => card / size
+container: card | container => card
+container-type: size; container-name: x | container => x / size
+container: card / inline-size | container-type => inline-size
+
+=== computed container properties
+--- css
+#a { container: card / inline-size; }
+#b { container-name: x y; }
+#c { container-type: size; }
+#d { container: inherit; }
+--- html
+html
+  body
+    div#a
+      div#d
+    div#b
+    div#c
+--- expect
+#a -> container-type: inline-size
+#a -> container-name: card
+#b -> container-name: x y
+#b -> container-type: normal
+#c -> container-name: none
+#c -> container-type: size
+#d -> container-type: inline-size
+#d -> container-name: card
+
+=== a query reads the nearest container
+--- css
+.c { container-type: inline-size; }
+@container (min-width: 400px) { .t { color: green; } }
+@container (width < 400px) { .t { width: 1px; } }
+--- html
+html
+  body
+    div#big.c[cqsize="500 100"]
+      p#t1.t
+      div[cqsize="100 10"]
+        p#t2.t
+    div#small.c[cqsize="300 100"]
+      p#t5.t
+      div.c[cqsize="450 10"]
+        p#t3.t
+    p#t4.t
+--- expect
+#t1 -> color: rgb(0, 128, 0)
+#t1 -> width: auto
+# a div that is not a container is passed over
+#t2 -> color: rgb(0, 128, 0)
+#t3 -> color: rgb(0, 128, 0)
+#t5 -> color: rgb(0, 0, 0)
+#t5 -> width: 1px
+# no container: every query is false
+#t4 -> color: rgb(0, 0, 0)
+#t4 -> width: auto
+# a container does not query itself
+#big -> color: rgb(0, 0, 0)
+
+=== a name picks the nearest container with that name
+--- css
+#a { container: card / inline-size; }
+#b { container-type: inline-size; }
+#c { container: other card / inline-size; }
+@container card (min-width: 400px) { .t { color: green; } }
+@container other (min-width: 1px) { .t { width: 3px; } }
+@container nothing (min-width: 1px) { .t { height: 3px; } }
+@container card { .t { outline-color: blue; } }
+--- html
+html
+  body
+    div#a[cqsize="500 10"]
+      div#b[cqsize="50 10"]
+        p#t1.t
+      div#c[cqsize="100 10"]
+        p#t2.t
+    p#t3.t
+--- expect
+#t1 -> color: rgb(0, 128, 0)
+#t1 -> width: auto
+#t1 -> height: auto
+#t1 -> outline-color: rgb(0, 0, 255)
+#t2 -> color: rgb(0, 0, 0)
+#t2 -> width: 3px
+#t3 -> outline-color: rgb(0, 0, 0)
+
+=== the block axis needs container-type size
+--- css
+.i { container-type: inline-size; }
+.s { container-type: size; }
+@container (min-height: 50px) { .t { color: green; } }
+@container (block-size > 50px) { .t { width: 2px; } }
+@container (orientation: portrait) { .t { height: 2px; } }
+@container (min-width: 1px) { .t { outline-color: blue; } }
+--- html
+html
+  body
+    div.s[cqsize="100 100"]
+      div.i[cqsize="100 10"]
+        p#t1.t
+    div.i[cqsize="100 10"]
+      p#t2.t
+--- expect
+#t1 -> color: rgb(0, 128, 0)
+#t1 -> width: 2px
+#t1 -> height: 2px
+#t1 -> outline-color: rgb(0, 0, 255)
+#t2 -> color: rgb(0, 0, 0)
+#t2 -> width: auto
+#t2 -> height: auto
+
+=== conditions: and, or, not, ranges, ratios and unknown
+--- css
+#c { container-type: size; font-size: 20px; }
+@container (width > 100px) and (height > 100px) { #t1 { color: green; } }
+@container not (width > 1000px) { #t2 { color: green; } }
+@container (width > 1000px) or (height > 100px) { #t3 { color: green; } }
+@container style(--x: 1) { #t4 { color: red; } }
+@container not style(--x: 1) { #t5 { color: red; } }
+@container (orientation: portrait) { #t6 { color: green; } }
+@container (orientation: landscape) { #t6 { width: 1px; } }
+@container (aspect-ratio < 1/1) { #t7 { color: green; } }
+@container (min-aspect-ratio: 2/1) { #t7 { width: 1px; } }
+@container (100px < inline-size <= 200px) { #t8 { color: green; } }
+@container (block-size: 300px) { #t9 { color: green; } }
+@container (min-width: 10em) { #t10 { color: green; } }
+@container (min-width: 11em) { #t10 { width: 1px; } }
+@container ((width > 1px) and (not (height < 1px))) { #t11 { color: green; } }
+@container (width) { #t12 { color: green; } }
+@container (color) { #t13 { color: red; } }
+@container (min-width: 10rem) { #t14 { color: green; } }
+--- html
+html
+  body
+    div#c[cqsize="200 300"]
+      p#t1
+      p#t2
+      p#t3
+      p#t4
+      p#t5
+      p#t6
+      p#t7
+      p#t8
+      p#t9
+      p#t10
+      p#t11
+      p#t12
+      p#t13
+      p#t14
+--- expect
+#t1 -> color: rgb(0, 128, 0)
+#t2 -> color: rgb(0, 128, 0)
+#t3 -> color: rgb(0, 128, 0)
+#t4 -> color: rgb(0, 0, 0)
+#t5 -> color: rgb(0, 0, 0)
+#t6 -> color: rgb(0, 128, 0)
+#t6 -> width: auto
+#t7 -> color: rgb(0, 128, 0)
+#t7 -> width: auto
+#t8 -> color: rgb(0, 128, 0)
+#t9 -> color: rgb(0, 128, 0)
+#t10 -> color: rgb(0, 128, 0)
+#t10 -> width: auto
+#t11 -> color: rgb(0, 128, 0)
+#t12 -> color: rgb(0, 128, 0)
+#t13 -> color: rgb(0, 0, 0)
+#t14 -> color: rgb(0, 128, 0)
+
+=== a container without a size matches nothing
+--- css
+#c { container-type: size; }
+@container (min-width: 0px) { #t1 { color: red; } }
+@container not (min-width: 0px) { #t1 { width: 1px; } }
+--- html
+html
+  body
+    div#c
+      p#t1
+--- expect
+#t1 -> color: rgb(0, 0, 0)
+#t1 -> width: auto
+
+=== invalid preludes drop the rule
+--- css
+@container (width > 0) { #a { color: green; } }
+@container card { #b { color: green; } }
+@container none (width > 0) { #c { color: red; } }
+@container (width > 0) junk { #c { color: red; } }
+@container { #c { color: red; } }
+@container and (width > 0) { #c { color: red; } }
+@container a b (width > 0) { #c { color: red; } }
+@container (color) { #d { color: red; } }
+#e { color: blue; }
+--- rules
+4
+
+=== nested @container rules all hold
+--- css
+.outer { container: outer / inline-size; }
+.inner { container: inner / inline-size; }
+@container outer (width > 500px) { @container inner (width < 200px) { #t1 { color: green; } } }
+@container outer (width > 500px) { @container inner (width > 200px) { #t1 { width: 1px; } } }
+@media (min-width: 1px) { @container (width > 100px) { #t2 { color: green; } } }
+@container (width > 100px) { @media (max-width: 1px) { #t2 { width: 1px; } } }
+.box { @container inner (width > 100px) { color: green; } }
+.box { @container inner (width > 1000px) { width: 1px; } }
+--- html
+html
+  body
+    div.outer[cqsize="600 10"]
+      div.inner[cqsize="150 10"]
+        p#t1
+        p#t2
+        p#t3.box
+--- expect
+#t1 -> color: rgb(0, 128, 0)
+#t1 -> width: auto
+#t2 -> color: rgb(0, 128, 0)
+#t2 -> width: auto
+#t3 -> color: rgb(0, 128, 0)
+#t3 -> width: auto
+
+=== a pseudo-element queries its element first
+--- css
+#p { container-type: inline-size; }
+@container (width > 200px) { #p::before { content: "big"; } }
+@container (width > 200px) { #p { color: red; } }
+.q { container-type: inline-size; }
+@container (width > 200px) { .q::before { content: "big"; } }
+--- html
+html
+  body
+    div#p[cqsize="300 10"]
+    div#q1.q[cqsize="300 10"]
+    div#q2.q[cqsize="100 10"]
+    div#q3.q[cqsize="300 10"]
+--- expect
+#p::before -> content: "big"
+#p -> color: rgb(0, 0, 0)
+# siblings with the same rules are not shared: each is its own container
+#q1::before -> content: "big"
+#q2::before -> (none)
+#q3::before -> content: "big"
+
+=== container units
+--- css
+.c { container-type: inline-size; }
+.s { container-type: size; }
+#t1 { width: 50cqw; }
+#t2 { width: 10cqi; height: 10cqh; }
+#t3 { width: 50cqw; height: 10cqb; }
+#t4 { width: 10cqmin; height: 10cqmax; }
+#t5 { container-type: size; }
+#t5::before { content: "x"; width: 50cqw; }
+#t6 { width: 50cqw; }
+#t7 { font-size: 10cqw; }
+.u { width: 50cqw; }
+--- html
+html
+  body
+    div.c[cqsize="400 10"]
+      p#t1
+      p#t2
+      div#t6.c[cqsize="100 10"]
+      p#t7
+    p#t3
+    div.s[cqsize="300 200"]
+      p#t4
+    div#t5[cqsize="100 100"]
+    div.c[cqsize="400 10"]
+      p#u1.u
+    div.c[cqsize="200 10"]
+      p#u2.u
+--- expect
+#t1 -> width: 200px
+#t2 -> width: 40px
+# an inline-size container has no height: the small viewport's
+#t2 -> height: 76.8px
+#t3 -> width: 512px
+#t3 -> height: 76.8px
+#t4 -> width: 20px
+#t4 -> height: 30px
+#t5::before -> width: 50px
+#t6 -> width: 200px
+#t7 -> font-size: 40px
+# elements whose parents share a style still get their own container's size
+#u1 -> width: 200px
+#u2 -> width: 100px
+
+=== a shadow host is the container of its shadow tree
+--- css
+#h { container-type: inline-size; }
+--- css #h
+@container (min-width: 100px) { #in { color: green; } }
+--- html
+html
+  body
+    div#h[cqsize="300 10"]
+      ::shadow
+        p#in
+--- expect
+#h / #in -> color: rgb(0, 128, 0)

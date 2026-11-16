@@ -415,11 +415,13 @@ typedef struct AuStyleRare {
      * lists (au_style_mask_layer). */
     AuCssBlob *mask_image, *mask_mode, *mask_position_x, *mask_position_y, *mask_size, *mask_repeat,
         *mask_origin, *mask_clip;
+    AuCssBlob *container_name; /* NULL for none; IDENT or LIST of IDENT */
     AuColor stop_color;
     float stop_opacity;
     uint8_t outline_style, transform_style, backface_visibility, object_fit, resize, appearance,
         scroll_behavior, contain, isolation, mix_blend_mode, text_decoration_line, text_decoration_style,
-        text_overflow, user_select, box_orient, vector_effect, mask_type, dominant_baseline;
+        text_overflow, user_select, box_orient, vector_effect, mask_type, dominant_baseline,
+        container_type; /* AU_CONTAINER_TYPE_* */
 } AuStyleRare;
 
 typedef enum {
@@ -464,7 +466,10 @@ enum {
      * whose background, border or box-shadow comes from author styles:
      * layout paints it as a plain CSS box instead of a native-looking
      * control, as browsers do for appearance: auto. */
-    AU_STYLE_F_AUTHOR_DECOR = 16
+    AU_STYLE_F_AUTHOR_DECOR = 16,
+    /* Uses a container unit resolved against a container's size: not
+     * shared with an element that has the same parent style. */
+    AU_STYLE_F_CONTAINER_UNITS = 32
 };
 
 AuStyle *au_style_retain(AuStyle *s);
@@ -700,6 +705,26 @@ enum {
 int au_css_resolver_viewport_restyle(const AuCssResolver *r);
 const AuCssDevice *au_css_resolver_device(const AuCssResolver *r);
 void au_css_resolver_set_metrics(AuCssResolver *r, AuCssMetricsFn fn, void *ctx);
+/* ---- Container queries ----
+ * Size queries (@container) and container units read the size of a query
+ * container, which layout knows: fn sets *w and *h to the content-box
+ * size of el's box in the last layout and returns false when el has none.
+ * Without it, size queries are false and container units are small
+ * viewport units. A style pass reads sizes from the last layout; after
+ * each layout, au_css_resolver_containers_changed marks the containers
+ * whose size is not the one read, and the caller restyles and lays out
+ * again, a bounded number of times. */
+typedef bool (*AuCssContainerSizeFn)(void *ctx, const AuElement *el, float *w, float *h);
+void au_css_resolver_set_container_size(AuCssResolver *r, AuCssContainerSizeFn fn, void *ctx);
+/* True when a style read some container's size. */
+bool au_css_resolver_has_containers(const AuCssResolver *r);
+/* Marks for restyle the flat subtree of each container (in doc) whose
+ * size differs from the size read, and returns true if there was one:
+ * then call au_css_restyle and lay out again. */
+bool au_css_resolver_containers_changed(AuCssResolver *r, AuDocument *doc);
+/* Drops the references the resolver holds to containers (call it before
+ * the document goes). */
+void au_css_resolver_forget_containers(AuCssResolver *r);
 /* Sets the font preferences (copied) and restyles everything. A new
  * resolver uses au_css_font_prefs_default. Values out of range (sizes
  * not above 0, zoom not above 0) fall back to the defaults. */

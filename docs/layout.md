@@ -139,10 +139,11 @@ children, to a shadow root's children or to a subtree with a slot in a
 shadow tree on the host's parent, so the host's boxes are built again
 ("Shadow trees" below). The differential check walks the flat tree.
 
-A restyle that depends on a box's size (container queries) can feed the
-boxes whose style changed to `au_layout_styles_changed` as it is; a
-difference that changes the boxes is then rebuilt there, not in the
-whole tree.
+The restyle after a container query round goes through
+`au_layout_styles_changed` like any other ("Container query rounds"
+below); a difference that changes the boxes is rebuilt there, not in
+the whole tree.
+
 To run the tests and fuzzers under it, configure a tree with
 `cmake -S . -B build/check -G Ninja -DCMAKE_C_FLAGS=-DAURA_INCR_CHECK`
 and run `ctest --test-dir build/check` or a fuzzer from it. The check
@@ -173,6 +174,45 @@ its geometry there is the previous layout's.
 page area's width (`relayout` in `browser.c`), and `check_hscroll`
 corrects it after the layout. Deciding from the old content width cost
 a second pass on every resize of a page that follows the window.
+
+### Container query rounds
+
+To evaluate container queries after a layout, the document view runs
+`container_rounds` (`src/page/docview.c`) at the end of
+`au_docview_update`, only when the resolver has read a container
+(`au_css_resolver_has_containers`). Each round:
+
+1. asks `au_css_resolver_containers_changed` which containers changed
+   size, and stops when none did;
+2. restyles (`au_css_restyle`) and passes the changed styles to
+   `au_layout_styles_changed`;
+3. lays out again (`au_layout_update`).
+
+The loop stops after `CQ_ROUNDS` (4) rounds. A chain of containers in
+which each one's size depends on a query of the one above settles one
+level per round, so a fifth level keeps the style of the previous
+round. A page without `@container` rules or container units never
+enters the loop.
+
+`au_layout_css_container_size` gives the resolver the content-box size
+of an element's block box (`LK_BLOCK` with `LF_HAS_LAYOUT`); an element
+without one has no size, and its queries do not match until it has.
+
+### Size containment
+
+`container-type: size` and `contain: size` contain both axes,
+`container-type: inline-size` the width (`l_size_contained`, which
+returns bit 1 for width and bit 2 for height). It applies to flow,
+flex and grid boxes that are not anonymous and not replaced.
+
+- A contained width makes the box's intrinsic widths 0
+  (`l_intrinsic`), so a shrink-to-fit or flex item container needs a
+  width of its own.
+- A contained height makes an auto height 0, plus padding and border
+  (`l_layout_content`, and `finish_block` for in-flow blocks); an
+  `aspect-ratio` still gives a height. The children are laid out and
+  overflow.
+- A change of `container-type` relayouts the box (`style_diff`).
 
 ## Costs that must stay linear
 

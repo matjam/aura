@@ -58,6 +58,8 @@ static const char *const decls[] = {
     "-webkit-line-clamp:2", "-webkit-box-orient:vertical", "background:linear-gradient(red,blue)",
     "box-shadow:3px 3px 5px black", "outline:2px solid", "text-decoration:underline",
     "text-shadow:1px 1px red", "text-transform:uppercase", "tab-size:3", "columns:2", "content:'x'",
+    "container-type:inline-size", "container-type:size", "container:c / size", "width:50cqw", "height:20cqh",
+    "padding:5cqmin", "font-size:4cqi",
     "display:inline-table", "display:table-row", "display:table-row-group", "display:table-header-group",
     "display:table-footer-group", "display:table-column", "display:table-column-group", "display:table-caption",
     "border-collapse:collapse", "border-spacing:4px 9px", "table-layout:fixed", "empty-cells:hide",
@@ -237,12 +239,17 @@ int main(int argc, char **argv)
         static const char *const sels[] = {"div", "p::before", "li::marker", "span:hover", "*", "a:active",
                                            "#e1", "td", "ul li", "q::after", "table", "tr", "th", "col",
                                            "caption", "tbody"};
+        static const char *const cqs[] = {"(min-width:100px)", "c (width > 50px)", "(height < 30px) or (orientation:portrait)",
+                                          "not (inline-size >= 200px)", "(aspect-ratio > 1) and (block-size > 0)"};
         for (int r = 0; r < nr; r++) {
+            int cq = rnd(4) == 0;
+            if (cq)
+                au_buf_printf(&b, "@container %s{", cqs[rnd(sizeof cqs / sizeof cqs[0])]);
             au_buf_printf(&b, "%s{", sels[rnd(sizeof sels / sizeof sels[0])]);
             int nd = (int)rnd(4) + 1;
             for (int d = 0; d < nd; d++)
                 au_buf_printf(&b, "%s;", decls[rnd(sizeof decls / sizeof decls[0])]);
-            au_buf_puts(&b, "}");
+            au_buf_puts(&b, cq ? "}}" : "}");
         }
         au_buf_puts(&b, "</style><body>");
         if (rnd(10) == 0) {
