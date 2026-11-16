@@ -1727,8 +1727,12 @@ void browserwin_page_timings(BrowserWin *b)
                  (unsigned long)(ks1.styled_elements - ks0.styled_elements),
                  (unsigned long)(ks1.layouts - ks0.layouts));
     } else {
-        snprintf(l0, sizeof l0, "%.80s: first paint %lu ms, loaded in %lu ms (emulated timings vary).",
-                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms);
+        snprintf(l0, sizeof l0,
+                 "%.60s: first paint %lu ms, loaded in %lu ms (emulated timings vary). Source %luK held in %luK, "
+                 "compressed in %lu ms.",
+                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms,
+                 (unsigned long)(st2.source_bytes / 1024), (unsigned long)(st2.source_held / 1024),
+                 (unsigned long)st2.source_pack_ms);
     }
     snprintf(l1, sizeof l1,
              "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu "
