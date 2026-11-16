@@ -953,6 +953,12 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
         if (!dv->slim_scrolls)
             dv->slim_scrolls = au_layout_scroll_save(dv->layout, &dv->nslim_scrolls);
         au_layout_release(dv->layout);
+        /* Its style sheet text is packed now rather than by the idle
+         * pass, which a hidden view no longer gets: a document left within
+         * a few seconds of loading would otherwise keep the raw text (about
+         * 2 MB for a site with large sheets). One sheet a call, bounded. */
+        for (int n = 0; n < 64 && au_docview_pack_sheets(dv); n++) {
+        }
     } else if (dv->hidden_image_budget) {
         au_image_cache_set_budget(c, dv->hidden_image_budget);
         dv->hidden_image_budget = 0;
