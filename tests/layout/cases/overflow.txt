@@ -304,3 +304,37 @@ pixel 59 30 ff0000
 pixel 61 30 ffffff
 pixel 1 1 ffffff
 pixel 30 5 00ff00
+
+=== a stacking context's overflow clip clips hit testing of its positioned descendants
+<body style="margin:0">
+<div style="display:flex">
+<div id=a style="width:50px;height:50px"><div style="position:relative;overflow:hidden;transform:scale(1);width:50px;height:50px"><div id=ia style="position:relative;width:100px;height:50px;background:#ff0000"></div></div></div>
+<div id=b style="width:50px;height:50px"><div style="position:relative;overflow:hidden;transform:scale(1);width:50px;height:50px"><div id=ib style="position:relative;left:-50px;width:100px;height:50px;background:#0000ff"></div></div></div>
+<div id=c style="width:50px;height:50px"><div style="position:relative;z-index:0;overflow:hidden;width:50px;height:50px"><div id=ic style="position:absolute;left:-100px;top:0;width:150px;height:50px;background:#00ff00"></div></div></div>
+</div>
+---
+// Each wrapper clips and is a stacking context (a transform, a z-index),
+// so its positioned content is in its own layer list. The content of the
+// second and third reaches left over the first; a point outside a
+// wrapper's clip must not reach it (reCAPTCHA's 4x4 image tiles: every
+// click went to the last tile).
+pixel 25 25 ff0000
+pixel 75 25 0000ff
+pixel 125 25 00ff00
+hit 25 25 #ia
+hit 75 25 #ib
+hit 125 25 #ic
+
+=== a scaled stacking context clips hit testing to its scaled clip
+<body style="margin:0">
+<div style="display:flex">
+<div id=a style="width:50px;height:50px"><div style="position:relative;overflow:hidden;transform:scale(1);width:50px;height:50px"><div id=ia style="position:relative;width:100px;height:50px;background:#ff0000"></div></div></div>
+<div id=b style="width:50px;height:50px"><div style="position:relative;overflow:hidden;transform:scale(.5);width:50px;height:50px"><div id=ib style="position:relative;left:-50px;width:100px;height:50px;background:#0000ff"></div></div></div>
+</div>
+---
+// the second wrapper shows as 25x25 about its centre: 62.5 to 87.5
+pixel 75 25 0000ff
+pixel 55 25 ffffff
+hit 75 25 #ib
+hit 55 25 #b
+hit 25 25 #ia
