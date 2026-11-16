@@ -3,7 +3,7 @@
 # and reference decodes made with the host's own decoders by the
 # generator scripts (see each script's header).
 #
-# To run a long fuzz session, build with sanitizers (see CLAUDE.md) and run
+# To run a long fuzz session, build with sanitizers (see docs/building.md) and run
 #   fuzz_image ITERATIONS SEED tests/image/vectors/*/*
 include(${CMAKE_CURRENT_SOURCE_DIR}/common.cmake OPTIONAL)
 include(${CMAKE_CURRENT_SOURCE_DIR}/png.cmake OPTIONAL)

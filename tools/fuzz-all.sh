@@ -7,7 +7,7 @@
 #   JOBS     how many run at once (default 4)
 #   SEED     the seed given to each (default 1)
 #   BUILD    the build tree (default build/asan, the sanitizer build:
-#            see Build and test in CLAUDE.md)
+#            see docs/building.md)
 #
 # The fuzzers are copied to RUN/fuzz/bin first, so a rebuild during the
 # run does not replace a program that is running (macOS kills it). Each

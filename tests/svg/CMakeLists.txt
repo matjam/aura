@@ -1,6 +1,6 @@
 # SVG tests: grammars, XML, rendering, and fuzzers for the XML parser,
 # the path parser and the SVG image pipeline. ctest runs short fuzz
-# sessions; for long ones build with sanitizers (see CLAUDE.md) and run
+# sessions; for long ones build with sanitizers (see docs/building.md) and run
 #   build/asan/tests/svg/fuzz_svg ITERATIONS SEED tests/svg/corpus/*
 add_executable(test_svg ${CMAKE_CURRENT_SOURCE_DIR}/test_svg.c)
 target_link_libraries(test_svg aura_engine)
