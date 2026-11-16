@@ -1085,27 +1085,91 @@ function weight(c) {
     if (SPACE.test(ch)) return 0x100000 + c;
     return 0x200000 + c;
 }
+/* a sort compares each string many times, so the decomposed forms of the
+ * last few hundred strings are kept */
+const prepCache = [new Map(), new Map()];
 function prep(str, s) {
-    if (!isAscii(str)) str = str.normalize('NFD');
-    if (s.ignorePunctuation) str = str.replace(/[\p{P}\p{Z}\s]+/gu, '');
-    return str;
+    const cache = prepCache[s.ignorePunctuation ? 1 : 0];
+    let r = cache.get(str);
+    if (r !== undefined) return r;
+    r = isAscii(str) ? str : str.normalize('NFD');
+    if (s.ignorePunctuation) r = r.replace(/[\p{P}\p{Z}\s]+/gu, '');
+    if (cache.size >= 512) cache.clear();
+    if (str.length <= 256) cache.set(str, r);
+    return r;
 }
 const isMark = (c) => c >= 0x300 && (c <= 0x36f || MARK.test(String.fromCodePoint(c)));
+const ASCII_W = [];
+for (let c = 0; c < 128; c++) ASCII_W.push(weight(c));
+/* compares two strings whose characters up to the first difference are
+ * ASCII; null when a character that is not ASCII is reached first */
+function compareAscii(s, a, b) {
+    const n = a.length, m = b.length;
+    let i = 0;
+    while (i < n && i < m && a.charCodeAt(i) === b.charCodeAt(i)) i++;
+    if (s.numeric) while (i > 0 && a.charCodeAt(i - 1) >= 48 && a.charCodeAt(i - 1) <= 57) i--;
+    let j = i;
+    while (i < n && j < m) {
+        const ca = a.charCodeAt(i), cb = b.charCodeAt(j);
+        if (ca > 127 || cb > 127) return null;
+        if (s.numeric && ca >= 48 && ca <= 57 && cb >= 48 && cb <= 57) return null;
+        if (ca !== cb) {
+            const wa = ASCII_W[ca], wb = ASCII_W[cb];
+            if (wa !== wb) return wa < wb ? -1 : 1;
+        }
+        i++;
+        j++;
+    }
+    if (i < n || j < m) {
+        const c = i < n ? a.charCodeAt(i) : b.charCodeAt(j);
+        if (c > 127) return null;
+        return i < n ? 1 : -1;
+    }
+    if (s.sensitivity === 'base' || s.sensitivity === 'accent') return 0;
+    for (let k = 0; k < n; k++) {
+        const x = a.charCodeAt(k), y = b.charCodeAt(k);
+        if (x !== y) return (x >= 97 ? -1 : 1) * (s.caseFirst === 'upper' ? -1 : 1);
+    }
+    return 0;
+}
 function compareStrings(s, a, b) {
-    a = prep(String(a), s);
-    b = prep(String(b), s);
+    a = String(a);
+    b = String(b);
     if (a === b) return 0;
-    /* primary: base letters, folded */
-    let i = 0, j = 0;
+    if (!s.ignorePunctuation) {
+        const r = compareAscii(s, a, b);
+        if (r !== null) return r;
+    }
+    a = prep(a, s);
+    b = prep(b, s);
+    if (a === b) return 0;
+    /* primary: base letters, folded. An identical prefix differs at no
+     * level, so the walk starts after it (at a digit run's start when
+     * digits compare as numbers, and never inside a surrogate pair). */
+    let k = 0;
+    while (k < a.length && k < b.length && a.charCodeAt(k) === b.charCodeAt(k)) k++;
+    if (k > 0 && (a.charCodeAt(k - 1) & 0xfc00) === 0xd800) k--;
+    if (s.numeric) while (k > 0 && a.charCodeAt(k - 1) >= 48 && a.charCodeAt(k - 1) <= 57) k--;
+    let i = k, j = k;
+    const cp = (str, x) => {
+        const c = str.charCodeAt(x);
+        return (c & 0xfc00) === 0xd800 ? str.codePointAt(x) : c;
+    };
     for (;;) {
-        while (i < a.length && isMark(a.codePointAt(i))) i += a.codePointAt(i) > 0xffff ? 2 : 1;
-        while (j < b.length && isMark(b.codePointAt(j))) j += b.codePointAt(j) > 0xffff ? 2 : 1;
-        if (i >= a.length || j >= b.length) {
-            if (i < a.length) return 1;
-            if (j < b.length) return -1;
+        let ca = i < a.length ? cp(a, i) : -1, cb = j < b.length ? cp(b, j) : -1;
+        while (ca >= 0x300 && isMark(ca)) {
+            i += ca > 0xffff ? 2 : 1;
+            ca = i < a.length ? cp(a, i) : -1;
+        }
+        while (cb >= 0x300 && isMark(cb)) {
+            j += cb > 0xffff ? 2 : 1;
+            cb = j < b.length ? cp(b, j) : -1;
+        }
+        if (ca < 0 || cb < 0) {
+            if (ca >= 0) return 1;
+            if (cb >= 0) return -1;
             break;
         }
-        const ca = a.codePointAt(i), cb = b.codePointAt(j);
         if (s.numeric && ca >= 48 && ca <= 57 && cb >= 48 && cb <= 57) {
             let ei = i, ej = j;
             while (ei < a.length && a.charCodeAt(ei) >= 48 && a.charCodeAt(ei) <= 57) ei++;
@@ -1117,8 +1181,10 @@ function compareStrings(s, a, b) {
             j = ej;
             continue;
         }
-        const wa = weight(ca), wb = weight(cb);
-        if (wa !== wb) return wa < wb ? -1 : 1;
+        if (ca !== cb) {
+            const wa = ca < 128 ? ASCII_W[ca] : weight(ca), wb = cb < 128 ? ASCII_W[cb] : weight(cb);
+            if (wa !== wb) return wa < wb ? -1 : 1;
+        }
         i += ca > 0xffff ? 2 : 1;
         j += cb > 0xffff ? 2 : 1;
     }

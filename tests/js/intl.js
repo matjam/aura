@@ -339,6 +339,10 @@ test('Collator and localeCompare', () => {
     assert.equal('b'.localeCompare('a'), 1);
     assert.equal('ä'.localeCompare('z', 'de'), -1);
     assert.equal('a'.localeCompare('A', undefined, { sensitivity: 'base' }), 0);
+    assert.equal('item10'.localeCompare('item9', undefined, { numeric: true }), 1);
+    assert.equal(String.prototype.localeCompare.length, 1);
+    assert.equal(Number.prototype.toLocaleString.length, 0);
+    assert.equal(Date.prototype.toLocaleDateString.length, 0);
     assert.deepEqual(c.resolvedOptions(), { locale: 'en-US', usage: 'sort', sensitivity: 'variant',
         ignorePunctuation: false, collation: 'default', numeric: false, caseFirst: 'false' });
 });

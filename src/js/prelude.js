@@ -822,17 +822,22 @@ const thisString = (v) => {
     if (v === null || v === undefined) throw new TypeError('String.prototype.localeCompare called on null or undefined');
     return String(v);
 };
-defProps(Number.prototype, {
-    toLocaleString() { return intl().numberToLocale(thisNumber(this), arguments[0], arguments[1]); },
-});
-defProps(BigInt.prototype, {
-    toLocaleString() { return intl().numberToLocale(BigInt.prototype.valueOf.call(this), arguments[0], arguments[1]); },
-});
-defProps(Date.prototype, {
-    toLocaleString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'any'); },
-    toLocaleDateString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'date'); },
-    toLocaleTimeString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'time'); },
-});
-defProps(String.prototype, {
-    localeCompare(that) { return intl().compare(thisString(this), String(that), arguments[1], arguments[2]); },
-});
+/* the methods keep their standard lengths (0, and 1 for localeCompare) */
+const intlMethods = (proto, props, len) => {
+    defProps(proto, props);
+    for (const k of Object.keys(props)) Object.defineProperty(proto[k], 'length', { value: len });
+};
+intlMethods(Number.prototype, {
+    toLocaleString(l, o) { return intl().numberToLocale(thisNumber(this), l, o); },
+}, 0);
+intlMethods(BigInt.prototype, {
+    toLocaleString(l, o) { return intl().numberToLocale(BigInt.prototype.valueOf.call(this), l, o); },
+}, 0);
+intlMethods(Date.prototype, {
+    toLocaleString(l, o) { return intl().dateToLocale(thisTime(this), l, o, 'any'); },
+    toLocaleDateString(l, o) { return intl().dateToLocale(thisTime(this), l, o, 'date'); },
+    toLocaleTimeString(l, o) { return intl().dateToLocale(thisTime(this), l, o, 'time'); },
+}, 0);
+intlMethods(String.prototype, {
+    localeCompare(that, l, o) { return intl().compare(thisString(this), String(that), l, o); },
+}, 1);
