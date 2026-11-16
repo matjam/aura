@@ -30,6 +30,13 @@ VERSION").
   `release-please-config.json` and remove it after that release.
 - Before a release, test on the stock base as well as the Enforcer base
   ([`guest-testing.md`](guest-testing.md)).
+- Before a release, make the longer fuzzing pass on `main` in the
+  sanitizer tree: 3,000 Domato pages over ten new seeds (about 6
+  minutes four seeds at a time) and `tools/fuzz-all.sh 120` with a new
+  seed (about 13 minutes). [`fuzzing.md`](fuzzing.md), "The pass before
+  a release", gives the commands and the table of seeds to add a row
+  to. A report is fixed, with a regression, before the release pull
+  request is merged.
 
 ## To build the archive locally
 
@@ -67,7 +74,7 @@ repos/OWNER/REPO/commits/TAG -q .sha`) and change both.
 | Job | What it does |
 |---|---|
 | `host` | runs `./build.sh test` on Ubuntu (GCC) and macOS (Apple Clang) |
-| `sanitize` | runs the tests on Ubuntu under Clang's AddressSanitizer and UBSan, with leak detection off |
+| `sanitize` | runs the tests on Ubuntu under Clang's AddressSanitizer and UBSan (with `float-cast-overflow` named, as in [`building.md`](building.md)), with leak detection off |
 | `toolchain` | builds Retro68 when the cache has none |
 | `ppc` | runs `./build.sh ppc` and uploads the two archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and `Aura-VERSION-SHORTHASH-sea-bin` |
 

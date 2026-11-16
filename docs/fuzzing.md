@@ -115,6 +115,47 @@ the input, a call sequence), write a test instead, as
 `test_textarea_wrap_scaling` in `tests/forms` and `test_cut_sequences`
 in `tests/html` do. Fix the engine, never the fuzzer's input.
 
+- **A cost that grows with the square of the page:** add a pattern to
+  `tests/layout/test_scaling.c`, which lays a generated page out at two
+  sizes and fails when four times the content takes more than ten times
+  as long ([`layout.md`](layout.md), "Costs that must stay linear").
+- **A node used after a listener freed it:** add the event, what the
+  listener destroys or the control to `tests/forms/test_input_lifetime.c`
+  (below).
+
+## To test input while listeners destroy things
+
+`tests/forms/test_input_lifetime.c` loads a page of form controls with
+one listener for one event that destroys something (the target, its
+form, an ancestor, the body, the document, the frame), then drives one
+control with the mouse, the keyboard and the Edit commands. It checks
+the rule in [`conventions.md`](conventions.md), "Pointers across
+script"; a failure is an AddressSanitizer report.
+
+- Under ctest (`forms_input_lifetime`) it runs 1,323 of its 10,710
+  cases (about a minute and a half in the sanitizer tree).
+- After a change to `src/page/forms.c`, to the input paths of
+  `docview.c` or `frames.c`, or to event dispatch, run all of it in the
+  sanitizer tree with script garbage collected at every exit from
+  script, one process per event:
+
+  ```bash
+  cp build/asan/tests/forms/test_input_lifetime run/
+  seq 0 20 | AURA_TEST_GC_STRESS=1 AURA_TEST_VERBOSE=1 xargs -P 8 -I{} \
+      sh -c 'run/test_input_lifetime all {} > run/lifetime-{}.log 2>&1 || echo "event {} failed"'
+  ```
+
+  The last case a log names is the one that failed; run it again with its three numbers
+  (`test_input_lifetime EVENT DESTROYER CONTROL`).
+
+**Script garbage and freed nodes.** A script wrapper holds its node, and
+a wrapper that is garbage in a reference cycle lives until the collector
+runs, which on a small page is seldom: a node a listener removed can
+stay allocated for a long time, and a pointer the engine kept to it goes
+unnoticed. `au_js_set_gc_stress(true)` (`src/js/js.h`) makes every
+runtime collect each time script is left; `test_input_lifetime` turns
+it on with `AURA_TEST_GC_STRESS=1`.
+
 ## Rules the fuzzers enforce, for new code
 
 - Convert a float that a page controls to an integer with `au_f2i` or
@@ -128,6 +169,20 @@ in `tests/html` do. Fix the engine, never the fuzzer's input.
   (`AU_SHADOW_MAX_BLUR`).
 - Do not measure a text prefix from its start in a loop over its
   characters; start from `l_prefix_seek`.
+- Do not do work per line, per float or per box that grows with the
+  paragraph or the page (an insertion into the middle of an array, a
+  measurement of the rest of a text, a walk of every float): see
+  [`layout.md`](layout.md), "Costs that must stay linear".
+- Hold a reference to a node across any call that can run script, and
+  check that it is still in the document afterwards
+  ([`conventions.md`](conventions.md), "Pointers across script").
+
+**To check the float indexes**, build a tree with
+`-DCMAKE_C_FLAGS="-DAURA_FLOATS_CHECK -fsanitize=address,undefined"`
+and run `fuzz_layout`, `fuzz_page`, `fuzz_css` and the layout cases in
+it: every question to a formatting context's float list is then answered
+by the index and by the plain walk, from the third float on, and a
+difference aborts ([`layout.md`](layout.md)).
 
 **Script that does not end** is stopped by its time limit, which the
 engine checks once in ten thousand steps. A native that can take long
@@ -179,9 +234,55 @@ interfaces and attribute values. Nothing of Domato is committed here.
   to `tests/js/regress` (replayed by `fuzz_dom`), or to
   `tests/page/regress` when it needs no script; do not commit Domato's
   pages whole.
-- **Runs so far (2026-11-15, macOS host, sanitizer build):** 200 pages
-  of seed 1 and 1000 pages of seed 2, each page about 0.5 MB, with no
-  sanitizer report, crash or slow page. 1000 pages took about 3 minutes.
+
+### The pass before a release
+
+Before a release, run at least 3,000 Domato pages over ten or more
+seeds that have not been used, in the sanitizer tree, from a copy of the
+runner (a rebuild must not replace it while it runs):
+
+```bash
+tests/domato/fetch-domato.sh
+mkdir -p run/domato && cp build/asan/tests/js/fuzz_domato run/domato/
+for seed in 201 202 203 204 205 206 207 208 209 210; do
+    AURA_FUZZ_VERBOSE=1 tests/domato/run-domato.sh run/domato/fuzz_domato build 300 $seed 900 \
+        > run/domato/seed-$seed.log 2>&1 || echo "seed $seed failed"
+done
+grep -l 'runtime error' run/domato/seed-*.log
+```
+
+- **Seeds.** Take seeds above the highest in the table below, and add a
+  row for the pass. A seed gives the same pages again, so a used seed
+  finds nothing new; a seed that found a bug is recorded with the bug,
+  and its page can be made again (`tests/domato/generate.py build/domato
+  OUT COUNT SEED`).
+- **Time.** 300 pages take about 100 seconds in the sanitizer build on
+  an 8-core Mac with four seeds running at once, so the ten seeds take
+  about 6 minutes run four at a time (`xargs -P 4`) and about 15 one
+  after another. The pages take about 150 MB per seed under
+  `build/domato-out`; delete them afterwards.
+- **A failure** is a seed whose log ends without `fuzz_domato: N pages`,
+  or holds `runtime error` (UBSan goes on after a report). The last
+  page the log names is the one that failed. Reproduce, reduce and add
+  a regression as above, fix the engine, and run the seed again.
+- Run `tools/fuzz-all.sh 120` with a new seed in the same session
+  ("To run them all").
+
+### Runs so far
+
+Sanitizer build, macOS host (8 cores), pages of about 0.5 MB. Pages per
+seed; "not recorded" where no log of the count was kept.
+
+| Date | Seeds | Pages per seed | Found |
+|---|---|---|---|
+| 2026-11-15 | 1 | 200 | nothing |
+| 2026-11-15 | 2 | 1,000 | nothing |
+| 2026-11-15 | 23 | not recorded | page 197: an element freed by a focus listener and read by `au_forms_mouse` (`tests/forms/test_input_lifetime.c`) |
+| 2026-11-15 | 29 | not recorded | page 79: inline layout that took minutes, `split_seg` ([`layout.md`](layout.md), "Costs that must stay linear") |
+| 2026-11-15 | 31 | not recorded | nothing |
+| 2026-11-15 | 101–107, 109–112 | 300 (79–141 s each, four at a time) | nothing |
+| 2026-11-15 | 108 | 1, then 400 after the fix | page 0: `frame_show_html` parsed `srcdoc` text that the old document's unload listener had freed (`tests/js/regress/srcdoc-set-by-unload.js`) |
+| 2026-11-15 | 113–122 | 400 (208–296 s each, four at a time) | nothing |
 
 ## Not fuzzed
 
