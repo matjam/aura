@@ -102,15 +102,16 @@ static void process_line(AuSseParser *p, const char *s, size_t n, const AuSseCal
     } else if (is_field(s, flen, "data")) {
         if (p->data_over)
             return;
-        if (p->data.len + vlen + 1 > p->max_data) {
+        /* vlen bytes become at most 3 * vlen (each bad byte is U+FFFD) */
+        if (vlen <= p->max_data)
+            put_utf8(&p->data, v, vlen);
+        au_buf_putc(&p->data, '\n');
+        if (vlen > p->max_data || p->data.len > p->max_data) {
             /* Too large: the event is dropped at its blank line. */
             p->data_over = true;
             au_buf_free(&p->data);
             au_buf_init(&p->data);
-            return;
         }
-        put_utf8(&p->data, v, vlen);
-        au_buf_putc(&p->data, '\n');
     } else if (is_field(s, flen, "id")) {
         if (!memchr(v, 0, vlen)) {
             au_buf_clear(&p->id);
