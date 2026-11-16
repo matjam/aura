@@ -37,7 +37,7 @@ class Blob {
     text() { return Promise.resolve(N.utf8Decode(this._b, false, false)); }
     arrayBuffer() { return Promise.resolve(this._b.slice().buffer); }
     bytes() { return Promise.resolve(this._b.slice()); }
-    stream() { throw new TypeError('Blob streams are not supported'); }
+    stream() { return streams().streamFromBytes(this._b); }
 }
 tag(Blob);
 defGlobal('Blob', Blob);
@@ -268,9 +268,20 @@ defGlobal('Headers', Headers);
 
 /* ---------------- Body, Request, Response ---------------- */
 
-/* Extracts a body: [bytes or null, content type or null]. */
-function extractBody(body) {
+/* A ReadableStream body (only possible once streams.js is loaded: a page
+ * that never touched a stream class cannot hold one). */
+const isStreamBody = (body) => streamsLib !== null && streamsLib.isReadable(body);
+const streamUnusable = (s) => { const st = streamsLib.streamState(s); return st.locked || st.disturbed; };
+/* Extracts a body: [bytes or null, content type or null, stream or
+ * undefined]. A ReadableStream comes back as itself (allowStream), or is
+ * taken as a string (XMLHttpRequest and sendBeacon, whose body types do
+ * not include streams). */
+function extractBody(body, allowStream) {
     if (body === null || body === undefined) return [null, null];
+    if (allowStream && isStreamBody(body)) {
+        if (streamUnusable(body)) throw new TypeError('The body stream is locked or has been read');
+        return [null, null, body];
+    }
     if (typeof body === 'string') return [N.utf8Encode(body.toWellFormed()), 'text/plain;charset=UTF-8'];
     if (body instanceof URLSearchParams) return [N.utf8Encode(body.toString()), 'application/x-www-form-urlencoded;charset=UTF-8'];
     if (body instanceof Blob) return [body._b, body.type || null];
@@ -291,8 +302,6 @@ function extractBody(body) {
         parts.push(N.utf8Encode('--' + boundary + '--\r\n'));
         return [concatBytes(parts), 'multipart/form-data; boundary=' + boundary];
     }
-    if (body !== null && typeof body === 'object' && typeof body.getReader === 'function')
-        throw new TypeError('A ReadableStream body is not supported');
     return [N.utf8Encode(str(body).toWellFormed()), 'text/plain;charset=UTF-8'];
 }
 /* Parses a multipart/form-data body (bytes) with its boundary. */
@@ -327,14 +336,85 @@ function parseMultipart(bytes, boundary) {
     }
     return fd;
 }
+/* ---- A network body as it arrives ----
+ * A response's body from the network is a feed until script reads it:
+ * the pieces are kept in order, then handed to whichever reader comes
+ * (text() and the other methods collect them; Response.body turns the
+ * feed into a ReadableStream, streams.js bodyFromFeed, which also pauses
+ * the network while the stream holds more than its reader has taken). A
+ * clone gets a feed of its own. A source is the network side of a
+ * response: { feeds, ended, abort, pause, paused, update }. A feed is
+ * { src, chunks, state (0 open, 1 ended, 2 failed), err, sink, waiter }.
+ * Plain records and four functions, so that the prelude stays small. */
+const newFeed = (src) => {
+    const f = { src, chunks: [], state: 0, err: null, sink: null, waiter: null };
+    src.feeds.push(f);
+    return f;
+};
+/* The network gave a piece (kind 0), ended (1) or failed (2). */
+function feedEvent(src, kind, v) {
+    if (kind) src.ended = true;
+    src.feeds.forEach((f, i) => {
+        if (kind === 0) {
+            const b = i ? v.slice() : v;
+            if (f.sink) f.sink.chunk(b); else f.chunks.push(b);
+            return;
+        }
+        f.state = kind;
+        f.err = v;
+        if (f.sink) { if (kind === 1) f.sink.close(); else f.sink.error(v); return; }
+        const w = f.waiter;
+        f.waiter = null;
+        if (w && kind === 1) w[0](concatBytes(f.chunks));
+        else if (w) w[1](v);
+        if (w || kind === 2) f.chunks = [];
+    });
+    if (kind === 0 && src.update) src.update(src);
+}
+/* text(), json(), ...: the whole body */
+function feedCollect(f) {
+    if (f.state === 1) { const all = concatBytes(f.chunks); f.chunks = []; return Promise.resolve(all); }
+    if (f.state === 2) return Promise.reject(f.err);
+    return new Promise((a, b) => { f.waiter = [a, b]; });
+}
+function feedFork(f) {
+    const g = newFeed(f.src);
+    g.chunks = f.chunks.map((c) => c.slice());
+    g.state = f.state;
+    g.err = f.err;
+    return g;
+}
+const nullBodyStatus = (s) => s === 101 || s === 103 || s === 204 || s === 205 || s === 304;
+
+/* A Request's or Response's body is one of: none (_hasBody false), bytes
+ * held in memory (_bytes), a network feed (_feed) or a ReadableStream
+ * (_stream, made when script asks for .body or passes a stream). */
 const bodyMixin = {
-    /* Streams are not implemented: body is undefined, never a ReadableStream. */
-    get body() { return undefined; },
-    get bodyUsed() { return !!this._used; },
+    get body() {
+        if (!this._hasBody) return null;
+        if (this._stream) return this._stream;
+        const lib = streams();
+        if (this._used) this._stream = lib.usedStream();
+        else if (this._feed) this._stream = lib.bodyFromFeed(this._feed);
+        else this._stream = lib.streamFromBytes(this._bytes || new Uint8Array(0));
+        this._feed = null;
+        this._bytes = null;
+        return this._stream;
+    },
+    get bodyUsed() {
+        if (this._stream) return streamsLib.streamState(this._stream).disturbed;
+        return !!this._used;
+    },
+    _unusable() { return this._stream ? streamUnusable(this._stream) : !!this._used; },
     _consume() {
-        if (this._used) return Promise.reject(new TypeError('The body has already been read'));
+        if (this._unusable()) return Promise.reject(new TypeError('The body has already been read'));
+        if (!this._hasBody) return Promise.resolve(new Uint8Array(0));
+        if (this._stream) return streamsLib.readAll(this._stream);
         this._used = true;
-        return this._bodyPromise ? this._bodyPromise() : Promise.resolve(this._bytes || new Uint8Array(0));
+        if (this._feed) { const f = this._feed; this._feed = null; return feedCollect(f); }
+        const b = this._bytes || new Uint8Array(0);
+        this._bytes = null;
+        return Promise.resolve(b);
     },
     arrayBuffer() { return this._consume().then((b) => b.slice().buffer); },
     bytes() { return this._consume().then((b) => b.slice()); },
@@ -417,17 +497,29 @@ class Request {
         const hinit = has('headers') ? init.headers : src ? src.headers : undefined;
         if (hinit !== undefined) this.headers._fill(hinit);
         const body = has('body') && init.body !== null ? init.body : null;
-        if ((body !== null || (src && src._bytes)) && (method === 'GET' || method === 'HEAD'))
+        if (src && src._hasBody && body === null && src._unusable()) throw new TypeError('The source request body has been used');
+        if ((body !== null || (src && src._hasBody)) && (method === 'GET' || method === 'HEAD'))
             throw new TypeError('A GET or HEAD request cannot have a body');
+        this._bytes = null;
+        this._stream = null;
+        this._hasBody = false;
         if (body !== null) {
-            const [bytes, type] = extractBody(body);
-            this._bytes = bytes;
+            const [bytes, type, stream] = extractBody(body, true);
+            if (stream) {
+                if (this._keepalive) throw new TypeError('A keepalive request cannot have a stream body');
+                if (!has('duplex') || str(init.duplex) !== 'half') throw new TypeError('A stream body needs duplex: "half"');
+                this._stream = stream;
+            } else this._bytes = bytes;
+            this._hasBody = true;
             if (type && !this.headers.has('content-type')) this.headers.append('content-type', type);
-        } else if (src) {
-            if (src._used) throw new TypeError('The source request body has been used');
-            this._bytes = src._bytes;
-            if (src._bytes && Object.keys(init).length === 0) { /* a plain copy shares the bytes */ }
-        } else this._bytes = null;
+        } else if (src && src._hasBody) {
+            this._hasBody = true;
+            if (src._stream) {
+                /* the new request takes the stream; the source's is used up */
+                this._stream = src._stream;
+                src._stream = streams().usedStream();
+            } else this._bytes = src._bytes;
+        }
     }
     get url() { return this._url; }
     get method() { return this._method; }
@@ -444,7 +536,20 @@ class Request {
     get isHistoryNavigation() { return false; }
     get isReloadNavigation() { return false; }
     get duplex() { return 'half'; }
-    clone() { if (this._used) throw new TypeError('The body has been used'); return new Request(this); }
+    clone() {
+        if (this._unusable()) throw new TypeError('The body has been used');
+        const r = Object.create(Request.prototype);
+        Object.assign(r, this);
+        r.headers = new Headers(this.headers);
+        r.headers._guard = this.headers._guard;
+        r._signal = AbortSignal.any([this._signal]);
+        if (this._stream) {
+            const [a, b] = streamsLib.tee(this._stream);
+            this._stream = a;
+            r._stream = b;
+        }
+        return r;
+    }
 }
 defProps(Request.prototype, bodyMixin);
 tag(Request);
@@ -465,12 +570,17 @@ class Response {
         this._type = 'default';
         this._url = '';
         this._redirected = false;
+        this._bytes = null;
+        this._stream = null;
+        this._feed = null;
+        this._hasBody = false;
         if (body !== null && body !== undefined) {
-            if (status === 101 || status === 103 || status === 204 || status === 205 || status === 304) throw new TypeError('This status cannot have a body');
-            const [bytes, type] = extractBody(body);
-            this._bytes = bytes;
+            if (nullBodyStatus(status)) throw new TypeError('This status cannot have a body');
+            const [bytes, type, stream] = extractBody(body, true);
+            if (stream) this._stream = stream; else this._bytes = bytes;
+            this._hasBody = true;
             if (type && !this.headers.has('content-type')) this.headers.append('content-type', type);
-        } else this._bytes = null;
+        }
     }
     static error() { const r = new Response(); r._type = 'error'; r._status = 0; r.headers._guard = 'immutable'; return r; }
     static redirect(url, status = 302) {
@@ -496,15 +606,16 @@ class Response {
     get ok() { return this._status >= 200 && this._status <= 299; }
     get statusText() { return this._statusText; }
     clone() {
-        if (this._used) throw new TypeError('The body has been used');
+        if (this._unusable()) throw new TypeError('The body has been used');
         const r = Object.create(Response.prototype);
         Object.assign(r, this);
         r.headers = new Headers(this.headers);
         r.headers._guard = this.headers._guard;
-        if (this._bodyPromise) {
-            const p = this._bodyPromise();
-            this._bodyPromise = r._bodyPromise = () => p;
-        }
+        if (this._stream) {
+            const [a, b] = streamsLib.tee(this._stream);
+            this._stream = a;
+            r._stream = b;
+        } else if (this._feed) r._feed = feedFork(this._feed);
         return r;
     }
 }
@@ -570,7 +681,10 @@ function startFetch(method, url, headerList, bytes, cred, mode, dest, cb, opts) 
         case 'error': finished = true; cb.done(false, msg[1] || 'network error'); break;
         }
     }, opts);
-    return () => { if (!finished) { finished = true; N.fetchAbort(id); } };
+    const abort = () => { if (!finished) { finished = true; N.fetchAbort(id); } };
+    /* backpressure: stop or resume reading the response from the network */
+    abort.pause = (paused) => { if (!finished) N.fetchPause(id, paused); };
+    return abort;
 }
 /* A request's options for startFetch. */
 const fetchOpts = (req) => ({
@@ -597,24 +711,33 @@ defGlobal('fetch', function fetch(input, init) {
     let req;
     try {
         req = new Request(input, init);
+        if (req._hasBody && req._unusable()) throw new TypeError('Failed to fetch: the request body has been used');
     } catch (e) {
         return Promise.reject(e);
     }
+    /* A stream body is read whole first and sent with a length: requests
+     * are not streamed (see docs/known-gaps.md). */
+    if (req._stream) return streamsLib.readAll(req._stream).then((bytes) => fetchRequest(req, bytes));
+    const bytes = req._bytes;
+    if (req._hasBody) { req._used = true; req._bytes = null; }
+    return fetchRequest(req, bytes);
+});
+/* fetch() for a Request whose body is bytes (or none). The response is
+ * given as soon as its head arrives; its body follows as a feed. */
+function fetchRequest(req, bodyBytes) {
     return new Promise((resolve, reject) => {
         const signal = req._signal;
         if (signal.aborted) { reject(signal.reason); return; }
         const chunks = [];
+        const src = { feeds: [], ended: false, abort: null, pause: null, paused: false, update: null };
         let response = null, pendingHead = null;
-        let bodyResolve, bodyReject;
-        const bodyP = new Promise((a, b) => { bodyResolve = a; bodyReject = b; });
-        bodyP.catch(() => {});
         let abort = () => {};
         const onAbort = () => {
             abort();
             const reason = signal.reason;
-            if (!response) reject(reason); else bodyReject(reason);
+            if (!response) reject(reason); else feedEvent(src, 2, reason);
         };
-        const makeResponse = (status, text, headers, finalUrl, type, redirected) => {
+        const makeResponse = (status, text, headers, finalUrl, type, redirected, bytes) => {
             const r = Object.create(Response.prototype);
             r._status = status;
             r._statusText = text;
@@ -624,33 +747,40 @@ defGlobal('fetch', function fetch(input, init) {
             r._type = type;
             r._url = finalUrl.replace(/#.*$/, '');
             r._redirected = !!redirected;
-            r._bodyPromise = () => bodyP;
+            r._bytes = null;
+            r._stream = null;
+            r._feed = null;
+            r._hasBody = !nullBodyStatus(status) && req._method !== 'HEAD' && type !== 'opaque' && type !== 'opaqueredirect';
+            if (bytes) r._bytes = bytes;
+            else if (r._hasBody) r._feed = newFeed(src);
             response = r;
             resolve(r);
         };
         try {
-            abort = startFetch(req._method, req._url.replace(/#.*$/, ''), req.headers._l, req._bytes, credNum[req._cred], modeNum[req._mode], 0, {
+            abort = startFetch(req._method, req._url.replace(/#.*$/, ''), req.headers._l, bodyBytes, credNum[req._cred], modeNum[req._mode], 0, {
                 head(...a) {
                     /* with integrity metadata the response waits for its whole body */
                     if (req._integrity) pendingHead = a; else makeResponse(...a);
                 },
-                data(b) { chunks.push(b); },
+                data(b) { if (req._integrity) chunks.push(b); else feedEvent(src, 0, b); },
                 done(ok, msg) {
                     signal.removeEventListener('abort', onAbort);
                     if (ok) {
-                        const all = concatBytes(chunks);
                         if (req._integrity) {
+                            const all = concatBytes(chunks);
                             const opaque = pendingHead && (pendingHead[4] === 'opaque' || pendingHead[4] === 'opaqueredirect');
                             if (opaque || !integrityOk(req._integrity, all)) {
                                 reject(new TypeError('Failed to fetch: the response does not match the integrity metadata'));
                                 return;
                             }
+                            makeResponse(...(pendingHead || [200, 'OK', [], req._url, 'basic', false]), all);
+                            return;
                         }
-                        if (!response) makeResponse(...(pendingHead || [200, 'OK', [], req._url, 'basic', false]));
-                        bodyResolve(all);
+                        if (!response) makeResponse(200, 'OK', [], req._url, 'basic', false);
+                        feedEvent(src, 1, null);
                     } else {
                         const e = new TypeError('Failed to fetch: ' + (msg || 'network error'));
-                        if (!response) reject(e); else bodyReject(e);
+                        if (!response) reject(e); else feedEvent(src, 2, e);
                     }
                 },
             }, fetchOpts(req));
@@ -658,9 +788,11 @@ defGlobal('fetch', function fetch(input, init) {
             reject(e);
             return;
         }
+        src.abort = () => { signal.removeEventListener('abort', onAbort); abort(); };
+        if (abort.pause) src.pause = abort.pause;
         signal.addEventListener('abort', onAbort);
     });
-});
+}
 
 /* navigator.sendBeacon(url, data): a POST that outlives nothing here (a
  * document that goes cancels its requests), sent with credentials. */
@@ -834,6 +966,7 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
         if (this._uploading) fire(this._upload, new ProgressEvent('loadstart', { lengthComputable: true, loaded: 0, total: upTotal }));
         if (this._state !== 1 || !this._send) return;
         let total = 0;
+        let progressAt = -1;
         try {
             this._abort = startFetch(this._method, this._url.replace(/#.*$/, ''), this._headers, bytes,
                 this._cred ? 2 : 1, 0, 0, {
@@ -856,6 +989,11 @@ class XMLHttpRequest extends XMLHttpRequestEventTarget {
                         if (!xhr._send) return;
                         xhr._chunks.push(b);
                         xhr._loaded += b.length;
+                        /* the standard's "roughly 50ms" between progress events
+                         * (the first piece always reports) */
+                        const now = N.now();
+                        if (progressAt >= 0 && now - progressAt < 50) return;
+                        progressAt = now;
                         if (xhr._state === 2) xhr._state = 3;
                         fireSimple(xhr, 'readystatechange', false, false);
                         if (!xhr._send) return;
@@ -1005,6 +1143,22 @@ for (const [k, v] of [['UNSENT', 0], ['OPENED', 1], ['HEADERS_RECEIVED', 2], ['L
 }
 defineHandlers(XMLHttpRequest.prototype, ['readystatechange']);
 for (const C of [XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest]) { tag(C); defGlobal(C.name, C); }
+
+/* ---------------- EventSource ---------------- */
+
+/* EventSource lives in src/js/eventsource.js, compiled to its own
+ * bytecode and read with N.eventSource() the first time script touches
+ * the global. */
+let esLib = null;
+const eventSources = () => esLib || (esLib = N.eventSource()(G, { N, domErr, EventTarget, defineHandlers, startFetch,
+    fire, fireSimple, MessageEvent }));
+Object.defineProperty(G, 'EventSource', {
+    get() { const v = eventSources().EventSource; defGlobal('EventSource', v); return v; },
+    set(v) { defGlobal('EventSource', v); },
+    configurable: true, enumerable: false,
+});
+/* The document is hidden or shown again (P.pageTransition). */
+P.eventSourcesFreeze = function (frozen) { if (esLib) esLib.freeze(frozen); };
 
 /* Script loads for the page (external classic scripts loaded by src/page
  * go through the embedder's loader directly; this is for dynamically

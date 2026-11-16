@@ -586,6 +586,13 @@ void au_net_loader_cancel(AuNetLoader *l, uint32_t id)
     r->finished = true;
 }
 
+void au_net_loader_pause(AuNetLoader *l, uint32_t id, bool paused)
+{
+    Req *r = find(l, id);
+    if (r && r->t && !r->finished && !r->cancelled)
+        au_http_pause(r->t, paused);
+}
+
 static void deliver_early(Req *r)
 {
     AuLoadInfo info;

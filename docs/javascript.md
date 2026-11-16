@@ -343,7 +343,9 @@ QuickJS bytecode and the runtime loads that.
 - A name declared twice across the files stops the runtime from
   starting ("invalid redefinition").
 - `Intl` is not part of the prelude: `src/js/intl.js` is compiled to
-  bytecode of its own and read on first use (see "Intl" below).
+  bytecode of its own and read on first use (see "Intl" below). So are
+  `src/js/streams.js` (the Streams API) and `src/js/eventsource.js`
+  (see "Streams and EventSource" below).
 - A worker has a second, smaller prelude built from `prelude.js`,
   `prelude_web.js`, `prelude_net.js` and `prelude_worker.js`
   (`prelude_worker.bc`): code in the first three must run without a
@@ -474,6 +476,45 @@ Apple silicon) with `aura-host js --stats`:
 | Reading `intl.bc` on first use | | 0.3 ms |
 
 What is left out is in [`known-gaps.md`](known-gaps.md#javascript).
+
+## Streams and EventSource
+
+What the two modules do is in
+[`script-requests-and-cors.md`](script-requests-and-cors.md); this
+section is how they load. Each is a function of the global object and a
+bag of prelude helpers (`H`), compiled to its own bytecode
+(`build/*/gen/streams.bc`, 59,288 bytes on the host;
+`eventsource.bc`, 4,376 bytes) and read by `N.streams()` or
+`N.eventSource()` (`n_lazy` in `runtime.c`), which also adds the codec
+and parser natives of `natives_streams.c` to `N` at that moment.
+
+- `prelude.js` defines the 17 stream globals as accessors, one function
+  per name serving as getter and setter; the first read loads the
+  module and every one becomes a plain data property. `EventSource` is
+  done the same way in `prelude_net.js`.
+- A body's stream is made only when script reads `body`
+  (`streams().bodyFromFeed` and `streamFromBytes`); a network body
+  until then is a plain record (`newFeed`, `feedEvent` in
+  `prelude_net.js`), so the prelude holds no stream code.
+- To add a helper the modules need from the prelude, add it to the `H`
+  bag in `streams()` or `eventSources()`.
+
+What they cost, measured on 2026-11-16 on the host (RelWithDebInfo,
+Apple silicon, the machine busy with another build, so the times are
+higher than in the `Intl` table) with `aura-host js --stats`:
+
+| | Before | After |
+|---|---|---|
+| A context's heap at start-up | 1,751,437 bytes | 1,772,088 bytes (+20 KB) |
+| In use at start-up | 1423 KB | 1438 KB |
+| Start-up time (median of 21, alternating runs) | 6.90 ms | 6.91 ms |
+| The heap after a script that reads a stream and touches `EventSource` | | 1,954,490 bytes (+182 KB over start-up) |
+| Reading `streams.bc` on first use | | 0.6 to 1.2 ms |
+| Reading `eventsource.bc` on first use | | 0.1 to 0.2 ms |
+
+Most of the 20 KB at start-up is the stream code in `prelude_net.js`
+(feeds, bodies that may be streams, the XHR progress throttle) and the
+17 accessors.
 
 ## document.cookie
 

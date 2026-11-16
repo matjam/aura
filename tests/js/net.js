@@ -184,7 +184,7 @@ test('Request carries the fetch options', () => {
         'application/x-www-form-urlencoded;charset=UTF-8');
     assert.equal(new Request('x', { method: 'POST', body: new Blob(['b'], { type: 'text/x-b' }) }).headers.get('content-type'), 'text/x-b');
     assert.equal(new Request('x', { method: 'POST', body: new Uint8Array(2) }).headers.get('content-type'), null);
-    assert.equal(new Response('x').body, undefined, 'there are no streams');
+    assert.ok(new Response('x').body instanceof ReadableStream, 'a body is a stream (streams.js has the rest)');
 });
 
 promise_test('Response bodies: bytes, formData, clone', async () => {

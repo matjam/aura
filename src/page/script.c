@@ -523,6 +523,13 @@ static void f_abort(void *ctx, uint32_t id)
         au_dv_cancel(s->dv, id);
 }
 
+static void f_pause(void *ctx, uint32_t id, bool paused)
+{
+    AuDocScript *s = ctx;
+    if (find_fetch(s, id))
+        au_dv_pause(s->dv, id, paused);
+}
+
 /* A script element's kind from its type and language attributes, as the
  * standard decides it (src/js has the same rule; this one needs no
  * runtime, so a page whose only scripts are data blocks starts none). */
@@ -613,6 +620,7 @@ static bool ensure_js(AuDocScript *s)
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
+    h.fetcher.pause = f_pause;
     h.frames_changed = h_frames_changed;
     h.frame_count = h_frame_count;
     h.frame_at = h_frame_at;
@@ -991,6 +999,32 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
             q->bad_status = bad;
             q->muted = muted;
         }
+}
+
+bool au_docscript_resource_data(AuDocScript *s, uint32_t id, const void *data, size_t len)
+{
+    struct ScriptFetch *f = find_fetch(s, id);
+    if (!f)
+        return false;
+    if (!s->js || !len)
+        return true;
+    AuJs *to = f->js;
+    /* No enter() here: these calls only queue tasks for script (or C data
+     * for a worker), so no script runs inside the loader's callback, and
+     * the turn bookkeeping of enter() and leave() is not wanted per piece. */
+    if (!f->head_sent) {
+        /* PLACEHOLDER HEAD, as in au_docscript_resource_done: a loader
+         * that reports no head gets a 200 with a type from the URL. The
+         * call may fail the fetch, which cancels the request (and so
+         * removes f). */
+        const char *hdrs[2] = {"content-type", f->type};
+        f->head_sent = true;
+        au_js_fetch_head(to, id, 200, "OK", hdrs, f->type ? 1 : 0, NULL);
+        if (!find_fetch(s, id))
+            return true;
+    }
+    au_js_fetch_data(to, id, data, len);
+    return true;
 }
 
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok)

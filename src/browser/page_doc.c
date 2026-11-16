@@ -898,6 +898,18 @@ static void loader_cancel(void *ctx, uint32_t id)
             fetch_cancel(p->fetches[i]);
 }
 
+/* Backpressure from a script's response stream: the fetcher stops
+ * reading the transfer (AuPageFetcher.pause). */
+static void loader_pause(void *ctx, uint32_t id, bool paused)
+{
+    AuPage *p = ctx;
+    for (size_t i = 0; i < p->nfetches; i++) {
+        Fetch *f = p->fetches[i];
+        if (!f->main && f->id == id && !f->done && !f->cancelled && f->fetcher && f->fetcher->pause)
+            f->fetcher->pause(f->fetcher->ctx, f->fid, paused);
+    }
+}
+
 /* ---- Document view callbacks ---- */
 
 static void dv_title(void *ctx, AuDocView *dv, const char *title)
@@ -1634,7 +1646,7 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
 
 static void new_view(AuPage *p)
 {
-    AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
+    AuLoader loader = {p, loader_request, loader_cancel, sniff_image, loader_pause};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
     dcb.ctx = p;

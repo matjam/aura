@@ -700,7 +700,8 @@ class TextDecoder {
                 let cut = bytes.length;
                 for (let i = Math.max(0, bytes.length - 3); i < bytes.length; i++) {
                     const b = bytes[i];
-                    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 0;
+                    /* only a byte that can lead a sequence waits (0xff never does) */
+                    const need = b >= 0xf5 ? 0 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc2 ? 2 : 0;
                     if (need && i + need > bytes.length) { cut = i; break; }
                 }
                 if (cut < bytes.length) { this._pending = bytes.slice(cut); bytes = bytes.subarray(0, cut); }

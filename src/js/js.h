@@ -134,6 +134,12 @@ typedef struct AuFetcher {
     uint32_t (*start)(void *ctx, AuJs *js, const AuFetchRequest *req);
     /* Stops a request; nothing more is reported for id. Optional. */
     void (*abort)(void *ctx, uint32_t id);
+    /* Backpressure: paused, the embedder stops reading the response from
+     * the network (data already on its way may still be reported); the
+     * next call with paused false reads on. Script pauses a response
+     * whose ReadableStream body holds more than it has read. Optional:
+     * without it the data arrives as fast as the network gives it. */
+    void (*pause)(void *ctx, uint32_t id, bool paused);
 } AuFetcher;
 
 /* Response head: status, status text, every header as name/value pairs,

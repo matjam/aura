@@ -264,6 +264,13 @@ typedef struct AuHttpCallbacks {
 AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbacks *cb);
 /* Cancels a transfer: no further callbacks; freed on the next pump. */
 void au_http_cancel(AuHttpTransfer *t);
+/* Backpressure: while paused, the transfer reads nothing more from its
+ * connection once its response head is in (bytes the connection already
+ * holds wait there too), so the socket's receive buffer fills and TCP
+ * holds the server back; no idle timeout runs meanwhile. A transfer
+ * served from the cache is not affected. Unpausing reads on at the next
+ * pump. */
+void au_http_pause(AuHttpTransfer *t, bool paused);
 /* Answers a deferred credentials request; user NULL gives up. */
 void au_http_answer_credentials(AuHttpTransfer *t, const char *user, const char *pass);
 

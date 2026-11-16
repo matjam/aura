@@ -52,6 +52,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_deflate` | the deflate encoder: made inputs compressed with random chunking and decoded again by Aura's inflate | `codec/fuzz_deflate N SEED tests/codec/brotli-vectors/page.html` (`AURA_FUZZ_SECONDS` caps it) | the codec originals |
 | `fuzz_inflate`, `fuzz_brotli` | the decoders alone | `codec/fuzz_inflate N SEED tests/codec/inflate-vectors/*`, `codec/fuzz_brotli N SEED tests/codec/brotli-vectors/*.br` | the codec vectors |
 | `fuzz_cookies` | Set-Cookie parsing, the cookie file | `net/fuzz_cookies N SEED` | built-in cookies |
+| `fuzz_sse` | the EventSource event stream parser (`src/net/sse.c`): each stream parsed whole and in random pieces, which must agree; valid UTF-8 and the size limits in every callback | `net/fuzz_sse N SEED SECONDS` | built-in streams |
 | `fuzz_files` | Session, Bookmarks.html, History, Aura Preferences, Downloads, cookie rules, the disk cache folder | `browser/fuzz_files N SEED SECONDS` | files the stores write, made at start |
 | `fuzz_blocklist` | list parser, compiled files, the store's index | `blocklist/fuzz_blocklist N SEED SECONDS` | generated |
 

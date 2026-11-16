@@ -66,6 +66,7 @@ net|net/fuzz_net|all BIG SEED assets/net/aura-roots.bin
 net-aia|net/fuzz_net|aia BIG SEED
 net-tls|net/fuzz_net|tls BIG SEED SECS
 cookies|net/fuzz_cookies|BIG SEED
+sse|net/fuzz_sse|BIG SEED SECS
 inflate|codec/fuzz_inflate|BIG SEED tests/codec/inflate-vectors/*
 brotli|codec/fuzz_brotli|BIG SEED tests/codec/brotli-vectors/*.br
 deflate|codec/fuzz_deflate|BIG SEED tests/codec/brotli-vectors/page.html

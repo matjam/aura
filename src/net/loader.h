@@ -132,6 +132,9 @@ struct AuBlocklist *au_net_loader_blocklist(AuNetLoader *l);
 /* Returns a nonzero id; failures are reported through done(). */
 uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLoadCallbacks *cb);
 void au_net_loader_cancel(AuNetLoader *l, uint32_t id);
+/* Backpressure: stops or resumes reading request id's response from the
+ * network (au_http_pause). */
+void au_net_loader_pause(AuNetLoader *l, uint32_t id, bool paused);
 /* Pumps the network and delivers. Returns true if anything happened. */
 bool au_net_loader_poll(AuNetLoader *l);
 int au_net_loader_active(const AuNetLoader *l);

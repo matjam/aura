@@ -562,7 +562,7 @@ static void test_images(void)
 {
     Fake f;
     memset(&f, 0, sizeof f);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html = "<!DOCTYPE html><body style='margin:0'><img id=i src='p.png'><img id=j src='q.png' width=20>"
                        "<div id=d style='background:url(bg.png)'>x</div>"
@@ -660,7 +660,7 @@ static void test_image_arrival_cost(void)
     memset(&f, 0, sizeof f);
     InvalLog log;
     memset(&log, 0, sizeof log);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocViewCallbacks cb;
     memset(&cb, 0, sizeof cb);
     cb.ctx = &log;
@@ -730,7 +730,7 @@ static void test_object_embed(void)
 {
     Fake f;
     memset(&f, 0, sizeof f);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html =
         "<!DOCTYPE html><body style='margin:0'>"

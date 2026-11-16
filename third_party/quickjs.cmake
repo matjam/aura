@@ -111,11 +111,32 @@ else()
         DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_INTL_JS}
         COMMENT "Compiling Intl to bytecode"
         VERBATIM)
-    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC} ${AURA_INTL_BC})
+    # Streams (src/js/streams.js): the same, read the first time script
+    # touches a stream class or a body's stream (N.streams in runtime.c).
+    set(AURA_STREAMS_BC ${AURA_PRELUDE_DIR}/streams.bc)
+    set(AURA_STREAMS_JS ${CMAKE_SOURCE_DIR}/src/js/streams.js)
+    add_custom_command(OUTPUT ${AURA_STREAMS_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_STREAMS_BC} ${AURA_STREAMS_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_STREAMS_JS}
+        COMMENT "Compiling Streams to bytecode"
+        VERBATIM)
+    # EventSource (src/js/eventsource.js): the same, read the first time
+    # script touches EventSource (N.eventSource in runtime.c).
+    set(AURA_EVENTSOURCE_BC ${AURA_PRELUDE_DIR}/eventsource.bc)
+    set(AURA_EVENTSOURCE_JS ${CMAKE_SOURCE_DIR}/src/js/eventsource.js)
+    add_custom_command(OUTPUT ${AURA_EVENTSOURCE_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_EVENTSOURCE_BC} ${AURA_EVENTSOURCE_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_EVENTSOURCE_JS}
+        COMMENT "Compiling EventSource to bytecode"
+        VERBATIM)
+    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC} ${AURA_INTL_BC} ${AURA_STREAMS_BC}
+                      ${AURA_EVENTSOURCE_BC})
     add_dependencies(aura_engine aura_prelude_bc)
     # #embed looks beside the source file, then in --embed-dir (Clang and
     # GCC 15 or later), not in the include path.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
-        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC}"
+        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC};${AURA_STREAMS_BC};${AURA_EVENTSOURCE_BC}"
         COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
 endif()
