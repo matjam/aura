@@ -68,6 +68,17 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 UBSan prints a report once per source line and goes on, so a run that
 exits 0 can still hold reports: search the log for `runtime error`.
 
+## To check incremental rebuilds against whole builds
+
+To find a subtree rebuild or a targeted restyle that differs from a
+whole one, run the fuzzers that change a document (`fuzz_dom`,
+`fuzz_page`, `fuzz_layout`, Domato) from a tree configured with
+`-DAURA_INCR_CHECK` ([`layout.md`](layout.md), "A DOM change"). Every
+update that rebuilt a subtree is compared with a whole build, and a
+difference aborts with the path of the first box that differs. The
+check costs a whole build per update, so give the run a time cap and
+expect fewer iterations.
+
 ## To find recursion over input nesting
 
 Run the plain build (`build/host`) with `AURA_FUZZ_STACK_KB=512`: the

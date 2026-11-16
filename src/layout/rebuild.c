@@ -564,8 +564,10 @@ static bool cmp_box(const LBox *a, const LBox *b, bool geom, AuBuf *msg)
                       (unsigned)b->kind, (unsigned)b->inner, (unsigned)b->replaced, (unsigned)b->pseudo);
     if (a->kind == LK_BLOCK && b->kind == LK_BLOCK) {
         const LBlock *x = (const LBlock *)a, *y = (const LBlock *)b;
-        au_buf_printf(msg, " (incremental %g,%g %gx%g; whole %g,%g %gx%g)", (double)x->x, (double)x->y, (double)x->w,
-                      (double)x->h, (double)y->x, (double)y->y, (double)y->w, (double)y->h);
+        au_buf_printf(msg, " (incremental %g,%g %gx%g m %g %g %g %g; whole %g,%g %gx%g m %g %g %g %g)", (double)x->x,
+                      (double)x->y, (double)x->w, (double)x->h, (double)x->m[0], (double)x->m[1], (double)x->m[2],
+                      (double)x->m[3], (double)y->x, (double)y->y, (double)y->w, (double)y->h, (double)y->m[0],
+                      (double)y->m[1], (double)y->m[2], (double)y->m[3]);
     }
     au_buf_puts(msg, "\n");
     return false;

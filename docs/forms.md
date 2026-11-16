@@ -180,9 +180,12 @@ change now keeps the tree (see [`layout.md`](layout.md)), and a key
 there restyles 2 elements, builds no tree, runs no layout and
 invalidates the field (439 x 41 pixels).
 
-What remains is the page's own work: when the suggestion list changes,
-its DOM insertions build the tree again, and keys typed while the page
-still loads its search module pay for that loading.
+When the suggestion list changes, its DOM insertions now rebuild only
+the list's subtree ([`layout.md`](layout.md), "A DOM change"): six keys
+with waits cost 54 subtree rebuilds and no tree build
+([`performance.md`](performance.md), "DOM changes"). What remains is
+the page's own work: keys typed while the page still loads its search
+module pay for that loading.
 
 ## Tests
 

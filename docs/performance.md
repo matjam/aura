@@ -77,6 +77,37 @@ where they were taken.
 | memory per subsystem, script heaps, the guest's free heap | [`memory.md`](memory.md) |
 | disk cache writes (about 9 ms each in the guest) | [`networking.md`](networking.md) |
 
+## DOM changes: subtree rebuilds, 2026-11-16
+
+To repeat these, build a Release tree and run, for the typing page,
+`aura-host chrome -w 1440 -h 900 --tab tests/page/bench/typeahead.html
+--do clickname:q --do keys:macintosh`; for Wikipedia's suggestions,
+`aura-host chrome -w 1440 -h 900 --net --tab
+https://en.wikipedia.org/wiki/Mac_OS_9 --do wait:4000 --do
+clickname:search --do wait:3000 --do perf --do keys:m --do wait:1500`
+and so on for each letter of "macint", then `--do perf` again (the wait
+lets the suggestions arrive; the difference between the two reports is
+the typing); for a load, `--tab URL --do wait:3000 --do perf`.
+
+Host, Release, base `889cb4a` against the branch with subtree rebuilds
+(`Subtree rebuilds` is the new line in the Performance report and in
+the `keys:` output). Network pages vary between runs.
+
+| Measurement | Base 889cb4a | Subtree rebuilds |
+|---|---|---|
+| typeahead.html, per key (9 keys) | 3.87 ms in the event; 958 elements styled, 1 tree build, 1 layout | 3.08 ms; 25 elements styled, 0 tree builds, 1 subtree rebuild of 33 boxes, 1 layout |
+| Wikipedia suggestions, 6 keys with waits | 69 style passes, 71,859 elements styled, 14 tree builds, 15 layouts; style 61 ms, layout 39 ms | 68 style passes, 18,371 elements styled, 0 tree builds, 54 subtree rebuilds (1,087 boxes), 14 layouts; style 3 ms, layout 7 ms |
+| Wikipedia Mac_OS_9 load | page load 271 ms; 4 tree builds; style 22 ms, layout 6 ms | page load 171 ms; 4 tree builds, 0 subtree rebuilds; style 21 ms, layout 6 ms |
+| GitHub home, first 60 s (still busy) | 63 style passes, 126,327 elements styled, 61 tree builds; style 1,125 ms, layout 127 ms | 61 style passes, 48,149 elements styled, 10 tree builds, 49 subtree rebuilds (31,280 boxes); style 503 ms, layout 66 ms |
+
+- The Wikipedia load builds the whole tree 4 times on both: no subtree
+  rebuild applied during that load, and why was not traced. The page
+  load times differ by the network.
+- A key on typeahead.html still invalidates the whole page (1,191,469
+  pixels): the update changed geometry, and the view invalidates the
+  page for that.
+- Not measured in the guest.
+
 ## Things that were slow, and why
 
 These are the causes found so far; look for the same shapes first.
@@ -86,9 +117,9 @@ These are the causes found so far; look for the same shapes first.
 - **Restyling the whole document** for a hover change, a keystroke or a
   resize, on pages with `:has()` rules ([`css.md`](css.md),
   [`forms.md`](forms.md)).
-- **Building the box tree again** when an image's size arrived or an
-  attribute the box tree never reads changed
-  ([`layout.md`](layout.md), [`forms.md`](forms.md)).
+- **Building the box tree again** when an image's size arrived, an
+  attribute the box tree never reads changed, or script inserted or
+  removed a node ([`layout.md`](layout.md), [`forms.md`](forms.md)).
 - **Repainting the page to scroll** ([`browser-chrome.md`](browser-chrome.md)).
 - **Loading a page again for Back** ([`browser-chrome.md`](browser-chrome.md)).
 - **Third-party scripts**: blocking them removes requests and bytes

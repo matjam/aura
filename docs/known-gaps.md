@@ -62,9 +62,29 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - Text is segmented and measured again for each layout of its block
   (the word cache answers the widths).
 - `l_layout_abspos_for` removes queue entries with `memmove`.
-- A DOM insertion or removal builds the whole box tree again (the
-  search suggestions on Wikipedia cost a tree build each time the list
-  changes).
+- A DOM change still builds the whole box tree when the change uses a
+  counter or a quote from outside its subtree (a numbered heading, a
+  `<q>`, a `<summary>`), when the nearest block that can be rebuilt is
+  the root element, when more than 64 separate places change between
+  two updates,
+  or when the rebuilt box changes its outer kind ([`layout.md`](layout.md),
+  "A DOM change").
+- A relayout after a viewport change or a style change that keeps the
+  boxes does not always give what a layout from scratch gives: forcing
+  the differential check after every update of `fuzz_page` (seeds 7 and
+  21, 2026-11-16) finds overflow and document heights that differ. So
+  the check compares geometry only while no such relayout has run since
+  the last whole build ([`layout.md`](layout.md), "A DOM change").
+- Open differences the check still finds (2026-11-16): a table's
+  percentage margins are resolved against 0 by some table paths and
+  against the containing block by others, so the last layout to run
+  decides them (Domato seeds 41 page 121 and 42 page 286, reduced to a
+  table with `margin-right: 9%` or `margin-bottom: 29%`); `fuzz_page`
+  seed 21 lists one `display: none` element fewer than a whole build,
+  and seed 22 gives a table another width; these two were not reduced.
+- After a subtree rebuild, layout lays out again every block on the path
+  to the root and the in-flow siblings that do not establish a block
+  formatting context, not only the rebuilt subtree.
 - Images: `currentSrc` in script, `image-set()`, and `sizes` lengths
   other than px, vw, vh, em and rem.
 - Grid: `subgrid` (parsed; laid out as `none`), baseline alignment of
@@ -106,7 +126,6 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## CSS
 
-- Targeted invalidation of child insertions and removals.
 - `@container`, `@scope` and `@starting-style` are parsed and never
   apply.
 - Preference changes (dark scheme, reduced motion) do not reach the
@@ -288,7 +307,6 @@ failing:
 - A resend prompt for POST history entries.
 - Form-associated custom elements.
 - IME input.
-
 ## Networking and TLS
 
 - IPv4 only on Mac OS 9.
@@ -450,8 +468,6 @@ fuzzed".
 
 ## Performance
 
-- Keys typed while a page changes its DOM pay for a box tree build (see
-  [Layout](#layout) and [`forms.md`](forms.md)).
 - Loading a Wikipedia article in the guest took 30 to 70 seconds
   ([`browser-chrome.md`](browser-chrome.md)).
 - A window zoom in the guest costs two passes of about 280 ms each on a

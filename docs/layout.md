@@ -43,16 +43,105 @@ specifications, not from running Chrome beside Aura.
 **A viewport change** is an incremental layout.
 
 - The document view restyles and calls `au_layout_styles_changed`, not
-  `au_layout_tree_changed`; the box tree is rebuilt only when a style
-  difference needs it (display, position, float, overflow, generated
-  content) or an element that had `display: none` is shown (layout
-  keeps the elements it left out in `AuLayout.hidden`).
+  `au_layout_tree_changed`; a box whose style difference changes the
+  boxes (display, position, float, overflow, generated content, list
+  markers, counters), and an element that had `display: none` and is
+  shown (layout keeps the elements it left out in `AuLayout.hidden`),
+  are rebuilt with their parent's subtree, as a DOM change is (below).
 - Layout then reuses every independent subtree whose constraints did
   not change, and keeps intrinsic widths, which do not depend on the
   viewport.
 - Lengths in viewport units reach layout as style changes.
 - The restyle itself is skipped or partial when the cascade says so
   (see [`css.md`](css.md), "A viewport change").
+
+**A DOM change** (a child inserted or removed, text edited, an attribute
+that a box reads, a control's state) rebuilds the smallest subtree that
+holds it (`src/layout/rebuild.c`).
+
+- The document view calls `au_layout_node_changed` with the parent of
+  the change (the text node for a text edit). It records the node and
+  nothing else, so it is safe while the DOM is mid-mutation. A node
+  outside the view's document is ignored: its insertion is recorded
+  when it comes.
+- Before the next layout, `l_rebuild_dirty` finds for each recorded
+  node the rebuild root: the nearest element, the node or an ancestor,
+  whose principal box is a block-level, non-anonymous block box that is
+  not the root box, a table part, a caption or a legend, whose style is
+  not inline-level, and that shares no counter or quote with content
+  outside it. Below `display: none` the change is dropped, unless a
+  replaced box above it shows its content (a select shows its options'
+  text).
+- Such a root's content starts after a collapsed space, the space after
+  it collapses whatever it holds, the anonymous blocks and flex items
+  its parent makes depend only on its being block-level, and no table
+  grid outside it points into it. So its subtree can be built alone.
+- Every root's old subtree is dropped first (a node that moved from one
+  root to another must not keep its old box), then `l_build_subtree`
+  builds each root with the walk the whole build uses and runs the
+  table fixup, normalization and table grids on the new subtree. The
+  new box takes the flags its parent's normalization gives (flex and
+  grid items) and goes in place of the old one; it and every ancestor
+  are marked for layout, and scroll offsets inside it are kept.
+- The whole tree is built instead when a root's outer kind changes
+  (inline-level, floated, positioned, a marker, a flex item, a list
+  item), its counter properties change, the walk meets a counter or a
+  quote from outside the subtree (`LX_CTR_OPEN`, below), the search
+  reaches the document, or more than 64 separate nodes changed.
+- Dropped boxes stay in the arena until the next whole build; when the
+  arena grows past twice the size of the last whole build plus 256 KB,
+  the next change builds the whole tree, which frees them.
+
+**Counter scope.** A counter's scope is the element that creates it,
+its following siblings and their descendants, so a subtree that uses a
+counter created outside it cannot be built alone. The whole build
+records, on each block box, whether its subtree uses a counter or a
+quote from outside (`LX_CTR_OPEN` in `LBlock.xf`), and such a box is
+never a rebuild root. A subtree build that meets a counter name the
+document has used but cannot find inside the subtree, or any quote,
+gives up and the whole tree is built. A list marker reads the
+`list-item` counter only when it shows a number, so an unnumbered list
+item does not tie its subtree to the list.
+
+**To check that a rebuild equals a whole build**, turn on the
+differential check: build with `-DAURA_INCR_CHECK` (every layout and
+document view checks, and a difference aborts with the path of the
+box), or call `au_layout_set_check` or `au_docview_set_check`. After
+each update that rebuilt a subtree, `l_check_incremental` builds the
+whole tree from the same document and styles in a second layout, lays
+it out at the same viewport and compares the two trees box by box
+(kind, node, style, flags, text, replaced content, geometry, overflow,
+scroll extent, counter scope, lines, fragments and table grids), the
+element box pointers and the list of `display: none` elements.
+`au_docview_check_failures` returns the count and the first difference.
+The check also runs after an update whose recorded changes needed no
+rebuild, which catches a change dropped wrongly. Geometry (positions,
+sizes, overflow, lines, fragments, the document size) is compared only
+while nothing but subtree rebuilds has asked for layout since the last
+whole build (`AuLayout.other_relayout`): a relayout after a viewport
+change or a style change that keeps the boxes is not always exact
+([`known-gaps.md`](known-gaps.md)), and the check would blame the
+rebuild for it. The tree itself is always compared.
+
+**Relative offsets in reused content.** `relative_pass` offsets every
+relatively positioned box after a layout. A block whose content was
+reused (`can_skip`, or the measure cache) keeps its descendants'
+positions, offsets included, so the pass does not descend into a block
+whose `skip_gen` is the current generation unless it was also laid out
+in it (`lay_gen`). Before this, a relatively positioned box inside a
+reused block moved by its offset again on each relayout.
+
+**To extend it** to shadow trees, make `find_root` and the recording in
+`au_layout_node_changed` follow the flat tree (a slotted node's slot,
+a shadow root's host) instead of `parent`; today a node in a shadow tree
+is ignored, as shadow trees have no boxes. A restyle that depends on a
+box's size (container queries) can feed the boxes whose style changed
+to `au_layout_styles_changed` as it is; a difference that changes the
+boxes is then rebuilt there, not in the whole tree.
+To run the tests and fuzzers under it, configure a tree with
+`cmake -S . -B build/check -G Ninja -DCMAKE_C_FLAGS=-DAURA_INCR_CHECK`
+and run `ctest --test-dir build/check` or a fuzzer from it. The check
+build is slower: a fuzzer runs fewer iterations in its time cap.
 
 **An image change** (`au_layout_images_changed`: a size became known,
 an image failed) keeps the box tree.

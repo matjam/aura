@@ -109,6 +109,8 @@ static const Case cases[] = {
      "b.appendChild(document.createElement('tr')).innerHTML='<td colspan=2>c</td>'", INCR},
     {"stray cell", "", "<div id=a><p>x</p></div>", "a.appendChild(document.createElement('td')).textContent='cell'",
      INCR},
+    {"percentage margins on a table", "table { margin-right: 9%; margin-bottom: 29% }",
+     "<div id=a><table><tr><td>a</td></tr></table></div>", "a.appendChild(document.createElement('table'))", INCR},
     {"text in a cell", "", "<table><tr><td id=c>a</td><td>b</td></tr></table>", "c.textContent='a longer text'",
      INCR},
     {"colspan", "", "<div><table><tr><td id=c>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table></div>",

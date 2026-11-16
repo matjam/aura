@@ -62,9 +62,43 @@ argument can anchor on.
 - Selectors the analysis cannot follow (`:nth-child(... of S)` with a
   state or name in S, a complex selector nested inside a `:has()`
   argument) restyle the document.
-- Child insertions and removals are not targeted: they restyle the
-  element's subtree and its following siblings' subtrees, or the
-  document when a `:has()` rule exists.
+- Child insertions and removals restyle what the selectors can reach
+  (see below).
+
+**Child insertions and removals** go through
+`au_css_invalidate_children`, which the document view calls from the
+`child_changed` mutation hook with the parent, the child and the
+neighbours it had. It is scoped as Blink scopes `ChildrenChanged`, from
+masks that `deps_build` records for each selector outside `:has()`:
+
+- the inserted subtree always;
+- the parent, for `:empty` (`st_empty`);
+- the following siblings, for `:nth-child`, `:nth-of-type`,
+  `:first-child`, `:only-child` and `~` (`st_forward`, `st_ind`): the
+  sibling rule goes on the first following sibling only, and the
+  descendant and self rules on each, so a long list costs its length;
+- the preceding siblings, for `:last-child`, `:nth-last-*` and
+  `:only-*` (`st_back`);
+- the next element sibling, for `+` (`st_adj`);
+- the `:has()` anchors among the parent, its ancestors and their
+  preceding siblings (`has_anchors`, one entry per `:has()` argument
+  with the key its anchor compound names); an argument with an
+  unanchored relative selector restyles the document;
+- form owners above the parent (form, fieldset, select, option,
+  textarea) when a rule reads `:valid`, `:checked`, `:indeterminate` or
+  similar; an inserted control when a rule reads `:default` restyles the
+  document.
+
+A text change goes through `au_css_invalidate_text`, which restyles the
+parent for `:empty`, the `:has()` anchors above it when a `:has()`
+argument reads `:empty`, and the form owners above it (a textarea's
+`:placeholder-shown`).
+
+To check a targeted restyle, turn the differential check on
+(`au_docview_set_check`, or build with `-DAURA_INCR_CHECK`): after each
+restyle that followed a child or text change, `au_css_check_restyle`
+runs a whole style pass and compares every element's computed values
+with the targeted result.
 
 **Class and id changes** need the names that changed. `src/dom` notes
 them in `AuDocument.style_names` when the attribute changes, and the
