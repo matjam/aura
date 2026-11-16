@@ -429,6 +429,16 @@ bool au_bw_typing(const AuBrowserWindow *w);
 /* Inline completion for typed text from history and bookmarks: the full
  * URL whose match key extends typed, or NULL. */
 const char *au_bw_complete(AuBrowserWindow *w, const char *typed);
+/* The address field's text after inline completion of typed (UTF-8) to
+ * url: when url, with its scheme and "//" removed if typed has no scheme
+ * and its leading "www." removed if typed does not start with one, is
+ * longer than typed and starts with it (ASCII case ignored), out
+ * receives typed followed by the rest of that key and the result is
+ * true. Otherwise out is unchanged and the result is false. The host
+ * selects the text after typed, so the next keystroke replaces it. */
+bool au_complete_fill(const char *typed, const char *url, AuBuf *out);
+/* au_bw_complete, then au_complete_fill. */
+bool au_bw_complete_field(AuBrowserWindow *w, const char *typed, AuBuf *out);
 
 /* ---- Geometry, painting, input ---- */
 void au_bw_resize(AuBrowserWindow *w, int width, int height);

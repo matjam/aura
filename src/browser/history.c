@@ -75,6 +75,22 @@ void au_day_label(int64_t day, int64_t today, char *out, size_t cap)
         snprintf(out, cap, "%s, %d %s %d", weekdays[wd], d, months[m - 1], y);
 }
 
+void au_menu_title(const char *title, const char *url, char *out, size_t cap)
+{
+    if (!cap)
+        return;
+    const char *t = title && *title ? title : url ? url : "";
+    size_t n = strlen(t);
+    if (n > AU_MENU_TITLE_MAX) {
+        size_t k = AU_MENU_TITLE_MAX - 3;
+        while (k > 0 && ((unsigned char)t[k] & 0xC0) == 0x80)
+            k--;
+        snprintf(out, cap, "%.*s...", (int)k, t);
+    } else {
+        snprintf(out, cap, "%s", t);
+    }
+}
+
 /* ---- History ---- */
 
 void au_history_init(AuHistory *h, size_t max_entries)

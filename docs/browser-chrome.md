@@ -283,6 +283,17 @@ Open Location selects the whole address again when the field already
 has the focus, and a paste into the field turns line breaks into
 spaces.
 
+To complete the address as the user types, call `au_bw_complete_field`
+with the field's text after each keystroke that leaves the caret at the
+end: it finds the best history or bookmark match and returns the field's
+new text, and the platform selects the part after what was typed. The
+matching (`au_complete_fill`) ignores the scheme, `//` and `www.` unless
+the user typed them. History and bookmark menu items get their text
+from `au_menu_title` (`history.c`), which shortens long titles at a
+character boundary. Keep logic like this in `src/browser`, where the
+host tests reach it; the platform code only sets the text field or adds
+the menu item.
+
 ## The horizontal scroll bar
 
 A horizontal scroll bar appears along the bottom of the page area while

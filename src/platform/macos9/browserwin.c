@@ -407,52 +407,31 @@ void browserwin_focus_field(BrowserWin *b)
     flush(b);
 }
 
-static bool has_scheme(const char *s)
-{
-    return au_url_scheme_len(s, strlen(s)) != 0;
-}
-
 /* Inline completion: after typing at the end of the field, the best
- * history or bookmark match is filled in and the added part selected. */
+ * history or bookmark match is filled in (au_bw_complete_field) and the
+ * added part selected. */
 static void autocomplete(BrowserWin *b)
 {
     TERec *t = *b->te;
     if (t->selStart != t->selEnd || t->selEnd != t->teLength)
         return;
     char *typed = field_text(b);
-    size_t tn = strlen(typed);
-    const char *url = tn ? au_bw_complete(b->bw, typed) : NULL;
-    if (url) {
-        const char *key = url;
-        size_t kn = strlen(url);
-        if (!has_scheme(typed)) {
-            size_t k = au_url_scheme_len(url, kn);
-            key = url + (k ? k + 1 : 0);
-            if (!strncmp(key, "//", 2))
-                key += 2;
-            if (strncmp(typed, "www.", 4) != 0 && !strncmp(key, "www.", 4))
-                key += 4;
-            kn = strlen(key);
-        }
-        if (kn > tn && au_ieq(key, tn, typed, tn)) {
-            AuBuf full;
-            au_buf_init(&full);
-            au_buf_puts(&full, typed);
-            au_buf_puts(&full, key + tn);
-            size_t rn, fn;
-            char *rt = mac_utf8_to_roman(typed, &rn);
-            char *rf = mac_utf8_to_roman(au_buf_cstr(&full), &fn);
-            TESetText(rf, (long)fn, b->te);
-            TESetSelect((short)rn, (short)fn, b->te);
-            Rect view = (**b->te).viewRect;
-            BackColor(whiteColor);
-            EraseRect(&view);
-            TEUpdate(&view, b->te);
-            au_free(rt);
-            au_free(rf);
-            au_buf_free(&full);
-        }
+    AuBuf full;
+    au_buf_init(&full);
+    if (au_bw_complete_field(b->bw, typed, &full)) {
+        size_t rn, fn;
+        char *rt = mac_utf8_to_roman(typed, &rn);
+        char *rf = mac_utf8_to_roman(au_buf_cstr(&full), &fn);
+        TESetText(rf, (long)fn, b->te);
+        TESetSelect((short)rn, (short)fn, b->te);
+        Rect view = (**b->te).viewRect;
+        BackColor(whiteColor);
+        EraseRect(&view);
+        TEUpdate(&view, b->te);
+        au_free(rt);
+        au_free(rf);
     }
+    au_buf_free(&full);
     au_free(typed);
 }
 

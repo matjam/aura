@@ -34,6 +34,12 @@ AuTime au_time_of_date(int year, int month, int mday);
 /* A heading for a day relative to today: "Today", "Yesterday", a weekday
  * name within the last week, else "Monday, 3 November 2026". */
 void au_day_label(int64_t day, int64_t today, char *out, size_t cap);
+/* A history or bookmark menu item's text: title, or url when title is
+ * empty or NULL. Text over AU_MENU_TITLE_MAX bytes is cut to at most
+ * AU_MENU_TITLE_MAX - 3 bytes, at the start of a UTF-8 character, and
+ * "..." added. out always ends with a NUL when cap is not 0. */
+#define AU_MENU_TITLE_MAX 48
+void au_menu_title(const char *title, const char *url, char *out, size_t cap);
 
 
 /* ---- History ---- */

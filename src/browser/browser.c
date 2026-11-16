@@ -1881,6 +1881,38 @@ const char *au_bw_complete(AuBrowserWindow *w, const char *typed)
     return b ? b->url : NULL;
 }
 
+bool au_complete_fill(const char *typed, const char *url, AuBuf *out)
+{
+    if (!typed || !url)
+        return false;
+    size_t tn = strlen(typed);
+    if (!tn)
+        return false;
+    const char *key = url;
+    size_t kn = strlen(url);
+    if (au_url_scheme_len(typed, tn) == 0) {
+        size_t k = au_url_scheme_len(url, kn);
+        key = url + (k ? k + 1 : 0);
+        if (!strncmp(key, "//", 2))
+            key += 2;
+        if (strncmp(typed, "www.", 4) != 0 && !strncmp(key, "www.", 4))
+            key += 4;
+        kn = strlen(key);
+    }
+    if (kn <= tn || !au_ieq(key, tn, typed, tn))
+        return false;
+    au_buf_puts(out, typed);
+    au_buf_puts(out, key + tn);
+    return true;
+}
+
+bool au_bw_complete_field(AuBrowserWindow *w, const char *typed, AuBuf *out)
+{
+    if (!typed || !*typed)
+        return false;
+    return au_complete_fill(typed, au_bw_complete(w, typed), out);
+}
+
 /* ---- Geometry and painting ---- */
 
 void au_bw_resize(AuBrowserWindow *w, int width, int height)

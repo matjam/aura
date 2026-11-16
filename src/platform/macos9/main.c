@@ -293,20 +293,6 @@ static void clear_from(MenuHandle m, short first)
         DeleteMenuItem(m, n);
 }
 
-static void short_title(const char *title, const char *url, char *out, size_t cap)
-{
-    const char *t = title && *title ? title : url;
-    size_t n = strlen(t);
-    if (n > 48) {
-        size_t k = 45;
-        while (k > 0 && ((unsigned char)t[k] & 0xC0) == 0x80)
-            k--;
-        snprintf(out, cap, "%.*s...", (int)k, t);
-    } else {
-        snprintf(out, cap, "%s", t);
-    }
-}
-
 static void rebuild_go(void)
 {
     MenuHandle m = GetMenuHandle(kGoMenu);
@@ -320,7 +306,7 @@ static void rebuild_go(void)
         AppendMenu(m, (ConstStr255Param) "\p-");
     char t[64];
     for (size_t i = 0; i < h->n && i < kGoEntries; i++) {
-        short_title(h->e[i].title, h->e[i].url, t, sizeof t);
+        au_menu_title(h->e[i].title, h->e[i].url, t, sizeof t);
         mac_append_item(m, t);
         go_urls[i] = au_strndup(h->e[i].url, strlen(h->e[i].url));
     }
@@ -369,7 +355,7 @@ static void rebuild_bookmarks(void)
         qh++;
         for (AuBookmark *b = folder->first; b; b = b->next) {
             char t[64];
-            short_title(b->title, b->url, t, sizeof t);
+            au_menu_title(b->title, b->url, t, sizeof t);
             mac_append_item(menu, t);
             short item = CountMItems(menu);
             if (!b->folder) {
