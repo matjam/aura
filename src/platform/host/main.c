@@ -105,6 +105,39 @@ void au_host_mem_report(const char *label)
 #endif
 }
 
+/* ---- The pooled allocator on the host (AURA_HEAP=1) ----
+ * Runs au_alloc through the pool the Mac OS 9 application uses
+ * (src/core/heap.c), over malloc, so a page exercises it here and
+ * --do heap can show what it holds. */
+static void *host_heap_get(size_t n)
+{
+    return malloc(n);
+}
+
+static void host_heap_release(void *p)
+{
+    free(p);
+}
+
+static void au_host_heap_report(const char *label)
+{
+    if (!au_heap_enabled()) {
+        printf("heap (%s): the pool is off; set AURA_HEAP=1\n", label);
+        return;
+    }
+    AuHeapStats st;
+    au_heap_stats(&st);
+    printf("heap (%s): %lu blocks, %lu KB asked for; %lu KB from the platform in %lu slabs and %lu large blocks\n",
+           label, (unsigned long)st.blocks, (unsigned long)(st.used_bytes / 1024),
+           (unsigned long)(st.system_bytes / 1024), (unsigned long)st.slabs, (unsigned long)st.large);
+    printf("heap (%s): %lu blocks over 2 KB in %lu slabs; %lu KB of empty slabs kept\n", label,
+           (unsigned long)st.mid_blocks, (unsigned long)st.mid_slabs, (unsigned long)(st.empty_bytes / 1024));
+#ifdef AU_HEAP_PROFILE
+    void au_heap_profile_report(void);
+    au_heap_profile_report();
+#endif
+}
+
 static double now_ms(void)
 {
     struct timespec ts;
@@ -776,6 +809,8 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                (unsigned long)(n >= 0 && n < w->ntabs ? au_page_memory_estimate(w->tabs[n]->page) / 1024 : 0));
     } else if (!strcmp(a, "mem")) {
         au_host_mem_report("now");
+    } else if (!strcmp(a, "heap")) {
+        au_host_heap_report("now");
     } else if (!strcmp(a, "closetab")) {
         /* Closes the active tab (the window keeps at least one). */
         if (w->ntabs > 1)
@@ -1087,6 +1122,8 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
         return usage();
+    if (getenv("AURA_HEAP"))
+        au_heap_enable(host_heap_get, host_heap_release);
     const char *cmd = argv[1];
     if (!strcmp(cmd, "fetch"))
         return au_host_fetch_main(argc, argv);
