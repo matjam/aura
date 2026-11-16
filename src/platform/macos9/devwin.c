@@ -428,6 +428,7 @@ static bool refresh(DevWin *dw, bool force)
             h.heap_free_kb = (uint32_t)(FreeMem() / 1024);
             h.heap_block_kb = (uint32_t)(MaxBlock() / 1024);
             h.temp_free_kb = (uint32_t)(TempFreeMem() / 1024);
+            h.temp_used_kb = (uint32_t)(mac_heap_temp_bytes() / 1024);
             mac_net_dev_info(&h, &conn);
             au_dev_perf_report(p, &h, now, &out);
         } else {

@@ -611,6 +611,7 @@ typedef struct JSMemoryUsage {
     int64_t shape_count, shape_size;
     int64_t js_func_count, js_func_size, js_func_code_size;
     int64_t js_func_pc2line_count, js_func_pc2line_size;
+    int64_t js_func_source_count, js_func_source_size; /* source texts, counted in js_func_size */
     int64_t c_func_count, array_count;
     int64_t fast_array_count, fast_array_elements;
     int64_t binary_object_count, binary_object_size;
@@ -1318,6 +1319,10 @@ typedef struct JSSABTab {
 #define JS_WRITE_OBJ_REFERENCE (1 << 3) /* allow object references to encode arbitrary object graph */
 #define JS_WRITE_OBJ_STRIP_SOURCE  (1 << 4) /* do not write source code information */
 #define JS_WRITE_OBJ_STRIP_DEBUG   (1 << 5) /* do not write debug information */
+#define JS_WRITE_OBJ_SOURCE_REF    (1 << 6) /* Aura: write where each function's text lies in its
+                                               script instead of the text; fails for a function
+                                               whose text is not part of a whole script's text.
+                                               Read the result with JS_ReadObjectSource. */
 JS_EXTERN uint8_t *JS_WriteObject(JSContext *ctx, size_t *psize, JSValueConst obj, int flags);
 JS_EXTERN uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
                                    int flags, JSSABTab *psab_tab);
@@ -1333,6 +1338,8 @@ JS_EXTERN uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst o
 #define JS_READ_OBJ_SAB       (1 << 2) /* allow SharedArrayBuffer */
 #define JS_READ_OBJ_REFERENCE (1 << 3) /* allow object references */
 JS_EXTERN JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len, int flags);
+JS_EXTERN JSValue JS_ReadObjectSource(JSContext *ctx, const uint8_t *buf, size_t buf_len, int flags,
+                                      const char *source, size_t source_len);
 JS_EXTERN JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
                                  int flags, JSSABTab *psab_tab);
 /* instantiate and evaluate a bytecode function. Only used when

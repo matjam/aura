@@ -363,6 +363,7 @@ struct JSRuntime {
     JSClass *class_array;
 
     struct list_head context_list; /* list of JSContext.link */
+    struct list_head source_text_list; /* list of JSSourceText.link */
     /* list of JSGCObjectHeader.link. List of allocated GC objects (used
        by the garbage collector) */
     struct list_head gc_obj_list;
@@ -908,12 +909,16 @@ typedef struct JSFunctionBytecode {
    kept a copy of its own text, so text nested n levels deep was held n
    times. */
 typedef struct JSSourceText {
+    struct list_head link; /* JSRuntime.source_text_list */
     int ref_count;
     int len;
+    uint32_t hash;  /* of buf, when 'cached' */
+    bool cached;    /* a whole script's text, found again by its content */
     char buf[]; /* len bytes, then a NUL */
 } JSSourceText;
 
 static void js_source_text_free(JSRuntime *rt, JSSourceText *st);
+static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int len);
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -2360,6 +2365,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->malloc_gc_threshold = 256 * 1024;
 
     init_list_head(&rt->context_list);
+    init_list_head(&rt->source_text_list);
     init_list_head(&rt->gc_obj_list);
     init_list_head(&rt->gc_zero_ref_count_list);
     rt->gc_phase = JS_GC_PHASE_NONE;
@@ -7579,11 +7585,6 @@ static void compute_bytecode_size(JSFunctionBytecode *b, JSMemoryUsage_helper *h
     if (b->byte_code_buf) {
         hp->js_func_code_size += b->byte_code_len;
     }
-    /* a shared source text is counted with the function it starts with */
-    if (b->source_text && b->source == b->source_text->buf) {
-        memory_used_count++;
-        js_func_size += sizeof(JSSourceText) + b->source_text->len + 1;
-    }
     if (b->pc2line_len) {
         memory_used_count++;
         hp->js_func_pc2line_count += 1;
@@ -7889,6 +7890,14 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
     s->js_func_code_size = mem.js_func_code_size;
     s->js_func_pc2line_count = mem.js_func_pc2line_count;
     s->js_func_pc2line_size = mem.js_func_pc2line_size;
+    /* source texts, each counted once however many functions share it */
+    list_for_each(el, &rt->source_text_list) {
+        JSSourceText *st = list_entry(el, JSSourceText, link);
+        s->js_func_source_count++;
+        s->js_func_source_size += sizeof(*st) + st->len + 1;
+    }
+    s->memory_used_count += s->js_func_source_count;
+    s->js_func_size += s->js_func_source_size;
     s->memory_used_count += round(mem.memory_used_count) +
         s->atom_count + s->str_count +
         s->obj_count + s->shape_count +
@@ -26013,12 +26022,12 @@ static __exception int js_parse_class(JSParseState *s, bool is_class_expr,
     put_u32(fd->byte_code.buf + ctor_cpool_offset, ctor_fd->parent_cpool_idx);
 
     /* store the class source code in the constructor. */
+    /* (the text is taken from the parser's buffer when the whole script
+       has been parsed: js_fd_assign_sources) */
     js_free(ctx, ctor_fd->source);
+    ctor_fd->source = NULL;
     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
     ctor_fd->source_pos1 = 1 + (int)(class_start_ptr - s->buf_start);
-    ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
-    if (!ctor_fd->source)
-        goto fail;
 
     /* consume the '}' */
     if (next_token(s))
@@ -37055,10 +37064,30 @@ static int add_module_variables(JSContext *ctx, JSFunctionDef *fd)
     return 0;
 }
 
+/* A function has been parsed: its first-pass bytecode stays until the
+   whole script is parsed, so give back what its buffer has spare (the
+   buffer grows by half each time; over a script's functions the spare
+   part was a quarter of the bytecode). */
+static void js_fd_trim(JSFunctionDef *fd)
+{
+    DynBuf *d = &fd->byte_code;
+    uint8_t *p;
+
+    if (d->error || !d->buf || d->size == 0 || d->allocated_size <= d->size)
+        return;
+    p = d->realloc_func(d->opaque, d->buf, d->size);
+    if (p) {
+        d->buf = p;
+        d->allocated_size = d->size;
+    }
+}
+
 static void js_source_text_free(JSRuntime *rt, JSSourceText *st)
 {
-    if (--st->ref_count == 0)
+    if (--st->ref_count == 0) {
+        list_del(&st->link);
         js_free_rt(rt, st);
+    }
 }
 
 static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len)
@@ -37068,10 +37097,128 @@ static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len
         return NULL;
     st->ref_count = 1;
     st->len = len;
+    st->hash = 0;
+    st->cached = false;
     if (buf)
         memcpy(st->buf, buf, len);
     st->buf[len] = '\0';
+    list_add_tail(&st->link, &ctx->rt->source_text_list);
     return st;
+}
+
+/* The text of a whole script, with a new reference. Every context of the
+   runtime that compiles the same bytes (documents of one page that load
+   the same library) gets the same text. */
+static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int len)
+{
+    struct list_head *el;
+    JSSourceText *st;
+    uint32_t h = 2166136261u;
+    int i;
+
+    /* a short text is not worth the search */
+    if (len < 1024)
+        return js_source_text_new(ctx, buf, len);
+    for (i = 0; i < len; i++)
+        h = (h ^ (uint8_t)buf[i]) * 16777619u;
+    list_for_each(el, &ctx->rt->source_text_list) {
+        st = list_entry(el, JSSourceText, link);
+        if (st->cached && st->len == len && st->hash == h && !memcmp(st->buf, buf, len)) {
+            st->ref_count++;
+            return st;
+        }
+    }
+    st = js_source_text_new(ctx, buf, len);
+    if (st) {
+        st->hash = h;
+        st->cached = true;
+    }
+    return st;
+}
+
+/* Gives every function of a parsed script its source text. The parser
+   only notes where each function's text lies in its buffer
+   (source_pos1, source_len); nothing is copied while parsing, where a
+   copy per function was held until the end of the parse, nested text
+   once per level.
+
+   When the script's outermost functions make up half of it or more (a
+   bundle wrapped in one function, a library of declarations), one text
+   holds the whole script and every function points into it. Otherwise
+   each outermost function gets a text of its own, which the functions
+   nested in it share, and the rest of the script (data, statements) is
+   not kept. */
+static int js_fd_assign_sources(JSContext *ctx, JSFunctionDef *top,
+                                const char *input, size_t input_len)
+{
+    JSFunctionDef *fd, *p;
+    struct list_head *el;
+    JSSourceText *script = NULL, *st;
+    size_t covered = 0;
+    bool whole;
+    int ofs;
+
+    if (input_len > INT32_MAX / 2)
+        input_len = 0; /* no function gets a text */
+    list_for_each(el, &top->child_list) {
+        fd = list_entry(el, JSFunctionDef, link);
+        if (fd->source_pos1)
+            covered += fd->source_len;
+    }
+    whole = (covered >= input_len / 2);
+    fd = top;
+    for (;;) {
+        if (fd != top && fd->source_pos1 && !fd->source && !fd->source_text) {
+            ofs = fd->source_pos1 - 1;
+            if (ofs < 0 || fd->source_len < 0 || (size_t)ofs > input_len ||
+                (size_t)fd->source_len > input_len - ofs) {
+                fd->source_pos1 = 0;
+                fd->source_len = 0;
+            } else if (whole) {
+                if (!script) {
+                    script = js_source_text_script(ctx, input, input_len);
+                    if (!script)
+                        return -1;
+                }
+                script->ref_count++;
+                fd->source_text = script;
+                fd->source_ofs = ofs;
+            } else {
+                st = NULL;
+                for (p = fd->parent; p && p != top; p = p->parent) {
+                    if (!p->source_text)
+                        continue;
+                    if (fd->source_pos1 >= p->source_pos1 &&
+                        fd->source_pos1 + fd->source_len <= p->source_pos1 + p->source_len) {
+                        st = p->source_text;
+                        st->ref_count++;
+                        fd->source_ofs = p->source_ofs + (fd->source_pos1 - p->source_pos1);
+                    }
+                    break;
+                }
+                if (!st) {
+                    st = js_source_text_new(ctx, input + ofs, fd->source_len);
+                    if (!st)
+                        return -1;
+                    fd->source_ofs = 0;
+                }
+                fd->source_text = st;
+            }
+        }
+        /* the next function in tree order */
+        if (!list_empty(&fd->child_list)) {
+            fd = list_entry(fd->child_list.next, JSFunctionDef, link);
+        } else {
+            while (fd != top && fd->link.next == &fd->parent->child_list)
+                fd = fd->parent;
+            if (fd == top)
+                break;
+            fd = list_entry(fd->link.next, JSFunctionDef, link);
+        }
+    }
+    if (script)
+        js_source_text_free(ctx->rt, script);
+    return 0;
 }
 
 /* Moves fd->source into a shared text: the nearest enclosing function's,
@@ -37951,9 +38098,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
                 token of the function source stored into s->last_ptr */
             fd->source_len = s->last_ptr - ptr;
             fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
-            fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-            if (!fd->source)
-                goto fail;
+            js_fd_trim(fd);
 
             goto done;
         }
@@ -37990,9 +38135,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
         /* save the function source code */
         fd->source_len = s->buf_ptr - ptr;
         fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
-        fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-        if (!fd->source)
-            goto fail;
+        js_fd_trim(fd);
 
         if (next_token(s)) {
             /* consume the '}' */
@@ -38397,6 +38540,8 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    if (!err)
+        err = js_fd_assign_sources(ctx, fd, input, input_len);
     if (err) {
     fail:
         free_token(s, &s->token);
@@ -38679,6 +38824,7 @@ typedef struct BCWriterState {
     bool allow_reference;
     bool allow_source;
     bool allow_debug;
+    bool source_ref; /* write where a function's text lies in its script, not the text */
     bool byte_swap; /* write for a machine of the other byte order */
     uint32_t first_atom;
     uint32_t *atom_to_idx;
@@ -39217,7 +39363,16 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
         bc_put_leb128(s, b->col_num);
         bc_put_leb128(s, b->pc2line_len);
         dbuf_put(&s->dbuf, b->pc2line_buf, b->pc2line_len);
-        if (s->allow_source && b->source) {
+        if (s->source_ref && b->source) {
+            /* the reader is given the script's text again
+               (JS_ReadObjectSource) */
+            if (!b->source_text || !b->source_text->cached) {
+                JS_ThrowInternalError(s->ctx, "the function's text is not part of a script text");
+                goto fail;
+            }
+            bc_put_leb128(s, b->source_len);
+            bc_put_leb128(s, (uint32_t)(b->source - b->source_text->buf));
+        } else if (s->allow_source && b->source) {
             bc_put_leb128(s, b->source_len);
             dbuf_put(&s->dbuf, b->source, b->source_len);
         } else {
@@ -39652,6 +39807,7 @@ uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
     s->allow_sab = ((flags & JS_WRITE_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_WRITE_OBJ_REFERENCE) != 0);
     s->allow_source = ((flags & JS_WRITE_OBJ_STRIP_SOURCE) == 0);
+    s->source_ref = ((flags & JS_WRITE_OBJ_SOURCE_REF) != 0);
     s->allow_debug = ((flags & JS_WRITE_OBJ_STRIP_DEBUG) == 0);
     s->byte_swap = ((flags & JS_WRITE_OBJ_BSWAP) != 0);
     /* XXX: could use a different version when bytecode is included */
@@ -39710,6 +39866,7 @@ typedef struct BCReaderState {
     bool allow_sab;
     bool allow_bytecode;
     bool allow_reference;
+    JSSourceText *source_ref; /* JS_ReadObjectSource: the script's text */
     /* object references */
     JSObject **objects;
     int objects_count;
@@ -40285,6 +40442,21 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         bc_read_trace(s, "source: %d bytes\n", b->source_len);
         if (s->ptr_last)
             s->ptr_last += b->source_len;  // omit source code hex dump
+        if (s->source_ref) {
+            /* the text is a part of the script's text */
+            int ofs;
+            if (bc_get_leb128_int(s, &ofs))
+                goto fail;
+            if (ofs < 0 || b->source_len < 0 || ofs > s->source_ref->len ||
+                b->source_len > s->source_ref->len - ofs) {
+                b->source_len = 0;
+                JS_ThrowSyntaxError(ctx, "invalid source position");
+                goto fail;
+            }
+            s->source_ref->ref_count++;
+            b->source_text = s->source_ref;
+            b->source = b->source_text->buf + ofs;
+        } else {
         /* b->source is a UTF-8 encoded null terminated C string */
         b->source_text = js_source_text_new(ctx, NULL, b->source_len);
         if (!b->source_text)
@@ -40292,6 +40464,7 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         b->source = b->source_text->buf;
         if (bc_get_buf(s, (uint8_t *)b->source, b->source_len))
             goto fail;
+        }
     }
     bc_read_trace(s, "}\n");
 
@@ -40973,6 +41146,45 @@ JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     } else {
         js_free(ctx, s->sab_tab);
     }
+    bc_reader_free(s);
+    return obj;
+}
+
+/* Reads bytecode written with JS_WRITE_OBJ_SOURCE_REF: 'source' is the
+   script the bytecode was compiled from, and the functions read point
+   into one text of it, shared with every context of the runtime that
+   compiled or read the same script. */
+JSValue JS_ReadObjectSource(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                            int flags, const char *source, size_t source_len)
+{
+    BCReaderState ss, *s = &ss;
+    JSValue obj;
+
+    if (source_len > INT32_MAX / 2)
+        return JS_ThrowRangeError(ctx, "script too long");
+    memset(s, 0, sizeof(*s));
+    s->ctx = ctx;
+    s->buf_start = buf;
+    s->buf_end = buf + buf_len;
+    s->ptr = buf;
+    s->allow_bytecode = true;
+    s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
+    s->first_atom = JS_ATOM_END;
+    s->source_ref = js_source_text_script(ctx, source, (int)source_len);
+    if (!s->source_ref)
+        return JS_EXCEPTION;
+    /* found again by content even when short */
+    if (!s->source_ref->cached) {
+        js_source_text_free(ctx->rt, s->source_ref);
+        return JS_ThrowRangeError(ctx, "script too short to share");
+    }
+    if (JS_ReadObjectAtoms(s)) {
+        obj = JS_EXCEPTION;
+    } else {
+        obj = JS_ReadObjectRec(s);
+    }
+    js_free(ctx, s->sab_tab);
+    js_source_text_free(ctx->rt, s->source_ref);
     bc_reader_free(s);
     return obj;
 }

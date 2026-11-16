@@ -51,6 +51,18 @@ static void *raw_realloc(void *p, size_t n)
 static bool (*release_handler)(size_t);
 static bool releasing;
 
+static bool (*low_memory_check)(size_t);
+
+void au_set_low_memory_check(bool (*low)(size_t n))
+{
+    low_memory_check = low;
+}
+
+bool au_memory_low(size_t n)
+{
+    return low_memory_check && low_memory_check(n);
+}
+
 void au_set_release_handler(bool (*release)(size_t wanted))
 {
     release_handler = release;

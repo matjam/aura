@@ -78,6 +78,10 @@ extern AuFontSet *g_fonts;
 extern bool g_quitting;
 extern bool g_in_front; /* the application is not suspended */
 void mac_out_of_memory(size_t wanted);
+/* The free application heap plus free temporary memory, in KB, and the
+ * temporary memory the allocator holds, in bytes (main.c). */
+uint32_t mac_memory_free_kb(void);
+long mac_heap_temp_bytes(void);
 void mac_menus_dirty(void);
 /* Brings the menu bar in step with the front window (enables, checks). */
 void mac_adjust_menus(void);

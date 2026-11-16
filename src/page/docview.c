@@ -802,7 +802,7 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
     }
     if (req.kind == AU_RES_OTHER && !req.font) {
         if (dv->script)
-            au_docscript_resource_done(dv->script, req.id, req.data.data, req.data.len, ok);
+            au_docscript_resource_done(dv->script, req.id, &req.data, ok);
         au_buf_free(&req.data);
         maybe_finished(dv);
         return;
@@ -1142,7 +1142,9 @@ void au_docview_begin(AuDocView *dv, const char *url)
     au_free(dv->url);
     au_free(dv->base);
     dv->url = dup(url);
-    dv->base = dup(url);
+    /* A srcdoc or about:blank document in a frame resolves its URLs
+     * against its parent's base URL (HTML: the fallback base URL). */
+    dv->base = dup(dv->parent && (!strcmp(url, "about:srcdoc") || !strcmp(url, "about:blank")) ? dv->parent->base : url);
     if (dv->title[0]) {
         au_free(dv->title);
         dv->title = dup("");
@@ -1332,6 +1334,19 @@ void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit)
     *used = *limit = 0;
     if (dv->script)
         au_docscript_heap(dv->script, used, limit);
+}
+
+void au_docview_script_summary(const AuDocView *dv, AuBuf *out)
+{
+    if (dv->script)
+        au_docscript_memory_summary(dv->script, out);
+}
+
+void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *worker_peak)
+{
+    *page_peak = *worker_peak = 0;
+    if (dv->script)
+        au_docscript_peaks(dv->script, page_peak, worker_peak);
 }
 
 /* Brings styles up to date; returns true if the tree was restyled. */
@@ -1806,6 +1821,12 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
 void au_docview_set_scripting(AuDocView *dv, bool on)
 {
     dv->scripting = on;
+}
+
+void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worker_bytes)
+{
+    dv->script_mem = page_bytes;
+    dv->worker_mem = worker_bytes;
 }
 
 void au_docview_set_user_agent(AuDocView *dv, const char *ua)

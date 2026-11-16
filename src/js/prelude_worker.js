@@ -94,7 +94,10 @@ defGlobal('importScripts', function importScripts(...urls) {
             let r = null;
             /* credentials same-origin (1), no-cors (1), a worker's script (4) */
             try { r = N.fetchSync('GET', url, [], null, 1, 1, 4, null, {}); } catch (e) { r = null; }
-            if (r && r[0] >= 200 && r[0] < 300) text = N.utf8Decode(r[2], false, false);
+            /* the response's bytes go to the native as they are, and it
+             * empties them: no string of the script is made */
+            if (r && r[0] >= 200 && r[0] < 300) text = r[2];
+            r = null;
         }
         if (text === null) throw domErr('importScripts: could not load ' + url, 'NetworkError');
         if (!N.runScript(text, url)) throw domErr('importScripts: the script at ' + url + ' threw', 'NetworkError');
@@ -129,7 +132,7 @@ P.workerDeliver = function (kind, id, tree, cids) {
 /* Runs the worker's script. */
 P.startWorker = function (source, url, module) {
     if (module) runModuleScript(url, source, null).then(() => N.workerReady());
-    else N.runScript(source, url);
+    else N.runScript(source, url); /* source is null: the native takes the text worker.c holds */
 };
 
 return P;

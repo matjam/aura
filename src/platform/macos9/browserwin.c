@@ -771,6 +771,13 @@ static bool host_random(void *ctx, void *buf, size_t len)
     return mac_net_random(buf, len);
 }
 
+/* For the Automatic script memory limits. */
+static uint32_t host_memory_free(void *ctx)
+{
+    (void)ctx;
+    return mac_memory_free_kb();
+}
+
 void browserwin_host(AuBrowserHost *h)
 {
     memset(h, 0, sizeof *h);
@@ -789,6 +796,7 @@ void browserwin_host(AuBrowserHost *h)
     h->scroll_area = host_scroll_area;
     h->random = host_random;
     h->coro = mac_coro_ops();
+    h->memory_free_kb = host_memory_free;
 }
 
 /* ---- Events ---- */

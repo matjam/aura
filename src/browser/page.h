@@ -296,6 +296,11 @@ typedef struct AuPageFetcher {
     /* Optional: the user chose to visit the blocked site of url anyway,
      * for this session ("Visit Anyway" on the blocked-site page). */
     void (*allow_blocked)(void *ctx, const char *url);
+    /* Optional: document.cookie for the document at url. top_level_url is
+     * the tab's document when url is a nested document's, else NULL.
+     * get_cookie returns au_alloc'd text ("a=1; b=2") or NULL. */
+    char *(*get_cookie)(void *ctx, const char *url, const char *top_level_url);
+    void (*set_cookie)(void *ctx, const char *url, const char *top_level_url, const char *value);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {
@@ -317,6 +322,10 @@ typedef struct AuPageEnv {
     bool (*random)(void *ctx, void *buf, size_t len);
     /* Optional: coroutines for workers (AuBrowserHost.coro). */
     const AuCoroOps *coro;
+    /* Optional: the memory the application can still get, in KB, or 0
+     * when unknown (AuBrowserHost.memory_free_kb). Read when a document
+     * begins, for the Automatic script memory limits. */
+    uint32_t (*memory_free_kb)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -579,6 +588,10 @@ AuPerf *au_page_perf(AuPage *p);
 /* Bytes the page's script runtime has allocated, and its limit (0, 0
  * when it has none). */
 void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
+/* A line per script runtime, document and worker of the page (bytes now,
+ * peak, limit), for the Performance report; and the peaks alone. */
+void au_page_script_summary(const AuPage *p, AuBuf *out);
+void au_page_script_peaks(const AuPage *p, size_t *page_peak, size_t *worker_peak);
 /* The console: lines ever added (a view compares it to see new lines or
  * a Clear), a line added by a tool (levels 5, the expression typed, and
  * 6, its result, besides the script levels), and Clear. */

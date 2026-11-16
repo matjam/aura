@@ -76,9 +76,10 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
 
     au_buf_puts(out, "Memory\n");
     if (h && h->have_memory)
-        au_buf_printf(out, "  application heap: %lu KB free (largest block %lu KB); temporary memory: %lu KB free\n",
+        au_buf_printf(out, "  application heap: %lu KB free (largest block %lu KB); temporary memory: %lu KB free, %lu KB "
+                           "taken by Aura's heap\n",
                       (unsigned long)h->heap_free_kb, (unsigned long)h->heap_block_kb,
-                      (unsigned long)h->temp_free_kb);
+                      (unsigned long)h->temp_free_kb, (unsigned long)h->temp_used_kb);
     size_t js_used, js_limit;
     au_page_script_memory(p, &js_used, &js_limit);
     au_buf_puts(out, "  script heap: ");
@@ -89,7 +90,9 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     } else {
         au_buf_puts(out, "no runtime");
     }
-    au_buf_printf(out, "\n  images: %lu KB decoded of %lu KB (%lu decodes, %lu evictions)\n",
+    au_buf_putc(out, '\n');
+    au_page_script_summary(p, out);
+    au_buf_printf(out, "  images: %lu KB decoded of %lu KB (%lu decodes, %lu evictions)\n",
                   (unsigned long)st.image_kb, (unsigned long)st.image_budget_kb, (unsigned long)st.image_decodes,
                   (unsigned long)st.image_evictions);
     au_buf_printf(out, "  documents kept for Back and Forward: %lu, about %lu KB",

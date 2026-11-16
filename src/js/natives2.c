@@ -796,7 +796,8 @@ static JSValue n_history(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 static JSValue n_cookie(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     AuJs *js = js_of_ctx(ctx);
-    if (!js->settings.cookies_enabled)
+    /* A document with an opaque origin (a sandboxed frame) has no cookies. */
+    if (!js->settings.cookies_enabled || js->opaque_origin)
         return magic ? JS_UNDEFINED : JS_NewString(ctx, "");
     if (magic == 0) {
         char *c = js->hooks.get_cookie ? js->hooks.get_cookie(js->hooks.ctx, js->url) : NULL;

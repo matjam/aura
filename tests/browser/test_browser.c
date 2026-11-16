@@ -1,6 +1,7 @@
 /* Tests for src/browser: back/forward lists, tabs, history, bookmarks,
  * preferences, the session file, the URL-or-search helper, chrome layout
  * and hit testing. Exits non-zero on the first failure. */
+#include "browser/scriptmem.h"
 #include "browser/browser.h"
 #include "browser/listview.h"
 #include "browser/macroman.h"
@@ -166,7 +167,7 @@ static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 
 static AuBrowser *make_browser(AuFontSet *fonts)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     return au_browser_new(fonts, &h);
 }
 
@@ -295,7 +296,7 @@ static bool t_external(void *ctx, const char *url)
 /* Addresses Aura does not open go to the host's helper applications. */
 static void test_external(AuFontSet *fonts)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, t_external, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, t_external, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     AuBrowser *b = au_browser_new(fonts, &h);
     CHECK(au_browser_opens_url(b, "http://a/") && au_browser_opens_url(b, "HTTPS://a/") &&
           au_browser_opens_url(b, "file:///x") && au_browser_opens_url(b, "about:home") &&
@@ -697,6 +698,64 @@ static void test_bookmarks(void)
 }
 
 /* ---- Preferences ---- */
+
+/* The script memory limits: 0 (Automatic) is the default and is stored as
+ * 0, so it follows the policy of whichever Aura reads it; a number is
+ * clamped to 4 MB .. 256 MB; the policy follows the memory free. */
+static void test_script_memory_prefs(void)
+{
+    AuPrefs p;
+    au_prefs_init(&p);
+    CHECK(p.script_memory_kb == 0 && p.worker_memory_kb == 0);
+    AuBuf out;
+    au_buf_init(&out);
+    au_prefs_serialize(&p, &out);
+    CHECK(strstr(au_buf_cstr(&out), "content.script_memory_kb=0\n") != NULL);
+    CHECK(strstr(out.data, "content.worker_memory_kb=0\n") != NULL);
+
+    /* round trip of custom values */
+    static const char file[] = "content.script_memory_kb=49152\ncontent.worker_memory_kb=12288\n";
+    CHECK(au_prefs_parse(&p, file, sizeof file - 1));
+    CHECK(p.script_memory_kb == 49152 && p.worker_memory_kb == 12288);
+    au_buf_clear(&out);
+    au_prefs_serialize(&p, &out);
+    AuPrefs q;
+    au_prefs_init(&q);
+    CHECK(au_prefs_parse(&q, out.data, out.len));
+    CHECK(q.script_memory_kb == 49152 && q.worker_memory_kb == 12288);
+    au_prefs_free(&q);
+
+    /* clamping: too small, too large, negative, and back to Automatic */
+    static const char small[] = "content.script_memory_kb=100\ncontent.worker_memory_kb=999999999\n";
+    CHECK(au_prefs_parse(&p, small, sizeof small - 1));
+    CHECK(p.script_memory_kb == 4096 && p.worker_memory_kb == 262144);
+    au_prefs_set(&p, "content.script_memory_kb", "-5");
+    CHECK(p.script_memory_kb == 0);
+    au_prefs_set(&p, "content.worker_memory_kb", "0");
+    CHECK(p.worker_memory_kb == 0);
+    AuBuf v;
+    au_buf_init(&v);
+    CHECK(au_prefs_get(&p, "content.script_memory_kb", &v) && !strcmp(au_buf_cstr(&v), "0"));
+    au_buf_free(&v);
+    au_buf_free(&out);
+    au_prefs_free(&p);
+
+    CHECK(au_script_memory_clamp(0) == 0 && au_script_memory_clamp(1) == 4096 &&
+          au_script_memory_clamp(8192) == 8192 && au_script_memory_clamp(1 << 30) == 262144);
+    uint32_t page, worker;
+    au_script_memory_auto(0, &page, &worker); /* an unknown machine: the host tools, tests */
+    CHECK(page == 65536 && worker == 32768);
+    au_script_memory_auto(10 * 1024, &page, &worker); /* 10 MB free: the floors */
+    CHECK(page == 8192 && worker == 4096);
+    au_script_memory_auto(50 * 1024 + 300, &page, &worker); /* half and a quarter, whole megabytes */
+    CHECK(page == 25 * 1024 && worker == 12 * 1024);
+    au_script_memory_auto(460 * 1024, &page, &worker); /* plenty: the ceilings */
+    CHECK(page == 96 * 1024 && worker == 32 * 1024);
+    au_script_memory_limits(0, 20000, 50 * 1024, &page, &worker); /* one Automatic, one custom */
+    CHECK(page == 25 * 1024 && worker == 20000);
+    au_script_memory_limits(1000, 0, 0, &page, &worker);
+    CHECK(page == 4096 && worker == 32768);
+}
 
 static void test_prefs(void)
 {
@@ -1188,6 +1247,7 @@ int main(void)
     test_history();
     test_bookmarks();
     test_prefs();
+    test_script_memory_prefs();
     test_session(fonts);
     test_layout();
     test_ellipsize(fonts);
