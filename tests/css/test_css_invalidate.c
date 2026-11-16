@@ -810,6 +810,31 @@ static void lazy_page(const char *what, const char *html, size_t len, const char
     view_doc_free(&eager);
 }
 
+/* Every prefix of a sheet (a sheet cut off anywhere: inside a block, a
+ * string, a comment, a selector): lazy and eager parses must style the
+ * built-in page alike. */
+static void lazy_truncations(const char *what, const char *css)
+{
+    size_t n = strlen(css);
+    char *buf = malloc(n + 1);
+    for (size_t k = 0; k <= n; k++) {
+        memcpy(buf, css, k);
+        buf[k] = 0;
+        const char *extra[1] = {buf};
+        css_lazy_bodies = true;
+        ViewDoc lazy = view_doc(page, sizeof page - 1, extra, 1, 1024, 768);
+        css_lazy_bodies = false;
+        ViewDoc eager = view_doc(page, sizeof page - 1, extra, 1, 1024, 768);
+        css_lazy_bodies = true;
+        char step[48];
+        snprintf(step, sizeof step, "cut at byte %u", (unsigned)k);
+        compare_docs(what, step, &lazy, &eager);
+        view_doc_free(&lazy);
+        view_doc_free(&eager);
+    }
+    free(buf);
+}
+
 /* --lazy DIR: the sample pages (with wiki.css for the page that links
  * it), as written and with sheets of media queries and viewport units.
  * --lazy-page PAGE.html [SHEET.css ...]: one page with the sheets given. */
@@ -879,6 +904,8 @@ static int test_lazy(int argc, char **argv)
               6);
     lazy_page("repeated layers first", page, sizeof page - 1,
               (const char *const[]){sheet_layers, sheet_layers_between, sheet_layers}, 3);
+    lazy_truncations("cut sheet", sheet_lazy);
+    lazy_truncations("cut layers", sheet_layers_between);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
