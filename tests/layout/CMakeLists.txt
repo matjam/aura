@@ -20,6 +20,14 @@ target_link_libraries(test_layout_fonts aura_host_platform aura_engine m)
 target_compile_definitions(test_layout_fonts PRIVATE AURA_FONTS_DIR="${CMAKE_SOURCE_DIR}/assets/fonts")
 add_test(NAME layout_fonts COMMAND test_layout_fonts)
 
+# DOM changes rebuild only the changed subtree of the box tree, and the
+# result equals a whole build (test_incremental.c).
+add_executable(test_incremental test_incremental.c)
+target_link_libraries(test_incremental aura_engine m)
+target_include_directories(test_incremental PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME layout_incremental COMMAND test_incremental)
+set_tests_properties(layout_incremental PROPERTIES TIMEOUT 120)
+
 # One test per case file.
 file(GLOB LAYOUT_CASES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/cases/*.txt)
 foreach(case ${LAYOUT_CASES})
