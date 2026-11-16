@@ -170,15 +170,75 @@ The three pages, base against all the changes:
 | https://news.ycombinator.com/ | 0 to 5 | 1 to 4 |
 
 After the changes, compiling is about 45% of GitHub's script time and
-GitHub's own code most of the rest; Aura's natives are under 5%. Not
-measured in the guest.
+GitHub's own code most of the rest; Aura's natives are under 5%. In the
+guest the page's script took 9.3 to 10 s, and about 3 s of it was the
+allocator ("The pooled allocator's classes over 2 KB" below).
+
+## The pooled allocator's classes over 2 KB
+
+Measured on 2026-11-16 in the guest (Enforcer base, 640x480), base
+`0477437` against the branch with the classes over 2 KB (`ca03101`),
+in alternating runs. Each run launched Aura, opened a new tab, loaded
+https://github.com/matjam/aura, read Develop > Performance 80 seconds
+after the address was typed, closed the tab, read Develop > System
+Status, and did the same for https://en.wikipedia.org/wiki/PowerPC.
+
+To repeat it, build both, push one at a time with `tools/guest-push.sh`
+into a guest of your own (`AURA_RUN`), and alternate. The host's load
+moves every time in the guest: compare style time too, which the
+change hardly touches, and leave out runs where it doubled.
+
+GitHub's repository page, medians (base: 6 runs; the change: 3 runs,
+2 more left out under load):
+
+| Reading | Base | Classes over 2 KB |
+|---|---|---|
+| Page load | 10.57 s (9.70 to 13.29) | 9.15 s (8.60 to 10.23) |
+| Script | 9,673 ms (9,279 to 13,337) | 6,850 ms (6,662 to 7,088) |
+| Style | 1,087 ms | 1,315 ms |
+| Free memory, the page loaded | 21.61 MB of 72.02 MB (largest block 19.06 MB) | 20.20 MB (largest block 17.75 MB) |
+| Free heap, its tab closed | 57.40 MB (largest block 20.07 MB) | 56.60 MB (largest block 18.92 MB) |
+
+The same page with 64 KB slabs for the classes (`f846bee`, 3 runs):
+page load 8.63 s, script 6,833 ms, free memory 19.66 MB, free heap
+after closing 55.64 MB (largest block 18.96 MB). The 32 KB slabs kept
+the speed and pinned less.
+
+The Wikipedia article (loaded second, so its "closed" reading follows
+both pages), medians of 5 runs each:
+
+| Reading | Base | Classes over 2 KB |
+|---|---|---|
+| Page load | 1.52 s | 1.40 s |
+| Script | 1,754 ms | 1,442 ms |
+| Style | 850 ms | 775 ms |
+| Free heap, both tabs closed | 55.88 MB (largest block 20.30 MB) | 55.36 MB (largest block 18.90 MB) |
+
+- Script on GitHub's page took 29% less time and the page loaded 13%
+  faster: the script engine's arenas no longer go through `NewPtr` and
+  `DisposePtr`, and the Memory Manager holds about 1,500 blocks for the
+  pool instead of about 7,900.
+- The heap holds 1.4 MB more while the page is loaded (blocks rounded
+  up to their class) and 0.8 MB more after its tab closed (slabs
+  pinned by blocks that outlive the page, [`memory.md`](memory.md),
+  "Blocks over 2 KB"); the largest free block after closing was 1.2 MB
+  smaller.
+- Free temporary memory read about 2 MB lower with the change in every
+  pair (3 to 5 MB with 64 KB slabs), although the heap took none from
+  it (Develop > Performance showed no "taken by Aura" line). The cause
+  was not found.
+- The baseline given before this work (11.2 s, script 10.9 s, style
+  3.2 s, 22.8 of 72.2 MB free) was taken under more load.
+- Not measured on a real G4 or on the stock base.
 
 ## Things that were slow, and why
 
 These are the causes found so far; look for the same shapes first.
 
 - **One `NewPtr` per block.** Retro68's `malloc` cost tens of seconds
-  per layout on a large page ([`memory.md`](memory.md)).
+  per layout on a large page ([`memory.md`](memory.md)). The script
+  engine's 4 KB arenas, one `NewPtr` each until 2026-11-16, cost GitHub's
+  page about 3 s of script time in the guest.
 - **Restyling the whole document** for a hover change, a keystroke or a
   resize, on pages with `:has()` rules ([`css.md`](css.md),
   [`forms.md`](forms.md)).
