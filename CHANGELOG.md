@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.0](https://github.com/matjam/aura/compare/v0.3.0...v0.4.0) (2026-11-16)
+
+
+### Features
+
+* a deflate encoder (raw, zlib and gzip; stored, fixed and dynamic blocks; two levels) ([1825a93](https://github.com/matjam/aura/commit/1825a93f6c2665a721e8686f65353b7f77f228a6))
+* background tabs are unloaded when memory is low, and a restored session loads only its active tab ([ecf9852](https://github.com/matjam/aura/commit/ecf9852804edb371277726249522db115c04f144))
+* localStorage and sessionStorage are kept by a storage service: shared by an origin's pages and tabs, with storage events, per-tab session storage and document.referrer ([ddf8930](https://github.com/matjam/aura/commit/ddf8930513dbbc9ce868f1a1eadc3b9c0ef3a052))
+* localStorage and sessionStorage are stored, shared across an origin's pages and saved; document.referrer ([1971abb](https://github.com/matjam/aura/commit/1971abb88894fed68d84c428ba00c120bffd0ca9))
+* Page Timings shows the page source's size, what is held for it and how long compressing took ([76fff4e](https://github.com/matjam/aura/commit/76fff4e91c89e87b2f26b3bf3c0e623c9ea68231))
+* web storage in the host tools, the sample page, the file fuzzer and docs/web-storage.md; session storage follows the cookie rules into the Session file ([ea5dbcc](https://github.com/matjam/aura/commit/ea5dbccaa81feb2c93f888af73b991f7dd447b3c))
+* web storage is saved in the Local Storage folder, follows the cookie rules, and shows in the Cookies window and System Status ([7be5846](https://github.com/matjam/aura/commit/7be58465dbc24963c86866250c412ee4cff1a708))
+
+
+### Bug Fixes
+
+* the deflate encoder's tree builder states its two-leaf minimum, for GCC's bounds check ([a32ea9e](https://github.com/matjam/aura/commit/a32ea9e783f602d937318a3439f919c15e7f8f74))
+* the kept-document estimate counts a parsed sheet as it is stored now ([03313a7](https://github.com/matjam/aura/commit/03313a72ef6d53ab558946734d9aa072f4e7edc3))
+
+
+### Performance Improvements
+
+* a hidden document packs its style sheet text at once ([8574ef8](https://github.com/matjam/aura/commit/8574ef871ef81982d7be55a8a6665a35b5e01b13))
+* a sheet that script changed keeps its text once ([c809d77](https://github.com/matjam/aura/commit/c809d77b346d010c9c7709502fd855fd3d106413))
+* a sheet's text is held deflated once the page has loaded ([1ab0608](https://github.com/matjam/aura/commit/1ab0608babd5afab19df30dc05dc713ab3aaa1f9))
+* a small sheet's arena chunks stay small, and the Mac OS 9 build checks the record sizes ([dafce20](https://github.com/matjam/aura/commit/dafce201354370961481149adeb259420d40f8f2))
+* kept documents free their layout, background tabs unload when memory is low, page source and cached responses are held compressed ([52d0953](https://github.com/matjam/aura/commit/52d09533f4c1d7e92ca0b80d742c8464d32b5ea7))
+* only the last occurrence of a repeated sheet is indexed; a token list is one block; an aliased custom property shares its value ([a077c0b](https://github.com/matjam/aura/commit/a077c0bc937225c82ab7dc89745f5cb1e24ee3db))
+* parsed style sheets live in an arena, with packed rules and selectors; blocks that cannot apply are not parsed ([511b534](https://github.com/matjam/aura/commit/511b534e1f8977159821228a6ba5b7abc227fa78))
+* parsed style sheets take a fifth of the memory: lazy rule bodies, an arena with packed records, shared and repeated sheets, packed text ([0c30977](https://github.com/matjam/aura/commit/0c3097712edacea62d9c0272a0cc82017b82b68c))
+* the HTTP cache holds encoded responses as they arrived and decodes them when served ([2798b18](https://github.com/matjam/aura/commit/2798b18287c71712acee89ae593e3395616e7cf3))
+* the page source is held compressed once the load is over ([30ec393](https://github.com/matjam/aura/commit/30ec393edc9d492af326e8d2651e194fbeb7f4f5))
+* the rule index rejects on a selector's first filter hash and keeps a parsed block's address; a token list is built in its block ([8d0d7ff](https://github.com/matjam/aura/commit/8d0d7ff215881c81fb6a72939e1f47f28d204f8e))
+
 ## 0.3.0 (2026-11-16)
 
 
