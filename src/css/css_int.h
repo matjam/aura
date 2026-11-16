@@ -502,6 +502,7 @@ typedef struct CssPropertyRule {
 } CssPropertyRule;
 
 struct AuCssSheet {
+    uint32_t refs; /* owners (au_css_sheet_retain); freed with the last */
     uint8_t origin;
     bool quirks;
     char *base_url;

@@ -527,7 +527,11 @@ typedef struct AuCssMediaList AuCssMediaList;
  * invalid parts are dropped as CSS requires. */
 AuCssSheet *au_css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                                const char *media);
+/* A sheet is freed when its last owner frees it; au_css_sheet_retain adds
+ * an owner (a document that links one sheet several times parses it
+ * once). */
 void au_css_sheet_free(AuCssSheet *s);
+AuCssSheet *au_css_sheet_retain(AuCssSheet *s);
 size_t au_css_sheet_rule_count(const AuCssSheet *s); /* style rules, nested ones included */
 
 /* @import rules, in order. To load one, fetch url (relative to the

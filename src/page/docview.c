@@ -636,11 +636,45 @@ static void start_sheet(AuDocView *dv, SheetSrc *s)
 /* Parses a source whose text is there, once; attaches an import to its
  * parent's sheet; and starts the sheet's own @imports. A fetched sheet's
  * text is freed: nothing reads it again. */
+static uint32_t text_hash(const char *p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (unsigned char)p[i]) * 16777619u;
+    return h;
+}
+
+/* A sheet of this document that was parsed from the same text for the
+ * same URL and media, or NULL. A page may link one sheet several times
+ * (GitHub's home page links one of 800 KB four times); they share one
+ * parsed sheet. Sheets with @import rules are left out: an import is
+ * attached to its parent's sheet. */
+static AuCssSheet *same_sheet(AuDocView *dv, const SheetSrc *s)
+{
+    if (s->parent)
+        return NULL;
+    for (uint32_t i = 0; i < dv->nslots; i++) {
+        const SheetSrc *o = dv->slots[i].src;
+        if (o == s || !o->sheet || o->nimports || o->len != s->len || o->hash != s->hash)
+            continue;
+        if (au_css_sheet_import_count(o->sheet) || strcmp(o->url ? o->url : "", s->url ? s->url : "") ||
+            strcmp(o->media ? o->media : "", s->media ? s->media : ""))
+            continue;
+        return o->sheet;
+    }
+    return NULL;
+}
+
 static void parse_sheet(AuDocView *dv, SheetSrc *s, bool keep_text)
 {
     if (s->sheet || !s->text)
         return;
-    AuCssSheet *sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    s->hash = text_hash(s->text, s->len);
+    AuCssSheet *sh = same_sheet(dv, s);
+    if (sh)
+        au_css_sheet_retain(sh);
+    else
+        sh = au_css_sheet_parse(s->text, s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
     if (dv->webfonts)
         au_webfonts_add_sheet(dv->webfonts, sh, s->text, s->len);
     if (!keep_text) {

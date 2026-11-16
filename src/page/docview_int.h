@@ -18,6 +18,7 @@ struct SheetSrc {
     char *media;  /* media attribute or @import media, NULL for all */
     char *text;   /* a <style>'s text, kept to notice edits; a fetched sheet's text is freed once parsed */
     size_t len;   /* the text's length, also after the text is freed */
+    uint32_t hash; /* of the text, set when it is parsed (same_sheet) */
     uint32_t req; /* outstanding request, 0 if none */
     bool failed;
     bool deferred;     /* media does not match: not fetched (a <style>: not parsed) yet */

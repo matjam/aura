@@ -962,6 +962,7 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
 {
     au_css_init();
     AuCssSheet *sh = au_calloc(sizeof *sh);
+    sh->refs = 1;
     sh->origin = (uint8_t)origin;
     sh->quirks = quirks;
     sh->base_url = base_url ? au_strndup(base_url, strlen(base_url)) : NULL;
@@ -1018,9 +1019,16 @@ void css_rules_free(CssRule *r)
     }
 }
 
+AuCssSheet *au_css_sheet_retain(AuCssSheet *s)
+{
+    if (s)
+        s->refs++;
+    return s;
+}
+
 void au_css_sheet_free(AuCssSheet *s)
 {
-    if (!s)
+    if (!s || --s->refs)
         return;
     css_rules_free(s->rules);
     for (uint32_t i = 0; i < s->nimports; i++) {
