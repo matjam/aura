@@ -111,20 +111,47 @@ out-of-memory test.
 
 ## The pooled allocator
 
-On Mac OS 9, `au_alloc` takes small blocks from the pooled allocator
-(`src/core/heap.c`, turned on by `au_heap_enable` at the start of
-`main`): 32 KB slabs per size class, and one `NewPtr` only for a slab
-or a block over 2 KB.
+On Mac OS 9, `au_alloc` takes every block of up to 16 KB from the
+pooled allocator (`src/core/heap.c`, turned on by `au_heap_enable` at
+the start of `main`), and calls `NewPtr` only for a slab or a block
+over 16 KB.
+
+To see what the pool holds on the host, run `aura-host` with
+`AURA_HEAP=1` (the pool then runs over `malloc`, as on the Mac) and add
+`--do heap`: it prints the blocks in use, the bytes held from the
+platform, the slabs and large blocks, the blocks over 2 KB and their
+slabs, and the empty slabs kept. For example, `AURA_HEAP=1 aura-host
+chrome --net --tab about:blank --tab URL --active 1 --do wait:8000 --do
+heap --do closetab --do wait:3000 --do heap` shows what a page leaves
+behind when its tab closes.
 
 **What a block costs there.** Every block has a header of 8 bytes (the
 slab and the size asked for), and its size is rounded up to its class:
-steps of 8 bytes up to 128, then four classes per doubling up to 2 KB
-(a 130-byte block takes a 160-byte slot). A block over 2 KB is a
-`NewPtr` of its own, with the same 8-byte header and the Memory
-Manager's. A slab is returned only when its last block is freed, so
-many small long-lived blocks also pin slabs. Prefer one allocation for
-records that live and die together: a parsed style sheet keeps its
-rules and selectors in an arena for this reason
+
+| Size | Classes | Slab |
+|---|---|---|
+| up to 128 bytes | every 8 bytes | 32 KB, shared by the small classes |
+| 129 bytes to 2 KB | four per doubling (a 130-byte block takes a 160-byte slot) | 32 KB, shared by the small classes |
+| over 2 KB to 16 KB | 2560, 3072, 3584, 4112, 5120, 6144, 7168, 8208, 10240, 12288, 14336, 16400 bytes | about 32 KB, a whole number of blocks and at least 4: 13 blocks of 2560, 8 of 4112, 4 of 16400 |
+| over 16400 bytes | none: a `NewPtr` of its own, with the same header and the Memory Manager's | |
+
+The classes at a power of two are 16 bytes over it so that the script
+engine's 4 KB arenas fit: QuickJS takes its blocks of up to 512 bytes
+from arenas of at most 4096 bytes, and `qa_malloc`
+(`src/js/runtime.c`) adds a 16-byte header to each.
+
+**Empty slabs.** A slab is returned only when its last block is freed.
+The pool then keeps up to 8 empty small slabs and, for the classes
+over 2 KB, one empty slab per class and 4 in all; the others go back to
+the platform at once. `au_heap_trim` gives back the kept slabs too.
+`au_alloc` and `au_try_alloc` call it when the platform has no memory,
+before the release handler, and again after the handler has run.
+
+**Long-lived blocks pin slabs.** One block that outlives a page keeps
+its whole slab, so many small long-lived blocks hold more memory than
+they use ("Blocks over 2 KB" below has the figures). Prefer one
+allocation for records that live and die together: a parsed style
+sheet keeps its rules and selectors in an arena for this reason
 ([`css.md`](css.md), "How a parsed sheet is stored").
 
 Retro68's `malloc` is one `NewPtr` per block, and the Memory Manager
@@ -139,8 +166,8 @@ On Mac OS 9, `heap_get` in `main.c` takes a platform block from
 temporary memory when the application heap is short: when the block
 would leave less than 2 MB free there (`HEAP_FLOOR`), or when `NewPtr`
 fails. This applies to every allocation, script included: the script
-heap is `au_try_alloc`, and QuickJS's 4 KB arenas and larger blocks are
-one platform block each (they are over the pooled allocator's 2 KB).
+heap is `au_try_alloc`, its 4 KB arenas come from the pool's slabs, and
+its blocks over 16 KB are one platform block each.
 
 - Temporary memory is taken 256 KB at a time (one locked handle);
   blocks under 128 KB are cut from the chunk in order and the chunk is
@@ -359,6 +386,62 @@ The page takes 27.7 MB of heap on `main` and 9.8 MB with the work.
 With the live page and its scripts the script heap (36 MB) decides the
 reading, and the heap takes temporary memory when it is full, so the
 two builds cannot be compared that way.
+
+### Blocks over 2 KB
+
+Measured on 2026-11-16, base `0477437`, before the pool served blocks
+over 2 KB from slabs. To repeat it, count the blocks in `au_heap_alloc`
+and `au_heap_free` with a temporary patch and load the page with
+`AURA_HEAP=1` (above, "The pooled allocator").
+
+Blocks over 2 KB that the host made while it loaded each page for 8
+seconds and closed its tab (64-bit host; the script engine's arenas are
+the same size on PowerPC):
+
+| Size | GitHub repository page: made | GitHub: live at most | Wikipedia (PowerPC): made | Wikipedia: live at most | Hacker News: made | Hacker News: live at most |
+|---|---|---|---|---|---|---|
+| 2 to 3 KB | 7,167 | 273 | 3,520 | 72 | 235 | 11 |
+| 3 KB to 4112 bytes (the script engine's 4 KB arenas are 3.6 KB to 4112 bytes) | 29,562 | 6,707 | 6,364 | 1,856 | 655 | 412 |
+| 4113 bytes to 8 KB | 4,750 | 282 | 741 | 128 | 79 | 35 |
+| 8 to 16 KB | 2,342 | 309 | 711 | 106 | 242 | 24 |
+| 16 to 64 KB | 1,370 | 139 | 411 | 114 | 44 | 25 |
+| over 64 KB | 421 | 70 | 172 | 47 | 80 | 23 |
+| All | 45,612 | 7,601 at once | 11,919 | 2,263 at once | 1,335 | 518 at once |
+
+- **Lifetimes.** Of the 38,051 blocks GitHub's page freed before its tab
+  closed, 95.5% lived under 10 ms, 3.9% under 100 ms and 0.4% under a
+  second. The script engine frees an arena as soon as its last block
+  goes, so arenas are made and freed thousands of times; each was a
+  `NewPtr` and a `DisposePtr` on Mac OS 9.
+- **What outlives the page.** After the tab closed, 200 blocks over
+  2 KB were still live: HTTP cache entries (`cache.c`, 66 blocks,
+  0.4 MB), TLS connections kept open (`tls.c`, `tls_platform.c`, 81
+  blocks), response headers and HTTP buffers.
+
+What the pool held from the platform for GitHub's page (`--do heap`,
+host), before the change, with 64 KB slabs for the classes over 2 KB,
+and with 32 KB slabs (the change as merged):
+
+| Reading | Before | 64 KB slabs | 32 KB slabs |
+|---|---|---|---|
+| Platform blocks, the page loaded | 7,917 (356 slabs, 7,561 large blocks) | 1,072 | 1,548 (1,348 slabs, 200 large blocks) |
+| Bytes from the platform, the page loaded | 76,212 KB | 78,281 KB | 78,508 KB |
+| Platform blocks, its tab closed | 443 | 323 | 339 |
+| Bytes from the platform, its tab closed | 29,070 KB | 32,595 KB | 31,077 KB (393 KB of it empty slabs kept) |
+
+The blocks that outlive the page were made while its arenas filled the
+same slabs, so each pins a slab: 191 blocks held 89 slabs with 32 KB
+slabs, 190 held 72 with 64 KB slabs. The Mac OS 9 application returns
+the empty slabs it keeps every 10 seconds while no page loads
+(`idle_all` in `main.c`); `aura-host` does not.
+
+In the guest (Enforcer base, medians, [`performance.md`](performance.md),
+"The pooled allocator's classes over 2 KB"):
+
+| Reading, GitHub's repository page | Before | After |
+|---|---|---|
+| Free memory, the page loaded | 21.61 MB of 72.02 MB (largest block 19.06 MB) | 20.20 MB (largest block 17.75 MB) |
+| Free heap, its tab closed | 57.40 MB (largest block 20.07 MB) | 56.60 MB (largest block 18.92 MB) |
 
 ## Cold memory
 

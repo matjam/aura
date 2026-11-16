@@ -452,7 +452,15 @@ Largest first.
    Error locations in the Console depend on them.
 8. **The pooled allocator's slabs** are `NewPtr` blocks that do not
    move: one long-lived block keeps a 32 KB slab, and the largest free
-   block after closing a large page was 42 MB of 60 MB free.
+   block after closing a large page was 42 MB of 60 MB free. Since the
+   classes over 2 KB came from slabs too (2026-11-16), the blocks over
+   2 KB that outlive GitHub's repository page (HTTP cache entries, idle
+   TLS connections, made while the page's script arenas filled the
+   same slabs) hold about 2 MB of slabs on the host when its tab
+   closes, against 1 MB of their own
+   ([`memory.md`](memory.md), "Blocks over 2 KB"). Keeping blocks that
+   outlive a page apart from the page's own (a pool per document, or
+   the cache's bodies in slabs of their own) would release those slabs.
 9. **A system font is read whole on first use** (into temporary
    memory); reading only the tables used needs a different font data
    interface.
@@ -537,12 +545,18 @@ fuzzed".
   pages load the same bundles each time
   ([`performance.md`](performance.md), "Script on GitHub's repository
   page").
-- **Script heap blocks on Mac OS 9.** QuickJS takes its small blocks
-  from 4 KB arenas, and the pooled allocator gives every block over
-  2 KB its own `NewPtr` ([`memory.md`](memory.md)): GitHub's
-  repository page made 16,410 such blocks, 12,169 of them arenas, so
-  the Memory Manager holds thousands of blocks for one script heap.
-  Its cost in the guest has not been measured.
+- **Blocks over 16 KB on Mac OS 9** are still a `NewPtr` each (about
+  1,800 of GitHub's 45,600 blocks over 2 KB, 200 live at once); the
+  4 KB script arenas and the other blocks up to 16 KB come from the
+  pool's slabs since 2026-11-16 ([`memory.md`](memory.md), "Blocks
+  over 2 KB"). Classes up to 64 KB would remove most of the rest at the
+  cost of more memory pinned by long-lived blocks.
+- **The pool rounds blocks over 2 KB up to their class** (up to 25%),
+  and long-lived blocks pin slabs: GitHub's page took about 1.4 MB
+  more heap in the guest with the classes, and its closed tab left
+  0.8 MB less free and a largest free block 1.2 MB smaller
+  ([`performance.md`](performance.md), "The pooled allocator's classes
+  over 2 KB").
 - **Forced layout from script** remains where script asks for geometry
   (`getBoundingClientRect`, `offsetWidth`, `getComputedStyle` widths
   through `N.rect`); on GitHub's page after the changes of 2026-11-16 it
