@@ -149,9 +149,10 @@ Measured (Wikipedia, live):
 - In the guest the change showed on screen about 3 seconds after the
   key was sent, because the page being left was still running its
   scripts.
-- Develop > Page Timings shows these times for a page that Back or
-  Forward showed from the kept documents, with the number and estimated
-  size of kept documents.
+- Develop > Performance shows these times for a page that Back or
+  Forward showed from the kept documents (the "Page load" line), with
+  the number and estimated size of kept documents in its Memory section
+  ([`developer-tools.md`](developer-tools.md)).
 
 ## Back, Forward and closed tabs
 

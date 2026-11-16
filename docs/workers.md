@@ -23,11 +23,18 @@ that moves while script runs.
 
 Each worker is a QuickJS runtime with the worker prelude
 ([`javascript.md`](javascript.md), "The prelude") and no document, with
-its own memory limit (`AuJsSettings.worker_memory_limit`, 24 MB when
-the setting is 0).
+its own memory limit (`AuJsSettings.worker_memory_limit`). The browser
+sets it from the `content.worker_memory_kb` preference: Automatic is a
+quarter of the memory free, at least 4 MB and at most 32 MB
+([`javascript.md`](javascript.md), "Script memory limits"). An embedder
+that leaves the setting 0 gets 24 MB. A worker that reaches its limit
+ends, and its `Worker` object gets an `error` event; the page goes on
+running.
 
 - The page fetches the script (same origin, or a `blob:` or `data:`
-  URL) and hands the text over.
+  URL) and hands the text over, with its bytecode when the page has
+  compiled the same script ([`javascript.md`](javascript.md), "How
+  script memory is kept down").
 - Messages cross as bytes: `scEncode` in `prelude_web.js` turns a value
   into a plain tree, `JS_WriteObject` writes it, and the other side
   reads it and builds the value.
