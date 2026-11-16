@@ -232,10 +232,10 @@ static uint32_t sandbox_flags(const AuElement *el)
 
 static AuIRect frame_rect_in_owner(const AuFrame *f, AuIRect r)
 {
-    AuIRect o = {(int)f->box.x + r.x0 - f->sx - 1, (int)f->box.y + r.y0 - f->sy - 1, (int)f->box.x + r.x1 - f->sx + 1,
-                 (int)f->box.y + r.y1 - f->sy + 1};
-    int bx0 = (int)f->box.x - 1, by0 = (int)f->box.y - 1;
-    int bx1 = (int)(f->box.x + f->box.w) + 2, by1 = (int)(f->box.y + f->box.h) + 2;
+    AuIRect o = {au_f2px(f->box.x) + r.x0 - f->sx - 1, au_f2px(f->box.y) + r.y0 - f->sy - 1, au_f2px(f->box.x) + r.x1 - f->sx + 1,
+                 au_f2px(f->box.y) + r.y1 - f->sy + 1};
+    int bx0 = au_f2px(f->box.x) - 1, by0 = au_f2px(f->box.y) - 1;
+    int bx1 = au_f2px(f->box.x + f->box.w) + 2, by1 = au_f2px(f->box.y + f->box.h) + 2;
     if (o.x0 < bx0)
         o.x0 = bx0;
     if (o.y0 < by0)
@@ -252,7 +252,7 @@ static void invalidate_frame(AuFrame *f)
     AuDocView *o = f->owner;
     if (!f->has_box || !o->cb.invalidate)
         return;
-    AuIRect r = {(int)f->box.x - 1, (int)f->box.y - 1, (int)(f->box.x + f->box.w) + 2, (int)(f->box.y + f->box.h) + 2};
+    AuIRect r = {au_f2px(f->box.x) - 1, au_f2px(f->box.y) - 1, au_f2px(f->box.x + f->box.w) + 2, au_f2px(f->box.y + f->box.h) + 2};
     o->cb.invalidate(o->cb.ctx, o, r);
 }
 
@@ -274,7 +274,7 @@ static void clamp_scroll(AuFrame *f)
         return;
     float w, h;
     au_layout_document_size(au_docview_layout(f->dv), &w, &h);
-    int mx = (int)(w + 0.99f) - f->dv->vw, my = (int)(h + 0.99f) - f->dv->vh;
+    int mx = au_f2px(w + 0.99f) - f->dv->vw, my = au_f2px(h + 0.99f) - f->dv->vh;
     if (f->sx > mx)
         f->sx = mx;
     if (f->sy > my)
@@ -485,7 +485,7 @@ static AuDocView *frame_view(AuFrame *f)
     if (o->has_font_prefs)
         au_docview_set_font_prefs(c, &o->font_prefs);
     if (f->has_box && f->box.w >= 1 && f->box.h >= 1)
-        au_docview_set_viewport(c, (int)f->box.w, (int)f->box.h);
+        au_docview_set_viewport(c, au_f2px(f->box.w), au_f2px(f->box.h));
     else
         au_docview_set_viewport(c, 300, 150);
     f->dv = c;
@@ -1478,7 +1478,7 @@ void au_frames_layout(AuDocView *dv)
         f->off_x = cr.x - br.x;
         f->off_y = cr.y - br.y;
         if (f->dv && cr.w >= 1 && cr.h >= 1)
-            au_docview_set_viewport(f->dv, (int)cr.w, (int)cr.h);
+            au_docview_set_viewport(f->dv, au_f2px(cr.w), au_f2px(cr.h));
         if (f->state == FS_LAZY && near_viewport(f) && f->url) {
             char *url = f->url;
             f->url = NULL;
@@ -1511,7 +1511,7 @@ void au_frames_paint(AuDocView *dv, AuElement *el, AuCanvas *c, AuRect content)
     AuRect r = {floorf(content.x + 0.5f), floorf(content.y + 0.5f), floorf(content.w), floorf(content.h)};
     if (r.w < 1 || r.h < 1)
         return;
-    au_docview_set_viewport(f->dv, (int)r.w, (int)r.h);
+    au_docview_set_viewport(f->dv, au_f2px(r.w), au_f2px(r.h));
     int cw, ch;
     au_docview_content_size(f->dv, &cw, &ch);
     clamp_scroll(f);
@@ -1521,19 +1521,19 @@ void au_frames_paint(AuDocView *dv, AuElement *el, AuCanvas *c, AuRect content)
     /* Scroll bars, drawn as the page's overflow scrollers are. */
     AuRadii rad = {{3, 3, 3, 3}, {3, 3, 3, 3}};
     au_canvas_clip_push(c, r);
-    if (ch > (int)r.h && r.h > 8) {
+    if (ch > au_f2px(r.h) && r.h > 8) {
         float th = r.h * r.h / (float)ch;
         if (th < 16)
             th = 16;
-        float ty = r.y + (r.h - th) * ((float)f->sy / (float)(ch - (int)r.h));
+        float ty = r.y + (r.h - th) * ((float)f->sy / (float)(ch - au_f2px(r.h)));
         au_fill_rect(c, (AuRect){r.x + r.w - 8, r.y, 8, r.h}, AU_RGBA(0, 0, 0, 20));
         au_fill_rounded_rect(c, (AuRect){r.x + r.w - 7, ty + 1, 6, th - 2}, &rad, AU_RGBA(0, 0, 0, 110));
     }
-    if (cw > (int)r.w && r.w > 8) {
+    if (cw > au_f2px(r.w) && r.w > 8) {
         float tw = r.w * r.w / (float)cw;
         if (tw < 16)
             tw = 16;
-        float tx = r.x + (r.w - tw) * ((float)f->sx / (float)(cw - (int)r.w));
+        float tx = r.x + (r.w - tw) * ((float)f->sx / (float)(cw - au_f2px(r.w)));
         au_fill_rect(c, (AuRect){r.x, r.y + r.h - 8, r.w, 8}, AU_RGBA(0, 0, 0, 20));
         au_fill_rounded_rect(c, (AuRect){tx + 1, r.y + r.h - 7, tw - 2, 6}, &rad, AU_RGBA(0, 0, 0, 110));
     }
@@ -1557,8 +1557,8 @@ static AuFrame *frame_at(AuDocView *dv, int x, int y, int *cx, int *cy)
     float lx = r.local_x - f->off_x, ly = r.local_y - f->off_y;
     if (lx < 0 || ly < 0 || lx >= f->box.w || ly >= f->box.h)
         return NULL; /* on the border or padding */
-    *cx = (int)lx + f->sx;
-    *cy = (int)ly + f->sy;
+    *cx = au_f2px(lx) + f->sx;
+    *cy = au_f2px(ly) + f->sy;
     return f;
 }
 
@@ -1592,8 +1592,8 @@ bool au_frames_mouse(AuDocView *dv, const AuEvent *ev, bool *used)
         f = dv->mouse_frame = NULL;
     if (f) {
         /* a press that began in the frame: it gets the drag and the release */
-        cx = ev->x - (int)f->box.x + f->sx;
-        cy = ev->y - (int)f->box.y + f->sy;
+        cx = ev->x - au_f2px(f->box.x) + f->sx;
+        cy = ev->y - au_f2px(f->box.y) + f->sy;
     } else {
         f = frame_at(dv, ev->x, ev->y, &cx, &cy);
     }
@@ -1758,8 +1758,8 @@ void au_docview_point_from_top(const AuDocView *dv, int *x, int *y)
     for (; dv->parent && dv->in_frame && n <= AU_FRAMES_DEPTH; dv = dv->parent)
         chain[n++] = dv->in_frame;
     while (n--) {
-        *x = *x - (int)chain[n]->box.x + chain[n]->sx;
-        *y = *y - (int)chain[n]->box.y + chain[n]->sy;
+        *x = *x - au_f2px(chain[n]->box.x) + chain[n]->sx;
+        *y = *y - au_f2px(chain[n]->box.y) + chain[n]->sy;
     }
 }
 

@@ -586,7 +586,7 @@ typedef struct SvgPaint {
 static AuColor paint_color(uint32_t css, float opacity)
 {
     uint32_t a = css & 255;
-    float fa = a * (opacity < 0 ? 0 : opacity > 1 ? 1 : opacity);
+    float fa = a * (!(opacity > 0) ? 0 : opacity > 1 ? 1 : opacity); /* a NaN opacity is 0 */
     uint32_t na = (uint32_t)(fa + 0.5f);
     return (AuColor)((na << 24) | (css >> 8));
 }
@@ -1125,7 +1125,7 @@ static void image_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opac
     if (!href || !x->env || !x->env->image || w == 0 || h == 0)
         return;
     float scale = mat_scale(&f->ctm);
-    int dw = (int)ceilf((w > 0 ? w : 0) * scale), dh = (int)ceilf((h > 0 ? h : 0) * scale);
+    int dw = au_f2px(ceilf((w > 0 ? w : 0) * scale)), dh = au_f2px(ceilf((h > 0 ? h : 0) * scale));
     const AuSurface *img = x->env->image(x->env->ctx, el, href, dw, dh);
     if (!img || img->width <= 0 || img->height <= 0)
         return;

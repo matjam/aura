@@ -423,6 +423,11 @@ void au_draw_glyph_run(AuCanvas *c, const AuFontFace *f, float size, const AuGly
         const AuFontFace *gf = g->face ? g->face : f;
         float gx = x + g->x + tx;
         float gy = g->y ? floorf(g->y + 0.5f) : 0;
+        /* A position that is not a number, or is far outside any surface
+         * (the page set it: a transform, an offset of 1e38px), draws
+         * nothing; the conversions below then stay in int's range. */
+        if (!(gx > -1e8f && gx < 1e8f && by + gy > -1e8f && by + gy < 1e8f))
+            continue;
         if (gf->color && au_colr_has(gf, g->id)) {
             /* Colour glyphs keep their own colours (the text colour is
              * only the foreground palette entry) and whole-pixel

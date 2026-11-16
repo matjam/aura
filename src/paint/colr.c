@@ -339,7 +339,7 @@ static uint32_t line_at(const ColorLine *L, float t)
         if (u > 1)
             u = 2 - u;
     }
-    if (u <= 0)
+    if (!(u > 0)) /* also not a number (an infinite position wrapped) */
         return L->lut[0];
     if (u >= 1)
         return L->lut[255];
@@ -653,9 +653,11 @@ static uint32_t composite_px(int mode, uint32_t s, uint32_t d)
 pack:;
     if (ra > 1)
         ra = 1;
+    if (!(ra > 0))
+        ra = 0; /* negative, or not a number */
     uint32_t A = (uint32_t)(ra * 255 + 0.5f), out = A << 24;
     for (int i = 0; i < 3; i++) {
-        float v = rc[i] > ra ? ra : rc[i] < 0 ? 0 : rc[i];
+        float v = rc[i] > ra ? ra : rc[i] > 0 ? rc[i] : 0;
         out |= (uint32_t)(v * 255 + 0.5f) << (16 - 8 * i);
     }
     return out;

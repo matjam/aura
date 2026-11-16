@@ -212,7 +212,8 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
         } else {
             float span = pos[s] - pos[s - 1];
             float f = span > 0 ? (t - pos[s - 1]) / span : 1.0f;
-            c = lerp_px(col[s - 1], col[s], (uint32_t)(f * 256.0f + 0.5f));
+            /* f is 0 to 1 for ordered stops; a page's stops may not be numbers. */
+            c = lerp_px(col[s - 1], col[s], f >= 1 ? 256u : f > 0 ? (uint32_t)(f * 256.0f + 0.5f) : 0u);
         }
         out->lut[i] = c;
     }
@@ -222,8 +223,8 @@ void au_gradient_prepare(const AuGradient *g, float tx, float ty, AuGradientLut 
 static int lut_index(const AuGradientLut *g, float t)
 {
     if (g->repeat) {
-        float f = t - floorf(t);
-        int i = (int)(f * 256.0f);
+        float f = t - floorf(t); /* not a number when t is infinite */
+        int i = au_f2i(f * 256.0f);
         return i < 0 ? 0 : i > 255 ? 255 : i;
     }
     if (g->reflect && isfinite(t)) {

@@ -1440,7 +1440,12 @@ static void prune_slots(AuDocView *dv)
  * clock advances when read, so it is not used for measuring). */
 static uint32_t perf_now(AuDocView *dv)
 {
-    return dv->cb.now_ms ? (uint32_t)dv->cb.now_ms(dv->cb.ctx, dv) : 0;
+    if (!dv->cb.now_ms)
+        return 0;
+    /* The low 32 bits of the milliseconds: a clock past 2^32 ms (49 days)
+     * is outside uint32_t's range, where a cast is undefined. */
+    double ms = fmod(dv->cb.now_ms(dv->cb.ctx, dv), 4294967296.0);
+    return ms >= 0 ? (uint32_t)ms : 0;
 }
 
 AuPerf *au_docview_perf(AuDocView *dv)
@@ -1872,15 +1877,15 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                     break;
                 }
         }
+        /* Held across the click: a listener may remove the link, and a
+         * new element at its address must not be taken for it. */
+        if (down_link)
+            au_node_ref(&down_link->node);
         bool follow = true;
         if (down && r.element) {
             /* click goes to the nearest common ancestor of the press and
              * release targets */
             AuElement *t = r.element;
-        /* Held across the click: a listener may remove the link, and a
-         * new element at its address must not be taken for it. */
-        if (down_link)
-            au_node_ref(&down_link->node);
             while (t && !node_contains(&t->node, &down->node))
                 t = au_is_element(t->node.parent) ? au_as_element(t->node.parent) : NULL;
             if (t) {
@@ -1903,6 +1908,7 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                 if (down_link)
                     au_node_unref(&down_link->node);
                 return true;
+            }
             au_docview_hit_test(dv, ev->x, ev->y, &r); /* listeners may have changed the page */
         }
         set_state(dv, &dv->active, NULL, AU_STATE_ACTIVE);
@@ -1911,7 +1917,6 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
             au_node_unref(&down_link->node); /* r.link, when it is the same, is in the document */
         if (follow && same_link) {
             char url[2048];
-            }
             link_url(dv, r.link, url, sizeof url);
             const char *target = attr(r.link, "target");
             bool new_tab = (ev->mods & AU_MOD_COMMAND) || (target && au_ieq(target, strlen(target), "_blank", 6));
@@ -2304,8 +2309,8 @@ static void canvas_dirty(void *ctx, AuCanvas2D *c, void *owner, AuIRect area)
         return;
     }
     float sx = cb.w / (float)cw, sy = cb.h / (float)ch;
-    AuIRect r = {(int)floorf(cb.x + (float)area.x0 * sx) - 1, (int)floorf(cb.y + (float)area.y0 * sy) - 1,
-                 (int)ceilf(cb.x + (float)area.x1 * sx) + 1, (int)ceilf(cb.y + (float)area.y1 * sy) + 1};
+    AuIRect r = {au_f2px(floorf(cb.x + (float)area.x0 * sx)) - 1, au_f2px(floorf(cb.y + (float)area.y0 * sy)) - 1,
+                 au_f2px(ceilf(cb.x + (float)area.x1 * sx)) + 1, au_f2px(ceilf(cb.y + (float)area.y1 * sy)) + 1};
     au_dv_invalidate_element_rect(dv, el, r);
 }
 

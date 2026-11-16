@@ -203,8 +203,9 @@ void au_svg_doc_default_size(const AuSvgDoc *d, int *w, int *h)
         fw = 300;
         fh = 150;
     }
-    *w = fw < 1 ? 1 : fw > AU_IMAGE_MAX_DIM ? AU_IMAGE_MAX_DIM : (int)(fw + 0.5f);
-    *h = fh < 1 ? 1 : fh > AU_IMAGE_MAX_DIM ? AU_IMAGE_MAX_DIM : (int)(fh + 0.5f);
+    /* !(x >= 1): below 1, or not a number */
+    *w = !(fw >= 1) ? 1 : fw > AU_IMAGE_MAX_DIM ? AU_IMAGE_MAX_DIM : (int)(fw + 0.5f);
+    *h = !(fh >= 1) ? 1 : fh > AU_IMAGE_MAX_DIM ? AU_IMAGE_MAX_DIM : (int)(fh + 0.5f);
 }
 
 /* The env's image callback: data: URLs only. */

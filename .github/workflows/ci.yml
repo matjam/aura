@@ -62,7 +62,7 @@ jobs:
         run: >-
           cmake -S . -B build/asan -G Ninja
           -DCMAKE_C_COMPILER=clang
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=undefined,float-cast-overflow"
       - name: Build
         run: cmake --build build/asan
       - name: Fetch Domato

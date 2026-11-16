@@ -157,7 +157,9 @@ static void raster(const AuPath *p, float dx, float dy, AuFillRule rule, AuIRect
      * scroll would differ in a coverage level here and there (scrolling
      * moves pixels and compares equal to a fresh paint only if drawing
      * does not depend on where the page is scrolled to). */
-    int ix = (int)floorf(dx), iy = (int)floorf(dy);
+    /* The offset is the canvas translation, which a page sets to anything
+     * (a transform, a position of 1e38px): au_f2px, not a cast. */
+    int ix = au_f2px(floorf(dx)), iy = au_f2px(floorf(dy));
     clip.x0 -= ix;
     clip.x1 -= ix;
     clip.y0 -= iy;

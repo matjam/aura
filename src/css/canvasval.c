@@ -156,7 +156,7 @@ bool au_css_parse_font_text(const char *s, size_t len, const AuStyle *base, AuCs
             else if (out->weight != 400)
                 au_buf_printf(&out->text, "%d ", out->weight);
             if (px == floorf(px))
-                au_buf_printf(&out->text, "%dpx ", (int)px);
+                au_buf_printf(&out->text, "%dpx ", au_f2i(px));
             else
                 au_buf_printf(&out->text, "%.6gpx ", (double)px);
             au_buf_append(&out->text, out->families.data, out->families.len);

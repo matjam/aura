@@ -340,7 +340,7 @@ static float font_kw_size(int k, float def)
         {9, 9, 10, 12, 14, 18, 24, 36},  {9, 10, 11, 13, 16, 20, 26, 39}, {9, 10, 12, 14, 17, 21, 28, 42},
         {9, 10, 13, 15, 18, 23, 30, 45}, {9, 10, 13, 16, 18, 24, 32, 48}};
     static const float scale[8] = {0.6f, 0.75f, 8.0f / 9, 1, 1.2f, 1.5f, 2, 3};
-    int d = (int)def;
+    int d = au_f2i(def);
     if ((float)d == def && d >= 9 && d <= 16)
         return table[d - 9][k - 1];
     return def * scale[k - 1];
@@ -471,7 +471,7 @@ static bool apply_font_weight(CssComputeCtx *c, const AuCssValue *v)
     } else {
         w = compute_number(c, v);
     }
-    if (w < 1)
+    if (!(w >= 1)) /* below 1, or not a number (calc(0/0)) */
         w = 1;
     if (w > 1000)
         w = 1000;

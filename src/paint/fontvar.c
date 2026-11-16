@@ -858,7 +858,7 @@ AuFontFace *au_font_face_instance(const AuFontFace *f, const AuFontVariation *va
     au_fontvar_apply_metrics(v);
     int w = au_font_axis_find(f, AU_TAG('w', 'g', 'h', 't'));
     if (w >= 0) {
-        int wt = (int)floorf(user[w] + 0.5f);
+        int wt = au_f2i(floorf(user[w] + 0.5f));
         v->weight = (uint16_t)(wt < 1 ? 1 : wt > 1000 ? 1000 : wt);
     }
     int it = au_font_axis_find(f, AU_TAG('i', 't', 'a', 'l'));

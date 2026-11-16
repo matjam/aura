@@ -40,10 +40,18 @@ To copy the result into the test machine and run it, see
 configure a separate folder:
 
 ```bash
-cmake -S . -B build/asan -G Ninja -DCMAKE_C_FLAGS="-fsanitize=address,undefined"
+cmake -S . -B build/asan -G Ninja -DCMAKE_C_FLAGS="-fsanitize=address,undefined,float-cast-overflow"
 cmake --build build/asan
 ctest --test-dir build/asan
 ```
+
+`float-cast-overflow` reports a float converted to an integer type that
+cannot hold it (a page reaches such conversions with 1e38px and NaN; see
+[`fuzzing.md`](fuzzing.md), "Rules the fuzzers enforce"). Clang's
+`undefined` group includes it (Apple Clang 21 reports it with
+`undefined` alone, checked 2026-11-15, and Clang's documentation lists
+it in the group); GCC's does not, so the flag names it and every
+compiler checks the same. CI configures with the same sanitizers.
 
 Run this for any change to code that reads data from the network or a
 file. The long fuzz sessions named in the area documents use this

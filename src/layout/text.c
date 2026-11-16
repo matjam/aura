@@ -73,7 +73,7 @@ static uint32_t font_hash(const void *fam, unsigned weight, bool italic, float s
     uint32_t h = (uint32_t)(uintptr_t)fam * 2654435761u;
     h ^= weight * 40503u;
     h ^= italic ? 0x5bd1e995u : 0;
-    h ^= (uint32_t)(size * 64) * 0x27d4eb2fu;
+    h ^= (uint32_t)au_f2i(size * 64) * 0x27d4eb2fu;
     return (h ^ (h >> 16)) & 63;
 }
 

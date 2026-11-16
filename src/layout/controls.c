@@ -238,7 +238,7 @@ bool au_layout_field_offset_at(AuLayout *L, AuElement *el, float lx, float ly, u
         return false;
     float ox, oy;
     text_origin(&F, &ox, &oy);
-    int li = (int)floorf((ly - oy) / (F.lh > 0 ? F.lh : 1));
+    int li = au_f2i(floorf((ly - oy) / (F.lh > 0 ? F.lh : 1)));
     if (li < 0)
         li = 0;
     if (li >= (int)F.nlines)
@@ -456,8 +456,8 @@ int au_layout_listbox_row_at(AuLayout *L, AuElement *el, float lx, float ly)
     if (y < 0 || rh <= 0)
         return -1;
     AuControl *c = au_ctl_peek(el);
-    int top = c ? (int)c->scroll_y : 0;
-    int row = (int)(y / rh) + top;
+    int top = c ? au_f2px(c->scroll_y) : 0;
+    int row = au_f2px(y / rh) + top;
     /* count the rows */
     int n = 0;
     const char *t = b->rep && b->rep->label ? b->rep->label : "";
@@ -477,7 +477,7 @@ int au_layout_listbox_visible(AuLayout *L, AuElement *el)
     LBlock *b = (LBlock *)bx;
     float rh = l_listbox_row(L, b);
     float h = b->h - b->bw[0] - b->bw[2] - b->p[0] - b->p[2];
-    int n = rh > 0 ? (int)(h / rh) : 4;
+    int n = rh > 0 ? au_f2i(h / rh) : 4;
     return n > 0 ? n : 1;
 }
 

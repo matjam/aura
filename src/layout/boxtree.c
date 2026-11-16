@@ -402,7 +402,7 @@ static int32_t clamp_i(float v)
         return 1000000000;
     if (v < -1e9f)
         return -1000000000;
-    return (int32_t)v;
+    return v != v ? 0 : (int32_t)v;
 }
 
 /* counter-reset, counter-increment, counter-set of one element or

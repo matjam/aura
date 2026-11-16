@@ -213,7 +213,7 @@ void au_blur_mask(uint8_t *m, int w, int h, float sigma)
     /* Three boxes of width d approximate a Gaussian of variance
      * 3 * (d^2 - 1) / 12 = sigma^2. */
     float d = sqrtf(4.0f * sigma * sigma + 1.0f);
-    int r = (int)floorf((d - 1.0f) / 2.0f + 0.5f);
+    int r = au_f2px(floorf((d - 1.0f) / 2.0f + 0.5f));
     if (r < 1)
         r = 1;
     uint8_t *tmp = au_alloc((size_t)(w > h ? w : h));
@@ -260,7 +260,7 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     au_canvas_get_translation(c, &tx, &ty);
     /* The fraction of the translation; whole pixels are added when
      * blending (see raster() in raster.c). */
-    int ix = (int)floorf(tx - (float)ox), iy = (int)floorf(ty - (float)oy);
+    int ix = au_f2px(floorf(tx - (float)ox)), iy = au_f2px(floorf(ty - (float)oy));
     float px = tx - (float)ox - (float)ix, py = ty - (float)oy - (float)iy;
     clip.x0 -= ix;
     clip.x1 -= ix;
@@ -273,7 +273,7 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
         au_radii_fit(&br, b);
     }
     float sigma = blur / 2.0f;
-    int pad = (int)ceilf(blur * 1.5f) + 2;
+    int pad = au_f2px(ceilf(blur * 1.5f)) + 2;
 
     /* The shadow shape: the box moved by the offset and grown by the spread
      * (shrunk for inset). */

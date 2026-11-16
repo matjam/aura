@@ -55,8 +55,12 @@ static void raster_size(const AuImageDecoder *d, int w, int h, int *ow, int *oh)
         tw *= k;
         th *= k;
     }
-    *ow = tw < 1 ? 1 : (int)(tw + 0.5f);
-    *oh = th < 1 ? 1 : (int)(th + 0.5f);
+    *ow = tw < 1 ? 1 : au_f2i(tw + 0.5f);
+    *oh = th < 1 ? 1 : au_f2i(th + 0.5f);
+    if (*ow < 1)
+        *ow = 1; /* not a number */
+    if (*oh < 1)
+        *oh = 1;
     while ((size_t)*ow * (size_t)*oh * 4 > d->opt.max_bytes && (*ow > 1 || *oh > 1)) {
         if (*ow > 1)
             (*ow)--;

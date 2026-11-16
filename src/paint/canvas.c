@@ -382,9 +382,11 @@ static void fill_rect_source(AuCanvas *c, AuRect r, const Source *src)
      * is then the same wherever the rectangle is translated to (see
      * raster()). */
     float tx = c->tx - (float)ox, ty = c->ty - (float)oy;
-    int ix = (int)floorf(tx), iy = (int)floorf(ty);
+    int ix = au_f2px(floorf(tx)), iy = au_f2px(floorf(ty));
     float x0 = r.x + (tx - (float)ix), y0 = r.y + (ty - (float)iy);
     float x1 = x0 + r.w, y1 = y0 + r.h;
+    if (x0 != x0 || y0 != y0 || x1 != x1 || y1 != y1)
+        return; /* not numbers: the coverage below would not be either */
     if (x0 < -1e7f)
         x0 = -1e7f;
     if (y0 < -1e7f)

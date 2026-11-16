@@ -529,7 +529,7 @@ static void draw_rounded_dashes(AuCanvas *c, AuRect box, const float *bw, const 
             continue;
         }
         float dash = dot ? s.w : 2 * s.w, gap = s.w;
-        int n = (int)((s.len + gap) / (dash + gap));
+        int n = au_f2i((s.len + gap) / (dash + gap));
         n = n < 1 ? 1 : n > 4000 ? 4000 : n;
         if (n == 1)
             dash = l_min(dash, s.len);
