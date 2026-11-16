@@ -2167,6 +2167,7 @@ static void build_walk(Builder *B)
             AuElement *e = au_as_element(c);
             const AuStyle *s = au_element_style(e);
             if (!s || s->box->display == AU_DISPLAY_NONE) {
+                e->box = NULL; /* (one adopted from another document) */
                 /* Remembered, so a restyle that shows it rebuilds the tree
                  * (au_layout_styles_changed sees only elements with boxes). */
                 if (s && !f->skip_children)
@@ -2179,6 +2180,7 @@ static void build_walk(Builder *B)
                 rev = true;
             apply_counters(B, s, c, li, rev);
             if (s->box->display == AU_DISPLAY_CONTENTS) {
+                e->box = NULL;
                 push(B, c, f->box, s);
                 /* ::before/::after of a contents element go into the parent box. */
                 BFrame *nf = &B->st[B->n - 1];
@@ -2194,8 +2196,9 @@ static void build_walk(Builder *B)
                 !(box->parent && box->parent->node == c->parent && box->parent->kind == LK_BLOCK &&
                   box->parent->inner == LI_FLOW))
                 box->flags &= ~LF_LEGEND; /* its fieldset has no block box of its own */
-            if (!e->box)
-                e->box = box;
+            /* Always: an element adopted from another document can still
+             * point at a box of that document's layout. */
+            e->box = box;
             if (box->kind == LK_BLOCK && !(box->flags & LF_INLINE_LEVEL))
                 B->last_space = true;
             if (box->kind == LK_BR || box->kind == LK_WBR) {

@@ -770,12 +770,14 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     bool tabular = b->b.inner == LI_TABLE || b->b.inner == LI_TABLE_CELL;
     if (can_skip(L, b, content_w, content_h, cb_h)) {
         L->stats.layouts_skipped++;
+        b->skip_gen = L->gen;
         b->w = content_w + l_bp_h(b);
         float h = content_h >= 0 && !tabular ? content_h : b->h - l_bp_v(b);
         b->h = h + l_bp_v(b);
         return;
     }
     L->depth++;
+    b->lay_gen = L->gen;
     b->b.flags &= ~(LF_TOO_DEEP | LF_ESCAPES);
     LConstraints c = {content_w, b->b.inner == LI_TABLE_CELL ? -1 : content_h, content_w, content_h};
     /* Quirks mode: an auto-height block passes its own percentage base
@@ -843,11 +845,14 @@ float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h
      * as given); no layout needed. */
     if (content_h >= 0 && b->b.inner != LI_TABLE && b->b.inner != LI_TABLE_CELL)
         return content_h + l_bp_v(b);
-    if (can_skip(L, b, content_w, content_h, cb_h))
+    if (can_skip(L, b, content_w, content_h, cb_h)) {
+        b->skip_gen = L->gen;
         return b->h;
+    }
     if ((b->b.flags & (LF_MEASURE_OK | LF_DIRTY | LF_CHILD_DIRTY)) == LF_MEASURE_OK && b->mk_w == content_w &&
         b->mk_h == content_h && same_cbh(L, b, b->mk_cbh, cb_h)) {
         L->stats.layouts_skipped++;
+        b->skip_gen = L->gen;
         return b->m_res;
     }
     l_layout_content(L, b, content_w, content_h, cb_h);
@@ -1052,7 +1057,10 @@ static void relative_pass(AuLayout *L)
             float ch = g && l_spec_height(g, -1) >= 0 ? g->h - l_bp_v(g) : -1;
             l_apply_relative((LBlock *)b, cw, ch);
         }
-        if (b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP))
+        /* Content reused in this pass kept its positions, offsets
+         * included: do not offset it again. */
+        bool reused = b->kind == LK_BLOCK && ((LBlock *)b)->skip_gen == L->gen && ((LBlock *)b)->lay_gen != L->gen;
+        if (b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP) && !reused)
             b = b->first;
         else {
             while (b && !b->next)
@@ -1466,6 +1474,7 @@ void au_layout_images_changed(AuLayout *L)
             if (r == 2 && !(sb->width.kind == AU_LEN_PX && sb->height.kind == AU_LEN_PX)) {
                 l_mark_dirty(b);
                 L->need_layout = true;
+                L->other_relayout = true;
             }
             if (r)
                 L->need_paint = true;
@@ -1643,8 +1652,10 @@ void au_layout_styles_changed(AuLayout *L)
             }
             if (d > worst)
                 worst = d;
-            if (d == 2)
+            if (d == 2) {
                 l_mark_dirty(b);
+                L->other_relayout = true;
+            }
             if (d < 3) {
                 au_style_retain((AuStyle *)ns);
                 au_style_release(b->style);
@@ -1758,6 +1769,8 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         vh = 1;
     bool changed = false;
     l_rebuild_dirty(L);
+    if (vw != L->vw || vh != L->vh)
+        L->other_relayout = true;
     if (L->src_viewport && (vw != L->src_vw || vh != L->src_vh))
         L->need_build = true; /* another srcset candidate may apply */
     if (L->need_build) {
@@ -1767,6 +1780,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         l_build_tree(L);
         L->build_count++;
         L->need_build = false;
+        L->other_relayout = false; /* laid out from scratch below */
         L->need_layout = true;
         L->need_restack = true;
     }

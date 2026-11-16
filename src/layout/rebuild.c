@@ -124,11 +124,12 @@ static AuElement *find_root(AuLayout *L, AuNode *n, bool *full)
         AuElement *e = au_as_element(p);
         const AuStyle *s = au_element_style(e);
         /* Nothing below display: none has a box, but a replaced box can
-         * show what is there: a select its options' text. */
+         * show what is there (a select its options' text), and an element
+         * that has a box was shown until this restyle: its box must go. */
         const LBox *eb = e->box;
         if (eb && eb->node == p && eb->replaced)
             hidden = false;
-        else if (s && s->box->display == AU_DISPLAY_NONE)
+        else if (s && s->box->display == AU_DISPLAY_NONE && !eb)
             hidden = true;
         if (hidden)
             continue;
@@ -173,6 +174,30 @@ static void context_fix(const LBox *parent, LBox *b)
 
 /* The flags by which a parent's normalization and the walk treat a child. */
 #define OUTER_FLAGS (LF_INLINE_LEVEL | LF_FLOAT | LF_ABSPOS | LF_MARKER_OUT | LF_FLEX_ITEM | LF_LEGEND | LF_LIST_ITEM)
+
+/* Whether box b's element is still a descendant of the element of b's
+ * nearest non-anonymous ancestor box, with no element that has a box of
+ * its own between them. */
+static bool in_place(const AuLayout *L, const LBox *b)
+{
+    const LBox *top = b;
+    while (top->parent)
+        top = top->parent;
+    if (top != L->root)
+        return false; /* a box of another document's layout */
+    const LBox *pb = b->parent;
+    while (pb && ((pb->flags & LF_ANON) || pb->pseudo || !pb->node))
+        pb = pb->parent;
+    if (!pb || !b->node)
+        return false;
+    for (const AuNode *p = b->node->parent; p; p = p->parent) {
+        if (p == pb->node)
+            return true;
+        if (p->type == AU_NODE_ELEMENT && ((const AuElement *)p)->box)
+            return false;
+    }
+    return false;
+}
 
 typedef struct RScroll {
     AuElement *el; /* referenced */
@@ -269,6 +294,10 @@ void l_rebuild_dirty(AuLayout *L)
             full = true;
         if (!el)
             continue;
+        if (!in_place(L, el->box)) {
+            full = true;
+            break;
+        }
         bool dup = false;
         for (uint32_t k = 0; k < nroots && !dup; k++)
             dup = roots[k].el == el;
@@ -299,7 +328,10 @@ void l_rebuild_dirty(AuLayout *L)
     for (uint32_t i = 0; i < nroots; i++)
         ((LBlock *)roots[i].old)->xf &= (uint8_t)~LX_MARK;
     nroots = n;
-    /* What a root's own style decides outside its box must not change. */
+    /* What a root's own style decides outside its box must not change.
+     * (in_place above: its old box must still be where its element is,
+     * since an element that moved gets its new box from the root it
+     * moved into.) */
     for (uint32_t i = 0; i < nroots; i++) {
         const AuStyle *ns = au_element_style(roots[i].el);
         const AuStyle *os = roots[i].old->style;
@@ -456,7 +488,7 @@ static void box_path(const LBox *b, AuBuf *o)
 
 /* Compares one box of the incremental tree (a) with its counterpart in
  * the whole build (b); writes what differs to msg. */
-static bool cmp_box(const LBox *a, const LBox *b, AuBuf *msg)
+static bool cmp_box(const LBox *a, const LBox *b, bool geom, AuBuf *msg)
 {
     const char *what = NULL;
     if (a->kind != b->kind || a->inner != b->inner || a->replaced != b->replaced || a->pseudo != b->pseudo)
@@ -479,14 +511,16 @@ static bool cmp_box(const LBox *a, const LBox *b, AuBuf *msg)
                  feq(x->baseline, y->baseline) && feq(x->last_baseline, y->last_baseline);
         for (int i = 0; i < 4 && g; i++)
             g = feq(x->m[i], y->m[i]) && feq(x->p[i], y->p[i]) && feq(x->bw[i], y->bw[i]);
-        if (!g)
+        if ((x->xf & LX_CTR_OPEN) != (y->xf & LX_CTR_OPEN))
+            what = "counter scope";
+        else if (!geom)
+            ; /* the tree only: lines and fragments follow the geometry */
+        else if (!g)
             what = "geometry";
         else if (!(feq(x->ov.x, y->ov.x) && feq(x->ov.y, y->ov.y) && feq(x->ov.w, y->ov.w) && feq(x->ov.h, y->ov.h)))
             what = "overflow";
         else if ((a->flags & LF_CLIPS) && !(feq(x->sw, y->sw) && feq(x->sh, y->sh)))
             what = "scroll extent";
-        else if ((x->xf & LX_CTR_OPEN) != (y->xf & LX_CTR_OPEN))
-            what = "counter scope";
         else if (x->nlines != y->nlines || x->nfrags != y->nfrags)
             what = "line count";
         else if ((x->rep == NULL) != (y->rep == NULL))
@@ -499,13 +533,13 @@ static bool cmp_box(const LBox *a, const LBox *b, AuBuf *msg)
                 !feq(r->density, s->density))
                 what = "replaced data";
         }
-        for (uint32_t i = 0; !what && i < x->nlines; i++) {
+        for (uint32_t i = 0; geom && !what && i < x->nlines; i++) {
             const LLine *p = &x->lines[i], *q = &y->lines[i];
             if (!feq(p->y, q->y) || !feq(p->h, q->h) || !feq(p->baseline, q->baseline) || !feq(p->x, q->x) ||
                 !feq(p->w, q->w) || p->first != q->first || p->n != q->n)
                 what = "line";
         }
-        for (uint32_t i = 0; !what && i < x->nfrags; i++) {
+        for (uint32_t i = 0; geom && !what && i < x->nfrags; i++) {
             const LFrag *p = &x->frags[i], *q = &y->frags[i];
             if (p->kind != q->kind || p->flags != q->flags || p->depth != q->depth || p->start != q->start ||
                 p->len != q->len || !feq(p->x, q->x) || !feq(p->y, q->y) || !feq(p->w, q->w) || !feq(p->h, q->h) ||
@@ -524,6 +558,10 @@ static bool cmp_box(const LBox *a, const LBox *b, AuBuf *msg)
         return true;
     au_buf_printf(msg, "%s differs at ", what);
     box_path(a, msg);
+    if (a->kind != b->kind || a->inner != b->inner || a->replaced != b->replaced || a->pseudo != b->pseudo)
+        au_buf_printf(msg, " (incremental kind %u inner %u replaced %u pseudo %u; whole %u %u %u %u)",
+                      (unsigned)a->kind, (unsigned)a->inner, (unsigned)a->replaced, (unsigned)a->pseudo,
+                      (unsigned)b->kind, (unsigned)b->inner, (unsigned)b->replaced, (unsigned)b->pseudo);
     if (a->kind == LK_BLOCK && b->kind == LK_BLOCK) {
         const LBlock *x = (const LBlock *)a, *y = (const LBlock *)b;
         au_buf_printf(msg, " (incremental %g,%g %gx%g; whole %g,%g %gx%g)", (double)x->x, (double)x->y, (double)x->w,
@@ -552,6 +590,7 @@ void l_check_incremental(AuLayout *L)
             au_as_element(n)->box = NULL;
         }
     AuLayout *F = au_layout_new(&L->env);
+    F->check = 0; /* the whole build is not checked again */
     au_layout_set_document(F, L->doc);
     F->transparent = L->transparent;
     F->src_vw = L->src_vw;
@@ -560,7 +599,8 @@ void l_check_incremental(AuLayout *L)
     AuBuf msg;
     au_buf_init(&msg);
     bool ok = true;
-    if (!feq(F->doc_w, L->doc_w) || !feq(F->doc_h, L->doc_h)) {
+    bool geom = !L->other_relayout;
+    if (geom && (!feq(F->doc_w, L->doc_w) || !feq(F->doc_h, L->doc_h))) {
         au_buf_printf(&msg, "document size differs: %g x %g, whole build %g x %g\n", (double)L->doc_w,
                       (double)L->doc_h, (double)F->doc_w, (double)F->doc_h);
         ok = false;
@@ -575,7 +615,7 @@ void l_check_incremental(AuLayout *L)
         ok = false;
     }
     while (ok && a && b) {
-        if (!cmp_box(a, b, &msg)) {
+        if (!cmp_box(a, b, geom, &msg)) {
             ok = false;
             break;
         }
@@ -614,7 +654,17 @@ void l_check_incremental(AuLayout *L)
                 want = p ? p->incr : NULL;
             }
             if (want != mine) {
-                au_buf_printf(&msg, "the box pointer of <%s> differs\n", au_atom_str(au_as_element(n)->tag));
+                au_buf_printf(&msg, "the box pointer of <%s> differs: ", au_atom_str(au_as_element(n)->tag));
+                if (mine)
+                    box_path(mine, &msg);
+                else
+                    au_buf_puts(&msg, "none");
+                au_buf_puts(&msg, ", whole build ");
+                if (want)
+                    box_path(want, &msg);
+                else
+                    au_buf_puts(&msg, fb ? "a box with no counterpart" : "none");
+                au_buf_puts(&msg, "\n");
                 ok = false;
             }
         }

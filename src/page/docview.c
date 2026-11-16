@@ -198,6 +198,11 @@ static void clear_document(AuDocView *dv)
     if (dv->script) {
         AuDocScript *s = dv->script;
         dv->script = NULL;
+        /* A canvas shows its fallback content without script (and the
+         * pagehide handlers that run while the script goes can ask for
+         * layout). */
+        if (dv->layout)
+            au_layout_tree_changed(dv->layout);
         au_docscript_free(s);
     }
     dv->nbg = 0;

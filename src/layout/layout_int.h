@@ -222,6 +222,10 @@ typedef struct LBlock {
     float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting border-box height */
     float sticky_dx, sticky_dy;  /* sticky offset applied at the last paint */
     LReplaced *rep;     /* replaced content */
+    /* The layout generations (AuLayout.gen) in which its content was
+     * last reused from an earlier layout and last laid out: a relative
+     * offset inside content reused in this pass is applied already. */
+    uint32_t skip_gen, lay_gen;
     uint8_t xf;         /* LX_* */
 } LBlock;
 
@@ -442,6 +446,12 @@ struct AuLayout {
      * compared. */
     int check;
     bool rebuilt; /* a subtree was rebuilt since the last check */
+    /* Something besides a subtree rebuild asked for layout since the
+     * last whole build (a viewport change, a style change that keeps the
+     * boxes, an image size): the check then compares the tree but not
+     * the geometry, which such a relayout does not always give exactly
+     * (known-gaps.md). */
+    bool other_relayout;
     uint32_t check_runs, check_failures;
     AuBuf check_msg; /* the first difference found */
     /* The focused element (not referenced; the document view clears it
