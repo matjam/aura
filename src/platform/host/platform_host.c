@@ -21,6 +21,28 @@ bool au_platform_read_file(const char *path, char **data, size_t *len)
     FILE *f = fopen(path, "rb");
     if (!f)
         return false;
+    /* A file whose size is known is read into a block of that size: a
+     * buffer grown by doubling keeps up to twice the bytes, and a font's
+     * data is kept for good. */
+    if (fseek(f, 0, SEEK_END) == 0) {
+        long size = ftell(f);
+        rewind(f);
+        if (size > 0) {
+            char *d = au_alloc((size_t)size + 1);
+            size_t got = fread(d, 1, (size_t)size, f);
+            int extra = fgetc(f);
+            if (got == (size_t)size && extra == EOF && !ferror(f)) {
+                fclose(f);
+                d[got] = 0;
+                *data = d;
+                *len = got;
+                return true;
+            }
+            /* It changed while being read: read it as a stream. */
+            au_free(d);
+            rewind(f);
+        }
+    }
     AuBuf b;
     au_buf_init(&b);
     char chunk[65536];
