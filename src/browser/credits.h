@@ -10,7 +10,7 @@
  * the release file names. release-please rewrites this line when it
  * prepares a release (release-please-config.json); do not edit it by hand
  * between releases. */
-#define AU_VERSION "0.4.0" /* x-release-please-version */
+#define AU_VERSION "0.4.1" /* x-release-please-version */
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
 /* What Aura says it is. The string has the shape every Chrome-compatible
  * browser sends (Edge, Brave, Opera and Vivaldi add their own token to the
