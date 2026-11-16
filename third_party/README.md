@@ -54,7 +54,13 @@ records where the code came from and how to update it.
   bracket look-ahead (`js_parse_skip_parens_token`) found for each
   bracket it passed, instead of scanning nested brackets once per level,
   and `0012` a parser that finds a scoped variable through the variable
-  hash table instead of walking the scope chain (`scope_chain_lookup`).
+  hash table instead of walking the scope chain (`scope_chain_lookup`),
+  and `0013` less memory while compiling a large script (5-byte source
+  positions in phase 1 bytecode, the phase 2 and 3 state out of
+  `JSFunctionDef`, one trim after each function, the compiler's blocks
+  outside the small-block arenas) and `JS_EVAL_FLAG_NO_SOURCE`, which
+  keeps no source text (`Function.prototype.toString` then gives the
+  native function form with the function's kind, or `class C { }`).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

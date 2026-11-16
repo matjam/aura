@@ -1,0 +1,959 @@
+Use less memory while compiling a large script, and optionally keep no
+source text.
+
+QuickJS parses a whole script before it finishes any function, so the
+definition and phase 1 bytecode of every function are held at once.
+For YouTube's 9.8 MB player bundle that peaked at 75.8 MB on the host.
+This patch makes the following changes.
+
+- A source position in phase 1 and 2 bytecode takes 5 bytes
+  (OP_source_loc2, line << 16 | column) when the line and column are
+  below 65536, 9 bytes (OP_source_loc) otherwise, and a position that
+  directly follows another replaces it. Positions were a third of the
+  phase 1 bytecode.
+- The state of phases 2 and 3 (jump slots, source position slots, the
+  pc2line buffer and its counters) moved out of JSFunctionDef into
+  JSFunctionDefLate, which js_create_function keeps on its stack. A
+  function definition is 472 bytes instead of 552 on a 64-bit host and
+  356 instead of 408 on PowerPC.
+- js_fd_trim runs once, after the function's return is emitted (the
+  return used to grow the trimmed buffer by half again), trims the
+  label table too, and shrinks with js_realloc (the DynBuf realloc
+  function does not shrink).
+- Function definitions, the compiler's arrays (js_realloc_array) and
+  its bytecode buffers are allocated outside the small-block arenas.
+  In the arenas they left holes between the atoms and small functions
+  made at the same time (4.5 MB of free arena space after compiling the
+  bundle). A block that already has room is kept, and a buffer starts
+  at 64 bytes, so compiling is no slower.
+- JS_EVAL_FLAG_NO_SOURCE compiles a script without keeping its source
+  text. Line and column numbers are kept. Function.prototype.toString
+  gives such a function the native function form with its kind
+  ("function f() { [native code] }", "async function", "function *")
+  and a class constructor "class C { }": YouTube tests
+  /\bclass\b/.test(class{}.toString()) to choose how to construct
+  classes. The kind is the new JSFunctionBytecode.text_dropped field,
+  written as 2 more bits of the function flags.
+
+The final bytecode is the same except that more jumps take their 8-bit
+forms (pass 3 estimates jump sizes from the smaller phase 2 code: 155
+bytes fewer over the bundle). Adding an opcode changes the bytecode
+version hash. Compiling the bundle alone (2026-11-16, host): peak
+75,831 KB before, 62,779 KB with the first three changes, 54,979 KB
+with all of them; kept after compiling, 40,567 KB before and 25,351 KB
+after.
+
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -467,6 +467,12 @@
+    the compiled module without resolving its imports; resolve it with
+    JS_ResolveModule(). */
+ #define JS_EVAL_FLAG_NO_RESOLVE (1 << 8)
++/* Aura: keep no source text for the script's functions:
++   Function.prototype.toString gives a function the native function form
++   with its kind ("function f() { [native code] }", "async function",
++   "function *") and a class "class C { }". Line and column numbers are
++   kept. */
++#define JS_EVAL_FLAG_NO_SOURCE (1 << 9)
+
+ typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+ typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+--- a/quickjs-opcode.h
++++ b/quickjs-opcode.h
+@@ -297,6 +297,9 @@
+ def( dispose_scope, 3, 0, 0, u16) /* emitted in phase 1, removed in phase 2 */
+
+ def(     source_loc, 9, 0, 0, u32x2) /* emitted in phase 1, removed in phase 3 */
++/* Aura: a line and a column below 65536 in one u32 (line << 16 | col),
++   emitted in phases 1 and 2 instead of source_loc, removed in phase 3 */
++def(    source_loc2, 5, 0, 0, u32)
+
+ DEF(    push_minus1, 1, 0, 1, none_int)
+ DEF(         push_0, 1, 0, 1, none_int)
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -882,7 +882,10 @@
+     uint8_t super_allowed : 1;
+     uint8_t arguments_allowed : 1;
+     uint8_t backtrace_barrier : 1; /* stop backtrace on this function */
+-    /* XXX: 5 bits available */
++    /* Aura: JS_TEXT_* (compiled with JS_EVAL_FLAG_NO_SOURCE: what
++       Function.prototype.toString gives in place of the text) */
++    uint8_t text_dropped : 2;
++    /* XXX: 3 bits available */
+     uint8_t *byte_code_buf; /* (self pointer) */
+     int byte_code_len;
+     JSAtom func_name;
+@@ -907,6 +910,11 @@
+     struct JSSourceText *source_text; /* NULL if no source */
+ } JSFunctionBytecode;
+
++/* JSFunctionBytecode.text_dropped */
++#define JS_TEXT_KEPT 0     /* or the text was never there (bytecode written without it) */
++#define JS_TEXT_DROPPED 1  /* a function's text was not kept */
++#define JS_TEXT_DROPPED_CLASS 2 /* a class constructor's text was not kept */
++
+ /* The source text of an outermost function, shared with the functions
+    nested in it: each one's text is a part of it. Before, every function
+    kept a copy of its own text, so text nested n levels deep was held n
+@@ -2060,6 +2068,30 @@
+     return ptr;
+ }
+
++/* Aura: a block outside the small-block arenas, for the compiler's
++   working arrays and buffers. They live until their function is
++   compiled; in arenas they left holes between the atoms and small
++   functions made at the same time (4.5 MB of free arena space after
++   compiling a 9.8 MB script). A block made here stays outside the
++   arenas when it is reallocated or freed with the usual calls. */
++static void *js_malloc_unpooled_rt(JSRuntime *rt, size_t size)
++{
++    void *ptr;
++    JSMallocState *s;
++
++    if (unlikely(size == 0))
++        return NULL;
++    s = &rt->malloc_state;
++    if (unlikely(s->malloc_size + size > s->malloc_limit - 1))
++        return NULL;
++    ptr = arena_malloc_large(rt, size);
++    if (!ptr)
++        return NULL;
++    s->malloc_count++;
++    s->malloc_size += js_arena_usable_size(rt, ptr) + MALLOC_OVERHEAD;
++    return ptr;
++}
++
+ void js_free_rt(JSRuntime *rt, void *ptr)
+ {
+     JSMallocState *s;
+@@ -2196,6 +2228,30 @@
+ char *js_strdup(JSContext *ctx, const char *str)
+ {
+     return js_strndup(ctx, str, strlen(str));
++}
++
++/* Aura: js_realloc, but a new block is made outside the arenas
++   (js_malloc_unpooled_rt) */
++static void *js_realloc_unpooled(JSContext *ctx, void *ptr, size_t size)
++{
++    void *ret;
++
++    if (ptr) {
++        /* a block that already holds size bytes is kept: the system's
++           realloc is slower than an arena's, and buffers grow in many
++           small steps */
++        if (size != 0 && size <= js_malloc_usable_size(ctx, ptr))
++            return ptr;
++        return js_realloc(ctx, ptr, size);
++    }
++    if (size == 0)
++        return NULL;
++    ret = js_malloc_unpooled_rt(ctx->rt, size);
++    if (unlikely(!ret)) {
++        JS_ThrowOutOfMemory(ctx);
++        return NULL;
++    }
++    return ret;
+ }
+
+ static no_inline int js_realloc_array(JSContext *ctx, void **parray,
+@@ -2206,7 +2262,9 @@
+     /* XXX: potential arithmetic overflow */
+     new_size = max_int(req_size, *psize * 3 / 2);
+     assert(elem_size > 0 && new_size > 0);
+-    new_array = js_realloc(ctx, *parray, (size_t)new_size * (size_t)elem_size);
++    /* Aura: the arrays grown here are the compiler's and other short
++       lived ones: outside the arenas */
++    new_array = js_realloc_unpooled(ctx, *parray, (size_t)new_size * (size_t)elem_size);
+     if (!new_array)
+         return -1;
+     *psize = new_size;
+@@ -2234,6 +2292,21 @@
+     dbuf_init2(s, ctx, js_dbuf_realloc);
+ }
+
++static void *js_dbuf_realloc_unpooled(void *ctx, void *ptr, size_t size)
++{
++    /* a buffer starts at 64 bytes, not at the 1 byte DynBuf asks for
++       first (it grows by half each time) */
++    if (!ptr && size != 0 && size < 64)
++        size = 64;
++    return js_realloc_unpooled(ctx, ptr, size);
++}
++
++/* Aura: a buffer of the compiler's, outside the arenas */
++static inline void js_dbuf_init_unpooled(JSContext *ctx, DynBuf *s)
++{
++    dbuf_init2(s, ctx, js_dbuf_realloc_unpooled);
++}
++
+ static inline int is_digit(int c) {
+     return c >= '0' && c <= '9';
+ }
+@@ -22358,6 +22431,7 @@
+     bool need_home_object : 1;
+     bool use_short_opcodes : 1; /* true if short opcodes are used in byte_code */
+     bool has_await : 1; /* true if await is used (used in module eval) */
++    bool no_source : 1; /* Aura: compiled with JS_EVAL_FLAG_NO_SOURCE */
+
+     JSFunctionKindEnum func_kind : 8;
+     JSParseFunctionEnum func_type : 7;
+@@ -22403,6 +22477,9 @@
+
+     DynBuf byte_code;
+     int last_opcode_pos; /* -1 if no last opcode */
++    /* Aura: position of the last source position emitted when nothing
++       was emitted after it, else -1 (emit_source_loc_at) */
++    int last_source_loc_pos;
+
+     LabelSlot *label_slots;
+     int label_size; /* allocated size for label_slots[] */
+@@ -22419,22 +22496,15 @@
+     int closure_var_size;
+     JSClosureVar *closure_var;
+
+-    JumpSlot *jump_slots;
+-    int jump_size;
+-    int jump_count;
++    /* Aura: the state of phases 2 and 3 (jumps, source positions, the
++       pc2line table) lives in js_create_function while it runs, not in
++       every function definition the parser keeps until the whole script
++       is parsed. */
++    struct JSFunctionDefLate *late;
+
+-    SourceLocSlot *source_loc_slots;
+-    int source_loc_size;
+-    int source_loc_count;
+-    int line_number_last;
+-    int line_number_last_pc;
+-    int col_number_last;
+-
+-    /* pc2line table */
+     JSAtom filename;
+     int line_num;
+     int col_num;
+-    DynBuf pc2line;
+
+     char *source;  /* raw source, utf-8 encoded */
+     int source_len;
+@@ -22444,6 +22514,22 @@
+
+     JSModuleDef *module; /* != NULL when parsing a module */
+ } JSFunctionDef;
++
++typedef struct JSFunctionDefLate {
++    JumpSlot *jump_slots;
++    int jump_size;
++    int jump_count;
++
++    SourceLocSlot *source_loc_slots;
++    int source_loc_size;
++    int source_loc_count;
++    int line_number_last;
++    int line_number_last_pc;
++    int col_number_last;
++
++    /* pc2line table */
++    DynBuf pc2line;
++} JSFunctionDefLate;
+
+ typedef struct JSToken {
+     int val;
+@@ -24094,16 +24180,72 @@
+ static void emit_u32(JSParseState *s, uint32_t val)
+ {
+     dbuf_put_u32(&s->cur_func->byte_code, val);
++}
++
++/* Aura: a source position in phase 1 and 2 bytecode takes 5 bytes
++   (OP_source_loc2) when its line and column are below 65536, 9 bytes
++   (OP_source_loc) otherwise. In a large script they were a third of the
++   phase 1 bytecode, which is held for every function until the whole
++   script is parsed. */
++static bool is_source_loc(int op)
++{
++    return op == OP_source_loc || op == OP_source_loc2;
++}
++
++static void get_source_loc(const uint8_t *p, int *line_num, int *col_num)
++{
++    uint32_t v;
++
++    if (p[0] == OP_source_loc2) {
++        v = get_u32(p + 1);
++        *line_num = v >> 16;
++        *col_num = v & 0xffff;
++    } else {
++        *line_num = get_u32(p + 1);
++        *col_num = get_u32(p + 5);
++    }
++}
++
++/* writes the opcode to p[0..8], returns its size */
++static int encode_source_loc(uint8_t *p, int line_num, int col_num)
++{
++    if ((uint32_t)line_num <= 0xffff && (uint32_t)col_num <= 0xffff) {
++        p[0] = OP_source_loc2;
++        put_u32(p + 1, ((uint32_t)line_num << 16) | (uint32_t)col_num);
++        return 5;
++    }
++    p[0] = OP_source_loc;
++    put_u32(p + 1, line_num);
++    put_u32(p + 5, col_num);
++    return 9;
+ }
+
++static void put_source_loc(DynBuf *bc, int line_num, int col_num)
++{
++    uint8_t op[9];
++
++    dbuf_put(bc, op, encode_source_loc(op, line_num, col_num));
++}
++
+ static void emit_source_loc_at(JSParseState *s, int line_num, int col_num)
+ {
+     JSFunctionDef *fd = s->cur_func;
+     DynBuf *bc = &fd->byte_code;
++    int pos = fd->last_source_loc_pos;
++    uint8_t op[9];
++    int len;
+
+-    dbuf_putc(bc, OP_source_loc);
+-    dbuf_put_u32(bc, line_num);
+-    dbuf_put_u32(bc, col_num);
++    len = encode_source_loc(op, line_num, col_num);
++    /* Aura: a position that directly follows another replaces it when it
++       has the same size, which keeps every saved offset valid; phase 3
++       keeps only the second of two positions in a row. */
++    if (pos >= 0 && !bc->error && pos + len == (int)bc->size &&
++        bc->buf[pos] == op[0]) {
++        memcpy(bc->buf + pos, op, len);
++        return;
++    }
++    fd->last_source_loc_pos = bc->size;
++    dbuf_put(bc, op, len);
+ }
+
+ static void emit_source_loc(JSParseState *s)
+@@ -24117,6 +24259,7 @@
+     DynBuf *bc = &fd->byte_code;
+
+     fd->last_opcode_pos = bc->size;
++    fd->last_source_loc_pos = -1; /* Aura: see emit_source_loc_at */
+     dbuf_putc(bc, val);
+ }
+
+@@ -33257,9 +33400,11 @@
+ {
+     JSFunctionDef *fd;
+
+-    fd = js_mallocz(ctx, sizeof(*fd));
++    /* Aura: outside the arenas, as the compiler's arrays are */
++    fd = js_realloc_unpooled(ctx, NULL, sizeof(*fd));
+     if (!fd)
+         return NULL;
++    memset(fd, 0, sizeof(*fd));
+
+     fd->ctx = ctx;
+     init_list_head(&fd->child_list);
+@@ -33271,12 +33416,14 @@
+         list_add_tail(&fd->link, &parent->child_list);
+         fd->is_strict_mode = parent->is_strict_mode;
+         fd->parent_scope_level = parent->scope_level;
++        fd->no_source = parent->no_source;
+     }
+
+     fd->is_eval = is_eval;
+     fd->is_func_expr = is_func_expr;
+-    js_dbuf_init(ctx, &fd->byte_code);
++    js_dbuf_init_unpooled(ctx, &fd->byte_code);
+     fd->last_opcode_pos = -1;
++    fd->last_source_loc_pos = -1;
+     fd->func_name = JS_ATOM_NULL;
+     fd->var_object_idx = -1;
+     fd->arg_var_object_idx = -1;
+@@ -33307,10 +33454,6 @@
+     fd->line_num = line_num;
+     fd->col_num = col_num;
+
+-    js_dbuf_init(ctx, &fd->pc2line);
+-    //fd->pc2line_last_line_num = line_num;
+-    //fd->pc2line_last_pc = 0;
+-
+     return fd;
+ }
+
+@@ -33368,9 +33511,15 @@
+     free_bytecode_atoms(ctx->rt, fd->byte_code.buf, fd->byte_code.size,
+                         fd->use_short_opcodes);
+     dbuf_free(&fd->byte_code);
+-    js_free(ctx, fd->jump_slots);
++    if (fd->late) {
++        js_free(ctx, fd->late->jump_slots);
++        fd->late->jump_slots = NULL;
++        js_free(ctx, fd->late->source_loc_slots);
++        fd->late->source_loc_slots = NULL;
++        dbuf_free(&fd->late->pc2line);
++        fd->late = NULL;
++    }
+     js_free(ctx, fd->label_slots);
+-    js_free(ctx, fd->source_loc_slots);
+
+     for(i = 0; i < fd->cpool_count; i++) {
+         JS_FreeValue(ctx, fd->cpool[i]);
+@@ -33404,7 +33553,6 @@
+         js_free(ctx, fd->scopes);
+
+     JS_FreeAtom(ctx, fd->filename);
+-    dbuf_free(&fd->pc2line);
+
+     js_free(ctx, fd->source);
+     if (fd->source_text)
+@@ -33517,8 +33665,10 @@
+             if (b) {
+                 int col1;
+                 line1 = find_line_num(ctx, b, pos, &col1) - line_num + 1;
+-            } else if (op == OP_source_loc) {
+-                line1 = get_u32(tab + pos + 1) - line_num + 1;
++            } else if (is_source_loc(op)) {
++                int col1;
++                get_source_loc(tab + pos, &line1, &col1);
++                line1 = line1 - line_num + 1;
+             }
+             if (line1 > line) {
+                 if (!in_source)
+@@ -34152,7 +34302,7 @@
+     dbuf_put_u32(bc, *plabel_done);
+     dbuf_putc(bc, is_with);
+     update_label(s, *plabel_done, 1);
+-    s->jump_size++;
++    s->late->jump_size++;
+ }
+
+ static inline void capture_var(JSFunctionDef *s, JSVarDef *vd)
+@@ -35172,9 +35322,8 @@
+             pos_next = pos + len;
+             if (pos_next > s->bc_len)
+                 goto done;
+-            if (op == OP_source_loc) {
+-                line_num = get_u32(tab + pos + 1);
+-                col_num = get_u32(tab + pos + 5);
++            if (is_source_loc(op)) {
++                get_source_loc(tab + pos, &line_num, &col_num);
+                 pos = pos_next;
+             } else {
+                 break;
+@@ -35310,7 +35459,7 @@
+         dbuf_putc(bc, OP_if_false);
+         dbuf_put_u32(bc, label_next);
+         update_label(s, label_next, 1);
+-        s->jump_size++;
++        s->late->jump_size++;
+     }
+
+     /* add the global variables (only happens if s->is_global_var is
+@@ -35417,9 +35566,8 @@
+     for (; pos < bc_len; pos += len) {
+         op = bc_buf[pos];
+         len = opcode_info[op].size;
+-        if (op == OP_source_loc) {
+-            *linep = get_u32(bc_buf + pos + 1);
+-            *colp = get_u32(bc_buf + pos + 5);
++        if (is_source_loc(op)) {
++            get_source_loc(bc_buf + pos, linep, colp);
+         } else if (op == OP_label) {
+             label = get_u32(bc_buf + pos + 1);
+             if (update_label(s, label, 0) > 0)
+@@ -35463,6 +35611,9 @@
+             case OP_source_loc:
+                 pos += 9;
+                 continue;
++            case OP_source_loc2:
++                pos += 5;
++                continue;
+             case OP_label:
+                 pos += 5;
+                 continue;
+@@ -35491,7 +35642,7 @@
+
+     cc.bc_buf = bc_buf = s->byte_code.buf;
+     cc.bc_len = bc_len = s->byte_code.size;
+-    js_dbuf_init(ctx, &bc_out);
++    js_dbuf_init_unpooled(ctx, &bc_out);
+
+     /* first pass for runtime checks (must be done before the
+        variables are created) */
+@@ -35540,9 +35691,9 @@
+         pos_next = pos + len;
+         switch(op) {
+         case OP_source_loc:
+-            line_num = get_u32(bc_buf + pos + 1);
+-            col_num = get_u32(bc_buf + pos + 5);
+-            s->source_loc_size++;
++        case OP_source_loc2:
++            get_source_loc(bc_buf + pos, &line_num, &col_num);
++            s->late->source_loc_size++;
+             goto no_change;
+
+         case OP_eval: /* convert scope index to adjusted variable index */
+@@ -35602,7 +35753,7 @@
+             }
+             break;
+         case OP_gosub:
+-            s->jump_size++;
++            s->late->jump_size++;
+             {
+                 /* remove calls to empty finalizers  */
+                 int label;
+@@ -35627,10 +35778,8 @@
+                 if (cc.line_num != line_num || cc.col_num != col_num) {
+                     line_num = cc.line_num;
+                     col_num = cc.col_num;
+-                    s->source_loc_size++;
+-                    dbuf_putc(&bc_out, OP_source_loc);
+-                    dbuf_put_u32(&bc_out, line_num);
+-                    dbuf_put_u32(&bc_out, col_num);
++                    s->late->source_loc_size++;
++                    put_source_loc(&bc_out, line_num, col_num);
+                 }
+                 break;
+             }
+@@ -35641,12 +35790,12 @@
+                 dbuf_putc(&bc_out, cc.op ^ OP_if_false ^ OP_if_true);
+                 dbuf_put_u32(&bc_out, cc.label);
+                 pos_next = cc.pos;
+-                s->jump_size++;
++                s->late->jump_size++;
+                 break;
+             }
+             goto no_change;
+         case OP_goto:
+-            s->jump_size++;
++            s->late->jump_size++;
+             /* fall thru */
+         case OP_tail_call:
+         case OP_tail_call_method:
+@@ -35668,10 +35817,8 @@
+                 if (line_num != line || col_num != col) {
+                     line_num = line;
+                     col_num = col;
+-                    s->source_loc_size++;
+-                    dbuf_putc(&bc_out, OP_source_loc);
+-                    dbuf_put_u32(&bc_out, line_num);
+-                    dbuf_put_u32(&bc_out, col_num);
++                    s->late->source_loc_size++;
++                    put_source_loc(&bc_out, line_num, col_num);
+                 }
+                 break;
+             }
+@@ -35762,7 +35909,7 @@
+                                 dbuf_putc(&bc_out, OP_catch);
+                                 dbuf_put_u32(&bc_out, label_catch);
+                                 update_label(s, label_catch, 1);
+-                                s->jump_size++;
++                                s->late->jump_size++;
+
+                                 dbuf_putc(&bc_out, OP_using_dispose_async);
+                                 dbuf_put_u16(&bc_out, scope_idx);
+@@ -35774,7 +35921,7 @@
+                                 dbuf_putc(&bc_out, OP_goto);
+                                 dbuf_put_u32(&bc_out, label_end);
+                                 update_label(s, label_end, 1);
+-                                s->jump_size++;
++                                s->late->jump_size++;
+
+                                 dbuf_putc(&bc_out, OP_label);
+                                 dbuf_put_u32(&bc_out, label_catch);
+@@ -35810,7 +35957,7 @@
+         case OP_if_false:
+         case OP_if_true:
+         case OP_catch:
+-            s->jump_size++;
++            s->late->jump_size++;
+             goto no_change;
+
+         case OP_dup:
+@@ -35828,7 +35975,7 @@
+                     lab1 = cc.label;
+                 }
+                 if (code_match(&cc, pos2, op1, -1)) {
+-                    s->jump_size++;
++                    s->late->jump_size++;
+                     update_label(s, lab0, -1);
+                     update_label(s, cc.label, +1);
+                     dbuf_putc(&bc_out, op1);
+@@ -35839,10 +35986,8 @@
+                     if (line1 != line_num || col1 != col_num) {
+                         line_num = line1;
+                         col_num = col1;
+-                        s->source_loc_size++;
+-                        dbuf_putc(&bc_out, OP_source_loc);
+-                        dbuf_put_u32(&bc_out, line_num);
+-                        dbuf_put_u32(&bc_out, col_num);
++                        s->late->source_loc_size++;
++                        put_source_loc(&bc_out, line_num, col_num);
+                     }
+                     break;
+                 }
+@@ -35900,37 +36045,37 @@
+ static void add_pc2line_info(JSFunctionDef *s, uint32_t pc,
+                              int line_num, int col_num)
+ {
+-    if (s->source_loc_slots == NULL)
++    if (s->late->source_loc_slots == NULL)
+         return;
+-    if (s->source_loc_count >= s->source_loc_size)
++    if (s->late->source_loc_count >= s->late->source_loc_size)
+         return;
+-    if (pc < s->line_number_last_pc)
++    if (pc < s->late->line_number_last_pc)
+         return;
+-    if (line_num == s->line_number_last)
+-        if (col_num == s->col_number_last)
++    if (line_num == s->late->line_number_last)
++        if (col_num == s->late->col_number_last)
+             return;
+-    s->source_loc_slots[s->source_loc_count].pc = pc;
+-    s->source_loc_slots[s->source_loc_count].line_num = line_num;
+-    s->source_loc_slots[s->source_loc_count].col_num = col_num;
+-    s->source_loc_count++;
+-    s->line_number_last_pc = pc;
+-    s->line_number_last = line_num;
+-    s->col_number_last = col_num;
++    s->late->source_loc_slots[s->late->source_loc_count].pc = pc;
++    s->late->source_loc_slots[s->late->source_loc_count].line_num = line_num;
++    s->late->source_loc_slots[s->late->source_loc_count].col_num = col_num;
++    s->late->source_loc_count++;
++    s->late->line_number_last_pc = pc;
++    s->late->line_number_last = line_num;
++    s->late->col_number_last = col_num;
+ }
+
+ static void compute_pc2line_info(JSFunctionDef *s)
+ {
+-    if (s->source_loc_slots) {
++    if (s->late->source_loc_slots) {
+         int last_line_num = s->line_num;
+         int last_col_num = s->col_num;
+         uint32_t last_pc = 0;
+         int i;
+
+-        js_dbuf_init(s->ctx, &s->pc2line);
+-        for (i = 0; i < s->source_loc_count; i++) {
+-            uint32_t pc = s->source_loc_slots[i].pc;
+-            int line_num = s->source_loc_slots[i].line_num;
+-            int col_num = s->source_loc_slots[i].col_num;
++        js_dbuf_init(s->ctx, &s->late->pc2line);
++        for (i = 0; i < s->late->source_loc_count; i++) {
++            uint32_t pc = s->late->source_loc_slots[i].pc;
++            int line_num = s->late->source_loc_slots[i].line_num;
++            int col_num = s->late->source_loc_slots[i].col_num;
+             int diff_pc, diff_line, diff_col;
+
+             if (line_num < 0)
+@@ -35948,15 +36093,15 @@
+             if (diff_line >= PC2LINE_BASE &&
+                 diff_line < PC2LINE_BASE + PC2LINE_RANGE &&
+                 diff_pc <= PC2LINE_DIFF_PC_MAX) {
+-                dbuf_putc(&s->pc2line, (diff_line - PC2LINE_BASE) +
++                dbuf_putc(&s->late->pc2line, (diff_line - PC2LINE_BASE) +
+                           diff_pc * PC2LINE_RANGE + PC2LINE_OP_FIRST);
+             } else {
+                 /* longer encoding */
+-                dbuf_putc(&s->pc2line, 0);
+-                dbuf_put_leb128(&s->pc2line, diff_pc);
+-                dbuf_put_sleb128(&s->pc2line, diff_line);
++                dbuf_putc(&s->late->pc2line, 0);
++                dbuf_put_leb128(&s->late->pc2line, diff_pc);
++                dbuf_put_sleb128(&s->late->pc2line, diff_line);
+             }
+-            dbuf_put_sleb128(&s->pc2line, diff_col);
++            dbuf_put_sleb128(&s->late->pc2line, diff_col);
+
+             last_pc = pc;
+             last_line_num = line_num;
+@@ -35982,8 +36127,8 @@
+ {
+     while (pos < s->bc_len) {
+         int op = s->bc_buf[pos];
+-        if (op == OP_source_loc) {
+-            pos += 9;
++        if (is_source_loc(op)) {
++            pos += opcode_info[op].size;
+             continue;
+         }
+         if (op == OP_label) {
+@@ -36017,6 +36162,7 @@
+         for (;;) {
+             switch(op = s->byte_code.buf[pos]) {
+             case OP_source_loc:
++            case OP_source_loc2:
+             case OP_label:
+                 pos += opcode_info[op].size;
+                 continue;
+@@ -36138,21 +36284,21 @@
+
+     cc.bc_buf = bc_buf = s->byte_code.buf;
+     cc.bc_len = bc_len = s->byte_code.size;
+-    js_dbuf_init(ctx, &bc_out);
++    js_dbuf_init_unpooled(ctx, &bc_out);
+
+-    if (s->jump_size) {
+-        s->jump_slots = js_mallocz(s->ctx, sizeof(*s->jump_slots) * s->jump_size);
+-        if (s->jump_slots == NULL)
++    if (s->late->jump_size) {
++        s->late->jump_slots = js_mallocz(s->ctx, sizeof(*s->late->jump_slots) * s->late->jump_size);
++        if (s->late->jump_slots == NULL)
+             return -1;
+     }
+
+-    if (s->source_loc_size) {
+-        s->source_loc_slots = js_mallocz(s->ctx, sizeof(*s->source_loc_slots) * s->source_loc_size);
+-        if (s->source_loc_slots == NULL)
++    if (s->late->source_loc_size) {
++        s->late->source_loc_slots = js_mallocz(s->ctx, sizeof(*s->late->source_loc_slots) * s->late->source_loc_size);
++        if (s->late->source_loc_slots == NULL)
+             return -1;
+-        s->line_number_last = s->line_num;
+-        s->col_number_last = s->col_num;
+-        s->line_number_last_pc = 0;
++        s->late->line_number_last = s->line_num;
++        s->late->col_number_last = s->col_num;
++        s->late->line_number_last_pc = 0;
+     }
+
+     /* initialize the 'home_object' variable if needed */
+@@ -36226,11 +36372,11 @@
+         pos_next = pos + len;
+         switch(op) {
+         case OP_source_loc:
++        case OP_source_loc2:
+             /* line number info (for debug). We put it in a separate
+                compressed table to reduce memory usage and get better
+                performance */
+-            line_num = get_u32(bc_buf + pos + 1);
+-            col_num = get_u32(bc_buf + pos + 5);
++            get_source_loc(bc_buf + pos, &line_num, &col_num);
+             break;
+
+         case OP_label:
+@@ -36363,7 +36509,7 @@
+             }
+             assert(label >= 0 && label < s->label_count);
+             ls = &label_slots[label];
+-            jp = &s->jump_slots[s->jump_count++];
++            jp = &s->late->jump_slots[s->late->jump_count++];
+             jp->op = op;
+             jp->size = 4;
+             jp->pos = bc_out.size + 1;
+@@ -36431,7 +36577,7 @@
+                 assert(label >= 0 && label < s->label_count);
+                 ls = &label_slots[label];
+                 add_pc2line_info(s, bc_out.size, line_num, col_num);
+-                jp = &s->jump_slots[s->jump_count++];
++                jp = &s->late->jump_slots[s->late->jump_count++];
+                 jp->op = op;
+                 jp->size = 4;
+                 jp->pos = bc_out.size + 5;
+@@ -36940,7 +37086,7 @@
+
+     /* more jump optimizations */
+     patch_offsets = 0;
+-    for (i = 0, jp = s->jump_slots; i < s->jump_count; i++, jp++) {
++    for (i = 0, jp = s->late->jump_slots; i < s->late->jump_count; i++, jp++) {
+         LabelSlot *ls;
+         JumpSlot *jp1;
+         int j, pos, diff, delta;
+@@ -36980,13 +37126,13 @@
+                     if (ls->addr > pos)
+                         ls->addr -= delta;
+                 }
+-                for (j = i + 1, jp1 = jp + 1; j < s->jump_count; j++, jp1++) {
++                for (j = i + 1, jp1 = jp + 1; j < s->late->jump_count; j++, jp1++) {
+                     if (jp1->pos > pos)
+                         jp1->pos -= delta;
+                 }
+-                for (j = 0; j < s->source_loc_count; j++) {
+-                    if (s->source_loc_slots[j].pc > pos)
+-                        s->source_loc_slots[j].pc -= delta;
++                for (j = 0; j < s->late->source_loc_count; j++) {
++                    if (s->late->source_loc_slots[j].pc > pos)
++                        s->late->source_loc_slots[j].pc -= delta;
+                 }
+                 continue;
+             }
+@@ -36997,7 +37143,7 @@
+     if (patch_offsets) {
+         JumpSlot *jp1;
+         int j;
+-        for (j = 0, jp1 = s->jump_slots; j < s->jump_count; j++, jp1++) {
++        for (j = 0, jp1 = s->late->jump_slots; j < s->late->jump_count; j++, jp1++) {
+             int diff1 = s->label_slots[jp1->label].addr - jp1->pos;
+             switch (jp1->size) {
+             case 1:
+@@ -37013,14 +37159,14 @@
+         }
+     }
+
+-    js_free(ctx, s->jump_slots);
+-    s->jump_slots = NULL;
++    js_free(ctx, s->late->jump_slots);
++    s->late->jump_slots = NULL;
+     js_free(ctx, s->label_slots);
+     s->label_slots = NULL;
+     /* XXX: should delay until copying to runtime bytecode function */
+     compute_pc2line_info(s);
+-    js_free(ctx, s->source_loc_slots);
+-    s->source_loc_slots = NULL;
++    js_free(ctx, s->late->source_loc_slots);
++    s->late->source_loc_slots = NULL;
+     /* set the new byte code */
+     dbuf_free(&s->byte_code);
+     s->byte_code = bc_out;
+@@ -37329,10 +37475,21 @@
+ {
+     DynBuf *d = &fd->byte_code;
+     uint8_t *p;
++    LabelSlot *ls;
+
++    /* Aura: the label table grows by half too */
++    if (fd->label_count > 0 && fd->label_size > fd->label_count) {
++        ls = js_realloc(fd->ctx, fd->label_slots,
++                        sizeof(fd->label_slots[0]) * fd->label_count);
++        if (ls) {
++            fd->label_slots = ls;
++            fd->label_size = fd->label_count;
++        }
++    }
+     if (d->error || !d->buf || d->size == 0 || d->allocated_size <= d->size)
+         return;
+-    p = d->realloc_func(d->opaque, d->buf, d->size);
++    /* not d->realloc_func, which does not shrink a block */
++    p = js_realloc(fd->ctx, d->buf, d->size);
+     if (p) {
+         d->buf = p;
+         d->allocated_size = d->size;
+@@ -37527,6 +37684,12 @@
+     int stack_size, scope, idx;
+     int function_size, byte_code_offset, cpool_offset;
+     int closure_var_offset, vardefs_offset;
++    JSFunctionDefLate late;
++
++    /* Aura: the state of phases 2 and 3 (see JSFunctionDef.late) */
++    memset(&late, 0, sizeof(late));
++    js_dbuf_init(ctx, &late.pc2line);
++    fd->late = &late;
+
+     /* recompute scope linkage */
+     for (scope = 0; scope < fd->scope_count; scope++) {
+@@ -37674,10 +37837,12 @@
+     b->line_num = fd->line_num;
+     b->col_num = fd->col_num;
+
+-    b->pc2line_buf = js_realloc(ctx, fd->pc2line.buf, fd->pc2line.size);
++    b->pc2line_buf = js_realloc(ctx, late.pc2line.buf, late.pc2line.size);
+     if (!b->pc2line_buf)
+-        b->pc2line_buf = fd->pc2line.buf;
+-    b->pc2line_len = fd->pc2line.size;
++        b->pc2line_buf = late.pc2line.buf;
++    b->pc2line_len = late.pc2line.size;
++    late.pc2line.buf = NULL;
++    fd->late = NULL;
+     b->source_text = fd->source_text;
+     b->source = fd->source_text ? fd->source_text->buf + fd->source_ofs : NULL;
+     b->source_len = fd->source_text ? fd->source_len : 0;
+@@ -37706,6 +37871,11 @@
+     b->super_allowed = fd->super_allowed;
+     b->arguments_allowed = fd->arguments_allowed;
+     b->backtrace_barrier = fd->backtrace_barrier;
++    if (fd->no_source) {
++        b->text_dropped = (fd->func_type == JS_PARSE_FUNC_CLASS_CONSTRUCTOR ||
++                           fd->func_type == JS_PARSE_FUNC_DERIVED_CLASS_CONSTRUCTOR) ?
++            JS_TEXT_DROPPED_CLASS : JS_TEXT_DROPPED;
++    }
+     b->realm = JS_DupContext(ctx);
+
+     add_gc_object(ctx->rt, &b->header, JS_GC_OBJ_TYPE_FUNCTION_BYTECODE);
+@@ -38356,7 +38526,6 @@
+                 token of the function source stored into s->last_ptr */
+             fd->source_len = s->last_ptr - ptr;
+             fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+-            js_fd_trim(fd);
+
+             goto done;
+         }
+@@ -38393,7 +38562,6 @@
+         /* save the function source code */
+         fd->source_len = s->buf_ptr - ptr;
+         fd->source_pos1 = 1 + (int)(ptr - s->buf_start);
+-        js_fd_trim(fd);
+
+         if (next_token(s)) {
+             /* consume the '}' */
+@@ -38428,6 +38596,9 @@
+         }
+     }
+ done:
++    /* Aura: after the function's last opcode (the return emitted above
++       used to grow the trimmed buffer by half again) */
++    js_fd_trim(fd);
+     s->cur_func = fd->parent;
+
+     /* Reparse identifiers after the function is terminated so that
+@@ -38766,6 +38937,7 @@
+     if (!fd)
+         goto fail1;
+     s->cur_func = fd;
++    fd->no_source = (flags & JS_EVAL_FLAG_NO_SOURCE) != 0;
+     fd->eval_type = eval_type;
+     fd->has_this_binding = (eval_type != JS_EVAL_TYPE_DIRECT);
+     fd->backtrace_barrier = ((flags & JS_EVAL_FLAG_BACKTRACE_BARRIER) != 0);
+@@ -38799,7 +38971,7 @@
+
+     err = js_parse_program(s);
+     skip_memo_free(s); /* Aura */
+-    if (!err)
++    if (!err && !(flags & JS_EVAL_FLAG_NO_SOURCE))
+         err = js_fd_assign_sources(ctx, fd, input, input_len);
+     if (err) {
+     fail:
+@@ -39527,6 +39699,7 @@
+     bc_set_flags(&flags, &idx, b->arguments_allowed, 1);
+     bc_set_flags(&flags, &idx, b->backtrace_barrier, 1);
+     bc_set_flags(&flags, &idx, s->allow_debug, 1);
++    bc_set_flags(&flags, &idx, b->text_dropped, 2); /* Aura */
+     assert(idx <= 16);
+     bc_put_u16(s, flags);
+     bc_put_u8(s, b->is_strict_mode);
+@@ -40528,6 +40701,7 @@
+     bc.arguments_allowed = bc_get_flags(v16, &idx, 1);
+     bc.backtrace_barrier = bc_get_flags(v16, &idx, 1);
+     has_debug_info = bc_get_flags(v16, &idx, 1);
++    bc.text_dropped = bc_get_flags(v16, &idx, 2); /* Aura */
+     if (bc_get_u8(s, &v8))
+         goto fail;
+     bc.is_strict_mode = (v8 > 0);
+@@ -43511,6 +43685,22 @@
+         /* `b->source` must be pure ASCII or UTF-8 encoded */
+         if (b->source)
+             return JS_NewStringLen(ctx, b->source, b->source_len);
++        /* Aura: a function whose text was not kept says what kind of
++           function it is, as its text would: scripts test
++           class{}.toString() for "class" to choose how to construct
++           classes */
++        if (b->text_dropped == JS_TEXT_DROPPED_CLASS) {
++            JSValue name = JS_GetProperty(ctx, this_val, JS_ATOM_name);
++            if (JS_IsException(name))
++                return name;
++            if (!JS_IsString(name) || JS_VALUE_GET_STRING(name)->len == 0) {
++                JS_FreeValue(ctx, name);
++                return JS_NewString(ctx, "class { }");
++            }
++            return JS_ConcatString3(ctx, "class ", name, " { }");
++        }
++        if (b->text_dropped == JS_TEXT_DROPPED)
++            func_kind = b->func_kind;
+     }
+     {
+         JSValue name;

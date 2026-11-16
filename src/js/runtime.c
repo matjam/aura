@@ -582,6 +582,7 @@ void au_js_set_gc_stress(bool on)
 void js_safe_point(AuJs *js)
 {
     js_drain_pending(js);
+    js_code_expire(js);
     /* For tests and fuzzers (au_js_set_gc_stress): collect whenever
      * script has been left, so a node whose wrapper is garbage in a
      * reference cycle (an event object and its target) is freed as soon
@@ -1205,10 +1206,20 @@ void js_code_expire(AuJs *js)
     AuJs *r = js->root;
     if (r->depth > 0)
         return;
-    double now = js_now(r);
-    for (size_t i = 0; i < JS_COUNTOF(r->code); i++)
-        if (r->code[i].url && now - r->code[i].when >= 20000)
+    /* A heap past three quarters of its limit keeps nothing that only
+     * saves a compile: YouTube's 9.8 MB bundle left its outer function
+     * (1.2 MB) in the kept script while the page, never idle for 20
+     * seconds, ran into its limit. */
+    bool tight = r->live_bytes > r->settings.memory_limit / 4 * 3;
+    double now = -1;
+    for (size_t i = 0; i < JS_COUNTOF(r->code); i++) {
+        if (!r->code[i].url)
+            continue;
+        if (now < 0)
+            now = js_now(r);
+        if (tight || now - r->code[i].when >= 20000)
             code_drop(&r->code[i]);
+    }
 }
 
 /* The script c as bytecode in a QuickJS block of c's context, or NULL. */
@@ -1406,13 +1417,15 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
     r->compiling = (char *)name;
     JSValue fn = JS_UNINITIALIZED;
     bool large = len >= JS_LARGE_SCRIPT;
+    bool no_text = len >= JS_NO_TEXT_SCRIPT;
     uint32_t hash = large ? code_hash(src, len) : 0;
     if (large && r->worker) {
         /* the page compiled this script and sent its bytecode along */
         size_t clen = 0;
         uint8_t *code = js_worker_take_code(js, &clen);
         if (code) {
-            fn = JS_ReadObjectSource(ctx, code, clen, JS_READ_OBJ_BYTECODE, src, len);
+            fn = no_text ? JS_ReadObject(ctx, code, clen, JS_READ_OBJ_BYTECODE)
+                         : JS_ReadObjectSource(ctx, code, clen, JS_READ_OBJ_BYTECODE, src, len);
             au_free(code);
         }
     } else if (large) {
@@ -1420,7 +1433,10 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         size_t blen = 0;
         uint8_t *blob = c ? code_write(c, &blen) : NULL;
         if (blob) {
-            fn = JS_ReadObjectSource(ctx, blob, blen, JS_READ_OBJ_BYTECODE, src, len);
+            /* without texts the bytecode names no positions in the
+             * script, and reading it needs no copy of the script */
+            fn = no_text ? JS_ReadObject(ctx, blob, blen, JS_READ_OBJ_BYTECODE)
+                         : JS_ReadObjectSource(ctx, blob, blen, JS_READ_OBJ_BYTECODE, src, len);
             js_free(c->owner->ctx, blob);
             c->used = ++r->code_clock;
             c->when = js_now(r);
@@ -1433,7 +1449,9 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         fn = JS_UNINITIALIZED;
     }
     if (JS_IsUninitialized(fn)) {
-        JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY, name, line};
+        JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION,
+                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY | (no_text ? JS_EVAL_FLAG_NO_SOURCE : 0),
+                           name, line};
         fn = JS_Eval2(ctx, src, len, &o);
         if (large && !r->worker && !JS_IsException(fn))
             code_add(js, name, len, hash, line, fn);

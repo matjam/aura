@@ -127,7 +127,8 @@ static JSModuleDef *compile_module(JSContext *ctx, const char *name, const char 
                                    const char *meta_url)
 {
     JSValue fn = JS_Eval(ctx, src, len, name,
-                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE);
+                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE |
+                             (len >= JS_NO_TEXT_SCRIPT ? JS_EVAL_FLAG_NO_SOURCE : 0));
     if (JS_IsException(fn))
         return NULL;
     JSModuleDef *md = JS_VALUE_GET_PTR(fn);

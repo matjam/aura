@@ -466,6 +466,25 @@ PowerPC. The load took 1.35 s. Develop > Performance showed:
 With "Script memory per page" set to Custom, 48 MB, the next load
 showed a limit of 49,152 KB.
 
+**A 9.8 MB script.** YouTube's player bundle, compiled alone on the
+64-bit host (a tool that links QuickJS with the allocator counters),
+2026-11-16, base e04ed48. Each row adds one change of patch 0013:
+
+| Change | Compile peak | Held after the compile |
+|---|---|---|
+| none (base) | 75,831 KB | 40,567 KB |
+| 5-byte source positions, phase 2 and 3 state out of `JSFunctionDef`, one trim per function | 62,779 KB | 41,411 KB |
+| the compiler's blocks outside the arenas | 63,019 KB | 34,887 KB |
+| no source text (scripts of 2 MB or more) | 54,979 KB | 25,351 KB |
+
+At the base's peak, the parts were about: function definitions (552
+bytes each on the host, 408 on PowerPC; 472 and 356 after) and their
+jump and position tables 3.5 MB, source positions in phase 1 bytecode
+3.2 MB, unused buffer space 6 MB, the source text 8 MB, and holes in
+the arenas left by the compiler's freed blocks 6.5 MB of what stays
+after. The page's results are in [`javascript.md`](javascript.md),
+"Large scripts".
+
 ### Measured in the guest
 
 Stock base, merged build, live Wikipedia:

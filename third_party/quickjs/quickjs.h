@@ -467,6 +467,12 @@ static inline bool JS_VALUE_IS_NAN(JSValue v)
    the compiled module without resolving its imports; resolve it with
    JS_ResolveModule(). */
 #define JS_EVAL_FLAG_NO_RESOLVE (1 << 8)
+/* Aura: keep no source text for the script's functions:
+   Function.prototype.toString gives a function the native function form
+   with its kind ("function f() { [native code] }", "async function",
+   "function *") and a class "class C { }". Line and column numbers are
+   kept. */
+#define JS_EVAL_FLAG_NO_SOURCE (1 << 9)
 
 typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);

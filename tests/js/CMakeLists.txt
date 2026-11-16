@@ -20,6 +20,11 @@ add_executable(test_subtle_context test_subtle_context.c)
 target_link_libraries(test_subtle_context aura_engine)
 add_test(NAME js_subtle_context COMMAND test_subtle_context)
 
+# Source text kept or not by a script's length, and source positions.
+add_executable(test_script_text test_script_text.c)
+target_link_libraries(test_script_text aura_engine)
+add_test(NAME js_script_text COMMAND test_script_text)
+
 # Workers on their own stacks (the host's coroutines), and without them.
 add_test(NAME js_workers
          COMMAND ${JS_TOOL} js --quiet --expect-errors 1 ${JS_DIR}/harness.js ${JS_DIR}/workers.js)

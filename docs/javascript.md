@@ -82,6 +82,7 @@ Patches this document refers to:
 | 0010 | a module graph is resolved again without compiling its modules again (`0010-module-retry-without-recompiling`; "Module scripts" below) |
 | 0011 | the parser records what its bracket look-ahead found instead of repeating it for nested brackets (`0011-parse-lookahead-memo`); the bytecode is unchanged |
 | 0012 | the parser finds a scoped variable through the variable hash table instead of walking the scope chain (`0012-scope-lookup-hash`); the bytecode is unchanged |
+| 0013 | less memory while compiling a large script, and `JS_EVAL_FLAG_NO_SOURCE`, which keeps no source text (`0013-compiler-memory`; "How script memory is kept down" below) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -175,8 +176,15 @@ is a RangeError) and a time budget (`AuJsHooks.long_script` decides
 whether a long script goes on). Allocation failures never reach
 `au_alloc`'s fatal handler. The memory limits are set by the policy in
 "Script memory limits" below.
-On Mac OS 9 script may use 512 KB of the application's 1 MB stack
-([`mac-os-9-shell.md`](mac-os-9-shell.md)). A native that can take long
+The default C stack limit (`au_js_settings_default`) is 128 KB times
+the pointer size: 512 KB on Mac OS 9, of the application's 1 MB stack
+([`mac-os-9-shell.md`](mac-os-9-shell.md)), and 1 MB on a 64-bit host.
+A call from script to script takes one frame of QuickJS's interpreter
+(`JS_CallInternal`): 608 bytes on PowerPC and 960 bytes on 64-bit ARM.
+So the same limit in calls needs more bytes on the host; with 512 KB the
+host stopped YouTube's home page at about 500 calls (see "Large
+scripts" below). A recursion that never ends is still a RangeError
+(`tools/smoke/recursion.html`). A native that can take long
 must check the time limit itself ([`fuzzing.md`](fuzzing.md), "Script
 that does not end").
 
@@ -309,7 +317,33 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   text and its nested functions share it. A whole-script text of 1 KB
   or more is found again by content, so every context of a runtime that
   compiles or reads the script shares it. `toString` returns the same
-  characters as before (no text is stripped at any size).
+  characters as before for a script under 2 MB.
+- **A script of 2 MB or more keeps no source text** (`JS_NO_TEXT_SCRIPT`
+  in `js_int.h`; `eval_classic` and `compile_module` pass
+  `JS_EVAL_FLAG_NO_SOURCE`, patch 0013). Its functions' `toString`
+  gives the native function form with the function's kind
+  (`function f() {\n    [native code]\n}`, `async function`,
+  `function *`), and a class gives `class C { }`, because YouTube tests
+  `class{}.toString()` for "class". Line and column numbers in errors
+  are unchanged. The compiled script cache then writes and reads plain
+  bytecode (`JS_ReadObject`). For YouTube's 9.8 MB bundle this saves
+  8 MB of the compile's peak and 9.5 MB after it.
+- **The compiler holds less per function** (patch 0013). A source
+  position in phase 1 bytecode takes 5 bytes instead of 9, and one that
+  directly follows another replaces it; the jump and position tables of
+  phases 2 and 3 live on `js_create_function`'s stack instead of in
+  every function definition; each function's buffers are trimmed once,
+  after its last opcode. Together about 13 MB of the peak for YouTube's
+  bundle (75.8 MB to 62.8 MB compiled alone).
+- **The compiler's blocks are outside the small-block arenas** (patch
+  0013): function definitions, the arrays `js_realloc_array` grows and
+  the bytecode buffers. In the arenas they left holes that the objects
+  made later could not fill: 6.5 MB of the memory still held after
+  compiling YouTube's bundle.
+- **Kept compiled scripts are dropped near the limit.** `js_safe_point`
+  calls `js_code_expire`, which drops every kept script when the
+  runtime uses more than three quarters of its limit. YouTube's outer
+  function alone holds 1.2 MB.
 - **A script's text is held once while it compiles.** The response
   buffer becomes the script's text (`au_docscript_resource_done` takes
   the buffer) and the engine frees it when the compile ends, before the
@@ -346,6 +380,61 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
 - `test_script_memory_prefs` in `tests/browser/test_browser.c`: the two
   preferences (default, round trip, clamping, Automatic stored as 0)
   and the policy function.
+- `tests/js/test_script_text.c` (ctest `js_script_text`): a 200 KB
+  script keeps its text and a script over 2 MB does not; the second's
+  `toString` gives the native form for a function, an arrow, an async
+  function and a generator and `class Klass { }` for a class,
+  `class{}.toString()` contains "class", and error positions (including
+  a column above 65535 and a line above 65535) match a script with
+  text, also in a child frame that reads the script from the cache.
+
+### Large scripts
+
+To measure a page's script memory and time on the host, run
+`aura-host chrome --net --tab URL --do wait:6000 --do perf --do console`
+and read the `Script` line of the Performance report and the "script
+runtime of" line (in use, peak, limit). To measure a compile alone, run
+`aura-host js --mem 128 FILE`.
+
+YouTube's home page loads one 9.8 MB player bundle. Measured on the
+host (arm64 macOS, `build/host`), 2026-11-16, base e04ed48 against the
+change that added patch 0013:
+
+| Page, limit | Peak | In use after | Script | Result |
+|---|---|---|---|---|
+| YouTube, 64 MB, before | 64,797 KB | | 408 ms | out of memory while compiling; skeleton only |
+| YouTube, 256 MB, before | 76,789 KB | 71,638 KB | 3,118 ms | 2 RangeErrors (stack); 498 boxes |
+| YouTube, 64 MB, after | 62,690 KB | 60,989 KB | 3,104 ms | runs; header, sidebar and prompt drawn; 643 boxes |
+| YouTube, 256 MB, after | 67,185 KB | 61,877 KB | | |
+| GitHub repository page, before | 38,384 KB | 37,844 KB | 502 to 527 ms | |
+| GitHub repository page, after | 38,401 KB | 37,831 KB | 515 to 527 ms | |
+| Wikipedia article, before | 10,093 KB | 9,594 KB | 104 to 130 ms | |
+| Wikipedia article, after | 10,089 KB | 9,598 KB | 106 to 127 ms | |
+
+The GitHub page was https://github.com/matjam/aura and the Wikipedia
+page https://en.wikipedia.org/wiki/PowerPC, three loads each. Their
+scripts are under 2 MB, so only the compiler changes apply; the
+differences are within the spread of the runs.
+
+Compiling YouTube's bundle alone (`aura-host js --mem 128`): peak
+72.8 MB before and 51.7 MB after, 42.6 MB and 29.1 MB after a
+collection, 0.53 s of user time both.
+
+YouTube's page still fits 64 MB with a margin of 2 MB, all of it at the
+end of the compile. After the collection that follows, 53.6 MB is in
+use and 7.4 MB is free in the arenas. Script objects (146,000, 10 MB),
+properties (7 MB), functions (9.6 MB, 3.4 MB of it bytecode) and atoms
+(5.7 MB) make up most of it. The default limit is unchanged: Automatic
+gives 96 MB on the stock test machine, and the limit is not raised on
+Mac OS 9 without a guest measurement of the page.
+
+**The stack.** YouTube's code goes about 600 calls deep. On the host it
+used at most 621,280 bytes of C stack (measured with an 8 MB limit),
+more than the 512 KB that the host's limit then allowed, so two calls
+failed with a RangeError. The recursion ends: it passes with 1 MB. With
+PowerPC's smaller frame (0.63 of the host's) the same depth is about
+390 KB, inside the Mac's 512 KB. Plain recursion reaches 519 calls at
+512 KB and 1,039 at 1 MB on the host.
 
 ## Retro68 compiler points
 

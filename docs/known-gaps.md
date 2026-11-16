@@ -270,6 +270,17 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   ([`javascript.md`](javascript.md), "How script memory is kept down").
 - **An out-of-memory script** gets a console line and no page-level
   notice.
+- **A script of 2 MB or more keeps no source text**: its functions'
+  `toString` gives the native function form with the function's kind,
+  and a class gives `class C { }`. A page that reads a function's text
+  from such a script gets the placeholder
+  ([`javascript.md`](javascript.md), "How script memory is kept down").
+- **YouTube's home page** runs within the 64 MB limit with 2 MB to spare
+  (62.7 MB peak on the host, all of it at the end of compiling the
+  9.8 MB bundle); a larger bundle would run out while compiling. Two
+  "not a function" errors remain (`playerApi`). Not measured in the
+  guest
+  ([`javascript.md`](javascript.md), "Large scripts").
 - **A module graph that fails to load** (an import that cannot be
   fetched, or one with a syntax error) keeps the modules it compiled
   until the document goes: unresolved modules stay loaded so that the
@@ -484,10 +495,12 @@ Largest first.
    [`javascript.md`](javascript.md), "Modules read on first use"); the
    observers, XMLHttpRequest and the top layer are the next largest
    parts, and most script-heavy pages use the observers.
-6. **Compiling a script** holds about 4 MB beyond its result for an
-   860 KB script (a record per function and all first-pass bytecode
-   until the script ends). That is how QuickJS resolves variables
-   ([`memory.md`](memory.md), "Where script memory goes").
+6. **Compiling a script** holds a record per function and all
+   first-pass bytecode until the script ends, because that is how
+   QuickJS resolves variables: about 4 MB beyond its result for an
+   860 KB script before patch 0013, and 30 MB beyond it for YouTube's
+   9.8 MB bundle after it ([`memory.md`](memory.md), "Where script
+   memory goes").
 7. **Line tables are kept** (153 KB per document for that script, 3%).
    Error locations in the Console depend on them.
 8. **The pooled allocator's slabs** are `NewPtr` blocks that do not

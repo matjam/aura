@@ -446,6 +446,12 @@ void js_url_free(JsUrl *u);
 #define AU_JS_WORKER_STACK ((size_t)256 << 10)
 #define AU_JS_WORKER_MEMORY ((size_t)24 << 20) /* a worker's memory limit when the embedder sets none */
 
+/* A script this long or longer keeps no source text for its functions
+ * (JS_EVAL_FLAG_NO_SOURCE, QuickJS patch 0013): toString gives them the
+ * native function form. The text was a seventh of a 9.8 MB bundle's
+ * compile peak and a seventh of its page's script heap afterwards. */
+#define JS_NO_TEXT_SCRIPT ((size_t)2 << 20)
+
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 
 #endif

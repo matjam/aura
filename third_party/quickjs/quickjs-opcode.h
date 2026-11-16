@@ -297,6 +297,9 @@ def( set_class_name, 5, 1, 1, u32) /* emitted in phase 1, removed in phase 2 */
 def( dispose_scope, 3, 0, 0, u16) /* emitted in phase 1, removed in phase 2 */
 
 def(     source_loc, 9, 0, 0, u32x2) /* emitted in phase 1, removed in phase 3 */
+/* Aura: a line and a column below 65536 in one u32 (line << 16 | col),
+   emitted in phases 1 and 2 instead of source_loc, removed in phase 3 */
+def(    source_loc2, 5, 0, 0, u32)
 
 DEF(    push_minus1, 1, 0, 1, none_int)
 DEF(         push_0, 1, 0, 1, none_int)
