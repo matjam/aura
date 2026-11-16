@@ -4,6 +4,7 @@
  * HTML document, then a line "---", then expectations, one per line:
  *
  *   viewport W H            (before the HTML; default 800 600)
+ *   script                  (before the HTML) runs the page's scripts
  *   #id x=10 y=20 w=100 h=50 lines=2
  *                           border box in document coordinates (any
  *                           subset of keys; lines: line boxes of the
@@ -148,12 +149,15 @@ static void deliver_data(DataLoader *d, AuDocView *dv)
     }
 }
 
-static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expect, int line0, int vw, int vh)
+static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expect, int line0, int vw, int vh,
+                     bool scripting)
 {
     DataLoader loader;
     memset(&loader, 0, sizeof loader);
     AuLoader li = {&loader, data_request, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    if (scripting)
+        au_docview_set_scripting(dv, true);
     /* Cases run in standards mode unless they start with their own
      * doctype (or a comment saying "quirks"). */
     static char src[1 << 16];
@@ -401,9 +405,16 @@ int main(int argc, char **argv)
             if (next)
                 *next = 0;
             int vw = 800, vh = 600;
-            if (!strncmp(body, "viewport ", 9)) {
-                vw = (int)strtol(body + 9, &body, 10);
-                vh = (int)strtol(body, &body, 10);
+            bool scripting = false;
+            for (;;) {
+                if (!strncmp(body, "viewport ", 9)) {
+                    vw = (int)strtol(body + 9, &body, 10);
+                    vh = (int)strtol(body, &body, 10);
+                } else if (!strncmp(body, "script\n", 7)) {
+                    scripting = true;
+                } else {
+                    break;
+                }
                 while (*body && *body != '\n')
                     body++;
                 if (*body)
@@ -414,7 +425,8 @@ int main(int argc, char **argv)
                 fail(line, "case without ---");
             } else {
                 *sep = 0;
-                run_case(fonts, body, strlen(body), sep + 5, line_of(orig, (size_t)(sep + 5 - buf)), vw, vh);
+                run_case(fonts, body, strlen(body), sep + 5, line_of(orig, (size_t)(sep + 5 - buf)), vw, vh,
+                         scripting);
             }
             ncases++;
             p = next ? next + 1 : NULL;

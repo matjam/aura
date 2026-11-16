@@ -1,0 +1,121 @@
+The top layer: a dialog opened with showModal() and its ::backdrop
+(HTML "the dialog element"; CSS Positioned Layout 4, section 6). Expected
+values come from the specifications; Wikipedia's "Thank you for donating"
+dialog painted under the footer's positioned links before.
+
+=== a modal dialog paints and hits above later positioned content
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+dialog::backdrop { background: transparent }
+dialog:modal #in { background: #00ff00 }
+</style>
+<main><dialog id=d><div id=in style="height:20px"></div></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+#d x=150 y=125 w=100 h=50
+pixel 200 135 00ff00
+pixel 200 165 0000ff
+hit 200 135 #in
+hit 200 165 #d
+pixel 10 10 ff0000
+// a transparent backdrop is still hit, and its events go to the dialog
+hit 10 10 #d
+
+=== the default backdrop covers the viewport under the dialog
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 600px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+</style>
+<main><dialog id=d></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+pixel 10 10 e60000
+pixel 390 290 e60000
+pixel 200 150 0000ff
+hit 10 10 #d
+scroll 200
+pixel 10 10 e60000
+pixel 200 150 0000ff
+hit 200 150 #d
+
+=== ancestors do not clip, move or fade it, and z-index stays below it
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; z-index: 2147483647; height: 300px; background: #ff0000 }
+#box { transform: translateX(50px); overflow: hidden; opacity: 0.5; width: 10px; height: 10px }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+dialog::backdrop { background: transparent }
+</style>
+<div id=box><dialog id=d></dialog></div>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+#d x=150 y=125 w=100 h=50
+pixel 160 130 0000ff
+pixel 240 170 0000ff
+hit 200 150 #d
+
+=== a page's ::backdrop paints between the page and the dialog
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+dialog::backdrop { background: rgba(255, 255, 255, 0.5) }
+</style>
+<main><dialog id=d></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+pixel 10 10 ff8080
+pixel 200 150 0000ff
+
+=== close() and removing open take it out of the top layer
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+</style>
+<main><dialog id=a></dialog><dialog id=b></dialog></main>
+<div id=cover></div>
+<script>
+var a = document.getElementById('a'), b = document.getElementById('b');
+a.showModal();
+a.close();
+b.showModal();
+b.removeAttribute('open');
+</script>
+---
+pixel 200 150 ff0000
+pixel 10 10 ff0000
+hit 200 150 #cover
+
+=== a dialog opened with show() stays in the page's painting order
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+</style>
+<main><dialog id=d></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').show()</script>
+---
+#d x=150 y=0
+pixel 200 25 ff0000
+hit 200 25 #cover
