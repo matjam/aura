@@ -15,7 +15,6 @@
 #include "browser/scriptmem.h"
 #include "core/region.h"
 #include "host.h"
-#include "fontdir.h"
 #include "png.h"
 #include "browser/browser.h"
 #include "browser/present.h"
@@ -460,7 +459,7 @@ static int cmd_font_index(int argc, char **argv)
         out = argv[4];
     AuBuf b;
     au_buf_init(&b);
-    if (!au_host_font_index(dir, &b)) {
+    if (!au_posix_font_index(dir, &b)) {
         fprintf(stderr, "aura-host: no usable fonts in %s\n", dir);
         au_buf_free(&b);
         return 1;
@@ -785,7 +784,7 @@ static void chrome_settle(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         if (t >= limit_ms || (t >= min_ms && !au_browser_busy(b)))
             break;
         if (net) {
-            au_host_net_wait(ses->host, 10);
+            au_posix_net_wait(ses->host, 10);
         } else {
             struct timespec ts = {0, 10 * 1000000};
             nanosleep(&ts, NULL);
@@ -1248,7 +1247,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
     AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     host.random = host_random;
-    host.coro = au_host_coro_ops();
+    host.coro = au_posix_coro_ops();
     if (o->scroll_bench) {
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;
@@ -1344,7 +1343,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         double t0 = now_ms(), limit = o->net ? 60000 : 5000;
         while (au_browser_busy(b) && now_ms() - t0 < limit) {
             if (o->net) {
-                au_host_net_wait(ses.host, 10);
+                au_posix_net_wait(ses.host, 10);
             } else {
                 struct timespec ts = {0, 20 * 1000000};
                 nanosleep(&ts, NULL);

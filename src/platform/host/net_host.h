@@ -1,36 +1,21 @@
-/* The host's AuNetOps: BSD sockets (non-blocking), getaddrinfo on a
- * helper thread per lookup, the system random generator, and the system
- * clocks. Also the host profile folder where aura-host keeps its cookie
- * and HSTS files between runs. */
+/* The network session of the aura-host tool (net_host.c): the profile
+ * folder where it keeps its cookie and HSTS files between runs, the root
+ * store, and the sockets of src/platform/posix (AuPosixNet). Also the
+ * entry points of the tool's network commands. */
 #ifndef AURA_HOST_NET_H
 #define AURA_HOST_NET_H
 
 #include "browser/app.h"
 #include "net/net.h"
-
-typedef struct AuHostNet AuHostNet;
-
-AuHostNet *au_host_net_new(void);
-void au_host_net_free(AuHostNet *h); /* closes every socket it opened */
-const AuNetOps *au_host_net_ops(AuHostNet *h);
-/* Waits up to ms for socket activity or a finished lookup. */
-void au_host_net_wait(AuHostNet *h, int ms);
+#include "platform/posix/posix.h"
 
 /* The trust anchors from assets/net/aura-roots.bin (path fixed at build
  * time, or $AURA_ROOTS). NULL with a message on stderr on failure. */
 AuRootStore *au_host_load_roots(void);
 
-/* The profile folder: $AURA_PROFILE, else ~/.aura-host. Created if
- * missing. Returns false when it cannot be made. */
-bool au_host_profile_path(const char *name, char *out, size_t cap);
-/* Reads a whole file (NUL-terminated, au_free); NULL if absent. */
-char *au_host_read_file(const char *path, size_t *len);
-/* Writes a file safely: to path.tmp, then renamed over path. */
-bool au_host_write_file(const char *path, const void *data, size_t len);
-
-/* The application services' port (browser/app.h, app_host.c): the
- * profile folder's files and folders over POSIX files, and the system
- * clocks (no script clock: Date keeps the C library's). */
+/* The application services' port (browser/app.h) over the profile
+ * folder, $AURA_PROFILE, else ~/.aura-host (made when missing):
+ * posix.h's au_posix_app_files and au_posix_app_port on that folder. */
 void au_host_app_files(AuAppFiles *out);
 void au_host_app_port(AuAppPort *out);
 
@@ -39,7 +24,7 @@ void au_host_app_port(AuAppPort *out);
  * certificates loaded from the profile folder by browser/app.c (files
  * "Cookies", "HSTS" and "Intermediates", as Mac OS 9 names them). */
 typedef struct AuHostSession {
-    AuHostNet *host;
+    AuPosixNet *host;
     AuRootStore *roots;
     AuNet *net;
     AuCookieJar *jar; /* NULL with cookies off */

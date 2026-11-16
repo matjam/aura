@@ -1,8 +1,9 @@
-/* Bundled fonts on the host: the faces of a Fonts folder (assets/fonts in
- * the source tree), registered from its fonts.idx and loaded on first
- * use. Without an index the folder is scanned and each font read once to
- * describe it. */
-#include "fontdir.h"
+/* Font files on disk (see posix.h): single files read whole, and the faces
+ * of a Fonts folder (assets/fonts in the source tree, the Fonts folder
+ * beside a port's application), registered from its fonts.idx and loaded
+ * on first use. Without an index the folder is scanned and each font read
+ * once to describe it. */
+#include "posix.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -12,7 +13,7 @@
 
 typedef struct FaceFile {
     struct FaceFile *next;
-    AuHostFontDir *dir;
+    AuPosixFontDir *dir;
     char path[1024];
     char *data;
     size_t len;
@@ -20,7 +21,7 @@ typedef struct FaceFile {
     FILE *fp; /* open while a paged face reads from it */
 } FaceFile;
 
-struct AuHostFontDir {
+struct AuPosixFontDir {
     char root[1024];
     FaceFile *files;
     AuFontSet *set;
@@ -76,7 +77,7 @@ static bool file_read(void *ctx, uint32_t off, void *buf, uint32_t n)
 static const AuFontFileOps file_ops = {load_file, file_size, file_read};
 
 /* One FaceFile per path: faces of one .ttc share it. */
-static FaceFile *file_for(AuHostFontDir *d, const char *path)
+static FaceFile *file_for(AuPosixFontDir *d, const char *path)
 {
     for (FaceFile *f = d->files; f; f = f->next)
         if (!strcmp(f->path, path))
@@ -91,7 +92,7 @@ static FaceFile *file_for(AuHostFontDir *d, const char *path)
 
 static void add_entry(void *ctx, const AuFontIndexEntry *e)
 {
-    AuHostFontDir *d = ctx;
+    AuPosixFontDir *d = ctx;
     char path[1024];
     snprintf(path, sizeof path, "%s/%s", d->root, e->path);
     FaceFile *f = file_for(d, path);
@@ -145,7 +146,7 @@ static void scan(AuBuf *b, const char *dir, const char *prefix, int depth)
     free(list);
 }
 
-bool au_host_font_index(const char *dir, AuBuf *out)
+bool au_posix_font_index(const char *dir, AuBuf *out)
 {
     au_buf_printf(out, "# Aura font index: path, face, weight, style, family. Written by aura-host font-index.\n");
     size_t before = out->len;
@@ -153,9 +154,24 @@ bool au_host_font_index(const char *dir, AuBuf *out)
     return out->len > before;
 }
 
-AuHostFontDir *au_host_add_font_dir(AuFontSet *set, const char *dir, unsigned flags)
+bool au_posix_add_font_file(AuFontSet *set, const char *path)
 {
-    AuHostFontDir *d = au_calloc(sizeof *d);
+    char *data;
+    size_t len;
+    if (!au_platform_read_file(path, &data, &len))
+        return false; /* missing: the caller decides whether to say so */
+    /* The data stays allocated for the life of the program. */
+    if (au_fontset_add_data(set, data, len) == 0) {
+        fprintf(stderr, "aura: %s: not a usable TrueType font\n", path);
+        au_free(data);
+        return false;
+    }
+    return true;
+}
+
+AuPosixFontDir *au_posix_add_font_dir(AuFontSet *set, const char *dir, unsigned flags)
+{
+    AuPosixFontDir *d = au_calloc(sizeof *d);
     snprintf(d->root, sizeof d->root, "%s", dir);
     d->set = set;
     d->flags = flags;
@@ -169,24 +185,24 @@ AuHostFontDir *au_host_add_font_dir(AuFontSet *set, const char *dir, unsigned fl
     } else {
         AuBuf b;
         au_buf_init(&b);
-        au_host_font_index(dir, &b);
+        au_posix_font_index(dir, &b);
         au_font_index_parse(b.data ? b.data : "", b.len, add_entry, d);
         au_buf_free(&b);
     }
     return d;
 }
 
-int au_host_font_dir_count(const AuHostFontDir *d)
+int au_posix_font_dir_count(const AuPosixFontDir *d)
 {
     return d ? d->added : 0;
 }
 
-size_t au_host_font_dir_loads(const AuHostFontDir *d)
+size_t au_posix_font_dir_loads(const AuPosixFontDir *d)
 {
     return d ? d->loads : 0;
 }
 
-void au_host_font_dir_free(AuHostFontDir *d)
+void au_posix_font_dir_free(AuPosixFontDir *d)
 {
     if (!d)
         return;

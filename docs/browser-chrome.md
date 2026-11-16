@@ -734,7 +734,7 @@ folder (`SEED` for `Random Seed`), `AuCa` in `Cache`, `AuLS` in
   again.
 - **To start with clean state in the guest**, delete that folder.
 - **On the host**, `aura-host chrome --profile DIR` loads and saves the
-  same files in `DIR` (`app_host.c`); `aura-host fetch` and `--net`
+  same files in `DIR` (`src/platform/posix/files_posix.c`); `aura-host fetch` and `--net`
   keep `Cookies`, `HSTS`, `Intermediates` and `Local Storage` in
   `$AURA_PROFILE` (default `~/.aura-host`).
 

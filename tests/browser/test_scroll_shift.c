@@ -6,7 +6,7 @@
  * every machine. */
 #include "browser/browser.h"
 #include "browser/present.h"
-#include "fontdir.h"
+#include "platform/posix/posix.h"
 #include "png.h"
 #include "browser/url.h"
 
@@ -290,8 +290,8 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
 int main(void)
 {
     AuFontSet *fonts = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    CHECK(dir && au_host_font_dir_count(dir) > 0);
+    AuPosixFontDir *dir = au_posix_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    CHECK(dir && au_posix_font_dir_count(dir) > 0);
 
     /* The damage list on its own. */
     au_present_init(&pres);

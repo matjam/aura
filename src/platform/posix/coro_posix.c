@@ -1,14 +1,15 @@
-/* Coroutines for the host tools (core/coro.h): each coroutine is a thread
- * that runs only while the thread that resumed it waits, so there is one
- * thread of control at any time, as with the Thread Manager on Mac OS 9.
- * A thread, not ucontext, because the sanitizers follow threads' stacks
- * and not hand-switched ones. */
-#include "host.h"
+/* Coroutines over POSIX threads (core/coro.h, posix.h): each coroutine is
+ * a thread that runs only while the thread that resumed it waits, so
+ * there is one thread of control at any time, as with the Thread Manager
+ * on Mac OS 9. A thread, not ucontext, because the sanitizers follow
+ * threads' stacks and not hand-switched ones, and because ucontext is
+ * deprecated on macOS. */
+#include "posix.h"
 
 #include <pthread.h>
 #include <stdlib.h>
 
-typedef struct HostCoro {
+typedef struct PosixCoro {
     pthread_t thread;
     pthread_mutex_t mu;
     pthread_cond_t cv;
@@ -16,11 +17,11 @@ typedef struct HostCoro {
     bool done;
     void (*entry)(void *arg);
     void *arg;
-} HostCoro;
+} PosixCoro;
 
 static void *coro_thread(void *p)
 {
-    HostCoro *c = p;
+    PosixCoro *c = p;
     pthread_mutex_lock(&c->mu);
     while (c->turn != 1)
         pthread_cond_wait(&c->cv, &c->mu);
@@ -37,7 +38,7 @@ static void *coro_thread(void *p)
 static void *coro_create(void *ctx, size_t stack_size, void (*entry)(void *arg), void *arg)
 {
     (void)ctx;
-    HostCoro *c = calloc(1, sizeof *c);
+    PosixCoro *c = calloc(1, sizeof *c);
     if (!c)
         return NULL;
     pthread_mutex_init(&c->mu, NULL);
@@ -65,7 +66,7 @@ static void *coro_create(void *ctx, size_t stack_size, void (*entry)(void *arg),
 static bool coro_resume(void *ctx, void *co)
 {
     (void)ctx;
-    HostCoro *c = co;
+    PosixCoro *c = co;
     pthread_mutex_lock(&c->mu);
     if (!c->done) {
         c->turn = 1;
@@ -81,7 +82,7 @@ static bool coro_resume(void *ctx, void *co)
 static void coro_yield(void *ctx, void *co)
 {
     (void)ctx;
-    HostCoro *c = co;
+    PosixCoro *c = co;
     pthread_mutex_lock(&c->mu);
     c->turn = 0;
     pthread_cond_broadcast(&c->cv);
@@ -93,14 +94,14 @@ static void coro_yield(void *ctx, void *co)
 static void coro_destroy(void *ctx, void *co)
 {
     (void)ctx;
-    HostCoro *c = co;
+    PosixCoro *c = co;
     pthread_join(c->thread, NULL);
     pthread_mutex_destroy(&c->mu);
     pthread_cond_destroy(&c->cv);
     free(c);
 }
 
-const AuCoroOps *au_host_coro_ops(void)
+const AuCoroOps *au_posix_coro_ops(void)
 {
     static const AuCoroOps ops = {NULL, coro_create, coro_resume, coro_yield, coro_destroy};
     return &ops;

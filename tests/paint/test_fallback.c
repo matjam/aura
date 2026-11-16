@@ -4,7 +4,7 @@
  * text segments into one face per cluster; the fallback cache; faces load
  * only when needed; a damaged Fonts folder and index do not crash. */
 #include "test_paint.h"
-#include "fontdir.h"
+#include "platform/posix/posix.h"
 
 #include <string.h>
 #include <sys/stat.h>
@@ -68,7 +68,7 @@ static void test_index_and_faces(void)
 {
     AuBuf now;
     au_buf_init(&now);
-    CHECK(au_host_font_index(AURA_FONTS_DIR, &now));
+    CHECK(au_posix_font_index(AURA_FONTS_DIR, &now));
     char *idx;
     size_t len;
     char path[1024];
@@ -82,11 +82,11 @@ static void test_index_and_faces(void)
     au_buf_free(&now);
 
     AuFontSet *set = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    EXPECT(au_host_font_dir_count(dir) == 19);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    EXPECT(au_posix_font_dir_count(dir) == 19);
     EXPECT(au_fontset_count(set) == 19);
     /* Registering opens nothing. */
-    EXPECT(count_loaded(set) == 0 && au_host_font_dir_loads(dir) == 0);
+    EXPECT(count_loaded(set) == 0 && au_posix_font_dir_loads(dir) == 0);
     for (size_t i = 0; i < au_fontset_count(set); i++) {
         EXPECT(au_fontset_entry_flags(set, i) & AU_FONT_BUNDLED);
         int w;
@@ -124,7 +124,7 @@ static void test_index_and_faces(void)
         au_surface_free(s);
     }
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 }
 
 /* ---- Aliases ---- */
@@ -132,7 +132,7 @@ static void test_index_and_faces(void)
 static void test_aliases_bundled_only(void)
 {
     AuFontSet *set = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
     EXPECT_FAMILY(set, "Arial", "Aura Sans");
     /* Only the face matched is loaded. */
     EXPECT(count_loaded(set) == 1 && loaded(set, "Aura Sans", 400, false));
@@ -205,7 +205,7 @@ static void test_aliases_bundled_only(void)
     EXPECT(au_font_generic("Arial", 5) == NULL);
     EXPECT(au_font_alias("No Such Font", 12) == NULL);
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 }
 
 /* A "system" face: a lazily registered entry whose data is a bundled
@@ -230,7 +230,7 @@ static void test_aliases_with_system(void)
     AuFontSet *set = au_fontset_new();
     au_fontset_add_lazy(set, "Arial", 400, false, 0, 0, sys_loader, NULL);
     au_fontset_add_lazy(set, "Monaco", 400, false, 0, 0, sys_loader, NULL);
-    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
     int arial = entry_of(set, "Arial", 400, false);
     /* The installed face of the name comes first. */
     AuFontFace *a = au_fontset_match(set, "Arial", 400, false);
@@ -253,7 +253,7 @@ static void test_aliases_with_system(void)
     au_fontset_set_generic(set, AU_GENERIC_SANS_SERIF, "Arial");
     EXPECT(au_fontset_match(set, "sans-serif", 400, false) == a);
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
     au_free(sys_data);
 }
 
@@ -273,7 +273,7 @@ static const char *glyph_family(const AuGlyphRun *r, size_t i)
 static void test_fallback(void)
 {
     AuFontSet *set = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
     AuFontList *l = au_fontlist_parse(set, "Arial, sans-serif", 400, false);
     AuFontFace *primary = au_fontlist_primary(l);
     CHECK(primary && !strcmp(primary->family, "Aura Sans"));
@@ -436,7 +436,7 @@ static void test_fallback(void)
     au_fontlist_free(two);
     au_fontlist_free(other);
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 }
 
 /* An empty set: lists have no primary and shape nothing. */
@@ -539,24 +539,24 @@ static void test_damaged_folder(void)
     snprintf(path, sizeof path, "%s/fonts.idx", root);
     write_file(path, idx, sizeof idx - 1);
     AuFontSet *set = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(set, root, AU_FONT_BUNDLED);
-    EXPECT(au_host_font_dir_count(dir) == 6);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, root, AU_FONT_BUNDLED);
+    EXPECT(au_posix_font_dir_count(dir) == 6);
     exercise_set(set);
     /* The broken faces failed and were never chosen; Good was. */
     AuFontFace *f = au_fontset_match(set, "Bad, Trunc, Missing, Evil", 400, false);
     EXPECT(f && !strcmp(f->family, "Inter"));
     EXPECT(!au_fontset_has_family(set, "Bad", 3) && !au_fontset_has_family(set, "Missing", 7));
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 
     /* Without an index the folder is scanned; broken files are left out. */
     unlink(path);
     set = au_fontset_new();
-    dir = au_host_add_font_dir(set, root, AU_FONT_BUNDLED);
-    EXPECT(au_host_font_dir_count(dir) == 1);
+    dir = au_posix_add_font_dir(set, root, AU_FONT_BUNDLED);
+    EXPECT(au_posix_font_dir_count(dir) == 1);
     exercise_set(set);
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 
     /* Damaged copies of a font in the folder: registering by scan, then
      * matching and drawing, must not crash (AddressSanitizer). */
@@ -571,10 +571,10 @@ static void test_damaged_folder(void)
         size_t cut = (next_rand() % 3 == 0) ? next_rand() % good_len : good_len;
         write_file(path, buf, cut);
         set = au_fontset_new();
-        dir = au_host_add_font_dir(set, root, AU_FONT_BUNDLED);
+        dir = au_posix_add_font_dir(set, root, AU_FONT_BUNDLED);
         exercise_set(set);
         au_fontset_free(set);
-        au_host_font_dir_free(dir);
+        au_posix_font_dir_free(dir);
     }
     au_free(buf);
 
@@ -672,7 +672,7 @@ static double now_ms(void)
 static void test_cjk(void)
 {
     AuFontSet *set = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    AuPosixFontDir *dir = au_posix_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
     AuFontList *l = au_fontlist_parse(set, "Arial, sans-serif", 400, false);
     AuGlyphRun r;
     au_glyph_run_init(&r);
@@ -747,7 +747,7 @@ static void test_cjk(void)
     au_glyph_run_free(&r);
     au_fontlist_free(l);
     au_fontset_free(set);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
 }
 
 /* ---- Paged faces ---- */

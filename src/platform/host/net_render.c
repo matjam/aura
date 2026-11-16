@@ -220,7 +220,7 @@ static void run_until_quiet(NetRender *nr, AuHostSession *ses, bool scripts, dou
             break;
         }
         if (!any)
-            au_host_net_wait(ses->host, due < 20 ? (int)due : 20);
+            au_posix_net_wait(ses->host, due < 20 ? (int)due : 20);
     }
     au_docview_update(nr->dv);
 }
@@ -303,7 +303,7 @@ int au_host_net_render_main(int argc, char **argv)
     au_net_loader_start(nr.l, &rq, &cb);
     while (!nr.main_done) {
         if (!au_net_loader_poll(nr.l))
-            au_host_net_wait(ses.host, 20);
+            au_posix_net_wait(ses.host, 20);
     }
     double t_main = now_ms() - t0;
     int rc = 0;
@@ -369,7 +369,7 @@ int au_host_net_render_main(int argc, char **argv)
             while (au_docview_pending(nr.dv) > 0 && now_ms() - tp < MAX_SECONDS * 1000.0) {
                 bool any = au_net_loader_poll(nr.l);
                 if (!any)
-                    au_host_net_wait(ses.host, 20);
+                    au_posix_net_wait(ses.host, 20);
             }
             au_docview_update(nr.dv);
             au_docview_paint(nr.dv, c, (AuRect){0, 0, (float)w, (float)ph}, 0, scroll);

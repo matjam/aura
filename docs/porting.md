@@ -41,11 +41,20 @@ host test.
 | Engine: HTML, CSS, layout, paint, script, network, TLS | `src/core`, `src/html`, `src/css`, `src/layout`, `src/paint`, `src/js`, `src/net`, ... | nothing outside `src/` |
 | Browser model: windows, tabs, history, bookmarks, downloads, preferences, commands, lists, developer tools | `src/browser` | the engine |
 | Platinum chrome painter (optional view of the model) | `src/browser/chrome.c` | the browser model |
-| Port services: sockets, DNS, clock, entropy, files, coroutines, fonts | `src/platform/<os>` (shared POSIX pieces in `src/platform/posix`) | the OS |
+| Port services: sockets, DNS, clock, entropy, files, coroutines, fonts | `src/platform/posix` for any Unix port (`posix.h`); `src/platform/macos9` for Mac OS 9 | the OS |
 | Port user interface | `src/platform/<port>` | the browser model, the toolkit |
+| Host test tool `aura-host` (headless; not a port users run) | `src/platform/host` | the browser model, `src/platform/posix` |
 
-The engine and the browser model build and pass their tests on Linux
-and macOS hosts in CI today; a port adds only the last two rows.
+The engine, the browser model and `src/platform/posix` build and pass
+their tests on Linux and macOS hosts in CI today; a Unix port adds only
+its user interface and the few services listed below that are not in
+`src/platform/posix`.
+
+CMake builds one platform per build folder, chosen by `AURA_PLATFORM`
+(`macos9`, `host`, or `gtk`, which is reserved and stops configuring
+until the port exists); see [`building.md`](building.md), "Choosing the
+platform". A new port adds its value there and its folder under
+`src/platform`.
 
 ## What a port writes
 
@@ -65,6 +74,54 @@ set of functions declared in the header named.
 | `AuDownloadFiles` | `src/net/transfer.h` | creating and finishing download files |
 | system facts | `src/browser/sysinfo.h` | the machine and OS for System Status and bug reports |
 | `AuDevWinHost` | `src/browser/devwin_model.h` | for the developer windows: the page shown, the machine's facts, the clipboard, saving a file, the Find dialog |
+
+A Unix port takes these from `src/platform/posix` (link `aura_posix`,
+include `platform/posix/posix.h`) instead of writing them:
+
+| Interface | File | Function |
+|---|---|---|
+| `AuNetOps`: DNS, TCP, clocks, entropy | `net_posix.c` | `au_posix_net_new`, `au_posix_net_ops`, and the main loop calls below |
+| clock and time zone | `clock_posix.c` | `au_posix_ms`, `au_posix_us`, `au_posix_wall_time`, `au_posix_utc_offset`; `au_platform_time_ms` |
+| entropy | `entropy_posix.c` | `au_posix_entropy` (getentropy, else `/dev/urandom`) |
+| application files and clocks | `files_posix.c` | `au_posix_files_init` on the profile folder, then `au_posix_app_port`; `au_posix_read_file`, `au_posix_write_file`, `au_posix_make_dirs`; `au_platform_read_file` |
+| coroutines | `coro_posix.c` | `au_posix_coro_ops` |
+| font files | `fontdir_posix.c` | `au_posix_add_font_file` for one file, `au_posix_add_font_dir` for the bundled Fonts folder and its `fonts.idx` |
+
+The port still writes `au_platform_load_fonts` (which files to load:
+fontconfig on Linux), `au_platform_window_surface` and
+`au_platform_present`, `AuDownloadFiles`, the system facts, and
+everything in the user interface.
+
+## The POSIX services
+
+`src/platform/posix` has no event loop and does not block the caller.
+To run the network stack from a GUI main loop (the GLib main loop in the
+GTK4 port), do this:
+
+1. Make the sockets with `au_posix_net_new`, and the stack with
+   `au_net_new(au_posix_net_ops(n))` (or `AuAppNet.ops` for
+   `au_app_net_start`).
+2. List the descriptors to watch with `au_posix_net_watch`: the wake
+   pipe that DNS lookup threads write to, every socket for reading, and
+   for writing each socket that is still connecting or that last
+   refused part of a send. Add a watch for each (`g_unix_fd_add` with
+   `G_IO_IN`, `G_IO_OUT`, and always `G_IO_ERR | G_IO_HUP`).
+3. When one is ready, call `au_posix_net_ready` (it empties the wake
+   pipe), then `au_net_pump` until it returns false.
+4. After each pump, compare `au_posix_net_watch_serial` with the value
+   from step 2; when it changed, list the descriptors again and replace
+   the watches.
+5. Also pump from a timer, for the stack's connect, idle and total
+   timeouts and for the page's own idle work; the host tool pumps at
+   least every 20 ms while a load runs.
+
+A tool without a main loop calls `au_posix_net_wait(n, ms)`, which does
+steps 2 and 3 with `poll`; the `aura-host` commands use it.
+
+The code builds on macOS and on Linux (glibc and musl). It uses no call
+that one of them lacks without a fallback: entropy uses `getentropy`
+where the C library declares it and `/dev/urandom` otherwise, and
+`SO_NOSIGPIPE` and `MSG_NOSIGNAL` are each used only where defined.
 
 Then the user interface:
 
@@ -111,7 +168,8 @@ the page.
 | Preferences | a window of `GtkStack` pages built from the preference descriptions |
 | lists | `GtkColumnView` over a `GListModel` fed from the list models |
 | clipboard | `GdkClipboard` |
-| network | the POSIX sockets in `src/platform/posix`, run from the GLib main loop (`g_unix_fd_add`) |
+| network | the POSIX sockets in `src/platform/posix`, run from the GLib main loop (`g_unix_fd_add` on the descriptors `au_posix_net_watch` lists; "The POSIX services" above) |
+| coroutines, clocks, entropy, files | `src/platform/posix` |
 | fonts | fontconfig to find font files, read by Aura's own font code |
 | files | `~/.config/aura` and `~/.cache/aura` (XDG base directories) |
 | packaging | an AppImage and a `.deb`, built in CI |
@@ -131,8 +189,8 @@ keeps the Mac OS 9 build working and looking the same.
 | Command table (`src/browser/commands.c`); Mac menus built from it ([`browser-chrome.md`](browser-chrome.md), "Commands and menus") | done |
 | Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them ([`browser-chrome.md`](browser-chrome.md), "Preferences") | done |
 | List models for History, Bookmarks, Downloads and Cookies (`src/browser/lists.c`); Mac list windows built from them | done |
-| Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | not started |
+| Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | done |
 | Developer windows' layout and actions in `src/browser` (`devwin_model.c`); Mac `devwin.c` only frames them ([`developer-tools.md`](developer-tools.md), "The window models") | done |
-| Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; host `app_host.c`) | done |
+| Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; Unix `src/platform/posix/files_posix.c`) | done |
 | GTK4 port in `src/platform/gtk`, with a CI build | not started |
 | Packaging for Linux | not started |

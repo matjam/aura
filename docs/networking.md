@@ -14,7 +14,8 @@ The network stack is portable engine code that never touches a socket
 itself. `src/net` talks to the platform through `AuNetOps`
 (`src/platform/platform.h`): DNS, non-blocking TCP, a monotonic and a
 wall clock, and an entropy source. The host implements it with BSD
-sockets (`src/platform/host/net_host.c`); Mac OS 9 with Open Transport
+sockets (`src/platform/posix/net_posix.c`, which a Unix port reuses;
+[`porting.md`](porting.md), "The POSIX services"); Mac OS 9 with Open Transport
 (`src/platform/macos9/net_ot.c`). One `AuNet` per application holds the
 connection pool, the TLS sessions and the policy stores the embedder
 attaches. The only process-wide state is the TLS library's

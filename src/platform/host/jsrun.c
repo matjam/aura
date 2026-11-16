@@ -378,7 +378,7 @@ static int js_main(int argc, char **argv)
     h.now_ms = h_now;
     h.console = h_console;
     h.random = h_random;
-    h.coro = no_coro ? NULL : au_host_coro_ops();
+    h.coro = no_coro ? NULL : au_posix_coro_ops();
     h.fetcher.ctx = &run;
     h.fetcher.start = h_fetch_start;
     h.fetcher.abort = h_fetch_abort;

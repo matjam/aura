@@ -1,13 +1,12 @@
-/* Host-only additions to the platform interface. */
+/* Host-only additions to the platform interface, for the aura-host tool
+ * and the tests that use its platform. The OS services (coroutines,
+ * files, sockets, font files) are src/platform/posix's, declared in
+ * posix.h. */
 #ifndef AURA_HOST_H
 #define AURA_HOST_H
 
 #include "platform/platform.h"
-#include "core/coro.h"
-
-/* Coroutines for the host tools (coro_host.c): a thread per coroutine,
- * run one at a time. */
-const AuCoroOps *au_host_coro_ops(void);
+#include "platform/posix/posix.h"
 
 /* Fonts named on the command line; au_platform_load_fonts loads them
  * before the system fonts. */

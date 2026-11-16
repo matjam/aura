@@ -1,63 +1,13 @@
-/* The host platform: headless, for development and tests on macOS (and
- * any POSIX system). There is no window; the window surface is an
- * offscreen surface the tool writes to a PNG. */
+/* The host platform: headless, for development and tests on macOS and
+ * Linux. There is no window; the window surface is an offscreen surface
+ * the tool writes to a PNG. The clock and file reads of platform.h come
+ * from src/platform/posix. */
 #include "host.h"
-#include "fontdir.h"
+#include "platform/posix/posix.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-uint32_t au_platform_time_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
-}
-
-bool au_platform_read_file(const char *path, char **data, size_t *len)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        return false;
-    /* A file whose size is known is read into a block of that size: a
-     * buffer grown by doubling keeps up to twice the bytes, and a font's
-     * data is kept for good. */
-    if (fseek(f, 0, SEEK_END) == 0) {
-        long size = ftell(f);
-        rewind(f);
-        if (size > 0) {
-            char *d = au_alloc((size_t)size + 1);
-            size_t got = fread(d, 1, (size_t)size, f);
-            int extra = fgetc(f);
-            if (got == (size_t)size && extra == EOF && !ferror(f)) {
-                fclose(f);
-                d[got] = 0;
-                *data = d;
-                *len = got;
-                return true;
-            }
-            /* It changed while being read: read it as a stream. */
-            au_free(d);
-            rewind(f);
-        }
-    }
-    AuBuf b;
-    au_buf_init(&b);
-    char chunk[65536];
-    size_t n;
-    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
-        au_buf_append(&b, chunk, n);
-    bool ok = !ferror(f);
-    fclose(f);
-    if (!ok) {
-        au_buf_free(&b);
-        return false;
-    }
-    *data = au_buf_take(&b, len);
-    return true;
-}
 
 /* The macOS system fonts that match the fonts Mac OS 9.2.2 ships, so the
  * host and the guest draw the scene with the same families. */
@@ -90,7 +40,7 @@ static const char *extra_fonts[64];
 static int nextra;
 static bool use_system_fonts = true, use_bundled_fonts = true;
 static const char *bundled_dir;
-static AuHostFontDir *bundled[16];
+static AuPosixFontDir *bundled[16];
 static int nbundled;
 
 void au_host_add_font_path(const char *path)
@@ -162,34 +112,19 @@ static void map_generic(AuFontSet *set, AuGenericFamily g, const char *a, const 
         au_fontset_set_generic(set, g, b);
 }
 
-static bool add_file(AuFontSet *set, const char *path)
-{
-    char *data;
-    size_t len;
-    if (!au_platform_read_file(path, &data, &len))
-        return false;
-    /* The data stays allocated for the life of the program. */
-    if (au_fontset_add_data(set, data, len) == 0) {
-        fprintf(stderr, "aura-host: %s: not a usable TrueType font\n", path);
-        au_free(data);
-        return false;
-    }
-    return true;
-}
-
 void au_platform_load_fonts(AuFontSet *set)
 {
     for (int i = 0; i < nextra; i++)
-        if (!add_file(set, extra_fonts[i]))
+        if (!au_posix_add_font_file(set, extra_fonts[i]))
             fprintf(stderr, "aura-host: cannot load font %s\n", extra_fonts[i]);
     if (use_system_fonts) {
         for (size_t i = 0; i < sizeof system_fonts / sizeof system_fonts[0]; i++)
-            add_file(set, system_fonts[i]);
+            au_posix_add_font_file(set, system_fonts[i]);
     }
     /* The bundled faces come after the system's, so a system face of the
      * same family wins. Their data lives as long as the process. */
     if (use_bundled_fonts && nbundled < 16)
-        bundled[nbundled++] = au_host_add_font_dir(set, au_host_fonts_dir(), AU_FONT_BUNDLED);
+        bundled[nbundled++] = au_posix_add_font_dir(set, au_host_fonts_dir(), AU_FONT_BUNDLED);
     map_generic(set, AU_GENERIC_SERIF, "Times New Roman", "Times");
     map_generic(set, AU_GENERIC_SANS_SERIF, "Helvetica", "Arial");
     map_generic(set, AU_GENERIC_MONOSPACE, "Courier New", "Courier");

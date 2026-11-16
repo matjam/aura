@@ -33,7 +33,7 @@ typedef struct Fetch {
     AuCertInfo cert;
     bool have_cert;
     double t_start, t_response;
-    AuHostNet *host;
+    AuPosixNet *host;
     bool again; /* the repeat of --again: print the TLS line only */
 } Fetch;
 
@@ -253,7 +253,7 @@ int au_host_fetch_main(int argc, char **argv)
         fprintf(stderr, "aura-host: cannot set up sockets\n");
         return 3;
     }
-    AuHostNet *host = ses.host;
+    AuPosixNet *host = ses.host;
     AuNet *net = ses.net;
     f.host = host;
     au_net_config(net)->https_first = https_first;
@@ -289,7 +289,7 @@ int au_host_fetch_main(int argc, char **argv)
     au_http_request_free(&rq);
     while (!f.done) {
         if (!au_net_pump(net))
-            au_host_net_wait(host, 20);
+            au_posix_net_wait(host, 20);
     }
     double t_end = mono_ms();
     if (again && f.err == AU_NET_OK) {
@@ -305,7 +305,7 @@ int au_host_fetch_main(int argc, char **argv)
         au_http_request_free(&rq);
         while (!f.done) {
             if (!au_net_pump(net))
-                au_host_net_wait(host, 20);
+                au_posix_net_wait(host, 20);
         }
         fprintf(stderr, "* again: %s, %.0f ms\n", f.err == AU_NET_OK ? "done" : au_net_error_name(f.err),
                 mono_ms() - t0);

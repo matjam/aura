@@ -46,7 +46,7 @@ every face parses and draws.
   use), then the bundled faces listed in `Fonts/fonts.idx`.
 - **Host.** `platform_host.c` loads a fixed list of macOS fonts that
   match Mac OS 9's, then the bundled faces of `assets/fonts`
-  (`fontdir.c`), lazily.
+  (`src/platform/posix/fontdir_posix.c`), lazily.
 - Both platforms register a bundled face with `au_fontset_add_file`. A
   file over 2 MB (`AU_FONT_PAGED_MIN`) becomes a paged face (below);
   a smaller one is read whole, on Mac OS 9 into temporary memory when
@@ -71,7 +71,8 @@ face this large.
   Status shows "Paged faces" with the blocks read.
 - The platform supplies `size` and `read` callbacks (`AuFontFileOps`);
   on Mac OS 9 the size comes from the catalog and the data fork stays
-  open for reads (`platform_mac.c`), on the host a `FILE` (`fontdir.c`).
+  open for reads (`platform_mac.c`), on the host a `FILE`
+  (`fontdir_posix.c`).
 - A read that fails, or a file shorter than its tables say, gives
   missing glyphs. The pager checks every table range against the file
   length, at most 256 tables and 16 MB of tables in memory, and a glyph

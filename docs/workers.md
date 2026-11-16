@@ -69,8 +69,8 @@ and `AuJsHooks.coro`.
 
 - Mac OS 9 uses the Thread Manager's cooperative threads (`coro_mac.c`:
   a worker's thread is stopped except while it is resumed).
-- The host tools use a thread that runs only while its resumer waits
-  (`coro_host.c`).
+- The host tools (and any Unix port) use a thread that runs only while
+  its resumer waits (`src/platform/posix/coro_posix.c`).
 - Only one stack runs at a time, so engine code needs no locks.
 - Everything that touches a worker's runtime runs on the worker's
   stack; the page's side only appends C data to the worker's queue

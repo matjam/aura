@@ -3,7 +3,7 @@
  * symbols and emoji shapes without missing glyphs through the chrome's
  * font list, ellipsizes within its width, and paints. */
 #include "browser/browser.h"
-#include "fontdir.h"
+#include "platform/posix/posix.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,8 +20,8 @@
 int main(void)
 {
     AuFontSet *fonts = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    CHECK(dir && au_host_font_dir_count(dir) > 0);
+    AuPosixFontDir *dir = au_posix_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    CHECK(dir && au_posix_font_dir_count(dir) > 0);
     static const char title[] = "Caf\xC3\xA9 \xD0\x96\xD0\xB8\xD0\xB7\xD0\xBD\xD1\x8C \xE2\x8C\x98 \xF0\x9F\x98\x80 "
                                 "\xE2\x80\x9Cquoted\xE2\x80\x9D \xCE\xA9";
     AuFontList *l = au_fontlist_parse(fonts, AU_CHROME_LABEL_FAMILIES, 400, false);
@@ -62,7 +62,7 @@ int main(void)
     au_fontlist_free(s.small_list);
     au_fontlist_free(l);
     au_fontset_free(fonts);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
     printf("chrome_fonts: all tests passed\n");
     return 0;
 }

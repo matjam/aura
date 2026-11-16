@@ -24,7 +24,8 @@ below.
 | `src/url` | WHATWG URL parser and serializer, hosts (IPv4, IPv6, Punycode) | |
 | `src/codec` | streaming inflate (gzip, zlib, raw deflate) and Brotli decoders | |
 | `src/net` | HTTP/1.1 client, TLS glue, cookies, HSTS, PSL, cache, sniffing, encodings, the resource loader, blocklists | [`networking.md`](networking.md), [`tls.md`](tls.md), [`content-blocking.md`](content-blocking.md) |
-| `src/platform/host` | host tools: headless render to PNG, tree dumps, `fetch`, BSD sockets for the network stack, `js` and `page` for scripts | [`building.md`](building.md) |
+| `src/platform/posix` | the POSIX services a Unix port reuses (`posix.h`): BSD sockets and DNS for the network stack, files and the profile folder, clocks, entropy, coroutines, font files; no event loop | [`porting.md`](porting.md) |
+| `src/platform/host` | the `aura-host` tool (`AURA_PLATFORM=host`): headless render to PNG, tree dumps, `fetch`, `js` and `page` for scripts, `chrome`, `blocklist`; built on `src/platform/posix` | [`building.md`](building.md) |
 | `src/platform/macos9` | the Mac OS 9 application; Open Transport sockets, entropy and clocks for the network stack; `nettest/` | [`mac-os-9-shell.md`](mac-os-9-shell.md) |
 | `src/platform/macos9/jstest` | JSTest, the JavaScript engine self-test and benchmark for Mac OS 9 | [`javascript.md`](javascript.md) |
 | `src/platform/macos9/sea` | the installer: the extractor of the self-extracting archive | [`ci-and-releases.md`](ci-and-releases.md) |
@@ -37,9 +38,12 @@ below.
 | `assets/fonts` | the bundled fonts, their licences and `fonts.idx` | [`fonts.md`](fonts.md) |
 | `assets/net` | `aura-roots.bin`, the root certificate store | [`tls.md`](tls.md) |
 
-`CMakeLists.txt` globs `src/**/*.c` into the `aura_engine` library and
-adds every `tests/*/CMakeLists.txt`, so a new source file or test area
-needs no change to the top-level file.
+`CMakeLists.txt` globs `src/**/*.c` outside `src/platform` into the
+`aura_engine` library and adds every `tests/*/CMakeLists.txt`, so a new
+engine source file or test area needs no change to the top-level file.
+`AURA_PLATFORM` chooses the platform folder it adds: `macos9`, or
+`host` (`src/platform/posix` and `src/platform/host`, with the tests)
+([`building.md`](building.md), "Choosing the platform").
 
 ## To add a test
 
@@ -59,14 +63,14 @@ C99 that never calls the OS ([`conventions.md`](conventions.md)). A
 platform supplies what the engine cannot do itself, through tables of
 functions:
 
-| What | Interface | Host | Mac OS 9 |
+| What | Interface | Host (`posix/` and `host/`) | Mac OS 9 |
 |---|---|---|---|
-| DNS, TCP, clocks, entropy | `AuNetOps` (`src/platform/platform.h`) | `net_host.c` (BSD sockets) | `net_ot.c` (Open Transport), `entropy.c`, `clock_mac.c` |
+| DNS, TCP, clocks, entropy | `AuNetOps` (`src/platform/platform.h`) | `posix/net_posix.c` (BSD sockets), `clock_posix.c`, `entropy_posix.c` | `net_ot.c` (Open Transport), `entropy.c`, `clock_mac.c` |
 | Windows, invalidation, scrolling the screen, dialogs | `AuBrowserHost` | `aura-host chrome` | `browserwin.c`, `main.c` |
-| Fonts | the platform font set | `platform_host.c` | `platform_mac.c` |
-| Coroutines for workers | `AuCoroOps` (`src/core/coro.h`) | `coro_host.c` | `coro_mac.c` (Thread Manager) |
+| Fonts | the platform font set | `host/platform_host.c` (which files), `posix/fontdir_posix.c` (reading them) | `platform_mac.c` |
+| Coroutines for workers | `AuCoroOps` (`src/core/coro.h`) | `posix/coro_posix.c` | `coro_mac.c` (Thread Manager) |
 | Download files | `AuDownloadFiles` | | `downloads_mac.c` |
-| The profile folder's files, clocks, network hooks | `AuAppPort`, `AuAppNet` (`src/browser/app.h`) | `app_host.c` | `storage.c`, `network.c` |
+| The profile folder's files, clocks, network hooks | `AuAppPort`, `AuAppNet` (`src/browser/app.h`) | `posix/files_posix.c` over the folder `host/net_host.c` picks | `storage.c`, `network.c` |
 | Blocklist files and memory | `AuBlockStore`, `AuBlockMem` | | `blocking_mac.c` |
 
 The host tools (`aura-host`) run the same engine headless, so most

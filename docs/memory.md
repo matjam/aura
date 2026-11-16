@@ -328,7 +328,7 @@ has a bound:
 |---|---|---|
 | The HTTP memory cache: entries, response headers, bodies | `src/net/cache.c`, `headers.c` | 8 MB of cost on the host (each entry costs 256 bytes, its headers and its body; the newest entry is always kept); 1 MB resident on the Mac when the disk cache is on ([`networking.md`](networking.md)) |
 | Idle connections: TLS contexts, records, receive buffers | `tls.c`, `tls_platform.c`, `http.c` | 16 connections, 6 per host, closed after 30 seconds idle; about 1 MB |
-| Font files read on first use | `src/platform/host/platform_host.c` | the Fonts folder (8.3 MB with the bundled fonts); each file is held at its size |
+| Font files read on first use | `src/platform/posix/fontdir_posix.c` | the Fonts folder (8.3 MB with the bundled fonts); each file is held at its size |
 | Web storage | `src/net` | about 1 MB |
 
 **To find a leak among them**, run with `AURA_MEM_EXIT=1`: after

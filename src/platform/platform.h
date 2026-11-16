@@ -1,7 +1,8 @@
 /* The interface between Aura and the operating system.
  *
  * Each platform (src/platform/host, src/platform/macos9) implements the
- * functions below. The engine (everything outside src/platform) never
+ * functions below; a Unix port takes the clock and file reads from
+ * src/platform/posix. The engine (everything outside src/platform) never
  * calls them; the application shell does, and passes the engine what it
  * needs (a surface to paint into, a font set, events). That keeps the
  * engine testable on the host with no OS at all.
@@ -108,7 +109,7 @@ typedef struct AuEvent {
  * calls from its event loop on the main task, so implementations need not
  * be reentrant. No call may block: an operation that cannot complete at
  * once returns "pending" or "would block" and is polled again on the next
- * pump. src/platform/host/net_host.c implements this with BSD sockets;
+ * pump. src/platform/posix/net_posix.c implements this with BSD sockets;
  * src/platform/macos9/net_ot.c with Open Transport.
  *
  * Handles are small positive integers chosen by the platform (0 is

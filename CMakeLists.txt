@@ -16,9 +16,41 @@ if(AURA_MEM_TRACK)
     add_compile_options(-Wno-unsequenced)
 endif()
 
+# The platform to build (docs/porting.md):
+#   macos9  the Mac OS 9 application (src/platform/macos9), with Retro68
+#   host    the aura-host tool and the tests (src/platform/host), on macOS
+#           or Linux
+#   gtk     the Linux GTK4 port (src/platform/gtk); reserved, not written
 # Retro68's toolchain file sets CMAKE_SYSTEM_NAME to RetroPPC (or Retro68,
-# RetroCarbon). Anything else is the development host.
+# RetroCarbon), and the default follows it, so ./build.sh needs no option.
 if(CMAKE_SYSTEM_NAME MATCHES "Retro")
+    set(AURA_PLATFORM_DEFAULT macos9)
+else()
+    set(AURA_PLATFORM_DEFAULT host)
+endif()
+set(AURA_PLATFORM ${AURA_PLATFORM_DEFAULT} CACHE STRING "Platform to build: macos9, host or gtk")
+set_property(CACHE AURA_PLATFORM PROPERTY STRINGS macos9 host gtk)
+if(AURA_PLATFORM STREQUAL "gtk")
+    message(FATAL_ERROR "AURA_PLATFORM=gtk: the GTK4 port is not written yet. "
+        "docs/porting.md describes it and the order of the work. Configure with "
+        "AURA_PLATFORM=host for the host tool and the tests.")
+elseif(AURA_PLATFORM STREQUAL "macos9")
+    if(NOT CMAKE_SYSTEM_NAME MATCHES "Retro")
+        message(FATAL_ERROR "AURA_PLATFORM=macos9 needs the Retro68 toolchain file: "
+            "run ./build.sh ppc, or configure an empty folder with "
+            "-DCMAKE_TOOLCHAIN_FILE=.../retroppc.toolchain.cmake (docs/building.md).")
+    endif()
+elseif(AURA_PLATFORM STREQUAL "host")
+    if(CMAKE_SYSTEM_NAME MATCHES "Retro")
+        message(FATAL_ERROR "AURA_PLATFORM=host cannot be built with the Retro68 toolchain; "
+            "use AURA_PLATFORM=macos9 or leave it unset.")
+    endif()
+else()
+    message(FATAL_ERROR "AURA_PLATFORM=${AURA_PLATFORM}: use macos9, host or gtk (docs/building.md).")
+endif()
+# Derived from AURA_PLATFORM for the files that test it
+# (third_party/quickjs.cmake, third_party/mbedtls.cmake).
+if(AURA_PLATFORM STREQUAL "macos9")
     set(AURA_MACOS9 ON)
 else()
     set(AURA_MACOS9 OFF)
@@ -67,14 +99,14 @@ set_source_files_properties(${CMAKE_SOURCE_DIR}/src/browser/page_doc.c PROPERTIE
 include(third_party/quickjs.cmake)
 include(third_party/mbedtls.cmake)
 
-if(AURA_MACOS9)
+if(AURA_PLATFORM STREQUAL "macos9")
     if(EXISTS ${CMAKE_SOURCE_DIR}/src/platform/macos9/CMakeLists.txt)
         add_subdirectory(src/platform/macos9)
     endif()
-else()
-    if(EXISTS ${CMAKE_SOURCE_DIR}/src/platform/host/CMakeLists.txt)
-        add_subdirectory(src/platform/host)
-    endif()
+elseif(AURA_PLATFORM STREQUAL "host")
+    # The POSIX services, then the tool that uses them.
+    add_subdirectory(src/platform/posix)
+    add_subdirectory(src/platform/host)
     enable_testing()
     # Each folder in tests/ with a CMakeLists.txt is one test area.
     file(GLOB AURA_TEST_DIRS CONFIGURE_DEPENDS tests/*/CMakeLists.txt)

@@ -96,7 +96,7 @@ static bool compile_file(const char *path, const char *title, const AuBlockMem *
 AuBlocklist *au_host_blocklist_open(const char *path)
 {
     size_t len = 0;
-    char *raw = au_host_read_file(path, &len);
+    char *raw = au_posix_read_file(path, &len);
     if (!raw) {
         fprintf(stderr, "aura-host: cannot read %s\n", path);
         return NULL;
@@ -154,7 +154,7 @@ static int cmd_compile(int argc, char **argv)
         fprintf(stderr, "aura-host: the compiled list does not check\n");
         return 1;
     }
-    bool ok = au_host_write_file(argv[4], data, len);
+    bool ok = au_posix_write_file(argv[4], data, len);
     struct stat sb;
     long text = stat(argv[3], &sb) == 0 ? (long)sb.st_size : 0;
     printf("%s: \"%s\"\n", argv[4], info.title);
@@ -205,7 +205,7 @@ static int cmd_bench(int argc, char **argv)
         return usage();
     long want = argc > 4 ? atol(argv[4]) : 1000000;
     size_t len = 0;
-    char *raw = au_host_read_file(argv[3], &len);
+    char *raw = au_posix_read_file(argv[3], &len);
     if (!raw)
         return 1;
     /* Hosts to ask about: "www." before every 7th name of the list (hits)
@@ -261,7 +261,7 @@ static bool dir_read(void *ctx, const char *name, const AuBlockMem *mem, uint8_t
     DirStore *d = ctx;
     char path[2048];
     snprintf(path, sizeof path, "%s/%s", d->dir, name);
-    char *raw = au_host_read_file(path, len);
+    char *raw = au_posix_read_file(path, len);
     if (!raw)
         return false;
     if (mem && mem->alloc) {
@@ -281,7 +281,7 @@ static bool dir_write(void *ctx, const char *name, const void *data, size_t len)
     DirStore *d = ctx;
     char path[2048];
     snprintf(path, sizeof path, "%s/%s", d->dir, name);
-    return au_host_write_file(path, data, len);
+    return au_posix_write_file(path, data, len);
 }
 
 static void dir_remove(void *ctx, const char *name)
@@ -350,7 +350,7 @@ static int cmd_update(int argc, char **argv)
         if (!busy && !au_net_active(ses.net))
             break;
         if (!any)
-            au_host_net_wait(ses.host, 5);
+            au_posix_net_wait(ses.host, 5);
     }
     au_block_manager_idle(m, false);
     for (size_t i = 0; i < au_block_manager_count(m); i++) {

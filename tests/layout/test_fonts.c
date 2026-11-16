@@ -5,7 +5,7 @@
  * may grow to the fallback face's ascent and descent, never shrink, and
  * a line without them keeps the primary face's height; with a fixed
  * line-height nothing changes. */
-#include "fontdir.h"
+#include "platform/posix/posix.h"
 #include "page/page.h"
 
 #include <math.h>
@@ -76,8 +76,8 @@ static int block_lines(const char *dump, const char *id, float *block_h, float *
 int main(void)
 {
     AuFontSet *fonts = au_fontset_new();
-    AuHostFontDir *dir = au_host_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    if (au_host_font_dir_count(dir) == 0) {
+    AuPosixFontDir *dir = au_posix_add_font_dir(fonts, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    if (au_posix_font_dir_count(dir) == 0) {
         fprintf(stderr, "no bundled fonts in %s\n", AURA_FONTS_DIR);
         return 1;
     }
@@ -160,7 +160,7 @@ int main(void)
 
     au_docview_free(dv);
     au_fontset_free(fonts);
-    au_host_font_dir_free(dir);
+    au_posix_font_dir_free(dir);
     if (failures) {
         fprintf(stderr, "fonts: %d failures\n", failures);
         return 1;

@@ -326,7 +326,7 @@ int au_host_page_main(int argc, char **argv)
     memset(&cb, 0, sizeof cb);
     cb.ctx = &run;
     cb.console = c_console;
-    cb.coro = au_host_coro_ops();
+    cb.coro = au_posix_coro_ops();
     cb.random = c_random;
     if (run.real_time)
         cb.now_ms = c_now;

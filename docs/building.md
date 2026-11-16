@@ -14,6 +14,26 @@ a machine or need a build other than the default.
 | build for Mac OS 9 | `./build.sh ppc` |
 | do both | `./build.sh` |
 
+## Choosing the platform
+
+The CMake option `AURA_PLATFORM` names the platform a build folder
+builds. `./build.sh` and CI never set it: the default follows the
+toolchain.
+
+| Value | Builds | Default when |
+|---|---|---|
+| `host` | `src/platform/posix`, the `aura-host` tool (`src/platform/host`) and the tests, on macOS or Linux | no toolchain file is given |
+| `macos9` | the Mac OS 9 application (`src/platform/macos9`) | the Retro68 toolchain file is given (`./build.sh ppc`) |
+| `gtk` | reserved for the Linux GTK4 port; configuring stops with a message, because the port is not written yet ([`porting.md`](porting.md)) | never |
+
+- `macos9` needs the Retro68 toolchain file, and `host` cannot use it;
+  configuring either the wrong way stops with a message.
+- A folder keeps the value it was first configured with. To change it,
+  delete the folder or pass `-DAURA_PLATFORM=...` again.
+- `AURA_MACOS9` is set from it (`ON` for `macos9`) for
+  `third_party/quickjs.cmake` and `third_party/mbedtls.cmake`; do not set
+  it yourself.
+
 ## The Mac OS 9 build
 
 `./build.sh ppc` builds with Retro68 (GCC 16.1, Multiversal Interfaces).
@@ -91,6 +111,18 @@ without arguments for its commands and options. The area documents
 give the command for each kind of work: `render`, `scene`, `chrome`,
 `layout-bench`, `image`, `fonts`, `font-index`, `fetch`, `js`, `page`
 and `blocklist`.
+
+- The tool's own code is in `src/platform/host`; the OS services it
+  uses (sockets, files, clocks, entropy, coroutines, font files) are in
+  `src/platform/posix`, which a Unix port reuses
+  ([`porting.md`](porting.md), "The POSIX services").
+- The tool stays in `src/platform/host` rather than under `tools/`:
+  `AURA_PLATFORM=host` builds that folder as `macos9` builds
+  `src/platform/macos9`, the binary keeps the path every document and
+  script uses, and tests build from its files (`tests/layout` compiles
+  `render_loader.c`; `tests/paint`, `tests/canvas`, `tests/browser` and
+  `tests/layout` link `aura_host_png` or `aura_host_platform`).
+- The build runs on macOS and Linux; CI runs the tests on both.
 
 ## Dependencies outside the repository
 
