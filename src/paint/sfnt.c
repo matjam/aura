@@ -454,11 +454,17 @@ static bool glyph_box(const AuFontFace *f, uint16_t g, int16_t box[4]);
 
 AuFontFace *au_font_face_new(const void *data, size_t len, int index)
 {
+    return au_font_face_parse(data, len, index, NULL);
+}
+
+AuFontFace *au_font_face_parse(const void *data, size_t len, int index, AuFontPager *pager)
+{
     if (!data || len < 12 || len > 0x7FFFFFFF)
         return NULL;
     AuFontFace *f = au_calloc(sizeof *f);
     f->data = data;
     f->len = (uint32_t)len;
+    f->pager = pager;
     uint32_t dir = 0;
     if (u32(f, 0) == TAG('t', 't', 'c', 'f')) {
         uint32_t n = u32(f, 8);
@@ -476,6 +482,12 @@ AuFontFace *au_font_face_new(const void *data, size_t len, int index)
     for (uint32_t i = 0; i < ntables; i++) {
         uint32_t r = dir + 12 + i * 16;
         uint32_t tag = u32(f, r), off = u32(f, r + 8), tlen = u32(f, r + 12);
+        if (pager && tag == TAG('g', 'l', 'y', 'f')) {
+            /* In the file, read through the pager: offsets are within it. */
+            f->glyf = 0;
+            f->glyf_len = au_font_pager_glyf_len(pager);
+            continue;
+        }
         if (!in_range(f, off, tlen))
             continue; /* a table past the end is treated as absent */
         uint32_t *o = NULL, *l = NULL;
@@ -652,18 +664,62 @@ static bool glyph_loc(const AuFontFace *f, uint16_t g, uint32_t *off, uint32_t *
     }
     if (b <= a || b > f->glyf_len)
         return false;
-    *off = f->glyf + a;
+    *off = a;
     *len = b - a;
     return *len >= 10;
 }
 
-static bool glyph_box(const AuFontFace *f, uint16_t g, int16_t box[4])
+/* A glyph's bytes: p[0..len), from the face's data or, for a paged face,
+ * the pager (own holds a copy to free when the glyph spans blocks). Reads
+ * of these bytes are checked against len by the code that makes them. */
+typedef struct GlyphBytes {
+    const uint8_t *p;
+    uint32_t len;
+    uint8_t *own;
+} GlyphBytes;
+
+/* False for an empty or missing glyph, or one that cannot be read. When
+ * it returns true, call glyph_put. glyph_loc bounds the range by glyf. */
+static bool glyph_get(const AuFontFace *f, uint16_t g, GlyphBytes *gb)
 {
     uint32_t off, len;
-    if (!g || !glyph_loc(f, g, &off, &len))
+    gb->own = NULL;
+    if (!glyph_loc(f, g, &off, &len))
+        return false;
+    gb->len = len;
+    if (f->pager) {
+        gb->p = au_font_pager_glyf(f->pager, off, len, &gb->own);
+        return gb->p != NULL;
+    }
+    gb->p = f->data + f->glyf + off; /* glyf is within data: au_font_face_parse checked it */
+    return true;
+}
+
+static void glyph_put(GlyphBytes *gb)
+{
+    au_free(gb->own);
+    gb->own = NULL;
+}
+
+/* Big-endian reads of glyph bytes already checked against the length. */
+static inline uint16_t gb16(const uint8_t *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static inline int16_t gbs16(const uint8_t *p)
+{
+    return (int16_t)gb16(p);
+}
+
+static bool glyph_box(const AuFontFace *f, uint16_t g, int16_t box[4])
+{
+    GlyphBytes gb;
+    if (!g || !glyph_get(f, g, &gb))
         return false;
     for (int i = 0; i < 4; i++)
-        box[i] = s16(f, off + 2 + (uint32_t)i * 2);
+        box[i] = gbs16(gb.p + 2 + i * 2); /* len >= 10 */
+    glyph_put(&gb);
     return true;
 }
 
@@ -688,11 +744,12 @@ static void xf_apply(const Xform *m, float x, float y, float *ox, float *oy)
 #define MAX_POINTS 20000
 #define MAX_COMPOSITE_DEPTH 8
 
-static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t len, int ncont, const Xform *m,
+/* gp holds the glyph's len bytes (len >= 10, ncont >= 0 read from it). */
+static bool simple_glyph(const AuFontFace *f, uint16_t g, const uint8_t *gp, uint32_t len, int ncont, const Xform *m,
                          AuPath *path)
 {
-    uint32_t end = off + len;
-    uint32_t p = off + 10;
+    uint32_t end = len;
+    uint32_t p = 10;
     if (ncont == 0)
         return true;
     if (p + (uint32_t)ncont * 2 + 2 > end)
@@ -700,7 +757,7 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
     int npts = 0;
     int prev = -1;
     for (int i = 0; i < ncont; i++) {
-        int e = u16(f, p + (uint32_t)i * 2);
+        int e = gb16(gp + p + (uint32_t)i * 2);
         if (e <= prev && i)
             return false;
         prev = e;
@@ -710,7 +767,7 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
         return false;
     uint32_t endpts = p;
     p += (uint32_t)ncont * 2;
-    uint16_t ilen = u16(f, p);
+    uint16_t ilen = gb16(gp + p);
     p += 2 + ilen;
     if (p > end)
         return false;
@@ -724,12 +781,12 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
     for (int i = 0; i < npts;) {
         if (p >= end)
             goto out;
-        uint8_t fl = f->data[p++];
+        uint8_t fl = gp[p++];
         flags[i++] = fl;
         if (fl & 8) {
             if (p >= end)
                 goto out;
-            int rep = f->data[p++];
+            int rep = gp[p++];
             while (rep-- > 0 && i < npts)
                 flags[i++] = fl;
         }
@@ -740,12 +797,12 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
         if (fl & 2) {
             if (p >= end)
                 goto out;
-            int d = f->data[p++];
+            int d = gp[p++];
             v += (fl & 16) ? d : -d;
         } else if (!(fl & 16)) {
             if (p + 2 > end)
                 goto out;
-            v += s16(f, p);
+            v += gbs16(gp + p);
             p += 2;
         }
         xs[i] = (float)v;
@@ -756,12 +813,12 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
         if (fl & 4) {
             if (p >= end)
                 goto out;
-            int d = f->data[p++];
+            int d = gp[p++];
             v += (fl & 32) ? d : -d;
         } else if (!(fl & 32)) {
             if (p + 2 > end)
                 goto out;
-            v += s16(f, p);
+            v += gbs16(gp + p);
             p += 2;
         }
         ys[i] = (float)v;
@@ -770,7 +827,7 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
         int n = npts + 4;
         ends = au_alloc((size_t)ncont * sizeof *ends);
         for (int c = 0; c < ncont; c++)
-            ends[c] = u16(f, endpts + (uint32_t)c * 2);
+            ends[c] = gb16(gp + endpts + (uint32_t)c * 2);
         for (int i = npts; i < n; i++)
             xs[i] = ys[i] = 0;
         dxs = au_calloc((size_t)n * 2 * sizeof(float));
@@ -785,7 +842,7 @@ static bool simple_glyph(const AuFontFace *f, uint16_t g, uint32_t off, uint32_t
      * them. A contour may start off the curve. */
     int start = 0;
     for (int c = 0; c < ncont; c++) {
-        int last = u16(f, endpts + (uint32_t)c * 2);
+        int last = gb16(gp + endpts + (uint32_t)c * 2);
         int n = last - start + 1;
         if (n < 2) {
             start = last + 1;
@@ -847,51 +904,51 @@ typedef struct GlyphComp { /* not "Component": a Component Manager type */
     float dx, dy, a, b, c, d;
 } GlyphComp;
 
-/* Reads the components of the composite at off (MAX_COMPONENTS at most).
- * Returns their count, or -1 when the glyph is malformed. */
-static int read_components(const AuFontFace *f, uint32_t off, uint32_t len, GlyphComp *out)
+/* Reads the components of the composite in gp[0..len) (MAX_COMPONENTS at
+ * most). Returns their count, or -1 when the glyph is malformed. */
+static int read_components(const uint8_t *gp, uint32_t len, GlyphComp *out)
 {
-    uint32_t end = off + len, p = off + 10;
+    uint32_t end = len, p = 10;
     for (int count = 0; count < MAX_COMPONENTS; count++) {
         if (p + 4 > end)
             return -1;
         GlyphComp *k = &out[count];
-        uint16_t flags = u16(f, p);
+        uint16_t flags = gb16(gp + p);
         k->flags = flags;
-        k->glyph = u16(f, p + 2);
+        k->glyph = gb16(gp + p + 2);
         p += 4;
         if (flags & 1) { /* ARG_1_AND_2_ARE_WORDS */
             if (p + 4 > end)
                 return -1;
-            k->dx = s16(f, p);
-            k->dy = s16(f, p + 2);
+            k->dx = gbs16(gp + p);
+            k->dy = gbs16(gp + p + 2);
             p += 4;
         } else {
             if (p + 2 > end)
                 return -1;
-            k->dx = (int8_t)f->data[p];
-            k->dy = (int8_t)f->data[p + 1];
+            k->dx = (int8_t)gp[p];
+            k->dy = (int8_t)gp[p + 1];
             p += 2;
         }
         k->a = 1, k->b = 0, k->c = 0, k->d = 1;
         if (flags & 8) { /* WE_HAVE_A_SCALE */
             if (p + 2 > end)
                 return -1;
-            k->a = k->d = s16(f, p) / 16384.0f;
+            k->a = k->d = gbs16(gp + p) / 16384.0f;
             p += 2;
         } else if (flags & 0x40) { /* X_AND_Y_SCALE */
             if (p + 4 > end)
                 return -1;
-            k->a = s16(f, p) / 16384.0f;
-            k->d = s16(f, p + 2) / 16384.0f;
+            k->a = gbs16(gp + p) / 16384.0f;
+            k->d = gbs16(gp + p + 2) / 16384.0f;
             p += 4;
         } else if (flags & 0x80) { /* TWO_BY_TWO */
             if (p + 8 > end)
                 return -1;
-            k->a = s16(f, p) / 16384.0f;
-            k->b = s16(f, p + 2) / 16384.0f;
-            k->c = s16(f, p + 4) / 16384.0f;
-            k->d = s16(f, p + 6) / 16384.0f;
+            k->a = gbs16(gp + p) / 16384.0f;
+            k->b = gbs16(gp + p + 2) / 16384.0f;
+            k->c = gbs16(gp + p + 4) / 16384.0f;
+            k->d = gbs16(gp + p + 6) / 16384.0f;
             p += 8;
         }
         if (!(flags & 0x20)) /* MORE_COMPONENTS */
@@ -908,16 +965,27 @@ static bool glyph_outline(const AuFontFace *f, uint16_t g, const Xform *m, int d
     uint32_t off, len;
     if (!glyph_loc(f, g, &off, &len))
         return g < f->num_glyphs; /* an empty glyph (space) is fine */
-    int16_t ncont = s16(f, off);
-    if (ncont >= 0)
-        return simple_glyph(f, g, off, len, ncont, m, path);
+    GlyphBytes gb;
+    if (!glyph_get(f, g, &gb))
+        return false; /* a paged glyph that could not be read */
+    int16_t ncont = gbs16(gb.p);
+    if (ncont >= 0) {
+        bool ok = simple_glyph(f, g, gb.p, gb.len, ncont, m, path);
+        glyph_put(&gb);
+        return ok;
+    }
     /* Composite: components with their own transforms. Depth is bounded by
      * MAX_COMPOSITE_DEPTH, so this recursion is bounded by a constant. */
-    if (depth >= MAX_COMPOSITE_DEPTH)
+    if (depth >= MAX_COMPOSITE_DEPTH) {
+        glyph_put(&gb);
         return false;
-    /* On the heap: Mac OS 9 stacks are small and composites nest. */
+    }
+    /* On the heap: Mac OS 9 stacks are small and composites nest. The
+     * glyph's bytes are let go before its components are read (a paged
+     * face's block may be reused for them). */
     GlyphComp *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
-    int ncomp = read_components(f, off, len, comp);
+    int ncomp = read_components(gb.p, gb.len, comp);
+    glyph_put(&gb);
     bool ok = ncomp >= 0;
     if (ok && f->varied && ncomp) {
         /* gvar varies each component's offset (one point per component,
@@ -964,17 +1032,26 @@ bool au_font_glyph_point_count(const AuFontFace *f, uint16_t g, int *npoints, bo
     *composite = false;
     if (!glyph_loc(f, g, &off, &len))
         return g < f->num_glyphs;
-    int16_t ncont = s16(f, off);
+    GlyphBytes gb;
+    if (!glyph_get(f, g, &gb))
+        return false;
+    int16_t ncont = gbs16(gb.p);
     if (ncont >= 0) {
-        if (ncont == 0)
-            return true;
-        if (len < 10 + (uint32_t)ncont * 2)
-            return false;
-        *npoints = u16(f, off + 10 + (uint32_t)(ncont - 1) * 2) + 1;
-        return *npoints <= MAX_POINTS;
+        bool ok = true;
+        if (ncont > 0) {
+            if (len < 10 + (uint32_t)ncont * 2) {
+                ok = false;
+            } else {
+                *npoints = gb16(gb.p + 10 + (uint32_t)(ncont - 1) * 2) + 1;
+                ok = *npoints <= MAX_POINTS;
+            }
+        }
+        glyph_put(&gb);
+        return ok;
     }
     GlyphComp *comp = au_alloc(MAX_COMPONENTS * sizeof *comp);
-    int n = read_components(f, off, len, comp);
+    int n = read_components(gb.p, gb.len, comp);
+    glyph_put(&gb);
     au_free(comp);
     if (n < 0)
         return false;

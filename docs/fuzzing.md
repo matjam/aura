@@ -44,7 +44,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_canvas2d` | the canvas 2D context: random drawing calls with extreme arguments | `canvas/fuzz_canvas2d N SEED SECONDS` | generated |
 | `fuzz_svg` | XML parser, path grammar, the SVG image pipeline | `svg/fuzz_svg N SEED SECONDS tests/svg/corpus/*` | `tests/svg/corpus` |
 | `fuzz_image` | PNG, JPEG, GIF, WebP, BMP and ICO decoders, whole and in chunks | `image/fuzz_image N SEED tests/image/vectors/*/*` (one format: `tests/image/vectors/png/*`) | `tests/image/vectors` |
-| `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2 | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |
+| `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2, paged faces (with short files and failing reads) | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |
 | `fuzz_webfont` | `@font-face` loading with mutated WOFF2 answers | `page/fuzz_webfont N SEED SECONDS` | `sample-inter.woff2` |
 | `fuzz_url` | URL parser and serializer | `url/fuzz_url N SEED` | built-in URLs |
 | `fuzz_net` | HTTP response parser, data URLs, PSL, root store, certificates, HSTS header and file, authentication, dates, MIME types, cache entries; `aia`: certificate bundles and the intermediates pool file; `tls`: the TLS handshake through `tls.c` | `net/fuzz_net all N SEED assets/net/aura-roots.bin`, `net/fuzz_net aia N SEED`, `net/fuzz_net tls N SEED SECONDS` | built-in seeds, the root store, test certificates |
@@ -52,6 +52,8 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_deflate` | the deflate encoder: made inputs compressed with random chunking and decoded again by Aura's inflate | `codec/fuzz_deflate N SEED tests/codec/brotli-vectors/page.html` (`AURA_FUZZ_SECONDS` caps it) | the codec originals |
 | `fuzz_inflate`, `fuzz_brotli` | the decoders alone | `codec/fuzz_inflate N SEED tests/codec/inflate-vectors/*`, `codec/fuzz_brotli N SEED tests/codec/brotli-vectors/*.br` | the codec vectors |
 | `fuzz_cookies` | Set-Cookie parsing, the cookie file | `net/fuzz_cookies N SEED` | built-in cookies |
+| `fuzz_sse` | the EventSource event stream parser (`src/net/sse.c`): each stream parsed whole and in random pieces, which must agree; valid UTF-8 and the size limits in every callback | `net/fuzz_sse N SEED SECONDS` | built-in streams |
+| `fuzz_webcrypto` | crypto.subtle's C side (`src/net/webcrypto.c`): mutated key data imported as every kind of key (RSA DER, EC scalars and points, X25519) and used; AES in four modes and PBKDF2 and HKDF with random lengths | `net/fuzz_webcrypto N SEED SECONDS` | keys generated at start |
 | `fuzz_files` | Session, Bookmarks.html, History, Aura Preferences, Downloads, cookie rules, the disk cache folder | `browser/fuzz_files N SEED SECONDS` | files the stores write, made at start |
 | `fuzz_blocklist` | list parser, compiled files, the store's index | `blocklist/fuzz_blocklist N SEED SECONDS` | generated |
 

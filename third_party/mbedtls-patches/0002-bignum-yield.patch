@@ -1,0 +1,67 @@
+Let prime generation yield, so that RSA key generation does not stop the
+browser.
+
+Why: script's crypto.subtle.generateKey for RSA (src/net/webcrypto.c,
+src/js/natives_crypto.c) generates two primes of 512 to 2048 bits,
+which takes seconds on a 1 GHz G4. Aura runs the generation on a
+coroutine (or a worker's own stack) and leaves it between steps; the
+library has no point at which it hands control back, so this patch adds
+one.
+
+What: with the option AURA_MBEDTLS_YIELD (set in
+third_party/mbedtls-config/aura_crypto_config.h), mbedtls_mpi_gen_prime
+calls aura_mbedtls_yield() before each candidate and mpi_miller_rabin
+before each round. The embedder defines the function
+(src/net/tls_platform.c). A nonzero return abandons the generation with
+MBEDTLS_ERR_MPI_ALLOC_FAILED, which the PSA layer reports as
+PSA_ERROR_INSUFFICIENT_MEMORY; the key slot is released as for any
+failed generation. Without the option the library is unchanged.
+
+To drop it: delete this file, remove AURA_MBEDTLS_YIELD from
+third_party/mbedtls-config, remove au_tls_set_yield and
+aura_mbedtls_yield from src/net/tls_platform.c and their callers in
+src/js/natives_crypto.c, and run apply.sh.
+
+diff -ruN a/tf-psa-crypto/drivers/builtin/src/bignum.c b/tf-psa-crypto/drivers/builtin/src/bignum.c
+--- a/tf-psa-crypto/drivers/builtin/src/bignum.c
++++ b/tf-psa-crypto/drivers/builtin/src/bignum.c
+@@ -2059,6 +2059,23 @@
+
+ #if defined(MBEDTLS_GENPRIME)
+
++#if defined(AURA_MBEDTLS_YIELD)
++/* Aura patch: a cooperative yield point, defined by the embedder
++ * (src/net/tls_platform.c). Prime generation calls it before each
++ * candidate and each Miller-Rabin round, so a long key generation can
++ * let other work run. A nonzero return abandons the generation. */
++int aura_mbedtls_yield(void);
++#define AURA_YIELD_POINT()                          \
++    do {                                            \
++        if (aura_mbedtls_yield() != 0) {            \
++            ret = MBEDTLS_ERR_MPI_ALLOC_FAILED;     \
++            goto cleanup;                           \
++        }                                           \
++    } while (0)
++#else
++#define AURA_YIELD_POINT() do { } while (0)
++#endif
++
+ /* Largest "small prime" tested. If this is ever changed, must update:
+  * - the product below obviously,
+  * - the documentation and tests of mbedtls_mpi_is_prime_ext() about this limit,
+@@ -2167,6 +2184,7 @@
+     MBEDTLS_MPI_CHK(mbedtls_mpi_shift_r(&R, s));
+
+     for (i = 0; i < rounds; i++) {
++        AURA_YIELD_POINT();
+         /*
+          * pick a random A, 1 < A < |X| - 1
+          */
+@@ -2302,6 +2320,7 @@
+     }
+
+     while (1) {
++        AURA_YIELD_POINT();
+         MBEDTLS_MPI_CHK(mbedtls_mpi_fill_random(X, n * ciL, f_rng, p_rng));
+         /* make sure generated number is at least (nbits-1)+0.5 bits (FIPS 186-4 §B.3.3 steps 4.4, 5.5) */
+         if (X->p[n-1] < CEIL_MAXUINT_DIV_SQRT2) {

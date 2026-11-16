@@ -323,10 +323,11 @@ resource 'DITL' (200) {
 	}
 };
 
-/* 202: About Aura. ^0 name and version, ^1 what Aura is, ^2 fonts,
- * ^3 libraries (aboutbox.c fills them from the credits table). */
+/* 202: About Aura. Every text is drawn by aboutbox.c: the heading (name,
+ * version, tagline), the home page link, and the facts and the quip. The
+ * icon and the link are enabled user items, so a click on them returns. */
 resource 'DLOG' (202) {
-	{0, 0, 236, 420}, movableDBoxProc, invisible, noGoAway, 0, 202, "About Aura",
+	{0, 0, 300, 460}, movableDBoxProc, invisible, noGoAway, 0, 202, "About Aura",
 	alertPositionMainScreen
 };
 
@@ -338,13 +339,12 @@ data 'dctb' (202) {
 
 resource 'DITL' (202) {
 	{
-		{200, 334, 220, 404}, Button { enabled, "OK" };
-		{200, 222, 220, 322}, Button { enabled, "Licences..." };
-		{16, 16, 80, 80}, UserItem { disabled };
-		{20, 96, 38, 404}, StaticText { disabled, "^0" };
-		{42, 96, 78, 404}, StaticText { disabled, "^1" };
-		{96, 16, 150, 404}, StaticText { disabled, "^2" };
-		{156, 16, 190, 404}, StaticText { disabled, "^3" }
+		{264, 374, 284, 444}, Button { enabled, "OK" };
+		{264, 206, 284, 362}, Button { enabled, "Credits & Licences..." };
+		{18, 18, 82, 82}, UserItem { enabled };
+		{14, 100, 104, 444}, UserItem { disabled };
+		{106, 100, 122, 300}, UserItem { enabled };
+		{136, 18, 252, 444}, UserItem { disabled }
 	}
 };
 

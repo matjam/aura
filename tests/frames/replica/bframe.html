@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!-- The challenge frame of the replica: the 4x4 image-select table with
+     the class names and the rules that matter from reCAPTCHA's public
+     style sheet (styles__ltr.css), and a small click handler in place of
+     its script. The check mark is a data: URL longer than 2 KB, as
+     reCAPTCHA's is (3978 bytes); this one is drawn here, not copied. -->
+<html><head>
+<style>
+body{margin:0;font-family:helvetica,arial,sans-serif}
+#rc-imageselect{min-width:240px;background-color:#fff}
+.rc-imageselect-payload{min-width:240px;margin:0 7px;padding:7px 0}
+.rc-imageselect-instructions{height:113px;width:100%;margin-bottom:7px;position:relative}
+.rc-imageselect-desc-wrapper{background-color:#1a73e8;position:relative;padding:24px;color:white;height:66px;font-size:16px}
+.rc-imageselect-challenge{position:relative;width:100%;height:100%;box-sizing:border-box;text-align:center}
+.rc-imageselect-table-33,.rc-imageselect-table-42,.rc-imageselect-table-44{border-collapse:separate;border-spacing:0;width:100%;height:100%;transition:all 1s ease}
+.rc-imageselect-table-44{margin:-1px}
+.rc-imageselect-table-44 td{padding:1px}
+.rc-image-tile-target tr,td{margin:0}
+.rc-image-tile-overlay{display:none;opacity:0;position:absolute;background-color:#1a73e8;width:100%;height:100%;z-index:2;transition:opacity 1s cubic-bezier(.49,.78,.46,1.34)}
+.rc-image-tile-target{position:relative}
+.rc-imageselect-tileselected{position:relative}
+.rc-imageselect-tileselected .rc-image-tile-wrapper{transform:scale(.8)}
+.rc-image-tile-wrapper{transform:scale(1)}
+.rc-imageselect-tileselected .rc-imageselect-checkbox{display:block;background-repeat:no-repeat;bottom:0;left:0;right:0;top:0}
+.rc-image-tile-wrapper{overflow:hidden;position:relative;transition:.1s ease}
+.rc-image-tile-wrapper img{position:relative;backface-visibility:hidden}
+.rc-image-tile-44{width:400%;height:400%}
+</style>
+<script>
+// .rc-imageselect-checkbox{background:url(data:...);display:none;position:absolute}
+(function () {
+  var svg = "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>" +
+    "<circle cx='16' cy='16' r='14' fill='#1a73e8'/>" +
+    "<path d='M9 16l5 5 9-10' stroke='#fff' stroke-width='3' fill='none'/>" +
+    "<!--" + new Array(2401).join('x') + "--></svg>";
+  var url = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  var st = document.createElement('style');
+  st.textContent = '.rc-imageselect-checkbox{background:url("' + url + '");display:none;position:absolute}';
+  document.head.appendChild(st);
+})();
+</script>
+</head><body>
+<div id="rc-imageselect"><div class="rc-imageselect-payload">
+<div class="rc-imageselect-instructions"><div class="rc-imageselect-desc-wrapper">Select all squares with <strong>tiles</strong></div></div>
+<div class="rc-imageselect-challenge"><div id="rc-imageselect-target" class="rc-imageselect-target" dir="ltr" role="presentation">
+<table class="rc-imageselect-table-44"><tbody id="tb"></tbody></table>
+</div></div></div></div>
+<script>
+var log = [];
+var tb = document.getElementById('tb');
+for (var r = 0; r < 4; r++) {
+  var tr = document.createElement('tr');
+  for (var c = 0; c < 4; c++) {
+    var td = document.createElement('td');
+    td.setAttribute('role', 'button');
+    td.id = String(r * 4 + c);
+    td.tabIndex = 0;
+    td.className = 'rc-imageselect-tile';
+    td.innerHTML = '<div class="rc-image-tile-target"><div class="rc-image-tile-wrapper" style="width: 93px; height: 93px">' +
+      '<img class="rc-image-tile-44" src="photo.svg" alt="" style="top:' + (r * -100) + '%; left: ' + (c * -100) + '%">' +
+      '<div class="rc-image-tile-overlay"></div></div><div class="rc-imageselect-checkbox"></div></div>';
+    td.addEventListener('click', function () {
+      var on = !this.classList.contains('rc-imageselect-tileselected');
+      this.classList.toggle('rc-imageselect-tileselected');
+      this.querySelector('.rc-imageselect-checkbox').style.display = on ? '' : 'none';
+      log.push(this.id);
+    });
+    tr.appendChild(td);
+  }
+  tb.appendChild(tr);
+}
+</script>
+</body></html>

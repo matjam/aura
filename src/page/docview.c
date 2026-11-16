@@ -760,11 +760,11 @@ static void parse_sheet(AuDocView *dv, SheetSrc *s)
         const AuCssImport *im = au_css_sheet_import(sh, i);
         if (!im->supported)
             continue;
-        char abs[2048];
-        if (!au_url_resolve(s->url, im->url, abs, sizeof abs))
+        char *abs = au_url_resolve_dup(s->url, im->url);
+        if (!abs)
             continue;
         SheetSrc *c = au_calloc(sizeof *c);
-        c->url = dup(abs);
+        c->url = abs;
         c->media = im->media && *im->media ? dup(im->media) : NULL;
         c->parent = s;
         c->index = (uint32_t)i;
@@ -843,6 +843,11 @@ void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size
         images_data(dv, r->image, data, len);
         return;
     }
+    /* A script's fetch takes its bytes as they come (streams, progress
+     * events, EventSource): the view keeps none of them. The call may
+     * cancel the request, so r is not used after it. */
+    if (r->kind == AU_RES_OTHER && !r->font && dv->script && au_docscript_resource_data(dv->script, id, data, len))
+        return;
     if (r->data.len + len > (size_t)64 * 1024 * 1024)
         return; /* refuse absurd resources */
     au_buf_append(&r->data, data, len);
@@ -1220,10 +1225,10 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
             dv->ndeferred++;
         }
     } else {
-        char abs[2048];
         const char *href = attr(el, "href");
-        if (href && au_url_resolve(dv->base, href, abs, sizeof abs)) {
-            s->src->url = dup(abs);
+        char *abs = href ? au_url_resolve_dup(dv->base, href) : NULL;
+        if (abs) {
+            s->src->url = abs;
             s->src->cors = au_dv_cors_attr(el);
             start_sheet(dv, s->src);
             dv->finished_reported = false;
@@ -1454,11 +1459,13 @@ static bool slot_stale(AuDocView *dv, const SheetSlot *s)
     }
     if (!is_stylesheet_link(s->el) || attr(s->el, "disabled"))
         return true;
-    char abs[2048];
     const char *href = attr(s->el, "href");
-    if (!href || !au_url_resolve(dv->base, href, abs, sizeof abs))
+    char *abs = href ? au_url_resolve_dup(dv->base, href) : NULL;
+    if (!abs)
         return !s->src->failed;
-    return !same_str(abs, s->src->url);
+    bool same = same_str(abs, s->src->url);
+    au_free(abs);
+    return !same;
 }
 
 static void prune_slots(AuDocView *dv)
@@ -1867,6 +1874,15 @@ static void follow_link(AuDocView *dv, const char *url, const char *target, bool
     }
 }
 
+/* Whether a popover of doc is showing (in the top layer). */
+static bool popover_open(const AuDocument *doc)
+{
+    for (uint32_t i = 0; i < doc->ntop; i++)
+        if (doc->top_layer[i]->state & AU_STATE_POPOVER_OPEN)
+            return true;
+    return false;
+}
+
 bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
 {
     if (!dv->doc)
@@ -1879,6 +1895,19 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
     }
     AuHitResult r;
     au_docview_hit_test(dv, ev->x, ev->y, &r);
+    if (dv->script && (ev->type == AU_EVENT_MOUSE_DOWN || ev->type == AU_EVENT_MOUSE_UP) && popover_open(dv->doc)) {
+        /* Light dismiss: a press and release outside an auto popover
+         * hide it, before the page sees the events. */
+        AuElement *target = r.element;
+        if (target)
+            au_node_ref(&target->node);
+        au_docscript_light_dismiss(dv->script, au_dv_alive(dv, target) ? target : NULL, ev->type == AU_EVENT_MOUSE_UP);
+        if (target)
+            au_node_unref(&target->node);
+        if (!dv->doc)
+            return true;
+        au_docview_hit_test(dv, ev->x, ev->y, &r);
+    }
     if (dv->script) {
         /* Listeners may change or replace the document: the target is
          * held across the hover events (whose listeners may remove it
@@ -2171,6 +2200,13 @@ uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool backg
     return r->id;
 }
 
+void au_dv_pause(AuDocView *dv, uint32_t id, bool paused)
+{
+    AuDocView *top = au_dv_top(dv);
+    if (find_request(dv, id) && top->loader.pause)
+        top->loader.pause(top->loader.ctx, id, paused);
+}
+
 void au_dv_cancel(AuDocView *dv, uint32_t id)
 {
     Request *r = find_request(dv, id);
@@ -2395,8 +2431,8 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
     AuBuf src;
     au_buf_init(&src);
     bool ok = false;
-    char abs[2048];
-    if (au_layout_image_source(dv->layout, img, &src) && au_url_resolve(dv->base, au_buf_cstr(&src), abs, sizeof abs)) {
+    char *abs = au_layout_image_source(dv->layout, img, &src) ? au_url_resolve_dup(dv->base, au_buf_cstr(&src)) : NULL;
+    if (abs) {
         AuImageCache *cache = au_docimages_cache(dv->imgs);
         AuImageEntry *e = au_image_cache_find(cache, abs);
         int iw = 0, ih = 0;
@@ -2410,6 +2446,7 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
                 ok = true;
             }
         }
+        au_free(abs);
     }
     au_buf_free(&src);
     return ok;

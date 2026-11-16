@@ -23,6 +23,7 @@
 #include "scene.h"
 #include "url.h"
 
+#include "bookmarks.h"
 #include "credits.h"
 #include "history.h"
 #include "netlog.h"
@@ -31,6 +32,7 @@
 #include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../js/storage_call.h"
+#include "../net/auth.h" /* au_base64_encode */
 #include "../net/dataurl.h"
 #include "../net/policy.h"
 #include "../net/web_storage.h"
@@ -898,6 +900,18 @@ static void loader_cancel(void *ctx, uint32_t id)
             fetch_cancel(p->fetches[i]);
 }
 
+/* Backpressure from a script's response stream: the fetcher stops
+ * reading the transfer (AuPageFetcher.pause). */
+static void loader_pause(void *ctx, uint32_t id, bool paused)
+{
+    AuPage *p = ctx;
+    for (size_t i = 0; i < p->nfetches; i++) {
+        Fetch *f = p->fetches[i];
+        if (!f->main && f->id == id && !f->done && !f->cancelled && f->fetcher && f->fetcher->pause)
+            f->fetcher->pause(f->fetcher->ctx, f->fid, paused);
+    }
+}
+
 /* ---- Document view callbacks ---- */
 
 static void dv_title(void *ctx, AuDocView *dv, const char *title)
@@ -1634,7 +1648,7 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
 
 static void new_view(AuPage *p)
 {
-    AuLoader loader = {p, loader_request, loader_cancel, sniff_image};
+    AuLoader loader = {p, loader_request, loader_cancel, sniff_image, loader_pause};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
     dcb.ctx = p;
@@ -2154,26 +2168,275 @@ static void page_head(AuBuf *b, const char *title)
                    "</style></head><body>");
 }
 
-static void build_home(AuBuf *b)
+/* ---- The start page (about:home) ---- */
+
+/* #embed is C23; the compilers Aura uses (Clang, GCC 15 or later) take it
+ * in C99 mode with a warning. */
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+static const unsigned char home_icon_png[] = {
+#embed "home.png"
+};
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+/* Sites that work well on an old Mac: light pages, little script. */
+static const struct {
+    const char *name, *url, *what;
+} home_sites[] = {
+    {"Wikipedia", "https://en.wikipedia.org/", "The free encyclopedia"},
+    {"Hacker News", "https://news.ycombinator.com/", "Technology news"},
+    {"CNN Lite", "https://lite.cnn.com/", "News, text only"},
+    {"NPR Text", "https://text.npr.org/", "News, text only"},
+    {"68k.news", "http://68k.news/", "Headlines for vintage computers"},
+    {"FrogFind", "http://frogfind.com/", "Search that simplifies pages"},
+    {"Macintosh Repository", "https://www.macintoshrepository.org/", "Classic Mac software"},
+    {"Mac OS 9 Lives", "https://macos9lives.com/", "The Mac OS 9 community"},
+};
+
+static const char *const home_tips[] = {
+    "Command-L puts you in the address field; type words there to search.",
+    "Command-click a link to open it in a new tab.",
+    "Command-T opens a new tab, and Command-W closes it.",
+    "Content blocking in Preferences keeps trackers and ads from loading, which makes pages faster.",
+    "Develop &gt; Performance shows where a slow page spends its time.",
+    "Help &gt; Report a Problem writes up a bug report you can paste into GitHub.",
+    "Choose File &gt; Open File to open an HTML or text file, or drop one on the Aura icon.",
+    "Develop &gt; Console shows a page's script errors.",
+};
+
+static int hex_digit(char c)
 {
-    page_head(b, "Aura");
-    au_buf_puts(b, "<h1>Aura</h1>"
-                   "<p class=note>A web browser for Mac OS 9, with its own engine (HTML, CSS, layout, painting "
-                   "and networking over HTTP and HTTPS).</p>"
-                   "<h2>Open a page</h2>"
-                   "<p>Type an address or words to search for in the address field. Choose File &gt; Open File "
-                   "to open an HTML or text file, or drop one on the Aura icon.</p>"
-                   "<h2>Built-in pages</h2><ul>"
-                   "<li><a href='about:scene'>Paint and font test scene</a></li>"
-                   "<li><a href='about:fonts'>Installed fonts</a></li>"
-                   "<li><a href='about:blank'>Blank page</a></li>"
-                   "<li><a href='about:licences'>Licences</a></li></ul>"
-                   "<h2>Sites to try</h2><ul>"
-                   "<li><a href='http://example.com/'>http://example.com/</a></li>"
-                   "<li><a href='https://en.wikipedia.org/'>https://en.wikipedia.org/</a></li>"
-                   "<li><a href='http://www.macintoshrepository.org/'>http://www.macintoshrepository.org/</a></li></ul>"
-                   "<p class=note style='margin-top:18px'>Command-click a link to open it in a new tab.</p>"
-                   "</body></html>");
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+/* Appends s percent-decoded ('+' as a space). */
+static void url_decode_into(AuBuf *out, const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        int hi, lo;
+        if (s[i] == '+') {
+            au_buf_putc(out, ' ');
+        } else if (s[i] == '%' && i + 2 < n && (hi = hex_digit(s[i + 1])) >= 0 && (lo = hex_digit(s[i + 2])) >= 0) {
+            au_buf_putc(out, (char)(hi * 16 + lo));
+            i += 2;
+        } else {
+            au_buf_putc(out, s[i]);
+        }
+    }
+}
+
+/* The search form for a template such as
+ * "https://html.duckduckgo.com/html/?q=%s": the form posts to the URL
+ * before '?' by GET, the parameter whose value is "%s" becomes the text
+ * field and the others hidden fields. Returns false, writing nothing,
+ * when no query parameter holds exactly "%s". */
+static bool home_search_form(AuBuf *b, const char *tpl)
+{
+    const char *q = tpl ? strchr(tpl, '?') : NULL;
+    if (!q)
+        return false;
+    size_t end = strcspn(q + 1, "#");
+    const char *field = NULL;
+    size_t field_len = 0;
+    for (const char *s = q + 1; s < q + 1 + end;) {
+        size_t n = strcspn(s, "&#");
+        const char *eq = memchr(s, '=', n);
+        if (eq && (size_t)(s + n - eq - 1) == 2 && !memcmp(eq + 1, "%s", 2)) {
+            field = s;
+            field_len = (size_t)(eq - s);
+        }
+        s += n + (s[n] == '&');
+    }
+    if (!field || !field_len)
+        return false;
+    AuBuf v;
+    au_buf_init(&v);
+    au_buf_puts(b, "<form class=search method=get action='");
+    html_escape(b, tpl, (size_t)(q - tpl));
+    au_buf_puts(b, "'><input type=search size=40 placeholder='Search the web' name='");
+    au_buf_clear(&v);
+    url_decode_into(&v, field, field_len);
+    html_escape_str(b, au_buf_cstr(&v));
+    au_buf_puts(b, "'>");
+    for (const char *s = q + 1; s < q + 1 + end;) {
+        size_t n = strcspn(s, "&#");
+        const char *eq = memchr(s, '=', n);
+        if (s != field && n) {
+            au_buf_puts(b, "<input type=hidden name='");
+            au_buf_clear(&v);
+            url_decode_into(&v, s, eq ? (size_t)(eq - s) : n);
+            html_escape_str(b, au_buf_cstr(&v));
+            au_buf_puts(b, "' value='");
+            au_buf_clear(&v);
+            if (eq)
+                url_decode_into(&v, eq + 1, (size_t)(s + n - eq - 1));
+            html_escape_str(b, au_buf_cstr(&v));
+            au_buf_puts(b, "'>");
+        }
+        s += n + (s[n] == '&');
+    }
+    au_buf_puts(b, " <input type=submit value='Search'></form>");
+    au_buf_free(&v);
+    return true;
+}
+
+/* The host of an http or https URL without "www.", for a tile's second
+ * line. */
+static void home_host(AuBuf *b, const char *url)
+{
+    if (strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) {
+        html_escape_str(b, url);
+        return;
+    }
+    const char *s = strstr(url, "://");
+    s = s ? s + 3 : url;
+    if (!strncmp(s, "www.", 4))
+        s += 4;
+    html_escape(b, s, strcspn(s, "/?#:"));
+}
+
+/* A tile: a link with a title line and a note line. The title is cut to
+ * 40 bytes at a character boundary. */
+static void home_tile(AuBuf *b, const char *url, const char *title, const char *note, bool note_is_host)
+{
+    au_buf_puts(b, "<a class=tile href='");
+    html_escape_str(b, url);
+    au_buf_puts(b, "'><b>");
+    size_t n = strlen(title);
+    bool cut = n > 40;
+    if (cut) {
+        n = 40;
+        while (n > 0 && ((unsigned char)title[n] & 0xC0) == 0x80)
+            n--;
+    }
+    html_escape(b, title, n);
+    if (cut)
+        au_buf_puts(b, "&#8230;");
+    au_buf_puts(b, "</b><span>");
+    if (note_is_host)
+        home_host(b, note);
+    else
+        html_escape_str(b, note);
+    au_buf_puts(b, "</span></a>");
+}
+
+static bool is_web_url(const char *u)
+{
+    return !strncmp(u, "http://", 7) || !strncmp(u, "https://", 8);
+}
+
+static void build_home(AuPage *p, AuBuf *b)
+{
+    au_buf_puts(b, "<!DOCTYPE html><html><head><meta charset=utf-8><title>Aura</title><style>"
+                   "body { font-family: sans-serif; margin: 0; color: #222; background: #f4f1ea; }"
+                   ".page { max-width: 760px; margin: 0 auto; padding: 28px 24px 20px; }"
+                   ".head { display: flex; align-items: center; margin-bottom: 18px; }"
+                   ".head img { width: 72px; height: 72px; margin-right: 16px; }"
+                   "h1 { font-size: 34px; color: #203c78; margin: 0; }"
+                   ".head p { margin: 2px 0 0; color: #5a5a5a; font-size: 14px; }"
+                   ".search { margin: 0 0 22px; }"
+                   ".search input[type=search] { font-size: 15px; padding: 5px 7px; width: 70%; }"
+                   ".search input[type=submit] { font-size: 14px; padding: 4px 12px; }"
+                   "h2 { font-size: 15px; color: #6b5a3a; margin: 20px 0 8px; text-transform: uppercase; "
+                   "letter-spacing: 1px; }"
+                   ".tiles { display: flex; flex-wrap: wrap; margin: 0 -5px; }"
+                   ".tile { display: block; width: 146px; min-height: 34px; margin: 5px; padding: 9px 11px; "
+                   "background: #fff; "
+                   "border: 1px solid #d8d0bf; border-radius: 6px; text-decoration: none; color: #222; }"
+                   ".tile:hover { border-color: #203c78; background: #f8faff; }"
+                   ".tile b { display: block; font-size: 14px; color: #203c78; overflow: hidden; }"
+                   ".tile span { display: block; font-size: 12px; color: #6a6a6a; margin-top: 2px; overflow: hidden; }"
+                   ".tip { margin-top: 22px; padding: 10px 14px; background: #fff8dc; border: 1px solid #e6d9a8; "
+                   "border-radius: 6px; font-size: 13px; }"
+                   ".foot { margin-top: 26px; font-size: 12px; color: #777; }"
+                   ".foot a { color: #555; }"
+                   "</style></head><body><div class=page><div class=head><img alt='' src='data:image/png;base64,");
+    au_base64_encode(home_icon_png, sizeof home_icon_png, b);
+    au_buf_puts(b, "'><div><h1>Aura</h1><p>The modern web, on your Mac.</p></div></div>");
+
+    const AuPrefs *pr = p->env.prefs;
+    home_search_form(b, pr ? pr->search_template : NULL);
+
+    /* Most visited: web pages visited at least twice, most visits first. */
+    const AuHistory *h = p->env.history ? p->env.history(p->env.ctx) : NULL;
+    if (h && h->n) {
+        enum { kTop = 8 };
+        const AuHistoryEntry *top[kTop];
+        int ntop = 0;
+        for (size_t i = 0; i < h->n; i++) {
+            const AuHistoryEntry *e = &h->e[i];
+            if (e->visits < 2 || !is_web_url(e->url))
+                continue;
+            int at = ntop;
+            while (at > 0 && top[at - 1]->visits < e->visits)
+                at--;
+            if (at >= kTop)
+                continue;
+            int last = ntop < kTop ? ntop : kTop - 1;
+            for (int k = last; k > at; k--)
+                top[k] = top[k - 1];
+            top[at] = e;
+            if (ntop < kTop)
+                ntop++;
+        }
+        if (ntop) {
+            au_buf_puts(b, "<h2>Most visited</h2><div class=tiles>");
+            for (int i = 0; i < ntop; i++)
+                home_tile(b, top[i]->url, top[i]->title && *top[i]->title ? top[i]->title : top[i]->url,
+                          top[i]->url, true);
+            au_buf_puts(b, "</div>");
+        }
+    }
+
+    /* Bookmarks: the first links in the bookmark tree. */
+    const AuBookmarks *bm = p->env.bookmarks ? p->env.bookmarks(p->env.ctx) : NULL;
+    if (bm) {
+        int shown = 0;
+        for (const AuBookmark *k = au_bookmark_next(&bm->root, &bm->root, false); k && shown < 12;
+             k = au_bookmark_next(k, &bm->root, false)) {
+            if (k->folder || !k->url || !*k->url)
+                continue;
+            if (!shown)
+                au_buf_puts(b, "<h2>Bookmarks</h2><div class=tiles>");
+            home_tile(b, k->url, k->title && *k->title ? k->title : k->url, k->url, true);
+            shown++;
+        }
+        if (shown)
+            au_buf_puts(b, "</div>");
+    }
+
+    au_buf_puts(b, "<h2>Sites that work well</h2><div class=tiles>");
+    for (size_t i = 0; i < sizeof home_sites / sizeof home_sites[0]; i++)
+        home_tile(b, home_sites[i].url, home_sites[i].name, home_sites[i].what, false);
+    au_buf_puts(b, "</div>");
+
+    size_t ntips = sizeof home_tips / sizeof home_tips[0];
+    uint32_t now = p->env.time_ms ? p->env.time_ms(p->env.ctx) : 0;
+    au_buf_puts(b, "<div class=tip><b>Tip:</b> ");
+    au_buf_puts(b, home_tips[(now / 1000u) % ntips]);
+    au_buf_puts(b, "</div>");
+
+    au_buf_puts(b, "<p class=foot>Aura " AU_VERSION " by " AU_AUTHOR ". "
+                   "<a href='" AU_HOMEPAGE "'>Source and releases on GitHub</a> &middot; "
+                   "<a href='about:licences'>Licences</a> &middot; "
+                   "<a href='about:fonts'>Fonts</a> &middot; "
+                   "<a href='about:scene'>Test scene</a></p>"
+                   "</div></body></html>");
 }
 
 static void credit_rows(AuBuf *b, AuCreditKind kind)
@@ -3177,7 +3440,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
             apply_pending_scroll(p, true);
             finish(p, true);
         } else if (wn == 4 && !memcmp(what, "home", 4)) {
-            build_home(&b);
+            build_home(p, &b);
             load_html_now(p, b.data, b.len, NULL);
         } else if (wn == 5 && !memcmp(what, "fonts", 5)) {
             build_fonts(p, &b);

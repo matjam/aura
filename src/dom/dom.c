@@ -127,6 +127,7 @@ static void node_free(AuNode *n)
     }
     case AU_NODE_DOCUMENT:
         au_free(((AuDocument *)n)->url);
+        au_free(((AuDocument *)n)->top_layer);
         break;
     default:
         break;
@@ -210,6 +211,8 @@ void au_node_unref(AuNode *n)
 
 /* ---- Tree ---- */
 
+static void top_layer_left(AuDocument *d, AuNode *c);
+
 static void unlink_node(AuNode *c)
 {
     AuNode *p = c->parent;
@@ -226,6 +229,8 @@ static void unlink_node(AuNode *c)
         p->last_child = c->prev;
     c->parent = c->prev = c->next = NULL;
     bump(p);
+    if (p->doc && p->doc->ntop)
+        top_layer_left(p->doc, c);
     const AuDomHooks *h = HOOKS(p);
     if (h && h->removed)
         h->removed(p->doc->hooks_ctx, p, c, prev, next);
@@ -357,6 +362,8 @@ static void style_name_changed(AuElement *el, AuAtom a)
 
 static void attr_changed(AuElement *el, AuAtom name, const char *v, size_t len)
 {
+    if (name == AU_ATOM_inert && el->node.doc)
+        el->node.doc->has_inert = true;
     if (name == AU_ATOM_id) {
         AuAtom old = el->id;
         el->id = au_atom(v, len);
@@ -396,9 +403,35 @@ static void attr_hook(AuElement *el, AuAtom name, uint8_t ns, const AuAttr *old)
         h->attr_changing(el->node.doc->hooks_ctx, el, name, ns, old ? old->value : NULL, old ? old->len : 0);
 }
 
+/* The popover state a popover attribute value names: 0 none (NULL), 1
+ * auto, 2 hint, 3 manual (an invalid value). */
+static int popover_kind(const char *v, size_t n)
+{
+    if (!v)
+        return 0;
+    if (!n || au_ieq(v, n, "auto", 4))
+        return 1;
+    return au_ieq(v, n, "hint", 4) ? 2 : 3;
+}
+
+/* A showing popover whose popover attribute changes state hides (HTML,
+ * the popover attribute change steps), without toggle events. now is
+ * the new value (NULL: removed). */
+static void popover_attr(AuElement *el, const AuAttr *old, const char *now, size_t now_len)
+{
+    if (!(el->state & AU_STATE_POPOVER_OPEN) || !old ||
+        popover_kind(old->value, old->len) == popover_kind(now, now_len))
+        return;
+    el->state &= ~(uint32_t)AU_STATE_POPOVER_OPEN;
+    if (!(el->state & AU_STATE_MODAL))
+        au_top_layer_remove(el);
+}
+
 void au_element_set_attr_ns(AuElement *el, AuAtom name, AuAttrNamespace ns, const char *value, size_t len)
 {
     AuAttr *a = au_element_attr(el, name);
+    if (name == AU_ATOM_popover && ns == AU_ATTR_NS_NONE)
+        popover_attr(el, a, value, len);
     attr_hook(el, name, (uint8_t)ns, a);
     if (a) {
         au_free(a->value);
@@ -427,6 +460,8 @@ void au_element_remove_attr(AuElement *el, AuAtom name)
     AuAttr *a = au_element_attr(el, name);
     if (!a)
         return;
+    if (name == AU_ATOM_popover)
+        popover_attr(el, a, NULL, 0);
     attr_hook(el, name, a->ns, a);
     au_free(a->value);
     uint32_t i = (uint32_t)(a - el->attrs);
@@ -435,8 +470,10 @@ void au_element_remove_attr(AuElement *el, AuAtom name)
     attr_changed(el, name, "", 0);
     /* A modal dialog whose open attribute is removed leaves the top
      * layer (HTML, the dialog's attribute change steps). */
-    if ((el->state & AU_STATE_MODAL) && !strcmp(au_atom_str(name), "open"))
+    if ((el->state & AU_STATE_MODAL) && name == AU_ATOM_open && el->ns == AU_NS_HTML && el->tag == AU_ATOM_dialog) {
         el->state &= ~(uint32_t)AU_STATE_MODAL;
+        au_top_layer_remove(el);
+    }
 }
 
 bool au_element_has_class(const AuElement *el, AuAtom cls)
@@ -567,4 +604,105 @@ void au_element_set_state(AuElement *el, uint32_t bits, bool on)
         return;
     for (AuNode *p = el->node.parent; p && p->type == AU_NODE_ELEMENT; p = p->parent)
         set_bits((AuElement *)p, up, on);
+}
+
+/* ---- The top layer and inertness ---- */
+
+/* n's parent in the flat sense: a shadow root's parent is its host. */
+static const AuNode *up_node(const AuNode *n)
+{
+    if (n->parent)
+        return n->parent;
+    if (n->type == AU_NODE_FRAGMENT && (n->flags & AU_NODEF_SHADOW_ROOT))
+        return (const AuNode *)((const AuShadowRoot *)n)->host;
+    return NULL;
+}
+
+static uint32_t top_find(const AuDocument *d, const AuElement *el)
+{
+    for (uint32_t i = 0; i < d->ntop; i++)
+        if (d->top_layer[i] == el)
+            return i;
+    return UINT32_MAX;
+}
+
+static void top_drop(AuDocument *d, uint32_t i)
+{
+    memmove(d->top_layer + i, d->top_layer + i + 1, (d->ntop - i - 1) * sizeof *d->top_layer);
+    d->ntop--;
+}
+
+void au_top_layer_add(AuElement *el)
+{
+    AuDocument *d = el->node.doc;
+    if (!d)
+        return;
+    uint32_t i = top_find(d, el);
+    if (i != UINT32_MAX)
+        top_drop(d, i);
+    if (d->ntop == d->top_cap) {
+        d->top_cap = d->top_cap ? d->top_cap * 2 : 4;
+        d->top_layer = au_realloc(d->top_layer, d->top_cap * sizeof *d->top_layer);
+    }
+    d->top_layer[d->ntop++] = el;
+}
+
+void au_top_layer_remove(AuElement *el)
+{
+    AuDocument *d = el->node.doc;
+    uint32_t i = d ? top_find(d, el) : UINT32_MAX;
+    if (i != UINT32_MAX)
+        top_drop(d, i);
+}
+
+int au_top_layer_index(const AuElement *el)
+{
+    const AuDocument *d = el->node.doc;
+    uint32_t i = d ? top_find(d, el) : UINT32_MAX;
+    return i == UINT32_MAX ? -1 : (int)i;
+}
+
+AuElement *au_document_modal(const AuDocument *doc)
+{
+    for (uint32_t i = doc ? doc->ntop : 0; i-- > 0;)
+        if (doc->top_layer[i]->state & AU_STATE_MODAL)
+            return doc->top_layer[i];
+    return NULL;
+}
+
+/* c left its parent in d: the elements of the top layer at or under c
+ * leave it too, and stop being modal or showing (HTML, the removing
+ * steps of dialog and of popovers). */
+static void top_layer_left(AuDocument *d, AuNode *c)
+{
+    for (uint32_t i = d->ntop; i-- > 0;) {
+        AuElement *e = d->top_layer[i];
+        const AuNode *p = &e->node;
+        while (p && p != c)
+            p = up_node(p);
+        if (!p)
+            continue;
+        e->state &= ~(uint32_t)(AU_STATE_MODAL | AU_STATE_POPOVER_OPEN);
+        top_drop(d, i);
+    }
+}
+
+bool au_node_inert(const AuNode *n)
+{
+    const AuDocument *d = n ? n->doc : NULL;
+    if (!d || (!d->ntop && !d->has_inert))
+        return false;
+    const AuElement *modal = au_document_modal(d);
+    if (!modal && !d->has_inert)
+        return false;
+    bool inside = modal == NULL;
+    for (const AuNode *p = n; p; p = up_node(p)) {
+        if (p->type != AU_NODE_ELEMENT)
+            continue;
+        if (modal && p == &modal->node)
+            inside = true;
+        if (d->has_inert && au_element_attr((const AuElement *)p, AU_ATOM_inert))
+            return true;
+    }
+    return !inside;
 }

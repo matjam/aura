@@ -134,6 +134,12 @@ typedef struct AuFetcher {
     uint32_t (*start)(void *ctx, AuJs *js, const AuFetchRequest *req);
     /* Stops a request; nothing more is reported for id. Optional. */
     void (*abort)(void *ctx, uint32_t id);
+    /* Backpressure: paused, the embedder stops reading the response from
+     * the network (data already on its way may still be reported); the
+     * next call with paused false reads on. Script pauses a response
+     * whose ReadableStream body holds more than it has read. Optional:
+     * without it the data arrives as fast as the network gives it. */
+    void (*pause)(void *ctx, uint32_t id, bool paused);
 } AuFetcher;
 
 /* Response head: status, status text, every header as name/value pairs,
@@ -388,6 +394,14 @@ bool au_js_fire_input(AuJs *js, AuElement *el, const char *type, const char *inp
 /* The submit event at form (SubmitEvent; submitter NULL for none).
  * Returns false if cancelled. */
 bool au_js_fire_submit(AuJs *js, AuElement *form, AuElement *submitter);
+/* The top layer. A close request (Escape): the topmost modal dialog gets
+ * cancel and closes unless it is cancelled, or the topmost auto popover
+ * hides. Returns true when there was one. */
+bool au_js_close_request(AuJs *js);
+/* Light dismiss of popovers: a press (up false) or release (up true) at
+ * target (NULL: none). Auto popovers the press and release were both
+ * outside of hide. */
+void au_js_light_dismiss(AuJs *js, AuElement *target, bool up);
 /* Tests value against an HTML pattern attribute (the whole value, v
  * flag): 1 match, 0 no match, -1 an invalid pattern. */
 int au_js_pattern_test(AuJs *js, const char *pattern, const char *value);

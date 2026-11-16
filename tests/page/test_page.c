@@ -79,6 +79,30 @@ static void test_urls(void)
     url_case("http://h/a/b", "//cdn.example/x.js", "http://cdn.example/x.js");
     char small[8];
     CHECK(!au_url_resolve("http://example.com/", "long/path", small, sizeof small), "overflow not reported");
+    /* Long URLs resolve whole: a data: URL of 20,000 bytes, and a relative
+     * path of 10,000 with dot segments, a query and a fragment. The
+     * resolver cut the relative part at 4095 bytes. */
+    size_t big = 20000;
+    char *rel = malloc(big + 1);
+    memcpy(rel, "data:image/png;base64,", 22);
+    memset(rel + 22, 'A', big - 22);
+    rel[big] = 0;
+    char *got = au_url_resolve_dup("http://a/b/c", rel);
+    CHECK(got && !strcmp(got, rel), "a long data: URL resolves whole: %zu bytes", got ? strlen(got) : 0);
+    au_free(got);
+    char *out = malloc(big + 64);
+    CHECK(au_url_resolve("http://a/b/c", rel, out, big + 64) && !strcmp(out, rel), "the same into a buffer");
+    CHECK(!au_url_resolve("http://a/b/c", rel, out, big), "a buffer one byte short");
+    memcpy(rel, "x/../", 5);
+    memset(rel + 5, 'p', 9990);
+    memcpy(rel + 9995, "?q#f", 5);
+    got = au_url_resolve_dup("http://a/b/c", rel);
+    CHECK(got && strlen(got) == strlen("http://a/b/") + 9990 + 4 && !strncmp(got, "http://a/b/ppp", 14) &&
+              !strcmp(got + strlen(got) - 4, "?q#f"),
+          "a long relative path: %.20s... (%zu bytes)", got ? got : "", got ? strlen(got) : 0);
+    au_free(got);
+    free(out);
+    free(rel);
 }
 
 /* ---- A fake asynchronous loader ---- */
@@ -538,7 +562,7 @@ static void test_images(void)
 {
     Fake f;
     memset(&f, 0, sizeof f);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html = "<!DOCTYPE html><body style='margin:0'><img id=i src='p.png'><img id=j src='q.png' width=20>"
                        "<div id=d style='background:url(bg.png)'>x</div>"
@@ -636,7 +660,7 @@ static void test_image_arrival_cost(void)
     memset(&f, 0, sizeof f);
     InvalLog log;
     memset(&log, 0, sizeof log);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocViewCallbacks cb;
     memset(&cb, 0, sizeof cb);
     cb.ctx = &log;
@@ -706,7 +730,7 @@ static void test_object_embed(void)
 {
     Fake f;
     memset(&f, 0, sizeof f);
-    AuLoader li = {&f, fake_request, NULL, NULL};
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
     const char *html =
         "<!DOCTYPE html><body style='margin:0'>"

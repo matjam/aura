@@ -9,6 +9,17 @@ target_include_directories(test_cors_net PRIVATE ${CMAKE_SOURCE_DIR}/tests/net $
 add_test(NAME webapi_cors_net COMMAND test_cors_net)
 set_tests_properties(webapi_cors_net PROPERTIES TIMEOUT 120)
 
+# Streaming bodies and EventSource over the fake transport: slow servers
+# read through Response.body and XMLHttpRequest progress, a reader that
+# falls behind pausing the request, event streams with reconnection,
+# Last-Event-ID, CORS and a document that goes.
+add_executable(test_streams_net test_streams_net.c)
+target_link_libraries(test_streams_net aura_fakenet m)
+target_include_directories(test_streams_net PRIVATE ${CMAKE_SOURCE_DIR}/tests/net ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME webapi_streams_net COMMAND test_streams_net)
+set_tests_properties(webapi_streams_net PROPERTIES TIMEOUT 120)
+
 # The CORS rules as functions (src/net/cors.c) and the digests.
 add_executable(test_cors test_cors.c)
 target_link_libraries(test_cors aura_engine m)

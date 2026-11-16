@@ -12,6 +12,8 @@
  * between releases. */
 #define AU_VERSION "0.4.1" /* x-release-please-version */
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
+#define AU_AUTHOR "Nathan Ollerenshaw"
+#define AU_HOMEPAGE "https://github.com/matjam/aura"
 /* What Aura says it is. The string has the shape every Chrome-compatible
  * browser sends (Edge, Brave, Opera and Vivaldi add their own token to the
  * same chain), because sites that read the user agent refuse or degrade

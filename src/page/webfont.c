@@ -391,10 +391,10 @@ static void parse_src(Rule *r, const AuCssValue *v, const char *base)
                     ok = false;
             }
         }
-        char abs[2048];
-        if (!url || !ok || !url->u.str || !au_url_resolve(base ? base : "", url->u.str, abs, sizeof abs))
+        char *abs = url && ok && url->u.str ? au_url_resolve_dup(base ? base : "", url->u.str) : NULL;
+        if (!abs)
             continue;
-        r->src[r->nsrc++].url = au_strndup(abs, strlen(abs));
+        r->src[r->nsrc++].url = abs;
     }
 }
 

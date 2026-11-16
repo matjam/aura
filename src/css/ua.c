@@ -190,9 +190,15 @@ const char css_ua_sheet[] =
     "meter { display: inline-block; width: 5em; height: 1em; vertical-align: -0.2em; }\n"
     /* misc */
     "marquee { display: inline-block; text-align: initial; overflow: hidden !important; }\n"
+    "[popover] { position: fixed; inset: 0; width: fit-content; height: fit-content; margin: auto;"
+    " border: solid; padding: 0.25em; overflow: auto; color: CanvasText; background-color: Canvas; }\n"
     "[popover]:not(:popover-open):not(dialog[open]) { display: none; }\n"
+    "dialog:popover-open { display: block; }\n"
     "::selection { background-color: Highlight; color: HighlightText; }\n"
-    "::backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.1); }\n"
+    "::backdrop { position: fixed; inset: 0; }\n"
+    "dialog::backdrop { background: rgba(0, 0, 0, 0.1); }\n"
+    /* the page stays live around a popover (a press outside hides it) */
+    "[popover]:popover-open::backdrop { pointer-events: none; }\n"
     "audio:not([controls]) { display: none !important; }\n"
     "audio { width: 300px; height: 54px; }\n"
     "video, canvas, img, iframe, embed, object { overflow: clip; }\n";

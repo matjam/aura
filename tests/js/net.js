@@ -184,7 +184,7 @@ test('Request carries the fetch options', () => {
         'application/x-www-form-urlencoded;charset=UTF-8');
     assert.equal(new Request('x', { method: 'POST', body: new Blob(['b'], { type: 'text/x-b' }) }).headers.get('content-type'), 'text/x-b');
     assert.equal(new Request('x', { method: 'POST', body: new Uint8Array(2) }).headers.get('content-type'), null);
-    assert.equal(new Response('x').body, undefined, 'there are no streams');
+    assert.ok(new Response('x').body instanceof ReadableStream, 'a body is a stream (streams.js has the rest)');
 });
 
 promise_test('Response bodies: bytes, formData, clone', async () => {
@@ -242,8 +242,11 @@ promise_test('crypto.subtle: digests and HMAC', async () => {
     try { await crypto.subtle.exportKey('raw', key); } catch (e) { err = e; }
     assert.equal(err && err.name, 'InvalidAccessError');
     err = null;
+    try { await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, key, msg); } catch (e) { err = e; }
+    assert.equal(err && err.name, 'InvalidAccessError', 'an HMAC key does not encrypt');
+    err = null;
     try { await crypto.subtle.encrypt({ name: 'AES-GCM' }, key, msg); } catch (e) { err = e; }
-    assert.equal(err && err.name, 'NotSupportedError');
+    assert.ok(err instanceof TypeError, 'AES-GCM without an iv');
 });
 
 promise_test('XMLHttpRequest: event order, response types, headers', async () => {

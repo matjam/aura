@@ -302,6 +302,27 @@ or copy them before returning to the event loop, and ask
 `storage.c`, which asks with `StandardPutFile` and writes the bytes
 unchanged as a TEXT file with creator AURA.
 
+## The start page (about:home)
+
+To change the start page, edit `build_home` in `src/browser/page_doc.c`.
+It is generated HTML with no script, built each time it loads:
+- **Header:** the kookaburra, `assets/icon/kookaburra/home.png` (72 px),
+  embedded with `#embed` and sent as a `data:` URL.
+- **Search:** a form made from the search preference's template. The
+  parameter whose value is `%s` becomes the text field and the others
+  hidden fields. A template without such a parameter gets no form.
+- **Most visited:** up to 8 web pages visited at least twice, from the
+  history, most visits first.
+- **Bookmarks:** the first 12 links in the bookmark tree.
+- **Sites that work well:** the `home_sites` table.
+- **Tip:** one entry of `home_tips`, chosen by the clock.
+- **Footer:** the version, the author, and links to GitHub, the licences,
+  the fonts and the test scene.
+
+History and bookmarks reach the page through `AuPageEnv.history` and
+`AuPageEnv.bookmarks`. `test_home` in `tests/browser/test_page_doc.c`
+checks the form, the escaping and the sections.
+
 ## The About box and about:licences
 
 To change the About box or about:licences, edit the credits table in
@@ -312,9 +333,21 @@ under the MPL (the root store, the Public Suffix List) carries the MPL
 notice and where its source form is. QuickJS-ng and Mbed TLS have their
 entries there.
 
-The About box (DLOG 202) draws icon family 128 at 64 pixels with
-`PlotIconID`; its empty `dctb` gives it a colour port, without which
-the icon draws in black and white.
+The About box (DLOG 202, `aboutbox.c`) draws all its text itself in
+user items:
+- the name, the version (`au_build_identity`) and `AU_TAGLINE`;
+- a link to `AU_HOMEPAGE`, which opens it in a new tab;
+- `AU_AUTHOR`, the libraries from the credits table, and the Mac it runs
+  on (`mac_sysinfo`);
+- a quip from the `quips` table, picked at random. A click on the
+  kookaburra shows the next one.
+Fonts and data are not listed there; Credits & Licences opens
+about:licences, which lists them all. To change the wording, edit
+`aboutbox.c` and the macros in `credits.h`.
+
+The About box draws icon family 128 at 64 pixels with `PlotIconID`. Its
+empty `dctb` gives it a colour port; without one the icon draws in
+black and white.
 
 ## Internet Config
 
@@ -370,7 +403,9 @@ To change text selection or find, work in two places:
 
 `au_page_find` searches the page's text with simple case folding
 (ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
-selection, wrapping.
+selection, wrapping. Selection and find leave inert content out (see
+[`layout.md`](layout.md), "Inert content"), so with a modal dialog open
+they work in the dialog only.
 
 The Mac OS 9 shell counts clicks within the double-click time, copies
 with `mac_put_scrap` (TEXT in Mac Roman with transliteration and

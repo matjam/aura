@@ -226,7 +226,9 @@ static bool focusable(const AuElement *el)
         return false;
     if (natural && au_form_is_listed(el) && au_form_disabled(el))
         return false;
-    return rendered(el);
+    /* Inert elements (outside a modal dialog, or under inert) are not
+     * focusable, so Tab cycles inside the dialog. */
+    return rendered(el) && !au_node_inert(&el->node);
 }
 
 static bool tabbable(const AuElement *el)
@@ -1575,7 +1577,12 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
          * click, submit): el is held across it. */
         if (el)
             au_node_ref(&el->node);
-        if (ev->key == AU_KEY_TAB && !cmd) {
+        if (ev->key == AU_KEY_ESCAPE && !cmd && dv->doc->ntop && dv->script &&
+            au_docscript_close_request(dv->script)) {
+            /* Escape closes the topmost modal dialog (cancel first) or
+             * auto popover, before a field's own Escape. */
+            used = true;
+        } else if (ev->key == AU_KEY_TAB && !cmd) {
             AuElement *to = next_tab(dv, el, (ev->mods & AU_MOD_SHIFT) != 0);
             if (to) {
                 focus_el(dv, to, true, false);
@@ -1880,7 +1887,10 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r)
          * of them; the target and the control are held instead. */
         AuElement *target = r->element;
         if (!target) {
-            if (dv->focus)
+            /* A press on inert content (outside a modal dialog without a
+             * backdrop) leaves the focus where it is. */
+            AuElement *root = au_document_element(dv->doc);
+            if (dv->focus && !(root && au_node_inert(&root->node)))
                 focus_el(dv, NULL, false, false);
             return false;
         }

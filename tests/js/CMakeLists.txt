@@ -5,9 +5,14 @@ set(JS_TOOL $<TARGET_FILE:aura-host>)
 set(JS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 foreach(name dom_tree events collections html_elements loop window net observers custom_elements shadow
-             modules security forms ranges cssom intl)
+             modules security forms ranges cssom intl top_layer streams eventsource subtle)
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
+
+# crypto.subtle only in secure contexts: documents at made-up URLs.
+add_executable(test_subtle_context test_subtle_context.c)
+target_link_libraries(test_subtle_context aura_engine)
+add_test(NAME js_subtle_context COMMAND test_subtle_context)
 
 # Workers on their own stacks (the host's coroutines), and without them.
 add_test(NAME js_workers

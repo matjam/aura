@@ -33,7 +33,17 @@ static bool targetable(const LBox *b)
         return false;
     if (s->inh->visibility != AU_VISIBILITY_VISIBLE)
         return false;
-    return true;
+    /* An inert node is hit tested as if it had pointer-events: none. */
+    return !l_box_inert(b);
+}
+
+/* Whether b and its subtree can be passed over: b is inert. An inert box
+ * holds content that is not inert only through the top layer (a modal
+ * dialog inside an inert ancestor), and top-layer boxes are layers of
+ * the root's list, so only the root must still be entered. */
+static bool skip_inert(const HCtx *H, const LBox *b)
+{
+    return b != H->L->root && l_box_inert(b);
 }
 
 static bool clip_content(HCtx *H, LBlock *b, float ox, float oy, float *cx, float *cy)
@@ -127,6 +137,8 @@ static bool hit_block_child(HCtx *H, LBox *c, float kx, float ky, int phase)
 {
     LBlock *k = (LBlock *)c;
     float cx, cy;
+    if (skip_inert(H, c))
+        return false;
     if (clip_content(H, k, kx, ky, &cx, &cy)) {
         if (hit_flow(H, c, cx, cy, phase) ||
             (phase == PH_INLINE && (c->flags & LF_INLINES) && hit_lines(H, k, cx, cy, NULL)))
@@ -186,7 +198,7 @@ static bool hit_flow(HCtx *H, LBox *parent, float ox, float oy, int phase)
             c->inner != LI_TABLE_CELL)
             continue;
         if (c->kind == LK_INLINE) {
-            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED))
+            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED) && !skip_inert(H, c))
                 hit = hit_flow(H, c, ox, oy, phase);
             continue;
         }
@@ -231,7 +243,7 @@ static bool hit_contents(HCtx *H, LBlock *k, float cx, float cy)
 
 static bool hit_atomic(HCtx *H, LBlock *k, float ox, float oy)
 {
-    if (k->b.flags & LF_TOO_DEEP)
+    if ((k->b.flags & LF_TOO_DEEP) || skip_inert(H, &k->b))
         return false;
     if (!inside(H, ox + k->ov.x, oy + k->ov.y, k->ov.w, k->ov.h))
         return false;
@@ -329,7 +341,7 @@ static bool hit_list(HCtx *H, LBlock *sc, float sx, float sy, uint32_t from, uin
 
 static bool hit_layer(HCtx *H, LBox *b, float ox, float oy)
 {
-    if (H->depth > L_MAX_DEPTH || (b->flags & LF_TOO_DEEP))
+    if (H->depth > L_MAX_DEPTH || (b->flags & LF_TOO_DEEP) || skip_inert(H, b))
         return false;
     if (b->kind == LK_INLINE) {
         LBlock *g = l_geom_parent(b);
@@ -363,11 +375,17 @@ static bool hit_layer(HCtx *H, LBox *b, float ox, float oy)
         cx = ox;
         cy = oy;
     }
-    if (sc && hit_list(H, k, cx, cy, k->layers->nneg, k->layers->n))
+    /* The box's own overflow clip applies to the layers of its stacking
+     * context as paint_layer applies it (push_clip before
+     * paint_layer_list): a point outside the clip reaches none of them.
+     * layer_origin only sees the clips of the boxes between a layer and
+     * its stacking context. */
+    bool layers = sc && (content || k->b.inner == LI_REPLACED);
+    if (layers && hit_list(H, k, cx, cy, k->layers->nneg, k->layers->n))
         hit = true;
     if (!hit && content && hit_contents(H, k, cx, cy))
         hit = true;
-    if (!hit && sc && hit_list(H, k, cx, cy, 0, k->layers->nneg))
+    if (!hit && layers && hit_list(H, k, cx, cy, 0, k->layers->nneg))
         hit = true;
     if (!hit && inside(H, ox, oy, k->w, k->h) && targetable(b) && !lb_anon(b)) {
         H->box = b;
@@ -415,6 +433,10 @@ static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll
     bool ok = hit_layer(&H, L->root, root->x - scroll_x, root->y - scroll_y);
     LBox *b = ok ? H.box : L->root;
     r->element = element_of(b);
+    /* Nothing that is not inert under the point (outside a modal dialog
+     * without a backdrop, or in an inert page): no target. */
+    if (!ok && r->element && au_node_inert(&r->element->node))
+        r->element = NULL;
     r->node = r->element ? &r->element->node : NULL;
     if (ok && H.frag && b->kind == LK_TEXT) {
         LText *t = (LText *)b;

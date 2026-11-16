@@ -86,6 +86,10 @@ typedef struct AuLoader {
     /* Unused: the view decodes images itself (src/image, through
      * docimages.c). Kept so existing loaders still compile. */
     bool (*decode_image)(void *ctx, const void *data, size_t len, int *w, int *h, AuSurface **pixels);
+    /* Backpressure for a script's request: paused, stop reading id's
+     * response from the network until a call with paused false. Data
+     * already received may still arrive. Optional. */
+    void (*pause)(void *ctx, uint32_t id, bool paused);
 } AuLoader;
 
 /* A form submission for the embedder to navigate to. */
@@ -466,7 +470,13 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag);
  * path-absolute, path-relative with dot segments, query-only,
  * fragment-only); it does not percent-encode, apply IDNA or validate
  * hosts. A full WHATWG URL parser comes with networking. Returns false if
- * the result does not fit. */
+ * the result does not fit. Inputs of any length up to AU_URL_MAX_INPUT
+ * resolve: a data: URL is often longer than a fixed buffer, so code that
+ * handles image, font or style sheet URLs uses au_url_resolve_dup. */
 bool au_url_resolve(const char *base, const char *rel, char *out, size_t cap);
+
+/* The same resolution into a string from au_alloc (the caller frees it),
+ * or NULL when an input is longer than AU_URL_MAX_INPUT. */
+char *au_url_resolve_dup(const char *base, const char *rel);
 
 #endif

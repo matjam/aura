@@ -24,6 +24,10 @@ const AuCredit au_credits[] = {
      "Changes for Aura: hinting, glyph names and some tables removed; the graphics are unchanged.",
      "Creative Commons Attribution 4.0 International (graphics) and Apache License 2.0 (font build)",
      "Fonts:twemoji:LICENSE.md", NULL},
+    {AU_CREDIT_FONT, "Noto Sans SC and Noto Sans KR 2.004", "Chinese, Japanese and Korean text",
+     "Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.\n"
+     "Changes for Aura: subset to the common characters, hinting and some tables removed.",
+     "SIL Open Font License 1.1", "Fonts:notosanscjk:OFL.txt", NULL},
     /* Third-party libraries. Add one entry each as they join the build:
      *
      * {AU_CREDIT_LIBRARY, "<name> <version>", "<what for>",

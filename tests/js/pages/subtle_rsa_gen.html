@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>RSA key generation while the page stays responsive</title>
+<!-- page args: --real-time -->
+<script src="../harness.js"></script>
+</head>
+<body>
+<p id="out">working</p>
+<script>
+/* crypto.subtle generates an RSA key on a coroutine and leaves it between
+ * prime candidates (src/js/natives_crypto.c), in the page and in a
+ * worker; a 5 ms interval keeps firing meanwhile. */
+const params = (bits) => ({ name: 'RSASSA-PKCS1-v1_5', modulusLength: bits, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' });
+async function timed(fn) {
+    let ticks = 0;
+    const iv = setInterval(() => { ticks++; document.getElementById('out').textContent = String(ticks); }, 5);
+    const t0 = performance.now();
+    const r = await fn();
+    const ms = performance.now() - t0;
+    clearInterval(iv);
+    return { r, ms, ticks };
+}
+promise_test('RSA-2048 generation in the page: timers keep firing', async () => {
+    const { r, ms, ticks } = await timed(() => crypto.subtle.generateKey(params(2048), false, ['sign', 'verify']));
+    const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', r.privateKey, new Uint8Array(4));
+    assert.ok(await crypto.subtle.verify('RSASSA-PKCS1-v1_5', r.publicKey, sig, new Uint8Array(4)));
+    console.log('RSA-2048 in the page: ' + Math.round(ms) + ' ms, ' + ticks + ' page timer ticks');
+    assert.ok(ticks >= Math.max(2, ms / 50), ticks + ' ticks in ' + Math.round(ms) + ' ms');
+}, 120000);
+promise_test('RSA-2048 generation in a worker: timers keep firing', async () => {
+    const w = new Worker(URL.createObjectURL(new Blob([
+        "onmessage = async (e) => { const k = await crypto.subtle.generateKey(e.data, true, ['sign', 'verify']);" +
+        " postMessage(await crypto.subtle.exportKey('jwk', k.publicKey)); };"])));
+    const { r, ms, ticks } = await timed(() => new Promise((resolve, reject) => {
+        w.onmessage = (e) => resolve(e.data);
+        w.onerror = (e) => reject(new Error(e.message));
+        w.postMessage(params(2048));
+    }));
+    w.terminate();
+    assert.equal(r.kty, 'RSA');
+    assert.equal(r.e, 'AQAB');
+    console.log('RSA-2048 in a worker: ' + Math.round(ms) + ' ms, ' + ticks + ' page timer ticks');
+    assert.ok(ticks >= Math.max(2, ms / 50), ticks + ' ticks in ' + Math.round(ms) + ' ms');
+}, 120000);
+promise_test('a page that drops a generation under way, and a worker ended during one', async () => {
+    /* the job is collected while the coroutine waits: its finalizer
+     * abandons the generation (run under the sanitizers) */
+    crypto.subtle.generateKey(params(4096), false, ['sign', 'verify']);
+    const w = new Worker(URL.createObjectURL(new Blob([
+        "postMessage('go'); crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 4096," +
+        " publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign']);"])));
+    await new Promise((resolve) => { w.onmessage = resolve; });
+    await new Promise((r) => setTimeout(r, 20));
+    w.terminate();
+    const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, false, ['encrypt']);
+    assert.equal(k.type, 'secret');
+}, 120000);
+</script>
+</body>
+</html>

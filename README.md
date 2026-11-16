@@ -73,7 +73,7 @@ Each has one self-extracting archive in two forms:
 Either gives the application "Aura VERSION Installer". Open it on Mac OS
 9.1 to 9.2.2 and choose where the Aura folder goes. The folder holds
 Aura, its fonts, the root certificates and the licences (Aura's own is
-MIT, in `Licences`). The build of every
+MIT, in `Licences`). The fonts cover Chinese, Japanese and Korean text. The build of every
 commit is attached to its
 [CI run](https://github.com/matjam/aura/actions/workflows/ci.yml) in the
 same two forms.
@@ -99,8 +99,9 @@ authorities HTTPS trusts (Mozilla's root set), and packs that folder as
 folder's files together; without `aura-roots` no HTTPS site loads. Aura needs Open Transport with TCP/IP
 configured. In the fonts folder: Aura draws pages with your
 system's fonts first and uses these open source fonts (Liberation-based
-Aura Sans, Serif and Mono, Inter, DejaVu Sans, Noto Emoji and the colour
-emoji font Twemoji Mozilla) for families and characters the system lacks.
+Aura Sans, Serif and Mono, Inter, DejaVu Sans, Noto Sans SC and KR for
+Chinese, Japanese and Korean, Noto Emoji and the colour emoji font
+Twemoji Mozilla) for families and characters the system lacks.
 Each font's licence is in its folder; `assets/fonts/README.md` lists their
 sources. Pages can also bring their own fonts with `@font-face` (WOFF2,
 WOFF or TrueType, variable fonts included).

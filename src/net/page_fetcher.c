@@ -449,6 +449,14 @@ static void pf_cancel(void *ctx, uint32_t id)
         }
 }
 
+static void pf_pause(void *ctx, uint32_t id, bool paused)
+{
+    AuNetPageFetcher *f = ctx;
+    for (PfReq *r = f->reqs; r; r = r->next)
+        if (r->id == id && !r->done)
+            au_net_loader_pause(f->l, id, paused);
+}
+
 static void pf_poll(void *ctx)
 {
     AuNetPageFetcher *f = ctx;
@@ -529,6 +537,7 @@ void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *ou
     out->allow_blocked = pf_allow_blocked;
     out->get_cookie = pf_get_cookie;
     out->set_cookie = pf_set_cookie;
+    out->pause = pf_pause;
 }
 
 AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f)

@@ -88,8 +88,12 @@ typedef struct AuFontFace {
     int16_t coords[AU_FONT_MAX_AXES];
     bool varied;
     struct AuFontCache *cache; /* lazily built per-face caches */
+    /* A paged face (au_font_face_new_paged): data holds every table but
+     * glyf, which is read from the file through the pager. NULL when the
+     * whole file is in data. */
+    struct AuFontPager *pager;
 
-    char family[64];   /* typographic family (name 16), else family (1) */
+    char family[64];  /* typographic family (name 16), else family (1) */
     char subfamily[64];
     char full_name[96];
 } AuFontFace;
@@ -101,6 +105,34 @@ int au_font_face_count(const void *data, size_t len);
  * TrueType font. data must outlive the face. */
 AuFontFace *au_font_face_new(const void *data, size_t len, int index);
 void au_font_face_free(AuFontFace *f);
+
+/* Paged faces: a large font file (a CJK face of megabytes) need not be in
+ * memory. A pager reads one face's tables, all but glyf, into a compact
+ * sfnt in memory, and reads glyph outlines from the file on demand in
+ * blocks of AU_FONT_PAGE_SIZE bytes, keeping the AU_FONT_PAGE_SLOTS most
+ * recently used blocks and up to AU_FONT_GLYPH_CACHE bytes of the glyphs
+ * read. read(ctx, off, buf, n) reads n bytes at offset off of the file
+ * into buf and returns false when it cannot. */
+#define AU_FONT_PAGE_SIZE 16384
+#define AU_FONT_PAGE_SLOTS 4
+#define AU_FONT_GLYPH_CACHE (256u * 1024)
+typedef bool (*AuFontReadFn)(void *ctx, uint32_t off, void *buf, uint32_t n);
+typedef struct AuFontPager AuFontPager;
+/* NULL when the file (file_len bytes) is not a TrueType font with a
+ * face index, or its tables do not fit the limits. */
+AuFontPager *au_font_pager_new(AuFontReadFn read, void *ctx, uint32_t file_len, int index);
+/* Frees the pager; free its faces first. */
+void au_font_pager_free(AuFontPager *p);
+/* The pager's face (free it with au_font_face_free), or NULL. */
+AuFontFace *au_font_face_new_paged(AuFontPager *p);
+typedef struct AuFontPagerStats {
+    size_t table_bytes; /* the tables held in memory */
+    size_t block_bytes; /* the glyph blocks cached */
+    size_t glyph_bytes; /* the glyphs kept */
+    size_t reads;       /* blocks read from the file so far */
+    size_t hits;        /* glyph reads answered from the kept glyphs */
+} AuFontPagerStats;
+void au_font_pager_stats(const AuFontPager *p, AuFontPagerStats *st);
 
 /* Web font containers (woff.c). au_font_sniff names a file's format by
  * its first bytes. au_font_decode turns WOFF 1.0, WOFF2 (collections
@@ -318,6 +350,19 @@ int au_fontset_add_data(AuFontSet *s, const void *data, size_t len);
  * flags: AU_FONT_*. */
 void au_fontset_add_lazy(AuFontSet *s, const char *family, int weight, bool italic, int face_index, unsigned flags,
                          AuFontLoader load, void *ctx);
+/* A font file the platform can measure and read in pieces. When it is
+ * first matched, a file of more than AU_FONT_PAGED_MIN bytes is opened as
+ * a paged face (au_font_pager_new with read); a smaller one is loaded
+ * whole with load. size returns false when the file cannot be opened. */
+#define AU_FONT_PAGED_MIN (2u * 1024 * 1024)
+typedef struct AuFontFileOps {
+    AuFontLoader load;
+    bool (*size)(void *ctx, uint32_t *len);
+    AuFontReadFn read;
+} AuFontFileOps;
+/* Registers one face of such a file (ops must outlive the set). */
+void au_fontset_add_file(AuFontSet *s, const char *family, int weight, bool italic, int face_index, unsigned flags,
+                         const AuFontFileOps *ops, void *ctx);
 /* Maps a generic family to an installed one. */
 void au_fontset_set_generic(AuFontSet *s, AuGenericFamily g, const char *family);
 /* The best face for a CSS font-family value ("Georgia, 'Times New Roman',
@@ -339,7 +384,9 @@ bool au_fontset_has_family(const AuFontSet *s, const char *family, size_t len);
 
 typedef struct AuFontSetStats {
     size_t loaded;       /* faces whose data is loaded */
-    size_t loaded_bytes; /* their data */
+    size_t loaded_bytes; /* their data (a paged face: its tables and cached blocks) */
+    size_t paged;        /* loaded faces that are paged */
+    size_t paged_reads;  /* glyph blocks they have read from their files */
     size_t loads;        /* faces loaded so far */
     size_t fallback_hits, fallback_misses; /* the per-set fallback cache */
 } AuFontSetStats;

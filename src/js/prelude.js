@@ -841,3 +841,31 @@ intlMethods(Date.prototype, {
 intlMethods(String.prototype, {
     localeCompare(that, l, o) { return intl().compare(thisString(this), String(that), l, o); },
 }, 1);
+
+/* ---------------- Streams ---------------- */
+
+/* The Streams classes live in src/js/streams.js, compiled to bytecode of
+ * their own and read with N.streams() the first time script touches one
+ * of these globals or a body's stream (Response.body, Blob.stream());
+ * until then each global is a getter that costs nothing. */
+const streamGlobals = ['ReadableStream', 'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader',
+    'ReadableStreamDefaultController', 'ReadableByteStreamController', 'ReadableStreamBYOBRequest', 'WritableStream',
+    'WritableStreamDefaultWriter', 'WritableStreamDefaultController', 'TransformStream',
+    'TransformStreamDefaultController', 'ByteLengthQueuingStrategy', 'CountQueuingStrategy', 'TextEncoderStream',
+    'TextDecoderStream', 'CompressionStream', 'DecompressionStream'];
+let streamsLib = null;
+const streams = () => {
+    if (streamsLib) return streamsLib;
+    streamsLib = N.streams()(G, { N, domErr, reportError, structuredClone, TextDecoder, AbortController, AbortSignal });
+    /* the globals become plain data properties, unless the page replaced one */
+    for (const name of streamGlobals) {
+        const d = Object.getOwnPropertyDescriptor(G, name);
+        if (d && d.get && d.get === d.set) defGlobal(name, streamsLib[name]);
+    }
+    return streamsLib;
+};
+/* One function per name is both getter and setter (half the closures). */
+for (const name of streamGlobals) {
+    const f = function (v) { if (arguments.length) defGlobal(name, v); else return streams()[name]; };
+    Object.defineProperty(G, name, { get: f, set: f, configurable: true, enumerable: false });
+}

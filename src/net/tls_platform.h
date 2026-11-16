@@ -22,6 +22,12 @@ bool au_tls_entropy_ready(void);
 /* Random bytes from the library's generator. False before the first
  * au_tls_entropy_feed, or when the generator fails. */
 bool au_tls_random(uint8_t *out, size_t len);
+/* The function prime generation calls between steps (RSA key generation,
+ * src/net/webcrypto.c); NULL for none. It runs on the generating stack and
+ * may leave it (a coroutine yield); a nonzero return abandons the
+ * generation. Set it only around the call that generates, and clear it
+ * before the stack is left, so that nothing else calls it. */
+void au_tls_set_yield(int (*fn)(void *ctx), void *ctx);
 /* The clocks the library reads: the wall clock (seconds since 1970 UTC)
  * for certificate validity, and a millisecond clock for session ticket
  * ages. tls.c sets the wall clock to each connection's validation time

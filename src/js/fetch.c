@@ -68,6 +68,7 @@ struct JsFetch {
     uint8_t taint, phase;
     bool tainted_origin; /* Origin is "null" from now on */
     bool redirected, final, hide_body;
+    bool paused; /* the embedder was asked to stop reading (fetchPause) */
     int redirects;
     /* a synchronous request (a worker's importScripts or XMLHttpRequest):
      * events are kept here instead of being queued for script */
@@ -541,6 +542,25 @@ static JSValue n_fetch_abort(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* fetchPause(id, paused): backpressure from a response's ReadableStream
+ * body. Only the final response's transfer is paused (a preflight or a
+ * redirect hop ends by itself). */
+static JSValue n_fetch_pause(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    uint32_t id = 0;
+    JsFetch *f;
+    if (argc > 1 && !JS_ToUint32(ctx, &id, argv[0]) && (f = find_fetch(js, id, false, NULL))) {
+        bool paused = JS_ToBool(ctx, argv[1]);
+        if (f->final && f->hop && f->paused != paused && js->hooks.fetcher.pause) {
+            f->paused = paused;
+            js->hooks.fetcher.pause(js->hooks.fetcher.ctx, f->hop, paused);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
 /* fetchSync(method, url, headers, body, credentials, mode, dest, null,
  * opts) -> [status, headers, bytes, url] or null for a network error.
  * Only a worker that runs on its own stack can wait for the network
@@ -602,6 +622,7 @@ static const JSCFunctionListEntry fetch_natives[] = {
     JS_CFUNC_DEF("fetchStart", 9, n_fetch_start),
     JS_CFUNC_DEF("fetchAbort", 1, n_fetch_abort),
     JS_CFUNC_DEF("fetchSync", 9, n_fetch_sync),
+    JS_CFUNC_DEF("fetchPause", 2, n_fetch_pause),
 };
 
 void js_fetch_init(AuJs *js, JSValue N)

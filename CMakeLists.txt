@@ -46,6 +46,10 @@ add_custom_target(aura_buildinfo
     VERBATIM)
 add_dependencies(aura_engine aura_buildinfo)
 target_include_directories(aura_engine PRIVATE ${CMAKE_BINARY_DIR}/gen)
+# The start page's kookaburra (about:home), embedded with #embed.
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/browser/page_doc.c PROPERTIES
+    OBJECT_DEPENDS ${CMAKE_SOURCE_DIR}/assets/icon/kookaburra/home.png
+    COMPILE_OPTIONS "--embed-dir=${CMAKE_SOURCE_DIR}/assets/icon/kookaburra")
 include(third_party/quickjs.cmake)
 include(third_party/mbedtls.cmake)
 

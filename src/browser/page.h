@@ -301,6 +301,10 @@ typedef struct AuPageFetcher {
      * get_cookie returns au_alloc'd text ("a=1; b=2") or NULL. */
     char *(*get_cookie)(void *ctx, const char *url, const char *top_level_url);
     void (*set_cookie)(void *ctx, const char *url, const char *top_level_url, const char *value);
+    /* Optional: backpressure. Paused, the fetcher stops reading fetch
+     * id's response from the network (the connection's receive window
+     * then fills and the server waits); paused false reads on. */
+    void (*pause)(void *ctx, uint32_t id, bool paused);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {
@@ -331,6 +335,10 @@ typedef struct AuPageEnv {
      * sessionStorage. Without it each document has storage of its own
      * that ends with it. */
     struct AuWebStorage *(*storage)(void *ctx);
+    /* Optional: the browsing history and the bookmarks, which the start
+     * page (about:home) shows as most visited sites and bookmarks. */
+    const struct AuHistory *(*history)(void *ctx);
+    const struct AuBookmarks *(*bookmarks)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

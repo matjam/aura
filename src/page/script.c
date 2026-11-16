@@ -14,7 +14,7 @@
  *   maps are handed to src/js; scripts with an unknown type are ignored.
  * - The runtime starts on the first script, or at the end of parsing when
  *   an element has an event handler attribute (handlers compile lazily on
- *   first dispatch, in src/js).
+ *   first dispatch, in src/js) or a popovertarget attribute.
  * - Script DOM changes only mark style and layout out of date
  *   (au_dv_dom_changed); one repaint request goes out at the end of each
  *   script turn and layout runs at the next paint, or earlier when script
@@ -531,6 +531,13 @@ static void f_abort(void *ctx, uint32_t id)
         au_dv_cancel(s->dv, id);
 }
 
+static void f_pause(void *ctx, uint32_t id, bool paused)
+{
+    AuDocScript *s = ctx;
+    if (find_fetch(s, id))
+        au_dv_pause(s->dv, id, paused);
+}
+
 /* A script element's kind from its type and language attributes, as the
  * standard decides it (src/js has the same rule; this one needs no
  * runtime, so a page whose only scripts are data blocks starts none). */
@@ -622,6 +629,7 @@ static bool ensure_js(AuDocScript *s)
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
+    h.fetcher.pause = f_pause;
     h.frames_changed = h_frames_changed;
     h.frame_count = h_frame_count;
     h.frame_at = h_frame_at;
@@ -822,10 +830,10 @@ static PendingScript *new_pending(AuElement *el, int kind)
 /* Starts loading an external script; false if it cannot be fetched. */
 static bool fetch_script(AuDocScript *s, PendingScript *p, const char *src)
 {
-    char abs[2048];
-    if (!*src || !au_url_resolve(au_docview_base_url(s->dv), src, abs, sizeof abs))
+    char *abs = *src ? au_url_resolve_dup(au_docview_base_url(s->dv), src) : NULL;
+    if (!abs)
         return false;
-    p->url = au_strndup(abs, strlen(abs));
+    p->url = abs;
     if (p->kind == AU_JS_SCRIPT_MODULE)
         return true; /* src/js fetches modules itself */
     /* Until the response says otherwise (a loader that reports no head),
@@ -942,7 +950,8 @@ void au_docscript_parse_done(AuDocScript *s)
         return;
     s->parse_done = true;
     if (!s->js) {
-        /* Start the runtime only when an event handler attribute needs it. */
+        /* Start the runtime only when an event handler attribute needs
+         * it, or a popovertarget button (popovers live in the bindings). */
         bool handlers = false;
         for (AuNode *n = &s->doc->node; n && !handlers; n = au_node_next(n, &s->doc->node)) {
             if (n->type != AU_NODE_ELEMENT)
@@ -950,7 +959,8 @@ void au_docscript_parse_done(AuDocScript *s)
             const AuElement *el = au_as_element(n);
             for (uint32_t i = 0; i < el->nattrs && !handlers; i++) {
                 const char *name = au_atom_str(el->attrs[i].name);
-                handlers = (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N');
+                handlers = ((name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N')) ||
+                           !strcmp(name, "popovertarget");
             }
         }
         if (!handlers) {
@@ -998,6 +1008,32 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
             q->bad_status = bad;
             q->muted = muted;
         }
+}
+
+bool au_docscript_resource_data(AuDocScript *s, uint32_t id, const void *data, size_t len)
+{
+    struct ScriptFetch *f = find_fetch(s, id);
+    if (!f)
+        return false;
+    if (!s->js || !len)
+        return true;
+    AuJs *to = f->js;
+    /* No enter() here: these calls only queue tasks for script (or C data
+     * for a worker), so no script runs inside the loader's callback, and
+     * the turn bookkeeping of enter() and leave() is not wanted per piece. */
+    if (!f->head_sent) {
+        /* PLACEHOLDER HEAD, as in au_docscript_resource_done: a loader
+         * that reports no head gets a 200 with a type from the URL. The
+         * call may fail the fetch, which cancels the request (and so
+         * removes f). */
+        const char *hdrs[2] = {"content-type", f->type};
+        f->head_sent = true;
+        au_js_fetch_head(to, id, 200, "OK", hdrs, f->type ? 1 : 0, NULL);
+        if (!find_fetch(s, id))
+            return true;
+    }
+    au_js_fetch_data(to, id, data, len);
+    return true;
 }
 
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok)
@@ -1170,6 +1206,25 @@ int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value)
     if (!s->js)
         return -1;
     return au_js_pattern_test(s->js, pattern, value);
+}
+
+bool au_docscript_close_request(AuDocScript *s)
+{
+    if (!s->js)
+        return false;
+    enter(s);
+    bool r = au_js_close_request(s->js);
+    leave(s);
+    return r;
+}
+
+void au_docscript_light_dismiss(AuDocScript *s, AuElement *target, bool up)
+{
+    if (!s->js)
+        return;
+    enter(s);
+    au_js_light_dismiss(s->js, target, up);
+    leave(s);
 }
 
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy)

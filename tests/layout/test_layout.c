@@ -154,7 +154,7 @@ static void run_case(AuFontSet *fonts, const char *html, size_t hlen, char *expe
 {
     DataLoader loader;
     memset(&loader, 0, sizeof loader);
-    AuLoader li = {&loader, data_request, NULL, NULL};
+    AuLoader li = {&loader, data_request, NULL, NULL, NULL};
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
     if (scripting)
         au_docview_set_scripting(dv, true);

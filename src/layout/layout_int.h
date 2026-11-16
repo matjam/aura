@@ -472,11 +472,13 @@ static inline const AuStyle *lb_style(const LBox *b) { return b->style; }
 static inline bool lb_anon(const LBox *b) { return (b->flags & LF_ANON) != 0; }
 
 /* Whether b is rendered in the top layer (CSS Positioned Layout 4,
- * section 6): the box of a modal dialog (AU_STATE_MODAL) or of its
- * ::backdrop, when absolutely positioned or fixed (the UA sheet makes
- * them fixed). Its containing block is the initial containing block
+ * section 6): the box of a modal dialog (AU_STATE_MODAL) or a showing
+ * popover (AU_STATE_POPOVER_OPEN), or of its ::backdrop, when absolutely
+ * positioned or fixed (the cascade makes any other position absolute).
+ * Its containing block is the initial containing block
  * (l_queue_abspos), it is a stacking context painted after the rest of
- * the root's (l_build_stacking), and no ancestor clips it. */
+ * the root's in the order of the document's top layer
+ * (l_build_stacking), and no ancestor clips it. */
 static inline bool l_top_layer(const LBox *b)
 {
     if (b->kind != LK_BLOCK || (b->flags & (LF_ANON | LF_ABSPOS)) != LF_ABSPOS || !b->node ||
@@ -484,7 +486,14 @@ static inline bool l_top_layer(const LBox *b)
         return false;
     if (b->pseudo != AU_CSS_PSEUDO_NONE && b->pseudo != AU_CSS_PSEUDO_BACKDROP)
         return false;
-    return (((const AuElement *)b->node)->state & AU_STATE_MODAL) != 0;
+    return (((const AuElement *)b->node)->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)) != 0;
+}
+
+/* Whether b's node is inert (au_node_inert): it is not hit, selected or
+ * found. A box without a node (anonymous) is not. */
+static inline bool l_box_inert(const LBox *b)
+{
+    return b->node && au_node_inert(b->node);
 }
 
 /* Converts a CSS colour (RGBA, red in the high byte) to a paint colour
@@ -598,6 +607,12 @@ bool l_style_contains_fixed(const AuStyle *s);
 /* Asks the loader about rep's image again. Returns 0 when nothing
  * changed, 1 when only its pixels did, 2 when its size or presence did. */
 int l_image_refresh(AuLayout *L, LReplaced *rep);
+/* Resolves url against the document (AuLayoutEnv.resolve_url) into buf
+ * (cap bytes), or into a block from au_alloc when the result is longer
+ * (a data: URL often is); a URL the document does not resolve is returned
+ * as written. Release the result with l_url_free(result, buf). */
+char *l_resolve_url(AuLayout *L, const char *url, char *buf, size_t cap);
+void l_url_free(char *url, char *buf);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);

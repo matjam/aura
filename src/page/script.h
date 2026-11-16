@@ -32,6 +32,11 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
 /* A resource of kind AU_RES_OTHER finished. Returns true if it was the
  * script side's request. */
 bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok);
+/* Body bytes of an AU_RES_OTHER request as they arrive. Returns true
+ * when the request is a script's fetch, which takes them at once (the
+ * view then keeps nothing); false for a resource the view buffers (a
+ * script element's source). */
+bool au_docscript_resource_data(AuDocScript *s, uint32_t id, const void *data, size_t len);
 /* Scripts still hold the load event (a pending or deferred script, or
  * DOMContentLoaded not yet fired). */
 bool au_docscript_busy(const AuDocScript *s);
@@ -59,6 +64,12 @@ bool au_docscript_submit_event(AuDocScript *s, AuElement *form, AuElement *submi
 /* Tests value against an HTML pattern attribute with the script engine's
  * RegExp: 1 match, 0 no match, -1 no runtime or a bad pattern. */
 int au_docscript_pattern(AuDocScript *s, const char *pattern, const char *value);
+/* Escape: closes the topmost modal dialog (after cancel) or auto popover
+ * of the top layer. Returns true when there was one. */
+bool au_docscript_close_request(AuDocScript *s);
+/* Light dismiss of auto popovers at a press (up false) or release (up
+ * true) on target (NULL: none). */
+void au_docscript_light_dismiss(AuDocScript *s, AuElement *target, bool up);
 /* Hover moved from one element to another: mouseout and mouseover. */
 void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, int vy);
 /* A link with a javascript: URL was activated. */
@@ -116,6 +127,8 @@ uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool backg
 uint32_t au_dv_request_cors(AuDocView *dv, const char *url, uint8_t cors);
 uint8_t au_dv_cors_attr(const AuElement *el);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
+/* Backpressure on a script's request (AuLoader.pause). */
+void au_dv_pause(AuDocView *dv, uint32_t id, bool paused);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);
 /* Script inserted child into parent, or removed it (prev and next were

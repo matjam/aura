@@ -176,7 +176,7 @@ int main(int argc, char **argv)
     for (it = 0; it < iters && now() - t0 < limit; it++) {
         Loader l;
         memset(&l, 0, sizeof l);
-        AuLoader li = {&l, req_fn, NULL, NULL};
+        AuLoader li = {&l, req_fn, NULL, NULL, NULL};
         AuDocView *dv = au_docview_new(fonts, &li, NULL);
         au_docview_set_viewport(dv, 200 + (int)rnd(600), 300);
         int docs = 1 + (int)rnd(2);

@@ -143,6 +143,23 @@ document does not use scroll the frame, and at its end the page. The
 wheel scrolls the innermost scroller under the pointer, then the frame,
 then the page.
 
+A click reaches the nested document through the owner's hit test, so
+the owner's clips and stacking contexts decide which frame is under the
+point, and the nested document's own hit test decides the element
+([`layout.md`](layout.md), "Hit testing follows the paint order and its
+clips").
+
+**To try an image-tile challenge without a real one**, use the replica
+in `tests/frames/replica/`: `index.html` places `bframe.html` in a
+frame inside an absolutely positioned container with a large z-index
+that script moves into view, as reCAPTCHA places its challenge, and
+`bframe.html` has the 4x4 table with the class names and rules of
+reCAPTCHA's style sheet and a click handler that toggles the selected
+class. Run `aura-host chrome --tab tests/frames/replica/index.html --do
+wait:800 --do click:76,240 --do shot:a.png --do wait:300 --do
+shot:b.png -o c.png`; the second shot shows the check mark, which the
+first paint asks for. Never load a real challenge for this.
+
 Links and forms follow `target`: a frame's name, `_self`, `_parent`,
 `_top`, `_blank` (`au_frames_route`); a link in a frame without a
 target loads in that frame.
@@ -243,7 +260,11 @@ script of the page, is on the stack. Nothing is freed then.
   (paint against a reference render, scrolling, clicks and keys, script
   access both ways, postMessage and ports, sandbox, framing headers,
   limits, lazy loading, objects, removal and navigation while script
-  runs, a kept document, a cross-origin widget).
+  runs, a kept document, a cross-origin widget, an image-tile challenge
+  in a positioned frame: clicks reach the right tile and the check marks
+  paint).
+- `tests/frames/replica/`: the image-tile challenge as pages to open by
+  hand (see "Input").
 - `test_frames_net.c`: a browser window over the fake transport
   (referrer, blocklist, X-Frame-Options from a real response, typing
   and Edit commands in a frame, Back to a kept page with frames).

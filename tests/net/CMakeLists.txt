@@ -35,6 +35,18 @@ add_executable(test_loader test_loader.c)
 target_link_libraries(test_loader aura_fakenet)
 add_test(NAME net_loader COMMAND test_loader)
 
+add_executable(test_sse test_sse.c)
+target_link_libraries(test_sse aura_engine)
+add_test(NAME net_sse COMMAND test_sse)
+
+# The event stream parser, whole and in pieces, at most 10 seconds. For a
+# long run use the sanitizer build:
+#   fuzz_sse 100000000 SEED 600
+add_executable(fuzz_sse fuzz_sse.c)
+target_link_libraries(fuzz_sse aura_engine)
+add_test(NAME net_sse_fuzz COMMAND fuzz_sse 20000 1 10)
+set_tests_properties(net_sse_fuzz PROPERTIES TIMEOUT 120)
+
 add_executable(test_policy test_policy.c)
 target_link_libraries(test_policy aura_engine)
 add_test(NAME net_policy COMMAND test_policy)
@@ -44,6 +56,14 @@ add_test(NAME net_policy COMMAND test_policy)
 add_executable(fuzz_cookies fuzz_cookies.c)
 target_link_libraries(fuzz_cookies aura_engine)
 add_test(NAME net_cookies_fuzz COMMAND fuzz_cookies 20000 1)
+
+# crypto.subtle's key import and operations (src/net/webcrypto.c), 15
+# seconds at most. For a long run use the sanitizer build:
+#   fuzz_webcrypto 100000000 SEED 600
+add_executable(fuzz_webcrypto fuzz_webcrypto.c)
+target_link_libraries(fuzz_webcrypto aura_engine)
+add_test(NAME net_webcrypto_fuzz COMMAND fuzz_webcrypto 3000 1 15)
+set_tests_properties(net_webcrypto_fuzz PROPERTIES TIMEOUT 120)
 
 # Parsers: HTTP responses and chunked bodies, data: URLs, PSL, the root
 # store loader, certificates, HSTS, authentication headers, dates, MIME.

@@ -15,7 +15,7 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 |---|---|
 | "Secure connection failed" | [Networking and TLS](#networking-and-tls): DHE-only or CBC-only servers |
 | A script error about a missing API | [JavaScript](#javascript), [Script requests and CORS](#script-requests-and-cors), [Canvas](#canvas), [Workers](#workers) |
-| Text without ligatures, wrong order of Arabic or Hebrew, missing CJK | [Fonts](#fonts) |
+| Text without ligatures, wrong order of Arabic or Hebrew, rare CJK characters missing | [Fonts](#fonts) |
 | A layout that depends on container queries, subgrid or baseline alignment in grid | [CSS](#css), [Layout](#layout) |
 | An embedded widget that stays empty | [Frames](#frames) |
 | Missing pictures or icons | [Images](#images), [SVG](#svg) |
@@ -100,12 +100,25 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - Acid2 still differs in four rows of the eyes and along the nose's
   border joins ([`layout.md`](layout.md), "Acid2").
 - The top layer ([`layout.md`](layout.md), "The top layer") holds modal
-  dialogs only: popovers and fullscreen elements are not in it. Several
-  modal dialogs are painted in tree order, not in the order they were
-  opened. A modal dialog removed from the document stays modal, and
-  the rest of the document is not made inert (clicks outside the
-  dialog still reach the page). A modal dialog with `position: static`
-  is not treated as absolutely positioned.
+  dialogs and popovers; fullscreen elements are not in it. Popovers and
+  `popovertarget` buttons need the script runtime, so they do nothing
+  with script turned off. `hint` popovers share the auto popovers'
+  stack, popover anchoring (`anchor`, implicit anchors) and the
+  `interestfor` and `commandfor` attributes are not done, and a
+  popover whose `popover` attribute changes while it shows hides
+  without `beforetoggle` and `toggle`.
+- Inert content ([`layout.md`](layout.md), "Inert content") is still
+  painted with its old `:hover` until the pointer moves, a focused
+  element that becomes inert through the `inert` attribute keeps the
+  focus (no focus fixup), and a selection made before a modal dialog
+  opened keeps its range (only its inert part stops painting).
+- A stacking context that clips its overflow clips every positioned
+  descendant, in painting and in hit testing, including one whose
+  containing block is outside it (an absolutely positioned box under a
+  static `overflow: hidden; opacity: .5` box); CSS clips only the
+  descendants whose containing block chain passes through the clipping
+  box ([`layout.md`](layout.md), "Hit testing follows the paint order
+  and its clips").
 
 ## Fonts
 
@@ -115,7 +128,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - CFF and CFF2 outlines.
 - SVG, sbix and CBDT colour glyphs.
 - COLR variations (version 1 draws at the default instance).
-- A CJK font pack (see the fonts README for what one needs).
+- Regional ideograph shapes: Japanese, Korean and traditional Chinese
+  text uses Noto Sans SC's ideographs, and the fallback does not read
+  `lang`. CJK characters outside the bundled sets (Big5 level 2, the
+  hangul syllables beyond KS X 1001, CJK extension blocks) are missing
+  unless the system has a face for them. Vertical writing is not drawn.
 - CSS does not parse `font-tech()`, and layout passes only weight and
   style to the font list (`font-variation-settings` and
   `font-optical-sizing` are computed, in `AuStyleInhRare`).
@@ -187,8 +204,23 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   `@import` rules, rules nested in a style rule, `@font-face` rules
   added through the CSSOM (they are not given to the web font loader).
   `cssRules` is not live.
-- **crypto.subtle:** only `digest` and HMAC; AES, RSA, ECDSA, PBKDF2
-  and HKDF are what pages ask for next.
+- **crypto.subtle** ([`javascript.md`](javascript.md), "crypto.subtle"):
+  - Ed25519, Ed448 and X448: TF-PSA-Crypto has no Edwards curves.
+  - RSA-PSS signs only with a salt as long as the hash (shorter when
+    the key has no room), which is what the library does; another
+    `saltLength` rejects with NotSupportedError, and verifying with one
+    accepts any salt length.
+  - RSA keys over 4096 bits or not in whole bytes, multi-prime keys,
+    and private JWKs without the CRT members (`p`, `q`, `dp`, `dq`,
+    `qi`); generation below 1024 bits.
+  - HMAC keys whose length is not a whole number of bytes; compressed
+    EC points.
+  - A `CryptoKey` cannot be cloned (`structuredClone`, `postMessage`):
+    it throws DataCloneError.
+  - PBKDF2, RSA signing and decryption and EC key generation run on the
+    caller's stack: a PBKDF2 of hundreds of thousands of iterations
+    stops the page while it runs (only RSA key generation yields).
+  - Whether a context is secure is decided when it starts.
 - **Console:** a source position for `console.log` lines (only errors
   carry a stack).
 - **Start-up:** the prelude's CSSOM, Range and observer parts are
@@ -235,9 +267,18 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## Script requests and CORS
 
-- `ReadableStream` bodies and `Response.body` (undefined: there are no
-  streams), so `EventSource` is not there either and a response reaches
-  script when it is complete (one `progress` event).
+- A `fetch` with a `ReadableStream` body reads the whole stream before
+  it sends anything (a `Content-Length` request, not a chunked upload),
+  so a stream that never ends never sends.
+- A body read with `text()` and the like, or a clone nobody reads, is
+  not paused while it arrives; only a body read through its stream
+  pauses the request ([`script-requests-and-cors.md`](script-requests-and-cors.md#streams-and-streaming-bodies)).
+- `EventSource` keeps at most four connections per document or worker;
+  a fifth source waits. A stream silent for 60 seconds (the loader's
+  idle timeout) or past 64 MB reconnects. After Back or Forward to a
+  kept document its sources reconnect without an `error` event.
+- `TextDecoderStream` decodes UTF-8, UTF-16 and windows-1252 only, the
+  encodings `TextDecoder` knows.
 - XML for `responseXML`; `responseType` `document` parses HTML only.
 - A `keepalive` request does not outlive its document.
 - `blob:` URLs work in `fetch`, `XMLHttpRequest`, `Worker` and
@@ -277,6 +318,18 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   "Script").
 - POST into a frame works only with a loader that implements
   `request_ex`.
+- URLs longer than 2047 bytes (a long `data:` URL) still fail where
+  they are resolved into 2048-byte buffers: a frame's `src` or an
+  object's `data` (`frames.c`), a link followed by a click, by Return or
+  shown in the status bar (`link_url` in `docview.c`, `control_key` in
+  `forms.c`), `<base href>`, and the canvas natives
+  (`natives_canvas.c`). Images, backgrounds, fonts, scripts and style
+  sheets resolve URLs of any length ([`layout.md`](layout.md), "URLs of
+  any length").
+- `naturalWidth` of an `<img>` in a parsed `file:` page read 0 in
+  `aura-host chrome` for `data:` URLs short and long, though the image
+  painted (seen on 2026-11-16 while building the image-tile replica;
+  not looked into).
 - No CSP directive other than `frame-ancestors` is enforced anywhere
   (`script-src`, `frame-src`, `sandbox`, `default-src` and the rest are
   ignored), and neither is the `Permissions-Policy` header or the

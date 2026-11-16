@@ -817,6 +817,16 @@ static struct AuWebStorage *env_storage(void *ctx)
     return ((AuBrowser *)ctx)->storage;
 }
 
+static const struct AuHistory *env_history(void *ctx)
+{
+    return &((AuBrowser *)ctx)->history;
+}
+
+static const struct AuBookmarks *env_bookmarks(void *ctx)
+{
+    return &((AuBrowser *)ctx)->bookmarks;
+}
+
 /* Script changed a storage area: the documents of the same area in every
  * tab hear of it (the writer is left out by the page), and a change to a
  * tab's sessionStorage puts the session file out of date, as a scroll
@@ -1016,7 +1026,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->shown_ms = time_ms(b);
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
-                     b->host.random ? env_random : NULL, b->host.coro, env_memory_free, env_storage};
+                     b->host.random ? env_random : NULL, b->host.coro, env_memory_free, env_storage,
+                     env_history, env_bookmarks};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};

@@ -8,6 +8,7 @@
 
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static int failures;
@@ -82,8 +83,8 @@ static void test_index_and_faces(void)
 
     AuFontSet *set = au_fontset_new();
     AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
-    EXPECT(au_host_font_dir_count(dir) == 17);
-    EXPECT(au_fontset_count(set) == 17);
+    EXPECT(au_host_font_dir_count(dir) == 19);
+    EXPECT(au_fontset_count(set) == 19);
     /* Registering opens nothing. */
     EXPECT(count_loaded(set) == 0 && au_host_font_dir_loads(dir) == 0);
     for (size_t i = 0; i < au_fontset_count(set); i++) {
@@ -100,6 +101,10 @@ static void test_index_and_faces(void)
         /* Each draws ink: text, or an emoji for the emoji face. */
         bool emoji = !strcmp(fam, "Noto Emoji") || !strcmp(fam, "Twemoji Mozilla");
         const char *sample = emoji ? "\xF0\x9F\x98\x80" : "Hamburg 0123";
+        if (!strcmp(fam, "Noto Sans SC"))
+            sample = "\xE4\xB8\xAD\xE6\x96\x87\xE3\x81\x8B\xE3\x81\xAA"; /* 中文かな */
+        else if (!strcmp(fam, "Noto Sans KR"))
+            sample = "\xED\x95\x9C\xEA\xB5\xAD\xEC\x96\xB4"; /* 한국어 */
         AuSurface *s = au_surface_new(160, 40);
         au_surface_clear(s, AU_RGB(255, 255, 255));
         AuCanvas *c = au_canvas_new(s);
@@ -620,7 +625,7 @@ static void test_index_fuzz(void)
     snprintf(path, sizeof path, "%s/fonts.idx", AURA_FONTS_DIR);
     CHECK(au_platform_read_file(path, &idx, &len));
     FuzzCtx fc = {0};
-    EXPECT(au_font_index_parse(idx, len, check_entry, &fc) == 17 && fc.n == 17);
+    EXPECT(au_font_index_parse(idx, len, check_entry, &fc) == 19 && fc.n == 19);
     int rounds = 20000;
     const char *scale = getenv("AURA_FUZZ_SCALE");
     if (scale && atoi(scale) > 0)
@@ -651,9 +656,234 @@ static void test_index_fuzz(void)
     au_free(idx);
 }
 
+/* ---- CJK ---- */
+
+/* Every script of Chinese, Japanese and Korean pages draws from the
+ * bundled faces: ideographs (simplified, traditional, Japanese kanji),
+ * kana, bopomofo, CJK punctuation and fullwidth forms from Noto Sans SC,
+ * hangul from Noto Sans KR. The large face is paged. */
+static double now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+static void test_cjk(void)
+{
+    AuFontSet *set = au_fontset_new();
+    AuHostFontDir *dir = au_host_add_font_dir(set, AURA_FONTS_DIR, AU_FONT_BUNDLED);
+    AuFontList *l = au_fontlist_parse(set, "Arial, sans-serif", 400, false);
+    AuGlyphRun r;
+    au_glyph_run_init(&r);
+    {
+        /* The time to the first CJK glyph: finding and opening the paged
+         * face, then reading and drawing the glyph. Printed, not checked. */
+        AuSurface *s = au_surface_new(40, 40);
+        AuCanvas *c = au_canvas_new(s);
+        double t0 = now_ms();
+        shape(l, "\xE4\xB8\xAD", &r); /* 中 */
+        double t1 = now_ms();
+        au_draw_glyph_run(c, au_fontlist_primary(l), 20, &r, 2, 24, AU_RGB(0, 0, 0));
+        double t2 = now_ms();
+        printf("cjk: first glyph in %.2f ms (fallback and opening the face %.2f ms, reading and drawing %.2f ms)\n",
+               t2 - t0, t1 - t0, t2 - t1);
+        au_canvas_free(c);
+        au_surface_free(s);
+    }
+    static const struct {
+        const char *text, *family;
+    } cases[] = {
+        {"\xE4\xB8\xAD\xE5\x8D\x8E\xE4\xBA\xBA\xE6\xB0\x91", "Noto Sans SC"},  /* 中华人民 (GB 2312) */
+        {"\xE8\x87\xBA\xE7\x81\xA3\xE7\xB9\x81\xE9\xAB\x94", "Noto Sans SC"},  /* 臺灣繁體 (Big5) */
+        {"\xE6\xBC\xA2\xE5\xAD\x97\xE6\x97\xA5\xE6\x9C\xAC", "Noto Sans SC"},  /* 漢字日本 */
+        {"\xE3\x81\xB2\xE3\x82\x89\xE3\x82\xAB\xE3\x82\xBF", "Noto Sans SC"},  /* ひらカタ */
+        {"\xE3\x84\x85\xE3\x84\x86\xE3\x84\x87", "Noto Sans SC"},              /* ㄅㄆㄇ */
+        {"\xE3\x80\x8C\xE3\x80\x82\xE3\x80\x81\xE3\x80\x8D", "Noto Sans SC"},  /* 「。、」 */
+        {"\xEF\xBC\xA1\xEF\xBC\x91\xEF\xBC\x9F", "Noto Sans SC"},              /* Ａ１？ */
+        {"\xED\x95\x9C\xEA\xB5\xAD\xEC\x96\xB4\xEB\x8C\x80", "Noto Sans KR"},  /* 한국어대 */
+        {"\xE3\x84\xB1\xE3\x85\x8F", "Noto Sans KR"},                          /* ㄱㅏ */
+    };
+    for (size_t k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        shape(l, cases[k].text, &r);
+        EXPECT(r.n > 0 && r.missing == 0);
+        for (size_t i = 0; i < r.n; i++) {
+            EXPECT(r.glyphs[i].id != 0);
+            if (strcmp(glyph_family(&r, i), cases[k].family)) {
+                fprintf(stderr, "case %zu glyph %zu: %s, expected %s\n", k, i, glyph_family(&r, i),
+                        cases[k].family);
+                failures++;
+            }
+        }
+        /* The glyphs draw ink. */
+        AuSurface *s = au_surface_new(120, 32);
+        au_surface_clear(s, AU_RGB(255, 255, 255));
+        AuCanvas *c = au_canvas_new(s);
+        au_draw_glyph_run(c, au_fontlist_primary(l), 20, &r, 2, 24, AU_RGB(0, 0, 0));
+        int ink = 0;
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 120; x++)
+                ink += au_surface_get(s, x, y) != AU_RGB(255, 255, 255);
+        EXPECT(ink > 30);
+        au_canvas_free(c);
+        au_surface_free(s);
+    }
+    /* Mixed with Latin: the Latin stays in the primary face. */
+    shape(l, "Tokyo \xE6\x9D\xB1\xE4\xBA\xAC", &r);
+    EXPECT(r.missing == 0 && !strcmp(glyph_family(&r, 0), "Aura Sans") && !strcmp(glyph_family(&r, 6), "Noto Sans SC"));
+    /* Noto Sans SC (3.5 MB) is paged: its tables and a few blocks are in
+     * memory, not the file. Noto Sans KR (0.4 MB) is read whole. */
+    AuFontSetStats st;
+    au_fontset_stats(set, &st);
+    EXPECT(st.paged == 1);
+    AuFontFace *sc = au_fontset_match(set, "'Noto Sans SC'", 400, false);
+    CHECK(sc && sc->pager);
+    AuFontPagerStats ps;
+    au_font_pager_stats(sc->pager, &ps);
+    EXPECT(ps.table_bytes < 400 * 1024 && ps.block_bytes <= AU_FONT_PAGE_SLOTS * AU_FONT_PAGE_SIZE);
+    EXPECT(ps.reads > 0);
+    printf("cjk: Noto Sans SC holds %zu bytes of tables and %zu of blocks after %zu reads (%zu hits)\n",
+           ps.table_bytes, ps.block_bytes, ps.reads, ps.hits);
+    au_glyph_run_free(&r);
+    au_fontlist_free(l);
+    au_fontset_free(set);
+    au_host_font_dir_free(dir);
+}
+
+/* ---- Paged faces ---- */
+
+typedef struct MemFile {
+    const uint8_t *data;
+    uint32_t len;
+    uint32_t fail_every, count;
+} MemFile;
+
+static bool mem_read(void *ctx, uint32_t off, void *buf, uint32_t n)
+{
+    MemFile *m = ctx;
+    if (m->fail_every && ++m->count % m->fail_every == 0)
+        return false;
+    if (off > m->len || n > m->len - off)
+        return false;
+    memcpy(buf, m->data + off, n);
+    return true;
+}
+
+static bool same_path(const AuPath *a, const AuPath *b)
+{
+    return a->nops == b->nops && a->npts == b->npts && !memcmp(a->ops, b->ops, a->nops) &&
+           !memcmp(a->pts, b->pts, a->npts * sizeof(float)); /* npts counts floats */
+}
+
+/* A paged face draws exactly what the face read whole draws, for every
+ * glyph of a CJK face and of a Latin face with composite glyphs; a file
+ * cut short at any length, or reads that fail, give missing glyphs and
+ * no crash. */
+static void test_paged(void)
+{
+    static const char *files[] = {"notosanscjk/NotoSansKR-Regular.ttf", "notosanscjk/NotoSansSC-Regular.ttf",
+                                  "dejavu/DejaVuSans.ttf"};
+    for (size_t fi = 0; fi < sizeof files / sizeof files[0]; fi++) {
+        char path[1024];
+        char *data;
+        size_t len;
+        snprintf(path, sizeof path, "%s/%s", AURA_FONTS_DIR, files[fi]);
+        CHECK(au_platform_read_file(path, &data, &len));
+        AuFontFace *whole = au_font_face_new(data, len, 0);
+        MemFile mf = {(const uint8_t *)data, (uint32_t)len, 0, 0};
+        AuFontPager *p = au_font_pager_new(mem_read, &mf, (uint32_t)len, 0);
+        AuFontFace *paged = au_font_face_new_paged(p);
+        CHECK(whole && paged);
+        EXPECT(paged->num_glyphs == whole->num_glyphs && paged->num_hmetrics == whole->num_hmetrics);
+        EXPECT(!strcmp(paged->family, whole->family) && paged->x_height == whole->x_height);
+        int differ = 0;
+        unsigned step = whole->num_glyphs > 4000 ? 7 : 1;
+        for (unsigned g = 0; g < whole->num_glyphs; g += step) {
+            AuPath a, b;
+            au_path_init(&a);
+            au_path_init(&b);
+            bool oa = au_font_glyph_path(whole, (uint16_t)g, 0.02f, 0.02f, 1, 30, &a);
+            bool ob = au_font_glyph_path(paged, (uint16_t)g, 0.02f, 0.02f, 1, 30, &b);
+            int16_t ba[4] = {0}, bb[4] = {0};
+            bool xa = au_font_glyph_box(whole, (uint16_t)g, ba), xb = au_font_glyph_box(paged, (uint16_t)g, bb);
+            if (oa != ob || !same_path(&a, &b) || xa != xb || memcmp(ba, bb, sizeof ba) ||
+                au_font_advance_units(whole, (uint16_t)g) != au_font_advance_units(paged, (uint16_t)g)) {
+                if (!differ)
+                    fprintf(stderr, "glyph %u: ok %d %d, ops %zu %zu, pts %zu %zu, box %d %d (%d %d)\n", g, oa, ob,
+                            a.nops, b.nops, a.npts, b.npts, xa, xb, ba[0], bb[0]);
+                differ++;
+            }
+            au_path_free(&a);
+            au_path_free(&b);
+        }
+        EXPECT(differ == 0);
+        if (differ)
+            fprintf(stderr, "%s: %d glyphs differ paged\n", files[fi], differ);
+        au_font_face_free(paged);
+        au_font_pager_free(p);
+
+        if (fi == 0) {
+            /* Cut short: every length through the table directory and the
+             * first tables, then every 1,009 bytes. */
+            for (uint32_t cut = 0; cut < len; cut += cut < 4096 ? 1 : 1009) {
+                MemFile m = {(const uint8_t *)data, cut, 0, 0};
+                AuFontPager *q = au_font_pager_new(mem_read, &m, cut, 0);
+                AuFontFace *f = au_font_face_new_paged(q);
+                if (f) {
+                    for (unsigned g = 0; g < f->num_glyphs; g += 97) {
+                        AuPath pa;
+                        au_path_init(&pa);
+                        au_font_glyph_path(f, (uint16_t)g, 0.02f, 0.02f, 0, 0, &pa);
+                        au_path_free(&pa);
+                    }
+                }
+                au_font_face_free(f);
+                au_font_pager_free(q);
+            }
+            /* The file says it is longer than it is: glyphs past the end
+             * cannot be read and are missing. */
+            MemFile m = {(const uint8_t *)data, (uint32_t)len / 2, 0, 0};
+            AuFontPager *q = au_font_pager_new(mem_read, &m, (uint32_t)len, 0);
+            AuFontFace *f = au_font_face_new_paged(q);
+            if (f) {
+                AuPath pa;
+                au_path_init(&pa);
+                EXPECT(!au_font_glyph_path(f, (uint16_t)(f->num_glyphs - 1), 0.02f, 0.02f, 0, 0, &pa));
+                au_path_free(&pa);
+            }
+            au_font_face_free(f);
+            au_font_pager_free(q);
+            /* Reads that fail now and then. */
+            for (uint32_t every = 1; every < 30; every++) {
+                MemFile m2 = {(const uint8_t *)data, (uint32_t)len, every, 0};
+                AuFontPager *q2 = au_font_pager_new(mem_read, &m2, (uint32_t)len, 0);
+                AuFontFace *f2 = au_font_face_new_paged(q2);
+                for (unsigned g = 0; f2 && g < f2->num_glyphs; g += 13) {
+                    AuPath pa;
+                    au_path_init(&pa);
+                    au_font_glyph_path(f2, (uint16_t)g, 0.02f, 0.02f, 0, 0, &pa);
+                    au_path_free(&pa);
+                }
+                au_font_face_free(f2);
+                au_font_pager_free(q2);
+            }
+            /* Not a font, a face index it lacks, no glyf. */
+            EXPECT(!au_font_pager_new(mem_read, &mf, (uint32_t)len, 1));
+            EXPECT(!au_font_pager_new(NULL, &mf, (uint32_t)len, 0));
+            static const uint8_t junk[64] = {0, 1, 0, 0, 0, 1};
+            MemFile mj = {junk, sizeof junk, 0, 0};
+            EXPECT(!au_font_pager_new(mem_read, &mj, sizeof junk, 0));
+        }
+        au_font_face_free(whole);
+        au_free(data);
+    }
+}
+
 int main(void)
 {
     test_index_and_faces();
+    test_cjk();
+    test_paged();
     test_aliases_bundled_only();
     test_aliases_with_system();
     test_fallback();

@@ -109,11 +109,94 @@ crossorigin>` whose response passed the CORS check. An image made by
 script and never put in the document is fetched without CORS.
 [`canvas.md`](canvas.md) says what tainting does.
 
+## Streams and streaming bodies
+
+To change the Streams API, edit `src/js/streams.js` and run
+`tests/js/streams.js` (ctest `js_streams`). To change how a network
+body reaches script, see `prelude_net.js` ("A network body as it
+arrives") and test with `tests/webapi/test_streams_net.c`.
+
+`streams.js` follows the WHATWG Streams standard: `ReadableStream`
+(default and byte streams, default and BYOB readers with `min`, `tee`,
+`pipeTo`, `pipeThrough`, async iteration, `ReadableStream.from`),
+`WritableStream`, `TransformStream`, the two queuing strategies,
+`TextEncoderStream`, `TextDecoderStream`, and `CompressionStream` and
+`DecompressionStream` (`gzip`, `deflate`, `deflate-raw`, through
+`src/codec` by the natives in `src/js/natives_streams.c`). It is
+compiled to bytecode of its own and read the first time script touches
+a stream class or a body's stream, as `Intl` is
+([`javascript.md`](javascript.md), "Loaded on first use").
+
+A body is a stream on demand:
+
+- `Response.body` and `Request.body` make a stream the first time they
+  are read; `text()`, `json()` and the other methods read the body
+  without one. `Blob.stream()` gives a byte stream over the blob.
+- `new Response(stream)` and `new Request(url, {body: stream, duplex:
+  "half"})` take a `ReadableStream`; `clone()` tees it.
+- A body from the network reaches script piece by piece as the loader
+  delivers it (`au_docscript_resource_data` in `script.c`; the document
+  view no longer holds script request bodies until they are complete).
+  Until script reads it the pieces are kept in order in a feed; a clone
+  gets a feed of its own.
+
+When a body's stream holds 64 KB that its reader has not taken, the
+request is paused, and it resumes when the reader pulls again. The
+pause goes from `N.fetchPause` through `AuFetcher.pause`,
+`AuLoader.pause` and `AuPageFetcher.pause` to `au_http_pause`, which
+stops reading the socket; the time a request is paused does not count
+toward the 60-second idle timeout. A body read with `text()` or a
+clone that nobody reads is not paused: it is kept whole, up to the
+loader's 64 MB limit. Canceling a body's stream (or every clone's) ends
+the request.
+
+A `fetch` with a stream body reads the stream to its end and then
+sends the bytes with a `Content-Length` (see
+[`known-gaps.md`](known-gaps.md#script-requests-and-cors)).
+`XMLHttpRequest.send` and `navigator.sendBeacon` turn a stream into the
+string "[object ReadableStream]", as browsers do.
+
+## EventSource
+
+To change `EventSource`, edit `src/js/eventsource.js` (also loaded on
+first use) and the event stream parser in `src/net/sse.c`; run
+`tests/js/eventsource.js`, `tests/net/test_sse.c`, `fuzz_sse`
+([`fuzzing.md`](fuzzing.md)) and `tests/webapi/test_streams_net.c`.
+
+An `EventSource` is an ordinary script request: mode `cors`,
+credentials `include` with `withCredentials` and `same-origin`
+without, cache mode `no-store`, `Accept: text/event-stream` and
+`Last-Event-ID` after a reconnection. The body goes to the C parser
+(`N.sseFeed`) as it arrives, so an event is dispatched as soon as its
+blank line comes. The parser drops a line longer than 512 KB and an
+event whose data passes 1 MB.
+
+- A response that is not 200 with type `text/event-stream`, or a
+  request the same-origin policy or CORS refuses, fails the source: one
+  `error` event and `CLOSED`.
+- A stream that ends or drops reconnects: `error` with `CONNECTING`,
+  then a new request after the reconnection time (3 seconds, or the
+  last `retry` field).
+- `close()` ends the request at once; a document that goes ends its
+  requests with it, and a worker's end with the worker.
+
+A source holds a connection for as long as it lives, and the loader
+allows six connections to a host and sixteen in all (on Mac OS 9 each
+is an Open Transport endpoint). So a document or worker keeps at most
+four sources connected at once; more wait in `CONNECTING`, in the order
+they were made, until one closes or drops. A document hidden for Back
+and Forward drops its connections and makes them again, with
+`Last-Event-ID`, when it is shown, without an `error` event. A server
+that sends nothing for 60 seconds hits the idle timeout and the source
+reconnects; so does a stream that passes the 64 MB body limit.
+
 ## XMLHttpRequest
 
 Asynchronous requests follow the standard's states and events
 (`loadstart`, upload events, `readystatechange`, `progress`, `load` or
-`error`, `timeout`, `abort`, `loadend`).
+`error`, `timeout`, `abort`, `loadend`). The body arrives in pieces, so
+`progress` and `readystatechange` (state 3) fire as it does, at most
+every 50 ms after the first piece, and `responseText` grows.
 
 A synchronous request works for `data:` and `blob:` URLs anywhere and
 for network URLs in a worker with its own stack, which waits while the
@@ -130,7 +213,12 @@ re-enter the parser and every loader.
   preflight and its cache, redirects, `crossorigin` scripts, muted
   errors).
 - `tests/webapi/test_cors.c`: the rules and the digests.
-- `tests/js/net.js`.
+- `tests/webapi/test_streams_net.c`: slow servers read through
+  `Response.body` and `XMLHttpRequest`, a paused request, event stream
+  servers (reconnection, `Last-Event-ID`, CORS, failures, a document
+  that goes).
+- `tests/net/test_sse.c` and `fuzz_sse`: the event stream parser.
+- `tests/js/net.js`, `tests/js/streams.js`, `tests/js/eventsource.js`.
 
 ## Not done
 
