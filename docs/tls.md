@@ -53,7 +53,15 @@ older Aura is refused with a message that says so.
 Follow `third_party/README.md`. Expect to fix
 `third_party/mbedtls-patches/0001-tls12-rsa-key-transport.patch` by
 hand if the TLS 1.2 handshake files changed, and run `test_legacy_kex`
-and `fuzz_net tls`.
+and `fuzz_net tls`. If `0002-bignum-yield.patch` no longer applies, put
+the two yield points back in `mbedtls_mpi_gen_prime` and
+`mpi_miller_rabin` and run `js_page_subtle_rsa_gen`.
+
+The library also serves script's crypto.subtle (`src/net/webcrypto.c`,
+[`javascript.md`](javascript.md), "crypto.subtle"); the options it needs
+are marked in `aura_crypto_config.h`. Script's keys share the library's
+key store and random generator with TLS, and its allocations count in
+`au_tls_memory`.
 
 ## To see a connection's TLS details
 

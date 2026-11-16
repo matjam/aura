@@ -52,6 +52,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_deflate` | the deflate encoder: made inputs compressed with random chunking and decoded again by Aura's inflate | `codec/fuzz_deflate N SEED tests/codec/brotli-vectors/page.html` (`AURA_FUZZ_SECONDS` caps it) | the codec originals |
 | `fuzz_inflate`, `fuzz_brotli` | the decoders alone | `codec/fuzz_inflate N SEED tests/codec/inflate-vectors/*`, `codec/fuzz_brotli N SEED tests/codec/brotli-vectors/*.br` | the codec vectors |
 | `fuzz_cookies` | Set-Cookie parsing, the cookie file | `net/fuzz_cookies N SEED` | built-in cookies |
+| `fuzz_webcrypto` | crypto.subtle's C side (`src/net/webcrypto.c`): mutated key data imported as every kind of key (RSA DER, EC scalars and points, X25519) and used; AES in four modes and PBKDF2 and HKDF with random lengths | `net/fuzz_webcrypto N SEED SECONDS` | keys generated at start |
 | `fuzz_files` | Session, Bookmarks.html, History, Aura Preferences, Downloads, cookie rules, the disk cache folder | `browser/fuzz_files N SEED SECONDS` | files the stores write, made at start |
 | `fuzz_blocklist` | list parser, compiled files, the store's index | `blocklist/fuzz_blocklist N SEED SECONDS` | generated |
 
