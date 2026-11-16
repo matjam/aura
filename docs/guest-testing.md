@@ -57,6 +57,15 @@ article, scrolled, typed in a search field, showed Develop >
 Performance and was launched three times in one boot: the control panel
 reported nothing caught.
 
+On 2026-11-15, with Enforcer 0.2.0+bd0d2bc, Aura 0.4.1 at 457dd44
+loaded about:home and Hacker News: the control panel reported nothing
+caught, 123 writes checked, 0 stopped, 0 blocked.
+
+Enforcer 0.2.0 adds "Give applications more memory than Get Info
+sets", on by default. With it on, an application can get more memory
+than its Get Info size. To measure Aura's memory as users without
+Enforcer see it, test on the stock base.
+
 ## To start and stop the guest
 
 To start the guest, run `tools/guest-run.sh start`. QEMU runs headless
@@ -268,25 +277,31 @@ UTC matches the host's `date -u` to the second.
 
 ## The Enforcer image
 
-The Enforcer on `os9-vmoff.qcow2` is version 0.1.0, installed on
-2026-11-15 from that project's `dist/` as built at 12:58 that day:
-commit 6ba015b plus changes not yet committed there (`common/engine.c`,
-`common/kcb.h`, `installer/kpatch.h`, `kernel/nanokernel.s`).
-Enforcer's files carry no version resource; the installed extension is
-96,498 bytes.
+The Enforcer on `os9-vmoff.qcow2` is version 0.2.0+bd0d2bc (as its
+installer and control panel title show), installed on 2026-11-15 from
+that project's `dist/` as built at 21:32 that day. The extension's
+forks are 15,064 and 81,594 bytes.
 
-`disks/os9-vmoff.before-update.qcow2` is the image before that update
-(an Enforcer of 2026-11-14). To go back to it, stop every guest and
-copy it over `os9-vmoff.qcow2`; `guest-run.sh` then sets aside the
-overlays made on the newer image.
+Earlier images, kept in `disks/`:
+
+| File | Enforcer |
+|---|---|
+| `os9-vmoff.before-update.qcow2` | 0.1.0, 2026-11-15 (commit 6ba015b plus uncommitted changes) |
+| `os9-vmoff.2026-11-14.qcow2` | the build of 2026-11-14 |
+
+To go back to one, stop every guest and copy it over
+`os9-vmoff.qcow2`; `guest-run.sh` then sets aside the overlays made on
+the newer image.
 
 ### To update Enforcer on `os9-vmoff.qcow2`
 
 Use a run folder of your own (`export AURA_RUN=$PWD/run-enf`) and these
 steps. Enforcer's installer updates an installed Enforcer in place.
 
-1. Stop every guest that runs the Enforcer base, and copy
-   `disks/os9-vmoff.qcow2` to `disks/os9-vmoff.before-update.qcow2`.
+1. Stop every guest that runs the Enforcer base. Rename
+   `disks/os9-vmoff.before-update.qcow2` after the date of its
+   Enforcer, then copy `disks/os9-vmoff.qcow2` to
+   `disks/os9-vmoff.before-update.qcow2`.
 2. Run `BASE=enforcer PERSIST=1 tools/guest-run.sh start`, wait for the
    Finder, and push the three MacBinary files of Enforcer's `dist/`
    together: `tools/guest-push.sh -n EnfNew "DIST/Enforcer
@@ -313,4 +328,5 @@ steps. Enforcer's installer updates an installed Enforcer in place.
    run-enf/os9-overlay-enforcer.qcow2`, then `qemu-img info
    disks/os9-vmoff.qcow2` (no backing file) and `qemu-img check
    disks/os9-vmoff.qcow2`. Delete the overlay.
-7. Change the version, date and commit in the paragraph above.
+7. Change the version and date in the paragraph above, and add the
+   older image to the table.
