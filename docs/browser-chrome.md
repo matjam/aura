@@ -370,7 +370,9 @@ To change text selection or find, work in two places:
 
 `au_page_find` searches the page's text with simple case folding
 (ASCII, Latin-1, Greek, Cyrillic, Latin Extended-A), from the
-selection, wrapping.
+selection, wrapping. Selection and find leave inert content out (see
+[`layout.md`](layout.md), "Inert content"), so with a modal dialog open
+they work in the dialog only.
 
 The Mac OS 9 shell counts clicks within the double-click time, copies
 with `mac_put_scrap` (TEXT in Mac Roman with transliteration and
