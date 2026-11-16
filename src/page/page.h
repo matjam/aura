@@ -130,6 +130,12 @@ typedef struct AuDocViewCallbacks {
     /* Coroutines for workers (core/coro.h). Optional: without them a
      * worker runs on the caller's stack, a task at a time. */
     const AuCoroOps *coro;
+    /* document.cookie of the document at url (the view's own, or a nested
+     * document's when nested is set; dv is the top-level view either
+     * way): get_cookie returns au_alloc'd text or NULL. Optional: without
+     * them document.cookie reads "" and writes are dropped. */
+    char *(*get_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested);
+    void (*set_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value);
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */
@@ -248,6 +254,11 @@ void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
  * how soon it needs calling again (0: now; UINT32_MAX: no timer or frame
  * is waiting). */
 void au_docview_set_scripting(AuDocView *dv, bool on);
+/* The memory limits of the script runtime of the page and of each of its
+ * workers, in bytes, for runtimes started from now on (set it before
+ * au_docview_begin; the top-level view's values serve its frames). 0
+ * keeps the engine's defaults (32 MB and 24 MB). */
+void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worker_bytes);
 /* The string script sees as navigator.userAgent, from the next load. It
  * must be the one the network sends. NULL or "": the script default. */
 void au_docview_set_user_agent(AuDocView *dv, const char *ua);
@@ -269,6 +280,11 @@ bool au_docview_content_loaded(const AuDocView *dv);
 /* Bytes the document's script runtime has allocated and its limit; 0, 0
  * without a runtime. */
 void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit);
+/* Script memory in detail: a line per runtime, document and worker of
+ * the page (bytes now, peak, limit), and the peaks alone (the page's
+ * runtime; the largest live worker). */
+void au_docview_script_summary(const AuDocView *dv, AuBuf *out);
+void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *worker_peak);
 
 /* ---- Keeping a document while it is not shown ----
  * An embedder that keeps a view alive while another document is shown

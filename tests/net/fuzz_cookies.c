@@ -4,6 +4,7 @@
  * persistent cookie).
  *
  *   fuzz_cookies ITERATIONS SEED */
+#include "../fuzz.h"
 #include "net/cookies.h"
 #include "url/url.h"
 
@@ -96,6 +97,10 @@ int main(int argc, char **argv)
     AuBuf out;
     au_buf_init(&out);
     for (long it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = it;
+            break;
+        }
         const char *s = seeds[rnd() % (sizeof seeds / sizeof *seeds)];
         size_t len = strlen(s);
         memcpy(buf, s, len);

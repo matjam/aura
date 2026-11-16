@@ -644,7 +644,9 @@ static uint32_t count_spaces(const LText *t, uint32_t start, uint32_t len)
 
 /* Builds the fragments of segments [a, e] as one line at S->y with the
  * content edges [l, r] (BFC x). Returns the line height. */
-static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r, float indent, bool last_line,
+/* Not inlined: its VCtx stack (3.7 KB) would sit in l_inline_layout's
+ * frame, which is on the stack once per level of nested inline blocks. */
+static AU_NOINLINE float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r, float indent, bool last_line,
                          bool ellipsis_here)
 {
     InlineCtx *C = S->C;
@@ -840,8 +842,8 @@ static float finish_line(LineState *S, uint32_t a, uint32_t e, float l, float r,
             if (f->kind == FR_TEXT) {
                 LText *t = (LText *)f->box;
                 LFont *ff = l_font(L, f->box->style);
-                uint32_t k = 0;
                 float w = 0;
+                uint32_t k = l_prefix_seek(L, ff, f->box->style, t->text + f->start, f->len, limit + 0.01f - f->x, &w);
                 while (k < f->len) {
                     size_t adv;
                     au_utf8_decode(t->text + f->start + k, f->len - k, &adv);
@@ -1193,9 +1195,9 @@ static uint32_t fit_prefix(AuLayout *L, LSeg *s, float room, float *w_out)
     LText *t = (LText *)s->box;
     LFont *f = l_font(L, s->box->style);
     uint32_t e = s->end - s->trail;
-    uint32_t k = s->start;
     float w = 0;
-    bool first = true;
+    uint32_t k = s->start + l_prefix_seek(L, f, s->box->style, t->text + s->start, e - s->start, room, &w);
+    bool first = k == s->start;
     while (k < e) {
         size_t adv;
         au_utf8_decode(t->text + k, e - k, &adv);

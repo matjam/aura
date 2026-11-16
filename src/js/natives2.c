@@ -325,6 +325,8 @@ static JSValue n_style_text(JSContext *ctx, JSValueConst this_val, int argc, JSV
 static JSValue n_computed(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
     AuElement *e = argc > 1 ? arg_el(js, argv[0]) : NULL;
     if (!e || !js->hooks.computed_style)
         return JS_NewString(ctx, "");
@@ -393,6 +395,8 @@ static JSValue n_css_supports(JSContext *ctx, JSValueConst this_val, int argc, J
 static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
     AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
     AuJsRect r;
     if (!e || !js->hooks.element_rect || !js->hooks.element_rect(js->hooks.ctx, e, &r))
@@ -412,6 +416,8 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
 static JSValue n_text_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
     AuNode *n = argc > 0 ? js_unwrap(js, argv[0]) : NULL;
     uint32_t a = 0, b = 0;
     if (!js->hooks.text_rects)
@@ -519,6 +525,8 @@ static JSValue n_sheet_disable(JSContext *ctx, JSValueConst this_val, int argc, 
 static JSValue n_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
     int v[6] = {800, 600, 0, 0, 800, 600};
     if (js->hooks.viewport)
         js->hooks.viewport(js->hooks.ctx, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
@@ -788,7 +796,8 @@ static JSValue n_history(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 static JSValue n_cookie(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     AuJs *js = js_of_ctx(ctx);
-    if (!js->settings.cookies_enabled)
+    /* A document with an opaque origin (a sandboxed frame) has no cookies. */
+    if (!js->settings.cookies_enabled || js->opaque_origin)
         return magic ? JS_UNDEFINED : JS_NewString(ctx, "");
     if (magic == 0) {
         char *c = js->hooks.get_cookie ? js->hooks.get_cookie(js->hooks.ctx, js->url) : NULL;

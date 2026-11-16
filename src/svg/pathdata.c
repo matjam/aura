@@ -423,7 +423,8 @@ void svg_parse_par(const char *s, SvgPar *out)
         out->ax = out->ay = SVG_ALIGN_NONE;
         return;
     }
-    if (s[0] == 'x' && s[4] == 'Y' && strlen(s) >= 8) {
+    /* The length first: s[4] is past the end of a short value. */
+    if (strlen(s) >= 8 && s[0] == 'x' && s[4] == 'Y') {
         uint8_t ax = 0, ay = 0;
         if (strncmp(s + 1, "Min", 3) == 0) ax = SVG_ALIGN_MIN;
         else if (strncmp(s + 1, "Mid", 3) == 0) ax = SVG_ALIGN_MID;

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>A frame's window exists as soon as its element does</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<!-- A new iframe has an initial about:blank document and a window at
+     once (HTML: "create a new child navigable"). A script that follows the
+     element in the same piece of markup, and the script of a later frame,
+     must find that window through window[0], window.frames["name"],
+     parent.frames[name] and contentWindow. Aura brought its frame list up
+     to date only between parser chunks, and gave the window its named
+     frames only after starting the frames' documents, so these read
+     undefined (a widget of two frames that looks its sibling up by name
+     threw). -->
+<iframe name="a-first" srcdoc="<p>first</p>"></iframe>
+<iframe name="c-second" srcdoc="<script>
+var n = 'a-first';
+var f = parent.frames[n];
+parent.fromFrame = { byName: !!f, onParent: !!parent[n], length: parent.frames.length,
+                     byIndex: !!parent.frames[0], same: parent.frames[0] === f };
+</script>"></iframe>
+<script>
+/* Runs right after the two elements, in the same parser chunk. */
+const atOnce = {
+    length: window.length,
+    first: window[0],
+    byName: window.frames['a-first'],
+    second: window['c-second'],
+    content: document.querySelector('iframe').contentWindow,
+};
+test('a script right after the frames sees their windows', () => {
+    assert.equal(atOnce.length, 2);
+    assert.ok(atOnce.first, 'window[0]');
+    assert.ok(atOnce.byName, 'window.frames[name]');
+    assert.ok(atOnce.second, 'window[name] of the second frame');
+    assert.ok(atOnce.first === atOnce.byName, 'index and name give one window');
+    assert.ok(atOnce.content === atOnce.first, 'contentWindow is that window');
+});
+test('a frame finds its earlier sibling through its parent while it loads', () => {
+    assert.ok(window.fromFrame, 'the second frame ran its script');
+    assert.equal(fromFrame.byName, true);
+    assert.equal(fromFrame.onParent, true);
+    assert.equal(fromFrame.length, 2);
+    assert.equal(fromFrame.byIndex, true);
+    assert.equal(fromFrame.same, true);
+});
+test('an iframe made by script has a window before its document loads', () => {
+    const f = document.createElement('iframe');
+    f.name = 'made';
+    f.src = 'res/never-there.html';
+    document.body.appendChild(f);
+    assert.ok(f.contentWindow, 'contentWindow');
+    assert.equal(window.length, 3);
+    assert.ok(window['made'] === f.contentWindow, 'the named property');
+    assert.equal(f.contentWindow.location.href, 'about:blank');
+    assert.equal(f.contentDocument.URL, 'about:blank');
+    f.remove();
+    assert.equal(window.length, 2);
+});
+</script>
+</body>
+</html>

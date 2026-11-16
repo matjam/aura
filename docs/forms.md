@@ -1,0 +1,198 @@
+# Forms
+
+This document covers form controls: their state in C, painting,
+editing, input, submission, the script API, the Mac OS 9 side, and what
+a keystroke costs. Read it before changing a control, text editing,
+focus or submission, or when typing in a page is slow.
+
+Form controls keep their state in C, so typing, clicks and submission
+work with script off, and script reads and writes the same state.
+
+## To drive forms on the host
+
+Use `aura-host chrome` with `--do` actions, run in order after the page
+loads:
+
+| Action | Does |
+|---|---|
+| `clickname:NAME` | clicks the element with that name attribute |
+| `click:X,Y` | clicks a point |
+| `type:TEXT` | types text |
+| `key:[cmd-][shift-][opt-]NAME` | presses a key |
+| `keys:TEXT` | types TEXT and prints the cost of each key |
+| `edit:copy\|cut\|paste:TEXT` | runs an Edit command |
+| `wait:MS` | waits |
+| `shot:FILE.png` | writes a screenshot |
+| `console` | prints the console |
+
+For example, `aura-host chrome --net --tab
+https://html.duckduckgo.com/html/ --do clickname:q --do "type:mac os 9"
+--do key:return --do wait:3000 -o run/ddg.png`.
+
+## To measure a keystroke
+
+- On the host, run `aura-host chrome --tab PAGE --do clickname:NAME
+  --do keys:TEXT`: for each key it prints the time in the event, the
+  idle pass and painting, and the counts from `au_docview_stats` (style
+  passes, elements styled, tree builds, layouts) and the pixels
+  invalidated.
+- In the guest, focus a page field and choose Develop > Page Timings:
+  it types 16 keys and shows milliseconds per key with the restyle and
+  layout counts.
+- `test_keystroke_cost` in `tests/forms` asserts zero of each on a page
+  with `:has()` rules, with and without script listeners.
+
+## Where things are
+
+| File | Holds |
+|---|---|
+| `src/dom/control.c` | control state |
+| `src/layout/controls.c` | painting, points to offsets |
+| `src/page/editing.c` | the portable editing model |
+| `src/page/forms.c` | input: focus, edits, activation |
+| `src/page/formdata.c` | entry lists, encodings, validity |
+| `src/js/natives_forms.c`, `prelude_html.js` | the script API |
+
+## Control state
+
+`src/dom/control.c` gives each input, textarea, select and option an
+`AuControl` on first use (`au_ctl`): the UTF-8 value and its dirty
+flag, the selection as byte offsets (anchor and caret), scroll offsets,
+one undo step, the value at focus (for change), the custom validity
+message, chosen files, the list box cursor and the pressed flag.
+Checkedness is the element state `AU_STATE_CHECKED` with
+`AU_STATE_CHECKED_SET`. Layout reads the value at paint time, so typing
+repaints without a box tree rebuild.
+
+## Painting
+
+`src/layout/controls.c` paints text fields and textareas (placeholder,
+password bullets, selection, a one-pixel caret, soft wrapping and
+scrolling) and maps points to offsets (`au_layout_field_offset_at`,
+`au_layout_field_caret_rect`). A textarea is a replaced box; its
+children are not laid out.
+
+## Editing
+
+`src/page/editing.c` is the portable model: insertion with maxlength
+and single-line rules, deletion by character and word, movement, word
+and line boundaries, and undo (Undo twice redoes).
+
+## Input
+
+`src/page/forms.c` turns keys and mouse events into focus changes,
+edits and activation:
+
+- click and Tab focus (positive tabindex first, then tree order);
+- autofocus at the end of parsing;
+- the caret blink (`au_docview_blink`, which repaints only the caret);
+- checkbox, radio group, select, list box, range, file, details and
+  label behaviour;
+- implicit submission;
+- the Edit commands (`au_docview_edit`).
+
+With the JavaScript runtime running, a click's activation runs in the
+bindings and reaches C through `N.submitForm`; without it
+`au_forms_activate` does the same in C.
+
+## Submission
+
+`src/page/formdata.c` builds the entry list (`au_form_entries_build`)
+and encodes it (urlencoded, multipart with file parts, text/plain), and
+checks validity (`au_form_validity`; pattern goes through the script
+RegExp when the runtime runs).
+
+`form_submit` in `forms.c` applies the formaction, formmethod,
+formenctype, formtarget and formnovalidate attributes, asks before an
+https page sends a form over http, and passes an `AuFormSubmission` to
+`AuDocViewCallbacks.submit`.
+
+`page_doc.c` sends GET through `open_url` and POST to the browser
+(`submit_post`), which adds a history entry and calls
+`au_page_navigate_post`; the fetcher sends the body. Reloading a POST
+result asks first (`AuBrowserHost.confirm`); a history entry of a POST
+result loads with GET.
+
+## Script
+
+`src/js/natives_forms.c` exposes the control state (`N.ctlValue`,
+`N.ctlSel`, `N.ctlFiles` and so on), converting selection offsets
+between UTF-16 and UTF-8. `prelude_html.js` builds the DOM API on them
+(value, selectionStart, setRangeText, files, validity, requestSubmit)
+and the legacy named access (`document.formName`, `form.controlName`,
+`form[0]`, RadioNodeList) through a proxy between `Node.prototype` and
+`EventTarget.prototype`.
+
+Events go in the standard order: keydown, beforeinput, input, keyup,
+change at blur or implicit submission, submit. Enter also fires
+keypress (code 13) before implicit submission.
+
+## The Mac OS 9 shell
+
+- `browserwin.c` maps typed Mac Roman characters to Unicode and passes
+  every key to the page when the address field does not have the focus.
+- `main.c` routes Command-arrows and Command-Delete to the window
+  instead of MenuKey.
+- The Edit menu acts on a focused page field (`page_field_edit`, TEXT
+  scrap in Mac Roman).
+- Selects use `PopUpMenuSelect` (`host_popup`), file inputs
+  `StandardGetFile`, confirms ALRT 136, and the I-beam shows over text
+  fields (`au_bw_text_field_at`).
+- `bw_key` does not paint: the event loop in `main.c` handles up to 8
+  queued keys and then paints once (`idle_all`).
+
+## What a keystroke costs
+
+A character typed into, or deleted from, a text field that stays
+non-empty restyles nothing, builds no box tree, runs no layout and
+invalidates the field's rectangle only. `edited` in `forms.c` restyles
+only when `field_style_state` changes: the field becomes empty or stops
+being empty (`:placeholder-shown`), or its validity bits change.
+
+Measured in the guest on a 400-paragraph page with `:has()` rules:
+
+| | Per key |
+|---|---|
+| Before (a restyle of every element and a layout per key) | 61 to 124 ms |
+| After | 4.5 ms |
+
+### What script does per key still costs
+
+- A change in a subtree that is not in the document marks nothing dirty
+  (`h_dom_changed` in `script.c`).
+- Attributes the box tree never reads (`aria-*`, `data-*`, `role`,
+  `title`, `tabindex`, a hidden input's `value`) restyle without a box
+  tree rebuild (`au_dv_dom_changed`).
+- While a key is handled, `au_dv_turn_end` does not invalidate the page
+  for what listeners changed: `au_docview_key` updates at its end and
+  invalidates the page only if the update changed geometry or raised a
+  paint, so a restyle that computes the same values repaints the field
+  only (`test_keystroke_cost`, "attribute writers").
+
+On live Wikipedia (`aura-host chrome -w 1440 -h 900 --net --tab
+https://en.wikipedia.org/wiki/Mac_OS_9 --do wait:4000 --do
+clickname:search --do wait:3000 --do keys:macint`) the box tree build
+on a key came from the suggestion list's thumbnails: an image whose
+size became known made layout build the tree again and the view
+invalidate the page, at the next update, which a key runs. An image
+change now keeps the tree (see [`layout.md`](layout.md)), and a key
+there restyles 2 elements, builds no tree, runs no layout and
+invalidates the field (439 x 41 pixels).
+
+What remains is the page's own work: when the suggestion list changes,
+its DOM insertions build the tree again, and keys typed while the page
+still loads its search module pay for that loading.
+
+## Tests
+
+- `tests/forms`: editing, encodings, focus, submission, validation,
+  event order.
+- `tests/js/forms.js`: bindings and named access.
+- The forms part of `tests/browser/test_net_page.c`: GET and POST over
+  the fake transport.
+- `tests/page/samples/qa-forms.html`: every control, and a Try it form
+  that shows what it sent.
+
+## Not done
+
+See [`known-gaps.md`](known-gaps.md#forms).

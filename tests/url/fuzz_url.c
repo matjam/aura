@@ -4,6 +4,7 @@
  * output). Under ASan/UBSan it finds memory errors.
  *
  * usage: fuzz_url ITERATIONS SEED */
+#include "../fuzz.h"
 #include "url/url.h"
 
 #include <stdio.h>
@@ -80,6 +81,10 @@ int main(int argc, char **argv)
     char buf[512];
     long notidem = 0;
     for (long it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = it;
+            break;
+        }
         size_t n;
         if (rnd() % 8) {
             const char *s = seeds[rnd() % nseeds];

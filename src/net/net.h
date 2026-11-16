@@ -21,7 +21,7 @@
  * The protocol code is sans I/O: response parsing (http_parse.h), TLS
  * (tls.h), cookies, HSTS and the cache are state machines over bytes and
  * values; only au_net_pump talks to AuNetOps. Everything runs on the main
- * task (see CLAUDE.md, Networking). */
+ * task (see docs/networking.md and docs/mac-os-9-shell.md). */
 #ifndef AURA_NET_H
 #define AURA_NET_H
 
@@ -106,6 +106,14 @@ void au_net_set_cookie_jar(AuNet *net, AuCookieJar *jar);
 void au_net_set_hsts(AuNet *net, AuHsts *hsts);
 void au_net_set_cache(AuNet *net, AuHttpCache *cache);
 AuCookieJar *au_net_cookie_jar(AuNet *net);
+/* document.cookie for the document at url: the cookies script may read
+ * (out is reset; never HttpOnly ones), and a cookie script sets.
+ * top_level_url is the tab's document when url is a nested document's
+ * (third-party blocking and SameSite then apply), NULL for the tab's own
+ * document. Without a jar, or for a URL that does not parse, get gives
+ * nothing and set does nothing. */
+void au_net_document_cookie_get(AuNet *net, const char *url, const char *top_level_url, AuBuf *out);
+void au_net_document_cookie_set(AuNet *net, const char *url, const char *top_level_url, const char *value);
 AuHsts *au_net_hsts(AuNet *net);
 AuHttpCache *au_net_cache(AuNet *net);
 /* The root store for certificate validation (owned by the caller). Without

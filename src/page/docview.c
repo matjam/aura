@@ -35,7 +35,7 @@ static void invalidate_all(AuDocView *dv)
     if (dv->cb.invalidate) {
         float w, h;
         au_layout_document_size(dv->layout, &w, &h);
-        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, (int)w + 1, (int)h + 1});
+        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, au_f2px(w) + 1, au_f2px(h) + 1});
     }
 }
 
@@ -298,7 +298,7 @@ static void images_changed(AuDocView *dv)
         dv->images_dirty = true;
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
-    au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, (int)w + 1, (int)h + 1}, invalidate_fn, dv);
+    au_docimages_invalidate(dv->imgs, dv->layout, (AuIRect){0, 0, au_f2px(w) + 1, au_f2px(h) + 1}, invalidate_fn, dv);
 }
 
 static void images_data(AuDocView *dv, AuImageEntry *e, const void *data, size_t len)
@@ -802,7 +802,7 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
     }
     if (req.kind == AU_RES_OTHER && !req.font) {
         if (dv->script)
-            au_docscript_resource_done(dv->script, req.id, req.data.data, req.data.len, ok);
+            au_docscript_resource_done(dv->script, req.id, &req.data, ok);
         au_buf_free(&req.data);
         maybe_finished(dv);
         return;
@@ -1142,7 +1142,9 @@ void au_docview_begin(AuDocView *dv, const char *url)
     au_free(dv->url);
     au_free(dv->base);
     dv->url = dup(url);
-    dv->base = dup(url);
+    /* A srcdoc or about:blank document in a frame resolves its URLs
+     * against its parent's base URL (HTML: the fallback base URL). */
+    dv->base = dup(dv->parent && (!strcmp(url, "about:srcdoc") || !strcmp(url, "about:blank")) ? dv->parent->base : url);
     if (dv->title[0]) {
         au_free(dv->title);
         dv->title = dup("");
@@ -1334,6 +1336,19 @@ void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit)
         au_docscript_heap(dv->script, used, limit);
 }
 
+void au_docview_script_summary(const AuDocView *dv, AuBuf *out)
+{
+    if (dv->script)
+        au_docscript_memory_summary(dv->script, out);
+}
+
+void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *worker_peak)
+{
+    *page_peak = *worker_peak = 0;
+    if (dv->script)
+        au_docscript_peaks(dv->script, page_peak, worker_peak);
+}
+
 /* Brings styles up to date; returns true if the tree was restyled. */
 static bool update_style(AuDocView *dv)
 {
@@ -1464,8 +1479,8 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height)
     au_docview_update(dv);
     float w, h;
     au_layout_document_size(dv->layout, &w, &h);
-    *width = (int)(w + 0.99f);
-    *height = (int)(h + 0.99f);
+    *width = au_f2px(w + 0.99f);
+    *height = au_f2px(h + 0.99f);
 }
 
 void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
@@ -1507,7 +1522,7 @@ int au_docview_scroll_damage(AuDocView *dv, int ox, int oy, int nx, int ny, AuIR
         int iv[4];
         for (int k = 0; k < 4; k++) {
             float f = v[k] < -1e6f ? -1e6f : v[k] > 1e6f ? 1e6f : v[k];
-            iv[k] = (int)f + (k < 2 ? -1 : 1);
+            iv[k] = au_f2px(f) + (k < 2 ? -1 : 1);
         }
         out[i] = (AuIRect){iv[0], iv[1], iv[2], iv[3]};
     }
@@ -1700,8 +1715,8 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                     AuRect b;
                     int ix = 0, iy = 0;
                     if (au_layout_element_rect(dv->layout, t, &b)) {
-                        ix = ev->x - (int)b.x;
-                        iy = ev->y - (int)b.y;
+                        ix = ev->x - au_f2px(b.x);
+                        iy = ev->y - au_f2px(b.y);
                     }
                     au_forms_activate(dv, t, ix, iy);
                 }
@@ -1795,10 +1810,10 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
         /* No box (display: contents or none): try the first descendant with one. */
         for (AuNode *c = au_node_next(&el->node, &el->node); c; c = au_node_next(c, &el->node))
             if (au_is_element(c) && au_layout_element_rect(dv->layout, au_as_element(c), &r))
-                return (int)r.y;
+                return au_f2px(r.y);
         return -1;
     }
-    return (int)r.y;
+    return au_f2px(r.y);
 }
 
 /* ---- Scripts (see script.c) ---- */
@@ -1806,6 +1821,12 @@ int au_docview_fragment_y(AuDocView *dv, const char *frag)
 void au_docview_set_scripting(AuDocView *dv, bool on)
 {
     dv->scripting = on;
+}
+
+void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worker_bytes)
+{
+    dv->script_mem = page_bytes;
+    dv->worker_mem = worker_bytes;
 }
 
 void au_docview_set_user_agent(AuDocView *dv, const char *ua)

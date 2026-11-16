@@ -1,6 +1,7 @@
 /* Browser preferences. See prefs.h. */
 #include "prefs.h"
 #include "credits.h"
+#include "scriptmem.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,8 @@ static const Key keys[] = {
     I("fonts.size_monospace", font_size_mono, 6, 72),
     I("fonts.minimum_size", font_size_min, 0, 36),
     B("content.javascript", javascript),
+    I("content.script_memory_kb", script_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    I("content.worker_memory_kb", worker_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     B("content.images", load_images),
     B("content.block_popups", block_popups),
     E("privacy.cookies", cookies, cookie_names),
@@ -232,6 +235,9 @@ bool au_prefs_set(AuPrefs *p, const char *key, const char *value)
             if (v > k->max)
                 v = k->max;
             *int_field(p, k) = (int)v;
+            /* 0 is Automatic; any other script memory limit has a floor */
+            p->script_memory_kb = au_script_memory_clamp(p->script_memory_kb);
+            p->worker_memory_kb = au_script_memory_clamp(p->worker_memory_kb);
         }
         break;
     }

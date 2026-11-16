@@ -1,9 +1,18 @@
 # Developer tools: Report a Problem, System Status and the Develop menu
 
-These notes replace the "Developer tools" section of `CLAUDE.md` and
-add to "Guest testing", "Browser chrome" and "Networking" where those
-name Network Status, Page Timings or Benchmark. They were written on
-the `devmenu` branch on 2026-11-15.
+These notes were written on the `devmenu` branch on 2026-11-15, to be
+folded into the other documents. They replace most of
+`docs/developer-tools.md`. The documents below still name the three
+items that are gone (Network Status, Page Timings, Benchmark); change
+each as the table says.
+
+| Document | Names | Now |
+|---|---|---|
+| `developer-tools.md` (lines 13, 38, 43, 54) | the debug items | this file |
+| `browser-chrome.md` (152), `forms.md` (39), `memory.md` (55), `performance.md` (52) | Develop > Page Timings | Develop > Run Timing Test, whose table is in the Performance window; free memory is in Performance and System Status |
+| `content-blocking.md` (117), `mac-os-9-shell.md` (84, 119), `guest-testing.md` (257), `memory.md` (56), `performance.md` (54), `tools/guest-env.sh` | Develop > Network Status | Develop > System Status: the Clock, Network, HTTP cache and Content blocking sections |
+| `performance.md` (51) | Develop > Benchmark | Develop > Tests > Paint Benchmark, whose table is in System Status; font registration time is in its Fonts section |
+| `developer-tools.md` | "View Source still opens a `view-source:` tab" | the Page Source window on Mac OS 9 |
 
 ## The Develop menu
 

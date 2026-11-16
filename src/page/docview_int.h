@@ -98,6 +98,7 @@ struct AuDocView {
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     /* scripts (script.c) */
     AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
+    size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */

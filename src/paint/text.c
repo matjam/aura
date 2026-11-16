@@ -260,7 +260,7 @@ static GlyphEntry *rasterize(const AuFontFace *f, uint16_t glyph, float size, ui
             if (y > y1)
                 y1 = y;
         }
-        AuIRect area = {(int)floorf(x0), (int)floorf(y0), (int)ceilf(x1) + 1, (int)ceilf(y1) + 1};
+        AuIRect area = {au_f2px(floorf(x0)), au_f2px(floorf(y0)), au_f2px(ceilf(x1)) + 1, au_f2px(ceilf(y1)) + 1};
         int w = area.x1 - area.x0, h = area.y1 - area.y0;
         /* A sane bound: glyphs larger than this (bad fonts, absurd sizes)
          * are not drawn. */

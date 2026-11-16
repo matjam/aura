@@ -26,6 +26,7 @@
 #include "credits.h"
 #include "history.h"
 #include "netlog.h"
+#include "scriptmem.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
 #include "../net/dataurl.h"
@@ -1055,6 +1056,26 @@ static void dv_scroll_to(void *ctx, AuDocView *dv, int x, int y)
         request_scroll(ctx, x, y);
 }
 
+/* document.cookie: the scheme's fetcher owns the cookie jar. A view that
+ * is not the page's current one (a kept document running pagehide)
+ * reads nothing and sets nothing. */
+static char *dv_get_cookie(void *ctx, AuDocView *dv, const char *url, bool nested)
+{
+    AuPage *p = ctx;
+    const AuPageFetcher *fe = dv == p->dv ? fetcher_for(p, url) : NULL;
+    if (!fe || !fe->get_cookie)
+        return NULL;
+    return fe->get_cookie(fe->ctx, url, nested ? p->url : NULL);
+}
+
+static void dv_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value)
+{
+    AuPage *p = ctx;
+    const AuPageFetcher *fe = dv == p->dv ? fetcher_for(p, url) : NULL;
+    if (fe && fe->set_cookie)
+        fe->set_cookie(fe->ctx, url, nested ? p->url : NULL, value);
+}
+
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
 {
     AuPage *p = ctx;
@@ -1470,6 +1491,8 @@ static void new_view(AuPage *p)
     dcb.console = dv_console;
     dcb.random = p->env.random ? dv_random : NULL;
     dcb.coro = p->env.coro;
+    dcb.get_cookie = dv_get_cookie;
+    dcb.set_cookie = dv_set_cookie;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;
@@ -1824,6 +1847,16 @@ static void begin_doc(AuPage *p, const char *url)
     p->internal = false;
     p->interim = false;
     au_docview_set_scripting(p->dv, !p->env.prefs || p->env.prefs->javascript);
+    {
+        /* Script memory limits for this document's runtime and workers:
+         * the preferences, or what Automatic gives with the memory free
+         * now. A change of preference applies from the next load. */
+        uint32_t page_kb, worker_kb;
+        au_script_memory_limits(p->env.prefs ? p->env.prefs->script_memory_kb : 0,
+                                p->env.prefs ? p->env.prefs->worker_memory_kb : 0,
+                                p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0, &page_kb, &worker_kb);
+        au_docview_set_script_memory(p->dv, (size_t)page_kb * 1024, (size_t)worker_kb * 1024);
+    }
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
@@ -3110,6 +3143,16 @@ AuPerf *au_page_perf(AuPage *p)
 void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit)
 {
     au_docview_script_memory(p->dv, used, limit);
+}
+
+void au_page_script_summary(const AuPage *p, AuBuf *out)
+{
+    au_docview_script_summary(p->dv, out);
+}
+
+void au_page_script_peaks(const AuPage *p, size_t *page_peak, size_t *worker_peak)
+{
+    au_docview_script_peaks(p->dv, page_peak, worker_peak);
 }
 
 uint32_t au_page_console_total(const AuPage *p)

@@ -99,22 +99,24 @@ one. This is how I would like a fix to arrive, with or without one:
    - `./build.sh test`, which builds for your machine and runs the
      tests.
    - The tests under AddressSanitizer and UBSan, for any change to code
-     that reads data from the network or a file (`CLAUDE.md`, "Build
-     and test").
+     that reads data from the network or a file (`docs/building.md`,
+     "Other build trees").
    - `./build.sh ppc`, which builds the Mac OS 9 application. It must
      build without warnings.
    - The application itself, in QEMU or on a real Mac. Say which, and
      which Mac OS version.
 6. Start the commit subject with `fix:` so the change is listed in the
-   next release (`CLAUDE.md`, "Conventions").
+   next release (`docs/conventions.md`, "Commit messages").
 
 If you or your assistant could not test something, say so. An honest
 "not run on Mac OS 9" is better than a claim nobody checked.
 
-`README.md` says how to build Aura. `CLAUDE.md` is the full development
-guide: the conventions, how each part works, how to set up and drive
-the test machine, what is not done yet, and what was learned on the
-way. Point your assistant at it before it changes anything.
+`README.md` says how to build Aura. `CLAUDE.md` is the starting point
+for development: it states the rules every change follows and names the
+document under `docs/` for each kind of work (the conventions, how each
+part works, how to set up and drive the test machine, what is not done
+yet, and what was learned on the way). Point your assistant at it
+before it changes anything.
 
 A few rules that reviews will hold to:
 

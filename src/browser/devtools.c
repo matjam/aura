@@ -314,8 +314,26 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
         snprintf(note, sizeof note, "%s kept for Back and Forward", s_count(a, sizeof a, (unsigned long)au_page_kept_count(p)));
         mem_row(out, "Kept documents", (uint32_t)(au_page_kept_bytes(p) / 1024), 0, note);
     }
-    if (h && h->have_memory)
+    if (h && h->have_memory) {
         mem_row(out, "Temporary memory", h->temp_free_kb, 0, "free");
+        /* What the allocator took from temporary memory because the heap
+         * was short. */
+        if (h->temp_used_kb)
+            mem_row(out, "  taken by Aura", h->temp_used_kb, 0, "of temporary memory, for the heap");
+    }
+    /* Each script runtime, document and worker of the page. */
+    {
+        AuBuf rt;
+        au_buf_init(&rt);
+        au_page_script_summary(p, &rt);
+        if (rt.len) {
+            au_report_heading(out, "Script runtimes");
+            au_buf_append(out, rt.data, rt.len);
+            if (rt.data[rt.len - 1] != '\n')
+                au_buf_putc(out, '\n');
+        }
+        au_buf_free(&rt);
+    }
 
     if (h && h->have_net) {
         au_report_heading(out, "Network");

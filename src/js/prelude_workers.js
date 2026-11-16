@@ -37,7 +37,11 @@ class Worker extends EventTarget {
                 done: (ok, msg) => {
                     if (!this._id) return;
                     if (!ok || status < 200 || status > 299) { fail('could not load ' + href + (msg ? ' (' + msg + ')' : '')); return; }
-                    N.workerSource(this._id, N.utf8Decode(concatBytes(chunks), false, true), final);
+                    /* the bytes go over as they are and the native empties
+                     * them: a large script is not also held as a string */
+                    const bytes = concatBytes(chunks);
+                    chunks.length = 0;
+                    N.workerSource(this._id, bytes, final);
                 },
             });
         } catch (e) {

@@ -36,9 +36,16 @@ records where the code came from and how to update it.
   v0.18.0 swaps nowhere, so the build tool `tools/jsprelude` writes the
   prelude's bytecode byte-swapped for the PowerPC build, `0006`
   one shared copy of the source text for a function and the functions
-  nested in it (each used to keep its own copy), and `0007`
+  nested in it (each used to keep its own copy), `0007`
   `JS_SetTimeSource`, through which the embedder supplies Date's clock
-  and time zone offset (`src/js/clock.h`).
+  and time zone offset (`src/js/clock.h`), and `0008` one source text
+  per script: the parser copies no function text while parsing, a
+  script made mostly of functions keeps one text that all its functions
+  point into, and the contexts of a runtime that compile the same
+  script share that text, and `0009` bytecode that names positions in
+  the script's text (`JS_WRITE_OBJ_SOURCE_REF`, `JS_ReadObjectSource`),
+  with which `src/js/runtime.c` compiles a large script once per page,
+  and a parser that trims each function's bytecode buffer.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

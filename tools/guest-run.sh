@@ -39,7 +39,7 @@ running() {
 
 prepare_disk() {
   if [ ! -f "$AURA_BASE" ]; then
-    echo "guest-run: no base image $AURA_BASE (see Guest testing in CLAUDE.md)" >&2
+    echo "guest-run: no base image $AURA_BASE (see docs/building.md, Disk images)" >&2
     exit 1
   fi
   stamp=$(base_stamp)

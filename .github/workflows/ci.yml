@@ -65,6 +65,11 @@ jobs:
           -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
       - name: Build
         run: cmake --build build/asan
+      - name: Fetch Domato
+        # The DOM fuzzer's page generator, at the commit pinned in the
+        # script; the js_domato test runs 30 of its pages and skips
+        # without it.
+        run: tests/domato/fetch-domato.sh
       - name: Test
         env:
           # Leak detection is off, as it is on macOS, where the sanitizer

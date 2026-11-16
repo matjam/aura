@@ -152,6 +152,38 @@ static bool h_random(void *ctx, void *buf, size_t len)
     return cb->random && cb->random(cb->ctx, s->dv, buf, len);
 }
 
+/* document.cookie. A document without a network URL of its own
+ * (about:blank, srcdoc) has its parent's origin and so its cookies. */
+static const char *cookie_url(AuDocScript *s)
+{
+    AuDocView *dv = s->dv;
+    for (;;) {
+        const char *u = au_docview_url(dv);
+        if (!dv->parent || (strncmp(u, "about:", 6) != 0 && strncmp(u, "data:", 5) != 0))
+            return u;
+        dv = dv->parent;
+    }
+}
+
+static char *h_get_cookie(void *ctx, const char *url)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    (void)url;
+    if (!cb->get_cookie)
+        return NULL;
+    return cb->get_cookie(cb->ctx, au_dv_top(s->dv), cookie_url(s), s->dv->parent != NULL);
+}
+
+static void h_set_cookie(void *ctx, const char *url, const char *value)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    (void)url;
+    if (cb->set_cookie)
+        cb->set_cookie(cb->ctx, au_dv_top(s->dv), cookie_url(s), s->dv->parent != NULL, value);
+}
+
 static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
 {
     AuDocScript *s = ctx;
@@ -524,6 +556,15 @@ static bool ensure_js(AuDocScript *s)
     au_js_settings_default(&set);
     if (au_dv_user_agent(s->dv))
         set.user_agent = au_dv_user_agent(s->dv);
+    /* The limits the embedder set for the page (au_docview_set_script_memory);
+     * a nested document's context lives in the page's runtime. */
+    {
+        AuDocView *topv = au_dv_top(s->dv);
+        if (topv->script_mem)
+            set.memory_limit = topv->script_mem;
+        if (topv->worker_mem)
+            set.worker_memory_limit = topv->worker_mem;
+    }
     AuJsHooks h;
     memset(&h, 0, sizeof h);
     h.ctx = s;
@@ -547,6 +588,8 @@ static bool ensure_js(AuDocScript *s)
     if (au_dv_callbacks(s->dv)->random)
         h.random = h_random;
     h.coro = au_dv_callbacks(s->dv)->coro;
+    h.get_cookie = h_get_cookie;
+    h.set_cookie = h_set_cookie;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
@@ -650,6 +693,17 @@ static void run_classic(AuDocScript *s, PendingScript *p)
 {
     if (!ensure_js(s))
         return;
+    /* Frame elements the parser has inserted since the frame list was
+     * last brought up to date (that happens between parser chunks, and
+     * the parser's insertions do not mark the list): a script right
+     * after an iframe must see its window (frames.length, window[0], a
+     * frame by name, contentWindow), which the standard gives an initial
+     * about:blank document at once. The check walks the document, so it
+     * is made only while the parser runs. */
+    if (s->parser && !au_html_parser_done(s->parser)) {
+        s->dv->frames_dirty = true;
+        au_frames_sync(s->dv);
+    }
     if (p->failed) {
         fire_simple(s, p->el, "error");
         return;
@@ -658,7 +712,11 @@ static void run_classic(AuDocScript *s, PendingScript *p)
     snprintf(s->perf_label, sizeof s->perf_label, "%s", url);
     if (p->muted && p->url)
         au_js_mute_script(s->js, p->url);
-    au_js_run_classic(s->js, p->el, p->text ? p->text : "", p->len, url, 1);
+    /* The runtime takes the text and frees it once it is compiled. */
+    size_t len = p->text ? p->len : 0;
+    char *text = p->text ? p->text : au_strndup("", 0);
+    p->text = NULL;
+    au_js_run_classic_take(s->js, p->el, text, len, url, 1);
     if (p->url)
         fire_simple(s, p->el, "load");
 }
@@ -915,8 +973,10 @@ void au_docscript_resource_head(AuDocScript *s, uint32_t id, int status, const c
         }
 }
 
-bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, size_t len, bool ok)
+bool au_docscript_resource_done(AuDocScript *s, uint32_t id, AuBuf *body, bool ok)
 {
+    const void *data = body->data;
+    size_t len = body->len;
     const char *type = NULL;
     bool head_sent = false;
     AuJs *to = NULL;
@@ -964,8 +1024,12 @@ bool au_docscript_resource_done(AuDocScript *s, uint32_t id, const void *data, s
     p->failed = !ok || p->bad_status;
     ok = !p->failed;
     if (ok) {
-        p->text = au_strndup(data ? data : "", len);
-        p->len = len;
+        /* the response's buffer becomes the script's text: no second copy */
+        p->text = au_buf_take(body, &p->len);
+        if (!p->text) {
+            p->text = au_strndup("", 0);
+            p->len = 0;
+        }
     }
     enter(s);
     if (where == 1) {
@@ -1145,6 +1209,23 @@ void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit)
     au_js_stats(s->js, &st);
     *used = st.memory_used;
     *limit = st.memory_limit;
+}
+
+void au_docscript_memory_summary(const AuDocScript *s, AuBuf *out)
+{
+    if (s && s->js)
+        au_js_memory_summary(s->js, out);
+}
+
+void au_docscript_peaks(const AuDocScript *s, size_t *page_peak, size_t *worker_peak)
+{
+    *page_peak = *worker_peak = 0;
+    if (!s || !s->js)
+        return;
+    AuJsStats st;
+    au_js_stats(s->js, &st);
+    *page_peak = st.memory_peak;
+    *worker_peak = st.worker_peak;
 }
 
 bool au_docscript_eval(AuDocScript *s, const char *src, AuBuf *out)

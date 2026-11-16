@@ -362,6 +362,25 @@ static void fc_console(void *ctx, AuDocView *dv, int level, const char *text, si
         top->cb.console(top->cb.ctx, top, level, text, len);
 }
 
+/* document.cookie of a nested document: the embedder gets the top-level
+ * view and nested set (script.c passes the document's URL). */
+static char *fc_get_cookie(void *ctx, AuDocView *dv, const char *url, bool nested)
+{
+    AuDocView *top = au_dv_top(((AuFrame *)ctx)->owner);
+    (void)dv;
+    (void)nested;
+    return top->cb.get_cookie ? top->cb.get_cookie(top->cb.ctx, top, url, true) : NULL;
+}
+
+static void fc_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value)
+{
+    AuDocView *top = au_dv_top(((AuFrame *)ctx)->owner);
+    (void)dv;
+    (void)nested;
+    if (top->cb.set_cookie)
+        top->cb.set_cookie(top->cb.ctx, top, url, true, value);
+}
+
 static bool fc_random(void *ctx, AuDocView *dv, void *buf, size_t len)
 {
     (void)dv;
@@ -439,6 +458,8 @@ static AuDocView *frame_view(AuFrame *f)
     if (top->cb.random)
         cb.random = fc_random;
     cb.coro = top->cb.coro;
+    cb.get_cookie = fc_get_cookie;
+    cb.set_cookie = fc_set_cookie;
     cb.popup = fc_popup;
     cb.choose_file = fc_choose_file;
     cb.confirm = fc_confirm;
@@ -1099,16 +1120,25 @@ void au_frames_sync(AuDocView *dv)
     uint32_t n = 0, cap = 0;
     bool changed = false;
     /* The document's frame elements in tree order. */
+    uint32_t left = nold; /* old records not met yet */
     for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+        /* Every old record is placed and no new one may be made: the rest
+         * of the document changes nothing. Without this each sync looked
+         * every further frame element up in the old list, and a script
+         * that kept inserting iframes (one sync per insertion) slowed
+         * down so fast that its time limit was never checked. */
+        if (left == 0 && n >= 4 * AU_FRAMES_MAX)
+            break;
         int kind = frame_kind(c);
         if (kind < 0)
             continue;
         AuElement *el = au_as_element(c);
         AuFrame *f = NULL;
-        for (uint32_t i = 0; i < nold; i++)
+        for (uint32_t i = 0; left && i < nold; i++)
             if (old[i] && old[i]->el == el) {
                 f = old[i];
                 old[i] = NULL;
+                left--;
                 if (i != n)
                     changed = true;
                 break;
@@ -1138,6 +1168,11 @@ void au_frames_sync(AuDocView *dv)
     dv->frames = list;
     dv->nframes = n;
     dv->frames_cap = cap;
+    /* The window gets its indexed and named frames before any frame's
+     * document starts: a srcdoc document's script runs inside the loop
+     * below and may look its siblings up through parent.frames[name]. */
+    if (changed && dv->script)
+        au_docscript_frames_changed(dv->script);
     /* New frames and frames whose attributes changed load. */
     for (uint32_t i = 0; i < dv->nframes; i++) {
         AuFrame *f = dv->frames[i];

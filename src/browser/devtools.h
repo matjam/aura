@@ -74,6 +74,7 @@ typedef struct AuDevHostInfo {
     bool have_memory;      /* Mac OS 9: the application heap and temporary memory */
     uint32_t partition_kb; /* the application heap's size; 0 when not known */
     uint32_t heap_free_kb, heap_block_kb, temp_free_kb;
+    uint32_t temp_used_kb; /* temporary memory the allocator took because the heap was short */
     bool have_net;
     uint32_t http_cache_kb, http_cache_max_kb, http_cache_entries;
     unsigned long cache_fresh, cache_history, cache_stale, cache_304, cache_missed, cache_stored, cache_disk;

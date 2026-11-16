@@ -25,6 +25,14 @@ void au_set_oom_handler(void (*handler)(size_t wanted));
  * again while it runs. */
 void au_set_release_handler(bool (*release)(size_t wanted));
 
+/* Whether the platform is too short of memory to give n more bytes to a
+ * user that can do without (the JavaScript engine: it then fails the
+ * script with an out-of-memory error, while there is still memory for the
+ * page itself). The platform installs the check; without one the answer
+ * is always no. */
+void au_set_low_memory_check(bool (*low)(size_t n));
+bool au_memory_low(size_t n);
+
 /* ---- Non-fatal allocation ----
  * For allocators that must survive running out, such as the JavaScript
  * engine's, which turns a failed allocation into a script out-of-memory
@@ -129,6 +137,40 @@ static inline bool au_is_alpha(int c) { return (c >= 'a' && c <= 'z') || (c >= '
 static inline bool au_is_hex(int c) { return au_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 static inline int au_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 bool au_ieq(const char *a, size_t alen, const char *b, size_t blen); /* ASCII case-insensitive */
+
+/* ---- stack use ----
+ * Mac OS 9 gives Aura a small stack (see main.c), and layout calls itself
+ * once per level of nested boxes. A function with large locals that the
+ * compiler inlines adds them to its caller's frame for the whole call:
+ * AU_NOINLINE keeps such a function out of a caller that recurses. */
+#if defined(__GNUC__)
+#define AU_NOINLINE __attribute__((noinline))
+#else
+#define AU_NOINLINE
+#endif
+
+/* ---- float to int ----
+ * A cast of a float outside int's range (or NaN) is undefined, and pages
+ * reach every size and offset with values such as 1e38px. au_f2i
+ * saturates at the ends of int's range; au_f2px saturates at plus and
+ * minus 2^29, for pixel coordinates, so that the difference of two
+ * results and a result plus a small pad still fit an int. NaN gives 0. */
+static inline int au_f2i(float v)
+{
+    if (v >= 2147483520.0f)
+        return 2147483520;
+    if (v <= -2147483648.0f)
+        return (int)(-2147483647 - 1);
+    return v != v ? 0 : (int)v;
+}
+static inline int au_f2px(float v)
+{
+    if (v >= 536870912.0f)
+        return 536870912;
+    if (v <= -536870912.0f)
+        return -536870912;
+    return v != v ? 0 : (int)v;
+}
 
 /* ---- Atoms ----
  * An atom is an interned string: equal strings give equal atoms, so names

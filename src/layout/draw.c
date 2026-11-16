@@ -428,7 +428,7 @@ static void dashed_side(AuCanvas *c, AuRect box, int side, float w, uint32_t col
     float dash = dotted ? w : 2 * w, gap = w;
     if (dash <= 0)
         return;
-    int n = (int)((len + gap) / (dash + gap));
+    int n = au_f2px((len + gap) / (dash + gap));
     if (n < 1)
         n = 1;
     if (n > 4000)
@@ -923,8 +923,8 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     const AuSurface *px = NULL;
     if (gradient) {
         /* No intrinsic size: auto is the origin box (CSS Backgrounds 3). */
-        iw = (int)ceilf(origin_box.w);
-        ih = (int)ceilf(origin_box.h);
+        iw = au_f2px(ceilf(origin_box.w));
+        ih = au_f2px(ceilf(origin_box.h));
         if (iw <= 0 || ih <= 0)
             return;
     } else {
@@ -968,7 +968,7 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         /* A vector image is drawn at the tile size. */
         char abs[2048];
         if (P->L->env.resolve_url && P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs))
-            P->L->env.image_use(P->L->env.ctx, abs, (int)ceilf(tw), (int)ceilf(th));
+            P->L->env.image_use(P->L->env.ctx, abs, au_f2px(ceilf(tw)), au_f2px(ceilf(th)));
     }
     float px0 = origin_box.x + bg_len(ly->position_x, origin_box.w - tw) * 1;
     float py0 = origin_box.y + bg_len(ly->position_y, origin_box.h - th);
@@ -1793,7 +1793,7 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
             bool crop = ob.x < cb.x - 0.01f || ob.y < cb.y - 0.01f || ob.x + ob.w > cb.x + cb.w + 0.01f ||
                         ob.y + ob.h > cb.y + cb.h + 0.01f;
             if (r->url && P->L->env.image_use && ob.w >= 1 && ob.h >= 1 && ob.w <= 8192 && ob.h <= 8192)
-                P->L->env.image_use(P->L->env.ctx, r->url, (int)ceilf(ob.w), (int)ceilf(ob.h));
+                P->L->env.image_use(P->L->env.ctx, r->url, au_f2px(ceilf(ob.w)), au_f2px(ceilf(ob.h)));
             const AuSurface *px = r->pixels;
             if (crop)
                 au_canvas_clip_push(P->c, cb);
@@ -2283,8 +2283,14 @@ static void paint_children(PCtx *P, LBox *parent, float ox, float oy, int phase)
             c->inner != LI_TABLE_CELL)
             continue;
         if (c->kind == LK_INLINE) {
-            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED))
+            /* Inline boxes nest as deeply as the page's markup: the same
+             * depth limit as blocks, or thousands of nested spans
+             * overflow the stack. */
+            if (phase == PH_FLOAT && !(c->flags & LF_LAYERED) && P->depth <= L_MAX_DEPTH) {
+                P->depth++;
                 paint_children(P, c, ox, oy, phase);
+                P->depth--;
+            }
             continue;
         }
         if (c->kind != LK_BLOCK)

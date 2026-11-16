@@ -12,6 +12,7 @@
  *   aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--tab URL]...
  *       Renders a browser window (chrome and stub page) as a PNG. See
  *       usage() for the options. */
+#include "browser/scriptmem.h"
 #include "host.h"
 #include "fontdir.h"
 #include "png.h"
@@ -123,7 +124,7 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
-            "                        [--net] [--no-doc-cache] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
@@ -132,7 +133,9 @@ static int usage(void)
             "                        the documents kept for Back and Forward, DNS lookups)\n"
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
             "                        in the page) save:FILE (the page source) console;\n"
-            "                        --no-doc-cache makes Back and Forward load again)\n"
+            "                        --no-doc-cache makes Back and Forward load again;\n"
+            "                        --script-mem MB and --worker-mem MB set the script memory limits of a\n"
+            "                        page and of a worker, else Automatic)\n"
             "                        (developer tools: netlog[:details] perf eval:EXPR source[:FIRST,COUNT]\n"
             "                        devshot:source|console|network|perf:FILE.png)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
@@ -374,6 +377,7 @@ typedef struct ChromeOpts {
     int scroll_bench; /* steps of the scroll benchmark; 0 for none */
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
+    int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
@@ -859,7 +863,7 @@ static bool host_random(void *ctx, void *buf, size_t len)
 
 static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
 {
-    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {NULL, host_ms, host_now, host_read_url, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     host.random = host_random;
     host.coro = au_host_coro_ops();
     if (o->scroll_bench) {
@@ -873,6 +877,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     b->site_icons = true;
     if (o->no_doc_cache)
         b->prefs.document_cache_pages = 0;
+    if (o->script_mem_mb)
+        b->prefs.script_memory_kb = au_script_memory_clamp(o->script_mem_mb * 1024);
+    if (o->worker_mem_mb)
+        b->prefs.worker_memory_kb = au_script_memory_clamp(o->worker_mem_mb * 1024);
     /* --net: http and https through the network stack and page fetcher,
      * as the Mac application does; without it they show the stand-in. */
     AuHostSession ses;
@@ -1088,6 +1096,10 @@ int main(int argc, char **argv)
                 o.no_shift = true;
             else if (!strcmp(a, "--no-doc-cache"))
                 o.no_doc_cache = true;
+            else if (!strcmp(a, "--script-mem") && i + 1 < argc)
+                o.script_mem_mb = atoi(argv[++i]);
+            else if (!strcmp(a, "--worker-mem") && i + 1 < argc)
+                o.worker_mem_mb = atoi(argv[++i]);
             else if (!strcmp(a, "--no-entropy"))
                 host_no_entropy = true;
             else if (!strcmp(a, "--mouse") && i + 2 < argc) {

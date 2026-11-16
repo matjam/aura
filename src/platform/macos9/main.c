@@ -85,15 +85,164 @@ static void oom_handler(size_t wanted)
 }
 
 /* Platform memory for the pooled allocator (au_heap_enable): slabs and
- * large blocks are pointer blocks in the application heap. */
+ * large blocks.
+ *
+ * They are pointer blocks in the application heap while it has room, and
+ * come from temporary memory (the rest of the machine's memory) when it
+ * is short: less than HEAP_FLOOR would stay free, or NewPtr fails. So a
+ * page that needs more than the partition holds can still run on a
+ * machine with memory to spare, and the Toolbox keeps the floor.
+ *
+ * Temporary memory is taken a TEMP_CHUNK at a time (one locked handle),
+ * and blocks smaller than half a chunk are cut from it in order: a
+ * script heap is thousands of 4 KB blocks, and a handle for each would
+ * fill the system's handle tables. A chunk is returned when its last
+ * block is freed; space inside a chunk is not reused before that. Larger
+ * blocks get a handle each.
+ *
+ * Every block starts with an 8-byte header that says where it came from. */
+#define HEAP_FLOOR (2L * 1024 * 1024)
+#define TEMP_CHUNK (256L * 1024)
+
+typedef struct TempChunk {
+    Handle h;
+    long live;  /* blocks in use */
+    long used;  /* bytes handed out, the chunk's own header included */
+    struct TempChunk *prev, *next;
+} TempChunk;
+
+typedef struct PlatHdr {
+    void *owner; /* NULL: a pointer block; else the Handle, or the TempChunk */
+    long chunked; /* 1: owner is a TempChunk */
+} PlatHdr;
+
+static TempChunk *temp_chunks; /* the newest first: it is the one being filled */
+static long temp_heap_bytes;   /* temporary memory the allocator holds */
+
+long mac_heap_temp_bytes(void)
+{
+    return temp_heap_bytes;
+}
+
+static Handle temp_handle(long n)
+{
+    OSErr err = noErr;
+    Handle h = TempNewHandle((Size)n, &err);
+    if (!h || err != noErr)
+        return NULL;
+    HLock(h);
+    temp_heap_bytes += n;
+    return h;
+}
+
+static void *temp_get(size_t n)
+{
+    long need = (long)((n + sizeof(PlatHdr) + 7) & ~(size_t)7);
+    if (need > TEMP_CHUNK / 2) {
+        Handle h = temp_handle(need);
+        if (!h)
+            return NULL;
+        PlatHdr *hd = (PlatHdr *)*h;
+        hd->owner = h;
+        hd->chunked = 0;
+        return hd + 1;
+    }
+    TempChunk *c = temp_chunks;
+    if (!c || c->used + need > TEMP_CHUNK) {
+        Handle h = temp_handle(TEMP_CHUNK);
+        if (!h)
+            return NULL;
+        c = (TempChunk *)*h;
+        c->h = h;
+        c->live = 0;
+        c->used = (long)((sizeof(TempChunk) + 7) & ~(size_t)7);
+        c->prev = NULL;
+        c->next = temp_chunks;
+        if (temp_chunks)
+            temp_chunks->prev = c;
+        temp_chunks = c;
+    }
+    PlatHdr *hd = (PlatHdr *)((char *)c + c->used);
+    c->used += need;
+    c->live++;
+    hd->owner = c;
+    hd->chunked = 1;
+    return hd + 1;
+}
+
 static void *heap_get(size_t n)
 {
-    return NewPtr((Size)n);
+    Ptr p = NULL;
+    if (FreeMem() >= (long)(n + sizeof(PlatHdr)) + HEAP_FLOOR)
+        p = NewPtr((Size)(n + sizeof(PlatHdr)));
+    if (!p) {
+        void *t = temp_get(n);
+        if (t)
+            return t;
+        p = NewPtr((Size)(n + sizeof(PlatHdr))); /* no temporary memory: the floor goes too */
+        if (!p)
+            return NULL;
+    }
+    PlatHdr *hd = (PlatHdr *)p;
+    hd->owner = NULL;
+    hd->chunked = 0;
+    return hd + 1;
 }
 
 static void heap_release(void *p)
 {
-    DisposePtr((Ptr)p);
+    PlatHdr *hd = (PlatHdr *)p - 1;
+    if (!hd->owner) {
+        DisposePtr((Ptr)hd);
+    } else if (!hd->chunked) {
+        Handle h = (Handle)hd->owner;
+        temp_heap_bytes -= GetHandleSize(h);
+        HUnlock(h);
+        DisposeHandle(h);
+    } else {
+        TempChunk *c = (TempChunk *)hd->owner;
+        if (--c->live > 0)
+            return;
+        if (c == temp_chunks && c->next == NULL) {
+            /* the only chunk: keep it and start again at its beginning */
+            c->used = (long)((sizeof(TempChunk) + 7) & ~(size_t)7);
+            return;
+        }
+        if (c->prev)
+            c->prev->next = c->next;
+        else
+            temp_chunks = c->next;
+        if (c->next)
+            c->next->prev = c->prev;
+        Handle h = c->h;
+        temp_heap_bytes -= TEMP_CHUNK;
+        HUnlock(h);
+        DisposeHandle(h);
+    }
+}
+
+/* What the application can still get: the free application heap and free
+ * temporary memory. The Automatic script memory limits follow it
+ * (browser/scriptmem.h). */
+uint32_t mac_memory_free_kb(void)
+{
+    long a = FreeMem(), t = (long)TempFreeMem();
+    if (a < 0)
+        a = 0;
+    if (t < 0)
+        t = 0;
+    return (uint32_t)(a / 1024) + (uint32_t)(t / 1024);
+}
+
+/* The script engine asks before it takes more memory (au_memory_low):
+ * when less than this would be left for the page's documents, layout and
+ * images, the script gets an out-of-memory error instead, which the page
+ * survives; au_alloc running out does not. */
+#define SCRIPT_RESERVE_KB (3L * 1024)
+
+static bool low_memory(size_t n)
+{
+    return (long)mac_memory_free_kb() < SCRIPT_RESERVE_KB + (long)(n / 1024);
 }
 
 /* Low memory: before au_alloc gives up, the documents kept for Back and
@@ -910,9 +1059,13 @@ static void idle_all(void)
 int main(void)
 {
     /* The default stack is small, and a stack that overflows runs into
-     * the top of the heap without any error. Give it 256 KB before the
-     * heap takes the rest of the partition. */
-    SetApplLimit(GetApplLimit() - 256 * 1024);
+     * the top of the heap without any error. Give it 1 MB before the
+     * heap takes the rest of the partition: script may use 512 KB of it
+     * before it gets a RangeError (AuJsSettings.stack_limit), and layout
+     * called from script needs up to 180 KB more at its depth limit
+     * (L_MAX_DEPTH nested inline blocks at 1.8 KB a level). With 256 KB
+     * a page whose script recursed without end froze the machine. */
+    SetApplLimit(GetApplLimit() - 1024 * 1024);
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();
@@ -932,6 +1085,7 @@ int main(void)
     reserve = NewHandle(64 * 1024);
     au_set_oom_handler(oom_handler);
     au_set_release_handler(release_caches);
+    au_set_low_memory_check(low_memory);
 
     AEInstallEventHandler(kCoreEventClass, kAEOpenApplication, NewAEEventHandlerUPP(ae_open_app), 0, false);
     AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, NewAEEventHandlerUPP(ae_open_docs), 0, false);
