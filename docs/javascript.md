@@ -634,14 +634,130 @@ a document view).
   chrome --no-entropy` answers as an unready pool.
 - `tests/browser/test_crypto.c` covers a ready source, an unready one
   and a host without one (no `crypto` object).
-- `crypto.subtle` has `digest` (SHA-1, SHA-256, SHA-384, SHA-512) and
-  HMAC with raw keys (`importKey`, `generateKey`, `exportKey`, `sign`,
-  `verify`); every other algorithm and operation rejects with
-  NotSupportedError (AES, RSA, ECDSA, PBKDF2 and HKDF are what pages
-  ask for next).
+
+### crypto.subtle
+
+To change `crypto.subtle`, work in `src/js/subtle.js` (algorithm
+normalization, key types, usages and extractability, and the key
+formats), `src/js/natives_crypto.c` (key handles and the natives) and
+`src/net/webcrypto.c` (the cryptography, through TF-PSA-Crypto's PSA
+interface; [`tls.md`](tls.md) says how the library is built). Run
+`tests/js/subtle.js` (ctest `js_subtle`), `js_page_subtle_rsa_gen`,
+`js_subtle_context` and `net_webcrypto_fuzz`, and the same under the
+sanitizers.
+
+| Algorithm | Operations | Key formats |
+|---|---|---|
+| SHA-1, SHA-256, SHA-384, SHA-512 | `digest` | |
+| HMAC | `sign`, `verify`, `generateKey` | raw, jwk |
+| AES-GCM, AES-CBC, AES-CTR | `encrypt`, `decrypt`, `wrapKey`, `unwrapKey`, `generateKey` | raw, jwk |
+| AES-KW | `wrapKey`, `unwrapKey`, `generateKey` | raw, jwk |
+| RSASSA-PKCS1-v1_5, RSA-PSS | `sign`, `verify`, `generateKey` | spki, pkcs8, jwk |
+| RSA-OAEP | `encrypt`, `decrypt`, `wrapKey`, `unwrapKey`, `generateKey` | spki, pkcs8, jwk |
+| ECDSA (P-256, P-384, P-521) | `sign`, `verify`, `generateKey` | raw (public), spki, pkcs8, jwk |
+| ECDH (P-256, P-384, P-521), X25519 | `deriveBits`, `deriveKey`, `generateKey` | raw (public), spki, pkcs8, jwk |
+| PBKDF2, HKDF | `deriveBits`, `deriveKey` | raw |
+
+- **Where it exists.** `crypto.subtle`, `SubtleCrypto` and `CryptoKey`
+  exist only in secure contexts, in pages and workers: https:, file:,
+  about:, localhost and 127.0.0.1, and blob: URLs of those (a blob: URL
+  of a file: page is `blob:null/...`). The prelude decides when the
+  context starts (`prelude_web.js`); elsewhere `'subtle' in crypto` is
+  false.
+- **Loaded on first use.** `subtle.js` is compiled to its own bytecode
+  (`build/*/gen/subtle.bc`) and read by `N.subtle()` the first time
+  script touches `crypto.subtle`, `SubtleCrypto` or `CryptoKey`, as
+  `Intl` is ("Intl" above).
+- **Keys.** A `CryptoKey` holds a handle (a class in
+  `natives_crypto.c`); the key material is in the library's key store,
+  or for secret keys in a block that is zeroed when the handle is
+  collected. Script never sees it unless it exports an extractable key.
+  `type`, `extractable`, `algorithm` and `usages` follow the
+  specification; `usages` are in its order, once each. What the live
+  keys hold outside the script heap is capped at 4 MB
+  (`AU_WC_HELD_MAX`); past it, making a key rejects with
+  OperationError until the collector frees unused ones.
+- **Errors** are the specification's: NotSupportedError for an
+  algorithm, format or curve that is not there, TypeError for a missing
+  member, SyntaxError for usages a key cannot have, InvalidAccessError
+  for a key of another algorithm or without the usage or not
+  extractable, DataError for bad key data, OperationError when the
+  operation fails (a tag or padding that does not check, a length out
+  of range).
+- **Key formats.** `subtle.js` reads and writes spki, pkcs8,
+  ECPrivateKey and the RSA structures in DER (definite, minimal lengths,
+  nothing after the end) and converts JWKs; the library gets PKCS#1 DER
+  for RSA, the scalar or the uncompressed point for EC keys and 32 bytes
+  for X25519, and checks that RSA keys are consistent and EC points are
+  on the curve. A JWK or ECPrivateKey whose public key does not match
+  its private key is a DataError. Exported JWKs have Chrome's members in
+  Chrome's (alphabetical) order, and pkcs8 EC keys carry the public key
+  and no parameters, as Chrome's do.
+- **Lengths.** Every length script passes is checked in `subtle.js` and
+  again in C: AES keys of 16, 24 or 32 bytes, GCM tags of 32, 64, 96 and
+  104 to 128 bits, a 16-byte CBC iv and CTR counter, KW data in 8-byte
+  steps (16 bytes or more to wrap, 24 to unwrap), secret keys up to
+  64 KB, RSA moduli up to 4096 bits, HKDF up to 255 hash blocks and
+  PBKDF2 up to 1 MB of output.
+- **RSA key generation** takes 1024 to 4096 bits in whole bytes and an
+  odd public exponent below 2^31. It must not stop the browser, so it
+  runs a slice at a time: in a page, on a coroutine of its own
+  (`AuJsHooks.coro`), resumed for 8 ms by each step of `finishJob` in
+  `subtle.js`, which runs each step as a task and the next as a timer
+  so page timers, input and painting run between steps; in a worker,
+  inline, leaving the worker's stack when its slice ends. Prime
+  generation calls back between candidates and Miller-Rabin rounds
+  through `au_tls_set_yield` (`third_party/mbedtls-patches/0002-bignum-yield.patch`).
+  A page that goes away, or a worker that is terminated, abandons the
+  generation at its next yield. Without coroutines it runs to the end
+  in one step.
+- **The entropy.** The library's random generator starts from
+  `AuJsHooks.random` the first time script uses a key, if no https
+  request has started it ([`tls.md`](tls.md), "Memory, clocks and
+  entropy"); until the platform's pool is ready the calls reject with
+  OperationError.
 - The digests are `src/net/digest.c`: SHA-256 is the engine's own, the
-  others come from the TLS library's PSA hash interface, which `src/js`
-  reaches only through that file.
+  others come from the TLS library's PSA hash interface. HMAC is
+  `au_hmac` over them.
+- A `CryptoKey` cannot be cloned: `structuredClone` and `postMessage`
+  of one throw DataCloneError.
+
+Measured on 2026-11-16, base 6cd3ddf, on an Apple Silicon host under
+load (`aura-host js`, averages; RSA generation time varies a lot from
+key to key). The G4 column is an estimate, 30 to 50 times the host,
+not a measurement: the library's bignum code uses 32-bit limbs there.
+
+| Operation | Host | 1 GHz G4 (estimate) |
+|---|---|---|
+| RSA-1024 `generateKey` | 242 ms | 7 to 12 s |
+| RSA-2048 `generateKey` | 761 ms | 25 to 40 s |
+| RSA-4096 `generateKey` | 3.1 s | 2 to 3 min |
+| RSA-2048 `sign` | 6.3 ms | 0.2 to 0.3 s |
+| RSA-2048 `verify` | 0.1 ms | 5 ms |
+| ECDSA P-256 `sign` / `verify` / `generateKey` | 0.3 / 0.9 / 0.2 ms | 10 / 30 / 8 ms |
+| PBKDF2-SHA-256, 100,000 iterations | 165 ms | 5 to 8 s |
+| AES-128-GCM `encrypt`, 1 MB | 8.9 ms | 0.3 to 0.5 s |
+
+Only RSA generation runs in slices; the other operations, PBKDF2
+included, run to the end in one step.
+
+The PowerPC build (`Aura.pef`) grew by 76,198 bytes, measured against
+889cb4a:
+
+| Part | Bytes |
+|---|---|
+| AES-CBC, AES-CTR and AES-ECB, with the cipher module | 15,816 |
+| PBKDF2 with HMAC | 2,224 |
+| HKDF as one algorithm (TLS already has its halves) | 32 |
+| RSA key pair import, export and generation, with the yield points | 5,696 |
+| `webcrypto.c` | 12,520 |
+| `natives_crypto.c` | 14,160 |
+| `subtle.js` bytecode in the prelude | 26,336 |
+
+The library's rows are the difference in its object code with each
+option turned off.
+
+What is left out is in [`known-gaps.md`](known-gaps.md#javascript).
 
 ## Tests
 

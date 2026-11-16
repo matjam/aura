@@ -131,12 +131,22 @@ else()
         DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_EVENTSOURCE_JS}
         COMMENT "Compiling EventSource to bytecode"
         VERBATIM)
+    # crypto.subtle (src/js/subtle.js): the same, read the first time script
+    # touches crypto.subtle (N.subtle in natives_crypto.c).
+    set(AURA_SUBTLE_BC ${AURA_PRELUDE_DIR}/subtle.bc)
+    set(AURA_SUBTLE_JS ${CMAKE_SOURCE_DIR}/src/js/subtle.js)
+    add_custom_command(OUTPUT ${AURA_SUBTLE_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_SUBTLE_BC} ${AURA_SUBTLE_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_SUBTLE_JS}
+        COMMENT "Compiling crypto.subtle to bytecode"
+        VERBATIM)
     add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC} ${AURA_INTL_BC} ${AURA_STREAMS_BC}
-                      ${AURA_EVENTSOURCE_BC})
+                      ${AURA_EVENTSOURCE_BC} ${AURA_SUBTLE_BC})
     add_dependencies(aura_engine aura_prelude_bc)
     # #embed looks beside the source file, then in --embed-dir (Clang and
     # GCC 15 or later), not in the include path.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
-        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC};${AURA_STREAMS_BC};${AURA_EVENTSOURCE_BC}"
+        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC};${AURA_STREAMS_BC};${AURA_EVENTSOURCE_BC};${AURA_SUBTLE_BC}"
         COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
 endif()

@@ -71,7 +71,8 @@ function structuredClone(value, options) {
             out = v;
         } else if (isNode(v) || v instanceof EventTarget || v instanceof WeakMap || v instanceof WeakSet ||
             v instanceof Promise || (typeof WeakRef === 'function' && v instanceof WeakRef) ||
-            t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' || t === 'Window' || t === 'MessagePort') {
+            t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' || t === 'Window' || t === 'MessagePort' ||
+            t === 'CryptoKey') {
             throw domErr('The object could not be cloned', 'DataCloneError');
         } else {
             out = {};
@@ -131,7 +132,7 @@ function scEncode(value, portIndex) {
         if (v instanceof Error || t === 'Error') return ['E', id, String(v.name), String(v.message), v.stack === undefined ? null : String(v.stack)];
         if (v instanceof Blob) return ['L', id, v instanceof File ? 1 : 0, v._b, v.type, v instanceof File ? v.name : '', v instanceof File ? v.lastModified : 0];
         if (isNode(v) || v instanceof EventTarget || t === 'WeakMap' || t === 'WeakSet' || t === 'Promise' || t === 'WeakRef' ||
-            t === 'Window' || t === 'MessagePort' || t === 'SharedArrayBuffer') throw no('The object');
+            t === 'Window' || t === 'MessagePort' || t === 'SharedArrayBuffer' || t === 'CryptoKey') throw no('The object');
         const items = [];
         for (const k of Object.keys(v)) items.push(k, enc(v[k]));
         return ['O', id, items];
@@ -383,94 +384,31 @@ if (N.random(0) !== null) {
             return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
         }
     }
-    /* SubtleCrypto: digest (SHA-1, SHA-256, SHA-384, SHA-512) and HMAC
-     * with raw keys (importKey, sign, verify, generateKey, exportKey).
-     * Everything else rejects with NotSupportedError. */
-    const algName = (a) => str(a && typeof a === 'object' ? a.name : a);
-    const hashOf = (a) => {
-        const n = algName(a).toUpperCase();
-        if (!['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512'].includes(n)) throw domErr('Unrecognized hash: ' + algName(a), 'NotSupportedError');
-        return n;
-    };
-    const srcBytes = (d) => {
-        if (d instanceof ArrayBuffer) return new Uint8Array(d.slice(0));
-        if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength));
-        throw new TypeError('The data is not a BufferSource');
-    };
-    const unsupported = () => Promise.reject(domErr('The algorithm or operation is not supported', 'NotSupportedError'));
-    const keyData = new WeakMap();
-    class CryptoKey {
-        constructor() { throw new TypeError('Illegal constructor'); }
-        get type() { return 'secret'; }
-        get extractable() { return keyData.get(this).extractable; }
-        get algorithm() { const k = keyData.get(this); return { name: 'HMAC', hash: { name: k.hash }, length: k.bytes.length * 8 }; }
-        get usages() { return keyData.get(this).usages.slice(); }
-    }
-    const makeKey = (bytes, hash, extractable, usages) => {
-        const k = Object.create(CryptoKey.prototype);
-        keyData.set(k, { bytes, hash, extractable: !!extractable, usages: Array.from(usages || []).map(str) });
-        return k;
-    };
-    const attempt = (fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } };
-    class SubtleCrypto {
-        constructor() { throw new TypeError('Illegal constructor'); }
-        digest(alg, data) { return attempt(() => N.digest(hashOf(alg), srcBytes(data))); }
-        importKey(format, data, alg, extractable, usages) {
-            return attempt(() => {
-                if (algName(alg).toUpperCase() !== 'HMAC' || str(format) !== 'raw') throw domErr('Only raw HMAC keys are supported', 'NotSupportedError');
-                return makeKey(srcBytes(data), hashOf(alg.hash), extractable, usages);
-            });
-        }
-        generateKey(alg, extractable, usages) {
-            return attempt(() => {
-                if (algName(alg).toUpperCase() !== 'HMAC') throw domErr('Only HMAC keys are supported', 'NotSupportedError');
-                const hash = hashOf(alg.hash);
-                const bytes = new Uint8Array(alg.length ? alg.length >>> 3 : hash === 'SHA-384' || hash === 'SHA-512' ? 128 : 64);
-                G.crypto.getRandomValues(bytes);
-                return makeKey(bytes, hash, extractable, usages);
-            });
-        }
-        exportKey(format, key) {
-            return attempt(() => {
-                const k = keyData.get(key);
-                if (!k) throw new TypeError('The key is not a CryptoKey');
-                if (str(format) !== 'raw') throw domErr('Only the raw format is supported', 'NotSupportedError');
-                if (!k.extractable) throw domErr('The key is not extractable', 'InvalidAccessError');
-                return k.bytes.slice().buffer;
-            });
-        }
-        sign(alg, key, data) {
-            return attempt(() => {
-                const k = keyData.get(key);
-                if (!k) throw new TypeError('The key is not a CryptoKey');
-                if (algName(alg).toUpperCase() !== 'HMAC') throw domErr('Only HMAC is supported', 'NotSupportedError');
-                if (!k.usages.includes('sign')) throw domErr('The key may not sign', 'InvalidAccessError');
-                return N.hmac(k.hash, k.bytes, srcBytes(data));
-            });
-        }
-        verify(alg, key, signature, data) {
-            return attempt(() => {
-                const k = keyData.get(key);
-                if (!k) throw new TypeError('The key is not a CryptoKey');
-                if (algName(alg).toUpperCase() !== 'HMAC') throw domErr('Only HMAC is supported', 'NotSupportedError');
-                if (!k.usages.includes('verify')) throw domErr('The key may not verify', 'InvalidAccessError');
-                const a = new Uint8Array(N.hmac(k.hash, k.bytes, srcBytes(data))), b = srcBytes(signature);
-                let diff = a.length ^ b.length;
-                for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i % (b.length || 1)];
-                return diff === 0;
-            });
-        }
-        encrypt() { return unsupported(); } decrypt() { return unsupported(); }
-        deriveBits() { return unsupported(); } deriveKey() { return unsupported(); }
-        wrapKey() { return unsupported(); } unwrapKey() { return unsupported(); }
-    }
-    const subtle = Object.create(SubtleCrypto.prototype);
-    defProps(Crypto.prototype, { get subtle() { return subtle; } });
-    tag(Crypto); tag(SubtleCrypto); tag(CryptoKey);
+    /* crypto.subtle, SubtleCrypto and CryptoKey live in src/js/subtle.js,
+     * compiled to its own bytecode: N.subtle() reads it the first time
+     * script touches one of them. Like browsers, Aura gives them only to
+     * secure contexts (https:, file:, about:, localhost, and blob: URLs
+     * of those; a blob: URL of an opaque origin, blob:null/, comes from a
+     * file: page or a sandboxed frame); this is decided once, when the
+     * context starts. */
+    const here = N.docUrl(0) || '';
+    const secure = /^(https:|file:|blob:(https:|file:|null\/)|about:)/i.test(here) ||
+        /^(blob:)?http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//i.test(here);
+    tag(Crypto);
     defGlobal('Crypto', Crypto);
-    defGlobal('SubtleCrypto', SubtleCrypto);
-    defGlobal('CryptoKey', CryptoKey);
     defGlobal('crypto', Object.create(Crypto.prototype));
+    if (secure) {
+        let subtleLib = null;
+        const subtleOf = () => subtleLib || (subtleLib = N.subtle()(G, N, domErr));
+        defProps(Crypto.prototype, { get subtle() { return subtleOf().subtle; } });
+        for (const name of ['SubtleCrypto', 'CryptoKey']) {
+            Object.defineProperty(G, name, {
+                get() { const v = subtleOf()[name]; defGlobal(name, v); return v; },
+                set(v) { defGlobal(name, v); },
+                configurable: true, enumerable: false,
+            });
+        }
+    }
 }
 tag(MessagePort); tag(MessageChannel);
 defGlobal('MessagePort', MessagePort);

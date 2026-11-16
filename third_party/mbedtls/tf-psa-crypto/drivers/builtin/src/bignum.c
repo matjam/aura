@@ -2059,6 +2059,23 @@ int mbedtls_mpi_inv_mod(mbedtls_mpi *X, const mbedtls_mpi *A, const mbedtls_mpi 
 
 #if defined(MBEDTLS_GENPRIME)
 
+#if defined(AURA_MBEDTLS_YIELD)
+/* Aura patch: a cooperative yield point, defined by the embedder
+ * (src/net/tls_platform.c). Prime generation calls it before each
+ * candidate and each Miller-Rabin round, so a long key generation can
+ * let other work run. A nonzero return abandons the generation. */
+int aura_mbedtls_yield(void);
+#define AURA_YIELD_POINT()                          \
+    do {                                            \
+        if (aura_mbedtls_yield() != 0) {            \
+            ret = MBEDTLS_ERR_MPI_ALLOC_FAILED;     \
+            goto cleanup;                           \
+        }                                           \
+    } while (0)
+#else
+#define AURA_YIELD_POINT() do { } while (0)
+#endif
+
 /* Largest "small prime" tested. If this is ever changed, must update:
  * - the product below obviously,
  * - the documentation and tests of mbedtls_mpi_is_prime_ext() about this limit,
@@ -2167,6 +2184,7 @@ static int mpi_miller_rabin(const mbedtls_mpi *X, size_t rounds,
     MBEDTLS_MPI_CHK(mbedtls_mpi_shift_r(&R, s));
 
     for (i = 0; i < rounds; i++) {
+        AURA_YIELD_POINT();
         /*
          * pick a random A, 1 < A < |X| - 1
          */
@@ -2302,6 +2320,7 @@ int mbedtls_mpi_gen_prime(mbedtls_mpi *X, size_t nbits, int flags,
     }
 
     while (1) {
+        AURA_YIELD_POINT();
         MBEDTLS_MPI_CHK(mbedtls_mpi_fill_random(X, n * ciL, f_rng, p_rng));
         /* make sure generated number is at least (nbits-1)+0.5 bits (FIPS 186-4 §B.3.3 steps 4.4, 5.5) */
         if (X->p[n-1] < CEIL_MAXUINT_DIV_SQRT2) {

@@ -189,6 +189,25 @@ bool au_tls_entropy_feed(const uint8_t *seed, size_t len)
 
 bool au_tls_entropy_ready(void) { return g_started; }
 
+/* ---- Yielding during key generation ----
+ *
+ * AURA_MBEDTLS_YIELD (third_party/mbedtls-patches/0002): prime
+ * generation calls aura_mbedtls_yield before each candidate and each
+ * Miller-Rabin round. It lives in this file because every program that
+ * links the library pulls this file in first (see mbedtls.cmake). */
+
+static int (*g_yield)(void *ctx);
+static void *g_yield_ctx;
+
+void au_tls_set_yield(int (*fn)(void *ctx), void *ctx)
+{
+    g_yield = fn;
+    g_yield_ctx = ctx;
+}
+
+int aura_mbedtls_yield(void);
+int aura_mbedtls_yield(void) { return g_yield ? g_yield(g_yield_ctx) : 0; }
+
 bool au_tls_random(uint8_t *out, size_t len)
 {
     return g_started && psa_generate_random(out, len) == PSA_SUCCESS;

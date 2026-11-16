@@ -90,6 +90,17 @@ const char au_js_eventsource_src[] = {
 
 const size_t au_js_eventsource_len = sizeof au_js_eventsource_src - 1;
 
+/* crypto.subtle, read when script first touches it (N.subtle in
+ * natives_crypto.c). */
+extern const char au_js_subtle_src[];
+extern const size_t au_js_subtle_len;
+
+const char au_js_subtle_src[] = {
+#embed "subtle.js"
+    , 0};
+
+const size_t au_js_subtle_len = sizeof au_js_subtle_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -139,5 +150,14 @@ const unsigned char au_js_eventsource_bc[] = {
 };
 
 const size_t au_js_eventsource_bc_len = sizeof au_js_eventsource_bc;
+
+extern const unsigned char au_js_subtle_bc[];
+extern const size_t au_js_subtle_bc_len;
+
+const unsigned char au_js_subtle_bc[] = {
+#embed "subtle.bc"
+};
+
+const size_t au_js_subtle_bc_len = sizeof au_js_subtle_bc;
 
 #endif

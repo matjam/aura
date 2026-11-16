@@ -83,7 +83,11 @@ records where the code came from and how to update it.
   RSA (PKCS#1 v1.5 and PSS) verification; AES-GCM and ChaCha20-Poly1305;
   SHA-256, SHA-384 and SHA-512 (SHA-1 only to parse root certificates);
   HKDF; X.509 parsing and verification with the trusted-certificate
-  callback; session tickets, SNI and ALPN. No server, no DTLS, no
+  callback; session tickets, SNI and ALPN. For script's crypto.subtle
+  (`src/net/webcrypto.c`) it also has AES-CBC with PKCS#7 padding,
+  AES-CTR and AES-ECB (which bring in the cipher module), PBKDF2 with
+  HMAC, HKDF as one algorithm, and RSA private keys (import, export,
+  generation). No server, no DTLS, no
   sockets, files, threads, operating system time or entropy: the
   library gets memory, clocks and entropy from `src/net/tls_platform.c`.
   The library is compiled with `-O2` and without warnings; Aura reaches
@@ -97,13 +101,18 @@ records where the code came from and how to update it.
 - **Do not enable `MBEDTLS_ECDH_VARIANT_EVEREST_ENABLED`.** With it,
   X25519 gave wrong shared secrets on big-endian PowerPC and every
   handshake failed its first integrity check.
-- **Changes:** one patch, `mbedtls-patches/0001-tls12-rsa-key-transport.patch`:
-  it restores RSA key transport for TLS 1.2 (the two
+- **Changes:** two patches. `mbedtls-patches/0001-tls12-rsa-key-transport.patch`
+  restores RSA key transport for TLS 1.2 (the two
   `TLS_RSA_WITH_AES_*_GCM_*` suites), which Mbed TLS 4.0 removed, for
   old servers that offer nothing with forward secrecy. It is 250 added
   lines in seven files, all under the option
-  `AURA_MBEDTLS_KEY_EXCHANGE_RSA`, and follows Mbed TLS 3.6's code; its
-  header says why it exists and how to drop it. The vendored tree is
+  `AURA_MBEDTLS_KEY_EXCHANGE_RSA`, and follows Mbed TLS 3.6's code.
+  `mbedtls-patches/0002-bignum-yield.patch` adds a call to the
+  embedder's `aura_mbedtls_yield` before each prime candidate and each
+  Miller-Rabin round, under the option `AURA_MBEDTLS_YIELD`, so that RSA
+  key generation for crypto.subtle can leave its stack between steps (a
+  nonzero return abandons it). Each patch's header says why it exists
+  and how to drop it. The vendored tree is
   the release with the patches applied. Any change goes in
   `mbedtls-patches/` as a patch, applied in name order by `apply.sh`. To update Mbed TLS, download the
   new release of the 4.1 branch, check its SHA-256, and run

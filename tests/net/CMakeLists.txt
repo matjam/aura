@@ -57,6 +57,14 @@ add_executable(fuzz_cookies fuzz_cookies.c)
 target_link_libraries(fuzz_cookies aura_engine)
 add_test(NAME net_cookies_fuzz COMMAND fuzz_cookies 20000 1)
 
+# crypto.subtle's key import and operations (src/net/webcrypto.c), 15
+# seconds at most. For a long run use the sanitizer build:
+#   fuzz_webcrypto 100000000 SEED 600
+add_executable(fuzz_webcrypto fuzz_webcrypto.c)
+target_link_libraries(fuzz_webcrypto aura_engine)
+add_test(NAME net_webcrypto_fuzz COMMAND fuzz_webcrypto 3000 1 15)
+set_tests_properties(net_webcrypto_fuzz PROPERTIES TIMEOUT 120)
+
 # Parsers: HTTP responses and chunked bodies, data: URLs, PSL, the root
 # store loader, certificates, HSTS, authentication headers, dates, MIME.
 #   fuzz_net all ITERATIONS SEED assets/net/aura-roots.bin

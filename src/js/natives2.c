@@ -1193,6 +1193,7 @@ static const JSCFunctionListEntry natives_shared[] = {
 void js_natives_shared_init(AuJs *js, JSValue N)
 {
     JS_SetPropertyFunctionList(js->ctx, N, natives_shared, JS_COUNTOF(natives_shared));
+    js_natives_crypto_init(js, N);
 }
 
 void js_natives2_init(AuJs *js, JSValue N)

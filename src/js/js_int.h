@@ -246,6 +246,9 @@ struct AuJs {
     /* canvas (natives_canvas.c) */
     struct JsCanvas *canvas;
     bool canvas_pending; /* a canvas element's width or height attribute is changing */
+    /* root: the classes of crypto.subtle's key handles and key generation
+     * jobs (natives_crypto.c) */
+    JSClassID crypto_cls[2];
 };
 
 /* ---- runtime.c ---- */
@@ -316,6 +319,7 @@ void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
 void js_storage_free(AuJs *js);
 void js_natives_shared_init(AuJs *js, JSValue N); /* the natives a worker has too */
+void js_natives_crypto_init(AuJs *js, JSValue N);  /* crypto.subtle's (natives_crypto.c), part of the shared ones */
 void js_natives_forms_init(AuJs *js, JSValue N);
 
 /* ---- natives_streams.c: CompressionStream's codecs and the EventSource

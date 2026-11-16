@@ -185,8 +185,23 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   `@import` rules, rules nested in a style rule, `@font-face` rules
   added through the CSSOM (they are not given to the web font loader).
   `cssRules` is not live.
-- **crypto.subtle:** only `digest` and HMAC; AES, RSA, ECDSA, PBKDF2
-  and HKDF are what pages ask for next.
+- **crypto.subtle** ([`javascript.md`](javascript.md), "crypto.subtle"):
+  - Ed25519, Ed448 and X448: TF-PSA-Crypto has no Edwards curves.
+  - RSA-PSS signs only with a salt as long as the hash (shorter when
+    the key has no room), which is what the library does; another
+    `saltLength` rejects with NotSupportedError, and verifying with one
+    accepts any salt length.
+  - RSA keys over 4096 bits or not in whole bytes, multi-prime keys,
+    and private JWKs without the CRT members (`p`, `q`, `dp`, `dq`,
+    `qi`); generation below 1024 bits.
+  - HMAC keys whose length is not a whole number of bytes; compressed
+    EC points.
+  - A `CryptoKey` cannot be cloned (`structuredClone`, `postMessage`):
+    it throws DataCloneError.
+  - PBKDF2, RSA signing and decryption and EC key generation run on the
+    caller's stack: a PBKDF2 of hundreds of thousands of iterations
+    stops the page while it runs (only RSA key generation yields).
+  - Whether a context is secure is decided when it starts.
 - **Console:** a source position for `console.log` lines (only errors
   carry a stack).
 - **Start-up:** the prelude's CSSOM, Range and observer parts are
