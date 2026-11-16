@@ -219,7 +219,9 @@ typedef struct LBlock {
     float sx, sy;       /* absolutely positioned: static position in the geometry parent */
     float min_c, max_c; /* intrinsic content-box widths, valid with LF_INTRINSIC_OK */
     float key_w, key_h, key_cbh; /* constraints of the last layout (incremental) */
-    float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting border-box height */
+    float key_ch;       /* the content height that layout gave (padding and border can change since) */
+    float key_top, key_left; /* padding plus border above and left of the content at that layout */
+    float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting content height */
     float sticky_dx, sticky_dy;  /* sticky offset applied at the last paint */
     LReplaced *rep;     /* replaced content */
     /* The layout generations (AuLayout.gen) in which its content was
@@ -417,13 +419,17 @@ struct AuLayout {
      * the box tree. */
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
-    /* Elements the box tree build left out for display: none (their
-     * descendants are not listed), each referenced, with the box its
-     * parent's children went into (a subtree rebuild drops the entries
-     * of the boxes it drops). */
+    /* Elements the box tree build gave no box of their own: display: none
+     * (their descendants are not listed) and display: contents. Each is
+     * referenced, with the style it was built with (retained) and the box
+     * its parent's children went into (a subtree rebuild drops the
+     * entries of the boxes it drops). A restyle that changes what such an
+     * element builds (its display, counters, generated content) rebuilds
+     * its parent's subtree: no box of its own shows the change. */
     struct LHidden {
         AuElement *el;
         LBox *box;
+        AuStyle *style;
     } *hidden;
     uint32_t nhidden, hidden_cap;
     /* Subtree rebuilds (rebuild.c). dirty holds the nodes whose children,

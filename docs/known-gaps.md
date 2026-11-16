@@ -70,18 +70,19 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   or when the rebuilt box changes its outer kind ([`layout.md`](layout.md),
   "A DOM change").
 - A relayout after a viewport change or a style change that keeps the
-  boxes does not always give what a layout from scratch gives: forcing
-  the differential check after every update of `fuzz_page` (seeds 7 and
-  21, 2026-11-16) finds overflow and document heights that differ. So
-  the check compares geometry only while no such relayout has run since
-  the last whole build ([`layout.md`](layout.md), "A DOM change").
-- Open differences the check still finds (2026-11-16): a table's
-  percentage margins are resolved against 0 by some table paths and
-  against the containing block by others, so the last layout to run
-  decides them (Domato seeds 41 page 121 and 42 page 286, reduced to a
-  table with `margin-right: 9%` or `margin-bottom: 29%`); `fuzz_page`
-  seed 21 lists one `display: none` element fewer than a whole build,
-  and seed 22 gives a table another width; these two were not reduced.
+  boxes differs from a layout from scratch in one case, so the
+  differential check compares geometry only while no such relayout has
+  run since the last whole build ([`layout.md`](layout.md), "A relayout
+  must give what a layout from scratch gives"): overflow and the
+  document size are found before relative offsets are applied, and a
+  relayout that reuses content keeps the offset positions. With geometry
+  forced on (2026-11-16), `fuzz_page` seeds 24 and 26 find it, reduced
+  to `<table><td style="position:relative;display:grid;top:1px"><caption><a href><center><table><td><ul>`
+  (a row group's overflow is 2 pixels tall from scratch and 3 after a
+  relayout); seeds 7, 21, 22, 41, 44 and 47 run clean for 150 s each. To
+  fix it, apply each offset to the overflow of the boxes that contain
+  it in `relative_pass`. The percentage heights in table cells that also
+  differed are fixed ([`layout.md`](layout.md)).
 - After a subtree rebuild, layout lays out again every block on the path
   to the root and the in-flow siblings that do not establish a block
   formatting context, not only the rebuilt subtree.

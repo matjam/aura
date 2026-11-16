@@ -212,3 +212,11 @@ pixel 50 82 ff0000
 #k x=1 y=235
 scroll 40
 pixel 50 42 ff0000
+
+=== a relative box inside a fixed box takes its offset
+<body style="margin:0">
+<div style="position:fixed;top:0;left:0;width:100px"><p id=r style="position:relative;left:5px;top:3px;margin:0;height:10px"></p></div>
+<div style="position:absolute;top:50px;left:0;width:100px"><div id=s style="position:relative;left:7px;height:10px"></div></div>
+---
+#r x=5 y=3
+#s x=7 y=50

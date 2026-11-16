@@ -2095,7 +2095,7 @@ static void pop(Builder *B)
         B->nctr--;
 }
 
-static void note_hidden(AuLayout *L, AuElement *e, LBox *box)
+static void note_hidden(AuLayout *L, AuElement *e, LBox *box, const AuStyle *style)
 {
     if (L->nhidden == L->hidden_cap) {
         L->hidden_cap = L->hidden_cap ? L->hidden_cap * 2 : 64;
@@ -2104,6 +2104,7 @@ static void note_hidden(AuLayout *L, AuElement *e, LBox *box)
     au_node_ref(&e->node);
     L->hidden[L->nhidden].el = e;
     L->hidden[L->nhidden].box = box;
+    L->hidden[L->nhidden].style = au_style_retain((AuStyle *)style);
     L->nhidden++;
 }
 
@@ -2166,7 +2167,7 @@ static void build_walk(Builder *B)
                 /* Remembered, so a restyle that shows it rebuilds the tree
                  * (au_layout_styles_changed sees only elements with boxes). */
                 if (s && !f->skip_children)
-                    note_hidden(L, e, f->box);
+                    note_hidden(L, e, f->box, s);
                 continue;
             }
             bool li = au_display_list_item(s->box->display);
@@ -2176,6 +2177,10 @@ static void build_walk(Builder *B)
             apply_counters(B, s, c, li, rev);
             if (s->box->display == AU_DISPLAY_CONTENTS) {
                 e->box = NULL;
+                /* No box compares its style: listed, so a restyle that
+                 * gives it a box rebuilds its parent's subtree. */
+                if (!f->skip_children)
+                    note_hidden(L, e, f->box, s);
                 push(B, c, f->box, s);
                 /* ::before/::after of a contents element go into the parent box. */
                 BFrame *nf = &B->st[B->n - 1];
@@ -2362,8 +2367,10 @@ void l_free_tree(AuLayout *L)
     }
     ar_free_all(&L->tree);
     L->root = NULL;
-    for (uint32_t i = 0; i < L->nhidden; i++)
+    for (uint32_t i = 0; i < L->nhidden; i++) {
         au_node_unref(&L->hidden[i].el->node);
+        au_style_release(L->hidden[i].style);
+    }
     L->nhidden = 0;
     L->nctr_names = 0;
     L->tree_full_bytes = 0;

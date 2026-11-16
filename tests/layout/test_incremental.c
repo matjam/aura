@@ -111,6 +111,12 @@ static const Case cases[] = {
      INCR},
     {"percentage margins on a table", "table { margin-right: 9%; margin-bottom: 29% }",
      "<div id=a><table><tr><td>a</td></tr></table></div>", "a.appendChild(document.createElement('table'))", INCR},
+    {"percentage margins on a table in a float", "table { margin: 5% 9% 29% 4% } .f { float: left }",
+     "<div class=f><table><tr><td>a</td></tr></table></div><div id=a><p>x</p></div>",
+     "a.appendChild(document.createElement('p')).textContent='y'", INCR},
+    {"percentage margins on an empty table", "table { margin-right: 9%; margin-bottom: 29% }",
+     "<div id=a><table id=t><tr><td>a</td></tr></table><dl><dt>x</dt></dl></div>",
+     "t.querySelector('tr').remove();@@a.appendChild(document.createElement('p'))", INCR},
     {"text in a cell", "", "<table><tr><td id=c>a</td><td>b</td></tr></table>", "c.textContent='a longer text'",
      INCR},
     {"colspan", "", "<div><table><tr><td id=c>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table></div>",
@@ -169,6 +175,25 @@ static const Case cases[] = {
      "l.className='n'", INCR},
     {"flex container by class", ".f { display: flex }", "<section><div id=d>a <b>b</b> c</div></section>",
      "d.className='f';@@d.className=''", INCR},
+    {"inline around a block made display: contents", "a.c { display: contents }",
+     "<h1>&gt;<a href id=a><center><e><ul></ul></e></center></a></h1>", "a.className='c';@@a.className=''", INCR},
+    {"display: contents taken back", "div.on a { display: contents }",
+     "<div id=w class=on><h1>&gt;<a href><center><e><ul></ul></e></center></a></h1></div>", "w.className=''",
+     INCR},
+    {"hidden element in a cell that the table fixup wraps",
+     ".g { display: grid } .x, .n { display: none } .g.on .n { display: block }",
+     "<div><em class=g id=g><td><span class=x>h</span>c</td><b class=n>n</b></em></div>", "g.className='g on'",
+     INCR},
+    {"a clip-path that only repaints still makes a layer", "",
+     "<div><span id=s>x</span></div><div hidden><p id=p>a</p></div>",
+     "s.style.clipPath='inset(1px)';p.appendChild(document.createElement('b')).textContent='b'", ANY},
+    {"root element of a frame moved into the document", "",
+     "<div id=w>a</div><div id=h style='display:none'></div>",
+     "var f=document.createElement('iframe');f.srcdoc='<input autofocus>';document.body.appendChild(f);@@"
+     "h.appendChild(f.contentDocument.documentElement);@@w.appendChild(h.firstChild)",
+     ANY},
+    {"boxless element moved below display: none", ".n { display: none }",
+     "<div id=w><p id=p>a<span class=n>x</span></p></div><div>b</div>", "document.head.appendChild(p)", INCR},
     /* ---- Selectors that insertions reach ---- */
     {"first child", LIST_CSS, "<div><ul class=m id=u><li>one</li><li>two</li></ul></div>",
      "var l=document.createElement('li');l.textContent='zero';u.insertBefore(l,u.firstChild)", INCR},
@@ -333,6 +358,69 @@ static void test_restyle_scope(void)
     au_docview_free(dv);
 }
 
+/* A view laid out at one width and resized to another matches a view
+ * laid out at the second width from the start: every element with an id
+ * has the same rectangle, and the document the same size. */
+static AuDocView *at_width(const char *body, int w)
+{
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    au_docview_set_viewport(dv, w, 300);
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_printf(&html, "<!DOCTYPE html><style>body { font: 10px Ahem }</style>%s", body);
+    au_docview_load(dv, html.data, html.len, "http://example.com/");
+    au_docview_update(dv);
+    au_buf_free(&html);
+    return dv;
+}
+
+static void test_resize(void)
+{
+    static const char *const bodies[] = {
+        /* the content of a box with a percentage padding is reused at the new width */
+        "<p>a <select id=s style='padding:1%'><option>x</option></select> b</p>",
+        "<p>a <span id=t style='display:inline-table;padding:2%'><span id=u>x</span></span> b</p>",
+        "<div style='width:50%'><div id=d style='overflow:hidden;padding:3% 1%'><p id=p>text</p></div></div>",
+        /* relative offsets inside a fixed box and inside reused content */
+        "<div style='position:fixed;top:0'><p id=r style='position:relative;left:5px'>r</p></div>",
+        "<div style='overflow:hidden;width:200px'><p id=q style='position:relative;top:4px'>q</p></div><p>z</p>",
+        /* percentage margins of a table */
+        "<div><table id=m style='margin:2% 9% 5% 4%'><tr><td>a</td></tr></table><p id=n>n</p></div>",
+        /* a relative box that sticks out of the document */
+        "<table><tr><td><input id=i style='position:relative;inset:3px;width:600px'></td></tr></table>",
+        /* percentage heights in cells */
+        "<table style='height:0'><tr><td id=c style='height:0%;display:flex'><table><tr><th><table><tr><td>"
+        "<span style='position:absolute'>v</span>x</td></tr></table></th></tr></table></td></tr></table>",
+        "<b style='display:flex'><table><tr><td><table id=h style='height:1%'><caption>x</caption></table></td></tr>"
+        "</table><i style='position:fixed'>f</i></b>",
+    };
+    for (size_t i = 0; i < sizeof bodies / sizeof bodies[0]; i++) {
+        AuDocView *a = at_width(bodies[i], 300), *b = at_width(bodies[i], 500);
+        au_docview_set_viewport(a, 500, 300);
+        au_docview_update(a);
+        int aw, ah, bw, bh;
+        au_docview_content_size(a, &aw, &ah);
+        au_docview_content_size(b, &bw, &bh);
+        CHECK(aw == bw && ah == bh, "resize %zu: document %dx%d, fresh %dx%d", i, aw, ah, bw, bh);
+        AuDocument *da = au_docview_document(a), *db = au_docview_document(b);
+        AuNode *na = &da->node, *nb = &db->node;
+        for (AuNode *x = au_node_next(na, &da->node), *y = au_node_next(nb, &db->node); x && y;
+             x = au_node_next(x, &da->node), y = au_node_next(y, &db->node)) {
+            if (x->type != AU_NODE_ELEMENT || !au_as_element(x)->id)
+                continue;
+            AuRect ra, rb;
+            bool ha = au_layout_element_rect(au_docview_layout(a), au_as_element(x), &ra);
+            bool hb = au_layout_element_rect(au_docview_layout(b), au_as_element(y), &rb);
+            const char *id = au_atom_str(au_as_element(x)->id);
+            CHECK(ha == hb && (!ha || (ra.x == rb.x && ra.y == rb.y && ra.w == rb.w && ra.h == rb.h)),
+                  "resize %zu: #%s at %g,%g %gx%g, fresh %g,%g %gx%g", i, id, (double)ra.x, (double)ra.y,
+                  (double)ra.w, (double)ra.h, (double)rb.x, (double)rb.y, (double)rb.w, (double)rb.h);
+        }
+        au_docview_free(a);
+        au_docview_free(b);
+    }
+}
+
 /* A title set by script reaches the view without a whole build. */
 static void test_title(void)
 {
@@ -360,6 +448,7 @@ int main(int argc, char **argv)
         run_case(&cases[i]);
     test_restyle_scope();
     test_title();
+    test_resize();
     au_fontset_free(fonts);
     printf("incremental: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

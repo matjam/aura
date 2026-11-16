@@ -850,6 +850,14 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     LTableBox *t = (LTableBox *)b;
     LTableGrid *g = t->g;
     t->edges_ok = false; /* styles may have changed since the last pass */
+    /* Intrinsic widths treat percentage margins and padding as 0 (CSS 2.1
+     * 10.3 and Chrome's intrinsic sizing), but the used edges are the
+     * ones the table's container resolved against its width: keep them,
+     * whichever of the two runs last in a layout. */
+    float m0[4], p0[4], bw0[4];
+    memcpy(m0, b->m, sizeof m0);
+    memcpy(p0, b->p, sizeof p0);
+    memcpy(bw0, b->bw, sizeof bw0);
     l_resolve_box_edges(b, 0);
     column_constraints(L, t);
     uint32_t nc = g->ncols, vis = visible_cols(t);
@@ -891,6 +899,9 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
         }
     *min_c = mn;
     *max_c = l_max(mx, mn);
+    memcpy(b->m, m0, sizeof m0);
+    memcpy(b->p, p0, sizeof p0);
+    memcpy(b->bw, bw0, sizeof bw0);
 }
 
 /* Fixed layout distribution (Chrome's DistributeInlineSizeToComputedInlineSizeFixed). */
@@ -1068,6 +1079,30 @@ static bool cell_height_definite(const LTableBox *t, const LCellBox *cb, float t
         return true;
     if (!lb_anon(r) && (r->style->box->height.kind == AU_LEN_PX || r->style->box->height.kind == AU_LEN_FIT_CONTENT_PX))
         return true;
+    return false;
+}
+
+/* Whether a box below cell k has a percentage height, min-height or
+ * max-height. Its first layout resolved those against an indefinite
+ * height, so a cell whose final height is definite lays it out again even
+ * when that height equals its content height. */
+static bool cell_has_pct_height(const LBlock *k)
+{
+    const LBox *root = &k->b, *b = root->first;
+    while (b) {
+        if (b->kind == LK_BLOCK && !lb_anon(b) && b->style) {
+            const AuStyleBox *s = b->style->box;
+            if (l_len_pct(&s->height) || l_len_pct(&s->min_height) || l_len_pct(&s->max_height))
+                return true;
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && b != root && !b->next)
+                b = b->parent;
+            b = b && b != root ? b->next : NULL;
+        }
+    }
     return false;
 }
 
@@ -1286,7 +1321,8 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
         float h = span_height(t, cb->row, cb->rowspan, vs);
         float bpv = l_bp_v(k), inner = l_max(0, h - bpv);
         bool definite = cell_height_definite(t, cb, target);
-        if ((definite && fabsf(inner - cb->nat_h) > 0.001f) || cb->stale) {
+        bool again = definite && (fabsf(inner - cb->nat_h) > 0.001f || (cb->base1 != inner && cell_has_pct_height(k)));
+        if (again || cb->stale) {
             l_layout_content(L, k, l_max(0, cw - l_bp_h(k)), definite ? inner : cb->base1, -1);
             cb->nat_h = k->h - bpv;
             cb->stale = false;

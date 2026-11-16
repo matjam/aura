@@ -757,8 +757,12 @@ static bool same_cbh(const AuLayout *L, const LBlock *b, float a, float c)
 
 static bool can_skip(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h)
 {
+    /* The content is placed from the border box's corner: a padding or
+     * border above or left of it that changed (a percentage of the
+     * containing block) moves all of it. */
     return (b->b.flags & (LF_HAS_LAYOUT | LF_DIRTY | LF_CHILD_DIRTY | LF_ESCAPES)) == LF_HAS_LAYOUT &&
            (b->b.flags & LF_BFC) && b->key_w == content_w && b->key_h == content_h &&
+           b->key_top == b->p[0] + b->bw[0] && b->key_left == b->p[3] + b->bw[3] &&
            same_cbh(L, b, b->key_cbh, cb_h);
 }
 
@@ -787,8 +791,11 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     if (can_skip(L, b, content_w, content_h, cb_h)) {
         L->stats.layouts_skipped++;
         b->skip_gen = L->gen;
+        /* The edges were resolved again (a percentage padding follows the
+         * containing block): the content keeps its size, the box takes
+         * the new edges. */
         b->w = content_w + l_bp_h(b);
-        float h = content_h >= 0 && !tabular ? content_h : b->h - l_bp_v(b);
+        float h = content_h >= 0 && !tabular ? content_h : b->key_ch;
         b->h = h + l_bp_v(b);
         return;
     }
@@ -846,6 +853,9 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->baseline = b->last_baseline = control_baseline(L, b, h);
     b->w = content_w + l_bp_h(b);
     b->h = h + l_bp_v(b);
+    b->key_ch = h;
+    b->key_top = b->p[0] + b->bw[0];
+    b->key_left = b->p[3] + b->bw[3];
     b->key_w = content_w;
     b->key_h = content_h;
     b->key_cbh = cb_h;
@@ -863,21 +873,24 @@ float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h
      * as given); no layout needed. */
     if (content_h >= 0 && b->b.inner != LI_TABLE && b->b.inner != LI_TABLE_CELL)
         return content_h + l_bp_v(b);
+    /* Heights are kept as content heights: the padding and border can
+     * change while the content does not (percentages of the containing
+     * block). */
     if (can_skip(L, b, content_w, content_h, cb_h)) {
         b->skip_gen = L->gen;
-        return b->h;
+        return b->key_ch + l_bp_v(b);
     }
     if ((b->b.flags & (LF_MEASURE_OK | LF_DIRTY | LF_CHILD_DIRTY)) == LF_MEASURE_OK && b->mk_w == content_w &&
         b->mk_h == content_h && same_cbh(L, b, b->mk_cbh, cb_h)) {
         L->stats.layouts_skipped++;
         b->skip_gen = L->gen;
-        return b->m_res;
+        return b->m_res + l_bp_v(b);
     }
     l_layout_content(L, b, content_w, content_h, cb_h);
     b->mk_w = content_w;
     b->mk_h = content_h;
     b->mk_cbh = cb_h;
-    b->m_res = b->h;
+    b->m_res = b->h - l_bp_v(b);
     b->b.flags |= LF_MEASURE_OK;
     return b->h;
 }
@@ -1095,9 +1108,20 @@ void l_apply_relative(LBlock *b, float cb_w, float cb_h)
     b->y += dy;
 }
 
-static void relative_pass(AuLayout *L)
+/* An absolutely positioned box whose containing block is the initial one:
+ * the root lays it out after the relative pass (l_layout_abspos_for). */
+static bool late_abspos(const LBox *b)
 {
-    LBox *b = L->root;
+    return b->kind == LK_BLOCK && (b->flags & LF_ABSPOS) && !((const LBlock *)b)->cb;
+}
+
+/* Offsets the relatively positioned boxes below top (and top itself when
+ * it is one). Content reused in this pass kept its positions, offsets
+ * included, and is not offset again. With skip_late, the boxes laid out
+ * after this pass (late_abspos) are left for relative_pass_late. */
+static void relative_pass(AuLayout *L, LBox *top, bool skip_late)
+{
+    LBox *b = top;
     while (b) {
         if (b->kind == LK_BLOCK && (b->flags & LF_RELPOS) && b != L->root) {
             LBlock *g = l_geom_parent(b);
@@ -1105,10 +1129,30 @@ static void relative_pass(AuLayout *L)
             float ch = g && l_spec_height(g, -1) >= 0 ? g->h - l_bp_v(g) : -1;
             l_apply_relative((LBlock *)b, cw, ch);
         }
-        /* Content reused in this pass kept its positions, offsets
-         * included: do not offset it again. */
         bool reused = b->kind == LK_BLOCK && ((LBlock *)b)->skip_gen == L->gen && ((LBlock *)b)->lay_gen != L->gen;
-        if (b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP) && !reused)
+        bool later = skip_late && b != top && late_abspos(b);
+        if (b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP) && !reused && !later)
+            b = b->first;
+        else {
+            while (b != top && !b->next)
+                b = b->parent;
+            b = b == top ? NULL : b->next;
+        }
+    }
+}
+
+/* The relative pass inside the boxes the root laid out after the first
+ * one: before this, relatively positioned boxes inside a fixed box or an
+ * absolutely positioned box without a positioned ancestor kept no offset
+ * in a fresh layout, and got it on the next relayout. */
+static void relative_pass_late(AuLayout *L)
+{
+    LBox *b = L->root;
+    while (b) {
+        bool late = b != L->root && late_abspos(b);
+        if (late)
+            relative_pass(L, b, false);
+        if (b->first && b->kind != LK_TEXT && !(b->flags & LF_TOO_DEEP) && !late)
             b = b->first;
         else {
             while (b && !b->next)
@@ -1489,14 +1533,17 @@ void au_layout_tree_changed(AuLayout *L)
     L->need_paint = true;
 }
 
+/* Marks b for layout and every ancestor for a layout of its children.
+ * It does not stop at an ancestor already marked: a box that layout did
+ * not reach (in a cell or a float laid out from a cache) can keep its
+ * mark while its ancestors lost theirs, and stopping there left a
+ * restyled box with its old geometry. */
 void l_mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
     b->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
     l_table_forget(b);
     for (LBox *p = b->parent; p; p = p->parent) {
-        if ((p->flags & LF_CHILD_DIRTY) && !(p->flags & LF_INTRINSIC_OK))
-            break;
         p->flags |= LF_CHILD_DIRTY;
         p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
         l_table_forget(p);
@@ -1596,6 +1643,25 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
             return 3;
     }
     return r;
+}
+
+/* Whether a style change can make or unmake a stacking context or a
+ * positioned layer (creates_stacking in draw.c): the layer lists are
+ * built again even when the change needs only a repaint. */
+static bool stacking_style_differs(const AuStyle *a, const AuStyle *b)
+{
+    if (a->box->z_index != b->box->z_index)
+        return true;
+    const AuStyleRare *x = a->rare, *y = b->rare;
+    if (x == y)
+        return false;
+    return (x->opacity < 1) != (y->opacity < 1) || (x->transform == NULL) != (y->transform == NULL) ||
+           (x->translate == NULL) != (y->translate == NULL) || (x->rotate == NULL) != (y->rotate == NULL) ||
+           (x->scale == NULL) != (y->scale == NULL) || x->isolation != y->isolation ||
+           (x->filter == NULL) != (y->filter == NULL) || x->mix_blend_mode != y->mix_blend_mode ||
+           (x->clip_path == NULL) != (y->clip_path == NULL) ||
+           (x->contain & AU_CONTAIN_PAINT) != (y->contain & AU_CONTAIN_PAINT) ||
+           (au_style_mask_layer_count(a) > 0) != (au_style_mask_layer_count(b) > 0);
 }
 
 static const AuStyle *current_style(const LBox *b)
@@ -1705,6 +1771,8 @@ void au_layout_styles_changed(AuLayout *L)
             }
             if (d > worst)
                 worst = d;
+            if (d < 3 && stacking_style_differs(b->style, ns))
+                L->need_restack = true;
             if (d == 2) {
                 l_mark_dirty(b);
                 L->other_relayout = true;
@@ -1724,11 +1792,18 @@ void au_layout_styles_changed(AuLayout *L)
                 b = b->next;
         }
     }
-    /* An element left out of the tree for display: none that is shown now. */
+    /* An element left out of the tree for display: none that is shown
+     * now, or a display: contents element whose new style builds
+     * something else (no box of its own was compared above). */
     for (uint32_t i = 0; i < L->nhidden && worst < 3; i++) {
         AuElement *hel = L->hidden[i].el;
-        const AuStyle *hs = au_element_style(hel);
-        if (hs && hs->box->display != AU_DISPLAY_NONE) {
+        const AuStyle *hs = au_element_style(hel), *was = L->hidden[i].style;
+        bool changed = false;
+        if (hs && was && was->box->display == AU_DISPLAY_NONE)
+            changed = hs->box->display != AU_DISPLAY_NONE;
+        else if (hs && was && hs != was)
+            changed = style_diff(was, hs) == 3;
+        if (changed) {
             au_layout_node_changed(L, hel->node.parent ? hel->node.parent : &hel->node);
             if (L->need_build)
                 worst = 3;
@@ -1784,8 +1859,9 @@ static void layout_root(AuLayout *L)
     root->x = root->m[3];
     root->y = root->m[0];
     l_layout_content(L, root, w, h, L->vh);
-    relative_pass(L);
+    relative_pass(L, L->root, true);
     l_layout_abspos_for(L, NULL, 0);
+    relative_pass_late(L);
     l_finish_overflow(root);
     /* Document size: the root's overflow plus positioned boxes outside it. */
     float right = root->x + root->ov.x + root->ov.w, bottom = root->y + root->ov.y + root->ov.h;
