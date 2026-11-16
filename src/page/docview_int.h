@@ -148,6 +148,7 @@ struct AuDocView {
     AuFrame **dead;      /* frames whose element left its document, freed at the next safe point */
     uint32_t ndead, dead_cap;
     int script_depth;    /* entries into script of any document of the page */
+    uint32_t script_runs; /* counts those entries: it moved when script may have run (au_dv_script_runs) */
     bool frames_work;    /* something waits for au_frames_idle */
     bool in_frames_idle;
     AuPerf perf;         /* time counters (perf.h), cleared by au_docview_begin */
@@ -232,6 +233,33 @@ void au_dv_mouse_leave(AuDocView *dv);
 void au_dv_set_hover(AuDocView *dv, AuElement *el);
 void au_dv_tree_dirty(AuDocView *dv);
 
+
+/* ---- Pointers across script ----
+ * Any call that can run script (an event, focus or blur, input or change,
+ * click activation, a submission, a javascript: URL, timers, the load
+ * event, an embedder callback that shows a menu or a dialog) can remove a
+ * node from the document, free it, move it to another document, replace
+ * the document or rebuild the layout. Code that uses an element after
+ * such a call must hold a reference across it (au_node_ref before,
+ * au_node_unref after), ask au_dv_alive before acting on the element
+ * again, and look boxes and hit results up again instead of keeping them.
+ * docs/conventions.md states the rule. */
+
+/* True while el is connected to the document dv shows. el must be a
+ * valid pointer: one the caller holds a reference to. */
+static inline bool au_dv_alive(const AuDocView *dv, const AuElement *el)
+{
+    return dv->doc && el && el->node.doc == dv->doc && au_node_is_connected(&el->node);
+}
+
+/* A count of entries into script of any document of the page. When it
+ * has not moved across a call, no script ran in it. */
+static inline uint32_t au_dv_script_runs(AuDocView *dv)
+{
+    while (dv->parent)
+        dv = dv->parent;
+    return dv->script_runs;
+}
 
 /* forms.c */
 /* Forgets the focus and drag state (the document is going). */

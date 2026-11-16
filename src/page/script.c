@@ -658,6 +658,7 @@ static bool ensure_js(AuDocScript *s)
 static void enter(AuDocScript *s)
 {
     au_dv_top(s->dv)->script_depth++;
+    au_dv_top(s->dv)->script_runs++;
     if (s->depth++ == 0) { /* the outermost entry is timed (perf.h) */
         s->perf_t0 = au_dv_perf_now(s->dv);
         s->perf_label[0] = 0;
@@ -1166,12 +1167,22 @@ void au_docscript_hover(AuDocScript *s, AuElement *from, AuElement *to, int vx, 
 {
     if (!s->js)
         return;
+    /* Both are held: a mouseout listener may remove either, and from is
+     * the related target of the second event. */
+    if (from)
+        au_node_ref(&from->node);
+    if (to)
+        au_node_ref(&to->node);
     enter(s);
     if (from && au_node_is_connected(&from->node))
         au_js_fire_mouse(s->js, from, "mouseout", vx, vy, 0, 0, 0, to);
-    if (to)
+    if (to && s->js)
         au_js_fire_mouse(s->js, to, "mouseover", vx, vy, 0, 0, 0, from);
     leave(s);
+    if (from)
+        au_node_unref(&from->node);
+    if (to)
+        au_node_unref(&to->node);
 }
 
 void au_docscript_javascript_url(AuDocScript *s, const char *url)

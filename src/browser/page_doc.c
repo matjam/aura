@@ -182,7 +182,7 @@ struct AuPage {
     bool prev_have_security, prev_mixed, prev_legacy_kex;
     AuFetchCert *prev_cert;
 
-    /* Text selection: anchor and focus hold a reference to their node. */
+    /* Text selection: anchor, focus and sel_base hold a reference to their nodes. */
     AuTextPos anchor, focus;
     AuDocView *sel_dv;    /* the nested view the selection is in; NULL: the page's own (sel_view) */
     AuDocument *sel_doc;  /* the document sel_dv showed then (referenced) */
@@ -1391,7 +1391,8 @@ static AuDocView *sel_view(AuPage *p)
     AuTextPos none = {NULL, 0};
     set_pos(&p->anchor, none);
     set_pos(&p->focus, none);
-    p->sel_base.start = p->sel_base.end = none;
+    set_pos(&p->sel_base.start, none);
+    set_pos(&p->sel_base.end, none);
     p->selecting = false;
     if (p->sel_doc)
         au_node_unref(&p->sel_doc->node);
@@ -1439,7 +1440,8 @@ void au_page_clear_selection(AuPage *p)
     AuTextPos none = {NULL, 0};
     set_pos(&p->anchor, none);
     set_pos(&p->focus, none);
-    p->sel_base.start = p->sel_base.end = none;
+    set_pos(&p->sel_base.start, none);
+    set_pos(&p->sel_base.end, none);
     p->selecting = false;
     if (p->sel_doc)
         au_node_unref(&p->sel_doc->node);
@@ -1579,9 +1581,11 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
         }
         AuTextRange u;
         if (p->sel_mode > 1 && (p->sel_mode == 2 ? au_layout_word_at(L, &q, &u) : au_layout_block_at(L, &q, &u))) {
-            /* sel_base holds no references: its nodes belong to the
-             * document, which outlives it (it is cleared first). */
-            p->sel_base = u;
+            /* sel_base holds references as the anchor and focus do:
+             * script may remove and free a text node while the document
+             * stays, and the next drag compares positions with it. */
+            set_pos(&p->sel_base.start, u.start);
+            set_pos(&p->sel_base.end, u.end);
             sel_set(p, u.start, u.end);
             return true;
         }

@@ -427,6 +427,11 @@ void au_js_checkpoint(AuJs *js);
 bool au_js_idle(const AuJs *js);
 /* Runs the garbage collector. */
 void au_js_gc(AuJs *js);
+/* For tests and fuzzers: while on, every runtime collects each time
+ * script is left (not only when its heap has grown), so nodes that only
+ * garbage still names are freed at once and a pointer kept across script
+ * without a reference is caught by AddressSanitizer. Slow. */
+void au_js_set_gc_stress(bool on);
 
 /* ---- Workers ----
  * A dedicated worker (new Worker(url)) is a QuickJS runtime of its own

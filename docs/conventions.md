@@ -35,6 +35,9 @@ names the document for each kind of work.
   (constants). Prefix types with `Au` in every file: Retro68's
   `<string.h>` pulls in the Toolbox `Strings.h`, so names like `FInfo`
   collide with Toolbox types.
+- **Script runs inside your calls.** Hold a reference to a node across
+  any call that can run script, and check that it is still in the
+  document afterwards: see "Pointers across script" below.
 - **Input is hostile.** Everything a server or a file gives Aura is
   parsed on a machine without memory protection. Check every length
   that comes from the data before use, check size computations for
@@ -48,6 +51,57 @@ names the document for each kind of work.
   [`fuzzing.md`](fuzzing.md) lists the fuzzers and the rules they
   enforce on new code: `au_f2i` for floats a page controls, depth
   limits, capped allocations).
+
+## Pointers across script
+
+Any call that can run script can remove a node from the document, free
+it, move it to another document, replace the document or build the
+layout again. Treat every pointer to a node, element, control or box as
+gone after such a call unless you did the following.
+
+- **To use an element after a call that can run script, take a
+  reference before the call and release it after:** `au_node_ref(&el->node)`,
+  the call, `au_node_unref(&el->node)`. A reference keeps the memory, not
+  the place in the tree: the element may now be detached, and its
+  ancestors may be freed (its `parent` is then NULL).
+- **Ask whether it is still in this document before acting on it:**
+  `au_dv_alive(dv, el)` (`src/page/docview_int.h`; `alive` in `forms.c`).
+  It reads the element, so it needs the reference too.
+- **Do not keep what is not reference counted.** Look a box up again
+  (`el->box`, `au_layout_element_rect`), make the hit test again
+  (`AuHitResult` holds bare pointers), read an attribute's text again,
+  and ask for the control again (`au_ctl(el)`).
+- **Check `dv->doc`** after the call: the document may be gone.
+- **To know whether script ran in a call**, compare
+  `au_dv_script_runs(dv)` before and after.
+
+Calls that can run script: every `au_docscript_*` function that fires an
+event or runs code (`_mouse`, `_key`, `_fire`, `_focus`, `_input`,
+`_submit_event`, `_hover`, `_javascript_url`, `_run`, `_eval`,
+`_loaded`, `_layout_done`), and so everything built on them in
+`forms.c` (`fire`, `focus_el`, `input_change`, `commit_change`,
+`range_set`, `select_choose`, `listbox_pick`, `insert_text`,
+`delete_text`, `form_submit`, `form_reset`, `synthetic_click`,
+`au_forms_activate`), `au_docview_mouse`, `_key`, `_edit`,
+`_set_focus`, `_run_scripts`, `au_frames_idle`, `au_frames_blur`, and
+the embedder callbacks that show a menu or a dialog (`popup`,
+`choose_file`, `confirm`).
+
+Three things hide a missing reference, so a test must defeat each
+(`tests/forms/test_input_lifetime.c` does):
+
+- the box tree holds a reference to every node it shows, until the next
+  layout: the listener must ask for a layout (`offsetWidth`) after it
+  removes the node;
+- the view holds its hover target: the pointer must arrive at the
+  element without a move over it;
+- a script wrapper holds its node until the collector runs: turn on
+  `au_js_set_gc_stress` ([`fuzzing.md`](fuzzing.md)).
+
+Frames and nested views are not reference counted. They are freed only
+by `au_frames_idle`, which does nothing while script of the page is on
+the stack; check `f->dead` and `f->dv` after a call that can run script
+([`frames.md`](frames.md)).
 
 ## Third-party code and licences
 

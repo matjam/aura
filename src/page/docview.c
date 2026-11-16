@@ -1807,15 +1807,22 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
     AuHitResult r;
     au_docview_hit_test(dv, ev->x, ev->y, &r);
     if (dv->script) {
-        /* Listeners may change or replace the document; the script side
-         * keeps r.element alive while they run. */
+        /* Listeners may change or replace the document: the target is
+         * held across the hover events (whose listeners may remove it
+         * before the event itself is fired), and the hit test is made
+         * again afterwards, since r's pointers are not held. */
         static const char *const types[] = {"mousemove", "mousedown", "mouseup"};
         int t = ev->type == AU_EVENT_MOUSE_MOVE ? 0 : ev->type == AU_EVENT_MOUSE_DOWN ? 1 : ev->type == AU_EVENT_MOUSE_UP ? 2 : -1;
         if (t >= 0) {
-            if (t == 0 && r.element != dv->hover)
-                au_docscript_hover(dv->script, dv->hover, r.element, ev->x - dv->scroll_x, ev->y - dv->scroll_y);
-            if (dv->script)
-                au_docscript_mouse(dv->script, ev, r.element, types[t], ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            AuElement *target = r.element;
+            if (target)
+                au_node_ref(&target->node);
+            if (t == 0 && target != dv->hover)
+                au_docscript_hover(dv->script, dv->hover, target, ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            if (dv->script && au_dv_alive(dv, target))
+                au_docscript_mouse(dv->script, ev, target, types[t], ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            if (target)
+                au_node_unref(&target->node);
             if (!dv->doc)
                 return true;
             au_docview_hit_test(dv, ev->x, ev->y, &r);
@@ -1823,11 +1830,15 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
     }
     bool used = false;
     if (ev->type == AU_EVENT_MOUSE_DOWN || ev->type == AU_EVENT_MOUSE_MOVE || ev->type == AU_EVENT_MOUSE_UP) {
-        /* Focus, caret placement, drags in fields, pop-ups, buttons. */
+        /* Focus, caret placement, drags in fields, pop-ups, buttons. Its
+         * events (focus, blur, change, input) may have changed the page,
+         * also when no control used the press: r is made again whenever
+         * script ran. */
+        uint32_t runs = au_dv_script_runs(dv);
         used = au_forms_mouse(dv, ev, &r);
         if (!dv->doc)
             return true;
-        if (used && ev->type != AU_EVENT_MOUSE_UP)
+        if ((used && ev->type != AU_EVENT_MOUSE_UP) || au_dv_script_runs(dv) != runs)
             au_docview_hit_test(dv, ev->x, ev->y, &r);
     }
     switch (ev->type) {
@@ -1866,6 +1877,10 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
             /* click goes to the nearest common ancestor of the press and
              * release targets */
             AuElement *t = r.element;
+        /* Held across the click: a listener may remove the link, and a
+         * new element at its address must not be taken for it. */
+        if (down_link)
+            au_node_ref(&down_link->node);
             while (t && !node_contains(&t->node, &down->node))
                 t = au_is_element(t->node.parent) ? au_as_element(t->node.parent) : NULL;
             if (t) {
@@ -1884,13 +1899,19 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
                 }
                 au_node_unref(&t->node);
             }
-            if (!dv->doc)
+            if (!dv->doc) {
+                if (down_link)
+                    au_node_unref(&down_link->node);
                 return true;
             au_docview_hit_test(dv, ev->x, ev->y, &r); /* listeners may have changed the page */
         }
         set_state(dv, &dv->active, NULL, AU_STATE_ACTIVE);
-        if (follow && r.link && r.link == down_link) {
+        bool same_link = r.link && r.link == down_link;
+        if (down_link)
+            au_node_unref(&down_link->node); /* r.link, when it is the same, is in the document */
+        if (follow && same_link) {
             char url[2048];
+            }
             link_url(dv, r.link, url, sizeof url);
             const char *target = attr(r.link, "target");
             bool new_tab = (ev->mods & AU_MOD_COMMAND) || (target && au_ieq(target, strlen(target), "_blank", 6));

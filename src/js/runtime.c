@@ -572,9 +572,24 @@ void au_js_checkpoint(AuJs *js)
     root->in_checkpoint = false;
 }
 
+static bool gc_stress;
+
+void au_js_set_gc_stress(bool on)
+{
+    gc_stress = on;
+}
+
 void js_safe_point(AuJs *js)
 {
     js_drain_pending(js);
+    /* For tests and fuzzers (au_js_set_gc_stress): collect whenever
+     * script has been left, so a node whose wrapper is garbage in a
+     * reference cycle (an event object and its target) is freed as soon
+     * as script lets go of it, not at some later collection. */
+    if (gc_stress && !js->root->closing) {
+        JS_RunGC(js->rt);
+        js_drain_pending(js);
+    }
 }
 
 /* ---- Natives every part uses ---- */

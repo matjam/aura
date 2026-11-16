@@ -499,9 +499,16 @@ static void frame_show_html(AuFrame *f, const char *url, const char *html)
     if (!c)
         return;
     f->sx = f->sy = 0;
+    /* html is often an attribute's text (srcdoc). au_docview_begin ends
+     * the frame's previous document, whose unload listeners run and may
+     * set that attribute, which frees the text: it is copied first
+     * (docs/conventions.md, "Pointers across script"). */
+    size_t n = strlen(html);
+    char *copy = au_strndup(html, n);
     au_docview_begin(c, url);
-    au_docview_feed(c, html, strlen(html));
+    au_docview_feed(c, copy, n);
     au_docview_finish(c);
+    au_free(copy);
     invalidate_frame(f);
 }
 

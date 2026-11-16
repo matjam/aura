@@ -17,6 +17,7 @@
 
 #include "../url/url.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +67,8 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el)
         return;
     /* Fixed boxes are placed by the viewport scroll: cover both. */
     int pad = 4;
-    AuIRect ir = {(int)r.x - pad, (int)r.y - pad, (int)(r.x + r.w) + pad + 1, (int)(r.y + r.h) + pad + 1};
+    /* A page puts a box anywhere (left: 1e38px): au_f2px, not a cast. */
+    AuIRect ir = {au_f2px(r.x) - pad, au_f2px(r.y) - pad, au_f2px(r.x + r.w) + pad + 1, au_f2px(r.y + r.h) + pad + 1};
     au_dv_invalidate_element_rect(dv, el, ir);
 }
 
@@ -118,9 +120,12 @@ static bool fire(AuDocView *dv, AuElement *el, const char *type, bool bubbles, b
     return au_docscript_fire(dv->script, el, type, bubbles, cancelable);
 }
 
+/* Every function here that fires an event follows the rule in
+ * docview_int.h ("Pointers across script"): it holds a reference to each
+ * element it uses afterwards and asks alive() before acting on it. */
 static bool alive(AuDocView *dv, AuElement *el)
 {
-    return dv->doc && el && el->node.doc == dv->doc && au_node_is_connected(&el->node);
+    return au_dv_alive(dv, el);
 }
 
 /* input then change, after a user change of a checkbox, radio button,
@@ -244,13 +249,23 @@ static void focus_el(AuDocView *dv, AuElement *el, bool keyboard, bool from_scri
         return;
     }
     AuElement *old = dv->focus;
+    /* The change listener, and the blur of a nested document, may remove
+     * el: it is held until the end and asked for again after each. */
+    if (el)
+        au_node_ref(&el->node);
     if (old) {
         au_node_ref(&old->node);
         if (au_ctl_is_text_field(old) && !from_script)
             commit_change(dv, old);
         if (dv->focus != old) { /* a change listener moved the focus */
             au_node_unref(&old->node);
+            if (el)
+                au_node_unref(&el->node);
             return;
+        }
+        if (el && !alive(dv, el)) { /* the listener removed el: the focus only leaves old */
+            au_node_unref(&el->node);
+            el = NULL;
         }
         fill_focus_state(dv, old, false, false);
         AuControl *c = au_ctl_peek(old);
@@ -260,9 +275,20 @@ static void focus_el(AuDocView *dv, AuElement *el, bool keyboard, bool from_scri
         }
         dv->focus = NULL;
     }
+    if (el && dv->focus_frame) {
+        au_frames_blur(dv); /* the keyboard leaves the nested document; its blur listeners run */
+        if (dv->focus) { /* one of them focused an element of this document */
+            au_node_unref(&el->node);
+            if (old)
+                au_node_unref(&old->node);
+            return;
+        }
+        if (!alive(dv, el)) {
+            au_node_unref(&el->node);
+            el = NULL;
+        }
+    }
     if (el) {
-        if (dv->focus_frame)
-            au_frames_blur(dv); /* the keyboard leaves the nested document */
         set_ref(&dv->focus, el);
         bool text = au_ctl_is_text_field(el);
         dv->focus_visible = keyboard || text;
@@ -287,6 +313,8 @@ static void focus_el(AuDocView *dv, AuElement *el, bool keyboard, bool from_scri
     }
     if (old)
         au_node_unref(&old->node);
+    if (el)
+        au_node_unref(&el->node);
 }
 
 void au_forms_script_focus(AuDocView *dv, AuElement *el)
@@ -311,9 +339,11 @@ void au_forms_autofocus(AuDocView *dv)
         }
     if (!cand)
         return;
+    au_node_ref(&cand->node);
     au_docview_update(dv);
     if (alive(dv, cand) && focusable(cand) && !dv->focus)
         focus_el(dv, cand, false, false);
+    au_node_unref(&cand->node);
 }
 
 void au_forms_clear(AuDocView *dv)
@@ -351,9 +381,9 @@ static void reveal_element(AuDocView *dv, AuElement *el)
         return;
     int x = dv->scroll_x, y = dv->scroll_y;
     if (r.y < y || r.y + r.h > y + dv->vh)
-        y = (int)r.y - dv->vh / 3;
+        y = au_f2px(r.y) - dv->vh / 3;
     if (r.x < x || r.x + r.w > x + dv->vw)
-        x = (int)r.x - 20;
+        x = au_f2px(r.x) - 20;
     if (x < 0)
         x = 0;
     if (y < 0)
@@ -432,7 +462,7 @@ uint32_t au_docview_blink(AuDocView *dv, uint32_t now_ms)
     au_layout_set_focus(dv->layout, dv->focus, dv->caret_on);
     AuRect r;
     if (dv->cb.invalidate && au_layout_field_caret_rect(dv->layout, dv->focus, c->caret, &r)) {
-        AuIRect ir = {(int)r.x - 1, (int)r.y - 1, (int)(r.x + r.w) + 2, (int)(r.y + r.h) + 2};
+        AuIRect ir = {au_f2px(r.x) - 1, au_f2px(r.y) - 1, au_f2px(r.x + r.w) + 2, au_f2px(r.y + r.h) + 2};
         dv->cb.invalidate(dv->cb.ctx, dv, ir);
         if (is_fixed(dv->focus)) {
             AuIRect f = {ir.x0 + dv->scroll_x, ir.y0 + dv->scroll_y, ir.x1 + dv->scroll_x, ir.y1 + dv->scroll_y};
@@ -475,7 +505,8 @@ static bool validate_form(AuDocView *dv, AuElement *form)
             first_bits = bits;
         }
     }
-    if (first && dv->doc) {
+    /* A later control's listener may have removed the first one. */
+    if (first && alive(dv, first)) {
         reveal_element(dv, first);
         if (focusable(first))
             focus_el(dv, first, true, false);
@@ -519,6 +550,8 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
     bool novalidate = get_attr(form, "novalidate") || (submitter && get_attr(submitter, "formnovalidate"));
     if (!(flags & SUB_NO_VALIDATE) && !novalidate && !validate_form(dv, form))
         goto out;
+    if (!alive(dv, form))
+        goto out; /* a listener of the validation removed it */
     if (!(flags & SUB_NO_EVENTS) && dv->script) {
         if (!au_docscript_submit_event(dv->script, form, submitter) || !alive(dv, form))
             goto out;
@@ -577,6 +610,21 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
             au_free(url);
             goto out;
         }
+        /* The embedder's dialog may have let the page run: the form is
+         * asked for again, and target, an attribute's text, is read again. */
+        if (!alive(dv, form)) {
+            au_form_entries_free(&l);
+            au_free(url);
+            goto out;
+        }
+        target = pick(form, submitter, "target");
+        if (!target) {
+            for (AuNode *c = &dv->doc->node; c && !target; c = au_node_next(c, &dv->doc->node))
+                if (au_is_html_element(c, AU_ATOM_base))
+                    target = get_attr(au_as_element(c), "target");
+        }
+        new_tab = target && *target && !au_ieq(target, strlen(target), "_self", 5) &&
+                  !au_ieq(target, strlen(target), "_top", 4) && !au_ieq(target, strlen(target), "_parent", 7);
         AuBuf body, target_url;
         au_buf_init(&body);
         au_buf_init(&target_url);
@@ -608,7 +656,9 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
             au_buf_puts(&target_url, url);
             s.method = "POST";
             if (enc == 1) {
-                uint32_t r = (uint32_t)(uintptr_t)form ^ (uint32_t)(au_dv_now(dv) * 1000.0) ^ (uint32_t)l.n * 2654435761u;
+                /* fmod: the clock times 1000 leaves uint32_t's range after 71 minutes. */
+                double clk = fmod(au_dv_now(dv) * 1000.0, 4294967296.0);
+                uint32_t r = (uint32_t)(uintptr_t)form ^ (clk >= 0 ? (uint32_t)clk : 0) ^ (uint32_t)l.n * 2654435761u;
                 uint32_t r2 = r * 2246822519u + 0x9E3779B9u;
                 snprintf(boundary, sizeof boundary, "----AuraFormBoundary%08lx%08lx", (unsigned long)r,
                          (unsigned long)r2);
@@ -664,7 +714,10 @@ void au_docview_submit(AuDocView *dv, AuElement *form, AuElement *submitter)
 
 static void form_reset(AuDocView *dv, AuElement *form)
 {
-    if (!fire(dv, form, "reset", true, true) || !alive(dv, form))
+    au_node_ref(&form->node);
+    bool go = fire(dv, form, "reset", true, true) && alive(dv, form);
+    au_node_unref(&form->node); /* still in the document when go is set */
+    if (!go)
         return;
     size_t n;
     AuElement **els = au_form_elements(form, &n);
@@ -795,7 +848,7 @@ static void toggle_details(AuDocView *dv, AuElement *summary)
     if (dv->cb.invalidate) {
         float w, h;
         au_layout_document_size(dv->layout, &w, &h);
-        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, (int)w + 1, (int)h + 1});
+        dv->cb.invalidate(dv->cb.ctx, dv, (AuIRect){0, 0, au_f2px(w) + 1, au_f2px(h) + 1});
     }
     fire(dv, d, "toggle", false, false);
 }
@@ -893,10 +946,12 @@ static void synthetic_click(AuDocView *dv, AuElement *el)
         AuEvent ev;
         memset(&ev, 0, sizeof ev);
         ev.clicks = 1;
+        au_node_ref(&el->node);
         au_docscript_mouse(dv->script, &ev, el, "click", 0, 0);
         /* the bindings toggled checkboxes and radio buttons */
         if (alive(dv, el))
             state_changed(dv, el);
+        au_node_unref(&el->node);
     } else {
         au_forms_activate(dv, el, 0, 0);
     }
@@ -975,7 +1030,7 @@ static void select_popup(AuDocView *dv, AuElement *sel)
     AuRect r;
     AuIRect at = {0, 0, 0, 0};
     if (au_layout_element_rect(dv->layout, sel, &r))
-        at = (AuIRect){(int)r.x, (int)r.y, (int)(r.x + r.w), (int)(r.y + r.h)};
+        at = (AuIRect){au_f2px(r.x), au_f2px(r.y), au_f2px(r.x + r.w), au_f2px(r.y + r.h)};
     au_node_ref(&sel->node);
     int chosen = dv->cb.popup(dv->cb.ctx, dv, items, (int)n, selected_row, at);
     if (chosen >= 0 && chosen < (int)n && opt_index[chosen] >= 0 && !items[chosen].disabled && alive(dv, sel))
@@ -1045,9 +1100,9 @@ static void listbox_pick(AuDocView *dv, AuElement *sel, int row, bool toggle, bo
         c->cursor = row;
     /* keep the row in view */
     int vis = au_layout_listbox_visible(dv->layout, sel);
-    if (row < (int)c->scroll_y)
+    if (row < au_f2px(c->scroll_y))
         c->scroll_y = (float)row;
-    else if (row >= (int)c->scroll_y + vis)
+    else if (row >= au_f2px(c->scroll_y) + vis)
         c->scroll_y = (float)(row - vis + 1);
     au_free(rows);
     rebuild(dv, sel);
@@ -1072,6 +1127,7 @@ static void range_set(AuDocView *dv, AuElement *el, double v, bool commit)
     bool changed = strcmp(was, now) != 0;
     au_free(was);
     au_ctl(el)->user_interacted = true;
+    au_node_ref(&el->node);
     if (changed) {
         /* the slider is painted from the value attribute's box data */
         rebuild(dv, el);
@@ -1079,6 +1135,7 @@ static void range_set(AuDocView *dv, AuElement *el, double v, bool commit)
     }
     if (commit && changed && alive(dv, el))
         fire(dv, el, "change", true, false);
+    au_node_unref(&el->node);
 }
 
 static double range_num(AuElement *el, const char *name, double dflt)
@@ -1346,9 +1403,7 @@ static bool control_key(AuDocView *dv, AuElement *el, const AuEvent *ev)
                 bool extend = (ev->mods & AU_MOD_SHIFT) != 0;
                 if (extend && c->cursor < 0)
                     c->cursor = r;
-                listbox_pick(dv, el, k, false, extend);
-                if (extend)
-                    c->cursor = c->cursor; /* the anchor stays */
+                listbox_pick(dv, el, k, false, extend); /* the anchor stays when extending */
             }
             return true;
         }
@@ -1396,8 +1451,11 @@ static bool control_key(AuDocView *dv, AuElement *el, const AuEvent *ev)
             }
             au_free(g);
             if (to) {
+                au_node_ref(&to->node);
                 focus_el(dv, to, true, false);
-                synthetic_click(dv, to);
+                if (alive(dv, to))
+                    synthetic_click(dv, to);
+                au_node_unref(&to->node);
             }
             return true;
         }
@@ -1502,6 +1560,10 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
     }
     bool used = used_by_script;
     if (!used_by_script) {
+        /* The key's own action fires events (beforeinput, input, change,
+         * click, submit): el is held across it. */
+        if (el)
+            au_node_ref(&el->node);
         if (ev->key == AU_KEY_TAB && !cmd) {
             AuElement *to = next_tab(dv, el, (ev->mods & AU_MOD_SHIFT) != 0);
             if (to) {
@@ -1518,6 +1580,8 @@ bool au_docview_key(AuDocView *dv, const AuEvent *ev)
         } else if (el) {
             used = control_key(dv, el, ev);
         }
+        if (el)
+            au_node_unref(&el->node);
     }
     if (dv->script && dv->doc) {
         char key[16], code[24];
@@ -1562,11 +1626,23 @@ bool au_docview_can_edit(const AuDocView *dv, int cmd)
     }
 }
 
+static bool edit_command(AuDocView *dv, AuElement *el, int cmd, const char *text, size_t len, AuBuf *out);
+
 bool au_docview_edit(AuDocView *dv, int cmd, const char *text, size_t len, AuBuf *out)
 {
     if (!au_docview_editing(dv))
         return false;
+    /* The command fires beforeinput and input, whose listeners may move
+     * the focus and remove the field. */
     AuElement *el = dv->focus;
+    au_node_ref(&el->node);
+    bool ok = edit_command(dv, el, cmd, text, len, out);
+    au_node_unref(&el->node);
+    return ok;
+}
+
+static bool edit_command(AuDocView *dv, AuElement *el, int cmd, const char *text, size_t len, AuBuf *out)
+{
     AuControl *c = au_ctl(el);
     au_ctl_value(el, NULL);
     bool pw = is_html(el, AU_ATOM_input) && au_input_type(el) == AU_INPUT_PASSWORD;
@@ -1736,58 +1812,92 @@ static AuElement *focus_target(AuElement *e)
     return NULL;
 }
 
+/* A press on control ctl, which the caller holds. r is the hit result, or
+ * NULL when script ran since it was made (the point is then worked out
+ * from the control's box). */
+static bool down_on_control(AuDocView *dv, AuElement *ctl, const AuEvent *ev, const AuHitResult *r)
+{
+    if (!alive(dv, ctl) || au_form_disabled(ctl))
+        return true;
+    if (au_ctl_is_text_field(ctl)) {
+        if (dv->focus == ctl)
+            field_click(dv, ctl, ev, r);
+        return true;
+    }
+    if (is_html(ctl, AU_ATOM_select)) {
+        if (au_select_is_listbox(ctl)) {
+            float lx, ly;
+            local_point(dv, ctl, ev, r, &lx, &ly);
+            int row = au_layout_listbox_row_at(dv->layout, ctl, lx, ly);
+            if (row >= 0)
+                listbox_pick(dv, ctl, row, (ev->mods & AU_MOD_COMMAND) != 0, (ev->mods & AU_MOD_SHIFT) != 0);
+            if (alive(dv, ctl))
+                set_ref(&dv->drag, ctl);
+        } else {
+            select_popup(dv, ctl);
+        }
+        return true;
+    }
+    if (is_html(ctl, AU_ATOM_input) && au_input_type(ctl) == AU_INPUT_RANGE) {
+        float lx, ly;
+        local_point(dv, ctl, ev, r, &lx, &ly);
+        float f = au_layout_range_frac_at(dv->layout, ctl, lx);
+        if (f >= 0) {
+            double mn = range_num(ctl, "min", 0), mx = range_num(ctl, "max", 100);
+            range_set(dv, ctl, mn + f * (mx - mn), false);
+        }
+        if (alive(dv, ctl))
+            set_ref(&dv->drag, ctl);
+        return true;
+    }
+    /* buttons: painted pressed while held */
+    set_ref(&dv->pressed, ctl);
+    AuControl *c = au_ctl(ctl);
+    c->pressed = true;
+    au_dv_invalidate_element(dv, ctl);
+    return true;
+}
+
 bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r)
 {
     switch (ev->type) {
     case AU_EVENT_MOUSE_DOWN: {
-        AuElement *ft = focus_target(r->element);
+        /* Moving the focus fires change, blur and focus, and the control's
+         * own action fires input and change: their listeners may remove
+         * the element under the pointer, its control, or the document.
+         * The hit result is the caller's and is not read after the first
+         * of them; the target and the control are held instead. */
+        AuElement *target = r->element;
+        if (!target) {
+            if (dv->focus)
+                focus_el(dv, NULL, false, false);
+            return false;
+        }
+        uint32_t runs = au_dv_script_runs(dv);
+        au_node_ref(&target->node);
+        AuElement *ft = focus_target(target);
         if (ft != dv->focus)
             focus_el(dv, ft, false, false);
-        if (!dv->doc)
-            return true;
-        AuElement *ctl = control_of(r->element);
-        if (!ctl || !alive(dv, ctl) || au_form_disabled(ctl))
-            return ctl != NULL;
-        if (au_ctl_is_text_field(ctl)) {
-            if (dv->focus == ctl)
-                field_click(dv, ctl, ev, r);
-            return true;
-        }
-        if (is_html(ctl, AU_ATOM_select)) {
-            if (au_select_is_listbox(ctl)) {
-                float lx, ly;
-                local_point(dv, ctl, ev, r, &lx, &ly);
-                int row = au_layout_listbox_row_at(dv->layout, ctl, lx, ly);
-                if (row >= 0)
-                    listbox_pick(dv, ctl, row, (ev->mods & AU_MOD_COMMAND) != 0, (ev->mods & AU_MOD_SHIFT) != 0);
-                set_ref(&dv->drag, ctl);
-            } else {
-                select_popup(dv, ctl);
-            }
-            return true;
-        }
-        if (is_html(ctl, AU_ATOM_input) && au_input_type(ctl) == AU_INPUT_RANGE) {
-            float lx, ly;
-            local_point(dv, ctl, ev, r, &lx, &ly);
-            float f = au_layout_range_frac_at(dv->layout, ctl, lx);
-            if (f >= 0) {
-                double mn = range_num(ctl, "min", 0), mx = range_num(ctl, "max", 100);
-                range_set(dv, ctl, mn + f * (mx - mn), false);
-            }
-            set_ref(&dv->drag, ctl);
-            return true;
-        }
-        /* buttons: painted pressed while held */
-        set_ref(&dv->pressed, ctl);
-        AuControl *c = au_ctl(ctl);
-        c->pressed = true;
-        au_dv_invalidate_element(dv, ctl);
-        return true;
+        bool target_ok = alive(dv, target);
+        AuElement *ctl = target_ok ? control_of(target) : NULL;
+        if (ctl)
+            au_node_ref(&ctl->node);
+        au_node_unref(&target->node);
+        if (!ctl)
+            return !target_ok; /* a press whose target went away is used up */
+        /* The point inside the control comes from the hit result only
+         * while no script ran since it was made. */
+        if (au_dv_script_runs(dv) != runs)
+            r = NULL;
+        bool used = down_on_control(dv, ctl, ev, r);
+        au_node_unref(&ctl->node);
+        return used;
     }
     case AU_EVENT_MOUSE_MOVE: {
         AuElement *d = dv->drag;
         if (!d || !alive(dv, d))
             return false;
+        au_node_ref(&d->node); /* input listeners may end the drag and remove d */
         if (au_ctl_is_text_field(d)) {
             field_drag(dv, d, ev);
         } else if (is_html(d, AU_ATOM_input)) {
@@ -1806,9 +1916,10 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r)
             if (row >= 0 && row != c->cursor) {
                 int keep = c->cursor;
                 listbox_pick(dv, d, row, false, true);
-                c->cursor = keep;
+                au_ctl(d)->cursor = keep; /* d is held; its control is asked for again */
             }
         }
+        au_node_unref(&d->node);
         return true;
     }
     case AU_EVENT_MOUSE_UP: {
