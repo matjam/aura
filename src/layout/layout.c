@@ -1625,6 +1625,25 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
     return r;
 }
 
+/* Whether a style change can make or unmake a stacking context or a
+ * positioned layer (creates_stacking in draw.c): the layer lists are
+ * built again even when the change needs only a repaint. */
+static bool stacking_style_differs(const AuStyle *a, const AuStyle *b)
+{
+    if (a->box->z_index != b->box->z_index)
+        return true;
+    const AuStyleRare *x = a->rare, *y = b->rare;
+    if (x == y)
+        return false;
+    return (x->opacity < 1) != (y->opacity < 1) || (x->transform == NULL) != (y->transform == NULL) ||
+           (x->translate == NULL) != (y->translate == NULL) || (x->rotate == NULL) != (y->rotate == NULL) ||
+           (x->scale == NULL) != (y->scale == NULL) || x->isolation != y->isolation ||
+           (x->filter == NULL) != (y->filter == NULL) || x->mix_blend_mode != y->mix_blend_mode ||
+           (x->clip_path == NULL) != (y->clip_path == NULL) ||
+           (x->contain & AU_CONTAIN_PAINT) != (y->contain & AU_CONTAIN_PAINT) ||
+           (au_style_mask_layer_count(a) > 0) != (au_style_mask_layer_count(b) > 0);
+}
+
 static const AuStyle *current_style(const LBox *b)
 {
     AuNode *n = b->node;
@@ -1732,6 +1751,8 @@ void au_layout_styles_changed(AuLayout *L)
             }
             if (d > worst)
                 worst = d;
+            if (d < 3 && stacking_style_differs(b->style, ns))
+                L->need_restack = true;
             if (d == 2) {
                 l_mark_dirty(b);
                 L->other_relayout = true;
