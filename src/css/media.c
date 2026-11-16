@@ -31,6 +31,15 @@ struct AuCssMediaList {
     char *text;
 };
 
+/* For css_bench: what a list holds, here and on 32-bit PowerPC. */
+void css_media_mem(const AuCssMediaList *m, size_t *bytes, size_t *bytes32, size_t *blocks);
+void css_media_mem(const AuCssMediaList *m, size_t *bytes, size_t *bytes32, size_t *blocks)
+{
+    *bytes += sizeof *m + m->cap * sizeof(MqNode) + (m->text ? strlen(m->text) + 1 : 0);
+    *bytes32 += 16 + m->cap * sizeof(MqNode) + (m->text ? strlen(m->text) + 1 : 0);
+    *blocks += 1 + (m->n != NULL) + (m->text != NULL);
+}
+
 /* ---- Features ---- */
 
 enum { FT_RANGE_LEN, FT_RANGE_RATIO, FT_RANGE_RES, FT_RANGE_INT, FT_DISCRETE };

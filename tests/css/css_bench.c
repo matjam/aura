@@ -7,6 +7,7 @@
  * generated document with it, and prints the times and the bytes of
  * computed style per element. */
 #include "../../src/css/css_int.h"
+#include "../../src/html/html.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -235,11 +236,316 @@ static int mem_report(int argc, char **argv)
     return 0;
 }
 
+
+/* ---- css_bench --where: what each structure of the parsed sheets takes ----
+ * Bytes are what was asked of the allocator, for this host and as they
+ * would be on 32-bit PowerPC (from the struct layouts there); blocks are
+ * allocations. */
+typedef struct {
+    const char *name;
+    size_t bytes, bytes32, blocks;
+} Where;
+enum { W_RULE, W_SELLIST, W_SELECTOR, W_COMP, W_SELSTR, W_DECLS, W_BLOB, W_CUSTOM, W_VAR, W_MEDIA, W_LAYER, W_COND,
+       W_OTHER, W_COUNT };
+static Where wh[W_COUNT] = {{"rules (CssRule)", 0, 0, 0}, {"selector lists", 0, 0, 0}, {"selectors", 0, 0, 0},
+                            {"components", 0, 0, 0}, {"attribute and :lang strings", 0, 0, 0},
+                            {"declaration arrays", 0, 0, 0}, {"declared value trees (blobs)", 0, 0, 0},
+                            {"custom property token lists", 0, 0, 0}, {"var() token lists", 0, 0, 0},
+                            {"media lists", 0, 0, 0}, {"layer names", 0, 0, 0}, {"condition text", 0, 0, 0},
+                            {"sheet, imports, faces, keyframes, @property", 0, 0, 0}};
+static size_t n_rules, n_style, n_selectors, n_comps, n_decls;
+
+static void w_add(int w, size_t b, size_t b32)
+{
+    wh[w].bytes += b;
+    wh[w].bytes32 += b32;
+    wh[w].blocks++;
+}
+
+static const void **seen_p;
+static size_t seen_n, seen_cap;
+static bool seen(const void *p)
+{
+    if ((seen_n + 1) * 2 > seen_cap) {
+        size_t nc = seen_cap ? seen_cap * 2 : 4096;
+        const void **nt = calloc(nc, sizeof *nt);
+        for (size_t i = 0; i < seen_cap; i++)
+            if (seen_p[i]) {
+                size_t h = ((uintptr_t)seen_p[i] >> 4) * 2654435761u & (nc - 1);
+                while (nt[h])
+                    h = (h + 1) & (nc - 1);
+                nt[h] = seen_p[i];
+            }
+        free(seen_p);
+        seen_p = nt;
+        seen_cap = nc;
+    }
+    size_t h = ((uintptr_t)p >> 4) * 2654435761u & (seen_cap - 1);
+    while (seen_p[h]) {
+        if (seen_p[h] == p)
+            return true;
+        h = (h + 1) & (seen_cap - 1);
+    }
+    seen_p[h] = p;
+    seen_n++;
+    return false;
+}
+
+static size_t tree32(const AuCssValue *v)
+{
+    /* the 32-bit size of what css_blob_pack stores after the root */
+    size_t n = 0;
+    if (v->type == AU_CSSV_IDENT || v->type == AU_CSSV_STRING || v->type == AU_CSSV_URL)
+        return (v->n + 1 + 7) & ~(size_t)7;
+    if (v->type == AU_CSSV_FUNCTION || v->type == AU_CSSV_CALC || v->type == AU_CSSV_LIST ||
+        v->type == AU_CSSV_COMMA_LIST) {
+        n += (v->n * 12 + 7) & ~(size_t)7;
+        for (uint32_t i = 0; i < v->n; i++)
+            n += tree32(&v->u.items[i]);
+    }
+    return n;
+}
+
+static void w_sellist(const AuSelList *l);
+static void w_decls(const AuCssDeclBlock *b)
+{
+    if (!b->d)
+        return;
+    n_decls += b->n;
+    w_add(W_DECLS, b->cap * sizeof(AuCssDecl), b->cap * 20);
+    for (uint32_t i = 0; i < b->n; i++) {
+        const AuCssDecl *d = &b->d[i];
+        if (d->kind == DK_BLOB && !seen(d->u.blob)) {
+            size_t tail = d->u.blob->base_url ? strlen(d->u.blob->base_url) + 1 : 0;
+            w_add(W_BLOB, d->u.blob->size, 24 + tree32(&d->u.blob->value) + tail);
+        } else if ((d->kind == DK_VAR || d->kind == DK_CUSTOM) && !seen(d->u.toks)) {
+            const CssTokList *t = d->u.toks;
+            int w = d->kind == DK_VAR ? W_VAR : W_CUSTOM;
+            w_add(w, sizeof *t, 32);
+            if (t->tk.t)
+                w_add(w, t->tk.cap * sizeof(CssToken), t->tk.cap * sizeof(CssToken));
+            if (t->tk.pool.data)
+                w_add(w, t->tk.pool.cap, t->tk.pool.cap);
+        }
+    }
+}
+
+static void w_sellist(const AuSelList *l)
+{
+    if (!l)
+        return;
+    w_add(W_SELLIST, sizeof *l, 12);
+    if (l->sel)
+        w_add(W_SELECTOR, l->n * sizeof(AuSelector), l->n * 36);
+    n_selectors += l->n;
+    for (uint32_t i = 0; i < l->n; i++) {
+        const AuSelector *s = &l->sel[i];
+        w_add(W_COMP, (s->ncomp ? s->ncomp : 1) * sizeof(AuSelComp), (s->ncomp ? s->ncomp : 1) * 24);
+        n_comps += s->ncomp;
+        for (uint32_t k = 0; k < s->ncomp; k++) {
+            const AuSelComp *c = &s->comp[k];
+            if (c->type == SC_ATTR && c->u.value.s)
+                w_add(W_SELSTR, c->u.value.len + 1, c->u.value.len + 1);
+            else if (c->type == SC_PSEUDO && c->op == PC_LANG)
+                w_add(W_SELSTR, c->u.value.len + 1, c->u.value.len + 1);
+            else if (c->type == SC_PSEUDO && (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT || c->op == PC_HAS))
+                w_sellist(c->u.list);
+            else if (c->type == SC_PSEUDO && c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE)
+                w_sellist(c->u.nth.of);
+        }
+    }
+}
+
+void css_media_mem(const AuCssMediaList *m, size_t *bytes, size_t *bytes32, size_t *blocks);
+
+static void w_media(const AuCssMediaList *m)
+{
+    if (!m)
+        return;
+    size_t b = 0, b32 = 0, bl = 0;
+    css_media_mem(m, &b, &b32, &bl);
+    wh[W_MEDIA].bytes += b;
+    wh[W_MEDIA].bytes32 += b32;
+    wh[W_MEDIA].blocks += bl;
+}
+
+static void w_rules(const CssRule *r)
+{
+    for (; r; r = r->next) {
+        n_rules++;
+        w_add(W_RULE, sizeof *r, 48);
+        if (r->type == RULE_STYLE) {
+            n_style++;
+            w_sellist(r->sel);
+        }
+        w_decls(&r->decls);
+        w_media(r->media);
+        if (r->layers) {
+            w_add(W_LAYER, r->nlayers * sizeof(CssLayerName), r->nlayers * 8);
+            for (uint32_t i = 0; i < r->nlayers; i++)
+                if (r->layers[i].parts)
+                    w_add(W_LAYER, r->layers[i].n * sizeof(AuAtom), r->layers[i].n * sizeof(AuAtom));
+        }
+        if (r->text)
+            w_add(W_COND, strlen(r->text) + 1, strlen(r->text) + 1);
+        w_rules(r->children);
+    }
+}
+
+static void w_sheet(const AuCssSheet *s)
+{
+    w_add(W_OTHER, sizeof *s, 80);
+    if (s->base_url)
+        w_add(W_OTHER, strlen(s->base_url) + 1, strlen(s->base_url) + 1);
+    w_media(s->media);
+    w_rules(s->rules);
+    if (s->imports) {
+        w_add(W_OTHER, s->imports_cap * sizeof(AuCssImport), s->imports_cap * 24);
+        w_add(W_OTHER, s->imports_cap * sizeof(CssRule *), s->imports_cap * 4);
+    }
+    if (s->faces)
+        w_add(W_OTHER, s->faces_cap * sizeof(AuCssFontFace), s->faces_cap * 16);
+    for (uint32_t i = 0; i < s->nfaces; i++)
+        w_decls(&s->faces[i].descs);
+    if (s->keyframes)
+        w_add(W_OTHER, s->keyframes_cap * sizeof(AuCssKeyframes), s->keyframes_cap * 12);
+    for (uint32_t i = 0; i < s->nkeyframes; i++) {
+        const AuCssKeyframes *k = &s->keyframes[i];
+        if (k->frames)
+            w_add(W_OTHER, k->nframes * sizeof(AuCssKeyframe), k->nframes * 12);
+        for (uint32_t j = 0; j < k->nframes; j++) {
+            w_add(W_OTHER, k->frames[j].noffsets * sizeof(float), k->frames[j].noffsets * sizeof(float));
+            w_add(W_OTHER, sizeof(AuCssDeclBlock), 12);
+            w_decls(k->frames[j].decls);
+        }
+    }
+    if (s->props)
+        w_add(W_OTHER, s->props_cap * sizeof(CssPropertyRule), s->props_cap * 12);
+}
+
+static int where_report(int argc, char **argv)
+{
+    size_t text = 0;
+    for (int i = 2; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        if (!f) {
+            fprintf(stderr, "cannot read %s\n", argv[i]);
+            continue;
+        }
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        char *buf = malloc((size_t)n + 1);
+        size_t got = fread(buf, 1, (size_t)n, f);
+        fclose(f);
+        AuCssSheet *s = au_css_sheet_parse(buf, got, AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+        free(buf);
+        text += got;
+        w_sheet(s);
+    }
+    size_t tb = 0, tb32 = 0, tbl = 0;
+    printf("%-46s %10s %8s %10s %12s\n", "structure", "bytes", "blocks", "32-bit", "+8/block");
+    for (int i = 0; i < W_COUNT; i++) {
+        printf("%-46s %10zu %8zu %10zu %12zu\n", wh[i].name, wh[i].bytes, wh[i].blocks, wh[i].bytes32,
+               wh[i].bytes32 + 8 * wh[i].blocks);
+        tb += wh[i].bytes;
+        tb32 += wh[i].bytes32;
+        tbl += wh[i].blocks;
+    }
+    printf("%-46s %10zu %8zu %10zu %12zu\n", "total", tb, tbl, tb32, tb32 + 8 * tbl);
+    printf("%zu bytes of text; %zu rules (%zu style rules), %zu selectors, %zu components, %zu declarations\n", text,
+           n_rules, n_style, n_selectors, n_comps, n_decls);
+    return 0;
+}
+
+/* css_bench --page PAGE.html SHEET.css...: the sheets parsed in the order
+ * given (a file may be given more than once, as a page that links it
+ * twice does), then the page styled with them: times, and the heap the
+ * sheets, the index and the styles keep (macOS only). */
+static char *slurp(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc((size_t)n + 1);
+    *len = fread(buf, 1, (size_t)n, f);
+    fclose(f);
+    return buf;
+}
+
+static int page_report(int argc, char **argv)
+{
+    if (argc < 3) {
+        fprintf(stderr, "usage: css_bench --page PAGE.html [SHEET.css ...]\n");
+        return 2;
+    }
+    size_t len;
+    char *html = slurp(argv[2], &len);
+    if (!html) {
+        fprintf(stderr, "cannot read %s\n", argv[2]);
+        return 2;
+    }
+    AuDocument *doc = au_html_parse(html, len, NULL);
+    free(html);
+    AuCssResolver *r = au_css_resolver_new();
+    size_t nent, nuni;
+    css_resolver_index_stats(r, &nent, &nuni);
+    int nel = 0;
+    for (AuNode *n = doc->node.first_child; n; n = au_node_next(n, &doc->node))
+        nel += n->type == AU_NODE_ELEMENT;
+    /* read the files first, so that their buffers are not in the heap figures */
+    int ns = argc - 3;
+    char **text = calloc((size_t)ns + 1, sizeof *text);
+    size_t *tlen = calloc((size_t)ns + 1, sizeof *tlen), total = 0;
+    for (int i = 0; i < ns; i++) {
+        text[i] = slurp(argv[3 + i], &tlen[i]);
+        if (!text[i]) {
+            fprintf(stderr, "cannot read %s\n", argv[3 + i]);
+            return 2;
+        }
+        total += tlen[i];
+    }
+    size_t h0 = heap_in_use();
+    double t0 = now_ms();
+    size_t rules = 0;
+    for (int i = 0; i < ns; i++) {
+        AuCssSheet *s = au_css_sheet_parse(text[i], tlen[i], AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+        rules += au_css_sheet_rule_count(s);
+        au_css_resolver_add_sheet(r, s);
+    }
+    double t1 = now_ms();
+    size_t h1 = heap_in_use();
+    css_resolver_index_stats(r, &nent, &nuni);
+    double t2 = now_ms();
+    size_t h2 = heap_in_use();
+    au_css_style_document(r, doc);
+    double t3 = now_ms();
+    size_t h3 = heap_in_use();
+    au_css_style_document(r, doc);
+    double t4 = now_ms();
+    printf("%d sheets, %zu bytes of text, %zu style rules, %d elements\n", ns, total, rules, nel);
+    printf("  parse %.1f ms; index %.1f ms (%zu entries); first style %.1f ms; style again %.1f ms\n", t1 - t0, t2 - t1,
+           nent, t3 - t2, t4 - t3);
+    printf("  heap: sheets %zu bytes, index %zu, styles and what styling parsed %zu; total %zu\n", h1 - h0, h2 - h1,
+           h3 - h2, h3 - h0);
+    au_css_clear_document(doc);
+    au_node_unref(&doc->node);
+    au_css_resolver_free(r);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     au_css_init();
     if (argc > 1 && strcmp(argv[1], "--mem") == 0)
         return mem_report(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "--page") == 0)
+        return page_report(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "--where") == 0)
+        return where_report(argc, argv);
     bool small = argc > 1 && strcmp(argv[1], "--small") == 0;
     int rules = small ? 2000 : 20000, elements = small ? 2000 : 20000, classes = small ? 300 : 3000;
     AuBuf b;
