@@ -92,8 +92,10 @@ static void destroy_subtree(AuNode *root);
 /* Frees one node's own storage. Its children are already gone. */
 static void node_free(AuNode *n)
 {
-    if (n->type != AU_NODE_DOCUMENT && n->doc && n->doc->nmanual)
-        au_manual_slots_removed(n->doc, n); /* the pairs hold no references */
+    /* the pairs hold no references; a node outlives its document only
+     * after the document cleared the flag */
+    if ((n->flags & AU_NODEF_MANUAL) && n->doc)
+        au_manual_slots_removed(n->doc, n);
     switch (n->type) {
     case AU_NODE_ELEMENT: {
         AuElement *e = (AuElement *)n;
@@ -130,6 +132,11 @@ static void node_free(AuNode *n)
     case AU_NODE_DOCUMENT:
         au_free(((AuDocument *)n)->url);
         au_free(((AuDocument *)n)->top_layer);
+        /* nodes in pairs may outlive the document: they forget it */
+        for (uint32_t i = 0; i < ((AuDocument *)n)->nmanual; i++) {
+            ((AuDocument *)n)->manual[i].node->flags &= (uint8_t)~AU_NODEF_MANUAL;
+            ((AuDocument *)n)->manual[i].slot->node.flags &= (uint8_t)~AU_NODEF_MANUAL;
+        }
         au_free(((AuDocument *)n)->manual);
         break;
     default:

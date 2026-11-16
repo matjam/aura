@@ -149,6 +149,24 @@ static AuElement *manual_slot_of(const AuShadowRoot *sr, const AuNode *n)
     return best;
 }
 
+/* AU_NODEF_MANUAL marks exactly the nodes and slots that are in a pair
+ * (node_free drops their pairs; a freed document clears the marks). A
+ * dropped pair clears both marks; set_pair_flags puts back those still
+ * in another pair. */
+static void clear_pair_flags(AuManualSlot *m)
+{
+    m->node->flags &= (uint8_t)~AU_NODEF_MANUAL;
+    m->slot->node.flags &= (uint8_t)~AU_NODEF_MANUAL;
+}
+
+static void set_pair_flags(AuDocument *d)
+{
+    for (uint32_t i = 0; i < d->nmanual; i++) {
+        d->manual[i].node->flags |= AU_NODEF_MANUAL;
+        d->manual[i].slot->node.flags |= AU_NODEF_MANUAL;
+    }
+}
+
 void au_slot_assign(AuElement *slot, AuNode *const *nodes, size_t n)
 {
     AuDocument *d = slot->node.doc;
@@ -163,6 +181,8 @@ void au_slot_assign(AuElement *slot, AuNode *const *nodes, size_t n)
             drop = m->node == nodes[j];
         if (!drop)
             d->manual[k++] = *m;
+        else
+            clear_pair_flags(m);
     }
     d->nmanual = k;
     for (size_t j = 0; j < n; j++) {
@@ -181,6 +201,7 @@ void au_slot_assign(AuElement *slot, AuNode *const *nodes, size_t n)
         d->manual[d->nmanual].slot = slot;
         d->nmanual++;
     }
+    set_pair_flags(d);
     d->version++;
 }
 
@@ -189,11 +210,14 @@ void au_manual_slots_removed(AuDocument *d, const AuNode *n)
     uint32_t k = 0;
     for (uint32_t i = 0; i < d->nmanual; i++) {
         AuManualSlot *m = &d->manual[i];
-        if (m->node == n || &m->slot->node == n)
+        if (m->node == n || &m->slot->node == n) {
+            clear_pair_flags(m);
             continue;
+        }
         d->manual[k++] = *m;
     }
     d->nmanual = k;
+    set_pair_flags(d);
 }
 
 /* ---- Assignment ---- */

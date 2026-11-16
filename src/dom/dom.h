@@ -290,7 +290,8 @@ static inline bool au_node_held_elsewhere(const AuNode *n) { return n->parent ||
 enum {
     AU_NODEF_SHADOW_ROOT = 1u, /* an AuShadowRoot (type AU_NODE_FRAGMENT) */
     AU_NODEF_JS_STRONG = 2u,   /* the node holds its wrapper (owned by src/js) */
-    AU_NODEF_JS_MARK = 4u      /* free for src/js bookkeeping */
+    AU_NODEF_JS_MARK = 4u,     /* free for src/js bookkeeping */
+    AU_NODEF_MANUAL = 8u       /* in a manual slot pair of its document (freeing it drops them) */
 };
 
 /* ---- Shadow DOM ----
