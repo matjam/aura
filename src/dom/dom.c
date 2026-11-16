@@ -92,6 +92,8 @@ static void destroy_subtree(AuNode *root);
 /* Frees one node's own storage. Its children are already gone. */
 static void node_free(AuNode *n)
 {
+    if (n->type != AU_NODE_DOCUMENT && n->doc && n->doc->nmanual)
+        au_manual_slots_removed(n->doc, n); /* the pairs hold no references */
     switch (n->type) {
     case AU_NODE_ELEMENT: {
         AuElement *e = (AuElement *)n;
@@ -128,6 +130,7 @@ static void node_free(AuNode *n)
     case AU_NODE_DOCUMENT:
         au_free(((AuDocument *)n)->url);
         au_free(((AuDocument *)n)->top_layer);
+        au_free(((AuDocument *)n)->manual);
         break;
     default:
         break;
@@ -602,6 +605,17 @@ void au_element_set_state(AuElement *el, uint32_t bits, bool on)
     }
     if (!up)
         return;
+    if (el->node.doc && el->node.doc->has_shadow) {
+        /* :hover, :active and :focus-within follow the flat tree; a
+         * focused element's shadow hosts match :focus too (HTML, "focus
+         * delegation" and the :focus pseudo-class). */
+        for (AuElement *p = au_flat_parent_element(&el->node); p; p = au_flat_parent_element(&p->node))
+            set_bits(p, up, on);
+        if (bits & AU_STATE_FOCUS)
+            for (AuElement *h = au_node_tree_host(&el->node); h; h = au_node_tree_host(&h->node))
+                set_bits(h, AU_STATE_FOCUS, on);
+        return;
+    }
     for (AuNode *p = el->node.parent; p && p->type == AU_NODE_ELEMENT; p = p->parent)
         set_bits((AuElement *)p, up, on);
 }

@@ -1585,9 +1585,12 @@ static const AuStyle *current_style(const LBox *b)
         return NULL;
     const AuStyle *es;
     if (n->type == AU_NODE_TEXT) {
-        AuNode *p = n->parent;
+        /* the text takes its flat parent's style: a slot's, or a shadow
+         * root's host's */
+        bool flat = n->doc && n->doc->has_shadow;
+        AuNode *p = flat ? au_flat_parent(n) : n->parent;
         while (p && p->type != AU_NODE_ELEMENT)
-            p = p->parent;
+            p = flat ? au_flat_parent(p) : p->parent;
         es = p ? au_element_style(au_as_element(p)) : NULL;
     } else if (au_is_element(n)) {
         es = au_element_style(au_as_element(n));

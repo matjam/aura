@@ -99,6 +99,9 @@ typedef struct Builder {
     /* A subtree build (l_build_subtree): the counters and quotes outside
      * the subtree are not known, so a use of one sets abort. */
     bool incr, abort;
+    /* The document has had a shadow root: the walk follows the flat tree
+     * (a host shows its shadow tree, a slot its assigned nodes). */
+    bool flat;
     AuBuf tmp;
 } Builder;
 
@@ -2068,7 +2071,7 @@ static void push(Builder *B, AuNode *dom, LBox *box, const AuStyle *s)
     BFrame *f = &B->st[B->n++];
     memset(f, 0, sizeof *f);
     f->dom = dom;
-    f->child = dom ? dom->first_child : NULL;
+    f->child = dom ? (B->flat ? au_flat_first_child(dom) : dom->first_child) : NULL;
     f->box = box;
     f->style = s;
     f->esc = UINT32_MAX;
@@ -2143,7 +2146,7 @@ static void build_walk(Builder *B)
                 pop(B);
                 continue;
             }
-            f->child = c->next;
+            f->child = B->flat ? au_flat_next_sibling(c) : c->next;
             if (f->details_closed) {
                 /* A closed details shows its first summary child only. */
                 if (!au_is_html_element(c, AU_ATOM_summary) || f->summary_done)
@@ -2242,6 +2245,7 @@ void l_build_tree(AuLayout *L)
     Builder B;
     memset(&B, 0, sizeof B);
     B.L = L;
+    B.flat = L->doc->has_shadow;
     au_buf_init(&B.tmp);
     B.last_space = true;
     /* The root box: always a block (CSS blockifies the root). */
@@ -2280,6 +2284,7 @@ LBox *l_build_subtree(AuLayout *L, AuElement *el)
     memset(&B, 0, sizeof B);
     B.L = L;
     B.incr = true;
+    B.flat = L->doc && L->doc->has_shadow;
     au_buf_init(&B.tmp);
     /* A block-level box: its content starts after a collapsible space
      * (l_build_tree sets last_space when it inserts one). */

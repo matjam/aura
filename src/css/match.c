@@ -786,9 +786,83 @@ static bool has_match(const AuSelList *l, const AuElement *anchor, const CssMatc
     return false;
 }
 
+/* A context for matching the argument of :host(), :host-context() or
+ * ::slotted() against an element of the outer tree. */
+static CssMatchCtx plain_ctx(const CssMatchCtx *mc)
+{
+    CssMatchCtx sub = *mc;
+    sub.bloom = NULL;
+    sub.host = NULL;
+    sub.slotted = NULL;
+    sub.part_el = NULL;
+    sub.npart_names = 0;
+    return sub;
+}
+
+static bool part_names_ok(const AuSelComp *c, const CssMatchCtx *mc)
+{
+    uint32_t vlen;
+    const char *v = css_comp_value(c, &vlen);
+    if (!v || !mc->part_el)
+        return false;
+    for (uint32_t i = 0; i < vlen;) {
+        while (i < vlen && v[i] == ' ')
+            i++;
+        uint32_t s = i;
+        while (i < vlen && v[i] != ' ')
+            i++;
+        if (i == s)
+            break;
+        AuAtom a = au_atom_lookup(v + s, i - s);
+        bool found = false;
+        for (uint32_t k = 0; a && k < mc->npart_names && !found; k++)
+            found = mc->part_names[k] == a;
+        if (!found)
+            return false;
+    }
+    return true;
+}
+
+static bool match_shadow_pseudo(const AuSelComp *c, const AuElement *el, const CssMatchCtx *mc)
+{
+    switch (c->op) {
+    case PC_HOST: {
+        if (!mc->host || el != mc->host)
+            return false;
+        if (!c->u.list)
+            return true;
+        CssMatchCtx sub = plain_ctx(mc);
+        return list_match(c->u.list, el, &sub);
+    }
+    case PC_HOST_CONTEXT: {
+        if (!mc->host || el != mc->host)
+            return false;
+        CssMatchCtx sub = plain_ctx(mc);
+        /* the host and its shadow-including ancestors */
+        for (const AuNode *n = &el->node; n; n = au_shadow_including_parent(n))
+            if (n->type == AU_NODE_ELEMENT && list_match(c->u.list, (const AuElement *)n, &sub))
+                return true;
+        return false;
+    }
+    case PC_SLOTTED: {
+        if (!mc->slotted)
+            return false;
+        CssMatchCtx sub = plain_ctx(mc);
+        return list_match(c->u.list, mc->slotted, &sub);
+    }
+    default:
+        return part_names_ok(c, mc);
+    }
+}
+
 static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatchCtx *mc)
 {
     switch (c->op) {
+    case PC_HOST:
+    case PC_HOST_CONTEXT:
+    case PC_SLOTTED:
+    case PC_PART:
+        return match_shadow_pseudo(c, el, mc);
     case PC_IS:
     case PC_WHERE:
         return list_match(c->u.list, el, mc);
@@ -971,6 +1045,12 @@ static bool match_simple(const AuSelComp *c, const AuElement *el, const CssMatch
     case SC_ATTR:
         return match_attr(c, el);
     case SC_PSEUDO:
+        if (c->flags & SCF_ON_PART) {
+            if (!mc->part_el)
+                return false;
+            CssMatchCtx sub = plain_ctx(mc);
+            return match_pseudo(c, mc->part_el, &sub);
+        }
         return match_pseudo(c, el, mc);
     case SC_NESTING:
         if (!c->u.list)
@@ -1013,13 +1093,47 @@ typedef enum {
     M_FAIL_ALL       /* no sibling and no ancestor can match */
 } MatchResult;
 
+/* What the shadow host of a tree may match from inside it (it is
+ * featureless there): :host, :host(), :host-context(), and :is() or
+ * :where() of those; a ::part() rule's own components apply to others. */
+static bool host_comp_ok(const AuSelComp *c)
+{
+    if (c->type == SC_UNIVERSAL)
+        return true;
+    if (c->type != SC_PSEUDO)
+        return false;
+    if (c->flags & SCF_ON_PART)
+        return true;
+    return c->op == PC_HOST || c->op == PC_HOST_CONTEXT || c->op == PC_IS || c->op == PC_WHERE ||
+           c->op == PC_PART;
+}
+
+/* The element a descendant or child combinator steps to: the parent,
+ * or, from the top of the shadow tree whose rules are matched, its host.
+ * Nothing is above the host in that tree. */
+static const AuElement *m_parent(const AuElement *el, const CssMatchCtx *mc)
+{
+    if (mc->host) {
+        if (el == mc->host)
+            return NULL;
+        AuNode *p = el->node.parent;
+        if (p && au_is_shadow_root(p) && ((const AuShadowRoot *)p)->host == mc->host)
+            return mc->host;
+    }
+    return parent_el(el);
+}
+
 static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *el, const CssMatchCtx *mc,
                               const AuElement *anchor)
 {
     uint32_t k = i;
-    for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++)
+    bool featureless = mc->host && el == mc->host;
+    for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++) {
+        if (featureless && !host_comp_ok(&s->comp[k]))
+            return M_FAIL;
         if (!match_simple(&s->comp[k], el, mc))
             return M_FAIL;
+    }
     if (k >= s->ncomp) {
         if (anchor)
             return anchor_rel(el, anchor, s->rel_comb ? s->rel_comb : COMB_DESCENDANT) ? M_MATCH : M_FAIL;
@@ -1030,7 +1144,7 @@ static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *
     k++;
     switch (comb) {
     case COMB_DESCENDANT:
-        for (const AuElement *p = parent_el(el); p; p = parent_el(p)) {
+        for (const AuElement *p = m_parent(el, mc); p; p = m_parent(p, mc)) {
             if (anchor && p == anchor)
                 return M_FAIL_ALL;
             r = match_rest(s, k, p, mc, anchor);
@@ -1039,19 +1153,23 @@ static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *
         }
         return M_FAIL_ALL;
     case COMB_CHILD: {
-        const AuElement *p = parent_el(el);
+        const AuElement *p = m_parent(el, mc);
         if (!p || (anchor && p == anchor))
             return M_FAIL_ALL;
         r = match_rest(s, k, p, mc, anchor);
         return r == M_MATCH || r == M_FAIL_ALL ? r : M_FAIL_SIBLINGS;
     }
     case COMB_NEXT: {
+        if (mc->host && el == mc->host)
+            return M_FAIL_ALL; /* the host has no siblings in its shadow tree */
         const AuElement *p = prev_el(el);
         if (!p || p == anchor)
             return M_FAIL_SIBLINGS;
         return match_rest(s, k, p, mc, anchor);
     }
     case COMB_SUBSEQUENT:
+        if (mc->host && el == mc->host)
+            return M_FAIL_ALL;
         for (const AuElement *p = prev_el(el); p; p = prev_el(p)) {
             if (p == anchor)
                 return M_FAIL_SIBLINGS;

@@ -102,6 +102,15 @@ struct AuDocument {
     /* The top layer (see "The top layer" below), bottom first. */
     AuElement **top_layer;
     uint32_t ntop, top_cap;
+    /* An element of this document has had a shadow root: until then
+     * style, layout and the event paths walk the plain tree (the flat
+     * tree is the same). */
+    bool has_shadow;
+    /* Manual slot assignments (slot.assign()), without references: a
+     * pair goes when its node leaves its parent or its slot leaves its
+     * tree (see "Shadow DOM" below). */
+    struct AuManualSlot *manual;
+    uint32_t nmanual, manual_cap;
 };
 #define AU_DOC_STYLE_NAMES 24
 
@@ -321,20 +330,54 @@ bool au_node_is_connected(const AuNode *n);
  * a <slot> element (its name attribute). */
 const char *au_slot_name_of(const AuNode *n);
 /* The slot n is assigned to, or NULL: n's parent is a shadow host whose
- * shadow root has a <slot> (in tree order the first) with n's slot name.
- * Elements and text are slottables; manual assignment is not supported. */
+ * shadow root has a <slot> (in tree order the first) with n's slot name,
+ * or, with manual assignment, the first slot in tree order whose
+ * assign() list holds n. Elements and text are slottables. */
 AuElement *au_node_assigned_slot(const AuNode *n);
-/* The nodes assigned to slot, in tree order, into out (up to cap);
- * returns the count (may exceed cap). */
+/* The nodes assigned to slot, in tree order (in assign() order for manual
+ * assignment), into out (up to cap); returns the count (may exceed cap). */
 size_t au_slot_assigned_nodes(const AuElement *slot, AuNode **out, size_t cap);
+/* slot.assign(): replaces the slot's manual list with nodes (elements and
+ * text; others are skipped). A node listed by another slot is taken from
+ * it. Nothing is assigned until the slot is in a shadow root with manual
+ * assignment and the node is a child of its host. */
+void au_slot_assign(AuElement *slot, AuNode *const *nodes, size_t n);
+typedef struct AuManualSlot {
+    AuNode *node;
+    AuElement *slot;
+} AuManualSlot;
+/* For dom.c: n is being freed; drops the pairs that name it. */
+void au_manual_slots_removed(AuDocument *d, const AuNode *n);
 
 /* ---- The flat tree ----
  * For style and layout of shadow trees: a shadow host's flat children are
  * its shadow root's children; a <slot>'s flat children are its assigned
  * nodes, or its own children when none are assigned; other nodes' flat
- * children are their children, minus slottables of hosts. */
+ * children are their children, minus slottables of hosts. A light child
+ * of a host that no slot takes, and the fallback children of a slot that
+ * has assigned nodes, are not in the flat tree: au_flat_parent still
+ * names their parent, so test with au_node_in_flat_tree. */
 AuNode *au_flat_first_child(const AuNode *n);
 AuNode *au_flat_next_sibling(const AuNode *n);
 AuNode *au_flat_parent(const AuNode *n);
+/* The flat parent when it is an element, else NULL. */
+AuElement *au_flat_parent_element(const AuNode *n);
+/* Preorder over root's flat subtree: the node after n, or NULL; the
+ * second form skips n's flat subtree. Iterative. */
+AuNode *au_flat_next(const AuNode *n, const AuNode *root);
+AuNode *au_flat_next_skip(const AuNode *n, const AuNode *root);
+/* Whether n's flat parent shows it: false for a light child of a host
+ * that no slot takes and for a slot's fallback child while the slot has
+ * assigned nodes. Only n's own link is tested, not its ancestors'. */
+bool au_node_in_flat_tree(const AuNode *n);
+/* The element n's parent pointer reaches in the flat sense: the host of
+ * a shadow root. Unlike au_flat_parent, it ignores slots: for retargeting
+ * and focus, which follow the shadow-including tree. */
+AuNode *au_shadow_including_parent(const AuNode *n);
+/* The host of the shadow tree n is in, or NULL in a document tree. */
+AuElement *au_node_tree_host(const AuNode *n);
+/* Shadow-including preorder within root: an element, then its shadow
+ * tree, then its children. Iterative. */
+AuNode *au_node_next_including_shadow(const AuNode *n, const AuNode *root);
 
 #endif

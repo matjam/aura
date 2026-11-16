@@ -5,13 +5,19 @@
 
 /* ---- Order ---- */
 
-static int node_depth(const AuNode *n)
+/* Positions come from boxes, which follow the flat tree: with shadow
+ * trees the order is the flat tree's (shadow content where its host is,
+ * slotted nodes where their slot is). */
+static const AuNode *up(const AuNode *n, bool flat)
+{
+    return flat ? au_flat_parent(n) : n->parent;
+}
+
+static int node_depth(const AuNode *n, bool flat)
 {
     int d = 0;
-    while (n->parent) {
-        n = n->parent;
+    while ((n = up(n, flat)) != NULL)
         d++;
-    }
     return d;
 }
 
@@ -19,25 +25,26 @@ int au_node_order(const AuNode *a, const AuNode *b)
 {
     if (a == b)
         return 0;
-    int da = node_depth(a), db = node_depth(b);
+    bool flat = a->doc && a->doc->has_shadow;
+    int da = node_depth(a, flat), db = node_depth(b, flat);
     const AuNode *x = a, *y = b;
     while (da > db) {
-        x = x->parent;
+        x = up(x, flat);
         da--;
     }
     while (db > da) {
-        y = y->parent;
+        y = up(y, flat);
         db--;
     }
     if (x == y)
         return a == x ? -1 : 1; /* one is the other's ancestor */
-    while (x->parent != y->parent) {
-        x = x->parent;
-        y = y->parent;
+    while (up(x, flat) != up(y, flat)) {
+        x = up(x, flat);
+        y = up(y, flat);
     }
-    if (!x->parent)
+    if (!up(x, flat))
         return a < b ? -1 : 1; /* different trees: any stable order */
-    for (const AuNode *s = x->next; s; s = s->next)
+    for (const AuNode *s = flat ? au_flat_next_sibling(x) : x->next; s; s = flat ? au_flat_next_sibling(s) : s->next)
         if (s == y)
             return -1;
     return 1;

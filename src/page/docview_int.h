@@ -36,11 +36,27 @@ struct SheetSrc {
     uint8_t cors; /* a link's crossorigin attribute: 0 none, 1 anonymous, 2 use-credentials */
 };
 
-/* A <style> or <link> element in document order. */
+/* A <style> or <link> element in shadow-including tree order. */
 typedef struct SheetSlot {
     AuElement *el; /* referenced */
     SheetSrc *src;
+    AuNode *scope; /* the shadow root el is in (referenced), NULL in the document */
 } SheetSlot;
+
+/* A constructed style sheet (new CSSStyleSheet in script), by the id
+ * script gave it, and the sheets a document or shadow root adopted. */
+typedef struct ConstructedSheet {
+    uint32_t id;
+    AuCssSheet *sheet; /* parsed from the text script gave, or NULL */
+    char *media;       /* NULL for all */
+    bool disabled;
+} ConstructedSheet;
+
+typedef struct AdoptedSheets {
+    AuNode *scope; /* the document or a shadow root (referenced) */
+    uint32_t *ids;
+    uint32_t n;
+} AdoptedSheets;
 
 typedef struct AuFrame AuFrame;
 
@@ -77,6 +93,16 @@ struct AuDocView {
     AuLayout *layout;
     SheetSlot *slots;
     uint32_t nslots, slots_cap;
+    ConstructedSheet *csheets;
+    uint32_t ncsheets, csheets_cap;
+    AdoptedSheets *adopted;
+    uint32_t nadopted, adopted_cap;
+    /* While every sheet change since the last rebuild_resolver was in a
+     * shadow root, the roots (referenced; at most 8): only
+     * their hosts' subtrees are restyled. */
+    AuNode *dirty_scopes[8];
+    uint32_t ndirty_scopes;
+    bool sheets_scoped_only;
     AuCssSheet *user_sheet; /* user_css parsed for this document, or NULL */
     uint32_t ndeferred;     /* sheet sources waiting for their media query to match */
     AuDocImages *imgs; /* docimages.c */
@@ -240,6 +266,8 @@ void au_dv_drop_routes(AuDocView *top, AuDocView *dv);
 void au_dv_mouse_leave(AuDocView *dv);
 void au_dv_set_hover(AuDocView *dv, AuElement *el);
 void au_dv_tree_dirty(AuDocView *dv);
+/* The constructed sheet with id, or NULL. */
+ConstructedSheet *au_dv_constructed(AuDocView *dv, uint32_t id);
 
 
 /* ---- Pointers across script ----

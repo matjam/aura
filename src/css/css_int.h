@@ -353,7 +353,9 @@ typedef enum {
 
 enum { COMB_DESCENDANT = 1, COMB_CHILD, COMB_NEXT, COMB_SUBSEQUENT };
 enum { ATTR_EXISTS = 1, ATTR_EQ, ATTR_INCLUDES, ATTR_DASH, ATTR_PREFIX, ATTR_SUFFIX, ATTR_SUBSTR };
-enum { SCF_CI = 1, SCF_CS = 2, SCF_NS_ANY = 4, SCF_NS_NONE = 8, SCF_NS_SET = 16, SCF_EXT = 32 };
+/* SCF_ON_PART: a pseudo-class after ::part(), matched against the part
+ * element (CssMatchCtx.part_el) rather than the originating host. */
+enum { SCF_CI = 1, SCF_CS = 2, SCF_NS_ANY = 4, SCF_NS_NONE = 8, SCF_NS_SET = 16, SCF_EXT = 32, SCF_ON_PART = 64 };
 
 typedef enum {
     PC_IS = 1, PC_WHERE, PC_NOT, PC_HAS,
@@ -364,7 +366,14 @@ typedef enum {
     PC_CHECKED, PC_INDETERMINATE, PC_DEFAULT, PC_DISABLED, PC_ENABLED, PC_REQUIRED, PC_OPTIONAL,
     PC_READ_ONLY, PC_READ_WRITE, PC_PLACEHOLDER_SHOWN, PC_TARGET, PC_DEFINED, PC_LANG, PC_DIR, PC_SCOPE,
     PC_VALID, PC_INVALID, PC_USER_VALID, PC_USER_INVALID, PC_IN_RANGE, PC_OUT_OF_RANGE, PC_MODAL,
-    PC_POPOVER_OPEN, PC_NEVER /* known pseudo-classes that never match here (:autofill, :fullscreen, ...) */
+    PC_POPOVER_OPEN, PC_NEVER, /* known pseudo-classes that never match here (:autofill, :fullscreen, ...) */
+    /* Shadow trees (CSS Scoping). :host and :host() (u.list: the argument
+     * compound, NULL for :host) and :host-context() match only the
+     * featureless shadow host (CssMatchCtx.host). PC_SLOTTED is the
+     * argument of ::slotted() (u.list), true for CssMatchCtx.slotted;
+     * PC_PART holds the names of ::part() (value, space-separated), true
+     * when CssMatchCtx.part_names has them all. */
+    PC_HOST, PC_HOST_CONTEXT, PC_SLOTTED, PC_PART
 } PseudoClass;
 
 /* What a component needs beyond a name: allocated only for the
@@ -498,6 +507,17 @@ typedef struct CssMatchCtx {
      * an empty index is not used. */
     CssHasIndex *has_index;
     const AuNode *has_root;
+    /* Shadow trees: the host of the tree whose rules are matched (NULL in
+     * the document's), which a combinator reaches from the shadow root's
+     * children and which matches only :host-like selectors; the element
+     * a ::slotted() rule is matched for (the selector itself is matched
+     * against the slot); the element a ::part() rule is matched for and
+     * the part names it exposes to the rule's tree. */
+    const AuElement *host;
+    const AuElement *slotted;
+    const AuElement *part_el;
+    const AuAtom *part_names;
+    uint32_t npart_names;
 } CssMatchCtx;
 
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc);

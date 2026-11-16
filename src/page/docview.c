@@ -168,6 +168,53 @@ static void free_sheet_src(AuDocView *dv, SheetSrc *s)
     au_free(s);
 }
 
+static void drop_dirty_scopes(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->ndirty_scopes; i++)
+        au_node_unref(dv->dirty_scopes[i]);
+    dv->ndirty_scopes = 0;
+}
+
+/* A sheet of scope (a shadow root, or NULL for the document) came, went
+ * or changed. While every change is in a shadow root, rebuild_resolver
+ * restyles only those roots' hosts. */
+static void sheets_changed(AuDocView *dv, AuNode *scope)
+{
+    if (!dv->sheets_dirty)
+        dv->sheets_scoped_only = true;
+    dv->sheets_dirty = true;
+    if (!dv->sheets_scoped_only)
+        return;
+    if (!scope || !au_is_shadow_root(scope) || dv->ndirty_scopes == sizeof dv->dirty_scopes / sizeof dv->dirty_scopes[0]) {
+        dv->sheets_scoped_only = false;
+        drop_dirty_scopes(dv);
+        return;
+    }
+    for (uint32_t i = 0; i < dv->ndirty_scopes; i++)
+        if (dv->dirty_scopes[i] == scope)
+            return;
+    dv->dirty_scopes[dv->ndirty_scopes++] = au_node_ref(scope);
+}
+
+static void free_constructed(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->ncsheets; i++) {
+        au_css_sheet_free(dv->csheets[i].sheet);
+        au_free(dv->csheets[i].media);
+    }
+    au_free(dv->csheets);
+    dv->csheets = NULL;
+    dv->ncsheets = dv->csheets_cap = 0;
+    for (uint32_t i = 0; i < dv->nadopted; i++) {
+        au_node_unref(dv->adopted[i].scope);
+        au_free(dv->adopted[i].ids);
+    }
+    au_free(dv->adopted);
+    dv->adopted = NULL;
+    dv->nadopted = dv->adopted_cap = 0;
+    drop_dirty_scopes(dv);
+}
+
 /* Stops request id of dv. A nested view's requests were made through
  * the top view's loader. */
 static void loader_cancel(AuDocView *dv, uint32_t id)
@@ -222,8 +269,11 @@ static void clear_document(AuDocView *dv)
         au_css_resolver_detach_sheets(dv->resolver); /* the sources own the sheets */
     for (uint32_t i = 0; i < dv->nslots; i++) {
         au_node_unref(&dv->slots[i].el->node);
+        if (dv->slots[i].scope)
+            au_node_unref(dv->slots[i].scope);
         free_sheet_src(dv, dv->slots[i].src);
     }
+    free_constructed(dv);
     dv->nslots = 0;
     dv->ndeferred = 0;
     au_css_sheet_free(dv->user_sheet);
@@ -312,7 +362,7 @@ void au_docview_set_user_css(AuDocView *dv, const char *css)
         au_css_resolver_detach_sheets(dv->resolver);
     au_css_sheet_free(dv->user_sheet);
     dv->user_sheet = NULL;
-    dv->sheets_dirty = true;
+    sheets_changed(dv, NULL);
     au_frames_settings_changed(dv);
 }
 
@@ -740,7 +790,7 @@ static void parse_sheet(AuDocView *dv, SheetSrc *s)
         au_buf_free(&t);
     }
     dv->sheets_packed = false;
-    dv->sheets_dirty = true;
+    sheets_changed(dv, NULL);
     if (s->parent) {
         if (!s->parent->sheet) {
             au_css_sheet_free(sh);
@@ -918,7 +968,7 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
         } else {
             s->failed = true;
         }
-        dv->sheets_dirty = true;
+        sheets_changed(dv, NULL);
     } else if (req.kind == AU_RES_IMAGE && req.image) {
         au_image_entry_done(au_docimages_cache(dv->imgs), req.image, ok);
         images_changed(dv);
@@ -1194,6 +1244,13 @@ static bool has_slot(AuDocView *dv, AuElement *el)
     return false;
 }
 
+/* The shadow root el is in, or NULL in the document. */
+static AuNode *tree_scope(AuElement *el)
+{
+    AuNode *r = au_node_root(&el->node);
+    return au_is_shadow_root(r) ? r : NULL;
+}
+
 static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
 {
     if (dv->nslots == dv->slots_cap) {
@@ -1205,6 +1262,9 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
     SheetSlot *s = &dv->slots[index];
     s->el = el;
     au_node_ref(&el->node);
+    s->scope = tree_scope(el);
+    if (s->scope)
+        au_node_ref(s->scope);
     s->src = au_calloc(sizeof *s->src);
     const char *media = attr(el, "media");
     s->src->media = media && *media ? dup(media) : NULL;
@@ -1237,25 +1297,37 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
             s->src->failed = true;
         }
     }
-    dv->sheets_dirty = true;
+    sheets_changed(dv, s->scope);
 }
 
-/* Finds new <style>, <link rel=stylesheet>, <base> and <title> elements.
- * A <style> is taken once its end tag has been seen (the parser has moved
- * past it), so its text is complete. */
+/* Finds new <style>, <link rel=stylesheet>, <base> and <title> elements,
+ * in shadow-including tree order (a shadow tree's sheets apply to it
+ * alone: SheetSlot.scope). A <style> is taken once its end tag has been
+ * seen (the parser has moved past it), so its text is complete. */
 static void scan_document(AuDocView *dv, bool final)
 {
     if (!dv->doc)
         return;
     uint32_t index = 0;
     bool base_seen = false, title_seen = false;
-    for (AuNode *n = au_node_next(&dv->doc->node, &dv->doc->node); n; n = au_node_next(n, &dv->doc->node)) {
+    const AuNode *top = &dv->doc->node;
+    bool shadows = dv->doc->has_shadow;
+    for (AuNode *n = top->first_child; n; n = shadows ? au_node_next_including_shadow(n, top) : au_node_next(n, top)) {
         if (n->type != AU_NODE_ELEMENT)
             continue;
         AuElement *el = au_as_element(n);
         if (el->ns != AU_NS_HTML)
             continue;
         bool complete = final || n->next || (n->parent && n->parent->next);
+        AuNode *scope = NULL;
+        if (shadows && (el->tag == AU_ATOM_style || el->tag == AU_ATOM_base || el->tag == AU_ATOM_title)) {
+            scope = tree_scope(el);
+            /* script builds shadow trees whole; the parser only declarative ones */
+            if (scope && !((AuShadowRoot *)scope)->declarative)
+                complete = true;
+        }
+        if (scope && el->tag != AU_ATOM_style)
+            continue; /* a shadow tree's <base> and <title> are not the document's */
         if (el->tag == AU_ATOM_style || (el->tag == AU_ATOM_link && is_stylesheet_link(el) && !attr(el, "disabled"))) {
             /* index counts the slots before this element: slots are kept in
              * document order, an incomplete <style> has none yet. */
@@ -1348,7 +1420,8 @@ void au_docview_begin(AuDocView *dv, const char *url)
         au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     au_layout_set_document(dv->layout, dv->doc);
     dv->parsing = true;
-    dv->tree_dirty = dv->sheets_dirty = true;
+    dv->tree_dirty = true;
+    sheets_changed(dv, NULL);
     dv->finished_reported = false;
     dv->scroll_x = dv->scroll_y = 0;
 }
@@ -1431,10 +1504,40 @@ static void rebuild_resolver(AuDocView *dv)
          * changed is the one parsed from the text script wrote back */
         AuCssSheet *sh = s->om_sheet ? s->om_sheet : s->sheet;
         if (sh && !s->disabled)
-            au_css_resolver_add_sheet(dv->resolver, sh);
+            au_css_resolver_add_scoped_sheet(dv->resolver, sh, dv->slots[i].scope);
     }
-    au_css_resolver_sheets_changed(dv->resolver);
-    dv->style_all = true;
+    /* adopted sheets come after the tree's own (the resolver keeps each
+     * tree's sheets in the order given); a shadow root whose host is gone
+     * is let go */
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < dv->nadopted; i++) {
+        AdoptedSheets *a = &dv->adopted[i];
+        if (au_is_shadow_root(a->scope) && !((AuShadowRoot *)a->scope)->host) {
+            au_node_unref(a->scope);
+            au_free(a->ids);
+            continue;
+        }
+        dv->adopted[k++] = *a;
+        if (!au_node_is_connected(a->scope))
+            continue;
+        for (uint32_t j = 0; j < a->n; j++) {
+            ConstructedSheet *c = au_dv_constructed(dv, a->ids[j]);
+            if (c && c->sheet && !c->disabled)
+                au_css_resolver_add_scoped_sheet(dv->resolver, c->sheet,
+                                                 a->scope->type == AU_NODE_DOCUMENT ? NULL : a->scope);
+        }
+    }
+    dv->nadopted = k;
+    if (dv->sheets_scoped_only && dv->ndirty_scopes && !dv->style_all && !dv->tree_dirty) {
+        au_css_resolver_sheets_changed_in(dv->resolver, dv->dirty_scopes, dv->ndirty_scopes);
+        dv->restyle_needed = true;
+        dv->struct_changed = true;
+    } else {
+        au_css_resolver_sheets_changed(dv->resolver);
+        dv->style_all = true;
+    }
+    drop_dirty_scopes(dv);
+    dv->sheets_scoped_only = false;
 }
 
 static bool same_str(const char *a, const char *b)
@@ -1473,7 +1576,7 @@ static void prune_slots(AuDocView *dv)
     uint32_t k = 0;
     for (uint32_t i = 0; i < dv->nslots; i++) {
         SheetSlot *s = &dv->slots[i];
-        if (au_node_is_connected(&s->el->node) && !slot_stale(dv, s)) {
+        if (au_node_is_connected(&s->el->node) && !slot_stale(dv, s) && tree_scope(s->el) == s->scope) {
             dv->slots[k++] = *s;
             continue;
         }
@@ -1481,7 +1584,11 @@ static void prune_slots(AuDocView *dv)
             au_css_resolver_detach_sheets(dv->resolver); /* until rebuild_resolver, which follows */
         au_node_unref(&s->el->node);
         free_sheet_src(dv, s->src);
-        dv->sheets_dirty = true;
+        /* the sheet left its tree, which is restyled; one that moved to
+         * another tree is found there again by the scan */
+        sheets_changed(dv, s->scope);
+        if (s->scope)
+            au_node_unref(s->scope);
     }
     dv->nslots = k;
 }
@@ -2376,7 +2483,7 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
         au_css_sheet_free(s->om_sheet);
     s->om_sheet = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media); /* keeps a copy of the text */
     dv->sheets_packed = false;
-    dv->sheets_dirty = true;
+    sheets_changed(dv, tree_scope(el));
 }
 
 void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled)
@@ -2385,7 +2492,147 @@ void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled)
     if (!s || s->disabled == disabled)
         return;
     s->disabled = disabled;
-    dv->sheets_dirty = true;
+    sheets_changed(dv, tree_scope(el));
+}
+
+/* ---- Constructed sheets and adoptedStyleSheets (script.c) ---- */
+
+ConstructedSheet *au_dv_constructed(AuDocView *dv, uint32_t id)
+{
+    /* ids grow: binary search */
+    uint32_t lo = 0, hi = dv->ncsheets;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (dv->csheets[mid].id == id)
+            return &dv->csheets[mid];
+        if (dv->csheets[mid].id < id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return NULL;
+}
+
+static bool is_adopted(const AuDocView *dv, uint32_t id)
+{
+    for (uint32_t i = 0; i < dv->nadopted; i++)
+        for (uint32_t j = 0; j < dv->adopted[i].n; j++)
+            if (dv->adopted[i].ids[j] == id)
+                return true;
+    return false;
+}
+
+/* Every tree that adopted sheet id, restyled. */
+static void constructed_changed(AuDocView *dv, uint32_t id)
+{
+    for (uint32_t i = 0; i < dv->nadopted; i++)
+        for (uint32_t j = 0; j < dv->adopted[i].n; j++)
+            if (dv->adopted[i].ids[j] == id) {
+                sheets_changed(dv, dv->adopted[i].scope->type == AU_NODE_DOCUMENT ? NULL : dv->adopted[i].scope);
+                break;
+            }
+}
+
+void au_dv_sheet_construct(AuDocView *dv, uint32_t id, const char *text, size_t len, const char *media,
+                           int disabled)
+{
+    ConstructedSheet *c = au_dv_constructed(dv, id);
+    if (!c) {
+        if (!text)
+            return;
+        if (dv->ncsheets && dv->csheets[dv->ncsheets - 1].id >= id)
+            return; /* ids come in order */
+        if (dv->ncsheets == dv->csheets_cap) {
+            dv->csheets_cap = dv->csheets_cap ? dv->csheets_cap * 2 : 8;
+            dv->csheets = au_realloc(dv->csheets, dv->csheets_cap * sizeof *dv->csheets);
+        }
+        c = &dv->csheets[dv->ncsheets++];
+        memset(c, 0, sizeof *c);
+        c->id = id;
+    }
+    bool changed = false;
+    if (media) {
+        au_free(c->media);
+        c->media = *media ? dup(media) : NULL;
+        changed = true;
+    }
+    if (disabled >= 0 && (bool)disabled != c->disabled) {
+        c->disabled = disabled != 0;
+        changed = true;
+    }
+    if (text || (media && c->sheet)) {
+        /* the resolver lets go of the sheets before one it holds is
+         * freed; update_style hands them back */
+        if (dv->resolver && is_adopted(dv, id))
+            au_css_resolver_detach_sheets(dv->resolver);
+        AuBuf old;
+        au_buf_init(&old);
+        if (!text && c->sheet) {
+            au_css_sheet_text_get(c->sheet, &old);
+            text = old.data ? old.data : "";
+            len = old.len;
+        }
+        AuCssSheet *ns = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, dv->base, c->media);
+        au_buf_free(&old);
+        au_css_sheet_free(c->sheet);
+        c->sheet = ns;
+        changed = true;
+    }
+    if (changed)
+        constructed_changed(dv, id);
+}
+
+void au_dv_sheet_destroy(AuDocView *dv, uint32_t id)
+{
+    ConstructedSheet *c = au_dv_constructed(dv, id);
+    if (!c)
+        return;
+    /* a sheet still adopted somewhere stays (script let go of its object
+     * only); the adopted lists name it */
+    if (is_adopted(dv, id))
+        return;
+    /* the resolver does not hold a sheet nothing adopted */
+    au_css_sheet_free(c->sheet);
+    au_free(c->media);
+    uint32_t i = (uint32_t)(c - dv->csheets);
+    memmove(c, c + 1, (dv->ncsheets - i - 1) * sizeof *c);
+    dv->ncsheets--;
+}
+
+void au_dv_sheets_adopt(AuDocView *dv, AuNode *scope, const uint32_t *ids, size_t n)
+{
+    if (!scope || (scope->type != AU_NODE_DOCUMENT && !au_is_shadow_root(scope)))
+        return;
+    AdoptedSheets *a = NULL;
+    for (uint32_t i = 0; i < dv->nadopted && !a; i++)
+        if (dv->adopted[i].scope == scope)
+            a = &dv->adopted[i];
+    if (!a) {
+        if (!n)
+            return;
+        if (dv->nadopted == dv->adopted_cap) {
+            dv->adopted_cap = dv->adopted_cap ? dv->adopted_cap * 2 : 8;
+            dv->adopted = au_realloc(dv->adopted, dv->adopted_cap * sizeof *dv->adopted);
+        }
+        a = &dv->adopted[dv->nadopted++];
+        memset(a, 0, sizeof *a);
+        a->scope = au_node_ref(scope);
+    } else if (a->n == n && (!n || !memcmp(a->ids, ids, n * sizeof *ids))) {
+        return; /* the same list again */
+    }
+    /* a sheet that leaves the list may be freed before update_style hands
+     * the sheets back: the resolver lets go of them now */
+    if (dv->resolver)
+        au_css_resolver_detach_sheets(dv->resolver);
+    au_free(a->ids);
+    a->ids = NULL;
+    a->n = 0;
+    if (n) {
+        a->ids = au_alloc(n * sizeof *ids);
+        memcpy(a->ids, ids, n * sizeof *ids);
+        a->n = (uint32_t)n;
+    }
+    sheets_changed(dv, scope->type == AU_NODE_DOCUMENT ? NULL : scope);
 }
 
 void au_dv_parsed_more(AuDocView *dv)

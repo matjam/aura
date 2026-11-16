@@ -57,7 +57,7 @@ static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const 
 
 static bool tcomp_has_string(const TComp *c)
 {
-    return c->type == SC_ATTR || (c->type == SC_PSEUDO && c->op == PC_LANG);
+    return c->type == SC_ATTR || (c->type == SC_PSEUDO && (c->op == PC_LANG || c->op == PC_PART));
 }
 
 static void tcomp_free(TComp *c)
@@ -226,7 +226,7 @@ static const struct {
     {"picture-in-picture", PC_NEVER}, {"playing", PC_NEVER}, {"paused", PC_NEVER}, {"seeking", PC_NEVER},
     {"buffering", PC_NEVER}, {"stalled", PC_NEVER}, {"muted", PC_NEVER}, {"volume-locked", PC_NEVER},
     {"open", PC_NEVER}, {"closed", PC_NEVER}, {"current", PC_NEVER}, {"past", PC_NEVER},
-    {"future", PC_NEVER}, {"blank", PC_NEVER}, {"target-within", PC_NEVER}, {"host", PC_NEVER},
+    {"future", PC_NEVER}, {"blank", PC_NEVER}, {"target-within", PC_NEVER}, {"host", PC_HOST},
     {"-moz-focusring", PC_NEVER}, {"-moz-ui-invalid", PC_NEVER}, {"-webkit-autofill-strong-password", PC_NEVER},
     {"placeholder", PC_NEVER}, {"first", PC_NEVER}, {"left", PC_NEVER}, {"right", PC_NEVER},
 };
@@ -383,6 +383,78 @@ static bool parse_attr(SP *p, uint32_t a, uint32_t b, Compound *c)
     return true;
 }
 
+/* The argument of :host(), :host-context() and ::slotted(): one compound
+ * selector, without a pseudo-element. */
+static AuSelList *parse_compound_arg(const CssTokens *tk, uint32_t s, uint32_t e, const CssSelParseCtx *sub)
+{
+    AuSelList *l = parse_list(tk, s, e, sub);
+    if (!l || l->n != 1 || l->sel[0].pseudo)
+        return NULL;
+    for (uint32_t i = 0; i < l->sel[0].ncomp; i++)
+        if (l->sel[0].comp[i].type == SC_COMBINATOR)
+            return NULL;
+    return l;
+}
+
+/* ::slotted(compound) and ::part(ident+): the argument becomes a
+ * component of the subject compound (PC_SLOTTED, PC_PART). */
+static bool parse_shadow_pseudo_el(SP *p, const CssToken *nt, uint32_t q, Compound *c, uint32_t *spec,
+                                   uint8_t *pseudo)
+{
+    const CssTokens *tk = p->tk;
+    char name[16];
+    if (!css_lower(css_tok_str(tk, nt), css_tok_len(nt), name, sizeof name))
+        return false;
+    uint32_t end = nt->len;
+    uint32_t e = (end > q + 1 && tk->t[end - 1].type == TK_RPAREN) ? end - 1 : end;
+    if (!strcmp(name, "slotted")) {
+        CssSelParseCtx sub = *p->cx;
+        sub.depth++;
+        sub.nested_rule = false;
+        sub.relative = false;
+        sub.forgiving = false;
+        if (sub.depth > MAX_SEL_DEPTH)
+            return false;
+        AuSelList *l = parse_compound_arg(tk, q + 1, e, &sub);
+        if (!l)
+            return false;
+        TComp *x = push_comp(c, SC_PSEUDO);
+        x->op = PC_SLOTTED;
+        x->u.list = l;
+        *pseudo = AU_CSS_PSEUDO_SLOTTED;
+        *spec = spec_add(*spec, spec_add(1, css_sellist_max_spec(l)));
+        return true;
+    }
+    if (!strcmp(name, "part")) {
+        AuBuf buf;
+        au_buf_init(&buf);
+        for (uint32_t i = q + 1; i < e; i++) {
+            const CssToken *t = &tk->t[i];
+            if (t->type == TK_WS)
+                continue;
+            if (t->type != TK_IDENT) {
+                au_buf_free(&buf);
+                return false;
+            }
+            if (buf.len)
+                au_buf_putc(&buf, ' ');
+            au_buf_append(&buf, css_tok_str(tk, t), t->len);
+        }
+        if (!buf.len) {
+            au_buf_free(&buf);
+            return false;
+        }
+        TComp *x = push_comp(c, SC_PSEUDO);
+        x->op = PC_PART;
+        x->u.value.len = (uint32_t)buf.len;
+        x->u.value.s = au_buf_take(&buf, NULL);
+        *pseudo = AU_CSS_PSEUDO_PART;
+        *spec = spec_add(*spec, 1);
+        return true;
+    }
+    return false;
+}
+
 static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Compound *c, uint32_t *spec)
 {
     const CssTokens *tk = p->tk;
@@ -504,8 +576,17 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
         *spec = 1 << 8;
         return true;
     }
-    if (!strcmp(name, "host") || !strcmp(name, "host-context") || !strcmp(name, "state") ||
-        !strcmp(name, "current") || !strcmp(name, "past") || !strcmp(name, "future")) {
+    if (!strcmp(name, "host") || !strcmp(name, "host-context")) {
+        AuSelList *l = parse_compound_arg(tk, s, e, &sub);
+        if (!l)
+            return false;
+        TComp *x = push_comp(c, SC_PSEUDO);
+        x->op = name[4] ? PC_HOST_CONTEXT : PC_HOST;
+        x->u.list = l;
+        *spec = spec_add(1 << 8, css_sellist_max_spec(l));
+        return true;
+    }
+    if (!strcmp(name, "state") || !strcmp(name, "current") || !strcmp(name, "past") || !strcmp(name, "future")) {
         TComp *x = push_comp(c, SC_PSEUDO);
         x->op = PC_NEVER;
         *spec = 1 << 8;
@@ -578,9 +659,15 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
                 if (*pseudo && !el)
                     return false;
                 if (nt->type != TK_IDENT) {
-                    /* functional pseudo-elements (::part, ::slotted, ::highlight) never match */
                     if (nt->type != TK_FUNCTION)
                         return false;
+                    if (!*pseudo && el && p->cx->depth == 0 && parse_shadow_pseudo_el(p, nt, q, c, spec, pseudo)) {
+                        k = nt->len;
+                        after_pseudo_el = true;
+                        any = true;
+                        continue;
+                    }
+                    /* other functional pseudo-elements (::highlight) never match */
                     *pseudo = AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
                     AuBuf nb;
                     au_buf_init(&nb);
@@ -608,6 +695,16 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
                 int pc = pseudo_class_lookup(css_tok_str(tk, nt), nt->len);
                 if (!pc)
                     return false;
+                if (*pseudo == AU_CSS_PSEUDO_PART && pc != PC_HOST && !(pc >= PC_FIRST_CHILD && pc <= PC_EMPTY)) {
+                    /* a state of the part element (structural ones are not allowed) */
+                    TComp *x = push_comp(c, SC_PSEUDO);
+                    x->op = (uint8_t)pc;
+                    x->flags = SCF_ON_PART;
+                    *spec = spec_add(*spec, 1 << 8);
+                    k = q + 1;
+                    any = true;
+                    continue;
+                }
                 if (after_pseudo_el || *pseudo) {
                     /* user-action pseudo-classes on a pseudo-element: never matches */
                     if (pc != PC_HOVER && pc != PC_ACTIVE && pc != PC_FOCUS && pc != PC_FOCUS_VISIBLE &&
@@ -700,7 +797,8 @@ static void emit_comp(CssArena *A, AuSelComp *dst, TComp *src)
     dst->u.ext = NULL;
     bool is_list = src->type == SC_NESTING ||
                    (src->type == SC_PSEUDO &&
-                    (src->op == PC_IS || src->op == PC_WHERE || src->op == PC_NOT || src->op == PC_HAS));
+                    (src->op == PC_IS || src->op == PC_WHERE || src->op == PC_NOT || src->op == PC_HAS || src->op == PC_HOST ||
+                     src->op == PC_HOST_CONTEXT || src->op == PC_SLOTTED));
     bool is_nth = src->type == SC_PSEUDO && src->op >= PC_NTH_CHILD && src->op <= PC_NTH_LAST_OF_TYPE;
     bool has_string = tcomp_has_string(src) && (src->type != SC_ATTR || src->op != ATTR_EXISTS);
     if (is_list) {
@@ -919,7 +1017,8 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
             if (c->op == PC_HOVER || c->op == PC_ACTIVE || c->op == PC_FOCUS || c->op == PC_FOCUS_VISIBLE ||
                 c->op == PC_FOCUS_WITHIN || c->op == PC_CHECKED || c->op == PC_TARGET)
                 flags |= SELF_STATE;
-            if ((c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT || c->op == PC_HAS) && c->u.list)
+            if ((c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT || c->op == PC_HAS || c->op == PC_HOST ||
+                 c->op == PC_HOST_CONTEXT || c->op == PC_SLOTTED) && c->u.list)
                 flags |= c->u.list->flags;
             if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.ext->u.nth.of)
                 flags |= c->u.ext->u.nth.of->flags;
@@ -1043,6 +1142,22 @@ static void ser_comp(const AuSelComp *c, AuBuf *out)
             ser_list(c->u.list, out);
             au_buf_putc(out, ')');
             return;
+        case PC_HOST: case PC_HOST_CONTEXT: case PC_SLOTTED:
+            au_buf_puts(out, c->op == PC_HOST ? ":host" : c->op == PC_HOST_CONTEXT ? ":host-context" : "::slotted");
+            if (c->u.list) {
+                au_buf_putc(out, '(');
+                ser_list(c->u.list, out);
+                au_buf_putc(out, ')');
+            }
+            return;
+        case PC_PART: {
+            uint32_t vlen;
+            const char *v = css_comp_value(c, &vlen);
+            au_buf_puts(out, "::part(");
+            au_buf_append(out, v, vlen);
+            au_buf_putc(out, ')');
+            return;
+        }
         case PC_NTH_CHILD: case PC_NTH_LAST_CHILD: case PC_NTH_OF_TYPE: case PC_NTH_LAST_OF_TYPE: {
             static const char *n[] = {":nth-child(", ":nth-last-child(", ":nth-of-type(", ":nth-last-of-type("};
             au_buf_puts(out, n[c->op - PC_NTH_CHILD]);

@@ -9,11 +9,29 @@
  * filter, and matches the rest. Matched declarations get a 64-bit cascade
  * key; for each property the declaration with the largest key wins.
  *
- *   key = level(3) element-attached(1) layer(12) specificity(24) order(24)
+ *   key = level(3) context(3) element-attached(1) layer(12) specificity(24)
+ *         order(21)
  *   level: 0 UA, 1 user, 2 author; important: 4 author, 5 user, 6 UA.
+ *   context: the tree the declaration's sheet belongs to, relative to the
+ *   element's own tree (CSS Scoping 3.3, "Shadow Trees and the
+ *   Cascade"): for normal declarations an outer tree (a ::part() rule)
+ *   wins over the element's tree, which wins over an inner one (:host and
+ *   ::slotted() rules); for important declarations the reverse.
  *   layer: rank among the origin's layers (unlayered highest), reversed
  *   for important declarations; presentational hints sit below all
- *   author layers. */
+ *   author layers.
+ *
+ * Shadow trees. Every sheet belongs to a tree scope: the document, or a
+ * shadow root (its <style> and <link> elements and its adopted sheets).
+ * Shadow roots whose sheet lists are the same share one scope id, and
+ * every indexed entry carries its sheet's scope (walked_scope). An
+ * element matches the entries of its own tree's scope; a shadow host
+ * also matches its shadow scope's entries as the featureless host
+ * (:host); a slotted element matches the ::slotted() entries of each
+ * slot's scope along its chain of slots; an element with a part
+ * attribute matches the ::part() entries of the scopes outside it that
+ * its parts reach through exportparts. Until a document has had a shadow
+ * root and while no sheet has a scope, none of this runs. */
 #include "css_int.h"
 
 #include <stdlib.h>
@@ -168,10 +186,38 @@ typedef struct {
     AuStyle *style;
 } ShareSlot;
 
+#define SCOPE_ANY 0xFFFFu  /* user agent and user sheets: every tree */
+#define SCOPE_NONE 0xFFFEu /* a shadow tree without author sheets */
+#define SCOPE_MAX 0xFF00u  /* scope ids below this */
+
+typedef struct {
+    const AuNode *key; /* a shadow root */
+    uint16_t id;
+} ScopeKey;
+
+/* Matched entries carry their context in the top bits (ctx_code). */
+#define ME_CTX_SHIFT 28
+#define ME_INDEX(v) ((v) & ((1u << ME_CTX_SHIFT) - 1))
+#define ME_CTX(v) ((int)((v) >> ME_CTX_SHIFT))
+#define CTX_OWN 3 /* the element's own tree; 0..2 outer trees, 4..7 inner */
+
 struct AuCssResolver {
     AuCssSheet *ua, *ua_quirks;
     AuCssSheet **sheets;
+    const AuNode **sheet_scope; /* per sheet: NULL for the document, else its shadow root */
     uint32_t nsheets, sheets_cap;
+    bool any_scoped;  /* some sheet has a shadow root */
+    bool scoping;     /* the index was built with scopes: filter by them */
+    uint16_t *walked_scope; /* per walked sheet */
+    uint32_t walked_scope_cap;
+    uint16_t walk_scope;    /* during index_build */
+    ScopeKey *scope_keys;   /* shadow root -> scope id, sorted by key */
+    uint32_t nscope_keys, scope_keys_cap;
+    uint32_t *shadow_entries; /* entries of ::slotted() and ::part() rules (not in the maps) */
+    uint32_t nshadow_entries, shadow_entries_cap;
+    bool slotted_rules, part_rules;
+    const AuNode *cur_root;       /* the tree root of cur_el (style_pass) */
+    const AuElement *cur_el;
     AuCssDevice dev;
     AuCssFontPrefs fprefs;
     AuCssMetricsFn metrics;
@@ -181,6 +227,7 @@ struct AuCssResolver {
     bool has_has;
     bool styled_once;
     bool full_restyle;
+    bool sheets_full; /* the sheets changed: the next restyle is a full one (unless sheets_changed_in) */
     /* What depends on the viewport. media_deps holds every media query
      * the index evaluated, with its result (the lists belong to the
      * sheets and are valid while the index is). viewport_styles is set
@@ -637,6 +684,7 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                 dep_add(cx, F_ATTR, css_comp_name(c), rel, key);
             } else if (c->type == SC_PSEUDO) {
                 uint32_t st = pseudo_state(c->op);
+                IndexKey none = {KEY_UNIVERSAL, 0, 0};
                 if (!cx->in_has)
                     struct_pseudo(cx->r, c->op, rel);
                 else if (c->op == PC_EMPTY)
@@ -644,7 +692,20 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                 else if (c->op == PC_DEFAULT || c->op == PC_INDETERMINATE)
                     cx->r->st_form = true;
                 if (st) {
-                    dep_add(cx, F_STATE, st, rel, key);
+                    /* a state after ::part() is the part element's, which
+                     * has none of the host compound's keys */
+                    dep_add(cx, F_STATE, st, rel, (c->flags & SCF_ON_PART) ? none : key);
+                } else if (c->op == PC_HOST || c->op == PC_SLOTTED) {
+                    /* :host(): the host, whose flat subtree the shadow
+                     * tree is; ::slotted(): the slotted element, which has
+                     * none of the slot compound's keys */
+                    if (c->u.list)
+                        for (uint32_t m = 0; m < c->u.list->n; m++)
+                            dep_selector(cx, &c->u.list->sel[m], rel, none, depth + 1);
+                } else if (c->op == PC_HOST_CONTEXT && c->u.list) {
+                    /* an ancestor of the host: its subtree holds the host */
+                    for (uint32_t m = 0; m < c->u.list->n; m++)
+                        dep_selector(cx, &c->u.list->sel[m], cx->in_has ? REL_ANY : REL_DESC, none, depth + 1);
                 } else if (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT) {
                     nested = c->u.list;
                 } else if (c->op == PC_HAS && c->u.list) {
@@ -734,8 +795,13 @@ static void deps_build(AuCssResolver *r)
     memset(&cx, 0, sizeof cx);
     cx.r = r;
     IndexKey none = {KEY_UNIVERSAL, 0, 0};
-    for (uint32_t i = 0; i < r->nentries; i++)
-        dep_selector(&cx, r->entries[i].sel, REL_SELF, none, 0);
+    for (uint32_t i = 0; i < r->nentries; i++) {
+        /* a ::slotted() or ::part() rule styles elements below the slot
+         * or host its compound matches (in the flat tree) */
+        uint8_t pe = r->entries[i].pseudo;
+        bool below = pe == AU_CSS_PSEUDO_SLOTTED || pe == AU_CSS_PSEUDO_PART;
+        dep_selector(&cx, r->entries[i].sel, below ? REL_DESC : REL_SELF, none, 0);
+    }
     if (r->ndeps > 1) {
         qsort(r->deps, r->ndeps, sizeof(StateDep), dep_cmp);
         uint32_t k = 1;
@@ -760,6 +826,8 @@ static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *r
     /* a block that is still text has at least one declaration to try */
     if (!sel || (!(rule->flags & RF_LAZY) && !rule->b.decls->n))
         return;
+    if (r->nentries + sel->n >= (1u << ME_CTX_SHIFT))
+        return; /* matched entries keep their context above the index */
     uint32_t spec_override = nested_decls ? css_sellist_max_spec(sel) : 0;
     uint32_t ord = (*order)++;
     for (uint32_t i = 0; i < sel->n; i++) {
@@ -808,6 +876,11 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         return;
     uint32_t sheet_index = r->nwalked;
     *CSS_PUSH(r->walked, r->nwalked, r->walked_cap) = sheet;
+    if (r->walked_scope_cap < r->walked_cap) {
+        r->walked_scope_cap = r->walked_cap;
+        r->walked_scope = au_realloc(r->walked_scope, r->walked_scope_cap * sizeof *r->walked_scope);
+    }
+    r->walked_scope[sheet_index] = sheet->origin == AU_CSS_ORIGIN_AUTHOR ? r->walk_scope : SCOPE_ANY;
     LayerTree *lt = &r->layers[sheet->origin];
     for (uint32_t i = 0; i < sheet->nprops && !layers_only; i++)
         *CSS_PUSH(r->props, r->nprops, r->props_cap) = sheet->props[i];
@@ -899,6 +972,9 @@ static void index_clear(AuCssResolver *r)
     r->has_has = false;
     r->nprops = 0;
     r->nmedia_deps = 0;
+    r->nscope_keys = 0;
+    r->nshadow_entries = 0;
+    r->slotted_rules = r->part_rules = false;
     deps_clear(r);
 }
 
@@ -907,6 +983,134 @@ static void pending_drop(AuCssResolver *r);
 static void pending_flush(AuCssResolver *r, AuDocument *doc);
 
 static void sort_registrations(AuCssResolver *r);
+
+/* Walks the sheets of one tree scope, list[0..n) in order, under layer
+ * node layer of the author tree (0 for the document's). */
+static void walk_group(AuCssResolver *r, AuCssSheet *const *list, uint32_t n, int32_t layer, uint32_t *order,
+                       Frame **stack, uint32_t *sn, uint32_t *scap)
+{
+    for (uint32_t i = 0; i < n; i++) {
+        /* A sheet given again later (a page that links one sheet several
+         * times): every declaration of this occurrence loses to the same
+         * declaration of the later one, which has the same origin, layer
+         * and specificity and comes later, so only the last occurrence is
+         * indexed. An earlier occurrence still names its layers, whose
+         * place is set by where they are first named. An anonymous layer
+         * is a new layer at each occurrence, so a sheet with one is
+         * indexed every time (repeat_matters). */
+        bool again = false;
+        if (css_index_skip_repeats && !list[i]->repeat_matters)
+            for (uint32_t k = i + 1; k < n && !again; k++)
+                again = list[k] == list[i];
+        if (!again || list[i]->has_layers)
+            walk_sheet(r, list[i], list[i]->origin == AU_CSS_ORIGIN_AUTHOR ? layer : 0, order, stack, sn, scap,
+                       again);
+    }
+}
+
+typedef struct {
+    const AuNode *key;
+    uint32_t index;
+} ScopedSheet;
+
+static int scoped_cmp(const void *a, const void *b)
+{
+    const ScopedSheet *x = a, *y = b;
+    if (x->key != y->key)
+        return (uintptr_t)x->key < (uintptr_t)y->key ? -1 : 1;
+    return x->index < y->index ? -1 : x->index > y->index;
+}
+
+/* The shadow roots' sheets: one scope id for each distinct list of
+ * sheets, each walked once under a layer node of its own (a scope's
+ * layers are ordered among themselves only). */
+static void index_scopes(AuCssResolver *r, uint32_t *order, Frame **stack, uint32_t *sn, uint32_t *scap)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < r->nsheets; i++)
+        n += r->sheet_scope[i] != NULL;
+    if (!n)
+        return;
+    ScopedSheet *v = au_alloc(n * sizeof *v);
+    n = 0;
+    for (uint32_t i = 0; i < r->nsheets; i++)
+        if (r->sheet_scope[i]) {
+            v[n].key = r->sheet_scope[i];
+            v[n].index = i;
+            n++;
+        }
+    qsort(v, n, sizeof *v, scoped_cmp);
+    /* groups already walked: [first, first + len) in v, and their ids */
+    typedef struct {
+        uint32_t first, len, hash;
+        uint16_t id;
+    } Group;
+    Group *groups = NULL;
+    uint32_t ngroups = 0, gcap = 0;
+    AuCssSheet **list = au_alloc(n * sizeof *list);
+    for (uint32_t a = 0; a < n;) {
+        uint32_t b = a;
+        uint32_t h = 2166136261u;
+        while (b < n && v[b].key == v[a].key) {
+            h = (h ^ (uint32_t)(uintptr_t)r->sheets[v[b].index]) * 16777619u;
+            b++;
+        }
+        uint16_t id = 0;
+        for (uint32_t g = 0; g < ngroups && !id; g++) {
+            if (groups[g].hash != h || groups[g].len != b - a)
+                continue;
+            bool same = true;
+            for (uint32_t k = 0; k < b - a && same; k++)
+                same = r->sheets[v[groups[g].first + k].index] == r->sheets[v[a + k].index];
+            if (same)
+                id = groups[g].id;
+        }
+        if (!id && ngroups + 1 < SCOPE_MAX) {
+            id = (uint16_t)(ngroups + 1);
+            Group *gr = CSS_PUSH(groups, ngroups, gcap);
+            gr->first = a;
+            gr->len = b - a;
+            gr->hash = h;
+            gr->id = id;
+            for (uint32_t k = a; k < b; k++)
+                list[k - a] = r->sheets[v[k].index];
+            r->walk_scope = id;
+            int32_t layer = layer_new(&r->layers[AU_CSS_ORIGIN_AUTHOR], 0, 0);
+            walk_group(r, list, b - a, layer, order, stack, sn, scap);
+            r->walk_scope = 0;
+        }
+        if (id) {
+            ScopeKey *sk = CSS_PUSH(r->scope_keys, r->nscope_keys, r->scope_keys_cap);
+            sk->key = v[a].key;
+            sk->id = id;
+        }
+        a = b;
+    }
+    /* v was sorted by key: so is scope_keys (scope_of_root searches it) */
+    au_free(list);
+    au_free(groups);
+    au_free(v);
+}
+
+/* The scope id of a tree root: 0 for the document (and for detached
+ * trees), the id of a shadow root's sheet list, or SCOPE_NONE. */
+static uint16_t scope_of_root(const AuCssResolver *r, const AuNode *root)
+{
+    if (!root || !au_is_shadow_root(root))
+        return 0;
+    uint32_t lo = 0, hi = r->nscope_keys;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        const AuNode *k = r->scope_keys[mid].key;
+        if (k == root)
+            return r->scope_keys[mid].id;
+        if ((uintptr_t)k < (uintptr_t)root)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return SCOPE_NONE;
+}
 
 static void index_build(AuCssResolver *r, bool quirks)
 {
@@ -918,24 +1122,22 @@ static void index_build(AuCssResolver *r, bool quirks)
     uint32_t order = 1;
     Frame *stack = NULL;
     uint32_t sn = 0, scap = 0;
+    r->walk_scope = 0;
     walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap, false);
     if (quirks)
         walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap, false);
-    for (uint32_t i = 0; i < r->nsheets; i++) {
-        /* A sheet given again later (a page that links one sheet several
-         * times): every declaration of this occurrence loses to the same
-         * declaration of the later one, which has the same origin, layer
-         * and specificity and comes later, so only the last occurrence is
-         * indexed. An earlier occurrence still names its layers, whose
-         * place is set by where they are first named. An anonymous layer
-         * is a new layer at each occurrence, so a sheet with one is
-         * indexed every time (repeat_matters). */
-        bool again = false;
-        if (css_index_skip_repeats && !r->sheets[i]->repeat_matters)
-            for (uint32_t k = i + 1; k < r->nsheets && !again; k++)
-                again = r->sheets[k] == r->sheets[i];
-        if (!again || r->sheets[i]->has_layers)
-            walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap, again);
+    if (!r->any_scoped) {
+        walk_group(r, r->sheets, r->nsheets, 0, &order, &stack, &sn, &scap);
+    } else {
+        /* the document's sheets in order, then each shadow scope's */
+        AuCssSheet **list = au_alloc((r->nsheets ? r->nsheets : 1) * sizeof *list);
+        uint32_t n = 0;
+        for (uint32_t i = 0; i < r->nsheets; i++)
+            if (!r->sheet_scope[i])
+                list[n++] = r->sheets[i];
+        walk_group(r, list, n, 0, &order, &stack, &sn, &scap);
+        au_free(list);
+        index_scopes(r, &order, &stack, &sn, &scap);
     }
     au_free(stack);
     if (r->nentries && r->nentries < r->entries_cap) {
@@ -950,8 +1152,20 @@ static void index_build(AuCssResolver *r, bool quirks)
         r->entries[i].layer = r->layers[r->entries[i].origin].n[r->entries[i].layer].rank;
     IndexKey *keys = NULL;
     uint32_t nkeys = 0, kcap = 0;
-    for (uint32_t i = 0; i < r->nentries; i++)
+    for (uint32_t i = 0; i < r->nentries; i++) {
+        uint8_t pe = r->entries[i].pseudo;
+        if (pe == AU_CSS_PSEUDO_SLOTTED || pe == AU_CSS_PSEUDO_PART) {
+            /* matched for the slotted or part element, against another
+             * element (the slot, the host): not found by the keys */
+            *CSS_PUSH(r->shadow_entries, r->nshadow_entries, r->shadow_entries_cap) = i;
+            if (pe == AU_CSS_PSEUDO_SLOTTED)
+                r->slotted_rules = true;
+            else
+                r->part_rules = true;
+            continue;
+        }
         selector_keys(r->entries[i].sel, quirks, i, &keys, &nkeys, &kcap);
+    }
     if (nkeys > 1)
         qsort(keys, nkeys, sizeof(IndexKey), key_cmp);
     r->sorted = au_alloc((nkeys ? nkeys : 1) * sizeof(uint32_t));
@@ -1040,6 +1254,10 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->has_anchors);
     au_free(r->entries);
     au_free(r->walked);
+    au_free(r->walked_scope);
+    au_free(r->scope_keys);
+    au_free(r->shadow_entries);
+    au_free(r->sheet_scope);
     au_free(r->media_deps);
     for (int i = 0; i < 3; i++)
         au_free(r->layers[i].n);
@@ -1135,10 +1353,23 @@ void au_css_resolver_set_font_prefs(AuCssResolver *r, const AuCssFontPrefs *p)
 
 const AuCssFontPrefs *au_css_resolver_font_prefs(const AuCssResolver *r) { return &r->fprefs; }
 
+void au_css_resolver_add_scoped_sheet(AuCssResolver *r, AuCssSheet *s, const AuNode *scope)
+{
+    if (scope && !au_is_shadow_root(scope))
+        scope = NULL;
+    uint32_t cap = r->sheets_cap;
+    *CSS_PUSH(r->sheets, r->nsheets, r->sheets_cap) = s;
+    if (r->sheets_cap != cap || !r->sheet_scope)
+        r->sheet_scope = au_realloc(r->sheet_scope, r->sheets_cap * sizeof *r->sheet_scope);
+    r->sheet_scope[r->nsheets - 1] = scope;
+    if (scope)
+        r->any_scoped = true;
+    au_css_resolver_sheets_changed(r);
+}
+
 void au_css_resolver_add_sheet(AuCssResolver *r, AuCssSheet *s)
 {
-    *CSS_PUSH(r->sheets, r->nsheets, r->sheets_cap) = s;
-    au_css_resolver_sheets_changed(r);
+    au_css_resolver_add_scoped_sheet(r, s, NULL);
 }
 
 void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s)
@@ -1146,6 +1377,7 @@ void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s)
     for (uint32_t i = 0; i < r->nsheets; i++)
         if (r->sheets[i] == s) {
             memmove(&r->sheets[i], &r->sheets[i + 1], (r->nsheets - i - 1) * sizeof(AuCssSheet *));
+            memmove(&r->sheet_scope[i], &r->sheet_scope[i + 1], (r->nsheets - i - 1) * sizeof *r->sheet_scope);
             r->nsheets--;
             /* the index points into s: drop it before freeing */
             index_clear(r);
@@ -1162,6 +1394,7 @@ void au_css_resolver_detach_sheets(AuCssResolver *r)
     index_clear(r);
     share_clear(r);
     r->nsheets = 0;
+    r->any_scoped = false;
     au_css_resolver_sheets_changed(r);
 }
 
@@ -1177,7 +1410,27 @@ bool au_css_media_text_matches(const char *query, size_t len, const AuCssDevice 
 void au_css_resolver_sheets_changed(AuCssResolver *r)
 {
     r->index_dirty = true;
-    r->full_restyle = true;
+    r->sheets_full = true;
+}
+
+static void mark_ancestors(AuElement *el);
+
+void au_css_resolver_sheets_changed_in(AuCssResolver *r, AuNode *const *roots, size_t n)
+{
+    r->index_dirty = true;
+    if (!r->styled_once || r->full_restyle)
+        return;
+    for (size_t i = 0; i < n; i++)
+        if (!roots[i] || !au_is_shadow_root(roots[i]) || !((const AuShadowRoot *)roots[i])->host)
+            return; /* the document's sheets: restyle everything */
+    r->sheets_full = false;
+    /* the rules of these trees reach their shadow trees, their hosts and
+     * what is slotted into them: the hosts' flat subtrees */
+    for (size_t i = 0; i < n; i++) {
+        AuElement *h = ((const AuShadowRoot *)roots[i])->host;
+        h->state |= AU_STATE_STYLE_DIRTY;
+        mark_ancestors(h);
+    }
 }
 
 static const AuCssKeyframes *find_keyframes(const AuCssSheet *s, AuAtom name, const AuCssKeyframes *best)
@@ -1209,15 +1462,27 @@ bool au_css_media_matches(AuCssResolver *r, const char *query, size_t len)
 
 /* ---- Matching ---- */
 
-static uint64_t make_key(int level, int attached, uint32_t layer, uint32_t spec, uint32_t order)
+#define KEY_LAYER_SHIFT 45 /* key >> KEY_LAYER_SHIFT: level, context, attached and layer */
+#define KEY_ORDER_MAX 0x1FFFFFu
+
+/* ctx: 0..7, larger wins; ctx_normal and ctx_important give it from the
+ * context code of a matched entry. */
+static uint64_t make_key(int level, int ctx, int attached, uint32_t layer, uint32_t spec, uint32_t order)
 {
     if (layer > 4095)
         layer = 4095;
-    if (order > 0xFFFFFF)
-        order = 0xFFFFFF;
-    return ((uint64_t)level << 61) | ((uint64_t)attached << 60) | ((uint64_t)layer << 48) |
-           ((uint64_t)(spec & 0xFFFFFF) << 24) | order;
+    if (order > KEY_ORDER_MAX)
+        order = KEY_ORDER_MAX;
+    return ((uint64_t)level << 61) | ((uint64_t)ctx << 58) | ((uint64_t)attached << 57) |
+           ((uint64_t)layer << KEY_LAYER_SHIFT) | ((uint64_t)(spec & 0xFFFFFF) << 21) | order;
 }
+
+/* Context codes: CTX_OWN for the element's tree, below it the trees
+ * outside (::part() rules), above it the trees inside (:host, then
+ * ::slotted() along the chain of slots). Normal declarations of an outer
+ * tree win, important ones of an inner tree. */
+static int ctx_normal(int code) { return 7 - code; }
+static int ctx_important(int code) { return code; }
 
 static void push_matched(AuCssResolver *r, const AuCssDeclBlock *b, uint64_t kn, uint64_t ki)
 {
@@ -1236,12 +1501,26 @@ static const AuCssDeclBlock *entry_decls(AuCssResolver *r, RuleEntry *e)
     return (const AuCssDeclBlock *)e->body;
 }
 
+/* Which entries a pass over the buckets takes: with r->scoping, those of
+ * scope (and with any_too the user agent's and user's), each recorded
+ * with context code ctx. */
+typedef struct {
+    uint16_t scope;
+    bool any_too;
+    uint32_t ctx; /* code << ME_CTX_SHIFT */
+} Pass;
+
 static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const AuElement *el, const CssMatchCtx *mc,
-                         uint8_t want, uint16_t *pseudo_bits)
+                         uint8_t want, uint16_t *pseudo_bits, const Pass *ps)
 {
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ei = r->sorted[start + i];
         const RuleEntry *e = &r->entries[ei];
+        if (r->scoping) {
+            uint16_t sc = r->walked_scope[e->sheet];
+            if (sc != ps->scope && !(sc == SCOPE_ANY && ps->any_too))
+                continue;
+        }
         if (e->pseudo != want) {
             if (want != AU_CSS_PSEUDO_NONE || !pseudo_bits || e->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
                 continue;
@@ -1257,7 +1536,7 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
             if (css_selector_match(e->sel, el, mc)) {
                 *pseudo_bits |= (uint16_t)(1u << e->pseudo);
                 if (attached)
-                    *CSS_PUSH(r->pseudo_entries, r->npe, r->pe_cap) = ei;
+                    *CSS_PUSH(r->pseudo_entries, r->npe, r->pe_cap) = ei | ps->ctx;
             }
             continue;
         }
@@ -1265,7 +1544,179 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
             continue; /* an ancestor the selector names is not there */
         if (!css_selector_match(e->sel, el, mc))
             continue;
-        *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei;
+        *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei | ps->ctx;
+    }
+}
+
+/* The tree root of el: the style pass gives it for the element it
+ * styles; anything else walks up. */
+static const AuNode *root_of(const AuCssResolver *r, const AuElement *el)
+{
+    return r->cur_el == el ? r->cur_root : au_node_root(&el->node);
+}
+
+/* The names in a part attribute, or an exportparts mapping applied to
+ * names (inner names to outer ones; "a" alone maps a to a). Up to max
+ * names; returns the count. */
+#define MAX_PART_NAMES 16
+static uint32_t part_tokens(const char *v, AuAtom *out, uint32_t max)
+{
+    uint32_t n = 0;
+    for (const char *p = v; *p && n < max;) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\f' || *p == '\r')
+            p++;
+        const char *s = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\f' && *p != '\r')
+            p++;
+        if (p > s)
+            out[n++] = au_atom(s, (size_t)(p - s));
+    }
+    return n;
+}
+
+static uint32_t export_parts(const char *map, const AuAtom *in, uint32_t nin, AuAtom *out, uint32_t max)
+{
+    uint32_t n = 0;
+    for (const char *p = map; *p && n < max;) {
+        /* one "inner[:outer]" item up to a comma */
+        const char *e = p;
+        while (*e && *e != ',')
+            e++;
+        const char *a = p, *colon = NULL;
+        for (const char *q = p; q < e; q++)
+            if (*q == ':' && !colon)
+                colon = q;
+        const char *ae = colon ? colon : e;
+        const char *b = colon ? colon + 1 : a, *be = e;
+        while (a < ae && au_is_space((unsigned char)*a))
+            a++;
+        while (ae > a && au_is_space((unsigned char)ae[-1]))
+            ae--;
+        while (b < be && au_is_space((unsigned char)*b))
+            b++;
+        while (be > b && au_is_space((unsigned char)be[-1]))
+            be--;
+        if (!colon) {
+            b = a;
+            be = ae;
+        }
+        if (ae > a && be > b) {
+            AuAtom inner = au_atom(a, (size_t)(ae - a));
+            for (uint32_t i = 0; i < nin; i++)
+                if (in[i] == inner) {
+                    out[n++] = au_atom(b, (size_t)(be - b));
+                    break;
+                }
+        }
+        p = *e ? e + 1 : e;
+    }
+    return n;
+}
+
+static void collect_buckets(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc, uint8_t want,
+                            uint16_t *pseudo_bits, const Pass *ps)
+{
+    uint32_t s, n;
+    bool q = r->quirks;
+    if (el->id && map_get(&r->maps[0], q ? css_atom_lower(el->id) : el->id, &s, &n))
+        match_bucket(r, s, n, el, mc, want, pseudo_bits, ps);
+    for (uint32_t i = 0; i < el->nclasses; i++) {
+        AuAtom c = q ? css_atom_lower(el->classes[i]) : el->classes[i];
+        bool dup = false;
+        if (q)
+            for (uint32_t k = 0; k < i; k++)
+                if (css_atom_lower(el->classes[k]) == c)
+                    dup = true;
+        if (!dup && map_get(&r->maps[1], c, &s, &n))
+            match_bucket(r, s, n, el, mc, want, pseudo_bits, ps);
+    }
+    AuAtom tag = el->ns == AU_NS_HTML ? el->tag : css_atom_lower(el->tag);
+    if (map_get(&r->maps[KEY_TAG], tag, &s, &n))
+        match_bucket(r, s, n, el, mc, want, pseudo_bits, ps);
+    if (r->maps[KEY_ATTR].size)
+        for (uint32_t i = 0; i < el->nattrs; i++)
+            if (map_get(&r->maps[KEY_ATTR], css_atom_lower(el->attrs[i].name), &s, &n))
+                match_bucket(r, s, n, el, mc, want, pseudo_bits, ps);
+    match_bucket(r, r->uni_start, r->uni_count, el, mc, want, pseudo_bits, ps);
+}
+
+/* The ::slotted() and ::part() entries of scope whose pseudo-element is
+ * pe, matched against target (the slot, the host) for el. */
+static void collect_shadow(AuCssResolver *r, const AuElement *target, const CssMatchCtx *mc, uint8_t pe, uint16_t scope,
+                           int code)
+{
+    for (uint32_t i = 0; i < r->nshadow_entries; i++) {
+        uint32_t ei = r->shadow_entries[i];
+        const RuleEntry *e = &r->entries[ei];
+        if (e->pseudo != pe || r->walked_scope[e->sheet] != scope)
+            continue;
+        if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
+            continue;
+        if (css_selector_match(e->sel, target, mc))
+            *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei | ((uint32_t)code << ME_CTX_SHIFT);
+    }
+}
+
+/* The rules of the trees around el's own: its shadow tree's :host rules,
+ * the ::slotted() rules of the slots it is assigned to, the ::part()
+ * rules of the trees its parts reach. */
+static void collect_scoped(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc, uint8_t want,
+                           uint16_t *pseudo_bits, const AuNode *root)
+{
+    if (el->shadow_root) {
+        uint16_t hs = scope_of_root(r, el->shadow_root);
+        if (hs != SCOPE_NONE) {
+            CssMatchCtx hm = *mc;
+            hm.host = el;
+            Pass ps = {hs, false, (uint32_t)(CTX_OWN + 1) << ME_CTX_SHIFT};
+            /* :host rules are in the universal list (their compound names
+             * no id, class or tag that the featureless host could match) */
+            match_bucket(r, r->uni_start, r->uni_count, el, &hm, want, pseudo_bits, &ps);
+        }
+    }
+    if (want != AU_CSS_PSEUDO_NONE)
+        return;
+    if (r->slotted_rules && el->node.parent && el->node.parent->type == AU_NODE_ELEMENT &&
+        ((const AuElement *)el->node.parent)->shadow_root) {
+        int code = CTX_OWN;
+        for (AuElement *slot = au_node_assigned_slot(&el->node); slot && code < 7;
+             slot = au_node_assigned_slot(&slot->node)) {
+            code++;
+            const AuNode *sroot = au_node_root(&slot->node);
+            uint16_t sc = scope_of_root(r, sroot);
+            if (sc == SCOPE_NONE || !au_is_shadow_root(sroot))
+                continue;
+            CssMatchCtx sm = *mc;
+            sm.host = ((const AuShadowRoot *)sroot)->host;
+            sm.slotted = el;
+            collect_shadow(r, slot, &sm, AU_CSS_PSEUDO_SLOTTED, sc, code);
+        }
+    }
+    const char *part;
+    if (r->part_rules && au_is_shadow_root(root) && (part = au_element_get_attr(el, au_atom("part", 4))) != NULL) {
+        AuAtom names[MAX_PART_NAMES], next[MAX_PART_NAMES];
+        uint32_t nn = part_tokens(part, names, MAX_PART_NAMES);
+        const AuElement *host = ((const AuShadowRoot *)root)->host;
+        int code = CTX_OWN;
+        while (host && nn && code > 0) {
+            code--;
+            const AuNode *hroot = au_node_root(&host->node);
+            uint16_t sc = scope_of_root(r, hroot);
+            if (sc != SCOPE_NONE) {
+                CssMatchCtx pm = *mc;
+                pm.host = au_is_shadow_root(hroot) ? ((const AuShadowRoot *)hroot)->host : NULL;
+                pm.part_el = el;
+                pm.part_names = names;
+                pm.npart_names = nn;
+                collect_shadow(r, host, &pm, AU_CSS_PSEUDO_PART, sc, code);
+            }
+            if (!au_is_shadow_root(hroot))
+                break;
+            const char *ex = au_element_get_attr(host, au_atom("exportparts", 11));
+            nn = ex ? export_parts(ex, names, nn, next, MAX_PART_NAMES) : 0;
+            memcpy(names, next, nn * sizeof *names);
+            host = ((const AuShadowRoot *)hroot)->host;
+        }
     }
 }
 
@@ -1282,28 +1733,17 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
 {
     r->nme = 0;
     r->npe = 0;
-    uint32_t s, n;
-    bool q = r->quirks;
-    if (el->id && map_get(&r->maps[0], q ? css_atom_lower(el->id) : el->id, &s, &n))
-        match_bucket(r, s, n, el, mc, want, pseudo_bits);
-    for (uint32_t i = 0; i < el->nclasses; i++) {
-        AuAtom c = q ? css_atom_lower(el->classes[i]) : el->classes[i];
-        bool dup = false;
-        if (q)
-            for (uint32_t k = 0; k < i; k++)
-                if (css_atom_lower(el->classes[k]) == c)
-                    dup = true;
-        if (!dup && map_get(&r->maps[1], c, &s, &n))
-            match_bucket(r, s, n, el, mc, want, pseudo_bits);
+    Pass own = {0, true, (uint32_t)CTX_OWN << ME_CTX_SHIFT};
+    if (r->scoping) {
+        const AuNode *root = root_of(r, el);
+        own.scope = scope_of_root(r, root);
+        CssMatchCtx om = *mc;
+        om.host = au_is_shadow_root(root) ? ((const AuShadowRoot *)root)->host : NULL;
+        collect_buckets(r, el, &om, want, pseudo_bits, &own);
+        collect_scoped(r, el, mc, want, pseudo_bits, root);
+    } else {
+        collect_buckets(r, el, mc, want, pseudo_bits, &own);
     }
-    AuAtom tag = el->ns == AU_NS_HTML ? el->tag : css_atom_lower(el->tag);
-    if (map_get(&r->maps[KEY_TAG], tag, &s, &n))
-        match_bucket(r, s, n, el, mc, want, pseudo_bits);
-    if (r->maps[KEY_ATTR].size)
-        for (uint32_t i = 0; i < el->nattrs; i++)
-            if (map_get(&r->maps[KEY_ATTR], css_atom_lower(el->attrs[i].name), &s, &n))
-                match_bucket(r, s, n, el, mc, want, pseudo_bits);
-    match_bucket(r, r->uni_start, r->uni_count, el, mc, want, pseudo_bits);
     if (r->nme > 1) {
         qsort(r->matched_entries, r->nme, sizeof(uint32_t), u32_cmp);
         /* an entry indexed under several keys can be found twice */
@@ -1323,12 +1763,14 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
     }
     r->nmatched = 0;
     for (uint32_t i = 0; i < r->nme; i++) {
-        RuleEntry *e = &r->entries[r->matched_entries[i]];
+        uint32_t v = r->matched_entries[i];
+        RuleEntry *e = &r->entries[ME_INDEX(v)];
+        int code = ME_CTX(v);
         int lvl_n = e->origin;
         int lvl_i = e->origin == AU_CSS_ORIGIN_AUTHOR ? 4 : e->origin == AU_CSS_ORIGIN_USER ? 5 : 6;
         uint32_t layer = (uint32_t)e->layer;
-        push_matched(r, entry_decls(r, e), make_key(lvl_n, 0, layer, e->spec, e->order),
-                     make_key(lvl_i, 0, 4095 - layer, e->spec, e->order));
+        push_matched(r, entry_decls(r, e), make_key(lvl_n, ctx_normal(code), 0, layer, e->spec, e->order),
+                     make_key(lvl_i, ctx_important(code), 0, 4095 - layer, e->spec, e->order));
     }
 }
 
@@ -1550,7 +1992,8 @@ static uint16_t phys_of(Cascade *cs, uint16_t prop)
 }
 
 /* The best declaration for prop (physical) below a threshold. kind 1:
- * origin lower than the origin of thr; kind 2: key >> 48 lower. */
+ * origin lower than the origin of thr; kind 2: level, context and layer
+ * lower (key >> KEY_LAYER_SHIFT). */
 static const AuCssDecl *best_below(Cascade *cs, uint16_t prop, uint64_t thr, int kind, uint64_t *out_key)
 {
     AuCssResolver *r = cs->r;
@@ -1566,7 +2009,8 @@ static const AuCssDecl *best_below(Cascade *cs, uint16_t prop, uint64_t thr, int
             if (p != prop)
                 continue;
             uint64_t k = (d->flags & DF_IMPORTANT) ? mt->key_i : mt->key_n;
-            bool below = kind == 1 ? level_origin(k) < level_origin(thr) : (k >> 48) < (thr >> 48);
+            bool below =
+                kind == 1 ? level_origin(k) < level_origin(thr) : (k >> KEY_LAYER_SHIFT) < (thr >> KEY_LAYER_SHIFT);
             if (below && (!best || k >= bk)) {
                 best = d;
                 bk = k;
@@ -2025,9 +2469,11 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
                         const AuCssDeclBlock *hints, uint8_t pseudo)
 {
     if (hints && hints->n)
-        push_matched(r, hints, make_key(2, 0, 0, 0, 0), make_key(4, 0, 4095, 0, 0));
+        push_matched(r, hints, make_key(2, ctx_normal(CTX_OWN), 0, 0, 0, 0),
+                     make_key(4, ctx_important(CTX_OWN), 0, 4095, 0, 0));
     if (inl && inl->n)
-        push_matched(r, inl, make_key(2, 1, 4095, 0, 0), make_key(4, 1, 4095, 0, 0));
+        push_matched(r, inl, make_key(2, ctx_normal(CTX_OWN), 1, 4095, 0, 0),
+                     make_key(4, ctx_important(CTX_OWN), 1, 4095, 0, 0));
 
     AuStyle *s = css_style_new();
     s->pseudo = pseudo;
@@ -2230,6 +2676,23 @@ static void prepare(AuCssResolver *r, const AuElement *el)
     bool quirks = el->node.doc && el->node.doc->quirks == AU_QUIRKS_FULL;
     if (r->index_dirty || quirks != r->quirks)
         index_build(r, quirks);
+    /* elements of shadow trees must not match the document's rules */
+    r->scoping = r->any_scoped || (el->node.doc && el->node.doc->has_shadow);
+}
+
+/* Whether el's style may come from the share cache: not for a host, a
+ * slotted element or a part, whose rules come from other trees than its
+ * siblings' (the share key holds only the matched entries). */
+static bool share_scope_ok(const AuCssResolver *r, const AuElement *el)
+{
+    if (!r->scoping)
+        return true;
+    if (el->shadow_root)
+        return false;
+    const AuNode *p = el->node.parent;
+    if (p && p->type == AU_NODE_ELEMENT && ((const AuElement *)p)->shadow_root)
+        return false;
+    return !(r->part_rules && au_element_get_attr(el, au_atom("part", 4)));
 }
 
 static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *parent, const CssBloom *bloom)
@@ -2249,7 +2712,7 @@ static AuStyle *compute_element(AuCssResolver *r, AuElement *el, const AuStyle *
     css_decl_block_init(&hints);
     css_presentational_hints(el, &hints, r->quirks);
     bool root = el->node.parent && el->node.parent->type == AU_NODE_DOCUMENT;
-    bool eligible = share_eligible(el, inl, &hints, root);
+    bool eligible = share_eligible(el, inl, &hints, root) && share_scope_ok(r, el);
     uint32_t h = 0;
     ShareSlot *slot = NULL;
     if (eligible) {
@@ -2368,8 +2831,51 @@ static void store_style(AuElement *el, AuStyle *s)
 
 typedef struct {
     AuElement *el;
+    const AuNode *root; /* the root of el's tree (a document or shadow root) */
     bool forced;
 } PathEntry;
+
+/* Releases the styles of root's subtree and of the shadow trees in it,
+ * iteratively (shadow roots go on a work list). */
+static void clear_styles(AuNode *root)
+{
+    AuNode **work = NULL;
+    uint32_t nwork = 0, cap = 0;
+    for (;;) {
+        for (AuNode *n = root; n; n = au_node_next(n, root)) {
+            if (n->type != AU_NODE_ELEMENT)
+                continue;
+            AuElement *el = (AuElement *)n;
+            au_style_release((AuStyle *)el->style);
+            el->style = NULL;
+            if (el->shadow_root)
+                *CSS_PUSH(work, nwork, cap) = el->shadow_root;
+        }
+        if (!nwork)
+            break;
+        root = work[--nwork];
+    }
+    au_free(work);
+}
+
+/* el is restyled and has flat children: what its flat tree leaves out (a
+ * host's light children that no slot takes, a slot's fallback while it
+ * has assigned nodes) loses its style, so that nothing takes it for
+ * shown and it is computed again when a slot takes it. */
+static void clear_unshown(AuElement *el)
+{
+    if (el->shadow_root) {
+        for (AuNode *c = el->node.first_child; c; c = c->next)
+            if (c->type == AU_NODE_ELEMENT && ((AuElement *)c)->style && !au_node_assigned_slot(c))
+                clear_styles(c);
+    } else if (au_is_html_element(&el->node, AU_ATOM_slot) && el->node.first_child) {
+        AuNode *first = au_flat_first_child(&el->node);
+        if (first && first->parent != &el->node)
+            for (AuNode *c = el->node.first_child; c; c = c->next)
+                if (c->type == AU_NODE_ELEMENT && ((AuElement *)c)->style)
+                    clear_styles(c);
+    }
+}
 
 /* Custom property maps with the same names and values. */
 static bool custom_same(const AuCustomProps *a, const AuCustomProps *b)
@@ -2478,18 +2984,42 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     PathEntry *path = NULL;
     uint32_t np = 0, pcap = 0;
     const AuNode *root = &doc->node;
+    /* With shadow trees the pass walks the flat tree: a host's flat
+     * children are its shadow tree's, a slot's are its assigned nodes,
+     * and inheritance follows (CSS Scoping 3.4). */
+    bool flat = doc->has_shadow;
     for (AuNode *n = root->first_child; n;) {
         if (n->type != AU_NODE_ELEMENT) {
-            n = au_node_next(n, root);
+            n = flat ? au_flat_next(n, root) : au_node_next(n, root);
             continue;
         }
         AuElement *el = (AuElement *)n;
         /* pop to the parent */
-        while (np && &path[np - 1].el->node != n->parent) {
+        const AuNode *fp = flat ? au_flat_parent(n) : n->parent;
+        while (np && &path[np - 1].el->node != fp) {
             css_bloom_pop(&r->bloom, path[np - 1].el, r->quirks);
             np--;
         }
         const AuElement *pe = np ? path[np - 1].el : NULL;
+        /* the root of el's tree: its parent's, a shadow root's, or for a
+         * slotted element its host's (on the path above the slot) */
+        const AuNode *troot = root;
+        if (flat) {
+            if (pe && n->parent == &pe->node)
+                troot = path[np - 1].root;
+            else if (n->parent && au_is_shadow_root(n->parent))
+                troot = n->parent;
+            else if (n->parent != root) {
+                troot = NULL;
+                for (uint32_t k = np; k-- > 0 && !troot;)
+                    if (&path[k].el->node == n->parent)
+                        troot = path[k].root;
+                if (!troot)
+                    troot = au_node_root(n);
+            }
+        }
+        r->cur_el = el;
+        r->cur_root = troot;
         bool forced = !only_dirty || (np && path[np - 1].forced) || (el->state & AU_STATE_STYLE_DIRTY) || !el->style;
         if (forced || (el->state & AU_STATE_STYLE_SELF_DIRTY)) {
             const AuStyle *ps = pe ? au_element_style(pe) : NULL;
@@ -2497,6 +3027,8 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
             if (!pe)
                 r->root_style = s; /* its pseudo-elements may use rem */
             attach_pseudos(r, el, s);
+            if (flat)
+                clear_unshown(el);
             /* Equal values keep the old object, so that what compares
              * style pointers (layout) sees no change. A marked element
              * that changed takes its subtree along: descendants inherit. */
@@ -2514,17 +3046,21 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
         /* invalidation marks the ancestors of dirty elements subtree-dirty */
         bool sub_dirty = (el->state & AU_STATE_SUBTREE_DIRTY) != 0;
         el->state &= ~(uint32_t)(AU_STATE_STYLE_DIRTY | AU_STATE_SUBTREE_DIRTY | AU_STATE_STYLE_SELF_DIRTY);
-        bool descend = n->first_child != NULL && (!only_dirty || forced || sub_dirty);
+        AuNode *first = flat ? au_flat_first_child(n) : n->first_child;
+        bool descend = first != NULL && (!only_dirty || forced || sub_dirty);
         if (descend) {
             PathEntry *pe2 = CSS_PUSH(path, np, pcap);
             pe2->el = el;
+            pe2->root = troot;
             pe2->forced = forced;
             css_bloom_push(&r->bloom, el, r->quirks);
-            n = n->first_child;
+            n = first;
         } else {
-            n = au_node_next_skip(n, root);
+            n = flat ? au_flat_next_skip(n, root) : au_node_next_skip(n, root);
         }
     }
+    r->cur_el = NULL;
+    r->cur_root = NULL;
     au_free(path);
     share_clear(r);
     css_has_index_free(&r->has_idx);
@@ -2532,6 +3068,8 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
     doc->style_names_n = 0; /* the class and id changes are styled */
     r->styled_once = true;
     r->full_restyle = false;
+    if (!only_dirty)
+        r->sheets_full = false;
 }
 
 void au_css_style_document(AuCssResolver *r, AuDocument *doc)
@@ -2553,7 +3091,8 @@ static void mark_ancestors(AuElement *el);
 static void mark_viewport_styles(AuDocument *doc)
 {
     const AuNode *root = &doc->node;
-    for (AuNode *n = root->first_child; n; n = au_node_next(n, root)) {
+    bool flat = doc->has_shadow;
+    for (AuNode *n = root->first_child; n; n = flat ? au_flat_next(n, root) : au_node_next(n, root)) {
         if (n->type != AU_NODE_ELEMENT)
             continue;
         AuElement *el = (AuElement *)n;
@@ -2572,6 +3111,17 @@ static void mark_viewport_styles(AuDocument *doc)
 
 void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 {
+    if (r->sheets_full)
+        r->full_restyle = true;
+    if (r->index_dirty && r->styled_once && !r->full_restyle) {
+        /* only shadow trees' sheets changed (sheets_changed_in marked
+         * their hosts): the new index serves the marked elements */
+        AuElement *de = au_document_element(doc);
+        if (de)
+            prepare(r, de);
+        else
+            r->full_restyle = true;
+    }
     if (r->viewport_pending && r->styled_once && !r->full_restyle && !r->index_dirty)
         mark_viewport_styles(doc);
     r->viewport_pending = false;
@@ -2588,13 +3138,7 @@ void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 
 void au_css_clear_document(AuDocument *doc)
 {
-    const AuNode *root = &doc->node;
-    for (AuNode *n = root->first_child; n; n = au_node_next(n, root))
-        if (n->type == AU_NODE_ELEMENT) {
-            AuElement *el = (AuElement *)n;
-            au_style_release((AuStyle *)el->style);
-            el->style = NULL;
-        }
+    clear_styles(&doc->node);
 }
 
 static AuElement *parent_element(const AuElement *el)
@@ -2603,9 +3147,17 @@ static AuElement *parent_element(const AuElement *el)
     return p && p->type == AU_NODE_ELEMENT ? (AuElement *)p : NULL;
 }
 
+/* The parent in the flat tree, which the style pass and :hover follow. */
+static AuElement *flat_parent_element(const AuElement *el)
+{
+    if (el->node.doc && el->node.doc->has_shadow)
+        return au_flat_parent_element(&el->node);
+    return parent_element(el);
+}
+
 static void mark_ancestors(AuElement *el)
 {
-    for (AuElement *p = parent_element(el); p; p = parent_element(p))
+    for (AuElement *p = flat_parent_element(el); p; p = flat_parent_element(p))
         p->state |= AU_STATE_SUBTREE_DIRTY;
 }
 
@@ -2847,36 +3399,37 @@ static void invalidate_attr(AuCssResolver *r, AuElement *el, AuAtom attr)
 
 void au_css_move_state(AuCssResolver *r, AuElement *from, AuElement *to, uint32_t bit)
 {
-    /* the nearest common ancestor-or-self keeps the bit */
+    /* the nearest common ancestor-or-self keeps the bit; :hover and
+     * :active follow the flat tree */
     AuElement *a = from, *b = to;
     uint32_t da = 0, db = 0;
-    for (AuElement *p = a; p; p = parent_element(p))
+    for (AuElement *p = a; p; p = flat_parent_element(p))
         da++;
-    for (AuElement *p = b; p; p = parent_element(p))
+    for (AuElement *p = b; p; p = flat_parent_element(p))
         db++;
     for (; da > db; da--)
-        a = parent_element(a);
+        a = flat_parent_element(a);
     for (; db > da; db--)
-        b = parent_element(b);
+        b = flat_parent_element(b);
     while (a != b) {
-        a = parent_element(a);
-        b = parent_element(b);
+        a = flat_parent_element(a);
+        b = flat_parent_element(b);
     }
     AuElement *common = a;
-    for (AuElement *p = from; p && p != common; p = parent_element(p))
+    for (AuElement *p = from; p && p != common; p = flat_parent_element(p))
         if (p->state & bit) {
             p->state &= ~bit;
             if (r)
                 au_css_invalidate_state(r, p, bit);
         }
-    for (AuElement *p = to; p && p != common; p = parent_element(p))
+    for (AuElement *p = to; p && p != common; p = flat_parent_element(p))
         if (!(p->state & bit)) {
             p->state |= bit;
             if (r)
                 au_css_invalidate_state(r, p, bit);
         }
     /* ancestors that lost the bit while detached get it back */
-    for (AuElement *p = common; p && to; p = parent_element(p))
+    for (AuElement *p = common; p && to; p = flat_parent_element(p))
         if (!(p->state & bit)) {
             p->state |= bit;
             if (r)
@@ -3024,11 +3577,13 @@ void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child,
     if (!child || (child->type != AU_NODE_ELEMENT && child->type != AU_NODE_TEXT))
         return; /* comments and the like match nothing and count for nothing */
     if (!r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown || !parent ||
-        parent->type != AU_NODE_ELEMENT) {
+        (parent->type != AU_NODE_ELEMENT && !au_is_shadow_root(parent))) {
         r->full_restyle = true;
         return;
     }
-    AuElement *pe = (AuElement *)parent;
+    /* a child of a shadow root: its siblings are the shadow root's other
+     * children; no element is its parent for :empty, :has() or forms */
+    AuElement *pe = parent->type == AU_NODE_ELEMENT ? (AuElement *)parent : NULL;
     bool elem = child->type == AU_NODE_ELEMENT;
     if (inserted && elem) {
         /* The new subtree, whatever styles it had where it was before. */
@@ -3037,7 +3592,7 @@ void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child,
     }
     AuNode *before = inserted ? child->prev : prev;
     AuNode *after = inserted ? child->next : next;
-    if (r->st_empty)
+    if (r->st_empty && pe)
         dep_apply_mask(r, pe, r->st_empty);
     if (elem) {
         /* What a sibling rule marks from one element covers the same
@@ -3066,10 +3621,27 @@ void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child,
         if (r->st_form && holds_control(child))
             r->full_restyle = true; /* the form's default button, a radio group */
     }
-    if (r->nhas_anchors && !r->full_restyle)
+    if (r->nhas_anchors && !r->full_restyle && pe)
         has_anchors_fire(r, pe, before);
-    if (!r->full_restyle)
+    if (!r->full_restyle && pe)
         form_ancestors(r, pe);
+}
+
+void au_css_invalidate_subtree(AuCssResolver *r, AuElement *el)
+{
+    if (!r->styled_once || r->index_dirty || r->full_restyle) {
+        r->full_restyle = true;
+        return;
+    }
+    el->state |= AU_STATE_STYLE_DIRTY;
+    mark_ancestors(el);
+}
+
+/* The next element the style pass styles after c, in preorder of the
+ * flat tree (or of the node tree in a document without shadow roots). */
+static AuNode *next_styled(const AuNode *c, const AuNode *top, bool flat)
+{
+    return flat ? au_flat_next(c, top) : au_node_next(c, top);
 }
 
 /* Every computed longhand of s and of its pseudo-element styles. */
@@ -3088,12 +3660,13 @@ static void serialize_all(const AuStyle *s, AuBuf *out)
 bool au_css_check_restyle(AuCssResolver *r, AuDocument *doc, AuBuf *msg)
 {
     const AuNode *top = &doc->node;
+    bool flat = doc->has_shadow;
     uint32_t n = 0;
-    for (AuNode *c = top->first_child; c; c = au_node_next(c, top))
+    for (AuNode *c = top->first_child; c; c = next_styled(c, top, flat))
         n += c->type == AU_NODE_ELEMENT;
     AuStyle **old = au_alloc((n ? n : 1) * sizeof *old);
     uint32_t i = 0;
-    for (AuNode *c = top->first_child; c; c = au_node_next(c, top))
+    for (AuNode *c = top->first_child; c; c = next_styled(c, top, flat))
         if (c->type == AU_NODE_ELEMENT)
             old[i++] = au_style_retain((AuStyle *)((AuElement *)c)->style);
     /* A whole pass keeps an element's style object when its values are
@@ -3104,7 +3677,7 @@ bool au_css_check_restyle(AuCssResolver *r, AuDocument *doc, AuBuf *msg)
     AuBuf a, b;
     au_buf_init(&a);
     au_buf_init(&b);
-    for (AuNode *c = top->first_child; c; c = au_node_next(c, top)) {
+    for (AuNode *c = top->first_child; c && i < n; c = next_styled(c, top, flat)) {
         if (c->type != AU_NODE_ELEMENT)
             continue;
         AuElement *el = (AuElement *)c;

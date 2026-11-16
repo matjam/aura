@@ -390,7 +390,11 @@ static void set_doc_subtree(AuNode *root, AuDocument *doc)
     for (;;) {
         if (root->doc != doc) {
             for (AuNode *n = root; n; n = au_node_next(n, root)) {
+                if (n->doc && n->doc->nmanual)
+                    au_manual_slots_removed(n->doc, n); /* the old document's pairs hold no references */
                 n->doc = doc;
+                if (n->type == AU_NODE_ELEMENT && ((AuElement *)n)->shadow_root)
+                    doc->has_shadow = true;
                 if (n->type == AU_NODE_ELEMENT) {
                     AuElement *e = (AuElement *)n;
                     if (e->template_content)
