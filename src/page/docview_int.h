@@ -100,6 +100,7 @@ struct AuDocView {
     AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
+    char *referrer;      /* document.referrer for the next runtime; NULL: "" */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
@@ -204,6 +205,7 @@ AuElement *au_frames_element(const AuDocView *dv);
 /* Sums and state over the frames, for the view's own functions. */
 bool au_frames_can_persist(AuDocView *dv);
 void au_frames_set_hidden(AuDocView *dv, bool hidden);
+void au_frames_storage_event(AuDocView *dv, const AuDocStorageEvent *ev);
 size_t au_frames_memory(AuDocView *dv);
 bool au_frames_run_scripts(AuDocView *dv, uint32_t budget_ms);
 uint32_t au_frames_scripts_due(AuDocView *dv);

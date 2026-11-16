@@ -2,6 +2,7 @@
 #include "browser.h"
 #include "favicon.h"
 #include "url.h"
+#include "../net/web_storage.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -413,7 +414,7 @@ static void cb_open(void *ctx, AuPage *p, const char *url, bool new_tab)
     AuTab *t = ctx;
     AuBrowserWindow *w = t->win;
     if (new_tab) {
-        au_bw_new_tab(w, url, false, tab_index(w, t) + 1);
+        au_bw_open_from(w, t, url, false, tab_index(w, t) + 1);
     } else {
         int i = tab_index(w, t);
         if (i != w->active)
@@ -498,7 +499,7 @@ static void cb_submit_post(void *ctx, AuPage *p, const char *url, const void *bo
     AuBrowserWindow *w = t->win;
     (void)p;
     if (new_tab) {
-        t = au_bw_new_tab(w, "about:blank", false, tab_index(w, t) + 1);
+        t = au_bw_open_from(w, t, "about:blank", false, tab_index(w, t) + 1);
         if (!t)
             return;
     } else {
@@ -687,6 +688,37 @@ static const AuPageFetcher *env_fetcher(void *ctx, const char *scheme)
     return NULL;
 }
 
+/* ---- Web storage ---- */
+
+static struct AuWebStorage *env_storage(void *ctx)
+{
+    return ((AuBrowser *)ctx)->storage;
+}
+
+/* Script changed a storage area: the documents of the same area in every
+ * tab hear of it (the writer is left out by the page), and a change to a
+ * tab's sessionStorage puts the session file out of date, as a scroll
+ * position does. */
+static void storage_changed(void *ctx, const AuStorageChange *c)
+{
+    AuBrowser *b = ctx;
+    if (c->kind == AU_STORAGE_SESSION)
+        b->scroll_gen++;
+    for (int i = 0; i < b->nwindows; i++)
+        for (int j = 0; j < b->windows[i]->ntabs; j++)
+            au_page_storage_event(b->windows[i]->tabs[j]->page, c);
+}
+
+void au_browser_set_storage(AuBrowser *b, struct AuWebStorage *ws)
+{
+    if (b->own_storage)
+        au_web_storage_free(b->storage);
+    b->storage = ws;
+    b->own_storage = false;
+    if (ws)
+        au_web_storage_set_listener(ws, storage_changed, b);
+}
+
 void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f)
 {
     for (int i = 0; i < b->nfetchers; i++) {
@@ -720,6 +752,9 @@ AuBrowser *au_browser_new(AuFontSet *fonts, const AuBrowserHost *host)
     b->host = *host;
     b->next_tab_id = 1;
     b->favicons = au_favicons_new();
+    b->storage = au_web_storage_new();
+    b->own_storage = true;
+    au_web_storage_set_listener(b->storage, storage_changed, b);
     return b;
 }
 
@@ -734,8 +769,15 @@ void au_browser_free(AuBrowser *b)
     au_bookmarks_free(&b->bookmarks);
     au_downloads_free(&b->downloads);
     au_free(b->find_text);
-    for (int i = 0; i < b->nclosed; i++)
+    for (int i = 0; i < b->nclosed; i++) {
         au_nav_free(&b->closed[i]);
+        if (b->storage)
+            au_web_storage_ns_free(b->storage, b->closed_ns[i]);
+    }
+    if (b->own_storage)
+        au_web_storage_free(b->storage);
+    else if (b->storage)
+        au_web_storage_set_listener(b->storage, NULL, NULL);
     au_free(b);
 }
 
@@ -804,6 +846,10 @@ AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height)
 static void free_tab(AuTab *t)
 {
     au_page_free(t->page);
+    /* A closed tab that can be reopened gave its namespace to the closed
+     * list (push_closed) and has none here. */
+    if (t->storage_ns && t->win->browser->storage)
+        au_web_storage_ns_free(t->win->browser->storage, t->storage_ns);
     au_nav_free(&t->nav);
     au_free(t->status);
     au_free(t);
@@ -847,11 +893,15 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->status = au_strndup("", 0);
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
-                     b->host.random ? env_random : NULL, b->host.coro, env_memory_free};
+                     b->host.random ? env_random : NULL, b->host.coro, env_memory_free, env_storage};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};
     t->page = au_page_new(&env, &cb);
+    if (b->storage) {
+        t->storage_ns = au_web_storage_ns_new(b->storage);
+        au_page_set_storage_ns(t->page, t->storage_ns);
+    }
     if (index < 0 || index > w->ntabs)
         index = w->ntabs;
     if (w->ntabs == w->cap) {
@@ -1062,11 +1112,18 @@ static void load_new(AuTab *t, const char *url)
 
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index)
 {
+    return au_bw_open_from(w, NULL, url, activate, index);
+}
+
+AuTab *au_bw_open_from(AuBrowserWindow *w, AuTab *opener, const char *url, bool activate, int index)
+{
     if (w->ntabs > 0 && hand_off(w->browser, url))
         return NULL;
     if (index < 0)
         index = w->active >= 0 ? w->active + 1 : w->ntabs;
     AuTab *t = make_tab(w, index);
+    if (opener && w->browser->storage)
+        au_web_storage_ns_copy(w->browser->storage, opener->storage_ns, t->storage_ns);
     relayout(w, false);
     if (activate || w->active < 0)
         au_bw_select_tab(w, tab_index(w, t));
@@ -1158,6 +1215,8 @@ AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i)
         return NULL;
     AuTab *src = w->tabs[i];
     AuTab *t = make_tab(w, i + 1);
+    if (w->browser->storage)
+        au_web_storage_ns_copy(w->browser->storage, src->storage_ns, t->storage_ns);
     for (int k = 0; k < src->nav.n; k++) {
         au_nav_push(&t->nav, src->nav.e[k].url, src->nav.e[k].title);
         t->nav.e[k].scroll_y = src->nav.e[k].scroll_y;
@@ -1176,12 +1235,16 @@ AuTab *au_bw_duplicate_tab(AuBrowserWindow *w, int i)
 }
 
 /* A new tab after the active one holding a copy of nav, at entry index,
- * loaded and scrolled to where that entry was left; activated or not. */
-static AuTab *tab_from_nav(AuBrowserWindow *w, const AuNavList *nav, int index, int at, bool activate)
+ * loaded and scrolled to where that entry was left; activated or not.
+ * Its sessionStorage starts as a copy of namespace ns_from (0: empty). */
+static AuTab *tab_from_nav(AuBrowserWindow *w, const AuNavList *nav, int index, int at, bool activate,
+                           uint32_t ns_from)
 {
     if (index < 0 || index >= nav->n)
         return NULL;
     AuTab *t = make_tab(w, at);
+    if (ns_from && w->browser->storage)
+        au_web_storage_ns_copy(w->browser->storage, ns_from, t->storage_ns);
     for (int k = 0; k < nav->n; k++) {
         au_nav_push(&t->nav, nav->e[k].url, nav->e[k].title);
         t->nav.e[t->nav.n - 1].scroll_y = nav->e[k].scroll_y;
@@ -1209,7 +1272,7 @@ AuTab *au_bw_go_new_tab(AuBrowserWindow *w, int delta)
     AuNavEntry *cur = au_nav_current(&src->nav);
     if (cur)
         cur->scroll_y = src->scroll_y;
-    return tab_from_nav(w, &src->nav, src->nav.index + delta, w->active + 1, false);
+    return tab_from_nav(w, &src->nav, src->nav.index + delta, w->active + 1, false, src->storage_ns);
 }
 
 int au_bw_history_items(AuBrowserWindow *w, int dir, AuHistoryItem *out, int cap)
@@ -1238,10 +1301,16 @@ static void push_closed(AuBrowser *b, AuTab *t)
         cur->scroll_y = t->scroll_y;
     if (b->nclosed == AU_MAX_CLOSED_TABS) {
         au_nav_free(&b->closed[0]);
+        if (b->storage)
+            au_web_storage_ns_free(b->storage, b->closed_ns[0]);
         memmove(&b->closed[0], &b->closed[1], (AU_MAX_CLOSED_TABS - 1) * sizeof b->closed[0]);
+        memmove(&b->closed_ns[0], &b->closed_ns[1], (AU_MAX_CLOSED_TABS - 1) * sizeof b->closed_ns[0]);
         b->nclosed--;
     }
-    /* Move the list: the tab is about to be freed. */
+    /* Move the list and the sessionStorage: the tab is about to be freed
+     * (the page first, so what its documents write as they go is kept). */
+    b->closed_ns[b->nclosed] = t->storage_ns;
+    t->storage_ns = 0;
     b->closed[b->nclosed++] = t->nav;
     au_nav_init(&t->nav);
 }
@@ -1257,8 +1326,11 @@ AuTab *au_bw_reopen_closed_tab(AuBrowserWindow *w)
     if (!b->nclosed)
         return NULL;
     AuNavList nav = b->closed[--b->nclosed];
-    AuTab *t = tab_from_nav(w, &nav, nav.index, w->active + 1, true);
+    uint32_t ns = b->closed_ns[b->nclosed];
+    AuTab *t = tab_from_nav(w, &nav, nav.index, w->active + 1, true, ns);
     au_nav_free(&nav);
+    if (b->storage)
+        au_web_storage_ns_free(b->storage, ns);
     if (t)
         changed(w, AU_CHANGED_FOCUS_PAGE);
     return t;
@@ -2153,15 +2225,27 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out)
                 put_clean(out, nav->e[k].title);
                 au_buf_printf(out, "\t%d\n", sy > 0 ? sy : 0);
             }
+            if (b->storage)
+                au_web_storage_ns_serialize(b->storage, t->storage_ns, out);
         }
     }
+}
+
+static void session_tab_free(AuSessionTab *t)
+{
+    au_nav_free(&t->nav);
+    for (int i = 0; i < t->nstorage; i++)
+        au_free(t->storage[i]);
+    au_free(t->storage);
+    t->storage = NULL;
+    t->nstorage = 0;
 }
 
 void au_session_free(AuSession *s)
 {
     for (int i = 0; i < s->nwindows; i++) {
         for (int j = 0; j < s->windows[i].ntabs; j++)
-            au_nav_free(&s->windows[i].tabs[j].nav);
+            session_tab_free(&s->windows[i].tabs[j]);
         au_free(s->windows[i].tabs);
     }
     au_free(s->windows);
@@ -2216,8 +2300,20 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
             }
             sw->tabs = au_realloc(sw->tabs, (size_t)(sw->ntabs + 1) * sizeof *sw->tabs);
             AuSessionTab *st = &sw->tabs[sw->ntabs++];
+            memset(st, 0, sizeof *st);
             au_nav_init(&st->nav);
             st->nav.index = idx; /* checked after its entries are read */
+        } else if (!strncmp(l, "storage\t", 8) && s->nwindows && s->windows[s->nwindows - 1].ntabs) {
+            /* The tab's sessionStorage for one origin; the storage
+             * service reads the line when the tab is restored. */
+            AuSessionWindow *sw = &s->windows[s->nwindows - 1];
+            AuSessionTab *st = &sw->tabs[sw->ntabs - 1];
+            if (st->nstorage >= AU_SESSION_STORAGE_LINES) {
+                ok = false;
+                continue;
+            }
+            st->storage = au_realloc(st->storage, (size_t)(st->nstorage + 1) * sizeof *st->storage);
+            st->storage[st->nstorage++] = au_strndup(l + 8, line.len - 8);
         } else if (!strncmp(l, "entry\t", 6) && s->nwindows && s->windows[s->nwindows - 1].ntabs) {
             AuSessionWindow *sw = &s->windows[s->nwindows - 1];
             AuNavList *nav = &sw->tabs[sw->ntabs - 1].nav;
@@ -2256,7 +2352,7 @@ bool au_session_parse(AuSession *s, const char *data, size_t len)
         for (int j = 0; j < sw->ntabs; j++) {
             AuNavList *nav = &sw->tabs[j].nav;
             if (nav->n == 0) {
-                au_nav_free(nav);
+                session_tab_free(&sw->tabs[j]);
                 ok = false;
                 continue;
             }
@@ -2282,6 +2378,10 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
             t->nav.e[t->nav.n - 1].scroll_y = src->e[k].scroll_y;
         }
         t->nav.index = src->index;
+        /* Its sessionStorage, before any document of the tab runs. */
+        for (int k = 0; k < sw->tabs[j].nstorage && w->browser->storage; k++)
+            au_web_storage_ns_restore(w->browser->storage, t->storage_ns, sw->tabs[j].storage[k],
+                                      strlen(sw->tabs[j].storage[k]));
         AuNavEntry *e = au_nav_current(&t->nav);
         if (e) {
             /* Back where it was left, once the page is tall enough. */

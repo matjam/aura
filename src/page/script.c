@@ -184,6 +184,20 @@ static void h_set_cookie(void *ctx, const char *url, const char *value)
         cb->set_cookie(cb->ctx, au_dv_top(s->dv), cookie_url(s), s->dv->parent != NULL, value);
 }
 
+/* localStorage and sessionStorage: the embedder's service, told which
+ * document asks (the view names the writer of a change) and, for a
+ * nested document, the top-level document's URL, which decides whether
+ * it is in a third-party context. */
+static int h_storage(void *ctx, AuJsStorageCall *c)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    AuDocView *top = au_dv_top(s->dv);
+    c->writer = s->dv;
+    c->top_url = s->dv->parent ? au_docview_url(top) : NULL;
+    return cb->storage ? cb->storage(cb->ctx, top, c) : AU_JS_STORAGE_DENIED;
+}
+
 static int h_sheet_text(void *ctx, AuElement *el, AuBuf *text, AuBuf *url)
 {
     AuDocScript *s = ctx;
@@ -556,6 +570,7 @@ static bool ensure_js(AuDocScript *s)
     au_js_settings_default(&set);
     if (au_dv_user_agent(s->dv))
         set.user_agent = au_dv_user_agent(s->dv);
+    set.referrer = au_dv_referrer(s->dv);
     /* The limits the embedder set for the page (au_docview_set_script_memory);
      * a nested document's context lives in the page's runtime. */
     {
@@ -590,6 +605,8 @@ static bool ensure_js(AuDocScript *s)
     h.coro = au_dv_callbacks(s->dv)->coro;
     h.get_cookie = h_get_cookie;
     h.set_cookie = h_set_cookie;
+    if (au_dv_callbacks(s->dv)->storage)
+        h.storage = h_storage;
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
@@ -1304,6 +1321,14 @@ void au_docscript_page_transition(AuDocScript *s, bool show)
     au_js_page_transition(s->js, show);
     if (!show)
         au_js_gc(s->js); /* a hidden document holds no garbage */
+}
+
+void au_docscript_storage_event(AuDocScript *s, const AuDocStorageEvent *ev)
+{
+    if (!s || !s->js)
+        return;
+    au_js_storage_event(s->js, ev->kind, ev->storage_key, ev->key, ev->key_len, ev->old_value, ev->old_len,
+                        ev->new_value, ev->new_len, ev->url);
 }
 
 size_t au_docscript_memory(const AuDocScript *s)

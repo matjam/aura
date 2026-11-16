@@ -60,6 +60,10 @@ typedef struct AuCookieRequest {
 AuCookieJar *au_cookie_jar_new(void);
 void au_cookie_jar_free(AuCookieJar *jar);
 void au_cookie_jar_set_policy(AuCookieJar *jar, AuNetCookiePolicy policy, bool block_third_party);
+/* The policy in force, and a counter that moves whenever the policy or a
+ * per-site rule changes (web storage follows both: web_storage.h). */
+AuNetCookiePolicy au_cookie_jar_policy(const AuCookieJar *jar, bool *block_third_party);
+uint32_t au_cookie_jar_policy_gen(const AuCookieJar *jar);
 
 /* Stores the cookie in one Set-Cookie value. Returns true when stored (or
  * when it deleted a cookie by expiring it); false when ignored. why, if

@@ -89,6 +89,8 @@ void au_docscript_scrolled(AuDocScript *s);
 bool au_docscript_can_persist(AuDocScript *s);
 void au_docscript_page_transition(AuDocScript *s, bool show);
 size_t au_docscript_memory(const AuDocScript *s);
+/* Queues the storage event when the document has the changed area. */
+void au_docscript_storage_event(AuDocScript *s, const AuDocStorageEvent *ev);
 /* Layout ran: intersection and resize observers. */
 void au_docscript_layout_done(AuDocScript *s);
 /* Frames (frames.c). on_stack: script of the page is running (nothing may
@@ -141,6 +143,7 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
 double au_dv_now(AuDocView *dv);
 /* The user agent set with au_docview_set_user_agent, or NULL. */
 const char *au_dv_user_agent(const AuDocView *dv);
+const char *au_dv_referrer(const AuDocView *dv);
 /* forms.c: script focused el (NULL: blurred); script submitted form
  * (form.submit, or requestSubmit after its submit event); script changed
  * a control's value (repaint). */

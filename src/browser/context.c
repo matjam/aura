@@ -184,7 +184,7 @@ bool au_bw_context_command(AuBrowserWindow *w, const AuContextMenu *m, AuCommand
         return true;
     case AU_CMD_OPEN_LINK_TAB:
         if (m->link)
-            au_bw_new_tab(w, m->link, false, -1);
+            au_bw_open_from(w, au_bw_active_tab(w), m->link, false, -1);
         return true;
     case AU_CMD_BOOKMARK_LINK:
         if (m->link)

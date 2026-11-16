@@ -381,6 +381,15 @@ static void fc_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested
         top->cb.set_cookie(top->cb.ctx, top, url, true, value);
 }
 
+/* Storage of a nested document: script.c has named the document and the
+ * top-level URL in the call. */
+static int fc_storage(void *ctx, AuDocView *dv, struct AuJsStorageCall *call)
+{
+    AuDocView *top = au_dv_top(((AuFrame *)ctx)->owner);
+    (void)dv;
+    return top->cb.storage(top->cb.ctx, top, call);
+}
+
 static bool fc_random(void *ctx, AuDocView *dv, void *buf, size_t len)
 {
     (void)dv;
@@ -460,6 +469,8 @@ static AuDocView *frame_view(AuFrame *f)
     cb.coro = top->cb.coro;
     cb.get_cookie = fc_get_cookie;
     cb.set_cookie = fc_set_cookie;
+    if (top->cb.storage)
+        cb.storage = fc_storage;
     cb.popup = fc_popup;
     cb.choose_file = fc_choose_file;
     cb.confirm = fc_confirm;
@@ -1790,6 +1801,13 @@ void au_frames_set_hidden(AuDocView *dv, bool hidden)
     for (uint32_t i = 0; i < dv->nframes; i++)
         if (dv->frames[i]->dv && dv->frames[i]->dv->doc)
             au_docview_set_hidden(dv->frames[i]->dv, hidden);
+}
+
+void au_frames_storage_event(AuDocView *dv, const AuDocStorageEvent *ev)
+{
+    for (uint32_t i = 0; i < dv->nframes; i++)
+        if (dv->frames[i]->dv && dv->frames[i]->dv->doc)
+            au_docview_storage_event(dv->frames[i]->dv, ev);
 }
 
 size_t au_frames_memory(AuDocView *dv)

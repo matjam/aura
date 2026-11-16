@@ -29,7 +29,10 @@
 #include "scriptmem.h"
 #include "../image/cache.h"
 #include "../layout/selection.h"
+#include "../js/storage_call.h"
 #include "../net/dataurl.h"
+#include "../net/policy.h"
+#include "../net/web_storage.h"
 #include "../page/page.h"
 
 #include <stdio.h>
@@ -152,6 +155,7 @@ struct AuPage {
     bool image_doc;                 /* the document is an image: shown with a generated <img> */
     bool discard;                   /* the document is of a type Aura cannot show: its bytes are dropped */
     char last_status[160];          /* the status text last reported (load_progress) */
+    uint32_t storage_ns;            /* the tab's sessionStorage namespace (au_page_set_storage_ns) */
     AuBuf *preset_source;           /* au_page_navigate_source: the bytes to show */
     bool interim;                   /* an internal page shown while the real one is awaited */
     uint32_t interim_ms;
@@ -1076,6 +1080,92 @@ static void dv_set_cookie(void *ctx, AuDocView *dv, const char *url, bool nested
         fe->set_cookie(fe->ctx, url, nested ? p->url : NULL, value);
 }
 
+/* localStorage and sessionStorage: the application's service
+ * (net/web_storage.h) decides the document's area from its origin and,
+ * for a nested document, the top-level URL; sessionStorage is the tab's
+ * namespace. A document kept for Back may still write (its pagehide
+ * handler saves state): the areas belong to the origin and the tab, not
+ * to the document. */
+static int dv_storage(void *ctx, AuDocView *dv, AuJsStorageCall *c)
+{
+    AuPage *p = ctx;
+    AuWebStorage *ws = p->env.storage(p->env.ctx);
+    (void)dv;
+    if (!ws)
+        return AU_JS_STORAGE_DENIED;
+    int kind = c->kind == AU_JS_STORAGE_SESSION ? AU_STORAGE_SESSION : AU_STORAGE_LOCAL;
+    if (c->op == AU_JS_STORAGE_MATCH) {
+        AuBuf k;
+        au_buf_init(&k);
+        bool same = au_web_storage_key(ws, c->origin, c->top_url, &k, NULL) == AU_STORAGE_OK && k.len == c->key_len &&
+                    !memcmp(k.data, c->key, k.len);
+        au_buf_free(&k);
+        return same ? AU_JS_STORAGE_OK : AU_JS_STORAGE_MISSING;
+    }
+    AuStorageArea *a = NULL;
+    AuStorageResult r =
+        au_web_storage_open(ws, kind, p->storage_ns, c->origin, c->top_url, c->op == AU_JS_STORAGE_SET, &a);
+    if (r != AU_STORAGE_OK)
+        return r == AU_STORAGE_QUOTA ? AU_JS_STORAGE_QUOTA : AU_JS_STORAGE_DENIED;
+    AuStorageMap *m = a ? au_storage_area_map(a) : NULL;
+    switch (c->op) {
+    case AU_JS_STORAGE_LENGTH:
+        c->length = m ? au_storage_map_count(m) : 0;
+        break;
+    case AU_JS_STORAGE_KEY:
+        if (!m || !au_storage_map_key(m, c->index, &c->out, &c->out_len))
+            return AU_JS_STORAGE_MISSING;
+        break;
+    case AU_JS_STORAGE_GET:
+        if (!m || !au_storage_map_get(m, c->key, c->key_len, &c->out, &c->out_len))
+            return AU_JS_STORAGE_MISSING;
+        break;
+    case AU_JS_STORAGE_SET:
+        if (au_web_storage_set(ws, a, c->key, c->key_len, c->value, c->value_len, c->url, c->writer) != AU_STORAGE_OK)
+            return AU_JS_STORAGE_QUOTA;
+        break;
+    case AU_JS_STORAGE_REMOVE:
+        if (a)
+            au_web_storage_remove(ws, a, c->key, c->key_len, c->url, c->writer);
+        break;
+    case AU_JS_STORAGE_CLEAR:
+        if (a)
+            au_web_storage_clear_area(ws, a, c->url, c->writer);
+        break;
+    case AU_JS_STORAGE_ESTIMATE:
+        c->usage = m ? au_storage_map_bytes(m) : 0;
+        c->quota = au_web_storage_area_quota(ws);
+        break;
+    default:
+        break;
+    }
+    return AU_JS_STORAGE_OK;
+}
+
+void au_page_set_storage_ns(AuPage *p, uint32_t ns)
+{
+    p->storage_ns = ns;
+}
+
+void au_page_storage_event(AuPage *p, const AuStorageChange *c)
+{
+    if (c->kind == AU_STORAGE_SESSION && c->ns != p->storage_ns)
+        return;
+    AuDocStorageEvent ev;
+    memset(&ev, 0, sizeof ev);
+    ev.kind = c->kind == AU_STORAGE_SESSION ? AU_JS_STORAGE_SESSION : AU_JS_STORAGE_LOCAL;
+    ev.storage_key = c->storage_key;
+    ev.writer = c->writer;
+    ev.key = c->key;
+    ev.key_len = c->key_len;
+    ev.old_value = c->old_value;
+    ev.old_len = c->old_len;
+    ev.new_value = c->new_value;
+    ev.new_len = c->new_len;
+    ev.url = c->url;
+    au_docview_storage_event(p->dv, &ev);
+}
+
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len)
 {
     AuPage *p = ctx;
@@ -1493,6 +1583,7 @@ static void new_view(AuPage *p)
     dcb.coro = p->env.coro;
     dcb.get_cookie = dv_get_cookie;
     dcb.set_cookie = dv_set_cookie;
+    dcb.storage = p->env.storage ? dv_storage : NULL;
     dcb.submit = dv_submit;
     dcb.popup = dv_popup;
     dcb.choose_file = dv_choose_file;
@@ -1858,6 +1949,21 @@ static void begin_doc(AuPage *p, const char *url)
         au_docview_set_script_memory(p->dv, (size_t)page_kb * 1024, (size_t)worker_kb * 1024);
     }
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
+    {
+        /* document.referrer: what the network layer sent as Referer for
+         * this navigation (the default policy cuts a cross-origin
+         * referrer to its origin and sends none from https to http). */
+        AuBuf ref;
+        AuUrl target;
+        au_buf_init(&ref);
+        if (p->referrer && !p->internal && au_url_parse(&target, url, NULL)) {
+            if (!au_referrer_compute(p->referrer, &target, AU_RP_DEFAULT, &ref))
+                au_buf_clear(&ref);
+            au_url_free(&target);
+        }
+        au_docview_set_referrer(p->dv, ref.len ? au_buf_cstr(&ref) : NULL);
+        au_buf_free(&ref);
+    }
     au_docview_begin(p->dv, url);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_scroll(p->dv, 0, 0);

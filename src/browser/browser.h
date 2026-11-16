@@ -142,6 +142,10 @@ struct AuTab {
     int scroll_x, scroll_y;
     bool loading;
     bool close_pending; /* opened only for a download: closed at the next idle */
+    /* The tab's sessionStorage: a namespace of the browser's storage
+     * service. It belongs to the tab, not to a document, so it outlives
+     * navigations, kept documents and a discarded page. */
+    uint32_t storage_ns;
 };
 
 struct AuBrowserWindow {
@@ -204,7 +208,13 @@ struct AuBrowser {
     void (*blocking_changed)(void *ctx);
     void *blocking_ctx;
     AuNavList closed[AU_MAX_CLOSED_TABS]; /* closed tabs' histories, oldest first */
+    uint32_t closed_ns[AU_MAX_CLOSED_TABS]; /* and their sessionStorage namespaces */
     int nclosed;
+    /* Web storage (net/web_storage.h): localStorage of every origin and
+     * each tab's sessionStorage. The browser makes one in memory; a shell
+     * that keeps files replaces it with au_browser_set_storage. */
+    struct AuWebStorage *storage;
+    bool own_storage;
     struct {
         char scheme[16];
         AuPageFetcher fetcher;
@@ -232,6 +242,11 @@ void au_browser_history_changed(AuBrowser *b);
  * ':'), replacing an earlier one; NULL removes it. A network stack calls
  * this for "http" and "https" at start-up, before windows open. */
 void au_browser_set_fetcher(AuBrowser *b, const char *scheme, const AuPageFetcher *f);
+/* Gives the browser the application's storage service in place of its
+ * own (the shell attaches the cookie jar and the files to it, and frees
+ * it after the browser). Call it before the first window opens: tabs
+ * take their sessionStorage namespace from the service. */
+void au_browser_set_storage(AuBrowser *b, struct AuWebStorage *ws);
 /* Whether Aura opens url itself: about:, file:, view-source:, http:,
  * https:, a scheme with a fetcher, or text without a scheme. */
 bool au_browser_opens_url(const AuBrowser *b, const char *url);
@@ -262,6 +277,10 @@ void au_browser_window_free(AuBrowserWindow *w);
  * the host's open_external took the address instead (the window keeps
  * its tabs; a window's first tab always opens). */
 AuTab *au_bw_new_tab(AuBrowserWindow *w, const char *url, bool activate, int index);
+/* The same for a tab that opener opened (a link in a new tab,
+ * window.open, target=_blank): the new tab starts with a copy of the
+ * opener's sessionStorage, as the standard says. */
+AuTab *au_bw_open_from(AuBrowserWindow *w, AuTab *opener, const char *url, bool activate, int index);
 /* Closes tab i. Closing the last tab asks the host to close the window. */
 void au_bw_close_tab(AuBrowserWindow *w, int i);
 void au_bw_select_tab(AuBrowserWindow *w, int i);
@@ -406,14 +425,21 @@ AuIRect au_bw_hit_rect(AuBrowserWindow *w, AuHit h);
  *     window <width> <height> <active tab> <x> <y>
  *     tab <current entry>
  *     entry\t<url>\t<title>\t<scroll y>
- * Windows hold the tab lines that follow, tabs the entry lines. The
+ *     storage\t<storage key>\t<key>\t<value>...
+ * Windows hold the tab lines that follow, tabs the entry lines and the
+ * storage lines (the tab's sessionStorage, one line per origin, written
+ * and limited by au_web_storage_ns_serialize; optional). The
  * window position (-1 -1 when not known) and the scroll position are
  * optional (older files lack them); for the current
  * entry it is where the tab is scrolled now. session_gen changes with
  * the windows, tabs and entries; scroll_gen with the scroll positions,
  * which the shell saves less often. */
+#define AU_SESSION_STORAGE_LINES 64 /* storage lines read per tab */
+
 typedef struct AuSessionTab {
     AuNavList nav;
+    char **storage; /* the text of each storage line after "storage\t" */
+    int nstorage;
 } AuSessionTab;
 typedef struct AuSessionWindow {
     int width, height, active;

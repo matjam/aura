@@ -834,6 +834,8 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
     js->root->cur_slot = js->slot;
     const char *origin_set = js->settings.origin;
     js->settings.origin = NULL; /* the caller's string: copied below */
+    js->referrer = js->settings.referrer ? au_strndup(js->settings.referrer, strlen(js->settings.referrer)) : NULL;
+    js->settings.referrer = NULL;
     if (root) {
         /* A frame: a new context in the page's runtime. */
         js->rt = root->rt;
@@ -1140,6 +1142,7 @@ void au_js_free(AuJs *js)
     js_module_free(js);
     js_mutations_free(js);
     js_ranges_free(js);
+    js_storage_free(js);
     au_buf_free(&js->open_buf);
     if (js->root != js) {
         /* A frame's context. The runtime, the wrappers and whatever script
@@ -1185,6 +1188,7 @@ void au_js_free(AuJs *js)
         au_free(js->url);
         au_free(js->base);
         au_free(js->origin);
+        au_free(js->referrer);
         au_free(js);
         return;
     }
@@ -1231,6 +1235,7 @@ void au_js_free(AuJs *js)
     au_free(js->url);
     au_free(js->base);
     au_free(js->origin);
+    au_free(js->referrer);
     au_free(js->slots);
     au_free(js);
 }
