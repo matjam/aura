@@ -729,16 +729,22 @@ function randomBytes(n) {
     return u8(b);
 }
 /* Runs an RSA generation job to its end, a slice at a time, so the page
- * goes on between slices (natives_crypto.c). */
+ * goes on between slices (natives_crypto.c). A slice runs as a task, and
+ * the next is a timer due at once, which the event loop takes in turn
+ * with the page's own timers, its input and rendering, returning to the
+ * embedder when its time is up. (A timer set from a timer would be held
+ * back 4 ms each time once nested five deep; one set from a task is not.
+ * A chain of tasks alone would keep the page's timers waiting.) */
 function finishJob(job) {
     return new Promise((resolve, reject) => {
-        const tick = () => {
+        const step = () => {
             let h;
             try { h = N.ckJobStep(job); } catch (e) { reject(conv(e)); return; }
-            if (h === undefined) N.setTimeout(tick, 0);
+            if (h === undefined) N.setTimeout(next, 0);
             else resolve(h);
         };
-        tick();
+        const next = () => N.queueTask(step);
+        step();
     });
 }
 function generateKey(alg, extractable, usagesIn) {

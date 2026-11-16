@@ -145,7 +145,10 @@ static JSValue n_ck_secret(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_EXCEPTION;
     if (len > AU_WC_SECRET_MAX)
         return ck_throw(ctx, "DataError", "The key is too long");
-    return wrap_key(js, au_wc_secret(p, len));
+    AuWcKey *k = au_wc_secret(p, len);
+    if (!k)
+        return ck_err(ctx, AU_WC_ENOMEM, "");
+    return wrap_key(js, k);
 }
 
 /* ckBytes(handle) -> ArrayBuffer of a secret key's bytes (or an X25519

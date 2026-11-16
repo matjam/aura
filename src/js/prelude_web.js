@@ -386,11 +386,12 @@ if (N.random(0) !== null) {
     /* crypto.subtle, SubtleCrypto and CryptoKey live in src/js/subtle.js,
      * compiled to its own bytecode: N.subtle() reads it the first time
      * script touches one of them. Like browsers, Aura gives them only to
-     * secure contexts (https:, file:, about:, blob: URLs of https: and
-     * file:, and localhost); this is decided once, when the context
-     * starts. */
+     * secure contexts (https:, file:, about:, localhost, and blob: URLs
+     * of those; a blob: URL of an opaque origin, blob:null/, comes from a
+     * file: page or a sandboxed frame); this is decided once, when the
+     * context starts. */
     const here = N.docUrl(0) || '';
-    const secure = /^(https:|file:|blob:(https|file):|about:)/i.test(here) ||
+    const secure = /^(https:|file:|blob:(https:|file:|null\/)|about:)/i.test(here) ||
         /^(blob:)?http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//i.test(here);
     tag(Crypto);
     defGlobal('Crypto', Crypto);

@@ -44,7 +44,14 @@ typedef enum {
 #define AU_WC_RSA_MAX_BITS 4096
 #define AU_WC_RSA_GEN_MIN_BITS 1024
 
+/* The most the live keys may hold outside script's heap (an estimate of
+ * the records, secret bytes and the library's copies): past it, making a
+ * key fails with AU_WC_ENOMEM. au_wc_held gives the estimate. */
+#define AU_WC_HELD_MAX ((size_t)4 << 20)
+
 typedef struct AuWcKey AuWcKey;
+
+size_t au_wc_held(void);
 
 /* Starts the library from seed bytes of the platform's entropy source
  * when nothing has started it yet. False when it cannot start. */

@@ -64,10 +64,36 @@ void au_wc_wipe_free(void *p, size_t len)
     au_free(p);
 }
 
+/* What the live keys hold, outside script's heap (their handles there are
+ * small): the structures, secret bytes and the library's copies, as an
+ * estimate. A page that makes keys without end is refused at the cap
+ * instead of running the application out of memory. */
+static size_t g_held;
+
+static size_t held_by(const AuWcKey *k)
+{
+    /* an RSA key pair is about five times its modulus in the key store */
+    return sizeof *k + k->len + (k->id ? (k->bits / 8 + 1) * (k->kind == AU_WC_RSA ? 5 : 3) + 64 : 0);
+}
+
+size_t au_wc_held(void) { return g_held; }
+
 static AuWcKey *key_new(AuWcKind kind)
 {
-    AuWcKey *k = au_calloc(sizeof *k);
+    if (g_held > AU_WC_HELD_MAX)
+        return NULL;
+    AuWcKey *k = au_try_alloc(sizeof *k);
+    if (!k)
+        return NULL;
+    memset(k, 0, sizeof *k);
     k->kind = kind;
+    return k;
+}
+
+/* Counts the key, once it holds what it will hold. */
+static AuWcKey *key_done(AuWcKey *k)
+{
+    g_held += held_by(k);
     return k;
 }
 
@@ -76,13 +102,19 @@ AuWcKey *au_wc_secret(const uint8_t *bytes, size_t len)
     if (len > AU_WC_SECRET_MAX)
         return NULL;
     AuWcKey *k = key_new(AU_WC_SECRET);
-    k->bytes = au_alloc(len ? len : 1);
+    if (!k)
+        return NULL;
+    k->bytes = au_try_alloc(len ? len : 1);
+    if (!k->bytes) {
+        au_free(k);
+        return NULL;
+    }
     if (len)
         memcpy(k->bytes, bytes, len);
     k->len = len;
     k->bits = len * 8;
     k->priv = true;
-    return k;
+    return key_done(k);
 }
 
 const uint8_t *au_wc_key_bytes(const AuWcKey *k, size_t *len)
@@ -99,6 +131,8 @@ void au_wc_key_free(AuWcKey *k)
 {
     if (!k)
         return;
+    size_t h = held_by(k);
+    g_held = g_held > h ? g_held - h : 0;
     if (k->id)
         psa_destroy_key(k->id);
     au_wc_wipe_free(k->bytes, k->len ? k->len : 1);
@@ -167,9 +201,14 @@ static bool attributes(AuWcKind kind, bool priv, size_t bits, AuWcAlg alg, AuDig
     return true;
 }
 
+/* NULL (and the key destroyed) when there is no memory for the record. */
 static AuWcKey *asym_key(AuWcKind kind, bool priv, AuWcAlg alg, AuDigestAlg hash, psa_key_id_t id)
 {
     AuWcKey *k = key_new(kind);
+    if (!k) {
+        psa_destroy_key(id);
+        return NULL;
+    }
     k->priv = priv;
     k->alg = alg;
     k->hash = hash;
@@ -214,13 +253,20 @@ AuWcErr au_wc_import(AuWcKind kind, bool priv, int curve_bits, AuWcAlg alg, AuDi
     if (s != PSA_SUCCESS)
         return err_of(s, AU_WC_EDATA);
     AuWcKey *k = asym_key(kind, priv, alg, hash, id);
+    if (!k)
+        return AU_WC_ENOMEM;
     if (kind == AU_WC_X25519 && priv) {
         /* The library keeps the key clamped; export gives back what came in. */
-        k->bytes = au_alloc(32);
+        k->bytes = au_try_alloc(32);
+        if (!k->bytes) {
+            psa_destroy_key(k->id);
+            au_free(k);
+            return AU_WC_ENOMEM;
+        }
         memcpy(k->bytes, data, 32);
         k->len = 32;
     }
-    *out = k;
+    *out = key_done(k);
     return AU_WC_OK;
 }
 
@@ -251,7 +297,10 @@ AuWcErr au_wc_generate(AuWcKind kind, int bits, uint32_t e, AuWcAlg alg, AuDiges
     psa_reset_key_attributes(&a);
     if (s != PSA_SUCCESS)
         return err_of(s, AU_WC_EOP);
-    *out = asym_key(kind, true, alg, hash, id);
+    AuWcKey *k = asym_key(kind, true, alg, hash, id);
+    if (!k)
+        return AU_WC_ENOMEM;
+    *out = key_done(k);
     return AU_WC_OK;
 }
 
@@ -270,7 +319,9 @@ uint8_t *au_wc_export(const AuWcKey *k, bool public_part, size_t *len)
     size_t cap = pub ? PSA_EXPORT_PUBLIC_KEY_OUTPUT_SIZE(type, bits) : PSA_EXPORT_KEY_OUTPUT_SIZE(type, bits);
     if (!cap)
         return NULL;
-    uint8_t *buf = au_alloc(cap);
+    uint8_t *buf = au_try_alloc(cap);
+    if (!buf)
+        return NULL;
     size_t got = 0;
     psa_status_t s = pub ? psa_export_public_key(k->id, buf, cap, &got) : psa_export_key(k->id, buf, cap, &got);
     if (s != PSA_SUCCESS || got > cap) {
