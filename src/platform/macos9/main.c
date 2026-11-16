@@ -94,9 +94,9 @@ static void oom_handler(size_t wanted)
  * machine with memory to spare, and the Toolbox keeps the floor.
  *
  * Temporary memory is taken a TEMP_CHUNK at a time (one locked handle),
- * and blocks smaller than half a chunk are cut from it in order: a
- * script heap is thousands of 4 KB blocks, and a handle for each would
- * fill the system's handle tables. A chunk is returned when its last
+ * and blocks smaller than half a chunk are cut from it in order: a large
+ * page holds hundreds of the pool's 32 KB slabs, and a handle for each
+ * would fill the system's handle tables. A chunk is returned when its last
  * block is freed; space inside a chunk is not reused before that. Larger
  * blocks get a handle each.
  *
@@ -1041,8 +1041,20 @@ static bool any_field_focused(void)
 #define LOW_HEAP (6L * 1024 * 1024)
 #define LOW_BLOCK (2L * 1024 * 1024)
 
+/* The pooled allocator keeps a few empty slabs for reuse; they go back to
+ * the heap every TRIM_TICKS while no page is loading, so that slabs a
+ * closed page emptied do not stay in the middle of the free space. */
+#define TRIM_TICKS (10UL * 60)
+
 static void idle_all(void)
 {
+    static unsigned long last_trim;
+    unsigned long now = TickCount();
+    if (now - last_trim >= TRIM_TICKS) {
+        last_trim = now;
+        if (!au_browser_busy(g_browser))
+            au_heap_trim();
+    }
     if (au_browser_kept_documents(g_browser, NULL) && (FreeMem() < LOW_HEAP || MaxBlock() < LOW_BLOCK))
         au_browser_evict_document(g_browser);
     mac_net_idle();
