@@ -18,8 +18,14 @@ like a native application of its system.
 Aura also builds for mainstream systems. These ports exist to help
 development, not to compete with modern browsers: they let the engine be
 tested, debugged and compared against other browsers on a current
-machine, so that what works there can be made to work on the old one. A
-Linux port with GTK4 is in progress.
+machine, so that what works there can be made to work on the old one.
+
+| Platform | Kind | Status |
+|---|---|---|
+| Mac OS 9.1 to 9.2.2 on PowerPC | legacy | in development, released |
+| Linux with GTK4 | mainstream, for testing | in progress |
+| Amiga with an accelerated 68k processor | legacy | planned |
+| Modern macOS | mainstream, for testing | planned |
 
 Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with

@@ -27,6 +27,32 @@ So when the two pull in different directions, the legacy platforms win:
 
 Further legacy platforms can follow the same plan as a mainstream one.
 
+## Platforms
+
+| Platform | Kind | Toolkit | Status |
+|---|---|---|---|
+| Mac OS 9.1 to 9.2.2 on PowerPC | legacy | Toolbox, Appearance Manager | in development, released |
+| Linux | mainstream, for testing | GTK4 | in progress, the next port |
+| Amiga with an accelerated 68k processor | legacy | Intuition, with the system's own gadget classes | planned |
+| Modern macOS | mainstream, for testing | AppKit | planned |
+
+What each planned port will need beyond this document's interfaces:
+
+- **Amiga.** A 68k cross toolchain, and a processor and memory the
+  engine can live with (a 68040 or 68060 accelerator with an FPU, and
+  tens of megabytes of fast memory; the figures in
+  [`memory.md`](memory.md) say what pages need). The network services
+  go over `bsdsocket.library` (Roadshow, AmiTCP or Miami), coroutines
+  over Exec tasks or stack switching, and files through `dos.library`.
+  The engine's big-endian code paths are already exercised by the
+  PowerPC build. Measure before choosing a toolkit: Intuition with the
+  system's own gadgets keeps the port native without a third-party
+  library.
+- **Modern macOS.** AppKit for the user interface, with native chrome
+  as GTK4 uses it, and the services in `src/platform/posix` (sockets,
+  files, clocks, entropy, coroutines) as they are. This is the
+  mainstream port for developers on a Mac, beside `aura-host`.
+
 The first port after Mac OS 9 is Linux with GTK4.
 
 ## The rule: each port looks native
