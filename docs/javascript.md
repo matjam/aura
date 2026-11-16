@@ -436,8 +436,11 @@ dropped writes. (That was the browser's state until 2026-11-15:
 requests carried cookies, because the network layer has its own path to
 the jar, but no test read the getter in a page.)
 
-`document.referrer` is always `""`
-([`known-gaps.md`](known-gaps.md#javascript)).
+`document.referrer` is the Referer value the navigation carried, for a
+top-level document; in a frame it is `""`
+([`known-gaps.md`](known-gaps.md#javascript)). Web storage
+(`localStorage`, `sessionStorage`) is described in
+[`web-storage.md`](web-storage.md).
 
 ## window.postMessage
 

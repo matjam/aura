@@ -326,6 +326,11 @@ typedef struct AuPageEnv {
      * when unknown (AuBrowserHost.memory_free_kb). Read when a document
      * begins, for the Automatic script memory limits. */
     uint32_t (*memory_free_kb)(void *ctx);
+    /* Optional: the application's web storage service
+     * (net/web_storage.h), which holds every page's localStorage and
+     * sessionStorage. Without it each document has storage of its own
+     * that ends with it. */
+    struct AuWebStorage *(*storage)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -379,6 +384,15 @@ typedef struct AuPageCallbacks {
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */
 AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb);
+/* Web storage (AuPageEnv.storage). The page's sessionStorage is the
+ * namespace ns of the service (the browser gives each tab one, so it
+ * outlives every document of the tab; 0 until set).
+ * au_page_storage_event passes a change the service reported to the
+ * page's shown document and its frames; documents kept for Back get no
+ * events. */
+struct AuStorageChange;
+void au_page_set_storage_ns(AuPage *p, uint32_t ns);
+void au_page_storage_event(AuPage *p, const struct AuStorageChange *c);
 void au_page_free(AuPage *p);
 
 /* Starts loading url (already resolved by the browser). A URL that

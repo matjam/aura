@@ -253,7 +253,9 @@ static bool low_memory(size_t n)
 static bool release_caches(size_t wanted)
 {
     (void)wanted;
-    return g_browser && au_browser_release_memory(g_browser) > 0;
+    /* Also the web storage areas that are safe on disk. */
+    bool freed = g_browser && au_browser_release_memory(g_browser) > 0;
+    return mac_net_release_storage() > 0 || freed;
 }
 
 MacWin *mac_win_of(WindowPtr w)

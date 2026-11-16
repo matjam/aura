@@ -76,6 +76,9 @@ typedef struct AuJsSettings {
     const char *origin;
     bool sandbox_origin;
     bool no_top_navigation;
+    /* document.referrer: the Referer value the navigation to this
+     * document carried; NULL for none (""). Copied. */
+    const char *referrer;
     /* Workers (see "Workers" below). */
     size_t worker_memory_limit; /* bytes one worker's runtime may allocate; 0: 24 MB; the browser sets it (scriptmem.h) */
     size_t worker_stack;        /* bytes of stack for a worker's coroutine; 0: 256 KB */
@@ -152,6 +155,8 @@ typedef struct AuJsRect {
 struct AuSurface;
 struct AuCanvasSet;
 
+#include "storage_call.h" /* AuJsStorageCall: one web storage operation */
+
 typedef struct AuJsHooks {
     void *ctx;
     /* Monotonic milliseconds: timers, performance.now, script budgets. */
@@ -201,11 +206,12 @@ typedef struct AuJsHooks {
      * a cookie set by script. */
     char *(*get_cookie)(void *ctx, const char *url);
     void (*set_cookie)(void *ctx, const char *url, const char *cookie);
-    /* localStorage persistence: load returns the serialized area for an
-     * origin (au_alloc'd, or NULL); save stores it. sessionStorage is not
-     * persisted. */
-    char *(*storage_load)(void *ctx, const char *origin, size_t *len);
-    void (*storage_save)(void *ctx, const char *origin, const char *data, size_t len);
+    /* localStorage and sessionStorage: one operation on the document's
+     * area of c->kind (AuJsStorageCall below); returns AU_JS_STORAGE_OK
+     * or another of the results. The embedder's storage service decides
+     * which area the document has. Optional: without it each AuJs keeps
+     * two areas of its own in memory, which end with it. */
+    int (*storage)(void *ctx, struct AuJsStorageCall *c);
     /* Focus moved to el (NULL: the body). */
     void (*focus_changed)(void *ctx, AuElement *el);
     /* A form is to be submitted (form.submit(), or requestSubmit and
@@ -289,6 +295,13 @@ AuJs *au_js_new_child(AuJs *page, AuDocument *doc, const char *url, const AuJsSe
 void au_js_free(AuJs *js);
 /* The document's origin as script sees it ("null" for an opaque one). */
 const char *au_js_origin(const AuJs *js);
+/* Another document changed the storage area named storage_key: when that
+ * is this document's area of kind (asked through the hook with
+ * AU_JS_STORAGE_MATCH), queues the storage event (a task). key is NULL
+ * for clear(), old_value NULL for a new key, new_value NULL for a
+ * removal; url is the writer's. */
+void au_js_storage_event(AuJs *js, int kind, const char *storage_key, const char *key, size_t key_len,
+                         const char *old_value, size_t old_len, const char *new_value, size_t new_len, const char *url);
 /* Script of the page (any of its documents) is on the stack. */
 bool au_js_running(const AuJs *js);
 /* The frame list of js's document changed outside script (the parser, a

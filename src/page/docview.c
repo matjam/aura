@@ -265,6 +265,7 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->title);
     au_free(dv->user_css);
     au_free(dv->user_agent);
+    au_free(dv->referrer);
     au_free(dv);
 }
 
@@ -956,6 +957,13 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
         au_image_cache_set_budget(c, dv->hidden_image_budget);
         dv->hidden_image_budget = 0;
     }
+}
+
+void au_docview_storage_event(AuDocView *dv, const AuDocStorageEvent *ev)
+{
+    au_frames_storage_event(dv, ev); /* frames nest at most AU_FRAMES_DEPTH deep */
+    if (dv != ev->writer)
+        au_docscript_storage_event(dv->script, ev);
 }
 
 /* Packs the text of the first sheet of a source (or of its imports) that
@@ -1995,6 +2003,14 @@ void au_docview_set_user_agent(AuDocView *dv, const char *ua)
 }
 
 const char *au_dv_user_agent(const AuDocView *dv) { return dv->user_agent; }
+
+void au_docview_set_referrer(AuDocView *dv, const char *referrer)
+{
+    au_free(dv->referrer);
+    dv->referrer = referrer && referrer[0] ? au_strndup(referrer, strlen(referrer)) : NULL;
+}
+
+const char *au_dv_referrer(const AuDocView *dv) { return dv->referrer; }
 
 bool au_docview_scripting(const AuDocView *dv)
 {

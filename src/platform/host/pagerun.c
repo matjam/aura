@@ -28,6 +28,7 @@
 #include "host.h"
 #include "image/image.h"
 #include "image/pngenc.h"
+#include "net/web_storage.h"
 #include "render.h"
 
 #include <stdio.h>
@@ -40,7 +41,32 @@ typedef struct PageRun {
     int errors, fails;
     bool loaded;
     bool real_time;
+    AuWebStorage *storage;
 } PageRun;
+
+static int c_storage(void *ctx, AuDocView *dv, struct AuJsStorageCall *call)
+{
+    (void)dv;
+    return au_web_storage_call(((PageRun *)ctx)->storage, 1, call);
+}
+
+/* A change: the storage event for the page's other documents. */
+static void c_storage_changed(void *ctx, const AuStorageChange *c)
+{
+    AuDocStorageEvent ev;
+    memset(&ev, 0, sizeof ev);
+    ev.kind = c->kind == AU_STORAGE_SESSION ? AU_JS_STORAGE_SESSION : AU_JS_STORAGE_LOCAL;
+    ev.storage_key = c->storage_key;
+    ev.writer = c->writer;
+    ev.key = c->key;
+    ev.key_len = c->key_len;
+    ev.old_value = c->old_value;
+    ev.old_len = c->old_len;
+    ev.new_value = c->new_value;
+    ev.new_len = c->new_len;
+    ev.url = c->url;
+    au_docview_storage_event(ctx, &ev);
+}
 
 #include <time.h>
 static double real_now_ms(void)
@@ -306,7 +332,12 @@ int au_host_page_main(int argc, char **argv)
         cb.now_ms = c_now;
     cb.open_url = c_open;
     cb.load_finished = c_loaded;
+    /* A storage service in memory, so the page and its frames share
+     * localStorage as they do in the browser. */
+    run.storage = au_web_storage_new();
+    cb.storage = c_storage;
     AuDocView *dv = au_docview_new(fonts, &li, &cb);
+    au_web_storage_set_listener(run.storage, c_storage_changed, dv);
     au_docview_set_scripting(dv, scripting);
     au_docview_set_viewport(dv, 800, 600);
     char url[4200];
@@ -331,6 +362,7 @@ int au_host_page_main(int argc, char **argv)
     if (run.fails == 0 && !run.loaded)
         run.fails++;
     au_docview_free(dv); /* unload */
+    au_web_storage_free(run.storage);
     au_host_loader_free(loader);
     au_fontset_free(fonts);
     au_free(data);

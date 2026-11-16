@@ -26,6 +26,7 @@
 #include "net/cache.h"
 #include "net/loader.h"
 #include "net/net_prefs.h"
+#include "net/web_storage.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -124,6 +125,8 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
+            "                        [--profile DIR] (keeps web storage in DIR/local-storage, as --net does in $AURA_PROFILE)\n"
+            "                        (--do storage prints the storage service's areas; --do reload reloads)\n"
             "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
@@ -377,6 +380,7 @@ typedef struct ChromeOpts {
     int scroll_bench; /* steps of the scroll benchmark; 0 for none */
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
+    bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
     const char *actions[64]; /* --do: scripted input, in order */
     int nactions;
@@ -735,6 +739,21 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
                                     : "the page was loaded again, its document from the network",
                shown, now_ms() - t0);
+    } else if (!strcmp(a, "reload")) {
+        au_bw_reload(w);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strcmp(a, "storage")) {
+        /* The storage service's counts and its areas (never their contents). */
+        AuWebStorageStats st;
+        AuStorageAreaInfo in;
+        au_web_storage_stats(b->storage, &st);
+        printf("storage: %u origins on disk, %u for the session only, %u session areas, %lu bytes (%lu in memory), "
+               "%u writes pending\n",
+               st.local_areas, st.session_only_areas, st.session_areas, (unsigned long)st.bytes,
+               (unsigned long)st.resident, st.pending);
+        for (size_t i = 0; au_web_storage_info(b->storage, i, &in); i++)
+            printf("  %s %s: %u bytes in %u items%s\n", in.kind == AU_STORAGE_SESSION ? "session" : "local", in.key,
+                   in.bytes, in.items, in.session_only ? " (session only)" : "");
     } else if (!strncmp(a, "tab:", 4)) {
         /* Selects tab N (from 0), timed until the tab is idle again: an
          * unloaded tab loads here. */
@@ -938,6 +957,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_browser_set_fetcher(b, "http", &f);
         au_browser_set_fetcher(b, "https", &f);
     }
+    /* Web storage: in the profile folder with --net (where the cookies
+     * are) or --profile DIR, else in memory for the run. */
+    struct AuWebStorage *storage = au_host_storage_open(ses.jar, o->net || o->profile);
+    au_browser_set_storage(b, storage);
     b->prefs.tab_position = o->pos;
     if (o->column)
         b->prefs.tab_column_width = o->column;
@@ -1044,6 +1067,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     au_canvas_free(c);
     au_surface_free(s);
     au_browser_free(b);
+    au_host_storage_close(storage); /* writes what changed */
     if (o->net) {
         if (blocklist) {
             au_host_blocklist_report(blocklist);
@@ -1115,6 +1139,10 @@ int main(int argc, char **argv)
                 o.loading = true;
             else if (!strcmp(a, "--net"))
                 o.net = true;
+            else if (!strcmp(a, "--profile") && i + 1 < argc) {
+                setenv("AURA_PROFILE", argv[++i], 1);
+                o.profile = true;
+            }
             else if (!strcmp(a, "--blocklist") && i + 1 < argc)
                 o.blocklist = argv[++i];
             else if (!strcmp(a, "--hover") && i + 1 < argc)

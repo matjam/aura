@@ -163,7 +163,9 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   carry a stack).
 - **Start-up:** the prelude's CSSOM, Range and observer parts are
   created in every context (see [Memory](#memory)).
-- **`document.referrer`** is always `""`.
+- **`document.referrer`** is `""` in frames (a top-level document has it).
+- **IndexedDB, the Cache API and service workers** are absent; what each
+  would take is in [`web-storage.md`](web-storage.md).
 - **`document.cookie`** in a sandboxed frame without
   `allow-same-origin` reads `""` and sets nothing; the standard throws
   SecurityError ([`networking.md`](networking.md), "Cookies and

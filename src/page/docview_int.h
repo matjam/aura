@@ -103,6 +103,7 @@ struct AuDocView {
     AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
+    char *referrer;      /* document.referrer for the next runtime; NULL: "" */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
     bool sheets_packed;  /* every sheet's text has been packed (au_docview_pack_sheets) */
     /* When to pack them (au_docview_update): the count of late parses last
@@ -214,6 +215,7 @@ AuElement *au_frames_element(const AuDocView *dv);
 bool au_frames_can_persist(AuDocView *dv);
 bool au_frames_has_state(AuDocView *dv);
 void au_frames_set_hidden(AuDocView *dv, bool hidden);
+void au_frames_storage_event(AuDocView *dv, const AuDocStorageEvent *ev);
 size_t au_frames_memory(AuDocView *dv);
 bool au_frames_run_scripts(AuDocView *dv, uint32_t budget_ms);
 uint32_t au_frames_scripts_due(AuDocView *dv);
