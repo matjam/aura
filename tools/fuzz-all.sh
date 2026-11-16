@@ -68,6 +68,7 @@ net-tls|net/fuzz_net|tls BIG SEED SECS
 cookies|net/fuzz_cookies|BIG SEED
 inflate|codec/fuzz_inflate|BIG SEED tests/codec/inflate-vectors/*
 brotli|codec/fuzz_brotli|BIG SEED tests/codec/brotli-vectors/*.br
+deflate|codec/fuzz_deflate|BIG SEED tests/codec/brotli-vectors/page.html
 files|browser/fuzz_files|BIG SEED SECS
 EOF
 }

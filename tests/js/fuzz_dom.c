@@ -11,6 +11,19 @@
  * forces a layout, paints, hit tests, sends mouse and key events and
  * runs timers, so layout and input see every intermediate tree.
  *
+ * Scripts also install listeners on the events the view fires while it
+ * handles input (focus, blur, mousedown, input, change, submit, ...)
+ * that destroy the target, its form, an ancestor, the document or the
+ * frame; start workers that post, end, throw or never return, and
+ * terminate them mid-message; draw on canvases that are then removed;
+ * and insert, navigate and remove iframes whose documents remove their
+ * own frame. Between steps the input is aimed at the elements the page
+ * shows (presses with and without a pointer move first, drags, editing
+ * keys, the Edit commands), and now and then the view is hidden and
+ * shown again, which releases its layout and builds it again while
+ * script holds references. One run in four collects script garbage
+ * whenever script is left (au_js_set_gc_stress).
+ *
  * The document view is freed at the end with script objects alive. An
  * iteration over AURA_FUZZ_SLOW_MS (default 60000) of CPU time aborts;
  * with AURA_FUZZ_VERBOSE set, scripts that take over 3 s are saved.
@@ -21,6 +34,7 @@
  *        fuzz_dom replay SCRIPT.js... */
 #include "../fuzz.h"
 #include "../layout/ahem.h"
+#include "js/js.h"
 #include "page/page.h"
 
 #include <stdarg.h>
@@ -37,7 +51,7 @@ static const char page[] =
     "</select><textarea id=ta>text</textarea><button id=bu>go</button></form>"
     "<template id=tp><p>tpl <b>b</b></p></template><svg id=sv width=20 height=20><rect id=r1 width=5 height=5></rect></svg>"
     "<div id=host></div><p id=last>last paragraph of text</p>"
-    "<script>var E=[],R=[],T=[],L=[],O=[],n=0;"
+    "<script>var E=[],R=[],T=[],L=[],O=[],W=[],C=[],n=0;"
     "function e(i){return E.length?E[i%E.length]:document.body}"
     "function r(i){return R.length?R[i%R.length]:document.createRange()}"
     "function t(i){return T.length?T[i%T.length]:document.createTextNode('t')}"
@@ -77,6 +91,135 @@ static const char *const pvals[] = {"none", "block", "inline", "inline-block", "
 static const char *const events[] = {"click", "x", "input", "change", "focus", "blur", "DOMContentLoaded", "load", "slotchange",
                                      "mousedown", "keydown", "submit", "reset", "toggle", "error"};
 
+/* ---- Listeners that destroy things during input ----
+ * The events the view fires from C while it handles the mouse, the
+ * keyboard and form controls, and what a listener for one does: remove
+ * the target, its form, its parent or the frame, empty a control (which
+ * frees the element under the pointer), write the document again,
+ * navigate, move the focus. Each ends with a forced layout, since the
+ * box tree holds the nodes it shows until it is built again. Domato
+ * found a use of a freed element this way that this fuzzer did not,
+ * because its listeners were never on these events. The strings that
+ * go inside a quoted script string (controls, worker_src, frame_docs)
+ * hold no single quote. */
+static const char *const input_events[] = {"focus",    "blur",     "focusin",  "focusout", "mousedown",   "mouseup", "click",
+                                           "mousemove", "mouseover", "mouseout", "keydown",  "keypress",    "keyup",   "beforeinput",
+                                           "input",    "change",   "submit",   "invalid",  "reset",       "select",  "toggle"};
+static const char *const destroy[] = {
+    "ev.target.remove()",
+    "ev.target.form.remove()",
+    "ev.target.parentNode.remove()",
+    "ev.target.innerHTML=\"\"",
+    "ev.target.textContent=\"\"",
+    "document.activeElement.innerHTML=\"\"",
+    "document.activeElement.remove()",
+    "document.body.innerHTML=\"<input autofocus><p>x</p>\"",
+    "document.open();document.write(\"<p>w</p><input>\");document.close()",
+    "document.documentElement.remove()",
+    "document.implementation.createHTMLDocument(\"\").body.appendChild(ev.target)",
+    "location.href=\"#h\"+n",
+    "location.href=\"http://fuzz.example/next\"",
+    "if(window.frameElement)frameElement.remove()",
+    "ev.target.parentNode.replaceChildren()",
+    "document.querySelectorAll(\"iframe,canvas,select,input,button,a,b,i\").forEach(function(x){x.remove()})",
+    "ev.target.focus()",
+    "ev.target.blur()",
+    "ev.target.form.submit()",
+    "ev.target.form.reset()",
+    "ev.target.click()",
+    "ev.target.disabled=true",
+    "ev.target.type=\"checkbox\"",
+    "ev.target.closest(\"form,div,body\").innerHTML=\"<b>gone</b>\"",
+    "ev.preventDefault()",
+};
+/* Controls whose text is an element of its own (the hit test names the
+ * inner element, the control gets the focus) and the other kinds of
+ * control, to give the input between steps something to act on. */
+static const char *const controls[] = {
+    "<button><b>go</b></button>",
+    "<a href=\"#x\"><i>link</i></a>",
+    "<label>l <span>s</span><input></label>",
+    "<details><summary><b>s</b></summary>d</details>",
+    "<form action=/s><input required><input value=v><button><i>b</i></button><input type=reset></form>",
+    "<form><input name=q><input type=submit></form>",
+    "<select size=3 multiple><option>a<option>b<option>c</select>",
+    "<select><option>x<option>y<option>z</select>",
+    "<input type=range><input type=checkbox><input type=radio name=r><input type=radio name=r>",
+    "<textarea>some text here</textarea>",
+    "<span tabindex=0><i>t</i></span>",
+    "<input type=file><input type=search value=s><input type=password value=p>",
+};
+/* Worker scripts: one that answers, ends itself, throws, imports a
+ * script that does not load, never returns, posts on a timer. */
+static const char *const worker_src[] = {
+    "onmessage=function(e){postMessage(e.data)}",
+    "postMessage(1);close()",
+    "throw new Error(\"x\")",
+    "importScripts(\"http://fuzz.example/none.js\")",
+    "onmessage=function(e){for(;;);}",
+    "setInterval(function(){postMessage(Date.now())},1)",
+    "onmessage=function(e){postMessage({a:[1,2,{b:e.data}],c:new ArrayBuffer(64)})};postMessage(0)",
+    "self.close();postMessage(2)",
+    "importScripts(\"data:text/javascript,postMessage(3)\");onmessage=function(){close()}",
+    "onmessage=function(e){throw e.data}",
+};
+static const char *const worker_ops[] = {
+    "w.postMessage({k:n,a:new ArrayBuffer(8)})",
+    "w.postMessage(1);w.terminate()",
+    "w.terminate();w.postMessage(2)",
+    "W.splice(0,1);w.terminate()",
+    "var b=new ArrayBuffer(16);w.postMessage(b,[b])",
+    "w.onmessage=null;w.postMessage(3)",
+};
+static const char *const canvas_ops[] = {
+    "x.fillRect(0,0,1e9,1e9)",
+    "x.drawImage(x.canvas,0,0)",
+    "x.canvas.remove();x.fillText(\"t\",1,9)",
+    "x.canvas.width=0;x.fillRect(0,0,1,1)",
+    "x.canvas.width=33;x.strokeRect(1,1,5,5)",
+    "x.getImageData(0,0,4,4)",
+    "x.putImageData(x.getImageData(0,0,2,2),1e9,-1e9)",
+    "x.save();x.translate(1e30,0);x.arc(0,0,5,0,7);x.fill();x.restore()",
+    "x.createPattern(x.canvas,\"repeat\")",
+    "x.canvas.toDataURL()",
+    "x.font=\"20px a\";x.strokeText(\"abc\",NaN,1)",
+    "x.clip();x.clearRect(-1,-1,1e9,1e9)",
+    "x.setTransform(1e20,0,0,1e-20,0,0);x.fillRect(0,0,1,1)",
+    "x.canvas.style.display=\"none\";x.fillRect(0,0,9,9);x.canvas.parentNode.removeChild(x.canvas)",
+    "x.beginPath();x.moveTo(0,0);x.lineTo(1e38,NaN);x.stroke()",
+    "x.shadowBlur=1e9;x.shadowColor=\"red\";x.fillRect(1,1,3,3)",
+};
+/* Documents for iframes (srcdoc): some remove their own frame, or
+ * change the embedding document, from a script or a listener. */
+static const char *const frame_docs[] = {
+    "<p>f</p>",
+    "<input autofocus><button><b>b</b></button>",
+    "<script>parent.n++;frameElement.remove()</script>",
+    "<script>onfocus=function(){frameElement.remove()};document.onmousedown=function(){parent.document.body.innerHTML=1}</script><input>",
+    "<iframe srcdoc=\"<p>in</p><input>\"></iframe><p>outer</p>",
+    "<script>setTimeout(function(){frameElement.remove()},1)</script><p>t</p>",
+    "<body onload=\"parent.document.querySelector(&quot;iframe&quot;).src=&quot;about:blank&quot;\">x",
+    ("<form><input required><button>go</button></form><script>document.forms[0].oninvalid=function(){frameElement.remove()};"
+     "document.onkeydown=function(){frameElement.parentNode.removeChild(frameElement)}</script>"),
+    "<script>document.onmouseover=document.onclick=function(e){parent.document.documentElement.appendChild(e.target)}</script><a href=#>a</a>",
+};
+static const char *const frame_ops[] = {
+    "f.src=\"about:blank\"",
+    "f.srcdoc=\"<p>new</p><input autofocus>\"",
+    "f.contentWindow.location.href=\"about:blank\"",
+    "add(f.contentDocument.body);add(f.contentDocument.documentElement)",
+    "f.remove()",
+    "f.contentWindow.eval('parent.document.querySelector(\"iframe\").remove()')",
+    "f.contentDocument.open();f.contentDocument.write(\"<input autofocus>\");f.contentDocument.close()",
+    "f.contentWindow.focus()",
+    "f.contentDocument.querySelector(\"input\").focus()",
+    "document.body.appendChild(f)",
+    "f.contentWindow.postMessage(1,\"*\")",
+    "f.style.display=\"none\"",
+    "f.width=7;f.height=1e9",
+    "f.contentDocument.body.appendChild(document.getElementById(\"i1\"))",
+};
+
 static void put(FzBuf *b, const char *fmt, ...)
 {
     char tmp[1024];
@@ -105,7 +248,7 @@ static void gen_callback(FzBuf *b, int depth)
 
 static void gen_op(FzBuf *b, int depth)
 {
-    uint32_t op = fz_rnd(depth > 1 ? 40 : 72);
+    uint32_t op = fz_rnd(depth > 1 ? 40 : 84);
     fz_puts(b, "try{");
     switch (op) {
     case 0: put(b, "add(document.createElement('%s'))", PICK(tags)); break;
@@ -222,6 +365,51 @@ static void gen_op(FzBuf *b, int depth)
     case 69: put(b, "var w=document.createTreeWalker(e(%u),-1),x,k=0;while((x=w.nextNode())&&k++<20){if(k%%3==0)x.remove();else add(x)}", N());
         break;
     case 70: put(b, "e(%u).form&&e(%u).form.reset();e(%u).options.length=%u;e(%u).add(new Option('n'))", N(), N(), N(), fz_rnd(3), N()); break;
+    case 72:
+    case 73:
+    case 74: {
+        /* a listener on an input event that destroys something */
+        static const char *const opts[] = {"true", "false", "{capture:true,once:true}", "{once:true}"};
+        int k, nd = 1 + (int)fz_rnd(2);
+        fz_puts(b, "var h=function(ev){");
+        for (k = 0; k < nd; k++)
+            put(b, "try{%s}catch(_){}", PICK(destroy));
+        if (fz_rnd(4))
+            fz_puts(b, "try{(document.body||document.documentElement).offsetWidth}catch(_){}");
+        fz_puts(b, "};L.push(h);");
+        if (fz_rnd(3))
+            put(b, "document.addEventListener('%s',h,%s)", PICK(input_events), PICK(opts));
+        else
+            put(b, "e(%u).addEventListener('%s',h,%s)", N(), PICK(input_events), PICK(opts));
+        break;
+    }
+    case 75:
+    case 76: {
+        static const char *const where[] = {"beforebegin", "afterbegin", "beforeend", "afterend"};
+        put(b, "(%s).insertAdjacentHTML('%s','%s');all()", fz_rnd(3) ? "document.body" : "e(0)", PICK(where), PICK(controls));
+        break;
+    }
+    case 77:
+        put(b, "if(W.length<3){var w=new Worker(URL.createObjectURL(new Blob(['%s'])));W.push(w);w.onmessage=", PICK(worker_src));
+        gen_callback(b, depth);
+        fz_puts(b, ";w.onerror=");
+        gen_callback(b, depth);
+        put(b, ";w.postMessage(%u)}", N());
+        break;
+    case 78: put(b, "var w=W[%u%%(W.length||1)];%s", N(), PICK(worker_ops)); break;
+    case 79:
+        put(b, "var c=document.createElement('canvas');c.width=%u;c.height=%u;add(c);e(%u).appendChild(c);"
+               "var x=c.getContext('2d');C.push(x);x.fillStyle='red';x.fillRect(1,1,%u,%u)",
+            fz_rnd(64), fz_rnd(64), N(), fz_rnd(40), fz_rnd(40));
+        break;
+    case 80: put(b, "var x=C[%u%%(C.length||1)];%s;x.drawImage(e(%u),0,0)", N(), PICK(canvas_ops), N()); break;
+    case 81:
+        put(b, "var f=document.createElement('iframe');f.srcdoc='%s';add(f);f.onload=", PICK(frame_docs));
+        gen_callback(b, depth);
+        put(b, ";(%s).appendChild(f)", fz_rnd(2) ? "document.body" : "e(1)");
+        break;
+    case 82:
+    case 83: put(b, "var f=document.querySelectorAll('iframe')[%u%%(document.querySelectorAll('iframe').length||1)];%s", fz_rnd(4), PICK(frame_ops)); break;
     default: put(b, "document.title='t%u';document.documentElement.appendChild(e(%u))", N(), N()); break;
     }
     fz_puts(b, "}catch(_){}\n");
@@ -244,6 +432,27 @@ static AuFontSet *fonts;
 static AuSurface *surface;
 static long slow_ms = 60000;
 
+/* The embedder's menu for a select and its file dialog: a choice is
+ * made, so the view goes on to fire input and change. */
+static int popup_cb(void *ctx, AuDocView *dv, const AuPopupItem *items, int n, int selected, AuIRect at)
+{
+    (void)ctx, (void)dv, (void)items, (void)at;
+    return n > 1 ? (selected + 1) % n : -1;
+}
+
+static bool choose_file_cb(void *ctx, AuDocView *dv, bool multiple, AuControlFile **files, uint32_t *n)
+{
+    AuControlFile *f = au_calloc(sizeof *f);
+    (void)ctx, (void)dv, (void)multiple;
+    f->name = au_strndup("a.txt", 5);
+    f->type = au_strndup("text/plain", 10);
+    f->data = au_strndup("data", 4);
+    f->len = 4;
+    *files = f;
+    *n = 1;
+    return true;
+}
+
 static double fake_now;
 /* The clock script sees: CPU time, twenty times as fast, so that the
  * engine's ten-second limit on a script that does not end (callbacks
@@ -253,6 +462,131 @@ static double now_ms(void *ctx, AuDocView *dv)
     (void)ctx, (void)dv;
     fake_now += 0.001;
     return fake_now + (double)clock() * 20000.0 / CLOCKS_PER_SEC;
+}
+
+/* The centre of a random element that has a box, a form control or
+ * something inside one three times in four when there is one; false
+ * when the document shows nothing. */
+static bool random_target(AuDocView *dv, int *x, int *y)
+{
+    AuDocument *d;
+    AuNode *n, *pick = NULL, *pick_ctl = NULL;
+    uint32_t seen = 0, seen_ctl = 0;
+    AuRect r;
+    au_docview_update(dv);
+    d = au_docview_document(dv);
+    if (!d)
+        return false;
+    for (n = au_node_next(&d->node, &d->node); n; n = au_node_next(n, &d->node)) {
+        AuNode *a;
+        bool ctl = false;
+        if (n->type != AU_NODE_ELEMENT || !au_layout_element_rect(au_docview_layout(dv), au_as_element(n), &r) ||
+            !(r.w > 0 && r.h > 0))
+            continue;
+        for (a = n; a && !ctl; a = a->parent) {
+            AuAtom t = a->type == AU_NODE_ELEMENT ? au_as_element(a)->tag : 0;
+            ctl = t == AU_ATOM_input || t == AU_ATOM_select || t == AU_ATOM_textarea || t == AU_ATOM_button ||
+                  t == AU_ATOM_a || t == AU_ATOM_label || t == AU_ATOM_summary || t == AU_ATOM_iframe;
+        }
+        /* reservoir sampling: each candidate is as likely */
+        if (fz_rnd(++seen) == 0)
+            pick = n;
+        if (ctl && fz_rnd(++seen_ctl) == 0)
+            pick_ctl = n;
+    }
+    if (pick_ctl && fz_rnd(4))
+        pick = pick_ctl;
+    if (!pick || !au_layout_element_rect(au_docview_layout(dv), au_as_element(pick), &r))
+        return false;
+    /* clamped: a page puts boxes anywhere */
+    *x = au_f2px(r.x + r.w / 2);
+    *y = au_f2px(r.y + r.h / 2);
+    return true;
+}
+
+static void mouse_at(AuDocView *dv, int type, int x, int y, int clicks, uint32_t mods)
+{
+    AuEvent ev;
+    memset(&ev, 0, sizeof ev);
+    ev.type = type;
+    ev.x = x;
+    ev.y = y;
+    ev.clicks = clicks;
+    ev.mods = mods;
+    au_docview_mouse(dv, &ev);
+}
+
+/* Input aimed at what the page shows: a press on an element (with or
+ * without the pointer moving there first, a drag, a double click, with
+ * modifiers), editing keys, and the Edit commands. The listeners of
+ * case 72 destroy things while the view handles these. */
+static void more_input(AuDocView *dv)
+{
+    static const int keys[] = {AU_KEY_TAB,  AU_KEY_RETURN, AU_KEY_BACKSPACE, AU_KEY_DELETE, AU_KEY_LEFT, AU_KEY_RIGHT,
+                               AU_KEY_UP,   AU_KEY_DOWN,   AU_KEY_HOME,      AU_KEY_END,    AU_KEY_ESCAPE, AU_KEY_PAGE_DOWN};
+    static const uint32_t modsv[] = {0, 0, 0, AU_MOD_SHIFT, AU_MOD_COMMAND, AU_MOD_OPTION};
+    AuEvent ev;
+    int x, y, k, nk;
+    if (fz_rnd(3) && random_target(dv, &x, &y)) {
+        int clicks = fz_rnd(5) ? 1 : 2 + (int)fz_rnd(2);
+        uint32_t mods = PICK(modsv);
+        if (fz_rnd(2))
+            mouse_at(dv, AU_EVENT_MOUSE_MOVE, x, y, 0, 0);
+        mouse_at(dv, AU_EVENT_MOUSE_DOWN, x, y, clicks, mods);
+        if (fz_rnd(3) == 0)
+            mouse_at(dv, AU_EVENT_MOUSE_MOVE, x + (int)fz_rnd(30) - 10, y + (int)fz_rnd(20) - 5, 0, 0);
+        mouse_at(dv, AU_EVENT_MOUSE_UP, x, y, clicks, mods);
+    }
+    nk = (int)fz_rnd(4);
+    for (k = 0; k < nk; k++) {
+        memset(&ev, 0, sizeof ev);
+        ev.type = AU_EVENT_KEY_DOWN;
+        if (fz_rnd(3))
+            ev.key = PICK(keys);
+        else
+            ev.ch = fz_rnd(3) ? 'a' + fz_rnd(26) : ' ';
+        ev.mods = PICK(modsv);
+        au_docview_key(dv, &ev);
+    }
+    if (fz_rnd(4) == 0) {
+        AuDocView *v = au_docview_focus_view(dv);
+        if (v && au_docview_editing(v)) {
+            static const int cmds[] = {AU_EDITCMD_UNDO, AU_EDITCMD_CUT, AU_EDITCMD_COPY, AU_EDITCMD_PASTE, AU_EDITCMD_CLEAR,
+                                       AU_EDITCMD_SELECT_ALL};
+            AuBuf out;
+            au_buf_init(&out);
+            au_docview_edit(v, PICK(cmds), "paste", 5, &out);
+            au_buf_free(&out);
+        }
+    }
+    if (fz_rnd(8) == 0)
+        au_docview_set_focus(dv, NULL);
+}
+
+/* The document is hidden (a kept document of another history entry, a
+ * background tab): its layout is released. Script may run meanwhile; the
+ * layout is built again when it is shown. */
+static void hide_and_show(AuDocView *dv)
+{
+    AuCanvas *c;
+    AuHitResult hr;
+    au_docview_set_hidden(dv, true);
+    if (fz_rnd(2))
+        au_docview_run_scripts(dv, 5);
+    if (fz_rnd(3) == 0) {
+        AuBuf out;
+        au_buf_init(&out);
+        au_docview_eval(dv, "try{document.body.offsetWidth;getSelection().toString();e(n).getBoundingClientRect()}catch(_){}0", &out);
+        au_buf_free(&out);
+    }
+    au_docview_set_hidden(dv, false);
+    if (fz_rnd(2))
+        au_docview_run_scripts(dv, 5);
+    au_docview_update(dv);
+    c = au_canvas_new(surface);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 150}, 0, 0);
+    au_canvas_free(c);
+    au_docview_hit_test(dv, (int)fz_rnd(300), (int)fz_rnd(200), &hr);
 }
 
 static void between_steps(AuDocView *dv)
@@ -284,9 +618,12 @@ static void between_steps(AuDocView *dv)
     else
         ev.ch = 'k';
     au_docview_key(dv, &ev);
+    more_input(dv);
     for (m = 0; m < 4; m++)
         au_docview_run_scripts(dv, 5);
     au_docview_update(dv);
+    if (fz_rnd(6) == 0)
+        hide_and_show(dv);
 }
 
 static void run_one(const FzBuf *in)
@@ -298,7 +635,14 @@ static void run_one(const FzBuf *in)
     int steps = 0;
     memset(&cb, 0, sizeof cb);
     cb.now_ms = now_ms;
+    cb.popup = popup_cb;
+    cb.choose_file = choose_file_cb;
     fake_now = 1000;
+    /* One run in four collects script garbage whenever script is left
+     * (slow): a node that only garbage names is then freed as soon as it
+     * is removed. Chosen from the state without drawing a number, so the
+     * saved scripts replay as before. */
+    au_js_set_gc_stress(((fz_state >> 9) & 3) == 0);
     dv = au_docview_new(fonts, NULL, &cb);
     au_docview_set_scripting(dv, true);
     au_docview_set_viewport(dv, 300, 200);

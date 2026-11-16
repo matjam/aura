@@ -40,7 +40,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_css` | CSS tokenizer, parser, selectors, media and supports conditions, cascade; layout and paint of a small document under the sheet | `css/fuzz_css N SEED SECONDS tests/page/samples/*.css tests/css/cases/*.txt` | `wiki.css`, the CSS case files, built-in sheets with extreme values |
 | `fuzz_layout` | style, layout at two sizes, paint, hit tests, mouse and keys, scroll damage, selection and find on mutated pages, script off | `page/fuzz_layout N SEED SECONDS tests/page/samples/*.html tests/page/samples/*.css tests/page/samples/*.gif` | sample pages, sheets and images, built-in layout snippets |
 | `fuzz_page` | the same pipeline on generated documents (floats, tables, flex, deep nesting) | `page/fuzz_page N SEED` | generated |
-| `fuzz_dom` | the DOM bindings with script on: generated scripts (tree edits, innerHTML, ranges, shadow roots, custom elements, observers, timers) with layout, paint and input between steps | `js/fuzz_dom N SEED SECONDS` | generated |
+| `fuzz_dom` | the DOM bindings with script on: generated scripts (tree edits, innerHTML, ranges, shadow roots, custom elements, observers, timers, listeners that destroy things during input events, workers, canvas drawing, iframes) with layout, paint, aimed input and hide-and-show cycles between steps | `js/fuzz_dom N SEED SECONDS` | generated |
 | `fuzz_canvas2d` | the canvas 2D context: random drawing calls with extreme arguments | `canvas/fuzz_canvas2d N SEED SECONDS` | generated |
 | `fuzz_svg` | XML parser, path grammar, the SVG image pipeline | `svg/fuzz_svg N SEED SECONDS tests/svg/corpus/*` | `tests/svg/corpus` |
 | `fuzz_image` | PNG, JPEG, GIF, WebP, BMP and ICO decoders, whole and in chunks | `image/fuzz_image N SEED tests/image/vectors/*/*` (one format: `tests/image/vectors/png/*`) | `tests/image/vectors` |
@@ -153,8 +153,8 @@ a wrapper that is garbage in a reference cycle lives until the collector
 runs, which on a small page is seldom: a node a listener removed can
 stay allocated for a long time, and a pointer the engine kept to it goes
 unnoticed. `au_js_set_gc_stress(true)` (`src/js/js.h`) makes every
-runtime collect each time script is left; `test_input_lifetime` turns
-it on with `AURA_TEST_GC_STRESS=1`.
+runtime collect each time script is left. `fuzz_dom` turns it on for one
+run in four, and `test_input_lifetime` with `AURA_TEST_GC_STRESS=1`.
 
 ## Rules the fuzzers enforce, for new code
 
