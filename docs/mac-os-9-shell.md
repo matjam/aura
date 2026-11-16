@@ -201,6 +201,35 @@ about the Toolbox:
 `listwin_cookies_changed` (called after Clear Cookies) marks the Cookies
 window's model stale with `au_list_touch`.
 
+## The developer windows
+
+To change what a developer window shows, when it refreshes, its parts,
+buttons, toggles, fields or actions, change the model in
+`src/browser/devwin_model.c` ([`developer-tools.md`](developer-tools.md),
+"The window models"), not `devwin.c`. `devwin.c` holds only what is
+about the Toolbox:
+
+- the window, one of each kind, and its place in the `develop.windows`
+  preference (`save_place`, `initial_place`; the default size fits the
+  screen);
+- the GWorld the engine paints into: the bands, the filter field with
+  its caret, the Network column titles, the text views, the input line
+  and the button bar, copied to the window around the controls
+  (`dw_paint`);
+- the native scroll bars (their 16-bit range scaled for long text),
+  push buttons, check boxes and radio buttons, made from
+  `au_devwin_buttons` and `au_devwin_toggles` and moved to the model's
+  rectangles (`place`); `sync_toggles` sets them from
+  `AuDevWin.toggle_on`;
+- events: Mac key codes turned into `AU_KEY_*` or UTF-8 (`mac_key`),
+  clicks counted by time and place, a drag past the text's edge paced
+  at a row every two ticks, and a beep for `AU_DEVWIN_FAILED`;
+- the `AuDevWinHost` callbacks: `mac_sysinfo` and the memory figures,
+  `mac_net_*` text, the font registration line for System Status, the
+  Scrap, `mac_save_text`, `mac_open_url`, DLOG 201 (the Find dialog
+  with Match Case hidden) for `ask_text`, the watch cursor, and
+  `SetWTitle` for the title.
+
 ## Resources by number
 
 | Resource | Use |
