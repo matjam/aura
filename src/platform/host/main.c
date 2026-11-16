@@ -727,6 +727,9 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         memset(&ps, 0, sizeof ps);
         if (bt)
             au_page_stats(bt->page, &ps);
+        if (ps.restored)
+            printf("%s: hiding the page left took %lu ms, building the layout again %lu ms\n", a,
+                   (unsigned long)ps.hide_ms, (unsigned long)ps.rebuild_ms);
         printf("%s: %s, %.1f ms in the call, %.0f ms until idle\n", a,
                ps.restored          ? "the kept document was shown"
                : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"

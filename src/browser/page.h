@@ -434,6 +434,10 @@ void au_page_set_entry(AuPage *p, uint32_t entry);
 void au_page_retain_entries(AuPage *p, const uint32_t *ids, size_t n);
 size_t au_page_kept_count(const AuPage *p);
 size_t au_page_kept_bytes(const AuPage *p); /* estimated */
+/* An estimate of what the document shown holds (the view's
+ * au_docview_memory_estimate and the page source), without the kept
+ * documents. A kept document holds less: it frees its layout. */
+size_t au_page_memory_estimate(const AuPage *p);
 /* When the oldest kept document was hidden (the page's clock); false
  * when the page keeps none. */
 bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp);
@@ -620,6 +624,7 @@ typedef struct AuPageStats {
     uint32_t restored;       /* times this document was shown again from the document cache; load_ms and
                               * first_paint_ms then time the last showing */
     uint32_t hide_ms;        /* of load_ms after a restore: hiding (or freeing) the document that was left */
+    uint32_t rebuild_ms;     /* of load_ms after a restore: building the layout the kept document had freed */
     bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);

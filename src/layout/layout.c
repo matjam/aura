@@ -1316,6 +1316,83 @@ void au_layout_free(AuLayout *L)
     au_free(L);
 }
 
+void au_layout_release(AuLayout *L)
+{
+    l_free_tree(L);
+    l_text_free_caches(L);
+    au_free(L->items);
+    au_free(L->segs);
+    au_free(L->abs);
+    au_free(L->grid_abs);
+    au_free(L->hidden);
+    L->items = NULL;
+    L->segs = NULL;
+    L->abs = NULL;
+    L->grid_abs = NULL;
+    L->hidden = NULL;
+    L->nitems = L->items_cap = 0;
+    L->nsegs = L->segs_cap = 0;
+    L->nabs = L->abs_cap = 0;
+    L->ngrid_abs = L->grid_abs_cap = 0;
+    L->nhidden = L->hidden_cap = 0;
+    L->nview_boxes = 0;
+    L->need_build = true;
+    L->need_paint = true;
+}
+
+AuLayoutScroll *au_layout_scroll_save(AuLayout *L, uint32_t *n)
+{
+    AuLayoutScroll *out = NULL;
+    uint32_t count = 0, cap = 0;
+    LBox *b = L->root;
+    while (b) {
+        if (b->kind == LK_BLOCK && b->node && au_is_element(b->node) && au_as_element(b->node)->box == b) {
+            LBlock *k = (LBlock *)b;
+            if (k->scroll_x != 0 || k->scroll_y != 0) {
+                if (count == cap) {
+                    cap = cap ? cap * 2 : 8;
+                    out = au_realloc(out, cap * sizeof *out);
+                }
+                au_node_ref(b->node);
+                out[count++] = (AuLayoutScroll){au_as_element(b->node), k->scroll_x, k->scroll_y};
+            }
+        }
+        if (b->first && b->kind != LK_TEXT)
+            b = b->first;
+        else {
+            while (b && !b->next)
+                b = b->parent;
+            if (b)
+                b = b->next;
+        }
+    }
+    *n = count;
+    return out;
+}
+
+void au_layout_scroll_restore(AuLayout *L, const AuLayoutScroll *s, uint32_t n)
+{
+    if (!L->root || L->need_build)
+        return;
+    for (uint32_t i = 0; i < n; i++) {
+        LBox *b = s[i].el->box;
+        if (!b || b->kind != LK_BLOCK || !(b->flags & LF_SCROLLER))
+            continue;
+        LBlock *k = (LBlock *)b;
+        float vw = k->w - k->bw[1] - k->bw[3], vh = k->h - k->bw[0] - k->bw[2];
+        k->scroll_x = l_max(0, l_min(l_max(0, k->sw - vw), s[i].x));
+        k->scroll_y = l_max(0, l_min(l_max(0, k->sh - vh), s[i].y));
+        L->need_paint = true;
+    }
+}
+
+void au_layout_scroll_free(AuLayoutScroll *s, uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++)
+        au_node_unref(&s[i].el->node);
+    au_free(s);
+}
+
 void au_layout_set_document(AuLayout *L, AuDocument *doc)
 {
     l_free_tree(L);

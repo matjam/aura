@@ -1710,10 +1710,10 @@ void browserwin_page_timings(BrowserWin *b)
     if (st.restored) {
         /* Back or Forward showed the kept document: the times are that showing's. */
         snprintf(l0, sizeof l0,
-                 "%.60s: kept document shown in %lu ms (%lu ms of it hiding the page left), painted after %lu ms. "
-                 "Kept documents: %lu, about %luK.",
+                 "%.60s: kept document shown in %lu ms (%lu ms hiding the page left, %lu ms building the layout "
+                 "again), painted after %lu ms. Kept documents: %lu, about %luK.",
                  au_page_title(t->page), (unsigned long)st.load_ms, (unsigned long)st.hide_ms,
-                 (unsigned long)st.first_paint_ms, (unsigned long)au_browser_kept_documents(g_browser, NULL),
+                 (unsigned long)st.rebuild_ms, (unsigned long)st.first_paint_ms, (unsigned long)au_browser_kept_documents(g_browser, NULL),
                  (unsigned long)(kept_bytes(g_browser) / 1024));
     } else if (typed.steps) {
         /* a long title would push the typing figures out of the 255

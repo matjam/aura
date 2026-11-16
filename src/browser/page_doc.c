@@ -1760,7 +1760,11 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     apply_font_prefs(p);
     p->content_w = k->content_w;
     p->content_h = k->content_h;
+    /* A kept document freed its layout: this update builds it again,
+     * before the first paint. */
+    uint32_t t1 = now(p);
     au_docview_update(p->dv);
+    p->stats.rebuild_ms = now(p) - t1;
     float w, h;
     au_layout_document_size(au_docview_layout(p->dv), &w, &h);
     p->content_w = (int)(w + 0.99f);
@@ -1803,6 +1807,11 @@ size_t au_page_kept_bytes(const AuPage *p)
     for (size_t i = 0; i < p->nkept; i++)
         n += p->kept[i]->bytes;
     return n;
+}
+
+size_t au_page_memory_estimate(const AuPage *p)
+{
+    return (p->dv ? au_docview_memory_estimate(p->dv) : 0) + p->source.len;
 }
 
 bool au_page_kept_oldest(const AuPage *p, uint32_t *stamp)

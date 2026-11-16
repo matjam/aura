@@ -98,7 +98,8 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     au_buf_printf(out, "  documents kept for Back and Forward: %lu, about %lu KB",
                   (unsigned long)au_page_kept_count(p), (unsigned long)(au_page_kept_bytes(p) / 1024));
     if (st.restored)
-        au_buf_printf(out, " (this one was restored; hiding the last took %lu ms)", (unsigned long)st.hide_ms);
+        au_buf_printf(out, " (this one was restored; hiding the last took %lu ms, building its layout again %lu ms)",
+                      (unsigned long)st.hide_ms, (unsigned long)st.rebuild_ms);
     au_buf_putc(out, '\n');
     AuGlyphCacheStats gs;
     au_glyph_cache_stats(&gs);
