@@ -19,6 +19,9 @@
 
 #include "platform/platform.h"
 
+/* Frees a temporary memory handle (main.c; mac.h says why not DisposeHandle). */
+void mac_temp_dispose(Handle h);
+
 /* ---- Time ---- */
 
 /* Microseconds is in InterfaceLib; the Multiversal headers leave it out. */
@@ -111,7 +114,7 @@ static bool load_sfnt(void *ctx, const void **data, size_t *len)
     ReadPartialResource(h, 0, buf, size);
     if (ResError() != noErr) {
         if (th)
-            DisposeHandle(th);
+            mac_temp_dispose(th);
         else
             DisposePtr(buf);
         return false;
@@ -316,7 +319,7 @@ static bool read_fork(short ref, Handle *hout, Ptr *pout, long *len)
     long count = eof;
     if (FSRead(ref, &count, buf) != noErr || count != eof) {
         if (th)
-            DisposeHandle(th);
+            mac_temp_dispose(th);
         else
             DisposePtr(buf);
         return false;
@@ -483,7 +486,7 @@ static void describe_folder(AuBuf *b, short vref, long dir, const char *prefix, 
         if (read_fork(ref, &h, &p, &len)) {
             au_font_index_write(b, rel, h ? (const void *)*h : (const void *)p, (size_t)len);
             if (h)
-                DisposeHandle(h);
+                mac_temp_dispose(h);
             else
                 DisposePtr(p);
         }
@@ -516,7 +519,7 @@ static void load_bundled_fonts(AuFontSet *set)
         if (ok) {
             au_font_index_parse(h ? (const char *)*h : (const char *)p, (size_t)len, add_bundled, &ic);
             if (h)
-                DisposeHandle(h);
+                mac_temp_dispose(h);
             else
                 DisposePtr(p);
             return;

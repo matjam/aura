@@ -126,6 +126,61 @@ long mac_heap_temp_bytes(void)
     return temp_heap_bytes;
 }
 
+/* Temporary memory starts in one zone (71 MB on the 512 MB test machine);
+ * beyond it the system makes more zones (16 MB areas when that zone is
+ * full). Mac OS 9.2.2 can then hang for good in the Memory Manager: an area
+ * ends up linked to itself in its list of areas, and the next one added
+ * loops in that list (seen in the guest with YouTube's page after GitHub's,
+ * in builds before and after the long-lived zone, and with YouTube's page
+ * alone once the long-lived zone used temporary memory; docs/memory.md,
+ * "Temporary memory areas"). It did not happen once no zone outside the
+ * first emptied: the first handle of Aura's freed in each such zone is
+ * shrunk to TEMP_PIN bytes and kept until Aura quits. */
+#define TEMP_PIN 16
+#define TEMP_PINS 256
+
+static Ptr temp_home_lo, temp_home_hi; /* the zone temporary memory starts in; NULL: unknown */
+static THz temp_pinned[TEMP_PINS];     /* the areas that hold a kept handle */
+static int temp_npinned;
+
+long mac_temp_pins(void)
+{
+    return temp_npinned;
+}
+
+static void temp_home_init(void)
+{
+    OSErr err = noErr;
+    Handle h = TempNewHandle(TEMP_PIN, &err);
+    if (!h || err != noErr)
+        return;
+    THz z = HandleZone(h);
+    if (z && *h > (Ptr)z && *h < z->bkLim) {
+        temp_home_lo = (Ptr)z;
+        temp_home_hi = z->bkLim;
+    }
+    DisposeHandle(h);
+}
+
+void mac_temp_dispose(Handle h)
+{
+    Ptr p = *h;
+    if (temp_home_hi && (p < temp_home_lo || p >= temp_home_hi) && temp_npinned < TEMP_PINS) {
+        THz z = HandleZone(h);
+        int i = 0;
+        while (i < temp_npinned && temp_pinned[i] != z)
+            i++;
+        if (z && p > (Ptr)z && p < z->bkLim && i == temp_npinned) {
+            HUnlock(h);
+            SetHandleSize(h, TEMP_PIN);
+            temp_pinned[temp_npinned++] = z;
+            return;
+        }
+    }
+    HUnlock(h);
+    DisposeHandle(h);
+}
+
 static Handle temp_handle(long n)
 {
     OSErr err = noErr;
@@ -208,8 +263,7 @@ static Handle long_handle(long n)
 static void long_handle_free(Handle h)
 {
     long_temp_bytes -= GetHandleSize(h);
-    HUnlock(h);
-    DisposeHandle(h);
+    mac_temp_dispose(h);
 }
 
 /* A slab from the chunks, adding one when none has room; NULL when the
@@ -298,8 +352,7 @@ static void heap_release(void *p)
     } else if (!hd->chunked) {
         Handle h = (Handle)hd->owner;
         temp_heap_bytes -= GetHandleSize(h);
-        HUnlock(h);
-        DisposeHandle(h);
+        mac_temp_dispose(h);
     } else {
         TempChunk *c = (TempChunk *)hd->owner;
         if (--c->live > 0)
@@ -317,8 +370,7 @@ static void heap_release(void *p)
             c->next->prev = c->prev;
         Handle h = c->h;
         temp_heap_bytes -= TEMP_CHUNK;
-        HUnlock(h);
-        DisposeHandle(h);
+        mac_temp_dispose(h);
     }
 }
 
@@ -1184,6 +1236,7 @@ int main(void)
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();
+    temp_home_init();
     /* Before the first au_alloc: small blocks come from slabs, not from
      * one NewPtr each (see src/core/heap.c). */
     au_heap_enable(heap_get, heap_release);

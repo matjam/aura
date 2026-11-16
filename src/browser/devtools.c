@@ -335,6 +335,11 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
             snprintf(note, sizeof note, "in %lu KB of temporary memory", (unsigned long)h->long_temp_kb);
             mem_row(out, "Long-lived blocks", h->long_kb, 0, note);
         }
+        /* Areas the system added to temporary memory that Aura keeps a
+         * small block in, so that they never empty (macos9/main.c). */
+        if (h->temp_pins)
+            au_buf_printf(out, "  %-18s %10lu              areas kept from emptying\n", "Areas held",
+                          (unsigned long)h->temp_pins);
     }
     /* Each script runtime, document and worker of the page. */
     {

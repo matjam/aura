@@ -88,6 +88,11 @@ long mac_heap_temp_bytes(void);
 /* The temporary memory that holds the allocator's long-lived zone, in
  * bytes (main.c). */
 long mac_heap_long_temp_bytes(void);
+/* Frees a temporary memory handle. The first one freed in each area the
+ * system added to temporary memory is shrunk and kept instead, so that the
+ * area never empties (main.c). mac_temp_pins: the handles kept. */
+void mac_temp_dispose(Handle h);
+long mac_temp_pins(void);
 void mac_menus_dirty(void);
 /* Brings the menu bar in step with the front window (enables, checks). */
 void mac_adjust_menus(void);

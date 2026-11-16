@@ -464,6 +464,7 @@ static void host_info(AuSysInfo *sys, AuDevHostInfo *h, AuBuf *conn, char *machi
     au_heap_stats(&hs);
     h->long_kb = (uint32_t)(hs.long_bytes / 1024);
     h->long_temp_kb = (uint32_t)(mac_heap_long_temp_bytes() / 1024);
+    h->temp_pins = (uint32_t)mac_temp_pins();
     mac_net_dev_info(h, conn);
 }
 
