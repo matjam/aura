@@ -1,37 +1,70 @@
-/* The developer windows: Page Source, Console, Network and Performance.
+/* The developer windows: Page Source, Console, Network, Performance,
+ * System Status and Report a Problem.
  *
  * Each is a document window whose text is painted by the engine's text
- * view (src/browser/textview.c) into an offscreen GWorld, with a native
- * scroll bar and a bar of push buttons at the bottom, as the list
- * windows are. There is at most one window of each kind. All four show
- * the active tab of the frontmost browser window and follow it: every
- * idle pass looks the tab up again (a window never keeps a page pointer
- * to use later) and rebuilds its text when the page's change counter
- * moved.
+ * view (src/browser/textview.c) into an offscreen GWorld. There is at
+ * most one window of each kind. The first four show the active tab of
+ * the frontmost browser window and follow it: every idle pass looks the
+ * tab up again (a window never keeps a page pointer to use later) and
+ * rebuilds its text when the page's change counter moved.
+ *
+ * All six are laid out alike, top to bottom:
+ *   - a tool band, where the window has a filter or options;
+ *   - the text, in the monospace face, with a scroll bar; a selection is
+ *     made by dragging and copied with Edit > Copy;
+ *   - a bar of push buttons, Copy All first and Find second, with one
+ *     line of status text after them.
+ * Each window comes back where it was left and at the size it had (the
+ * develop.windows preference).
  *
  *   Page Source  the main document's bytes with line numbers and colour
- *                (sourceview.c); Find, Copy, Select All
- *   Console      the page's console lines (devtools.c) and an input line:
- *                type an expression, Return evaluates it in the page;
- *                Up and Down recall earlier input
- *   Network      one row per request (netlog.c); a click shows the
- *                request's details and headers in the lower pane; the
- *                bar shows the totals and the open connections. Opening
- *                the window turns header recording on for later loads.
+ *                (sourceview.c)
+ *   Console      the page's console lines (devtools.c), filtered by level
+ *                and text, and an input line: type an expression, Return
+ *                evaluates it in the page; Up and Down recall earlier
+ *                input; Tab moves between the filter and the input line
+ *   Network      one row per request (netlog.c), filtered by text and by
+ *                kind (all, problems, blocked), sorted by a click on a
+ *                column title; a click on a row shows the request's
+ *                details and headers in the lower pane, which shows the
+ *                summary and the problem requests otherwise. Opening the
+ *                window turns header recording on for later loads.
  *   Performance  the report (au_dev_perf_report), rebuilt once a second;
- *                Copy Report puts it on the clipboard */
+ *                Run Timing Test adds its table to it
+ *   System Status  the machine, the clock, Aura's memory and the network
+ *                stack (sysinfo.c), rebuilt every two seconds; the paint
+ *                benchmark adds its table to it
+ *   Report a Problem  the bug report (bugreport.c) as it will be copied:
+ *                Copy Report, Save Report and Open GitHub Issues. Nothing
+ *                is sent anywhere.
+ * A report that rebuilds itself waits while text in it is selected, so
+ * that a selection can be copied. */
 #include "mac.h"
 
+#include "browser/bugreport.h"
 #include "browser/chrome.h"
 #include "browser/devtools.h"
 #include "browser/netlog.h"
 #include "browser/sourceview.h"
+#include "browser/sysinfo.h"
 #include "browser/textview.h"
 
 #include <stdio.h>
 #include <string.h>
 
-enum { kBarH = 32, kHeadH = 15, kInputH = 19, kMaxButtons = 3, kHistory = 16 };
+enum {
+    kBarH = 32,    /* the button bar */
+    kToolH = 24,   /* the tool band */
+    kReportH = 40, /* the Report window's band: two lines of text */
+    kHeadH = 15,   /* the Network window's column titles */
+    kInputH = 19,
+    kMaxButtons = 3,
+    kMaxToggles = 3,
+    kHistory = 16,
+    kFieldX = 46, /* the filter field in the tool band */
+    kFieldW = 150,
+    kKinds = WIN_REPORT - WIN_SOURCE + 1
+};
 
 typedef struct DevWin {
     MacWin base;
@@ -40,10 +73,14 @@ typedef struct DevWin {
     ControlHandle vscroll, dscroll; /* the text's; the Network detail pane's */
     ControlHandle buttons[kMaxButtons];
     int nbuttons;
+    ControlHandle toggles[kMaxToggles]; /* the tool band's check boxes or radio buttons */
+    int ntoggles;
     AuTextView tv, dv; /* the main text; the Network detail pane */
     AuTextList list, dlist;
     AuSourceView sv;
     bool have_sv;
+    AuNetView nv;
+    AuBuf text; /* Performance, System Status, Report: the text shown */
     /* What is shown, to notice changes. page is compared, never used. */
     const void *page;
     const char *src_data;
@@ -53,6 +90,9 @@ typedef struct DevWin {
     uint32_t detail_seq; /* Network: the request in the detail pane; 0 for none */
     char footer[320];
     char header[160];
+    /* The filter field (Console and Network). */
+    AuBuf filter;
+    bool filter_focus;
     /* Console input. */
     AuBuf input;
     char *history[kHistory];
@@ -64,11 +104,21 @@ typedef struct DevWin {
     char *find;
 } DevWin;
 
-static DevWin *g_dev[4]; /* by kind - WIN_SOURCE */
+static DevWin *g_dev[kKinds]; /* by kind - WIN_SOURCE */
+
+/* The last timing test (shown by Performance while its page is the
+ * current one) and paint benchmark (shown by System Status). */
+static AuTimingTest g_timing;
+static const void *g_timing_page;
+static AuPaintBench g_bench;
+
+static const char *const kind_names[kKinds] = {"source", "console", "network", "performance", "status", "report"};
+static const char *const kind_titles[kKinds] = {"Page Source", "Console", "Network", "Performance", "System Status",
+                                                "Report a Problem"};
 
 static DevWin *dev_of(WinKind kind)
 {
-    return kind >= WIN_SOURCE && kind <= WIN_PERF ? g_dev[kind - WIN_SOURCE] : NULL;
+    return kind >= WIN_SOURCE && kind <= WIN_REPORT ? g_dev[kind - WIN_SOURCE] : NULL;
 }
 
 /* The page the windows show: the active tab of the frontmost browser
@@ -80,11 +130,16 @@ static AuPage *current_page(void)
     return t ? t->page : NULL;
 }
 
+static bool has_filter(const DevWin *dw)
+{
+    return dw->base.kind == WIN_CONSOLE || dw->base.kind == WIN_NETWORK;
+}
+
 /* ---- Geometry ---- */
 
 typedef struct Areas {
-    Rect all, head, main, detail, input, bar;
-    bool has_head, has_detail, has_input;
+    Rect all, tool, field, head, main, detail, input, bar;
+    bool has_tool, has_head, has_detail, has_input;
 } Areas;
 
 static void areas(DevWin *dw, Areas *a)
@@ -94,16 +149,24 @@ static void areas(DevWin *dw, Areas *a)
     short W = a->all.right, H = a->all.bottom;
     SetRect(&a->bar, 0, (short)(H - kBarH), W, H);
     short top = 0, bottom = (short)(H - kBarH);
-    if (dw->base.kind == WIN_NETWORK) {
+    WinKind kind = dw->base.kind;
+    if (has_filter(dw) || kind == WIN_REPORT) {
+        short th = kind == WIN_REPORT ? kReportH : kToolH;
+        a->has_tool = true;
+        SetRect(&a->tool, 0, 0, W, th);
+        SetRect(&a->field, kFieldX, 4, kFieldX + kFieldW, 20);
+        top = th;
+    }
+    if (kind == WIN_NETWORK) {
         a->has_head = true;
-        SetRect(&a->head, 0, 0, W, kHeadH);
-        top = kHeadH;
+        SetRect(&a->head, 0, top, W, (short)(top + kHeadH));
+        top = (short)(top + kHeadH);
         a->has_detail = true;
         short dh = (short)((bottom - top) * 2 / 5);
         SetRect(&a->detail, 0, (short)(bottom - dh), (short)(W - kScrollBarWidth + 1), bottom);
         bottom = (short)(bottom - dh - 1);
     }
-    if (dw->base.kind == WIN_CONSOLE) {
+    if (kind == WIN_CONSOLE) {
         a->has_input = true;
         SetRect(&a->input, 0, (short)(bottom - kInputH), W, bottom);
         bottom = (short)(bottom - kInputH);
@@ -136,6 +199,55 @@ static void make_gworld(DevWin *dw)
     au_surface_clear(dw->surf, AU_RGB(255, 255, 255));
 }
 
+/* ---- Where the window was left ---- */
+
+static void save_place(DevWin *dw)
+{
+    SetPort((GrafPtr)dw->base.win);
+    Rect r;
+    GetWindowPortBounds(dw->base.win, &r);
+    Point tl = {r.top, r.left};
+    LocalToGlobal(&tl);
+    int place[4] = {tl.h, tl.v, r.right - r.left, r.bottom - r.top};
+    AuBuf out;
+    au_buf_init(&out);
+    au_dev_window_set(g_browser->prefs.dev_windows, kind_names[dw->base.kind - WIN_SOURCE], place, &out);
+    if (strcmp(au_buf_cstr(&out), g_browser->prefs.dev_windows ? g_browser->prefs.dev_windows : "") != 0) {
+        au_prefs_set_str(&g_browser->prefs.dev_windows, au_buf_cstr(&out));
+        g_browser->prefs_gen++; /* the shell saves the preferences file */
+    }
+    au_buf_free(&out);
+}
+
+/* The window's content rectangle on screen: where it was left when that
+ * is still reachable, else a default that fits the screen. */
+static void initial_place(WinKind kind, Rect *wr)
+{
+    static const short heights[kKinds] = {360, 300, 380, 400, 400, 400};
+    Rect screen = qd.screenBits.bounds;
+    int idx = kind - WIN_SOURCE, place[4];
+    if (au_dev_window_get(g_browser->prefs.dev_windows, kind_names[idx], place)) {
+        /* Usable when some of the title bar is on the screen, below the
+         * menu bar. */
+        if (place[0] + place[2] > screen.left + 60 && place[0] < screen.right - 60 && place[1] >= screen.top + 38 &&
+            place[1] < screen.bottom - 40) {
+            SetRect(wr, (short)place[0], (short)place[1], (short)(place[0] + place[2]), (short)(place[1] + place[3]));
+            return;
+        }
+    }
+    int w = screen.right - screen.left - 24, h = heights[idx];
+    if (w > 720)
+        w = 720;
+    int x = screen.right - w - 10 - idx * 2, y = 44 + idx * 20;
+    if (x < 6)
+        x = 6;
+    if (y + h > screen.bottom - 30) /* clear of the Control Strip */
+        h = screen.bottom - 30 - y;
+    if (h < 160)
+        h = 160;
+    SetRect(wr, (short)x, (short)y, (short)(x + w), (short)(y + h));
+}
+
 /* ---- Scroll bars ----
  * A control's range is 16 bits; a long source has more rows, so the
  * value is scaled when the range does not fit. */
@@ -165,6 +277,29 @@ static void sync_scroll(DevWin *dw)
 
 /* ---- Painting ---- */
 
+/* The window's background colour is the grey of its bands, so that the
+ * check boxes, radio buttons and push buttons, which erase to it, sit on
+ * the bands without a white box around them. */
+static void band_back(void)
+{
+    RGBColor grey = {0xDDDD, 0xDDDD, 0xDDDD};
+    RGBBackColor(&grey);
+}
+
+/* Draws text in the monospace face so that its end stays in view when it
+ * is wider than room; returns the x after it. */
+static float draw_tail(AuCanvas *c, DevWin *dw, float x, float base, float room, const char *text, size_t len,
+                       AuColor ink)
+{
+    while (len && au_text_width_list(dw->tv.font, dw->tv.size, text, len) > room) {
+        size_t adv = 1;
+        au_utf8_decode(text, len, &adv);
+        text += adv;
+        len -= adv;
+    }
+    return x + au_draw_text_list(c, dw->tv.font, dw->tv.size, x, base, text, len, ink);
+}
+
 static void dw_paint(DevWin *dw)
 {
     if (!dw->surf)
@@ -177,11 +312,40 @@ static void dw_paint(DevWin *dw)
     AuCanvas *c = au_canvas_new(dw->surf);
     int W = a.all.right, H = a.all.bottom;
     AuFontFace *small = au_fontset_match(g_fonts, AU_CHROME_SMALL_FAMILIES, 400, false);
+    if (a.has_tool) {
+        int th = a.tool.bottom;
+        au_fill_rect(c, (AuRect){0, 0, (float)W, (float)th}, AU_RGB(221, 221, 221));
+        au_fill_rect(c, (AuRect){0, (float)(th - 1), (float)W, 1}, AU_RGB(153, 153, 153));
+        if (has_filter(dw)) {
+            if (small)
+                au_draw_text(c, small, 10, 8, 16, "Filter:", 7, AU_RGB(40, 40, 40));
+            AuRect f = {(float)a.field.left, (float)a.field.top, (float)(a.field.right - a.field.left),
+                        (float)(a.field.bottom - a.field.top)};
+            bool focus = dw->filter_focus && active;
+            au_fill_rect(c, f, focus ? AU_RGB(0, 0, 0) : AU_RGB(119, 119, 119));
+            au_fill_rect(c, (AuRect){f.x + 1, f.y + 1, f.w - 2, f.h - 2}, AU_RGB(255, 255, 255));
+            if (dw->tv.font) {
+                float x = draw_tail(c, dw, f.x + 4, f.y + 12, f.w - 10, au_buf_cstr(&dw->filter), dw->filter.len,
+                                    AU_RGB(0, 0, 0));
+                if (focus)
+                    au_fill_rect(c, (AuRect){x + 1, f.y + 3, 1, f.h - 6}, AU_RGB(0, 0, 0));
+            }
+        } else if (small) {
+            /* Report a Problem: what the text is, and what to do with it. */
+            static const char l1[] = "This is all that Copy and Save take. It has no cookies, passwords or history. You can "
+                                     "edit it after pasting.";
+            static const char l2[] = "Paste it into a new issue at github.com/matjam/aura/issues";
+            char buf[200];
+            au_chrome_ellipsize(small, 10, l1, (float)(W - 16), buf, sizeof buf);
+            au_draw_text(c, small, 10, 8, 14, buf, strlen(buf), AU_RGB(0, 0, 0));
+            au_draw_text(c, small, 10, 8, 30, l2, sizeof l2 - 1, AU_RGB(40, 40, 40));
+        }
+    }
     if (a.has_head) {
-        au_fill_rect(c, (AuRect){0, 0, (float)W, kHeadH}, AU_RGB(221, 221, 221));
-        au_fill_rect(c, (AuRect){0, kHeadH - 1, (float)W, 1}, AU_RGB(153, 153, 153));
+        au_fill_rect(c, (AuRect){0, (float)a.head.top, (float)W, kHeadH}, AU_RGB(238, 238, 238));
+        au_fill_rect(c, (AuRect){0, (float)(a.head.bottom - 1), (float)W, 1}, AU_RGB(153, 153, 153));
         if (dw->tv.font)
-            au_draw_text_list(c, dw->tv.font, dw->tv.size, (float)dw->tv.gutter, 11, dw->header,
+            au_draw_text_list(c, dw->tv.font, dw->tv.size, (float)dw->tv.gutter, (float)(a.head.top + 11), dw->header,
                               strlen(dw->header), AU_RGB(0, 0, 0));
     }
     au_textview_paint(&dw->tv, c, 0, a.main.top);
@@ -195,19 +359,10 @@ static void dw_paint(DevWin *dw)
         if (dw->tv.font) {
             float base = (float)a.input.top + 13;
             float x = au_draw_text_list(c, dw->tv.font, dw->tv.size, 5, base, "> ", 2, AU_RGB(0, 51, 170));
-            /* The end of long input stays in view. */
-            const char *text = au_buf_cstr(&dw->input);
-            size_t len = dw->input.len;
-            float room = (float)(W - kScrollBarWidth - 24);
-            while (len && au_text_width_list(dw->tv.font, dw->tv.size, text, len) > room) {
-                size_t adv = 1;
-                au_utf8_decode(text, len, &adv);
-                text += adv;
-                len -= adv;
-            }
-            x += au_draw_text_list(c, dw->tv.font, dw->tv.size, 5 + x, base, text, len, AU_RGB(0, 0, 0));
-            if (active)
-                au_fill_rect(c, (AuRect){5 + x + 1, (float)a.input.top + 3, 1, kInputH - 6}, AU_RGB(0, 0, 0));
+            x = draw_tail(c, dw, 5 + x, base, (float)(W - kScrollBarWidth - 24), au_buf_cstr(&dw->input), dw->input.len,
+                          AU_RGB(0, 0, 0));
+            if (active && !dw->filter_focus)
+                au_fill_rect(c, (AuRect){x + 1, (float)a.input.top + 3, 1, kInputH - 6}, AU_RGB(0, 0, 0));
         }
     }
     au_fill_rect(c, (AuRect){0, (float)(H - kBarH), (float)W, kBarH}, AU_RGB(221, 221, 221));
@@ -244,6 +399,11 @@ static void dw_paint(DevWin *dw)
         RectRgn(cut, &cr);
         DiffRgn(mask, cut, mask);
     }
+    for (int i = 0; i < dw->ntoggles; i++) {
+        cr = (**dw->toggles[i]).contrlRect;
+        RectRgn(cut, &cr);
+        DiffRgn(mask, cut, mask);
+    }
     Rect g;
     SetRect(&g, (short)(W - kGrowBox), (short)(H - kGrowBox), (short)W, (short)H);
     RectRgn(cut, &g);
@@ -252,6 +412,7 @@ static void dw_paint(DevWin *dw)
     BackColor(whiteColor);
     CopyBits(&((GrafPtr)dw->gw)->portBits, &((GrafPtr)dw->base.win)->portBits, &src, &src, srcCopy | kDitherCopy,
              mask);
+    band_back();
     DisposeRgn(mask);
     DisposeRgn(cut);
 }
@@ -268,9 +429,10 @@ static void layout(DevWin *dw)
 
 /* ---- Content ---- */
 
-static void set_title(DevWin *dw, const char *what, AuPage *p)
+static void set_title(DevWin *dw, AuPage *p)
 {
     char t[200];
+    const char *what = kind_titles[dw->base.kind - WIN_SOURCE];
     const char *url = p ? au_page_url(p) : "";
     snprintf(t, sizeof t, "%s%s%.150s", what, url[0] ? ": " : "", url);
     Str255 ps, cur;
@@ -282,38 +444,96 @@ static void set_title(DevWin *dw, const char *what, AuPage *p)
     }
 }
 
-/* The machine in one line, for the report. */
-static void machine_line(char *out, size_t cap)
+/* What the shell knows, for the reports: the machine's facts, and from
+ * them the Performance report's memory and machine line. machine holds
+ * the text h points to; conn the connections'. */
+static void host_info(AuSysInfo *sys, AuDevHostInfo *h, AuBuf *conn, char *machine, size_t cap)
 {
-    long sys = 0, cpu = 0, ram = 0, hz = 0;
-    Gestalt('sysv', &sys);
-    Gestalt('cput', &cpu);
-    Gestalt('ram ', &ram);
-    Gestalt('pclk', &hz);
-    const char *name = cpu == 0x108 ? "PowerPC G3" : cpu == 0x10C ? "PowerPC G4" : cpu == 0x111 ? "PowerPC G4 (7450)"
-                       : cpu == 0x104                                                           ? "PowerPC 604"
-                       : cpu == 0x109                                                           ? "PowerPC 604e"
-                                                                                                : "PowerPC";
-    Rect sb = qd.screenBits.bounds;
-    GDHandle gd = GetMainDevice();
-    int depth = gd ? (**(**gd).gdPMap).pixelSize : 0;
-    snprintf(out, cap, "Mac OS %lx.%lx.%lx, %s (type %lx) %ld MHz, %ld MB, screen %dx%d at %d bits", (sys >> 8) & 0xFF,
-             (sys >> 4) & 0xF, sys & 0xF, name, cpu, hz / 1000000, ram / (1024 * 1024), sb.right - sb.left,
-             sb.bottom - sb.top, depth);
+    mac_sysinfo(sys);
+    memset(h, 0, sizeof *h);
+    au_sysinfo_line(sys, machine, cap);
+    h->machine = machine;
+    h->build = au_build_identity();
+    h->have_memory = true;
+    h->partition_kb = sys->partition_kb;
+    h->heap_free_kb = sys->heap_free_kb;
+    h->heap_block_kb = sys->heap_block_kb;
+    h->temp_free_kb = sys->temp_free_kb;
+    mac_net_dev_info(h, conn);
+}
+
+/* The view's filter and options, from the tool band. */
+static void network_view(DevWin *dw)
+{
+    snprintf(dw->nv.filter, sizeof dw->nv.filter, "%s", au_buf_cstr(&dw->filter));
+    dw->nv.show = AU_NETSHOW_ALL;
+    for (int i = 0; i < dw->ntoggles; i++)
+        if (GetControlValue(dw->toggles[i]))
+            dw->nv.show = i;
+    AuBuf hd;
+    au_buf_init(&hd);
+    au_netlog_header_sorted(dw->nv.sort == AU_NETCOL_SEQ && !dw->nv.desc ? -1 : dw->nv.sort, dw->nv.desc, &hd);
+    snprintf(dw->header, sizeof dw->header, "%s", au_buf_cstr(&hd));
+    au_buf_free(&hd);
+}
+
+/* The record on the selected line, or NULL. */
+static const AuNetRecord *network_selected(DevWin *dw, const AuNetLog *l)
+{
+    if (!l || dw->tv.selected < 0 || (uint32_t)dw->tv.selected >= dw->nv.n)
+        return NULL;
+    return au_netlog_at(l, dw->nv.rows[dw->tv.selected]);
+}
+
+static void network_footer(DevWin *dw, const AuNetLog *l, const AuNetRecord *sel)
+{
+    AuBuf f;
+    au_buf_init(&f);
+    if (sel) {
+        /* The whole address of the selected request: the row may cut it. */
+        au_buf_puts(&f, sel->url);
+    } else if (l) {
+        /* Short: the lower pane has the whole summary. */
+        if (dw->nv.n != l->count)
+            au_buf_printf(&f, "Showing %lu of ", (unsigned long)dw->nv.n);
+        au_buf_printf(&f, "%lu requests, %lu blocked, %lu failed, ", (unsigned long)l->requests,
+                      (unsigned long)l->blocked, (unsigned long)l->failed);
+        au_put_size(&f, l->decoded_bytes);
+        if (l->requests > l->finished)
+            au_buf_printf(&f, ", %lu still loading", (unsigned long)(l->requests - l->finished));
+    }
+    snprintf(dw->footer, sizeof dw->footer, "%s", au_buf_cstr(&f));
+    au_buf_free(&f);
 }
 
 static void network_detail(DevWin *dw, AuPage *p)
 {
     const AuNetLog *l = p ? au_page_netlog(p) : NULL;
-    const AuNetRecord *r = l && dw->tv.selected >= 0 ? au_netlog_at(l, (uint32_t)dw->tv.selected) : NULL;
+    const AuNetRecord *r = network_selected(dw, l);
     uint32_t seq = r ? r->seq : 0;
     uint32_t old_top = seq == dw->detail_seq ? dw->dv.top : 0;
     dw->detail_seq = seq;
-    if (r)
+    if (r) {
         au_dev_network_detail_lines(r, &dw->dlist);
-    else
-        au_dev_network_blocked_lines(l, &dw->dlist); /* nothing selected: what was blocked */
+    } else {
+        /* Nothing selected: the summary and the problem requests. */
+        AuBuf conn;
+        au_buf_init(&conn);
+        mac_net_connections_text(&conn);
+        au_dev_network_summary_lines(l, au_buf_cstr(&conn), &dw->dlist);
+        au_buf_free(&conn);
+    }
     dw->dv.top = old_top;
+    network_footer(dw, l, r);
+}
+
+/* Shows text (a report) in the main view. */
+static void show_report(DevWin *dw, bool markdown)
+{
+    if (markdown)
+        au_dev_markdown_lines(au_buf_cstr(&dw->text), &dw->list);
+    else
+        au_dev_report_lines(au_buf_cstr(&dw->text), &dw->list);
 }
 
 /* Rebuilds the window's text when what it shows changed (or force).
@@ -343,11 +563,12 @@ static bool refresh(DevWin *dw, bool force)
         AuTextSource src;
         au_sourceview_source(&dw->sv, &src);
         au_textview_set_source(&dw->tv, &src);
-        set_title(dw, "Source", ok ? p : NULL);
+        set_title(dw, ok ? p : NULL);
         if (ok) {
             AuBuf f;
             au_buf_init(&f);
-            au_buf_printf(&f, "%lu lines, ", (unsigned long)dw->sv.nnumbers);
+            au_put_count(&f, dw->sv.nnumbers);
+            au_buf_puts(&f, " lines, ");
             au_put_size(&f, (uint32_t)n);
             snprintf(dw->footer, sizeof dw->footer, "%s", au_buf_cstr(&f));
             au_buf_free(&f);
@@ -361,14 +582,28 @@ static bool refresh(DevWin *dw, bool force)
         if (!force && !page_changed && total == dw->seen)
             return false;
         bool end = au_textview_at_end(&dw->tv);
-        if (p)
-            au_dev_console_lines(p, &dw->list);
-        else
+        uint32_t hidden = 0;
+        if (p) {
+            AuConsoleFilter f;
+            f.show = 0;
+            static const unsigned bits[kMaxToggles] = {AU_CONSOLE_SHOW_ERRORS, AU_CONSOLE_SHOW_WARNINGS,
+                                                       AU_CONSOLE_SHOW_LOGS};
+            for (int i = 0; i < dw->ntoggles; i++)
+                if (GetControlValue(dw->toggles[i]))
+                    f.show |= bits[i];
+            f.text = au_buf_cstr(&dw->filter);
+            hidden = au_dev_console_lines(p, &f, &dw->list);
+        } else {
             au_textlist_clear(&dw->list);
+        }
         dw->seen = total;
-        set_title(dw, "Console", p);
-        snprintf(dw->footer, sizeof dw->footer, "%lu lines. Type an expression and press Return to run it in the page.",
-                 (unsigned long)(p ? au_page_console_count(p) : 0));
+        set_title(dw, p);
+        if (hidden)
+            snprintf(dw->footer, sizeof dw->footer, "%lu entries, %lu hidden by the filter.",
+                     (unsigned long)(p ? au_page_console_count(p) : 0), (unsigned long)hidden);
+        else
+            snprintf(dw->footer, sizeof dw->footer, "%lu entries. Return runs the expression in the page.",
+                     (unsigned long)(p ? au_page_console_count(p) : 0));
         dw->page = p;
         layout(dw);
         if (end || page_changed)
@@ -385,25 +620,24 @@ static bool refresh(DevWin *dw, bool force)
         if (!force && !page_changed && now - dw->last_ms < 250)
             return false; /* a loading page changes the log many times a second */
         bool end = au_textview_at_end(&dw->tv) && dw->tv.selected < 0;
+        if (page_changed)
+            dw->detail_seq = 0;
+        network_view(dw);
+        au_netview_build(&dw->nv, l);
+        layout(dw); /* the columns the rows may take */
         if (l)
-            au_dev_network_lines(l, &dw->list);
+            au_dev_network_lines(l, &dw->nv, dw->tv.cols, &dw->list);
         else
             au_textlist_clear(&dw->list);
-        if (page_changed)
-            dw->tv.selected = -1;
+        /* The selected request keeps its selection through a new order. */
+        dw->tv.selected = -1;
+        for (uint32_t i = 0; l && dw->detail_seq && i < dw->nv.n; i++)
+            if (au_netlog_at(l, dw->nv.rows[i])->seq == dw->detail_seq)
+                dw->tv.selected = (int32_t)i;
         dw->seen = gen;
-        set_title(dw, "Network", p);
-        AuBuf f, conn;
-        au_buf_init(&f);
-        au_buf_init(&conn);
-        mac_net_connections_text(&conn);
-        if (l)
-            au_netlog_footer(l, au_buf_cstr(&conn), &f);
-        snprintf(dw->footer, sizeof dw->footer, "%s", au_buf_cstr(&f));
-        au_buf_free(&f);
-        au_buf_free(&conn);
+        set_title(dw, p);
         dw->page = p;
-        layout(dw); /* drops a selection past the end */
+        layout(dw);
         network_detail(dw, p);
         layout(dw);
         if (end)
@@ -413,31 +647,82 @@ static bool refresh(DevWin *dw, bool force)
         return true;
     }
     case WIN_PERF: {
-        if (!force && !page_changed && now - dw->last_ms < 1000)
+        if (!force && !page_changed && (now - dw->last_ms < 1000 || au_textview_has_selection(&dw->tv)))
             return false;
-        AuBuf out, conn;
-        au_buf_init(&out);
+        AuBuf conn;
         au_buf_init(&conn);
+        au_buf_clear(&dw->text);
         if (p) {
+            AuSysInfo sys;
             AuDevHostInfo h;
-            char machine[200];
-            memset(&h, 0, sizeof h);
-            machine_line(machine, sizeof machine);
-            h.machine = machine;
-            h.have_memory = true;
-            h.heap_free_kb = (uint32_t)(FreeMem() / 1024);
-            h.heap_block_kb = (uint32_t)(MaxBlock() / 1024);
-            h.temp_free_kb = (uint32_t)(TempFreeMem() / 1024);
-            mac_net_dev_info(&h, &conn);
-            au_dev_perf_report(p, &h, now, &out);
+            char machine[256];
+            host_info(&sys, &h, &conn, machine, sizeof machine);
+            h.timing = g_timing.ran && g_timing_page == (const void *)p ? &g_timing : NULL;
+            au_dev_perf_report(p, &h, now, &dw->text);
         } else {
-            au_buf_puts(&out, "No page: open a browser window.");
+            au_buf_puts(&dw->text, "Performance\n  No page is open. Open a browser window, then choose Develop > Performance.\n");
         }
-        au_dev_report_lines(au_buf_cstr(&out), &dw->list);
-        au_buf_free(&out);
+        show_report(dw, false);
         au_buf_free(&conn);
-        set_title(dw, "Performance", p);
-        snprintf(dw->footer, sizeof dw->footer, "Updated every second.");
+        set_title(dw, p);
+        snprintf(dw->footer, sizeof dw->footer, "Updates every second; waits while text is selected.");
+        break;
+    }
+    case WIN_STATUS: {
+        if (!force && (now - dw->last_ms < 2000 || au_textview_has_selection(&dw->tv)))
+            return false;
+        AuSysInfo sys;
+        AuDevHostInfo h;
+        AuBuf conn, shell;
+        char machine[256];
+        au_buf_init(&conn);
+        au_buf_init(&shell);
+        host_info(&sys, &h, &conn, machine, sizeof machine);
+        /* Continues the report's Fonts section, then the network's. */
+        au_report_kv(&shell, "Found at start in", "%lu ms   (%d bundled faces in %lu ms)", (unsigned long)mac_fonts_ms(),
+                     mac_fonts_bundled(), (unsigned long)mac_fonts_bundled_ms());
+        au_buf_putc(&shell, '\n');
+        mac_net_status_text(&shell);
+        au_buf_clear(&dw->text);
+        au_sysinfo_report(&sys, g_browser, &h, au_buf_cstr(&shell), &g_bench, &dw->text);
+        show_report(dw, false);
+        au_buf_free(&conn);
+        au_buf_free(&shell);
+        set_title(dw, NULL);
+        snprintf(dw->footer, sizeof dw->footer, "Updates every two seconds; waits while text is selected.");
+        break;
+    }
+    case WIN_REPORT: {
+        /* A snapshot: built when the window is shown and when its option
+         * changes, never while it is read. */
+        if (!force)
+            return false;
+        AuSysInfo sys;
+        AuDevHostInfo h;
+        AuBugReport br;
+        AuBuf conn;
+        char machine[256];
+        au_buf_init(&conn);
+        host_info(&sys, &h, &conn, machine, sizeof machine);
+        memset(&br, 0, sizeof br);
+        BrowserWin *bw = browserwin_front();
+        br.browser = g_browser;
+        br.window = bw ? browserwin_model(bw) : NULL;
+        br.sys = &sys;
+        br.host = &h;
+        br.other_tabs = dw->ntoggles && GetControlValue(dw->toggles[0]);
+        au_buf_clear(&dw->text);
+        au_bugreport_build(&br, &dw->text);
+        show_report(dw, true);
+        au_buf_free(&conn);
+        set_title(dw, NULL);
+        AuBuf f;
+        au_buf_init(&f);
+        au_put_count(&f, (unsigned long)dw->text.len);
+        snprintf(dw->footer, sizeof dw->footer, "%s characters. Nothing is sent.", au_buf_cstr(&f));
+        au_buf_free(&f);
+        dw->tv.top = 0;
+        au_textview_clear_selection(&dw->tv);
         break;
     }
     default: return false;
@@ -449,24 +734,53 @@ static bool refresh(DevWin *dw, bool force)
 }
 
 /* The whole text of the window, for Copy All and Copy Report. */
+static void all_text(DevWin *dw, AuBuf *out)
+{
+    AuPage *p = current_page();
+    switch (dw->base.kind) {
+    case WIN_NETWORK:
+        if (p) {
+            AuBuf conn;
+            au_buf_init(&conn);
+            mac_net_connections_text(&conn);
+            au_netlog_dump(au_page_netlog(p), au_buf_cstr(&conn), true, out);
+            au_buf_free(&conn);
+        }
+        break;
+    case WIN_CONSOLE:
+        if (p)
+            au_dev_console_text(p, out);
+        break;
+    case WIN_PERF:
+    case WIN_STATUS:
+    case WIN_REPORT: au_buf_append(out, dw->text.data ? dw->text.data : "", dw->text.len); break;
+    default: au_textview_all_text(&dw->tv, out); break;
+    }
+}
+
 static void copy_all(DevWin *dw)
 {
     AuBuf out;
     au_buf_init(&out);
-    AuPage *p = current_page();
-    if (dw->base.kind == WIN_NETWORK && p) {
-        AuBuf conn;
-        au_buf_init(&conn);
-        mac_net_connections_text(&conn);
-        au_netlog_dump(au_page_netlog(p), au_buf_cstr(&conn), true, &out);
-        au_buf_free(&conn);
-    } else if (dw->base.kind == WIN_CONSOLE && p) {
-        au_dev_console_text(p, &out);
-    } else {
-        au_textview_all_text(&dw->tv, &out);
-    }
+    all_text(dw, &out);
     if (!out.len || !mac_put_scrap(out.data, out.len))
         SysBeep(1);
+    au_buf_free(&out);
+}
+
+/* Save Report: the text with CR LF line ends, which editors on every
+ * system read. */
+static void save_report(DevWin *dw)
+{
+    AuBuf out;
+    au_buf_init(&out);
+    for (size_t i = 0; i < dw->text.len; i++) {
+        if (dw->text.data[i] == '\n')
+            au_buf_putc(&out, '\r');
+        au_buf_putc(&out, dw->text.data[i]);
+    }
+    if (out.len)
+        mac_save_text("Save the report as:", "Aura Problem Report.txt", out.data, out.len);
     au_buf_free(&out);
 }
 
@@ -500,6 +814,8 @@ void devwin_find(MacWin *mw)
     GetDialogItem(d, FIND_TEXT, &type, &h, &r);
     SetDialogItemText(h, p);
     SelectDialogItemText(d, FIND_TEXT, 0, 32767);
+    GetDialogItem(d, FIND_LABEL, &type, &h, &r);
+    SetDialogItemText(h, (ConstStr255Param) "\pFind text in this window:");
     /* The text view's find ignores case: the check box is not offered. */
     HideDialogItem(d, FIND_CASE);
     SetDialogDefaultItem(d, FIND_OK);
@@ -574,7 +890,8 @@ static void console_recall(DevWin *dw, int dir)
         au_buf_puts(&dw->input, dw->history[at]);
 }
 
-static void console_paste(DevWin *dw)
+/* Paste into the field that has the keyboard: one line. */
+static void paste_into(AuBuf *field, size_t cap)
 {
     Handle h = NewHandle(0);
     long off = 0;
@@ -588,11 +905,40 @@ static void console_paste(DevWin *dw)
         for (char *q = u; *q; q++)
             if (*q == '\r' || *q == '\n' || *q == '\t')
                 *q = ' ';
-        if (dw->input.len + strlen(u) < 4000)
-            au_buf_puts(&dw->input, u);
+        if (field->len + strlen(u) < cap)
+            au_buf_puts(field, u);
         au_free(u);
     }
     DisposeHandle(h);
+}
+
+/* A key typed into a one-line field. Returns true when the text changed. */
+static bool field_key(AuBuf *field, unsigned char ch, size_t cap)
+{
+    if (ch == 0x08) {
+        /* Delete: the last character, whole. */
+        size_t n = field->len;
+        if (!n)
+            return false;
+        while (n && ((unsigned char)field->data[n - 1] & 0xC0) == 0x80)
+            n--;
+        field->len = n ? n - 1 : 0;
+        return true;
+    }
+    if (ch == 0x1B) {
+        if (!field->len)
+            return false;
+        au_buf_clear(field);
+        return true;
+    }
+    if (ch >= 0x20 && ch != 0x7F && field->len < cap) {
+        char mr = (char)ch;
+        char *u = mac_roman_to_utf8(&mr, 1);
+        au_buf_puts(field, u);
+        au_free(u);
+        return true;
+    }
+    return false;
 }
 
 /* ---- Events ---- */
@@ -626,6 +972,8 @@ static void dw_activate(MacWin *mw, bool on)
         HiliteControl(dw->dscroll, on ? 0 : 255);
     for (int i = 0; i < dw->nbuttons; i++)
         HiliteControl(dw->buttons[i], on ? 0 : 255);
+    for (int i = 0; i < dw->ntoggles; i++)
+        HiliteControl(dw->toggles[i], on ? 0 : 255);
     dw_paint(dw);
     draw_grow(mw);
 }
@@ -670,27 +1018,62 @@ static void scroll_click(DevWin *dw, ControlHandle c, AuTextView *tv, short part
     tv->select_rows = rows;
 }
 
+static void repaint(DevWin *dw)
+{
+    SetPort((GrafPtr)dw->base.win);
+    dw_paint(dw);
+}
+
+/* The buttons: Copy All is the first in every window and Find the second
+ * (Report a Problem has its own three). */
 static void button(DevWin *dw, int which)
 {
     AuPage *p = current_page();
-    switch (dw->base.kind) {
-    case WIN_SOURCE:
+    if (dw->base.kind == WIN_REPORT) {
         if (which == 0)
-            devwin_find(&dw->base);
-        else
             copy_all(dw);
+        else if (which == 1)
+            save_report(dw);
+        else
+            mac_open_url(AU_BUGREPORT_ISSUES_URL, true); /* in Aura, in a new tab */
         return;
+    }
+    if (which == 0) {
+        copy_all(dw);
+        return;
+    }
+    if (which == 1) {
+        devwin_find(&dw->base);
+        return;
+    }
+    switch (dw->base.kind) {
     case WIN_CONSOLE:
-        if (which == 0 && p) {
+        if (p) {
             au_page_console_clear(p);
             refresh(dw, true);
-            dw_paint(dw);
-        } else if (which == 1) {
-            copy_all(dw);
+            repaint(dw);
         }
-        return;
-    default: copy_all(dw); return;
+        break;
+    case WIN_PERF: devwin_run_timing(); break;
+    case WIN_STATUS:
+        refresh(dw, true);
+        repaint(dw);
+        break;
+    default: break;
     }
+}
+
+/* A check box or radio button of the tool band was clicked. */
+static void toggle(DevWin *dw, int which)
+{
+    if (dw->base.kind == WIN_NETWORK) {
+        for (int i = 0; i < dw->ntoggles; i++)
+            SetControlValue(dw->toggles[i], i == which);
+    } else {
+        SetControlValue(dw->toggles[which], !GetControlValue(dw->toggles[which]));
+    }
+    refresh(dw, true);
+    repaint(dw);
 }
 
 static void dw_click(MacWin *mw, EventRecord *ev)
@@ -706,14 +1089,40 @@ static void dw_click(MacWin *mw, EventRecord *ev)
             scroll_click(dw, c, &dw->tv, part, pt);
         else if (c == dw->dscroll)
             scroll_click(dw, c, &dw->dv, part, pt);
-        else if (TrackControl(c, pt, NULL))
+        else if (TrackControl(c, pt, NULL)) {
             for (int i = 0; i < dw->nbuttons; i++)
-                if (dw->buttons[i] == c)
+                if (dw->buttons[i] == c) {
                     button(dw, i);
+                    return;
+                }
+            for (int i = 0; i < dw->ntoggles; i++)
+                if (dw->toggles[i] == c) {
+                    toggle(dw, i);
+                    return;
+                }
+        }
         return;
     }
     Areas a;
     areas(dw, &a);
+    /* The filter field takes the keyboard when clicked; a click in the
+     * text gives it back to the console's input line. */
+    if (has_filter(dw)) {
+        bool in_field = PtInRect(pt, &a.field);
+        if (in_field != dw->filter_focus && (in_field || dw->base.kind == WIN_CONSOLE)) {
+            dw->filter_focus = in_field;
+            dw_paint(dw);
+        }
+        if (in_field)
+            return;
+    }
+    /* A column title sorts the requests by it. */
+    if (a.has_head && PtInRect(pt, &a.head) && dw->tv.cell_w > 0) {
+        au_netview_click_column(&dw->nv, au_netlog_column_at((int)((float)(pt.h - dw->tv.gutter) / dw->tv.cell_w)));
+        refresh(dw, true);
+        dw_paint(dw);
+        return;
+    }
     AuTextView *tv = NULL;
     Rect *area = NULL;
     if (PtInRect(pt, &a.main)) {
@@ -777,28 +1186,36 @@ static bool dw_key(MacWin *mw, EventRecord *ev)
               : ch == 0x04 ? AU_KEY_END
                            : 0;
     SetPort((GrafPtr)mw->win);
+    /* The filter field: in the Network window it is the only place to
+     * type, so it takes every character; in the Console, Tab moves
+     * between it and the input line. */
+    bool to_filter = has_filter(dw) && (dw->filter_focus || dw->base.kind == WIN_NETWORK);
+    if (dw->base.kind == WIN_CONSOLE && ch == 0x09) {
+        dw->filter_focus = !dw->filter_focus;
+        dw_paint(dw);
+        return true;
+    }
+    if (to_filter && !key && ch != 0x0D && ch != 0x03) {
+        if (field_key(&dw->filter, ch, 60)) {
+            dw->filter_focus = true;
+            refresh(dw, true);
+            dw_paint(dw);
+            return true;
+        }
+        return ch == 0x08 || ch == 0x1B;
+    }
     if (dw->base.kind == WIN_CONSOLE) {
         if (ch == 0x0D || ch == 0x03) {
-            console_run(dw);
-        } else if (ch == 0x08) {
-            /* Delete: the last character, whole. */
-            size_t n = dw->input.len;
-            while (n && ((unsigned char)dw->input.data[n - 1] & 0xC0) == 0x80)
-                n--;
-            dw->input.len = n ? n - 1 : 0;
-        } else if (ch == 0x1B) {
-            au_buf_clear(&dw->input);
+            if (dw->filter_focus)
+                dw->filter_focus = false; /* Return leaves the filter */
+            else
+                console_run(dw);
         } else if (key == AU_KEY_UP || key == AU_KEY_DOWN) {
             console_recall(dw, key == AU_KEY_UP ? -1 : 1);
         } else if (key) {
             au_textview_key(&dw->tv, key);
             sync_scroll(dw);
-        } else if (ch >= 0x20 && ch != 0x7F && dw->input.len < 4000) {
-            char mr = (char)ch;
-            char *u = mac_roman_to_utf8(&mr, 1);
-            au_buf_puts(&dw->input, u);
-            au_free(u);
-        } else {
+        } else if (!field_key(&dw->input, ch, 4000)) {
             return false;
         }
         dw_paint(dw);
@@ -820,10 +1237,8 @@ static bool dw_key(MacWin *mw, EventRecord *ev)
 static void dw_idle(MacWin *mw)
 {
     DevWin *dw = (DevWin *)mw;
-    if (refresh(dw, false)) {
-        SetPort((GrafPtr)mw->win);
-        dw_paint(dw);
-    }
+    if (refresh(dw, false))
+        repaint(dw);
 }
 
 static void place(DevWin *dw)
@@ -849,6 +1264,18 @@ static void place(DevWin *dw)
         MoveControl(dw->buttons[i], (short)x, (short)(a.all.bottom - kBarH + 6));
         x += w + 8;
     }
+    /* The tool band's options: after the filter field, or (Report a
+     * Problem) at the right of its second line. */
+    x = has_filter(dw) ? kFieldX + kFieldW + 14 : 0;
+    for (int i = 0; i < dw->ntoggles; i++) {
+        Rect tr = (**dw->toggles[i]).contrlRect;
+        int w = tr.right - tr.left;
+        if (dw->base.kind == WIN_REPORT)
+            MoveControl(dw->toggles[i], (short)(W - w - 8 > 330 ? W - w - 8 : 330), 20);
+        else
+            MoveControl(dw->toggles[i], (short)x, 4);
+        x += w + 6;
+    }
 }
 
 static void dw_grow(MacWin *mw)
@@ -856,15 +1283,24 @@ static void dw_grow(MacWin *mw)
     DevWin *dw = (DevWin *)mw;
     make_gworld(dw);
     place(dw);
+    if (dw->base.kind == WIN_NETWORK)
+        refresh(dw, true); /* the rows are cut to the new width */
     layout(dw);
     Rect r;
     GetWindowPortBounds(mw->win, &r);
     InvalRect(&r);
+    save_place(dw);
+}
+
+static void dw_moved(MacWin *mw)
+{
+    save_place((DevWin *)mw);
 }
 
 static void dw_close(MacWin *mw)
 {
     DevWin *dw = (DevWin *)mw;
+    save_place(dw);
     g_dev[mw->kind - WIN_SOURCE] = NULL;
     DisposeWindow(mw->win);
     if (dw->surf)
@@ -875,9 +1311,12 @@ static void dw_close(MacWin *mw)
     au_textview_free(&dw->dv);
     au_textlist_free(&dw->list);
     au_textlist_free(&dw->dlist);
+    au_netview_free(&dw->nv);
     if (dw->have_sv)
         au_sourceview_free(&dw->sv);
     au_buf_free(&dw->input);
+    au_buf_free(&dw->filter);
+    au_buf_free(&dw->text);
     for (int i = 0; i < dw->nhistory; i++)
         au_free(dw->history[i]);
     au_free(dw->find);
@@ -886,7 +1325,7 @@ static void dw_close(MacWin *mw)
 }
 
 /* Edit menu: Copy the selection (of the pane that has one), Select All
- * in the main text, Paste into the console's input line. */
+ * in the main text, Paste into the field that has the keyboard. */
 static bool dw_edit(MacWin *mw, int item)
 {
     DevWin *dw = (DevWin *)mw;
@@ -904,18 +1343,21 @@ static bool dw_edit(MacWin *mw, int item)
         return true;
     }
     case 5:
-        if (dw->base.kind != WIN_CONSOLE)
+        if (!has_filter(dw))
             return false;
-        console_paste(dw);
-        SetPort((GrafPtr)mw->win);
-        dw_paint(dw);
+        if (dw->filter_focus || dw->base.kind == WIN_NETWORK) {
+            paste_into(&dw->filter, 60);
+            refresh(dw, true);
+        } else {
+            paste_into(&dw->input, 4000);
+        }
+        repaint(dw);
         return true;
     case 7:
         if (dw->tv.select_rows)
             return false;
         au_textview_select_all(&dw->tv);
-        SetPort((GrafPtr)mw->win);
-        dw_paint(dw);
+        repaint(dw);
         return true;
     default: return false;
     }
@@ -933,9 +1375,22 @@ static void add_button(DevWin *dw, const char *title, int width)
     dw->buttons[dw->nbuttons++] = c;
 }
 
+/* A check box or radio button in the window's font (Geneva 10). */
+static void add_toggle(DevWin *dw, const char *title, int width, bool radio, bool on)
+{
+    Rect r;
+    SetRect(&r, 0, 0, (short)width, 16);
+    Str255 p;
+    mac_pstr(title, p);
+    ControlHandle c = NewControl(dw->base.win, &r, p, true, on ? 1 : 0, 0, 1, (short)((radio ? radioButProc : checkBoxProc) | useWFont), 0);
+    if (!c)
+        mac_out_of_memory(256);
+    dw->toggles[dw->ntoggles++] = c;
+}
+
 void devwin_show(WinKind kind)
 {
-    if (kind < WIN_SOURCE || kind > WIN_PERF)
+    if (kind < WIN_SOURCE || kind > WIN_REPORT)
         return;
     DevWin *dw = dev_of(kind);
     if (dw) {
@@ -953,13 +1408,17 @@ void devwin_show(WinKind kind)
     dw->base.key = dw_key;
     dw->base.idle = dw_idle;
     dw->base.grow = dw_grow;
+    dw->base.moved = dw_moved;
     dw->base.close = dw_close;
     dw->base.edit = dw_edit;
     au_textview_init(&dw->tv);
     au_textview_init(&dw->dv);
     au_textlist_init(&dw->list);
     au_textlist_init(&dw->dlist);
+    au_netview_init(&dw->nv);
     au_buf_init(&dw->input);
+    au_buf_init(&dw->filter);
+    au_buf_init(&dw->text);
     AuTextSource src;
     au_textlist_source(&dw->list, &src);
     au_textview_set_source(&dw->tv, &src);
@@ -970,27 +1429,18 @@ void devwin_show(WinKind kind)
     dw->tv.select_rows = kind == WIN_NETWORK;
     dw->dv.wrap = true;
 
-    Rect screen = qd.screenBits.bounds, wr;
-    int w = screen.right - screen.left - 40, h = kind == WIN_NETWORK ? 400 : 340;
-    if (w > 760)
-        w = 760;
-    int x = screen.right - w - 16 - (kind - WIN_SOURCE) * 6, y = 64 + (kind - WIN_SOURCE) * 22;
-    if (x < 6)
-        x = 6;
-    if (y + h > screen.bottom - 30) /* clear of the Control Strip */
-        h = screen.bottom - 30 - y;
-    SetRect(&wr, (short)x, (short)y, (short)(x + w), (short)(y + h));
-    const char *title = kind == WIN_SOURCE    ? "Source"
-                        : kind == WIN_CONSOLE ? "Console"
-                        : kind == WIN_NETWORK ? "Network"
-                                              : "Performance";
+    Rect wr;
+    initial_place(kind, &wr);
     Str255 pt;
-    mac_pstr(title, pt);
+    mac_pstr(kind_titles[kind - WIN_SOURCE], pt);
     WindowPtr win = NewCWindow(NULL, &wr, pt, false, kZoomDocProc, (WindowPtr)-1, true, (long)dw);
     if (!win)
         mac_out_of_memory(sizeof(WindowRecord));
     dw->base.win = win;
     SetPort((GrafPtr)win);
+    TextFont(applFont); /* Geneva 10 for the tool band's options */
+    TextSize(10);
+    band_back();
     Rect sr = {0, 0, 10, 10};
     dw->vscroll = NewControl(win, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
     if (!dw->vscroll)
@@ -999,23 +1449,33 @@ void devwin_show(WinKind kind)
         dw->dscroll = NewControl(win, &sr, (ConstStr255Param) "\p", true, 0, 0, 0, scrollBarProc, 0);
         if (!dw->dscroll)
             mac_out_of_memory(256);
-        AuBuf hd;
-        au_buf_init(&hd);
-        au_netlog_header(&hd);
-        snprintf(dw->header, sizeof dw->header, "%s", au_buf_cstr(&hd));
-        au_buf_free(&hd);
         /* From now on the network stack keeps request and response
          * headers for the log. */
         mac_net_trace_headers(true);
-        add_button(dw, "Copy All", 80);
-    } else if (kind == WIN_SOURCE) {
-        add_button(dw, "Find...", 70);
-        add_button(dw, "Copy All", 80);
-    } else if (kind == WIN_CONSOLE) {
-        add_button(dw, "Clear", 64);
-        add_button(dw, "Copy All", 80);
-    } else {
+    }
+    /* Copy All first, Find second, then the window's own. */
+    if (kind == WIN_REPORT) {
         add_button(dw, "Copy Report", 104);
+        add_button(dw, "Save Report...", 116);
+        add_button(dw, "Open GitHub Issues", 150);
+        add_toggle(dw, "Include other tabs' addresses", 190, false, false);
+    } else {
+        add_button(dw, "Copy All", 80);
+        add_button(dw, "Find...", 66);
+        if (kind == WIN_CONSOLE) {
+            add_button(dw, "Clear", 64);
+            add_toggle(dw, "Errors", 62, false, true);
+            add_toggle(dw, "Warnings", 76, false, true);
+            add_toggle(dw, "Logs", 52, false, true);
+        } else if (kind == WIN_NETWORK) {
+            add_toggle(dw, "All", 40, true, true);
+            add_toggle(dw, "Problems", 76, true, false);
+            add_toggle(dw, "Blocked", 68, true, false);
+        } else if (kind == WIN_PERF) {
+            add_button(dw, "Run Timing Test", 130);
+        } else if (kind == WIN_STATUS) {
+            add_button(dw, "Refresh", 76);
+        }
     }
     g_dev[kind - WIN_SOURCE] = dw;
     make_gworld(dw);
@@ -1024,4 +1484,26 @@ void devwin_show(WinKind kind)
     ShowWindow(win);
     SelectWindow(win);
     mac_menus_dirty();
+}
+
+void devwin_run_timing(void)
+{
+    BrowserWin *b = browserwin_front();
+    if (!b || !browserwin_timing_test(b, &g_timing)) {
+        SysBeep(1);
+        return;
+    }
+    g_timing_page = current_page();
+    devwin_show(WIN_PERF);
+}
+
+void devwin_run_benchmark(void)
+{
+    BrowserWin *b = browserwin_front();
+    if (!b) {
+        SysBeep(1);
+        return;
+    }
+    browserwin_benchmark(b, &g_bench);
+    devwin_show(WIN_STATUS);
 }

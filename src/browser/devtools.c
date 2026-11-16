@@ -236,7 +236,7 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
         total += pf->ms[k];
     }
     if (pf->interval_ms) {
-        char label[40];
+        char label[64];
         snprintf(label, sizeof label, "Busy, last %s", s_ms(a, sizeof a, pf->interval_ms));
         au_report_kv(out, label, "%u %%   (%s ms of work)", percent(busy, pf->interval_ms), s_count(b, sizeof b, busy));
     }

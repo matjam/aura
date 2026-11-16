@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMenu, kWindowMenu, kDebugMenu = 135 };
+enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMenu, kWindowMenu, kDevelopMenu = 135,
+       kTestsMenu = 190, /* Develop > Tests, a submenu */
+       kHelpMenu = -16490 /* the system's Help menu (kHMHelpMenuID) */ };
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
 
 enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
@@ -20,10 +22,10 @@ enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELE
        EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
 enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
        VIEW_TABS_LEFT };
-/* The Develop menu (kDebugMenu): the developer windows, then the debug
- * items. */
-enum { DEV_SOURCE = 1, DEV_CONSOLE, DEV_NETWORK, DEV_PERF, DEBUG_SCENE = 6, DEBUG_FONTS, DEBUG_BENCH, DEBUG_NETWORK,
-       DEBUG_TIMINGS };
+/* The Develop menu and its Tests submenu (aura.r describes the groups). */
+enum { DEV_SOURCE = 1, DEV_CONSOLE, DEV_NETWORK, DEV_PERF = 5, DEV_TIMING, DEV_STATUS = 8, DEV_TESTS = 10,
+       DEV_REPORT = 12 };
+enum { TEST_SCENE = 1, TEST_FONTS, TEST_BENCH = 4 };
 enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
 enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
 enum { WIN_DOWNLOADS_ITEM = 1, WIN_COOKIES_ITEM, WIN_FIRST_WINDOW = 4 };
@@ -48,6 +50,7 @@ static int nbm_items, bm_cap;
 static short folder_menus_used; /* hierarchical menus currently inserted */
 static WindowPtr window_items[64];
 static int nwindow_items;
+static short help_report_item; /* Report a Problem in the Help menu; 0 when there is no Help menu */
 
 /* ---- Out of memory ----
  * au_alloc calls this when malloc fails. For now: free the reserve so the
@@ -374,6 +377,27 @@ void mac_adjust_menus(void)
         EnableItem(bm, BM_ADD);
     else
         DisableItem(bm, BM_ADD);
+    /* Develop: the windows that show a page need one; the timing test and
+     * the benchmark need a browser window to paint in. System Status, the
+     * test pages and Report a Problem always work. */
+    MenuHandle dev = GetMenuHandle(kDevelopMenu), tests = GetMenuHandle(kTestsMenu);
+    static const short page_items[] = {DEV_CONSOLE, DEV_NETWORK, DEV_PERF, DEV_TIMING};
+    if (w && au_bw_can_view_source(w))
+        EnableItem(dev, DEV_SOURCE);
+    else
+        DisableItem(dev, DEV_SOURCE);
+    for (size_t i = 0; i < sizeof page_items / sizeof page_items[0]; i++) {
+        if (t)
+            EnableItem(dev, page_items[i]);
+        else
+            DisableItem(dev, page_items[i]);
+    }
+    if (tests) {
+        if (b)
+            EnableItem(tests, TEST_BENCH);
+        else
+            DisableItem(tests, TEST_BENCH);
+    }
 }
 
 /* Shift or Option held now (for Reload chosen from the menu). */
@@ -383,17 +407,6 @@ static bool shift_or_option(void)
     GetKeys(k);
     /* Key codes 0x38 (Shift) and 0x3A (Option): byte 7, bits 0 and 2. */
     return (k[7] & 0x01) || (k[7] & 0x04);
-}
-
-static void network_status(void)
-{
-    char lines[4][256];
-    mac_net_status(lines);
-    Str255 p[4];
-    for (int i = 0; i < 4; i++)
-        mac_pstr(lines[i], p[i]);
-    ParamText(p[0], p[1], p[2], p[3]);
-    NoteAlert(131, NULL);
 }
 
 static void close_window(WindowPtr w)
@@ -410,6 +423,13 @@ static void do_menu(long choice)
     short menu = (short)(choice >> 16), item = (short)(choice & 0xFFFF);
     BrowserWin *b = browserwin_front();
     AuBrowserWindow *w = b ? browserwin_model(b) : NULL;
+    if (menu == kHelpMenu) {
+        /* The system's own items (balloons) are handled by the system. */
+        if (help_report_item && item == help_report_item)
+            devwin_show(WIN_REPORT);
+        HiliteMenu(0);
+        return;
+    }
     switch (menu) {
     case kAppleMenu:
         if (item == 1) {
@@ -521,23 +541,22 @@ static void do_menu(long choice)
             break;
         }
         break;
-    case kDebugMenu:
+    case kDevelopMenu:
         switch (item) {
-        case DEV_SOURCE:
-        case DEV_CONSOLE:
-        case DEV_NETWORK:
-        case DEV_PERF: devwin_show((WinKind)(WIN_SOURCE + item - DEV_SOURCE)); break;
-        case DEBUG_SCENE: mac_open_url("about:scene", false); break;
-        case DEBUG_FONTS: mac_open_url("about:fonts", false); break;
-        case DEBUG_BENCH:
-            if (b)
-                browserwin_benchmark(b);
-            break;
-        case DEBUG_NETWORK: network_status(); break;
-        case DEBUG_TIMINGS:
-            if (b)
-                browserwin_page_timings(b);
-            break;
+        case DEV_SOURCE: devwin_show(WIN_SOURCE); break;
+        case DEV_CONSOLE: devwin_show(WIN_CONSOLE); break;
+        case DEV_NETWORK: devwin_show(WIN_NETWORK); break;
+        case DEV_PERF: devwin_show(WIN_PERF); break;
+        case DEV_TIMING: devwin_run_timing(); break;
+        case DEV_STATUS: devwin_show(WIN_STATUS); break;
+        case DEV_REPORT: devwin_show(WIN_REPORT); break;
+        }
+        break;
+    case kTestsMenu:
+        switch (item) {
+        case TEST_SCENE: mac_open_url("about:scene", false); break;
+        case TEST_FONTS: mac_open_url("about:fonts", false); break;
+        case TEST_BENCH: devwin_run_benchmark(); break;
         }
         break;
     case kGoMenu:
@@ -711,6 +730,8 @@ static void mouse_down(EventRecord *ev)
         DragWindow(w, ev->where, &qd.screenBits.bounds);
         if (m && m->kind == WIN_BROWSER)
             browserwin_moved((BrowserWin *)m);
+        else if (m && m->moved)
+            m->moved(m);
         break;
     case inGrow: {
         Rect limits;
@@ -737,6 +758,8 @@ static void mouse_down(EventRecord *ev)
                 m->grow(m);
             if (m && m->kind == WIN_BROWSER)
                 browserwin_moved((BrowserWin *)m);
+            else if (m && m->moved)
+                m->moved(m);
         }
         break;
     case inContent:
@@ -921,6 +944,25 @@ int main(void)
         mac_out_of_memory(1024);
     SetMenuBar(mbar);
     AppendResMenu(GetMenuHandle(kAppleMenu), 'DRVR');
+    {
+        /* Develop > Tests is a submenu: the item's command character 0x1B
+         * marks it, and its mark is the submenu's ID. */
+        MenuHandle tests = GetMenu(kTestsMenu);
+        if (tests) {
+            InsertMenu(tests, -1);
+            SetItemCmd(GetMenuHandle(kDevelopMenu), DEV_TESTS, 0x1B);
+            SetItemMark(GetMenuHandle(kDevelopMenu), DEV_TESTS, (CharParameter)kTestsMenu);
+        } else {
+            DisableItem(GetMenuHandle(kDevelopMenu), DEV_TESTS);
+        }
+        /* Report a Problem goes in the system's Help menu too. */
+        MenuHandle help = NULL;
+        if (HMGetHelpMenuHandle(&help) == noErr && help) {
+            AppendMenu(help, (ConstStr255Param) "\p(-");
+            AppendMenu(help, (ConstStr255Param) "\pReport a Problem...");
+            help_report_item = CountMItems(help);
+        }
+    }
     DrawMenuBar();
     mac_context_init();
 

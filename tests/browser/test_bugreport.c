@@ -383,7 +383,7 @@ static void test_report(void)
           "the System Status report:\n%s", t);
     char line[256];
     au_sysinfo_line(&sys, line, sizeof line);
-    CHECK(!strcmp(line, "Power Mac G4 (AGP Graphics), PowerPC G4 (7400) 450 MHz, 512 MB, Mac OS 9.2.2, screen 1024x768 at 32 bits"),
+    CHECK(!strcmp(line, "Power Mac G4 (AGP Graphics), PowerPC G4 (7400) 450 MHz, 512 MB, Mac OS 9.2.2, 1024x768x32"),
           "the machine in one line: %s", line);
     CHECK(strstr(au_build_identity(), "0.") != NULL && au_build_date()[0], "build identity: %s, %s", au_build_identity(),
           au_build_date());

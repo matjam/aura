@@ -501,6 +501,31 @@ void mac_save_page(AuBrowserWindow *w)
     }
 }
 
+bool mac_save_text(const char *prompt, const char *name, const char *text, size_t len)
+{
+    Str255 pprompt, pname;
+    mac_pstr(prompt, pprompt);
+    mac_pstr(name, pname);
+    if (pname[0] > 31)
+        pname[0] = 31;
+    StandardFileReply reply;
+    memset(&reply, 0, sizeof reply);
+    StandardPutFile(pprompt, pname, &reply);
+    if (!reply.sfGood)
+        return false;
+    OSErr err = write_spec(&reply.sfFile, text, len);
+    if (err != noErr) {
+        Str255 msg;
+        char line[96];
+        snprintf(line, sizeof line, "The file could not be saved (error %d).", (int)err);
+        mac_pstr(line, msg);
+        ParamText(msg, (ConstStringPtr) "\p", (ConstStringPtr) "\p", (ConstStringPtr) "\p");
+        StopAlert(132, NULL);
+        return false;
+    }
+    return true;
+}
+
 char *mac_choose_file_url(void)
 {
     StandardFileReply reply;

@@ -62,7 +62,7 @@ void au_sysinfo_line(const AuSysInfo *s, char *out, size_t cap)
     if (s->ram_mb)
         snprintf(ram, sizeof ram, ", %lu MB", (unsigned long)s->ram_mb);
     if (s->screen_w)
-        snprintf(screen, sizeof screen, ", screen %dx%d at %d bits", s->screen_w, s->screen_h, s->screen_depth);
+        snprintf(screen, sizeof screen, ", %dx%dx%d", s->screen_w, s->screen_h, s->screen_depth);
     snprintf(out, cap, "%s%s%s%s%s, %s%s", s->model[0] ? s->model : "", s->model[0] ? ", " : "", or_unknown(s->cpu), mhz,
              ram, or_unknown(s->os), screen);
 }

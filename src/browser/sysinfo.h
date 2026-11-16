@@ -43,7 +43,9 @@ const char *au_build_identity(void);
 /* The date of that commit, "2026-11-15"; "unknown" when not recorded. */
 const char *au_build_date(void);
 
-/* The machine and system in one line, for the Performance report. */
+/* The machine and system in one line, for the Performance report:
+ * "Power Mac G4, PowerPC G4 (7400) 900 MHz, 512 MB, Mac OS 9.2.2,
+ * 640x480x32" (the screen's width, height and depth). */
 void au_sysinfo_line(const AuSysInfo *s, char *out, size_t cap);
 /* The sections, each as "label value" lines (au_report_kv) without a
  * title: the caller writes the heading (plain text or Markdown). */
