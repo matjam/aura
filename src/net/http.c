@@ -121,6 +121,7 @@ struct AuHttpTransfer {
     int redirects;
     bool body_done;
     bool head_sent;
+    bool paused;          /* au_http_pause: read nothing more for now */
     int64_t received;     /* body bytes as sent */
     size_t delivered;     /* decoded bytes */
     AuHttpParser parser;
@@ -467,6 +468,15 @@ void au_http_cancel(AuHttpTransfer *t)
 {
     /* No more callbacks; the next pump releases it. */
     t->cancelled = true;
+}
+
+void au_http_pause(AuHttpTransfer *t, bool paused)
+{
+    if (t->paused == paused)
+        return;
+    t->paused = paused;
+    /* The idle timeout counts from now, not from before the pause. */
+    t->last_ms = now_ms(t->net);
 }
 
 void au_http_set_user(AuHttpTransfer *t, void *user) { t->user = user; }
@@ -2561,6 +2571,13 @@ static bool step(AuHttpTransfer *t)
                 return true;
             if (t->body_done && c->out.len == c->out_off)
                 t->state = T_RECV;
+        }
+        if (t->paused && t->state == T_RECV && t->parser_live && au_http_parser_have_headers(&t->parser) &&
+            c->out.len == c->out_off) {
+            /* Backpressure: leave the bytes in the socket; the server
+             * waits once its window is full. Not an idle connection. */
+            t->last_ms = now;
+            return any;
         }
         any |= conn_io(c);
         if (c->state == C_DEAD)

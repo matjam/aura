@@ -204,7 +204,7 @@ static void world_open(World *w, const Page *pages, const char *url, int vw, int
     memset(w, 0, sizeof *w);
     w->pages = pages;
     au_buf_init(&w->console);
-    AuLoader l = {w, w_request_plain, w_cancel, NULL};
+    AuLoader l = {w, w_request_plain, w_cancel, NULL, NULL};
     AuDocViewCallbacks cb;
     memset(&cb, 0, sizeof cb);
     cb.ctx = w;

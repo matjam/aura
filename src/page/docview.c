@@ -806,6 +806,11 @@ void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size
         images_data(dv, r->image, data, len);
         return;
     }
+    /* A script's fetch takes its bytes as they come (streams, progress
+     * events, EventSource): the view keeps none of them. The call may
+     * cancel the request, so r is not used after it. */
+    if (r->kind == AU_RES_OTHER && !r->font && dv->script && au_docscript_resource_data(dv->script, id, data, len))
+        return;
     if (r->data.len + len > (size_t)64 * 1024 * 1024)
         return; /* refuse absurd resources */
     au_buf_append(&r->data, data, len);
@@ -2107,6 +2112,13 @@ uint32_t au_dv_request_ex(AuDocView *dv, const AuResourceRequest *rq, bool backg
     else
         dv->finished_reported = false;
     return r->id;
+}
+
+void au_dv_pause(AuDocView *dv, uint32_t id, bool paused)
+{
+    AuDocView *top = au_dv_top(dv);
+    if (find_request(dv, id) && top->loader.pause)
+        top->loader.pause(top->loader.ctx, id, paused);
 }
 
 void au_dv_cancel(AuDocView *dv, uint32_t id)

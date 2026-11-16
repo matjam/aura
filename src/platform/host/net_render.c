@@ -317,7 +317,7 @@ int au_host_net_render_main(int argc, char **argv)
 
     AuFontSet *fonts = au_fontset_new();
     au_platform_load_fonts(fonts);
-    AuLoader li = {&nr, res_request, NULL, res_decode};
+    AuLoader li = {&nr, res_request, NULL, res_decode, NULL};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
     dcb.open_url = cb_open;
