@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Developer tools test page</title>
+<style>
+body { font-family: sans-serif; margin: 2em; }
+code { background: #eee; padding: 0 3px; }
+</style>
+<!-- Hosts that blocklists name: the requests are refused before any lookup. -->
+<script src="https://static.ads-twitter.com/uwt.js"></script>
+<script src="https://connect.facebook.net/en_US/fbevents.js"></script>
+<script src="https://cdn.taboola.com/libtrc/loader.js"></script>
+</head>
+<body>
+<h1>Developer tools test page</h1>
+<p>This page writes to the console at every level, throws an error, asks
+for an image that does not exist and for three scripts on hosts that
+blocklists name. Open it, then open <code>Develop &gt; Console</code> and
+<code>Develop &gt; Network</code>.</p>
+<p><img src="https://example.com/no-such-image.png" alt="a missing image" width="40" height="40">
+<img src="https://example.com/track?session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amp;x=1" alt="a long query" width="40" height="40"></p>
+<p id="out"></p>
+<script>
+console.log("log: the page started");
+console.info("info: user agent is " + navigator.userAgent);
+console.warn("warn: this is a warning");
+console.error("error: this is an error written by console.error");
+console.debug("debug: a debug line");
+function inner() { throw new Error("thrown from inner()"); }
+function outer() { inner(); }
+setTimeout(outer, 10);
+Promise.reject(new Error("an unhandled rejection"));
+document.getElementById("out").textContent = "Script ran.";
+</script>
+</body>
+</html>

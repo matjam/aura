@@ -57,3 +57,11 @@ target_include_directories(test_favicon PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 target_compile_definitions(test_favicon PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME browser_favicon COMMAND test_favicon)
 set_tests_properties(browser_favicon PROPERTIES TIMEOUT 120)
+
+# The bug report and the System Status report: structure, ASCII, and what
+# is left out (cookies, Authorization, long queries, paths, other tabs).
+add_executable(test_bugreport test_bugreport.c)
+target_link_libraries(test_bugreport aura_fakenet m)
+target_include_directories(test_bugreport PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_bugreport COMMAND test_bugreport)
+set_tests_properties(browser_bugreport PROPERTIES TIMEOUT 120)
