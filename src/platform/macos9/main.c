@@ -246,12 +246,14 @@ static bool low_memory(size_t n)
 }
 
 /* Low memory: before au_alloc gives up, the documents kept for Back and
- * Forward go (au_set_release_handler). Kept documents are hidden, so no
- * code on the stack is using one. */
+ * Forward go (au_set_release_handler), and when none is left, the
+ * background tabs that can be unloaded (browser.h, "Unloaded tabs").
+ * Kept documents are hidden and the model leaves alone the tab whose
+ * page is being called, so no code on the stack is using what goes. */
 static bool release_caches(size_t wanted)
 {
     (void)wanted;
-    return g_browser && au_browser_release_documents(g_browser) > 0;
+    return g_browser && au_browser_release_memory(g_browser) > 0;
 }
 
 MacWin *mac_win_of(WindowPtr w)
@@ -453,9 +455,7 @@ void mac_adjust_menus(void)
         EnableItem(file, FILE_REOPEN_TAB);
     else
         DisableItem(file, FILE_REOPEN_TAB);
-    const char *src_data;
-    size_t src_len;
-    if (w && au_bw_page_source(w, &src_data, &src_len))
+    if (w && au_bw_has_page_source(w))
         EnableItem(file, FILE_SAVE_AS);
     else
         DisableItem(file, FILE_SAVE_AS);

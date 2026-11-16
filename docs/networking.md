@@ -135,8 +135,27 @@ cache is used through the page's cache mode (`AuFetchCacheMode`):
   neither freshness nor a validator are stored for this alone. no-store
   responses are never stored, so history fetches them again, and Vary
   (Cookie included) still selects the variant.
+- **Encoded bodies.** A response that arrived gzip, deflate or brotli
+  encoded is stored as it arrived, in memory and on disk, with its
+  coding list in the entry (`au_cache_writer_set_coding`,
+  `au_cache_entry_coding`), and `deliver_cached` in `http.c` decodes it
+  each time it is served: an article's 46 entries take 0.9 MB instead
+  of 4.4 MB. Other bodies (images) are stored as they are. The stored
+  response fields carry neither Content-Encoding nor Content-Length, as
+  before, so readers of a cached response see a decoded body either
+  way. Revalidation (a 304 keeps the stored body and its coding), Vary
+  and the history mode work on the entry and do not look at the body;
+  requests with Range never use the cache.
+- **The entry format.** An entry held decoded is serialized as `AURC1`,
+  as before; one held encoded as `AURC2`, which adds the coding list
+  and the decoded length before the body. `au_cache_entry_parse` reads
+  both, so cache files written by earlier versions stay valid; an
+  earlier version of Aura takes an `AURC2` file for damaged, removes it
+  and fetches again. A stored body that fails to decode (a damaged
+  file) fails that request with a decode error and the entry is
+  removed, so the next request fetches it.
 - **Entry size.** An entry may take a quarter of the memory cache (8 MB
-  by default), so a large article's HTML fits.
+  by default), counted as stored, so a large article's HTML fits.
 - **Resident bytes.** The cache holds response bodies in memory up to
   its budget. With the disk cache on, the Mac application keeps 1 MB of
   them resident (`au_cache_set_resident`); the rest are read back from

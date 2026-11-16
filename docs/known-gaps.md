@@ -334,6 +334,62 @@ very long Wikipedia article is over 30 MB), and scripted frames cost
 8 MB a Mac with little free memory gets
 ([`javascript.md`](javascript.md), "Script memory limits").
 
+### Cold memory: what is not done
+
+Kept documents free their layout, background tabs are unloaded, and the
+page source and the HTTP cache hold compressed bytes
+([`memory.md`](memory.md), "Cold memory"). These remain, with what each
+would save for a Wikipedia article (host figures, 2026-11-15):
+
+1. **Script source text** kept for `Function.prototype.toString` (992 KB
+   in 8 texts for an article). Deflated it would be about 300 KB, a
+   saving of 0.7 MB per document. It needs a QuickJS patch:
+   `JSFunctionBytecode.source` is a pointer into `JSSourceText.buf`
+   (patch 0008), read by `js_function_toString` and the bytecode dump,
+   and patch 0008 finds a script's text again by comparing its bytes.
+   The pointer would become an offset, the readers would inflate
+   through a hook the embedder sets (QuickJS cannot call `src/codec`),
+   and the content lookup would compare length and hash first. No hot
+   path reads the text.
+2. **Layout of the parts of a visible page that are off screen.** The
+   box tree is one arena, so freeing part of it needs per-subtree
+   arenas or a layout that builds lines only for blocks near the
+   viewport. An article's layout is 2.5 MB and most of the page is off
+   screen; how much could go was not measured (an estimate: 1 to 2 MB
+   per visible article). Scrolling would then lay out as it goes.
+3. **Layout of background tabs.** A background tab still runs its
+   timers, so its layout is rebuilt whenever script asks for geometry;
+   freeing it when the tab has been in the background for a while (as
+   a kept document does) saves 0.9 to 2.5 MB per tab at the cost of a
+   25 to 30 ms rebuild (host) on return.
+4. **Function bytecode that has not run for a while** (464 KB per
+   article, with 72 KB of line tables). QuickJS would have to compile a
+   function again from its source text on the next call, which it has
+   no path for; with item 1 the text would also have to be inflated
+   first. About 0.4 MB per document, and the riskiest of these.
+5. **The prelude per context** (1.7 MB for each document context, frames
+   included). Its bytecode is shared; what each context holds is the
+   objects the prelude creates (constructors, prototypes, 500 C
+   functions). Creating the CSSOM, Range and observer parts on first
+   use (item 5 of the list above) saves 150 to 250 KB; creating
+   interface objects on first lookup of their global name would save
+   perhaps half of the 1.7 MB for a frame that uses few of them.
+6. **Atoms** (item 2 of the list above): 873 KB of script atoms per
+   runtime go with the runtime, but the engine's own atoms (270 KB per
+   article visited) never go.
+7. **Free space inside the script heap's arenas** (1.9 MB of 12.8 MB
+   after an article loads): a kept or background document cannot give
+   it back while live blocks share its slabs.
+8. **The page source and the cache entry are two compressed copies** of
+   an article's HTML (180 KB each); the page could hold a reference to
+   the cache entry instead when there is one.
+9. **Image bytes are held twice** while a document is loaded: by the
+   image cache (to decode again) and by the HTTP memory cache. With the
+   disk cache on the HTTP cache keeps 1 MB resident, which bounds it
+   there; the host tool holds both in full.
+10. **Text selection is not kept across Back** (it never was: a
+   navigation clears it).
+
 ## Fuzzing
 
 What no fuzzer covers is listed in [`fuzzing.md`](fuzzing.md), "Not

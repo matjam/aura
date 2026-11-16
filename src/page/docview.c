@@ -211,6 +211,9 @@ static void clear_document(AuDocView *dv)
     au_css_sheet_free(dv->user_sheet);
     dv->user_sheet = NULL;
     au_docimages_clear(dv->imgs);
+    au_layout_scroll_free(dv->slim_scrolls, dv->nslim_scrolls);
+    dv->slim_scrolls = NULL;
+    dv->nslim_scrolls = 0;
     if (dv->hover)
         au_node_unref(&dv->hover->node);
     if (dv->active)
@@ -854,6 +857,27 @@ bool au_docview_can_persist(AuDocView *dv)
     return au_docscript_can_persist(dv->script) && au_frames_can_persist(dv);
 }
 
+bool au_docview_has_state(AuDocView *dv)
+{
+    if (!dv->doc)
+        return false;
+    /* A canvas with a bitmap: what script or the user drew cannot be
+     * told apart, and neither comes back with a reload. */
+    if (dv->canvases && au_canvas_set_bytes(dv->canvases) > 0)
+        return true;
+    if (au_docscript_workers(dv->script) > 0)
+        return true;
+    /* A form control the user changed or gave files. */
+    for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        const AuControl *ctl = au_ctl_peek((const AuElement *)c);
+        if (ctl && (ctl->user_interacted || ctl->nfiles))
+            return true;
+    }
+    return au_frames_has_state(dv);
+}
+
 void au_docview_set_hidden(AuDocView *dv, bool hidden)
 {
     au_frames_set_hidden(dv, hidden); /* its frames pause and resume with it */
@@ -869,6 +893,13 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
         dv->hidden_image_budget = st.budget;
         au_image_cache_frame_begin(c);
         au_image_cache_set_budget(c, 1);
+        /* The layout goes too: boxes, lines, fragments, stacking data,
+         * measured words and font lists are built again from the tree and
+         * its styles by the first update after the view is shown. Inner
+         * scroll offsets live in the boxes, so they are saved. */
+        if (!dv->slim_scrolls)
+            dv->slim_scrolls = au_layout_scroll_save(dv->layout, &dv->nslim_scrolls);
+        au_layout_release(dv->layout);
     } else if (dv->hidden_image_budget) {
         au_image_cache_set_budget(c, dv->hidden_image_budget);
         dv->hidden_image_budget = 0;
@@ -1429,6 +1460,14 @@ bool au_docview_update(AuDocView *dv)
         dv->images_dirty = false;
     }
     bool laid_out = au_layout_update(dv->layout, (float)dv->vw, (float)dv->vh);
+    if (dv->slim_scrolls) {
+        /* The first layout after the view was hidden: its scroll
+         * containers return to where they were. */
+        au_layout_scroll_restore(dv->layout, dv->slim_scrolls, dv->nslim_scrolls);
+        au_layout_scroll_free(dv->slim_scrolls, dv->nslim_scrolls);
+        dv->slim_scrolls = NULL;
+        dv->nslim_scrolls = 0;
+    }
     if (laid_out) {
         changed = true;
         if (images)

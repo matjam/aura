@@ -111,6 +111,7 @@ typedef struct AuChromeTab {
     const char *title; /* "" shows the URL or "Untitled" */
     bool loading;
     const AuSurface *icon; /* the site's 16 x 16 icon, or NULL for the page glyph */
+    bool unloaded; /* its document was freed to save memory: the title is dimmed */
 } AuChromeTab;
 
 typedef struct AuChromeState {
