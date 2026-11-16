@@ -81,8 +81,9 @@ The network stack in the Mac OS 9 application is `network.c`.
   cookies are dropped).
 - The disk cache is the `Cache` folder (`src/net/disk_cache.c`, limited
   by the disk cache preference).
-- Develop > Network Status shows the clock, entropy, Open Transport
-  counters, roots, cookies and cache use.
+- Develop > System Status shows the clock, entropy, Open Transport
+  counters, roots, cookies and cache use in its Clock, Network and
+  HTTP cache sections ([`developer-tools.md`](developer-tools.md)).
 - The out-of-memory handler closes Open Transport before ExitToShell:
   with providers open at exit the guest froze.
 
@@ -116,10 +117,10 @@ zone offset of the Date & Time control panel (`au_mac_wall_time`,
 `clock_mac.c`), so a wrong zone or daylight saving setting makes cookie
 expiry, certificate dates and cache freshness wrong by hours.
 
-To see the clock Aura uses, choose Develop > Network Status: its first
-line shows the UTC time Aura computes, script's `Date.now()` as UTC,
-the Mac's local time, the zone offset in hours and whether daylight
-saving is on.
+To see the clock Aura uses, choose Develop > System Status and read the
+Clock section: the UTC time Aura computes, script's `Date.now()` as
+UTC, the Mac's local time, the zone offset and whether daylight saving
+is on.
 
 Script's `Date` uses the same clock and offset
 ([`javascript.md`](javascript.md), "Date and the clock").

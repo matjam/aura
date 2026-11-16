@@ -48,10 +48,11 @@ aura-host 3`.
 
 | To see | Use | Document |
 |---|---|---|
-| scene, fill and chrome timings, font registration | Develop > Benchmark | [`developer-tools.md`](developer-tools.md) |
-| first paint, load, layout, scrolling, keys, Back, free memory | Develop > Page Timings | [`developer-tools.md`](developer-tools.md) |
-| style, layout, paint, script and screen copy time per page, the slowest tasks | Develop > Performance (Copy Report) | [`developer-tools.md`](developer-tools.md) |
-| cache lookups and cache file times | Develop > Network Status | [`developer-tools.md`](developer-tools.md) |
+| scene, fill and chrome timings | Develop > Tests > Paint Benchmark, whose table is in System Status | [`developer-tools.md`](developer-tools.md) |
+| font registration time | Develop > System Status, the Fonts section | [`developer-tools.md`](developer-tools.md) |
+| scrolling, repaints and keys, in milliseconds per step | Develop > Run Timing Test, whose table is in the Performance window | [`developer-tools.md`](developer-tools.md) |
+| first paint, load, Back, style, layout, paint, script and screen copy time per page, the slowest tasks, free memory | Develop > Performance (Copy All) | [`developer-tools.md`](developer-tools.md) |
+| cache lookups and cache file times | Develop > System Status, the HTTP cache section | [`developer-tools.md`](developer-tools.md) |
 | the TLS primitives, DNS, TCP and handshakes | NetTest | [`networking.md`](networking.md) |
 | the script engine's start-up and benchmark | JSTest | [`javascript.md`](javascript.md) |
 
