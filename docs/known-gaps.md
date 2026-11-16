@@ -278,8 +278,9 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - **YouTube's home page** runs within the 64 MB limit with 2 MB to spare
   (62.7 MB peak on the host, all of it at the end of compiling the
   9.8 MB bundle); a larger bundle would run out while compiling. Two
-  "not a function" errors remain (`playerApi`). Not measured in the
-  guest
+  "not a function" errors remain (`playerApi`). In the guest it runs
+  with the Automatic limit (96 MB; peak 45 to 51 MB), but the machine
+  takes no events for 4 to 6 minutes while the bundle compiles
   ([`javascript.md`](javascript.md), "Large scripts").
 - **A module graph that fails to load** (an import that cannot be
   fetched, or one with a syntax error) keeps the modules it compiled
@@ -503,20 +504,48 @@ Largest first.
    memory goes").
 7. **Line tables are kept** (153 KB per document for that script, 3%).
    Error locations in the Console depend on them.
-8. **The pooled allocator's slabs** are `NewPtr` blocks that do not
-   move: one long-lived block keeps a 32 KB slab, and the largest free
-   block after closing a large page was 42 MB of 60 MB free. Since the
-   classes over 2 KB came from slabs too (2026-11-16), the blocks over
-   2 KB that outlive GitHub's repository page (HTTP cache entries, idle
-   TLS connections, made while the page's script arenas filled the
-   same slabs) hold about 2 MB of slabs on the host when its tab
-   closes, against 1 MB of their own
-   ([`memory.md`](memory.md), "Blocks over 2 KB"). Keeping blocks that
-   outlive a page apart from the page's own (a pool per document, or
-   the cache's bodies in slabs of their own) would release those slabs.
-9. **A system font is read whole on first use** (into temporary
-   memory); reading only the tables used needs a different font data
-   interface.
+8. **MDN's CSS page leaks** about 40 KB each time it closes: seven
+   computed styles with their groups, custom property maps
+   (`cascade.c`) and token lists (`tokenizer.c`), and the text of three
+   text nodes (`dom.c`), still allocated after the browser, the network
+   stack and the cache are freed. To see them, run `AURA_MEM_EXIT=1
+   AURA_MEM_MIN=1 aura-host chrome --net --tab about:blank --do
+   newtab:https://developer.mozilla.org/en-US/docs/Web/CSS --do
+   wait:8000 --do closetab` in a tree built with `-DAURA_MEM_TRACK=ON`
+   ([`memory.md`](memory.md), "To see where blocks sit in the Mac's
+   heap"). The blocks also split the free space the page leaves. The
+   cause was not found: the retains and releases of styles and groups
+   in `cascade.c`, `style.c` and `layout.c` pair up as read.
+9. **Pages share the page zone.** The long-lived zone keeps the
+   network stack, the cache, fonts and atoms out of the space a page
+   leaves ([`memory.md`](memory.md), "Zones"), but two pages open at
+   once (two tabs, or a kept document and the page shown) take their
+   slabs and large blocks from the same free space, so closing one
+   leaves holes among the other's blocks until it goes too. A region
+   per document would keep them apart.
+   - A block is in the zone of the file that allocates it; a helper
+     outside `src/core`, `src/codec` and `src/url` that allocates for
+     long-lived callers puts their blocks in the page zone unless the
+     caller holds the zone. The heap map finds such blocks.
+   - With no temporary memory free, long-lived blocks come from the
+     application heap, among a page's, as before the zones.
+   - The long-lived zone's temporary memory (7.7 MB holding 4.7 MB of
+     blocks in the guest after GitHub, YouTube, Wikipedia and ten
+     pages; mostly the HTTP cache, TLS and fonts) is outside the
+     partition that Get Info sets, as font data and the blocklists are.
+   - After the ten pages the application heap's largest free block was
+     53.6 MB of 60.7 MB free in the guest: what is left splits it.
+10. **Mac OS 9.2.2 can hang in the Memory Manager** when temporary
+    memory grows past its first zone, shrinks and grows again. Aura
+    keeps the first handle freed in each extra zone (shrunk to 16
+    bytes, up to 256), and with that the sequences that hung in the
+    guest ran ([`memory.md`](memory.md), "Temporary memory areas"). The
+    cause inside the system was not found; another program's
+    temporary memory, or more than 256 zones, could still meet it, and
+    it has not been tried on real hardware or on the stock base.
+11. **A system font is read whole on first use** (into temporary
+    memory); reading only the tables used needs a different font data
+    interface.
 
 Also: a document estimated at more than 24 MB is not kept for Back (a
 very long Wikipedia article is over 30 MB), and scripted frames cost

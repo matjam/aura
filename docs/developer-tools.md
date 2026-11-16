@@ -272,7 +272,7 @@ the last second was, layout boxes, free memory. Then:
 |---|---|
 | Time | one row per kind of work (Script, Style, Layout, Paint, Screen copy) with milliseconds and runs in the last interval and since the page began, and a bar for its share of the time |
 | Work done | pixels painted, style passes, box tree builds, layouts, image decodes |
-| Memory | one row per store (application heap, script heap, decoded images, HTTP memory cache, glyph cache, kept documents) with what it holds, its limit, and a bar; free temporary memory, and a "taken by Aura" line when the heap has taken temporary memory ([`memory.md`](memory.md)) |
+| Memory | one row per store (application heap, script heap, decoded images, HTTP memory cache, glyph cache, kept documents) with what it holds, its limit, and a bar; free temporary memory, a "taken by Aura" line when the heap has taken temporary memory, and a "Long-lived blocks" line with the allocator's long-lived zone and the temporary memory that holds it ([`memory.md`](memory.md), "Zones"), and an "Areas held" line with the temporary memory zones Aura keeps from emptying ([`memory.md`](memory.md), "Temporary memory areas") |
 | Script runtimes | one line per script runtime, document and worker ([`memory.md`](memory.md), "To see what a script heap holds") |
 | Network | HTTP cache lookups and writes, DNS, the open connections |
 | Slowest tasks | tasks of 50 ms or more, scripts with their URL |

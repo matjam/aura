@@ -424,9 +424,33 @@ YouTube's page still fits 64 MB with a margin of 2 MB, all of it at the
 end of the compile. After the collection that follows, 53.6 MB is in
 use and 7.4 MB is free in the arenas. Script objects (146,000, 10 MB),
 properties (7 MB), functions (9.6 MB, 3.4 MB of it bytecode) and atoms
-(5.7 MB) make up most of it. The default limit is unchanged: Automatic
-gives 96 MB on the stock test machine, and the limit is not raised on
-Mac OS 9 without a guest measurement of the page.
+(5.7 MB) make up most of it.
+
+**In the guest** (Enforcer base, 2026-11-16, Develop > Performance; the
+Automatic limit gave the page 96 MB, 98,304 KB):
+
+| Build, sequence | Script peak | Page load | Slowest task | Free memory, largest block | Result |
+|---|---|---|---|---|---|
+| `81ca065`, fresh boot | 50,768 KB | 12.87 s | 595 ms | 8.09 MB of 103.25, 226 KB | runs; header, search prompt drawn |
+| `81ca065`, after GitHub | | | | | Mac OS hangs ([`memory.md`](memory.md), "Temporary memory areas") |
+| zones and pins, after GitHub | 44,918 KB | 17.97 s | 5.61 s | 11.61 MB of 111.26, 679 KB | runs |
+
+- The machine takes no events while the bundle compiles: 4 to 6 minutes
+  of wall time in QEMU from the address to a live menu bar clock. The
+  menu bar clock stops meanwhile, and the page's own times (page load,
+  script) are far below the wall time.
+- After YouTube's tab closed, Wikipedia's PowerPC article loaded and
+  drew in both builds (free memory 45.33 MB, largest block 11.11 MB on
+  the base; 49.28 MB and 46.88 MB with the change).
+- The script heap stays near half of the limit (42 to 50 MB of 96), and
+  the page took 15 to 16 MB of temporary memory beyond the heap.
+
+**The Automatic limit is unchanged.** The page fits 96 MB with 45 MB to
+spare, so raising the limit gains nothing for it, and the guest hang
+came from temporary memory, not from the limit. A machine with less
+free memory gets a smaller limit (half of the free memory, at least
+8 MB), where the page runs out of memory while compiling (64 MB on the
+host was enough with 2 MB to spare).
 
 **The stack.** YouTube's code goes about 600 calls deep. On the host it
 used at most 621,280 bytes of C stack (measured with an 8 MB limit),
