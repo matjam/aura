@@ -17,6 +17,7 @@ typedef struct FaceFile {
     char *data;
     size_t len;
     bool tried;
+    FILE *fp; /* open while a paged face reads from it */
 } FaceFile;
 
 struct AuHostFontDir {
@@ -26,6 +27,7 @@ struct AuHostFontDir {
     unsigned flags;
     int added;
     size_t loads;
+    size_t reads; /* reads of paged faces */
 };
 
 static bool load_file(void *ctx, const void **data, size_t *len)
@@ -44,6 +46,34 @@ static bool load_file(void *ctx, const void **data, size_t *len)
     *len = f->len;
     return true;
 }
+
+/* Large files are paged: the set asks for the size, then reads pieces. */
+static bool file_size(void *ctx, uint32_t *len)
+{
+    FaceFile *f = ctx;
+    struct stat st;
+    if (stat(f->path, &st) != 0 || st.st_size < 0 || (unsigned long long)st.st_size > 0x7FFFFFFFu)
+        return false;
+    *len = (uint32_t)st.st_size;
+    return true;
+}
+
+static bool file_read(void *ctx, uint32_t off, void *buf, uint32_t n)
+{
+    FaceFile *f = ctx;
+    if (!f->fp) {
+        f->fp = fopen(f->path, "rb");
+        if (!f->fp)
+            return false;
+        f->dir->loads++;
+    }
+    if (fseek(f->fp, (long)off, SEEK_SET) != 0)
+        return false;
+    f->dir->reads++;
+    return fread(buf, 1, n, f->fp) == n;
+}
+
+static const AuFontFileOps file_ops = {load_file, file_size, file_read};
 
 /* One FaceFile per path: faces of one .ttc share it. */
 static FaceFile *file_for(AuHostFontDir *d, const char *path)
@@ -65,7 +95,7 @@ static void add_entry(void *ctx, const AuFontIndexEntry *e)
     char path[1024];
     snprintf(path, sizeof path, "%s/%s", d->root, e->path);
     FaceFile *f = file_for(d, path);
-    au_fontset_add_lazy(d->set, e->family, e->weight, e->italic, e->face_index, d->flags, load_file, f);
+    au_fontset_add_file(d->set, e->family, e->weight, e->italic, e->face_index, d->flags, &file_ops, f);
     d->added++;
 }
 
@@ -163,6 +193,8 @@ void au_host_font_dir_free(AuHostFontDir *d)
     FaceFile *f = d->files;
     while (f) {
         FaceFile *n = f->next;
+        if (f->fp)
+            fclose(f->fp);
         au_free(f->data);
         au_free(f);
         f = n;

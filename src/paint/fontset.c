@@ -35,7 +35,9 @@ typedef struct Entry {
     uint32_t *ranges; /* unicode-range pairs, NULL for all */
     size_t nranges;
     AuFontLoader load;
+    const AuFontFileOps *ops; /* a file read whole or paged (au_fontset_add_file) */
     void *ctx;
+    AuFontPager *pager; /* the loaded face is paged */
     bool failed;
 } Entry;
 
@@ -82,6 +84,7 @@ void au_fontset_free(AuFontSet *s)
         for (int k = 0; k < 3; k++)
             au_font_face_free(e->synth[k]);
         au_font_face_free(e->face);
+        au_font_pager_free(e->pager);
         au_free(e->ranges);
         au_free(e->owned);
     }
@@ -199,6 +202,13 @@ void au_fontset_add_lazy(AuFontSet *s, const char *family, int weight, bool ital
     e->ctx = ctx;
 }
 
+void au_fontset_add_file(AuFontSet *s, const char *family, int weight, bool italic, int face_index, unsigned flags,
+                         const AuFontFileOps *ops, void *ctx)
+{
+    au_fontset_add_lazy(s, family, weight, italic, face_index, flags, ops->load, ctx);
+    s->e[s->n - 1].ops = ops;
+}
+
 void au_fontset_set_generic(AuFontSet *s, AuGenericFamily g, const char *family)
 {
     if ((unsigned)g < AU_GENERIC_COUNT)
@@ -247,7 +257,14 @@ void au_fontset_stats(const AuFontSet *s, AuFontSetStats *st)
     for (size_t i = 0; i < s->n; i++)
         if (s->e[i].face) {
             st->loaded++;
-            st->loaded_bytes += s->e[i].face->len;
+            if (s->e[i].pager) {
+                AuFontPagerStats ps;
+                au_font_pager_stats(s->e[i].pager, &ps);
+                st->loaded_bytes += ps.table_bytes + ps.block_bytes;
+                st->paged++;
+            } else {
+                st->loaded_bytes += s->e[i].face->len;
+            }
         }
 }
 
@@ -259,8 +276,18 @@ static bool load_entry(AuFontSet *s, Entry *e)
         return false;
     const void *data = NULL;
     size_t len = 0;
-    if (e->load && e->load(e->ctx, &data, &len))
+    uint32_t size = 0;
+    if (e->ops && e->ops->size && e->ops->read && e->ops->size(e->ctx, &size) && size > AU_FONT_PAGED_MIN) {
+        /* A large file: its outlines stay in the file. */
+        e->pager = au_font_pager_new(e->ops->read, e->ctx, size, e->index);
+        e->face = au_font_face_new_paged(e->pager);
+        if (!e->face) {
+            au_font_pager_free(e->pager);
+            e->pager = NULL;
+        }
+    } else if (e->load && e->load(e->ctx, &data, &len)) {
         e->face = au_font_face_new(data, len, e->index);
+    }
     if (!e->face) {
         e->failed = true;
     } else {
