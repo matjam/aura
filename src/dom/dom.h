@@ -185,8 +185,10 @@ void au_element_append_attr(AuElement *el, AuAtom name, AuAttrNamespace ns, cons
  * AU_STATE_FOCUS sets AU_STATE_FOCUS_WITHIN on the element and its
  * ancestors. AU_STATE_CHECKED is the current checkedness of an input or
  * the selectedness of an option; it is used instead of the checked or
- * selected attribute once AU_STATE_CHECKED_SET is on. The bits from
- * AU_STATE_STYLE_DIRTY up belong to src/css. */
+ * selected attribute once AU_STATE_CHECKED_SET is on. AU_STATE_MODAL is
+ * a dialog opened with showModal(): it matches :modal and layout paints
+ * it in the top layer. The bits from AU_STATE_STYLE_DIRTY up belong to
+ * src/css. */
 enum {
     AU_STATE_HOVER = 1u << 0,
     AU_STATE_ACTIVE = 1u << 1,
@@ -198,6 +200,7 @@ enum {
     AU_STATE_INDETERMINATE = 1u << 7,
     AU_STATE_TARGET = 1u << 8,
     AU_STATE_DEFINED = 1u << 9, /* a custom element (name with '-') that is defined */
+    AU_STATE_MODAL = 1u << 10,  /* a modal dialog, in the top layer */
     AU_STATE_STYLE_DIRTY = 1u << 16,
     AU_STATE_SUBTREE_DIRTY = 1u << 17,
     AU_STATE_STYLE_SELF_DIRTY = 1u << 18 /* restyle the element; its subtree only if its style changes */

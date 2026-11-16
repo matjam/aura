@@ -2240,6 +2240,24 @@ static JSValue n_set_defined(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* setModal(dialog, on): puts a dialog in the top layer as a modal dialog
+ * (showModal) or takes it out (close). */
+static JSValue n_set_modal(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    AuJs *js = js_of_ctx(ctx);
+    AuNode *n = argc > 1 ? arg_node(js, argv[0]) : NULL;
+    if (n && n->type == AU_NODE_ELEMENT) {
+        bool on = JS_ToBool(ctx, argv[1]);
+        AuElement *e = (AuElement *)n;
+        if (((e->state & AU_STATE_MODAL) != 0) != on) {
+            au_element_set_state(e, AU_STATE_MODAL, on);
+            if (js->hooks.dom_changed)
+                js->hooks.dom_changed(js->hooks.ctx, n, 0, AU_JS_CHANGE_STATE);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue n_set_counts(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     AuJs *js = js_of_ctx(ctx);
@@ -2530,6 +2548,7 @@ static const JSCFunctionListEntry dom_natives[] = {
     JS_CFUNC_DEF("hostOf", 1, n_host_of),
     JS_CFUNC_DEF("declarativeShadow", 2, n_declarative_shadow),
     JS_CFUNC_DEF("setDefined", 2, n_set_defined),
+    JS_CFUNC_DEF("setModal", 2, n_set_modal),
     JS_CFUNC_DEF("setCounts", 3, n_set_counts),
     JS_CFUNC_DEF("flushMutations", 0, n_flush_mutations),
     JS_CFUNC_DEF("setObserved", 2, n_set_observed),

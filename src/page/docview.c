@@ -2153,6 +2153,10 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
             dv->tree_dirty = true; /* src, colspan, value...: content may change */
         if (el->tag == AU_ATOM_link || el->tag == AU_ATOM_style || el->tag == AU_ATOM_base)
             dv->sheets_rescan = true;
+        /* Removing open takes a modal dialog out of the top layer
+         * (au_element_remove_attr clears AU_STATE_MODAL): :modal changes. */
+        if (el->tag == AU_ATOM_dialog && !strcmp(an, "open"))
+            au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
     } else if (kind == 5) { /* a control's value or selection: repaint only */
         if (el)
             au_dv_invalidate_element(dv, el);

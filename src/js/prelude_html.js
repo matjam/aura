@@ -1000,13 +1000,20 @@ defProps(HTMLMediaElement.prototype, {
 });
 defProps(HTMLDialogElement.prototype, {
     show() { if (!this.hasAttribute('open')) this.setAttribute('open', ''); },
+    /* A modal dialog is in the top layer (N.setModal): it matches :modal
+     * and is painted above the rest of the page. */
     showModal() {
-        if (this.hasAttribute('open')) throw domErr('The dialog is already open', 'InvalidStateError');
+        if (this.hasAttribute('open')) {
+            if (this.matches(':modal')) return;
+            throw domErr('The dialog is already open', 'InvalidStateError');
+        }
         if (!this.isConnected) throw domErr('The dialog is not connected', 'InvalidStateError');
         this.setAttribute('open', '');
+        N.setModal(this, true);
     },
     close(rv) {
         if (!this.hasAttribute('open')) return;
+        N.setModal(this, false);
         this.removeAttribute('open');
         if (rv !== undefined) ctrlState(this).returnValue = str(rv);
         fireSimple(this, 'close', false, false);

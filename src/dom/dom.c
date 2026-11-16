@@ -433,6 +433,10 @@ void au_element_remove_attr(AuElement *el, AuAtom name)
     memmove(a, a + 1, (el->nattrs - i - 1) * sizeof *a);
     el->nattrs--;
     attr_changed(el, name, "", 0);
+    /* A modal dialog whose open attribute is removed leaves the top
+     * layer (HTML, the dialog's attribute change steps). */
+    if ((el->state & AU_STATE_MODAL) && !strcmp(au_atom_str(name), "open"))
+        el->state &= ~(uint32_t)AU_STATE_MODAL;
 }
 
 bool au_element_has_class(const AuElement *el, AuAtom cls)

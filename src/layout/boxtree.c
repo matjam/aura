@@ -1000,6 +1000,26 @@ static void make_pseudo(Builder *B, LBox *parent, AuNode *el, const AuStyle *es,
         B->last_space = box->flags & LF_INLINE_LEVEL ? false : true;
 }
 
+/* The ::backdrop of an element in the top layer: a box without content,
+ * made a child of the element's box. The UA sheet makes it fixed with
+ * inset 0, so it covers the viewport; l_top_layer puts it in the top
+ * layer just under the element (l_build_stacking). */
+static void make_backdrop(Builder *B, LBox *parent, AuNode *el, const AuStyle *es)
+{
+    const AuStyle *ps = au_style_pseudo(es, AU_CSS_PSEUDO_BACKDROP);
+    if (!ps || ps->box->display == AU_DISPLAY_NONE || ps->box->display == AU_DISPLAY_CONTENTS)
+        return;
+    /* A page that makes it static or relative would have it laid out
+     * inside the element: it is left out (not in the top layer). */
+    if (ps->box->position != AU_POSITION_FIXED && ps->box->position != AU_POSITION_ABSOLUTE)
+        return;
+    bool skip;
+    LBox *box = make_element_box(B, el, ps, AU_CSS_PSEUDO_BACKDROP, &skip);
+    bool saved = B->last_space;
+    insert_child(B, parent, box);
+    B->last_space = saved;
+}
+
 /* The list marker of a list item. */
 static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
 {
@@ -2029,6 +2049,8 @@ void l_build_tree(AuLayout *L)
         if (f->stage == 0) {
             f->stage = 1;
             if (f->box && f->style && f->dom && f->box->node == f->dom && f->box->pseudo == 0) {
+                if (l_top_layer(f->box))
+                    make_backdrop(&B, f->box, f->dom, f->style);
                 if ((f->box->flags & LF_LIST_ITEM) && f->box->kind == LK_BLOCK)
                     make_marker(&B, f->box, f->dom, f->style);
                 if (f->box->inner != LI_REPLACED && f->box->replaced != LR_TEXTAREA)

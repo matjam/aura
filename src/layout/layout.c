@@ -1070,7 +1070,9 @@ void l_queue_abspos(AuLayout *L, LBlock *b, float sx, float sy)
     b->sx = sx;
     b->sy = sy;
     LBox *cb = NULL;
-    if (!(b->b.flags & LF_FIXED)) {
+    if (l_top_layer(&b->b)) {
+        /* the initial containing block, whatever the ancestors */
+    } else if (!(b->b.flags & LF_FIXED)) {
         for (LBox *p = b->b.parent; p; p = p->parent)
             if (p->flags & (LF_POSITIONED | LF_TRANSFORM | LF_CB)) {
                 cb = p;

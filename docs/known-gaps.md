@@ -75,6 +75,13 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - `frameset` `rows` and `cols` sizes are not read.
 - Acid2 still differs in four rows of the eyes and along the nose's
   border joins ([`layout.md`](layout.md), "Acid2").
+- The top layer ([`layout.md`](layout.md), "The top layer") holds modal
+  dialogs only: popovers and fullscreen elements are not in it. Several
+  modal dialogs are painted in tree order, not in the order they were
+  opened. A modal dialog removed from the document stays modal, and
+  the rest of the document is not made inert (clicks outside the
+  dialog still reach the page). A modal dialog with `position: static`
+  is not treated as absolutely positioned.
 
 ## Fonts
 

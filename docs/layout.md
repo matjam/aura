@@ -190,6 +190,33 @@ a filter, `backdrop-filter`, layout or paint containment, or
 absolutely positioned and fixed descendants (`l_style_contains_fixed`,
 `LF_TRANSFORM`). A fixed box under one scrolls with the page.
 
+### The top layer
+
+A dialog opened with `showModal()` is in the top layer (CSS Positioned
+Layout 4, section 6). `showModal()` sets `AU_STATE_MODAL` on the
+element (`N.setModal` in `prelude_html.js`); `close()` and removing the
+`open` attribute clear it (`au_element_remove_attr`). The state makes
+`:modal` match, so the UA sheet's `dialog:modal` rule makes the dialog
+fixed and centres it in the viewport.
+
+- To test whether a box is in the top layer, call `l_top_layer`: the
+  box of an element with `AU_STATE_MODAL`, or of its `::backdrop`, when
+  it is absolutely positioned or fixed.
+- Its containing block is the initial containing block whatever its
+  ancestors (`l_queue_abspos`), so no ancestor clips, moves or fades it.
+- `l_build_stacking` makes it a stacking context in the root's list,
+  and `sort_layers` puts it after every z-index, each element just
+  above its backdrop. Painting and hit testing read the same lists.
+- `::backdrop` gets a style only for an element in the top layer
+  (`attach_pseudos` in `cascade.c`; such an element's style is not
+  shared). `make_backdrop` in `boxtree.c` makes its box a child of the
+  element's box; a backdrop that the page makes static or relative gets
+  no box.
+- A click on the backdrop goes to the dialog, as in Chrome.
+
+The cases are in `tests/layout/cases/top_layer.txt`; a `script` line
+before a case's HTML runs its scripts.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips

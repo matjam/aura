@@ -71,14 +71,27 @@ static int32_t zof(const LBox *b)
     return z == AU_INT_AUTO ? 0 : z;
 }
 
+/* Whether a is painted after b in a stacking context's list: the top
+ * layer after every z-index, and within it each element just above its
+ * ::backdrop (which is a child of the element's box, so comes later in
+ * tree order); otherwise by z-index. */
+static bool layer_after(const LBox *a, const LBox *b)
+{
+    bool ta = l_top_layer(a), tb = l_top_layer(b);
+    if (ta != tb)
+        return ta;
+    if (ta)
+        return a->node == b->node && a->pseudo == AU_CSS_PSEUDO_NONE && b->pseudo == AU_CSS_PSEUDO_BACKDROP;
+    return zof(a) > zof(b);
+}
+
 static void sort_layers(LLayers *ls)
 {
     /* Stable: insertion sort by z (lists are short; tree order kept). */
     for (uint32_t i = 1; i < ls->n; i++) {
         LBox *x = ls->items[i];
-        int32_t zx = zof(x);
         uint32_t j = i;
-        while (j > 0 && zof(ls->items[j - 1]) > zx) {
+        while (j > 0 && layer_after(ls->items[j - 1], x)) {
             ls->items[j] = ls->items[j - 1];
             j--;
         }
@@ -86,6 +99,8 @@ static void sort_layers(LLayers *ls)
     }
     ls->nneg = ls->nzero = 0;
     for (uint32_t i = 0; i < ls->n; i++) {
+        if (l_top_layer(ls->items[i]))
+            continue; /* painted with the positive layers, after them */
         int32_t z = zof(ls->items[i]);
         if (z < 0)
             ls->nneg++;
@@ -133,6 +148,11 @@ void l_build_stacking(AuLayout *L)
         LBox *sc = stack[sp - 1];
         bool flex_item = (b->flags & LF_FLEX_ITEM) != 0;
         bool layered = false;
+        if (l_top_layer(b)) {
+            /* A stacking context of the root's, whatever its ancestors. */
+            sc = root;
+            b->flags |= LF_STACKING;
+        }
         if (b->kind == LK_BLOCK || b->kind == LK_INLINE) {
             if (!lb_anon(b) && ((b->flags & LF_POSITIONED) || creates_stacking(b, flex_item))) {
                 layered = true;

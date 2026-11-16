@@ -202,11 +202,21 @@ test('details toggle and dialog', () => {
     document.body.appendChild(dlg);
     dlg.showModal();
     assert.ok(dlg.open);
+    assert.ok(dlg.matches(':modal'));
+    dlg.showModal(); /* already modal: nothing happens */
     let closed = false;
     dlg.addEventListener('close', () => { closed = true; });
     dlg.close('rv');
     assert.ok(!dlg.open && closed);
+    assert.ok(!dlg.matches(':modal'));
     assert.equal(dlg.returnValue, 'rv');
+    dlg.show();
+    assert.ok(dlg.open && !dlg.matches(':modal'));
+    assert.throws(() => dlg.showModal()); /* open, but not modal */
+    dlg.close();
+    dlg.showModal();
+    dlg.removeAttribute('open');
+    assert.ok(!dlg.matches(':modal'));
     dlg.remove();
 });
 

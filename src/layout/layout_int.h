@@ -426,6 +426,22 @@ struct AuSvgNames *l_svg_names(AuLayout *L);
 static inline const AuStyle *lb_style(const LBox *b) { return b->style; }
 static inline bool lb_anon(const LBox *b) { return (b->flags & LF_ANON) != 0; }
 
+/* Whether b is rendered in the top layer (CSS Positioned Layout 4,
+ * section 6): the box of a modal dialog (AU_STATE_MODAL) or of its
+ * ::backdrop, when absolutely positioned or fixed (the UA sheet makes
+ * them fixed). Its containing block is the initial containing block
+ * (l_queue_abspos), it is a stacking context painted after the rest of
+ * the root's (l_build_stacking), and no ancestor clips it. */
+static inline bool l_top_layer(const LBox *b)
+{
+    if (b->kind != LK_BLOCK || (b->flags & (LF_ANON | LF_ABSPOS)) != LF_ABSPOS || !b->node ||
+        b->node->type != AU_NODE_ELEMENT)
+        return false;
+    if (b->pseudo != AU_CSS_PSEUDO_NONE && b->pseudo != AU_CSS_PSEUDO_BACKDROP)
+        return false;
+    return (((const AuElement *)b->node)->state & AU_STATE_MODAL) != 0;
+}
+
 /* Converts a CSS colour (RGBA, red in the high byte) to a paint colour
  * (ARGB). The two headers use the same type name for different layouts. */
 static inline uint32_t l_paint_color(uint32_t css)
