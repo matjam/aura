@@ -154,6 +154,9 @@ static int usage(void)
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
+            "                        [--native-chrome] (renders only the page, as for a port with its own\n"
+            "                        widgets; coordinates are the page's; prints each AU_CHANGED_* notice\n"
+            "                        and the chrome's state after the loads and at the end)\n"
             "                        [--profile DIR] (keeps web storage in DIR/local-storage, as --net does in $AURA_PROFILE)\n"
             "                        (--do storage prints the storage service's areas; --do reload reloads)\n"
             "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
@@ -404,6 +407,7 @@ typedef struct ChromeOpts {
     int ntabs, extra_tabs, active;
     const char *field;
     bool focus, loading, menus, net;
+    bool native_chrome; /* --native-chrome: the page alone; the chrome's state and notices are printed */
     const char *hover;
     int scroll, mouse_x, mouse_y;
     int scroll_bench; /* steps of the scroll benchmark; 0 for none */
@@ -937,6 +941,55 @@ static AuHitPart hit_by_name(const char *s)
     return AU_HIT_NONE;
 }
 
+/* ---- --native-chrome: the page alone, and what a port's widgets show ----
+ * Each AU_CHANGED_* notice is printed as it arrives; the chrome's state
+ * is printed after the loads and at the end. */
+
+static void print_notice(void *ctx, AuBrowserWindow *w, unsigned what)
+{
+    static const char *const names[] = {"field",   "title",    "layout",   "scroll",   "menus",
+                                        "focus-field", "focus-page", "tabs", "tab-info", "active-tab",
+                                        "nav",     "status",   "security", "progress", "bookmark"};
+    (void)ctx, (void)w;
+    printf("notice:");
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (what & (1u << i))
+            printf(" %s", names[i]);
+    printf("\n");
+}
+
+static void print_chrome_state(AuBrowserWindow *w, const char *when)
+{
+    static const char *const sec[] = {"none", "secure", "not secure", "certificate error", "mixed"};
+    printf("chrome state (%s):\n", when);
+    for (int i = 0; i < au_bw_tab_count(w); i++) {
+        AuChromeTab ti;
+        au_bw_tab_info(w, i, &ti);
+        printf("  tab %d%s: \"%s\" <%s>%s%s%s", i, i == au_bw_active_index(w) ? " (active)" : "", ti.title, ti.url,
+               ti.loading ? " loading" : "", ti.unloaded ? " unloaded" : "", ti.icon ? " icon" : "");
+        if (ti.loading)
+            printf(" %d%%", (int)(ti.progress * 100.0f + 0.5f));
+        printf("\n");
+    }
+    char title[256], status[300], progress[32];
+    au_bw_window_title(w, title, sizeof title);
+    au_bw_status_text(w, status, sizeof status);
+    au_bw_progress_text(w, progress, sizeof progress);
+    AuSecurity s = au_bw_security(w);
+    int sx, sy, mx, my;
+    au_bw_scroll_pos(w, &sx, &sy);
+    au_bw_scroll_max(w, &mx, &my);
+    printf("  window title: \"%s\"\n", title);
+    printf("  address field: \"%s\"\n", au_bw_field_text(w));
+    printf("  back %s, forward %s, %s, bookmarked %s\n", au_bw_can_go(w, -1) ? "on" : "off",
+           au_bw_can_go(w, 1) ? "on" : "off", au_bw_loading(w) ? "loading (Stop)" : "not loading (Reload)",
+           au_bw_is_bookmarked(w) ? "yes" : "no");
+    printf("  security: %s\n", (unsigned)s < sizeof sec / sizeof sec[0] ? sec[s] : "?");
+    printf("  status: \"%s\"; progress: \"%s\"; blocked: %d\n", status, progress, au_bw_blocked_count(w));
+    printf("  scroll: %d,%d of %d,%d; page %dx%d\n", sx, sy, mx, my, w->layout.page.x1 - w->layout.page.x0,
+           w->layout.page.y1 - w->layout.page.y0);
+}
+
 /* crypto for pages: the system's random device. --no-entropy makes it
  * answer as the Mac OS 9 pool does before it has gathered enough. */
 static bool host_no_entropy;
@@ -965,6 +1018,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     } else {
         host.invalidate = key_inval;
     }
+    if (o->native_chrome)
+        host.changed = print_notice;
     AuBrowser *b = au_browser_new(fonts, &host);
     b->site_icons = true;
     if (o->no_doc_cache)
@@ -1006,7 +1061,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     b->prefs.tab_position = o->pos;
     if (o->column)
         b->prefs.tab_column_width = o->column;
-    AuBrowserWindow *w = au_browser_window_new(b, o->w, o->h);
+    AuBrowserWindow *w = o->native_chrome ? au_browser_window_new_native(b, o->w, o->h)
+                                          : au_browser_window_new(b, o->w, o->h);
     w->native_standins = true;
     au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura", "about:home", 0);
     if (o->ntabs == 0 && o->extra_tabs == 0)
@@ -1057,6 +1113,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     }
     if (o->active >= 0 && o->active < w->ntabs)
         au_bw_select_tab(w, o->active);
+    if (o->native_chrome)
+        print_chrome_state(w, "loaded");
     if (o->nactions)
         au_bw_set_field_focus(w, false); /* keys go to the page */
     for (int i = 0; i < o->nactions; i++)
@@ -1104,6 +1162,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         printf("%s: %dx%d, %d tabs (%s), painted in %.2f ms\n", out, o->w, o->h, w->ntabs,
                o->pos == AU_TABS_LEFT ? "left" : "top", t1 - t0);
     }
+    if (o->native_chrome)
+        print_chrome_state(w, "at the end");
     if (getenv("AURA_MEM"))
         au_host_mem_report("after the paint");
     au_canvas_free(c);
@@ -1183,6 +1243,8 @@ int main(int argc, char **argv)
                 o.loading = true;
             else if (!strcmp(a, "--net"))
                 o.net = true;
+            else if (!strcmp(a, "--native-chrome"))
+                o.native_chrome = true;
             else if (!strcmp(a, "--profile") && i + 1 < argc) {
                 setenv("AURA_PROFILE", argv[++i], 1);
                 o.profile = true;

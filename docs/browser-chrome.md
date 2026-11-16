@@ -304,6 +304,118 @@ bars meet at a blank corner square above the grow box, and Shift turns
 a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 [`layout.md`](layout.md) says how its state is kept across a resize.
 
+## Native chrome
+
+To show a browser window's tabs, toolbar, address field, progress,
+status and scroll bars with a port's own widgets, create the window with
+`au_browser_window_new_native(b, width, height)` instead of
+`au_browser_window_new`. The choice is fixed for the window's life
+(`AuBrowserWindow.native_chrome`). The Mac OS 9 port uses painted
+chrome; [`porting.md`](porting.md) says which a port should use.
+
+In native chrome mode:
+
+- `width` and `height` are the page's size, and `au_bw_resize` takes
+  the page's new size. The layout (`au_chrome_layout_page_only`) makes
+  the page the whole surface; every other region is empty, so no tab
+  strip, toolbar, status bar or scroll bar column is laid out, painted
+  or hit.
+- `au_bw_paint` paints only the page, and `invalidate` reports only page
+  rectangles.
+- Mouse events are in page coordinates: every point inside the surface
+  is `AU_HIT_PAGE`. When the pointer leaves the page widget, call
+  `au_bw_mouse_leave` so that hover ends and a link's status text goes.
+- Keys, the wheel (Shift turns it horizontal), Find, the Edit commands
+  and the address field functions (`au_bw_field_text`,
+  `au_bw_set_field_text`, `au_bw_set_field_focus`, `au_bw_navigate_input`,
+  `au_bw_complete_field`) work as in painted mode.
+
+To read what the painted chrome shows, call these. They work in both
+modes, and the painter itself is built on them (`paint_chrome` in
+`browser.c`), so the two cannot disagree.
+
+| Shows | Call |
+|---|---|
+| tabs: count and active tab | `au_bw_tab_count`, `au_bw_active_index` |
+| a tab's label, address, loading state, progress, site icon (16 x 16 `AuSurface`, NULL for the generic page icon), unloaded | `au_bw_tab_info` (fills an `AuChromeTab`) |
+| Back and Forward enabled | `au_bw_can_go(w, -1)`, `au_bw_can_go(w, 1)` |
+| Reload or Stop | `au_bw_loading` |
+| progress bar and its text ("Loading, 40%") | `au_bw_progress`, `au_bw_progress_text` |
+| security button | `au_bw_security` |
+| bookmark star | `au_bw_is_bookmarked` |
+| status text (link under the pointer, else what the load is doing) | `au_bw_status_text` |
+| blocked requests | `au_bw_blocked_count` |
+| window title | `au_bw_window_title` |
+| scroll position and range | `au_bw_scroll_pos`, `au_bw_scroll_max` |
+
+To act on what the user does with the port's widgets, call these:
+
+| Widget | Call |
+|---|---|
+| select a tab | `au_bw_select_tab` |
+| close a tab | `au_bw_close_tab` |
+| reorder tabs (drag) | `au_bw_move_tab(w, from, to)` |
+| New Tab button | `au_bw_open_new_tab` (a blank tab at the end, the field focused) |
+| Duplicate, Reopen Closed Tab, Close Other Tabs, Unload Tab | `au_bw_duplicate_tab`, `au_bw_reopen_closed_tab`, `au_bw_close_other_tabs`, `au_bw_unload_tab` |
+| Back, Forward | `au_bw_back`, `au_bw_forward`; with Command, `au_bw_go_new_tab(w, -1 or 1)` |
+| history pop-up on Back or Forward | `au_bw_history_items`, then `au_bw_go(w, delta)` |
+| Reload or Stop | `au_bw_reload_or_stop(w, bypass)`; bypass for Shift or Option |
+| Home | `au_bw_home` |
+| bookmark star | `au_bw_bookmark_page(w, true)` |
+| security button | `au_bw_show_certificate` |
+| scroll bars | `au_bw_scroll_to` |
+
+`au_bw_press(w, hit, mods)` does what a click on a painted part does,
+with its modifier keys; painted mode routes its clicks through it. Tab
+scrolling and the tab column's splitter have no function: a port's own
+tab bar scrolls itself.
+
+To know what to refresh, read the bits of `AuBrowserHost.changed`. The
+model sends them from every place the state changes, in both modes, and
+several can arrive in one call.
+
+| Bit | Refresh |
+|---|---|
+| `AU_CHANGED_TABS` | the tab list: a tab was added, closed or moved; read the list and the active index again |
+| `AU_CHANGED_TAB_INFO` | tab labels: a title, address, site icon, loading or unloaded state changed |
+| `AU_CHANGED_ACTIVE_TAB` | the selected tab |
+| `AU_CHANGED_NAV` | Back, Forward, and Reload or Stop |
+| `AU_CHANGED_STATUS` | the status text |
+| `AU_CHANGED_SECURITY` | the security button |
+| `AU_CHANGED_PROGRESS` | progress: a tab's, and the active tab's progress text and blocked count |
+| `AU_CHANGED_BOOKMARK` | the bookmark star |
+| `AU_CHANGED_TITLE` | the window title |
+| `AU_CHANGED_FIELD` | the address field's text, unless the user is typing in it |
+| `AU_CHANGED_SCROLL` | the scroll bars: position or range |
+| `AU_CHANGED_LAYOUT` | the page's size changed (in native mode, after `au_bw_resize`) |
+| `AU_CHANGED_MENUS` | menus built from tabs, history or bookmarks |
+| `AU_CHANGED_FOCUS_FIELD`, `AU_CHANGED_FOCUS_PAGE` | the keyboard focus (see "Keyboard focus and the address field") |
+
+A tab selection sends the bits for everything that belongs to the active
+tab, so a port can refresh the toolbar from it alone.
+
+To show scroll bars, set each bar's range from `au_bw_scroll_max` and
+its value from `au_bw_scroll_pos` on `AU_CHANGED_SCROLL`, and call
+`au_bw_scroll_to(w, x, y)` when the user moves either bar. The page
+area does not shrink for a horizontal bar in native mode: the port puts
+its bars outside the page's surface and passes the remaining size to
+`au_bw_resize`.
+
+To check native chrome by hand, run:
+
+```bash
+build/host/src/platform/host/aura-host chrome --native-chrome -w 640 -h 400 \
+  --tab about:home --tab file:tests/page/samples/wiki.html -o run/native.png
+```
+
+It renders only the page, prints each notice as it arrives and prints
+the chrome's state after the loads and at the end; `--do click:X,Y`
+takes page coordinates. `tests/browser/test_native_chrome.c` covers the
+page-only surface, clicks on links in page coordinates, every action,
+the accessors and each notice in both modes, and scrolling both ways;
+`test_favicon.c` checks that a site icon's arrival sends
+`AU_CHANGED_TAB_INFO`.
+
 ## Save Page As
 
 To change Save Page As, see `au_page_source` (the page keeps the main

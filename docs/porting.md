@@ -124,7 +124,7 @@ keeps the Mac OS 9 build working and looking the same.
 | Step | Status |
 |---|---|
 | Address completion and menu item text in `src/browser` (`au_complete_fill`, `au_menu_title`) | done |
-| Native chrome mode in the browser model, with complete `AU_CHANGED_*` notices | in progress |
+| Native chrome mode in the browser model, with complete `AU_CHANGED_*` notices ([`browser-chrome.md`](browser-chrome.md), "Native chrome") | done |
 | Command table (`src/browser/commands.c`); Mac menus built from it | in progress |
 | Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them | in progress |
 | List models for History, Bookmarks, Downloads and Cookies (`src/browser/lists.c`); Mac list windows built from them | done |
