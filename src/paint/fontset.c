@@ -262,6 +262,7 @@ void au_fontset_stats(const AuFontSet *s, AuFontSetStats *st)
                 au_font_pager_stats(s->e[i].pager, &ps);
                 st->loaded_bytes += ps.table_bytes + ps.block_bytes;
                 st->paged++;
+                st->paged_reads += ps.reads;
             } else {
                 st->loaded_bytes += s->e[i].face->len;
             }

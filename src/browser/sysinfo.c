@@ -204,6 +204,9 @@ void au_sysinfo_report(const AuSysInfo *s, AuBrowser *b, const AuDevHostInfo *h,
         au_report_heading(out, "Fonts");
         au_report_kv(out, "Faces", "%lu found, %lu loaded (%s)", (unsigned long)au_fontset_count(b->fonts),
                      (unsigned long)fst.loaded, size_kb(x, sizeof x, (uint32_t)(fst.loaded_bytes / 1024)));
+        if (fst.paged)
+            au_report_kv(out, "Paged faces", "%lu, %lu glyph blocks read from their files", (unsigned long)fst.paged,
+                         (unsigned long)fst.paged_reads);
     }
     if (shell_sections && shell_sections[0]) {
         /* The shell's sections follow the same layout; the first is

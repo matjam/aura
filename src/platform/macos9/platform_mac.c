@@ -280,7 +280,7 @@ static void map_generic(AuFontSet *set, AuGenericFamily g, const char *a, const 
  * first time it is matched, into temporary memory when there is room. A
  * file over AU_FONT_PAGED_MIN (the CJK faces) is paged instead: its data
  * fork stays open and the font set reads its tables once and its glyph
- * outlines in 4 KB blocks as they are drawn (fontpage.c). */
+ * outlines in 16 KB blocks as they are drawn (fontpage.c). */
 
 typedef struct BundledRef {
     short vref;

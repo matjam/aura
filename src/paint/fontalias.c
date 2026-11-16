@@ -130,11 +130,13 @@ static const AuFontAlias rows[] = {
 };
 
 /* Faces tried, in order, for a character no family of the page's list
- * has. CJK system faces are here for machines that have them; Aura does
- * not bundle one. */
+ * has. CJK system faces come first for machines that have them, then the
+ * bundled CJK faces: Noto Sans SC draws the ideographs of Chinese,
+ * Japanese and Korean (Han unification), kana and bopomofo; Noto Sans KR
+ * draws only hangul. */
 static const char text_fallbacks[] = "DejaVu Sans, Lucida Grande, Arial Unicode MS, Symbola, Osaka, Hiragino Sans, "
                                      "Hiragino Kaku Gothic ProN, PingFang SC, Apple SD Gothic Neo, AppleGothic, "
-                                     "Apple LiGothic, STHeiti, MS Gothic, SimSun, Gulim";
+                                     "Apple LiGothic, STHeiti, MS Gothic, SimSun, Gulim, Noto Sans SC, Noto Sans KR";
 /* Faces tried first for a character with emoji presentation. */
 static const char emoji_fallbacks[] = EMOJI ", Symbola";
 

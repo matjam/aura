@@ -112,8 +112,8 @@ void au_font_face_free(AuFontFace *f);
  * blocks of AU_FONT_PAGE_SIZE bytes, keeping the AU_FONT_PAGE_SLOTS most
  * recently used. read(ctx, off, buf, n) reads n bytes at offset off of
  * the file into buf and returns false when it cannot. */
-#define AU_FONT_PAGE_SIZE 4096
-#define AU_FONT_PAGE_SLOTS 32
+#define AU_FONT_PAGE_SIZE 16384
+#define AU_FONT_PAGE_SLOTS 16
 typedef bool (*AuFontReadFn)(void *ctx, uint32_t off, void *buf, uint32_t n);
 typedef struct AuFontPager AuFontPager;
 /* NULL when the file (file_len bytes) is not a TrueType font with a
@@ -383,6 +383,7 @@ typedef struct AuFontSetStats {
     size_t loaded;       /* faces whose data is loaded */
     size_t loaded_bytes; /* their data (a paged face: its tables and cached blocks) */
     size_t paged;        /* loaded faces that are paged */
+    size_t paged_reads;  /* glyph blocks they have read from their files */
     size_t loads;        /* faces loaded so far */
     size_t fallback_hits, fallback_misses; /* the per-set fallback cache */
 } AuFontSetStats;
