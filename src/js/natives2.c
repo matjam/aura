@@ -528,11 +528,15 @@ static JSValue n_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     AuJs *js = js_of_ctx(ctx);
     if (js_out_of_time(js))
         return js_throw_stopped(ctx);
+    /* viewport(true) adds the document's size, which needs a layout; the
+     * size and scroll offset alone (innerWidth, scrollY, every
+     * getBoundingClientRect) do not. */
+    bool size = argc > 0 && JS_ToBool(ctx, argv[0]) > 0;
     int v[6] = {800, 600, 0, 0, 800, 600};
     if (js->hooks.viewport)
-        js->hooks.viewport(js->hooks.ctx, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+        js->hooks.viewport(js->hooks.ctx, &v[0], &v[1], &v[2], &v[3], size ? &v[4] : NULL, size ? &v[5] : NULL);
     JSValue arr = JS_NewArray(ctx);
-    for (uint32_t i = 0; i < 6; i++)
+    for (uint32_t i = 0; i < (size ? 6u : 4u); i++)
         JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, v[i]));
     return arr;
 }
