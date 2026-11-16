@@ -73,6 +73,10 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   order, `masonry`. An item's min-content and max-content heights are
   both its height at its used width.
 - `frameset` `rows` and `cols` sizes are not read.
+- Shadow trees are not rendered: an element with a shadow root shows
+  its light children. GitHub's `<relative-time>` elements therefore show
+  the server's date ("Nov 16, 2026") instead of the text their shadow
+  root holds ("20 minutes ago"); seen on 2026-11-15 while adding Intl.
 - Acid2 still differs in four rows of the eyes and along the nose's
   border joins ([`layout.md`](layout.md), "Acid2").
 
