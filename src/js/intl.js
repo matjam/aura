@@ -1244,53 +1244,51 @@ const WORD_RE = /[\p{L}\p{N}\p{M}_]+(?:(?:['\u2019.:\u00B7]|(?<=\p{N}),(?=\p{N})
 const SENTENCE_RE = /[^.!?\u3002]+(?:[.!?\u3002]+["'\u201D\u2019)\]]*)?\s*|[.!?\u3002]+["'\u201D\u2019)\]]*\s*/gu;
 const WORDLIKE = /^[\p{L}\p{N}]/u;
 
-function segmentList(s, str) {
-    const re = s.granularity === 'word' ? WORD_RE : s.granularity === 'sentence' ? SENTENCE_RE : GRAPHEME_RE;
-    re.lastIndex = 0;
-    const out = [];
-    let at = 0, m;
-    while (at < str.length && (m = re.exec(str)) !== null) {
-        if (m.index !== at || !m[0]) {
-            /* not expected; take one code unit so the loop ends */
-            const one = str[at];
-            out.push({ segment: one, index: at });
-            at += 1;
-            re.lastIndex = at;
-            continue;
-        }
-        out.push({ segment: m[0], index: at });
-        at += m[0].length;
-    }
-    return out;
+/* Segments are found one at a time, from a position, with sticky copies
+ * of the expressions: a long string is never split up front. */
+const STICKY = { grapheme: new RegExp(GRAPHEME_RE.source, 'uy'), word: new RegExp(WORD_RE.source, 'uy'),
+                 sentence: new RegExp(SENTENCE_RE.source, 'uy') };
+/* the length of the segment that starts at pos (at least 1) */
+function segmentAt(s, str, pos) {
+    const re = STICKY[s.granularity];
+    re.lastIndex = pos;
+    const m = re.exec(str);
+    return m && m[0].length ? m[0].length : 1;
 }
-function segData(s, seg, input) {
-    const d = { segment: seg.segment, index: seg.index, input };
-    if (s.granularity === 'word') d.isWordLike = WORDLIKE.test(seg.segment);
+function segData(s, input, index, len) {
+    const segment = input.slice(index, index + len);
+    const d = { segment, index, input };
+    if (s.granularity === 'word') d.isWordLike = WORDLIKE.test(segment);
     return d;
+}
+function segs(o) {
+    const z = o !== null && typeof o === 'object' ? slots.get(o) : undefined;
+    if (!z || z.kind !== 'Segments') throw new TypeError('Method called on incompatible receiver');
+    return z;
 }
 class Segments {
     containing(index) {
-        const z = slots.get(this);
-        if (!z || z.kind !== 'Segments') throw new TypeError('incompatible receiver');
-        let n = Math.trunc(Number(index)) || 0;
+        const z = segs(this);
+        const n = Math.trunc(Number(index)) || 0;
         if (n < 0 || n >= z.input.length) return undefined;
-        if (!z.list) z.list = segmentList(z.s, z.input);
-        let lo = 0, hi = z.list.length - 1;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (z.list[mid].index <= n) lo = mid;
-            else hi = mid - 1;
+        let pos = 0;
+        for (;;) {
+            const len = segmentAt(z.s, z.input, pos);
+            if (pos + len > n) return segData(z.s, z.input, pos, len);
+            pos += len;
         }
-        return segData(z.s, z.list[lo], z.input);
     }
     [Symbol.iterator]() {
-        const z = slots.get(this);
-        if (!z || z.kind !== 'Segments') throw new TypeError('incompatible receiver');
-        if (!z.list) z.list = segmentList(z.s, z.input);
-        let k = 0;
+        const z = segs(this);
+        let pos = 0;
         const it = Object.create(SegmentIterator);
-        it.next = () => (k < z.list.length ? { value: segData(z.s, z.list[k++], z.input), done: false } :
-            { value: undefined, done: true });
+        it.next = () => {
+            if (pos >= z.input.length) return { value: undefined, done: true };
+            const len = segmentAt(z.s, z.input, pos);
+            const v = segData(z.s, z.input, pos, len);
+            pos += len;
+            return { value: v, done: false };
+        };
         return it;
     }
 }
@@ -1307,7 +1305,7 @@ class Segmenter {
     segment(input) {
         const s = inner(this, 'Segmenter', 'segment');
         const seg = new Segments();
-        slots.set(seg, { kind: 'Segments', s, input: String(input), list: null });
+        slots.set(seg, { kind: 'Segments', s, input: String(input) });
         return seg;
     }
     resolvedOptions() {
