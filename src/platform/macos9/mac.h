@@ -203,10 +203,16 @@ void mac_net_quit(void);
 /* Closes Open Transport at once, allocating nothing: before ExitToShell
  * on the out-of-memory path, so no notifier outlives the heap. */
 void mac_net_emergency_close(void);
-void mac_net_clear_cookies(void);
+void mac_net_clear_cookies(void); /* and the web storage of every site */
 void mac_net_clear_cache(void);
 struct AuCookieJar;
 struct AuCookieJar *mac_net_cookie_jar(void); /* NULL before init */
+/* The web storage service (net/web_storage.h; NULL before init), and
+ * the release handler's part: unloads the saved areas, returns the
+ * bytes freed. */
+struct AuWebStorage;
+struct AuWebStorage *mac_net_storage(void);
+size_t mac_net_release_storage(void);
 /* The rules in the jar were changed by the Cookies window: copied into
  * the cookies.sites preference. */
 void mac_net_rules_changed(void);

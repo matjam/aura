@@ -56,6 +56,7 @@
 
 #include "cookies.h"
 #include "storage_map.h"
+#include "../js/storage_call.h"
 
 #define AU_WEB_STORAGE_AREA_BYTES (5u << 20)
 #define AU_WEB_STORAGE_TOTAL_BYTES (50u << 20)
@@ -136,6 +137,11 @@ void au_web_storage_remove(AuWebStorage *ws, AuStorageArea *a, const char *k, si
 void au_web_storage_clear_area(AuWebStorage *ws, AuStorageArea *a, const char *url, const void *writer);
 /* The per-area limit, for navigator.storage.estimate(). */
 uint32_t au_web_storage_area_quota(const AuWebStorage *ws);
+/* One operation as script asks for it (AuJsStorageCall,
+ * src/js/storage_call.h, with the document's origin, URL and top-level
+ * URL filled in) on the document's area, ns naming its tab; returns an
+ * AU_JS_STORAGE_* result. What an embedder's storage callback calls. */
+int au_web_storage_call(AuWebStorage *ws, uint32_t ns, AuJsStorageCall *call);
 
 /* ---- Session namespaces (one per tab) ---- */
 uint32_t au_web_storage_ns_new(AuWebStorage *ws);

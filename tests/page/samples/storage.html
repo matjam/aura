@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web storage</title>
+<style>
+body { font: 14px Geneva, Verdana, sans-serif; margin: 24px; color: #222; }
+h1 { font-size: 20px; }
+table { border-collapse: collapse; margin: 12px 0; }
+td, th { border: 1px solid #999; padding: 4px 10px; text-align: left; }
+th { background: #eee; }
+.n { font-size: 28px; font-weight: bold; text-align: right; min-width: 60px; }
+button { font-size: 13px; margin-right: 6px; }
+#log { color: #555; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Web storage</h1>
+<p>Each load of this page adds one to both counters. The first is kept in
+<code>localStorage</code>: it goes on counting after a reload, in another tab and
+after Aura is quit and opened again. The second is kept in
+<code>sessionStorage</code>: it counts the loads in this tab only.</p>
+<table>
+<tr><th>Counter</th><th>Loads</th><th>Kept</th></tr>
+<tr><td>localStorage</td><td class="n" id="local">?</td><td>on disk, for every tab</td></tr>
+<tr><td>sessionStorage</td><td class="n" id="session">?</td><td>with this tab</td></tr>
+</table>
+<p><button id="again">Count again</button><button id="reset">Reset both</button><button id="time">Time 1000 writes</button></p>
+<p id="status"></p>
+<p id="log"></p>
+<script>
+function bump(area, id) {
+    var out = document.getElementById(id);
+    try {
+        var n = parseInt(area.getItem('aura.sample.loads') || '0', 10) + 1;
+        area.setItem('aura.sample.loads', String(n));
+        out.textContent = n;
+        return n;
+    } catch (e) {
+        out.textContent = e.name;
+        return -1;
+    }
+}
+function show() {
+    var l = bump(localStorage, 'local'), s = bump(sessionStorage, 'session');
+    document.title = 'Web storage ' + l + '/' + s;
+    document.getElementById('status').textContent =
+        'localStorage holds ' + localStorage.length + ' item(s); first stored ' +
+        (localStorage.getItem('aura.sample.first') || 'now') + '.';
+    if (!localStorage.getItem('aura.sample.first'))
+        localStorage.setItem('aura.sample.first', new Date().toISOString());
+}
+function log(text) { document.getElementById('log').textContent += text + '\n'; }
+document.getElementById('again').onclick = show;
+document.getElementById('reset').onclick = function () {
+    localStorage.clear();
+    sessionStorage.clear();
+    show();
+};
+document.getElementById('time').onclick = function () {
+    var t0 = Date.now();
+    for (var i = 0; i < 1000; i++) localStorage.setItem('aura.sample.t' + (i % 100), 'value ' + i);
+    var t1 = Date.now();
+    for (i = 0; i < 100; i++) localStorage.removeItem('aura.sample.t' + i);
+    log('1000 setItem calls: ' + (t1 - t0) + ' ms');
+    document.title = 'Web storage timed ' + (t1 - t0) + ' ms';
+};
+window.addEventListener('storage', function (e) {
+    log('storage event: ' + e.key + ' = ' + e.newValue + ' (from ' + e.url + ')');
+    if (e.key === 'aura.sample.loads' && e.storageArea === localStorage)
+        document.getElementById('local').textContent = e.newValue;
+});
+try { show(); } catch (e) { document.getElementById('status').textContent = String(e); }
+</script>
+</body>
+</html>

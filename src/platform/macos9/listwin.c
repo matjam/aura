@@ -44,11 +44,20 @@ enum { H_OPEN, H_DELETE, H_CLEAR };                      /* history */
 enum { D_STOP, D_RESUME, D_REMOVE, D_CLEAR, D_REVEAL };  /* downloads */
 enum { C_DETAILS, C_REMOVE, C_REMOVE_ALL, C_RULE };      /* cookies */
 
-/* The Cookies window's change signature: cookies plus rules. */
+/* The Cookies window's change signature: cookies plus rules, and the
+ * storage areas with their size in KB (so a page that writes all the
+ * time does not rebuild the list at every pass). */
 static uint32_t cookie_sig(void)
 {
     AuCookieJar *j = mac_net_cookie_jar();
-    return j ? (uint32_t)(au_cookie_jar_count(j) * 1000u + au_cookie_rules_count(j)) : 0;
+    uint32_t sig = j ? (uint32_t)(au_cookie_jar_count(j) * 1000u + au_cookie_rules_count(j)) : 0;
+    AuWebStorage *ws = mac_net_storage();
+    if (ws) {
+        AuWebStorageStats st;
+        au_web_storage_stats(ws, &st);
+        sig += (uint32_t)au_web_storage_count(ws) * 7919u + (uint32_t)(st.bytes >> 10) * 104729u;
+    }
+    return sig;
 }
 
 static uint32_t g_cookie_bump; /* listwin_cookies_changed */
@@ -228,7 +237,8 @@ static void enable_buttons(ListWin *lw)
             if (i == C_DETAILS || i == C_REMOVE || i == C_RULE)
                 on = sel >= 0;
             else if (i == C_REMOVE_ALL)
-                on = mac_net_cookie_jar() && au_cookie_jar_count(mac_net_cookie_jar()) > 0;
+                on = (mac_net_cookie_jar() && au_cookie_jar_count(mac_net_cookie_jar()) > 0) ||
+                     (mac_net_storage() && au_web_storage_count(mac_net_storage()) > 0);
             break;
         default: break;
         }
@@ -293,8 +303,9 @@ static void open_row(ListWin *lw, int row)
             au_free(u);
         }
     } else if (lw->base.kind == WIN_COOKIES && lw->have_cv) {
-        if (au_cookie_view_cookie(&lw->cv, row)) {
-            cookie_details(lw, row);
+        if (au_cookie_view_cookie(&lw->cv, row) ||
+            (lw->cv.list.rows[row].id & (AU_COOKIE_ROW_SITE | AU_COOKIE_ROW_STORAGE)) == AU_COOKIE_ROW_STORAGE) {
+            cookie_details(lw, row); /* a cookie or a storage area */
         } else {
             au_cookie_view_toggle(&lw->cv, row, mac_now());
             rebuild(lw);
@@ -792,6 +803,7 @@ void listwin_show(WinKind kind)
     lw->lv = &lw->own;
     if (kind == WIN_COOKIES && mac_net_cookie_jar()) {
         au_cookie_view_init(&lw->cv, mac_net_cookie_jar());
+        lw->cv.storage = mac_net_storage(); /* sites' web storage is listed and removed with their cookies */
         lw->have_cv = true;
         lw->lv = &lw->cv.list;
     }

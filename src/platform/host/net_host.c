@@ -3,6 +3,7 @@
 #include "net/cookies.h"
 #include "net/hsts.h"
 #include "net/roots.h"
+#include "net/web_storage.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -447,6 +448,82 @@ bool au_host_profile_path(const char *name, char *out, size_t cap)
     if (mkdir(dir, 0700) != 0 && errno != EEXIST)
         return false;
     return snprintf(out, cap, "%s/%s", dir, name) < (int)cap;
+}
+
+/* ---- Web storage in the profile folder ----
+ * The service's files (net/web_storage.h) in a folder "local-storage" of
+ * the profile; a file that does not parse is renamed "<name>.damaged". */
+
+static bool storage_path(const char *name, char *out, size_t cap)
+{
+    char dir[4096];
+    if (!au_host_profile_path("local-storage", dir, sizeof dir))
+        return false;
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST)
+        return false;
+    return snprintf(out, cap, "%s/%s", dir, name) < (int)cap;
+}
+
+static bool ws_read(void *ctx, const char *name, AuBuf *out)
+{
+    char path[4200];
+    size_t len;
+    (void)ctx;
+    if (!storage_path(name, path, sizeof path))
+        return false;
+    char *data = au_host_read_file(path, &len);
+    if (!data)
+        return false;
+    au_buf_append(out, data, len);
+    au_free(data);
+    return true;
+}
+
+static bool ws_write(void *ctx, const char *name, const void *data, size_t len)
+{
+    char path[4200];
+    (void)ctx;
+    return storage_path(name, path, sizeof path) && au_host_write_file(path, data, len);
+}
+
+static void ws_remove(void *ctx, const char *name)
+{
+    char path[4200];
+    (void)ctx;
+    if (storage_path(name, path, sizeof path))
+        remove(path);
+}
+
+static void ws_damaged(void *ctx, const char *name)
+{
+    char path[4200], aside[4300];
+    (void)ctx;
+    if (!storage_path(name, path, sizeof path))
+        return;
+    snprintf(aside, sizeof aside, "%s.damaged", path);
+    fprintf(stderr, "aura-host: %s is damaged; set aside\n", path);
+    if (rename(path, aside) != 0)
+        remove(path);
+}
+
+AuWebStorage *au_host_storage_open(AuCookieJar *jar, bool persist)
+{
+    AuWebStorage *ws = au_web_storage_new();
+    if (jar)
+        au_web_storage_set_cookie_jar(ws, jar);
+    if (persist) {
+        AuWebStorageFiles files = {NULL, ws_read, ws_write, ws_remove, ws_damaged};
+        au_web_storage_set_files(ws, &files);
+    }
+    return ws;
+}
+
+void au_host_storage_close(AuWebStorage *ws)
+{
+    if (!ws)
+        return;
+    au_web_storage_save(ws, 0);
+    au_web_storage_free(ws);
 }
 
 static void load_store(const char *name, bool (*parse)(void *, const char *, size_t, int64_t), void *store,

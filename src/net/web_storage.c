@@ -1051,6 +1051,55 @@ void au_web_storage_clear_area(AuWebStorage *ws, AuStorageArea *a, const char *u
     remove_area(ws, a);
 }
 
+int au_web_storage_call(AuWebStorage *ws, uint32_t ns, AuJsStorageCall *c)
+{
+    int kind = c->kind == AU_JS_STORAGE_SESSION ? AU_STORAGE_SESSION : AU_STORAGE_LOCAL;
+    if (c->op == AU_JS_STORAGE_MATCH) {
+        const char *key;
+        bool so;
+        bool same = resolve(ws, c->origin, c->top_url, &key, &so) == AU_STORAGE_OK && strlen(key) == c->key_len &&
+                    !memcmp(key, c->key, c->key_len);
+        return same ? AU_JS_STORAGE_OK : AU_JS_STORAGE_MISSING;
+    }
+    AuStorageArea *a = NULL;
+    AuStorageResult r = au_web_storage_open(ws, kind, ns, c->origin, c->top_url, c->op == AU_JS_STORAGE_SET, &a);
+    if (r != AU_STORAGE_OK)
+        return r == AU_STORAGE_QUOTA ? AU_JS_STORAGE_QUOTA : AU_JS_STORAGE_DENIED;
+    AuStorageMap *m = a ? a->map : NULL;
+    switch (c->op) {
+    case AU_JS_STORAGE_LENGTH:
+        c->length = m ? au_storage_map_count(m) : 0;
+        break;
+    case AU_JS_STORAGE_KEY:
+        if (!m || !au_storage_map_key(m, c->index, &c->out, &c->out_len))
+            return AU_JS_STORAGE_MISSING;
+        break;
+    case AU_JS_STORAGE_GET:
+        if (!m || !au_storage_map_get(m, c->key, c->key_len, &c->out, &c->out_len))
+            return AU_JS_STORAGE_MISSING;
+        break;
+    case AU_JS_STORAGE_SET:
+        if (au_web_storage_set(ws, a, c->key, c->key_len, c->value, c->value_len, c->url, c->writer) != AU_STORAGE_OK)
+            return AU_JS_STORAGE_QUOTA;
+        break;
+    case AU_JS_STORAGE_REMOVE:
+        if (a)
+            au_web_storage_remove(ws, a, c->key, c->key_len, c->url, c->writer);
+        break;
+    case AU_JS_STORAGE_CLEAR:
+        if (a)
+            au_web_storage_clear_area(ws, a, c->url, c->writer);
+        break;
+    case AU_JS_STORAGE_ESTIMATE:
+        c->usage = m ? au_storage_map_bytes(m) : 0;
+        c->quota = ws->area_quota;
+        break;
+    default:
+        break;
+    }
+    return AU_JS_STORAGE_OK;
+}
+
 /* ---- Session namespaces ---- */
 
 uint32_t au_web_storage_ns_new(AuWebStorage *ws)

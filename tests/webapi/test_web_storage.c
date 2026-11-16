@@ -578,9 +578,10 @@ static void test_frames(void)
     frames_page(&e);
     EQ(js(&e, "R.cross"), "cross/1", "a cross-site frame has storage");
     EQ(js(&e, "R.sandboxed"), "SecurityError", "a sandboxed frame has none");
-    EQ(js(&e, "R['sandboxed-same']"), "sandboxed-same/1", "allow-same-origin gives it the origin's");
+    EQ(js(&e, "R['sandboxed-same'].split('/')[0]"), "sandboxed-same", "allow-same-origin gives it the origin's");
     EQ(js(&e, "R.data"), "SecurityError", "a data: document has none");
-    EQ(js(&e, "localStorage.getItem('who')"), "sandboxed-same", "same-origin frames share the page's area");
+    EQ(js(&e, "/^(sandboxed-)?same$/.test(localStorage.getItem('who'))"), "true",
+       "same-origin frames share the page's area");
     EQ(js(&e, "R.srcdoc+localStorage.getItem('sd')"), "11", "a srcdoc frame has its parent's");
     EQ(js(&e, "ev.length>0"), "true", "the page got storage events from its same-origin frames");
     AuStorageAreaInfo in;

@@ -1091,55 +1091,7 @@ static int dv_storage(void *ctx, AuDocView *dv, AuJsStorageCall *c)
     AuPage *p = ctx;
     AuWebStorage *ws = p->env.storage(p->env.ctx);
     (void)dv;
-    if (!ws)
-        return AU_JS_STORAGE_DENIED;
-    int kind = c->kind == AU_JS_STORAGE_SESSION ? AU_STORAGE_SESSION : AU_STORAGE_LOCAL;
-    if (c->op == AU_JS_STORAGE_MATCH) {
-        AuBuf k;
-        au_buf_init(&k);
-        bool same = au_web_storage_key(ws, c->origin, c->top_url, &k, NULL) == AU_STORAGE_OK && k.len == c->key_len &&
-                    !memcmp(k.data, c->key, k.len);
-        au_buf_free(&k);
-        return same ? AU_JS_STORAGE_OK : AU_JS_STORAGE_MISSING;
-    }
-    AuStorageArea *a = NULL;
-    AuStorageResult r =
-        au_web_storage_open(ws, kind, p->storage_ns, c->origin, c->top_url, c->op == AU_JS_STORAGE_SET, &a);
-    if (r != AU_STORAGE_OK)
-        return r == AU_STORAGE_QUOTA ? AU_JS_STORAGE_QUOTA : AU_JS_STORAGE_DENIED;
-    AuStorageMap *m = a ? au_storage_area_map(a) : NULL;
-    switch (c->op) {
-    case AU_JS_STORAGE_LENGTH:
-        c->length = m ? au_storage_map_count(m) : 0;
-        break;
-    case AU_JS_STORAGE_KEY:
-        if (!m || !au_storage_map_key(m, c->index, &c->out, &c->out_len))
-            return AU_JS_STORAGE_MISSING;
-        break;
-    case AU_JS_STORAGE_GET:
-        if (!m || !au_storage_map_get(m, c->key, c->key_len, &c->out, &c->out_len))
-            return AU_JS_STORAGE_MISSING;
-        break;
-    case AU_JS_STORAGE_SET:
-        if (au_web_storage_set(ws, a, c->key, c->key_len, c->value, c->value_len, c->url, c->writer) != AU_STORAGE_OK)
-            return AU_JS_STORAGE_QUOTA;
-        break;
-    case AU_JS_STORAGE_REMOVE:
-        if (a)
-            au_web_storage_remove(ws, a, c->key, c->key_len, c->url, c->writer);
-        break;
-    case AU_JS_STORAGE_CLEAR:
-        if (a)
-            au_web_storage_clear_area(ws, a, c->url, c->writer);
-        break;
-    case AU_JS_STORAGE_ESTIMATE:
-        c->usage = m ? au_storage_map_bytes(m) : 0;
-        c->quota = au_web_storage_area_quota(ws);
-        break;
-    default:
-        break;
-    }
-    return AU_JS_STORAGE_OK;
+    return ws ? au_web_storage_call(ws, p->storage_ns, c) : AU_JS_STORAGE_DENIED;
 }
 
 void au_page_set_storage_ns(AuPage *p, uint32_t ns)
