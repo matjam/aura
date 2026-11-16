@@ -80,6 +80,7 @@ Patches this document refers to:
 | 0008 | one source text per script (`0008-one-source-text-per-script`): the parser copies no function text, and the contexts of a runtime share a script's text |
 | 0009 | bytecode that names positions in the script's text (`0009-bytecode-source-positions`: `JS_WRITE_OBJ_SOURCE_REF`, `JS_ReadObjectSource`), and a parser that trims each function's buffers (`js_fd_trim`) |
 | 0010 | a module graph is resolved again without compiling its modules again (`0010-module-retry-without-recompiling`; "Module scripts" below) |
+| 0011 | the parser records what its bracket look-ahead found instead of repeating it for nested brackets (`0011-parse-lookahead-memo`); the bytecode is unchanged |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.

@@ -50,7 +50,9 @@ records where the code came from and how to update it.
   resolution reports every missing import in one pass,
   `JS_EVAL_FLAG_NO_RESOLVE` compiles a module without resolving it,
   unresolved modules stay loaded, and `JS_FindLoadedModule` finds one
-  by name (`src/js/module.c`).
+  by name (`src/js/module.c`), and `0011` a parser that records what its
+  bracket look-ahead (`js_parse_skip_parens_token`) found for each
+  bracket it passed, instead of scanning nested brackets once per level.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
