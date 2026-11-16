@@ -3,6 +3,7 @@
  * interface, and the client's use of the cache (fresh hits, revalidation
  * with 304, no-store, invalidation by POST, reload). */
 #include "fakenet.h"
+#include "codec/codec.h"
 #include "net/cache.h"
 #include "net/disk_cache.h"
 #include "net/net.h"
@@ -885,6 +886,180 @@ static void test_client(void)
     fake_free(&f);
 }
 
+/* A response sent with a Content-Encoding is stored as it arrived and
+ * decoded when served: from memory, after a 304, from the storage; the
+ * file format says so; a damaged file fails the request once and is
+ * forgotten. */
+static char *coded_response(const char *coding, AuDeflateFormat fmt, const char *extra, const char *text, size_t n,
+                            const char *date, size_t *len, size_t *coded_len)
+{
+    AuBuf z;
+    au_buf_init(&z);
+    au_deflate_all(fmt, 2, text, n, &z);
+    char *resp = malloc(z.len + 512);
+    int hl = snprintf(resp, 512,
+                      "HTTP/1.1 200 OK\r\nDate: %s\r\nCache-Control: max-age=60\r\nETag: \"e1\"\r\n%s"
+                      "Content-Type: text/html\r\nContent-Encoding: %s\r\nContent-Length: %u\r\n\r\n",
+                      date, extra, coding, (unsigned)z.len);
+    memcpy(resp + hl, z.data, z.len);
+    *len = (size_t)hl + z.len;
+    if (coded_len)
+        *coded_len = z.len;
+    au_buf_free(&z);
+    return resp;
+}
+
+static void test_encoded(void)
+{
+    FakeNet f;
+    fake_init(&f);
+    AuNet *net = au_net_new(&f.ops);
+    Disk disk;
+    memset(&disk, 0, sizeof disk);
+    AuCacheStorage st = {&disk, d_store, d_load, d_remove};
+    AuHttpCache *c = au_cache_new(1 << 20);
+    au_cache_set_storage(c, &st);
+    au_net_set_cache(net, c);
+    FakeServer *s = fake_server(&f, "z.test", 80);
+    char d[32];
+    date_str(f.wall, d);
+    /* 60 KB of text that compresses well. */
+    AuBuf text;
+    au_buf_init(&text);
+    for (int i = 0; text.len < 60000; i++)
+        au_buf_printf(&text, "<p class=\"line\">line %d of the page, with words that repeat</p>\n", i);
+    size_t rl, zl;
+    char *resp = coded_response("gzip", AU_DEFLATE_GZIP, "", text.data, text.len, d, &rl, &zl);
+    FakeResponse *g = fake_add(s, resp);
+    g->len = rl;
+    R r;
+    memset(&r, 0, sizeof r);
+    au_buf_init(&r.body);
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(r.err == AU_NET_OK && !r.from_cache && r.body.len == text.len && !memcmp(r.body.data, text.data, text.len),
+          "from the network, decoded: %zu bytes", r.body.len);
+    CHECK(au_cache_count(c) == 1 && au_cache_bytes(c) < text.len / 3 && au_cache_bytes(c) >= zl,
+          "the cache holds the encoded bytes: %zu for %zu of text (%zu encoded)", au_cache_bytes(c), text.len, zl);
+    AuHeaders rq;
+    au_headers_init(&rq);
+    AuCacheEntry *e = NULL;
+    CHECK(au_cache_lookup_history(c, "http://z.test/page", &rq, &e) == AU_CACHE_FRESH && e, "the entry is there");
+    if (e) {
+        size_t bl;
+        au_cache_entry_body(e, &bl);
+        CHECK(au_cache_entry_coding(e) && !strcmp(au_cache_entry_coding(e), "gzip") && bl == zl &&
+                  au_cache_entry_plain_len(e) == text.len,
+              "coding %s, %zu bytes held, %zu decoded", au_cache_entry_coding(e) ? au_cache_entry_coding(e) : "(none)",
+              bl, au_cache_entry_plain_len(e));
+        CHECK(!au_headers_get(au_cache_entry_headers(e), "content-encoding") &&
+                  !au_headers_get(au_cache_entry_headers(e), "content-length"),
+              "the stored fields name neither the coding nor the length");
+        au_cache_entry_release(c, e);
+    }
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(r.err == AU_NET_OK && r.from_cache && s->nreq == 1 && r.body.len == text.len &&
+              !memcmp(r.body.data, text.data, text.len),
+          "from the cache, decoded: %zu bytes", r.body.len);
+
+    /* Stale: a 304 delivers the stored body, decoded. */
+    f.wall += 120;
+    char d2[32], nm[256];
+    date_str(f.wall, d2);
+    snprintf(nm, sizeof nm, "HTTP/1.1 304 Not Modified\r\nDate: %s\r\nCache-Control: max-age=60\r\nETag: \"e1\"\r\n\r\n",
+             d2);
+    fake_respond(s, nm);
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(s->nreq == 2 && strstr(s->requests[1], "If-None-Match: \"e1\""), "revalidated");
+    CHECK(r.err == AU_NET_OK && r.revalidated && r.body.len == text.len && !memcmp(r.body.data, text.data, text.len),
+          "the 304 delivers the body decoded: %zu bytes", r.body.len);
+
+    /* The storage got a version 2 blob; a new cache serves it decoded. */
+    CHECK(disk.n == 1 && disk.val[0].len > 6 && !memcmp(disk.val[0].data, "AURC2\n", 6) &&
+              disk.val[0].len < text.len / 3,
+          "the stored blob is version 2 and small: %zu bytes", disk.n ? disk.val[0].len : 0);
+    AuHttpCache *c2 = au_cache_new(1 << 20);
+    au_cache_set_storage(c2, &st);
+    au_net_set_cache(net, c2);
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(r.err == AU_NET_OK && r.from_cache && s->nreq == 2 && r.body.len == text.len &&
+              !memcmp(r.body.data, text.data, text.len),
+          "read back from the storage and decoded: %zu bytes", r.body.len);
+    /* Every truncation of the blob is refused, and it round-trips. */
+    int accepted = 0;
+    for (size_t cut = 0; cut < disk.val[0].len; cut += cut < 400 ? 1 : 97) {
+        AuCacheEntry *q = au_cache_entry_parse(disk.val[0].data, cut);
+        if (q) {
+            accepted++;
+            au_cache_entry_free(q);
+        }
+    }
+    CHECK(accepted == 0, "truncated version 2 blobs refused (%d accepted)", accepted);
+    AuCacheEntry *p = au_cache_entry_parse(disk.val[0].data, disk.val[0].len);
+    AuBuf again;
+    au_buf_init(&again);
+    if (p)
+        au_cache_entry_serialize(p, &again);
+    CHECK(p && again.len == disk.val[0].len && !memcmp(again.data, disk.val[0].data, again.len), "the blob round-trips");
+    au_cache_entry_free(p);
+    au_buf_free(&again);
+
+    /* A damaged body in the storage: the request fails once, the entry
+     * goes, and the next request fetches the page again. */
+    AuHttpCache *c3 = au_cache_new(1 << 20);
+    au_cache_set_storage(c3, &st);
+    au_net_set_cache(net, c3);
+    for (size_t i = disk.val[0].len - zl / 2; i < disk.val[0].len - zl / 2 + 40; i++)
+        disk.val[0].data[i] ^= 0x55;
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(r.err == AU_NET_ERR_DECODE && s->nreq == 2, "a damaged stored body fails the request: %d", r.err);
+    CHECK(au_cache_count(c3) == 0 && disk.key[0][0] == 0, "and the entry is forgotten (%zu in memory, key '%s')",
+          au_cache_count(c3), disk.key[0]);
+    g = fake_add(s, resp);
+    g->len = rl;
+    req(&f, net, &r, "GET", "http://z.test/page", false);
+    CHECK(r.err == AU_NET_OK && !r.from_cache && s->nreq == 3 && r.body.len == text.len, "the next request fetches it");
+
+    /* A body larger decoded than an entry may be is stored all the same:
+     * the limit is on what is held. Content-Encoding: deflate (zlib). */
+    AuBuf big;
+    au_buf_init(&big);
+    while (big.len < 600000)
+        au_buf_puts(&big, "the same sentence over and over again, six hundred thousand bytes of it. ");
+    size_t bl2, bz;
+    char *bresp = coded_response("deflate", AU_DEFLATE_ZLIB, "", big.data, big.len, d2, &bl2, &bz);
+    g = fake_add(s, bresp);
+    g->len = bl2;
+    CHECK(big.len > au_cache_entry_limit(c3) && bz < au_cache_entry_limit(c3), "decoded it is over the entry limit");
+    req(&f, net, &r, "GET", "http://z.test/big", false);
+    CHECK(r.err == AU_NET_OK && r.body.len == big.len, "the large page arrives: %zu", r.body.len);
+    req(&f, net, &r, "GET", "http://z.test/big", false);
+    CHECK(r.from_cache && s->nreq == 4 && r.body.len == big.len && !memcmp(r.body.data, big.data, big.len),
+          "and is served from the cache, decoded");
+
+    /* Vary still selects: the same URL asked for with another Accept. */
+    char *vresp = coded_response("gzip", AU_DEFLATE_GZIP, "Vary: Accept-Language\r\n", text.data, 2000, d2, &rl, NULL);
+    g = fake_add(s, vresp);
+    g->len = rl;
+    req(&f, net, &r, "GET", "http://z.test/vary", false);
+    req(&f, net, &r, "GET", "http://z.test/vary", false);
+    CHECK(r.from_cache && r.body.len == 2000 && s->nreq == 5, "a Vary response is stored encoded and served");
+
+    free(resp);
+    free(bresp);
+    free(vresp);
+    au_buf_free(&big);
+    au_buf_free(&text);
+    au_buf_free(&r.body);
+    au_headers_free(&rq);
+    au_net_free(net);
+    au_cache_free(c);
+    au_cache_free(c2);
+    au_cache_free(c3);
+    for (int i = 0; i < disk.n; i++)
+        au_buf_free(&disk.val[i]);
+    fake_free(&f);
+}
+
 int main(void)
 {
     test_control();
@@ -896,6 +1071,7 @@ int main(void)
     test_disk_cache();
     test_client();
     test_history();
+    test_encoded();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

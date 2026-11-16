@@ -129,6 +129,7 @@ struct AuHttpTransfer {
     AuDecoder *dec[MAX_DECODERS];
     int ndec;
     bool uses_brotli;
+    bool cache_raw; /* the cache writer takes the body as it arrives (still encoded), not the decoded bytes */
     /* authentication */
     int auth_attempts, proxy_auth_attempts;
     AuAuthParams pending_auth;
@@ -1454,6 +1455,9 @@ static bool deliver_decoded(AuHttpTransfer *t, int stage, const uint8_t *data, s
 static bool deliver_body(AuHttpTransfer *t, const uint8_t *data, size_t len)
 {
     t->received += (int64_t)len;
+    /* The cache keeps an encoded body as it arrived. */
+    if (t->cache_w && t->cache_raw && len && !au_cache_write(t->cache_w, data, len))
+        t->cache_w = NULL; /* too large: the writer aborted itself */
     if (t->ndec == 0)
         return deliver_decoded(t, -1, data, len);
     return deliver_decoded(t, t->ndec - 1, data, len);
@@ -1468,7 +1472,9 @@ static bool emit(AuHttpTransfer *t, const uint8_t *data, size_t len)
         fail_later(t, AU_NET_ERR_TOO_LARGE);
         return false;
     }
-    if (t->cache_w && !au_cache_write(t->cache_w, data, len))
+    if (t->cache_w && t->cache_raw)
+        au_cache_writer_plain(t->cache_w, len);
+    else if (t->cache_w && !au_cache_write(t->cache_w, data, len))
         t->cache_w = NULL; /* too large: the writer aborted itself */
     if (!t->cancelled && t->cb.data)
         t->cb.data(t->cb.ctx, t, data, len);
@@ -1499,17 +1505,11 @@ static bool deliver_decoded(AuHttpTransfer *t, int stage, const uint8_t *data, s
     }
 }
 
-static void setup_decoders(AuHttpTransfer *t)
+/* Makes the decoders for a Content-Encoding list, in t->dec. False (with
+ * no decoder left) when a coding is unknown or there are too many. */
+static bool make_decoders(AuHttpTransfer *t, const char *list)
 {
-    const char *ce = au_headers_get(&t->parser.headers, "content-encoding");
-    au_buf_clear(&t->encoding);
-    if (!ce || t->parser.framing == AU_BODY_NONE)
-        return;
-    AuBuf all;
-    au_buf_init(&all);
-    au_headers_get_combined(&t->parser.headers, "content-encoding", &all);
-    au_buf_puts(&t->encoding, au_buf_cstr(&all));
-    const char *s = au_buf_cstr(&all), *item;
+    const char *s = list, *item;
     size_t il;
     while (au_http_list_next(&s, &item, &il)) {
         AuDecoder *d = NULL;
@@ -1535,10 +1535,24 @@ static void setup_decoders(AuHttpTransfer *t)
             /* Unknown or too many codings: deliver as sent. */
             au_decoder_free(d);
             release_decoders(t);
-            break;
+            return false;
         }
         t->dec[t->ndec++] = d;
     }
+    return true;
+}
+
+static void setup_decoders(AuHttpTransfer *t)
+{
+    const char *ce = au_headers_get(&t->parser.headers, "content-encoding");
+    au_buf_clear(&t->encoding);
+    if (!ce || t->parser.framing == AU_BODY_NONE)
+        return;
+    AuBuf all;
+    au_buf_init(&all);
+    au_headers_get_combined(&t->parser.headers, "content-encoding", &all);
+    au_buf_puts(&t->encoding, au_buf_cstr(&all));
+    make_decoders(t, au_buf_cstr(&all));
     au_buf_free(&all);
 }
 
@@ -1636,9 +1650,17 @@ static void request_fields(AuHttpTransfer *t, AuHeaders *out)
     }
 }
 
-/* Delivers a cached entry's response and body through the callbacks. */
-static void deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
+/* Delivers a cached entry's response and body through the callbacks. A
+ * body the cache holds encoded is decoded on the way. False when that
+ * fails (a damaged cache file): the transfer is failed (fail_later) and
+ * the caller forgets the entry. */
+static bool deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
 {
+    const char *coding = au_cache_entry_coding(e);
+    if (coding && (t->ndec || !make_decoders(t, coding))) {
+        fail_later(t, AU_NET_ERR_DECODE);
+        return false;
+    }
     au_headers_free(&t->resp_headers);
     au_headers_copy(&t->resp_headers, au_cache_entry_headers(e));
     t->status = au_cache_entry_status(e);
@@ -1658,7 +1680,7 @@ static void deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
     r.headers = &t->resp_headers;
     r.url = t->url.href;
     r.redirects = t->redirects;
-    r.content_length = (int64_t)len;
+    r.content_length = (int64_t)au_cache_entry_plain_len(e);
     r.mime = au_buf_cstr(&t->mime);
     r.charset = au_buf_cstr(&t->charset);
     r.content_encoding = au_buf_cstr(&t->encoding);
@@ -1676,13 +1698,32 @@ static void deliver_cached(AuHttpTransfer *t, AuCacheEntry *e, bool revalidated)
         t->cb.response(t->cb.ctx, t, &r);
     /* The body in pieces, as the network would deliver it. */
     size_t off = 0;
-    while (off < len && !t->cancelled) {
+    bool ok = true;
+    while (off < len && !t->cancelled && ok) {
         size_t n = len - off > 16384 ? 16384 : len - off;
-        t->delivered += n;
-        if (t->cb.data)
-            t->cb.data(t->cb.ctx, t, body + off, n);
+        if (coding) {
+            ok = deliver_decoded(t, t->ndec - 1, body + off, n);
+        } else {
+            t->delivered += n;
+            if (t->cb.data)
+                t->cb.data(t->cb.ctx, t, body + off, n);
+        }
         off += n;
     }
+    if (coding)
+        release_decoders(t);
+    return ok;
+}
+
+/* A cached entry could not be decoded: it is forgotten, so the next
+ * request fetches the resource again. */
+static void cached_entry_bad(AuHttpTransfer *t)
+{
+    AuBuf key;
+    au_buf_init(&key);
+    cache_key(&t->url, &key);
+    au_cache_invalidate(t->net->cache, au_buf_cstr(&key));
+    au_buf_free(&key);
 }
 
 /* stale-while-revalidate: starts a transfer of its own that revalidates
@@ -1738,9 +1779,11 @@ static bool cache_try(AuHttpTransfer *t)
         t->trace.source = t->history                                   ? AU_HTTP_FROM_HISTORY
                           : after.from_storage != before.from_storage ? AU_HTTP_FROM_DISK
                                                                       : AU_HTTP_FROM_MEMORY;
-        deliver_cached(t, e, false);
+        bool ok = deliver_cached(t, e, false);
         au_cache_entry_release(net->cache, e);
-        finish(t, AU_NET_OK);
+        if (!ok)
+            cached_entry_bad(t);
+        finish(t, ok ? AU_NET_OK : t->fail_err);
         return true;
     }
     if (st == AU_CACHE_STALE_USABLE) {
@@ -1754,9 +1797,11 @@ static bool cache_try(AuHttpTransfer *t)
         if (!au_cache_entry_revalidating(e))
             revalidate_in_background(t, e);
         t->trace.source = AU_HTTP_FROM_MEMORY; /* the request log: a stale copy, served as it is */
-        deliver_cached(t, e, false);
+        bool ok = deliver_cached(t, e, false);
         au_cache_entry_release(net->cache, e);
-        finish(t, AU_NET_OK);
+        if (!ok)
+            cached_entry_bad(t);
+        finish(t, ok ? AU_NET_OK : t->fail_err);
         return true;
     }
     if (st == AU_CACHE_STALE)
@@ -1809,6 +1854,12 @@ static void cache_begin(AuHttpTransfer *t)
     request_fields(t, &req);
     t->cache_w = au_cache_begin(net->cache, au_buf_cstr(&key), &req, t->parser.status, t->parser.reason,
                                 &t->parser.headers, t->request_wall, wall(net));
+    /* A body that is being decoded is stored as it arrives (gzip and
+     * brotli are a third to a fifth of the text) and decoded again each
+     * time it is served. */
+    t->cache_raw = t->cache_w && t->ndec > 0;
+    if (t->cache_raw)
+        au_cache_writer_set_coding(t->cache_w, au_buf_cstr(&t->encoding));
     au_headers_free(&req);
     au_buf_free(&key);
 }
@@ -1869,9 +1920,12 @@ static bool handle_head(AuHttpTransfer *t)
         int64_t now = wall(net);
         au_cache_update(net->cache, t->cache_entry, &t->parser.headers, t->request_wall, now);
         t->trace.source = AU_HTTP_FROM_304;
-        deliver_cached(t, t->cache_entry, true);
+        bool ok = deliver_cached(t, t->cache_entry, true);
         drop_cache_entry(t);
-        t->state = T_RECV; /* the 304 has no body; DONE finishes */
+        if (!ok)
+            cached_entry_bad(t); /* and the transfer fails (T_FAILED) */
+        else
+            t->state = T_RECV; /* the 304 has no body; DONE finishes */
         return true;
     }
     if (t->cache_entry && st != 401 && st != 407) /* (an auth retry asks for the same URL again) */

@@ -25,6 +25,11 @@ struct AuCacheEntry {
     AuHeaders vary;
     uint8_t *body;
     size_t len;
+    /* The body is held as it arrived, in these content codings (the
+     * Content-Encoding list), or NULL when it is held decoded; and its
+     * decoded length. */
+    char *coding;
+    size_t plain_len;
     int64_t request_time, response_time;
     int refs;
     bool linked;
@@ -36,6 +41,8 @@ struct AuCacheWriter {
     AuHttpCache *cache;
     AuCacheEntry *e;
     AuBuf body;
+    char *coding;
+    size_t plain_len;
 };
 
 struct AuHttpCache {
@@ -76,6 +83,7 @@ void au_cache_entry_free(AuCacheEntry *e)
     au_headers_free(&e->resp);
     au_headers_free(&e->vary);
     au_free(e->body);
+    au_free(e->coding);
     au_free(e);
 }
 
@@ -347,6 +355,16 @@ const uint8_t *au_cache_entry_body(const AuCacheEntry *e, size_t *len)
     return e->body;
 }
 
+const char *au_cache_entry_coding(const AuCacheEntry *e)
+{
+    return e->coding;
+}
+
+size_t au_cache_entry_plain_len(const AuCacheEntry *e)
+{
+    return e->coding ? e->plain_len : e->len;
+}
+
 const char *au_cache_entry_etag(const AuCacheEntry *e) { return au_headers_get(&e->resp, "etag"); }
 const char *au_cache_entry_last_modified(const AuCacheEntry *e) { return au_headers_get(&e->resp, "last-modified"); }
 
@@ -389,7 +407,7 @@ static size_t headers_cost(const AuHeaders *h)
 static void compute_cost(AuCacheEntry *e)
 {
     e->cost = ENTRY_OVERHEAD + strlen(e->url) + strlen(e->reason) + headers_cost(&e->resp) + headers_cost(&e->vary) +
-              e->len;
+              e->len + (e->coding ? strlen(e->coding) : 0);
 }
 
 /* Records the request's values of the response's Vary fields. Returns
@@ -665,12 +683,24 @@ bool au_cache_write(AuCacheWriter *w, const void *data, size_t len)
     return true;
 }
 
+void au_cache_writer_set_coding(AuCacheWriter *w, const char *coding)
+{
+    au_free(w->coding);
+    w->coding = coding && *coding ? dupz(coding) : NULL;
+}
+
+void au_cache_writer_plain(AuCacheWriter *w, size_t n)
+{
+    w->plain_len += n;
+}
+
 void au_cache_abort(AuCacheWriter *w)
 {
     if (!w)
         return;
     au_cache_entry_free(w->e);
     au_buf_free(&w->body);
+    au_free(w->coding);
     au_free(w);
 }
 
@@ -678,7 +708,14 @@ void au_cache_commit(AuCacheWriter *w)
 {
     AuHttpCache *c = w->cache;
     AuCacheEntry *e = w->e;
+    /* The buffer grew by doubling: give back what it did not use. */
+    if (w->body.cap > w->body.len + 1 && w->body.len) {
+        w->body.data = au_realloc(w->body.data, w->body.len + 1);
+        w->body.cap = w->body.len + 1;
+    }
     e->body = (uint8_t *)au_buf_take(&w->body, &e->len);
+    e->coding = w->coding;
+    e->plain_len = w->plain_len;
     au_free(w);
     insert(c, e);
     c->stats.stored++;
@@ -767,7 +804,11 @@ static void put_headers(AuBuf *b, const AuHeaders *h)
 
 void au_cache_entry_serialize(const AuCacheEntry *e, AuBuf *out)
 {
-    au_buf_puts(out, "AURC1\n");
+    /* Version 2 adds the body's content codings and decoded length after
+     * the response fields. An entry held decoded is still written as
+     * version 1, which earlier versions of Aura read; they take a
+     * version 2 file for damaged and fetch again. */
+    au_buf_puts(out, e->coding ? "AURC2\n" : "AURC1\n");
     put32(out, (uint32_t)e->status);
     put_str(out, e->reason);
     put_str(out, e->url);
@@ -775,6 +816,10 @@ void au_cache_entry_serialize(const AuCacheEntry *e, AuBuf *out)
     put64(out, e->response_time);
     put_headers(out, &e->vary);
     put_headers(out, &e->resp);
+    if (e->coding) {
+        put_str(out, e->coding);
+        put32(out, (uint32_t)e->plain_len);
+    }
     put32(out, (uint32_t)e->len);
     au_buf_append(out, e->body, e->len);
 }
@@ -837,8 +882,9 @@ static void get_headers(Rd *r, AuHeaders *h)
 AuCacheEntry *au_cache_entry_parse(const void *data, size_t len)
 {
     Rd r = {data, len, 0, false};
-    if (len < 6 || memcmp(data, "AURC1\n", 6))
+    if (len < 6 || (memcmp(data, "AURC1\n", 6) && memcmp(data, "AURC2\n", 6)))
         return NULL;
+    bool v2 = ((const char *)data)[4] == '2';
     r.off = 6;
     AuCacheEntry *e = au_calloc(sizeof *e);
     au_headers_init(&e->vary);
@@ -852,6 +898,17 @@ AuCacheEntry *au_cache_entry_parse(const void *data, size_t len)
     get_headers(&r, &e->vary);
     au_headers_free(&e->resp);
     get_headers(&r, &e->resp);
+    if (v2) {
+        e->coding = get_str(&r);
+        e->plain_len = get32(&r);
+        /* A coding list is short tokens; an empty one means decoded. */
+        if (e->coding && (strlen(e->coding) > 64 || e->plain_len > SER_MAX_BODY))
+            r.bad = true;
+        if (e->coding && !*e->coding) {
+            au_free(e->coding);
+            e->coding = NULL;
+        }
+    }
     uint32_t bl = get32(&r);
     if (!r.bad && (bl > SER_MAX_BODY || bl != r.n - r.off))
         r.bad = true;
