@@ -94,6 +94,16 @@ static void state_changed(AuDocView *dv, AuElement *el)
 
 void au_forms_changed(AuDocView *dv, AuElement *el)
 {
+    /* A value set by script: :valid, :invalid, :in-range and the like
+     * follow it, on the control and on the form and fieldsets around it
+     * (the resolver restyles only what rules about those states reach). */
+    if (dv->resolver) {
+        au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
+        for (AuElement *p = parent_el(el); p; p = parent_el(p))
+            if (p->ns == AU_NS_HTML && (p->tag == AU_ATOM_form || p->tag == AU_ATOM_fieldset))
+                au_css_invalidate(dv->resolver, p, AU_CSS_CHANGE_STATE, 0);
+        dv->restyle_needed = true;
+    }
     au_dv_invalidate_element(dv, el);
 }
 
