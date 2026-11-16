@@ -31,8 +31,14 @@ typedef struct {
     uint32_t count, cap;
 } LayerTree;
 
+/* A rule entry holds its layer in 16 bits: past MAX_LAYERS layers of an
+ * origin, a new layer is its parent. */
+#define MAX_LAYERS 65535u
+
 static int32_t layer_new(LayerTree *t, int32_t parent, AuAtom name)
 {
+    if (t->count >= MAX_LAYERS && parent >= 0)
+        return parent;
     LayerNode *n = CSS_PUSH(t->n, t->count, t->cap);
     memset(n, 0, sizeof *n);
     n->name = name;
@@ -96,16 +102,18 @@ static void layer_rank(LayerTree *t)
 
 /* ---- Rule index ---- */
 
+/* One selector of one rule: 20 bytes with 32-bit pointers. */
 typedef struct RuleEntry {
     const AuSelector *sel;
-    const CssRule *rule;      /* its declarations: css_rule_decls */
-    const AuCssSheet *sheet;
-    uint32_t order;
-    uint32_t spec;
-    int32_t layer; /* node in the origin's tree, then its rank */
-    uint8_t origin;
-    uint8_t pseudo;
+    const CssRule *rule;   /* its declarations: css_rule_decls with the sheet */
+    unsigned order : 24;   /* source order, clamped as make_key clamps it */
+    unsigned pseudo : 4;   /* AuCssPseudo of the selector */
+    unsigned origin : 2;
+    unsigned spec : 24;
+    uint16_t layer;        /* node in the origin's tree, then its rank */
+    uint16_t sheet;        /* index in AuCssResolver.walked */
 } RuleEntry;
+#define MAX_WALKED 65535u /* sheets (imports and the user agent's included) one index holds */
 
 typedef struct {
     AuAtom *keys;
@@ -177,6 +185,8 @@ struct AuCssResolver {
 
     RuleEntry *entries;
     uint32_t nentries, entries_cap;
+    const AuCssSheet **walked; /* the sheets the index was built from, in order */
+    uint32_t nwalked, walked_cap;
     uint32_t *sorted; /* entry indices grouped by key */
     AtomMap maps[KEY_UNIVERSAL]; /* by id, class, tag, attribute name */
     uint32_t uni_start, uni_count;
@@ -291,18 +301,18 @@ static IndexKey compound_key_at(const AuSelector *s, uint32_t from, bool quirks)
         const AuSelComp *c = &s->comp[i];
         if (c->type == SC_ID) {
             k.kind = KEY_ID;
-            k.atom = quirks ? css_atom_lower(c->name) : c->name;
+            k.atom = quirks ? css_atom_lower(c->u.name) : c->u.name;
             return k;
         }
         if (c->type == SC_CLASS && k.kind > KEY_CLASS) {
             k.kind = KEY_CLASS;
-            k.atom = quirks ? css_atom_lower(c->name) : c->name;
+            k.atom = quirks ? css_atom_lower(c->u.name) : c->u.name;
         } else if (c->type == SC_TAG && k.kind > KEY_TAG) {
             k.kind = KEY_TAG;
-            k.atom = c->name;
+            k.atom = css_comp_name(c);
         } else if (c->type == SC_ATTR && k.kind > KEY_ATTR) {
             k.kind = KEY_ATTR;
-            k.atom = c->name;
+            k.atom = css_comp_name(c);
         }
     }
     return k;
@@ -547,11 +557,11 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
             if (c->type == SC_NESTING) {
                 nested = c->u.list;
             } else if (c->type == SC_CLASS) {
-                dep_add(cx, F_CLASS, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+                dep_add(cx, F_CLASS, quirks ? css_atom_lower(c->u.name) : c->u.name, rel, key);
             } else if (c->type == SC_ID) {
-                dep_add(cx, F_ID, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+                dep_add(cx, F_ID, quirks ? css_atom_lower(c->u.name) : c->u.name, rel, key);
             } else if (c->type == SC_ATTR) {
-                dep_add(cx, F_ATTR, c->name, rel, key);
+                dep_add(cx, F_ATTR, css_comp_name(c), rel, key);
             } else if (c->type == SC_PSEUDO) {
                 uint32_t st = pseudo_state(c->op);
                 if (st) {
@@ -569,11 +579,11 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                         IndexKey none = {KEY_UNIVERSAL, 0, 0};
                         dep_selector(&h, a, cx->in_has ? REL_ANY : REL_SELF, none, depth + 1);
                     }
-                } else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.nth.of) {
+                } else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.ext->u.nth.of) {
                     /* a sibling's state changes the index of the others */
                     IndexKey none = {KEY_UNIVERSAL, 0, 0};
-                    for (uint32_t m = 0; m < c->u.nth.of->n; m++)
-                        dep_selector(cx, &c->u.nth.of->sel[m], REL_ANY, none, depth + 1);
+                    for (uint32_t m = 0; m < c->u.ext->u.nth.of->n; m++)
+                        dep_selector(cx, &c->u.ext->u.nth.of->sel[m], REL_ANY, none, depth + 1);
                 }
             }
             if (nested) {
@@ -647,26 +657,29 @@ static void deps_build(AuCssResolver *r)
 typedef struct {
     const CssRule *rule;
     const AuCssSheet *sheet;
+    uint32_t sheet_index;
     int32_t layer;
 } Frame;
 
-static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, const AuCssSheet *sheet,
+static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, uint32_t sheet_index,
                         int32_t layer, uint32_t *order, bool nested_decls)
 {
-    uint8_t origin = sheet->origin;
+    uint8_t origin = r->walked[sheet_index]->origin;
     /* a block that is still text has at least one declaration to try */
-    if (!sel || (!rule->lazy && !rule->decls.n))
+    if (!sel || (!(rule->flags & RF_LAZY) && !rule->b.decls->n))
         return;
     uint32_t spec_override = nested_decls ? css_sellist_max_spec(sel) : 0;
     uint32_t ord = (*order)++;
     for (uint32_t i = 0; i < sel->n; i++) {
+        if (sel->sel[i].flags & SELF_NEVER)
+            continue; /* cannot match: not indexed, and its block is never parsed */
         RuleEntry *e = CSS_PUSH(r->entries, r->nentries, r->entries_cap);
         e->sel = &sel->sel[i];
         e->rule = rule;
-        e->sheet = sheet;
-        e->order = ord;
+        e->sheet = (uint16_t)sheet_index;
+        e->order = ord > 0xFFFFFF ? 0xFFFFFF : ord;
         e->spec = nested_decls ? spec_override : sel->sel[i].spec;
-        e->layer = layer;
+        e->layer = (uint16_t)layer;
         e->origin = origin;
         e->pseudo = sel->sel[i].pseudo;
         if (sel->sel[i].flags & SELF_HAS)
@@ -695,6 +708,10 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
 {
     if (sheet->media && !media_dep(r, sheet->media))
         return;
+    if (r->nwalked >= MAX_WALKED)
+        return;
+    uint32_t sheet_index = r->nwalked;
+    *CSS_PUSH(r->walked, r->nwalked, r->walked_cap) = sheet;
     LayerTree *lt = &r->layers[sheet->origin];
     for (uint32_t i = 0; i < sheet->nprops; i++)
         *CSS_PUSH(r->props, r->nprops, r->props_cap) = sheet->props[i];
@@ -704,6 +721,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         Frame *f = CSS_PUSH(*stack, *sn, *scap);
         f->rule = sheet->rules;
         f->sheet = sheet;
+        f->sheet_index = sheet_index;
         f->layer = layer;
     }
     while (*sn > base) {
@@ -717,39 +735,40 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             Frame *nf = CSS_PUSH(*stack, *sn, *scap);
             nf->rule = ru->next;
             nf->sheet = f.sheet;
+            nf->sheet_index = f.sheet_index;
             nf->layer = f.layer;
         }
         int32_t child_layer = f.layer;
         bool descend = false;
         switch (ru->type) {
         case RULE_STYLE:
-            add_entries(r, ru->sel, ru, f.sheet, f.layer, order, false);
+            add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false);
             descend = true;
             break;
         case RULE_NESTED_DECLS:
-            add_entries(r, ru->sel, ru, f.sheet, f.layer, order, true);
+            add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true);
             break;
         case RULE_MEDIA:
-            descend = media_dep(r, ru->media);
+            descend = media_dep(r, ru->u.media);
             break;
         case RULE_SUPPORTS:
-            descend = ru->ok;
+            descend = (ru->flags & RF_OK) != 0;
             break;
         case RULE_LAYER_BLOCK:
-            child_layer = layer_path(lt, f.layer, &ru->layers[0]);
+            child_layer = layer_path(lt, f.layer, &ru->u.layers[0]);
             descend = true;
             break;
         case RULE_LAYER_STMT:
-            for (uint32_t k = 0; k < ru->nlayers; k++)
-                layer_path(lt, f.layer, &ru->layers[k]);
+            for (uint32_t k = 0; k < ru->b.nlayers; k++)
+                layer_path(lt, f.layer, &ru->u.layers[k]);
             break;
         case RULE_IMPORT: {
-            const AuCssImport *im = &f.sheet->imports[ru->index];
-            if (!im->sheet || !ru->ok || (ru->media && !media_dep(r, ru->media)))
+            const AuCssImport *im = &f.sheet->imports[ru->b.index];
+            if (!im->sheet || !(ru->flags & RF_OK) || (ru->u.media && !media_dep(r, ru->u.media)))
                 break;
             int32_t il = f.layer;
-            if (ru->nlayers)
-                il = layer_path(lt, f.layer, &ru->layers[0]);
+            if (ru->flags & RF_LAYER)
+                il = layer_path(lt, f.layer, &f.sheet->import_layers[ru->b.index]);
             /* the imported sheet's rules come here in order: walk it now */
             walk_sheet(r, im->sheet, il, order, stack, sn, scap);
             break;
@@ -757,10 +776,12 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         default:
             break; /* @container, @scope, @starting-style: not applied */
         }
-        if (descend && ru->children) {
+        const CssRule *kids = descend ? css_rule_children(f.sheet, ru) : NULL;
+        if (kids) {
             Frame *nf = CSS_PUSH(*stack, *sn, *scap);
-            nf->rule = ru->children;
+            nf->rule = kids;
             nf->sheet = f.sheet;
+            nf->sheet_index = f.sheet_index;
             nf->layer = child_layer;
         }
     }
@@ -769,6 +790,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
 static void index_clear(AuCssResolver *r)
 {
     r->nentries = 0;
+    r->nwalked = 0;
     au_free(r->sorted);
     r->sorted = NULL;
     for (int i = 0; i < KEY_UNIVERSAL; i++)
@@ -904,6 +926,7 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->pending);
     au_free(r->deps);
     au_free(r->entries);
+    au_free(r->walked);
     au_free(r->media_deps);
     for (int i = 0; i < 3; i++)
         au_free(r->layers[i].n);
@@ -1178,7 +1201,7 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
         int lvl_n = e->origin;
         int lvl_i = e->origin == AU_CSS_ORIGIN_AUTHOR ? 4 : e->origin == AU_CSS_ORIGIN_USER ? 5 : 6;
         uint32_t layer = (uint32_t)e->layer;
-        push_matched(r, css_rule_decls(e->sheet, e->rule), make_key(lvl_n, 0, layer, e->spec, e->order),
+        push_matched(r, css_rule_decls(r->walked[e->sheet], e->rule), make_key(lvl_n, 0, layer, e->spec, e->order),
                      make_key(lvl_i, 0, 4095 - layer, e->spec, e->order));
     }
 }

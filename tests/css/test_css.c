@@ -517,7 +517,9 @@ static void run_selectors(const Section *sec)
         }
         CssTokens tk = {0};
         css_tokenize(in, strlen(in), &tk);
+        CssArena arena = {0};
         CssSelParseCtx cx = {0};
+        cx.arena = &arena;
         AuSelList *l = css_selector_parse(&tk, 0, tk.n, &cx);
         AuBuf o;
         au_buf_init(&o);
@@ -530,8 +532,8 @@ static void run_selectors(const Section *sec)
                 if (l->sel[i].spec > sp)
                     sp = l->sel[i].spec;
             au_buf_printf(&o, " (%u,%u,%u)", (unsigned)(sp >> 16), (unsigned)((sp >> 8) & 255), (unsigned)(sp & 255));
-            css_sellist_free(l);
         }
+        css_arena_free(&arena);
         css_tokens_free(&tk);
         check_str(ln, in, want, au_buf_cstr(&o));
         au_buf_free(&o);

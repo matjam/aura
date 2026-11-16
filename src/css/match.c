@@ -187,8 +187,9 @@ static bool str_eq(const char *a, size_t an, const char *b, size_t bn, bool ci)
 
 static bool match_attr_value(const AuSelComp *c, const char *v, size_t vn, bool ci)
 {
-    const char *w = c->u.value.s;
-    size_t wn = c->u.value.len;
+    uint32_t wlen;
+    const char *w = css_comp_value(c, &wlen);
+    size_t wn = wlen;
     switch (c->op) {
     case ATTR_EXISTS:
         return true;
@@ -235,7 +236,7 @@ static bool match_attr_value(const AuSelComp *c, const char *v, size_t vn, bool 
 static bool match_attr(const AuSelComp *c, const AuElement *el)
 {
     bool html = is_html(el);
-    AuAtom want = html ? c->name : c->name_cs;
+    AuAtom want = html ? css_comp_name(c) : css_comp_name_cs(c);
     for (uint32_t i = 0; i < el->nattrs; i++) {
         const AuAttr *a = &el->attrs[i];
         bool name_ok;
@@ -265,7 +266,7 @@ static bool match_attr(const AuSelComp *c, const AuElement *el)
         else if (c->flags & SCF_CS)
             ci = false;
         else
-            ci = html && attr_value_ci(c->name);
+            ci = html && attr_value_ci(css_comp_name(c));
         if (match_attr_value(c, a->value, a->len, ci))
             return true;
     }
@@ -629,10 +630,10 @@ uint64_t css_has_selector_bits(const AuSelector *s)
     for (uint32_t i = 0; i < s->ncomp; i++) {
         const AuSelComp *c = &s->comp[i];
         switch (c->type) {
-        case SC_TAG: m |= hbit(css_hash_atom(c->name, 3)); break;
-        case SC_ID: m |= hbit(css_hash_atom(c->name, 1)); break;
-        case SC_CLASS: m |= hbit(css_hash_atom(c->name, 2)); break;
-        case SC_ATTR: m |= hbit(css_hash_atom(c->name, 4)); break;
+        case SC_TAG: m |= hbit(css_hash_atom(css_comp_name(c), 3)); break;
+        case SC_ID: m |= hbit(css_hash_atom(c->u.name, 1)); break;
+        case SC_CLASS: m |= hbit(css_hash_atom(c->u.name, 2)); break;
+        case SC_ATTR: m |= hbit(css_hash_atom(css_comp_name(c), 4)); break;
         case SC_PSEUDO:
             if (c->op == PC_CHECKED)
                 m |= (uint64_t)1 << HB_CHECKED;
@@ -797,14 +798,14 @@ static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatch
         return has_match(c->u.list, el, mc);
     case PC_NTH_CHILD:
     case PC_NTH_LAST_CHILD: {
-        if (c->u.nth.of && !list_match(c->u.nth.of, el, mc))
+        if (c->u.ext->u.nth.of && !list_match(c->u.ext->u.nth.of, el, mc))
             return false;
         int32_t idx = 1;
         for (const AuElement *s = c->op == PC_NTH_CHILD ? prev_el(el) : next_el(el); s;
              s = c->op == PC_NTH_CHILD ? prev_el(s) : next_el(s))
-            if (!c->u.nth.of || list_match(c->u.nth.of, s, mc))
+            if (!c->u.ext->u.nth.of || list_match(c->u.ext->u.nth.of, s, mc))
                 idx++;
-        return nth_ok(c->u.nth.a, c->u.nth.b, idx);
+        return nth_ok(c->u.ext->u.nth.a, c->u.ext->u.nth.b, idx);
     }
     case PC_NTH_OF_TYPE:
     case PC_NTH_LAST_OF_TYPE: {
@@ -813,7 +814,7 @@ static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatch
              s = c->op == PC_NTH_OF_TYPE ? prev_el(s) : next_el(s))
             if (same_type(s, el))
                 idx++;
-        return nth_ok(c->u.nth.a, c->u.nth.b, idx);
+        return nth_ok(c->u.ext->u.nth.a, c->u.ext->u.nth.b, idx);
     }
     case PC_FIRST_CHILD:
         return !prev_el(el);
@@ -902,9 +903,9 @@ static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatch
             return (el->state & AU_STATE_DEFINED) != 0;
         return true;
     case PC_LANG:
-        return lang_matches(el, c->u.value.s, c->u.value.len);
+        return lang_matches(el, c->u.ext->u.value.s, c->u.ext->u.value.len);
     case PC_DIR:
-        return directionality(el) == (int)c->name;
+        return directionality(el) == (int)c->u.name;
     case PC_SCOPE:
         return mc->scope ? el == mc->scope : is_root(el);
     case PC_VALID:
@@ -944,20 +945,20 @@ static bool match_simple(const AuSelComp *c, const AuElement *el, const CssMatch
     case SC_TAG:
         if (!ns_ok(c, el))
             return false;
-        return el->tag == (is_html(el) ? c->name : c->name_cs);
+        return el->tag == (is_html(el) ? css_comp_name(c) : css_comp_name_cs(c));
     case SC_UNIVERSAL:
         return ns_ok(c, el);
     case SC_ID:
         if (!el->id)
             return false;
-        if (el->id == c->name)
+        if (el->id == c->u.name)
             return true;
-        return mc->quirks && css_atom_lower(el->id) == css_atom_lower(c->name);
+        return mc->quirks && css_atom_lower(el->id) == css_atom_lower(c->u.name);
     case SC_CLASS:
-        if (au_element_has_class(el, c->name))
+        if (au_element_has_class(el, c->u.name))
             return true;
         if (mc->quirks) {
-            AuAtom lc = css_atom_lower(c->name);
+            AuAtom lc = css_atom_lower(c->u.name);
             for (uint32_t i = 0; i < el->nclasses; i++)
                 if (css_atom_lower(el->classes[i]) == lc)
                     return true;
@@ -1069,8 +1070,9 @@ static bool match_from(const AuSelector *s, uint32_t i, const AuElement *el, con
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc)
 {
     if (mc->bloom) {
-        for (int i = 0; i < 4 && s->hashes[i]; i++)
-            if (!css_bloom_may_contain(mc->bloom, s->hashes[i]))
+        const uint32_t *h = css_sel_hashes(s);
+        for (uint32_t i = 0; i < s->nhash; i++)
+            if (!css_bloom_may_contain(mc->bloom, h[i]))
                 return false;
     }
     return match_from(s, 0, el, mc, NULL);

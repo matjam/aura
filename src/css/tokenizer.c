@@ -42,22 +42,29 @@ struct CssArenaChunk {
 };
 #define ARENA_HDR ((sizeof(CssArenaChunk) + 15) & ~(size_t)15)
 
-void *css_arena_alloc(CssArena *a, size_t n)
+static void *arena_alloc(CssArena *a, size_t n, size_t align)
 {
-    n = (n + 7) & ~(size_t)7;
-    if (!a->head || a->used + n > a->cap) {
-        size_t cap = n > 8192 ? n : 8192;
+    n = (n + align - 1) & ~(align - 1);
+    size_t used = (a->used + align - 1) & ~(align - 1);
+    if (!a->head || used + n > a->cap) {
+        size_t chunk = a->chunk ? a->chunk : 8192;
+        size_t cap = n > chunk ? n : chunk;
+        if (a->chunk_max && a->chunk < a->chunk_max)
+            a->chunk = a->chunk * 2 > a->chunk_max ? a->chunk_max : a->chunk * 2;
         CssArenaChunk *c = au_alloc(ARENA_HDR + cap);
         c->cap = cap;
         c->next = a->head;
         a->head = c;
-        a->used = 0;
         a->cap = cap;
+        used = 0;
     }
-    void *p = (char *)a->head + ARENA_HDR + a->used;
-    a->used += n;
+    void *p = (char *)a->head + ARENA_HDR + used;
+    a->used = used + n;
     return p;
 }
+
+void *(css_arena_alloc)(CssArena *a, size_t n) { return arena_alloc(a, n, 8); }
+void *(css_arena_alloc_ptr)(CssArena *a, size_t n) { return arena_alloc(a, n, sizeof(void *)); }
 
 char *css_arena_strndup(CssArena *a, const char *s, size_t n)
 {
@@ -84,6 +91,17 @@ void css_arena_reset(CssArena *a)
     a->used = 0;
 }
 
+void css_arena_release(CssArena *a, CssArenaMark m)
+{
+    while (a->head != m.head) {
+        CssArenaChunk *n = a->head->next;
+        au_free(a->head);
+        a->head = n;
+    }
+    a->used = m.used;
+    a->cap = a->head ? a->head->cap : 0;
+}
+
 void css_arena_free(CssArena *a)
 {
     CssArenaChunk *c = a->head;
@@ -94,6 +112,18 @@ void css_arena_free(CssArena *a)
     }
     a->head = NULL;
     a->used = a->cap = 0;
+}
+
+/* For css_bench: the chunks of an arena, their bytes with headers, and
+ * the bytes handed out. */
+void css_arena_mem(const CssArena *a, size_t *bytes, size_t *used, size_t *chunks)
+{
+    *bytes = *used = *chunks = 0;
+    for (const CssArenaChunk *c = a->head; c; c = c->next) {
+        *bytes += ARENA_HDR + c->cap;
+        *used += c == a->head ? a->used : c->cap;
+        (*chunks)++;
+    }
 }
 
 /* ---- Units ---- */
@@ -869,6 +899,24 @@ CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
         l->tk.pool.cap = l->tk.pool.len;
     }
     return l;
+}
+
+/* For css_bench: what a list takes here and with 32-bit pointers. */
+void css_toklist_mem(const CssTokList *l, size_t *bytes, size_t *bytes32, size_t *blocks)
+{
+    *bytes = sizeof *l;
+    *bytes32 = 32;
+    *blocks = 1;
+    if (l->tk.t) {
+        *bytes += (size_t)l->tk.cap * sizeof(CssToken);
+        *bytes32 += (size_t)l->tk.cap * sizeof(CssToken);
+        (*blocks)++;
+    }
+    if (l->tk.pool.data) {
+        *bytes += l->tk.pool.cap;
+        *bytes32 += l->tk.pool.cap;
+        (*blocks)++;
+    }
 }
 
 CssTokList *css_toklist_retain(CssTokList *l)

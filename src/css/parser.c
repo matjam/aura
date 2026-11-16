@@ -16,13 +16,14 @@ typedef struct {
     bool quirks;
     bool imports_allowed;
     int depth;
-    bool lazy; /* blocks of declarations stay text until used */
+    bool lazy; /* blocks of declarations and top-level @media blocks stay text until used */
+    uint32_t src_base; /* where the tokenized text starts in the sheet's text */
+    AuCssMediaList *media[64]; /* distinct media lists so far (media_list) */
+    uint32_t nmedia;
 } Parser;
 
 bool css_lazy_bodies = true;
 
-/* The longest block kept as text; a longer one is parsed with the sheet. */
-#define MAX_LAZY_BODY 0xFFFFu
 
 static bool is_open(int t) { return t == TK_FUNCTION || t == TK_LPAREN || t == TK_LBRACKET || t == TK_LBRACE; }
 
@@ -47,12 +48,41 @@ static void block_range(const CssTokens *tk, uint32_t i, uint32_t *start, uint32
     *end = (e > i + 1 && css_tok_is_close(tk->t[e - 1].type)) ? e - 1 : e;
 }
 
-static CssRule *new_rule(int type)
+static CssRule *new_rule(Parser *p, int type)
 {
-    CssRule *r = au_calloc(sizeof *r);
+    CssRule *r = css_arena_alloc_ptr(&p->sheet->arena, sizeof *r);
+    memset(r, 0, sizeof *r);
     r->type = (uint8_t)type;
-    r->ok = 1;
+    r->flags = RF_OK;
     return r;
+}
+
+static char *arena_text(Parser *p, char *heap)
+{
+    char *t = css_arena_strndup(&p->sheet->arena, heap ? heap : "", heap ? strlen(heap) : 0);
+    au_free(heap);
+    return t;
+}
+
+/* The block every rule without declarations shares. */
+static AuCssDeclBlock empty_block;
+
+/* Moves parsed declarations into the sheet's arena: the block and its
+ * array in one allocation that is never grown. */
+static AuCssDeclBlock *decls_pack(AuCssSheet *sh, AuCssDeclBlock *tmp)
+{
+    if (!tmp->n) {
+        au_free(tmp->d);
+        memset(tmp, 0, sizeof *tmp);
+        return &empty_block;
+    }
+    AuCssDeclBlock *b = css_arena_alloc_ptr(&sh->arena, sizeof *b + tmp->n * sizeof(AuCssDecl));
+    b->d = (AuCssDecl *)(b + 1);
+    b->n = b->cap = tmp->n;
+    memcpy(b->d, tmp->d, tmp->n * sizeof(AuCssDecl));
+    au_free(tmp->d);
+    memset(tmp, 0, sizeof *tmp);
+    return b;
 }
 
 typedef struct {
@@ -152,8 +182,9 @@ void css_parse_decl_list(const CssTokens *tk, uint32_t a, uint32_t b, AuCssDeclB
 /* ---- Layer names ---- */
 
 /* Parses "a.b.c" starting at *i; returns false on a syntax error. */
-static bool parse_layer_name(const CssTokens *tk, uint32_t *i, uint32_t b, CssLayerName *out)
+static bool parse_layer_name(Parser *p, uint32_t *i, uint32_t b, CssLayerName *out)
 {
+    const CssTokens *tk = p->tk;
     AuAtom parts[16];
     uint32_t n = 0;
     uint32_t k = *i;
@@ -172,7 +203,7 @@ static bool parse_layer_name(const CssTokens *tk, uint32_t *i, uint32_t b, CssLa
         break;
     }
     out->n = n;
-    out->parts = au_alloc(n * sizeof(AuAtom));
+    out->parts = css_arena_alloc_ptr(&p->sheet->arena, n * sizeof(AuAtom));
     memcpy(out->parts, parts, n * sizeof(AuAtom));
     *i = k;
     return true;
@@ -181,24 +212,18 @@ static bool parse_layer_name(const CssTokens *tk, uint32_t *i, uint32_t b, CssLa
 /* ---- Rules ---- */
 
 static void parse_rule_list(Parser *p, uint32_t a, uint32_t b, RuleList *out, bool top);
-static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *style, RuleList *out);
+static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *style, AuCssDeclBlock *own,
+                                 RuleList *out);
 
 static AuSelList *parse_selectors(Parser *p, uint32_t a, uint32_t b, const AuSelList *parent)
 {
     CssSelParseCtx sc = {0};
+    sc.arena = &p->sheet->arena;
     sc.parent = parent;
     sc.ns = &p->sheet->ns;
     sc.nested_rule = parent != NULL;
     sc.relative = parent != NULL;
     return css_selector_parse(p->tk, a, b, &sc);
-}
-
-static void decls_trim(AuCssDeclBlock *b)
-{
-    if (b->cap > b->n && b->n) {
-        b->d = au_realloc(b->d, b->n * sizeof *b->d);
-        b->cap = b->n;
-    }
 }
 
 /* True if the block at blk, with contents [s, e), is closed by its own }
@@ -237,27 +262,69 @@ static bool only_declarations(const CssTokens *tk, uint32_t blk, uint32_t s, uin
 
 const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
 {
-    if (!ru->lazy)
-        return &ru->decls;
+    if (!(ru->flags & RF_LAZY))
+        return ru->b.decls;
     CssRule *w = (CssRule *)ru; /* the parsed block is a cache of the text */
+    AuCssDeclBlock tmp = {0};
     CssTokens tk = {0};
-    css_tokenize(sh->text + w->body_off, w->body_len, &tk);
-    css_parse_decl_list(&tk, 0, tk.n, &w->decls, sh->quirks, sh->base_url);
+    css_tokenize(sh->text + w->b.off, w->c.lazy_len, &tk);
+    css_parse_decl_list(&tk, 0, tk.n, &tmp, sh->quirks, sh->base_url);
     css_tokens_free(&tk);
-    decls_trim(&w->decls);
-    w->lazy = 0;
-    return &w->decls;
+    w->flags &= (uint8_t)~RF_LAZY;
+    w->c.children = NULL;
+    w->b.decls = decls_pack((AuCssSheet *)sh, &tmp);
+    return w->b.decls;
+}
+
+static void parse_rule_list(Parser *p, uint32_t a, uint32_t b, RuleList *out, bool top);
+
+const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
+{
+    if (!(ru->flags & RF_LAZY))
+        return ru->c.children;
+    if (ru->type != RULE_MEDIA)
+        return NULL; /* a style rule whose declarations are still text */
+    /* A top-level @media block that was kept as text: parse it as the
+     * sheet parse would have, one level down. */
+    CssRule *w = (CssRule *)ru;
+    CssTokens tk = {0};
+    css_tokenize(sh->text + w->b.off, w->c.lazy_len, &tk);
+    Parser p;
+    memset(&p, 0, sizeof p);
+    p.tk = &tk;
+    p.sheet = (AuCssSheet *)sh;
+    p.quirks = sh->quirks;
+    p.depth = 1;
+    p.lazy = true;
+    p.src_base = w->b.off;
+    w->flags &= (uint8_t)~RF_LAZY;
+    w->c.children = NULL;
+    w->b.off = 0;
+    RuleList inner = {&w->c.children};
+    css_toklist_intern_begin();
+    css_blob_intern_begin();
+    parse_rule_list(&p, 0, tk.n, &inner, true);
+    css_blob_intern_end();
+    css_toklist_intern_end();
+    css_tokens_free(&tk);
+    return w->c.children;
 }
 
 /* A style rule: prelude [a, pe), block at blk. */
 static void parse_style_rule(Parser *p, uint32_t a, uint32_t pe, uint32_t blk, const AuSelList *parent,
                              RuleList *out)
 {
+    CssArenaMark mark = css_arena_mark(&p->sheet->arena);
     AuSelList *sel = parse_selectors(p, a, pe, parent);
-    if (!sel)
-        return; /* invalid selector: the whole rule is dropped */
-    CssRule *r = new_rule(RULE_STYLE);
-    r->sel = sel;
+    if (!sel) {
+        /* invalid selector: the whole rule is dropped, with what its
+         * valid parts took */
+        css_arena_release(&p->sheet->arena, mark);
+        return;
+    }
+    CssRule *r = new_rule(p, RULE_STYLE);
+    r->u.sel = sel;
+    r->b.decls = &empty_block;
     append_rule(out, r);
     p->sheet->nstyle_rules++;
     uint32_t s, e;
@@ -266,28 +333,41 @@ static void parse_style_rule(Parser *p, uint32_t a, uint32_t pe, uint32_t blk, c
         return;
     if (p->lazy && only_declarations(p->tk, blk, s, e)) {
         uint32_t off = css_tok_src(&p->tk->t[blk]), end = css_tok_src(&p->tk->t[e]);
-        if (end >= off && end - off <= MAX_LAZY_BODY && end <= p->sheet->text_len) {
-            r->lazy = 1;
-            r->body_off = off;
-            r->body_len = end - off;
+        if (end >= off && end <= p->sheet->text_len - p->src_base) {
+            r->flags |= RF_LAZY;
+            r->b.off = p->src_base + off;
+            r->c.lazy_len = end - off;
             return;
         }
     }
     p->depth++;
-    RuleList children = {&r->children};
-    parse_block_contents(p, s, e, r, &children);
+    AuCssDeclBlock own = {0};
+    RuleList children = {&r->c.children};
+    parse_block_contents(p, s, e, r, &own, &children);
+    r->b.decls = decls_pack(p->sheet, &own);
     p->depth--;
+}
+
+/* Ends a run of nested declarations: its block goes to the arena. */
+static void nd_close(Parser *p, CssRule **nd, AuCssDeclBlock *ndb)
+{
+    if (*nd)
+        (*nd)->b.decls = decls_pack(p->sheet, ndb);
+    *nd = NULL;
 }
 
 /* Contents of a style rule's block (or of a conditional rule nested in
  * one): declarations, nested rules, at-rules. Declarations before the
- * first nested rule go to style->decls; later runs of declarations become
+ * first nested rule go to own (the style rule's block; NULL inside a
+ * nested conditional rule); later runs of declarations become
  * nested-declarations rules. */
-static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *style, RuleList *out)
+static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *style, AuCssDeclBlock *own,
+                                 RuleList *out)
 {
     const CssTokens *tk = p->tk;
-    AuCssDeclBlock *decls = (out->tail == &style->children && !style->children) ? &style->decls : NULL;
+    AuCssDeclBlock *decls = own;
     CssRule *nd = NULL; /* current nested-declarations rule */
+    AuCssDeclBlock ndb = {0};
     uint32_t i = a;
     while (i < b) {
         int ty = tk->t[i].type;
@@ -307,19 +387,21 @@ static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *sty
                  * contents belong to the parent style rule */
                 parse_rule_list(p, i, end, out, false);
                 CssRule *g = *t0;
-                if (g && (g->type == RULE_MEDIA || g->type == RULE_SUPPORTS || g->type == RULE_LAYER_BLOCK ||
-                          g->type == RULE_CONTAINER || g->type == RULE_SCOPE || g->type == RULE_STARTING_STYLE) &&
+                /* a group that never applies (a false @supports, @container,
+                 * @scope, @starting-style) keeps no contents */
+                if (g && (g->type == RULE_MEDIA || g->type == RULE_LAYER_BLOCK ||
+                          (g->type == RULE_SUPPORTS && (g->flags & RF_OK))) &&
                     p->depth < MAX_RULE_DEPTH) {
                     uint32_t s, e;
                     block_range(tk, j, &s, &e);
-                    RuleList inner = {&g->children};
+                    RuleList inner = {&g->c.children};
                     p->depth++;
-                    parse_block_contents(p, s, e, style, &inner);
+                    parse_block_contents(p, s, e, style, NULL, &inner);
                     p->depth--;
                 }
             }
             decls = NULL;
-            nd = NULL;
+            nd_close(p, &nd, &ndb);
             i = end;
             continue;
         }
@@ -337,9 +419,9 @@ static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *sty
             j = b;
         bool custom = ty == TK_IDENT && css_ident_is_custom_prop(css_tok_str(tk, &tk->t[i]), tk->t[i].len);
         if (has_block && !custom) {
-            parse_style_rule(p, i, j, j, style->sel, out);
+            parse_style_rule(p, i, j, j, style->u.sel, out);
             decls = NULL;
-            nd = NULL;
+            nd_close(p, &nd, &ndb);
             i = tk->t[j].len;
             continue;
         }
@@ -352,20 +434,37 @@ static void parse_block_contents(Parser *p, uint32_t a, uint32_t b, CssRule *sty
             AuCssDeclBlock *target = decls;
             if (!target) {
                 if (!nd) {
-                    nd = new_rule(RULE_NESTED_DECLS);
-                    nd->sel = style->sel; /* borrowed */
+                    nd = new_rule(p, RULE_NESTED_DECLS);
+                    nd->u.sel = style->u.sel; /* borrowed */
+                    nd->b.decls = &empty_block;
                     append_rule(out, nd);
                 }
-                target = &nd->decls;
+                target = &ndb;
             }
             parse_decl(tk, i, j, target, p->quirks, p->sheet->base_url, true);
         }
         i = j;
     }
-    /* the arrays grew by doubling: give back what is unused */
-    decls_trim(&style->decls);
-    if (nd)
-        decls_trim(&nd->decls);
+    nd_close(p, &nd, &ndb);
+}
+
+/* The media query list in [a, b), in the sheet's arena. A sheet repeats
+ * few distinct queries many times: equal ones (by their text) share one
+ * list, up to MEDIA_SHARED distinct ones. */
+#define MEDIA_SHARED 64
+static AuCssMediaList *media_list(Parser *p, uint32_t a, uint32_t b)
+{
+    AuCssMediaList *m = css_media_parse(p->tk, a, b);
+    const char *text = css_media_text(m);
+    for (uint32_t i = 0; i < p->nmedia; i++)
+        if (!strcmp(css_media_text(p->media[i]), text)) {
+            css_media_free(m);
+            return p->media[i];
+        }
+    m = css_media_pack(&p->sheet->arena, m);
+    if (p->nmedia < MEDIA_SHARED)
+        p->media[p->nmedia++] = m;
+    return m;
 }
 
 static void add_import(Parser *p, uint32_t a, uint32_t b)
@@ -406,7 +505,7 @@ static void add_import(Parser *p, uint32_t a, uint32_t b)
         uint32_t s, e;
         block_range(tk, i, &s, &e);
         s = skip_ws(tk, s, e);
-        if (!parse_layer_name(tk, &s, e, &layer) || skip_ws(tk, s, e) != e)
+        if (!parse_layer_name(p, &s, e, &layer) || skip_ws(tk, s, e) != e)
             return;
         has_layer = true;
         i = tk->t[i].len;
@@ -456,18 +555,18 @@ static void add_import(Parser *p, uint32_t a, uint32_t b)
         imp.layer = au_buf_take(&lb, NULL);
     }
     AuCssSheet *sh = p->sheet;
-    CssRule *r = new_rule(RULE_IMPORT);
-    r->index = sh->nimports;
-    r->media = css_media_parse(tk, i, b);
-    if (has_layer) {
-        r->layers = au_calloc(sizeof(CssLayerName));
-        *r->layers = layer;
-        r->nlayers = 1;
-    }
-    r->ok = imp.supported;
+    CssRule *r = new_rule(p, RULE_IMPORT);
+    r->b.index = sh->nimports;
+    r->u.media = media_list(p, i, b);
+    if (has_layer)
+        r->flags |= RF_LAYER;
+    if (!imp.supported)
+        r->flags &= (uint8_t)~RF_OK;
     *CSS_PUSH(sh->imports, sh->nimports, sh->imports_cap) = imp;
     sh->import_rules = au_realloc(sh->import_rules, sh->imports_cap * sizeof(CssRule *));
-    sh->import_rules[r->index] = r; /* the caller appends r to the rule list */
+    sh->import_rules[r->b.index] = r; /* the caller appends r to the rule list */
+    sh->import_layers = au_realloc(sh->import_layers, sh->imports_cap * sizeof(CssLayerName));
+    sh->import_layers[r->b.index] = layer;
 }
 
 static int hex_digit(int c)
@@ -839,6 +938,27 @@ static char *range_text(const CssTokens *tk, uint32_t a, uint32_t b)
     return au_buf_take(&buf, NULL);
 }
 
+/* True if the block at blk, with contents [s, e), is closed by its own }
+ * and can be parsed later from its text with the same result: it holds
+ * no rule that registers something with the sheet when parsed
+ * (@font-face, @keyframes, @property). */
+static bool block_can_wait(const CssTokens *tk, uint32_t blk, uint32_t s, uint32_t e)
+{
+    if (tk->t[blk].type != TK_LBRACE || tk->t[blk].len != e + 1 || e >= tk->n || tk->t[e].type != TK_RBRACE)
+        return false;
+    for (uint32_t i = s; i < e; i++) {
+        if (tk->t[i].type != TK_AT)
+            continue;
+        const char *name = css_tok_str(tk, &tk->t[i]);
+        uint32_t nlen = tk->t[i].len;
+        if (au_ieq(name, nlen, "font-face", 9) || au_ieq(name, nlen, "keyframes", 9) ||
+            au_ieq(name, nlen, "-webkit-keyframes", 17) || au_ieq(name, nlen, "-moz-keyframes", 14) ||
+            au_ieq(name, nlen, "property", 8))
+            return false;
+    }
+    return true;
+}
+
 /* One at-rule at i, ending before b. Returns the index after it. In nested
  * mode (top == false, inside a style rule) group rules get no children
  * here; parse_block_contents fills them. */
@@ -862,7 +982,8 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         return end;
     }
     if (IS("import")) {
-        if (!block && top && p->imports_allowed) {
+        /* only at the top of the sheet, before its rules */
+        if (!block && top && p->depth == 0 && p->imports_allowed) {
             uint32_t before = p->sheet->nimports;
             add_import(p, pa, pe);
             if (p->sheet->nimports > before)
@@ -871,7 +992,9 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         return end;
     }
     if (IS("namespace")) {
-        if (!block && top)
+        /* only at the top of the sheet, before its rules: every selector
+         * of the sheet is parsed with the same prefixes */
+        if (!block && top && p->depth == 0 && p->imports_allowed)
             add_namespace(p, pa, pe);
         return end;
     }
@@ -882,7 +1005,7 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         uint32_t n = 0;
         bool ok = true;
         while (k < pe && ok) {
-            if (n >= 32 || !parse_layer_name(tk, &k, pe, &names[n])) {
+            if (n >= 32 || !parse_layer_name(p, &k, pe, &names[n])) {
                 ok = false;
                 break;
             }
@@ -898,20 +1021,18 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
                     ok = false;
             }
         }
-        if (!ok || (block && n > 1) || (!block && n == 0)) {
-            for (uint32_t q = 0; q < n; q++)
-                au_free(names[q].parts);
+        if (!ok || (block && n > 1) || (!block && n == 0))
             return end;
-        }
-        CssRule *r = new_rule(block ? RULE_LAYER_BLOCK : RULE_LAYER_STMT);
-        r->nlayers = block ? 1 : n;
-        r->layers = au_calloc(r->nlayers * sizeof(CssLayerName));
+        CssRule *r = new_rule(p, block ? RULE_LAYER_BLOCK : RULE_LAYER_STMT);
+        r->b.nlayers = block ? 1 : n;
+        r->u.layers = css_arena_alloc_ptr(&p->sheet->arena, r->b.nlayers * sizeof(CssLayerName));
+        memset(r->u.layers, 0, r->b.nlayers * sizeof(CssLayerName));
         if (n)
-            memcpy(r->layers, names, n * sizeof(CssLayerName));
+            memcpy(r->u.layers, names, n * sizeof(CssLayerName));
         append_rule(out, r);
         if (block && top && p->depth < MAX_RULE_DEPTH) {
             p->depth++;
-            RuleList inner = {&r->children};
+            RuleList inner = {&r->c.children};
             parse_rule_list(p, bs, be, &inner, true);
             p->depth--;
         }
@@ -920,43 +1041,48 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
     if (!block)
         return end; /* other statement at-rules are unknown */
     if (IS("media")) {
-        CssRule *r = new_rule(RULE_MEDIA);
-        r->media = css_media_parse(tk, pa, pe);
+        CssRule *r = new_rule(p, RULE_MEDIA);
+        r->u.media = media_list(p, pa, pe);
         append_rule(out, r);
+        if (top && p->depth == 0 && p->lazy && block_can_wait(tk, j, bs, be)) {
+            uint32_t off = css_tok_src(&tk->t[j]), e2 = css_tok_src(&tk->t[be]);
+            if (e2 >= off && e2 <= p->sheet->text_len - p->src_base) {
+                r->flags |= RF_LAZY;
+                r->b.off = p->src_base + off;
+                r->c.lazy_len = e2 - off;
+                return end;
+            }
+        }
         if (top && p->depth < MAX_RULE_DEPTH) {
             p->depth++;
-            RuleList inner = {&r->children};
+            RuleList inner = {&r->c.children};
             parse_rule_list(p, bs, be, &inner, true);
             p->depth--;
         }
         return end;
     }
     if (IS("supports")) {
-        CssRule *r = new_rule(RULE_SUPPORTS);
-        r->ok = css_supports_eval(tk, pa, pe);
-        r->text = range_text(tk, pa, pe);
+        CssRule *r = new_rule(p, RULE_SUPPORTS);
+        if (!css_supports_eval(tk, pa, pe))
+            r->flags &= (uint8_t)~RF_OK;
+        r->u.text = arena_text(p, range_text(tk, pa, pe));
         append_rule(out, r);
-        if (top && p->depth < MAX_RULE_DEPTH) {
+        /* the contents of a false @supports are not kept */
+        if (top && (r->flags & RF_OK) && p->depth < MAX_RULE_DEPTH) {
             p->depth++;
-            RuleList inner = {&r->children};
+            RuleList inner = {&r->c.children};
             parse_rule_list(p, bs, be, &inner, true);
             p->depth--;
         }
         return end;
     }
     if (IS("container") || IS("scope") || IS("starting-style")) {
-        /* parsed and kept; never applies (container queries, @scope and
-         * @starting-style are not evaluated yet) */
-        CssRule *r = new_rule(IS("container") ? RULE_CONTAINER : IS("scope") ? RULE_SCOPE : RULE_STARTING_STYLE);
-        r->ok = 0;
-        r->text = range_text(tk, pa, pe);
+        /* kept as a rule without contents: container queries, @scope and
+         * @starting-style are not evaluated, so their rules never apply */
+        CssRule *r = new_rule(p, IS("container") ? RULE_CONTAINER : IS("scope") ? RULE_SCOPE : RULE_STARTING_STYLE);
+        r->flags &= (uint8_t)~RF_OK;
+        r->u.text = arena_text(p, range_text(tk, pa, pe));
         append_rule(out, r);
-        if (top && p->depth < MAX_RULE_DEPTH) {
-            p->depth++;
-            RuleList inner = {&r->children};
-            parse_rule_list(p, bs, be, &inner, true);
-            p->depth--;
-        }
         return end;
     }
     if (!top)
@@ -1030,6 +1156,9 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     sh->quirks = quirks;
     sh->base_url = base_url ? au_strndup(base_url, strlen(base_url)) : NULL;
     sh->ns.default_ns = -1;
+    /* a small sheet gets a small chunk, a large one a few that double */
+    sh->arena.chunk = 496;
+    sh->arena.chunk_max = 16368;
     if (media && *media)
         sh->media = css_media_parse_text(media, strlen(media));
     CssTokens tk = {0};
@@ -1048,7 +1177,13 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
         sh->text_owned = text_mode != CSS_TEXT_BORROW;
         sh->text_len = len;
     }
-    Parser p = {&tk, sh, quirks, true, 0, css_lazy_bodies && sh->text != NULL};
+    Parser p;
+    memset(&p, 0, sizeof p);
+    p.tk = &tk;
+    p.sheet = sh;
+    p.quirks = quirks;
+    p.imports_allowed = true;
+    p.lazy = css_lazy_bodies && sh->text != NULL;
     RuleList l = {&sh->rules};
     /* equal var() and custom property values share one token list, equal
      * declared values one blob */
@@ -1083,30 +1218,24 @@ const char *au_css_sheet_text(const AuCssSheet *s, size_t *len)
 
 /* ---- Freeing ---- */
 
-void css_rules_free(CssRule *r)
+/* Lets go of what the declarations of the rules refer to (value blobs,
+ * token lists). The rules and their arrays are in the sheet's arena. */
+static void rules_release(CssRule *r)
 {
     /* iterative: children are spliced in front of the remaining list */
     while (r) {
-        if (r->children) {
-            CssRule *last = r->children;
+        if (!(r->flags & RF_LAZY) && r->c.children) {
+            CssRule *last = r->c.children;
             while (last->next)
                 last = last->next;
             last->next = r->next;
-            r->next = r->children;
-            r->children = NULL;
+            r->next = r->c.children;
+            r->c.children = NULL;
         }
-        CssRule *next = r->next;
-        if (r->type == RULE_STYLE)
-            css_sellist_free(r->sel);
-        css_decl_block_clear(&r->decls);
-        if (r->media)
-            css_media_free(r->media);
-        for (uint32_t i = 0; i < r->nlayers; i++)
-            au_free(r->layers[i].parts);
-        au_free(r->layers);
-        au_free(r->text);
-        au_free(r);
-        r = next;
+        if ((r->type == RULE_STYLE || r->type == RULE_NESTED_DECLS) && !(r->flags & RF_LAZY))
+            for (uint32_t i = 0; i < r->b.decls->n; i++)
+                css_decl_release(&r->b.decls->d[i]);
+        r = r->next;
     }
 }
 
@@ -1121,7 +1250,9 @@ void au_css_sheet_free(AuCssSheet *s)
 {
     if (!s || --s->refs)
         return;
-    css_rules_free(s->rules);
+    rules_release(s->rules);
+    css_arena_free(&s->arena);
+    au_free(s->import_layers);
     for (uint32_t i = 0; i < s->nimports; i++) {
         AuCssImport *im = &s->imports[i];
         au_free((char *)im->url);
@@ -1158,7 +1289,30 @@ void au_css_sheet_free(AuCssSheet *s)
     au_free(s);
 }
 
-size_t au_css_sheet_rule_count(const AuCssSheet *s) { return s->nstyle_rules; }
+size_t au_css_sheet_rule_count(const AuCssSheet *s)
+{
+    /* The style rules of @media blocks that are still text count too:
+     * parse them. Rules nest at most MAX_RULE_DEPTH deep. */
+    const CssRule *stack[MAX_RULE_DEPTH + 4];
+    uint32_t sp = 0;
+    const CssRule *r = s->rules;
+    for (;;) {
+        if (!r) {
+            if (!sp)
+                break;
+            r = stack[--sp];
+            continue;
+        }
+        const CssRule *kids = css_rule_children(s, r);
+        if (kids && sp < CSS_ARRAY_LEN(stack)) {
+            stack[sp++] = r->next;
+            r = kids;
+        } else {
+            r = r->next;
+        }
+    }
+    return s->nstyle_rules;
+}
 size_t au_css_sheet_import_count(const AuCssSheet *s) { return s->nimports; }
 const AuCssImport *au_css_sheet_import(const AuCssSheet *s, size_t i) { return i < s->nimports ? &s->imports[i] : NULL; }
 
