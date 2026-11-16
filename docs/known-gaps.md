@@ -204,6 +204,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   ([`javascript.md`](javascript.md), "How script memory is kept down").
 - **An out-of-memory script** gets a console line and no page-level
   notice.
+- **A module graph that fails to load** (an import that cannot be
+  fetched, or one with a syntax error) keeps the modules it compiled
+  until the document goes: unresolved modules stay loaded so that the
+  next round does not compile them again ([`javascript.md`](javascript.md),
+  "Module scripts").
 - **Intl** ([`javascript.md`](javascript.md), "Intl") formats every
   locale as en-US: other languages, numbering systems and calendars are
   not there, and `resolvedOptions().locale` says `en-US`.
@@ -494,3 +499,20 @@ fuzzed".
   ([`browser-chrome.md`](browser-chrome.md)).
 - A window zoom in the guest costs two passes of about 280 ms each on a
   large article ([`layout.md`](layout.md)).
+- **Compiling script** is about 45% of the script time of GitHub's
+  repository page on the host (5.1 MB of modules, 245 ms): QuickJS
+  compiles every function of a script when it loads, and nothing keeps
+  compiled scripts from one page load to the next, although GitHub's
+  pages load the same bundles each time
+  ([`performance.md`](performance.md), "Script on GitHub's repository
+  page").
+- **Script heap blocks on Mac OS 9.** QuickJS takes its small blocks
+  from 4 KB arenas, and the pooled allocator gives every block over
+  2 KB its own `NewPtr` ([`memory.md`](memory.md)): GitHub's
+  repository page made 16,410 such blocks, 12,169 of them arenas, so
+  the Memory Manager holds thousands of blocks for one script heap.
+  Its cost in the guest has not been measured.
+- **Forced layout from script** remains where script asks for geometry
+  (`getBoundingClientRect`, `offsetWidth`, `getComputedStyle` widths
+  through `N.rect`); on GitHub's page after the changes of 2026-11-16 it
+  is about 3% of script time on the host.
