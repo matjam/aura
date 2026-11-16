@@ -55,7 +55,8 @@ typedef enum {
 
 typedef struct AuJsSettings {
     size_t memory_limit;  /* bytes the runtime may allocate; 0: 32 MB */
-    size_t stack_limit;   /* bytes of C stack script may use below the entry point; 0: 512 KB.
+    size_t stack_limit;   /* bytes of C stack script may use below the entry point; 0: 512 KB
+                           * with 32-bit pointers, 1 MB with 64-bit ones.
                            * The thread must have this much stack free, plus margin. */
     uint32_t slice_ms;    /* long-script check interval; 0: 1000 */
     uint32_t kill_ms;     /* default limit without a long_script hook; 0: 10000 */

@@ -218,7 +218,12 @@ void au_js_settings_default(AuJsSettings *s)
 {
     memset(s, 0, sizeof *s);
     s->memory_limit = 32u << 20;
-    s->stack_limit = 512u << 10;
+    /* 512 KB with 32-bit pointers (Mac OS 9), 1 MB with 64-bit ones: a
+     * call from script to script takes one C frame of QuickJS's
+     * interpreter, 608 bytes on PowerPC and 960 on a 64-bit ARM host,
+     * and YouTube's home page goes about 600 calls deep, which 512 KB
+     * did not hold on the host. */
+    s->stack_limit = ((size_t)128 << 10) * sizeof(void *);
     /* AddressSanitizer frames in unoptimized builds are about a hundred
      * times larger (QuickJS's interpreter frame with redzones); the host
      * tools run script on a thread with a stack big enough for this. */
