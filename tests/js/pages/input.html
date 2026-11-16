@@ -31,6 +31,19 @@ test('geometry reads force layout of script changes', () => {
     box.style.height = '70px';
     assert.equal(box.getBoundingClientRect().height, 70);
 });
+test('the viewport and the document size', () => {
+    /* innerWidth and scrollY need no layout; scrollHeight does, and sees
+     * a change script just made */
+    assert.ok(innerWidth > 0 && innerHeight > 0, innerWidth + 'x' + innerHeight);
+    assert.equal(scrollY, 0);
+    const tall = document.createElement('div');
+    tall.style.height = (innerHeight * 3) + 'px';
+    document.body.appendChild(tall);
+    assert.ok(document.documentElement.scrollHeight >= innerHeight * 3, String(document.documentElement.scrollHeight));
+    assert.ok(document.documentElement.scrollWidth >= 300, String(document.documentElement.scrollWidth));
+    tall.remove();
+    assert.ok(document.documentElement.scrollHeight < innerHeight * 3, String(document.documentElement.scrollHeight));
+});
 test('a style sheet added by script applies, and stops applying when removed', () => {
     const st = document.createElement('style');
     st.textContent = '#box { width: 123px }';

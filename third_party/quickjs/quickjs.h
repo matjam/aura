@@ -463,6 +463,10 @@ static inline bool JS_VALUE_IS_NAN(JSValue v)
 /* allow top-level await in normal script. JS_Eval() returns a
    promise. Only allowed with JS_EVAL_TYPE_GLOBAL */
 #define JS_EVAL_FLAG_ASYNC (1 << 7)
+/* Aura: with JS_EVAL_TYPE_MODULE and JS_EVAL_FLAG_COMPILE_ONLY, return
+   the compiled module without resolving its imports; resolve it with
+   JS_ResolveModule(). */
+#define JS_EVAL_FLAG_NO_RESOLVE (1 << 8)
 
 typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
@@ -1348,6 +1352,10 @@ JS_EXTERN JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj);
 /* load the dependencies of the module 'obj'. Useful when JS_ReadObject()
    returns a module. */
 JS_EXTERN int JS_ResolveModule(JSContext *ctx, JSValueConst obj);
+/* Aura: the module of this name the context has compiled, resolved or
+   not, or NULL. A module that could not be resolved stays loaded so that
+   a later attempt resolves it without compiling it again. */
+JS_EXTERN JSModuleDef *JS_FindLoadedModule(JSContext *ctx, const char *name);
 
 /* only exported for os.Worker() */
 JS_EXTERN JSAtom JS_GetScriptOrModuleName(JSContext *ctx, int n_stack_levels);
