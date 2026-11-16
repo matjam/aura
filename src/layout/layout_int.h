@@ -219,7 +219,9 @@ typedef struct LBlock {
     float sx, sy;       /* absolutely positioned: static position in the geometry parent */
     float min_c, max_c; /* intrinsic content-box widths, valid with LF_INTRINSIC_OK */
     float key_w, key_h, key_cbh; /* constraints of the last layout (incremental) */
-    float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting border-box height */
+    float key_ch;       /* the content height that layout gave (padding and border can change since) */
+    float key_top, key_left; /* padding plus border above and left of the content at that layout */
+    float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting content height */
     float sticky_dx, sticky_dy;  /* sticky offset applied at the last paint */
     LReplaced *rep;     /* replaced content */
     /* The layout generations (AuLayout.gen) in which its content was

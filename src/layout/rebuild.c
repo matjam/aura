@@ -387,15 +387,7 @@ void l_rebuild_dirty(AuLayout *L)
         replace_child(ob->parent, ob, nb);
         l_drop_box(ob);
         roots[i].old = NULL;
-        /* Every ancestor: l_mark_dirty stops at one already marked, and
-         * a box layout did not reach (inside a cell or float laid out
-         * from a cache) can keep its mark while its ancestors lost it. */
         l_mark_dirty(nb);
-        for (LBox *p = nb->parent; p; p = p->parent) {
-            p->flags |= LF_CHILD_DIRTY;
-            p->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
-            l_table_forget(p);
-        }
     }
     L->subtree_boxes += L->stats.boxes - boxes0;
     /* The boxless elements of the dropped boxes are gone from the tree;
@@ -585,6 +577,9 @@ static bool cmp_box(const LBox *a, const LBox *b, bool geom, AuBuf *msg)
                       (double)x->y, (double)x->w, (double)x->h, (double)x->m[0], (double)x->m[1], (double)x->m[2],
                       (double)x->m[3], (double)y->x, (double)y->y, (double)y->w, (double)y->h, (double)y->m[0],
                       (double)y->m[1], (double)y->m[2], (double)y->m[3]);
+        au_buf_printf(msg, " (overflow %g,%g %gx%g; whole %g,%g %gx%g)", (double)x->ov.x, (double)x->ov.y,
+                      (double)x->ov.w, (double)x->ov.h, (double)y->ov.x, (double)y->ov.y, (double)y->ov.w,
+                      (double)y->ov.h);
     }
     au_buf_puts(msg, "\n");
     return false;

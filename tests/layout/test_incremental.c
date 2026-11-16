@@ -348,6 +348,62 @@ static void test_restyle_scope(void)
     au_docview_free(dv);
 }
 
+/* A view laid out at one width and resized to another matches a view
+ * laid out at the second width from the start: every element with an id
+ * has the same rectangle, and the document the same size. */
+static AuDocView *at_width(const char *body, int w)
+{
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    au_docview_set_viewport(dv, w, 300);
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_printf(&html, "<!DOCTYPE html><style>body { font: 10px Ahem }</style>%s", body);
+    au_docview_load(dv, html.data, html.len, "http://example.com/");
+    au_docview_update(dv);
+    au_buf_free(&html);
+    return dv;
+}
+
+static void test_resize(void)
+{
+    static const char *const bodies[] = {
+        /* the content of a box with a percentage padding is reused at the new width */
+        "<p>a <select id=s style='padding:1%'><option>x</option></select> b</p>",
+        "<p>a <span id=t style='display:inline-table;padding:2%'><span id=u>x</span></span> b</p>",
+        "<div style='width:50%'><div id=d style='overflow:hidden;padding:3% 1%'><p id=p>text</p></div></div>",
+        /* relative offsets inside a fixed box and inside reused content */
+        "<div style='position:fixed;top:0'><p id=r style='position:relative;left:5px'>r</p></div>",
+        "<div style='overflow:hidden;width:200px'><p id=q style='position:relative;top:4px'>q</p></div><p>z</p>",
+        /* percentage margins of a table */
+        "<div><table id=m style='margin:2% 9% 5% 4%'><tr><td>a</td></tr></table><p id=n>n</p></div>",
+    };
+    for (size_t i = 0; i < sizeof bodies / sizeof bodies[0]; i++) {
+        AuDocView *a = at_width(bodies[i], 300), *b = at_width(bodies[i], 500);
+        au_docview_set_viewport(a, 500, 300);
+        au_docview_update(a);
+        int aw, ah, bw, bh;
+        au_docview_content_size(a, &aw, &ah);
+        au_docview_content_size(b, &bw, &bh);
+        CHECK(aw == bw && ah == bh, "resize %zu: document %dx%d, fresh %dx%d", i, aw, ah, bw, bh);
+        AuDocument *da = au_docview_document(a), *db = au_docview_document(b);
+        AuNode *na = &da->node, *nb = &db->node;
+        for (AuNode *x = au_node_next(na, &da->node), *y = au_node_next(nb, &db->node); x && y;
+             x = au_node_next(x, &da->node), y = au_node_next(y, &db->node)) {
+            if (x->type != AU_NODE_ELEMENT || !au_as_element(x)->id)
+                continue;
+            AuRect ra, rb;
+            bool ha = au_layout_element_rect(au_docview_layout(a), au_as_element(x), &ra);
+            bool hb = au_layout_element_rect(au_docview_layout(b), au_as_element(y), &rb);
+            const char *id = au_atom_str(au_as_element(x)->id);
+            CHECK(ha == hb && (!ha || (ra.x == rb.x && ra.y == rb.y && ra.w == rb.w && ra.h == rb.h)),
+                  "resize %zu: #%s at %g,%g %gx%g, fresh %g,%g %gx%g", i, id, (double)ra.x, (double)ra.y,
+                  (double)ra.w, (double)ra.h, (double)rb.x, (double)rb.y, (double)rb.w, (double)rb.h);
+        }
+        au_docview_free(a);
+        au_docview_free(b);
+    }
+}
+
 /* A title set by script reaches the view without a whole build. */
 static void test_title(void)
 {
@@ -375,6 +431,7 @@ int main(int argc, char **argv)
         run_case(&cases[i]);
     test_restyle_scope();
     test_title();
+    test_resize();
     au_fontset_free(fonts);
     printf("incremental: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
