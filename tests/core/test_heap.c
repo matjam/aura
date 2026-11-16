@@ -191,12 +191,12 @@ static void mid_classes(void)
 }
 
 /* The script engine's 4 KB arenas (4096 bytes and its 16-byte header):
- * 16 to a slab, a freed block reused, one empty slab of the class kept. */
+ * 8 to a slab, a freed block reused, one empty slab of the class kept. */
 static void arenas(void)
 {
     au_heap_trim();
     size_t blocks0 = sys_blocks;
-    enum { NA = 150, PER = 16 };
+    enum { NA = 150, PER = 8 };
     void *a[NA];
     for (int i = 0; i < NA; i++) {
         a[i] = au_alloc(4112);

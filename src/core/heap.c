@@ -17,8 +17,8 @@
  *   small class takes from; the pool keeps at most AU_HEAP_KEEP slabs and
  *   returns the rest to the platform.
  * - Mid classes (over AU_HEAP_SMALL, up to AU_HEAP_MID) use slabs of
- *   about 64 KB, sized to a whole number of blocks: 26 blocks of 2.5 KB,
- *   16 of 4 KB, 4 of 16 KB. An empty mid slab is kept only while its class
+ *   about 32 KB, sized to a whole number of blocks and at least 4: 13
+ *   blocks of 2.5 KB, 8 of 4 KB, 4 of 16 KB. An empty mid slab is kept only while its class
  *   has no other empty slab and fewer than AU_HEAP_MID_KEEP are kept in
  *   all; otherwise it goes back to the platform. So one long-lived block
  *   pins at most one slab of its class.
@@ -38,7 +38,7 @@
 #define AU_HEAP_SLAB 32768u     /* a small class's slab */
 #define AU_HEAP_SMALL 2048u     /* the largest small block */
 #define AU_HEAP_MID 16400u      /* the largest block from a slab */
-#define AU_HEAP_MID_SLAB 65536u /* what a mid slab is sized near */
+#define AU_HEAP_MID_SLAB 32768u /* what a mid slab is sized near */
 #define AU_HEAP_KEEP 8          /* empty small slabs kept */
 #define AU_HEAP_MID_KEEP 4      /* empty mid slabs kept, at most one per class */
 #define AU_HEAP_NSMALL 32

@@ -132,10 +132,6 @@ static void au_host_heap_report(const char *label)
            (unsigned long)(st.system_bytes / 1024), (unsigned long)st.slabs, (unsigned long)st.large);
     printf("heap (%s): %lu blocks over 2 KB in %lu slabs; %lu KB of empty slabs kept\n", label,
            (unsigned long)st.mid_blocks, (unsigned long)st.mid_slabs, (unsigned long)(st.empty_bytes / 1024));
-#ifdef AU_HEAP_PROFILE
-    void au_heap_profile_report(void);
-    au_heap_profile_report();
-#endif
 }
 
 static double now_ms(void)
