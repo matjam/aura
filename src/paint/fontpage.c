@@ -1,11 +1,13 @@
 /* Paged faces: a font file whose glyph outlines stay in the file.
  *
  * The pager reads the face's table directory and every table but glyf
- * into one compact sfnt in memory (cmap, metrics, loca, names: about 5% of
+ * into one compact sfnt in memory (cmap, metrics, loca, names: about 3% of
  * a CJK face), and reads glyf in blocks of AU_FONT_PAGE_SIZE bytes when a
  * glyph is drawn, keeping the AU_FONT_PAGE_SLOTS most recently used
- * blocks. Rasterized glyphs are cached by the glyph cache, so a block is
- * read again only when the glyph cache has dropped every glyph in it.
+ * blocks for the glyphs near it. Each glyph read is kept by itself, up to
+ * AU_FONT_GLYPH_CACHE bytes, least recently used first out: drawing a
+ * glyph again at another size, or after the glyph cache dropped it, then
+ * reads nothing.
  *
  * Every size comes from the file and is checked before use: table ranges
  * against the file length, the table count and the total of the tables
@@ -24,6 +26,18 @@ typedef struct PageSlot {
     uint8_t *data;  /* AU_FONT_PAGE_SIZE bytes, allocated on first use */
 } PageSlot;
 
+/* A glyph's bytes, kept by glyph: a page draws a few hundred of a face's
+ * ten thousand glyphs, at several sizes, so keeping the glyphs costs far
+ * less than keeping the blocks they came from. */
+typedef struct GlyphCopy {
+    struct GlyphCopy *next;          /* in its hash bucket */
+    struct GlyphCopy *newer, *older; /* the use order */
+    uint32_t off, n;                 /* in glyf */
+    uint8_t data[];
+} GlyphCopy;
+
+#define GLYPH_BUCKETS 256
+
 struct AuFontPager {
     AuFontReadFn read;
     void *ctx;
@@ -32,8 +46,13 @@ struct AuFontPager {
     uint32_t glyf_off, glyf_len; /* glyf in the file */
     uint32_t clock;
     PageSlot slot[AU_FONT_PAGE_SLOTS];
+    GlyphCopy *bucket[GLYPH_BUCKETS];
+    GlyphCopy *newest, *oldest;
+    size_t glyph_bytes;
     size_t reads, hits;
 };
+
+static void evict_oldest(AuFontPager *p);
 
 static uint32_t be32(const uint8_t *p)
 {
@@ -154,6 +173,8 @@ void au_font_pager_free(AuFontPager *p)
         return;
     for (int i = 0; i < AU_FONT_PAGE_SLOTS; i++)
         au_free(p->slot[i].data);
+    while (p->oldest)
+        evict_oldest(p);
     au_free(p->data);
     au_free(p);
 }
@@ -177,6 +198,7 @@ void au_font_pager_stats(const AuFontPager *p, AuFontPagerStats *st)
     for (int i = 0; i < AU_FONT_PAGE_SLOTS; i++)
         if (p->slot[i].data)
             st->block_bytes += AU_FONT_PAGE_SIZE;
+    st->glyph_bytes = p->glyph_bytes;
     st->reads = p->reads;
     st->hits = p->hits;
 }
@@ -215,35 +237,103 @@ static PageSlot *block(AuFontPager *p, uint32_t b)
     return victim;
 }
 
-const uint8_t *au_font_pager_glyf(AuFontPager *p, uint32_t off, uint32_t n, uint8_t **own)
+/* Copies glyf bytes [off, off + n) into buf through the block cache. */
+static bool copy_glyf(AuFontPager *p, uint32_t off, uint32_t n, uint8_t *buf)
 {
-    *own = NULL;
-    if (!n || n > AU_FONT_GLYPH_MAX || off > p->glyf_len || n > p->glyf_len - off)
-        return NULL;
     uint32_t first = off / AU_FONT_PAGE_SIZE, last = (off + n - 1) / AU_FONT_PAGE_SIZE;
-    if (first == last) {
-        PageSlot *s = block(p, first);
-        return s ? s->data + (off - first * AU_FONT_PAGE_SIZE) : NULL;
-    }
-    uint8_t *buf = au_alloc(n);
     uint32_t done = 0;
     for (uint32_t b = first; b <= last; b++) {
         PageSlot *s = block(p, b);
-        if (!s) {
-            au_free(buf);
-            return NULL;
-        }
+        if (!s)
+            return false;
         uint32_t from = b == first ? off - b * AU_FONT_PAGE_SIZE : 0;
+        if (from >= s->n)
+            return false;
         uint32_t take = s->n - from;
         if (take > n - done)
             take = n - done;
         memcpy(buf + done, s->data + from, take);
         done += take;
     }
-    if (done != n) {
-        au_free(buf);
+    return done == n;
+}
+
+static uint32_t bucket_of(uint32_t off)
+{
+    return (off * 2654435761u) >> (32 - 8); /* GLYPH_BUCKETS == 256 */
+}
+
+static void lru_unlink(AuFontPager *p, GlyphCopy *g)
+{
+    if (g->newer)
+        g->newer->older = g->older;
+    else
+        p->newest = g->older;
+    if (g->older)
+        g->older->newer = g->newer;
+    else
+        p->oldest = g->newer;
+    g->newer = g->older = NULL;
+}
+
+static void lru_push(AuFontPager *p, GlyphCopy *g)
+{
+    g->older = p->newest;
+    g->newer = NULL;
+    if (p->newest)
+        p->newest->newer = g;
+    p->newest = g;
+    if (!p->oldest)
+        p->oldest = g;
+}
+
+static void evict_oldest(AuFontPager *p)
+{
+    GlyphCopy *g = p->oldest;
+    lru_unlink(p, g);
+    GlyphCopy **link = &p->bucket[bucket_of(g->off)];
+    while (*link != g)
+        link = &(*link)->next;
+    *link = g->next;
+    p->glyph_bytes -= sizeof *g + g->n;
+    au_free(g);
+}
+
+const uint8_t *au_font_pager_glyf(AuFontPager *p, uint32_t off, uint32_t n, uint8_t **own)
+{
+    *own = NULL;
+    if (!n || n > AU_FONT_GLYPH_MAX || off > p->glyf_len || n > p->glyf_len - off)
+        return NULL;
+    uint32_t h = bucket_of(off);
+    for (GlyphCopy *g = p->bucket[h]; g; g = g->next)
+        if (g->off == off && g->n == n) {
+            lru_unlink(p, g);
+            lru_push(p, g);
+            p->hits++;
+            return g->data;
+        }
+    if (sizeof(GlyphCopy) + n > AU_FONT_GLYPH_CACHE) {
+        /* Larger than the whole cache: a copy for this call alone. */
+        uint8_t *buf = au_alloc(n);
+        if (!copy_glyf(p, off, n, buf)) {
+            au_free(buf);
+            return NULL;
+        }
+        *own = buf;
+        return buf;
+    }
+    GlyphCopy *g = au_alloc(sizeof *g + n);
+    if (!copy_glyf(p, off, n, g->data)) {
+        au_free(g);
         return NULL;
     }
-    *own = buf;
-    return buf;
+    g->off = off;
+    g->n = n;
+    g->next = p->bucket[h];
+    p->bucket[h] = g;
+    lru_push(p, g);
+    p->glyph_bytes += sizeof *g + n;
+    while (p->glyph_bytes > AU_FONT_GLYPH_CACHE && p->oldest != g)
+        evict_oldest(p);
+    return g->data;
 }

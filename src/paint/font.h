@@ -110,10 +110,12 @@ void au_font_face_free(AuFontFace *f);
  * memory. A pager reads one face's tables, all but glyf, into a compact
  * sfnt in memory, and reads glyph outlines from the file on demand in
  * blocks of AU_FONT_PAGE_SIZE bytes, keeping the AU_FONT_PAGE_SLOTS most
- * recently used. read(ctx, off, buf, n) reads n bytes at offset off of
- * the file into buf and returns false when it cannot. */
+ * recently used blocks and up to AU_FONT_GLYPH_CACHE bytes of the glyphs
+ * read. read(ctx, off, buf, n) reads n bytes at offset off of the file
+ * into buf and returns false when it cannot. */
 #define AU_FONT_PAGE_SIZE 16384
-#define AU_FONT_PAGE_SLOTS 16
+#define AU_FONT_PAGE_SLOTS 4
+#define AU_FONT_GLYPH_CACHE (256u * 1024)
 typedef bool (*AuFontReadFn)(void *ctx, uint32_t off, void *buf, uint32_t n);
 typedef struct AuFontPager AuFontPager;
 /* NULL when the file (file_len bytes) is not a TrueType font with a
@@ -126,8 +128,9 @@ AuFontFace *au_font_face_new_paged(AuFontPager *p);
 typedef struct AuFontPagerStats {
     size_t table_bytes; /* the tables held in memory */
     size_t block_bytes; /* the glyph blocks cached */
+    size_t glyph_bytes; /* the glyphs kept */
     size_t reads;       /* blocks read from the file so far */
-    size_t hits;        /* glyph reads answered from the cache */
+    size_t hits;        /* glyph reads answered from the kept glyphs */
 } AuFontPagerStats;
 void au_font_pager_stats(const AuFontPager *p, AuFontPagerStats *st);
 

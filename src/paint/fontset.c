@@ -260,7 +260,7 @@ void au_fontset_stats(const AuFontSet *s, AuFontSetStats *st)
             if (s->e[i].pager) {
                 AuFontPagerStats ps;
                 au_font_pager_stats(s->e[i].pager, &ps);
-                st->loaded_bytes += ps.table_bytes + ps.block_bytes;
+                st->loaded_bytes += ps.table_bytes + ps.block_bytes + ps.glyph_bytes;
                 st->paged++;
                 st->paged_reads += ps.reads;
             } else {

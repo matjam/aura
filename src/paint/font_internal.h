@@ -105,11 +105,11 @@ bool au_font_glyph_point_count(const AuFontFace *f, uint16_t g, int *npoints, bo
 AuFontFace *au_font_face_parse(const void *data, size_t len, int index, AuFontPager *pager);
 /* The length of the paged face's glyf table in the file. */
 uint32_t au_font_pager_glyf_len(const AuFontPager *p);
-/* n bytes at offset off of the paged face's glyf table: a pointer into a
- * cached block, valid until the next call on the pager, or, when the
- * bytes span blocks, a copy that is also stored in *own (au_alloc'd; the
- * caller frees it). NULL when the range is outside glyf, over
- * AU_FONT_GLYPH_MAX bytes, or cannot be read. */
+/* n bytes at offset off of the paged face's glyf table: a pointer to the
+ * kept copy of the glyph, valid until the next call on the pager, or, for
+ * a glyph larger than the whole glyph cache, a copy that is also stored
+ * in *own (au_alloc'd; the caller frees it). NULL when the range is
+ * outside glyf, over AU_FONT_GLYPH_MAX bytes, or cannot be read. */
 #define AU_FONT_GLYPH_MAX (256u * 1024)
 const uint8_t *au_font_pager_glyf(AuFontPager *p, uint32_t off, uint32_t n, uint8_t **own);
 
