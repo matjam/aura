@@ -528,6 +528,17 @@ static void test_session(void)
     au_browser_session_serialize(e.b, &ses);
     CHECK(ses.len < 100000 && !strstr(au_buf_cstr(&ses), "storage\thttp://b.test"), "an area over the cap is not saved: %u",
           (unsigned)ses.len);
+    CHECK(strstr(ses.data, "storage\thttp://a.test\t") != NULL, "the other tabs' areas are");
+    /* What may not reach the disk as cookies may not as session storage. */
+    au_cookie_jar_set_rule(e.jar, "a.test", AU_COOKIE_RULE_SESSION);
+    au_buf_clear(&ses);
+    au_browser_session_serialize(e.b, &ses);
+    CHECK(!strstr(au_buf_cstr(&ses), "storage\t"), "a session-only site's storage is not written");
+    au_cookie_jar_set_rule(e.jar, "a.test", AU_COOKIE_RULE_NONE);
+    e.b->prefs.clear_cookies_on_quit = true;
+    au_buf_clear(&ses);
+    au_browser_session_serialize(e.b, &ses);
+    CHECK(!strstr(au_buf_cstr(&ses), "storage\t"), "nor any when cookies are cleared at quit");
     au_buf_free(&ses);
     env_free(&e);
 }

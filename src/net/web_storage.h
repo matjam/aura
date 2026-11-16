@@ -151,7 +151,10 @@ void au_web_storage_ns_copy(AuWebStorage *ws, uint32_t from, uint32_t to);
 /* The namespace's areas as lines for the Session file, each
  *     storage\t<storage key>\t<key>\t<value>...\n
  * with '%', tab, CR, LF and NUL in a field written as %25, %09, %0D,
- * %0A, %00; at most AU_WEB_STORAGE_SESSION_SAVE_BYTES in all. */
+ * %0A, %00; at most AU_WEB_STORAGE_SESSION_SAVE_BYTES in all. An area
+ * whose site's local storage would be kept for the session only (its
+ * cookie rule, third-party blocking) is left out: it must not reach the
+ * disk. */
 void au_web_storage_ns_serialize(const AuWebStorage *ws, uint32_t ns, AuBuf *out);
 /* Reads one such line's text after "storage\t" into the namespace.
  * False for a damaged line (nothing is added). */

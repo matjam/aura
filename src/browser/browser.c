@@ -2225,7 +2225,9 @@ void au_browser_session_serialize(const AuBrowser *b, AuBuf *out)
                 put_clean(out, nav->e[k].title);
                 au_buf_printf(out, "\t%d\n", sy > 0 ? sy : 0);
             }
-            if (b->storage)
+            /* The tab's sessionStorage, unless cookies are cleared at
+             * quit: then no site data is to outlive the run. */
+            if (b->storage && !b->prefs.clear_cookies_on_quit)
                 au_web_storage_ns_serialize(b->storage, t->storage_ns, out);
         }
     }

@@ -64,6 +64,7 @@ Aura for its users; keep it short.
 | iframes, objects, script between documents, sandbox | [`docs/frames.md`](docs/frames.md) |
 | form controls, text editing, submission, typing speed | [`docs/forms.md`](docs/forms.md) |
 | HTTP, the cache, DNS, cookies, HSTS, HTTPS-first, the loader | [`docs/networking.md`](docs/networking.md) |
+| `localStorage`, `sessionStorage`, the Local Storage folder, `document.referrer` | [`docs/web-storage.md`](docs/web-storage.md) |
 | TLS, certificates, the root store, Mbed TLS and its patches | [`docs/tls.md`](docs/tls.md) (history: [`docs/tls13-feasibility.md`](docs/tls13-feasibility.md)) |
 | blocklists | [`docs/content-blocking.md`](docs/content-blocking.md) |
 | windows, tabs, history, Back and Forward, scrolling, selection, find, contextual menus, Internet Config, downloads, session files | [`docs/browser-chrome.md`](docs/browser-chrome.md) |

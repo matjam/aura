@@ -1153,12 +1153,34 @@ static void put_escaped(AuBuf *out, const char *s, size_t n)
     }
 }
 
+/* Whether what the site of a storage key stores may go to disk: not when
+ * its cookies may not (cookies off, a "session only" or "block" rule, a
+ * third-party area while third-party cookies are blocked). */
+static bool key_may_persist(const AuWebStorage *ws, const char *key)
+{
+    if (!ws->jar)
+        return true;
+    const char *cut = strchr(key, '^');
+    AuUrl o;
+    if (!au_url_parse_n(&o, key, cut ? (size_t)(cut - key) : strlen(key), NULL))
+        return false;
+    bool block_third = false;
+    AuNetCookiePolicy policy = au_cookie_jar_policy(ws->jar, &block_third);
+    AuCookieRule rule = au_cookie_jar_rule(ws->jar, o.host);
+    au_url_free(&o);
+    if (rule == AU_COOKIE_RULE_ALLOW)
+        return true;
+    if (rule != AU_COOKIE_RULE_NONE || policy == AU_COOKIE_POLICY_NONE)
+        return false;
+    return !(cut && (block_third || policy == AU_COOKIE_POLICY_SAME_SITE));
+}
+
 void au_web_storage_ns_serialize(const AuWebStorage *ws, uint32_t ns, AuBuf *out)
 {
     size_t left = AU_WEB_STORAGE_SESSION_SAVE_BYTES;
     for (size_t i = 0; i < ws->n; i++) {
         const AuStorageArea *a = ws->areas[i];
-        if (a->kind != AU_STORAGE_SESSION || a->ns != ns || !a->items)
+        if (a->kind != AU_STORAGE_SESSION || a->ns != ns || !a->items || !key_may_persist(ws, a->key))
             continue;
         size_t start = out->len;
         au_buf_puts(out, "storage\t");

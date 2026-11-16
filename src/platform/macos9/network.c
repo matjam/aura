@@ -369,8 +369,11 @@ static bool ls_write(void *ctx, const char *name, const void *data, size_t len)
     (void)ctx;
     uint32_t t0 = au_mac_clock_us();
     bool ok = folder_write(N.ls_vref, N.ls_dir, name, data, len, 'AuLS');
-    N.ls_write_us = au_mac_clock_us() - t0; /* the last write, for System Status */
-    N.ls_write_len = (uint32_t)len;
+    if (len >= N.ls_write_len) {
+        /* the largest write, for System Status */
+        N.ls_write_us = au_mac_clock_us() - t0;
+        N.ls_write_len = (uint32_t)len;
+    }
     return ok;
 }
 
@@ -779,13 +782,14 @@ void mac_net_status_text(AuBuf *out)
         /* Counts only: never what a site stored. */
         AuWebStorageStats ws;
         au_web_storage_stats(N.storage, &ws);
-        au_report_kv(out, "Web storage",
-                     "%u origins, %lu KB   (%u for the session only, %u tab areas, %lu KB in memory, %u writes pending)",
-                     ws.local_areas, (unsigned long)(ws.bytes / 1024), ws.session_only_areas, ws.session_areas,
-                     (unsigned long)(ws.resident / 1024), ws.pending);
-        au_report_kv(out, "Storage files", "%u read in %lu ms, %u written (the last: %lu bytes in %lu ms), %u damaged",
-                     ws.reads, (unsigned long)(N.ls_read_us / 1000), ws.writes, (unsigned long)N.ls_write_len,
-                     (unsigned long)(N.ls_write_us / 1000), ws.damaged);
+        au_report_kv(out, "Web storage", "%u origins, %lu KB, %u writes pending", ws.local_areas + ws.session_only_areas,
+                     (unsigned long)(ws.bytes / 1024), ws.pending);
+        au_report_kv(out, "Storage areas", "%u session only, %u of tabs, %lu KB in memory", ws.session_only_areas,
+                     ws.session_areas, (unsigned long)(ws.resident / 1024));
+        au_report_kv(out, "Storage files", "%u read in %lu ms, %u written, %u damaged", ws.reads,
+                     (unsigned long)(N.ls_read_us / 1000), ws.writes, ws.damaged);
+        au_report_kv(out, "Largest write", "%lu bytes in %lu ms", (unsigned long)N.ls_write_len,
+                     (unsigned long)(N.ls_write_us / 1000));
     }
 
     AuCacheStats cs;
