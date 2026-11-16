@@ -397,6 +397,15 @@ static void set_doc_subtree(AuNode *root, AuDocument *doc)
                     doc->has_shadow = true;
                 if (n->type == AU_NODE_ELEMENT) {
                     AuElement *e = (AuElement *)n;
+                    /* Its box belongs to the old document's layout: one
+                     * left here would point into another arena when the
+                     * element sits where the new layout makes no box. */
+                    e->box = NULL;
+                    /* Hover, active, focus and target belong to the old
+                     * document's view, which keeps no pointer it would use to
+                     * clear them here. */
+                    e->state &= ~(uint32_t)(AU_STATE_HOVER | AU_STATE_ACTIVE | AU_STATE_FOCUS | AU_STATE_FOCUS_VISIBLE |
+                                            AU_STATE_FOCUS_WITHIN | AU_STATE_TARGET);
                     if (e->template_content)
                         e->template_content->doc = doc; /* its contents keep their own document in the standard; close enough */
                     if (e->shadow_root) {

@@ -213,8 +213,11 @@ typedef struct RRoot {
  * display: none, which a whole build lists instead. */
 static bool hidden_gone(const AuLayout *L, const RRoot *roots, uint32_t nroots, const AuElement *el)
 {
-    const AuNode *p = el->node.parent;
-    for (; p && p->type != AU_NODE_DOCUMENT; p = p->parent) {
+    bool flat = L->doc->has_shadow;
+    if (flat && !au_node_in_flat_tree(&el->node))
+        return true; /* a light child that no slot takes is not rendered */
+    const AuNode *p = flat ? au_flat_parent(&el->node) : el->node.parent;
+    for (; p && p->type != AU_NODE_DOCUMENT; p = flat ? au_flat_parent(p) : p->parent) {
         for (uint32_t i = 0; i < nroots; i++)
             if (p == &roots[i].el->node)
                 return true;
