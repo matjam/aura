@@ -204,6 +204,13 @@ static int build_lengths(const uint32_t *freq, int n, int max_bits, Code *out)
                 leaf[j] = v;
             }
         }
+        if (nl < 2) {
+            /* Not reached with an alphabet of two symbols or more (two
+             * were given counts above); for the compiler's sake. */
+            for (int i = 0; i < n; i++)
+                out[i].len = f[i] ? 1 : 0;
+            break;
+        }
         /* Nodes 0..nl-1 are the leaves in that order; nl.. are internal,
          * made in order of weight, so they form a second sorted queue. */
         uint32_t w[2 * (L_CODES + 2)];
