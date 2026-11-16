@@ -143,6 +143,20 @@ void au_chrome_layout(AuChromeLayout *l, int W, int H, AuTabPosition pos, int co
     l->address_text = irect(ax0 + 23, l->address.y0 + 3, ax1 - 4, l->address.y1 - 3);
 }
 
+void au_chrome_layout_page_only(AuChromeLayout *l, int W, int H, int ntabs)
+{
+    memset(l, 0, sizeof *l);
+    if (W < 1)
+        W = 1;
+    if (H < 1)
+        H = 1;
+    l->width = W;
+    l->height = H;
+    l->ntabs = ntabs;
+    l->tab_size = 1; /* keeps tab arithmetic free of division by zero */
+    l->page = irect(0, 0, W, H);
+}
+
 void au_chrome_layout_hscroll(AuChromeLayout *l)
 {
     if (!au_irect_empty(l->hscroll))

@@ -258,6 +258,28 @@ static void test_tabs(AuFontSet *fonts)
     const char *c = au_bw_complete(w, "exa");
     CHECK(c && !strcmp(c, "http://example.com/"));
     CHECK(au_bw_complete(w, "zzz") == NULL);
+    AuBuf fill;
+    au_buf_init(&fill);
+    CHECK(au_bw_complete_field(w, "exa", &fill));
+    CHECK_STR(au_buf_cstr(&fill), "example.com/");
+    au_buf_clear(&fill);
+    CHECK(!au_bw_complete_field(w, "", &fill) && fill.len == 0);
+    /* The field's text keeps what was typed and adds the rest of the key:
+     * no scheme or "//" when none was typed, no "www." unless typed. */
+    CHECK(au_complete_fill("EX", "https://www.example.com/a", &fill));
+    CHECK_STR(au_buf_cstr(&fill), "EXample.com/a");
+    au_buf_clear(&fill);
+    CHECK(au_complete_fill("www.ex", "https://www.example.com/", &fill));
+    CHECK_STR(au_buf_cstr(&fill), "www.example.com/");
+    au_buf_clear(&fill);
+    CHECK(au_complete_fill("https://ex", "https://example.com/", &fill));
+    CHECK_STR(au_buf_cstr(&fill), "https://example.com/");
+    au_buf_clear(&fill);
+    CHECK(!au_complete_fill("example.com/", "https://example.com/", &fill)); /* nothing to add */
+    CHECK(!au_complete_fill("exb", "https://example.com/", &fill));
+    CHECK(!au_complete_fill("ex", NULL, &fill));
+    CHECK(fill.len == 0);
+    au_buf_free(&fill);
 
     /* Field edits. */
     au_bw_set_field_text(w, "typed");
@@ -513,6 +535,24 @@ static void test_history(void)
     CHECK_STR(label, "Wednesday");
     au_day_label(au_day_of(t0) - 30, au_day_of(t0), label, sizeof label);
     CHECK_STR(label, "Thursday, 15 October 2026");
+    /* Menu item text: the title, or the URL without one; long text is cut
+     * at a character boundary and "..." added. */
+    au_menu_title("Short", "http://a/", label, sizeof label);
+    CHECK_STR(label, "Short");
+    au_menu_title("", "http://a/", label, sizeof label);
+    CHECK_STR(label, "http://a/");
+    au_menu_title(NULL, "http://a/", label, sizeof label);
+    CHECK_STR(label, "http://a/");
+    au_menu_title("123456789012345678901234567890123456789012345678", "u", label, sizeof label);
+    CHECK_STR(label, "123456789012345678901234567890123456789012345678"); /* 48: kept */
+    au_menu_title("1234567890123456789012345678901234567890123456789", "u", label, sizeof label);
+    CHECK_STR(label, "123456789012345678901234567890123456789012345..."); /* 49: cut to 45 */
+    /* "é" (2 bytes) across byte 45: the cut goes before it. */
+    au_menu_title("12345678901234567890123456789012345678901234\xC3\xA9xxxxx", "u", label, sizeof label);
+    CHECK_STR(label, "12345678901234567890123456789012345678901234...");
+    char tiny[8];
+    au_menu_title("A long title here", "u", tiny, sizeof tiny);
+    CHECK(strlen(tiny) == 7);
     /* Times are UTC; days are local (here UTC-7). */
     AuHistory z;
     au_history_init(&z, 10);
@@ -529,14 +569,7 @@ static void test_history(void)
     CHECK(y == 1970 && m == 1 && d == 1 && wd == 4);
     CHECK(au_day_of(-1) == -1);
 
-    /* The history window list groups by day. */
-    AuListView lv;
-    au_listview_init(&lv);
-    au_listview_from_history(&lv, &g, t0);
-    CHECK(lv.n == 3 + 4);
-    CHECK(lv.rows[0].kind == AU_ROW_HEADER && !strcmp(lv.rows[0].text, "Today"));
-    CHECK(lv.rows[1].kind == AU_ROW_LINK && lv.rows[1].id == 0);
-    au_listview_free(&lv);
+    /* The History window's rows are tested in test_lists.c. */
 
     /* Expiry. */
     au_history_expire(&g, t0, 2);
@@ -623,19 +656,7 @@ static void test_bookmarks(void)
         CHECK_STR(b->title, order[i++]);
     CHECK(i == 7);
 
-    /* Manager list: collapsed folders hide their contents. */
-    AuListView lv;
-    au_listview_init(&lv);
-    au_listview_from_bookmarks(&lv, &bm);
-    CHECK(lv.n == 4); /* Unicode, Apple, Retro (collapsed), Empty */
-    f->expanded = true;
-    lv.selected = 2;
-    au_listview_from_bookmarks(&lv, &bm);
-    CHECK(lv.n == 6 && lv.selected == 2 && lv.rows[2].id == f->id);
-    CHECK(lv.rows[4].kind == AU_ROW_FOLDER && lv.rows[4].indent == 1);
-    bool disc;
-    CHECK(au_listview_hit(&lv, 6 + 16 + 2, 2 + 4 * AU_LIST_ROW_H + 5, &disc) == 4 && disc);
-    au_listview_free(&lv);
+    /* The Bookmarks window's rows are tested in test_lists.c. */
 
     /* Netscape round trip. */
     AuBuf out;

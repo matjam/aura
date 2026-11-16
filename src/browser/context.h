@@ -4,54 +4,18 @@
  *
  * To show one, call au_bw_context_menu with the window point, show the
  * enabled items' labels in order (AU_CMD_SEPARATOR is a divider line),
- * then pass the chosen command to au_bw_context_command. When that
- * returns false the command is the shell's: copying to the clipboard
+ * then pass the chosen command to au_command_run_context (commands.h),
+ * which runs the model's commands with au_bw_context_command and hands
+ * the rest to the port's AuCommandHost: copying to the clipboard
  * (AU_CMD_COPY_LINK, AU_CMD_COPY_IMAGE, AU_CMD_COPY), the address
- * field's editing commands and AU_CMD_OPEN_LINK_WINDOW. Free the menu
- * with au_context_menu_free. */
+ * field's editing commands, AU_CMD_OPEN_LINK_WINDOW and the Page Source
+ * window. Free the menu with au_context_menu_free. Item labels are the
+ * command table's titles (au_command_title). */
 #ifndef AURA_BROWSER_CONTEXT_H
 #define AURA_BROWSER_CONTEXT_H
 
 #include "browser.h"
-
-typedef enum AuCommand {
-    AU_CMD_NONE,
-    AU_CMD_SEPARATOR,
-    /* a link */
-    AU_CMD_OPEN_LINK,
-    AU_CMD_OPEN_LINK_TAB,
-    AU_CMD_OPEN_LINK_WINDOW, /* the shell's */
-    AU_CMD_COPY_LINK,        /* the shell's: copy AuContextMenu.link */
-    AU_CMD_BOOKMARK_LINK,
-    /* an image */
-    AU_CMD_OPEN_IMAGE_TAB,
-    AU_CMD_COPY_IMAGE, /* the shell's: copy AuContextMenu.image */
-    /* the page */
-    AU_CMD_BACK,
-    AU_CMD_FORWARD,
-    AU_CMD_RELOAD,
-    AU_CMD_VIEW_SOURCE,
-    AU_CMD_BOOKMARK_PAGE,
-    AU_CMD_COPY, /* the shell's: copy the selection */
-    /* the address field (all the shell's) */
-    AU_CMD_CUT,
-    AU_CMD_FIELD_COPY,
-    AU_CMD_PASTE,
-    AU_CMD_PASTE_GO,
-    AU_CMD_SELECT_ALL,
-    /* a tab */
-    AU_CMD_CLOSE_TAB,
-    AU_CMD_CLOSE_OTHER_TABS,
-    AU_CMD_RELOAD_TAB,
-    AU_CMD_DUPLICATE_TAB,
-    /* downloads */
-    AU_CMD_SAVE_LINK,
-    AU_CMD_SAVE_IMAGE,
-    /* the page: "Turn Off (On) Blocking for This Site" */
-    AU_CMD_TOGGLE_BLOCKING,
-    /* a tab: "Unload Tab" (au_bw_unload_tab) */
-    AU_CMD_UNLOAD_TAB
-} AuCommand;
+#include "commands.h" /* AuCommand: the contextual commands and their titles */
 
 typedef enum AuContextKind {
     AU_CONTEXT_NONE, /* nothing to offer here */

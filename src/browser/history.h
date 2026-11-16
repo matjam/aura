@@ -34,6 +34,12 @@ AuTime au_time_of_date(int year, int month, int mday);
 /* A heading for a day relative to today: "Today", "Yesterday", a weekday
  * name within the last week, else "Monday, 3 November 2026". */
 void au_day_label(int64_t day, int64_t today, char *out, size_t cap);
+/* A history or bookmark menu item's text: title, or url when title is
+ * empty or NULL. Text over AU_MENU_TITLE_MAX bytes is cut to at most
+ * AU_MENU_TITLE_MAX - 3 bytes, at the start of a UTF-8 character, and
+ * "..." added. out always ends with a NUL when cap is not 0. */
+#define AU_MENU_TITLE_MAX 48
+void au_menu_title(const char *title, const char *url, char *out, size_t cap);
 
 
 /* ---- History ---- */
@@ -42,6 +48,7 @@ typedef struct AuHistoryEntry {
     char *url, *title;
     AuTime last_visit;
     uint32_t visits;
+    uint32_t id; /* 1 to 0x7FFFFFFF, unique while Aura runs (not saved), for the History window */
 } AuHistoryEntry;
 
 typedef struct AuHistory {
@@ -50,6 +57,7 @@ typedef struct AuHistory {
     size_t max_entries;
     uint32_t generation; /* bumped on every change, for menus and saving */
     int32_t utc_offset;  /* seconds east of UTC, for local days (0: UTC) */
+    uint32_t last_id;    /* the last AuHistoryEntry.id given */
 } AuHistory;
 
 #define AU_HISTORY_DEFAULT_MAX 1000

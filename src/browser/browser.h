@@ -60,15 +60,25 @@ typedef struct AuBrowser AuBrowser;
 typedef struct AuBrowserWindow AuBrowserWindow;
 typedef struct AuTab AuTab;
 
-/* What au_bw_* changed, for AuBrowserHost.changed. */
+/* What au_bw_* changed, for AuBrowserHost.changed. The model sends them
+ * in both chrome modes; a port with native chrome refreshes only the
+ * widgets a bit names. Several bits can arrive in one call. */
 enum {
     AU_CHANGED_FIELD = 1,  /* the address field's text (au_bw_field_text) */
     AU_CHANGED_TITLE = 2,  /* the window title (au_bw_window_title) */
     AU_CHANGED_LAYOUT = 4, /* chrome rectangles moved: place native controls again */
-    AU_CHANGED_SCROLL = 8, /* scroll position or range of the active tab */
+    AU_CHANGED_SCROLL = 8, /* scroll position or range of the active tab (au_bw_scroll_pos, au_bw_scroll_max) */
     AU_CHANGED_MENUS = 16, /* tab list, history or bookmarks: rebuild menus */
     AU_CHANGED_FOCUS_FIELD = 32, /* put the keyboard focus in the address field */
-    AU_CHANGED_FOCUS_PAGE = 64   /* take it out of the field: keys go to the page */
+    AU_CHANGED_FOCUS_PAGE = 64,  /* take it out of the field: keys go to the page */
+    AU_CHANGED_TABS = 128,       /* a tab was added, closed or moved (au_bw_tab_count, au_bw_tab_info) */
+    AU_CHANGED_TAB_INFO = 256,   /* a tab's title, address, icon, loading or unloaded state (au_bw_tab_info) */
+    AU_CHANGED_ACTIVE_TAB = 512, /* another tab became active (au_bw_active_index) */
+    AU_CHANGED_NAV = 1024,       /* Back, Forward or Reload/Stop of the active tab (au_bw_can_go, au_bw_loading) */
+    AU_CHANGED_STATUS = 2048,    /* the status bar's text (au_bw_status_text) */
+    AU_CHANGED_SECURITY = 4096,  /* the active tab's security state (au_bw_security) */
+    AU_CHANGED_PROGRESS = 8192,  /* a tab's load progress, or the active tab's progress text or blocked count */
+    AU_CHANGED_BOOKMARK = 16384  /* whether the active page is bookmarked (au_bw_is_bookmarked) */
 };
 
 typedef struct AuBrowserHost {
@@ -169,6 +179,10 @@ struct AuBrowserWindow {
     bool field_focused;
     bool native_field;    /* the shell edits the field natively */
     bool native_standins; /* paint scroll bar and grow box stand-ins */
+    /* Native chrome (au_browser_window_new_native): the surface holds only
+     * the page and the port shows tabs, toolbar, status and scroll bars
+     * with its own widgets. Fixed when the window is made. */
+    bool native_chrome;
     bool active_window;
     int throbber_frame;
     uint32_t throbber_ms;
@@ -308,8 +322,17 @@ size_t au_browser_release_memory(AuBrowser *b);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
 
-/* A window with no tabs yet; width and height are the content size. */
+/* A window with no tabs yet; width and height are the content size. The
+ * model lays out and paints the Platinum chrome (chrome.h) around the
+ * page and routes clicks in it. */
 AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height);
+/* A window in native chrome mode: width and height are the page's size,
+ * the surface au_bw_paint fills holds only the page, and mouse events
+ * are in page coordinates. The port shows tabs, buttons, address field,
+ * progress, status text and scroll bars with its own widgets, reads them
+ * with the accessors below ("Native chrome") and calls the au_bw_*
+ * actions; the AU_CHANGED_* bits say what to refresh. */
+AuBrowserWindow *au_browser_window_new_native(AuBrowser *b, int width, int height);
 void au_browser_window_free(AuBrowserWindow *w);
 
 /* ---- Tabs ---- */
@@ -429,6 +452,16 @@ bool au_bw_typing(const AuBrowserWindow *w);
 /* Inline completion for typed text from history and bookmarks: the full
  * URL whose match key extends typed, or NULL. */
 const char *au_bw_complete(AuBrowserWindow *w, const char *typed);
+/* The address field's text after inline completion of typed (UTF-8) to
+ * url: when url, with its scheme and "//" removed if typed has no scheme
+ * and its leading "www." removed if typed does not start with one, is
+ * longer than typed and starts with it (ASCII case ignored), out
+ * receives typed followed by the rest of that key and the result is
+ * true. Otherwise out is unchanged and the result is false. The host
+ * selects the text after typed, so the next keystroke replaces it. */
+bool au_complete_fill(const char *typed, const char *url, AuBuf *out);
+/* au_bw_complete, then au_complete_fill. */
+bool au_bw_complete_field(AuBrowserWindow *w, const char *typed, AuBuf *out);
 
 /* ---- Geometry, painting, input ---- */
 void au_bw_resize(AuBrowserWindow *w, int width, int height);
@@ -437,8 +470,9 @@ void au_bw_resize(AuBrowserWindow *w, int width, int height);
 void au_bw_set_position(AuBrowserWindow *w, int x, int y);
 void au_bw_set_active(AuBrowserWindow *w, bool active); /* window activation */
 void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip);
-/* Mouse events in window coordinates. Returns the hit the event was
- * routed to, so the shell can take over parts it handles natively. */
+/* Mouse events in window coordinates (page coordinates in native chrome
+ * mode, where every point inside is the page). Returns the hit the event
+ * was routed to, so the shell can take over parts it handles natively. */
 AuHit au_bw_mouse(AuBrowserWindow *w, const AuEvent *ev);
 /* Keys not taken by the address field: the page's focused element and
  * script first, then scrolling keys. */
@@ -461,6 +495,50 @@ void au_bw_idle(AuBrowserWindow *w);
 void au_bw_window_title(AuBrowserWindow *w, char *out, size_t cap);
 /* The rectangle a hit part occupies (for repainting). */
 AuIRect au_bw_hit_rect(AuBrowserWindow *w, AuHit h);
+
+/* ---- Native chrome ----
+ * What the painted chrome shows, for a port that shows it with its own
+ * widgets (au_browser_window_new_native); they work in both modes. The
+ * strings belong to the model and last until the next call into it. */
+int au_bw_tab_count(const AuBrowserWindow *w);
+/* The active tab's index, or -1 before the first tab. */
+int au_bw_active_index(const AuBrowserWindow *w);
+/* Tab i's label (its title, else its address, else "New Tab"), address,
+ * loading state and progress, site icon (a 16 x 16 surface, or NULL for
+ * the generic page icon) and whether it is unloaded. False when i is out
+ * of range. */
+bool au_bw_tab_info(AuBrowserWindow *w, int i, AuChromeTab *out);
+/* Whether Back (delta -1) or Forward (delta 1) is enabled. */
+bool au_bw_can_go(AuBrowserWindow *w, int delta);
+/* The active tab is loading: the Reload button shows Stop. */
+bool au_bw_loading(AuBrowserWindow *w);
+/* The active tab's load progress, 0..1 (0 when not loading). */
+float au_bw_progress(AuBrowserWindow *w);
+AuSecurity au_bw_security(AuBrowserWindow *w);
+/* The status bar's text: the link under the pointer or what the page
+ * said, else, while loading, what the load is doing; "" for none. */
+void au_bw_status_text(AuBrowserWindow *w, char *out, size_t cap);
+/* "Loading, 40%" while the active tab loads, else "". */
+void au_bw_progress_text(AuBrowserWindow *w, char *out, size_t cap);
+/* Requests of the active page a blocklist refused. */
+int au_bw_blocked_count(AuBrowserWindow *w);
+/* The active tab's scroll position (0, 0 without a tab). */
+void au_bw_scroll_pos(AuBrowserWindow *w, int *x, int *y);
+
+/* What the painted chrome's controls do, for a port's own widgets. */
+/* The New Tab button: a blank tab at the end, made active, with the
+ * keyboard focus in the address field. */
+AuTab *au_bw_open_new_tab(AuBrowserWindow *w);
+/* The Reload button: Stop while the active tab loads, else reload
+ * (bypass: fetch again past the cache, as Shift or Option does). */
+void au_bw_reload_or_stop(AuBrowserWindow *w, bool bypass);
+/* Does what a click on the painted part h does, with modifier keys mods
+ * (AU_MOD_*): Command on Back or Forward opens the entry in a new tab,
+ * Shift or Option on Reload bypasses the cache. Parts without an action
+ * do nothing. */
+void au_bw_press(AuBrowserWindow *w, AuHit h, uint32_t mods);
+/* The pointer left the page: hover ends and a link's status text goes. */
+void au_bw_mouse_leave(AuBrowserWindow *w);
 
 /* ---- Session (open windows and tabs, for "restore last tabs") ----
  * File format:

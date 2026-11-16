@@ -407,52 +407,31 @@ void browserwin_focus_field(BrowserWin *b)
     flush(b);
 }
 
-static bool has_scheme(const char *s)
-{
-    return au_url_scheme_len(s, strlen(s)) != 0;
-}
-
 /* Inline completion: after typing at the end of the field, the best
- * history or bookmark match is filled in and the added part selected. */
+ * history or bookmark match is filled in (au_bw_complete_field) and the
+ * added part selected. */
 static void autocomplete(BrowserWin *b)
 {
     TERec *t = *b->te;
     if (t->selStart != t->selEnd || t->selEnd != t->teLength)
         return;
     char *typed = field_text(b);
-    size_t tn = strlen(typed);
-    const char *url = tn ? au_bw_complete(b->bw, typed) : NULL;
-    if (url) {
-        const char *key = url;
-        size_t kn = strlen(url);
-        if (!has_scheme(typed)) {
-            size_t k = au_url_scheme_len(url, kn);
-            key = url + (k ? k + 1 : 0);
-            if (!strncmp(key, "//", 2))
-                key += 2;
-            if (strncmp(typed, "www.", 4) != 0 && !strncmp(key, "www.", 4))
-                key += 4;
-            kn = strlen(key);
-        }
-        if (kn > tn && au_ieq(key, tn, typed, tn)) {
-            AuBuf full;
-            au_buf_init(&full);
-            au_buf_puts(&full, typed);
-            au_buf_puts(&full, key + tn);
-            size_t rn, fn;
-            char *rt = mac_utf8_to_roman(typed, &rn);
-            char *rf = mac_utf8_to_roman(au_buf_cstr(&full), &fn);
-            TESetText(rf, (long)fn, b->te);
-            TESetSelect((short)rn, (short)fn, b->te);
-            Rect view = (**b->te).viewRect;
-            BackColor(whiteColor);
-            EraseRect(&view);
-            TEUpdate(&view, b->te);
-            au_free(rt);
-            au_free(rf);
-            au_buf_free(&full);
-        }
+    AuBuf full;
+    au_buf_init(&full);
+    if (au_bw_complete_field(b->bw, typed, &full)) {
+        size_t rn, fn;
+        char *rt = mac_utf8_to_roman(typed, &rn);
+        char *rf = mac_utf8_to_roman(au_buf_cstr(&full), &fn);
+        TESetText(rf, (long)fn, b->te);
+        TESetSelect((short)rn, (short)fn, b->te);
+        Rect view = (**b->te).viewRect;
+        BackColor(whiteColor);
+        EraseRect(&view);
+        TEUpdate(&view, b->te);
+        au_free(rt);
+        au_free(rf);
     }
+    au_buf_free(&full);
     au_free(typed);
 }
 
@@ -955,7 +934,7 @@ static bool clipboard_has_text(void)
 
 /* Paste and Go: the clipboard's text, line breaks as spaces, as typed
  * address-field input. */
-static void paste_and_go(BrowserWin *b)
+void browserwin_paste_and_go(BrowserWin *b)
 {
     Handle h = NewHandle(0);
     long off = 0;
@@ -1009,38 +988,16 @@ static void context_menu(BrowserWin *b, Point pt, Point global)
     int i = mac_context_select(&m, global);
     AuCommand cmd = i >= 0 ? m.items[i].cmd : AU_CMD_NONE;
     SetPort((GrafPtr)b->base.win);
-    if (cmd == AU_CMD_VIEW_SOURCE) {
-        /* The Page Source window, as View > Page Source: the model's own
-         * command opens a view-source: tab, for shells without one. */
-        au_context_menu_free(&m);
-        devwin_show(WIN_SOURCE);
-        return;
-    }
-    if (!au_bw_context_command(b->bw, &m, cmd)) {
-        switch (cmd) {
-        case AU_CMD_OPEN_LINK_WINDOW:
-            if (m.link)
-                browserwin_new(m.link, NULL);
-            break;
-        case AU_CMD_COPY_LINK:
-            if (m.link)
-                mac_put_scrap(m.link, strlen(m.link));
-            break;
-        case AU_CMD_COPY_IMAGE:
-            if (m.image)
-                mac_put_scrap(m.image, strlen(m.image));
-            break;
-        case AU_CMD_COPY: bw_edit(&b->base, 4); break;
-        case AU_CMD_CUT: bw_edit(&b->base, 3); break;
-        case AU_CMD_FIELD_COPY: bw_edit(&b->base, 4); break;
-        case AU_CMD_PASTE: bw_edit(&b->base, 5); break;
-        case AU_CMD_SELECT_ALL: bw_edit(&b->base, 7); break;
-        case AU_CMD_PASTE_GO: paste_and_go(b); break;
-        default: break;
-        }
-    }
+    /* The command table runs it (browser/commands.h); the clipboard,
+     * field editing, new windows and the Page Source window come back
+     * through the Mac host. */
+    AuCommandState st;
+    mac_command_state(&st);
+    st.window = b->bw;
+    au_command_run_context(&st, mac_command_host(), &m, cmd);
     au_context_menu_free(&m);
-    if (!b->closing)
+    /* View Source opened the Page Source window in front of this one. */
+    if (!b->closing && cmd != AU_CMD_VIEW_SOURCE)
         flush(b);
 }
 

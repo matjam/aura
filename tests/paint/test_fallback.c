@@ -771,8 +771,10 @@ static bool mem_read(void *ctx, uint32_t off, void *buf, uint32_t n)
 
 static bool same_path(const AuPath *a, const AuPath *b)
 {
-    return a->nops == b->nops && a->npts == b->npts && !memcmp(a->ops, b->ops, a->nops) &&
-           !memcmp(a->pts, b->pts, a->npts * sizeof(float)); /* npts counts floats */
+    /* An empty path may have NULL arrays; memcmp must not see them. */
+    return a->nops == b->nops && a->npts == b->npts &&
+           (!a->nops || !memcmp(a->ops, b->ops, a->nops)) &&
+           (!a->npts || !memcmp(a->pts, b->pts, a->npts * sizeof(float))); /* npts counts floats */
 }
 
 /* A paged face draws exactly what the face read whole draws, for every

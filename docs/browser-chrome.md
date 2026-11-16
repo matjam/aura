@@ -3,9 +3,9 @@
 This document covers the browser model in `src/browser`: windows, tabs,
 back and forward, the documents kept for Back, site icons, keyboard
 focus, scrolling by moving pixels, selection and find, contextual
-menus, Internet Config, downloads and the files Aura keeps. Read it
-before changing how a browser window looks or behaves. The Mac OS 9
-side of each feature is named here; Toolbox lessons are in
+menus, Internet Config, downloads, the list windows and the files Aura
+keeps. Read it before changing how a browser window looks or behaves.
+The Mac OS 9 side of each feature is named here; Toolbox lessons are in
 [`mac-os-9-shell.md`](mac-os-9-shell.md).
 
 ## Where things are
@@ -16,10 +16,14 @@ side of each feature is named here; Toolbox lessons are in
 | `browser.c` | windows, tabs and back/forward lists; routes input |
 | `page.h` | the interface a page implements |
 | `page_doc.c` | implements it on the document view (`src/page`) |
+| `commands.c` | the command table: menus, titles, shortcuts, enable rules, running commands |
 | `context.c` | contextual menus |
 | `favicon.c` | site icons |
 | `present.c` | the shells' damage list |
 | `credits.c` | the About box and about:licences table |
+| `prefs.c`, `prefs_ui.c` | the preferences and their file; the Preferences window's descriptions and editing session |
+| `lists.c` | the models of the Bookmarks, History, Downloads and Cookies windows |
+| `listview.c` | the painted list the Mac OS 9 list windows show |
 
 The model never calls the OS; the shells pass events in and show the
 rectangles it reports through `AuBrowserHost.invalidate`.
@@ -232,8 +236,7 @@ default was 425,000.
 - Holding the button for half a second (30 ticks) shows a pop-up of the
   entries that way (`au_bw_history_items`, `history_popup` in
   `browserwin.c`).
-- File > Reopen Closed Tab (Shift-Command-T, mapped in `key_down`
-  because MenuKey ignores Shift) brings back the last of up to
+- File > Reopen Closed Tab (Shift-Command-T) brings back the last of up to
   `AU_MAX_CLOSED_TABS` closed tabs with their history and scroll
   position.
 - Each window's position goes into the session (`au_bw_set_position`
@@ -283,6 +286,17 @@ Open Location selects the whole address again when the field already
 has the focus, and a paste into the field turns line breaks into
 spaces.
 
+To complete the address as the user types, call `au_bw_complete_field`
+with the field's text after each keystroke that leaves the caret at the
+end: it finds the best history or bookmark match and returns the field's
+new text, and the platform selects the part after what was typed. The
+matching (`au_complete_fill`) ignores the scheme, `//` and `www.` unless
+the user typed them. History and bookmark menu items get their text
+from `au_menu_title` (`history.c`), which shortens long titles at a
+character boundary. Keep logic like this in `src/browser`, where the
+host tests reach it; the platform code only sets the text field or adds
+the menu item.
+
 ## The horizontal scroll bar
 
 A horizontal scroll bar appears along the bottom of the page area while
@@ -290,6 +304,118 @@ the active page is wider than it (`au_chrome_layout_hscroll`); the two
 bars meet at a blank corner square above the grow box, and Shift turns
 a vertical wheel scroll horizontal (Mac OS 9 itself reports no wheel).
 [`layout.md`](layout.md) says how its state is kept across a resize.
+
+## Native chrome
+
+To show a browser window's tabs, toolbar, address field, progress,
+status and scroll bars with a port's own widgets, create the window with
+`au_browser_window_new_native(b, width, height)` instead of
+`au_browser_window_new`. The choice is fixed for the window's life
+(`AuBrowserWindow.native_chrome`). The Mac OS 9 port uses painted
+chrome; [`porting.md`](porting.md) says which a port should use.
+
+In native chrome mode:
+
+- `width` and `height` are the page's size, and `au_bw_resize` takes
+  the page's new size. The layout (`au_chrome_layout_page_only`) makes
+  the page the whole surface; every other region is empty, so no tab
+  strip, toolbar, status bar or scroll bar column is laid out, painted
+  or hit.
+- `au_bw_paint` paints only the page, and `invalidate` reports only page
+  rectangles.
+- Mouse events are in page coordinates: every point inside the surface
+  is `AU_HIT_PAGE`. When the pointer leaves the page widget, call
+  `au_bw_mouse_leave` so that hover ends and a link's status text goes.
+- Keys, the wheel (Shift turns it horizontal), Find, the Edit commands
+  and the address field functions (`au_bw_field_text`,
+  `au_bw_set_field_text`, `au_bw_set_field_focus`, `au_bw_navigate_input`,
+  `au_bw_complete_field`) work as in painted mode.
+
+To read what the painted chrome shows, call these. They work in both
+modes, and the painter itself is built on them (`paint_chrome` in
+`browser.c`), so the two cannot disagree.
+
+| Shows | Call |
+|---|---|
+| tabs: count and active tab | `au_bw_tab_count`, `au_bw_active_index` |
+| a tab's label, address, loading state, progress, site icon (16 x 16 `AuSurface`, NULL for the generic page icon), unloaded | `au_bw_tab_info` (fills an `AuChromeTab`) |
+| Back and Forward enabled | `au_bw_can_go(w, -1)`, `au_bw_can_go(w, 1)` |
+| Reload or Stop | `au_bw_loading` |
+| progress bar and its text ("Loading, 40%") | `au_bw_progress`, `au_bw_progress_text` |
+| security button | `au_bw_security` |
+| bookmark star | `au_bw_is_bookmarked` |
+| status text (link under the pointer, else what the load is doing) | `au_bw_status_text` |
+| blocked requests | `au_bw_blocked_count` |
+| window title | `au_bw_window_title` |
+| scroll position and range | `au_bw_scroll_pos`, `au_bw_scroll_max` |
+
+To act on what the user does with the port's widgets, call these:
+
+| Widget | Call |
+|---|---|
+| select a tab | `au_bw_select_tab` |
+| close a tab | `au_bw_close_tab` |
+| reorder tabs (drag) | `au_bw_move_tab(w, from, to)` |
+| New Tab button | `au_bw_open_new_tab` (a blank tab at the end, the field focused) |
+| Duplicate, Reopen Closed Tab, Close Other Tabs, Unload Tab | `au_bw_duplicate_tab`, `au_bw_reopen_closed_tab`, `au_bw_close_other_tabs`, `au_bw_unload_tab` |
+| Back, Forward | `au_bw_back`, `au_bw_forward`; with Command, `au_bw_go_new_tab(w, -1 or 1)` |
+| history pop-up on Back or Forward | `au_bw_history_items`, then `au_bw_go(w, delta)` |
+| Reload or Stop | `au_bw_reload_or_stop(w, bypass)`; bypass for Shift or Option |
+| Home | `au_bw_home` |
+| bookmark star | `au_bw_bookmark_page(w, true)` |
+| security button | `au_bw_show_certificate` |
+| scroll bars | `au_bw_scroll_to` |
+
+`au_bw_press(w, hit, mods)` does what a click on a painted part does,
+with its modifier keys; painted mode routes its clicks through it. Tab
+scrolling and the tab column's splitter have no function: a port's own
+tab bar scrolls itself.
+
+To know what to refresh, read the bits of `AuBrowserHost.changed`. The
+model sends them from every place the state changes, in both modes, and
+several can arrive in one call.
+
+| Bit | Refresh |
+|---|---|
+| `AU_CHANGED_TABS` | the tab list: a tab was added, closed or moved; read the list and the active index again |
+| `AU_CHANGED_TAB_INFO` | tab labels: a title, address, site icon, loading or unloaded state changed |
+| `AU_CHANGED_ACTIVE_TAB` | the selected tab |
+| `AU_CHANGED_NAV` | Back, Forward, and Reload or Stop |
+| `AU_CHANGED_STATUS` | the status text |
+| `AU_CHANGED_SECURITY` | the security button |
+| `AU_CHANGED_PROGRESS` | progress: a tab's, and the active tab's progress text and blocked count |
+| `AU_CHANGED_BOOKMARK` | the bookmark star |
+| `AU_CHANGED_TITLE` | the window title |
+| `AU_CHANGED_FIELD` | the address field's text, unless the user is typing in it |
+| `AU_CHANGED_SCROLL` | the scroll bars: position or range |
+| `AU_CHANGED_LAYOUT` | the page's size changed (in native mode, after `au_bw_resize`) |
+| `AU_CHANGED_MENUS` | menus built from tabs, history or bookmarks |
+| `AU_CHANGED_FOCUS_FIELD`, `AU_CHANGED_FOCUS_PAGE` | the keyboard focus (see "Keyboard focus and the address field") |
+
+A tab selection sends the bits for everything that belongs to the active
+tab, so a port can refresh the toolbar from it alone.
+
+To show scroll bars, set each bar's range from `au_bw_scroll_max` and
+its value from `au_bw_scroll_pos` on `AU_CHANGED_SCROLL`, and call
+`au_bw_scroll_to(w, x, y)` when the user moves either bar. The page
+area does not shrink for a horizontal bar in native mode: the port puts
+its bars outside the page's surface and passes the remaining size to
+`au_bw_resize`.
+
+To check native chrome by hand, run:
+
+```bash
+build/host/src/platform/host/aura-host chrome --native-chrome -w 640 -h 400 \
+  --tab about:home --tab file:tests/page/samples/wiki.html -o run/native.png
+```
+
+It renders only the page, prints each notice as it arrives and prints
+the chrome's state after the loads and at the end; `--do click:X,Y`
+takes page coordinates. `tests/browser/test_native_chrome.c` covers the
+page-only surface, clicks on links in page coordinates, every action,
+the accessors and each notice in both modes, and scrolling both ways;
+`test_favicon.c` checks that a site icon's arrival sends
+`AU_CHANGED_TAB_INFO`.
 
 ## Save Page As
 
@@ -374,13 +500,74 @@ To change how Aura works with Internet Config, edit
 - `mac_ic_download_folder` and `mac_ic_map_filename` are there for
   downloads.
 
+## Commands and menus
+
+To add a menu command, add an `AU_CMD_*` value in
+`src/browser/commands.h`, its row in the `commands` table in
+`commands.c` (menu, title, shortcut), its place in the menu's item
+list, its enable rule in `au_command_enabled` (commands are enabled
+unless a rule says otherwise) and its action in `au_command_run`. Then
+add a case to `tests/browser/test_commands.c`. No port changes unless
+the command opens a native window.
+
+- **The table.** `au_command_info` gives each command's title (UTF-8;
+  ports convert), menu, shortcut and submenu. `au_menu_info` gives each
+  menu's title, fixed items in order (`AU_CMD_SEPARATOR` is a divider)
+  and the dynamic list that follows them; `au_menu_bar` gives the
+  menu bar's order. Help's items go after the system's own Help items
+  on Mac OS 9.
+- **Shortcuts.** An `AuShortcut` is a key (an upper-case letter, digit
+  or punctuation) and modifiers: `AU_SHORTCUT_PRIMARY` is Command on Mac
+  OS 9 and Ctrl on Linux, plus `AU_SHORTCUT_SHIFT` and
+  `AU_SHORTCUT_ALT`. Each key and modifier set belongs to one command.
+  To find the command for a key press, call `au_command_for_key`, which
+  also makes Close Tab's shortcut close a window that has no tabs.
+- **State.** The port fills an `AuCommandState`: the browser, the
+  frontmost browser window (in front or not), what kind of window is in
+  front (`AU_FRONT_BROWSER`, `AU_FRONT_TOOL` for a developer window,
+  `AU_FRONT_OTHER`, `AU_FRONT_NONE`), whether a text field has the
+  focus, whether the developer window can find again, and the modifier
+  keys held (Reload with Shift or Option reloads past the cache).
+- **Enabled, checked, title.** Before a menu is shown or a shortcut is
+  looked up, call `au_command_enabled` and `au_command_checked` for each
+  item. `au_command_title` gives the title to show for commands whose
+  title follows the state (Turn Off or Turn On Blocking for This Site).
+- **Running.** `au_command_run` does nothing for a disabled command and
+  otherwise does what the command does with `au_bw_*` calls. What needs
+  the port comes back through its `AuCommandHost`: `new_window`,
+  `raise`, `focus_address`, `show_window` (About, Preferences, the list
+  and developer windows, the timing test and paint benchmark),
+  `choose_file_url`, `save_page`, `close_front`, `find`,
+  `tool_find_again`, `edit` (Undo to Select All, Paste and Go),
+  `copy_text`, `select_window`, `beep` and `quit`. A port without a
+  Page Source window returns false from `show_window` for it, and the
+  model opens a `view-source:` tab instead. To open a URL from a port
+  (a GURL event, a list window), call `au_command_open_url`.
+- **Dynamic menus.** `au_menu_list_history` lists a separator and up to
+  `AU_GO_MENU_ENTRIES` recent pages for Go. `au_menu_list_bookmarks`
+  lists the bookmarks breadth-first; an entry's `parent` is the index of
+  its folder entry (-1 for the menu itself), every entry comes after its
+  folder, and an empty folder holds a disabled "(empty)" item.
+  `au_menu_list_windows` takes the port's visible windows front to back
+  and lists a separator and one item each, the front one checked. History
+  and bookmark titles come from `au_menu_title`; window titles are
+  used as they are. To run an entry, call
+  `au_menu_entry_run`; a bookmark is looked up by id when it runs, so a
+  deleted one does nothing. Free a list with `au_menu_list_free`.
+
+The Mac OS 9 menus are built from the table at start-up
+([`mac-os-9-shell.md`](mac-os-9-shell.md), "Menus").
+
 ## Contextual menus
 
 To change what a contextual menu offers, edit `src/browser/context.c`:
 `au_bw_context_menu` builds the items for a window point (link, image,
-page, address field or tab, using `au_page_hit_info` for the page) and
-`au_bw_context_command` runs the commands the model can; the shell does
-the rest (clipboard, field editing, a new window).
+page, address field or tab, using `au_page_hit_info` for the page),
+with labels from the command table. To run the chosen item, call
+`au_command_run_context`: it runs the model's commands with
+`au_bw_context_command` and passes the rest to the port's
+`AuCommandHost` (the clipboard, editing in the address field, a new
+window, the Page Source window).
 
 On Mac OS 9, `contextmenu.c` finds the Contextual Menu Manager in the
 ContextualMenu shared library at run time (the Multiversal Interfaces
@@ -410,8 +597,7 @@ they work in the dialog only.
 The Mac OS 9 shell counts clicks within the double-click time, copies
 with `mac_put_scrap` (TEXT in Mac Roman with transliteration and
 carriage returns, plus 'utxt'), asks for the text with the Find dialog
-(DLOG 201), maps Shift-Command-G to Find Previous itself (MenuKey
-ignores Shift), and paints selections in the Appearance highlight
+(DLOG 201), and paints selections in the Appearance highlight
 colour (`LMGetHiliteRGB`, passed in `AuBrowser.highlight`).
 
 Script has a selection of its own that is not joined to this one (see
@@ -531,11 +717,121 @@ resumed with Range. A page's response that turns out to be a download
 (attachment or a type Aura cannot show) continues on its own transfer.
 `au_sim_source` remains for tests.
 
-## Cookies window
+## The list windows
+
+The Bookmarks, History, Downloads and Cookies windows are built from
+the list models in `src/browser/lists.h`. To change what a list shows,
+which buttons a window has, when a button is enabled or what it does,
+change `lists.c` and its test, `tests/browser/test_lists.c`; a port only
+shows the model.
+
+- **To show a list in a port**, call `au_list_sources` with the browser,
+  the cookie jar and the storage service, then `au_list_init` with the
+  kind (`AU_LIST_BOOKMARKS`, `AU_LIST_HISTORY`, `AU_LIST_DOWNLOADS` or
+  `AU_LIST_COOKIES`) and an `AuListHost`. Show `AuListModel.items` in the
+  port's list widget: `au_list_columns` gives the headings, each item's
+  `cols` the text of each column, `depth` the indent, `type` whether it
+  is a day heading, a folder or an entry, and `icon` and `icon_host` its
+  icon. A list that shows one line of text and a detail uses `cols[0]`
+  and `summary`.
+- **To keep it current**, call `au_list_stale` from the event loop and,
+  when it returns true, `au_list_refresh` and redraw. History, Bookmarks
+  and Downloads compare their data's generation counter; Cookies compare
+  the number of cookies, rules and storage areas and the storage size in
+  KB. When the jar changes in a way those numbers do not show (Clear
+  Cookies in Preferences), call `au_list_touch`.
+- **To make the buttons**, call `au_list_buttons`: each has an action, a
+  label and the width the Mac OS 9 window gives it. Enable each with
+  `au_list_can` after every change of selection or data, and run it with
+  `au_list_run`. A double click or Return calls `au_list_activate`, a
+  click on a folder's triangle `au_list_toggle`, and the Delete key runs
+  `AU_LIST_DELETE`. A port that lets the user drag bookmarks calls
+  `au_list_move_bookmark`.
+- **Selection.** The model holds one selected row (`au_list_select`).
+  A refresh keeps it on the same id; when that row went, History and
+  Downloads keep the position, Bookmarks select nothing, and Cookies
+  select the site of a removed cookie.
+- **Ids.** Bookmarks and downloads use their own ids, history entries
+  `AuHistoryEntry.id` (given at each new entry, not saved), day headings
+  `AU_LIST_ID_GROUP` plus the day number, and cookie rows a hash of what
+  they name.
+- **Dialogs.** Actions that ask call the port: `ask_text` for New Folder
+  and Rename, `show_text` for a cookie's details, `choose` for Site
+  Rule (the Mac OS 9 window pops it up under the button), and
+  `reveal_download` for Reveal. `AU_LIST_FAILED` from `au_list_run`
+  means the port should alert the user (the Mac beeps). No action asks
+  for confirmation.
+
+| Window | Rows | Buttons |
+|---|---|---|
+| Bookmarks | the bookmark tree; a closed folder hides its contents | Open (a folder opens or closes), New Folder, Rename..., Delete |
+| History | entries most recent first, under a heading per local day | Open, Delete, Clear History (also clears the site icons) |
+| Downloads | downloads oldest first, with state and progress | Stop, Resume, Remove, Clear Completed, Reveal |
+| Cookies | a folder per site; an open site lists its cookies and storage areas | Details..., Remove, Remove All, Site Rule... |
 
 The Cookies window (Window > Cookies, or Preferences > Privacy) lists
-`src/net/cookie_view.c`'s model; per-site rules (allow, session only,
-block) live in the `cookies.sites` preference.
+`src/net/cookie_view.c`'s model through `lists.c`; per-site rules
+(allow, session only, block) live in the `cookies.sites` preference.
+
+## Preferences
+
+The settings are fields of `AuPrefs` (`prefs.h`), stored in the
+`Aura Preferences` file. The Preferences window's contents are
+described in `prefs_ui.h`, and a port builds its own window from them.
+
+To build a Preferences window, walk `au_pref_desc(id)` for every
+`AuPrefId` in order. Each item has a section (the pane), a kind (check
+box, radio group, number with a range and unit, text, choice, font
+family, folder, button, note, or the blocking list rows), a caption, a
+title, choices, its preferences file key, the item whose choice enables
+it, and flags: `AU_PREF_LIVE` for items that apply at once and
+`AU_PREF_STATUS` for items with a status line. The port keeps only its
+layout.
+
+To run the window, use an editing session (`AuPrefsEdit`):
+
+1. `au_prefs_edit_new(&browser->prefs, &host)` when the window opens.
+   `AuPrefsHost` gives the font set, the free memory, the blocking
+   manager, whether Aura is the default browser, and the words for the
+   system ("this Mac", "Internet Config", an example folder path, the
+   system's download folder). Load each control from
+   `au_prefs_edit_get_bool`, `_get_choice` or `_get_text`, and the
+   choices from `au_prefs_edit_choice` (the font families come from the
+   font set, unique and sorted).
+2. When the user changes a check box, radio group or choice, call the
+   matching `au_prefs_edit_set_*`. For an `AU_PREF_LIVE` item (the tab
+   position, the blocking switch and lists), call
+   `au_prefs_edit_apply_live`; it returns `AU_PREF_CHANGED_TABS` or
+   `AU_PREF_CHANGED_BLOCKING` for the port to act on. Then read
+   `au_prefs_edit_enabled` and `au_prefs_edit_text` again.
+3. For a button, call `au_prefs_edit_action`. It does the model's part
+   (Clear History, Use Current Page, Update Now) and returns
+   `AU_PREF_DO_*` bits for the parts that need the OS (clearing cookies
+   and the cache, the Cookies window, making Aura the default browser).
+4. On OK, set every text and number field with `au_prefs_edit_set_text`
+   and call `au_prefs_edit_commit`, which writes the shown items into
+   `b->prefs` and calls `au_browser_prefs_changed`. Items the window does
+   not show (zoom per site, window sizes) are left as they are. On
+   Cancel, call `au_prefs_edit_cancel`, which puts the live items back.
+   Then `au_prefs_edit_free`.
+
+The session checks values when they are set, with the rules the Mac
+window used before the descriptions (tested in
+`tests/browser/test_prefs_ui.c`):
+
+- A number is clamped to its range, which is the preferences file's
+  range. Text that is not a number gives the value the preference had
+  when the window opened.
+- Script memory is Automatic (stored as 0) or Custom, 4 to 256 MB.
+- A choice out of range is clamped, except the blocking update
+  interval, which becomes daily.
+- A font family must be installed; it is matched without regard to
+  case and stored with the font set's spelling.
+- The user agent equal to Aura's default is stored as empty.
+- More lists keeps only https addresses of 12 to 1023 bytes; Always
+  allow and Always block keep cleaned domains, without repeats.
+
+To reset a pane to the defaults, call `au_prefs_edit_reset_section`.
 
 ## Not done
 

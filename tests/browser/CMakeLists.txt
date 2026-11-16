@@ -2,6 +2,24 @@ add_executable(test_browser test_browser.c)
 target_link_libraries(test_browser aura_engine m)
 add_test(NAME browser COMMAND test_browser)
 
+# The command table: titles, shortcuts, enable rules, running commands,
+# the port's callbacks and the dynamic menus.
+add_executable(test_commands test_commands.c)
+target_link_libraries(test_commands aura_engine m)
+add_test(NAME browser_commands COMMAND test_commands)
+
+# The list windows' models: rows, actions and their enable rules, the
+# callbacks for actions that ask, and the change notice.
+add_executable(test_lists test_lists.c)
+target_link_libraries(test_lists aura_engine m)
+add_test(NAME browser_lists COMMAND test_lists)
+
+# Native chrome mode: the page-only surface, the actions and accessors a
+# port's own widgets use, and the AU_CHANGED_* notices.
+add_executable(test_native_chrome test_native_chrome.c)
+target_link_libraries(test_native_chrome aura_engine m)
+add_test(NAME browser_native_chrome COMMAND test_native_chrome)
+
 add_executable(test_page_doc test_page_doc.c)
 target_link_libraries(test_page_doc aura_engine m)
 target_compile_definitions(test_page_doc PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -72,6 +90,12 @@ target_link_libraries(test_bugreport aura_fakenet m)
 target_include_directories(test_bugreport PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_bugreport COMMAND test_bugreport)
 set_tests_properties(browser_bugreport PROPERTIES TIMEOUT 120)
+
+# The Preferences window's descriptions and editing session: values,
+# the old window's clamping rules, live items, Cancel and OK.
+add_executable(test_prefs_ui test_prefs_ui.c)
+target_link_libraries(test_prefs_ui aura_engine m)
+add_test(NAME browser_prefs_ui COMMAND test_prefs_ui)
 
 # Script memory: a page, two frames and a worker that share one large
 # script stay under stated peaks; out-of-memory in a worker or a page is
