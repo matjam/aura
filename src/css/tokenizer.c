@@ -759,6 +759,25 @@ void css_tokens_free(CssTokens *tk)
 
 /* ---- Token lists ---- */
 
+/* The tokens whose string css_tokens_append copies. */
+static bool tok_has_string(int type)
+{
+    switch (type) {
+    case TK_IDENT:
+    case TK_FUNCTION:
+    case TK_AT:
+    case TK_HASH:
+    case TK_STRING:
+    case TK_BAD_STRING:
+    case TK_URL:
+    case TK_BAD_URL:
+    case TK_DIMENSION:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_t b)
 {
     if (!dst->pool.data)
@@ -766,25 +785,13 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
     uint32_t base = dst->n;
     for (uint32_t i = a; i < b; i++) {
         CssToken t = src->t[i];
-        switch (t.type) {
-        case TK_IDENT:
-        case TK_FUNCTION:
-        case TK_AT:
-        case TK_HASH:
-        case TK_STRING:
-        case TK_BAD_STRING:
-        case TK_URL:
-        case TK_BAD_URL:
-        case TK_DIMENSION: {
+        if (tok_has_string(t.type)) {
             uint32_t off = (uint32_t)dst->pool.len;
             au_buf_append(&dst->pool, src->pool.data + t.str, css_tok_len(&t));
             au_buf_putc(&dst->pool, 0);
             t.str = off;
-            break;
-        }
-        default:
+        } else {
             t.str = 0;
-            break;
         }
         if (t.type != TK_FUNCTION)
             t.name_len = 0; /* a number's source text is not copied */
@@ -870,61 +877,50 @@ static uint32_t toklist_slot(const CssTokList *l)
 }
 
 /* A list is one allocation: the header, its tokens, then their strings.
- * tk points into it and is never grown. */
-static CssTokList *toklist_pack(const CssTokList *tmp)
-{
-    size_t tb = (size_t)tmp->tk.n * sizeof(CssToken), pb = tmp->tk.pool.len;
-    CssTokList *l = au_alloc(sizeof *l + tb + pb + 1);
-    memset(l, 0, sizeof *l);
-    l->refs = 1;
-    l->has_var = tmp->has_var;
-    l->has_attr = tmp->has_attr;
-    l->tk.t = (CssToken *)(l + 1);
-    l->tk.n = l->tk.cap = tmp->tk.n;
-    if (tb)
-        memcpy(l->tk.t, tmp->tk.t, tb);
-    l->tk.pool.data = (char *)(l + 1) + tb;
-    l->tk.pool.len = pb;
-    l->tk.pool.cap = pb + 1;
-    if (pb)
-        memcpy(l->tk.pool.data, tmp->tk.pool.data, pb);
-    l->tk.pool.data[pb] = 0;
-    return l;
-}
-
+ * tk points into it and is never grown. The sizes are worked out first,
+ * so the tokens are copied once, into their place. */
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
 {
-    CssTokList tmp;
-    memset(&tmp, 0, sizeof tmp);
-    css_tokens_append(&tmp.tk, src, a, b);
-    for (uint32_t i = 0; i < tmp.tk.n; i++) {
-        const CssToken *t = &tmp.tk.t[i];
+    if (b < a)
+        b = a;
+    size_t pool = 1; /* offset 0 is the empty string */
+    for (uint32_t i = a; i < b; i++)
+        if (tok_has_string(src->t[i].type))
+            pool += (size_t)css_tok_len(&src->t[i]) + 1;
+    size_t tb = (size_t)(b - a) * sizeof(CssToken);
+    CssTokList *l = au_alloc(sizeof *l + tb + pool + 1);
+    memset(l, 0, sizeof *l);
+    l->refs = 1;
+    l->tk.t = (CssToken *)(l + 1);
+    l->tk.cap = b - a;
+    l->tk.pool.data = (char *)(l + 1) + tb;
+    l->tk.pool.cap = pool + 1; /* au_buf_reserve keeps a byte for a NUL */
+    l->tk.pool.data[0] = 0;
+    l->tk.pool.len = 1;
+    css_tokens_append(&l->tk, src, a, b);
+    for (uint32_t i = 0; i < l->tk.n; i++) {
+        const CssToken *t = &l->tk.t[i];
         if (t->type == TK_FUNCTION && (t->kw == AU_K_var || t->kw == AU_K_env))
-            tmp.has_var = 1;
+            l->has_var = 1;
         if (t->type == TK_FUNCTION && t->kw == AU_K_attr)
-            tmp.has_attr = 1;
+            l->has_attr = 1;
     }
-    CssTokList *l;
     if (tl_intern.depth > 0) {
-        uint32_t h = toklist_slot(&tmp);
+        uint32_t h = toklist_slot(l);
         if (tl_intern.slots[h]) {
-            l = css_toklist_retain(tl_intern.slots[h]);
-        } else {
-            l = toklist_pack(&tmp);
-            tl_intern.slots[h] = css_toklist_retain(l);
-            tl_intern.count++;
+            au_free(l);
+            return css_toklist_retain(tl_intern.slots[h]);
         }
-    } else {
-        l = toklist_pack(&tmp);
+        tl_intern.slots[h] = css_toklist_retain(l);
+        tl_intern.count++;
     }
-    css_tokens_free(&tmp.tk);
     return l;
 }
 
 /* For css_bench: what a list takes here and with 32-bit pointers. */
 void css_toklist_mem(const CssTokList *l, size_t *bytes, size_t *bytes32, size_t *blocks)
 {
-    size_t body = (size_t)l->tk.n * sizeof(CssToken) + l->tk.pool.len + 1;
+    size_t body = (size_t)l->tk.n * sizeof(CssToken) + l->tk.pool.cap;
     *bytes = sizeof *l + body;
     *bytes32 = 32 + body;
     *blocks = 1;

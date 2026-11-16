@@ -657,6 +657,9 @@ static int page_report(int argc, char **argv)
 int main(int argc, char **argv)
 {
     au_css_init();
+    /* to compare: CSS_EAGER=1 parses every block with its sheet */
+    if (getenv("CSS_EAGER"))
+        css_lazy_bodies = false;
     if (argc > 1 && strcmp(argv[1], "--mem") == 0)
         return mem_report(argc, argv);
     if (argc > 1 && strcmp(argv[1], "--page") == 0)

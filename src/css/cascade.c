@@ -104,19 +104,25 @@ static void layer_rank(LayerTree *t)
 
 bool css_index_skip_repeats = true;
 
-/* One selector of one rule: 20 bytes with 32-bit pointers. */
+/* One selector of one rule: 24 bytes with 32-bit pointers. hash is the
+ * selector's first ancestor filter hash: match_bucket rejects most
+ * entries on it without reading the selector. */
 typedef struct RuleEntry {
     const AuSelector *sel;
-    const CssRule *rule;   /* its declarations: css_rule_decls with the sheet */
+    /* The rule's declarations (an AuCssDeclBlock *), or, with the low bit
+     * set, the rule itself (a CssRule *) whose block is still text:
+     * entry_decls parses it and keeps the block here. */
+    uintptr_t body;
+    uint32_t hash;         /* 0: the selector names no ancestor */
     unsigned order : 24;   /* source order, clamped as make_key clamps it */
-    unsigned pseudo : 4;   /* AuCssPseudo of the selector */
-    unsigned origin : 2;
+    unsigned pseudo : 8;   /* AuCssPseudo of the selector */
     unsigned spec : 24;
+    unsigned origin : 8;
     uint16_t layer;        /* node in the origin's tree, then its rank */
     uint16_t sheet;        /* index in AuCssResolver.walked */
 } RuleEntry;
 #define MAX_WALKED 65535u /* sheets (imports and the user agent's included) one index holds */
-CSS_SIZE_ON_32(RuleEntry, 20);
+CSS_SIZE_ON_32(RuleEntry, 24);
 
 typedef struct {
     AuAtom *keys;
@@ -678,7 +684,8 @@ static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *r
             continue; /* cannot match: not indexed, and its block is never parsed */
         RuleEntry *e = CSS_PUSH(r->entries, r->nentries, r->entries_cap);
         e->sel = &sel->sel[i];
-        e->rule = rule;
+        e->body = rule->flags & RF_LAZY ? (uintptr_t)rule | 1 : (uintptr_t)rule->b.decls;
+        e->hash = sel->sel[i].nhash ? css_sel_hashes(&sel->sel[i])[0] : 0;
         e->sheet = (uint16_t)sheet_index;
         e->order = ord > 0xFFFFFF ? 0xFFFFFF : ord;
         e->spec = nested_decls ? spec_override : sel->sel[i].spec;
@@ -1136,6 +1143,15 @@ static void push_matched(AuCssResolver *r, const AuCssDeclBlock *b, uint64_t kn,
     m->key_i = ki;
 }
 
+/* The declarations of an entry's rule, parsed now if they are still
+ * text. */
+static const AuCssDeclBlock *entry_decls(AuCssResolver *r, RuleEntry *e)
+{
+    if (e->body & 1)
+        e->body = (uintptr_t)css_rule_decls(r->walked[e->sheet], (const CssRule *)(e->body & ~(uintptr_t)1));
+    return (const AuCssDeclBlock *)e->body;
+}
+
 static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const AuElement *el, const CssMatchCtx *mc,
                          uint8_t want, uint16_t *pseudo_bits)
 {
@@ -1152,6 +1168,8 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
                             e->pseudo == AU_CSS_PSEUDO_MARKER;
             if (!attached && (*pseudo_bits & (1u << e->pseudo)))
                 continue; /* already known to match */
+            if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
+                continue;
             if (css_selector_match(e->sel, el, mc)) {
                 *pseudo_bits |= (uint16_t)(1u << e->pseudo);
                 if (attached)
@@ -1159,6 +1177,8 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
             }
             continue;
         }
+        if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
+            continue; /* an ancestor the selector names is not there */
         if (!css_selector_match(e->sel, el, mc))
             continue;
         *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei;
@@ -1219,11 +1239,11 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
     }
     r->nmatched = 0;
     for (uint32_t i = 0; i < r->nme; i++) {
-        const RuleEntry *e = &r->entries[r->matched_entries[i]];
+        RuleEntry *e = &r->entries[r->matched_entries[i]];
         int lvl_n = e->origin;
         int lvl_i = e->origin == AU_CSS_ORIGIN_AUTHOR ? 4 : e->origin == AU_CSS_ORIGIN_USER ? 5 : 6;
         uint32_t layer = (uint32_t)e->layer;
-        push_matched(r, css_rule_decls(r->walked[e->sheet], e->rule), make_key(lvl_n, 0, layer, e->spec, e->order),
+        push_matched(r, entry_decls(r, e), make_key(lvl_n, 0, layer, e->spec, e->order),
                      make_key(lvl_i, 0, 4095 - layer, e->spec, e->order));
     }
 }

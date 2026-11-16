@@ -155,12 +155,15 @@ A sheet keeps its source text and parses as little of it as it can.
   it. A selector list parsed on its own (`au_css_selector_parse`) has
   its own small arena.
 - **Records.** With 32-bit pointers a rule is 20 bytes, a selector 12,
-  a component 8, a rule index entry 20; `CSS_SIZE_ON_32` fails the
+  a component 8, a rule index entry 24; `CSS_SIZE_ON_32` fails the
   Mac OS 9 build if one grows. A component holds only a name or a list;
   an attribute value, An+B, a `:lang` string or a name whose case
   differs is in a `CssSelExt` (read through `css_comp_name`,
   `css_comp_name_cs`, `css_comp_value`). A selector's ancestor filter
-  hashes follow its components (`css_sel_hashes`).
+  hashes follow its components (`css_sel_hashes`); the rule index
+  keeps the first one in its entry, so most entries are rejected
+  without reading the selector, and keeps the parsed block's address
+  once a rule's block is parsed (`entry_decls`).
 - **The text is packed once the page has loaded**
   (`au_css_sheet_pack_text`): deflated in pieces of 4 KB
   (`CSS_TEXT_PIECE`), each a stream of its own, so reading one block
