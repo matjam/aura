@@ -24,7 +24,7 @@
 
 #define AU_BUGREPORT_QUERY_MAX 100
 #define AU_BUGREPORT_CONSOLE_LINES 50
-#define AU_BUGREPORT_REQUESTS 200
+#define AU_BUGREPORT_REQUESTS 200 /* table rows; with the limits in bugreport.c the report fits a GitHub issue */
 #define AU_BUGREPORT_ISSUES_URL "https://github.com/matjam/aura/issues/new"
 
 typedef struct AuBugReport {

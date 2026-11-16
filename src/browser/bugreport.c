@@ -198,7 +198,7 @@ static void put_redacted_kv(AuBuf *b, const char *label, const char *url)
     AuBuf u;
     au_buf_init(&u);
     au_bugreport_redact_url(url, &u);
-    au_report_kv(b, label, "%s", au_buf_cstr(&u));
+    au_report_kv(b, label, "%.500s", au_buf_cstr(&u));
     au_buf_free(&u);
 }
 
@@ -225,7 +225,7 @@ static void page_section(const AuBugReport *in, AuBuf *b)
     AuPageStats st;
     au_page_stats(p, &st);
     put_redacted_kv(b, "Address", au_page_url(p));
-    au_report_kv(b, "Title", "%s", au_page_title(p)[0] ? au_page_title(p) : "(none)");
+    au_report_kv(b, "Title", "%.200s", au_page_title(p)[0] ? au_page_title(p) : "(none)");
     au_report_kv(b, "Loading", "%s", au_page_loading(p) ? "still loading when the report was made" : "finished");
     au_report_kv(b, "User agent", "%s", au_prefs_user_agent(&in->browser->prefs));
     au_report_kv(b, "Security", "%s", security_name(au_page_security(p)));
@@ -294,8 +294,8 @@ static int console_section(AuPage *p, AuBuf *b)
                     au_buf_printf(&line, "%-5s  ", au_dev_console_label(e.level));
                 else
                     au_buf_puts(&line, "       ");
-                au_buf_append(&line, s, k > 300 ? 300 : k);
-                if (k > 300)
+                au_buf_append(&line, s, k > 200 ? 200 : k);
+                if (k > 200)
                     au_buf_puts(&line, "...");
                 au_bugreport_redact_text(au_buf_cstr(&line), &red);
                 au_buf_append(b, red.data, red.len);
@@ -401,6 +401,27 @@ static void settings_section(const AuBugReport *in, AuBuf *b)
     au_prefs_free(&def);
 }
 
+/* Appends text with at most max_lines lines, each cut to max_cols bytes
+ * with "...", and says how many lines were left out. */
+static void limit_lines(const char *text, int max_lines, size_t max_cols, AuBuf *out)
+{
+    int n = 0, more = 0;
+    for (const char *s = text; *s;) {
+        size_t k = strcspn(s, "\n");
+        if (n++ < max_lines) {
+            au_buf_append(out, s, k > max_cols ? max_cols : k);
+            if (k > max_cols)
+                au_buf_puts(out, "...");
+            au_buf_putc(out, '\n');
+        } else {
+            more++;
+        }
+        s += k + (s[k] == '\n');
+    }
+    if (more)
+        au_buf_printf(out, "  (%d more are in the table below)\n", more);
+}
+
 void au_bugreport_build(const AuBugReport *in, AuBuf *out)
 {
     AuBuf b, red;
@@ -465,8 +486,12 @@ void au_bugreport_build(const AuBugReport *in, AuBuf *out)
     heading(out, "Network");
     if (p) {
         const AuNetLog *l = au_page_netlog(p);
-        au_netlog_summary(l, NULL, &red);
-        au_bugreport_redact_text(au_buf_cstr(&red), &b);
+        AuBuf sum;
+        au_buf_init(&sum);
+        au_netlog_summary(l, NULL, &sum);
+        au_bugreport_redact_text(au_buf_cstr(&sum), &red);
+        limit_lines(au_buf_cstr(&red), 46, 200, &b);
+        au_buf_free(&sum);
         au_buf_clear(&red);
         fenced(out, &b);
         char title[96];
@@ -480,7 +505,9 @@ void au_bugreport_build(const AuBugReport *in, AuBuf *out)
             const AuNetRecord *r = au_netlog_at(l, i);
             au_buf_clear(&red);
             au_bugreport_redact_url(r->url, &red);
-            au_netlog_row_url(r, au_buf_cstr(&red), 0, &b);
+            /* A long path is cut in its middle, so that 200 rows stay
+             * well inside what a GitHub issue holds (65,536 characters). */
+            au_netlog_row_url(r, au_buf_cstr(&red), 120, &b);
             au_buf_putc(&b, '\n');
         }
         au_buf_clear(&red);

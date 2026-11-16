@@ -363,6 +363,28 @@ static void test_report(void)
           "no home page, folder, proxy address, search template, site list or history");
     CHECK(out.len < 60000, "the report fits a GitHub issue (%u bytes)", (unsigned)out.len);
 
+    /* A page that fills the log with long addresses, all blocked, still
+     * gives a report that fits an issue. */
+    {
+        AuNetLog *wl = (AuNetLog *)l;
+        char longurl[700];
+        for (int i = 0; i < 320; i++) {
+            int n = snprintf(longurl, sizeof longurl, "http://ads%d.test/", i);
+            memset(longurl + n, 'p', 600);
+            longurl[n + 600] = 0;
+            uint32_t q3 = au_netlog_begin(wl, longurl, NULL, AU_FETCH_IMAGE, 100);
+            au_netlog_set_blocked_reason(wl, q3, "blocked: A list");
+            au_netlog_end(wl, q3, AU_NETREC_BLOCKED, NULL, 100);
+        }
+        AuBuf big;
+        au_buf_init(&big);
+        au_bugreport_build(&br, &big);
+        CHECK(big.len < 60000 && strstr(au_buf_cstr(&big), "more are in the table below") &&
+                  strstr(au_buf_cstr(&big), "(200 of 3") && count(au_buf_cstr(&big), "\n```\n") % 2 == 0,
+              "a full log still fits an issue (%u bytes)", (unsigned)big.len);
+        au_buf_free(&big);
+    }
+
     /* With other tabs asked for, their addresses appear, redacted. */
     au_buf_clear(&out);
     br.other_tabs = true;

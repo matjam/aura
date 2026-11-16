@@ -311,7 +311,7 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
         char note[120];
         snprintf(note, sizeof note, "%s glyphs", s_count(a, sizeof a, (unsigned long)gs.entries));
         mem_row(out, "Glyph cache", (uint32_t)(gs.bytes / 1024), 0, note);
-        snprintf(note, sizeof note, "%s documents for Back and Forward", s_count(a, sizeof a, (unsigned long)au_page_kept_count(p)));
+        snprintf(note, sizeof note, "%s kept for Back and Forward", s_count(a, sizeof a, (unsigned long)au_page_kept_count(p)));
         mem_row(out, "Kept documents", (uint32_t)(au_page_kept_bytes(p) / 1024), 0, note);
     }
     if (h && h->have_memory)
