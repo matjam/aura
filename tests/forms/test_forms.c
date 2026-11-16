@@ -6,6 +6,7 @@
 #include "../layout/ahem.h"
 #include "page/editing.h"
 #include "page/formdata.h"
+#include "layout/selection.h"
 #include "page/page.h"
 
 #include <stdio.h>
@@ -560,6 +561,135 @@ static void test_script_events(void)
     au_docview_free(dv);
 }
 
+static void click_at(AuDocView *dv, int x, int y)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.x = x;
+    e.y = y;
+    e.clicks = 1;
+    e.type = AU_EVENT_MOUSE_DOWN;
+    au_docview_mouse(dv, &e);
+    e.type = AU_EVENT_MOUSE_UP;
+    au_docview_mouse(dv, &e);
+}
+
+static const char *eval_str(AuDocView *dv, const char *js, AuBuf *out)
+{
+    au_buf_clear(out);
+    au_docview_eval(dv, js, out);
+    return au_buf_cstr(out);
+}
+
+/* A modal dialog makes the rest of the document inert (HTML, "inert
+ * subtrees"): clicks outside it reach no listener, Tab stays inside it,
+ * Escape cancels and closes it, and Select All and find see only its
+ * text. Escape closes an auto popover, and a click outside hides it. */
+static void test_modal_dialog(void)
+{
+    Ctx c;
+    AuBuf out;
+    au_buf_init(&out);
+    AuDocView *dv = view(&c,
+                         "<style>body{margin:0} dialog::backdrop{display:none}"
+                         " dialog{border:0;padding:0;width:200px;height:100px}</style>"
+                         "<button id=out>outside text</button><input id=out2>"
+                         "<dialog id=d><input id=in1><input id=in2> inside text</dialog>"
+                         "<script>var log=[];"
+                         "document.addEventListener('click',function(e){log.push('click:'+e.target.id)});"
+                         "document.addEventListener('mousedown',function(e){log.push('down:'+e.target.id)});"
+                         "var d=document.getElementById('d');"
+                         "d.addEventListener('cancel',function(e){log.push('cancel');if(window.keep)e.preventDefault()});"
+                         "d.addEventListener('close',function(){log.push('close')});"
+                         "</script>",
+                         true);
+    click(dv, "out2");
+    CHECK(!strcmp(focus_id(dv), "out2"), "focus before showModal: %s", focus_id(dv));
+    eval_str(dv, "d.showModal(); log=[]", &out);
+    au_docview_update(dv);
+    CHECK(!strcmp(focus_id(dv), "in1"), "showModal focuses the dialog's first control: %s", focus_id(dv));
+    /* outside the dialog (no backdrop): no target, focus stays */
+    click_at(dv, 5, 5);
+    click_at(dv, 5, 590);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out), ""), "clicks outside the dialog reached the page: %s",
+          au_buf_cstr(&out));
+    CHECK(!strcmp(focus_id(dv), "in1"), "a click outside moved the focus: %s", focus_id(dv));
+    CHECK(!strcmp(eval_str(dv, "document.getElementById('out').focus(); document.activeElement.id", &out), "in1"),
+          "focus() on inert content: %s", au_buf_cstr(&out));
+    /* Tab cycles inside the dialog */
+    const char *order[] = {"in2", "in1", "in2"};
+    for (int i = 0; i < 3; i++) {
+        key(dv, AU_KEY_TAB, 0, 0);
+        CHECK(!strcmp(focus_id(dv), order[i]), "tab %d in the dialog: %s, want %s", i, focus_id(dv), order[i]);
+    }
+    /* a click inside reaches the page */
+    click(dv, "in1");
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out), "down:in1 click:in1"), "click inside: %s", au_buf_cstr(&out));
+    /* Select All and find see only the dialog's text */
+    AuLayout *L = au_docview_layout(dv);
+    AuTextRange all, m;
+    au_buf_clear(&out);
+    if (au_layout_all_text(L, &all))
+        au_layout_range_text(L, &all, &out);
+    CHECK(!strcmp(au_buf_cstr(&out), " inside text"), "select all with a modal dialog: '%s'", au_buf_cstr(&out));
+    CHECK(!au_layout_find(L, "outside", NULL, true, true, &m), "find matched inert text");
+    CHECK(au_layout_find(L, "inside", NULL, true, true, &m), "find missed the dialog's text");
+    AuTextPos q;
+    CHECK(!au_layout_text_pos_at(L, 5, 590, 0, 0, &q), "a press outside the dialog has a text position");
+    /* Escape: cancel, then close unless cancelled; focus goes back */
+    eval_str(dv, "log=[]; window.keep=true", &out);
+    key(dv, AU_KEY_ESCAPE, 0, 0);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')+' '+d.open", &out), "cancel true"), "cancelled Escape: %s",
+          au_buf_cstr(&out));
+    eval_str(dv, "log=[]; window.keep=false", &out);
+    key(dv, AU_KEY_ESCAPE, 0, 0);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')+' '+d.open", &out), "cancel close false"), "Escape: %s",
+          au_buf_cstr(&out));
+    CHECK(!strcmp(focus_id(dv), "out2"), "close() returns the focus: %s", focus_id(dv));
+    eval_str(dv, "log=[]", &out);
+    click(dv, "out");
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out), "down:out click:out"), "click after close: %s",
+          au_buf_cstr(&out));
+    au_docview_free(dv);
+
+    /* the inert attribute: not focusable by Tab or click, not found */
+    dv = view(&c, "<input id=a><div inert><input id=b>hidden words</div><input id=c>", false);
+    key(dv, AU_KEY_TAB, 0, 0);
+    key(dv, AU_KEY_TAB, 0, 0);
+    CHECK(!strcmp(focus_id(dv), "c"), "Tab skips inert: %s", focus_id(dv));
+    click(dv, "b");
+    CHECK(strcmp(focus_id(dv), "b") != 0, "a click on an inert input focused it");
+    CHECK(!au_layout_find(au_docview_layout(dv), "hidden", NULL, true, true, &m), "find matched inert text");
+    au_docview_free(dv);
+
+    /* popovers: Escape hides an auto popover, a click outside too, and a
+     * click inside it or on its button keeps it */
+    dv = view(&c,
+              "<style>body{margin:0} [popover]{border:0;padding:0;width:100px;height:50px}</style>"
+              "<button id=b popovertarget=p>toggle</button><div id=far style='height:400px'></div>"
+              "<div id=p popover><span id=ps>in</span></div>",
+              true);
+    click(dv, "b");
+    CHECK(!strcmp(eval_str(dv, "String(document.getElementById('p').matches(':popover-open'))", &out), "true"),
+          "popovertarget click shows: %s", au_buf_cstr(&out));
+    click(dv, "ps");
+    CHECK(!strcmp(eval_str(dv, "String(document.getElementById('p').matches(':popover-open'))", &out), "true"),
+          "a click inside hid it");
+    key(dv, AU_KEY_ESCAPE, 0, 0);
+    CHECK(!strcmp(eval_str(dv, "String(document.getElementById('p').matches(':popover-open'))", &out), "false"),
+          "Escape left the popover open");
+    click(dv, "b");
+    click(dv, "far");
+    CHECK(!strcmp(eval_str(dv, "String(document.getElementById('p').matches(':popover-open'))", &out), "false"),
+          "light dismiss left the popover open");
+    click(dv, "b");
+    click(dv, "b");
+    CHECK(!strcmp(eval_str(dv, "String(document.getElementById('p').matches(':popover-open'))", &out), "false"),
+          "a second click on its button left the popover open");
+    au_docview_free(dv);
+    au_buf_free(&out);
+}
+
 static void test_edit_commands(void)
 {
     Ctx c;
@@ -634,6 +764,7 @@ int main(void)
     test_radio_and_select();
     test_validation();
     test_script_events();
+    test_modal_dialog();
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();

@@ -119,3 +119,126 @@ dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff 
 #d x=150 y=0
 pixel 200 25 ff0000
 hit 200 25 #cover
+
+=== outside a modal dialog without a backdrop nothing is hit
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px }
+dialog::backdrop { display: none }
+</style>
+<a id=out href="http://example.com/out">out</a>
+<main><dialog id=d><a id=in href="http://example.com/in">in</a></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+// the rest of the document is inert: no target, no link
+hit 2 2 none
+hit 10 100 none
+hit 155 130 #in
+link 155 130 http://example.com/in
+hit 240 170 #d
+
+=== an inert element is not hit, what is under it is
+viewport 400 300
+<style>
+body { margin: 0 }
+#under { position: absolute; top: 0; left: 0; width: 200px; height: 100px }
+#over { position: absolute; top: 0; left: 0; width: 100px; height: 50px }
+</style>
+<div id=under></div>
+<div id=over inert><span id=t>text</span></div>
+---
+hit 5 5 #under
+hit 50 40 #under
+hit 150 10 #under
+
+=== modal dialogs stack in the order they were opened, the last on top
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px }
+dialog::backdrop { background: transparent }
+#a { background: #0000ff; width: 120px }
+#b { background: #00ff00; height: 100px }
+</style>
+<dialog id=a></dialog><dialog id=b></dialog>
+<script>
+document.getElementById('b').showModal();
+document.getElementById('a').showModal();
+</script>
+---
+pixel 200 150 0000ff
+hit 200 150 #a
+// b is under a's backdrop, and inert
+pixel 200 110 00ff00
+hit 200 110 #a
+
+=== a modal dialog removed from the document leaves the top layer
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+</style>
+<main id=m><dialog id=d></dialog></main>
+<div id=cover></div>
+<script>
+var d = document.getElementById('d');
+d.showModal();
+d.remove();
+document.getElementById('m').appendChild(d);
+</script>
+---
+#d x=150 y=0
+pixel 200 25 ff0000
+pixel 10 150 ff0000
+hit 200 25 #cover
+hit 10 150 #cover
+
+=== a modal dialog with position: static is absolutely positioned
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; height: 300px; background: #ff0000 }
+dialog { position: static; border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+dialog::backdrop { position: relative; background: transparent }
+</style>
+<main><dialog id=d></dialog></main>
+<div id=cover></div>
+<script>document.getElementById('d').showModal()</script>
+---
+#d x=150 y=125
+pixel 200 150 0000ff
+hit 200 150 #d
+// the backdrop is absolute too, over the viewport
+hit 10 10 #d
+
+=== a showing popover is in the top layer, centred
+viewport 400 300
+script
+<style>
+body { margin: 0 }
+#cover { position: relative; z-index: 10; height: 300px; background: #ff0000 }
+[popover] { border: 0; padding: 0; width: 100px; height: 50px; background: #0000ff }
+#q { background: #00ff00; width: 120px }
+</style>
+<div id=p popover=manual></div><div id=q popover=manual></div><div id=hidden popover></div>
+<div id=cover></div>
+<script>
+document.getElementById('q').showPopover();
+document.getElementById('p').showPopover();
+</script>
+---
+#p x=150 y=125
+pixel 200 150 0000ff
+hit 200 150 #p
+pixel 145 150 00ff00
+hit 145 150 #q
+// the page stays live around a popover: its backdrop is not hit
+hit 10 10 #cover
