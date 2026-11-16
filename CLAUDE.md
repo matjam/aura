@@ -71,6 +71,7 @@ Aura for its users; keep it short.
 | the Mac OS 9 application, the Toolbox, Open Transport, entropy, the clock | [`docs/mac-os-9-shell.md`](docs/mac-os-9-shell.md) |
 | the Develop menu and its windows, System Status, Report a Problem and the bug report builder | [`docs/developer-tools.md`](docs/developer-tools.md) |
 | fuzzing, or any code a page's data reaches | [`docs/fuzzing.md`](docs/fuzzing.md) (Aura's fuzzers, Domato, and the rules they enforce) |
+| a new platform port (Linux GTK4), or the line between `src/browser` and `src/platform` | [`docs/porting.md`](docs/porting.md) |
 
 | Problem | Read |
 |---|---|
