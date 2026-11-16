@@ -312,9 +312,21 @@ under the MPL (the root store, the Public Suffix List) carries the MPL
 notice and where its source form is. QuickJS-ng and Mbed TLS have their
 entries there.
 
-The About box (DLOG 202) draws icon family 128 at 64 pixels with
-`PlotIconID`; its empty `dctb` gives it a colour port, without which
-the icon draws in black and white.
+The About box (DLOG 202, `aboutbox.c`) draws all its text itself in
+user items:
+- the name, the version (`au_build_identity`) and `AU_TAGLINE`;
+- a link to `AU_HOMEPAGE`, which opens it in a new tab;
+- `AU_AUTHOR`, the libraries from the credits table, and the Mac it runs
+  on (`mac_sysinfo`);
+- a quip from the `quips` table, picked at random. A click on the
+  kookaburra shows the next one.
+Fonts and data are not listed there; Credits & Licences opens
+about:licences, which lists them all. To change the wording, edit
+`aboutbox.c` and the macros in `credits.h`.
+
+The About box draws icon family 128 at 64 pixels with `PlotIconID`. Its
+empty `dctb` gives it a colour port; without one the icon draws in
+black and white.
 
 ## Internet Config
 
