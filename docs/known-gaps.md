@@ -176,6 +176,32 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   ([`javascript.md`](javascript.md), "How script memory is kept down").
 - **An out-of-memory script** gets a console line and no page-level
   notice.
+- **Intl** ([`javascript.md`](javascript.md), "Intl") formats every
+  locale as en-US: other languages, numbering systems and calendars are
+  not there, and `resolvedOptions().locale` says `en-US`.
+  - Time zones: the local zone is named by its offset (`Etc/GMT+8`,
+    `+05:30`) because Mac OS 9 has no zone database, so its short name
+    is `GMT-8`, not `PST`. 67 named zones are known, with their
+    current daylight saving rules applied to every year; any other IANA
+    name throws RangeError. Long zone names exist only for UTC, the US
+    zones and London.
+  - `formatRange` repeats the shared fields ("Jan 1 – Jan 5", where
+    Chrome writes "Jan 1 – 5"); `NumberFormat.formatRange` is a plain
+    "a–b".
+  - `Collator` orders by folded code point within each class (spaces,
+    punctuation, digits, letters), not by the full Unicode collation
+    table; punctuation among itself, ligatures and `ß` sort by code
+    point.
+  - `Segmenter` follows a few rules of UAX 29 (combining marks, ZWJ
+    sequences, flags; words with apostrophes, periods and digit groups;
+    sentences end at `.`, `!`, `?`): no dictionary for Chinese, Japanese
+    or Thai words, and "3.14" ends a sentence at the period.
+  - `DisplayNames` knows about 30 languages, 35 regions, 11 scripts and
+    the currencies `NumberFormat` has symbols for. `Intl.DurationFormat`
+    is absent, and the `dayPeriod` option knows five periods.
+  - A sort with `localeCompare` costs about 0.7 microseconds a
+    comparison on the host (2000 strings in 15 to 20 ms), 15 to 20 times
+    a plain `<` comparison; not measured on a G4.
 
 ## Script requests and CORS
 
