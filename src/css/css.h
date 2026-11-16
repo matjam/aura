@@ -762,8 +762,10 @@ void au_css_clear_document(AuDocument *doc);
  * keeps its old AuStyle object, and its subtree is left alone unless a
  * selector reaches into it; so equal styles stay pointer-equal.
  *
- * Child changes restyle the element's subtree and its following siblings'
- * subtrees, or the whole document when a :has() rule exists. */
+ * Child insertions and removals reported with au_css_invalidate_children
+ * are targeted too; AU_CSS_CHANGE_CHILDREN without the child restyles the
+ * element's subtree and its following siblings' subtrees, or the whole
+ * document when a :has() rule exists. */
 typedef enum {
     AU_CSS_CHANGE_ATTR,     /* an attribute, class or id changed (attr: its name) */
     AU_CSS_CHANGE_STATE,    /* hover, focus, checked, ... (AU_STATE_* bits) */
@@ -772,6 +774,25 @@ typedef enum {
     AU_CSS_CHANGE_ALL       /* sheets, device, fonts */
 } AuCssChange;
 void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAtom attr);
+/* child was inserted into parent (already linked), or removed from it
+ * (prev and next were its siblings, child is detached). Call it during
+ * the change, before anything else moves. Restyles the inserted subtree,
+ * and only the elements selectors can reach from the change: parent for
+ * :empty; the following siblings for :first-child, :nth-child(), the
+ * of-type forms, :only-*, + and ~; the preceding siblings for
+ * :last-child, :nth-last-child() and the like; the :has() anchors among
+ * parent, its ancestors and their preceding siblings; the form elements
+ * above whose state follows their descendants. Comments change nothing. */
+void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next,
+                                bool inserted);
+/* The data of text node text changed: :empty of its parent, :has()
+ * arguments with :empty, a textarea's :placeholder-shown. */
+void au_css_invalidate_text(AuCssResolver *r, AuNode *text);
+/* For tests and the differential check: restyles the whole document and
+ * returns false, with what differs in msg, when an element's computed
+ * values were not what a whole restyle gives (call it after
+ * au_css_restyle). */
+bool au_css_check_restyle(AuCssResolver *r, AuDocument *doc, AuBuf *msg);
 /* The AU_STATE_* bits in bits changed on el (already set or cleared; call
  * it for every element whose bits changed, ancestors included). Restyles
  * el, and only the other elements that selectors reading those states can

@@ -118,6 +118,10 @@ uint8_t au_dv_cors_attr(const AuElement *el);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);
+/* Script inserted child into parent, or removed it (prev and next were
+ * its siblings): restyle what selectors reach and rebuild the boxes of
+ * the enclosing subtree. Called during the mutation. */
+void au_dv_child_changed(AuDocView *dv, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next, bool inserted);
 /* The parser produced more of the document after a resume. */
 void au_dv_parsed_more(AuDocView *dv);
 /* Reports load_finished (and the load event) if nothing is pending. */

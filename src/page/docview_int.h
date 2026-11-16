@@ -88,6 +88,11 @@ struct AuDocView {
     int scroll_x, scroll_y;
     bool parsing;
     bool tree_dirty, sheets_dirty, restyle_needed, style_all, images_dirty;
+    /* The differential check (au_docview_set_check): struct_changed says
+     * children or text changed since the last style pass. */
+    bool check, struct_changed;
+    uint32_t check_failures;
+    AuBuf check_msg;
     bool viewport_restyle; /* the viewport changed: restyle, keeping the box tree where styles allow */
     bool finished_reported;
     float last_w, last_h;
@@ -115,6 +120,7 @@ struct AuDocView {
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
     uint32_t dead_builds, dead_layouts; /* counts of layouts replaced by new_layout */
+    uint32_t dead_subtree_builds, dead_subtree_boxes;
     uint32_t nbg;        /* background requests among reqs */
     double clock;        /* the fallback clock */
     /* forms (forms.c) */

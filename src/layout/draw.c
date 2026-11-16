@@ -3275,7 +3275,7 @@ int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny,
 {
     if (!L->root)
         return 0;
-    if (L->need_build || L->need_layout || L->need_restack)
+    if (L->need_build || L->ndirty || L->need_layout || L->need_restack)
         return -1;
     /* A fixed canvas background, or a gradient over the view, moves with
      * the viewport everywhere. */

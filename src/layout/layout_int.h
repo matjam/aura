@@ -116,7 +116,15 @@ enum {
     LF_ESCAPES = 1u << 27,      /* holds an absolutely positioned box whose containing block is outside it */
     LF_MEASURE_OK = 1u << 28,   /* the measure cache (mk_*, m_res) is valid */
     LF_LEGEND = 1u << 29,       /* the rendered legend of its fieldset parent: placed on the top border */
+    LF_DEAD = 1u << 30,         /* dropped from the tree by a subtree rebuild (the memory stays in the arena) */
     LF_ABS_QUEUED = 1u << 31    /* in AuLayout.abs, waiting for its containing block to finish */
+};
+
+/* LBlock.xf: what the box tree build found out about an element's
+ * subtree (rebuild.c reads them to choose where to rebuild). */
+enum {
+    LX_CTR_OPEN = 1, /* a counter or a quote in the subtree is one that content outside it also uses */
+    LX_MARK = 2      /* scratch for rebuild.c */
 };
 
 typedef struct LBox LBox;
@@ -214,6 +222,7 @@ typedef struct LBlock {
     float mk_w, mk_h, mk_cbh, m_res; /* measure cache: constraints and resulting border-box height */
     float sticky_dx, sticky_dy;  /* sticky offset applied at the last paint */
     LReplaced *rep;     /* replaced content */
+    uint8_t xf;         /* LX_* */
 } LBlock;
 
 /* ---- Tables (table.c) ----
@@ -405,10 +414,36 @@ struct AuLayout {
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
     /* Elements the box tree build left out for display: none (their
-     * descendants are not listed). Not referenced: read only while the
-     * tree is current (au_layout_styles_changed). */
-    AuElement **hidden;
+     * descendants are not listed), each referenced, with the box its
+     * parent's children went into (a subtree rebuild drops the entries
+     * of the boxes it drops). */
+    struct LHidden {
+        AuElement *el;
+        LBox *box;
+    } *hidden;
     uint32_t nhidden, hidden_cap;
+    /* Subtree rebuilds (rebuild.c). dirty holds the nodes whose children,
+     * text or box-relevant attributes changed since the last update, each
+     * referenced; dirty_full says there were more than fit, so the next
+     * update builds the whole tree. */
+    AuNode **dirty;
+    uint32_t ndirty, dirty_cap;
+    /* Counter names any build created since the last whole build, as
+     * hashes (a rebuild that looks a name up and does not find it in its
+     * subtree gives up when the name may exist outside). */
+#define L_CTR_NAMES 64
+    uint32_t ctr_names[L_CTR_NAMES];
+    uint32_t nctr_names; /* above L_CTR_NAMES: every name may exist */
+    size_t tree_full_bytes; /* the arena after the last whole build */
+    uint32_t subtree_builds; /* subtree rebuilds since creation */
+    uint32_t subtree_boxes;  /* boxes they built */
+    /* The differential check (au_layout_set_check): after every update
+     * that rebuilt a subtree, a whole tree is built beside it and
+     * compared. */
+    int check;
+    bool rebuilt; /* a subtree was rebuilt since the last check */
+    uint32_t check_runs, check_failures;
+    AuBuf check_msg; /* the first difference found */
     /* The focused element (not referenced; the document view clears it
      * before the element can go) and whether its caret shows now. */
     AuElement *focus;
@@ -475,7 +510,27 @@ enum {
 
 /* boxtree.c */
 void l_build_tree(AuLayout *L);
+/* Builds the boxes of el's subtree on their own, as l_build_tree would
+ * inside the whole tree, for an element whose box is block-level and
+ * counter-closed (rebuild.c chooses it). Returns the new principal box,
+ * not linked into the tree, or NULL when the subtree cannot be built
+ * on its own (it reads a counter or a quote that may come from outside):
+ * the caller then builds the whole tree. */
+LBox *l_build_subtree(AuLayout *L, AuElement *el);
+/* Releases a box taken out of the tree and its subtree: references,
+ * styles, element box pointers and the box's layout arrays; marks the
+ * boxes LF_DEAD (their memory stays in the arena). */
+void l_drop_box(LBox *root);
 void l_free_tree(AuLayout *L);
+/* rebuild.c */
+/* Rebuilds the subtrees the dirty list names (before the styles are
+ * compared: au_layout_styles_changed and au_layout_update call it). */
+void l_rebuild_dirty(AuLayout *L);
+void l_dirty_clear(AuLayout *L);
+/* The differential check after an update (au_layout_update). */
+void l_check_incremental(AuLayout *L);
+/* layout.c: marks b for layout and its ancestors as holding such a box. */
+void l_mark_dirty(LBox *b);
 void l_box_free_layout(LBox *b);
 const char *l_attr(const LBox *b, AuAtom name);
 bool l_is_tag(const LBox *b, AuAtom tag);

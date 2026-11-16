@@ -260,8 +260,18 @@ typedef struct AuDocViewStats {
     uint32_t styled_elements; /* elements whose style was computed */
     uint32_t tree_builds;     /* box tree builds */
     uint32_t layouts;         /* layout passes */
+    uint32_t subtree_builds;  /* box tree rebuilds of a subtree (a DOM change) */
+    uint32_t subtree_boxes;   /* the boxes those built */
 } AuDocViewStats;
 void au_docview_stats(const AuDocView *dv, AuDocViewStats *s);
+/* The differential check (for tests; on in a build with
+ * -DAURA_INCR_CHECK): after a restyle that followed child or text
+ * changes, the document is restyled whole and compared; after a subtree
+ * rebuild, the whole box tree is built and laid out beside it and
+ * compared (au_layout_set_check). au_docview_check_failures returns the
+ * differences found and appends the first to msg (may be NULL). */
+void au_docview_set_check(AuDocView *dv, bool on);
+uint32_t au_docview_check_failures(const AuDocView *dv, AuBuf *msg);
 
 /* ---- Scripts ----
  * Scripting is off by default: <script> is ignored and <noscript> shows.

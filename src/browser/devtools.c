@@ -289,6 +289,8 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
         au_report_kv(out, "Style passes", "%s   (%s elements styled)", s_count(a, sizeof a, ds.style_passes),
                      s_count(b, sizeof b, ds.styled_elements));
         au_report_kv(out, "Box tree builds", "%s", s_count(a, sizeof a, ds.tree_builds));
+        au_report_kv(out, "Subtree rebuilds", "%s   (%s boxes)", s_count(a, sizeof a, ds.subtree_builds),
+                     s_count(b, sizeof b, ds.subtree_boxes));
         au_report_kv(out, "Layouts", "%s", s_count(a, sizeof a, ds.layouts));
     }
     au_report_kv(out, "Image decodes", "%s   (%s dropped to make room)", s_count(a, sizeof a, st.image_decodes),

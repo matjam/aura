@@ -170,6 +170,11 @@ typedef struct AuJsHooks {
      * (an element whose attribute changed, a parent whose children
      * changed, a text node). */
     void (*dom_changed)(void *ctx, AuNode *node, AuAtom attr, int kind);
+    /* Optional, in place of dom_changed with AU_JS_CHANGE_CHILDREN for a
+     * single insertion or removal: child was inserted into parent
+     * (already linked), or removed from it (prev and next were its
+     * siblings). Called during the mutation: record, do not mutate. */
+    void (*child_changed)(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next, bool inserted);
     /* Brings layout up to date (forced synchronous layout) and returns the
      * border box of el in document coordinates; false if el has no box. */
     bool (*element_rect)(void *ctx, AuElement *el, AuJsRect *out);

@@ -13,6 +13,14 @@ static void changed(AuJs *js, AuNode *n, AuAtom attr, int kind)
         js->hooks.dom_changed(js->hooks.ctx, n, attr, kind);
 }
 
+static void child_changed(AuJs *js, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next, bool inserted)
+{
+    if (js->hooks.child_changed && !js->closing)
+        js->hooks.child_changed(js->hooks.ctx, parent, child, prev, next, inserted);
+    else
+        changed(js, parent, 0, AU_JS_CHANGE_CHILDREN);
+}
+
 static JSValue delivery_job(JSContext *ctx, int argc, JSValueConst *argv)
 {
     (void)argc;
@@ -152,7 +160,7 @@ static void h_inserted(void *ctx, AuNode *parent, AuNode *child)
     if (js->closing)
         return;
     js_ranges_inserted(js, parent, child);
-    changed(js, parent, 0, AU_JS_CHANGE_CHILDREN);
+    child_changed(js, parent, child, child->prev, child->next, true);
     if (js->observers)
         push_mut(js, 1, parent, child, NULL, child->prev, child->next, 0, NULL, 0);
     if (js->ce_defs && au_node_is_connected(parent))
@@ -169,7 +177,7 @@ static void h_removed(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, Au
     if (js->closing)
         return;
     js_ranges_removed(js, parent, child, prev);
-    changed(js, parent, 0, AU_JS_CHANGE_CHILDREN);
+    child_changed(js, parent, child, prev, next, false);
     if (js->observers)
         push_mut(js, 1, parent, NULL, child, prev, next, 0, NULL, 0);
     if (js->ce_defs && au_node_is_connected(parent))

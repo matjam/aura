@@ -9,7 +9,8 @@
  *     au_layout_update(L, 800, 600);           // builds boxes, lays out
  *     au_layout_paint(L, canvas, view, 0, 0);  // paints document (0,0)+
  *
- * After a DOM change call au_layout_tree_changed; after a restyle call
+ * After a DOM change call au_layout_node_changed (or au_layout_tree_changed
+ * when what changed is not known); after a restyle call
  * au_layout_styles_changed (it compares each box's old and new style and
  * marks only what needs it: nothing, a repaint, a relayout of the box, or
  * a rebuild of the box tree). au_layout_update then does the minimum.
@@ -20,7 +21,9 @@
  * content is clean and whose constraints did not change, reusing its
  * fragments; style changes that only affect painting (colours,
  * backgrounds, decorations, outlines, visibility, opacity) cause no
- * layout. A structural change (DOM, display, content, counters, text
+ * layout. A DOM change rebuilds the boxes below the nearest element whose
+ * box can be built on its own (rebuild.c), and layout goes on from there.
+ * A style change that alters structure (display, content, counters, text
  * transforms) rebuilds the whole box tree; layout of that tree is then
  * full.
  *
@@ -118,8 +121,28 @@ AuLayoutScroll *au_layout_scroll_save(AuLayout *L, uint32_t *n);
 void au_layout_scroll_restore(AuLayout *L, const AuLayoutScroll *s, uint32_t n);
 void au_layout_scroll_free(AuLayoutScroll *s, uint32_t n);
 
-/* The DOM changed (nodes inserted or removed, text changed). */
+/* The DOM changed in a way that may change any box: the whole box tree
+ * is built at the next update. */
 void au_layout_tree_changed(AuLayout *L);
+/* The children of n were inserted or removed, the data of text node n
+ * changed, or an attribute that the box tree reads changed on a child of
+ * n (pass the element's parent then). n is referenced until the next
+ * update, which rebuilds only the boxes of the nearest enclosing element
+ * whose box can be built on its own (or the whole tree when there is
+ * none). Call it after the change, and restyle before the update: the
+ * new boxes take the current styles. */
+void au_layout_node_changed(AuLayout *L, AuNode *n);
+/* The differential check: after every update that rebuilt a subtree, a
+ * whole tree is built and laid out beside the incremental one and
+ * compared box for box (a build with -DAURA_INCR_CHECK checks every
+ * layout and aborts on a difference). au_layout_check_failures returns
+ * the number of differences found and appends the first one to msg
+ * (may be NULL). */
+void au_layout_set_check(AuLayout *L, bool on);
+uint32_t au_layout_check_failures(const AuLayout *L, AuBuf *msg);
+/* Subtree rebuilds since creation, the boxes they built, and the checks
+ * the differential check ran. */
+void au_layout_subtree_counts(const AuLayout *L, uint32_t *rebuilds, uint32_t *boxes, uint32_t *checks);
 /* Styles were recomputed. Call before anything else reads the layout:
  * boxes hold the previous styles until then. */
 void au_layout_styles_changed(AuLayout *L);

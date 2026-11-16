@@ -74,6 +74,12 @@ typedef struct BFrame {
     AuNode *child;
     LBox *box;            /* receives the children */
     const AuStyle *style; /* the element's style, for its text children */
+    /* The lowest owner (Counter.owner) of the counters the subtree used:
+     * a counter with owner o lives outside the frames at depth o and
+     * deeper, so the frame at depth j shares one with content outside it
+     * when esc <= j. 0 for a quote (the quote depth runs through the
+     * whole document). */
+    uint32_t esc;
     uint8_t stage;        /* 0 start, 1 children, 2 done */
     bool skip_children;
     bool out_of_flow;     /* restore last_space when it closes */
@@ -90,6 +96,9 @@ typedef struct Builder {
     uint32_t nctr, ctr_cap;
     int quote_depth;
     bool last_space; /* the inline content so far ends in a collapsible space */
+    /* A subtree build (l_build_subtree): the counters and quotes outside
+     * the subtree are not known, so a use of one sets abort. */
+    bool incr, abort;
     AuBuf tmp;
 } Builder;
 
@@ -358,16 +367,79 @@ static void add_text(Builder *B, LBox *parent, AuNode *node, const AuStyle *s, c
 
 /* ---- Counters ---- */
 
+/* Counter names are remembered as hashes (AuLayout.ctr_names): a subtree
+ * build that does not find a name in its subtree gives up when the name
+ * may exist outside it. A collision only gives up more often. */
+static uint32_t ctr_hash(const char *s, size_t n)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (uint8_t)s[i]) * 16777619u;
+    return h;
+}
+
+static bool ctr_name_known(const AuLayout *L, const char *name, size_t len)
+{
+    if (L->nctr_names > L_CTR_NAMES)
+        return true;
+    uint32_t h = ctr_hash(name, len);
+    for (uint32_t i = 0; i < L->nctr_names; i++)
+        if (L->ctr_names[i] == h)
+            return true;
+    return false;
+}
+
+static void ctr_name_note(AuLayout *L, const char *name, size_t len)
+{
+    if (ctr_name_known(L, name, len))
+        return;
+    if (L->nctr_names == L_CTR_NAMES) {
+        L->nctr_names++; /* too many: every name may exist */
+        return;
+    }
+    L->ctr_names[L->nctr_names++] = ctr_hash(name, len);
+}
+
+/* Counter c is used (read or changed) by the content being built. */
+static void ctr_touch(Builder *B, const Counter *c)
+{
+    if (B->n && c->owner < B->st[B->n - 1].esc)
+        B->st[B->n - 1].esc = c->owner;
+}
+
+/* A counter name looked up and not found. In the whole tree that means
+ * no element above has it; a subtree build cannot know that for a name
+ * that exists somewhere. */
+static void ctr_miss(Builder *B, const char *name, size_t len)
+{
+    if (B->incr && ctr_name_known(B->L, name, len))
+        B->abort = true;
+}
+
+/* A quote: open-quote and the others read and change the quote depth of
+ * the whole document. */
+static void quote_use(Builder *B)
+{
+    if (B->incr)
+        B->abort = true;
+    else if (B->n)
+        B->st[B->n - 1].esc = 0;
+}
+
 static Counter *find_counter(Builder *B, const char *name, size_t len)
 {
     for (uint32_t i = B->nctr; i-- > 0;)
-        if (B->ctr[i].nlen == len && !memcmp(B->ctr[i].name, name, len))
+        if (B->ctr[i].nlen == len && !memcmp(B->ctr[i].name, name, len)) {
+            ctr_touch(B, &B->ctr[i]);
             return &B->ctr[i];
+        }
+    ctr_miss(B, name, len);
     return NULL;
 }
 
 static Counter *new_counter(Builder *B, const char *name, size_t len, int32_t v)
 {
+    ctr_name_note(B->L, name, len);
     if (B->nctr == B->ctr_cap) {
         B->ctr_cap = B->ctr_cap ? B->ctr_cap * 2 : 32;
         B->ctr = au_realloc(B->ctr, B->ctr_cap * sizeof *B->ctr);
@@ -902,6 +974,9 @@ static void add_content(Builder *B, LBox *box, AuNode *el, const AuStyle *ps)
         if (v->type == AU_CSSV_STRING) {
             au_buf_append(&text, v->u.str, v->n);
         } else if (v->type == AU_CSSV_KEYWORD) {
+            if (v->kw == AU_K_open_quote || v->kw == AU_K_close_quote || v->kw == AU_K_no_open_quote ||
+                v->kw == AU_K_no_close_quote)
+                quote_use(B);
             switch (v->kw) {
             case AU_K_open_quote:
                 au_buf_puts(&text, quote_str(ps, B->quote_depth, true));
@@ -942,13 +1017,16 @@ static void add_content(Builder *B, LBox *box, AuNode *el, const AuStyle *ps)
                 bool any = false;
                 for (uint32_t c = 0; c < B->nctr; c++)
                     if (B->ctr[c].nlen == nl && !memcmp(B->ctr[c].name, name, nl)) {
+                        ctr_touch(B, &B->ctr[c]);
                         if (any)
                             au_buf_puts(&text, sep);
                         format_counter(&text, B->ctr[c].value, style, sl);
                         any = true;
                     }
-                if (!any)
+                if (!any) {
+                    ctr_miss(B, name, nl);
                     format_counter(&text, 0, style, sl);
+                }
             } else {
                 Counter *c = find_counter(B, name, nl);
                 format_counter(&text, c ? c->value : 0, style, sl);
@@ -1020,6 +1098,14 @@ static void make_backdrop(Builder *B, LBox *parent, AuNode *el, const AuStyle *e
     B->last_space = saved;
 }
 
+/* The number a list marker shows: looked up only by markers that show
+ * it, so that the others do not tie their subtree to the list's counter. */
+static int32_t marker_value(Builder *B)
+{
+    Counter *c = find_counter(B, "list-item", 9);
+    return c ? c->value : 1;
+}
+
 /* The list marker of a list item. */
 static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
 {
@@ -1078,8 +1164,6 @@ static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
         }
     }
     const AuCssBlob *lt = es->inh->list_style_type;
-    Counter *c = find_counter(B, "list-item", 9);
-    int32_t v = c ? c->value : 1;
     bool have = false;
     if (lt && lt->value.type == AU_CSSV_STRING) {
         au_buf_append(&text, lt->value.u.str, lt->value.n);
@@ -1101,7 +1185,9 @@ static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
             shape = LR_DISCLOSURE_OPEN; /* drawn: the triangles are missing from many fonts */
         else if (sl == 17 && !memcmp(st, "disclosure-closed", 17))
             shape = LR_DISCLOSURE_CLOSED;
-        else if (format_counter(&text, v, st, sl)) {
+        else if (sl == 4 && !memcmp(st, "none", 4))
+            ; /* no marker, and the number is not read */
+        else if (format_counter(&text, marker_value(B), st, sl)) {
             /* The suffix space is a no-break space so that it survives
              * white space processing (::marker has white-space: pre). */
             if (!(sl >= 10 && !memcmp(st, "disclosure", 10)))
@@ -1798,9 +1884,7 @@ static LBox *new_anon_table_part(Builder *B, LBox *parent, int inner)
     return &k->b;
 }
 
-/* Releases a box removed from the tree, and its subtree (the memory stays
- * in the arena). */
-static void drop_box(LBox *root)
+void l_drop_box(LBox *root)
 {
     root->next = NULL;
     root->parent = NULL;
@@ -1811,6 +1895,7 @@ static void drop_box(LBox *root)
             next = b->first;
             b->first = NULL;
         } else {
+            l_box_free_layout(b);
             if (b->node && au_is_element(b->node) && au_as_element(b->node)->box == b)
                 au_as_element(b->node)->box = NULL;
             if (b->node)
@@ -1818,11 +1903,14 @@ static void drop_box(LBox *root)
             b->node = NULL;
             au_style_release(b->style);
             b->style = NULL;
+            b->flags |= LF_DEAD;
             next = b == root ? NULL : (b->next ? b->next : b->parent);
         }
         b = next;
     }
 }
+
+static void drop_box(LBox *root) { l_drop_box(root); }
 
 static void fix_table_children(Builder *B, LBox *p)
 {
@@ -1911,10 +1999,20 @@ static void fix_table_children(Builder *B, LBox *p)
     }
 }
 
-static void table_fixup(Builder *B)
+/* The box after b in preorder within start's subtree, or NULL. */
+static LBox *next_in(LBox *b, LBox *start)
 {
-    LBox *b = B->L->root;
-    while (b) {
+    if (b->first && b->kind != LK_TEXT)
+        return b->first;
+    while (b && b != start && !b->next)
+        b = b->parent;
+    return b && b != start ? b->next : NULL;
+}
+
+static void table_fixup(Builder *B, LBox *start)
+{
+    (void)B;
+    for (LBox *b = start; b; b = next_in(b, start)) {
         if ((b->kind == LK_BLOCK && b->inner != LI_REPLACED) || b->kind == LK_INLINE) {
             /* Columns and column groups always: their content (generated
              * content included) is dropped. */
@@ -1925,23 +2023,14 @@ static void table_fixup(Builder *B)
             if (any)
                 fix_table_children(B, b);
         }
-        if (b->first && b->kind != LK_TEXT)
-            b = b->first;
-        else {
-            while (b && !b->next)
-                b = b->parent;
-            if (b)
-                b = b->next;
-        }
     }
 }
 
-static void normalize(Builder *B)
+static void normalize(Builder *B, LBox *start)
 {
     /* Postorder is not needed: each container's fix-up only looks at its
      * own children. Preorder walk with an explicit next-pointer loop. */
-    LBox *b = B->L->root;
-    while (b) {
+    for (LBox *b = start; b; b = next_in(b, start)) {
         if (b->kind == LK_BLOCK && (is_tabular(b) || b->inner == LI_TABLE_COLUMN ||
                                     b->inner == LI_TABLE_COLUMN_GROUP)) {
             /* Children are table parts after the fixup. */
@@ -1973,15 +2062,6 @@ static void normalize(Builder *B)
                 b->flags |= LF_INLINES;
             }
         }
-        /* next in preorder */
-        if (b->first && b->kind != LK_TEXT)
-            b = b->first;
-        else {
-            while (b && !b->next)
-                b = b->parent;
-            if (b)
-                b = b->next;
-        }
     }
 }
 
@@ -1999,14 +2079,157 @@ static void push(Builder *B, AuNode *dom, LBox *box, const AuStyle *s)
     f->child = dom ? dom->first_child : NULL;
     f->box = box;
     f->style = s;
+    f->esc = UINT32_MAX;
 }
 
 static void pop(Builder *B)
 {
+    /* Whether the element's subtree shares a counter or a quote with
+     * content outside it (LX_CTR_OPEN): then it cannot be rebuilt on its
+     * own. The lowest owner goes up to the parent frame. */
+    BFrame *f = &B->st[B->n - 1];
+    uint32_t j = B->n - 1;
+    LBox *fb = f->box;
+    if (f->esc <= j && fb && fb->kind == LK_BLOCK && fb->node == f->dom && fb->pseudo == 0)
+        ((LBlock *)fb)->xf |= LX_CTR_OPEN;
+    if (j > 0 && f->esc < B->st[j - 1].esc)
+        B->st[j - 1].esc = f->esc;
     B->n--;
     /* Counters created by this frame's children end with it. */
     while (B->nctr && B->ctr[B->nctr - 1].owner > B->n)
         B->nctr--;
+}
+
+static void note_hidden(AuLayout *L, AuElement *e, LBox *box)
+{
+    if (L->nhidden == L->hidden_cap) {
+        L->hidden_cap = L->hidden_cap ? L->hidden_cap * 2 : 64;
+        L->hidden = au_realloc(L->hidden, L->hidden_cap * sizeof *L->hidden);
+    }
+    au_node_ref(&e->node);
+    L->hidden[L->nhidden].el = e;
+    L->hidden[L->nhidden].box = box;
+    L->nhidden++;
+}
+
+/* The preorder walk over the DOM below the frames on the stack. */
+static void build_walk(Builder *B)
+{
+    AuLayout *L = B->L;
+    bool skip;
+    while (B->n && !B->abort) {
+        BFrame *f = &B->st[B->n - 1];
+        if (f->stage == 0) {
+            f->stage = 1;
+            if (f->box && f->style && f->dom && f->box->node == f->dom && f->box->pseudo == 0) {
+                if (l_top_layer(f->box))
+                    make_backdrop(B, f->box, f->dom, f->style);
+                if ((f->box->flags & LF_LIST_ITEM) && f->box->kind == LK_BLOCK)
+                    make_marker(B, f->box, f->dom, f->style);
+                if (f->box->inner != LI_REPLACED && f->box->replaced != LR_TEXTAREA)
+                    make_pseudo(B, f->box, f->dom, f->style, AU_CSS_PSEUDO_BEFORE);
+            }
+            if (f->skip_children)
+                f->child = NULL;
+            continue;
+        }
+        if (f->stage == 1) {
+            AuNode *c = f->child;
+            if (!c) {
+                f->stage = 2;
+                LBox *fb = f->box;
+                if (fb && f->style && f->dom && f->dom->type == AU_NODE_ELEMENT &&
+                    !(fb->node == f->dom && fb->kind == LK_BLOCK &&
+                      (fb->inner == LI_REPLACED || fb->replaced == LR_TEXTAREA)))
+                    make_pseudo(B, fb, f->dom, f->style, AU_CSS_PSEUDO_AFTER);
+                if (f->out_of_flow)
+                    B->last_space = f->saved_space;
+                else if (fb && fb->kind == LK_BLOCK && fb->node == f->dom && !(fb->flags & LF_INLINE_LEVEL))
+                    B->last_space = true;
+                else if (fb && fb->kind == LK_BLOCK && fb->node == f->dom)
+                    B->last_space = false;
+                pop(B);
+                continue;
+            }
+            f->child = c->next;
+            if (f->details_closed) {
+                /* A closed details shows its first summary child only. */
+                if (!au_is_html_element(c, AU_ATOM_summary) || f->summary_done)
+                    continue;
+                f->summary_done = true;
+            }
+            if (c->type == AU_NODE_TEXT) {
+                add_text(B, f->box, c, f->style, au_as_text(c)->data, au_as_text(c)->len);
+                continue;
+            }
+            if (c->type != AU_NODE_ELEMENT)
+                continue;
+            AuElement *e = au_as_element(c);
+            const AuStyle *s = au_element_style(e);
+            if (!s || s->box->display == AU_DISPLAY_NONE) {
+                /* Remembered, so a restyle that shows it rebuilds the tree
+                 * (au_layout_styles_changed sees only elements with boxes). */
+                if (s && !f->skip_children)
+                    note_hidden(L, e, f->box);
+                continue;
+            }
+            bool li = au_display_list_item(s->box->display);
+            bool rev = false;
+            if (li && c->parent && au_is_html_element(c->parent, AU_ATOM_ol) && attr_s(c->parent, "reversed"))
+                rev = true;
+            apply_counters(B, s, c, li, rev);
+            if (s->box->display == AU_DISPLAY_CONTENTS) {
+                push(B, c, f->box, s);
+                /* ::before/::after of a contents element go into the parent box. */
+                BFrame *nf = &B->st[B->n - 1];
+                nf->stage = 1;
+                make_pseudo(B, nf->box, c, s, AU_CSS_PSEUDO_BEFORE);
+                continue;
+            }
+            LBox *box = make_element_box(B, c, s, 0, &skip);
+            LBox *parent = f->box;
+            bool saved = B->last_space;
+            insert_child(B, parent, box);
+            if ((box->flags & LF_LEGEND) &&
+                !(box->parent && box->parent->node == c->parent && box->parent->kind == LK_BLOCK &&
+                  box->parent->inner == LI_FLOW))
+                box->flags &= ~LF_LEGEND; /* its fieldset has no block box of its own */
+            if (!e->box)
+                e->box = box;
+            if (box->kind == LK_BLOCK && !(box->flags & LF_INLINE_LEVEL))
+                B->last_space = true;
+            if (box->kind == LK_BR || box->kind == LK_WBR) {
+                if (box->kind == LK_BR && s->inh->white_space_collapse != AU_WHITE_SPACE_COLLAPSE_PRESERVE)
+                    B->last_space = true;
+                continue;
+            }
+            if (box->kind == LK_BLOCK && box->inner == LI_REPLACED) {
+                B->last_space = false;
+                if (skip)
+                    continue;
+            }
+            push(B, c, box, s);
+            if (skip)
+                B->st[B->n - 1].skip_children = true;
+            if (au_is_html_element(c, AU_ATOM_details) && !attr_s(c, "open"))
+                B->st[B->n - 1].details_closed = true;
+            if (box->flags & (LF_FLOAT | LF_ABSPOS)) {
+                B->st[B->n - 1].out_of_flow = true;
+                B->st[B->n - 1].saved_space = saved;
+            }
+        }
+    }
+}
+
+/* The fix-ups after the walk, over start's subtree: anonymous table
+ * parts, anonymous blocks and flex items, the tables' slot grids. */
+static void build_finish(Builder *B, LBox *start)
+{
+    table_fixup(B, start);
+    normalize(B, start);
+    for (LBox *b = start; b; b = next_in(b, start))
+        if (b->kind == LK_BLOCK && b->inner == LI_TABLE)
+            l_table_build_grid(B->L, (LTableBox *)b);
 }
 
 void l_build_tree(AuLayout *L)
@@ -2044,131 +2267,52 @@ void l_build_tree(AuLayout *L)
     push(&B, &rootel->node, root, rs);
     if (skip)
         B.st[0].skip_children = true;
-    while (B.n) {
-        BFrame *f = &B.st[B.n - 1];
-        if (f->stage == 0) {
-            f->stage = 1;
-            if (f->box && f->style && f->dom && f->box->node == f->dom && f->box->pseudo == 0) {
-                if (l_top_layer(f->box))
-                    make_backdrop(&B, f->box, f->dom, f->style);
-                if ((f->box->flags & LF_LIST_ITEM) && f->box->kind == LK_BLOCK)
-                    make_marker(&B, f->box, f->dom, f->style);
-                if (f->box->inner != LI_REPLACED && f->box->replaced != LR_TEXTAREA)
-                    make_pseudo(&B, f->box, f->dom, f->style, AU_CSS_PSEUDO_BEFORE);
-            }
-            if (f->skip_children)
-                f->child = NULL;
-            continue;
-        }
-        if (f->stage == 1) {
-            AuNode *c = f->child;
-            if (!c) {
-                f->stage = 2;
-                LBox *fb = f->box;
-                if (fb && f->style && f->dom && f->dom->type == AU_NODE_ELEMENT &&
-                    !(fb->node == f->dom && fb->kind == LK_BLOCK &&
-                      (fb->inner == LI_REPLACED || fb->replaced == LR_TEXTAREA)))
-                    make_pseudo(&B, fb, f->dom, f->style, AU_CSS_PSEUDO_AFTER);
-                if (f->out_of_flow)
-                    B.last_space = f->saved_space;
-                else if (fb && fb->kind == LK_BLOCK && fb->node == f->dom && !(fb->flags & LF_INLINE_LEVEL))
-                    B.last_space = true;
-                else if (fb && fb->kind == LK_BLOCK && fb->node == f->dom)
-                    B.last_space = false;
-                pop(&B);
-                continue;
-            }
-            f->child = c->next;
-            if (f->details_closed) {
-                /* A closed details shows its first summary child only. */
-                if (!au_is_html_element(c, AU_ATOM_summary) || f->summary_done)
-                    continue;
-                f->summary_done = true;
-            }
-            if (c->type == AU_NODE_TEXT) {
-                add_text(&B, f->box, c, f->style, au_as_text(c)->data, au_as_text(c)->len);
-                continue;
-            }
-            if (c->type != AU_NODE_ELEMENT)
-                continue;
-            AuElement *e = au_as_element(c);
-            const AuStyle *s = au_element_style(e);
-            if (!s || s->box->display == AU_DISPLAY_NONE) {
-                /* Remembered, so a restyle that shows it rebuilds the tree
-                 * (au_layout_styles_changed sees only elements with boxes). */
-                if (s && !f->skip_children) {
-                    if (L->nhidden == L->hidden_cap) {
-                        L->hidden_cap = L->hidden_cap ? L->hidden_cap * 2 : 64;
-                        L->hidden = au_realloc(L->hidden, L->hidden_cap * sizeof *L->hidden);
-                    }
-                    L->hidden[L->nhidden++] = e;
-                }
-                continue;
-            }
-            bool li = au_display_list_item(s->box->display);
-            bool rev = false;
-            if (li && c->parent && au_is_html_element(c->parent, AU_ATOM_ol) && attr_s(c->parent, "reversed"))
-                rev = true;
-            apply_counters(&B, s, c, li, rev);
-            if (s->box->display == AU_DISPLAY_CONTENTS) {
-                push(&B, c, f->box, s);
-                /* ::before/::after of a contents element go into the parent box. */
-                BFrame *nf = &B.st[B.n - 1];
-                nf->stage = 1;
-                make_pseudo(&B, nf->box, c, s, AU_CSS_PSEUDO_BEFORE);
-                continue;
-            }
-            LBox *box = make_element_box(&B, c, s, 0, &skip);
-            LBox *parent = f->box;
-            bool saved = B.last_space;
-            insert_child(&B, parent, box);
-            if ((box->flags & LF_LEGEND) &&
-                !(box->parent && box->parent->node == c->parent && box->parent->kind == LK_BLOCK &&
-                  box->parent->inner == LI_FLOW))
-                box->flags &= ~LF_LEGEND; /* its fieldset has no block box of its own */
-            if (!e->box)
-                e->box = box;
-            if (box->kind == LK_BLOCK && !(box->flags & LF_INLINE_LEVEL))
-                B.last_space = true;
-            if (box->kind == LK_BR || box->kind == LK_WBR) {
-                if (box->kind == LK_BR && s->inh->white_space_collapse != AU_WHITE_SPACE_COLLAPSE_PRESERVE)
-                    B.last_space = true;
-                continue;
-            }
-            if (box->kind == LK_BLOCK && box->inner == LI_REPLACED) {
-                B.last_space = false;
-                if (skip)
-                    continue;
-            }
-            push(&B, c, box, s);
-            if (skip)
-                B.st[B.n - 1].skip_children = true;
-            if (au_is_html_element(c, AU_ATOM_details) && !attr_s(c, "open"))
-                B.st[B.n - 1].details_closed = true;
-            if (box->flags & (LF_FLOAT | LF_ABSPOS)) {
-                B.st[B.n - 1].out_of_flow = true;
-                B.st[B.n - 1].saved_space = saved;
-            }
-        }
+    build_walk(&B);
+    au_free(B.st);
+    au_free(B.ctr);
+    au_buf_free(&B.tmp);
+    build_finish(&B, root);
+    L->stats.tree_bytes = L->tree.total;
+    L->tree_full_bytes = L->tree.total;
+}
+
+LBox *l_build_subtree(AuLayout *L, AuElement *el)
+{
+    const AuStyle *s = au_element_style(el);
+    if (!s || s->box->display == AU_DISPLAY_NONE || s->box->display == AU_DISPLAY_CONTENTS)
+        return NULL;
+    Builder B;
+    memset(&B, 0, sizeof B);
+    B.L = L;
+    B.incr = true;
+    au_buf_init(&B.tmp);
+    /* A block-level box: its content starts after a collapsible space
+     * (l_build_tree sets last_space when it inserts one). */
+    B.last_space = true;
+    bool skip;
+    LBox *box = make_element_box(&B, &el->node, s, 0, &skip);
+    el->box = box;
+    if (box->kind == LK_BLOCK && box->inner == LI_REPLACED)
+        B.last_space = false; /* as the walk sets it after a replaced box */
+    if (box->kind == LK_BLOCK && !(box->inner == LI_REPLACED && skip)) {
+        push(&B, &el->node, box, s);
+        if (skip)
+            B.st[0].skip_children = true;
+        if (au_is_html_element(&el->node, AU_ATOM_details) && !attr_s(&el->node, "open"))
+            B.st[0].details_closed = true;
+        build_walk(&B);
+    } else if (box->kind != LK_BLOCK) {
+        B.abort = true;
     }
     au_free(B.st);
     au_free(B.ctr);
     au_buf_free(&B.tmp);
-    table_fixup(&B);
-    normalize(&B);
-    for (LBox *b = L->root; b;) {
-        if (b->kind == LK_BLOCK && b->inner == LI_TABLE)
-            l_table_build_grid(L, (LTableBox *)b);
-        if (b->first && b->kind != LK_TEXT)
-            b = b->first;
-        else {
-            while (b && !b->next)
-                b = b->parent;
-            if (b)
-                b = b->next;
-        }
+    if (B.abort) {
+        l_drop_box(box);
+        return NULL;
     }
-    L->stats.tree_bytes = L->tree.total;
+    build_finish(&B, box);
+    return box;
 }
 
 /* ---- Destruction ---- */
@@ -2218,6 +2362,10 @@ void l_free_tree(AuLayout *L)
     }
     ar_free_all(&L->tree);
     L->root = NULL;
+    for (uint32_t i = 0; i < L->nhidden; i++)
+        au_node_unref(&L->hidden[i].el->node);
     L->nhidden = 0;
+    L->nctr_names = 0;
+    L->tree_full_bytes = 0;
     memset(&L->stats, 0, sizeof L->stats);
 }

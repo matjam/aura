@@ -837,11 +837,13 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                 au_bw_paint(w, cv, key_inv.r[k]);
             double t3 = now_ms();
             printf("key %c: event %.2f ms, idle %.2f ms, paint %.2f ms; %u style passes, %u elements styled, "
-                   "%u tree builds, %u layouts; %d invalidations, %ld px, union %d,%d %dx%d\n",
+                   "%u tree builds, %u subtree builds (%u boxes), %u layouts; %d invalidations, %ld px, union "
+                   "%d,%d %dx%d\n",
                    cp < 127 ? (char)cp : '?', t1 - t0, t2 - t1, t3 - t2, s1.style_passes - s0.style_passes,
-                   s1.styled_elements - s0.styled_elements, s1.tree_builds - s0.tree_builds, s1.layouts - s0.layouts,
-                   key_inv.n, key_inv.area, key_inv.u.x0, key_inv.u.y0, key_inv.u.x1 - key_inv.u.x0,
-                   key_inv.u.y1 - key_inv.u.y0);
+                   s1.styled_elements - s0.styled_elements, s1.tree_builds - s0.tree_builds,
+                   s1.subtree_builds - s0.subtree_builds, s1.subtree_boxes - s0.subtree_boxes,
+                   s1.layouts - s0.layouts, key_inv.n, key_inv.area, key_inv.u.x0, key_inv.u.y0,
+                   key_inv.u.x1 - key_inv.u.x0, key_inv.u.y1 - key_inv.u.y0);
         }
         au_canvas_free(cv);
         au_surface_free(surf);

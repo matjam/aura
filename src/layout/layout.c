@@ -1304,7 +1304,11 @@ AuLayout *au_layout_new(const AuLayoutEnv *env)
     ar_init(&L->tree);
     ar_init(&L->font_arena);
     ar_init(&L->word_arena);
+    au_buf_init(&L->check_msg);
     L->need_build = true;
+#ifdef AURA_INCR_CHECK
+    L->check = 1;
+#endif
     return L;
 }
 
@@ -1312,6 +1316,9 @@ void au_layout_free(AuLayout *L)
 {
     if (!L)
         return;
+    l_dirty_clear(L);
+    au_free(L->dirty);
+    au_buf_free(&L->check_msg);
     l_free_tree(L);
     l_text_free_caches(L);
     au_svg_names_free(L->svg_names);
@@ -1325,6 +1332,7 @@ void au_layout_free(AuLayout *L)
 
 void au_layout_release(AuLayout *L)
 {
+    l_dirty_clear(L);
     l_free_tree(L);
     l_text_free_caches(L);
     au_free(L->items);
@@ -1402,6 +1410,7 @@ void au_layout_scroll_free(AuLayoutScroll *s, uint32_t n)
 
 void au_layout_set_document(AuLayout *L, AuDocument *doc)
 {
+    l_dirty_clear(L);
     l_free_tree(L);
     L->doc = doc;
     L->need_build = true;
@@ -1419,11 +1428,12 @@ void au_layout_tree_changed(AuLayout *L)
 {
     au_svg_id_index_free(L->svg_ids);
     L->svg_ids = NULL;
+    l_dirty_clear(L);
     L->need_build = true;
     L->need_paint = true;
 }
 
-static void mark_dirty(LBox *b)
+void l_mark_dirty(LBox *b)
 {
     b->flags |= LF_DIRTY;
     b->flags &= ~(LF_INTRINSIC_OK | LF_MEASURE_OK);
@@ -1454,7 +1464,7 @@ void au_layout_images_changed(AuLayout *L)
             /* A width and height in pixels leave nothing to the image. */
             const AuStyleBox *sb = b->style->box;
             if (r == 2 && !(sb->width.kind == AU_LEN_PX && sb->height.kind == AU_LEN_PX)) {
-                mark_dirty(b);
+                l_mark_dirty(b);
                 L->need_layout = true;
             }
             if (r)
@@ -1579,18 +1589,33 @@ void au_layout_styles_changed(AuLayout *L)
     /* An id attribute may have changed. */
     au_svg_id_index_free(L->svg_ids);
     L->svg_ids = NULL;
+    /* The subtrees whose DOM changed first: their new boxes take the
+     * current styles, so the comparison below finds nothing there. */
+    l_rebuild_dirty(L);
     if (L->need_build || !L->root) {
         L->need_build = true;
         return;
     }
     LBox *b = L->root;
     int worst = 0;
+    /* A box whose new style changes what is built (display, float,
+     * position, content, list markers, counters) is rebuilt with its
+     * parent's subtree: the changed box is recorded as a DOM change of
+     * its parent (or, for a pseudo-element, of its element) and its
+     * descendants are not compared. */
+    bool deferred = false;
     while (b && worst < 3) {
         const AuStyle *ns;
         if (lb_anon(b)) {
             ns = b->parent ? b->parent->style : NULL;
-            if (b->pseudo == AU_CSS_PSEUDO_MARKER || (b->parent && b->parent->pseudo))
+            if (b->parent && b->parent->pseudo)
                 ns = NULL; /* compared through its element */
+            else if (b->pseudo == AU_CSS_PSEUDO_MARKER) {
+                /* A marker has its ::marker style, or its item's. */
+                const AuStyle *es = b->node && au_is_element(b->node) ? au_element_style(au_as_element(b->node)) : NULL;
+                const AuStyle *ms = es ? au_style_pseudo(es, AU_CSS_PSEUDO_MARKER) : NULL;
+                ns = ms ? ms : es;
+            }
         } else {
             ns = current_style(b);
         }
@@ -1600,10 +1625,26 @@ void au_layout_styles_changed(AuLayout *L)
         }
         if (ns && ns != b->style) {
             int d = style_diff(b->style, ns);
+            if (d == 3 && b->node && (!lb_anon(b) || b->pseudo == AU_CSS_PSEUDO_MARKER)) {
+                AuNode *at = b->pseudo || !b->node->parent ? b->node : b->node->parent;
+                au_layout_node_changed(L, at);
+                if (L->need_build) {
+                    worst = 3;
+                    break;
+                }
+                deferred = true;
+                if (worst < 2)
+                    worst = 2;
+                while (b && !b->next) /* the subtree is built again */
+                    b = b->parent;
+                if (b)
+                    b = b->next;
+                continue;
+            }
             if (d > worst)
                 worst = d;
             if (d == 2)
-                mark_dirty(b);
+                l_mark_dirty(b);
             if (d < 3) {
                 au_style_retain((AuStyle *)ns);
                 au_style_release(b->style);
@@ -1621,9 +1662,21 @@ void au_layout_styles_changed(AuLayout *L)
     }
     /* An element left out of the tree for display: none that is shown now. */
     for (uint32_t i = 0; i < L->nhidden && worst < 3; i++) {
-        const AuStyle *hs = au_element_style(L->hidden[i]);
-        if (hs && hs->box->display != AU_DISPLAY_NONE)
+        AuElement *hel = L->hidden[i].el;
+        const AuStyle *hs = au_element_style(hel);
+        if (hs && hs->box->display != AU_DISPLAY_NONE) {
+            au_layout_node_changed(L, hel->node.parent ? hel->node.parent : &hel->node);
+            if (L->need_build)
+                worst = 3;
+            deferred = true;
+        }
+    }
+    if (deferred && worst < 3) {
+        l_rebuild_dirty(L);
+        if (L->need_build)
             worst = 3;
+        else if (worst < 2)
+            worst = 2;
     }
     if (worst == 3)
         L->need_build = true;
@@ -1704,6 +1757,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (vh < 1)
         vh = 1;
     bool changed = false;
+    l_rebuild_dirty(L);
     if (L->src_viewport && (vw != L->src_vw || vh != L->src_vh))
         L->need_build = true; /* another srcset candidate may apply */
     if (L->need_build) {
@@ -1748,6 +1802,9 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     }
     if (changed)
         L->need_paint = true;
+    if (L->check)
+        l_check_incremental(L);
+    L->rebuilt = false;
     return changed;
 }
 
@@ -1885,7 +1942,7 @@ static bool style_names_image(AuLayout *L, const AuStyle *s, const char *url)
 
 int au_layout_image_users(AuLayout *L, const char *url, void (*fn)(void *ctx, AuRect r), void *ctx)
 {
-    if (!L->root || L->need_build)
+    if (!L->root || L->need_build || L->ndirty)
         return -1;
     int count = 0;
     const AuStyle *last = NULL;

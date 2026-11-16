@@ -234,6 +234,18 @@ struct AuCssResolver {
     uint32_t named_size, named_count;
     struct PendingAttr *pending; /* elements whose class or id changed since the last restyle */
     uint32_t npending, pending_cap;
+    /* What child insertions and removals reach (au_css_invalidate_children):
+     * for each structural dependency, the set (1 << REL_*) of places the
+     * styled elements lie from the element whose match changes. */
+    uint8_t st_empty;   /* :empty, on the parent */
+    uint8_t st_forward; /* :first-child, :nth-child() and the of-type forms, on following siblings */
+    uint8_t st_back;    /* :last-child, :nth-last-child() and the of-type forms, on preceding siblings */
+    uint8_t st_adj;     /* E + F: F, the element after the change */
+    uint8_t st_ind;     /* E ~ F: every following sibling */
+    bool st_has_empty;  /* :empty inside :has(): a text change reaches the :has() anchors */
+    bool st_form;       /* :default or :indeterminate: one control's match follows the others of its form */
+    struct HasAnchor *has_anchors; /* every :has() (au_css_invalidate_children) */
+    uint32_t nhas_anchors, has_anchors_cap;
     uint32_t styled_count; /* elements styled since creation (au_css_resolver_styled_count) */
     uint32_t stat_computed; /* elements computed since the last css_resolver_take_computed */
 };
@@ -423,6 +435,56 @@ typedef struct {
     IndexKey anchor;
 } DepCtx;
 
+/* A :has() pseudo-class: the elements it can match (anchor) and where the
+ * elements whose style follows its result lie from it (rel). sib: an
+ * argument starts with + or ~, so the anchor may be a preceding sibling of
+ * what changed. */
+typedef struct HasAnchor {
+    AuAtom anchor;
+    uint8_t anchor_kind; /* KEY_* */
+    uint8_t rel;
+    uint8_t sib;
+} HasAnchor;
+
+static void has_anchor_add(AuCssResolver *r, IndexKey anchor, uint8_t rel, bool sib)
+{
+    HasAnchor h;
+    memset(&h, 0, sizeof h);
+    h.anchor = anchor.atom;
+    h.anchor_kind = anchor.kind;
+    h.rel = rel;
+    h.sib = sib;
+    for (uint32_t i = 0; i < r->nhas_anchors; i++)
+        if (!memcmp(&r->has_anchors[i], &h, sizeof h))
+            return;
+    *CSS_PUSH(r->has_anchors, r->nhas_anchors, r->has_anchors_cap) = h;
+}
+
+/* The structural pseudo-class op, read at rel, outside :has(). */
+static void struct_pseudo(AuCssResolver *r, int op, uint8_t rel)
+{
+    uint8_t bit = (uint8_t)(1u << rel);
+    if (op == PC_DEFAULT || op == PC_INDETERMINATE)
+        r->st_form = true;
+    switch (op) {
+    case PC_EMPTY: r->st_empty |= bit; break;
+    case PC_FIRST_CHILD:
+    case PC_NTH_CHILD:
+    case PC_FIRST_OF_TYPE:
+    case PC_NTH_OF_TYPE: r->st_forward |= bit; break;
+    case PC_LAST_CHILD:
+    case PC_NTH_LAST_CHILD:
+    case PC_LAST_OF_TYPE:
+    case PC_NTH_LAST_OF_TYPE: r->st_back |= bit; break;
+    case PC_ONLY_CHILD:
+    case PC_ONLY_OF_TYPE:
+        r->st_forward |= bit;
+        r->st_back |= bit;
+        break;
+    default: break;
+    }
+}
+
 /* The state bits a pseudo-class reads, or 0. */
 static uint32_t pseudo_state(int op)
 {
@@ -574,6 +636,12 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                 dep_add(cx, F_ATTR, css_comp_name(c), rel, key);
             } else if (c->type == SC_PSEUDO) {
                 uint32_t st = pseudo_state(c->op);
+                if (!cx->in_has)
+                    struct_pseudo(cx->r, c->op, rel);
+                else if (c->op == PC_EMPTY)
+                    cx->r->st_has_empty = true;
+                else if (c->op == PC_DEFAULT || c->op == PC_INDETERMINATE)
+                    cx->r->st_form = true;
                 if (st) {
                     dep_add(cx, F_STATE, st, rel, key);
                 } else if (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT) {
@@ -586,6 +654,7 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                     for (uint32_t m = 0; m < c->u.list->n; m++) {
                         const AuSelector *a = &c->u.list->sel[m];
                         h.has_sib = a->rel_comb == COMB_NEXT || a->rel_comb == COMB_SUBSEQUENT;
+                        has_anchor_add(cx->r, key, h.has_rel, h.has_sib);
                         IndexKey none = {KEY_UNIVERSAL, 0, 0};
                         dep_selector(&h, a, cx->in_has ? REL_ANY : REL_SELF, none, depth + 1);
                     }
@@ -603,8 +672,17 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                     dep_selector(&n, &nested->sel[m], rel, key, depth + 1);
             }
         }
-        if (k < s->ncomp)
-            rel = cx->has_nested ? REL_ANY : rel_cross(rel, s->comp[k].op);
+        if (k < s->ncomp) {
+            /* Components are stored subject first: this compound is right
+             * of the combinator. An element inserted or removed before
+             * the one it matches changes what it is next to. */
+            int op = s->comp[k].op;
+            if (!cx->in_has && op == COMB_NEXT)
+                cx->r->st_adj |= (uint8_t)(1u << rel);
+            else if (!cx->in_has && op == COMB_SUBSEQUENT)
+                cx->r->st_ind |= (uint8_t)(1u << rel);
+            rel = cx->has_nested ? REL_ANY : rel_cross(rel, op);
+        }
         i = k + 1;
     }
 }
@@ -640,6 +718,9 @@ static void deps_clear(AuCssResolver *r)
     r->ndeps = 0;
     r->state_used = 0;
     r->deps_unknown = false;
+    r->st_empty = r->st_forward = r->st_back = r->st_adj = r->st_ind = 0;
+    r->st_has_empty = r->st_form = false;
+    r->nhas_anchors = 0;
     au_free(r->named);
     r->named = NULL;
     r->named_size = r->named_count = 0;
@@ -955,6 +1036,7 @@ void au_css_resolver_free(AuCssResolver *r)
     pending_drop(r);
     au_free(r->pending);
     au_free(r->deps);
+    au_free(r->has_anchors);
     au_free(r->entries);
     au_free(r->walked);
     au_free(r->media_deps);
@@ -2837,6 +2919,235 @@ void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAt
         invalidate_coarse(r, el, change == AU_CSS_CHANGE_CHILDREN);
         break;
     }
+}
+
+/* ---- Child insertions and removals ----
+ * As Blink scopes them (Element::ChildrenChanged and the
+ * ChildrenAffectedBy flags), from what the rule index found when it was
+ * built (deps_build): the inserted subtree, the parent for :empty, the
+ * following or preceding siblings for positional pseudo-classes and
+ * sibling combinators, and the :has() anchors among the ancestors and
+ * their preceding siblings. */
+
+static void dep_apply_mask(AuCssResolver *r, AuElement *el, uint8_t mask)
+{
+    for (uint8_t rel = REL_SELF; rel <= REL_ANY && !r->full_restyle; rel++)
+        if (mask & (1u << rel))
+            dep_apply(r, el, rel);
+}
+
+static AuElement *elem_at_or_after(AuNode *n)
+{
+    for (; n; n = n->next)
+        if (n->type == AU_NODE_ELEMENT)
+            return (AuElement *)n;
+    return NULL;
+}
+
+static AuElement *elem_at_or_before(AuNode *n)
+{
+    for (; n; n = n->prev)
+        if (n->type == AU_NODE_ELEMENT)
+            return (AuElement *)n;
+    return NULL;
+}
+
+/* The anchors of :has() a change below parent can reach: parent and its
+ * ancestors, and for arguments that start with + or ~ the preceding
+ * siblings of the change point (before is the node before it) and of
+ * each of those. */
+static void has_anchors_fire(AuCssResolver *r, AuElement *parent, AuNode *before)
+{
+    for (uint32_t i = 0; i < r->nhas_anchors && !r->full_restyle; i++) {
+        const HasAnchor *h = &r->has_anchors[i];
+        if (h->rel == REL_ANY) {
+            r->full_restyle = true;
+            return;
+        }
+        if (h->sib)
+            for (AuNode *p = before; p; p = p->prev)
+                if (p->type == AU_NODE_ELEMENT && dep_key_match(r, h->anchor_kind, h->anchor, (AuElement *)p))
+                    dep_apply(r, (AuElement *)p, h->rel);
+        for (AuElement *a = parent; a && !r->full_restyle; a = parent_element(a)) {
+            if (dep_key_match(r, h->anchor_kind, h->anchor, a))
+                dep_apply(r, a, h->rel);
+            if (h->sib)
+                for (AuNode *p = a->node.prev; p; p = p->prev)
+                    if (p->type == AU_NODE_ELEMENT && dep_key_match(r, h->anchor_kind, h->anchor, (AuElement *)p))
+                        dep_apply(r, (AuElement *)p, h->rel);
+        }
+    }
+}
+
+static bool is_form_owner(const AuElement *a)
+{
+    return a->ns == AU_NS_HTML && (a->tag == HN(form) || a->tag == HN(fieldset) || a->tag == HN(select) ||
+                                   a->tag == HN(datalist) || a->tag == HN(optgroup) || a->tag == HN(textarea) ||
+                                   a->tag == HN(option));
+}
+
+/* Pseudo-classes of form elements that follow their descendants: a
+ * form's or fieldset's :valid and :invalid, a select's options' :checked
+ * (the first option is selected when none says so), a select's own
+ * validity, a textarea's :placeholder-shown (its value is its text). */
+static void form_ancestors(AuCssResolver *r, AuElement *parent)
+{
+    const uint32_t bits = STATE_OTHER | AU_STATE_CHECKED | AU_STATE_CHECKED_SET | AU_STATE_INDETERMINATE;
+    if (!(r->state_used & bits))
+        return;
+    for (AuElement *a = parent; a && !r->full_restyle; a = parent_element(a)) {
+        if (!is_form_owner(a))
+            continue;
+        au_css_invalidate_state(r, a, bits);
+        if (a->tag == HN(select) && (r->state_used & (AU_STATE_CHECKED | AU_STATE_CHECKED_SET)))
+            for (AuNode *n = a->node.first_child; n; n = au_node_next(n, &a->node))
+                if (n->type == AU_NODE_ELEMENT && ((AuElement *)n)->tag == HN(option))
+                    au_css_invalidate_state(r, (AuElement *)n, bits);
+    }
+}
+
+static bool holds_control(AuNode *n)
+{
+    for (AuNode *c = n; c; c = au_node_next(c, n))
+        if (c->type == AU_NODE_ELEMENT && ((AuElement *)c)->ns == AU_NS_HTML &&
+            (((AuElement *)c)->tag == HN(input) || ((AuElement *)c)->tag == HN(button)))
+            return true;
+    return false;
+}
+
+void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next,
+                                bool inserted)
+{
+    if (!child || (child->type != AU_NODE_ELEMENT && child->type != AU_NODE_TEXT))
+        return; /* comments and the like match nothing and count for nothing */
+    if (!r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown || !parent ||
+        parent->type != AU_NODE_ELEMENT) {
+        r->full_restyle = true;
+        return;
+    }
+    AuElement *pe = (AuElement *)parent;
+    bool elem = child->type == AU_NODE_ELEMENT;
+    if (inserted && elem) {
+        /* The new subtree, whatever styles it had where it was before. */
+        ((AuElement *)child)->state |= AU_STATE_STYLE_DIRTY;
+        mark_ancestors((AuElement *)child);
+    }
+    AuNode *before = inserted ? child->prev : prev;
+    AuNode *after = inserted ? child->next : next;
+    if (r->st_empty)
+        dep_apply_mask(r, pe, r->st_empty);
+    if (elem) {
+        /* What a sibling rule marks from one element covers the same
+         * marks from every element after it: those go on the first only,
+         * so a long list costs its length, not its square. */
+        const uint8_t own = (1u << REL_SELF) | (1u << REL_DESC) | (1u << REL_ANY);
+        uint8_t fwd = r->st_forward | r->st_ind;
+        bool first = true;
+        if (fwd)
+            for (AuElement *e = elem_at_or_after(after); e && !r->full_restyle; e = elem_at_or_after(e->node.next)) {
+                dep_apply_mask(r, e, first ? fwd : (uint8_t)(fwd & own));
+                first = false;
+            }
+        if (r->st_back) {
+            AuElement *earliest = NULL;
+            for (AuElement *e = elem_at_or_before(before); e && !r->full_restyle; e = elem_at_or_before(e->node.prev)) {
+                dep_apply_mask(r, e, (uint8_t)(r->st_back & own));
+                earliest = e;
+            }
+            if (earliest && !r->full_restyle)
+                dep_apply_mask(r, earliest, (uint8_t)(r->st_back & ~own));
+        }
+        AuElement *adj = r->st_adj ? elem_at_or_after(after) : NULL;
+        if (adj)
+            dep_apply_mask(r, adj, r->st_adj);
+        if (r->st_form && holds_control(child))
+            r->full_restyle = true; /* the form's default button, a radio group */
+    }
+    if (r->nhas_anchors && !r->full_restyle)
+        has_anchors_fire(r, pe, before);
+    if (!r->full_restyle)
+        form_ancestors(r, pe);
+}
+
+/* Every computed longhand of s and of its pseudo-element styles. */
+static void serialize_all(const AuStyle *s, AuBuf *out)
+{
+    for (const AuStyle *p = s; p; p = p == s ? s->pseudos : p->next) {
+        au_buf_printf(out, "[%u]", (unsigned)p->pseudo);
+        for (int k = 1; k < AU_PROP_LONGHAND_END; k++) {
+            au_style_serialize_property(p, au_atom_cstr(au_css_property_name((AuCssProp)k)), out);
+            au_buf_putc(out, ';');
+        }
+        au_buf_printf(out, "f%u b%u ", (unsigned)p->flags, (unsigned)p->pseudo_bits);
+    }
+}
+
+bool au_css_check_restyle(AuCssResolver *r, AuDocument *doc, AuBuf *msg)
+{
+    const AuNode *top = &doc->node;
+    uint32_t n = 0;
+    for (AuNode *c = top->first_child; c; c = au_node_next(c, top))
+        n += c->type == AU_NODE_ELEMENT;
+    AuStyle **old = au_alloc((n ? n : 1) * sizeof *old);
+    uint32_t i = 0;
+    for (AuNode *c = top->first_child; c; c = au_node_next(c, top))
+        if (c->type == AU_NODE_ELEMENT)
+            old[i++] = au_style_retain((AuStyle *)((AuElement *)c)->style);
+    /* A whole pass keeps an element's style object when its values are
+     * equal: an object that changed may hold a difference. */
+    style_pass(r, doc, false);
+    bool ok = true;
+    i = 0;
+    AuBuf a, b;
+    au_buf_init(&a);
+    au_buf_init(&b);
+    for (AuNode *c = top->first_child; c; c = au_node_next(c, top)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        AuElement *el = (AuElement *)c;
+        AuStyle *was = old[i++];
+        if (ok && was != el->style) {
+            au_buf_clear(&a);
+            au_buf_clear(&b);
+            if (was)
+                serialize_all(was, &a);
+            if (el->style)
+                serialize_all(el->style, &b);
+            if (a.len != b.len || memcmp(a.data, b.data, a.len) != 0) {
+                size_t k = 0;
+                while (k < a.len && k < b.len && a.data[k] == b.data[k])
+                    k++;
+                size_t s = k > 40 ? k - 40 : 0;
+                au_buf_printf(msg, "the style of <%s> differs from a whole restyle: ...%.*s | whole: ...%.*s\n",
+                              au_atom_str(el->tag), (int)(a.len - s < 120 ? a.len - s : 120), a.data ? a.data + s : "",
+                              (int)(b.len - s < 120 ? b.len - s : 120), b.data ? b.data + s : "");
+                ok = false;
+            }
+        }
+        au_style_release(was);
+    }
+    au_buf_free(&a);
+    au_buf_free(&b);
+    au_free(old);
+    return ok;
+}
+
+void au_css_invalidate_text(AuCssResolver *r, AuNode *text)
+{
+    AuNode *parent = text ? text->parent : NULL;
+    if (!parent || parent->type != AU_NODE_ELEMENT)
+        return; /* text outside an element is not styled */
+    if (!r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown) {
+        r->full_restyle = true;
+        return;
+    }
+    AuElement *pe = (AuElement *)parent;
+    if (r->st_empty)
+        dep_apply_mask(r, pe, r->st_empty);
+    if (r->st_has_empty && !r->full_restyle)
+        has_anchors_fire(r, pe, text->prev);
+    if (!r->full_restyle)
+        form_ancestors(r, pe);
 }
 
 /* ---- Debug and test access ---- */

@@ -9,6 +9,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#ifdef AURA_INCR_CHECK
+#include <stdlib.h>
+#endif
 
 /* ---- Helpers ---- */
 
@@ -71,11 +74,18 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_pass_counts(dv->layout, &b, &l);
         dv->dead_builds += b;
         dv->dead_layouts += l;
+        uint32_t sb, sx, ck;
+        au_layout_subtree_counts(dv->layout, &sb, &sx, &ck);
+        dv->dead_subtree_builds += sb;
+        dv->dead_subtree_boxes += sx;
+        dv->check_failures += au_layout_check_failures(dv->layout, dv->check_msg.len ? NULL : &dv->check_msg);
         au_layout_free(dv->layout);
     }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
                        layout_paint_frame, layout_canvas};
     dv->layout = au_layout_new(&env);
+    if (dv->check)
+        au_layout_set_check(dv->layout, true);
     /* Canvas text is drawn with the same fonts; font lists made from the
      * old set go before the set does. */
     dv->cur_fonts = fonts;
@@ -112,6 +122,10 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
      * font arriving) keeps every image and its animation. */
     dv->imgs = au_docimages_new();
     au_docimages_set_fonts(dv->imgs, fonts); /* text in SVG images */
+    au_buf_init(&dv->check_msg);
+#ifdef AURA_INCR_CHECK
+    dv->check = true;
+#endif
     new_layout(dv, fonts);
     dv->url = dup("about:blank");
     dv->base = dup("about:blank");
@@ -266,7 +280,21 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->user_css);
     au_free(dv->user_agent);
     au_free(dv->referrer);
+    au_buf_free(&dv->check_msg);
     au_free(dv);
+}
+
+void au_docview_set_check(AuDocView *dv, bool on)
+{
+    dv->check = on;
+    au_layout_set_check(dv->layout, on);
+}
+
+uint32_t au_docview_check_failures(const AuDocView *dv, AuBuf *msg)
+{
+    if (msg && dv->check_msg.len)
+        au_buf_append(msg, dv->check_msg.data, dv->check_msg.len);
+    return dv->check_failures + au_layout_check_failures(dv->layout, msg && !dv->check_msg.len ? msg : NULL);
 }
 
 void au_docview_set_user_css(AuDocView *dv, const char *css)
@@ -335,12 +363,16 @@ bool au_docview_animating(const AuDocView *dv)
 
 void au_docview_stats(const AuDocView *dv, AuDocViewStats *s)
 {
-    uint32_t b = 0, l = 0;
+    uint32_t b = 0, l = 0, sb = 0, sx = 0, ck = 0;
     *s = dv->stats;
-    if (dv->layout)
+    if (dv->layout) {
         au_layout_pass_counts(dv->layout, &b, &l);
+        au_layout_subtree_counts(dv->layout, &sb, &sx, &ck);
+    }
     s->tree_builds = dv->dead_builds + b;
     s->layouts = dv->dead_layouts + l;
+    s->subtree_builds = dv->dead_subtree_builds + sb;
+    s->subtree_boxes = dv->dead_subtree_boxes + sx;
 }
 
 void au_docview_image_stats(const AuDocView *dv, AuImageCacheStats *s)
@@ -1489,6 +1521,24 @@ void au_docview_script_peaks(const AuDocView *dv, size_t *page_peak, size_t *wor
         au_docscript_peaks(dv->script, page_peak, worker_peak);
 }
 
+/* The differential check of a restyle after child or text changes: the
+ * targeted restyle must give what a whole restyle gives. */
+static void check_restyle(AuDocView *dv)
+{
+    AuBuf msg;
+    au_buf_init(&msg);
+    if (!au_css_check_restyle(dv->resolver, dv->doc, &msg)) {
+        dv->check_failures++;
+        if (!dv->check_msg.len)
+            au_buf_append(&dv->check_msg, msg.data, msg.len);
+#ifdef AURA_INCR_CHECK
+        fprintf(stderr, "aura: targeted restyle differs: %.*s", (int)msg.len, msg.data);
+        abort();
+#endif
+    }
+    au_buf_free(&msg);
+}
+
 /* Brings styles up to date; returns true if the tree was restyled. */
 static bool update_style(AuDocView *dv)
 {
@@ -1544,9 +1594,16 @@ static bool update_style(AuDocView *dv)
     } else if (dv->restyle_needed) {
         au_css_restyle(dv->resolver, dv->doc);
         dv->stats.styled_elements += au_css_resolver_styled_count(dv->resolver) - styled0;
+        if (dv->check && dv->struct_changed)
+            check_restyle(dv);
         au_layout_styles_changed(dv->layout);
         dv->restyle_needed = false;
+        /* New text may need a web font not fetched yet (it returns at
+         * once when every font is fetched or fetching). */
+        if (dv->struct_changed && dv->webfonts)
+            au_webfonts_scan(dv->webfonts, dv->doc, fetch_font, dv);
     }
+    dv->struct_changed = false;
     return changed;
 }
 
@@ -2122,6 +2179,8 @@ void au_dv_cancel(AuDocView *dv, uint32_t id)
     *r = dv->reqs[--dv->nreqs];
 }
 
+static int tag_kinds(AuAtom t);
+
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
 {
     if (!dv->doc)
@@ -2149,8 +2208,14 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
         au_css_invalidate(dv->resolver, el,
                           attr_name == AU_ATOM_style ? AU_CSS_CHANGE_INLINE_STYLE : AU_CSS_CHANGE_ATTR, attr_name);
         dv->restyle_needed = true;
-        if (!style_only)
-            dv->tree_dirty = true; /* src, colspan, value...: content may change */
+        /* src, colspan, value...: the element's box may change, and it is
+         * built in its parent's context (a select's options, a picture's
+         * sources, the list item numbers an ol's start sets). */
+        if (!style_only) {
+            au_layout_node_changed(dv->layout, el->node.parent ? el->node.parent : &el->node);
+            if (tag_kinds(el->tag) == 4)
+                au_docimages_tree_changed(dv->imgs); /* src, srcset, type */
+        }
         if (el->tag == AU_ATOM_link || el->tag == AU_ATOM_style || el->tag == AU_ATOM_base)
             dv->sheets_rescan = true;
         /* Removing open takes a modal dialog out of the top layer
@@ -2163,11 +2228,67 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
     } else if (kind == 4 && el && dv->resolver) { /* state: checked, focus... */
         au_css_invalidate(dv->resolver, el, AU_CSS_CHANGE_STATE, 0);
         dv->restyle_needed = true;
-        dv->tree_dirty = true;
+        /* a select's label shows which option is selected */
+        au_layout_node_changed(dv->layout, el->node.parent ? el->node.parent : &el->node);
+    } else if (kind == 3 && n->type == AU_NODE_TEXT && dv->resolver) { /* text */
+        AuNode *p = n->parent;
+        if (p && p->type == AU_NODE_ELEMENT && tag_kinds(au_as_element(p)->tag) == 1)
+            dv->sheets_rescan = true; /* an edited <style> or <title> */
+        au_css_invalidate_text(dv->resolver, n);
+        au_layout_node_changed(dv->layout, n);
+        dv->restyle_needed = true;
+        dv->struct_changed = true;
     } else {
         dv->tree_dirty = true;
         dv->sheets_rescan = true;
     }
+}
+
+/* What a subtree holds that the view keeps lists of: style sheet sources,
+ * the base URL and the title (1, scan_document), frame elements (2) and
+ * images (4, AuDocImages). */
+static int tag_kinds(AuAtom t)
+{
+    if (t == AU_ATOM_style || t == AU_ATOM_link || t == AU_ATOM_base || t == AU_ATOM_title)
+        return 1;
+    if (t == AU_ATOM_iframe || t == AU_ATOM_frame || t == AU_ATOM_object || t == AU_ATOM_embed)
+        return 2;
+    if (t == AU_ATOM_img || t == AU_ATOM_input || t == AU_ATOM_source || t == AU_ATOM_picture)
+        return 4;
+    return 0;
+}
+
+static int subtree_kinds(AuNode *n)
+{
+    int k = 0;
+    for (AuNode *c = n; c && k != 7; c = au_node_next(c, n))
+        if (c->type == AU_NODE_ELEMENT)
+            k |= tag_kinds(au_as_element(c)->tag);
+    return k;
+}
+
+void au_dv_child_changed(AuDocView *dv, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next, bool inserted)
+{
+    if (!dv->doc || !child)
+        return;
+    if (child->type != AU_NODE_ELEMENT && child->type != AU_NODE_TEXT)
+        return; /* a comment: nothing shows it, no selector counts it */
+    if (au_node_shadow_including_root(parent) != &dv->doc->node)
+        return; /* built outside the document (or in another): its insertion is the change */
+    int k = subtree_kinds(child);
+    if (parent->type == AU_NODE_ELEMENT && tag_kinds(au_as_element(parent)->tag) == 1)
+        k |= 1; /* the text of a <style> or <title> */
+    if (k & 1)
+        dv->sheets_rescan = true;
+    if (k & 2)
+        dv->frames_dirty = true;
+    if (k & 4)
+        au_docimages_tree_changed(dv->imgs);
+    if (dv->resolver)
+        au_css_invalidate_children(dv->resolver, parent, child, prev, next, inserted);
+    au_layout_node_changed(dv->layout, parent);
+    dv->restyle_needed = true;
+    dv->struct_changed = true;
 }
 
 /* ---- CSSOM (script.c): the sheet of a style or link element ---- */

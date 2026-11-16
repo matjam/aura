@@ -145,6 +145,14 @@ static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
     au_dv_dom_changed(s->dv, node, attr_name, kind);
 }
 
+static void h_child_changed(void *ctx, AuNode *parent, AuNode *child, AuNode *prev, AuNode *next, bool inserted)
+{
+    AuDocScript *s = ctx;
+    if (au_node_shadow_including_root(parent) != &s->doc->node)
+        return; /* as h_dom_changed: a subtree not in the document */
+    au_dv_child_changed(s->dv, parent, child, prev, next, inserted);
+}
+
 static bool h_random(void *ctx, void *buf, size_t len)
 {
     AuDocScript *s = ctx;
@@ -586,6 +594,7 @@ static bool ensure_js(AuDocScript *s)
     h.now_ms = h_now;
     h.console = h_console;
     h.dom_changed = h_dom_changed;
+    h.child_changed = h_child_changed;
     h.element_rect = h_element_rect;
     h.text_rects = h_text_rects;
     h.computed_style = h_computed_style;
