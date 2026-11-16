@@ -803,3 +803,36 @@ class AbortController {
 tag(AbortSignal); tag(AbortController);
 defGlobal('AbortSignal', AbortSignal);
 defGlobal('AbortController', AbortController);
+
+/* ---------------- Intl ---------------- */
+
+/* Intl lives in src/js/intl.js, compiled to its own bytecode. N.intl()
+ * reads it the first time script touches Intl or one of the locale
+ * methods below; until then the global is a getter that costs nothing. */
+let intlLib = null;
+const intl = () => intlLib || (intlLib = N.intl()(G));
+Object.defineProperty(G, 'Intl', {
+    get() { const v = intl().Intl; defGlobal('Intl', v); return v; },
+    set(v) { defGlobal('Intl', v); },
+    configurable: true, enumerable: false,
+});
+const thisNumber = (v) => (typeof v === 'number' ? v : Number.prototype.valueOf.call(v));
+const thisTime = (v) => Date.prototype.getTime.call(v);
+const thisString = (v) => {
+    if (v === null || v === undefined) throw new TypeError('String.prototype.localeCompare called on null or undefined');
+    return String(v);
+};
+defProps(Number.prototype, {
+    toLocaleString() { return intl().numberToLocale(thisNumber(this), arguments[0], arguments[1]); },
+});
+defProps(BigInt.prototype, {
+    toLocaleString() { return intl().numberToLocale(BigInt.prototype.valueOf.call(this), arguments[0], arguments[1]); },
+});
+defProps(Date.prototype, {
+    toLocaleString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'any'); },
+    toLocaleDateString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'date'); },
+    toLocaleTimeString() { return intl().dateToLocale(thisTime(this), arguments[0], arguments[1], 'time'); },
+});
+defProps(String.prototype, {
+    localeCompare(that) { return intl().compare(thisString(this), String(that), arguments[1], arguments[2]); },
+});

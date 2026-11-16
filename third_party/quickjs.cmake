@@ -101,11 +101,21 @@ else()
         DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_WORKER_JS}
         COMMENT "Compiling the worker prelude to bytecode"
         VERBATIM)
-    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC})
+    # Intl (src/js/intl.js): its own bytecode, read the first time a page
+    # touches Intl (N.intl in runtime.c), by pages and workers alike.
+    set(AURA_INTL_BC ${AURA_PRELUDE_DIR}/intl.bc)
+    set(AURA_INTL_JS ${CMAKE_SOURCE_DIR}/src/js/intl.js)
+    add_custom_command(OUTPUT ${AURA_INTL_BC}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+        COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${AURA_INTL_BC} ${AURA_INTL_JS}
+        DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_INTL_JS}
+        COMMENT "Compiling Intl to bytecode"
+        VERBATIM)
+    add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC} ${AURA_INTL_BC})
     add_dependencies(aura_engine aura_prelude_bc)
     # #embed looks beside the source file, then in --embed-dir (Clang and
     # GCC 15 or later), not in the include path.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
-        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC}"
+        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC}"
         COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
 endif()

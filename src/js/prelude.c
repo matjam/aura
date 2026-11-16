@@ -60,6 +60,16 @@ const char au_js_worker_prelude_src[] = {
 
 const size_t au_js_worker_prelude_len = sizeof au_js_worker_prelude_src - 1;
 
+/* Intl, read when a page first touches it (N.intl in runtime.c). */
+extern const char au_js_intl_src[];
+extern const size_t au_js_intl_len;
+
+const char au_js_intl_src[] = {
+#embed "intl.js"
+    , 0};
+
+const size_t au_js_intl_len = sizeof au_js_intl_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -82,5 +92,14 @@ const unsigned char au_js_worker_prelude_bc[] = {
 };
 
 const size_t au_js_worker_prelude_bc_len = sizeof au_js_worker_prelude_bc;
+
+extern const unsigned char au_js_intl_bc[];
+extern const size_t au_js_intl_bc_len;
+
+const unsigned char au_js_intl_bc[] = {
+#embed "intl.bc"
+};
+
+const size_t au_js_intl_bc_len = sizeof au_js_intl_bc;
 
 #endif
