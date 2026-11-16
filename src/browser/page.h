@@ -404,6 +404,29 @@ void au_page_navigate_source(AuPage *p, const char *url, const char *data, size_
  * url, without fetching anything. */
 void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t len);
 
+/* ---- Discarding the document (unloaded tabs) ----
+ * A page that is not shown can give up its document to save memory and
+ * load it again later: au_page_discard frees the document view, the kept
+ * documents, the page source, the request log and the console, and keeps
+ * the URL, the title, the zoom and the security state. The page then
+ * paints white and does nothing until the browser navigates it again
+ * (au_page_navigate_entry with the page's URL loads it through the
+ * history cache mode). No pagehide or unload event fires.
+ *
+ * au_page_can_discard says whether nothing would be lost: false while
+ * the page loads or has transfers under way, for a POST result, an
+ * internal or interim page, a document with an unload or beforeunload
+ * listener, a worker, a canvas with a bitmap, or a form control the user
+ * changed (au_docview_has_state), and for a page that is discarded
+ * already. au_page_discard does not check.
+ *
+ * au_page_set_discarded puts a page that has not loaded anything into
+ * the discarded state with a URL and title to show (session restore). */
+bool au_page_can_discard(AuPage *p);
+void au_page_discard(AuPage *p);
+bool au_page_discarded(const AuPage *p);
+void au_page_set_discarded(AuPage *p, const char *url, const char *title);
+
 /* ---- The document cache ----
  * A page keeps the documents it leaves, so that Back and Forward show
  * them again at once: the document view with its tree, layout, images,

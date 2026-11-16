@@ -66,6 +66,11 @@ static const Key keys[] = {
     I("cache.disk_kb", disk_cache_kb, 0, 1 << 22),
     I("cache.documents", document_cache_pages, 0, 16),
     I("cache.documents_kb", document_cache_kb, 0, 1 << 20),
+    B("tabs.unload_low_memory", unload_tabs),
+    I("tabs.unload_free_kb", unload_free_kb, 0, 1 << 22),
+    I("tabs.unload_idle_kb", unload_idle_kb, 0, 1 << 22),
+    I("tabs.unload_idle_minutes", unload_idle_minutes, 0, 100000),
+    B("tabs.unload_restored", unload_restored),
     S("downloads.folder", download_folder),
     B("downloads.decode", decode_downloads),
     I("window.width", window_width, 0, 8192),
@@ -149,6 +154,15 @@ void au_prefs_init(AuPrefs *p)
      * documents while the free heap is low. */
     p->document_cache_pages = 3;
     p->document_cache_kb = 24576;
+    /* Background tabs are unloaded while less than 6 MB is free (a page
+     * load needs about that; the same figure the Mac shell drops kept
+     * documents at), and a tab not looked at for 30 minutes while less
+     * than 16 MB is free (room for one more article). */
+    p->unload_tabs = true;
+    p->unload_free_kb = 6144;
+    p->unload_idle_kb = 16384;
+    p->unload_idle_minutes = 30;
+    p->unload_restored = true;
 }
 
 void au_prefs_free(AuPrefs *p)

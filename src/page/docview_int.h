@@ -207,6 +207,7 @@ AuDocView *au_frames_view_of(AuDocView *dv, AuElement *el);
 AuElement *au_frames_element(const AuDocView *dv);
 /* Sums and state over the frames, for the view's own functions. */
 bool au_frames_can_persist(AuDocView *dv);
+bool au_frames_has_state(AuDocView *dv);
 void au_frames_set_hidden(AuDocView *dv, bool hidden);
 size_t au_frames_memory(AuDocView *dv);
 bool au_frames_run_scripts(AuDocView *dv, uint32_t budget_ms);

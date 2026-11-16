@@ -1785,6 +1785,14 @@ void au_frames_sync_all(AuDocView *dv)
             au_frames_sync_all(dv->frames[i]->dv);
 }
 
+bool au_frames_has_state(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nframes; i++)
+        if (dv->frames[i]->dv && dv->frames[i]->dv->doc && au_docview_has_state(dv->frames[i]->dv))
+            return true;
+    return false;
+}
+
 void au_frames_set_hidden(AuDocView *dv, bool hidden)
 {
     for (uint32_t i = 0; i < dv->nframes; i++)

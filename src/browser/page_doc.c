@@ -196,6 +196,7 @@ struct AuPage {
     size_t nkept;
     bool no_store;       /* the main response said Cache-Control: no-store */
     bool no_keep;        /* the document shown was a POST result (set until the next load starts) */
+    bool discarded;      /* the document was freed to save memory (au_page_discard); cleared by the next load */
 
     /* Script console: the last AU_PAGE_CONSOLE_LINES lines, oldest first
      * from console_start. */
@@ -1840,6 +1841,83 @@ size_t au_page_drop_kept(AuPage *p)
     return n;
 }
 
+/* ---- Discarding the document (page.h) ---- */
+
+static void cancel_all(AuPage *p);
+
+bool au_page_can_discard(AuPage *p)
+{
+    if (p->discarded || p->kind != K_DOC || !p->begun || p->loading || p->failed || p->internal || p->interim)
+        return false;
+    if (p->in_idle || p->leaving || p->open_url || p->sub_url || p->post || p->no_keep)
+        return false;
+    compact_fetches(p);
+    if (p->nfetches)
+        return false;
+    return au_docview_can_persist(p->dv) && !au_docview_has_state(p->dv);
+}
+
+/* The page's state for a document that is not there. */
+static void set_discarded(AuPage *p)
+{
+    p->discarded = true;
+    p->begun = false;
+    p->loading = p->failed = p->internal = p->interim = p->discard = false;
+    p->main = MAIN_NONE;
+    p->main_done = false;
+    p->dirty = false;
+    p->restore = false;
+    p->progress = 0;
+    p->requested = p->completed = 0;
+    p->last_status[0] = 0;
+    p->content_w = p->vw;
+    p->content_h = p->vh;
+    memset(&p->stats, 0, sizeof p->stats);
+}
+
+void au_page_discard(AuPage *p)
+{
+    if (p->discarded)
+        return;
+    cancel_all(p);
+    compact_fetches(p);
+    au_page_clear_selection(p);
+    if (p->leaving)
+        kept_free(p->leaving);
+    p->leaving = NULL;
+    /* The page is in its discarded state before anything is freed:
+     * freeing can run out of memory, and the low-memory path discards. */
+    AuDocView *old = p->dv;
+    new_view(p);
+    set_discarded(p);
+    au_page_drop_kept(p);
+    au_docview_free(old);
+    au_buf_free(&p->source);
+    au_buf_init(&p->source);
+    uint32_t gen = p->netlog.generation + 1;
+    au_netlog_free(&p->netlog);
+    au_netlog_init(&p->netlog);
+    p->netlog.generation = gen;
+    au_page_console_clear(p);
+    au_free(p->fragment);
+    p->fragment = NULL;
+    p->gen++;
+}
+
+bool au_page_discarded(const AuPage *p)
+{
+    return p->discarded;
+}
+
+void au_page_set_discarded(AuPage *p, const char *url, const char *title)
+{
+    if (p->begun || p->loading)
+        return;
+    set_str(&p->url, url);
+    set_str(&p->title, title ? title : "");
+    set_discarded(p);
+}
+
 /* ---- Documents ---- */
 
 /* Starts the new document in the view (the old one stays visible until
@@ -1853,6 +1931,7 @@ static void begin_doc(AuPage *p, const char *url)
     p->kind = K_DOC;
     p->internal = false;
     p->interim = false;
+    p->discarded = false;
     au_docview_set_scripting(p->dv, !p->env.prefs || p->env.prefs->javascript);
     {
         /* Script memory limits for this document's runtime and workers:
@@ -2827,6 +2906,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     /* Whether the document shown may be kept, judged before its fetches
      * are cancelled. */
     compact_fetches(p);
+    p->discarded = false; /* a discarded page loads like one that never held a document */
     bool keep = !p->leaving && p->next_entry != p->doc_entry && can_keep(p);
     p->no_keep = false;
     cancel_all(p);

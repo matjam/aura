@@ -77,6 +77,15 @@ typedef struct AuPrefs {
     /* The document cache for Back and Forward: documents kept per tab
      * (0 turns it off) and the memory all kept documents may take. */
     int document_cache_pages, document_cache_kb;
+    /* Unloading background tabs (browser.h, "Unloaded tabs"): the switch;
+     * the free memory in KB under which the least recently used
+     * background tab is unloaded; and the softer rule, a tab not looked
+     * at for unload_idle_minutes (0: never) goes while less than
+     * unload_idle_kb is free. unload_restored: a restored session loads
+     * only each window's active tab, the others when first selected. */
+    bool unload_tabs;
+    int unload_free_kb, unload_idle_kb, unload_idle_minutes;
+    bool unload_restored;
 
     /* Downloads */
     char *download_folder; /* platform path; "" for the default */

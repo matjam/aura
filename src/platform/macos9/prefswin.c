@@ -33,7 +33,7 @@ typedef enum {
     F_DNT, F_GPC, F_HTTPS_FIRST, F_LEGACY_TLS, F_TRACKERS, F_WARN_APPS, F_COOKIES, F_THIRD_PARTY,
     F_HISTORY_ON, F_HISTORY_DAYS, F_CLEAR_H_QUIT, F_CLEAR_CK_QUIT, F_CLEAR_CA_QUIT,
     F_CLEAR_HISTORY, F_CLEAR_COOKIES, F_CLEAR_CACHE, F_SHOW_COOKIES,
-    F_HTTP_HOST, F_HTTP_PORT, F_HTTPS_HOST, F_HTTPS_PORT, F_UA, F_MEM_CACHE, F_DISK_CACHE,
+    F_HTTP_HOST, F_HTTP_PORT, F_HTTPS_HOST, F_HTTPS_PORT, F_UA, F_MEM_CACHE, F_DISK_CACHE, F_UNLOAD_TABS,
     F_DL_FOLDER, F_DECODE,
     F_BL_URLS, F_BL_ALLOW, F_BL_DENY,
     F_OK, F_CANCEL, F_TAB,
@@ -356,6 +356,8 @@ static void build(PrefsWin *p)
     label(p, 4, L, y, 130, "Disk cache:");
     edit(p, 4, F_DISK_CACHE, X, y, 70);
     label(p, 4, (short)(X + 76), y, 40, "KB");
+    y += 34;
+    check(p, 4, F_UNLOAD_TABS, L, y, 400, "Unload background tabs when memory is low");
 
     /* Downloads */
     y = 52;
@@ -553,6 +555,7 @@ static void load(PrefsWin *p, const AuPrefs *pr)
     set_text(p->field[F_UA], au_prefs_user_agent(pr));
     set_num(p->field[F_MEM_CACHE], pr->memory_cache_kb);
     set_num(p->field[F_DISK_CACHE], pr->disk_cache_kb);
+    SetControlValue(p->field[F_UNLOAD_TABS], pr->unload_tabs);
     set_text(p->field[F_DL_FOLDER], pr->download_folder);
     SetControlValue(p->field[F_DECODE], pr->decode_downloads);
     set_text(p->field[F_BL_URLS], pr->block_custom);
@@ -622,6 +625,7 @@ static void store(PrefsWin *p, AuPrefs *pr)
         au_prefs_set_str(&pr->user_agent, "");
     pr->memory_cache_kb = clampi(get_num(p->field[F_MEM_CACHE], pr->memory_cache_kb), 0, 1 << 20);
     pr->disk_cache_kb = clampi(get_num(p->field[F_DISK_CACHE], pr->disk_cache_kb), 0, 1 << 22);
+    pr->unload_tabs = GetControlValue(p->field[F_UNLOAD_TABS]) != 0;
     store_str(&pr->download_folder, p->field[F_DL_FOLDER]);
     pr->decode_downloads = GetControlValue(p->field[F_DECODE]) != 0;
     char *urls = get_text(p->field[F_BL_URLS]), *allow = get_text(p->field[F_BL_ALLOW]),

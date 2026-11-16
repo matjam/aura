@@ -857,6 +857,27 @@ bool au_docview_can_persist(AuDocView *dv)
     return au_docscript_can_persist(dv->script) && au_frames_can_persist(dv);
 }
 
+bool au_docview_has_state(AuDocView *dv)
+{
+    if (!dv->doc)
+        return false;
+    /* A canvas with a bitmap: what script or the user drew cannot be
+     * told apart, and neither comes back with a reload. */
+    if (dv->canvases && au_canvas_set_bytes(dv->canvases) > 0)
+        return true;
+    if (au_docscript_workers(dv->script) > 0)
+        return true;
+    /* A form control the user changed or gave files. */
+    for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+        if (c->type != AU_NODE_ELEMENT)
+            continue;
+        const AuControl *ctl = au_ctl_peek((const AuElement *)c);
+        if (ctl && (ctl->user_interacted || ctl->nfiles))
+            return true;
+    }
+    return au_frames_has_state(dv);
+}
+
 void au_docview_set_hidden(AuDocView *dv, bool hidden)
 {
     au_frames_set_hidden(dv, hidden); /* its frames pause and resume with it */

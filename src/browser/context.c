@@ -98,6 +98,8 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
         sep(m);
         add(m, AU_CMD_RELOAD_TAB, "Reload", true);
         add(m, AU_CMD_DUPLICATE_TAB, "Duplicate", true);
+        sep(m);
+        add(m, AU_CMD_UNLOAD_TAB, "Unload Tab", au_bw_can_unload_tab(w, h.index));
         break;
     case AU_HIT_ADDRESS:
     case AU_HIT_SECURITY: {
@@ -215,6 +217,7 @@ bool au_bw_context_command(AuBrowserWindow *w, const AuContextMenu *m, AuCommand
     case AU_CMD_RELOAD_TAB: au_bw_reload_tab(w, m->tab); return true;
     case AU_CMD_DUPLICATE_TAB: au_bw_duplicate_tab(w, m->tab); return true;
     case AU_CMD_TOGGLE_BLOCKING: au_bw_toggle_site_blocking(w); return true;
+    case AU_CMD_UNLOAD_TAB: au_bw_unload_tab(w, m->tab); return true;
     case AU_CMD_NONE:
     case AU_CMD_SEPARATOR: return true;
     default: return false;

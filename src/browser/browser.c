@@ -211,6 +211,8 @@ static void clamp_scroll(AuTab *t)
     int mx, my;
     AuBrowserWindow *w = t->win;
     int cw, ch;
+    if (au_page_discarded(t->page))
+        return; /* an unloaded tab keeps the position its document had */
     au_page_content_size(t->page, &cw, &ch);
     AuIRect p = w->layout.page;
     mx = cw - (p.x1 - p.x0);
@@ -487,6 +489,126 @@ size_t au_browser_release_documents(AuBrowser *b)
         for (int j = 0; j < b->windows[i]->ntabs; j++)
             n += au_page_drop_kept(b->windows[i]->tabs[j]->page);
     return n;
+}
+
+/* ---- Unloaded tabs (browser.h) ---- */
+
+/* Whether tab i of w may give up its document now. */
+static bool tab_unloadable(AuBrowserWindow *w, int i)
+{
+    AuBrowser *b = w->browser;
+    if (i < 0 || i >= w->ntabs || i == w->active)
+        return false;
+    AuTab *t = w->tabs[i];
+    if (t->loading || t->close_pending)
+        return false;
+    /* A page au_bw_idle is inside has its document on the stack. */
+    if (b->idle_depth > 1 || (b->idle_depth == 1 && b->idle_page == t->page))
+        return false;
+    return au_page_can_discard(t->page);
+}
+
+static void unload_tab(AuBrowserWindow *w, int i)
+{
+    AuTab *t = w->tabs[i];
+    AuNavEntry *e = au_nav_current(&t->nav);
+    if (e)
+        e->scroll_y = t->scroll_y;
+    au_page_discard(t->page);
+    set_str(&t->status, "");
+    invalidate_tab(w, i);
+}
+
+bool au_bw_can_unload_tab(AuBrowserWindow *w, int i)
+{
+    return tab_unloadable(w, i);
+}
+
+bool au_bw_unload_tab(AuBrowserWindow *w, int i)
+{
+    if (!tab_unloadable(w, i))
+        return false;
+    unload_tab(w, i);
+    return true;
+}
+
+/* The eligible tab shown longest ago, in any window; false when none. */
+static bool lru_tab(AuBrowser *b, AuBrowserWindow **win, int *index, uint32_t *age_ms)
+{
+    uint32_t now_ms = time_ms(b), best = 0;
+    bool found = false;
+    for (int i = 0; i < b->nwindows; i++) {
+        AuBrowserWindow *w = b->windows[i];
+        for (int j = 0; j < w->ntabs; j++) {
+            uint32_t age = now_ms - w->tabs[j]->shown_ms;
+            if ((found && age <= best) || !tab_unloadable(w, j))
+                continue;
+            found = true;
+            best = age;
+            *win = w;
+            *index = j;
+        }
+    }
+    *age_ms = best;
+    return found;
+}
+
+bool au_browser_unload_lru(AuBrowser *b)
+{
+    AuBrowserWindow *w;
+    int i;
+    uint32_t age;
+    if (!lru_tab(b, &w, &i, &age))
+        return false;
+    unload_tab(w, i);
+    b->unloaded_count++;
+    return true;
+}
+
+bool au_browser_memory_pressure(AuBrowser *b, uint32_t free_kb)
+{
+    const AuPrefs *p = &b->prefs;
+    if (!p->unload_tabs)
+        return false;
+    if (free_kb < (uint32_t)p->unload_free_kb)
+        return au_browser_evict_document(b) || au_browser_unload_lru(b);
+    if (p->unload_idle_minutes > 0 && free_kb < (uint32_t)p->unload_idle_kb) {
+        AuBrowserWindow *w;
+        int i;
+        uint32_t age;
+        if (lru_tab(b, &w, &i, &age) && age / 60000u >= (uint32_t)p->unload_idle_minutes) {
+            unload_tab(w, i);
+            b->unloaded_count++;
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t au_browser_release_memory(AuBrowser *b)
+{
+    size_t n = au_browser_release_documents(b);
+    if (!n && b->prefs.unload_tabs)
+        while (au_browser_unload_lru(b))
+            n++;
+    return n;
+}
+
+/* An unloaded tab is about to be shown: its entry loads again through
+ * the history cache mode, scrolled to where the tab was. */
+static void load_unloaded(AuTab *t)
+{
+    if (!au_page_discarded(t->page))
+        return;
+    AuNavEntry *e = au_nav_current(&t->nav);
+    const char *u = e ? e->url : au_page_url(t->page);
+    char *url = au_strndup(u, strlen(u));
+    int sx = t->scroll_x, sy = t->scroll_y;
+    t->scroll_x = t->scroll_y = 0;
+    au_page_set_scroll(t->page, 0, 0);
+    entry_load(t);
+    au_page_navigate_entry(t->page, url, sx, sy);
+    au_free(url);
 }
 
 /* A form posted: a new entry in this tab, or a new tab. A history entry
@@ -845,6 +967,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     t->id = b->next_tab_id++;
     t->win = w;
     t->status = au_strndup("", 0);
+    t->shown_ms = time_ms(b);
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
                      b->host.random ? env_random : NULL, b->host.coro, env_memory_free};
@@ -1105,10 +1228,15 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
     if (i < 0 || i >= w->ntabs)
         return;
     int old = w->active;
+    uint32_t t_now = time_ms(w->browser);
+    if (old >= 0 && old < w->ntabs)
+        w->tabs[old]->shown_ms = t_now; /* shown until now */
     w->active = i;
     au_free(w->field);
     w->field = NULL;
     AuTab *t = w->tabs[i];
+    t->shown_ms = t_now;
+    load_unloaded(t);
     changed(w, fresh_blank(t) ? AU_CHANGED_FOCUS_FIELD : AU_CHANGED_FOCUS_PAGE);
     set_viewport(t);
     check_hscroll(w);
@@ -1714,6 +1842,7 @@ void au_bw_paint(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
         }
         tabs[i].title = title;
         tabs[i].loading = x->loading;
+        tabs[i].unloaded = au_page_discarded(x->page);
         tabs[i].icon = au_favicons_for_url(w->browser->favicons, au_page_url(x->page));
     }
     AuChromeState s;
@@ -2085,6 +2214,15 @@ void au_bw_idle(AuBrowserWindow *w)
     }
     au_browser_trim_documents(w->browser);
     {
+        /* The memory rules for background tabs, about once a second. */
+        AuBrowser *b = w->browser;
+        uint32_t t = time_ms(b);
+        if (b->host.memory_free_kb && b->prefs.unload_tabs && !b->idle_depth && t - b->pressure_ms >= 1000) {
+            b->pressure_ms = t;
+            au_browser_memory_pressure(b, b->host.memory_free_kb(b->host.ctx));
+        }
+    }
+    {
         /* Icon fetches run outside the pages; repaint the tabs when one
          * arrived. */
         uint32_t serial = au_favicons_idle(w->browser->favicons);
@@ -2095,7 +2233,15 @@ void au_bw_idle(AuBrowserWindow *w)
     }
     bool any = false;
     for (int i = 0; i < w->ntabs; i++) {
+        /* The page being called is named, so that a low-memory unload
+         * from inside the call leaves its document alone. */
+        AuBrowser *b = w->browser;
+        AuPage *outer = b->idle_page;
+        b->idle_page = w->tabs[i]->page;
+        b->idle_depth++;
         au_page_idle(w->tabs[i]->page);
+        b->idle_depth--;
+        b->idle_page = outer;
         if (i < w->ntabs && w->tabs[i]->loading)
             any = true;
     }
@@ -2283,7 +2429,14 @@ void au_bw_restore(AuBrowserWindow *w, const AuSessionWindow *sw)
         }
         t->nav.index = src->index;
         AuNavEntry *e = au_nav_current(&t->nav);
-        if (e) {
+        if (e && j != sw->active && w->browser->prefs.unload_restored && !au_url_scheme_is(e->url, "about")) {
+            /* A background tab comes back unloaded: it loads when it is
+             * first selected, so a session of many tabs starts as fast
+             * as one of a single tab. */
+            apply_site_zoom(t, e->url);
+            au_page_set_discarded(t->page, e->url, e->title);
+            t->scroll_y = e->scroll_y;
+        } else if (e) {
             /* Back where it was left, once the page is tall enough. */
             char *url = au_strndup(e->url, strlen(e->url));
             apply_site_zoom(t, url);
