@@ -390,12 +390,24 @@ static bool only_declarations(const CssTokens *tk, uint32_t blk, uint32_t s, uin
     return any;
 }
 
+/* What a block parsed late interns is held by every document that holds
+ * the sheet (the scopes it was parsed and shared in) as well as by the
+ * one at hand, and goes into the set of a sheet other documents can
+ * share. */
+static AuAtomCollect late_begin(const AuCssSheet *sh)
+{
+    AuCssSheet *w = (AuCssSheet *)sh;
+    return au_atom_collect_begin(w->shared ? &w->atoms : NULL,
+                                 (w->scopes & au_atom_scope_live()) | au_atom_scope_bits());
+}
+
 const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
 {
     if (!(ru->flags & RF_LAZY))
         return ru->b.decls;
     CssRule *w = (CssRule *)ru; /* the parsed block is a cache of the text */
     late_parses++;
+    AuAtomCollect ac = late_begin(sh);
     AuCssDeclBlock tmp = {0};
     CssTokens tk = {0};
     AuBuf text;
@@ -407,6 +419,7 @@ const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru)
     w->flags &= (uint8_t)~RF_LAZY;
     w->c.children = NULL;
     w->b.decls = decls_pack((AuCssSheet *)sh, &tmp);
+    au_atom_collect_end(ac);
     return w->b.decls;
 }
 
@@ -422,6 +435,7 @@ const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
      * sheet parse would have, one level down. */
     CssRule *w = (CssRule *)ru;
     late_parses++;
+    AuAtomCollect ac = late_begin(sh);
     CssTokens tk = {0};
     AuBuf text;
     au_buf_init(&text);
@@ -445,6 +459,7 @@ const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru)
     css_blob_intern_end();
     css_toklist_intern_end();
     css_tokens_free(&tk);
+    au_atom_collect_end(ac);
     return w->c.children;
 }
 
@@ -1317,6 +1332,7 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     au_css_init();
     AuCssSheet *sh = au_calloc(sizeof *sh);
     sh->refs = 1;
+    sh->scopes = au_atom_scope_bits();
     sh->origin = (uint8_t)origin;
     sh->quirks = quirks;
     sh->base_url = base_url ? au_strndup(base_url, strlen(base_url)) : NULL;
@@ -1378,6 +1394,105 @@ AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, c
 {
     return css_sheet_parse(css, len, origin, base_url, media, false, CSS_TEXT_TAKE);
 }
+
+/* ---- Sheets shared between documents ----
+ * Every sheet parsed by au_css_sheet_parse_shared that has no @import rule
+ * is listed here while an owner holds it, with a hash of its text and the
+ * media text it was parsed for. A later parse of the same bytes for the
+ * same base URL, media and origin takes an owner on the listed sheet
+ * instead of parsing again. A listed sheet is never changed in a way an
+ * owner could see: the CSSOM parses a sheet of its own when script changes
+ * one (docview.c, om_sheet), imports are attached only to sheets that are
+ * not listed, and what the sheet does parse or pack late (blocks of
+ * declarations, @media blocks, the packed text) reads the same to every
+ * owner. The list is short (the sheets alive in all documents), so it is
+ * searched in order. */
+typedef struct SharedSheet {
+    AuCssSheet *sheet;
+    uint32_t hash;
+    char *media; /* NULL for all */
+} SharedSheet;
+
+static SharedSheet *shared_sheets;
+static uint32_t nshared_sheets, shared_sheets_cap;
+
+static uint32_t text_hash(const char *s, size_t n)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (unsigned char)s[i]) * 16777619u;
+    return h;
+}
+
+static bool same_str(const char *a, const char *b) { return strcmp(a ? a : "", b ? b : "") == 0; }
+
+AuCssSheet *au_css_sheet_parse_shared(char *css, size_t len, AuCssOrigin origin, const char *base_url,
+                                      const char *media)
+{
+    if (media && !*media)
+        media = NULL;
+    uint32_t h = text_hash(css, len);
+    for (uint32_t i = 0; i < nshared_sheets; i++) {
+        const SharedSheet *e = &shared_sheets[i];
+        AuCssSheet *s = e->sheet;
+        if (e->hash != h || s->text_len != len || s->origin != (uint8_t)origin || s->quirks)
+            continue;
+        if (!same_str(s->base_url, base_url) || !same_str(e->media, media))
+            continue;
+        if (!au_css_sheet_text_is(s, css, len))
+            continue;
+        au_free(css);
+        s->refs++;
+        /* the new owner's document holds the sheet's atoms too */
+        AuAtomBits bits = au_atom_scope_bits();
+        au_atom_set_hold(&s->atoms, bits);
+        s->scopes |= bits;
+        return s;
+    }
+    /* The atoms the sheet refers to are collected as it is parsed, for
+     * documents that share it later (none to collect when they are all
+     * permanent: no scope is entered). */
+    AuAtomSet set = {0};
+    AuAtomCollect ac = au_atom_collect_begin(&set, au_atom_scope_bits());
+    AuCssSheet *s = css_sheet_parse(css, len, origin, base_url, media, false, CSS_TEXT_TAKE);
+    au_atom_collect_end(ac);
+    /* A sheet with @import rules gets its imports attached by its owner,
+     * and one without its text cannot be compared: neither is listed. */
+    if (s->nimports || !s->has_text) {
+        au_atom_set_free(&set);
+        return s;
+    }
+    s->atoms = set;
+    if (nshared_sheets == shared_sheets_cap) {
+        shared_sheets_cap = shared_sheets_cap ? shared_sheets_cap * 2 : 16;
+        shared_sheets = au_realloc(shared_sheets, shared_sheets_cap * sizeof *shared_sheets);
+    }
+    SharedSheet *e = &shared_sheets[nshared_sheets++];
+    e->sheet = s;
+    e->hash = h;
+    e->media = media ? au_strndup(media, strlen(media)) : NULL;
+    s->shared = true;
+    return s;
+}
+
+static void unlist_shared(const AuCssSheet *s)
+{
+    for (uint32_t i = 0; i < nshared_sheets; i++)
+        if (shared_sheets[i].sheet == s) {
+            au_free(shared_sheets[i].media);
+            shared_sheets[i] = shared_sheets[--nshared_sheets];
+            break;
+        }
+    if (!nshared_sheets) {
+        au_free(shared_sheets);
+        shared_sheets = NULL;
+        shared_sheets_cap = 0;
+    }
+}
+
+size_t au_css_shared_sheet_count(void) { return nshared_sheets; }
+
+uint32_t au_css_sheet_owners(const AuCssSheet *s) { return s ? s->refs : 0; }
 
 size_t au_css_sheet_memory(const AuCssSheet *s)
 {
@@ -1457,6 +1572,9 @@ void au_css_sheet_free(AuCssSheet *s)
 {
     if (!s || --s->refs)
         return;
+    if (s->shared)
+        unlist_shared(s);
+    au_atom_set_free(&s->atoms);
     rules_release(s->rules);
     css_arena_free(&s->arena);
     au_free(s->import_layers);
@@ -1526,7 +1644,7 @@ const AuCssImport *au_css_sheet_import(const AuCssSheet *s, size_t i) { return i
 
 void au_css_sheet_set_import(AuCssSheet *s, size_t i, AuCssSheet *child)
 {
-    if (i >= s->nimports) {
+    if (i >= s->nimports || s->shared) { /* a listed sheet has no imports */
         au_css_sheet_free(child);
         return;
     }

@@ -160,6 +160,121 @@ Do not call `malloc` in engine code, and enable the pool before the
 first allocation in a new Mac OS 9 program. `tests/core/test_heap.c`
 covers it on the host.
 
+## Atoms
+
+Atoms (`au_atom`, `src/core/core.c`) are freed with the pages that made
+them. Each top-level document view takes an atom scope
+(`au_atom_scope_new` in `au_docview_new`; a frame's view uses its top
+view's, `au_dv_use_scope_of`) and enters it in every public
+`au_docview_*` function that can intern (`DV_ENTRY` in
+`docview_int.h`). Every atom interned or looked up meanwhile gets the
+scope as a holder; `au_docview_free` frees the scope last, and the
+atoms only it held are freed, their numbers used again and the table
+made smaller.
+
+- **To keep an atom past the page that made it** (a table every
+  document reads, a cache), intern it with `au_atom_permanent`, or
+  enter no scope around the code (`au_atom_scope_enter(0)`):
+  `au_css_init`, the user agent sheets, the initial values and the
+  attribute lists of `match.c` do this. Code that runs in no scope
+  (the browser layer, the host tools, the tests) makes every atom it
+  touches permanent, so a missed entry point costs memory, never an
+  atom freed while it is in use.
+- **A cache that returns atoms it keeps** calls `au_atom_use` on each
+  (the caller's scope then holds it) and empties itself when
+  `au_atom_generation` changes (`css_atom_lower`, `css_hash_atom`).
+- **A structure that several pages share** keeps the set of atoms it
+  refers to (`AuAtomSet`, collected with `au_atom_collect_begin`) and
+  each page that takes it holds them (`au_atom_set_hold`): a style
+  sheet shared between documents does this ([`css.md`](css.md),
+  "Sheets shared between documents").
+- **Limits.** 31 scopes can be live; a document made while all are
+  taken gets none and its atoms are permanent. A freed scope that is
+  still entered holds nothing new: atoms made then are permanent.
+- To see the counts, `aura-host chrome ... --do mem` prints a line
+  `atoms: N live, M made at run time (P permanent), S scopes`.
+- Tests: `tests/core/test_atoms.c` (ctest `core_atoms`) and
+  `test_atoms_freed` in `tests/page/test_page.c` (three pages loaded and
+  freed in turn leave the count where it was; a shared sheet's names,
+  those parsed late included, stay while the document sharing it
+  lives).
+
+QuickJS's own atoms belong to the page's script runtime and are freed
+with it: the script heap was 0 KB after each page closed in the
+measurement below, and no QuickJS patch was needed.
+
+**An element's computed style is freed with the element.** An element
+that script removed from its document kept its `AuStyle` (with its
+groups, custom property maps and value blobs) when it was freed: the
+DOM did not know about styles, and `au_css_clear_document` reaches only
+the elements still in the tree. GitHub's pages, whose script replaces
+much of the page, left 29.8 MB of styles behind when their tab closed,
+and held them while open. `node_free` in `dom.c` now calls the release
+function src/css registers (`au_dom_set_style_release` in
+`au_css_init`).
+
+Measured on 2026-11-16, base `49d5f6e`, host (64-bit, bundled fonts,
+`AURA_MEM=1`), loading GitHub's home page in a second tab for 8
+seconds and closing it (`--tab about:blank --tab URL --active 1 --do
+wait:8000 --do closetab --do wait:2000 --do mem`):
+
+| After the tab closed | `49d5f6e` | This change |
+|---|---|---|
+| Live bytes | 40,372 KB | 9,921 KB |
+| `src/css` | 29,828 KB in 168,891 blocks | 232 KB in 318 blocks |
+| `src/core` (atoms and other core) | 718 KB in 10,878 blocks | 412 KB in 1,016 blocks |
+
+Ten pages opened in a new tab and closed in turn (Wikipedia's PowerPC
+article, Hacker News, GitHub's home page, lobste.rs, Wikipedia's Mac OS 9
+article, GitHub's torvalds/linux, MDN's CSS page, Python's built-in
+types page, w3.org, rust-lang.org; `newtab:URL`, `wait:8000`,
+`closetab`, `wait:1000`, `mem` for each), with the style fix in both
+columns, atoms permanent before and freed after:
+
+| After closing page | Atoms made at run time, before | After | `src/core`, before | After | Live bytes, before | After |
+|---|---|---|---|---|---|---|
+| (none open) | 1,001 | 1,001 | 76 KB | 76 KB | 768 KB | 768 KB |
+| 1 Wikipedia PowerPC | 4,012 | 1,022 | 301 KB | 220 KB | 9,195 KB | 9,135 KB |
+| 2 Hacker News | 4,175 | 1,063 | 302 KB | 220 KB | 9,669 KB | 9,552 KB |
+| 3 GitHub home | 16,521 | 1,063 | 1,390 KB | 412 KB | 14,268 KB | 12,728 KB |
+| 4 lobste.rs | 16,807 | 1,063 | 1,393 KB | 412 KB | 14,212 KB | 12,165 KB |
+| 5 Wikipedia Mac OS 9 | 16,904 | 1,063 | 1,395 KB | 412 KB | 14,664 KB | 12,948 KB |
+| 6 GitHub torvalds/linux | 18,427 | 1,063 | 1,424 KB | 412 KB | 15,548 KB | 14,054 KB |
+| 7 MDN CSS | 18,899 | 1,063 | 1,429 KB | 412 KB | 15,937 KB | 14,409 KB |
+| 8 Python built-in types | 19,663 | 1,067 | 1,437 KB | 412 KB | 16,517 KB | 14,937 KB |
+| 9 w3.org | 20,009 | 1,067 | 1,441 KB | 412 KB | 16,948 KB | 15,380 KB |
+| 10 rust-lang.org | 21,677 | 1,067 | 1,457 KB | 412 KB | 17,110 KB | 15,537 KB |
+
+The "before" column is the same build with every atom permanent. After
+the change, the atoms made at run time stay at the ones the program
+keeps (user agent sheets, initial values, caches), and `src/core` stops
+growing. Of the 412 KB left, 400 KB is the atom array and hash table:
+the array keeps its high-water size when a permanent atom made during a
+large page sits near its end, because atom numbers cannot move. The
+live bytes that still grow from close to close are in `src/net` (5.3 MB
+after the third close, 6.8 MB after the tenth) and `src/platform/host`
+(6.4 MB to 7.8 MB), which hold the network cache and the host shell's
+data, not page structures.
+
+In the guest on 2026-11-16 (Enforcer base, 640x480, one run each),
+Develop > Performance read as follows with `49d5f6e` and with the shared
+sheets, freed atoms, the style fix and the lazy prelude modules
+([`javascript.md`](javascript.md), "Modules read on first use"):
+
+| Reading | `49d5f6e` used | This change used | Largest free block, `49d5f6e` | This change |
+|---|---|---|---|---|
+| about:home | 10.89 MB of 71.82 | 10.91 MB of 71.83 | 60.84 MB | 60.83 MB |
+| two tabs of Wikipedia's PowerPC article | 41.26 MB of 75.65 | 40.94 MB of 75.67 | 33.22 MB | 32.60 MB |
+| one Wikipedia tab, after a GitHub torvalds/linux tab closed | 34.68 MB of 76.28 | 34.16 MB of 76.30 | 4.83 MB | 4.70 MB |
+
+The heap held about 0.3 to 0.5 MB less with the pages open. This is a
+smaller gain than the host tables show; the guest reading was taken on
+torvalds/linux rather than GitHub's home page, and a 32-bit build's
+structures are smaller. The cause of the remaining difference was not
+measured. After the GitHub tab closed, the largest free
+block was under 5 MB in both builds: the heap is fragmented, which this
+change does not address.
+
 ## Temporary memory for the heap
 
 On Mac OS 9, `heap_get` in `main.c` takes a platform block from

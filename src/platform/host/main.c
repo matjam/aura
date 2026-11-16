@@ -160,7 +160,7 @@ static int usage(void)
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
-            "                        go:URL back forward closetab mem (bytes live per source line, in a\n"
+            "                        go:URL newtab:URL back forward closetab mem (bytes live per source line, in a\n"
             "                        build with -DAURA_MEM_TRACK=ON) cache (the HTTP cache's counts with --net,\n"
             "                        the documents kept for Back and Forward, DNS lookups)\n"
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
@@ -750,6 +750,10 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
     } else if (!strncmp(a, "go:", 3)) {
         au_bw_navigate(w, a + 3);
         chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+    } else if (!strncmp(a, "newtab:", 7)) {
+        /* Opens URL in a new tab after the others and selects it. */
+        au_bw_new_tab(w, a + 7, true, w->ntabs);
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
     } else if (!strcmp(a, "back") || !strcmp(a, "forward")) {
         double t0 = now_ms();
         au_bw_go(w, a[0] == 'b' ? -1 : 1);
@@ -805,6 +809,11 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
                (unsigned long)(n >= 0 && n < w->ntabs ? au_page_memory_estimate(w->tabs[n]->page) / 1024 : 0));
     } else if (!strcmp(a, "mem")) {
         au_host_mem_report("now");
+        AuAtomStats as;
+        au_atom_stats(&as);
+        printf("atoms: %u live, %u made at run time (%u permanent), %u scopes; strings %lu KB, tables %lu KB\n",
+               as.atoms, as.dynamic, as.permanent, as.scopes, (unsigned long)(as.string_bytes / 1024),
+               (unsigned long)(as.table_bytes / 1024));
     } else if (!strcmp(a, "heap")) {
         au_host_heap_report("now");
     } else if (!strcmp(a, "closetab")) {

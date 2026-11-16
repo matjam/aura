@@ -559,6 +559,18 @@ size_t au_css_sheet_memory(const AuCssSheet *s);
  * once). */
 void au_css_sheet_free(AuCssSheet *s);
 AuCssSheet *au_css_sheet_retain(AuCssSheet *s);
+/* Parses css as au_css_sheet_parse_take does, or, when some owner still
+ * holds a sheet parsed from the same bytes for the same base URL, media
+ * and origin, frees css and returns that sheet with an owner added. The
+ * documents of all tabs and frames share sheets this way. A shared sheet
+ * must not be changed: to change a sheet's rules, parse a new one (the
+ * CSSOM does). A sheet with @import rules is never shared, since its
+ * owner attaches the imports. au_css_sheet_owners says how many owners a
+ * sheet has; au_css_shared_sheet_count how many sheets can be shared. */
+AuCssSheet *au_css_sheet_parse_shared(char *css, size_t len, AuCssOrigin origin, const char *base_url,
+                                      const char *media);
+uint32_t au_css_sheet_owners(const AuCssSheet *s);
+size_t au_css_shared_sheet_count(void);
 size_t au_css_sheet_rule_count(const AuCssSheet *s); /* style rules, nested ones included */
 
 /* @import rules, in order. To load one, fetch url (relative to the

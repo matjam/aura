@@ -666,6 +666,12 @@ struct AuCssSheet {
      * layer each time, or an @import). */
     bool has_layers;
     bool repeat_matters;
+    bool shared; /* listed for other documents to share (au_css_sheet_parse_shared) */
+    /* The atom holders of the documents that parsed or shared the sheet
+     * (blocks parsed late intern for all of them), and for a listed sheet
+     * the atoms it refers to, which a document that shares it holds. */
+    AuAtomBits scopes;
+    AuAtomSet atoms;
     /* The sheet's source: lazy rules refer to ranges of it, and the
      * document view gives it to the CSSOM. A sheet of 4 GB or more has
      * none (has_text false), and no lazy rules. Once the document has

@@ -138,6 +138,10 @@ AuNode *au_fragment_new(AuDocument *doc);
 /* ---- Lifetime ---- */
 AuNode *au_node_ref(AuNode *n);
 void au_node_unref(AuNode *n);
+/* What frees an element's computed style (AuElement.style) when the
+ * element is freed: src/css sets it (au_css_init). An element that script
+ * removed from its document keeps its style until it is freed. */
+void au_dom_set_style_release(void (*release)(void *style));
 
 /* ---- Tree ----
  * Insertion removes the child from its current parent first. These do not

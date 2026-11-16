@@ -907,7 +907,7 @@ static void adjust_mathml_attrs(HtmlToken *t)
 {
     static AuAtom lower;
     if (!lower)
-        lower = au_atom_cstr("definitionurl");
+        lower = au_atom_permanent("definitionurl", 13);
     for (uint32_t i = 0; i < t->nattrs; i++)
         if (t->attrs[i].name == lower)
             t->attrs[i].name = AU_ATOM_definitionURL;

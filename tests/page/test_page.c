@@ -339,6 +339,156 @@ static void test_packed_sheets(void)
     au_docview_free(dv);
 }
 
+/* Documents that load the same sheet URL with the same bytes share one
+ * parsed sheet; a CSSOM change or disabling it in one document does not
+ * reach the other, and the sheet is freed once, with its last owner (the
+ * asan build checks the frees). */
+void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len);
+void au_dv_sheet_disable(AuDocView *dv, AuElement *el, bool disabled);
+
+static void load_shared(Fake *f, AuDocView *dv, const char *css, const char *media)
+{
+    char html[512];
+    snprintf(html, sizeof html,
+             "<!DOCTYPE html><html><head><link id=l rel=stylesheet href=shared.css%s%s%s>"
+             "<style>#u{width:20px;height:5px}</style>"
+             "</head><body style='margin:0'><div id=t></div><div id=u></div></body>",
+             media ? " media='" : "", media ? media : "", media ? "'" : "");
+    au_docview_load(dv, html, strlen(html), "http://example.com/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    fake_deliver(f, dv, "http://example.com/shared.css", css, true);
+}
+
+static void test_shared_sheets(void)
+{
+    const char *css = "#t{height:10px;width:100px}#t:hover{height:77px}@media (max-width:500px){#t{width:33px}}";
+    size_t base = au_css_shared_sheet_count();
+    Fake f1, f2, f3;
+    AuDocView *a = new_view(&f1);
+    load_shared(&f1, a, css, NULL);
+    AuDocView *b = new_view(&f2);
+    load_shared(&f2, b, css, NULL);
+    /* one sheet for the link, one for the <style> (same text and URL) */
+    CHECK(au_css_shared_sheet_count() == base + 2, "%zu shared sheets, want %zu", au_css_shared_sheet_count(),
+          base + 2);
+    AuRect ra = rect_of(a, "t"), rb = rect_of(b, "t");
+    CHECK(ra.w == 100 && rb.w == 100 && ra.h == 10 && rb.h == 10, "both styled: %gx%g, %gx%g", ra.w, ra.h, rb.w,
+          rb.h);
+    /* the same URL with other bytes, or with other media, is a sheet of its own */
+    AuDocView *c = new_view(&f3);
+    load_shared(&f3, c, "#t{height:12px;width:100px}", "screen");
+    CHECK(au_css_shared_sheet_count() == base + 3, "other bytes: %zu shared sheets", au_css_shared_sheet_count());
+    CHECK(rect_of(c, "t").h == 12, "the third document has its own sheet");
+    au_docview_free(c);
+    CHECK(au_css_shared_sheet_count() == base + 2, "its sheet freed with it");
+    /* script changes the rules in a: b keeps the shared sheet */
+    const char *changed = "#t{height:40px;width:50px}";
+    au_dv_sheet_set_text(a, by_id(a, "l"), changed, strlen(changed));
+    ra = rect_of(a, "t");
+    rb = rect_of(b, "t");
+    CHECK(ra.w == 50 && ra.h == 40, "a sees its change: %gx%g", ra.w, ra.h);
+    CHECK(rb.w == 100 && rb.h == 10, "b does not: %gx%g", rb.w, rb.h);
+    AuBuf text, url;
+    au_buf_init(&text);
+    au_buf_init(&url);
+    CHECK(au_dv_sheet_text(b, by_id(b, "l"), &text, &url) == 2 && text.len == strlen(css) &&
+              !memcmp(text.data, css, text.len),
+          "b's CSSOM reads the text as it arrived");
+    au_buf_free(&text);
+    au_buf_free(&url);
+    /* b disables the sheet: a's change stays and nothing else moves */
+    au_dv_sheet_disable(b, by_id(b, "l"), true);
+    rb = rect_of(b, "t");
+    ra = rect_of(a, "t");
+    CHECK(rb.h == 0 && ra.h == 40, "disabled in b only: b %g, a %g", rb.h, ra.h);
+    au_dv_sheet_disable(b, by_id(b, "l"), false);
+    CHECK(rect_of(b, "t").h == 10, "enabled again in b");
+    /* the rules parsed late (hover, @media) work in the document that is
+     * left after the other goes */
+    au_docview_free(a);
+    CHECK(au_css_shared_sheet_count() == base + 2, "b still holds both sheets");
+    mouse(b, AU_EVENT_MOUSE_MOVE, 5, 5, 0);
+    CHECK(rect_of(b, "t").h == 77, "hover in b after a is freed");
+    au_docview_set_viewport(b, 400, 600);
+    CHECK(rect_of(b, "t").w == 33, "@media in b after a is freed");
+    CHECK(rect_of(b, "u").w == 20, "the shared <style> sheet in b");
+    au_docview_free(b);
+    CHECK(au_css_shared_sheet_count() == base, "%zu shared sheets after both are freed, want %zu",
+          au_css_shared_sheet_count(), base);
+}
+
+/* The atoms a page added go when its view is freed (core.h, "Atoms"):
+ * class and id names, attribute names, custom properties, names in its
+ * sheets and those script made. A sheet shared with another document
+ * keeps its names, those parsed late included, while that document
+ * lives. */
+static uint32_t dynamic_atoms(void)
+{
+    AuAtomStats st;
+    au_atom_stats(&st);
+    return st.dynamic;
+}
+
+static void load_named(Fake *f, AuDocView *dv, int round)
+{
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_printf(&html,
+                  "<!DOCTYPE html><html><head><link rel=stylesheet href=named.css>"
+                  "<style>.st-%d{--style-prop-%d:1px}</style></head><body style='margin:0'>",
+                  round, round);
+    for (int i = 0; i < 50; i++)
+        au_buf_printf(&html, "<div id=id-%d-%d class='cls-%d-%d other-%d' data-attr-%d-%d=x>t</div>", round, i,
+                      round, i, i, round, i);
+    au_buf_puts(&html, "<p id=t>x</p></body></html>");
+    au_docview_load(dv, html.data, html.len, "http://example.com/named.html");
+    au_docview_set_viewport(dv, 800, 600);
+    char css[256];
+    snprintf(css, sizeof css, ".sheet-only-%d{color:red}#t{height:10px}#t:hover{--lazy-name-%d:3px;height:20px}",
+             round, round);
+    fake_deliver(f, dv, "http://example.com/named.css", css, true);
+    au_docview_update(dv);
+    au_buf_free(&html);
+}
+
+static void hover_t(AuDocView *dv)
+{
+    AuRect r = rect_of(dv, "t");
+    mouse(dv, AU_EVENT_MOUSE_MOVE, (int)r.x + 2, (int)r.y + 2, 0);
+}
+
+static void test_atoms_freed(void)
+{
+    uint32_t base = dynamic_atoms();
+    for (int round = 0; round < 3; round++) {
+        Fake f;
+        AuDocView *dv = new_view(&f);
+        load_named(&f, dv, round);
+        hover_t(dv); /* parses the hover block late */
+        CHECK(rect_of(dv, "t").h == 20, "round %d: the hover rule", round);
+        uint32_t held = dynamic_atoms();
+        CHECK(held > base + 150, "round %d: %u atoms while the page is up, %u before", round, held, base);
+        CHECK(au_atom_peek("cls-0-7", 7) || round, "a class atom exists");
+        au_docview_free(dv);
+        CHECK(dynamic_atoms() == base, "round %d: %u atoms after the page is freed, want %u", round,
+              dynamic_atoms(), base);
+    }
+    /* a shared sheet's atoms stay with the document that shares it */
+    Fake f1, f2;
+    AuDocView *a = new_view(&f1);
+    load_named(&f1, a, 7);
+    AuDocView *b = new_view(&f2);
+    load_named(&f2, b, 7);
+    hover_t(a); /* a parses the hover block: b holds what it interned */
+    au_docview_free(a);
+    CHECK(au_atom_peek("sheet-only-7", 12) != 0, "the sheet's class name stays for b");
+    CHECK(au_atom_peek("--lazy-name-7", 13) != 0, "the name a parsed late stays for b");
+    hover_t(b);
+    CHECK(rect_of(b, "t").h == 20, "b's hover rule");
+    au_docview_free(b);
+    CHECK(dynamic_atoms() == base, "%u atoms after both, want %u", dynamic_atoms(), base);
+}
+
 /* A sheet whose media query does not match is neither fetched nor parsed
  * until the viewport changes so that it matches. */
 static void test_media_sheets(void)
@@ -971,6 +1121,8 @@ int main(void)
     test_sheets();
     test_media_sheets();
     test_packed_sheets();
+    test_shared_sheets();
+    test_atoms_freed();
     test_base_title_fragments();
     test_input();
     test_incremental();

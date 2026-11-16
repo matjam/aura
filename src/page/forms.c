@@ -371,7 +371,7 @@ AuElement *au_docview_focus(const AuDocView *dv)
     return dv->focus;
 }
 
-void au_docview_set_focus(AuDocView *dv, AuElement *el)
+DV_ENTRY_VOID(set_focus, (AuDocView * dv, AuElement *el), (dv, el))
 {
     if (el && (!alive(dv, el) || !focusable(el)))
         return;
@@ -734,7 +734,7 @@ void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter
     form_submit(dv, form, submitter, SUB_NO_VALIDATE | SUB_NO_EVENTS, 0, 0);
 }
 
-void au_docview_submit(AuDocView *dv, AuElement *form, AuElement *submitter)
+DV_ENTRY_VOID(submit, (AuDocView * dv, AuElement *form, AuElement *submitter), (dv, form, submitter))
 {
     form_submit(dv, form, submitter, 0, 0, 0);
 }
@@ -1544,7 +1544,7 @@ static void key_names(const AuEvent *ev, char *key, size_t kcap, char *code, siz
         snprintf(code, ccap, "%s", "");
 }
 
-bool au_docview_key(AuDocView *dv, const AuEvent *ev)
+DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
 {
     if (!dv->doc || ev->type != AU_EVENT_KEY_DOWN)
         return false;
@@ -1660,7 +1660,7 @@ bool au_docview_can_edit(const AuDocView *dv, int cmd)
 
 static bool edit_command(AuDocView *dv, AuElement *el, int cmd, const char *text, size_t len, AuBuf *out);
 
-bool au_docview_edit(AuDocView *dv, int cmd, const char *text, size_t len, AuBuf *out)
+DV_ENTRY(bool, edit, (AuDocView * dv, int cmd, const char *text, size_t len, AuBuf *out), (dv, cmd, text, len, out))
 {
     if (!au_docview_editing(dv))
         return false;
@@ -1730,7 +1730,7 @@ static AuElement *control_of(AuElement *e)
     return NULL;
 }
 
-bool au_docview_control_at(AuDocView *dv, int x, int y)
+DV_ENTRY(bool, control_at, (AuDocView * dv, int x, int y), (dv, x, y))
 {
     if (dv->drag)
         return true;

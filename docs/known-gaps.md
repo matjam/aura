@@ -439,12 +439,12 @@ Largest first.
    page with 32-bit pointers: 2.4 MB (1.3 MB of rules and selectors,
    0.6 MB of packed text, 0.4 MB of token lists;
    [`memory.md`](memory.md)).
-   - Each document parses its own sheets: a second tab, a frame or a
-     kept document of the same site holds them again.
-     `au_css_sheet_retain` already lets owners share a sheet; a table
-     of parsed sheets by URL, media and text would let documents share
-     them (not sheets with `@import` rules, whose imports are attached
-     to the sheet).
+   - Documents share a sheet only while one holds it
+     ([`css.md`](css.md), "Sheets shared between documents"): a page
+     loaded after the last document with the sheet went parses it
+     again. A sheet with `@import` rules is never shared (its imports
+     are attached to it), nor are the imported sheets' parents, the
+     user sheet, constructed sheets and the sheets of SVG images.
    - The texts are packed by `au_docview_update`, so a document that
      stops being updated before its texts are packed (hidden or kept
      within seconds of loading) keeps them as they arrived. The page
@@ -457,24 +457,32 @@ Largest first.
    - A custom property map is flattened every 12 levels
      (`AuCustomProps.base`): GitHub's 2157 properties give 23 full
      maps, 0.39 MB with 32-bit pointers.
-2. **Atoms live for the life of the program:** every class, id and
-   custom property name of every page visited stays (270 KB for the
-   article, 720 KB for GitHub), so a long session grows. Atoms need a
-   count or a per-document table.
+2. **Atoms that outlive their page.** A page's atoms go with its view
+   ([`memory.md`](memory.md), "Atoms"), except:
+   - atoms that code outside the page's entry points interns or looks
+     up while a page's atom is live (the browser layer reading a
+     document, the host tools) become permanent;
+   - with 31 top-level documents alive (tabs and kept documents), the
+     32nd and later get no scope and their atoms are permanent;
+   - pages that share a style sheet each hold all its atoms, so a
+     sheet's names live while any of them does.
+   QuickJS's atoms belong to the page's runtime and go with it; none
+   grew over ten pages.
 3. **`LBlock`** is 264 bytes on the host (about 216 on PowerPC) and
    every inline box is one; an inline box needs under half of it.
 4. **`AuElement`** carries `template_content`, `shadow_root` and
    `control`, which almost no element uses (24 bytes of 160 on the
    host, 12 of about 92 on PowerPC).
-5. **The prelude is created in every context** (1.4 MB per document,
-   0.6 MB per worker). Its classes and prototypes must be per realm
-   (`frame.contentWindow.Node !== Node`), and a function's bytecode
-   belongs to one realm, so only the 109 KB of prelude bytecode and its
+5. **The prelude is created in every context** (1.3 MB in use per
+   document, 0.6 MB per worker). Its classes and prototypes must be per
+   realm (`frame.contentWindow.Node !== Node`), and a function's
+   bytecode belongs to one realm, so only the prelude bytecode and its
    function records could be shared, and only by teaching QuickJS to
-   share bytecode between realms. The cheaper step: create the CSSOM,
-   Range and observer parts (a quarter of its source) on first use,
-   which means splitting the single prelude function and would save an
-   estimated 150 to 250 KB per context.
+   share bytecode between realms. Range, the CSSOM and the canvas are
+   read on first use (164 KB less per context,
+   [`javascript.md`](javascript.md), "Modules read on first use"); the
+   observers, XMLHttpRequest and the top layer are the next largest
+   parts, and most script-heavy pages use the observers.
 6. **Compiling a script** holds about 4 MB beyond its result for an
    860 KB script (a record per function and all first-pass bytecode
    until the script ends). That is how QuickJS resolves variables

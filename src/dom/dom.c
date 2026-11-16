@@ -89,6 +89,10 @@ AuNode *au_fragment_new(AuDocument *doc)
 
 static void destroy_subtree(AuNode *root);
 
+static void (*style_release)(void *style);
+
+void au_dom_set_style_release(void (*release)(void *style)) { style_release = release; }
+
 /* Frees one node's own storage. Its children are already gone. */
 static void node_free(AuNode *n)
 {
@@ -99,6 +103,11 @@ static void node_free(AuNode *n)
     switch (n->type) {
     case AU_NODE_ELEMENT: {
         AuElement *e = (AuElement *)n;
+        /* a style the document's clear did not reach: the element left
+         * the tree before (script removed it) */
+        if (e->style && style_release)
+            style_release(e->style);
+        e->style = NULL;
         for (uint32_t i = 0; i < e->nattrs; i++)
             au_free(e->attrs[i].value);
         au_free(e->attrs);

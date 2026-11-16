@@ -164,10 +164,10 @@ and `@import` is a `SheetSrc`.
   was parsed late (`pack_when_quiet`). To pack the sheets of a document
   that is no longer updated (hidden, kept for Back), call
   `au_docview_pack_sheets` until it returns false.
-- Sources of one document with the same URL, media and text share one
-  parsed sheet (`same_sheet`, `au_css_sheet_retain`); a sheet with
-  `@import` rules is not shared. GitHub's home page links one 800 KB
-  sheet four times and one of 300 KB six times.
+- Sources with the same URL, media and text share one parsed sheet, in
+  one document or across documents ("Sheets shared between documents"
+  below); a sheet with `@import` rules is not shared. GitHub's home
+  page links one 800 KB sheet four times and one of 300 KB six times.
 - A source whose media query does not match the device is neither
   fetched nor parsed (`start_sheet`); `undefer_sheets` starts it when
   the viewport changes so that it matches.
@@ -176,6 +176,68 @@ and `@import` is a `SheetSrc`.
 
 Script reaches sheets through the CSSOM
 ([`javascript.md`](javascript.md), "CSSOM").
+
+## Sheets shared between documents
+
+To parse a sheet that other documents may share, call
+`au_css_sheet_parse_shared(text, len, origin, base_url, media)` instead
+of `au_css_sheet_parse_take`: when a live sheet was parsed from the same
+bytes for the same base URL, media text and origin, it frees the text and
+returns that sheet with an owner added. The document view does this for
+every `<style>`, `<link>` and `@import` (`parse_sheet` in `docview.c`), so
+two tabs of one article, a frame, a document kept for Back and a shadow
+root that links a page's sheet hold one parsed sheet.
+
+- **The key.** `parser.c` keeps a list of the sheets that can be shared
+  (`SharedSheet`: the sheet, an FNV-1a hash of its text, its media
+  text); a match needs the same hash, length, origin, base URL and
+  media, and then the same bytes (`au_css_sheet_text_is`, which reads
+  packed text a piece at a time). The base URL is the URL the document
+  requested (the view does not follow a redirect's final URL for it), so
+  two sheets parse alike exactly when the key matches. The list holds
+  the sheets that are alive and is searched in order; a sheet leaves it
+  when its last owner frees it.
+- **A shared sheet is never changed.** Script that changes a sheet's
+  rules (`insertRule`, `deleteRule`, `cssText`, `replace`) gets a sheet of
+  its own parsed from the new text (`SheetSrc.om_sheet`,
+  `au_dv_sheet_set_text`); `disabled` is the source's
+  (`SheetSrc.disabled`). A sheet with `@import` rules is not listed,
+  since its owner attaches the imported sheets to it
+  (`au_css_sheet_set_import` refuses a listed sheet). What a sheet does
+  late (blocks of declarations parsed on first match, `@media` blocks
+  parsed when they first apply, the packed text) reads the same to
+  every owner.
+- **Atoms.** A listed sheet keeps the set of atoms it refers to
+  (`AuCssSheet.atoms`), and a document that shares it holds them
+  (`au_atom_set_hold`); a block parsed late interns for every document
+  that holds the sheet (`late_begin`). [`memory.md`](memory.md), "Atoms",
+  explains why.
+- **What a document is charged.** `au_docview_memory_estimate` counts a
+  shared sheet's memory divided by its owners.
+
+Tests: `test_shared_sheets` in `tests/page/test_page.c` (two documents
+share a link's and a `<style>`'s sheet; one changes its sheet with the
+CSSOM and the other keeps the original; disabling it in one leaves the
+other; the rules parsed late work after the first document is freed;
+the list is empty after both; the asan build checks the frees), and
+`test_atoms_freed` for the atoms.
+
+Measured on 2026-11-16, base `49d5f6e`, host (64-bit, bundled fonts,
+`AURA_MEM=1`), with the change and with sharing turned off in the same
+build, two runs each. Each cell is what the second document adds over
+the first opened alone: two tabs of Wikipedia's PowerPC article after
+12 seconds, and GitHub's torvalds/linux beside GitHub's home page after
+15 seconds.
+
+| Second document | `src/css`, not shared | Shared | Live bytes, not shared | Shared |
+|---|---|---|---|---|
+| Wikipedia PowerPC, a second tab | 1,279 / 1,266 KB | 855 / 831 KB | 14,754 / 14,684 KB | 14,066 / 14,006 KB |
+| GitHub torvalds/linux beside GitHub's home page | 6,493 / 6,241 KB | 2,958 / 2,420 KB | 54,289 / 52,295 KB | 48,623 / 46,932 KB |
+
+The second Wikipedia tab costs about 430 KB less in sheets, and the
+second GitHub page about 3.7 MB less: the sheets its pages share are
+parsed once. The rest of what a second document costs (its tree,
+layout and script heap) is its own.
 
 ## Shadow trees and scoped styles
 

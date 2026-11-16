@@ -78,6 +78,12 @@ typedef struct Request {
 
 struct AuDocView {
     AuFontSet *fonts;
+    /* The atom scope of the page (core.h): a top-level view makes one and
+     * frees it with itself, so the atoms only its documents used go with
+     * them; a nested view uses its top view's (nodes move between the
+     * documents of a page). Each entry point enters it (DV_IN). */
+    AuAtomScope atoms;
+    bool own_atoms;
     AuWebFonts *webfonts; /* the document's @font-face faces, over fonts */
     AuLoader loader;
     AuLoaderRequestEx request_ex; /* au_docview_set_request_ex */
@@ -204,6 +210,8 @@ enum {
 #define AU_FRAMES_IDLE_DOCS 4 /* documents (about:blank, srcdoc) one au_frames_idle call begins */
 
 AuDocView *au_dv_top(AuDocView *dv);
+/* A nested view takes its top view's atom scope (it frees its own). */
+void au_dv_use_scope_of(AuDocView *dv, const AuDocView *top);
 /* Brings the frame list in step with the document's elements, starts the
  * loads of new frames and notes the ones whose element is gone. Safe
  * while script runs: nothing is freed here. */
@@ -313,5 +321,30 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
  * fixed element, as au_dv_invalidate_element does). */
 void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect r);
 void au_dv_invalidate_all(AuDocView *dv);
+
+/* An entry point of the view: what it interns belongs to the page's atom
+ * scope. DV_ENTRY(ret, name, params, args) defines the public function
+ * as a call of name##_in, the body that follows, inside the scope. */
+#define DV_IN(dv) AuAtomBits dv_scope_prev_ = au_atom_scope_enter((dv)->atoms)
+#define DV_OUT() au_atom_scope_leave(dv_scope_prev_)
+#define DV_ENTRY(ret, name, params, args)                                                                              \
+    static ret name##_in params;                                                                                       \
+    ret au_docview_##name params                                                                                       \
+    {                                                                                                                  \
+        DV_IN(dv);                                                                                                     \
+        ret r_ = name##_in args;                                                                                       \
+        DV_OUT();                                                                                                      \
+        return r_;                                                                                                     \
+    }                                                                                                                  \
+    static ret name##_in params
+#define DV_ENTRY_VOID(name, params, args)                                                                              \
+    static void name##_in params;                                                                                      \
+    void au_docview_##name params                                                                                      \
+    {                                                                                                                  \
+        DV_IN(dv);                                                                                                     \
+        name##_in args;                                                                                                \
+        DV_OUT();                                                                                                      \
+    }                                                                                                                  \
+    static void name##_in params
 
 #endif

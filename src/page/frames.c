@@ -476,6 +476,7 @@ static AuDocView *frame_view(AuFrame *f)
     cb.confirm = fc_confirm;
     cb.message = fc_message;
     AuDocView *c = au_docview_new(o->fonts, NULL, &cb);
+    au_dv_use_scope_of(c, top); /* nodes move between the page's documents */
     c->parent = o;
     c->in_frame = f;
     c->sandbox = f->sandbox | o->sandbox;

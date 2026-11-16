@@ -116,6 +116,9 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
 {
     AuDocView *dv = au_calloc(sizeof *dv);
     dv->fonts = fonts;
+    dv->atoms = au_atom_scope_new(); /* a frame takes its top view's (au_dv_use_scope_of) */
+    dv->own_atoms = true;
+    DV_IN(dv);
     if (loader)
         dv->loader = *loader;
     if (cb)
@@ -135,6 +138,7 @@ AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocV
     dv->vw = 800;
     dv->vh = 600;
     dv->goal_x = -1;
+    DV_OUT();
     return dv;
 }
 
@@ -323,6 +327,7 @@ void au_docview_free(AuDocView *dv)
 {
     if (!dv)
         return;
+    DV_IN(dv); /* script may run as the document goes */
     clear_document(dv);
     if (dv->parent)
         au_dv_drop_routes(au_dv_top(dv), dv);
@@ -340,7 +345,19 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->user_agent);
     au_free(dv->referrer);
     au_buf_free(&dv->check_msg);
+    DV_OUT();
+    /* last: the atoms only this page's documents used go with them */
+    if (dv->own_atoms)
+        au_atom_scope_free(dv->atoms);
     au_free(dv);
+}
+
+void au_dv_use_scope_of(AuDocView *dv, const AuDocView *top)
+{
+    if (dv->own_atoms) /* what the new view interned is the top view's now */
+        au_atom_scope_free_into(dv->atoms, top->atoms);
+    dv->atoms = top->atoms;
+    dv->own_atoms = false;
 }
 
 void au_docview_set_check(AuDocView *dv, bool on)
@@ -356,7 +373,7 @@ uint32_t au_docview_check_failures(const AuDocView *dv, AuBuf *msg)
     return dv->check_failures + au_layout_check_failures(dv->layout, msg && !dv->check_msg.len ? msg : NULL);
 }
 
-void au_docview_set_user_css(AuDocView *dv, const char *css)
+DV_ENTRY_VOID(set_user_css, (AuDocView *dv, const char *css), (dv, css))
 {
     if ((!css && !dv->user_css) || (css && dv->user_css && strcmp(css, dv->user_css) == 0))
         return;
@@ -407,7 +424,7 @@ void au_docview_set_clock(AuDocView *dv, uint32_t (*now_ms)(void *ctx), void *ct
     au_docimages_set_clock(dv->imgs, now_ms, ctx);
 }
 
-uint32_t au_docview_animate(AuDocView *dv, uint32_t now_ms)
+DV_ENTRY(uint32_t, animate, (AuDocView *dv, uint32_t now_ms), (dv, now_ms))
 {
     uint32_t next = au_docimages_tick(dv->imgs, now_ms);
     images_changed(dv);
@@ -439,7 +456,7 @@ void au_docview_image_stats(const AuDocView *dv, AuImageCacheStats *s)
     au_image_cache_stats(au_docimages_cache(dv->imgs), s);
 }
 
-void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p)
+DV_ENTRY_VOID(set_font_prefs, (AuDocView *dv, const AuCssFontPrefs *p), (dv, p))
 {
     if (dv->has_font_prefs && !memcmp(&dv->font_prefs, p, sizeof *p))
         return;
@@ -747,44 +764,26 @@ static bool src_text_is(const SheetSrc *s, const char *text, size_t len)
     return s->sheet && au_css_sheet_text_is(s->sheet, text, len);
 }
 
-/* A sheet of this document that was parsed from the same text for the
- * same URL and media, or NULL. A page may link one sheet several times
- * (GitHub's home page links one of 800 KB four times); they share one
- * parsed sheet. Sheets with @import rules are left out: an import is
- * attached to its parent's sheet. */
-static AuCssSheet *same_sheet(AuDocView *dv, const SheetSrc *s)
-{
-    if (s->parent)
-        return NULL;
-    for (uint32_t i = 0; i < dv->nslots; i++) {
-        const SheetSrc *o = dv->slots[i].src;
-        if (o == s || !o->sheet || o->nimports || o->len != s->len)
-            continue;
-        if (au_css_sheet_import_count(o->sheet) || strcmp(o->url ? o->url : "", s->url ? s->url : "") ||
-            strcmp(o->media ? o->media : "", s->media ? s->media : ""))
-            continue;
-        if (au_css_sheet_text_is(o->sheet, s->text, s->len))
-            return o->sheet;
-    }
-    return NULL;
-}
-
 /* Parses a source whose text is there, once; attaches an import to its
  * parent's sheet; and starts the sheet's own @imports. The parsed sheet
  * takes the text (it parses blocks of declarations from it when their
- * rules first match, and the CSSOM reads it: src_text_get). */
+ * rules first match, and the CSSOM reads it: src_text_get).
+ *
+ * Sources with the same URL, media and text share one parsed sheet,
+ * whichever document they are in (au_css_sheet_parse_shared): a page may
+ * link one sheet several times (GitHub's home page links one of 800 KB
+ * four times), and a second tab, a frame or a document kept for Back
+ * often links the same sheets. The shared sheet is never changed: script
+ * that changes a sheet's rules gets a sheet of its own (om_sheet), and
+ * disabled is the source's. Sheets with @import rules are not shared: an
+ * import is attached to its parent's sheet. */
 static void parse_sheet(AuDocView *dv, SheetSrc *s)
 {
     if (s->sheet || !s->text)
         return;
-    AuCssSheet *sh = same_sheet(dv, s);
-    if (sh) {
-        au_css_sheet_retain(sh);
-        au_free(s->text);
-    } else {
-        /* the buffer grew by doubling: the sheet keeps only the text */
-        sh = au_css_sheet_parse_take(au_realloc(s->text, s->len + 1), s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
-    }
+    /* the buffer grew by doubling: the sheet keeps only the text */
+    AuCssSheet *sh =
+        au_css_sheet_parse_shared(au_realloc(s->text, s->len + 1), s->len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
     s->text = NULL; /* len stays: the size the sheet has (au_docview_memory_estimate) */
     if (dv->webfonts && au_css_sheet_font_face_count(sh)) {
         AuBuf t;
@@ -853,8 +852,10 @@ static void undefer_sheets(AuDocView *dv)
         undefer_sheet(dv, dv->slots[i].src);
 }
 
-void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char *status_text,
-                              const char *final_url, const char *const *headers, size_t nheaders)
+DV_ENTRY_VOID(resource_head,
+              (AuDocView * dv, uint32_t id, int status, const char *status_text, const char *final_url,
+               const char *const *headers, size_t nheaders),
+              (dv, id, status, status_text, final_url, headers, nheaders))
 {
     Request *r = find_request(dv, id);
     if (!r) {
@@ -879,7 +880,7 @@ void au_docview_resource_head(AuDocView *dv, uint32_t id, int status, const char
                                    r->cross && !r->cors);
 }
 
-void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size_t len)
+DV_ENTRY_VOID(resource_data, (AuDocView * dv, uint32_t id, const void *data, size_t len), (dv, id, data, len))
 {
     Request *r = find_request(dv, id);
     if (!r) {
@@ -924,7 +925,7 @@ static void maybe_finished(AuDocView *dv)
     }
 }
 
-void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok)
+DV_ENTRY_VOID(resource_done, (AuDocView * dv, uint32_t id, bool ok), (dv, id, ok))
 {
     Request *r = find_request(dv, id);
     if (!r) {
@@ -1027,7 +1028,7 @@ bool au_docview_has_state(AuDocView *dv)
     return au_frames_has_state(dv);
 }
 
-void au_docview_set_hidden(AuDocView *dv, bool hidden)
+DV_ENTRY_VOID(set_hidden, (AuDocView * dv, bool hidden), (dv, hidden))
 {
     au_frames_set_hidden(dv, hidden); /* its frames pause and resume with it */
     au_docscript_page_transition(dv->script, !hidden);
@@ -1061,7 +1062,7 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
     }
 }
 
-void au_docview_storage_event(AuDocView *dv, const AuDocStorageEvent *ev)
+DV_ENTRY_VOID(storage_event, (AuDocView * dv, const AuDocStorageEvent *ev), (dv, ev))
 {
     au_frames_storage_event(dv, ev); /* frames nest at most AU_FRAMES_DEPTH deep */
     if (dv != ev->writer)
@@ -1084,7 +1085,7 @@ static bool pack_src(SheetSrc *s)
     return false;
 }
 
-bool au_docview_pack_sheets(AuDocView *dv)
+DV_ENTRY(bool, pack_sheets, (AuDocView * dv), (dv))
 {
     if (dv->sheets_packed)
         return false;
@@ -1101,8 +1102,9 @@ static void sheet_bytes(const SheetSrc *s, size_t *n)
 {
     /* @import nesting is shallow and capped by the loader; one level of
      * recursion per import depth. A parsed sheet holds its text and its
-     * rules; a source still waiting holds its text. */
-    *n += s->sheet ? au_css_sheet_memory(s->sheet) : s->text ? s->len : 0;
+     * rules; a source still waiting holds its text. A sheet shared with
+     * other sources (in this document or others) counts its share. */
+    *n += s->sheet ? au_css_sheet_memory(s->sheet) / au_css_sheet_owners(s->sheet) : s->text ? s->len : 0;
     for (uint32_t i = 0; i < s->nimports; i++)
         if (s->imports[i])
             sheet_bytes(s->imports[i], n);
@@ -1386,7 +1388,7 @@ static void scan_document(AuDocView *dv, bool final)
 
 /* ---- Loading ---- */
 
-void au_docview_begin(AuDocView *dv, const char *url)
+DV_ENTRY_VOID(begin, (AuDocView * dv, const char *url), (dv, url))
 {
     clear_document(dv);
     au_perf_reset(&dv->perf);
@@ -1432,7 +1434,7 @@ void au_docview_begin(AuDocView *dv, const char *url)
     dv->scroll_x = dv->scroll_y = 0;
 }
 
-void au_docview_feed(AuDocView *dv, const char *bytes, size_t len)
+DV_ENTRY_VOID(feed, (AuDocView * dv, const char *bytes, size_t len), (dv, bytes, len))
 {
     if (!dv->parser)
         au_docview_begin(dv, dv->url);
@@ -1443,7 +1445,7 @@ void au_docview_feed(AuDocView *dv, const char *bytes, size_t len)
     au_frames_sync(dv);
 }
 
-void au_docview_finish(AuDocView *dv)
+DV_ENTRY_VOID(finish, (AuDocView * dv), (dv))
 {
     if (!dv->parser)
         au_docview_begin(dv, dv->url);
@@ -1466,7 +1468,7 @@ void au_docview_finish(AuDocView *dv)
     maybe_finished(dv);
 }
 
-void au_docview_load(AuDocView *dv, const char *bytes, size_t len, const char *url)
+DV_ENTRY_VOID(load, (AuDocView * dv, const char *bytes, size_t len, const char *url), (dv, bytes, len, url))
 {
     au_docview_begin(dv, url);
     au_docview_feed(dv, bytes, len);
@@ -1778,7 +1780,7 @@ static void container_rounds(AuDocView *dv)
     }
 }
 
-bool au_docview_update(AuDocView *dv)
+DV_ENTRY(bool, update, (AuDocView * dv), (dv))
 {
     if (!dv->doc)
         return false;
@@ -1832,7 +1834,7 @@ bool au_docview_update(AuDocView *dv)
     return changed;
 }
 
-void au_docview_set_viewport(AuDocView *dv, int width, int height)
+DV_ENTRY_VOID(set_viewport, (AuDocView * dv, int width, int height), (dv, width, height))
 {
     if (width < 1)
         width = 1;
@@ -1863,7 +1865,8 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height)
     *height = au_f2px(h + 0.99f);
 }
 
-void au_docview_paint(AuDocView *dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y)
+DV_ENTRY_VOID(paint, (AuDocView * dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y),
+              (dv, c, view, scroll_x, scroll_y))
 {
     if (!dv->parent)
         au_frames_idle(dv);
@@ -1919,7 +1922,7 @@ void au_docview_set_scroll(AuDocView *dv, int scroll_x, int scroll_y)
     dv->scroll_y = scroll_y;
 }
 
-bool au_docview_hit_test(AuDocView *dv, int x, int y, AuHitResult *r)
+DV_ENTRY(bool, hit_test, (AuDocView * dv, int x, int y, AuHitResult *r), (dv, x, y, r))
 {
     au_docview_update(dv);
     return au_layout_hit_test(dv->layout, (float)(x - dv->scroll_x), (float)(y - dv->scroll_y), (float)dv->scroll_x,
@@ -2021,7 +2024,7 @@ static bool popover_open(const AuDocument *doc)
     return false;
 }
 
-bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
+DV_ENTRY(bool, mouse, (AuDocView * dv, const AuEvent *ev), (dv, ev))
 {
     if (!dv->doc)
         return false;
@@ -2177,7 +2180,7 @@ bool au_docview_mouse(AuDocView *dv, const AuEvent *ev)
     return used;
 }
 
-bool au_docview_scroll_at(AuDocView *dv, int x, int y, int dx, int dy)
+DV_ENTRY(bool, scroll_at, (AuDocView * dv, int x, int y, int dx, int dy), (dv, x, y, dx, dy))
 {
     au_docview_update(dv);
     if (dv->nframes && au_frames_scroll(dv, x, y, dx, dy))
@@ -2196,7 +2199,7 @@ const char *au_docview_hover_link(const AuDocView *dv)
 
 /* ---- Fragments ---- */
 
-AuElement *au_docview_find_fragment(AuDocView *dv, const char *frag)
+DV_ENTRY(AuElement *, find_fragment, (AuDocView * dv, const char *frag), (dv, frag))
 {
     if (!dv->doc || !frag || !*frag)
         return NULL;
@@ -2278,7 +2281,7 @@ bool au_docview_scripting(const AuDocView *dv)
     return dv->scripting;
 }
 
-bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms)
+DV_ENTRY(bool, run_scripts, (AuDocView * dv, uint32_t budget_ms), (dv, budget_ms))
 {
     if (!dv->parent)
         au_frames_idle(dv);
@@ -2307,7 +2310,7 @@ uint32_t au_docview_scripts_due(AuDocView *dv)
     return fd < due ? fd : due;
 }
 
-bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out)
+DV_ENTRY(bool, eval, (AuDocView * dv, const char *src, AuBuf *out), (dv, src, out))
 {
     return dv->script && au_docscript_eval(dv->script, src, out);
 }

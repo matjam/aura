@@ -499,15 +499,32 @@ static const char *const static_atoms[] = {
 #undef ATOM
 };
 
+/* An entry's holders: a bit per live scope (au_atom_scope_new), and
+ * ATOM_PERM for an atom that lives for the life of the program. A free
+ * entry has s NULL and holders 0, and hash links it to the next free one. */
 typedef struct {
     const char *s;
     uint32_t len, hash;
+    uint32_t holders;
 } AtomEntry;
+
+#define ATOM_PERM 0x80000000u
+#define ATOM_SCOPES 31
 
 static AtomEntry *atom_entries; /* indexed by atom */
 static uint32_t atom_count, atom_cap;
 static AuAtom *atom_table;
 static uint32_t atom_table_size; /* power of two */
+static uint32_t atom_free_head;  /* first free entry, 0 for none */
+static uint32_t atom_live;       /* entries in use, the static ones included */
+static size_t atom_string_bytes;
+static uint32_t atom_generation;
+/* What an atom interned now is held by, and the set that collects it. */
+static uint32_t atom_bits = ATOM_PERM;
+static AuAtomSet *atom_set;
+static uint32_t scopes_live; /* a bit per live scope */
+
+static void set_push(AuAtomSet *set, AuAtom a);
 
 static uint32_t hash_bytes(const char *s, size_t n)
 {
@@ -532,21 +549,45 @@ static void table_grow(void)
     atom_table_size = atom_table_size ? atom_table_size * 2 : 1024;
     atom_table = au_calloc(atom_table_size * sizeof *atom_table);
     for (AuAtom a = 1; a < atom_count; a++)
-        table_insert(a);
+        if (atom_entries[a].s)
+            table_insert(a);
 }
 
-static AuAtom add_entry(const char *s, uint32_t len, uint32_t hash)
+/* The table again, after entries were freed: as small as the live
+ * entries allow (at most half full), and without the freed ones. */
+static void table_rebuild(void)
 {
-    if (atom_count == atom_cap) {
-        atom_cap = atom_cap ? atom_cap * 2 : 512;
-        atom_entries = au_realloc(atom_entries, atom_cap * sizeof *atom_entries);
+    uint32_t size = 1024;
+    while ((atom_live + 1) * 2 > size && size < 0x40000000u)
+        size *= 2;
+    au_free(atom_table);
+    atom_table_size = size;
+    atom_table = au_calloc(atom_table_size * sizeof *atom_table);
+    for (AuAtom a = 1; a < atom_count; a++)
+        if (atom_entries[a].s)
+            table_insert(a);
+}
+
+static AuAtom add_entry(const char *s, uint32_t len, uint32_t hash, uint32_t holders)
+{
+    AuAtom a;
+    if (atom_free_head) {
+        a = atom_free_head;
+        atom_free_head = atom_entries[a].hash;
+    } else {
+        if (atom_count == atom_cap) {
+            atom_cap = atom_cap ? atom_cap * 2 : 512;
+            atom_entries = au_realloc(atom_entries, atom_cap * sizeof *atom_entries);
+        }
+        a = atom_count++;
     }
-    AuAtom a = atom_count++;
     atom_entries[a].s = s;
     atom_entries[a].len = len;
     atom_entries[a].hash = hash;
+    atom_entries[a].holders = holders;
+    atom_live++;
     if (a) {
-        if ((atom_count + 1) * 2 > atom_table_size)
+        if ((atom_live + 1) * 2 > atom_table_size)
             table_grow();
         else
             table_insert(a);
@@ -558,8 +599,25 @@ static void atoms_init(void)
 {
     for (uint32_t i = 0; i < AU_ATOM_STATIC_COUNT; i++) {
         uint32_t len = (uint32_t)strlen(static_atoms[i]);
-        add_entry(static_atoms[i], len, hash_bytes(static_atoms[i], len));
+        add_entry(static_atoms[i], len, hash_bytes(static_atoms[i], len), ATOM_PERM);
     }
+}
+
+/* An atom interned or looked up now: it gets the current holders, and
+ * the collecting set records it unless it lives for good. */
+static uint32_t cur_bits(void)
+{
+    /* a scope freed while it was entered holds nothing any more */
+    uint32_t b = atom_bits & (scopes_live | ATOM_PERM);
+    return b ? b : ATOM_PERM;
+}
+
+static void atom_used(AuAtom a)
+{
+    AtomEntry *e = &atom_entries[a];
+    e->holders |= cur_bits();
+    if (atom_set && !(e->holders & ATOM_PERM))
+        set_push(atom_set, a);
 }
 
 static AuAtom find(const char *s, size_t n, uint32_t h)
@@ -581,7 +639,10 @@ AuAtom au_atom_lookup(const char *s, size_t n)
         atoms_init();
     if (!n)
         return 0;
-    return find(s, n, hash_bytes(s, n));
+    AuAtom a = find(s, n, hash_bytes(s, n));
+    if (a)
+        atom_used(a);
+    return a;
 }
 
 AuAtom au_atom(const char *s, size_t n)
@@ -592,9 +653,16 @@ AuAtom au_atom(const char *s, size_t n)
         return 0;
     uint32_t h = hash_bytes(s, n);
     AuAtom a = find(s, n, h);
-    if (a)
+    if (a) {
+        atom_used(a);
         return a;
-    return add_entry(au_strndup(s, n), (uint32_t)n, h);
+    }
+    atom_string_bytes += n + 1;
+    uint32_t bits = cur_bits();
+    a = add_entry(au_strndup(s, n), (uint32_t)n, h, bits);
+    if (atom_set && !(bits & ATOM_PERM))
+        set_push(atom_set, a);
+    return a;
 }
 
 AuAtom au_atom_cstr(const char *s)
@@ -602,11 +670,32 @@ AuAtom au_atom_cstr(const char *s)
     return au_atom(s, strlen(s));
 }
 
+AuAtom au_atom_permanent(const char *s, size_t n)
+{
+    AuAtomBits prev = au_atom_scope_enter(0);
+    AuAtom a = au_atom(s, n);
+    au_atom_scope_leave(prev);
+    return a;
+}
+
+AuAtom au_atom_peek(const char *s, size_t n)
+{
+    if (!atom_count)
+        atoms_init();
+    return n ? find(s, n, hash_bytes(s, n)) : 0;
+}
+
+void au_atom_use(AuAtom a)
+{
+    if (a && a < atom_count && atom_entries[a].s)
+        atom_used(a);
+}
+
 const char *au_atom_str(AuAtom a)
 {
     if (!atom_count)
         atoms_init();
-    return a < atom_count ? atom_entries[a].s : "";
+    return a < atom_count && atom_entries[a].s ? atom_entries[a].s : "";
 }
 
 size_t au_atom_len(AuAtom a)
@@ -615,3 +704,227 @@ size_t au_atom_len(AuAtom a)
         atoms_init();
     return a < atom_count ? atom_entries[a].len : 0;
 }
+
+/* ---- Atom scopes ----
+ * A scope is a bit in each atom's holders. The page layer gives each
+ * top-level document a scope and enters it while it works on the
+ * document; every atom interned or looked up meanwhile gets its bit.
+ * Freeing the scope clears the bit and frees the atoms nothing else holds.
+ * Code that runs in no scope (atom_bits ATOM_PERM) makes the atoms it
+ * touches permanent, so a missed entry costs memory, never an atom freed
+ * while in use. */
+
+AuAtomScope au_atom_scope_new(void)
+{
+    if (!atom_count)
+        atoms_init();
+    for (uint32_t i = 0; i < ATOM_SCOPES; i++)
+        if (!(scopes_live & (1u << i))) {
+            scopes_live |= 1u << i;
+            return i + 1;
+        }
+    return 0; /* none left: the document's atoms are permanent */
+}
+
+static uint32_t scope_bit(AuAtomScope s) { return s && s <= ATOM_SCOPES ? 1u << (s - 1) : 0; }
+
+static void scope_release(AuAtomScope s, AuAtomScope heir, bool has_heir);
+
+/* After atoms were freed: the free entries at the end of the array are
+ * dropped, the array shrinks when it is less than half used, and the
+ * free list is made again lowest number first, so that new atoms take
+ * low numbers and the end of the array stays free to drop next time. */
+static void entries_trim(void)
+{
+    uint32_t n = atom_count;
+    while (n > AU_ATOM_STATIC_COUNT && !atom_entries[n - 1].s)
+        n--;
+    atom_count = n;
+    uint32_t cap = 512;
+    while (cap < n)
+        cap *= 2;
+    if (cap < atom_cap / 2) {
+        atom_entries = au_realloc(atom_entries, cap * sizeof *atom_entries);
+        atom_cap = cap;
+    }
+    atom_free_head = 0;
+    for (uint32_t a = n; a-- > AU_ATOM_STATIC_COUNT;)
+        if (!atom_entries[a].s) {
+            atom_entries[a].hash = atom_free_head;
+            atom_free_head = a;
+        }
+}
+
+void au_atom_scope_free(AuAtomScope s) { scope_release(s, 0, false); }
+
+void au_atom_scope_free_into(AuAtomScope s, AuAtomScope heir) { scope_release(s, heir, true); }
+
+/* Clears s from every atom, giving heir its place (the program when heir
+ * is 0 or not live), and frees the atoms nothing holds then. */
+static void scope_release(AuAtomScope s, AuAtomScope heir, bool has_heir)
+{
+    uint32_t bit = scope_bit(s);
+    if (!bit || !(scopes_live & bit))
+        return;
+    scopes_live &= ~bit;
+    uint32_t to = 0;
+    if (has_heir) {
+        to = scope_bit(heir) & scopes_live;
+        if (!to)
+            to = ATOM_PERM;
+    }
+    uint32_t freed = 0;
+    for (AuAtom a = AU_ATOM_STATIC_COUNT; a < atom_count; a++) {
+        AtomEntry *e = &atom_entries[a];
+        if (!e->s || !(e->holders & bit))
+            continue;
+        e->holders = (e->holders & ~bit) | to;
+        if (e->holders)
+            continue;
+        atom_string_bytes -= e->len + 1;
+        au_free((char *)e->s);
+        e->s = NULL;
+        e->len = 0;
+        e->hash = atom_free_head;
+        atom_free_head = a;
+        atom_live--;
+        freed++;
+    }
+    if (freed) {
+        entries_trim();
+        table_rebuild();
+        atom_generation++;
+    }
+}
+
+AuAtomBits au_atom_scope_enter(AuAtomScope s)
+{
+    AuAtomBits prev = atom_bits;
+    uint32_t bit = scope_bit(s);
+    atom_bits = bit && (scopes_live & bit) ? bit : ATOM_PERM;
+    return prev;
+}
+
+void au_atom_scope_leave(AuAtomBits prev) { atom_bits = prev; }
+
+AuAtomBits au_atom_scope_bits(void) { return cur_bits(); }
+
+AuAtomBits au_atom_scope_live(void) { return scopes_live | ATOM_PERM; }
+
+/* ---- Atom sets ----
+ * A set is a sorted array of atoms (the ones that do not live for good)
+ * that some structure refers to, so that another holder can take them all
+ * (au_atom_set_hold). While a set collects, atoms are appended unsorted
+ * after the sorted part; collect_end sorts and merges them. */
+
+static void set_push(AuAtomSet *set, AuAtom a)
+{
+    if (set->n > set->sorted && set->a[set->n - 1] == a)
+        return;
+    if (set->n == set->cap) {
+        set->cap = set->cap ? set->cap * 2 : 16;
+        set->a = au_realloc(set->a, set->cap * sizeof *set->a);
+    }
+    set->a[set->n++] = a;
+}
+
+static int cmp_atom(const void *x, const void *y)
+{
+    AuAtom a = *(const AuAtom *)x, b = *(const AuAtom *)y;
+    return a < b ? -1 : a > b;
+}
+
+static bool set_has_sorted(const AuAtomSet *set, AuAtom a)
+{
+    uint32_t lo = 0, hi = set->sorted;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (set->a[mid] == a)
+            return true;
+        if (set->a[mid] < a)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return false;
+}
+
+static void set_normalize(AuAtomSet *set)
+{
+    if (set->n == set->sorted)
+        return;
+    AuAtom *tail = set->a + set->sorted;
+    uint32_t nt = set->n - set->sorted;
+    qsort(tail, nt, sizeof *tail, cmp_atom);
+    /* the tail's atoms, once each, that the sorted part lacks */
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < nt; i++)
+        if ((!m || tail[m - 1] != tail[i]) && !set_has_sorted(set, tail[i]))
+            tail[m++] = tail[i];
+    if (m) {
+        AuAtom *merged = au_alloc((set->sorted + m) * sizeof *merged);
+        uint32_t i = 0, j = 0, k = 0;
+        while (i < set->sorted || j < m)
+            merged[k++] = j >= m || (i < set->sorted && set->a[i] < tail[j]) ? set->a[i++] : tail[j++];
+        au_free(set->a);
+        set->a = merged;
+        set->cap = k;
+        set->n = set->sorted = k;
+    } else {
+        set->n = set->sorted;
+    }
+}
+
+AuAtomCollect au_atom_collect_begin(AuAtomSet *set, AuAtomBits bits)
+{
+    AuAtomCollect prev = {atom_set, atom_bits};
+    atom_set = set;
+    atom_bits = bits ? bits : ATOM_PERM;
+    return prev;
+}
+
+void au_atom_collect_end(AuAtomCollect prev)
+{
+    if (atom_set)
+        set_normalize(atom_set);
+    atom_set = prev.set;
+    atom_bits = prev.bits;
+}
+
+void au_atom_set_hold(const AuAtomSet *set, AuAtomBits bits)
+{
+    bits &= scopes_live | ATOM_PERM;
+    if (!bits)
+        bits = ATOM_PERM;
+    for (uint32_t i = 0; i < set->n; i++) {
+        AuAtom a = set->a[i];
+        if (a < atom_count && atom_entries[a].s)
+            atom_entries[a].holders |= bits;
+    }
+}
+
+void au_atom_set_free(AuAtomSet *set)
+{
+    au_free(set->a);
+    memset(set, 0, sizeof *set);
+}
+
+void au_atom_stats(AuAtomStats *st)
+{
+    if (!atom_count)
+        atoms_init();
+    memset(st, 0, sizeof *st);
+    st->atoms = atom_live;
+    st->dynamic = atom_live - AU_ATOM_STATIC_COUNT;
+    st->string_bytes = atom_string_bytes;
+    st->table_bytes = (size_t)atom_cap * sizeof(AtomEntry) + (size_t)atom_table_size * sizeof(AuAtom);
+    for (AuAtom a = AU_ATOM_STATIC_COUNT; a < atom_count; a++)
+        if (atom_entries[a].s && (atom_entries[a].holders & ATOM_PERM))
+            st->permanent++;
+    st->scopes = 0;
+    for (uint32_t i = 0; i < ATOM_SCOPES; i++)
+        if (scopes_live & (1u << i))
+            st->scopes++;
+}
+
+uint32_t au_atom_generation(void) { return atom_generation; }

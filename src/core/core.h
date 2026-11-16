@@ -181,9 +181,19 @@ static inline int au_f2px(float v)
 
 /* ---- Atoms ----
  * An atom is an interned string: equal strings give equal atoms, so names
- * compare by integer. Atoms live for the life of the program. 0 is "no
- * atom". Interning is case sensitive; lowercase HTML names before
- * interning.
+ * compare by integer. 0 is "no atom". Interning is case sensitive;
+ * lowercase HTML names before interning.
+ *
+ * An atom lives while a holder holds it: a scope (one per top-level
+ * document, au_atom_scope_new), or the program itself. Every atom interned
+ * or looked up gets the scope entered at that moment (au_atom_scope_enter)
+ * as a holder; with no scope entered it lives for good. au_atom_scope_free
+ * frees the atoms only that scope held, and their numbers are used again.
+ * So a structure that outlives the scope it was built in (a cache shared
+ * by all documents, say) must intern its atoms with no scope entered
+ * (au_atom_permanent), or take them for its holders (au_atom_set_hold),
+ * and a cache that returns atoms it keeps calls au_atom_use on each and
+ * drops what it keeps when au_atom_generation changes.
  *
  * Names known at compile time are listed in src/core/atoms_*.def as
  * ATOM(identifier, "string") and get the constant AU_ATOM_identifier. */
@@ -204,5 +214,57 @@ AuAtom au_atom_cstr(const char *s);
 AuAtom au_atom_lookup(const char *s, size_t n);
 const char *au_atom_str(AuAtom a); /* NUL-terminated; "" for 0 */
 size_t au_atom_len(AuAtom a);
+/* Interns s with no scope entered: the atom lives for good. */
+AuAtom au_atom_permanent(const char *s, size_t n);
+/* Gives a the holders an atom interned now would get. */
+void au_atom_use(AuAtom a);
+/* au_atom_lookup without giving the atom a holder: for tests and
+ * reports, never for an atom that is kept. */
+AuAtom au_atom_peek(const char *s, size_t n);
+
+/* Scopes. A scope is 1 to 31; 0 means none (atoms live for good), which
+ * au_atom_scope_new returns when 31 scopes are live. enter returns what
+ * was entered before, for leave. */
+typedef uint32_t AuAtomScope;
+typedef uint32_t AuAtomBits; /* a set of holders */
+AuAtomScope au_atom_scope_new(void);
+void au_atom_scope_free(AuAtomScope s);
+/* The same, giving heir the atoms s held (the program when heir is 0). */
+void au_atom_scope_free_into(AuAtomScope s, AuAtomScope heir);
+AuAtomBits au_atom_scope_enter(AuAtomScope s);
+void au_atom_scope_leave(AuAtomBits prev);
+AuAtomBits au_atom_scope_bits(void); /* the holders an atom interned now gets */
+AuAtomBits au_atom_scope_live(void); /* every live scope, and the program */
+
+/* An atom set: the atoms (other than those that live for good) that a
+ * structure refers to, so that a later holder of the structure can hold
+ * them too (a style sheet shared by documents of several scopes). While a
+ * set collects, every atom interned or looked up is added to it and gets
+ * the holders bits instead of the entered scope's. Zero-initialize a set. */
+typedef struct AuAtomSet {
+    AuAtom *a;
+    uint32_t n, sorted, cap;
+} AuAtomSet;
+typedef struct AuAtomCollect {
+    AuAtomSet *set;
+    AuAtomBits bits;
+} AuAtomCollect;
+AuAtomCollect au_atom_collect_begin(AuAtomSet *set, AuAtomBits bits);
+void au_atom_collect_end(AuAtomCollect prev);
+void au_atom_set_hold(const AuAtomSet *set, AuAtomBits bits);
+void au_atom_set_free(AuAtomSet *set);
+
+typedef struct AuAtomStats {
+    uint32_t atoms;      /* live, the compile-time ones included */
+    uint32_t dynamic;    /* live, interned at run time */
+    uint32_t permanent;  /* of those, the ones that live for good */
+    uint32_t scopes;     /* live scopes */
+    size_t string_bytes; /* the dynamic atoms' strings */
+    size_t table_bytes;  /* the entry array and the hash table */
+} AuAtomStats;
+void au_atom_stats(AuAtomStats *st);
+/* Changes each time a scope's atoms are freed (their numbers may then be
+ * given to other strings). */
+uint32_t au_atom_generation(void);
 
 #endif

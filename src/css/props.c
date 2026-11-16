@@ -118,12 +118,18 @@ static void map_set(uint16_t **map, uint32_t *n, AuAtom a, uint16_t v)
     (*map)[a] = v;
 }
 
+static void release_element_style(void *style) { au_style_release(style); }
+
 void au_css_init(void)
 {
     static bool done;
     if (done)
         return;
     done = true;
+    /* an element freed after it left its document frees its style */
+    au_dom_set_style_release(release_element_style);
+    /* the tables below keep atoms for good, whichever document is first */
+    AuAtomBits prev = au_atom_scope_enter(0);
     for (int k = 1; k < AU_K_COUNT; k++) {
         AuAtom a = au_atom_cstr(kw_names[k]);
         css_kw_atoms[k] = a;
@@ -138,6 +144,7 @@ void au_css_init(void)
     for (int i = 0; i < CSS_HN_COUNT; i++)
         css_hn[i] = au_atom_cstr(hn_names[i]);
     css_style_init_defaults();
+    au_atom_scope_leave(prev);
 }
 
 uint16_t css_kw_lookup(const char *s, size_t n)

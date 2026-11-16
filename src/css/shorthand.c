@@ -117,6 +117,8 @@ const AuCssValue *css_initial_value(uint16_t prop)
     if (prop >= AU_PROP_LONGHAND_END)
         prop = css_logical_template(prop);
     if (!initial_blobs[prop]) {
+        /* kept for good, for every document: no scope, no set */
+        AuAtomCollect ac = au_atom_collect_begin(NULL, 0);
         CssTokens tk = {0};
         const char *s = css_props[prop].initial;
         css_tokenize(s, strlen(s), &tk);
@@ -131,6 +133,7 @@ const AuCssValue *css_initial_value(uint16_t prop)
         initial_blobs[prop] = css_blob_pack(ok, NULL);
         css_arena_free(&a);
         css_tokens_free(&tk);
+        au_atom_collect_end(ac);
     }
     return &initial_blobs[prop]->value;
 }

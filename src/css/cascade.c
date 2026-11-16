@@ -1291,10 +1291,13 @@ AuCssResolver *au_css_resolver_new(void)
     au_css_device_default(&r->dev);
     au_css_font_prefs_default(&r->fprefs);
     if (!ua_users++) {
+        /* every document's resolver shares them: their atoms live for good */
+        AuAtomBits prev = au_atom_scope_enter(0);
         ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false, CSS_TEXT_BORROW);
         ua_quirks_shared =
             css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true,
                             CSS_TEXT_BORROW);
+        au_atom_scope_leave(prev);
     }
     r->ua = ua_shared;
     r->ua_quirks = ua_quirks_shared;

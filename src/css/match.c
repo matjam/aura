@@ -17,6 +17,22 @@
 static uint32_t *ci_hash;
 static AuAtom *lower_of;
 static uint32_t ci_n, lower_n;
+static uint32_t caches_gen; /* au_atom_generation when they were filled */
+
+/* Atoms freed with a document's scope may come back as other strings,
+ * and the highest numbers may be gone: both caches start again, empty. */
+static void check_caches(void)
+{
+    uint32_t g = au_atom_generation();
+    if (g == caches_gen)
+        return;
+    caches_gen = g;
+    au_free(ci_hash);
+    au_free(lower_of);
+    ci_hash = NULL;
+    lower_of = NULL;
+    ci_n = lower_n = 0;
+}
 
 static void grow_u32(uint32_t **arr, uint32_t *n, uint32_t need)
 {
@@ -42,6 +58,7 @@ static uint32_t ci_string_hash(AuAtom a)
 
 uint32_t css_hash_atom(AuAtom a, int salt)
 {
+    check_caches();
     grow_u32(&ci_hash, &ci_n, a);
     uint32_t h = ci_hash[a];
     if (!h)
@@ -57,9 +74,12 @@ uint32_t css_hash_atom(AuAtom a, int salt)
 
 AuAtom css_atom_lower(AuAtom a)
 {
+    check_caches();
     grow_u32((uint32_t **)&lower_of, &lower_n, a);
-    if (lower_of[a])
+    if (lower_of[a]) {
+        au_atom_use(lower_of[a]); /* the caller keeps it */
         return lower_of[a];
+    }
     const char *s = au_atom_str(a);
     size_t n = au_atom_len(a);
     bool has_upper = false;
@@ -171,7 +191,7 @@ static bool attr_value_ci(AuAtom name)
 {
     if (!ci_attr_atoms[0])
         for (size_t i = 0; i < CSS_ARRAY_LEN(ci_attr_names); i++)
-            ci_attr_atoms[i] = au_atom_cstr(ci_attr_names[i]);
+            ci_attr_atoms[i] = au_atom_permanent(ci_attr_names[i], strlen(ci_attr_names[i]));
     for (size_t i = 0; i < CSS_ARRAY_LEN(ci_attr_atoms); i++)
         if (ci_attr_atoms[i] == name)
             return true;
