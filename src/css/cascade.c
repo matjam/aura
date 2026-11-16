@@ -116,6 +116,7 @@ typedef struct RuleEntry {
     uint16_t sheet;        /* index in AuCssResolver.walked */
 } RuleEntry;
 #define MAX_WALKED 65535u /* sheets (imports and the user agent's included) one index holds */
+CSS_SIZE_ON_32(RuleEntry, 20);
 
 typedef struct {
     AuAtom *keys;

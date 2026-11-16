@@ -360,7 +360,7 @@ static void w_sellist(const AuSelList *l)
             }
             if (!(c->flags & SCF_EXT) || seen(c->u.ext))
                 continue;
-            w_add(W_SELEXT, sizeof(CssSelExt), 16, 0);
+            w_add(W_SELEXT, sizeof(CssSelExt), 20, 0);
             if (c->type == SC_PSEUDO && c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE)
                 w_sellist(c->u.ext->u.nth.of);
             else if (c->u.ext->u.value.s)
@@ -627,12 +627,13 @@ static int page_report(int argc, char **argv)
            total, rules, nel);
     printf("  parse %.1f ms; index %.1f ms (%zu entries); first style %.1f ms; style again %.1f ms\n", t1 - t0, t2 - t1,
            nent, t3 - t2, t4 - t3);
-    printf("  heap: sheets %zu bytes, index %zu, styles and what styling parsed %zu; total %zu\n", h1 - h0, h2 - h1,
-           h3 - h2, h3 - h0);
+    /* a difference can be negative: a table that grew frees its old block */
+    printf("  heap: sheets %ld bytes, index %ld, styles and what styling parsed %ld; total %ld\n", (long)(h1 - h0),
+           (long)(h2 - h1), (long)(h3 - h2), (long)(h3 - h0));
     au_css_clear_document(doc);
     au_css_resolver_free(r); /* frees the sheets it was given */
-    printf("  after freeing the styles and the sheets: %zu bytes more than before (atoms stay)\n",
-           heap_in_use() - h0);
+    printf("  after freeing the styles and the sheets: %ld bytes more than before (atoms stay)\n",
+           (long)(heap_in_use() - h0));
     au_node_unref(&doc->node);
     return 0;
 }

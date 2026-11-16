@@ -646,6 +646,14 @@ enum { CSS_TEXT_COPY, CSS_TEXT_TAKE, CSS_TEXT_BORROW };
 AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                             const char *media, bool quirks, int text_mode);
 
+/* The sizes these records are meant to have with 32-bit pointers (Mac OS
+ * 9): a build there fails if a change grows one. */
+#define CSS_SIZE_ON_32(T, n) typedef char css_size_of_##T[sizeof(void *) != 4 || sizeof(T) == (n) ? 1 : -1]
+CSS_SIZE_ON_32(CssRule, 20);
+CSS_SIZE_ON_32(AuSelector, 12);
+CSS_SIZE_ON_32(AuSelComp, 8);
+CSS_SIZE_ON_32(AuSelList, 4);
+
 /* ---- The UA sheet (ua.c) ---- */
 extern const char css_ua_sheet[];
 extern const char css_ua_quirks_sheet[];

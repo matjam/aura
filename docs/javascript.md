@@ -304,10 +304,10 @@ join them, convert each boundary point with
 - The text script writes back is parsed into `SheetSrc.om_sheet`, which
   replaces the sheet's own in the cascade; the resolver borrows sheets,
   so `au_dv_sheet_set_text` detaches them before it frees the old one.
-- A link element's sheet is listed and can be disabled, but its rules
-  throw NotSupportedError: the document view frees a fetched sheet's
-  text once it is parsed (`parse_sheet`), so there is nothing to read
-  them from.
+- A link element's sheet works like a style element's: the parsed sheet
+  keeps the text it was fetched as ([`css.md`](css.md), "How a parsed
+  sheet is stored"), and `au_dv_sheet_text` reads it from there. The
+  rules of a cross-origin sheet throw SecurityError.
 - A cross-origin sheet's rules throw SecurityError.
 
 ## getComputedStyle

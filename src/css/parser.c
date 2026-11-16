@@ -1163,9 +1163,10 @@ AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, con
     sh->quirks = quirks;
     sh->base_url = base_url ? au_strndup(base_url, strlen(base_url)) : NULL;
     sh->ns.default_ns = -1;
-    /* a small sheet gets a small chunk, a large one a few that double */
+    /* chunks double up to 16 KB, or to the size of the text for a sheet
+     * smaller than that, so that a small sheet's last chunk is small */
     sh->arena.chunk = 496;
-    sh->arena.chunk_max = 16368;
+    sh->arena.chunk_max = len < 496 ? 496 : len > 16368 ? 16368 : (len + 15) & ~(size_t)15;
     if (media && *media)
         sh->media = css_media_parse_text(media, strlen(media));
     CssTokens tk = {0};
