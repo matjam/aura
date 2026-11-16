@@ -486,7 +486,7 @@ static JSValue n_random(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return r;
 }
 
-/* ---- CSSOM: the sheet of a style or link element (prelude_cssom.js) ----
+/* ---- CSSOM: the sheet of a style or link element (cssom.js) ----
  * sheetText(el): [text, url] once the sheet has loaded ([null, url] when
  * its text is not kept), false while it loads, null when el has no sheet
  * or the embedder has no sheets. */
@@ -541,7 +541,7 @@ static JSValue n_sheet_disable(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 /* sheetConstruct(id, text, media, disabled): makes or changes constructed
- * sheet id (prelude_cssom.js). text or media null keeps it; disabled null
+ * sheet id (cssom.js). text or media null keeps it; disabled null
  * keeps it. */
 static JSValue n_sheet_construct(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {

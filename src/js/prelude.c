@@ -24,17 +24,13 @@ const char au_js_prelude_src[] = {
     , '\n',
 #embed "prelude_html.js"
     , '\n',
-#embed "prelude_range.js"
-    , '\n',
-#embed "prelude_cssom.js"
-    , '\n',
 #embed "prelude_window.js"
     , '\n',
 #embed "prelude_web.js"
     , '\n',
 #embed "prelude_net.js"
     , '\n',
-#embed "prelude_canvas.js"
+#embed "prelude_lazy.js"
     , '\n',
 #embed "prelude_workers.js"
     , '\n',
@@ -101,6 +97,26 @@ const char au_js_subtle_src[] = {
 
 const size_t au_js_subtle_len = sizeof au_js_subtle_src - 1;
 
+/* Range, the CSSOM and the canvas, read when script first touches them
+ * (N.lazy in runtime.c, lazyModule in prelude.js). */
+extern const char au_js_range_src[], au_js_cssom_src[], au_js_canvas_src[];
+extern const size_t au_js_range_len, au_js_cssom_len, au_js_canvas_len;
+
+const char au_js_range_src[] = {
+#embed "range.js"
+    , 0};
+const size_t au_js_range_len = sizeof au_js_range_src - 1;
+
+const char au_js_cssom_src[] = {
+#embed "cssom.js"
+    , 0};
+const size_t au_js_cssom_len = sizeof au_js_cssom_src - 1;
+
+const char au_js_canvas_src[] = {
+#embed "canvas.js"
+    , 0};
+const size_t au_js_canvas_len = sizeof au_js_canvas_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -159,5 +175,23 @@ const unsigned char au_js_subtle_bc[] = {
 };
 
 const size_t au_js_subtle_bc_len = sizeof au_js_subtle_bc;
+
+extern const unsigned char au_js_range_bc[], au_js_cssom_bc[], au_js_canvas_bc[];
+extern const size_t au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len;
+
+const unsigned char au_js_range_bc[] = {
+#embed "range.bc"
+};
+const size_t au_js_range_bc_len = sizeof au_js_range_bc;
+
+const unsigned char au_js_cssom_bc[] = {
+#embed "cssom.bc"
+};
+const size_t au_js_cssom_bc_len = sizeof au_js_cssom_bc;
+
+const unsigned char au_js_canvas_bc[] = {
+#embed "canvas.bc"
+};
+const size_t au_js_canvas_bc_len = sizeof au_js_canvas_bc;
 
 #endif

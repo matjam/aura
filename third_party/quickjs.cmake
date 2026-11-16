@@ -54,7 +54,7 @@ else()
     set(AURA_PRELUDE_BC ${AURA_PRELUDE_DIR}/prelude.bc)
     # The order prelude.c joins the files in.
     set(AURA_PRELUDE_JS)
-    foreach(part prelude prelude_dom prelude_html prelude_range prelude_cssom prelude_window prelude_web prelude_net prelude_canvas prelude_workers prelude_obs)
+    foreach(part prelude prelude_dom prelude_html prelude_window prelude_web prelude_net prelude_lazy prelude_workers prelude_obs)
         list(APPEND AURA_PRELUDE_JS ${CMAKE_SOURCE_DIR}/src/js/${part}.js)
     endforeach()
     set(AURA_JSPRELUDE_SRC ${CMAKE_SOURCE_DIR}/tools/jsprelude/jsprelude.c)
@@ -141,12 +141,27 @@ else()
         DEPENDS ${AURA_JSPRELUDE_DEP} ${AURA_SUBTLE_JS}
         COMMENT "Compiling crypto.subtle to bytecode"
         VERBATIM)
+    # Range, the CSSOM and the canvas (src/js/range.js, cssom.js,
+    # canvas.js): the same, read the first time script touches one of
+    # their globals or the members that reach them (N.lazy in runtime.c,
+    # lazyModule in prelude.js).
+    set(AURA_LAZY_BCS)
+    foreach(mod range cssom canvas)
+        set(bc ${AURA_PRELUDE_DIR}/${mod}.bc)
+        add_custom_command(OUTPUT ${bc}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}
+            COMMAND ${AURA_JSPRELUDE} ${AURA_JSPRELUDE_FLAGS} -o ${bc} ${CMAKE_SOURCE_DIR}/src/js/${mod}.js
+            DEPENDS ${AURA_JSPRELUDE_DEP} ${CMAKE_SOURCE_DIR}/src/js/${mod}.js
+            COMMENT "Compiling ${mod}.js to bytecode"
+            VERBATIM)
+        list(APPEND AURA_LAZY_BCS ${bc})
+    endforeach()
     add_custom_target(aura_prelude_bc DEPENDS ${AURA_PRELUDE_BC} ${AURA_WORKER_BC} ${AURA_INTL_BC} ${AURA_STREAMS_BC}
-                      ${AURA_EVENTSOURCE_BC} ${AURA_SUBTLE_BC})
+                      ${AURA_EVENTSOURCE_BC} ${AURA_SUBTLE_BC} ${AURA_LAZY_BCS})
     add_dependencies(aura_engine aura_prelude_bc)
     # #embed looks beside the source file, then in --embed-dir (Clang and
     # GCC 15 or later), not in the include path.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/prelude.c PROPERTIES
-        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC};${AURA_STREAMS_BC};${AURA_EVENTSOURCE_BC};${AURA_SUBTLE_BC}"
+        OBJECT_DEPENDS "${AURA_PRELUDE_BC};${AURA_WORKER_BC};${AURA_INTL_BC};${AURA_STREAMS_BC};${AURA_EVENTSOURCE_BC};${AURA_SUBTLE_BC};${AURA_LAZY_BCS}"
         COMPILE_OPTIONS "--embed-dir=${AURA_PRELUDE_DIR}")
 endif()

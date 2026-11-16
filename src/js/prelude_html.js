@@ -1439,7 +1439,7 @@ defProps(DP, {
         e[S.ev].initialized = false;
         return e;
     },
-    createRange() { return new Range(); },
+    createRange() { return new (ranges().Range)(); }, /* prelude_lazy.js */
     createNodeIterator(root, what, filter) { return new NodeIterator(root, what, filter); },
     createTreeWalker(root, what, filter) { return new TreeWalker(root, what, filter); },
     /* document.open() and close(): during parsing, write() inserts at the

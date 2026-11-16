@@ -1,5 +1,12 @@
 
-/* ---------------- CSSOM: style sheets and rules ----------------
+/* CSSOM: style sheets and rules. The build compiles this file to its own
+ * bytecode (cssom.bc); the prelude reads it with N.lazy(1) the first time
+ * script touches one of the classes below, an element's sheet,
+ * styleSheets or adoptedStyleSheets, so a page that never does pays only
+ * for the getters. It is a function of G, the global object, and H, the
+ * prelude's helpers, and returns the classes and what the prelude's
+ * getters call.
+ *
  * A CSSStyleSheet stands for the sheet of a style or link element. Its
  * rules are read from the sheet's text (N.sheetText: the text the cascade
  * uses) by a splitter that knows comments, strings and blocks; a change
@@ -18,6 +25,10 @@
  * sheets of @import rules (CSSImportRule.styleSheet is null), rules nested
  * in a style rule, and the rules of cross-origin sheets (SecurityError,
  * as in other browsers). document.styleSheets is a new list at each read. */
+(function (G, H) {
+'use strict';
+
+const { N, doc, S, domErr, str, tag } = H;
 
 /* Splits css into its top-level rules: { prelude, block } with block null
  * for a statement at-rule (@import ...;). Invalid pieces are dropped. */
@@ -435,24 +446,22 @@ function sheetFor(el) {
     }
     return s;
 }
-defProps(HTMLStyleElement.prototype, { get sheet() { return sheetFor(this); } });
-defProps(HTMLLinkElement.prototype, { get sheet() { return sheetFor(this); } });
 class StyleSheetList {
     constructor() { throw new TypeError('Illegal constructor'); }
     item(i) { i >>>= 0; return i < this.length ? this[i] : null; }
     [Symbol.iterator]() { return Array.prototype[Symbol.iterator].call(this); }
 }
-defProps(DP, {
-    get styleSheets() {
-        const out = [];
-        for (const el of this.querySelectorAll('style, link')) {
-            if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
-            const s = sheetFor(el);
-            if (s) out.push(s);
-        }
-        return arrayLike(StyleSheetList.prototype, out);
-    },
-});
+/* document.styleSheets (html true: only HTML elements' sheets) and a
+ * shadow root's styleSheets */
+function styleSheetsOf(scope, html) {
+    const out = [];
+    for (const el of scope.querySelectorAll('style, link')) {
+        if (html && el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
+        const s = sheetFor(el);
+        if (s) out.push(s);
+    }
+    return arrayLike(StyleSheetList.prototype, out);
+}
 /* adoptedStyleSheets: an array (a proxy) whose changes reach the view. */
 const adoptedLists = new WeakMap();
 const checkAdoptable = (s) => {
@@ -478,33 +487,20 @@ function adoptedOf(scope) {
     }
     return l;
 }
-const adoptedProps = {
-    get adoptedStyleSheets() { return adoptedOf(this).proxy; },
-    set adoptedStyleSheets(v) {
-        const items = Array.from(v, checkAdoptable);
-        const { arr } = adoptedOf(this);
-        arr.length = 0;
-        arr.push(...items);
-        N.sheetsAdopt(this, items.map((s) => s._cid));
-    },
-};
-defProps(DP, adoptedProps);
-if (typeof ShadowRoot === 'function') {
-    defProps(ShadowRoot.prototype, adoptedProps);
-    defProps(ShadowRoot.prototype, {
-        get styleSheets() {
-            const out = [];
-            for (const el of this.querySelectorAll('style, link')) {
-                const s = sheetFor(el);
-                if (s) out.push(s);
-            }
-            return arrayLike(StyleSheetList.prototype, out);
-        },
-    });
+const adoptedGet = (scope) => adoptedOf(scope).proxy;
+function adoptedSet(scope, v) {
+    const items = Array.from(v, checkAdoptable);
+    const { arr } = adoptedOf(scope);
+    arr.length = 0;
+    arr.push(...items);
+    N.sheetsAdopt(scope, items.map((s) => s._cid));
 }
+const lib = { sheetFor, styleSheetsOf, adoptedGet, adoptedSet };
 for (const C of [CSSRule, CSSStyleRule, CSSGroupingRule, CSSConditionRule, CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule,
     CSSImportRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSRuleList, MediaList, StyleSheet,
     CSSStyleSheet, StyleSheetList]) {
     tag(C);
-    defGlobal(C.name, C);
+    lib[C.name] = C;
 }
+return lib;
+})

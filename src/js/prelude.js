@@ -842,6 +842,35 @@ intlMethods(String.prototype, {
     localeCompare(that, l, o) { return intl().compare(thisString(this), String(that), l, o); },
 }, 1);
 
+/* ---------------- Modules read on first use ---------------- */
+
+/* A part of the platform compiled to bytecode of its own (src/js/range.js,
+ * cssom.js, canvas.js) and read with N.lazy(index) the first time script
+ * touches one of its globals or calls load(). Until then each global is
+ * an accessor, one function per name serving as getter and setter, so
+ * `name in window`, typeof, instanceof and the window's own property
+ * names find it as before. The module is a function of G and the helpers
+ * bag (made at that moment, so it may name anything the prelude defines);
+ * on loading, the globals become plain data properties, unless the page
+ * replaced one. */
+const lazyModule = (index, names, helpers) => {
+    let lib = null;
+    const load = () => {
+        if (lib) return lib;
+        lib = N.lazy(index)(G, helpers());
+        for (const name of names) {
+            const d = Object.getOwnPropertyDescriptor(G, name);
+            if (d && d.get && d.get === d.set) defGlobal(name, lib[name]);
+        }
+        return lib;
+    };
+    for (const name of names) {
+        const f = function (v) { if (arguments.length) defGlobal(name, v); else return load()[name]; };
+        Object.defineProperty(G, name, { get: f, set: f, configurable: true, enumerable: false });
+    }
+    return load;
+};
+
 /* ---------------- Streams ---------------- */
 
 /* The Streams classes live in src/js/streams.js, compiled to bytecode of

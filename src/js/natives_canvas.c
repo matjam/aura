@@ -2,7 +2,7 @@
  * CanvasPattern, Path2D, ImageBitmap and TextMetrics over
  * src/paint/canvas2d.h. The context's methods and attributes are C
  * functions on its prototype (script calls them thousands of times per
- * frame); prelude_canvas.js adds the element's methods, ImageData,
+ * frame); canvas.js (read on first use) adds the element's methods, ImageData,
  * OffscreenCanvas and the few context methods that build script objects.
  *
  * Ownership. A context object owns its AuCanvas2D and holds its canvas

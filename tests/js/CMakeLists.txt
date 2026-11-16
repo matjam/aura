@@ -9,6 +9,12 @@ foreach(name dom_tree events collections html_elements loop window net observers
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
 
+# Range, the CSSOM and the canvas, read on first use: each file touches
+# them first in other ways, in a fresh window.
+foreach(name lazy_prelude_a lazy_prelude_b lazy_prelude_c)
+    add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/lazy_common.js ${JS_DIR}/${name}.js)
+endforeach()
+
 # crypto.subtle only in secure contexts: documents at made-up URLs.
 add_executable(test_subtle_context test_subtle_context.c)
 target_link_libraries(test_subtle_context aura_engine)

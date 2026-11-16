@@ -1,5 +1,11 @@
 
-/* ---------------- Range and Selection ----------------
+/* Range and Selection. The build compiles this file to its own bytecode
+ * (range.bc); the prelude reads it with N.lazy(0) the first time script
+ * touches Range, AbstractRange, StaticRange, Selection, getSelection or
+ * document.createRange, so a page that never does pays only for the
+ * getters. It is a function of G, the global object, and H, the prelude's
+ * helpers, and returns the classes and getSelection.
+ *
  * Range follows the DOM standard. Its boundary points live in C
  * (ranges.c), where the mutation hooks move them when nodes are inserted
  * or removed; character data edits report through replaceData and
@@ -10,6 +16,10 @@
  * Not exact: normalize() moves boundary points in merged text nodes to
  * their parent. The Selection object is script state: it is not the
  * selection the user makes with the mouse, and it is not painted. */
+(function (G, H) {
+'use strict';
+
+const { N, doc, DOMRect, Event, S, domErr, fire, isNode, rootOf, str, tag } = H;
 
 class AbstractRange {
     constructor() { if (new.target === AbstractRange) throw new TypeError('Illegal constructor'); }
@@ -333,8 +343,6 @@ function copyContents(range, extract) {
     return frag;
 }
 tag(AbstractRange); tag(Range);
-defGlobal('AbstractRange', AbstractRange);
-defGlobal('Range', Range);
 
 class StaticRange extends AbstractRange {
     constructor(init) {
@@ -348,7 +356,6 @@ class StaticRange extends AbstractRange {
     get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
 }
 tag(StaticRange);
-defGlobal('StaticRange', StaticRange);
 
 /* One range at most, with a direction: the anchor is the range's start
  * unless the selection was made backwards. selectionchange fires at the
@@ -451,6 +458,7 @@ class Selection {
     toString() { return selRange ? selRange.toString() : ''; }
 }
 tag(Selection);
-defGlobal('Selection', Selection);
 const theSelection = Object.create(Selection.prototype);
-defGlobal('getSelection', () => theSelection);
+
+return { AbstractRange, Range, StaticRange, Selection, getSelection: () => theSelection };
+})

@@ -807,6 +807,39 @@ static JSValue n_lazy(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
 #endif
 }
 
+#ifdef AU_JS_PRELUDE_SOURCE
+extern const char au_js_range_src[], au_js_cssom_src[], au_js_canvas_src[];
+extern const size_t au_js_range_len, au_js_cssom_len, au_js_canvas_len;
+#else
+extern const unsigned char au_js_range_bc[], au_js_cssom_bc[], au_js_canvas_bc[];
+extern const size_t au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len;
+#endif
+
+/* N.lazy(i): reads module i (0 src/js/range.js, 1 cssom.js, 2 canvas.js,
+ * each compiled to its own bytecode) and returns the function it
+ * evaluates to. lazyModule in prelude.js calls it once per context, the
+ * first time script touches one of the module's globals or members. */
+static JSValue n_lazy_module(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    int32_t i = -1;
+    if (argc < 1 || JS_ToInt32(ctx, &i, argv[0]) || i < 0 || i > 2)
+        return JS_ThrowRangeError(ctx, "lazy: no such module");
+#ifdef AU_JS_PRELUDE_SOURCE
+    static const char *const names[] = {"aura:range", "aura:cssom", "aura:canvas"};
+    const char *src = i == 0 ? au_js_range_src : i == 1 ? au_js_cssom_src : au_js_canvas_src;
+    size_t len = i == 0 ? au_js_range_len : i == 1 ? au_js_cssom_len : au_js_canvas_len;
+    return JS_Eval(ctx, src, len, names[i], JS_EVAL_TYPE_GLOBAL);
+#else
+    const unsigned char *bc = i == 0 ? au_js_range_bc : i == 1 ? au_js_cssom_bc : au_js_canvas_bc;
+    size_t len = i == 0 ? au_js_range_bc_len : i == 1 ? au_js_cssom_bc_len : au_js_canvas_bc_len;
+    JSValue fn = JS_ReadObject(ctx, bc, len, JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(fn))
+        return fn;
+    return JS_EvalFunction(ctx, fn);
+#endif
+}
+
 static const JSCFunctionListEntry base_natives[] = {
     JS_CFUNC_MAGIC_DEF("scriptMuted", 1, n_mute, 0),
     JS_CFUNC_MAGIC_DEF("muteScript", 1, n_mute, 1),
@@ -816,6 +849,7 @@ static const JSCFunctionListEntry base_natives[] = {
     JS_CFUNC_DEF("intl", 0, n_intl),
     JS_CFUNC_MAGIC_DEF("streams", 0, n_lazy, 0),
     JS_CFUNC_MAGIC_DEF("eventSource", 0, n_lazy, 1),
+    JS_CFUNC_DEF("lazy", 1, n_lazy_module),
 };
 
 /* ---- Creation ---- */

@@ -1,16 +1,28 @@
 
-/* ---------------- canvas ----------------
+/* The canvas. The build compiles this file to its own bytecode
+ * (canvas.bc); the prelude reads it with N.lazy(2) the first time script
+ * touches one of the globals below or a canvas element's getContext,
+ * toDataURL or toBlob, so a page that never does pays only for the
+ * getters. It is a function of G, the global object, and H, the prelude's
+ * helpers, and returns the globals and the canvas element's methods.
+ *
  * The 2D context's attributes and most of its methods are C functions on
  * N.c2dProto (natives_canvas.c). Here: the interface objects, the canvas
  * element's methods, ImageData, DOMMatrix, OffscreenCanvas,
- * createImageBitmap, and the context methods that build script objects. */
+ * createImageBitmap, and the context methods that build script objects.
+ * (A canvas element's width and height setters are in the prelude.) */
+(function (G, H) {
+'use strict';
+
+const { N, Blob, defProps, domErr, str, tag } = H;
+const lib = {};
 
 const nativeIface = (name, proto) => {
     const C = { [name]() { throw new TypeError('Illegal constructor'); } }[name];
     Object.defineProperty(C, 'prototype', { value: proto, writable: false });
     Object.defineProperty(proto, 'constructor', { value: C, writable: true, configurable: true });
     Object.defineProperty(proto, Symbol.toStringTag, { value: name, configurable: true });
-    defGlobal(name, C);
+    lib[name] = C;
     return C;
 };
 nativeIface('CanvasRenderingContext2D', N.c2dProto);
@@ -19,7 +31,7 @@ nativeIface('CanvasPattern', N.patProto);
 nativeIface('ImageBitmap', N.bmpProto);
 nativeIface('TextMetrics', N.tmProto);
 Object.defineProperty(N.Path2D.prototype, Symbol.toStringTag, { value: 'Path2D', configurable: true });
-defGlobal('Path2D', N.Path2D);
+lib.Path2D = N.Path2D;
 
 /* A long argument: a number that is not finite is a TypeError. */
 const canvasLong = (v) => {
@@ -58,7 +70,7 @@ class ImageData {
     get colorSpace() { return 'srgb'; }
 }
 tag(ImageData);
-defGlobal('ImageData', ImageData);
+lib.ImageData = ImageData;
 
 /* DOMMatrix, the two-dimensional part: what getTransform returns and
  * setTransform, addPath and CanvasPattern.setTransform accept. */
@@ -138,8 +150,8 @@ class DOMMatrix extends DOMMatrixReadOnly {
     }
 }
 tag(DOMMatrixReadOnly); tag(DOMMatrix);
-defGlobal('DOMMatrixReadOnly', DOMMatrixReadOnly);
-defGlobal('DOMMatrix', DOMMatrix);
+lib.DOMMatrixReadOnly = DOMMatrixReadOnly;
+lib.DOMMatrix = DOMMatrix;
 
 defProps(N.c2dProto, {
     getTransform() { return new DOMMatrix(N.c2dMatrix(this)); },
@@ -198,38 +210,16 @@ const pngBlob = (bytes) => {
     return b;
 };
 
-defProps(HTMLCanvasElement.prototype, {
-    getContext(type, opts) { return canvasContext(this, this, type, opts); },
-    /* Always PNG: the standard allows it for types an implementation
-     * does not encode (JPEG and WebP here). */
-    toDataURL() { return canvasEncode(this, true) || 'data:,'; },
-    toBlob(cb) {
-        if (typeof cb !== 'function') throw new TypeError('toBlob: the callback is not a function');
-        const bytes = canvasEncode(this, false);
-        N.queueTask(() => cb(bytes ? pngBlob(bytes) : null));
-    },
-});
-/* Setting width or height resets the bitmap, also when the value is the
- * one it has. The attribute is written only when it changes, so that a
- * script clearing its canvas with canvas.width = canvas.width costs no
- * layout. */
-for (const name of ['width', 'height']) {
-    const d = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, name);
-    Object.defineProperty(HTMLCanvasElement.prototype, name, {
-        get: d.get,
-        set(v) {
-            if (this.hasAttribute(name) && d.get.call(this) === Number(v)) {
-                const c = this._c2d;
-                if (c) N.canvasResize(c, this.width, this.height);
-                return;
-            }
-            d.set.call(this, v);
-            N.canvasSync();
-        },
-        configurable: true,
-        enumerable: true,
-    });
-}
+/* The canvas element's methods (the prelude's own call these). */
+lib.getContext = (canvas, type, opts) => canvasContext(canvas, canvas, type, opts);
+/* Always PNG: the standard allows it for types an implementation does
+ * not encode (JPEG and WebP here). */
+lib.toDataURL = (canvas) => canvasEncode(canvas, true) || 'data:,';
+lib.toBlob = (canvas, cb) => {
+    if (typeof cb !== 'function') throw new TypeError('toBlob: the callback is not a function');
+    const bytes = canvasEncode(canvas, false);
+    N.queueTask(() => cb(bytes ? pngBlob(bytes) : null));
+};
 
 class OffscreenCanvas {
     constructor(w, h) {
@@ -258,9 +248,9 @@ class OffscreenCanvas {
     }
 }
 tag(OffscreenCanvas);
-defGlobal('OffscreenCanvas', OffscreenCanvas);
+lib.OffscreenCanvas = OffscreenCanvas;
 
-defGlobal('createImageBitmap', function createImageBitmap(source, sx, sy, sw, sh) {
+lib.createImageBitmap = function createImageBitmap(source, sx, sy, sw, sh) {
     const crop = arguments.length >= 5;
     return new Promise((resolve, reject) => {
         try {
@@ -268,4 +258,7 @@ defGlobal('createImageBitmap', function createImageBitmap(source, sx, sy, sw, sh
             resolve(N.canvasBitmap(source, crop, sx, sy, sw, sh));
         } catch (e) { reject(e); }
     });
-});
+};
+
+return lib;
+})

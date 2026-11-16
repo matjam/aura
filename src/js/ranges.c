@@ -1,7 +1,7 @@
 /* Live ranges: the boundary points of every script Range, kept here so
  * that the DOM mutation hooks can move them as the DOM standard says
  * (insert, remove) without running script inside a mutation. The Range
- * class itself is in prelude_range.js; it reads and writes its boundary
+ * class itself is in range.js (read on first use); it reads and writes its boundary
  * points through N.rangeGet and N.rangeSet, and reports character data
  * changes with N.rangeText and N.rangeSplit, because offsets in text are
  * UTF-16 code units, which only script knows.

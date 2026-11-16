@@ -3,7 +3,7 @@
 This document covers the `<canvas>` element and its 2D context: the
 drawing model, the fast paths, the bindings, tainting, memory and the
 bounds on hostile input. Read it before changing `src/paint/canvas2d*.c`,
-`src/js/natives_canvas.c` or `src/js/prelude_canvas.js`.
+`src/js/natives_canvas.c` or `src/js/canvas.js`.
 
 The `<canvas>` element has a 2D context (CanvasRenderingContext2D of
 the HTML standard). The context is a state machine in C that draws on
@@ -26,7 +26,8 @@ shows the frame time).
 | `canvas2d_path.c` | builds paths |
 | `canvas2d_draw.c` | paints, compositing, clipping, shadows, fills, strokes, text and images |
 | `src/js/natives_canvas.c` | binds them (with `canvas_css.c` for colours and fonts) |
-| `src/js/prelude_canvas.js` | the element's methods, `ImageData`, `DOMMatrix`, `OffscreenCanvas` and `createImageBitmap` |
+| `src/js/canvas.js` | the element's methods, `ImageData`, `DOMMatrix`, `OffscreenCanvas` and `createImageBitmap`; read the first time script touches a canvas global or calls `getContext`, `toDataURL` or `toBlob` ([`javascript.md`](javascript.md), "Modules read on first use") |
+| `src/js/prelude_lazy.js` | the getters that read `canvas.js`, and the element's `width` and `height` setters |
 | `src/css/canvasval.c` | parses a colour and a font shorthand given as text (`au_css_parse_color_text`, `au_css_parse_font_text`) with the same code as declarations |
 | `src/image/pngenc.c` | the PNG encoder |
 

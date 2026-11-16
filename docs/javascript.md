@@ -358,9 +358,9 @@ in Aura's own code.
 ## The prelude
 
 The prelude is one function expression split over
-`src/js/prelude*.js`, joined in order (base, dom, html, range, cssom,
-window, web, net, canvas, workers, obs). The build compiles it to
-QuickJS bytecode and the runtime loads that.
+`src/js/prelude*.js`, joined in order (base, dom, html, window, web,
+net, lazy, workers, obs). The build compiles it to QuickJS bytecode and
+the runtime loads that.
 
 - To add a file, add it to the list in `third_party/quickjs.cmake` and
   its `#embed` line in `prelude.c` (the source build).
@@ -369,7 +369,8 @@ QuickJS bytecode and the runtime loads that.
 - `Intl` is not part of the prelude: `src/js/intl.js` is compiled to
   bytecode of its own and read on first use (see "Intl" below). So are
   `src/js/streams.js` (the Streams API) and `src/js/eventsource.js`
-  (see "Streams and EventSource" below).
+  (see "Streams and EventSource" below), and `src/js/range.js`,
+  `cssom.js` and `canvas.js` ("Modules read on first use" below).
 - A worker has a second, smaller prelude built from `prelude.js`,
   `prelude_web.js`, `prelude_net.js` and `prelude_worker.js`
   (`prelude_worker.bc`): code in the first three must run without a
@@ -417,6 +418,74 @@ heap holds by kind.
 The 226 KB of bytecode sit in the application's data instead of 299 KB
 of source. (A later measurement, in [`workers.md`](workers.md), has the
 page's prelude at 258 KB of bytecode.)
+
+### Modules read on first use
+
+To move a part of the prelude out of every context's start-up heap,
+make it a module like `src/js/range.js`: a function of `G` (the global
+object) and `H` (a bag of prelude helpers) that returns its globals and
+whatever the prelude's stubs call. Then:
+
+- add its name to the `foreach(mod range cssom canvas)` list in
+  `third_party/quickjs.cmake` (it is compiled to `build/*/gen/NAME.bc`),
+  its two `#embed` blocks to `prelude.c` and its index to
+  `n_lazy_module` in `runtime.c` (`N.lazy(i)`);
+- in `prelude_lazy.js`, call `lazyModule(index, globals, helpers)`
+  (`prelude.js`): each global becomes an accessor, one function per
+  name serving as getter and setter, and the first read loads the
+  module and turns every global into a plain data property (unless the
+  page assigned one first). `name in window`, the window's own property
+  names, `typeof` and `instanceof` see the global before and after, and
+  the globals stay non-enumerable as they were;
+- give the members of other interfaces that reach the module (a canvas
+  element's `getContext`, `element.sheet`, `document.createRange`) a stub
+  in `prelude_lazy.js` with the same name and length that calls the
+  module;
+- pass the helpers as a function (`() => ({ N, doc, ... })`), so that the
+  bag is made at the first read and may name anything the prelude
+  defines after `prelude_lazy.js`.
+
+The three modules, on 2026-11-16 (bytecode sizes on the host):
+
+| Module | Bytecode | Globals | Members that read it |
+|---|---|---|---|
+| `range.js` | 15,744 bytes | `AbstractRange`, `Range`, `StaticRange`, `Selection`, `getSelection` | `document.createRange`; `document.getSelection` through `getSelection` |
+| `cssom.js` | 19,382 bytes | the 19 CSSOM classes (`CSSRule` to `StyleSheetList`) | `sheet` of style and link elements, `styleSheets` and `adoptedStyleSheets` of documents and shadow roots |
+| `canvas.js` | 9,236 bytes | `CanvasRenderingContext2D`, `CanvasGradient`, `CanvasPattern`, `ImageBitmap`, `TextMetrics`, `Path2D`, `ImageData`, `DOMMatrixReadOnly`, `DOMMatrix`, `OffscreenCanvas`, `createImageBitmap` | a canvas element's `getContext`, `toDataURL`, `toBlob` |
+
+The canvas element's `width` and `height` setters stay in the prelude
+(`prelude_lazy.js`); they touch the context only when one exists, which
+means `canvas.js` is loaded. The context's C functions stay on
+`N.c2dProto` from the start: QuickJS makes a function in a function list
+only when it is first read, so they cost a property each.
+
+Measured on 2026-11-16, base `49d5f6e`, host (RelWithDebInfo, Apple
+silicon, the machine busy with fuzzers, so the times are rough):
+
+| | Before | After |
+|---|---|---|
+| A context's heap at start-up (`aura-host js --stats`, empty script) | 1,803,990 bytes | 1,635,883 bytes (-164 KB, -9.3%) |
+| In use at start-up | 1462 KB | 1317 KB |
+| Functions at start-up | 1851, 356 KB (115 KB of bytecode) | 1571, 301 KB (97 KB of bytecode) |
+| Objects, properties, atoms at start-up | 3841, 11,230, 4115 | 3603, 10,517, 3801 |
+| `prelude.bc` | 281,540 bytes | 240,780 bytes (and 44,362 in the three modules) |
+| The heap after a script that touches all three modules | 1,803,990 bytes | 1,767,774 bytes |
+| Start-up time (median of 15) | 6.80 ms | 6.20 ms |
+
+A page's script runtime (Develop > Performance, `aura-host chrome --net
+--tab URL --do wait:6000 --do perf`, two loads each):
+
+| Page | Before | After | Modules the page read |
+|---|---|---|---|
+| Hacker News front page | 1783, 1783 KB | 1615, 1615 KB | none |
+| Wikipedia article (PowerPC) | 9758, 9738 KB | 9605, 9569 KB | none |
+| GitHub repository page (torvalds/linux) | 39,608, 39,615 KB | 39,648, 39,550 KB | `cssom.js` |
+
+Left in the prelude: `IntersectionObserver` and `ResizeObserver` (most
+script-heavy pages create one while they load, and both are run from
+layout's entry points), `MutationObserver` and custom elements (the DOM
+hooks call them), XMLHttpRequest and fetch (shared with the worker
+prelude).
 
 ## Date and the clock
 
@@ -579,7 +648,8 @@ origin dropped the message and Return did nothing
 
 ## Range
 
-`prelude_range.js`, `ranges.c`. Boundary points live in C so that the
+`range.js` (read on first use, "Modules read on first use" above),
+`ranges.c`. Boundary points live in C so that the
 DOM mutation hooks can move them without running script:
 `js_ranges_inserted` and `js_ranges_removed` follow the DOM standard's
 insert and remove steps.
@@ -613,8 +683,9 @@ join them, convert each boundary point with
 
 ## CSSOM
 
-`prelude_cssom.js`. `element.sheet` and `document.styleSheets` give a
-`CSSStyleSheet` per style or link element.
+`cssom.js` (read on first use, "Modules read on first use" above).
+`element.sheet` and `document.styleSheets` give a `CSSStyleSheet` per
+style or link element.
 
 - Rules are read from the sheet's text (`AuJsHooks.sheet_text`,
   `au_dv_sheet_text` in `docview.c`) by a splitter in script.
@@ -628,6 +699,9 @@ join them, convert each boundary point with
 - The text script writes back is parsed into `SheetSrc.om_sheet`, which
   replaces the sheet's own in the cascade; the resolver borrows sheets,
   so `au_dv_sheet_set_text` detaches them before it frees the old one.
+  This is what keeps a parsed sheet that several documents share
+  ([`css.md`](css.md), "Sheets shared between documents") unchanged:
+  script never edits the shared sheet, it gets a sheet of its own.
 - A link element's sheet works like a style element's: the parsed sheet
   keeps the text it was fetched as ([`css.md`](css.md), "How a parsed
   sheet is stored"), and `au_dv_sheet_text` reads it from there. The
@@ -835,6 +909,13 @@ What is left out is in [`known-gaps.md`](known-gaps.md#javascript).
 `tests/js` holds binding, loop, limit, lifetime, security and worker
 scripts for `aura-host js`, scripted pages for `aura-host page`
 (`tests/js/pages`) and the benchmark (`tests/js/bench/bench.js`).
+`tests/js/lazy_prelude_a.js`, `_b.js` and `_c.js` (ctest
+`js_lazy_prelude_*`, with `lazy_common.js`) check the modules read on
+first use: each file touches every module first in another way
+(`typeof`, `instanceof`, a member of another interface) in a fresh
+window, and checks that feature detection sees the globals before, that
+nothing else is read, and that a global the page replaced stays
+replaced.
 
 ## Not done
 
