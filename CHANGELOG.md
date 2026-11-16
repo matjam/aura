@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.1](https://github.com/matjam/aura/compare/v0.4.0...v0.4.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* float to integer conversions a page reaches with huge or NaN values ([53719ec](https://github.com/matjam/aura/commit/53719ec563ae11420114b4daddb3b3898c9bf9f0))
+* inline layout and float placement take time in proportion to the page ([4764d4f](https://github.com/matjam/aura/commit/4764d4feabc378e2d693ce781aac6fe8011152ba))
+* input handling holds a reference to elements across script ([eb40bbb](https://github.com/matjam/aura/commit/eb40bbb7462810245652fdf9c7446a43efd83570))
+
 ## [0.4.0](https://github.com/matjam/aura/compare/v0.3.0...v0.4.0) (2026-11-16)
 
 
