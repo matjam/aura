@@ -60,7 +60,9 @@ records where the code came from and how to update it.
   `JSFunctionDef`, one trim after each function, the compiler's blocks
   outside the small-block arenas) and `JS_EVAL_FLAG_NO_SOURCE`, which
   keeps no source text (`Function.prototype.toString` then gives the
-  native function form with the function's kind, or `class C { }`).
+  native function form with the function's kind, or `class C { }`),
+  and `0014` correctly typed realloc wrappers for `unicode_normalize`
+  (the casts it replaces were undefined behaviour that UBSan reports).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

@@ -53,6 +53,16 @@ cannot hold it (a page reaches such conversions with 1e38px and NaN; see
 it in the group); GCC's does not, so the flag names it and every
 compiler checks the same. CI configures with the same sanitizers.
 
+CI's Linux Clang finds two kinds of fault that the macOS build does
+not report, so a local sanitizer run that passes can still fail in CI:
+a call through a function pointer of another type (`-fsanitize=function`,
+for example a `DynBufReallocFunc` cast in QuickJS, fixed by patch 0014),
+and a NULL pointer passed to `memcmp` or `memcpy` with a length of 0
+(glibc declares those arguments non-null). Never cast a function to
+another function pointer type; write a wrapper with the right type.
+Check a pointer that may be NULL before passing it to `memcmp`, even
+with a length of 0.
+
 Run this for any change to code that reads data from the network or a
 file. The long fuzz sessions named in the area documents use this
 tree's binaries (for example `build/asan/tests/image/fuzz_image`).
