@@ -786,3 +786,9 @@ pixel 60 20 000080
 #t x=40 y=20
 #n y=20
 #m y=61
+
+=== a percentage height in a cell resolves when the cell height equals its content height
+<body style="margin:0">
+<table style="height:40px;border-spacing:0"><tr><td style="padding:0"><div style="height:24px;width:10px"></div><div id=p style="height:50%"><div style="height:16px"></div></div></td></tr></table>
+---
+#p y=24 h=20

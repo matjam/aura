@@ -7,6 +7,13 @@ add_executable(fuzz_page fuzz_page.c)
 target_link_libraries(fuzz_page aura_engine m)
 add_test(NAME page_fuzz COMMAND fuzz_page 60 7)
 set_tests_properties(page_fuzz PROPERTIES TIMEOUT 120)
+# Reduced fuzz_page documents that a subtree rebuild once laid out unlike
+# a whole build, with the random state that drove them. They check
+# something only in a tree built with -DAURA_INCR_CHECK (docs/layout.md).
+add_test(NAME page_fuzz_incr_float
+         COMMAND fuzz_page process 1447083605 ${CMAKE_CURRENT_SOURCE_DIR}/regress-incr/float-under-collapse.html)
+add_test(NAME page_fuzz_incr_cell
+         COMMAND fuzz_page process 2393214793 ${CMAKE_CURRENT_SOURCE_DIR}/regress-incr/cell-pct-height.html)
 
 # @font-face loading with random rules and loader answers.
 add_executable(fuzz_webfont fuzz_webfont.c)
