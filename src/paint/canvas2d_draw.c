@@ -650,8 +650,8 @@ static void draw_shadow(AuCanvas2D *c, const AuPath *dev, AuFillRule rule, const
     int ox = (int)floorf(fx + 0.5f), oy = (int)floorf(fy + 0.5f);
     /* The mask covers the shape plus the blur, where its shadow can
      * reach the clip box. */
-    AuIRect shape = {(int)floorf(b[0]) - pad, (int)floorf(b[1]) - pad, (int)ceilf(b[2]) + pad + 1,
-                     (int)ceilf(b[3]) + pad + 1};
+    AuIRect shape = {au_f2px(floorf(b[0])) - pad, au_f2px(floorf(b[1])) - pad, au_f2px(ceilf(b[2])) + pad + 1,
+                     au_f2px(ceilf(b[3])) + pad + 1};
     AuIRect reach = {box.x0 - ox - pad, box.y0 - oy - pad, box.x1 - ox + pad, box.y1 - oy + pad};
     AuIRect area = au_irect_intersect(shape, reach);
     if (au_irect_empty(area))
@@ -728,7 +728,8 @@ static void draw_dev_path(AuCanvas2D *c, const AuPath *dev, AuFillRule rule, con
         if (!au_path_bounds(dev, b))
             return;
         au_raster_path(dev, 0, 0, rule, box, span_fn, &k);
-        AuIRect r = {(int)floorf(b[0]) - 1, (int)floorf(b[1]) - 1, (int)ceilf(b[2]) + 2, (int)ceilf(b[3]) + 2};
+        AuIRect r = {au_f2px(floorf(b[0])) - 1, au_f2px(floorf(b[1])) - 1, au_f2px(ceilf(b[2])) + 2,
+                     au_f2px(ceilf(b[3])) + 2};
         c2d_touch(c, au_irect_intersect(r, box));
         return;
     }
@@ -910,7 +911,7 @@ void au_c2d_clip(AuCanvas2D *c, const AuCanvasPath *path, AuFillRule rule)
         st->clip_box = au_irect_intersect(au_irect_intersect(st->clip_box, r), full);
         return;
     }
-    AuIRect pb = {(int)floorf(b[0]), (int)floorf(b[1]), (int)ceilf(b[2]) + 1, (int)ceilf(b[3]) + 1};
+    AuIRect pb = {au_f2px(floorf(b[0])), au_f2px(floorf(b[1])), au_f2px(ceilf(b[2])) + 1, au_f2px(ceilf(b[3])) + 1};
     AuIRect box = au_irect_intersect(au_irect_intersect(st->clip_box, pb), full);
     if (au_irect_empty(box) || c->inert) {
         st->clip_box = none;
@@ -1362,10 +1363,10 @@ void au_c2d_draw_image(AuCanvas2D *c, const AuSurface *src, int nat_w, int nat_h
         whole = same || !st->smoothing || reduce;
     }
     if (whole) {
-        AuIRect d = {(int)floorf(r[0] + 0.5f), (int)floorf(r[1] + 0.5f), (int)floorf(r[2] + 0.5f),
-                     (int)floorf(r[3] + 0.5f)};
-        AuIRect sr = {(int)floor(ssx + 0.5), (int)floor(ssy + 0.5), (int)floor(ssx + ssw + 0.5),
-                      (int)floor(ssy + ssh + 0.5)};
+        AuIRect d = {au_f2px(floorf(r[0] + 0.5f)), au_f2px(floorf(r[1] + 0.5f)), au_f2px(floorf(r[2] + 0.5f)),
+                     au_f2px(floorf(r[3] + 0.5f))};
+        AuIRect sr = {au_f2px((float)floor(ssx + 0.5)), au_f2px((float)floor(ssy + 0.5)),
+                      au_f2px((float)floor(ssx + ssw + 0.5)), au_f2px((float)floor(ssy + ssh + 0.5))};
         sr = au_irect_intersect(sr, (AuIRect){0, 0, src->width, src->height});
         AuIRect vis = au_irect_intersect(d, box);
         if (!au_irect_empty(vis) && !au_irect_empty(sr)) {
@@ -1397,10 +1398,10 @@ void au_c2d_draw_image(AuCanvas2D *c, const AuSurface *src, int nat_w, int nat_h
         p.img = src;
         p.opaque = opaque;
         p.clamp = true;
-        p.ix0 = (int)floor(ssx);
-        p.iy0 = (int)floor(ssy);
-        p.ix1 = (int)ceil(ssx + ssw);
-        p.iy1 = (int)ceil(ssy + ssh);
+        p.ix0 = au_f2px((float)floor(ssx));
+        p.iy0 = au_f2px((float)floor(ssy));
+        p.ix1 = au_f2px((float)ceil(ssx + ssw));
+        p.iy1 = au_f2px((float)ceil(ssy + ssh));
         if (p.ix0 < 0)
             p.ix0 = 0;
         if (p.iy0 < 0)
