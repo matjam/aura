@@ -18,12 +18,31 @@ You do not need to find a bug to help. Open an issue and say:
   - How much memory did you give Aura in Get Info, and did it run out?
   - Does anything crash, freeze the Mac, or stop working after a while?
 
-To send measurements, load a page, choose Develop > Performance, click
-Copy Report and paste the text into the issue. It lists the time spent
-in script, style, layout and painting, and memory use.
-
 "Wikipedia loads in 20 seconds on my 867 MHz Quicksilver with 768 MB"
 is a useful report.
+
+## Use Report a Problem
+
+To collect what a report needs, choose Help > Report a Problem (it is
+in the Develop menu too) with the page in question in the front window.
+Aura shows a report: its version, the Mac and system, memory, the page's
+address, its console errors, its requests (with any that failed or were
+blocked), the Performance figures, the settings you changed and the
+clock. Then:
+
+1. Click Copy Report, or Save Report to write a text file you can move
+   to another machine.
+2. Click Open GitHub Issues, or open
+   `github.com/matjam/aura/issues/new` in any browser.
+3. Paste the report, and fill in its first three sections in your own
+   words: what you did, what you expected, what happened.
+
+Nothing is sent by Aura: the window shows exactly the text that Copy
+and Save take, and you can edit it before you post it. The report
+leaves out cookies, request and response headers, form data, history,
+bookmarks and paths on your disk; it cuts long query strings in
+addresses; and it lists the addresses of your other tabs only when you
+tick the box that says so.
 
 ## Report a site that does not work
 
@@ -31,14 +50,13 @@ Most bugs will be of this kind. Open an issue with:
 
 - The address of the page.
 - What you expected and what you saw. A screenshot helps most.
-- The Aura version. It is in the About box, for example "Aura 0.3.0".
-- What these show, if you can:
-  - Develop > Console: copy any errors.
-  - Develop > Network: open it, reload the page, and click Copy All. It
-    lists every request, including any that failed or were blocked.
-  - Whether the page works with blocking turned off for the site (the
-    page's contextual menu) and with JavaScript turned off in
-    Preferences. That tells which part is involved.
+- The report from Help > Report a Problem, made with the page open (see
+  above). It carries the Aura version, the console errors and every
+  request, including any that failed or were blocked. Without it, give
+  the Aura version from the About box, for example "Aura 0.3.0".
+- Whether the page works with blocking turned off for the site (the
+  page's contextual menu) and with JavaScript turned off in
+  Preferences. That tells which part is involved.
 
 A page that needs you to sign in is hard for me to test. If the problem
 shows on a public page too, give that one.
@@ -48,13 +66,13 @@ shows on a public page too, give that one.
 1. Open an issue.
 2. Say what you did, and the address of the page if a page was open.
    Steps that make it happen again are worth more than anything else.
-3. Add what you can of:
-   - The Aura version, the Mac and the Mac OS version.
-   - How much memory Aura has in Get Info, and whether virtual memory
-     is on.
+3. Add the report from Help > Report a Problem, made after you start
+   Aura again (see above): it has the Aura version, the Mac, the Mac OS
+   version, Aura's memory, whether virtual memory is on and whether
+   Enforcer is installed. Then add what the report cannot know:
    - The error number or message, or a photo of the screen.
-   - Whether Enforcer is installed. If it is, what its control panel
-     lists under Caught.
+   - If Enforcer is installed, what its control panel lists under
+     Caught.
 
 ## Report a security problem
 

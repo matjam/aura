@@ -3,7 +3,9 @@
  *   main.c        start-up, the event loop, menus, Apple events, saving
  *   browserwin.c  browser windows (GWorld, chrome, page, address field)
  *   listwin.c     the Bookmarks, History, Downloads and Cookies windows
- *   devwin.c      the Page Source, Console, Network and Performance windows
+ *   devwin.c      the developer windows: Page Source, Console, Network,
+ *                 Performance, System Status and Report a Problem
+ *   sysinfo_mac.c the machine's facts (Gestalt) for those reports
  *   network.c     the network stack (Open Transport, stores, fetchers)
  *   downloads_mac.c  download files, Reveal in Finder
  *   prefswin.c    the Preferences window (Appearance controls)
@@ -40,7 +42,7 @@ enum {
 
 typedef enum { WIN_BROWSER = 1, WIN_BOOKMARKS, WIN_HISTORY, WIN_PREFS, WIN_DOWNLOADS, WIN_COOKIES,
                /* The developer windows (devwin.c), in this order. */
-               WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK, WIN_PERF } WinKind;
+               WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK, WIN_PERF, WIN_STATUS, WIN_REPORT } WinKind;
 
 typedef struct MacWin MacWin;
 struct MacWin {
@@ -53,6 +55,7 @@ struct MacWin {
     bool (*key)(MacWin *w, EventRecord *ev);
     void (*idle)(MacWin *w);
     void (*grow)(MacWin *w); /* after the window was resized */
+    void (*moved)(MacWin *w); /* after the window was dragged; may be NULL */
     void (*close)(MacWin *w);
     /* Edit menu: 1 undo, 3 cut, 4 copy, 5 paste, 6 clear, 7 select all.
      * Returns true when handled. Item 0 only asks whether a text field
@@ -99,11 +102,14 @@ void browserwin_close(BrowserWin *bw);
 void browserwin_flush_all(void);
 /* The AuBrowserHost callbacks. */
 void browserwin_host(AuBrowserHost *h);
-/* Debug menu: benchmark the scene in the front window. */
-void browserwin_benchmark(BrowserWin *bw);
-/* Debug menu: the active page's load and layout times, a timed scroll
- * repaint, and free memory. */
-void browserwin_page_timings(BrowserWin *bw);
+/* Develop > Tests > Paint Benchmark: times the test scene, a fill and the
+ * chrome in the window. */
+struct AuPaintBench;
+void browserwin_benchmark(BrowserWin *bw, struct AuPaintBench *out);
+/* Develop > Run Timing Test: times typing, scrolling and repainting of
+ * the active page; false when the window has no tab. */
+struct AuTimingTest;
+bool browserwin_timing_test(BrowserWin *bw, struct AuTimingTest *out);
 /* The window was dragged: its position is kept for the session. */
 void browserwin_moved(BrowserWin *bw);
 /* Edit > Find: asks for text and finds it in the active page. */
@@ -117,10 +123,17 @@ void listwin_cookies_changed(void);
 void mac_open_url(const char *url, bool new_tab);
 
 /* ---- devwin.c ----
- * The developer windows: WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK or
- * WIN_PERF. Each shows the active tab of the frontmost browser window.
- * Showing one that is open brings it forward and reads the page again. */
+ * The developer windows: WIN_SOURCE, WIN_CONSOLE, WIN_NETWORK, WIN_PERF,
+ * WIN_STATUS (System Status) or WIN_REPORT (Report a Problem). The first
+ * four show the active tab of the frontmost browser window. Showing one
+ * that is open brings it forward and reads its data again. */
 void devwin_show(WinKind kind);
+/* Develop > Run Timing Test: runs it on the front browser window and
+ * shows the Performance window, whose report then carries the result. */
+void devwin_run_timing(void);
+/* Develop > Tests > Paint Benchmark: runs it and shows the System Status
+ * window, whose report then carries the result. */
+void devwin_run_benchmark(void);
 /* Edit > Find, Find Again and Find Previous while a developer window is
  * in front (mw is that window). */
 void devwin_find(MacWin *mw);
@@ -150,6 +163,10 @@ char *mac_choose_file_url(void);
 /* File > Save Page As: asks for a file (StandardPutFile) and writes the
  * active page's source to it, type TEXT, creator AURA. */
 void mac_save_page(AuBrowserWindow *w);
+/* Asks for a file (StandardPutFile, with prompt and the suggested name)
+ * and writes text to it, type TEXT, creator AURA. False when cancelled
+ * or when writing failed (an alert says so). */
+bool mac_save_text(const char *prompt, const char *name, const char *text, size_t len);
 
 /* Files in the Aura preferences folder by name, written safely (a .tmp
  * file swapped in); for network.c's Cookies and HSTS. */
@@ -193,8 +210,9 @@ struct AuCookieJar *mac_net_cookie_jar(void); /* NULL before init */
 /* The rules in the jar were changed by the Cookies window: copied into
  * the cookies.sites preference. */
 void mac_net_rules_changed(void);
-/* View > Debug > Network Status: four lines of diagnostics. */
-void mac_net_status(char lines[4][256]);
+/* The network sections of the System Status report: entropy, Open
+ * Transport, the stores, the HTTP cache and content blocking. */
+void mac_net_status_text(AuBuf *out);
 /* The developer windows: the network part of the Performance report
  * (conn holds the text h points to), the open connections per host as
  * text, and whether the stack keeps request and response headers for
@@ -215,6 +233,12 @@ bool mac_download_reveal(const AuDownload *d);
 /* Whether a name or MIME type looks like an application (for the
  * "warn before downloading applications" preference). */
 bool mac_download_is_app(const char *name, const char *mime);
+
+/* ---- sysinfo_mac.c ---- */
+struct AuSysInfo;
+/* Fills out with the machine's facts (Gestalt), Aura's memory and the
+ * clock, for the System Status window and the bug report. */
+void mac_sysinfo(struct AuSysInfo *out);
 
 /* ---- aboutbox.c ---- */
 void mac_about_box(void);

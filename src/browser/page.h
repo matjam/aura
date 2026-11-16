@@ -501,6 +501,9 @@ bool au_page_has_source(const AuPage *p);
  * on (the default), from the next load. */
 #define AU_PAGE_CONSOLE_LINES 300
 size_t au_page_console_count(const AuPage *p);
+/* How many of those lines, counted from the newest, were written since
+ * the last navigation began: the lines of the page now shown. */
+size_t au_page_console_current(const AuPage *p);
 /* Evaluates src as script in the page's document and appends the
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */

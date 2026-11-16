@@ -95,6 +95,11 @@ typedef struct AuPrefs {
      * the default). */
     int window_width, window_height;
 
+    /* Where the developer windows were left: "name=x,y,w,h" items
+     * separated by spaces (name: source, console, network, performance,
+     * status, report), written by the shell. */
+    char *dev_windows;
+
     /* Text zoom remembered per site: "key=percent" items separated by
      * spaces (au_browser_site_zoom). */
     char *zoom_sites;

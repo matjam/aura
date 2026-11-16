@@ -114,8 +114,9 @@ launch at the earliest.
 Preferences > Blocking (`prefs_blocking.c`; the switch and the three
 fields are in `prefswin.c`) lists the catalogue with each list's size
 and date or what the manager is doing; its checkboxes and Update Now
-act at once. Develop > Network Status shows the totals, where the list
-memory came from and what the last compile cost.
+act at once. The Content blocking section of Develop > System Status
+shows the totals, where the list memory came from and what the last
+compile cost ([`developer-tools.md`](developer-tools.md)).
 
 ## Tests
 

@@ -9,7 +9,8 @@ cache, or before changing `src/core/heap.c`.
 The Mac OS 9 application runs in a 64 MB partition (12 MB at least,
 `aura.r`). Font data, the window's GWorld and the blocklists go to
 temporary memory when there is room; everything else comes from the
-application heap through `au_alloc`.
+application heap through `au_alloc`, which takes temporary memory when
+the heap is short ("Temporary memory for the heap" below).
 
 ## To see which code holds memory on the host
 
@@ -47,14 +48,43 @@ Run `aura-host js --stats FILE` or, for a page, `aura-host chrome --net
 atoms, strings, objects, properties, shapes, function records,
 bytecode, line tables). `--do js:aura:gc` runs the collector.
 
+- The accounting also prints "in use" (what the engine's blocks hold),
+  "free inside the engine's arenas" (the rest of the heap) and "source
+  text" (each text counted once).
+- **Per runtime, document and worker.** Run `aura-host chrome --tab URL
+  --do wait:3000 --do perf` (add `--net` for network pages), or choose
+  Develop > Performance in the application. The report has one line per
+  script runtime of the page with the bytes it holds now, the most it
+  has held (peak) and its limit; under it one line per document in that
+  runtime (the page and each frame); then one line per worker with its
+  own bytes, peak and limit. The code is `au_js_memory_summary`
+  (`src/js/runtime.c`), reached through `au_page_script_summary`.
+- **Read the per-document lines as approximate and the runtime line as
+  exact.** The per-document figures are what was allocated while that
+  document's context was entered: the allocator (`qa_malloc` in
+  `runtime.c`) writes the entered context's slot into each block's
+  header. QuickJS takes blocks of up to 512 bytes from 4 KB arenas of
+  its own, so a small block is charged to the document that made its
+  arena.
+- `au_js_stats` reports `memory_used` as the bytes the allocator gave
+  the engine, arenas' free blocks included, and `memory_peak`,
+  `worker_peak` and `worker_limit`. The kept-document estimate uses
+  `memory_used`. (It used QuickJS's count of used blocks, about 10%
+  less, and walked the heap to get it.)
+- The limits and the out-of-memory console line are in
+  [`javascript.md`](javascript.md), "Script memory limits".
+
 To see what parsed style sheets hold, run `css_bench --mem`
 ([`css.md`](css.md)).
 
 ## To measure the Mac application
 
-Choose Develop > Page Timings: it shows the free heap, the largest free
-block and free temporary memory. Develop > Network Status shows the
-bytes the HTTP cache holds in memory and on disk. Take the first
+Choose Develop > Performance or Develop > System Status: both show the
+free heap, the largest free block and free temporary memory, and
+Performance shows the temporary memory the heap has taken. The HTTP
+cache section of System Status shows the bytes the HTTP cache holds in
+memory and on disk ([`developer-tools.md`](developer-tools.md)). Take
+the first
 reading after a page has loaded once: the network stack, the root store
 and the blocklists start after launch.
 
@@ -92,6 +122,29 @@ Do not call `malloc` in engine code, and enable the pool before the
 first allocation in a new Mac OS 9 program. `tests/core/test_heap.c`
 covers it on the host.
 
+## Temporary memory for the heap
+
+On Mac OS 9, `heap_get` in `main.c` takes a platform block from
+temporary memory when the application heap is short: when the block
+would leave less than 2 MB free there (`HEAP_FLOOR`), or when `NewPtr`
+fails. This applies to every allocation, script included: the script
+heap is `au_try_alloc`, and QuickJS's 4 KB arenas and larger blocks are
+one platform block each (they are over the pooled allocator's 2 KB).
+
+- Temporary memory is taken 256 KB at a time (one locked handle);
+  blocks under 128 KB are cut from the chunk in order and the chunk is
+  returned when its last block is freed. Larger blocks get a handle
+  each.
+- Every platform block has an 8-byte header that says which kind it is.
+- Develop > Performance shows how much temporary memory the heap has
+  taken (the "taken by Aura" line under Temporary memory).
+- To exercise the path, lower Aura's partition in Get Info to 12 MB and
+  load a heavy page; the "taken by Aura" line then shows above 0.
+- Not verified: the path has been compiled for PowerPC and Aura ran in
+  the stock guest with the new block headers, but the guest's heap
+  never ran short (47 MB free), so no block came from temporary memory
+  there ([`known-gaps.md`](known-gaps.md#not-verified)).
+
 ## Budgets
 
 | What | Budget | Document |
@@ -102,8 +155,9 @@ covers it on the host.
 | The image cache | 8 MB per document by default; one image at most half of it | [`images.md`](images.md) |
 | A decoded image | 16 MB | [`images.md`](images.md) |
 | The HTTP memory cache | 8 MB by default; 1 MB resident with the disk cache on | [`networking.md`](networking.md) |
-| A page's script runtime | 32 MB | [`javascript.md`](javascript.md) |
-| A worker | 24 MB, 256 KB of stack | [`workers.md`](workers.md) |
+| A page's script runtime, shared by its frames | Automatic: half of the memory free, at least 8 MB, at most 96 MB (64 MB where the machine is unknown); or the `content.script_memory_kb` preference, 4 to 256 MB | [`javascript.md`](javascript.md), "Script memory limits" |
+| A worker | Automatic: a quarter of the memory free, at least 4 MB, at most 32 MB (32 MB where the machine is unknown); or the `content.worker_memory_kb` preference, 4 to 256 MB. 256 KB of stack | [`javascript.md`](javascript.md), "Script memory limits"; [`workers.md`](workers.md) |
+| Script, when the machine is short | refused when less than 3 MB would be left (`au_memory_low`) | [`javascript.md`](javascript.md), "Script memory limits" |
 | A document's canvases | 32 MB; one canvas 16 MB | [`canvas.md`](canvas.md) |
 | Images script holds for a canvas | 4 MB each, 12 MB together | [`canvas.md`](canvas.md) |
 
@@ -150,6 +204,74 @@ objects about 1 MB. Sharing the source text brought it to 8.7 MB; four
 seconds later the page's lazy modules have raised it to 11.3 MB, and
 the idle collection takes 0.6 MB off. The kept-document estimate for
 the article fell from 15.3 MB to 12.9 MB.
+
+### Where script memory goes
+
+Measured on 2026-11-15, 64-bit macOS host, RelWithDebInfo. What the
+runtime does to keep these figures down is in
+[`javascript.md`](javascript.md), "How script memory is kept down".
+
+One document that loads an 860 KB minified script (one outer function
+around about 3,600 functions) holds 6.6 MB after the script has run. A
+document's context with the prelude alone is 1.7 MB (1.4 MB in use), a
+worker's 0.6 MB. The script's share, by QuickJS's accounting:
+
+| Part | KB | Shared by the documents of a page |
+|---|---|---|
+| Source text kept for `Function.prototype.toString` | 840 | yes, one copy per runtime (was one per document) |
+| Bytecode | 517 | no (a function's bytecode belongs to one realm) |
+| Function records (variables, closure tables, constant pools) | 400 | no |
+| Line tables | 153 | no |
+| Atoms (names) | 257 | yes, atoms belong to the runtime |
+| Objects, properties, shapes, strings, arrays the script made | 960 | no |
+| Block headers (8 bytes each) and parts not itemised (closure cells) | 740 | no |
+| Free blocks inside the engine's arenas | 630 | no |
+
+Compiling costs more than it keeps. For this script the parser held
+4.0 MB beyond the result at its peak: a 544-byte record per function
+(1.9 MB), every function's first-pass bytecode (2.7 MB, kept until the
+whole script is parsed, plus 0.7 MB of unused buffer), and a copy of
+every function's text, nested text once per level (2.2 MB). Compiling
+took 116 to 144 ms; writing the compiled script as bytecode took 3 ms
+(1.2 MB) and reading it 3 to 4 ms with no working memory.
+
+Settled and peak script memory, in KB, for N documents that each load
+the script (`run/mem` pages: the page plus N-1 same-origin frames;
+"worker" adds a dedicated worker that loads it). "Before" is `main`
+with only the counters added; "after" has the compile-once cache, the
+shared source text and the other changes:
+
+| Case | Before: settled | Before: peak | After: settled | After: peak |
+|---|---|---|---|---|
+| N = 1 | 6,722 | 11,596 | 6,889 | 9,089 |
+| N = 2 | 12,450 | 17,324 | 11,629 | 11,912 |
+| N = 3 | 18,218 | 23,040 | 16,449 | 16,735 |
+| N = 3, the worker's runtime (script through `importScripts`) | 5,646 | 13,034 | 5,498 | 8,009 |
+| N = 3, the worker's runtime (script as the worker's own) | not measured | not measured | 5,250 | 5,533 |
+
+- The settled figure of N = 1 rose by 250 KB because the compiled
+  script is kept for 20 seconds.
+- The generated script of `tests/browser/test_script_memory.c` (830 KB,
+  6,000 functions) with two frames and a worker peaked at 20,625 KB in
+  the page's runtime and 10,581 KB in the worker with each context
+  compiling for itself, and at 15,468 KB and 4,535 KB after.
+
+**In the guest.** Stock base, 2026-11-15, the same generated script
+loaded by a page, two `srcdoc` frames and a worker
+(`run/guest/mem.html`, pushed with the application). The page, both
+frames and the worker computed the same value, so bytecode written by
+one context and read by another, and by a worker's runtime, works on
+PowerPC. The load took 1.35 s. Develop > Performance showed:
+
+| Runtime or document | Holds | Peak | Limit |
+|---|---|---|---|
+| The page's runtime | 10,766 KB | 12,585 KB | 98,304 KB (Automatic with 47 MB of heap and 404 MB of temporary memory free) |
+| The page's document | 4,555 KB | | |
+| Each frame | about 3,100 KB | 4,500 KB | |
+| The worker | 3,631 KB | 3,785 KB | 32,768 KB |
+
+With "Script memory per page" set to Custom, 48 MB, the next load
+showed a limit of 49,152 KB.
 
 ### Measured in the guest
 

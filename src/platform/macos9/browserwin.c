@@ -22,6 +22,8 @@
  * the field and repaints nothing else. */
 #include "mac.h"
 
+#include "browser/devtools.h"
+
 #include "browser/present.h"
 #include "page/page.h" /* AuDocViewStats, for Page Timings */
 #include "browser/scene.h"
@@ -1007,6 +1009,13 @@ static void context_menu(BrowserWin *b, Point pt, Point global)
     int i = mac_context_select(&m, global);
     AuCommand cmd = i >= 0 ? m.items[i].cmd : AU_CMD_NONE;
     SetPort((GrafPtr)b->base.win);
+    if (cmd == AU_CMD_VIEW_SOURCE) {
+        /* The Page Source window, as View > Page Source: the model's own
+         * command opens a view-source: tab, for shells without one. */
+        au_context_menu_free(&m);
+        devwin_show(WIN_SOURCE);
+        return;
+    }
     if (!au_bw_context_command(b->bw, &m, cmd)) {
         switch (cmd) {
         case AU_CMD_OPEN_LINK_WINDOW:
@@ -1549,18 +1558,6 @@ void browserwin_find(BrowserWin *b)
 
 /* ---- Debug > Page Timings ---- */
 
-static size_t kept_bytes(AuBrowser *b)
-{
-    size_t n = 0;
-    au_browser_kept_documents(b, &n);
-    return n;
-}
-
-static void ms10(char *out, size_t cap, uint32_t tenths)
-{
-    snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
-}
-
 typedef struct TimedScroll {
     int steps;
     uint32_t total_us, paint_us, blit_us, shift_us, areas;
@@ -1605,28 +1602,29 @@ static TimedScroll timed_scrolls(BrowserWin *b, AuTab *t, int step, int n)
     return r;
 }
 
-/* "12.3 = 1.0+3.5+6.7 (2)": per step, total = moving pixels + painting +
- * copying to the screen in milliseconds, and the areas painted per step. */
-static void timed_text(char *out, size_t cap, const TimedScroll *s)
+static AuTimedSteps timed_steps(const TimedScroll *s)
 {
-    char a[16], m[16], p[16], c[16];
-    uint32_t n = s->steps > 0 ? (uint32_t)s->steps : 1;
-    uint32_t paint = s->paint_us > s->shift_us ? s->paint_us - s->shift_us : 0;
-    ms10(a, sizeof a, s->total_us / 100 / n);
-    ms10(m, sizeof m, s->shift_us / 100 / n);
-    ms10(p, sizeof p, paint / 100 / n);
-    ms10(c, sizeof c, s->blit_us / 100 / n);
-    snprintf(out, cap, "%s = %s+%s+%s (%lu)", a, m, p, c, (unsigned long)((s->areas + n / 2) / n));
+    AuTimedSteps r;
+    r.steps = s->steps > 0 ? (uint32_t)s->steps : 0;
+    r.total_us = s->total_us;
+    r.move_us = s->shift_us;
+    r.paint_us = s->paint_us;
+    r.copy_us = s->blit_us;
+    r.areas = s->areas;
+    return r;
 }
 
-void browserwin_page_timings(BrowserWin *b)
+/* Develop > Run Timing Test: types in the page's focused text field,
+ * scrolls and repaints the active page as a user's keys and scrolls do,
+ * and fills out for the Performance report (au_dev_timing_report). */
+bool browserwin_timing_test(BrowserWin *b, AuTimingTest *out)
+
 {
     AuTab *t = au_bw_active_tab(b->bw);
+    memset(out, 0, sizeof *out);
     if (!t)
-        return;
+        return false;
     SetCursor(*GetCursor(watchCursor));
-    AuPageStats st;
-    au_page_stats(t->page, &st);
     /* Typing, when a text field of the page has the focus: eight
      * characters and eight Backspaces, each painted and shown as a typed
      * key is. The field is left as it was (script listeners saw the
@@ -1702,80 +1700,26 @@ void browserwin_page_timings(BrowserWin *b)
     }
     au_glyph_cache_stats(&g1);
     update_scroll(b);
-    long heap_free = FreeMem(), heap_block = MaxBlock();
-    long temp_free = (long)TempFreeMem();
-    AuPageStats st2;
-    au_page_stats(t->page, &st2);
-    char l0[320], l1[300], l2[512], l3[256], a[4][96];
-    if (st.restored) {
-        /* Back or Forward showed the kept document: the times are that showing's. */
-        snprintf(l0, sizeof l0,
-                 "%.60s: kept document shown in %lu ms (%lu ms hiding the page left, %lu ms building the layout "
-                 "again), painted after %lu ms. Kept documents: %lu, about %luK.",
-                 au_page_title(t->page), (unsigned long)st.load_ms, (unsigned long)st.hide_ms,
-                 (unsigned long)st.rebuild_ms, (unsigned long)st.first_paint_ms, (unsigned long)au_browser_kept_documents(g_browser, NULL),
-                 (unsigned long)(kept_bytes(g_browser) / 1024));
-    } else if (typed.steps) {
-        /* a long title would push the typing figures out of the 255
-         * characters an alert line holds */
-        timed_text(a[0], sizeof a[0], &typed);
-        snprintf(l0, sizeof l0,
-                 "%.40s: first paint %lu ms, loaded in %lu ms. Typing, ms per key (areas): %s; in 16 keys %lu "
-                 "restyles (%lu elements), %lu layouts.",
-                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms, a[0],
-                 (unsigned long)(ks1.style_passes - ks0.style_passes),
-                 (unsigned long)(ks1.styled_elements - ks0.styled_elements),
-                 (unsigned long)(ks1.layouts - ks0.layouts));
-    } else {
-        snprintf(l0, sizeof l0,
-                 "%.60s: first paint %lu ms, loaded in %lu ms (emulated timings vary). Source %luK held in %luK, "
-                 "compressed in %lu ms.",
-                 au_page_title(t->page), (unsigned long)st.first_paint_ms, (unsigned long)st.load_ms,
-                 (unsigned long)(st2.source_bytes / 1024), (unsigned long)(st2.source_held / 1024),
-                 (unsigned long)st2.source_pack_ms);
-    }
-    snprintf(l1, sizeof l1,
-             "Layout: last pass %lu ms, %lu passes %lu ms in all; last paint %lu ms; %lu boxes, %lu bytes, %lu "
-             "resources. Images: %luK of %luK, %lu decodes.",
-             (unsigned long)st.layout_ms, (unsigned long)st.layouts, (unsigned long)st.layout_total_ms,
-             (unsigned long)st.paint_ms, (unsigned long)st.boxes, (unsigned long)st.bytes,
-             (unsigned long)st.resources, (unsigned long)st2.image_kb, (unsigned long)st2.image_budget_kb,
-             (unsigned long)st2.image_decodes);
-    if (small.steps) {
-        timed_text(a[0], sizeof a[0], &small);
-        timed_text(a[1], sizeof a[1], &again);
-        timed_text(a[2], sizeof a[2], &big);
-        timed_text(a[3], sizeof a[3], &full);
-        snprintf(l2, sizeof l2,
-                 "Scrolling, ms per step (total = moving + painting + copying, areas): 32 px %s, again %s; "
-                 "page down %s; whole page %s.",
-                 a[0], a[1], a[2], a[3]);
-    } else {
-        timed_text(a[3], sizeof a[3], &full);
-        snprintf(l2, sizeof l2, "Scrolling: the page does not scroll; whole page %s ms.", a[3]);
-    }
-    AuGlyphCacheStats gs;
-    au_glyph_cache_stats(&gs);
-    snprintf(l3, sizeof l3,
-             "Memory: heap %ldK free (largest block %ldK), temporary memory %ldK free. Glyph cache: %luK, "
-             "%lu glyphs; in these scrolls %lu hits, %lu misses, %lu evictions.",
-             heap_free / 1024, heap_block / 1024, temp_free / 1024, (unsigned long)(gs.bytes / 1024),
-             (unsigned long)gs.entries, (unsigned long)(small.hits + again.hits + big.hits + g1.hits - g0.hits),
-             (unsigned long)(small.misses + again.misses + big.misses + g1.misses - g0.misses),
-             (unsigned long)(small.evictions + again.evictions + big.evictions + g1.evictions - g0.evictions));
-    Str255 p[4];
-    mac_pstr(l0, p[0]);
-    mac_pstr(l1, p[1]);
-    mac_pstr(l2, p[2]);
-    mac_pstr(l3, p[3]);
-    ParamText(p[0], p[1], p[2], p[3]);
+    out->ran = true;
+    out->at_ms = au_platform_time_ms();
+    out->typing = timed_steps(&typed);
+    out->key_restyles = ks1.style_passes - ks0.style_passes;
+    out->key_elements = ks1.styled_elements - ks0.styled_elements;
+    out->key_layouts = ks1.layouts - ks0.layouts;
+    out->small = timed_steps(&small);
+    out->again = timed_steps(&again);
+    out->page = timed_steps(&big);
+    out->full = timed_steps(&full);
+    out->glyph_hits = (uint32_t)(small.hits + again.hits + big.hits + g1.hits - g0.hits);
+    out->glyph_misses = (uint32_t)(small.misses + again.misses + big.misses + g1.misses - g0.misses);
+    out->glyph_evictions = (uint32_t)(small.evictions + again.evictions + big.evictions + g1.evictions - g0.evictions);
     InitCursor();
-    NoteAlert(131, NULL);
+    return true;
 }
 
-/* ---- Debug > Benchmark ---- */
+/* ---- Develop > Tests > Paint Benchmark ---- */
 
-void browserwin_benchmark(BrowserWin *b)
+void browserwin_benchmark(BrowserWin *b, AuPaintBench *out)
 {
     SetCursor(*GetCursor(watchCursor));
     AuSurface *s = b->surf;
@@ -1803,27 +1747,14 @@ void browserwin_benchmark(BrowserWin *b)
         au_bw_paint(b->bw, c, (AuIRect){0, 0, l->width, l->page.y0});
     uint32_t chrome = (au_platform_time_ms() - t0) * 10 / 10;
     au_canvas_free(c);
-    char l0[96], l1[96], l2[96], l3[96];
-    snprintf(l0, sizeof l0, "Scene %dx%d: %lu.%lu ms (cached glyphs), %lu.%lu ms (cold)", w, h,
-             (unsigned long)(warm / 10), (unsigned long)(warm % 10), (unsigned long)(cold / 10),
-             (unsigned long)(cold % 10));
-    snprintf(l1, sizeof l1, "Alpha fill %dx%d: %lu.%lu ms", w, h, (unsigned long)(fill / 10),
-             (unsigned long)(fill % 10));
-    snprintf(l2, sizeof l2, "Chrome (toolbar and tabs): %lu.%lu ms", (unsigned long)(chrome / 10),
-             (unsigned long)(chrome % 10));
-    AuFontSetStats fst;
-    au_fontset_stats(g_fonts, &fst);
-    snprintf(l3, sizeof l3, "Fonts: %u faces in %lu ms (%d bundled, %lu ms); %u loaded, %lu KB",
-             (unsigned)au_fontset_count(g_fonts), (unsigned long)mac_fonts_ms(), mac_fonts_bundled(),
-             (unsigned long)mac_fonts_bundled_ms(), (unsigned)fst.loaded, (unsigned long)(fst.loaded_bytes / 1024));
-    Str255 p[4];
-    mac_pstr(l0, p[0]);
-    mac_pstr(l1, p[1]);
-    mac_pstr(l2, p[2]);
-    mac_pstr(l3, p[3]);
-    ParamText(p[0], p[1], p[2], p[3]);
+    out->ran = true;
+    out->width = w;
+    out->height = h;
+    out->scene_warm = warm;
+    out->scene_cold = cold;
+    out->fill = fill;
+    out->chrome = chrome;
     InitCursor();
     invalidate_all(b);
     flush(b);
-    NoteAlert(129, NULL);
 }

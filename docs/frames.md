@@ -63,6 +63,9 @@ A frame's document is an `AU_RES_FRAME` request of the owner view
   nothing.
 - `srcdoc`, `about:blank` and `data:` URLs need no network;
   `page_doc.c` decodes `data:` URLs itself, for scripts too.
+- A `srcdoc` or `about:blank` frame resolves URLs against its parent's
+  base URL (`au_docview_begin`), so a relative script or image in a
+  `srcdoc` document loads. (It used `about:srcdoc`, and they did not.)
 - In `page_doc.c` the requesting document is the referrer and decides
   mixed content (an http frame in an https page is blocked by the net
   loader), and the tab's URL is the top-level site for cookies and the
@@ -148,7 +151,37 @@ named frames (own accessor properties of the window, set by
 `P.framesChanged`).
 
 - The memory limit, the stack limit and the time budget are the
-  runtime's.
+  runtime's ([`javascript.md`](javascript.md), "Script memory limits").
+  A large script that several documents of the page load is compiled
+  once ("How script memory is kept down" there).
+- **A frame's window exists as soon as its element does.** A script
+  that follows an `<iframe>` in the same parser chunk finds
+  `frames.length`, `window[0]`, `window["name"]` and `contentWindow`:
+  `run_classic` in `script.c` brings the frame list up to date before a
+  parser script runs. The parser's insertions do not mark the list, so
+  the check walks the document, and is made only while the parser runs.
+- **Indexed and named frames are set before the frames' documents
+  start** (`au_frames_sync`), so the script of a `srcdoc` frame finds
+  an earlier sibling through `parent.frames[name]` while it loads.
+- **The initial document.** A frame whose response has not arrived gets
+  an `about:blank` document and a script context when script first asks
+  for its window (`au_frames_view_of`); no context is made for a frame
+  nobody asks about.
+- **A new window object per document (differs from the standard).**
+  When the frame's real document begins, the frame gets a new window
+  object. The standard keeps one WindowProxy per frame for its whole
+  life, and reuses the Window of the initial `about:blank` document for
+  a first same-origin document. In Aura, `frames[i]`, `window["name"]`
+  and `contentWindow` read again give the new window, and a reference
+  taken earlier is not equal to it. Through the old reference,
+  `document` is still the blank document and properties script put on
+  the window are still there; `location` answers for the top-level
+  document; a message posted to it does not reach the new window.
+  Keeping the identity needs a context that can take a new document
+  (the prelude captures the document when it starts), which is a large
+  change.
+- **`document.cookie`** in a frame: see
+  [`networking.md`](networking.md), "Cookies and `document.cookie`".
 - A node's wrapper takes its prototypes from the realm of the node's
   document.
 - **Another origin.** For a document of another origin `wrapWindow`
@@ -209,15 +242,22 @@ script of the page, is on the stack. Nothing is freed then.
   (referrer, blocklist, X-Frame-Options from a real response, typing
   and Edit commands in a frame, Back to a kept page with frames).
 
-Run both under the sanitizers after a change to lifetimes.
+- `tests/js/pages/frame_initial.html`: a script right after two frames
+  sees their windows by index, by name and through `contentWindow`; a
+  frame finds its earlier sibling through its parent while it loads; an
+  iframe made by script has a window before its document loads.
+
+Run the first two under the sanitizers after a change to lifetimes.
 
 ## Cost, measured on the host
 
 Release build: a frame without script adds about 6 KB to the estimate
 and 0.15 ms; a frame with script adds a context with its own copy of
 the prelude, 1.4 MB and 16 ms (57 ms each with 20 of them, as
-collections of the growing heap add up). The runtime's 32 MB limit
-bounds the total: about 20 scripted frames.
+collections of the growing heap add up). The runtime's memory limit
+bounds the total ([`javascript.md`](javascript.md), "Script memory
+limits"): at 1.4 MB each, about 5 scripted frames fit the 8 MB floor of
+the Automatic limit and about 45 fit the 64 MB the host tools get.
 
 ## Acid3
 

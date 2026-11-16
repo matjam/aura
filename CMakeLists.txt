@@ -36,6 +36,16 @@ if(CMAKE_C_FLAGS MATCHES "-fsanitize")
     target_compile_options(aura_engine PRIVATE -include ${CMAKE_SOURCE_DIR}/src/core/nullcheck.h)
 endif()
 target_include_directories(aura_engine PUBLIC src)
+# The build's identity (the commit and its date) for bug reports:
+# tools/buildinfo.cmake writes gen/au_build.h on every build, and only
+# src/browser/sysinfo.c includes it.
+add_custom_target(aura_buildinfo
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/gen/au_build.h
+            -P ${CMAKE_SOURCE_DIR}/tools/buildinfo.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/gen/au_build.h
+    VERBATIM)
+add_dependencies(aura_engine aura_buildinfo)
+target_include_directories(aura_engine PRIVATE ${CMAKE_BINARY_DIR}/gen)
 include(third_party/quickjs.cmake)
 include(third_party/mbedtls.cmake)
 
