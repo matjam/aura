@@ -8,6 +8,12 @@ add_executable(test_commands test_commands.c)
 target_link_libraries(test_commands aura_engine m)
 add_test(NAME browser_commands COMMAND test_commands)
 
+# Native chrome mode: the page-only surface, the actions and accessors a
+# port's own widgets use, and the AU_CHANGED_* notices.
+add_executable(test_native_chrome test_native_chrome.c)
+target_link_libraries(test_native_chrome aura_engine m)
+add_test(NAME browser_native_chrome COMMAND test_native_chrome)
+
 add_executable(test_page_doc test_page_doc.c)
 target_link_libraries(test_page_doc aura_engine m)
 target_compile_definitions(test_page_doc PRIVATE AURA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
