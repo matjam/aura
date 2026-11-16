@@ -358,8 +358,8 @@ What the numbers mean:
 
 The steps are ordered so that each leaves a working tree.
 
-1. **Decide and import.** Record the decision (Conventions in
-   `CLAUDE.md` names BearSSL; this replaces it). Import Mbed TLS 4.1.x
+1. **Decide and import.** Record the decision (the conventions,
+   now `docs/conventions.md`, named BearSSL; this replaces it). Import Mbed TLS 4.1.x
    and its TF-PSA-Crypto under `third_party/mbedtls`: only `library/`,
    `include/`, and from `tf-psa-crypto` the `core`, `extras`,
    `platform`, `utilities`, `include` and `drivers/builtin` folders,
@@ -601,5 +601,5 @@ Measured against this study's estimates: the application grew by 245 KB
 (6%), not 180 KB, because the full configuration (the library's own
 random generator, tickets, session handling) is larger than the trial's;
 memory per connection is about the same as before. The current state of
-the code is described in `CLAUDE.md` (Networking) and
+the code is described in [`tls.md`](tls.md) and
 `third_party/README.md`, not here.

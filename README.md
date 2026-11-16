@@ -89,7 +89,8 @@ application, run:
 
 The Mac OS 9 build needs Retro68's PowerPC toolchain. To install it in
 `~/.local/opt/retro68`, run `toolchain/build.sh`. To use one you already
-have, set `RETRO68` to its folder.
+have, set `RETRO68` to its folder. `docs/building.md` has the details,
+and `CLAUDE.md` names the document for each part of the code.
 
 The build leaves the application in `build/ppc/dist/Aura`, beside a
 `Fonts` folder, a `Licences` folder and `aura-roots`, the certificate
