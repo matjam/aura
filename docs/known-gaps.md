@@ -93,10 +93,25 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   order, `masonry`. An item's min-content and max-content heights are
   both its height at its used width.
 - `frameset` `rows` and `cols` sizes are not read.
-- Shadow trees are not rendered: an element with a shadow root shows
-  its light children. GitHub's `<relative-time>` elements therefore show
-  the server's date ("Nov 16, 2026") instead of the text their shadow
-  root holds ("20 minutes ago"); seen on 2026-11-15 while adding Intl.
+- Shadow trees ([`layout.md`](layout.md), "Shadow trees";
+  [`css.md`](css.md), "Shadow trees and scoped styles"):
+  - Tab order walks the document in shadow-including tree order; the
+    standard orders each shadow tree as a scope of its own, so a
+    positive `tabindex` inside a shadow tree is ordered with the whole
+    document's.
+  - A click on a host whose shadow root delegates focus focuses the
+    host's nearest focusable ancestor, not the first focusable element
+    of the shadow tree (script's `focus()` does delegate).
+  - A change to a host's children, a slot's `name` or a node's `slot`
+    restyles the host's whole flat subtree and rebuilds its boxes, not
+    only the slots whose assigned nodes changed.
+  - `adoptedStyleSheets` rejects a sheet constructed in another frame
+    with a TypeError; the standard asks for NotAllowedError.
+  - `getHTML()`, `serializable` roots and `ElementInternals` are not
+    done.
+  - A slot of a declarative shadow root that takes nodes while the
+    page parses fires `slotchange` once, after the first mutation
+    script makes; browsers fire it as the parser assigns them.
 - Acid2 still differs in four rows of the eyes and along the nose's
   border joins ([`layout.md`](layout.md), "Acid2").
 - The top layer ([`layout.md`](layout.md), "The top layer") holds modal
@@ -200,8 +215,7 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - **Selection:** script's selection is not joined to the selection the
   user makes with the mouse, and it is not painted
   ([`javascript.md`](javascript.md), "Selection").
-- **CSSOM:** constructed sheets and `adoptedStyleSheets`, the sheets of
-  `@import` rules, rules nested in a style rule, `@font-face` rules
+- **CSSOM:** the sheets of `@import` rules, rules nested in a style rule, `@font-face` rules
   added through the CSSOM (they are not given to the web font loader).
   `cssRules` is not live.
 - **crypto.subtle** ([`javascript.md`](javascript.md), "crypto.subtle"):

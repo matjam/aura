@@ -1513,11 +1513,12 @@ typedef struct {
 static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const AuElement *el, const CssMatchCtx *mc,
                          uint8_t want, uint16_t *pseudo_bits, const Pass *ps)
 {
+    const uint16_t *walked = r->scoping ? r->walked_scope : NULL; /* NULL: every entry counts */
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ei = r->sorted[start + i];
         const RuleEntry *e = &r->entries[ei];
-        if (r->scoping) {
-            uint16_t sc = r->walked_scope[e->sheet];
+        if (walked) {
+            uint16_t sc = walked[e->sheet];
             if (sc != ps->scope && !(sc == SCOPE_ANY && ps->any_too))
                 continue;
         }

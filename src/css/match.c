@@ -823,7 +823,9 @@ static bool part_names_ok(const AuSelComp *c, const CssMatchCtx *mc)
     return true;
 }
 
-static bool match_shadow_pseudo(const AuSelComp *c, const AuElement *el, const CssMatchCtx *mc)
+/* Out of line: pages without shadow trees never get here, and inlined it
+ * made match_pseudo too large to inline into the hot matching loop. */
+static AU_NOINLINE bool match_shadow_pseudo(const AuSelComp *c, const AuElement *el, const CssMatchCtx *mc)
 {
     switch (c->op) {
     case PC_HOST: {
@@ -853,6 +855,24 @@ static bool match_shadow_pseudo(const AuSelComp *c, const AuElement *el, const C
     default:
         return part_names_ok(c, mc);
     }
+}
+
+/* A pseudo-class after ::part() applies to the part element. It is
+ * matched as a selector of that one component (match_from), so that
+ * match_simple and match_pseudo keep their single callers and stay
+ * inlined in the hot path. */
+static AU_NOINLINE bool match_on_part(const AuSelComp *c, const CssMatchCtx *mc)
+{
+    if (!mc->part_el)
+        return false;
+    CssMatchCtx sub = plain_ctx(mc);
+    AuSelComp plain = *c;
+    plain.flags &= (uint8_t)~SCF_ON_PART;
+    AuSelector one;
+    memset(&one, 0, sizeof one);
+    one.comp = &plain;
+    one.ncomp = 1;
+    return match_from(&one, 0, mc->part_el, &sub, NULL);
 }
 
 static bool match_pseudo(const AuSelComp *c, const AuElement *el, const CssMatchCtx *mc)
@@ -1045,12 +1065,8 @@ static bool match_simple(const AuSelComp *c, const AuElement *el, const CssMatch
     case SC_ATTR:
         return match_attr(c, el);
     case SC_PSEUDO:
-        if (c->flags & SCF_ON_PART) {
-            if (!mc->part_el)
-                return false;
-            CssMatchCtx sub = plain_ctx(mc);
-            return match_pseudo(c, mc->part_el, &sub);
-        }
+        if (c->flags & SCF_ON_PART)
+            return match_on_part(c, mc);
         return match_pseudo(c, el, mc);
     case SC_NESTING:
         if (!c->u.list)
@@ -1108,6 +1124,19 @@ static bool host_comp_ok(const AuSelComp *c)
            c->op == PC_PART;
 }
 
+/* The compound at s->comp[k] may match the featureless host: all its
+ * components are allowed there and one is a pseudo-class. */
+static AU_NOINLINE bool host_compound_ok(const AuSelector *s, uint32_t k)
+{
+    bool hosted = false;
+    for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++) {
+        if (!host_comp_ok(&s->comp[k]))
+            return false;
+        hosted |= s->comp[k].type == SC_PSEUDO;
+    }
+    return hosted;
+}
+
 /* The element a descendant or child combinator steps to: the parent,
  * or, from the top of the shadow tree whose rules are matched, its host.
  * Nothing is above the host in that tree. */
@@ -1127,19 +1156,12 @@ static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *
                               const AuElement *anchor)
 {
     uint32_t k = i;
-    bool featureless = mc->host && el == mc->host;
-    bool hosted = false; /* the featureless host needs a :host-like component (a lone * fails) */
-    for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++) {
-        if (featureless) {
-            if (!host_comp_ok(&s->comp[k]))
-                return M_FAIL;
-            hosted |= s->comp[k].type == SC_PSEUDO;
-        }
+    /* the featureless host needs a :host-like component (a lone * fails) */
+    if (mc->host && el == mc->host && !host_compound_ok(s, k))
+        return M_FAIL;
+    for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++)
         if (!match_simple(&s->comp[k], el, mc))
             return M_FAIL;
-    }
-    if (featureless && !hosted)
-        return M_FAIL;
     if (k >= s->ncomp) {
         if (anchor)
             return anchor_rel(el, anchor, s->rel_comb ? s->rel_comb : COMB_DESCENDANT) ? M_MATCH : M_FAIL;

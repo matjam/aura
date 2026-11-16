@@ -610,6 +610,53 @@ join them, convert each boundary point with
   rules of a cross-origin sheet throw SecurityError.
 - A cross-origin sheet's rules throw SecurityError.
 
+**Constructed sheets.** `new CSSStyleSheet(options)` takes an id from a
+counter in the prelude and makes the sheet in the document view
+(`N.sheetConstruct`, `au_dv_sheet_construct`, `AuDocView.csheets`).
+`replace`, `replaceSync`, `insertRule`, `deleteRule`, `media` and
+`disabled` send the new text or flags the same way; `@import` rules are
+dropped. A `FinalizationRegistry` tells the view when script lets go of
+a sheet (`au_dv_sheet_destroy`); a sheet that a tree still adopts stays
+until the document goes.
+
+**`adoptedStyleSheets`** on a document or a shadow root is an array
+behind a `Proxy`: each write sends the list of ids
+(`N.sheetsAdopt`, `au_dv_sheets_adopt`). The view adds adopted sheets
+after the tree's own sheets and restyles only that tree when the list
+or an adopted sheet changes (`sheets_changed`,
+[`css.md`](css.md), "Shadow trees and scoped styles").
+
+## Shadow DOM
+
+`natives.c` (attachShadow, slots), `prelude.js` (event paths),
+`prelude_obs.js` (`slotchange`), `prelude_dom.js` (focus),
+`src/dom/shadow.c` (assignment and the flat tree).
+
+- **Declarative shadow roots.** The HTML parser makes them when
+  `AuHtmlOptions.declarative_shadow` is set: the document view sets it
+  for pages, `setHTMLUnsafe` and `Document.parseHTMLUnsafe` for their
+  fragments and documents; `innerHTML` and `DOMParser` do not. The
+  template goes on the stack of open elements only and its contents are
+  the shadow root (`declarative_template` in `treebuilder.c`).
+- **Slots.** Named assignment is worked out on demand
+  (`au_node_assigned_slot`). `slot.assign()` stores node and slot pairs
+  in the document (`AuDocument.manual`, no references; a node in a pair
+  carries `AU_NODEF_MANUAL`, and freeing it drops its pairs).
+  `assignedNodes({flatten: true})` replaces nested slots with what they
+  offer, with an explicit stack.
+- **Events** are retargeted across shadow boundaries; `composed`
+  decides whether an event leaves its shadow root, and `composedPath()`
+  hides nodes of closed trees from listeners outside them.
+- **Focus.** `focus()` on a host whose shadow root has `delegatesFocus`
+  focuses the first focusable element of its shadow tree.
+  `document.activeElement` and `shadowRoot.activeElement` are the
+  focused element retargeted to that tree. A focused element inside a
+  shadow tree gives its hosts `:focus` and `:focus-within`.
+- **Hit testing.** `document.elementFromPoint` asks layout
+  (`AuJsHooks.hit_test`, `h_hit_test` in `script.c`) and retargets the
+  element to the document; a shadow root's `elementFromPoint` answers
+  for its own tree.
+
 ## getComputedStyle
 
 `getComputedStyle` returns the used width and height in pixels
