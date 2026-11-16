@@ -59,14 +59,67 @@ extern const char *au_mem_site_;
 #define AU_MEM_HERE_ __FILE__ ":" AU_MEM_STR_(__LINE__)
 size_t au_mem_live(void);
 size_t au_mem_peak(void);
+/* The site that allocated a block, given the block as au_heap_alloc
+ * returned it (the counter's header comes first). */
+const char *au_mem_site_of(const void *raw);
 int au_mem_sites(AuMemSite *out, int max);
-#define au_alloc(n) (au_mem_site_ = AU_MEM_HERE_, au_alloc(n))
-#define au_calloc(n) (au_mem_site_ = AU_MEM_HERE_, au_calloc(n))
-#define au_realloc(p, n) (au_mem_site_ = AU_MEM_HERE_, au_realloc(p, n))
-#define au_try_alloc(n) (au_mem_site_ = AU_MEM_HERE_, au_try_alloc(n))
-#define au_try_realloc(p, n) (au_mem_site_ = AU_MEM_HERE_, au_try_realloc(p, n))
-#define au_strndup(s, n) (au_mem_site_ = AU_MEM_HERE_, au_strndup(s, n))
 #endif
+
+/* ---- Zones ----
+ * Every block belongs to one of two zones: the page zone, for what a page
+ * makes and frees with it (documents, styles, layout, script heaps), and
+ * the long-lived zone, for what outlives pages (the network stack and the
+ * HTTP cache, TLS connections, fonts, atoms, the browser's lists and the
+ * platform shell). The pooled allocator never mixes the two in a slab and
+ * the Mac OS 9 shell keeps the long-lived zone in a region of its own, so
+ * a closed page leaves its memory in one piece (docs/memory.md, "Zones").
+ *
+ * A source file's zone is AU_HEAP_ZONE, which the build defines per file
+ * (CMakeLists.txt, AURA_LONG_LIVED_SOURCES; the page zone otherwise). Each
+ * allocating call below sets the zone to it first (au_heap_zone_set),
+ * and the zone stays until the next one sets it. Files compiled
+ * with AU_HEAP_ZONE_INHERIT (src/core, src/codec, src/url: helpers that allocate
+ * for their callers) leave it alone, so their blocks take the zone of the
+ * caller's last allocating call. au_heap_zone_set sets it for code that
+ * must choose otherwise (the atom table), and returns the previous one.
+ *
+ * - To allocate one long-lived block in a page-zone file (a cache kept in
+ *   a static variable), use au_alloc_long, au_calloc_long or
+ *   au_realloc_long.
+ * - To make everything a call allocates long-lived, whatever the files it
+ *   reaches (decoding a favicon the browser keeps), hold the zone:
+ *   int h = au_heap_zone_hold(AU_HEAP_ZONE_LONG); ...;
+ *   au_heap_zone_unhold(h). */
+#define AU_HEAP_ZONE_PAGE 0u
+#define AU_HEAP_ZONE_LONG 1u
+unsigned au_heap_zone_set(unsigned zone);
+int au_heap_zone_hold(unsigned zone);
+void au_heap_zone_unhold(int prev);
+#ifdef AU_HEAP_ZONE_INHERIT
+#define AU_ZONE_PRE_ ((void)0)
+#else
+#ifndef AU_HEAP_ZONE
+#define AU_HEAP_ZONE AU_HEAP_ZONE_PAGE
+#endif
+/* A call, not an assignment: two allocations in one expression then set
+ * it in some order rather than without a sequence point. */
+#define AU_ZONE_PRE_ ((void)au_heap_zone_set(AU_HEAP_ZONE))
+#endif
+#ifdef AU_MEM_TRACK
+#define AU_ALLOC_PRE_ (au_mem_site_ = AU_MEM_HERE_, AU_ZONE_PRE_)
+#else
+#define AU_ALLOC_PRE_ AU_ZONE_PRE_
+#endif
+#define au_alloc(n) (AU_ALLOC_PRE_, au_alloc(n))
+#define au_calloc(n) (AU_ALLOC_PRE_, au_calloc(n))
+#define au_realloc(p, n) (AU_ALLOC_PRE_, au_realloc(p, n))
+#define au_try_alloc(n) (AU_ALLOC_PRE_, au_try_alloc(n))
+#define au_try_realloc(p, n) (AU_ALLOC_PRE_, au_try_realloc(p, n))
+#define au_strndup(s, n) (AU_ALLOC_PRE_, au_strndup(s, n))
+#define AU_LONG_PRE_ (AU_ALLOC_PRE_, (void)au_heap_zone_set(AU_HEAP_ZONE_LONG))
+#define au_alloc_long(n) (AU_LONG_PRE_, (au_alloc)(n))
+#define au_calloc_long(n) (AU_LONG_PRE_, (au_calloc)(n))
+#define au_realloc_long(p, n) (AU_LONG_PRE_, (au_realloc)(p, n))
 
 /* ---- The pooled allocator (heap.c) ----
  * To make au_alloc and the functions above take blocks of up to 16 KB
@@ -80,7 +133,12 @@ int au_mem_sites(AuMemSite *out, int max);
  * au_heap_trim returns the empty slabs the pool keeps for reuse to the
  * platform and says how many bytes went; au_alloc and au_try_alloc call it
  * when the platform has no memory, before the release handler. */
-void au_heap_enable(void *(*get)(size_t n), void (*release)(void *p));
+/* get's how: the zone (AU_HEAP_ZONE_PAGE or AU_HEAP_ZONE_LONG, the low
+ * bits), and AU_HEAP_GET_SLAB when the block will be a slab, else it is
+ * one large block. */
+#define AU_HEAP_GET_SLAB 0x10u
+#define AU_HEAP_ZONE_MASK 0x0Fu
+void au_heap_enable(void *(*get)(size_t n, unsigned how), void (*release)(void *p));
 bool au_heap_enabled(void);
 void *au_heap_alloc(size_t n); /* NULL when the platform has no memory */
 void *au_heap_realloc(void *p, size_t n);
@@ -92,8 +150,15 @@ typedef struct AuHeapStats {
     size_t system_bytes;        /* bytes held from the platform */
     size_t mid_slabs, mid_blocks; /* of those: slabs of blocks over 2 KB, and their blocks in use */
     size_t empty_bytes;         /* bytes of empty slabs kept for reuse (au_heap_trim returns them) */
+    size_t long_bytes;          /* of system_bytes: the long-lived zone's */
 } AuHeapStats;
+/* The zone of a block from au_heap_alloc. */
+unsigned au_heap_zone_of(const void *p);
 void au_heap_stats(AuHeapStats *s);
+/* For a map of the platform's blocks: calls fn for each block in use in
+ * pb, a block that get returned with the given how (a slab's blocks, or
+ * the one large block). */
+void au_heap_walk_platform_block(void *pb, unsigned how, void (*fn)(void *ctx, void *block, size_t n), void *ctx);
 
 /* ---- Growable byte buffer ---- */
 typedef struct AuBuf {
@@ -119,15 +184,13 @@ char *au_buf_cstr(AuBuf *b);
 /* Returns the NUL-terminated contents and resets the buffer; the caller
  * frees the result with au_free. */
 char *au_buf_take(AuBuf *b, size_t *len);
-#ifdef AU_MEM_TRACK
-#define au_buf_reserve(b, n) (au_mem_site_ = AU_MEM_HERE_, au_buf_reserve(b, n))
-#define au_buf_append(b, p, n) (au_mem_site_ = AU_MEM_HERE_, au_buf_append(b, p, n))
-#define au_buf_puts(b, s) (au_mem_site_ = AU_MEM_HERE_, au_buf_puts(b, s))
-#define au_buf_putc(b, c) (au_mem_site_ = AU_MEM_HERE_, au_buf_putc(b, c))
-#define au_buf_put_utf8(b, c) (au_mem_site_ = AU_MEM_HERE_, au_buf_put_utf8(b, c))
-#define au_buf_printf(...) (au_mem_site_ = AU_MEM_HERE_, au_buf_printf(__VA_ARGS__))
-#define au_buf_cstr(b) (au_mem_site_ = AU_MEM_HERE_, au_buf_cstr(b))
-#endif
+#define au_buf_reserve(b, n) (AU_ALLOC_PRE_, au_buf_reserve(b, n))
+#define au_buf_append(b, p, n) (AU_ALLOC_PRE_, au_buf_append(b, p, n))
+#define au_buf_puts(b, s) (AU_ALLOC_PRE_, au_buf_puts(b, s))
+#define au_buf_putc(b, c) (AU_ALLOC_PRE_, au_buf_putc(b, c))
+#define au_buf_put_utf8(b, c) (AU_ALLOC_PRE_, au_buf_put_utf8(b, c))
+#define au_buf_printf(...) (AU_ALLOC_PRE_, au_buf_printf(__VA_ARGS__))
+#define au_buf_cstr(b) (AU_ALLOC_PRE_, au_buf_cstr(b))
 
 /* ---- UTF-8 ----
  * au_utf8_decode reads one code point from s (n bytes available, n > 0),

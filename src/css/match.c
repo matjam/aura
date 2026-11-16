@@ -41,7 +41,8 @@ static void grow_u32(uint32_t **arr, uint32_t *n, uint32_t need)
     uint32_t nn = *n ? *n : 1024;
     while (nn <= need)
         nn *= 2;
-    *arr = au_realloc(*arr, nn * sizeof(uint32_t));
+    /* These caches outlive the page that grew them (docs/memory.md, "Zones"). */
+    *arr = au_realloc_long(*arr, nn * sizeof(uint32_t));
     memset(*arr + *n, 0, (nn - *n) * sizeof(uint32_t));
     *n = nn;
 }

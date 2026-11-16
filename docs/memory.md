@@ -41,6 +41,45 @@ first use, into temporary memory. The host's PNG writer takes 11 MB at
 the end and the tool's own window surface 3 MB (1024 x 768); the Mac's
 GWorld is in temporary memory.
 
+## To see where blocks sit in the Mac's heap
+
+Run `aura-host` with `AURA_HEAP=mac` and add `--do heapmap:FILE`:
+
+```bash
+AURA_HEAP=mac:200 build/mem/src/platform/host/aura-host chrome --bundled-only --net \
+  --tab about:blank --do newtab:URL --do wait:8000 --do heapmap:run/loaded.txt \
+  --do closetab --do wait:3000 --do heapmap:run/closed.txt
+```
+
+- The pool's platform blocks then come from a region of 200 MB (the
+  number after `mac:`, 160 by default) placed as the Mac's `NewPtr`
+  places them: the lowest free space that fits. The long-lived zone
+  goes outside the region, as the Mac application keeps it in temporary
+  memory ("Zones" below). `mac:200:top` puts it at the top of the
+  region instead, and `mac:200:flat` low with the page zone, as before
+  the zones.
+- `heapmap` gives the empty slabs back (as the Mac does when idle) and
+  prints the free space, the largest free block, the blocks held, how
+  far the page zone's blocks have reached, and the bytes held outside
+  the region.
+- FILE gets the map: one line per platform block in address order (its
+  offset, zone, slab or large block, size, allocation number, "new"
+  when it was made after the previous `heapmap`), and the free extents
+  of 64 KB or more. In a tree built with `-DAURA_MEM_TRACK=ON` each
+  block's line also names the three sites that hold most of its bytes,
+  a lone small block shows its first bytes, and the file ends with the
+  platform bytes per site.
+- To find what splits the free space after a page closes, read the
+  page-zone blocks between the free extents of the closed map.
+- The host's structures are larger than the Mac's (64-bit pointers),
+  so compare the placement of the two builds, not the megabytes with
+  the guest's.
+
+To see what stays allocated when everything is freed (leaks, and what
+the program keeps for good), run the same tree with `AURA_MEM_EXIT=1
+AURA_MEM_MIN=1`: `aura-host chrome` prints the table once more after it
+has freed the browser, the network stack and the cache.
+
 ## To see what a script heap holds
 
 Run `aura-host js --stats FILE` or, for a page, `aura-host chrome --net
@@ -149,7 +188,8 @@ before the release handler, and again after the handler has run.
 
 **Long-lived blocks pin slabs.** One block that outlives a page keeps
 its whole slab, so many small long-lived blocks hold more memory than
-they use ("Blocks over 2 KB" below has the figures). Prefer one
+they use ("Blocks over 2 KB" below has the figures). Allocate such
+blocks in the long-lived zone ("Zones" below), and prefer one
 allocation for records that live and die together: a parsed style
 sheet keeps its rules and selectors in an arena for this reason
 ([`css.md`](css.md), "How a parsed sheet is stored").
@@ -159,6 +199,175 @@ took tens of seconds per layout with the 90,000 blocks of a large page.
 Do not call `malloc` in engine code, and enable the pool before the
 first allocation in a new Mac OS 9 program. `tests/core/test_heap.c`
 covers it on the host.
+
+## Zones
+
+Every block belongs to the page zone or the long-lived zone. The page
+zone holds what a page makes and frees with it: documents, styles,
+layout, images, script heaps. The long-lived zone holds what outlives
+pages: the network stack (the HTTP cache, connections and TLS, response
+headers, cookies, DNS), fonts and their caches, atoms, the favicon
+store, the browser's tabs, history and bookmarks, and the platform
+shell. The pool never puts blocks of the two zones in one slab, and it
+tells the platform the zone of each slab and large block it asks for
+(`get`'s `how`, `core.h`).
+
+**To choose the zone of new code:**
+
+- A whole source file: add it to `AURA_LONG_LIVED_SOURCES` in
+  `CMakeLists.txt` (every file of `src/net` is there). The file is then
+  compiled with `AU_HEAP_ZONE=1`, and each `au_alloc`, `au_realloc`,
+  `au_strndup` and `au_buf_*` call in it sets the zone first. Other
+  files are in the page zone. The platform shells' targets set
+  `AU_HEAP_ZONE=1` for all their files.
+- Helpers that allocate for their callers (`src/core`, `src/codec`,
+  `src/url`) are compiled with `AU_HEAP_ZONE_INHERIT`: they leave the
+  zone alone, so their blocks take the zone of the caller's last
+  allocating call.
+- One long-lived block in a page-zone file (a cache in a static
+  variable): `au_alloc_long`, `au_calloc_long`, `au_realloc_long`
+  (`css/match.c`'s case-folding caches).
+- Everything a call allocates, whatever files it reaches:
+  `int h = au_heap_zone_hold(AU_HEAP_ZONE_LONG); ...;
+  au_heap_zone_unhold(h);` (the favicon store's surfaces in
+  `browser/favicon.c`, and a block of the user agent sheets parsed late
+  in `css/parser.c`).
+- `au_heap_zone_of(p)` says which zone a block is in.
+
+A block in the wrong zone costs placement, never correctness: a
+long-lived block in the page zone splits the free space a page leaves,
+and a page block in the long-lived zone uses that zone's memory until
+the page goes. To find one, use the heap map ("To see where blocks sit
+in the Mac's heap" above) and read the page-zone blocks left between
+the free extents after the page's tab closes.
+
+**On Mac OS 9** (`heap_get` in `main.c`) the page zone's slabs and large
+blocks are `NewPtr` blocks in the application heap, as before. The
+long-lived zone's come from temporary memory: slabs are cut from
+512 KB chunks (`LONG_CHUNK`, locked handles) by an `AuRegion`
+(`src/core/region.h`, first fit, so freed space is used again), large
+blocks get a handle each (receive buffers, TLS records and bodies come
+and go with transfers, and in the chunks they left each chunk held by a
+few slabs), and a chunk whose slabs are all freed goes back, except the
+last one. When temporary memory has no room, a long-lived block comes
+from the heap as a page's does. Develop >
+Performance shows the zone's bytes and the temporary memory its chunks
+take (the "Long-lived blocks" line).
+
+So a closed page leaves the application heap as it found it: the only
+nonrelocatable blocks there are the page zone's, and they go with the
+page.
+
+**What split the heap before.** Mapped on the host after GitHub's home
+page closed (`AURA_HEAP=mac:512:flat`, 2026-11-16, base `81ca065`), the
+blocks left among the free space were HTTP cache entries and their
+bodies (`cache.c`, 70 platform blocks), response headers kept with them
+(`headers.c`, 63), TLS records and contexts of idle connections
+(`tls.c`, `tls_platform.c`, 50), HTTP connection buffers (`http.c`),
+font caches (`sfnt.c`, `fontpage.c`), atom texts, `match.c`'s
+case-folding caches (64 KB each), blocks of the user agent sheets parsed
+late, favicon surfaces, and a 32-byte block each PNG decoder leaked.
+Each pinned a 32 KB slab or sat alone between free extents.
+
+**Measured on the host** (2026-11-16, base `81ca065`, 64-bit,
+`--bundled-only`, live sites): the free space of a 200 MB stand-in heap
+(`AURA_HEAP=mac:200`) and its largest free block, in KB. "Before" places
+both zones low (`:flat`), as the heap did before the change (the slabs
+are already per zone); "after" keeps the long-lived zone outside, as
+the Mac application does. Each page was opened in a second tab beside
+about:blank and closed after 8 seconds (YouTube 15).
+
+| Reading | Before: free | Largest | After: free | Largest |
+|---|---|---|---|---|
+| about:blank | 202,452 | 202,075 | 203,719 | 203,577 |
+| GitHub's home page loaded | 46,726 | 18,401 | 62,461 | 31,694 |
+| its tab closed | 192,829 | 58,159 | 203,719 | 203,577 |
+| YouTube's home page loaded | 107,847 | 92,824 | 116,279 | 113,405 |
+| its tab closed | 197,040 | 106,901 | 203,719 | 203,577 |
+| ten pages opened and closed in turn (the list under "Atoms") | 186,907 | 47,734 | 203,110 | 188,569 |
+
+- After GitHub's and YouTube's tabs closed, the stand-in heap is as it
+  was before they opened.
+- The long-lived zone outside held 1.3 MB at the start, 16.7 MB with
+  GitHub's page loaded, 10.7 MB after it closed and 16.2 MB after the
+  ten pages (the host's HTTP memory cache keeps 8 MB, and the host
+  reads font files whole).
+- What still splits the space after the ten pages is what MDN's CSS
+  page leaks: computed style groups, custom property maps, token lists
+  and text nodes that stay allocated after everything is freed
+  (`AURA_MEM_EXIT=1`; [`known-gaps.md`](known-gaps.md#memory)).
+
+**Measured in the guest** (2026-11-16, Enforcer base, 640x480, base
+`81ca065` against this change with the temporary memory pins, one run
+each): Develop > Performance's "Free memory" line, in MB. The change's
+run went launch, GitHub, YouTube, Wikipedia, ten pages in one session.
+The base build hangs when YouTube follows GitHub ("Temporary memory
+areas" below), so its YouTube rows are from a fresh boot and its ten
+pages from another.
+
+| Reading | Base: free | Largest block | This change: free | Largest block |
+|---|---|---|---|---|
+| about:home at launch | 60.92 of 71.83 | 60.83 | 61.50 of 75.15 | 61.38 |
+| GitHub's home page loaded | 7.21 of 100.97 | 1.02 | 5.78 of 111.26 | 1.09 |
+| its tab closed | 57.47 of 79.45 | 11.50 | 61.47 of 111.26 | 60.97 |
+| YouTube's home page loaded | 8.09 of 103.25 | 0.22 | 11.61 of 111.26 | 0.66 |
+| its tab closed | 58.38 of 103.25 | 11.10 | 61.47 of 111.26 | 60.97 |
+| ten pages opened and closed in turn (the list under "Atoms") | 54.84 of 76.81 | 14.53 | 60.66 of 111.26 | 53.57 |
+
+The long-lived zone held
+1.54 MB in 1,681 KB of temporary memory at launch, 3.05 MB in 6,596 KB
+after GitHub's tab closed and 4.72 MB in 7,673 KB after the ten pages.
+
+## What grows from page to page
+
+The live bytes left after each page closes grow over the first ten
+pages and then stop. What grows is in the long-lived zone, and each part
+has a bound:
+
+| What | Where | Bound |
+|---|---|---|
+| The HTTP memory cache: entries, response headers, bodies | `src/net/cache.c`, `headers.c` | 8 MB of cost on the host (each entry costs 256 bytes, its headers and its body; the newest entry is always kept); 1 MB resident on the Mac when the disk cache is on ([`networking.md`](networking.md)) |
+| Idle connections: TLS contexts, records, receive buffers | `tls.c`, `tls_platform.c`, `http.c` | 16 connections, 6 per host, closed after 30 seconds idle; about 1 MB |
+| Font files read on first use | `src/platform/host/platform_host.c` | the Fonts folder (8.3 MB with the bundled fonts); each file is held at its size |
+| Web storage | `src/net` | about 1 MB |
+
+**To find a leak among them**, run with `AURA_MEM_EXIT=1`: after
+`aura-host` frees everything at exit it prints the blocks still
+allocated by site. In `src/net` and `src/platform/host` only 7 blocks
+(8 KB) remain, the TLS tables kept for the life of the program, so
+neither leaks.
+
+The leaks it found elsewhere and the fixes:
+
+- The PNG decoder did not free its pixel block (`destroy` in
+  `src/image/png.c`), 32 bytes or more per image.
+- A fetch that a page's script started while the page was being freed
+  stayed in the fetch list with its URL (`au_page_free` in
+  `src/browser/page_doc.c` now cancels and compacts the list after the
+  document view goes). YouTube's page did this.
+- Not fixed: MDN's CSS page leaves about 40 KB
+  ([`known-gaps.md`](known-gaps.md#memory)).
+
+The host also held memory that a bound did not explain: cached bodies
+and font files were grown by doubling and kept the slack (up to twice
+their size). `au_cache_commit` now copies a body into a block of its
+size, and `au_platform_read_file` reads a file of known size into a
+block of that size.
+
+Measured on the host (2026-11-16, base `81ca065`, the ten pages under
+"Atoms" opened and closed in turn), in KB after the tenth close:
+
+| | Before | After |
+|---|---|---|
+| Live bytes | 15,350 | 13,570 |
+| `src/net` | 7,910 | 7,860 |
+| `src/platform/host` | 6,800 | 4,760 |
+
+The same ten pages twice (twenty closes, after the change): the live
+bytes were 12,144 KB after the fifth close, 13,370 KB after the eighth,
+and between 12,680 and 13,710 KB from the tenth to the twentieth;
+`src/net` stayed between 6,980 and 8,000 KB and `src/platform/host` at
+4,762 KB from the eighth close on.
 
 ## Atoms
 
@@ -253,8 +462,8 @@ the array keeps its high-water size when a permanent atom made during a
 large page sits near its end, because atom numbers cannot move. The
 live bytes that still grow from close to close are in `src/net` (5.3 MB
 after the third close, 6.8 MB after the tenth) and `src/platform/host`
-(6.4 MB to 7.8 MB), which hold the network cache and the host shell's
-data, not page structures.
+(6.4 MB to 7.8 MB). Both are bounded caches, not leaks ("What grows
+from page to page" below).
 
 In the guest on 2026-11-16 (Enforcer base, 640x480, one run each),
 Develop > Performance read as follows with `49d5f6e` and with the shared
@@ -272,8 +481,8 @@ smaller gain than the host tables show; the guest reading was taken on
 torvalds/linux rather than GitHub's home page, and a 32-bit build's
 structures are smaller. The cause of the remaining difference was not
 measured. After the GitHub tab closed, the largest free
-block was under 5 MB in both builds: the heap is fragmented, which this
-change does not address.
+block was under 5 MB in both builds: the heap was fragmented. The
+zones fixed that ("Zones" above).
 
 ## Temporary memory for the heap
 
@@ -293,10 +502,53 @@ its blocks over 16 KB are one platform block each.
   taken (the "taken by Aura" line under Temporary memory).
 - To exercise the path, lower Aura's partition in Get Info to 12 MB and
   load a heavy page; the "taken by Aura" line then shows above 0.
-- Not verified: the path has been compiled for PowerPC and Aura ran in
-  the stock guest with the new block headers, but the guest's heap
-  never ran short (47 MB free), so no block came from temporary memory
-  there ([`known-gaps.md`](known-gaps.md#not-verified)).
+- In the guest (Enforcer base, 2026-11-16) GitHub's home page took
+  29.9 MB of temporary memory for the heap and YouTube's 15.9 MB, and
+  both pages ran.
+
+### Temporary memory areas
+
+Mac OS 9.2.2 can hang for good inside the Memory Manager when temporary
+memory grows, shrinks and grows again. Aura's temporary memory starts in
+one zone (71 MB on the 512 MB test machine, at 0x20001000); beyond it
+the system makes more zones, and adds 16 MB areas when the first zone
+is full. In the hang, one area's link to the next points to itself, and
+the system, adding another area, follows that link without end. The
+menu bar clock stops and nothing but a restart helps.
+
+Seen in the guest (Enforcer base, 2026-11-16):
+
+| Build | Sequence | Result |
+|---|---|---|
+| `81ca065` (base) | fresh boot, YouTube | runs |
+| `81ca065` | YouTube, Wikipedia, GitHub, then YouTube again | hangs while YouTube loads |
+| zones, no pins | fresh boot, GitHub, then YouTube | hangs while YouTube loads |
+| zones, no pins | fresh boot, YouTube | hangs while YouTube loads |
+| zones, no pins | a script page of 88 MB opened and closed 4 times, then 2 at once 3 times, then YouTube | the script pages run; YouTube hangs |
+| zones, with pins | fresh boot, YouTube | runs |
+| zones, with pins | fresh boot, GitHub, YouTube, Wikipedia, ten pages | runs |
+
+The zones build puts the long-lived blocks in temporary memory too, so
+temporary memory comes and goes more often, and YouTube's page alone was
+enough.
+
+**What Aura does.** `mac_temp_dispose` in `main.c` frees every temporary
+memory handle the application takes. The first handle freed in each
+zone other than the one temporary memory starts in is shrunk to 16 bytes
+and kept until Aura quits, so no such zone empties because of Aura. Up
+to 256 are kept; Develop > Performance shows how many ("Areas held"):
+14 after launch (reading the Fonts folder), 109 after GitHub's page.
+They cost little: after YouTube's page closed, 343 MB of temporary
+memory was free with them and 349 MB with the base build.
+
+**To find the hang in the guest**, sample the processor with
+`tools/guest-qmp.py hmp "info registers"`: in the hang the instruction
+address stays between 0x34f010 and 0x34f03c (system code), and the area
+list, read with `x/11wx` from 0x2800 following the word at offset 0x20,
+reaches an area whose word at 0x20 is its own address.
+
+The cause inside the system was not found, and the pins were tested
+with the sequences above only ([`known-gaps.md`](known-gaps.md#memory)).
 
 ## Budgets
 

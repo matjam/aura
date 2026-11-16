@@ -36,6 +36,20 @@ if(CMAKE_C_FLAGS MATCHES "-fsanitize")
     target_compile_options(aura_engine PRIVATE -include ${CMAKE_SOURCE_DIR}/src/core/nullcheck.h)
 endif()
 target_include_directories(aura_engine PUBLIC src)
+# Zones (src/core/core.h, docs/memory.md "Zones"): blocks allocated in
+# these files outlive pages and go to the long-lived zone; the others go
+# to the page zone. src/core, src/codec and src/url allocate for their
+# callers and take the caller's zone. The platform shells set
+# AU_HEAP_ZONE=1 for their own targets.
+file(GLOB AURA_LONG_LIVED_SOURCES CONFIGURE_DEPENDS src/net/*.c)
+foreach(f paint/fontset.c paint/sfnt.c paint/fontpage.c paint/fontindex.c paint/fontalias.c paint/fallback.c
+          paint/fontvar.c paint/colr.c paint/gsub.c paint/text.c
+          browser/browser.c browser/history.c browser/bookmarks.c browser/prefs.c browser/downloads.c browser/favicon.c)
+    list(APPEND AURA_LONG_LIVED_SOURCES ${CMAKE_SOURCE_DIR}/src/${f})
+endforeach()
+set_property(SOURCE ${AURA_LONG_LIVED_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS AU_HEAP_ZONE=1)
+file(GLOB AURA_ZONE_INHERIT_SOURCES CONFIGURE_DEPENDS src/core/*.c src/codec/*.c src/url/*.c)
+set_property(SOURCE ${AURA_ZONE_INHERIT_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS AU_HEAP_ZONE_INHERIT)
 # The build's identity (the commit and its date) for bug reports:
 # tools/buildinfo.cmake writes gen/au_build.h on every build, and only
 # src/browser/sysinfo.c includes it.

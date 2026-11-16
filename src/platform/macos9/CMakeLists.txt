@@ -31,6 +31,8 @@ add_application(Aura main.c browserwin.c listwin.c devwin.c sysinfo_mac.c prefsw
                 CREATOR AURA)
 target_include_directories(Aura PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(Aura PRIVATE -O2)
+# The shell's blocks live as long as the application (src/core/core.h, "Zones").
+target_compile_definitions(Aura PRIVATE AU_HEAP_ZONE=1)
 target_link_libraries(Aura aura_engine AppearanceLib OpenTransportLib OpenTptInternetLib ThreadsLib m)
 add_subdirectory(nettest)
 add_subdirectory(jstest)

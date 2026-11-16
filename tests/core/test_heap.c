@@ -7,6 +7,7 @@
  * Nothing in the allocator depends on byte order; reallocations of odd
  * lengths check that the word-at-a-time copy also moves the last bytes. */
 #include "core/core.h"
+#include "core/region.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +18,12 @@
 static size_t sys_blocks, sys_bytes, sys_fail_after = (size_t)-1, sys_budget = (size_t)-1;
 
 typedef struct SysHdr {
-    size_t n, pad; /* two words: the block after it keeps malloc's alignment for the pool */
+    size_t n, how; /* two words: the block after it keeps malloc's alignment for the pool */
 } SysHdr;
 
-static void *get(size_t n)
+static size_t sys_long_blocks, sys_long_bytes; /* of them, the long-lived zone's */
+
+static void *get(size_t n, unsigned how)
 {
     if (sys_fail_after == 0)
         return NULL;
@@ -32,8 +35,13 @@ static void *get(size_t n)
     if (!h)
         return NULL;
     h->n = n;
+    h->how = how;
     sys_blocks++;
     sys_bytes += n;
+    if ((how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG) {
+        sys_long_blocks++;
+        sys_long_bytes += n;
+    }
     return h + 1;
 }
 
@@ -42,6 +50,10 @@ static void release(void *p)
     SysHdr *h = (SysHdr *)p - 1;
     sys_blocks--;
     sys_bytes -= h->n;
+    if ((h->how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG) {
+        sys_long_blocks--;
+        sys_long_bytes -= h->n;
+    }
     free(h);
 }
 
@@ -268,6 +280,141 @@ static void keep_limit(void)
     CHECK(st.slabs == 0 && st.empty_bytes == 0 && st.system_bytes == 0 && sys_blocks == 0);
 }
 
+/* Zones (core.h): long-lived blocks never share a slab with page blocks,
+ * the platform is told each slab's and large block's zone, a held zone
+ * wins over the files' zones, and the statistics count the long-lived
+ * zone's platform bytes. */
+static void zones(void)
+{
+    au_heap_trim();
+    size_t blocks0 = sys_blocks, long0 = sys_long_blocks;
+    CHECK(stats().long_bytes == sys_long_bytes);
+
+    /* One page block and one long-lived block of the same class: two
+     * slabs, one of each zone. */
+    void *pg = au_alloc(100);
+    void *lg = au_alloc_long(100);
+    CHECK(au_heap_zone_of(pg) == AU_HEAP_ZONE_PAGE);
+    CHECK(au_heap_zone_of(lg) == AU_HEAP_ZONE_LONG);
+    CHECK(sys_blocks - blocks0 == 2 && sys_long_blocks - long0 == 1);
+    CHECK(stats().long_bytes == sys_long_bytes);
+
+    /* More of each fill their own slabs. */
+    void *pg2 = au_alloc(100), *lg2 = au_calloc_long(100);
+    CHECK(sys_blocks - blocks0 == 2);
+    CHECK(au_heap_zone_of(pg2) == AU_HEAP_ZONE_PAGE && au_heap_zone_of(lg2) == AU_HEAP_ZONE_LONG);
+    CHECK(((unsigned char *)lg2)[99] == 0);
+
+    /* A large block and a mid one: the platform hears the zone. */
+    void *big = au_alloc_long(50000);
+    CHECK(au_heap_zone_of(big) == AU_HEAP_ZONE_LONG && sys_long_blocks - long0 == 2);
+    void *mid = au_alloc_long(4112);
+    CHECK(au_heap_zone_of(mid) == AU_HEAP_ZONE_LONG && sys_long_blocks - long0 == 3);
+    CHECK(stats().long_bytes == sys_long_bytes);
+
+    /* Growing a long-lived block past its class keeps it long-lived. */
+    lg2 = au_realloc_long(lg2, 3000);
+    CHECK(au_heap_zone_of(lg2) == AU_HEAP_ZONE_LONG);
+
+    /* A held zone wins over the zone each call site sets. */
+    int h = au_heap_zone_hold(AU_HEAP_ZONE_LONG);
+    void *held = au_alloc(200);
+    char *held_s = au_strndup("long", 4);
+    au_heap_zone_unhold(h);
+    void *after = au_alloc(200);
+    CHECK(au_heap_zone_of(held) == AU_HEAP_ZONE_LONG && au_heap_zone_of(held_s) == AU_HEAP_ZONE_LONG);
+    CHECK(au_heap_zone_of(after) == AU_HEAP_ZONE_PAGE);
+
+    /* au_heap_zone_set returns the zone before it. */
+    unsigned prev = au_heap_zone_set(AU_HEAP_ZONE_LONG);
+    CHECK(prev == AU_HEAP_ZONE_PAGE);
+    CHECK(au_heap_zone_set(prev) == AU_HEAP_ZONE_LONG);
+
+    void *all[] = {pg, lg, pg2, lg2, big, mid, held, held_s, after};
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; i++)
+        au_free(all[i]);
+    au_heap_trim();
+    CHECK(sys_blocks == blocks0 && sys_long_blocks == long0);
+    CHECK(stats().long_bytes == sys_long_bytes);
+}
+
+static void region_count(void *ctx, void *p, size_t n, bool is_free)
+{
+    int *w = ctx; /* live, free */
+    (void)p;
+    (void)n;
+    w[is_free ? 1 : 0]++;
+}
+
+/* The region allocator (core/region.h): low and high placement, joining
+ * freed neighbours, chunks, the walk, and taking out an empty chunk. */
+static void region(void)
+{
+    enum { CH = 64 * 1024 };
+    static size_t mem[3][CH / sizeof(size_t)];
+    AuRegion r;
+    au_region_init(&r);
+    CHECK(au_region_alloc(&r, 16, false) == NULL);
+    CHECK(au_region_add(&r, mem[0], CH));
+    size_t free0, big0;
+    au_region_free_space(&r, &free0, &big0);
+    CHECK(free0 == big0 && free0 > CH - 64);
+
+    /* Low blocks go up from the bottom, high ones down from the top. */
+    char *a = au_region_alloc(&r, 1000, false);
+    char *b = au_region_alloc(&r, 1000, false);
+    char *c = au_region_alloc(&r, 1000, true);
+    char *d = au_region_alloc(&r, 1000, true);
+    CHECK(a && b && c && d);
+    CHECK(a < b && b < d && d < c);
+    CHECK(aligned(a) && aligned(b) && aligned(c) && aligned(d));
+    CHECK(c + au_region_size(c) + 64 > (char *)mem[0] + CH);
+    CHECK(au_region_owns(&r, a) && !au_region_owns(&r, mem[1]));
+    CHECK(au_region_size(a) >= 1000 && *au_region_tag(a) == 0);
+    *au_region_tag(a) = 77;
+    memset(a, 1, 1000);
+    memset(b, 2, 1000);
+    memset(c, 3, 1000);
+    memset(d, 4, 1000);
+    CHECK(r.blocks == 4);
+
+    /* A freed block is used again by the next low block that fits. */
+    au_region_free(&r, a);
+    char *a2 = au_region_alloc(&r, 900, false);
+    CHECK(a2 == a && *au_region_tag(a2) == 0);
+
+    /* Freeing joins neighbours: all freed, one extent again. */
+    au_region_free(&r, b);
+    au_region_free(&r, a2);
+    au_region_free(&r, d);
+    au_region_free(&r, c);
+    size_t f, big;
+    au_region_free_space(&r, &f, &big);
+    CHECK(f == free0 && big == big0 && r.blocks == 0 && r.used == 0);
+
+    /* Too large for any extent. */
+    CHECK(au_region_alloc(&r, CH, false) == NULL);
+
+    /* A second chunk, right after the first in memory: free space at the
+     * end of one is not joined with the start of the other. The walk
+     * visits both in order, free blocks too. */
+    CHECK(au_region_add(&r, mem[1], CH));
+    char *x = au_region_alloc(&r, CH - 4096, false); /* fills most of the first */
+    char *y = au_region_alloc(&r, 8000, false);      /* the second */
+    CHECK(x && y && au_region_owns(&r, y) && (size_t)(y - (char *)mem[1]) < 64);
+    int w[2] = {0, 0};
+    au_region_walk(&r, region_count, w);
+    CHECK(w[0] == 2 && w[1] == 2);
+
+    /* An empty chunk can be taken out; one with a block cannot. */
+    CHECK(au_region_drop_free_chunk(&r) == -1);
+    au_region_free(&r, y);
+    CHECK(au_region_drop_free_chunk(&r) == 1 && r.nchunks == 1);
+    CHECK(au_region_drop_free_chunk(&r) == -1);
+    au_region_free(&r, x);
+    CHECK(au_region_drop_free_chunk(&r) == 0 && r.nchunks == 0 && r.free == NULL && r.total == 0);
+}
+
 static int handler_calls;
 static void *cache_block; /* what the release handler can free */
 
@@ -342,6 +489,8 @@ int main(void)
     arenas();
     keep_limit();
     low_memory();
+    zones();
+    region();
 
     /* The same class keeps a block in place when it grows a little. */
     char *p = au_alloc(130);

@@ -708,9 +708,15 @@ void au_cache_commit(AuCacheWriter *w)
 {
     AuHttpCache *c = w->cache;
     AuCacheEntry *e = w->e;
-    /* The buffer grew by doubling: give back what it did not use. */
+    /* The buffer grew by doubling: give back what it did not use. A copy,
+     * not au_realloc: the pooled allocator keeps a block over 16 KB in
+     * place when it shrinks by less than half, and the entry would hold up
+     * to twice its body for as long as it is cached. */
     if (w->body.cap > w->body.len + 1 && w->body.len) {
-        w->body.data = au_realloc(w->body.data, w->body.len + 1);
+        char *exact = au_alloc(w->body.len + 1);
+        memcpy(exact, w->body.data, w->body.len);
+        au_free(w->body.data);
+        w->body.data = exact;
         w->body.cap = w->body.len + 1;
     }
     e->body = (uint8_t *)au_buf_take(&w->body, &e->len);
