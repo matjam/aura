@@ -102,6 +102,8 @@ static void layer_rank(LayerTree *t)
 
 /* ---- Rule index ---- */
 
+bool css_index_skip_repeats = true;
+
 /* One selector of one rule: 20 bytes with 32-bit pointers. */
 typedef struct RuleEntry {
     const AuSelector *sel;
@@ -703,8 +705,11 @@ static bool media_dep(AuCssResolver *r, const AuCssMediaList *m)
     return ok;
 }
 
+/* Adds a sheet's rules to the index. With layers_only, only names its
+ * layers in the order a full walk would (an occurrence of a sheet that
+ * is given again later: index_build). */
 static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer, uint32_t *order, Frame **stack,
-                       uint32_t *sn, uint32_t *scap)
+                       uint32_t *sn, uint32_t *scap, bool layers_only)
 {
     if (sheet->media && !media_dep(r, sheet->media))
         return;
@@ -713,7 +718,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
     uint32_t sheet_index = r->nwalked;
     *CSS_PUSH(r->walked, r->nwalked, r->walked_cap) = sheet;
     LayerTree *lt = &r->layers[sheet->origin];
-    for (uint32_t i = 0; i < sheet->nprops; i++)
+    for (uint32_t i = 0; i < sheet->nprops && !layers_only; i++)
         *CSS_PUSH(r->props, r->nprops, r->props_cap) = sheet->props[i];
     /* frames are processed in order: push the first rule */
     uint32_t base = *sn;
@@ -742,11 +747,13 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         bool descend = false;
         switch (ru->type) {
         case RULE_STYLE:
-            add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false);
+            if (!layers_only)
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false);
             descend = true;
             break;
         case RULE_NESTED_DECLS:
-            add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true);
+            if (!layers_only)
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true);
             break;
         case RULE_MEDIA:
             descend = media_dep(r, ru->u.media);
@@ -770,7 +777,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             if (ru->flags & RF_LAYER)
                 il = layer_path(lt, f.layer, &f.sheet->import_layers[ru->b.index]);
             /* the imported sheet's rules come here in order: walk it now */
-            walk_sheet(r, im->sheet, il, order, stack, sn, scap);
+            walk_sheet(r, im->sheet, il, order, stack, sn, scap, layers_only);
             break;
         }
         default:
@@ -820,11 +827,25 @@ static void index_build(AuCssResolver *r, bool quirks)
     uint32_t order = 1;
     Frame *stack = NULL;
     uint32_t sn = 0, scap = 0;
-    walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap);
+    walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap, false);
     if (quirks)
-        walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap);
-    for (uint32_t i = 0; i < r->nsheets; i++)
-        walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap);
+        walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap, false);
+    for (uint32_t i = 0; i < r->nsheets; i++) {
+        /* A sheet given again later (a page that links one sheet several
+         * times): every declaration of this occurrence loses to the same
+         * declaration of the later one, which has the same origin, layer
+         * and specificity and comes later, so only the last occurrence is
+         * indexed. An earlier occurrence still names its layers, whose
+         * place is set by where they are first named. An anonymous layer
+         * is a new layer at each occurrence, so a sheet with one is
+         * indexed every time (repeat_matters). */
+        bool again = false;
+        if (css_index_skip_repeats && !r->sheets[i]->repeat_matters)
+            for (uint32_t k = i + 1; k < r->nsheets && !again; k++)
+                again = r->sheets[k] == r->sheets[i];
+        if (!again || r->sheets[i]->has_layers)
+            walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap, again);
+    }
     au_free(stack);
     if (r->nentries && r->nentries < r->entries_cap) {
         /* Kept until the sheets change: trim to the length. */
@@ -1318,27 +1339,53 @@ static bool substitute(VarCtx *vc, const CssTokens *src, uint32_t a, uint32_t b,
 
 static CssTokList *substitute_list(VarCtx *vc, const CssTokList *in)
 {
-    CssTokList *l = au_calloc(sizeof *l);
-    l->refs = 1;
-    if (!substitute(vc, &in->tk, 0, in->tk.n, &l->tk)) {
-        css_toklist_release(l);
+    /* A value that is one var() without a fallback is the value it
+     * names: share that list instead of copying it (themes define
+     * hundreds of such aliases). The depth is counted as substitute
+     * counts it. */
+    {
+        const CssToken *t = in->tk.t;
+        uint32_t s = 0, e = in->tk.n;
+        while (s < e && t[s].type == TK_WS)
+            s++;
+        while (e > s && t[e - 1].type == TK_WS)
+            e--;
+        if (s < e && t[s].type == TK_FUNCTION && t[s].kw == AU_K_var && t[s].len == e &&
+            t[e - 1].type == TK_RPAREN) {
+            uint32_t k = s + 1, ie = e - 1;
+            while (k < ie && t[k].type == TK_WS)
+                k++;
+            uint32_t q = k + 1;
+            while (q < ie && t[q].type == TK_WS)
+                q++;
+            if (k < ie && q == ie && t[k].type == TK_IDENT &&
+                css_ident_is_custom_prop(css_tok_str(&in->tk, &t[k]), t[k].len)) {
+                if (++vc->depth > 64) {
+                    vc->depth--;
+                    return NULL;
+                }
+                CssTokList *val = resolve_custom(vc, au_atom(css_tok_str(&in->tk, &t[k]), t[k].len));
+                vc->depth--;
+                return val && !val->has_var ? css_toklist_retain(val) : NULL;
+            }
+        }
+    }
+    CssTokens out = {0};
+    if (!substitute(vc, &in->tk, 0, in->tk.n, &out)) {
+        css_tokens_free(&out);
         return NULL;
     }
-    css_tokens_rematch(&l->tk);
+    css_tokens_rematch(&out);
     /* trim whitespace */
-    uint32_t s = 0, e = l->tk.n;
-    while (s < e && l->tk.t[s].type == TK_WS)
+    uint32_t s = 0, e = out.n;
+    while (s < e && out.t[s].type == TK_WS)
         s++;
-    while (e > s && l->tk.t[e - 1].type == TK_WS)
+    while (e > s && out.t[e - 1].type == TK_WS)
         e--;
-    if (s || e != l->tk.n) {
-        CssTokList *t = css_toklist_new(&l->tk, s, e);
-        css_toklist_release(l);
-        l = t;
-    }
-    for (uint32_t i = 0; i < l->tk.n; i++)
-        if (l->tk.t[i].type == TK_FUNCTION && l->tk.t[i].kw == AU_K_attr)
-            l->has_attr = 1;
+    CssTokList *l = css_toklist_new(&out, s, e);
+    css_tokens_free(&out);
+    /* css_toklist_new looks for var() and attr(); a substituted value has
+     * no var() left to substitute */
     l->has_var = 0;
     return l;
 }

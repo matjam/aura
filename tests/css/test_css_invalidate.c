@@ -533,6 +533,15 @@ static const char sheet_lazy[] =
     "@media (min-width: 900px) { @layer a { strong { top: 4px } } label { margin: 1px } }"
     "em { width: 10px; { color: red } height: 5px } u { color: blue";
 
+/* Named layers only: an earlier occurrence of such a sheet is left out of
+ * the rule index but still names its layers first. */
+static const char sheet_layers[] =
+    "@layer x, y; @layer y { p { color: red !important; top: 1px } li { margin: 1px } }"
+    "@layer x { p { color: blue !important; top: 2px } li { margin: 2px !important } } p { left: 3px }";
+static const char sheet_layers_between[] =
+    "@layer z { p { color: green !important; top: 5px } } @layer x { p { top: 7px; color: gray !important } }"
+    "@layer y { li { margin: 9px !important } } p { left: 4px } @layer { li { padding: 1px } }";
+
 typedef struct ViewDoc {
     AuDocument *doc;
     AuCssResolver *r;
@@ -561,8 +570,20 @@ static ViewDoc view_doc(const char *html, size_t len, const char *const *extra, 
         au_buf_free(&t);
     }
     au_free(el);
-    for (int i = 0; i < nextra; i++)
-        au_css_resolver_add_sheet(v.r, au_css_sheet_parse(extra[i], strlen(extra[i]), AU_CSS_ORIGIN_AUTHOR, NULL, NULL));
+    /* a text given again (the same pointer) shares the parsed sheet, as a
+     * document does for a sheet it links twice */
+    AuCssSheet *parsed[64];
+    for (int i = 0; i < nextra; i++) {
+        AuCssSheet *sh = NULL;
+        for (int k = 0; k < i && k < 64 && !sh; k++)
+            if (extra[k] == extra[i])
+                sh = au_css_sheet_retain(parsed[k]);
+        if (!sh)
+            sh = au_css_sheet_parse(extra[i], strlen(extra[i]), AU_CSS_ORIGIN_AUTHOR, NULL, NULL);
+        if (i < 64)
+            parsed[i] = sh;
+        au_css_resolver_add_sheet(v.r, sh);
+    }
     AuCssDevice dev;
     au_css_device_default(&dev);
     dev.width = w;
@@ -745,8 +766,14 @@ static void lazy_page(const char *what, const char *html, size_t len, const char
     ViewDoc lazy = view_doc(html, len, extra, nextra, 1024, 768);
     css_lazy_bodies = false;
     ViewDoc eager = view_doc(html, len, extra, nextra, 1024, 768);
+    /* and with every occurrence of a repeated sheet in the rule index */
+    css_index_skip_repeats = false;
+    ViewDoc all = view_doc(html, len, extra, nextra, 1024, 768);
+    css_index_skip_repeats = true;
     css_lazy_bodies = true;
     compare_docs(what, "first style", &lazy, &eager);
+    compare_docs(what, "first style, every occurrence of a repeated sheet", &lazy, &all);
+    view_doc_free(&all);
     static const float sizes[][2] = {{500, 700}, {1440, 900}, {320, 480}, {1024, 768}};
     for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
         ViewDoc *v[2] = {&lazy, &eager};
@@ -799,6 +826,11 @@ static int test_lazy(int argc, char **argv)
         const char **css = calloc((size_t)ns + 1, sizeof *css);
         for (int i = 0; i < ns; i++) {
             size_t n;
+            for (int k = 0; k < i && !css[i]; k++)
+                if (!strcmp(argv[3 + k], argv[3 + i]))
+                    css[i] = css[k]; /* a file given again is the same sheet */
+            if (css[i])
+                continue;
             css[i] = read_file(argv[3 + i], &n);
             if (!css[i]) {
                 fprintf(stderr, "cannot read %s\n", argv[3 + i]);
@@ -836,6 +868,17 @@ static int test_lazy(int argc, char **argv)
         free(css);
     }
     lazy_page("built in", page, sizeof page - 1, (const char *const[]){sheet_plain, sheet_has_state, sheet_lazy}, 3);
+    /* sheets given twice, with and without layers */
+    lazy_page("repeated", page, sizeof page - 1,
+              (const char *const[]){sheet_plain, sheet_lazy, sheet_has_state, sheet_plain, sheet_viewport, sheet_lazy,
+                                    sheet_plain},
+              7);
+    lazy_page("repeated layers", page, sizeof page - 1,
+              (const char *const[]){sheet_layers_between, sheet_layers, sheet_layers_between, sheet_plain,
+                                    sheet_layers, sheet_layers_between},
+              6);
+    lazy_page("repeated layers first", page, sizeof page - 1,
+              (const char *const[]){sheet_layers, sheet_layers_between, sheet_layers}, 3);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

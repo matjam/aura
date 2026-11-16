@@ -590,6 +590,9 @@ const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru);
 const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru);
 /* For tests: false makes a sheet parse every block when it is parsed. */
 extern bool css_lazy_bodies;
+/* For tests: false makes the rule index hold every occurrence of a sheet
+ * that a resolver was given several times. */
+extern bool css_index_skip_repeats;
 
 struct AuCssFontFace {
     AuCssDeclBlock descs; /* prop = 0, aux = descriptor atom, kind DK_BLOB */
@@ -607,6 +610,13 @@ struct AuCssSheet {
     uint8_t origin;
     bool quirks;
     bool text_owned;
+    /* For a sheet a resolver is given more than once (index_build):
+     * has_layers: it names a layer, so an earlier occurrence still sets
+     * that layer's place. repeat_matters: an earlier occurrence cannot be
+     * left out of the rule index (an anonymous layer, which is a new
+     * layer each time, or an @import). */
+    bool has_layers;
+    bool repeat_matters;
     /* The sheet's source: lazy rules refer to ranges of it, and the
      * document view gives it to the CSSOM. NULL for a sheet of 4 GB or
      * more, which has no lazy rules. */

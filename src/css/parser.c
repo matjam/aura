@@ -565,6 +565,7 @@ static void add_import(Parser *p, uint32_t a, uint32_t b)
     *CSS_PUSH(sh->imports, sh->nimports, sh->imports_cap) = imp;
     sh->import_rules = au_realloc(sh->import_rules, sh->imports_cap * sizeof(CssRule *));
     sh->import_rules[r->b.index] = r; /* the caller appends r to the rule list */
+    sh->has_layers = sh->repeat_matters = true;
     sh->import_layers = au_realloc(sh->import_layers, sh->imports_cap * sizeof(CssLayerName));
     sh->import_layers[r->b.index] = layer;
 }
@@ -942,8 +943,9 @@ static char *range_text(const CssTokens *tk, uint32_t a, uint32_t b)
  * and can be parsed later from its text with the same result: it holds
  * no rule that registers something with the sheet when parsed
  * (@font-face, @keyframes, @property). */
-static bool block_can_wait(const CssTokens *tk, uint32_t blk, uint32_t s, uint32_t e)
+static bool block_can_wait(Parser *p, uint32_t blk, uint32_t s, uint32_t e)
 {
+    const CssTokens *tk = p->tk;
     if (tk->t[blk].type != TK_LBRACE || tk->t[blk].len != e + 1 || e >= tk->n || tk->t[e].type != TK_RBRACE)
         return false;
     for (uint32_t i = s; i < e; i++) {
@@ -951,6 +953,8 @@ static bool block_can_wait(const CssTokens *tk, uint32_t blk, uint32_t s, uint32
             continue;
         const char *name = css_tok_str(tk, &tk->t[i]);
         uint32_t nlen = tk->t[i].len;
+        if (au_ieq(name, nlen, "layer", 5)) /* which may be anonymous: known before the block is parsed */
+            p->sheet->has_layers = p->sheet->repeat_matters = true;
         if (au_ieq(name, nlen, "font-face", 9) || au_ieq(name, nlen, "keyframes", 9) ||
             au_ieq(name, nlen, "-webkit-keyframes", 17) || au_ieq(name, nlen, "-moz-keyframes", 14) ||
             au_ieq(name, nlen, "property", 8))
@@ -999,6 +1003,7 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         return end;
     }
     if (IS("layer")) {
+        p->sheet->has_layers = true;
         /* statement: names, comma separated; block: optional name */
         uint32_t k = skip_ws(tk, pa, pe);
         CssLayerName names[32];
@@ -1023,6 +1028,8 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         }
         if (!ok || (block && n > 1) || (!block && n == 0))
             return end;
+        if (block && n == 0)
+            p->sheet->repeat_matters = true; /* an anonymous layer */
         CssRule *r = new_rule(p, block ? RULE_LAYER_BLOCK : RULE_LAYER_STMT);
         r->b.nlayers = block ? 1 : n;
         r->u.layers = css_arena_alloc_ptr(&p->sheet->arena, r->b.nlayers * sizeof(CssLayerName));
@@ -1044,7 +1051,7 @@ static uint32_t parse_at_rule(Parser *p, uint32_t i, uint32_t b, RuleList *out, 
         CssRule *r = new_rule(p, RULE_MEDIA);
         r->u.media = media_list(p, pa, pe);
         append_rule(out, r);
-        if (top && p->depth == 0 && p->lazy && block_can_wait(tk, j, bs, be)) {
+        if (top && p->depth == 0 && p->lazy && block_can_wait(p, j, bs, be)) {
             uint32_t off = css_tok_src(&tk->t[j]), e2 = css_tok_src(&tk->t[be]);
             if (e2 >= off && e2 <= p->sheet->text_len - p->src_base) {
                 r->flags |= RF_LAZY;

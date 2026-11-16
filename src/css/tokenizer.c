@@ -843,7 +843,9 @@ static bool toklist_equal(const CssTokList *x, const CssTokList *y)
 
 /* The list equal to l that the table already has (l is then freed), or l
  * after adding it. */
-static CssTokList *toklist_intern(CssTokList *l)
+/* The slot of the table's list equal to l, or the empty slot where l
+ * belongs. */
+static uint32_t toklist_slot(const CssTokList *l)
 {
     if (tl_intern.count * 2 >= tl_intern.size) {
         uint32_t size = tl_intern.size ? tl_intern.size * 2 : 256;
@@ -862,61 +864,70 @@ static CssTokList *toklist_intern(CssTokList *l)
         tl_intern.size = size;
     }
     uint32_t h = toklist_hash(l) & (tl_intern.size - 1);
-    for (; tl_intern.slots[h]; h = (h + 1) & (tl_intern.size - 1))
-        if (toklist_equal(tl_intern.slots[h], l)) {
-            css_toklist_release(l);
-            return css_toklist_retain(tl_intern.slots[h]);
-        }
-    tl_intern.slots[h] = css_toklist_retain(l);
-    tl_intern.count++;
+    while (tl_intern.slots[h] && !toklist_equal(tl_intern.slots[h], l))
+        h = (h + 1) & (tl_intern.size - 1);
+    return h;
+}
+
+/* A list is one allocation: the header, its tokens, then their strings.
+ * tk points into it and is never grown. */
+static CssTokList *toklist_pack(const CssTokList *tmp)
+{
+    size_t tb = (size_t)tmp->tk.n * sizeof(CssToken), pb = tmp->tk.pool.len;
+    CssTokList *l = au_alloc(sizeof *l + tb + pb + 1);
+    memset(l, 0, sizeof *l);
+    l->refs = 1;
+    l->has_var = tmp->has_var;
+    l->has_attr = tmp->has_attr;
+    l->tk.t = (CssToken *)(l + 1);
+    l->tk.n = l->tk.cap = tmp->tk.n;
+    if (tb)
+        memcpy(l->tk.t, tmp->tk.t, tb);
+    l->tk.pool.data = (char *)(l + 1) + tb;
+    l->tk.pool.len = pb;
+    l->tk.pool.cap = pb + 1;
+    if (pb)
+        memcpy(l->tk.pool.data, tmp->tk.pool.data, pb);
+    l->tk.pool.data[pb] = 0;
     return l;
 }
 
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
 {
-    CssTokList *l = au_calloc(sizeof *l);
-    l->refs = 1;
-    css_tokens_append(&l->tk, src, a, b);
-    for (uint32_t i = 0; i < l->tk.n; i++) {
-        const CssToken *t = &l->tk.t[i];
+    CssTokList tmp;
+    memset(&tmp, 0, sizeof tmp);
+    css_tokens_append(&tmp.tk, src, a, b);
+    for (uint32_t i = 0; i < tmp.tk.n; i++) {
+        const CssToken *t = &tmp.tk.t[i];
         if (t->type == TK_FUNCTION && (t->kw == AU_K_var || t->kw == AU_K_env))
-            l->has_var = 1;
+            tmp.has_var = 1;
         if (t->type == TK_FUNCTION && t->kw == AU_K_attr)
-            l->has_attr = 1;
+            tmp.has_attr = 1;
     }
+    CssTokList *l;
     if (tl_intern.depth > 0) {
-        CssTokList *shared = toklist_intern(l);
-        if (shared != l)
-            return shared;
+        uint32_t h = toklist_slot(&tmp);
+        if (tl_intern.slots[h]) {
+            l = css_toklist_retain(tl_intern.slots[h]);
+        } else {
+            l = toklist_pack(&tmp);
+            tl_intern.slots[h] = css_toklist_retain(l);
+            tl_intern.count++;
+        }
+    } else {
+        l = toklist_pack(&tmp);
     }
-    /* the arrays grew by doubling: keep what is used */
-    if (l->tk.cap > l->tk.n && l->tk.n) {
-        l->tk.t = au_realloc(l->tk.t, (size_t)l->tk.n * sizeof(CssToken));
-        l->tk.cap = l->tk.n;
-    }
-    if (l->tk.pool.cap > l->tk.pool.len && l->tk.pool.len) {
-        l->tk.pool.data = au_realloc(l->tk.pool.data, l->tk.pool.len);
-        l->tk.pool.cap = l->tk.pool.len;
-    }
+    css_tokens_free(&tmp.tk);
     return l;
 }
 
 /* For css_bench: what a list takes here and with 32-bit pointers. */
 void css_toklist_mem(const CssTokList *l, size_t *bytes, size_t *bytes32, size_t *blocks)
 {
-    *bytes = sizeof *l;
-    *bytes32 = 32;
+    size_t body = (size_t)l->tk.n * sizeof(CssToken) + l->tk.pool.len + 1;
+    *bytes = sizeof *l + body;
+    *bytes32 = 32 + body;
     *blocks = 1;
-    if (l->tk.t) {
-        *bytes += (size_t)l->tk.cap * sizeof(CssToken);
-        *bytes32 += (size_t)l->tk.cap * sizeof(CssToken);
-        (*blocks)++;
-    }
-    if (l->tk.pool.data) {
-        *bytes += l->tk.pool.cap;
-        *bytes32 += l->tk.pool.cap;
-        (*blocks)++;
-    }
 }
 
 CssTokList *css_toklist_retain(CssTokList *l)
@@ -930,8 +941,7 @@ void css_toklist_release(CssTokList *l)
 {
     if (!l || --l->refs)
         return;
-    css_tokens_free(&l->tk);
-    au_free(l);
+    au_free(l); /* tokens and strings are in the same block */
 }
 
 /* ---- Serialization (the primitives are in serialize.c) ---- */
