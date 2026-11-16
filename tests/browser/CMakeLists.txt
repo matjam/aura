@@ -54,6 +54,15 @@ target_link_libraries(test_devtools aura_fakenet m)
 target_include_directories(test_devtools PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_devtools COMMAND test_devtools)
 set_tests_properties(browser_devtools PROPERTIES TIMEOUT 120)
+
+# The developer windows' models: parts and rectangles, refresh rules,
+# toggles and filters, the Network selection, the Console input line,
+# Find, Copy All and Save, and the port's callbacks.
+add_executable(test_devwin test_devwin.c)
+target_link_libraries(test_devwin aura_fakenet m)
+target_include_directories(test_devwin PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_devwin COMMAND test_devwin)
+set_tests_properties(browser_devwin PROPERTIES TIMEOUT 120)
 set_tests_properties(browser_net_page PROPERTIES TIMEOUT 120)
 
 # The document cache for Back and Forward, on the fake transport.
