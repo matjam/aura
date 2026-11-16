@@ -2340,6 +2340,36 @@ void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr_name, int kind)
                       (el->tag == AU_ATOM_iframe || el->tag == AU_ATOM_frame || el->tag == AU_ATOM_object ||
                        el->tag == AU_ATOM_embed)))
         dv->frames_dirty = true;
+    /* attachShadow (children of a host that now has a shadow root): the
+     * host's flat subtree is restyled and its boxes rebuilt */
+    if (kind == 1 && el && el->shadow_root && dv->doc->has_shadow && dv->resolver &&
+        au_node_shadow_including_root(n) == &dv->doc->node) {
+        au_css_invalidate_subtree(dv->resolver, el);
+        au_layout_node_changed(dv->layout, el->node.parent ? el->node.parent : &el->node);
+        dv->restyle_needed = true;
+        dv->struct_changed = true;
+        dv->sheets_rescan = true;
+        return;
+    }
+    /* slot, name (of a slot), part and exportparts change what a host's
+     * subtree takes or which ::slotted() and ::part() rules match */
+    if (kind == 2 && el && dv->resolver && dv->doc->has_shadow && attr_name) {
+        AuElement *host = NULL;
+        const char *an = au_atom_str(attr_name);
+        if (attr_name == AU_ATOM_slot && el->node.parent && el->node.parent->type == AU_NODE_ELEMENT &&
+            au_as_element(el->node.parent)->shadow_root)
+            host = au_as_element(el->node.parent);
+        else if (!strcmp(an, "name") && el->tag == AU_ATOM_slot && el->ns == AU_NS_HTML)
+            host = au_node_tree_host(&el->node);
+        else if (!strcmp(an, "part") || !strcmp(an, "exportparts"))
+            host = el;
+        if (host) {
+            au_css_invalidate_subtree(dv->resolver, host);
+            au_layout_node_changed(dv->layout, host->node.parent ? host->node.parent : &host->node);
+            dv->restyle_needed = true;
+            return;
+        }
+    }
     if (kind == 2 && el && dv->resolver) { /* attribute */
         /* Attributes the box tree never reads: they reach layout only
          * through selectors and attr(), which the restyle covers. Scripts
@@ -2432,6 +2462,33 @@ void au_dv_child_changed(AuDocView *dv, AuNode *parent, AuNode *child, AuNode *p
         dv->frames_dirty = true;
     if (k & 4)
         au_docimages_tree_changed(dv->imgs);
+    /* In a document with shadow trees, a child of a host or of a shadow
+     * root, or a subtree with a slot in a shadow tree, may change which
+     * nodes slots take: the host's flat subtree is restyled and its boxes
+     * rebuilt. */
+    AuElement *host = NULL;
+    if (dv->doc->has_shadow) {
+        if (parent->type == AU_NODE_ELEMENT && au_as_element(parent)->shadow_root)
+            host = au_as_element(parent);
+        else if (au_is_shadow_root(parent))
+            host = au_node_tree_host(parent);
+        else if (child->type == AU_NODE_ELEMENT && au_node_tree_host(parent)) {
+            for (AuNode *c = child; c; c = au_node_next(c, child))
+                if (c->type == AU_NODE_ELEMENT && au_as_element(c)->tag == AU_ATOM_slot &&
+                    au_as_element(c)->ns == AU_NS_HTML) {
+                    host = au_node_tree_host(parent);
+                    break;
+                }
+        }
+    }
+    if (host) {
+        if (dv->resolver)
+            au_css_invalidate_subtree(dv->resolver, host);
+        au_layout_node_changed(dv->layout, host->node.parent ? host->node.parent : &host->node);
+        dv->restyle_needed = true;
+        dv->struct_changed = true;
+        return;
+    }
     if (dv->resolver)
         au_css_invalidate_children(dv->resolver, parent, child, prev, next, inserted);
     au_layout_node_changed(dv->layout, parent);

@@ -224,6 +224,25 @@ static void h_sheet_disable(void *ctx, AuElement *el, bool disabled)
     au_dv_sheet_disable(s->dv, el, disabled);
 }
 
+static void h_sheet_construct(void *ctx, uint32_t id, const char *text, size_t len, const char *media,
+                              int disabled)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_construct(s->dv, id, text, len, media, disabled);
+}
+
+static void h_sheet_destroy(void *ctx, uint32_t id)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheet_destroy(s->dv, id);
+}
+
+static void h_sheets_adopt(void *ctx, AuNode *scope, const uint32_t *ids, size_t n)
+{
+    AuDocScript *s = ctx;
+    au_dv_sheets_adopt(s->dv, scope, ids, n);
+}
+
 static void h_focus_changed(void *ctx, AuElement *el)
 {
     AuDocScript *s = ctx;
@@ -626,6 +645,9 @@ static bool ensure_js(AuDocScript *s)
     h.sheet_text = h_sheet_text;
     h.sheet_set_text = h_sheet_set_text;
     h.sheet_disable = h_sheet_disable;
+    h.sheet_construct = h_sheet_construct;
+    h.sheet_destroy = h_sheet_destroy;
+    h.sheets_adopt = h_sheets_adopt;
     h.fetcher.ctx = s;
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
