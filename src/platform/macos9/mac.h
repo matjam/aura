@@ -88,6 +88,11 @@ long mac_heap_temp_bytes(void);
 void mac_menus_dirty(void);
 /* Brings the menu bar in step with the front window (enables, checks). */
 void mac_adjust_menus(void);
+/* The command table's view of the Mac (browser/commands.h): the front
+ * windows, the text focus and the modifier keys held now, and the
+ * callbacks that open Aura's native windows and dialogs. */
+void mac_command_state(AuCommandState *st);
+const AuCommandHost *mac_command_host(void);
 
 /* ---- browserwin.c ---- */
 typedef struct BrowserWin BrowserWin;
@@ -114,6 +119,8 @@ bool browserwin_timing_test(BrowserWin *bw, struct AuTimingTest *out);
 void browserwin_moved(BrowserWin *bw);
 /* Edit > Find: asks for text and finds it in the active page. */
 void browserwin_find(BrowserWin *bw);
+/* Paste and Go: opens the clipboard's text as if typed in the field. */
+void browserwin_paste_and_go(BrowserWin *bw);
 
 /* ---- listwin.c ---- */
 void listwin_show(WinKind kind); /* WIN_BOOKMARKS, WIN_HISTORY, WIN_DOWNLOADS or WIN_COOKIES */

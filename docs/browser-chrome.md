@@ -16,6 +16,7 @@ side of each feature is named here; Toolbox lessons are in
 | `browser.c` | windows, tabs and back/forward lists; routes input |
 | `page.h` | the interface a page implements |
 | `page_doc.c` | implements it on the document view (`src/page`) |
+| `commands.c` | the command table: menus, titles, shortcuts, enable rules, running commands |
 | `context.c` | contextual menus |
 | `favicon.c` | site icons |
 | `present.c` | the shells' damage list |
@@ -232,8 +233,7 @@ default was 425,000.
 - Holding the button for half a second (30 ticks) shows a pop-up of the
   entries that way (`au_bw_history_items`, `history_popup` in
   `browserwin.c`).
-- File > Reopen Closed Tab (Shift-Command-T, mapped in `key_down`
-  because MenuKey ignores Shift) brings back the last of up to
+- File > Reopen Closed Tab (Shift-Command-T) brings back the last of up to
   `AU_MAX_CLOSED_TABS` closed tabs with their history and scroll
   position.
 - Each window's position goes into the session (`au_bw_set_position`
@@ -385,13 +385,74 @@ To change how Aura works with Internet Config, edit
 - `mac_ic_download_folder` and `mac_ic_map_filename` are there for
   downloads.
 
+## Commands and menus
+
+To add a menu command, add an `AU_CMD_*` value in
+`src/browser/commands.h`, its row in the `commands` table in
+`commands.c` (menu, title, shortcut), its place in the menu's item
+list, its enable rule in `au_command_enabled` (commands are enabled
+unless a rule says otherwise) and its action in `au_command_run`. Then
+add a case to `tests/browser/test_commands.c`. No port changes unless
+the command opens a native window.
+
+- **The table.** `au_command_info` gives each command's title (UTF-8;
+  ports convert), menu, shortcut and submenu. `au_menu_info` gives each
+  menu's title, fixed items in order (`AU_CMD_SEPARATOR` is a divider)
+  and the dynamic list that follows them; `au_menu_bar` gives the
+  menu bar's order. Help's items go after the system's own Help items
+  on Mac OS 9.
+- **Shortcuts.** An `AuShortcut` is a key (an upper-case letter, digit
+  or punctuation) and modifiers: `AU_SHORTCUT_PRIMARY` is Command on Mac
+  OS 9 and Ctrl on Linux, plus `AU_SHORTCUT_SHIFT` and
+  `AU_SHORTCUT_ALT`. Each key and modifier set belongs to one command.
+  To find the command for a key press, call `au_command_for_key`, which
+  also makes Close Tab's shortcut close a window that has no tabs.
+- **State.** The port fills an `AuCommandState`: the browser, the
+  frontmost browser window (in front or not), what kind of window is in
+  front (`AU_FRONT_BROWSER`, `AU_FRONT_TOOL` for a developer window,
+  `AU_FRONT_OTHER`, `AU_FRONT_NONE`), whether a text field has the
+  focus, whether the developer window can find again, and the modifier
+  keys held (Reload with Shift or Option reloads past the cache).
+- **Enabled, checked, title.** Before a menu is shown or a shortcut is
+  looked up, call `au_command_enabled` and `au_command_checked` for each
+  item. `au_command_title` gives the title to show for commands whose
+  title follows the state (Turn Off or Turn On Blocking for This Site).
+- **Running.** `au_command_run` does nothing for a disabled command and
+  otherwise does what the command does with `au_bw_*` calls. What needs
+  the port comes back through its `AuCommandHost`: `new_window`,
+  `raise`, `focus_address`, `show_window` (About, Preferences, the list
+  and developer windows, the timing test and paint benchmark),
+  `choose_file_url`, `save_page`, `close_front`, `find`,
+  `tool_find_again`, `edit` (Undo to Select All, Paste and Go),
+  `copy_text`, `select_window`, `beep` and `quit`. A port without a
+  Page Source window returns false from `show_window` for it, and the
+  model opens a `view-source:` tab instead. To open a URL from a port
+  (a GURL event, a list window), call `au_command_open_url`.
+- **Dynamic menus.** `au_menu_list_history` lists a separator and up to
+  `AU_GO_MENU_ENTRIES` recent pages for Go. `au_menu_list_bookmarks`
+  lists the bookmarks breadth-first; an entry's `parent` is the index of
+  its folder entry (-1 for the menu itself), every entry comes after its
+  folder, and an empty folder holds a disabled "(empty)" item.
+  `au_menu_list_windows` takes the port's visible windows front to back
+  and lists a separator and one item each, the front one checked. History
+  and bookmark titles come from `au_menu_title`; window titles are
+  used as they are. To run an entry, call
+  `au_menu_entry_run`; a bookmark is looked up by id when it runs, so a
+  deleted one does nothing. Free a list with `au_menu_list_free`.
+
+The Mac OS 9 menus are built from the table at start-up
+([`mac-os-9-shell.md`](mac-os-9-shell.md), "Menus").
+
 ## Contextual menus
 
 To change what a contextual menu offers, edit `src/browser/context.c`:
 `au_bw_context_menu` builds the items for a window point (link, image,
-page, address field or tab, using `au_page_hit_info` for the page) and
-`au_bw_context_command` runs the commands the model can; the shell does
-the rest (clipboard, field editing, a new window).
+page, address field or tab, using `au_page_hit_info` for the page),
+with labels from the command table. To run the chosen item, call
+`au_command_run_context`: it runs the model's commands with
+`au_bw_context_command` and passes the rest to the port's
+`AuCommandHost` (the clipboard, editing in the address field, a new
+window, the Page Source window).
 
 On Mac OS 9, `contextmenu.c` finds the Contextual Menu Manager in the
 ContextualMenu shared library at run time (the Multiversal Interfaces
@@ -421,8 +482,7 @@ they work in the dialog only.
 The Mac OS 9 shell counts clicks within the double-click time, copies
 with `mac_put_scrap` (TEXT in Mac Roman with transliteration and
 carriage returns, plus 'utxt'), asks for the text with the Find dialog
-(DLOG 201), maps Shift-Command-G to Find Previous itself (MenuKey
-ignores Shift), and paints selections in the Appearance highlight
+(DLOG 201), and paints selections in the Appearance highlight
 colour (`LMGetHiliteRGB`, passed in `AuBrowser.highlight`).
 
 Script has a selection of its own that is not joined to this one (see

@@ -125,7 +125,7 @@ keeps the Mac OS 9 build working and looking the same.
 |---|---|
 | Address completion and menu item text in `src/browser` (`au_complete_fill`, `au_menu_title`) | done |
 | Native chrome mode in the browser model, with complete `AU_CHANGED_*` notices | in progress |
-| Command table (`src/browser/commands.c`); Mac menus built from it | in progress |
+| Command table (`src/browser/commands.c`); Mac menus built from it | done |
 | Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them | in progress |
 | List models for History, Bookmarks, Downloads and Cookies; Mac list windows built from them | in progress |
 | Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | not started |

@@ -11,7 +11,7 @@ before changing anything under `src/platform/macos9`.
 
 | File | Holds |
 |---|---|
-| `main.c` | menus and the event loop (`idle_all`, `key_down`, `release_caches`) |
+| `main.c` | the menu bar built from the command table, the `AuCommandHost`, and the event loop (`idle_all`, `key_down`, `release_caches`) |
 | `browserwin.c` | browser windows |
 | `listwin.c` | list windows (bookmarks, history) |
 | `prefswin.c`, `prefs_blocking.c` | the Preferences window |
@@ -26,7 +26,7 @@ before changing anything under `src/platform/macos9`.
 | `internetconfig.c`, `contextmenu.c` | Internet Config, contextual menus ([`browser-chrome.md`](browser-chrome.md)) |
 | `downloads_mac.c`, `blocking_mac.c` | download files, blocklist storage |
 | `appearance.h` | Appearance Manager declarations |
-| `aura.r` | resources: menus, dialogs, alerts, the SIZE resource |
+| `aura.r` | resources: dialogs, alerts, the SIZE resource |
 | `nettest/`, `jstest/`, `sea/` | NetTest, JSTest, the installer |
 
 The shell keeps one module per kind of window, with menus and the event
@@ -38,6 +38,42 @@ loop in `main.c` and files in `storage.c`.
 - The Preferences window uses Appearance Manager controls, declared in
   `appearance.h` because the Multiversal Interfaces lack them, from
   AppearanceLib.
+
+## Menus
+
+To add or change a menu command, edit the command table in
+`src/browser/commands.c` ([`browser-chrome.md`](browser-chrome.md),
+"Commands and menus"); the Mac menus follow it without a change to
+`main.c`. The shell's part is drawing and the native windows:
+
+- `build_menu_bar` makes every menu with `NewMenu` at start-up, in the
+  order of `au_menu_bar`, with the IDs in `main.c` (Apple 128 to Develop
+  135, Tests 190, bookmark folders 200 to 255). There are no `MENU` or
+  `MBAR` resources. Item text goes through `mac_append_item`, which
+  converts UTF-8 to Mac Roman and sets the text after `AppendMenu` so
+  that metacharacters stay text. The Apple menu adds a separator and the
+  desk accessories after About Aura; the Help items go after the
+  system's Help menu items, behind a separator.
+- A shortcut of Command alone becomes the item's key equivalent. The
+  Menu Manager cannot show Shift, so Shift-Command shortcuts (Close
+  Window, Reopen Closed Tab, Find Previous) have no key equivalent shown.
+- `key_down` looks every Command key up with `au_command_for_key`. With
+  Shift held and no Shift shortcut for the key, it runs the Command
+  shortcut, as MenuKey did (Shift-Command-R is Reload past the cache).
+  Command-= is Zoom In. Command-1 to 9 select tabs and Command-arrows
+  edit text before the lookup.
+- `mac_adjust_menus` runs before `MenuSelect` and before a key lookup.
+  It rebuilds the Go and Bookmarks lists when `mac_menus_dirty` was
+  called, the Window list every time, and then enables and checks every
+  fixed item with `au_command_enabled` and `au_command_checked`.
+- `mac_command_state` describes the Mac to the table: the frontmost
+  browser window, what kind of window is in front, the text focus (a
+  desk accessory counts), and Shift and Option from `GetKeys`.
+- `do_menu` turns a menu choice into a command (or a dynamic entry, or a
+  desk accessory) and runs it. Native windows and dialogs come back
+  through `command_host`, the shell's `AuCommandHost`.
+- The contextual menu's choice runs through `au_command_run_context`
+  with the same host (`context_menu` in `browserwin.c`).
 
 The application runs in a 64 MB partition; [`memory.md`](memory.md)
 says what goes where. In a new Mac OS 9 program, call `au_heap_enable`
@@ -137,9 +173,7 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 
 - `bw_key` does not paint: the event loop in `main.c` handles up to 8
   queued keys and then paints once (`idle_all`).
-- MenuKey ignores Shift, so `key_down` maps Shift-Command-T (Reopen
-  Closed Tab) and the shell maps Shift-Command-G (Find Previous)
-  itself.
+- Command keys go to the command table, not to MenuKey (see "Menus").
 - [`forms.md`](forms.md) says how typed characters, the Edit menu,
   pop-up menus and file dialogs reach page fields.
 
@@ -156,7 +190,14 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 
 - **Rez `MENU` enable flags.** In a Rez `MENU`, the enable flags put
   item k at bit k-1 (the menu's own flag is the separate `enabled`
-  field). A separator at item 5 clears bit 4.
+  field). A separator at item 5 clears bit 4. Aura's menus are no
+  longer resources.
+- **`AppendMenu` metacharacters.** `AppendMenu` reads `( ; ^ ! < /` in
+  the text as instructions and does not show them ("(" disables the
+  item), so "(empty)" given to `AppendMenu` reads "empty)". Use `mac_append_item` for any text that is not a separator.
+- **`CheckItem` and submenus.** A hierarchical item's mark is the
+  submenu's ID; `CheckItem(m, item, false)` on it detaches the submenu.
+  `apply_states` skips such items.
 - **`TEGetPoint`.** Do not call `TEGetPoint` from PowerPC code; it
   crashed the guest. The caret position comes from `TextWidth` with the
   TextEdit handles locked.

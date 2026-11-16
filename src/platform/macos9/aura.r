@@ -1,5 +1,5 @@
-/* Aura's resources: memory partition, menus, alerts, dialogs, the
-   preferences tab names, version, Finder bundle. */
+/* Aura's resources: memory partition, alerts, dialogs, the preferences
+   tab names, version, Finder bundle. */
 #include "Processes.r"
 #include "Menus.r"
 #include "Dialogs.r"
@@ -31,134 +31,8 @@ resource 'SIZE' (-1) {
 	12 * 1024 * 1024
 };
 
-resource 'MBAR' (128) {
-	{ 128, 129, 130, 131, 132, 133, 135, 134 }
-};
-
-resource 'MENU' (128, "Apple") {
-	128, textMenuProc, 0x7FFFFFFD, enabled, apple,
-	{
-		"About Aura...", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain
-	}
-};
-
-resource 'MENU' (129, "File") {
-	129, textMenuProc, 0x7FFFFAEF, enabled, "File",
-	{
-		"New Window", noIcon, "N", noMark, plain;
-		"New Tab", noIcon, "T", noMark, plain;
-		"Open Location...", noIcon, "L", noMark, plain;
-		"Open File...", noIcon, "O", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Close Tab", noIcon, "W", noMark, plain;
-		"Close Window", noIcon, noKey, noMark, plain;
-		"Reopen Closed Tab", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Save Page As...", noIcon, "S", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Quit", noIcon, "Q", noMark, plain
-	}
-};
-
-resource 'MENU' (130, "Edit") {
-	130, textMenuProc, 0x7FFFF77D, enabled, "Edit",
-	{
-		"Undo", noIcon, "Z", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Cut", noIcon, "X", noMark, plain;
-		"Copy", noIcon, "C", noMark, plain;
-		"Paste", noIcon, "V", noMark, plain;
-		"Clear", noIcon, noKey, noMark, plain;
-		"Select All", noIcon, "A", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Find...", noIcon, "F", noMark, plain;
-		"Find Again", noIcon, "G", noMark, plain;
-		"Find Previous", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Preferences...", noIcon, noKey, noMark, plain
-	}
-};
-
-resource 'MENU' (131, "View") {
-	131, textMenuProc, 0x7FFFFF77, enabled, "View",
-	{
-		"Reload", noIcon, "R", noMark, plain;
-		"Stop", noIcon, ".", noMark, plain;
-		"Page Source", noIcon, "U", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Zoom In", noIcon, "+", noMark, plain;
-		"Zoom Out", noIcon, "-", noMark, plain;
-		"Actual Size", noIcon, "0", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Tabs on Top", noIcon, noKey, noMark, plain;
-		"Tabs on Left", noIcon, noKey, noMark, plain
-	}
-};
-
-/* Develop, in groups: looking at the page (Page Source, Console,
-   Network), measuring it (Performance, Run Timing Test), the engine and
-   the machine (System Status), test content (the Tests submenu, MENU 190,
-   attached by main.c), and Report a Problem, which the Help menu also
-   has. Items 4, 7, 9 and 11 are separators (enable flags: item k is bit
-   k-1). An ellipsis marks the one item that asks before it does
-   anything further. */
-resource 'MENU' (135, "Develop") {
-	135, textMenuProc, 0x7FFFFAB7, enabled, "Develop",
-	{
-		"Page Source", noIcon, noKey, noMark, plain;
-		"Console", noIcon, "K", noMark, plain;
-		"Network", noIcon, "E", noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Performance", noIcon, noKey, noMark, plain;
-		"Run Timing Test", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"System Status", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Tests", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Report a Problem...", noIcon, noKey, noMark, plain
-	}
-};
-
-/* Develop > Tests. Item 3 is a separator. */
-resource 'MENU' (190, "Tests") {
-	190, textMenuProc, 0x7FFFFFFB, enabled, "Tests",
-	{
-		"Test Scene", noIcon, noKey, noMark, plain;
-		"Font List", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Paint Benchmark", noIcon, noKey, noMark, plain
-	}
-};
-
-resource 'MENU' (132, "Go") {
-	132, textMenuProc, 0x7FFFFFF7, enabled, "Go",
-	{
-		"Back", noIcon, "[", noMark, plain;
-		"Forward", noIcon, "]", noMark, plain;
-		"Home", noIcon, noKey, noMark, plain;
-		"-", noIcon, noKey, noMark, plain;
-		"Show History", noIcon, "Y", noMark, plain
-	}
-};
-
-resource 'MENU' (133, "Bookmarks") {
-	133, textMenuProc, 0x7FFFFFFB, enabled, "Bookmarks",
-	{
-		"Add Bookmark", noIcon, "D", noMark, plain;
-		"Show Bookmarks", noIcon, "B", noMark, plain;
-		"-", noIcon, noKey, noMark, plain
-	}
-};
-
-resource 'MENU' (134, "Window") {
-	134, textMenuProc, 0x7FFFFFFF, enabled, "Window",
-	{
-		"Downloads", noIcon, "J", noMark, plain;
-		"Cookies", noIcon, noKey, noMark, plain
-	}
-};
+/* The menus are built at start-up from the command table
+   (src/browser/commands.c); main.c's build_menu_bar makes them. */
 
 /* The Preferences window's tabs (Appearance 'tab#': version, then per
    tab an icon suite ID, the name and two reserved fields). */

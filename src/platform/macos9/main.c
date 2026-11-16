@@ -11,25 +11,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Menu IDs. The menus themselves come from the command table
+ * (src/browser/commands.h). */
 enum { kAppleMenu = 128, kFileMenu, kEditMenu, kViewMenu, kGoMenu, kBookmarksMenu, kWindowMenu, kDevelopMenu = 135,
        kTestsMenu = 190, /* Develop > Tests, a submenu */
        kHelpMenu = -16490 /* the system's Help menu (kHMHelpMenuID) */ };
 enum { kFirstFolderMenu = 200, kLastFolderMenu = 255 };
-
-enum { FILE_NEW_WINDOW = 1, FILE_NEW_TAB, FILE_OPEN_LOCATION, FILE_OPEN_FILE, FILE_CLOSE_TAB = 6, FILE_CLOSE_WINDOW,
-       FILE_REOPEN_TAB, FILE_SAVE_AS = 10, FILE_QUIT = 12 };
-enum { EDIT_UNDO = 1, EDIT_CUT = 3, EDIT_COPY, EDIT_PASTE, EDIT_CLEAR, EDIT_SELECT_ALL, EDIT_FIND = 9, EDIT_FIND_AGAIN,
-       EDIT_FIND_PREVIOUS, EDIT_PREFS = 13 };
-enum { VIEW_RELOAD = 1, VIEW_STOP, VIEW_SOURCE, VIEW_ZOOM_IN = 5, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET, VIEW_TABS_TOP = 9,
-       VIEW_TABS_LEFT };
-/* The Develop menu and its Tests submenu (aura.r describes the groups). */
-enum { DEV_SOURCE = 1, DEV_CONSOLE, DEV_NETWORK, DEV_PERF = 5, DEV_TIMING, DEV_STATUS = 8, DEV_TESTS = 10,
-       DEV_REPORT = 12 };
-enum { TEST_SCENE = 1, TEST_FONTS, TEST_BENCH = 4 };
-enum { GO_BACK = 1, GO_FORWARD, GO_HOME, GO_HISTORY = 5, GO_FIRST_ENTRY = 7 };
-enum { BM_ADD = 1, BM_SHOW, BM_FIRST_ITEM = 4 };
-enum { WIN_DOWNLOADS_ITEM = 1, WIN_COOKIES_ITEM, WIN_FIRST_WINDOW = 4 };
-enum { kGoEntries = 15 };
 
 AuBrowser *g_browser;
 AuFontSet *g_fonts;
@@ -39,18 +26,17 @@ bool g_in_front = true;
 static Handle reserve; /* released when memory runs out, for the alert */
 static bool menus_dirty = true;
 
-/* Menu item -> data maps for the dynamic menus. */
-static char *go_urls[kGoEntries];
+/* The dynamic menus' entries (commands.h), and for the bookmarks, which
+ * menu and item each entry went to. */
+static AuMenuList go_list, bm_list, win_list;
 typedef struct BmItem {
     short menu, item;
-    uint32_t id;
+    int entry; /* index in bm_list */
 } BmItem;
 static BmItem *bm_items;
 static int nbm_items, bm_cap;
 static short folder_menus_used; /* hierarchical menus currently inserted */
-static WindowPtr window_items[64];
-static int nwindow_items;
-static short help_report_item; /* Report a Problem in the Help menu; 0 when there is no Help menu */
+static short help_first; /* the first of Aura's items in the Help menu; 0 when there is no Help menu */
 
 /* ---- Out of memory ----
  * au_alloc calls this when malloc fails. For now: free the reserve so the
@@ -270,22 +256,296 @@ void mac_menus_dirty(void)
     menus_dirty = true;
 }
 
-void mac_open_url(const char *url, bool new_tab)
+/* ---- Commands ----
+ * What each command does and when it is enabled is decided in
+ * src/browser/commands.c; this part describes the Mac's state to it and
+ * opens the native windows and dialogs it asks for. */
+
+static void close_window(WindowPtr w)
 {
+    MacWin *m = mac_win_of(w);
+    if (m && m->close)
+        m->close(m);
+    else if (w && GetWindowKind(w) < 0)
+        CloseDeskAcc(GetWindowKind(w));
+}
+
+void mac_command_state(AuCommandState *st)
+{
+    memset(st, 0, sizeof *st);
+    st->browser = g_browser;
     BrowserWin *b = browserwin_front();
-    if (!b) {
-        browserwin_new(url, NULL);
-        return;
-    }
-    AuBrowserWindow *w = browserwin_model(b);
-    if (new_tab)
-        au_bw_new_tab(w, url, true, w->ntabs);
+    st->window = b ? browserwin_model(b) : NULL;
+    WindowPtr fw = FrontWindow();
+    MacWin *fm = mac_win_of(fw);
+    if (!fw)
+        st->front = AU_FRONT_NONE;
+    else if (b && fm == (MacWin *)b)
+        st->front = AU_FRONT_BROWSER;
+    else if (fm && fm->kind >= WIN_SOURCE)
+        st->front = AU_FRONT_TOOL;
     else
-        au_bw_navigate(w, url);
+        st->front = AU_FRONT_OTHER;
+    /* A text field with the focus, or a desk accessory, which takes the
+     * Edit menu through SystemEdit. */
+    st->text_focus = (fw && GetWindowKind(fw) < 0) || (fm && fm->edit && fm->edit(fm, 0));
+    st->tool_can_find_again = st->front == AU_FRONT_TOOL && devwin_can_find_again(fm);
+    uint8_t k[16]; /* the KeyMap: bit (code & 7) of byte (code >> 3) */
+    GetKeys(k);
+    /* Key codes 0x38 (Shift) and 0x3A (Option): byte 7, bits 0 and 2. */
+    if (k[7] & 0x01)
+        st->mods |= AU_MOD_SHIFT;
+    if (k[7] & 0x04)
+        st->mods |= AU_MOD_OPTION;
+}
+
+static BrowserWin *front_browser_win(void)
+{
+    MacWin *m = mac_win_of(FrontWindow());
+    return m && m->kind == WIN_BROWSER ? (BrowserWin *)m : NULL;
+}
+
+static AuBrowserWindow *host_new_window(void *ctx, const char *url)
+{
+    (void)ctx;
+    return browserwin_model(browserwin_new(url, NULL));
+}
+
+static void host_raise(void *ctx, AuBrowserWindow *w)
+{
+    (void)ctx;
     SelectWindow(w->platform ? ((MacWin *)w->platform)->win : FrontWindow());
 }
 
+static void host_focus_address(void *ctx, AuBrowserWindow *w)
+{
+    (void)ctx;
+    if (w->platform)
+        browserwin_focus_field((BrowserWin *)w->platform);
+}
+
+static bool host_show_window(void *ctx, AuWindowKind kind)
+{
+    (void)ctx;
+    switch (kind) {
+    case AU_WINDOW_ABOUT: mac_about_box(); break;
+    case AU_WINDOW_PREFERENCES: prefswin_show(); break;
+    case AU_WINDOW_HISTORY: listwin_show(WIN_HISTORY); break;
+    case AU_WINDOW_BOOKMARKS: listwin_show(WIN_BOOKMARKS); break;
+    case AU_WINDOW_DOWNLOADS: listwin_show(WIN_DOWNLOADS); break;
+    case AU_WINDOW_COOKIES: listwin_show(WIN_COOKIES); break;
+    case AU_WINDOW_PAGE_SOURCE: devwin_show(WIN_SOURCE); break;
+    case AU_WINDOW_CONSOLE: devwin_show(WIN_CONSOLE); break;
+    case AU_WINDOW_NETWORK: devwin_show(WIN_NETWORK); break;
+    case AU_WINDOW_PERFORMANCE: devwin_show(WIN_PERF); break;
+    case AU_WINDOW_SYSTEM_STATUS: devwin_show(WIN_STATUS); break;
+    case AU_WINDOW_REPORT: devwin_show(WIN_REPORT); break;
+    case AU_WINDOW_TIMING_TEST: devwin_run_timing(); break;
+    case AU_WINDOW_PAINT_BENCHMARK: devwin_run_benchmark(); break;
+    default: return false;
+    }
+    return true;
+}
+
+static char *host_choose_file_url(void *ctx)
+{
+    (void)ctx;
+    return mac_choose_file_url();
+}
+
+static void host_save_page(void *ctx, AuBrowserWindow *w)
+{
+    (void)ctx;
+    mac_save_page(w);
+}
+
+static void host_close_front(void *ctx)
+{
+    (void)ctx;
+    close_window(FrontWindow());
+}
+
+static void host_find(void *ctx, AuBrowserWindow *w)
+{
+    (void)ctx;
+    if (w && w->platform)
+        browserwin_find((BrowserWin *)w->platform);
+    else if (!w && mac_win_of(FrontWindow()))
+        devwin_find(mac_win_of(FrontWindow()));
+}
+
+static void host_tool_find_again(void *ctx, bool forward)
+{
+    (void)ctx;
+    MacWin *m = mac_win_of(FrontWindow());
+    if (m)
+        devwin_find_again(m, forward);
+}
+
+/* The Edit menu's item numbers, which SystemEdit and MacWin.edit take. */
+static void host_edit(void *ctx, AuEditAction a)
+{
+    (void)ctx;
+    static const short items[] = {1, 3, 4, 5, 6, 7};
+    if (a == AU_EDIT_PASTE_AND_GO) {
+        BrowserWin *b = front_browser_win();
+        if (b)
+            browserwin_paste_and_go(b);
+        return;
+    }
+    if ((int)a < 0 || (size_t)a >= sizeof items / sizeof items[0])
+        return;
+    short item = items[a];
+    MacWin *m = mac_win_of(FrontWindow());
+    if (!SystemEdit((short)(item - 1)) && m && m->edit)
+        m->edit(m, item);
+}
+
+static void host_copy_text(void *ctx, const char *utf8, size_t len)
+{
+    (void)ctx;
+    mac_put_scrap(utf8, len);
+}
+
+static void host_select_window(void *ctx, void *window)
+{
+    (void)ctx;
+    SelectWindow((WindowPtr)window);
+}
+
+static void host_beep(void *ctx)
+{
+    (void)ctx;
+    SysBeep(1);
+}
+
+static void host_quit(void *ctx)
+{
+    (void)ctx;
+    g_quitting = true;
+}
+
+static const AuCommandHost command_host = {
+    NULL,          host_new_window,      host_raise,     host_focus_address, host_show_window,
+    host_choose_file_url, host_save_page, host_close_front, host_find,      host_tool_find_again,
+    host_edit,     host_copy_text,       host_select_window, host_beep,     host_quit};
+
+const AuCommandHost *mac_command_host(void)
+{
+    return &command_host;
+}
+
+void mac_open_url(const char *url, bool new_tab)
+{
+    AuCommandState st;
+    mac_command_state(&st);
+    au_command_open_url(&st, &command_host, url, new_tab);
+}
+
 /* ---- Menus ---- */
+
+static short mac_menu_id(AuMenuId id)
+{
+    switch (id) {
+    case AU_MENU_APPLICATION: return kAppleMenu;
+    case AU_MENU_FILE: return kFileMenu;
+    case AU_MENU_EDIT: return kEditMenu;
+    case AU_MENU_VIEW: return kViewMenu;
+    case AU_MENU_GO: return kGoMenu;
+    case AU_MENU_BOOKMARKS: return kBookmarksMenu;
+    case AU_MENU_DEVELOP: return kDevelopMenu;
+    case AU_MENU_TESTS: return kTestsMenu;
+    case AU_MENU_WINDOW: return kWindowMenu;
+    case AU_MENU_HELP: return kHelpMenu;
+    default: return 0;
+    }
+}
+
+static AuMenuId au_menu_of(short mac_id)
+{
+    for (int id = AU_MENU_NONE + 1; id < AU_MENU_COUNT; id++)
+        if (mac_menu_id((AuMenuId)id) == mac_id)
+            return (AuMenuId)id;
+    return AU_MENU_NONE;
+}
+
+/* The command at item of menu id's fixed items (first is the item
+ * number of the first of them), or AU_CMD_NONE. */
+static AuCommand menu_command(AuMenuId id, short item, short first)
+{
+    const AuMenuInfo *mi = au_menu_info(id);
+    if (!mi || item < first || item - first >= mi->nitems)
+        return AU_CMD_NONE;
+    return mi->items[item - first];
+}
+
+/* Appends a menu's fixed items. A key equivalent is set for shortcuts
+ * of Command alone; the Menu Manager cannot show Shift, so key_down
+ * looks those up in the table. */
+static void append_items(MenuHandle m, const AuMenuInfo *mi)
+{
+    for (int i = 0; i < mi->nitems; i++) {
+        AuCommand c = mi->items[i];
+        if (c == AU_CMD_SEPARATOR) {
+            AppendMenu(m, (ConstStr255Param) "\p(-");
+            continue;
+        }
+        const AuCommandInfo *ci = au_command_info(c);
+        mac_append_item(m, ci->title);
+        short item = CountMItems(m);
+        if (ci->shortcut.key && ci->shortcut.mods == AU_SHORTCUT_PRIMARY)
+            SetItemCmd(m, item, (CharParameter)ci->shortcut.key);
+        if (ci->submenu != AU_MENU_NONE) {
+            /* A submenu: the item's command character 0x1B marks it, and
+             * its mark is the submenu's ID. */
+            const AuMenuInfo *si = au_menu_info(ci->submenu);
+            Str255 title;
+            mac_pstr(si->title, title);
+            MenuHandle sub = NewMenu(mac_menu_id(ci->submenu), title);
+            if (!sub) {
+                DisableItem(m, item);
+                continue;
+            }
+            append_items(sub, si);
+            InsertMenu(sub, -1);
+            SetItemCmd(m, item, 0x1B);
+            SetItemMark(m, item, (CharParameter)mac_menu_id(ci->submenu));
+        }
+    }
+}
+
+/* The menu bar, from the command table. */
+static void build_menu_bar(void)
+{
+    int n;
+    const AuMenuId *bar = au_menu_bar(&n);
+    for (int i = 0; i < n; i++) {
+        const AuMenuInfo *mi = au_menu_info(bar[i]);
+        Str255 title;
+        if (bar[i] == AU_MENU_APPLICATION) {
+            title[0] = 1;
+            title[1] = 0x14; /* the apple */
+        } else {
+            mac_pstr(mi->title, title);
+        }
+        MenuHandle m = NewMenu(mac_menu_id(bar[i]), title);
+        if (!m)
+            mac_out_of_memory(1024);
+        append_items(m, mi);
+        InsertMenu(m, 0);
+        if (bar[i] == AU_MENU_APPLICATION) {
+            AppendMenu(m, (ConstStr255Param) "\p(-");
+            AppendResMenu(m, 'DRVR');
+        }
+    }
+    /* Aura's Help items go after the system's own. */
+    MenuHandle help = NULL;
+    if (HMGetHelpMenuHandle(&help) == noErr && help) {
+        AppendMenu(help, (ConstStr255Param) "\p(-");
+        help_first = (short)(CountMItems(help) + 1);
+        append_items(help, au_menu_info(AU_MENU_HELP));
+    }
+}
 
 static void clear_from(MenuHandle m, short first)
 {
@@ -293,26 +553,39 @@ static void clear_from(MenuHandle m, short first)
         DeleteMenuItem(m, n);
 }
 
-static void rebuild_go(void)
+/* The number of the first dynamic item of a menu. */
+static short first_listed(AuMenuId id)
 {
-    MenuHandle m = GetMenuHandle(kGoMenu);
-    clear_from(m, GO_FIRST_ENTRY - 1);
-    for (int i = 0; i < kGoEntries; i++) {
-        au_free(go_urls[i]);
-        go_urls[i] = NULL;
-    }
-    AuHistory *h = &g_browser->history;
-    if (h->n)
-        AppendMenu(m, (ConstStr255Param) "\p-");
-    char t[64];
-    for (size_t i = 0; i < h->n && i < kGoEntries; i++) {
-        au_menu_title(h->e[i].title, h->e[i].url, t, sizeof t);
-        mac_append_item(m, t);
-        go_urls[i] = au_strndup(h->e[i].url, strlen(h->e[i].url));
+    return (short)(au_menu_info(id)->nitems + 1);
+}
+
+/* Appends top-level entries of a dynamic list to m. */
+static void append_entries(MenuHandle m, const AuMenuList *l)
+{
+    for (int i = 0; i < l->n; i++) {
+        const AuMenuEntry *e = &l->e[i];
+        if (e->kind == AU_ENTRY_SEPARATOR) {
+            AppendMenu(m, (ConstStr255Param) "\p-");
+            continue;
+        }
+        mac_append_item(m, e->title);
+        short item = CountMItems(m);
+        if (!e->enabled)
+            DisableItem(m, item);
+        CheckItem(m, item, e->checked);
     }
 }
 
-static void bm_map(short menu, short item, uint32_t id)
+static void rebuild_go(void)
+{
+    MenuHandle m = GetMenuHandle(kGoMenu);
+    clear_from(m, first_listed(AU_MENU_GO));
+    au_menu_list_free(&go_list);
+    au_menu_list_history(g_browser, &go_list);
+    append_entries(m, &go_list);
+}
+
+static void bm_map(short menu, short item, int entry)
 {
     if (nbm_items == bm_cap) {
         bm_cap = bm_cap ? bm_cap * 2 : 64;
@@ -320,10 +593,12 @@ static void bm_map(short menu, short item, uint32_t id)
     }
     bm_items[nbm_items].menu = menu;
     bm_items[nbm_items].item = item;
-    bm_items[nbm_items].id = id;
+    bm_items[nbm_items].entry = entry;
     nbm_items++;
 }
 
+/* Bookmark folders become hierarchical menus 200 to 255; a folder past
+ * them is shown disabled, without its contents. */
 static void rebuild_bookmarks(void)
 {
     for (short id = kFirstFolderMenu; id < kFirstFolderMenu + folder_menus_used; id++) {
@@ -336,87 +611,101 @@ static void rebuild_bookmarks(void)
     folder_menus_used = 0;
     nbm_items = 0;
     MenuHandle m = GetMenuHandle(kBookmarksMenu);
-    clear_from(m, BM_FIRST_ITEM);
-    /* Breadth-first over folders with an explicit queue: (folder, menu). */
-    struct {
-        AuBookmark *folder;
-        MenuHandle menu;
-        short id;
-    } queue[kLastFolderMenu - kFirstFolderMenu + 2];
-    int qh = 0, qt = 0;
-    queue[qt].folder = &g_browser->bookmarks.root;
-    queue[qt].menu = m;
-    queue[qt].id = kBookmarksMenu;
-    qt++;
-    while (qh < qt) {
-        AuBookmark *folder = queue[qh].folder;
-        MenuHandle menu = queue[qh].menu;
-        short mid = queue[qh].id;
-        qh++;
-        for (AuBookmark *b = folder->first; b; b = b->next) {
-            char t[64];
-            au_menu_title(b->title, b->url, t, sizeof t);
-            mac_append_item(menu, t);
-            short item = CountMItems(menu);
-            if (!b->folder) {
-                bm_map(mid, item, b->id);
+    clear_from(m, first_listed(AU_MENU_BOOKMARKS));
+    au_menu_list_free(&bm_list);
+    au_menu_list_bookmarks(g_browser, &bm_list);
+    if (!bm_list.n)
+        return;
+    /* The menu each folder entry opens (NULL when it has none). The list
+     * puts every entry after its folder. */
+    MenuHandle *sub_of = au_calloc((size_t)bm_list.n * sizeof *sub_of);
+    short *id_of = au_calloc((size_t)bm_list.n * sizeof *id_of);
+    for (int i = 0; i < bm_list.n; i++) {
+        const AuMenuEntry *e = &bm_list.e[i];
+        MenuHandle menu = m;
+        short mid = kBookmarksMenu;
+        if (e->parent >= 0) {
+            menu = sub_of[e->parent];
+            mid = id_of[e->parent];
+            if (!menu)
                 continue;
-            }
-            short sid = (short)(kFirstFolderMenu + folder_menus_used);
-            if (sid > kLastFolderMenu || qt >= (int)(sizeof queue / sizeof queue[0])) {
-                DisableItem(menu, item);
-                continue;
-            }
-            Str255 pt;
-            mac_pstr(b->title, pt);
-            MenuHandle sub = NewMenu(sid, pt);
-            if (!sub)
-                continue;
-            InsertMenu(sub, -1);
-            folder_menus_used++;
-            SetItemCmd(menu, item, 0x1B);
-            SetItemMark(menu, item, (CharParameter)sid);
-            if (!b->first) {
-                AppendMenu(sub, (ConstStr255Param) "\p(empty)");
-                DisableItem(sub, 1);
-            }
-            queue[qt].folder = b;
-            queue[qt].menu = sub;
-            queue[qt].id = sid;
-            qt++;
         }
+        mac_append_item(menu, e->title);
+        short item = CountMItems(menu);
+        if (!e->enabled)
+            DisableItem(menu, item);
+        if (e->kind != AU_ENTRY_FOLDER) {
+            bm_map(mid, item, i);
+            continue;
+        }
+        short sid = (short)(kFirstFolderMenu + folder_menus_used);
+        if (sid > kLastFolderMenu) {
+            DisableItem(menu, item);
+            continue;
+        }
+        Str255 pt;
+        mac_pstr(e->title, pt);
+        MenuHandle sub = NewMenu(sid, pt);
+        if (!sub)
+            continue;
+        InsertMenu(sub, -1);
+        folder_menus_used++;
+        SetItemCmd(menu, item, 0x1B);
+        SetItemMark(menu, item, (CharParameter)sid);
+        sub_of[i] = sub;
+        id_of[i] = sid;
     }
+    au_free(sub_of);
+    au_free(id_of);
 }
 
 static void rebuild_windows(void)
 {
     MenuHandle m = GetMenuHandle(kWindowMenu);
-    clear_from(m, WIN_FIRST_WINDOW - 1);
-    nwindow_items = 0;
-    bool sep = false;
-    for (WindowPtr w = FrontWindow(); w && nwindow_items < 64; w = mac_next_window(w)) {
+    clear_from(m, first_listed(AU_MENU_WINDOW));
+    AuWindowRef refs[64];
+    int n = 0;
+    for (WindowPtr w = FrontWindow(); w && n < 64; w = mac_next_window(w)) {
         if (!mac_win_of(w) || !((WindowPeek)w)->visible)
             continue;
-        if (!sep) {
-            AppendMenu(m, (ConstStr255Param) "\p-");
-            sep = true;
-        }
         Str255 title;
         GetWTitle(w, title);
-        AppendMenu(m, (ConstStr255Param) "\px");
-        short item = CountMItems(m);
-        if (title[0] == 0) {
-            title[0] = 1;
-            title[1] = ' ';
+        refs[n].title = mac_roman_to_utf8((const char *)title + 1, title[0]);
+        refs[n].window = w;
+        n++;
+    }
+    au_menu_list_free(&win_list);
+    au_menu_list_windows(refs, n, FrontWindow(), &win_list);
+    for (int i = 0; i < n; i++)
+        au_free((char *)refs[i].title);
+    append_entries(m, &win_list);
+}
+
+/* Enables, disables and checks a menu's fixed items (the first at item
+ * number first) as the command table says. */
+static void apply_states(MenuHandle m, AuMenuId id, short first, const AuCommandState *st)
+{
+    const AuMenuInfo *mi = au_menu_info(id);
+    if (!m || !mi)
+        return;
+    for (int i = 0; i < mi->nitems; i++) {
+        AuCommand c = mi->items[i];
+        short item = (short)(first + i);
+        if (c == AU_CMD_SEPARATOR)
+            continue;
+        if (au_command_info(c)->submenu != AU_MENU_NONE) {
+            apply_states(GetMenuHandle(mac_menu_id(au_command_info(c)->submenu)), au_command_info(c)->submenu, 1,
+                         st);
+            continue; /* the item's mark names the submenu */
         }
-        SetMenuItemText(m, item, title);
-        CheckItem(m, item, w == FrontWindow());
-        window_items[nwindow_items++] = w;
+        if (au_command_enabled(st, c))
+            EnableItem(m, item);
+        else
+            DisableItem(m, item);
+        CheckItem(m, item, au_command_checked(st, c));
     }
 }
 
-/* View Source works for documents that have bytes: files and network
- * pages, not generated about: pages or a source view itself. */
 void mac_adjust_menus(void)
 {
     if (menus_dirty) {
@@ -425,323 +714,63 @@ void mac_adjust_menus(void)
         menus_dirty = false;
     }
     rebuild_windows(); /* cheap, and the front window changes often */
-    BrowserWin *b = browserwin_front();
-    AuBrowserWindow *w = b ? browserwin_model(b) : NULL;
-    AuTab *t = w ? au_bw_active_tab(w) : NULL;
-    bool browser_front = b && mac_win_of(FrontWindow()) == (MacWin *)b;
-    MenuHandle file = GetMenuHandle(kFileMenu), view = GetMenuHandle(kViewMenu), go = GetMenuHandle(kGoMenu),
-               bm = GetMenuHandle(kBookmarksMenu);
-    if (browser_front)
-        EnableItem(file, FILE_CLOSE_TAB);
-    else
-        DisableItem(file, FILE_CLOSE_TAB);
-    if (FrontWindow())
-        EnableItem(file, FILE_CLOSE_WINDOW);
-    else
-        DisableItem(file, FILE_CLOSE_WINDOW);
-    if (au_browser_can_reopen(g_browser))
-        EnableItem(file, FILE_REOPEN_TAB);
-    else
-        DisableItem(file, FILE_REOPEN_TAB);
-    if (w && au_bw_has_page_source(w))
-        EnableItem(file, FILE_SAVE_AS);
-    else
-        DisableItem(file, FILE_SAVE_AS);
-    /* Undo, Cut, Copy, Paste, Clear and Select All need a text field (or
-     * a desk accessory, which takes them through SystemEdit). */
-    WindowPtr fw = FrontWindow();
-    MacWin *fm = mac_win_of(fw);
-    bool text = (fw && GetWindowKind(fw) < 0) || (fm && fm->edit && fm->edit(fm, 0));
-    MenuHandle edit = GetMenuHandle(kEditMenu);
-    for (short i = 1; i <= 7; i++) {
-        if (i == 2)
-            continue;
-        if (text)
-            EnableItem(edit, i);
-        else
-            DisableItem(edit, i);
-    }
-    /* In a page: Copy needs a selection, Select All a tab. */
-    if (!text && browser_front && t) {
-        if (au_bw_has_selection(w))
-            EnableItem(edit, EDIT_COPY);
-        EnableItem(edit, EDIT_SELECT_ALL);
-    }
-    if (t)
-        EnableItem(edit, EDIT_FIND);
-    else
-        DisableItem(edit, EDIT_FIND);
-    bool dev_front = fm && fm->kind >= WIN_SOURCE;
-    if (dev_front)
-        EnableItem(edit, EDIT_FIND);
-    for (short i = EDIT_FIND_AGAIN; i <= EDIT_FIND_PREVIOUS; i++) {
-        if (dev_front ? devwin_can_find_again(fm) : (t && g_browser->find_text))
-            EnableItem(edit, i);
-        else
-            DisableItem(edit, i);
-    }
-    if (t && t->loading)
-        EnableItem(view, VIEW_STOP);
-    else
-        DisableItem(view, VIEW_STOP);
-    if (t)
-        EnableItem(view, VIEW_RELOAD);
-    else
-        DisableItem(view, VIEW_RELOAD);
-    if (w && au_bw_can_view_source(w))
-        EnableItem(view, VIEW_SOURCE);
-    else
-        DisableItem(view, VIEW_SOURCE);
-    static const short zoom_items[3] = {VIEW_ZOOM_IN, VIEW_ZOOM_OUT, VIEW_ZOOM_RESET};
-    static const int zoom_dirs[3] = {1, -1, 0};
-    for (int i = 0; i < 3; i++) {
-        if (w && au_bw_can_zoom(w, zoom_dirs[i]))
-            EnableItem(view, zoom_items[i]);
-        else
-            DisableItem(view, zoom_items[i]);
-    }
-    CheckItem(view, VIEW_TABS_TOP, g_browser->prefs.tab_position == AU_TABS_TOP);
-    CheckItem(view, VIEW_TABS_LEFT, g_browser->prefs.tab_position == AU_TABS_LEFT);
-    if (t && au_nav_can_go(&t->nav, -1))
-        EnableItem(go, GO_BACK);
-    else
-        DisableItem(go, GO_BACK);
-    if (t && au_nav_can_go(&t->nav, 1))
-        EnableItem(go, GO_FORWARD);
-    else
-        DisableItem(go, GO_FORWARD);
-    if (t)
-        EnableItem(bm, BM_ADD);
-    else
-        DisableItem(bm, BM_ADD);
-    /* Develop: the windows that show a page need one; the timing test and
-     * the benchmark need a browser window to paint in. System Status, the
-     * test pages and Report a Problem always work. */
-    MenuHandle dev = GetMenuHandle(kDevelopMenu), tests = GetMenuHandle(kTestsMenu);
-    static const short page_items[] = {DEV_CONSOLE, DEV_NETWORK, DEV_PERF, DEV_TIMING};
-    if (w && au_bw_can_view_source(w))
-        EnableItem(dev, DEV_SOURCE);
-    else
-        DisableItem(dev, DEV_SOURCE);
-    for (size_t i = 0; i < sizeof page_items / sizeof page_items[0]; i++) {
-        if (t)
-            EnableItem(dev, page_items[i]);
-        else
-            DisableItem(dev, page_items[i]);
-    }
-    if (tests) {
-        if (b)
-            EnableItem(tests, TEST_BENCH);
-        else
-            DisableItem(tests, TEST_BENCH);
+    AuCommandState st;
+    mac_command_state(&st);
+    int n;
+    const AuMenuId *bar = au_menu_bar(&n);
+    for (int i = 0; i < n; i++)
+        apply_states(GetMenuHandle(mac_menu_id(bar[i])), bar[i], 1, &st);
+    if (help_first) {
+        MenuHandle help = NULL;
+        if (HMGetHelpMenuHandle(&help) == noErr && help)
+            apply_states(help, AU_MENU_HELP, help_first, &st);
     }
 }
 
-/* Shift or Option held now (for Reload chosen from the menu). */
-static bool shift_or_option(void)
+static void run_command(AuCommand c)
 {
-    uint8_t k[16]; /* the KeyMap: bit (code & 7) of byte (code >> 3) */
-    GetKeys(k);
-    /* Key codes 0x38 (Shift) and 0x3A (Option): byte 7, bits 0 and 2. */
-    return (k[7] & 0x01) || (k[7] & 0x04);
+    AuCommandState st;
+    mac_command_state(&st);
+    au_command_run(&st, &command_host, c);
 }
 
-static void close_window(WindowPtr w)
+static void run_entry(const AuMenuList *l, int i)
 {
-    MacWin *m = mac_win_of(w);
-    if (m && m->close)
-        m->close(m);
-    else if (w && GetWindowKind(w) < 0)
-        CloseDeskAcc(GetWindowKind(w));
+    if (i < 0 || i >= l->n)
+        return;
+    AuCommandState st;
+    mac_command_state(&st);
+    au_menu_entry_run(&st, &command_host, &l->e[i]);
 }
 
 static void do_menu(long choice)
 {
     short menu = (short)(choice >> 16), item = (short)(choice & 0xFFFF);
-    BrowserWin *b = browserwin_front();
-    AuBrowserWindow *w = b ? browserwin_model(b) : NULL;
     if (menu == kHelpMenu) {
         /* The system's own items (balloons) are handled by the system. */
-        if (help_report_item && item == help_report_item)
-            devwin_show(WIN_REPORT);
+        if (help_first)
+            run_command(menu_command(AU_MENU_HELP, item, help_first));
         HiliteMenu(0);
         return;
     }
-    switch (menu) {
-    case kAppleMenu:
-        if (item == 1) {
-            mac_about_box();
-        } else {
-            Str255 name;
-            GetMenuItemText(GetMenuHandle(kAppleMenu), item, name);
-            OpenDeskAcc(name);
-        }
-        break;
-    case kFileMenu:
-        switch (item) {
-        case FILE_NEW_WINDOW: browserwin_new(NULL, NULL); break;
-        case FILE_NEW_TAB:
-            if (w) {
-                au_bw_new_tab(w, NULL, true, w->ntabs);
-                browserwin_focus_field(b);
-            } else {
-                browserwin_focus_field(browserwin_new("about:blank", NULL));
-            }
-            break;
-        case FILE_OPEN_LOCATION:
-            if (!b)
-                b = browserwin_new("about:blank", NULL);
-            SelectWindow(((MacWin *)b)->win);
-            browserwin_focus_field(b);
-            break;
-        case FILE_OPEN_FILE: {
-            char *url = mac_choose_file_url();
-            if (url) {
-                mac_open_url(url, false);
-                au_free(url);
-            }
-            break;
-        }
-        case FILE_CLOSE_TAB:
-            if (w && mac_win_of(FrontWindow()) == (MacWin *)b)
-                au_bw_close_tab(w, w->active);
-            else
-                close_window(FrontWindow());
-            break;
-        case FILE_CLOSE_WINDOW: close_window(FrontWindow()); break;
-        case FILE_REOPEN_TAB:
-            if (au_browser_can_reopen(g_browser)) {
-                if (!w)
-                    w = browserwin_model(browserwin_new("about:blank", NULL));
-                au_bw_reopen_closed_tab(w);
-            }
-            break;
-        case FILE_SAVE_AS:
-            if (w)
-                mac_save_page(w);
-            break;
-        case FILE_QUIT: g_quitting = true; break;
-        }
-        break;
-    case kEditMenu: {
-        if (item == EDIT_PREFS) {
-            prefswin_show();
-            break;
-        }
-        /* Find in a developer window searches its text. */
-        MacWin *dev = mac_win_of(FrontWindow());
-        if (dev && dev->kind < WIN_SOURCE)
-            dev = NULL;
-        if (item == EDIT_FIND) {
-            if (dev)
-                devwin_find(dev);
-            else if (b)
-                browserwin_find(b);
-            break;
-        }
-        if (item == EDIT_FIND_AGAIN || item == EDIT_FIND_PREVIOUS) {
-            if (dev)
-                devwin_find_again(dev, item == EDIT_FIND_AGAIN);
-            else if (w && !au_bw_find_again(w, item == EDIT_FIND_AGAIN))
-                SysBeep(1);
-            break;
-        }
-        MacWin *m = mac_win_of(FrontWindow());
-        if (!SystemEdit((short)(item - 1)) && m && m->edit)
-            m->edit(m, item);
-        break;
-    }
-    case kViewMenu:
-        switch (item) {
-        case VIEW_RELOAD:
-            /* Shift or Option: reload from the network, past the cache. */
-            if (w && shift_or_option())
-                au_bw_reload_bypass(w);
-            else if (w)
-                au_bw_reload(w);
-            break;
-        case VIEW_STOP:
-            if (w)
-                au_bw_stop(w);
-            break;
-        case VIEW_SOURCE: devwin_show(WIN_SOURCE); break;
-        case VIEW_ZOOM_IN:
-        case VIEW_ZOOM_OUT:
-        case VIEW_ZOOM_RESET:
-            if (w)
-                au_bw_zoom(w, item == VIEW_ZOOM_IN ? 1 : item == VIEW_ZOOM_OUT ? -1 : 0);
-            break;
-        case VIEW_TABS_TOP:
-        case VIEW_TABS_LEFT:
-            g_browser->prefs.tab_position = item == VIEW_TABS_LEFT ? AU_TABS_LEFT : AU_TABS_TOP;
-            au_browser_prefs_changed(g_browser);
-            break;
-        }
-        break;
-    case kDevelopMenu:
-        switch (item) {
-        case DEV_SOURCE: devwin_show(WIN_SOURCE); break;
-        case DEV_CONSOLE: devwin_show(WIN_CONSOLE); break;
-        case DEV_NETWORK: devwin_show(WIN_NETWORK); break;
-        case DEV_PERF: devwin_show(WIN_PERF); break;
-        case DEV_TIMING: devwin_run_timing(); break;
-        case DEV_STATUS: devwin_show(WIN_STATUS); break;
-        case DEV_REPORT: devwin_show(WIN_REPORT); break;
-        }
-        break;
-    case kTestsMenu:
-        switch (item) {
-        case TEST_SCENE: mac_open_url("about:scene", false); break;
-        case TEST_FONTS: mac_open_url("about:fonts", false); break;
-        case TEST_BENCH: devwin_run_benchmark(); break;
-        }
-        break;
-    case kGoMenu:
-        if (item == GO_BACK && w)
-            au_bw_back(w);
-        else if (item == GO_FORWARD && w)
-            au_bw_forward(w);
-        else if (item == GO_HOME) {
-            if (w)
-                au_bw_home(w);
-            else
-                browserwin_new(NULL, NULL);
-        } else if (item == GO_HISTORY)
-            listwin_show(WIN_HISTORY);
-        else if (item >= GO_FIRST_ENTRY && item < GO_FIRST_ENTRY + kGoEntries && go_urls[item - GO_FIRST_ENTRY]) {
-            char *u = au_strndup(go_urls[item - GO_FIRST_ENTRY], strlen(go_urls[item - GO_FIRST_ENTRY]));
-            mac_open_url(u, false);
-            au_free(u);
-        }
-        break;
-    case kWindowMenu:
-        if (item == WIN_DOWNLOADS_ITEM)
-            listwin_show(WIN_DOWNLOADS);
-        else if (item == WIN_COOKIES_ITEM)
-            listwin_show(WIN_COOKIES);
-        else if (item >= WIN_FIRST_WINDOW && item - WIN_FIRST_WINDOW < nwindow_items)
-            SelectWindow(window_items[item - WIN_FIRST_WINDOW]);
-        break;
-    default:
-        if (menu == kBookmarksMenu && item == BM_ADD) {
-            if (w)
-                au_bw_bookmark_page(w, false);
-        } else if (menu == kBookmarksMenu && item == BM_SHOW) {
-            listwin_show(WIN_BOOKMARKS);
-        } else {
-            for (int i = 0; i < nbm_items; i++) {
-                if (bm_items[i].menu == menu && bm_items[i].item == item) {
-                    AuBookmark *bk = au_bookmark_find_id(&g_browser->bookmarks, bm_items[i].id);
-                    if (bk) {
-                        char *u = au_strndup(bk->url, strlen(bk->url));
-                        mac_open_url(u, false);
-                        au_free(u);
-                    }
-                    break;
-                }
+    AuMenuId id = au_menu_of(menu);
+    if (id == AU_MENU_APPLICATION && item > au_menu_info(id)->nitems) {
+        Str255 name;
+        GetMenuItemText(GetMenuHandle(kAppleMenu), item, name);
+        OpenDeskAcc(name);
+    } else if (id != AU_MENU_NONE && item < first_listed(id)) {
+        run_command(menu_command(id, item, 1));
+    } else if (id == AU_MENU_GO) {
+        run_entry(&go_list, item - first_listed(id));
+    } else if (id == AU_MENU_WINDOW) {
+        run_entry(&win_list, item - first_listed(id));
+    } else if (id == AU_MENU_BOOKMARKS || (menu >= kFirstFolderMenu && menu <= kLastFolderMenu)) {
+        for (int i = 0; i < nbm_items; i++) {
+            if (bm_items[i].menu == menu && bm_items[i].item == item) {
+                run_entry(&bm_list, bm_items[i].entry);
+                break;
             }
         }
-        break;
     }
     HiliteMenu(0);
 }
@@ -928,12 +957,6 @@ static void key_down(EventRecord *ev)
             au_bw_select_tab(w, i);
             return;
         }
-        /* Command-Shift-W closes the window; so does Command-W in a window
-         * without tabs (Close Tab is greyed there). */
-        if ((ch == 'w' || ch == 'W') && ((ev->modifiers & shiftKey) || !(b && m == (MacWin *)b))) {
-            close_window(FrontWindow());
-            return;
-        }
         /* Command-arrows, Command-Delete and Command-Home/End edit or move
          * in a text field (the address field or the page's); no menu has
          * them. */
@@ -946,25 +969,21 @@ static void key_down(EventRecord *ev)
         if (ch == '=')
             ch = '+'; /* Command-= is Zoom In without Shift */
         mac_adjust_menus();
-        /* MenuKey ignores Shift: Shift-Command-T is Reopen Closed Tab,
-         * Shift-Command-G Find Previous. */
-        if ((ch == 't' || ch == 'T') && (ev->modifiers & shiftKey)) {
-            if (au_browser_can_reopen(g_browser)) {
-                HiliteMenu(kFileMenu);
-                do_menu(((long)kFileMenu << 16) | FILE_REOPEN_TAB);
-            }
-            return;
+        /* The shortcut from the command table. Shift-Command shortcuts
+         * (Reopen Closed Tab, Close Window, Find Previous) are looked up
+         * with Shift; other keys with Shift run their Command shortcut, as
+         * MenuKey, which ignores Shift, did. */
+        AuCommandState st;
+        mac_command_state(&st);
+        unsigned mods = AU_SHORTCUT_PRIMARY | ((ev->modifiers & shiftKey) ? AU_SHORTCUT_SHIFT : 0);
+        AuCommand c = au_command_for_key(&st, ch, mods);
+        if (c == AU_CMD_NONE && (mods & AU_SHORTCUT_SHIFT))
+            c = au_command_for_key(&st, ch, AU_SHORTCUT_PRIMARY);
+        if (c != AU_CMD_NONE && au_command_enabled(&st, c)) {
+            HiliteMenu(mac_menu_id(au_command_info(c)->menu));
+            au_command_run(&st, &command_host, c);
+            HiliteMenu(0);
         }
-        if ((ch == 'g' || ch == 'G') && (ev->modifiers & shiftKey)) {
-            if ((m && m->kind >= WIN_SOURCE) ? devwin_can_find_again(m) : (b && g_browser->find_text != NULL)) {
-                HiliteMenu(kEditMenu);
-                do_menu(((long)kEditMenu << 16) | EDIT_FIND_PREVIOUS);
-            }
-            return;
-        }
-        long choice = MenuKey(ch);
-        if (choice >> 16)
-            do_menu(choice);
         return;
     }
     if (m && m->key)
@@ -1093,30 +1112,7 @@ int main(void)
     AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, NewAEEventHandlerUPP(ae_quit), 0, false);
     AEInstallEventHandler('GURL', 'GURL', NewAEEventHandlerUPP(ae_get_url), 0, false);
 
-    Handle mbar = GetNewMBar(128);
-    if (!mbar)
-        mac_out_of_memory(1024);
-    SetMenuBar(mbar);
-    AppendResMenu(GetMenuHandle(kAppleMenu), 'DRVR');
-    {
-        /* Develop > Tests is a submenu: the item's command character 0x1B
-         * marks it, and its mark is the submenu's ID. */
-        MenuHandle tests = GetMenu(kTestsMenu);
-        if (tests) {
-            InsertMenu(tests, -1);
-            SetItemCmd(GetMenuHandle(kDevelopMenu), DEV_TESTS, 0x1B);
-            SetItemMark(GetMenuHandle(kDevelopMenu), DEV_TESTS, (CharParameter)kTestsMenu);
-        } else {
-            DisableItem(GetMenuHandle(kDevelopMenu), DEV_TESTS);
-        }
-        /* Report a Problem goes in the system's Help menu too. */
-        MenuHandle help = NULL;
-        if (HMGetHelpMenuHandle(&help) == noErr && help) {
-            AppendMenu(help, (ConstStr255Param) "\p(-");
-            AppendMenu(help, (ConstStr255Param) "\pReport a Problem...");
-            help_report_item = CountMItems(help);
-        }
-    }
+    build_menu_bar();
     DrawMenuBar();
     mac_context_init();
 

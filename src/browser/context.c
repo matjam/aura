@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-static void add(AuContextMenu *m, AuCommand cmd, const char *label, bool enabled)
+static void add_titled(AuContextMenu *m, AuCommand cmd, const char *label, bool enabled)
 {
     if (m->n >= AU_CONTEXT_MAX)
         return;
@@ -18,9 +18,15 @@ static void add(AuContextMenu *m, AuCommand cmd, const char *label, bool enabled
     m->n++;
 }
 
+/* An item titled from the command table (commands.c). */
+static void add(AuContextMenu *m, AuCommand cmd, bool enabled)
+{
+    add_titled(m, cmd, au_command_title(NULL, cmd), enabled);
+}
+
 static void sep(AuContextMenu *m)
 {
-    add(m, AU_CMD_SEPARATOR, "-", false);
+    add_titled(m, AU_CMD_SEPARATOR, "-", false);
 }
 
 static char *take(AuBuf *b)
@@ -93,24 +99,24 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
             break;
         m->kind = AU_CONTEXT_TAB;
         m->tab = h.index;
-        add(m, AU_CMD_CLOSE_TAB, "Close Tab", true);
-        add(m, AU_CMD_CLOSE_OTHER_TABS, "Close Other Tabs", w->ntabs > 1);
+        add(m, AU_CMD_CLOSE_TAB, true);
+        add(m, AU_CMD_CLOSE_OTHER_TABS, w->ntabs > 1);
         sep(m);
-        add(m, AU_CMD_RELOAD_TAB, "Reload", true);
-        add(m, AU_CMD_DUPLICATE_TAB, "Duplicate", true);
+        add(m, AU_CMD_RELOAD_TAB, true);
+        add(m, AU_CMD_DUPLICATE_TAB, true);
         sep(m);
-        add(m, AU_CMD_UNLOAD_TAB, "Unload Tab", au_bw_can_unload_tab(w, h.index));
+        add(m, AU_CMD_UNLOAD_TAB, au_bw_can_unload_tab(w, h.index));
         break;
     case AU_HIT_ADDRESS:
     case AU_HIT_SECURITY: {
         bool sel = (flags & AU_CONTEXT_FIELD_SELECTION) != 0, clip = (flags & AU_CONTEXT_CLIPBOARD_TEXT) != 0;
         m->kind = AU_CONTEXT_FIELD;
-        add(m, AU_CMD_CUT, "Cut", sel);
-        add(m, AU_CMD_FIELD_COPY, "Copy", sel);
-        add(m, AU_CMD_PASTE, "Paste", clip);
-        add(m, AU_CMD_PASTE_GO, "Paste and Go", clip);
+        add(m, AU_CMD_CUT, sel);
+        add(m, AU_CMD_FIELD_COPY, sel);
+        add(m, AU_CMD_PASTE, clip);
+        add(m, AU_CMD_PASTE_GO, clip);
         sep(m);
-        add(m, AU_CMD_SELECT_ALL, "Select All", (flags & AU_CONTEXT_FIELD_TEXT) != 0);
+        add(m, AU_CMD_SELECT_ALL, (flags & AU_CONTEXT_FIELD_TEXT) != 0);
         break;
     }
     case AU_HIT_PAGE: {
@@ -125,39 +131,42 @@ bool au_bw_context_menu(AuBrowserWindow *w, int x, int y, unsigned flags, AuCont
         m->link = take(&link);
         m->image = take(&image);
         if (m->link) {
-            add(m, AU_CMD_OPEN_LINK, "Open Link", true);
-            add(m, AU_CMD_OPEN_LINK_TAB, "Open Link in New Tab", true);
-            add(m, AU_CMD_OPEN_LINK_WINDOW, "Open Link in New Window", true);
+            add(m, AU_CMD_OPEN_LINK, true);
+            add(m, AU_CMD_OPEN_LINK_TAB, true);
+            add(m, AU_CMD_OPEN_LINK_WINDOW, true);
             sep(m);
-            add(m, AU_CMD_COPY_LINK, "Copy Link Address", true);
+            add(m, AU_CMD_COPY_LINK, true);
             if (saveable(m->link))
-                add(m, AU_CMD_SAVE_LINK, "Save Link As", true);
-            add(m, AU_CMD_BOOKMARK_LINK, "Bookmark Link", true);
+                add(m, AU_CMD_SAVE_LINK, true);
+            add(m, AU_CMD_BOOKMARK_LINK, true);
         }
         if (m->image) {
             sep(m);
-            add(m, AU_CMD_OPEN_IMAGE_TAB, "Open Image in New Tab", true);
-            add(m, AU_CMD_COPY_IMAGE, "Copy Image Address", true);
+            add(m, AU_CMD_OPEN_IMAGE_TAB, true);
+            add(m, AU_CMD_COPY_IMAGE, true);
             if (saveable(m->image))
-                add(m, AU_CMD_SAVE_IMAGE, "Save Image As", true);
+                add(m, AU_CMD_SAVE_IMAGE, true);
         }
         if (!m->link && !m->image) {
-            add(m, AU_CMD_BACK, "Back", au_nav_can_go(&t->nav, -1));
-            add(m, AU_CMD_FORWARD, "Forward", au_nav_can_go(&t->nav, 1));
-            add(m, AU_CMD_RELOAD, "Reload", true);
+            add(m, AU_CMD_BACK, au_nav_can_go(&t->nav, -1));
+            add(m, AU_CMD_FORWARD, au_nav_can_go(&t->nav, 1));
+            add(m, AU_CMD_RELOAD, true);
             sep(m);
-            add(m, AU_CMD_VIEW_SOURCE, "View Source", au_bw_can_view_source(w));
-            add(m, AU_CMD_BOOKMARK_PAGE, "Bookmark Page", true);
+            add(m, AU_CMD_VIEW_SOURCE, au_bw_can_view_source(w));
+            add(m, AU_CMD_BOOKMARK_PAGE, true);
             bool off;
             if (au_bw_site_blocking(w, &off)) {
+                AuCommandState st;
+                memset(&st, 0, sizeof st);
+                st.browser = w->browser;
+                st.window = w;
                 sep(m);
-                add(m, AU_CMD_TOGGLE_BLOCKING,
-                    off ? "Turn On Blocking for This Site" : "Turn Off Blocking for This Site", true);
+                add_titled(m, AU_CMD_TOGGLE_BLOCKING, au_command_title(&st, AU_CMD_TOGGLE_BLOCKING), true);
             }
         }
         if (au_page_has_selection(t->page)) {
             sep(m);
-            add(m, AU_CMD_COPY, "Copy", true);
+            add(m, AU_CMD_COPY, true);
         }
         break;
     }
