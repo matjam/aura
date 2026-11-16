@@ -44,7 +44,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_canvas2d` | the canvas 2D context: random drawing calls with extreme arguments | `canvas/fuzz_canvas2d N SEED SECONDS` | generated |
 | `fuzz_svg` | XML parser, path grammar, the SVG image pipeline | `svg/fuzz_svg N SEED SECONDS tests/svg/corpus/*` | `tests/svg/corpus` |
 | `fuzz_image` | PNG, JPEG, GIF, WebP, BMP and ICO decoders, whole and in chunks | `image/fuzz_image N SEED tests/image/vectors/*/*` (one format: `tests/image/vectors/png/*`) | `tests/image/vectors` |
-| `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2 | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |
+| `fuzz_font` | sfnt tables, variations, COLR, GSUB, WOFF and WOFF2, paged faces (with short files and failing reads) | `paint/fuzz_font N SEED SECONDS tests/paint/fonts/*.ttf tests/paint/fonts/*.woff*` | `tests/paint/fonts` |
 | `fuzz_webfont` | `@font-face` loading with mutated WOFF2 answers | `page/fuzz_webfont N SEED SECONDS` | `sample-inter.woff2` |
 | `fuzz_url` | URL parser and serializer | `url/fuzz_url N SEED` | built-in URLs |
 | `fuzz_net` | HTTP response parser, data URLs, PSL, root store, certificates, HSTS header and file, authentication, dates, MIME types, cache entries; `aia`: certificate bundles and the intermediates pool file; `tls`: the TLS handshake through `tls.c` | `net/fuzz_net all N SEED assets/net/aura-roots.bin`, `net/fuzz_net aia N SEED`, `net/fuzz_net tls N SEED SECONDS` | built-in seeds, the root store, test certificates |
