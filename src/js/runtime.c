@@ -273,6 +273,30 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
     return 1;
 }
 
+/* The engine asks interrupt_cb only once in ten thousand steps (loop
+ * iterations and calls). That is often enough for script that computes,
+ * but a native that forces a layout can take a large part of a second,
+ * and ten thousand of those before the first check is longer than anyone
+ * waits: a mutation observer that read the page's size on every change
+ * ran for minutes. Natives that can be slow call js_out_of_time first
+ * and, when it is true, return js_throw_stopped: the same uncatchable
+ * error the interrupt raises. */
+bool js_out_of_time(AuJs *js)
+{
+    AuJs *r = js->root;
+    if (r->depth == 0 || r->closing)
+        return false;
+    return interrupt_cb(r->ctx, r) != 0;
+}
+
+JSValue js_throw_stopped(JSContext *ctx)
+{
+    JS_ThrowInternalError(ctx, "interrupted");
+    JSValue e = JS_GetException(ctx);
+    JS_SetUncatchableError(ctx, e);
+    return JS_Throw(ctx, e);
+}
+
 /* The entry depth, the budget and the interrupt state belong to the
  * runtime, so they live in the root AuJs: a frame's script that runs
  * inside its parent's call shares the parent's budget. root->entered
@@ -506,6 +530,12 @@ static void run_jobs(AuJs *js)
             break;
         if (r < 0)
             js_report_exception(js);
+        /* The script's time is up: the jobs left wait for the next
+         * entry. Each further job would run up to ten thousand steps
+         * before the engine asked again, and jobs that queue jobs
+         * (observers that change the tree) kept that up for minutes. */
+        if (js->root->interrupted)
+            break;
     }
 }
 
@@ -522,7 +552,7 @@ void au_js_checkpoint(AuJs *js)
     for (int round = 0; round < 64; round++) {
         run_jobs(js);
         bool more = false;
-        for (AuJs *g = root; g; g = g->group_next) {
+        for (AuJs *g = root; g && !root->interrupted; g = g->group_next) {
             if (g->closing)
                 continue;
             if (g->nreacts) {
@@ -534,7 +564,7 @@ void au_js_checkpoint(AuJs *js)
                 more = true;
             }
         }
-        if (!more && !JS_IsJobPending(js->rt))
+        if (root->interrupted || (!more && !JS_IsJobPending(js->rt)))
             break;
     }
     report_rejections(js);

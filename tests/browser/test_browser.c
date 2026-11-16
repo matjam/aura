@@ -572,6 +572,15 @@ static void test_history(void)
     au_history_init(&r, 100);
     CHECK(au_history_parse(&r, "", 0));
     au_history_free(&r);
+    /* A time of 19 digits overflowed the number parser (found by
+     * fuzz_files): the line is dropped, the next one kept. */
+    au_history_init(&r, 100);
+    static const char big[] = "# Aura history 1\n9999999999999999999\t1\thttp://big.test/\tBig\n"
+                              "-9999999999999999999\t1\thttp://neg.test/\tNeg\n"
+                              "999999999999999999\t1\thttp://ok.test/\tOk\n1700000000\t2\thttp://a.test/\tA\n";
+    au_history_parse(&r, big, sizeof big - 1);
+    CHECK(r.n == 2 && au_history_find(&r, "http://big.test/") < 0 && au_history_find(&r, "http://ok.test/") >= 0);
+    au_history_free(&r);
 
     au_buf_free(&out);
     au_history_free(&g);
@@ -1147,6 +1156,12 @@ static void test_downloads(void)
     CHECK(back.n == 0);
     static const char nohead[] = "1\tdone\t5\t5\t0\thttp://a/\ta\t\t\n";
     CHECK(!au_downloads_parse(&back, nohead, sizeof nohead - 1));
+    CHECK(back.n == 1);
+    /* Numbers of 19 digits overflowed the parser (found by fuzz_files):
+     * the line is dropped. */
+    static const char bignum[] = "# Aura downloads 1\n1\tdone\t9999999999999999999\t-9999999999999999999\t0\thttp://a/\ta\t\t\n"
+                                 "2\tdone\t5\t5\t0\thttp://b/\tb\t\t\n";
+    au_downloads_parse(&back, bignum, sizeof bignum - 1);
     CHECK(back.n == 1);
 
     /* Painting the list must not crash without fonts. */

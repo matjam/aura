@@ -6,7 +6,7 @@
 #              guest beside the first, give it another folder.
 # AURA_DISKS   folder of the base disk images. Default: disks/ in the main
 #              checkout. The images are standalone (no backing file) and
-#              git-ignored; CLAUDE.md says where they came from.
+#              git-ignored; docs/building.md says where they came from.
 # BASE         which Mac OS 9.2.2 system the guest boots:
 #                enforcer  os9-vmoff.qcow2: virtual memory off, with the
 #                          Enforcer kernel and extension installed

@@ -21,7 +21,7 @@
  * The protocol code is sans I/O: response parsing (http_parse.h), TLS
  * (tls.h), cookies, HSTS and the cache are state machines over bytes and
  * values; only au_net_pump talks to AuNetOps. Everything runs on the main
- * task (see CLAUDE.md, Networking). */
+ * task (see docs/networking.md and docs/mac-os-9-shell.md). */
 #ifndef AURA_NET_H
 #define AURA_NET_H
 

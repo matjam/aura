@@ -116,8 +116,8 @@ Keep code small and fast where that costs nothing.
 - Shared workers, service workers, IndexedDB. (Dedicated workers are in:
   bot checks that run a proof of work need them.)
 - WebSockets. The first to pull in if an acceptance site needs it.
-  (Canvas 2D was listed here and has since been built: see Canvas in
-  `CLAUDE.md`.)
+  (Canvas 2D was listed here and has since been built: see
+  [`canvas.md`](canvas.md).)
 - CSS animations and transitions beyond jumping to the end state, 3D
   transforms, filters, blend modes, container queries.
 - Right-to-left and vertical text, complex-script shaping (Arabic,

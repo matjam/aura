@@ -343,6 +343,13 @@ static void window_frames(AuJs *js)
 {
     if (js->closing || JS_IsUndefined(js->P))
         return;
+    /* A script that is being stopped (its time is up) must not run more
+     * script. The exception of the call below is dropped, the interrupt's
+     * too, and the engine checks the time only once in ten thousand
+     * steps, most of which were spent here: a loop that kept inserting
+     * iframes was interrupted here again and again and never ended. */
+    if (js->root->interrupted)
+        return;
     JSValue fn = JS_GetPropertyStr(js->ctx, js->P, "framesChanged");
     if (JS_IsFunction(js->ctx, fn)) {
         JSValue r = JS_Call(js->ctx, fn, JS_UNDEFINED, 0, NULL);

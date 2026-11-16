@@ -2952,14 +2952,21 @@ static void in_template(HtmlTreeBuilder *tb, HtmlToken *t)
             in_head(tb, t);
         return;
     case HTML_TOK_EOF:
-        if (!template_open(tb)) {
-            stop(tb);
-            return;
-        }
-        pop_until_tag(tb, AU_ATOM_template);
-        clear_afe_to_marker(tb);
-        tb->ntmpl--;
-        reset_mode(tb);
+        /* Each open template is closed and the token processed again.
+         * While template insertion modes remain, every mode's end-of-file
+         * rule comes back here, so the templates are closed in a loop:
+         * processing the token again by a call nested once per open
+         * template, and a page can leave thousands open. */
+        do {
+            if (!template_open(tb)) {
+                stop(tb);
+                return;
+            }
+            pop_until_tag(tb, AU_ATOM_template);
+            clear_afe_to_marker(tb);
+            tb->ntmpl--;
+            reset_mode(tb);
+        } while (tb->ntmpl > 0);
         dispatch(tb, t);
         return;
     }

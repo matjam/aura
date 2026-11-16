@@ -275,6 +275,11 @@ JSValue js_call(AuJs *js, JSValueConst fn, JSValueConst this_val, int argc, JSVa
 JSValue js_call_prelude(AuJs *js, const char *name, int argc, JSValueConst *argv);
 void js_safe_point(AuJs *js);
 double js_now(const AuJs *js);
+/* For natives that can be slow (a forced layout): true when the script's
+ * time is up; the native then returns js_throw_stopped(ctx). See
+ * runtime.c. */
+bool js_out_of_time(AuJs *js);
+JSValue js_throw_stopped(JSContext *ctx);
 /* JS string from UTF-8 / to an au_alloc'd UTF-8 copy. */
 JSValue js_str(JSContext *ctx, const char *s, size_t len);
 char *js_tostr(JSContext *ctx, JSValueConst v, size_t *len);

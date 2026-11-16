@@ -15,10 +15,30 @@ Usage:
   tools/guest-qmp.py guest-eject NAME     eject the mounted disc NAME from the
                                           guest's Finder (needed before a new
                                           disc can replace a mounted one)
-  tools/guest-qmp.py open DISC ITEM       open ITEM (an application, say) on
-                                          the mounted disc DISC, by keyboard
+  tools/guest-qmp.py open DISC ITEM [APP] open ITEM (an application, say) on
+                                          the mounted disc DISC, by keyboard,
+                                          and wait until the application APP
+                                          (default: ITEM; "-" for no wait) is
+                                          the current one. Each step is
+                                          checked before the next key; exits
+                                          1 with the reason when the disc is
+                                          not mounted, the disc or the item
+                                          cannot be selected, or APP does not
+                                          come up within OPEN_TIMEOUT seconds
+                                          (default 120)
   tools/guest-qmp.py screen-size          print the screen size
   tools/guest-qmp.py front-app            print the current application's name
+  tools/guest-qmp.py front-window         print the title of the current
+                                          application's front window
+  tools/guest-qmp.py volumes              print the mounted volumes' names
+  tools/guest-qmp.py wait-app APP [SECONDS]
+                                          wait (60 s) until APP is the current
+                                          application; exit 1 if it is not
+  tools/guest-qmp.py wait-window APP TITLE [SECONDS]
+                                          wait (60 s) until APP is current and
+                                          its front window is called TITLE;
+                                          exit 1, printing the last title, if
+                                          it does not happen
 
 Guest UI (coordinates are guest screen pixels, x right, y down):
   tools/guest-qmp.py pos                  print the cursor position
@@ -69,6 +89,13 @@ SOCK = os.environ.get("QMP_SOCK") or os.path.join(RUN, "qmp.sock")
 MTEMP = 0x828
 RAWMOUSE = 0x82C
 CURAPNAME = 0x910  # Str31, the current application's name
+WINDOWLIST = 0x9D6  # the current application's first window (WindowPeek)
+VCBQHEAD = 0x358  # qHead of VCBQHdr: the first mounted volume's VCB
+VCB_NAME = 44  # vcbVN, a Str27
+# Offsets in a WindowRecord.
+WIN_VISIBLE = 110
+WIN_TITLE = 134  # StringHandle
+WIN_NEXT = 144
 
 
 class QMP:
@@ -139,6 +166,81 @@ class QMP:
                 return bytes(b[1:1 + b[0]]).decode("mac_roman")
             time.sleep(0.01)
         return None
+
+    def front_window(self, app=None):
+        """Return the title of the current application's front (first
+        visible) window, "" when it has none, or None when memory could
+        not be read or, with app given, another application is current.
+
+        The window list (WindowList, 0x9D6) and CurApName belong to
+        whichever process is switched in, and background processes run
+        for moments all the time, so separate reads can come from
+        different processes. The guest is stopped for the reads, so that
+        they all describe one moment, and resumed at once.
+        """
+        self.cmd("stop")
+        try:
+            b = self.read_words(CURAPNAME, 32, "b")
+            if b is None or not 0 < b[0] < 32:
+                return None
+            if app is not None and bytes(b[1:1 + b[0]]).decode("mac_roman") != app:
+                return None
+            w = self.read_words(WINDOWLIST, 1, "w")
+            if w is None:
+                return None
+            w = w[0]
+            for _ in range(64):
+                if w == 0:
+                    return ""
+                visible = self.read_words(w + WIN_VISIBLE, 1, "b")
+                handle = self.read_words(w + WIN_TITLE, 1, "w")
+                nxt = self.read_words(w + WIN_NEXT, 1, "w")
+                if visible is None or handle is None or nxt is None:
+                    return None
+                if visible[0]:
+                    if handle[0] == 0:
+                        return ""
+                    ptr = self.read_words(handle[0], 1, "w")
+                    if ptr is None or ptr[0] == 0:
+                        return None
+                    t = self.read_words(ptr[0], 256, "b")
+                    if t is None:
+                        return None
+                    return bytes(t[1:1 + t[0]]).decode("mac_roman")
+                w = nxt[0]
+            return None
+        finally:
+            self.cmd("cont")
+
+    def wait_front_window(self, app, title, timeout):
+        """Wait until app is current and its front window is called title.
+        Returns the last title read (title itself on success)."""
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            t = self.front_window(app)
+            if t is not None:
+                last = t
+                if t == title:
+                    return t
+            time.sleep(0.1)
+        return last
+
+    def wait_front_app(self, app, timeout):
+        """Wait until CurApName is app on three reads in a row over half a
+        second. Returns the last name read (app itself on success)."""
+        deadline = time.monotonic() + timeout
+        last = None
+        streak = 0
+        while time.monotonic() < deadline:
+            name = self.front_app()
+            if name is not None:
+                last = name
+            streak = streak + 1 if name == app else 0
+            if streak >= 3:
+                return app
+            time.sleep(0.25)
+        return last
 
     def bring_finder_forward(self):
         """Make the Finder the front application, or raise SystemExit.
@@ -242,9 +344,22 @@ class QMP:
         self.cmd("send-key", keys=[{"type": "qcode", "data": q} for q in qcodes])
         time.sleep(0.05)
 
-    def type_text(self, text):
+    def type_text(self, text, gap=0.0):
+        """Type text; gap is a pause after each character (a key is held
+        for 100 ms, so without one the presses overlap)."""
         for c in text:
             self.keys(char_codes(c))
+            if gap:
+                time.sleep(gap)
+
+    def release_modifiers(self):
+        """Send a key-up for every modifier. A modifier the guest still
+        takes as held (a lost key-up on a busy host) turns typed letters
+        into commands."""
+        for q in ("meta_l", "shift", "alt", "ctrl"):
+            self.cmd("input-send-event", events=[
+                {"type": "key", "data": {"down": False,
+                                         "key": {"type": "qcode", "data": q}}}])
 
     def screen_size(self):
         path = os.path.join(RUN, ".size.png")
@@ -263,37 +378,167 @@ class QMP:
                         bool(b.get("locked")))
         raise SystemExit("no CD drive ide1-cd0")
 
-    def open_item(self, disc, item):
-        """Open item on the mounted disc from the Finder, by keyboard.
+    def volumes(self):
+        """Return the names of the mounted volumes (the VCB queue), or
+        None when memory could not be read. The guest is stopped for the
+        reads, as in front_window."""
+        self.cmd("stop")
+        try:
+            b = self.read_words(CURAPNAME, 32, "b")
+            if b is None or not 0 < b[0] < 32:
+                return None
+            head = self.read_words(VCBQHEAD, 1, "w")
+            if head is None or head[0] == 0:
+                return None  # there is always a startup volume
+            names = []
+            vcb = head[0]
+            for _ in range(32):
+                if vcb == 0:
+                    return names
+                name = self.read_words(vcb + VCB_NAME, 28, "b")
+                link = self.read_words(vcb, 1, "w")
+                if name is None or link is None or name[0] > 27:
+                    return None
+                names.append(bytes(name[1:1 + name[0]]).decode("mac_roman"))
+                vcb = link[0]
+            return None
+        finally:
+            self.cmd("cont")
 
-        Brings the Finder forward (bring_finder_forward), selects the disc
-        on the desktop by typing its name, opens its window (Cmd-O),
-        selects the item by typing its name and opens it (Cmd-O).
+    def wait_volume(self, name, timeout):
+        """Wait until a volume called name is mounted; False on timeout."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            v = self.volumes()
+            if v is not None and name in v:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def wait_finder_title(self, accept, timeout):
+        """Wait until the Finder is current and accept(title of its front
+        window) is true. Returns the last title read."""
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            t = self.front_window("Finder")
+            if t is not None:
+                last = t
+                if accept(t):
+                    return t
+            time.sleep(0.1)
+        return last
+
+    def select_checked(self, name, desktop):
+        """Select the item called name (on the desktop, or in the Finder's
+        front window) by typing its name, and confirm what got selected.
+
+        Typing selects the nearest name when none matches (before a
+        pushed disc shows on the desktop, "AuraTest" selects Browse the
+        Internet), and nothing reads the selection directly. Get Info
+        (Cmd-I) opens a window titled "<name> Info" for the selected
+        item, which opens nothing; the window is closed again, and the
+        selection stays. Tries a few times, since the Finder shows a new
+        disc a moment after it is mounted. Raises SystemExit when the
+        item cannot be selected.
         """
+        info = name + " Info"
+        got = None
+        for attempt in range(6):
+            self.release_modifiers()
+            if attempt and (got is None or not got.endswith(" Info")):
+                # No Info window at all: the keys did not reach the
+                # Finder. Bring it forward and click the desktop.
+                self.bring_finder_forward()
+                _, height = self.screen_size()
+                self.click(20, height - 40)
+                time.sleep(0.5)
+            if desktop:
+                # Makes the desktop active (and selects the startup disk).
+                self.keys(combo("cmd-shift-up"))
+                time.sleep(0.5)
+            # One key at a time: on a busy host overlapping presses were
+            # lost and the name selected nothing.
+            self.type_text(name, gap=0.15)
+            time.sleep(0.5)
+            self.keys(combo("cmd-i"))
+            got = self.wait_finder_title(lambda t: t.endswith(" Info"), 8)
+            if got is not None and got.endswith(" Info"):
+                self.keys(combo("cmd-w"))
+                self.wait_finder_title(lambda t: not t.endswith(" Info"), 8)
+                if got == info:
+                    return
+            time.sleep(2.0)
+        where = "on the desktop" if desktop else "in the Finder's front window"
+        raise SystemExit(f'open: could not select "{name}" {where} (typing '
+                         f"its name selected: {got!r}); nothing was opened")
+
+    def open_item(self, disc, item, app=None, timeout=120):
+        """Open item on the mounted disc from the Finder, by keyboard, and
+        wait for the application it starts.
+
+        Every step is checked before the next key is sent, because a key
+        sent too early opens something else (typed before the disc shows,
+        its name selects another desktop icon, and Cmd-O launches it):
+        the disc is in the volume queue; the Finder is in front; typing
+        the disc's name selected the disc (select_checked); Cmd-O made
+        the disc's window the Finder's front window; typing the item's
+        name selected the item; and after Cmd-O the current application
+        becomes app (the item's name when None; "-" skips that wait).
+        Raises SystemExit with the reason when a step does not happen.
+        """
+        if app is None:
+            app = item
+        if not self.wait_volume(disc, 60):
+            raise SystemExit(f'open: no volume "{disc}" is mounted in the '
+                             f"guest (volumes: {self.volumes()})")
         self.bring_finder_forward()
-        self.keys(combo("cmd-shift-up"))
-        time.sleep(0.3)
-        self.type_text(disc)
-        time.sleep(0.5)
+        title = self.wait_finder_title(lambda t: True, 5)
+        if title != disc:
+            if title not in ("Desktop", "", None):
+                # Another Finder window is in front: close them all, so
+                # that keys go to the desktop.
+                self.keys(combo("cmd-opt-w"))
+                self.wait_finder_title(lambda t: t in ("Desktop", ""), 8)
+            self.select_checked(disc, desktop=True)
+            self.keys(combo("cmd-o"))
+            got = self.wait_front_window("Finder", disc, 30)
+            if got != disc:
+                raise SystemExit(
+                    f'open: the window of the disc "{disc}" did not open in '
+                    f"30 seconds (the Finder's front window: {got!r}; front "
+                    f"application: {self.front_app()})")
+            # The window is in the list before the Finder has drawn it
+            # and takes keys for it.
+            time.sleep(1.0)
+        self.select_checked(item, desktop=False)
+        got = self.wait_front_window("Finder", disc, 5)
+        if got != disc:
+            raise SystemExit(f'open: the window of "{disc}" is no longer '
+                             f"the Finder's front window ({got!r}; front "
+                             f"application: {self.front_app()}); nothing "
+                             "was opened")
         self.keys(combo("cmd-o"))
-        time.sleep(2.0)
-        self.type_text(item)
-        time.sleep(0.5)
-        self.keys(combo("cmd-o"))
+        if app == "-":
+            return
+        got = self.wait_front_app(app, timeout)
+        if got != app:
+            raise SystemExit(
+                f'open: "{app}" did not become the current application '
+                f"within {timeout:g} seconds after opening \"{item}\" on "
+                f'"{disc}" (front application: {got}; its front window: '
+                f"{self.front_window()!r})")
 
     def guest_eject(self, name, timeout=15):
         """Eject the mounted disc called name from inside the guest.
 
         Brings the Finder forward (bring_finder_forward, which types
-        nothing until the Finder is current), makes the desktop active
-        (Cmd-Shift-Up), selects the disc by typing its name, and puts it
-        away with Cmd-E.
+        nothing until the Finder is current), selects the disc on the
+        desktop by typing its name, checks that the disc is what got
+        selected (select_checked), and puts it away with Cmd-E.
         """
         self.bring_finder_forward()
-        self.keys(combo("cmd-shift-up"))
-        time.sleep(0.3)
-        self.type_text(name)
-        time.sleep(0.5)
+        self.select_checked(name, desktop=True)
         self.keys(combo("cmd-e"))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -430,12 +675,38 @@ def main(argv):
                 print(("locked " if locked else "unlocked ") + inserted)
         elif op == "guest-eject" and len(args) == 1:
             q.guest_eject(args[0])
-        elif op == "open" and len(args) == 2:
-            q.open_item(args[0], args[1])
+        elif op == "open" and len(args) in (2, 3):
+            q.open_item(args[0], args[1], args[2] if len(args) == 3 else None,
+                        timeout=float(os.environ.get("OPEN_TIMEOUT", "120")))
+            if len(args) == 2 or args[2] != "-":
+                print(q.front_app())
         elif op == "screen-size" and not args:
             print("%d %d" % q.screen_size())
         elif op == "front-app" and not args:
             print(q.front_app())
+        elif op == "wait-app" and len(args) in (1, 2):
+            got = q.wait_front_app(args[0], float(args[1]) if len(args) == 2 else 60)
+            if got != args[0]:
+                raise SystemExit(f'wait-app: the current application is {got}, not "{args[0]}"')
+        elif op == "wait-window" and len(args) in (2, 3):
+            got = q.wait_front_window(args[0], args[1], float(args[2]) if len(args) == 3 else 60)
+            if got != args[1]:
+                raise SystemExit(f'wait-window: the front window of "{args[0]}" is {got!r}, not '
+                                 f'"{args[1]}" (current application: {q.front_app()})')
+        elif op == "volumes" and not args:
+            for _ in range(100):
+                v = q.volumes()
+                if v is not None:
+                    break
+                time.sleep(0.05)
+            print("\n".join(v or []))
+        elif op == "front-window" and not args:
+            for _ in range(50):
+                t = q.front_window()
+                if t is not None:
+                    break
+                time.sleep(0.05)
+            print(t)
         else:
             raise SystemExit(__doc__)
     finally:

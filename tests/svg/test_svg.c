@@ -642,6 +642,25 @@ static void bench(void)
     au_svg_doc_free(d);
 }
 
+/* Inputs the fuzzer found. Each ran past a buffer or looped; here they
+ * only have to render (the sanitizer build checks the memory). */
+static void test_fuzz_regressions(void)
+{
+    /* preserveAspectRatio shorter than "xMidYMid": svg_parse_par read
+     * s[4] past the end of the attribute's value. */
+    static const char *const par[] = {"x", "xe", "xMi", "xMid", "xMidY", "", "defer", "defer x"};
+    for (size_t i = 0; i < sizeof par / sizeof par[0]; i++) {
+        char doc[256];
+        snprintf(doc, sizeof doc,
+                 "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 4 4' "
+                 "preserveAspectRatio='%s'><rect width='4' height='4' fill='lime'/></svg>",
+                 par[i]);
+        AuSurface *s = render(doc, 8, 8);
+        EXPECT_PX(s, 4, 4, 255, 0, 255, 0);
+        au_surface_free(s);
+    }
+}
+
 int main(int argc, char **argv)
 {
     bool do_bench = false;
@@ -673,6 +692,7 @@ int main(int argc, char **argv)
     test_clip_mask();
     test_opacity_style();
     test_nested_switch_image();
+    test_fuzz_regressions();
     test_intrinsic();
     test_text();
     test_image_pipeline();

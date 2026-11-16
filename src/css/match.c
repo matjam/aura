@@ -996,50 +996,74 @@ static bool anchor_rel(const AuElement *el, const AuElement *anchor, int comb)
     }
 }
 
-static bool match_from(const AuSelector *s, uint32_t i, const AuElement *el, const CssMatchCtx *mc,
-                       const AuElement *anchor)
+/* How a match of the rest of a selector failed. Without it a chain of
+ * descendant combinators on a deep tree backtracks without limit ("p div
+ * div div ... div" over 40 nested divs tries every choice of ancestors):
+ * when the rest of the selector fails because it ran out of ancestors, no
+ * ancestor further up can do better, and likewise for siblings. */
+typedef enum {
+    M_MATCH,
+    M_FAIL,          /* this element fails; another candidate may match */
+    M_FAIL_SIBLINGS, /* no earlier sibling of this element can match */
+    M_FAIL_ALL       /* no sibling and no ancestor can match */
+} MatchResult;
+
+static MatchResult match_rest(const AuSelector *s, uint32_t i, const AuElement *el, const CssMatchCtx *mc,
+                              const AuElement *anchor)
 {
     uint32_t k = i;
     for (; k < s->ncomp && s->comp[k].type != SC_COMBINATOR; k++)
         if (!match_simple(&s->comp[k], el, mc))
-            return false;
+            return M_FAIL;
     if (k >= s->ncomp) {
         if (anchor)
-            return anchor_rel(el, anchor, s->rel_comb ? s->rel_comb : COMB_DESCENDANT);
-        return true;
+            return anchor_rel(el, anchor, s->rel_comb ? s->rel_comb : COMB_DESCENDANT) ? M_MATCH : M_FAIL;
+        return M_MATCH;
     }
     int comb = s->comp[k].op;
+    MatchResult r;
     k++;
     switch (comb) {
     case COMB_DESCENDANT:
         for (const AuElement *p = parent_el(el); p; p = parent_el(p)) {
             if (anchor && p == anchor)
-                return false;
-            if (match_from(s, k, p, mc, anchor))
-                return true;
+                return M_FAIL_ALL;
+            r = match_rest(s, k, p, mc, anchor);
+            if (r == M_MATCH || r == M_FAIL_ALL)
+                return r;
         }
-        return false;
+        return M_FAIL_ALL;
     case COMB_CHILD: {
         const AuElement *p = parent_el(el);
         if (!p || (anchor && p == anchor))
-            return false;
-        return match_from(s, k, p, mc, anchor);
+            return M_FAIL_ALL;
+        r = match_rest(s, k, p, mc, anchor);
+        return r == M_MATCH || r == M_FAIL_ALL ? r : M_FAIL_SIBLINGS;
     }
     case COMB_NEXT: {
         const AuElement *p = prev_el(el);
-        return p && p != anchor && match_from(s, k, p, mc, anchor);
+        if (!p || p == anchor)
+            return M_FAIL_SIBLINGS;
+        return match_rest(s, k, p, mc, anchor);
     }
     case COMB_SUBSEQUENT:
         for (const AuElement *p = prev_el(el); p; p = prev_el(p)) {
             if (p == anchor)
-                return false;
-            if (match_from(s, k, p, mc, anchor))
-                return true;
+                return M_FAIL_SIBLINGS;
+            r = match_rest(s, k, p, mc, anchor);
+            if (r != M_FAIL)
+                return r;
         }
-        return false;
+        return M_FAIL_SIBLINGS;
     default:
-        return false;
+        return M_FAIL;
     }
+}
+
+static bool match_from(const AuSelector *s, uint32_t i, const AuElement *el, const CssMatchCtx *mc,
+                       const AuElement *anchor)
+{
+    return match_rest(s, i, el, mc, anchor) == M_MATCH;
 }
 
 bool css_selector_match(const AuSelector *s, const AuElement *el, const CssMatchCtx *mc)

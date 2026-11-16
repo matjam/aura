@@ -96,38 +96,38 @@ static uint32_t next_char(const char *t, size_t n, uint32_t i)
     return i;
 }
 
-/* Soft wrap of one hard line [a, b) at width w. */
+/* Soft wrap of one hard line [a, b) at width w. Each line costs about
+ * its own length to find (l_prefix_seek): measuring the rest of the text
+ * for every line, and every prefix up to each space, took 11 s to paint
+ * a textarea of 80,000 characters. */
 static void wrap_line(Field *F, uint32_t a, uint32_t b, float w)
 {
     const char *t = F->t;
     while (a < b) {
-        if (width_of(F, a, b) <= w) {
+        /* The longest prefix that fits. */
+        float pw;
+        uint32_t k = a + l_prefix_seek(F->L, F->f, F->s, t + a, b - a, w, &pw);
+        while (k < b) {
+            uint32_t e2 = next_char(t, b, k);
+            if (width_of(F, a, e2) > w)
+                break;
+            k = e2;
+        }
+        if (k >= b) {
             add_line(F, a, b);
             return;
         }
-        /* The longest prefix ending after a space that fits. */
-        uint32_t best = 0, i = a;
-        while (i < b) {
+        /* The longest prefix ending after a space, the text before the
+         * space fitting. */
+        uint32_t best = 0;
+        for (uint32_t i = k + 1; i-- > a;) {
             if (t[i] == ' ') {
-                uint32_t e = i + 1;
-                if (width_of(F, a, i) <= w)
-                    best = e;
-                else
-                    break;
+                best = i + 1;
+                break;
             }
-            i++;
         }
-        if (!best) {
-            /* No space fits: break between characters. */
-            uint32_t e = next_char(t, b, a);
-            while (e < b) {
-                uint32_t e2 = next_char(t, b, e);
-                if (width_of(F, a, e2) > w)
-                    break;
-                e = e2;
-            }
-            best = e;
-        }
+        if (!best) /* no space fits: break between characters */
+            best = k > a ? k : next_char(t, b, a);
         add_line(F, a, best);
         a = best;
     }

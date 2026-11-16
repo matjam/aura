@@ -8,6 +8,7 @@
  * memory errors; on its own it checks termination and determinism.
  *
  * usage: fuzz_image ITERATIONS SEED VECTOR... */
+#include "../fuzz.h"
 #include "imgtest.h"
 
 typedef struct Result {
@@ -117,6 +118,10 @@ int main(int argc, char **argv)
     uint8_t *buf = malloc(cap);
     long mismatches = 0;
     for (long it = 0; it < iters; it++) {
+        if (fz_capped()) { /* AURA_FUZZ_SECONDS */
+            iters = it;
+            break;
+        }
         int vi = (int)(it_rng(&rng) % (uint32_t)nv);
         size_t n = vlen[vi];
         memcpy(buf, vec[vi], n);
