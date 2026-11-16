@@ -217,6 +217,43 @@ fixed and centres it in the viewport.
 The cases are in `tests/layout/cases/top_layer.txt`; a `script` line
 before a case's HTML runs its scripts.
 
+### Hit testing follows the paint order and its clips
+
+`hit.c` walks the boxes in the reverse of the paint order in `draw.c`
+and must apply the same clips, or a click lands on a box that is not
+drawn there.
+
+- A layer's clips come from two places. `layer_origin` applies the
+  clips of the boxes between the layer and its stacking context;
+  `hit_layer` applies the stacking context's own overflow clip to every
+  layer in its lists, as `paint_layer` does with `push_clip` before
+  `paint_layer_list`. A point outside a stacking context's clip reaches
+  none of its positioned descendants.
+- A box that clips and is a stacking context (a transform, a z-index,
+  opacity) holds its positioned content in its own layer list. Without
+  its clip in hit testing, content moved outside it took the clicks of
+  its neighbours: reCAPTCHA's 4x4 image tiles each show the whole photo
+  moved by -100% steps inside a wrapper with `transform: scale(1)`, and
+  every click went to the last tile.
+- A transformed layer is tested with the point mapped back through its
+  matrix, so a scaled clip clips the point where it is drawn.
+
+The cases are in `tests/layout/cases/overflow.txt` ("a stacking
+context's overflow clip ..."), and `test_image_tiles` in
+`tests/frames/test_frames.c` covers the whole challenge in a frame.
+
+### URLs of any length
+
+To resolve a URL in layout, call `l_resolve_url` and release the result
+with `l_url_free`: it resolves into the caller's buffer, or into a block
+from `au_alloc` when the result is longer. In the document view, use
+`au_url_resolve_dup` for image, font, script and style sheet URLs. A
+`data:` URL is often several kilobytes; the 2048-byte buffers these
+paths used dropped a long background image without asking for it and
+cut a long `<img>` URL short (reCAPTCHA's check mark is a 3978-byte
+`data:` URL in its style sheet). The case is in
+`tests/layout/cases/images.txt`.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips
