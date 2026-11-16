@@ -146,6 +146,10 @@ static JSValue n_z_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
         h->kind = H_DEFLATE;
         h->def = au_deflate_new(f[fmt], 1);
     }
+    if (!h->inf && !h->def) {
+        au_free(h);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     js->root->nzip++;
     return new_handle(ctx, h);
 }
@@ -215,7 +219,8 @@ static JSValue n_z_run(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
             au_buf_append(&out, chunk, made);
         if (st == AU_CODEC_ERROR) {
             au_buf_free(&out);
-            return JS_ThrowTypeError(ctx, "The compressed data is not valid: %s", au_inflate_error(h->inf));
+            return JS_ThrowTypeError(ctx, "The compressed data is not valid: %s",
+                                     h->inf ? au_inflate_error(h->inf) : "encoder error");
         }
         if (st == AU_CODEC_DONE) {
             if (h->kind == H_INFLATE) {
