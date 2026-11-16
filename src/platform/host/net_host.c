@@ -450,60 +450,20 @@ bool au_host_profile_path(const char *name, char *out, size_t cap)
     return snprintf(out, cap, "%s/%s", dir, name) < (int)cap;
 }
 
-/* ---- Web storage in the profile folder ----
- * The service's files (net/web_storage.h) in a folder "local-storage" of
- * the profile; a file that does not parse is renamed "<name>.damaged". */
+/* ---- The profile folder, through browser/app.c ----
+ * Web storage's files in the folder "Local Storage", and the Cookies,
+ * HSTS and Intermediates files, loaded and saved by the application
+ * services as on Mac OS 9 (a file that does not parse is renamed
+ * "<name> (damaged)"). */
 
-static bool storage_path(const char *name, char *out, size_t cap)
-{
-    char dir[4096];
-    if (!au_host_profile_path("local-storage", dir, sizeof dir))
-        return false;
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST)
-        return false;
-    return snprintf(out, cap, "%s/%s", dir, name) < (int)cap;
-}
+static AuAppFiles profile_files;
+static AuAppFolder ls_folder;
 
-static bool ws_read(void *ctx, const char *name, AuBuf *out)
+static const AuAppFiles *files(void)
 {
-    char path[4200];
-    size_t len;
-    (void)ctx;
-    if (!storage_path(name, path, sizeof path))
-        return false;
-    char *data = au_host_read_file(path, &len);
-    if (!data)
-        return false;
-    au_buf_append(out, data, len);
-    au_free(data);
-    return true;
-}
-
-static bool ws_write(void *ctx, const char *name, const void *data, size_t len)
-{
-    char path[4200];
-    (void)ctx;
-    return storage_path(name, path, sizeof path) && au_host_write_file(path, data, len);
-}
-
-static void ws_remove(void *ctx, const char *name)
-{
-    char path[4200];
-    (void)ctx;
-    if (storage_path(name, path, sizeof path))
-        remove(path);
-}
-
-static void ws_damaged(void *ctx, const char *name)
-{
-    char path[4200], aside[4300];
-    (void)ctx;
-    if (!storage_path(name, path, sizeof path))
-        return;
-    snprintf(aside, sizeof aside, "%s.damaged", path);
-    fprintf(stderr, "aura-host: %s is damaged; set aside\n", path);
-    if (rename(path, aside) != 0)
-        remove(path);
+    if (!profile_files.read)
+        au_host_app_files(&profile_files);
+    return &profile_files;
 }
 
 AuWebStorage *au_host_storage_open(AuCookieJar *jar, bool persist)
@@ -511,9 +471,11 @@ AuWebStorage *au_host_storage_open(AuCookieJar *jar, bool persist)
     AuWebStorage *ws = au_web_storage_new();
     if (jar)
         au_web_storage_set_cookie_jar(ws, jar);
-    if (persist) {
-        AuWebStorageFiles files = {NULL, ws_read, ws_write, ws_remove, ws_damaged};
-        au_web_storage_set_files(ws, &files);
+    if (persist && au_app_folder_init(&ls_folder, files(), AU_APP_FOLDER_LOCAL_STORAGE,
+                                      (size_t)AU_WEB_STORAGE_FILE_MAX + 1)) {
+        AuWebStorageFiles wf;
+        au_app_folder_web_storage(&ls_folder, &wf);
+        au_web_storage_set_files(ws, &wf);
     }
     return ws;
 }
@@ -524,40 +486,6 @@ void au_host_storage_close(AuWebStorage *ws)
         return;
     au_web_storage_save(ws, 0);
     au_web_storage_free(ws);
-}
-
-static void load_store(const char *name, bool (*parse)(void *, const char *, size_t, int64_t), void *store,
-                       int64_t now, bool verbose)
-{
-    char path[4096];
-    if (!au_host_profile_path(name, path, sizeof path))
-        return;
-    size_t len;
-    char *data = au_host_read_file(path, &len);
-    if (!data)
-        return;
-    if (!parse(store, data, len, now))
-        fprintf(stderr, "aura-host: %s is damaged; kept what could be read\n", path);
-    else if (verbose)
-        fprintf(stderr, "* loaded %s\n", path);
-    au_free(data);
-}
-
-static void save_store(const char *name, const AuBuf *b)
-{
-    char path[4096];
-    if (!au_host_profile_path(name, path, sizeof path))
-        return;
-    if (!au_host_write_file(path, b->data ? b->data : "", b->len))
-        fprintf(stderr, "aura-host: cannot write %s\n", path);
-}
-
-static bool parse_cookies(void *s, const char *d, size_t n, int64_t now) { return au_cookie_jar_parse(s, d, n, now); }
-static bool parse_hsts(void *s, const char *d, size_t n, int64_t now) { return au_hsts_parse_file(s, d, n, now); }
-static bool parse_intermediates(void *s, const char *d, size_t n, int64_t now)
-{
-    (void)now;
-    return au_net_intermediates_parse(s, d, n);
 }
 
 bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose)
@@ -574,13 +502,14 @@ bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose)
     int64_t now = ops->wall_time(ops->ctx);
     if (cookies) {
         s->jar = au_cookie_jar_new();
-        load_store("cookies", parse_cookies, s->jar, now, verbose);
         au_net_set_cookie_jar(s->net, s->jar);
     }
     s->hsts = au_hsts_new();
-    load_store("hsts", parse_hsts, s->hsts, now, verbose);
     au_net_set_hsts(s->net, s->hsts);
-    load_store("intermediates", parse_intermediates, s->net, now, verbose);
+    au_app_load_stores(files(), s->jar, s->hsts, s->net, now);
+    if (verbose)
+        fprintf(stderr, "* profile: %u cookies, %u HSTS hosts\n", s->jar ? (unsigned)au_cookie_jar_count(s->jar) : 0,
+                (unsigned)au_hsts_count(s->hsts));
     return true;
 }
 
@@ -589,24 +518,7 @@ void au_host_session_close(AuHostSession *s)
     if (!s->host)
         return;
     const AuNetOps *ops = au_host_net_ops(s->host);
-    int64_t now = ops->wall_time(ops->ctx);
-    AuBuf b;
-    au_buf_init(&b);
-    if (s->jar && au_cookie_jar_dirty(s->jar)) {
-        au_cookie_jar_serialize(s->jar, &b, now);
-        save_store("cookies", &b);
-    }
-    if (au_hsts_dirty(s->hsts)) {
-        au_buf_clear(&b);
-        au_hsts_serialize(s->hsts, &b, now);
-        save_store("hsts", &b);
-    }
-    if (au_net_intermediates_dirty(s->net)) {
-        au_buf_clear(&b);
-        au_net_intermediates_serialize(s->net, &b);
-        save_store("intermediates", &b);
-    }
-    au_buf_free(&b);
+    au_app_save_stores(files(), s->jar, s->hsts, s->net, ops->wall_time(ops->ctx));
     au_net_free(s->net);
     if (s->jar)
         au_cookie_jar_free(s->jar);

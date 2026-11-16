@@ -157,7 +157,9 @@ static int usage(void)
             "                        [--native-chrome] (renders only the page, as for a port with its own\n"
             "                        widgets; coordinates are the page's; prints each AU_CHANGED_* notice\n"
             "                        and the chrome's state after the loads and at the end)\n"
-            "                        [--profile DIR] (keeps web storage in DIR/local-storage, as --net does in $AURA_PROFILE)\n"
+            "                        [--profile DIR] (loads and saves Aura's files in DIR as Mac OS 9 does: preferences,\n"
+            "                        bookmarks, history, session, web storage in DIR/Local Storage; --net keeps cookies\n"
+            "                        and web storage in $AURA_PROFILE)\n"
             "                        (--do storage prints the storage service's areas; --do reload reloads)\n"
             "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
@@ -1058,13 +1060,25 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
      * are) or --profile DIR, else in memory for the run. */
     struct AuWebStorage *storage = au_host_storage_open(ses.jar, o->net || o->profile);
     au_browser_set_storage(b, storage);
+    /* --profile DIR: the browser's files there too (preferences,
+     * bookmarks, history, session, downloads, site icons, Running),
+     * loaded and saved by the application services as on Mac OS 9. */
+    AuApp *app = NULL;
+    if (o->profile) {
+        AuAppPort port;
+        au_host_app_port(&port);
+        app = au_app_new(b, &port);
+        if (au_app_load(app))
+            printf("profile: the last run did not quit\n");
+    }
     b->prefs.tab_position = o->pos;
     if (o->column)
         b->prefs.tab_column_width = o->column;
     AuBrowserWindow *w = o->native_chrome ? au_browser_window_new_native(b, o->w, o->h)
                                           : au_browser_window_new(b, o->w, o->h);
     w->native_standins = true;
-    au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura", "about:home", 0);
+    if (!app)
+        au_bookmark_add(&b->bookmarks, NULL, NULL, "Aura", "about:home", 0);
     if (o->ntabs == 0 && o->extra_tabs == 0)
         o->tabs[o->ntabs++] = "about:home";
     for (int i = 0; i < o->ntabs; i++) {
@@ -1168,6 +1182,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_host_mem_report("after the paint");
     au_canvas_free(c);
     au_surface_free(s);
+    if (app) {
+        au_app_quit(app); /* while the window is open: the session is saved too */
+        au_app_free(app);
+    }
     au_browser_free(b);
     au_host_storage_close(storage); /* writes what changed */
     if (o->net) {

@@ -5,6 +5,7 @@
 #ifndef AURA_HOST_NET_H
 #define AURA_HOST_NET_H
 
+#include "browser/app.h"
 #include "net/net.h"
 
 typedef struct AuHostNet AuHostNet;
@@ -27,9 +28,16 @@ char *au_host_read_file(const char *path, size_t *len);
 /* Writes a file safely: to path.tmp, then renamed over path. */
 bool au_host_write_file(const char *path, const void *data, size_t len);
 
+/* The application services' port (browser/app.h, app_host.c): the
+ * profile folder's files and folders over POSIX files, and the system
+ * clocks (no script clock: Date keeps the C library's). */
+void au_host_app_files(AuAppFiles *out);
+void au_host_app_port(AuAppPort *out);
+
 /* Everything a host command needs to make requests: sockets, the root
- * store, the AuNet, and the cookie jar and HSTS store loaded from the
- * profile folder (files "cookies" and "hsts"). */
+ * store, the AuNet, and the cookie jar, HSTS store and intermediate
+ * certificates loaded from the profile folder by browser/app.c (files
+ * "Cookies", "HSTS" and "Intermediates", as Mac OS 9 names them). */
 typedef struct AuHostSession {
     AuHostNet *host;
     AuRootStore *roots;
@@ -43,8 +51,9 @@ void au_host_session_close(AuHostSession *s);
 
 /* The web storage service (net/web_storage.h) for a host tool, following
  * jar's cookie rules (NULL: none). With persist its files are kept in
- * the folder "local-storage" of the profile folder; without, it lives in
- * memory. Close saves what changed and frees it (after the browser). */
+ * the folder "Local Storage" of the profile folder (browser/app.c's
+ * AuAppFolder); without, it lives in memory. Close saves what changed
+ * and frees it (after the browser). */
 struct AuWebStorage;
 struct AuWebStorage *au_host_storage_open(AuCookieJar *jar, bool persist);
 void au_host_storage_close(struct AuWebStorage *ws);
