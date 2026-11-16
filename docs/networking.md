@@ -162,6 +162,12 @@ cache is used through the page's cache mode (`AuFetchCacheMode`):
   its budget. With the disk cache on, the Mac application keeps 1 MB of
   them resident (`au_cache_set_resident`); the rest are read back from
   disk when asked for.
+- **Memory held.** Each entry costs 256 bytes, its headers and its
+  body, and the newest entry is always kept. A stored body is copied
+  into a block of its size (`au_cache_commit`), so the cache's blocks
+  match its count; on the host it plateaus at about 8 MB of `src/net`
+  after ten pages ([`memory.md`](memory.md), "What grows from page to
+  page"). Its blocks are in the long-lived zone.
 - **To count hits on the host**, run `aura-host chrome --net
   --no-doc-cache --tab URL --do cache --do go:URL2 --do back --do
   cache` (without `--no-doc-cache`, Back shows the kept document and

@@ -64,6 +64,7 @@ set of functions declared in the header named.
 | `AuBrowserHost` | `src/browser/browser.h` | redraw requests, change notices, pop-up menus, confirm, file chooser, download confirmation, opening other programs |
 | `AuDownloadFiles` | `src/net/transfer.h` | creating and finishing download files |
 | system facts | `src/browser/sysinfo.h` | the machine and OS for System Status and bug reports |
+| `AuDevWinHost` | `src/browser/devwin_model.h` | for the developer windows: the page shown, the machine's facts, the clipboard, saving a file, the Find dialog |
 
 Then the user interface:
 
@@ -75,7 +76,8 @@ Then the user interface:
 - the Preferences window, built from the preference descriptions;
 - the History, Bookmarks, Downloads and Cookies windows, built from the
   list models;
-- the developer windows, which show text and tables the engine draws;
+- the developer windows, built from the window models
+  (`src/browser/devwin_model.h`), with the text the engine draws;
 - the About box.
 
 ## Native chrome
@@ -127,10 +129,10 @@ keeps the Mac OS 9 build working and looking the same.
 | Address completion and menu item text in `src/browser` (`au_complete_fill`, `au_menu_title`) | done |
 | Native chrome mode in the browser model, with complete `AU_CHANGED_*` notices ([`browser-chrome.md`](browser-chrome.md), "Native chrome") | done |
 | Command table (`src/browser/commands.c`); Mac menus built from it ([`browser-chrome.md`](browser-chrome.md), "Commands and menus") | done |
-| Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them | in progress |
+| Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them ([`browser-chrome.md`](browser-chrome.md), "Preferences") | done |
 | List models for History, Bookmarks, Downloads and Cookies (`src/browser/lists.c`); Mac list windows built from them | done |
 | Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | not started |
-| Developer windows' layout and actions in `src/browser`; Mac `devwin.c` only frames them | in progress |
+| Developer windows' layout and actions in `src/browser` (`devwin_model.c`); Mac `devwin.c` only frames them ([`developer-tools.md`](developer-tools.md), "The window models") | done |
 | Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; host `app_host.c`) | done |
 | GTK4 port in `src/platform/gtk`, with a CI build | not started |
 | Packaging for Linux | not started |

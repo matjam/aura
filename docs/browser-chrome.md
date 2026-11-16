@@ -21,6 +21,7 @@ The Mac OS 9 side of each feature is named here; Toolbox lessons are in
 | `favicon.c` | site icons |
 | `present.c` | the shells' damage list |
 | `credits.c` | the About box and about:licences table |
+| `prefs.c`, `prefs_ui.c` | the preferences and their file; the Preferences window's descriptions and editing session |
 | `lists.c` | the models of the Bookmarks, History, Downloads and Cookies windows |
 | `listview.c` | the painted list the Mac OS 9 list windows show |
 | `app.c`, `app_net.c` | the application services: the files Aura keeps, loading and saving them, session restore, the network stack set up from the preferences ("Files Aura keeps") |
@@ -832,6 +833,66 @@ shows the model.
 The Cookies window (Window > Cookies, or Preferences > Privacy) lists
 `src/net/cookie_view.c`'s model through `lists.c`; per-site rules
 (allow, session only, block) live in the `cookies.sites` preference.
+
+## Preferences
+
+The settings are fields of `AuPrefs` (`prefs.h`), stored in the
+`Aura Preferences` file. The Preferences window's contents are
+described in `prefs_ui.h`, and a port builds its own window from them.
+
+To build a Preferences window, walk `au_pref_desc(id)` for every
+`AuPrefId` in order. Each item has a section (the pane), a kind (check
+box, radio group, number with a range and unit, text, choice, font
+family, folder, button, note, or the blocking list rows), a caption, a
+title, choices, its preferences file key, the item whose choice enables
+it, and flags: `AU_PREF_LIVE` for items that apply at once and
+`AU_PREF_STATUS` for items with a status line. The port keeps only its
+layout.
+
+To run the window, use an editing session (`AuPrefsEdit`):
+
+1. `au_prefs_edit_new(&browser->prefs, &host)` when the window opens.
+   `AuPrefsHost` gives the font set, the free memory, the blocking
+   manager, whether Aura is the default browser, and the words for the
+   system ("this Mac", "Internet Config", an example folder path, the
+   system's download folder). Load each control from
+   `au_prefs_edit_get_bool`, `_get_choice` or `_get_text`, and the
+   choices from `au_prefs_edit_choice` (the font families come from the
+   font set, unique and sorted).
+2. When the user changes a check box, radio group or choice, call the
+   matching `au_prefs_edit_set_*`. For an `AU_PREF_LIVE` item (the tab
+   position, the blocking switch and lists), call
+   `au_prefs_edit_apply_live`; it returns `AU_PREF_CHANGED_TABS` or
+   `AU_PREF_CHANGED_BLOCKING` for the port to act on. Then read
+   `au_prefs_edit_enabled` and `au_prefs_edit_text` again.
+3. For a button, call `au_prefs_edit_action`. It does the model's part
+   (Clear History, Use Current Page, Update Now) and returns
+   `AU_PREF_DO_*` bits for the parts that need the OS (clearing cookies
+   and the cache, the Cookies window, making Aura the default browser).
+4. On OK, set every text and number field with `au_prefs_edit_set_text`
+   and call `au_prefs_edit_commit`, which writes the shown items into
+   `b->prefs` and calls `au_browser_prefs_changed`. Items the window does
+   not show (zoom per site, window sizes) are left as they are. On
+   Cancel, call `au_prefs_edit_cancel`, which puts the live items back.
+   Then `au_prefs_edit_free`.
+
+The session checks values when they are set, with the rules the Mac
+window used before the descriptions (tested in
+`tests/browser/test_prefs_ui.c`):
+
+- A number is clamped to its range, which is the preferences file's
+  range. Text that is not a number gives the value the preference had
+  when the window opened.
+- Script memory is Automatic (stored as 0) or Custom, 4 to 256 MB.
+- A choice out of range is clamped, except the blocking update
+  interval, which becomes daily.
+- A font family must be installed; it is matched without regard to
+  case and stored with the font set's spelling.
+- The user agent equal to Aura's default is stored as empty.
+- More lists keeps only https addresses of 12 to 1023 bytes; Always
+  allow and Always block keep cleaned domains, without repeats.
+
+To reset a pane to the defaults, call `au_prefs_edit_reset_section`.
 
 ## Not done
 

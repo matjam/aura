@@ -110,6 +110,7 @@ static void destroy(void *st)
     au_free(p->cur);
     au_free(p->prev);
     au_free(p->argb);
+    au_free(p->block);
     au_free(p->saved);
     au_free(p);
 }

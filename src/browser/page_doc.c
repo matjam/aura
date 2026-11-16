@@ -3624,7 +3624,12 @@ void au_page_free(AuPage *p)
     p->leaving = NULL;
     au_page_drop_kept(p);
     au_free(p->kept);
-    au_docview_free(p->dv); /* cancels nothing more: the fetches are gone */
+    au_docview_free(p->dv);
+    /* Freeing the documents can start a fetch (YouTube's page left one,
+     * Fetch and URL, behind each time it closed): cancel and free those
+     * too. */
+    cancel_all(p);
+    compact_fetches(p);
     au_free(p->fetches);
     au_free(p->url);
     au_free(p->title);

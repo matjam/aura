@@ -8,6 +8,8 @@
  * looked up. */
 #include "mac.h"
 
+#include "core/region.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -99,8 +101,8 @@ typedef struct TempChunk {
 } TempChunk;
 
 typedef struct PlatHdr {
-    void *owner; /* NULL: a pointer block; else the Handle, or the TempChunk */
-    long chunked; /* 1: owner is a TempChunk */
+    void *owner;  /* NULL: a pointer block; else the Handle, the TempChunk or the long-lived region */
+    long chunked; /* 1: owner is a TempChunk; 2: a long-lived block's own Handle; 3: in long_region */
 } PlatHdr;
 
 static TempChunk *temp_chunks; /* the newest first: it is the one being filled */
@@ -109,6 +111,61 @@ static long temp_heap_bytes;   /* temporary memory the allocator holds */
 long mac_heap_temp_bytes(void)
 {
     return temp_heap_bytes;
+}
+
+/* Temporary memory starts in one zone (71 MB on the 512 MB test machine);
+ * beyond it the system makes more zones (16 MB areas when that zone is
+ * full). Mac OS 9.2.2 can then hang for good in the Memory Manager: an area
+ * ends up linked to itself in its list of areas, and the next one added
+ * loops in that list (seen in the guest with YouTube's page after GitHub's,
+ * in builds before and after the long-lived zone, and with YouTube's page
+ * alone once the long-lived zone used temporary memory; docs/memory.md,
+ * "Temporary memory areas"). It did not happen once no zone outside the
+ * first emptied: the first handle of Aura's freed in each such zone is
+ * shrunk to TEMP_PIN bytes and kept until Aura quits. */
+#define TEMP_PIN 16
+#define TEMP_PINS 256
+
+static Ptr temp_home_lo, temp_home_hi; /* the zone temporary memory starts in; NULL: unknown */
+static THz temp_pinned[TEMP_PINS];     /* the areas that hold a kept handle */
+static int temp_npinned;
+
+long mac_temp_pins(void)
+{
+    return temp_npinned;
+}
+
+static void temp_home_init(void)
+{
+    OSErr err = noErr;
+    Handle h = TempNewHandle(TEMP_PIN, &err);
+    if (!h || err != noErr)
+        return;
+    THz z = HandleZone(h);
+    if (z && *h > (Ptr)z && *h < z->bkLim) {
+        temp_home_lo = (Ptr)z;
+        temp_home_hi = z->bkLim;
+    }
+    DisposeHandle(h);
+}
+
+void mac_temp_dispose(Handle h)
+{
+    Ptr p = *h;
+    if (temp_home_hi && (p < temp_home_lo || p >= temp_home_hi) && temp_npinned < TEMP_PINS) {
+        THz z = HandleZone(h);
+        int i = 0;
+        while (i < temp_npinned && temp_pinned[i] != z)
+            i++;
+        if (z && p > (Ptr)z && p < z->bkLim && i == temp_npinned) {
+            HUnlock(h);
+            SetHandleSize(h, TEMP_PIN);
+            temp_pinned[temp_npinned++] = z;
+            return;
+        }
+    }
+    HUnlock(h);
+    DisposeHandle(h);
 }
 
 static Handle temp_handle(long n)
@@ -157,8 +214,104 @@ static void *temp_get(size_t n)
     return hd + 1;
 }
 
-static void *heap_get(size_t n)
+/* The long-lived zone (core.h, "Zones"): the slabs and large blocks of
+ * the network stack, the HTTP cache, TLS, fonts, atoms and this shell.
+ * They come from temporary memory, so that they never sit among a page's
+ * blocks in the application heap and a closed page leaves its space in
+ * one piece: slabs (about 32 KB each) are cut from chunks of LONG_CHUNK
+ * (an AuRegion, first fit, so freed space is used again), and large
+ * blocks, which come and go with transfers (receive buffers, TLS records,
+ * bodies), get a handle each, so that they do not leave chunks held by a
+ * few slabs. A chunk whose slabs are all freed goes back, except the last
+ * one. When temporary memory has no room, the block comes from the heap
+ * as a page's does. */
+#define LONG_CHUNK (512L * 1024)
+
+static AuRegion long_region;
+static Handle long_handles[AU_REGION_CHUNKS]; /* the handle of long_region.chunk[i] */
+static long long_temp_bytes;                  /* temporary memory the long-lived zone holds */
+
+long mac_heap_long_temp_bytes(void)
 {
+    return long_temp_bytes;
+}
+
+static Handle long_handle(long n)
+{
+    OSErr err = noErr;
+    Handle h = TempNewHandle((Size)n, &err);
+    if (!h || err != noErr)
+        return NULL;
+    HLock(h);
+    long_temp_bytes += n;
+    return h;
+}
+
+static void long_handle_free(Handle h)
+{
+    long_temp_bytes -= GetHandleSize(h);
+    mac_temp_dispose(h);
+}
+
+/* A slab from the chunks, adding one when none has room; NULL when the
+ * region has all its chunks or temporary memory has no room. */
+static PlatHdr *long_chunked(long need)
+{
+    PlatHdr *hd = au_region_alloc(&long_region, (size_t)need, false);
+    if (!hd && long_region.nchunks < AU_REGION_CHUNKS) {
+        Handle h = long_handle(LONG_CHUNK);
+        if (!h)
+            return NULL;
+        if (!au_region_add(&long_region, *h, LONG_CHUNK)) {
+            long_handle_free(h);
+            return NULL;
+        }
+        long_handles[long_region.nchunks - 1] = h;
+        hd = au_region_alloc(&long_region, (size_t)need, false);
+    }
+    if (hd) {
+        hd->owner = &long_region;
+        hd->chunked = 3;
+    }
+    return hd;
+}
+
+static void *long_get(size_t n, bool slab)
+{
+    long need = (long)((n + sizeof(PlatHdr) + 7) & ~(size_t)7);
+    PlatHdr *hd = slab ? long_chunked(need) : NULL;
+    if (!hd) {
+        Handle h = long_handle(need);
+        if (!h)
+            return NULL;
+        hd = (PlatHdr *)*h;
+        hd->owner = h;
+        hd->chunked = 2;
+    }
+    return hd + 1;
+}
+
+static void long_release(PlatHdr *hd)
+{
+    if (hd->chunked == 2) {
+        long_handle_free((Handle)hd->owner);
+        return;
+    }
+    au_region_free(&long_region, hd);
+    int i;
+    while (long_region.nchunks > 1 && (i = au_region_drop_free_chunk(&long_region)) >= 0) {
+        long_handle_free(long_handles[i]);
+        long_handles[i] = long_handles[long_region.nchunks]; /* the region moved its last chunk to i */
+    }
+}
+
+static void *heap_get(size_t n, unsigned how)
+{
+    if ((how & AU_HEAP_ZONE_MASK) == AU_HEAP_ZONE_LONG) {
+        void *t = long_get(n, (how & AU_HEAP_GET_SLAB) != 0);
+        if (t)
+            return t;
+    }
     Ptr p = NULL;
     if (FreeMem() >= (long)(n + sizeof(PlatHdr)) + HEAP_FLOOR)
         p = NewPtr((Size)(n + sizeof(PlatHdr)));
@@ -179,13 +332,14 @@ static void *heap_get(size_t n)
 static void heap_release(void *p)
 {
     PlatHdr *hd = (PlatHdr *)p - 1;
-    if (!hd->owner) {
+    if (hd->chunked >= 2) {
+        long_release(hd);
+    } else if (!hd->owner) {
         DisposePtr((Ptr)hd);
     } else if (!hd->chunked) {
         Handle h = (Handle)hd->owner;
         temp_heap_bytes -= GetHandleSize(h);
-        HUnlock(h);
-        DisposeHandle(h);
+        mac_temp_dispose(h);
     } else {
         TempChunk *c = (TempChunk *)hd->owner;
         if (--c->live > 0)
@@ -203,8 +357,7 @@ static void heap_release(void *p)
             c->next->prev = c->prev;
         Handle h = c->h;
         temp_heap_bytes -= TEMP_CHUNK;
-        HUnlock(h);
-        DisposeHandle(h);
+        mac_temp_dispose(h);
     }
 }
 
@@ -1089,6 +1242,7 @@ int main(void)
     MaxApplZone();
     for (int i = 0; i < 16; i++)
         MoreMasters();
+    temp_home_init();
     /* Before the first au_alloc: small blocks come from slabs, not from
      * one NewPtr each (see src/core/heap.c). */
     au_heap_enable(heap_get, heap_release);

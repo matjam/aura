@@ -27,27 +27,41 @@
  *
  * Larger blocks go to the platform one by one.
  *
- * Every block has a header of two words before it: the slab (NULL for a
- * large block) and the size asked for. Blocks are aligned to two words
- * (8 bytes on Mac OS 9, 16 on a 64-bit host). Nothing here depends on byte
- * order. */
+ * Zones: every block belongs to the page zone or the long-lived zone,
+ * chosen by au_heap_zone_set when it is allocated (core.h, "Zones"). The two
+ * zones never share a slab, and the platform is told the zone of each
+ * slab and large block it gives (get's how), so that it can keep
+ * long-lived blocks apart from a page's and a closed page leaves its
+ * space in one piece.
+ *
+ * Every block has a header of two words before it: the slab (for a large
+ * block, LARGE_PAGE or LARGE_LONG) and the size asked for. Blocks are
+ * aligned to two words (8 bytes on Mac OS 9, 16 on a 64-bit host).
+ * Nothing here depends on byte order. */
 #include "core.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #define AU_HEAP_SLAB 32768u     /* a small class's slab */
 #define AU_HEAP_SMALL 2048u     /* the largest small block */
 #define AU_HEAP_MID 16400u      /* the largest block from a slab */
 #define AU_HEAP_MID_SLAB 32768u /* what a mid slab is sized near */
-#define AU_HEAP_KEEP 8          /* empty small slabs kept */
-#define AU_HEAP_MID_KEEP 4      /* empty mid slabs kept, at most one per class */
+#define AU_HEAP_KEEP 8          /* empty small slabs kept, per zone */
+#define AU_HEAP_MID_KEEP 4      /* empty mid slabs kept per zone, at most one per class */
 #define AU_HEAP_NSMALL 32
 #define AU_HEAP_CLASSES 44
+#define AU_HEAP_ZONES 2
 
 typedef struct HeapSlab HeapSlab;
 
+/* The slab field of a large block's header: which zone it is in. */
+#define LARGE_PAGE ((HeapSlab *)0)
+#define LARGE_LONG ((HeapSlab *)1)
+#define IS_LARGE(s) ((uintptr_t)(s) <= 1)
+
 typedef struct HeapHdr {
-    HeapSlab *slab; /* NULL: a large block from the platform */
+    HeapSlab *slab; /* LARGE_PAGE or LARGE_LONG: a large block from the platform */
     size_t size;    /* bytes asked for */
 } HeapHdr;
 
@@ -61,17 +75,26 @@ struct HeapSlab {
     char *tail, *end;      /* never used yet; the slab's end */
     uint32_t live;         /* blocks in use */
     uint16_t cls;
+    uint8_t zone;
     bool listed;           /* on its class's list */
 };
 
-static struct {
-    void *(*get)(size_t n);
-    void (*release)(void *p);
+/* The zone of the next allocation (core.h). Code that runs before any
+ * call site has set it is the application starting: long-lived. */
+static unsigned char zone_cur = AU_HEAP_ZONE_LONG;
+
+typedef struct HeapZone {
     HeapSlab *avail[AU_HEAP_CLASSES]; /* slabs with room, per class */
     HeapSlab *empty;                  /* unused small slabs */
     uint32_t nempty;
     HeapSlab *mid_empty;              /* unused mid slabs, one per class at most */
     uint32_t nmid_empty;
+} HeapZone;
+
+static struct {
+    void *(*get)(size_t n, unsigned how);
+    void (*release)(void *p);
+    HeapZone z[AU_HEAP_ZONES];
     AuHeapStats st;
 } H;
 
@@ -128,7 +151,7 @@ bool au_heap_enabled(void)
     return H.get != NULL;
 }
 
-void au_heap_enable(void *(*get)(size_t n), void (*release)(void *p))
+void au_heap_enable(void *(*get)(size_t n, unsigned how), void (*release)(void *p))
 {
     H.get = get;
     H.release = release;
@@ -137,6 +160,36 @@ void au_heap_enable(void *(*get)(size_t n), void (*release)(void *p))
 void au_heap_stats(AuHeapStats *s)
 {
     *s = H.st;
+}
+
+unsigned au_heap_zone_set(unsigned zone)
+{
+    unsigned prev = zone_cur;
+    zone_cur = (unsigned char)(zone ? AU_HEAP_ZONE_LONG : AU_HEAP_ZONE_PAGE);
+    return prev;
+}
+
+/* A held zone: -1 when none. */
+static int zone_held = -1;
+
+int au_heap_zone_hold(unsigned zone)
+{
+    int prev = zone_held;
+    zone_held = zone ? (int)AU_HEAP_ZONE_LONG : (int)AU_HEAP_ZONE_PAGE;
+    return prev;
+}
+
+void au_heap_zone_unhold(int prev)
+{
+    zone_held = prev;
+}
+
+/* The zone the next block goes to. */
+static unsigned zone_now(void)
+{
+    if (zone_held >= 0)
+        return (unsigned)zone_held;
+    return zone_cur ? AU_HEAP_ZONE_LONG : AU_HEAP_ZONE_PAGE;
 }
 
 /* Copies n bytes between two word-aligned blocks a word at a time (the
@@ -156,11 +209,12 @@ static void copy_words(void *dst, const void *src, size_t n)
 
 static void list_add(HeapSlab *s)
 {
+    HeapSlab **head = &H.z[s->zone].avail[s->cls];
     s->prev = NULL;
-    s->next = H.avail[s->cls];
+    s->next = *head;
     if (s->next)
         s->next->prev = s;
-    H.avail[s->cls] = s;
+    *head = s;
     s->listed = true;
 }
 
@@ -169,11 +223,24 @@ static void list_remove(HeapSlab *s)
     if (s->prev)
         s->prev->next = s->next;
     else
-        H.avail[s->cls] = s->next;
+        H.z[s->zone].avail[s->cls] = s->next;
     if (s->next)
         s->next->prev = s->prev;
     s->next = s->prev = NULL;
     s->listed = false;
+}
+
+static void count_platform(size_t bytes, unsigned zone, bool add)
+{
+    if (add) {
+        H.st.system_bytes += bytes;
+        if (zone)
+            H.st.long_bytes += bytes;
+    } else {
+        H.st.system_bytes -= bytes;
+        if (zone)
+            H.st.long_bytes -= bytes;
+    }
 }
 
 /* Gives a slab back to the platform. */
@@ -183,53 +250,55 @@ static void slab_release(HeapSlab *s)
     H.st.slabs--;
     if (s->cls >= AU_HEAP_NSMALL)
         H.st.mid_slabs--;
-    H.st.system_bytes -= bytes;
+    count_platform(bytes, s->zone, false);
     H.release(s);
 }
 
-/* Takes the kept empty mid slab of class c off its pool, or NULL. */
-static HeapSlab *mid_empty_take(unsigned c)
+/* Takes the kept empty mid slab of class c off its zone's pool, or NULL. */
+static HeapSlab *mid_empty_take(HeapZone *z, unsigned c)
 {
-    HeapSlab **pp = &H.mid_empty;
+    HeapSlab **pp = &z->mid_empty;
     while (*pp && (*pp)->cls != c)
         pp = &(*pp)->next;
     HeapSlab *s = *pp;
     if (s) {
         *pp = s->next;
-        H.nmid_empty--;
+        z->nmid_empty--;
         H.st.empty_bytes -= (size_t)(s->end - (char *)s);
     }
     return s;
 }
 
-static HeapSlab *slab_new(unsigned c)
+static HeapSlab *slab_new(unsigned c, unsigned zone)
 {
+    HeapZone *z = &H.z[zone];
     HeapSlab *s;
     size_t bytes = slab_bytes(c);
     if (c < AU_HEAP_NSMALL) {
-        s = H.empty;
+        s = z->empty;
         if (s) {
-            H.empty = s->next;
-            H.nempty--;
+            z->empty = s->next;
+            z->nempty--;
             H.st.empty_bytes -= bytes;
         }
     } else {
-        s = mid_empty_take(c);
+        s = mid_empty_take(z, c);
     }
     if (!s) {
-        s = H.get(bytes);
+        s = H.get(bytes, AU_HEAP_GET_SLAB | zone);
         if (!s)
             return NULL;
         H.st.slabs++;
         if (c >= AU_HEAP_NSMALL)
             H.st.mid_slabs++;
-        H.st.system_bytes += bytes;
+        count_platform(bytes, zone, true);
     }
     s->free = NULL;
     s->tail = (char *)s + slab_head();
     s->end = (char *)s + bytes;
     s->live = 0;
     s->cls = (uint16_t)c;
+    s->zone = (uint8_t)zone;
     list_add(s);
     return s;
 }
@@ -237,25 +306,26 @@ static HeapSlab *slab_new(unsigned c)
 /* A slab whose last block was freed: kept for reuse, or returned. */
 static void slab_empty(HeapSlab *s)
 {
+    HeapZone *z = &H.z[s->zone];
     if (s->listed)
         list_remove(s);
     size_t bytes = (size_t)(s->end - (char *)s);
     if (s->cls < AU_HEAP_NSMALL) {
-        if (H.nempty < AU_HEAP_KEEP) {
-            s->next = H.empty;
-            H.empty = s;
-            H.nempty++;
+        if (z->nempty < AU_HEAP_KEEP) {
+            s->next = z->empty;
+            z->empty = s;
+            z->nempty++;
             H.st.empty_bytes += bytes;
             return;
         }
-    } else if (H.nmid_empty < AU_HEAP_MID_KEEP) {
-        HeapSlab *k = H.mid_empty;
+    } else if (z->nmid_empty < AU_HEAP_MID_KEEP) {
+        HeapSlab *k = z->mid_empty;
         while (k && k->cls != s->cls)
             k = k->next;
         if (!k) {
-            s->next = H.mid_empty;
-            H.mid_empty = s;
-            H.nmid_empty++;
+            s->next = z->mid_empty;
+            z->mid_empty = s;
+            z->nmid_empty++;
             H.st.empty_bytes += bytes;
             return;
         }
@@ -266,43 +336,47 @@ static void slab_empty(HeapSlab *s)
 size_t au_heap_trim(void)
 {
     size_t freed = 0;
-    while (H.empty) {
-        HeapSlab *s = H.empty;
-        H.empty = s->next;
-        freed += (size_t)(s->end - (char *)s);
-        slab_release(s);
+    for (int i = 0; i < AU_HEAP_ZONES; i++) {
+        HeapZone *z = &H.z[i];
+        while (z->empty) {
+            HeapSlab *s = z->empty;
+            z->empty = s->next;
+            freed += (size_t)(s->end - (char *)s);
+            slab_release(s);
+        }
+        while (z->mid_empty) {
+            HeapSlab *s = z->mid_empty;
+            z->mid_empty = s->next;
+            freed += (size_t)(s->end - (char *)s);
+            slab_release(s);
+        }
+        z->nempty = z->nmid_empty = 0;
     }
-    while (H.mid_empty) {
-        HeapSlab *s = H.mid_empty;
-        H.mid_empty = s->next;
-        freed += (size_t)(s->end - (char *)s);
-        slab_release(s);
-    }
-    H.nempty = H.nmid_empty = 0;
     H.st.empty_bytes = 0;
     return freed;
 }
 
 void *au_heap_alloc(size_t n)
 {
+    unsigned zone = zone_now();
     if (n > AU_HEAP_MID) {
         if (n > (size_t)-1 - sizeof(HeapHdr))
             return NULL;
-        HeapHdr *h = H.get(n + sizeof(HeapHdr));
+        HeapHdr *h = H.get(n + sizeof(HeapHdr), zone);
         if (!h)
             return NULL;
-        h->slab = NULL;
+        h->slab = zone ? LARGE_LONG : LARGE_PAGE;
         h->size = n;
         H.st.large++;
-        H.st.system_bytes += n + sizeof(HeapHdr);
+        count_platform(n + sizeof(HeapHdr), zone, true);
         H.st.used_bytes += n;
         H.st.blocks++;
         return h + 1;
     }
     unsigned c = class_of(n);
-    HeapSlab *s = H.avail[c];
+    HeapSlab *s = H.z[zone].avail[c];
     if (!s) {
-        s = slab_new(c);
+        s = slab_new(c, zone);
         if (!s)
             return NULL;
     }
@@ -335,9 +409,9 @@ void au_heap_free(void *p)
     HeapSlab *s = h->slab;
     H.st.used_bytes -= h->size;
     H.st.blocks--;
-    if (!s) {
+    if (IS_LARGE(s)) {
         H.st.large--;
-        H.st.system_bytes -= h->size + sizeof(HeapHdr);
+        count_platform(h->size + sizeof(HeapHdr), s == LARGE_LONG, false);
         H.release(h);
         return;
     }
@@ -353,13 +427,51 @@ void au_heap_free(void *p)
         list_add(s);
 }
 
+unsigned au_heap_zone_of(const void *p)
+{
+    const HeapHdr *h = (const HeapHdr *)p - 1;
+    if (IS_LARGE(h->slab))
+        return h->slab == LARGE_LONG ? AU_HEAP_ZONE_LONG : AU_HEAP_ZONE_PAGE;
+    return h->slab->zone;
+}
+
+void au_heap_walk_platform_block(void *pb, unsigned how, void (*fn)(void *ctx, void *block, size_t n), void *ctx)
+{
+    if (!(how & AU_HEAP_GET_SLAB)) {
+        HeapHdr *h = pb;
+        fn(ctx, h + 1, h->size);
+        return;
+    }
+    HeapSlab *s = pb;
+    if (s->live == 0)
+        return;
+    size_t bs = block_size(s->cls);
+    char *first = (char *)s + slab_head();
+    size_t slots = (size_t)(s->tail - first) / bs;
+    /* A bit per slot used; the freed ones are cleared from the free list. */
+    unsigned char used[(AU_HEAP_SLAB / 16 + 7) / 8 + 1];
+    if (slots > sizeof used * 8)
+        slots = sizeof used * 8;
+    memset(used, 0xFF, sizeof used);
+    for (HeapFree *f = s->free; f; f = f->next) {
+        size_t i = (size_t)((char *)f - first) / bs;
+        if (i < slots)
+            used[i / 8] &= (unsigned char)~(1u << (i % 8));
+    }
+    for (size_t i = 0; i < slots; i++)
+        if (used[i / 8] & (1u << (i % 8))) {
+            HeapHdr *h = (HeapHdr *)(first + i * bs);
+            fn(ctx, h + 1, h->size);
+        }
+}
+
 void *au_heap_realloc(void *p, size_t n)
 {
     if (!p)
         return au_heap_alloc(n);
     HeapHdr *h = (HeapHdr *)p - 1;
     size_t old = h->size;
-    if (h->slab && n <= AU_HEAP_MID && class_of(n) == h->slab->cls) {
+    if (!IS_LARGE(h->slab) && n <= AU_HEAP_MID && class_of(n) == h->slab->cls) {
         H.st.used_bytes += n;
         H.st.used_bytes -= old;
         h->size = n;
@@ -367,9 +479,9 @@ void *au_heap_realloc(void *p, size_t n)
     }
     /* A large block that shrinks by less than half stays where it is
      * (the statistics then count it at its new size). */
-    if (!h->slab && n <= old && n > AU_HEAP_MID && n >= old / 2) {
+    if (IS_LARGE(h->slab) && n <= old && n > AU_HEAP_MID && n >= old / 2) {
         H.st.used_bytes -= old - n;
-        H.st.system_bytes -= old - n;
+        count_platform(old - n, h->slab == LARGE_LONG, false);
         h->size = n;
         return p;
     }

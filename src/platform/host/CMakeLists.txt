@@ -14,3 +14,6 @@ add_executable(aura-host main.c render.c render_loader.c net_host.c app_host.c n
     jsrun.c pagerun.c devtools_host.c blocklist_tool.c)
 target_link_libraries(aura-host aura_host_platform aura_host_png aura_engine m pthread)
 target_compile_definitions(aura-host PRIVATE AURA_ROOTS_FILE="${CMAKE_SOURCE_DIR}/assets/net/aura-roots.bin")
+# The host shell's blocks live as long as the tool (src/core/core.h, "Zones").
+target_compile_definitions(aura_host_platform PRIVATE AU_HEAP_ZONE=1)
+target_compile_definitions(aura-host PRIVATE AU_HEAP_ZONE=1)

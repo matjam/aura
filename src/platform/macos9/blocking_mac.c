@@ -73,7 +73,7 @@ static void bm_release(void *ctx, void *p)
     BlockHead *bh = (BlockHead *)p - 1;
     if (bh->h) {
         B.temp_bytes -= bh->size;
-        DisposeHandle(bh->h);
+        mac_temp_dispose(bh->h);
     } else {
         B.heap_bytes -= bh->size;
         au_free(bh);

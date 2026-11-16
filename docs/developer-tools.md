@@ -8,10 +8,12 @@ window or a report, or when you need to see what a page requested,
 logged or cost.
 
 The windows show the active tab of the frontmost browser window and
-follow it. The text of every window comes from portable code in
-`src/browser`; the Mac OS 9 windows are `src/platform/macos9/devwin.c`.
-To change a window's text, change it in `src/browser` and check it on
-the host first.
+follow it. Everything about a window except drawing and the Toolbox is
+portable code in `src/browser`: its text, when it refreshes, its parts
+and their rectangles, its buttons and toggles and what they do
+(`devwin_model.c`, "The window models" below). The Mac OS 9 windows are
+`src/platform/macos9/devwin.c`. To change a window's text or behaviour,
+change it in `src/browser` and check it on the host first.
 
 ## To see the same text on the host
 
@@ -101,8 +103,10 @@ Earlier builds had three items that showed their text in alerts
 
 ## The six windows
 
-To change a window, work in `src/platform/macos9/devwin.c`. All six are
-laid out alike:
+To change what a window shows or does, change its model in
+`src/browser/devwin_model.c` and `tests/browser/test_devwin.c`; to
+change how the Mac OS 9 window draws it, `src/platform/macos9/devwin.c`.
+All six are laid out alike:
 
 - **A tool band at the top** where the window has a filter or options:
   a text filter and check boxes (Console), a text filter and radio
@@ -121,9 +125,9 @@ laid out alike:
   `devtools.c`); a place whose title bar would be off the screen is
   ignored. The default size fits a 640x480 screen. The windows are not
   part of the session: they are not reopened at the next launch.
-- **Background.** The window's background colour is the grey of its
-  bands (`band_back`), because check boxes and radio buttons erase to
-  the port's background colour.
+- **Background.** On Mac OS 9 the window's background colour is the
+  grey of its bands (`band_back` in `devwin.c`), because check boxes and
+  radio buttons erase to the port's background colour.
 
 | Window | Text from | Updates | Own button |
 |---|---|---|---|
@@ -136,6 +140,71 @@ laid out alike:
 
 Performance and System Status do not rebuild while text in them is
 selected, so that a selection can be copied.
+
+### The window models
+
+`src/browser/devwin_model.h` holds one model (`AuDevWin`) per open
+window. A port shows it with its own widgets and holds no
+developer-window logic of its own.
+
+- **To make a window**, call `au_devwin_init` with the kind
+  (`AU_DEVWIN_SOURCE`, `_CONSOLE`, `_NETWORK`, `_PERF`, `_STATUS` or
+  `_REPORT`), the browser, the fonts, the width a scroll bar takes at
+  the right of each text pane, and an `AuDevWinHost`. Then call
+  `au_devwin_resize` with the window's content size and
+  `au_devwin_refresh(dw, true)`.
+- **What a kind has.** `au_devwin_kind` gives its preference name,
+  title, default height, which parts it has (tool band, filter field,
+  column titles, detail pane, input line), the text view's settings and
+  Report a Problem's two lines of instructions. `au_devwin_buttons` and
+  `au_devwin_toggles` give the push buttons and the check boxes or radio
+  buttons, each with its label, its Mac OS 9 width and what it does;
+  `AuDevWin.toggle_on` holds their state.
+- **Layout.** `au_devwin_areas` gives the rectangle of each part for the
+  model's size; `au_devwin_button_rect` and `au_devwin_toggle_rect`
+  place the controls. A port that lays the window out natively uses the
+  kind's parts and ignores the rectangles.
+- **To keep it current**, call `au_devwin_refresh(dw, false)` from the
+  event loop and redraw when it returns true. `au_devwin_stale` states
+  the rules: Page Source when the page or its source changed (a page
+  still loading keeps the old text), Console when the page wrote a
+  line, Network when the log changed and 250 ms passed, Performance
+  every second and System Status every two seconds while no text is
+  selected, Report a Problem only when shown or when its check box
+  changes. Another page always counts, except for System Status and
+  Report a Problem.
+- **What to draw.** `AuDevWin.tv` is the main text and `dv` the Network
+  detail pane (paint them with `au_textview_paint`); `title`, `footer`
+  (the status line), `header` (the Network column titles), `filter`,
+  `input` and `filter_focus` (which field has the keyboard).
+- **Input.** Pass keys to `au_devwin_key` (`AU_KEY_*`, or the UTF-8 of a
+  typed character), clicks to `au_devwin_mouse_down` with the click
+  count, then `au_devwin_mouse_drag` and `au_devwin_mouse_up` for a text
+  pane; a scroll bar calls `au_devwin_scroll` or `au_devwin_scroll_to`.
+  Buttons call `au_devwin_run`, toggles `au_devwin_toggle`, Edit > Copy
+  `au_devwin_copy_text`, Paste `au_devwin_paste` and Select All
+  `au_devwin_select_all`; Find and Find Again call `au_devwin_ask_find`
+  and `au_devwin_find_next`. `AU_DEVWIN_FAILED` means alert the user
+  (the Mac beeps).
+- **The Console input line.** Return runs it (`au_devwin_console_run`:
+  it goes into the history of 16 lines, is cleared, runs with the busy
+  cursor, and the view scrolls to the end); Up and Down recall
+  (`au_devwin_console_recall`). The filter field holds 60 bytes and the
+  input line 4000.
+- **The Network selection.** `au_devwin_network_selected` gives the
+  selected request; a new selection fills the detail pane and puts the
+  whole address in the status line, and a new order keeps it on the same
+  request.
+- **Copy All and Save.** `au_devwin_all_text` is what Copy All copies;
+  `au_devwin_save_text` is the report with CR LF line ends, as Save
+  Report writes it.
+- **The port's callbacks** (`AuDevWinHost`): the page shown, the front
+  browser window, the clock, the machine's facts (`host_info`), the
+  open connections, the shell's own System Status sections, the last
+  timing test and paint benchmark, the clipboard, saving a file,
+  opening a page in a new tab, asking for the text to find, running the
+  timing test, the busy cursor, the title, and turning on header
+  recording when a Network window opens.
 
 ### The text view
 
@@ -272,7 +341,7 @@ the last second was, layout boxes, free memory. Then:
 |---|---|
 | Time | one row per kind of work (Script, Style, Layout, Paint, Screen copy) with milliseconds and runs in the last interval and since the page began, and a bar for its share of the time |
 | Work done | pixels painted, style passes, box tree builds, layouts, image decodes |
-| Memory | one row per store (application heap, script heap, decoded images, HTTP memory cache, glyph cache, kept documents) with what it holds, its limit, and a bar; free temporary memory, and a "taken by Aura" line when the heap has taken temporary memory ([`memory.md`](memory.md)) |
+| Memory | one row per store (application heap, script heap, decoded images, HTTP memory cache, glyph cache, kept documents) with what it holds, its limit, and a bar; free temporary memory, a "taken by Aura" line when the heap has taken temporary memory, and a "Long-lived blocks" line with the allocator's long-lived zone and the temporary memory that holds it ([`memory.md`](memory.md), "Zones"), and an "Areas held" line with the temporary memory zones Aura keeps from emptying ([`memory.md`](memory.md), "Temporary memory areas") |
 | Script runtimes | one line per script runtime, document and worker ([`memory.md`](memory.md), "To see what a script heap holds") |
 | Network | HTTP cache lookups and writes, DNS, the open connections |
 | Slowest tasks | tasks of 50 ms or more, scripts with their URL |

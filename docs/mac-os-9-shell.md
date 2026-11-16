@@ -14,7 +14,7 @@ before changing anything under `src/platform/macos9`.
 | `main.c` | the menu bar built from the command table, the `AuCommandHost`, start-up and quit through the application services (`g_app`), and the event loop (`idle_all`, `key_down`, `release_caches`) |
 | `browserwin.c` | browser windows |
 | `listwin.c` | the Bookmarks, History, Downloads and Cookies windows, built from the list models ([`browser-chrome.md`](browser-chrome.md), "The list windows") |
-| `prefswin.c`, `prefs_blocking.c` | the Preferences window |
+| `prefswin.c`, `prefs_blocking.c` | the Preferences window, built from `src/browser/prefs_ui.h` ("The Preferences window" below) |
 | `devwin.c` | the developer windows ([`developer-tools.md`](developer-tools.md)) |
 | `storage.c` | the Aura folder's files and the clocks for the application services (`storage_port`), file: URLs, the Open and Save dialogs ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
 | `network.c` | the Mac side of the network stack: Open Transport started on demand, the entropy pool, the root store, download files and content blocking, given to `au_app_net_start` |
@@ -209,6 +209,33 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 - [`forms.md`](forms.md) says how typed characters, the Edit menu,
   pop-up menus and file dialogs reach page fields.
 
+## The Preferences window
+
+`prefswin.c` builds the Preferences window from the preference
+descriptions and runs it through an editing session
+([`browser-chrome.md`](browser-chrome.md), "Preferences"). It holds no
+values, checks or choice lists of its own.
+
+- To move a control, change its row in the `hints` table in
+  `prefswin.c`. A row gives, in window coordinates, the caption's
+  position and width, the control's position and width (the height of
+  a note), a radio group's second button, the unit label, the status
+  line and a pop-up's menu ID. `H_AFTER_LIST` measures y from below the
+  blocking list rows, which `prefs_blocking.c` makes.
+- To add a setting, add its item to `prefs_ui.c` and a row to `hints`;
+  an item without a row is not shown on Mac OS 9.
+- The tab titles are the `'tab#'` 128 resource in `aura.r`, in the
+  order of `AuPrefSection`.
+- On OK the window reads every control into the session, commits it and
+  calls `mac_net_prefs_changed`. On Cancel it calls
+  `au_prefs_edit_cancel` and, when the blocking lists changed,
+  `mac_blocking_prefs_changed`. A click on the tab position or a
+  blocking check box applies it at once.
+- An edit field that is not enabled (the MB field while its pop-up says
+  Automatic) is deactivated and ignores clicks; a button that is not
+  enabled (Make Aura the Default Browser without Internet Config) is
+  hilited 255.
+
 ## The list windows
 
 To change a list window's rows, buttons or actions, change the model
@@ -232,6 +259,35 @@ about the Toolbox:
 
 `listwin_cookies_changed` (called after Clear Cookies) marks the Cookies
 window's model stale with `au_list_touch`.
+
+## The developer windows
+
+To change what a developer window shows, when it refreshes, its parts,
+buttons, toggles, fields or actions, change the model in
+`src/browser/devwin_model.c` ([`developer-tools.md`](developer-tools.md),
+"The window models"), not `devwin.c`. `devwin.c` holds only what is
+about the Toolbox:
+
+- the window, one of each kind, and its place in the `develop.windows`
+  preference (`save_place`, `initial_place`; the default size fits the
+  screen);
+- the GWorld the engine paints into: the bands, the filter field with
+  its caret, the Network column titles, the text views, the input line
+  and the button bar, copied to the window around the controls
+  (`dw_paint`);
+- the native scroll bars (their 16-bit range scaled for long text),
+  push buttons, check boxes and radio buttons, made from
+  `au_devwin_buttons` and `au_devwin_toggles` and moved to the model's
+  rectangles (`place`); `sync_toggles` sets them from
+  `AuDevWin.toggle_on`;
+- events: Mac key codes turned into `AU_KEY_*` or UTF-8 (`mac_key`),
+  clicks counted by time and place, a drag past the text's edge paced
+  at a row every two ticks, and a beep for `AU_DEVWIN_FAILED`;
+- the `AuDevWinHost` callbacks: `mac_sysinfo` and the memory figures,
+  `mac_net_*` text, the font registration line for System Status, the
+  Scrap, `mac_save_text`, `mac_open_url`, DLOG 201 (the Find dialog
+  with Match Case hidden) for `ask_text`, the watch cursor, and
+  `SetWTitle` for the title.
 
 ## Resources by number
 

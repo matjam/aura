@@ -61,6 +61,15 @@ target_link_libraries(test_devtools aura_fakenet m)
 target_include_directories(test_devtools PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_devtools COMMAND test_devtools)
 set_tests_properties(browser_devtools PROPERTIES TIMEOUT 120)
+
+# The developer windows' models: parts and rectangles, refresh rules,
+# toggles and filters, the Network selection, the Console input line,
+# Find, Copy All and Save, and the port's callbacks.
+add_executable(test_devwin test_devwin.c)
+target_link_libraries(test_devwin aura_fakenet m)
+target_include_directories(test_devwin PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_devwin COMMAND test_devwin)
+set_tests_properties(browser_devwin PROPERTIES TIMEOUT 120)
 set_tests_properties(browser_net_page PROPERTIES TIMEOUT 120)
 
 # The document cache for Back and Forward, on the fake transport.
@@ -97,6 +106,12 @@ target_link_libraries(test_bugreport aura_fakenet m)
 target_include_directories(test_bugreport PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
 add_test(NAME browser_bugreport COMMAND test_bugreport)
 set_tests_properties(browser_bugreport PROPERTIES TIMEOUT 120)
+
+# The Preferences window's descriptions and editing session: values,
+# the old window's clamping rules, live items, Cancel and OK.
+add_executable(test_prefs_ui test_prefs_ui.c)
+target_link_libraries(test_prefs_ui aura_engine m)
+add_test(NAME browser_prefs_ui COMMAND test_prefs_ui)
 
 # Script memory: a page, two frames and a worker that share one large
 # script stay under stated peaks; out-of-memory in a worker or a page is
