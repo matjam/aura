@@ -14,7 +14,7 @@ before changing anything under `src/platform/macos9`.
 | `main.c` | the menu bar built from the command table, the `AuCommandHost`, and the event loop (`idle_all`, `key_down`, `release_caches`) |
 | `browserwin.c` | browser windows |
 | `listwin.c` | the Bookmarks, History, Downloads and Cookies windows, built from the list models ([`browser-chrome.md`](browser-chrome.md), "The list windows") |
-| `prefswin.c`, `prefs_blocking.c` | the Preferences window |
+| `prefswin.c`, `prefs_blocking.c` | the Preferences window, built from `src/browser/prefs_ui.h` ("The Preferences window" below) |
 | `devwin.c` | the developer windows ([`developer-tools.md`](developer-tools.md)) |
 | `storage.c` | files ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
 | `network.c` | the network stack's start-up, cookies and HSTS files |
@@ -176,6 +176,33 @@ stopped except while it is resumed). See [`workers.md`](workers.md).
 - Command keys go to the command table, not to MenuKey (see "Menus").
 - [`forms.md`](forms.md) says how typed characters, the Edit menu,
   pop-up menus and file dialogs reach page fields.
+
+## The Preferences window
+
+`prefswin.c` builds the Preferences window from the preference
+descriptions and runs it through an editing session
+([`browser-chrome.md`](browser-chrome.md), "Preferences"). It holds no
+values, checks or choice lists of its own.
+
+- To move a control, change its row in the `hints` table in
+  `prefswin.c`. A row gives, in window coordinates, the caption's
+  position and width, the control's position and width (the height of
+  a note), a radio group's second button, the unit label, the status
+  line and a pop-up's menu ID. `H_AFTER_LIST` measures y from below the
+  blocking list rows, which `prefs_blocking.c` makes.
+- To add a setting, add its item to `prefs_ui.c` and a row to `hints`;
+  an item without a row is not shown on Mac OS 9.
+- The tab titles are the `'tab#'` 128 resource in `aura.r`, in the
+  order of `AuPrefSection`.
+- On OK the window reads every control into the session, commits it and
+  calls `mac_net_prefs_changed`. On Cancel it calls
+  `au_prefs_edit_cancel` and, when the blocking lists changed,
+  `mac_blocking_prefs_changed`. A click on the tab position or a
+  blocking check box applies it at once.
+- An edit field that is not enabled (the MB field while its pop-up says
+  Automatic) is deactivated and ignores clicks; a button that is not
+  enabled (Make Aura the Default Browser without Internet Config) is
+  hilited 255.
 
 ## The list windows
 

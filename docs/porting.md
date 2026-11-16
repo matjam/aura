@@ -128,7 +128,7 @@ keeps the Mac OS 9 build working and looking the same.
 | Address completion and menu item text in `src/browser` (`au_complete_fill`, `au_menu_title`) | done |
 | Native chrome mode in the browser model, with complete `AU_CHANGED_*` notices ([`browser-chrome.md`](browser-chrome.md), "Native chrome") | done |
 | Command table (`src/browser/commands.c`); Mac menus built from it ([`browser-chrome.md`](browser-chrome.md), "Commands and menus") | done |
-| Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them | in progress |
+| Preference descriptions (`src/browser/prefs_ui.c`); Mac Preferences window built from them ([`browser-chrome.md`](browser-chrome.md), "Preferences") | done |
 | List models for History, Bookmarks, Downloads and Cookies (`src/browser/lists.c`); Mac list windows built from them | done |
 | Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | not started |
 | Developer windows' layout and actions in `src/browser` (`devwin_model.c`); Mac `devwin.c` only frames them ([`developer-tools.md`](developer-tools.md), "The window models") | done |

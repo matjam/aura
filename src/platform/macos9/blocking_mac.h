@@ -26,20 +26,23 @@ void mac_blocking_quit(void);
 void mac_blocking_status_text(AuBuf *out);
 AuBlockManager *mac_blocking_manager(void); /* NULL before init */
 
-/* ---- The Preferences pane ----
- * prefswin.c owns the window, the pane's user pane and the three edit
- * fields; these make and run the rest: the catalogue's checkboxes with a
- * status line each, the update interval and Update Now. The checkboxes
- * and the button act at once; prefs_blocking_cancel puts the lists back. */
-void prefs_blocking_build(WindowPtr win, ControlHandle pane, short top);
-void prefs_blocking_load(const AuPrefs *pr);
-/* True when c is one of the pane's controls (the click was handled). */
+/* ---- The Preferences pane's list rows ----
+ * prefswin.c builds the Blocking pane from the preference descriptions;
+ * these make the rows of AU_PREF_BLOCK_LISTS: the catalogue's check boxes
+ * with a status line each, from the editing session's rows. */
+struct AuPrefsEdit;
+/* Makes the rows from top; returns the y below them. */
+short prefs_blocking_build(WindowPtr win, ControlHandle pane, struct AuPrefsEdit *edit, short top);
+/* Sets the check boxes and status lines from the session. */
+void prefs_blocking_load(void);
+/* Redraws the status lines that changed (draw: now). */
+void prefs_blocking_refresh(bool draw);
+/* True when c is a row's check box: its list is set in the session
+ * (the caller applies the live items). */
 bool prefs_blocking_click(ControlHandle c);
-void prefs_blocking_idle(void);
-/* OK: the interval, and the three fields' text cleaned into the
- * preferences (addresses must be https; domains are normalised). */
-void prefs_blocking_store(AuPrefs *pr, const char *urls, const char *allow, const char *block);
-void prefs_blocking_cancel(AuPrefs *pr);
+/* From idle: true when the status lines should be refreshed (the
+ * manager's generation changed, or a second passed while it works). */
+bool prefs_blocking_due(void);
 void prefs_blocking_close(void);
 
 #endif
