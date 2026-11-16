@@ -199,15 +199,28 @@ static bool in_place(const AuLayout *L, const LBox *b)
     return false;
 }
 
-typedef struct RScroll {
-    AuElement *el; /* referenced */
-    float x, y;
-} RScroll;
-
 typedef struct RRoot {
     AuElement *el; /* referenced */
     LBox *old;     /* the old principal box, kept in place until the new one replaces it */
 } RRoot;
+
+/* Whether an entry of the boxless list from before a rebuild goes: its
+ * element left the document, or is below a rebuilt root, whose new
+ * subtree listed it again if it is still boxless. */
+static bool hidden_gone(const AuLayout *L, const RRoot *roots, uint32_t nroots, const AuElement *el)
+{
+    const AuNode *p = el->node.parent;
+    for (; p && p->type != AU_NODE_DOCUMENT; p = p->parent)
+        for (uint32_t i = 0; i < nroots; i++)
+            if (p == &roots[i].el->node)
+                return true;
+    return p != &L->doc->node;
+}
+
+typedef struct RScroll {
+    AuElement *el; /* referenced */
+    float x, y;
+} RScroll;
 
 /* Saves the scroll offsets of the scrolled boxes in b's subtree. */
 static void save_scrolls(LBox *b, RScroll **v, uint32_t *n, uint32_t *cap)
@@ -356,6 +369,7 @@ void l_rebuild_dirty(AuLayout *L)
     }
     bool failed = false;
     uint32_t boxes0 = L->stats.boxes;
+    uint32_t nhidden0 = L->nhidden; /* entries after it are the new subtrees' */
     for (uint32_t i = 0; i < nroots && !failed; i++) {
         LBox *ob = roots[i].old;
         LBox *nb = l_build_subtree(L, roots[i].el);
@@ -384,13 +398,16 @@ void l_rebuild_dirty(AuLayout *L)
         }
     }
     L->subtree_boxes += L->stats.boxes - boxes0;
-    /* The display: none elements of the dropped boxes are gone from the
-     * tree; the new subtrees listed theirs. */
+    /* The boxless elements of the dropped boxes are gone from the tree;
+     * the new subtrees listed theirs (kept even when the table fixup or
+     * normalization replaced the box they name, as a whole build keeps
+     * them). */
     uint32_t k = 0;
     for (uint32_t i = 0; i < L->nhidden; i++) {
-        if (L->hidden[i].box->flags & LF_DEAD)
+        if (i < nhidden0 && hidden_gone(L, roots, nroots, L->hidden[i].el)) {
             au_node_unref(&L->hidden[i].el->node);
-        else
+            au_style_release(L->hidden[i].style);
+        } else
             L->hidden[k++] = L->hidden[i];
     }
     L->nhidden = k;
@@ -689,12 +706,31 @@ void l_check_incremental(AuLayout *L)
                 x[m++] = x[k];
         ux = m;
         if (ux != uy || memcmp(x, y, ux * sizeof *x) != 0) {
-            au_buf_printf(&msg, "the display: none elements differ (%u, whole build %u)\n", ux, uy);
+            au_buf_printf(&msg, "the boxless elements differ (%u, whole build %u):", ux, uy);
+            for (uint32_t k = 0; k < ux; k++)
+                au_buf_printf(&msg, " %s", au_atom_str(((AuElement *)x[k])->tag));
+            au_buf_puts(&msg, "; whole build:");
+            for (uint32_t k = 0; k < uy; k++)
+                au_buf_printf(&msg, " %s", au_atom_str(((AuElement *)y[k])->tag));
+            au_buf_puts(&msg, "\n");
             ok = false;
         }
         au_free(x);
     }
     au_free(pairs);
+#ifdef AURA_INCR_CHECK
+    if (!ok && F->stats.boxes < 300) {
+        /* A small (reduced) case: both trees, to compare by eye. */
+        AuBuf d;
+        au_buf_init(&d);
+        au_layout_dump(L, &d);
+        fprintf(stderr, "aura: incremental tree:\n%.*s", (int)d.len, d.data);
+        au_buf_clear(&d);
+        au_layout_dump(F, &d);
+        fprintf(stderr, "aura: whole build:\n%.*s", (int)d.len, d.data);
+        au_buf_free(&d);
+    }
+#endif
     au_layout_free(F);
     i = 0;
     for (AuNode *n = top->first_child; n; n = au_node_next(n, top))

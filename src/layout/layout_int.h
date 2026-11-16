@@ -417,13 +417,17 @@ struct AuLayout {
      * the box tree. */
     struct AuSvgNames *svg_names;
     struct AuSvgIdIndex *svg_ids;
-    /* Elements the box tree build left out for display: none (their
-     * descendants are not listed), each referenced, with the box its
-     * parent's children went into (a subtree rebuild drops the entries
-     * of the boxes it drops). */
+    /* Elements the box tree build gave no box of their own: display: none
+     * (their descendants are not listed) and display: contents. Each is
+     * referenced, with the style it was built with (retained) and the box
+     * its parent's children went into (a subtree rebuild drops the
+     * entries of the boxes it drops). A restyle that changes what such an
+     * element builds (its display, counters, generated content) rebuilds
+     * its parent's subtree: no box of its own shows the change. */
     struct LHidden {
         AuElement *el;
         LBox *box;
+        AuStyle *style;
     } *hidden;
     uint32_t nhidden, hidden_cap;
     /* Subtree rebuilds (rebuild.c). dirty holds the nodes whose children,

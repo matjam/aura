@@ -187,6 +187,74 @@ static void gen(AuBuf *b, int depth, int budget)
     }
 }
 
+/* Feeds one document in random chunks with random viewports, then paints,
+ * hit tests, hovers, scrolls and resizes it; the random state goes on. */
+static void process(AuFontSet *fonts, AuSurface *s, const char *data, size_t len)
+{
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    au_docview_begin(dv, "http://fuzz.example/dir/page.html");
+    size_t pos = 0;
+    while (pos < len) {
+        size_t chunk = 1 + rnd(512);
+        if (chunk > len - pos)
+            chunk = len - pos;
+        au_docview_feed(dv, data + pos, chunk);
+        pos += chunk;
+        if (rnd(3) == 0) {
+            au_docview_set_viewport(dv, 1 + (int)rnd(900), 1 + (int)rnd(700));
+            au_docview_update(dv);
+        }
+    }
+    au_docview_finish(dv);
+    for (int k = 0; k < 3; k++) {
+        int w = 1 + (int)rnd(1000), h = 1 + (int)rnd(800);
+        au_docview_set_viewport(dv, w, h);
+        int cw, ch;
+        au_docview_content_size(dv, &cw, &ch);
+        AuCanvas *c = au_canvas_new(s);
+        int sy = ch > 1 ? (int)rnd((uint32_t)ch) : 0;
+        au_docview_paint(dv, c, (AuRect){0, 0, 320, 240}, 0, sy);
+        au_canvas_free(c);
+        for (int m = 0; m < 6; m++) {
+            AuEvent ev;
+            memset(&ev, 0, sizeof ev);
+            ev.type = m % 3 == 0 ? AU_EVENT_MOUSE_MOVE : m % 3 == 1 ? AU_EVENT_MOUSE_DOWN : AU_EVENT_MOUSE_UP;
+            ev.x = (int)rnd(400);
+            ev.y = sy + (int)rnd(300);
+            au_docview_mouse(dv, &ev);
+            au_docview_scroll_at(dv, ev.x, ev.y, (int)rnd(200) - 100, (int)rnd(200) - 100);
+        }
+        AuBuf d;
+        au_buf_init(&d);
+        au_layout_dump(au_docview_layout(dv), &d);
+        au_buf_free(&d);
+        au_docview_fragment_y(dv, "e3");
+    }
+    au_docview_free(dv);
+}
+
+/* fuzz_page process STATE FILE: processes a saved document as the run
+ * that saved it did (STATE from FILE.seed). For tools/fuzz-reduce.py. */
+static int process_file(const char *state, const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 1;
+    static char buf[1 << 20];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    rng = (uint32_t)strtoul(state, NULL, 10);
+    if (!rng)
+        rng = 1;
+    static uint8_t fontdata[16384];
+    AuFontSet *fonts = ahem_fontset(fontdata);
+    AuSurface *s = au_surface_new(320, 240);
+    process(fonts, s, buf, n);
+    au_surface_free(s);
+    au_fontset_free(fonts);
+    return 0;
+}
+
 /* fuzz_page replay FILE: lays a saved document out at every width from 1
  * to 1000 (prints each width first, to find one that hangs). */
 static int replay(const char *path)
@@ -216,6 +284,8 @@ int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "replay"))
         return replay(argv[2]);
+    if (argc > 3 && !strcmp(argv[1], "process"))
+        return process_file(argv[2], argv[3]);
     int iters = argc > 1 ? atoi(argv[1]) : 100;
     rng = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 12345u;
     if (!rng)
@@ -262,54 +332,24 @@ int main(int argc, char **argv)
         gen(&b, 0, 6000);
         if (argc > 3) {
             /* fuzz_page N SEED FILE: each document is written to FILE
-             * before it is processed, to catch one that hangs. */
+             * before it is processed, to catch one that hangs, and the
+             * random state that processes it to FILE.seed (fuzz_page
+             * process STATE FILE runs it again). */
             FILE *f = fopen(argv[3], "wb");
             if (f) {
                 fwrite(b.data, 1, b.len, f);
                 fclose(f);
             }
+            char sp[1024];
+            snprintf(sp, sizeof sp, "%s.seed", argv[3]);
+            f = fopen(sp, "w");
+            if (f) {
+                fprintf(f, "%lu\n", (unsigned long)rng);
+                fclose(f);
+            }
         }
         clock_t t0 = clock();
-        AuDocView *dv = au_docview_new(fonts, NULL, NULL);
-        au_docview_begin(dv, "http://fuzz.example/dir/page.html");
-        size_t pos = 0;
-        while (pos < b.len) {
-            size_t chunk = 1 + rnd(512);
-            if (chunk > b.len - pos)
-                chunk = b.len - pos;
-            au_docview_feed(dv, b.data + pos, chunk);
-            pos += chunk;
-            if (rnd(3) == 0) {
-                au_docview_set_viewport(dv, 1 + (int)rnd(900), 1 + (int)rnd(700));
-                au_docview_update(dv);
-            }
-        }
-        au_docview_finish(dv);
-        for (int k = 0; k < 3; k++) {
-            int w = 1 + (int)rnd(1000), h = 1 + (int)rnd(800);
-            au_docview_set_viewport(dv, w, h);
-            int cw, ch;
-            au_docview_content_size(dv, &cw, &ch);
-            AuCanvas *c = au_canvas_new(s);
-            int sy = ch > 1 ? (int)rnd((uint32_t)ch) : 0;
-            au_docview_paint(dv, c, (AuRect){0, 0, 320, 240}, 0, sy);
-            au_canvas_free(c);
-            for (int m = 0; m < 6; m++) {
-                AuEvent ev;
-                memset(&ev, 0, sizeof ev);
-                ev.type = m % 3 == 0 ? AU_EVENT_MOUSE_MOVE : m % 3 == 1 ? AU_EVENT_MOUSE_DOWN : AU_EVENT_MOUSE_UP;
-                ev.x = (int)rnd(400);
-                ev.y = sy + (int)rnd(300);
-                au_docview_mouse(dv, &ev);
-                au_docview_scroll_at(dv, ev.x, ev.y, (int)rnd(200) - 100, (int)rnd(200) - 100);
-            }
-            AuBuf d;
-            au_buf_init(&d);
-            au_layout_dump(au_docview_layout(dv), &d);
-            au_buf_free(&d);
-            au_docview_fragment_y(dv, "e3");
-        }
-        au_docview_free(dv);
+        process(fonts, s, b.data, b.len);
         double secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
         if (secs > 0.5) {
             /* Slow documents are worth a look: save them. */

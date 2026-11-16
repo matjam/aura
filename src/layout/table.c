@@ -850,6 +850,14 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     LTableBox *t = (LTableBox *)b;
     LTableGrid *g = t->g;
     t->edges_ok = false; /* styles may have changed since the last pass */
+    /* Intrinsic widths treat percentage margins and padding as 0 (CSS 2.1
+     * 10.3 and Chrome's intrinsic sizing), but the used edges are the
+     * ones the table's container resolved against its width: keep them,
+     * whichever of the two runs last in a layout. */
+    float m0[4], p0[4], bw0[4];
+    memcpy(m0, b->m, sizeof m0);
+    memcpy(p0, b->p, sizeof p0);
+    memcpy(bw0, b->bw, sizeof bw0);
     l_resolve_box_edges(b, 0);
     column_constraints(L, t);
     uint32_t nc = g->ncols, vis = visible_cols(t);
@@ -891,6 +899,9 @@ void l_table_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
         }
     *min_c = mn;
     *max_c = l_max(mx, mn);
+    memcpy(b->m, m0, sizeof m0);
+    memcpy(b->p, p0, sizeof p0);
+    memcpy(b->bw, bw0, sizeof bw0);
 }
 
 /* Fixed layout distribution (Chrome's DistributeInlineSizeToComputedInlineSizeFixed). */

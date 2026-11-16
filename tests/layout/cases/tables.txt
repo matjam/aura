@@ -770,3 +770,19 @@ pixel 60 20 000080
 <body style="margin:0"><style>table{position:absolute;height:100%;border-spacing:0}td{padding:0}</style><div style="position:relative;height:400px;transform:translate(0)"><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><table><tr><td><i id=e style="display:inline-block;width:10px;height:10px;vertical-align:top"></i></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></td></tr></table></div>
 ---
 #e x=0 y=12192 w=10 h=10
+
+=== percentage margins of a table resolve against its containing block
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<div style="width:400px"><table id=t style="border-spacing:0;margin-left:10%;margin-top:5%"><tr><td><i></i></td></tr></table><table id=u style="border-spacing:0;margin:0 10% 0 auto"><tr><td><i></i></td></tr></table></div>
+---
+#t x=40 y=20 w=16
+#u x=344 w=16
+
+=== percentage margins of an empty table resolve against its containing block
+<body style="margin:0">
+<div style="width:400px"><table id=t style="border-spacing:0;margin-left:10%;margin-top:5%"></table><div id=n style="height:1px"></div><table id=u style="border-spacing:0;margin:0 0 10% 0"><tbody></tbody></table><div id=m style="height:1px"></div></div>
+---
+#t x=40 y=20
+#n y=20
+#m y=61

@@ -1701,11 +1701,18 @@ void au_layout_styles_changed(AuLayout *L)
                 b = b->next;
         }
     }
-    /* An element left out of the tree for display: none that is shown now. */
+    /* An element left out of the tree for display: none that is shown
+     * now, or a display: contents element whose new style builds
+     * something else (no box of its own was compared above). */
     for (uint32_t i = 0; i < L->nhidden && worst < 3; i++) {
         AuElement *hel = L->hidden[i].el;
-        const AuStyle *hs = au_element_style(hel);
-        if (hs && hs->box->display != AU_DISPLAY_NONE) {
+        const AuStyle *hs = au_element_style(hel), *was = L->hidden[i].style;
+        bool changed = false;
+        if (hs && was && was->box->display == AU_DISPLAY_NONE)
+            changed = hs->box->display != AU_DISPLAY_NONE;
+        else if (hs && was && hs != was)
+            changed = style_diff(was, hs) == 3;
+        if (changed) {
             au_layout_node_changed(L, hel->node.parent ? hel->node.parent : &hel->node);
             if (L->need_build)
                 worst = 3;
