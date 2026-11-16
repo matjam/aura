@@ -1,0 +1,139 @@
+Container queries and size containment through the document view: the
+style pass reads each container's size from the last layout, and after a
+layout the subtrees of containers whose size changed are restyled and
+laid out again (at most four rounds). Expected values are worked out from
+CSS Conditional 5 and CSS Containment 2; no browser was consulted.
+
+=== a query reads the container's width from layout
+<body style="margin:0">
+<style>
+.c { container-type: inline-size; width: 400px; }
+.t { height: 10px; }
+@container (min-width: 300px) { .t { height: 20px; } }
+</style>
+<div class=c><div class=t id=t1></div></div>
+<div class=c style="width:200px"><div class=t id=t2></div></div>
+<div><div class=t id=t3></div></div>
+---
+#t1 y=0 h=20
+#t2 y=20 h=10
+#t3 y=30 h=10
+
+=== a container that follows the viewport
+viewport 640 480
+<body style="margin:0">
+<style>
+main { container: page / inline-size; }
+.card { height: 10px; }
+@container page (width > 600px) { .card { height: 40px; width: 50%; } }
+</style>
+<main><div class=card id=c></div></main>
+---
+#c h=40 w=320
+
+=== the same page in a narrow viewport
+viewport 500 480
+<body style="margin:0">
+<style>
+main { container: page / inline-size; }
+.card { height: 10px; }
+@container page (width > 600px) { .card { height: 40px; width: 50%; } }
+</style>
+<main><div class=card id=c></div></main>
+---
+#c h=10 w=500
+
+=== inline-size containment: the width does not follow the content
+<body style="margin:0">
+<div id=f style="float:left;container-type:inline-size;padding:5px;height:10px"><span>some text</span></div>
+<div id=g style="display:inline-block;contain:inline-size;border:2px solid;height:10px">more text</div>
+---
+#f w=10
+#g w=4
+
+=== size containment: the height does not follow the content either
+<body style="margin:0">
+<div id=s style="container-type:size;width:100px;border:1px solid"><div id=in style="height:50px"></div></div>
+<div id=after style="height:10px"></div>
+---
+#s h=2
+#in y=1 h=50
+#after y=2
+
+=== container units
+<body style="margin:0">
+<style>
+.c { container-type: inline-size; width: 500px; }
+.s { container-type: size; width: 300px; height: 200px; }
+</style>
+<div class=c><div id=u style="width:50cqw;height:10px"></div></div>
+<div class=s><div id=v style="width:10cqw;height:25cqh"></div></div>
+<div id=w style="width:10cqw;height:10px"></div>
+---
+#u w=250
+#v w=30 h=50
+#w w=80
+
+=== a query that hides and shows content rebuilds its boxes
+<body style="margin:0">
+<style>
+.c { container-type: inline-size; }
+.wide { height: 30px; }
+.narrow { height: 7px; display: none; }
+@container (max-width: 300px) { .wide { display: none; } .narrow { display: block; } }
+</style>
+<div class=c style="width:200px"><div class=wide id=w1></div><div class=narrow id=n1></div><div id=a1 style="height:1px"></div></div>
+<div class=c style="width:400px"><div class=wide id=w2></div><div class=narrow id=n2></div><div id=a2 style="height:1px"></div></div>
+---
+#n1 y=0 h=7
+#a1 y=7
+#w2 y=8 h=30
+#a2 y=38
+
+=== a container sized by a query on its own container takes two rounds
+<body style="margin:0">
+<style>
+.a { container-type: inline-size; width: 600px; }
+.b { container-type: inline-size; width: 100px; }
+@container (min-width: 500px) { .b { width: 400px; } }
+.x { height: 5px; }
+@container (min-width: 300px) { .x { height: 30px; } }
+</style>
+<div class=a><div class=b id=b><div class=x id=x></div></div></div>
+---
+#b w=400
+#x h=30
+
+=== a chain that needs more rounds stops after four
+<body style="margin:0">
+<style>
+.r { container-type: inline-size; width: 600px; }
+.l { container-type: inline-size; width: 100px; height: 1px; }
+@container (min-width: 500px) { .l { width: 600px; } }
+</style>
+<div class=r><div class=l id=l1><div class=l id=l2><div class=l id=l3><div class=l id=l4><div class=l id=l5><div class=l id=l6></div></div></div></div></div></div></div>
+---
+#l1 w=600
+#l4 w=600
+#l5 w=100
+#l6 w=100
+
+=== a pseudo-element queries its element
+<body style="margin:0">
+<style>
+.c { container-type: inline-size; height: 20px; }
+@container (min-width: 300px) { .c::before { content: ""; display: block; height: 15px; width: 50cqw; } }
+</style>
+<div class=c id=c1 style="width:400px"></div>
+<div class=c id=c2 style="width:200px"></div>
+---
+#c1 h=20
+#c2 y=20
+
+=== a shadow host is the container of its shadow tree
+<body style="margin:0">
+<div id=h style="container-type:inline-size;width:400px"><template shadowrootmode=open><style>.t { height: 5px; } @container (min-width: 300px) { .t { height: 25px; } }</style><div class=t id=t></div></template></div>
+<div id=after style="height:1px"></div>
+---
+#t h=25
+#after y=25

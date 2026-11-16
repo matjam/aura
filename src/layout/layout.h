@@ -286,5 +286,10 @@ void au_layout_pass_counts(const AuLayout *L, uint32_t *builds, uint32_t *layout
 /* Font metrics for the CSS resolver's ex and ch units
  * (au_css_resolver_set_metrics with ctx = the AuLayout). */
 void au_layout_css_metrics(void *layout, const AuStyle *style, float *ex_px, float *ch_px);
+/* The content-box size of el's box in the last layout, for the CSS
+ * resolver's container queries (au_css_resolver_set_container_size with
+ * ctx = the AuLayout); false for an element without a laid-out block or
+ * atomic inline box. */
+bool au_layout_css_container_size(void *layout, const AuElement *el, float *w, float *h);
 
 #endif

@@ -569,6 +569,20 @@ static void replaced_size(AuLayout *L, LBlock *b, float cb_w, float cb_h, float 
 
 /* ---- Intrinsic sizes ---- */
 
+int l_size_contained(const LBlock *b)
+{
+    if (lb_anon(&b->b) || !b->b.style || b->b.replaced)
+        return 0;
+    if (b->b.inner != LI_FLOW && b->b.inner != LI_FLEX && b->b.inner != LI_GRID)
+        return 0;
+    const AuStyleRare *r = b->b.style->rare;
+    if ((r->contain & AU_CONTAIN_SIZE) || r->container_type == AU_CONTAINER_TYPE_SIZE)
+        return 3;
+    if ((r->contain & AU_CONTAIN_INLINE_SIZE) || r->container_type == AU_CONTAINER_TYPE_INLINE_SIZE)
+        return 1;
+    return 0;
+}
+
 void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
 {
     if (b->b.flags & LF_INTRINSIC_OK) {
@@ -592,6 +606,8 @@ void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
         mn = mx = w;
     } else if (b->b.replaced == LR_TEXTAREA) {
         mn = mx = textarea_w(L, b);
+    } else if (l_size_contained(b) & 1) {
+        mn = mx = 0; /* sized as if empty */
     } else {
         l_fc_ops(b)->intrinsic(L, b, &mn, &mx);
     }
@@ -812,6 +828,8 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->baseline = b->last_baseline = NAN;
     } else {
         ch = l_fc_ops(b)->layout(L, b, &c);
+        if (l_size_contained(b) & 2)
+            ch = 0; /* the content is laid out, and overflows */
     }
     L->depth--;
     if (b->b.replaced == LR_TEXTAREA && content_h < 0) {
@@ -1607,6 +1625,8 @@ static int style_diff(const AuStyle *a, const AuStyle *b)
             l_style_contains_fixed(a) != l_style_contains_fixed(b) ||
             x->line_clamp != y->line_clamp || x->contain != y->contain)
             return 3;
+        if (x->container_type != y->container_type) /* size containment */
+            r = r < 2 ? 2 : r;
         if (x->transform != y->transform || x->box_shadow != y->box_shadow ||
             x->outline_width != y->outline_width || x->text_overflow != y->text_overflow)
             r = r < 2 ? 2 : r;

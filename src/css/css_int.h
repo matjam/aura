@@ -336,6 +336,27 @@ void css_media_serialize(const AuCssMediaList *m, AuBuf *out);
 /* Evaluates an @supports condition in tokens [a, b). */
 bool css_supports_eval(const CssTokens *tk, uint32_t a, uint32_t b);
 
+/* ---- Container queries (media.c) ----
+ * The prelude of @container: an optional name and a condition over the
+ * size features. axes says which a container must allow querying. */
+enum { CQ_AXIS_WIDTH = 1, CQ_AXIS_HEIGHT = 2, CQ_AXIS_INLINE = 4, CQ_AXIS_BLOCK = 8 };
+typedef struct CssContainerQuery {
+    AuAtom name;          /* 0: any container */
+    uint8_t axes;         /* CQ_AXIS_* the condition reads */
+    AuCssMediaList *cond; /* NULL for a name alone */
+} CssContainerQuery;
+/* The query container's size and what lengths in the condition need:
+ * w and h are its content box, -1 for an axis it cannot be queried in. */
+typedef struct CssCqEnv {
+    float w, h;
+    bool horizontal; /* horizontal writing mode: the inline axis is the width */
+    float em, rem;
+    const AuCssDevice *dev;
+} CssCqEnv;
+/* Parses tokens [a, b) into the arena; NULL when the prelude is invalid. */
+CssContainerQuery *css_container_parse(CssArena *arena, const CssTokens *tk, uint32_t a, uint32_t b);
+bool css_container_eval(const CssContainerQuery *q, const CssCqEnv *e);
+
 /* ---- Selectors (selector.c, match.c) ---- */
 typedef struct AuSelector AuSelector;
 typedef struct AuSelList AuSelList;
@@ -574,7 +595,7 @@ typedef struct CssLayerName {
  * (css_rule_decls), the @media block until its query first matches the
  * device (css_rule_children). */
 enum {
-    RF_OK = 1,   /* @supports: the condition holds; @import: supports() holds. Clear for @container */
+    RF_OK = 1,   /* @supports: the condition holds; @import: supports() holds. Clear for @scope */
     RF_LAZY = 2, /* c.lazy_len bytes of text at b.off stand for the declarations or the children */
     RF_LAYER = 4 /* @import with a layer: its name is sheet->import_layers[b.index] */
 };
@@ -592,7 +613,8 @@ struct CssRule {
         AuSelList *sel;        /* style rules; nested declarations (the parent rule's, borrowed) */
         AuCssMediaList *media; /* @media, @import (NULL for all) */
         CssLayerName *layers;  /* @layer: b.nlayers names (a block has one; n == 0 is anonymous) */
-        char *text;            /* condition text (@container, @supports, @scope) */
+        char *text;            /* condition text (@supports, @scope) */
+        struct CssContainerQuery *cq; /* @container */
     } u;
     union {
         AuCssDeclBlock *decls; /* style rules, nested declarations (never NULL without RF_LAZY) */
@@ -745,8 +767,18 @@ typedef struct CssComputeCtx {
     float ex, ch; /* cached font metrics, < 0 until asked */
     float font_size_for_em; /* the parent's font size while computing font-size */
     bool font_size_mode;    /* computing font-size: em is the parent's, absolute units zoom */
-    uint8_t flags;
+    uint8_t flags;          /* 2 viewport units, 4 attr(), 8 container units resolved against a container */
+    /* For container units: the resolver (NULL: they are small viewport
+     * units), and whether the style is a pseudo-element's, whose element
+     * is a candidate container. */
+    struct AuCssResolver *cq;
+    bool cq_self;
 } CssComputeCtx;
+
+/* The content-box size of el's nearest query container whose type allows
+ * querying axis (CQ_AXIS_WIDTH, _HEIGHT, _INLINE or _BLOCK) in *px;
+ * false when there is none or its size is not known (cascade.c). */
+bool css_cq_axis_size(CssComputeCtx *c, int axis, float *px);
 
 /* Length conversion against the context (font-relative and viewport). */
 float css_length_px(CssComputeCtx *c, float v, int unit);

@@ -595,6 +595,12 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
  * where a later l_layout_content call does the final layout). */
 float l_measure_content(AuLayout *L, LBlock *b, float content_w, float content_h, float cb_h);
 void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c);
+/* Size containment (contain: size or inline-size, container-type: size
+ * or inline-size): bit 1 when b's width, bit 2 when its height is sized
+ * as if it had no content. Only block containers, flex and grid
+ * containers of elements; layout is horizontal, so the inline size is
+ * the width. */
+int l_size_contained(const LBlock *b);
 void l_outer_intrinsic(AuLayout *L, LBlock *b, float cb_w, float *min_o, float *max_o);
 float l_edges_h(const LBlock *b); /* horizontal margins + borders + padding */
 float l_bp_h(const LBlock *b);    /* horizontal borders + padding */

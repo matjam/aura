@@ -855,6 +855,34 @@ static bool sh_overflow(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
     return true;
 }
 
+/* container: <'container-name'> [ / <'container-type'> ]? */
+static bool sh_container(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
+{
+    uint32_t n;
+    const AuCssValue *it = sh_items(s->cx, tk, a, b, &n, false, NULL);
+    if (!it || n < 1)
+        return false;
+    uint32_t slash = n;
+    for (uint32_t i = 0; i < n; i++)
+        if (it[i].type == AU_CSSV_DELIM) {
+            if (it[i].unit != '/' || slash != n)
+                return false;
+            slash = i;
+        }
+    if (slash == 0 || (slash < n && slash + 2 != n))
+        return false;
+    AuCssValue *names = css_new_list(s->cx->arena, AU_CSSV_LIST, slash);
+    for (uint32_t i = 0; i < slash; i++)
+        names->u.items[i] = it[i];
+    AuCssValue *name = try_lh(s->cx, AU_PROP_container_name, slash == 1 ? &it[0] : names);
+    AuCssValue *type = slash < n ? try_lh(s->cx, AU_PROP_container_type, &it[slash + 1]) : NULL;
+    if (!name || (slash < n && !type))
+        return false;
+    emit(s, AU_PROP_container_name, name);
+    emit(s, AU_PROP_container_type, type);
+    return true;
+}
+
 /* ---- Flex, alignment, gap ---- */
 
 static bool sh_flex(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
@@ -1437,6 +1465,8 @@ bool css_parse_shorthand(CssParseCtx *cx, uint16_t sh, const CssTokens *tk, uint
         return sh_text_wrap(&s, tk, a, b);
     case AU_PROP_overflow:
         return sh_overflow(&s, tk, a, b);
+    case AU_PROP_container:
+        return sh_container(&s, tk, a, b);
     default:
         if (sh >= AU_PROP_margin_block && sh <= AU_PROP_border_inline_color)
             return sh_logical_pair(&s, sh, tk, a, b);
