@@ -243,6 +243,17 @@ struct AuJs {
         double when;  /* when it was compiled or last read (now_ms clock) */
     } code[4];
     uint32_t code_clock;
+    /* Parsed selectors of matches, closest and querySelector (natives.c,
+     * arg_selector), in the root; allocated on first use. */
+    struct JsSelector {
+        char *text;
+        size_t len;
+        uint32_t hash;
+        uint32_t used;
+        struct AuCssSelectorList *list;
+    } *selectors;
+    uint32_t selector_clock;
+    struct AuCssSelectorList *selector_long; /* the last one too long to keep */
     /* canvas (natives_canvas.c) */
     struct JsCanvas *canvas;
     bool canvas_pending; /* a canvas element's width or height attribute is changing */
@@ -271,6 +282,7 @@ char *js_take_script_bytes(JSContext *ctx, JSValueConst v, size_t *len);
 /* Lets go of compiled scripts nothing has asked for in the last 20
  * seconds (called while the page is idle). */
 void js_code_expire(AuJs *js);
+void js_selectors_free(AuJs *js); /* the root's parsed selector cache (natives.c) */
 AuJs *js_of_ctx(JSContext *ctx);
 void js_report_exception(AuJs *js);
 void js_console(AuJs *js, AuJsLogLevel level, const char *text, size_t len);

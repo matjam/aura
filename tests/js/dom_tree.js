@@ -264,3 +264,35 @@ test('second documents: createHTMLDocument and DOMParser', () => {
     moved.remove();
     assert.throws(() => new DOMParser().parseFromString('<a/>', 'text/xml'), 'NotSupportedError');
 });
+
+// Parsed selectors are kept in a cache of 32 (natives.c, arg_selector):
+// a selector asked for again, after others have pushed it out, and an
+// invalid one must give the same answers as the first time.
+test('selectors asked for many times', () => {
+    const root = document.createElement('div');
+    root.innerHTML = '<p class="a"><span id="s1" class="b c">x</span></p><p class="d"><span id="s2">y</span></p>';
+    document.body.appendChild(root);
+    const s1 = root.querySelector('#s1'), s2 = root.querySelector('#s2');
+    for (let round = 0; round < 3; round++) {
+        for (let i = 0; i < 40; i++) {
+            assert.equal(s1.matches('.c, .z' + i), true);
+            assert.equal(s2.matches('.c, .z' + i), false);
+            assert.equal(root.querySelectorAll('span, .q' + i).length, 2);
+        }
+        assert.equal(s1.closest('p.a'), s1.parentNode);
+        assert.equal(s2.closest('p.a'), null);
+        assert.equal(root.querySelector('p.d > span'), s2);
+        assert.throws(() => s1.matches('p..a'), 'SyntaxError');
+        assert.throws(() => root.querySelector('['), 'SyntaxError');
+    }
+    /* 600 different selectors overflow the table; long ones are not kept */
+    for (let i = 0; i < 600; i++) assert.equal(s1.matches('x-tag-' + i), false);
+    const long1 = Array.from({ length: 60 }, (_, i) => 'x-long-' + i).join(', ') + ', #s1';
+    const long2 = Array.from({ length: 60 }, (_, i) => 'y-long-' + i).join(', ') + ', #s2';
+    for (let i = 0; i < 3; i++) {
+        assert.equal(s1.matches(long1), true);
+        assert.equal(s1.matches(long2), false);
+        assert.equal(root.querySelectorAll(long2).length, 1);
+    }
+    root.remove();
+});

@@ -313,7 +313,8 @@ static void h_viewport(void *ctx, int *width, int *height, int *scroll_x, int *s
 {
     AuDocScript *s = ctx;
     au_dv_scroll(s->dv, scroll_x, scroll_y, width, height);
-    au_docview_content_size(s->dv, doc_w, doc_h);
+    if (doc_w && doc_h)
+        au_docview_content_size(s->dv, doc_w, doc_h);
 }
 
 static void h_scroll_to(void *ctx, int x, int y)

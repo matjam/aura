@@ -1066,17 +1066,85 @@ static JSValue s_reflect(JSContext *ctx, JSValueConst this_val, JSValueConst val
 
 /* ---- Selectors ---- */
 
+/* The parsed selector for v, owned by the runtime (the caller does not
+ * free it; a list is never changed by matching). GitHub's scripts test
+ * each element they see against the 400-odd tag names of their lazy
+ * custom elements, element.matches(name) for each, which parsed 24,000
+ * selectors while the repository page loaded: 6% of its script time on
+ * the host. Parsed selectors are kept in a table of SEL_SLOTS entries: a
+ * selector may sit in any of SEL_WAYS slots from its hash, and a new one
+ * takes an empty slot there or the least recently used. A selector longer
+ * than SEL_MAX_LEN is not kept: the runtime holds it until the next one
+ * like it. */
+#define SEL_SLOTS 512u
+#define SEL_WAYS 8u
+#define SEL_MAX_LEN 256u
+
 static AuCssSelectorList *arg_selector(JSContext *ctx, JSValueConst v)
 {
+    AuJs *r = js_of_ctx(ctx)->root;
     size_t n;
     const char *s = JS_ToCStringLen(ctx, &n, v);
     if (!s)
         return NULL;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ (uint8_t)s[i]) * 16777619u;
+    struct JsSelector *slot = NULL;
+    if (n <= SEL_MAX_LEN) {
+        if (!r->selectors)
+            r->selectors = au_calloc(SEL_SLOTS * sizeof *r->selectors);
+        for (uint32_t w = 0; w < SEL_WAYS; w++) {
+            struct JsSelector *c = &r->selectors[(h + w) & (SEL_SLOTS - 1)];
+            if (c->list && c->hash == h && c->len == n && !memcmp(c->text, s, n)) {
+                JS_FreeCString(ctx, s);
+                c->used = ++r->selector_clock;
+                return c->list;
+            }
+            if (!slot || (slot->list && (!c->list || c->used < slot->used)))
+                slot = c;
+        }
+    }
     AuCssSelectorList *l = au_css_selector_parse(s, n);
-    if (!l)
+    if (!l) {
         JS_ThrowDOMException(ctx, "SyntaxError", "'%s' is not a valid selector", s);
+        JS_FreeCString(ctx, s);
+        return NULL;
+    }
+    if (!slot) {
+        if (r->selector_long)
+            au_css_selector_free(r->selector_long);
+        r->selector_long = l;
+        JS_FreeCString(ctx, s);
+        return l;
+    }
+    if (slot->list) {
+        au_css_selector_free(slot->list);
+        au_free(slot->text);
+    }
+    slot->text = au_strndup(s, n);
+    slot->len = n;
+    slot->hash = h;
+    slot->list = l;
+    slot->used = ++r->selector_clock;
     JS_FreeCString(ctx, s);
     return l;
+}
+
+void js_selectors_free(AuJs *js)
+{
+    for (uint32_t i = 0; js->selectors && i < SEL_SLOTS; i++) {
+        struct JsSelector *c = &js->selectors[i];
+        if (c->list) {
+            au_css_selector_free(c->list);
+            au_free(c->text);
+        }
+    }
+    au_free(js->selectors);
+    js->selectors = NULL;
+    if (js->selector_long)
+        au_css_selector_free(js->selector_long);
+    js->selector_long = NULL;
 }
 
 static JSValue m_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -1088,7 +1156,6 @@ static JSValue m_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     if (!l)
         return JS_EXCEPTION;
     bool m = au_css_selector_matches(l, e);
-    au_css_selector_free(l);
     return JS_NewBool(ctx, m);
 }
 
@@ -1106,7 +1173,6 @@ static JSValue m_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValu
             r = p;
             break;
         }
-    au_css_selector_free(l);
     return js_wrap(js, r);
 }
 
@@ -1119,7 +1185,6 @@ static JSValue m_query_selector(JSContext *ctx, JSValueConst this_val, int argc,
     if (!l)
         return JS_EXCEPTION;
     AuElement *r = au_css_query_selector(l, n);
-    au_css_selector_free(l);
     return js_wrap(js, r ? &r->node : NULL);
 }
 
@@ -1144,7 +1209,6 @@ static JSValue m_query_selector_all(JSContext *ctx, JSValueConst this_val, int a
             }
             found[nf++] = au_node_ref(c);
         }
-    au_css_selector_free(l);
     JSValue arr = JS_NewArray(ctx);
     for (uint32_t i = 0; i < nf; i++) {
         JS_SetPropertyUint32(ctx, arr, i, js_wrap(js, found[i]));

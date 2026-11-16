@@ -196,7 +196,9 @@ typedef struct AuJsHooks {
     /* Brings style up to date and returns el's computed style (an AuStyle
      * from src/css), or NULL. */
     const void *(*computed_style)(void *ctx, AuElement *el);
-    /* The viewport size and the document scroll offset and size. */
+    /* The viewport size and the document scroll offset and size. doc_w and
+     * doc_h are NULL when script does not need the document's size (which
+     * forces a layout). */
     void (*viewport)(void *ctx, int *width, int *height, int *scroll_x, int *scroll_y, int *doc_w, int *doc_h);
     void (*scroll_to)(void *ctx, int x, int y);
     bool (*media_matches)(void *ctx, const char *query, size_t len);
