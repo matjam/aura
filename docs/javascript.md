@@ -491,9 +491,9 @@ join them, convert each boundary point with
 - Rules are read from the sheet's text (`AuJsHooks.sheet_text`,
   `au_dv_sheet_text` in `docview.c`) by a splitter in script.
 - `insertRule`, `deleteRule` and changes to a rule write the whole text
-  back (`au_dv_sheet_set_text`, kept in `SheetSrc.om_text`), and the
-  document view parses it again, so the element's own text does not
-  change.
+  back (`au_dv_sheet_set_text`), and the document view parses it again
+  into `SheetSrc.om_sheet`, which keeps that text, so the element's own
+  text does not change.
 - `sheet.disabled` sets `SheetSrc.disabled`.
 - A rule's declarations are the `style` attribute of an element that is
   never inserted, so they share the inline style code.

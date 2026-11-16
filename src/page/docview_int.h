@@ -27,11 +27,10 @@ struct SheetSrc {
     uint32_t depth;    /* imports above this one */
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
-    /* CSSOM (au_dv_sheet_*): the text script wrote back after changing the
-     * sheet's rules and the sheet parsed from it, which replaces sheet in
-     * the cascade (its @import rules are not loaded); and sheet.disabled. */
-    char *om_text;
-    size_t om_len;
+    /* CSSOM (au_dv_sheet_*): the sheet parsed from the text script wrote
+     * back after changing the sheet's rules (it holds that text), which
+     * replaces sheet in the cascade (its @import rules are not loaded);
+     * and sheet.disabled. */
     AuCssSheet *om_sheet;
     bool disabled;
     uint8_t cors; /* a link's crossorigin attribute: 0 none, 1 anonymous, 2 use-credentials */

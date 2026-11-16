@@ -149,7 +149,6 @@ static void free_sheet_src(AuDocView *dv, SheetSrc *s)
     au_free(s->url);
     au_free(s->media);
     au_free(s->text);
-    au_free(s->om_text);
     if (s->om_sheet)
         au_css_sheet_free(s->om_sheet);
     au_free(s);
@@ -2047,12 +2046,8 @@ int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
     if (!s->text && !s->sheet)
         return 1;
     au_buf_puts(url, s->url ? s->url : "");
-    if (s->om_text) {
-        au_buf_append(text, s->om_text, s->om_len);
-        return 2;
-    }
     size_t n;
-    const char *t = src_text(s, &n);
+    const char *t = s->om_sheet ? au_css_sheet_text(s->om_sheet, &n) : src_text(s, &n);
     if (!t)
         return 3; /* a sheet that could not keep its text */
     au_buf_append(text, t, n);
@@ -2062,7 +2057,7 @@ int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url)
 void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t len)
 {
     SheetSrc *s = sheet_of(dv, el);
-    if (!s || (!s->text && !s->sheet && !s->om_text))
+    if (!s || (!s->text && !s->sheet && !s->om_sheet))
         return;
     /* The resolver borrows the parsed sheets: it lets go of them before
      * one is freed, and update_style hands them back (sheets_dirty). */
@@ -2070,10 +2065,7 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
         au_css_resolver_detach_sheets(dv->resolver);
     if (s->om_sheet)
         au_css_sheet_free(s->om_sheet);
-    au_free(s->om_text);
-    s->om_text = au_strndup(text, len);
-    s->om_len = len;
-    s->om_sheet = au_css_sheet_parse(s->om_text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media);
+    s->om_sheet = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media); /* keeps a copy of the text */
     dv->sheets_dirty = true;
 }
 
