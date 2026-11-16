@@ -723,11 +723,11 @@ static void parse_sheet(AuDocView *dv, SheetSrc *s)
         const AuCssImport *im = au_css_sheet_import(sh, i);
         if (!im->supported)
             continue;
-        char abs[2048];
-        if (!au_url_resolve(s->url, im->url, abs, sizeof abs))
+        char *abs = au_url_resolve_dup(s->url, im->url);
+        if (!abs)
             continue;
         SheetSrc *c = au_calloc(sizeof *c);
-        c->url = dup(abs);
+        c->url = abs;
         c->media = im->media && *im->media ? dup(im->media) : NULL;
         c->parent = s;
         c->index = (uint32_t)i;
@@ -1183,10 +1183,10 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
             dv->ndeferred++;
         }
     } else {
-        char abs[2048];
         const char *href = attr(el, "href");
-        if (href && au_url_resolve(dv->base, href, abs, sizeof abs)) {
-            s->src->url = dup(abs);
+        char *abs = href ? au_url_resolve_dup(dv->base, href) : NULL;
+        if (abs) {
+            s->src->url = abs;
             s->src->cors = au_dv_cors_attr(el);
             start_sheet(dv, s->src);
             dv->finished_reported = false;
@@ -1417,11 +1417,13 @@ static bool slot_stale(AuDocView *dv, const SheetSlot *s)
     }
     if (!is_stylesheet_link(s->el) || attr(s->el, "disabled"))
         return true;
-    char abs[2048];
     const char *href = attr(s->el, "href");
-    if (!href || !au_url_resolve(dv->base, href, abs, sizeof abs))
+    char *abs = href ? au_url_resolve_dup(dv->base, href) : NULL;
+    if (!abs)
         return !s->src->failed;
-    return !same_str(abs, s->src->url);
+    bool same = same_str(abs, s->src->url);
+    au_free(abs);
+    return !same;
 }
 
 static void prune_slots(AuDocView *dv)
@@ -2291,8 +2293,8 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
     AuBuf src;
     au_buf_init(&src);
     bool ok = false;
-    char abs[2048];
-    if (au_layout_image_source(dv->layout, img, &src) && au_url_resolve(dv->base, au_buf_cstr(&src), abs, sizeof abs)) {
+    char *abs = au_layout_image_source(dv->layout, img, &src) ? au_url_resolve_dup(dv->base, au_buf_cstr(&src)) : NULL;
+    if (abs) {
         AuImageCache *cache = au_docimages_cache(dv->imgs);
         AuImageEntry *e = au_image_cache_find(cache, abs);
         int iw = 0, ih = 0;
@@ -2306,6 +2308,7 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
                 ok = true;
             }
         }
+        au_free(abs);
     }
     au_buf_free(&src);
     return ok;

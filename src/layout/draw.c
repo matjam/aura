@@ -936,13 +936,13 @@ static float bg_len(const AuCssValue *v, float basis)
     return 0;
 }
 
-static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect origin_box, AuRect clip_box,
-                          const AuRadii *radii)
+/* One background or mask layer: a gradient (abs NULL) or the image at the
+ * resolved URL abs. */
+static void draw_bg_layer(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect origin_box, AuRect clip_box,
+                          const AuRadii *radii, const char *abs)
 {
     const AuCssValue *im = ly->image;
-    if (!im)
-        return;
-    bool gradient = im->type == AU_CSSV_FUNCTION;
+    bool gradient = abs == NULL;
     int iw = 0, ih = 0;
     const AuSurface *px = NULL;
     if (gradient) {
@@ -951,18 +951,8 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         ih = au_f2px(ceilf(origin_box.h));
         if (iw <= 0 || ih <= 0)
             return;
-    } else {
-        if (im->type != AU_CSSV_URL || !P->L->env.image)
-            return;
-        char abs[2048];
-        if (!P->L->env.resolve_url || !P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs)) {
-            size_t n = strlen(im->u.str);
-            if (n >= sizeof abs)
-                return;
-            memcpy(abs, im->u.str, n + 1);
-        }
-        if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0)
-            return;
+    } else if (!P->L->env.image(P->L->env.ctx, abs, &iw, &ih, &px) || !px || iw <= 0 || ih <= 0) {
+        return;
     }
     /* Tile size. */
     float tw = gradient ? origin_box.w : (float)iw, th = gradient ? origin_box.h : (float)ih;
@@ -990,9 +980,7 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         return;
     if (!gradient && P->L->env.image_use && tw <= 8192 && th <= 8192) {
         /* A vector image is drawn at the tile size. */
-        char abs[2048];
-        if (P->L->env.resolve_url && P->L->env.resolve_url(P->L->env.ctx, im->u.str, abs, sizeof abs))
-            P->L->env.image_use(P->L->env.ctx, abs, au_f2px(ceilf(tw)), au_f2px(ceilf(th)));
+        P->L->env.image_use(P->L->env.ctx, abs, au_f2px(ceilf(tw)), au_f2px(ceilf(th)));
     }
     float px0 = origin_box.x + bg_len(ly->position_x, origin_box.w - tw) * 1;
     float py0 = origin_box.y + bg_len(ly->position_y, origin_box.h - th);
@@ -1036,6 +1024,24 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
                           AU_FILTER_BILINEAR, 1);
         }
     au_canvas_clip_pop(P->c);
+}
+
+static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect origin_box, AuRect clip_box,
+                          const AuRadii *radii)
+{
+    const AuCssValue *im = ly->image;
+    if (!im)
+        return;
+    if (im->type == AU_CSSV_FUNCTION) {
+        draw_bg_layer(P, s, ly, origin_box, clip_box, radii, NULL);
+        return;
+    }
+    if (im->type != AU_CSSV_URL || !P->L->env.image)
+        return;
+    char buf[2048];
+    char *abs = l_resolve_url(P->L, im->u.str, buf, sizeof buf);
+    draw_bg_layer(P, s, ly, origin_box, clip_box, radii, abs);
+    l_url_free(abs, buf);
 }
 
 static AuRect box_area_of(const LBlock *b, AuRect r, int which)
@@ -1703,19 +1709,16 @@ static const AuSurface *env_image_at(AuLayout *L, const char *url, int dw, int d
 {
     if (!L->env.image)
         return NULL;
-    char abs[2048];
-    if (!L->env.resolve_url || !L->env.resolve_url(L->env.ctx, url, abs, sizeof abs)) {
-        size_t n = strlen(url);
-        if (n >= sizeof abs)
-            return NULL;
-        memcpy(abs, url, n + 1);
-    }
+    char buf[2048];
+    char *abs = l_resolve_url(L, url, buf, sizeof buf);
     const AuSurface *px = NULL;
     int w = 0, h = 0;
-    if (!L->env.image(L->env.ctx, abs, &w, &h, &px) || !px || w <= 0 || h <= 0)
-        return NULL;
-    if (dw > 0 && dh > 0 && L->env.image_use)
+    bool ok = L->env.image(L->env.ctx, abs, &w, &h, &px) && px && w > 0 && h > 0;
+    if (ok && dw > 0 && dh > 0 && L->env.image_use)
         L->env.image_use(L->env.ctx, abs, dw, dh);
+    l_url_free(abs, buf);
+    if (!ok)
+        return NULL;
     if (iw)
         *iw = w;
     if (ih)

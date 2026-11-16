@@ -375,11 +375,17 @@ static bool hit_layer(HCtx *H, LBox *b, float ox, float oy)
         cx = ox;
         cy = oy;
     }
-    if (sc && hit_list(H, k, cx, cy, k->layers->nneg, k->layers->n))
+    /* The box's own overflow clip applies to the layers of its stacking
+     * context as paint_layer applies it (push_clip before
+     * paint_layer_list): a point outside the clip reaches none of them.
+     * layer_origin only sees the clips of the boxes between a layer and
+     * its stacking context. */
+    bool layers = sc && (content || k->b.inner == LI_REPLACED);
+    if (layers && hit_list(H, k, cx, cy, k->layers->nneg, k->layers->n))
         hit = true;
     if (!hit && content && hit_contents(H, k, cx, cy))
         hit = true;
-    if (!hit && sc && hit_list(H, k, cx, cy, 0, k->layers->nneg))
+    if (!hit && layers && hit_list(H, k, cx, cy, 0, k->layers->nneg))
         hit = true;
     if (!hit && inside(H, ox, oy, k->w, k->h) && targetable(b) && !lb_anon(b)) {
         H->box = b;

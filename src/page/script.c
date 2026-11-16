@@ -813,10 +813,10 @@ static PendingScript *new_pending(AuElement *el, int kind)
 /* Starts loading an external script; false if it cannot be fetched. */
 static bool fetch_script(AuDocScript *s, PendingScript *p, const char *src)
 {
-    char abs[2048];
-    if (!*src || !au_url_resolve(au_docview_base_url(s->dv), src, abs, sizeof abs))
+    char *abs = *src ? au_url_resolve_dup(au_docview_base_url(s->dv), src) : NULL;
+    if (!abs)
         return false;
-    p->url = au_strndup(abs, strlen(abs));
+    p->url = abs;
     if (p->kind == AU_JS_SCRIPT_MODULE)
         return true; /* src/js fetches modules itself */
     /* Until the response says otherwise (a loader that reports no head),

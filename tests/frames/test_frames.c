@@ -850,6 +850,114 @@ static void test_widget(void)
     world_close(&w);
 }
 
+/* ---- An image-tile challenge in a positioned frame ---- */
+
+/* The shape of reCAPTCHA's 4x4 image challenge (class names and the rules
+ * that matter from its public style sheet), in a frame inside an
+ * absolutely positioned container with a large z-index that script
+ * creates hidden and then moves into view. Each tile's wrapper clips and
+ * has a transform, so it is a stacking context, and its picture is the
+ * whole photo moved by -100% steps; a click toggles the tile's selected
+ * class and shows its check mark, a background image of an absolutely
+ * positioned box. Every click went to the last tile, and the check mark
+ * (a long data: URL there; a plain URL here) was not painted. The tiles
+ * are 40px wrappers in 42px cells. */
+static void test_image_tiles(void)
+{
+    static const Page site[] = {
+        {"http://site.test/",
+         "<!DOCTYPE html><body style='margin:0;background:#eee'>"
+         "<script>var picked='';addEventListener('message',function(e){if(e.origin==='http://challenge.test')"
+         "picked=e.data});var outer=document.createElement('div');"
+         "outer.style.cssText='visibility:hidden;position:absolute;width:100%;top:-10000px;left:0;right:0;"
+         "transition:visibility 0s linear 0.3s,opacity 0.3s linear;opacity:0';"
+         "var box=document.createElement('div');"
+         "box.style.cssText='border:1px solid #ccc;position:absolute;z-index:2000000000;background:#fff';"
+         "var f=document.createElement('iframe');f.setAttribute('frameborder','0');f.setAttribute('scrolling','no');"
+         "f.src='http://challenge.test/bframe';f.style.cssText='width:200px;height:200px;display:block';"
+         "box.appendChild(f);outer.appendChild(box);document.body.appendChild(outer);"
+         "setTimeout(function(){outer.style.transition='visibility 0s linear 0s,opacity 0.3s linear';"
+         "outer.style.visibility='visible';outer.style.opacity='1';outer.style.top='10px';"
+         "box.style.left='20px';box.style.top='0px'},10)</script>"},
+        {"http://challenge.test/bframe",
+         "<!DOCTYPE html><style>body{margin:0;background:#fff}"
+         ".rc-imageselect-table-44{border-collapse:separate;border-spacing:0;transition:all 1s ease;margin:-1px}"
+         ".rc-imageselect-table-44 td{padding:1px}"
+         ".rc-image-tile-target{position:relative}"
+         ".rc-imageselect-tileselected{position:relative}"
+         ".rc-image-tile-wrapper{overflow:hidden;position:relative;transform:scale(1);transition:.1s ease;"
+         "width:40px;height:40px}"
+         ".rc-imageselect-tileselected .rc-image-tile-wrapper{transform:scale(.8)}"
+         ".rc-image-tile-wrapper img{position:relative}"
+         ".rc-image-tile-44{width:400%;height:400%}"
+         ".rc-imageselect-checkbox{background:url(check.svg);display:none;position:absolute}"
+         ".rc-imageselect-tileselected .rc-imageselect-checkbox{display:block;background-repeat:no-repeat;"
+         "bottom:0;left:0;right:0;top:0}</style>"
+         "<table class=rc-imageselect-table-44><tbody id=tb></tbody></table>"
+         "<script>var log=[];var tb=document.getElementById('tb');"
+         "for(var r=0;r<4;r++){var tr=document.createElement('tr');for(var c=0;c<4;c++){"
+         "var td=document.createElement('td');td.setAttribute('role','button');td.id=String(r*4+c);td.tabIndex=0;"
+         "td.className='rc-imageselect-tile';"
+         "td.innerHTML='<div class=\"rc-image-tile-target\"><div class=\"rc-image-tile-wrapper\">'+"
+         "'<img class=\"rc-image-tile-44\" src=\"photo.svg\" alt=\"\" style=\"top:'+(r*-100)+'%;left:'+(c*-100)+'%\">'+"
+         "'</div><div class=\"rc-imageselect-checkbox\"></div></div>';"
+         "td.addEventListener('click',function(){var on=!this.classList.contains('rc-imageselect-tileselected');"
+         "this.classList.toggle('rc-imageselect-tileselected');"
+         "this.querySelector('.rc-imageselect-checkbox').style.display=on?'':'none';log.push(this.id);"
+         "parent.postMessage(log.join(),'http://site.test')});"
+         "tr.appendChild(td)}tb.appendChild(tr)}</script>"},
+        /* tile 0 red, tile 5 blue, tile 15 green, the rest grey */
+        {"http://challenge.test/photo.svg",
+         "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 4 4'>"
+         "<rect width='4' height='4' fill='#808080'/><rect width='1' height='1' fill='#ff0000'/>"
+         "<rect x='1' y='1' width='1' height='1' fill='#0000ff'/><rect x='3' y='3' width='1' height='1' "
+         "fill='#008000'/></svg>",
+         "image/svg+xml"},
+        {"http://challenge.test/check.svg",
+         "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' "
+         "fill='#ff00ff'/></svg>",
+         "image/svg+xml"},
+        {0}};
+    World w;
+    world_open(&w, site, "http://site.test/", 300, 300);
+    /* The frame's content starts at (21, 11); tile (r, c) has its centre
+     * at (41 + 42c, 31 + 42r). */
+    AuSurface *s = shot(&w, 300, 300, 0, 0);
+    pump(&w);
+    au_surface_free(s);
+    s = shot(&w, 300, 300, 0, 0);
+    CHECK(au_surface_get(s, 41, 31) == RED, "tile 0 shows its part of the photo: %08x", au_surface_get(s, 41, 31));
+    CHECK(au_surface_get(s, 83, 73) == BLUE, "tile 5: %08x", au_surface_get(s, 83, 73));
+    CHECK(au_surface_get(s, 167, 157) == GREEN, "tile 15: %08x", au_surface_get(s, 167, 157));
+    au_surface_free(s);
+    click(&w, 41, 31);
+    click(&w, 83, 73);
+    click(&w, 167, 157);
+    JS_IS(&w, "picked", "0,5,15");
+    /* The check marks: asked for by the first paint that shows them. */
+    s = shot(&w, 300, 300, 0, 0);
+    pump(&w);
+    au_surface_free(s);
+    s = shot(&w, 300, 300, 0, 0);
+    uint32_t magenta = AU_RGB(255, 0, 255);
+    CHECK(au_surface_get(s, 23, 13) == magenta, "tile 0's check mark: %08x", au_surface_get(s, 23, 13));
+    CHECK(au_surface_get(s, 65, 55) == magenta, "tile 5's check mark: %08x", au_surface_get(s, 65, 55));
+    CHECK(au_surface_get(s, 65, 13) != magenta, "an unselected tile has none: %08x", au_surface_get(s, 65, 13));
+    /* a selected tile's picture is scaled to 32px about its centre */
+    uint32_t mid = au_surface_get(s, 41, 31);
+    CHECK(((mid >> 16) & 0xff) > 0xf0 && ((mid >> 8) & 0xff) < 0x10 && (mid & 0xff) < 0x10 &&
+              au_surface_get(s, 21 + 2, 11 + 38) == WHITE,
+          "tile 0 is drawn smaller: %08x %08x", mid, au_surface_get(s, 23, 49));
+    au_surface_free(s);
+    /* A click in a selected tile's margin, outside its scaled picture,
+     * still reaches its cell; the next tile's picture does not take it. */
+    click(&w, 21 + 38, 11 + 20);
+    click(&w, 83, 73);
+    JS_IS(&w, "picked", "0,5,15,0,5");
+    CHECK(strstr(au_buf_cstr(&w.console), "Uncaught") == NULL, "script errors: %s", au_buf_cstr(&w.console));
+    world_close(&w);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -864,6 +972,7 @@ int main(void)
     test_reload_loop();
     test_kept();
     test_widget();
+    test_image_tiles();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

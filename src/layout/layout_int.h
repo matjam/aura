@@ -542,6 +542,12 @@ bool l_style_contains_fixed(const AuStyle *s);
 /* Asks the loader about rep's image again. Returns 0 when nothing
  * changed, 1 when only its pixels did, 2 when its size or presence did. */
 int l_image_refresh(AuLayout *L, LReplaced *rep);
+/* Resolves url against the document (AuLayoutEnv.resolve_url) into buf
+ * (cap bytes), or into a block from au_alloc when the result is longer
+ * (a data: URL often is); a URL the document does not resolve is returned
+ * as written. Release the result with l_url_free(result, buf). */
+char *l_resolve_url(AuLayout *L, const char *url, char *buf, size_t cap);
+void l_url_free(char *url, char *buf);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);
