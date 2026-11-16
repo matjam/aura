@@ -1218,6 +1218,13 @@ AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, c
     return css_sheet_parse(css, len, origin, base_url, media, false, CSS_TEXT_TAKE);
 }
 
+size_t au_css_sheet_memory(const AuCssSheet *s)
+{
+    size_t bytes, used, chunks;
+    css_arena_mem(&s->arena, &bytes, &used, &chunks);
+    return sizeof *s + bytes + (s->text && s->text_owned ? s->text_len : 0);
+}
+
 const char *au_css_sheet_text(const AuCssSheet *s, size_t *len)
 {
     *len = s->text ? s->text_len : 0;

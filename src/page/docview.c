@@ -924,8 +924,9 @@ void au_docview_set_hidden(AuDocView *dv, bool hidden)
 static void sheet_bytes(const SheetSrc *s, size_t *n)
 {
     /* @import nesting is shallow and capped by the loader; one level of
-     * recursion per import depth. */
-    *n += s->len;
+     * recursion per import depth. A parsed sheet holds its text and its
+     * rules; a source still waiting holds its text. */
+    *n += s->sheet ? au_css_sheet_memory(s->sheet) : s->text ? s->len : 0;
     for (uint32_t i = 0; i < s->nimports; i++)
         if (s->imports[i])
             sheet_bytes(s->imports[i], n);
@@ -947,10 +948,18 @@ size_t au_docview_memory_estimate(AuDocView *dv)
         }
     }
     size_t css = 0;
-    for (uint32_t i = 0; i < dv->nslots; i++)
-        if (dv->slots[i].src)
+    for (uint32_t i = 0; i < dv->nslots; i++) {
+        if (!dv->slots[i].src)
+            continue;
+        /* sources that share a parsed sheet count it once */
+        bool counted = false;
+        for (uint32_t k = 0; k < i && !counted; k++)
+            counted = dv->slots[k].src && dv->slots[k].src->sheet &&
+                      dv->slots[k].src->sheet == dv->slots[i].src->sheet;
+        if (!counted)
             sheet_bytes(dv->slots[i].src, &css);
-    n += css * 4; /* the rules parsed from the text (about four times its size); the text is not kept */
+    }
+    n += css;
     AuLayoutStats ls;
     au_layout_stats(dv->layout, &ls);
     n += ls.tree_bytes + ls.frag_bytes;

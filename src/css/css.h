@@ -534,6 +534,8 @@ AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, c
 /* The text the sheet was parsed from (the sheet keeps it: blocks of
  * declarations are parsed from it when a rule first matches), or NULL. */
 const char *au_css_sheet_text(const AuCssSheet *s, size_t *len);
+/* About what the sheet holds: its text and the chunks of its rules. */
+size_t au_css_sheet_memory(const AuCssSheet *s);
 /* A sheet is freed when its last owner frees it; au_css_sheet_retain adds
  * an owner (a document that links one sheet several times parses it
  * once). */
