@@ -21,6 +21,7 @@ struct AuCookieJar {
     AuNetCookiePolicy policy;
     bool block_third_party;
     bool dirty;
+    uint32_t policy_gen; /* moves with the policy and the rules (au_cookie_jar_policy_gen) */
     CookieRuleEntry *rules;
     size_t nrules;
 };
@@ -57,9 +58,20 @@ void au_cookie_jar_free(AuCookieJar *j)
 
 void au_cookie_jar_set_policy(AuCookieJar *j, AuNetCookiePolicy policy, bool block_third_party)
 {
+    if (j->policy != policy || j->block_third_party != block_third_party)
+        j->policy_gen++;
     j->policy = policy;
     j->block_third_party = block_third_party;
 }
+
+AuNetCookiePolicy au_cookie_jar_policy(const AuCookieJar *j, bool *block_third_party)
+{
+    if (block_third_party)
+        *block_third_party = j->block_third_party;
+    return j->policy;
+}
+
+uint32_t au_cookie_jar_policy_gen(const AuCookieJar *j) { return j->policy_gen; }
 
 static void remove_at(AuCookieJar *j, size_t i)
 {
@@ -709,6 +721,7 @@ void au_cookie_jar_set_rule(AuCookieJar *j, const char *site, AuCookieRule r)
         au_buf_free(&k);
         return;
     }
+    j->policy_gen++;
     CookieRuleEntry *e = find_rule(j, key);
     if (r == AU_COOKIE_RULE_NONE) {
         if (e) {
@@ -757,6 +770,7 @@ void au_cookie_rules_parse(AuCookieJar *j, const char *text)
     for (size_t i = 0; i < j->nrules; i++)
         au_free(j->rules[i].site);
     j->nrules = 0;
+    j->policy_gen++;
     if (!text)
         return;
     const char *s = text;

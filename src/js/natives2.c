@@ -3,6 +3,7 @@
  * history, cookies, storage, media queries, focus). */
 #include "js_int.h"
 #include "../net/digest.h"
+#include "../net/storage_map.h"
 #include "../css/css.h"
 
 #include <stdio.h>
@@ -588,6 +589,8 @@ static JSValue n_doc_url(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     int32_t which = 0;
     if (argc > 0)
         JS_ToInt32(ctx, &which, argv[0]);
+    if (which == 3)
+        return JS_NewString(ctx, js->referrer ? js->referrer : "");
     return JS_NewString(ctx, which == 0 ? js->url : which == 1 ? js->base : js->origin);
 }
 
@@ -814,24 +817,179 @@ static JSValue n_cookie(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+/* ---- Web storage ----
+ * localStorage and sessionStorage live with the embedder
+ * (AuJsHooks.storage); the prelude's Storage objects hold nothing. An
+ * AuJs without the hook keeps two maps of its own. */
+
+void js_storage_free(AuJs *js)
+{
+    au_storage_map_free(js->own_storage[0]);
+    au_storage_map_free(js->own_storage[1]);
+    js->own_storage[0] = js->own_storage[1] = NULL;
+}
+
+static int storage_own(AuJs *js, AuJsStorageCall *c)
+{
+    AuStorageMap **slot = &js->own_storage[c->kind == AU_JS_STORAGE_SESSION];
+    if (!*slot)
+        *slot = au_storage_map_new();
+    AuStorageMap *m = *slot;
+    switch (c->op) {
+    case AU_JS_STORAGE_LENGTH:
+        c->length = au_storage_map_count(m);
+        return AU_JS_STORAGE_OK;
+    case AU_JS_STORAGE_KEY:
+        return au_storage_map_key(m, c->index, &c->out, &c->out_len) ? AU_JS_STORAGE_OK : AU_JS_STORAGE_MISSING;
+    case AU_JS_STORAGE_GET:
+        return au_storage_map_get(m, c->key, c->key_len, &c->out, &c->out_len) ? AU_JS_STORAGE_OK
+                                                                                : AU_JS_STORAGE_MISSING;
+    case AU_JS_STORAGE_SET: {
+        const char *ov = NULL;
+        size_t ol = 0;
+        bool had = au_storage_map_get(m, c->key, c->key_len, &ov, &ol);
+        uint64_t size = au_storage_map_bytes(m);
+        size -= had ? 2ull * au_storage_utf16_units(ov, ol) : 0;
+        size += 2ull * au_storage_utf16_units(c->value, c->value_len);
+        size += had ? 0 : 2ull * au_storage_utf16_units(c->key, c->key_len);
+        if (size > js->settings.storage_quota)
+            return AU_JS_STORAGE_QUOTA;
+        au_storage_map_set(m, c->key, c->key_len, c->value, c->value_len);
+        return AU_JS_STORAGE_OK;
+    }
+    case AU_JS_STORAGE_REMOVE:
+        au_storage_map_remove(m, c->key, c->key_len);
+        return AU_JS_STORAGE_OK;
+    case AU_JS_STORAGE_CLEAR:
+        au_storage_map_clear(m);
+        return AU_JS_STORAGE_OK;
+    case AU_JS_STORAGE_ESTIMATE:
+        c->usage = au_storage_map_bytes(m);
+        c->quota = js->settings.storage_quota;
+        return AU_JS_STORAGE_OK;
+    default:
+        return AU_JS_STORAGE_OK;
+    }
+}
+
+/* The document's origin for storage: every file: document shares one
+ * ("file://"); an opaque origin (a sandboxed frame, a data: document, an
+ * internal page) has none. */
+static const char *storage_origin(const AuJs *js)
+{
+    if (!js->settings.sandbox_origin && !strncmp(js->url, "file:", 5))
+        return "file://";
+    return js->opaque_origin ? NULL : js->origin;
+}
+
+static int storage_call(AuJs *js, AuJsStorageCall *c)
+{
+    c->origin = storage_origin(js);
+    c->url = js->url;
+    if (!c->origin)
+        return AU_JS_STORAGE_DENIED;
+    return js->hooks.storage ? js->hooks.storage(js->hooks.ctx, c) : storage_own(js, c);
+}
+
+/* N.storage<Op>(kind, ...): magic is the operation. ACCESS, SET return
+ * the result code; LENGTH a number; KEY and GET a string or null;
+ * ESTIMATE [usage, quota]; AU_JS_STORAGE_MATCH + 1 is "keys": every key
+ * as an array. A denied area reads as empty. */
 static JSValue n_storage(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     AuJs *js = js_of_ctx(ctx);
-    if (magic == 0) {
-        size_t len = 0;
-        char *s = js->hooks.storage_load ? js->hooks.storage_load(js->hooks.ctx, js->origin, &len) : NULL;
-        JSValue r = s ? js_str(ctx, s, len) : JS_NULL;
-        au_free(s);
-        return r;
+    AuJsStorageCall c;
+    memset(&c, 0, sizeof c);
+    int32_t kind = 0;
+    if (argc > 0)
+        JS_ToInt32(ctx, &kind, argv[0]);
+    c.kind = kind == AU_JS_STORAGE_SESSION ? AU_JS_STORAGE_SESSION : AU_JS_STORAGE_LOCAL;
+    if (magic == AU_JS_STORAGE_MATCH + 1) {
+        JSValue arr = JS_NewArray(ctx);
+        c.op = AU_JS_STORAGE_LENGTH;
+        if (storage_call(js, &c) != AU_JS_STORAGE_OK)
+            return arr;
+        uint32_t n = c.length;
+        c.op = AU_JS_STORAGE_KEY;
+        for (uint32_t i = 0; i < n; i++) {
+            c.index = i;
+            if (storage_call(js, &c) != AU_JS_STORAGE_OK)
+                break;
+            JS_SetPropertyUint32(ctx, arr, i, js_str(ctx, c.out, c.out_len));
+        }
+        return arr;
     }
-    size_t len;
-    char *s = argc > 0 ? js_tostr(ctx, argv[0], &len) : NULL;
-    if (!s)
-        return JS_EXCEPTION;
-    if (js->hooks.storage_save)
-        js->hooks.storage_save(js->hooks.ctx, js->origin, s, len);
-    au_free(s);
-    return JS_UNDEFINED;
+    c.op = (uint8_t)magic;
+    const char *k = NULL, *v = NULL;
+    JSValue r = JS_UNDEFINED;
+    if (magic == AU_JS_STORAGE_KEY) {
+        if (argc > 1)
+            JS_ToUint32(ctx, &c.index, argv[1]);
+    } else if (magic == AU_JS_STORAGE_GET || magic == AU_JS_STORAGE_SET || magic == AU_JS_STORAGE_REMOVE) {
+        k = argc > 1 ? JS_ToCStringLen(ctx, &c.key_len, argv[1]) : NULL;
+        if (!k)
+            return JS_EXCEPTION;
+        c.key = k;
+        if (magic == AU_JS_STORAGE_SET) {
+            v = argc > 2 ? JS_ToCStringLen(ctx, &c.value_len, argv[2]) : NULL;
+            if (!v) {
+                JS_FreeCString(ctx, k);
+                return JS_EXCEPTION;
+            }
+            c.value = v;
+        }
+    }
+    int res = storage_call(js, &c);
+    switch (magic) {
+    case AU_JS_STORAGE_LENGTH:
+        r = JS_NewUint32(ctx, res == AU_JS_STORAGE_OK ? c.length : 0);
+        break;
+    case AU_JS_STORAGE_KEY:
+    case AU_JS_STORAGE_GET:
+        r = res == AU_JS_STORAGE_OK ? js_str(ctx, c.out, c.out_len) : JS_NULL;
+        break;
+    case AU_JS_STORAGE_ESTIMATE:
+        r = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, r, 0, JS_NewFloat64(ctx, res == AU_JS_STORAGE_OK ? c.usage : 0));
+        JS_SetPropertyUint32(ctx, r, 1, JS_NewFloat64(ctx, res == AU_JS_STORAGE_OK ? c.quota : 0));
+        break;
+    default:
+        r = JS_NewInt32(ctx, res);
+        break;
+    }
+    if (k)
+        JS_FreeCString(ctx, k);
+    if (v)
+        JS_FreeCString(ctx, v);
+    return r;
+}
+
+void au_js_storage_event(AuJs *js, int kind, const char *storage_key, const char *key, size_t key_len,
+                         const char *old_value, size_t old_len, const char *new_value, size_t new_len, const char *url)
+{
+    if (!js || js->closing || js->worker || JS_IsUndefined(js->P) || !js->hooks.storage)
+        return;
+    AuJsStorageCall c;
+    memset(&c, 0, sizeof c);
+    c.kind = (uint8_t)kind;
+    c.op = AU_JS_STORAGE_MATCH;
+    c.key = storage_key;
+    c.key_len = strlen(storage_key);
+    if (storage_call(js, &c) != AU_JS_STORAGE_OK)
+        return;
+    JSContext *ctx = js->ctx;
+    JSValue fn = JS_GetPropertyStr(ctx, js->P, "storageEvent");
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue arr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, arr, 0, JS_NewInt32(ctx, kind));
+        JS_SetPropertyUint32(ctx, arr, 1, key ? js_str(ctx, key, key_len) : JS_NULL);
+        JS_SetPropertyUint32(ctx, arr, 2, old_value ? js_str(ctx, old_value, old_len) : JS_NULL);
+        JS_SetPropertyUint32(ctx, arr, 3, new_value ? js_str(ctx, new_value, new_len) : JS_NULL);
+        JS_SetPropertyUint32(ctx, arr, 4, JS_NewString(ctx, url ? url : ""));
+        js_queue_task(js, fn, arr);
+        JS_FreeValue(ctx, arr);
+    }
+    JS_FreeValue(ctx, fn);
 }
 
 static JSValue n_media_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -966,8 +1124,15 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_MAGIC_DEF("historyReplace", 1, n_history, 3),
     JS_CFUNC_MAGIC_DEF("getCookie", 0, n_cookie, 0),
     JS_CFUNC_MAGIC_DEF("setCookie", 1, n_cookie, 1),
-    JS_CFUNC_MAGIC_DEF("storageLoad", 0, n_storage, 0),
-    JS_CFUNC_MAGIC_DEF("storageSave", 1, n_storage, 1),
+    JS_CFUNC_MAGIC_DEF("storageAccess", 1, n_storage, AU_JS_STORAGE_ACCESS),
+    JS_CFUNC_MAGIC_DEF("storageLength", 1, n_storage, AU_JS_STORAGE_LENGTH),
+    JS_CFUNC_MAGIC_DEF("storageKey", 2, n_storage, AU_JS_STORAGE_KEY),
+    JS_CFUNC_MAGIC_DEF("storageGet", 2, n_storage, AU_JS_STORAGE_GET),
+    JS_CFUNC_MAGIC_DEF("storageSet", 3, n_storage, AU_JS_STORAGE_SET),
+    JS_CFUNC_MAGIC_DEF("storageRemove", 2, n_storage, AU_JS_STORAGE_REMOVE),
+    JS_CFUNC_MAGIC_DEF("storageClear", 1, n_storage, AU_JS_STORAGE_CLEAR),
+    JS_CFUNC_MAGIC_DEF("storageEstimate", 1, n_storage, AU_JS_STORAGE_ESTIMATE),
+    JS_CFUNC_MAGIC_DEF("storageKeys", 1, n_storage, AU_JS_STORAGE_MATCH + 1),
     JS_CFUNC_DEF("mediaMatches", 1, n_media_matches),
     JS_CFUNC_DEF("setFocus", 2, n_set_focus),
     JS_CFUNC_DEF("setChecked", 2, n_set_checked),

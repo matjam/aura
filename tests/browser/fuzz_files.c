@@ -12,7 +12,11 @@
  *
  * usage: fuzz_files ITERATIONS SEED SECONDS
  *        fuzz_files replay KIND FILE...   (KIND: session bookmarks history
- *                                          prefs downloads rules diskcache) */
+ *                                          prefs downloads rules diskcache
+ *                                          storage)
+ *
+ * storage: the web storage service's area files, its index and the
+ * session file's storage lines (run_storage). */
 #include "../fuzz.h"
 #include "browser/bookmarks.h"
 #include "browser/browser.h"
@@ -21,6 +25,7 @@
 #include "browser/prefs.h"
 #include "net/cookies.h"
 #include "net/disk_cache.h"
+#include "net/web_storage.h"
 
 static const char *const dict[] = {
     "\n", "\r", "\r\n", "\t", " ", "=", "#", "# Aura session 1\n", "window ", "window 800 600 0 10 10\n", "tab ", "tab 0\n",
@@ -30,11 +35,14 @@ static const char *const dict[] = {
     "true", "false", "on", "off", "\\n", "\\t", "\\\\", "\\", "\"", "allow", "block", "session", "a.test=allow ", "=", ".",
     "home.url=", "fonts.size=", "cache.disk_kb=", "zoom.sites=", "cookies.sites=", "blocking.lists=", "content.javascript=",
     "AURD1\n", "c0123456789abcdef", "http://a.test/\n", "\0", "\xFF", "\xC3\xA9", "\xEF\xBB\xBF", "\xED\xA0\x80",
+    "storage\t", "storage\thttp://a.test\tk\tv\n", "%09", "%00", "%25", "%", "%zz", "AuLS", "http://a.test", "^http://b.test",
+    "# Aura local storage 1\n", "0000abcd\t40\t2\thttp://a.test\n", "0000abcd", "\t99999999999\t",
 };
 #define NDICT ((int)(sizeof dict / sizeof dict[0]))
 
-enum { K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_COUNT };
-static const char *const kind_names[K_COUNT] = {"session", "bookmarks", "history", "prefs", "downloads", "rules", "diskcache"};
+enum { K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_STORAGE, K_COUNT };
+static const char *const kind_names[K_COUNT] = {"session", "bookmarks", "history",   "prefs",
+                                                "downloads", "rules",   "diskcache", "storage"};
 
 static void fail(const char *what)
 {
@@ -63,8 +71,18 @@ static void run_session(const FzBuf *in)
     for (w = 0; w < s.nwindows; w++) {
         if (s.windows[w].ntabs < 0)
             fail("session: negative tab count");
-        for (t = 0; t < s.windows[w].ntabs; t++)
+        for (t = 0; t < s.windows[w].ntabs; t++) {
+            /* its storage lines go to the storage service, as a restore does */
+            const AuSessionTab *st = &s.windows[w].tabs[t];
+            AuWebStorage *ws = au_web_storage_new();
+            int k;
+            if (st->nstorage < 0 || st->nstorage > AU_SESSION_STORAGE_LINES)
+                fail("session: storage line count");
+            for (k = 0; k < st->nstorage; k++)
+                au_web_storage_ns_restore(ws, 1, st->storage[k], strlen(st->storage[k]));
+            au_web_storage_free(ws);
             total++;
+        }
         total++;
     }
     /* every window and tab takes a line of at least four bytes */
@@ -339,9 +357,136 @@ static void run_diskcache(const FzBuf *in)
         free(fo.f[i].d);
 }
 
+/* ---- web storage: an area file, the index, a session line ----
+ * The input is an area file of http://a.test (half the time with its
+ * checksum set right, so that the items behind it are reached), or, when
+ * it starts with '#', the folder's index. The service reads it through
+ * its files, script's calls run on the area, and what changed is saved
+ * (some writes fail). The same bytes are also read as a session file's
+ * storage line. */
+typedef struct StoreFolder {
+    const FzBuf *in;
+    bool as_index;
+    char *sum_fixed; /* the input with a right checksum, or NULL */
+    int damaged, writes;
+} StoreFolder;
+
+static uint32_t fnv(const uint8_t *d, size_t n)
+{
+    uint32_t h = 2166136261u;
+    size_t i;
+    for (i = 0; i < n; i++)
+        h = (h ^ d[i]) * 16777619u;
+    return h;
+}
+
+static bool sf_read(void *ctx, const char *name, AuBuf *out)
+{
+    StoreFolder *sf = (StoreFolder *)ctx;
+    if (!strcmp(name, "Index")) {
+        if (sf->as_index)
+            au_buf_append(out, sf->in->d, sf->in->n);
+        else
+            au_buf_puts(out, "# Aura local storage 1\n0000abcd\t40\t2\thttp://a.test\n");
+        return true;
+    }
+    if (sf->as_index)
+        return false;
+    au_buf_append(out, sf->sum_fixed ? (const void *)sf->sum_fixed : (const void *)sf->in->d, sf->in->n);
+    return true;
+}
+
+static bool sf_write(void *ctx, const char *name, const void *data, size_t len)
+{
+    StoreFolder *sf = (StoreFolder *)ctx;
+    (void)data;
+    if (strlen(name) > 8)
+        fail("storage: a file name over 8 bytes");
+    if (len > (1u << 20))
+        fail("storage: a file far larger than what was stored");
+    return ++sf->writes % 3 != 0;
+}
+
+static void sf_remove(void *ctx, const char *name)
+{
+    (void)ctx;
+    (void)name;
+}
+
+static void sf_damaged(void *ctx, const char *name)
+{
+    (void)name;
+    ((StoreFolder *)ctx)->damaged++;
+}
+
+static void run_storage(const FzBuf *in)
+{
+    StoreFolder sf;
+    AuWebStorageFiles files = {NULL, sf_read, sf_write, sf_remove, sf_damaged};
+    AuWebStorage *ws;
+    AuStorageArea *a = NULL;
+    AuStorageMap *m;
+    AuWebStorageStats st;
+    char *p = exact(in);
+    memset(&sf, 0, sizeof sf);
+    sf.in = in;
+    sf.as_index = in->n > 0 && in->d[0] == '#';
+    if (!sf.as_index && in->n >= 4 && (fnv(in->d, in->n) & 1)) {
+        uint32_t h = fnv(in->d, in->n - 4);
+        sf.sum_fixed = (char *)malloc(in->n);
+        memcpy(sf.sum_fixed, in->d, in->n);
+        sf.sum_fixed[in->n - 4] = (char)(h >> 24);
+        sf.sum_fixed[in->n - 3] = (char)(h >> 16);
+        sf.sum_fixed[in->n - 2] = (char)(h >> 8);
+        sf.sum_fixed[in->n - 1] = (char)h;
+    }
+    /* the parser alone, on a block of exactly the input's size */
+    m = au_storage_map_new();
+    if (au_web_storage_parse_file(sf.sum_fixed ? sf.sum_fixed : p, in->n, "http://a.test", m)) {
+        if (au_storage_map_count(m) > in->n / 8)
+            fail("storage: more items than the file has room for");
+    } else if (au_storage_map_count(m)) {
+        fail("storage: a refused file left items");
+    }
+    au_storage_map_free(m);
+    /* through the service */
+    files.ctx = &sf;
+    ws = au_web_storage_new();
+    au_web_storage_set_files(ws, &files);
+    if (au_web_storage_count(ws) > in->n / 12 + 1)
+        fail("storage: more areas than the index has lines");
+    if (au_web_storage_open(ws, AU_STORAGE_LOCAL, 0, "http://a.test", NULL, true, &a) == AU_STORAGE_OK && a) {
+        const char *k, *v;
+        size_t kl, vl;
+        uint32_t i, n = au_storage_map_count(au_storage_area_map(a));
+        for (i = 0; i < n && i < 64; i++)
+            if (au_storage_map_key(au_storage_area_map(a), i, &k, &kl))
+                au_storage_map_get(au_storage_area_map(a), k, kl, &v, &vl);
+        au_web_storage_set(ws, a, "fuzz", 4, "value", 5, "http://a.test/", NULL);
+    }
+    au_web_storage_save(ws, 0);
+    au_web_storage_stats(ws, &st);
+    au_web_storage_release(ws);
+    /* as a session file's storage line */
+    au_web_storage_ns_restore(ws, 7, p, in->n);
+    {
+        AuBuf out;
+        au_buf_init(&out);
+        au_web_storage_ns_serialize(ws, 7, &out);
+        if (out.len > in->n * 3 + 64)
+            fail("storage: a session line grew");
+        au_buf_free(&out);
+    }
+    au_web_storage_clear(ws);
+    au_web_storage_free(ws);
+    free(sf.sum_fixed);
+    free(p);
+}
+
 static void run_kind(int kind, const FzBuf *in)
 {
     switch (kind) {
+    case K_STORAGE: run_storage(in); break;
     case K_SESSION: run_session(in); break;
     case K_BOOKMARKS: run_bookmarks(in); break;
     case K_HISTORY: run_history(in); break;
@@ -407,6 +552,43 @@ static void make_seeds(FzCorpus c[K_COUNT])
         au_downloads_free(&dl);
     }
     fz_corpus_add_str(&c[K_RULES], "a.test=allow b.test=block c.co.uk=session  d.test=bogus =allow x");
+    fz_corpus_add_str(&c[K_SESSION], "# Aura session 1\nwindow 800 600 0 40 60\ntab 0\nentry\thttp://a.test/\tA page\t0\n"
+                                     "storage\thttp://a.test\tkey\tvalue\ta%09b\t%25%00%0A\xED\xA0\x80\n"
+                                     "storage\thttp://b.test^http://a.test\tk\t\n");
+    {
+        /* An area file as the service writes it, the index, a session line. */
+        static const char *const items[][2] = {{"key", "value"}, {"", ""}, {"\xED\xA0\x80", "a\tb\nc"}, {"n", "12345"}};
+        size_t i;
+        uint32_t h;
+        au_buf_clear(&out);
+        au_buf_append(&out, "AuLS\0\0\0\1\0\0\0\x0d", 12);
+        au_buf_puts(&out, "http://a.test");
+        au_buf_append(&out, "\0\0\0\4", 4);
+        for (i = 0; i < 4; i++) {
+            int f;
+            for (f = 0; f < 2; f++) {
+                size_t n = strlen(items[i][f]);
+                char len[4] = {0, 0, 0, (char)n};
+                au_buf_append(&out, len, 4);
+                au_buf_append(&out, items[i][f], n);
+            }
+        }
+        h = fnv((const uint8_t *)out.data, out.len);
+        {
+            char sum[4] = {(char)(h >> 24), (char)(h >> 16), (char)(h >> 8), (char)h};
+            au_buf_append(&out, sum, 4);
+        }
+        {
+            AuStorageMap *m = au_storage_map_new();
+            if (!au_web_storage_parse_file(out.data, out.len, "http://a.test", m) || au_storage_map_count(m) != 4)
+                fail("storage: the seed file does not parse");
+            au_storage_map_free(m);
+        }
+        fz_corpus_add(&c[K_STORAGE], out.data, out.len);
+        fz_corpus_add_str(&c[K_STORAGE], "# Aura local storage 1\n0000abcd\t40\t2\thttp://a.test\n"
+                                         "0000abce\t12\t1\thttps://b.test^https://a.test\n0000abcf\t0\t0\tfile://\n");
+        fz_corpus_add_str(&c[K_STORAGE], "http://a.test\tkey\tvalue\ta%09b\t%25%00%0A\xED\xA0\x80");
+    }
     {
         char name[19];
         au_disk_cache_name("http://a.test/", name);

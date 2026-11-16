@@ -32,6 +32,7 @@
 #include "net/net_prefs.h"
 #include "net/roots.h"
 #include "net/transfer.h"
+#include "net/web_storage.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -61,6 +62,14 @@ static struct {
     AuNetTransferSource *xfer;
     bool cookies_pending, hsts_pending;
     uint32_t cookies_first_ms, hsts_first_ms;
+    /* Web storage (net/web_storage.h): the Local Storage folder, when
+     * its changes began to wait, and file times for System Status. */
+    AuWebStorage *storage;
+    short ls_vref;
+    long ls_dir;
+    bool storage_pending;
+    uint32_t storage_gen, storage_change_ms, storage_first_ms;
+    uint32_t ls_read_us, ls_write_us, ls_write_len;
 } N;
 
 /* ---- Open Transport, started on demand ---- */
@@ -265,7 +274,8 @@ static void load_roots(void)
 
 /* ---- The disk cache's files: the Cache folder ---- */
 
-static bool cache_spec(const char *name, FSSpec *spec)
+/* A file of a folder (the Cache folder, the Local Storage folder). */
+static bool folder_spec(short vref, long dir, const char *name, FSSpec *spec)
 {
     Str255 p;
     size_t n = strlen(name);
@@ -273,8 +283,123 @@ static bool cache_spec(const char *name, FSSpec *spec)
         return false;
     p[0] = (unsigned char)n;
     memcpy(p + 1, name, n);
-    OSErr err = FSMakeFSSpec(N.cache_vref, N.cache_dir, p, spec);
+    OSErr err = FSMakeFSSpec(vref, dir, p, spec);
     return err == noErr || err == fnfErr;
+}
+
+static bool cache_spec(const char *name, FSSpec *spec)
+{
+    return folder_spec(N.cache_vref, N.cache_dir, name, spec);
+}
+
+/* Appends the whole file to out. */
+static bool folder_read(short vref, long dir, const char *name, AuBuf *out, long max)
+{
+    FSSpec s;
+    short ref;
+    if (!folder_spec(vref, dir, name, &s) || FSpOpenDF(&s, fsRdPerm, &ref) != noErr)
+        return false;
+    long eof = 0;
+    bool ok = false;
+    if (GetEOF(ref, &eof) == noErr && eof > 0 && eof < max) {
+        au_buf_reserve(out, (size_t)eof);
+        long count = eof;
+        OSErr err = FSRead(ref, &count, out->data + out->len);
+        if ((err == noErr || err == eofErr) && count == eof) {
+            out->len += (size_t)eof;
+            ok = true;
+        }
+    }
+    FSClose(ref);
+    return ok;
+}
+
+/* Writes "<name>.tmp" and renames it over the file, so a crash in the
+ * middle leaves the old file. */
+static bool folder_write(short vref, long dir, const char *name, const void *data, size_t len, OSType type)
+{
+    char tname[40];
+    snprintf(tname, sizeof tname, "%s.tmp", name);
+    FSSpec tmp, dst;
+    if (!folder_spec(vref, dir, tname, &tmp) || !folder_spec(vref, dir, name, &dst))
+        return false;
+    FSpDelete(&tmp);
+    if (FSpCreate(&tmp, 'AURA', type, smSystemScript) != noErr)
+        return false;
+    short ref;
+    if (FSpOpenDF(&tmp, fsRdWrPerm, &ref) != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    long count = (long)len;
+    OSErr err = FSWrite(ref, &count, data);
+    if (err == noErr && count != (long)len)
+        err = dskFulErr;
+    OSErr cerr = FSClose(ref);
+    if (err != noErr || cerr != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    FSpDelete(&dst);
+    Str255 p;
+    p[0] = (unsigned char)strlen(name);
+    memcpy(p + 1, name, p[0]);
+    if (FSpRename(&tmp, p) != noErr) {
+        FSpDelete(&tmp);
+        return false;
+    }
+    return true;
+}
+
+/* ---- Web storage's files: the Local Storage folder ----
+ * One file per origin and "Index" (net/web_storage.h). A file that does
+ * not parse is renamed "<name> (damaged)". */
+
+static bool ls_read(void *ctx, const char *name, AuBuf *out)
+{
+    (void)ctx;
+    uint32_t t0 = au_mac_clock_us();
+    bool ok = folder_read(N.ls_vref, N.ls_dir, name, out, (long)AU_WEB_STORAGE_FILE_MAX + 1);
+    N.ls_read_us += au_mac_clock_us() - t0;
+    return ok;
+}
+
+static bool ls_write(void *ctx, const char *name, const void *data, size_t len)
+{
+    (void)ctx;
+    uint32_t t0 = au_mac_clock_us();
+    bool ok = folder_write(N.ls_vref, N.ls_dir, name, data, len, 'AuLS');
+    if (len >= N.ls_write_len) {
+        /* the largest write, for System Status */
+        N.ls_write_us = au_mac_clock_us() - t0;
+        N.ls_write_len = (uint32_t)len;
+    }
+    return ok;
+}
+
+static void ls_remove(void *ctx, const char *name)
+{
+    (void)ctx;
+    FSSpec s;
+    if (folder_spec(N.ls_vref, N.ls_dir, name, &s))
+        FSpDelete(&s);
+}
+
+static void ls_damaged(void *ctx, const char *name)
+{
+    (void)ctx;
+    char aside[40];
+    snprintf(aside, sizeof aside, "%s (damaged)", name);
+    FSSpec s, old;
+    if (folder_spec(N.ls_vref, N.ls_dir, aside, &old))
+        FSpDelete(&old);
+    if (folder_spec(N.ls_vref, N.ls_dir, name, &s)) {
+        Str255 p;
+        p[0] = (unsigned char)strlen(aside);
+        memcpy(p + 1, aside, p[0]);
+        if (FSpRename(&s, p) != noErr)
+            FSpDelete(&s);
+    }
 }
 
 static void dc_list(void *ctx, void (*each)(void *, const char *, size_t, uint32_t), void *ec)
@@ -333,59 +458,12 @@ static bool dc_write(void *ctx, const char *name, const void *data, size_t len)
 
 static bool dc_read_file(const char *name, AuBuf *out)
 {
-    FSSpec s;
-    short ref;
-    if (!cache_spec(name, &s) || FSpOpenDF(&s, fsRdPerm, &ref) != noErr)
-        return false;
-    long eof = 0;
-    bool ok = false;
-    if (GetEOF(ref, &eof) == noErr && eof > 0 && eof < 32L * 1024 * 1024) {
-        char *buf = au_alloc((size_t)eof);
-        long count = eof;
-        OSErr err = FSRead(ref, &count, buf);
-        if ((err == noErr || err == eofErr) && count == eof) {
-            au_buf_append(out, buf, (size_t)eof);
-            ok = true;
-        }
-        au_free(buf);
-    }
-    FSClose(ref);
-    return ok;
+    return folder_read(N.cache_vref, N.cache_dir, name, out, 32L * 1024 * 1024);
 }
 
 static bool dc_write_file(const char *name, const void *data, size_t len)
 {
-    char tname[40];
-    snprintf(tname, sizeof tname, "%s.tmp", name);
-    FSSpec tmp, dst;
-    if (!cache_spec(tname, &tmp) || !cache_spec(name, &dst))
-        return false;
-    FSpDelete(&tmp);
-    if (FSpCreate(&tmp, 'AURA', 'AuCa', smSystemScript) != noErr)
-        return false;
-    short ref;
-    if (FSpOpenDF(&tmp, fsRdWrPerm, &ref) != noErr) {
-        FSpDelete(&tmp);
-        return false;
-    }
-    long count = (long)len;
-    OSErr err = FSWrite(ref, &count, data);
-    if (err == noErr && count != (long)len)
-        err = dskFulErr;
-    OSErr cerr = FSClose(ref);
-    if (err != noErr || cerr != noErr) {
-        FSpDelete(&tmp);
-        return false;
-    }
-    FSpDelete(&dst);
-    Str255 p;
-    p[0] = (unsigned char)strlen(name);
-    memcpy(p + 1, name, p[0]);
-    if (FSpRename(&tmp, p) != noErr) {
-        FSpDelete(&tmp);
-        return false;
-    }
-    return true;
+    return folder_write(N.cache_vref, N.cache_dir, name, data, len, 'AuCa');
 }
 
 static void dc_remove(void *ctx, const char *name)
@@ -470,6 +548,26 @@ void mac_net_save(bool force)
         au_net_intermediates_serialize(N.net, &b);
         storage_write_named("Intermediates", b.data, b.len);
         au_buf_free(&b);
+    }
+    /* Web storage: the changed areas, one file a pass, once script has
+     * left them alone for the delay (or half a minute after the first
+     * change, for a page that never stops writing), and while nothing
+     * loads; all of them when forced. */
+    if (N.storage) {
+        uint32_t g = au_web_storage_change_gen(N.storage);
+        bool pending = au_web_storage_pending(N.storage) > 0;
+        if (pending && !N.storage_pending)
+            N.storage_first_ms = now;
+        N.storage_pending = pending;
+        if (g != N.storage_gen) {
+            N.storage_gen = g;
+            N.storage_change_ms = now;
+        }
+        if (pending && force)
+            au_web_storage_save(N.storage, 0);
+        else if (pending && (now - N.storage_change_ms >= kSaveDelayMs || now - N.storage_first_ms >= 30000) &&
+                 au_net_loader_active(N.loader) == 0)
+            au_web_storage_save(N.storage, 1);
     }
 }
 
@@ -556,6 +654,17 @@ void mac_net_init(void)
         au_disk_cache_set_deferred(N.disk, true);
     }
     load_stores();
+    /* Web storage follows the cookie rules; its files are in the Local
+     * Storage folder, read when an origin is first used. At most 6 MB of
+     * it stays in memory. */
+    N.storage = au_web_storage_new();
+    au_web_storage_set_cookie_jar(N.storage, N.jar);
+    au_web_storage_set_limits(N.storage, 0, 0, 6u << 20);
+    if (storage_subfolder("Local Storage", &N.ls_vref, &N.ls_dir)) {
+        AuWebStorageFiles lsf = {NULL, ls_read, ls_write, ls_remove, ls_damaged};
+        au_web_storage_set_files(N.storage, &lsf);
+    }
+    au_browser_set_storage(g_browser, N.storage);
     apply_prefs();
 
     N.loader = au_net_loader_new(N.net);
@@ -619,6 +728,16 @@ void mac_net_clear_cookies(void)
 {
     if (N.jar)
         au_cookie_jar_clear(N.jar);
+    /* What sites stored goes with their cookies. */
+    if (N.storage)
+        au_web_storage_clear(N.storage);
+}
+
+AuWebStorage *mac_net_storage(void) { return N.storage; }
+
+size_t mac_net_release_storage(void)
+{
+    return N.storage ? au_web_storage_release(N.storage) : 0;
 }
 
 void mac_net_clear_cache(void)
@@ -659,6 +778,19 @@ void mac_net_status_text(AuBuf *out)
     au_report_kv(out, "Root certificates", "%u", N.roots ? (unsigned)au_roots_count(N.roots) : 0);
     au_report_kv(out, "Cookies", "%u", N.jar ? (unsigned)au_cookie_jar_count(N.jar) : 0);
     au_report_kv(out, "HSTS hosts", "%u", N.hsts ? (unsigned)au_hsts_count(N.hsts) : 0);
+    if (N.storage) {
+        /* Counts only: never what a site stored. */
+        AuWebStorageStats ws;
+        au_web_storage_stats(N.storage, &ws);
+        au_report_kv(out, "Web storage", "%u origins, %lu KB, %u writes pending", ws.local_areas + ws.session_only_areas,
+                     (unsigned long)(ws.bytes / 1024), ws.pending);
+        au_report_kv(out, "Storage areas", "%u session only, %u of tabs, %lu KB in memory", ws.session_only_areas,
+                     ws.session_areas, (unsigned long)(ws.resident / 1024));
+        au_report_kv(out, "Storage files", "%u read in %lu ms, %u written, %u damaged", ws.reads,
+                     (unsigned long)(N.ls_read_us / 1000), ws.writes, ws.damaged);
+        au_report_kv(out, "Largest write", "%lu bytes in %lu ms", (unsigned long)N.ls_write_len,
+                     (unsigned long)(N.ls_write_us / 1000));
+    }
 
     AuCacheStats cs;
     memset(&cs, 0, sizeof cs);
@@ -709,8 +841,10 @@ void mac_net_quit(void)
     if (!N.net)
         return;
     const AuPrefs *p = &g_browser->prefs;
-    if (p->clear_cookies_on_quit)
+    if (p->clear_cookies_on_quit) {
         au_cookie_jar_clear(N.jar);
+        au_web_storage_clear(N.storage);
+    }
     au_cookie_jar_end_session(N.jar);
     if (p->clear_cache_on_quit)
         mac_net_clear_cache();
@@ -736,6 +870,8 @@ void mac_net_quit(void)
     au_cache_free(N.cache);
     au_disk_cache_free(N.disk);
     au_hsts_free(N.hsts);
+    au_browser_set_storage(g_browser, NULL); /* saved above (mac_net_save) */
+    au_web_storage_free(N.storage);
     au_cookie_jar_free(N.jar);
     au_roots_free(N.roots);
     if (N.ot)

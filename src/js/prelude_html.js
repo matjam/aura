@@ -1152,7 +1152,7 @@ defProps(DP, {
     get currentScript() { return this === doc ? N.currentScript() : null; },
     get cookie() { return this === doc ? N.getCookie() : ''; },
     set cookie(v) { if (this === doc) N.setCookie(str(v)); },
-    get referrer() { return ''; },
+    get referrer() { return this === doc ? N.docUrl(3) : ''; },
     get domain() { try { return new URL(N.docUrl(0)).hostname; } catch (e) { return ''; } },
     set domain(v) { throw domErr('Setting document.domain is not supported', 'SecurityError'); },
     get lastModified() {

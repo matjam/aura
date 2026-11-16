@@ -99,6 +99,20 @@ typedef struct AuFormSubmission {
     const char *target;    /* the target attribute (form, submitter or <base>), or NULL */
 } AuFormSubmission;
 
+struct AuJsStorageCall;
+
+/* A change to a storage area, for the documents that share it
+ * (au_docview_storage_event). key is NULL for clear(), old_value NULL
+ * for a new key, new_value NULL for a removal. */
+typedef struct AuDocStorageEvent {
+    int kind;                /* AU_JS_STORAGE_LOCAL or _SESSION */
+    const char *storage_key; /* the area's name in the embedder's service */
+    const void *writer;      /* AuJsStorageCall.writer of the document that wrote */
+    const char *key, *old_value, *new_value;
+    size_t key_len, old_len, new_len;
+    const char *url;         /* the writer's */
+} AuDocStorageEvent;
+
 typedef struct AuDocViewCallbacks {
     void *ctx;
     void (*title_changed)(void *ctx, AuDocView *dv, const char *title);
@@ -136,6 +150,12 @@ typedef struct AuDocViewCallbacks {
      * them document.cookie reads "" and writes are dropped. */
     char *(*get_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested);
     void (*set_cookie)(void *ctx, AuDocView *dv, const char *url, bool nested, const char *value);
+    /* localStorage and sessionStorage: one operation (AuJsStorageCall,
+     * src/js/js.h) for the document whose origin, URL and, when it is a
+     * nested document, top-level URL the call names; dv is the top-level
+     * view. Returns an AU_JS_STORAGE_* result. Optional: without it each
+     * document keeps storage of its own that ends with it. */
+    int (*storage)(void *ctx, AuDocView *dv, struct AuJsStorageCall *call);
     /* Forms (all optional). A form was submitted: navigate as s says
      * (without it, GET submissions go through open_url and POST ones are
      * dropped). */
@@ -262,6 +282,10 @@ void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worke
 /* The string script sees as navigator.userAgent, from the next load. It
  * must be the one the network sends. NULL or "": the script default. */
 void au_docview_set_user_agent(AuDocView *dv, const char *ua);
+/* The string script sees as document.referrer in the view's own document
+ * (not its frames'), from the next load: the Referer value the
+ * navigation carried. NULL or "": none. */
+void au_docview_set_referrer(AuDocView *dv, const char *referrer);
 bool au_docview_scripting(const AuDocView *dv);
 bool au_docview_run_scripts(AuDocView *dv, uint32_t budget_ms);
 uint32_t au_docview_scripts_due(AuDocView *dv);
@@ -306,6 +330,11 @@ bool au_docview_has_state(AuDocView *dv);
  * (pageshow), both with persisted true. A hidden view drops its decoded
  * image pixels; images decode again from their bytes when next painted. */
 void au_docview_set_hidden(AuDocView *dv, bool hidden);
+/* Script in some document changed a storage area: queues the storage
+ * event in this view's document and its nested documents, in each one
+ * that has that area and is not the writer (the callbacks' storage is
+ * asked with AU_JS_STORAGE_MATCH). */
+void au_docview_storage_event(AuDocView *dv, const AuDocStorageEvent *ev);
 /* An estimate of the memory the document holds, in bytes: the tree, its
  * style sheets, the layout, images (decoded and compressed) and the
  * script runtime. */

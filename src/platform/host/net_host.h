@@ -41,6 +41,14 @@ bool au_host_session_open(AuHostSession *s, bool cookies, bool verbose);
 /* Saves the stores when they changed, and frees everything. */
 void au_host_session_close(AuHostSession *s);
 
+/* The web storage service (net/web_storage.h) for a host tool, following
+ * jar's cookie rules (NULL: none). With persist its files are kept in
+ * the folder "local-storage" of the profile folder; without, it lives in
+ * memory. Close saves what changed and frees it (after the browser). */
+struct AuWebStorage;
+struct AuWebStorage *au_host_storage_open(AuCookieJar *jar, bool persist);
+void au_host_storage_close(struct AuWebStorage *ws);
+
 /* aura-host fetch URL [-o file] [-v] ... (argv[1] is "fetch"). */
 int au_host_fetch_main(int argc, char **argv);
 /* aura-host render|dump with an http or https URL (net_render.c). */

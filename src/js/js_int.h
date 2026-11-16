@@ -126,6 +126,7 @@ struct AuJs {
     AuJs *group_next;
     AuJs *entered[16];  /* root: the AuJs of each nested entry from the embedder */
     bool opaque_origin; /* a sandboxed document: same-origin with nothing */
+    struct AuStorageMap *own_storage[2]; /* localStorage, sessionStorage without the embedder's hook (natives2.c) */
     bool frames_dirty;  /* a frame element went into or left this document */
     bool any_frames_dirty; /* root: some AuJs of the group has frames_dirty */
     AuDocument *doc;
@@ -142,6 +143,7 @@ struct AuJs {
     AuJsSettings settings;
     AuJsHooks hooks;
     char *url, *base, *origin;
+    char *referrer; /* document.referrer, or NULL */
     JSClassID cls_node;
     JSValue proto[JSI_COUNT];
     JSValue ctor[JSI_COUNT];
@@ -308,6 +310,7 @@ int js_iface_of(const AuNode *n);
 /* ---- natives.c, natives2.c ---- */
 void js_natives_init(AuJs *js, JSValue N);
 void js_natives2_init(AuJs *js, JSValue N);
+void js_storage_free(AuJs *js);
 void js_natives_shared_init(AuJs *js, JSValue N); /* the natives a worker has too */
 void js_natives_forms_init(AuJs *js, JSValue N);
 

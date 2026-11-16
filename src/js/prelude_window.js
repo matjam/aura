@@ -247,6 +247,7 @@ const navProps = {
     get languages() { return Object.freeze([settings.language]); },
     get onLine() { return settings.online; },
     get cookieEnabled() { return settings.cookieEnabled; },
+    get storage() { return theStorageManager; },
     get doNotTrack() { return settings.dnt ? '1' : null; },
     get globalPrivacyControl() { return settings.gpc; },
     get hardwareConcurrency() { return 1; },
@@ -530,73 +531,103 @@ P.framesChanged = function () {
 
 /* ---------------- Storage ---------------- */
 
-/* localStorage persists through the embedder (storageLoad/storageSave,
- * one JSON string per origin); sessionStorage lives as long as the
- * document. Both enforce the quota from the settings on the UTF-16 length
- * of keys and values. */
+/* The areas live with the embedder (N.storage*, AuJsHooks.storage): a
+ * Storage object holds only its kind (0 local, 1 session), so every
+ * document of an origin reads the same data. The embedder counts the
+ * quota and fires the storage event in the other documents
+ * (P.storageEvent). */
 class Storage {
     constructor() { throw new TypeError('Illegal constructor'); }
 }
-const storageData = new WeakMap();
-const storageSize = (m) => { let n = 0; for (const [k, v] of m) n += k.length + v.length; return n; };
-function storageSave(s) { const d = storageData.get(s); if (d.persist) N.storageSave(JSON.stringify([...d.map])); }
+const storageKind = new WeakMap();
+const kindOf = (s) => {
+    const k = storageKind.get(s);
+    if (k === undefined) throw new TypeError('Illegal invocation');
+    return k;
+};
 defProps(Storage.prototype, {
-    get length() { return storageData.get(this).map.size; },
-    key(i) { const k = [...storageData.get(this).map.keys()][i >>> 0]; return k === undefined ? null : k; },
-    getItem(k) { const v = storageData.get(this).map.get(str(k)); return v === undefined ? null : v; },
-    setItem(k, v) {
-        k = str(k); v = str(v);
-        const d = storageData.get(this);
-        const old = d.map.get(k);
-        if (old === v) return;
-        const size = storageSize(d.map) - (old === undefined ? 0 : k.length + old.length) + k.length + v.length;
-        if (size * 2 > settings.quota) throw domErr('The storage quota has been exceeded', 'QuotaExceededError');
-        d.map.set(k, v);
-        storageSave(this);
+    get length() { return N.storageLength(kindOf(this)); },
+    key(i) {
+        if (!arguments.length) throw new TypeError('key: 1 argument required');
+        return N.storageKey(kindOf(this), i >>> 0);
     },
-    removeItem(k) { const d = storageData.get(this); if (d.map.delete(str(k))) storageSave(this); },
-    clear() { const d = storageData.get(this); if (d.map.size) { d.map.clear(); storageSave(this); } },
+    getItem(k) {
+        if (!arguments.length) throw new TypeError('getItem: 1 argument required');
+        return N.storageGet(kindOf(this), str(k));
+    },
+    setItem(k, v) {
+        if (arguments.length < 2) throw new TypeError('setItem: 2 arguments required');
+        const kind = kindOf(this);
+        const r = N.storageSet(kind, str(k), str(v));
+        if (r === 2) throw domErr('The storage quota has been exceeded', 'QuotaExceededError');
+        if (r === 3) throw domErr('Storage is not available for this document', 'SecurityError');
+    },
+    removeItem(k) {
+        if (!arguments.length) throw new TypeError('removeItem: 1 argument required');
+        N.storageRemove(kindOf(this), str(k));
+    },
+    clear() { N.storageClear(kindOf(this)); },
 });
 tag(Storage);
 defGlobal('Storage', Storage);
+/* Named properties (the standard's legacy platform object): a string
+ * key that is not a property of the prototype chain reads the item; any
+ * string key written, defined or deleted acts on the items. */
 const storageHandler = {
-    get(t, p) { if (typeof p !== 'string' || p in t) return Reflect.get(t, p, t); const v = storageData.get(t).map.get(p); return v; },
-    set(t, p, v) { if (typeof p !== 'string' || p in Storage.prototype) return Reflect.set(t, p, v, t); t.setItem(p, v); return true; },
-    has(t, p) { return typeof p === 'string' && storageData.get(t).map.has(p) || p in t; },
-    deleteProperty(t, p) { if (typeof p === 'string') t.removeItem(p); return true; },
-    ownKeys(t) { return [...storageData.get(t).map.keys()]; },
+    get(t, p, r) {
+        if (typeof p !== 'string' || p in t) return Reflect.get(t, p, r);
+        const v = N.storageGet(kindOf(t), p);
+        return v === null ? undefined : v;
+    },
+    set(t, p, v) { if (typeof p !== 'string') return Reflect.set(t, p, v, t); t.setItem(p, v); return true; },
+    defineProperty(t, p, d) {
+        if (typeof p !== 'string' || !('value' in d)) return Reflect.defineProperty(t, p, d);
+        t.setItem(p, d.value);
+        return true;
+    },
+    has(t, p) { return typeof p === 'string' && N.storageGet(kindOf(t), p) !== null || p in t; },
+    deleteProperty(t, p) { if (typeof p !== 'string') return Reflect.deleteProperty(t, p); t.removeItem(p); return true; },
+    ownKeys(t) { return N.storageKeys(kindOf(t)).concat(Reflect.ownKeys(t)); },
     getOwnPropertyDescriptor(t, p) {
-        const v = typeof p === 'string' ? storageData.get(t).map.get(p) : undefined;
-        return v === undefined ? undefined : { value: v, writable: true, enumerable: true, configurable: true };
+        if (typeof p !== 'string') return Reflect.getOwnPropertyDescriptor(t, p);
+        const v = N.storageGet(kindOf(t), p);
+        return v === null ? undefined : { value: v, writable: true, enumerable: true, configurable: true };
     },
 };
-function makeStorage(persist) {
+function makeStorage(kind) {
     const s = Object.create(Storage.prototype);
-    const map = new Map();
-    if (persist) {
-        try {
-            const raw = N.storageLoad();
-            if (raw) for (const [k, v] of JSON.parse(raw)) if (typeof k === 'string' && typeof v === 'string') map.set(k, v);
-        } catch (e) { /* damaged data: start empty */ }
-    }
-    const data = { map, persist };
     const p = new Proxy(s, storageHandler);
-    storageData.set(s, data);
-    storageData.set(p, data); /* methods see the proxy as this */
+    storageKind.set(s, kind);
+    storageKind.set(p, kind); /* methods see the proxy as this */
     return p;
 }
-let localStore = null, sessionStore = null;
-const storageAllowed = () => N.docUrl(2) !== 'null' || /^file:/.test(N.docUrl(0));
+const stores = [null, null];
+const storageOf = (kind) => stores[kind] || (stores[kind] = makeStorage(kind));
+const storageChecked = (kind) => {
+    if (N.storageAccess(kind) !== 0) throw domErr('Storage is not available for this document', 'SecurityError');
+    return storageOf(kind);
+};
 defProps(WP, {
-    get localStorage() {
-        if (!storageAllowed()) throw domErr('Storage is not available for this document', 'SecurityError');
-        return localStore || (localStore = makeStorage(true));
-    },
-    get sessionStorage() {
-        if (!storageAllowed()) throw domErr('Storage is not available for this document', 'SecurityError');
-        return sessionStore || (sessionStore = makeStorage(false));
-    },
+    get localStorage() { return storageChecked(0); },
+    get sessionStorage() { return storageChecked(1); },
 });
+/* Another document of this origin changed the area (a task from the
+ * embedder): a = [kind, key, oldValue, newValue, url]. */
+P.storageEvent = function (a) {
+    fire(G, new StorageEvent('storage', { key: a[1], oldValue: a[2], newValue: a[3], url: a[4], storageArea: storageOf(a[0]) }));
+};
+
+/* navigator.storage: the usage and quota of the document's local area.
+ * Aura never drops a persistent area, so persist() has nothing to ask. */
+class StorageManager { constructor() { throw new TypeError('Illegal constructor'); } }
+defProps(StorageManager.prototype, {
+    estimate() { const e = N.storageEstimate(0); return Promise.resolve({ usage: e[0], quota: e[1] }); },
+    persisted() { return Promise.resolve(N.storageAccess(0) === 0); },
+    persist() { return Promise.resolve(N.storageAccess(0) === 0); },
+});
+tag(StorageManager);
+defGlobal('StorageManager', StorageManager);
+const theStorageManager = Object.create(StorageManager.prototype);
 
 /* ---------------- misc globals ---------------- */
 

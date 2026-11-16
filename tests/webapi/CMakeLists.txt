@@ -15,6 +15,18 @@ target_link_libraries(test_cors aura_engine m)
 target_include_directories(test_cors PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME webapi_cors COMMAND test_cors)
 
+# localStorage and sessionStorage (src/net/web_storage.c through the
+# browser): persistence, origins, tabs and the storage event, the tab's
+# session storage, third-party frames, the cookie preferences, quotas,
+# strings, named properties, files (damaged and truncated), clearing;
+# document.referrer.
+add_executable(test_web_storage test_web_storage.c ${CMAKE_SOURCE_DIR}/tests/net/tls_fixtures.c)
+target_link_libraries(test_web_storage aura_fakenet m)
+target_include_directories(test_web_storage PRIVATE ${CMAKE_SOURCE_DIR}/tests/net ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME webapi_web_storage COMMAND test_web_storage)
+set_tests_properties(webapi_web_storage PROPERTIES TIMEOUT 120)
+
 # document.cookie: response and script cookies read back by script, in the
 # page and in frames.
 add_executable(test_doc_cookie test_doc_cookie.c)
