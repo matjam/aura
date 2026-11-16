@@ -2,7 +2,7 @@
 
 This document covers `src/js`: the QuickJS-ng runtime wrapper, how
 script runs in pages, the prelude and its bytecode, limits, `Date` and
-the clock, and the bindings that have rules of their own
+the clock, `Intl`, and the bindings that have rules of their own
 (`document.cookie`, postMessage, Range, Selection, CSSOM,
 getComputedStyle, crypto). Read it
 before changing a binding or the runtime, or when a site's script
@@ -342,6 +342,8 @@ QuickJS bytecode and the runtime loads that.
   its `#embed` line in `prelude.c` (the source build).
 - A name declared twice across the files stops the runtime from
   starting ("invalid redefinition").
+- `Intl` is not part of the prelude: `src/js/intl.js` is compiled to
+  bytecode of its own and read on first use (see "Intl" below).
 - A worker has a second, smaller prelude built from `prelude.js`,
   `prelude_web.js`, `prelude_net.js` and `prelude_worker.js`
   (`prelude_worker.bc`): code in the first three must run without a
@@ -414,6 +416,64 @@ methods (`getHours`, `toString`, `getTimezoneOffset`,
   as `tests/js/clock.js` does (ctest `js_clock`).
 
 [`mac-os-9-shell.md`](mac-os-9-shell.md) describes the Mac's clock.
+
+## Intl
+
+To change `Intl`, edit `src/js/intl.js` and run `tests/js/intl.js`
+(ctest `js_intl`); the local-zone cases are in `tests/js/clock.js`
+(ctest `js_clock`). The tests' expected strings are Chrome's output for
+en-US: check a new case in Chrome before you write it down.
+
+QuickJS-ng has no `Intl`, and sites call it while their modules load:
+GitHub's code view threw "Intl is not defined" and left the file list's
+commit messages and dates, Releases, Contributors and Languages as grey
+placeholders. Aura's `Intl` is written in JavaScript for English only,
+with no locale data beyond small tables in the file:
+
+| Object | What it does |
+|---|---|
+| `DateTimeFormat` | `format`, `formatToParts`, `formatRange`, `formatRangeToParts`, `resolvedOptions`; `dateStyle`, `timeStyle` and the component options (`weekday`, `era`, `year`, `month`, `day`, `hour`, `minute`, `second`, `fractionalSecondDigits`, `dayPeriod`, `timeZoneName` in all six styles), `hour12` and `hourCycle` |
+| `NumberFormat` | `format`, `formatToParts`, `resolvedOptions`; decimal, percent, currency (symbols for 16 currencies, the code for others; `accounting`, `code`, `name`, `narrowSymbol`), unit (the 45 units ECMA-402 sanctions and their `-per-` pairs), compact, scientific and engineering notation, the digit and rounding options, `useGrouping`, `signDisplay`; numbers, BigInts and decimal strings, which keep all their digits |
+| `RelativeTimeFormat` | `format`, `formatToParts`, `numeric: "auto"`, the long, short and narrow styles |
+| `PluralRules` | English cardinal and ordinal rules, with the digit options |
+| `Collator` | `compare`, with `sensitivity`, `numeric`, `caseFirst`, `ignorePunctuation` |
+| `ListFormat`, `Segmenter`, `DisplayNames`, `Locale` | the common cases; `Segmenter` does graphemes, words and sentences |
+| `Intl` | `getCanonicalLocales`, `supportedValuesOf`, and `supportedLocalesOf` on each constructor (the `en` locales) |
+
+- **Locales.** Every locale tag is checked and canonicalized as the
+  standard says (an invalid one throws RangeError), and every one is
+  formatted as en-US; `resolvedOptions().locale` is `en-US`.
+- **Time zones.** With no `timeZone` option, dates are formatted with
+  `Date`'s local fields, so they follow the embedder's clock and zone
+  ("Date and the clock" above). The local zone is named by its offset
+  (`Etc/GMT+8`, or `+05:30` for an offset that is not whole hours),
+  because Mac OS 9 has no zone database; GitHub sends this name to its
+  server as the `tz` cookie. `UTC`, the `Etc/GMT` zones, offsets and 67
+  named zones with their daylight saving rules (`ZONES` in the file) are
+  known; any other name throws RangeError, as the standard says.
+- **The locale methods.** `Number.prototype.toLocaleString`,
+  `BigInt.prototype.toLocaleString`, `Date.prototype.toLocaleString`,
+  `toLocaleDateString`, `toLocaleTimeString` and
+  `String.prototype.localeCompare` go through the same code, so they
+  agree with `Intl`; with no arguments they reuse one formatter each.
+- **Loaded on first use.** `intl.js` is compiled to its own bytecode
+  (`build/*/gen/intl.bc`, 92,641 bytes on the host) and is not part of the
+  prelude. `prelude.js` defines `Intl` as a getter and the locale
+  methods as small wrappers; the first time script touches either,
+  `N.intl()` (`runtime.c`) reads the bytecode and the getter becomes a
+  plain data property. A page that never uses `Intl` holds none of it.
+
+What `Intl` costs, measured on 2026-11-15 on the host (RelWithDebInfo,
+Apple silicon) with `aura-host js --stats`:
+
+| | Before | After |
+|---|---|---|
+| A context's heap at start-up | 1,743,317 bytes | 1,751,437 bytes (+8 KB, including the SVG `style` properties added at the same time) |
+| Start-up time (median of 20) | 3.3 ms | 3.3 ms |
+| The heap after a script that formats one date and one number | | 1,933,999 bytes (+182 KB over start-up) |
+| Reading `intl.bc` on first use | | 0.3 ms |
+
+What is left out is in [`known-gaps.md`](known-gaps.md#javascript).
 
 ## document.cookie
 

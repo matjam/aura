@@ -742,12 +742,40 @@ static JSValue n_mute(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_NewBool(ctx, r);
 }
 
+#ifdef AU_JS_PRELUDE_SOURCE
+extern const char au_js_intl_src[];
+extern const size_t au_js_intl_len;
+#else
+extern const unsigned char au_js_intl_bc[];
+extern const size_t au_js_intl_bc_len;
+#endif
+
+/* N.intl(): reads src/js/intl.js (its bytecode, intl.bc) and returns the
+ * function it evaluates to. The prelude calls it once per context, the
+ * first time a page touches Intl or a toLocale method, so a page that
+ * never does holds none of it. */
+static JSValue n_intl(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+#ifdef AU_JS_PRELUDE_SOURCE
+    return JS_Eval(ctx, au_js_intl_src, au_js_intl_len, "aura:intl", JS_EVAL_TYPE_GLOBAL);
+#else
+    JSValue fn = JS_ReadObject(ctx, au_js_intl_bc, au_js_intl_bc_len, JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(fn))
+        return fn;
+    return JS_EvalFunction(ctx, fn);
+#endif
+}
+
 static const JSCFunctionListEntry base_natives[] = {
     JS_CFUNC_MAGIC_DEF("scriptMuted", 1, n_mute, 0),
     JS_CFUNC_MAGIC_DEF("muteScript", 1, n_mute, 1),
     JS_CFUNC_DEF("print", 2, n_print),
     JS_CFUNC_DEF("now", 0, n_now),
     JS_CFUNC_DEF("runScript", 3, n_run_script),
+    JS_CFUNC_DEF("intl", 0, n_intl),
 };
 
 /* ---- Creation ---- */
