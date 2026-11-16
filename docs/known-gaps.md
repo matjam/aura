@@ -156,8 +156,7 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - **CSSOM:** constructed sheets and `adoptedStyleSheets`, the sheets of
   `@import` rules, rules nested in a style rule, `@font-face` rules
   added through the CSSOM (they are not given to the web font loader).
-  A link element's rules throw NotSupportedError. `cssRules` is not
-  live.
+  `cssRules` is not live.
 - **crypto.subtle:** only `digest` and HMAC; AES, RSA, ECDSA, PBKDF2
   and HKDF are what pages ask for next.
 - **Console:** a source position for `console.log` lines (only errors
@@ -292,13 +291,28 @@ failing:
 
 Largest first.
 
-1. **Parsed style sheets.** A rule is five to seven blocks (rule,
-   selector list, selectors, components, declarations, token lists);
-   GitHub's 42,000 rules take 345,000 blocks and 24 MB on the host.
-   Allocating a rule's selector list, selectors and components as one
-   block would save the per-block headers (8 bytes each in the Mac's
-   pooled allocator, about 1 MB there) and `AuSelComp.name_cs` and
-   `AuSelector.hashes` could move out of line.
+1. **Parsed style sheets.** What is left of them, for GitHub's home
+   page with 32-bit pointers: 2.4 MB (1.3 MB of rules and selectors,
+   0.6 MB of packed text, 0.4 MB of token lists;
+   [`memory.md`](memory.md)).
+   - Each document parses its own sheets: a second tab, a frame or a
+     kept document of the same site holds them again.
+     `au_css_sheet_retain` already lets owners share a sheet; a table
+     of parsed sheets by URL, media and text would let documents share
+     them (not sheets with `@import` rules, whose imports are attached
+     to the sheet).
+   - The texts are packed by `au_docview_update`, so a document that
+     stops being updated before its texts are packed (hidden or kept
+     within seconds of loading) keeps them as they arrived. The page
+     layer can call `au_docview_pack_sheets` when a document goes
+     cold.
+   - The tokens of a whole sheet exist while it is parsed, then are
+     freed: 3.7 MB for GitHub's 800 KB sheet, 1.6 MB for Wikipedia's
+     212 KB one (20 bytes a token, and arrays that grow by doubling).
+     Parsing rule by rule would keep that to one rule's tokens.
+   - A custom property map is flattened every 12 levels
+     (`AuCustomProps.base`): GitHub's 2157 properties give 23 full
+     maps, 0.39 MB with 32-bit pointers.
 2. **Atoms live for the life of the program:** every class, id and
    custom property name of every page visited stays (270 KB for the
    article, 720 KB for GitHub), so a long session grows. Atoms need a

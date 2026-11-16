@@ -132,6 +132,15 @@ static void run_api(const FzBuf *in)
     size_t i, n;
     au_buf_init(&out);
     au_css_sheet_rule_count(sheet);
+    /* the text the sheet keeps is the input, packed or not */
+    if (fz_rnd(2))
+        au_css_sheet_pack_text(sheet);
+    if (!au_css_sheet_text_is(sheet, s, in->n))
+        abort();
+    au_css_sheet_text_get(sheet, &out);
+    if (out.len != in->n || (in->n && memcmp(out.data, s, in->n)))
+        abort();
+    au_buf_clear(&out);
     n = au_css_sheet_import_count(sheet);
     for (i = 0; i < n; i++)
         (void)au_css_sheet_import(sheet, i)->url;
@@ -245,6 +254,11 @@ static void run_page(const FzBuf *in, const FzCorpus *corpus)
         AuBuf d;
         AuIRect dmg[8];
         int cw, ch, m;
+        /* the second round reads the sheets' texts packed: rules that
+         * first match now and @media blocks that first apply now */
+        if (k)
+            while (au_docview_pack_sheets(dv))
+                ;
         au_docview_set_viewport(dv, k ? 1 + (int)fz_rnd(900) : 300, k ? 1 + (int)fz_rnd(700) : 200);
         au_docview_update(dv);
         au_docview_content_size(dv, &cw, &ch);

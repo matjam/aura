@@ -494,19 +494,19 @@ join them, convert each boundary point with
 - Rules are read from the sheet's text (`AuJsHooks.sheet_text`,
   `au_dv_sheet_text` in `docview.c`) by a splitter in script.
 - `insertRule`, `deleteRule` and changes to a rule write the whole text
-  back (`au_dv_sheet_set_text`, kept in `SheetSrc.om_text`), and the
-  document view parses it again, so the element's own text does not
-  change.
+  back (`au_dv_sheet_set_text`), and the document view parses it again
+  into `SheetSrc.om_sheet`, which keeps that text, so the element's own
+  text does not change.
 - `sheet.disabled` sets `SheetSrc.disabled`.
 - A rule's declarations are the `style` attribute of an element that is
   never inserted, so they share the inline style code.
 - The text script writes back is parsed into `SheetSrc.om_sheet`, which
   replaces the sheet's own in the cascade; the resolver borrows sheets,
   so `au_dv_sheet_set_text` detaches them before it frees the old one.
-- A link element's sheet is listed and can be disabled, but its rules
-  throw NotSupportedError: the document view frees a fetched sheet's
-  text once it is parsed (`parse_sheet`), so there is nothing to read
-  them from.
+- A link element's sheet works like a style element's: the parsed sheet
+  keeps the text it was fetched as ([`css.md`](css.md), "How a parsed
+  sheet is stored"), and `au_dv_sheet_text` reads it from there. The
+  rules of a cross-origin sheet throw SecurityError.
 - A cross-origin sheet's rules throw SecurityError.
 
 ## getComputedStyle

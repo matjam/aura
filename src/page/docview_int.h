@@ -16,8 +16,8 @@ typedef struct SheetSrc SheetSrc;
 struct SheetSrc {
     char *url;    /* base URL for the sheet (absolute) */
     char *media;  /* media attribute or @import media, NULL for all */
-    char *text;   /* a <style>'s text, kept to notice edits; a fetched sheet's text is freed once parsed */
-    size_t len;   /* the text's length, also after the text is freed */
+    char *text;   /* the text until it is parsed; the parsed sheet takes it (src_text) */
+    size_t len;   /* the text's length, also once the sheet has it */
     uint32_t req; /* outstanding request, 0 if none */
     bool failed;
     bool deferred;     /* media does not match: not fetched (a <style>: not parsed) yet */
@@ -27,11 +27,10 @@ struct SheetSrc {
     uint32_t depth;    /* imports above this one */
     SheetSrc **imports; /* one per @import of the sheet, in order */
     uint32_t nimports;
-    /* CSSOM (au_dv_sheet_*): the text script wrote back after changing the
-     * sheet's rules and the sheet parsed from it, which replaces sheet in
-     * the cascade (its @import rules are not loaded); and sheet.disabled. */
-    char *om_text;
-    size_t om_len;
+    /* CSSOM (au_dv_sheet_*): the sheet parsed from the text script wrote
+     * back after changing the sheet's rules (it holds that text), which
+     * replaces sheet in the cascade (its @import rules are not loaded);
+     * and sheet.disabled. */
     AuCssSheet *om_sheet;
     bool disabled;
     uint8_t cors; /* a link's crossorigin attribute: 0 none, 1 anonymous, 2 use-credentials */
@@ -106,6 +105,12 @@ struct AuDocView {
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     char *referrer;      /* document.referrer for the next runtime; NULL: "" */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */
+    bool sheets_packed;  /* every sheet's text has been packed (au_docview_pack_sheets) */
+    /* When to pack them (au_docview_update): the count of late parses last
+     * seen, and since when (or for how many passes, without a clock) it
+     * has not moved. */
+    uint32_t pack_seen, pack_since, pack_passes;
+    bool pack_watching;
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */

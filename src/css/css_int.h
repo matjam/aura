@@ -24,10 +24,27 @@ typedef struct CssArenaChunk CssArenaChunk;
 typedef struct CssArena {
     CssArenaChunk *head;
     size_t used, cap;
+    size_t chunk;     /* the size of the next chunk, 0 for 8 KB */
+    size_t chunk_max; /* when set, each new chunk is twice the last, up to this */
 } CssArena;
 void *css_arena_alloc(CssArena *a, size_t n);
+/* The same aligned for pointers only (4 bytes with 32-bit pointers): for
+ * records without doubles or 64-bit integers. */
+void *css_arena_alloc_ptr(CssArena *a, size_t n);
 char *css_arena_strndup(CssArena *a, const char *s, size_t n);
 void css_arena_reset(CssArena *a); /* keeps the first chunk */
+void css_arena_mem(const CssArena *a, size_t *bytes, size_t *used, size_t *chunks);
+/* A place in an arena, and giving back everything allocated since. */
+typedef struct CssArenaMark {
+    CssArenaChunk *head;
+    size_t used;
+} CssArenaMark;
+static inline CssArenaMark css_arena_mark(const CssArena *a)
+{
+    CssArenaMark m = {a->head, a->used};
+    return m;
+}
+void css_arena_release(CssArena *a, CssArenaMark m);
 void css_arena_free(CssArena *a);
 
 /* ---- Keywords and names (props.c) ---- */
@@ -103,6 +120,9 @@ static inline const char *css_tok_num_text(const CssTokens *tk, const CssToken *
     *len = t->type == TK_NUMBER || t->type == TK_PERCENT || t->type == TK_DIMENSION ? t->name_len : 0;
     return tk->pool.data + t->str - *len;
 }
+/* Where the contents of the block of a { token start in the tokenized
+ * text, and where they end for a } token. */
+static inline uint32_t css_tok_src(const CssToken *t) { return ((uint32_t)t->unit << 16) | t->name_len; }
 /* The string length of a token, functions included. */
 static inline uint32_t css_tok_len(const CssToken *t) { return t->type == TK_FUNCTION ? t->name_len : t->len; }
 /* Serializes tokens [a, b) back to CSS text. */
@@ -123,6 +143,7 @@ CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b);
 void css_toklist_intern_begin(void);
 void css_toklist_intern_end(void);
 CssTokList *css_toklist_retain(CssTokList *l);
+void css_toklist_mem(const CssTokList *l, size_t *bytes, size_t *bytes32, size_t *blocks);
 void css_toklist_release(CssTokList *l);
 /* Appends tokens [a, b) of src to dst, copying their strings and fixing
  * the block end indices. */
@@ -307,6 +328,10 @@ AuCssMediaList *css_media_parse(const CssTokens *tk, uint32_t a, uint32_t b);
 AuCssMediaList *css_media_parse_text(const char *text, size_t len);
 bool css_media_eval(const AuCssMediaList *m, const AuCssDevice *d);
 void css_media_free(AuCssMediaList *m);
+/* Moves a parsed list into an arena as one allocation; it is then freed
+ * with the arena and never with css_media_free. */
+AuCssMediaList *css_media_pack(CssArena *a, AuCssMediaList *m);
+const char *css_media_text(const AuCssMediaList *m); /* the query as written */
 void css_media_serialize(const AuCssMediaList *m, AuBuf *out);
 /* Evaluates an @supports condition in tokens [a, b). */
 bool css_supports_eval(const CssTokens *tk, uint32_t a, uint32_t b);
@@ -328,7 +353,7 @@ typedef enum {
 
 enum { COMB_DESCENDANT = 1, COMB_CHILD, COMB_NEXT, COMB_SUBSEQUENT };
 enum { ATTR_EXISTS = 1, ATTR_EQ, ATTR_INCLUDES, ATTR_DASH, ATTR_PREFIX, ATTR_SUFFIX, ATTR_SUBSTR };
-enum { SCF_CI = 1, SCF_CS = 2, SCF_NS_ANY = 4, SCF_NS_NONE = 8, SCF_NS_SET = 16 };
+enum { SCF_CI = 1, SCF_CS = 2, SCF_NS_ANY = 4, SCF_NS_NONE = 8, SCF_NS_SET = 16, SCF_EXT = 32 };
 
 typedef enum {
     PC_IS = 1, PC_WHERE, PC_NOT, PC_HAS,
@@ -342,44 +367,86 @@ typedef enum {
     PC_NEVER /* known pseudo-classes that never match here (:autofill, :fullscreen, :modal, ...) */
 } PseudoClass;
 
-typedef struct AuSelComp {
-    uint8_t type;  /* SelCompType */
-    uint8_t op;    /* attribute operator, pseudo-class, combinator */
-    uint8_t flags; /* SCF_* */
-    uint8_t ns;    /* namespace (AuNamespace) when SCF_NS_SET */
-    AuAtom name;   /* tag (lowercase), id, class, attribute name (lowercase), :lang/:dir argument */
+/* What a component needs beyond a name: allocated only for the
+ * components that have it (SCF_EXT). */
+typedef struct CssSelExt {
+    AuAtom name;    /* tag (lowercase), attribute name (lowercase) */
     AuAtom name_cs; /* tag or attribute name as written, for non-HTML elements */
     union {
         struct {
             char *s;
             uint32_t len;
         } value; /* attribute value, :lang ranges as a comma-joined string */
-        AuSelList *list;
         struct {
             int32_t a, b;
             AuSelList *of;
         } nth;
     } u;
+} CssSelExt;
+
+/* One component: 8 bytes with 32-bit pointers. Selectors, their
+ * components and what hangs off them are allocated in an arena (the
+ * sheet's, or the selector list's own) and freed with it. */
+typedef struct AuSelComp {
+    uint8_t type;  /* SelCompType */
+    uint8_t op;    /* attribute operator, pseudo-class, combinator */
+    uint8_t flags; /* SCF_* */
+    uint8_t ns;    /* namespace (AuNamespace) when SCF_NS_SET */
+    union {
+        AuAtom name;     /* without SCF_EXT: tag, id, class, attribute name (as written and lowercase
+                          * alike), :dir argument (0 ltr, 1 rtl) */
+        AuSelList *list; /* :is, :where, :not, :has; & (the parent rule's selectors, NULL for :scope) */
+        CssSelExt *ext;  /* with SCF_EXT */
+    } u;
 } AuSelComp;
 
-enum { SELF_HAS = 1, SELF_STATE = 2, SELF_NESTED = 4, SELF_ATTR = 8 };
+static inline AuAtom css_comp_name(const AuSelComp *c) { return c->flags & SCF_EXT ? c->u.ext->name : c->u.name; }
+static inline AuAtom css_comp_name_cs(const AuSelComp *c)
+{
+    return c->flags & SCF_EXT ? c->u.ext->name_cs : c->u.name;
+}
+/* The attribute value or :lang ranges of a component, NULL without one. */
+static inline const char *css_comp_value(const AuSelComp *c, uint32_t *len)
+{
+    if (!(c->flags & SCF_EXT)) {
+        *len = 0;
+        return NULL;
+    }
+    *len = c->u.ext->u.value.len;
+    return c->u.ext->u.value.s;
+}
 
+/* SELF_NEVER: the selector cannot match an element here (a pseudo-element
+ * Aura does not create, or a pseudo-class that is never true, on the
+ * subject or an ancestor compound); it is not indexed. A list's flags do
+ * not carry it. */
+enum { SELF_HAS = 1, SELF_STATE = 2, SELF_NESTED = 4, SELF_ATTR = 8, SELF_NEVER = 16 };
+
+/* 12 bytes with 32-bit pointers. After the components come nhash
+ * ancestor filter hashes (css_sel_hashes) and, for
+ * AU_CSS_PSEUDO_UNKNOWN_WEBKIT, the pseudo-element's name as written. */
 struct AuSelector {
-    AuSelComp *comp; /* right to left */
+    AuSelComp *comp;       /* right to left */
+    unsigned spec : 24;    /* (a << 16) | (b << 8) | c, each clamped to 255 */
+    unsigned flags : 8;    /* SELF_* */
     uint16_t ncomp;
-    uint8_t pseudo;   /* AuCssPseudo on the subject */
-    uint8_t rel_comb; /* relative selectors (:has): combinator to the anchor, else 0 */
-    uint32_t spec;    /* (a << 16) | (b << 8) | c, each clamped to 255 */
-    uint32_t hashes[4]; /* ancestor filter hashes, 0-terminated */
-    AuAtom pseudo_name; /* AU_CSS_PSEUDO_UNKNOWN_WEBKIT: the name as written, for serialization */
-    uint8_t flags;
+    uint8_t pseudo;        /* AuCssPseudo on the subject */
+    uint8_t rel_comb : 4;  /* relative selectors (:has): combinator to the anchor, else 0 */
+    uint8_t nhash : 4;     /* at most CSS_SEL_HASHES */
 };
+#define CSS_SEL_HASHES 4
+static inline const uint32_t *css_sel_hashes(const AuSelector *s) { return (const uint32_t *)(s->comp + s->ncomp); }
+static inline AuAtom css_sel_pseudo_name(const AuSelector *s)
+{
+    return s->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT ? (AuAtom)css_sel_hashes(s)[s->nhash] : 0;
+}
 
 struct AuSelList {
-    AuSelector *sel;
-    uint32_t n;
-    uint8_t flags; /* union of selector flags */
+    unsigned n : 24;
+    unsigned flags : 8; /* union of selector flags */
+    AuSelector sel[];
 };
+#define CSS_SELLIST_MAX 0xFFFFFFu
 
 typedef struct CssNamespaces {
     AuAtom default_prefix_ns; /* unused placeholder */
@@ -390,7 +457,8 @@ typedef struct CssNamespaces {
 } CssNamespaces;
 
 typedef struct CssSelParseCtx {
-    const AuSelList *parent; /* for & in nested rules, NULL at top level */
+    CssArena *arena;         /* where the list is allocated; freed as a whole */
+    const AuSelList *parent; /* for & in nested rules (in the same arena), NULL at top level */
     const CssNamespaces *ns;
     bool relative;           /* parse as <relative-selector-list> (:has, nested rules) */
     bool forgiving;          /* :is/:where: drop invalid selectors instead of failing */
@@ -398,8 +466,9 @@ typedef struct CssSelParseCtx {
     int depth;
 } CssSelParseCtx;
 
+/* Parses a selector list into cx->arena; NULL if it is invalid (what was
+ * allocated for it stays in the arena until the arena is freed). */
 AuSelList *css_selector_parse(const CssTokens *tk, uint32_t a, uint32_t b, const CssSelParseCtx *cx);
-void css_sellist_free(AuSelList *l);
 void css_sellist_serialize(const AuSelList *l, AuBuf *out);
 uint32_t css_sellist_max_spec(const AuSelList *l);
 
@@ -475,20 +544,62 @@ typedef struct CssLayerName {
     uint32_t n;
 } CssLayerName;
 
+/* A rule: 20 bytes with 32-bit pointers. Rules, their selectors, media
+ * lists, layer names, condition text and parsed declaration arrays are
+ * allocated in the sheet's arena and freed with it.
+ *
+ * A style rule whose block holds only declarations, and a top-level
+ * @media block, stay text (RF_LAZY: a range of the sheet's text) until
+ * used: the style rule until it first matches an element
+ * (css_rule_decls), the @media block until its query first matches the
+ * device (css_rule_children). */
+enum {
+    RF_OK = 1,   /* @supports: the condition holds; @import: supports() holds. Clear for @container */
+    RF_LAZY = 2, /* c.lazy_len bytes of text at b.off stand for the declarations or the children */
+    RF_LAYER = 4 /* @import with a layer: its name is sheet->import_layers[b.index] */
+};
+
 typedef struct CssRule CssRule;
 struct CssRule {
     uint8_t type;
-    uint8_t ok; /* @supports result; 0 for @container (never matches) */
+    uint8_t flags; /* RF_* */
     CssRule *next;
-    CssRule *children;
-    AuSelList *sel;          /* style rules */
-    AuCssDeclBlock decls;    /* style rules, nested declarations, page */
-    AuCssMediaList *media;   /* @media, @import */
-    CssLayerName *layers;    /* @layer statement: names; block: layers[0] if nlayers */
-    uint32_t nlayers;
-    uint32_t index;          /* @import, @font-face, @keyframes index */
-    char *text;              /* condition text (@container, @supports) */
+    union {
+        CssRule *children; /* without RF_LAZY */
+        uint32_t lazy_len;
+    } c;
+    union {
+        AuSelList *sel;        /* style rules; nested declarations (the parent rule's, borrowed) */
+        AuCssMediaList *media; /* @media, @import (NULL for all) */
+        CssLayerName *layers;  /* @layer: b.nlayers names (a block has one; n == 0 is anonymous) */
+        char *text;            /* condition text (@container, @supports, @scope) */
+    } u;
+    union {
+        AuCssDeclBlock *decls; /* style rules, nested declarations (never NULL without RF_LAZY) */
+        uint32_t off;          /* RF_LAZY: where the text starts in the sheet's text */
+        uint32_t nlayers;      /* @layer */
+        uint32_t index;        /* @import */
+    } b;
 };
+
+/* The declarations of a style or nested-declarations rule of sh, parsing
+ * them first if they are still text. */
+const AuCssDeclBlock *css_rule_decls(const AuCssSheet *sh, const CssRule *ru);
+/* The rules inside a rule of sh, parsing them first if they are still
+ * text. */
+const CssRule *css_rule_children(const AuCssSheet *sh, const CssRule *ru);
+/* For tests: false makes a sheet parse every block when it is parsed. */
+extern bool css_lazy_bodies;
+/* For tests: true packs a sheet's text as soon as it is parsed, whatever
+ * its size. */
+extern bool css_pack_at_parse;
+#define CSS_TEXT_PIECE 4096u
+/* len bytes of the sheet's text at off: a pointer into the text, or,
+ * when the text is packed, into the piece inflated last or into tmp. */
+const char *css_sheet_text_at(const AuCssSheet *sh, uint32_t off, uint32_t len, AuBuf *tmp);
+/* For tests: false makes the rule index hold every occurrence of a sheet
+ * that a resolver was given several times. */
+extern bool css_index_skip_repeats;
 
 struct AuCssFontFace {
     AuCssDeclBlock descs; /* prop = 0, aux = descriptor atom, kind DK_BLOB */
@@ -502,15 +613,40 @@ typedef struct CssPropertyRule {
 } CssPropertyRule;
 
 struct AuCssSheet {
+    uint32_t refs; /* owners (au_css_sheet_retain); freed with the last */
     uint8_t origin;
     bool quirks;
+    bool text_owned;
+    /* For a sheet a resolver is given more than once (index_build):
+     * has_layers: it names a layer, so an earlier occurrence still sets
+     * that layer's place. repeat_matters: an earlier occurrence cannot be
+     * left out of the rule index (an anonymous layer, which is a new
+     * layer each time, or an @import). */
+    bool has_layers;
+    bool repeat_matters;
+    /* The sheet's source: lazy rules refer to ranges of it, and the
+     * document view gives it to the CSSOM. A sheet of 4 GB or more has
+     * none (has_text false), and no lazy rules. Once the document has
+     * loaded the text is packed (au_css_sheet_pack_text): text is NULL
+     * and ztext holds it deflated in pieces of CSS_TEXT_PIECE bytes, each
+     * a stream of its own, so that one block's text is read by inflating
+     * the piece it is in (css_sheet_text_at). */
+    bool has_text;
+    bool pack_tried;
+    char *text;
+    size_t text_len;
+    uint8_t *ztext;
+    uint32_t *zoff; /* nz + 1 offsets of the pieces in ztext */
+    uint32_t nz;
     char *base_url;
     AuCssMediaList *media; /* the sheet's own media list, NULL for all */
+    CssArena arena;        /* rules, selectors, media lists, parsed declaration arrays */
     CssRule *rules;
     uint32_t nstyle_rules;
     AuCssImport *imports;
     uint32_t nimports, imports_cap;
     CssRule **import_rules;
+    CssLayerName *import_layers; /* one per import; meaningful with RF_LAYER */
     AuCssFontFace *faces;
     uint32_t nfaces, faces_cap;
     AuCssKeyframes *keyframes;
@@ -520,9 +656,19 @@ struct AuCssSheet {
     CssNamespaces ns;
 };
 
+/* How a sheet gets its text: a copy, the caller's au_alloc block (the
+ * sheet frees it), or the caller's storage that outlives the sheet. */
+enum { CSS_TEXT_COPY, CSS_TEXT_TAKE, CSS_TEXT_BORROW };
 AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
-                            const char *media, bool quirks);
-void css_rules_free(CssRule *r);
+                            const char *media, bool quirks, int text_mode);
+
+/* The sizes these records are meant to have with 32-bit pointers (Mac OS
+ * 9): a build there fails if a change grows one. */
+#define CSS_SIZE_ON_32(T, n) typedef char css_size_of_##T[sizeof(void *) != 4 || sizeof(T) == (n) ? 1 : -1]
+CSS_SIZE_ON_32(CssRule, 20);
+CSS_SIZE_ON_32(AuSelector, 12);
+CSS_SIZE_ON_32(AuSelComp, 8);
+CSS_SIZE_ON_32(AuSelList, 4);
 
 /* ---- The UA sheet (ua.c) ---- */
 extern const char css_ua_sheet[];

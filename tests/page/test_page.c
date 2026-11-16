@@ -248,6 +248,73 @@ static void test_sheets(void)
     au_docview_free(dv);
 }
 
+/* A sheet's text is packed once the document has loaded: a rule that
+ * first matches afterwards, an @media block whose query first matches
+ * afterwards and the CSSOM read it back; a sheet linked twice is parsed
+ * once. */
+int au_dv_sheet_text(AuDocView *dv, AuElement *el, AuBuf *text, AuBuf *url);
+static void mouse(AuDocView *dv, AuEventType t, int x, int y, uint32_t mods);
+
+static void test_packed_sheets(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><html><head>"
+                       "<link id=one rel=stylesheet href=big.css>"
+                       "<link id=two rel=stylesheet href=big.css>"
+                       "<style>#t{background:red}</style>"
+                       "</head><body style='margin:0'><div id=t></div></body>";
+    AuBuf css;
+    au_buf_init(&css);
+    au_buf_puts(&css, "#t{height:10px;width:100px}\n");
+    for (int i = 0; i < 400; i++)
+        au_buf_printf(&css, ".c%d:hover > .d%d{margin:%dpx;color:#%06x}\n", i, i * 7, i, i * 4099);
+    au_buf_puts(&css, "#t:hover{height:77px}\n@media (max-width: 500px){#t{width:33px}}\n");
+    for (int i = 0; i < 200; i++)
+        au_buf_printf(&css, ".e%d{padding:%dpx}\n", i, i);
+    au_buf_puts(&css, "#t:active{height:55px}\n");
+    au_docview_load(dv, html, strlen(html), "http://example.com/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    /* one request per link here; both get the same text */
+    for (int i = 0; i < f.n; i++) {
+        au_docview_resource_data(dv, f.req[i].id, css.data, css.len);
+        au_docview_resource_done(dv, f.req[i].id, true);
+    }
+    AuRect r = rect_of(dv, "t");
+    CHECK(r.h == 10 && r.w == 100, "before packing: %gx%g", r.w, r.h);
+    CHECK(!au_docview_loading(dv), "still loading");
+    int packed = 0;
+    while (au_docview_pack_sheets(dv))
+        packed++;
+    CHECK(packed == 1, "%d sheets packed, want 1 (the two links share one; the style element's is small)", packed);
+    CHECK(!au_docview_pack_sheets(dv), "packing twice");
+    /* the CSSOM's view of both links is the text as it arrived */
+    for (int k = 0; k < 2; k++) {
+        AuBuf text, url;
+        au_buf_init(&text);
+        au_buf_init(&url);
+        int st = au_dv_sheet_text(dv, by_id(dv, k ? "two" : "one"), &text, &url);
+        CHECK(st == 2 && text.len == css.len && !memcmp(text.data, css.data, css.len), "link %d: text read back (%d)", k,
+              st);
+        au_buf_free(&text);
+        au_buf_free(&url);
+    }
+    /* a rule that matches for the first time now */
+    mouse(dv, AU_EVENT_MOUSE_MOVE, 5, 5, 0);
+    r = rect_of(dv, "t");
+    CHECK(r.h == 77, "hover after packing: h=%g", r.h);
+    mouse(dv, AU_EVENT_MOUSE_DOWN, 5, 5, 0);
+    r = rect_of(dv, "t");
+    CHECK(r.h == 55, "active after packing: h=%g", r.h);
+    mouse(dv, AU_EVENT_MOUSE_UP, 5, 5, 0);
+    /* an @media block that applies for the first time now */
+    au_docview_set_viewport(dv, 400, 600);
+    r = rect_of(dv, "t");
+    CHECK(r.w == 33, "@media after packing: w=%g", r.w);
+    au_buf_free(&css);
+    au_docview_free(dv);
+}
+
 /* A sheet whose media query does not match is neither fetched nor parsed
  * until the viewport changes so that it matches. */
 static void test_media_sheets(void)
@@ -879,6 +946,7 @@ int main(void)
     test_urls();
     test_sheets();
     test_media_sheets();
+    test_packed_sheets();
     test_base_title_fragments();
     test_input();
     test_incremental();

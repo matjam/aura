@@ -20,8 +20,27 @@
 #define MAX_SEL_COMPOUNDS 128
 #define MAX_SEL_COMPONENTS 4096
 
+/* A component while its selector is being parsed. The selector's final
+ * components (AuSelComp, in the arena) are written once it is known to be
+ * valid; an attribute value or :lang string is on the heap until then. */
 typedef struct {
-    AuSelComp *c;
+    uint8_t type, op, flags, ns;
+    AuAtom name, name_cs;
+    union {
+        struct {
+            char *s;
+            uint32_t len;
+        } value;
+        AuSelList *list;
+        struct {
+            int32_t a, b;
+            AuSelList *of;
+        } nth;
+    } u;
+} TComp;
+
+typedef struct {
+    TComp *c;
     uint32_t n, cap;
     uint8_t comb;   /* combinator to the compound on the left (set on the right compound) */
     bool has_amp;
@@ -35,77 +54,16 @@ typedef struct {
 } SP;
 
 static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const CssSelParseCtx *cx);
-void css_sellist_free(AuSelList *l);
 
-static void comp_free(AuSelComp *c)
+static bool tcomp_has_string(const TComp *c)
 {
-    switch (c->type) {
-    case SC_ATTR:
+    return c->type == SC_ATTR || (c->type == SC_PSEUDO && c->op == PC_LANG);
+}
+
+static void tcomp_free(TComp *c)
+{
+    if (tcomp_has_string(c))
         au_free(c->u.value.s);
-        break;
-    case SC_PSEUDO:
-        if (c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT || c->op == PC_HAS)
-            css_sellist_free(c->u.list);
-        else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE)
-            css_sellist_free(c->u.nth.of);
-        else if (c->op == PC_LANG)
-            au_free(c->u.value.s);
-        break;
-    default:
-        break;
-    }
-}
-
-void css_sellist_free(AuSelList *l)
-{
-    if (!l)
-        return;
-    for (uint32_t i = 0; i < l->n; i++) {
-        AuSelector *s = &l->sel[i];
-        for (uint32_t k = 0; k < s->ncomp; k++)
-            comp_free(&s->comp[k]);
-        au_free(s->comp);
-    }
-    au_free(l->sel);
-    au_free(l);
-}
-
-static AuSelList *sellist_copy(const AuSelList *l);
-
-static void comp_copy(AuSelComp *dst, const AuSelComp *src)
-{
-    *dst = *src;
-    switch (src->type) {
-    case SC_ATTR:
-        dst->u.value.s = src->u.value.s ? au_strndup(src->u.value.s, src->u.value.len) : NULL;
-        break;
-    case SC_PSEUDO:
-        if (src->op == PC_IS || src->op == PC_WHERE || src->op == PC_NOT || src->op == PC_HAS)
-            dst->u.list = sellist_copy(src->u.list);
-        else if (src->op >= PC_NTH_CHILD && src->op <= PC_NTH_LAST_OF_TYPE)
-            dst->u.nth.of = sellist_copy(src->u.nth.of);
-        else if (src->op == PC_LANG)
-            dst->u.value.s = au_strndup(src->u.value.s, src->u.value.len);
-        break;
-    default:
-        break;
-    }
-}
-
-static AuSelList *sellist_copy(const AuSelList *l)
-{
-    if (!l)
-        return NULL;
-    AuSelList *c = au_calloc(sizeof *c);
-    *c = *l;
-    c->sel = au_alloc(l->n * sizeof(AuSelector));
-    for (uint32_t i = 0; i < l->n; i++) {
-        c->sel[i] = l->sel[i];
-        c->sel[i].comp = au_alloc((l->sel[i].ncomp ? l->sel[i].ncomp : 1) * sizeof(AuSelComp));
-        for (uint32_t k = 0; k < l->sel[i].ncomp; k++)
-            comp_copy(&c->sel[i].comp[k], &l->sel[i].comp[k]);
-    }
-    return c;
 }
 
 uint32_t css_sellist_max_spec(const AuSelList *l)
@@ -151,9 +109,9 @@ static AuAtom lower_atom(const char *s, size_t n)
     return a;
 }
 
-static AuSelComp *push_comp(Compound *c, int type)
+static TComp *push_comp(Compound *c, int type)
 {
-    AuSelComp *x = CSS_PUSH(c->c, c->n, c->cap);
+    TComp *x = CSS_PUSH(c->c, c->n, c->cap);
     memset(x, 0, sizeof *x);
     x->type = (uint8_t)type;
     return x;
@@ -373,7 +331,7 @@ static bool parse_attr(SP *p, uint32_t a, uint32_t b, Compound *c)
     uint8_t flags, ns;
     if (!parse_qname(p, &i, b, &nt, &uni, &flags, &ns, true) || !nt)
         return false;
-    AuSelComp *x = push_comp(c, SC_ATTR);
+    TComp *x = push_comp(c, SC_ATTR);
     x->name = lower_atom(css_tok_str(tk, nt), nt->len);
     x->name_cs = au_atom(css_tok_str(tk, nt), nt->len);
     x->flags = flags;
@@ -460,18 +418,13 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
         for (uint32_t i = 0; i < l->n; i++) {
             if (!l->sel[i].pseudo)
                 continue;
-            if (pc == PC_HAS || pc == PC_NOT) {
-                css_sellist_free(l);
+            if (pc == PC_HAS || pc == PC_NOT)
                 return false;
-            }
-            for (uint32_t k = 0; k < l->sel[i].ncomp; k++)
-                comp_free(&l->sel[i].comp[k]);
-            au_free(l->sel[i].comp);
             memmove(&l->sel[i], &l->sel[i + 1], (l->n - i - 1) * sizeof(AuSelector));
             l->n--;
             i--;
         }
-        AuSelComp *x = push_comp(c, SC_PSEUDO);
+        TComp *x = push_comp(c, SC_PSEUDO);
         x->op = (uint8_t)pc;
         x->u.list = l;
         *spec = pc == PC_WHERE ? 0 : css_sellist_max_spec(l);
@@ -498,7 +451,7 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
             if (!ofl)
                 return false;
         }
-        AuSelComp *x = push_comp(c, SC_PSEUDO);
+        TComp *x = push_comp(c, SC_PSEUDO);
         x->op = (uint8_t)pc;
         x->u.nth.a = A;
         x->u.nth.b = B;
@@ -531,7 +484,7 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
             au_buf_free(&buf);
             return false;
         }
-        AuSelComp *x = push_comp(c, SC_PSEUDO);
+        TComp *x = push_comp(c, SC_PSEUDO);
         x->op = PC_LANG;
         x->u.value.len = (uint32_t)buf.len;
         x->u.value.s = au_buf_take(&buf, NULL);
@@ -545,7 +498,7 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
         uint16_t kw = tk->t[i].kw;
         if (kw != AU_K_ltr && kw != AU_K_rtl)
             return false;
-        AuSelComp *x = push_comp(c, SC_PSEUDO);
+        TComp *x = push_comp(c, SC_PSEUDO);
         x->op = PC_DIR;
         x->name = kw == AU_K_ltr ? 0 : 1;
         *spec = 1 << 8;
@@ -553,7 +506,7 @@ static bool parse_pseudo_fn(SP *p, const CssToken *f, uint32_t s, uint32_t e, Co
     }
     if (!strcmp(name, "host") || !strcmp(name, "host-context") || !strcmp(name, "state") ||
         !strcmp(name, "current") || !strcmp(name, "past") || !strcmp(name, "future")) {
-        AuSelComp *x = push_comp(c, SC_PSEUDO);
+        TComp *x = push_comp(c, SC_PSEUDO);
         x->op = PC_NEVER;
         *spec = 1 << 8;
         return true;
@@ -575,7 +528,7 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
         uint8_t flags, ns;
         if (!parse_qname(p, &k, b, &nt, &uni, &flags, &ns, false))
             return false;
-        AuSelComp *x = push_comp(c, uni ? SC_UNIVERSAL : SC_TAG);
+        TComp *x = push_comp(c, uni ? SC_UNIVERSAL : SC_TAG);
         x->flags = flags;
         x->ns = ns;
         if (!uni) {
@@ -592,14 +545,14 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
         if (t->type == TK_HASH) {
             if (!(t->flags & TF_ID))
                 return false;
-            AuSelComp *x = push_comp(c, SC_ID);
+            TComp *x = push_comp(c, SC_ID);
             x->name = au_atom(css_tok_str(tk, t), t->len);
             *spec = spec_add(*spec, 1 << 16);
             k++;
         } else if (is_delim(t, '.')) {
             if (k + 1 >= b || tk->t[k + 1].type != TK_IDENT)
                 return false;
-            AuSelComp *x = push_comp(c, SC_CLASS);
+            TComp *x = push_comp(c, SC_CLASS);
             x->name = au_atom(css_tok_str(tk, &tk->t[k + 1]), tk->t[k + 1].len);
             *spec = spec_add(*spec, 1 << 8);
             k += 2;
@@ -611,7 +564,7 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
             *spec = spec_add(*spec, 1 << 8);
             k = end;
         } else if (is_delim(t, '&')) {
-            AuSelComp *x = push_comp(c, SC_NESTING);
+            TComp *x = push_comp(c, SC_NESTING);
             x->u.list = (AuSelList *)p->cx->parent;
             c->has_amp = true;
             k++;
@@ -662,7 +615,7 @@ static bool parse_compound(SP *p, uint32_t *i, uint32_t b, Compound *c, uint32_t
                         return false;
                     *pseudo = AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
                 }
-                AuSelComp *x = push_comp(c, SC_PSEUDO);
+                TComp *x = push_comp(c, SC_PSEUDO);
                 x->op = (uint8_t)pc;
                 *spec = spec_add(*spec, 1 << 8);
                 k = q + 1;
@@ -700,42 +653,88 @@ static uint32_t compound_spec_nesting(const Compound *c)
 }
 
 /* Hashes for the ancestor filter (match.c computes element hashes the
- * same way). */
-static void compute_hashes(AuSelector *s)
+ * same way): fed the components in their final order, right to left. */
+typedef struct {
+    uint32_t h[CSS_SEL_HASHES];
+    uint32_t n;
+    bool ancestor;
+} HashFeed;
+
+static void hash_feed(HashFeed *f, int type, int op, AuAtom name)
 {
-    uint32_t n = 0;
-    bool ancestor = false;
-    for (uint32_t i = 0; i < s->ncomp && n < 4; i++) {
-        const AuSelComp *c = &s->comp[i];
-        if (c->type == SC_COMBINATOR) {
-            ancestor = c->op == COMB_DESCENDANT || c->op == COMB_CHILD;
-            continue;
-        }
-        if (!ancestor)
-            continue;
-        uint32_t h = 0;
-        if (c->type == SC_ID)
-            h = css_hash_atom(c->name, 1);
-        else if (c->type == SC_CLASS)
-            h = css_hash_atom(c->name, 2);
-        else if (c->type == SC_TAG)
-            h = css_hash_atom(c->name, 3);
-        if (h)
-            s->hashes[n++] = h;
+    if (type == SC_COMBINATOR) {
+        f->ancestor = op == COMB_DESCENDANT || op == COMB_CHILD;
+        return;
     }
-    if (n < 4)
-        s->hashes[n] = 0;
+    if (!f->ancestor || f->n >= CSS_SEL_HASHES)
+        return;
+    uint32_t h = 0;
+    if (type == SC_ID)
+        h = css_hash_atom(name, 1);
+    else if (type == SC_CLASS)
+        h = css_hash_atom(name, 2);
+    else if (type == SC_TAG)
+        h = css_hash_atom(name, 3);
+    if (h)
+        f->h[f->n++] = h;
 }
 
 static void free_compounds(Compound *cs, uint32_t n)
 {
     for (uint32_t i = 0; i < n; i++) {
         for (uint32_t k = 0; k < cs[i].n; k++)
-            if (cs[i].c[k].type != SC_NESTING)
-                comp_free(&cs[i].c[k]);
+            tcomp_free(&cs[i].c[k]);
         au_free(cs[i].c);
     }
     au_free(cs);
+}
+
+/* Writes the final form of a parsed component into the arena and takes
+ * its string. */
+static void emit_comp(CssArena *A, AuSelComp *dst, TComp *src)
+{
+    dst->type = src->type;
+    dst->op = src->op;
+    dst->flags = src->flags;
+    dst->ns = src->ns;
+    dst->u.ext = NULL;
+    bool is_list = src->type == SC_NESTING ||
+                   (src->type == SC_PSEUDO &&
+                    (src->op == PC_IS || src->op == PC_WHERE || src->op == PC_NOT || src->op == PC_HAS));
+    bool is_nth = src->type == SC_PSEUDO && src->op >= PC_NTH_CHILD && src->op <= PC_NTH_LAST_OF_TYPE;
+    bool has_string = tcomp_has_string(src) && (src->type != SC_ATTR || src->op != ATTR_EXISTS);
+    if (is_list) {
+        dst->u.list = src->u.list;
+        return;
+    }
+    if (!is_nth && !has_string && src->name == src->name_cs) {
+        dst->u.name = src->name;
+        tcomp_free(src);
+        return;
+    }
+    if (!is_nth && !has_string && src->type != SC_TAG && src->type != SC_ATTR) {
+        dst->u.name = src->name; /* name_cs is not set for these */
+        return;
+    }
+    CssSelExt *x = css_arena_alloc_ptr(A, sizeof *x);
+    memset(x, 0, sizeof *x);
+    x->name = src->name;
+    x->name_cs = src->name_cs;
+    if (is_nth) {
+        x->u.nth.a = src->u.nth.a;
+        x->u.nth.b = src->u.nth.b;
+        x->u.nth.of = src->u.nth.of;
+    } else if (has_string) {
+        char *v = css_arena_alloc_ptr(A, (size_t)src->u.value.len + 1);
+        if (src->u.value.len)
+            memcpy(v, src->u.value.s, src->u.value.len);
+        v[src->u.value.len] = 0;
+        x->u.value.s = v;
+        x->u.value.len = src->u.value.len;
+    }
+    tcomp_free(src);
+    dst->flags |= SCF_EXT;
+    dst->u.ext = x;
 }
 
 /* Parses one complex (or relative) selector in [a, b). */
@@ -816,7 +815,7 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
         memmove(cs + 1, cs, nc * sizeof(Compound));
         nc++;
         memset(&cs[0], 0, sizeof cs[0]);
-        AuSelComp *x = push_comp(&cs[0], SC_NESTING);
+        TComp *x = push_comp(&cs[0], SC_NESTING);
         x->u.list = (AuSelList *)cx->parent;
         cs[0].has_amp = true;
         cs[1].comb = lead ? lead : COMB_DESCENDANT;
@@ -845,20 +844,45 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
         free_compounds(cs, nc);
         return false;
     }
-    AuSelComp *out_c = au_alloc(total * sizeof(AuSelComp));
+    /* the filter hashes, from the components in their final order */
+    HashFeed hf;
+    memset(&hf, 0, sizeof hf);
+    uint32_t count = 0; /* the components written below: at most total */
+    for (uint32_t k = nc; k-- > 0;) {
+        Compound *c = &cs[k];
+        for (uint32_t m = 0; m < c->n; m++)
+            if (!(inline_amp && c->c[m].type == SC_NESTING)) {
+                hash_feed(&hf, c->c[m].type, c->c[m].op, c->c[m].name);
+                count++;
+            }
+        if (inline_amp && c->has_amp)
+            for (uint32_t m = 0; m < ps->ncomp; m++) {
+                hash_feed(&hf, ps->comp[m].type, ps->comp[m].op, css_comp_name(&ps->comp[m]));
+                count++;
+            }
+        if (k > 0) {
+            hash_feed(&hf, SC_COMBINATOR, c->comb, 0);
+            count++;
+        }
+    }
+    bool named = pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
+    AuSelComp *out_c =
+        css_arena_alloc_ptr(cx->arena, count * sizeof(AuSelComp) + (hf.n + (named ? 1 : 0)) * sizeof(uint32_t));
     uint32_t w = 0;
+    uint8_t flags = 0;
     for (uint32_t k = nc; k-- > 0;) {
         Compound *c = &cs[k];
         for (uint32_t m = 0; m < c->n; m++) {
             if (inline_amp && c->c[m].type == SC_NESTING)
                 continue;
-            out_c[w++] = c->c[m];
+            emit_comp(cx->arena, &out_c[w++], &c->c[m]);
         }
         if (inline_amp && c->has_amp) {
             /* the parent's rightmost compound joins this one, its other
-             * compounds follow to the left */
+             * compounds follow to the left; what hangs off them is in the
+             * same arena and is shared */
             for (uint32_t m = 0; m < ps->ncomp; m++)
-                comp_copy(&out_c[w++], &ps->comp[m]);
+                out_c[w++] = ps->comp[m];
         }
         if (k > 0) {
             AuSelComp *x = &out_c[w++];
@@ -876,17 +900,20 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
     out->pseudo = pseudo;
     out->rel_comb = cx->relative && !cx->nested_rule ? (lead ? lead : COMB_DESCENDANT) : 0;
     if (inline_amp)
-        out->spec = spec_add(spec, ps->spec);
+        out->spec = spec_add(spec, ps->spec) & 0xFFFFFF;
     else
-        out->spec = spec_add(spec, amp_spec);
-    if (pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT) {
-        out->pseudo = AU_CSS_PSEUDO_UNKNOWN_WEBKIT;
-        out->pseudo_name = p->pe_name;
-    }
-    uint8_t flags = 0;
+        out->spec = spec_add(spec, amp_spec) & 0xFFFFFF;
+    out->nhash = (uint8_t)hf.n;
+    uint32_t *tail = (uint32_t *)(out_c + w);
+    for (uint32_t k = 0; k < hf.n; k++)
+        tail[k] = hf.h[k];
+    if (named)
+        tail[hf.n] = p->pe_name;
     for (uint32_t k = 0; k < w; k++) {
         const AuSelComp *c = &out_c[k];
         if (c->type == SC_PSEUDO) {
+            if (c->op == PC_NEVER)
+                flags |= SELF_NEVER;
             if (c->op == PC_HAS)
                 flags |= SELF_HAS;
             if (c->op == PC_HOVER || c->op == PC_ACTIVE || c->op == PC_FOCUS || c->op == PC_FOCUS_VISIBLE ||
@@ -894,8 +921,8 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
                 flags |= SELF_STATE;
             if ((c->op == PC_IS || c->op == PC_WHERE || c->op == PC_NOT || c->op == PC_HAS) && c->u.list)
                 flags |= c->u.list->flags;
-            if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.nth.of)
-                flags |= c->u.nth.of->flags;
+            if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.ext->u.nth.of)
+                flags |= c->u.ext->u.nth.of->flags;
         } else if (c->type == SC_NESTING) {
             flags |= SELF_NESTED;
             if (c->u.list)
@@ -904,25 +931,27 @@ static bool parse_complex(SP *p, uint32_t a, uint32_t b, AuSelector *out)
             flags |= SELF_ATTR;
         }
     }
+    if (pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
+        flags |= SELF_NEVER;
     out->flags = flags;
-    compute_hashes(out);
     return true;
 }
 
 static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const CssSelParseCtx *cx)
 {
     SP p = {tk, cx, false, 0};
-    AuSelList *l = au_calloc(sizeof *l);
-    uint32_t cap = 0;
+    AuSelector *sel = NULL; /* collected here, then copied into the arena */
+    uint32_t n = 0, cap = 0;
+    uint8_t flags = 0;
     uint32_t start = a;
     for (uint32_t i = a; i <= b;) {
         if (i == b || tk->t[i].type == TK_COMMA) {
             AuSelector s;
-            if (parse_complex(&p, start, i, &s)) {
-                *CSS_PUSH(l->sel, l->n, cap) = s;
-                l->flags |= s.flags;
+            if (n < CSS_SELLIST_MAX && parse_complex(&p, start, i, &s)) {
+                *CSS_PUSH(sel, n, cap) = s;
+                flags |= s.flags & (uint8_t)~SELF_NEVER;
             } else if (!cx->forgiving) {
-                css_sellist_free(l);
+                au_free(sel);
                 return NULL;
             }
             if (i == b)
@@ -934,13 +963,16 @@ static AuSelList *parse_list(const CssTokens *tk, uint32_t a, uint32_t b, const 
         int ty = tk->t[i].type;
         i = (ty == TK_FUNCTION || ty == TK_LPAREN || ty == TK_LBRACKET || ty == TK_LBRACE) ? tk->t[i].len : i + 1;
     }
-    if (!l->n && !cx->forgiving) {
-        css_sellist_free(l);
+    if (!n && !cx->forgiving) {
+        au_free(sel);
         return NULL;
     }
-    /* most lists hold one selector; the array grew from room for four */
-    if (l->n && cap > l->n)
-        l->sel = au_realloc(l->sel, l->n * sizeof(AuSelector));
+    AuSelList *l = css_arena_alloc_ptr(cx->arena, sizeof *l + n * sizeof(AuSelector));
+    l->n = n;
+    l->flags = flags;
+    if (n)
+        memcpy(l->sel, sel, n * sizeof(AuSelector));
+    au_free(sel);
     return l;
 }
 
@@ -961,7 +993,7 @@ static void ser_comp(const AuSelComp *c, AuBuf *out)
             au_buf_puts(out, "*|");
         else if (c->flags & SCF_NS_NONE)
             au_buf_putc(out, '|');
-        css_serialize_ident(au_atom_str(c->name_cs), au_atom_len(c->name_cs), out);
+        css_serialize_ident(au_atom_str(css_comp_name_cs(c)), au_atom_len(css_comp_name_cs(c)), out);
         break;
     case SC_UNIVERSAL:
         if (c->flags & SCF_NS_ANY)
@@ -972,19 +1004,21 @@ static void ser_comp(const AuSelComp *c, AuBuf *out)
         break;
     case SC_ID:
         au_buf_putc(out, '#');
-        css_serialize_ident(au_atom_str(c->name), au_atom_len(c->name), out);
+        css_serialize_ident(au_atom_str(c->u.name), au_atom_len(c->u.name), out);
         break;
     case SC_CLASS:
         au_buf_putc(out, '.');
-        css_serialize_ident(au_atom_str(c->name), au_atom_len(c->name), out);
+        css_serialize_ident(au_atom_str(c->u.name), au_atom_len(c->u.name), out);
         break;
     case SC_ATTR: {
         au_buf_putc(out, '[');
-        css_serialize_ident(au_atom_str(c->name_cs), au_atom_len(c->name_cs), out);
+        css_serialize_ident(au_atom_str(css_comp_name_cs(c)), au_atom_len(css_comp_name_cs(c)), out);
         static const char *ops[] = {"", "", "=", "~=", "|=", "^=", "$=", "*="};
         if (c->op != ATTR_EXISTS) {
+            uint32_t vlen;
+            const char *v = css_comp_value(c, &vlen);
             au_buf_puts(out, ops[c->op]);
-            css_serialize_string(c->u.value.s, c->u.value.len, out);
+            css_serialize_string(v ? v : "", vlen, out);
             if (c->flags & SCF_CI)
                 au_buf_puts(out, " i");
             else if (c->flags & SCF_CS)
@@ -1012,7 +1046,7 @@ static void ser_comp(const AuSelComp *c, AuBuf *out)
         case PC_NTH_CHILD: case PC_NTH_LAST_CHILD: case PC_NTH_OF_TYPE: case PC_NTH_LAST_OF_TYPE: {
             static const char *n[] = {":nth-child(", ":nth-last-child(", ":nth-of-type(", ":nth-last-of-type("};
             au_buf_puts(out, n[c->op - PC_NTH_CHILD]);
-            int32_t A = c->u.nth.a, B = c->u.nth.b;
+            int32_t A = c->u.ext->u.nth.a, B = c->u.ext->u.nth.b;
             if (A == 0)
                 au_buf_printf(out, "%ld", (long)B);
             else {
@@ -1027,20 +1061,23 @@ static void ser_comp(const AuSelComp *c, AuBuf *out)
                 else if (B < 0)
                     au_buf_printf(out, "%ld", (long)B);
             }
-            if (c->u.nth.of) {
+            if (c->u.ext->u.nth.of) {
                 au_buf_puts(out, " of ");
-                ser_list(c->u.nth.of, out);
+                ser_list(c->u.ext->u.nth.of, out);
             }
             au_buf_putc(out, ')');
             return;
         }
-        case PC_LANG:
+        case PC_LANG: {
+            uint32_t vlen;
+            const char *v = css_comp_value(c, &vlen);
             au_buf_puts(out, ":lang(");
-            au_buf_append(out, c->u.value.s, c->u.value.len);
+            au_buf_append(out, v, vlen);
             au_buf_putc(out, ')');
             return;
+        }
         case PC_DIR:
-            au_buf_puts(out, c->name ? ":dir(rtl)" : ":dir(ltr)");
+            au_buf_puts(out, c->u.name ? ":dir(rtl)" : ":dir(ltr)");
             return;
         default:
             au_buf_putc(out, ':');
@@ -1084,9 +1121,9 @@ static void ser_selector(const AuSelector *s, AuBuf *out)
         for (uint32_t i = a; i < b; i++)
             ser_comp(&s->comp[i], out);
         if (k == 0 && s->pseudo) {
-            if (s->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT && s->pseudo_name) {
+            if (css_sel_pseudo_name(s)) {
                 au_buf_puts(out, "::");
-                au_buf_puts(out, au_atom_str(s->pseudo_name));
+                au_buf_puts(out, au_atom_str(css_sel_pseudo_name(s)));
             } else {
                 au_buf_puts(out, pseudo_el_name(s->pseudo));
             }
@@ -1112,6 +1149,7 @@ void css_sellist_serialize(const AuSelList *l, AuBuf *out) { ser_list(l, out); }
 /* ---- Public selector API ---- */
 
 struct AuCssSelectorList {
+    CssArena arena; /* holds l */
     AuSelList *l;
 };
 
@@ -1120,13 +1158,17 @@ AuCssSelectorList *au_css_selector_parse(const char *text, size_t len)
     au_css_init();
     CssTokens tk = {0};
     css_tokenize(text, len, &tk);
+    AuCssSelectorList *r = au_calloc(sizeof *r);
+    r->arena.chunk = len < 64 ? 176 : 496; /* most are a few components */
+    r->arena.chunk_max = 8176;
     CssSelParseCtx cx = {0};
-    AuSelList *l = css_selector_parse(&tk, 0, tk.n, &cx);
+    cx.arena = &r->arena;
+    r->l = css_selector_parse(&tk, 0, tk.n, &cx);
     css_tokens_free(&tk);
-    if (!l)
+    if (!r->l) {
+        au_css_selector_free(r);
         return NULL;
-    AuCssSelectorList *r = au_alloc(sizeof *r);
-    r->l = l;
+    }
     return r;
 }
 
@@ -1134,7 +1176,7 @@ void au_css_selector_free(AuCssSelectorList *l)
 {
     if (!l)
         return;
-    css_sellist_free(l->l);
+    css_arena_free(&l->arena);
     au_free(l);
 }
 

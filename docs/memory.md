@@ -74,8 +74,8 @@ bytecode, line tables). `--do js:aura:gc` runs the collector.
 - The limits and the out-of-memory console line are in
   [`javascript.md`](javascript.md), "Script memory limits".
 
-To see what parsed style sheets hold, run `css_bench --mem`
-([`css.md`](css.md)).
+To see what parsed style sheets hold, and where, run `css_bench --mem`,
+`--where` or `--page` ([`css.md`](css.md), "To measure").
 
 ## To measure the Mac application
 
@@ -115,6 +115,17 @@ On Mac OS 9, `au_alloc` takes small blocks from the pooled allocator
 (`src/core/heap.c`, turned on by `au_heap_enable` at the start of
 `main`): 32 KB slabs per size class, and one `NewPtr` only for a slab
 or a block over 2 KB.
+
+**What a block costs there.** Every block has a header of 8 bytes (the
+slab and the size asked for), and its size is rounded up to its class:
+steps of 8 bytes up to 128, then four classes per doubling up to 2 KB
+(a 130-byte block takes a 160-byte slot). A block over 2 KB is a
+`NewPtr` of its own, with the same 8-byte header and the Memory
+Manager's. A slab is returned only when its last block is freed, so
+many small long-lived blocks also pin slabs. Prefer one allocation for
+records that live and die together: a parsed style sheet keeps its
+rules and selectors in an arena for this reason
+([`css.md`](css.md), "How a parsed sheet is stored").
 
 Retro68's `malloc` is one `NewPtr` per block, and the Memory Manager
 took tens of seconds per layout with the 90,000 blocks of a large page.
@@ -186,7 +197,13 @@ pointers, so pointer-heavy rows are smaller there.
 | Host tool only: window surface | 3072, 3072 | 3072, 3072 | 3072, 3072 |
 | Total live | 4453, 4449 | 23942, 19389 | 40138, 37348 |
 
-With the system fonts, `/usr/bin/time -l` reports a peak footprint of:
+The style sheet work that followed (below, "Parsed style sheets")
+changed the GitHub column: CSS is 6036 KB, the sheets' text adds
+2499 KB to the document view's row until it is packed (about 600 KB
+then), and the total live is 19,126 KB before packing.
+
+With the system fonts, `/usr/bin/time -l` reports a peak footprint of
+(before the style sheet work):
 
 | Page | Now | Before |
 |---|---|---|
@@ -194,6 +211,40 @@ With the system fonts, `/usr/bin/time -l` reports a peak footprint of:
 | the Wikipedia article | 49.2 MB | 52.2 MB |
 | the GitHub page without its sheets | 38.7 MB | 42.1 MB |
 | the GitHub page with them | 78.2 MB | 80.2 MB |
+
+### Parsed style sheets
+
+`css_bench --where --style PAGE` after the work of 2026-11-15 on style
+sheets: what the sheets of a page hold once the page is styled and
+their texts are packed, on the host and, from the struct layouts, with
+32-bit pointers. Before that
+work the GitHub home page's sheets (28 linked, 20 distinct) were
+300,000 blocks: 17.6 MB on the host, and 13.9 MB with 32-bit pointers
+plus 2.4 MB of block headers in the pooled allocator. The Wikipedia
+article's were 10,200 blocks, 0.74 MB and 0.59 MB.
+
+| What | GitHub, host | 32-bit | Wikipedia, host | 32-bit |
+|---|---|---|---|---|
+| Rules | 655 KB | 328 KB | 44 KB | 22 KB |
+| Selector lists and selectors | 461 KB | 312 KB | 45 KB | 31 KB |
+| Components and filter hashes | 735 KB | 376 KB | 119 KB | 62 KB |
+| Attribute values, An+B, names that differ in case | 96 KB | 82 KB | 19 KB | 15 KB |
+| Declaration blocks of the rules that matched | 166 KB | 137 KB | 44 KB | 36 KB |
+| Media lists, layer names, condition text | 38 KB | 36 KB | 8 KB | 7 KB |
+| The arena that holds the rows above | 2240 KB in 194 chunks | 1323 KB | 308 KB in 27 chunks | 192 KB |
+| The sheets' text, packed (2559 KB and 220 KB as it arrived) | 596 KB | 596 KB | 48 KB | 48 KB |
+| Value trees | 20 KB | 16 KB | 14 KB | 12 KB |
+| Custom property and `var()` token lists | 473 KB | 396 KB | 48 KB | 41 KB |
+| Sheet records, keyframes, font faces | 29 KB | 21 KB | 0.4 KB | 0.2 KB |
+| Total | 3.4 MB in 4300 blocks | 2.4 MB | 0.41 MB in 480 blocks | 0.29 MB |
+
+Of GitHub's 16,400 rules, 14,200 blocks of declarations and 280
+`@media` blocks are still text after the page is styled. For the page
+as the browser loads it (`AURA_MEM=1`, host), `src/css` went from
+24.7 MB in 347,000 blocks to 6.0 MB in 19,600, plus the sheets' text
+(which the document view used to free: 2.5 MB until it is packed,
+0.6 MB after); the picture painted is the same, byte for byte. [`css.md`](css.md) has the figures step by step
+and the times.
 
 ### A live Wikipedia article's script heap
 
@@ -291,6 +342,24 @@ hold a live block; a second load returned the heap to within 85 KB, so
 pages are freed. The 3.5 MB of temporary memory is font data, which
 stays loaded.
 
+Stock base, 2026-11-15, a copy of the GitHub home page without its
+scripts and with its 20 style sheets (2.5 MB), opened from the disc;
+`main` at 1971abb against the style sheet work (Develop > Performance):
+
+| Reading | `main` | With the style sheet work |
+|---|---|---|
+| Free heap, about:home after launch | 61.29 MB | 61.29 MB |
+| Free heap, the page loaded | 33.64 MB | 48.94 MB |
+| Largest free block | 29.58 MB | 46.63 MB |
+| Free heap after 45 s of mouse moves (the texts packed) | 33.54 MB | 51.50 MB |
+| Page load | 3.05 s | 1.57 s |
+| Style | 683 ms in 4 passes | 349 ms in 3 passes |
+
+The page takes 27.7 MB of heap on `main` and 9.8 MB with the work.
+With the live page and its scripts the script heap (36 MB) decides the
+reading, and the heap takes temporary memory when it is full, so the
+two builds cannot be compared that way.
+
 ## Cold memory
 
 Memory held by things that are not looked at, or rarely read, is given
@@ -302,6 +371,7 @@ up or compressed. To change any of these, start at the place named.
 | A background tab | is unloaded when memory is short: its document is freed and loads again when the tab is selected | `browser.c`, "Unloaded tabs" ([`browser-chrome.md`](browser-chrome.md)) |
 | The page source (Page Source, View Source, Save Page As) | is deflated once the load is over and inflated when asked for | `page_doc.c`, "The page source" |
 | HTTP cache entries | hold the body as it arrived (gzip, deflate, brotli) and decode it when served | `cache.h`, `deliver_cached` in `http.c` ([`networking.md`](networking.md)) |
+| The text a parsed style sheet keeps | is deflated in 4 KB pieces once the page has loaded and five seconds have passed without a block parsed late; a piece is inflated when a block is parsed or the CSSOM reads the sheet | `au_docview_pack_sheets`, `css_sheet_text_at` ([`css.md`](css.md), "How a parsed sheet is stored") |
 
 Computed styles stay with a kept document: an article's are 0.7 MB and
 a full style pass is 12 ms on the host. Canvas bitmaps stay (they
@@ -371,6 +441,22 @@ inflate), `check-deflate.py` (the same streams decoded by Python's
 zlib) and `fuzz_deflate.c` ([`fuzzing.md`](fuzzing.md)).
 
 ## What was cut on 2026-11-15
+
+Style sheets ([`css.md`](css.md), "How a parsed sheet is stored"):
+
+- A document parsed a sheet once for every element that linked it
+  (11 MB of GitHub's 24.7 MB).
+- A rule was five to seven heap blocks, and its records were two to
+  three times the size they are now.
+- Every block of declarations was parsed with the sheet; about one
+  rule in eight of GitHub's sheets matches an element of its home page.
+- `@media` blocks for other devices, the contents of false `@supports`
+  rules and of `@container` rules were parsed and kept.
+- A sheet linked several times was indexed and matched each time.
+- A token list was three blocks, and a custom property that only names
+  another one held a copy of its value.
+
+Elsewhere:
 
 - An inline formatting context kept room for 64 fragments and 16 lines
   whatever it used (3.4 MB of the article).

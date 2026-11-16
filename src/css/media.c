@@ -31,6 +31,15 @@ struct AuCssMediaList {
     char *text;
 };
 
+/* For css_bench: what a list holds, here and on 32-bit PowerPC. */
+void css_media_mem(const AuCssMediaList *m, size_t *bytes, size_t *bytes32, size_t *blocks);
+void css_media_mem(const AuCssMediaList *m, size_t *bytes, size_t *bytes32, size_t *blocks)
+{
+    *bytes += sizeof *m + m->cap * sizeof(MqNode) + (m->text ? strlen(m->text) + 1 : 0);
+    *bytes32 += 16 + m->cap * sizeof(MqNode) + (m->text ? strlen(m->text) + 1 : 0);
+    *blocks += m->n == (const MqNode *)(m + 1) ? 0 : 1 + (m->n != NULL) + (m->text != NULL);
+}
+
 /* ---- Features ---- */
 
 enum { FT_RANGE_LEN, FT_RANGE_RATIO, FT_RANGE_RES, FT_RANGE_INT, FT_DISCRETE };
@@ -529,6 +538,27 @@ AuCssMediaList *css_media_parse_text(const char *text, size_t len)
     return m;
 }
 
+/* Moves a parsed list into an arena as one allocation; it is then freed
+ * with the arena and never with css_media_free. */
+AuCssMediaList *css_media_pack(CssArena *a, AuCssMediaList *m)
+{
+    size_t tn = m->text ? strlen(m->text) + 1 : 0;
+    AuCssMediaList *p = css_arena_alloc(a, sizeof *p + m->count * sizeof(MqNode) + tn);
+    p->n = (MqNode *)(p + 1);
+    p->count = p->cap = m->count;
+    if (m->count)
+        memcpy(p->n, m->n, m->count * sizeof(MqNode));
+    p->text = NULL;
+    if (tn) {
+        p->text = (char *)(p->n + m->count);
+        memcpy(p->text, m->text, tn);
+    }
+    css_media_free(m);
+    return p;
+}
+
+const char *css_media_text(const AuCssMediaList *m) { return m->text ? m->text : ""; }
+
 void css_media_free(AuCssMediaList *m)
 {
     if (!m)
@@ -792,12 +822,13 @@ static bool sup_in_parens(const CssTokens *tk, uint32_t *i, uint32_t b, int dept
         uint32_t s = k + 1, e = (end > s && tk->t[end - 1].type == TK_RPAREN) ? end - 1 : end;
         *i = end;
         if (t->kw == AU_K_selector) {
+            CssArena arena = {0};
+            arena.chunk = 512;
             CssSelParseCtx sc = {0};
+            sc.arena = &arena;
             AuSelList *l = css_selector_parse(tk, s, e, &sc);
-            if (!l)
-                return false;
-            css_sellist_free(l);
-            return true;
+            css_arena_free(&arena);
+            return l != NULL;
         }
         if (au_ieq(css_tok_str(tk, t), css_tok_len(t), "font-format", 11)) {
             /* the formats @font-face src accepts for the font loader */

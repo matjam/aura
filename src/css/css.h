@@ -527,7 +527,31 @@ typedef struct AuCssMediaList AuCssMediaList;
  * invalid parts are dropped as CSS requires. */
 AuCssSheet *au_css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                                const char *media);
+/* The same, taking css, a block from au_alloc: the sheet keeps it instead
+ * of a copy and frees it. */
+AuCssSheet *au_css_sheet_parse_take(char *css, size_t len, AuCssOrigin origin, const char *base_url,
+                                    const char *media);
+/* The sheet keeps the text it was parsed from: blocks of declarations
+ * are parsed from it when a rule first matches. au_css_sheet_text_get
+ * appends it to out (false: the sheet has none); au_css_sheet_text_is
+ * says whether it is exactly these bytes. au_css_sheet_pack_text deflates
+ * it in place (call it once the document has loaded: reading a block
+ * then inflates a piece of the text); it returns true if it did, false
+ * if the text is small, already packed or does not compress. */
+bool au_css_sheet_text_get(const AuCssSheet *s, AuBuf *out);
+bool au_css_sheet_text_is(const AuCssSheet *s, const char *text, size_t len);
+bool au_css_sheet_pack_text(AuCssSheet *s);
+/* How many blocks have been parsed late from sheet text, over all sheets:
+ * while it grows, a document is still finding its rules, and packing its
+ * sheets' texts would make each of those parses inflate a piece. */
+uint32_t au_css_late_parse_count(void);
+/* About what the sheet holds: its text and the chunks of its rules. */
+size_t au_css_sheet_memory(const AuCssSheet *s);
+/* A sheet is freed when its last owner frees it; au_css_sheet_retain adds
+ * an owner (a document that links one sheet several times parses it
+ * once). */
 void au_css_sheet_free(AuCssSheet *s);
+AuCssSheet *au_css_sheet_retain(AuCssSheet *s);
 size_t au_css_sheet_rule_count(const AuCssSheet *s); /* style rules, nested ones included */
 
 /* @import rules, in order. To load one, fetch url (relative to the

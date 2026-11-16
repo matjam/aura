@@ -31,8 +31,14 @@ typedef struct {
     uint32_t count, cap;
 } LayerTree;
 
+/* A rule entry holds its layer in 16 bits: past MAX_LAYERS layers of an
+ * origin, a new layer is its parent. */
+#define MAX_LAYERS 65535u
+
 static int32_t layer_new(LayerTree *t, int32_t parent, AuAtom name)
 {
+    if (t->count >= MAX_LAYERS && parent >= 0)
+        return parent;
     LayerNode *n = CSS_PUSH(t->n, t->count, t->cap);
     memset(n, 0, sizeof *n);
     n->name = name;
@@ -96,15 +102,27 @@ static void layer_rank(LayerTree *t)
 
 /* ---- Rule index ---- */
 
+bool css_index_skip_repeats = true;
+
+/* One selector of one rule: 24 bytes with 32-bit pointers. hash is the
+ * selector's first ancestor filter hash: match_bucket rejects most
+ * entries on it without reading the selector. */
 typedef struct RuleEntry {
     const AuSelector *sel;
-    const AuCssDeclBlock *decls;
-    uint32_t order;
-    uint32_t spec;
-    int32_t layer; /* node in the origin's tree, then its rank */
-    uint8_t origin;
-    uint8_t pseudo;
+    /* The rule's declarations (an AuCssDeclBlock *), or, with the low bit
+     * set, the rule itself (a CssRule *) whose block is still text:
+     * entry_decls parses it and keeps the block here. */
+    uintptr_t body;
+    uint32_t hash;         /* 0: the selector names no ancestor */
+    unsigned order : 24;   /* source order, clamped as make_key clamps it */
+    unsigned pseudo : 8;   /* AuCssPseudo of the selector */
+    unsigned spec : 24;
+    unsigned origin : 8;
+    uint16_t layer;        /* node in the origin's tree, then its rank */
+    uint16_t sheet;        /* index in AuCssResolver.walked */
 } RuleEntry;
+#define MAX_WALKED 65535u /* sheets (imports and the user agent's included) one index holds */
+CSS_SIZE_ON_32(RuleEntry, 24);
 
 typedef struct {
     AuAtom *keys;
@@ -176,6 +194,8 @@ struct AuCssResolver {
 
     RuleEntry *entries;
     uint32_t nentries, entries_cap;
+    const AuCssSheet **walked; /* the sheets the index was built from, in order */
+    uint32_t nwalked, walked_cap;
     uint32_t *sorted; /* entry indices grouped by key */
     AtomMap maps[KEY_UNIVERSAL]; /* by id, class, tag, attribute name */
     uint32_t uni_start, uni_count;
@@ -290,18 +310,18 @@ static IndexKey compound_key_at(const AuSelector *s, uint32_t from, bool quirks)
         const AuSelComp *c = &s->comp[i];
         if (c->type == SC_ID) {
             k.kind = KEY_ID;
-            k.atom = quirks ? css_atom_lower(c->name) : c->name;
+            k.atom = quirks ? css_atom_lower(c->u.name) : c->u.name;
             return k;
         }
         if (c->type == SC_CLASS && k.kind > KEY_CLASS) {
             k.kind = KEY_CLASS;
-            k.atom = quirks ? css_atom_lower(c->name) : c->name;
+            k.atom = quirks ? css_atom_lower(c->u.name) : c->u.name;
         } else if (c->type == SC_TAG && k.kind > KEY_TAG) {
             k.kind = KEY_TAG;
-            k.atom = c->name;
+            k.atom = css_comp_name(c);
         } else if (c->type == SC_ATTR && k.kind > KEY_ATTR) {
             k.kind = KEY_ATTR;
-            k.atom = c->name;
+            k.atom = css_comp_name(c);
         }
     }
     return k;
@@ -546,11 +566,11 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
             if (c->type == SC_NESTING) {
                 nested = c->u.list;
             } else if (c->type == SC_CLASS) {
-                dep_add(cx, F_CLASS, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+                dep_add(cx, F_CLASS, quirks ? css_atom_lower(c->u.name) : c->u.name, rel, key);
             } else if (c->type == SC_ID) {
-                dep_add(cx, F_ID, quirks ? css_atom_lower(c->name) : c->name, rel, key);
+                dep_add(cx, F_ID, quirks ? css_atom_lower(c->u.name) : c->u.name, rel, key);
             } else if (c->type == SC_ATTR) {
-                dep_add(cx, F_ATTR, c->name, rel, key);
+                dep_add(cx, F_ATTR, css_comp_name(c), rel, key);
             } else if (c->type == SC_PSEUDO) {
                 uint32_t st = pseudo_state(c->op);
                 if (st) {
@@ -568,11 +588,11 @@ static void dep_selector(DepCtx *cx, const AuSelector *s, uint8_t rel, IndexKey 
                         IndexKey none = {KEY_UNIVERSAL, 0, 0};
                         dep_selector(&h, a, cx->in_has ? REL_ANY : REL_SELF, none, depth + 1);
                     }
-                } else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.nth.of) {
+                } else if (c->op >= PC_NTH_CHILD && c->op <= PC_NTH_LAST_OF_TYPE && c->u.ext->u.nth.of) {
                     /* a sibling's state changes the index of the others */
                     IndexKey none = {KEY_UNIVERSAL, 0, 0};
-                    for (uint32_t m = 0; m < c->u.nth.of->n; m++)
-                        dep_selector(cx, &c->u.nth.of->sel[m], REL_ANY, none, depth + 1);
+                    for (uint32_t m = 0; m < c->u.ext->u.nth.of->n; m++)
+                        dep_selector(cx, &c->u.ext->u.nth.of->sel[m], REL_ANY, none, depth + 1);
                 }
             }
             if (nested) {
@@ -646,23 +666,30 @@ static void deps_build(AuCssResolver *r)
 typedef struct {
     const CssRule *rule;
     const AuCssSheet *sheet;
+    uint32_t sheet_index;
     int32_t layer;
 } Frame;
 
-static void add_entries(AuCssResolver *r, const AuSelList *sel, const AuCssDeclBlock *decls, uint8_t origin,
+static void add_entries(AuCssResolver *r, const AuSelList *sel, const CssRule *rule, uint32_t sheet_index,
                         int32_t layer, uint32_t *order, bool nested_decls)
 {
-    if (!sel || !decls->n)
+    uint8_t origin = r->walked[sheet_index]->origin;
+    /* a block that is still text has at least one declaration to try */
+    if (!sel || (!(rule->flags & RF_LAZY) && !rule->b.decls->n))
         return;
     uint32_t spec_override = nested_decls ? css_sellist_max_spec(sel) : 0;
     uint32_t ord = (*order)++;
     for (uint32_t i = 0; i < sel->n; i++) {
+        if (sel->sel[i].flags & SELF_NEVER)
+            continue; /* cannot match: not indexed, and its block is never parsed */
         RuleEntry *e = CSS_PUSH(r->entries, r->nentries, r->entries_cap);
         e->sel = &sel->sel[i];
-        e->decls = decls;
-        e->order = ord;
+        e->body = rule->flags & RF_LAZY ? (uintptr_t)rule | 1 : (uintptr_t)rule->b.decls;
+        e->hash = sel->sel[i].nhash ? css_sel_hashes(&sel->sel[i])[0] : 0;
+        e->sheet = (uint16_t)sheet_index;
+        e->order = ord > 0xFFFFFF ? 0xFFFFFF : ord;
         e->spec = nested_decls ? spec_override : sel->sel[i].spec;
-        e->layer = layer;
+        e->layer = (uint16_t)layer;
         e->origin = origin;
         e->pseudo = sel->sel[i].pseudo;
         if (sel->sel[i].flags & SELF_HAS)
@@ -686,13 +713,20 @@ static bool media_dep(AuCssResolver *r, const AuCssMediaList *m)
     return ok;
 }
 
+/* Adds a sheet's rules to the index. With layers_only, only names its
+ * layers in the order a full walk would (an occurrence of a sheet that
+ * is given again later: index_build). */
 static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer, uint32_t *order, Frame **stack,
-                       uint32_t *sn, uint32_t *scap)
+                       uint32_t *sn, uint32_t *scap, bool layers_only)
 {
     if (sheet->media && !media_dep(r, sheet->media))
         return;
+    if (r->nwalked >= MAX_WALKED)
+        return;
+    uint32_t sheet_index = r->nwalked;
+    *CSS_PUSH(r->walked, r->nwalked, r->walked_cap) = sheet;
     LayerTree *lt = &r->layers[sheet->origin];
-    for (uint32_t i = 0; i < sheet->nprops; i++)
+    for (uint32_t i = 0; i < sheet->nprops && !layers_only; i++)
         *CSS_PUSH(r->props, r->nprops, r->props_cap) = sheet->props[i];
     /* frames are processed in order: push the first rule */
     uint32_t base = *sn;
@@ -700,6 +734,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
         Frame *f = CSS_PUSH(*stack, *sn, *scap);
         f->rule = sheet->rules;
         f->sheet = sheet;
+        f->sheet_index = sheet_index;
         f->layer = layer;
     }
     while (*sn > base) {
@@ -713,50 +748,55 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
             Frame *nf = CSS_PUSH(*stack, *sn, *scap);
             nf->rule = ru->next;
             nf->sheet = f.sheet;
+            nf->sheet_index = f.sheet_index;
             nf->layer = f.layer;
         }
         int32_t child_layer = f.layer;
         bool descend = false;
         switch (ru->type) {
         case RULE_STYLE:
-            add_entries(r, ru->sel, &ru->decls, f.sheet->origin, f.layer, order, false);
+            if (!layers_only)
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, false);
             descend = true;
             break;
         case RULE_NESTED_DECLS:
-            add_entries(r, ru->sel, &ru->decls, f.sheet->origin, f.layer, order, true);
+            if (!layers_only)
+                add_entries(r, ru->u.sel, ru, f.sheet_index, f.layer, order, true);
             break;
         case RULE_MEDIA:
-            descend = media_dep(r, ru->media);
+            descend = media_dep(r, ru->u.media);
             break;
         case RULE_SUPPORTS:
-            descend = ru->ok;
+            descend = (ru->flags & RF_OK) != 0;
             break;
         case RULE_LAYER_BLOCK:
-            child_layer = layer_path(lt, f.layer, &ru->layers[0]);
+            child_layer = layer_path(lt, f.layer, &ru->u.layers[0]);
             descend = true;
             break;
         case RULE_LAYER_STMT:
-            for (uint32_t k = 0; k < ru->nlayers; k++)
-                layer_path(lt, f.layer, &ru->layers[k]);
+            for (uint32_t k = 0; k < ru->b.nlayers; k++)
+                layer_path(lt, f.layer, &ru->u.layers[k]);
             break;
         case RULE_IMPORT: {
-            const AuCssImport *im = &f.sheet->imports[ru->index];
-            if (!im->sheet || !ru->ok || (ru->media && !media_dep(r, ru->media)))
+            const AuCssImport *im = &f.sheet->imports[ru->b.index];
+            if (!im->sheet || !(ru->flags & RF_OK) || (ru->u.media && !media_dep(r, ru->u.media)))
                 break;
             int32_t il = f.layer;
-            if (ru->nlayers)
-                il = layer_path(lt, f.layer, &ru->layers[0]);
+            if (ru->flags & RF_LAYER)
+                il = layer_path(lt, f.layer, &f.sheet->import_layers[ru->b.index]);
             /* the imported sheet's rules come here in order: walk it now */
-            walk_sheet(r, im->sheet, il, order, stack, sn, scap);
+            walk_sheet(r, im->sheet, il, order, stack, sn, scap, layers_only);
             break;
         }
         default:
             break; /* @container, @scope, @starting-style: not applied */
         }
-        if (descend && ru->children) {
+        const CssRule *kids = descend ? css_rule_children(f.sheet, ru) : NULL;
+        if (kids) {
             Frame *nf = CSS_PUSH(*stack, *sn, *scap);
-            nf->rule = ru->children;
+            nf->rule = kids;
             nf->sheet = f.sheet;
+            nf->sheet_index = f.sheet_index;
             nf->layer = child_layer;
         }
     }
@@ -765,6 +805,7 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
 static void index_clear(AuCssResolver *r)
 {
     r->nentries = 0;
+    r->nwalked = 0;
     au_free(r->sorted);
     r->sorted = NULL;
     for (int i = 0; i < KEY_UNIVERSAL; i++)
@@ -794,11 +835,25 @@ static void index_build(AuCssResolver *r, bool quirks)
     uint32_t order = 1;
     Frame *stack = NULL;
     uint32_t sn = 0, scap = 0;
-    walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap);
+    walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap, false);
     if (quirks)
-        walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap);
-    for (uint32_t i = 0; i < r->nsheets; i++)
-        walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap);
+        walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap, false);
+    for (uint32_t i = 0; i < r->nsheets; i++) {
+        /* A sheet given again later (a page that links one sheet several
+         * times): every declaration of this occurrence loses to the same
+         * declaration of the later one, which has the same origin, layer
+         * and specificity and comes later, so only the last occurrence is
+         * indexed. An earlier occurrence still names its layers, whose
+         * place is set by where they are first named. An anonymous layer
+         * is a new layer at each occurrence, so a sheet with one is
+         * indexed every time (repeat_matters). */
+        bool again = false;
+        if (css_index_skip_repeats && !r->sheets[i]->repeat_matters)
+            for (uint32_t k = i + 1; k < r->nsheets && !again; k++)
+                again = r->sheets[k] == r->sheets[i];
+        if (!again || r->sheets[i]->has_layers)
+            walk_sheet(r, r->sheets[i], 0, &order, &stack, &sn, &scap, again);
+    }
     au_free(stack);
     if (r->nentries && r->nentries < r->entries_cap) {
         /* Kept until the sheets change: trim to the length. */
@@ -852,9 +907,10 @@ AuCssResolver *au_css_resolver_new(void)
     au_css_device_default(&r->dev);
     au_css_font_prefs_default(&r->fprefs);
     if (!ua_users++) {
-        ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false);
+        ua_shared = css_sheet_parse(css_ua_sheet, strlen(css_ua_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, false, CSS_TEXT_BORROW);
         ua_quirks_shared =
-            css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true);
+            css_sheet_parse(css_ua_quirks_sheet, strlen(css_ua_quirks_sheet), AU_CSS_ORIGIN_UA, NULL, NULL, true,
+                            CSS_TEXT_BORROW);
     }
     r->ua = ua_shared;
     r->ua_quirks = ua_quirks_shared;
@@ -899,6 +955,7 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->pending);
     au_free(r->deps);
     au_free(r->entries);
+    au_free(r->walked);
     au_free(r->media_deps);
     for (int i = 0; i < 3; i++)
         au_free(r->layers[i].n);
@@ -1086,6 +1143,15 @@ static void push_matched(AuCssResolver *r, const AuCssDeclBlock *b, uint64_t kn,
     m->key_i = ki;
 }
 
+/* The declarations of an entry's rule, parsed now if they are still
+ * text. */
+static const AuCssDeclBlock *entry_decls(AuCssResolver *r, RuleEntry *e)
+{
+    if (e->body & 1)
+        e->body = (uintptr_t)css_rule_decls(r->walked[e->sheet], (const CssRule *)(e->body & ~(uintptr_t)1));
+    return (const AuCssDeclBlock *)e->body;
+}
+
 static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const AuElement *el, const CssMatchCtx *mc,
                          uint8_t want, uint16_t *pseudo_bits)
 {
@@ -1102,6 +1168,8 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
                             e->pseudo == AU_CSS_PSEUDO_MARKER;
             if (!attached && (*pseudo_bits & (1u << e->pseudo)))
                 continue; /* already known to match */
+            if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
+                continue;
             if (css_selector_match(e->sel, el, mc)) {
                 *pseudo_bits |= (uint16_t)(1u << e->pseudo);
                 if (attached)
@@ -1109,6 +1177,8 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
             }
             continue;
         }
+        if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
+            continue; /* an ancestor the selector names is not there */
         if (!css_selector_match(e->sel, el, mc))
             continue;
         *CSS_PUSH(r->matched_entries, r->nme, r->me_cap) = ei;
@@ -1169,11 +1239,11 @@ static void collect(AuCssResolver *r, const AuElement *el, const CssMatchCtx *mc
     }
     r->nmatched = 0;
     for (uint32_t i = 0; i < r->nme; i++) {
-        const RuleEntry *e = &r->entries[r->matched_entries[i]];
+        RuleEntry *e = &r->entries[r->matched_entries[i]];
         int lvl_n = e->origin;
         int lvl_i = e->origin == AU_CSS_ORIGIN_AUTHOR ? 4 : e->origin == AU_CSS_ORIGIN_USER ? 5 : 6;
         uint32_t layer = (uint32_t)e->layer;
-        push_matched(r, e->decls, make_key(lvl_n, 0, layer, e->spec, e->order),
+        push_matched(r, entry_decls(r, e), make_key(lvl_n, 0, layer, e->spec, e->order),
                      make_key(lvl_i, 0, 4095 - layer, e->spec, e->order));
     }
 }
@@ -1290,27 +1360,53 @@ static bool substitute(VarCtx *vc, const CssTokens *src, uint32_t a, uint32_t b,
 
 static CssTokList *substitute_list(VarCtx *vc, const CssTokList *in)
 {
-    CssTokList *l = au_calloc(sizeof *l);
-    l->refs = 1;
-    if (!substitute(vc, &in->tk, 0, in->tk.n, &l->tk)) {
-        css_toklist_release(l);
+    /* A value that is one var() without a fallback is the value it
+     * names: share that list instead of copying it (themes define
+     * hundreds of such aliases). The depth is counted as substitute
+     * counts it. */
+    {
+        const CssToken *t = in->tk.t;
+        uint32_t s = 0, e = in->tk.n;
+        while (s < e && t[s].type == TK_WS)
+            s++;
+        while (e > s && t[e - 1].type == TK_WS)
+            e--;
+        if (s < e && t[s].type == TK_FUNCTION && t[s].kw == AU_K_var && t[s].len == e &&
+            t[e - 1].type == TK_RPAREN) {
+            uint32_t k = s + 1, ie = e - 1;
+            while (k < ie && t[k].type == TK_WS)
+                k++;
+            uint32_t q = k + 1;
+            while (q < ie && t[q].type == TK_WS)
+                q++;
+            if (k < ie && q == ie && t[k].type == TK_IDENT &&
+                css_ident_is_custom_prop(css_tok_str(&in->tk, &t[k]), t[k].len)) {
+                if (++vc->depth > 64) {
+                    vc->depth--;
+                    return NULL;
+                }
+                CssTokList *val = resolve_custom(vc, au_atom(css_tok_str(&in->tk, &t[k]), t[k].len));
+                vc->depth--;
+                return val && !val->has_var ? css_toklist_retain(val) : NULL;
+            }
+        }
+    }
+    CssTokens out = {0};
+    if (!substitute(vc, &in->tk, 0, in->tk.n, &out)) {
+        css_tokens_free(&out);
         return NULL;
     }
-    css_tokens_rematch(&l->tk);
+    css_tokens_rematch(&out);
     /* trim whitespace */
-    uint32_t s = 0, e = l->tk.n;
-    while (s < e && l->tk.t[s].type == TK_WS)
+    uint32_t s = 0, e = out.n;
+    while (s < e && out.t[s].type == TK_WS)
         s++;
-    while (e > s && l->tk.t[e - 1].type == TK_WS)
+    while (e > s && out.t[e - 1].type == TK_WS)
         e--;
-    if (s || e != l->tk.n) {
-        CssTokList *t = css_toklist_new(&l->tk, s, e);
-        css_toklist_release(l);
-        l = t;
-    }
-    for (uint32_t i = 0; i < l->tk.n; i++)
-        if (l->tk.t[i].type == TK_FUNCTION && l->tk.t[i].kw == AU_K_attr)
-            l->has_attr = 1;
+    CssTokList *l = css_toklist_new(&out, s, e);
+    css_tokens_free(&out);
+    /* css_toklist_new looks for var() and attr(); a substituted value has
+     * no var() left to substitute */
     l->has_var = 0;
     return l;
 }

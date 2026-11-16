@@ -42,22 +42,29 @@ struct CssArenaChunk {
 };
 #define ARENA_HDR ((sizeof(CssArenaChunk) + 15) & ~(size_t)15)
 
-void *css_arena_alloc(CssArena *a, size_t n)
+static void *arena_alloc(CssArena *a, size_t n, size_t align)
 {
-    n = (n + 7) & ~(size_t)7;
-    if (!a->head || a->used + n > a->cap) {
-        size_t cap = n > 8192 ? n : 8192;
+    n = (n + align - 1) & ~(align - 1);
+    size_t used = (a->used + align - 1) & ~(align - 1);
+    if (!a->head || used + n > a->cap) {
+        size_t chunk = a->chunk ? a->chunk : 8192;
+        size_t cap = n > chunk ? n : chunk;
+        if (a->chunk_max && a->chunk < a->chunk_max)
+            a->chunk = a->chunk * 2 > a->chunk_max ? a->chunk_max : a->chunk * 2;
         CssArenaChunk *c = au_alloc(ARENA_HDR + cap);
         c->cap = cap;
         c->next = a->head;
         a->head = c;
-        a->used = 0;
         a->cap = cap;
+        used = 0;
     }
-    void *p = (char *)a->head + ARENA_HDR + a->used;
-    a->used += n;
+    void *p = (char *)a->head + ARENA_HDR + used;
+    a->used = used + n;
     return p;
 }
+
+void *(css_arena_alloc)(CssArena *a, size_t n) { return arena_alloc(a, n, 8); }
+void *(css_arena_alloc_ptr)(CssArena *a, size_t n) { return arena_alloc(a, n, sizeof(void *)); }
 
 char *css_arena_strndup(CssArena *a, const char *s, size_t n)
 {
@@ -84,6 +91,17 @@ void css_arena_reset(CssArena *a)
     a->used = 0;
 }
 
+void css_arena_release(CssArena *a, CssArenaMark m)
+{
+    while (a->head != m.head) {
+        CssArenaChunk *n = a->head->next;
+        au_free(a->head);
+        a->head = n;
+    }
+    a->used = m.used;
+    a->cap = a->head ? a->head->cap : 0;
+}
+
 void css_arena_free(CssArena *a)
 {
     CssArenaChunk *c = a->head;
@@ -94,6 +112,18 @@ void css_arena_free(CssArena *a)
     }
     a->head = NULL;
     a->used = a->cap = 0;
+}
+
+/* For css_bench: the chunks of an arena, their bytes with headers, and
+ * the bytes handed out. */
+void css_arena_mem(const CssArena *a, size_t *bytes, size_t *used, size_t *chunks)
+{
+    *bytes = *used = *chunks = 0;
+    for (const CssArenaChunk *c = a->head; c; c = c->next) {
+        *bytes += ARENA_HDR + c->cap;
+        *used += c == a->head ? a->used : c->cap;
+        (*chunks)++;
+    }
 }
 
 /* ---- Units ---- */
@@ -255,6 +285,15 @@ static CssToken *push_tok(Lexer *L, int type)
     memset(t, 0, sizeof *t);
     t->type = (uint8_t)type;
     return t;
+}
+
+/* A brace remembers its place in the source (css_tok_src) in the two
+ * fields braces do not use; offsets past 4 GB wrap, and css_sheet_parse
+ * does not use them for such a sheet. */
+static void tok_set_src(CssToken *t, size_t off)
+{
+    t->unit = (uint16_t)(off >> 16);
+    t->name_len = (uint16_t)off;
 }
 
 static void begin_str(Lexer *L, CssToken *t) { t->str = (uint32_t)L->out->pool.len; }
@@ -610,11 +649,11 @@ void css_tokenize(const char *src, size_t len, CssTokens *out)
             continue;
         case '{':
             L.i++;
-            push_tok(&L, TK_LBRACE);
+            tok_set_src(push_tok(&L, TK_LBRACE), L.i); /* where its contents start */
             continue;
         case '}':
+            tok_set_src(push_tok(&L, TK_RBRACE), L.i); /* where the contents end */
             L.i++;
-            push_tok(&L, TK_RBRACE);
             continue;
         case ',':
             L.i++;
@@ -720,6 +759,25 @@ void css_tokens_free(CssTokens *tk)
 
 /* ---- Token lists ---- */
 
+/* The tokens whose string css_tokens_append copies. */
+static bool tok_has_string(int type)
+{
+    switch (type) {
+    case TK_IDENT:
+    case TK_FUNCTION:
+    case TK_AT:
+    case TK_HASH:
+    case TK_STRING:
+    case TK_BAD_STRING:
+    case TK_URL:
+    case TK_BAD_URL:
+    case TK_DIMENSION:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_t b)
 {
     if (!dst->pool.data)
@@ -727,28 +785,18 @@ void css_tokens_append(CssTokens *dst, const CssTokens *src, uint32_t a, uint32_
     uint32_t base = dst->n;
     for (uint32_t i = a; i < b; i++) {
         CssToken t = src->t[i];
-        switch (t.type) {
-        case TK_IDENT:
-        case TK_FUNCTION:
-        case TK_AT:
-        case TK_HASH:
-        case TK_STRING:
-        case TK_BAD_STRING:
-        case TK_URL:
-        case TK_BAD_URL:
-        case TK_DIMENSION: {
+        if (tok_has_string(t.type)) {
             uint32_t off = (uint32_t)dst->pool.len;
             au_buf_append(&dst->pool, src->pool.data + t.str, css_tok_len(&t));
             au_buf_putc(&dst->pool, 0);
             t.str = off;
-            break;
-        }
-        default:
+        } else {
             t.str = 0;
-            break;
         }
         if (t.type != TK_FUNCTION)
             t.name_len = 0; /* a number's source text is not copied */
+        if (t.type == TK_LBRACE || t.type == TK_RBRACE)
+            t.unit = 0; /* nor a brace's place in the source */
         if (close_of(t.type)) {
             uint32_t end = t.len > b ? b : t.len;
             t.len = end - a + base;
@@ -802,7 +850,9 @@ static bool toklist_equal(const CssTokList *x, const CssTokList *y)
 
 /* The list equal to l that the table already has (l is then freed), or l
  * after adding it. */
-static CssTokList *toklist_intern(CssTokList *l)
+/* The slot of the table's list equal to l, or the empty slot where l
+ * belongs. */
+static uint32_t toklist_slot(const CssTokList *l)
 {
     if (tl_intern.count * 2 >= tl_intern.size) {
         uint32_t size = tl_intern.size ? tl_intern.size * 2 : 256;
@@ -821,20 +871,32 @@ static CssTokList *toklist_intern(CssTokList *l)
         tl_intern.size = size;
     }
     uint32_t h = toklist_hash(l) & (tl_intern.size - 1);
-    for (; tl_intern.slots[h]; h = (h + 1) & (tl_intern.size - 1))
-        if (toklist_equal(tl_intern.slots[h], l)) {
-            css_toklist_release(l);
-            return css_toklist_retain(tl_intern.slots[h]);
-        }
-    tl_intern.slots[h] = css_toklist_retain(l);
-    tl_intern.count++;
-    return l;
+    while (tl_intern.slots[h] && !toklist_equal(tl_intern.slots[h], l))
+        h = (h + 1) & (tl_intern.size - 1);
+    return h;
 }
 
+/* A list is one allocation: the header, its tokens, then their strings.
+ * tk points into it and is never grown. The sizes are worked out first,
+ * so the tokens are copied once, into their place. */
 CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
 {
-    CssTokList *l = au_calloc(sizeof *l);
+    if (b < a)
+        b = a;
+    size_t pool = 1; /* offset 0 is the empty string */
+    for (uint32_t i = a; i < b; i++)
+        if (tok_has_string(src->t[i].type))
+            pool += (size_t)css_tok_len(&src->t[i]) + 1;
+    size_t tb = (size_t)(b - a) * sizeof(CssToken);
+    CssTokList *l = au_alloc(sizeof *l + tb + pool + 1);
+    memset(l, 0, sizeof *l);
     l->refs = 1;
+    l->tk.t = (CssToken *)(l + 1);
+    l->tk.cap = b - a;
+    l->tk.pool.data = (char *)(l + 1) + tb;
+    l->tk.pool.cap = pool + 1; /* au_buf_reserve keeps a byte for a NUL */
+    l->tk.pool.data[0] = 0;
+    l->tk.pool.len = 1;
     css_tokens_append(&l->tk, src, a, b);
     for (uint32_t i = 0; i < l->tk.n; i++) {
         const CssToken *t = &l->tk.t[i];
@@ -844,20 +906,24 @@ CssTokList *css_toklist_new(const CssTokens *src, uint32_t a, uint32_t b)
             l->has_attr = 1;
     }
     if (tl_intern.depth > 0) {
-        CssTokList *shared = toklist_intern(l);
-        if (shared != l)
-            return shared;
-    }
-    /* the arrays grew by doubling: keep what is used */
-    if (l->tk.cap > l->tk.n && l->tk.n) {
-        l->tk.t = au_realloc(l->tk.t, (size_t)l->tk.n * sizeof(CssToken));
-        l->tk.cap = l->tk.n;
-    }
-    if (l->tk.pool.cap > l->tk.pool.len && l->tk.pool.len) {
-        l->tk.pool.data = au_realloc(l->tk.pool.data, l->tk.pool.len);
-        l->tk.pool.cap = l->tk.pool.len;
+        uint32_t h = toklist_slot(l);
+        if (tl_intern.slots[h]) {
+            au_free(l);
+            return css_toklist_retain(tl_intern.slots[h]);
+        }
+        tl_intern.slots[h] = css_toklist_retain(l);
+        tl_intern.count++;
     }
     return l;
+}
+
+/* For css_bench: what a list takes here and with 32-bit pointers. */
+void css_toklist_mem(const CssTokList *l, size_t *bytes, size_t *bytes32, size_t *blocks)
+{
+    size_t body = (size_t)l->tk.n * sizeof(CssToken) + l->tk.pool.cap;
+    *bytes = sizeof *l + body;
+    *bytes32 = 32 + body;
+    *blocks = 1;
 }
 
 CssTokList *css_toklist_retain(CssTokList *l)
@@ -871,8 +937,7 @@ void css_toklist_release(CssTokList *l)
 {
     if (!l || --l->refs)
         return;
-    css_tokens_free(&l->tk);
-    au_free(l);
+    au_free(l); /* tokens and strings are in the same block */
 }
 
 /* ---- Serialization (the primitives are in serialize.c) ---- */

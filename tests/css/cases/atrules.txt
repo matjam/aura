@@ -24,7 +24,7 @@ html
 #b -> height: 6px
 #c -> color: rgb(0, 128, 0)
 --- rules
-7
+6
 
 === @container and @scope are kept but never apply
 --- css
