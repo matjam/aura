@@ -1,8 +1,12 @@
 # Aura: where to look
 
-Aura is a web browser for Mac OS 9 on PowerPC, with its engine written
-from scratch in portable C99. It is built and tested on a modern host
-and run in a QEMU guest (and on real Macs).
+Aura is a lightweight web browser for retro computers and legacy
+operating systems, with its engine written from scratch in portable C99.
+Its first platform is Mac OS 9 on PowerPC, built and tested on a modern
+host and run in a QEMU guest (and on real Macs). Ports to mainstream
+systems (Linux with GTK4 first) exist for testing and compatibility
+work; decisions favour the legacy platforms
+([`docs/porting.md`](docs/porting.md)).
 
 This file is a directory. It states the rules every change must follow
 and names the document under `docs/` to read for each kind of work.

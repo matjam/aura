@@ -4,11 +4,22 @@
 [![Release](https://img.shields.io/github/v/release/matjam/aura)](https://github.com/matjam/aura/releases)
 [![License: MIT](https://img.shields.io/github/license/matjam/aura)](LICENSE)
 
-A web browser for Mac OS 9 on PowerPC, with its engine written from
-scratch in C: HTML parser, CSS, layout, rasterizer and networking. It uses
-two third-party libraries, QuickJS-ng for JavaScript and Mbed TLS for TLS.
+A lightweight web browser for retro computers and legacy operating
+systems, with its engine written from scratch in portable C: HTML parser,
+CSS, layout, rasterizer and networking. It uses two third-party
+libraries, QuickJS-ng for JavaScript and Mbed TLS for TLS.
 
 ![Aura on Mac OS 9.2.2 showing Wikipedia's Kookaburra article](docs/images/aura-kookaburra.png)
+
+Aura's first platform is Mac OS 9 on PowerPC. The goal is a browser that
+lets old machines use today's web, with each port looking and behaving
+like a native application of its system.
+
+Aura also builds for mainstream systems. These ports exist to help
+development, not to compete with modern browsers: they let the engine be
+tested, debugged and compared against other browsers on a current
+machine, so that what works there can be made to work on the old one. A
+Linux port with GTK4 is in progress.
 
 Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
@@ -64,7 +75,7 @@ memory and CPU, but there is only so much we can do there.
 ## Download
 
 Releases are on the [releases page](https://github.com/matjam/aura/releases).
-Each has one self-extracting archive in two forms:
+For Mac OS 9, each has one self-extracting archive in two forms:
 
 - `Aura-VERSION.hqx`, BinHex text, which survives any transfer. Decode it
   on the Mac with StuffIt Expander (part of Mac OS 9).
@@ -91,6 +102,8 @@ The Mac OS 9 build needs Retro68's PowerPC toolchain. To install it in
 `~/.local/opt/retro68`, run `toolchain/build.sh`. To use one you already
 have, set `RETRO68` to its folder. `docs/building.md` has the details,
 and `CLAUDE.md` names the document for each part of the code.
+`docs/porting.md` describes how Aura is divided between the shared engine
+and each platform, for anyone adding a port.
 
 The build leaves the application in `build/ppc/dist/Aura`, beside a
 `Fonts` folder, a `Licences` folder and `aura-roots`, the certificate

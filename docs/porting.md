@@ -6,6 +6,27 @@ what is still being moved out of the Mac OS 9 port to make that small.
 Read it before you add a port or change the boundary between
 `src/browser` and `src/platform`.
 
+## Why Aura has more than one port
+
+Aura is a browser for retro computers and legacy operating systems;
+Mac OS 9 on PowerPC is the first. Ports to mainstream systems serve that
+goal: on a current machine the engine can be run under debuggers and
+sanitizers, compared page by page with other browsers, and tested in CI,
+and what is fixed there is fixed on the old systems too. They are not
+meant to compete with modern browsers.
+
+So when the two pull in different directions, the legacy platforms win:
+
+- The engine stays small enough, and fast enough, for the oldest
+  supported machine. A feature that only a mainstream port could afford
+  needs a way to leave it out.
+- Shared code assumes only what the oldest supported system provides:
+  C99, no threads in the engine, no OS calls outside `src/platform`.
+- A mainstream port may be plainer than the legacy ones, as long as it
+  is native and complete enough to test the engine.
+
+Further legacy platforms can follow the same plan as a mainstream one.
+
 The first port after Mac OS 9 is Linux with GTK4.
 
 ## The rule: each port looks native

@@ -1,8 +1,14 @@
 # Contributing to Aura
 
-Please contribute. The most useful thing you can do is run Aura on a
-real Mac and say what happened, because so far it has run only in an
-emulator (see the AI use disclosure in `README.md`).
+Please contribute. Aura is a browser for retro computers and legacy
+operating systems, so the most useful thing you can do is run it on a
+real old Mac and say what happened, because so far it has run only in
+an emulator (see the AI use disclosure in `README.md`).
+
+The mainstream ports (Linux with GTK4, in progress) are there to help
+with testing and compatibility. A report that a page renders wrongly
+there is useful too: the engine is the same, so the fix helps every
+platform.
 
 ## Tell me how it went
 

@@ -7,6 +7,10 @@ Version 1 is a browser a person can use daily on a 1 GHz G4 under
 Mac OS 9.1 to 9.2.2, for server-rendered and moderately scripted sites,
 safely.
 
+Ports to mainstream systems (Linux with GTK4 first, see
+[`porting.md`](porting.md)) are for testing and compatibility work. They
+are not version 1 criteria, and version 1 does not wait for them.
+
 ## Acceptance sites
 
 Version 1 is done when these work:
