@@ -3,9 +3,9 @@
 This document covers the browser model in `src/browser`: windows, tabs,
 back and forward, the documents kept for Back, site icons, keyboard
 focus, scrolling by moving pixels, selection and find, contextual
-menus, Internet Config, downloads and the files Aura keeps. Read it
-before changing how a browser window looks or behaves. The Mac OS 9
-side of each feature is named here; Toolbox lessons are in
+menus, Internet Config, downloads, the list windows and the files Aura
+keeps. Read it before changing how a browser window looks or behaves.
+The Mac OS 9 side of each feature is named here; Toolbox lessons are in
 [`mac-os-9-shell.md`](mac-os-9-shell.md).
 
 ## Where things are
@@ -21,6 +21,8 @@ side of each feature is named here; Toolbox lessons are in
 | `favicon.c` | site icons |
 | `present.c` | the shells' damage list |
 | `credits.c` | the About box and about:licences table |
+| `lists.c` | the models of the Bookmarks, History, Downloads and Cookies windows |
+| `listview.c` | the painted list the Mac OS 9 list windows show |
 
 The model never calls the OS; the shells pass events in and show the
 rectangles it reports through `AuBrowserHost.invalidate`.
@@ -714,11 +716,61 @@ resumed with Range. A page's response that turns out to be a download
 (attachment or a type Aura cannot show) continues on its own transfer.
 `au_sim_source` remains for tests.
 
-## Cookies window
+## The list windows
+
+The Bookmarks, History, Downloads and Cookies windows are built from
+the list models in `src/browser/lists.h`. To change what a list shows,
+which buttons a window has, when a button is enabled or what it does,
+change `lists.c` and its test, `tests/browser/test_lists.c`; a port only
+shows the model.
+
+- **To show a list in a port**, call `au_list_sources` with the browser,
+  the cookie jar and the storage service, then `au_list_init` with the
+  kind (`AU_LIST_BOOKMARKS`, `AU_LIST_HISTORY`, `AU_LIST_DOWNLOADS` or
+  `AU_LIST_COOKIES`) and an `AuListHost`. Show `AuListModel.items` in the
+  port's list widget: `au_list_columns` gives the headings, each item's
+  `cols` the text of each column, `depth` the indent, `type` whether it
+  is a day heading, a folder or an entry, and `icon` and `icon_host` its
+  icon. A list that shows one line of text and a detail uses `cols[0]`
+  and `summary`.
+- **To keep it current**, call `au_list_stale` from the event loop and,
+  when it returns true, `au_list_refresh` and redraw. History, Bookmarks
+  and Downloads compare their data's generation counter; Cookies compare
+  the number of cookies, rules and storage areas and the storage size in
+  KB. When the jar changes in a way those numbers do not show (Clear
+  Cookies in Preferences), call `au_list_touch`.
+- **To make the buttons**, call `au_list_buttons`: each has an action, a
+  label and the width the Mac OS 9 window gives it. Enable each with
+  `au_list_can` after every change of selection or data, and run it with
+  `au_list_run`. A double click or Return calls `au_list_activate`, a
+  click on a folder's triangle `au_list_toggle`, and the Delete key runs
+  `AU_LIST_DELETE`. A port that lets the user drag bookmarks calls
+  `au_list_move_bookmark`.
+- **Selection.** The model holds one selected row (`au_list_select`).
+  A refresh keeps it on the same id; when that row went, History and
+  Downloads keep the position, Bookmarks select nothing, and Cookies
+  select the site of a removed cookie.
+- **Ids.** Bookmarks and downloads use their own ids, history entries
+  `AuHistoryEntry.id` (given at each new entry, not saved), day headings
+  `AU_LIST_ID_GROUP` plus the day number, and cookie rows a hash of what
+  they name.
+- **Dialogs.** Actions that ask call the port: `ask_text` for New Folder
+  and Rename, `show_text` for a cookie's details, `choose` for Site
+  Rule (the Mac OS 9 window pops it up under the button), and
+  `reveal_download` for Reveal. `AU_LIST_FAILED` from `au_list_run`
+  means the port should alert the user (the Mac beeps). No action asks
+  for confirmation.
+
+| Window | Rows | Buttons |
+|---|---|---|
+| Bookmarks | the bookmark tree; a closed folder hides its contents | Open (a folder opens or closes), New Folder, Rename..., Delete |
+| History | entries most recent first, under a heading per local day | Open, Delete, Clear History (also clears the site icons) |
+| Downloads | downloads oldest first, with state and progress | Stop, Resume, Remove, Clear Completed, Reveal |
+| Cookies | a folder per site; an open site lists its cookies and storage areas | Details..., Remove, Remove All, Site Rule... |
 
 The Cookies window (Window > Cookies, or Preferences > Privacy) lists
-`src/net/cookie_view.c`'s model; per-site rules (allow, session only,
-block) live in the `cookies.sites` preference.
+`src/net/cookie_view.c`'s model through `lists.c`; per-site rules
+(allow, session only, block) live in the `cookies.sites` preference.
 
 ## Not done
 

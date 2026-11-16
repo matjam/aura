@@ -3,6 +3,7 @@
 
 #include "favicon.h"
 #include "chrome.h"
+#include "lists.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -48,17 +49,6 @@ void au_listview_add(AuListView *lv, AuRowKind kind, int indent, bool expanded, 
     r->icon_host = NULL;
 }
 
-/* Notes the host of the last row added when the icon store has an icon
- * for url's site. */
-static void row_icon(AuListView *lv, const char *url)
-{
-    char host[256];
-    if (!lv->icons || !lv->n || !url || !au_favicons_host(url, host, sizeof host) ||
-        !au_favicons_for_host(lv->icons, host))
-        return;
-    lv->rows[lv->n - 1].icon_host = au_strndup(host, strlen(host));
-}
-
 static void clamp(AuListView *lv)
 {
     int max = au_listview_content_height(lv) - lv->height;
@@ -72,51 +62,20 @@ static void clamp(AuListView *lv)
         lv->selected = lv->n - 1;
 }
 
-void au_listview_from_bookmarks(AuListView *lv, const AuBookmarks *bm)
-{
-    uint32_t sel = lv->selected >= 0 && lv->selected < lv->n ? lv->rows[lv->selected].id : 0;
-    au_listview_clear(lv);
-    lv->selected = -1;
-    const AuBookmark *root = &bm->root;
-    for (const AuBookmark *b = root->first; b;) {
-        if (b->id == sel)
-            lv->selected = lv->n;
-        au_listview_add(lv, b->folder ? AU_ROW_FOLDER : AU_ROW_LINK, au_bookmark_depth(b), b->expanded, b->title,
-                        b->folder ? NULL : b->url, b->id);
-        if (!b->folder)
-            row_icon(lv, b->url);
-        b = au_bookmark_next(b, root, b->folder && !b->expanded);
-    }
-    clamp(lv);
-}
-
-void au_listview_from_history(AuListView *lv, const AuHistory *h, AuTime now)
+void au_listview_from_list(AuListView *lv, const AuListModel *m)
 {
     au_listview_clear(lv);
-    int64_t today = au_day_of(now + h->utc_offset);
-    int64_t day = 0;
-    char label[96], when[16];
-    for (size_t i = 0; i < h->n; i++) {
-        const AuHistoryEntry *e = &h->e[i];
-        AuTime local = e->last_visit + h->utc_offset;
-        int64_t d = au_day_of(local);
-        if (i == 0 || d != day) {
-            day = d;
-            au_day_label(d, today, label, sizeof label);
-            au_listview_add(lv, AU_ROW_HEADER, 0, true, label, NULL, 0);
-        }
-        int64_t secs = local - d * 86400;
-        snprintf(when, sizeof when, "%02d:%02d", (int)(secs / 3600), (int)(secs / 60 % 60));
-        AuBuf detail;
-        au_buf_init(&detail);
-        au_buf_puts(&detail, when);
-        au_buf_puts(&detail, "  ");
-        au_buf_puts(&detail, e->url);
-        au_listview_add(lv, AU_ROW_LINK, 1, false, *e->title ? e->title : e->url, au_buf_cstr(&detail),
-                        (uint32_t)i);
-        row_icon(lv, e->url);
-        au_buf_free(&detail);
+    for (int i = 0; i < m->n; i++) {
+        const AuListItem *it = &m->items[i];
+        AuRowKind kind = it->type == AU_LIST_ITEM_GROUP    ? AU_ROW_HEADER
+                         : it->type == AU_LIST_ITEM_FOLDER ? AU_ROW_FOLDER
+                                                           : AU_ROW_LINK;
+        au_listview_add(lv, kind, it->depth, it->type == AU_LIST_ITEM_GROUP || it->expanded, it->cols[0],
+                        it->summary, it->id);
+        if (it->icon_host)
+            lv->rows[lv->n - 1].icon_host = au_strndup(it->icon_host, strlen(it->icon_host));
     }
+    lv->selected = m->selected;
     clamp(lv);
 }
 

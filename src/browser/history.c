@@ -150,6 +150,12 @@ static char *clean_title(const char *t)
     return c;
 }
 
+static uint32_t new_id(AuHistory *h)
+{
+    h->last_id = h->last_id >= 0x7FFFFFFFu ? 1 : h->last_id + 1;
+    return h->last_id;
+}
+
 static void cap(AuHistory *h)
 {
     while (h->n > h->max_entries)
@@ -178,6 +184,7 @@ void au_history_visit(AuHistory *h, const char *url, const char *title, AuTime n
         e.url = clean_title(url);
         e.title = clean_title(title);
         e.visits = 1;
+        e.id = new_id(h);
     }
     e.last_visit = now;
     h->e[0] = e;
@@ -363,6 +370,7 @@ bool au_history_parse(AuHistory *h, const char *data, size_t len)
         x->title = title;
         x->last_visit = when;
         x->visits = visits > 0xFFFFFFF ? 0xFFFFFFF : (uint32_t)visits;
+        x->id = new_id(h);
     }
     /* qsort is not stable; equal times keep an arbitrary order, which is
      * harmless for history. */

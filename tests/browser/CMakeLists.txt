@@ -8,6 +8,12 @@ add_executable(test_commands test_commands.c)
 target_link_libraries(test_commands aura_engine m)
 add_test(NAME browser_commands COMMAND test_commands)
 
+# The list windows' models: rows, actions and their enable rules, the
+# callbacks for actions that ask, and the change notice.
+add_executable(test_lists test_lists.c)
+target_link_libraries(test_lists aura_engine m)
+add_test(NAME browser_lists COMMAND test_lists)
+
 # Native chrome mode: the page-only surface, the actions and accessors a
 # port's own widgets use, and the AU_CHANGED_* notices.
 add_executable(test_native_chrome test_native_chrome.c)
