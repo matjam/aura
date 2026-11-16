@@ -140,6 +140,9 @@ static const Case cases[] = {
      "f.textContent='fixed'", INCR},
     {"sticky header", "header { position: sticky; top: 0 }", "<header id=h><div id=s>s</div></header><p>p</p>",
      "s.appendChild(document.createElement('ul')).innerHTML='<li>x</li><li>y</li>'", INCR},
+    {"relative box in a reused subtree", ".w { overflow: hidden } .r { position: relative; left: 10px; top: 3px }",
+     "<div class=w><p class=r>r</p><span class=r>s</span></div><div id=a><p>x</p></div>",
+     "a.appendChild(document.createElement('p')).textContent='y'", INCR},
     /* ---- display ---- */
     {"display contents", ".c { display: contents }", "<div><div class=c id=c><p>a</p></div></div>",
      "c.appendChild(document.createElement('p')).textContent='b'", INCR},
