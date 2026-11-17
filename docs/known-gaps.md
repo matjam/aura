@@ -159,6 +159,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## CSS
 
+- CSS animations and transitions do not play: an element shows one
+  frame of its `@keyframes` animation, and a transition jumps to its
+  end. Spinners stand still (GitHub's in-progress check icons,
+  `anim-rotate`). Out of scope for version 1
+  ([`v1-scope.md`](v1-scope.md)); deferred again on 2026-11-16.
 - `@scope` and `@starting-style` are parsed and never apply.
 - Container queries ([`css.md`](css.md), "Container queries"):
   - `style()` and `scroll-state()` queries are unknown, so a rule that
