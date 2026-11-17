@@ -978,9 +978,6 @@ bool au_browser_dark(const AuBrowser *b)
 static void scheme_changed(AuBrowser *b)
 {
     bool dark = au_browser_dark(b);
-    if (dark == b->shown_dark)
-        return;
-    b->shown_dark = dark;
     for (int i = 0; i < b->nwindows; i++) {
         AuBrowserWindow *w = b->windows[i];
         for (int j = 0; j < w->ntabs; j++)

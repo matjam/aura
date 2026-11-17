@@ -867,6 +867,20 @@ static void test_color_scheme_live(AuFontSet *fonts)
     settle(w);
     CHECK(page_says(w->tabs[1]->page, q, "true "));
     au_browser_free(b);
+
+    /* Dark read from the preferences file before the first tab, then
+     * Light: the open page follows. */
+    b = make_browser(fonts);
+    b->prefs.color_scheme = AU_SCHEME_DARK;
+    w = au_browser_window_new(b, 700, 500);
+    au_bw_new_tab(w, "file:///scheme.html", true, -1);
+    settle(w);
+    CHECK(page_says(w->tabs[0]->page, q, "true "));
+    b->prefs.color_scheme = AU_SCHEME_LIGHT;
+    au_browser_prefs_changed(b);
+    settle(w);
+    CHECK(page_says(w->tabs[0]->page, q, "false false"));
+    au_browser_free(b);
 }
 
 static void test_prefs(void)

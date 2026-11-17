@@ -215,9 +215,7 @@ struct AuBrowser {
     uint32_t scroll_gen; /* any tab's scroll position changed (saved with the session, less often) */
     uint32_t next_tab_id;
     uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
-    /* The platform's light or dark setting, for the System appearance
-     * (au_browser_set_system_dark), and the scheme the pages have now. */
-    bool system_dark, shown_dark;
+    bool system_dark;    /* the platform is set to dark (au_browser_set_system_dark), for System */
     char *find_text;     /* the last Find, for Find Again; NULL before one */
     bool find_case;      /* it was case-sensitive */
     /* Optional, set by the shell: the blocking preferences changed in the
