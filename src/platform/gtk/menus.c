@@ -295,7 +295,18 @@ static void fill_list(DynList *d)
     }
 }
 
-/* The browser windows front to back: the front one, then the rest. */
+static bool is_browser_window(GtkWindow *gw)
+{
+    for (AuGtkWin *w = au_gtk.wins; w; w = w->next)
+        if (w->window == gw)
+            return true;
+    return false;
+}
+
+/* The Window menu's windows: the browser windows front to back (the
+ * front one, then the rest), then the application's other visible
+ * windows (Preferences, the lists, the developer windows, About). A
+ * browser window's ref is its AuGtkWin, any other's its GtkWindow. */
 static int window_refs(AuWindowRef *refs, int cap, guint *hash)
 {
     int n = 0;
@@ -311,6 +322,17 @@ static int window_refs(AuWindowRef *refs, int cap, guint *hash)
             h = h * 33 + g_str_hash(refs[n].title) + (guint)(uintptr_t)w;
             n++;
         }
+    }
+    GList *all = au_gtk.app ? gtk_application_get_windows(au_gtk.app) : NULL;
+    for (GList *l = all; l && n < cap; l = l->next) {
+        GtkWindow *gw = l->data;
+        if (is_browser_window(gw) || !gtk_widget_get_visible(GTK_WIDGET(gw)))
+            continue;
+        const char *t = gtk_window_get_title(gw);
+        refs[n].title = t ? t : "";
+        refs[n].window = gw;
+        h = h * 33 + g_str_hash(refs[n].title) + (guint)(uintptr_t)gw;
+        n++;
     }
     *hash = h + (guint)n;
     return n;
@@ -521,9 +543,18 @@ static void h_copy_text(void *ctx, const char *utf8, size_t len)
 static void h_select_window(void *ctx, void *window)
 {
     (void)ctx;
-    for (AuGtkWin *w = au_gtk.wins; w; w = w->next)
-        if (w == window)
+    for (AuGtkWin *w = au_gtk.wins; w; w = w->next) {
+        if (w == window) {
             gtk_window_present(w->window);
+            return;
+        }
+    }
+    /* Another window: present it only while the application still has
+     * it. */
+    GList *all = au_gtk.app ? gtk_application_get_windows(au_gtk.app) : NULL;
+    for (GList *l = all; l; l = l->next)
+        if (l->data == window)
+            gtk_window_present(GTK_WINDOW(window));
 }
 
 static void h_beep(void *ctx)
