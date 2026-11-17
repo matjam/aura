@@ -7,12 +7,8 @@ pkg_check_modules(AURA_FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 include(GNUInstallDirs)
 
 # The native windows (Preferences, the lists, the developer windows, About)
-# come from windows.cmake, which sets AURA_GTK_WINDOW_SOURCES. Without it
-# the port builds alone and menus.c reports those windows as not available.
-set(AURA_GTK_WINDOW_SOURCES "")
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/windows.cmake)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/windows.cmake)
-endif()
+# come from windows.cmake, which sets AURA_GTK_WINDOW_SOURCES.
+include(${CMAKE_CURRENT_SOURCE_DIR}/windows.cmake)
 
 add_executable(aura
     main.c

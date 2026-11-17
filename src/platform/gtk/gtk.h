@@ -39,6 +39,7 @@ typedef struct AuGtkWin {
     AuBrowserWindow *bw;
     GtkWindow *window;
     GtkWidget *back, *forward, *reload, *entry;
+    GtkWidget *body; /* the tabs and the page: vertical, or horizontal for tabs on the left */
     GtkWidget *notebook;
     GtkWidget *search_bar, *search_entry;
     GtkWidget *area, *vscroll, *hscroll;
@@ -123,6 +124,8 @@ bool au_gtk_show_window(AuWindowKind kind);
 
 /* host.c */
 void au_gtk_browser_host(AuBrowserHost *out);
+/* Starts the secondary windows (windows_gtk.h) with this port's host. */
+void au_gtk_windows_start(void);
 void au_gtk_modal_begin(void);
 void au_gtk_modal_end(void);
 /* Waits in a nested main loop until *done. */

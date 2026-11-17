@@ -3,6 +3,7 @@
  * shell: fonts, the browser, the profile files, the network, then the
  * windows; at quit the reverse. */
 #include "gtk.h"
+#include "windows_gtk.h"
 
 #include <glib-unix.h>
 #include <signal.h>
@@ -121,6 +122,9 @@ void au_gtk_quit(void)
     if (kick_id)
         g_source_remove(kick_id);
     tick_id = kick_id = 0;
+    /* The secondary windows close first: an open Preferences window is
+     * cancelled, so the last save has the preferences from before it. */
+    au_gtk_windows_shutdown();
     /* Privacy options, the last save (the session while the windows are
      * open) and the Running file; then the windows; then the network. */
     au_app_quit(au_gtk.a);
@@ -163,6 +167,7 @@ static void start(const char *const *urls, int nurls)
     if (!au_gtk_net_start())
         fprintf(stderr, "aura: the network could not be started\n");
     au_gtk.started = true;
+    au_gtk_windows_start();
 
     /* The last tabs come back when the preference says so or, after a
      * crash, when the user says so. */

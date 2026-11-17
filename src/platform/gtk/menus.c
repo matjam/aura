@@ -10,6 +10,7 @@
  * widget. The Go, Bookmarks and Window menus end with a section rebuilt
  * from the model's dynamic lists when they change. */
 #include "gtk.h"
+#include "windows_gtk.h"
 
 #include <string.h>
 
@@ -47,11 +48,19 @@ void au_gtk_command_state(AuCommandState *st)
         st->front = w ? AU_FRONT_BROWSER : AU_FRONT_NONE;
     else if (w && act == w->window)
         st->front = AU_FRONT_BROWSER;
+    else if (au_gtk_devwin_owns(act))
+        st->front = AU_FRONT_TOOL;
     else
         st->front = AU_FRONT_OTHER;
     GtkWidget *focus = act ? gtk_root_get_focus(GTK_ROOT(act)) : NULL;
     st->text_focus = focus && GTK_IS_TEXT(focus);
     st->tool_can_find_again = false;
+    if (st->front == AU_FRONT_TOOL) {
+        /* A developer window takes Copy, Paste and Select All itself
+         * (au_gtk_edit), and Find and Find Again. */
+        st->text_focus = true;
+        st->tool_can_find_again = au_gtk_devwin_can_find_again(act);
+    }
     st->mods = au_gtk_current_mods(act ? GTK_WIDGET(act) : NULL);
 }
 
@@ -362,54 +371,12 @@ void au_gtk_menus_refresh(void)
 }
 
 /* ---- Native windows ----
- * One function per window that AuCommandHost.show_window opens. Each
- * returns whether a window was shown. The Preferences, list, developer
- * and About windows are not in this port yet: they say so and return
- * false. To attach a window, call its show function here. */
-
-static bool not_yet(const char *what)
-{
-    AuGtkWin *w = au_gtk_front();
-    char *msg = g_strdup_printf("%s is not yet available in the GTK port.", what);
-    au_gtk_notice(w ? w->window : NULL, msg, NULL);
-    g_free(msg);
-    return false;
-}
-
-static bool show_about(void) { return not_yet("About Aura"); }
-static bool show_preferences(void) { return not_yet("Preferences"); }
-static bool show_history(void) { return not_yet("The History window"); }
-static bool show_bookmarks(void) { return not_yet("The Bookmarks window"); }
-static bool show_downloads(void) { return not_yet("The Downloads window"); }
-static bool show_cookies(void) { return not_yet("The Cookies window"); }
-/* false: the model opens a view-source: tab instead. */
-static bool show_page_source(void) { return false; }
-static bool show_developer(AuWindowKind kind)
-{
-    switch (kind) {
-    case AU_WINDOW_CONSOLE: return not_yet("The Console");
-    case AU_WINDOW_NETWORK: return not_yet("The Network window");
-    case AU_WINDOW_PERFORMANCE: return not_yet("The Performance window");
-    case AU_WINDOW_SYSTEM_STATUS: return not_yet("System Status");
-    case AU_WINDOW_REPORT: return not_yet("Report a Problem");
-    case AU_WINDOW_TIMING_TEST: return not_yet("The timing test");
-    case AU_WINDOW_PAINT_BENCHMARK: return not_yet("The paint benchmark");
-    default: return false;
-    }
-}
+ * Preferences, the lists, the developer windows and About come from
+ * windows_gtk.h. Page Source opens the Source developer window. */
 
 bool au_gtk_show_window(AuWindowKind kind)
 {
-    switch (kind) {
-    case AU_WINDOW_ABOUT: return show_about();
-    case AU_WINDOW_PREFERENCES: return show_preferences();
-    case AU_WINDOW_HISTORY: return show_history();
-    case AU_WINDOW_BOOKMARKS: return show_bookmarks();
-    case AU_WINDOW_DOWNLOADS: return show_downloads();
-    case AU_WINDOW_COOKIES: return show_cookies();
-    case AU_WINDOW_PAGE_SOURCE: return show_page_source();
-    default: return show_developer(kind);
-    }
+    return au_gtk_window_kind(kind);
 }
 
 /* ---- AuCommandHost ---- */
@@ -524,14 +491,19 @@ static void h_find(void *ctx, AuBrowserWindow *bw)
 {
     (void)ctx;
     AuGtkWin *w = bw ? au_gtk_win_of(bw) : NULL;
+    GtkWindow *act = active_window();
     if (w)
         au_gtk_win_find(w);
+    else if (act && au_gtk_devwin_owns(act))
+        au_gtk_devwin_find(act);
 }
 
 static void h_tool_find_again(void *ctx, bool forward)
 {
     (void)ctx;
-    (void)forward; /* no developer windows in this port yet */
+    GtkWindow *act = active_window();
+    if (act && au_gtk_devwin_owns(act))
+        au_gtk_devwin_find_again(act, forward);
 }
 
 static void h_edit(void *ctx, AuEditAction a)
@@ -652,6 +624,11 @@ void au_gtk_edit(AuEditAction a)
                                               "clipboard.paste",  "selection.delete", "selection.select-all"};
         if ((size_t)a < sizeof actions / sizeof actions[0])
             gtk_widget_activate_action(text, actions[a], NULL);
+        return;
+    }
+    GtkWindow *act = active_window();
+    if (act && au_gtk_devwin_owns(act)) {
+        au_gtk_devwin_edit(act, a);
         return;
     }
     if (!w || w->freed)

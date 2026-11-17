@@ -135,6 +135,19 @@ static GtkWidget *tab_label(AuGtkWin *w, GtkWidget *child)
     return box;
 }
 
+/* Tabs on top, or a column of tabs on the left (the tab position
+ * preference, View > Tabs on Left). */
+static void sync_tab_position(AuGtkWin *w)
+{
+    const AuPrefs *p = &au_gtk.browser->prefs;
+    bool left = p->tab_position == AU_TABS_LEFT;
+    GtkNotebook *nb = GTK_NOTEBOOK(w->notebook);
+    gtk_orientable_set_orientation(GTK_ORIENTABLE(w->body), left ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL);
+    gtk_notebook_set_tab_pos(nb, left ? GTK_POS_LEFT : GTK_POS_TOP);
+    int width = p->tab_column_width >= 100 ? p->tab_column_width : 180;
+    gtk_widget_set_size_request(w->notebook, left ? width : -1, -1);
+}
+
 static void sync_tabs(AuGtkWin *w)
 {
     GtkNotebook *nb = GTK_NOTEBOOK(w->notebook);
@@ -571,7 +584,16 @@ AuGtkWin *au_gtk_win_new(int width, int height)
     gtk_notebook_set_action_widget(GTK_NOTEBOOK(w->notebook), plus, GTK_PACK_END);
     g_signal_connect(w->notebook, "switch-page", G_CALLBACK(on_switch_page), w);
     g_signal_connect(w->notebook, "page-reordered", G_CALLBACK(on_page_reordered), w);
-    gtk_box_append(GTK_BOX(box), w->notebook);
+    /* The tabs and the page share a box that turns horizontal for tabs
+     * on the left (sync_tab_position). */
+    w->body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_vexpand(w->body, TRUE);
+    gtk_box_append(GTK_BOX(box), w->body);
+    gtk_box_append(GTK_BOX(w->body), w->notebook);
+    GtkWidget *column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_hexpand(column, TRUE);
+    gtk_widget_set_vexpand(column, TRUE);
+    gtk_box_append(GTK_BOX(w->body), column);
 
     w->search_bar = gtk_search_bar_new();
     w->search_entry = gtk_search_entry_new();
@@ -583,7 +605,7 @@ AuGtkWin *au_gtk_win_new(int width, int height)
     g_signal_connect(w->search_entry, "next-match", G_CALLBACK(on_find_next), w);
     g_signal_connect(w->search_entry, "previous-match", G_CALLBACK(on_find_previous), w);
     g_signal_connect(w->search_entry, "stop-search", G_CALLBACK(on_find_stop), w);
-    gtk_box_append(GTK_BOX(box), w->search_bar);
+    gtk_box_append(GTK_BOX(column), w->search_bar);
 
     GtkWidget *grid = gtk_grid_new();
     w->area = gtk_drawing_area_new();
@@ -603,7 +625,7 @@ AuGtkWin *au_gtk_win_new(int width, int height)
     gtk_grid_attach(GTK_GRID(grid), w->area, 0, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), w->vscroll, 1, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), w->hscroll, 0, 1, 1, 1);
-    gtk_box_append(GTK_BOX(box), grid);
+    gtk_box_append(GTK_BOX(column), grid);
 
     GtkWidget *status = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_widget_set_margin_start(status, 6);
@@ -703,6 +725,8 @@ static void apply_changes(AuGtkWin *w)
         gtk_window_set_title(w->window, *title ? title : "Aura");
         au_gtk_menus_dirty(); /* the Window menu lists the titles */
     }
+    if (what & AU_CHANGED_LAYOUT)
+        sync_tab_position(w);
     if (what & (AU_CHANGED_TABS | AU_CHANGED_TAB_INFO | AU_CHANGED_ACTIVE_TAB)) {
         w->syncing = true;
         sync_tabs(w);

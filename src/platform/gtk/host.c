@@ -10,6 +10,9 @@
 #include "gtk.h"
 
 #include "browser/url.h"
+#include "net/loader.h"
+#include "net/net.h"
+#include "windows_gtk.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -142,6 +145,12 @@ static void h_changed(void *ctx, AuBrowserWindow *bw, unsigned what)
     (void)ctx;
     if (w)
         au_gtk_win_changed(w, what);
+    /* History or bookmarks moved: the open History and Bookmarks windows
+     * reload at their next poll. */
+    if (what & (AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK)) {
+        au_gtk_list_touch(AU_LIST_HISTORY);
+        au_gtk_list_touch(AU_LIST_BOOKMARKS);
+    }
 }
 
 static void h_close_window(void *ctx, AuBrowserWindow *bw)
@@ -173,6 +182,14 @@ static bool h_open_external(void *ctx, const char *url)
     GtkUriLauncher *l = gtk_uri_launcher_new(url);
     gtk_uri_launcher_launch(l, parent_of(NULL), NULL, launch_done, NULL);
     return true;
+}
+
+/* The Downloads window comes forward when a download starts. */
+static void h_download_added(void *ctx, AuDownload *d)
+{
+    (void)ctx;
+    (void)d;
+    au_gtk_list_show(AU_LIST_DOWNLOADS);
 }
 
 static bool h_confirm_download(void *ctx, const char *url, const char *name, const char *mime)
@@ -376,6 +393,7 @@ void au_gtk_browser_host(AuBrowserHost *h)
     h->close_window = h_close_window;
     h->open_external = h_open_external;
     h->confirm_download = h_confirm_download;
+    h->download_added = h_download_added;
     h->popup = h_popup;
     h->choose_file = h_choose_file;
     h->confirm = h_confirm;
@@ -383,4 +401,158 @@ void au_gtk_browser_host(AuBrowserHost *h)
     h->random = h_random;
     h->coro = au_posix_coro_ops();
     h->memory_free_kb = h_memory_free_kb;
+}
+
+/* ---- The secondary windows (windows_gtk.h) ----
+ * Preferences, the lists, the developer windows and About reach the
+ * front browser window and the application's services through this
+ * host. */
+
+static AuBrowserWindow *w_front_window(void *ctx)
+{
+    (void)ctx;
+    AuGtkWin *w = au_gtk.started && !au_gtk.quitting ? au_gtk_front() : NULL;
+    return w && !w->freed ? w->bw : NULL;
+}
+
+static AuPage *w_front_page(void *ctx)
+{
+    AuBrowserWindow *bw = w_front_window(ctx);
+    AuTab *t = bw ? au_bw_active_tab(bw) : NULL;
+    return t ? t->page : NULL;
+}
+
+static GtkWindow *w_front_gtk_window(void *ctx)
+{
+    (void)ctx;
+    AuGtkWin *w = au_gtk_front();
+    return w && !w->freed ? w->window : NULL;
+}
+
+static void w_open_url(void *ctx, const char *url, bool new_tab)
+{
+    (void)ctx;
+    if (!au_gtk.started || au_gtk.quitting || au_gtk.modal)
+        return;
+    AuCommandState st;
+    au_gtk_command_state(&st);
+    au_command_open_url(&st, au_gtk_command_host(), url, new_tab);
+    AuGtkWin *w = au_gtk_front();
+    if (w)
+        gtk_window_present(w->window);
+    au_gtk_kick();
+}
+
+static void reveal_done(GObject *src, GAsyncResult *res, gpointer data)
+{
+    GError *err = NULL;
+    (void)data;
+    if (!gtk_file_launcher_open_containing_folder_finish(GTK_FILE_LAUNCHER(src), res, &err)) {
+        fprintf(stderr, "aura: cannot show the download: %s\n", err ? err->message : "no file manager");
+        g_clear_error(&err);
+    }
+    g_object_unref(src);
+}
+
+/* The file manager shows a finished download in the download folder. */
+static bool w_reveal_download(void *ctx, const AuDownload *d)
+{
+    (void)ctx;
+    if (!d->filename || !*d->filename)
+        return false;
+    char dir[1024];
+    au_gtk_download_folder(dir, sizeof dir);
+    char *path = g_build_filename(dir, d->filename, NULL);
+    bool exists = g_file_test(path, G_FILE_TEST_EXISTS);
+    if (exists) {
+        GFile *f = g_file_new_for_path(path);
+        GtkFileLauncher *l = gtk_file_launcher_new(f);
+        gtk_file_launcher_open_containing_folder(l, w_front_gtk_window(NULL), NULL, reveal_done, NULL);
+        g_object_unref(f);
+    }
+    g_free(path);
+    return exists;
+}
+
+/* The model has applied the preferences to the browser and its windows
+ * (AuBrowserHost.changed reports what moved, and the next flush shows
+ * it); the tick saves the file. After OK the network takes the new
+ * settings. */
+static void w_prefs_changed(void *ctx, unsigned what, bool committed)
+{
+    (void)ctx;
+    (void)what;
+    if (committed && au_gtk.a)
+        au_app_prefs_changed(au_gtk.a);
+    au_gtk_menus_dirty();
+    au_gtk_kick();
+}
+
+static uint32_t w_memory_free_kb(void *ctx)
+{
+    (void)ctx;
+    return au_gtk_memory_free_kb();
+}
+
+static AuNet *app_net(void)
+{
+    return au_gtk.a ? au_app_net(au_gtk.a) : NULL;
+}
+
+static void w_host_info(void *ctx, AuSysInfo *sys, AuDevHostInfo *h, AuBuf *conn)
+{
+    (void)ctx;
+    au_gtk_sysinfo(sys);
+    AuNet *net = app_net();
+    if (net)
+        au_net_dev_info(net, h, conn);
+}
+
+static void w_connections(void *ctx, AuBuf *out)
+{
+    (void)ctx;
+    AuNet *net = app_net();
+    int total, busy;
+    if (net)
+        au_net_connections_text(net, out, &total, &busy);
+}
+
+static void w_record_headers(void *ctx)
+{
+    (void)ctx;
+    AuNet *net = app_net();
+    if (net)
+        au_net_set_trace_headers(net, true);
+}
+
+static void w_windows_changed(void *ctx)
+{
+    (void)ctx;
+    au_gtk_menus_dirty();
+}
+
+void au_gtk_windows_start(void)
+{
+    AuGtkWindowsHost h;
+    memset(&h, 0, sizeof h);
+    h.app = au_gtk.app;
+    h.browser = au_gtk.browser;
+    h.fonts = au_gtk.fonts;
+    h.aura_app = au_gtk.a;
+    h.front_window = w_front_window;
+    h.front_page = w_front_page;
+    h.front_gtk_window = w_front_gtk_window;
+    h.open_url = w_open_url;
+    h.reveal_download = w_reveal_download;
+    h.prefs_changed = w_prefs_changed;
+    h.memory_free_kb = w_memory_free_kb;
+    h.host_info = w_host_info;
+    h.connections = w_connections;
+    /* status_sections stays NULL: System Status shows the network's
+     * status (au_app_net_status). This port has no blocking manager, no
+     * default-browser switch, and no timing test or paint benchmark
+     * (docs/gtk.md, "Known gaps"), so those hooks stay NULL too. */
+    h.record_headers = w_record_headers;
+    h.windows_changed = w_windows_changed;
+    au_gtk_windows_init(&h);
 }
