@@ -32,7 +32,7 @@ Further legacy platforms can follow the same plan as a mainstream one.
 | Platform | Kind | Toolkit | Status |
 |---|---|---|---|
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | Toolbox, Appearance Manager | in development, released |
-| Linux | mainstream, for testing | GTK4 | in progress, the next port |
+| Linux on Wayland | mainstream, for testing | GTK4 | in development: browser windows done ([`gtk.md`](gtk.md)), other windows in progress |
 | Amiga with an accelerated 68k processor | legacy | Intuition, with the system's own gadget classes | planned |
 | Modern macOS | mainstream, for testing | AppKit | planned |
 
@@ -80,6 +80,12 @@ A port must not decide what a command does or whether it is enabled,
 and must not hold browser state of its own. When a port needs logic
 that is not about drawing or the OS, add it to `src/browser` with a
 host test.
+
+When a browser feature needs platform code, implement it on every port
+in the same change. If you add to a platform interface (a host callback,
+an `AuAppNet` hook, a service in `src/platform/posix`), give the Mac OS 9
+port and the GTK4 port their implementations in that change, so no port
+falls behind and the shared code never tests which port it runs on.
 
 ## The layers
 
@@ -199,9 +205,8 @@ A browser window can show its chrome in one of two ways:
   update through `AuBrowserHost.changed` and the `AU_CHANGED_*` bits.
 
 The GTK4 port uses native chrome: `GtkHeaderBar` with Back, Forward,
-Reload and the address `GtkEntry`, a `GtkNotebook` (or `AdwTabBar`
-style tabs drawn with plain GTK4) for tabs, and a `GtkDrawingArea` for
-the page.
+Reload and the address `GtkEntry`, a `GtkNotebook` for tabs, and a
+`GtkDrawingArea` for the page. It uses plain GTK4, without libadwaita.
 
 ## The GTK4 port
 
@@ -209,7 +214,7 @@ the page.
 |---|---|
 | application and windows | `GtkApplication`, `GtkApplicationWindow` |
 | menus and shortcuts | `GMenu` and `GAction` from the command table, `gtk_application_set_accels_for_action` |
-| page | `GtkDrawingArea` drawing the page surface with Cairo; `GtkEventControllerKey`, `GtkGestureClick`, `GtkEventControllerScroll`, `GtkEventControllerMotion` for input; `GtkIMContext` for text input |
+| page | `GtkDrawingArea` drawing the page surface with Cairo; `GtkEventControllerKey`, `GtkEventControllerLegacy` (pointer, with its own click counting), `GtkEventControllerScroll`, `GtkEventControllerMotion` for input; `GtkIMContext` for text input |
 | chrome | `GtkHeaderBar`, `GtkEntry`, `GtkNotebook`, `GtkProgressBar` or the entry's progress, a status label |
 | dialogs | `GtkAlertDialog`, `GtkFileDialog` |
 | Preferences | a window of `GtkStack` pages built from the preference descriptions |
@@ -218,11 +223,12 @@ the page.
 | network | the POSIX sockets in `src/platform/posix`, run from the GLib main loop (`g_unix_fd_add` on the descriptors `au_posix_net_watch` lists; "The POSIX services" above) |
 | coroutines, clocks, entropy, files | `src/platform/posix` |
 | fonts | fontconfig to find font files, read by Aura's own font code |
-| files | `~/.config/aura` and `~/.cache/aura` (XDG base directories) |
-| packaging | an AppImage and a `.deb`, built in CI |
+| files | `$XDG_CONFIG_HOME/aura`, `$XDG_CACHE_HOME/aura`, downloads in `$XDG_DOWNLOAD_DIR` |
+| packaging | an AppImage and a `.deb`, built in CI (not started) |
 
 GTK4 is LGPL and is linked from the system, not bundled; Aura stays
-MIT. Its build is `-DAURA_PLATFORM=gtk`.
+MIT. Its build is `-DAURA_PLATFORM=gtk` (`./build.sh gtk`). To build,
+run or change it, read [`gtk.md`](gtk.md).
 
 ## Status of the refactoring
 
@@ -239,5 +245,6 @@ keeps the Mac OS 9 build working and looking the same.
 | Split `src/platform/host` into `src/platform/posix` and the `aura-host` tool; `AURA_PLATFORM` in CMake | done |
 | Developer windows' layout and actions in `src/browser` (`devwin_model.c`); Mac `devwin.c` only frames them ([`developer-tools.md`](developer-tools.md), "The window models") | done |
 | Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; Unix `src/platform/posix/files_posix.c`) | done |
-| GTK4 port in `src/platform/gtk`, with a CI build | not started |
+| GTK4 port in `src/platform/gtk`: browser windows, tabs, page, input, menus, dialogs, fonts, network ([`gtk.md`](gtk.md)) | done |
+| GTK4 Preferences, list, developer and About windows, and a CI build | in progress |
 | Packaging for Linux | not started |

@@ -13,6 +13,7 @@ a machine or need a build other than the default.
 | build for the host and run the tests | `./build.sh test` |
 | build for Mac OS 9 | `./build.sh ppc` |
 | do both | `./build.sh` |
+| build the Linux GTK4 application | `./build.sh gtk` |
 
 ## Choosing the platform
 
@@ -24,7 +25,7 @@ toolchain.
 |---|---|---|
 | `host` | `src/platform/posix`, the `aura-host` tool (`src/platform/host`) and the tests, on macOS or Linux | no toolchain file is given |
 | `macos9` | the Mac OS 9 application (`src/platform/macos9`) | the Retro68 toolchain file is given (`./build.sh ppc`) |
-| `gtk` | reserved for the Linux GTK4 port; configuring stops with a message, because the port is not written yet ([`porting.md`](porting.md)) | never |
+| `gtk` | the Linux GTK4 application for Wayland (`src/platform/gtk`), at `build/gtk/src/platform/gtk/aura` | never; `./build.sh gtk` passes it |
 
 - `macos9` needs the Retro68 toolchain file, and `host` cannot use it;
   configuring either the wrong way stops with a message.
@@ -53,6 +54,22 @@ toolchain.
 
 To copy the result into the test machine and run it, see
 [`guest-testing.md`](guest-testing.md).
+
+## The GTK4 build
+
+`./build.sh gtk` configures `build/gtk` with `-DAURA_PLATFORM=gtk` and
+builds `build/gtk/src/platform/gtk/aura`.
+
+- It needs the development files for GTK4, fontconfig and Cairo
+  (`pkg-config` names `gtk4`, `fontconfig`, `cairo`), CMake and Ninja.
+  On Arch: `pacman -S gtk4 fontconfig cairo cmake ninja`. On Debian
+  and Ubuntu: `apt install libgtk-4-dev libfontconfig-dev libcairo2-dev
+  cmake ninja-build`.
+- The build must finish without warnings, as the others do.
+- To run it, start `build/gtk/src/platform/gtk/aura [URL...]` in a
+  Wayland session. It finds its fonts in `assets/fonts` of the source
+  tree. To run it without touching your desktop, use a nested headless
+  compositor ([`gtk.md`](gtk.md), "To test without a desktop").
 
 ## Other build trees
 

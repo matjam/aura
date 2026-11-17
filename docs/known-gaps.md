@@ -609,6 +609,11 @@ would save for a Wikipedia article (host figures, 2026-11-15):
 10. **Text selection is not kept across Back** (it never was: a
    navigation clears it).
 
+## The Linux GTK4 port
+
+What the GTK4 port does not do yet is listed in [`gtk.md`](gtk.md),
+"Known gaps".
+
 ## Fuzzing
 
 What no fuzzer covers is listed in [`fuzzing.md`](fuzzing.md), "Not

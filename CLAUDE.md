@@ -76,6 +76,7 @@ Aura for its users; keep it short.
 | the Develop menu and its windows, System Status, Report a Problem and the bug report builder | [`docs/developer-tools.md`](docs/developer-tools.md) |
 | fuzzing, or any code a page's data reaches | [`docs/fuzzing.md`](docs/fuzzing.md) (Aura's fuzzers, Domato, and the rules they enforce) |
 | a new platform port (Linux GTK4), or the line between `src/browser` and `src/platform` | [`docs/porting.md`](docs/porting.md) |
+| the Linux GTK4 port: building, running, testing in a headless compositor, its windows, input, menus, dialogs, main loop | [`docs/gtk.md`](docs/gtk.md) |
 
 | Problem | Read |
 |---|---|
