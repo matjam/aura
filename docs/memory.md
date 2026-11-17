@@ -959,3 +959,53 @@ Elsewhere:
 ## Not done
 
 See [`known-gaps.md`](known-gaps.md#memory).
+
+**Per-document zones were tried and dropped** (2026-11-17). The idea
+was to split the page zone per document, so that a document kept for
+Back holds its memory apart and freeing it leaves whole chunks:
+
+- Each document view made a zone (14 ids) and entered it in its entry
+  points (`DV_IN`).
+- The pool cut that zone's slabs and blocks of up to 64 KB from chunks
+  of its own (64 KB first, doubling to 512 KB, placed by an
+  `AuRegion`).
+- Blocks larger than that went to the platform one by one, as before.
+
+It did not pay, for two reasons:
+
+- **Peak memory.** A kept document's slabs and chunks keep the space
+  its freed blocks left, and no other document can use it. At the
+  fourth of four Wikipedia articles, the same 51.4 MB in use took
+  67.7 MB from the platform with the zones and 59.3 MB without
+  (+14%), and the page blocks reached 72 MB instead of 60 MB of the
+  stand-in heap.
+- **Blocks that outlive their document.** Anything a document's code
+  allocates for the tab or for every tab pins that document's chunks
+  after it goes. Before they were moved to the shared page zone, four
+  kinds of block each kept 64 to 512 KB chunks of an ended zone:
+  - shared style sheets (`au_css_sheet_parse_shared`);
+  - blocks of those sheets parsed late (`css_rule_decls`);
+  - the shared inflater of packed sheet text;
+  - the tab's console lines and fetch list (`page_doc.c`).
+
+  Every new cache of this kind would have to be found the same way.
+
+Measured on the host (2026-11-17, base `5dd32fb`, `AURA_HEAP=mac:200`,
+one build with the zones turned on and off, 1024x768). Three articles
+were loaded (PowerPC, Mac OS 9, Power Macintosh G4), then the kept
+documents were released as the release handler does, then QuickTime
+was loaded and the kept one released again. Each cell is the free
+space and the largest free block, in MB:
+
+| Reading | Zones | No zones |
+|---|---|---|
+| third article loaded | 150.2, 147.9 | 161.6, 157.6 |
+| kept documents released | 184.0, 147.9 | 184.0, 157.6 |
+| fourth article loaded | 164.1, 148.5 | 171.3, 159.6 |
+| kept document released | 181.9, 167.3 | 181.3, 159.6 |
+
+The zones won only at the last reading; at the others the higher peak
+left the free space smaller and more split. To split the heap less
+after a kept document goes, look first at the blocks that outlive
+their document in the page zone (the list above, found with the heap
+map, "To see where blocks sit in the Mac's heap").
