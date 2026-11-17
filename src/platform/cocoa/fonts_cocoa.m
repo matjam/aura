@@ -39,18 +39,30 @@ static int css_weight(double t)
  * files whose faces Core Text lists in file order, so a collection's face
  * index is its place in the list. Families whose names begin with a dot
  * are the system's private faces. Apple Color Emoji's glyphs are bitmaps
- * the engine does not draw; the bundled emoji fonts cover it. */
+ * the engine does not draw; the bundled emoji fonts cover it.
+ *
+ * The available URLs name one face each (Helvetica.ttc#postscript-name=
+ * Helvetica-Bold), and the descriptors of such a URL are that one face
+ * at place 0. So each file is read once, through a URL without the
+ * fragment, which lists all its faces; reading the per-face URLs made
+ * every face of a collection face 0, and no system bold was drawn. */
 static void add_system_fonts(AuFontSet *set)
 {
     CFArrayRef urls = CTFontManagerCopyAvailableFontURLs();
     if (!urls)
         return;
     system_dir = au_posix_font_dir_new(set, 0);
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
     for (CFIndex u = 0; u < CFArrayGetCount(urls); u++) {
-        NSURL *url = (__bridge NSURL *)CFArrayGetValueAtIndex(urls, u);
-        const char *path = url.fileSystemRepresentation;
+        NSURL *face_url = (__bridge NSURL *)CFArrayGetValueAtIndex(urls, u);
+        const char *path = face_url.fileSystemRepresentation;
         if (!path)
             continue;
+        NSString *p = @(path);
+        if ([seen containsObject:p])
+            continue;
+        [seen addObject:p];
+        NSURL *url = [NSURL fileURLWithPath:p];
         CFArrayRef descs = CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url);
         if (!descs)
             continue;

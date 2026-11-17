@@ -60,7 +60,12 @@ built, and the model falls back where it can.
 - To find system fonts, the port lists Core Text's font files
   (`CTFontManagerCopyAvailableFontURLs`) and each file's faces
   (`CTFontManagerCreateFontDescriptorsFromURL`, in file order, so a
-  collection's face index is its place in the list). It registers the
+  collection's face index is its place in the list). The listed URLs
+  name one face each (`Helvetica.ttc#postscript-name=Helvetica-Bold`),
+  and such a URL's descriptors are that face alone at place 0, so the
+  port reads each file once through a URL without the fragment. Reading
+  the per-face URLs registered every face of a collection as face 0: no
+  system font drew bold or italic (fixed 2026-11-16). It registers the
   TrueType faces lazily; Aura's own font code reads the files. CFF faces,
   the system's private families (names beginning with a dot) and Apple
   Color Emoji (bitmap glyphs) are left out.
