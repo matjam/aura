@@ -358,6 +358,7 @@ static void destroyed(GtkWidget *w, gpointer data)
         g_source_remove(lw->timer);
     g_lists[lw->m.kind] = NULL;
     g_signal_handlers_disconnect_by_data(lw->sel, lw);
+    g_object_unref(lw->sel);
     au_list_free(&lw->m);
     g_object_unref(lw->store);
     g_free(lw);
@@ -391,7 +392,9 @@ void au_gtk_list_show(AuListKind kind)
     lw->sel = gtk_single_selection_new(G_LIST_MODEL(g_object_ref(lw->store)));
     gtk_single_selection_set_autoselect(lw->sel, FALSE);
     gtk_single_selection_set_can_unselect(lw->sel, TRUE);
-    lw->view = gtk_column_view_new(GTK_SELECTION_MODEL(lw->sel));
+    /* The view takes the selection; the window keeps its own reference
+     * so destroyed() can still disconnect from it after the view goes. */
+    lw->view = gtk_column_view_new(GTK_SELECTION_MODEL(g_object_ref(lw->sel)));
     gtk_column_view_set_show_column_separators(GTK_COLUMN_VIEW(lw->view), TRUE);
     gtk_column_view_set_reorderable(GTK_COLUMN_VIEW(lw->view), FALSE);
     const char *const *headings;
