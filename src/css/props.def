@@ -222,6 +222,7 @@ P(object_position, "object-position", T_BLOB, F_PCT, RARE, object_position, posi
 P(resize, "resize", T_KW, 0, RARE, resize, RESIZE, "none")
 P(appearance, "appearance", T_KW, 0, RARE, appearance, APPEARANCE, "none")
 P(scroll_behavior, "scroll-behavior", T_KW, 0, RARE, scroll_behavior, SCROLL_BEHAVIOR, "auto")
+P(scrollbar_width, "scrollbar-width", T_KW, 0, RARE, scrollbar_width, SCROLLBAR_WIDTH, "auto")
 P(will_change, "will-change", T_BLOB, 0, RARE, will_change, will_change, "auto")
 P(contain, "contain", T_SPECIAL, 0, RARE, contain, contain, "none")
 P(isolation, "isolation", T_KW, 0, RARE, isolation, ISOLATION, "auto")

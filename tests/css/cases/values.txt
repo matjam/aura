@@ -208,7 +208,9 @@ html
 #d { display: grid; grid-auto-flow: column dense; justify-items: legacy center; contain: strict; text-decoration-line: underline line-through; }
 #e { display: list-item; vertical-align: -2px; line-height: 1.5; font-weight: 650; font-style: oblique 10deg; font-stretch: 75%; }
 #f { display: none; vertical-align: text-top; line-height: 150%; font-weight: bolder; letter-spacing: normal; word-spacing: 2px; tab-size: 4; }
-#g { aspect-ratio: 16 / 9; z-index: 2.5; opacity: -1; }
+#g { aspect-ratio: 16 / 9; z-index: 2.5; opacity: -1; scrollbar-width: none; }
+#f { scrollbar-width: thin; }
+#e { scrollbar-width: 2px; }
 --- html
 html
   body
@@ -236,6 +238,10 @@ html
 #b -> overflow-x: hidden
 #b -> overflow-y: scroll
 #b -> overflow: hidden scroll
+#b -> scrollbar-width: auto
+#e -> scrollbar-width: auto
+#f -> scrollbar-width: thin
+#g -> scrollbar-width: none
 #b -> text-align: -webkit-center
 #c -> display: flex
 #c -> flex-grow: 2

@@ -2307,6 +2307,13 @@ static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
 {
     if (!(b->b.flags & LF_SCROLLER) || (b->b.flags & LF_HIDDEN))
         return;
+    /* scrollbar-width: none still scrolls but draws no bars (Tailwind's
+     * scrollbar-hide); thin draws narrower ones. The bars overlay the
+     * content, so neither changes layout. */
+    uint8_t sbw = b->b.style->rare->scrollbar_width;
+    if (sbw == AU_SCROLLBAR_WIDTH_NONE)
+        return;
+    float bw = sbw == AU_SCROLLBAR_WIDTH_THIN ? 5 : 8; /* track */
     AuRect pb = box_area(b, ox, oy, AU_K_padding_box);
     const AuStyleBox *s = b->b.style->box;
     float vw = pb.w, vh = pb.h;
@@ -2315,16 +2322,16 @@ static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
     if (vbar && s->overflow_y != AU_OVERFLOW_HIDDEN && s->overflow_y != AU_OVERFLOW_CLIP && vh > 8) {
         float th = l_max(16, vh * vh / l_max(vh, b->sh));
         float ty = pb.y + (vh - th) * (b->sh > vh ? b->scroll_y / (b->sh - vh) : 0);
-        au_fill_rect(P->c, (AuRect){pb.x + pb.w - 8, pb.y, 8, vh}, AU_RGBA(0, 0, 0, 20));
+        au_fill_rect(P->c, (AuRect){pb.x + pb.w - bw, pb.y, bw, vh}, AU_RGBA(0, 0, 0, 20));
         AuRadii r = {{3, 3, 3, 3}, {3, 3, 3, 3}};
-        au_fill_rounded_rect(P->c, (AuRect){pb.x + pb.w - 7, ty + 1, 6, th - 2}, &r, AU_RGBA(0, 0, 0, 110));
+        au_fill_rounded_rect(P->c, (AuRect){pb.x + pb.w - bw + 1, ty + 1, bw - 2, th - 2}, &r, AU_RGBA(0, 0, 0, 110));
     }
     if (hbar && s->overflow_x != AU_OVERFLOW_HIDDEN && s->overflow_x != AU_OVERFLOW_CLIP && vw > 8) {
         float tw = l_max(16, vw * vw / l_max(vw, b->sw));
         float tx = pb.x + (vw - tw) * (b->sw > vw ? b->scroll_x / (b->sw - vw) : 0);
-        au_fill_rect(P->c, (AuRect){pb.x, pb.y + pb.h - 8, vw, 8}, AU_RGBA(0, 0, 0, 20));
+        au_fill_rect(P->c, (AuRect){pb.x, pb.y + pb.h - bw, vw, bw}, AU_RGBA(0, 0, 0, 20));
         AuRadii r = {{3, 3, 3, 3}, {3, 3, 3, 3}};
-        au_fill_rounded_rect(P->c, (AuRect){tx + 1, pb.y + pb.h - 7, tw - 2, 6}, &r, AU_RGBA(0, 0, 0, 110));
+        au_fill_rounded_rect(P->c, (AuRect){tx + 1, pb.y + pb.h - bw + 1, tw - 2, bw - 2}, &r, AU_RGBA(0, 0, 0, 110));
     }
 }
 

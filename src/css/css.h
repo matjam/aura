@@ -419,7 +419,7 @@ typedef struct AuStyleRare {
     AuColor stop_color;
     float stop_opacity;
     uint8_t outline_style, transform_style, backface_visibility, object_fit, resize, appearance,
-        scroll_behavior, contain, isolation, mix_blend_mode, text_decoration_line, text_decoration_style,
+        scroll_behavior, scrollbar_width, contain, isolation, mix_blend_mode, text_decoration_line, text_decoration_style,
         text_overflow, user_select, box_orient, vector_effect, mask_type, dominant_baseline,
         container_type; /* AU_CONTAINER_TYPE_* */
 } AuStyleRare;
