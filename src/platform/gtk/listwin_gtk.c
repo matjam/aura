@@ -56,7 +56,7 @@ static void enable_buttons(ListWin *lw)
         gtk_widget_set_sensitive(lw->buttons[i], au_list_can(&lw->m, lw->actions[i]));
 }
 
-static void sync(ListWin *lw)
+static void sync_view(ListWin *lw)
 {
     lw->syncing = true;
     if (!lw->shown || lw->shown_gen != lw->m.generation) {
@@ -87,7 +87,7 @@ static gboolean tick(gpointer data)
         return G_SOURCE_CONTINUE;
     if (au_list_stale(&lw->m)) {
         au_list_refresh(&lw->m, au_gtk_now());
-        sync(lw);
+        sync_view(lw);
     }
     return G_SOURCE_CONTINUE;
 }
@@ -97,7 +97,7 @@ static void run_action(ListWin *lw, AuListAction a)
     if (au_list_run(&lw->m, a, au_gtk_now()) == AU_LIST_FAILED)
         gtk_widget_error_bell(GTK_WIDGET(lw->win));
     if (g_lists[lw->m.kind] == lw)
-        sync(lw);
+        sync_view(lw);
 }
 
 /* ---- The model's callbacks ---- */
@@ -167,7 +167,7 @@ static void disclosure_clicked(GtkButton *b, gpointer data)
     if (row < 0 || row >= lw->m.n || au_gtk_dialog_running())
         return;
     au_list_toggle(&lw->m, row, au_gtk_now());
-    sync(lw);
+    sync_view(lw);
 }
 
 /* The first column: [indent][disclosure][icon] text. */
@@ -309,7 +309,7 @@ static void selected_changed(GtkSingleSelection *s, GParamSpec *p, gpointer data
         return;
     guint pos = gtk_single_selection_get_selected(s);
     au_list_select(&lw->m, pos == GTK_INVALID_LIST_POSITION ? -1 : (int)pos);
-    sync(lw); /* a day heading is not selected */
+    sync_view(lw); /* a day heading is not selected */
 }
 
 static void activated(GtkColumnView *v, guint pos, gpointer data)
@@ -320,7 +320,7 @@ static void activated(GtkColumnView *v, guint pos, gpointer data)
     if (au_list_activate(&lw->m, (int)pos, au_gtk_now()) == AU_LIST_FAILED)
         gtk_widget_error_bell(GTK_WIDGET(lw->win));
     if (g_lists[lw->m.kind] == lw)
-        sync(lw);
+        sync_view(lw);
 }
 
 static void button_clicked(GtkButton *b, gpointer data)
@@ -433,7 +433,7 @@ void au_gtk_list_show(AuListKind kind)
     g_signal_connect(w, "close-request", G_CALLBACK(close_request), lw);
     g_signal_connect(w, "destroy", G_CALLBACK(destroyed), lw);
     g_lists[kind] = lw;
-    sync(lw);
+    sync_view(lw);
     lw->timer = g_timeout_add(250, tick, lw);
     gtk_window_present(lw->win);
     gtk_widget_grab_focus(lw->view);
