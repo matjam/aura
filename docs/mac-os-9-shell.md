@@ -229,8 +229,11 @@ values, checks or choice lists of its own.
 - On OK the window reads every control into the session, commits it and
   calls `mac_net_prefs_changed`. On Cancel it calls
   `au_prefs_edit_cancel` and, when the blocking lists changed,
-  `mac_blocking_prefs_changed`. A click on the tab position or a
-  blocking check box applies it at once.
+  `mac_blocking_prefs_changed`. A click on the tab position, the
+  Appearance pop-up (menu 158) or a blocking check box applies it at
+  once. Mac OS 9 has no system dark setting, so "Same as system" means
+  Light there. The Appearance row has not yet been built or run on
+  Mac OS 9.
 - An edit field that is not enabled (the MB field while its pop-up says
   Automatic) is deactivated and ignores clicks; a button that is not
   enabled (Make Aura the Default Browser without Internet Config) is

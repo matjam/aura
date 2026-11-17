@@ -10,8 +10,9 @@
  * check, choice list, note and enabled state comes from the session.
  * prefs_blocking.c makes the Blocking pane's list rows.
  *
- * Changes apply on OK; the tab position and the blocking switch and
- * lists apply as soon as they are clicked (Cancel puts them back), and
+ * Changes apply on OK; the tab position, the appearance and the
+ * blocking switch and lists apply as soon as they are clicked (Cancel
+ * puts them back), and
  * the network settings reach the network stack through
  * mac_net_prefs_changed.
  *
@@ -60,10 +61,11 @@ static const Hint hints[] = {
     {AU_PREF_USE_CURRENT_PAGE,          0, 0, 0,  R - 120, 52, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
     {AU_PREF_STARTUP,                   L, 86, 130,   X,  86, 220, 0, 0, 0, 0, 0, 0, 0, 0, 150, 0},
     {AU_PREF_TAB_POSITION,              L, 120, 130,  X, 121, 160, 0, X + 170, 180, 0, 0, 0, 0, 0, 0, 0},
-    {AU_PREF_SEARCH,                    L, 154, 130,  X, 154, R - X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {AU_PREF_SEARCH_NOTE,               0, 0, 0,      X, 178, R - X, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {AU_PREF_EXTERNAL_NEW_WINDOW,       L, 214, 130,  X, 215, R - X, 0, 0, 0, 0, 0, 0, 0, 0, 0, H_TWO_LINES},
-    {AU_PREF_DEFAULT_BROWSER,           0, 0, 0,      X, 248, 220, 0, 0, 0, 0, 0, X + 230, 251, R - X - 230, 0, 0},
+    {AU_PREF_APPEARANCE,                L, 154, 130,  X, 154, 160, 0, 0, 0, 0, 0, 0, 0, 0, 158, 0},
+    {AU_PREF_SEARCH,                    L, 188, 130,  X, 188, R - X, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {AU_PREF_SEARCH_NOTE,               0, 0, 0,      X, 212, R - X, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {AU_PREF_EXTERNAL_NEW_WINDOW,       L, 248, 130,  X, 249, R - X, 0, 0, 0, 0, 0, 0, 0, 0, 0, H_TWO_LINES},
+    {AU_PREF_DEFAULT_BROWSER,           0, 0, 0,      X, 282, 220, 0, 0, 0, 0, 0, X + 230, 285, R - X - 230, 0, 0},
     {AU_PREF_FONT_SERIF,                L, 52, 130,   X,  52, 220, 0, 0, 0, 0, 0, 0, 0, 0, 152, 0},
     {AU_PREF_FONT_SANS,                 L, 84, 130,   X,  84, 220, 0, 0, 0, 0, 0, 0, 0, 0, 153, 0},
     {AU_PREF_FONT_MONO,                 L, 116, 130,  X, 116, 220, 0, 0, 0, 0, 0, 0, 0, 0, 154, 0},
@@ -625,7 +627,9 @@ static AuPrefId item_of(PrefsWin *p, ControlHandle c, bool *second)
 static void apply_live(PrefsWin *p)
 {
     unsigned bits = au_prefs_edit_apply_live(p->edit, g_browser);
-    if (bits & AU_PREF_CHANGED_TABS)
+    /* The appearance restyles every page (au_browser_prefs_changed); the
+     * flush draws them now rather than at the next idle. */
+    if (bits & (AU_PREF_CHANGED_TABS | AU_PREF_CHANGED_APPEARANCE))
         browserwin_flush_all();
     if (bits & AU_PREF_CHANGED_BLOCKING)
         mac_blocking_prefs_changed();
