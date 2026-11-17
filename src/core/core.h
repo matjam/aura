@@ -140,6 +140,11 @@ void au_heap_zone_unhold(int prev);
 #define AU_HEAP_ZONE_MASK 0x0Fu
 void au_heap_enable(void *(*get)(size_t n, unsigned how), void (*release)(void *p));
 bool au_heap_enabled(void);
+/* Optional: resize makes a large platform block (one get returned without
+ * AU_HEAP_GET_SLAB) n bytes long where it is, never moving it, and
+ * returns false when it cannot. au_realloc of a block over 16 KB tries it
+ * before it allocates, copies and frees. */
+void au_heap_set_resize(bool (*resize)(void *p, size_t n));
 void *au_heap_alloc(size_t n); /* NULL when the platform has no memory */
 void *au_heap_realloc(void *p, size_t n);
 void au_heap_free(void *p);
@@ -151,6 +156,7 @@ typedef struct AuHeapStats {
     size_t mid_slabs, mid_blocks; /* of those: slabs of blocks over 2 KB, and their blocks in use */
     size_t empty_bytes;         /* bytes of empty slabs kept for reuse (au_heap_trim returns them) */
     size_t long_bytes;          /* of system_bytes: the long-lived zone's */
+    size_t resized;             /* large blocks au_realloc resized in place (au_heap_set_resize) */
 } AuHeapStats;
 /* The zone of a block from au_heap_alloc. */
 unsigned au_heap_zone_of(const void *p);

@@ -94,6 +94,7 @@ typedef struct HeapZone {
 static struct {
     void *(*get)(size_t n, unsigned how);
     void (*release)(void *p);
+    bool (*resize)(void *p, size_t n); /* optional (au_heap_set_resize) */
     HeapZone z[AU_HEAP_ZONES];
     AuHeapStats st;
 } H;
@@ -155,6 +156,11 @@ void au_heap_enable(void *(*get)(size_t n, unsigned how), void (*release)(void *
 {
     H.get = get;
     H.release = release;
+}
+
+void au_heap_set_resize(bool (*resize)(void *p, size_t n))
+{
+    H.resize = resize;
 }
 
 void au_heap_stats(AuHeapStats *s)
@@ -475,6 +481,19 @@ void *au_heap_realloc(void *p, size_t n)
         H.st.used_bytes += n;
         H.st.used_bytes -= old;
         h->size = n;
+        return p;
+    }
+    /* A large block that stays large: the platform resizes it where it
+     * is when it can (a growth then needs no copy and leaves no hole). */
+    if (IS_LARGE(h->slab) && n > AU_HEAP_MID && H.resize && n <= (size_t)-1 - sizeof(HeapHdr) &&
+        H.resize(h, n + sizeof(HeapHdr))) {
+        bool lng = h->slab == LARGE_LONG;
+        count_platform(old + sizeof(HeapHdr), lng, false);
+        count_platform(n + sizeof(HeapHdr), lng, true);
+        H.st.used_bytes -= old;
+        H.st.used_bytes += n;
+        h->size = n;
+        H.st.resized++;
         return p;
     }
     /* A large block that shrinks by less than half stays where it is

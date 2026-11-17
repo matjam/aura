@@ -43,6 +43,10 @@ bool au_region_add(AuRegion *r, void *mem, size_t bytes);
 /* NULL when no free extent fits n bytes. */
 void *au_region_alloc(AuRegion *r, size_t n, bool high);
 void au_region_free(AuRegion *r, void *p);
+/* Makes block p hold n bytes without moving it: a shrink frees the tail,
+ * a growth takes the free space right after the block. False when that
+ * space is not free or too small (p is then unchanged). */
+bool au_region_resize(AuRegion *r, void *p, size_t n);
 /* Takes out a chunk that holds no block: returns its index, and the last
  * chunk moves to that index (the caller who keeps a table per chunk
  * moves its entry the same way); the chunk's memory is the caller's

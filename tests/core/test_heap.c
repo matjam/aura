@@ -415,6 +415,108 @@ static void region(void)
     CHECK(au_region_drop_free_chunk(&r) == 0 && r.nchunks == 0 && r.free == NULL && r.total == 0);
 }
 
+/* au_region_resize: a shrink frees the tail (joined with free space after
+ * it), a growth takes the free block after it and only that, and the
+ * bytes kept are untouched. */
+static void region_resize(void)
+{
+    enum { CH = 64 * 1024 };
+    static size_t mem[CH / sizeof(size_t)];
+    AuRegion r;
+    au_region_init(&r);
+    CHECK(au_region_add(&r, mem, CH));
+    size_t free0;
+    au_region_free_space(&r, &free0, NULL);
+    char *a = au_region_alloc(&r, 4000, false);
+    char *b = au_region_alloc(&r, 4000, false);
+    CHECK(a && b && a < b);
+    memset(a, 7, 4000);
+    /* a cannot grow: b is right after it. */
+    CHECK(!au_region_resize(&r, a, 5000) && au_region_size(a) >= 4000 && au_region_size(a) < 5000);
+    /* b grows into the free space after it, in place. */
+    memset(b, 9, 4000);
+    CHECK(au_region_resize(&r, b, 20000) && au_region_size(b) >= 20000);
+    bool same = true;
+    for (int i = 0; i < 4000; i++)
+        same = same && b[i] == 9;
+    CHECK(same);
+    /* b shrinks: the tail goes back and joins the rest. */
+    CHECK(au_region_resize(&r, b, 1000) && au_region_size(b) < 1100);
+    size_t f, big;
+    au_region_free_space(&r, &f, &big);
+    CHECK(f == big && r.blocks == 2);
+    /* With b freed, a grows into the space b left. */
+    au_region_free(&r, b);
+    CHECK(au_region_resize(&r, a, 30000) && au_region_size(a) >= 30000);
+    same = true;
+    for (int i = 0; i < 4000; i++)
+        same = same && a[i] == 7;
+    CHECK(same);
+    /* Not past the chunk's end. */
+    CHECK(!au_region_resize(&r, a, CH));
+    au_region_free(&r, a);
+    au_region_free_space(&r, &f, &big);
+    CHECK(f == free0 && big == free0 && r.blocks == 0 && r.used == 0);
+}
+
+/* The pool's large blocks grow and shrink in place when the platform's
+ * resize allows it: here a region stands in for the Mac's heap. */
+static AuRegion big_region;
+static size_t big_mem[(1u << 20) / sizeof(size_t)];
+
+static void *big_get(size_t n, unsigned how)
+{
+    void *p = (how & AU_HEAP_GET_SLAB) ? NULL : au_region_alloc(&big_region, n, false);
+    return p ? p : get(n, how);
+}
+
+static void big_release(void *p)
+{
+    if (au_region_owns(&big_region, p))
+        au_region_free(&big_region, p);
+    else
+        release(p);
+}
+
+static bool big_resize(void *p, size_t n)
+{
+    return au_region_owns(&big_region, p) && au_region_resize(&big_region, p, n);
+}
+
+static void resize_in_place(void)
+{
+    au_region_init(&big_region);
+    CHECK(au_region_add(&big_region, big_mem, sizeof big_mem));
+    au_heap_enable(big_get, big_release);
+    au_heap_set_resize(big_resize);
+    size_t resized0 = stats().resized;
+    unsigned char *p = au_alloc(20000);
+    for (int i = 0; i < 20000; i++)
+        p[i] = (unsigned char)i;
+    unsigned char *q = au_realloc(p, 200000);
+    CHECK(q == p && stats().resized == resized0 + 1);
+    bool same = true;
+    for (int i = 0; i < 20000; i++)
+        same = same && q[i] == (unsigned char)i;
+    CHECK(same);
+    /* Another block after it: the next growth must move. */
+    void *blocker = au_alloc(30000);
+    unsigned char *r2 = au_realloc(q, 400000);
+    CHECK(r2 != q);
+    same = true;
+    for (int i = 0; i < 20000; i++)
+        same = same && r2[i] == (unsigned char)i;
+    CHECK(same);
+    /* Shrinking stays in place and gives the tail back. */
+    unsigned char *s2 = au_realloc(r2, 17000);
+    CHECK(s2 == r2 && stats().resized == resized0 + 2);
+    au_free(s2);
+    au_free(blocker);
+    CHECK(big_region.blocks == 0);
+    au_heap_set_resize(NULL);
+    au_heap_enable(get, release);
+}
+
 static int handler_calls;
 static void *cache_block; /* what the release handler can free */
 
@@ -491,6 +593,8 @@ int main(void)
     low_memory();
     zones();
     region();
+    region_resize();
+    resize_in_place();
 
     /* The same class keeps a block in place when it grows a little. */
     char *p = au_alloc(130);

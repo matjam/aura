@@ -329,6 +329,23 @@ static void *heap_get(size_t n, unsigned how)
     return hd + 1;
 }
 
+/* au_heap_set_resize: a large block from NewPtr grows or shrinks where it
+ * is (SetPtrSize never moves a nonrelocatable block), so a growing
+ * buffer needs no copy and leaves no hole behind. Blocks in temporary
+ * memory or the long-lived region are left to the pool's copy. */
+static bool heap_resize(void *p, size_t n)
+{
+    PlatHdr *hd = (PlatHdr *)p - 1;
+    if (hd->owner || hd->chunked)
+        return false;
+    Size want = (Size)(n + sizeof(PlatHdr));
+    Size have = GetPtrSize((Ptr)hd);
+    if (want > have && FreeMem() < (long)(want - have) + HEAP_FLOOR)
+        return false;
+    SetPtrSize((Ptr)hd, want);
+    return MemError() == noErr;
+}
+
 static void heap_release(void *p)
 {
     PlatHdr *hd = (PlatHdr *)p - 1;
@@ -1246,6 +1263,7 @@ int main(void)
     /* Before the first au_alloc: small blocks come from slabs, not from
      * one NewPtr each (see src/core/heap.c). */
     au_heap_enable(heap_get, heap_release);
+    au_heap_set_resize(heap_resize);
     InitGraf(&qd.thePort);
     InitFonts();
     InitWindows();

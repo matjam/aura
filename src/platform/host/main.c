@@ -178,6 +178,17 @@ static void sim_heap_release(void *p)
     free(o);
 }
 
+/* As SetPtrSize: in place within the region, or not at all. */
+static bool sim_heap_resize(void *p, size_t n)
+{
+    if (!au_region_owns(&sim_heap, p) || !au_region_resize(&sim_heap, p, n))
+        return false;
+    size_t end = (size_t)((char *)p - sim_heap.chunk[0].base) + au_region_size(p);
+    if (end > sim_high && !(*au_region_tag(p) & AU_HEAP_ZONE_LONG && sim_mode == SIM_TOP))
+        sim_high = end;
+    return true;
+}
+
 static bool sim_heap_start(const char *spec)
 {
     if (strncmp(spec, "mac", 3))
@@ -192,6 +203,8 @@ static bool sim_heap_start(const char *spec)
     au_region_init(&sim_heap);
     au_region_add(&sim_heap, mem, mb * 1024 * 1024);
     au_heap_enable(sim_heap_get, sim_heap_release);
+    if (!strstr(spec, ":noresize"))
+        au_heap_set_resize(sim_heap_resize);
     return true;
 }
 
@@ -363,8 +376,10 @@ static void au_host_heap_report(const char *label)
     printf("heap (%s): %lu blocks, %lu KB asked for; %lu KB from the platform in %lu slabs and %lu large blocks\n",
            label, (unsigned long)st.blocks, (unsigned long)(st.used_bytes / 1024),
            (unsigned long)(st.system_bytes / 1024), (unsigned long)st.slabs, (unsigned long)st.large);
-    printf("heap (%s): %lu blocks over 2 KB in %lu slabs; %lu KB of empty slabs kept\n", label,
-           (unsigned long)st.mid_blocks, (unsigned long)st.mid_slabs, (unsigned long)(st.empty_bytes / 1024));
+    printf("heap (%s): %lu blocks over 2 KB in %lu slabs; %lu KB of empty slabs kept; %lu large blocks resized in "
+           "place\n",
+           label, (unsigned long)st.mid_blocks, (unsigned long)st.mid_slabs, (unsigned long)(st.empty_bytes / 1024),
+           (unsigned long)st.resized);
 }
 
 static double now_ms(void)

@@ -149,6 +149,57 @@ void au_region_free(AuRegion *r, void *p)
     free_insert(r, (AuRegionFree *)h);
 }
 
+bool au_region_resize(AuRegion *r, void *p, size_t n)
+{
+    if (!p || n > (size_t)-1 / 2)
+        return false;
+    RHdr *h = (RHdr *)p - 1;
+    size_t need = (sizeof(RHdr) + n + R_ALIGN - 1) & ~(R_ALIGN - 1);
+    if (need < R_MIN)
+        need = R_MIN;
+    size_t have = bytes_of(h);
+    if (need <= have) {
+        if (have - need < R_MIN)
+            return true; /* the rest would be too small to hold a free block */
+        AuRegionFree *rest = (AuRegionFree *)((char *)h + need);
+        rest->h.size = have - need;
+        h->size = need;
+        r->used -= have - need;
+        free_insert(r, rest);
+        return true;
+    }
+    /* Growing: only into a free block right after it in its chunk. */
+    char *after = (char *)h + have;
+    const char *base = chunk_base(r, h);
+    if (!base || chunk_base(r, after) != base)
+        return false;
+    AuRegionFree *prev = NULL, *e = r->free;
+    while (e && (char *)e < after) {
+        prev = e;
+        e = e->next;
+    }
+    if ((char *)e != after || have + bytes_of(&e->h) < need)
+        return false;
+    size_t total = have + bytes_of(&e->h);
+    AuRegionFree *link = e->next;
+    if (total - need >= R_MIN) {
+        AuRegionFree *rest = (AuRegionFree *)((char *)h + need);
+        rest->h.size = (total - need) | 1;
+        rest->h.tag = 0;
+        rest->next = link;
+        link = rest;
+    } else {
+        need = total;
+    }
+    if (prev)
+        prev->next = link;
+    else
+        r->free = link;
+    h->size = need;
+    r->used += need - have;
+    return true;
+}
+
 int au_region_drop_free_chunk(AuRegion *r)
 {
     AuRegionFree *prev = NULL;

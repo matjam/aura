@@ -57,7 +57,8 @@ AURA_HEAP=mac:200 build/mem/src/platform/host/aura-host chrome --bundled-only --
   goes outside the region, as the Mac application keeps it in temporary
   memory ("Zones" below). `mac:200:top` puts it at the top of the
   region instead, and `mac:200:flat` low with the page zone, as before
-  the zones.
+  the zones. `:noresize` (for example `mac:200:noresize`) stops large
+  blocks from being resized in place ("The pooled allocator" below).
 - `heapmap` gives the empty slabs back (as the Mac does when idle) and
   prints the free space, the largest free block, the blocks held, how
   far the page zone's blocks have reached, and the bytes held outside
@@ -178,6 +179,23 @@ The classes at a power of two are 16 bytes over it so that the script
 engine's 4 KB arenas fit: QuickJS takes its blocks of up to 512 bytes
 from arenas of at most 4096 bytes, and `qa_malloc`
 (`src/js/runtime.c`) adds a 16-byte header to each.
+
+**Large blocks resize in place.** `au_realloc` of a block over 16 KB
+that stays over 16 KB first asks the platform to resize it where it is
+(`au_heap_set_resize`): `SetPtrSize` on the Mac, which never moves a
+nonrelocatable block, and `au_region_resize` in the host's stand-in
+heap. A growing buffer then needs no copy and leaves no hole below it.
+Only when the space after the block is taken does the pool allocate,
+copy and free. Blocks in temporary memory and the long-lived region are
+not resized.
+
+Measured on the host (2026-11-16, `AURA_HEAP=mac:200`, Wikipedia's
+PowerPC article at 1024x768, 10 seconds; `:noresize` turns the resize
+off): 80 large blocks were resized in place, the page's blocks reached
+23.6 MB of the region instead of 25.1 MB, the largest free block while
+the page was open was 184.3 MB instead of 182.1 MB, and the platform
+was asked for 904 blocks instead of 1,143. `--do heap` counts the
+blocks resized.
 
 **Empty slabs.** A slab is returned only when its last block is freed.
 The pool then keeps up to 8 empty small slabs and, for the classes
