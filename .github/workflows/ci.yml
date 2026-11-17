@@ -5,6 +5,7 @@
 #   sanitize  the tests under AddressSanitizer and UBSan (Ubuntu, Clang)
 #   ppc       the Mac OS 9 application and the self-extracting archive
 #             (build-ppc.yml), uploaded as artifacts
+#   gtk       the Linux GTK4 application (-DAURA_PLATFORM=gtk) builds
 #
 # Releases are made by release.yml. Nothing here needs the guest disk
 # images, QEMU or a secret. Actions are pinned to a commit; the comment
@@ -78,6 +79,24 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build/asan --output-on-failure
+
+  gtk:
+    name: Linux GTK4 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: gtk-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install GTK4, Fontconfig and Ninja
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgtk-4-dev libfontconfig-dev ninja-build
+      - name: Configure
+        run: cmake -S . -B build/gtk -G Ninja -DAURA_PLATFORM=gtk
+      - name: Build
+        run: cmake --build build/gtk
 
   ppc:
     name: Mac OS 9
