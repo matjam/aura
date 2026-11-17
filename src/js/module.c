@@ -193,11 +193,19 @@ static JSValue n_module_eval(JSContext *ctx, JSValueConst this_val, int argc, JS
         return JS_EXCEPTION;
     bool inl = argc > 2 && JS_ToBool(ctx, argv[2]);
     bool has_src = argc > 1 && JS_IsString(argv[1]);
-    char name[1100];
-    if (inl && has_src)
-        snprintf(name, sizeof name, "%.1000s#inline-module-%lu", url, (unsigned long)++m->inline_seq);
-    else
-        snprintf(name, sizeof name, "%.1000s", url);
+    /* The module's name is its whole URL: a data: URL module runs to
+     * tens of kilobytes (Reddit's are 1.3 and 36 KB), and a name cut
+     * short is not the name the loader and moduleStore use, so the
+     * module was asked for again on every round. */
+    char *name = url;
+    if (inl && has_src) {
+        AuBuf nb;
+        au_buf_init(&nb);
+        au_buf_puts(&nb, url);
+        au_buf_printf(&nb, "#inline-module-%lu", (unsigned long)++m->inline_seq);
+        name = au_buf_take(&nb, NULL);
+    }
+    JSValue ret = JS_EXCEPTION;
     clear_missing(m);
     /* A module script of a URL already loaded (as another script or as an
      * import) is that module: it is not compiled or run a second time. */
@@ -205,55 +213,54 @@ static JSValue n_module_eval(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (!md && has_src) {
         size_t len = 0;
         char *src = js_tostr(ctx, argv[1], &len);
-        if (!src) {
-            au_free(url);
-            return JS_EXCEPTION;
-        }
+        if (!src)
+            goto out;
         md = compile_module(ctx, name, src, len, inl ? js->url : url);
         au_free(src);
-        if (!md) {
-            au_free(url);
-            return JS_EXCEPTION;
-        }
+        if (!md)
+            goto out;
     } else if (!md && inl) {
-        au_free(url);
-        return JS_ThrowInternalError(ctx, "inline module %s is gone", name);
+        ret = JS_ThrowInternalError(ctx, "inline module %.200s is gone", name);
+        goto out;
     } else if (!md) {
         ModSrc *s = find_src(m, url);
         if (!s || !s->src) {
             add_missing(m, url);
-            au_free(url);
-            return missing_array(js);
+            ret = missing_array(js);
+            goto out;
         }
         md = compile_module(ctx, name, s->src, s->len, url);
         au_free(s->src);
         s->src = NULL;
         s->len = 0;
-        if (!md) {
-            au_free(url);
-            return JS_EXCEPTION;
-        }
+        if (!md)
+            goto out;
     }
-    au_free(url);
     JSValue mv = JS_DupValue(ctx, JS_MKPTR(JS_TAG_MODULE, md));
     if (JS_ResolveModule(ctx, mv) < 0) {
         JS_FreeValue(ctx, mv);
         if (!m->nmissing)
-            return JS_EXCEPTION;
+            goto out;
         JSValue e = JS_GetException(ctx);
-        if (JS_IsUncatchableError(e))
-            return JS_Throw(ctx, e);
+        if (JS_IsUncatchableError(e)) {
+            ret = JS_Throw(ctx, e);
+            goto out;
+        }
         JS_FreeValue(ctx, e);
-        JSValue arr = missing_array(js);
-        JS_SetPropertyStr(ctx, arr, "module", JS_NewString(ctx, name));
-        return arr;
+        ret = missing_array(js);
+        JS_SetPropertyStr(ctx, ret, "module", JS_NewString(ctx, name));
+        goto out;
     }
     JSValue p = JS_EvalFunction(ctx, mv);
     if (JS_IsException(p))
-        return JS_EXCEPTION;
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "promise", p);
-    return o;
+        goto out;
+    ret = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, ret, "promise", p);
+out:
+    if (name != url)
+        au_free(name);
+    au_free(url);
+    return ret;
 }
 
 static JSValue n_module_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)

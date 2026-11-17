@@ -158,6 +158,11 @@ at once (`fetchModules`) and calls again with the module's name.
   copy (patch 0008).
 - A module script whose URL is already loaded is that module: it runs
   once, as the standard's module map says.
+- A module's name is its whole URL, however long. Reddit loads `data:`
+  modules of 1.3 KB and 36 KB and imports the larger one as well; a
+  name cut short at 1000 characters never matched the module the
+  import had loaded, and the script was asked for again until "Module
+  graph too large" (`tests/js/pages/module_data_url.html`).
 - To change the protocol, keep `tests/js/modules.js` passing: it covers
   shared imports, two script elements of one URL, `import.meta.url` of
   modules loaded in later rounds, inline modules and syntax errors.
