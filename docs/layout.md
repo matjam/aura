@@ -580,6 +580,9 @@ next block's margin apply.
 
 - `object-fit` and `object-position` are applied when an image box is
   painted.
+- `border-radius` clips an image to its content box with the radii
+  less the border and padding (`content_radii` in `draw.c`); a canvas,
+  frame or SVG image is not clipped yet ([`known-gaps.md`](known-gaps.md)).
 - `list-style-image` makes the marker an image box with a 7px gap after
   it (Blink's marker padding), or the `list-style-type` marker when the
   image fails.

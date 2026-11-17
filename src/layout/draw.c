@@ -1793,6 +1793,21 @@ static void paint_svg(PCtx *P, LBlock *b, AuRect cb)
     au_canvas_translate(P->c, -ix, -iy);
 }
 
+/* The content-box radii that clip a replaced element's content (CSS
+ * Backgrounds 3, 5.3: the border radii less the border and padding),
+ * if any corner stays rounded. */
+static bool content_radii(const LBlock *b, AuRadii *out)
+{
+    box_radii(b, out, b->w, b->h);
+    if (au_radii_zero(out))
+        return false;
+    float in[4];
+    for (int i = 0; i < 4; i++)
+        in[i] = b->bw[i] + b->p[i];
+    inset_radii(out, in);
+    return !au_radii_zero(out);
+}
+
 static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
 {
     if (b->b.flags & LF_HIDDEN)
@@ -1854,13 +1869,25 @@ static void paint_replaced(PCtx *P, LBlock *b, float ox, float oy)
             if (r->url && P->L->env.image_use && ob.w >= 1 && ob.h >= 1 && ob.w <= 8192 && ob.h <= 8192)
                 P->L->env.image_use(P->L->env.ctx, r->url, au_f2px(ceilf(ob.w)), au_f2px(ceilf(ob.h)));
             const AuSurface *px = r->pixels;
+            AuRadii rr;
+            bool round = content_radii(b, &rr);
             if (crop)
                 au_canvas_clip_push(P->c, cb);
+            if (round)
+                au_canvas_group_begin(P->c, cb);
             if (ob.w > 0 && ob.h > 0)
                 au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, ob,
                               s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST
                                                                                      : AU_FILTER_BILINEAR,
                               1);
+            if (round) {
+                AuPath path;
+                au_path_init(&path);
+                au_path_rounded_rect(&path, cb, &rr, false);
+                au_canvas_group_mask(P->c, &path);
+                au_path_free(&path);
+                au_canvas_group_end(P->c, 1.0f);
+            }
             if (crop)
                 au_canvas_clip_pop(P->c);
         } else if (cb.w >= 1 && cb.h >= 1) {

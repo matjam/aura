@@ -139,3 +139,18 @@ pixel 28 40 000000
 #h w=20 h=10
 #g w=300 h=150
 #p h=16
+
+=== border-radius clips an image to its rounded content box
+<body style="margin:0">
+<style>img { width:60px; height:60px; display:block; float:left; margin-right:10px }</style>
+<img style="border-radius:50%" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+<img style="border-radius:10px;padding:10px;width:40px;height:40px" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII=">
+---
+// jslandy.com's round headshot was square: images ignored border-radius
+pixel 3 3 ffffff
+pixel 56 56 ffffff
+pixel 30 30 ff0000
+pixel 30 2 ff0000
+// the radius less the padding is 0: the content corners stay square
+pixel 80 10 ff0000
+pixel 72 2 ffffff

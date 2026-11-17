@@ -209,6 +209,8 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   paint unclipped, it does not clip hit testing, and a box with both
   `clip` and `clip-path` takes only `clip-path`.
 - `mask: url(#id)` on HTML elements.
+- `border-radius` does not clip the content of a canvas, an iframe or an
+  `<img>` showing an SVG (raster images are clipped).
 - One raster per SVG image URL (an image shown at two shapes on one
   page shares the larger raster).
 - SVG documents in frames are shown as text (see [Frames](#frames)).
