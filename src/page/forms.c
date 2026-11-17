@@ -1625,15 +1625,14 @@ DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
     dv->in_key = false;
     if (dv->restyle_needed || dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan) {
         /* What listeners and state changes did during the key
-         * (au_dv_turn_end leaves it to here): update now, and repaint the
-         * page only if the update changed something. A restyle that
-         * computes the same values repaints nothing. A change still
-         * waiting for its paint (pending) was invalidated when it was
-         * made. */
+         * (au_dv_turn_end leaves it to here): update now, and repaint
+         * what the update changed (au_layout_take_damage): nothing for a
+         * restyle that computes the same values, the boxes restyled for
+         * paint only, or the page when anything moved. */
         bool heavy = dv->tree_dirty || dv->sheets_dirty || dv->sheets_rescan;
-        bool pending = au_layout_needs_paint(dv->layout);
-        if (au_docview_update(dv) || heavy || (!pending && au_layout_needs_paint(dv->layout)))
+        if (au_docview_update(dv) || heavy)
             au_dv_invalidate_all(dv);
+        au_dv_invalidate_damage(dv);
     }
     return used;
 }

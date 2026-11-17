@@ -199,6 +199,16 @@ bool au_layout_update(AuLayout *L, float vw, float vh);
 /* True when something changed since the last paint. Cleared by
  * au_layout_paint. */
 bool au_layout_needs_paint(const AuLayout *L);
+/* What changed on screen since the last call, whoever ran the updates:
+ * -1 for everything (a build, a layout, a new paint order, or a change
+ * whose place depends on scrolling or a transform), else n rectangles in
+ * document coordinates (at most max), the paint extents of the boxes a
+ * restyle changed for paint only (colours, opacity, outlines that keep
+ * their width). 0 when a restyle computed what the boxes had. Changes
+ * that invalidate on their own (images, canvases, form controls, the
+ * caret, selection) are not counted here. The damage is then cleared. */
+#define AU_LAYOUT_DAMAGE 16 /* the most rectangles it keeps */
+int au_layout_take_damage(AuLayout *L, AuRect *out, int max);
 
 /* The size of the document's scrollable area: at least the viewport. */
 void au_layout_document_size(const AuLayout *L, float *w, float *h);

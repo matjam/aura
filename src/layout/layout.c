@@ -1613,6 +1613,54 @@ void au_layout_images_changed(AuLayout *L)
     }
 }
 
+/* Adds the paint extent of b, restyled for paint only, to the damage.
+ * When the list is full, the new extent joins the rectangle it grows
+ * least. */
+static void damage_box(AuLayout *L, LBox *b)
+{
+    if (L->dmg_all)
+        return;
+    AuRect r;
+    if (!l_box_paint_extent(L, b, &r)) {
+        L->dmg_all = true;
+        return;
+    }
+    if (!(r.w > 0 && r.h > 0))
+        return; /* it paints nothing */
+    if (L->ndmg < L_DAMAGE) {
+        L->dmg[L->ndmg++] = r;
+        return;
+    }
+    int best = 0;
+    float grow = 0;
+    for (int i = 0; i < L->ndmg; i++) {
+        AuRect a = L->dmg[i];
+        float x0 = l_min(a.x, r.x), y0 = l_min(a.y, r.y);
+        float x1 = l_max(a.x + a.w, r.x + r.w), y1 = l_max(a.y + a.h, r.y + r.h);
+        float g = (x1 - x0) * (y1 - y0) - a.w * a.h;
+        if (i == 0 || g < grow) {
+            best = i;
+            grow = g;
+        }
+    }
+    AuRect a = L->dmg[best];
+    float x0 = l_min(a.x, r.x), y0 = l_min(a.y, r.y);
+    float x1 = l_max(a.x + a.w, r.x + r.w), y1 = l_max(a.y + a.h, r.y + r.h);
+    L->dmg[best] = (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+int au_layout_take_damage(AuLayout *L, AuRect *out, int max)
+{
+    int n = L->dmg_all ? -1 : L->ndmg;
+    if (n > max)
+        n = -1;
+    for (int i = 0; i < n; i++)
+        out[i] = L->dmg[i];
+    L->dmg_all = false;
+    L->ndmg = 0;
+    return n;
+}
+
 /* How a style change affects layout: 0 none, 1 repaint, 2 relayout of
  * the box, 3 rebuild of the box tree. */
 static int style_diff(const AuStyle *a, const AuStyle *b)
@@ -1801,6 +1849,8 @@ void au_layout_styles_changed(AuLayout *L)
                 worst = d;
             if (d < 3 && stacking_style_differs(b->style, ns))
                 L->need_restack = true;
+            if (d == 1)
+                damage_box(L, b); /* with its old style: the same geometry */
             if (d == 2) {
                 l_mark_dirty(b);
                 L->other_relayout = true;
@@ -1957,6 +2007,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->vw = vw;
         L->vh = vh;
         L->need_layout = false;
+        L->dmg_all = true;
         return true;
     }
     if (L->need_layout || vw != L->vw || vh != L->vh) {
@@ -1980,9 +2031,12 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->need_restack) {
         l_build_stacking(L);
         L->need_restack = false;
+        L->dmg_all = true; /* the paint order changed */
     }
-    if (changed)
+    if (changed) {
         L->need_paint = true;
+        L->dmg_all = true;
+    }
     if (L->check)
         l_check_incremental(L);
     L->rebuilt = false;

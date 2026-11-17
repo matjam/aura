@@ -375,6 +375,14 @@ bool au_docview_pack_sheets(AuDocView *dv);
 void au_docview_set_viewport(AuDocView *dv, int width, int height);
 /* Brings style and layout up to date. Returns true if geometry changed. */
 bool au_docview_update(AuDocView *dv);
+/* Script changed a top-level document (au_docview_settle_pending): its
+ * turns leave the update to au_docview_settle, which the embedder calls
+ * once its script slice is over (and after input). It updates and
+ * invalidates what the update changed: nothing for a restyle that
+ * computed the same values, the boxes restyled for paint only, or the
+ * whole document when anything moved (au_layout_take_damage). */
+bool au_docview_settle_pending(const AuDocView *dv);
+void au_docview_settle(AuDocView *dv);
 void au_docview_content_size(AuDocView *dv, int *width, int *height);
 /* Paints the document so that document point (scroll_x, scroll_y) is at
  * view's top-left; paints every pixel of view. */

@@ -3945,6 +3945,15 @@ static void internal_action(AuPage *p, const char *what)
     }
 }
 
+/* Updates the layout for what script turns changed and repaints only what
+ * moved or changed (au_docview_settle). Runs outside fetch polling, where
+ * an invalidation would mark the whole page dirty. */
+static void settle(AuPage *p)
+{
+    if (p->kind == K_DOC && p->begun && !p->in_idle)
+        au_docview_settle(p->dv);
+}
+
 bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
@@ -3964,7 +3973,8 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
         e.x = e.y = -100000; /* end the press without activating a link */
     bool used = au_docview_mouse(p->dv, &e) || gesture;
     if (follow_open_url(p))
-        used = true;
+        return true;
+    settle(p);
     return used;
 }
 
@@ -4002,7 +4012,8 @@ bool au_page_key(AuPage *p, const AuEvent *ev)
         return false;
     bool used = au_docview_key(p->dv, ev);
     if (follow_open_url(p))
-        used = true;
+        return true;
+    settle(p);
     return used;
 }
 
@@ -4194,6 +4205,7 @@ void au_page_idle(AuPage *p)
         au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS); /* timers, tasks, frames */
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
+        settle(p);
     }
     /* A load whose fetches are all in may still wait for a frame's
      * document (a srcdoc frame, a frame's load event): check_finished
@@ -4231,6 +4243,7 @@ void au_page_idle(AuPage *p)
         return; /* a script navigated while the document loaded */
     update_interim(p);
     maybe_layout(p, false);
+    settle(p); /* script that ran in fetch callbacks */
     if (!p->netlog.dcl_ms && p->main_done && p->begun && !p->internal && au_docview_content_loaded(p->dv))
         au_netlog_mark(&p->netlog, log_ms(p) ? log_ms(p) : 1, 0);
     check_finished(p);
@@ -4240,7 +4253,7 @@ void au_page_idle(AuPage *p)
 bool au_page_busy(const AuPage *p)
 {
     return p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
-           (p->begun && au_docview_scripts_due(p->dv) < 300);
+           (p->begun && au_docview_scripts_due(p->dv) < 300) || (p->begun && au_docview_settle_pending(p->dv));
 }
 
 void au_page_stats(const AuPage *p, AuPageStats *s)

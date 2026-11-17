@@ -3649,6 +3649,25 @@ static bool view_box_extent(const AuLayout *L, LBox *b, AuRect *out)
     return true;
 }
 
+bool l_box_paint_extent(AuLayout *L, LBox *b, AuRect *out)
+{
+    while (b && b->kind != LK_BLOCK) /* an inline box or text: its block */
+        b = b->parent;
+    if (!b)
+        return false;
+    for (LBox *p = b; p; p = p->parent) {
+        if (p->flags & (LF_FIXED | LF_STICKY))
+            return false;
+        if (p != b && p->kind == LK_BLOCK && (p->flags & LF_SCROLLER))
+            return false;
+    }
+    if (is_view_box(L, b))
+        return false;
+    /* A fixed or sticky descendant is left out by view_box_extent: its
+     * own style change, if any, gives up above. */
+    return view_box_extent(L, b, out);
+}
+
 static bool has_scroller_ancestor(const LBox *b)
 {
     for (const LBox *p = b->parent; p; p = p->parent)

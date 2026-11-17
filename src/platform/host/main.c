@@ -421,7 +421,9 @@ static int usage(void)
             "                        build with -DAURA_MEM_TRACK=ON) cache (the HTTP cache's counts with --net,\n"
             "                        the documents kept for Back and Forward, DNS lookups)\n"
             "                        keys:TEXT (types it and prints what each key cost) js:CODE (evaluate\n"
-            "                        in the page) save:FILE (the page source) console;\n"
+            "                        in the page) save:FILE (the page source) console\n"
+            "                        damage[:FILE.png] (compares the pixels painted only where the window\n"
+            "                        invalidated with a whole paint; FILE marks the stale ones in magenta);\n"
             "                        --no-doc-cache makes Back and Forward load again;\n"
             "                        --script-mem MB and --worker-mem MB set the script memory limits of a\n"
             "                        page and of a worker, else Automatic)\n"
@@ -813,6 +815,10 @@ static struct {
 /* Set when the window invalidates anything; chrome_present clears it. */
 static bool settle_dirty;
 static int settle_w, settle_h;
+/* The window's pixels as a shell keeps them: chrome_present paints only
+ * what was invalidated and moves pixels for scrolls (--do damage). */
+static AuPresent live_pres;
+static AuSurface *live;
 
 static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
 {
@@ -820,6 +826,7 @@ static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
     if (r.x1 <= r.x0 || r.y1 <= r.y0)
         return;
     settle_dirty = true;
+    au_present_invalidate(&live_pres, r);
     if (key_inv.n < 16)
         key_inv.r[key_inv.n] = r;
     if (!key_inv.n) {
@@ -834,21 +841,89 @@ static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
     key_inv.area += (long)(r.x1 - r.x0) * (r.y1 - r.y0);
 }
 
-/* Paints the window into a scratch surface when it invalidated anything,
- * as a shell paints after each idle call. Painting is what asks for
- * background images, masks and SVG images at their painted size, so a
- * screenshot taken after a wait shows them as a shell would. */
+static void live_scroll(void *ctx, AuBrowserWindow *w, AuIRect area, int dx, int dy)
+{
+    (void)ctx, (void)w;
+    settle_dirty = true;
+    au_present_scroll(&live_pres, area, dx, dy);
+}
+
+/* Paints what the window invalidated, as a shell paints after each idle
+ * call: the surface keeps its pixels, scrolls move them, and only the
+ * damaged rectangles are painted. Painting is what asks for background
+ * images, masks and SVG images at their painted size, so a screenshot
+ * taken after a wait shows them as a shell would. */
 static void chrome_present(AuBrowserWindow *w)
 {
     if (!settle_dirty || settle_w <= 0 || settle_h <= 0)
         return;
     settle_dirty = false;
-    AuSurface *s = au_surface_new(settle_w, settle_h);
+    if (!live || live->width != settle_w || live->height != settle_h) {
+        au_surface_free(live);
+        live = au_surface_new(settle_w, settle_h);
+        if (!live)
+            return;
+        au_present_invalidate(&live_pres, (AuIRect){0, 0, settle_w, settle_h});
+    }
+    AuPresentRound r;
+    au_present_begin(&live_pres, live, &r);
+    AuCanvas *c = au_canvas_new(live);
+    for (int i = 0; i < r.n; i++)
+        au_bw_paint(w, c, r.rects[i]);
+    au_canvas_free(c);
+}
+
+/* --do damage[:PNG]: compares the pixels chrome_present kept, painted
+ * only where the window invalidated, with a whole paint. Pixels that
+ * differ are damage the engine did not report (or reported wrongly).
+ * PNG gets the kept pixels, with those that differ in magenta. */
+static void damage_check(AuBrowserWindow *w, const char *png)
+{
+    settle_dirty = true;
+    chrome_present(w);
+    if (!live)
+        return;
+    AuSurface *s = au_surface_new(live->width, live->height);
     if (!s)
         return;
     AuCanvas *c = au_canvas_new(s);
-    au_bw_paint(w, c, (AuIRect){0, 0, settle_w, settle_h});
+    au_bw_paint(w, c, (AuIRect){0, 0, s->width, s->height});
     au_canvas_free(c);
+    long n = 0, near = 0;
+    AuIRect u = {live->width, live->height, 0, 0};
+    for (int y = 0; y < s->height; y++) {
+        for (int x = 0; x < s->width; x++) {
+            AuPixel a = live->pixels[(size_t)y * (size_t)live->stride + (size_t)x];
+            AuPixel b = s->pixels[(size_t)y * (size_t)s->stride + (size_t)x];
+            if (a == b)
+                continue;
+            /* Off by 2 or less in every channel: rounding, as a scaled
+             * layer painted in strips gives, not stale pixels. */
+            int far = 0;
+            for (int k = 0; k < 32; k += 8) {
+                int d = (int)((a >> k) & 255) - (int)((b >> k) & 255);
+                far |= d > 2 || d < -2;
+            }
+            if (!far) {
+                near++;
+                continue;
+            }
+            n++;
+            if (x < u.x0) u.x0 = x;
+            if (y < u.y0) u.y0 = y;
+            if (x >= u.x1) u.x1 = x + 1;
+            if (y >= u.y1) u.y1 = y + 1;
+            if (png)
+                s->pixels[(size_t)y * (size_t)s->stride + (size_t)x] = AU_RGB(255, 0, 255);
+        }
+    }
+    if (n)
+        printf("damage: %ld pixels differ from a whole paint, in %d,%d %dx%d (and %ld by rounding)\n", n, u.x0,
+               u.y0, u.x1 - u.x0, u.y1 - u.y0, near);
+    else
+        printf("damage: the kept pixels match a whole paint (%ld differ by rounding)\n", near);
+    if (png && !au_png_write(png, s))
+        fprintf(stderr, "aura-host: cannot write %s\n", png);
     au_surface_free(s);
 }
 
@@ -1210,6 +1285,8 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         } else {
             printf("save: no source\n");
         }
+    } else if (!strcmp(a, "damage") || !strncmp(a, "damage:", 7)) {
+        damage_check(w, a[6] == ':' ? a + 7 : NULL);
     } else if (!strcmp(a, "console")) {
         AuTab *t = au_bw_active_tab(w);
         size_t n = t ? au_page_console_count(t->page) : 0;
@@ -1315,7 +1392,9 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         host.invalidate = bench_inval;
         host.scroll_area = bench_scroll;
     } else {
+        au_present_init(&live_pres);
         host.invalidate = key_inval;
+        host.scroll_area = live_scroll;
         settle_w = o->w;
         settle_h = o->h;
     }

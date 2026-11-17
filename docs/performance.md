@@ -33,6 +33,7 @@ Build a Release tree first (`cmake -S . -B build/rel -G Ninja
 | hover restyles | `build/host/tests/css/test_css_invalidate --bench [--verify] PAGE.html [SHEET.css ...]` | [`css.md`](css.md) |
 | Back to a kept document, HTTP cache hits | `aura-host chrome --net --tab URL --do go:URL2 --do back --do cache` | [`browser-chrome.md`](browser-chrome.md), [`networking.md`](networking.md) |
 | a page's style, layout, paint and script time | `aura-host chrome --net --tab URL --do perf` | [`developer-tools.md`](developer-tools.md) |
+| whether repaints cover what changed | `aura-host chrome --net --tab URL --do wait:3000 --do damage:OUT.png` | [`layout.md`](layout.md) ("Repainting after script") |
 | an image decode | `aura-host image FILE --repeat N` | [`images.md`](images.md) |
 | SVG icons | `test_svg --bench` | [`svg.md`](svg.md) |
 | canvas calls | `test_canvas2d --bench` | [`canvas.md`](canvas.md) |
@@ -174,6 +175,29 @@ Measured on the host (Release, base `2943372`) with `aura-host chrome
   the host and a script heap at its 64 MB limit (Develop > Performance
   showed 8 s of script, 1.8 s of style and 4 s of paint signed in, in
   the Cocoa application).
+
+## Repainting after script on Reddit, 2026-11-17
+
+Measured on the host (Debug, base `22a4ced`) with `aura-host chrome -w
+1024 -h 768 --net --load-ms 15000 --tab https://www.reddit.com/ --do
+wait:3000 --do perf --do wait:5000 --do perf`, signed out. The host
+paints after each idle call when anything was invalidated, as a shell
+does.
+
+| | Before | After |
+|---|---|---|
+| Paint during the load | 14,023 ms, 1,198 paints | 4,827 ms, 454 paints |
+| Paint in the 15 s after it | 7,418 ms, 641 paints | 0 ms, 0 paints |
+
+- Each script turn that changed the document invalidated the whole
+  page, and Reddit's script ran about 60 turns in a few seconds after
+  load, each one a paint of the whole window. Most of those turns
+  restyle elements to the values they already had.
+- A top-level document now updates once after the script slice and
+  repaints only the boxes whose paint changed
+  ([`layout.md`](layout.md), "Repainting after script").
+- Still open: the script heap is at its 64 MB limit, and one task takes
+  about 800 ms.
 
 ## DOM changes: subtree rebuilds, 2026-11-16
 

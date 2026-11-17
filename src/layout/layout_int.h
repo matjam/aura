@@ -392,6 +392,14 @@ struct AuLayout {
     LBox *view_boxes[L_VIEW_BOXES];
     uint32_t nview_boxes;
     bool need_paint;
+    /* What changed on screen since au_layout_take_damage: everything
+     * (dmg_all: the tree was built, laid out or restacked, or a changed
+     * box's place on screen is not known), else the paint extents of the
+     * boxes restyled for paint only, in document coordinates. */
+#define L_DAMAGE AU_LAYOUT_DAMAGE
+    AuRect dmg[L_DAMAGE];
+    uint8_t ndmg;
+    bool dmg_all;
     uint32_t hidden_gen;   /* au_layout_text_visibility_changed calls */
     bool transparent;      /* a nested document: the canvas gets no white (au_layout_set_transparent) */
     bool need_restack;
@@ -568,6 +576,11 @@ void l_dirty_clear(AuLayout *L);
 void l_check_incremental(AuLayout *L);
 /* layout.c: marks b for layout and its ancestors as holding such a box. */
 void l_mark_dirty(LBox *b);
+/* Where b and everything it paints can reach on the document, for the
+ * damage of a paint-only change (draw.c); false when that place depends
+ * on scrolling or a transform (a box in a scroller, fixed or sticky, or
+ * transformed). An empty rectangle when it paints nothing. */
+bool l_box_paint_extent(AuLayout *L, LBox *b, AuRect *out);
 void l_box_free_layout(LBox *b);
 const char *l_attr(const LBox *b, AuAtom name);
 bool l_is_tag(const LBox *b, AuAtom tag);

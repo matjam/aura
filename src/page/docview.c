@@ -2986,8 +2986,46 @@ void au_dv_turn_end(AuDocView *dv)
      * updates, and repaints the page only if something changed. */
     if (dv->in_key)
         return;
-    if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan)
+    if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan) {
+        /* A top-level document settles once the embedder's script slice
+         * is over, and repaints only what changed; a nested one
+         * repaints its box at once. */
+        if (dv->parent || !dv->cb.invalidate)
+            invalidate_all(dv);
+        else
+            dv->settle = true;
+    }
+}
+
+bool au_docview_settle_pending(const AuDocView *dv)
+{
+    return dv->settle;
+}
+
+/* Invalidates what the layout says changed since the last call (the
+ * updates since then may have been anyone's: a paint updates too). */
+void au_dv_invalidate_damage(AuDocView *dv)
+{
+    AuRect r[AU_LAYOUT_DAMAGE];
+    int n = au_layout_take_damage(dv->layout, r, AU_LAYOUT_DAMAGE);
+    if (n < 0) {
         invalidate_all(dv);
+        return;
+    }
+    for (int i = 0; i < n && dv->cb.invalidate; i++) {
+        AuIRect ir = {au_f2px(floorf(r[i].x)), au_f2px(floorf(r[i].y)), au_f2px(ceilf(r[i].x + r[i].w)),
+                      au_f2px(ceilf(r[i].y + r[i].h))};
+        dv->cb.invalidate(dv->cb.ctx, dv, ir);
+    }
+}
+
+void au_docview_settle(AuDocView *dv)
+{
+    if (!dv->settle)
+        return;
+    dv->settle = false;
+    au_docview_update(dv);
+    au_dv_invalidate_damage(dv);
 }
 
 void au_dv_invalidate_all(AuDocView *dv)

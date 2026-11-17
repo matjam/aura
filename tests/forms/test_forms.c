@@ -752,6 +752,51 @@ static void test_textarea_wrap_scaling(void)
     }
 }
 
+/* Script that changes a top-level document leaves the repaint to
+ * au_docview_settle, which invalidates only what changed: nothing for a
+ * restyle that computes the same values, the box for a colour change, and
+ * the page when boxes moved. Reddit invalidated its whole page after each
+ * script turn before this. */
+static void settle_step(Ctx *c, AuDocView *dv, const char *js)
+{
+    AuBuf out;
+    c->invals = 0;
+    au_buf_init(&out);
+    au_docview_eval(dv, js, &out);
+    for (int i = 0; i < 5; i++)
+        au_docview_run_scripts(dv, 10);
+    CHECK(au_docview_settle_pending(dv) && !c->invals, "after %s: settle pending %d, %d invalidations (%s)", js,
+          au_docview_settle_pending(dv), c->invals, au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_docview_settle(dv);
+}
+
+static void test_settle_damage(void)
+{
+    Ctx c;
+    AuDocView *dv = view(&c,
+                         "<!DOCTYPE html><body style='margin:0'>"
+                         "<div id=a style='height:20px'>A</div>"
+                         "<div id=b style='margin-top:300px;height:20px;width:100px'>B</div>"
+                         "<script>var a=document.getElementById('a'),b=document.getElementById('b'),queue=[];window.addEventListener('message',function(){queue.shift()()});"
+                         "function later(f){queue.push(f);postMessage('go','*')}</script>",
+                         true);
+    AuRect rb;
+    au_layout_element_rect(au_docview_layout(dv), by_id(dv, "b"), &rb);
+    au_docview_settle(dv); /* what the load left */
+    settle_step(&c, dv, "later(function(){a.className='nothing-matches'});''");
+    CHECK(c.invals == 0, "same-value restyle: %d invalidations", c.invals);
+    settle_step(&c, dv, "later(function(){b.style.color='red'});''");
+    CHECK(c.invals >= 1 && c.inval.y0 >= (int)rb.y - 6 && c.inval.y1 <= (int)(rb.y + rb.h) + 6,
+          "colour change: %d invalidations, %d,%d-%d,%d (box at y %g)", c.invals, c.inval.x0, c.inval.y0,
+          c.inval.x1, c.inval.y1, rb.y);
+    settle_step(&c, dv, "later(function(){a.style.height='40px'});''");
+    CHECK(c.invals >= 1 && c.inval.y0 <= 0 && c.inval.y1 >= 600, "relayout: %d invalidations, %d,%d-%d,%d",
+          c.invals, c.inval.x0, c.inval.y0, c.inval.x1, c.inval.y1);
+    CHECK(!au_docview_settle_pending(dv), "settled");
+    au_docview_free(dv);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -769,6 +814,7 @@ int main(void)
     test_keystroke_cost();
     test_edit_commands();
     test_textarea_wrap_scaling();
+    test_settle_damage();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

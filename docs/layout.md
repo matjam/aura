@@ -231,6 +231,35 @@ page area's width (`relayout` in `browser.c`), and `check_hscroll`
 corrects it after the layout. Deciding from the old content width cost
 a second pass on every resize of a page that follows the window.
 
+### Repainting after script
+
+To repaint only what script changed, the layout keeps a damage list
+(`au_layout_take_damage`, at most `AU_LAYOUT_DAMAGE` rectangles, merged
+by least growth when full):
+
+- A restyle that changes only paint (`style_diff` 1) adds the box's
+  paint extent (`l_box_paint_extent`, its ink and its descendants').
+- A relayout, a restack, a box tree build, and a box that is fixed,
+  sticky, inside a scroller or a frame view mark the whole document.
+- A restyle that computes the same values adds nothing.
+
+A script turn on a top-level document (`au_dv_turn_end`) does not
+invalidate. It sets `settle`, and the embedder calls
+`au_docview_settle` after its script slice and after each mouse and key
+event (`settle` in `page_doc.c`); that updates once and invalidates the
+damage (`au_dv_invalidate_damage`). A nested document still
+invalidates its frame at once. The key path in `forms.c` takes the
+damage the same way.
+
+To check that repaints cover what changed, run `aura-host chrome ...
+--do damage:OUT.png`. The host keeps the window's pixels as a shell
+does (painting only invalidated rectangles, moving pixels for scrolls),
+compares them with a whole paint, and prints the pixels that differ by
+more than rounding; OUT.png marks them in magenta. A missed colour
+change on Reddit-sized pages shows as thousands of pixels in the box's
+rectangle. `test_forms` (`test_settle_damage`) covers the three cases
+above.
+
 ### Container query rounds
 
 To evaluate container queries after a layout, the document view runs

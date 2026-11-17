@@ -162,6 +162,7 @@ struct AuDocView {
     bool pack_watching;
     bool layout_ran;     /* layout changed since observers last ran */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
+    bool settle;         /* script changed it: au_docview_settle updates and repaints what changed */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */
     uint32_t dead_builds, dead_layouts; /* counts of layouts replaced by new_layout */
     uint32_t dead_subtree_builds, dead_subtree_boxes;
@@ -334,6 +335,9 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
  * fixed element, as au_dv_invalidate_element does). */
 void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect r);
 void au_dv_invalidate_all(AuDocView *dv);
+/* Invalidates what the layout's updates changed since the last call
+ * (au_layout_take_damage). */
+void au_dv_invalidate_damage(AuDocView *dv);
 
 /* An entry point of the view: what it interns belongs to the page's atom
  * scope. DV_ENTRY(ret, name, params, args) defines the public function
