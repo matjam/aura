@@ -5,6 +5,7 @@
 #
 # Environment:
 #   BUILD_DIR      build tree (default build/package-linux)
+#   APPIMAGE_EXTRACT_AND_RUN=1  lets an AppImage appimagetool run without FUSE
 #   APPIMAGETOOL   path of appimagetool; else appimagetool on PATH. When
 #                  neither exists the AppDir is built and the AppImage step
 #                  is skipped with a message.
@@ -31,8 +32,10 @@ cmake -S . -B "$build" -G Ninja -DAURA_PLATFORM=gtk -DCMAKE_BUILD_TYPE=Release \
 cmake --build "$build"
 
 # The .deb (CPack, packaging/linux/CMakeLists.txt).
-(cd "$build" && cpack -G DEB -B "$out" >/dev/null)
-echo "built $(ls "$out"/aura_*.deb)"
+rm -rf "$build/cpack"
+(cd "$build" && cpack -G DEB -B "$root/$build/cpack" >/dev/null)
+mv "$build/cpack/aura_${version}_"*.deb "$out/"
+echo "built $(ls "$out"/aura_"${version}"_*.deb)"
 
 # The AppDir: the install tree, plus AppRun, the desktop file and the icon at
 # its root.
@@ -55,6 +58,5 @@ if [ -z "$tool" ]; then
     echo "appimagetool not found (set APPIMAGETOOL); AppDir left in $appdir, AppImage not built" >&2
     exit 0
 fi
-ARCH=$arch "$tool" --appimage-extract-and-run "$appdir" "$out/Aura-$version-$arch.AppImage" 2>/dev/null ||
-    ARCH=$arch "$tool" "$appdir" "$out/Aura-$version-$arch.AppImage"
+ARCH=$arch "$tool" "$appdir" "$out/Aura-$version-$arch.AppImage"
 echo "built $out/Aura-$version-$arch.AppImage"

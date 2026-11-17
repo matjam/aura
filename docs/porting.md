@@ -224,7 +224,7 @@ Reload and the address `GtkEntry`, a `GtkNotebook` for tabs, and a
 | coroutines, clocks, entropy, files | `src/platform/posix` |
 | fonts | fontconfig to find font files, read by Aura's own font code |
 | files | `$XDG_CONFIG_HOME/aura`, `$XDG_CACHE_HOME/aura`, downloads in `$XDG_DOWNLOAD_DIR` |
-| packaging | an AppImage and a `.deb`, built in CI (not started) |
+| packaging | an AppImage and a `.deb`, built in CI ([`gtk.md`](gtk.md), "Packaging") |
 
 GTK4 is LGPL and is linked from the system, not bundled; Aura stays
 MIT. Its build is `-DAURA_PLATFORM=gtk` (`./build.sh gtk`). To build,
@@ -247,4 +247,4 @@ keeps the Mac OS 9 build working and looking the same.
 | Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; Unix `src/platform/posix/files_posix.c`) | done |
 | GTK4 port in `src/platform/gtk`: browser windows, tabs, page, input, menus, dialogs, fonts, network ([`gtk.md`](gtk.md)) | done |
 | GTK4 Preferences, list, developer and About windows, and a CI build | in progress |
-| Packaging for Linux | not started |
+| Packaging for Linux: `.deb` and AppImage, built in CI and attached to releases ([`gtk.md`](gtk.md), "Packaging") | done; the AppImage is untested outside CI |

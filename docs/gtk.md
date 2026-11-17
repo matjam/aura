@@ -202,6 +202,34 @@ grim shot.png
   unless it runs under a tracer. If so, start it as
   `strace -e trace=none -e signal=none -o /dev/null sway ...`.
 
+## Packaging
+
+The port ships as a `.deb` and an AppImage, both built by
+`tools/package-linux.sh` and in CI by `.github/workflows/build-linux.yml`.
+GTK4 is LGPL and Aura is MIT, so GTK4 and fontconfig are linked from the
+system and are never bundled in either package.
+
+| To | Run |
+|---|---|
+| build both packages | `tools/package-linux.sh [OUTDIR]` (default `dist/linux`; needs the GTK4 build packages of [`building.md`](building.md)) |
+| build the AppImage too | set `APPIMAGETOOL` to an appimagetool binary (CI uses release 1.9.1, checked by SHA-256; it is not in the repository); without it the script leaves the AppDir in `build/package-linux/AppDir` and says so |
+| install into a folder | `cmake --install build/gtk --prefix DIR` |
+
+- The install rules are in `packaging/linux/CMakeLists.txt`: `bin/aura`,
+  the fonts and `net/aura-roots.bin` in `share/aura` (where the binary
+  looks beside itself, see "Profile and assets"), the desktop file, the
+  AppStream metainfo, the icons in `share/icons/hicolor` and the licence.
+  The desktop file and metainfo are `org.aura.Browser.*`, the application
+  ID, and the desktop file claims `text/html` and the `http` and `https`
+  schemes.
+- The `.deb` depends on `libgtk-4-1 (>= 4.10)`, `libfontconfig1` and
+  `libc6`. Its version is `AU_VERSION`.
+- The AppImage holds an AppDir with `AppRun`, which runs `usr/bin/aura`.
+  It needs GTK4 4.10 or later and fontconfig on the host, as the `.deb`
+  does; on a machine without them, install `libgtk-4-1`.
+- CI uploads both as artifacts of every push and pull request, and
+  attaches them to a release ([`ci-and-releases.md`](ci-and-releases.md)).
+
 ## Known gaps
 
 - Preferences, the History, Bookmarks, Downloads and Cookies windows,

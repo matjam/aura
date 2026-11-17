@@ -23,8 +23,9 @@ VERSION").
   `.release-please-manifest.json`.
 - When the pull request is merged, the same workflow tags the merge
   commit `vVERSION`, creates the GitHub release with the changelog
-  entry as its notes, builds the archive from that commit and attaches
-  `Aura-VERSION.hqx` and `Aura-VERSION.sea.bin`.
+  entry as its notes, builds the archive and the Linux packages from that
+  commit and attaches `Aura-VERSION.hqx`, `Aura-VERSION.sea.bin`,
+  `aura_VERSION_amd64.deb` and `Aura-VERSION-x86_64.AppImage`.
 - Do not push a tag or edit `AU_VERSION` by hand.
 - To force a version, add `"release-as": "X.Y.Z"` to the package in
   `release-please-config.json` and remove it after that release.
@@ -76,6 +77,7 @@ repos/OWNER/REPO/commits/TAG -q .sha`) and change both.
 | `host` | runs `./build.sh test` on Ubuntu (GCC) and macOS (Apple Clang) |
 | `sanitize` | runs the tests on Ubuntu under Clang's AddressSanitizer and UBSan (with `float-cast-overflow` named, as in [`building.md`](building.md)), with leak detection off |
 | `toolchain` | builds Retro68 when the cache has none |
+| `linux` | runs `tools/package-linux.sh` on Ubuntu (`build-linux.yml`, a reusable workflow) and uploads `aura_VERSION_amd64.deb` and `Aura-VERSION-x86_64.AppImage` as artifacts named `Aura-VERSION-SHORTHASH-deb` and `Aura-VERSION-SHORTHASH-appimage`; see [`gtk.md`](gtk.md), "Packaging" |
 | `ppc` | runs `./build.sh ppc` and uploads the two archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and `Aura-VERSION-SHORTHASH-sea-bin` |
 
 - Leak detection is off because several tests do not free everything at

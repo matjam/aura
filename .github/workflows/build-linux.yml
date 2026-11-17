@@ -1,0 +1,84 @@
+# Build the GTK4 port and its Linux packages (a .deb and an AppImage) with
+# tools/package-linux.sh, and upload them as artifacts. Called by ci.yml
+# (every push and pull request) and by release.yml (when a release is made).
+#
+# GTK4 is installed from the runner's distribution to build against; it is
+# not bundled in either package (docs/gtk.md, "Packaging"). appimagetool is
+# downloaded at a pinned release and checked against its SHA-256.
+#
+# Actions are pinned to a commit; the comment names the release.
+name: Linux build
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Aura's version (AU_VERSION)
+        value: ${{ jobs.linux.outputs.version }}
+      deb-artifact:
+        description: The artifact holding aura_VERSION_amd64.deb
+        value: ${{ jobs.linux.outputs.deb }}
+      appimage-artifact:
+        description: The artifact holding Aura-VERSION-x86_64.AppImage
+        value: ${{ jobs.linux.outputs.appimage }}
+
+permissions:
+  contents: read
+
+env:
+  APPIMAGETOOL_VERSION: 1.9.1
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+
+jobs:
+  linux:
+    name: Linux (GTK4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: linux-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      version: ${{ steps.names.outputs.version }}
+      deb: ${{ steps.names.outputs.deb }}
+      appimage: ${{ steps.names.outputs.appimage }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ninja-build pkg-config libgtk-4-dev libfontconfig-dev desktop-file-utils appstream
+      - name: Fetch appimagetool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+      - name: Build the packages
+        env:
+          APPIMAGETOOL: ${{ runner.temp }}/appimagetool
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: tools/package-linux.sh dist/linux
+      - name: Check the desktop file and the metainfo
+        run: |
+          desktop-file-validate packaging/linux/org.aura.Browser.desktop
+          appstreamcli validate --no-net build/package-linux/packaging/linux/org.aura.Browser.metainfo.xml
+      - name: Name the artifacts
+        id: names
+        run: |
+          version=$(tools/version.sh)
+          short=$(git rev-parse --short=7 HEAD)
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "deb=Aura-$version-$short-deb" >>"$GITHUB_OUTPUT"
+          echo "appimage=Aura-$version-$short-appimage" >>"$GITHUB_OUTPUT"
+      - name: Upload the .deb
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.names.outputs.deb }}
+          path: dist/linux/aura_${{ steps.names.outputs.version }}_amd64.deb
+          if-no-files-found: error
+      - name: Upload the AppImage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.names.outputs.appimage }}
+          path: dist/linux/Aura-${{ steps.names.outputs.version }}-x86_64.AppImage
+          if-no-files-found: error
