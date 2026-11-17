@@ -683,6 +683,10 @@ void au_gtk_win_destroy(AuGtkWin *w)
 
 void au_gtk_win_changed(AuGtkWin *w, unsigned what)
 {
+    /* The later of two focus requests in one batch wins: a new tab asks
+     * for the field while blank, then for the page once its load starts. */
+    if (what & (AU_CHANGED_FOCUS_FIELD | AU_CHANGED_FOCUS_PAGE))
+        w->pending &= ~(unsigned)(AU_CHANGED_FOCUS_FIELD | AU_CHANGED_FOCUS_PAGE);
     w->pending |= what;
     au_gtk_kick();
 }
