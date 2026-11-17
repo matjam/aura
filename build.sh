@@ -1,9 +1,10 @@
 #!/bin/sh
 # Build Aura.
 #
-# Usage: ./build.sh [host|ppc|test|all]
+# Usage: ./build.sh [host|gtk|ppc|test|all]
 #   host  build the engine, host tools and tests for this machine (build/host)
 #   test  build host, then run the tests
+#   gtk   build the Linux GTK4 application (build/gtk/src/platform/gtk/aura)
 #   ppc   build the Mac OS 9 application with Retro68 (build/ppc), the
 #         distributable folder and the self-extracting archive
 #   all   test, then ppc (default)
@@ -18,6 +19,11 @@ cd "$(dirname "$0")"
 host() {
     cmake -S . -B build/host -G Ninja >/dev/null
     cmake --build build/host
+}
+
+gtk() {
+    cmake -S . -B build/gtk -G Ninja -DAURA_PLATFORM=gtk >/dev/null
+    cmake --build build/gtk
 }
 
 run_tests() {
@@ -81,7 +87,8 @@ sea() {
 case "${1:-all}" in
     host) host ;;
     test) run_tests ;;
+    gtk) gtk ;;
     ppc) ppc ;;
     all) run_tests; ppc ;;
-    *) echo "usage: $0 [host|ppc|test|all]" >&2; exit 2 ;;
+    *) echo "usage: $0 [host|gtk|ppc|test|all]" >&2; exit 2 ;;
 esac

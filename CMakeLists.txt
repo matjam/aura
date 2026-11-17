@@ -20,7 +20,7 @@ endif()
 #   macos9  the Mac OS 9 application (src/platform/macos9), with Retro68
 #   host    the aura-host tool and the tests (src/platform/host), on macOS
 #           or Linux
-#   gtk     the Linux GTK4 port (src/platform/gtk); reserved, not written
+#   gtk     the Linux GTK4 port (src/platform/gtk), native Wayland
 # Retro68's toolchain file sets CMAKE_SYSTEM_NAME to RetroPPC (or Retro68,
 # RetroCarbon), and the default follows it, so ./build.sh needs no option.
 if(CMAKE_SYSTEM_NAME MATCHES "Retro")
@@ -31,9 +31,9 @@ endif()
 set(AURA_PLATFORM ${AURA_PLATFORM_DEFAULT} CACHE STRING "Platform to build: macos9, host or gtk")
 set_property(CACHE AURA_PLATFORM PROPERTY STRINGS macos9 host gtk)
 if(AURA_PLATFORM STREQUAL "gtk")
-    message(FATAL_ERROR "AURA_PLATFORM=gtk: the GTK4 port is not written yet. "
-        "docs/porting.md describes it and the order of the work. Configure with "
-        "AURA_PLATFORM=host for the host tool and the tests.")
+    if(CMAKE_SYSTEM_NAME MATCHES "Retro")
+        message(FATAL_ERROR "AURA_PLATFORM=gtk cannot be built with the Retro68 toolchain.")
+    endif()
 elseif(AURA_PLATFORM STREQUAL "macos9")
     if(NOT CMAKE_SYSTEM_NAME MATCHES "Retro")
         message(FATAL_ERROR "AURA_PLATFORM=macos9 needs the Retro68 toolchain file: "
@@ -114,4 +114,8 @@ elseif(AURA_PLATFORM STREQUAL "host")
         get_filename_component(dir ${t} DIRECTORY)
         add_subdirectory(${dir})
     endforeach()
+elseif(AURA_PLATFORM STREQUAL "gtk")
+    # The POSIX services, then the GTK4 application (docs/gtk.md).
+    add_subdirectory(src/platform/posix)
+    add_subdirectory(src/platform/gtk)
 endif()

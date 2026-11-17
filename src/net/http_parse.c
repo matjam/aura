@@ -282,7 +282,7 @@ AuHttpParseResult au_http_parser_feed(AuHttpParser *p, const uint8_t *d, size_t 
                     }
                     /* An HTTP/0.9 or garbage response has no status line:
                      * catch it at the first line. */
-                    if (memchr(b, '\n', L - 1) == NULL && (L < 8 || memcmp(b, "HTTP/1.", 7) != 0)) {
+                    if ((L < 2 || memchr(b, '\n', L - 1) == NULL) && (L < 8 || memcmp(b, "HTTP/1.", 7) != 0)) {
                         r = fail(p, "bad status line");
                         goto out;
                     }

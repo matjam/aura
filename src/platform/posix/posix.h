@@ -128,6 +128,13 @@ typedef struct AuPosixFontDir AuPosixFontDir;
  * files when there is no index. flags: AU_FONT_*. The result owns the
  * loaded font data; free it after the set. */
 AuPosixFontDir *au_posix_add_font_dir(AuFontSet *set, const char *dir, unsigned flags);
+/* An empty AuPosixFontDir, for faces a port lists itself (the GTK4 port:
+ * from fontconfig). au_posix_font_dir_add registers one face of the file
+ * at path (absolute), loaded on first use like a Fonts folder's faces;
+ * a path of 1024 bytes or more is skipped. */
+AuPosixFontDir *au_posix_font_dir_new(AuFontSet *set, unsigned flags);
+void au_posix_font_dir_add(AuPosixFontDir *d, const char *path, const char *family, int weight, bool italic,
+                           int face_index);
 /* Faces registered, and font files read so far. */
 int au_posix_font_dir_count(const AuPosixFontDir *d);
 size_t au_posix_font_dir_loads(const AuPosixFontDir *d);

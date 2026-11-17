@@ -94,9 +94,26 @@ static void add_entry(void *ctx, const AuFontIndexEntry *e)
 {
     AuPosixFontDir *d = ctx;
     char path[1024];
-    snprintf(path, sizeof path, "%s/%s", d->root, e->path);
+    if (snprintf(path, sizeof path, "%s/%s", d->root, e->path) >= (int)sizeof path)
+        return;
+    au_posix_font_dir_add(d, path, e->family, e->weight, e->italic, e->face_index);
+}
+
+AuPosixFontDir *au_posix_font_dir_new(AuFontSet *set, unsigned flags)
+{
+    AuPosixFontDir *d = au_calloc(sizeof *d);
+    d->set = set;
+    d->flags = flags;
+    return d;
+}
+
+void au_posix_font_dir_add(AuPosixFontDir *d, const char *path, const char *family, int weight, bool italic,
+                           int face_index)
+{
+    if (strlen(path) >= sizeof d->files->path)
+        return;
     FaceFile *f = file_for(d, path);
-    au_fontset_add_file(d->set, e->family, e->weight, e->italic, e->face_index, d->flags, &file_ops, f);
+    au_fontset_add_file(d->set, family, weight, italic, face_index, d->flags, &file_ops, f);
     d->added++;
 }
 
@@ -127,8 +144,8 @@ static void scan(AuBuf *b, const char *dir, const char *prefix, int depth)
         if (S_ISDIR(st.st_mode)) {
             if (depth < 1) {
                 char sub[512];
-                snprintf(sub, sizeof sub, "%s/", rel);
-                scan(b, full, sub, depth + 1);
+                if (snprintf(sub, sizeof sub, "%s/", rel) < (int)sizeof sub)
+                    scan(b, full, sub, depth + 1);
             }
             continue;
         }
@@ -171,10 +188,8 @@ bool au_posix_add_font_file(AuFontSet *set, const char *path)
 
 AuPosixFontDir *au_posix_add_font_dir(AuFontSet *set, const char *dir, unsigned flags)
 {
-    AuPosixFontDir *d = au_calloc(sizeof *d);
+    AuPosixFontDir *d = au_posix_font_dir_new(set, flags);
     snprintf(d->root, sizeof d->root, "%s", dir);
-    d->set = set;
-    d->flags = flags;
     char path[1100];
     snprintf(path, sizeof path, "%s/fonts.idx", dir);
     char *idx;
