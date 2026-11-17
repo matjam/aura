@@ -61,7 +61,18 @@ void au_gtk_about_show(void)
     gtk_about_dialog_set_system_information(d, "The licences of the libraries, fonts and data Aura includes are "
                                                "on the page about:licences.");
     const char *id = au_gtk_host.app ? g_application_get_application_id(G_APPLICATION(au_gtk_host.app)) : NULL;
-    gtk_about_dialog_set_logo_icon_name(d, id ? id : "web-browser");
+    /* The application's icon, else a browser's, else none rather than
+     * the theme's missing-image icon. */
+    GtkIconTheme *theme = gtk_icon_theme_get_for_display(gtk_widget_get_display(GTK_WIDGET(d)));
+    const char *logo = NULL;
+    if (id && gtk_icon_theme_has_icon(theme, id))
+        logo = id;
+    else if (gtk_icon_theme_has_icon(theme, "web-browser"))
+        logo = "web-browser";
+    if (logo)
+        gtk_about_dialog_set_logo_icon_name(d, logo);
+    else
+        gtk_about_dialog_set_logo(d, NULL);
     GtkWindow *parent = au_gtk_front_parent();
     if (parent)
         gtk_window_set_transient_for(GTK_WINDOW(d), parent);
