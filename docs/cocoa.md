@@ -162,7 +162,8 @@ scale; it is a known gap, as on GTK.
   Forward.
 - **Scrolling**: a mouse wheel step is 48 points; a trackpad's precise
   deltas pass through, with the system's natural scrolling already
-  applied.
+  applied. Their fractions of a pixel carry to the next event, so slow
+  movements are not lost to rounding.
 - A link, file or text dropped on the page opens it.
 
 ## Menus

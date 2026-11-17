@@ -80,6 +80,7 @@ static int special_key(unsigned short code)
 @implementation AuPageView {
     NSTrackingArea *tracking;
     NSString *marked; /* the input method's composition, not yet inserted */
+    double scroll_rx, scroll_ry; /* trackpad scrolling's fractions of a pixel, carried to the next event */
 }
 
 - (instancetype)initWithFrame:(NSRect)r
@@ -409,14 +410,29 @@ static int special_key(unsigned short code)
     NSPoint p = [self pointOf:e];
     double scale = e.hasPreciseScrollingDeltas ? 1 : WHEEL_STEP;
     double dx = -e.scrollingDeltaX * scale, dy = -e.scrollingDeltaY * scale;
+    /* A trackpad sends fractions of a pixel; rounding each event alone
+     * lost slow movements. Carry the remainder, and drop it when a
+     * gesture begins. */
+    if (e.phase == NSEventPhaseBegan || !e.hasPreciseScrollingDeltas)
+        scroll_rx = scroll_ry = 0;
+    dx += scroll_rx;
+    dy += scroll_ry;
+    double rdx = trunc(dx), rdy = trunc(dy);
+    if (e.hasPreciseScrollingDeltas) {
+        scroll_rx = dx - rdx;
+        scroll_ry = dy - rdy;
+    } else {
+        rdx = round(dx);
+        rdy = round(dy);
+    }
     AuEvent ev;
     memset(&ev, 0, sizeof ev);
     ev.type = AU_EVENT_SCROLL;
     ev.time_ms = au_posix_ms();
     ev.x = (int)p.x;
     ev.y = (int)p.y;
-    ev.dx = (int)lround(dx);
-    ev.dy = (int)lround(dy);
+    ev.dx = (int)rdx;
+    ev.dy = (int)rdy;
     ev.mods = au_cocoa_mods(e.modifierFlags) & ~(uint32_t)AU_MOD_SHIFT;
     if (!ev.dx && !ev.dy)
         return;
