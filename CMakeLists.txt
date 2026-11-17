@@ -21,6 +21,7 @@ endif()
 #   host    the aura-host tool and the tests (src/platform/host), on macOS
 #           or Linux
 #   gtk     the Linux GTK4 port (src/platform/gtk), native Wayland
+#   cocoa   the modern macOS port (src/platform/cocoa), AppKit, Aura.app
 # Retro68's toolchain file sets CMAKE_SYSTEM_NAME to RetroPPC (or Retro68,
 # RetroCarbon), and the default follows it, so ./build.sh needs no option.
 if(CMAKE_SYSTEM_NAME MATCHES "Retro")
@@ -28,11 +29,15 @@ if(CMAKE_SYSTEM_NAME MATCHES "Retro")
 else()
     set(AURA_PLATFORM_DEFAULT host)
 endif()
-set(AURA_PLATFORM ${AURA_PLATFORM_DEFAULT} CACHE STRING "Platform to build: macos9, host or gtk")
-set_property(CACHE AURA_PLATFORM PROPERTY STRINGS macos9 host gtk)
+set(AURA_PLATFORM ${AURA_PLATFORM_DEFAULT} CACHE STRING "Platform to build: macos9, host, gtk or cocoa")
+set_property(CACHE AURA_PLATFORM PROPERTY STRINGS macos9 host gtk cocoa)
 if(AURA_PLATFORM STREQUAL "gtk")
     if(CMAKE_SYSTEM_NAME MATCHES "Retro")
         message(FATAL_ERROR "AURA_PLATFORM=gtk cannot be built with the Retro68 toolchain.")
+    endif()
+elseif(AURA_PLATFORM STREQUAL "cocoa")
+    if(NOT APPLE OR CMAKE_SYSTEM_NAME MATCHES "Retro")
+        message(FATAL_ERROR "AURA_PLATFORM=cocoa builds only on macOS, with Xcode's compilers (docs/cocoa.md).")
     endif()
 elseif(AURA_PLATFORM STREQUAL "macos9")
     if(NOT CMAKE_SYSTEM_NAME MATCHES "Retro")
@@ -46,7 +51,7 @@ elseif(AURA_PLATFORM STREQUAL "host")
             "use AURA_PLATFORM=macos9 or leave it unset.")
     endif()
 else()
-    message(FATAL_ERROR "AURA_PLATFORM=${AURA_PLATFORM}: use macos9, host or gtk (docs/building.md).")
+    message(FATAL_ERROR "AURA_PLATFORM=${AURA_PLATFORM}: use macos9, host, gtk or cocoa (docs/building.md).")
 endif()
 # Derived from AURA_PLATFORM for the files that test it
 # (third_party/quickjs.cmake, third_party/mbedtls.cmake).
@@ -120,4 +125,9 @@ elseif(AURA_PLATFORM STREQUAL "gtk")
     add_subdirectory(src/platform/gtk)
     # Install rules and the .deb settings (docs/gtk.md, "Packaging").
     add_subdirectory(packaging/linux)
+elseif(AURA_PLATFORM STREQUAL "cocoa")
+    # The POSIX services, then the AppKit application (docs/cocoa.md).
+    enable_language(OBJC)
+    add_subdirectory(src/platform/posix)
+    add_subdirectory(src/platform/cocoa)
 endif()

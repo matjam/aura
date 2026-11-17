@@ -1,10 +1,11 @@
 #!/bin/sh
 # Build Aura.
 #
-# Usage: ./build.sh [host|gtk|ppc|test|all]
+# Usage: ./build.sh [host|gtk|cocoa|ppc|test|all]
 #   host  build the engine, host tools and tests for this machine (build/host)
 #   test  build host, then run the tests
 #   gtk   build the Linux GTK4 application (build/gtk/src/platform/gtk/aura)
+#   cocoa build the macOS application (build/cocoa/src/platform/cocoa/Aura.app)
 #   ppc   build the Mac OS 9 application with Retro68 (build/ppc), the
 #         distributable folder and the self-extracting archive
 #   all   test, then ppc (default)
@@ -24,6 +25,11 @@ host() {
 gtk() {
     cmake -S . -B build/gtk -G Ninja -DAURA_PLATFORM=gtk >/dev/null
     cmake --build build/gtk
+}
+
+cocoa() {
+    cmake -S . -B build/cocoa -G Ninja -DAURA_PLATFORM=cocoa >/dev/null
+    cmake --build build/cocoa
 }
 
 run_tests() {
@@ -88,7 +94,8 @@ case "${1:-all}" in
     host) host ;;
     test) run_tests ;;
     gtk) gtk ;;
+    cocoa) cocoa ;;
     ppc) ppc ;;
     all) run_tests; ppc ;;
-    *) echo "usage: $0 [host|gtk|ppc|test|all]" >&2; exit 2 ;;
+    *) echo "usage: $0 [host|gtk|cocoa|ppc|test|all]" >&2; exit 2 ;;
 esac
