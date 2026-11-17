@@ -141,6 +141,13 @@ typedef struct AuBrowserHost {
      * Automatic script memory limits follow it (scriptmem.h); without it
      * they take the values for an unknown machine. */
     uint32_t (*memory_free_kb)(void *ctx);
+    /* Optional. Tells the user something with an OK button: message is
+     * the alert's main line, detail (may be NULL) explains it. Called
+     * from au_bw_idle, never with script on the stack (a page's script
+     * that ran out of memory). Without it nothing is shown; the console
+     * still has the line. Last in the struct: some callers fill it in
+     * order. */
+    void (*notice)(void *ctx, AuBrowserWindow *w, const char *message, const char *detail);
 } AuBrowserHost;
 
 struct AuTab {
@@ -497,8 +504,14 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y);
 void au_bw_scroll_by(AuBrowserWindow *w, int dx, int dy);
 /* The largest scroll offsets for the active tab (0 when it fits). */
 void au_bw_scroll_max(AuBrowserWindow *w, int *max_x, int *max_y);
-/* Runs page timers and the throbber. */
+/* Runs page timers and the throbber, and shows a page's out-of-memory
+ * notice (AuBrowserHost.notice) once per page shown. */
 void au_bw_idle(AuBrowserWindow *w);
+/* The out-of-memory notice's text for a page named page_name: why script
+ * stopped and what to change (a Custom script memory of
+ * au_script_oom_suggest_kb, or freeing memory). */
+void au_script_oom_text(const AuScriptOom *o, const char *page_name, AuBuf *message, AuBuf *detail);
+uint32_t au_script_oom_suggest_kb(uint32_t limit_kb);
 /* The window title for the active tab. */
 void au_bw_window_title(AuBrowserWindow *w, char *out, size_t cap);
 /* The rectangle a hit part occupies (for repainting). */

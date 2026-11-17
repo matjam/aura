@@ -1,6 +1,7 @@
 /* The browser model and controller. See browser.h. */
 #include "browser.h"
 #include "favicon.h"
+#include "scriptmem.h"
 #include "url.h"
 #include "../net/web_storage.h"
 
@@ -2538,6 +2539,63 @@ bool au_bw_key(AuBrowserWindow *w, const AuEvent *ev)
     return false;
 }
 
+/* The script memory a notice suggests after a page reached limit_kb: twice
+ * the limit, at least 32 MB more, within the custom range; 0 when the
+ * limit is already the largest a user can set. */
+uint32_t au_script_oom_suggest_kb(uint32_t limit_kb)
+{
+    if (limit_kb >= AU_SCRIPT_MEM_CUSTOM_MAX_KB)
+        return 0;
+    uint32_t mb = limit_kb / 1024;
+    uint32_t want = mb * 2 > mb + 32 ? mb * 2 : mb + 32;
+    want = (want + 15) / 16 * 16; /* a round number of MB */
+    if (want * 1024 > AU_SCRIPT_MEM_CUSTOM_MAX_KB)
+        want = AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024;
+    return want * 1024;
+}
+
+void au_script_oom_text(const AuScriptOom *o, const char *page_name, AuBuf *message, AuBuf *detail)
+{
+    au_buf_printf(message, "\"%s\" ran out of script memory.", page_name && *page_name ? page_name : "This page");
+    const char *who = o->worker ? "A background script (a worker) of this page" : "This page's scripts";
+    const char *them = o->worker ? "it" : "them";
+    if (o->machine) {
+        au_buf_printf(detail,
+                      "%s needed more memory than Aura has left, so Aura stopped %s, and parts of the page may "
+                      "not work. To fix it, close other tabs, windows or applications, or give Aura more memory, "
+                      "then reload the page.",
+                      who, them);
+        return;
+    }
+    au_buf_printf(detail,
+                  "%s needed more than the %lu MB of script memory a %s may use, so Aura stopped %s, and parts of "
+                  "the page may not work. The limit keeps one page from taking all of Aura's memory.",
+                  who, (unsigned long)(o->limit_kb / 1024), o->worker ? "worker" : "page", them);
+    uint32_t want = au_script_oom_suggest_kb(o->limit_kb);
+    if (want)
+        au_buf_printf(detail,
+                      " To fix it, choose Preferences > Content, set \"Script memory per %s\" to Custom with %lu MB, "
+                      "and reload the page.",
+                      o->worker ? "worker" : "page", (unsigned long)(want / 1024));
+    else
+        au_buf_puts(detail, " That is already the largest setting, so this page needs more memory than Aura can give it.");
+}
+
+static void script_oom_notice(AuBrowserWindow *w, AuPage *p, const AuScriptOom *o)
+{
+    AuBrowser *b = w->browser;
+    if (!b->host.notice)
+        return;
+    AuBuf msg, det;
+    au_buf_init(&msg);
+    au_buf_init(&det);
+    const char *name = au_page_title(p);
+    au_script_oom_text(o, name[0] ? name : au_page_url(p), &msg, &det);
+    b->host.notice(b->host.ctx, w, au_buf_cstr(&msg), au_buf_cstr(&det));
+    au_buf_free(&msg);
+    au_buf_free(&det);
+}
+
 void au_bw_idle(AuBrowserWindow *w)
 {
     if (w->hscroll_dirty) {
@@ -2586,6 +2644,15 @@ void au_bw_idle(AuBrowserWindow *w)
     for (int i = w->ntabs - 1; i >= 0; i--)
         if (w->tabs[i]->close_pending && w->ntabs > 1)
             au_bw_close_tab(w, i);
+    /* A page whose script ran out of memory says so once, here, where no
+     * script is on the stack. */
+    for (int i = 0; i < w->ntabs; i++) {
+        AuScriptOom oom;
+        if (au_page_take_script_oom(w->tabs[i]->page, &oom)) {
+            script_oom_notice(w, w->tabs[i]->page, &oom);
+            break; /* the tabs may have changed during the alert; the next idle looks again */
+        }
+    }
     if (!any)
         return;
     uint32_t t = time_ms(w->browser);

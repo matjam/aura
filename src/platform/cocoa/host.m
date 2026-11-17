@@ -65,10 +65,13 @@ void au_cocoa_notice(NSWindow *parent, const char *message, const char *detail)
     a.messageText = au_cocoa_str(message);
     if (detail)
         a.informativeText = au_cocoa_str(detail);
-    if (parent)
+    if (parent) {
         [a beginSheetModalForWindow:parent completionHandler:nil];
-    else
+    } else {
+        au_cocoa_modal_begin();
         [a runModal];
+        au_cocoa_modal_end();
+    }
 }
 
 void au_cocoa_copy_text(const char *utf8, size_t len)
@@ -280,6 +283,14 @@ static bool h_confirm(void *ctx, AuBrowserWindow *bw, const char *message)
     return au_cocoa_ask(parent_of(bw), message, NULL, "OK", "Cancel");
 }
 
+static void h_notice(void *ctx, AuBrowserWindow *bw, const char *message, const char *detail)
+{
+    (void)ctx;
+    /* A sheet on the window: nothing waits on it */
+    NSWindow *parent = parent_of(bw);
+    au_cocoa_notice(parent && !parent.attachedSheet ? parent : nil, message, detail);
+}
+
 static bool h_random(void *ctx, void *buf, size_t len)
 {
     (void)ctx;
@@ -307,6 +318,7 @@ void au_cocoa_browser_host(AuBrowserHost *h)
     h->popup = h_popup;
     h->choose_file = h_choose_file;
     h->confirm = h_confirm;
+    h->notice = h_notice;
     h->scroll_area = h_scroll_area;
     h->random = h_random;
     h->coro = au_posix_coro_ops();

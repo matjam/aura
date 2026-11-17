@@ -296,8 +296,39 @@ the preference to change:
 - A worker that runs out of memory ends, and its `Worker` object in the
   page gets an `error` event ("out of memory: the worker reached its
   script memory limit of N KB"). The page goes on running
-  (`js_worker_fatal` in `worker.c`). There is no page-level notice: the
-  console line is the report.
+  (`js_worker_fatal` in `worker.c`).
+
+### The out-of-memory alert
+
+The first time a page's script (or a frame's, or a worker's) runs out
+of memory, Aura also shows an alert with an OK button that says why and
+what to change:
+
+    "Slashdot" ran out of script memory.
+    This page's scripts needed more than the 96 MB of script memory a
+    page may use, so Aura stopped them, and parts of the page may not
+    work. The limit keeps one page from taking all of Aura's memory. To
+    fix it, choose Preferences > Content, set "Script memory per page"
+    to Custom with 192 MB, and reload the page.
+
+- **The suggestion** (`au_script_oom_suggest_kb`) is twice the limit,
+  at least 32 MB more, rounded up to 16 MB, within the custom range. At
+  256 MB, the largest setting, the alert says the page needs more than
+  Aura can give.
+- **When the machine is short** (`au_memory_low`), the alert says to
+  close tabs, windows or applications, or give Aura more memory.
+- **Once per page shown.** `AuJsHooks.out_of_memory` (called beside the
+  console line, with script on the stack) reaches the page through
+  `AuDocViewCallbacks.script_oom`, frames forwarding to the top view;
+  the page keeps the first one until the next navigation.
+  `au_bw_idle`, with no script on the stack, takes it
+  (`au_page_take_script_oom`), builds the text (`au_script_oom_text`)
+  and calls `AuBrowserHost.notice`.
+- **The ports.** Mac OS 9 shows alert 137 (the explanation cut at spaces
+  into the three 255-byte pieces of `ParamText`); macOS shows a sheet on
+  the window; GTK shows a non-modal `GtkAlertDialog`.
+- **Test:** `tests/browser/test_script_memory.c` counts the notices of a
+  page and of a worker that run out, and checks the text.
 
 ### How script memory is kept down
 

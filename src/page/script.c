@@ -127,6 +127,14 @@ static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t le
         cb->console(cb->ctx, s->dv, (int)level, text, len);
 }
 
+static void h_out_of_memory(void *ctx, bool worker, bool machine, uint32_t limit_kb)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    if (cb->script_oom)
+        cb->script_oom(cb->ctx, s->dv, worker, machine, limit_kb);
+}
+
 static void h_dom_changed(void *ctx, AuNode *node, AuAtom attr_name, int kind)
 {
     AuDocScript *s = ctx;
@@ -634,6 +642,7 @@ static bool ensure_js(AuDocScript *s)
     h.ctx = s;
     h.now_ms = h_now;
     h.console = h_console;
+    h.out_of_memory = h_out_of_memory;
     h.dom_changed = h_dom_changed;
     h.child_changed = h_child_changed;
     h.element_rect = h_element_rect;

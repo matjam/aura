@@ -62,6 +62,18 @@ typedef struct Env {
     FakeServer *a;
 } Env;
 
+/* The notices the browser showed (AuBrowserHost.notice). */
+static int notices;
+static char notice_text[1024];
+
+static void t_notice(void *ctx, AuBrowserWindow *w, const char *message, const char *detail)
+{
+    (void)ctx;
+    (void)w;
+    notices++;
+    snprintf(notice_text, sizeof notice_text, "%s | %s", message, detail ? detail : "");
+}
+
 static uint32_t t_ms(void *ctx) { return ((Env *)ctx)->f.now; }
 static AuTime t_now(void *ctx) { return ((Env *)ctx)->f.wall; }
 
@@ -77,6 +89,9 @@ static void env_init(Env *e, int page_kb, int worker_kb)
     h.ctx = e;
     h.time_ms = t_ms;
     h.now = t_now;
+    h.notice = t_notice;
+    notices = 0;
+    notice_text[0] = 0;
     e->b = au_browser_new(fonts, &h);
     e->b->prefs.https_first = false;
     e->b->prefs.script_memory_kb = page_kb;
@@ -279,6 +294,11 @@ static void test_worker_out_of_memory(void)
     size_t page_peak = 0, worker_peak = 0;
     au_page_script_peaks(page(&e), &page_peak, &worker_peak);
     CHECK(page_peak < (size_t)4096 * 1024, "the page's runtime was not charged: %lu KB", (unsigned long)(page_peak / 1024));
+    /* one notice, which says why and names the worker setting */
+    CHECK(notices == 1, "notices: %d", notices);
+    CHECK(strstr(notice_text, "ran out of script memory") && strstr(notice_text, "a worker") &&
+              strstr(notice_text, "4 MB") && strstr(notice_text, "\"Script memory per worker\" to Custom with 48 MB"),
+          "%s", notice_text);
     env_free(&e);
 }
 
@@ -308,8 +328,41 @@ static void test_page_out_of_memory(void)
     /* the scripts before and after it ran, and the document is shown */
     CHECK(!strcmp(js(&e, "before+' '+after+' '+document.getElementById('p').textContent"), "1 undefined page"), "%s",
           js(&e, "before+' '+after"));
+    /* one notice for the page, however long it goes on; another after a reload */
+    CHECK(notices == 1, "notices: %d", notices);
+    CHECK(strstr(notice_text, "\"t\" ran out of script memory") && strstr(notice_text, "This page's scripts") &&
+              strstr(notice_text, "\"Script memory per page\" to Custom with 48 MB") &&
+              strstr(notice_text, "reload the page"),
+          "%s", notice_text);
     free(script);
     env_free(&e);
+}
+
+/* The notice's text: what it suggests, and the machine's own shortage. */
+static void test_oom_text(void)
+{
+    CHECK(au_script_oom_suggest_kb(4096) == 48 * 1024, "%u", (unsigned)au_script_oom_suggest_kb(4096));
+    CHECK(au_script_oom_suggest_kb(96 * 1024) == 192 * 1024, "%u", (unsigned)au_script_oom_suggest_kb(96 * 1024));
+    CHECK(au_script_oom_suggest_kb(192 * 1024) == 256 * 1024, "%u", (unsigned)au_script_oom_suggest_kb(192 * 1024));
+    CHECK(au_script_oom_suggest_kb(256 * 1024) == 0, "%u", (unsigned)au_script_oom_suggest_kb(256 * 1024));
+    AuScriptOom o = {false, false, 256 * 1024};
+    AuBuf m, d;
+    au_buf_init(&m);
+    au_buf_init(&d);
+    au_script_oom_text(&o, "", &m, &d);
+    CHECK(strstr(au_buf_cstr(&m), "\"This page\"") && strstr(au_buf_cstr(&d), "already the largest setting"), "%s | %s",
+          au_buf_cstr(&m), au_buf_cstr(&d));
+    au_buf_free(&m);
+    au_buf_free(&d);
+    au_buf_init(&m);
+    au_buf_init(&d);
+    o.machine = true;
+    au_script_oom_text(&o, "News", &m, &d);
+    CHECK(strstr(au_buf_cstr(&d), "more memory than Aura has left") && strstr(au_buf_cstr(&d), "close other tabs") &&
+              !strstr(au_buf_cstr(&d), "Custom"),
+          "%s", au_buf_cstr(&d));
+    au_buf_free(&m);
+    au_buf_free(&d);
 }
 
 int main(void)
@@ -319,6 +372,7 @@ int main(void)
     test_shared_script();
     test_worker_out_of_memory();
     test_page_out_of_memory();
+    test_oom_text();
     au_fontset_free(fonts);
     for (int i = 0; i < nresponses; i++)
         free(responses[i]);

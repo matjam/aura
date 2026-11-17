@@ -721,6 +721,35 @@ static bool host_confirm(void *ctx, AuBrowserWindow *w, const char *message)
     return CautionAlert(136, NULL) == 1;
 }
 
+/* A notice (a page's script ran out of memory): alert 137, with the
+ * explanation cut at spaces into the three 255-byte pieces it shows. */
+static void host_notice(void *ctx, AuBrowserWindow *w, const char *message, const char *detail)
+{
+    (void)ctx, (void)w;
+    Str255 m, part[3];
+    mac_pstr(message, m);
+    for (int k = 0; k < 3; k++)
+        part[k][0] = 0;
+    size_t n = 0;
+    char *roman = mac_utf8_to_roman(detail ? detail : "", &n);
+    size_t at = 0;
+    for (int k = 0; k < 3 && at < n; k++) {
+        size_t take = n - at;
+        if (take > 255) {
+            take = 255;
+            while (take > 128 && roman[at + take] != ' ')
+                take--; /* end the piece at a space; the space starts the next */
+        }
+        part[k][0] = (unsigned char)take;
+        memcpy(part[k] + 1, roman + at, take);
+        at += take;
+    }
+    au_free(roman);
+    ParamText(m, part[0], part[1], part[2]);
+    InitCursor();
+    NoteAlert(137, NULL);
+}
+
 static void host_download_added(void *ctx, AuDownload *d)
 {
     (void)ctx, (void)d;
@@ -774,6 +803,7 @@ void browserwin_host(AuBrowserHost *h)
     h->popup = host_popup;
     h->choose_file = host_choose_file;
     h->confirm = host_confirm;
+    h->notice = host_notice;
     h->scroll_area = host_scroll_area;
     h->random = host_random;
     h->coro = mac_coro_ops();

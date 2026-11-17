@@ -163,6 +163,27 @@ resource 'DITL' (136) {
 	}
 };
 
+/* 137: a notice from the browser (a page's script ran out of memory):
+ * ^0 is the main line, ^1^2^3 the explanation in up to three pieces. */
+resource 'ALRT' (137) {
+	{0, 0, 240, 460}, 137,
+	{
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1;
+		OK, visible, sound1
+	},
+	alertPositionMainScreen
+};
+
+resource 'DITL' (137) {
+	{
+		{208, 378, 228, 446}, Button { enabled, "OK" };
+		{12, 70, 46, 446}, StaticText { disabled, "^0" };
+		{52, 70, 198, 446}, StaticText { disabled, "^1^2^3" }
+	}
+};
+
 /* 135: a cookie's or site's details in the Cookies window, ^0 to ^3. */
 resource 'ALRT' (135) {
 	{0, 0, 250, 460}, 135,

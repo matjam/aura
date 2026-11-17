@@ -401,6 +401,9 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
                      r->oom_machine ? "could not grow to" : "reached", (unsigned long)(r->settings.memory_limit / 1024));
             js_worker_fatal(r, note);
         }
+        if (js->hooks.out_of_memory)
+            js->hooks.out_of_memory(js->hooks.ctx, r->worker, r->oom_machine,
+                                    (uint32_t)(r->settings.memory_limit / 1024));
         if (r->oom_machine)
             au_buf_puts(&b, ". Close other tabs or applications, or give Aura more memory in its Get Info window.");
         else
@@ -1065,6 +1068,7 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     js->hooks.ctx = owner->hooks.ctx;
     js->hooks.now_ms = owner->hooks.now_ms;
     js->hooks.console = owner->hooks.console;
+    js->hooks.out_of_memory = owner->hooks.out_of_memory;
     js->hooks.random = owner->hooks.random;
     js->hooks.fetcher = owner->hooks.fetcher;
     js->hooks.coro = owner->hooks.coro;

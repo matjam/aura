@@ -363,6 +363,15 @@ static void fc_console(void *ctx, AuDocView *dv, int level, const char *text, si
         top->cb.console(top->cb.ctx, top, level, text, len);
 }
 
+static void fc_script_oom(void *ctx, AuDocView *dv, bool worker, bool machine, uint32_t limit_kb)
+{
+    (void)dv;
+    AuFrame *f = ctx;
+    AuDocView *top = au_dv_top(f->owner);
+    if (top->cb.script_oom)
+        top->cb.script_oom(top->cb.ctx, top, worker, machine, limit_kb);
+}
+
 /* document.cookie of a nested document: the embedder gets the top-level
  * view and nested set (script.c passes the document's URL). */
 static char *fc_get_cookie(void *ctx, AuDocView *dv, const char *url, bool nested)
@@ -465,6 +474,7 @@ static AuDocView *frame_view(AuFrame *f)
     cb.now_ms = fc_now;
     cb.scroll_to = fc_scroll_to;
     cb.console = fc_console;
+    cb.script_oom = fc_script_oom;
     if (top->cb.random)
         cb.random = fc_random;
     cb.coro = top->cb.coro;

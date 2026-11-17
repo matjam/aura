@@ -302,6 +302,11 @@ typedef struct AuJsHooks {
      * passed the CORS check (an <img crossorigin>). Optional: without it
      * only same-origin, data: and blob: images are clean. */
     bool (*image_origin_clean)(void *ctx, const char *url);
+    /* Optional. Script stopped because a runtime ran out of memory:
+     * worker (a worker's runtime, else the page's), machine (the machine
+     * had too little left, else the runtime reached limit_kb). Called with
+     * script on the stack, after the console line: note it, show nothing. */
+    void (*out_of_memory)(void *ctx, bool worker, bool machine, uint32_t limit_kb);
 } AuJsHooks;
 
 /* Kinds for dom_changed. */

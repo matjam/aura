@@ -141,6 +141,10 @@ typedef struct AuDocViewCallbacks {
     /* A console line from script (level: 0 log, 1 info, 2 warn, 3 error,
      * 4 debug). */
     void (*console)(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
+    /* Optional. Script stopped out of memory (AuJsHooks.out_of_memory):
+     * worker, machine, the limit in KB. Called with script on the stack:
+     * note it and show it later. A nested view's goes to the top view's. */
+    void (*script_oom)(void *ctx, AuDocView *dv, bool worker, bool machine, uint32_t limit_kb);
     /* Cryptographically strong random bytes for script (crypto
      * .getRandomValues); false when the source is not ready. Optional:
      * without it pages have no crypto object. */

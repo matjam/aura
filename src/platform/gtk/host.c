@@ -370,6 +370,12 @@ static bool h_confirm(void *ctx, AuBrowserWindow *bw, const char *message)
     return au_gtk_ask(parent_of(bw), message, NULL, "OK", "Cancel");
 }
 
+static void h_notice(void *ctx, AuBrowserWindow *bw, const char *message, const char *detail)
+{
+    (void)ctx;
+    au_gtk_notice(parent_of(bw), message, detail);
+}
+
 static bool h_random(void *ctx, void *buf, size_t len)
 {
     (void)ctx;
@@ -397,6 +403,7 @@ void au_gtk_browser_host(AuBrowserHost *h)
     h->popup = h_popup;
     h->choose_file = h_choose_file;
     h->confirm = h_confirm;
+    h->notice = h_notice;
     h->scroll_area = h_scroll_area;
     h->random = h_random;
     h->coro = au_posix_coro_ops();

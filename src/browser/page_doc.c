@@ -225,6 +225,11 @@ struct AuPage {
     size_t console_start, console_count;
     uint32_t console_total; /* lines ever added, so a view sees new ones */
     uint32_t console_current; /* lines added since the last navigation began */
+    /* Script ran out of memory since the last navigation began: the
+     * notice waiting for au_page_take_script_oom, and whether this page
+     * has had one (one notice per page shown). */
+    AuScriptOom oom;
+    bool oom_due, oom_told;
 
     AuNetLog netlog; /* the requests since the last navigation (netlog.h) */
 };
@@ -1262,6 +1267,28 @@ static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, si
     p->console_current++;
 }
 
+static void dv_script_oom(void *ctx, AuDocView *dv, bool worker, bool machine, uint32_t limit_kb)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    if (p->oom_due || p->oom_told)
+        return; /* the first one of this page says it */
+    p->oom.worker = worker;
+    p->oom.machine = machine;
+    p->oom.limit_kb = limit_kb;
+    p->oom_due = true;
+}
+
+bool au_page_take_script_oom(AuPage *p, AuScriptOom *out)
+{
+    if (!p || !p->oom_due)
+        return false;
+    p->oom_due = false;
+    p->oom_told = true;
+    *out = p->oom;
+    return true;
+}
+
 static void internal_action(AuPage *p, const char *what);
 
 /* Hands a navigation from a link or script to the browser. */
@@ -1662,6 +1689,7 @@ static void new_view(AuPage *p)
     dcb.now_ms = dv_now;
     dcb.scroll_to = dv_scroll_to;
     dcb.console = dv_console;
+    dcb.script_oom = dv_script_oom;
     dcb.random = p->env.random ? dv_random : NULL;
     dcb.coro = p->env.coro;
     dcb.get_cookie = dv_get_cookie;
@@ -3403,6 +3431,7 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
     p->load_start = now(p);
     au_netlog_clear(&p->netlog);
     p->console_current = 0; /* the console keeps the earlier lines; the Console window marks where this page's begin */
+    p->oom_due = p->oom_told = false;
     memset(&p->stats, 0, sizeof p->stats);
     au_free(p->fragment);
     p->fragment = NULL;

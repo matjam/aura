@@ -531,6 +531,17 @@ size_t au_page_console_count(const AuPage *p);
 /* How many of those lines, counted from the newest, were written since
  * the last navigation began: the lines of the page now shown. */
 size_t au_page_console_current(const AuPage *p);
+/* Script of the page (or of a frame or worker in it) stopped because it
+ * ran out of memory. */
+typedef struct AuScriptOom {
+    bool worker;       /* a worker's runtime, else the page's */
+    bool machine;      /* the machine had too little memory left; else the limit was reached */
+    uint32_t limit_kb; /* that runtime's limit */
+} AuScriptOom;
+/* The out-of-memory notice waiting since the page began, once: true and
+ * *out filled the first time after it happened, false after that until
+ * the next navigation. au_bw_idle shows it (AuBrowserHost.notice). */
+bool au_page_take_script_oom(AuPage *p, AuScriptOom *out);
 /* Evaluates src as script in the page's document and appends the
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
