@@ -39,6 +39,12 @@ static void t_close(void *ctx, AuBrowserWindow *w) { (void)ctx, (void)w; }
 static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 {
     (void)ctx;
+    if (!strcmp(url, "file:///field.html")) {
+        static const char field[] = "<!doctype html><title>Field</title><input autofocus value=abc>";
+        *data = au_strndup(field, sizeof field - 1);
+        *len = sizeof field - 1;
+        return true;
+    }
     if (strcmp(url, "file:///doc.html") != 0)
         return false;
     static const char html[] = "<!doctype html><title>Doc</title><p>Some words to find here.";
@@ -309,6 +315,17 @@ static void test_enabled(void)
     CHECK(au_command_enabled(&st, AU_CMD_EDIT_UNDO) && au_command_enabled(&st, AU_CMD_EDIT_CUT) &&
           au_command_enabled(&st, AU_CMD_EDIT_PASTE) && au_command_enabled(&st, AU_CMD_EDIT_CLEAR));
     st.text_focus = false;
+    /* A field in the page has the focus: the same, with no help from the
+     * port (its own text_focus covers only its native fields). */
+    au_bw_navigate(w, "file:///field.html");
+    settle(w);
+    CHECK(au_bw_page_editing(w));
+    CHECK(au_command_enabled(&st, AU_CMD_EDIT_UNDO) && au_command_enabled(&st, AU_CMD_EDIT_CUT) &&
+          au_command_enabled(&st, AU_CMD_EDIT_PASTE) && au_command_enabled(&st, AU_CMD_EDIT_CLEAR) &&
+          au_command_enabled(&st, AU_CMD_EDIT_COPY));
+    st.front = AU_FRONT_OTHER;
+    CHECK(!au_command_enabled(&st, AU_CMD_EDIT_PASTE)); /* the window behind another */
+    st.front = AU_FRONT_BROWSER;
     /* A developer window in front finds in its own text. */
     st.front = AU_FRONT_TOOL;
     CHECK(au_command_enabled(&st, AU_CMD_EDIT_FIND));

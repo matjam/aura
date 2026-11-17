@@ -200,6 +200,8 @@ bool au_command_enabled(const AuCommandState *st, AuCommand cmd)
     AuBrowserWindow *w = st->window;
     AuTab *t = active_tab(st);
     bool browser_front = w && st->front == AU_FRONT_BROWSER;
+    /* A port's own text field, or a field in the page being edited. */
+    bool text_focus = st->text_focus || (browser_front && au_bw_page_editing(w));
     switch (cmd) {
     case AU_CMD_FILE_CLOSE_TAB: return browser_front;
     case AU_CMD_FILE_CLOSE_WINDOW: return st->front != AU_FRONT_NONE;
@@ -210,11 +212,11 @@ bool au_command_enabled(const AuCommandState *st, AuCommand cmd)
     case AU_CMD_EDIT_UNDO:
     case AU_CMD_EDIT_CUT:
     case AU_CMD_EDIT_PASTE:
-    case AU_CMD_EDIT_CLEAR: return st->text_focus;
+    case AU_CMD_EDIT_CLEAR: return text_focus;
     case AU_CMD_EDIT_COPY:
-        return st->text_focus || (browser_front && t && au_bw_has_selection(w)) ||
+        return text_focus || (browser_front && t && au_bw_has_selection(w)) ||
                (st->front == AU_FRONT_OTHER && st->other_can_copy);
-    case AU_CMD_EDIT_SELECT_ALL: return st->text_focus || (browser_front && t);
+    case AU_CMD_EDIT_SELECT_ALL: return text_focus || (browser_front && t);
     case AU_CMD_EDIT_FIND: return t || st->front == AU_FRONT_TOOL;
     case AU_CMD_EDIT_FIND_AGAIN:
     case AU_CMD_EDIT_FIND_PREVIOUS:
