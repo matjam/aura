@@ -3,11 +3,16 @@
 
 Usage:
   tools/png-compare.py GUEST.png X Y HOST.png [DIFF.png]
+  tools/png-compare.py --side LEFT.png RIGHT.png OUT.png [DIFF.png]
 
 Compares HOST.png with the same-sized region of GUEST.png whose top-left
 corner is X,Y, and prints the mean and maximum channel difference and the
 share of pixels that differ by more than 8 levels. DIFF.png, when given,
 gets an image of the differences (amplified 4x).
+
+With --side, compares the area the two images share from their top-left
+corners, prints the same figures, and writes OUT.png with LEFT and RIGHT
+next to each other, 8 grey pixels apart (tools/render-compare.sh uses it).
 
 Pure Python (zlib only), for 8-bit RGB and RGBA PNGs.
 """
@@ -81,14 +86,27 @@ def write_png(path, width, height, rows):
         f.write(chunk(b"IEND", b""))
 
 
-def main(argv):
+def side_by_side(argv):
     if len(argv) not in (5, 6):
         raise SystemExit(__doc__)
-    gw, gh, guest = read_png(argv[1])
-    x0, y0 = int(argv[2]), int(argv[3])
-    hw, hh, host = read_png(argv[4])
-    if x0 + hw > gw or y0 + hh > gh:
-        raise SystemExit("the host image does not fit in the guest image there")
+    lw, lh, left = read_png(argv[2])
+    rw, rh, right = read_png(argv[3])
+    gap, grey, white = 8, (128, 128, 128), (255, 255, 255)
+    h = max(lh, rh)
+    rows = []
+    for y in range(h):
+        row = list(left[y]) if y < lh else [white] * lw
+        row += [grey] * gap
+        row += list(right[y]) if y < rh else [white] * rw
+        rows.append(row)
+    write_png(argv[4], lw + gap + rw, h, rows)
+    w, hh = min(lw, rw), min(lh, rh)
+    if (lw, lh) != (rw, rh):
+        print(f"sizes differ: {lw}x{lh} and {rw}x{rh}; comparing {w}x{hh}")
+    compare(left, 0, 0, [r[:w] for r in right[:hh]], w, hh, argv[5] if len(argv) == 6 else None)
+
+
+def compare(guest, x0, y0, host, hw, hh, diff_path):
     total = maxd = big = 0
     diff_rows = []
     for y in range(hh):
@@ -107,8 +125,22 @@ def main(argv):
     n = hw * hh
     print(f"{hw}x{hh} at {x0},{y0}: mean diff {total / n:.2f}, max {maxd}, "
           f"{100.0 * big / n:.2f}% of pixels differ by more than 8")
-    if len(argv) == 6:
-        write_png(argv[5], hw, hh, diff_rows)
+    if diff_path:
+        write_png(diff_path, hw, hh, diff_rows)
+
+
+def main(argv):
+    if len(argv) > 1 and argv[1] == "--side":
+        side_by_side(argv)
+        return
+    if len(argv) not in (5, 6):
+        raise SystemExit(__doc__)
+    gw, gh, guest = read_png(argv[1])
+    x0, y0 = int(argv[2]), int(argv[3])
+    hw, hh, host = read_png(argv[4])
+    if x0 + hw > gw or y0 + hh > gh:
+        raise SystemExit("the host image does not fit in the guest image there")
+    compare(guest, x0, y0, host, hw, hh, argv[5] if len(argv) == 6 else None)
 
 
 if __name__ == "__main__":
