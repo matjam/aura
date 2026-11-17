@@ -109,6 +109,74 @@ static void test_budget(void)
     free(d);
 }
 
+static void put16(uint8_t *p, unsigned v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void put32(uint8_t *p, uint32_t v)
+{
+    put16(p, v & 0xFFFF);
+    put16(p + 2, v >> 16);
+}
+
+/* A 1-bit BMP of side x side pixels, stripes. */
+static uint8_t *make_bmp(int side, size_t *len)
+{
+    size_t row = (size_t)((side + 31) / 32) * 4, off = 14 + 40 + 8;
+    *len = off + row * (size_t)side;
+    uint8_t *d = calloc(1, *len);
+    d[0] = 'B';
+    d[1] = 'M';
+    put32(d + 2, (uint32_t)*len);
+    put32(d + 10, (uint32_t)off);
+    put32(d + 14, 40);
+    put32(d + 18, (uint32_t)side);
+    put32(d + 22, (uint32_t)side);
+    put16(d + 26, 1);
+    put16(d + 28, 1);
+    put32(d + 34, (uint32_t)(row * (size_t)side));
+    d[54 + 4] = d[54 + 5] = d[54 + 6] = 0xFF; /* palette: black, white */
+    for (int y = 0; y < side; y++)
+        memset(d + off + row * (size_t)y, (y & 8) ? 0xF0 : 0x0F, row);
+    return d;
+}
+
+/* An image larger than the per-image cap decodes reduced and is drawn
+ * larger: it is not decoded again on each paint (a 1200 x 1200 page
+ * background made every scroll step a full decode). */
+static void test_capped_not_redecoded(void)
+{
+    size_t n;
+    uint8_t *d = make_bmp(1024, &n); /* 4 MB decoded; the cap is 1 MB */
+    AuImageCache *c = au_image_cache_new(1024 * 1024);
+    AuImageEntry *e = au_image_cache_add(c, "http://x/bg.bmp");
+    feed(c, e, d, n, 65536);
+    au_image_entry_done(c, e, true);
+    const AuSurface *view = au_image_entry_surface(e);
+    AuImageCacheStats st;
+    for (int i = 0; i < 5; i++) {
+        au_image_cache_frame_begin(c);
+        au_image_entry_use(c, e, 1024, 1024);
+    }
+    au_image_cache_stats(c, &st);
+    IT_CHECK(view->width < 1024 && view->width > 1, "decoded reduced: %dx%d", view->width, view->height);
+    IT_CHECK(st.decodes == 1, "decoded once over five paints: %u decodes", st.decodes);
+    /* At the natural size (no display size): also once. */
+    AuImageEntry *f = au_image_cache_add(c, "http://x/bg2.bmp");
+    feed(c, f, d, n, 65536);
+    au_image_entry_done(c, f, true);
+    for (int i = 0; i < 5; i++) {
+        au_image_cache_frame_begin(c);
+        au_image_entry_use(c, f, 0, 0);
+    }
+    au_image_cache_stats(c, &st);
+    IT_CHECK(st.decodes == 2, "natural size decoded once: %u decodes", st.decodes);
+    au_image_cache_free(c);
+    free(d);
+}
+
 static void test_progressive(void)
 {
     size_t n;
@@ -239,6 +307,7 @@ int main(int argc, char **argv)
     snprintf(root, sizeof root, "%s", argv[1]);
     test_lazy_and_sizes();
     test_budget();
+    test_capped_not_redecoded();
     test_progressive();
     test_animation();
     test_failures_and_bytes();

@@ -83,7 +83,11 @@ The cache (`cache.h`) holds one document's images by URL.
 - Over the budget, images not used in the last paint lose their pixels,
   oldest first, and keep their compressed bytes to decode again.
 - One image may use at most half the budget (at least 1 MB, at most
-  16 MB).
+  16 MB). A larger image decodes reduced and is drawn scaled up. It is
+  decoded again only when shown larger than the last decode's target,
+  not on each paint: macintoshgarden.org's 1200 x 1200 body background
+  (5.8 MB) was decoded on every scroll step, about 29 ms each in the
+  macOS app (2026-11-16).
 - A still image whose bytes are larger than its pixels keeps only the
   pixels.
 - Animations decode frame by frame from the compressed bytes, keep one

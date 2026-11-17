@@ -398,6 +398,15 @@ void au_image_cache_frame_begin(AuImageCache *c)
         c->e[i]->want_w = c->e[i]->want_h = 0;
 }
 
+/* Whether a display size asks for more than a decode target did. 0 in
+ * either means no limit (the natural size). */
+static bool wants_more(int want, int target)
+{
+    if (!target)
+        return false;
+    return !want || want > target;
+}
+
 void au_image_entry_use(AuImageCache *c, AuImageEntry *e, int dw, int dh)
 {
     bool resumed = e->last_used + 1 < c->epoch;
@@ -435,9 +444,13 @@ void au_image_entry_use(AuImageCache *c, AuImageEntry *e, int dw, int dh)
         }
         return;
     }
-    /* Shown larger than decoded (and decoded reduced): decode again. */
+    /* Shown larger than decoded (and decoded reduced): decode again, but
+     * only when asked for more than the last decode's target. An image
+     * the size cap reduced comes out reduced at any target, and decoding
+     * it again on each paint made every scroll step a full decode. */
     bool reduced = s->width < e->iw || s->height < e->ih;
-    if (reduced && !e->loading && !e->data_dropped && ((dw && s->width < dw) || (dh && s->height < dh) || (!dw && !dh))) {
+    if (reduced && !e->loading && !e->data_dropped && ((dw && s->width < dw) || (dh && s->height < dh) || (!dw && !dh)) &&
+        (wants_more(dw, e->tw) || wants_more(dh, e->th))) {
         start_decode(c, e, e->want_w, e->want_h);
         au_image_cache_trim(c);
     }
