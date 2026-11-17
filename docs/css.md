@@ -526,6 +526,14 @@ same code as declarations, for the canvas ([`canvas.md`](canvas.md)).
 SVG presentation attributes reach the cascade as presentational hints
 (`svg_hints` in `src/css/ua.c`, see [`svg.md`](svg.md)).
 
+## Computed values fixed after the cascade
+
+`css_compute_finish` in `src/css/compute.c` adjusts a few values once
+every declaration has applied: display is blockified, overflow pairs
+and border and outline widths are corrected, and `text-align:
+match-parent` (the UA sheet's `li`) becomes the parent's value, with
+`start` and `end` made `left` or `right` by the parent's direction.
+
 ## Tests
 
 - `tests/css/cases/*.txt` (one ctest per file, format in `test_css.c`).

@@ -1054,4 +1054,16 @@ void css_compute_finish(CssComputeCtx *c, uint16_t parent_display)
     }
     if (s->rare->outline_style == AU_OUTLINE_STYLE_NONE && s->rare->outline_width != 0)
         ((AuStyleRare *)css_mut_group(s, G_RARE))->outline_width = 0;
+    /* text-align: match-parent (the UA sheet's li) computes to the
+     * parent's value, start and end made left or right by the parent's
+     * direction (CSS Text 3, 7.1). */
+    if (s->inh->text_align == AU_TEXT_ALIGN_MATCH_PARENT) {
+        int pa = c->parent ? c->parent->inh->text_align : AU_TEXT_ALIGN_START;
+        bool rtl = c->parent && c->parent->inh->direction == AU_DIRECTION_RTL;
+        if (pa == AU_TEXT_ALIGN_START || pa == AU_TEXT_ALIGN_MATCH_PARENT)
+            pa = rtl ? AU_TEXT_ALIGN_RIGHT : AU_TEXT_ALIGN_LEFT;
+        else if (pa == AU_TEXT_ALIGN_END)
+            pa = rtl ? AU_TEXT_ALIGN_LEFT : AU_TEXT_ALIGN_RIGHT;
+        ((AuStyleInh *)css_mut_group(s, G_INH))->text_align = (uint8_t)pa;
+    }
 }

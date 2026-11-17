@@ -133,3 +133,26 @@ html
 --- expect
 html -> color: rgb(0, 0, 0)
 html -> font-size: 16px
+
+=== text-align match-parent takes the parent's alignment
+--- css
+#a { text-align: center; }
+#b { text-align: end; direction: rtl; }
+#e { text-align: match-parent; }
+--- html
+html
+  body
+    ul#a
+      li#c
+        span#d
+    ol#b
+      li#f
+    div
+      p#e
+--- expect
+# jslandy.com centred its sidebar links with text-align on an ancestor;
+# the UA li rule's match-parent was treated as start
+#c -> text-align: center
+#d -> text-align: center
+#f -> text-align: left
+#e -> text-align: left
