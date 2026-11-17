@@ -1111,6 +1111,29 @@ static void test_webfonts_generated(void)
     au_docview_free(dv);
 }
 
+/* A background colour fills whole pixels: a 1px rule at a fractional
+ * position is one row in its own colour, as in browsers. */
+static void test_background_snapped(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><body style='margin:0'><div style='height:10.6px'></div>"
+                       "<div style='height:1px;width:20px;background:#ccb581'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 100, 100);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(100, 40);
+    AuCanvas *c = au_canvas_new(s);
+    au_fill_rect(c, (AuRect){0, 0, 100, 40}, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 100, 40}, 0, 0);
+    CHECK(au_surface_get(s, 5, 11) == AU_RGB(0xcc, 0xb5, 0x81), "rule row: %08x", au_surface_get(s, 5, 11));
+    CHECK(au_surface_get(s, 5, 10) == AU_RGB(255, 255, 255) && au_surface_get(s, 5, 12) == AU_RGB(255, 255, 255),
+          "rule spread over rows: %08x %08x", au_surface_get(s, 5, 10), au_surface_get(s, 5, 12));
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* A url() in a style sheet resolves against the sheet's URL, and one in
  * a style attribute against the document's (CSS Values 4). */
 static void test_sheet_relative_urls(void)
@@ -1219,6 +1242,7 @@ int main(void)
     test_images_and_webfonts();
     test_sheet_relative_urls();
     test_webfonts_generated();
+    test_background_snapped();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

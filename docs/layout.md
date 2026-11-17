@@ -489,6 +489,21 @@ cut a long `<img>` URL short (reCAPTCHA's check mark is a 3978-byte
 `data:` URL in its style sheet). The case is in
 `tests/layout/cases/images.txt`.
 
+`l_resolve_url` takes a base: pass the `base_url` of the value's
+`AuCssBlob` (or `AuBgLayer.base_url`) for a `url()` from a style sheet,
+and NULL for an attribute or inline style, which resolve against the
+document ([`css.md`](css.md), "Sheets in a document").
+
+### Snapped backgrounds
+
+`paint_background` fills a square-cornered background colour over whole
+surface pixels (`snap_device` in `draw.c`), as browsers snap a box's
+background. A 1px rule at a fractional position (Cornell Chronicle's
+gold bar under the date, `header::after` at `height: 1px`) is then one
+row in its own colour instead of two pale rows that read as grey.
+Rounded backgrounds and images are not snapped. `test_background_snapped`
+in `tests/page/test_page.c` covers it.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips

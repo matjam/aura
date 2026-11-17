@@ -1066,6 +1066,19 @@ static AuRect box_area(const LBlock *b, float ox, float oy, int which)
     return box_area_of(b, (AuRect){ox, oy, b->w, b->h}, which);
 }
 
+/* r with its edges rounded to whole surface pixels, as browsers snap a
+ * box's background: a one-pixel rule at a fractional position stays one
+ * sharp row in its own colour instead of two pale ones. Edges shared by
+ * two boxes round alike, so neighbours still meet. */
+static AuRect snap_device(const AuCanvas *c, AuRect r)
+{
+    float dx, dy;
+    au_canvas_get_translation(c, &dx, &dy);
+    float x0 = roundf(r.x + dx), y0 = roundf(r.y + dy);
+    float x1 = roundf(r.x + r.w + dx), y1 = roundf(r.y + r.h + dy);
+    return (AuRect){x0 - dx, y0 - dy, x1 - x0, y1 - y0};
+}
+
 static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect border_box, bool is_root_canvas)
 {
     (void)is_root_canvas;
@@ -1087,7 +1100,7 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
             inset_radii(&rr, in);
             au_fill_rounded_rect(P->c, r, &rr, bgc);
         } else {
-            au_fill_rect(P->c, r, bgc);
+            au_fill_rect(P->c, snap_device(P->c, r), bgc);
         }
     }
     for (size_t i = nl; i-- > 0;) {
