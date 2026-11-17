@@ -476,8 +476,9 @@ static void apply_font_prefs(AuPage *p)
     au_docview_set_font_prefs(p->dv, &fp);
     /* The initial family: the reader's serif face, as browsers default. */
     au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
-    /* Decoded images get the memory cache size as their budget. */
-    au_docview_set_image_budget(p->dv, pr ? (size_t)pr->memory_cache_kb * 1024 : 0);
+    /* Decoded images get the memory cache size as their budget, scaled
+     * up on 64-bit builds (AU_IMAGE_BUDGET_SCALE). */
+    au_docview_set_image_budget(p->dv, pr ? (size_t)pr->memory_cache_kb * 1024 * AU_IMAGE_BUDGET_SCALE : 0);
     /* The colour scheme (prefers-color-scheme), from the browser. */
     au_docview_set_dark(p->dv, p->env.dark && p->env.dark(p->env.ctx));
 }

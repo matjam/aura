@@ -79,7 +79,10 @@ The cache (`cache.h`) holds one document's images by URL.
   power-of-two reduction that still covers the displayed size.
 - The budget comes from the memory cache preference
   (`au_docview_set_image_budget`, 8 MB by default, as without a
-  browser).
+  browser). On 64-bit builds it is four times that figure
+  (`AU_IMAGE_BUDGET_SCALE`, 32 MB by default), so an image up to the
+  16 MB per-image cap decodes at full size. The scale applies to
+  existing profiles too, which store `cache.memory_kb=8192`.
 - Over the budget, images not used in the last paint lose their pixels,
   oldest first, and keep their compressed bytes to decode again.
 - One image may use at most half the budget (at least 1 MB, at most

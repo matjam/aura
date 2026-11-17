@@ -39,7 +39,12 @@
 
 #include "image.h"
 
-#define AU_IMAGE_CACHE_DEFAULT_BUDGET ((size_t)8 * 1024 * 1024)
+/* 64-bit builds run on machines with memory to spare: the browser gives
+ * them four times the memory cache size as their image budget, so an
+ * image up to the 16 MB cap (a 2000 x 2000 page background) decodes at
+ * full size. 32-bit builds (Mac OS 9) keep the figure as given. */
+#define AU_IMAGE_BUDGET_SCALE (sizeof(void *) >= 8 ? 4u : 1u)
+#define AU_IMAGE_CACHE_DEFAULT_BUDGET ((size_t)8 * 1024 * 1024 * AU_IMAGE_BUDGET_SCALE)
 #define AU_IMAGE_CACHE_MAX_IMAGE ((size_t)16 * 1024 * 1024)
 
 typedef enum {

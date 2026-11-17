@@ -9,6 +9,7 @@
 #include "browser/browser.h"
 #include "browser/context.h"
 #include "browser/credits.h"
+#include "image/cache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,6 +188,10 @@ static void test_sample(void)
     AuPageStats st;
     au_page_stats(t->page, &st);
     CHECK(st.load_ms > 0 && st.layouts >= 1 && st.resources == 2 && st.boxes > 50);
+    /* The image budget: the 8 MB memory cache, four times over on a
+     * 64-bit build. */
+    CHECK(st.image_budget_kb == 8192 * AU_IMAGE_BUDGET_SCALE);
+    CHECK(sizeof(void *) < 8 || st.image_budget_kb == 32768);
     paint(w);
     au_page_stats(t->page, &st);
     CHECK(st.first_paint_ms > 0);
