@@ -1921,11 +1921,11 @@ static void match_bucket(AuCssResolver *r, uint32_t start, uint32_t count, const
         if (e->pseudo != want) {
             if (want != AU_CSS_PSEUDO_NONE || !pseudo_bits || e->pseudo == AU_CSS_PSEUDO_UNKNOWN_WEBKIT)
                 continue;
-            /* The ::before, ::after and ::marker styles hang off the
+            /* The ::before, ::after, ::marker and ::placeholder styles hang off the
              * element's style, so the rules that give them are part of
              * what a shared style stands for: find them all. */
             bool attached = e->pseudo == AU_CSS_PSEUDO_BEFORE || e->pseudo == AU_CSS_PSEUDO_AFTER ||
-                            e->pseudo == AU_CSS_PSEUDO_MARKER;
+                            e->pseudo == AU_CSS_PSEUDO_MARKER || e->pseudo == AU_CSS_PSEUDO_PLACEHOLDER;
             if (!attached && (*pseudo_bits & (1u << e->pseudo)))
                 continue; /* already known to match */
             if (e->hash && mc->bloom && !css_bloom_may_contain(mc->bloom, e->hash))
@@ -3209,7 +3209,10 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
     if (s->pseudos || s->pseudo)
         return;
     static const uint8_t kinds[] = {AU_CSS_PSEUDO_BEFORE, AU_CSS_PSEUDO_AFTER, AU_CSS_PSEUDO_MARKER,
-                                    AU_CSS_PSEUDO_BACKDROP};
+                                    AU_CSS_PSEUDO_BACKDROP, AU_CSS_PSEUDO_PLACEHOLDER};
+    /* ::placeholder exists for text fields and textareas (by tag, so a
+     * style shared between two of them carries it either way) */
+    bool field = el->ns == AU_NS_HTML && (el->tag == HN(input) || el->tag == HN(textarea));
     AuStyle **tail = &s->pseudos;
     /* el is a candidate container of its pseudo-elements, with the style
      * computed now (stored after this) */
@@ -3221,6 +3224,8 @@ static void attach_pseudos(AuCssResolver *r, AuElement *el, AuStyle *s)
             continue;
         /* ::backdrop exists only for an element in the top layer */
         if (k == AU_CSS_PSEUDO_BACKDROP && !(el->state & (AU_STATE_MODAL | AU_STATE_POPOVER_OPEN)))
+            continue;
+        if (k == AU_CSS_PSEUDO_PLACEHOLDER && !field)
             continue;
         AuStyle *p = au_css_compute_pseudo(r, el, s, (AuCssPseudo)k);
         if (p) {

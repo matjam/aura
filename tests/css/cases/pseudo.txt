@@ -69,3 +69,20 @@ html
 --- expect
 #q::before -> content: open-quote
 #q::after -> content: close-quote
+
+=== placeholders of text fields and textareas
+--- css
+.b::placeholder { color: red; }
+.c::placeholder { color: transparent; }
+--- html
+html
+  body
+    input#i.b[placeholder=x]
+    textarea#t.b
+    input#n.c
+    div#d.b
+--- expect
+#i::placeholder -> color: rgb(255, 0, 0)
+#t::placeholder -> color: rgb(255, 0, 0)
+#n::placeholder -> color: rgba(0, 0, 0, 0)
+#d::placeholder -> (none)

@@ -336,3 +336,21 @@ html
       span#a "a"
 --- expect
 #a -> (none)
+
+=== a shadow sheet styles ::placeholder by a host attribute
+--- css #h
+:host([cp]) textarea::placeholder { color: transparent; }
+--- css #k
+textarea::placeholder { color: red; }
+--- html
+html
+  body
+    div#h[cp]
+      ::shadow
+        textarea#a[placeholder=A]
+    div#k
+      ::shadow
+        textarea#c[placeholder=C]
+--- expect
+#h / #a::placeholder -> color: rgba(0, 0, 0, 0)
+#k / #c::placeholder -> color: rgb(255, 0, 0)

@@ -16,6 +16,19 @@ test('performance.timeOrigin is the embedder clock', () => {
     assert.equal(performance.timing.navigationStart, T);
 });
 
+test('performance.timing and performance.navigation have their interfaces', () => {
+    assert.ok(performance.timing instanceof PerformanceTiming);
+    assert.equal(performance.timing, performance.timing);
+    assert.equal(performance.timing.loadEventEnd, T);
+    assert.equal(performance.timing.toJSON().fetchStart, T);
+    assert.ok(performance.navigation instanceof PerformanceNavigation);
+    assert.equal(PerformanceNavigation.TYPE_RELOAD, 1);
+    assert.equal(performance.navigation.TYPE_BACK_FORWARD, 2);
+    assert.equal(performance.navigation.type, PerformanceNavigation.TYPE_NAVIGATE);
+    assert.equal(performance.navigation.redirectCount, 0);
+    assert.throws(() => new PerformanceNavigation(), TypeError);
+});
+
 test('getTimezoneOffset is the embedder zone', () => {
     assert.equal(new Date().getTimezoneOffset(), 480);
     // Fixed for every date: Mac OS 9 has no zone database.

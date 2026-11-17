@@ -337,9 +337,13 @@ AuNode *au_node_root(const AuNode *n);
 AuNode *au_node_shadow_including_root(const AuNode *n);
 /* True when n is in a document (through shadow hosts). */
 bool au_node_is_connected(const AuNode *n);
-/* The slot name of a slottable (its slot attribute, "" when none) and of
- * a <slot> element (its name attribute). */
+/* The name of a <slot> element (its name attribute, "" when none; "" for
+ * any other node). */
 const char *au_slot_name_of(const AuNode *n);
+/* The slot name a slottable asks for: its slot attribute, "" when none or
+ * for text. A <slot> slotted into another shadow tree asks by its slot
+ * attribute too. */
+const char *au_slottable_name_of(const AuNode *n);
 /* The slot n is assigned to, or NULL: n's parent is a shadow host whose
  * shadow root has a <slot> (in tree order the first) with n's slot name,
  * or, with manual assignment, the first slot in tree order whose

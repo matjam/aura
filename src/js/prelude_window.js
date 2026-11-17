@@ -394,17 +394,43 @@ defProps(Performance.prototype, {
     getEntriesByName(n, t) { return marks.filter((m) => m.name === n && (t === undefined || m.entryType === t)); },
     clearResourceTimings() {},
     setResourceTimingBufferSize() {},
-    get timing() {
-        return { navigationStart: timeOrigin, fetchStart: timeOrigin, domLoading: timeOrigin, domInteractive: timeOrigin,
-            domContentLoadedEventStart: timeOrigin, domContentLoadedEventEnd: timeOrigin, domComplete: timeOrigin,
-            loadEventStart: timeOrigin, loadEventEnd: timeOrigin, responseStart: timeOrigin, responseEnd: timeOrigin,
-            requestStart: timeOrigin, connectStart: timeOrigin, connectEnd: timeOrigin };
-    },
-    get navigation() { return { type: 0, redirectCount: 0, TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2 }; },
+    get timing() { return theTiming; },
+    get navigation() { return theNavigation; },
     toJSON() { return { timeOrigin }; },
 });
+/* The legacy performance.timing and performance.navigation objects,
+ * with their interfaces (pages compare navigation.type against
+ * PerformanceNavigation.TYPE_RELOAD). Every time is the time origin. */
+class PerformanceTiming {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+const timingNames = ['navigationStart', 'unloadEventStart', 'unloadEventEnd', 'redirectStart', 'redirectEnd', 'fetchStart',
+    'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart',
+    'responseStart', 'responseEnd', 'domLoading', 'domInteractive', 'domContentLoadedEventStart',
+    'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd'];
+const timingProps = { toJSON() { const o = {}; for (const k of timingNames) o[k] = this[k]; return o; } };
+for (const k of timingNames) Object.defineProperty(timingProps, k, { get() { return Math.round(timeOrigin); }, enumerable: true });
+Object.defineProperties(PerformanceTiming.prototype, Object.getOwnPropertyDescriptors(timingProps));
+class PerformanceNavigation {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+const navConsts = { TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2, TYPE_RESERVED: 255 };
+for (const k in navConsts) {
+    Object.defineProperty(PerformanceNavigation, k, { value: navConsts[k], enumerable: true });
+    Object.defineProperty(PerformanceNavigation.prototype, k, { value: navConsts[k], enumerable: true });
+}
+defProps(PerformanceNavigation.prototype, {
+    get type() { return 0; },
+    get redirectCount() { return 0; },
+    toJSON() { return { type: 0, redirectCount: 0 }; },
+});
+const theTiming = Object.create(PerformanceTiming.prototype);
+const theNavigation = Object.create(PerformanceNavigation.prototype);
 tag(Performance);
-for (const C of [Performance, PerformanceEntry, PerformanceMark, PerformanceMeasure]) defGlobal(C.name, C);
+tag(PerformanceTiming);
+tag(PerformanceNavigation);
+for (const C of [Performance, PerformanceEntry, PerformanceMark, PerformanceMeasure, PerformanceTiming, PerformanceNavigation])
+    defGlobal(C.name, C);
 const thePerformance = Object.create(Performance.prototype);
 defProps(WP, { get performance() { return thePerformance; } });
 class PerformanceObserver {

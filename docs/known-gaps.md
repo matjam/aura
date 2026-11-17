@@ -264,6 +264,10 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - **Start-up:** the prelude's CSSOM, Range and observer parts are
   created in every context (see [Memory](#memory)).
 - **`document.referrer`** is `""` in frames (a top-level document has it).
+- **Web Animations** (`Element.animate`, `Animation`,
+  `document.getAnimations`) are absent, so a call to `animate` throws
+  "not a function". Reddit's loading spinner (`faceplate-progress`)
+  throws once for each spinner; nothing visible depends on it there.
 - **IndexedDB, the Cache API and service workers** are absent; what each
   would take is in [`web-storage.md`](web-storage.md).
 - **`document.cookie`** in a sandboxed frame without

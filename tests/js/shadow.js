@@ -42,6 +42,22 @@ test('slots and assignment', () => {
     assert.equal(sa.assignedNodes().length, 0);
 });
 
+test('a slot slotted into another shadow tree goes by its slot attribute', () => {
+    const outer = document.createElement('div');
+    outer.innerHTML = '<a slot=n>logo</a>';
+    const r1 = outer.attachShadow({ mode: 'open' });
+    r1.innerHTML = '<x-pop><slot slot=anchor name=n></slot><i>body</i></x-pop>';
+    const pop = r1.firstChild;
+    const r2 = pop.attachShadow({ mode: 'open' });
+    r2.innerHTML = '<slot name=anchor></slot><slot></slot>';
+    const [anchor, rest] = r2.querySelectorAll('slot');
+    const fwd = r1.querySelector('slot');
+    assert.equal(fwd.assignedSlot, anchor);
+    assert.equal(anchor.assignedNodes()[0], fwd);
+    assert.equal(anchor.assignedNodes({ flatten: true })[0], outer.firstChild);
+    assert.equal(rest.assignedElements()[0].localName, 'i');
+});
+
 promise_test('slotchange fires', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);

@@ -445,6 +445,8 @@ static void run_expect(const Section *sec, AuDocument *doc, AuCssResolver *r)
                 pseudo = AU_CSS_PSEUDO_AFTER;
             else if (strcmp(pp, "::marker") == 0)
                 pseudo = AU_CSS_PSEUDO_MARKER;
+            else if (strcmp(pp, "::placeholder") == 0)
+                pseudo = AU_CSS_PSEUDO_PLACEHOLDER;
             *pp = 0;
         }
         bool bad;

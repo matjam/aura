@@ -158,6 +158,11 @@ at once (`fetchModules`) and calls again with the module's name.
   copy (patch 0008).
 - A module script whose URL is already loaded is that module: it runs
   once, as the standard's module map says.
+- A module's name is its whole URL, however long. Reddit loads `data:`
+  modules of 1.3 KB and 36 KB and imports the larger one as well; a
+  name cut short at 1000 characters never matched the module the
+  import had loaded, and the script was asked for again until "Module
+  graph too large" (`tests/js/pages/module_data_url.html`).
 - To change the protocol, keep `tests/js/modules.js` passing: it covers
   shared imports, two script elements of one URL, `import.meta.url` of
   modules loaded in later rounds, inline modules and syntax errors.
@@ -621,6 +626,11 @@ methods (`getHours`, `toString`, `getTimezoneOffset`,
 - Without a clock (the host tools, JSTest) `Date` reads the C library,
   which on Mac OS 9 knows neither the Mac's clock nor its zone.
 - `performance.now()` and timers use the monotonic `AuJsHooks.now_ms`.
+- The legacy `performance.timing` (a `PerformanceTiming`) gives the
+  time origin for every field, and `performance.navigation` (a
+  `PerformanceNavigation`, with the `TYPE_*` constants that pages such
+  as Reddit compare against) always says `TYPE_NAVIGATE` with no
+  redirects (`prelude_window.js`).
 - To test with a fixed time and zone, run `aura-host js --clock MS
   --zone SECONDS` (UTC milliseconds since 1970; seconds east of UTC),
   as `tests/js/clock.js` does (ctest `js_clock`).
@@ -856,7 +866,11 @@ or an adopted sheet changes (`sheets_changed`,
   in the document (`AuDocument.manual`, no references; a node in a pair
   carries `AU_NODEF_MANUAL`, and freeing it drops its pairs).
   `assignedNodes({flatten: true})` replaces nested slots with what they
-  offer, with an explicit stack.
+  offer, with an explicit stack. A slottable asks for a slot by its
+  `slot` attribute (`au_slottable_name_of`), and a `<slot>` slotted into
+  a shadow tree below it does too; its `name` attribute only names the
+  slot it is (`au_slot_name_of`). Lit components forward a light child
+  this way (`<slot slot=anchor>` in Reddit's tooltips).
 - **Events** are retargeted across shadow boundaries; `composed`
   decides whether an event leaves its shadow root, and `composedPath()`
   hides nodes of closed trees from listeners outside them.

@@ -527,6 +527,15 @@ SVG; it drew at its 300x150 fallback size before. An environment
 without the callback keeps the old natural-size behaviour.
 `test_background_svg_ratio_only` in `tests/page/test_page.c` covers it.
 
+### Scroll bars of scrollers
+
+`paint_scrollbars` in `draw.c` draws a scroller's bars over its padding
+box; they take no layout space. `scrollbar-width: none` draws none (the
+box still scrolls), which is how Tailwind's `scrollbar-hide` hides the
+bar under Reddit's post action row, and `thin` draws 5 px bars instead
+of 8 px. `::-webkit-scrollbar` rules are not read. The cases are in
+`tests/layout/cases/overflow.txt`.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips
