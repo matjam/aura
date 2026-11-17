@@ -67,6 +67,7 @@ for w in $widths; do
     fi
     if ! timeout "$limit" "$chrome" --headless=new --disable-gpu --hide-scrollbars \
         --no-first-run --no-default-browser-check --user-data-dir="$profile" \
+        --blink-settings=preferredColorScheme=1 \
         --window-size="$w,$height" --screenshot="$c" "$url" >"$outdir/chrome-$w.log" 2>&1; then
         echo "Chrome failed; see $outdir/chrome-$w.log" >&2
         status=1

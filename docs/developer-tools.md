@@ -93,6 +93,10 @@ fails at the other.
   makes the side-by-side image and figures for any two PNGs.
 - On a Mac without `google-chrome-stable`, the script uses
   `/Applications/Google Chrome.app` when `CHROME` is not set.
+- Chrome is given `--blink-settings=preferredColorScheme=1`, the light
+  scheme `aura-host` renders by default; without it Chrome follows the
+  desktop, and on a Mac in dark mode pages like Apple's came out dark in
+  Chrome only.
 
 ## To compare many pages with Chrome
 
