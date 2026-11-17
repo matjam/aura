@@ -1082,6 +1082,35 @@ static int count_requests(const Fake *f, const char *url)
     return n;
 }
 
+/* A face used only by generated content (an icon font on ::before) is
+ * fetched, from a sheet in another directory; one whose unicode-range
+ * misses the content, or whose pseudo-element has no content, is not. */
+static void test_webfonts_generated(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><link rel=stylesheet href=css/s.css><body>"
+                       "<i class=icon></i><i class=cnt></i><i class=none></i><i class=far></i>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/a/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    fake_deliver(&f, dv, "http://example.com/a/css/s.css",
+                 "@font-face{font-family:Icons;src:url(../fonts/i.woff2)}"
+                 "@font-face{font-family:Cnt;src:url(c.woff2);unicode-range:U+30-39}"
+                 "@font-face{font-family:None;src:url(n.woff2)}"
+                 "@font-face{font-family:Far;src:url(f.woff2);unicode-range:U+0400-045F}"
+                 ".icon::before{font-family:Icons;content:\"\\f197\"}"
+                 ".cnt::after{font-family:Cnt;content:counter(x)}"
+                 ".none::before{font-family:None}"
+                 ".far::before{font-family:Far;content:'abc'}",
+                 true);
+    au_docview_update(dv);
+    CHECK(count_requests(&f, "http://example.com/a/fonts/i.woff2") == 1, "icon font on ::before not requested");
+    CHECK(count_requests(&f, "http://example.com/a/css/c.woff2") == 1, "font for a counter not requested");
+    CHECK(count_requests(&f, "http://example.com/a/css/n.woff2") == 0, "font of a pseudo-element without content");
+    CHECK(count_requests(&f, "http://example.com/a/css/f.woff2") == 0, "face outside the content's unicode-range");
+    au_docview_free(dv);
+}
+
 /* A url() in a style sheet resolves against the sheet's URL, and one in
  * a style attribute against the document's (CSS Values 4). */
 static void test_sheet_relative_urls(void)
@@ -1189,6 +1218,7 @@ int main(void)
     test_webfonts();
     test_images_and_webfonts();
     test_sheet_relative_urls();
+    test_webfonts_generated();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
