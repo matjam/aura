@@ -386,7 +386,10 @@ static int usage(void)
             "                     --color-scheme light|dark (prefers-color-scheme; default light)\n"
             "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
-            "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
+            "                        [--loading] [--load-ms MS] (the longest the loads, and each wait:, stay busy\n"
+            "                        before going on: a page that animates or runs timers stays busy; 60000\n"
+            "                        with --net, else 5000)\n"
+            "                        [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
             "                        [--scroll Y] [--mouse X Y]\n"
             "                        [--native-chrome] (renders only the page, as for a port with its own\n"
             "                        widgets; coordinates are the page's; prints each AU_CHANGED_* notice\n"
@@ -651,6 +654,7 @@ typedef struct ChromeOpts {
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
     bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
+    int load_ms;      /* --load-ms: how long the loads and the waits may stay busy; 0: the default */
     const char *actions[256]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
@@ -978,7 +982,8 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         printf("edit %s: %s%s%s\n", c, ok ? "done" : "not done", out.len ? ", text: " : "", au_buf_cstr(&out));
         au_buf_free(&out);
     } else if (!strncmp(a, "wait:", 5)) {
-        chrome_settle(b, w, ses, o->net, atof(a + 5), o->net ? 60000 : 10000);
+        double ms = atof(a + 5), cap = o->load_ms > 0 ? o->load_ms : o->net ? 60000 : 10000;
+        chrome_settle(b, w, ses, o->net, ms, cap > ms ? cap : ms);
     } else if (!strncmp(a, "pause:", 6)) {
         double ms = atof(a + 6);
         chrome_settle(b, w, ses, o->net, ms, ms);
@@ -1377,7 +1382,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     if (!o->loading) {
         /* Let loads finish (simulated ones in 5 seconds, network ones in
          * 60). */
-        double t0 = now_ms(), limit = o->net ? 60000 : 5000;
+        double t0 = now_ms(), limit = o->load_ms > 0 ? o->load_ms : o->net ? 60000 : 5000;
         while (au_browser_busy(b) && now_ms() - t0 < limit) {
             if (o->net) {
                 au_posix_net_wait(ses.host, 10);
@@ -1538,6 +1543,8 @@ int main(int argc, char **argv)
                 o.loading = true;
             else if (!strcmp(a, "--net"))
                 o.net = true;
+            else if (!strcmp(a, "--load-ms") && i + 1 < argc)
+                o.load_ms = atoi(argv[++i]);
             else if (!strcmp(a, "--native-chrome"))
                 o.native_chrome = true;
             else if (!strcmp(a, "--profile") && i + 1 < argc) {

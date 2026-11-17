@@ -28,6 +28,7 @@ outdir=${4:-run/compare}
 aura=${AURA_HOST:-$root/build/host/src/platform/host/aura-host}
 chrome=${CHROME:-google-chrome-stable}
 wait_ms=${AURA_WAIT:-4000}
+load_ms=${AURA_LOAD:-20000}
 limit=${TIMEOUT:-120}
 
 if [ $# -ge 2 ]; then
@@ -56,7 +57,7 @@ for w in $widths; do
     rm -f "$a" "$c"
     echo "== ${w}x$height"
     if ! timeout "$limit" "$aura" chrome --native-chrome --net -w "$w" -h "$height" \
-        --tab "$url" --do "wait:$wait_ms" -o "$a" >"$outdir/aura-$w.log" 2>&1; then
+        --load-ms "$load_ms" --tab "$url" --do "wait:$wait_ms" -o "$a" >"$outdir/aura-$w.log" 2>&1; then
         echo "aura-host failed; see $outdir/aura-$w.log" >&2
         status=1
     fi

@@ -80,8 +80,13 @@ fails at the other.
 - To render one size, give it: `tools/render-compare.sh URL 933 1300`.
   A fourth argument names another output directory.
 - `AURA_HOST`, `CHROME`, `AURA_WAIT` (milliseconds Aura waits after the
-  load, 4000 by default) and `TIMEOUT` (seconds for each render, 120)
-  change the defaults.
+  load, 4000 by default), `AURA_LOAD` (the longest Aura's load and its
+  wait stay busy, 20000 milliseconds, passed as `aura-host --load-ms`)
+  and `TIMEOUT` (seconds for each render, 120) change the defaults.
+- A page with an endless CSS animation or a short timer stays busy, so
+  without the `AURA_LOAD` cap `aura-host` spent 60 seconds on the load
+  and 60 on the wait and the render timed out (5 of 30 Hacker News
+  pages on 2026-11-16).
 - Headless Chrome screenshots when the page has loaded and Aura after
   its wait, so content a script adds late can differ between them.
 - `tools/png-compare.py --side LEFT.png RIGHT.png OUT.png [DIFF.png]`
