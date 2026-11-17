@@ -46,4 +46,10 @@ void au_gtk_window_css(void);
 /* Tells the caller the set of windows changed. */
 void au_gtk_windows_changed(void);
 
+/* Closing every window of a file, for au_gtk_windows_shutdown. */
+void au_gtk_about_close(void);
+void au_gtk_prefs_close(void);
+void au_gtk_lists_close(void);
+void au_gtk_devwins_close(void);
+
 #endif

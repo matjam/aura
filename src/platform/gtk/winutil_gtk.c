@@ -294,6 +294,14 @@ void au_gtk_copy(GtkWidget *w, const char *text, size_t len)
 
 void au_gtk_windows_init(const AuGtkWindowsHost *host) { au_gtk_host = *host; }
 
+void au_gtk_windows_shutdown(void)
+{
+    au_gtk_prefs_close();
+    au_gtk_lists_close();
+    au_gtk_devwins_close();
+    au_gtk_about_close();
+}
+
 bool au_gtk_window_kind(AuWindowKind kind)
 {
     switch (kind) {
