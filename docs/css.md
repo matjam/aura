@@ -482,8 +482,9 @@ querySelectorAll or closest was called on); with a document or NULL,
 of LISTs of two integer NUMBERs, the first and last code point of each
 range; an invalid `unicode-range` is dropped. The tokenizer keeps each
 number as written (`css_tok_num_text`) for this, since `U+0025-00FF`
-and `U+1e3` are number tokens. [`fonts.md`](fonts.md) describes the web
-font loader.
+and `U+1e3` are number tokens. `font-display` is read from its generic
+value (a keyword) by `webfont.c`. [`fonts.md`](fonts.md) describes the web
+font loader and the block periods.
 
 ## Values parsed from text
 

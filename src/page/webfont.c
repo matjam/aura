@@ -15,6 +15,9 @@
 
 enum { R_IDLE, R_LOADING, R_LOADED, R_FAILED };
 
+/* font-display values. */
+enum { FD_AUTO, FD_BLOCK, FD_SWAP, FD_FALLBACK, FD_OPTIONAL };
+
 typedef struct Src {
     char *url;   /* absolute, or NULL */
     char *local; /* a local() name, or NULL */
@@ -30,6 +33,9 @@ typedef struct Rule {
     int nsrc, next;
     uint32_t req;
     uint8_t state;
+    uint8_t display;  /* FD_* */
+    bool blocked;     /* in its block period, as last reported (text_hidden) */
+    uint32_t t0;      /* when its first fetch started (the clock's ms) */
     uint64_t key;
 } Rule;
 
@@ -39,6 +45,9 @@ struct AuWebFonts {
     size_t n, cap;
     size_t loaded;
     bool changed;
+    bool vis_changed;              /* a rule's blocked flag changed */
+    uint32_t (*now)(void *ctx);    /* NULL: no clock, no block period */
+    void *now_ctx;
 };
 
 AuWebFonts *au_webfonts_new(AuFontSet *platform)
@@ -66,6 +75,62 @@ void au_webfonts_free(AuWebFonts *w)
 AuFontSet *au_webfonts_set(AuWebFonts *w)
 {
     return w->set;
+}
+
+void au_webfonts_set_clock(AuWebFonts *w, uint32_t (*now)(void *ctx), void *ctx)
+{
+    w->now = now;
+    w->now_ctx = ctx;
+}
+
+/* ---- font-display: the block and swap periods ---- */
+
+static uint32_t block_ms(const Rule *r)
+{
+    return r->display == FD_AUTO || r->display == FD_BLOCK ? AU_WEBFONT_BLOCK_MS : AU_WEBFONT_SHORT_BLOCK_MS;
+}
+
+/* Whether a face arriving at now is still used: after its swap period a
+ * fallback or optional face keeps the fallback font. */
+static bool in_swap_period(const AuWebFonts *w, const Rule *r)
+{
+    if (!w->now || (r->display != FD_FALLBACK && r->display != FD_OPTIONAL))
+        return true;
+    uint32_t limit = block_ms(r) + (r->display == FD_FALLBACK ? AU_WEBFONT_SWAP_MS : 0);
+    return (uint32_t)(w->now(w->now_ctx) - r->t0) < limit;
+}
+
+/* Sets each rule's blocked flag for now; returns the milliseconds until
+ * the next block period ends (UINT32_MAX: none). */
+static uint32_t update_blocked(AuWebFonts *w)
+{
+    uint32_t next = UINT32_MAX;
+    uint32_t now = w->now ? w->now(w->now_ctx) : 0;
+    for (size_t i = 0; i < w->n; i++) {
+        Rule *r = &w->rules[i];
+        bool b = false;
+        if (r->state == R_LOADING && w->now) {
+            uint32_t el = now - r->t0, lim = block_ms(r);
+            if (el < lim) {
+                b = true;
+                if (lim - el < next)
+                    next = lim - el;
+            }
+        }
+        if (b != r->blocked) {
+            r->blocked = b;
+            w->vis_changed = true;
+        }
+    }
+    return next;
+}
+
+uint32_t au_webfonts_tick(AuWebFonts *w, bool *changed)
+{
+    uint32_t next = update_blocked(w);
+    *changed = w->vis_changed;
+    w->vis_changed = false;
+    return next;
 }
 
 bool au_webfonts_take_changed(AuWebFonts *w)
@@ -359,6 +424,25 @@ static bool tech_ok(const AuCssValue *fn)
     return true;
 }
 
+/* font-display: auto | block | swap | fallback | optional; anything else
+ * is invalid and leaves auto. */
+static uint8_t display_value(const AuCssValue *v)
+{
+    const char *name = NULL;
+    if (v->type == AU_CSSV_KEYWORD)
+        name = au_css_keyword_name((AuCssKeyword)v->kw);
+    else if (v->type == AU_CSSV_IDENT)
+        name = v->u.str;
+    if (!name)
+        return FD_AUTO;
+    static const char *const names[] = {"auto", "block", "swap", "fallback", "optional"};
+    size_t n = strlen(name);
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (au_ieq(name, n, names[i], strlen(names[i])))
+            return (uint8_t)i;
+    return FD_AUTO;
+}
+
 static void parse_src(Rule *r, const AuCssValue *v, const char *base)
 {
     uint32_t n;
@@ -460,6 +544,9 @@ void au_webfonts_add_sheet(AuWebFonts *w, const AuCssSheet *sh, const char *text
             const AuCssValue *a = items(st, &m);
             r.italic = a[0].type == AU_CSSV_KEYWORD && (a[0].kw == AU_K_italic || a[0].kw == AU_K_oblique);
         }
+        const AuCssValue *fd = au_css_font_face_descriptor(f, "font-display");
+        if (fd)
+            r.display = display_value(fd);
         if (use_raw && raw[i].v) {
             int np = parse_ranges(raw[i].v, raw[i].n, r.ranges, MAX_RANGES);
             r.nranges = np > 0 ? (size_t)np : 0;
@@ -516,11 +603,15 @@ static bool try_local(AuWebFonts *w, Rule *r, const char *name)
 
 static void start(AuWebFonts *w, Rule *r, AuWebFontFetch fetch, void *ctx)
 {
+    if (r->state == R_IDLE && w->now)
+        r->t0 = w->now(w->now_ctx); /* the block period starts with the first source */
     while (r->next < r->nsrc) {
         Src *s = &r->src[r->next++];
         if (s->local) {
-            if (try_local(w, r, s->local))
+            if (try_local(w, r, s->local)) {
+                update_blocked(w);
                 return;
+            }
             continue;
         }
         if (w->loaded >= MAX_LOADED || !fetch)
@@ -529,10 +620,12 @@ static void start(AuWebFonts *w, Rule *r, AuWebFontFetch fetch, void *ctx)
         if (id) {
             r->req = id;
             r->state = R_LOADING;
+            update_blocked(w);
             return;
         }
     }
     r->state = R_FAILED;
+    update_blocked(w);
 }
 
 void au_webfonts_done(AuWebFonts *w, uint32_t id, const void *data, size_t len, bool ok, AuWebFontFetch fetch,
@@ -543,11 +636,20 @@ void au_webfonts_done(AuWebFonts *w, uint32_t id, const void *data, size_t len, 
         if (r->state != R_LOADING || r->req != id)
             continue;
         r->req = 0;
+        if (!in_swap_period(w, r)) {
+            /* font-display: fallback or optional, too late: the text keeps
+             * its fallback font and is not laid out again. */
+            r->state = R_FAILED;
+            update_blocked(w);
+            return;
+        }
         uint8_t *out;
         size_t olen;
         if (ok && data && w->loaded < MAX_LOADED &&
-            au_font_decode(data, len, MAX_FONT_BYTES, &out, &olen) == AU_FONT_OK && add_face(w, r, out, olen))
+            au_font_decode(data, len, MAX_FONT_BYTES, &out, &olen) == AU_FONT_OK && add_face(w, r, out, olen)) {
+            update_blocked(w);
             return;
+        }
         start(w, r, fetch, ctx);
         return;
     }
@@ -657,4 +759,47 @@ void au_webfonts_scan(AuWebFonts *w, AuDocument *doc, AuWebFontFetch fetch, void
                 start(w, r, fetch, ctx);
         }
     }
+}
+
+bool au_webfonts_hidden(const AuWebFonts *w, const char *const *families, size_t n, int weight, bool italic)
+{
+    if (!w->n || !w->now)
+        return false;
+    for (size_t i = 0; i < n && i < 16; i++) {
+        const char *name = families[i];
+        size_t len = strlen(name);
+        int best = -1, best_d = 0;
+        for (size_t k = 0; k < w->n; k++) {
+            const Rule *r = &w->rules[k];
+            if (!au_ieq(r->family, strlen(r->family), name, len) || !in_ranges(r, ' '))
+                continue;
+            int d = weight_distance(r, weight) + (r->italic != italic ? 10000 : 0);
+            if (best < 0 || d < best_d) {
+                best = (int)k;
+                best_d = d;
+            }
+        }
+        if (best >= 0) {
+            /* The family's faces for this weight and style that cover the
+             * space (CSS Fonts 4: the first available font). */
+            const Rule *b = &w->rules[best];
+            bool blocked = false, usable = false;
+            for (size_t k = 0; k < w->n; k++) {
+                const Rule *r = &w->rules[k];
+                if (r->wmin != b->wmin || r->wmax != b->wmax || r->italic != b->italic || !in_ranges(r, ' ') ||
+                    !au_ieq(r->family, strlen(r->family), name, len))
+                    continue;
+                blocked |= r->blocked;
+                usable |= r->state == R_LOADED;
+            }
+            if (usable)
+                return false;
+            if (blocked)
+                return true;
+            continue; /* failed, too late or not needed: the next family */
+        }
+        if (au_font_generic(name, len) || au_font_alias(name, len) || au_fontset_has_family(w->platform, name, len))
+            return false;
+    }
+    return false;
 }

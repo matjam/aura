@@ -96,6 +96,13 @@ typedef struct AuLayoutEnv {
      * block's width (CSS 2.1 10.3.2), and contributes 0 to intrinsic
      * sizes. Optional; without it every image has its natural size. */
     bool (*image_ratio_only)(void *ctx, const char *url);
+    /* Whether text whose computed font-family list is families (n names,
+     * as written), at weight and style, is painted invisible: its first
+     * available font is a web font still in its block period
+     * (font-display). The text keeps the fallback face's metrics.
+     * Optional; asked again for each font after
+     * au_layout_text_visibility_changed. */
+    bool (*text_hidden)(void *ctx, const char *const *families, size_t n, int weight, bool italic);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
@@ -159,6 +166,9 @@ void au_layout_styles_changed(AuLayout *L);
  * box tree is kept. The tree is built again only when its shape depends
  * on images (an object or embed element with a resource). */
 void au_layout_images_changed(AuLayout *L);
+/* What text_hidden answers may have changed (a web font's block period
+ * ended or its face failed): text is painted again, with no layout. */
+void au_layout_text_visibility_changed(AuLayout *L);
 /* Appends to out the URL (as written, not resolved) that el shows: for
  * an <img>, the choice among srcset candidates (density 1; width
  * descriptors against sizes and the viewport of the last layout) and

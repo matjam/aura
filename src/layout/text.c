@@ -77,6 +77,45 @@ static uint32_t font_hash(const void *fam, unsigned weight, bool italic, float s
     return (h ^ (h >> 16)) & 63;
 }
 
+/* The names of a font-family list (at most 16). */
+static size_t font_names(const AuCssBlob *family, const char **names)
+{
+    size_t n = 0;
+    if (family) {
+        uint32_t cnt;
+        const AuCssValue *it = l_items(&family->value, &cnt);
+        for (uint32_t i = 0; i < cnt && n < 16; i++) {
+            size_t len;
+            const char *nm = l_val_name(&it[i], &len);
+            if (nm && *nm)
+                names[n++] = nm;
+        }
+    }
+    return n;
+}
+
+/* Whether text in f is painted invisible (a web font's block period). */
+bool l_font_hidden(AuLayout *L, LFont *f)
+{
+    if (!L->env.text_hidden)
+        return false;
+    if (f->hidden_gen != L->hidden_gen + 1) {
+        const char *names[16];
+        size_t n = font_names(f->family, names);
+        f->hidden = L->env.text_hidden(L->env.ctx, names, n, f->weight, f->italic);
+        f->hidden_gen = L->hidden_gen + 1;
+    }
+    return f->hidden;
+}
+
+void au_layout_text_visibility_changed(AuLayout *L)
+{
+    L->hidden_gen++;
+    if (L->hidden_gen + 1 == 0)
+        L->hidden_gen = 0; /* 0 stays "not asked" for every font */
+    L->need_paint = true;
+}
+
 LFont *l_font(AuLayout *L, const AuStyle *s)
 {
     const AuStyleInh *in = s->inh;
@@ -96,17 +135,7 @@ LFont *l_font(AuLayout *L, const AuStyle *s)
     f->italic = italic;
     f->size = size;
     const char *names[16];
-    size_t n = 0;
-    if (in->font_family) {
-        uint32_t cnt;
-        const AuCssValue *it = l_items(&in->font_family->value, &cnt);
-        for (uint32_t i = 0; i < cnt && n < 16; i++) {
-            size_t len;
-            const char *nm = l_val_name(&it[i], &len);
-            if (nm && *nm)
-                names[n++] = nm;
-        }
-    }
+    size_t n = font_names(in->font_family, names);
     f->list = L->env.fonts ? au_fontlist_new(L->env.fonts, names, n, in->font_weight, italic) : NULL;
     f->face = au_fontlist_primary(f->list);
     if (f->face)
@@ -374,7 +403,7 @@ static bool skip_char(uint32_t cp)
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,
                  uint32_t color, float spacing)
 {
-    if (!f->face || !n)
+    if (!f->face || !n || l_font_hidden(L, f))
         return;
     float ls = s->inhr->letter_spacing, ws = s->inhr->word_spacing + spacing;
     AuGlyphRun *run = &L->run; /* kept between calls: no allocation per fragment */

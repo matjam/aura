@@ -54,6 +54,7 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
 }
 
 static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px);
+static bool layout_text_hidden(void *ctx, const char *const *families, size_t n, int weight, bool italic);
 
 /* An SVG image with only a viewBox has no natural size. */
 static bool layout_image_ratio_only(void *ctx, const char *url)
@@ -89,8 +90,16 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         dv->check_failures += au_layout_check_failures(dv->layout, dv->check_msg.len ? NULL : &dv->check_msg);
         au_layout_free(dv->layout);
     }
-    AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
-                       layout_paint_frame, layout_canvas, layout_image_ratio_only};
+    AuLayoutEnv env = {fonts,
+                       dv,
+                       layout_image,
+                       layout_resolve,
+                       layout_image_use,
+                       layout_embed_kind,
+                       layout_paint_frame,
+                       layout_canvas,
+                       layout_image_ratio_only,
+                       layout_text_hidden};
     dv->layout = au_layout_new(&env);
     if (dv->check)
         au_layout_set_check(dv->layout, true);
@@ -107,6 +116,35 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
         au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
     }
+}
+
+/* Text whose web font is in its block period is painted invisible. */
+static bool layout_text_hidden(void *ctx, const char *const *families, size_t n, int weight, bool italic)
+{
+    AuDocView *dv = ctx;
+    return dv->webfonts && au_webfonts_hidden(dv->webfonts, families, n, weight, italic);
+}
+
+static uint32_t perf_now(AuDocView *dv);
+static uint32_t webfont_now(void *ctx)
+{
+    return perf_now(ctx);
+}
+
+/* Ends web font block periods that have run out: the text they hid is
+ * painted (no layout: it was laid out with the fallback's metrics).
+ * Returns the milliseconds until the next one ends (UINT32_MAX: none). */
+static uint32_t webfonts_tick(AuDocView *dv)
+{
+    if (!dv->webfonts)
+        return UINT32_MAX;
+    bool changed;
+    uint32_t next = au_webfonts_tick(dv->webfonts, &changed);
+    if (changed) {
+        au_layout_text_visibility_changed(dv->layout);
+        invalidate_all(dv);
+    }
+    return next;
 }
 
 static uint32_t fetch_font(void *ctx, const char *url)
@@ -437,7 +475,10 @@ DV_ENTRY(uint32_t, animate, (AuDocView *dv, uint32_t now_ms), (dv, now_ms))
     uint32_t next = au_docimages_tick(dv->imgs, now_ms);
     images_changed(dv);
     uint32_t fn = au_frames_animate(dv, now_ms);
-    return fn < next ? fn : next;
+    if (fn < next)
+        next = fn;
+    uint32_t wf = webfonts_tick(dv);
+    return wf < next ? wf : next;
 }
 
 bool au_docview_animating(const AuDocView *dv)
@@ -1401,6 +1442,8 @@ DV_ENTRY_VOID(begin, (AuDocView * dv, const char *url), (dv, url))
     clear_document(dv);
     au_perf_reset(&dv->perf);
     dv->webfonts = au_webfonts_new(dv->fonts);
+    if (dv->cb.now_ms)
+        au_webfonts_set_clock(dv->webfonts, webfont_now, dv);
     new_layout(dv, au_webfonts_set(dv->webfonts));
     au_free(dv->url);
     au_free(dv->base);
@@ -1691,7 +1734,8 @@ static bool update_style(AuDocView *dv)
         dv->sheets_dirty = false;
     }
     if (dv->webfonts && au_webfonts_take_changed(dv->webfonts)) {
-        /* A web font arrived: lay out again with it (font-display: swap). */
+        /* A web font arrived and is used (webfont.h, font-display): lay
+         * out again with it. */
         new_layout(dv, au_webfonts_set(dv->webfonts));
         dv->style_all = true; /* ex and ch units */
     }
@@ -1806,6 +1850,7 @@ DV_ENTRY(bool, update, (AuDocView * dv), (dv))
     uint32_t t1 = perf_now(dv);
     if (style_work)
         au_perf_add(&dv->perf, AU_PERF_STYLE, t1 - t0, NULL, t1);
+    webfonts_tick(dv); /* faces that started, arrived or failed; block periods that ended */
     if (au_docimages_take_layout_changed(dv->imgs))
         dv->images_dirty = true;
     bool images = dv->images_dirty;

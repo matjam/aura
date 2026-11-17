@@ -317,6 +317,8 @@ typedef struct LFont {
     AuFontFace *face;   /* the primary face of list */
     AuFontList *list;   /* the family list, for per-character fallback */
     bool fallback;      /* some text measured with it used another face */
+    bool hidden;        /* env.text_hidden's answer, valid while hidden_gen is L->hidden_gen + 1 */
+    uint32_t hidden_gen;
     float size;
     AuFontMetrics m;
     uint16_t weight;
@@ -388,6 +390,7 @@ struct AuLayout {
     LBox *view_boxes[L_VIEW_BOXES];
     uint32_t nview_boxes;
     bool need_paint;
+    uint32_t hidden_gen;   /* au_layout_text_visibility_changed calls */
     bool transparent;      /* a nested document: the canvas gets no white (au_layout_set_transparent) */
     bool need_restack;
     /* The box tree's shape depends on which images are known (an object
@@ -525,6 +528,9 @@ float l_measure_raw(AuLayout *L, LFont *f, const char *t, size_t n);
 float l_line_height(const AuStyle *s, LFont *f);
 bool l_text_fallback_extents(AuLayout *L, LFont *f, const char *t, size_t n, float *ascent, float *descent);
 void l_text_free_caches(AuLayout *L);
+/* Text in f is painted invisible (env.text_hidden: a web font's block
+ * period); l_draw_text then draws nothing. */
+bool l_font_hidden(AuLayout *L, LFont *f);
 void l_draw_text(AuLayout *L, AuCanvas *c, LFont *f, const AuStyle *s, const char *t, size_t n, float x, float y,
                  uint32_t color, float spacing);
 int l_break_class(uint32_t cp);
