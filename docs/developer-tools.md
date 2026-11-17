@@ -91,6 +91,29 @@ fails at the other.
   its wait, so content a script adds late can differ between them.
 - `tools/png-compare.py --side LEFT.png RIGHT.png OUT.png [DIFF.png]`
   makes the side-by-side image and figures for any two PNGs.
+- On a Mac without `google-chrome-stable`, the script uses
+  `/Applications/Google Chrome.app` when `CHROME` is not set.
+
+## To compare many pages with Chrome
+
+To find the pages that render worst, run `tools/render-batch.sh`. It
+takes every story link on Hacker News's front page, runs
+`render-compare.sh` on each at 1280x900, four at a time, and ranks the
+pages by the share of pixels that differ. It writes `run/batch/NN/` for
+each page (the files above, its `url.txt` and `compare.log`),
+`run/batch/report.md` (a table, worst first) and `run/batch/index.html`
+(every page's side-by-side image, worst first).
+
+| To | Run |
+|---|---|
+| compare another listing's outbound links | `tools/render-batch.sh https://lobste.rs/` |
+| compare a list of URLs | `tools/render-batch.sh -f urls.txt` (one per line, `#` comments) |
+| change the size, jobs, count or folder | `-w 1280 -h 900 -j 6 -n 30 -o run/batch` |
+
+A high share is not always a bug: a page shifted by a few pixels, a
+different cookie banner or an animated hero scores high too. Open the
+side-by-side image before taking the ranking as the order of work. On
+2026-11-16, 29 front-page links took four minutes with six jobs.
 
 ## The Develop menu
 

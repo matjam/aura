@@ -27,6 +27,10 @@ height=${3:-900}
 outdir=${4:-run/compare}
 aura=${AURA_HOST:-$root/build/host/src/platform/host/aura-host}
 chrome=${CHROME:-google-chrome-stable}
+mac_chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+if [ -z "${CHROME:-}" ] && ! command -v "$chrome" >/dev/null 2>&1 && [ -x "$mac_chrome" ]; then
+    chrome=$mac_chrome
+fi
 wait_ms=${AURA_WAIT:-4000}
 load_ms=${AURA_LOAD:-20000}
 limit=${TIMEOUT:-120}
