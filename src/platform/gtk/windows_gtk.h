@@ -75,8 +75,9 @@ typedef struct AuGtkWindowsHost {
     /* Opens url in the front browser window, or in a new tab (a new
      * window when none is open). Required. */
     void (*open_url)(void *ctx, const char *url, bool new_tab);
-    /* Shows a finished download's file in the file manager. May be NULL:
-     * the file is shown with GtkFileLauncher. */
+    /* Shows a finished download's file in the file manager (the caller
+     * knows the download folder; GtkFileLauncher can show it). false when
+     * it cannot. May be NULL: Reveal reports that it failed. */
     bool (*reveal_download)(void *ctx, const AuDownload *d);
 
     /* Preferences were applied: what (AU_PREF_CHANGED_TABS: lay the
