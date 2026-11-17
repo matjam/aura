@@ -332,11 +332,18 @@ function customElementRegistry() { return theRegistry; }
  * script-created scripts are watched so they run when connected. */
 const scriptCreated = new WeakSet();
 const scriptStarted = new WeakSet();
+/* The HTML Standard's "force async" flag (non-blocking): set on a script
+ * that script creates, cleared by setting its async property. An
+ * external classic script without it and without the async attribute
+ * runs in insertion order (the list of scripts that will execute in
+ * order as soon as possible). Google's module loader relies on this. */
+const scriptForceAsync = new WeakSet();
 const createElement0 = DP.createElement;
 const createElementNS0 = DP.createElementNS;
 function afterCreate(el) {
     if (el.localName === 'script' && el.namespaceURI === HTML_NS) {
         scriptCreated.add(el);
+        scriptForceAsync.add(el);
         scriptWatch++;
         syncCounts();
     }
@@ -413,6 +420,25 @@ function scriptKind(el) {
     return null;
 }
 P.scriptKind = scriptKind;
+
+defProps(HTMLScriptElement.prototype, {
+    get async() { return scriptForceAsync.has(this) || this.hasAttribute('async'); },
+    set async(v) {
+        scriptForceAsync.delete(this);
+        if (v) this.setAttribute('async', '');
+        else this.removeAttribute('async');
+    },
+});
+
+/* External classic scripts that run in insertion order: each waits for
+ * those inserted before it to load and run. */
+const scriptsInOrder = [];
+function runScriptsInOrder() {
+    while (scriptsInOrder.length && scriptsInOrder[0].run) {
+        const e = scriptsInOrder.shift();
+        try { e.run(); } catch (x) { /* reported where it was thrown; the rest still run */ }
+    }
+}
 function scriptConnected(el) {
     if (!scriptCreated.has(el) || scriptStarted.has(el) || !el.isConnected) return;
     const src = el.getAttribute('src');
@@ -436,11 +462,18 @@ function scriptConnected(el) {
             return;
         }
         const co = el.getAttribute('crossorigin');
+        const entry = !scriptForceAsync.has(el) && !el.hasAttribute('async') ? { run: null } : null;
+        if (entry) scriptsInOrder.push(entry);
         P.fetchText(url, 1, (body, msg, finalUrl, crossOrigin) => {
-            if (body === null) { fireSimple(el, 'error'); return; }
-            if (crossOrigin) N.muteScript(url);
-            N.runScript(body, url, el);
-            fireSimple(el, 'load');
+            const run = () => {
+                if (body === null) { fireSimple(el, 'error'); return; }
+                if (crossOrigin) N.muteScript(url);
+                N.runScript(body, url, el);
+                fireSimple(el, 'load');
+            };
+            if (!entry) { run(); return; }
+            entry.run = run;
+            runScriptsInOrder();
         }, co === null ? 0 : co.toLowerCase() === 'use-credentials' ? 2 : 1);
         return;
     }

@@ -134,6 +134,16 @@ fails a script element's load. Without it script sees status 200, no
 headers and a type guessed from the URL; `page_doc.c` passes the final
 URL and content type, and status 200 until `AuFetchInfo` has a status.
 
+**Scripts that script inserts** run from the prelude
+(`scriptConnected` in `prelude_obs.js`). A script made by
+`createElement` is async (the standard's "force async" flag) until its
+`async` property is set. An external classic script with `async` false
+waits for those inserted before it and runs in insertion order; others
+run as they arrive. Google's module loader (accounts.google.com, other
+boq sites) inserts `async = false` scripts and treats a module that ran
+out of order as a load failure ("Module load failure: Consecutive load
+failures (-1)").
+
 **`document.open()`** on a loaded document followed by `write` replaces
 the document's contents with the parse of what was written (the same
 Document and window; scripts in the written text do not run; a `write`

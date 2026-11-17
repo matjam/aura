@@ -77,6 +77,45 @@ promise_test('classic scripts inserted by script run, innerHTML scripts do not',
     assert.equal(window.__classic.length, 2);
 });
 
+promise_test('scripts inserted by script with async false run in insertion order', async () => {
+    const made = document.createElement('script');
+    assert.equal(made.async, true, 'a script made by script is async');
+    made.async = false;
+    assert.equal(made.async, false);
+    assert.equal(made.hasAttribute('async'), false);
+    made.async = true;
+    assert.equal(made.hasAttribute('async'), true);
+    // The file loads after the data: URL; with async false it still runs
+    // first, as Google's module loader expects.
+    window.__classic = [];
+    const a = document.createElement('script');
+    a.src = 'resources/classic.js';
+    a.async = false;
+    const b = document.createElement('script');
+    b.src = 'data:text/javascript,__classic.push("second")';
+    b.async = false;
+    const pa = once(a, 'load'), pb = once(b, 'load');
+    document.head.appendChild(a);
+    document.head.appendChild(b);
+    await pa;
+    await pb;
+    assert.deepEqual(window.__classic, ['external', 'second']);
+    // A failed script does not hold back those after it.
+    window.__classic = [];
+    const bad = document.createElement('script');
+    bad.src = 'resources/nope.js';
+    bad.async = false;
+    const c = document.createElement('script');
+    c.src = 'data:text/javascript,__classic.push("after")';
+    c.async = false;
+    const pe = once(bad, 'error'), pc = once(c, 'load');
+    document.head.appendChild(bad);
+    document.head.appendChild(c);
+    await pe;
+    await pc;
+    assert.deepEqual(window.__classic, ['after']);
+});
+
 // A module graph is fetched one level of imports at a time, and the
 // modules compiled in an earlier round are resolved again, not compiled
 // again (QuickJS patch 0010). Every module must still run once, in order,
