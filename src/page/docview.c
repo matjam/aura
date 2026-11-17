@@ -43,7 +43,7 @@ static void invalidate_all(AuDocView *dv)
 }
 
 static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels);
-static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap);
+static bool layout_resolve(void *ctx, const char *base, const char *url, char *out, size_t cap);
 static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind);
 
 /* Layout paints an image at a size: an SVG image is drawn at it. */
@@ -1152,10 +1152,10 @@ size_t au_docview_memory_estimate(AuDocView *dv)
 
 /* ---- Layout callbacks ---- */
 
-static bool layout_resolve(void *ctx, const char *url, char *out, size_t cap)
+static bool layout_resolve(void *ctx, const char *base, const char *url, char *out, size_t cap)
 {
     AuDocView *dv = ctx;
-    return au_url_resolve(dv->base, url, out, cap);
+    return au_url_resolve(base ? base : dv->base, url, out, cap);
 }
 
 /* The CORS mode an image is fetched with: that of the first <img> with a

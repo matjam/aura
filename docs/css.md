@@ -173,6 +173,14 @@ and `@import` is a `SheetSrc`.
   the viewport changes so that it matches.
 - A sheet that has been parsed stays, and the cascade evaluates its
   media query.
+- A `url()` value resolves against the URL of the sheet it came from, as
+  CSS Values 4 says, and a `url()` in a `style` attribute against the
+  document's base. The value keeps the sheet's URL
+  (`AuCssBlob.base_url`), and layout passes it to the view's
+  `resolve_url` callback for backgrounds, masks, `list-style-image` and
+  `content` (`AuBgLayer.base_url`, `l_resolve_url`). A sheet in
+  `/themes/x/dest/style.css` that names `../images/logo.svg` fetches
+  `/themes/x/images/logo.svg`.
 
 Script reaches sheets through the CSSOM
 ([`javascript.md`](javascript.md), "CSSOM").

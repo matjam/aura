@@ -1082,6 +1082,36 @@ static int count_requests(const Fake *f, const char *url)
     return n;
 }
 
+/* A url() in a style sheet resolves against the sheet's URL, and one in
+ * a style attribute against the document's (CSS Values 4). */
+static void test_sheet_relative_urls(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><link rel=stylesheet href=css/s.css>"
+                       "<body style='margin:0'><div id=b></div><ul><li id=l>x</li></ul><p id=c></p>"
+                       "<div id=i style='width:4px;height:4px;background-image:url(img/inline.png)'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/a/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    fake_deliver(&f, dv, "http://example.com/a/css/s.css",
+                 "#b{width:4px;height:4px;background-image:url(../img/bg.png)}"
+                 "#l{list-style-image:url('../img/li.png')}"
+                 "#c::before{content:url(\"sub/c.png\")}",
+                 true);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 200);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0); /* asks for the backgrounds */
+    au_canvas_free(c);
+    au_surface_free(s);
+    static const char *const want[] = {"http://example.com/a/img/bg.png", "http://example.com/a/img/li.png",
+                                       "http://example.com/a/css/sub/c.png", "http://example.com/a/img/inline.png"};
+    for (size_t k = 0; k < sizeof want / sizeof want[0]; k++)
+        CHECK(count_requests(&f, want[k]) == 1, "%s requested %d times", want[k], count_requests(&f, want[k]));
+    CHECK(count_requests(&f, "http://example.com/img/bg.png") == 0, "background resolved against the document");
+    au_docview_free(dv);
+}
+
 /* A web font arriving makes a new layout: images stay decoded, are not
  * fetched again, and animations keep running. */
 static void test_images_and_webfonts(void)
@@ -1158,6 +1188,7 @@ int main(void)
     test_user_css();
     test_webfonts();
     test_images_and_webfonts();
+    test_sheet_relative_urls();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

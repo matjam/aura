@@ -1039,7 +1039,7 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     if (im->type != AU_CSSV_URL || !P->L->env.image)
         return;
     char buf[2048];
-    char *abs = l_resolve_url(P->L, im->u.str, buf, sizeof buf);
+    char *abs = l_resolve_url(P->L, ly->base_url, im->u.str, buf, sizeof buf);
     draw_bg_layer(P, s, ly, origin_box, clip_box, radii, abs);
     l_url_free(abs, buf);
 }
@@ -1710,7 +1710,7 @@ static const AuSurface *env_image_at(AuLayout *L, const char *url, int dw, int d
     if (!L->env.image)
         return NULL;
     char buf[2048];
-    char *abs = l_resolve_url(L, url, buf, sizeof buf);
+    char *abs = l_resolve_url(L, NULL, url, buf, sizeof buf);
     const AuSurface *px = NULL;
     int w = 0, h = 0;
     bool ok = L->env.image(L->env.ctx, abs, &w, &h, &px) && px && w > 0 && h > 0;

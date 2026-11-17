@@ -63,10 +63,13 @@ typedef struct AuLayoutEnv {
      * known (a placeholder is painted). Returns false while the image is
      * not loaded or failed. Optional. */
     bool (*image)(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels);
-    /* Resolves a URL attribute against the document base. Writes into out
-     * (cap bytes) and returns false when it cannot. Optional; without it
-     * URLs are passed through as written. */
-    bool (*resolve_url)(void *ctx, const char *url, char *out, size_t cap);
+    /* Resolves url against base, or against the document base when base
+     * is NULL (an attribute, or a url() from an inline style). A url()
+     * from a style sheet passes the sheet's URL (AuCssBlob.base_url), as
+     * CSS Values 4 resolves it. Writes into out (cap bytes) and returns
+     * false when it cannot. Optional; without it URLs are passed through
+     * as written. */
+    bool (*resolve_url)(void *ctx, const char *base, const char *url, char *out, size_t cap);
     /* Called before an image is painted at dw x dh pixels (backgrounds,
      * masks, list markers, images in inline SVG), so a vector image can
      * be drawn at that size; the surface image() returned is then current.
