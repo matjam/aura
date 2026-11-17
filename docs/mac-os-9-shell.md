@@ -115,8 +115,15 @@ before the first allocation ([`memory.md`](memory.md)).
 
 Retro68's `<string.h>` pulls in the Toolbox `Strings.h`, so names like
 `FInfo` collide with Toolbox types; prefix types with `Au`
-([`conventions.md`](conventions.md)). newlib lacks `%lld` and `%llu`
-and its `memcpy` copies byte by byte.
+([`conventions.md`](conventions.md)). newlib lacks `%lld` and `%llu`.
+
+newlib's `memcpy` and `memmove` move words only when the source and
+the destination are both 4-byte aligned, and its `memmove` copies byte
+by byte whenever it copies backwards. Aura and JSTest link
+`src/platform/macos9/fastmem.c` in their place, which copies words in
+every case (shifting when the two pointers differ in alignment).
+`tests/core/test_fastmem.c` checks it on the host. newlib's `memset`
+already stores words.
 
 ## Everything runs on the main task
 

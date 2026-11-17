@@ -25,10 +25,16 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/browser/credits.h)
 configure_file(aura_vers.r.in ${CMAKE_CURRENT_BINARY_DIR}/aura_vers.r @ONLY)
 
+# memcpy and memmove in place of newlib's (fastmem.c). The flags keep the
+# compiler from turning its loops back into calls to memcpy.
+add_library(aura_fastmem OBJECT fastmem.c)
+target_compile_options(aura_fastmem PRIVATE -O2 -fno-builtin -fno-tree-loop-distribute-patterns)
+
 add_application(Aura main.c browserwin.c listwin.c devwin.c sysinfo_mac.c prefswin.c storage.c text.c aboutbox.c contextmenu.c internetconfig.c coro_mac.c platform_mac.c clock_mac.c
                 network.c downloads_mac.c net_ot.c entropy.c blocking_mac.c prefs_blocking.c aura.r aura_icon.r
                 ${CMAKE_CURRENT_BINARY_DIR}/aura_vers.r
                 CREATOR AURA)
+target_sources(Aura PRIVATE $<TARGET_OBJECTS:aura_fastmem>)
 target_include_directories(Aura PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(Aura PRIVATE -O2)
 # The shell's blocks live as long as the application (src/core/core.h, "Zones").

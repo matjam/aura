@@ -11,7 +11,8 @@ Host timings did not show the allocator problem that the pooled
 allocator fixed ([`memory.md`](memory.md)): a layout pass that took
 6 ms on the host took 11 s in the guest. When a guest figure is far
 from the host's, look for what differs there (the Memory Manager,
-newlib's byte-wise `memcpy`) before tuning the engine.
+the C library's copies, [`mac-os-9-shell.md`](mac-os-9-shell.md)) before
+tuning the engine.
 
 QEMU timings do not predict a G4's either: the guest's speed depends on
 the host's TCG translation and varies with the host's load, so report
@@ -83,10 +84,16 @@ then `tools/bench.sh`. To compare two builds, run it on each and then
   server, which writes `run/bench/DATE-COMMIT-BASE-icount.tsv`. The
   script then quits Aura, stops the guest and prints the medians.
 - The guest runs with `-icount shift=0,sleep=off`: its clock counts
-  instructions, one per nanosecond, so a figure depends on the code
-  Aura runs and not on the host's speed or load. Two runs of one build
-  give close figures; the times are not a G4's. `BENCH_ICOUNT=off`
-  runs in real time.
+  instructions, one per nanosecond, so script, style, layout and paint
+  times depend on the code Aura runs and not on the host's speed or
+  load. The times are not a G4's. `BENCH_ICOUNT=off` runs in real time.
+- Network data still arrives on the host's clock, so load and first
+  paint times vary between runs. Two runs of one build (b004ba8, stock
+  base, two rounds, 2026-11-16) agreed within 5% on the totals of
+  script, style, layout and paint time and on most pages' load times,
+  but `qa-flex.html` loaded in 23.5 ms in one and 40.5 ms in the other.
+  Compare builds on the script, style, layout and paint totals, and use
+  more rounds (`BENCH_REPEAT=5`) to compare load times.
 - The server sends every file with `Cache-Control: no-store`, so each
   load comes from the network in every round. The first round includes
   a cold start, and `bench-compare.py` leaves it out when there are
