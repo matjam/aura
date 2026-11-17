@@ -92,6 +92,7 @@ int au_host_render_main(int argc, char **argv)
     AuLoader li;
     au_host_loader_interface(loader, &li);
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    au_docview_set_dark(dv, au_host_dark());
     char url[4200];
     file_url(page, url, sizeof url);
     t0 = now_ms();
@@ -264,6 +265,7 @@ int au_host_layout_bench_main(int argc, char **argv)
     AuLoader li;
     au_host_loader_interface(loader, &li);
     AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    au_docview_set_dark(dv, au_host_dark());
     char url[4200];
     file_url(page, url, sizeof url);
     au_docview_load(dv, data, len, url);

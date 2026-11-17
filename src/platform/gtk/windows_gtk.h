@@ -81,7 +81,8 @@ typedef struct AuGtkWindowsHost {
     bool (*reveal_download)(void *ctx, const AuDownload *d);
 
     /* Preferences were applied: what (AU_PREF_CHANGED_TABS: lay the
-     * browser windows out again) for a live change; 0 after OK. The
+     * browser windows out again; AU_PREF_CHANGED_APPEARANCE: theme the
+     * chrome) for a live change; 0 after OK. The
      * caller saves the preferences file (prefs_gen moved) and, after OK,
      * reconfigures the network (au_app_prefs_changed). May be NULL. */
     void (*prefs_changed)(void *ctx, unsigned what, bool committed);

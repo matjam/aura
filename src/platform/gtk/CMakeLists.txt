@@ -21,6 +21,7 @@ add_executable(aura
     fonts_gtk.c
     downloads_gtk.c
     sysinfo_gtk.c
+    appearance_gtk.c
     ${AURA_GTK_WINDOW_SOURCES})
 target_link_libraries(aura aura_posix aura_engine PkgConfig::AURA_GTK4 PkgConfig::AURA_FONTCONFIG m)
 target_include_directories(aura PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR})

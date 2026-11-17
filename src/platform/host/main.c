@@ -382,7 +382,8 @@ static int usage(void)
             "       aura-host bench [font options]\n"
             "       aura-host font-index DIR [-o FILE]   (writes DIR/fonts.idx)\n"
             "       font options: --font F, --no-system-fonts (or --bundled-only), --no-bundled-fonts,\n"
-            "                     --fonts-dir D (default assets/fonts or $AURA_FONTS)\n"
+            "                     --fonts-dir D (default assets/fonts or $AURA_FONTS),\n"
+            "                     --color-scheme light|dark (prefers-color-scheme; default light)\n"
             "       aura-host chrome [-o out.png] [-w W] [-h H] [--tabs top|left] [--column W]\n"
             "                        [--tab URL]... [--more-tabs N] [--active N] [--field TEXT] [--focus]\n"
             "                        [--loading] [--hover back|forward|reload|home|bookmark|newtab|splitter]\n"
@@ -1341,6 +1342,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
             printf("profile: the last run did not quit\n");
     }
     b->prefs.tab_position = o->pos;
+    if (au_host_dark())
+        b->prefs.color_scheme = AU_SCHEME_DARK;
     if (o->column)
         b->prefs.tab_column_width = o->column;
     AuBrowserWindow *w = o->native_chrome ? au_browser_window_new_native(b, o->w, o->h)

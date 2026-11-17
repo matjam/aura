@@ -72,9 +72,17 @@ const char *au_host_fonts_dir(void)
     return env && *env ? env : AURA_FONTS_DIR;
 }
 
+static bool host_dark;
+
+bool au_host_dark(void) { return host_dark; }
+
 int au_host_font_option(int argc, char **argv, int i)
 {
     const char *a = argv[i];
+    if (!strcmp(a, "--color-scheme") && i + 1 < argc) {
+        host_dark = !strcmp(argv[i + 1], "dark");
+        return 2;
+    }
     if (!strcmp(a, "--font") && i + 1 < argc) {
         au_host_add_font_path(argv[i + 1]);
         return 2;

@@ -131,6 +131,7 @@ void au_gtk_quit(void)
     while (au_gtk.wins)
         au_gtk_win_destroy(au_gtk.wins);
     au_gtk_net_stop();
+    au_gtk_appearance_stop();
     au_app_free(au_gtk.a);
     au_gtk.a = NULL;
     au_browser_free(au_gtk.browser);
@@ -164,6 +165,7 @@ static void start(const char *const *urls, int nurls)
     bool files = au_gtk_files_init(&port);
     au_gtk.a = au_app_new(au_gtk.browser, &port);
     bool unclean = files && au_app_load(au_gtk.a);
+    au_gtk_appearance_start();
     if (!au_gtk_net_start())
         fprintf(stderr, "aura: the network could not be started\n");
     au_gtk.started = true;

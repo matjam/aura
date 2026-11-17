@@ -24,9 +24,13 @@ void au_host_use_bundled_fonts(bool on);
 void au_host_set_fonts_dir(const char *dir);
 const char *au_host_fonts_dir(void);
 /* Reads a font option at argv[i] (--font F, --no-system-fonts,
- * --bundled-only, --no-bundled-fonts, --fonts-dir D). Returns the
- * arguments it used, 0 when argv[i] is not one. */
+ * --bundled-only, --no-bundled-fonts, --fonts-dir D), or the colour
+ * scheme (--color-scheme light|dark). Returns the arguments it used, 0
+ * when argv[i] is not one. */
 int au_host_font_option(int argc, char **argv, int i);
+/* --color-scheme dark was given: pages render with prefers-color-scheme
+ * dark (au_docview_set_dark; the Appearance preference for chrome). */
+bool au_host_dark(void);
 /* The offscreen surface standing in for the window. */
 void au_host_set_window_surface(AuSurface *s);
 /* aura-host js (jsrun.c). */

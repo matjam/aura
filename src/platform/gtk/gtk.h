@@ -18,7 +18,8 @@
  *     files_gtk.c     the XDG profile and cache folders, finding assets
  *     fonts_gtk.c     fontconfig and the bundled fonts, platform.h
  *     downloads_gtk.c download files in the XDG download folder
- *     sysinfo_gtk.c   AuSysInfo from uname, os-release and /proc */
+ *     sysinfo_gtk.c   AuSysInfo from uname, os-release and /proc
+ *     appearance_gtk.c the desktop's light or dark setting, the chrome's theme */
 #ifndef AURA_GTK_H
 #define AURA_GTK_H
 
@@ -155,6 +156,13 @@ void au_gtk_fonts_free(void);
 
 /* sysinfo_gtk.c */
 void au_gtk_sysinfo(AuSysInfo *s);
+
+/* appearance_gtk.c: start follows the desktop's light or dark setting
+ * (after the preferences are read); apply themes the chrome for the
+ * Appearance preference, after it changed. */
+void au_gtk_appearance_start(void);
+void au_gtk_appearance_apply(void);
+void au_gtk_appearance_stop(void);
 uint32_t au_gtk_memory_free_kb(void);
 
 #endif

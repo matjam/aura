@@ -484,6 +484,7 @@ static void w_prefs_changed(void *ctx, unsigned what, bool committed)
     (void)what;
     if (committed && au_gtk.a)
         au_app_prefs_changed(au_gtk.a);
+    au_gtk_appearance_apply(); /* the chrome follows the Appearance item */
     au_gtk_menus_dirty();
     au_gtk_kick();
 }

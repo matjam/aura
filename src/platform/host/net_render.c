@@ -324,6 +324,7 @@ int au_host_net_render_main(int argc, char **argv)
     dcb.now_ms = cb_now;
     dcb.console = cb_console;
     nr.dv = au_docview_new(fonts, &li, &dcb);
+    au_docview_set_dark(nr.dv, au_host_dark());
     au_docview_set_scripting(nr.dv, scripts);
     au_docview_set_viewport(nr.dv, w, h ? h : 600);
     au_docview_load(nr.dv, nr.body.data ? nr.body.data : "", nr.body.len, nr.doc_url);
