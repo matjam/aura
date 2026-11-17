@@ -957,7 +957,26 @@ static void draw_bg_layer(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     /* Tile size. */
     float tw = gradient ? origin_box.w : (float)iw, th = gradient ? origin_box.h : (float)ih;
     const AuCssValue *sz = ly->size;
-    if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
+    /* An image that does not state its size (an SVG with only a viewBox)
+     * is fitted to the origin box (CSS Images 3, default sizing): with a
+     * ratio as contain, without one as the box, and a side it states is
+     * kept. iw x ih then carry only its ratio. */
+    unsigned miss = !gradient && P->L->env.image_missing ? P->L->env.image_missing(P->L->env.ctx, abs) : 0;
+    bool size_auto = !sz || (sz->type == AU_CSSV_KEYWORD && sz->kw == AU_K_auto_) ||
+                     (sz->type == AU_CSSV_LIST && sz->n == 2 && sz->u.items[0].type == AU_CSSV_KEYWORD &&
+                      sz->u.items[1].type == AU_CSSV_KEYWORD);
+    if (miss && size_auto) {
+        if ((miss & AU_LAYOUT_IMG_MISSING_W) && (miss & AU_LAYOUT_IMG_MISSING_H) && !(miss & AU_LAYOUT_IMG_MISSING_RATIO)) {
+            float sc = l_min(origin_box.w / iw, origin_box.h / ih);
+            tw = iw * sc;
+            th = ih * sc;
+        } else if (miss & AU_LAYOUT_IMG_MISSING_RATIO) {
+            if (miss & AU_LAYOUT_IMG_MISSING_W)
+                tw = origin_box.w;
+            if (miss & AU_LAYOUT_IMG_MISSING_H)
+                th = origin_box.h;
+        }
+    } else if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
         if (!gradient) {
             float sx = origin_box.w / iw, sy = origin_box.h / ih;
             float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
@@ -972,9 +991,9 @@ static void draw_bg_layer(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         if (!ba)
             th = bg_len(b, origin_box.h);
         if (!gradient && aa && !ba)
-            tw = th * iw / ih;
+            tw = !(miss & AU_LAYOUT_IMG_MISSING_RATIO) ? th * iw / ih : (miss & AU_LAYOUT_IMG_MISSING_W) ? origin_box.w : (float)iw;
         if (!gradient && ba && !aa)
-            th = tw * ih / iw;
+            th = !(miss & AU_LAYOUT_IMG_MISSING_RATIO) ? tw * ih / iw : (miss & AU_LAYOUT_IMG_MISSING_H) ? origin_box.h : (float)ih;
     }
     if (tw < 0.5f || th < 0.5f)
         return;

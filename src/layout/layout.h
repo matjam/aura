@@ -92,7 +92,14 @@ typedef struct AuLayoutEnv {
      * box's natural size from the width and height attributes (300 x 150
      * by default) and paints the bitmap scaled into the content box. */
     int (*canvas)(void *ctx, AuElement *el, const AuSurface **px);
+    /* What an image found by image() does not state of its size
+     * (AU_LAYOUT_IMG_MISSING_*): an SVG with only a viewBox, say.
+     * A background of auto size is then fitted to its box as CSS Images 3
+     * says instead of drawn at the size image() gave. Optional; without
+     * it every image states both sides. */
+    unsigned (*image_missing)(void *ctx, const char *url);
 } AuLayoutEnv;
+enum { AU_LAYOUT_IMG_MISSING_W = 1, AU_LAYOUT_IMG_MISSING_H = 2, AU_LAYOUT_IMG_MISSING_RATIO = 4 };
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
 void au_layout_free(AuLayout *L);

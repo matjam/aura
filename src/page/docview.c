@@ -43,6 +43,7 @@ static void invalidate_all(AuDocView *dv)
 }
 
 static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels);
+static unsigned layout_image_missing(void *ctx, const char *url);
 static bool layout_resolve(void *ctx, const char *base, const char *url, char *out, size_t cap);
 static Request *add_request(AuDocView *dv, const char *url, AuResourceKind kind);
 
@@ -82,7 +83,7 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_free(dv->layout);
     }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
-                       layout_paint_frame, layout_canvas};
+                       layout_paint_frame, layout_canvas, layout_image_missing};
     dv->layout = au_layout_new(&env);
     if (dv->check)
         au_layout_set_check(dv->layout, true);
@@ -1208,6 +1209,15 @@ static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSur
         *pixels = au_image_entry_surface(e);
     }
     return true;
+}
+
+static unsigned layout_image_missing(void *ctx, const char *url)
+{
+    AuDocView *dv = ctx;
+    AuImageEntry *e = au_image_cache_find(au_docimages_cache(dv->imgs), url);
+    unsigned m = e ? au_image_entry_missing(e) : 0;
+    return (m & AU_IMAGE_MISSING_W ? AU_LAYOUT_IMG_MISSING_W : 0) | (m & AU_IMAGE_MISSING_H ? AU_LAYOUT_IMG_MISSING_H : 0) |
+           (m & AU_IMAGE_MISSING_RATIO ? AU_LAYOUT_IMG_MISSING_RATIO : 0);
 }
 
 /* ---- Document scanning: sheets, base, title ---- */

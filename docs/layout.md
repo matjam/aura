@@ -504,6 +504,21 @@ row in its own colour instead of two pale rows that read as grey.
 Rounded backgrounds and images are not snapped. `test_background_snapped`
 in `tests/page/test_page.c` covers it.
 
+### Background images without a natural size
+
+To size a background image whose natural width or height is missing,
+`draw_bg_layer` asks the layout environment's `image_missing` callback
+which of width, height and ratio the image lacks
+(`AU_LAYOUT_IMG_MISSING_*`, from `AuImageInfo.missing`), and follows
+CSS Images 3 default sizing. With `background-size: auto` and only a
+ratio (an SVG with a `viewBox` but no `width` or `height`), the image
+is sized as `contain` in the origin box. With no ratio either, it fills
+the origin box. When one side is given, the other comes from the ratio,
+or else from the origin box. Cornell Chronicle's wordmark is such an
+SVG; it drew at its 300x150 fallback size before. An environment
+without the callback keeps the old natural-size behaviour.
+`test_background_svg_ratio_only` in `tests/page/test_page.c` covers it.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips

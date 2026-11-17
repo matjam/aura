@@ -154,6 +154,10 @@ static AuImageStatus svgimg_run(void *st, AuImageDecoder *d, const uint8_t **in,
     }
     d->info.width = w;
     d->info.height = h;
+    AuSvgIntrinsic nat;
+    au_svg_doc_intrinsic(doc, &nat);
+    d->info.missing = (uint8_t)((nat.width > 0 ? 0 : AU_IMAGE_MISSING_W) | (nat.height > 0 ? 0 : AU_IMAGE_MISSING_H) |
+                                (nat.ratio > 0 || (nat.width > 0 && nat.height > 0) ? 0 : AU_IMAGE_MISSING_RATIO));
     d->info.has_alpha = true;
     d->info.orientation = 1;
     d->info.scale_denom = 1;

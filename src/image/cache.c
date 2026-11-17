@@ -11,6 +11,7 @@ struct AuImageEntry {
     bool data_dropped;   /* the bytes were dropped: the pixels are kept */
     AuImageState state;
     int iw, ih;
+    uint8_t missing;     /* AuImageInfo.missing */
     AuImageFormat format;
     AuImageDecoder *probe; /* header only, fed as bytes arrive */
     /* Pixels. */
@@ -140,6 +141,8 @@ bool au_image_entry_size(const AuImageEntry *e, int *w, int *h)
     return true;
 }
 
+unsigned au_image_entry_missing(const AuImageEntry *e) { return e->missing; }
+
 bool au_image_entry_take_changed(AuImageEntry *e)
 {
     bool ch = e->changed;
@@ -179,15 +182,17 @@ static void sync_view(AuImageEntry *e)
     e->view.opaque = s->opaque;
 }
 
-static void set_sized(AuImageCache *c, AuImageEntry *e, int w, int h, AuImageFormat f)
+static void set_sized(AuImageCache *c, AuImageEntry *e, const AuImageInfo *info)
 {
+    int w = info->width, h = info->height;
+    e->missing = info->missing;
     if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h) {
         c->layout_changed = true;
         e->changed = true; /* repaint where it shows */
     }
     e->iw = w;
     e->ih = h;
-    e->format = f;
+    e->format = info->format;
     if (e->state == AU_IMAGE_PENDING)
         e->state = AU_IMAGE_SIZED;
 }
@@ -251,7 +256,7 @@ static void pump(AuImageCache *c, AuImageEntry *e)
     const AuImageInfo *info = au_image_info(e->dec);
     c->decode_ms += clock_now(c) - t0;
     if (info->ready) {
-        set_sized(c, e, info->width, info->height, info->format);
+        set_sized(c, e, info);
         if (au_image_canvas(e->dec))
             e->state = AU_IMAGE_READY;
     }
@@ -343,7 +348,7 @@ void au_image_entry_data(AuImageCache *c, AuImageEntry *e, const void *data, siz
         AuImageStatus st = au_image_decode(e->probe, &p, &n, false);
         const AuImageInfo *info = au_image_info(e->probe);
         if (info->ready)
-            set_sized(c, e, info->width, info->height, info->format);
+            set_sized(c, e, info);
         if (st == AU_IMAGE_ERROR)
             set_failed(c, e);
         if (st != AU_IMAGE_MORE) {
@@ -373,7 +378,7 @@ void au_image_entry_done(AuImageCache *c, AuImageEntry *e, bool ok)
         /* No header in all the bytes: one last try with everything. */
         AuImageInfo info;
         if (au_image_probe(e->data.data, e->data.len, &info))
-            set_sized(c, e, info.width, info.height, info.format);
+            set_sized(c, e, &info);
         else
             set_failed(c, e);
     }

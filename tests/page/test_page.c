@@ -1134,6 +1134,44 @@ static void test_background_snapped(void)
     au_docview_free(dv);
 }
 
+/* An SVG background that gives only a viewBox is fitted to its box like
+ * contain (CSS Images 3), not drawn at the 300 x 150 an <img> shows it
+ * at; one without a ratio fills the box. */
+static void test_background_svg_ratio_only(void)
+{
+    static const char ratio_svg[] = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 10'>"
+                                    "<rect width='20' height='10' fill='red'/></svg>";
+    static const char bare_svg[] = "<svg xmlns='http://www.w3.org/2000/svg'>"
+                                   "<rect width='100%' height='100%' fill='blue'/></svg>";
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><body style='margin:0'>"
+                       "<div style='width:100px;height:20px;background:url(r.svg) no-repeat'></div>"
+                       "<div style='width:100px;height:180px;background:url(b.svg) no-repeat'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 200, 100);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 220);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0); /* asks for the backgrounds */
+    deliver_image(&f, dv, "http://example.com/r.svg", (const uint8_t *)ratio_svg, sizeof ratio_svg - 1, true);
+    deliver_image(&f, dv, "http://example.com/b.svg", (const uint8_t *)bare_svg, sizeof bare_svg - 1, true);
+    au_docview_update(dv);
+    au_fill_rect(c, (AuRect){0, 0, 200, 220}, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0); /* drawn at the size the first paint asked for */
+    CHECK(au_surface_get(s, 30, 10) == AU_RGB(255, 0, 0), "ratio-only SVG inside: %08x", au_surface_get(s, 30, 10));
+    CHECK(au_surface_get(s, 60, 10) == AU_RGB(255, 255, 255), "ratio-only SVG past 40px: %08x",
+          au_surface_get(s, 60, 10));
+    CHECK(au_surface_get(s, 95, 190) == AU_RGB(0, 0, 255), "SVG without a ratio fills the box: %08x",
+          au_surface_get(s, 95, 190));
+    CHECK(au_surface_get(s, 105, 190) == AU_RGB(255, 255, 255), "SVG without a ratio past the box: %08x",
+          au_surface_get(s, 105, 190));
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* A url() in a style sheet resolves against the sheet's URL, and one in
  * a style attribute against the document's (CSS Values 4). */
 static void test_sheet_relative_urls(void)
@@ -1243,6 +1281,7 @@ int main(void)
     test_sheet_relative_urls();
     test_webfonts_generated();
     test_background_snapped();
+    test_background_svg_ratio_only();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

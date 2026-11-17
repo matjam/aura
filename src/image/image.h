@@ -96,7 +96,14 @@ typedef struct AuImageInfo {
     int orientation;       /* EXIF orientation applied (1 = none) */
     size_t mem_bytes;      /* the decoder's memory now: state, tables and canvas */
     size_t peak_bytes;     /* the most it has held */
+    /* What the image does not state of its size (AU_IMAGE_MISSING_*): 0
+     * for raster images. An SVG document may give no width or height,
+     * only a viewBox ratio or nothing; width and height above are then
+     * the size an <img> shows it at, and a CSS background sizes it
+     * differently (CSS Images 3, the default sizing algorithm). */
+    uint8_t missing;
 } AuImageInfo;
+enum { AU_IMAGE_MISSING_W = 1, AU_IMAGE_MISSING_H = 2, AU_IMAGE_MISSING_RATIO = 4 };
 
 typedef struct AuImageDecoder AuImageDecoder;
 
