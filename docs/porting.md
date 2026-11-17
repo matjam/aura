@@ -32,7 +32,7 @@ Further legacy platforms can follow the same plan as a mainstream one.
 | Platform | Kind | Toolkit | Status |
 |---|---|---|---|
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | Toolbox, Appearance Manager | in development, released |
-| Linux on Wayland | mainstream, for testing | GTK4 | done, with a CI build ([`gtk.md`](gtk.md)); packages not started |
+| Linux on Wayland | mainstream, for testing | GTK4 | done, with a CI build and `.deb` and AppImage packages ([`gtk.md`](gtk.md)) |
 | Amiga with an accelerated 68k processor | legacy | Intuition, with the system's own gadget classes | planned |
 | Modern macOS | mainstream, for testing | AppKit | planned |
 
