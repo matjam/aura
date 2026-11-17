@@ -496,6 +496,17 @@ positioned descendants to its rounded padding box: `layer_origin` in
 `draw.c` paints the layer into a group that `layer_clips_pop` masks,
 unless the layer's ink stays clear of the corners.
 
+### `clip-path`
+
+`clip_path_shape` in `draw.c` turns `inset()`, `circle()`, `ellipse()`,
+`polygon()` and a box keyword alone into a path against the reference
+box (border box by default), and `paint_layer` paints the layer into a
+group masked by it. A shape with no area (the visually-hidden
+`polygon(0 0, 0 0, 0 0)` that AddToAny and others put on screen-reader
+labels, a zero radius, an inset past the box) paints nothing. The
+cases are in `tests/layout/cases/overflow.txt`; what is not done is in
+[`known-gaps.md`](known-gaps.md).
+
 ### `background-attachment: fixed`
 
 It positions a layer against the viewport on any box. Once a box has
