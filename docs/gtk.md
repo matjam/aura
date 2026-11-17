@@ -100,6 +100,34 @@ scroll bars) and a status line. The model's window is made with
   back the page's address; Return calls `au_bw_navigate_input` and moves
   the focus to the page.
 
+## Appearance
+
+`appearance_gtk.c` finds the desktop's light or dark setting and themes
+the chrome from the Appearance preference
+([`browser-chrome.md`](browser-chrome.md), "Appearance").
+
+- The system setting comes from the settings portal
+  (`org.freedesktop.portal.Settings`, `org.freedesktop.appearance`
+  `color-scheme`: 1 is dark) over GDBus, read with `ReadOne` (or `Read`
+  on an older portal) and followed through `SettingChanged`. Without a
+  portal it comes from the `gtk-interface-color-scheme` setting of
+  GTK 4.20 and later (2 is dark), followed through its notify signal.
+  Either one calls `au_browser_set_system_dark`.
+- Light and Dark set `gtk-application-prefer-dark-theme` (and
+  `gtk-interface-color-scheme` where it is writable) so the windows'
+  widgets match the pages. Same as system puts back the values GTK had
+  at start, so the desktop's own setting stays in charge.
+- `au_gtk_appearance_start` runs after the profile loads and
+  `au_gtk_appearance_stop` at quit. `au_gtk_appearance_apply` runs
+  whenever the Preferences window reports a change (a live item, OK or
+  Cancel), so the chrome follows the pop-up as it is chosen.
+
+To test Same as system without a desktop, run the port in the headless
+compositor ("To test without a desktop") inside `dbus-run-session`, and
+own `org.freedesktop.portal.Desktop` on that bus with a small script
+that answers `ReadOne` for `color-scheme` and emits `SettingChanged`
+when you change the value.
+
 ## HiDPI
 
 The page surface is in logical pixels. At a scale factor above 1 the

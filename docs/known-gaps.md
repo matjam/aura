@@ -178,8 +178,12 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   - Size containment does not apply to tables or replaced elements
     (images, form controls), and with no vertical writing modes in
     layout, `inline-size` always contains the width.
-- Preference changes (dark scheme, reduced motion) do not reach the
-  device, so sheets deferred for them stay deferred.
+- `prefers-reduced-motion` is always `no-preference`: no preference or
+  system setting sets it.
+- `light-dark()` always gives its light value, and the `color-scheme`
+  property is not implemented, so a page cannot opt its form controls
+  and scroll bars into dark; only `prefers-color-scheme` follows the
+  Appearance preference.
 - `getComputedStyle`: margins, insets and percentages in properties
   other than width and height are still computed values, `transform` is
   not a matrix, and the `border` and `font` shorthands serialize every

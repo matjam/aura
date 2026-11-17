@@ -128,6 +128,30 @@ unit has `AU_STYLE_F_VIEWPORT_UNITS`.
 
 [`layout.md`](layout.md) says what layout reuses after the restyle.
 
+## The colour scheme
+
+`prefers-color-scheme` reads `AuCssDevice.dark`. To change it on an
+open document, call `au_docview_set_dark(dv, dark)`; the browser does
+this for every tab through `au_page_set_dark` when the Appearance
+preference or the system setting changes ([`browser-chrome.md`](browser-chrome.md),
+"Appearance"). It:
+
+- sets the device, which restyles the document (a device difference
+  other than the viewport size);
+- starts the `<link>` and `<style>` sources whose media query now
+  matches (`undefer_sheets`), without a reload;
+- queues a `change` event on every `matchMedia` list whose result
+  changed (`au_docscript_media_changed`, which runs `P.mediaChanged` in
+  the prelude at the next script turn);
+- passes the flag to every frame (`au_frames_settings_changed`); a frame
+  made later copies it from its parent;
+- passes it to layout (`au_layout_set_dark`) for `<picture>` sources
+  with a media query.
+
+`test_color_scheme` in `tests/frames/test_frames.c` covers all of these.
+To render a page dark on the host, pass `--color-scheme dark` to
+`aura-host`.
+
 ## Equal styles keep their object
 
 A style pass compares each newly computed style with the element's old
@@ -170,7 +194,7 @@ and `@import` is a `SheetSrc`.
   page links one 800 KB sheet four times and one of 300 KB six times.
 - A source whose media query does not match the device is neither
   fetched nor parsed (`start_sheet`); `undefer_sheets` starts it when
-  the viewport changes so that it matches.
+  the viewport or the colour scheme changes so that it matches.
 - A sheet that has been parsed stays, and the cascade evaluates its
   media query.
 - A `url()` value resolves against the URL of the sheet it came from, as

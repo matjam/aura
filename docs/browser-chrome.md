@@ -48,6 +48,8 @@ page loads; the actions are listed where they are used:
 [`developer-tools.md`](developer-tools.md) (netlog, perf, source),
 [`javascript.md`](javascript.md) (js, console, save),
 [`memory.md`](memory.md) (mem) and below (back, cache, resize).
+`--color-scheme light|dark` sets `prefers-color-scheme` for `chrome`
+and the single-page renders.
 
 ## How a page loads
 
@@ -86,6 +88,31 @@ Text zoom is per tab (`au_bw_zoom`, View > Zoom In, Zoom Out, Actual
 Size); the last zoom chosen for a site (host, or scheme for `file:`) is
 kept in the `zoom.sites` preference and applied when a tab opens that
 site again.
+
+## Appearance
+
+The `appearance.color_scheme` preference (`AuPrefs.color_scheme`) is
+`system` (the default), `light` or `dark`. A preferences file without
+the key gives `system`; an unknown value is ignored.
+
+- `au_browser_dark(b)` is the scheme pages get: Dark, or Same as system
+  while `b->system_dark` is set.
+- To report the system setting, a port calls
+  `au_browser_set_system_dark(b, dark)` at start and whenever it
+  changes. The GTK port reads it from the desktop
+  ([`gtk.md`](gtk.md), "Appearance"); Mac OS 9 has no such setting, so
+  Same as system is Light there.
+- When either changes, every tab of every window restyles in place
+  (`au_page_set_dark`, then [`css.md`](css.md), "The colour scheme"):
+  no reload, and frames follow. A new tab gets the scheme through the
+  `dark` callback of `AuPageEnv`.
+- In Preferences it is the Appearance pop-up in General, an
+  `AU_PREF_LIVE` item: a choice applies at once and Cancel puts it
+  back. `au_prefs_edit_apply_live` returns `AU_PREF_CHANGED_APPEARANCE`
+  so the port can theme its own chrome.
+
+`test_color_scheme_prefs` and `test_color_scheme_live` in
+`tests/browser/test_browser.c` cover the file and the live switch.
 
 ## Documents kept for Back and Forward
 
@@ -861,9 +888,10 @@ To run the window, use an editing session (`AuPrefsEdit`):
    font set, unique and sorted).
 2. When the user changes a check box, radio group or choice, call the
    matching `au_prefs_edit_set_*`. For an `AU_PREF_LIVE` item (the tab
-   position, the blocking switch and lists), call
-   `au_prefs_edit_apply_live`; it returns `AU_PREF_CHANGED_TABS` or
-   `AU_PREF_CHANGED_BLOCKING` for the port to act on. Then read
+   position, the appearance, the blocking switch and lists), call
+   `au_prefs_edit_apply_live`; it returns `AU_PREF_CHANGED_TABS`,
+   `AU_PREF_CHANGED_APPEARANCE` or `AU_PREF_CHANGED_BLOCKING` for the
+   port to act on. Then read
    `au_prefs_edit_enabled` and `au_prefs_edit_text` again.
 3. For a button, call `au_prefs_edit_action`. It does the model's part
    (Clear History, Use Current Page, Update Now) and returns
