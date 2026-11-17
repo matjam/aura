@@ -293,10 +293,10 @@ typedef struct AuJsHooks {
      * element the document loaded, at full size where memory allows, for
      * drawImage: *px is valid until script returns to the embedder, *w and
      * *h are the natural size (the pixels may be a reduced decode), url
-     * receives the URL the image came from. False when it has none. */
+     * receives the URL the image came from (of any length). False when it
+     * has none. */
     struct AuCanvasSet *(*canvas_set)(void *ctx);
-    bool (*canvas_image)(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
-                         size_t url_cap);
+    bool (*canvas_image)(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, AuBuf *url);
     /* Whether the image the document loaded from url may be read back
      * from a canvas: it is of the document's origin, or its response
      * passed the CORS check (an <img crossorigin>). Optional: without it

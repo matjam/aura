@@ -661,6 +661,8 @@ static bool near_viewport(const AuFrame *f)
     return f->box.y + f->box.h >= top && f->box.y <= bottom;
 }
 
+static void frame_load(AuFrame *f, bool lazy_ok, const char *srcdoc, const char *type, const char *abs);
+
 /* Reads the element's attributes and loads what they name. */
 static void frame_start(AuFrame *f, bool lazy_ok)
 {
@@ -677,10 +679,17 @@ static void frame_start(AuFrame *f, bool lazy_ok)
     const char *src = attr(el, f->kind == FK_OBJECT ? "data" : "src");
     const char *srcdoc = f->kind == FK_IFRAME ? attr(el, "srcdoc") : NULL;
     const char *type = f->kind == FK_OBJECT || f->kind == FK_EMBED ? attr(el, "type") : NULL;
-    char abs[2048];
-    abs[0] = 0;
-    if (src && *src && !au_url_resolve(o->base, src, abs, sizeof abs))
-        abs[0] = 0;
+    /* The address, of any length ("" for none). */
+    char *abs = src && *src ? au_url_resolve_dup(o->base, src) : NULL;
+    frame_load(f, lazy_ok, srcdoc, type, abs ? abs : "");
+    au_free(abs);
+}
+
+/* frame_start's second half: loads srcdoc, or the resolved address abs. */
+static void frame_load(AuFrame *f, bool lazy_ok, const char *srcdoc, const char *type, const char *abs)
+{
+    AuDocView *o = f->owner;
+    AuElement *el = f->el;
     f->load_due = f->error_due = false;
     if (srcdoc) {
         drop_request(f);
@@ -1643,8 +1652,8 @@ bool au_frames_mouse(AuDocView *dv, const AuEvent *ev, bool *used)
         leave_frame(dv);
         dv->hover_frame = f;
         au_dv_set_hover(dv, f->el);
-        if (dv->hover_link[0]) {
-            dv->hover_link[0] = 0;
+        if (dv->hover_link) {
+            au_dv_clear_hover_link(dv);
             if (dv->cb.status_text)
                 dv->cb.status_text(dv->cb.ctx, dv, "");
         }

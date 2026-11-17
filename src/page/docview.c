@@ -325,7 +325,7 @@ static void clear_document(AuDocView *dv)
     if (dv->active)
         au_node_unref(&dv->active->node);
     dv->hover = dv->active = NULL;
-    dv->hover_link[0] = 0;
+    au_dv_clear_hover_link(dv);
     if (dv->resolver)
         au_css_resolver_forget_containers(dv->resolver);
     if (dv->doc)
@@ -1277,9 +1277,11 @@ static uint8_t image_cors_mode(AuDocView *dv, const char *url)
         AuElement *el = au_as_element(n);
         if (!au_element_get_attr(el, co))
             continue;
-        char abs[2048];
         const char *src = attr(el, "src");
-        if (src && au_url_resolve(dv->base, src, abs, sizeof abs) && !strcmp(abs, url))
+        char *abs = src ? au_url_resolve_dup(dv->base, src) : NULL;
+        bool same = abs && !strcmp(abs, url);
+        au_free(abs);
+        if (same)
             return au_dv_cors_attr(el);
     }
     return 0;
@@ -1461,11 +1463,13 @@ static void scan_document(AuDocView *dv, bool final)
             const char *href = attr(el, "href");
             if (href) {
                 base_seen = true;
-                char abs[2048];
-                if (au_url_resolve(dv->url, href, abs, sizeof abs) && strcmp(abs, dv->base) != 0) {
+                char *abs = au_url_resolve_dup(dv->url, href);
+                if (abs && strcmp(abs, dv->base) != 0) {
                     au_free(dv->base);
-                    dv->base = dup(abs);
+                    dv->base = abs;
+                    abs = NULL;
                 }
+                au_free(abs);
             }
         } else if (el->tag == AU_ATOM_title && !title_seen && complete) {
             title_seen = true;
@@ -2084,12 +2088,18 @@ static bool node_contains(const AuNode *a, const AuNode *b)
     return false;
 }
 
-static void link_url(AuDocView *dv, AuElement *link, char *out, size_t cap)
+/* A link's absolute URL, of any length, from au_alloc; NULL when there is
+ * no link or it has no href. */
+static char *link_url(AuDocView *dv, AuElement *link)
 {
-    out[0] = 0;
     const char *href = link ? attr(link, "href") : NULL;
-    if (href && !au_url_resolve(dv->base, href, out, cap))
-        out[0] = 0;
+    return href ? au_url_resolve_dup(dv->base, href) : NULL;
+}
+
+void au_dv_clear_hover_link(AuDocView *dv)
+{
+    au_free(dv->hover_link);
+    dv->hover_link = NULL;
 }
 
 void au_dv_set_hover(AuDocView *dv, AuElement *el)
@@ -2115,8 +2125,8 @@ void au_dv_mouse_leave(AuDocView *dv)
     if (!dv->doc)
         return;
     set_state(dv, &dv->hover, NULL, AU_STATE_HOVER);
-    if (dv->hover_link[0]) {
-        dv->hover_link[0] = 0;
+    if (dv->hover_link) {
+        au_dv_clear_hover_link(dv);
         if (dv->cb.status_text)
             dv->cb.status_text(dv->cb.ctx, dv, "");
     }
@@ -2221,13 +2231,15 @@ DV_ENTRY(bool, mouse, (AuDocView * dv, const AuEvent *ev), (dv, ev))
     case AU_EVENT_MOUSE_MOVE: {
         bool before = dv->restyle_needed;
         set_state(dv, &dv->hover, r.element, AU_STATE_HOVER);
-        char url[2048];
-        link_url(dv, r.link, url, sizeof url);
-        if (strcmp(url, dv->hover_link) != 0) {
-            strcpy(dv->hover_link, url);
+        char *url = link_url(dv, r.link);
+        if (strcmp(url ? url : "", au_docview_hover_link(dv)) != 0) {
+            au_dv_clear_hover_link(dv);
+            dv->hover_link = url;
+            url = NULL;
             if (dv->cb.status_text)
-                dv->cb.status_text(dv->cb.ctx, dv, url);
+                dv->cb.status_text(dv->cb.ctx, dv, au_docview_hover_link(dv));
         }
+        au_free(url);
         used = used || (dv->restyle_needed && !before);
         break;
     }
@@ -2287,17 +2299,17 @@ DV_ENTRY(bool, mouse, (AuDocView * dv, const AuEvent *ev), (dv, ev))
         if (down_link)
             au_node_unref(&down_link->node); /* r.link, when it is the same, is in the document */
         if (follow && same_link) {
-            char url[2048];
-            link_url(dv, r.link, url, sizeof url);
+            char *url = link_url(dv, r.link);
             const char *target = attr(r.link, "target");
             bool new_tab = (ev->mods & AU_MOD_COMMAND) || (target && au_ieq(target, strlen(target), "_blank", 6));
-            if (au_ieq(url, strlen(url) < 11 ? strlen(url) : 11, "javascript:", 11)) {
+            if (url && au_ieq(url, strlen(url) < 11 ? strlen(url) : 11, "javascript:", 11)) {
                 /* Runs only in this document, and only with scripting on. */
                 if (dv->script)
                     au_docscript_javascript_url(dv->script, url);
-            } else if (url[0]) {
+            } else if (url && url[0]) {
                 follow_link(dv, url, target, new_tab);
             }
+            au_free(url);
             used = true;
         }
         break;
@@ -2327,7 +2339,7 @@ DV_ENTRY(bool, scroll_at, (AuDocView * dv, int x, int y, int dx, int dy), (dv, x
 
 const char *au_docview_hover_link(const AuDocView *dv)
 {
-    return dv->hover_link;
+    return dv->hover_link ? dv->hover_link : "";
 }
 
 /* ---- Fragments ---- */
@@ -2903,8 +2915,7 @@ struct AuCanvasSet *au_dv_canvas_set(AuDocView *dv)
 /* The pixels of an image element for drawImage: the image cache's entry
  * for the source layout chose, decoded at its natural size where the
  * cache's per-image limit allows. */
-bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, char *url,
-                        size_t url_cap)
+bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, AuBuf *url)
 {
     AuBuf src;
     au_buf_init(&src);
@@ -2920,7 +2931,8 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
                 *px = au_image_entry_surface(e);
                 *w = iw;
                 *h = ih;
-                snprintf(url, url_cap, "%s", abs);
+                au_buf_clear(url);
+                au_buf_puts(url, abs);
                 ok = true;
             }
         }

@@ -135,7 +135,7 @@ struct AuDocView {
     bool finished_reported;
     float last_w, last_h;
     AuElement *hover, *active;
-    char hover_link[2048];
+    char *hover_link; /* the URL of the link under the pointer, from au_alloc; NULL for none (au_dv_clear_hover_link) */
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     bool link_events; /* a <link>'s load or error event is due (SheetSrc.event) */
@@ -285,6 +285,7 @@ uint32_t au_dv_start_request(AuDocView *dv, const AuResourceRequest *rq, AuFrame
 void au_dv_drop_routes(AuDocView *top, AuDocView *dv);
 void au_dv_mouse_leave(AuDocView *dv);
 void au_dv_set_hover(AuDocView *dv, AuElement *el);
+void au_dv_clear_hover_link(AuDocView *dv);
 void au_dv_tree_dirty(AuDocView *dv);
 /* The constructed sheet with id, or NULL. */
 ConstructedSheet *au_dv_constructed(AuDocView *dv, uint32_t id);

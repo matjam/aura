@@ -1388,8 +1388,8 @@ static bool control_key(AuDocView *dv, AuElement *el, const AuEvent *ev)
     if (is_html(el, AU_ATOM_a) || is_html(el, AU_ATOM_area)) {
         if (ret) {
             const char *href = get_attr(el, "href");
-            char abs[2048];
-            if (href && au_url_resolve(dv->base, href, abs, sizeof abs)) {
+            char *abs = href ? au_url_resolve_dup(dv->base, href) : NULL;
+            if (abs) {
                 if (starts_ci(abs, "javascript:")) {
                     if (dv->script)
                         au_docscript_javascript_url(dv->script, abs);
@@ -1399,6 +1399,7 @@ static bool control_key(AuDocView *dv, AuElement *el, const AuEvent *ev)
                     dv->cb.open_url(dv->cb.ctx, dv, abs, nt);
                 }
             }
+            au_free(abs);
             return true;
         }
         return false;

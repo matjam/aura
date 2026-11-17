@@ -120,6 +120,7 @@ typedef struct Fake {
     uint32_t next;
     int in_request; /* data must never arrive from inside request() */
     char opened[256];
+    size_t opened_len; /* the whole URL's length (opened keeps its start) */
     bool opened_new_tab;
     char title[128];
     char status[256];
@@ -163,6 +164,7 @@ static void cb_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
     (void)dv;
     Fake *f = ctx;
     snprintf(f->opened, sizeof f->opened, "%s", url);
+    f->opened_len = strlen(url);
     f->opened_new_tab = new_tab;
 }
 
@@ -644,6 +646,50 @@ static void test_input(void)
     mouse(dv, AU_EVENT_MOUSE_UP, 700, 500, 0);
     CHECK(f.opened[0] == 0, "drag-off opened '%s'", f.opened);
     au_docview_free(dv);
+}
+
+/* A <base> and a link URL longer than any fixed buffer: hover, status and
+ * opening keep the whole URL. */
+static void test_long_link(void)
+{
+    enum { SEG = 5000 };
+    AuBuf base, html, want;
+    au_buf_init(&base);
+    au_buf_init(&html);
+    au_buf_init(&want);
+    au_buf_puts(&base, "http://example.com/");
+    for (int i = 0; i < SEG; i++)
+        au_buf_putc(&base, 'a' + i % 26);
+    au_buf_puts(&base, "/");
+    au_buf_puts(&want, au_buf_cstr(&base));
+    au_buf_puts(&want, "next.html?q=");
+    au_buf_puts(&html, "<!DOCTYPE html><base href='");
+    au_buf_puts(&html, au_buf_cstr(&base));
+    au_buf_puts(&html, "'><body style='margin:0'><a id=l style='display:block;height:20px' href='next.html?q=");
+    for (int i = 0; i < SEG; i++) {
+        au_buf_putc(&html, 'z');
+        au_buf_putc(&want, 'z');
+    }
+    au_buf_puts(&html, "'>x</a>");
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    au_docview_load(dv, html.data, html.len, "http://example.com/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    au_docview_update(dv);
+    CHECK(!strcmp(au_docview_base_url(dv), au_buf_cstr(&base)), "long base cut to %zu bytes",
+          strlen(au_docview_base_url(dv)));
+    mouse(dv, AU_EVENT_MOUSE_MOVE, 5, 5, 0);
+    CHECK(!strcmp(au_docview_hover_link(dv), au_buf_cstr(&want)), "long hover link cut to %zu bytes of %zu",
+          strlen(au_docview_hover_link(dv)), want.len);
+    mouse(dv, AU_EVENT_MOUSE_DOWN, 5, 5, 0);
+    mouse(dv, AU_EVENT_MOUSE_UP, 5, 5, 0);
+    CHECK(f.opened_len == want.len, "opened %zu bytes, want %zu", f.opened_len, want.len);
+    mouse(dv, AU_EVENT_MOUSE_MOVE, 700, 500, 0);
+    CHECK(!strcmp(au_docview_hover_link(dv), ""), "hover link not cleared");
+    au_docview_free(dv);
+    au_buf_free(&base);
+    au_buf_free(&html);
+    au_buf_free(&want);
 }
 
 /* ---- Incremental feeding and resize ---- */
@@ -1483,6 +1529,7 @@ int main(void)
     test_atoms_freed();
     test_base_title_fragments();
     test_input();
+    test_long_link();
     test_incremental();
     test_images();
     test_image_arrival_cost();

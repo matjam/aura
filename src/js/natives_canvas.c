@@ -451,18 +451,18 @@ static AuCanvasBitmap *decode_bitmap(AuJs *js, const uint8_t *data, size_t len)
                             info.height > 0 ? info.height : surf->height);
 }
 
-/* The absolute URL of an image element's src, into out. */
-static void img_url(AuJs *js, AuElement *el, char *out, size_t cap)
+/* An <img>'s src resolved, of any length, from au_alloc ("" when it has
+ * none). */
+static char *img_url(AuJs *js, AuElement *el)
 {
-    out[0] = 0;
     const char *src = au_element_get_attr(el, au_atom("src", 3));
-    if (!src || !*src)
-        return;
+    char *out = NULL;
     JsUrl u;
-    if (js_url_parse(src, js->base, &u)) {
-        snprintf(out, cap, "%s", u.href);
+    if (src && *src && js_url_parse(src, js->base, &u)) {
+        out = au_strndup(u.href, strlen(u.href));
         js_url_free(&u);
     }
+    return out ? out : au_strndup("", 0);
 }
 
 /* Resolves a CanvasImageSource. 1: s is filled; 0: nothing to draw (an
@@ -536,8 +536,6 @@ static int image_source(JSContext *ctx, JSValueConst v, Src *s)
         return s->surf ? 1 : 0;
     }
     if (el && el->ns == AU_NS_HTML && el->tag == AU_ATOM_img) {
-        char url[2048];
-        img_url(js, el, url, sizeof url);
         /* An image script loaded: the bitmap decoded before, or its bytes. */
         JSValue bv = JS_GetPropertyStr(ctx, v, "_ibmp");
         if (JS_IsException(bv))
@@ -560,7 +558,9 @@ static int image_source(JSContext *ctx, JSValueConst v, Src *s)
             JS_FreeValue(ctx, by);
             if (!b)
                 return 0;
+            char *url = img_url(js, el);
             b->clean = js_canvas_image_origin_clean(js, url);
+            au_free(url);
             JSValue o = new_bitmap_object(ctx, b);
             src_bitmap(s, b);
             au_cbitmap_unref(b);
@@ -575,16 +575,25 @@ static int image_source(JSContext *ctx, JSValueConst v, Src *s)
         if (js->hooks.canvas_image) {
             const AuSurface *px = NULL;
             int w = 0, h = 0;
-            char durl[2048];
-            durl[0] = 0;
-            if (js->hooks.canvas_image(js->hooks.ctx, el, &px, &w, &h, durl, sizeof durl) && px && w > 0 && h > 0) {
+            AuBuf durl;
+            au_buf_init(&durl);
+            bool got = js->hooks.canvas_image(js->hooks.ctx, el, &px, &w, &h, &durl) && px && w > 0 && h > 0;
+            if (got) {
                 s->surf = px;
                 s->nat_w = w;
                 s->nat_h = h;
                 s->opaque = px->opaque;
-                s->clean = js_canvas_image_origin_clean(js, durl[0] ? durl : url);
-                return 1;
+                if (durl.len) {
+                    s->clean = js_canvas_image_origin_clean(js, au_buf_cstr(&durl));
+                } else {
+                    char *url = img_url(js, el);
+                    s->clean = js_canvas_image_origin_clean(js, url);
+                    au_free(url);
+                }
             }
+            au_buf_free(&durl);
+            if (got)
+                return 1;
         }
         return 0;
     }

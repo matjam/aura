@@ -492,13 +492,16 @@ context's overflow clip ..."), and `test_image_tiles` in
 
 To resolve a URL in layout, call `l_resolve_url` and release the result
 with `l_url_free`: it resolves into the caller's buffer, or into a block
-from `au_alloc` when the result is longer. In the document view, use
-`au_url_resolve_dup` for image, font, script and style sheet URLs. A
-`data:` URL is often several kilobytes; the 2048-byte buffers these
-paths used dropped a long background image without asking for it and
-cut a long `<img>` URL short (reCAPTCHA's check mark is a 3978-byte
-`data:` URL in its style sheet). The case is in
-`tests/layout/cases/images.txt`.
+from `au_alloc` when the result is longer. Everywhere else, use
+`au_url_resolve_dup` and free the result: images, fonts, scripts, style
+sheets, `<base href>`, links (hover, status bar, click and Return),
+frames and objects, form actions, the favicon, and the canvas natives,
+whose `canvas_image` hook returns the URL in an `AuBuf`. Do not resolve
+a URL into a fixed buffer: a `data:` URL is often several kilobytes
+(reCAPTCHA's check mark is a 3978-byte `data:` URL in its style sheet),
+and tracking links and search URLs pass 2048 bytes. The cases are in
+`tests/layout/cases/images.txt` and `test_long_link` in
+`tests/page/test_page.c`.
 
 `l_resolve_url` takes a base: pass the `base_url` of the value's
 `AuCssBlob` (or `AuBgLayer.base_url`) for a `url()` from a style sheet,

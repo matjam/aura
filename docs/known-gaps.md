@@ -394,14 +394,6 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   "Script").
 - POST into a frame works only with a loader that implements
   `request_ex`.
-- URLs longer than 2047 bytes (a long `data:` URL) still fail where
-  they are resolved into 2048-byte buffers: a frame's `src` or an
-  object's `data` (`frames.c`), a link followed by a click, by Return or
-  shown in the status bar (`link_url` in `docview.c`, `control_key` in
-  `forms.c`), `<base href>`, and the canvas natives
-  (`natives_canvas.c`). Images, backgrounds, fonts, scripts and style
-  sheets resolve URLs of any length ([`layout.md`](layout.md), "URLs of
-  any length").
 - `naturalWidth` of an `<img>` in a parsed `file:` page read 0 in
   `aura-host chrome` for `data:` URLs short and long, though the image
   painted (seen on 2026-11-16 while building the image-tile replica;

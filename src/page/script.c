@@ -418,11 +418,10 @@ static bool h_image_origin_clean(void *ctx, const char *url)
     return au_docview_image_origin_clean(s->dv, url);
 }
 
-static bool h_canvas_image(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, char *url,
-                           size_t url_cap)
+static bool h_canvas_image(void *ctx, AuElement *img, const struct AuSurface **px, int *w, int *h, AuBuf *url)
 {
     AuDocScript *s = ctx;
-    return au_dv_canvas_image(s->dv, img, px, w, h, url, url_cap);
+    return au_dv_canvas_image(s->dv, img, px, w, h, url);
 }
 
 static void h_frames_changed(void *ctx)

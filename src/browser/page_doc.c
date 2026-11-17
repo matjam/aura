@@ -3972,9 +3972,10 @@ static void put_resolved(AuDocView *dv, const AuElement *el, const char *name, A
 {
     AuAtom a = au_atom_lookup(name, strlen(name));
     const char *v = a ? au_element_get_attr(el, a) : NULL;
-    char abs[2048];
-    if (v && *v && au_url_resolve(au_docview_base_url(dv), v, abs, sizeof abs))
+    char *abs = v && *v ? au_url_resolve_dup(au_docview_base_url(dv), v) : NULL;
+    if (abs)
         au_buf_puts(out, abs);
+    au_free(abs);
 }
 
 void au_page_hit_info(AuPage *p, int x, int y, AuBuf *link, AuBuf *image)
@@ -4344,11 +4345,9 @@ char *au_page_icon_url(AuPage *p)
             best = href;
         }
     }
-    char abs[2048];
-    if (best && au_url_resolve(au_docview_base_url(p->dv), best, abs, sizeof abs) &&
-        (au_url_scheme_is(abs, "http") || au_url_scheme_is(abs, "https")))
-        return au_strndup(abs, strlen(abs));
-    if (au_url_resolve(p->url, "/favicon.ico", abs, sizeof abs))
-        return au_strndup(abs, strlen(abs));
-    return NULL;
+    char *abs = best ? au_url_resolve_dup(au_docview_base_url(p->dv), best) : NULL;
+    if (abs && (au_url_scheme_is(abs, "http") || au_url_scheme_is(abs, "https")))
+        return abs;
+    au_free(abs);
+    return au_url_resolve_dup(p->url, "/favicon.ico");
 }

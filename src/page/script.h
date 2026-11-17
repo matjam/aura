@@ -165,8 +165,7 @@ void au_dv_sheets_adopt(AuDocView *dv, AuNode *scope, const uint32_t *ids, size_
  * document's canvas set, made on first use, and the decoded pixels of an
  * image element the document loaded. */
 struct AuCanvasSet *au_dv_canvas_set(AuDocView *dv);
-bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, char *url,
-                        size_t url_cap);
+bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int *w, int *h, AuBuf *url);
 /* The view's clock: the now_ms callback, or a counter. */
 double au_dv_now(AuDocView *dv);
 /* The user agent set with au_docview_set_user_agent, or NULL. */
