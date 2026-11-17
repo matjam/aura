@@ -114,6 +114,10 @@ typedef struct AuCocoaWindowsHost {
     const char *machine, *settings_name, *folder_example, *system_downloads, *no_folder;
 } AuCocoaWindowsHost;
 
+/* The host the windows share (winutil_cocoa.m), copied by
+ * au_cocoa_windows_init. */
+extern AuCocoaWindowsHost au_cocoa_wh;
+
 void au_cocoa_windows_init(const AuCocoaWindowsHost *host);
 void au_cocoa_windows_shutdown(void);
 
@@ -124,6 +128,10 @@ bool au_cocoa_window_kind(AuWindowKind kind);
 /* ---- Preferences (prefswin_cocoa.m) ---- */
 void au_cocoa_prefs_show(void);
 bool au_cocoa_prefs_is_open(void);
+/* Cancels an open edit session and closes the window (from
+ * au_cocoa_windows_shutdown). */
+void au_cocoa_prefs_shutdown(void);
+bool au_cocoa_prefs_built(void);
 
 /* ---- Lists (listwin_cocoa.m) ---- */
 void au_cocoa_list_show(AuListKind kind);
@@ -143,5 +151,6 @@ bool au_cocoa_devwin_can_find_again(NSWindow *w);
 
 /* ---- About (about_cocoa.m) ---- */
 void au_cocoa_about_show(void);
+bool au_cocoa_about_built(void);
 
 #endif
