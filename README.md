@@ -23,7 +23,7 @@ machine, so that what works there can be made to work on the old one.
 | Platform | Kind | Status |
 |---|---|---|
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | in development, released |
-| Linux with GTK4 | mainstream, for testing | in progress |
+| Linux with GTK4 | mainstream, for testing | in development, `.deb` and AppImage |
 | Amiga with an accelerated 68k processor | legacy | planned |
 | Modern macOS | mainstream, for testing | planned |
 
@@ -94,6 +94,10 @@ MIT, in `Licences`). The fonts cover Chinese, Japanese and Korean text. The buil
 commit is attached to its
 [CI run](https://github.com/matjam/aura/actions/workflows/ci.yml) in the
 same two forms.
+
+For Linux, each release has a `.deb` and an AppImage. Both need GTK 4.12
+or later installed from your distribution. `docs/gtk.md` describes the
+port.
 
 ## Build
 

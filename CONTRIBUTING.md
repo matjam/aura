@@ -5,7 +5,7 @@ operating systems, so the most useful thing you can do is run it on a
 real old Mac and say what happened, because so far it has run only in
 an emulator (see the AI use disclosure in `README.md`).
 
-The mainstream ports (Linux with GTK4, in progress) are there to help
+The mainstream ports (Linux with GTK4 so far) are there to help
 with testing and compatibility. A report that a page renders wrongly
 there is useful too: the engine is the same, so the fix helps every
 platform.
