@@ -73,6 +73,13 @@ scrolling) and maps points to offsets (`au_layout_field_offset_at`,
 `au_layout_field_caret_rect`). A textarea is a replaced box; its
 children are not laid out.
 
+The placeholder takes its colour from the field's `::placeholder`
+style. The cascade computes that style for every `input` and `textarea`
+that a `::placeholder` rule matches (`attach_pseudos` in
+`src/css/cascade.c`), so `color: transparent` hides the placeholder as
+in Chrome. Without a page rule the colour is `#757575` from the UA
+sheet.
+
 ## Editing
 
 `src/page/editing.c` is the portable model: insertion with maxlength

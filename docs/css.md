@@ -140,8 +140,8 @@ is unchanged does not restyle its subtree.
 ## Sharing
 
 Elements with the same parent style, tag and matched rules share one
-`AuStyle`; the key includes the matched `::before`, `::after` and
-`::marker` rules, and an element whose pseudo-element uses `attr()` is
+`AuStyle`; the key includes the matched `::before`, `::after`,
+`::marker` and `::placeholder` rules, and an element whose pseudo-element uses `attr()` is
 not shared. Custom property maps are layered: a map holds the element's
 own entries and refers to the parent's map (`AuCustomProps.base`,
 chains of at most 12).
