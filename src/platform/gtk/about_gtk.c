@@ -52,7 +52,13 @@ void au_gtk_about_show(void)
     gtk_about_dialog_set_website(d, AU_HOMEPAGE);
     gtk_about_dialog_set_website_label(d, "Aura on GitHub");
     gtk_about_dialog_set_copyright(d, "Written by " AU_AUTHOR ", with help from Claude.");
-    gtk_about_dialog_set_license_type(d, GTK_LICENSE_MIT_X11);
+    /* GTK's own MIT entry reads "See the The MIT License (MIT)", so the
+     * box carries Aura's short licence text instead. */
+    gtk_about_dialog_set_license_type(d, GTK_LICENSE_CUSTOM);
+    gtk_about_dialog_set_license(d, "Aura is released under the MIT licence. You may use, copy, change and "
+                                    "share it freely, as long as the copyright notice and the licence go with "
+                                    "it. It comes with no warranty.");
+    gtk_about_dialog_set_wrap_license(d, TRUE);
     static const char *authors[] = {AU_AUTHOR, NULL};
     gtk_about_dialog_set_authors(d, authors);
     add_section(d, "Libraries", AU_CREDIT_LIBRARY);
