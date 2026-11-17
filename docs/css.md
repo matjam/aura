@@ -175,6 +175,13 @@ chains of at most 12).
 `src/page/docview.c`, "Requests" and "Styles": each `<style>`, `<link>`
 and `@import` is a `SheetSrc`.
 
+- A `<link>` fires `load` once its sheet and every `@import` under it
+  have arrived, or `error` when its own sheet fails
+  (`SheetSrc.event`, fired from `au_docview_run_scripts`). Code-split
+  CSS loaders wait for it: without it, GitHub's dashboard never rendered
+  its Copilot box or its Top repositories list (the loader's timeout is
+  120 s).
+
 - It is parsed once, when its text arrives (`parse_sheet`); the
   resolver borrows the parsed sheets, and a change of the sheet list
   detaches and adds them again (`au_css_resolver_detach_sheets`)

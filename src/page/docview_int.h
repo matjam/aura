@@ -34,6 +34,11 @@ struct SheetSrc {
     AuCssSheet *om_sheet;
     bool disabled;
     uint8_t cors; /* a link's crossorigin attribute: 0 none, 1 anonymous, 2 use-credentials */
+    /* A <link>'s load (1) or error (2) event, due once the sheet and its
+     * imports have arrived (au_docview_run_scripts fires it); sent: it
+     * has been queued, so it is not queued twice. */
+    uint8_t event;
+    bool event_sent;
 };
 
 /* A <style> or <link> element in shadow-including tree order. */
@@ -133,6 +138,7 @@ struct AuDocView {
     char hover_link[2048];
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
+    bool link_events; /* a <link>'s load or error event is due (SheetSrc.event) */
     /* A hidden view frees its layout (au_docview_set_hidden); the scroll
      * offsets of its scroll containers wait here for the next layout. */
     AuLayoutScroll *slim_scrolls;

@@ -277,6 +277,8 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   own style. Before they existed, GitHub's landing page threw in a
   React ref and remounted a section about 600 times (150 MB of script
   heap, every image fetched 22 times).
+- **XPath** (`document.evaluate`, `XPathResult`) is absent; a call
+  throws "not a function".
 - **`document.fonts`** is a set that is always loaded (`ready`
   resolves at once, `check` is true); a `FontFace` made by script
   cannot load and its `load()` rejects with NetworkError.

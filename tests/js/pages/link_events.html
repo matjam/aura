@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Stylesheet link load and error events</title>
+<script src="../harness.js"></script>
+<link id="parsed" rel="stylesheet" href="res/link_parsed.css">
+</head>
+<body>
+<div id="sheet-probe"></div>
+<script>
+const parsedLoaded = once(document.getElementById('parsed'), 'load');
+
+promise_test('a stylesheet link in the markup fires load', async () => {
+    await parsedLoaded;
+});
+
+promise_test('a stylesheet link inserted by script fires load once its imports are in', async () => {
+    // GitHub's code-split CSS loader waits for this event before its lazy
+    // React parts (the dashboard's Copilot box) render.
+    const probe = document.getElementById('sheet-probe');
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'res/link_sheet.css';
+    let loads = 0;
+    l.addEventListener('load', () => loads++);
+    const p = once(l, 'load');
+    document.head.appendChild(l);
+    await p;
+    const cs = getComputedStyle(probe);
+    assert.equal(cs.width, '37px', 'the sheet applies when load fires');
+    assert.equal(cs.height, '11px', 'and its @import has arrived');
+    await delay(50);
+    assert.equal(loads, 1, 'load fires once');
+});
+
+promise_test('a stylesheet link that fails fires error', async () => {
+    const bad = document.createElement('link');
+    bad.rel = 'stylesheet';
+    bad.href = 'res/missing.css';
+    const pe = once(bad, 'error');
+    document.head.appendChild(bad);
+    await pe;
+});
+</script>
+</body>
+</html>

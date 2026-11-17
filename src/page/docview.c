@@ -738,6 +738,44 @@ static Request *find_request(AuDocView *dv, uint32_t id)
     return NULL;
 }
 
+/* Whether a sheet or one of its imports is still being fetched. Recurses
+ * once per import level (at most SHEET_IMPORT_DEPTH). */
+static bool sheet_loading(const SheetSrc *s)
+{
+    if (s->req)
+        return true;
+    for (uint32_t i = 0; i < s->nimports; i++)
+        if (s->imports[i] && sheet_loading(s->imports[i]))
+            return true;
+    return false;
+}
+
+/* Fires the <link> load and error events that are due. Script may change
+ * the element list, so the walk starts again after each event; each
+ * event is cleared before it fires, so the walk ends. */
+static void fire_link_events(AuDocView *dv)
+{
+    if (!dv->link_events)
+        return;
+    dv->link_events = false;
+    bool live = dv->script && au_docscript_running(dv->script);
+again:
+    for (uint32_t i = 0; i < dv->nslots; i++) {
+        SheetSrc *s = dv->slots[i].src;
+        if (!s || !s->event)
+            continue;
+        const char *type = s->event == 2 ? "error" : "load";
+        s->event = 0;
+        if (!live)
+            continue;
+        AuElement *el = dv->slots[i].el;
+        au_node_ref(&el->node);
+        au_docscript_fire(dv->script, el, type, false, false);
+        au_node_unref(&el->node);
+        goto again;
+    }
+}
+
 static void request_sheet(AuDocView *dv, SheetSrc *s)
 {
     Request *r = add_request_cors(dv, s->url, AU_RES_STYLESHEET, s->cors);
@@ -1030,6 +1068,15 @@ DV_ENTRY_VOID(resource_done, (AuDocView * dv, uint32_t id, bool ok), (dv, id, ok
             parse_sheet(dv, s);
         } else {
             s->failed = true;
+        }
+        /* The link's load or error event, once its imports are in too. */
+        SheetSrc *root = s;
+        while (root->parent)
+            root = root->parent;
+        if (!root->event_sent && !sheet_loading(root)) {
+            root->event = root->failed ? 2 : 1;
+            root->event_sent = true;
+            dv->link_events = true;
         }
         sheets_changed(dv, NULL);
     } else if (req.kind == AU_RES_IMAGE && req.image) {
@@ -2380,6 +2427,10 @@ DV_ENTRY(bool, run_scripts, (AuDocView * dv, uint32_t budget_ms), (dv, budget_ms
         dv->layout_ran = false;
         au_docscript_layout_done(dv->script);
     }
+    if (dv->link_events) {
+        fire_link_events(dv);
+        ran = true;
+    }
     if (dv->script && au_docscript_run(dv->script, budget_ms))
         ran = true;
     if (!dv->parent)
@@ -2391,7 +2442,7 @@ uint32_t au_docview_scripts_due(AuDocView *dv)
 {
     uint32_t due = dv->script ? au_docscript_due(dv->script) : UINT32_MAX;
     uint32_t fd = dv->nframes ? au_frames_scripts_due(dv) : UINT32_MAX;
-    if (au_dv_top(dv)->frames_work)
+    if (au_dv_top(dv)->frames_work || dv->link_events)
         return 0;
     return fd < due ? fd : due;
 }
