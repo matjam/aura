@@ -51,6 +51,11 @@ build/host/src/platform/host/aura-host chrome --net --bundled-only \
 - The host tool fills its `AuSysInfo` with next to nothing, which shows
   how the reports read where a fact is unknown.
 - The timing test and the paint benchmark exist only in the Mac shell.
+- `aura-host chrome` paints the window into a scratch surface after
+  each idle call that invalidated anything (`chrome_present` in
+  `src/platform/host/main.c`), as a shell does. Painting is what asks
+  for background images, masks and images in SVG, so a screenshot taken
+  after `--do wait:MS` shows them.
 
 ## The Develop menu
 
