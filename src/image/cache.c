@@ -11,6 +11,7 @@ struct AuImageEntry {
     bool data_dropped;   /* the bytes were dropped: the pixels are kept */
     AuImageState state;
     int iw, ih;
+    bool ratio_only; /* AuImageInfo.ratio_only */
     AuImageFormat format;
     AuImageDecoder *probe; /* header only, fed as bytes arrive */
     /* Pixels. */
@@ -131,6 +132,11 @@ AuImageState au_image_entry_state(const AuImageEntry *e) { return e->state; }
 const AuSurface *au_image_entry_surface(AuImageEntry *e) { return &e->view; }
 bool au_image_entry_animated(const AuImageEntry *e) { return e->animated; }
 
+bool au_image_entry_ratio_only(const AuImageEntry *e)
+{
+    return (e->state == AU_IMAGE_SIZED || e->state == AU_IMAGE_READY) && e->ratio_only;
+}
+
 bool au_image_entry_size(const AuImageEntry *e, int *w, int *h)
 {
     if (e->state != AU_IMAGE_SIZED && e->state != AU_IMAGE_READY)
@@ -179,14 +185,17 @@ static void sync_view(AuImageEntry *e)
     e->view.opaque = s->opaque;
 }
 
-static void set_sized(AuImageCache *c, AuImageEntry *e, int w, int h, AuImageFormat f)
+static void set_sized(AuImageCache *c, AuImageEntry *e, const AuImageInfo *info)
 {
-    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h) {
+    int w = info->width, h = info->height;
+    AuImageFormat f = info->format;
+    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h || e->ratio_only != info->ratio_only) {
         c->layout_changed = true;
         e->changed = true; /* repaint where it shows */
     }
     e->iw = w;
     e->ih = h;
+    e->ratio_only = info->ratio_only;
     e->format = f;
     if (e->state == AU_IMAGE_PENDING)
         e->state = AU_IMAGE_SIZED;
@@ -251,7 +260,7 @@ static void pump(AuImageCache *c, AuImageEntry *e)
     const AuImageInfo *info = au_image_info(e->dec);
     c->decode_ms += clock_now(c) - t0;
     if (info->ready) {
-        set_sized(c, e, info->width, info->height, info->format);
+        set_sized(c, e, info);
         if (au_image_canvas(e->dec))
             e->state = AU_IMAGE_READY;
     }
@@ -343,7 +352,7 @@ void au_image_entry_data(AuImageCache *c, AuImageEntry *e, const void *data, siz
         AuImageStatus st = au_image_decode(e->probe, &p, &n, false);
         const AuImageInfo *info = au_image_info(e->probe);
         if (info->ready)
-            set_sized(c, e, info->width, info->height, info->format);
+            set_sized(c, e, info);
         if (st == AU_IMAGE_ERROR)
             set_failed(c, e);
         if (st != AU_IMAGE_MORE) {
@@ -373,7 +382,7 @@ void au_image_entry_done(AuImageCache *c, AuImageEntry *e, bool ok)
         /* No header in all the bytes: one last try with everything. */
         AuImageInfo info;
         if (au_image_probe(e->data.data, e->data.len, &info))
-            set_sized(c, e, info.width, info.height, info.format);
+            set_sized(c, e, &info);
         else
             set_failed(c, e);
     }

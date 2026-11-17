@@ -85,6 +85,9 @@ typedef struct AuImageInfo {
     AuImageFormat format;
     bool ready;            /* the header is parsed: width, height, out_w, out_h valid */
     int width, height;     /* intrinsic size, after EXIF orientation */
+    bool ratio_only;       /* no natural width or height: width:height is only the
+                            * natural ratio (an SVG with a viewBox and neither a
+                            * width nor a height); width x height is the default size */
     int out_w, out_h;      /* canvas size */
     int scale_denom;       /* intrinsic / canvas, a power of two (1 = full size) */
     bool has_alpha;        /* the format can carry transparency for this image */

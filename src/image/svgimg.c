@@ -4,7 +4,9 @@
  * The intrinsic size (info.width and height) is the size an <img> shows
  * the document at without CSS sizes (au_svg_doc_default_size: its width
  * and height, one from the other through the viewBox ratio, else 300 x
- * 150). The canvas is not a reduction of it: it is the target size when
+ * 150). With only a viewBox the document has no natural size, only a
+ * ratio: info.ratio_only says so, and layout sizes the image from its
+ * containing block. The canvas is not a reduction of it: it is the target size when
  * one is given (both sides, or one side and the intrinsic ratio), so the
  * vector image is drawn sharp at the size it is shown, shrunk to fit
  * max_bytes. scale_denom stays 1. The document loads nothing: only
@@ -154,6 +156,9 @@ static AuImageStatus svgimg_run(void *st, AuImageDecoder *d, const uint8_t **in,
     }
     d->info.width = w;
     d->info.height = h;
+    AuSvgIntrinsic nat;
+    au_svg_doc_intrinsic(doc, &nat);
+    d->info.ratio_only = nat.width <= 0 && nat.height <= 0 && nat.ratio > 0;
     d->info.has_alpha = true;
     d->info.orientation = 1;
     d->info.scale_denom = 1;

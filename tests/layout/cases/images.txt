@@ -114,3 +114,28 @@ pixel 53 24 ffffff
 pixel 58 24 000000
 // a broken image: the square of list-style-type
 pixel 28 40 000000
+
+
+=== an SVG with only a viewBox has no natural size and fills its containing block
+<body style="margin:0;width:500px">
+<style>img { display:block } i { display:block; width:40px }
+#p::before { content:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 50%22%3E%3C/svg%3E"); display:block; width:12px }</style>
+<i><img id=a src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 50%22%3E%3C/svg%3E"></i>
+<span style="display:inline-block"><img id=b src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 50%22%3E%3C/svg%3E"></span>
+<div style="display:flex;width:400px"><img id=d src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 50%22%3E%3C/svg%3E"></div>
+<i><img id=h style="height:10px" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 50%22%3E%3C/svg%3E"></i>
+<i><img id=g src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22%3E%3C/svg%3E"></i>
+<div id=p style="width:40px"></div>
+---
+// Chrome: the image fills the 40px block at the viewBox ratio, shrinks
+// to 0 in a shrink-to-fit box, fills the flex container, and takes its
+// width from a set height. Without a viewBox the 300x150 default holds.
+// The ::before image was drawn at the 300x150 default capped to 150
+// high (Cornell's share row: an X logo 147x150 at width:12px); now it
+// is 12x6 and the block is one line of the test font.
+#a w=40 h=20
+#b w=0 h=0
+#d w=400 h=200
+#h w=20 h=10
+#g w=300 h=150
+#p h=16

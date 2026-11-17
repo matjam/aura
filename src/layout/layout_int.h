@@ -200,6 +200,7 @@ typedef struct LReplaced {
     bool placeholder; /* text input: label is the placeholder */
     float density;    /* image: device pixels per CSS pixel of the srcset candidate; 0 means 1 */
     bool marker;      /* image: a list-style-image marker, with L_MARKER_IMAGE_GAP after it */
+    bool ratio_only;  /* image: no natural size; iw x ih only gives the ratio (env.image_ratio_only) */
 } LReplaced;
 
 typedef struct LBlock {

@@ -685,14 +685,16 @@ int l_image_refresh(AuLayout *L, LReplaced *rep)
     }
     float d = rep->density > 0 ? rep->density : 1;
     float iw = (float)w / d, ih = (float)h / d;
+    bool ratio_only = loaded && w > 0 && h > 0 && L->env.image_ratio_only && L->env.image_ratio_only(L->env.ctx, rep->src);
     int r = 0;
-    if (loaded != rep->loaded || iw != rep->iw || ih != rep->ih)
+    if (loaded != rep->loaded || iw != rep->iw || ih != rep->ih || ratio_only != rep->ratio_only)
         r = 2;
     else if (px != rep->pixels)
         r = 1;
     rep->loaded = loaded;
     rep->iw = iw;
     rep->ih = ih;
+    rep->ratio_only = ratio_only;
     rep->ratio = h > 0 ? (float)w / h : 0;
     rep->pixels = px;
     rep->url = loaded && L->env.image_use ? rep->src : NULL;

@@ -377,6 +377,11 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
             /* A marker image: its own size, then the gap. */
             *w = r->iw > 0 ? r->iw + L_MARKER_IMAGE_GAP : 0;
             *h = r->ih;
+        } else if (r && r->loaded && r->ratio_only) {
+            /* No natural size: replaced_size fills the available width,
+             * and the intrinsic contributions are 0 (as in browsers). */
+            *w = *h = 0;
+            *ratio = r->ratio;
         } else if (r && r->loaded) {
             *w = r->iw;
             *h = r->ih;
@@ -533,9 +538,15 @@ static void replaced_size(AuLayout *L, LBlock *b, float cb_w, float cb_h, float 
         h = ih;
         if (b->b.replaced == LR_IMAGE && b->rep && !b->rep->loaded && !b->rep->label) {
             w = h = 0;
-        } else if (iw <= 0 && ratio > 0 && avail_c > 0) {
-            w = avail_c;
-            h = w / ratio;
+        } else if (iw <= 0 && ratio > 0) {
+            /* No natural width: fill the available width, or the
+             * containing block when that is unbounded (flex sizing
+             * passes an unbounded width; browsers fill the container). */
+            float fill = avail_c > 0 && avail_c < 1e29f ? avail_c : cb_w;
+            if (fill > 0 && fill < 1e29f) {
+                w = fill;
+                h = w / ratio;
+            }
         }
         /* min/max with an aspect ratio (10.4 table, simplified). */
         float cw = l_clamp_w(b, w, cb_w), chh = l_clamp_h(b, h, cb_h);

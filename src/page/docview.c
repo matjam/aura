@@ -55,6 +55,14 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
 
 static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px);
 
+/* An SVG image with only a viewBox has no natural size. */
+static bool layout_image_ratio_only(void *ctx, const char *url)
+{
+    AuDocView *dv = ctx;
+    AuImageEntry *e = au_image_cache_find(au_docimages_cache(dv->imgs), url);
+    return e && au_image_entry_ratio_only(e);
+}
+
 static int layout_embed_kind(void *ctx, AuElement *el)
 {
     return au_frames_embed_kind(ctx, el);
@@ -82,7 +90,7 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_free(dv->layout);
     }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
-                       layout_paint_frame, layout_canvas};
+                       layout_paint_frame, layout_canvas, layout_image_ratio_only};
     dv->layout = au_layout_new(&env);
     if (dv->check)
         au_layout_set_check(dv->layout, true);

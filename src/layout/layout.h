@@ -89,6 +89,13 @@ typedef struct AuLayoutEnv {
      * box's natural size from the width and height attributes (300 x 150
      * by default) and paints the bitmap scaled into the content box. */
     int (*canvas)(void *ctx, AuElement *el, const AuSurface **px);
+    /* Whether the image at url (one image() knows) has no natural width
+     * or height, only a ratio (an SVG with a viewBox and no width or
+     * height): the size image() gave is then only its ratio, and an
+     * <img> or content image with an auto size fills its containing
+     * block's width (CSS 2.1 10.3.2), and contributes 0 to intrinsic
+     * sizes. Optional; without it every image has its natural size. */
+    bool (*image_ratio_only)(void *ctx, const char *url);
 } AuLayoutEnv;
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
