@@ -2960,6 +2960,19 @@ static float cp_len(const AuCssValue *v, float basis, bool *ok)
         return v->u.num * basis / 100;
     if ((v->type == AU_CSSV_DIMENSION && v->unit == AU_UNIT_PX) || (v->type == AU_CSSV_NUMBER && v->u.num == 0))
         return v->u.num;
+    if (v->type == AU_CSSV_CALC) {
+        /* calc(10px + 40%), as computed: au_len_resolve evaluates the
+         * tree (the blob header only carries the node). */
+        AuCssBlob tmp;
+        memset(&tmp, 0, sizeof tmp);
+        tmp.refs = 1;
+        tmp.value = *v;
+        AuLen l;
+        memset(&l, 0, sizeof l);
+        l.kind = AU_LEN_CALC;
+        l.u.calc = &tmp;
+        return au_len_resolve(&l, basis < 0 ? 0 : basis);
+    }
     *ok = false;
     return 0;
 }
