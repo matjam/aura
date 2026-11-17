@@ -18,6 +18,7 @@
 #define TAB_ROW_HEIGHT 28
 #define TAB_MAX_WIDTH 230
 #define TAB_MIN_WIDTH 70
+#define PLUS_WIDTH 32 /* the New Tab button's room after the last tab */
 #define FIND_HEIGHT 32
 #define STATUS_HEIGHT 22
 
@@ -200,6 +201,7 @@ static NSImage *icon_image(const AuSurface *s)
     __unsafe_unretained AuCocoaWin *win;
     NSVisualEffectView *material; /* the toolbar's material, so the two read as one bar */
     AuFillView *edge;             /* the separator under the row, or beside the column */
+    NSButton *plus;               /* New Tab, right after the last tab */
     NSMutableArray<AuTabItem *> *items;
     bool vertical;
     int drag_from;
@@ -433,7 +435,22 @@ static NSImage *icon_image(const AuSurface *s)
     [self addSubview:material];
     edge = [[AuFillView alloc] initWithFill:NSColor.separatorColor];
     [self addSubview:edge];
+    plus = [NSButton buttonWithImage:symbol(@"plus", @"New Tab") target:self action:@selector(newTab:)];
+    plus.bordered = NO;
+    plus.imageScaling = NSImageScaleProportionallyDown;
+    plus.contentTintColor = NSColor.secondaryLabelColor;
+    plus.toolTip = @"New Tab";
+    plus.refusesFirstResponder = YES;
+    [self addSubview:plus];
     return self;
+}
+
+- (void)newTab:(id)s
+{
+    (void)s;
+    if (win && !win->freed && !au_cocoa.modal)
+        au_bw_open_new_tab(win->bw);
+    au_cocoa_kick();
 }
 
 - (BOOL)isFlipped
@@ -446,7 +463,7 @@ static NSImage *icon_image(const AuSurface *s)
     NSRect b = self.bounds;
     if (vertical)
         return NSMakeRect(4, 4 + i * TAB_ROW_HEIGHT, b.size.width - 8, TAB_ROW_HEIGHT);
-    CGFloat avail = b.size.width - 8;
+    CGFloat avail = b.size.width - 8 - PLUS_WIDTH;
     CGFloat w = n ? floor(avail / n) : TAB_MAX_WIDTH;
     if (w > TAB_MAX_WIDTH)
         w = TAB_MAX_WIDTH;
@@ -476,6 +493,12 @@ static NSImage *icon_image(const AuSurface *s)
     int n = (int)items.count;
     for (int i = 0; i < n; i++)
         items[(NSUInteger)i].frame = [self frameOf:i count:n];
+    /* New Tab follows the last tab: beside it in a row, under it in a
+     * column. */
+    NSRect last = n ? [self frameOf:n - 1 count:n] : NSMakeRect(4, vertical ? 4 - TAB_ROW_HEIGHT : 1, 0, TAB_ROW_HEIGHT);
+    CGFloat mid = vertical ? NSMaxY(last) + TAB_ROW_HEIGHT / 2 : NSMidY(last);
+    CGFloat x = vertical ? 8 : NSMaxX(last) + (PLUS_WIDTH - 20) / 2;
+    plus.frame = NSMakeRect(x, floor(mid - 10), 20, 20);
 }
 
 - (void)syncFrom:(AuCocoaWin *)w
@@ -828,7 +851,6 @@ static void find_hide(AuCocoaWin *w)
 static NSToolbarItemIdentifier const ID_BACK = @"aura.back";
 static NSToolbarItemIdentifier const ID_FORWARD = @"aura.forward";
 static NSToolbarItemIdentifier const ID_ADDRESS = @"aura.address";
-static NSToolbarItemIdentifier const ID_NEWTAB = @"aura.newtab";
 
 /* A toolbar button as AppKit draws them: borderless until the pointer is
  * over it. Its enabled state is set by sync_nav, not validated. */
@@ -852,7 +874,7 @@ static NSToolbarItemIdentifier const ID_NEWTAB = @"aura.newtab";
 {
     (void)tb;
     return @[ ID_BACK, ID_FORWARD, NSToolbarFlexibleSpaceItemIdentifier, ID_ADDRESS,
-              NSToolbarFlexibleSpaceItemIdentifier, ID_NEWTAB ];
+              NSToolbarFlexibleSpaceItemIdentifier ];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)tb
@@ -875,8 +897,6 @@ static NSToolbarItemIdentifier const ID_NEWTAB = @"aura.newtab";
         forward.navigational = YES;
         return forward;
     }
-    if ([ident isEqualToString:ID_NEWTAB])
-        return addTab = [self toolItem:ident symbol:@"plus" label:@"New Tab" action:@selector(newTab:)];
     NSToolbarItem *it = [[NSToolbarItem alloc] initWithItemIdentifier:ident];
     if ([ident isEqualToString:ID_ADDRESS]) {
         /* 240 to 1000 points; the toolbar stretches it over the free

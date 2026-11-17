@@ -111,10 +111,11 @@ as in Safari. The model's window is made with
 `au_browser_window_new_native`, so its surface holds only the page.
 
 - The toolbar holds Back and Forward (plain `NSToolbarItem`s marked
-  navigational, so AppKit draws them as one group at the leading edge),
-  the address field between two flexible spaces, and New Tab. Their
-  enabled state comes from `sync_nav`; the items do not validate
-  themselves.
+  navigational, so AppKit draws them as one group at the leading edge)
+  and the address field between two flexible spaces. Their enabled
+  state comes from `sync_nav`; the items do not validate themselves.
+  New Tab is a button in the tab strip, right after the last tab (under
+  it with tabs on the left).
 - The address field (`AuAddressField`) holds the security icon at its
   left, Reload or Stop at its right, and a 2-point accent line along its
   bottom while the page loads (`au_bw_progress`, shown at 5% at least

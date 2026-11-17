@@ -43,7 +43,7 @@
   @public
     AuBrowserWindow *bw;
     NSWindow *window;
-    NSToolbarItem *back, *forward, *addTab;
+    NSToolbarItem *back, *forward;
     /* The address field holds the security icon on its left, Reload or
      * Stop on its right, and the load progress line along its bottom. */
     NSTextField *address;
