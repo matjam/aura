@@ -856,7 +856,11 @@ or an adopted sheet changes (`sheets_changed`,
   in the document (`AuDocument.manual`, no references; a node in a pair
   carries `AU_NODEF_MANUAL`, and freeing it drops its pairs).
   `assignedNodes({flatten: true})` replaces nested slots with what they
-  offer, with an explicit stack.
+  offer, with an explicit stack. A slottable asks for a slot by its
+  `slot` attribute (`au_slottable_name_of`), and a `<slot>` slotted into
+  a shadow tree below it does too; its `name` attribute only names the
+  slot it is (`au_slot_name_of`). Lit components forward a light child
+  this way (`<slot slot=anchor>` in Reddit's tooltips).
 - **Events** are retargeted across shadow boundaries; `composed`
   decides whether an event leaves its shadow root, and `composedPath()`
   hides nodes of closed trees from listeners outside them.

@@ -77,14 +77,19 @@ AuElement *au_node_tree_host(const AuNode *n)
 
 const char *au_slot_name_of(const AuNode *n)
 {
+    if (!au_is_html_element(n, AU_ATOM_slot))
+        return "";
+    const char *v = au_element_get_attr((const AuElement *)n, au_atom("name", 4));
+    return v ? v : "";
+}
+
+const char *au_slottable_name_of(const AuNode *n)
+{
+    /* a <slot> is slotted by its slot attribute like any element; its
+     * name attribute names the slot it is */
     if (n->type != AU_NODE_ELEMENT)
         return "";
-    const AuElement *el = (const AuElement *)n;
-    const char *v;
-    if (el->ns == AU_NS_HTML && el->tag == AU_ATOM_slot)
-        v = au_element_get_attr(el, au_atom("name", 4));
-    else
-        v = au_element_get_attr(el, AU_ATOM_slot);
+    const char *v = au_element_get_attr((const AuElement *)n, AU_ATOM_slot);
     return v ? v : "";
 }
 
@@ -231,7 +236,7 @@ AuElement *au_node_assigned_slot(const AuNode *n)
         return NULL;
     if (sr->manual_slots)
         return manual_slot_of(sr, n);
-    return find_slot(sr, au_slot_name_of(n));
+    return find_slot(sr, au_slottable_name_of(n));
 }
 
 /* Whether slot is the slot its name selects in its root (named mode). */
@@ -247,7 +252,7 @@ static AuNode *next_assigned(const AuShadowRoot *sr, const AuElement *slot, cons
     if (!sr->manual_slots) {
         const char *name = au_slot_name_of(&slot->node);
         for (c = c ? c->next : sr->host->node.first_child; c; c = c->next)
-            if (is_slottable(c) && strcmp(au_slot_name_of(c), name) == 0)
+            if (is_slottable(c) && strcmp(au_slottable_name_of(c), name) == 0)
                 return (AuNode *)c;
         return NULL;
     }
