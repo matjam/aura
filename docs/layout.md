@@ -261,14 +261,30 @@ without one has no size, and its queries do not match until it has.
 returns bit 1 for width and bit 2 for height). It applies to flow,
 flex and grid boxes that are not anonymous and not replaced.
 
-- A contained width makes the box's intrinsic widths 0
-  (`l_intrinsic`), so a shrink-to-fit or flex item container needs a
-  width of its own.
-- A contained height makes an auto height 0, plus padding and border
-  (`l_layout_content`, and `finish_block` for in-flow blocks); an
-  `aspect-ratio` still gives a height. The children are laid out and
-  overflow.
+- A contained width makes the box's intrinsic widths its
+  `contain-intrinsic-width` (0 for `none`; `l_intrinsic`), so a
+  shrink-to-fit or flex item container needs a width of its own.
+- A contained height makes an auto height its `contain-intrinsic-height`
+  (0 for `none`), plus padding and border (`l_layout_content`, and
+  `finish_block` for in-flow blocks); an `aspect-ratio` still gives a
+  height. The children are laid out and overflow.
+- `contain-intrinsic-size`, its longhands and the `-block-size` and
+  `-inline-size` names are parsed. `auto <length>` takes the length:
+  Aura keeps no last remembered size. GitHub's file tree rows are
+  `contain: strict; contain-intrinsic-height: auto 32px`; without the
+  property each row was 0 high and the rows overlapped.
 - A change of `container-type` relayouts the box (`style_diff`).
+
+### Scrollable overflow
+
+A block keeps two overflow rectangles relative to its border box:
+`ov`, everything it paints (shadows, outlines, ink of inline SVG), for
+painting and hit testing, and `sov`, its border box with the content
+and children's `sov`, for scrolling (`l_finish_overflow`). A scroll
+container's extent and the document's size come from `sov`, so a box
+shadow or a focus outline never adds a scroll bar or widens the page,
+as in other browsers. GitHub's file tree pane scrolled sideways by
+8 pixels when shadows counted.
 
 ## Costs that must stay linear
 

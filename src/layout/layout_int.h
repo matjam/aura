@@ -208,6 +208,8 @@ typedef struct LBlock {
     float x, y, w, h;   /* border box, relative to the geometry parent's border box */
     float m[4], p[4], bw[4]; /* used margins, padding, border widths: top, right, bottom, left */
     LArea ov;           /* overflow (painted extent) relative to the border box */
+    LArea sov;          /* scrollable overflow relative to the border box: ov without shadows and outlines,
+                         * which never make an ancestor or the page scroll */
     float baseline;     /* first baseline from the border-box top, NAN if none */
     float last_baseline;
     float scroll_x, scroll_y; /* scroll containers */

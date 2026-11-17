@@ -972,6 +972,32 @@ static bool sh_gap(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
     return true;
 }
 
+/* contain-intrinsic-size: one or two of none | <length> | auto <length>
+ * (width, then height; one value sets both). */
+static bool sh_contain_intrinsic_size(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
+{
+    uint32_t n;
+    const AuCssValue *it = sh_items(s->cx, tk, a, b, &n, false, NULL);
+    if (!it || n < 1 || n > 4)
+        return false;
+    AuCssValue *v[2] = {NULL, NULL};
+    uint32_t i = 0, k = 0;
+    while (i < n && k < 2) {
+        if (css_is_kw(&it[i], AU_K_auto_) && i + 1 < n)
+            i++;
+        v[k] = try_lh(s->cx, k ? AU_PROP_contain_intrinsic_height : AU_PROP_contain_intrinsic_width, &it[i]);
+        if (!v[k])
+            return false;
+        i++;
+        k++;
+    }
+    if (i != n || !v[0])
+        return false;
+    emit(s, AU_PROP_contain_intrinsic_width, v[0]);
+    emit(s, AU_PROP_contain_intrinsic_height, v[1] ? v[1] : v[0]);
+    return true;
+}
+
 static bool sh_place(Sh *s, uint16_t sh, const CssTokens *tk, uint32_t a, uint32_t b)
 {
     const uint16_t *lh = css_shorthand_longhands(sh);
@@ -1445,6 +1471,8 @@ bool css_parse_shorthand(CssParseCtx *cx, uint16_t sh, const CssTokens *tk, uint
         return sh_flex_flow(&s, tk, a, b);
     case AU_PROP_gap:
         return sh_gap(&s, tk, a, b);
+    case AU_PROP_contain_intrinsic_size:
+        return sh_contain_intrinsic_size(&s, tk, a, b);
     case AU_PROP_place_content:
     case AU_PROP_place_items:
     case AU_PROP_place_self:

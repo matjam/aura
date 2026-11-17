@@ -409,6 +409,7 @@ static const uint16_t *const sh_longhands[AU_PROP_COUNT - AU_PROP_LOGICAL_END] =
     SH(flex) = LH(AU_PROP_flex_grow, AU_PROP_flex_shrink, AU_PROP_flex_basis),
     SH(flex_flow) = LH(AU_PROP_flex_direction, AU_PROP_flex_wrap),
     SH(gap) = LH(AU_PROP_row_gap, AU_PROP_column_gap),
+    SH(contain_intrinsic_size) = LH(AU_PROP_contain_intrinsic_width, AU_PROP_contain_intrinsic_height),
     SH(place_content) = LH(AU_PROP_align_content, AU_PROP_justify_content),
     SH(place_items) = LH(AU_PROP_align_items, AU_PROP_justify_items),
     SH(place_self) = LH(AU_PROP_align_self, AU_PROP_justify_self),

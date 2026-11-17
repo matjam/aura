@@ -588,7 +588,8 @@ static bool finish_block(AuLayout *L, LBfc *S, int level, LBlock *k, bool joined
     if (contained) {
         if (mc_val(S->pending) != 0 || S->owner)
             resolve(S);
-        h = l_clamp_h(k, l_max(0, ratio_h), cb_h);
+        /* As if empty, or the height contain-intrinsic-height gives. */
+        h = l_clamp_h(k, l_max(k->b.style->rare->contain_intrinsic_h, ratio_h), cb_h);
         S->pending = (LMargin){0};
     } else if (auto_h) {
         h = l_clamp_h(k, l_max(content, ratio_h), cb_h);

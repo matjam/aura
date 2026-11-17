@@ -632,7 +632,7 @@ void l_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
     } else if (b->b.replaced == LR_TEXTAREA) {
         mn = mx = textarea_w(L, b);
     } else if (l_size_contained(b) & 1) {
-        mn = mx = 0; /* sized as if empty */
+        mn = mx = b->b.style->rare->contain_intrinsic_w; /* sized as if empty, or contain-intrinsic-width */
     } else {
         l_fc_ops(b)->intrinsic(L, b, &mn, &mx);
     }
@@ -803,7 +803,7 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         b->b.flags |= LF_TOO_DEEP;
         b->w = content_w + l_bp_h(b);
         b->h = (content_h >= 0 ? content_h : 0) + l_bp_v(b);
-        b->ov = (LArea){0, 0, b->w, b->h};
+        b->ov = b->sov = (LArea){0, 0, b->w, b->h};
         return;
     }
     if (b->b.inner == LI_FLOW && !lb_anon(&b->b) && l_is_tag(&b->b, AU_ATOM_fieldset))
@@ -854,7 +854,7 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
     } else {
         ch = l_fc_ops(b)->layout(L, b, &c);
         if (l_size_contained(b) & 2)
-            ch = 0; /* the content is laid out, and overflows */
+            ch = b->b.style->rare->contain_intrinsic_h; /* the content is laid out, and overflows */
     }
     L->depth--;
     if (b->b.replaced == LR_TEXTAREA && content_h < 0) {
@@ -1000,7 +1000,7 @@ static void union_children(LBlock *b, LArea *ink, LArea *scroll)
                 if (c->flags & LF_CLIPS)
                     add_rect(scroll, k->x, k->y, k->w + l_max(0, k->m[1]), k->h + l_max(0, k->m[2]));
                 else
-                    add_rect(scroll, k->x + k->ov.x, k->y + k->ov.y, k->ov.w, k->ov.h);
+                    add_rect(scroll, k->x + k->sov.x, k->y + k->sov.y, k->sov.w, k->sov.h);
             }
         } else if (c->kind == LK_INLINE && c->first) {
             c = c->first;
@@ -1042,6 +1042,7 @@ void l_finish_overflow(LBlock *b)
     }
     LArea kids = content;
     union_children(b, &kids, &content);
+    LArea sov = {0, 0, b->w, b->h};
     if (b->b.flags & LF_CLIPS) {
         /* Scrollable extent includes the end padding. */
         float right = content.x + content.w + b->p[1], bottom = content.y + content.h + b->p[2];
@@ -1058,8 +1059,10 @@ void l_finish_overflow(LBlock *b)
     } else {
         add_rect(&ink, kids.x, kids.y, kids.w, kids.h);
         add_rect(&ink, content.x, content.y, content.w, content.h);
+        add_rect(&sov, content.x, content.y, content.w, content.h);
     }
     b->ov = ink;
+    b->sov = sov;
 }
 
 /* ---- URLs ---- */
@@ -1888,8 +1891,9 @@ static void layout_root(AuLayout *L)
     l_layout_abspos_for(L, NULL, 0);
     relative_pass_late(L);
     l_finish_overflow(root);
-    /* Document size: the root's overflow plus positioned boxes outside it. */
-    float right = root->x + root->ov.x + root->ov.w, bottom = root->y + root->ov.y + root->ov.h;
+    /* Document size: the root's scrollable overflow plus positioned boxes
+     * outside it (shadows and outlines do not widen the page). */
+    float right = root->x + root->sov.x + root->sov.w, bottom = root->y + root->sov.y + root->sov.h;
     right = l_max(right, root->x + root->w + root->m[1]);
     bottom = l_max(bottom, root->y + root->h + root->m[2]);
     LBox *b = L->root;
@@ -1899,8 +1903,8 @@ static void layout_root(AuLayout *L)
             float x, y;
             l_box_origin(b, &x, &y);
             LBlock *k = (LBlock *)b;
-            right = l_max(right, x + k->ov.x + k->ov.w);
-            bottom = l_max(bottom, y + k->ov.y + k->ov.h);
+            right = l_max(right, x + k->sov.x + k->sov.w);
+            bottom = l_max(bottom, y + k->sov.y + k->sov.h);
         }
         if (descend)
             b = b->first;

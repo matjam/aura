@@ -32,6 +32,29 @@ pixel 100 100 ff0000
 ---
 doc w=800 h=600
 
+=== shadows and outlines do not grow the document
+<body style="margin:0">
+<div style="width:800px;height:600px;box-shadow:20px 20px 10px #000;outline:5px solid #00f"></div>
+---
+doc w=800 h=600
+
+=== a shadow inside a scroll container does not make it scroll (GitHub's file tree)
+<body style="margin:0">
+<div style="overflow:auto;width:100px;height:100px;padding:10px;box-sizing:border-box">
+<div style="height:80px;box-shadow:0 0 0 8px #000;outline:4px solid #00f"></div>
+</div>
+---
+scrollat 50 50 10 0 no
+scrollat 50 50 0 10 no
+
+=== contain-intrinsic-size sizes a size-contained box
+<body style="margin:0">
+<ul style="margin:0;padding:0;list-style:none"><li id=a style="contain:strict;contain-intrinsic-height:auto 32px"><div style="height:40px"></div></li><li id=b style="contain:strict;contain-intrinsic-size:auto 50px auto 20px;display:inline-block">x</li><li id=c style="contain:size">x</li></ul>
+---
+#a y=0 h=32
+#b y=32 w=50 h=20
+#c h=0
+
 === the document scrolls
 <body style="margin:0">
 <div style="height:500px"></div>

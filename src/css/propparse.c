@@ -209,8 +209,18 @@ AuCssValue *css_validate_longhand(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
         return norm_lp(v, f) ? v : NULL;
     }
     case T_PX: {
+        if ((pi->extra & LK_AUTO) && v->type == AU_CSSV_LIST) {
+            /* contain-intrinsic-*: auto <length> | auto none. Without a
+             * remembered size the length is the value. */
+            uint32_t n;
+            const AuCssValue *it = css_items(v, &n);
+            if (n != 2 || !css_is_kw(&it[0], AU_K_auto_))
+                return NULL;
+            v = (AuCssValue *)&it[1];
+        }
         if (v->type == AU_CSSV_KEYWORD)
-            return ((pi->extra & LK_NORMAL) && v->kw == AU_K_normal) ? v : NULL;
+            return (((pi->extra & LK_NORMAL) && v->kw == AU_K_normal) || ((pi->extra & LK_NONE) && v->kw == AU_K_none))
+                       ? v : NULL;
         return norm_lp(v, lp_flags(cx, prop) & ~(unsigned)P_PCT) ? v : NULL;
     }
     case T_COLOR:

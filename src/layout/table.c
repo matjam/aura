@@ -1399,7 +1399,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
                 col->x -= t->colx[0];
                 col->y = 0;
             }
-            col->ov = (LArea){0, 0, col->w, col->h};
+            col->ov = col->sov = (LArea){0, 0, col->w, col->h};
         }
         i = e;
     }
@@ -1413,7 +1413,7 @@ float l_table_layout(AuLayout *L, LBlock *b, const LConstraints *cons)
             grp->y = ry0;
             grp->w = t->colx[e - 1] + t->colw[e - 1] - t->colx[i];
             grp->h = ry1 - ry0;
-            grp->ov = (LArea){0, 0, grp->w, grp->h};
+            grp->ov = grp->sov = (LArea){0, 0, grp->w, grp->h};
             for (uint32_t k = i; k < e; k++)
                 if (g->cols[k].col && g->cols[k].group == grp)
                     g->cols[k].col->x = t->colx[k] - t->colx[i];
