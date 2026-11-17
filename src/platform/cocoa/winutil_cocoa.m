@@ -69,6 +69,8 @@ WEAK void au_cocoa_prefs_show(void) {}
 WEAK bool au_cocoa_prefs_is_open(void) { return false; }
 WEAK void au_cocoa_list_show(AuListKind kind) { (void)kind; }
 WEAK void au_cocoa_list_touch(AuListKind kind) { (void)kind; }
+WEAK bool au_cocoa_list_can_copy(NSWindow *w) { (void)w; return false; }
+WEAK bool au_cocoa_list_copy(NSWindow *w) { (void)w; return false; }
 WEAK void au_cocoa_devwin_show(AuDevWinKind kind) { (void)kind; }
 WEAK void au_cocoa_devwin_run_timing(void) {}
 WEAK void au_cocoa_devwin_run_benchmark(void) {}

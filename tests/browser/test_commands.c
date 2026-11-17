@@ -296,6 +296,12 @@ static void test_enabled(void)
     CHECK(au_command_enabled(&st, AU_CMD_FILE_CLOSE_WINDOW));
     CHECK(!au_command_enabled(&st, AU_CMD_EDIT_COPY));
     CHECK(au_command_for_key(&st, 'w', AU_SHORTCUT_PRIMARY) == AU_CMD_FILE_CLOSE_WINDOW);
+    /* A list with a selected row in front: Copy only. */
+    st.other_can_copy = true;
+    CHECK(au_command_enabled(&st, AU_CMD_EDIT_COPY));
+    CHECK(!au_command_enabled(&st, AU_CMD_EDIT_CUT) && !au_command_enabled(&st, AU_CMD_EDIT_PASTE) &&
+          !au_command_enabled(&st, AU_CMD_EDIT_SELECT_ALL));
+    st.other_can_copy = false;
     st.front = AU_FRONT_BROWSER;
     CHECK(au_command_for_key(&st, 'w', AU_SHORTCUT_PRIMARY) == AU_CMD_FILE_CLOSE_TAB);
     /* A text field has the focus: all of the Edit menu. */

@@ -52,6 +52,8 @@ void au_cocoa_command_state(AuCommandState *st)
          * (au_cocoa_edit), and Find and Find Again. */
         st->text_focus = true;
         st->tool_can_find_again = au_cocoa_devwin_can_find_again(key);
+    } else if (st->front == AU_FRONT_OTHER && !st->text_focus) {
+        st->other_can_copy = au_cocoa_list_can_copy(key);
     }
     st->mods = au_cocoa_current_mods();
 }
@@ -607,6 +609,11 @@ void au_cocoa_edit(AuEditAction a)
     }
     if (key && au_cocoa_devwin_owns(key)) {
         au_cocoa_devwin_edit(key, a);
+        return;
+    }
+    if (key && au_cocoa_list_can_copy(key)) {
+        if (a == AU_EDIT_COPY)
+            au_cocoa_list_copy(key);
         return;
     }
     if (!w || w->freed)

@@ -22,7 +22,8 @@
  *   3. Route the Edit and Find commands to a developer window when it is
  *      the key window (au_cocoa_devwin_owns): au_cocoa_devwin_edit,
  *      au_cocoa_devwin_find, au_cocoa_devwin_find_again and
- *      au_cocoa_devwin_can_find_again.
+ *      au_cocoa_devwin_can_find_again. Route Copy to a list window
+ *      with a selected row (au_cocoa_list_can_copy, au_cocoa_list_copy).
  *   4. After the cookie store or the history changed outside its window:
  *      au_cocoa_list_touch. The lists also poll their models every 250 ms
  *      (au_list_stale), so this only makes the change show sooner.
@@ -138,6 +139,10 @@ void au_cocoa_list_show(AuListKind kind);
 /* The model's data changed outside its window: refresh soon. Does nothing
  * when the window is closed. */
 void au_cocoa_list_touch(AuListKind kind);
+/* Whether w is a list window with a selected row, and Copy for it: the
+ * row's columns, separated by tabs, on the pasteboard. */
+bool au_cocoa_list_can_copy(NSWindow *w);
+bool au_cocoa_list_copy(NSWindow *w);
 
 /* ---- Developer windows (devwin_cocoa.m) ---- */
 void au_cocoa_devwin_show(AuDevWinKind kind);

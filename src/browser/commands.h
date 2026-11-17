@@ -194,6 +194,10 @@ typedef struct AuCommandState {
     bool text_focus;
     /* AU_FRONT_TOOL: the tool window has something to find again. */
     bool tool_can_find_again;
+    /* AU_FRONT_OTHER: the window (a list) has a selection Copy can take.
+     * Copy then reaches the port's edit hook; the other Edit commands
+     * stay off. */
+    bool other_can_copy;
     /* The modifier keys (AU_MOD_*, platform.h) held as the command was
      * chosen: Reload with Shift or Option reloads past the cache. */
     unsigned mods;

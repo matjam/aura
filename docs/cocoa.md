@@ -212,10 +212,20 @@ answers.
 | `about_cocoa.m` | About Aura | `credits.h`, `sysinfo.h` |
 | `dialogs_cocoa.m` | the shared dialogs (`au_cocoa_dlg_*`): ask for text, choose from a list, details, a one-button alert | |
 
-- Ask for text and choose from a list are app-modal `NSAlert`s; the
-  one-button alert is a sheet when it has a parent window. While any
-  runs, the windows skip their timer refresh, ignore input and refuse
-  to close.
+- Ask for text, choose from a list and the one-button alert are sheets
+  on the window they came from (an app-modal alert when it has none, or
+  it already shows a sheet). The models wait for the answer, so the
+  sheet runs in a modal session (`runModalForWindow:`) that its
+  completion handler stops. While one runs, the windows skip their
+  timer refresh, ignore input and refuse to close. Save Report's panel
+  is a sheet that writes the file when it is answered.
+- The developer windows take characters through `NSTextInputClient`, so
+  dead keys and input methods compose. The text being composed is not
+  drawn; it is typed when it is committed, and dropped when the window
+  stops being key.
+- Edit > Copy in a list window copies the selected row's columns,
+  separated by tabs. `AuCommandState.other_can_copy` turns Copy on for
+  it; the other Edit commands stay off. A day heading is not copied.
 - The developer windows use the light appearance, because the painted
   area is always light. A native control wider than its Mac OS 9
   rectangle keeps its width and moves the controls after it right.
@@ -283,10 +293,11 @@ push and uploads it as an artifact
   off the end instead of scrolling.
 - The input method's window sits at the pointer, not at the caret.
 - Not signed with a Developer ID or notarized.
-- The list and developer windows' dialogs are app-modal alerts, not
-  sheets on their window.
-- The developer windows read key characters without the text input
-  system, so dead keys do not compose in the filter or the Console line.
-- Edit > Copy does nothing in the list windows, as on GTK.
-- The list and developer windows have been driven from code, not yet
-  clicked through by hand.
+- The developer windows do not draw the text an input method is
+  composing.
+- The list and developer windows have been driven from code (a
+  temporary hook that opens them, selects, copies, answers a sheet and
+  sends Core Graphics key events), not yet clicked through by hand.
+  `osascript` cannot drive the app unless the terminal has
+  Accessibility access (System Settings > Privacy & Security >
+  Accessibility).

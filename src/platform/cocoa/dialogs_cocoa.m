@@ -64,9 +64,32 @@ static NSAlert *new_alert(const char *title, const char *prompt)
     return a;
 }
 
+/* Runs the alert and waits for its answer: as a sheet on parent when it
+ * can take one, otherwise as an application-modal alert. The model the
+ * dialog came from is waiting on the answer, so the sheet runs in a modal
+ * session too (runModalForWindow:), ended from its completion handler. */
+static NSModalResponse run_alert(NSAlert *a, NSWindow *parent)
+{
+    au_cocoa_dlg_begin();
+    NSModalResponse r;
+    if (parent && parent.visible && !parent.attachedSheet && !parent.miniaturized) {
+        __block NSModalResponse got = NSModalResponseCancel;
+        [a beginSheetModalForWindow:parent
+                  completionHandler:^(NSModalResponse resp) {
+                    got = resp;
+                    [NSApp stopModalWithCode:resp];
+                  }];
+        [NSApp runModalForWindow:a.window];
+        r = got;
+    } else {
+        r = [a runModal];
+    }
+    au_cocoa_dlg_end();
+    return r;
+}
+
 char *au_cocoa_dlg_ask_text(NSWindow *parent, const char *title, const char *prompt, const char *initial)
 {
-    (void)parent;
     NSAlert *a = new_alert(title, prompt);
     NSTextField *field = [NSTextField textFieldWithString:au_cocoa_dlg_str(initial)];
     field.frame = NSMakeRect(0, 0, 300, 22);
@@ -75,10 +98,7 @@ char *au_cocoa_dlg_ask_text(NSWindow *parent, const char *title, const char *pro
     a.accessoryView = field;
     [a layout];
     a.window.initialFirstResponder = field;
-    au_cocoa_dlg_begin();
-    NSModalResponse r = [a runModal];
-    au_cocoa_dlg_end();
-    if (r != NSAlertFirstButtonReturn)
+    if (run_alert(a, parent) != NSAlertFirstButtonReturn)
         return NULL;
     const char *t = field.stringValue.UTF8String;
     if (!t)
@@ -101,7 +121,6 @@ char *au_cocoa_dlg_ask_text(NSWindow *parent, const char *title, const char *pro
 int au_cocoa_dlg_choose(NSWindow *parent, const char *title, const char *prompt, const char *const *items, int n,
                         int current)
 {
-    (void)parent;
     if (n <= 0)
         return -1;
     NSAlert *a = new_alert(title, prompt);
@@ -122,10 +141,7 @@ int au_cocoa_dlg_choose(NSWindow *parent, const char *title, const char *prompt,
     NSSize fit = stack.fittingSize;
     stack.frame = NSMakeRect(0, 0, fit.width > 200 ? fit.width : 200, fit.height);
     a.accessoryView = stack;
-    au_cocoa_dlg_begin();
-    NSModalResponse r = [a runModal];
-    au_cocoa_dlg_end();
-    if (r != NSAlertFirstButtonReturn)
+    if (run_alert(a, parent) != NSAlertFirstButtonReturn)
         return -1;
     for (int i = 0; i < n; i++)
         if (radios[(NSUInteger)i].state == NSControlStateValueOn)

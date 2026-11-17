@@ -570,6 +570,39 @@ void au_cocoa_list_touch(AuListKind kind)
         au_list_touch(&g_lists[kind]->m);
 }
 
+/* The open list whose window is w and whose selected row Copy can take. */
+static AuListWin *copy_source(NSWindow *w)
+{
+    for (int i = 0; i < AU_LIST_KINDS; i++) {
+        AuListWin *lw = g_lists[i];
+        if (lw && !lw->closed && lw->win == w && lw->m.selected >= 0 && lw->m.selected < lw->m.n &&
+            lw->m.items[lw->m.selected].type != AU_LIST_ITEM_GROUP)
+            return lw;
+    }
+    return nil;
+}
+
+bool au_cocoa_list_can_copy(NSWindow *w) { return w && copy_source(w) != nil; }
+
+bool au_cocoa_list_copy(NSWindow *w)
+{
+    AuListWin *lw = w ? copy_source(w) : nil;
+    if (!lw)
+        return false;
+    const AuListItem *it = &lw->m.items[lw->m.selected];
+    const char *const *headings;
+    int ncols = au_list_columns(lw->m.kind, &headings);
+    if (ncols > AU_LIST_MAX_COLS)
+        ncols = AU_LIST_MAX_COLS;
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (int c = 0; c < ncols; c++)
+        if (it->cols[c] && it->cols[c][0])
+            [parts addObject:au_cocoa_dlg_str(it->cols[c])];
+    NSString *s = [parts componentsJoinedByString:@"\t"];
+    const char *u = s.UTF8String;
+    return u && au_cocoa_dlg_copy(u, strlen(u));
+}
+
 void au_cocoa_lists_shutdown(void)
 {
     for (int i = 0; i < AU_LIST_KINDS; i++)

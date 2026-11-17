@@ -211,7 +211,9 @@ bool au_command_enabled(const AuCommandState *st, AuCommand cmd)
     case AU_CMD_EDIT_CUT:
     case AU_CMD_EDIT_PASTE:
     case AU_CMD_EDIT_CLEAR: return st->text_focus;
-    case AU_CMD_EDIT_COPY: return st->text_focus || (browser_front && t && au_bw_has_selection(w));
+    case AU_CMD_EDIT_COPY:
+        return st->text_focus || (browser_front && t && au_bw_has_selection(w)) ||
+               (st->front == AU_FRONT_OTHER && st->other_can_copy);
     case AU_CMD_EDIT_SELECT_ALL: return st->text_focus || (browser_front && t);
     case AU_CMD_EDIT_FIND: return t || st->front == AU_FRONT_TOOL;
     case AU_CMD_EDIT_FIND_AGAIN:

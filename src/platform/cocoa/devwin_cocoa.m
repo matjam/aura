@@ -29,13 +29,18 @@
 
 /* ---- The painted view ---- */
 
-@interface AuDevView : NSView {
+/* Characters come through the text input system (NSTextInputClient), so
+ * dead keys and input methods compose; the composing text is not drawn,
+ * and the composed text is typed when it is committed. */
+@interface AuDevView : NSView <NSTextInputClient> {
   @public
     __weak AuDevWinCtl *ctl;
     NSMutableData *pixels;
     int pw, ph;
     double wheel_acc; /* rows of precise scrolling not yet applied */
     AuDevWinPane wheel_pane;
+    NSString *marked; /* the text being composed, or nil */
+    NSEvent *key_event; /* the key being interpreted */
 }
 @end
 
@@ -68,6 +73,8 @@
 - (void)mouseUp:(NSEvent *)e;
 - (void)wheel:(NSEvent *)e at:(NSPoint)p;
 - (bool)key:(NSEvent *)e;
+- (void)typeText:(NSString *)s;
+- (void)typeKey:(NSEvent *)e;
 @end
 
 static AuDevWinCtl *g_dev[AU_DEVWIN_KINDS];
@@ -170,6 +177,85 @@ static int scroll_w(void)
 {
     if (![ctl key:e])
         [super keyDown:e];
+}
+
+/* ---- NSTextInputClient ---- */
+
+- (void)insertText:(id)string replacementRange:(NSRange)range
+{
+    (void)range;
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [string string] : string;
+    marked = nil;
+    if (s.length)
+        [ctl typeText:s];
+}
+
+- (void)doCommandBySelector:(SEL)sel
+{
+    /* A key the input system did not take (an arrow after a dead key):
+     * the window's own key handling. */
+    (void)sel;
+    if (key_event)
+        [ctl typeKey:key_event];
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)sel replacementRange:(NSRange)range
+{
+    (void)sel;
+    (void)range;
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [string string] : string;
+    marked = s.length ? [s copy] : nil;
+}
+
+- (void)unmarkText
+{
+    NSString *s = marked;
+    marked = nil;
+    if (s.length)
+        [ctl typeText:s];
+}
+
+- (NSRange)selectedRange
+{
+    return NSMakeRange(0, 0);
+}
+
+- (NSRange)markedRange
+{
+    return marked ? NSMakeRange(0, marked.length) : NSMakeRange(NSNotFound, 0);
+}
+
+- (BOOL)hasMarkedText
+{
+    return marked != nil;
+}
+
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actual
+{
+    (void)range;
+    (void)actual;
+    return nil;
+}
+
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText
+{
+    return @[];
+}
+
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actual
+{
+    /* The input method's window goes at the bottom left of the view,
+     * where the filter and the Console line are. */
+    (void)range;
+    (void)actual;
+    NSRect r = NSMakeRect(8, self.bounds.size.height - 24, 1, 16);
+    return [self.window convertRectToScreen:[self convertRect:r toView:nil]];
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)p
+{
+    (void)p;
+    return NSNotFound;
 }
 
 @end
@@ -603,24 +689,59 @@ static void paint_model(AuDevWinCtl *dw, AuCanvas *c)
     /* Command keys reached the menu bar first; Control keys are not ours. */
     if (e.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl))
         return false;
-    int key = key_of(e);
-    const char *text = NULL;
-    if (key == AU_KEY_NONE) {
-        NSString *s = e.characters;
-        unichar ch = s.length ? [s characterAtIndex:0] : 0;
-        if (!ch || ch < 0x20 || ch == 0x7F || (ch >= 0xF700 && ch <= 0xF8FF))
-            return true; /* not a character, and the window has no use for it */
-        text = s.UTF8String;
-        if (!text)
-            return true;
-    }
-    AuDevWinResult r = au_devwin_key(&m, key, text);
-    if (r == AU_DEVWIN_NOTHING)
+    if (key_of(e) != AU_KEY_NONE && !view->marked) {
+        [self typeKey:e];
         return true;
+    }
+    /* Characters, and every key while text is being composed, go through
+     * the text input system: insertText and doCommandBySelector come back. */
+    view->key_event = e;
+    [view interpretKeyEvents:@[ e ]];
+    view->key_event = nil;
+    return true;
+}
+
+- (void)apply:(AuDevWinResult)r
+{
+    if (r == AU_DEVWIN_NOTHING)
+        return;
     if (r == AU_DEVWIN_FAILED)
         NSBeep();
     [self update];
-    return true;
+}
+
+/* A key without a character (an arrow, Return, Delete). */
+- (void)typeKey:(NSEvent *)e
+{
+    int key = key_of(e);
+    if (closed || key == AU_KEY_NONE)
+        return;
+    [self apply:au_devwin_key(&m, key, NULL)];
+}
+
+/* Typed or composed text, a character at a time as the model takes it. */
+- (void)typeText:(NSString *)s
+{
+    if (closed || au_cocoa_dlg_running())
+        return;
+    __block AuDevWinResult last = AU_DEVWIN_NOTHING;
+    [s enumerateSubstringsInRange:NSMakeRange(0, s.length)
+                          options:NSStringEnumerationByComposedCharacterSequences
+                       usingBlock:^(NSString *one, NSRange r1, NSRange r2, BOOL *stop) {
+                         (void)r1;
+                         (void)r2;
+                         (void)stop;
+                         unichar ch = one.length ? [one characterAtIndex:0] : 0;
+                         if (!ch || ch < 0x20 || ch == 0x7F || (ch >= 0xF700 && ch <= 0xF8FF))
+                             return; /* not a character */
+                         const char *text = one.UTF8String;
+                         if (!text || closed)
+                             return;
+                         AuDevWinResult r = au_devwin_key(&m, AU_KEY_NONE, text);
+                         if (r != AU_DEVWIN_NOTHING)
+                             last = r;
+                       }];
+    [self apply:last];
 }
 
 /* ---- The window ---- */
@@ -634,6 +755,11 @@ static void paint_model(AuDevWinCtl *dw, AuCanvas *c)
 - (void)windowDidResignKey:(NSNotification *)n
 {
     (void)n;
+    if (view->marked) {
+        /* Text half composed is dropped, as a text field drops it. */
+        [view.inputContext discardMarkedText];
+        view->marked = nil;
+    }
     view.needsDisplay = YES;
 }
 
@@ -760,15 +886,24 @@ static void h_save_text(void *ctx, const char *prompt, const char *name, const c
     p.message = au_cocoa_dlg_str(prompt ? prompt : "Save");
     if (name)
         p.nameFieldStringValue = au_cocoa_dlg_str(name);
-    au_cocoa_dlg_begin();
-    NSModalResponse r = [p runModal];
-    au_cocoa_dlg_end();
-    if (r != NSModalResponseOK || !p.URL)
-        return;
-    NSError *err = nil;
-    if (![data writeToURL:p.URL options:NSDataWritingAtomic error:&err])
-        au_cocoa_dlg_alert(dw->closed ? front_ns_window() : dw->win, "The report could not be saved.",
-                           err.localizedDescription.UTF8String);
+    /* The text is copied, so nothing waits on the panel: a sheet on the
+     * window, writing when it is answered. */
+    void (^done)(NSModalResponse) = ^(NSModalResponse r) {
+      if (r != NSModalResponseOK || !p.URL)
+          return;
+      NSError *err = nil;
+      if (![data writeToURL:p.URL options:NSDataWritingAtomic error:&err])
+          au_cocoa_dlg_alert(dw->closed ? front_ns_window() : dw->win, "The report could not be saved.",
+                             err.localizedDescription.UTF8String);
+    };
+    if (!dw->closed && dw->win.visible && !dw->win.attachedSheet) {
+        [p beginSheetModalForWindow:dw->win completionHandler:done];
+    } else {
+        au_cocoa_dlg_begin();
+        NSModalResponse r = [p runModal];
+        au_cocoa_dlg_end();
+        done(r);
+    }
 }
 
 static void h_open_url(void *ctx, const char *url)
