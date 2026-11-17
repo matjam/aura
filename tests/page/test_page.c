@@ -1318,6 +1318,22 @@ static void test_font_display(void)
     CHECK(rect_of(dv, "a").w == 80, "optional: late face used: %g", rect_of(dv, "a").w);
     au_docview_free(dv);
 
+    /* A family whose name CSS knows as a keyword (fast) is still a family. */
+    {
+        display_clock = 0;
+        dv = new_clocked_view(&f);
+        const char *kw = "<!DOCTYPE html><style>\n@font-face{font-family:Fast;src:url(f.woff2)}</style>"
+                         "<body style='margin:0;font:20px Fast'><span id=a>iiii</span>";
+        au_docview_load(dv, kw, strlen(kw), "http://example.com/");
+        au_docview_set_viewport(dv, 400, 100);
+        au_docview_update(dv);
+        CHECK(fake_find(&f, "http://example.com/f.woff2") != NULL, "face of family Fast not requested");
+        CHECK(ink_of(dv, "a") == 0, "family Fast: fallback shown in the block period");
+        deliver_bytes(&f, dv, "http://example.com/f.woff2", woff2, wlen, true);
+        CHECK(rect_of(dv, "a").w < 40, "family Fast not used: %g", rect_of(dv, "a").w);
+        au_docview_free(dv);
+    }
+
     /* An invalid value is auto. */
     dv = display_page(&f, "sometimes", "W");
     advance(dv, AU_WEBFONT_SHORT_BLOCK_MS);

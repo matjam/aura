@@ -350,29 +350,41 @@ static const AuCssValue *items(const AuCssValue *v, uint32_t *n)
     return v;
 }
 
+/* The text of a string or identifier; an identifier CSS knows as a
+ * keyword (a family named Fast or Slow) is parsed as one. */
+static const char *word(const AuCssValue *v, bool strings)
+{
+    if (v->type == AU_CSSV_IDENT || (strings && v->type == AU_CSSV_STRING))
+        return v->u.str;
+    if (v->type == AU_CSSV_KEYWORD)
+        return au_css_keyword_name((AuCssKeyword)v->kw);
+    return NULL;
+}
+
 /* A family or local() name: a string, or identifiers joined by spaces. */
 static bool value_name(const AuCssValue *v, char *out, size_t cap)
 {
     out[0] = 0;
-    if (v->type == AU_CSSV_STRING || v->type == AU_CSSV_IDENT) {
-        if (!v->u.str || strlen(v->u.str) >= cap)
+    const char *one = word(v, true);
+    if (one) {
+        if (strlen(one) >= cap)
             return false;
-        strcpy(out, v->u.str);
+        strcpy(out, one);
         return out[0] != 0;
     }
     if (v->type != AU_CSSV_LIST)
         return false;
     size_t len = 0;
     for (uint32_t i = 0; i < v->n; i++) {
-        const AuCssValue *it = &v->u.items[i];
-        if (it->type != AU_CSSV_IDENT || !it->u.str)
+        const char *w = word(&v->u.items[i], false);
+        if (!w)
             return false;
-        size_t k = strlen(it->u.str);
+        size_t k = strlen(w);
         if (len + k + 2 > cap)
             return false;
         if (len)
             out[len++] = ' ';
-        memcpy(out + len, it->u.str, k);
+        memcpy(out + len, w, k);
         len += k;
         out[len] = 0;
     }
@@ -704,9 +716,9 @@ static size_t candidates(AuWebFonts *w, const AuStyleInh *in, uint16_t *cand)
     const AuCssValue *fl = items(&in->font_family->value, &nf);
     bool italic = in->font_style != AU_FONT_STYLE_NORMAL;
     for (uint32_t i = 0; i < nf && i < 16; i++) {
-        if ((fl[i].type != AU_CSSV_STRING && fl[i].type != AU_CSSV_IDENT) || !fl[i].u.str)
+        const char *name = word(&fl[i], true);
+        if (!name)
             continue;
-        const char *name = fl[i].u.str;
         size_t len = strlen(name);
         int best = -1, best_d = 0;
         for (size_t k = 0; k < w->n; k++) {
