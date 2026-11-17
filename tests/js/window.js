@@ -22,7 +22,10 @@ test('history.pushState changes the URL and state', () => {
 
 test('navigator and screen expose fixed values only', () => {
     assert.ok(navigator.userAgent.includes('Aura'));
-    assert.equal(navigator.platform, 'MacPPC');
+    /* the platform the build runs on (core/uaplatform.h), as the user agent names it */
+    const plat = { MacPPC: 'PPC Mac OS 9', MacIntel: 'Intel Mac OS X 10_15_7', 'Linux x86_64': 'Linux x86_64',
+        'Linux aarch64': 'Linux aarch64' }[navigator.platform];
+    assert.ok(plat && navigator.userAgent.includes(plat), navigator.platform + ' / ' + navigator.userAgent);
     assert.equal(navigator.hardwareConcurrency, 1);
     assert.equal(navigator.plugins.length, 0);
     assert.equal(navigator.languages[0], navigator.language);

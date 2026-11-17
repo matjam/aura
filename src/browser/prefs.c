@@ -405,7 +405,8 @@ bool au_prefs_parse(AuPrefs *p, const char *data, size_t len)
     au_buf_free(&val);
     /* A file saved by a version that stored its default string. */
     if (p->user_agent && (!strcmp(p->user_agent, AU_DEFAULT_USER_AGENT) ||
-                          !strncmp(p->user_agent, AU_OLD_USER_AGENT_PREFIX, strlen(AU_OLD_USER_AGENT_PREFIX))))
+                          !strncmp(p->user_agent, AU_OLD_USER_AGENT_PREFIX, strlen(AU_OLD_USER_AGENT_PREFIX)) ||
+                          !strncmp(p->user_agent, AU_MACOS9_USER_AGENT_PREFIX, strlen(AU_MACOS9_USER_AGENT_PREFIX))))
         au_prefs_set_str(&p->user_agent, "");
     return ok;
 }

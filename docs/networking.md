@@ -88,6 +88,36 @@ back at start. In the application this is `src/browser/app_net.c`
 `Cache` folder ([`browser-chrome.md`](browser-chrome.md), "Files Aura
 keeps").
 
+## The user agent
+
+Aura sends a Chrome-shaped user agent with its own token at the end
+(`AU_DEFAULT_USER_AGENT` in `src/browser/credits.h`). The platform part
+is the platform the build runs on (`src/core/uaplatform.h`, chosen by
+CMake as `AU_UA_KIND`), and `navigator.platform` and `navigator.oscpu`
+follow it:
+
+| Build | Platform part | `navigator.platform` |
+|---|---|---|
+| Mac OS 9 | `Macintosh; PPC Mac OS 9` | `MacPPC` |
+| macOS (cocoa, and host on a Mac) | `Macintosh; Intel Mac OS X 10_15_7` | `MacIntel` |
+| Linux (gtk, and host on Linux) | `X11; Linux x86_64` or `X11; Linux aarch64` | `Linux x86_64`, `Linux aarch64` |
+
+- macOS on any processor says `Intel Mac OS X 10_15_7`, the version
+  Chrome and Safari froze.
+- **Never send another platform's part.** Slashdot's Cloudflare rule
+  (2026-11-17) answers every request whose user agent says `PPC Mac OS
+  9` with a managed challenge, even one that carries a `cf_clearance`
+  cookie from a solved challenge, so the page reloaded into the
+  challenge after every tick. The same string with the macOS or Linux
+  part, `Aura/` token included, loads directly. Mac OS 9 still gets the
+  challenge there.
+- `network.user_agent` (Preferences > Network) replaces the string;
+  empty is the default. A saved string equal to the default, the old
+  `Aura/` form, or the Mac OS 9 Chrome form earlier versions sent from
+  every platform is read as empty. `au_net_apply_prefs` sets the header
+  from `au_prefs_user_agent`, so clearing a custom string goes back to
+  the default.
+
 ## Cookies and `document.cookie`
 
 Script reads and sets cookies through `au_net_document_cookie_get` and

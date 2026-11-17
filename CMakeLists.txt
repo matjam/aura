@@ -73,6 +73,18 @@ if(CMAKE_C_FLAGS MATCHES "-fsanitize")
     target_compile_options(aura_engine PRIVATE -include ${CMAKE_SOURCE_DIR}/src/core/nullcheck.h)
 endif()
 target_include_directories(aura_engine PUBLIC src)
+# The platform the user agent names (src/core/uaplatform.h): the one being
+# built, and for the host build the system it runs on.
+if(AURA_PLATFORM STREQUAL "macos9")
+    set(AURA_UA_KIND 0)
+elseif(AURA_PLATFORM STREQUAL "cocoa" OR APPLE)
+    set(AURA_UA_KIND 1)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(AURA_UA_KIND 3)
+else()
+    set(AURA_UA_KIND 2)
+endif()
+target_compile_definitions(aura_engine PUBLIC AU_UA_KIND=${AURA_UA_KIND})
 # Zones (src/core/core.h, docs/memory.md "Zones"): blocks allocated in
 # these files outlive pages and go to the long-lived zone; the others go
 # to the page zone. src/core, src/codec and src/url allocate for their

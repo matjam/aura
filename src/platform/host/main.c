@@ -1345,6 +1345,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         app = au_app_new(b, &port);
         if (au_app_load(app))
             printf("profile: the last run did not quit\n");
+        if (ses.net)
+            au_net_apply_prefs(ses.net, &b->prefs); /* the profile's, over the defaults applied above */
     }
     b->prefs.tab_position = o->pos;
     if (au_host_dark())

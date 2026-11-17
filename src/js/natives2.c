@@ -5,6 +5,7 @@
 #include "../net/digest.h"
 #include "../net/storage_map.h"
 #include "../css/css.h"
+#include "../core/uaplatform.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1160,7 +1161,9 @@ static JSValue n_settings(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     const AuJsSettings *s = &js->settings;
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "userAgent",
-                      JS_NewString(ctx, s->user_agent ? s->user_agent : "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/1"));
+                      JS_NewString(ctx, s->user_agent ? s->user_agent : "Mozilla/5.0 (" AU_UA_PLATFORM ") Aura/1"));
+    JS_SetPropertyStr(ctx, o, "platform", JS_NewString(ctx, AU_NAV_PLATFORM));
+    JS_SetPropertyStr(ctx, o, "oscpu", JS_NewString(ctx, AU_NAV_OSCPU));
     JS_SetPropertyStr(ctx, o, "language", JS_NewString(ctx, s->language ? s->language : "en-US"));
     JS_SetPropertyStr(ctx, o, "dnt", JS_NewBool(ctx, s->do_not_track));
     JS_SetPropertyStr(ctx, o, "gpc", JS_NewBool(ctx, s->global_privacy_control));

@@ -7,8 +7,8 @@
 void au_net_apply_prefs(AuNet *net, const AuPrefs *p)
 {
     AuNetConfig *c = au_net_config(net);
-    if (p->user_agent && p->user_agent[0])
-        au_net_set_config_str(&c->user_agent, p->user_agent);
+    /* the default too, so that clearing a custom string goes back to it */
+    au_net_set_config_str(&c->user_agent, au_prefs_user_agent(p));
     c->send_dnt = p->send_dnt;
     c->send_gpc = p->send_gpc;
     c->https_first = p->https_first;
