@@ -535,6 +535,15 @@ next block's margin apply.
   `au_layout_image_source` gives the document view the same choice.
 - A choice that depends on the viewport makes a viewport change build
   the box tree again.
+- A replaced flex item's automatic minimum width is its min-content
+  width, not its specified width: the width transferred through its
+  ratio from a definite height, or 0 when it has no natural width
+  (`min_m` in `flex.c`). An inline SVG of `width:32px; height:20px`
+  with a square viewBox shrinks to 20 in a 20px flex box, as AddToAny's
+  share icons need. A replaced box with no ratio record (a canvas, an
+  inline SVG) takes its height from the ratio of its attributes or
+  viewBox when it is laid out at a flexed width. The cases are in
+  `tests/layout/cases/flex.txt`.
 
 ### Text offsets for script
 

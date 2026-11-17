@@ -562,6 +562,7 @@ const char *l_attr(const LBox *b, AuAtom name);
 bool l_is_tag(const LBox *b, AuAtom tag);
 const char *l_val_name(const AuCssValue *v, size_t *len);
 const AuCssValue *l_items(const AuCssValue *v, uint32_t *n);
+bool l_replaced_ratio(AuLayout *L, LBlock *b, float *ratio);
 
 /* Formatting contexts (layout.c dispatches). */
 typedef struct LConstraints {

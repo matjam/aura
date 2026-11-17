@@ -158,6 +158,20 @@ bool l_aspect_ratio(const LBlock *b, float *ratio)
     return false;
 }
 
+/* The aspect ratio of replaced box b: aspect-ratio, else its natural
+ * ratio (an image's, or an inline SVG's from its size or viewBox). */
+bool l_replaced_ratio(AuLayout *L, LBlock *b, float *ratio)
+{
+    if (b->b.inner != LI_REPLACED || lb_anon(&b->b))
+        return false;
+    float w, h, r;
+    replaced_intrinsic_size(L, b, &w, &h, &r);
+    if (!l_aspect_ratio(b, &r) && !(r > 0))
+        return false;
+    *ratio = r;
+    return r > 0;
+}
+
 /* The content height a non-replaced box's aspect-ratio gives at content
  * width content_w, or -1. */
 float l_ratio_height(const LBlock *b, float content_w)
@@ -824,9 +838,9 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);
         float r = 0;
         bool has_r = l_aspect_ratio(b, &r) && r > 0;
-        if (!has_r && b->b.replaced == LR_CANVAS) {
-            /* A canvas has no LReplaced record: its ratio is that of its
-             * width and height attributes. */
+        if (!has_r) {
+            /* A canvas or an inline SVG has no LReplaced ratio: it comes
+             * from the width and height attributes or the viewBox. */
             float iw, ih;
             replaced_intrinsic_size(L, b, &iw, &ih, &r);
             has_r = r > 0;
