@@ -397,7 +397,7 @@ static int usage(void)
             "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
-            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS shot:FILE field\n"
+            "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS pause:MS shot:FILE field\n"
             "                        go:URL newtab:URL back forward closetab mem (bytes live per source line, in a\n"
             "                        build with -DAURA_MEM_TRACK=ON) cache (the HTTP cache's counts with --net,\n"
             "                        the documents kept for Back and Forward, DNS lookups)\n"
@@ -847,7 +847,8 @@ static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
 /* One --do action: click:X,Y (dclick, tclick for double and triple),
  * type:TEXT, key:[cmd-][shift-][opt-][ctrl-]NAME (a key name or one
  * character), edit:undo|cut|copy|paste:TEXT|clear|selectall, wait:MS
- * (at least MS, then until loads finish), shot:FILE.png, field (the
+ * (at least MS, then until loads finish), pause:MS (exactly MS, loads
+ * running), shot:FILE.png, field (the
  * address field takes the keyboard). */
 static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, ChromeOpts *o, const char *a)
 {
@@ -953,6 +954,9 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         au_buf_free(&out);
     } else if (!strncmp(a, "wait:", 5)) {
         chrome_settle(b, w, ses, o->net, atof(a + 5), o->net ? 60000 : 10000);
+    } else if (!strncmp(a, "pause:", 6)) {
+        double ms = atof(a + 6);
+        chrome_settle(b, w, ses, o->net, ms, ms);
     } else if (!strncmp(a, "shot:", 5)) {
         chrome_settle(b, w, ses, o->net, 0, 200);
         chrome_shot(w, o->w, o->h, a + 5);

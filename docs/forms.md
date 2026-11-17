@@ -21,7 +21,8 @@ loads:
 | `key:[cmd-][shift-][opt-]NAME` | presses a key |
 | `keys:TEXT` | types TEXT and prints the cost of each key |
 | `edit:copy\|cut\|paste:TEXT` | runs an Edit command |
-| `wait:MS` | waits |
+| `wait:MS` | waits at least MS, then until loads finish |
+| `pause:MS` | waits exactly MS while loads run (with `--loading`, to see a page part loaded, such as text in a web font's block period, [`fonts.md`](fonts.md#block-periods-and-font-display)) |
 | `shot:FILE.png` | writes a screenshot |
 | `console` | prints the console |
 
