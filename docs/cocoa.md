@@ -104,12 +104,31 @@ AppKit's run loop drives everything; the engine has no threads.
 
 ## Windows and tabs
 
-A browser window is an `NSWindow` with a unified toolbar (Back,
-Forward, Reload or Stop, the security icon, the address field and New
-Tab; the title is hidden, as in Safari) and a body that `AuBodyView`
-lays out by hand: the tab strip, the find bar, the page with its scroll
-bars, and the status line. The model's window is made with
+A browser window is an `NSWindow` with a unified toolbar and a body
+that `AuBodyView` lays out by hand: the tab strip, the find bar, the
+page with its scroll bars, and the status bubble. The title is hidden,
+as in Safari. The model's window is made with
 `au_browser_window_new_native`, so its surface holds only the page.
+
+- The toolbar holds Back and Forward (plain `NSToolbarItem`s marked
+  navigational, so AppKit draws them as one group at the leading edge),
+  the address field between two flexible spaces, and New Tab. Their
+  enabled state comes from `sync_nav`; the items do not validate
+  themselves.
+- The address field (`AuAddressField`) holds the security icon at its
+  left, Reload or Stop at its right, and a 2-point accent line along its
+  bottom while the page loads (`au_bw_progress`, shown at 5% at least
+  from the moment a load starts). `AuAddressCell` keeps the text and
+  the field editor clear of the two.
+- The status text (`au_bw_status_text`: the link under the pointer, or
+  what a load is doing) shows in a bubble over the page's bottom left
+  corner, at most two thirds of the page wide, and only while there is
+  some. The window has no status bar.
+- The tab strip lies on an `NSVisualEffectView` of the toolbar's
+  material (the sidebar material for tabs on the left), and the window
+  draws no separator under the toolbar, so the toolbar and the strip
+  read as one bar; the strip draws the line below itself. The active tab
+  has a neutral highlight, and inactive tabs are divided by short lines.
 
 - The tab strip (`AuTabStrip`, `AuTabItem` in `window.m`) shows each
   tab's site icon or a spinner, its title and a close button. A drag
@@ -262,7 +281,8 @@ kill -USR1 %1    # writes the front browser window to /tmp/snap.png
   that PNG: the views draw themselves into a bitmap and the page's
   pixels are drawn over the page view's place. Toolbar controls draw
   only as their outlines, so the snapshot also prints each toolbar
-  item's frame and whether it is in the window or in the overflow menu.
+  item's frame and whether it is in the window or in the overflow menu,
+  and for a plain button item whether it is enabled.
 - Send SIGUSR1 to the Aura process itself, not to `timeout` wrapping
   it: `timeout` passes the signal on, and the snapshot is written twice.
 - For the engine's rendering, use `aura-host` and

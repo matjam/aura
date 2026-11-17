@@ -19,7 +19,7 @@
 #define TAB_MAX_WIDTH 230
 #define TAB_MIN_WIDTH 70
 #define FIND_HEIGHT 32
-#define STATUS_HEIGHT 20
+#define STATUS_HEIGHT 22
 
 static NSMutableArray<AuCocoaWin *> *wins;
 
@@ -83,6 +83,95 @@ static NSImage *icon_image(const AuSurface *s)
     return ni;
 }
 
+/* ---- Small views ---- */
+
+/* A rectangle of one system colour, optionally rounded and outlined;
+ * the colours are resolved again when the appearance changes. */
+@interface AuFillView : NSView
+@property(strong) NSColor *fill, *stroke;
+@property CGFloat radius;
+@end
+
+@implementation AuFillView
+
+- (instancetype)initWithFill:(NSColor *)fill
+{
+    self = [super initWithFrame:NSZeroRect];
+    self.fill = fill;
+    self.wantsLayer = YES;
+    return self;
+}
+
+- (BOOL)wantsUpdateLayer
+{
+    return YES;
+}
+
+- (void)updateLayer
+{
+    self.layer.backgroundColor = self.fill.CGColor;
+    self.layer.cornerRadius = self.radius;
+    self.layer.borderColor = self.stroke.CGColor;
+    self.layer.borderWidth = self.stroke ? 1 : 0;
+}
+
+@end
+
+/* ---- The address field ----
+ * A rounded text field with the security icon at its left, Reload or Stop
+ * at its right, and a line along its bottom that grows as the page loads,
+ * as in Safari. The cell keeps the text clear of the two. */
+
+#define FIELD_LEAD 26
+#define FIELD_TRAIL 26
+
+@interface AuAddressCell : NSTextFieldCell
+@end
+
+@implementation AuAddressCell
+
+- (NSRect)drawingRectForBounds:(NSRect)r
+{
+    r.origin.x += FIELD_LEAD;
+    r.size.width -= FIELD_LEAD + FIELD_TRAIL;
+    if (r.size.width < 0)
+        r.size.width = 0;
+    return [super drawingRectForBounds:r];
+}
+
+@end
+
+@interface AuAddressField : NSTextField {
+  @public
+    NSImageView *icon;
+    NSButton *reload;
+    AuFillView *bar;
+    float progress; /* 0..1; 0 hides the line */
+}
+@end
+
+@implementation AuAddressField
+
++ (Class)cellClass
+{
+    return [AuAddressCell class];
+}
+
+- (void)layout
+{
+    [super layout];
+    NSRect b = self.bounds;
+    CGFloat mid = floor(NSMidY(b));
+    icon.frame = NSMakeRect(8, mid - 8, 16, 16);
+    reload.frame = NSMakeRect(NSMaxX(b) - 24, mid - 10, 20, 20);
+    CGFloat inner = b.size.width - 16;
+    bar.hidden = progress <= 0;
+    /* NSTextField is not flipped: y 0 is the bottom edge */
+    bar.frame = NSMakeRect(8, self.isFlipped ? NSMaxY(b) - 3 : 1, inner * (progress > 1 ? 1 : progress), 2);
+}
+
+@end
+
 /* ---- The tab strip ----
  * One AuTabItem per tab of the model: its icon or a spinner while it
  * loads, its title, and a close button that shows on hover and on the
@@ -97,6 +186,7 @@ static NSImage *icon_image(const AuSurface *s)
     __unsafe_unretained AuTabStrip *strip;
     int index;
     bool active, hover;
+    bool divider; /* a line at its trailing edge: it and the next are both inactive */
     NSImageView *icon;
     NSProgressIndicator *spinner;
     NSTextField *label;
@@ -108,6 +198,8 @@ static NSImage *icon_image(const AuSurface *s)
 @interface AuTabStrip : NSView {
   @public
     __unsafe_unretained AuCocoaWin *win;
+    NSVisualEffectView *material; /* the toolbar's material, so the two read as one bar */
+    AuFillView *edge;             /* the separator under the row, or beside the column */
     NSMutableArray<AuTabItem *> *items;
     bool vertical;
     int drag_from;
@@ -194,12 +286,12 @@ static NSImage *icon_image(const AuSurface *s)
     (void)dirty;
     NSRect r = NSInsetRect(self.bounds, 2, 2);
     NSBezierPath *p = [NSBezierPath bezierPathWithRoundedRect:r xRadius:6 yRadius:6];
-    if (active) {
-        [[NSColor.controlAccentColor colorWithAlphaComponent:0.22] setFill];
+    if (active || hover) {
+        [[NSColor.labelColor colorWithAlphaComponent:active ? 0.11 : 0.05] setFill];
         [p fill];
-    } else if (hover) {
-        [[NSColor.labelColor colorWithAlphaComponent:0.07] setFill];
-        [p fill];
+    } else if (divider && !strip->vertical) {
+        [[NSColor.separatorColor colorWithAlphaComponent:0.8] setFill];
+        NSRectFill(NSMakeRect(NSMaxX(self.bounds) - 1, NSMidY(self.bounds) - 7, 1, 14));
     }
 }
 
@@ -334,6 +426,13 @@ static NSImage *icon_image(const AuSurface *s)
 {
     self = [super initWithFrame:r];
     items = [NSMutableArray array];
+    material = [[NSVisualEffectView alloc] initWithFrame:self.bounds];
+    material.material = NSVisualEffectMaterialTitlebar;
+    material.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+    material.state = NSVisualEffectStateFollowsWindowActiveState;
+    [self addSubview:material];
+    edge = [[AuFillView alloc] initWithFill:NSColor.separatorColor];
+    [self addSubview:edge];
     return self;
 }
 
@@ -370,21 +469,13 @@ static NSImage *icon_image(const AuSurface *s)
 - (void)layout
 {
     [super layout];
+    NSRect b = self.bounds;
+    material.frame = b;
+    material.material = vertical ? NSVisualEffectMaterialSidebar : NSVisualEffectMaterialTitlebar;
+    edge.frame = vertical ? NSMakeRect(NSMaxX(b) - 1, 0, 1, b.size.height) : NSMakeRect(0, NSMaxY(b) - 1, b.size.width, 1);
     int n = (int)items.count;
     for (int i = 0; i < n; i++)
         items[(NSUInteger)i].frame = [self frameOf:i count:n];
-}
-
-- (void)drawRect:(NSRect)dirty
-{
-    (void)dirty;
-    [NSColor.windowBackgroundColor setFill];
-    NSRectFill(self.bounds);
-    [NSColor.separatorColor setFill];
-    if (vertical)
-        NSRectFill(NSMakeRect(NSMaxX(self.bounds) - 1, 0, 1, self.bounds.size.height));
-    else
-        NSRectFill(NSMakeRect(0, NSMaxY(self.bounds) - 1, self.bounds.size.width, 1));
 }
 
 - (void)syncFrom:(AuCocoaWin *)w
@@ -404,13 +495,16 @@ static NSImage *icon_image(const AuSurface *s)
         AuTabItem *it = items[(NSUInteger)i];
         it->index = i;
         it->active = i == active;
+        it->divider = i != active && i + 1 != active && i + 1 < n;
         it->close.hidden = !it->active && !it->hover;
         AuChromeTab t;
         if (!au_bw_tab_info(w->bw, i, &t))
             continue;
         const char *title = t.title && *t.title ? t.title : t.url && *t.url ? t.url : "Untitled";
         it->label.stringValue = au_cocoa_str(title);
-        it->label.textColor = t.unloaded ? NSColor.secondaryLabelColor : NSColor.labelColor;
+        it->label.textColor = t.unloaded ? NSColor.tertiaryLabelColor
+                              : it->active ? NSColor.labelColor
+                                           : NSColor.secondaryLabelColor;
         it.toolTip = au_cocoa_str(t.url && *t.url ? t.url : title);
         NSImage *ic = icon_image(t.icon);
         it->icon.image = ic ? ic : symbol(@"globe", @"Page");
@@ -429,7 +523,8 @@ static NSImage *icon_image(const AuSurface *s)
 
 /* ---- The body ----
  * Lays out the tab strip (a row on top, or a column on the left), the find
- * bar, the page and its scroll bars, and the status line, by hand. */
+ * bar, the page and its scroll bars, and the status bubble over the
+ * page, by hand. */
 
 @interface AuBodyView : NSView {
   @public
@@ -456,7 +551,7 @@ static NSImage *icon_image(const AuSurface *s)
     const AuPrefs *p = au_cocoa.browser ? &au_cocoa.browser->prefs : NULL;
     bool left = p && p->tab_position == AU_TABS_LEFT;
     w->strip->vertical = left;
-    CGFloat bottom = H - STATUS_HEIGHT;
+    CGFloat bottom = H;
     if (left) {
         CGFloat cw = p->tab_column_width >= 100 ? p->tab_column_width : 200;
         if (cw > W / 2)
@@ -482,8 +577,14 @@ static NSImage *icon_image(const AuSurface *s)
     w->page.frame = NSMakeRect(x0, y0, pwid, ph);
     w->vscroll.frame = NSMakeRect(x0 + pwid, y0, sw, ph);
     w->hscroll.frame = NSMakeRect(x0, y0 + ph, pwid, sw);
-    w->status.frame = NSMakeRect(8, bottom + 2, W * 0.75 - 8, STATUS_HEIGHT - 4);
-    w->progress.frame = NSMakeRect(W * 0.75, bottom + 2, W * 0.25 - 8, STATUS_HEIGHT - 4);
+    /* The status bubble: over the page's bottom left corner, as wide as
+     * its text and at most two thirds of the page. */
+    NSSize ts = w->status.intrinsicContentSize;
+    CGFloat bw = ceil(ts.width) + 16, maxw = floor(pwid * 2 / 3);
+    if (bw > maxw)
+        bw = maxw;
+    w->statusBubble.frame = NSMakeRect(x0 - 1, y0 + ph - STATUS_HEIGHT + 1, bw, STATUS_HEIGHT);
+    w->status.frame = NSMakeRect(8, 3, bw - 16, STATUS_HEIGHT - 6);
 }
 
 - (void)drawRect:(NSRect)dirty
@@ -568,6 +669,31 @@ static void sync_nav(AuCocoaWin *w)
     bool loading = au_bw_loading(w->bw);
     w->reload.image = loading ? symbol(@"xmark", @"Stop") : symbol(@"arrow.clockwise", @"Reload");
     w->reload.toolTip = loading ? @"Stop" : @"Reload";
+}
+
+static void sync_progress(AuCocoaWin *w)
+{
+    AuAddressField *f = (AuAddressField *)w->address;
+    bool loading = au_bw_loading(w->bw);
+    float p = loading ? au_bw_progress(w->bw) : 0;
+    if (loading && p < 0.05f)
+        p = 0.05f; /* a load that has started shows at once */
+    if (p != f->progress) {
+        f->progress = p;
+        f.needsLayout = YES;
+    }
+}
+
+static void sync_status(AuCocoaWin *w)
+{
+    char s[512];
+    au_bw_status_text(w->bw, s, sizeof s);
+    NSString *str = au_cocoa_str(s);
+    w->statusBubble.hidden = !str.length;
+    if (![str isEqualToString:w->status.stringValue]) {
+        w->status.stringValue = str;
+        w->body.needsLayout = YES;
+    }
 }
 
 /* ---- The address field ----
@@ -701,24 +827,32 @@ static void find_hide(AuCocoaWin *w)
 
 static NSToolbarItemIdentifier const ID_BACK = @"aura.back";
 static NSToolbarItemIdentifier const ID_FORWARD = @"aura.forward";
-static NSToolbarItemIdentifier const ID_RELOAD = @"aura.reload";
-static NSToolbarItemIdentifier const ID_SECURITY = @"aura.security";
 static NSToolbarItemIdentifier const ID_ADDRESS = @"aura.address";
 static NSToolbarItemIdentifier const ID_NEWTAB = @"aura.newtab";
 
-- (NSButton *)toolButton:(NSString *)sym tip:(NSString *)tip action:(SEL)action
+/* A toolbar button as AppKit draws them: borderless until the pointer is
+ * over it. Its enabled state is set by sync_nav, not validated. */
+- (NSToolbarItem *)toolItem:(NSToolbarItemIdentifier)ident
+                     symbol:(NSString *)sym
+                      label:(NSString *)label
+                     action:(SEL)action
 {
-    NSButton *b = [NSButton buttonWithImage:symbol(sym, tip) target:self action:action];
-    b.bezelStyle = NSBezelStyleTexturedRounded;
-    b.toolTip = tip;
-    b.refusesFirstResponder = YES;
-    return b;
+    NSToolbarItem *it = [[NSToolbarItem alloc] initWithItemIdentifier:ident];
+    it.image = symbol(sym, label);
+    it.label = label;
+    it.toolTip = label;
+    it.target = self;
+    it.action = action;
+    it.bordered = YES;
+    it.autovalidates = NO;
+    return it;
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)tb
 {
     (void)tb;
-    return @[ ID_BACK, ID_FORWARD, ID_RELOAD, ID_SECURITY, ID_ADDRESS, ID_NEWTAB ];
+    return @[ ID_BACK, ID_FORWARD, NSToolbarFlexibleSpaceItemIdentifier, ID_ADDRESS,
+              NSToolbarFlexibleSpaceItemIdentifier, ID_NEWTAB ];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)tb
@@ -731,23 +865,20 @@ static NSToolbarItemIdentifier const ID_NEWTAB = @"aura.newtab";
 {
     (void)tb;
     (void)flag;
-    NSToolbarItem *it = [[NSToolbarItem alloc] initWithItemIdentifier:ident];
     if ([ident isEqualToString:ID_BACK]) {
-        it.view = back;
-        it.label = @"Back";
-    } else if ([ident isEqualToString:ID_FORWARD]) {
-        it.view = forward;
-        it.label = @"Forward";
-    } else if ([ident isEqualToString:ID_SECURITY]) {
-        it.view = security;
-        it.label = @"Security";
-    } else if ([ident isEqualToString:ID_RELOAD]) {
-        it.view = reload;
-        it.label = @"Reload";
-    } else if ([ident isEqualToString:ID_NEWTAB]) {
-        it.view = addTab;
-        it.label = @"New Tab";
-    } else if ([ident isEqualToString:ID_ADDRESS]) {
+        back = [self toolItem:ident symbol:@"chevron.left" label:@"Back" action:@selector(goBack:)];
+        back.navigational = YES;
+        return back;
+    }
+    if ([ident isEqualToString:ID_FORWARD]) {
+        forward = [self toolItem:ident symbol:@"chevron.right" label:@"Forward" action:@selector(goForward:)];
+        forward.navigational = YES;
+        return forward;
+    }
+    if ([ident isEqualToString:ID_NEWTAB])
+        return addTab = [self toolItem:ident symbol:@"plus" label:@"New Tab" action:@selector(newTab:)];
+    NSToolbarItem *it = [[NSToolbarItem alloc] initWithItemIdentifier:ident];
+    if ([ident isEqualToString:ID_ADDRESS]) {
         /* 240 to 1000 points; the toolbar stretches it over the free
          * width by itself. A constraint that asks for more (even at a low
          * priority) makes the toolbar move every item into its overflow
@@ -950,7 +1081,7 @@ AuCocoaWin *au_cocoa_win_new(int width, int height)
     if (!wins)
         wins = [NSMutableArray array];
 
-    NSRect frame = NSMakeRect(0, 0, width, height + STRIP_HEIGHT + STATUS_HEIGHT);
+    NSRect frame = NSMakeRect(0, 0, width, height + STRIP_HEIGHT);
     NSWindow *win = [[NSWindow alloc]
         initWithContentRect:frame
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
@@ -962,20 +1093,31 @@ AuCocoaWin *au_cocoa_win_new(int width, int height)
     win.title = @"Aura";
     win.titleVisibility = NSWindowTitleHidden;
     win.toolbarStyle = NSWindowToolbarStyleUnified;
+    /* The tab strip draws the line under the toolbar and the strip. */
+    win.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
     win.tabbingMode = NSWindowTabbingModeDisallowed; /* Aura's own tabs */
     win.delegate = w;
     win.minSize = NSMakeSize(420, 300);
 
-    w->back = [w toolButton:@"chevron.left" tip:@"Back" action:@selector(goBack:)];
-    w->forward = [w toolButton:@"chevron.right" tip:@"Forward" action:@selector(goForward:)];
-    w->reload = [w toolButton:@"arrow.clockwise" tip:@"Reload" action:@selector(reloadOrStop:)];
-    w->addTab = [w toolButton:@"plus" tip:@"New Tab" action:@selector(newTab:)];
-    w->security = [NSImageView new];
+    AuAddressField *af = [AuAddressField new];
+    w->address = af;
+    w->security = af->icon = [NSImageView new];
     w->security.imageScaling = NSImageScaleProportionallyDown;
-    w->security.translatesAutoresizingMaskIntoConstraints = NO;
-    [w->security.widthAnchor constraintEqualToConstant:18].active = YES;
-    [w->security.heightAnchor constraintEqualToConstant:18].active = YES;
-    w->address = [NSTextField new];
+    w->reload = af->reload = [NSButton buttonWithImage:symbol(@"arrow.clockwise", @"Reload")
+                                                target:w
+                                                action:@selector(reloadOrStop:)];
+    w->reload.bordered = NO;
+    w->reload.imageScaling = NSImageScaleProportionallyDown;
+    w->reload.contentTintColor = NSColor.secondaryLabelColor;
+    w->reload.toolTip = @"Reload";
+    w->reload.refusesFirstResponder = YES;
+    w->loadBar = af->bar = [[AuFillView alloc] initWithFill:NSColor.controlAccentColor];
+    af->bar.radius = 1;
+    af->bar.hidden = YES;
+    for (NSView *v in @[ w->security, w->reload, af->bar ])
+        [af addSubview:v];
+    w->address.controlSize = NSControlSizeLarge;
+    w->address.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
     w->address.translatesAutoresizingMaskIntoConstraints = NO;
     w->address.placeholderString = @"Search or enter address";
     w->address.delegate = w;
@@ -1029,17 +1171,18 @@ AuCocoaWin *au_cocoa_win_new(int width, int height)
     }
     w->hscroll.hidden = YES;
 
+    AuFillView *bubble = [[AuFillView alloc] initWithFill:NSColor.windowBackgroundColor];
+    bubble.stroke = NSColor.separatorColor;
+    bubble.radius = 5;
+    bubble.hidden = YES;
+    w->statusBubble = bubble;
     w->status = [NSTextField labelWithString:@""];
     w->status.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     w->status.textColor = NSColor.secondaryLabelColor;
     w->status.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    w->progress = [NSTextField labelWithString:@""];
-    w->progress.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
-    w->progress.textColor = NSColor.tertiaryLabelColor;
-    w->progress.alignment = NSTextAlignmentRight;
-    w->progress.lineBreakMode = NSLineBreakByTruncatingHead;
-    [body addSubview:w->status];
-    [body addSubview:w->progress];
+    w->status.cell.usesSingleLineMode = YES;
+    [bubble addSubview:w->status];
+    [body addSubview:bubble]; /* last: over the page */
 
     /* Below the toolbar: the content view is the whole window
      * (FullSizeContentView), so the body sits in the layout guide. */
@@ -1138,16 +1281,10 @@ static void apply_changes(AuCocoaWin *w)
         sync_scroll(w);
         w->syncing = false;
     }
-    if (what & (AU_CHANGED_STATUS | AU_CHANGED_ACTIVE_TAB)) {
-        char s[512];
-        au_bw_status_text(w->bw, s, sizeof s);
-        w->status.stringValue = au_cocoa_str(s);
-    }
-    if (what & (AU_CHANGED_PROGRESS | AU_CHANGED_NAV | AU_CHANGED_ACTIVE_TAB)) {
-        char s[128];
-        au_bw_progress_text(w->bw, s, sizeof s);
-        w->progress.stringValue = au_cocoa_str(s);
-    }
+    if (what & (AU_CHANGED_STATUS | AU_CHANGED_ACTIVE_TAB))
+        sync_status(w);
+    if (what & (AU_CHANGED_PROGRESS | AU_CHANGED_NAV | AU_CHANGED_ACTIVE_TAB))
+        sync_progress(w);
     if (what & (AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK))
         au_cocoa_menus_dirty();
     if (what & AU_CHANGED_FOCUS_FIELD)

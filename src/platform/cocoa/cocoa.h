@@ -43,16 +43,23 @@
   @public
     AuBrowserWindow *bw;
     NSWindow *window;
-    NSButton *back, *forward, *reload, *addTab;
+    NSToolbarItem *back, *forward, *addTab;
+    /* The address field holds the security icon on its left, Reload or
+     * Stop on its right, and the load progress line along its bottom. */
     NSTextField *address;
     NSImageView *security;
+    NSButton *reload;
+    NSView *loadBar;
     AuTabStrip *strip;
     NSView *body;      /* the tab strip, find bar, page and scroll bars */
     NSView *findBar;
     NSSearchField *findField;
     AuPageView *page;
     NSScroller *vscroll, *hscroll;
-    NSTextField *status, *progress;
+    /* The status text: a bubble over the page's bottom left corner, shown
+     * while there is some. */
+    NSView *statusBubble;
+    NSTextField *status;
     /* The page's pixels: a bitmap the model paints into through an
      * AuSurface over the same memory (docs/cocoa.md, "HiDPI"). */
     void *pixels;

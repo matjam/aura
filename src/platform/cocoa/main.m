@@ -325,8 +325,12 @@ static void snapshot(void)
      * bitmap: list where each item is, and whether it is in the window or
      * in the overflow menu. */
     for (NSToolbarItem *it in w->window.toolbar.items)
-        fprintf(stderr, "aura snapshot: toolbar %s %s %s\n", it.itemIdentifier.UTF8String,
-                NSStringFromRect(it.view.frame).UTF8String, it.view.window ? "shown" : "in overflow");
+        if (it.view)
+            fprintf(stderr, "aura snapshot: toolbar %s %s %s\n", it.itemIdentifier.UTF8String,
+                    NSStringFromRect(it.view.frame).UTF8String, it.view.window ? "shown" : "in overflow");
+        else
+            fprintf(stderr, "aura snapshot: toolbar %s button%s\n", it.itemIdentifier.UTF8String,
+                    it.enabled ? "" : " (disabled)");
 }
 
 static dispatch_source_t on_signal(int sig)
