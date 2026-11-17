@@ -46,6 +46,18 @@ Intrinsic sizing: min-content, max-content, fit-content, shrink-to-fit.
 ---
 #a w=32
 
+=== word-break break-word lets min-content break inside a word
+<body style="margin:0">
+<div id=a style="width:min-content;word-break:break-word">xx xxxxxxxx</div>
+<div id=b style="width:min-content;overflow-wrap:anywhere">xxxxxxxx</div>
+<div id=c style="width:min-content;overflow-wrap:break-word">xxxxxxxx</div>
+---
+// masnick.com: a long Bluesky URL under word-break: break-word set the
+// min-content of a 1fr grid column, pushing the sidebar off the page
+#a w=16
+#b w=16
+#c w=128
+
 === nowrap text max is min
 <body style="margin:0">
 <div id=a style="width:min-content;white-space:nowrap">xx xx</div>

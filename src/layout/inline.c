@@ -456,8 +456,11 @@ void l_inline_intrinsic(AuLayout *L, LBlock *b, float *min_c, float *max_c)
             LFont *f = l_font(L, s->box->style);
             w = f->m.space_advance * 8;
         }
-        if (s->kind == IT_TEXT && (s->flags & SF_SPLITTABLE) && s->box->style->inhr->overflow_wrap == AU_OVERFLOW_WRAP_ANYWHERE) {
-            /* Any character may start a line: the widest character. */
+        if (s->kind == IT_TEXT && (s->flags & SF_SPLITTABLE) &&
+            (s->box->style->inhr->overflow_wrap == AU_OVERFLOW_WRAP_ANYWHERE ||
+             s->box->style->inhr->word_break == AU_WORD_BREAK_BREAK_WORD)) {
+            /* Any character may start a line: the widest character
+             * (word-break: break-word is overflow-wrap: anywhere). */
             LText *t = (LText *)s->box;
             LFont *f = l_font(L, s->box->style);
             float widest = 0;

@@ -371,6 +371,9 @@ fallback faces change a line's height.
 - The emoji set is the pictograph blocks U+1F000 to U+1FAFF and the BMP
   characters with emoji presentation; it is not generated from the
   Unicode data files.
+- `overflow-wrap: anywhere` and the legacy `word-break: break-word`
+  lower the min-content width to the widest character;
+  `overflow-wrap: break-word` does not (CSS Text 3).
 
 ### Containing blocks
 
