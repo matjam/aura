@@ -142,6 +142,11 @@ void au_js_resized(AuJs *js)
     call_bool(js, "resized", 0, NULL);
 }
 
+void au_js_media_changed(AuJs *js)
+{
+    call_bool(js, "mediaChanged", 0, NULL);
+}
+
 void au_js_scrolled(AuJs *js)
 {
     call_bool(js, "scrolled", 0, NULL);

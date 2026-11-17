@@ -485,6 +485,7 @@ static AuDocView *frame_view(AuFrame *f)
         au_docview_set_user_css(c, o->user_css);
     if (o->has_font_prefs)
         au_docview_set_font_prefs(c, &o->font_prefs);
+    au_docview_set_dark(c, o->dark);
     if (f->has_box && f->box.w >= 1 && f->box.h >= 1)
         au_docview_set_viewport(c, au_f2px(f->box.w), au_f2px(f->box.h));
     else
@@ -1905,5 +1906,6 @@ void au_frames_settings_changed(AuDocView *dv)
         au_docview_set_user_css(c, dv->user_css);
         if (dv->has_font_prefs)
             au_docview_set_font_prefs(c, &dv->font_prefs);
+        au_docview_set_dark(c, dv->dark);
     }
 }

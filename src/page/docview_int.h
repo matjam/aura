@@ -95,6 +95,7 @@ struct AuDocView {
     char *user_css; /* the user style sheet, or NULL */
     AuCssFontPrefs font_prefs; /* au_docview_set_font_prefs */
     bool has_font_prefs;
+    bool dark; /* prefers-color-scheme: dark (au_docview_set_dark) */
     AuCssResolver *resolver;
     AuLayout *layout;
     SheetSlot *slots;

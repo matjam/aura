@@ -215,6 +215,9 @@ struct AuBrowser {
     uint32_t scroll_gen; /* any tab's scroll position changed (saved with the session, less often) */
     uint32_t next_tab_id;
     uint32_t highlight;  /* selection colour (paint ARGB) for new tabs; 0 for the default */
+    /* The platform's light or dark setting, for the System appearance
+     * (au_browser_set_system_dark), and the scheme the pages have now. */
+    bool system_dark, shown_dark;
     char *find_text;     /* the last Find, for Find Again; NULL before one */
     bool find_case;      /* it was case-sensitive */
     /* Optional, set by the shell: the blocking preferences changed in the
@@ -256,6 +259,13 @@ void au_browser_free(AuBrowser *b);
 /* Call after changing b->prefs: lays windows out again (tab position,
  * column width), repaints, and bumps prefs_gen. */
 void au_browser_prefs_changed(AuBrowser *b);
+/* The platform's light or dark setting changed (or was first read): it
+ * decides the scheme while prefs.color_scheme is System. Mac OS 9 never
+ * calls it, so System is light there. */
+void au_browser_set_system_dark(AuBrowser *b, bool dark);
+/* Whether pages get the dark colour scheme now: the Appearance
+ * preference, or the platform's setting under System. */
+bool au_browser_dark(const AuBrowser *b);
 /* Call after changing b->bookmarks or b->history from outside (the
  * manager windows): updates the bookmark buttons and menus. */
 void au_browser_bookmarks_changed(AuBrowser *b);

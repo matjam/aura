@@ -238,6 +238,13 @@ void au_docview_set_user_css(AuDocView *dv, const char *css);
  * au_css_resolver_set_font_prefs) for this and later documents. A change
  * restyles the document at the next update. */
 void au_docview_set_font_prefs(AuDocView *dv, const AuCssFontPrefs *p);
+/* Sets the colour scheme the user prefers (the prefers-color-scheme media
+ * feature: dark or light) for this document, its frames and later
+ * documents. A change restyles at the next update without reloading:
+ * sheets deferred for their media query start, <picture> sources are
+ * chosen again, and matchMedia lists fire change. */
+void au_docview_set_dark(AuDocView *dv, bool dark);
+bool au_docview_dark(const AuDocView *dv);
 
 /* ---- Images ----
  * Images decode through src/image: sizes reach layout as soon as each

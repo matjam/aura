@@ -304,6 +304,14 @@ class MediaQueryList extends EventTarget {
     addEventListener(type, cb, opts) { mqlists.add(this); super.addEventListener(type, cb, opts); }
 }
 defineHandlers(MediaQueryList.prototype, ['change']);
+{
+    /* An onchange handler alone also watches the query. */
+    const d = Object.getOwnPropertyDescriptor(MediaQueryList.prototype, 'onchange');
+    Object.defineProperty(MediaQueryList.prototype, 'onchange', {
+        configurable: true, enumerable: true, get: d.get,
+        set(v) { if (v) mqlists.add(this); d.set.call(this, v); },
+    });
+}
 tag(MediaQueryList);
 defGlobal('MediaQueryList', MediaQueryList);
 class MediaQueryListEvent extends Event {
@@ -322,6 +330,7 @@ function checkMediaLists() {
     }
 }
 
+P.mediaChanged = function () { checkMediaLists(); };
 P.resized = function () {
     checkMediaLists();
     fireSimple(G, 'resize', false, false);

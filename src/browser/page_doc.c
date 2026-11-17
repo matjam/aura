@@ -473,6 +473,8 @@ static void apply_font_prefs(AuPage *p)
     au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
     /* Decoded images get the memory cache size as their budget. */
     au_docview_set_image_budget(p->dv, pr ? (size_t)pr->memory_cache_kb * 1024 : 0);
+    /* The colour scheme (prefers-color-scheme), from the browser. */
+    au_docview_set_dark(p->dv, p->env.dark && p->env.dark(p->env.ctx));
 }
 
 /* ---- Image sizes ----
@@ -3824,6 +3826,17 @@ void au_page_prefs_changed(AuPage *p)
 {
     kept_trim(p);
     apply_font_prefs(p);
+    if (p->kind == K_DOC && p->begun) {
+        run_layout(p);
+        invalidate_all(p);
+    }
+}
+
+void au_page_set_dark(AuPage *p, bool dark)
+{
+    if (au_docview_dark(p->dv) == dark)
+        return;
+    au_docview_set_dark(p->dv, dark);
     if (p->kind == K_DOC && p->begun) {
         run_layout(p);
         invalidate_all(p);

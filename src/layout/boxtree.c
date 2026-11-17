@@ -752,7 +752,7 @@ static float source_length(const char *p, const char *end, float vw, float vh)
 
 /* The source size of a sizes attribute: the length of the first entry
  * whose media condition matches, else the last entry's, else 100vw. */
-static float source_size(const char *sizes, float vw, float vh)
+static float source_size(const char *sizes, float vw, float vh, bool dark)
 {
     if (!sizes)
         return vw;
@@ -760,6 +760,7 @@ static float source_size(const char *sizes, float vw, float vh)
     au_css_device_default(&dev);
     dev.width = vw;
     dev.height = vh;
+    dev.dark = dark;
     const char *p = sizes;
     while (*p) {
         const char *e = p;
@@ -798,7 +799,7 @@ static float source_size(const char *sizes, float vw, float vh)
  * URL's start and sets *len; *viewport is set when the choice depends on
  * the viewport (width descriptors). */
 static const char *pick_candidate(const char *srcset, const char *sizes, const char *src, float vw, float vh,
-                                  size_t *len, bool *viewport, float *density)
+                                  bool dark, size_t *len, bool *viewport, float *density)
 {
     const char *best = NULL;
     size_t best_len = 0;
@@ -851,7 +852,7 @@ static const char *pick_candidate(const char *srcset, const char *sizes, const c
                 d = (float)v;
             else if (unit == 'w') {
                 if (size < 0)
-                    size = source_size(sizes, vw, vh);
+                    size = source_size(sizes, vw, vh, dark);
                 any_w = true;
                 d = size > 0 ? (float)v / size : 1e9f;
             } else if (unit != 'h')
@@ -892,10 +893,12 @@ static bool image_type_supported(const char *type)
     return false;
 }
 
-/* The URL an <img> shows at a vw x vh viewport, as written (not
- * resolved): from the first usable <source> of its <picture> parent,
- * else its srcset and src. Returns NULL when it has none. */
-static const char *img_source(const AuNode *img, float vw, float vh, size_t *len, bool *viewport, float *density)
+/* The URL an <img> shows at a vw x vh viewport in the light or dark
+ * scheme, as written (not resolved): from the first usable <source> of
+ * its <picture> parent, else its srcset and src. Returns NULL when it has
+ * none. */
+static const char *img_source(const AuNode *img, float vw, float vh, bool dark, size_t *len, bool *viewport,
+                              float *density)
 {
     *density = 1;
     const AuNode *pic = img->parent;
@@ -904,6 +907,7 @@ static const char *img_source(const AuNode *img, float vw, float vh, size_t *len
         au_css_device_default(&dev);
         dev.width = vw;
         dev.height = vh;
+        dev.dark = dark;
         for (const AuNode *c = pic->first_child; c && c != img; c = c->next) {
             if (!au_is_html_element(c, AU_ATOM_source))
                 continue;
@@ -918,7 +922,7 @@ static const char *img_source(const AuNode *img, float vw, float vh, size_t *len
             }
             if (type && *type && !image_type_supported(type))
                 continue;
-            const char *u = pick_candidate(set, attr_s(c, "sizes"), NULL, vw, vh, len, viewport, density);
+            const char *u = pick_candidate(set, attr_s(c, "sizes"), NULL, vw, vh, dark, len, viewport, density);
             if (u)
                 return u;
         }
@@ -926,7 +930,7 @@ static const char *img_source(const AuNode *img, float vw, float vh, size_t *len
     const char *src = attr_s(img, "src");
     const char *set = attr_s(img, "srcset");
     if (set && *set) {
-        const char *u = pick_candidate(set, attr_s(img, "sizes"), src, vw, vh, len, viewport, density);
+        const char *u = pick_candidate(set, attr_s(img, "sizes"), src, vw, vh, dark, len, viewport, density);
         if (u)
             return u;
     }
@@ -942,8 +946,8 @@ bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out)
     float density;
     const char *u;
     if (au_is_html_element(&el->node, AU_ATOM_img))
-        u = img_source(&el->node, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, &len, &viewport,
-                       &density);
+        u = img_source(&el->node, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, L->dark, &len,
+                       &viewport, &density);
     else {
         u = attr_s(&el->node, "src");
         len = u ? strlen(u) : 0;
@@ -1540,8 +1544,8 @@ static void setup_replaced(Builder *B, LBlock *k)
             bool viewport = false;
             AuLayout *L = B->L;
             float density;
-            const char *u = img_source(n, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, &ulen,
-                                       &viewport, &density);
+            const char *u = img_source(n, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, L->dark,
+                                       &ulen, &viewport, &density);
             /* The natural size is divided by the candidate's density. */
             rep->density = density;
             if (viewport)

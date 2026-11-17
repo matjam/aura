@@ -245,6 +245,10 @@ bool au_layout_element_content_rect(AuLayout *L, const AuElement *el, AuRect *ou
 /* The canvas background is left unpainted (a nested document shows its
  * parent through, unless its own root or body paints a background). */
 void au_layout_set_transparent(AuLayout *L, bool on);
+/* The colour scheme (prefers-color-scheme) the media conditions of
+ * <picture> sources and sizes attributes are matched against; a change
+ * builds the tree again when a choice depended on one. */
+void au_layout_set_dark(AuLayout *L, bool dark);
 
 /* ---- Form fields (controls.c) ----
  * Geometry of text fields (single-line inputs and textareas) for the

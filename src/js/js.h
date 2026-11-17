@@ -432,6 +432,8 @@ bool au_js_has_unload_handler(AuJs *js);
 void au_js_page_transition(AuJs *js, bool show);
 /* The viewport changed size (resize event, matchMedia listeners). */
 void au_js_resized(AuJs *js);
+/* Another media feature changed (matchMedia listeners, no resize event). */
+void au_js_media_changed(AuJs *js);
 /* The document scrolled (scroll event). */
 void au_js_scrolled(AuJs *js);
 

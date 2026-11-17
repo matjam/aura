@@ -24,6 +24,8 @@ typedef enum { AU_TABS_TOP, AU_TABS_LEFT } AuTabPosition;
 typedef enum { AU_STARTUP_HOME, AU_STARTUP_BLANK, AU_STARTUP_RESTORE } AuStartup;
 typedef enum { AU_COOKIES_ALL, AU_COOKIES_SAME_SITE, AU_COOKIES_NONE } AuCookiePolicy;
 typedef enum { AU_BLOCK_UPDATE_DAILY, AU_BLOCK_UPDATE_WEEKLY, AU_BLOCK_UPDATE_NEVER } AuBlockUpdate;
+/* Appearance: follow the system's light or dark setting, or force one. */
+typedef enum { AU_SCHEME_SYSTEM, AU_SCHEME_LIGHT, AU_SCHEME_DARK } AuColorScheme;
 
 /* Limits the window and the file parser apply. */
 #define AU_TAB_COLUMN_MIN 100
@@ -40,6 +42,10 @@ typedef struct AuPrefs {
     AuTabPosition tab_position;
     int tab_column_width; /* pixels, for AU_TABS_LEFT */
     char *search_template; /* "%s" is replaced by the query */
+    /* Light or dark, for pages (prefers-color-scheme) and, where the port
+     * draws native chrome, the chrome; System follows the platform
+     * (au_browser_set_system_dark). */
+    AuColorScheme color_scheme;
 
     /* Fonts: family names and sizes in pixels */
     char *font_serif, *font_sans, *font_mono;

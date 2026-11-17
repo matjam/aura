@@ -626,6 +626,7 @@ void l_check_incremental(AuLayout *L)
     F->transparent = L->transparent;
     F->src_vw = L->src_vw;
     F->src_vh = L->src_vh;
+    F->dark = L->dark;
     au_layout_update(F, L->vw, L->vh);
     AuBuf msg;
     au_buf_init(&msg);

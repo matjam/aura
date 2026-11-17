@@ -93,6 +93,9 @@ uint32_t au_dv_perf_now(AuDocView *dv);
 uint32_t au_docscript_due(AuDocScript *s);
 /* The viewport changed size or scrolled. */
 void au_docscript_resized(AuDocScript *s);
+/* A media feature other than the viewport size changed (the colour
+ * scheme): matchMedia lists fire change at the next run. */
+void au_docscript_media_changed(AuDocScript *s);
 void au_docscript_scrolled(AuDocScript *s);
 /* The document cache: false when window has an unload or beforeunload
  * listener; pagehide or pageshow (persisted) when the document is hidden

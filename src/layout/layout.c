@@ -1915,6 +1915,15 @@ static void layout_root(AuLayout *L)
     L->doc_h = l_max(L->vh, bottom);
 }
 
+void au_layout_set_dark(AuLayout *L, bool dark)
+{
+    if (L->dark == dark)
+        return;
+    L->dark = dark;
+    if (L->src_viewport)
+        L->need_build = true; /* a <source media> or sizes condition may choose another image */
+}
+
 bool au_layout_update(AuLayout *L, float vw, float vh)
 {
     if (vw < 1)

@@ -21,6 +21,7 @@ static const char *const startup_names[] = {"home", "blank", "restore", NULL};
 static const char *const tabpos_names[] = {"top", "left", NULL};
 static const char *const cookie_names[] = {"all", "same-site", "none", NULL};
 static const char *const block_update_names[] = {"daily", "weekly", "never", NULL};
+static const char *const color_scheme_names[] = {"system", "light", "dark", NULL};
 
 #define S(n, f) {n, T_STR, offsetof(AuPrefs, f), 0, 0, NULL}
 #define B(n, f) {n, T_BOOL, offsetof(AuPrefs, f), 0, 0, NULL}
@@ -33,6 +34,7 @@ static const Key keys[] = {
     E("tabs.position", tab_position, tabpos_names),
     I("tabs.column_width", tab_column_width, AU_TAB_COLUMN_MIN, AU_TAB_COLUMN_MAX),
     S("search.template", search_template),
+    E("appearance.color_scheme", color_scheme, color_scheme_names),
     S("fonts.serif", font_serif),
     S("fonts.sans_serif", font_sans),
     S("fonts.monospace", font_mono),
@@ -94,7 +96,7 @@ static bool *bool_field(AuPrefs *p, const Key *k) { return (bool *)((char *)p + 
 /* Enum fields are accessed as int; this fails to compile where enums are
  * not int-sized (-fshort-enums). */
 typedef char enum_is_int[(sizeof(AuStartup) == sizeof(int) && sizeof(AuTabPosition) == sizeof(int) &&
-                          sizeof(AuCookiePolicy) == sizeof(int))
+                          sizeof(AuCookiePolicy) == sizeof(int) && sizeof(AuColorScheme) == sizeof(int))
                              ? 1
                              : -1];
 static int *int_field(AuPrefs *p, const Key *k) { return (int *)((char *)p + k->off); }
@@ -116,6 +118,7 @@ void au_prefs_init(AuPrefs *p)
     p->startup = AU_STARTUP_HOME;
     p->tab_position = AU_TABS_TOP;
     p->tab_column_width = 170;
+    p->color_scheme = AU_SCHEME_SYSTEM;
     au_prefs_set_str(&p->search_template, "https://html.duckduckgo.com/html/?q=%s");
     au_prefs_set_str(&p->font_serif, "Times New Roman");
     au_prefs_set_str(&p->font_sans, "Helvetica");

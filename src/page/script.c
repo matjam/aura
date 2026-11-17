@@ -65,7 +65,7 @@ struct AuDocScript {
     uint32_t modules;                  /* module scripts started, not evaluated */
     bool defer_module_running;         /* the head of the defer list is a module in flight */
     bool parse_done, content_loaded, loaded;
-    bool resize_pending, scroll_pending;
+    bool resize_pending, scroll_pending, media_pending;
     int depth;
     uint32_t perf_t0;    /* when the outermost entry began */
     char perf_label[72]; /* the script it ran, for the slow task list */
@@ -1312,6 +1312,11 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
         au_js_scrolled(s->js);
         ran = true;
     }
+    if (s->media_pending) {
+        s->media_pending = false;
+        au_js_media_changed(s->js);
+        ran = true;
+    }
     if (au_js_run_tasks(s->js, budget_ms))
         ran = true;
     if (au_js_wants_frame(s->js)) {
@@ -1373,7 +1378,7 @@ uint32_t au_docscript_due(AuDocScript *s)
 {
     if (!s->js)
         return UINT32_MAX;
-    if (s->resize_pending || s->scroll_pending || au_js_workers_busy(s->js))
+    if (s->resize_pending || s->scroll_pending || s->media_pending || au_js_workers_busy(s->js))
         return 0;
     uint32_t due = au_js_wants_frame(s->js) ? 16 : UINT32_MAX;
     double t = au_js_next_timer(s->js);
@@ -1389,6 +1394,11 @@ uint32_t au_docscript_due(AuDocScript *s)
 void au_docscript_resized(AuDocScript *s)
 {
     s->resize_pending = s->js != NULL;
+}
+
+void au_docscript_media_changed(AuDocScript *s)
+{
+    s->media_pending = s->js != NULL;
 }
 
 void au_docscript_scrolled(AuDocScript *s)

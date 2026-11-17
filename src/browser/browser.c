@@ -852,6 +852,11 @@ static const struct AuBookmarks *env_bookmarks(void *ctx)
     return &((AuBrowser *)ctx)->bookmarks;
 }
 
+static bool env_dark(void *ctx)
+{
+    return au_browser_dark((AuBrowser *)ctx);
+}
+
 /* Script changed a storage area: the documents of the same area in every
  * tab hear of it (the writer is left out by the page), and a change to a
  * tab's sessionStorage puts the session file out of date, as a scroll
@@ -938,9 +943,12 @@ void au_browser_free(AuBrowser *b)
     au_free(b);
 }
 
+static void scheme_changed(AuBrowser *b);
+
 void au_browser_prefs_changed(AuBrowser *b)
 {
     b->prefs_gen++;
+    scheme_changed(b);
     for (int i = 0; i < b->nwindows; i++) {
         AuBrowserWindow *w = b->windows[i];
         relayout(w, true);
@@ -954,6 +962,36 @@ void au_browser_prefs_changed(AuBrowser *b)
         }
         changed(w, AU_CHANGED_LAYOUT | AU_CHANGED_SCROLL | AU_CHANGED_FIELD);
     }
+}
+
+bool au_browser_dark(const AuBrowser *b)
+{
+    switch (b->prefs.color_scheme) {
+    case AU_SCHEME_DARK: return true;
+    case AU_SCHEME_LIGHT: return false;
+    default: return b->system_dark;
+    }
+}
+
+/* The scheme reaches every tab's page (and its frames) at once; each
+ * restyles at its next update, without reloading. */
+static void scheme_changed(AuBrowser *b)
+{
+    bool dark = au_browser_dark(b);
+    if (dark == b->shown_dark)
+        return;
+    b->shown_dark = dark;
+    for (int i = 0; i < b->nwindows; i++) {
+        AuBrowserWindow *w = b->windows[i];
+        for (int j = 0; j < w->ntabs; j++)
+            au_page_set_dark(w->tabs[j]->page, dark);
+    }
+}
+
+void au_browser_set_system_dark(AuBrowser *b, bool dark)
+{
+    b->system_dark = dark;
+    scheme_changed(b);
 }
 
 void au_browser_bookmarks_changed(AuBrowser *b)
@@ -1068,7 +1106,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
                      b->host.random ? env_random : NULL, b->host.coro, env_memory_free, env_storage,
-                     env_history, env_bookmarks};
+                     env_history, env_bookmarks, env_dark};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};

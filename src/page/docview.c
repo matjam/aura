@@ -95,6 +95,7 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_canvas_set_fonts(dv->canvases, fonts);
     if (dv->parent)
         au_layout_set_transparent(dv->layout, true); /* a nested document shows its parent through */
+    au_layout_set_dark(dv->layout, dv->dark);
     if (dv->doc)
         au_layout_set_document(dv->layout, dv->doc);
     if (dv->resolver) {
@@ -503,6 +504,8 @@ DV_ENTRY_VOID(set_font_prefs, (AuDocView *dv, const AuCssFontPrefs *p), (dv, p))
     au_frames_settings_changed(dv);
 }
 
+bool au_docview_dark(const AuDocView *dv) { return dv->dark; }
+
 /* ---- Requests ---- */
 
 /* Asks the loader. Every request of the page goes through the top view's
@@ -753,6 +756,7 @@ static void view_device(const AuDocView *dv, AuCssDevice *dev)
     dev->width = (float)dv->vw;
     dev->height = (float)dv->vh;
     dev->scripting = dv->script ? 2 : 0;
+    dev->dark = dv->dark;
 }
 
 static bool media_matches(const AuDocView *dv, const SheetSrc *s)
@@ -884,6 +888,26 @@ static void undefer_sheets(AuDocView *dv)
 {
     for (uint32_t i = 0; i < dv->nslots && dv->ndeferred; i++)
         undefer_sheet(dv, dv->slots[i].src);
+}
+
+DV_ENTRY_VOID(set_dark, (AuDocView *dv, bool dark), (dv, dark))
+{
+    if (dv->dark != dark) {
+        dv->dark = dark;
+        if (dv->layout)
+            au_layout_set_dark(dv->layout, dark);
+        if (dv->resolver) {
+            AuCssDevice dev;
+            view_device(dv, &dev);
+            au_css_resolver_set_device(dv->resolver, &dev);
+            /* Every media query and light-dark() may answer otherwise. */
+            dv->style_all = true;
+        }
+        undefer_sheets(dv); /* sheets for the scheme now in use */
+        if (dv->script)
+            au_docscript_media_changed(dv->script);
+    }
+    au_frames_settings_changed(dv);
 }
 
 DV_ENTRY_VOID(resource_head,
@@ -1471,6 +1495,12 @@ DV_ENTRY_VOID(begin, (AuDocView * dv, const char *url), (dv, url))
     au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
     if (dv->has_font_prefs)
         au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
+    {
+        /* matchMedia may ask before the first style pass */
+        AuCssDevice dev;
+        view_device(dv, &dev);
+        au_css_resolver_set_device(dv->resolver, &dev);
+    }
     au_layout_set_document(dv->layout, dv->doc);
     dv->parsing = true;
     dv->tree_dirty = true;

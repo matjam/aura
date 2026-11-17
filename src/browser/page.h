@@ -339,6 +339,11 @@ typedef struct AuPageEnv {
      * page (about:home) shows as most visited sites and bookmarks. */
     const struct AuHistory *(*history)(void *ctx);
     const struct AuBookmarks *(*bookmarks)(void *ctx);
+    /* Optional: whether pages get the dark colour scheme
+     * (prefers-color-scheme), read when a page is made and when its
+     * preferences change; au_page_set_dark changes it later. NULL is
+     * light. */
+    bool (*dark)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -550,6 +555,10 @@ void au_page_content_size(const AuPage *p, int *width, int *height);
 void au_page_set_scroll(AuPage *p, int x, int y);
 /* Font preferences or other settings in env.prefs changed: restyle. */
 void au_page_prefs_changed(AuPage *p);
+/* The dark colour scheme on or off for the page and its frames:
+ * prefers-color-scheme media queries, matchMedia listeners and sheets
+ * deferred by media follow at once, without a reload. */
+void au_page_set_dark(AuPage *p, bool dark);
 /* Text zoom: font sizes are multiplied by zoom (clamped to the range
  * below); other lengths are not. It applies to this and later documents
  * of the page until changed. */

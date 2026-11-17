@@ -405,6 +405,9 @@ struct AuLayout {
      * on it: the tree is then built again when the viewport changes. */
     float src_vw, src_vh;
     bool src_viewport;
+    /* The colour scheme <source media> and sizes are matched against
+     * (au_layout_set_dark). */
+    bool dark;
     /* Table measuring: gen counts layout passes of the document; measuring
      * is nonzero inside a cell's measuring layout, where nested tables may
      * answer from their measure cache; measure_hits counts those answers. */

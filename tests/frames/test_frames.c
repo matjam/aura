@@ -496,6 +496,61 @@ static void test_script(void)
     world_close(&w);
 }
 
+/* ---- Colour scheme ----
+ * The Appearance preference reaches a page through au_docview_set_dark:
+ * prefers-color-scheme rules, sheets deferred by media, matchMedia
+ * listeners and frames all follow at once, without a reload. */
+
+static void test_color_scheme(void)
+{
+    static const Page site[] = {
+        {"http://a.test/",
+         "<!DOCTYPE html><head><style>#t{color:rgb(0,0,0)}"
+         "@media (prefers-color-scheme: dark){#t{color:rgb(255,255,255)}}</style>"
+         "<link rel=stylesheet media='(prefers-color-scheme: dark)' href=dark.css>"
+         "<style media='(prefers-color-scheme: dark)'>#u{width:77px}</style></head>"
+         "<body><p id=t>text</p><div id=u></div><div id=v></div>"
+         "<script>var mq=matchMedia('(prefers-color-scheme: dark)'),seen=[];"
+         "mq.addEventListener('change',function(e){seen.push(e.matches)})</script>"
+         "<iframe src=inner.html></iframe>"},
+        {"http://a.test/dark.css", "#v{height:9px}", "text/css"},
+        {"http://a.test/inner.html",
+         "<!DOCTYPE html><style>#i{color:rgb(1,2,3)}"
+         "@media (prefers-color-scheme: dark){#i{color:rgb(4,5,6)}}</style><p id=i>inner</p>"
+         "<script>var seen=[];matchMedia('(prefers-color-scheme: dark)').onchange="
+         "function(e){seen.push(e.matches)}</script>"},
+        {0}};
+    World w;
+    world_open(&w, site, "http://a.test/", 400, 600);
+    CHECK(!find_req(&w, "http://a.test/dark.css"), "dark.css fetched while light");
+    JS_IS(&w, "mq.matches + ' ' + getComputedStyle(document.getElementById('t')).color", "false rgb(0, 0, 0)");
+    JS_IS(&w, "frames[0].getComputedStyle(frames[0].document.getElementById('i')).color", "rgb(1, 2, 3)");
+    JS_IS(&w, "document.getElementById('u').offsetWidth", "384");
+
+    int reqs = w.n;
+    au_docview_set_dark(w.dv, true);
+    pump(&w);
+    CHECK(au_docview_dark(w.dv), "the view is not dark");
+    CHECK(find_req(&w, "http://a.test/dark.css") != NULL, "dark.css not fetched once dark");
+    CHECK(w.n == reqs + 1, "%d requests after the change, want %d (no reload)", w.n, reqs + 1);
+    JS_IS(&w, "mq.matches + ' ' + getComputedStyle(document.getElementById('t')).color", "true rgb(255, 255, 255)");
+    JS_IS(&w, "seen.join()", "true");
+    JS_IS(&w, "document.getElementById('u').offsetWidth + ' ' + document.getElementById('v').offsetHeight", "77 9");
+    JS_IS(&w, "frames[0].getComputedStyle(frames[0].document.getElementById('i')).color", "rgb(4, 5, 6)");
+    JS_IS(&w, "frames[0].seen.join()", "true");
+    /* a frame made while dark starts dark */
+    js(&w, "var f2=document.createElement('iframe');f2.src='inner.html';document.body.appendChild(f2)");
+    JS_IS(&w, "frames[1].matchMedia('(prefers-color-scheme: dark)').matches", "true");
+    JS_IS(&w, "frames[1].getComputedStyle(frames[1].document.getElementById('i')).color", "rgb(4, 5, 6)");
+
+    au_docview_set_dark(w.dv, false);
+    pump(&w);
+    JS_IS(&w, "getComputedStyle(document.getElementById('t')).color + ' ' + seen.join()", "rgb(0, 0, 0) true,false");
+    JS_IS(&w, "frames[1].matchMedia('(prefers-color-scheme: dark)').matches", "false");
+    CHECK(strstr(au_buf_cstr(&w.console), "Uncaught") == NULL, "script errors: %s", au_buf_cstr(&w.console));
+    world_close(&w);
+}
+
 /* ---- Sandbox ---- */
 
 static void test_sandbox(void)
@@ -965,6 +1020,7 @@ int main(void)
     test_paint();
     test_input();
     test_script();
+    test_color_scheme();
     test_sandbox();
     test_blocking();
     test_lazy_object();
