@@ -621,6 +621,11 @@ methods (`getHours`, `toString`, `getTimezoneOffset`,
 - Without a clock (the host tools, JSTest) `Date` reads the C library,
   which on Mac OS 9 knows neither the Mac's clock nor its zone.
 - `performance.now()` and timers use the monotonic `AuJsHooks.now_ms`.
+- The legacy `performance.timing` (a `PerformanceTiming`) gives the
+  time origin for every field, and `performance.navigation` (a
+  `PerformanceNavigation`, with the `TYPE_*` constants that pages such
+  as Reddit compare against) always says `TYPE_NAVIGATE` with no
+  redirects (`prelude_window.js`).
 - To test with a fixed time and zone, run `aura-host js --clock MS
   --zone SECONDS` (UTC milliseconds since 1970; seconds east of UTC),
   as `tests/js/clock.js` does (ctest `js_clock`).
