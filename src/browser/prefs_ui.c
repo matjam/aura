@@ -18,6 +18,7 @@
 
 static const char *const startup_choices[] = {"Open the home page", "Open a blank page", "Restore the last tabs", NULL};
 static const char *const tab_choices[] = {"Along the top", "Down the left side", NULL};
+static const char *const appearance_choices[] = {"Same as system", "Light", "Dark", NULL};
 static const char *const memory_choices[] = {"Automatic", "Custom", NULL};
 static const char *const cookie_choices[] = {"Accept all", "Same-site only", "Block all", NULL};
 static const char *const update_choices[] = {"Every day", "Every week", "Never", NULL};
@@ -58,6 +59,8 @@ static const AuPrefDesc descs[AU_PREF_COUNT] = {
     D_ACTION(USE_CURRENT_PAGE, GENERAL, "Use Current Page", 0),
     D_CHOICE(STARTUP, GENERAL, AU_PREF_CHOICE, "startup", "When Aura starts:", startup_choices, 0, startup),
     D_CHOICE(TAB_POSITION, GENERAL, AU_PREF_RADIO, "tabs.position", "Tabs:", tab_choices, AU_PREF_LIVE, tab_position),
+    D_CHOICE(APPEARANCE, GENERAL, AU_PREF_CHOICE, "appearance.color_scheme", "Appearance:", appearance_choices,
+             AU_PREF_LIVE, color_scheme),
     D_TEXT(SEARCH, GENERAL, "search.template", "Search with:", search_template),
     D_NOTE(SEARCH_NOTE, GENERAL,
          "Text in the address field that is not a web address is searched for with this URL; %s stands for the "
@@ -725,6 +728,10 @@ static unsigned copy_live(AuPrefs *dst, const AuPrefs *src, AuBrowser *b)
     if (copy_item(&descs[AU_PREF_TAB_POSITION], dst, src)) {
         au_browser_prefs_changed(b);
         bits |= AU_PREF_CHANGED_TABS;
+    }
+    if (copy_item(&descs[AU_PREF_APPEARANCE], dst, src)) {
+        au_browser_prefs_changed(b); /* every page takes the new scheme */
+        bits |= AU_PREF_CHANGED_APPEARANCE;
     }
     return bits;
 }

@@ -58,7 +58,7 @@ static const char *note_of(const AuPrefsEdit *e, AuPrefId id, AuBuf *b)
 
 /* Every preference the Mac window showed before the descriptions. */
 static const char *const shown_keys[] = {
-    "home_page", "startup", "tabs.position", "search.template", "links.external_new_window", "fonts.serif",
+    "home_page", "startup", "tabs.position", "appearance.color_scheme", "search.template", "links.external_new_window", "fonts.serif",
     "fonts.sans_serif", "fonts.monospace", "fonts.size", "fonts.size_monospace", "fonts.minimum_size",
     "content.javascript", "content.images", "content.block_popups", "content.script_memory_kb",
     "content.worker_memory_kb", "privacy.do_not_track", "privacy.global_privacy_control", "privacy.https_first",
@@ -479,6 +479,17 @@ static void test_apply_and_live(const AuPrefsHost *host, AuFontSet *fonts)
     au_prefs_edit_set_bool(e, AU_PREF_BLOCK_TRACKERS, false);
     CHECK(au_prefs_edit_apply_live(e, b) == AU_PREF_CHANGED_BLOCKING && !b->prefs.block_trackers, "the switch too");
 
+    /* The appearance is live too: every page takes the new scheme. */
+    CHECK(au_pref_desc(AU_PREF_APPEARANCE)->flags & AU_PREF_LIVE, "the appearance is live");
+    CHECK(au_prefs_edit_get_choice(e, AU_PREF_APPEARANCE) == AU_SCHEME_SYSTEM, "the appearance starts at System");
+    au_prefs_edit_set_choice(e, AU_PREF_APPEARANCE, AU_SCHEME_DARK);
+    gen = b->prefs_gen;
+    CHECK(au_prefs_edit_apply_live(e, b) == AU_PREF_CHANGED_APPEARANCE && b->prefs.color_scheme == AU_SCHEME_DARK &&
+              au_browser_dark(b) && b->prefs_gen != gen,
+          "the appearance applies at once");
+    au_prefs_edit_set_choice(e, AU_PREF_APPEARANCE, 3);
+    CHECK(au_prefs_edit_get_choice(e, AU_PREF_APPEARANCE) == AU_SCHEME_DARK, "appearance clamps");
+
     /* A setting that is not live waits for OK. */
     au_prefs_edit_set_bool(e, AU_PREF_JAVASCRIPT, false);
     au_prefs_edit_apply_live(e, b);
@@ -486,7 +497,8 @@ static void test_apply_and_live(const AuPrefsHost *host, AuFontSet *fonts)
 
     /* Cancel puts the live ones back. */
     unsigned bits = au_prefs_edit_cancel(e, b);
-    CHECK(bits == (AU_PREF_CHANGED_TABS | AU_PREF_CHANGED_BLOCKING), "cancel: %u", bits);
+    CHECK(bits == (AU_PREF_CHANGED_TABS | AU_PREF_CHANGED_BLOCKING | AU_PREF_CHANGED_APPEARANCE), "cancel: %u", bits);
+    CHECK(b->prefs.color_scheme == AU_SCHEME_SYSTEM && !au_browser_dark(b), "cancel restores the appearance");
     CHECK(b->prefs.tab_position == AU_TABS_TOP && !strcmp(b->prefs.block_lists, "light") && b->prefs.block_trackers &&
               b->prefs.javascript,
           "cancel restores");

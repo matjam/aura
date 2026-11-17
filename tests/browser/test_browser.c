@@ -157,6 +157,14 @@ static void t_close(void *ctx, AuBrowserWindow *w) { (void)ctx, (void)w; closes+
 static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 {
     (void)ctx;
+    if (!strcmp(url, "file:///scheme.html")) {
+        static const char page[] = "<!doctype html><p id=t>scheme</p><script>var seen=[];"
+                                   "matchMedia('(prefers-color-scheme: dark)').onchange=function(e){seen.push(e.matches)}"
+                                   "</script>";
+        *data = au_strndup(page, sizeof page - 1);
+        *len = sizeof page - 1;
+        return true;
+    }
     if (strcmp(url, "file:///doc.html") != 0)
         return false;
     static const char html[] = "<!doctype html><title> A  Title </title><h1>Head</h1><p>Some <b>text</b> here.";
@@ -778,6 +786,89 @@ static void test_script_memory_prefs(void)
     CHECK(page == 4096 && worker == 32768);
 }
 
+/* The Appearance preference: stored as system, light or dark; a file
+ * without it (older Auras) gives System; an unknown value is ignored. */
+static void test_color_scheme_prefs(void)
+{
+    AuPrefs p;
+    au_prefs_init(&p);
+    CHECK(p.color_scheme == AU_SCHEME_SYSTEM);
+    AuBuf out;
+    au_buf_init(&out);
+    au_prefs_serialize(&p, &out);
+    CHECK(strstr(au_buf_cstr(&out), "appearance.color_scheme=system\n") != NULL);
+    p.color_scheme = AU_SCHEME_DARK;
+    au_buf_clear(&out);
+    au_prefs_serialize(&p, &out);
+    CHECK(strstr(au_buf_cstr(&out), "appearance.color_scheme=dark\n") != NULL);
+    AuPrefs q;
+    au_prefs_init(&q);
+    CHECK(au_prefs_parse(&q, out.data, out.len));
+    CHECK(q.color_scheme == AU_SCHEME_DARK);
+    CHECK(au_prefs_set(&q, "appearance.color_scheme", "light") && q.color_scheme == AU_SCHEME_LIGHT);
+    au_prefs_set(&q, "appearance.color_scheme", "purple");
+    CHECK(q.color_scheme == AU_SCHEME_LIGHT);
+    AuBuf v;
+    au_buf_init(&v);
+    CHECK(au_prefs_get(&q, "appearance.color_scheme", &v) && !strcmp(au_buf_cstr(&v), "light"));
+    au_buf_free(&v);
+    au_prefs_free(&q);
+    /* an older file: every other key, but not this one */
+    static const char old[] = "home_page=http://x/\ntabs.position=left\n";
+    au_prefs_init(&q);
+    CHECK(au_prefs_parse(&q, old, sizeof old - 1));
+    CHECK(q.color_scheme == AU_SCHEME_SYSTEM && q.nextra == 0);
+    au_prefs_free(&q);
+    au_buf_free(&out);
+    au_prefs_free(&p);
+}
+
+static bool page_says(AuPage *pg, const char *src, const char *want)
+{
+    AuBuf out;
+    au_buf_init(&out);
+    au_page_eval(pg, src, &out);
+    bool ok = !strcmp(au_buf_cstr(&out), want);
+    if (!ok)
+        printf("  %s = \"%s\", want \"%s\"\n", src, au_buf_cstr(&out), want);
+    au_buf_free(&out);
+    return ok;
+}
+
+/* The scheme pages get: the preference, or the platform's setting under
+ * System; a change reaches open tabs without a reload. */
+static void test_color_scheme_live(AuFontSet *fonts)
+{
+    AuBrowser *b = make_browser(fonts);
+    CHECK(!au_browser_dark(b)); /* System, and no platform setting: light */
+    AuBrowserWindow *w = au_browser_window_new(b, 700, 500);
+    au_bw_new_tab(w, "file:///scheme.html", true, -1);
+    settle(w);
+    AuPage *pg = w->tabs[0]->page;
+    const char *q = "matchMedia('(prefers-color-scheme: dark)').matches + ' ' + seen.join()";
+    CHECK(page_says(pg, q, "false "));
+    au_browser_set_system_dark(b, true);
+    settle(w);
+    CHECK(au_browser_dark(b));
+    CHECK(page_says(pg, q, "true true"));
+    b->prefs.color_scheme = AU_SCHEME_LIGHT; /* Light overrides the platform */
+    au_browser_prefs_changed(b);
+    settle(w);
+    CHECK(!au_browser_dark(b));
+    CHECK(page_says(pg, q, "false true,false"));
+    b->prefs.color_scheme = AU_SCHEME_DARK;
+    au_browser_prefs_changed(b);
+    au_browser_set_system_dark(b, false); /* Dark ignores the platform */
+    settle(w);
+    CHECK(au_browser_dark(b));
+    CHECK(page_says(pg, q, "true true,false,true"));
+    /* a new tab starts in the scheme in use */
+    au_bw_new_tab(w, "file:///scheme.html", true, -1);
+    settle(w);
+    CHECK(page_says(w->tabs[1]->page, q, "true "));
+    au_browser_free(b);
+}
+
 static void test_prefs(void)
 {
     AuPrefs p;
@@ -1268,6 +1359,8 @@ int main(void)
     test_history();
     test_bookmarks();
     test_prefs();
+    test_color_scheme_prefs();
+    test_color_scheme_live(fonts);
     test_script_memory_prefs();
     test_session(fonts);
     test_layout();

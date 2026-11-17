@@ -65,6 +65,7 @@ typedef enum {
     AU_PREF_USE_CURRENT_PAGE,
     AU_PREF_STARTUP,
     AU_PREF_TAB_POSITION,
+    AU_PREF_APPEARANCE,
     AU_PREF_SEARCH,
     AU_PREF_SEARCH_NOTE,
     AU_PREF_EXTERNAL_NEW_WINDOW,
@@ -235,11 +236,12 @@ void au_prefs_edit_reset_section(AuPrefsEdit *e, AuPrefSection s);
 /* What a change asks of the port. */
 enum {
     AU_PREF_CHANGED_TABS = 1,    /* the tab position changed: windows were laid out again */
-    AU_PREF_CHANGED_BLOCKING = 2 /* the blocking switch or lists changed: tell the blocking manager */
+    AU_PREF_CHANGED_BLOCKING = 2, /* the blocking switch or lists changed: tell the blocking manager */
+    AU_PREF_CHANGED_APPEARANCE = 4 /* the colour scheme changed: pages restyled; the port themes its chrome */
 };
 /* Copies the live items of the working copy to b->prefs. Returns
  * AU_PREF_CHANGED_* for what differed (prefs_gen is bumped, and for the
- * tab position au_browser_prefs_changed is called). */
+ * tab position and the appearance au_browser_prefs_changed is called). */
 unsigned au_prefs_edit_apply_live(AuPrefsEdit *e, AuBrowser *b);
 /* Cancel: puts the live items of b->prefs back as they were when the
  * window opened. Returns AU_PREF_CHANGED_* as above. */
