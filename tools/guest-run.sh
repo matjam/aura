@@ -22,6 +22,9 @@
 # zone (-rtc base; AURA_GUEST_UTC_OFFSET in tools/guest-env.sh), so Mac OS
 # shows the right time for its zone and Aura works out the right UTC.
 #
+# QEMU_EXTRA adds arguments to QEMU's command line (tools/bench.sh passes
+# -icount there).
+#
 # BASE picks the system: enforcer (default, Mac OS 9.2.2 with the Enforcer
 # kernel and extension) or stock (without Enforcer). The guest boots an
 # overlay in AURA_RUN on the base image in disks/, so the base image is
@@ -106,7 +109,7 @@ case "${1:-}" in
         -prom-env 'auto-boot?=true' \
         -nic user,model=sungem \
         -qmp unix:"$AURA_QMP",server=on,wait=off \
-        -display cocoa,zoom-integer=on $snapshot \
+        -display cocoa,zoom-integer=on $snapshot ${QEMU_EXTRA:-} \
         -pidfile "$AURA_PID" \
         >"$AURA_LOG" 2>&1 &
       i=0
@@ -129,7 +132,7 @@ case "${1:-}" in
       -prom-env 'auto-boot?=true' \
       -nic user,model=sungem \
       -qmp unix:"$AURA_QMP",server=on,wait=off \
-      -display none $snapshot \
+      -display none $snapshot ${QEMU_EXTRA:-} \
       -daemonize -pidfile "$AURA_PID" \
       >"$AURA_LOG" 2>&1
     printf '%s\n' "$BASE" > "$AURA_RUNNING_BASE"

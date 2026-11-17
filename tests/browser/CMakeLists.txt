@@ -92,6 +92,12 @@ target_link_libraries(test_crypto aura_engine m)
 add_test(NAME browser_crypto COMMAND test_crypto)
 
 # Site icons for tabs, on the fake transport.
+add_executable(test_bench test_bench.c)
+target_link_libraries(test_bench aura_fakenet m)
+target_include_directories(test_bench PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)
+add_test(NAME browser_bench COMMAND test_bench)
+set_tests_properties(browser_bench PROPERTIES TIMEOUT 120)
+
 add_executable(test_favicon test_favicon.c)
 target_link_libraries(test_favicon aura_fakenet m)
 target_include_directories(test_favicon PRIVATE ${CMAKE_SOURCE_DIR}/tests/net)

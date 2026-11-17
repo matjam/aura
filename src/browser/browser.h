@@ -202,6 +202,7 @@ struct AuBrowserWindow {
      * step, since a hover change can restyle the whole document. */
     bool rehover_pending;
     uint32_t scrolled_ms;
+    struct AuBench *bench; /* about:bench under way in this window (bench.h), or NULL */
 };
 
 #define AU_REHOVER_MS 150

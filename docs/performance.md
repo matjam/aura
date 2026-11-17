@@ -69,6 +69,45 @@ Machines shared with other builds give wall-clock figures that vary by
 a factor of two; compare builds in alternating runs and report the
 spread.
 
+## To benchmark pages
+
+To time a build's page loads in the guest, run `./build.sh ppc` and
+then `tools/bench.sh`. To compare two builds, run it on each and then
+`tools/bench-compare.py OLD.tsv NEW.tsv`.
+
+- `tools/bench.sh` serves `tests/page/samples` with
+  `tools/bench-serve.py`, boots a stock guest in `run-bench`, pushes
+  `build/ppc/dist/Aura`, and types
+  `about:bench?http://10.0.2.2:8642/manifest.txt` in the address field.
+  Aura loads every page three times and posts a row per load to the
+  server, which writes `run/bench/DATE-COMMIT-BASE-icount.tsv`. The
+  script then quits Aura, stops the guest and prints the medians.
+- The guest runs with `-icount shift=0,sleep=off`: its clock counts
+  instructions, one per nanosecond, so a figure depends on the code
+  Aura runs and not on the host's speed or load. Two runs of one build
+  give close figures; the times are not a G4's. `BENCH_ICOUNT=off`
+  runs in real time.
+- The server sends every file with `Cache-Control: no-store`, so each
+  load comes from the network in every round. The first round includes
+  a cold start, and `bench-compare.py` leaves it out when there are
+  three or more rounds.
+- To benchmark other pages, set `BENCH_ROOT` to a folder of saved
+  pages, or `BENCH_MANIFEST` to a manifest file. Keep saved copies of
+  other people's sites out of the repository (`run/` is not committed).
+  `BENCH_REPEAT` and `BENCH_SETTLE` set the rounds and the time each
+  page gets after it loads.
+- To run it on the host, start `tools/bench-serve.py --once` and run
+  `aura-host chrome --net --tab about:blank --do
+  'go:about:bench?http://127.0.0.1:8642/manifest.txt' --do
+  wait:120000`.
+
+`src/browser/bench.h` defines the manifest and the columns. Each row
+holds the first paint and load times, the milliseconds in script,
+style, layout, paint and screen copy (the Performance window's
+counters, including the settle time), the passes counted, the bytes
+and requests, the boxes, the image decodes, the script heap peaks and
+the free memory.
+
 ## To measure in the guest
 
 | To see | Use | Document |

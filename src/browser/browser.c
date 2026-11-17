@@ -1,5 +1,6 @@
 /* The browser model and controller. See browser.h. */
 #include "browser.h"
+#include "bench.h"
 #include "favicon.h"
 #include "scriptmem.h"
 #include "url.h"
@@ -1078,6 +1079,8 @@ void au_browser_window_free(AuBrowserWindow *w)
             break;
         }
     }
+    au_bench_free(w->bench);
+    w->bench = NULL;
     AuTab **tabs = w->tabs;
     int ntabs = w->ntabs;
     w->tabs = NULL;
@@ -1768,6 +1771,16 @@ static bool hand_off(AuBrowser *b, const char *url)
 void au_bw_navigate(AuBrowserWindow *w, const char *url)
 {
     AuTab *t = au_bw_active_tab(w);
+    if (t && !strncmp(url, AU_BENCH_PREFIX, strlen(AU_BENCH_PREFIX))) {
+        /* The page benchmark: it drives the tab itself. */
+        au_bench_free(w->bench);
+        w->bench = NULL;
+        au_free(w->field);
+        w->field = NULL;
+        w->bench = au_bench_start(w, url + strlen(AU_BENCH_PREFIX));
+        changed(w, AU_CHANGED_FIELD | AU_CHANGED_TAB_INFO);
+        return;
+    }
     if (!t || hand_off(w->browser, url))
         return;
     bool typing = au_bw_typing(w);
@@ -2616,6 +2629,8 @@ void au_bw_idle(AuBrowserWindow *w)
         rehover(w);
     }
     au_browser_trim_documents(w->browser);
+    if (w->bench)
+        au_bench_idle(w->bench); /* the results stay readable until the next run */
     {
         /* The memory rules for background tabs, about once a second. */
         AuBrowser *b = w->browser;

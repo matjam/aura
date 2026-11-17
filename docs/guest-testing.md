@@ -29,6 +29,7 @@ another folder, for example to run a second guest beside the first);
 | print the front window's title | `tools/guest-qmp.py front-window` |
 | wait for an application or a window | `tools/guest-qmp.py wait-app APP [SECONDS]`, `wait-window APP TITLE [SECONDS]` |
 | check a build end to end | `tools/smoke.sh` |
+| time page loads (the page benchmark) | `tools/bench.sh` ([`performance.md`](performance.md), "To benchmark pages") |
 | stop the guest | `tools/guest-run.sh stop` |
 
 ## Which base to test on
