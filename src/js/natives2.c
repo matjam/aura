@@ -1201,7 +1201,17 @@ static JSValue n_compile(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return r;
 }
 
+/* scriptsOff(): the document's own script does not run (AuJsSettings). */
+static JSValue n_scripts_off(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewBool(ctx, js_of_ctx(ctx)->settings.scripts_off);
+}
+
 static const JSCFunctionListEntry natives2[] = {
+    JS_CFUNC_DEF("scriptsOff", 0, n_scripts_off),
     JS_CFUNC_DEF("styleSet", 4, n_style_set),
     JS_CFUNC_DEF("styleGet", 3, n_style_get),
     JS_CFUNC_DEF("styleNames", 1, n_style_names),

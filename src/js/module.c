@@ -432,7 +432,7 @@ void au_js_run_module(AuJs *js, AuElement *el, const char *src, size_t len, cons
                       void (*done)(void *ctx, AuElement *el, bool ok), void *ctx)
 {
     Modules *m = M(js);
-    if (js->closing || !m) {
+    if (js->closing || !m || js->settings.scripts_off) {
         if (done)
             done(ctx, el, false);
         return;

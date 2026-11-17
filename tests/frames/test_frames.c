@@ -589,6 +589,59 @@ static void test_sandbox(void)
     world_close(&w);
 }
 
+/* A sandboxed frame without allow-scripts has a window the parent may
+ * use (eval in it, as challenge scripts do), but none of its own script
+ * runs: script elements, event handler attributes, scripts the parent
+ * inserts. */
+static void test_sandbox_no_scripts(void)
+{
+    static const Page site[] = {
+        {"http://a.test/",
+         "<!DOCTYPE html><body><script>var f=document.createElement('iframe');f.setAttribute('sandbox','allow-same-origin');"
+         "f.srcdoc='<p id=p onclick=\"parent.clicked=1\">x</p><script>parent.ran=1<\\/script><noscript>ns</noscript>';"
+         "document.body.appendChild(f);var w=f.contentWindow;var early=w===null?'null':String(w.eval('1+1'));"
+         "</script>"},
+        {0}};
+    World w;
+    world_open(&w, site, "http://a.test/", 400, 600);
+    JS_IS(&w, "early", "2");
+    JS_IS(&w, "String(window.ran)", "undefined");
+    JS_IS(&w, "f.contentDocument.querySelector('noscript').textContent", "ns");
+    JS_IS(&w, "f.contentDocument.getElementById('p').click(), String(window.clicked)", "undefined");
+    JS_IS(&w, "var s=f.contentDocument.createElement('script');s.textContent='parent.inserted=1';"
+              "f.contentDocument.body.appendChild(s);String(window.inserted)",
+          "undefined");
+    JS_IS(&w, "var heard=0;f.contentDocument.getElementById('p').addEventListener('click',function(){heard=1});"
+              "f.contentDocument.getElementById('p').click();heard",
+          "1");
+    world_close(&w);
+}
+
+/* An iframe in a shadow tree (a widget's closed shadow root) loads and has
+ * a window, also when script built the shadow tree before inserting its
+ * host; it is not one of window.frames. */
+static void test_shadow_frames(void)
+{
+    static const Page site[] = {
+        {"http://a.test/",
+         "<!DOCTYPE html><body><div id=wrap></div><script>"
+         "var h1=document.createElement('div');document.body.appendChild(h1);"
+         "var f1=document.createElement('iframe');f1.src='kid.html?1';h1.attachShadow({mode:'closed'}).appendChild(f1);"
+         "var h2=document.createElement('div');var f2=document.createElement('iframe');f2.src='kid.html?2';"
+         "h2.attachShadow({mode:'closed'}).appendChild(f2);document.getElementById('wrap').appendChild(h2);"
+         "var got=[f1.contentWindow!==null,f2.contentWindow!==null].join();"
+         "</script>"},
+        {"http://a.test/kid.html?1", "<!DOCTYPE html><body><script>var me='one'</script>"},
+        {"http://a.test/kid.html?2", "<!DOCTYPE html><body><script>var me='two'</script>"},
+        {0}};
+    World w;
+    world_open(&w, site, "http://a.test/", 400, 600);
+    JS_IS(&w, "got", "true,true");
+    JS_IS(&w, "f1.contentWindow.me + f2.contentWindow.me", "onetwo");
+    JS_IS(&w, "frames.length", "0");
+    world_close(&w);
+}
+
 /* ---- Framing rules, limits ---- */
 
 static void test_blocking(void)
@@ -1022,6 +1075,8 @@ int main(void)
     test_script();
     test_color_scheme();
     test_sandbox();
+    test_sandbox_no_scripts();
+    test_shadow_frames();
     test_blocking();
     test_lazy_object();
     test_lifetime();

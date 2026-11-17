@@ -218,8 +218,24 @@ named frames (own accessor properties of the window, set by
   list move to the receiving document (reCAPTCHA-style widgets hand
   their parent a port this way).
 - `about:blank` and `srcdoc` frames have their parent's origin.
-- A frame with script off (a sandbox without `allow-scripts`, or the
-  JavaScript preference) has no window object: `contentWindow` is null.
+- **A sandboxed frame without `allow-scripts`** has a window object for
+  other documents' script, as in other browsers: the parent may call
+  into it (`contentWindow.eval`, which Cloudflare's challenge does), but
+  none of the frame's own script runs. The view keeps `scripting` off
+  and sets `script_window`, so it gets a script object whose runtime
+  has `AuJsSettings.scripts_off`: the parser runs no script, and script
+  elements inserted later, event handler attributes, `javascript:` URLs
+  and modules do not run. `noscript` content shows, and
+  `@media (scripting)` is `none`.
+- With the JavaScript preference off nothing has a window, and
+  `contentWindow` is null.
+- **Frames in shadow trees.** `au_frames_sync` walks the document in
+  shadow-including order, so an iframe in a shadow root (Turnstile puts
+  its widget in a closed one) loads and has a window. It is not one of
+  `window.frames` or `frames.length`, as the standard says. A host whose
+  shadow tree script built before inserting the host marks the frame
+  list when it is inserted (`subtree_kinds` in `docview.c` walks shadow
+  trees too).
 - `location.ancestorOrigins` lists the origins of the documents a frame
   is nested in.
 

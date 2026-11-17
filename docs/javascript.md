@@ -218,8 +218,15 @@ in force. The policy:
 
 | | Automatic | Unknown machine (host tools, tests) | Custom range |
 |---|---|---|---|
-| Page | half of the memory free, at least 8 MB, at most 96 MB | 64 MB | 4 to 256 MB |
-| Worker | a quarter of the memory free, at least 4 MB, at most 32 MB | 32 MB | 4 to 256 MB |
+| Page | half of the memory free, at least 8 MB, at most 96 MB (192 MB with 64-bit pointers) | 64 MB | 4 to 256 MB |
+| Worker | a quarter of the memory free, at least 4 MB, at most 32 MB (64 MB with 64-bit pointers) | 32 MB | 4 to 256 MB |
+
+- **64-bit ceilings.** The engine's objects, values and arenas are close
+  to twice the size with 64-bit pointers, so the mainstream ports get
+  twice the ceilings (`AU_SCRIPT_MEM_SCALE`). Cloudflare's managed
+  challenge (Slashdot, 2026-11-17) peaks at 112 MB in the page's
+  runtime on the 64-bit host, nearly all of it in the Turnstile frame,
+  and stops with the out-of-memory line at 96 MB.
 
 - **"Memory free"** is `AuBrowserHost.memory_free_kb`: on Mac OS 9 the
   free application heap plus free temporary memory

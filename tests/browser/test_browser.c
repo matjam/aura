@@ -778,8 +778,8 @@ static void test_script_memory_prefs(void)
     CHECK(page == 8192 && worker == 4096);
     au_script_memory_auto(50 * 1024 + 300, &page, &worker); /* half and a quarter, whole megabytes */
     CHECK(page == 25 * 1024 && worker == 12 * 1024);
-    au_script_memory_auto(460 * 1024, &page, &worker); /* plenty: the ceilings */
-    CHECK(page == 96 * 1024 && worker == 32 * 1024);
+    au_script_memory_auto(460 * 1024, &page, &worker); /* plenty: the ceilings, doubled with 64-bit pointers */
+    CHECK(page == (sizeof(void *) >= 8 ? 192u : 96u) * 1024 && worker == (sizeof(void *) >= 8 ? 64u : 32u) * 1024);
     au_script_memory_limits(0, 20000, 50 * 1024, &page, &worker); /* one Automatic, one custom */
     CHECK(page == 25 * 1024 && worker == 20000);
     au_script_memory_limits(1000, 0, 0, &page, &worker);

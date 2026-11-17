@@ -422,6 +422,7 @@ function scriptConnected(el) {
     scriptCreated.delete(el);
     scriptWatch = Math.max(0, scriptWatch - 1);
     syncCounts();
+    if (scriptsOff) return; /* a sandboxed frame without allow-scripts */
     const kind = scriptKind(el);
     if (!kind) return;
     if (kind === 'classic' && el.hasAttribute('nomodule')) return;

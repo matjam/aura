@@ -690,6 +690,7 @@ static bool ensure_js(AuDocScript *s)
         char origin[512];
         set.sandbox_origin = (dv->sandbox & AU_SANDBOX_ORIGIN) != 0;
         set.no_top_navigation = (dv->sandbox & AU_SANDBOX_TOP_NAV) != 0;
+        set.scripts_off = !dv->scripting;
         if (!strncmp(url, "about:", 6) && dv->parent->script && dv->parent->script->js) {
             /* about:blank and srcdoc documents have their parent's origin */
             snprintf(origin, sizeof origin, "%s", au_js_origin(dv->parent->script->js));
@@ -987,6 +988,10 @@ void au_docscript_parse_done(AuDocScript *s)
     if (s->parse_done)
         return;
     s->parse_done = true;
+    if (!s->js && !s->dv->scripting) {
+        s->content_loaded = true; /* a window only: no handlers of its own run */
+        return;
+    }
     if (!s->js) {
         /* Start the runtime only when an event handler attribute needs
          * it, or a popovertarget button (popovers live in the bindings). */

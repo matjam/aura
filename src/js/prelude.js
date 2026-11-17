@@ -10,6 +10,8 @@
 const P = Object.create(null);
 /* null in a worker, which has no document and none of the DOM natives */
 const doc = N.document ? N.document() : null;
+/* The document's own script is off (js.h, AuJsSettings.scripts_off). */
+const scriptsOff = !!(N.scriptsOff && N.scriptsOff());
 const S = {
     listeners: Symbol('listeners'), handlers: Symbol('handlers'), ev: Symbol('event'),
     list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'), range: Symbol('range'),
@@ -657,6 +659,10 @@ function handlerFunction(t, type) {
     if (src === null) return h && h.fn || null;
     if (h && h.src === src) return h.fn;
     let fn = null;
+    if (scriptsOff) {
+        store.set(type, { src, fn, fromProperty: false });
+        return fn;
+    }
     try {
         const form = host && host.form ? host.form : {};
         const outer = N.compileHandler(src, 'on' + type);

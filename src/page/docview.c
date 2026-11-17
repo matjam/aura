@@ -755,7 +755,7 @@ static void view_device(const AuDocView *dv, AuCssDevice *dev)
     au_css_device_default(dev);
     dev->width = (float)dv->vw;
     dev->height = (float)dv->vh;
-    dev->scripting = dv->script ? 2 : 0;
+    dev->scripting = dv->script && dv->scripting ? 2 : 0;
     dev->dark = dv->dark;
 }
 
@@ -1484,6 +1484,8 @@ DV_ENTRY_VOID(begin, (AuDocView * dv, const char *url), (dv, url))
         /* The parser keeps opts.ctx; the script object follows it. */
         opts.script_ready = au_docscript_script_ready;
         opts.ctx = dv->script = au_docscript_new(dv);
+    } else if (dv->script_window) {
+        dv->script = au_docscript_new(dv); /* a window only: the parser runs no script */
     }
     dv->parser = au_html_parser_new(&opts);
     dv->doc = au_html_parser_document(dv->parser);
@@ -2554,10 +2556,13 @@ static int tag_kinds(AuAtom t)
     return 0;
 }
 
-static int subtree_kinds(AuNode *n)
+/* Shadow trees included: a host whose shadow tree script built before
+ * inserting the host (Turnstile's widget, an iframe in a closed shadow
+ * root) brings that tree's frames, sheets and images with it. */
+static int subtree_kinds(AuNode *n, bool shadows)
 {
     int k = 0;
-    for (AuNode *c = n; c && k != 7; c = au_node_next(c, n))
+    for (AuNode *c = n; c && k != 7; c = shadows ? au_node_next_including_shadow(c, n) : au_node_next(c, n))
         if (c->type == AU_NODE_ELEMENT)
             k |= tag_kinds(au_as_element(c)->tag);
     return k;
@@ -2571,7 +2576,7 @@ void au_dv_child_changed(AuDocView *dv, AuNode *parent, AuNode *child, AuNode *p
         return; /* a comment: nothing shows it, no selector counts it */
     if (au_node_shadow_including_root(parent) != &dv->doc->node)
         return; /* built outside the document (or in another): its insertion is the change */
-    int k = subtree_kinds(child);
+    int k = subtree_kinds(child, dv->doc->has_shadow);
     if (parent->type == AU_NODE_ELEMENT && tag_kinds(au_as_element(parent)->tag) == 1)
         k |= 1; /* the text of a <style> or <title> */
     if (k & 1)

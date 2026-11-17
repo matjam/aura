@@ -138,7 +138,12 @@ struct AuDocView {
     AuLayoutScroll *slim_scrolls;
     uint32_t nslim_scrolls;
     /* scripts (script.c) */
-    AuDocScript *script; /* this document's, while scripting is on */    bool scripting;      /* the setting, applied at begin */
+    AuDocScript *script; /* this document's, while scripting is on or script_window is set */
+    bool scripting;      /* the setting, applied at begin */
+    /* With scripting off: the document still gets a window for other
+     * documents' script (a sandboxed frame without allow-scripts), but
+     * none of its own script runs (AuJsSettings.scripts_off). */
+    bool script_window;
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     char *referrer;      /* document.referrer for the next runtime; NULL: "" */

@@ -1488,7 +1488,7 @@ bool au_js_run_classic(AuJs *js, AuElement *el, const char *src, size_t len, con
 
 bool au_js_run_classic_take(AuJs *js, AuElement *el, char *src, size_t len, const char *url, int line)
 {
-    if (js->closing) {
+    if (js->closing || js->settings.scripts_off) {
         au_free(src);
         return false;
     }
@@ -1578,7 +1578,7 @@ bool au_js_eval(AuJs *js, const char *src, size_t len, AuBuf *out)
 
 void au_js_run_javascript_url(AuJs *js, const char *url)
 {
-    if (strncmp(url, "javascript:", 11) != 0)
+    if (strncmp(url, "javascript:", 11) != 0 || js->settings.scripts_off)
         return;
     JSValue s = js_str(js->ctx, url + 11, strlen(url + 11));
     JSValue r = js_call_prelude(js, "runJavascriptUrl", 1, &s);

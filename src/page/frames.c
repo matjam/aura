@@ -71,6 +71,7 @@ struct AuFrame {
     bool load_due, error_due; /* events for the element, fired from au_frames_idle */
     bool restart;   /* look at the attributes again from au_frames_idle */
     bool dead;
+    bool in_shadow; /* the element is in a shadow tree: not one of window.frames */
     uint32_t sandbox;
     int sx, sy;     /* scroll offset */
     AuRect box;     /* the content box in the owner's document coordinates */
@@ -481,6 +482,7 @@ static AuDocView *frame_view(AuFrame *f)
     c->in_frame = f;
     c->sandbox = f->sandbox | o->sandbox;
     c->scripting = o->scripting && !(c->sandbox & AU_SANDBOX_SCRIPTS);
+    c->script_window = o->scripting && !c->scripting;
     if (o->user_css)
         au_docview_set_user_css(c, o->user_css);
     if (o->has_font_prefs)
@@ -1140,9 +1142,14 @@ void au_frames_sync(AuDocView *dv)
     AuFrame **list = NULL;
     uint32_t n = 0, cap = 0;
     bool changed = false;
-    /* The document's frame elements in tree order. */
+    /* The document's frame elements in shadow-including tree order: a
+     * frame in a shadow tree (a widget's closed shadow root) loads and has
+     * a window like any other, but is not one of window.frames. */
     uint32_t left = nold; /* old records not met yet */
-    for (AuNode *c = au_node_next(&dv->doc->node, &dv->doc->node); c; c = au_node_next(c, &dv->doc->node)) {
+    const AuNode *top = &dv->doc->node;
+    bool shadows = dv->doc->has_shadow;
+    for (AuNode *c = shadows ? au_node_next_including_shadow(top, top) : au_node_next(top, top); c;
+         c = shadows ? au_node_next_including_shadow(c, top) : au_node_next(c, top)) {
         /* Every old record is placed and no new one may be made: the rest
          * of the document changes nothing. Without this each sync looked
          * every further frame element up in the old list, and a script
@@ -1172,6 +1179,11 @@ void au_frames_sync(AuDocView *dv)
             f->el = el;
             au_node_ref(&el->node);
             f->kind = (uint8_t)kind;
+            changed = true;
+        }
+        bool in_shadow = shadows && au_is_shadow_root(au_node_root(c));
+        if (in_shadow != f->in_shadow) {
+            f->in_shadow = in_shadow;
             changed = true;
         }
         if (n == cap) {
@@ -1422,7 +1434,7 @@ int au_frames_window_count(AuDocView *dv)
     au_frames_sync(dv);
     int n = 0;
     for (uint32_t i = 0; i < dv->nframes; i++)
-        n += is_window(dv->frames[i]);
+        n += is_window(dv->frames[i]) && !dv->frames[i]->in_shadow;
     return n;
 }
 
@@ -1430,7 +1442,7 @@ AuElement *au_frames_window_at(AuDocView *dv, int idx)
 {
     au_frames_sync(dv);
     for (uint32_t i = 0; i < dv->nframes; i++)
-        if (is_window(dv->frames[i]) && idx-- == 0)
+        if (is_window(dv->frames[i]) && !dv->frames[i]->in_shadow && idx-- == 0)
             return dv->frames[i]->el;
     return NULL;
 }

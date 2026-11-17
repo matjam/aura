@@ -77,6 +77,11 @@ typedef struct AuJsSettings {
     const char *origin;
     bool sandbox_origin;
     bool no_top_navigation;
+    /* The document's own script does not run (a sandboxed frame without
+     * allow-scripts): no script elements, event handler attributes,
+     * javascript: URLs or modules. The window exists for other documents'
+     * script, which may call into it, as in other browsers. */
+    bool scripts_off;
     /* document.referrer: the Referer value the navigation to this
      * document carried; NULL for none (""). Copied. */
     const char *referrer;

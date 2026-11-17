@@ -5,8 +5,10 @@
  * content.worker_memory_kb) holding 0 for Automatic or a number of KB.
  * Automatic follows the memory the machine has free when a page starts:
  *
- *   page   = half of what is free, at least 8 MB, at most 96 MB
+ *   page   = half of what is free, at least 8 MB, at most 96 MB (192 MB
+ *            with 64-bit pointers)
  *   worker = a quarter of what is free, at least 4 MB, at most 32 MB
+ *            (64 MB with 64-bit pointers)
  *
  * "Free" is what the shell reports (AuBrowserHost.memory_free_kb): on
  * Mac OS 9 the free application heap plus free temporary memory, which
@@ -29,10 +31,15 @@
 
 #define AU_SCRIPT_MEM_CUSTOM_MIN_KB (4u * 1024)
 #define AU_SCRIPT_MEM_CUSTOM_MAX_KB (256u * 1024)
+/* The ceilings are twice as high with 64-bit pointers: the engine's
+ * objects, values and arenas are close to twice the size, so the same
+ * page needs about twice the memory. Turnstile's managed challenge peaks
+ * at 112 MB on the 64-bit host (measured 2026-11-17) and stops at 96 MB. */
+#define AU_SCRIPT_MEM_SCALE (sizeof(void *) >= 8 ? 2u : 1u)
 #define AU_SCRIPT_MEM_PAGE_FLOOR_KB (8u * 1024)
-#define AU_SCRIPT_MEM_PAGE_CEILING_KB (96u * 1024)
+#define AU_SCRIPT_MEM_PAGE_CEILING_KB (96u * 1024 * AU_SCRIPT_MEM_SCALE)
 #define AU_SCRIPT_MEM_WORKER_FLOOR_KB (4u * 1024)
-#define AU_SCRIPT_MEM_WORKER_CEILING_KB (32u * 1024)
+#define AU_SCRIPT_MEM_WORKER_CEILING_KB (32u * 1024 * AU_SCRIPT_MEM_SCALE)
 #define AU_SCRIPT_MEM_PAGE_UNKNOWN_KB (64u * 1024)
 #define AU_SCRIPT_MEM_WORKER_UNKNOWN_KB (32u * 1024)
 
