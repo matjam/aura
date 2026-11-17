@@ -745,5 +745,277 @@ P.runJavascriptUrl = function (code) {
     N.runScript(code, N.docUrl(0), null);
 };
 
+/* ---------------- document.fonts (CSS Font Loading) ----------------
+ * The engine loads @font-face fonts itself; script sees a set that is
+ * always loaded, so code that awaits document.fonts.ready (GitHub's
+ * landing page) goes on. Fonts made by script cannot be loaded: a
+ * FontFace's load() rejects and the page keeps its fallback font. */
+
+class FontFace {
+    constructor(family, source, descriptors = {}) {
+        if (arguments.length < 2) throw new TypeError('FontFace: 2 arguments required');
+        this._family = str(family);
+        this._d = descriptors || {};
+        this._status = 'unloaded';
+        this._loaded = null;
+    }
+    get family() { return this._family; }
+    get style() { return str(this._d.style || 'normal'); }
+    get weight() { return str(this._d.weight || 'normal'); }
+    get stretch() { return str(this._d.stretch || 'normal'); }
+    get unicodeRange() { return str(this._d.unicodeRange || 'U+0-10FFFF'); }
+    get display() { return str(this._d.display || 'auto'); }
+    get status() { return this._status; }
+    get loaded() { return this._loaded || (this._loaded = new Promise((res, rej) => { this._settle = [res, rej]; })); }
+    load() {
+        const p = this.loaded;
+        if (this._status === 'unloaded') {
+            this._status = 'error';
+            this._settle[1](domErr('Fonts made by script are not supported', 'NetworkError'));
+        }
+        return p;
+    }
+}
+tag(FontFace);
+defGlobal('FontFace', FontFace);
+
+class FontFaceSet extends EventTarget {
+    constructor() { super(); this._faces = new Set(); this._ready = Promise.resolve(this); }
+    get ready() { return this._ready; }
+    get status() { return 'loaded'; }
+    get size() { return this._faces.size; }
+    add(f) { if (!(f instanceof FontFace)) throw new TypeError('FontFaceSet.add: not a FontFace'); this._faces.add(f); return this; }
+    delete(f) { return this._faces.delete(f); }
+    has(f) { return this._faces.has(f); }
+    clear() { this._faces.clear(); }
+    forEach(cb, self) { for (const f of this._faces) cb.call(self, f, f, this); }
+    values() { return this._faces.values(); }
+    keys() { return this._faces.values(); }
+    entries() { return this._faces.entries(); }
+    [Symbol.iterator]() { return this._faces.values(); }
+    check() { return true; }
+    load() { return Promise.resolve([]); }
+}
+tag(FontFaceSet);
+defGlobal('FontFaceSet', FontFaceSet);
+const fontSets = new WeakMap();
+defProps(DP, {
+    get fonts() {
+        let s = fontSets.get(this);
+        if (!s) fontSets.set(this, s = new FontFaceSet());
+        return s;
+    },
+});
+
+/* ---------------- Web Animations ----------------
+ * Element.animate and Animation run on the clock and fire their events
+ * and promises at the times the standard gives, but change nothing on
+ * screen: the element keeps its own style. Code that drives animations
+ * (GitHub's image fade-in, Reddit's spinner) runs instead of throwing;
+ * on GitHub the throw made React remount the page section in a loop. */
+
+class AnimationPlaybackEvent extends Event {
+    constructor(type, init = {}) {
+        super(type, init);
+        this._ct = init.currentTime ?? null;
+        this._tt = init.timelineTime ?? null;
+    }
+    get currentTime() { return this._ct; }
+    get timelineTime() { return this._tt; }
+}
+tag(AnimationPlaybackEvent);
+defGlobal('AnimationPlaybackEvent', AnimationPlaybackEvent);
+
+class AnimationTimeline {
+    get currentTime() { return Math.round(nowRel() * 10) / 10; }
+}
+class DocumentTimeline extends AnimationTimeline {}
+tag(AnimationTimeline);
+tag(DocumentTimeline);
+defGlobal('AnimationTimeline', AnimationTimeline);
+defGlobal('DocumentTimeline', DocumentTimeline);
+const theTimeline = new DocumentTimeline();
+
+const animTiming = (o) => {
+    const t = typeof o === 'number' ? { duration: o } : (o && typeof o === 'object' ? o : {});
+    const num = (v, d) => (v === undefined || v === 'auto' ? d : Number(v));
+    return {
+        delay: num(t.delay, 0), endDelay: num(t.endDelay, 0), fill: t.fill || 'auto',
+        iterationStart: num(t.iterationStart, 0), iterations: num(t.iterations, 1),
+        duration: num(t.duration, 0), direction: t.direction || 'normal', easing: t.easing || 'linear',
+    };
+};
+
+class AnimationEffect {
+    getTiming() { return Object.assign({}, this._t); }
+    _endTime() { const t = this._t; return Math.max(0, t.delay + t.duration * t.iterations + t.endDelay); }
+    getComputedTiming() {
+        const t = this._t, active = t.duration * t.iterations;
+        return Object.assign({}, t, { endTime: this._endTime(), activeDuration: active,
+            localTime: this._anim ? this._anim.currentTime : null, progress: null, currentIteration: null });
+    }
+    updateTiming(o = {}) { this._t = animTiming(Object.assign(this.getTiming(), o)); if (this._anim) this._anim._sched(); }
+}
+class KeyframeEffect extends AnimationEffect {
+    constructor(target, keyframes, options) {
+        super();
+        if (target instanceof KeyframeEffect) { keyframes = target._k; options = target._t; target = target._target; }
+        this._target = target || null;
+        this._k = keyframes == null ? [] : Array.isArray(keyframes) ? keyframes.slice() : [keyframes];
+        this._t = animTiming(options);
+        this._anim = null;
+        this.composite = (options && options.composite) || 'replace';
+        this.pseudoElement = (options && options.pseudoElement) || null;
+    }
+    get target() { return this._target; }
+    set target(v) { this._target = v || null; }
+    getKeyframes() { return this._k.map((k) => Object.assign({}, k)); }
+    setKeyframes(k) { this._k = k == null ? [] : Array.isArray(k) ? k.slice() : [k]; }
+}
+tag(AnimationEffect);
+tag(KeyframeEffect);
+defGlobal('AnimationEffect', AnimationEffect);
+defGlobal('KeyframeEffect', KeyframeEffect);
+
+/* Running and paused animations, for getAnimations. */
+const liveAnimations = new Set();
+let animIds = 0;
+class Animation extends EventTarget {
+    constructor(effect = null, timeline = theTimeline) {
+        super();
+        this.id = '';
+        this._effect = null;
+        this.effect = effect;
+        this.timeline = timeline;
+        this._state = 'idle';
+        this._rate = 1;
+        this._hold = null;  /* the current time while paused or idle */
+        this._start = null; /* the timeline time at current time 0 */
+        this._timer = 0;
+        this._newPromises();
+        this._ready = Promise.resolve(this);
+        this.onfinish = this.oncancel = this.onremove = null;
+        this._n = ++animIds;
+    }
+    _newPromises() {
+        this._finished = new Promise((res, rej) => { this._fin = [res, rej]; });
+        this._finished.catch(() => {});
+    }
+    get effect() { return this._effect; }
+    set effect(e) {
+        if (this._effect) this._effect._anim = null;
+        this._effect = e instanceof AnimationEffect ? e : null;
+        if (this._effect) this._effect._anim = this;
+    }
+    get playState() { return this._state; }
+    get pending() { return false; }
+    get replaceState() { return 'active'; }
+    get ready() { return this._ready; }
+    get finished() { return this._finished; }
+    get playbackRate() { return this._rate; }
+    set playbackRate(r) { const ct = this.currentTime; this._rate = Number(r); if (ct !== null) this.currentTime = ct; }
+    updatePlaybackRate(r) { this.playbackRate = r; }
+    get startTime() { return this._start; }
+    set startTime(v) { this._start = v === null ? null : Number(v); this._hold = null; if (this._start !== null) this._run(); }
+    get currentTime() {
+        if (this._hold !== null) return this._hold;
+        if (this._start === null) return null;
+        const t = (theTimeline.currentTime - this._start) * this._rate;
+        return this._state === 'finished' ? this._clamp(t) : t;
+    }
+    set currentTime(v) {
+        v = Number(v);
+        if (this._state === 'running' || this._state === 'finished') { this._start = theTimeline.currentTime - v / (this._rate || 1); this._run(); }
+        else this._hold = v;
+    }
+    _end() { return this._effect ? this._effect._endTime() : 0; }
+    _clamp(t) { return this._rate < 0 ? Math.max(0, t) : Math.min(this._end(), t); }
+    _sched() {
+        if (this._timer) { N.clearTimer(this._timer); this._timer = 0; }
+        if (this._state !== 'running' || !this._rate) return;
+        const ct = this.currentTime, end = this._end();
+        const left = this._rate > 0 ? (end - ct) / this._rate : ct / -this._rate;
+        if (!isFinite(left)) return;
+        this._timer = N.setTimeout(() => { this._timer = 0; this._finishNow(); }, Math.max(0, left));
+    }
+    _run() {
+        this._state = 'running';
+        liveAnimations.add(this);
+        this._sched();
+    }
+    _event(type, ct) {
+        const ev = new AnimationPlaybackEvent(type, { currentTime: ct, timelineTime: theTimeline.currentTime });
+        fire(this, ev);
+        const h = this['on' + type];
+        if (typeof h === 'function') h.call(this, ev);
+    }
+    _finishNow() {
+        if (this._state !== 'running') return;
+        const end = this._rate < 0 ? 0 : this._end();
+        this._hold = null;
+        this._start = theTimeline.currentTime - end / (this._rate || 1);
+        this._state = 'finished';
+        liveAnimations.delete(this);
+        this._fin[0](this);
+        N.queueTask(() => { if (this._state === 'finished') this._event('finish', this.currentTime); });
+    }
+    play() {
+        if (this._state === 'running') return;
+        let ct = this._hold;
+        if (this._state === 'finished' || ct === null) ct = this._rate < 0 ? this._end() : 0;
+        if (this._state === 'finished' || this._state === 'idle') this._newPromises();
+        this._hold = null;
+        this._start = theTimeline.currentTime - ct / (this._rate || 1);
+        this._run();
+    }
+    pause() {
+        if (this._state === 'paused') return;
+        const ct = this.currentTime;
+        if (this._state === 'finished' || this._state === 'idle') this._newPromises();
+        this._hold = ct === null ? (this._rate < 0 ? this._end() : 0) : ct;
+        this._start = null;
+        this._state = 'paused';
+        if (this._timer) { N.clearTimer(this._timer); this._timer = 0; }
+        liveAnimations.add(this);
+    }
+    finish() {
+        if (!this._rate || (this._rate > 0 && !isFinite(this._end()))) throw domErr('The animation cannot finish', 'InvalidStateError');
+        if (this._state === 'idle' || this._state === 'paused') this._state = 'running';
+        this._finishNow();
+    }
+    cancel() {
+        if (this._state === 'idle') return;
+        if (this._timer) { N.clearTimer(this._timer); this._timer = 0; }
+        if (this._state !== 'finished') this._fin[1](domErr('The animation was cancelled', 'AbortError'));
+        this._state = 'idle';
+        this._hold = this._start = null;
+        liveAnimations.delete(this);
+        this._newPromises();
+        N.queueTask(() => this._event('cancel', null));
+    }
+    reverse() { this._rate = -this._rate; this.play(); }
+    persist() {}
+    commitStyles() {}
+}
+tag(Animation);
+defGlobal('Animation', Animation);
+
+const byAge = (x, y) => x._n - y._n;
+defProps(EP, {
+    animate(keyframes, options) {
+        const a = new Animation(new KeyframeEffect(this, keyframes, options));
+        if (options && typeof options === 'object' && options.id !== undefined) a.id = str(options.id);
+        a.play();
+        return a;
+    },
+    getAnimations() { return [...liveAnimations].filter((a) => a._effect && a._effect._target === this).sort(byAge); },
+});
+defProps(DP, {
+    get timeline() { return theTimeline; },
+    getAnimations() {
+        return [...liveAnimations].filter((a) => a._effect && a._effect._target && this.contains(a._effect._target)).sort(byAge);
+    },
+});
+
 return P;
 })

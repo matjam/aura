@@ -237,3 +237,63 @@ test('script text and supports', () => {
     assert.ok(HTMLScriptElement.supports('module'));
     assert.ok(!HTMLScriptElement.supports('nonsense'));
 });
+
+promise_test('document.fonts is a loaded set', async () => {
+    assert.ok(document.fonts instanceof FontFaceSet);
+    assert.equal(document.fonts, document.fonts);
+    assert.equal(await document.fonts.ready, document.fonts);
+    assert.equal(document.fonts.status, 'loaded');
+    assert.ok(document.fonts.check('12px serif'));
+    const f = new FontFace('Mine', 'url(x.woff2)', { weight: '700' });
+    assert.equal(f.weight, '700');
+    assert.equal(f.status, 'unloaded');
+    document.fonts.add(f);
+    assert.ok(document.fonts.has(f));
+    assert.equal([...document.fonts].length, 1);
+    let err = null;
+    try { await f.load(); } catch (e) { err = e; }
+    assert.equal(err && err.name, 'NetworkError');
+    assert.equal(f.status, 'error');
+    document.fonts.clear();
+});
+
+promise_test('Element.animate runs on the clock and finishes', async () => {
+    const d = document.createElement('div');
+    document.body.appendChild(d);
+    const a = d.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 30, fill: 'backwards' });
+    assert.ok(a instanceof Animation);
+    assert.equal(a.playState, 'running');
+    assert.equal(a.effect.target, d);
+    assert.equal(a.effect.getKeyframes().length, 2);
+    assert.ok(d.getAnimations().length === 1 && d.getAnimations()[0] === a);
+    assert.ok(document.getAnimations().includes(a));
+    a.pause();
+    assert.equal(a.playState, 'paused');
+    let finishEvents = 0;
+    a.onfinish = () => finishEvents++;
+    a.play();
+    assert.equal(await a.finished, a);
+    assert.equal(a.playState, 'finished');
+    assert.equal(a.currentTime, 30);
+    await delay(5);
+    assert.equal(finishEvents, 1);
+    assert.equal(d.getAnimations().length, 0);
+    // cancel rejects finished and fires cancel
+    const b = d.animate({ opacity: [0, 1] }, 1000);
+    const rejected = b.finished.then(() => 'resolved', (e) => e.name);
+    let cancels = 0;
+    b.addEventListener('cancel', () => cancels++);
+    b.cancel();
+    assert.equal(await rejected, 'AbortError');
+    assert.equal(b.playState, 'idle');
+    assert.equal(b.currentTime, null);
+    await delay(5);
+    assert.equal(cancels, 1);
+    // finish() jumps to the end
+    const c = d.animate(null, { duration: 5000, delay: 100 });
+    c.finish();
+    assert.equal(c.playState, 'finished');
+    assert.equal(c.currentTime, 5100);
+    assert.equal(typeof document.timeline.currentTime, 'number');
+    d.remove();
+});

@@ -271,9 +271,15 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   created in every context (see [Memory](#memory)).
 - **`document.referrer`** is `""` in frames (a top-level document has it).
 - **Web Animations** (`Element.animate`, `Animation`,
-  `document.getAnimations`) are absent, so a call to `animate` throws
-  "not a function". Reddit's loading spinner (`faceplate-progress`)
-  throws once for each spinner; nothing visible depends on it there.
+  `document.getAnimations`) run on the clock and fire `finish`,
+  `cancel` and their promises, but change nothing on screen: keyframes
+  and easing are not applied, and `fill: forwards` leaves the element's
+  own style. Before they existed, GitHub's landing page threw in a
+  React ref and remounted a section about 600 times (150 MB of script
+  heap, every image fetched 22 times).
+- **`document.fonts`** is a set that is always loaded (`ready`
+  resolves at once, `check` is true); a `FontFace` made by script
+  cannot load and its `load()` rejects with NetworkError.
 - **IndexedDB, the Cache API and service workers** are absent; what each
   would take is in [`web-storage.md`](web-storage.md).
 - **`document.cookie`** in a sandboxed frame without
@@ -284,8 +290,6 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   worker loads with `importScripts`, a script that is mostly data, or a
   script the worker compiled before the page did
   ([`javascript.md`](javascript.md), "How script memory is kept down").
-- **An out-of-memory script** gets a console line and no page-level
-  notice.
 - **A script of 2 MB or more keeps no source text**: its functions'
   `toString` gives the native function form with the function's kind,
   and a class gives `class C { }`. A page that reads a function's text
