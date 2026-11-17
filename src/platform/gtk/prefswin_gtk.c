@@ -68,6 +68,21 @@ static void load_item(PrefsWin *p, AuPrefId id)
     case AU_PREF_CHOICE:
     case AU_PREF_FONT: {
         int v = au_prefs_edit_get_choice(p->edit, id);
+        if (v < 0 && desc(id)->kind == AU_PREF_FONT) {
+            /* A family that is not installed: shown after the installed
+             * ones, so the menu does not claim the first of them. */
+            GtkStringList *l = GTK_STRING_LIST(gtk_drop_down_get_model(GTK_DROP_DOWN(c)));
+            guint n = (guint)au_prefs_edit_choice_count(p->edit, id);
+            AuBuf b;
+            au_buf_init(&b);
+            au_prefs_edit_get_text(p->edit, id, &b);
+            char *name = g_strdup_printf("%s (not installed)", au_buf_cstr(&b));
+            const char *add[] = {name, NULL};
+            gtk_string_list_splice(l, n, g_list_model_get_n_items(G_LIST_MODEL(l)) - n, add);
+            g_free(name);
+            au_buf_free(&b);
+            v = (int)n;
+        }
         gtk_drop_down_set_selected(GTK_DROP_DOWN(c), v >= 0 ? (guint)v : GTK_INVALID_LIST_POSITION);
         break;
     }
@@ -233,8 +248,8 @@ static void drop_changed(GtkDropDown *d, GParamSpec *ps, gpointer data)
         return;
     AuPrefId id = ITEM(d);
     guint v = gtk_drop_down_get_selected(d);
-    if (v == GTK_INVALID_LIST_POSITION)
-        return;
+    if (v == GTK_INVALID_LIST_POSITION || v >= au_prefs_edit_choice_count(p->edit, id))
+        return; /* none, or the family that is not installed */
     if (!au_prefs_edit_set_choice(p->edit, id, (int)v))
         load_item(p, id);
     changed(p, id);
@@ -518,7 +533,7 @@ static AuPrefsEdit *new_session(void)
     h.blocking = au_gtk_host.block_manager ? au_gtk_host.block_manager(au_gtk_host.ctx) : NULL;
     h.default_browser = default_browser();
     h.machine = au_gtk_host.machine ? au_gtk_host.machine : "this computer";
-    h.settings_name = au_gtk_host.settings_name ? au_gtk_host.settings_name : "the system settings";
+    h.settings_name = au_gtk_host.settings_name; /* NULL: the model words it */
     char example[512];
     snprintf(example, sizeof example, "%s/Downloads", g_get_home_dir());
     h.folder_example = au_gtk_host.folder_example ? au_gtk_host.folder_example : example;
