@@ -426,6 +426,33 @@ static void test_tabs(void)
     env_free(&e);
 }
 
+/* Closing a window whose tabs write localStorage as they unload: the
+ * storage event reaches the tabs of other windows, never a tab of the
+ * closing window that is already freed (the macOS port crashed in
+ * au_page_storage_event closing such a window, 2026-11-17). */
+static void test_unload_writes(void)
+{
+    Env e;
+    env_init(&e, NULL);
+    for (int i = 0; i < 3; i++) {
+        answer(e.a, "", "<!DOCTYPE html><title>t</title><script>addEventListener('pagehide',function(){"
+                        "localStorage.setItem('gone',String(Math.random()))});onunload=function(){"
+                        "localStorage.setItem('unload',String(Math.random()))}</script>");
+        load(&e, "http://a.test/closing");
+    }
+    AuBrowserWindow *other = au_browser_window_new(e.b, 800, 600);
+    answer(e.a, "", PAGE);
+    au_bw_new_tab(other, "http://a.test/other", true, -1);
+    AuBrowserWindow *closing = e.w;
+    e.w = other;
+    settle(&e, 300);
+    au_browser_window_free(closing);
+    settle(&e, 50); /* the event is a task */
+    EQ(jst(&e, 0, "String(ev.length>0)+','+String(localStorage.getItem('gone')!==null)"), "true,true",
+       "the other window heard the closing tabs' writes");
+    env_free(&e);
+}
+
 /* ---- sessionStorage and the tab ---- */
 
 static void test_session(void)
@@ -1054,6 +1081,7 @@ int main(void)
     test_map();
     test_persistence();
     test_tabs();
+    test_unload_writes();
     test_session();
     test_frames();
     test_policy();

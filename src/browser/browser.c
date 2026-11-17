@@ -1067,14 +1067,10 @@ static void free_tab(AuTab *t)
 void au_browser_window_free(AuBrowserWindow *w)
 {
     AuBrowser *b = w->browser;
-    for (int i = 0; i < w->ntabs; i++)
-        free_tab(w->tabs[i]);
-    au_free(w->tabs);
-    au_free(w->field);
-    if (w->label_list)
-        au_fontlist_free(w->label_list);
-    if (w->small_list)
-        au_fontlist_free(w->small_list);
+    /* Out of the browser's lists first: freeing a page runs its unload
+     * handlers, whose script may write localStorage, and the storage event
+     * then goes to every listed tab (storage_changed). A tab freed earlier
+     * in this loop must not be among them, nor this window's others. */
     for (int i = 0; i < b->nwindows; i++) {
         if (b->windows[i] == w) {
             memmove(&b->windows[i], &b->windows[i + 1], (size_t)(b->nwindows - i - 1) * sizeof *b->windows);
@@ -1082,6 +1078,19 @@ void au_browser_window_free(AuBrowserWindow *w)
             break;
         }
     }
+    AuTab **tabs = w->tabs;
+    int ntabs = w->ntabs;
+    w->tabs = NULL;
+    w->ntabs = 0;
+    w->active = -1;
+    for (int i = 0; i < ntabs; i++)
+        free_tab(tabs[i]);
+    au_free(tabs);
+    au_free(w->field);
+    if (w->label_list)
+        au_fontlist_free(w->label_list);
+    if (w->small_list)
+        au_fontlist_free(w->small_list);
     b->session_gen++;
     au_free(w);
 }

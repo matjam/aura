@@ -1233,7 +1233,7 @@ void au_page_set_storage_ns(AuPage *p, uint32_t ns)
 
 void au_page_storage_event(AuPage *p, const AuStorageChange *c)
 {
-    if (c->kind == AU_STORAGE_SESSION && c->ns != p->storage_ns)
+    if (!p || !p->dv || (c->kind == AU_STORAGE_SESSION && c->ns != p->storage_ns))
         return;
     AuDocStorageEvent ev;
     memset(&ev, 0, sizeof ev);
