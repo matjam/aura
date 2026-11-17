@@ -321,6 +321,17 @@ checked; cases that depend on the Ahem-like font say "no-chrome". Ahem:
 #t x=0 y=0 w=150 h=16
 #c x=150 y=0 w=0 h=16
 
+=== fixed layout: a percentage column takes what fixed columns leave (GitHub's diffs)
+<body style="margin:0">
+<style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>
+<div style="width:600px"><table id=t style="table-layout:fixed;width:100%;border-collapse:collapse"><colgroup><col width=44><col width=44><col width="100%"></colgroup><tr><td id=a><i></i></td><td id=b><i></i></td><td id=c><i></i></td></tr><tr><td colspan=3 id=d><i></i></td></tr></table></div>
+---
+#t x=0 y=0 w=600 h=32
+#a x=0 y=0 w=44 h=16
+#b x=44 y=0 w=44 h=16
+#c x=88 y=0 w=512 h=16
+#d x=0 y=16 w=600 h=16
+
 === heights: a rowspan cell's excess goes to its rows in proportion to their heights
 <body style="margin:0">
 <style>i{display:inline-block;vertical-align:top;width:16px;height:16px}td{padding:0}</style>

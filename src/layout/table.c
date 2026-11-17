@@ -928,6 +928,21 @@ static void distribute_fixed(LTableBox *t, float target, float *out)
         total += out[i];
     }
     float d = target - total;
+    if (d < 0 && np) {
+        /* Percentage columns take what the fixed columns leave: with
+         * <col width=44> twice and <col width=100%> (GitHub's diffs) the
+         * last gets the table's width less 88, and the table keeps its
+         * width instead of growing by 88 past its container. */
+        float tpw = 0;
+        for (uint32_t i = 0; i < nc; i++)
+            if ((t->cfl[i] & CF_PCT) && !(t->cfl[i] & (CF_COLLAPSED | CF_FIXED)))
+                tpw += out[i];
+        float cut = l_min(-d, tpw);
+        for (uint32_t i = 0; i < nc && tpw > 0; i++)
+            if ((t->cfl[i] & CF_PCT) && !(t->cfl[i] & (CF_COLLAPSED | CF_FIXED)))
+                out[i] -= cut * out[i] / tpw;
+        return;
+    }
     if (d <= 0)
         return;
     for (uint32_t i = 0; i < nc; i++) {
