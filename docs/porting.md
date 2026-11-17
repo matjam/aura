@@ -32,7 +32,7 @@ Further legacy platforms can follow the same plan as a mainstream one.
 | Platform | Kind | Toolkit | Status |
 |---|---|---|---|
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | Toolbox, Appearance Manager | in development, released |
-| Linux on Wayland | mainstream, for testing | GTK4 | in development: browser windows done ([`gtk.md`](gtk.md)), other windows in progress |
+| Linux on Wayland | mainstream, for testing | GTK4 | done, with a CI build ([`gtk.md`](gtk.md)); packages not started |
 | Amiga with an accelerated 68k processor | legacy | Intuition, with the system's own gadget classes | planned |
 | Modern macOS | mainstream, for testing | AppKit | planned |
 
@@ -246,5 +246,5 @@ keeps the Mac OS 9 build working and looking the same.
 | Developer windows' layout and actions in `src/browser` (`devwin_model.c`); Mac `devwin.c` only frames them ([`developer-tools.md`](developer-tools.md), "The window models") | done |
 | Application services in `src/browser/app.c`: the data files Aura keeps, loading them at start, when to save them, damaged files, and setting up the network stack from preferences; the port gives named-file read, write and safe replace (Mac `storage.c`, `network.c`; Unix `src/platform/posix/files_posix.c`) | done |
 | GTK4 port in `src/platform/gtk`: browser windows, tabs, page, input, menus, dialogs, fonts, network ([`gtk.md`](gtk.md)) | done |
-| GTK4 Preferences, list, developer and About windows, and a CI build | in progress |
+| GTK4 Preferences, list, developer and About windows, and a CI build | done |
 | Packaging for Linux | not started |

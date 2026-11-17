@@ -6,7 +6,7 @@ it before you change the port. The boundary between the port and
 `src/browser` is in [`porting.md`](porting.md); the browser model's
 behaviour is in [`browser-chrome.md`](browser-chrome.md).
 
-The port runs on Wayland only, with plain GTK4 (4.10 or later) and no
+The port runs on Wayland only, with plain GTK4 (4.12 or later) and no
 libadwaita. Never set `GDK_BACKEND=x11` or run it under XWayland.
 
 ## To build and run
@@ -29,14 +29,11 @@ that includes a GTK, GLib, GDK, Cairo or fontconfig header lives in this
 folder. The OS services (sockets, files, clocks, entropy, coroutines)
 come from `src/platform/posix` unchanged.
 
-To add a native window (Preferences, the list windows, the developer
-windows, About), add its sources through `src/platform/gtk/windows.cmake`,
-which sets `AURA_GTK_WINDOW_SOURCES`; `CMakeLists.txt` includes it when
-it exists. Point the matching `show_*` function in the "Native windows"
-section of `menus.c` at the window's entry point; every menu command
-and `au_gtk_show_window` reach those windows through that section only.
-Those windows are documented in `docs/gtk-windows.md`, owned by the
-second phase of the port.
+The secondary windows (Preferences, the lists, the developer windows,
+About) have their own sources, listed in `windows.cmake`, which
+`CMakeLists.txt` includes. To add a source file to them, add it to
+`AURA_GTK_WINDOW_SOURCES` there. They are described in "Secondary
+windows" below.
 
 ## Profile and assets
 
@@ -168,6 +165,101 @@ to browser windows is ignored, so the model is never entered again from
 inside its own call. To add a synchronous dialog, use
 `au_gtk_modal_wait`; never call back into the model from its callback.
 
+## Secondary windows
+
+Every window other than the browser window is a view of a portable
+model in `src/browser`. The GTK code builds widgets from the model's
+descriptions, turns GTK events into the model's calls, and gives the
+model what it asks of the system. It holds no browser state and makes
+no decisions of its own.
+
+| File | Window | Model |
+|---|---|---|
+| `windows_gtk.h` | the API the rest of the port calls | |
+| `winutil_gtk.c`, `winutil_gtk.h` | the shared dialogs, CSS, clipboard, entry points | |
+| `prefswin_gtk.c` | Preferences | `prefs_ui.h` |
+| `listwin_gtk.c` | Bookmarks, History, Downloads, Cookies | `lists.h` |
+| `devwin_gtk.c` | Page Source, Console, Network, Performance, System Status, Report a Problem | `devwin_model.h` |
+| `about_gtk.c` | About Aura | `credits.h`, `sysinfo.h` |
+
+### How the port connects them
+
+- **Start and quit.** `start()` in `main.c` calls `au_gtk_windows_start`
+  (`host.c`), which fills an `AuGtkWindowsHost` and calls
+  `au_gtk_windows_init`. `au_gtk_quit` calls `au_gtk_windows_shutdown`
+  before the last save, so an open Preferences window is cancelled
+  first.
+- **Opening.** `au_gtk_show_window` in `menus.c` passes every
+  `AuWindowKind` to `au_gtk_window_kind`. Page Source opens the Source
+  developer window.
+- **The host's hooks.** `host.c` serves the front window and page,
+  opening a URL through `au_command_open_url`, showing a download in the
+  file manager (`GtkFileLauncher`), the system facts (`sysinfo_gtk.c`),
+  the network's connections and header recording, and free memory.
+  After OK in Preferences it calls `au_app_prefs_changed`. The hooks it
+  leaves NULL are listed in "Known gaps".
+- **Edit and Find.** When a developer window is active,
+  `au_gtk_command_state` reports `AU_FRONT_TOOL`. A focused entry takes
+  the Edit commands first; otherwise Copy, Paste and Select All go to
+  `au_gtk_devwin_edit`. Find goes to `au_gtk_devwin_find`, and Find
+  Again and Find Previous to `au_gtk_devwin_find_again`.
+- **Refreshing.** A model change with `AU_CHANGED_MENUS` or
+  `AU_CHANGED_BOOKMARK` touches the History and Bookmarks lists
+  (`au_gtk_list_touch`). The Cookies list notices changes through
+  `au_list_stale`. A new download brings the Downloads window forward.
+- **The Window menu** lists the browser windows, then the other
+  visible windows of the application (`window_refs` in `menus.c`).
+
+### How each window is built
+
+**Preferences.** A `GtkStackSidebar` beside a `GtkStack` with one page
+per `AuPrefSection`. Each page is a grid of caption and control, made by
+walking `au_pref_desc` for every `AuPrefId` and choosing the widget by
+`AuPrefKind`: check button, a pair of grouped check buttons for a radio
+item, an entry and its unit for a number, an entry for text, an entry
+and a Choose button (`GtkFileDialog`) for a folder, a `GtkDropDown` for
+a choice or a font, a button for an action, a wrapping label for a
+note, and one check button and status line per blocking list. As on
+Mac OS 9, check boxes, radio buttons and drop-downs are set in the edit
+session as they change (live items are applied to the browser at once),
+text and number fields are read on OK, and Cancel or closing the window
+cancels the session. Restore Defaults resets the visible section. A
+one-second timer redraws the blocking lists' status while they update.
+Tabs on Left takes effect at once: the browser window's body turns
+horizontal and the notebook puts its tabs on the left, at the tab
+column width.
+
+**Lists.** A `GtkColumnView` over a `GListStore` of row handles; the
+model's rows, columns, buttons and actions drive it. A 250 ms timer
+refreshes the model when `au_list_stale` says so. Delete and Backspace
+run Delete; a double click or Return activates the row.
+
+**Developer windows.** The model is painted, as on Mac OS 9, with the
+engine's canvas into a Cairo image surface the size of a
+`GtkDrawingArea`: the engine's premultiplied `0xAARRGGBB` pixels are
+`CAIRO_FORMAT_ARGB32`, so `au_surface_wrap` paints straight into it.
+The push buttons, the tool band's toggles and a `GtkScrollbar` per text
+pane sit over the drawing area in a `GtkOverlay`, at the rectangles
+`au_devwin_button_rect`, `au_devwin_toggle_rect` and `au_devwin_areas`
+give. The drawing area keeps the keyboard; the overlaid widgets never
+take focus, so Tab and Return reach the model. Clicks are counted by
+hand (double-click time, 4 pixels) and a drag past a pane's edge
+scrolls on a 40 ms timer. Only the window's size is kept in the
+`develop.windows` preference, since Wayland gives no position.
+
+**About.** A `GtkAboutDialog` with the build identity, the tagline, the
+credits by kind and a short MIT licence statement
+(`GTK_LICENSE_CUSTOM`). Its links open in Aura.
+
+### Dialogs the window models wait for
+
+The models' callbacks (ask for a name, choose a cookie rule, Find)
+return their answer. `au_gtk_ask_text` and `au_gtk_choose` run a modal
+window in a nested `GMainLoop`. While one runs, `au_gtk_dialog_running()`
+is true: the windows' timers skip their refresh and their close
+requests are refused, so the model the dialog belongs to does not
+change or go away under it.
+
 ## To test without a desktop
 
 Run the port only inside a nested headless compositor, never on your
@@ -200,21 +292,27 @@ grim shot.png
   virtual pointer client.
 - On some machines sway is killed a fraction of a second after it starts
   unless it runs under a tracer. If so, start it as
-  `strace -e trace=none -e signal=none -o /dev/null sway ...`.
+  `strace -f -e trace=none -e signal=none -o /dev/null sway ...`.
 
 ## Known gaps
 
-- Preferences, the History, Bookmarks, Downloads and Cookies windows,
-  the developer windows and About are not in this port yet; their
-  commands show a notice. Page Source opens a `view-source:` tab. System Status data (`sysinfo_gtk.c`) is
-  ready but has no window.
-- No content blocking.
+- No content blocking: the Blocking pane of Preferences has no
+  blocking manager behind it.
+- Develop > Tests > Timing Test and Paint Benchmark only beep. The
+  measurements are Mac shell instrumentation (`macos9/browserwin.c`);
+  the port leaves `timing_test` and `benchmark` NULL until they move to
+  shared code.
+- No default-browser switch in Preferences.
 - HiDPI enlarges logical pixels instead of drawing at device pixels.
 - The application is not unique: a second launch is a second process
   sharing the same profile.
 - Tabs have no contextual menu and no site icons.
 - Windows open where the compositor puts them; Wayland gives a client
   no window position, so the session does not restore positions.
-- Find Again from a developer window does nothing.
+- Lists: dragging bookmarks to move them, and favicons in the rows.
+- Developer windows: the canvas is painted at the logical size, so it
+  is not sharp at a scale above 1.
+- Preferences: a number field's range is checked by the session on OK,
+  not as it is typed.
 - Download names are cut to the Mac's 31 characters by shared code.
-- No CI job and no packages yet.
+- No packages yet.
