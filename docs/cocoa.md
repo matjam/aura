@@ -210,6 +210,20 @@ answers.
 | `listwin_cocoa.m` | Bookmarks, History, Downloads, Cookies | `lists.h` |
 | `devwin_cocoa.m` | Page Source, Console, Network, Performance, System Status, Report a Problem | `devwin_model.h` |
 | `about_cocoa.m` | About Aura | `credits.h`, `sysinfo.h` |
+| `dialogs_cocoa.m` | the shared dialogs (`au_cocoa_dlg_*`): ask for text, choose from a list, details, a one-button alert | |
+
+- Ask for text and choose from a list are app-modal `NSAlert`s; the
+  one-button alert is a sheet when it has a parent window. While any
+  runs, the windows skip their timer refresh, ignore input and refuse
+  to close.
+- The developer windows use the light appearance, because the painted
+  area is always light. A native control wider than its Mac OS 9
+  rectangle keeps its width and moves the controls after it right.
+- `develop.windows` keeps each developer window's size and position.
+  The position is the content's top-left in points from the main
+  screen's top-left. A place no screen shows the title bar of is
+  centred instead.
+- History's day headings are group rows and cannot be selected.
 
 `host.m` fills the `AuCocoaWindowsHost` in `au_cocoa_windows_start`: the
 front window and page, opening a URL through `au_command_open_url`,
@@ -269,3 +283,10 @@ push and uploads it as an artifact
   off the end instead of scrolling.
 - The input method's window sits at the pointer, not at the caret.
 - Not signed with a Developer ID or notarized.
+- The list and developer windows' dialogs are app-modal alerts, not
+  sheets on their window.
+- The developer windows read key characters without the text input
+  system, so dead keys do not compose in the filter or the Console line.
+- Edit > Copy does nothing in the list windows, as on GTK.
+- The list and developer windows have been driven from code, not yet
+  clicked through by hand.
