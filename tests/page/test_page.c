@@ -3,6 +3,7 @@
  * incremental feeding, resize. Uses the Ahem-like test font. */
 #include "../layout/ahem.h"
 #include "page/page.h"
+#include "page/webfont.h"
 #include "image/cache.h"
 
 #include <stdio.h>
@@ -1259,6 +1260,217 @@ static void test_images_and_webfonts(void)
     free(gif);
 }
 
+/* ---- font-display: block periods ----
+ * The view gets a clock the test moves. Ahem draws solid squares, so the
+ * text's ink is counted in a painted surface: hidden text has none. */
+
+static double display_clock;
+
+static double clock_now(void *ctx, AuDocView *dv)
+{
+    (void)ctx;
+    (void)dv;
+    return display_clock;
+}
+
+static AuDocView *new_clocked_view(Fake *f)
+{
+    memset(f, 0, sizeof *f);
+    static AuLoader li;
+    li.ctx = f;
+    li.request = fake_request;
+    static AuDocViewCallbacks cb;
+    memset(&cb, 0, sizeof cb);
+    cb.ctx = f;
+    cb.load_finished = cb_finished;
+    cb.now_ms = clock_now;
+    return au_docview_new(fonts, &li, &cb);
+}
+
+/* Dark pixels inside element id's box, painted at 400 x 100. */
+static int ink_of(AuDocView *dv, const char *id)
+{
+    AuSurface *s = au_surface_new(400, 100);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 400, 100}, 0, 0);
+    AuRect r = rect_of(dv, id);
+    int ink = 0;
+    for (int y = (int)r.y; y < (int)(r.y + r.h) && y < 100; y++)
+        for (int x = (int)r.x; x < (int)(r.x + r.w) && x < 400; x++) {
+            uint32_t px = au_surface_get(s, x, y);
+            ink += ((px >> 16) & 255) < 128 && ((px >> 8) & 255) < 128 && (px & 255) < 128;
+        }
+    au_canvas_free(c);
+    au_surface_free(s);
+    return ink;
+}
+
+static uint32_t layouts_of(AuDocView *dv)
+{
+    AuDocViewStats st;
+    au_docview_stats(dv, &st);
+    return st.layouts;
+}
+
+/* Loads a page whose span #a (iiii, 20px Ahem: 80 x 20) uses face W with
+ * the given font-display (NULL: none) and family list, at time 0. */
+static AuDocView *display_page(Fake *f, const char *display, const char *family)
+{
+    char html[512];
+    snprintf(html, sizeof html,
+             "<!DOCTYPE html><style>@font-face{font-family:W;src:url(w.woff2)%s%s}</style>"
+             "<body style='margin:0;font:20px %s;color:#000;background:#fff'><span id=a>iiii</span>",
+             display ? ";font-display:" : "", display ? display : "", family);
+    display_clock = 0;
+    AuDocView *dv = new_clocked_view(f);
+    au_docview_load(dv, html, (size_t)strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 400, 100);
+    au_docview_update(dv);
+    return dv;
+}
+
+/* Moves the clock and lets the view notice. */
+static void advance(AuDocView *dv, double to)
+{
+    display_clock = to;
+    au_docview_animate(dv, (uint32_t)to);
+}
+
+static void test_font_display(void)
+{
+    size_t wlen;
+    char *woff2 = read_sample("sample-inter.woff2", &wlen);
+    CHECK(woff2 != NULL, "cannot read sample-inter.woff2");
+    if (!woff2)
+        return;
+    const int full = 80 * 20; /* iiii in Ahem */
+    Fake f;
+
+    /* auto: hidden for the block period, then one layout when the face
+     * arrives inside it, and nothing more when the period ends. */
+    AuDocView *dv = display_page(&f, NULL, "W");
+    CHECK(fake_find(&f, "http://example.com/w.woff2") != NULL, "face not requested");
+    CHECK(rect_of(dv, "a").w == 80, "laid out with the fallback's metrics: %g", rect_of(dv, "a").w);
+    CHECK(ink_of(dv, "a") == 0, "fallback text shown at once: %d", ink_of(dv, "a"));
+    advance(dv, 2000);
+    CHECK(ink_of(dv, "a") == 0, "fallback text shown inside the block period: %d", ink_of(dv, "a"));
+    uint32_t l0 = layouts_of(dv);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    AuRect r = rect_of(dv, "a");
+    int ink = ink_of(dv, "a");
+    CHECK(r.w > 5 && r.w < 40 && ink > 0 && ink < full, "web face shown: %g wide, ink %d", r.w, ink);
+    CHECK(layouts_of(dv) == l0 + 1, "layouts when the face arrived: %u", layouts_of(dv) - l0);
+    advance(dv, 5000);
+    ink_of(dv, "a");
+    CHECK(layouts_of(dv) == l0 + 1, "the block period's end laid out again: %u", layouts_of(dv) - l0);
+    au_docview_free(dv);
+
+    /* block, slow: the fallback shows when the period ends, without a
+     * layout, and the face swaps in when it arrives. */
+    dv = display_page(&f, "block", "W");
+    CHECK(ink_of(dv, "a") == 0, "block: fallback shown at once");
+    l0 = layouts_of(dv);
+    advance(dv, AU_WEBFONT_BLOCK_MS - 1);
+    CHECK(ink_of(dv, "a") == 0, "block: fallback shown before the period ended");
+    advance(dv, AU_WEBFONT_BLOCK_MS);
+    CHECK(ink_of(dv, "a") == full, "block: fallback not shown after the period: %d", ink_of(dv, "a"));
+    CHECK(layouts_of(dv) == l0, "block: the period's end laid out again");
+    advance(dv, 60000);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w < 40, "block: late face not swapped in: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+
+    /* A failed face ends its block period at once. */
+    dv = display_page(&f, NULL, "W");
+    CHECK(ink_of(dv, "a") == 0, "failure: fallback shown at once");
+    advance(dv, 500);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", NULL, 0, false);
+    CHECK(ink_of(dv, "a") == full, "failure: fallback hidden after the face failed: %d", ink_of(dv, "a"));
+    au_docview_free(dv);
+
+    /* A platform family before the web face shows at once. */
+    dv = display_page(&f, NULL, "Ahem, W");
+    CHECK(ink_of(dv, "a") == full, "a platform family first is hidden: %d", ink_of(dv, "a"));
+    au_docview_free(dv);
+    dv = display_page(&f, NULL, "Nonesuch, W, serif");
+    CHECK(ink_of(dv, "a") == 0, "an unknown family before the web face shows the fallback");
+    au_docview_free(dv);
+
+    /* swap: a short block period, then the face swaps in whenever it arrives. */
+    dv = display_page(&f, "swap", "W");
+    CHECK(ink_of(dv, "a") == 0, "swap: fallback shown inside the short block period");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS);
+    CHECK(ink_of(dv, "a") == full, "swap: fallback not shown after the block period");
+    advance(dv, 60000);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w < 40, "swap: face not swapped in: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+
+    /* fallback: swaps inside its swap period, keeps the fallback after it. */
+    dv = display_page(&f, "fallback", "W");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS);
+    CHECK(ink_of(dv, "a") == full, "fallback: fallback not shown after the block period");
+    advance(dv, 2000);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w < 40, "fallback: face inside the swap period not used: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+    dv = display_page(&f, "fallback", "W");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS + AU_WEBFONT_SWAP_MS);
+    l0 = layouts_of(dv);
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w == 80 && ink_of(dv, "a") == full, "fallback: face after the swap period used: %g",
+          rect_of(dv, "a").w);
+    CHECK(layouts_of(dv) == l0, "fallback: a face not used laid out again");
+    CHECK(!au_docview_loading(dv), "fallback: still loading");
+    au_docview_free(dv);
+
+    /* optional: used only inside its block period. */
+    dv = display_page(&f, "optional", "W");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS / 2);
+    CHECK(ink_of(dv, "a") == 0, "optional: fallback shown inside the block period");
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w < 40, "optional: face inside the block period not used: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+    dv = display_page(&f, "optional", "W");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS);
+    CHECK(ink_of(dv, "a") == full, "optional: fallback not shown after the block period");
+    deliver_bytes(&f, dv, "http://example.com/w.woff2", woff2, wlen, true);
+    CHECK(rect_of(dv, "a").w == 80, "optional: late face used: %g", rect_of(dv, "a").w);
+    au_docview_free(dv);
+
+    /* A family whose name CSS knows as a keyword (fast) is still a family. */
+    {
+        display_clock = 0;
+        dv = new_clocked_view(&f);
+        const char *kw = "<!DOCTYPE html><style>\n@font-face{font-family:Fast;src:url(f.woff2)}</style>"
+                         "<body style='margin:0;font:20px Fast'><span id=a>iiii</span>";
+        au_docview_load(dv, kw, strlen(kw), "http://example.com/");
+        au_docview_set_viewport(dv, 400, 100);
+        au_docview_update(dv);
+        CHECK(fake_find(&f, "http://example.com/f.woff2") != NULL, "face of family Fast not requested");
+        CHECK(ink_of(dv, "a") == 0, "family Fast: fallback shown in the block period");
+        deliver_bytes(&f, dv, "http://example.com/f.woff2", woff2, wlen, true);
+        CHECK(rect_of(dv, "a").w < 40, "family Fast not used: %g", rect_of(dv, "a").w);
+        au_docview_free(dv);
+    }
+
+    /* An invalid value is auto. */
+    dv = display_page(&f, "sometimes", "W");
+    advance(dv, AU_WEBFONT_SHORT_BLOCK_MS);
+    CHECK(ink_of(dv, "a") == 0, "invalid font-display: not auto");
+    au_docview_free(dv);
+
+    /* A page without web fonts paints at once. */
+    display_clock = 0;
+    dv = new_clocked_view(&f);
+    const char *plain = "<!DOCTYPE html><body style='margin:0;font:20px W'><span id=a>iiii</span>";
+    au_docview_load(dv, plain, strlen(plain), "http://example.com/");
+    au_docview_set_viewport(dv, 400, 100);
+    CHECK(ink_of(dv, "a") == full, "no web fonts: text hidden");
+    au_docview_free(dv);
+    free(woff2);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -1282,6 +1494,7 @@ int main(void)
     test_webfonts_generated();
     test_background_snapped();
     test_background_svg_ratio_only();
+    test_font_display();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

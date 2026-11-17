@@ -1,5 +1,6 @@
 /* Fuzzing of @font-face loading: random and mutated @font-face rules
- * (src lists, formats, technologies, weights, styles, unicode-range text),
+ * (src lists, formats, technologies, weights, styles, unicode-range text,
+ * font-display) with a clock moved across the block periods,
  * random text, and a loader that answers in random order with the sample
  * WOFF2 font, mutated copies of it, garbage, empty bodies or failures,
  * with documents replaced and views freed while fonts load.
@@ -109,6 +110,7 @@ static const char *const ranges[] = {"U+0-7F", "U+0400-045F", "U+30-39, U+41-5A"
                                      "U+0-10FFFF", "U+110000", "U+7F-0", "u+00?\?-01FF", "U+", "U+zz",
                                      "U+0041, U+0042-", "U+0000000-1", "U+30-39,,U+41"};
 static const char *const weights[] = {"100 900", "bold", "normal", "300", "900 100", "auto", "1000 1", "0", "x"};
+static const char *const displays[] = {"auto", "block", "swap", "fallback", "optional", "AUTO", "x", "1", "swap swap", ""};
 static const char *const texts[] = {"Hello", "0123456789", "Привет", "😀 x", "", " ", "abc\xCC\x81", "\xFF\xFE",
                                     "日本語"};
 
@@ -127,6 +129,8 @@ static void gen(char *out, size_t cap)
         if (rnd(2))
             n += (size_t)snprintf(out + n, cap - n, ";font-weight:%s", weights[rnd(sizeof weights / sizeof weights[0])]);
         if (rnd(2))
+            n += (size_t)snprintf(out + n, cap - n, ";font-display:%s", displays[rnd(sizeof displays / sizeof displays[0])]);
+        if (rnd(2))
             n += (size_t)snprintf(out + n, cap - n, ";font-style:%s", rnd(2) ? "italic" : "oblique 10deg");
         n += (size_t)snprintf(out + n, cap - n, "%s", rnd(8) ? "}" : "/*");
         if (rnd(10) == 0)
@@ -144,6 +148,16 @@ static void gen(char *out, size_t cap)
         if (n)
             out[rnd((uint32_t)n)] = "{}();:'\"/*@,-+?"[rnd(15)];
     out[n] = 0;
+}
+
+/* The view's clock: moves forward in random steps, across block periods. */
+static double fake_ms;
+
+static double clock_fn(void *ctx, AuDocView *dv)
+{
+    (void)ctx;
+    (void)dv;
+    return fake_ms;
 }
 
 static double now(void)
@@ -177,7 +191,11 @@ int main(int argc, char **argv)
         Loader l;
         memset(&l, 0, sizeof l);
         AuLoader li = {&l, req_fn, NULL, NULL, NULL};
-        AuDocView *dv = au_docview_new(fonts, &li, NULL);
+        AuDocViewCallbacks cb;
+        memset(&cb, 0, sizeof cb);
+        cb.now_ms = clock_fn;
+        fake_ms = rnd(1000);
+        AuDocView *dv = au_docview_new(fonts, &li, rnd(4) ? &cb : NULL);
         au_docview_set_viewport(dv, 200 + (int)rnd(600), 300);
         int docs = 1 + (int)rnd(2);
         for (int d = 0; d < docs; d++) {
@@ -194,6 +212,10 @@ int main(int argc, char **argv)
                     au_surface_free(s);
                 }
                 answer(&l, dv);
+                if (rnd(2)) {
+                    fake_ms += rnd(4) == 0 ? rnd(5000) : rnd(150);
+                    au_docview_animate(dv, (uint32_t)fake_ms);
+                }
                 if (rnd(40) == 0)
                     break; /* leave fonts loading */
             }

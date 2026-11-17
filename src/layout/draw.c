@@ -2115,7 +2115,7 @@ static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
         l_draw_text(P->L, P->c, rf, root->b.style, "\xE2\x80\xA6", 3, endx, base, color, 0);
     }
     Deco d[8];
-    int nd = collect_decos(f->box, d, 8);
+    int nd = l_font_hidden(P->L, font) ? 0 : collect_decos(f->box, d, 8); /* hidden with the text */
     for (int i = 0; i < nd; i++) {
         float th = d[i].thickness > 0 ? d[i].thickness : l_max(1, roundf(font->m.underline_thickness));
         float w = f->w;

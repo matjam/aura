@@ -225,7 +225,8 @@ shaped.
   (`au_fontset_new_layered`, `au_fontset_add_web`), fetching only faces
   whose family the styled document uses for text in their
   `unicode-range`, and lays the document out again when one arrives
-  (font-display: swap). The faces go with the document.
+  and is used (see [Block periods](#block-periods-and-font-display)).
+  The faces go with the document.
 - The text a face is checked against is each text node and the
   `content` of each `::before` and `::after` (`scan_pseudo`), since
   icon fonts are often used only there. A string is checked as written;
@@ -235,6 +236,48 @@ shaped.
   several weights and a WOFF face limited by `unicode-range`.
 
 [`css.md`](css.md) describes the parsed `@font-face` descriptors.
+
+### Block periods and font-display
+
+Text in a face that is still loading is laid out with the fallback's
+metrics and painted invisible (text and its decorations) for the face's
+block period, as Chrome does, so a face that arrives in time costs one
+layout and no visible re-flow. The period starts when the face is first
+fetched. When it ends the fallback shows with a repaint only, and the
+face swaps in later only as `font-display` allows:
+
+| `font-display` | Block period | Face used if it arrives |
+|---|---|---|
+| `auto` (and an invalid value), `block` | 3 s | at any time |
+| `swap` | 100 ms | at any time |
+| `fallback` | 100 ms | within 3 s after the block period |
+| `optional` | 100 ms | within the block period |
+
+- To change the periods, edit `AU_WEBFONT_BLOCK_MS`,
+  `AU_WEBFONT_SHORT_BLOCK_MS` and `AU_WEBFONT_SWAP_MS` in
+  `src/page/webfont.h`. There is no preference.
+- A face whose fetch fails (all its sources) ends its block period at
+  once. A face not used is dropped undecoded.
+- Text is hidden only while the first family in its list that the page
+  can use with U+0020 is a blocked web face; a platform or generic
+  family ahead of it shows at once, and a page without `@font-face`
+  rules paints as before.
+- The clock is the document view's `now_ms` callback
+  (`au_webfonts_set_clock`); without one nothing is hidden and faces
+  swap in when they arrive (as in the host tests that give none).
+  Expiry is noticed in
+  `au_docview_animate`, which a page calls on idle while fetches are
+  outstanding, so no platform timer is needed.
+- On a slow link (Mac OS 9 on a modem or a congested network) most
+  faces miss the 3 s period: text in them appears in the fallback after
+  3 s and the page re-flows once per face when it arrives, and a
+  `fallback` or `optional` face usually keeps the fallback. A page never
+  stays blank past the period, whatever the network does.
+- Layout asks through the env callback `text_hidden`; the document
+  view calls `au_layout_text_visibility_changed` when a period ends,
+  which repaints without a new layout ([`layout.md`](layout.md)).
+- `test_font_display` in `tests/page/test_page.c` covers each value with
+  a delayed fetch and a test clock.
 
 ## Test fonts
 

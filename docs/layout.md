@@ -210,6 +210,14 @@ an image failed) keeps the box tree.
   (`au_layout_image_users` names the boxes with it as a background or
   mask) and the whole page only when layout changed geometry.
 
+**Hidden text** (a web font in its block period,
+[`fonts.md`](fonts.md#block-periods-and-font-display)) is laid out as usual
+and not painted: `l_font_hidden` asks the env callback `text_hidden`
+with the font's family list, weight and style, and caches the answer
+in the `LFont` until `au_layout_text_visibility_changed` bumps
+`AuLayout.hidden_gen`, which also asks for a repaint. Text decorations
+of hidden text are not painted either.
+
 **Generated text** (a pseudo-element's content, a marker's number) is a
 text box whose node is the element; `current_style` in `layout.c` finds
 its style through the pseudo-element box above it.
