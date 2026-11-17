@@ -224,6 +224,30 @@ static void on_activate(GApplication *app, gpointer data)
     g_application_release(app);
 }
 
+/* The command line's own arguments. GIO turns an argument such as
+ * about:home into the URI about:///home, so an argument with a scheme
+ * other than file: is passed on as it was typed. */
+static char **raw_args;
+static int raw_n;
+
+static bool has_scheme(const char *s)
+{
+    if (!g_ascii_isalpha(s[0]))
+        return false;
+    const char *p = s + 1;
+    while (g_ascii_isalnum(*p) || *p == '+' || *p == '-' || *p == '.')
+        p++;
+    return *p == ':' && g_ascii_strncasecmp(s, "file:", 5) != 0;
+}
+
+static char *open_url(GFile *file, gint i, gint n)
+{
+    if (raw_n == n && has_scheme(raw_args[i]) &&
+        !g_file_test(raw_args[i], G_FILE_TEST_EXISTS))
+        return g_strdup(raw_args[i]);
+    return g_file_get_uri(file);
+}
+
 static void on_open(GApplication *app, GFile **files, gint n, const gchar *hint, gpointer data)
 {
     (void)hint;
@@ -232,7 +256,7 @@ static void on_open(GApplication *app, GFile **files, gint n, const gchar *hint,
         return;
     char **urls = g_new0(char *, (gsize)n + 1);
     for (gint i = 0; i < n; i++)
-        urls[i] = g_file_get_uri(files[i]);
+        urls[i] = open_url(files[i], i, n);
     g_application_hold(app);
     if (!au_gtk.started) {
         start((const char *const *)urls, n);
@@ -261,6 +285,10 @@ static void on_shutdown(GApplication *app, gpointer data)
 int main(int argc, char **argv)
 {
     au_gtk_find_assets(argv[0]);
+    raw_args = g_new0(char *, (gsize)argc + 1);
+    for (int i = 1; i < argc; i++)
+        if (argv[i][0] != '-')
+            raw_args[raw_n++] = argv[i];
     /* One process per launch: the profile is used by that process only
      * (docs/gtk.md, "Known gaps"). */
     au_gtk.app = gtk_application_new(AURA_APP_ID, G_APPLICATION_NON_UNIQUE | G_APPLICATION_HANDLES_OPEN);
