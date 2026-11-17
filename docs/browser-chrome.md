@@ -647,7 +647,13 @@ page.
 **`au_page_scroll_damage`** (`page_doc.c`, `au_docview_scroll_damage`,
 `au_layout_scroll_damage` in `draw.c`) returns the rectangles that do
 not move with the page: fixed boxes (old and new place), sticky boxes
-whose offset changed, and their shadows and outlines. It returns -1
+whose offset changed, and their shadows and outlines. A box's extent
+is the union of what it and its descendants paint: boxes of no area
+add nothing, and a descendant that is a fixed or sticky box itself is
+left to its own rectangles. (Reddit keeps an empty fixed toast
+container at the top with a fixed slot at the bottom; their union was
+a rectangle the height of the view, damaged at both places, and a
+32-pixel step painted the view twice over.) It returns -1
 when the whole page must be repainted: layout pending, a fixed or
 gradient canvas background, more than `AU_PAGE_SCROLL_DAMAGE`
 rectangles, or a viewport box under a transformed ancestor. Layout
@@ -662,7 +668,11 @@ rectangles to paint; the shell then moves the screen (Mac OS 9:
 reports) and copies the painted rectangles.
 
 **Painting skips boxes outside the canvas clip** (`au_layout_paint`),
-so a strip paints only what it shows; box and text ink extents
+so a strip paints only what it shows. A transformed box is painted
+into a layer that covers only the part of it the strip can show (the
+dirty area mapped back through the transform, plus two pixels for the
+filter; `paint_layer` in `draw.c`); before 2026-11-17 the layer was the
+whole box, painted again for each strip. Box and text ink extents
 (shadows, outlines, inline SVG with visible overflow) must cover what
 they draw. `rect_hits` in `draw.c` allows one pixel above and below,
 because a text fragment is as tall as the face's rounded ascent and
@@ -692,12 +702,22 @@ not been measured again in the guest.
 **Tests and timing.** `tests/browser/test_scroll_shift.c` scrolls
 sample pages and inline pages with fixed, sticky and transformed boxes
 both ways and compares the moved result with a full repaint pixel for
-pixel; `SHIFT_DUMP=1` writes both images when they differ. To time
+pixel; `SHIFT_DUMP=1` writes both images when they differ. It also
+checks that a 32-pixel step over an empty fixed container paints a
+small part of the view, and that a page of rotated, skewed and
+translucent boxes painted in strips matches one whole paint
+(`strips_match`; the shifting comparison cannot check those, because
+the layer's filter rounds about one pixel in a thousand differently at
+other scroll offsets, by one level). To time
 scrolling on the host, run `aura-host chrome -w 1440 -h 1050 --tab PAGE
 --scroll-bench 20` (add `--bundled-only` for reproducible fonts): it
 times 32-pixel steps and page downs by repainting, then by moving
 pixels (`--no-shift` skips that), through the Mac shell's paint path,
-with pixels painted and copied, glyph cache counts and image decodes.
+with pixels painted and copied, glyph cache counts and image decodes,
+and the rectangles the first step of each kind painted. For a live
+page, add `--net --load-ms 8000`: a page that keeps timers running
+stays busy until the load limit (60 s with `--net`), and the benchmark
+starts only after it.
 
 ## Files Aura keeps
 

@@ -683,6 +683,7 @@ typedef struct ChromeOpts {
  * damaged rectangles are painted, and they are copied to the screen. */
 
 static AuPresent bench_pres;
+static bool bench_show; /* print the next flush's rectangles */
 
 static void bench_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
 {
@@ -714,6 +715,13 @@ static void bench_flush(AuBrowserWindow *w, AuSurface *s, AuSurface *screen, Ben
     AuPresentRound r;
     au_present_begin(&bench_pres, s, &r);
     AuCanvas *c = au_canvas_new(s);
+    if (bench_show) {
+        printf("  first step: %s, %d rectangles:", r.shifted ? "shifted" : "not shifted", r.n);
+        for (int i = 0; i < r.n; i++)
+            printf(" %d,%d-%d,%d", r.rects[i].x0, r.rects[i].y0, r.rects[i].x1, r.rects[i].y1);
+        printf("\n");
+        bench_show = false;
+    }
     for (int i = 0; i < r.n; i++) {
         au_bw_paint(w, c, r.rects[i]);
         bt->painted += (long)(r.rects[i].x1 - r.rects[i].x0) * (r.rects[i].y1 - r.rects[i].y0);
@@ -759,6 +767,7 @@ static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
             bt.model += now_ms() - s0;
             if (t->scroll_y == before)
                 break;
+            bench_show = i == 0;
             bench_flush(w, s, screen, &bt);
             n++;
         }

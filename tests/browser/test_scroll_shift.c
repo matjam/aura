@@ -77,6 +77,23 @@ static const char *inline_pages[][2] = {
      "p{margin:30px 0}</style><h4>Fixed in the frame</h4><p>one<p>two<p>three<p>four\"></iframe>"
      "<iframe srcdoc=\"<body style='background:#def'><p>alpha<p>beta<p>gamma<p>delta<p>epsilon\"></iframe>"
      "<iframe id=pin srcdoc=\"<body style='background:#fed;margin:2px'>pinned\"></iframe>"},
+    /* Reddit's toasts: a fixed container of no height at the top holding
+     * a fixed box at the bottom. Nothing between them paints, so a step
+     * must not repaint the view between them. */
+    {"file:///toasts.html",
+     "<!doctype html><style>body{margin:0;font:15px sans-serif}"
+     "#ctl{position:fixed;top:40px;left:0;right:0;height:0}"
+     "#ctl i{position:fixed;left:200px;bottom:20px;width:80px;height:24px;background:#c6f}"
+     "p{margin:0 0 20px;height:60px;background:#eef}</style><div id=ctl><i></i></div>"},
+    /* Transformed boxes are painted through a layer the size of the part
+     * a strip can show: strips across rotated, scaled, skewed and
+     * translucent boxes must match a whole paint (strips_match). */
+    {"file:///transforms.html",
+     "<!doctype html><style>body{margin:0;font:15px sans-serif}"
+     "div{margin:30px 60px;height:90px;background:linear-gradient(90deg,#f80,#08f);border:3px solid #333;"
+     "border-radius:12px;padding:8px}"
+     "div:nth-child(3n){transform:rotate(12deg)}div:nth-child(3n+1){transform:scale(1.3,.8) skewX(10deg);"
+     "opacity:.7}div:nth-child(3n+2){transform:rotate(-30deg) translateX(40px)}</style>"},
 };
 
 /* The inline pages' bodies are built from a head and repeated content. */
@@ -87,6 +104,7 @@ static void build_inline(int i, AuBuf *out)
         switch (i) {
         case 1: au_buf_printf(out, "<section><h2>Section %d</h2><p>Text of section %d.</p></section>", k, k); break;
         case 2: au_buf_printf(out, "<p>Paragraph %d over a gradient.</p>", k); break;
+        case 7: au_buf_printf(out, "<div>Box %d, transformed, with text across it</div>", k); break;
         case 3:
             au_buf_printf(out,
                           "<div class=b>Box %d with <span>outlined text</span> and a shadow. "
@@ -130,6 +148,8 @@ static void settle(AuBrowserWindow *w)
 }
 
 /* Paints what is pending into s, as the Mac shell's flush does. */
+static long painted; /* pixels painted by flush */
+
 static void flush(AuBrowserWindow *w, AuSurface *s)
 {
     for (int round = 0; round < 8 && au_present_pending(&pres); round++) {
@@ -142,8 +162,10 @@ static void flush(AuBrowserWindow *w, AuSurface *s)
             fprintf(stderr, "\n");
         }
         AuCanvas *c = au_canvas_new(s);
-        for (int i = 0; i < r.n; i++)
+        for (int i = 0; i < r.n; i++) {
             au_bw_paint(w, c, r.rects[i]);
+            painted += (long)(r.rects[i].x1 - r.rects[i].x0) * (r.rects[i].y1 - r.rects[i].y0);
+        }
         au_canvas_free(c);
     }
 }
@@ -235,6 +257,7 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
                  {-10, 5, 1}, {0, -1, 1}};
     char what[64];
     for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+        painted = 0;
         au_bw_scroll_by(bw, steps[i].dx, steps[i].dy);
         if (i == 5) {
             /* Damage between scrolls: the pointer over the page. */
@@ -247,6 +270,14 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
         }
         if (steps[i].flush) {
             flush(bw, s);
+            if (i == 0 && strstr(url, "toasts")) {
+                /* the 32-pixel strip, the box's two places, edges: far
+                 * less than the view (it was the view twice over) */
+                long view = (long)(bw->layout.page.x1 - bw->layout.page.x0) * (bw->layout.page.y1 - bw->layout.page.y0);
+                if (painted > view / 4)
+                    fprintf(stderr, "toasts: a 32-pixel step painted %ld of %ld pixels\n", painted, view);
+                CHECK(painted <= view / 4);
+            }
             snprintf(what, sizeof what, "step %d (by %d,%d)", (int)i, steps[i].dx, steps[i].dy);
             compare(bw, s, what);
         }
@@ -284,6 +315,67 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
         CHECK(shifts == 0);
     (void)t;
     au_surface_free(s);
+    au_browser_free(b);
+}
+
+/* Painting the view in strips must give the pixels of one whole paint, at
+ * the same scroll position (no shift, so no rounding of positions):
+ * a transformed box is painted through a layer the size of the part a
+ * strip shows, and that must not change what the strip gets. */
+static void strips_match(AuFontSet *fonts, const char *url, int w, int h)
+{
+    AuBrowserHost host = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, t_scroll, NULL, NULL, NULL, NULL};
+    AuBrowser *b = au_browser_new(fonts, &host);
+    au_present_init(&pres);
+    AuBrowserWindow *bw = au_browser_window_new(b, w, h);
+    bw->native_standins = true;
+    au_bw_new_tab(bw, url, true, 0);
+    settle(bw);
+    AuSurface *whole = au_surface_new(w, h), *strips = au_surface_new(w, h);
+    AuIRect page = {bw->layout.page.x0, bw->layout.page.y0, bw->layout.page.x1, bw->layout.page.y1};
+    static const int scrolls[] = {0, 150, 700, 1600};
+    static const int bands[] = {16, 7, 33};
+    for (size_t si = 0; si < sizeof scrolls / sizeof scrolls[0]; si++) {
+        au_bw_scroll_to(bw, 0, scrolls[si]);
+        settle(bw);
+        AuCanvas *c = au_canvas_new(whole);
+        au_bw_paint(bw, c, page);
+        au_canvas_free(c);
+        for (size_t bi = 0; bi < sizeof bands / sizeof bands[0]; bi++) {
+            c = au_canvas_new(strips);
+            for (int y = page.y0; y < page.y1; y += bands[bi]) {
+                int y1 = y + bands[bi] < page.y1 ? y + bands[bi] : page.y1;
+                au_bw_paint(bw, c, (AuIRect){page.x0, y, page.x1, y1});
+            }
+            au_canvas_free(c);
+            long off_by_one = 0, bad = 0;
+            for (int y = page.y0; y < page.y1; y++)
+                for (int x = page.x0; x < page.x1; x++) {
+                    AuPixel p = whole->pixels[(size_t)y * (size_t)whole->stride + (size_t)x];
+                    AuPixel q = strips->pixels[(size_t)y * (size_t)strips->stride + (size_t)x];
+                    if (p == q)
+                        continue;
+                    int dmax = 0;
+                    for (int sh = 0; sh < 32; sh += 8) {
+                        int d = (int)((p >> sh) & 0xFF) - (int)((q >> sh) & 0xFF);
+                        if (d < 0)
+                            d = -d;
+                        dmax = d > dmax ? d : dmax;
+                    }
+                    if (dmax <= 1)
+                        off_by_one++;
+                    else
+                        bad++;
+                }
+            if (bad || off_by_one > 64)
+                fprintf(stderr, "%s at scroll %d in %d-pixel strips: %ld pixels differ, %ld by one\n", url,
+                        scrolls[si], bands[bi], bad, off_by_one);
+            CHECK(!bad && off_by_one <= 64);
+        }
+    }
+    printf("%s: strips match a whole paint\n", url);
+    au_surface_free(whole);
+    au_surface_free(strips);
     au_browser_free(b);
 }
 
@@ -339,6 +431,8 @@ int main(void)
     run_page(fonts, "file:///fixed2.html", 640, 480, 1);
     run_page(fonts, "file:///sticky.html", 640, 480, 1);
     run_page(fonts, "file:///frames.html", 640, 480, 1);
+    run_page(fonts, "file:///toasts.html", 640, 480, 1);
+    strips_match(fonts, "file:///transforms.html", 640, 480);
     run_page(fonts, "file:///canvasgrad.html", 640, 480, 0);
     au_fontset_free(fonts);
     printf("scroll_shift: ok\n");

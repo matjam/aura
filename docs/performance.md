@@ -148,6 +148,33 @@ where they were taken.
 | memory per subsystem, script heaps, the guest's free heap | [`memory.md`](memory.md) |
 | disk cache writes (about 9 ms each in the guest) | [`networking.md`](networking.md) |
 
+## Scrolling on Reddit, 2026-11-17
+
+Measured on the host (Release, base `2943372`) with `aura-host chrome
+-w 640 -h 480 --net --load-ms 8000 --tab https://www.reddit.com/
+--scroll-bench 60`, signed out, two runs each (they agreed within
+10%). Paint time per step in ms, and pixels painted per step.
+
+| Step | Before: ms | Pixels | After: ms | Pixels |
+|---|---|---|---|---|
+| 32 pixels, by repainting the page | 6.0 | 255,625 | 4.1 | 255,625 |
+| 32 pixels, by moving pixels | 11.2 to 26.6 | 496,679 | 1.3 | 73,729 |
+| page down, by moving pixels | 10.2 to 11.9 | about 297,000 | 4.1 to 4.9 | about 255,000 |
+
+- Two faults made moving pixels cost more than repainting. The fixed
+  toast container's damage covered the view twice
+  ([`browser-chrome.md`](browser-chrome.md), "Scrolling by moving
+  pixels"). Each painted rectangle also painted every transformed box
+  it crossed whole, into a layer the box's size: `au_canvas_layer_end`
+  and the images in those layers were 96% of the paint time in a
+  profile.
+- What a 32-pixel step paints now: the exposed strip, the sticky
+  header, and a fixed button at the bottom right.
+- The page itself still costs much at load: about 1.7 s of script on
+  the host and a script heap at its 64 MB limit (Develop > Performance
+  showed 8 s of script, 1.8 s of style and 4 s of paint signed in, in
+  the Cocoa application).
+
 ## DOM changes: subtree rebuilds, 2026-11-16
 
 To repeat these, build a Release tree and run, for the typing page,
@@ -302,6 +329,9 @@ These are the causes found so far; look for the same shapes first.
   attribute the box tree never reads changed, or script inserted or
   removed a node ([`layout.md`](layout.md), [`forms.md`](forms.md)).
 - **Repainting the page to scroll** ([`browser-chrome.md`](browser-chrome.md)).
+- **Painting more than the dirty area**: an empty fixed container's
+  extent reaching across the view, and transformed boxes painted whole
+  into a layer for each strip ("Scrolling on Reddit" below).
 - **Loading a page again for Back** ([`browser-chrome.md`](browser-chrome.md)).
 - **Third-party scripts**: blocking them removes requests and bytes
   ([`content-blocking.md`](content-blocking.md)).

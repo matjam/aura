@@ -3292,8 +3292,30 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         P->depth--;
         return;
     }
-    if (affine && au_canvas_layer_begin(P->c, ovr)) {
-        P->dirty = (LArea){ovr.x, ovr.y, ovr.w, ovr.h};
+    /* The layer covers only the part of the box that the dirty area can
+     * show: the dirty area mapped back through the transform, with two
+     * pixels for the bilinear filter and anti-aliased edges. Painting a
+     * strip of the view then paints a strip of the box, not all of it
+     * (a 32-pixel scroll step over a page of transformed boxes painted
+     * each of them whole). */
+    AuRect need = ovr;
+    AuMatrix inv;
+    if (affine && au_matrix_invert(&tm, &inv)) {
+        const LArea *d = &P->dirty;
+        float xs[4] = {d->x, d->x + d->w, d->x + d->w, d->x};
+        float ys[4] = {d->y, d->y, d->y + d->h, d->y + d->h};
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (int i = 0; i < 4; i++) {
+            float X = inv.a * xs[i] + inv.c * ys[i] + inv.e, Y = inv.b * xs[i] + inv.d * ys[i] + inv.f;
+            x0 = l_min(x0, X), x1 = l_max(x1, X), y0 = l_min(y0, Y), y1 = l_max(y1, Y);
+        }
+        x0 = l_max(x0 - 2, ovr.x), y0 = l_max(y0 - 2, ovr.y);
+        x1 = l_min(x1 + 2, ovr.x + ovr.w), y1 = l_min(y1 + 2, ovr.y + ovr.h);
+        if (x1 > x0 && y1 > y0)
+            need = (AuRect){x0, y0, x1 - x0, y1 - y0};
+    }
+    if (affine && au_canvas_layer_begin(P->c, need)) {
+        P->dirty = (LArea){need.x, need.y, need.w, need.h};
         group = false; /* the layer applies the opacity */
     } else {
         affine = false;
@@ -3529,11 +3551,32 @@ static bool subtree_has(LBox *b, uint32_t flags, bool transforms)
     return false;
 }
 
+static bool is_view_box(const AuLayout *L, const LBox *b)
+{
+    for (uint32_t i = 0; i < L->nview_boxes; i++)
+        if (L->view_boxes[i] == b)
+            return true;
+    return false;
+}
+
+/* A box's overflow at (x, y), with one pixel above and below for glyph
+ * ink (see rect_hits); empty when the box has no area, so a box of no
+ * height (a fixed toast container) adds nothing. */
+static AuRect ink_rect(const LBlock *k, float x, float y)
+{
+    if (k->ov.w <= 0 || k->ov.h <= 0)
+        return (AuRect){x, y, 0, 0};
+    return (AuRect){x + k->ov.x, y + k->ov.y - 1, k->ov.w, k->ov.h + 2};
+}
+
 /* Where b and everything it paints can reach, in the frame of
- * l_box_origin (no scroll, no sticky offset), through b's own transform.
- * False when a transform elsewhere (an ancestor or a descendant) makes
- * that unknown. */
-static bool view_box_extent(LBox *b, AuRect *out)
+ * l_box_origin (no scroll, no sticky offset), through b's own transform;
+ * an empty rectangle when it paints nothing. Descendants that are view
+ * boxes themselves are left out: they are damaged on their own (a fixed
+ * box at the bottom inside one at the top made one rectangle the height
+ * of the view between them). False when a transform elsewhere (an
+ * ancestor or a descendant) makes that unknown. */
+static bool view_box_extent(const AuLayout *L, LBox *b, AuRect *out)
 {
     for (LBox *p = b->parent; p; p = p->parent) {
         AuMatrix m;
@@ -3543,9 +3586,8 @@ static bool view_box_extent(LBox *b, AuRect *out)
     LBlock *k = (LBlock *)b;
     float bx, by;
     l_box_origin(b, &bx, &by);
-    /* One pixel above and below for glyph ink (see rect_hits). */
-    AuRect r = {bx + k->ov.x, by + k->ov.y - 1, k->ov.w, k->ov.h + 2};
-    bool any = true;
+    AuRect r = ink_rect(k, bx, by);
+    bool any = r.w > 0;
     /* Descendants: positioned ones are layers, outside b's overflow. A
      * transformed descendant counts with its transformed overflow when
      * nothing inside it is positioned or transformed; the content of a
@@ -3557,11 +3599,19 @@ static bool view_box_extent(LBox *b, AuRect *out)
         if (++visited > 20000)
             return false;
         bool skip = false;
+        if (d->kind == LK_BLOCK && is_view_box(L, d)) {
+            /* damaged on its own; its subtree goes with it */
+            while (d && d != b && !d->next)
+                d = d->parent;
+            if (d && d != b)
+                d = d->next;
+            continue;
+        }
         if (d->kind == LK_BLOCK) {
             LBlock *dk = (LBlock *)d;
             float dx, dy;
             l_box_origin(d, &dx, &dy);
-            AuRect dr = {dx + dk->ov.x, dy + dk->ov.y - 1, dk->ov.w, dk->ov.h + 2};
+            AuRect dr = ink_rect(dk, dx, dy);
             AuMatrix m;
             if (l_transform_matrix(dk, &m)) {
                 if (subtree_has(d, LF_POSITIONED | LF_ABSPOS | LF_FIXED, true))
@@ -3583,6 +3633,10 @@ static bool view_box_extent(LBox *b, AuRect *out)
             d = d->parent;
         if (d && d != b)
             d = d->next;
+    }
+    if (!any) {
+        *out = (AuRect){bx, by, 0, 0};
+        return true;
     }
     AuMatrix tm;
     if (l_transform_matrix(k, &tm))
@@ -3662,10 +3716,12 @@ int au_layout_scroll_damage(AuLayout *L, float ox, float oy, float nx, float ny,
                 continue;
         }
         AuRect r;
-        if (!view_box_extent(b, &r)) {
+        if (!view_box_extent(L, b, &r)) {
             n = -1;
             break;
         }
+        if (r.w <= 0 || r.h <= 0)
+            continue; /* it paints nothing */
         /* Fixed: the same viewport place before and after. Sticky: the
          * document place plus the offset, in the viewport. */
         AuRect was = r, now = r;
