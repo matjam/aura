@@ -2234,6 +2234,33 @@ typedef struct {
 
 static CssTokList *resolve_custom(VarCtx *vc, AuAtom name);
 
+/* The environment variables (CSS Environment Variables 1) that have a
+ * value on every screen Aura draws to: the safe area insets and their
+ * maximums, and the virtual keyboard's insets, all 0px. The titlebar
+ * area variables exist only in a window-controls overlay, which Aura
+ * never has, so they take their fallback like an unknown name. Names are
+ * case-sensitive. */
+static bool env_is_zero(const char *s, size_t n)
+{
+    static const char *const prefixes[] = {"safe-area-inset-", "safe-area-max-inset-", "keyboard-inset-"};
+    static const char *const sides[] = {"top", "right", "bottom", "left"};
+    static const char *const keyboard[] = {"width", "height"};
+    for (size_t p = 0; p < sizeof prefixes / sizeof prefixes[0]; p++) {
+        size_t pl = strlen(prefixes[p]);
+        if (n <= pl || memcmp(s, prefixes[p], pl))
+            continue;
+        const char *rest = s + pl;
+        size_t rn = n - pl;
+        for (size_t k = 0; k < 4; k++)
+            if (rn == strlen(sides[k]) && !memcmp(rest, sides[k], rn))
+                return true;
+        for (size_t k = 0; p == 2 && k < 2; k++)
+            if (rn == strlen(keyboard[k]) && !memcmp(rest, keyboard[k], rn))
+                return true;
+    }
+    return false;
+}
+
 /* Appends tokens [a, b) of src to out, replacing var() and env(). Returns
  * false if a reference is invalid with no fallback. */
 static bool substitute(VarCtx *vc, const CssTokens *src, uint32_t a, uint32_t b, CssTokens *out)
@@ -2273,6 +2300,15 @@ static bool substitute(VarCtx *vc, const CssTokens *src, uint32_t a, uint32_t b,
                     break;
                 }
                 val = resolve_custom(vc, au_atom(s, nm->len));
+            } else if (env_is_zero(css_tok_str(src, nm), nm->len)) {
+                /* A screen without a notch, a keyboard over the page or
+                 * a cut-out: these environment variables are all 0px. */
+                CssTokens zero = {0};
+                css_tokenize("0px", 3, &zero);
+                css_tokens_append(out, &zero, 0, zero.n);
+                css_tokens_free(&zero);
+                i = end;
+                continue;
             }
             if (val) {
                 css_tokens_append(out, &val->tk, 0, val->tk.n);

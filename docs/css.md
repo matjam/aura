@@ -526,6 +526,19 @@ same code as declarations, for the canvas ([`canvas.md`](canvas.md)).
 SVG presentation attributes reach the cascade as presentational hints
 (`svg_hints` in `src/css/ua.c`, see [`svg.md`](svg.md)).
 
+## Environment variables
+
+`env()` is substituted with `var()` (`substitute` in
+`src/css/cascade.c`). The safe area insets (`safe-area-inset-*`,
+`safe-area-max-inset-*`) and the virtual keyboard's insets
+(`keyboard-inset-*`) are `0px`: no screen Aura draws to has a notch or
+an on-screen keyboard over the page. Any other name, the `titlebar-area-*`
+variables included, takes its fallback, and without one the declaration
+is invalid at computed-value time. Names are case-sensitive. Sites wrap
+their gutters in `max(var(--wrap), env(safe-area-inset-left))`, often in
+a grid's track list, so an unresolved `env()` there drops the whole
+template to `none`.
+
 ## Computed values fixed after the cascade
 
 `css_compute_finish` in `src/css/compute.c` adjusts a few values once

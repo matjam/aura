@@ -152,3 +152,28 @@ html
 #a -> width: 5px
 #a -> --other: 1
 #p -> --reg: 9px
+
+=== env(): the safe area and keyboard insets are 0px, other names take the fallback
+--- css
+:root { --wrap: 2rem; }
+#a { padding-left: env(safe-area-inset-left); padding-right: max(var(--wrap), env(safe-area-inset-right)); margin-left: env(safe-area-max-inset-top, 9px); margin-right: env(keyboard-inset-height); }
+#b { padding-left: env(titlebar-area-x, 7px); padding-right: env(no-such-thing, 3px); width: env(SAFE-AREA-INSET-LEFT, 11px); }
+#c { display: grid; grid-template-columns: [left] max(var(--wrap), env(safe-area-inset-left)) [mid] 1fr; }
+#d { width: env(titlebar-area-width); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+    div#d
+--- expect
+#a -> padding-left: 0px
+#a -> padding-right: 32px
+#a -> margin-left: 0px
+#a -> margin-right: 0px
+#b -> padding-left: 7px
+#b -> padding-right: 3px
+#b -> width: 11px
+#c -> grid-template-columns: [left] 32px [mid] 1fr
+#d -> width: auto
