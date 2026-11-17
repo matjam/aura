@@ -454,6 +454,7 @@ void au_style_bg_layer(const AuStyle *s, size_t i, AuBgLayer *out)
     const AuStyleBackground *bg = s->bg;
     memset(out, 0, sizeof *out);
     out->image = layer_item(bg->background_image, i);
+    out->base_url = bg->background_image ? bg->background_image->base_url : NULL;
     out->position_x = layer_item(bg->background_position_x, i);
     out->position_y = layer_item(bg->background_position_y, i);
     out->size = layer_item(bg->background_size, i);
@@ -494,6 +495,7 @@ void au_style_mask_layer(const AuStyle *s, size_t i, AuBgLayer *out)
     const AuStyleRare *r = s->rare;
     memset(out, 0, sizeof *out);
     out->image = layer_item(r->mask_image, i);
+    out->base_url = r->mask_image ? r->mask_image->base_url : NULL;
     out->position_x = layer_item(r->mask_position_x, i);
     out->position_y = layer_item(r->mask_position_y, i);
     out->size = layer_item(r->mask_size, i);

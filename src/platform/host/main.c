@@ -773,6 +773,56 @@ static void scroll_bench(AuBrowserWindow *w, int W, int H, int steps)
     au_surface_free(screen);
 }
 
+/* What the window invalidated since the record was cleared (--do keys:). */
+static struct {
+    int n;
+    long area;
+    AuIRect u;
+    AuIRect r[16];
+} key_inv;
+
+/* Set when the window invalidates anything; chrome_present clears it. */
+static bool settle_dirty;
+static int settle_w, settle_h;
+
+static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
+{
+    (void)ctx, (void)w;
+    if (r.x1 <= r.x0 || r.y1 <= r.y0)
+        return;
+    settle_dirty = true;
+    if (key_inv.n < 16)
+        key_inv.r[key_inv.n] = r;
+    if (!key_inv.n) {
+        key_inv.u = r;
+    } else {
+        if (r.x0 < key_inv.u.x0) key_inv.u.x0 = r.x0;
+        if (r.y0 < key_inv.u.y0) key_inv.u.y0 = r.y0;
+        if (r.x1 > key_inv.u.x1) key_inv.u.x1 = r.x1;
+        if (r.y1 > key_inv.u.y1) key_inv.u.y1 = r.y1;
+    }
+    key_inv.n++;
+    key_inv.area += (long)(r.x1 - r.x0) * (r.y1 - r.y0);
+}
+
+/* Paints the window into a scratch surface when it invalidated anything,
+ * as a shell paints after each idle call. Painting is what asks for
+ * background images, masks and SVG images at their painted size, so a
+ * screenshot taken after a wait shows them as a shell would. */
+static void chrome_present(AuBrowserWindow *w)
+{
+    if (!settle_dirty || settle_w <= 0 || settle_h <= 0)
+        return;
+    settle_dirty = false;
+    AuSurface *s = au_surface_new(settle_w, settle_h);
+    if (!s)
+        return;
+    AuCanvas *c = au_canvas_new(s);
+    au_bw_paint(w, c, (AuIRect){0, 0, settle_w, settle_h});
+    au_canvas_free(c);
+    au_surface_free(s);
+}
+
 /* Runs the idle loop for at least min_ms and then until nothing is busy,
  * at most limit_ms in all. */
 static void chrome_settle(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, bool net, double min_ms,
@@ -790,6 +840,7 @@ static void chrome_settle(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
             nanosleep(&ts, NULL);
         }
         au_bw_idle(w);
+        chrome_present(w);
     }
 }
 
@@ -804,33 +855,6 @@ static void chrome_shot(AuBrowserWindow *w, int width, int height, const char *p
         printf("%s: screenshot\n", path);
     au_canvas_free(c);
     au_surface_free(s);
-}
-
-/* What the window invalidated since the record was cleared (--do keys:). */
-static struct {
-    int n;
-    long area;
-    AuIRect u;
-    AuIRect r[16];
-} key_inv;
-
-static void key_inval(void *ctx, AuBrowserWindow *w, AuIRect r)
-{
-    (void)ctx, (void)w;
-    if (r.x1 <= r.x0 || r.y1 <= r.y0)
-        return;
-    if (key_inv.n < 16)
-        key_inv.r[key_inv.n] = r;
-    if (!key_inv.n) {
-        key_inv.u = r;
-    } else {
-        if (r.x0 < key_inv.u.x0) key_inv.u.x0 = r.x0;
-        if (r.y0 < key_inv.u.y0) key_inv.u.y0 = r.y0;
-        if (r.x1 > key_inv.u.x1) key_inv.u.x1 = r.x1;
-        if (r.y1 > key_inv.u.y1) key_inv.u.y1 = r.y1;
-    }
-    key_inv.n++;
-    key_inv.area += (long)(r.x1 - r.x0) * (r.y1 - r.y0);
 }
 
 static void chrome_key(AuBrowserWindow *w, int key, uint32_t ch, uint32_t mods)
@@ -971,6 +995,10 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         au_bw_resize(w, nw, nh);
         o->w = nw;
         o->h = nh;
+        if (settle_w) {
+            settle_w = nw;
+            settle_h = nh;
+        }
         AuSurface *sf = au_surface_new(nw, nh);
         AuCanvas *c = au_canvas_new(sf);
         au_bw_paint(w, c, (AuIRect){0, 0, nw, nh});
@@ -1254,6 +1282,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         host.scroll_area = bench_scroll;
     } else {
         host.invalidate = key_inval;
+        settle_w = o->w;
+        settle_h = o->h;
     }
     if (o->native_chrome)
         host.changed = print_notice;
@@ -1349,6 +1379,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
                 nanosleep(&ts, NULL);
             }
             au_bw_idle(w);
+            chrome_present(w);
         }
         if (o->net)
             printf("loaded in %.0f ms%s\n", now_ms() - t0, au_browser_busy(b) ? " (still busy at the limit)" : "");

@@ -226,6 +226,11 @@ shaped.
   whose family the styled document uses for text in their
   `unicode-range`, and lays the document out again when one arrives
   (font-display: swap). The faces go with the document.
+- The text a face is checked against is each text node and the
+  `content` of each `::before` and `::after` (`scan_pseudo`), since
+  icon fonts are often used only there. A string is checked as written;
+  a counter, `attr()` or quote is checked as digits, Latin letters and
+  quote marks, because its text is not known until layout.
 - `tests/page/samples/webfonts.html` shows a variable WOFF2 font at
   several weights and a WOFF face limited by `unicode-range`.
 

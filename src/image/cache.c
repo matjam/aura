@@ -11,7 +11,7 @@ struct AuImageEntry {
     bool data_dropped;   /* the bytes were dropped: the pixels are kept */
     AuImageState state;
     int iw, ih;
-    bool ratio_only; /* AuImageInfo.ratio_only */
+    uint8_t missing;     /* AuImageInfo.missing */
     AuImageFormat format;
     AuImageDecoder *probe; /* header only, fed as bytes arrive */
     /* Pixels. */
@@ -132,11 +132,6 @@ AuImageState au_image_entry_state(const AuImageEntry *e) { return e->state; }
 const AuSurface *au_image_entry_surface(AuImageEntry *e) { return &e->view; }
 bool au_image_entry_animated(const AuImageEntry *e) { return e->animated; }
 
-bool au_image_entry_ratio_only(const AuImageEntry *e)
-{
-    return (e->state == AU_IMAGE_SIZED || e->state == AU_IMAGE_READY) && e->ratio_only;
-}
-
 bool au_image_entry_size(const AuImageEntry *e, int *w, int *h)
 {
     if (e->state != AU_IMAGE_SIZED && e->state != AU_IMAGE_READY)
@@ -144,6 +139,11 @@ bool au_image_entry_size(const AuImageEntry *e, int *w, int *h)
     *w = e->iw;
     *h = e->ih;
     return true;
+}
+
+unsigned au_image_entry_missing(const AuImageEntry *e)
+{
+    return e->state == AU_IMAGE_SIZED || e->state == AU_IMAGE_READY ? e->missing : 0;
 }
 
 bool au_image_entry_take_changed(AuImageEntry *e)
@@ -188,15 +188,14 @@ static void sync_view(AuImageEntry *e)
 static void set_sized(AuImageCache *c, AuImageEntry *e, const AuImageInfo *info)
 {
     int w = info->width, h = info->height;
-    AuImageFormat f = info->format;
-    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h || e->ratio_only != info->ratio_only) {
+    if (e->state == AU_IMAGE_PENDING || e->iw != w || e->ih != h || e->missing != info->missing) {
         c->layout_changed = true;
         e->changed = true; /* repaint where it shows */
     }
     e->iw = w;
     e->ih = h;
-    e->ratio_only = info->ratio_only;
-    e->format = f;
+    e->missing = info->missing;
+    e->format = info->format;
     if (e->state == AU_IMAGE_PENDING)
         e->state = AU_IMAGE_SIZED;
 }

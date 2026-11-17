@@ -489,6 +489,36 @@ cut a long `<img>` URL short (reCAPTCHA's check mark is a 3978-byte
 `data:` URL in its style sheet). The case is in
 `tests/layout/cases/images.txt`.
 
+`l_resolve_url` takes a base: pass the `base_url` of the value's
+`AuCssBlob` (or `AuBgLayer.base_url`) for a `url()` from a style sheet,
+and NULL for an attribute or inline style, which resolve against the
+document ([`css.md`](css.md), "Sheets in a document").
+
+### Snapped backgrounds
+
+`paint_background` fills a square-cornered background colour over whole
+surface pixels (`snap_device` in `draw.c`), as browsers snap a box's
+background. A 1px rule at a fractional position (Cornell Chronicle's
+gold bar under the date, `header::after` at `height: 1px`) is then one
+row in its own colour instead of two pale rows that read as grey.
+Rounded backgrounds and images are not snapped. `test_background_snapped`
+in `tests/page/test_page.c` covers it.
+
+### Background images without a natural size
+
+To size a background image whose natural width or height is missing,
+`draw_bg_layer` asks the layout environment's `image_missing` callback
+which of width, height and ratio the image lacks
+(`AU_LAYOUT_IMG_MISSING_*`, from `AuImageInfo.missing`), and follows
+CSS Images 3 default sizing. With `background-size: auto` and only a
+ratio (an SVG with a `viewBox` but no `width` or `height`), the image
+is sized as `contain` in the origin box. With no ratio either, it fills
+the origin box. When one side is given, the other comes from the ratio,
+or else from the origin box. Cornell Chronicle's wordmark is such an
+SVG; it drew at its 300x150 fallback size before. An environment
+without the callback keeps the old natural-size behaviour.
+`test_background_svg_ratio_only` in `tests/page/test_page.c` covers it.
+
 ### Rounded clips
 
 A box with `border-radius` and overflow clipped on both axes clips

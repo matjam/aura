@@ -63,10 +63,13 @@ typedef struct AuLayoutEnv {
      * known (a placeholder is painted). Returns false while the image is
      * not loaded or failed. Optional. */
     bool (*image)(void *ctx, const char *url, int *w, int *h, const AuSurface **pixels);
-    /* Resolves a URL attribute against the document base. Writes into out
-     * (cap bytes) and returns false when it cannot. Optional; without it
-     * URLs are passed through as written. */
-    bool (*resolve_url)(void *ctx, const char *url, char *out, size_t cap);
+    /* Resolves url against base, or against the document base when base
+     * is NULL (an attribute, or a url() from an inline style). A url()
+     * from a style sheet passes the sheet's URL (AuCssBlob.base_url), as
+     * CSS Values 4 resolves it. Writes into out (cap bytes) and returns
+     * false when it cannot. Optional; without it URLs are passed through
+     * as written. */
+    bool (*resolve_url)(void *ctx, const char *base, const char *url, char *out, size_t cap);
     /* Called before an image is painted at dw x dh pixels (backgrounds,
      * masks, list markers, images in inline SVG), so a vector image can
      * be drawn at that size; the surface image() returned is then current.
@@ -89,14 +92,17 @@ typedef struct AuLayoutEnv {
      * box's natural size from the width and height attributes (300 x 150
      * by default) and paints the bitmap scaled into the content box. */
     int (*canvas)(void *ctx, AuElement *el, const AuSurface **px);
-    /* Whether the image at url (one image() knows) has no natural width
-     * or height, only a ratio (an SVG with a viewBox and no width or
-     * height): the size image() gave is then only its ratio, and an
-     * <img> or content image with an auto size fills its containing
-     * block's width (CSS 2.1 10.3.2), and contributes 0 to intrinsic
-     * sizes. Optional; without it every image has its natural size. */
-    bool (*image_ratio_only)(void *ctx, const char *url);
+    /* What an image found by image() does not state of its size
+     * (AU_LAYOUT_IMG_MISSING_*): an SVG with only a viewBox lacks a
+     * width and a height, and the size image() gave is then only its
+     * ratio. An <img> or content image with an auto size then fills its
+     * containing block's width (CSS 2.1 10.3.2) and contributes 0 to
+     * intrinsic sizes, and a background of auto size is fitted to its
+     * box as CSS Images 3 says. Optional; without it every image has its
+     * natural size. */
+    unsigned (*image_missing)(void *ctx, const char *url);
 } AuLayoutEnv;
+enum { AU_LAYOUT_IMG_MISSING_W = 1, AU_LAYOUT_IMG_MISSING_H = 2, AU_LAYOUT_IMG_MISSING_RATIO = 4 };
 
 AuLayout *au_layout_new(const AuLayoutEnv *env);
 void au_layout_free(AuLayout *L);

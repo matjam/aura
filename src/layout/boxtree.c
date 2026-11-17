@@ -685,7 +685,8 @@ int l_image_refresh(AuLayout *L, LReplaced *rep)
     }
     float d = rep->density > 0 ? rep->density : 1;
     float iw = (float)w / d, ih = (float)h / d;
-    bool ratio_only = loaded && w > 0 && h > 0 && L->env.image_ratio_only && L->env.image_ratio_only(L->env.ctx, rep->src);
+    unsigned miss = loaded && w > 0 && h > 0 && L->env.image_missing ? L->env.image_missing(L->env.ctx, rep->src) : 0;
+    bool ratio_only = (miss & AU_LAYOUT_IMG_MISSING_W) && (miss & AU_LAYOUT_IMG_MISSING_H) && !(miss & AU_LAYOUT_IMG_MISSING_RATIO);
     int r = 0;
     if (loaded != rep->loaded || iw != rep->iw || ih != rep->ih || ratio_only != rep->ratio_only)
         r = 2;
@@ -702,12 +703,13 @@ int l_image_refresh(AuLayout *L, LReplaced *rep)
     return r;
 }
 
-static void image_lookup(AuLayout *L, LReplaced *rep, const char *url)
+/* base is the style sheet's URL for a url() value, NULL for an attribute. */
+static void image_lookup(AuLayout *L, LReplaced *rep, const char *base, const char *url)
 {
     char buf[2048];
     if (!url || !*url)
         return;
-    char *abs = l_resolve_url(L, url, buf, sizeof buf);
+    char *abs = l_resolve_url(L, base, url, buf, sizeof buf);
     rep->src = ar_strndup(&L->tree, abs, strlen(abs));
     l_url_free(abs, buf);
     l_image_refresh(L, rep);
@@ -1037,7 +1039,7 @@ static void add_content(Builder *B, LBox *box, AuNode *el, const AuStyle *ps)
             img->b.flags = LF_ANON | LF_INLINE_LEVEL;
             img->b.pseudo = box->pseudo;
             img->rep = ar_alloc(&B->L->tree, sizeof *img->rep);
-            image_lookup(B->L, img->rep, v->u.str);
+            image_lookup(B->L, img->rep, cb->base_url, v->u.str);
             append(box, &img->b);
             B->last_space = false;
             B->L->stats.blocks++;
@@ -1137,7 +1139,7 @@ static void make_marker(Builder *B, LBox *item, AuNode *el, const AuStyle *es)
     const AuCssBlob *li = es->inhr->list_style_image;
     if (li && li->value.type == AU_CSSV_URL && li->value.u.str && *li->value.u.str) {
         LReplaced *rep = ar_alloc(&B->L->tree, sizeof *rep);
-        image_lookup(B->L, rep, li->value.u.str);
+        image_lookup(B->L, rep, li->base_url, li->value.u.str);
         if (rep->loaded) {
             /* Not sized yet, or failing later: the marker may become the
              * list-style-type one, which is another box. */
@@ -1284,7 +1286,7 @@ static int embedded_kind(AuLayout *L, AuElement *e, bool object, bool *skip_chil
     if ((!type || !*type) && starts_ci(url, "data:") && !starts_ci(url + 5, "image/"))
         return none;
     char buf[2048];
-    char *abs = l_resolve_url(L, url, buf, sizeof buf);
+    char *abs = l_resolve_url(L, NULL, url, buf, sizeof buf);
     int w = 0, h = 0;
     const AuSurface *px = NULL;
     L->images_shape = true;
@@ -1547,11 +1549,11 @@ static void setup_replaced(Builder *B, LBlock *k)
             if (u && ulen) {
                 au_buf_clear(&t);
                 au_buf_append(&t, u, ulen);
-                image_lookup(L, rep, au_buf_cstr(&t));
+                image_lookup(L, rep, NULL, au_buf_cstr(&t));
                 au_buf_clear(&t);
             }
         } else {
-            image_lookup(B->L, rep, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
+            image_lookup(B->L, rep, NULL, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
         }
         const char *alt = attr_s(n, "alt");
         if (!alt && au_is_html_element(n, AU_ATOM_input))

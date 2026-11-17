@@ -490,6 +490,7 @@ typedef struct AuBgLayer {
     const AuCssValue *size;       /* KEYWORD cover/contain, or LIST of two (auto keyword or length) */
     uint16_t repeat_x, repeat_y;  /* AU_K_repeat, AU_K_no_repeat, AU_K_space, AU_K_round */
     uint16_t attachment, clip, origin; /* keywords */
+    const char *base_url;              /* resolve a url() image against it; NULL: the document */
 } AuBgLayer;
 size_t au_style_bg_layer_count(const AuStyle *s);
 void au_style_bg_layer(const AuStyle *s, size_t i, AuBgLayer *out);

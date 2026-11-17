@@ -1082,6 +1082,126 @@ static int count_requests(const Fake *f, const char *url)
     return n;
 }
 
+/* A face used only by generated content (an icon font on ::before) is
+ * fetched, from a sheet in another directory; one whose unicode-range
+ * misses the content, or whose pseudo-element has no content, is not. */
+static void test_webfonts_generated(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><link rel=stylesheet href=css/s.css><body>"
+                       "<i class=icon></i><i class=cnt></i><i class=none></i><i class=far></i>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/a/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    fake_deliver(&f, dv, "http://example.com/a/css/s.css",
+                 "@font-face{font-family:Icons;src:url(../fonts/i.woff2)}"
+                 "@font-face{font-family:Cnt;src:url(c.woff2);unicode-range:U+30-39}"
+                 "@font-face{font-family:None;src:url(n.woff2)}"
+                 "@font-face{font-family:Far;src:url(f.woff2);unicode-range:U+0400-045F}"
+                 ".icon::before{font-family:Icons;content:\"\\f197\"}"
+                 ".cnt::after{font-family:Cnt;content:counter(x)}"
+                 ".none::before{font-family:None}"
+                 ".far::before{font-family:Far;content:'abc'}",
+                 true);
+    au_docview_update(dv);
+    CHECK(count_requests(&f, "http://example.com/a/fonts/i.woff2") == 1, "icon font on ::before not requested");
+    CHECK(count_requests(&f, "http://example.com/a/css/c.woff2") == 1, "font for a counter not requested");
+    CHECK(count_requests(&f, "http://example.com/a/css/n.woff2") == 0, "font of a pseudo-element without content");
+    CHECK(count_requests(&f, "http://example.com/a/css/f.woff2") == 0, "face outside the content's unicode-range");
+    au_docview_free(dv);
+}
+
+/* A background colour fills whole pixels: a 1px rule at a fractional
+ * position is one row in its own colour, as in browsers. */
+static void test_background_snapped(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><body style='margin:0'><div style='height:10.6px'></div>"
+                       "<div style='height:1px;width:20px;background:#ccb581'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 100, 100);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(100, 40);
+    AuCanvas *c = au_canvas_new(s);
+    au_fill_rect(c, (AuRect){0, 0, 100, 40}, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 100, 40}, 0, 0);
+    CHECK(au_surface_get(s, 5, 11) == AU_RGB(0xcc, 0xb5, 0x81), "rule row: %08x", au_surface_get(s, 5, 11));
+    CHECK(au_surface_get(s, 5, 10) == AU_RGB(255, 255, 255) && au_surface_get(s, 5, 12) == AU_RGB(255, 255, 255),
+          "rule spread over rows: %08x %08x", au_surface_get(s, 5, 10), au_surface_get(s, 5, 12));
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
+/* An SVG background that gives only a viewBox is fitted to its box like
+ * contain (CSS Images 3), not drawn at the 300 x 150 an <img> shows it
+ * at; one without a ratio fills the box. */
+static void test_background_svg_ratio_only(void)
+{
+    static const char ratio_svg[] = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 10'>"
+                                    "<rect width='20' height='10' fill='red'/></svg>";
+    static const char bare_svg[] = "<svg xmlns='http://www.w3.org/2000/svg'>"
+                                   "<rect width='100%' height='100%' fill='blue'/></svg>";
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><body style='margin:0'>"
+                       "<div style='width:100px;height:20px;background:url(r.svg) no-repeat'></div>"
+                       "<div style='width:100px;height:180px;background:url(b.svg) no-repeat'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 200, 100);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 220);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0); /* asks for the backgrounds */
+    deliver_image(&f, dv, "http://example.com/r.svg", (const uint8_t *)ratio_svg, sizeof ratio_svg - 1, true);
+    deliver_image(&f, dv, "http://example.com/b.svg", (const uint8_t *)bare_svg, sizeof bare_svg - 1, true);
+    au_docview_update(dv);
+    au_fill_rect(c, (AuRect){0, 0, 200, 220}, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 220}, 0, 0); /* drawn at the size the first paint asked for */
+    CHECK(au_surface_get(s, 30, 10) == AU_RGB(255, 0, 0), "ratio-only SVG inside: %08x", au_surface_get(s, 30, 10));
+    CHECK(au_surface_get(s, 60, 10) == AU_RGB(255, 255, 255), "ratio-only SVG past 40px: %08x",
+          au_surface_get(s, 60, 10));
+    CHECK(au_surface_get(s, 95, 190) == AU_RGB(0, 0, 255), "SVG without a ratio fills the box: %08x",
+          au_surface_get(s, 95, 190));
+    CHECK(au_surface_get(s, 105, 190) == AU_RGB(255, 255, 255), "SVG without a ratio past the box: %08x",
+          au_surface_get(s, 105, 190));
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
+/* A url() in a style sheet resolves against the sheet's URL, and one in
+ * a style attribute against the document's (CSS Values 4). */
+static void test_sheet_relative_urls(void)
+{
+    Fake f;
+    AuDocView *dv = new_view(&f);
+    const char *html = "<!DOCTYPE html><link rel=stylesheet href=css/s.css>"
+                       "<body style='margin:0'><div id=b></div><ul><li id=l>x</li></ul><p id=c></p>"
+                       "<div id=i style='width:4px;height:4px;background-image:url(img/inline.png)'></div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/a/page.html");
+    au_docview_set_viewport(dv, 800, 600);
+    fake_deliver(&f, dv, "http://example.com/a/css/s.css",
+                 "#b{width:4px;height:4px;background-image:url(../img/bg.png)}"
+                 "#l{list-style-image:url('../img/li.png')}"
+                 "#c::before{content:url(\"sub/c.png\")}",
+                 true);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 200);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0); /* asks for the backgrounds */
+    au_canvas_free(c);
+    au_surface_free(s);
+    static const char *const want[] = {"http://example.com/a/img/bg.png", "http://example.com/a/img/li.png",
+                                       "http://example.com/a/css/sub/c.png", "http://example.com/a/img/inline.png"};
+    for (size_t k = 0; k < sizeof want / sizeof want[0]; k++)
+        CHECK(count_requests(&f, want[k]) == 1, "%s requested %d times", want[k], count_requests(&f, want[k]));
+    CHECK(count_requests(&f, "http://example.com/img/bg.png") == 0, "background resolved against the document");
+    au_docview_free(dv);
+}
+
 /* A web font arriving makes a new layout: images stay decoded, are not
  * fetched again, and animations keep running. */
 static void test_images_and_webfonts(void)
@@ -1158,6 +1278,10 @@ int main(void)
     test_user_css();
     test_webfonts();
     test_images_and_webfonts();
+    test_sheet_relative_urls();
+    test_webfonts_generated();
+    test_background_snapped();
+    test_background_svg_ratio_only();
     au_fontset_free(fonts);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

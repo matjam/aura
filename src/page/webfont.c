@@ -630,6 +630,44 @@ static size_t candidates(AuWebFonts *w, const AuStyleInh *in, uint16_t *cand)
     return nc;
 }
 
+/* Text that generated content may show where the sheet does not spell
+ * it out: counters, attr(), quotes. */
+static const char GENERATED_SAMPLE[] = "0123456789Aa\"\xE2\x80\x9C";
+
+/* Starts the faces that the content of a ::before or ::after style
+ * shows: icon fonts are often used only there. */
+static void scan_pseudo(AuWebFonts *w, const AuStyle *ps, AuWebFontFetch fetch, void *ctx)
+{
+    if (!ps || !ps->rare || !ps->rare->content || ps->box->display == AU_DISPLAY_NONE)
+        return;
+    uint16_t cand[MAX_CAND];
+    size_t nc = candidates(w, ps->inh, cand);
+    if (!nc)
+        return;
+    uint32_t n;
+    const AuCssValue *it = items(&ps->rare->content->value, &n);
+    for (uint32_t k = 0; k < n; k++) {
+        const char *s;
+        size_t len;
+        if (it[k].type == AU_CSSV_STRING && it[k].u.str) {
+            s = it[k].u.str;
+            len = strlen(s);
+        } else if (it[k].type == AU_CSSV_FUNCTION || it[k].type == AU_CSSV_KEYWORD) {
+            if (it[k].type == AU_CSSV_KEYWORD && (it[k].kw == AU_K_none || it[k].kw == AU_K_normal))
+                return;
+            s = GENERATED_SAMPLE;
+            len = sizeof GENERATED_SAMPLE - 1;
+        } else {
+            continue; /* url(): an image */
+        }
+        for (size_t i = 0; i < nc; i++) {
+            Rule *r = &w->rules[cand[i]];
+            if (r->state == R_IDLE && text_in_range(r, s, len))
+                start(w, r, fetch, ctx);
+        }
+    }
+}
+
 void au_webfonts_scan(AuWebFonts *w, AuDocument *doc, AuWebFontFetch fetch, void *ctx)
 {
     bool idle = false;
@@ -641,6 +679,14 @@ void au_webfonts_scan(AuWebFonts *w, AuDocument *doc, AuWebFontFetch fetch, void
     uint16_t cand[MAX_CAND];
     size_t nc = 0;
     for (AuNode *c = au_node_next(&doc->node, &doc->node); c; c = au_node_next(c, &doc->node)) {
+        if (c->type == AU_NODE_ELEMENT) {
+            const AuStyle *es = au_element_style(au_as_element(c));
+            if (es && es->pseudo_bits) {
+                scan_pseudo(w, au_style_pseudo(es, AU_CSS_PSEUDO_BEFORE), fetch, ctx);
+                scan_pseudo(w, au_style_pseudo(es, AU_CSS_PSEUDO_AFTER), fetch, ctx);
+            }
+            continue;
+        }
         if (c->type != AU_NODE_TEXT || !c->parent || !au_is_element(c->parent))
             continue;
         const AuStyle *st = au_element_style(au_as_element(c->parent));

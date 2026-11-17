@@ -51,6 +51,41 @@ build/host/src/platform/host/aura-host chrome --net --bundled-only \
 - The host tool fills its `AuSysInfo` with next to nothing, which shows
   how the reports read where a fact is unknown.
 - The timing test and the paint benchmark exist only in the Mac shell.
+- `aura-host chrome` paints the window into a scratch surface after
+  each idle call that invalidated anything (`chrome_present` in
+  `src/platform/host/main.c`), as a shell does. Painting is what asks
+  for background images, masks and images in SVG, so a screenshot taken
+  after `--do wait:MS` shows them.
+
+## To compare a page with Chrome
+
+To compare a page with Chrome, run `tools/render-compare.sh URL`. It
+renders the page with `aura-host chrome --native-chrome --net` and with
+headless Chrome (`google-chrome-stable --headless=new`, a fresh profile
+in a temporary directory) at a narrow viewport (400x900) and a wide one
+(1280x900), and writes these files to `run/compare` for each width W:
+
+| File | Holds |
+|---|---|
+| `aura-W.png`, `chrome-W.png` | the two renders |
+| `side-W.png` | Aura on the left, Chrome on the right, 8 grey pixels apart |
+| `diff-W.png` | the differences, amplified four times |
+| `aura-W.log`, `chrome-W.log` | what each browser printed |
+
+It prints the `tools/png-compare.py` figures for each width: the mean
+and maximum channel difference and the share of pixels that differ by
+more than 8 levels. Check both widths: a fix that holds at one often
+fails at the other.
+
+- To render one size, give it: `tools/render-compare.sh URL 933 1300`.
+  A fourth argument names another output directory.
+- `AURA_HOST`, `CHROME`, `AURA_WAIT` (milliseconds Aura waits after the
+  load, 4000 by default) and `TIMEOUT` (seconds for each render, 120)
+  change the defaults.
+- Headless Chrome screenshots when the page has loaded and Aura after
+  its wait, so content a script adds late can differ between them.
+- `tools/png-compare.py --side LEFT.png RIGHT.png OUT.png [DIFF.png]`
+  makes the side-by-side image and figures for any two PNGs.
 
 ## The Develop menu
 

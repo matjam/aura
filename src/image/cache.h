@@ -82,9 +82,9 @@ void au_image_entry_done(AuImageCache *c, AuImageEntry *e, bool ok);
 AuImageState au_image_entry_state(const AuImageEntry *e);
 /* The intrinsic size (after EXIF orientation), when known. */
 bool au_image_entry_size(const AuImageEntry *e, int *w, int *h);
-/* The image has no natural size, only a ratio (AuImageInfo.ratio_only):
- * the size above is its default size. */
-bool au_image_entry_ratio_only(const AuImageEntry *e);
+/* What the image does not state of its size (AuImageInfo.missing), once
+ * it is sized; 0 before. */
+unsigned au_image_entry_missing(const AuImageEntry *e);
 const AuSurface *au_image_entry_surface(AuImageEntry *e);
 bool au_image_entry_animated(const AuImageEntry *e);
 

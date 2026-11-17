@@ -957,7 +957,26 @@ static void draw_bg_layer(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     /* Tile size. */
     float tw = gradient ? origin_box.w : (float)iw, th = gradient ? origin_box.h : (float)ih;
     const AuCssValue *sz = ly->size;
-    if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
+    /* An image that does not state its size (an SVG with only a viewBox)
+     * is fitted to the origin box (CSS Images 3, default sizing): with a
+     * ratio as contain, without one as the box, and a side it states is
+     * kept. iw x ih then carry only its ratio. */
+    unsigned miss = !gradient && P->L->env.image_missing ? P->L->env.image_missing(P->L->env.ctx, abs) : 0;
+    bool size_auto = !sz || (sz->type == AU_CSSV_KEYWORD && sz->kw == AU_K_auto_) ||
+                     (sz->type == AU_CSSV_LIST && sz->n == 2 && sz->u.items[0].type == AU_CSSV_KEYWORD &&
+                      sz->u.items[1].type == AU_CSSV_KEYWORD);
+    if (miss && size_auto) {
+        if ((miss & AU_LAYOUT_IMG_MISSING_W) && (miss & AU_LAYOUT_IMG_MISSING_H) && !(miss & AU_LAYOUT_IMG_MISSING_RATIO)) {
+            float sc = l_min(origin_box.w / iw, origin_box.h / ih);
+            tw = iw * sc;
+            th = ih * sc;
+        } else if (miss & AU_LAYOUT_IMG_MISSING_RATIO) {
+            if (miss & AU_LAYOUT_IMG_MISSING_W)
+                tw = origin_box.w;
+            if (miss & AU_LAYOUT_IMG_MISSING_H)
+                th = origin_box.h;
+        }
+    } else if (sz && sz->type == AU_CSSV_KEYWORD && (sz->kw == AU_K_cover || sz->kw == AU_K_contain)) {
         if (!gradient) {
             float sx = origin_box.w / iw, sy = origin_box.h / ih;
             float sc = sz->kw == AU_K_cover ? l_max(sx, sy) : l_min(sx, sy);
@@ -972,9 +991,9 @@ static void draw_bg_layer(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
         if (!ba)
             th = bg_len(b, origin_box.h);
         if (!gradient && aa && !ba)
-            tw = th * iw / ih;
+            tw = !(miss & AU_LAYOUT_IMG_MISSING_RATIO) ? th * iw / ih : (miss & AU_LAYOUT_IMG_MISSING_W) ? origin_box.w : (float)iw;
         if (!gradient && ba && !aa)
-            th = tw * ih / iw;
+            th = !(miss & AU_LAYOUT_IMG_MISSING_RATIO) ? tw * ih / iw : (miss & AU_LAYOUT_IMG_MISSING_H) ? origin_box.h : (float)ih;
     }
     if (tw < 0.5f || th < 0.5f)
         return;
@@ -1039,7 +1058,7 @@ static void draw_bg_image(PCtx *P, const AuStyle *s, const AuBgLayer *ly, AuRect
     if (im->type != AU_CSSV_URL || !P->L->env.image)
         return;
     char buf[2048];
-    char *abs = l_resolve_url(P->L, im->u.str, buf, sizeof buf);
+    char *abs = l_resolve_url(P->L, ly->base_url, im->u.str, buf, sizeof buf);
     draw_bg_layer(P, s, ly, origin_box, clip_box, radii, abs);
     l_url_free(abs, buf);
 }
@@ -1066,6 +1085,19 @@ static AuRect box_area(const LBlock *b, float ox, float oy, int which)
     return box_area_of(b, (AuRect){ox, oy, b->w, b->h}, which);
 }
 
+/* r with its edges rounded to whole surface pixels, as browsers snap a
+ * box's background: a one-pixel rule at a fractional position stays one
+ * sharp row in its own colour instead of two pale ones. Edges shared by
+ * two boxes round alike, so neighbours still meet. */
+static AuRect snap_device(const AuCanvas *c, AuRect r)
+{
+    float dx, dy;
+    au_canvas_get_translation(c, &dx, &dy);
+    float x0 = roundf(r.x + dx), y0 = roundf(r.y + dy);
+    float x1 = roundf(r.x + r.w + dx), y1 = roundf(r.y + r.h + dy);
+    return (AuRect){x0 - dx, y0 - dy, x1 - x0, y1 - y0};
+}
+
 static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect border_box, bool is_root_canvas)
 {
     (void)is_root_canvas;
@@ -1087,7 +1119,7 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
             inset_radii(&rr, in);
             au_fill_rounded_rect(P->c, r, &rr, bgc);
         } else {
-            au_fill_rect(P->c, r, bgc);
+            au_fill_rect(P->c, snap_device(P->c, r), bgc);
         }
     }
     for (size_t i = nl; i-- > 0;) {
@@ -1710,7 +1742,7 @@ static const AuSurface *env_image_at(AuLayout *L, const char *url, int dw, int d
     if (!L->env.image)
         return NULL;
     char buf[2048];
-    char *abs = l_resolve_url(L, url, buf, sizeof buf);
+    char *abs = l_resolve_url(L, NULL, url, buf, sizeof buf);
     const AuSurface *px = NULL;
     int w = 0, h = 0;
     bool ok = L->env.image(L->env.ctx, abs, &w, &h, &px) && px && w > 0 && h > 0;

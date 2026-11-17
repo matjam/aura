@@ -1064,11 +1064,11 @@ void l_finish_overflow(LBlock *b)
 
 /* ---- URLs ---- */
 
-char *l_resolve_url(AuLayout *L, const char *url, char *buf, size_t cap)
+char *l_resolve_url(AuLayout *L, const char *base, const char *url, char *buf, size_t cap)
 {
     size_t n = strlen(url);
     if (L->env.resolve_url) {
-        if (L->env.resolve_url(L->env.ctx, url, buf, cap))
+        if (L->env.resolve_url(L->env.ctx, base, url, buf, cap))
             return buf;
         /* Longer than buf: the result is url resolved against the base,
          * so room for url and a base of up to 4 KB, then 64 KB, covers it.
@@ -1076,7 +1076,7 @@ char *l_resolve_url(AuLayout *L, const char *url, char *buf, size_t cap)
         size_t room = n + 4096;
         for (int i = 0; i < 2 && room > n; i++, room = n + 65536) {
             char *h = au_alloc(room);
-            if (L->env.resolve_url(L->env.ctx, url, h, room))
+            if (L->env.resolve_url(L->env.ctx, base, url, h, room))
                 return h;
             au_free(h);
         }
@@ -2076,12 +2076,12 @@ bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
 }
 
 /* The value names url (after resolving) as one of its images. */
-static bool value_names_image(AuLayout *L, const AuCssValue *v, const char *url)
+static bool value_names_image(AuLayout *L, const AuCssValue *v, const char *base, const char *url)
 {
     if (!v || v->type != AU_CSSV_URL || !v->u.str)
         return false;
     char buf[2048];
-    char *abs = l_resolve_url(L, v->u.str, buf, sizeof buf);
+    char *abs = l_resolve_url(L, base, v->u.str, buf, sizeof buf);
     bool same = !strcmp(abs, url);
     l_url_free(abs, buf);
     return same;
@@ -2094,7 +2094,7 @@ static bool style_names_image(AuLayout *L, const AuStyle *s, const char *url)
         size_t n = au_style_bg_layer_count(s);
         for (size_t i = 0; i < n; i++) {
             au_style_bg_layer(s, i, &ly);
-            if (value_names_image(L, ly.image, url))
+            if (value_names_image(L, ly.image, ly.base_url, url))
                 return true;
         }
     }
@@ -2102,7 +2102,7 @@ static bool style_names_image(AuLayout *L, const AuStyle *s, const char *url)
         size_t n = au_style_mask_layer_count(s);
         for (size_t i = 0; i < n; i++) {
             au_style_mask_layer(s, i, &ly);
-            if (value_names_image(L, ly.image, url))
+            if (value_names_image(L, ly.image, ly.base_url, url))
                 return true;
         }
     }
