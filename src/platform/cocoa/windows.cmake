@@ -3,7 +3,7 @@
 # file. winutil_cocoa.m holds the entry points every window shares and a
 # weak placeholder for each window's functions, which that window's own
 # file replaces. To add a source to them, add it here.
-set(AURA_COCOA_WINDOW_SOURCES winutil_cocoa.m)
+set(AURA_COCOA_WINDOW_SOURCES winutil_cocoa.m dialogs_cocoa.m)
 foreach(f prefswin_cocoa.m listwin_cocoa.m devwin_cocoa.m about_cocoa.m)
     if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/${f})
         list(APPEND AURA_COCOA_WINDOW_SOURCES ${f})
