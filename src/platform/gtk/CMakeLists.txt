@@ -2,7 +2,7 @@
 # services are src/platform/posix (aura_posix); everything that includes a
 # GTK, GLib, Cairo or fontconfig header is in this folder.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(AURA_GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.10)
+pkg_check_modules(AURA_GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.12)
 pkg_check_modules(AURA_FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
 include(GNUInstallDirs)
 

@@ -11,3 +11,4 @@ qemu/src/
 qemu/build/
 run-net/
 run-*/
+dist/

@@ -6,8 +6,9 @@
 # version.txt, CHANGELOG.md and .release-please-manifest.json. Merging
 # that pull request is the release: on that push release-please tags the
 # commit vVERSION and creates the GitHub release, and the jobs below build
-# the Mac OS 9 archive from the same commit and attach Aura-VERSION.hqx
-# and Aura-VERSION.sea.bin to it.
+# the Mac OS 9 archive and the Linux packages from the same commit and
+# attach Aura-VERSION.hqx, Aura-VERSION.sea.bin, aura_VERSION_amd64.deb and
+# Aura-VERSION-x86_64.AppImage to it.
 #
 # The build runs here, not in a workflow started by the tag: a tag made
 # with GITHUB_TOKEN starts no workflow. release-please needs the
@@ -55,9 +56,15 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     uses: ./.github/workflows/build-ppc.yml
 
+  build-linux:
+    name: Linux (GTK4)
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/build-linux.yml
+
   upload:
-    name: Attach the archives
-    needs: [release-please, build]
+    name: Attach the packages
+    needs: [release-please, build, build-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -71,9 +78,10 @@ jobs:
         env:
           TAG: ${{ needs.release-please.outputs.tag_name }}
           VERSION: ${{ needs.build.outputs.version }}
+          LINUX_VERSION: ${{ needs.build-linux.outputs.version }}
         run: |
-          if [ "$TAG" != "v$VERSION" ]; then
-            echo "The tag is $TAG, but the build is version $VERSION." >&2
+          if [ "$TAG" != "v$VERSION" ] || [ "$TAG" != "v$LINUX_VERSION" ]; then
+            echo "The tag is $TAG, but the builds are versions $VERSION and $LINUX_VERSION." >&2
             exit 1
           fi
           ls -l artifacts
@@ -85,4 +93,5 @@ jobs:
         run: >-
           gh release upload "$TAG"
           "artifacts/Aura-$VERSION.hqx" "artifacts/Aura-$VERSION.sea.bin"
+          "artifacts/aura_${VERSION}_amd64.deb" "artifacts/Aura-$VERSION-x86_64.AppImage"
           --repo "$GITHUB_REPOSITORY" --clobber

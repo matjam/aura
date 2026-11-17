@@ -3,6 +3,8 @@
 #   host      configure, build and run the tests (Ubuntu with GCC, macOS
 #             with Apple Clang)
 #   sanitize  the tests under AddressSanitizer and UBSan (Ubuntu, Clang)
+#   linux     the GTK4 port, a .deb and an AppImage (build-linux.yml),
+#             uploaded as artifacts
 #   ppc       the Mac OS 9 application and the self-extracting archive
 #             (build-ppc.yml), uploaded as artifacts
 #   gtk       the Linux GTK4 application (-DAURA_PLATFORM=gtk) builds
@@ -101,3 +103,7 @@ jobs:
   ppc:
     name: Mac OS 9
     uses: ./.github/workflows/build-ppc.yml
+
+  linux:
+    name: Linux (GTK4)
+    uses: ./.github/workflows/build-linux.yml

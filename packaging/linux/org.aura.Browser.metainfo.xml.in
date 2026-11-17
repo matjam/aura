@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.aura.Browser</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Aura</name>
+  <summary>A lightweight web browser with its own engine</summary>
+  <description>
+    <p>Aura is a lightweight web browser whose engine is written from scratch in portable C99. It was made for retro computers and legacy operating systems; this Linux build uses GTK4 on Wayland.</p>
+    <p>It draws pages with its own layout, style and JavaScript engines and its own bundled fonts, and uses GTK4 only for windows and menus.</p>
+  </description>
+  <launchable type="desktop-id">org.aura.Browser.desktop</launchable>
+  <developer id="io.github.matjam"><name>Nathan Ollerenshaw</name></developer>
+  <url type="homepage">https://github.com/matjam/aura</url>
+  <url type="bugtracker">https://github.com/matjam/aura/issues</url>
+  <provides>
+    <binary>aura</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@AURA_VERSION@" date="@AURA_RELEASE_DATE@"/>
+  </releases>
+</component>
