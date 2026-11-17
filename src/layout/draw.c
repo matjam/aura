@@ -3164,10 +3164,44 @@ static int clip_path_build(const LBlock *k, float ox, float oy, AuPath *p)
     return ok ? 1 : 0;
 }
 
+/* The clip property (CSS 2.1, 11.1.2) of an absolutely positioned k:
+ * rect(top, right, bottom, left) as offsets from the border box's
+ * top-left corner, auto meaning that edge of the border box. 0 when it
+ * does not apply, 1 with the rectangle in *p, -1 when it encloses no
+ * area (the visually-hidden clip: rect(1px, 1px, 1px, 1px)). */
+static int clip_rect_build(const LBlock *k, float ox, float oy, AuPath *p)
+{
+    if (lb_anon(&k->b) || !(k->b.flags & LF_ABSPOS) || !k->b.style->rare->clip)
+        return 0;
+    const AuCssValue *v = &k->b.style->rare->clip->value;
+    if (v->type != AU_CSSV_FUNCTION || v->kw != AU_K_rect)
+        return 0;
+    uint32_t n = v->n;
+    const AuCssValue *a = v->u.items;
+    if (n == 1)
+        a = l_items(&v->u.items[0], &n);
+    if (n != 4)
+        return 0;
+    AuRect r = box_area(k, ox, oy, AU_K_border_box);
+    float d[4];
+    float edge[4] = {0, r.w, r.h, 0}; /* top, right, bottom, left */
+    bool ok = true;
+    for (int i = 0; i < 4; i++)
+        d[i] = a[i].type == AU_CSSV_KEYWORD && a[i].kw == AU_K_auto_ ? edge[i] : cp_len(&a[i], 0, &ok);
+    if (!ok)
+        return 0;
+    AuRect q = {r.x + d[3], r.y + d[0], d[1] - d[3], d[2] - d[0]};
+    if (q.w <= 0 || q.h <= 0)
+        return -1;
+    au_path_rect(p, q);
+    return 1;
+}
+
 static int clip_path_shape(const LBlock *k, float ox, float oy, AuPath *p)
 {
     au_path_init(p);
-    int r = clip_path_build(k, ox, oy, p);
+    int r = k->b.style && !lb_anon(&k->b) && k->b.style->rare->clip_path ? clip_path_build(k, ox, oy, p)
+                                                                         : clip_rect_build(k, ox, oy, p);
     if (r <= 0)
         au_path_free(p);
     return r;

@@ -204,6 +204,10 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - `clip-path`: `path()`, `rect()`, `xywh()` and `url(#id)` do not clip
   (the box paints unclipped), `polygon` ignores its fill rule, `inset`
   takes only the horizontal radii, and no clip-path clips hit testing.
+- The `clip` property clips only the painting of the absolutely
+  positioned box and its in-flow content: positioned descendants of it
+  paint unclipped, it does not clip hit testing, and a box with both
+  `clip` and `clip-path` takes only `clip-path`.
 - `mask: url(#id)` on HTML elements.
 - One raster per SVG image URL (an image shown at two shapes on one
   page shares the larger raster).

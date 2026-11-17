@@ -555,6 +555,11 @@ labels, a zero radius, an inset past the box) paints nothing. The
 cases are in `tests/layout/cases/overflow.txt`; what is not done is in
 [`known-gaps.md`](known-gaps.md).
 
+The old `clip: rect()` property goes the same way (`clip_rect_build`):
+on an absolutely or fixed positioned box it is a rectangle offset from
+the border box's top-left corner, and the WordPress visually-hidden
+`rect(1px, 1px, 1px, 1px)` paints nothing.
+
 ### `background-attachment: fixed`
 
 It positions a layer against the viewport on any box. Once a box has

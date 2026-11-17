@@ -381,6 +381,26 @@ pixel 95 10 0000ff
 pixel 95 40 ffffff
 pixel 105 40 0000ff
 
+=== clip rect() clips an absolutely positioned box only
+<body style="margin:0">
+<style>div { top:0; width:40px; height:40px; background:#0000ff }</style>
+<div style="position:absolute;left:0;clip:rect(5px,30px,25px,10px)"></div>
+<div style="position:absolute;left:50px;clip:rect(auto auto 20px auto)"></div>
+<div style="position:absolute;left:100px;clip:rect(1px,1px,1px,1px);background:#ff0000">SKIP</div>
+<div style="position:relative;left:150px;clip:rect(0,0,0,0)"></div>
+---
+// krebsonsecurity.com's "Skip to content" (WordPress .assistive-text)
+// showed: clip was parsed but never applied
+pixel 5 10 ffffff
+pixel 15 10 0000ff
+pixel 35 10 ffffff
+pixel 15 30 ffffff
+pixel 60 10 0000ff
+pixel 60 30 ffffff
+pixel 102 2 ffffff
+pixel 120 20 ffffff
+pixel 170 20 0000ff
+
 === scrollbar-width none hides the bars of a scroller, thin narrows them
 <body style="margin:0">
 <div style="overflow-x:scroll;width:100px;height:50px"><div style="width:300px;height:10px"></div></div>
