@@ -32,9 +32,10 @@ typedef struct DevWin {
     GtkWidget *buttons[AU_DEVWIN_MAX_BUTTONS];
     GtkWidget *toggles[AU_DEVWIN_MAX_TOGGLES];
     int nbuttons, ntoggles;
+    int footer_right; /* the last button's right edge the footer was painted after */
     cairo_surface_t *surf;
     bool syncing; /* the widgets are being set from the model */
-    guint timer, place_idle;
+    guint timer, place_idle, footer_tick;
     /* The mouse. */
     int clicks;
     gint64 click_us;
@@ -98,9 +99,13 @@ static void put(GtkWidget *w, int x, int y, int width, int height)
     gtk_widget_set_size_request(w, width, height);
 }
 
+static gboolean footer_tick(GtkWidget *area, GdkFrameClock *clock, gpointer data);
+
 /* The widgets at the model's rectangles for its size. */
 static void place(DevWin *dw)
 {
+    if (!dw->footer_tick)
+        dw->footer_tick = gtk_widget_add_tick_callback(dw->area, footer_tick, dw, NULL);
     AuDevWinAreas a;
     au_devwin_areas(&dw->m, &a);
     int W = a.all.right;
@@ -140,16 +145,26 @@ static float draw_tail(AuCanvas *c, DevWin *dw, float x, float base, float room,
     return x + au_draw_text_list(c, tv->font, tv->size, x, base, text, len, ink);
 }
 
-/* Where the footer starts: after the last button as GTK sized it. */
+/* The right edge of the last button as GTK sized it (its border box, in
+ * the drawing area's coordinates); the model's rectangle until it is
+ * allocated. */
+static int last_button_right(DevWin *dw)
+{
+    AuDevRect r;
+    au_devwin_button_rect(&dw->m, dw->nbuttons - 1, &r);
+    graphene_rect_t b;
+    if (gtk_widget_compute_bounds(dw->buttons[dw->nbuttons - 1], dw->area, &b) && b.size.width > 0)
+        return (int)(b.origin.x + b.size.width + 0.5f);
+    return r.right;
+}
+
+/* Where the footer starts: after the last button. */
 static int footer_x(DevWin *dw)
 {
     if (!dw->nbuttons)
         return 10;
-    GtkWidget *b = dw->buttons[dw->nbuttons - 1];
-    AuDevRect r;
-    au_devwin_button_rect(&dw->m, dw->nbuttons - 1, &r);
-    int w = gtk_widget_get_width(b);
-    return r.left + (w > 0 ? w : r.right - r.left) + 10;
+    dw->footer_right = last_button_right(dw);
+    return dw->footer_right + 10;
 }
 
 static void paint_model(DevWin *dw, AuCanvas *c)
@@ -256,6 +271,19 @@ static void draw(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data)
     cairo_surface_mark_dirty(dw->surf);
     cairo_set_source_surface(cr, dw->surf, 0, 0);
     cairo_paint(cr);
+}
+
+/* GTK sizes a button after the frame that placed it; paint the footer
+ * again once the last button's edge is known. */
+static gboolean footer_tick(GtkWidget *area, GdkFrameClock *clock, gpointer data)
+{
+    DevWin *dw = data;
+    if (dw->nbuttons && dw->m.footer[0] && last_button_right(dw) != dw->footer_right) {
+        gtk_widget_queue_draw(area);
+        return G_SOURCE_CONTINUE;
+    }
+    dw->footer_tick = 0; /* in place; place() watches again */
+    return G_SOURCE_REMOVE;
 }
 
 /* ---- Size ---- */

@@ -35,7 +35,7 @@ void au_gtk_window_css(void)
     /* The developer windows' controls sit on the model's rectangles,
      * which were drawn for Mac OS 9's small controls. */
     gtk_css_provider_load_from_string(p, ".aura-dev button { min-height: 0; padding: 1px 8px; font-size: 9pt; }\n"
-                                         ".aura-dev checkbutton { min-height: 0; padding: 0; font-size: 9pt; }\n"
+                                         ".aura-dev checkbutton { min-height: 0; padding: 0; font-size: 9pt; color: #000; }\n"
                                          ".aura-dev checkbutton check, .aura-dev checkbutton radio {"
                                          " min-width: 12px; min-height: 12px; margin: 0 4px 0 0; }\n"
                                          ".aura-dev scrollbar { background: #f4f4f4; }\n"
