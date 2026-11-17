@@ -78,6 +78,7 @@ repos/OWNER/REPO/commits/TAG -q .sha`) and change both.
 | `sanitize` | runs the tests on Ubuntu under Clang's AddressSanitizer and UBSan (with `float-cast-overflow` named, as in [`building.md`](building.md)), with leak detection off |
 | `toolchain` | builds Retro68 when the cache has none |
 | `linux` | runs `tools/package-linux.sh` on Ubuntu (`build-linux.yml`, a reusable workflow) and uploads `aura_VERSION_amd64.deb` and `Aura-VERSION-x86_64.AppImage` as artifacts named `Aura-VERSION-SHORTHASH-deb` and `Aura-VERSION-SHORTHASH-appimage`; see [`gtk.md`](gtk.md), "Packaging" |
+| `cocoa` | runs `tools/package-macos.sh` on macOS and uploads the universal `Aura-VERSION-macos.zip` as an artifact named `Aura-VERSION-SHORTHASH-macos`; see [`cocoa.md`](cocoa.md), "Packaging". It is not attached to releases yet |
 | `ppc` | runs `./build.sh ppc` and uploads the two archives as artifacts named `Aura-VERSION-SHORTHASH-hqx` and `Aura-VERSION-SHORTHASH-sea-bin` |
 
 - Leak detection is off because several tests do not free everything at

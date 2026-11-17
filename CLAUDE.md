@@ -77,6 +77,7 @@ Aura for its users; keep it short.
 | fuzzing, or any code a page's data reaches | [`docs/fuzzing.md`](docs/fuzzing.md) (Aura's fuzzers, Domato, and the rules they enforce) |
 | a new platform port (Linux GTK4), or the line between `src/browser` and `src/platform` | [`docs/porting.md`](docs/porting.md) |
 | the Linux GTK4 port: building, running, testing in a headless compositor, its windows, input, menus, dialogs, main loop | [`docs/gtk.md`](docs/gtk.md) |
+| the modern macOS port (AppKit): building, running, snapshots, its windows, input, menus, dialogs, main loop, packaging | [`docs/cocoa.md`](docs/cocoa.md) |
 
 | Problem | Read |
 |---|---|

@@ -8,6 +8,8 @@
 #   ppc       the Mac OS 9 application and the self-extracting archive
 #             (build-ppc.yml), uploaded as artifacts
 #   gtk       the Linux GTK4 application (-DAURA_PLATFORM=gtk) builds
+#   cocoa     the macOS application, universal, zipped (tools/package-macos.sh),
+#             uploaded as an artifact
 #
 # Releases are made by release.yml. Nothing here needs the guest disk
 # images, QEMU or a secret. Actions are pinned to a commit; the comment
@@ -99,6 +101,29 @@ jobs:
         run: cmake -S . -B build/gtk -G Ninja -DAURA_PLATFORM=gtk
       - name: Build
         run: cmake --build build/gtk
+
+  cocoa:
+    name: macOS (AppKit)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    concurrency:
+      group: cocoa-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Build the universal application and its zip
+        run: tools/package-macos.sh dist/macos
+      - name: Name the artifact
+        id: names
+        run: echo "zip=Aura-$(tools/version.sh)-$(git rev-parse --short=7 HEAD)-macos" >>"$GITHUB_OUTPUT"
+      - name: Upload the zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.names.outputs.zip }}
+          path: dist/macos/*.zip
+          if-no-files-found: error
 
   ppc:
     name: Mac OS 9

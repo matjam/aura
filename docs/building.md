@@ -14,6 +14,7 @@ a machine or need a build other than the default.
 | build for Mac OS 9 | `./build.sh ppc` |
 | do both | `./build.sh` |
 | build the Linux GTK4 application | `./build.sh gtk` |
+| build the macOS application | `./build.sh cocoa` |
 
 ## Choosing the platform
 
@@ -26,6 +27,7 @@ toolchain.
 | `host` | `src/platform/posix`, the `aura-host` tool (`src/platform/host`) and the tests, on macOS or Linux | no toolchain file is given |
 | `macos9` | the Mac OS 9 application (`src/platform/macos9`) | the Retro68 toolchain file is given (`./build.sh ppc`) |
 | `gtk` | the Linux GTK4 application for Wayland (`src/platform/gtk`), at `build/gtk/src/platform/gtk/aura` | never; `./build.sh gtk` passes it |
+| `cocoa` | the macOS application (`src/platform/cocoa`), at `build/cocoa/src/platform/cocoa/Aura.app`; macOS only | never; `./build.sh cocoa` passes it |
 
 - `macos9` needs the Retro68 toolchain file, and `host` cannot use it;
   configuring either the wrong way stops with a message.
@@ -70,6 +72,17 @@ builds `build/gtk/src/platform/gtk/aura`.
   Wayland session. It finds its fonts in `assets/fonts` of the source
   tree. To run it without touching your desktop, use a nested headless
   compositor ([`gtk.md`](gtk.md), "To test without a desktop").
+
+## The macOS build
+
+`./build.sh cocoa` configures `build/cocoa` with `-DAURA_PLATFORM=cocoa`
+and builds `build/cocoa/src/platform/cocoa/Aura.app`, with the fonts and
+the root store copied into the bundle.
+
+- It needs Xcode's command line tools (`xcode-select --install`), CMake
+  and Ninja (`brew install cmake ninja`). It runs on macOS 11 or later.
+- The build must finish without warnings, as the others do.
+- To run it and test it, see [`cocoa.md`](cocoa.md).
 
 ## Other build trees
 

@@ -34,7 +34,7 @@ Further legacy platforms can follow the same plan as a mainstream one.
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | Toolbox, Appearance Manager | in development, released |
 | Linux on Wayland | mainstream, for testing | GTK4 | done, with a CI build and `.deb` and AppImage packages ([`gtk.md`](gtk.md)) |
 | Amiga with an accelerated 68k processor | legacy | Intuition, with the system's own gadget classes | planned |
-| Modern macOS | mainstream, for testing | AppKit | planned |
+| Modern macOS (11 or later) | mainstream, for testing | AppKit | in development, with a CI build and a universal zip ([`cocoa.md`](cocoa.md)) |
 
 What each planned port will need beyond this document's interfaces:
 
@@ -48,10 +48,10 @@ What each planned port will need beyond this document's interfaces:
   PowerPC build. Measure before choosing a toolkit: Intuition with the
   system's own gadgets keeps the port native without a third-party
   library.
-- **Modern macOS.** AppKit for the user interface, with native chrome
-  as GTK4 uses it, and the services in `src/platform/posix` (sockets,
-  files, clocks, entropy, coroutines) as they are. This is the
-  mainstream port for developers on a Mac, beside `aura-host`.
+- **Modern macOS.** Built: AppKit with native chrome as GTK4 uses it,
+  and the services in `src/platform/posix` as they are, run from a
+  kqueue on the main run loop. This is the mainstream port for
+  developers on a Mac, beside `aura-host` ([`cocoa.md`](cocoa.md)).
 
 The first port after Mac OS 9 is Linux with GTK4.
 
@@ -104,9 +104,8 @@ its user interface and the few services listed below that are not in
 `src/platform/posix`.
 
 CMake builds one platform per build folder, chosen by `AURA_PLATFORM`
-(`macos9`, `host`, or `gtk`, which is reserved and stops configuring
-until the port exists); see [`building.md`](building.md), "Choosing the
-platform". A new port adds its value there and its folder under
+(`macos9`, `host`, `gtk` or `cocoa`); see [`building.md`](building.md),
+"Choosing the platform". A new port adds its value there and its folder under
 `src/platform`.
 
 ## What a port writes

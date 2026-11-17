@@ -25,7 +25,7 @@ machine, so that what works there can be made to work on the old one.
 | Mac OS 9.1 to 9.2.2 on PowerPC | legacy | in development, released |
 | Linux with GTK4 | mainstream, for testing | in development, `.deb` and AppImage |
 | Amiga with an accelerated 68k processor | legacy | planned |
-| Modern macOS | mainstream, for testing | planned |
+| macOS 11 or later | mainstream, for testing | in development, universal zip from CI |
 
 Aura is in early development. It loads web pages over HTTP and HTTPS
 (TLS 1.3 and 1.2), runs JavaScript, keeps cookies, blocks trackers with
@@ -98,6 +98,10 @@ same two forms.
 For Linux, each release has a `.deb` and an AppImage. Both need GTK 4.12
 or later installed from your distribution. `docs/gtk.md` describes the
 port.
+
+For current macOS, every CI run has a universal `Aura-VERSION-macos.zip`.
+It is not notarized: Control-click the application and choose Open the
+first time. `docs/cocoa.md` describes the port.
 
 ## Build
 
