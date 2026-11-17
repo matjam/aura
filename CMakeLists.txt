@@ -118,4 +118,6 @@ elseif(AURA_PLATFORM STREQUAL "gtk")
     # The POSIX services, then the GTK4 application (docs/gtk.md).
     add_subdirectory(src/platform/posix)
     add_subdirectory(src/platform/gtk)
+    # Install rules and the .deb settings (docs/gtk.md, "Packaging").
+    add_subdirectory(packaging/linux)
 endif()
