@@ -4,7 +4,9 @@
  * The intrinsic size (info.width and height) is the size an <img> shows
  * the document at without CSS sizes (au_svg_doc_default_size: its width
  * and height, one from the other through the viewBox ratio, else 300 x
- * 150). The canvas is not a reduction of it: it is the target size when
+ * 150). info.missing says which of a natural width, height and ratio
+ * the document lacks (only a viewBox: width and height), and layout
+ * sizes the image from its box instead. The canvas is not a reduction of it: it is the target size when
  * one is given (both sides, or one side and the intrinsic ratio), so the
  * vector image is drawn sharp at the size it is shown, shrunk to fit
  * max_bytes. scale_denom stays 1. The document loads nothing: only

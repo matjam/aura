@@ -197,7 +197,9 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 - Filters, patterns, markers, textPath, foreignObject, multi-line text,
   animation.
-- CSS basic shapes in `clip-path`.
+- `clip-path`: `path()`, `rect()`, `xywh()` and `url(#id)` do not clip
+  (the box paints unclipped), `polygon` ignores its fill rule, `inset`
+  takes only the horizontal radii, and no clip-path clips hit testing.
 - `mask: url(#id)` on HTML elements.
 - One raster per SVG image URL (an image shown at two shapes on one
   page shares the larger raster).

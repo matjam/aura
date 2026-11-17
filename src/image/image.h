@@ -99,8 +99,10 @@ typedef struct AuImageInfo {
     /* What the image does not state of its size (AU_IMAGE_MISSING_*): 0
      * for raster images. An SVG document may give no width or height,
      * only a viewBox ratio or nothing; width and height above are then
-     * the size an <img> shows it at, and a CSS background sizes it
-     * differently (CSS Images 3, the default sizing algorithm). */
+     * its default size (300 x 150, or the ratio at that width). Layout
+     * reads it through AuLayoutEnv.image_missing: an <img> with only a
+     * ratio fills its containing block, and a CSS background is sized by
+     * CSS Images 3's default sizing algorithm. */
     uint8_t missing;
 } AuImageInfo;
 enum { AU_IMAGE_MISSING_W = 1, AU_IMAGE_MISSING_H = 2, AU_IMAGE_MISSING_RATIO = 4 };

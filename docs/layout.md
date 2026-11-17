@@ -526,6 +526,17 @@ positioned descendants to its rounded padding box: `layer_origin` in
 `draw.c` paints the layer into a group that `layer_clips_pop` masks,
 unless the layer's ink stays clear of the corners.
 
+### `clip-path`
+
+`clip_path_shape` in `draw.c` turns `inset()`, `circle()`, `ellipse()`,
+`polygon()` and a box keyword alone into a path against the reference
+box (border box by default), and `paint_layer` paints the layer into a
+group masked by it. A shape with no area (the visually-hidden
+`polygon(0 0, 0 0, 0 0)` that AddToAny and others put on screen-reader
+labels, a zero radius, an inset past the box) paints nothing. The
+cases are in `tests/layout/cases/overflow.txt`; what is not done is in
+[`known-gaps.md`](known-gaps.md).
+
 ### `background-attachment: fixed`
 
 It positions a layer against the viewport on any box. Once a box has
@@ -554,6 +565,15 @@ next block's margin apply.
   `au_layout_image_source` gives the document view the same choice.
 - A choice that depends on the viewport makes a viewport change build
   the box tree again.
+- A replaced flex item's automatic minimum width is its min-content
+  width, not its specified width: the width transferred through its
+  ratio from a definite height, or 0 when it has no natural width
+  (`min_m` in `flex.c`). An inline SVG of `width:32px; height:20px`
+  with a square viewBox shrinks to 20 in a 20px flex box, as AddToAny's
+  share icons need. A replaced box with no ratio record (a canvas, an
+  inline SVG) takes its height from the ratio of its attributes or
+  viewBox when it is laid out at a flexed width. The cases are in
+  `tests/layout/cases/flex.txt`.
 
 ### Text offsets for script
 

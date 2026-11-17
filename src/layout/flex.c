@@ -363,9 +363,17 @@ float l_flex_layout(AuLayout *L, LBlock *b, const LConstraints *c)
         if (min_is_auto(k, row) && !(k->b.flags & LF_CLIPS)) {
             float content;
             if (row) {
-                if (k->b.inner == LI_REPLACED) {
-                    content = l_used_width(L, k, cw, F_BIG, LS_FIT);
+                float ratio, sh = l_spec_height(k, ch);
+                if (k->b.inner == LI_REPLACED && sh >= 0 && l_replaced_ratio(L, k, &ratio)) {
+                    /* The content size suggestion of a replaced item with
+                     * a ratio and a definite height is the transferred
+                     * size (an inline SVG of width:32px; height:20px with
+                     * a square viewBox shrinks to 20 in a 20px box). */
+                    content = l_clamp_w(k, sh * ratio, cw);
                 } else {
+                    /* The min-content width. For a replaced item it is
+                     * not the specified width: 0 for an SVG or image
+                     * with no natural width. */
                     float mn, mx;
                     l_intrinsic(L, k, &mn, &mx);
                     content = mn;

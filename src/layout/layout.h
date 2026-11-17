@@ -93,10 +93,13 @@ typedef struct AuLayoutEnv {
      * by default) and paints the bitmap scaled into the content box. */
     int (*canvas)(void *ctx, AuElement *el, const AuSurface **px);
     /* What an image found by image() does not state of its size
-     * (AU_LAYOUT_IMG_MISSING_*): an SVG with only a viewBox, say.
-     * A background of auto size is then fitted to its box as CSS Images 3
-     * says instead of drawn at the size image() gave. Optional; without
-     * it every image states both sides. */
+     * (AU_LAYOUT_IMG_MISSING_*): an SVG with only a viewBox lacks a
+     * width and a height, and the size image() gave is then only its
+     * ratio. An <img> or content image with an auto size then fills its
+     * containing block's width (CSS 2.1 10.3.2) and contributes 0 to
+     * intrinsic sizes, and a background of auto size is fitted to its
+     * box as CSS Images 3 says. Optional; without it every image has its
+     * natural size. */
     unsigned (*image_missing)(void *ctx, const char *url);
 } AuLayoutEnv;
 enum { AU_LAYOUT_IMG_MISSING_W = 1, AU_LAYOUT_IMG_MISSING_H = 2, AU_LAYOUT_IMG_MISSING_RATIO = 4 };

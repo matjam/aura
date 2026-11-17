@@ -33,6 +33,19 @@ again when it is shown larger or in another shape; layout asks for each
 paint size through `AuLayoutEnv.image_use`. An SVG image loads nothing:
 only `data:` URLs in `<image>` draw, nested SVG to depth 2.
 
+An SVG image with a viewBox but no width or height has no natural size,
+only a ratio. The codec records which of a natural width, height and
+ratio the document lacks (`AuImageInfo.missing`, read by layout through
+`AuLayoutEnv.image_missing`; a background image uses the same flags,
+see "Background images without a natural size" in
+[layout.md](layout.md)). Layout sizes an image with only a ratio as
+browsers do: it fills the containing block's width at the viewBox ratio
+(CSS 2.1 10.3.2), takes its width from a set height, and contributes 0
+to shrink-to-fit widths. A flex item fills the flex container. The
+300 x 150 size the codec reports is used only for drawing when nothing
+else gives a size, and for an SVG with neither size nor viewBox.
+`tests/layout/cases/images.txt` checks each case against Chrome.
+
 ## Masks
 
 `mask-image` and `-webkit-mask-image` layers draw into a canvas mask

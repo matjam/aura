@@ -158,6 +158,20 @@ bool l_aspect_ratio(const LBlock *b, float *ratio)
     return false;
 }
 
+/* The aspect ratio of replaced box b: aspect-ratio, else its natural
+ * ratio (an image's, or an inline SVG's from its size or viewBox). */
+bool l_replaced_ratio(AuLayout *L, LBlock *b, float *ratio)
+{
+    if (b->b.inner != LI_REPLACED || lb_anon(&b->b))
+        return false;
+    float w, h, r;
+    replaced_intrinsic_size(L, b, &w, &h, &r);
+    if (!l_aspect_ratio(b, &r) && !(r > 0))
+        return false;
+    *ratio = r;
+    return r > 0;
+}
+
 /* The content height a non-replaced box's aspect-ratio gives at content
  * width content_w, or -1. */
 float l_ratio_height(const LBlock *b, float content_w)
@@ -377,6 +391,11 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
             /* A marker image: its own size, then the gap. */
             *w = r->iw > 0 ? r->iw + L_MARKER_IMAGE_GAP : 0;
             *h = r->ih;
+        } else if (r && r->loaded && r->ratio_only) {
+            /* No natural size: replaced_size fills the available width,
+             * and the intrinsic contributions are 0 (as in browsers). */
+            *w = *h = 0;
+            *ratio = r->ratio;
         } else if (r && r->loaded) {
             *w = r->iw;
             *h = r->ih;
@@ -533,9 +552,15 @@ static void replaced_size(AuLayout *L, LBlock *b, float cb_w, float cb_h, float 
         h = ih;
         if (b->b.replaced == LR_IMAGE && b->rep && !b->rep->loaded && !b->rep->label) {
             w = h = 0;
-        } else if (iw <= 0 && ratio > 0 && avail_c > 0) {
-            w = avail_c;
-            h = w / ratio;
+        } else if (iw <= 0 && ratio > 0) {
+            /* No natural width: fill the available width, or the
+             * containing block when that is unbounded (flex sizing
+             * passes an unbounded width; browsers fill the container). */
+            float fill = avail_c > 0 && avail_c < 1e29f ? avail_c : cb_w;
+            if (fill > 0 && fill < 1e29f) {
+                w = fill;
+                h = w / ratio;
+            }
         }
         /* min/max with an aspect ratio (10.4 table, simplified). */
         float cw = l_clamp_w(b, w, cb_w), chh = l_clamp_h(b, h, cb_h);
@@ -813,9 +838,9 @@ void l_layout_content(AuLayout *L, LBlock *b, float content_w, float content_h, 
         replaced_size(L, b, content_w, cb_h, content_w, false, &w, &h);
         float r = 0;
         bool has_r = l_aspect_ratio(b, &r) && r > 0;
-        if (!has_r && b->b.replaced == LR_CANVAS) {
-            /* A canvas has no LReplaced record: its ratio is that of its
-             * width and height attributes. */
+        if (!has_r) {
+            /* A canvas or an inline SVG has no LReplaced ratio: it comes
+             * from the width and height attributes or the viewBox. */
             float iw, ih;
             replaced_intrinsic_size(L, b, &iw, &ih, &r);
             has_r = r > 0;

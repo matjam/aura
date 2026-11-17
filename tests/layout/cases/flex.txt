@@ -496,3 +496,17 @@ Flexbox: every property. Container 600px wide unless noted; Ahem text
 <div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><span id=d style="width:5px;height:5px"></span></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div>
 ---
 #d x=24
+
+
+=== a replaced item's automatic minimum is its size transferred from a definite height
+<body style="margin:0">
+<span style="display:flex;width:20px;height:32px;align-items:center;overflow:hidden">
+<svg id=s xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" style="display:block;width:32px;height:20px"><rect width="32" height="32" fill="#0000ff"/></svg></span>
+<div style="display:flex;width:20px"><svg id=t xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" style="width:32px"></svg></div>
+---
+// Chrome: the 32px-wide square SVG with height 20 shrinks to 20, its
+// min-content width through the ratio (AddToAny's share icons were cut
+// to their left 20px). One with no natural width has a min-content
+// width of 0 and shrinks too.
+#s w=20 h=20
+#t w=20 h=20

@@ -338,3 +338,32 @@ pixel 55 25 ffffff
 hit 75 25 #ib
 hit 55 25 #b
 hit 25 25 #ia
+
+
+=== clip-path basic shapes clip the box and its content
+<body style="margin:0">
+<style>div { position:absolute; top:0; width:40px; height:40px; background:#0000ff }</style>
+<div style="left:0;clip-path:polygon(0px 0px,0px 0px,0px 0px);background:#ff0000">LFT</div>
+<div style="left:50px;clip-path:inset(10px)"></div>
+<div style="left:100px;clip-path:circle(10px)"></div>
+<div style="left:150px;clip-path:polygon(0 0,100% 0,0 100%)"></div>
+<div style="left:200px;clip-path:ellipse(20px 5px at 50% 0)"></div>
+<div style="left:250px;clip-path:inset(0 50% 0 0)"><div style="position:static;width:40px;height:40px;background:#00ff00"></div></div>
+<div style="left:300px;clip-path:url(#nothing)"></div>
+---
+// AddToAny's visually-hidden labels (polygon of three equal points)
+// painted their text: clip-path was parsed but never applied
+pixel 2 2 ffffff
+pixel 20 20 ffffff
+pixel 55 55 ffffff
+pixel 52 20 ffffff
+pixel 70 20 0000ff
+pixel 102 2 ffffff
+pixel 120 20 0000ff
+pixel 152 2 0000ff
+pixel 188 38 ffffff
+pixel 220 2 0000ff
+pixel 220 20 ffffff
+pixel 255 20 00ff00
+pixel 285 20 ffffff
+pixel 320 20 0000ff

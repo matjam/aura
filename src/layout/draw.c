@@ -2944,6 +2944,215 @@ static void paint_mask(PCtx *P, LBlock *k, float ox, float oy, AuRect bounds)
     au_canvas_mask_end(P->c, luminance);
 }
 
+/* ---- clip-path basic shapes (CSS Masking 1, 5.1) ---- */
+
+/* A computed length or percentage of basis; *ok cleared otherwise. */
+static float cp_len(const AuCssValue *v, float basis, bool *ok)
+{
+    if (v->type == AU_CSSV_PERCENT)
+        return v->u.num * basis / 100;
+    if ((v->type == AU_CSSV_DIMENSION && v->unit == AU_UNIT_PX) || (v->type == AU_CSSV_NUMBER && v->u.num == 0))
+        return v->u.num;
+    *ok = false;
+    return 0;
+}
+
+/* One coordinate of an "at" position: a keyword, length or percentage. */
+static float cp_pos(const AuCssValue *v, float basis, bool *ok)
+{
+    if (v->type == AU_CSSV_KEYWORD) {
+        if (v->kw == AU_K_left || v->kw == AU_K_top)
+            return 0;
+        if (v->kw == AU_K_right || v->kw == AU_K_bottom)
+            return basis;
+        if (v->kw == AU_K_center)
+            return basis / 2;
+        *ok = false;
+        return 0;
+    }
+    return cp_len(v, basis, ok);
+}
+
+/* A circle or ellipse radius against the distances to the sides. */
+static float cp_radius(const AuCssValue *v, float near, float far, float basis, bool *ok)
+{
+    if (v->type == AU_CSSV_KEYWORD)
+        return v->kw == AU_K_farthest_side ? far : v->kw == AU_K_closest_side ? near : (*ok = false, 0);
+    return cp_len(v, basis, ok);
+}
+
+/* The "at" position from it[i], it[i + 1] (horizontal then vertical, or
+ * a vertical keyword first) into *cx, *cy, relative to box r. */
+static void cp_at(const AuCssValue *it, uint32_t i, uint32_t n, AuRect r, float *cx, float *cy, bool *ok)
+{
+    *cx = r.w / 2;
+    *cy = r.h / 2;
+    if (i >= n)
+        return;
+    if (it[i].type != AU_CSSV_KEYWORD || it[i].kw != AU_K_at || n - i - 1 < 1 || n - i - 1 > 2) {
+        *ok = false;
+        return;
+    }
+    const AuCssValue *a = &it[i + 1], *b = n - i - 1 == 2 ? &it[i + 2] : NULL;
+    if (b && a->type == AU_CSSV_KEYWORD && (a->kw == AU_K_top || a->kw == AU_K_bottom)) {
+        const AuCssValue *t = a;
+        a = b;
+        b = t;
+    }
+    if (!b && a->type == AU_CSSV_KEYWORD && (a->kw == AU_K_top || a->kw == AU_K_bottom)) {
+        *cy = cp_pos(a, r.h, ok);
+        return;
+    }
+    *cx = cp_pos(a, r.w, ok);
+    if (b)
+        *cy = cp_pos(b, r.h, ok);
+}
+
+/* The clip-path shape of k at ox, oy: 0 when nothing clips (none,
+ * url(), a shape this does not draw), 1 with the shape in *p (in canvas
+ * coordinates; the caller frees it), -1 when the shape encloses no area
+ * and nothing paints (the visually-hidden polygon(0 0, 0 0, 0 0)). */
+static int clip_path_build(const LBlock *k, float ox, float oy, AuPath *p)
+{
+    if (lb_anon(&k->b) || !k->b.style->rare->clip_path)
+        return 0;
+    uint32_t n;
+    const AuCssValue *it = l_items(&k->b.style->rare->clip_path->value, &n);
+    const AuCssValue *fn = NULL;
+    int box = AU_K_border_box;
+    for (uint32_t i = 0; i < n; i++) {
+        if (it[i].type == AU_CSSV_FUNCTION)
+            fn = &it[i];
+        else if (it[i].type == AU_CSSV_KEYWORD && it[i].kw != AU_K_none)
+            box = it[i].kw;
+        else
+            return 0; /* none, url() */
+    }
+    AuRect r = box_area(k, ox, oy, box == AU_K_padding_box || box == AU_K_content_box ? box : AU_K_border_box);
+    if (box == AU_K_margin_box) {
+        r.x -= k->m[3];
+        r.y -= k->m[0];
+        r.w += k->m[1] + k->m[3];
+        r.h += k->m[0] + k->m[2];
+    }
+    bool ok = true;
+    if (!fn) {
+        if (r.w <= 0 || r.h <= 0)
+            return -1;
+        au_path_rect(p, r);
+        return 1;
+    }
+    uint32_t na;
+    const AuCssValue *a = fn->n ? l_items(&fn->u.items[0], &na) : NULL;
+    if (!fn->n)
+        na = 0;
+    if (fn->kw == AU_K_polygon) {
+        uint32_t g = 0;
+        if (fn->n && na == 1 && a[0].type == AU_CSSV_KEYWORD && (a[0].kw == AU_K_nonzero || a[0].kw == AU_K_evenodd))
+            g = 1;
+        if (fn->n - g < 3)
+            return -1;
+        float area2 = 0, px0 = 0, py0 = 0, lx = 0, ly = 0;
+        for (uint32_t i = g; i < fn->n && ok; i++) {
+            uint32_t m;
+            const AuCssValue *q = l_items(&fn->u.items[i], &m);
+            if (m != 2) {
+                ok = false;
+                break;
+            }
+            float x = r.x + cp_len(&q[0], r.w, &ok), y = r.y + cp_len(&q[1], r.h, &ok);
+            if (i == g) {
+                au_path_move_to(p, x, y);
+                px0 = x, py0 = y;
+            } else {
+                au_path_line_to(p, x, y);
+                area2 += (lx - px0) * (y - py0) - (x - px0) * (ly - py0);
+            }
+            lx = x, ly = y;
+        }
+        au_path_close(p);
+        if (ok && area2 > -0.01f && area2 < 0.01f)
+            return -1;
+    } else if (fn->kw == AU_K_inset && fn->n == 1) {
+        float d[4] = {0, 0, 0, 0};
+        uint32_t nl = 0;
+        while (nl < na && !(a[nl].type == AU_CSSV_KEYWORD && a[nl].kw == AU_K_round))
+            nl++;
+        if (nl < 1 || nl > 4) {
+            ok = false;
+        } else {
+            for (uint32_t s = 0; s < 4; s++) {
+                /* top, right, bottom, left from 1 to 4 values */
+                uint32_t src = nl == 1 ? 0 : nl == 2 ? s % 2 : nl == 3 ? (s == 3 ? 1 : s) : s;
+                d[s] = cp_len(&a[src], s % 2 ? r.w : r.h, &ok);
+            }
+        }
+        AuRect q = {r.x + d[3], r.y + d[0], r.w - d[1] - d[3], r.h - d[0] - d[2]};
+        if (ok && (q.w <= 0 || q.h <= 0))
+            return -1;
+        AuRadii rr;
+        memset(&rr, 0, sizeof rr);
+        uint32_t nr = 0;
+        for (uint32_t i = nl + 1; i < na && ok; i++) {
+            if (a[i].type == AU_CSSV_DELIM)
+                break; /* elliptical radii: the horizontal ones serve */
+            if (nr < 4)
+                rr.rx[nr] = rr.ry[nr] = cp_len(&a[i], q.w, &ok);
+            nr++;
+        }
+        if (nr > 0 && nr < 4) {
+            /* 1 to 3 values: TL, TR, BR, BL as for border-radius */
+            float v0 = rr.rx[0], v1 = nr > 1 ? rr.rx[1] : v0, v2 = nr > 2 ? rr.rx[2] : v0;
+            float c[4] = {v0, v1, v2, v1};
+            for (int s = 0; s < 4; s++)
+                rr.rx[s] = rr.ry[s] = c[s];
+        }
+        if (nr > 0) {
+            au_radii_fit(&rr, q);
+            au_path_rounded_rect(p, q, &rr, false);
+        } else {
+            au_path_rect(p, q);
+        }
+    } else if ((fn->kw == AU_K_circle || fn->kw == AU_K_ellipse) && fn->n <= 1) {
+        bool circle = fn->kw == AU_K_circle;
+        uint32_t nrad = 0;
+        while (nrad < na && !(a[nrad].type == AU_CSSV_KEYWORD && a[nrad].kw == AU_K_at))
+            nrad++;
+        float cx, cy;
+        cp_at(a, nrad, na, r, &cx, &cy, &ok);
+        float nx = l_min(cx, r.w - cx), fx = l_max(cx, r.w - cx);
+        float ny = l_min(cy, r.h - cy), fy = l_max(cy, r.h - cy);
+        float rx, ry;
+        if (circle) {
+            if (nrad > 1)
+                ok = false;
+            float diag = sqrtf((r.w * r.w + r.h * r.h) / 2);
+            rx = nrad ? cp_radius(&a[0], l_min(nx, ny), l_max(fx, fy), diag, &ok) : l_min(nx, ny);
+            ry = rx;
+        } else {
+            if (nrad != 0 && nrad != 2)
+                ok = false;
+            rx = nrad == 2 ? cp_radius(&a[0], nx, fx, r.w, &ok) : nx;
+            ry = nrad == 2 ? cp_radius(&a[1], ny, fy, r.h, &ok) : ny;
+        }
+        if (ok && (rx <= 0 || ry <= 0))
+            return -1;
+        au_path_ellipse(p, r.x + cx, r.y + cy, rx, ry);
+    } else {
+        ok = false; /* path(), rect(), xywh() */
+    }
+    return ok ? 1 : 0;
+}
+
+static int clip_path_shape(const LBlock *k, float ox, float oy, AuPath *p)
+{
+    au_path_init(p);
+    int r = clip_path_build(k, ox, oy, p);
+    if (r <= 0)
+        au_path_free(p);
+    return r;
+}
+
 static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
 {
     if (P->depth > L_MAX_DEPTH || (b->flags & LF_TOO_DEEP))
@@ -2996,6 +3205,12 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         P->depth--;
         return;
     }
+    AuPath cpath;
+    int clipped_path = clip_path_shape(k, ox, oy, &cpath);
+    if (clipped_path < 0) {
+        P->depth--;
+        return;
+    }
     if (affine && au_canvas_layer_begin(P->c, ovr)) {
         P->dirty = (LArea){ovr.x, ovr.y, ovr.w, ovr.h};
         group = false; /* the layer applies the opacity */
@@ -3006,6 +3221,8 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         au_canvas_group_begin(P->c, ovr);
     bool masked = !lb_anon(b) && au_style_mask_layer_count(b->style) > 0;
     if (masked)
+        au_canvas_group_begin(P->c, ovr);
+    if (clipped_path)
         au_canvas_group_begin(P->c, ovr);
     if (b != P->L->root)
         paint_decor(P, k, ox, oy);
@@ -3043,6 +3260,11 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         paint_scrollbars(P, k, ox, oy);
     }
     paint_outline(P, b, (AuRect){ox, oy, k->w, k->h});
+    if (clipped_path) {
+        au_canvas_group_mask(P->c, &cpath);
+        au_canvas_group_end(P->c, 1.0f);
+        au_path_free(&cpath);
+    }
     if (masked) {
         paint_mask(P, k, ox, oy, ovr);
         au_canvas_group_end(P->c, 1.0f);
