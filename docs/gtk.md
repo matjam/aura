@@ -88,7 +88,8 @@ GLib's main loop drives everything; the engine has no threads.
 
 A browser window is a `GtkApplicationWindow` with a `GtkHeaderBar`
 (Back, Forward, Reload or Stop, the address `GtkEntry` with the security
-icon and load progress), the menu bar, a `GtkNotebook` holding only the
+icon and load progress, and the main menu button at the right), a
+`GtkNotebook` holding only the
 tab labels, an optional find bar, the page (a `GtkDrawingArea` with
 scroll bars) and a status line. The model's window is made with
 `au_browser_window_new_native`, so its surface holds only the page.
@@ -131,8 +132,12 @@ the engine to lay out at a scale; it is a known gap.
 
 ## Menus
 
-`menus.c` builds the menu bar from the command table
-([`browser-chrome.md`](browser-chrome.md), "Commands and menus").
+`menus.c` builds the application's menu model from the command table
+([`browser-chrome.md`](browser-chrome.md), "Commands and menus"). The
+window does not show it as a menu bar: each browser window's header bar
+has a main menu button (`open-menu-symbolic`) holding the same model, with
+each menu as a submenu. F10 opens it, because the button is the window's
+primary menu.
 
 - Each command is the application action `app.cmd-N`, where N is its
   `AuCommand` value, with the table's shortcut as its accelerator (Ctrl

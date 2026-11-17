@@ -540,7 +540,8 @@ AuGtkWin *au_gtk_win_new(int width, int height)
 
     GtkWidget *win = gtk_application_window_new(au_gtk.app);
     w->window = GTK_WINDOW(win);
-    gtk_application_window_set_show_menubar(GTK_APPLICATION_WINDOW(win), TRUE);
+    /* The menus live behind a menu button in the header bar, not a bar. */
+    gtk_application_window_set_show_menubar(GTK_APPLICATION_WINDOW(win), FALSE);
     /* The page area's size, plus the header bar, tabs and status bar. */
     gtk_window_set_default_size(w->window, width, height + 110);
     gtk_window_set_title(w->window, "Aura");
@@ -558,6 +559,14 @@ AuGtkWin *au_gtk_win_new(int width, int height)
     gtk_widget_set_hexpand(w->entry, TRUE);
     gtk_widget_set_size_request(w->entry, 320, -1);
     gtk_header_bar_set_title_widget(GTK_HEADER_BAR(hb), w->entry);
+    au_gtk_menus_init();
+    w->menu_button = gtk_menu_button_new();
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(w->menu_button), "open-menu-symbolic");
+    gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(w->menu_button),
+                                   gtk_application_get_menubar(au_gtk.app));
+    gtk_menu_button_set_primary(GTK_MENU_BUTTON(w->menu_button), TRUE);
+    gtk_widget_set_tooltip_text(w->menu_button, "Main Menu");
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(hb), w->menu_button);
     g_signal_connect(w->entry, "changed", G_CALLBACK(on_entry_changed), w);
     g_signal_connect(w->entry, "activate", G_CALLBACK(on_entry_activate), w);
     GtkEventController *ek = gtk_event_controller_key_new();

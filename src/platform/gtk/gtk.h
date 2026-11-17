@@ -38,7 +38,7 @@ typedef struct AuGtkWin {
     struct AuGtkWin *next;
     AuBrowserWindow *bw;
     GtkWindow *window;
-    GtkWidget *back, *forward, *reload, *entry;
+    GtkWidget *back, *forward, *reload, *entry, *menu_button;
     GtkWidget *body; /* the tabs and the page: vertical, or horizontal for tabs on the left */
     GtkWidget *notebook;
     GtkWidget *search_bar, *search_entry;
