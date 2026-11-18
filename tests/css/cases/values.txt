@@ -200,6 +200,26 @@ html
 #h -> border-top-color: rgb(0, 0, 255)
 #h -> outline-color: rgb(0, 0, 255)
 
+=== relative colors
+--- css
+#a { color: rgb(from rgb(10 20 30) b g r / 0.5); background-color: hsl(from rgb(255 0 0) 120 s l); }
+#b { color: hsl(from #336699 h s calc(l + 10)); background-color: rgb(from #808080 calc(r * 2) g calc(b / 2) / calc(alpha - 0.5)); }
+#c { color: green; color: rgb(from red r g); background-color: rgb(from blue r g b / 25%); border-top-color: rgba(from #00f none g 255); }
+--- html
+html
+  body
+    div#a
+    div#b
+    div#c
+--- expect
+#a -> color: rgba(30, 20, 10, 0.5)
+#a -> background-color: rgb(0, 255, 0)
+#b -> color: rgb(64, 128, 191)
+#b -> background-color: rgba(255, 128, 64, 0.5)
+#c -> color: rgb(0, 128, 0)
+#c -> background-color: rgba(0, 0, 255, 0.25)
+#c -> border-top-color: rgb(0, 0, 255)
+
 === keywords and numbers
 --- css
 #a { display: inline-block; position: relative; float: left; opacity: 0.5; z-index: 3; visibility: hidden; cursor: pointer; box-sizing: border-box; }

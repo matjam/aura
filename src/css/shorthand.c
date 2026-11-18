@@ -858,6 +858,22 @@ static bool sh_overflow(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
     return true;
 }
 
+/* overscroll-behavior: x [y] */
+static bool sh_overscroll(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
+{
+    uint32_t n;
+    const AuCssValue *it = sh_items(s->cx, tk, a, b, &n, false, NULL);
+    if (!it || n < 1 || n > 2)
+        return false;
+    AuCssValue *x = try_lh(s->cx, AU_PROP_overscroll_behavior_x, &it[0]);
+    AuCssValue *y = n == 2 ? try_lh(s->cx, AU_PROP_overscroll_behavior_y, &it[1]) : x;
+    if (!x || !y)
+        return false;
+    emit(s, AU_PROP_overscroll_behavior_x, x);
+    emit(s, AU_PROP_overscroll_behavior_y, y);
+    return true;
+}
+
 /* container: <'container-name'> [ / <'container-type'> ]? */
 static bool sh_container(Sh *s, const CssTokens *tk, uint32_t a, uint32_t b)
 {
@@ -1496,6 +1512,8 @@ bool css_parse_shorthand(CssParseCtx *cx, uint16_t sh, const CssTokens *tk, uint
         return sh_text_wrap(&s, tk, a, b);
     case AU_PROP_overflow:
         return sh_overflow(&s, tk, a, b);
+    case AU_PROP_overscroll_behavior:
+        return sh_overscroll(&s, tk, a, b);
     case AU_PROP_container:
         return sh_container(&s, tk, a, b);
     default:

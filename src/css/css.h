@@ -350,6 +350,8 @@ typedef struct AuStyleInhRare { /* inherited, rarely set */
         line_break, border_collapse, caption_side, empty_cells, pointer_events, cursor, font_kerning,
         text_rendering, image_rendering, font_optical_sizing, fill_rule, clip_rule, stroke_linecap,
         stroke_linejoin, text_anchor;
+    uint8_t interpolate_size; /* parsed only */
+    AuColor accent_color, caret_color; /* auto: 0; parsed only */
 } AuStyleInhRare;
 
 typedef struct AuStyleBox {
@@ -425,6 +427,8 @@ typedef struct AuStyleRare {
         scroll_behavior, scrollbar_width, contain, isolation, mix_blend_mode, text_decoration_line, text_decoration_style,
         text_overflow, user_select, box_orient, vector_effect, mask_type, dominant_baseline,
         container_type; /* AU_CONTAINER_TYPE_* */
+    /* parsed only (css_enums.h) */
+    uint8_t overscroll_x, overscroll_y, scrollbar_gutter, content_visibility, field_sizing;
 } AuStyleRare;
 
 typedef enum {

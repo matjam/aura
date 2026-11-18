@@ -533,6 +533,32 @@ same code as declarations, for the canvas ([`canvas.md`](canvas.md)).
 SVG presentation attributes reach the cascade as presentational hints
 (`svg_hints` in `src/css/ua.c`, see [`svg.md`](svg.md)).
 
+## Relative colours
+
+`rgb()`, `rgba()`, `hsl()` and `hsla()` take the relative syntax of CSS
+Color 5: `rgb(from <colour> r g b / alpha)` (`parse_relative` in
+`src/css/values.c`). Each channel is a channel keyword of the origin
+colour (`r g b alpha`, or `h s l alpha`), a number, a percentage,
+`none`, or a `calc()` over those with `+ - * /` (no parentheses;
+`rel_calc`). While a colour function's arguments are parsed,
+`CssParseCtx.in_color` lets a `calc()` that names a channel through as
+a plain function and lets the operators through as delimiters, since
+the math parser does not know channel names. The origin is resolved at
+parse time, so it cannot be `currentcolor`; a `var()` in it is
+substituted first as usual. The other colour functions (`lab()`,
+`oklch()`, `color()`) do not take the relative syntax yet.
+
+## Properties parsed only
+
+These are parsed, cascaded and computed, so `CSS.supports` and
+`@supports` answer true and the declarations are not dropped, but
+layout and painting do not act on them yet: `accent-color` and
+`caret-color` (`auto` is stored as the colour 0), `overscroll-behavior`
+and its `-x` and `-y` longhands, `scrollbar-gutter` (`auto`, `stable`;
+`stable both-edges` is not parsed), `content-visibility` (laid out as
+`visible`), `field-sizing` and `interpolate-size`. To make one take
+effect, read its field in `AuStyleRare` or `AuStyleInhRare` (`css.h`).
+
 ## Environment variables
 
 `env()` is substituted with `var()` (`substitute` in

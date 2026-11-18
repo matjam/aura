@@ -135,6 +135,16 @@
 #define AU_KWL_SCROLL_BEHAVIOR(X) X(SCROLL_BEHAVIOR, AUTO, auto_) X(SCROLL_BEHAVIOR, SMOOTH, smooth)
 #define AU_KWL_SCROLLBAR_WIDTH(X) X(SCROLLBAR_WIDTH, AUTO, auto_) X(SCROLLBAR_WIDTH, THIN, thin) X(SCROLLBAR_WIDTH, NONE, none)
 #define AU_KWL_ISOLATION(X) X(ISOLATION, AUTO, auto_) X(ISOLATION, ISOLATE, isolate)
+/* Parsed so that CSS.supports answers and the cascade keeps them; layout
+ * does not act on them yet (docs/css.md, "Properties parsed only"). */
+#define AU_KWL_OVERSCROLL(X) X(OVERSCROLL, AUTO, auto_) X(OVERSCROLL, CONTAIN, contain) X(OVERSCROLL, NONE, none)
+#define AU_KWL_SCROLLBAR_GUTTER(X)                                                                \
+    X(SCROLLBAR_GUTTER, AUTO, auto_) X(SCROLLBAR_GUTTER, STABLE, stable) X(SCROLLBAR_GUTTER, BOTH_EDGES, both_edges)
+#define AU_KWL_CONTENT_VISIBILITY(X)                                                              \
+    X(CONTENT_VISIBILITY, VISIBLE, visible) X(CONTENT_VISIBILITY, AUTO, auto_) X(CONTENT_VISIBILITY, HIDDEN, hidden)
+#define AU_KWL_FIELD_SIZING(X) X(FIELD_SIZING, FIXED, fixed) X(FIELD_SIZING, CONTENT, content)
+#define AU_KWL_INTERPOLATE_SIZE(X)                                                                \
+    X(INTERPOLATE_SIZE, NUMERIC_ONLY, numeric_only) X(INTERPOLATE_SIZE, ALLOW_KEYWORDS, allow_keywords)
 #define AU_KWL_CONTAINER_TYPE(X)                                                                  \
     X(CONTAINER_TYPE, NORMAL, normal) X(CONTAINER_TYPE, SIZE, size) X(CONTAINER_TYPE, INLINE_SIZE, inline_size)
 #define AU_KWL_MIX_BLEND_MODE(X)                                                                  \
@@ -188,6 +198,7 @@
     Y(FLEX_WRAP) Y(TRANSFORM_STYLE) Y(BACKFACE_VISIBILITY) Y(OBJECT_FIT) Y(RESIZE) Y(APPEARANCE)  \
     Y(SCROLL_BEHAVIOR) Y(SCROLLBAR_WIDTH) Y(ISOLATION) Y(MIX_BLEND_MODE) Y(TEXT_DECORATION_STYLE) Y(TEXT_OVERFLOW)   \
     Y(USER_SELECT) Y(BOX_ORIENT) Y(FILL_RULE) Y(STROKE_LINECAP) Y(STROKE_LINEJOIN) Y(TEXT_ANCHOR)  \
-    Y(VECTOR_EFFECT) Y(MASK_TYPE) Y(FONT_OPTICAL_SIZING) Y(DOMINANT_BASELINE) Y(CONTAINER_TYPE)
+    Y(VECTOR_EFFECT) Y(MASK_TYPE) Y(FONT_OPTICAL_SIZING) Y(DOMINANT_BASELINE) Y(CONTAINER_TYPE)    \
+    Y(OVERSCROLL) Y(SCROLLBAR_GUTTER) Y(CONTENT_VISIBILITY) Y(FIELD_SIZING) Y(INTERPOLATE_SIZE)
 
 #endif

@@ -224,6 +224,12 @@ AuCssValue *css_validate_longhand(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
         return norm_lp(v, lp_flags(cx, prop) & ~(unsigned)P_PCT) ? v : NULL;
     }
     case T_COLOR:
+        if (v->type == AU_CSSV_KEYWORD && v->kw == AU_K_auto_ && (pi->extra & LK_AUTO)) {
+            /* accent-color and caret-color: auto is kept as the color 0 */
+            memset(v, 0, sizeof *v);
+            v->type = AU_CSSV_COLOR;
+            return v;
+        }
         return norm_color(v) ? v : NULL;
     case T_NUM:
         if (v->type == AU_CSSV_PERCENT && (pi->flags & F_PCT))

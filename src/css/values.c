@@ -679,8 +679,202 @@ static bool parse_color_mix(const AuCssValue *fn, AuColor *out)
     return true;
 }
 
+static bool is_color_fn(int kw);
+
+/* The text of an identifier or keyword value, else NULL. */
+static const char *ident_text(const AuCssValue *v, size_t *n)
+{
+    if (v->type == AU_CSSV_IDENT) {
+        *n = v->n;
+        return v->u.str;
+    }
+    if (v->type == AU_CSSV_KEYWORD) {
+        const char *s = au_css_keyword_name(v->kw);
+        *n = s ? strlen(s) : 0;
+        return s;
+    }
+    return NULL;
+}
+
+static bool ident_is(const AuCssValue *v, const char *s)
+{
+    size_t n;
+    const char *t = ident_text(v, &n);
+    return t && au_ieq(t, n, s, strlen(s));
+}
+
+static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l)
+{
+    float mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    float mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    float d = mx - mn;
+    *l = (mx + mn) / 2;
+    *h = 0;
+    *s = 0;
+    if (d <= 0)
+        return;
+    *s = *l > 0.5f ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx == r)
+        *h = (g - b) / d + (g < b ? 6 : 0);
+    else if (mx == g)
+        *h = (b - r) / d + 2;
+    else
+        *h = (r - g) / d + 4;
+    *h *= 60;
+}
+
+/* One operand of a relative color's calc(): a channel keyword, a
+ * number, or a percentage (in the channel's own range). */
+static bool rel_operand(const AuCssValue *c, const char *const *names, const float *ch, bool hsl, int i, float *out)
+{
+    for (int k = 0; k < 4; k++)
+        if (ident_is(c, names[k])) {
+            *out = ch[k];
+            return true;
+        }
+    if (c->type == AU_CSSV_NUMBER) {
+        *out = (float)c->u.num;
+        return true;
+    }
+    if (c->type == AU_CSSV_PERCENT) {
+        *out = i == 3 ? (float)c->u.num / 100 : hsl ? (float)c->u.num : (float)c->u.num * 2.55f;
+        return true;
+    }
+    return false;
+}
+
+/* calc() over channel keywords: operands and + - * / with the usual
+ * precedence, no parentheses (at most 16 operands). */
+static bool rel_calc(const AuCssValue *fn, const char *const *names, const float *ch, bool hsl, int i, float *out)
+{
+    uint32_t n;
+    const AuCssValue *it = fn->n == 1 ? css_items(&fn->u.items[0], &n) : NULL;
+    if (!it || !n || n > 31 || !(n & 1))
+        return false;
+    float vals[16];
+    char ops[16];
+    int nv = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        if (k & 1) {
+            if (it[k].type != AU_CSSV_DELIM || !strchr("+-*/", it[k].unit))
+                return false;
+            ops[nv - 1] = (char)it[k].unit;
+        } else if (!rel_operand(&it[k], names, ch, hsl, i, &vals[nv++])) {
+            return false;
+        }
+    }
+    /* * and / first, folding into the left operand */
+    int m = 0;
+    float acc[16];
+    char aop[16];
+    acc[0] = vals[0];
+    for (int k = 1; k < nv; k++) {
+        char op = ops[k - 1];
+        if (op == '*')
+            acc[m] *= vals[k];
+        else if (op == '/')
+            acc[m] = vals[k] != 0 ? acc[m] / vals[k] : 0;
+        else {
+            aop[m] = op;
+            acc[++m] = vals[k];
+        }
+    }
+    float r = acc[0];
+    for (int k = 0; k < m; k++)
+        r = aop[k] == '+' ? r + acc[k + 1] : r - acc[k + 1];
+    *out = r;
+    return true;
+}
+
+/* Relative color syntax (CSS Color 5) for rgb() and hsl():
+ * rgb(from <color> r g b [/ alpha]). Each channel is one of the origin
+ * color's channel keywords, a number, a percentage or none; calc() over
+ * the channels is not supported. */
+static bool parse_relative(const AuCssValue *fn, AuColor *out, bool hsl)
+{
+    if (fn->n != 1)
+        return false;
+    uint32_t n;
+    const AuCssValue *it = css_items(&fn->u.items[0], &n);
+    if (n != 5 && n != 7)
+        return false;
+    if (!ident_is(&it[0], "from"))
+        return false;
+    AuColor base;
+    bool cur;
+    if (it[1].type == AU_CSSV_FUNCTION && is_color_fn(it[1].kw)) {
+        if (!parse_color_fn(&it[1], &base))
+            return false;
+    } else if (!css_value_to_color(&it[1], &base, &cur) || cur) {
+        return false;
+    }
+    if (n == 7 && !(it[5].type == AU_CSSV_DELIM && it[5].unit == '/'))
+        return false;
+    float r = (float)((base >> 24) & 255) / 255, g = (float)((base >> 16) & 255) / 255,
+          b = (float)((base >> 8) & 255) / 255, a = (float)(base & 255) / 255;
+    /* the origin's channels in the function's own ranges */
+    float ch[4];
+    static const char *const rgb_names[4] = {"r", "g", "b", "alpha"};
+    static const char *const hsl_names[4] = {"h", "s", "l", "alpha"};
+    const char *const *names = hsl ? hsl_names : rgb_names;
+    if (hsl) {
+        rgb_to_hsl(r, g, b, &ch[0], &ch[1], &ch[2]);
+        ch[1] *= 100;
+        ch[2] *= 100;
+    } else {
+        ch[0] = r * 255;
+        ch[1] = g * 255;
+        ch[2] = b * 255;
+    }
+    ch[3] = a;
+    float v[4];
+    for (int i = 0; i < 4; i++) {
+        const AuCssValue *c = i < 3 ? &it[2 + i] : n == 7 ? &it[6] : NULL;
+        if (!c) {
+            v[i] = ch[3];
+            continue;
+        }
+        bool found = false;
+        for (int k = 0; k < 4 && !found; k++)
+            if (ident_is(c, names[k])) {
+                v[i] = ch[k];
+                found = true;
+            }
+        if (found)
+            continue;
+        if (c->type == AU_CSSV_FUNCTION && c->kw == AU_K_calc) {
+            if (!rel_calc(c, names, ch, hsl, i, &v[i]))
+                return false;
+            continue;
+        }
+        if (ident_is(c, "none"))
+            v[i] = 0;
+        else if (c->type == AU_CSSV_NUMBER)
+            v[i] = (float)c->u.num;
+        else if (c->type == AU_CSSV_PERCENT)
+            v[i] = i == 3 ? (float)c->u.num / 100 : hsl ? (float)c->u.num : (float)c->u.num * 2.55f;
+        else if (hsl && i == 0 && c->type == AU_CSSV_DIMENSION) {
+            Comp cc;
+            if (!get_comp(c, &cc) || !cc.is_angle)
+                return false;
+            v[i] = cc.v;
+        } else
+            return false;
+    }
+    if (hsl) {
+        hsl_to_rgb(v[0], v[1] / 100, v[2] / 100, &r, &g, &b);
+        *out = rgbf(r, g, b, v[3]);
+    } else {
+        *out = rgbf(v[0] / 255, v[1] / 255, v[2] / 255, v[3]);
+    }
+    return true;
+}
+
 static bool parse_color_fn(const AuCssValue *fn, AuColor *out)
 {
+    if ((fn->kw == AU_K_rgb || fn->kw == AU_K_rgba || fn->kw == AU_K_hsl || fn->kw == AU_K_hsla) &&
+        parse_relative(fn, out, fn->kw == AU_K_hsl || fn->kw == AU_K_hsla))
+        return true;
     switch (fn->kw) {
     case AU_K_rgb:
     case AU_K_rgba:
@@ -1517,10 +1711,11 @@ AuCssValue *css_parse_component(CssParseCtx *cx, const CssTokens *tk, uint32_t *
         return v;
     }
     case TK_DELIM:
-        if (t->num == '/') {
+        /* '/', and inside a relative color's calc() the operators */
+        if (t->num == '/' || (cx->in_color && (t->num == '*' || t->num == '+' || t->num == '-'))) {
             (*i)++;
             AuCssValue *v = css_new_value(ar, AU_CSSV_DELIM);
-            v->unit = '/';
+            v->unit = (uint8_t)t->num;
             return v;
         }
         return NULL;
@@ -1554,10 +1749,16 @@ AuCssValue *css_parse_component(CssParseCtx *cx, const CssTokens *tk, uint32_t *
             return NULL;
         bool closed = end > *i + 1 && tk->t[end - 1].type == TK_RPAREN;
         uint32_t ib = closed ? end - 1 : end;
+        bool rel_calc_fn = false;
         if (is_math_fn(t->kw)) {
             MathP m = {cx, tk};
             AuCssValue *v = math_fn(&m, *i);
-            if (!v || (css_value_type(v) & CT_INVALID))
+            bool bad = !v || (css_value_type(v) & CT_INVALID);
+            if (bad && cx->in_color && t->kw == AU_K_calc) {
+                rel_calc_fn = true; /* channel keywords: kept for the color function */
+                goto generic;
+            }
+            if (bad)
                 return NULL;
             simplify(ar, v);
             if (is_leaf(v))
@@ -1587,7 +1788,8 @@ AuCssValue *css_parse_component(CssParseCtx *cx, const CssTokens *tk, uint32_t *
             return NULL;
         if (t->kw == AU_K_attr && !cx->in_content)
             return NULL;
-        if (!t->kw || (!is_color_fn(t->kw) && !is_generic_fn(t->kw) && t->kw != AU_K_attr))
+    generic:
+        if (!t->kw || (!is_color_fn(t->kw) && !is_generic_fn(t->kw) && t->kw != AU_K_attr && !rel_calc_fn))
             return NULL;
         if (++parse_depth > CSS_MAX_DEPTH) {
             parse_depth--;
@@ -1614,6 +1816,9 @@ AuCssValue *css_parse_component(CssParseCtx *cx, const CssTokens *tk, uint32_t *
         fn->kw = t->kw;
         uint32_t start = j, ai = 0;
         bool ok = true;
+        bool color_args = is_color_fn(t->kw);
+        if (color_args)
+            cx->in_color++;
         for (uint32_t k = j; ok && k <= ib;) {
             if (k == ib || tk->t[k].type == TK_COMMA) {
                 AuCssValue *arg = parse_value_range(cx, tk, start, k);
@@ -1631,6 +1836,8 @@ AuCssValue *css_parse_component(CssParseCtx *cx, const CssTokens *tk, uint32_t *
             int ty = tk->t[k].type;
             k = (ty == TK_FUNCTION || ty == TK_LPAREN || ty == TK_LBRACKET || ty == TK_LBRACE) ? tk->t[k].len : k + 1;
         }
+        if (color_args)
+            cx->in_color--;
         parse_depth--;
         if (!ok || ai != nargs)
             return NULL;

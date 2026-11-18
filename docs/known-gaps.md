@@ -172,6 +172,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   not play (a transition jumps to its end). Inline boxes do not
   animate.
 - `@scope` and `@starting-style` are parsed and never apply.
+- `accent-color`, `caret-color`, `overscroll-behavior`,
+  `scrollbar-gutter`, `content-visibility`, `field-sizing` and
+  `interpolate-size` are parsed only ([`css.md`](css.md), "Properties
+  parsed only"). Relative colours work in `rgb()` and `hsl()` but not in
+  `lab()`, `oklch()` or `color()`.
 - Container queries ([`css.md`](css.md), "Container queries"):
   - `style()` and `scroll-state()` queries are unknown, so a rule that
     needs one to be true does not apply.

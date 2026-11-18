@@ -155,6 +155,9 @@ typedef struct CssParseCtx {
     bool quirks;      /* quirks-mode unitless lengths */
     bool in_content;  /* attr() allowed */
     const char *base_url;
+    /* inside a color function's arguments: a calc() that names channel
+     * keywords (relative colors) is kept as a FUNCTION for values.c */
+    uint8_t in_color;
 } CssParseCtx;
 
 /* Converts tokens [a, b) into a generic value tree: COMMA_LIST if commas
