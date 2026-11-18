@@ -12,7 +12,7 @@
  * the release file names. release-please rewrites this line when it
  * prepares a release (release-please-config.json); do not edit it by hand
  * between releases. */
-#define AU_VERSION "0.6.0" /* x-release-please-version */
+#define AU_VERSION "0.7.0" /* x-release-please-version */
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
 #define AU_AUTHOR "Nathan Ollerenshaw"
 #define AU_HOMEPAGE "https://github.com/matjam/aura"
