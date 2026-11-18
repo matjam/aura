@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.7.0](https://github.com/matjam/aura/compare/v0.6.0...v0.7.0) (2026-11-18)
+
+
+### Features
+
+* **browser:** connect the history API to the back and forward list ([a99c1db](https://github.com/matjam/aura/commit/a99c1db983e62ec46e0b885fa455c4d7bdfc5735))
+* **browser:** hold a new page's first paint until its style sheets arrive ([00abea8](https://github.com/matjam/aura/commit/00abea86b2c2eee6cbb46723048567a28f6e8408))
+* **browser:** queue clicks and keys while a page's script is parked ([7d4ebe5](https://github.com/matjam/aura/commit/7d4ebe5a0ca3a2560e4e487368b9466ce7083ccf))
+* **browser:** scroll and paint while a page's script runs ([8a5b2e4](https://github.com/matjam/aura/commit/8a5b2e4bde54fc86b941da695842bf25232eff21))
+* **browser:** show a long task's progress while its script is parked ([2e2c851](https://github.com/matjam/aura/commit/2e2c851fd0542843502417e12f618dac39931779))
+* **css:** CSS.registerProperty ([c1b2e0c](https://github.com/matjam/aura/commit/c1b2e0c76565bb48e87a2b290609f6a27e4097f9))
+* **css:** relative colours and the properties sites test for ([bab3f6c](https://github.com/matjam/aura/commit/bab3f6cc884dd54e2848bcc7e54d5a01f1ffd7d9))
+* **css:** scroll snapping ([1c07083](https://github.com/matjam/aura/commit/1c070831d0b56e141cd41c63b4c2b1de6c35d5a8))
+* **js:** add the small APIs pages call without checking ([3602793](https://github.com/matjam/aura/commit/36027938784106a53839ee2c04e1b74af31f7670))
+* **js:** ElementInternals for form-associated custom elements ([b9c20ce](https://github.com/matjam/aura/commit/b9c20cebd8f2d014c561656d0a23172a1eff01f0))
+* **js:** IndexedDB, in memory per document ([64b4ae6](https://github.com/matjam/aura/commit/64b4ae6aad7b7634e8a62bb084b34e71a3205960))
+* **js:** named access on window for ids and named forms and images ([8fd0e02](https://github.com/matjam/aura/commit/8fd0e02366218d63547b5bd6623dacf2d604a432))
+* **js:** navigator.clipboard.writeText and user activation ([f4d8830](https://github.com/matjam/aura/commit/f4d8830bd1ceee29a6ebf8e345fe334a2920baad))
+* **js:** nested rules in the CSSOM ([88ae0f0](https://github.com/matjam/aura/commit/88ae0f075fe61414ce040720bf0492a0ce19368d))
+* **js:** URLPattern ([0213723](https://github.com/matjam/aura/commit/02137232f6f9384c488e2f092593faa485c5f7de))
+* **net:** WebSocket ([cbbf553](https://github.com/matjam/aura/commit/cbbf5533c41371e16b036f3ed47d516d5155556c))
+
+
+### Bug Fixes
+
+* **browser:** lay out a restyled page before its script parks ([0456b07](https://github.com/matjam/aura/commit/0456b07072faa2990803a3bb239c9b064c76e7c2))
+* **js:** make HTMLImageElement.decode() wait for the image ([007dd1d](https://github.com/matjam/aura/commit/007dd1da329b5df6056a0a554e33a4d436961af8))
+* **js:** Reddit's video player loads and shows its poster ([7bba65e](https://github.com/matjam/aura/commit/7bba65e09af557b844c2c7e1ecc1253ff1313cd5))
+* **layout:** the root's overflow scrolls the window, not a box of its own ([77bc223](https://github.com/matjam/aura/commit/77bc22361cd2213b86b59baf9958b9df32cf85ab))
+* **page:** fetch preload links and fire their load and error events ([9fbfd44](https://github.com/matjam/aura/commit/9fbfd440a369cd866c90e50efa2459d8f113f339))
+
+
+### Performance Improvements
+
+* **css:** keep the rule index when shadow roots adopt indexed sheets ([9045589](https://github.com/matjam/aura/commit/90455893b7dfae78144474394b7bce935b29baa5))
+* **js:** deflate function source text while nothing reads it ([eec78d4](https://github.com/matjam/aura/commit/eec78d47df5dd6e12733821c8a1cc062e0255e41))
+* **js:** try end-anchored patterns only at the end of the input ([e0587f0](https://github.com/matjam/aura/commit/e0587f08fd1f7ba6478d0341608b9c4557087fa3))
+
 ## [0.6.0](https://github.com/matjam/aura/compare/v0.5.0...v0.6.0) (2026-11-18)
 
 
