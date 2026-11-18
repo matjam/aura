@@ -1,0 +1,361 @@
+Keep 8 bytes per argument and local in a compiled function.
+
+A JSFunctionBytecode kept a copy of every JSVarDef of its arguments and
+locals: 20 bytes each, most of them fields only the compiler reads
+(scope_level, scope_next, func_pool_idx). Running code needs the name
+(errors, eval), how a closure captures the variable (is_captured,
+var_ref_idx) and its kind and flags. The function now keeps a
+JSBytecodeVar of 8 bytes for each. A function that contains a direct
+eval also keeps each one's scope (JSBytecodeVarScope, after the
+records, flag has_var_scopes), which add_closure_variables reads when
+the eval is compiled.
+
+The bytecode format is unchanged apart from the new flag bit: a
+function without scopes writes 0 and 0 for them. The bytecode dumps
+(ENABLE_DUMPS) no longer name arguments and locals in the opcode
+listing.
+
+On Reddit's home page the function records of 32,000 functions fell
+from 9.0 MB to 7.8 MB (host and PowerPC alike: the records hold no
+pointers).
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -859,6 +859,25 @@
+                           definition */
+ } JSVarDef;
+ 
++/* Aura: what a compiled function keeps of each argument and local (8
++   bytes instead of the 20 of a JSVarDef): the name, for errors and eval,
++   and how a closure captures it. A function that contains a direct eval
++   also keeps each local's scope (JSBytecodeVarScope, bc_var_scopes()),
++   which compiling the eval reads. */
++typedef struct JSBytecodeVar {
++    JSAtom var_name;
++    uint16_t var_ref_idx; /* if is_captured */
++    uint8_t is_const : 1;
++    uint8_t is_lexical : 1;
++    uint8_t is_captured : 1;
++    uint8_t var_kind : 4; /* see JSVarKindEnum */
++} JSBytecodeVar;
++
++typedef struct JSBytecodeVarScope {
++    int scope_level;
++    int scope_next;
++} JSBytecodeVarScope;
++
+ /* for the encoding of the pc2line table */
+ #define PC2LINE_BASE     (-1)
+ #define PC2LINE_RANGE    5
+@@ -889,11 +908,13 @@
+     /* Aura: JS_TEXT_* (compiled with JS_EVAL_FLAG_NO_SOURCE: what
+        Function.prototype.toString gives in place of the text) */
+     uint8_t text_dropped : 2;
+-    /* XXX: 3 bits available */
++    /* Aura: the vardefs are followed by their scopes (a direct eval) */
++    uint8_t has_var_scopes : 1;
++    /* XXX: 2 bits available */
+     uint8_t *byte_code_buf; /* (self pointer) */
+     int byte_code_len;
+     JSAtom func_name;
+-    JSVarDef *vardefs; /* arguments + local variables (arg_count + var_count) (self pointer) */
++    JSBytecodeVar *vardefs; /* arguments + local variables (arg_count + var_count) (self pointer) */
+     JSClosureVar *closure_var; /* list of variables in the closure (self pointer) */
+     uint16_t arg_count;
+     uint16_t var_count;
+@@ -914,6 +935,13 @@
+     struct JSSourceText *source_text; /* NULL if no source */
+ } JSFunctionBytecode;
+ 
++/* Aura: the scope of each argument and local, after the vardefs; only
++   when b->has_var_scopes */
++static inline JSBytecodeVarScope *bc_var_scopes(JSFunctionBytecode *b)
++{
++    return (JSBytecodeVarScope *)(b->vardefs + b->arg_count + b->var_count);
++}
++
+ /* JSFunctionBytecode.text_dropped */
+ #define JS_TEXT_KEPT 0     /* or the text was never there (bytecode written without it) */
+ #define JS_TEXT_DROPPED 1  /* a function's text was not kept */
+@@ -7682,6 +7710,8 @@
+     js_func_size = sizeof(*b);
+     if (b->vardefs) {
+         js_func_size += (b->arg_count + b->var_count) * sizeof(*b->vardefs);
++        if (b->has_var_scopes)
++            js_func_size += (b->arg_count + b->var_count) * sizeof(JSBytecodeVarScope);
+     }
+     if (b->cpool) {
+         js_func_size += b->cpool_count * sizeof(*b->cpool);
+@@ -17674,7 +17704,7 @@
+     JSVarRef *var_ref;
+     JSValue *pvalue;
+     int var_ref_idx;
+-    JSVarDef *vd;
++    JSBytecodeVar *vd;
+ 
+     p = JS_VALUE_GET_OBJ(sf->cur_func);
+     b = p->u.func.function_bytecode;
+@@ -33925,14 +33955,10 @@
+                                                  JSFunctionBytecode *b,
+                                                  int start_pos)
+ {
+-    JSVarDef *args, *vars;
+-
+-    args = vars = b->vardefs;
+-    if (vars)
+-        vars = &vars[b->arg_count];
+-
++    /* Aura: a compiled function keeps JSBytecodeVar, not JSVarDef: the
++       dump leaves out the names of arguments and locals */
+     dump_byte_code(ctx, /*pass*/3, pc, short_opcode_info(*pc).size,
+-                   args, b->arg_count, vars, b->var_count,
++                   NULL, 0, NULL, 0,
+                    b->closure_var, b->closure_var_count,
+                    b->cpool, b->cpool_count,
+                    NULL, b->line_num,
+@@ -34026,7 +34052,7 @@
+     if (b->var_count && b->vardefs) {
+         printf("  locals:\n");
+         for(i = 0; i < b->var_count; i++) {
+-            JSVarDef *vd = &b->vardefs[b->arg_count + i];
++            JSBytecodeVar *vd = &b->vardefs[b->arg_count + i];
+             printf("%5d: %s %s", i,
+                    vd->var_kind == JS_VAR_CATCH ? "catch" :
+                    (vd->var_kind == JS_VAR_FUNCTION_DECL ||
+@@ -34034,8 +34060,9 @@
+                    vd->is_const ? "const" :
+                    vd->is_lexical ? "let" : "var",
+                    JS_AtomGetStr(ctx, atom_buf, sizeof(atom_buf), vd->var_name));
+-            if (vd->scope_level)
+-                printf(" [level:%d next:%d]", vd->scope_level, vd->scope_next);
++            if (b->has_var_scopes && bc_var_scopes(b)[b->arg_count + i].scope_level)
++                printf(" [level:%d next:%d]", bc_var_scopes(b)[b->arg_count + i].scope_level,
++                       bc_var_scopes(b)[b->arg_count + i].scope_next);
+             printf("\n");
+         }
+     }
+@@ -34086,8 +34113,7 @@
+         op += short_opcode_info(*op).size;
+     printf("  opcodes: %d\n", i);
+     dump_byte_code(ctx, 3, b->byte_code_buf, b->byte_code_len,
+-                   b->vardefs, b->arg_count,
+-                   b->vardefs ? b->vardefs + b->arg_count : NULL, b->var_count,
++                   NULL, 0, NULL, 0, /* Aura: names listed above */
+                    b->closure_var, b->closure_var_count,
+                    b->cpool, b->cpool_count,
+                    b->source_text && b->source_text->buf ? b->source_text->buf + b->source_ofs : NULL,
+@@ -35253,13 +35279,37 @@
+     cv->var_name = JS_DupAtom(ctx, vd->var_name);
+ }
+ 
++/* Aura: set_closure_from_var and is_var_in_arg_scope for a compiled
++   function's locals */
++static void set_closure_from_bvar(JSContext *ctx, JSClosureVar *cv,
++                                  const JSBytecodeVar *vd, int var_idx)
++{
++    cv->closure_type = JS_CLOSURE_LOCAL;
++    cv->is_const = vd->is_const;
++    cv->is_lexical = vd->is_lexical;
++    cv->var_kind = vd->var_kind;
++    cv->var_idx = var_idx;
++    cv->var_name = JS_DupAtom(ctx, vd->var_name);
++}
++
++static bool is_bvar_in_arg_scope(const JSBytecodeVar *vd)
++{
++    return (vd->var_name == JS_ATOM_home_object ||
++            vd->var_name == JS_ATOM_this_active_func ||
++            vd->var_name == JS_ATOM_new_target ||
++            vd->var_name == JS_ATOM_this ||
++            vd->var_name == JS_ATOM__arg_var_ ||
++            vd->var_kind == JS_VAR_FUNCTION_NAME);
++}
++
+ /* for direct eval compilation: add references to the variables of the
+    calling function */
+ static __exception int add_closure_variables(JSContext *ctx, JSFunctionDef *s,
+                                              JSFunctionBytecode *b, int scope_idx)
+ {
+     int i, count;
+-    JSVarDef *vd;
++    JSBytecodeVar *vd;
++    JSBytecodeVarScope *sc;
+     bool is_arg_scope;
+ 
+     count = b->arg_count + b->var_count + b->closure_var_count;
+@@ -35271,14 +35321,18 @@
+     s->closure_var = js_malloc(ctx, sizeof(s->closure_var[0]) * count);
+     if (!s->closure_var)
+         return -1;
++    /* Aura: the scopes are kept only by a function that contains a direct
++       eval, which is the only kind that compiles one; without them every
++       local is taken to be at the function's own level */
++    sc = b->has_var_scopes ? bc_var_scopes(b) + b->arg_count : NULL;
+     /* Add lexical variables in scope at the point of evaluation */
+-    for (i = scope_idx; i >= 0;) {
++    for (i = scope_idx; sc && i >= 0;) {
+         vd = &b->vardefs[b->arg_count + i];
+-        if (vd->scope_level > 0) {
++        if (sc[i].scope_level > 0) {
+             JSClosureVar *cv = &s->closure_var[s->closure_var_count++];
+-            set_closure_from_var(ctx, cv, vd, i);
++            set_closure_from_bvar(ctx, cv, vd, i);
+         }
+-        i = vd->scope_next;
++        i = sc[i].scope_next;
+     }
+     is_arg_scope = (i == ARG_SCOPE_END);
+     if (!is_arg_scope) {
+@@ -35296,18 +35350,18 @@
+         /* Add local non lexical variables */
+         for(i = 0; i < b->var_count; i++) {
+             vd = &b->vardefs[b->arg_count + i];
+-            if (vd->scope_level == 0 && vd->var_name != JS_ATOM__ret_) {
++            if ((!sc || sc[i].scope_level == 0) && vd->var_name != JS_ATOM__ret_) {
+                 JSClosureVar *cv = &s->closure_var[s->closure_var_count++];
+-                set_closure_from_var(ctx, cv, vd, i);
++                set_closure_from_bvar(ctx, cv, vd, i);
+             }
+         }
+     } else {
+         /* only add pseudo variables */
+         for(i = 0; i < b->var_count; i++) {
+             vd = &b->vardefs[b->arg_count + i];
+-            if (vd->scope_level == 0 && is_var_in_arg_scope(vd)) {
++            if (sc[i].scope_level == 0 && is_bvar_in_arg_scope(vd)) {
+                 JSClosureVar *cv = &s->closure_var[s->closure_var_count++];
+-                set_closure_from_var(ctx, cv, vd, i);
++                set_closure_from_bvar(ctx, cv, vd, i);
+             }
+         }
+     }
+@@ -37806,7 +37860,7 @@
+     JSValue func_obj;
+     JSFunctionBytecode *b;
+     struct list_head *el, *el1;
+-    int stack_size, scope, idx;
++    int stack_size, scope, idx, i;
+     int function_size, byte_code_offset, cpool_offset;
+     int closure_var_offset, vardefs_offset;
+     JSFunctionDefLate late;
+@@ -37914,6 +37968,9 @@
+     function_size = cpool_offset + fd->cpool_count * sizeof(*fd->cpool);
+     vardefs_offset = function_size;
+     function_size += (fd->arg_count + fd->var_count) * sizeof(*b->vardefs);
++    /* Aura: the scopes a direct eval reads */
++    if (fd->has_eval_call)
++        function_size += (fd->arg_count + fd->var_count) * sizeof(JSBytecodeVarScope);
+     closure_var_offset = function_size;
+     function_size += fd->closure_var_count * sizeof(*fd->closure_var);
+     byte_code_offset = function_size;
+@@ -37933,12 +37990,25 @@
+     b->func_name = fd->func_name;
+     if (fd->arg_count + fd->var_count > 0) {
+         b->vardefs = (void *)((uint8_t*)b + vardefs_offset);
+-        if (fd->arg_count > 0)
+-            memcpy(b->vardefs, fd->args, fd->arg_count * sizeof(fd->args[0]));
+-        if (fd->var_count > 0)
+-            memcpy(b->vardefs + fd->arg_count, fd->vars, fd->var_count * sizeof(fd->vars[0]));
+         b->var_count = fd->var_count;
+         b->arg_count = fd->arg_count;
++        b->has_var_scopes = fd->has_eval_call;
++        /* Aura: keep what the compiled function needs (the names move
++           over with their references) */
++        for (i = 0; i < fd->arg_count + fd->var_count; i++) {
++            const JSVarDef *vd = i < fd->arg_count ? &fd->args[i] : &fd->vars[i - fd->arg_count];
++            JSBytecodeVar *bv = &b->vardefs[i];
++            bv->var_name = vd->var_name;
++            bv->var_ref_idx = vd->var_ref_idx;
++            bv->is_const = vd->is_const;
++            bv->is_lexical = vd->is_lexical;
++            bv->is_captured = vd->is_captured;
++            bv->var_kind = vd->var_kind;
++            if (b->has_var_scopes) {
++                bc_var_scopes(b)[i].scope_level = vd->scope_level;
++                bc_var_scopes(b)[i].scope_next = vd->scope_next;
++            }
++        }
+         b->defined_arg_count = fd->defined_arg_count;
+         b->var_ref_count = fd->var_ref_count;
+         js_free(ctx, fd->args);
+@@ -39825,6 +39895,7 @@
+     bc_set_flags(&flags, &idx, b->backtrace_barrier, 1);
+     bc_set_flags(&flags, &idx, s->allow_debug, 1);
+     bc_set_flags(&flags, &idx, b->text_dropped, 2); /* Aura */
++    bc_set_flags(&flags, &idx, b->has_var_scopes, 1); /* Aura */
+     assert(idx <= 16);
+     bc_put_u16(s, flags);
+     bc_put_u8(s, b->is_strict_mode);
+@@ -39842,10 +39913,11 @@
+         /* XXX: this field is redundant */
+         bc_put_leb128(s, b->arg_count + b->var_count);
+         for(i = 0; i < b->arg_count + b->var_count; i++) {
+-            JSVarDef *vd = &b->vardefs[i];
++            JSBytecodeVar *vd = &b->vardefs[i];
+             bc_put_atom(s, vd->var_name);
+-            bc_put_leb128(s, vd->scope_level);
+-            bc_put_leb128(s, vd->scope_next + 1);
++            /* Aura: 0 and -1 for a function that keeps no scopes */
++            bc_put_leb128(s, b->has_var_scopes ? bc_var_scopes(b)[i].scope_level : 0);
++            bc_put_leb128(s, b->has_var_scopes ? bc_var_scopes(b)[i].scope_next + 1 : 0);
+             flags = idx = 0;
+             bc_set_flags(&flags, &idx, vd->var_kind, 4);
+             bc_set_flags(&flags, &idx, vd->is_const, 1);
+@@ -40832,6 +40904,7 @@
+     bc.backtrace_barrier = bc_get_flags(v16, &idx, 1);
+     has_debug_info = bc_get_flags(v16, &idx, 1);
+     bc.text_dropped = bc_get_flags(v16, &idx, 2); /* Aura */
++    bc.has_var_scopes = bc_get_flags(v16, &idx, 1); /* Aura */
+     if (bc_get_u8(s, &v8))
+         goto fail;
+     bc.is_strict_mode = (v8 > 0);
+@@ -40855,12 +40928,17 @@
+         goto fail;
+     if (bc_get_leb128_int(s, &local_count))
+         goto fail;
++    /* Aura: the scopes sit after arg_count + var_count records */
++    if (bc.has_var_scopes && local_count != bc.arg_count + bc.var_count)
++        goto fail;
+ 
+     function_size = sizeof(*b);
+     cpool_offset = (function_size + 7) & ~7;
+     function_size = cpool_offset + bc.cpool_count * sizeof(*bc.cpool);
+     vardefs_offset = function_size;
+     function_size += local_count * sizeof(*bc.vardefs);
++    if (bc.has_var_scopes)
++        function_size += local_count * sizeof(JSBytecodeVarScope);
+     closure_var_offset = function_size;
+     function_size += bc.closure_var_count * sizeof(*bc.closure_var);
+     byte_code_offset = function_size;
+@@ -40906,14 +40984,18 @@
+         bc_read_trace(s, "vars {\n");
+         bc_read_trace(s, "off flags scope name\n");
+         for(i = 0; i < local_count; i++) {
+-            JSVarDef *vd = &b->vardefs[i];
++            JSBytecodeVar *vd = &b->vardefs[i];
++            int scope_level, scope_next;
+             if (bc_get_atom(s, &vd->var_name))
+                 goto fail;
+-            if (bc_get_leb128_int(s, &vd->scope_level))
++            if (bc_get_leb128_int(s, &scope_level))
+                 goto fail;
+-            if (bc_get_leb128_int(s, &vd->scope_next))
++            if (bc_get_leb128_int(s, &scope_next))
+                 goto fail;
+-            vd->scope_next--;
++            if (b->has_var_scopes) { /* Aura */
++                bc_var_scopes(b)[i].scope_level = scope_level;
++                bc_var_scopes(b)[i].scope_next = scope_next - 1;
++            }
+             if (bc_get_u8(s, &v8))
+                 goto fail;
+             idx = 0;
+@@ -40932,7 +41014,7 @@
+                               vd->is_const ? 'C' : '.',
+                               vd->is_lexical ? 'L' : '.',
+                               vd->is_captured ? 'X' : '.',
+-                              vd->scope_level);
++                              scope_level);
+                 print_atom(s->ctx, vd->var_name);
+                 printf("\n");
+             }

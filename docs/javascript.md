@@ -87,6 +87,7 @@ Patches this document refers to:
 | 0016 | a regular expression that is a run of one-character matchers followed by `$` (no `m`, `y`, `u` or `v` flag) is tried only where a match can start, the end of the input less its length (`0016-regexp-end-anchored`); Reddit tests `/[\n ]$/` about 48,000 times on text of up to 10 KB while it loads, which took 2.6 s of 5.9 s of script on the host |
 | 0017 | function source text, which only `Function.prototype.toString` reads, can be packed while nothing reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`) and is unpacked when asked for (`0017-pack-source-text`); `runtime.c` deflates texts of 4 KB or more on the second 5-second pass after they were last read ([`memory.md`](memory.md), "Cold memory") |
 | 0018 | a hashed shape of up to 32 properties grows by one instead of by half, so the objects that share it keep no empty property slots (`0018-exact-small-shapes`; "How script memory is kept down" below) |
+| 0019 | a compiled function keeps 8 bytes per argument and local (`JSBytecodeVar`) instead of the compiler's 20-byte `JSVarDef`; only a function with a direct eval also keeps their scopes (`0019-compact-bytecode-vars`) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -498,6 +499,11 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   Building small objects in a loop is about 2% slower. Starting new
   objects at one slot instead of two saves another 6% of property
   memory but costs another 5% of that loop's time, so it was left out.
+- **A compiled function keeps 8 bytes per variable** (patch 0019):
+  the name, its kind and flags, and how a closure captures it. The
+  scopes a direct eval needs are kept only by functions that contain
+  one. Reddit's function records fell from 9.0 MB to 7.8 MB
+  (2026-11-18, host; the PowerPC saves the same).
 - `js_workers_memory` no longer counts a worker's script text after it
   is freed.
 
