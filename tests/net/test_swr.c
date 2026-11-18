@@ -163,6 +163,42 @@ static void test_http(void)
     fake_free(&f);
 }
 
+/* Requests for a URL that is already being fetched wait for that fetch
+ * and are served from the cache; a response that is not stored sends
+ * each request to the network. */
+static void test_shared(void)
+{
+    FakeNet f;
+    fake_init(&f);
+    AuNet *net = au_net_new(&f.ops);
+    AuHttpCache *cache = au_cache_new(1 << 20);
+    au_net_set_cache(net, cache);
+    FakeServer *s = fake_server(&f, "site.test", 80);
+    Got g[3];
+
+    fake_respond(s, "HTTP/1.1 200 OK\r\nCache-Control: max-age=100\r\nContent-Length: 3\r\n\r\none");
+    for (int i = 0; i < 3; i++)
+        start(net, s, "http://site.test/a.css", AU_DEST_STYLE, &g[i]);
+    fake_run(&f, net, 2000, 10);
+    CHECK(s->nreq == 1, "one request for three transfers: %d", s->nreq);
+    for (int i = 0; i < 3; i++)
+        CHECK(g[i].done == 1 && g[i].err == AU_NET_OK && !strcmp(g[i].body, "one"), "transfer %d: %s", i, g[i].body);
+    CHECK(!g[0].from_cache && g[1].from_cache && g[2].from_cache, "the others from the cache");
+
+    fake_respond(s, "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nContent-Length: 3\r\n\r\ntwo");
+    fake_respond(s, "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nContent-Length: 3\r\n\r\ntwo");
+    for (int i = 0; i < 2; i++)
+        start(net, s, "http://site.test/b.css", AU_DEST_STYLE, &g[i]);
+    fake_run(&f, net, 2000, 10);
+    CHECK(s->nreq == 3, "not stored: each transfer asks: %d", s->nreq);
+    CHECK(!strcmp(g[0].body, "two") && !strcmp(g[1].body, "two"), "both get it: %s %d / %s %d", g[0].body, g[0].err,
+          g[1].body, g[1].err);
+
+    au_net_free(net);
+    au_cache_free(cache);
+    fake_free(&f);
+}
+
 /* ---- The policy ---- */
 
 #define T0 1800000000LL
@@ -217,6 +253,7 @@ int main(void)
 {
     test_policy();
     test_http();
+    test_shared();
     printf("swr: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

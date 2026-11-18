@@ -216,6 +216,18 @@ callbacks); a document waits for the revalidation. must-revalidate,
 no-cache and a request's no-cache or max-age turn it off.
 `tests/net/test_swr.c` covers it.
 
+### One download for simultaneous requests
+
+A cache miss for a URL that another transfer is already fetching
+(same URL and credentials mode, a GET the cache may store) waits in
+`T_START` until that transfer ends, then looks in the cache again
+(`shared_leader` in `http.c`). A response that is not stored (no-store,
+too large, failed) sends the waiting transfer to the network, once.
+GitHub's releases page links one 305 KB style sheet six times and
+imports modules it also preloads: before 2026-11-17 each copy was
+downloaded (1.8 MB for the sheet). `test_shared` in
+`tests/net/test_swr.c` covers it.
+
 ### Disk cache writes are queued
 
 With `au_disk_cache_set_deferred`, a store only keeps the file's bytes;

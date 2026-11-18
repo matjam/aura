@@ -109,6 +109,9 @@ struct AuHttpTransfer {
     char *top_level;
     bool user_activated, reload, omit_credentials, manual_redirect, allow_http_fallback;
     bool history; /* AuHttpRequest.history */
+    bool shared_wait;   /* waiting in T_START for another transfer of the URL (shared_leader) */
+    bool shared_waited; /* has waited once; never waits again */
+    bool resp_begun;    /* the response head was delivered (cache_w set then if it is being stored) */
     bool no_cache; /* AuHttpRequest.no_cache */
     bool https_first_upgrade; /* this attempt is an HTTPS-first upgrade */
     bool was_upgraded;        /* some attempt of this transfer was an HTTPS-first upgrade */
@@ -1458,6 +1461,7 @@ static void reset_attempt(AuHttpTransfer *t)
     t->parser_live = false;
     t->got_bytes = false;
     t->head_sent = false;
+    t->resp_begun = false;
     t->body_done = false;
     t->received = 0;
 }
@@ -1767,6 +1771,30 @@ static void revalidate_in_background(AuHttpTransfer *t, AuCacheEntry *e)
     b->swr_background = true;
     b->cache_entry = au_cache_entry_ref(e); /* T_START then skips the lookup and sends the conditional request */
     au_cache_entry_set_revalidating(e, true);
+}
+
+/* Another transfer already fetching what t asks for, whose response the
+ * cache may store: t waits for it and then finds the response in the
+ * cache, instead of downloading it a second time. Pages link one style
+ * sheet several times and preload modules they then import (GitHub
+ * fetched a 305 KB sheet six times at once). A transfer whose response
+ * is not being stored is no leader. */
+static bool shared_leader(const AuHttpTransfer *t)
+{
+    if (t->shared_waited || t->reload || t->history || t->swr_background || !cache_applies(t))
+        return false;
+    for (const AuHttpTransfer *o = t->net->transfers; o; o = o->next) {
+        if (o == t || o->cancelled || o->swr_background || o->aia_internal || !cache_applies(o) || o->reload)
+            continue;
+        if (o->state == T_START || o->state == T_FAILED || o->state == T_FINISHED)
+            continue;
+        if (o->resp_begun && !o->cache_w)
+            continue;
+        if (o->omit_credentials != t->omit_credentials || strcmp(o->url.href, t->url.href) != 0)
+            continue;
+        return true;
+    }
+    return false;
 }
 
 /* Looks the request up before connecting. Returns true when a fresh entry
@@ -2434,6 +2462,7 @@ static bool recv_step(AuHttpTransfer *t)
                 setup_decoders(t);
                 deliver_response(t);
                 cache_begin(t);
+                t->resp_begun = true;
                 t->state = T_RECV;
             } else if (t->state != T_DRAIN) {
                 return true;
@@ -2515,9 +2544,20 @@ static bool step(AuHttpTransfer *t)
     }
     switch (t->state) {
     case T_START:
-        hsts_upgrade(t);
+        if (t->shared_wait) {
+            if (shared_leader(t))
+                return false;
+            t->shared_wait = false;
+            t->shared_waited = true; /* the cache has it now, or it goes to the network */
+        } else {
+            hsts_upgrade(t);
+        }
         if (!t->cache_entry && cache_try(t))
             return true;
+        if (!t->cache_entry && shared_leader(t)) {
+            t->shared_wait = true;
+            return false;
+        }
         t->state = T_WAIT_CONN;
         return true;
     case T_WAIT_CONN:
