@@ -1727,7 +1727,12 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
             b->flags |= LF_FLOAT | LF_BFC;
         if (abspos)
             b->flags |= LF_ABSPOS | LF_BFC | (bx->position == AU_POSITION_FIXED ? LF_FIXED : 0);
-        if (bx->overflow_x != AU_OVERFLOW_VISIBLE || bx->overflow_y != AU_OVERFLOW_VISIBLE) {
+        /* The root's (or the body's) overflow goes to the viewport and the
+         * box is visible: html { height: 100%; overflow-y: auto } scrolls
+         * the window, as DuckDuckGo's results need. */
+        bool to_viewport = !pseudo && au_is_element(node) &&
+                           l_viewport_overflow_source(B->L) == (const AuElement *)node;
+        if (!to_viewport && (bx->overflow_x != AU_OVERFLOW_VISIBLE || bx->overflow_y != AU_OVERFLOW_VISIBLE)) {
             /* overflow: clip does not establish a BFC; the others do. */
             if (bx->overflow_x != AU_OVERFLOW_CLIP || bx->overflow_y != AU_OVERFLOW_CLIP)
                 b->flags |= LF_BFC;

@@ -608,6 +608,13 @@ void l_mark_dirty(LBox *b);
  * transformed). An empty rectangle when it paints nothing. */
 bool l_box_paint_extent(AuLayout *L, LBox *b, AuRect *out);
 void l_box_free_layout(LBox *b);
+/* The element whose overflow applies to the viewport (CSS Overflow 3,
+ * "Overflow viewport propagation"): the root element when its overflow
+ * is not visible, else the body when the root's is visible and the
+ * body's is not; NULL when both are visible. That element's box is laid
+ * out and painted as if its overflow were visible, and the viewport
+ * scrolls only along the axes its overflow does not hide (layout.c). */
+const AuElement *l_viewport_overflow_source(const AuLayout *L);
 const char *l_attr(const LBox *b, AuAtom name);
 bool l_is_tag(const LBox *b, AuAtom tag);
 const char *l_val_name(const AuCssValue *v, size_t *len);

@@ -318,6 +318,21 @@ shadow or a focus outline never adds a scroll bar or widens the page,
 as in other browsers. GitHub's file tree pane scrolled sideways by
 8 pixels when shadows counted.
 
+### The viewport's overflow
+
+The root element's `overflow`, or the body's when the root's is
+`visible`, belongs to the viewport (CSS Overflow 3, "Overflow viewport
+propagation"); `l_viewport_overflow_source` names that element. Its box
+is built as if its overflow were visible: it neither clips nor scrolls,
+so the window's own scroll bar scrolls the page. A `hidden` or `clip`
+across makes the document as wide as the viewport. Down the page the
+window still scrolls, so a body made `overflow: hidden` while a dialog
+is open keeps the page where it was (browsers stop the user scrolling
+it; Aura does not). DuckDuckGo's HTML results set `html { height: 100%;
+overflow-y: auto }`; before this the root was a 1-screen scroll box with
+a thin bar of its own and the window could not scroll. Test:
+`tests/js/pages/root_overflow.html`.
+
 ## Costs that must stay linear
 
 To check that layout time follows the size of a page, run

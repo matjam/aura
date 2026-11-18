@@ -2040,6 +2040,16 @@ static void layout_root(AuLayout *L)
     }
     L->doc_w = l_max(L->vw, right);
     L->doc_h = l_max(L->vh, bottom);
+    /* The viewport's overflow (l_viewport_overflow_source): hidden or
+     * clip across leaves nothing to scroll to sideways. Down the page it
+     * still scrolls: a body made overflow: hidden while a dialog is open
+     * would otherwise send the page back to its top. */
+    const AuElement *src = l_viewport_overflow_source(L);
+    if (src) {
+        uint8_t ox = au_element_style(src)->box->overflow_x;
+        if (ox == AU_OVERFLOW_HIDDEN || ox == AU_OVERFLOW_CLIP)
+            L->doc_w = L->vw;
+    }
 }
 
 void au_layout_set_dark(AuLayout *L, bool dark)
@@ -2149,6 +2159,28 @@ bool au_layout_needs_paint(const AuLayout *L)
 bool au_layout_settled(const AuLayout *L)
 {
     return !L->unsettled;
+}
+
+static bool overflow_visible(const AuElement *el)
+{
+    const AuStyle *s = el ? au_element_style(el) : NULL;
+    return !s || (s->box->overflow_x == AU_OVERFLOW_VISIBLE && s->box->overflow_y == AU_OVERFLOW_VISIBLE);
+}
+
+const AuElement *l_viewport_overflow_source(const AuLayout *L)
+{
+    if (!L->doc)
+        return NULL;
+    const AuElement *root = au_document_element(L->doc);
+    if (!root || !au_is_html_element(&root->node, AU_ATOM_html))
+        return root && !overflow_visible(root) ? root : NULL;
+    if (!overflow_visible(root))
+        return root;
+    const AuElement *body = au_document_body(L->doc);
+    if (body && body->node.parent == &root->node && au_is_html_element(&body->node, AU_ATOM_body) &&
+        !overflow_visible(body))
+        return body;
+    return NULL;
 }
 
 void au_layout_document_size(const AuLayout *L, float *w, float *h)
