@@ -84,6 +84,7 @@ Patches this document refers to:
 | 0012 | the parser finds a scoped variable through the variable hash table instead of walking the scope chain (`0012-scope-lookup-hash`); the bytecode is unchanged |
 | 0013 | less memory while compiling a large script, and `JS_EVAL_FLAG_NO_SOURCE`, which keeps no source text (`0013-compiler-memory`; "How script memory is kept down" below) |
 | 0015 | a global reference that reaches a proxy in the global object's prototype chain runs its `has` trap before `get`, as HasBinding does, so an unknown name still throws ReferenceError (`0015-global-reference-through-proxy`); the window's named properties object needs it |
+| 0016 | a regular expression that is a run of one-character matchers followed by `$` (no `m`, `y`, `u` or `v` flag) is tried only where a match can start, the end of the input less its length (`0016-regexp-end-anchored`); Reddit tests `/[\n ]$/` about 48,000 times on text of up to 10 KB while it loads, which took 2.6 s of 5.9 s of script on the host |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.

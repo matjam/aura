@@ -65,7 +65,11 @@ records where the code came from and how to update it.
   (the casts it replaces were undefined behaviour that UBSan reports),
   and `0015` a global reference that reaches a proxy in the global
   object's prototype chain asks its `has` trap first, so a name it does
-  not have throws ReferenceError (the window's named properties object).
+  not have throws ReferenceError (the window's named properties object),
+  and `0016` a pattern that is a run of one-character matchers followed
+  by `$` (no `m`, `y`, `u` or `v` flag) is tried only at the end of the
+  input less its length, instead of at every position (Reddit tests
+  `/[\n ]$/` against long text tens of thousands of times).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

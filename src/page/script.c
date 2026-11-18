@@ -1483,15 +1483,33 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
         au_js_media_changed(s->js);
         ran = true;
     }
+    /* The slow task list names the part that took longest. */
+    uint32_t t0 = au_dv_perf_now(s->dv), worst = 0;
+    const char *what = NULL;
+#define PART(name)                                                                                                     \
+    do {                                                                                                               \
+        uint32_t t1 = au_dv_perf_now(s->dv);                                                                           \
+        if (t1 - t0 >= worst) {                                                                                        \
+            worst = t1 - t0;                                                                                           \
+            what = name;                                                                                               \
+        }                                                                                                              \
+        t0 = t1;                                                                                                       \
+    } while (0)
     if (au_js_run_tasks(s->js, budget_ms))
         ran = true;
+    PART("tasks and timers");
     if (au_js_wants_frame(s->js)) {
         au_js_run_frame(s->js);
         ran = true;
     }
+    PART("animation frame callbacks");
     /* The document's workers, a slice each in turn. */
     if (au_js_run_workers(s->js, WORKER_BUDGET_MS))
         ran = true;
+    PART("workers");
+#undef PART
+    if (what && !s->perf_label[0])
+        snprintf(s->perf_label, sizeof s->perf_label, "%s", what);
     leave(s);
     return ran;
 }

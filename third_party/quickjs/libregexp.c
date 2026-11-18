@@ -3380,6 +3380,50 @@ static intptr_t lre_exec_backtrack(REExecContext *s, uint8_t **capture,
     }
 }
 
+/* A pattern compiled without the sticky, unicode and multiline flags that
+   is a run of matchers of one code unit each followed by $ (as /[\n ]$/)
+   can only match the last L code units of the input. Returns L, or -1
+   for any other pattern. Pages test such a pattern against long text
+   again and again, and trying every start position made each test as
+   slow as the text is long. */
+static int lre_end_anchored_len(const uint8_t *bc, const uint8_t *end)
+{
+    const uint8_t *p = bc;
+    int len = 0;
+    /* the search loop lre_compile puts first: split_goto_first, any,
+       goto */
+    if (end - p < 13 || p[0] != REOP_split_goto_first || p[5] != REOP_any ||
+        p[6] != REOP_goto || p[11] != REOP_save_start || p[12] != 0)
+        return -1;
+    p += 13;
+    while (p < end && len < 256) {
+        switch (*p) {
+        case REOP_char:
+        case REOP_char_i:
+            p += 3;
+            break;
+        case REOP_dot:
+        case REOP_any:
+        case REOP_space:
+        case REOP_not_space:
+            p += 1;
+            break;
+        case REOP_range:
+        case REOP_range_i:
+            if (end - p < 3)
+                return -1;
+            p += 3 + get_u16(p + 1) * 4;
+            break;
+        case REOP_line_end:
+            return end - p >= 3 && p[1] == REOP_save_end && p[2] == 0 ? len : -1;
+        default:
+            return -1;
+        }
+        len++;
+    }
+    return -1;
+}
+
 /* Return 1 if match, 0 if not match or < 0 if error (see LRE_RET_x). cindex is the
    starting position of the match and must be such as 0 <= cindex <=
    clen. */
@@ -3407,6 +3451,13 @@ int lre_exec(uint8_t **capture,
 
     for(i = 0; i < s->capture_count * 2; i++)
         capture[i] = NULL;
+
+    if (!(re_flags & (LRE_FLAG_STICKY | LRE_FLAG_MULTILINE | LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS))) {
+        int tail = lre_end_anchored_len(bc_buf + RE_HEADER_LEN,
+                                        bc_buf + RE_HEADER_LEN + get_u32(bc_buf + RE_HEADER_BYTECODE_LEN));
+        if (tail >= 0 && clen - tail > cindex)
+            cindex = clen - tail;
+    }
 
     cptr = cbuf + (cindex << cbuf_type);
     if (0 < cindex && cindex < clen && s->cbuf_type == 2) {
