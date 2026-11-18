@@ -1530,7 +1530,7 @@ void au_layout_scroll_restore(AuLayout *L, const AuLayoutScroll *s, uint32_t n)
         return;
     for (uint32_t i = 0; i < n; i++) {
         LBox *b = s[i].el->box;
-        if (!b || b->kind != LK_BLOCK || !(b->flags & LF_SCROLLER))
+        if (!b || b->kind != LK_BLOCK || !(b->flags & LF_CLIPS))
             continue;
         LBlock *k = (LBlock *)b;
         float vw = k->w - k->bw[1] - k->bw[3], vh = k->h - k->bw[0] - k->bw[2];
@@ -2004,8 +2004,22 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->need_build) {
         L->src_vw = vw;
         L->src_vh = vh;
-        /* Keep inner scroll offsets across the rebuild. */
+        /* Keep inner scroll offsets across the rebuild: each goes back on
+         * its element's new box, and l_finish_overflow clamps it to the
+         * new extent. Without this a sheet or font that arrived after
+         * MDN's script scrolled its sidebar put the sidebar back at the
+         * top. */
+        uint32_t nscrolls = 0;
+        AuLayoutScroll *scrolls = L->root ? au_layout_scroll_save(L, &nscrolls) : NULL;
         l_build_tree(L);
+        for (uint32_t i = 0; i < nscrolls; i++) {
+            LBox *nb = scrolls[i].el->box;
+            if (nb && nb->kind == LK_BLOCK && (nb->flags & LF_CLIPS)) {
+                ((LBlock *)nb)->scroll_x = scrolls[i].x;
+                ((LBlock *)nb)->scroll_y = scrolls[i].y;
+            }
+        }
+        au_layout_scroll_free(scrolls, nscrolls);
         L->build_count++;
         L->need_build = false;
         L->other_relayout = false; /* laid out from scratch below */
@@ -2151,6 +2165,126 @@ bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
     (void)L;
     LBox *b = el ? (LBox *)el->box : NULL;
     return b ? box_rect(b, out) : false;
+}
+
+/* Maps r through the transform of k, whose border box starts at (ox, oy),
+ * to the bounding box of the result. */
+static void map_through_transform(const LBlock *k, float ox, float oy, AuRect *r)
+{
+    AuMatrix m;
+    if (!l_transform_matrix(k, &m))
+        return;
+    float xs[4] = {r->x, r->x + r->w, r->x + r->w, r->x};
+    float ys[4] = {r->y, r->y, r->y + r->h, r->y + r->h};
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (int i = 0; i < 4; i++) {
+        float lx = xs[i] - ox, ly = ys[i] - oy;
+        float X = m.a * lx + m.c * ly + m.e + ox, Y = m.b * lx + m.d * ly + m.f + oy;
+        x0 = l_min(x0, X), y0 = l_min(y0, Y), x1 = l_max(x1, X), y1 = l_max(y1, Y);
+    }
+    *r = (AuRect){x0, y0, x1 - x0, y1 - y0};
+}
+
+bool au_layout_element_visual_rect(AuLayout *L, const AuElement *el, float view_x, float view_y, AuRect *out)
+{
+    LBox *b = el ? (LBox *)el->box : NULL;
+    if (!b || !box_rect(b, out))
+        return false;
+    float svx = L->view_scroll_x, svy = L->view_scroll_y;
+    L->view_scroll_x = view_x; /* l_sticky_offset reads them */
+    L->view_scroll_y = view_y;
+    /* Each level, from the box up: the scroll offset of an ancestor that
+     * scrolls it (the containing block chain, as layer_origin decides),
+     * then the level's transform about its own origin, then its sticky
+     * or fixed offset. Offsets from below a level are moves inside that
+     * level's box, so its transform applies to them too. */
+    LBox *need = b;
+    bool escaped = false; /* above a box fixed to the viewport: nothing scrolls it */
+    int guard = 0;
+    for (LBox *p = b; p && guard < L_MAX_DEPTH * 4; p = p->parent, guard++) {
+        if (p->kind != LK_BLOCK)
+            continue;
+        LBlock *k = (LBlock *)p;
+        if (p != b && !escaped) {
+            bool ap;
+            if (need->kind == LK_BLOCK && (need->flags & LF_ABSPOS)) {
+                LBox *cb = ((LBlock *)need)->cb;
+                LBox *ref = cb && cb->kind != LK_BLOCK ? &l_geom_parent(cb)->b : cb;
+                ap = p == ref || p == cb;
+            } else {
+                ap = true;
+            }
+            if (ap) {
+                need = p;
+                if (p->flags & LF_CLIPS) {
+                    out->x -= k->scroll_x;
+                    out->y -= k->scroll_y;
+                }
+            }
+        }
+        if (!lb_anon(p)) {
+            float ox, oy;
+            l_box_origin(p, &ox, &oy);
+            map_through_transform(k, ox, oy, out);
+        }
+        if (p->flags & LF_STICKY) {
+            float dx, dy = l_sticky_offset(L, k, &dx);
+            out->x += dx;
+            out->y += dy;
+        }
+        if ((p->flags & LF_FIXED) && !k->cb && !escaped) {
+            out->x += view_x;
+            out->y += view_y;
+            escaped = true;
+        }
+    }
+    L->view_scroll_x = svx;
+    L->view_scroll_y = svy;
+    return true;
+}
+
+/* A box script can scroll: overflow auto, scroll or hidden (not clip). */
+static bool script_scrollable(const LBox *b)
+{
+    if (!b || b->kind != LK_BLOCK || !(b->flags & LF_CLIPS) || lb_anon(b))
+        return false;
+    const AuStyleBox *s = b->style->box;
+    return s->overflow_x != AU_OVERFLOW_CLIP || s->overflow_y != AU_OVERFLOW_CLIP;
+}
+
+bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6])
+{
+    (void)L;
+    LBox *b = el ? (LBox *)el->box : NULL;
+    if (!script_scrollable(b))
+        return false;
+    LBlock *k = (LBlock *)b;
+    float vw = k->w - k->bw[1] - k->bw[3], vh = k->h - k->bw[0] - k->bw[2];
+    out[0] = k->scroll_x;
+    out[1] = k->scroll_y;
+    out[2] = l_max(vw, k->sw);
+    out[3] = l_max(vh, k->sh);
+    out[4] = vw;
+    out[5] = vh;
+    return true;
+}
+
+bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y)
+{
+    LBox *b = el ? (LBox *)el->box : NULL;
+    if (!script_scrollable(b))
+        return false;
+    LBlock *k = (LBlock *)b;
+    float vw = k->w - k->bw[1] - k->bw[3], vh = k->h - k->bw[0] - k->bw[2];
+    float mx = l_max(0, k->sw - vw), my = l_max(0, k->sh - vh);
+    /* Script scrolls overflow: hidden boxes too. */
+    float nx = l_max(0, l_min(mx, x == x ? x : 0)), ny = l_max(0, l_min(my, y == y ? y : 0));
+    if (nx == k->scroll_x && ny == k->scroll_y)
+        return false;
+    k->scroll_x = nx;
+    k->scroll_y = ny;
+    L->need_paint = true;
+    return true;
 }
 
 /* The value names url (after resolving) as one of its images. */

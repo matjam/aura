@@ -277,6 +277,48 @@ static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)
     return true;
 }
 
+static bool h_element_visual_rect(void *ctx, AuElement *el, AuJsRect *out)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    int sx, sy, vw, vh;
+    au_dv_scroll(s->dv, &sx, &sy, &vw, &vh);
+    AuRect r;
+    if (!au_layout_element_visual_rect(au_docview_layout(s->dv), el, (float)sx, (float)sy, &r))
+        return false;
+    *out = (AuJsRect){r.x, r.y, r.w, r.h};
+    return true;
+}
+
+static bool h_element_scroll(void *ctx, AuElement *el, double out[6])
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    float v[6];
+    if (!au_layout_element_scroll(au_docview_layout(s->dv), el, v))
+        return false;
+    for (int i = 0; i < 6; i++)
+        out[i] = v[i];
+    return true;
+}
+
+static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    AuLayout *L = au_docview_layout(s->dv);
+    if (!au_layout_element_scroll_to(L, el, (float)x, (float)y))
+        return;
+    /* Its box where it is drawn (inside other scrollers, transformed). */
+    int sx, sy, vw, vh;
+    au_dv_scroll(s->dv, &sx, &sy, &vw, &vh);
+    AuRect r;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    if (cb->invalidate && au_layout_element_visual_rect(L, el, (float)sx, (float)sy, &r))
+        cb->invalidate(cb->ctx, s->dv,
+                       (AuIRect){au_f2px(r.x) - 2, au_f2px(r.y) - 2, au_f2px(r.x + r.w) + 3, au_f2px(r.y + r.h) + 3});
+}
+
 static AuElement *h_hit_test(void *ctx, double x, double y)
 {
     AuDocScript *s = ctx;
@@ -645,6 +687,9 @@ static bool ensure_js(AuDocScript *s)
     h.dom_changed = h_dom_changed;
     h.child_changed = h_child_changed;
     h.element_rect = h_element_rect;
+    h.element_visual_rect = h_element_visual_rect;
+    h.element_scroll = h_element_scroll;
+    h.element_scroll_to = h_element_scroll_to;
     h.text_rects = h_text_rects;
     h.hit_test = h_hit_test;
     h.computed_style = h_computed_style;
@@ -839,6 +884,12 @@ static void start_module(AuDocScript *s, PendingScript *p)
 static void run_deferred(AuDocScript *s)
 {
     while (s->defer && !s->defer_module_running) {
+        /* They wait for the style sheets that are loading, as in
+         * browsers: MDN's module scrolls its sidebar to the current page,
+         * which needs the sidebar's height from the page's styles
+         * (au_docscript_sheets_arrived resumes). */
+        if (au_dv_sheets_block_scripts(s->dv))
+            return;
         PendingScript *p = s->defer;
         if (p->kind == AU_JS_SCRIPT_MODULE) {
             s->defer_module_running = true;
@@ -1024,6 +1075,15 @@ void au_docscript_parse_done(AuDocScript *s)
     au_js_set_parser(s->js, NULL);
     enter(s);
     au_js_set_ready_state(s->js, "interactive");
+    run_deferred(s);
+    leave(s);
+}
+
+void au_docscript_sheets_arrived(AuDocScript *s)
+{
+    if (!s->parse_done || !s->defer || s->defer_module_running || !s->js)
+        return;
+    enter(s);
     run_deferred(s);
     leave(s);
 }

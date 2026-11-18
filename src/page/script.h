@@ -23,6 +23,9 @@ void au_docscript_free(AuDocScript *s);
 void au_docscript_script_ready(void *ctx, AuHtmlParser *p, AuElement *script);
 /* The parser has consumed all input (au_html_parser_done). */
 void au_docscript_parse_done(AuDocScript *s);
+/* The document's style sheets have all arrived (au_dv_sheets_block_scripts
+ * is false): deferred and module scripts that waited for them run. */
+void au_docscript_sheets_arrived(AuDocScript *s);
 /* The response head of an AU_RES_OTHER request (headers are name/value
  * pairs; final_url NULL for the request URL). */
 /* muted: the response is of another origin and was fetched without CORS

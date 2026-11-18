@@ -190,6 +190,16 @@ typedef struct AuJsHooks {
     /* Brings layout up to date (forced synchronous layout) and returns the
      * border box of el in document coordinates; false if el has no box. */
     bool (*element_rect)(void *ctx, AuElement *el, AuJsRect *out);
+    /* As element_rect, but where el is drawn: moved by the scroll offsets
+     * of scroll containers, sticky and fixed positioning, and transforms
+     * (getBoundingClientRect). Optional: element_rect stands in. */
+    bool (*element_visual_rect)(void *ctx, AuElement *el, AuJsRect *out);
+    /* el's scroll state when its box clips: scrollLeft, scrollTop,
+     * scrollWidth, scrollHeight, clientWidth, clientHeight. False when it
+     * has no such box. Optional. */
+    bool (*element_scroll)(void *ctx, AuElement *el, double out[6]);
+    /* Scrolls el's box to (x, y), clamped. Optional. */
+    void (*element_scroll_to)(void *ctx, AuElement *el, double x, double y);
     /* Brings layout up to date and returns the element under viewport
      * point (x, y), or NULL (document.elementFromPoint). Optional. */
     AuElement *(*hit_test)(void *ctx, double x, double y);

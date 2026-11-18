@@ -797,6 +797,48 @@ static void test_settle_damage(void)
     au_docview_free(dv);
 }
 
+/* Script reads and sets the scroll offset of a box that clips, and
+ * getBoundingClientRect follows it and transforms, as in Chrome (the
+ * same figures in tools/chrome-shot.py). MDN scrolls its sidebar to the
+ * current page; the offset must also survive a rebuild of the box tree. */
+static void test_element_scroll(void)
+{
+    Ctx c;
+    AuDocView *dv = view(&c,
+                         "<!DOCTYPE html><body style='margin:0'>"
+                         "<div id=s style='overflow:auto;height:100px;width:200px;border:2px solid'>"
+                         "<div style='height:50px'>a</div><div style='height:50px'>b</div><div style='height:50px'>c</div>"
+                         "<div id=t style='height:50px'>target</div><div style='height:200px'>tail</div></div>"
+                         "<div id=x style='transform:translateX(40px);width:50px;height:20px'></div>"
+                         "<div id=h style='overflow:hidden;width:100px;height:30px'><div style='width:400px;height:30px'></div></div>",
+                         true);
+    static const struct {
+        const char *js, *want;
+    } steps[] = {
+        {"s=document.getElementById('s');t=document.getElementById('t');s.scrollHeight+' '+s.clientHeight+' '+s.scrollTop",
+         "400 100 0"},
+        {"s.scrollTop=60;s.scrollTop+' '+Math.round(t.getBoundingClientRect().top)", "60 92"},
+        {"t.scrollIntoView({block:'center'});s.scrollTop+' '+Math.round(t.getBoundingClientRect().top)", "125 27"},
+        {"s.scrollTo({top:9999});s.scrollTop", "300"},
+        {"s.scrollBy(0,-50);s.scrollTop", "250"},
+        {"document.getElementById('x').getBoundingClientRect().left", "40"},
+        {"h=document.getElementById('h');h.scrollLeft=120;h.scrollLeft+' '+h.scrollWidth", "120 400"},
+        {"document.head.appendChild(document.createElement('style')).textContent='p{color:red}';"
+         "document.body.offsetWidth;s.scrollTop",
+         "250"},
+    };
+    AuBuf out;
+    au_buf_init(&out);
+    for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+        au_buf_clear(&out);
+        au_docview_eval(dv, steps[i].js, &out);
+        CHECK(!strcmp(au_buf_cstr(&out), steps[i].want), "%s: %s, want %s", steps[i].js, au_buf_cstr(&out),
+              steps[i].want);
+    }
+    au_buf_free(&out);
+    au_docview_free(dv);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -815,6 +857,7 @@ int main(void)
     test_edit_commands();
     test_textarea_wrap_scaling();
     test_settle_damage();
+    test_element_scroll();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

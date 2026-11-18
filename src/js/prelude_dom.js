@@ -712,7 +712,7 @@ defGlobal('DOMRect', DOMRect);
 
 function docRect(el) { return N.rect(el); }
 function viewportRect(el) {
-    const r = N.rect(el);
+    const r = N.rect(el, true); /* where it is drawn: scrolled, transformed */
     if (!r) return new DOMRect(0, 0, 0, 0);
     const v = N.viewport();
     return new DOMRect(r[0] - v[2], r[1] - v[3], r[2], r[3]);
@@ -749,28 +749,89 @@ defProps(EP, {
     },
     get clientTop() { return Math.round(px(this, 'border-top-width')); },
     get clientLeft() { return Math.round(px(this, 'border-left-width')); },
-    get scrollWidth() { if (isRootish(this) || this === doc.body) return N.viewport(true)[4]; return this.clientWidth; },
-    get scrollHeight() { if (isRootish(this) || this === doc.body) return N.viewport(true)[5]; return this.clientHeight; },
-    get scrollTop() { return isRootish(this) || this === doc.body ? N.viewport()[3] : 0; },
-    set scrollTop(v) { if (isRootish(this) || this === doc.body) N.scrollTo(N.viewport()[2], +v || 0); },
-    get scrollLeft() { return isRootish(this) || this === doc.body ? N.viewport()[2] : 0; },
-    set scrollLeft(v) { if (isRootish(this) || this === doc.body) N.scrollTo(+v || 0, N.viewport()[3]); },
+    /* An element whose box clips (overflow auto, scroll or hidden) has its
+     * own scroll offset (N.elScroll); the root and body are the page's. */
+    get scrollWidth() {
+        if (isRootish(this) || this === doc.body) return N.viewport(true)[4];
+        const s = N.elScroll(this);
+        return s ? Math.round(s[2]) : this.clientWidth;
+    },
+    get scrollHeight() {
+        if (isRootish(this) || this === doc.body) return N.viewport(true)[5];
+        const s = N.elScroll(this);
+        return s ? Math.round(s[3]) : this.clientHeight;
+    },
+    get scrollTop() {
+        if (isRootish(this) || this === doc.body) return N.viewport()[3];
+        const s = N.elScroll(this);
+        return s ? s[1] : 0;
+    },
+    set scrollTop(v) {
+        if (isRootish(this) || this === doc.body) { N.scrollTo(N.viewport()[2], +v || 0); return; }
+        const s = N.elScroll(this);
+        if (s) N.elScrollTo(this, s[0], +v || 0);
+    },
+    get scrollLeft() {
+        if (isRootish(this) || this === doc.body) return N.viewport()[2];
+        const s = N.elScroll(this);
+        return s ? s[0] : 0;
+    },
+    set scrollLeft(v) {
+        if (isRootish(this) || this === doc.body) { N.scrollTo(+v || 0, N.viewport()[3]); return; }
+        const s = N.elScroll(this);
+        if (s) N.elScrollTo(this, +v || 0, s[1]);
+    },
+    /* Scrolls each scroll container the element is in, innermost first,
+     * then the page (CSSOM View, "scroll an element into view"). MDN
+     * scrolls its sidebar to the current page's entry this way. */
     scrollIntoView(arg) {
-        const r = docRect(this);
+        if (!N.rect(this)) return;
+        const o = arg && typeof arg === 'object' ? arg : {};
+        const block = o.block || (arg === false ? 'end' : 'start');
+        const inline = o.inline || 'nearest';
+        const delta = (lo, size, vlo, vsize, how) => {
+            if (how === 'end') return lo + size - (vlo + vsize);
+            if (how === 'center') return lo + size / 2 - (vlo + vsize / 2);
+            if (how === 'nearest') return lo < vlo ? lo - vlo : lo + size > vlo + vsize ? lo + size - (vlo + vsize) : 0;
+            return lo - vlo;
+        };
+        for (let p = this.parentNode, n = 0; p && n < 1000; n++) {
+            if (p.nodeType === 11) { p = p.host || null; continue; } /* out of a shadow tree */
+            if (p.nodeType !== 1 || isRootish(p) || p === doc.body) { p = p.parentNode; continue; }
+            const s = N.elScroll(p);
+            if (s && (s[2] > s[4] || s[3] > s[5])) {
+                const r = N.rect(this, true), pr = N.rect(p, true);
+                if (r && pr) {
+                    const vx = pr[0] + px(p, 'border-left-width'), vy = pr[1] + px(p, 'border-top-width');
+                    N.elScrollTo(p, s[0] + delta(r[0], r[2], vx, s[4], inline), s[1] + delta(r[1], r[3], vy, s[5], block));
+                }
+            }
+            p = p.parentNode;
+        }
+        const r = N.rect(this, true);
         if (!r) return;
         const v = N.viewport();
-        const block = arg && typeof arg === 'object' ? arg.block : arg === false ? 'end' : 'start';
-        let y = r[1];
-        if (block === 'end') y = r[1] + r[3] - v[1];
-        else if (block === 'center') y = r[1] + r[3] / 2 - v[1] / 2;
-        else if (block === 'nearest') y = r[1] < v[3] ? r[1] : r[1] + r[3] > v[3] + v[1] ? r[1] + r[3] - v[1] : v[3];
-        N.scrollTo(v[2], Math.max(0, y));
+        N.scrollTo(Math.max(0, v[2] + delta(r[0], r[2], v[2], v[0], inline)),
+                   Math.max(0, v[3] + delta(r[1], r[3], v[3], v[1], block)));
     },
     scrollTo(x, y) {
-        if (isRootish(this) || this === doc.body) G.scrollTo(x, y);
+        if (isRootish(this) || this === doc.body) { G.scrollTo(x, y); return; }
+        const s = N.elScroll(this);
+        if (!s) return;
+        if (x && typeof x === 'object') {
+            N.elScrollTo(this, x.left !== undefined ? +x.left || 0 : s[0], x.top !== undefined ? +x.top || 0 : s[1]);
+        } else if (x !== undefined) {
+            N.elScrollTo(this, +x || 0, +y || 0);
+        }
     },
     scroll(x, y) { this.scrollTo(x, y); },
-    scrollBy(x, y) { if (isRootish(this) || this === doc.body) G.scrollBy(x, y); },
+    scrollBy(x, y) {
+        if (isRootish(this) || this === doc.body) { G.scrollBy(x, y); return; }
+        const s = N.elScroll(this);
+        if (!s) return;
+        if (x && typeof x === 'object') N.elScrollTo(this, s[0] + (+x.left || 0), s[1] + (+x.top || 0));
+        else N.elScrollTo(this, s[0] + (+x || 0), s[1] + (+y || 0));
+    },
 });
 defProps(HTMLElement.prototype, {
     get offsetParent() { return offsetParentOf(this); },

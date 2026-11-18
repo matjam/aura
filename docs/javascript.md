@@ -127,6 +127,29 @@ fires DOMContentLoaded and load.
   last 300 console lines (`au_page_console_line`) for the Console
   window.
 
+**Deferred and module scripts wait for style sheets.** While a style
+sheet of the document is loading (`au_dv_sheets_block_scripts`: a
+`<link>` sheet or an `@import`, whose media matches), the deferred list
+does not run; the sheet's arrival resumes it
+(`au_docscript_sheets_arrived`). These are the HTML Standard's
+script-blocking style sheets. MDN's module scrolled its sidebar by the
+sidebar's height before its styles applied, and the sidebar stayed at
+the top.
+
+**Geometry.** `getBoundingClientRect`, `getClientRects` and
+IntersectionObserver use where an element is drawn (`N.rect(el, true)`,
+`au_layout_element_visual_rect`): moved by the scroll offsets of the
+boxes that scroll it, by sticky and fixed positioning, and mapped
+through transforms. `offsetTop`, `offsetWidth` and the like use its
+layout box (`N.rect(el)`). An element whose box clips (overflow `auto`,
+`scroll` or `hidden`) has its own `scrollTop`, `scrollLeft`,
+`scrollWidth`, `scrollHeight`, `scrollTo`, `scroll` and `scrollBy`
+(`N.elScroll`, `N.elScrollTo`, `au_layout_element_scroll`), and
+`scrollIntoView` scrolls each such box the element is in, innermost
+first, then the page. Before 2026-11-17 only the page scrolled from
+script and rectangles ignored inner scrolling and transforms.
+Script-set offsets, like the user's, survive a rebuild of the box tree.
+
 **Response heads.** A loader that knows a response's status and headers
 passes them with `au_docview_resource_head` before the data; script
 then sees them in `fetch` and `XMLHttpRequest`, and an error status

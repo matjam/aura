@@ -298,6 +298,21 @@ float au_layout_range_frac_at(AuLayout *L, AuElement *el, float lx);
  * caller then scrolls the viewport). */
 bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float scroll_y, float dx, float dy);
 
+/* For script (getBoundingClientRect, IntersectionObserver): el's border
+ * box where it is drawn, in document coordinates with the document
+ * scrolled to (view_x, view_y): moved by the scroll offsets of the
+ * scroll containers it is in, by sticky and fixed positioning, and
+ * mapped through transforms (the bounding box). False without a box. */
+bool au_layout_element_visual_rect(AuLayout *L, const AuElement *el, float view_x, float view_y, AuRect *out);
+/* el's scroll state when its box clips (overflow auto, scroll or
+ * hidden): scrollLeft, scrollTop, scrollWidth, scrollHeight and the
+ * padding box's width and height (clientWidth, clientHeight). False when
+ * el has no such box. */
+bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6]);
+/* Scrolls el's box to (x, y), clamped. True when the offset changed (the
+ * caller repaints). */
+bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y);
+
 /* Appends a text dump of the box tree with geometry (document
  * coordinates) to out. */
 void au_layout_dump(AuLayout *L, AuBuf *out);

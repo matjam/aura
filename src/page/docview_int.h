@@ -335,6 +335,11 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
  * fixed element, as au_dv_invalidate_element does). */
 void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect r);
 void au_dv_invalidate_all(AuDocView *dv);
+/* A style sheet of the document (a <link>, or an @import of a <link> or
+ * <style>) is still loading: deferred and module scripts wait for it (the
+ * HTML Standard's script-blocking style sheets), so they read geometry
+ * with the page's styles. */
+bool au_dv_sheets_block_scripts(const AuDocView *dv);
 /* Invalidates what the layout's updates changed since the last call
  * (au_layout_take_damage). */
 void au_dv_invalidate_damage(AuDocView *dv);

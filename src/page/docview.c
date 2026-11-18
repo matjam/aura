@@ -750,6 +750,16 @@ static bool sheet_loading(const SheetSrc *s)
     return false;
 }
 
+bool au_dv_sheets_block_scripts(const AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nslots; i++) {
+        const SheetSrc *s = dv->slots[i].src;
+        if (s && !s->parent && !s->deferred && !s->disabled && sheet_loading(s))
+            return true;
+    }
+    return false;
+}
+
 /* Fires the <link> load and error events that are due. Script may change
  * the element list, so the walk starts again after each event; each
  * event is cleared before it fires, so the walk ends. */
@@ -1079,6 +1089,8 @@ DV_ENTRY_VOID(resource_done, (AuDocView * dv, uint32_t id, bool ok), (dv, id, ok
             dv->link_events = true;
         }
         sheets_changed(dv, NULL);
+        if (dv->script && !au_dv_sheets_block_scripts(dv))
+            au_docscript_sheets_arrived(dv->script);
     } else if (req.kind == AU_RES_IMAGE && req.image) {
         au_image_entry_done(au_docimages_cache(dv->imgs), req.image, ok);
         images_changed(dv);

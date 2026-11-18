@@ -418,7 +418,7 @@ void l_rebuild_dirty(AuLayout *L)
     L->nhidden = k;
     for (uint32_t i = 0; i < nscrolls; i++) {
         LBox *b = scrolls[i].el->box;
-        if (!failed && b && b->kind == LK_BLOCK && (b->flags & LF_SCROLLER)) {
+        if (!failed && b && b->kind == LK_BLOCK && (b->flags & LF_CLIPS)) {
             ((LBlock *)b)->scroll_x = scrolls[i].x;
             ((LBlock *)b)->scroll_y = scrolls[i].y;
         }

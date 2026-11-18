@@ -529,7 +529,7 @@ class IntersectionObserver {
 tag(IntersectionObserver);
 defGlobal('IntersectionObserver', IntersectionObserver);
 function rectOf(el) {
-    const r = N.rect(el);
+    const r = N.rect(el, true); /* where it is drawn: scrolled, transformed */
     if (!r) return null;
     const v = N.viewport();
     return { x: r[0] - v[2], y: r[1] - v[3], w: r[2], h: r[3] };

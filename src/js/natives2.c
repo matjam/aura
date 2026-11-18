@@ -401,7 +401,12 @@ static JSValue n_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
         return js_throw_stopped(ctx);
     AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
     AuJsRect r;
-    if (!e || !js->hooks.element_rect || !js->hooks.element_rect(js->hooks.ctx, e, &r))
+    /* rect(el, true): where it is drawn (getBoundingClientRect) */
+    bool visual = argc > 1 && JS_ToBool(ctx, argv[1]) > 0 && js->hooks.element_visual_rect;
+    if (!e)
+        return JS_NULL;
+    if (visual ? !js->hooks.element_visual_rect(js->hooks.ctx, e, &r)
+               : !js->hooks.element_rect || !js->hooks.element_rect(js->hooks.ctx, e, &r))
         return JS_NULL;
     JSValue arr = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, r.x));
@@ -643,6 +648,43 @@ static JSValue n_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     for (uint32_t i = 0; i < (size ? 6u : 4u); i++)
         JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, v[i]));
     return arr;
+}
+
+/* elScroll(el): [scrollLeft, scrollTop, scrollWidth, scrollHeight,
+ * clientWidth, clientHeight] of an element whose box clips, else null. */
+static JSValue n_el_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    double v[6];
+    if (!e || !js->hooks.element_scroll || !js->hooks.element_scroll(js->hooks.ctx, e, v))
+        return JS_NULL;
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < 6; i++)
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, v[i]));
+    return arr;
+}
+
+/* elScrollTo(el, x, y) */
+static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    double x = 0, y = 0;
+    if (!e || argc < 3 || JS_ToFloat64(ctx, &x, argv[1]) || JS_ToFloat64(ctx, &y, argv[2]) ||
+        !js->hooks.element_scroll_to)
+        return JS_UNDEFINED;
+    if (!(x == x))
+        x = 0;
+    if (!(y == y))
+        y = 0;
+    js->hooks.element_scroll_to(js->hooks.ctx, e, x < -1e7 ? -1e7 : x > 1e7 ? 1e7 : x,
+                                y < -1e7 ? -1e7 : y > 1e7 ? 1e7 : y);
+    return JS_UNDEFINED;
 }
 
 static JSValue n_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -1232,6 +1274,8 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("sheetDestroy", 1, n_sheet_destroy),
     JS_CFUNC_DEF("sheetsAdopt", 2, n_sheets_adopt),
     JS_CFUNC_DEF("viewport", 0, n_viewport),
+    JS_CFUNC_DEF("elScroll", 1, n_el_scroll),
+    JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),
     JS_CFUNC_DEF("imageSize", 1, n_image_size),
