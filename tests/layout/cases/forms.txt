@@ -9,7 +9,7 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 ---
 #d h=22
 #s y=3 h=16
-#t y=2 w=274.67 h=20
+#t y=2 w=281 h=20
 #b y=2 w=29.33 h=20
 #c y=3 w=13 h=13
 
@@ -40,12 +40,14 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 ---
 #t h=36
 
-=== size sets a text input's width in average characters
+=== size sets a text input's width in characters
 <body style="margin:0">
 <input id=t size=4><input id=u size=0>
 ---
-#t w=61.33
-#u w=274.67
+// as Chrome on the Mac: size + 1 times the width of "x" (13.33, so 13),
+// plus 8 pixels of border and padding
+#t w=73
+#u w=281
 
 === button element with a height centres its content
 <body style="margin:0">

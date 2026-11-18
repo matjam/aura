@@ -81,6 +81,14 @@ that a `::placeholder` rule matches (`attach_pseudos` in
 in Chrome. Without a page rule the colour is `#757575` from the UA
 sheet.
 
+A text input's natural width (`replaced_intrinsic_size` in
+`src/layout/layout.c`) is `size` + 1 times the width of "x", rounded, as
+Chrome measures it on the Mac: 147 pixels of content at 13.33 pixels
+for the default `size` of 20 in Arial, Helvetica, Times and SF alike.
+The OS/2 average character width gave 115 to 172 pixels by face, and a
+wide field pushed the search button of Python's documentation past a
+400-pixel window.
+
 ## Editing
 
 `src/page/editing.c` is the portable model: insertion with maxlength

@@ -409,12 +409,19 @@ static void replaced_intrinsic_size(AuLayout *L, LBlock *b, float *w, float *h, 
         return;
     case LR_TEXT_INPUT: {
         /* size (default 20) average characters (HTML, "The input element
-         * as a text entry widget"). */
+         * as a text entry widget"), measured as Chrome measures them on
+         * the Mac: size + 1 times the width of "x", rounded. That is 147
+         * pixels at 13.33 pixels in Arial, Helvetica, Times and SF alike;
+         * the OS/2 average width gave 115 to 172 by face, and a wide
+         * field pushed Python's search button past a 400-pixel page. */
         const char *sz = l_attr(&b->b, AU_ATOM_size);
         int n = sz ? atoi(sz) : 20;
         if (n <= 0 || n > 1000)
             n = 20;
-        *w = (float)n * f->m.avg_advance;
+        float xw = roundf(l_measure(L, f, s, "x", 1));
+        if (xw <= 0)
+            xw = f->m.avg_advance;
+        *w = (float)(n + 1) * xw;
         *h = l_control_line(L, b, NULL);
         return;
     }
