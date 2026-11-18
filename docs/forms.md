@@ -89,6 +89,14 @@ The OS/2 average character width gave 115 to 172 pixels by face, and a
 wide field pushed the search button of Python's documentation past a
 400-pixel window.
 
+A single-line select is its widest option plus 19 pixels at 13.33
+pixels, as Chrome's is on the Mac: 4 pixels of left padding (the UA
+sheet), a 13-pixel arrow (`l_select_arrow_w`, 0.975 of the font size)
+and the border. Before 2026-11-17 it was 26 pixels. Aura's controls
+keep `system-ui` where Chrome on the Mac uses Arial, so a select or
+field is still a little wider than Chrome's: Python's documentation is
+5 pixels wider than a 400-pixel window.
+
 ## Editing
 
 `src/page/editing.c` is the portable model: insertion with maxlength

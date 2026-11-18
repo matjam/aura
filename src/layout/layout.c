@@ -207,12 +207,16 @@ float l_control_line(AuLayout *L, const LBlock *b, float *ascent)
 /* A list box row: the line and 1px above and below. */
 float l_listbox_row(AuLayout *L, const LBlock *b) { return l_control_line(L, b, NULL) + 2; }
 
-/* Width of the drop-down arrow area of a single-line select. */
+/* Width of the drop-down arrow area of a single-line select. With the UA
+ * padding (4px on the left only) and border a select is its text plus
+ * 19 pixels at 13.333px, as Chrome's is on macOS: Python's version menu
+ * was 17 pixels wider than Chrome's and pushed its search box out of
+ * the page at 400. */
 float l_select_arrow_w(const LBlock *b)
 {
     if (b->b.style->rare->appearance == AU_APPEARANCE_NONE)
         return 0;
-    return roundf(b->b.style->inh->font_size * 1.2f);
+    return roundf(b->b.style->inh->font_size * 0.975f);
 }
 
 /* The file input's button width, for its label. */

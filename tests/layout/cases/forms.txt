@@ -74,13 +74,15 @@ Controls use 13.333px: a 13.333px line, ascent 10.667. Text inputs have a
 <body style="margin:0">
 <select id=s><option>x</option><option selected>xxxx</option></select>
 ---
-#s w=79.33 h=18
+// 4 x 13.333 of text, 4 of padding, a 13-pixel arrow and the border:
+// the text plus 19, as Chrome's on macOS
+#s w=72.33 h=18
 
 === select without arrow when appearance is none
 <body style="margin:0">
 <select id=s style="appearance:none"><option>xxxx</option></select>
 ---
-#s w=63.33
+#s w=59.33
 
 === list box: four rows by default
 <body style="margin:0">

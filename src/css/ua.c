@@ -167,7 +167,7 @@ const char css_ua_sheet[] =
     "input:is([type=reset i], [type=button i], [type=submit i]), button { background-color: ButtonFace;"
     " color: ButtonText; border: 2px outset ButtonBorder; padding: 1px 6px; }\n"
     "select { display: inline-block; background-color: ButtonFace; color: ButtonText;"
-    " border: 1px solid ButtonBorder; padding: 1px 4px; }\n"
+    " border: 1px solid ButtonBorder; padding: 1px 0 1px 4px; }\n"
     "select:is([multiple], [size]:not([size=\"0\"], [size=\"1\"])) { background-color: Field;"
     " color: FieldText; padding: 0; }\n"
     "input:is([type=checkbox i], [type=radio i]) { border: none; padding: 0; background-color: transparent;"
