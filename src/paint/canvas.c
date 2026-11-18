@@ -654,16 +654,22 @@ static void draw_image_reduce(AuSurface *s, const AuSurface *img, AuIRect src, A
     for (int i = 0; i < ncol; i++)
         cols[i] = red_span(r.x0 - d.x0 + i, dw, sw);
     int32_t ys[RED_TAPS];
+    /* A compact image (au_surface_convert): the rows an output row reads,
+     * expanded once */
+    const AuPixel *srows[RED_TAPS];
+    AuPixel *tmp = img->format != AU_SURF_ARGB32 ? au_alloc((size_t)RED_TAPS * (size_t)sw * sizeof *tmp) : NULL;
     for (int y = r.y0; y < r.y1; y++) {
         RedSpan rs = red_span(y - d.y0, dh, sh);
-        for (int k = 0; k < rs.count; k++)
+        for (int k = 0; k < rs.count; k++) {
             ys[k] = src.y0 + rs.start + (int32_t)(((int64_t)k * rs.step + rs.step / 2) >> 16);
+            srows[k] = au_surface_row(img, ys[k], src.x0, sw, tmp ? tmp + (size_t)k * sw : NULL);
+        }
         AuPixel *drow = s->pixels + (size_t)y * s->stride;
         for (int i = 0; i < ncol; i++) {
             const RedSpan *cs = &cols[i];
             uint32_t sa = 0, sr = 0, sg = 0, sb = 0;
             for (int ky = 0; ky < rs.count; ky++) {
-                const AuPixel *row = img->pixels + (size_t)ys[ky] * img->stride + src.x0 + cs->start;
+                const AuPixel *row = srows[ky] + cs->start;
                 int32_t fx = cs->step / 2;
                 for (int kx = 0; kx < cs->count; kx++, fx += cs->step) {
                     uint32_t p = row[fx >> 16];
@@ -691,6 +697,7 @@ static void draw_image_reduce(AuSurface *s, const AuSurface *img, AuIRect src, A
     }
     if (cols != colbuf)
         au_free(cols);
+    au_free(tmp);
 }
 
 void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, AuFilter filter,
@@ -723,12 +730,15 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
     int32_t stepy = (int32_t)(((int64_t)sh << 16) / dh);
     /* Opaque pixels at full opacity replace the destination. */
     bool store = img->opaque && a >= 256;
+    /* A compact image's rows are expanded as they are read: up to two
+     * rows of the source's width. */
+    AuPixel *tmp = img->format != AU_SURF_ARGB32 ? au_alloc((size_t)2 * (size_t)sw * sizeof *tmp) : NULL;
     if (sw == dw && sh == dh) {
         /* Unscaled: copy or blend straight across. */
         for (int y = r.y0; y < r.y1; y++) {
             AuPixel *drow = s->pixels + (size_t)y * s->stride + r.x0;
-            const AuPixel *srow = img->pixels + (size_t)(src.y0 + y - d.y0) * img->stride + src.x0 + (r.x0 - d.x0);
             int n = r.x1 - r.x0;
+            const AuPixel *srow = au_surface_row(img, src.y0 + y - d.y0, src.x0 + (r.x0 - d.x0), n, tmp);
             if (store) {
                 memcpy(drow, srow, (size_t)n * sizeof *drow);
                 continue;
@@ -742,9 +752,11 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
                 drow[i] = (p >> 24) == 255 ? p : au_px_over(p, drow[i]);
             }
         }
+        au_free(tmp);
         return;
     }
     if (filter == AU_FILTER_BILINEAR && (stepx >= 2 << 16 || stepy >= 2 << 16)) {
+        au_free(tmp);
         draw_image_reduce(s, img, src, d, r, a, store);
         return;
     }
@@ -754,7 +766,7 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
             int32_t sy = (int32_t)(((int64_t)(y - d.y0) * stepy + stepy / 2) >> 16);
             if (sy >= sh)
                 sy = sh - 1;
-            const AuPixel *srow = img->pixels + (size_t)(src.y0 + sy) * img->stride + src.x0;
+            const AuPixel *srow = au_surface_row(img, src.y0 + sy, src.x0, sw, tmp);
             int32_t fx = (r.x0 - d.x0) * stepx + stepx / 2;
             for (int x = r.x0; x < r.x1; x++, fx += stepx) {
                 int32_t sx = fx >> 16;
@@ -779,8 +791,8 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
             uint32_t wy = (uint32_t)(fy & 0xFFFF) >> 8;
             int32_t y0i = iy < 0 ? 0 : (iy >= sh ? sh - 1 : iy);
             int32_t y1i = iy + 1 < 0 ? 0 : (iy + 1 >= sh ? sh - 1 : iy + 1);
-            const AuPixel *r0 = img->pixels + (size_t)(src.y0 + y0i) * img->stride + src.x0;
-            const AuPixel *r1 = img->pixels + (size_t)(src.y0 + y1i) * img->stride + src.x0;
+            const AuPixel *r0 = au_surface_row(img, src.y0 + y0i, src.x0, sw, tmp);
+            const AuPixel *r1 = y1i == y0i ? r0 : au_surface_row(img, src.y0 + y1i, src.x0, sw, tmp ? tmp + sw : NULL);
             int32_t fx = (r.x0 - d.x0) * stepx + stepx / 2 - 32768;
             for (int x = r.x0; x < r.x1; x++, fx += stepx) {
                 int32_t ix = fx >> 16;
@@ -801,4 +813,5 @@ void au_draw_image(AuCanvas *c, const AuSurface *img, AuIRect src, AuRect dst, A
             }
         }
     }
+    au_free(tmp);
 }

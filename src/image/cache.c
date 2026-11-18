@@ -46,9 +46,15 @@ struct AuImageCache {
     uint32_t (*clock)(void *ctx);
     void *clock_ctx;
     struct AuFontSet *fonts; /* text in SVG images */
+    uint8_t keep_format; /* AU_SURF_*: what finished opaque still images are kept in */
 };
 
 void au_image_cache_set_fonts(AuImageCache *c, struct AuFontSet *fonts) { c->fonts = fonts; }
+
+void au_image_cache_set_depth(AuImageCache *c, int bits)
+{
+    c->keep_format = bits == 16 ? AU_SURF_RGB565 : bits == 8 ? AU_SURF_INDEX8 : AU_SURF_ARGB32;
+}
 
 AuImageCache *au_image_cache_new(size_t budget)
 {
@@ -187,6 +193,7 @@ static void sync_view(AuImageEntry *e)
     e->view.height = s->height;
     e->view.stride = s->stride;
     e->view.opaque = s->opaque;
+    e->view.format = s->format;
 }
 
 static void set_sized(AuImageCache *c, AuImageEntry *e, const AuImageInfo *info)
@@ -222,7 +229,6 @@ static void set_failed(AuImageCache *c, AuImageEntry *e)
 /* The decoder is finished with: its canvas becomes the entry's pixels. */
 static void finalize(AuImageCache *c, AuImageEntry *e)
 {
-    (void)c;
     if (!e->dec)
         return;
     const AuImageInfo *info = au_image_info(e->dec);
@@ -232,12 +238,22 @@ static void finalize(AuImageCache *c, AuImageEntry *e)
     e->dec = NULL;
     e->waiting = false;
     au_surface_free(e->pixels);
+    /* A finished opaque still image is kept in the cache's format: 16 or 8
+     * bits dithered (au_image_cache_set_depth). Animations and images with
+     * transparency stay ARGB32. */
+    if (s && c->keep_format != AU_SURF_ARGB32 && s->opaque && !e->animated && e->format != AU_IMAGE_FORMAT_SVG) {
+        AuSurface *k = au_surface_convert(s, c->keep_format);
+        if (k) {
+            au_surface_free(s);
+            s = k;
+        }
+    }
     e->pixels = s;
     sync_view(e);
     /* Keep whichever is smaller: the bytes or full-size still pixels. An
      * SVG keeps its bytes: it is drawn again at each new size. */
     if (s && !e->animated && !e->loading && denom == 1 && e->format != AU_IMAGE_FORMAT_SVG &&
-        e->data.len > (size_t)s->width * s->height * 4) {
+        e->data.len > au_surface_bytes(s)) {
         au_buf_free(&e->data);
         au_buf_init(&e->data);
         e->data_dropped = true;
@@ -498,7 +514,7 @@ static size_t entry_bytes(const AuImageEntry *e)
 {
     size_t b = 0;
     if (e->pixels)
-        b += (size_t)e->pixels->width * (size_t)e->pixels->height * 4;
+        b += au_surface_bytes(e->pixels);
     if (e->dec)
         b += au_image_info(e->dec)->mem_bytes;
     return b;
@@ -572,7 +588,7 @@ void au_image_cache_stats(const AuImageCache *c, AuImageCacheStats *s)
         const AuImageEntry *e = c->e[i];
         if (e->pixels) {
             s->decoded++;
-            s->decoded_bytes += (size_t)e->pixels->width * (size_t)e->pixels->height * 4;
+            s->decoded_bytes += au_surface_bytes(e->pixels);
         }
         if (e->dec) {
             const AuSurface *cv = au_image_canvas(e->dec);

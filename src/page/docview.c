@@ -457,6 +457,7 @@ void au_docview_free(AuDocView *dv)
     au_free(dv->dead);
     au_layout_free(dv->layout);
     au_docimages_free(dv->imgs);
+    au_surface_free(dv->canvas_expanded);
     au_free(dv->slots);
     au_free(dv->reqs);
     au_free(dv->pl_ev);
@@ -539,6 +540,11 @@ static void images_data(AuDocView *dv, AuImageEntry *e, const void *data, size_t
 void au_docview_set_image_budget(AuDocView *dv, size_t bytes)
 {
     au_docimages_set_budget(dv->imgs, bytes);
+}
+
+void au_docview_set_image_depth(AuDocView *dv, int bits)
+{
+    au_image_cache_set_depth(au_docimages_cache(dv->imgs), bits);
 }
 
 void au_docview_set_clock(AuDocView *dv, uint32_t (*now_ms)(void *ctx), void *ctx)
@@ -3330,6 +3336,14 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
             au_image_entry_use(cache, e, iw, ih);
             if (au_image_entry_state(e) == AU_IMAGE_READY) {
                 *px = au_image_entry_surface(e);
+                /* drawImage and createImageBitmap read ARGB32: a compact
+                 * image is expanded, and the copy lives until the next
+                 * call or the view goes */
+                if ((*px)->format != AU_SURF_ARGB32) {
+                    au_surface_free(dv->canvas_expanded);
+                    dv->canvas_expanded = au_surface_expand(*px);
+                    *px = dv->canvas_expanded;
+                }
                 *w = iw;
                 *h = ih;
                 au_buf_clear(url);

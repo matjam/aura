@@ -103,6 +103,33 @@ The cache (`cache.h`) holds one document's images by URL.
   it down, and it held its full-size pixels.
 - A still image whose bytes are larger than its pixels keeps only the
   pixels.
+- A finished opaque still image is kept in the bits per pixel of the
+  "Image colours" preference (`content.image_colors`, Preferences >
+  Content; `au_image_cache_set_depth`): Millions keeps 32 bits,
+  Thousands keeps RGB565, and 256 keeps an index into a 6 x 7 x 6
+  colour cube. Both compact formats are dithered with a 4 x 4 ordered
+  matrix (`au_surface_convert` in `src/paint/surface.c`). "Same as the
+  screen", the default, follows the main screen's depth
+  (`AuBrowserHost.screen_bits`; only the Mac OS 9 shell gives it), so
+  it drops nothing the screen would show. Animations, SVG and images
+  with transparency stay in 32 bits. The budget counts the compact
+  size, so more images stay decoded.
+- `au_draw_image` reads compact rows as it draws (`au_surface_row`).
+  Other readers expand first: `drawImage` and `createImageBitmap` get
+  an ARGB32 copy (`au_dv_canvas_image`). To try a depth on the host,
+  run `aura-host chrome --image-bits 16` (or 8).
+
+Decoded images on Reddit after loading and three Page Downs (host,
+2026-11-18; each run loads live content, so the decode counts differ):
+
+| Image colours | Decoded images | Decodes |
+|---|---|---|
+| Millions (32 bits) | 8.45 MB | 18 |
+| Thousands (16 bits) | 4.78 MB | 12 |
+| 256 (8 bits) | 3.96 MB | 16 |
+
+At 8 bits the saving is less than three quarters because Reddit's
+icons and avatars have transparency and stay in 32 bits.
 - Animations decode frame by frame from the compressed bytes, keep one
   canvas, and pause when not painted; delays of 10 ms or less play at
   100 ms, as browsers do.

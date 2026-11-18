@@ -53,11 +53,136 @@ void au_surface_clear(AuSurface *s, AuColor c)
     }
 }
 
+/* ---- Compact formats ----
+ * Opaque images the image cache keeps in 16 or 8 bits (paint.h). A
+ * channel of L levels is quantized with a 4 x 4 ordered dither: level
+ * floor((v * (L - 1) + t) / 255), t from the Bayer matrix spread over
+ * 0..254, so the average over a tile keeps the source value. */
+
+static const uint8_t bayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+
+static inline uint32_t quant(uint32_t v, uint32_t levels, uint32_t t)
+{
+    return (v * (levels - 1) + t) / 255;
+}
+
+static inline AuPixel rgb565_px(uint16_t v)
+{
+    uint32_t r = v >> 11, g = (v >> 5) & 63, b = v & 31;
+    return 0xFF000000u | (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+}
+
+static AuPixel index8_lut[256];
+static bool index8_ready;
+
+static void index8_init(void)
+{
+    for (int i = 0; i < 256; i++) {
+        uint32_t r = 0, g = 0, b = 0;
+        if (i < 252) {
+            r = (uint32_t)(i / 42) * 51;
+            g = (uint32_t)((i / 6) % 7) * 255 / 6;
+            b = (uint32_t)(i % 6) * 51;
+        }
+        index8_lut[i] = 0xFF000000u | (r << 16) | (g << 8) | b;
+    }
+    index8_ready = true;
+}
+
+AuPixel au_index8_colour(uint8_t i)
+{
+    if (!index8_ready)
+        index8_init();
+    return index8_lut[i];
+}
+
+size_t au_surface_bytes(const AuSurface *s)
+{
+    size_t per = s->format == AU_SURF_RGB565 ? 2 : s->format == AU_SURF_INDEX8 ? 1 : 4;
+    return (size_t)s->stride * (size_t)s->height * per;
+}
+
+AuSurface *au_surface_convert(const AuSurface *s, uint8_t format)
+{
+    if (!s || s->format != AU_SURF_ARGB32 || !s->opaque || (format != AU_SURF_RGB565 && format != AU_SURF_INDEX8))
+        return NULL;
+    int w = s->width, h = s->height;
+    size_t per = format == AU_SURF_RGB565 ? 2 : 1;
+    void *data = au_alloc((size_t)w * (size_t)h * per + 1);
+    for (int y = 0; y < h; y++) {
+        const AuPixel *row = s->pixels + (size_t)y * s->stride;
+        const uint8_t *bm = bayer4 + (y & 3) * 4;
+        if (format == AU_SURF_RGB565) {
+            uint16_t *o = (uint16_t *)data + (size_t)y * w;
+            for (int x = 0; x < w; x++) {
+                uint32_t p = row[x], t = (uint32_t)bm[x & 3] * 255 / 16;
+                o[x] = (uint16_t)((quant((p >> 16) & 255, 32, t) << 11) | (quant((p >> 8) & 255, 64, t) << 5) |
+                                  quant(p & 255, 32, t));
+            }
+        } else {
+            uint8_t *o = (uint8_t *)data + (size_t)y * w;
+            for (int x = 0; x < w; x++) {
+                uint32_t p = row[x], t = (uint32_t)bm[x & 3] * 255 / 16;
+                o[x] = (uint8_t)(quant((p >> 16) & 255, 6, t) * 42 + quant((p >> 8) & 255, 7, t) * 6 +
+                                 quant(p & 255, 6, t));
+            }
+        }
+    }
+    AuSurface *c = au_calloc(sizeof *c);
+    c->pixels = data;
+    c->width = w;
+    c->height = h;
+    c->stride = w;
+    c->owned = true;
+    c->opaque = true;
+    c->format = format;
+    return c;
+}
+
+const AuPixel *au_surface_row(const AuSurface *s, int y, int x0, int n, AuPixel *tmp)
+{
+    if (s->format == AU_SURF_RGB565) {
+        const uint16_t *in = (const uint16_t *)(const void *)s->pixels + (size_t)y * s->stride + x0;
+        for (int i = 0; i < n; i++)
+            tmp[i] = rgb565_px(in[i]);
+        return tmp;
+    }
+    if (s->format == AU_SURF_INDEX8) {
+        if (!index8_ready)
+            index8_init();
+        const uint8_t *in = (const uint8_t *)(const void *)s->pixels + (size_t)y * s->stride + x0;
+        for (int i = 0; i < n; i++)
+            tmp[i] = index8_lut[in[i]];
+        return tmp;
+    }
+    return s->pixels + (size_t)y * s->stride + x0;
+}
+
+AuSurface *au_surface_expand(const AuSurface *s)
+{
+    AuPixel *data = au_alloc((size_t)s->width * (size_t)s->height * sizeof(AuPixel) + 1);
+    for (int y = 0; y < s->height; y++) {
+        AuPixel *o = data + (size_t)y * s->width;
+        const AuPixel *r = au_surface_row(s, y, 0, s->width, o);
+        if (r != o)
+            memcpy(o, r, (size_t)s->width * sizeof *o);
+    }
+    AuSurface *c = au_calloc(sizeof *c);
+    c->pixels = data;
+    c->width = s->width;
+    c->height = s->height;
+    c->stride = s->width;
+    c->owned = true;
+    c->opaque = s->opaque;
+    return c;
+}
+
 AuColor au_surface_get(const AuSurface *s, int x, int y)
 {
     if (x < 0 || y < 0 || x >= s->width || y >= s->height)
         return 0;
-    uint32_t p = s->pixels[(size_t)y * s->stride + x];
+    AuPixel tmp;
+    uint32_t p = *au_surface_row(s, y, x, 1, &tmp);
     uint32_t a = p >> 24;
     if (a == 0)
         return 0;

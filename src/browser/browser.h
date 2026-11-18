@@ -142,9 +142,14 @@ typedef struct AuBrowserHost {
      * coroutine runs on the thread of the user interface, as the Thread
      * Manager's cooperative threads do: the page's script calls the
      * shell's callbacks (titles, invalidation, dialogs) from its stack.
-     * The POSIX coroutines are threads, so the GTK and Cocoa shells give
-     * none; the host tool, which has no user interface, does. */
+     * The GTK and Cocoa shells give ucontext stacks on the main thread
+     * (au_posix_ucoro_ops); the host tool gives the POSIX thread ones. */
     const AuCoroOps *script_coro;
+    /* Optional. The bits per pixel of the main screen (Mac OS 9: the main
+     * device's depth). With "Image colours: Same as the screen" a screen
+     * of thousands of colours keeps images in 16 bits and one of 256 in
+     * 8 (prefs.h, AuImageColors); without it images stay in 32. */
+    int (*screen_bits)(void *ctx);
     /* Optional. The memory the application can still get, in KB (Mac
      * OS 9: free application heap plus free temporary memory). The
      * Automatic script memory limits follow it (scriptmem.h); without it

@@ -19,6 +19,8 @@
 static const char *const startup_choices[] = {"Open the home page", "Open a blank page", "Restore the last tabs", NULL};
 static const char *const tab_choices[] = {"Along the top", "Down the left side", NULL};
 static const char *const appearance_choices[] = {"Same as system", "Light", "Dark", NULL};
+static const char *const image_colors_choices[] = {"Same as the screen", "Millions", "Thousands", "256 (dithered)",
+                                                    NULL};
 static const char *const memory_choices[] = {"Automatic", "Custom", NULL};
 static const char *const cookie_choices[] = {"Accept all", "Same-site only", "Block all", NULL};
 static const char *const update_choices[] = {"Every day", "Every week", "Never", NULL};
@@ -96,6 +98,8 @@ static const AuPrefDesc descs[AU_PREF_COUNT] = {
     {AU_PREF_IMAGE_MEMORY_MB, SEC(CONTENT), AU_PREF_NUMBER, NULL, NULL, NULL, "MB", NULL, NULL, NULL,
      (int)(AU_SCRIPT_MEM_CUSTOM_MIN_KB / 1024), (int)(AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024), AU_PREF_IMAGE_MEMORY_MODE,
      1, AU_PREF_STATUS, AU_PREF_STORE_SPECIAL, 0},
+    D_CHOICE(IMAGE_COLORS, CONTENT, AU_PREF_CHOICE, "content.image_colors", "Image colours:", image_colors_choices, 0,
+             image_colors),
     D_NOTE(SCRIPT_MEMORY_NOTE, CONTENT, NULL),
     /* Privacy and Security */
     D_CHECK(SEND_DNT, PRIVACY, "privacy.do_not_track", "Send Do Not Track", send_dnt),

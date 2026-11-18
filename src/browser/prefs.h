@@ -26,6 +26,11 @@ typedef enum { AU_COOKIES_ALL, AU_COOKIES_SAME_SITE, AU_COOKIES_NONE } AuCookieP
 typedef enum { AU_BLOCK_UPDATE_DAILY, AU_BLOCK_UPDATE_WEEKLY, AU_BLOCK_UPDATE_NEVER } AuBlockUpdate;
 /* Appearance: follow the system's light or dark setting, or force one. */
 typedef enum { AU_SCHEME_SYSTEM, AU_SCHEME_LIGHT, AU_SCHEME_DARK } AuColorScheme;
+/* The colours decoded images are kept in (content.image_colors):
+ * Automatic follows the screen (AuBrowserHost.screen_bits), so nothing
+ * is lost that the screen would show; the others keep opaque still
+ * images in 32, 16 or 8 bits, dithered (au_image_cache_set_depth). */
+typedef enum { AU_IMGCOL_AUTO, AU_IMGCOL_MILLIONS, AU_IMGCOL_THOUSANDS, AU_IMGCOL_256 } AuImageColors;
 
 /* Limits the window and the file parser apply. */
 #define AU_TAB_COLUMN_MIN 100
@@ -59,6 +64,7 @@ typedef struct AuPrefs {
     int script_memory_kb, worker_memory_kb;
     /* Decoded images per page, in KB (scriptmem.h): 0 is Automatic. */
     int image_memory_kb;
+    AuImageColors image_colors;
     bool load_images;
     bool block_popups;
 

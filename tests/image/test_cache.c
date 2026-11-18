@@ -336,6 +336,83 @@ static void test_failures_and_bytes(void)
     au_image_cache_free(c);
 }
 
+/* Draws img over a cleared target with each filter and scale, for
+ * comparing a compact image with its ARGB32 expansion. */
+static void draw_all(const AuSurface *img, AuSurface *out[4])
+{
+    static const AuRect dst[4] = {{3, 2, 160, 120}, {0, 0, 37, 29}, {1, 1, 331, 250}, {0, 0, 200, 150}};
+    static const AuFilter f[4] = {AU_FILTER_BILINEAR, AU_FILTER_BILINEAR, AU_FILTER_BILINEAR, AU_FILTER_NEAREST};
+    for (int i = 0; i < 4; i++) {
+        out[i] = au_surface_new(340, 260);
+        AuCanvas *cv = au_canvas_new(out[i]);
+        au_draw_image(cv, img, (AuIRect){0, 0, img->width, img->height}, dst[i], f[i], i == 3 ? 0.5f : 1);
+        au_canvas_free(cv);
+    }
+}
+
+/* Opaque still images kept in 16 and 8 bits (au_image_cache_set_depth):
+ * the format and bytes, how far a pixel may be from the 32-bit decode,
+ * and drawing a compact image gives the same pixels as drawing its
+ * expansion (unscaled, reduced, enlarged, nearest at half opacity). */
+static void test_depth(void)
+{
+    size_t n;
+    uint8_t *d = load("png/big.png", &n);
+    if (!d)
+        return;
+    AuImageCache *full = au_image_cache_new(0);
+    AuImageEntry *ef = au_image_cache_add(full, "http://x/big.png");
+    feed(full, ef, d, n, n);
+    au_image_entry_done(full, ef, true);
+    au_image_cache_frame_begin(full);
+    au_image_entry_use(full, ef, 0, 0);
+    const AuSurface *ref = au_image_entry_surface(ef);
+    IT_CHECK(ref->opaque && ref->format == AU_SURF_ARGB32, "the vector is opaque, kept in 32 bits by default");
+    static const int bits[2] = {16, 8};
+    static const int maxerr[2] = {9, 52};
+    for (int k = 0; k < 2; k++) {
+        AuImageCache *c = au_image_cache_new(0);
+        au_image_cache_set_depth(c, bits[k]);
+        AuImageEntry *e = au_image_cache_add(c, "http://x/big.png");
+        feed(c, e, d, n, 1000);
+        au_image_entry_done(c, e, true);
+        au_image_cache_frame_begin(c);
+        au_image_entry_use(c, e, 0, 0);
+        const AuSurface *s = au_image_entry_surface(e);
+        IT_CHECK(s->format == (bits[k] == 16 ? AU_SURF_RGB565 : AU_SURF_INDEX8), "%d bits: format %d", bits[k],
+                 s->format);
+        AuImageCacheStats st;
+        au_image_cache_stats(c, &st);
+        IT_CHECK(st.decoded_bytes == (size_t)160 * 120 * (size_t)bits[k] / 8, "%d bits: %lu bytes", bits[k],
+                 (unsigned long)st.decoded_bytes);
+        int worst = 0;
+        for (int y = 0; y < s->height; y++)
+            for (int x = 0; x < s->width; x++) {
+                AuColor a = au_surface_get(s, x, y), b = au_surface_get(ref, x, y);
+                for (int sh = 0; sh <= 16; sh += 8) {
+                    int dv = abs((int)((a >> sh) & 255) - (int)((b >> sh) & 255));
+                    if (dv > worst)
+                        worst = dv;
+                }
+            }
+        IT_CHECK(worst <= maxerr[k], "%d bits: a channel off by %d", bits[k], worst);
+        AuSurface *x = au_surface_expand(s);
+        AuSurface *a[4], *b[4];
+        draw_all(s, a);
+        draw_all(x, b);
+        for (int i = 0; i < 4; i++) {
+            IT_CHECK(!memcmp(a[i]->pixels, b[i]->pixels, (size_t)340 * 260 * sizeof(AuPixel)),
+                     "%d bits: drawing %d matches the expansion", bits[k], i);
+            au_surface_free(a[i]);
+            au_surface_free(b[i]);
+        }
+        au_surface_free(x);
+        au_image_cache_free(c);
+    }
+    au_image_cache_free(full);
+    free(d);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -350,6 +427,7 @@ int main(int argc, char **argv)
     test_progressive();
     test_animation();
     test_failures_and_bytes();
+    test_depth();
     if (it_failures) {
         printf("%d failures\n", it_failures);
         return 1;

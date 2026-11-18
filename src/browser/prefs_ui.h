@@ -87,6 +87,7 @@ typedef enum {
     AU_PREF_WORKER_MEMORY_MB,
     AU_PREF_IMAGE_MEMORY_MODE,
     AU_PREF_IMAGE_MEMORY_MB,
+    AU_PREF_IMAGE_COLORS,
     AU_PREF_SCRIPT_MEMORY_NOTE,
     /* Privacy and Security */
     AU_PREF_SEND_DNT,

@@ -575,7 +575,7 @@ with the sequences above only ([`known-gaps.md`](known-gaps.md#memory)).
 | The application partition | 64 MB (12 MB at least) | |
 | Kept documents | 3 per tab, 24 MB over all tabs; the oldest is dropped while less than 6 MB of heap is free | [`browser-chrome.md`](browser-chrome.md) |
 | Background tabs | unloaded, least recently shown first, while less than 6 MB is free (heap and temporary memory together), or after 30 minutes in the background while less than 16 MB is free | [`browser-chrome.md`](browser-chrome.md) |
-| The image cache | per document: Automatic, an eighth of the memory free, 8 to 64 MB; or the `content.image_memory_kb` preference, 4 to 256 MB; one image at most half of it | [`images.md`](images.md) |
+| The image cache | per document: Automatic, an eighth of the memory free, 8 to 64 MB; or the `content.image_memory_kb` preference, 4 to 256 MB; one image at most half of it. Opaque still images are kept in 32, 16 or 8 bits (`content.image_colors`) | [`images.md`](images.md) |
 | A decoded image | 16 MB | [`images.md`](images.md) |
 | The HTTP memory cache | 8 MB by default; 1 MB resident with the disk cache on | [`networking.md`](networking.md) |
 | A page's script runtime, shared by its frames | Automatic: half of the memory free, at least 8 MB, at most 96 MB (64 MB where the machine is unknown); or the `content.script_memory_kb` preference, 4 to 256 MB | [`javascript.md`](javascript.md), "Script memory limits" |

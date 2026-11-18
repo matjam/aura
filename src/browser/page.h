@@ -354,6 +354,9 @@ typedef struct AuPageEnv {
      * two steps every 100 ms and au_page_idle returns, so the window
      * scrolls and paints while it runs. */
     const AuCoroOps *script_coro;
+    /* Optional: the main screen's bits per pixel, 0 when unknown
+     * (AuBrowserHost.screen_bits). Read when a document begins. */
+    int (*screen_bits)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

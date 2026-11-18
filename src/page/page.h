@@ -293,6 +293,9 @@ bool au_docview_dark(const AuDocView *dv);
  * au_docview_animate. See src/image/cache.h for the memory policy. */
 /* The memory budget for decoded images (0: AU_IMAGE_CACHE_DEFAULT_BUDGET). */
 void au_docview_set_image_budget(AuDocView *dv, size_t bytes);
+/* The bits per pixel opaque still images are kept in: 32, 16 or 8
+ * (au_image_cache_set_depth). */
+void au_docview_set_image_depth(AuDocView *dv, int bits);
 /* A millisecond clock for decode timings (optional). */
 void au_docview_set_clock(AuDocView *dv, uint32_t (*now_ms)(void *ctx), void *ctx);
 /* Advances animated images to now_ms, invalidating what changes. Returns

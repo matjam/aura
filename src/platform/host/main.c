@@ -426,7 +426,8 @@ static int usage(void)
             "                        invalidated with a whole paint; FILE marks the stale ones in magenta);\n"
             "                        --no-doc-cache makes Back and Forward load again;\n"
             "                        --script-mem MB and --worker-mem MB set the script memory limits of a\n"
-            "                        page and of a worker, else Automatic)\n"
+            "                        page and of a worker, else Automatic;\n"
+            "                        --image-bits 32|16|8 sets Image colours)\n"
             "                        (developer tools: netlog[:details] perf eval:EXPR source[:FIRST,COUNT]\n"
             "                        devshot:source|console|network|perf:FILE.png)\n"
             "                        (--tab takes a URL, a path, or file:relative/path; --net loads http and\n"
@@ -671,6 +672,7 @@ typedef struct ChromeOpts {
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
     bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
+    int image_bits;                   /* Image colours: 32, 16 or 8; 0: Automatic */
     int load_ms;      /* --load-ms: how long the loads and the waits may stay busy; 0: the default */
     const char *actions[256]; /* --do: scripted input, in order */
     int nactions;
@@ -1416,6 +1418,10 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         b->prefs.script_memory_kb = au_script_memory_clamp(o->script_mem_mb * 1024);
     if (o->worker_mem_mb)
         b->prefs.worker_memory_kb = au_script_memory_clamp(o->worker_mem_mb * 1024);
+    if (o->image_bits)
+        b->prefs.image_colors = o->image_bits == 8    ? AU_IMGCOL_256
+                                : o->image_bits == 16 ? AU_IMGCOL_THOUSANDS
+                                                      : AU_IMGCOL_MILLIONS;
     /* --net: http and https through the network stack and page fetcher,
      * as the Mac application does; without it they show the stand-in. */
     AuHostSession ses;
@@ -1678,6 +1684,8 @@ int main(int argc, char **argv)
                 o.no_doc_cache = true;
             else if (!strcmp(a, "--script-mem") && i + 1 < argc)
                 o.script_mem_mb = atoi(argv[++i]);
+            else if (!strcmp(a, "--image-bits") && i + 1 < argc)
+                o.image_bits = atoi(argv[++i]);
             else if (!strcmp(a, "--worker-mem") && i + 1 < argc)
                 o.worker_mem_mb = atoi(argv[++i]);
             else if (!strcmp(a, "--no-entropy"))

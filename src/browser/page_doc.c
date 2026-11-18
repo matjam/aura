@@ -533,6 +533,20 @@ static void apply_font_prefs(AuPage *p)
         p->dv, (size_t)au_image_memory_limit(pr ? pr->image_memory_kb : 0,
                                              p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0) *
                    1024);
+    /* The bits decoded images are kept in: the preference, or Automatic
+     * from the screen's depth, which shows no more than that. */
+    int bits = 32;
+    switch (pr ? pr->image_colors : AU_IMGCOL_AUTO) {
+    case AU_IMGCOL_THOUSANDS: bits = 16; break;
+    case AU_IMGCOL_256: bits = 8; break;
+    case AU_IMGCOL_MILLIONS: break;
+    default: {
+        int sb = p->env.screen_bits ? p->env.screen_bits(p->env.ctx) : 0;
+        bits = sb > 0 && sb <= 8 ? 8 : sb > 0 && sb <= 16 ? 16 : 32;
+        break;
+    }
+    }
+    au_docview_set_image_depth(p->dv, bits);
     /* The colour scheme (prefers-color-scheme), from the browser. */
     au_docview_set_dark(p->dv, p->env.dark && p->env.dark(p->env.ctx));
 }

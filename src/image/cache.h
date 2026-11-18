@@ -75,6 +75,12 @@ void au_image_cache_set_clock(AuImageCache *c, uint32_t (*now_ms)(void *ctx), vo
 /* The fonts text in SVG images is drawn with (NULL: none). The set must
  * outlive the cache or be replaced first. */
 void au_image_cache_set_fonts(AuImageCache *c, struct AuFontSet *fonts);
+/* The bits per pixel a finished opaque still image is kept in: 32 (the
+ * default), 16 (AU_SURF_RGB565) or 8 (AU_SURF_INDEX8), both dithered.
+ * Images decoded later follow it. A surface the cache returns may then be
+ * compact: au_draw_image reads it, other readers expand it
+ * (au_surface_expand). */
+void au_image_cache_set_depth(AuImageCache *c, int bits);
 
 AuImageEntry *au_image_cache_find(AuImageCache *c, const char *url);
 AuImageEntry *au_image_cache_add(AuImageCache *c, const char *url); /* or the existing one */

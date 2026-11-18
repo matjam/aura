@@ -22,6 +22,7 @@ static const char *const tabpos_names[] = {"top", "left", NULL};
 static const char *const cookie_names[] = {"all", "same-site", "none", NULL};
 static const char *const block_update_names[] = {"daily", "weekly", "never", NULL};
 static const char *const color_scheme_names[] = {"system", "light", "dark", NULL};
+static const char *const image_colors_names[] = {"automatic", "millions", "thousands", "256", NULL};
 
 #define S(n, f) {n, T_STR, offsetof(AuPrefs, f), 0, 0, NULL}
 #define B(n, f) {n, T_BOOL, offsetof(AuPrefs, f), 0, 0, NULL}
@@ -45,6 +46,7 @@ static const Key keys[] = {
     I("content.script_memory_kb", script_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     I("content.worker_memory_kb", worker_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     I("content.image_memory_kb", image_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    E("content.image_colors", image_colors, image_colors_names),
     B("content.images", load_images),
     B("content.block_popups", block_popups),
     E("privacy.cookies", cookies, cookie_names),
@@ -97,7 +99,8 @@ static bool *bool_field(AuPrefs *p, const Key *k) { return (bool *)((char *)p + 
 /* Enum fields are accessed as int; this fails to compile where enums are
  * not int-sized (-fshort-enums). */
 typedef char enum_is_int[(sizeof(AuStartup) == sizeof(int) && sizeof(AuTabPosition) == sizeof(int) &&
-                          sizeof(AuCookiePolicy) == sizeof(int) && sizeof(AuColorScheme) == sizeof(int))
+                          sizeof(AuCookiePolicy) == sizeof(int) && sizeof(AuColorScheme) == sizeof(int) &&
+                          sizeof(AuImageColors) == sizeof(int))
                              ? 1
                              : -1];
 static int *int_field(AuPrefs *p, const Key *k) { return (int *)((char *)p + k->off); }

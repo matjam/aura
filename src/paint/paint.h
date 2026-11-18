@@ -49,12 +49,23 @@ typedef struct AuIRect {
 
 /* ---- Surfaces ---- */
 
+/* The formats a surface's pixels may be in. Only AU_SURF_ARGB32 can be
+ * drawn into. The compact ones hold opaque images the image cache keeps
+ * (au_image_cache_set_depth): au_draw_image reads them, and any other
+ * reader expands them first (au_surface_expand, au_surface_row). */
+enum {
+    AU_SURF_ARGB32 = 0, /* AuPixel */
+    AU_SURF_RGB565 = 1, /* uint16_t: rrrrrggggggbbbbb, opaque */
+    AU_SURF_INDEX8 = 2  /* uint8_t: an index into the 6 x 7 x 6 colour cube (au_index8_colour), opaque */
+};
+
 typedef struct AuSurface {
-    AuPixel *pixels;
+    AuPixel *pixels; /* for a compact format, its own element type (au_surface_data) */
     int width, height;
-    int stride; /* pixels from one row to the next */
+    int stride; /* elements from one row to the next */
     bool owned; /* pixels belong to the surface */
     bool opaque; /* every pixel has alpha 255 (decoded images): drawing may skip blending */
+    uint8_t format; /* AU_SURF_* */
 } AuSurface;
 
 /* A new surface, cleared to transparent. */
@@ -66,6 +77,19 @@ void au_surface_free(AuSurface *s);
 void au_surface_clear(AuSurface *s, AuColor c);
 /* Reads a pixel back as a non-premultiplied colour (tests, PNG output). */
 AuColor au_surface_get(const AuSurface *s, int x, int y);
+/* The bytes a surface's pixels take. */
+size_t au_surface_bytes(const AuSurface *s);
+/* A copy of an opaque ARGB32 surface in a compact format, ordered-dithered
+ * (a 4 x 4 Bayer matrix) so gradients do not band; NULL when s is not
+ * opaque ARGB32. */
+AuSurface *au_surface_convert(const AuSurface *s, uint8_t format);
+/* An ARGB32 copy of any surface. */
+AuSurface *au_surface_expand(const AuSurface *s);
+/* The n pixels of row y from x0 as ARGB32: a pointer into s when it is
+ * ARGB32, else tmp filled in. */
+const AuPixel *au_surface_row(const AuSurface *s, int y, int x0, int n, AuPixel *tmp);
+/* The colour of an AU_SURF_INDEX8 index. */
+AuPixel au_index8_colour(uint8_t i);
 
 /* ---- Paths ----
  * Points are floats. Curves are kept as curves until the rasterizer

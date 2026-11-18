@@ -795,6 +795,15 @@ static uint32_t host_memory_free(void *ctx)
     return mac_memory_free_kb();
 }
 
+/* The main screen's depth, for "Image colours: Same as the screen": a
+ * screen of thousands keeps images in 16 bits, of 256 in 8. */
+static int host_screen_bits(void *ctx)
+{
+    (void)ctx;
+    GDHandle gd = GetMainDevice();
+    return gd && (**gd).gdPMap ? (**(**gd).gdPMap).pixelSize : 0;
+}
+
 void browserwin_host(AuBrowserHost *h)
 {
     memset(h, 0, sizeof *h);
@@ -819,6 +828,7 @@ void browserwin_host(AuBrowserHost *h)
      * page script may run on one (browser.h) */
     h->script_coro = mac_coro_ops();
     h->memory_free_kb = host_memory_free;
+    h->screen_bits = host_screen_bits;
 }
 
 /* ---- Events ---- */

@@ -153,6 +153,7 @@ struct AuDocView {
     char *hover_link; /* the URL of the link under the pointer, from au_alloc; NULL for none (au_dv_clear_hover_link) */
     uint32_t scanned_nodes;
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
+    struct AuSurface *canvas_expanded; /* a compact image expanded for drawImage (au_dv_canvas_image) */
     bool link_events; /* a <link>'s load or error event is due (SheetSrc.event) */
     bool img_events;  /* an image finished or layout found a known one: <img> load events may be due */
     PreloadEvent *pl_ev; /* preload events due (fired with the link events) */
