@@ -510,6 +510,26 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   in a runtime hash table. An object takes 72 bytes with its block
   header on the host instead of 80, and 40 instead of 48 on the
   PowerPC: about 1.8 MB for Reddit's 230,000 objects.
+
+What is left, measured on the host (2026-11-18, base `ebfa814`):
+
+- **Most compiled functions never run.** After loading Reddit and two
+  Page Downs, 6,814 of 29,826 functions had been called; on GitHub's
+  repository page, 5,230 of 25,738. The uncalled ones held 1.9 MB of
+  bytecode, 4.0 MB of function records and 0.4 MB of line tables on
+  Reddit (14% of the heap then). QuickJS compiles every function when
+  the script loads. Compiling a function at its first call, as V8
+  does, would save most of this and speed up loading, but the compiler
+  finds the variables a closure captures while it compiles the outer
+  function, so it is a large change.
+- **Each function record has a 136-byte header** (88 bytes on the
+  PowerPC); four of its pointers point into the record itself.
+- **Every block from the engine's arenas has an 8-byte header**, which
+  holds the reference count of the blocks that have one. Property
+  arrays and closure variable arrays do not need it (about 1.8 MB on
+  Reddit).
+- **Every GC object is on a doubly linked list** (16 bytes on the host,
+  8 on the PowerPC, about 400,000 objects on Reddit).
 - `js_workers_memory` no longer counts a worker's script text after it
   is freed.
 
