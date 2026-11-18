@@ -949,7 +949,7 @@ bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out)
         u = img_source(&el->node, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, L->dark, &len,
                        &viewport, &density);
     else {
-        u = attr_s(&el->node, "src");
+        u = attr_s(&el->node, au_is_html_element(&el->node, AU_ATOM_video) ? "poster" : "src");
         len = u ? strlen(u) : 0;
     }
     if (!u || !len)
@@ -1368,7 +1368,14 @@ static int replaced_kind(AuLayout *L, AuNode *node, bool *skip_children, bool *f
         *skip_children = true;
         return LR_CANVAS;
     }
-    if (t == AU_ATOM_video || t == AU_ATOM_iframe || t == AU_ATOM_audio || t == AU_ATOM_frame) {
+    if (t == AU_ATOM_video) {
+        /* Aura plays no video; a poster shows as the video's image
+         * (object-fit: contain from the UA sheet). */
+        const char *poster = attr_s(node, "poster");
+        *skip_children = true;
+        return poster && *poster ? LR_IMAGE : LR_OTHER;
+    }
+    if (t == AU_ATOM_iframe || t == AU_ATOM_audio || t == AU_ATOM_frame) {
         *skip_children = true;
         return LR_OTHER;
     }
@@ -1557,7 +1564,10 @@ static void setup_replaced(Builder *B, LBlock *k)
                 au_buf_clear(&t);
             }
         } else {
-            image_lookup(B->L, rep, NULL, attr_s(n, au_is_html_element(n, AU_ATOM_object) ? "data" : "src"));
+            image_lookup(B->L, rep, NULL,
+                         attr_s(n, au_is_html_element(n, AU_ATOM_object)  ? "data"
+                                   : au_is_html_element(n, AU_ATOM_video) ? "poster"
+                                                                          : "src"));
         }
         const char *alt = attr_s(n, "alt");
         if (!alt && au_is_html_element(n, AU_ATOM_input))

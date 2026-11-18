@@ -126,7 +126,8 @@ static const char *get_attr(const AuElement *el, const char *name)
     return a ? au_element_get_attr(el, a) : NULL;
 }
 
-/* Finds the <img> and <input type=image> elements and their entries. */
+/* Finds the <img>, <input type=image> and <video poster> elements and
+ * their entries. */
 static void scan(AuDocImages *m, AuDocument *doc, AuLayout *L, const char *base)
 {
     untrack(m);
@@ -139,7 +140,7 @@ static void scan(AuDocImages *m, AuDocument *doc, AuLayout *L, const char *base)
         if (n->type != AU_NODE_ELEMENT)
             continue;
         AuElement *el = au_as_element(n);
-        bool img = au_is_html_element(n, AU_ATOM_img);
+        bool img = au_is_html_element(n, AU_ATOM_img) || au_is_html_element(n, AU_ATOM_video);
         if (!img && au_is_html_element(n, AU_ATOM_input)) {
             const char *ty = get_attr(el, "type");
             img = ty && au_ieq(ty, strlen(ty), "image", 5);

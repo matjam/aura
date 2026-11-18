@@ -2838,7 +2838,7 @@ static int tag_kinds(AuAtom t)
         return 1;
     if (t == AU_ATOM_iframe || t == AU_ATOM_frame || t == AU_ATOM_object || t == AU_ATOM_embed)
         return 2;
-    if (t == AU_ATOM_img || t == AU_ATOM_input || t == AU_ATOM_source || t == AU_ATOM_picture)
+    if (t == AU_ATOM_img || t == AU_ATOM_input || t == AU_ATOM_source || t == AU_ATOM_picture || t == AU_ATOM_video)
         return 4;
     return 0;
 }

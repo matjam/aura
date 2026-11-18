@@ -322,8 +322,14 @@ done.
 - **`document.fonts`** is a set that is always loaded (`ready`
   resolves at once, `check` is true); a `FontFace` made by script
   cannot load and its `load()` rejects with NetworkError.
-- **IndexedDB, the Cache API and service workers** are absent; what each
-  would take is in [`web-storage.md`](web-storage.md).
+- **The Cache API and service workers** are absent; what each would
+  take is in [`web-storage.md`](web-storage.md).
+- **Audio and video** do not play. `play()` rejects with
+  NotSupportedError and `canPlayType` answers `""`, but `MediaError`,
+  `TimeRanges`, the track lists and the read-only state exist so that
+  players load and show their own controls (Reddit's player reads
+  `MediaError` when its bundle runs). A `<video poster>` shows the
+  poster as its image; a video without one is an empty box.
 - **`document.cookie`** in a sandboxed frame without
   `allow-same-origin` reads `""` and sets nothing; the standard throws
   SecurityError ([`networking.md`](networking.md), "Cookies and

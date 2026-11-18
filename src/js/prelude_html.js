@@ -1122,7 +1122,67 @@ defProps(HTMLMediaElement.prototype, {
     get currentSrc() { return ''; },
     get playbackRate() { return 1; },
     set playbackRate(v) {},
+    get defaultPlaybackRate() { return 1; },
+    set defaultPlaybackRate(v) {},
+    get seeking() { return false; },
+    get buffered() { return emptyRanges(); },
+    get played() { return emptyRanges(); },
+    get seekable() { return emptyRanges(); },
+    get textTracks() { return mediaTracks(this, 'text'); },
+    get audioTracks() { return mediaTracks(this, 'audio'); },
+    get videoTracks() { return mediaTracks(this, 'video'); },
+    addTextTrack() { throw domErr('Text tracks are not supported', 'NotSupportedError'); },
+    fastSeek() {},
+    setSinkId() { return Promise.reject(domErr('Audio output is not supported', 'NotSupportedError')); },
 });
+/* Aura plays no media (docs/web-platform.md, "Not planned"), but players
+ * read these types while they load: Reddit's player bundle reads
+ * MediaError's codes at its top level and fails to define its elements
+ * without them. */
+for (const [k, v] of [['NETWORK_EMPTY', 0], ['NETWORK_IDLE', 1], ['NETWORK_LOADING', 2], ['NETWORK_NO_SOURCE', 3],
+    ['HAVE_NOTHING', 0], ['HAVE_METADATA', 1], ['HAVE_CURRENT_DATA', 2], ['HAVE_FUTURE_DATA', 3], ['HAVE_ENOUGH_DATA', 4]]) {
+    Object.defineProperty(HTMLMediaElement, k, { value: v, enumerable: true });
+    Object.defineProperty(HTMLMediaElement.prototype, k, { value: v, enumerable: true });
+}
+defProps(HTMLVideoElement.prototype, {
+    get videoWidth() { return 0; },
+    get videoHeight() { return 0; },
+    getVideoPlaybackQuality() { return { creationTime: performance.now(), droppedVideoFrames: 0, totalVideoFrames: 0, corruptedVideoFrames: 0 }; },
+});
+class MediaError {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+for (const [k, v] of [['MEDIA_ERR_ABORTED', 1], ['MEDIA_ERR_NETWORK', 2], ['MEDIA_ERR_DECODE', 3], ['MEDIA_ERR_SRC_NOT_SUPPORTED', 4]]) {
+    Object.defineProperty(MediaError, k, { value: v, enumerable: true });
+    Object.defineProperty(MediaError.prototype, k, { value: v, enumerable: true });
+}
+class TimeRanges {
+    constructor() { throw new TypeError('Illegal constructor'); }
+    get length() { return 0; }
+    start(i) { throw domErr('The index is past the end of the ranges', 'IndexSizeError'); }
+    end(i) { throw domErr('The index is past the end of the ranges', 'IndexSizeError'); }
+}
+const emptyRanges = () => Object.create(TimeRanges.prototype);
+/* The track lists of a media element: always empty. */
+class TextTrackList extends EventTarget {
+    constructor(key) { if (key !== mediaTracks) throw new TypeError('Illegal constructor'); super(); }
+    get length() { return 0; }
+    getTrackById() { return null; }
+    [Symbol.iterator]() { return [][Symbol.iterator](); }
+}
+class AudioTrackList extends TextTrackList {}
+class VideoTrackList extends TextTrackList {
+    get selectedIndex() { return -1; }
+}
+defineHandlers(TextTrackList.prototype, ['change', 'addtrack', 'removetrack']);
+const trackLists = new WeakMap();
+function mediaTracks(el, kind) {
+    let m = trackLists.get(el);
+    if (!m) trackLists.set(el, (m = {}));
+    const C = kind === 'text' ? TextTrackList : kind === 'audio' ? AudioTrackList : VideoTrackList;
+    return m[kind] || (m[kind] = new C(mediaTracks));
+}
+for (const C of [MediaError, TimeRanges, TextTrackList, AudioTrackList, VideoTrackList]) { tag(C); defGlobal(C.name, C); }
 /* ---------------- the top layer: dialogs and popovers ----------------
  * A modal dialog and a showing popover are in the document's top layer
  * (N.setTopLayer, kind 1 and 2), which C keeps in the order they were

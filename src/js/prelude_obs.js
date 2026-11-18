@@ -544,15 +544,29 @@ defProps(DP, {
     },
     createElementNS(ns, name, opts) { return afterCreate(createElementNS0.call(this, ns, name, opts)); },
 });
+/* A cloned element, or anything imported into this document, upgrades
+ * its custom elements before it is returned (the standard's custom
+ * element reactions). Lit imports a template's content and then sets
+ * properties on the elements, so they must be upgraded by then: Reddit's
+ * video player reads such a property in connectedCallback. A clone of a
+ * fragment is not upgraded, because a template's content shares the
+ * document here (the standard gives it an inert one). */
+function upgradeClone(c, deep) {
+    if (!ceDefCount || !c) return c;
+    if (isElement(c)) upgrade(c);
+    if (deep && typeof c.querySelectorAllArray === 'function')
+        for (const el of c.querySelectorAllArray('*')) upgrade(el);
+    return c;
+}
 const cloneNode0 = NP.cloneNode;
 defProps(NP, {
-    cloneNode(deep) {
-        const c = cloneNode0.call(this, deep);
-        if (ceDefCount && isElement(c)) {
-            const list = [c].concat(deep ? c.querySelectorAllArray('*') : []);
-            for (const el of list) upgrade(el);
-        }
-        return c;
+    cloneNode(deep) { const c = cloneNode0.call(this, deep); return isElement(c) ? upgradeClone(c, deep) : c; },
+});
+const importNode0 = Document.prototype.importNode;
+defProps(Document.prototype, {
+    importNode(node, deep) {
+        const c = importNode0.call(this, node, deep);
+        return this === doc ? upgradeClone(c, !!deep) : c;
     },
 });
 

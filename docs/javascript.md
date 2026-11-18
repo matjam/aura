@@ -712,7 +712,16 @@ A page's script runtime (Develop > Performance, `aura-host chrome --net
 
 `idb.js` (IndexedDB, 30,976 bytes on 2026-11-18) is the fourth module,
 registered in `prelude_net.js` so that workers have it too; see
-"IndexedDB" below.
+"IndexedDB" below. `urlpattern.js` (`URLPattern`) is the fifth; see
+"URLPattern" below.
+
+Custom elements (`prelude_obs.js`) upgrade an element made by
+`cloneNode` or `document.importNode` before the call returns, with its
+descendants for a deep copy. Lit imports a template's content and then
+sets properties on the new elements, and an element upgraded later
+saves those properties until its first update, so `connectedCallback`
+would not see them. A clone of a fragment is not upgraded, because a
+template's content shares the document in Aura.
 
 Left in the prelude: `IntersectionObserver` and `ResizeObserver` (most
 script-heavy pages create one while they load, and both are run from

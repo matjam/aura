@@ -141,3 +141,21 @@ test('ElementInternals: form value, validity, reset, states', () => {
     assert.equal(f.i.willValidate, false);
     form.remove();
 });
+
+test('importNode and cloneNode upgrade before they return', () => {
+    let seen;
+    customElements.define('x-imported', class extends HTMLElement {
+        constructor() { super(); this.made = true; }
+        connectedCallback() { seen = this.prop; }
+    });
+    const t = document.createElement('template');
+    t.innerHTML = '<div><x-imported></x-imported></div>';
+    const f = document.importNode(t.content, true);
+    const el = f.querySelector('x-imported');
+    assert.ok(el.made, 'importNode of a fragment');
+    el.prop = 7;
+    document.body.appendChild(f);
+    assert.equal(seen, 7, 'a property set before insertion is there in connectedCallback');
+    assert.ok(el.cloneNode().made, 'cloneNode');
+    document.body.lastChild.remove();
+});

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Media elements without playback</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<video id="v" src="clip.mp4"></video>
+<video id="p" poster="data:image/gif;base64,R0lGODlhAgADAIAAAP8AAAAAACH5BAAAAAAALAAAAAACAAMAAAIChF8AOw=="></video>
+<script>
+test('the types players read while they load', () => {
+    assert.equal(MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED, 4);
+    assert.equal(MediaError.prototype.MEDIA_ERR_ABORTED, 1);
+    assert.throws(() => new MediaError(), 'TypeError');
+    assert.equal(HTMLMediaElement.HAVE_ENOUGH_DATA, 4);
+    assert.equal(HTMLMediaElement.prototype.NETWORK_NO_SOURCE, 3);
+    const v = document.getElementById('v');
+    assert.ok(v.buffered instanceof TimeRanges);
+    assert.equal(v.buffered.length, 0);
+    assert.throws(() => v.buffered.start(0), 'IndexSizeError');
+    assert.equal(v.textTracks.length, 0);
+    assert.equal(v.textTracks, v.textTracks, 'the same list each time');
+    assert.ok(v.textTracks instanceof EventTarget);
+    assert.equal(v.videoTracks.selectedIndex, -1);
+    assert.equal(v.videoWidth, 0);
+    assert.equal(typeof v.getVideoPlaybackQuality().droppedVideoFrames, 'number');
+    assert.equal(v.canPlayType('video/mp4'), '');
+});
+
+test('a poster shows as the video\'s image', async () => {
+    const p = document.getElementById('p');
+    for (let i = 0; i < 50 && !p.getBoundingClientRect().width; i++) await new Promise((r) => setTimeout(r, 20));
+    const r = p.getBoundingClientRect();
+    assert.equal(r.width, 2);
+    assert.equal(r.height, 3);
+});
+</script>
+</body>
+</html>
