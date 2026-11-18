@@ -124,3 +124,17 @@ aspect-ratio.
 <div id=a style="width:50vw;height:10vh"></div>
 ---
 #a w=400 h=60
+
+=== min-width keywords size from content and win over max-width
+<body style="margin:0">
+<div style="width:300px">
+<div id=a style="width:100%;max-width:calc(100% - 32px);min-width:fit-content"><div style="width:290px;height:5px"></div></div>
+<div id=b style="max-width:min-content;min-width:120px"><span style="display:inline-block;width:100px;height:5px"></span> <span style="display:inline-block;width:100px;height:5px"></span></div>
+<div id=c style="max-width:max-content"><span style="display:inline-block;width:50px;height:5px"></span></div>
+</div>
+---
+// BBC's card grids: min-width: fit-content with max-width: calc(100% -
+// 32px); Chrome keeps the content's 290 where the maximum gives 268
+#a w=290
+#b w=120
+#c w=50

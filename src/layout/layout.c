@@ -699,6 +699,26 @@ void l_outer_intrinsic(AuLayout *L, LBlock *b, float cb_w, float *min_o, float *
 
 /* ---- Widths ---- */
 
+/* Whether a width-like length is a content keyword. */
+static bool keyword_w(const AuLen *l)
+{
+    return l->kind == AU_LEN_MIN_CONTENT || l->kind == AU_LEN_MAX_CONTENT || l->kind == AU_LEN_FIT_CONTENT ||
+           l->kind == AU_LEN_FIT_CONTENT_PX;
+}
+
+/* A content keyword's content-box width from the min-content and
+ * max-content widths and the space available. */
+static float keyword_size(const AuLen *l, float mn, float mx, float avail_c)
+{
+    switch (l->kind) {
+    case AU_LEN_MIN_CONTENT: return mn;
+    case AU_LEN_MAX_CONTENT: return mx;
+    case AU_LEN_FIT_CONTENT: return l_min(mx, l_max(mn, avail_c));
+    case AU_LEN_FIT_CONTENT_PX: return l_min(mx, l_max(mn, l_min(avail_c, l->u.px)));
+    default: return -1;
+    }
+}
+
 /* The used content-box width of b. avail is the space for its margin box.
  * mode LS_STRETCH fills it (block-level boxes in flow), LS_FIT shrinks to
  * fit (floats, inline-blocks, abspos with auto offsets). Margins must be
@@ -768,6 +788,21 @@ float l_used_width(AuLayout *L, LBlock *b, float cb_w, float avail, int mode)
         }
     }
     w = l_clamp_w(b, w, cb_w);
+    if (s && (keyword_w(&s->max_width) || keyword_w(&s->min_width))) {
+        /* min-width and max-width given as min-content, max-content or
+         * fit-content size from the content; a minimum wins over a
+         * maximum. BBC's card grids have min-width: fit-content with
+         * max-width: calc(100% - 32px), and their edge-to-edge images
+         * were cut 32 pixels short. */
+        float mn, mx;
+        l_intrinsic(L, b, &mn, &mx);
+        float kmax = keyword_w(&s->max_width) ? keyword_size(&s->max_width, mn, mx, avail_c) : -1;
+        float kmin = keyword_w(&s->min_width) ? keyword_size(&s->min_width, mn, mx, avail_c) : -1;
+        if (kmax >= 0 && w > kmax)
+            w = l_clamp_w(b, kmax, cb_w);
+        if (kmin >= 0 && w < kmin)
+            w = kmin;
+    }
     if (b->b.inner == LI_TABLE) {
         /* A table is never narrower than its content. */
         float mn, mx;
@@ -2025,8 +2060,18 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     l_rebuild_dirty(L);
     if (vw != L->vw || vh != L->vh)
         L->other_relayout = true;
-    if (L->src_viewport && (vw != L->src_vw || vh != L->src_vh))
-        L->need_build = true; /* another srcset candidate may apply */
+    if (vw != L->src_vw || vh != L->src_vh) {
+        if (L->src_viewport) {
+            L->need_build = true; /* another srcset candidate may apply */
+        } else {
+            /* Nothing chose by it yet: images built later (a subtree
+             * rebuild when script inserts them) take the current size.
+             * BBC's React cards picked the 1536w candidate for a window
+             * that had been 1280 wide and drew 1274 pixels wide at 400. */
+            L->src_vw = vw;
+            L->src_vh = vh;
+        }
+    }
     if (L->need_build) {
         L->src_vw = vw;
         L->src_vh = vh;

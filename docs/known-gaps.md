@@ -59,6 +59,13 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## Layout
 
+- BBC News (bbc.com/news) at 400 pixels is 1291 wide where Chrome's
+  fits (2026-11-17): a card grid's implicit `auto` column takes the
+  max-content width of a description paragraph (994 pixels on one line)
+  through nested grids of `1fr` columns whose items have
+  `max-width: calc(100% - 32px)`; Chrome keeps the column at the
+  container's width. A page built from those rules alone lays out as in
+  Chrome, so the case still needs reducing.
 - Text is segmented and measured again for each layout of its block
   (the word cache answers the widths).
 - `l_layout_abspos_for` removes queue entries with `memmove`.
