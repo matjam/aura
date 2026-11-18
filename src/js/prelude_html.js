@@ -957,7 +957,27 @@ defProps(HTMLImageElement.prototype, {
     get currentSrc() { return this.src; },
     get x() { const r = N.rect(this); return r ? r[0] : 0; },
     get y() { const r = N.rect(this); return r ? r[1] : 0; },
-    decode() { return Promise.resolve(); },
+    /* Resolves once the image has loaded, rejects when it fails. An image
+     * without a box is not loaded by the document view (known-gaps.md),
+     * so decode() resolves for it rather than wait for ever. */
+    decode() {
+        return new Promise((resolve, reject) => {
+            const fail = () => reject(domErr('The image could not be decoded', 'EncodingError'));
+            const wait = () => {
+                const off = () => { this.removeEventListener('load', ok); this.removeEventListener('error', bad); };
+                const ok = () => { off(); resolve(); };
+                const bad = () => { off(); fail(); };
+                this.addEventListener('load', ok);
+                this.addEventListener('error', bad);
+            };
+            if (this._iload) { wait(); return; }
+            if (this.naturalWidth > 0) { resolve(); return; }
+            if (!this.hasAttribute('src') && !this.hasAttribute('srcset')) { fail(); return; }
+            if (this.isConnected && N.imgDone(this)) { fail(); return; }
+            if (this.isConnected && N.rect(this)) { wait(); return; }
+            resolve();
+        });
+    },
 });
 /* Setting src from script loads the image here: its header gives
  * naturalWidth and naturalHeight, then load (or error) fires. Images the

@@ -698,6 +698,16 @@ static JSValue n_img_claim(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* imgDone(el): the <img>'s load or error event has fired, or script
+ * loads it (AU_STATE_IMG_EVENT). */
+static JSValue n_img_done(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    return JS_NewBool(ctx, e && (e->state & AU_STATE_IMG_EVENT));
+}
+
 /* elScrollTo(el, x, y) */
 static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1310,6 +1320,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("elScroll", 1, n_el_scroll),
     JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
     JS_CFUNC_DEF("imgNatural", 1, n_img_natural),
+    JS_CFUNC_DEF("imgDone", 1, n_img_done),
     JS_CFUNC_DEF("imgClaim", 1, n_img_claim),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),

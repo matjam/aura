@@ -31,6 +31,23 @@ promise_test('setting the src attribute fires load again', async () => {
     assert.equal(img.naturalWidth, 2);
 });
 
+promise_test('decode() waits for the image and rejects a broken one', async () => {
+    const img = document.createElement('img');
+    img.setAttribute('src', 'data:image/gif;base64,R0lGODlhAwABAIAAAP///wAAACH5BAEAAAAALAAAAAADAAEAAAICRAEAOw==');
+    document.body.appendChild(img);
+    await img.decode();
+    assert.equal(img.naturalWidth, 3, 'the size is known when decode resolves');
+    const bad = document.createElement('img');
+    bad.setAttribute('src', 'res/missing.png');
+    document.body.appendChild(bad);
+    let err = null;
+    try { await bad.decode(); } catch (e) { err = e; }
+    assert.equal(err && err.name, 'EncodingError');
+    let none = null;
+    try { await document.createElement('img').decode(); } catch (e) { none = e; }
+    assert.equal(none && none.name, 'EncodingError', 'no source');
+});
+
 promise_test('an image inserted by script with src set fires load once', async () => {
     const img = document.createElement('img');
     let loads = 0;

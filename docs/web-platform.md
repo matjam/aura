@@ -33,7 +33,6 @@ stubs. They break sites quietly, so they come first.
 
 | Feature | What is wrong | Breaks |
 |---|---|---|
-| `HTMLImageElement.decode()` | resolves at once, before the image loads | React 19 transitions that wait for images; layout measured too early |
 | `attachInternals()` | throws NotSupportedError | form-associated custom elements: the constructor fails and the element never upgrades |
 | `new FontFace(name, buffer)` | rejects | icon fonts built by script |
 | `DOMParser` with an XML type | throws | sites that parse SVG or RSS by script |
@@ -48,7 +47,7 @@ first.
 |---|---|---|---|---|
 | 1 | ~~History bridge~~: done 2026-11-18 ([`browser-chrome.md`](browser-chrome.md), "Entries a page's script makes") | single-page navigation | | yes |
 | 2 | ~~Named access on `window`~~: done 2026-11-18 ([`javascript.md`](javascript.md), "Named access on the window") | older sites and inline scripts use `foo` for `id=foo` | | yes |
-| 3 | `HTMLImageElement.decode()` that waits | above | small | yes |
+| 3 | ~~`HTMLImageElement.decode()` that waits~~: done 2026-11-18; it resolves at once for an image without a box, which Aura does not load ([`known-gaps.md`](known-gaps.md)) | | | yes |
 | 4 | `ElementInternals` (form value, validity, states, ARIA) | above; also `:state()` | medium | yes |
 | 5 | Shims that make a site's normal path work: `scheduler.postTask` and `yield`, `Element.checkVisibility`, `document.startViewTransition` (runs the update, resolves its promises, no animation), `navigator.permissions.query`, `navigator.locks.request`, `requestFullscreen` (rejects), `setPointerCapture` and `releasePointerCapture`, `caretPositionFromPoint`, the `DragEvent`, `ClipboardEvent`, `FormDataEvent` and `TouchEvent` constructors, `Notification` with permission `denied`, `BroadcastChannel` between the documents of one runtime | sites call these without a check, or take a broken fallback | small each | yes |
 | 6 | `navigator.clipboard.writeText` and `readText` | copy buttons (GitHub's clone URL, code blocks) | small: the host scrap | yes |
