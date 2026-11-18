@@ -161,6 +161,36 @@ defProps(HEP, {
 });
 S.clicking = Symbol('clicking');
 
+/* Element methods pages call without checking (docs/web-platform.md,
+ * item 5). checkVisibility: false without a box, and with the options,
+ * for a hidden visibility or an ancestor of opacity 0. Fullscreen is
+ * refused. Pointer capture is recorded but does not yet redirect events
+ * (known-gaps.md). */
+const pointerCaptures = new Map(); /* pointerId -> element */
+defProps(Element.prototype, {
+    checkVisibility(opts) {
+        if (!this.isConnected || !N.rect(this)) return false;
+        opts = opts || {};
+        if (opts.checkVisibilityCSS || opts.visibilityProperty) {
+            if (G.getComputedStyle(this).visibility !== 'visible') return false;
+        }
+        if (opts.checkOpacity || opts.opacityProperty) {
+            for (let e = this; e; e = e.parentElement)
+                if (G.getComputedStyle(e).opacity === '0') return false;
+        }
+        return true;
+    },
+    requestFullscreen() { return Promise.reject(new TypeError('Fullscreen is not supported')); },
+    setPointerCapture(id) {
+        if (!this.isConnected) throw domErr('The element is not in a document', 'InvalidStateError');
+        pointerCaptures.set(Number(id), this);
+    },
+    releasePointerCapture(id) {
+        if (pointerCaptures.get(Number(id)) === this) pointerCaptures.delete(Number(id));
+    },
+    hasPointerCapture(id) { return pointerCaptures.get(Number(id)) === this; },
+});
+
 /* innerText without layout: block-level elements break lines, br is a
  * newline, display:none (hidden attribute, script, style, head) is
  * skipped, and white space collapses outside pre. */
@@ -770,7 +800,8 @@ defProps(HTMLFormElement.prototype, {
      * ReferenceError. Old pages and inline handlers use these. */
     const namedTags = new Set(['embed', 'form', 'img', 'object']);
     const winNamed = (p) => {
-        if (typeof p !== 'string' || p === '' || p === 'then' || isIndex(p) || !doc.documentElement) return undefined;
+        if (typeof p !== 'string' || p === '' || p === 'then' || isIndex(p) || P.namedOff || !doc.documentElement)
+            return undefined;
         const m = [];
         const byId = doc.getElementById(p);
         if (byId) m.push(byId);

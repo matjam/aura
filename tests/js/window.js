@@ -43,6 +43,58 @@ test('named access on window: ids, and names of forms and images', () => {
     assert.equal(window.namedForm, undefined, 'gone with the element');
 });
 
+promise_test('scheduler, permissions, locks, view transitions, Notification, BroadcastChannel', async () => {
+    const order = [];
+    const t = scheduler.postTask(() => { order.push('task'); return 7; });
+    await scheduler.yield();
+    order.push('yielded');
+    assert.equal(await t, 7);
+    assert.equal(order.join(), 'task,yielded');
+    const ac = new AbortController();
+    const aborted = scheduler.postTask(() => 1, { signal: ac.signal, delay: 50 });
+    ac.abort();
+    let reason = null;
+    try { await aborted; } catch (e) { reason = e.name; }
+    assert.equal(reason, 'AbortError');
+
+    assert.equal((await navigator.permissions.query({ name: 'notifications' })).state, 'denied');
+
+    const held = [];
+    const a = navigator.locks.request('L', async (lock) => { held.push('a:' + lock.name); await delay(20); held.push('a done'); });
+    const b = navigator.locks.request('L', (lock) => { held.push('b'); });
+    const c = navigator.locks.request('L', { ifAvailable: true }, (lock) => { held.push('c:' + lock); });
+    await Promise.all([a, b, c]);
+    assert.equal(held.join(), 'a:L,c:null,a done,b', 'exclusive, in order; ifAvailable gets null while held');
+
+    let ran = false;
+    const vt = document.startViewTransition(() => { ran = true; });
+    await vt.updateCallbackDone;
+    await vt.finished;
+    assert.ok(ran, 'the update runs');
+    let skipped = null;
+    try { await vt.ready; } catch (e) { skipped = e.name; }
+    assert.equal(skipped, 'AbortError');
+
+    assert.equal(Notification.permission, 'denied');
+    assert.equal(await Notification.requestPermission(), 'denied');
+
+    const ch1 = new BroadcastChannel('bc'), ch2 = new BroadcastChannel('bc');
+    const got = new Promise((r) => { ch2.onmessage = (e) => r(e.data); });
+    let self = 0;
+    ch1.onmessage = () => self++;
+    ch1.postMessage({ x: 1 });
+    assert.equal((await got).x, 1);
+    assert.equal(self, 0, 'a channel does not hear itself');
+    ch1.close();
+    ch2.close();
+
+    /* these tests run without layout: the cases with a box are in
+     * pages/img_events.html */
+    assert.equal(document.createElement('div').checkVisibility(), false, 'not in the document');
+    assert.equal(new DragEvent('dragstart').dataTransfer, null);
+    assert.ok(new ClipboardEvent('copy') instanceof Event);
+});
+
 test('navigator and screen expose fixed values only', () => {
     assert.ok(navigator.userAgent.includes('Aura'));
     /* the platform the build runs on (core/uaplatform.h), as the user agent names it */

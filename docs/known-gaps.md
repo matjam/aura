@@ -253,6 +253,16 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## JavaScript
 
+The ranked list of missing web platform features is
+[`web-platform.md`](web-platform.md); this section lists what is partly
+done.
+
+- **Pointer capture:** `setPointerCapture` records the element, but
+  pointer events still go to the element under the pointer, so a slider
+  dragged past its edge stops following.
+- **Shims within one document:** `navigator.locks` and
+  `BroadcastChannel` reach only the document that made them, not other
+  tabs or frames.
 - **Range:** `normalize()` moves points in merged text nodes to their
   parent.
 - **Selection:** script's selection is not joined to the selection the

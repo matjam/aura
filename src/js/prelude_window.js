@@ -579,7 +579,14 @@ P.framesChanged = function () {
         frameProps.push(k);
     };
     for (let i = 0; i < names.length; i++) def(String(i), i);
-    for (let i = 0; i < names.length; i++) if (names[i] && !(names[i] in G)) def(names[i], i);
+    /* frame names come before elements' ids and names (the named
+     * properties object in prelude_html.js), so those are not counted */
+    P.namedOff = true;
+    try {
+        for (let i = 0; i < names.length; i++) if (names[i] && !(names[i] in G)) def(names[i], i);
+    } finally {
+        P.namedOff = false;
+    }
 };
 
 /* ---------------- Storage ---------------- */
@@ -693,3 +700,187 @@ defProps(WP, {
     get visualViewport() { return null; },
     get customElements() { return customElementRegistry(); },
 });
+
+/* ---------------- small APIs pages call without checking ----------------
+ * Each does what the standard says a browser without the capability does
+ * (docs/web-platform.md, item 5), so the page takes its normal path. */
+
+/* scheduler.postTask and scheduler.yield: tasks in timer order. */
+class Scheduler { constructor() { throw new TypeError('Illegal constructor'); } }
+defProps(Scheduler.prototype, {
+    postTask(cb, opts) {
+        if (typeof cb !== 'function') throw new TypeError('postTask: callback is not a function');
+        const signal = opts && opts.signal, delay = Math.max(0, Number(opts && opts.delay) || 0);
+        return new Promise((resolve, reject) => {
+            if (signal && signal.aborted) { reject(signal.reason); return; }
+            const id = G.setTimeout(() => {
+                if (signal) signal.removeEventListener('abort', onAbort);
+                try { resolve(cb()); } catch (e) { reject(e); }
+            }, delay);
+            const onAbort = () => { G.clearTimeout(id); reject(signal.reason); };
+            if (signal) signal.addEventListener('abort', onAbort);
+        });
+    },
+    yield() { return new Promise((resolve) => G.setTimeout(resolve, 0)); },
+});
+tag(Scheduler);
+defGlobal('Scheduler', Scheduler);
+const theScheduler = Object.create(Scheduler.prototype);
+defProps(WP, { get scheduler() { return theScheduler; } });
+
+/* navigator.permissions: every permission Aura could be asked for is one
+ * it does not grant. */
+class PermissionStatus extends EventTarget {
+    constructor(key, name) {
+        if (key !== S.owner) throw new TypeError('Illegal constructor');
+        super();
+        this._name = name;
+    }
+    get name() { return this._name; }
+    get state() { return 'denied'; }
+}
+defineHandlers(PermissionStatus.prototype, ['change']);
+tag(PermissionStatus);
+defGlobal('PermissionStatus', PermissionStatus);
+class Permissions { constructor() { throw new TypeError('Illegal constructor'); } }
+defProps(Permissions.prototype, {
+    query(desc) {
+        if (!desc || typeof desc !== 'object' || desc.name === undefined)
+            return Promise.reject(new TypeError('permissions.query: a descriptor with a name is required'));
+        return Promise.resolve(new PermissionStatus(S.owner, str(desc.name)));
+    },
+});
+tag(Permissions);
+defGlobal('Permissions', Permissions);
+const thePermissions = Object.create(Permissions.prototype);
+
+/* navigator.locks: the Web Locks API within this document. A shared
+ * request waits like an exclusive one, which only orders more strictly. */
+class Lock {
+    constructor(key, name, mode) {
+        if (key !== S.owner) throw new TypeError('Illegal constructor');
+        this._name = name;
+        this._mode = mode;
+    }
+    get name() { return this._name; }
+    get mode() { return this._mode; }
+}
+tag(Lock);
+defGlobal('Lock', Lock);
+const lockTails = new Map(); /* name -> the promise the last request settles */
+const lockHeld = new Map();  /* name -> requests holding or waiting */
+class LockManager { constructor() { throw new TypeError('Illegal constructor'); } }
+defProps(LockManager.prototype, {
+    request(name, opts, cb) {
+        if (typeof opts === 'function') { cb = opts; opts = {}; }
+        opts = opts || {};
+        if (typeof cb !== 'function') return Promise.reject(new TypeError('locks.request: callback is not a function'));
+        name = str(name);
+        if (name.startsWith('-')) return Promise.reject(domErr('Lock names may not start with -', 'NotSupportedError'));
+        const mode = opts.mode === 'shared' ? 'shared' : 'exclusive';
+        if (opts.signal && opts.signal.aborted) return Promise.reject(opts.signal.reason);
+        const busy = (lockHeld.get(name) || 0) > 0;
+        if (opts.ifAvailable && busy && !opts.steal) return Promise.resolve().then(() => cb(null));
+        const prev = opts.steal ? Promise.resolve() : (lockTails.get(name) || Promise.resolve());
+        lockHeld.set(name, (lockHeld.get(name) || 0) + 1);
+        const run = prev.then(() => cb(new Lock(S.owner, name, mode)));
+        const tail = run.then(() => {}, () => {}).then(() => {
+            const n = lockHeld.get(name) - 1;
+            if (n > 0) lockHeld.set(name, n); else lockHeld.delete(name);
+            if (lockTails.get(name) === tail) lockTails.delete(name);
+        });
+        lockTails.set(name, tail);
+        return run;
+    },
+    query() {
+        const held = [...lockHeld.keys()].map((name) => ({ name, mode: 'exclusive', clientId: '' }));
+        return Promise.resolve({ held, pending: [] });
+    },
+});
+tag(LockManager);
+defGlobal('LockManager', LockManager);
+const theLockManager = Object.create(LockManager.prototype);
+defProps(Navigator.prototype, {
+    get permissions() { return thePermissions; },
+    get locks() { return theLockManager; },
+});
+
+/* document.startViewTransition: the update runs and the transition is
+ * skipped (no animation), as when a browser cannot capture the page. */
+class ViewTransition {
+    constructor(key, update) {
+        if (key !== S.owner) throw new TypeError('Illegal constructor');
+        const done = Promise.resolve().then(() => (update ? update() : undefined));
+        this._updateDone = done.then(() => undefined);
+        this._finished = done.then(() => undefined, () => undefined);
+        this._ready = done.then(() => { throw domErr('View transitions are skipped', 'AbortError'); });
+        this._ready.catch(() => {});
+    }
+    get updateCallbackDone() { return this._updateDone; }
+    get ready() { return this._ready; }
+    get finished() { return this._finished; }
+    get types() { return new Set(); }
+    skipTransition() {}
+}
+tag(ViewTransition);
+defGlobal('ViewTransition', ViewTransition);
+defProps(Document.prototype, {
+    startViewTransition(arg) {
+        const update = typeof arg === 'function' ? arg : arg && typeof arg.update === 'function' ? arg.update : null;
+        return new ViewTransition(S.owner, update);
+    },
+});
+
+/* Notification: permission is denied, so a notification made anyway
+ * fires error. */
+class Notification extends EventTarget {
+    constructor(title, opts) {
+        super();
+        if (!arguments.length) throw new TypeError('Notification: 1 argument required');
+        this._title = str(title);
+        this._body = opts && opts.body !== undefined ? str(opts.body) : '';
+        N.queueTask(() => fire(this, new Event('error')));
+    }
+    static get permission() { return 'denied'; }
+    static requestPermission(cb) {
+        if (typeof cb === 'function') N.queueTask(() => cb('denied'));
+        return Promise.resolve('denied');
+    }
+    static get maxActions() { return 0; }
+    get title() { return this._title; }
+    get body() { return this._body; }
+    close() {}
+}
+defineHandlers(Notification.prototype, ['show', 'click', 'close', 'error']);
+tag(Notification);
+defGlobal('Notification', Notification);
+
+/* BroadcastChannel between the channels of this document. */
+const bcChannels = new Map(); /* name -> Set of open channels */
+class BroadcastChannel extends EventTarget {
+    constructor(name) {
+        super();
+        if (!arguments.length) throw new TypeError('BroadcastChannel: 1 argument required');
+        this._name = str(name);
+        this._closed = false;
+        if (!bcChannels.has(this._name)) bcChannels.set(this._name, new Set());
+        bcChannels.get(this._name).add(this);
+    }
+    get name() { return this._name; }
+    postMessage(data) {
+        if (this._closed) throw domErr('The channel is closed', 'InvalidStateError');
+        const peers = [...(bcChannels.get(this._name) || [])].filter((c) => c !== this);
+        for (const c of peers) {
+            const copy = structuredClone(data);
+            N.queueTask(() => { if (!c._closed) fire(c, new MessageEvent('message', { data: copy, origin: N.docUrl(2) })); });
+        }
+    }
+    close() {
+        this._closed = true;
+        const set = bcChannels.get(this._name);
+        if (set) { set.delete(this); if (!set.size) bcChannels.delete(this._name); }
+    }
+}
+defineHandlers(BroadcastChannel.prototype, ['message', 'messageerror']);
+tag(BroadcastChannel);
+defGlobal('BroadcastChannel', BroadcastChannel);

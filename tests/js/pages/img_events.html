@@ -48,6 +48,23 @@ promise_test('decode() waits for the image and rejects a broken one', async () =
     assert.equal(none && none.name, 'EncodingError', 'no source');
 });
 
+test('checkVisibility follows the box, visibility and opacity', () => {
+    const d = document.createElement('div');
+    d.textContent = 'x';
+    document.body.appendChild(d);
+    assert.equal(d.checkVisibility(), true);
+    d.style.visibility = 'hidden';
+    assert.equal(d.checkVisibility(), true, 'visibility counts only when asked');
+    assert.equal(d.checkVisibility({ checkVisibilityCSS: true }), false);
+    d.style.visibility = '';
+    document.body.style.opacity = '0';
+    assert.equal(d.checkVisibility({ checkOpacity: true }), false, 'an ancestor of opacity 0');
+    document.body.style.opacity = '';
+    d.style.display = 'none';
+    assert.equal(d.checkVisibility(), false, 'no box');
+    d.remove();
+});
+
 promise_test('an image inserted by script with src set fires load once', async () => {
     const img = document.createElement('img');
     let loads = 0;
