@@ -102,6 +102,10 @@ parks"):
   - It paints and scrolls from the last layout: style and layout
     updates wait. Boxes hold their nodes, styles and text, so a
     document the script has half changed is safe to paint.
+  - At most once a second (`PARK_LAYOUT_MS`) the yield hook lays the
+    document out before it parks, so the window shows what a long task
+    has built so far and can scroll into it (`h_yield` in `script.c`).
+    The script could have forced the same layout at that point.
   - A restyle that no layout followed is not: `getComputedStyle`
     restyles, and the restyle rebuilds subtrees of boxes
     (`au_layout_styles_changed`), so the stacking lists name dropped

@@ -69,6 +69,7 @@ struct AuDocScript {
     int depth;
     uint32_t perf_t0;    /* when the outermost entry began */
     uint32_t perf_frozen0; /* the view's frozen_ms then: time parked is not script time */
+    double park_layout_at; /* when h_yield last laid the document out */
     char perf_label[72]; /* the script it ran, for the slow task list */
     char *nav_url;
     bool nav_new_tab;
@@ -129,6 +130,8 @@ size_t au_docview_script_stack(void)
     return s.stack_limit + s.stack_limit / 2;
 }
 
+#define PARK_LAYOUT_MS 1000 /* how often a parked script's document is laid out */
+
 static int h_yield(void *ctx)
 {
     AuDocScript *s = ctx;
@@ -137,9 +140,14 @@ static int h_yield(void *ctx)
         return 0;
     /* A getComputedStyle may have left boxes restyled and not laid out,
      * which the parked view cannot paint. Lay them out now: the script
-     * could have asked for the same layout here (offsetHeight). */
-    if (!au_layout_settled(au_docview_layout(s->dv)))
+     * could have asked for the same layout here (offsetHeight). Once a
+     * second the parked view also shows what the script has built so
+     * far, as a long task that builds a feed would on its own paints. */
+    double t = au_dv_now(s->dv);
+    if (!au_layout_settled(au_docview_layout(s->dv)) || t - s->park_layout_at >= PARK_LAYOUT_MS) {
+        s->park_layout_at = t;
         au_docview_update(s->dv);
+    }
     return cb->script_yield(cb->ctx, s->dv);
 }
 

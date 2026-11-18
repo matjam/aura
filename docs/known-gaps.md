@@ -694,9 +694,9 @@ fuzzed".
   (`ucontext`, or a fiber library) would let them park too.
 - While a page is parked, a click or a typed key reaches the page only
   when the slice ends (16 are kept; past that the slice runs to its end
-  first), dragging does not select, and the page shows its last layout
-  (text the script has changed appears when the slice ends, or when it
-  next parks after a style change).
+  first), dragging does not select, and the page shows the layout of
+  up to a second before (it is laid out at most once a second while
+  parked).
 - Loading a Wikipedia article in the guest took 30 to 70 seconds
   ([`browser-chrome.md`](browser-chrome.md)).
 - A window zoom in the guest costs two passes of about 280 ms each on a

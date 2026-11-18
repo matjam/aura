@@ -67,6 +67,10 @@ static const struct {
      "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(100000) "document.title='ran to the end';},10);"
      "</script>"},
     {"other.html", "<!DOCTYPE html><title>Other</title><body>o"},
+    {"grow.html",
+     "<!DOCTYPE html><body style='margin:0'><p>short</p><script>"
+     "setTimeout(function(){var d=document.createElement('div');d.style.height='5000px';"
+     "document.body.appendChild(d);" BUSY(4000) "document.title='grown';},10);</script>"},
     /* positioned boxes are in the root's stacking lists; a new display
      * rebuilds their subtrees when getComputedStyle restyles */
     {"restyle.html",
@@ -289,6 +293,29 @@ static void test_restyle_then_park(void)
     au_browser_free(b);
 }
 
+/* Once a second the parked script's document is laid out, so the window
+ * shows what the script built so far and can scroll into it. */
+static void test_shows_progress(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/grow.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    until_parked(w);
+    for (int i = 0; i < 15 && au_page_script_parked(t->page); i++) {
+        au_bw_idle(w); /* each resume runs 100 ms of the script */
+        paint(w);
+    }
+    CHECK(au_page_script_parked(t->page));
+    AuEvent e = key(AU_KEY_END);
+    CHECK(au_bw_key(w, &e));
+    CHECK(t->scroll_y > 1000);
+    paint(w);
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "grown");
+    au_browser_free(b);
+}
+
 static void test_click_waits(void)
 {
     AuBrowser *b = make_browser();
@@ -415,6 +442,7 @@ int main(void)
     main_thread = pthread_self();
     test_scroll();
     test_restyle_then_park();
+    test_shows_progress();
     test_click_waits();
     test_queue_dropped_on_stop();
     test_stop_and_leave();
