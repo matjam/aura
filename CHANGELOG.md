@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/matjam/aura/compare/v0.7.0...v0.8.0) (2026-11-18)
+
+
+### Features
+
+* **browser:** an image memory preference, Automatic from the memory free ([01f17a7](https://github.com/matjam/aura/commit/01f17a7349a37a2f50f0f91f4b53ee09329391c9))
+* **browser:** keep holding the first paint while head sheets still arrive ([18805ee](https://github.com/matjam/aura/commit/18805eee47db91af505b1cf389adb67d124248c4))
+* **browser:** long style passes park so the window scrolls ([a4c4424](https://github.com/matjam/aura/commit/a4c4424b57c57935beb228c6ec875c25b3f5adeb))
+* **browser:** the user does not scroll a page whose root hides overflow ([10d9155](https://github.com/matjam/aura/commit/10d9155424c67f148d7e3ffe41f01c4126a92712))
+* **gtk,cocoa:** park long scripts on the main thread with ucontext ([7a15d06](https://github.com/matjam/aura/commit/7a15d0657bdd4d3cb7b42cc4d595761a152affe3))
+
+
+### Performance Improvements
+
+* **browser:** refresh a parked page's view every 250 ms ([855242b](https://github.com/matjam/aura/commit/855242ba86f3a0ef0148f426ee3c801b1bc94247))
+* **css:** restyle only what added sheets and changed values reach ([b807370](https://github.com/matjam/aura/commit/b807370422c2ee6b3ff896818f05d35b443434f8))
+* **js:** size small shared shapes to what they hold ([23cd10f](https://github.com/matjam/aura/commit/23cd10f086c4a287fb87dc848110ab98811ee80c))
+* **paint:** fixed-point transformed layers, smaller image decodes, faster CRC ([b6329f5](https://github.com/matjam/aura/commit/b6329f5f2a5dc7d69ad5b6fc65009fc61a162c96))
+
 ## [0.7.0](https://github.com/matjam/aura/compare/v0.6.0...v0.7.0) (2026-11-18)
 
 
