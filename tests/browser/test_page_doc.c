@@ -117,7 +117,7 @@ static AuTime t_now(void *ctx) { (void)ctx; return 0; }
 
 static AuBrowser *make_browser(void)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read};
     return au_browser_new(fonts, &h);
 }
 
@@ -475,7 +475,7 @@ static void test_network(void)
     /* A registered fetcher. */
     FakeNet net;
     memset(&net, 0, sizeof net);
-    AuPageFetcher f = {&net, net_start, net_cancel, net_poll, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuPageFetcher f = {&net, net_start, net_cancel, net_poll, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     au_browser_set_fetcher(b, "http", &f);
     au_bw_navigate(w, "http://example.net/start");
     CHECK(t->loading && net.id == 1 && net.polls == 0);

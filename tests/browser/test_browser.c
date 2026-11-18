@@ -175,7 +175,8 @@ static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 
 static AuBrowser *make_browser(AuFontSet *fonts)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read, .invalidate = t_inval,
+                       .changed = t_changed, .close_window = t_close};
     return au_browser_new(fonts, &h);
 }
 
@@ -326,7 +327,8 @@ static bool t_external(void *ctx, const char *url)
 /* Addresses Aura does not open go to the host's helper applications. */
 static void test_external(AuFontSet *fonts)
 {
-    AuBrowserHost h = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, t_external, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    AuBrowserHost h = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read, .invalidate = t_inval,
+                       .changed = t_changed, .close_window = t_close, .open_external = t_external};
     AuBrowser *b = au_browser_new(fonts, &h);
     CHECK(au_browser_opens_url(b, "http://a/") && au_browser_opens_url(b, "HTTPS://a/") &&
           au_browser_opens_url(b, "file:///x") && au_browser_opens_url(b, "about:home") &&

@@ -237,7 +237,8 @@ static void compare(AuBrowserWindow *w, AuSurface *s, const char *what)
 /* expect_shift: 1 the page must move pixels, 0 it must not, -1 either. */
 static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect_shift)
 {
-    AuBrowserHost host = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, t_scroll, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read, .invalidate = t_inval,
+                          .changed = t_changed, .close_window = t_close, .scroll_area = t_scroll};
     AuBrowser *b = au_browser_new(fonts, &host);
     au_present_init(&pres);
     AuBrowserWindow *bw = au_browser_window_new(b, w, h);
@@ -333,7 +334,8 @@ static void run_page(AuFontSet *fonts, const char *url, int w, int h, int expect
  * strip shows, and that must not change what the strip gets. */
 static void strips_match(AuFontSet *fonts, const char *url, int w, int h)
 {
-    AuBrowserHost host = {NULL, t_ms, t_now, t_read, t_inval, t_changed, t_close, NULL, NULL, NULL, NULL, NULL, NULL, t_scroll, NULL, NULL, NULL, NULL};
+    AuBrowserHost host = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read, .invalidate = t_inval,
+                          .changed = t_changed, .close_window = t_close, .scroll_area = t_scroll};
     AuBrowser *b = au_browser_new(fonts, &host);
     au_present_init(&pres);
     AuBrowserWindow *bw = au_browser_window_new(b, w, h);
