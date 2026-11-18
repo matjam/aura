@@ -2266,6 +2266,16 @@ bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int 
     return true;
 }
 
+const char *au_layout_image_request(AuLayout *L, const AuElement *el)
+{
+    (void)L;
+    const LBox *b = el ? (const LBox *)el->box : NULL;
+    if (!b || b->kind != LK_BLOCK || b->replaced != LR_IMAGE)
+        return NULL;
+    const LReplaced *r = ((const LBlock *)b)->rep;
+    return r && !r->marker ? r->src : NULL;
+}
+
 bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6])
 {
     (void)L;

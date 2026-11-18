@@ -686,6 +686,18 @@ static JSValue n_img_natural(JSContext *ctx, JSValueConst this_val, int argc, JS
     return arr;
 }
 
+/* imgClaim(el): script loads this <img>'s source and fires its events, so
+ * the document view does not (AU_STATE_IMG_EVENT). */
+static JSValue n_img_claim(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    if (e)
+        e->state |= AU_STATE_IMG_EVENT;
+    return JS_UNDEFINED;
+}
+
 /* elScrollTo(el, x, y) */
 static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1295,6 +1307,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("elScroll", 1, n_el_scroll),
     JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
     JS_CFUNC_DEF("imgNatural", 1, n_img_natural),
+    JS_CFUNC_DEF("imgClaim", 1, n_img_claim),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),
     JS_CFUNC_DEF("imageSize", 1, n_image_size),

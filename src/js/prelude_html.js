@@ -928,7 +928,9 @@ defProps(HTMLImageElement.prototype, {
 });
 /* Setting src from script loads the image here: its header gives
  * naturalWidth and naturalHeight, then load (or error) fires. Images the
- * parser made load through the document view and fire no events yet. */
+ * parser made, or whose src or srcset attribute script set, load through
+ * the document view, which fires their events once layout has found the
+ * image loaded or failed (fire_image_events in docview.c). */
 const imgBytes = { total: 0, registry: new FinalizationRegistry((n) => { imgBytes.total -= n; }) };
 {
     const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
@@ -936,6 +938,7 @@ const imgBytes = { total: 0, registry: new FinalizationRegistry((n) => { imgByte
         get: d.get,
         set(v) {
             d.set.call(this, v);
+            N.imgClaim(this);
             const img = this, url = this.src;
             if (img._iabort) img._iabort();
             img._isz = null;

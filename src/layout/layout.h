@@ -312,6 +312,9 @@ bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6]);
 /* The natural size of the image an <img> box shows, once it has loaded
  * (naturalWidth, naturalHeight). False without a box or before then. */
 bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int *h);
+/* The absolute URL an <img> box asked the image loader for, or NULL (no
+ * image box, or no source). */
+const char *au_layout_image_request(AuLayout *L, const AuElement *el);
 /* Scrolls el's box to (x, y), clamped. True when the offset changed (the
  * caller repaints). */
 bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y);

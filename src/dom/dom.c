@@ -383,6 +383,8 @@ static void attr_changed(AuElement *el, AuAtom name, const char *v, size_t len)
 {
     if (name == AU_ATOM_inert && el->node.doc)
         el->node.doc->has_inert = true;
+    if (name == AU_ATOM_src || name == AU_ATOM_srcset)
+        el->state &= ~(uint32_t)AU_STATE_IMG_EVENT;
     if (name == AU_ATOM_id) {
         AuAtom old = el->id;
         el->id = au_atom(v, len);

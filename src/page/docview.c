@@ -786,6 +786,54 @@ again:
     }
 }
 
+/* Fires the load and error events of <img> elements whose image layout
+ * has found loaded or failed (AU_STATE_IMG_EVENT marks those done). The
+ * elements are collected first, as script may change the tree; a full
+ * batch leaves the flag set for the next turn. */
+#define IMG_EVENT_BATCH 64
+static void fire_image_events(AuDocView *dv)
+{
+    if (!dv->img_events)
+        return;
+    dv->img_events = false;
+    if (!dv->doc || !dv->script || !au_docscript_running(dv->script))
+        return;
+    au_docview_update(dv);
+    AuLayout *L = au_docview_layout(dv);
+    AuImageCache *cache = au_docimages_cache(dv->imgs);
+    if (!L)
+        return;
+    AuElement *els[IMG_EVENT_BATCH];
+    bool failed[IMG_EVENT_BATCH];
+    uint32_t n = 0;
+    AuNode *root = &dv->doc->node;
+    for (AuNode *nd = au_node_next_including_shadow(root, root); nd; nd = au_node_next_including_shadow(nd, root)) {
+        if (!au_is_html_element(nd, AU_ATOM_img))
+            continue;
+        AuElement *el = (AuElement *)nd;
+        if (el->state & AU_STATE_IMG_EVENT)
+            continue;
+        const char *src = au_layout_image_request(L, el);
+        AuImageEntry *e = src ? au_image_cache_find(cache, src) : NULL;
+        AuImageState st = e ? au_image_entry_state(e) : AU_IMAGE_PENDING;
+        if (st == AU_IMAGE_PENDING)
+            continue;
+        if (n == IMG_EVENT_BATCH) {
+            dv->img_events = true;
+            break;
+        }
+        el->state |= AU_STATE_IMG_EVENT;
+        au_node_ref(nd);
+        failed[n] = st == AU_IMAGE_FAILED;
+        els[n++] = el;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (dv->script)
+            au_docscript_fire(dv->script, els[i], failed[i] ? "error" : "load", false, false);
+        au_node_unref(&els[i]->node);
+    }
+}
+
 static void request_sheet(AuDocView *dv, SheetSrc *s)
 {
     Request *r = add_request_cors(dv, s->url, AU_RES_STYLESHEET, s->cors);
@@ -1094,6 +1142,7 @@ DV_ENTRY_VOID(resource_done, (AuDocView * dv, uint32_t id, bool ok), (dv, id, ok
     } else if (req.kind == AU_RES_IMAGE && req.image) {
         au_image_entry_done(au_docimages_cache(dv->imgs), req.image, ok);
         images_changed(dv);
+        dv->img_events = true;
     } else if (req.font && dv->webfonts) {
         au_webfonts_done(dv->webfonts, req.id, req.data.data, req.data.len, ok, fetch_font, dv);
     }
@@ -1320,6 +1369,8 @@ static bool layout_image(void *ctx, const char *url, int *w, int *h, const AuSur
             return false;
         }
     }
+    if (res != AU_DOCIMG_PENDING)
+        dv->img_events = true;
     if (res == AU_DOCIMG_FAILED)
         return false;
     if (res == AU_DOCIMG_PENDING) {
@@ -2455,6 +2506,8 @@ DV_ENTRY(bool, run_scripts, (AuDocView * dv, uint32_t budget_ms), (dv, budget_ms
         fire_link_events(dv);
         ran = true;
     }
+    if (dv->img_events)
+        fire_image_events(dv);
     if (dv->script && au_docscript_run(dv->script, budget_ms))
         ran = true;
     if (!dv->parent)
@@ -2466,7 +2519,7 @@ uint32_t au_docview_scripts_due(AuDocView *dv)
 {
     uint32_t due = dv->script ? au_docscript_due(dv->script) : UINT32_MAX;
     uint32_t fd = dv->nframes ? au_frames_scripts_due(dv) : UINT32_MAX;
-    if (au_dv_top(dv)->frames_work || dv->link_events)
+    if (au_dv_top(dv)->frames_work || dv->link_events || (dv->img_events && dv->script && au_docscript_running(dv->script)))
         return 0;
     return fd < due ? fd : due;
 }

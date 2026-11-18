@@ -136,6 +136,15 @@ script-blocking style sheets. MDN's module scrolled its sidebar by the
 sidebar's height before its styles applied, and the sidebar stayed at
 the top.
 
+**Image events.** An `<img>` that loads through the document view (made
+by the parser, or with its `src` or `srcset` attribute set by script)
+fires `load` or `error` once layout finds its image loaded or failed:
+`au_docview_run_scripts` walks the document after an image arrives or a
+layout looks one up (`fire_image_events`), and `AU_STATE_IMG_EVENT`
+marks an element done until its `src` or `srcset` changes. Setting the
+`src` property loads the image from script instead (`N.imgClaim`), which
+fires the events itself. Like browsers, `load` does not reach `window`.
+
 **Geometry.** `getBoundingClientRect`, `getClientRects` and
 IntersectionObserver use where an element is drawn (`N.rect(el, true)`,
 `au_layout_element_visual_rect`): moved by the scroll offsets of the

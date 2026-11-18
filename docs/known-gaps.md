@@ -394,10 +394,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   "Script").
 - POST into a frame works only with a loader that implements
   `request_ex`.
-- An `<img>` the parser made fires no `load` or `error` event, and its
-  `naturalWidth` comes from its layout box (`N.imgNatural`), so it reads
-  0 while the image has no box (`display: none`). Before 2026-11-17 it
-  read 0 always.
+- An `<img>` the parser made (or whose `src` attribute script set) loads
+  only once layout gives it a box, so an image under `display: none`
+  never loads, fires no `load` or `error` event, and reads
+  `naturalWidth` 0. Its events can also fire after the window's `load`
+  event, and `complete` is true while it loads.
 - No CSP directive other than `frame-ancestors` is enforced anywhere
   (`script-src`, `frame-src`, `sandbox`, `default-src` and the rest are
   ignored), and neither is the `Permissions-Policy` header or the

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Image load and error events</title>
+<script src="../harness.js"></script>
+</head>
+<body>
+<script>
+/* Listeners on the document in the capture phase see the parser's images,
+ * the way lazy loaders and React's onLoad do (load does not reach window). */
+window.imgEvents = [];
+document.addEventListener('load', (e) => { if (e.target.tagName === 'IMG') imgEvents.push(e.target.id + ':load'); }, true);
+document.addEventListener('error', (e) => { if (e.target.tagName === 'IMG') imgEvents.push(e.target.id + ':error'); }, true);
+</script>
+<img id="good" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">
+<img id="bad" src="res/missing.png" alt="missing">
+<img id="attr" onload="window.attrLoaded = this.naturalWidth" src="data:image/gif;base64,R0lGODlhAgABAIAAAP///wAAACH5BAEAAAAALAAAAAACAAEAAAICRAEAOw==">
+<script>
+promise_test('images the parser made fire load or error once', async () => {
+    while (imgEvents.length < 3) await delay(10);
+    await delay(50);
+    assert.deepEqual(imgEvents.slice().sort(), ['attr:load', 'bad:error', 'good:load']);
+    assert.equal(window.attrLoaded, 2, 'the onload attribute runs, with the size known');
+});
+
+promise_test('setting the src attribute fires load again', async () => {
+    const img = document.getElementById('good');
+    const p = once(img, 'load');
+    img.setAttribute('src', 'data:image/gif;base64,R0lGODlhAgABAIAAAP///wAAACH5BAEAAAAALAAAAAACAAEAAAICRAEAOw==');
+    await p;
+    assert.equal(img.naturalWidth, 2);
+});
+
+promise_test('an image inserted by script with src set fires load once', async () => {
+    const img = document.createElement('img');
+    let loads = 0;
+    img.addEventListener('load', () => loads++);
+    const p = once(img, 'load');
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+    document.body.appendChild(img);
+    await p;
+    await delay(50);
+    assert.equal(loads, 1);
+});
+</script>
+</body>
+</html>

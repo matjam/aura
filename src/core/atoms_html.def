@@ -170,3 +170,6 @@ ATOM(disabled, "disabled")
 ATOM(inert, "inert")
 ATOM(open, "open")
 ATOM(popover, "popover")
+/* Image load events (dom.c, docview.c). */
+ATOM(src, "src")
+ATOM(srcset, "srcset")
