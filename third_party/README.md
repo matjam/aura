@@ -62,7 +62,10 @@ records where the code came from and how to update it.
   keeps no source text (`Function.prototype.toString` then gives the
   native function form with the function's kind, or `class C { }`),
   and `0014` correctly typed realloc wrappers for `unicode_normalize`
-  (the casts it replaces were undefined behaviour that UBSan reports).
+  (the casts it replaces were undefined behaviour that UBSan reports),
+  and `0015` a global reference that reaches a proxy in the global
+  object's prototype chain asks its `has` trap first, so a name it does
+  not have throws ReferenceError (the window's named properties object).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

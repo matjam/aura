@@ -1,0 +1,39 @@
+Check HasProperty before Get when a global reference reaches a proxy.
+
+A global identifier is resolved with HasBinding on the global object's
+environment record, which calls HasProperty, and only then Get.
+JS_GetPropertyInternal called a proxy's get trap at once when the
+proxy sat in the global object's prototype chain, so an unknown name
+evaluated to undefined instead of throwing ReferenceError. Aura puts
+the window's named properties object (window.foo for an element with
+id foo) there as a proxy, as the HTML Standard places it. With
+throw_ref_error set the has trap now runs first, and a false answer
+throws ReferenceError. Property reads (throw_ref_error unset) are
+unchanged.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -9350,10 +9350,22 @@
+                 if (em) {
+                     if (em->get_property) {
+                         JSValue obj1, retval;
+-                        /* XXX: should pass throw_ref_error */
+                         /* Note: if 'p' is a prototype, it can be
+                            freed in the called function */
+                         obj1 = js_dup(JS_MKPTR(JS_TAG_OBJECT, p));
++                        if (unlikely(throw_ref_error) && em->has_property) {
++                            /* A global reference: HasBinding first
++                               (HasProperty), so a proxy in the global
++                               object's prototype chain that does not
++                               have the name leaves it unresolvable. */
++                            int has = em->has_property(ctx, obj1, prop);
++                            if (has <= 0) {
++                                JS_FreeValue(ctx, obj1);
++                                if (has < 0)
++                                    return JS_EXCEPTION;
++                                return JS_ThrowReferenceErrorNotDefined(ctx, prop);
++                            }
++                        }
+                         retval = em->get_property(ctx, obj1, prop, this_obj);
+                         JS_FreeValue(ctx, obj1);
+                         return retval;

@@ -761,6 +761,39 @@ defProps(HTMLFormElement.prototype, {
             return Reflect.get(t, p, r);
         },
     }));
+    /* The window's named properties (window.foo and a bare foo): an
+     * element with that id, or an embed, form, img or object with that
+     * name. A proxy between Window.prototype and EventTarget.prototype,
+     * as the HTML Standard's named properties object: globals the page
+     * defines and the window's own members are found first, and has()
+     * answers true only for a match, so an unknown global still throws
+     * ReferenceError. Old pages and inline handlers use these. */
+    const namedTags = new Set(['embed', 'form', 'img', 'object']);
+    const winNamed = (p) => {
+        if (typeof p !== 'string' || p === '' || p === 'then' || isIndex(p) || !doc.documentElement) return undefined;
+        const m = [];
+        const byId = doc.getElementById(p);
+        if (byId) m.push(byId);
+        for (const e of doc.getElementsByName(p))
+            if (e !== byId && e.namespaceURI === HTML_NS && namedTags.has(e.localName)) m.push(e);
+        if (m.length > 1) {
+            const all = new Set(m);
+            const ordered = doc.querySelectorAllArray('*').filter((e) => all.has(e));
+            return makeList(HTMLCollection, null, -1, null, ordered);
+        }
+        return m[0];
+    };
+    const wbase = Object.create(Object.getPrototypeOf(Window.prototype));
+    Object.setPrototypeOf(Window.prototype, new Proxy(wbase, {
+        has(t, p) { return p in t || winNamed(p) !== undefined; },
+        get(t, p, r) {
+            if (!(p in t)) {
+                const v = winNamed(p);
+                if (v !== undefined) return v;
+            }
+            return Reflect.get(t, p, r);
+        },
+    }));
 }
 const isSubmitButton = (e) => (e.localName === 'button' && (e.getAttribute('type') || 'submit').toLowerCase() === 'submit') ||
     (e.localName === 'input' && (inputType(e) === 'submit' || inputType(e) === 'image'));

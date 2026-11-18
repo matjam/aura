@@ -47,7 +47,7 @@ first.
 | # | Feature | Why | Cost | v1 |
 |---|---|---|---|---|
 | 1 | ~~History bridge~~: done 2026-11-18 ([`browser-chrome.md`](browser-chrome.md), "Entries a page's script makes") | single-page navigation | | yes |
-| 2 | Named access on `window` (`window.foo` and a bare `foo` for an element with `id=foo` or a named `form`, `img`, `embed` or `object`) | older sites and many inline scripts use the global; today they throw ReferenceError | small: a named properties object in the global's prototype chain, as `form.controlName` already does | yes |
+| 2 | ~~Named access on `window`~~: done 2026-11-18 ([`javascript.md`](javascript.md), "Named access on the window") | older sites and inline scripts use `foo` for `id=foo` | | yes |
 | 3 | `HTMLImageElement.decode()` that waits | above | small | yes |
 | 4 | `ElementInternals` (form value, validity, states, ARIA) | above; also `:state()` | medium | yes |
 | 5 | Shims that make a site's normal path work: `scheduler.postTask` and `yield`, `Element.checkVisibility`, `document.startViewTransition` (runs the update, resolves its promises, no animation), `navigator.permissions.query`, `navigator.locks.request`, `requestFullscreen` (rejects), `setPointerCapture` and `releasePointerCapture`, `caretPositionFromPoint`, the `DragEvent`, `ClipboardEvent`, `FormDataEvent` and `TouchEvent` constructors, `Notification` with permission `denied`, `BroadcastChannel` between the documents of one runtime | sites call these without a check, or take a broken fallback | small each | yes |

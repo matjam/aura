@@ -83,6 +83,7 @@ Patches this document refers to:
 | 0011 | the parser records what its bracket look-ahead found instead of repeating it for nested brackets (`0011-parse-lookahead-memo`); the bytecode is unchanged |
 | 0012 | the parser finds a scoped variable through the variable hash table instead of walking the scope chain (`0012-scope-lookup-hash`); the bytecode is unchanged |
 | 0013 | less memory while compiling a large script, and `JS_EVAL_FLAG_NO_SOURCE`, which keeps no source text (`0013-compiler-memory`; "How script memory is kept down" below) |
+| 0015 | a global reference that reaches a proxy in the global object's prototype chain runs its `has` trap before `get`, as HasBinding does, so an unknown name still throws ReferenceError (`0015-global-reference-through-proxy`); the window's named properties object needs it |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -144,6 +145,15 @@ layout looks one up (`fire_image_events`), and `AU_STATE_IMG_EVENT`
 marks an element done until its `src` or `srcset` changes. Setting the
 `src` property loads the image from script instead (`N.imgClaim`), which
 fires the events itself. Like browsers, `load` does not reach `window`.
+
+**Named access on the window.** `window.foo`, and a bare `foo` in
+script, find the element with `id=foo`, or an `embed`, `form`, `img` or
+`object` named `foo` (a collection when there are several). A proxy
+between `Window.prototype` and `EventTarget.prototype` does the lookup
+(`winNamed` in `prelude_html.js`), so the page's own globals and the
+window's members win. Its `has` trap answers for global references
+through QuickJS patch 0015, so an unknown name still throws
+ReferenceError.
 
 **Preload links.** While the document's script runs, a `<link
 rel=preload>` with an `as` of `style`, `script`, `font`, `image` or

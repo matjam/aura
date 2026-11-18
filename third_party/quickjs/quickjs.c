@@ -9350,10 +9350,22 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                 if (em) {
                     if (em->get_property) {
                         JSValue obj1, retval;
-                        /* XXX: should pass throw_ref_error */
                         /* Note: if 'p' is a prototype, it can be
                            freed in the called function */
                         obj1 = js_dup(JS_MKPTR(JS_TAG_OBJECT, p));
+                        if (unlikely(throw_ref_error) && em->has_property) {
+                            /* A global reference: HasBinding first
+                               (HasProperty), so a proxy in the global
+                               object's prototype chain that does not
+                               have the name leaves it unresolvable. */
+                            int has = em->has_property(ctx, obj1, prop);
+                            if (has <= 0) {
+                                JS_FreeValue(ctx, obj1);
+                                if (has < 0)
+                                    return JS_EXCEPTION;
+                                return JS_ThrowReferenceErrorNotDefined(ctx, prop);
+                            }
+                        }
                         retval = em->get_property(ctx, obj1, prop, this_obj);
                         JS_FreeValue(ctx, obj1);
                         return retval;

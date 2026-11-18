@@ -20,6 +20,29 @@ test('history.pushState changes the URL and state', () => {
     assert.throws(() => history.pushState({ f() {} }, ''), 'DataCloneError');
 });
 
+test('named access on window: ids, and names of forms and images', () => {
+    const box = document.createElement('div');
+    box.innerHTML = '<p id="namedPara">p</p><form name="namedForm"></form><img name="twice"><img id="twice">' +
+        '<span name="spanName"></span>';
+    document.body.appendChild(box);
+    try {
+        assert.equal(window.namedPara, document.getElementById('namedPara'));
+        assert.equal(namedPara.textContent, 'p', 'a bare name resolves');
+        assert.equal(namedForm.localName, 'form');
+        assert.ok('namedForm' in window);
+        assert.equal(twice.length, 2, 'several matches make a collection');
+        assert.equal(window.spanName, undefined, 'a span is not named by its name attribute');
+        assert.throws(() => notAGlobalAnywhere, 'ReferenceError');
+        window.namedPara = 5;
+        assert.equal(window.namedPara, 5, 'a global the page sets wins');
+        delete window.namedPara;
+        assert.equal(window.location, location, "the window's own members win");
+    } finally {
+        box.remove();
+    }
+    assert.equal(window.namedForm, undefined, 'gone with the element');
+});
+
 test('navigator and screen expose fixed values only', () => {
     assert.ok(navigator.userAgent.includes('Aura'));
     /* the platform the build runs on (core/uaplatform.h), as the user agent names it */
