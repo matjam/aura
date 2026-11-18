@@ -123,6 +123,11 @@ parks"):
   one per tab. A page whose script runs while another page's is parked
   runs it on the caller's stack, as without coroutines.
 
+Checked on stock Mac OS 9.2.2 in the guest on 2026-11-18: during a
+6-second loop, Page Down scrolled the window at once, and the script
+read the new `scrollY` when it ended. A loop longer than 10 s of script
+time is still stopped by the long-script limit.
+
 To test it, run `test_script_park` (`tests/browser`), or load a page
 with `aura-host chrome` and send keys while its script runs:
 
