@@ -494,7 +494,8 @@ static void run_ws(const Input *in)
         free(piece);
         i += k;
     }
-    if (whole.len != split.len || memcmp(whole.data, split.data, whole.len)) {
+    if (whole.len != split.len ||
+        (whole.len && memcmp(whole.data, split.data, whole.len))) {
         fprintf(stderr, "websocket: a split changed the events\n");
         abort();
     }
