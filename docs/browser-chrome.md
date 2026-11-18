@@ -672,7 +672,13 @@ so a strip paints only what it shows. A transformed box is painted
 into a layer that covers only the part of it the strip can show (the
 dirty area mapped back through the transform, plus two pixels for the
 filter; `paint_layer` in `draw.c`); before 2026-11-17 the layer was the
-whole box, painted again for each strip. Box and text ink extents
+whole box, painted again for each strip. An `<img>` that its transform
+only scales or moves, with no background, border, shadow, outline,
+rounded corners, mask, clip path or object-fit, is drawn straight to
+its transformed rectangle with no layer (`paint_scaled_image`): 20
+images at `scale(1.2)` repainted in 1.8 ms instead of 4.3 ms (Release,
+800x700), and closer to Chrome, since the image is resampled once.
+Reddit's blurred post backgrounds are such images. Box and text ink extents
 (shadows, outlines, inline SVG with visible overflow) must cover what
 they draw. `rect_hits` in `draw.c` allows one pixel above and below,
 because a text fragment is as tall as the face's rounded ascent and

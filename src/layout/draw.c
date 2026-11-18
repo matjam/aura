@@ -3234,6 +3234,50 @@ static int clip_path_shape(const LBlock *k, float ox, float oy, AuPath *p)
     return r;
 }
 
+static bool has_bg_image(const AuStyle *s);
+
+/* An <img> scaled or moved by its transform (no rotation or skew) with
+ * nothing else to paint: no background, border, shadow, outline,
+ * rounded corners or object-fit. It is drawn straight to its transformed
+ * rectangle instead of into a layer that is then scaled: one resampling
+ * instead of two, and no layer. Reddit's blurred post backgrounds are
+ * scale(1.2) images, and their layers were most of a scroll step's
+ * paint. False when the box needs the layer. */
+static bool paint_scaled_image(PCtx *P, LBlock *k, const AuMatrix *tm, float ox, float oy, float opacity)
+{
+    if (tm->b != 0 || tm->c != 0 || tm->a <= 0 || tm->d <= 0)
+        return false;
+    if (k->b.inner != LI_REPLACED || k->b.replaced != LR_IMAGE || lb_anon(&k->b) || (k->b.flags & LF_HIDDEN))
+        return false;
+    LReplaced *r = k->rep;
+    if (!r || !r->pixels || r->marker)
+        return false;
+    const AuStyle *s = k->b.style;
+    const AuStyleRare *rare = s->rare;
+    if (rare->object_fit != AU_OBJECT_FIT_FILL || rare->box_shadow || lb_anon(&k->b) ||
+        au_style_mask_layer_count(s) > 0 || (rare->outline_style > AU_OUTLINE_STYLE_HIDDEN && rare->outline_width > 0))
+        return false;
+    if ((pc(s, s->bg->background_color) >> 24) || has_bg_image(s))
+        return false;
+    for (int i = 0; i < 4; i++)
+        if (k->bw[i] > 0)
+            return false;
+    AuRadii rr;
+    if (content_radii(k, &rr))
+        return false;
+    AuRect cb = box_area(k, ox, oy, AU_K_content_box);
+    if (cb.w <= 0 || cb.h <= 0)
+        return true;
+    AuRect dst = {tm->a * cb.x + tm->e, tm->d * cb.y + tm->f, tm->a * cb.w, tm->d * cb.h};
+    if (r->url && P->L->env.image_use && cb.w >= 1 && cb.h >= 1 && cb.w <= 8192 && cb.h <= 8192)
+        P->L->env.image_use(P->L->env.ctx, r->url, au_f2px(ceilf(cb.w)), au_f2px(ceilf(cb.h)));
+    const AuSurface *px = r->pixels;
+    au_draw_image(P->c, px, (AuIRect){0, 0, px->width, px->height}, dst,
+                  s->inhr->image_rendering == AU_IMAGE_RENDERING_PIXELATED ? AU_FILTER_NEAREST : AU_FILTER_BILINEAR,
+                  opacity);
+    return true;
+}
+
 static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
 {
     if (P->depth > L_MAX_DEPTH || (b->flags & LF_TOO_DEEP))
@@ -3289,6 +3333,10 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
     AuPath cpath;
     int clipped_path = clip_path_shape(k, ox, oy, &cpath);
     if (clipped_path < 0) {
+        P->depth--;
+        return;
+    }
+    if (affine && !clipped_path && paint_scaled_image(P, k, &tm, ox, oy, opacity)) {
         P->depth--;
         return;
     }

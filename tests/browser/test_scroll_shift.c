@@ -104,7 +104,16 @@ static void build_inline(int i, AuBuf *out)
         switch (i) {
         case 1: au_buf_printf(out, "<section><h2>Section %d</h2><p>Text of section %d.</p></section>", k, k); break;
         case 2: au_buf_printf(out, "<p>Paragraph %d over a gradient.</p>", k); break;
-        case 7: au_buf_printf(out, "<div>Box %d, transformed, with text across it</div>", k); break;
+        case 7:
+            au_buf_printf(out, "<div>Box %d, transformed, with text across it</div>", k);
+            /* Scaled images are drawn without a layer (paint_scaled_image). */
+            if (k % 4 == 0 || k % 4 == 2)
+                au_buf_printf(out,
+                              "<img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFUlEQV"
+                              "R4nGP4z8DAsACIGf7/usMAABtDBHXYA4fpAAAAAElFTkSuQmCC' style='display:block;width:120px;"
+                              "height:60px;margin:20px 80px;transform:%s'>",
+                              k % 4 ? "scale(1.5,.8) translate(10px,5px);opacity:.6" : "scale(1.2)");
+            break;
         case 3:
             au_buf_printf(out,
                           "<div class=b>Box %d with <span>outlined text</span> and a shadow. "
