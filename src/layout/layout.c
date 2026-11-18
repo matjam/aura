@@ -1861,6 +1861,7 @@ static const AuStyle *current_style(const LBox *b)
 
 void au_layout_styles_changed(AuLayout *L)
 {
+    L->unsettled = true;
     /* An id attribute may have changed. */
     au_svg_id_index_free(L->svg_ids);
     L->svg_ids = NULL;
@@ -2136,12 +2137,18 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
     if (L->check)
         l_check_incremental(L);
     L->rebuilt = false;
+    L->unsettled = false;
     return changed;
 }
 
 bool au_layout_needs_paint(const AuLayout *L)
 {
     return L->need_paint;
+}
+
+bool au_layout_settled(const AuLayout *L)
+{
+    return !L->unsettled;
 }
 
 void au_layout_document_size(const AuLayout *L, float *w, float *h)

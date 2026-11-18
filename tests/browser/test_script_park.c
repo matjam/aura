@@ -67,6 +67,17 @@ static const struct {
      "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(100000) "document.title='ran to the end';},10);"
      "</script>"},
     {"other.html", "<!DOCTYPE html><title>Other</title><body>o"},
+    /* positioned boxes are in the root's stacking lists; a new display
+     * rebuilds their subtrees when getComputedStyle restyles */
+    {"restyle.html",
+     "<!DOCTYPE html><body style='margin:0'><div style='height:5000px'>"
+     "<div id=a style='position:relative;z-index:2'>a<span>x</span></div>"
+     "<div id=b style='position:absolute;top:50px;z-index:-1'>b</div>"
+     "<div id=c style='position:relative;opacity:.5'>c</div></div><script>"
+     "setTimeout(function(){['a','b','c'].forEach(function(id){var e=document.getElementById(id);"
+     "e.style.display='flex';e.style.zIndex='3';});"
+     "document.title=getComputedStyle(document.getElementById('a')).display;" BUSY(1500)
+     "document.title+=' done';},10);</script>"},
 };
 
 static bool t_read(void *ctx, const char *url, char **data, size_t *len)
@@ -253,6 +264,31 @@ static void test_scroll(void)
     au_browser_free(b);
 }
 
+/* A script that restyles through getComputedStyle and then parks: the
+ * boxes it rebuilt are laid out before it parks, so the parked view
+ * paints, scrolls and hit-tests boxes that are all alive. Reddit's feed
+ * crashed the paint here (a dropped box in a stacking list). */
+static void test_restyle_then_park(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/restyle.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    until_parked(w);
+    paint(w);
+    AuEvent e = key(AU_KEY_PAGE_DOWN);
+    CHECK(au_bw_key(w, &e));
+    CHECK(au_page_script_parked(t->page));
+    paint(w);
+    e = key(AU_KEY_PAGE_UP);
+    CHECK(au_bw_key(w, &e));
+    paint(w);
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "flex done");
+    paint(w);
+    au_browser_free(b);
+}
+
 static void test_click_waits(void)
 {
     AuBrowser *b = make_browser();
@@ -349,6 +385,7 @@ int main(void)
     fonts = ahem_fontset(fontdata);
     main_thread = pthread_self();
     test_scroll();
+    test_restyle_then_park();
     test_click_waits();
     test_stop_and_leave();
     test_dialog();

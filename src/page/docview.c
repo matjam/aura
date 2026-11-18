@@ -2256,6 +2256,13 @@ DV_ENTRY_VOID(paint, (AuDocView * dv, AuCanvas *c, AuRect view, int scroll_x, in
     au_docview_update(dv);
     dv->scroll_x = scroll_x;
     dv->scroll_y = scroll_y;
+    if (!au_layout_settled(dv->layout)) {
+        /* Parked script restyled a frame and no update can run until it
+         * ends (a top document is settled before it parks, script.c
+         * h_yield): its boxes are not fit to walk. */
+        au_fill_rect(c, view, AU_RGB(255, 255, 255));
+        return;
+    }
     /* Images near the viewport (not just this paint's rectangle) decode
      * now, at the size they are shown. */
     au_docimages_prepare(dv->imgs, dv->doc, dv->layout, dv->base,
@@ -2277,7 +2284,7 @@ int au_docview_scroll_damage(AuDocView *dv, int ox, int oy, int nx, int ny, AuIR
         return -1;
     if (au_docview_update(dv))
         return -1; /* geometry moved: everything is painted again */
-    if (au_layout_needs_paint(dv->layout))
+    if (au_layout_needs_paint(dv->layout) || !au_layout_settled(dv->layout))
         return -1; /* a change not painted yet */
     AuRect r[32];
     int n = au_layout_scroll_damage(dv->layout, (float)ox, (float)oy, (float)nx, (float)ny, r, max < 32 ? max : 32);
@@ -2308,6 +2315,10 @@ void au_docview_set_scroll(AuDocView *dv, int scroll_x, int scroll_y)
 DV_ENTRY(bool, hit_test, (AuDocView * dv, int x, int y, AuHitResult *r), (dv, x, y, r))
 {
     au_docview_update(dv);
+    if (!au_layout_settled(dv->layout)) {
+        memset(r, 0, sizeof *r);
+        return false;
+    }
     return au_layout_hit_test(dv->layout, (float)(x - dv->scroll_x), (float)(y - dv->scroll_y), (float)dv->scroll_x,
                               (float)dv->scroll_y, r);
 }

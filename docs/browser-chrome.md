@@ -100,8 +100,17 @@ parks"):
   Nothing else of the page runs until the slice ends.
 - While the page is parked:
   - It paints and scrolls from the last layout: style and layout
-    updates wait. Boxes hold their nodes, styles and text, so this is
-    safe while the document is half changed.
+    updates wait. Boxes hold their nodes, styles and text, so a
+    document the script has half changed is safe to paint.
+  - A restyle that no layout followed is not: `getComputedStyle`
+    restyles, and the restyle rebuilds subtrees of boxes
+    (`au_layout_styles_changed`), so the stacking lists name dropped
+    boxes until the next `au_layout_update`. The yield hook therefore
+    lays the document out before it parks when `au_layout_settled` is
+    false (`h_yield` in `script.c`), as `offsetHeight` would at that
+    point. A frame left unsettled paints white, and its hit test finds
+    nothing, until the slice ends. Without this, Reddit's feed crashed
+    the paint on the host and froze Mac OS 9 (2026-11-18).
   - What the network delivers is held (`Held`) and handed to the view,
     in order, when the slice ends. The main document's response and its
     end run the slice to its end first.

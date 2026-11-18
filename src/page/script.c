@@ -133,7 +133,14 @@ static int h_yield(void *ctx)
 {
     AuDocScript *s = ctx;
     const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
-    return cb->script_yield ? cb->script_yield(cb->ctx, s->dv) : 0;
+    if (!cb->script_yield)
+        return 0;
+    /* A getComputedStyle may have left boxes restyled and not laid out,
+     * which the parked view cannot paint. Lay them out now: the script
+     * could have asked for the same layout here (offsetHeight). */
+    if (!au_layout_settled(au_docview_layout(s->dv)))
+        au_docview_update(s->dv);
+    return cb->script_yield(cb->ctx, s->dv);
 }
 
 static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)

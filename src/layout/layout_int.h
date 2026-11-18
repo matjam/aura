@@ -382,6 +382,10 @@ struct AuLayout {
     float vw, vh;      /* viewport */
     float doc_w, doc_h;
     bool need_build, need_layout;
+    /* Styles reached the box tree (au_layout_styles_changed: boxes swapped
+     * styles, subtrees were rebuilt) and no au_layout_update has followed:
+     * the stacking lists and geometry may name dropped boxes. */
+    bool unsettled;
     uint32_t build_count, layout_count; /* box tree builds and layout passes since creation */
     /* fonts */
     LFont *font_hash[64];

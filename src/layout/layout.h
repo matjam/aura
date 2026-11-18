@@ -205,6 +205,11 @@ bool au_layout_update(AuLayout *L, float vw, float vh);
 /* True when something changed since the last paint. Cleared by
  * au_layout_paint. */
 bool au_layout_needs_paint(const AuLayout *L);
+/* False after a restyle that no au_layout_update has followed (a script's
+ * getComputedStyle): the box tree then holds boxes the stacking lists do
+ * not, and the other way round, so it must not be painted, hit-tested or
+ * scrolled by moving pixels until the update. */
+bool au_layout_settled(const AuLayout *L);
 /* What changed on screen since the last call, whoever ran the updates:
  * -1 for everything (a build, a layout, a new paint order, or a change
  * whose place depends on scrolling or a transform), else n rectangles in
