@@ -89,7 +89,7 @@ Aura for its users; keep it short.
 | adding a test | [`docs/architecture.md`](docs/architecture.md) ("To add a test"), then the area's document |
 | changing third-party code | [`docs/conventions.md`](docs/conventions.md), then [`docs/javascript.md`](docs/javascript.md) or [`docs/tls.md`](docs/tls.md), and `third_party/README.md` |
 | making a release | [`docs/ci-and-releases.md`](docs/ci-and-releases.md) |
-| looking for work, or for what is missing | [`docs/known-gaps.md`](docs/known-gaps.md), [`docs/v1-scope.md`](docs/v1-scope.md) |
+| looking for work, or for what is missing | [`docs/web-platform.md`](docs/web-platform.md) (the ranked feature list), [`docs/known-gaps.md`](docs/known-gaps.md), [`docs/v1-scope.md`](docs/v1-scope.md) |
 
 ## Build and test
 
