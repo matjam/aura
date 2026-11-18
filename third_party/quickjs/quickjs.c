@@ -364,6 +364,10 @@ struct JSRuntime {
 
     struct list_head context_list; /* list of JSContext.link */
     struct list_head source_text_list; /* list of JSSourceText.link */
+    /* Aura: JS_SetSourcePackHooks */
+    JSSourcePackFunc *source_pack;
+    JSSourceUnpackFunc *source_unpack;
+    void *source_pack_opaque;
     /* list of JSGCObjectHeader.link. List of allocated GC objects (used
        by the garbage collector) */
     struct list_head gc_obj_list;
@@ -906,7 +910,7 @@ typedef struct JSFunctionBytecode {
     int source_len;
     int pc2line_len;
     uint8_t *pc2line_buf;
-    char *source; /* points into source_text */
+    int source_ofs; /* Aura: where the text starts in source_text */
     struct JSSourceText *source_text; /* NULL if no source */
 } JSFunctionBytecode;
 
@@ -925,11 +929,19 @@ typedef struct JSSourceText {
     int len;
     uint32_t hash;  /* of buf, when 'cached' */
     bool cached;    /* a whole script's text, found again by its content */
-    char buf[]; /* len bytes, then a NUL */
+    /* Aura: a text can be packed (JS_PackSourceTexts): 'packed' then
+       holds what the runtime's pack hook made of it and buf is NULL
+       until js_source_text_buf unpacks it again. The packed copy is
+       kept beside an unpacked buf, so packing it again costs nothing. */
+    bool used;      /* read since the last JS_PackSourceTexts */
+    int packed_len;
+    void *packed;   /* NULL when the text was never packed */
+    char *buf;      /* len bytes, then a NUL; NULL while packed */
 } JSSourceText;
 
 static void js_source_text_free(JSRuntime *rt, JSSourceText *st);
 static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int len);
+static const char *js_source_text_buf(JSRuntime *rt, JSSourceText *st);
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -7984,7 +7996,7 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
     list_for_each(el, &rt->source_text_list) {
         JSSourceText *st = list_entry(el, JSSourceText, link);
         s->js_func_source_count++;
-        s->js_func_source_size += sizeof(*st) + st->len + 1;
+        s->js_func_source_size += sizeof(*st) + (st->buf ? st->len + 1 : 0) + st->packed_len;
     }
     s->memory_used_count += s->js_func_source_count;
     s->js_func_size += s->js_func_source_size;
@@ -33920,7 +33932,7 @@ static __maybe_unused void dump_single_byte_code(JSContext *ctx,
 
 static __maybe_unused void print_func_name(JSFunctionBytecode *b)
 {
-    print_lines(b->source, 0, 1);
+    print_lines(b->source_text && b->source_text->buf ? b->source_text->buf + b->source_ofs : NULL, 0, 1);
 }
 
 static __maybe_unused void dump_pc2line(JSContext *ctx,
@@ -34069,7 +34081,8 @@ static __maybe_unused void js_dump_function_bytecode(JSContext *ctx, JSFunctionB
                    b->vardefs ? b->vardefs + b->arg_count : NULL, b->var_count,
                    b->closure_var, b->closure_var_count,
                    b->cpool, b->cpool_count,
-                   b->source, b->line_num, NULL, b, 0);
+                   b->source_text && b->source_text->buf ? b->source_text->buf + b->source_ofs : NULL,
+                   b->line_num, NULL, b, 0);
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PC2LINE
     if (check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PC2LINE))
         dump_pc2line(ctx, b->pc2line_buf, b->pc2line_len, b->line_num, b->col_num);
@@ -37525,24 +37538,98 @@ static void js_source_text_free(JSRuntime *rt, JSSourceText *st)
 {
     if (--st->ref_count == 0) {
         list_del(&st->link);
+        js_free_rt(rt, st->buf);
+        js_free_rt(rt, st->packed);
         js_free_rt(rt, st);
     }
 }
 
 static JSSourceText *js_source_text_new(JSContext *ctx, const char *buf, int len)
 {
-    JSSourceText *st = js_malloc(ctx, sizeof(*st) + len + 1);
+    JSSourceText *st = js_malloc(ctx, sizeof(*st));
     if (!st)
         return NULL;
+    st->buf = js_malloc(ctx, len + 1);
+    if (!st->buf) {
+        js_free(ctx, st);
+        return NULL;
+    }
     st->ref_count = 1;
     st->len = len;
     st->hash = 0;
     st->cached = false;
+    st->used = true; /* a new text outlives one pass unpacked */
+    st->packed = NULL;
+    st->packed_len = 0;
     if (buf)
         memcpy(st->buf, buf, len);
     st->buf[len] = '\0';
     list_add_tail(&st->link, &ctx->rt->source_text_list);
     return st;
+}
+
+/* Aura: the text's bytes, unpacked first when packed. NULL when memory
+   ran out or the unpack hook failed. */
+static const char *js_source_text_buf(JSRuntime *rt, JSSourceText *st)
+{
+    char *b;
+
+    st->used = true;
+    if (st->buf)
+        return st->buf;
+    if (!st->packed || !rt->source_unpack)
+        return NULL;
+    b = js_malloc_rt(rt, st->len + 1);
+    if (!b)
+        return NULL;
+    if (rt->source_unpack(rt, rt->source_pack_opaque, st->packed, st->packed_len, b, st->len)) {
+        js_free_rt(rt, b);
+        return NULL;
+    }
+    b[st->len] = '\0';
+    st->buf = b;
+    return b;
+}
+
+void JS_SetSourcePackHooks(JSRuntime *rt, JSSourcePackFunc *pack, JSSourceUnpackFunc *unpack, void *opaque)
+{
+    rt->source_pack = pack;
+    rt->source_unpack = unpack;
+    rt->source_pack_opaque = opaque;
+}
+
+size_t JS_PackSourceTexts(JSRuntime *rt, size_t min_len)
+{
+    struct list_head *el;
+    size_t saved = 0;
+
+    if (!rt->source_pack || !rt->source_unpack)
+        return 0;
+    list_for_each(el, &rt->source_text_list) {
+        JSSourceText *st = list_entry(el, JSSourceText, link);
+        if (st->used) {
+            st->used = false;
+            continue;
+        }
+        if (!st->buf || (size_t)st->len < min_len)
+            continue;
+        if (!st->packed) {
+            size_t n = 0;
+            void *p = rt->source_pack(rt, rt->source_pack_opaque, st->buf, st->len, &n);
+            if (!p)
+                continue;
+            if (n >= (size_t)st->len || n > INT32_MAX) {
+                js_free_rt(rt, p);
+                continue;
+            }
+            st->packed = p;
+            st->packed_len = (int)n;
+        }
+        saved += st->len + 1;
+        js_free_rt(rt, st->buf);
+        st->buf = NULL;
+    }
+    return saved;
 }
 
 /* The text of a whole script, with a new reference. Every context of the
@@ -37562,7 +37649,10 @@ static JSSourceText *js_source_text_script(JSContext *ctx, const char *buf, int 
         h = (h ^ (uint8_t)buf[i]) * 16777619u;
     list_for_each(el, &ctx->rt->source_text_list) {
         st = list_entry(el, JSSourceText, link);
-        if (st->cached && st->len == len && st->hash == h && !memcmp(st->buf, buf, len)) {
+        if (st->cached && st->len == len && st->hash == h) {
+            const char *b = js_source_text_buf(ctx->rt, st);
+            if (!b || memcmp(b, buf, len))
+                continue;
             st->ref_count++;
             return st;
         }
@@ -37676,8 +37766,9 @@ static int js_fd_share_source(JSContext *ctx, JSFunctionDef *fd)
             continue;
         if (fd->source_pos1 && p->source_pos1 && fd->source_pos1 >= p->source_pos1) {
             ofs = p->source_ofs + (fd->source_pos1 - p->source_pos1);
-            if (ofs <= st->len && fd->source_len <= st->len - ofs &&
-                !memcmp(st->buf + ofs, fd->source, fd->source_len)) {
+            const char *b = js_source_text_buf(ctx->rt, st);
+            if (b && ofs <= st->len && fd->source_len <= st->len - ofs &&
+                !memcmp(b + ofs, fd->source, fd->source_len)) {
                 st->ref_count++;
                 fd->source_text = st;
                 fd->source_ofs = ofs;
@@ -37869,7 +37960,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     late.pc2line.buf = NULL;
     fd->late = NULL;
     b->source_text = fd->source_text;
-    b->source = fd->source_text ? fd->source_text->buf + fd->source_ofs : NULL;
+    b->source_ofs = fd->source_text ? fd->source_ofs : 0;
     b->source_len = fd->source_text ? fd->source_len : 0;
     fd->source_text = NULL;
 
@@ -39838,18 +39929,23 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
         bc_put_leb128(s, b->col_num);
         bc_put_leb128(s, b->pc2line_len);
         dbuf_put(&s->dbuf, b->pc2line_buf, b->pc2line_len);
-        if (s->source_ref && b->source) {
+        if (s->source_ref && b->source_text) {
             /* the reader is given the script's text again
                (JS_ReadObjectSource) */
-            if (!b->source_text || !b->source_text->cached) {
+            if (!b->source_text->cached) {
                 JS_ThrowInternalError(s->ctx, "the function's text is not part of a script text");
                 goto fail;
             }
             bc_put_leb128(s, b->source_len);
-            bc_put_leb128(s, (uint32_t)(b->source - b->source_text->buf));
-        } else if (s->allow_source && b->source) {
+            bc_put_leb128(s, (uint32_t)b->source_ofs);
+        } else if (s->allow_source && b->source_text) {
+            const char *src = js_source_text_buf(s->ctx->rt, b->source_text);
+            if (!src) {
+                JS_ThrowOutOfMemory(s->ctx);
+                goto fail;
+            }
             bc_put_leb128(s, b->source_len);
-            dbuf_put(&s->dbuf, b->source, b->source_len);
+            dbuf_put(&s->dbuf, (const uint8_t *)src + b->source_ofs, b->source_len);
         } else {
             bc_put_leb128(s, 0);
         }
@@ -40931,14 +41027,14 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
             }
             s->source_ref->ref_count++;
             b->source_text = s->source_ref;
-            b->source = b->source_text->buf + ofs;
+            b->source_ofs = ofs;
         } else {
-        /* b->source is a UTF-8 encoded null terminated C string */
+        /* the text is UTF-8 encoded and NUL terminated */
         b->source_text = js_source_text_new(ctx, NULL, b->source_len);
         if (!b->source_text)
             goto fail;
-        b->source = b->source_text->buf;
-        if (bc_get_buf(s, (uint8_t *)b->source, b->source_len))
+        b->source_ofs = 0;
+        if (bc_get_buf(s, (uint8_t *)b->source_text->buf, b->source_len))
             goto fail;
         }
     }
@@ -43707,9 +43803,13 @@ static JSValue js_function_toString(JSContext *ctx, JSValueConst this_val,
     p = JS_VALUE_GET_OBJ(this_val);
     if (js_class_has_bytecode(p->class_id)) {
         JSFunctionBytecode *b = p->u.func.function_bytecode;
-        /* `b->source` must be pure ASCII or UTF-8 encoded */
-        if (b->source)
-            return JS_NewStringLen(ctx, b->source, b->source_len);
+        /* the text must be pure ASCII or UTF-8 encoded */
+        if (b->source_text) {
+            const char *src = js_source_text_buf(ctx->rt, b->source_text);
+            if (!src)
+                return JS_ThrowOutOfMemory(ctx);
+            return JS_NewStringLen(ctx, src + b->source_ofs, b->source_len);
+        }
         /* Aura: a function whose text was not kept says what kind of
            function it is, as its text would: scripts test
            class{}.toString() for "class" to choose how to construct

@@ -1,6 +1,7 @@
 /* The runtime: QuickJS setup, allocation and limits, error reporting,
  * running scripts, microtask checkpoints. */
 #include "js_int.h"
+#include "../codec/codec.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +24,7 @@
  * The header holds the block's size and, 8 bytes in, the slot of the
  * context it is charged to (JsMemSlot in js_int.h). */
 #define OOM_RESERVE (64u << 10)
+#define JS_PACK_MS 5000 /* how often js_code_expire packs source text */
 #define HDR_SLOT(p) (*(uint32_t *)((char *)(p) + 8))
 
 /* Nearing the limit, the collector must run before the limit refuses an
@@ -295,6 +297,39 @@ static int interrupt_check(AuJs *js, bool may_yield)
     js->interrupted = true;
     js->interrupts++;
     return 1;
+}
+
+/* Function source text, which only Function.prototype.toString reads, is
+ * deflated while nothing reads it (au_js_pack_sources). Minified script
+ * packs to about a third. */
+static void *source_pack(JSRuntime *rt, void *opaque, const char *text, size_t len, size_t *packed_len)
+{
+    (void)opaque;
+    AuBuf z;
+    au_buf_init(&z);
+    au_deflate_all(AU_DEFLATE_RAW, 1, text, len, &z);
+    void *p = z.len && z.len < len ? js_malloc_rt(rt, z.len) : NULL;
+    if (p) {
+        memcpy(p, z.data, z.len);
+        *packed_len = z.len;
+    }
+    au_buf_free(&z);
+    return p;
+}
+
+static int source_unpack(JSRuntime *rt, void *opaque, const void *packed, size_t packed_len, char *out, size_t len)
+{
+    (void)rt;
+    (void)opaque;
+    AuInflate *z = au_inflate_new(AU_INFLATE_RAW);
+    if (!z)
+        return -1;
+    const uint8_t *in = packed;
+    size_t in_len = packed_len, out_len = len;
+    uint8_t *o = (uint8_t *)out;
+    AuCodecStatus st = au_inflate_run(z, &in, &in_len, &o, &out_len);
+    au_inflate_free(z);
+    return st == AU_CODEC_DONE && out_len == 0 ? 0 : -1;
 }
 
 static int interrupt_cb(JSContext *cctx, void *opaque)
@@ -1012,6 +1047,7 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
         JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
         JS_SetInterruptHandler(js->rt, interrupt_cb, js);
         JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
+        JS_SetSourcePackHooks(js->rt, source_pack, source_unpack, NULL);
     }
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
@@ -1119,6 +1155,7 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     JS_SetMaxStackSize(js->rt, js->settings.stack_limit);
     JS_SetInterruptHandler(js->rt, interrupt_cb, js);
     JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
+    JS_SetSourcePackHooks(js->rt, source_pack, source_unpack, NULL);
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
         JS_AddIntrinsicRegExp(ctx) || JS_AddIntrinsicJSON(ctx) || JS_AddIntrinsicProxy(ctx) ||
@@ -1262,6 +1299,15 @@ void js_code_expire(AuJs *js)
             now = js_now(r);
         if (tight || now - r->code[i].when >= 20000)
             code_drop(&r->code[i]);
+    }
+    /* Source text not read for one pass is packed on the next, so a
+     * script's text is deflated 5 to 10 seconds after it last ran
+     * through toString (or was compiled). */
+    if (now < 0)
+        now = js_now(r);
+    if (now >= r->next_pack) {
+        r->next_pack = now + JS_PACK_MS;
+        JS_PackSourceTexts(r->rt, 4096);
     }
 }
 

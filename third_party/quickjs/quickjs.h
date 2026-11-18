@@ -542,6 +542,20 @@ JS_EXTERN void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size);
 /* should be called when changing thread to update the stack top value
    used to check stack overflow. */
 JS_EXTERN void JS_UpdateStackTop(JSRuntime *rt);
+/* Aura: function source text, kept for Function.prototype.toString, can
+   be packed while it is not read. The pack hook returns the packed bytes
+   in a block from js_malloc_rt and their length, or NULL to leave the
+   text as it is; the unpack hook writes exactly len bytes to out and
+   returns 0, or returns -1. */
+typedef void *JSSourcePackFunc(JSRuntime *rt, void *opaque, const char *text, size_t len, size_t *packed_len);
+typedef int JSSourceUnpackFunc(JSRuntime *rt, void *opaque, const void *packed, size_t packed_len,
+                               char *out, size_t len);
+JS_EXTERN void JS_SetSourcePackHooks(JSRuntime *rt, JSSourcePackFunc *pack, JSSourceUnpackFunc *unpack,
+                                     void *opaque);
+/* Packs every text of min_len bytes or more that was not read since the
+   last call (a text read in between waits for the next call); a text
+   packed before only drops its unpacked copy. Returns the bytes freed. */
+JS_EXTERN size_t JS_PackSourceTexts(JSRuntime *rt, size_t min_len);
 JS_EXTERN JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque);
 JS_EXTERN void JS_FreeRuntime(JSRuntime *rt);
 JS_EXTERN void *JS_GetRuntimeOpaque(JSRuntime *rt);

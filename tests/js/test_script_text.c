@@ -62,6 +62,31 @@ static char *script(const char *prefix, size_t min_len, size_t *len)
     return (char *)b.data;
 }
 
+/* The source text's bytes from the memory report ("source text N M KB"). */
+static long source_kb(AuJs *js)
+{
+    AuBuf out;
+    au_buf_init(&out);
+    au_js_eval(js, "aura:memory", 11, &out);
+    const char *p = strstr(au_buf_cstr(&out), "source text");
+    long count = -1, kb = -1;
+    if (p)
+        sscanf(p + 11, "%ld %ld", &count, &kb);
+    au_buf_free(&out);
+    return kb;
+}
+
+/* Lets the source text go cold: two passes of JS_PackSourceTexts (one
+ * every 5 seconds of the runtime's clock, when script is left) with no
+ * toString between them. */
+static void go_cold(AuJs *js)
+{
+    for (int i = 0; i < 3; i++) {
+        clock_ms += 6000;
+        expect(js, "a quiet eval", "1", "1");
+    }
+}
+
 static const char where[] =
     "(function(fn) { try { fn(1) } catch (e) { var m = /:(\\d+):(\\d+)/.exec(e.stack); return m[1] + ':' + m[2] } })";
 
@@ -103,6 +128,66 @@ int main(void)
     expect(js, "the small script keeps its text", "sf.toString()",
            "function f(a) { throw new Error('f' + a) }");
     check_positions(js, "s", "small script");
+
+    /* Text nothing reads is deflated (QuickJS patch 0017) and inflated
+     * again, byte for byte, when toString asks. A bundle: one outer
+     * function around 5000 small ones, so the script's whole text is
+     * kept. */
+    AuBuf pb;
+    au_buf_init(&pb);
+    au_buf_puts(&pb, "globalThis.pk = (function outer() { var fns = [];\n");
+    for (int i = 0; i < 5000; i++)
+        au_buf_printf(&pb, "fns.push(function f%d(a) { return a * %d + 'x%d'; });\n", i, i, i);
+    au_buf_puts(&pb, "return fns; })();\n");
+    long before = source_kb(js);
+    if (!au_js_run_classic(js, NULL, (const char *)pb.data, pb.len, "http://a.test/bundle.js", 1)) {
+        printf("FAIL: the bundle did not run\n");
+        failures++;
+    }
+    long hot = source_kb(js) - before;
+    go_cold(js);
+    long cold = source_kb(js) - before;
+    if (hot < 200 || cold < 0 || cold > hot / 4) {
+        printf("FAIL packing: the bundle's text took %ld KB, then %ld KB cold\n", hot, cold);
+        failures++;
+    }
+    expect(js, "a packed text's function", "pk[0].toString()", "function f0(a) { return a * 0 + 'x0'; }");
+    expect(js, "a function in the middle of a packed text", "pk[2718].toString()",
+           "function f2718(a) { return a * 2718 + 'x2718'; }");
+    if (source_kb(js) - before < hot) {
+        printf("FAIL packing: toString left the text packed\n");
+        failures++;
+    }
+    go_cold(js);
+    if (source_kb(js) - before != cold) {
+        printf("FAIL packing: packing again took %ld KB, not %ld\n", source_kb(js) - before, cold);
+        failures++;
+    }
+    /* a frame that runs the same bundle finds the packed text by its
+     * content and shares it */
+    {
+        AuDocument *d = au_document_new();
+        AuJs *f = au_js_new_child(js, d, "http://a.test/frame0", &s, &h);
+        if (f) {
+            if (!au_js_run_classic(f, NULL, (const char *)pb.data, pb.len, "http://a.test/bundle2.js", 1)) {
+                printf("FAIL: the bundle did not run in the frame\n");
+                failures++;
+            }
+            expect(f, "a frame's function from a shared packed text", "pk[4999].toString()",
+                   "function f4999(a) { return a * 4999 + 'x4999'; }");
+            /* unpacked to compare, the packed copy kept beside it */
+            if (source_kb(js) - before > hot + cold + 1) {
+                printf("FAIL packing: the frame's copy took its own text (%ld KB)\n", source_kb(js) - before);
+                failures++;
+            }
+            au_js_free(f);
+        } else {
+            printf("FAIL: no frame\n");
+            failures++;
+        }
+        au_node_unref(&d->node);
+    }
+    au_buf_free(&pb);
 
     char *big = script("b", (2u << 20) + 1, &len);
     if (!au_js_run_classic(js, NULL, big, len, "http://a.test/big.js", 1)) {

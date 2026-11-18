@@ -157,6 +157,7 @@ struct AuJs {
     double run_start;
     double next_check; /* the next long-script check */
     double next_yield; /* the next hooks.yield call (settings.yield_ms) */
+    double next_pack;  /* the next JS_PackSourceTexts (js_code_expire) */
     bool interrupted, closing;
     AuElement *current_script;
     /* event loop */

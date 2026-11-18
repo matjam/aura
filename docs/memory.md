@@ -859,11 +859,17 @@ up or compressed. To change any of these, start at the place named.
 | The page source (Page Source, View Source, Save Page As) | is deflated once the load is over and inflated when asked for | `page_doc.c`, "The page source" |
 | HTTP cache entries | hold the body as it arrived (gzip, deflate, brotli) and decode it when served | `cache.h`, `deliver_cached` in `http.c` ([`networking.md`](networking.md)) |
 | A bundled font file over 2 MB (Noto Sans SC, 3.4 MB) | is paged: its tables (117 KB) are in memory, its glyph outlines are read from the file as they are drawn, with 4 blocks of 16 KB and 256 KB of glyphs kept | `fontpage.c` ([`fonts.md`](fonts.md), "Paged faces") |
+| Function source text (kept for `Function.prototype.toString`) | each text of 4 KB or more is deflated (raw, level 1) once a 5-second pass of its runtime finds it unread since the pass before, and inflated when `toString` (or a document compiling the same script) reads it; the deflated copy stays, so packing it again frees the inflated one | `js_code_expire` and `source_pack` in `src/js/runtime.c`, QuickJS patch 0017 ([`javascript.md`](javascript.md)) |
 | The text a parsed style sheet keeps | is deflated in 4 KB pieces once the page has loaded and five seconds have passed without a block parsed late; a piece is inflated when a block is parsed or the CSSOM reads the sheet | `au_docview_pack_sheets`, `css_sheet_text_at` ([`css.md`](css.md), "How a parsed sheet is stored") |
 
 Computed styles stay with a kept document: an article's are 0.7 MB and
 a full style pass is 12 ms on the host. Canvas bitmaps stay (they
-cannot be made again). The DOM and the script heap are not compressed.
+cannot be made again). The DOM and the script heap, apart from source
+text, are not compressed.
+
+Function source text on Reddit's home page (host, 2026-11-18, base
+`0456b07`, 15 s after the load began): 4,411 KB in 22 texts before,
+1,623 KB in 26 after. A text is bytes, so the PowerPC saves the same.
 
 Measured on the host (64-bit, bundled fonts, live Wikipedia,
 2026-11-15), before and after:

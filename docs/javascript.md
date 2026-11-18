@@ -85,6 +85,7 @@ Patches this document refers to:
 | 0013 | less memory while compiling a large script, and `JS_EVAL_FLAG_NO_SOURCE`, which keeps no source text (`0013-compiler-memory`; "How script memory is kept down" below) |
 | 0015 | a global reference that reaches a proxy in the global object's prototype chain runs its `has` trap before `get`, as HasBinding does, so an unknown name still throws ReferenceError (`0015-global-reference-through-proxy`); the window's named properties object needs it |
 | 0016 | a regular expression that is a run of one-character matchers followed by `$` (no `m`, `y`, `u` or `v` flag) is tried only where a match can start, the end of the input less its length (`0016-regexp-end-anchored`); Reddit tests `/[\n ]$/` about 48,000 times on text of up to 10 KB while it loads, which took 2.6 s of 5.9 s of script on the host |
+| 0017 | function source text, which only `Function.prototype.toString` reads, can be packed while nothing reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`) and is unpacked when asked for (`0017-pack-source-text`); `runtime.c` deflates texts of 4 KB or more on the second 5-second pass after they were last read ([`memory.md`](memory.md), "Cold memory") |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.

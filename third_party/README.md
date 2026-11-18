@@ -69,7 +69,10 @@ records where the code came from and how to update it.
   and `0016` a pattern that is a run of one-character matchers followed
   by `$` (no `m`, `y`, `u` or `v` flag) is tried only at the end of the
   input less its length, instead of at every position (Reddit tests
-  `/[\n ]$/` against long text tens of thousands of times).
+  `/[\n ]$/` against long text tens of thousands of times),
+  and `0017` function source text that can be packed while nothing
+  reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`; functions
+  keep an offset into their text instead of a pointer).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
