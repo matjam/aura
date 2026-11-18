@@ -304,8 +304,14 @@ static void clear_document(AuDocView *dv)
         loader_cancel(dv, dv->reqs[i].id);
         au_buf_free(&dv->reqs[i].data);
         au_free(dv->reqs[i].img_url);
+        if (dv->reqs[i].preload)
+            au_node_unref(&dv->reqs[i].preload->node);
     }
     dv->nreqs = 0;
+    for (uint32_t i = 0; i < dv->npl_ev; i++)
+        au_node_unref(&dv->pl_ev[i].el->node);
+    dv->npl_ev = 0;
+    dv->npreloads = 0;
     for (uint32_t i = 0; i < dv->ntainted; i++)
         au_free(dv->tainted_imgs[i]);
     au_free(dv->tainted_imgs);
@@ -379,6 +385,7 @@ void au_docview_free(AuDocView *dv)
     au_docimages_free(dv->imgs);
     au_free(dv->slots);
     au_free(dv->reqs);
+    au_free(dv->pl_ev);
     au_free(dv->url);
     au_free(dv->base);
     au_free(dv->title);
@@ -804,6 +811,101 @@ again:
         au_node_unref(&el->node);
         goto again;
     }
+    /* Preloads: listeners may queue more (a new preload that finishes at
+     * once), so the list is taken before any fires. */
+    PreloadEvent *ev = dv->pl_ev;
+    uint32_t n = dv->npl_ev;
+    dv->pl_ev = NULL;
+    dv->npl_ev = dv->pl_ev_cap = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (live && dv->script)
+            au_docscript_fire(dv->script, ev[i].el, ev[i].failed ? "error" : "load", false, false);
+        au_node_unref(&ev[i].el->node);
+    }
+    au_free(ev);
+}
+
+/* ---- Preloads ----
+ * A <link rel=preload> with an as of style, script, font, image or fetch
+ * and an href is fetched while the document's script runs, and gets its
+ * load or error event when the fetch ends. The bytes are not kept: the
+ * network layer's cache (or the request a later one shares, http.c)
+ * serves the element that uses them. Pages wait for these events: GitHub
+ * shows a page it navigates to by script only once the style sheets it
+ * preloads have loaded. Without script the links do nothing, so a page
+ * read without script fetches only what it uses. */
+#define PRELOADS_MAX 256
+
+/* Queues el's event; takes the caller's reference. */
+static void queue_preload_event(AuDocView *dv, AuElement *el, bool failed)
+{
+    if (dv->npl_ev == dv->pl_ev_cap) {
+        dv->pl_ev_cap = dv->pl_ev_cap ? dv->pl_ev_cap * 2 : 8;
+        dv->pl_ev = au_realloc(dv->pl_ev, dv->pl_ev_cap * sizeof *dv->pl_ev);
+    }
+    dv->pl_ev[dv->npl_ev].el = el;
+    dv->pl_ev[dv->npl_ev].failed = failed;
+    dv->npl_ev++;
+    dv->link_events = true;
+}
+
+/* Whether a space-separated token list holds tok (ASCII case-insensitive). */
+static bool has_token(const char *list, const char *tok)
+{
+    size_t tn = strlen(tok);
+    const char *p = list;
+    while (*p) {
+        while (*p && au_is_space((unsigned char)*p))
+            p++;
+        const char *s = p;
+        while (*p && !au_is_space((unsigned char)*p))
+            p++;
+        if (au_ieq(s, (size_t)(p - s), tok, tn))
+            return true;
+    }
+    return false;
+}
+
+/* Starts el's preload, if it is one the view fetches. Each element is
+ * looked at once (AU_STATE_PRELOAD). */
+static void start_preload(AuDocView *dv, AuElement *el)
+{
+    if (el->state & AU_STATE_PRELOAD)
+        return;
+    const char *rel = attr(el, "rel");
+    if (!rel || !has_token(rel, "preload") || !dv->script || !au_docscript_running(dv->script))
+        return;
+    el->state |= AU_STATE_PRELOAD;
+    const char *as = attr(el, "as");
+    const char *href = attr(el, "href");
+    if (!as || !href || !*href || dv->npreloads >= PRELOADS_MAX)
+        return;
+    size_t an = strlen(as);
+    AuResourceKind kind;
+    if (au_ieq(as, an, "style", 5))
+        kind = AU_RES_STYLESHEET;
+    else if (au_ieq(as, an, "image", 5))
+        kind = AU_RES_IMAGE;
+    else if (au_ieq(as, an, "font", 4))
+        kind = AU_RES_FONT;
+    else if (au_ieq(as, an, "script", 6) || au_ieq(as, an, "fetch", 5))
+        kind = AU_RES_OTHER;
+    else
+        return; /* not a destination Aura preloads: no fetch, no event */
+    char *abs = au_url_resolve_dup(dv->base, href);
+    if (!abs)
+        return;
+    dv->npreloads++;
+    Request *r = add_request_cors(dv, abs, kind, au_dv_cors_attr(el));
+    au_free(abs);
+    au_node_ref(&el->node);
+    if (!r) {
+        queue_preload_event(dv, el, true);
+        return;
+    }
+    r->preload = el;
+    r->background = true; /* it does not hold the load event */
+    dv->nbg++;
 }
 
 /* Fires the load and error events of <img> elements whose image layout
@@ -1049,7 +1151,7 @@ DV_ENTRY_VOID(resource_head,
         au_docview_resource_done(dv, id, false);
         return;
     }
-    if (r->kind == AU_RES_OTHER && !r->font && dv->script)
+    if (r->kind == AU_RES_OTHER && !r->font && !r->preload && dv->script)
         au_docscript_resource_head(dv->script, id, status, status_text, final_url, headers, nheaders,
                                    r->cross && !r->cors);
 }
@@ -1072,6 +1174,8 @@ DV_ENTRY_VOID(resource_data, (AuDocView * dv, uint32_t id, const void *data, siz
         images_data(dv, r->image, data, len);
         return;
     }
+    if (r->preload)
+        return; /* the network layer's cache keeps the bytes */
     /* A script's fetch takes its bytes as they come (streams, progress
      * events, EventSource): the view keeps none of them. The call may
      * cancel the request, so r is not used after it. */
@@ -1118,6 +1222,12 @@ DV_ENTRY_VOID(resource_done, (AuDocView * dv, uint32_t id, bool ok), (dv, id, ok
         if (req.cross && !req.cors)
             taint_image(dv, req.img_url, true);
         au_free(req.img_url);
+    }
+    if (req.preload) {
+        queue_preload_event(dv, req.preload, !ok); /* takes the reference */
+        au_buf_free(&req.data);
+        maybe_finished(dv);
+        return;
     }
     if (req.kind == AU_RES_FRAME) {
         if (req.frame)
@@ -1533,6 +1643,8 @@ static void scan_document(AuDocView *dv, bool final)
         }
         if (scope && el->tag != AU_ATOM_style)
             continue; /* a shadow tree's <base> and <title> are not the document's */
+        if (el->tag == AU_ATOM_link && !scope && !(el->state & AU_STATE_PRELOAD) && dv->script)
+            start_preload(dv, el);
         if (el->tag == AU_ATOM_style || (el->tag == AU_ATOM_link && is_stylesheet_link(el) && !attr(el, "disabled"))) {
             /* index counts the slots before this element: slots are kept in
              * document order, an incomplete <style> has none yet. */
@@ -2592,6 +2704,8 @@ void au_dv_cancel(AuDocView *dv, uint32_t id)
         dv->nbg--;
     au_buf_free(&r->data);
     au_free(r->img_url);
+    if (r->preload)
+        au_node_unref(&r->preload->node);
     *r = dv->reqs[--dv->nreqs];
 }
 

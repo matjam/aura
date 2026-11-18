@@ -145,6 +145,15 @@ marks an element done until its `src` or `srcset` changes. Setting the
 `src` property loads the image from script instead (`N.imgClaim`), which
 fires the events itself. Like browsers, `load` does not reach `window`.
 
+**Preload links.** While the document's script runs, a `<link
+rel=preload>` with an `as` of `style`, `script`, `font`, `image` or
+`fetch` is fetched in the background and fires `load` or `error` when
+the fetch ends (`start_preload` in `docview.c`, at most 256 for each
+document). The view keeps none of the bytes; the network cache serves
+the element that uses them. Without script, preload links fetch nothing.
+GitHub's router waited forever for these events: a link from the pull
+request list to a pull request changed the URL and showed nothing.
+
 **Geometry.** `getBoundingClientRect`, `getClientRects` and
 IntersectionObserver use where an element is drawn (`N.rect(el, true)`,
 `au_layout_element_visual_rect`): moved by the scroll offsets of the

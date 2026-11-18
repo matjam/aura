@@ -228,6 +228,9 @@ enum {
     /* An <img> whose load or error event is done for its current source
      * (src/page); no selector matches it. Changing src or srcset clears it. */
     AU_STATE_IMG_EVENT = 1u << 12,
+    /* a <link rel=preload> the view has fetched or turned down (docview.c,
+     * "Preloads"); set once per element */
+    AU_STATE_PRELOAD = 1u << 13,
     AU_STATE_STYLE_DIRTY = 1u << 16,
     AU_STATE_SUBTREE_DIRTY = 1u << 17,
     AU_STATE_STYLE_SELF_DIRTY = 1u << 18 /* restyle the element; its subtree only if its style changes */

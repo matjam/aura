@@ -41,6 +41,42 @@ promise_test('a stylesheet link that fails fires error', async () => {
     document.head.appendChild(bad);
     await pe;
 });
+
+promise_test('a preload link fires load once, and does not apply the sheet', async () => {
+    // GitHub's router shows a page it navigates to only once the style
+    // sheets it preloads have fired load.
+    const l = document.createElement('link');
+    l.rel = 'preload';
+    l.as = 'style';
+    l.href = 'res/green.css';
+    let loads = 0;
+    l.addEventListener('load', () => loads++);
+    const p = once(l, 'load');
+    document.head.appendChild(l);
+    await p;
+    await delay(50);
+    assert.equal(loads, 1, 'load fires once');
+    assert.equal(l.sheet, null, 'a preload is not a style sheet');
+});
+
+promise_test('preload links that fail, or have no as, behave as in Chrome', async () => {
+    const bad = document.createElement('link');
+    bad.rel = 'preload';
+    bad.as = 'fetch';
+    bad.href = 'res/missing.json';
+    const pe = once(bad, 'error');
+    document.head.appendChild(bad);
+    await pe;
+    const none = document.createElement('link');
+    none.rel = 'preload';
+    none.href = 'res/data.json';
+    let fired = 0;
+    none.addEventListener('load', () => fired++);
+    none.addEventListener('error', () => fired++);
+    document.head.appendChild(none);
+    await delay(100);
+    assert.equal(fired, 0, 'without as nothing is fetched and no event fires');
+});
 </script>
 </body>
 </html>

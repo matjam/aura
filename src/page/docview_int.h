@@ -79,7 +79,14 @@ typedef struct Request {
     bool cross;      /* the URL is of another origin than the document */
     uint8_t cors;    /* fetched with CORS: 1 anonymous, 2 with credentials */
     char *img_url;   /* an image's URL, for au_docview_image_origin_clean */
+    AuElement *preload; /* a <link rel=preload> (a reference): the bytes only warm the cache */
 } Request;
+
+/* A <link rel=preload> whose load or error event is due. */
+typedef struct PreloadEvent {
+    AuElement *el; /* a reference */
+    bool failed;
+} PreloadEvent;
 
 struct AuDocView {
     AuFontSet *fonts;
@@ -140,6 +147,9 @@ struct AuDocView {
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     bool link_events; /* a <link>'s load or error event is due (SheetSrc.event) */
     bool img_events;  /* an image finished or layout found a known one: <img> load events may be due */
+    PreloadEvent *pl_ev; /* preload events due (fired with the link events) */
+    uint32_t npl_ev, pl_ev_cap;
+    uint32_t npreloads; /* preloads fetched for this document (capped) */
     uint32_t anim_epoch; /* the clock at the document's first animation frame (0: none yet) */
     /* A hidden view frees its layout (au_docview_set_hidden); the scroll
      * offsets of its scroll containers wait here for the next layout. */
