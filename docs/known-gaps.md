@@ -686,6 +686,15 @@ fuzzed".
 
 ## Performance
 
+- **The GTK and Cocoa windows do not scroll while script runs.** A long
+  task parks only on Mac OS 9 and in the host tool
+  ([`browser-chrome.md`](browser-chrome.md), "Scrolling while script
+  runs"): those ports' coroutines are threads, and GTK and AppKit take
+  calls only on the main thread. Coroutines on the main thread
+  (`ucontext`, or a fiber library) would let them park too.
+- While a page is parked, a click or a typed key waits for the slice to
+  end, and the page shows its last layout (text the script has changed
+  appears when the slice ends).
 - Loading a Wikipedia article in the guest took 30 to 70 seconds
   ([`browser-chrome.md`](browser-chrome.md)).
 - A window zoom in the guest costs two passes of about 280 ms each on a

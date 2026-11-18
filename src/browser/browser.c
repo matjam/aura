@@ -1168,7 +1168,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     au_nav_init(&t->nav);
     AuPageEnv env = {b->fonts, &b->prefs, b, env_time, env_read, env_fetcher, b->highlight,
                      b->host.random ? env_random : NULL, b->host.coro, env_memory_free, env_storage,
-                     env_history, env_bookmarks, env_dark};
+                     env_history, env_bookmarks, env_dark, b->host.script_coro};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back,

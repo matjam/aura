@@ -60,6 +60,7 @@ typedef struct AuJsSettings {
                            * The thread must have this much stack free, plus margin. */
     uint32_t slice_ms;    /* long-script check interval; 0: 1000 */
     uint32_t kill_ms;     /* default limit without a long_script hook; 0: 10000 */
+    uint32_t yield_ms;    /* how often hooks.yield is called while script runs; 0: never */
     const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (AU_UA_PLATFORM) Aura/1" (core/uaplatform.h).
                              * Embedders pass the string the network sends (au_docview_set_user_agent). */
     const char *language;   /* navigator.language; NULL: "en-US" */
@@ -187,6 +188,13 @@ typedef struct AuJsHooks {
     void (*console)(void *ctx, AuJsLogLevel level, const char *text, size_t len);
     /* A script has run for elapsed_ms. Return true to let it continue. */
     bool (*long_script)(void *ctx, uint32_t elapsed_ms);
+    /* Optional: called from the engine's interrupt check about every
+     * settings.yield_ms while script runs, between two steps of the
+     * script (never inside a native). The embedder may leave the stack
+     * here (a coroutine) and come back later; the time away does not
+     * count toward the long-script limit. Return nonzero to stop the
+     * script (the same uncatchable error as the long-script limit). */
+    int (*yield)(void *ctx);
     /* The DOM changed under script: the embedder invalidates style and
      * layout and schedules a coalesced update. node is the changed node
      * (an element whose attribute changed, a parent whose children

@@ -2144,9 +2144,27 @@ static void container_rounds(AuDocView *dv)
     }
 }
 
+void au_docview_set_frozen(AuDocView *dv, bool frozen)
+{
+    AuDocView *top = au_dv_top(dv);
+    if (top->frozen == frozen)
+        return;
+    top->frozen = frozen;
+    uint32_t t = perf_now(top);
+    if (frozen)
+        top->frozen_at = t;
+    else
+        top->frozen_ms += t - top->frozen_at;
+}
+
+bool au_docview_frozen(const AuDocView *dv)
+{
+    return au_dv_top((AuDocView *)dv)->frozen;
+}
+
 DV_ENTRY(bool, update, (AuDocView * dv), (dv))
 {
-    if (!dv->doc)
+    if (!dv->doc || au_docview_frozen(dv))
         return false;
     /* Timed for the Performance window: a pass counts when it had work. */
     bool style_work = dv->sheets_rescan || dv->sheets_dirty || dv->style_all || dv->tree_dirty || dv->restyle_needed;
@@ -2233,7 +2251,7 @@ void au_docview_content_size(AuDocView *dv, int *width, int *height)
 DV_ENTRY_VOID(paint, (AuDocView * dv, AuCanvas *c, AuRect view, int scroll_x, int scroll_y),
               (dv, c, view, scroll_x, scroll_y))
 {
-    if (!dv->parent)
+    if (!dv->parent && !au_docview_frozen(dv))
         au_frames_idle(dv);
     au_docview_update(dv);
     dv->scroll_x = scroll_x;
@@ -3295,7 +3313,7 @@ void au_dv_invalidate_damage(AuDocView *dv)
 
 void au_docview_settle(AuDocView *dv)
 {
-    if (!dv->settle)
+    if (!dv->settle || au_docview_frozen(dv))
         return;
     dv->settle = false;
     if (dv->doc) {

@@ -1393,6 +1393,8 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     AuBrowserHost host = {.time_ms = host_ms, .now = host_now, .read_file_url = host_read_url};
     host.random = host_random;
     host.coro = au_posix_coro_ops();
+    /* no user interface: script may run on a thread (browser.h) */
+    host.script_coro = au_posix_coro_ops();
     if (o->scroll_bench) {
         au_present_init(&bench_pres);
         host.invalidate = bench_inval;

@@ -155,6 +155,14 @@ typedef struct AuDocViewCallbacks {
     /* Coroutines for workers (core/coro.h). Optional: without them a
      * worker runs on the caller's stack, a task at a time. */
     const AuCoroOps *coro;
+    /* Optional: called about every script_yield_ms while the page's
+     * script runs (AuJsHooks.yield). The embedder that runs
+     * au_docview_run_scripts on a coroutine leaves it here, so that the
+     * window scrolls and paints while a long task runs; while it is away
+     * the view is frozen (au_docview_set_frozen). Return nonzero to stop
+     * the script. Only the top-level view's callback is called. */
+    int (*script_yield)(void *ctx, AuDocView *dv);
+    uint32_t script_yield_ms; /* 0: 100 */
     /* document.cookie of the document at url (the view's own, or a nested
      * document's when nested is set; dv is the top-level view either
      * way): get_cookie returns au_alloc'd text or NULL. Optional: without
@@ -395,6 +403,20 @@ bool au_docview_pack_sheets(AuDocView *dv);
 void au_docview_set_viewport(AuDocView *dv, int width, int height);
 /* Brings style and layout up to date. Returns true if geometry changed. */
 bool au_docview_update(AuDocView *dv);
+/* While the page's script is parked in the middle of a task
+ * (AuDocViewCallbacks.script_yield), the embedder freezes the top-level
+ * view: au_docview_update and au_docview_settle do nothing, and
+ * au_docview_paint, scroll_at, scroll_damage and content_size work from
+ * the last layout. The document may be half changed, so the embedder
+ * must not call anything else on the view (or its frames) until it
+ * thaws it. Boxes hold their nodes, styles and text, so painting the
+ * last layout is safe. */
+void au_docview_set_frozen(AuDocView *dv, bool frozen);
+bool au_docview_frozen(const AuDocView *dv);
+/* The stack a coroutine that runs au_docview_run_scripts needs: the
+ * script runtime's C stack limit, and half again for the engine below
+ * the script (a forced layout, a parser chunk). */
+size_t au_docview_script_stack(void);
 /* Script changed a top-level document (au_docview_settle_pending): its
  * turns leave the update to au_docview_settle, which the embedder calls
  * once its script slice is over (and after input). It updates and

@@ -349,6 +349,11 @@ typedef struct AuPageEnv {
      * preferences change; au_page_set_dark changes it later. NULL is
      * light. */
     bool (*dark)(void *ctx);
+    /* Optional: coroutines the page's own script may run on
+     * (AuBrowserHost.script_coro). With them a long task parks between
+     * two steps every 100 ms and au_page_idle returns, so the window
+     * scrolls and paints while it runs. */
+    const AuCoroOps *script_coro;
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {
@@ -517,6 +522,9 @@ size_t au_page_drop_kept(AuPage *p);
 const char *au_page_url(const AuPage *p);   /* never NULL */
 const char *au_page_title(const AuPage *p); /* "" when the page has none */
 bool au_page_loading(const AuPage *p);
+/* The page's script has run long enough to park (AuPageEnv.script_coro):
+ * it goes on in the next au_page_idle calls, and au_page_stop ends it. */
+bool au_page_script_parked(const AuPage *p);
 float au_page_progress(const AuPage *p);    /* 0..1 while loading */
 AuSecurity au_page_security(const AuPage *p);
 /* The main document's certificate (https pages and certificate error

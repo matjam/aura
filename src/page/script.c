@@ -68,6 +68,7 @@ struct AuDocScript {
     bool resize_pending, scroll_pending, media_pending;
     int depth;
     uint32_t perf_t0;    /* when the outermost entry began */
+    uint32_t perf_frozen0; /* the view's frozen_ms then: time parked is not script time */
     char perf_label[72]; /* the script it ran, for the slow task list */
     char *nav_url;
     bool nav_new_tab;
@@ -119,6 +120,20 @@ static double h_now(void *ctx)
 {
     AuDocScript *s = ctx;
     return au_dv_now(s->dv);
+}
+
+size_t au_docview_script_stack(void)
+{
+    AuJsSettings s;
+    au_js_settings_default(&s);
+    return s.stack_limit + s.stack_limit / 2;
+}
+
+static int h_yield(void *ctx)
+{
+    AuDocScript *s = ctx;
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    return cb->script_yield ? cb->script_yield(cb->ctx, s->dv) : 0;
 }
 
 static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)
@@ -793,6 +808,11 @@ static bool ensure_js(AuDocScript *s)
     if (au_dv_callbacks(s->dv)->random)
         h.random = h_random;
     h.coro = au_dv_callbacks(s->dv)->coro;
+    if (!s->dv->parent && au_dv_callbacks(s->dv)->script_yield) {
+        /* the runtime's interrupt check reads the top-level hooks */
+        h.yield = h_yield;
+        set.yield_ms = au_dv_callbacks(s->dv)->script_yield_ms ? au_dv_callbacks(s->dv)->script_yield_ms : 100;
+    }
     h.get_cookie = h_get_cookie;
     h.set_cookie = h_set_cookie;
     if (au_dv_callbacks(s->dv)->storage)
@@ -857,6 +877,7 @@ static void enter(AuDocScript *s)
     au_dv_top(s->dv)->script_runs++;
     if (s->depth++ == 0) { /* the outermost entry is timed (perf.h) */
         s->perf_t0 = au_dv_perf_now(s->dv);
+        s->perf_frozen0 = au_dv_top(s->dv)->frozen_ms;
         s->perf_label[0] = 0;
         /* Frames the parser has made since the last update are known to
          * script from its first statement (window.frames, parent.frames). */
@@ -877,7 +898,9 @@ static void leave(AuDocScript *s)
         return;
     if (s->js) {
         uint32_t t1 = au_dv_perf_now(s->dv);
-        au_perf_add(au_docview_perf(s->dv), AU_PERF_SCRIPT, t1 - s->perf_t0, s->perf_label, t1);
+        uint32_t away = au_dv_top(s->dv)->frozen_ms - s->perf_frozen0;
+        uint32_t ran = t1 - s->perf_t0;
+        au_perf_add(au_docview_perf(s->dv), AU_PERF_SCRIPT, ran > away ? ran - away : 0, s->perf_label, t1);
     }
     au_dv_turn_end(s->dv);
     /* A module may have finished (load event) */
@@ -1561,7 +1584,9 @@ uint32_t au_docscript_due(AuDocScript *s)
 {
     if (!s->js)
         return UINT32_MAX;
-    if (s->resize_pending || s->scroll_pending || s->media_pending || au_js_workers_busy(s->js))
+    /* queued tasks (a fetch's answer, a message) run at the next idle */
+    if (s->resize_pending || s->scroll_pending || s->media_pending || au_js_has_tasks(s->js) ||
+        au_js_workers_busy(s->js))
         return 0;
     uint32_t due = au_js_wants_frame(s->js) ? 16 : UINT32_MAX;
     double t = au_js_next_timer(s->js);

@@ -174,6 +174,9 @@ struct AuDocView {
     uint32_t pack_seen, pack_since, pack_passes;
     bool pack_watching;
     bool layout_ran;     /* layout changed since observers last ran */
+    bool frozen;         /* top-level view: script is parked mid-task (au_docview_set_frozen) */
+    uint32_t frozen_at;  /* perf clock when it froze */
+    uint32_t frozen_ms;  /* time spent frozen, all told: script timings leave it out */
     bool in_key;         /* au_docview_key is running: it repaints at its end (au_dv_turn_end) */
     bool settle;         /* script changed it: au_docview_settle updates and repaints what changed */
     AuDocViewStats stats; /* style passes and styled elements; au_docview_stats adds the layout's counts */

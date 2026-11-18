@@ -78,6 +78,20 @@ struct Fetch {
     uint32_t log; /* its record in the page's request log (netlog.h) */
 };
 
+/* A delivery from the network held while the page's script is parked
+ * ("Script that parks"): a resource's head (b holds the status text, the
+ * URL and n header pairs, each NUL-terminated), its bytes or its end, or
+ * bytes of the main document. */
+enum { HELD_HEAD, HELD_DATA, HELD_DONE, HELD_MAIN_DATA };
+typedef struct Held {
+    struct Held *next;
+    uint8_t kind;
+    bool ok;
+    uint32_t id, gen, n;
+    int status;
+    AuBuf b;
+} Held;
+
 /* The main document's bytes as they arrived, for Page Source, View Source
  * and Save Page As ("The page source"). They are read rarely, so once
  * the load is over they are held compressed: plain is then empty until
@@ -244,6 +258,16 @@ struct AuPage {
     bool oom_due, oom_told;
 
     AuNetLog netlog; /* the requests since the last navigation (netlog.h) */
+
+    /* Script on a coroutine ("Script that parks"). */
+    bool parked;       /* the script stopped mid-slice: the view is frozen */
+    bool on_co;        /* the coroutine runs this page's slice now */
+    bool co_stop;      /* stop the script (navigation, Stop, closing) */
+    bool co_finish;    /* run the slice to its end without parking */
+    bool in_main_call; /* main_fn runs (a dialog the script opened) */
+    void (*main_fn)(AuPage *p, void *arg); /* to run on the main stack for the script */
+    void *main_arg;
+    Held *held, *held_tail; /* what the network delivered while parked */
 };
 
 /* Milliseconds since the navigation, for the request log. */
@@ -611,6 +635,23 @@ static void kept_trim(AuPage *p);
 static void new_view(AuPage *p);
 static void main_response(AuPage *p, const AuFetchResponse *r);
 static bool main_download(AuPage *p, const AuFetchResponse *r, uint32_t handoff);
+static bool thaw(AuPage *p);
+static void stop_script(AuPage *p);
+static void hold_head(AuPage *p, uint32_t id, int status, const char *text, const char *url, const char *const *hv,
+                      size_t n);
+static void hold_bytes(AuPage *p, int kind, uint32_t id, const void *bytes, size_t len);
+static void hold_done(AuPage *p, uint32_t id, bool ok);
+
+/* What the network delivers while the page's script is parked
+ * ("Script that parks") waits: the view's document may be half changed. */
+static void dv_head(AuPage *p, uint32_t id, int status, const char *text, const char *url, const char *const *hv,
+                    size_t n)
+{
+    if (p->parked)
+        hold_head(p, id, status, text, url, hv, n);
+    else
+        au_docview_resource_head(p->dv, id, status, text, url, hv, n);
+}
 
 static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
 {
@@ -621,6 +662,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
     au_netlog_response(&f->page->netlog, f->log, r->status, r->content_type, r->from_cache, log_ms(f->page));
     au_netlog_set_url(&f->page->netlog, f->log, r->url);
     if (f->main) {
+        thaw(f->page); /* the main response may replace the document */
         main_response(f->page, r);
         return;
     }
@@ -655,8 +697,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
             hv[2 * n + 1] = r->content_type;
             n++;
         }
-        au_docview_resource_head(f->page->dv, f->id, r->status ? r->status : 200,
-                                 r->status_text ? r->status_text : "", r->url, hv, n);
+        dv_head(f->page, f->id, r->status ? r->status : 200, r->status_text ? r->status_text : "", r->url, hv, n);
         au_free(hv);
         return;
     }
@@ -686,7 +727,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
         hdrs[2 * n + 1] = au_buf_cstr(&len);
         n++;
     }
-    au_docview_resource_head(f->page->dv, f->id, r->status ? r->status : 200, "", r->url, hdrs, n);
+    dv_head(f->page, f->id, r->status ? r->status : 200, "", r->url, hdrs, n);
     au_buf_free(&len);
 }
 
@@ -696,6 +737,7 @@ static bool sink_download(void *ctx, uint32_t id, const AuFetchResponse *r, uint
     (void)id;
     if (f->done || f->cancelled || !f->main)
         return false;
+    thaw(f->page);
     return main_download(f->page, r, handoff);
 }
 
@@ -707,7 +749,9 @@ static void sink_data(void *ctx, uint32_t id, const void *bytes, size_t len)
         return;
     f->off += len;
     au_netlog_data(&f->page->netlog, f->log, len);
-    if (f->main)
+    if (f->page->parked)
+        hold_bytes(f->page, f->main ? HELD_MAIN_DATA : HELD_DATA, f->id, bytes, len);
+    else if (f->main)
         main_data(f->page, bytes, len);
     else
         au_docview_resource_data(f->page->dv, f->id, bytes, len);
@@ -725,6 +769,7 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     AuPage *p = f->page;
     au_netlog_end(&p->netlog, f->log, ok ? AU_NETREC_DONE : AU_NETREC_FAILED, info, log_ms(p));
     if (f->main) {
+        thaw(p); /* the bytes held for the parser go first */
         main_done(p, ok, info);
     } else {
         if (info && info->mixed && p->have_security)
@@ -735,7 +780,10 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
                 p->cb.load_progress(p->cb.ctx, p);
         }
         p->completed++;
-        au_docview_resource_done(p->dv, f->id, ok);
+        if (p->parked)
+            hold_done(p, f->id, ok);
+        else
+            au_docview_resource_done(p->dv, f->id, ok);
         report_progress(p);
     }
 }
@@ -1127,25 +1175,67 @@ static void dv_submit(void *ctx, AuDocView *dv, const AuFormSubmission *s)
     p->sub_new_tab = s->new_tab;
 }
 
+static void on_main(AuPage *p, void (*fn)(AuPage *p, void *arg), void *arg);
+
+/* The dialogs a script opens run on the main stack (on_main): the shell's
+ * modal loop must not run on the script's coroutine. */
+typedef struct PopupCall {
+    const AuPopupItem *items;
+    int n, selected, result;
+    AuIRect at;
+} PopupCall;
+
+static void popup_main(AuPage *p, void *arg)
+{
+    PopupCall *c = arg;
+    c->result = p->cb.popup ? p->cb.popup(p->cb.ctx, p, c->items, c->n, c->selected, c->at) : -2;
+}
+
 static int dv_popup(void *ctx, AuDocView *dv, const AuPopupItem *items, int n, int selected, AuIRect at)
 {
-    AuPage *p = ctx;
     (void)dv;
-    return p->cb.popup ? p->cb.popup(p->cb.ctx, p, items, n, selected, at) : -2;
+    PopupCall c = {items, n, selected, -2, at};
+    on_main(ctx, popup_main, &c);
+    return c.result;
+}
+
+typedef struct FileCall {
+    bool multiple, result;
+    AuControlFile **files;
+    uint32_t *n;
+} FileCall;
+
+static void file_main(AuPage *p, void *arg)
+{
+    FileCall *c = arg;
+    c->result = p->cb.choose_file && p->cb.choose_file(p->cb.ctx, p, c->multiple, c->files, c->n);
 }
 
 static bool dv_choose_file(void *ctx, AuDocView *dv, bool multiple, AuControlFile **files, uint32_t *n)
 {
-    AuPage *p = ctx;
     (void)dv;
-    return p->cb.choose_file && p->cb.choose_file(p->cb.ctx, p, multiple, files, n);
+    FileCall c = {multiple, false, files, n};
+    on_main(ctx, file_main, &c);
+    return c.result;
+}
+
+typedef struct ConfirmCall {
+    const char *message;
+    bool result;
+} ConfirmCall;
+
+static void confirm_main(AuPage *p, void *arg)
+{
+    ConfirmCall *c = arg;
+    c->result = !p->cb.confirm || p->cb.confirm(p->cb.ctx, p, c->message);
 }
 
 static bool dv_confirm(void *ctx, AuDocView *dv, const char *message)
 {
-    AuPage *p = ctx;
     (void)dv;
-    return !p->cb.confirm || p->cb.confirm(p->cb.ctx, p, message);
+    ConfirmCall c = {message, true};
+    on_main(ctx, confirm_main, &c);
+    return c.result;
 }
 
 static void dv_message(void *ctx, AuDocView *dv, const char *text)
@@ -1155,6 +1245,262 @@ static void dv_message(void *ctx, AuDocView *dv, const char *text)
         return; /* a hidden document */
     if (p->cb.status_text)
         p->cb.status_text(p->cb.ctx, p, text);
+}
+
+/* ---- Script that parks ----
+ * With AuPageEnv.script_coro the page's script slice
+ * (au_docview_run_scripts) runs on a coroutine. Every 100 ms of script
+ * (AuDocViewCallbacks.script_yield) the coroutine leaves: the page is
+ * parked, its view frozen, and au_page_idle returns, so the shell handles
+ * input and paints. The next au_page_idle goes on with the slice.
+ *
+ * While parked, the page paints and scrolls from the last layout, the
+ * network's deliveries wait (Held) until the slice ends, mouse moves are
+ * dropped and the scrolling keys go to the browser. Any other call first
+ * runs the slice to its end without parking (thaw), as if it had never
+ * parked; a navigation, Stop and closing stop the script instead
+ * (stop_script). A dialog the script opens runs on the main stack
+ * (on_main).
+ *
+ * One coroutine serves every page, so Aura holds one more script stack,
+ * not one a tab: a page whose script runs while another page's is parked
+ * runs it on the caller's stack, as without coroutines. */
+static struct {
+    const AuCoroOps *ops;
+    void *co;
+    AuPage *owner;    /* the page whose slice runs or is parked; NULL between slices */
+    AuDocView *dv;    /* the view whose scripts the slice runs */
+    bool ran;         /* what the slice's au_docview_run_scripts returned */
+    AuAtomBits atoms; /* the atom scope entered on the coroutine when it left */
+} script_co;
+
+static void script_entry(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        script_co.ran = au_docview_run_scripts(script_co.dv, SCRIPT_BUDGET_MS);
+        script_co.owner = NULL;
+        script_co.ops->yield(script_co.ops->ctx, script_co.co);
+    }
+}
+
+static void release_held(AuPage *p);
+
+/* Resumes p's slice until it ends or parks again, running on this stack
+ * what the script asks for in between (on_main). */
+static void co_run(AuPage *p)
+{
+    const AuCoroOps *ops = script_co.ops;
+    for (;;) {
+        p->parked = false;
+        au_docview_set_frozen(script_co.dv, false);
+        /* the atom scope is the stack's: the slice's on the coroutine,
+         * the caller's here */
+        AuAtomBits outer = au_atom_scope_enter(0);
+        au_atom_scope_leave(script_co.atoms);
+        p->on_co = true;
+        bool alive = ops->resume(ops->ctx, script_co.co);
+        p->on_co = false;
+        script_co.atoms = au_atom_scope_enter(0);
+        au_atom_scope_leave(outer);
+        if (!alive) {
+            /* the thread is gone (the entry never returns): scripts run
+             * on the caller's stack from now on */
+            script_co.co = NULL;
+            script_co.owner = NULL;
+        }
+        if (script_co.owner != p)
+            break; /* the slice ended */
+        p->parked = true;
+        au_docview_set_frozen(script_co.dv, true);
+        if (!p->main_fn)
+            break;
+        void (*fn)(AuPage *, void *) = p->main_fn;
+        p->main_fn = NULL;
+        p->in_main_call = true;
+        fn(p, p->main_arg);
+        p->in_main_call = false;
+    }
+    if (!p->parked)
+        release_held(p);
+}
+
+/* The page's script slice: on the coroutine when there is one to be had,
+ * else on this stack. Returns whether script ran. */
+static bool run_scripts(AuPage *p)
+{
+    const AuCoroOps *ops = p->env.script_coro;
+    if (ops && !script_co.co && !script_co.ops) {
+        script_co.ops = ops;
+        script_co.co = ops->create(ops->ctx, au_docview_script_stack(), script_entry, NULL);
+    }
+    if (!ops || ops != script_co.ops || !script_co.co || (script_co.owner && script_co.owner != p))
+        return au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS);
+    if (!script_co.owner) {
+        script_co.owner = p;
+        script_co.dv = p->dv;
+        script_co.ran = false;
+        script_co.atoms = au_atom_scope_enter(0);
+        au_atom_scope_leave(script_co.atoms);
+    }
+    co_run(p);
+    return p->parked || script_co.ran;
+}
+
+/* AuDocViewCallbacks.script_yield, on the script's stack. */
+static int dv_script_yield(void *ctx, AuDocView *dv)
+{
+    AuPage *p = ctx;
+    if (p->co_stop)
+        return 1;
+    if (!p->on_co || p->co_finish || dv != script_co.dv)
+        return 0; /* on the caller's stack, or running to the end */
+    script_co.ops->yield(script_co.ops->ctx, script_co.co);
+    return p->co_stop;
+}
+
+/* Runs fn on the main stack: at once when the script is not on the
+ * coroutine, else after the coroutine leaves (co_run calls it) and before
+ * it comes back. */
+static void on_main(AuPage *p, void (*fn)(AuPage *p, void *arg), void *arg)
+{
+    if (!p->on_co) {
+        fn(p, arg);
+        return;
+    }
+    p->main_fn = fn;
+    p->main_arg = arg;
+    script_co.ops->yield(script_co.ops->ctx, script_co.co);
+}
+
+/* Runs a parked slice to its end. False while that cannot be done (a
+ * dialog of the script is open): the caller then leaves the page alone. */
+static bool thaw(AuPage *p)
+{
+    if (!p->parked)
+        return true;
+    if (p->in_main_call)
+        return false;
+    p->co_finish = true;
+    while (p->parked && !p->in_main_call)
+        co_run(p);
+    p->co_finish = false;
+    return !p->parked;
+}
+
+/* Stops a parked script: it ends with the long-script limit's
+ * uncatchable error, and the slice's other tasks are stopped at their
+ * first check. */
+static void stop_script(AuPage *p)
+{
+    if (!p->parked || p->in_main_call)
+        return;
+    p->co_stop = true;
+    thaw(p);
+    p->co_stop = false;
+}
+
+static Held *held_new(AuPage *p, int kind, uint32_t id)
+{
+    Held *h = au_calloc(sizeof *h);
+    h->kind = (uint8_t)kind;
+    h->id = id;
+    h->gen = p->gen;
+    au_buf_init(&h->b);
+    if (p->held_tail)
+        p->held_tail->next = h;
+    else
+        p->held = h;
+    p->held_tail = h;
+    return h;
+}
+
+static void hold_str(AuBuf *b, const char *s)
+{
+    if (!s)
+        s = "";
+    au_buf_append(b, s, strlen(s) + 1);
+}
+
+static void hold_head(AuPage *p, uint32_t id, int status, const char *text, const char *url, const char *const *hv,
+                      size_t n)
+{
+    Held *h = held_new(p, HELD_HEAD, id);
+    h->status = status;
+    h->n = (uint32_t)n;
+    hold_str(&h->b, text);
+    hold_str(&h->b, url);
+    for (size_t i = 0; i < 2 * n; i++)
+        hold_str(&h->b, hv[i]);
+}
+
+static void hold_bytes(AuPage *p, int kind, uint32_t id, const void *bytes, size_t len)
+{
+    Held *t = p->held_tail;
+    if (t && t->kind == kind && t->id == id && t->gen == p->gen) {
+        au_buf_append(&t->b, bytes, len); /* one record for a run of bytes */
+        return;
+    }
+    au_buf_append(&held_new(p, kind, id)->b, bytes, len);
+}
+
+static void hold_done(AuPage *p, uint32_t id, bool ok)
+{
+    held_new(p, HELD_DONE, id)->ok = ok;
+}
+
+static void held_free(Held *h)
+{
+    au_buf_free(&h->b);
+    au_free(h);
+}
+
+static void drop_held(AuPage *p)
+{
+    while (p->held) {
+        Held *h = p->held;
+        p->held = h->next;
+        held_free(h);
+    }
+    p->held_tail = NULL;
+}
+
+/* Hands the held deliveries to the view, in the order they came. One may
+ * run script that parks again; the rest then waits for that slice. */
+static void release_held(AuPage *p)
+{
+    while (p->held && !p->parked) {
+        Held *h = p->held;
+        p->held = h->next;
+        if (!p->held)
+            p->held_tail = NULL;
+        if (h->gen == p->gen) {
+            switch (h->kind) {
+            case HELD_HEAD: {
+                /* hold_head wrote both strings, so b holds at least two NULs */
+                const char *text = h->b.data, *url = text + strlen(text) + 1, *q = url + strlen(url) + 1;
+                const char **hv = h->n ? au_alloc(2 * h->n * sizeof *hv) : NULL;
+                for (uint32_t i = 0; i < 2 * h->n; i++) {
+                    hv[i] = q;
+                    q += strlen(q) + 1;
+                }
+                au_docview_resource_head(p->dv, h->id, h->status, text, url, hv, h->n);
+                au_free(hv);
+                break;
+            }
+            case HELD_DATA:
+                au_docview_resource_data(p->dv, h->id, h->b.data, h->b.len);
+                break;
+            case HELD_DONE:
+                au_docview_resource_done(p->dv, h->id, h->ok);
+                break;
+            default:
+                main_data(p, h->b.data, h->b.len);
+                break;
+            }
+        }
+        held_free(h);
+    }
 }
 
 /* Hands a POST submission to the browser (a history entry or a new tab);
@@ -1216,7 +1562,7 @@ bool au_page_can_edit(const AuPage *p, int cmd)
 
 bool au_page_edit(AuPage *p, int cmd, const char *text, size_t len, AuBuf *out)
 {
-    if (!au_page_editing(p))
+    if (!thaw(p) || !au_page_editing(p))
         return false;
     bool ok = au_docview_edit(key_view(p), cmd, text, len, out);
     follow_open_url(p);
@@ -1260,6 +1606,8 @@ bool au_page_control_rect(AuPage *p, const char *name, AuIRect *r)
 
 void au_page_blur(AuPage *p)
 {
+    if (!thaw(p))
+        return;
     if (p->kind == K_DOC && p->begun) {
         AuDocView *v = key_view(p);
         au_docview_set_focus(v, NULL);
@@ -1338,7 +1686,7 @@ void au_page_set_storage_ns(AuPage *p, uint32_t ns)
 
 void au_page_storage_event(AuPage *p, const AuStorageChange *c)
 {
-    if (!p || !p->dv || (c->kind == AU_STORAGE_SESSION && c->ns != p->storage_ns))
+    if (!p || !p->dv || (c->kind == AU_STORAGE_SESSION && c->ns != p->storage_ns) || !thaw(p))
         return;
     AuDocStorageEvent ev;
     memset(&ev, 0, sizeof ev);
@@ -1590,6 +1938,8 @@ static void sel_set(AuPage *p, AuTextPos anchor, AuTextPos focus)
 
 void au_page_clear_selection(AuPage *p)
 {
+    if (!thaw(p))
+        return;
     bool had = p->anchor.node || p->focus.node;
     au_layout_set_selection(au_docview_layout(sel_view(p)), NULL, 0);
     AuTextPos none = {NULL, 0};
@@ -1628,7 +1978,7 @@ bool au_page_selection_text(AuPage *p, AuBuf *out)
 
 void au_page_select_all(AuPage *p)
 {
-    if (p->kind != K_DOC || !p->begun)
+    if (p->kind != K_DOC || !p->begun || !thaw(p))
         return;
     /* in the document that has the keyboard */
     AuDocView *v = key_view(p);
@@ -1657,7 +2007,7 @@ static void reveal(AuPage *p, AuRect r)
 
 bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive)
 {
-    if (p->kind != K_DOC || !p->begun || !text || !*text)
+    if (p->kind != K_DOC || !p->begun || !text || !*text || !thaw(p))
         return false;
     /* Find searches the document the selection is in (a nested document
      * after a click in it), the page's own otherwise. */
@@ -1804,6 +2154,8 @@ static void new_view(AuPage *p)
     dcb.script_oom = dv_script_oom;
     dcb.random = p->env.random ? dv_random : NULL;
     dcb.coro = p->env.coro;
+    if (p->env.script_coro)
+        dcb.script_yield = dv_script_yield;
     dcb.get_cookie = dv_get_cookie;
     dcb.set_cookie = dv_set_cookie;
     dcb.storage = p->env.storage ? dv_storage : NULL;
@@ -2210,6 +2562,7 @@ void au_page_discard(AuPage *p)
 {
     if (p->discarded)
         return;
+    stop_script(p);
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
@@ -3472,7 +3825,8 @@ static bool is_same_document(AuPage *p, const char *url, bool entry)
 
 static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, bool force)
 {
-    int sdi = entry && !force && p->next_entry && p->kind == K_DOC && p->begun && !p->failed
+    stop_script(p); /* a parked script ends: the page leaves its document */
+    int sdi =entry && !force && p->next_entry && p->kind == K_DOC && p->begun && !p->failed
                   ? sd_find(p, p->next_entry)
                   : -1;
     if (sdi >= 0) {
@@ -3729,6 +4083,7 @@ void au_page_load_internal(AuPage *p, const char *url, const char *html, size_t 
 
 void au_page_stop(AuPage *p)
 {
+    stop_script(p); /* Stop also ends a script that has run long enough to park */
     if (!p->loading)
         return;
     if (p->main == MAIN_SIM) {
@@ -3792,6 +4147,8 @@ void au_page_free(AuPage *p)
 {
     if (!p)
         return;
+    stop_script(p);
+    drop_held(p);
     cancel_all(p);
     compact_fetches(p);
     au_page_clear_selection(p);
@@ -3879,6 +4236,10 @@ void au_page_console_clear(AuPage *p)
 
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
 {
+    if (!thaw(p)) {
+        au_buf_puts(out, "This page's script is showing a dialog");
+        return false;
+    }
     if (p->kind != K_DOC || !p->begun) {
         au_buf_puts(out, "This page has no document to run script in");
         return false;
@@ -3969,6 +4330,7 @@ const AuFetchCert *au_page_cert(const AuPage *p)
 
 void au_page_set_viewport(AuPage *p, int width, int height)
 {
+    thaw(p); /* a dialog of the script is modal: no resize comes then */
     if (width < 1)
         width = 1;
     if (height < 1)
@@ -4000,6 +4362,7 @@ void au_page_set_scroll(AuPage *p, int x, int y)
 
 void au_page_prefs_changed(AuPage *p)
 {
+    thaw(p);
     kept_trim(p);
     apply_font_prefs(p);
     if (p->kind == K_DOC && p->begun) {
@@ -4012,6 +4375,7 @@ void au_page_set_dark(AuPage *p, bool dark)
 {
     if (au_docview_dark(p->dv) == dark)
         return;
+    thaw(p);
     au_docview_set_dark(p->dv, dark);
     if (p->kind == K_DOC && p->begun) {
         run_layout(p);
@@ -4021,6 +4385,7 @@ void au_page_set_dark(AuPage *p, bool dark)
 
 void au_page_set_zoom(AuPage *p, float zoom)
 {
+    thaw(p);
     if (!(zoom >= AU_PAGE_ZOOM_MIN))
         zoom = AU_PAGE_ZOOM_MIN;
     if (zoom > AU_PAGE_ZOOM_MAX)
@@ -4049,7 +4414,7 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
         p->in_idle = false;
         au_docview_paint(p->dv, c, view, scroll_x, scroll_y);
         p->in_idle = was_idle;
-        if (p->dirty && !p->loading)
+        if (p->dirty && !p->loading && !p->parked)
             p->dirty = false; /* paint brought the layout up to date */
     }
     au_canvas_clip_pop(c);
@@ -4104,6 +4469,10 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
         return false;
+    /* While the script is parked a moving pointer changes nothing (hover
+     * waits for the next move); a press waits for the script. */
+    if (p->parked && (ev->type == AU_EVENT_MOUSE_MOVE || !thaw(p)))
+        return false;
     if (ev->type == AU_EVENT_MOUSE_DOWN) {
         int vx = ev->x, vy = ev->y;
         AuDocView *v = au_docview_view_at(p->dv, &vx, &vy);
@@ -4156,6 +4525,15 @@ bool au_page_key(AuPage *p, const AuEvent *ev)
 {
     if (p->kind != K_DOC || !p->begun)
         return false;
+    if (p->parked) {
+        /* the scrolling keys outside a field go to the browser, which
+         * scrolls; any other key waits for the script */
+        bool scroll_key = (ev->key >= AU_KEY_LEFT && ev->key <= AU_KEY_END) || (ev->ch == ' ' && !ev->key);
+        if (scroll_key && !au_docview_editing(p->dv))
+            return false;
+        if (!thaw(p))
+            return false;
+    }
     bool used = au_docview_key(p->dv, ev);
     if (follow_open_url(p))
         return true;
@@ -4353,7 +4731,18 @@ void au_page_idle(AuPage *p)
         }
         return;
     }
-    if (p->kind == K_DOC && p->begun) {
+    bool resumed = p->parked;
+    if (resumed) {
+        /* The script goes on from where it parked; nothing else of the
+         * page runs until its slice ends. */
+        uint32_t gen0 = p->gen;
+        run_scripts(p);
+        if (p->parked)
+            return;
+        if (follow_open_url(p) || gen0 != p->gen)
+            return; /* script navigated */
+        settle(p);
+    } else if (p->kind == K_DOC && p->begun) {
         /* Animated images and CSS animations repaint only their boxes:
          * their rectangles need no layout, so they go out now instead of
          * marking the page dirty, which repainted the whole window for
@@ -4366,9 +4755,11 @@ void au_page_idle(AuPage *p)
         if (au_docview_editing(p->dv) && (int32_t)(t - p->blink_due) >= 0)
             p->blink_due = t + au_docview_blink(key_view(p), t); /* the caret */
     }
-    if (p->kind == K_DOC && p->begun) {
+    if (p->kind == K_DOC && p->begun && !resumed) {
         uint32_t gen0 = p->gen;
-        au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS); /* timers, tasks, frames */
+        run_scripts(p); /* timers, tasks, frames */
+        if (p->parked)
+            return; /* the window scrolls and paints; the next idle goes on */
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
         settle(p);
@@ -4416,9 +4807,14 @@ void au_page_idle(AuPage *p)
     report_status(p);
 }
 
+bool au_page_script_parked(const AuPage *p)
+{
+    return p->parked;
+}
+
 bool au_page_busy(const AuPage *p)
 {
-    return p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
+    return p->parked || p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
            (p->begun && au_docview_scripts_due(p->dv) < 300) || (p->begun && au_docview_settle_pending(p->dv));
 }
 

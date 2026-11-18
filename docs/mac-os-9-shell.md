@@ -208,6 +208,20 @@ Workers need a stack of their own. Mac OS 9 supplies it with the Thread
 Manager's cooperative threads (`coro_mac.c`: a worker's thread is
 stopped except while it is resumed). See [`workers.md`](workers.md).
 
+The page's own script runs on one too (`AuBrowserHost.script_coro`), so
+a long task parks every 100 ms and the window scrolls and paints
+([`browser-chrome.md`](browser-chrome.md), "Scrolling while script
+runs"). Cooperative threads run on the main task, so the script's calls
+into the Toolbox work as on the main thread.
+
+- A coroutine yields to the thread that resumed it (`GetCurrentThread`
+  at resume): a worker resumed from the page's script coroutine goes
+  back to that coroutine, not to the main thread.
+- A coroutine whose entry returns stops itself the same way and waits
+  for `coro_destroy` to dispose of its thread. Returning would let the
+  Thread Manager run any ready thread, and while a worker runs inside
+  the page's script both that coroutine and the main thread are ready.
+
 ## Keys and input
 
 - `bw_key` does not paint: the event loop in `main.c` handles up to 8

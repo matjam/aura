@@ -48,6 +48,15 @@ if(TARGET aura_host_platform)
     set_tests_properties(scroll_shift PROPERTIES TIMEOUT 300)
 endif()
 
+# Script that parks: a long task on the POSIX coroutines, scrolling and
+# painting while it runs.
+if(TARGET aura_posix)
+    add_executable(test_script_park test_script_park.c)
+    target_link_libraries(test_script_park aura_posix aura_engine m)
+    add_test(NAME browser_script_park COMMAND test_script_park)
+    set_tests_properties(browser_script_park PROPERTIES TIMEOUT 120)
+endif()
+
 # The fetcher path on src/net's fake transport (no network).
 add_executable(test_net_page test_net_page.c ${CMAKE_SOURCE_DIR}/tests/net/tls_fixtures.c)
 target_link_libraries(test_net_page aura_fakenet m)

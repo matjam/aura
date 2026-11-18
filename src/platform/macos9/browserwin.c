@@ -815,6 +815,9 @@ void browserwin_host(AuBrowserHost *h)
     h->scroll_area = host_scroll_area;
     h->random = host_random;
     h->coro = mac_coro_ops();
+    /* the Thread Manager's cooperative threads run on the main task, so
+     * page script may run on one (browser.h) */
+    h->script_coro = mac_coro_ops();
     h->memory_free_kb = host_memory_free;
 }
 

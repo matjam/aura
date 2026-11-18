@@ -77,6 +77,59 @@ Pages load asynchronously: `au_page_navigate` only starts a load, and
 - While a page loads, the status bar shows its progress in the middle
   (`AuChromeState.progress_text`).
 
+## Scrolling while script runs
+
+To let the window scroll and paint while a page's script runs a long
+task, give the browser coroutines that run on the thread of the user
+interface: `AuBrowserHost.script_coro`. The Mac OS 9 shell gives the
+Thread Manager's cooperative threads, and `aura-host chrome` gives the
+POSIX ones (it has no user interface). The GTK and Cocoa shells give
+none: their coroutines are threads, and the page's script calls the
+shell's callbacks from its stack.
+
+With them, `au_page_idle` runs the page's script slice
+(`au_docview_run_scripts`) on a coroutine (`page_doc.c`, "Script that
+parks"):
+
+- Every 100 ms of script the engine's interrupt check calls
+  `AuJsHooks.yield` (`settings.yield_ms`), between two steps of the
+  script and never inside a native. The page leaves the coroutine there:
+  the page is *parked*, its view frozen (`au_docview_set_frozen`), and
+  `au_page_idle` returns.
+- The next `au_page_idle` goes on with the script from where it left.
+  Nothing else of the page runs until the slice ends.
+- While the page is parked:
+  - It paints and scrolls from the last layout: style and layout
+    updates wait. Boxes hold their nodes, styles and text, so this is
+    safe while the document is half changed.
+  - What the network delivers is held (`Held`) and handed to the view,
+    in order, when the slice ends. The main document's response and its
+    end run the slice to its end first.
+  - Mouse moves are dropped. The scrolling keys (arrows, Page Up and
+    Down, Home, End, space) outside a field go to the browser.
+  - Any other call first runs the slice to its end without parking
+    (`thaw`), as if it had never parked: a click, a typed key, Find,
+    the console, a resize.
+  - A navigation, Stop and closing the tab stop the script instead
+    (`stop_script`): it ends with the long-script limit's uncatchable
+    error. Stop is enabled while a page is parked
+    (`au_page_script_parked`).
+  - A dialog the script opens (the insecure-form confirmation, a file
+    chooser, a pop-up menu) runs on the main stack (`on_main`).
+- Time parked is not script time: it counts neither toward the
+  long-script limit nor in the Performance window.
+- One coroutine serves every page, so Aura holds one more script stack
+  (the runtime's stack limit and half again: 768 KB on Mac OS 9), not
+  one per tab. A page whose script runs while another page's is parked
+  runs it on the caller's stack, as without coroutines.
+
+To test it, run `test_script_park` (`tests/browser`), or load a page
+with `aura-host chrome` and send keys while its script runs:
+
+```bash
+aura-host chrome -w 640 -h 480 -o out.png --tab file:///path/long.html --do pause:600 --do key:pagedown --do shot:during.png
+```
+
 ## Font preferences and text zoom
 
 The font preferences reach the engine as the generic families of the

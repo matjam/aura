@@ -3,10 +3,11 @@
  * Manager switches to only when asked: a coroutine's thread is stopped
  * except while it is resumed, so neither WaitNextEvent nor the end of
  * another thread can schedule it. resume makes the thread ready and
- * yields to it; yield stops the thread and names the application's main
- * thread as the next to run; a thread whose entry returns is disposed of
- * by the Thread Manager, which then runs the only ready thread, the main
- * one.
+ * yields to it; yield stops the thread and names the thread that resumed
+ * it as the next to run: the main thread, or for a worker resumed from
+ * the page's script coroutine (browser/page_doc.c, "Script that parks"),
+ * that coroutine. A thread whose entry returns stops the same way and
+ * waits for coro_destroy.
  *
  * The Multiversal Interfaces have no Threads.h, so the few calls are
  * declared here; they are in ThreadsLib, which every Mac OS 9 has. On
@@ -28,9 +29,11 @@ extern pascal OSErr NewThread(unsigned long style, MacThreadEntry entry, void *p
 extern pascal OSErr DisposeThread(MacThreadID thread, void *result, Boolean recycle);
 extern pascal OSErr YieldToThread(MacThreadID thread);
 extern pascal OSErr SetThreadState(MacThreadID thread, unsigned short state, MacThreadID suggested);
+extern pascal OSErr GetCurrentThread(MacThreadID *thread);
 
 typedef struct MacCoro {
     MacThreadID thread;
+    MacThreadID resumer; /* the thread that resumed it: a worker's resumer is the page's script coroutine */
     void (*entry)(void *arg);
     void *arg;
     bool done;
@@ -41,7 +44,14 @@ static void *coro_thread(void *param)
     MacCoro *c = param;
     c->entry(c->arg);
     c->done = true;
-    return NULL; /* the Thread Manager disposes of the thread and runs the main one */
+    /* Back to the resumer, stopped until coro_destroy disposes of the
+     * thread. Returning would let the Thread Manager run any ready
+     * thread: with a worker resumed from the page's script coroutine,
+     * both that coroutine and the main thread are ready. */
+    for (;;)
+        SetThreadState(kMacCurrentThreadID, kMacStoppedThreadState,
+                       c->resumer != kMacNoThreadID ? c->resumer : kMacApplicationThreadID);
+    return NULL;
 }
 
 static void *coro_create(void *ctx, size_t stack_size, void (*entry)(void *arg), void *arg)
@@ -64,6 +74,8 @@ static bool coro_resume(void *ctx, void *co)
     MacCoro *c = co;
     if (c->done)
         return false;
+    if (GetCurrentThread(&c->resumer) != noErr)
+        c->resumer = kMacApplicationThreadID;
     if (SetThreadState(c->thread, kMacReadyThreadState, kMacNoThreadID) != noErr || YieldToThread(c->thread) != noErr)
         c->done = true; /* the thread is gone: nothing more can run on it */
     return !c->done;
@@ -72,16 +84,16 @@ static bool coro_resume(void *ctx, void *co)
 static void coro_yield(void *ctx, void *co)
 {
     (void)ctx;
-    (void)co;
-    SetThreadState(kMacCurrentThreadID, kMacStoppedThreadState, kMacApplicationThreadID);
+    MacCoro *c = co;
+    SetThreadState(kMacCurrentThreadID, kMacStoppedThreadState,
+                   c->resumer != kMacNoThreadID ? c->resumer : kMacApplicationThreadID);
 }
 
 static void coro_destroy(void *ctx, void *co)
 {
     (void)ctx;
     MacCoro *c = co;
-    if (!c->done)
-        DisposeThread(c->thread, NULL, false);
+    DisposeThread(c->thread, NULL, false); /* stopped: in coro_yield, or after its entry */
     au_free(c);
 }
 

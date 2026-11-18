@@ -224,7 +224,7 @@ bool au_command_enabled(const AuCommandState *st, AuCommand cmd)
             return st->tool_can_find_again;
         return t && st->browser->find_text;
     case AU_CMD_VIEW_RELOAD: return t != NULL;
-    case AU_CMD_VIEW_STOP: return t && t->loading;
+    case AU_CMD_VIEW_STOP: return t && (t->loading || au_page_script_parked(t->page));
     case AU_CMD_VIEW_PAGE_SOURCE:
     case AU_CMD_DEV_PAGE_SOURCE: return w && au_bw_can_view_source(w);
     case AU_CMD_VIEW_ZOOM_IN: return w && au_bw_can_zoom(w, 1);

@@ -136,6 +136,15 @@ typedef struct AuBrowserHost {
      * worker runs one task at a time on the caller's stack. The struct
      * must outlive the browser. */
     const AuCoroOps *coro;
+    /* Optional. Coroutines a page's own script may run on, so that a
+     * long task parks every 100 ms and the window scrolls and paints
+     * meanwhile (page.h, AuPageEnv.script_coro). Give them only where a
+     * coroutine runs on the thread of the user interface, as the Thread
+     * Manager's cooperative threads do: the page's script calls the
+     * shell's callbacks (titles, invalidation, dialogs) from its stack.
+     * The POSIX coroutines are threads, so the GTK and Cocoa shells give
+     * none; the host tool, which has no user interface, does. */
+    const AuCoroOps *script_coro;
     /* Optional. The memory the application can still get, in KB (Mac
      * OS 9: free application heap plus free temporary memory). The
      * Automatic script memory limits follow it (scriptmem.h); without it

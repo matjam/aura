@@ -155,7 +155,8 @@ struct AuJs {
     /* run state */
     int depth;        /* nested entries from the embedder */
     double run_start;
-    double next_check;
+    double next_check; /* the next long-script check */
+    double next_yield; /* the next hooks.yield call (settings.yield_ms) */
     bool interrupted, closing;
     AuElement *current_script;
     /* event loop */

@@ -120,7 +120,7 @@ set of functions declared in the header named.
 | entropy | `AuNetOps.entropy` | random bytes for TLS and `crypto` |
 | application files and clocks | `src/browser/app.h` (`AuAppPort`, `AuAppFiles`) | the profile folder and its `Cache` and `Local Storage` folders: read a named file, write it safely (a temporary file, then replaced), rename a damaged file, remove, test, make a folder, list it; monotonic, wall and microsecond time and the UTC offset. `src/browser/app.c` decides the rest: which files, their formats, loading order, damaged files, when to save, the Running marker and session restore ([`browser-chrome.md`](browser-chrome.md), "Files Aura keeps") |
 | network hooks | `src/browser/app.h` (`AuAppNet`) | the `AuNetOps`, and optionally entropy for the page fetcher, the offline reason, the root store's bytes, `AuDownloadFiles`, deferred cache writes, hooks around the loader and the port's System Status lines; `au_app_net_start` builds the stack from them |
-| coroutines | `src/core/coro.h` | stacks for workers and scripts that wait |
+| coroutines | `src/core/coro.h` | stacks for workers and scripts that wait; `AuBrowserHost.script_coro` only where a coroutine runs on the thread of the user interface ([`browser-chrome.md`](browser-chrome.md), "Scrolling while script runs") |
 | fonts | `src/platform/platform.h` (`au_platform_load_fonts`) | the system's and the bundled font files |
 | `AuBrowserHost` | `src/browser/browser.h` | redraw requests, change notices, pop-up menus, confirm, file chooser, download confirmation, opening other programs |
 | `AuDownloadFiles` | `src/net/transfer.h` | creating and finishing download files |

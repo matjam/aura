@@ -245,10 +245,24 @@ void au_js_settings_default(AuJsSettings *s)
 
 /* ---- Limits ---- */
 
-static int interrupt_cb(JSContext *cctx, void *opaque)
+/* hooks.yield, when settings.yield_ms has passed since the last call.
+ * Returns nonzero when the embedder stops the script. */
+static int maybe_yield(AuJs *js, double *now)
 {
-    (void)cctx;
-    AuJs *js = opaque;
+    if (!js->hooks.yield || !js->settings.yield_ms || *now < js->next_yield)
+        return 0;
+    double t0 = *now;
+    int stop = js->hooks.yield(js->hooks.ctx);
+    *now = js_now(js);
+    /* the time away is not the script's */
+    js->run_start += *now - t0;
+    js->next_check += *now - t0;
+    js->next_yield = *now + js->settings.yield_ms;
+    return stop || js->closing;
+}
+
+static int interrupt_check(AuJs *js, bool may_yield)
+{
     if (js->worker) {
         int r = js_worker_interrupt(js);
         if (r >= 0)
@@ -259,6 +273,11 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
     if (js->interrupted)
         return 1;
     double now = js_now(js);
+    if (may_yield && maybe_yield(js, &now)) {
+        js->interrupted = true;
+        js->interrupts++;
+        return 1;
+    }
     if (now < js->next_check)
         return 0;
     uint32_t elapsed = (uint32_t)(now - js->run_start);
@@ -278,6 +297,12 @@ static int interrupt_cb(JSContext *cctx, void *opaque)
     return 1;
 }
 
+static int interrupt_cb(JSContext *cctx, void *opaque)
+{
+    (void)cctx;
+    return interrupt_check(opaque, true);
+}
+
 /* The engine asks interrupt_cb only once in ten thousand steps (loop
  * iterations and calls). That is often enough for script that computes,
  * but a native that forces a layout can take a large part of a second,
@@ -291,7 +316,7 @@ bool js_out_of_time(AuJs *js)
     AuJs *r = js->root;
     if (r->depth == 0 || r->closing)
         return false;
-    return interrupt_cb(r->ctx, r) != 0;
+    return interrupt_check(r, false) != 0; /* a native does not leave its stack */
 }
 
 JSValue js_throw_stopped(JSContext *ctx)
@@ -316,6 +341,7 @@ void js_enter(AuJs *js)
         JS_UpdateStackTop(r->rt);
         r->run_start = js_now(r);
         r->next_check = r->run_start + r->settings.slice_ms;
+        r->next_yield = r->run_start + r->settings.yield_ms;
         r->interrupted = false;
     }
 }

@@ -253,6 +253,13 @@ is a RangeError) and a time budget (`AuJsHooks.long_script` decides
 whether a long script goes on). Allocation failures never reach
 `au_alloc`'s fatal handler. The memory limits are set by the policy in
 "Script memory limits" below.
+To let the embedder leave the script's stack while it runs, set
+`AuJsHooks.yield` and `AuJsSettings.yield_ms`: the interrupt check calls
+the hook about every `yield_ms` (`maybe_yield` in `runtime.c`), never
+from `js_out_of_time` (a native's own check). The time until the hook
+returns is taken off the long-script budget. The page uses it to park a
+long task ([`browser-chrome.md`](browser-chrome.md), "Scrolling while
+script runs").
 The default C stack limit (`au_js_settings_default`) is 128 KB times
 the pointer size: 512 KB on Mac OS 9, of the application's 1 MB stack
 ([`mac-os-9-shell.md`](mac-os-9-shell.md)), and 1 MB on a 64-bit host.
