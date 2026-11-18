@@ -125,6 +125,27 @@ static uint32_t webfont_now(void *ctx)
     return perf_now(ctx);
 }
 
+/* The resolver's yield hook (au_css_resolver_set_yield): a style pass of
+ * the top-level view that has run script_yield_ms leaves for the
+ * embedder, as script does (AuDocViewCallbacks.script_yield), so that a
+ * long pass on a slow machine does not hold the window. The embedder
+ * yields only when the pass runs on its coroutine; until the pass goes
+ * on, the view is frozen and the window paints the last layout, which
+ * no part of the pass has reached (styles reach boxes only in
+ * au_layout_styles_changed, after the pass). */
+static void style_yield(void *ctx)
+{
+    AuDocView *dv = ctx;
+    if (dv->parent || !dv->cb.script_yield || !au_layout_settled(dv->layout))
+        return; /* an unsettled layout cannot be painted while away */
+    uint32_t t = perf_now(dv);
+    uint32_t every = dv->cb.script_yield_ms ? dv->cb.script_yield_ms : 100;
+    if (t - dv->style_yield_at < every)
+        return;
+    dv->cb.script_yield(dv->cb.ctx, dv);
+    dv->style_yield_at = perf_now(dv);
+}
+
 /* Ends web font block periods that have run out: the text they hid is
  * painted (no layout: it was laid out with the fallback's metrics).
  * Returns the milliseconds until the next one ends (UINT32_MAX: none). */
@@ -1769,6 +1790,7 @@ DV_ENTRY_VOID(begin, (AuDocView * dv, const char *url), (dv, url))
     dv->resolver = au_css_resolver_new();
     au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
     au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
+    au_css_resolver_set_yield(dv->resolver, style_yield, dv);
     if (dv->has_font_prefs)
         au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     {
@@ -1863,6 +1885,7 @@ static void rebuild_resolver(AuDocView *dv)
         dv->resolver = au_css_resolver_new();
         au_css_resolver_set_metrics(dv->resolver, au_layout_css_metrics, dv->layout);
         au_css_resolver_set_container_size(dv->resolver, au_layout_css_container_size, dv->layout);
+        au_css_resolver_set_yield(dv->resolver, style_yield, dv);
         if (dv->has_font_prefs)
             au_css_resolver_set_font_prefs(dv->resolver, &dv->font_prefs);
     } else {
@@ -2041,6 +2064,7 @@ static void check_restyle(AuDocView *dv)
 static bool update_style(AuDocView *dv)
 {
     bool changed = false;
+    dv->style_yield_at = perf_now(dv); /* a pass yields after script_yield_ms */
     if (dv->frames_dirty)
         au_frames_sync(dv); /* what an object or embed shows decides its box */
     if (dv->sheets_rescan) {

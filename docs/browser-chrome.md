@@ -107,6 +107,17 @@ parks"):
   `au_page_idle` returns.
 - The next `au_page_idle` goes on with the script from where it left.
   Nothing else of the page runs until the slice ends.
+- A style and layout update (`au_docview_update`) runs on the same
+  coroutine (job `CO_LAYOUT` in `page_doc.c`) and parks the same way:
+  every 32 elements the style pass calls the resolver's yield hook
+  (`au_css_resolver_set_yield`, [`css.md`](css.md)), which parks after
+  100 ms of the update (`style_yield` in `docview.c`). It parks only
+  while the last layout is settled, so the frozen view paints that
+  layout. A forced update inside script (`getBoundingClientRect`) parks
+  through the same hook while the script slice runs. The page lays out,
+  repaints and applies its pending scroll when the job ends
+  (`layout_job_done`). Layout itself, image decoding and HTML parsing
+  do not park yet.
 - While the page is parked:
   - It paints and scrolls from the last layout: style and layout
     updates wait. Boxes hold their nodes, styles and text, so a

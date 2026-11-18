@@ -152,6 +152,15 @@ preference or the system setting changes ([`browser-chrome.md`](browser-chrome.m
 To render a page dark on the host, pass `--color-scheme dark` to
 `aura-host`.
 
+## Pausing a style pass
+
+To let a long style pass give the window time, set a yield hook with
+`au_css_resolver_set_yield(resolver, fn, ctx)`. The style pass calls it
+every 32 elements, between two elements, so the hook may switch
+coroutines (the browser parks the page there,
+[`browser-chrome.md`](browser-chrome.md), "Scrolling while script
+runs"). The hook must not change the document or its style sheets.
+
 ## Equal styles keep their object
 
 A style pass compares each newly computed style with the element's old

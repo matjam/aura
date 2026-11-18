@@ -832,6 +832,12 @@ void au_css_restyle(AuCssResolver *r, AuDocument *doc);
 /* The number of elements styled since the resolver was created (for
  * tests and timings: how much a change restyled). */
 uint32_t au_css_resolver_styled_count(const AuCssResolver *r);
+/* Calls fn every 32 elements a style pass reaches, between two elements,
+ * so that the embedder can leave a long pass and come back to it (the
+ * browser's coroutine, page_doc.c). Nothing may change the document or
+ * the resolver until the pass goes on; the styles of the elements
+ * reached so far are new, the others old, and no layout has seen any. */
+void au_css_resolver_set_yield(AuCssResolver *r, void (*fn)(void *ctx), void *ctx);
 /* Releases every AuElement.style in doc. */
 void au_css_clear_document(AuDocument *doc);
 

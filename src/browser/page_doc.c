@@ -152,6 +152,7 @@ struct AuPage {
      * hold_over that the wait has ended and does not come back. */
     uint32_t begun_at;
     bool hold_over;
+    uint32_t layout_active_ms; /* a parked loading layout's time on the coroutine */
     float progress;
 
     Fetch **fetches; /* resources and the main document, in request order */
@@ -1280,11 +1281,16 @@ static void dv_message(void *ctx, AuDocView *dv, const char *text)
  * One coroutine serves every page, so Aura holds one more script stack,
  * not one a tab: a page whose script runs while another page's is parked
  * runs it on the caller's stack, as without coroutines. */
+/* What a slice on the coroutine runs: the page's scripts, or the loading
+ * layout (whose style pass parks as script does). */
+enum { CO_SCRIPTS, CO_LAYOUT };
+
 static struct {
     const AuCoroOps *ops;
     void *co;
     AuPage *owner;    /* the page whose slice runs or is parked; NULL between slices */
     AuDocView *dv;    /* the view whose scripts the slice runs */
+    int job;          /* CO_SCRIPTS or CO_LAYOUT */
     bool ran;         /* what the slice's au_docview_run_scripts returned */
     AuAtomBits atoms; /* the atom scope entered on the coroutine when it left */
 } script_co;
@@ -1293,7 +1299,10 @@ static void script_entry(void *arg)
 {
     (void)arg;
     for (;;) {
-        script_co.ran = au_docview_run_scripts(script_co.dv, SCRIPT_BUDGET_MS);
+        if (script_co.job == CO_LAYOUT)
+            au_docview_update(script_co.dv);
+        else
+            script_co.ran = au_docview_run_scripts(script_co.dv, SCRIPT_BUDGET_MS);
         script_co.owner = NULL;
         script_co.ops->yield(script_co.ops->ctx, script_co.co);
     }
@@ -1342,7 +1351,11 @@ static void co_run(AuPage *p)
 
 /* The page's script slice: on the coroutine when there is one to be had,
  * else on this stack. Returns whether script ran. */
-static bool run_scripts(AuPage *p)
+/* Runs job for p on the coroutine, or goes on with p's parked slice
+ * (whatever its job). False when there is no coroutine to be had (none,
+ * or another page's slice is parked): the caller runs the job on its own
+ * stack. */
+static bool co_job(AuPage *p, int job)
 {
     const AuCoroOps *ops = p->env.script_coro;
     if (ops && !script_co.co && !script_co.ops) {
@@ -1350,15 +1363,23 @@ static bool run_scripts(AuPage *p)
         script_co.co = ops->create(ops->ctx, au_docview_script_stack(), script_entry, NULL);
     }
     if (!ops || ops != script_co.ops || !script_co.co || (script_co.owner && script_co.owner != p))
-        return au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS);
+        return false;
     if (!script_co.owner) {
         script_co.owner = p;
         script_co.dv = p->dv;
+        script_co.job = job;
         script_co.ran = false;
         script_co.atoms = au_atom_scope_enter(0);
         au_atom_scope_leave(script_co.atoms);
     }
     co_run(p);
+    return true;
+}
+
+static bool run_scripts(AuPage *p)
+{
+    if (!co_job(p, CO_SCRIPTS))
+        return au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS);
     return p->parked || script_co.ran;
 }
 
@@ -1851,11 +1872,8 @@ static void apply_pending_scroll(AuPage *p, bool final)
 
 /* ---- Layout ---- */
 
-static void run_layout(AuPage *p)
+static void layout_ran(AuPage *p, uint32_t dt)
 {
-    uint32_t t0 = now(p);
-    au_docview_update(p->dv);
-    uint32_t dt = now(p) - t0;
     p->stats.layout_ms = dt;
     p->stats.layout_total_ms += dt;
     p->stats.layouts++;
@@ -1863,6 +1881,32 @@ static void run_layout(AuPage *p)
     p->dirty = false;
 }
 
+static void run_layout(AuPage *p)
+{
+    uint32_t t0 = now(p);
+    au_docview_update(p->dv);
+    layout_ran(p, now(p) - t0);
+}
+
+static bool co_job(AuPage *p, int job);
+
+/* The loading layout (maybe_layout) on the coroutine, so that a long
+ * style pass leaves for the window as script does (style_yield in
+ * docview.c). False when it parked: the idle that ends it finishes the
+ * work (layout_job_done). */
+static bool run_layout_co(AuPage *p)
+{
+    uint32_t t0 = now(p);
+    if (!co_job(p, CO_LAYOUT)) {
+        run_layout(p);
+        return true;
+    }
+    p->layout_active_ms = now(p) - t0;
+    if (p->parked)
+        return false;
+    layout_ran(p, p->layout_active_ms);
+    return true;
+}
 /* Whether a new document's first paint still waits, as a browser's waits
  * for render-blocking style sheets: while it has no body, or a style
  * sheet that applies is being fetched, for at most RENDER_HOLD_MS after
@@ -1896,7 +1940,16 @@ static void maybe_layout(AuPage *p, bool force)
         interval = p->stats.layout_ms * 4;
     if (!force && p->stats.layouts > 0 && now(p) - p->last_layout < interval)
         return;
-    run_layout(p);
+    if (!run_layout_co(p))
+        return; /* parked mid style pass: layout_job_done finishes */
+    invalidate_all(p);
+    apply_pending_scroll(p, false);
+}
+
+/* A loading layout that parked has ended (au_page_idle). */
+static void layout_job_done(AuPage *p)
+{
+    layout_ran(p, p->layout_active_ms);
     invalidate_all(p);
     apply_pending_scroll(p, false);
 }
@@ -1921,6 +1974,8 @@ static void check_finished(AuPage *p)
         return;
     p->dirty = true;
     maybe_layout(p, true);
+    if (p->parked)
+        return; /* the load ends after the layout does */
     apply_pending_scroll(p, true);
     finish(p, !p->failed);
 }
@@ -4839,11 +4894,17 @@ void au_page_idle(AuPage *p)
         /* The script goes on from where it parked; nothing else of the
          * page runs until its slice ends. */
         uint32_t gen0 = p->gen;
+        bool layout = script_co.job == CO_LAYOUT;
+        uint32_t t0 = now(p);
         run_scripts(p);
+        if (layout)
+            p->layout_active_ms += now(p) - t0;
         if (p->parked)
             return;
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
+        if (layout)
+            layout_job_done(p);
         settle(p);
         deliver_input(p);
         if (p->parked || gen0 != p->gen)

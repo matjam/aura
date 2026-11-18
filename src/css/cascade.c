@@ -306,6 +306,9 @@ struct AuCssResolver {
     struct HasAnchor *has_anchors; /* every :has() (au_css_invalidate_children) */
     uint32_t nhas_anchors, has_anchors_cap;
     uint32_t styled_count; /* elements styled since creation (au_css_resolver_styled_count) */
+    void (*yield)(void *ctx); /* au_css_resolver_set_yield */
+    void *yield_ctx;
+    uint32_t yield_tick;
     uint32_t stat_computed; /* elements computed since the last css_resolver_take_computed */
 
     /* Container queries. cq_conds[1..ncq) are the @container rules the
@@ -3638,6 +3641,10 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
                     troot = au_node_root(n);
             }
         }
+        if (r->yield && ++r->yield_tick >= 32) {
+            r->yield_tick = 0;
+            r->yield(r->yield_ctx);
+        }
         r->cur_el = el;
         r->cur_root = troot;
         bool forced = !only_dirty || (np && path[np - 1].forced) || (el->state & AU_STATE_STYLE_DIRTY) || !el->style;
@@ -3701,6 +3708,13 @@ void au_css_style_document(AuCssResolver *r, AuDocument *doc)
 }
 
 uint32_t au_css_resolver_styled_count(const AuCssResolver *r) { return r->styled_count; }
+
+void au_css_resolver_set_yield(AuCssResolver *r, void (*fn)(void *ctx), void *ctx)
+{
+    r->yield = fn;
+    r->yield_ctx = ctx;
+    r->yield_tick = 0;
+}
 
 static void mark_ancestors(AuElement *el);
 

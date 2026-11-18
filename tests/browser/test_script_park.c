@@ -92,6 +92,18 @@ static bool t_read(void *ctx, const char *url, char **data, size_t *len)
     (void)ctx;
     if (strncmp(url, "file:///mem/", 12))
         return false;
+    if (!strcmp(url + 12, "styles.html")) {
+        /* 12,000 styled elements and no script: a long style pass */
+        AuBuf b;
+        au_buf_init(&b);
+        au_buf_puts(&b, "<!DOCTYPE html><title>Styles</title><style>div.a span{color:red}div:nth-child(odd) "
+                        "span.b{color:blue}p+p{margin:1px}</style><body style='margin:0'>");
+        for (int i = 0; i < 4000; i++)
+            au_buf_puts(&b, "<div class=a><span class=b>x</span><p>y</p></div>");
+        *len = b.len;
+        *data = (char *)b.data;
+        return true;
+    }
     for (size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
         if (!strcmp(url + 12, files[i].name)) {
             size_t n = strlen(files[i].text);
@@ -319,6 +331,33 @@ static void test_shows_progress(void)
     au_browser_free(b);
 }
 
+/* A long style pass while a page loads leaves the coroutine as script
+ * does: the window scrolls meanwhile, and the load ends laid out. */
+static void test_style_parks(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/styles.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    bool parked = false;
+    for (int i = 0; i < 4000 && !parked && au_browser_busy(b); i++) {
+        au_bw_idle(w);
+        parked = au_page_script_parked(t->page);
+    }
+    CHECK(parked);
+    paint(w);
+    settle(w);
+    CHECK(!au_page_script_parked(t->page));
+    int cw, ch;
+    au_page_content_size(t->page, &cw, &ch);
+    CHECK(ch > 4000 * 10);
+    AuEvent e = key(AU_KEY_PAGE_DOWN);
+    CHECK(au_bw_key(w, &e));
+    CHECK(t->scroll_y > 0);
+    paint(w);
+    au_browser_free(b);
+}
+
 /* overflow: hidden on the root: the user does not scroll the page (keys,
  * the scroll bar's range), script does. */
 static void test_scroll_locked(void)
@@ -470,6 +509,7 @@ int main(void)
     test_restyle_then_park();
     test_shows_progress();
     test_scroll_locked();
+    test_style_parks();
     test_click_waits();
     test_queue_dropped_on_stop();
     test_stop_and_leave();
