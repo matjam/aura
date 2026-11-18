@@ -17,6 +17,15 @@ Flexbox: every property. Container 600px wide unless noted; Ahem text
 ---
 #s x=32 w=32
 
+=== ::before and ::after are blockified items
+<body style="margin:0">
+<style>#c::after { content: ""; width: 20px; height: 20px; background: #ff0000 }</style>
+<div id=c style="display:flex;width:600px">xx</div>
+---
+// MDN's breadcrumb chevrons: an empty inline ::after showed nothing
+#c h=20
+pixel 40 10 ff0000
+
 === flex-grow distributes free space by factor
 <body style="margin:0">
 <div style="display:flex;width:600px">

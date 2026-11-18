@@ -3016,8 +3016,13 @@ static AuStyle *cascade(AuCssResolver *r, const AuElement *el, const AuStyle *pa
         s->flags |= AU_STYLE_F_AUTHOR_DECOR;
 
     uint16_t pdisp = parent ? parent->box->display : AU_DISPLAY_BLOCK;
-    if (pseudo)
-        pdisp = AU_DISPLAY_BLOCK; /* pseudo-elements are not flex items of their originating element here */
+    /* ::before and ::after are children of their element (parent here),
+     * so they are flex and grid items of a flex or grid container and
+     * blockify: MDN's breadcrumb chevrons are 20x20 ::after boxes of a
+     * flex <li>, and stayed empty inline boxes. Other pseudo-elements
+     * are not boxes of that kind. */
+    if (pseudo && pseudo != AU_CSS_PSEUDO_BEFORE && pseudo != AU_CSS_PSEUDO_AFTER)
+        pdisp = AU_DISPLAY_BLOCK;
     css_compute_finish(&cs.cc, pdisp);
     if (cs.cc.is_root)
         s->flags |= AU_STYLE_F_ROOT;
