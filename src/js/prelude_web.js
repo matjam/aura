@@ -671,14 +671,29 @@ defGlobal('TextDecoder', TextDecoder);
 
 /* ---------------- modules ---------------- */
 
-function fetchModules(urls) {
-    return Promise.all(urls.map((u) => new Promise((resolve) => {
-        P.fetchText(u, 2, (body) => {
-            if (body === null) { resolve(u); return; }
-            N.moduleStore(u, body);
-            resolve(null);
+/* Module graphs loading at once share each fetch: GitHub's React parts
+ * all import react-dom-client (200 KB), which was fetched, held as a
+ * string and stored once per graph. */
+const modFetching = new Map();
+function fetchModule(u) {
+    let p = modFetching.get(u);
+    if (!p) {
+        let done = false;
+        p = new Promise((resolve) => {
+            P.fetchText(u, 2, (body) => {
+                done = true;
+                modFetching.delete(u);
+                if (body === null) { resolve(u); return; }
+                N.moduleStore(u, body);
+                resolve(null);
+            });
         });
-    }))).then((failed) => failed.filter(Boolean));
+        if (!done) modFetching.set(u, p);
+    }
+    return p;
+}
+function fetchModules(urls) {
+    return Promise.all(urls.map(fetchModule)).then((failed) => failed.filter(Boolean));
 }
 /* Loads, links and evaluates a module script. Resolves to true on
  * success. Errors are reported. */
