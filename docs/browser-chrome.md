@@ -64,9 +64,14 @@ Pages load asynchronously: `au_page_navigate` only starts a load, and
 - A new document is neither laid out nor painted until it has a body
   and none of its style sheets that apply (`<link>`s and their
   `@import`s, `au_docview_sheets_pending`) is still being fetched, for
-  at most 5 seconds after its first bytes (`render_held` in
-  `page_doc.c`, `RENDER_HOLD_MS`). The window shows white meanwhile, so
-  the document never flashes up unstyled. Once the page shows, a sheet
+  5 seconds after its first bytes (`render_held` in `page_doc.c`,
+  `RENDER_HOLD_MS`). Past that, up to 20 seconds, it waits while a
+  sheet of the head that the parser found is still arriving: its bytes
+  grew in the last 2 seconds (`RENDER_HOLD_MAX_MS`,
+  `RENDER_HOLD_IDLE_MS`, `SheetSrc.blocking`). A sheet that stalls, or
+  one that script added, does not extend the wait; Chrome waits for
+  render-blocking sheets without a limit. The window shows white
+  meanwhile, so the document does not flash up unstyled on a slow link. Once the page shows, a sheet
   that script adds later does not hide it again. A document restored
   for Back and Forward shows at once. Test:
   `tests/browser/test_render_hold.c`.

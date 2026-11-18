@@ -152,6 +152,8 @@ struct AuPage {
      * hold_over that the wait has ended and does not come back. */
     uint32_t begun_at;
     bool hold_over;
+    size_t hold_bytes;       /* bytes of the pending sheets at the last check */
+    uint32_t hold_moved_at;  /* when they last grew */
     uint32_t layout_active_ms; /* a parked loading layout's time on the coroutine */
     float progress;
 
@@ -1909,18 +1911,32 @@ static bool run_layout_co(AuPage *p)
 }
 /* Whether a new document's first paint still waits, as a browser's waits
  * for render-blocking style sheets: while it has no body, or a style
- * sheet that applies is being fetched, for at most RENDER_HOLD_MS after
- * its first bytes. The window shows the page's background meanwhile
- * instead of the document unstyled, and the document is not laid out.
- * Once the wait ends it does not come back (a sheet that script adds
- * later does not blank a page that is showing). */
+ * sheet that applies is being fetched, for RENDER_HOLD_MS after its first
+ * bytes; and past that, up to RENDER_HOLD_MAX_MS, while the pending
+ * sheets' bytes still arrive (they grew in the last RENDER_HOLD_IDLE_MS).
+ * Chrome waits for such sheets without a limit; a sheet that stalls here
+ * gives way to the unstyled page. The window shows the page's background
+ * meanwhile instead of the document unstyled, and the document is not
+ * laid out. Once the wait ends it does not come back (a sheet that script
+ * adds later does not blank a page that is showing). */
+#define RENDER_HOLD_MAX_MS 20000
+#define RENDER_HOLD_IDLE_MS 2000
 static bool render_held(AuPage *p)
 {
     if (p->hold_over || p->kind != K_DOC || !p->begun)
         return false;
     AuDocument *doc = au_docview_document(p->dv);
-    bool wait = p->loading && now(p) - p->begun_at < RENDER_HOLD_MS && doc &&
-                (!au_document_body(doc) || au_docview_sheets_pending(p->dv));
+    uint32_t t = now(p), since = t - p->begun_at;
+    size_t bytes = 0;
+    bool sheets = doc && au_docview_sheets_pending(p->dv, &bytes);
+    if (bytes != p->hold_bytes || !p->hold_moved_at) {
+        p->hold_bytes = bytes;
+        p->hold_moved_at = t;
+    }
+    /* bytes > 0: a render-blocking sheet (from the head) is pending */
+    bool wait = p->loading && doc && (!au_document_body(doc) || sheets) &&
+                (since < RENDER_HOLD_MS ||
+                 (bytes > 0 && since < RENDER_HOLD_MAX_MS && t - p->hold_moved_at < RENDER_HOLD_IDLE_MS));
     if (!wait) {
         p->hold_over = true;
         p->dirty = true; /* the first layout is due */
@@ -2778,6 +2794,8 @@ static void begin_doc(AuPage *p, const char *url)
     p->dirty = true;
     p->begun_at = now(p);
     p->hold_over = false;
+    p->hold_bytes = 0;
+    p->hold_moved_at = 0;
 }
 
 /* Loads a whole generated document now. */

@@ -1362,8 +1362,10 @@ uint32_t au_docview_pending(const AuDocView *dv)
     return dv->nreqs;
 }
 
-bool au_docview_sheets_pending(const AuDocView *dv)
+bool au_docview_sheets_pending(const AuDocView *dv, size_t *bytes)
 {
+    bool pending = false;
+    size_t n = 0;
     for (uint32_t i = 0; i < dv->nreqs; i++) {
         const Request *r = &dv->reqs[i];
         if (r->kind != AU_RES_STYLESHEET || !r->sheet || r->preload)
@@ -1371,9 +1373,17 @@ bool au_docview_sheets_pending(const AuDocView *dv)
         const SheetSrc *s = r->sheet;
         if (s->disabled || s->failed || s->deferred || !media_matches(dv, s))
             continue;
-        return true;
+        pending = true;
+        /* an @import counts as its importing sheet does */
+        const SheetSrc *top = s;
+        while (top->parent)
+            top = top->parent;
+        if (top->blocking)
+            n += r->data.len + 1; /* + 1: a blocking sheet with no bytes yet shows as pending */
     }
-    return false;
+    if (bytes)
+        *bytes = n;
+    return pending;
 }
 
 bool au_docview_loading(const AuDocView *dv)
@@ -1669,6 +1679,11 @@ static void add_slot(AuDocView *dv, AuElement *el, uint32_t index)
     if (s->scope)
         au_node_ref(s->scope);
     s->src = au_calloc(sizeof *s->src);
+    /* A sheet of the head found while the document is still being parsed
+     * blocks the first paint as Chrome's do; one that script adds later
+     * does not extend the wait (au_docview_sheets_pending). */
+    AuElement *head = dv->doc ? au_document_head(dv->doc) : NULL;
+    s->src->blocking = dv->scan_from_parser && head && el->node.parent == &head->node;
     const char *media = attr(el, "media");
     s->src->media = media && *media ? dup(media) : NULL;
     if (au_is_html_element(&el->node, AU_ATOM_style)) {
@@ -1852,7 +1867,9 @@ DV_ENTRY_VOID(feed, (AuDocView * dv, const char *bytes, size_t len), (dv, bytes,
         au_docview_begin(dv, dv->url);
     au_html_parser_feed(dv->parser, bytes, len);
     dv->tree_dirty = true;
+    dv->scan_from_parser = true;
     scan_document(dv, false);
+    dv->scan_from_parser = false;
     dv->frames_dirty = true;
     au_frames_sync(dv);
 }
@@ -1865,12 +1882,16 @@ DV_ENTRY_VOID(finish, (AuDocView * dv), (dv))
     if (dv->script && !au_html_parser_done(dv->parser)) {
         /* Paused on a script: the end of parsing comes with the resume. */
         dv->tree_dirty = true;
+        dv->scan_from_parser = true;
         scan_document(dv, false);
+        dv->scan_from_parser = false;
         return;
     }
     dv->parsing = false;
     dv->tree_dirty = true;
+    dv->scan_from_parser = true;
     scan_document(dv, true);
+    dv->scan_from_parser = false;
     dv->frames_dirty = true;
     au_frames_sync(dv);
     invalidate_all(dv);
@@ -3227,9 +3248,11 @@ void au_dv_parsed_more(AuDocView *dv)
     if (!dv->parser)
         return;
     dv->tree_dirty = true;
+    dv->scan_from_parser = true; /* the sheets found are the parser's (render-blocking in the head) */
     if (dv->parsing && au_html_parser_done(dv->parser)) {
         dv->parsing = false;
         scan_document(dv, true);
+        dv->scan_from_parser = false;
         invalidate_all(dv);
         au_forms_autofocus(dv);
         if (dv->script)
@@ -3237,6 +3260,7 @@ void au_dv_parsed_more(AuDocView *dv)
         maybe_finished(dv);
     } else {
         scan_document(dv, false);
+        dv->scan_from_parser = false;
     }
 }
 

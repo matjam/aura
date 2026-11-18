@@ -240,8 +240,12 @@ void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok);
 /* Parsing is not finished or resources are pending. */
 bool au_docview_loading(const AuDocView *dv);
 /* A style sheet (a <link>'s or an @import's) whose media matches is still
- * being fetched: the page holds its first paint for it (page_doc.c). */
-bool au_docview_sheets_pending(const AuDocView *dv);
+ * being fetched: the page holds its first paint for it (page_doc.c).
+ * bytes (may be NULL) gets how many bytes of the render-blocking ones
+ * (found while the parser was in the head) have arrived, plus one for
+ * each, so that the hold can tell a slow sheet from a stalled one; 0
+ * when none of them is pending. */
+bool au_docview_sheets_pending(const AuDocView *dv, size_t *bytes);
 /* Requests still outstanding. */
 uint32_t au_docview_pending(const AuDocView *dv);
 

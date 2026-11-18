@@ -20,6 +20,7 @@ struct SheetSrc {
     size_t len;   /* the text's length, also once the sheet has it */
     uint32_t req; /* outstanding request, 0 if none */
     bool failed;
+    bool blocking;     /* found while the parser was in the head: render-blocking */
     bool deferred;     /* media does not match: not fetched (a <style>: not parsed) yet */
     AuCssSheet *sheet; /* parsed, or NULL; owned here, an import's by its parent's sheet */
     SheetSrc *parent;  /* the importing sheet, NULL for a <style> or <link> */
@@ -119,6 +120,7 @@ struct AuDocView {
      * (retire_sheet), so that it keeps its index meanwhile. */
     AuCssSheet **retired;
     uint32_t nretired, retired_cap;
+    bool scan_from_parser; /* scan_document runs for what the parser added */
     AdoptedSheets *adopted;
     uint32_t nadopted, adopted_cap;
     /* While every sheet change since the last rebuild_resolver was in a

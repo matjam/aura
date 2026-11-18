@@ -48,10 +48,13 @@ typedef struct NetReq {
     const AuFetchSink *sink;
     char url[256];
     int step;
+    size_t sent; /* sheet bytes sent while trickling */
+    int polls;
 } NetReq;
 static NetReq reqs[8];
 static uint32_t nreqs;
 static bool sheets_go;
+static bool sheets_trickle; /* a sheet's bytes come one every other poll */
 
 static uint32_t net_start(void *ctx, const AuFetchRequest *rq, const AuFetchSink *sink)
 {
@@ -91,6 +94,11 @@ static void net_poll(void *ctx)
             rs.charset = rs.encoding = rs.filename = rs.csp = rs.referrer_policy = rs.status_text = "";
             rs.content_length = (int64_t)strlen(body);
             s->response(s->ctx, i + 1, &rs);
+        } else if (r->step == 1 && css && sheets_trickle) {
+            if (r->polls++ % 2 == 0 && r->sent < strlen(body))
+                s->data(s->ctx, i + 1, body + r->sent++, 1);
+            if (r->sent < strlen(body))
+                continue; /* stays at this step */
         } else if (r->step == 1) {
             s->data(s->ctx, i + 1, body, strlen(body));
         } else if (r->step == 2) {
@@ -189,12 +197,43 @@ static void test_gives_up(void)
     au_browser_free(b);
 }
 
+/* A sheet still arriving after 5 seconds (a slow link) keeps the page
+ * held until it has come: its bytes grew within the last 2 seconds. */
+static void test_slow_sheet(void)
+{
+    AuPageFetcher f;
+    AuBrowser *b;
+    AuBrowserWindow *w;
+    start(&w, &b, &f);
+    sheets_go = sheets_trickle = true;
+    size_t len = strlen(sheet_body);
+    uint32_t t0 = clock_ms;
+    /* one byte every 200 ms: about 7 s for the sheet */
+    for (size_t i = 0; i + 3 < len; i++) {
+        idle(w, 2, 100);
+        uint32_t c = div_colour(w);
+        if (c == 0xFF0000)
+            fprintf(stderr, "unstyled at %u ms\n", (unsigned)(clock_ms - t0));
+        CHECK(c != 0xFF0000);
+    }
+    CHECK(clock_ms - t0 > 5000);
+    idle(w, 12, 100);
+    uint32_t c = div_colour(w);
+    if (c != 0x00FF00)
+        fprintf(stderr, "after the sheet: %06x (sent %u of %u, step %d)\n", (unsigned)c, (unsigned)reqs[1].sent,
+                (unsigned)len, reqs[1].step);
+    CHECK(c == 0x00FF00);
+    sheets_trickle = false;
+    au_browser_free(b);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
     fonts = ahem_fontset(fontdata);
     test_waits_for_sheet();
     test_gives_up();
+    test_slow_sheet();
     au_fontset_free(fonts);
     printf("render_hold: all tests passed\n");
     return 0;

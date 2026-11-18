@@ -484,6 +484,10 @@ failing:
 - No post-quantum key exchange, no revocation checking, no client
   certificates.
 - The platforms give no DNS TTL: an answer is used for 5 minutes.
+- Slashdot's Cloudflare rule challenges every request whose user agent
+  says `PPC Mac OS 9`, even with a solved challenge's cookie, so Mac OS
+  9 cannot read Slashdot. Aura does not send another platform's string
+  to get past it ([`networking.md`](networking.md), "User agent").
 
 ## Content blocking
 
@@ -512,6 +516,12 @@ failing:
 ## Memory
 
 Largest first.
+
+- reCAPTCHA's invisible badge on Reddit holds about 5 MB in its frame's
+  script and 6 MB in its worker on the 64-bit host (2026-11-18), each
+  peaking near 20 MB while it runs and collected afterwards. What stays
+  is live data: only engine-level cuts to objects and functions would
+  shrink it.
 
 1. **Parsed style sheets.** What is left of them, for GitHub's home
    page with 32-bit pointers: 2.4 MB (1.3 MB of rules and selectors,
