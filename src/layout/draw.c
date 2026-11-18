@@ -260,6 +260,19 @@ static float tf_arg(const AuCssValue *v, float basis)
         return v->u.num * basis / 100;
     if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
         return v->u.num;
+    if (v->type == AU_CSSV_CALC) {
+        /* translateX(calc(-100% - 10px)): Python's documentation hides
+         * its mobile menu this way, and it showed over the page. */
+        AuCssBlob tmp;
+        memset(&tmp, 0, sizeof tmp);
+        tmp.refs = 1;
+        tmp.value = *v;
+        AuLen l;
+        memset(&l, 0, sizeof l);
+        l.kind = AU_LEN_CALC;
+        l.u.calc = &tmp;
+        return au_len_resolve(&l, basis);
+    }
     return 0;
 }
 

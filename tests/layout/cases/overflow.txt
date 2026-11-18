@@ -123,6 +123,15 @@ hit 30 30 #b
 ---
 pixel 10 10 808080
 
+=== a translation in calc() with a percentage of the box
+<body style="margin:0">
+<div style="width:40px;height:20px;background:#000000;transform:translateX(calc(100% + 10px))"></div>
+---
+// Python's documentation hides its mobile menu with
+// translateX(calc(-100% - 10px)); the calc was taken as 0
+pixel 20 10 ffffff
+pixel 70 10 000000
+
 === opacity applies to an inline box
 <body style="margin:0;line-height:20px">
 <div>x<span style="opacity:0;background:#000000;padding:0 20px"> </span><span style="opacity:0.5;background:#000000;padding:0 20px"> </span></div>
