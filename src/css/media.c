@@ -221,7 +221,7 @@ static bool mq_value(MqP *p, uint32_t *i, uint32_t b, uint8_t *vt, float *v, uin
     }
     if (t->type == TK_FUNCTION && (t->kw == AU_K_calc || t->kw == AU_K_min || t->kw == AU_K_max || t->kw == AU_K_clamp)) {
         CssArena a = {0};
-        CssParseCtx cx = {&a, false, false, NULL};
+        CssParseCtx cx = {.arena = &a};
         uint32_t q = k;
         AuCssValue *val = css_parse_component(&cx, tk, &q, b);
         bool ok = false;

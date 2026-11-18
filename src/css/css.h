@@ -429,6 +429,14 @@ typedef struct AuStyleRare {
         container_type; /* AU_CONTAINER_TYPE_* */
     /* parsed only (css_enums.h) */
     uint8_t overscroll_x, overscroll_y, scrollbar_gutter, content_visibility, field_sizing;
+    /* Scroll snapping (layout/snap.c). scroll_snap_type: NULL or none, or
+     * an axis keyword optionally followed by mandatory or proximity (a
+     * LIST). scroll_snap_align: NULL or none, or one or two of none,
+     * start, end, center (block axis first). */
+    AuCssBlob *scroll_snap_type, *scroll_snap_align;
+    uint8_t scroll_snap_stop;
+    AuLen scroll_padding[4]; /* top, right, bottom, left; auto is 0 */
+    float scroll_margin[4];
 } AuStyleRare;
 
 typedef enum {

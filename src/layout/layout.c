@@ -2364,7 +2364,7 @@ bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6])
     return true;
 }
 
-bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y)
+bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y, bool by)
 {
     LBox *b = el ? (LBox *)el->box : NULL;
     if (!script_scrollable(b))
@@ -2374,10 +2374,12 @@ bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, floa
     float mx = l_max(0, k->sw - vw), my = l_max(0, k->sh - vh);
     /* Script scrolls overflow: hidden boxes too. */
     float nx = l_max(0, l_min(mx, x == x ? x : 0)), ny = l_max(0, l_min(my, y == y ? y : 0));
-    if (nx == k->scroll_x && ny == k->scroll_y)
-        return false;
+    float ox = k->scroll_x, oy = k->scroll_y;
     k->scroll_x = nx;
     k->scroll_y = ny;
+    l_snap(L, k, ox, oy, by);
+    if (k->scroll_x == ox && k->scroll_y == oy)
+        return false;
     L->need_paint = true;
     return true;
 }

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Scroll snapping</title>
+<script src="../harness.js"></script>
+<style>
+body { margin: 0; }
+.c { width: 300px; height: 50px; overflow-x: auto; overflow-y: hidden; display: flex; scroll-snap-type: x mandatory; }
+.c > div { flex: none; width: 200px; height: 40px; scroll-snap-align: start; }
+#prox { scroll-snap-type: x proximity; }
+#pad { scroll-padding-left: 20px; }
+#mid > div { scroll-snap-align: center; }
+#stop > div:nth-child(2) { scroll-snap-stop: always; }
+#none { scroll-snap-type: none; }
+#margin > div { scroll-margin-left: 10px; }
+</style>
+</head>
+<body>
+<div class="c" id="man"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="prox"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="pad"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="mid"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="stop"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="none"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="c" id="margin"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+
+test('mandatory snaps a script scroll to the nearest position', () => {
+    const c = $('man');
+    c.scrollLeft = 250;
+    assert.equal(c.scrollLeft, 200);
+    c.scrollTo(330, 0);
+    assert.equal(c.scrollLeft, 400);
+    c.scrollLeft = 99999;
+    assert.equal(c.scrollLeft, 900, 'the end of the scroll range');
+});
+
+test('scrollBy moves to the next position in its direction', () => {
+    const c = $('man');
+    c.scrollLeft = 200;
+    c.scrollBy(50, 0);
+    assert.equal(c.scrollLeft, 400);
+    c.scrollBy({ left: -10 });
+    assert.equal(c.scrollLeft, 200);
+    c.scrollBy(-1, 0);
+    assert.equal(c.scrollLeft, 0);
+});
+
+test('proximity snaps only near a position', () => {
+    const c = $('prox');
+    c.scrollLeft = 300;
+    assert.equal(c.scrollLeft, 300);
+    c.scrollLeft = 390;
+    assert.equal(c.scrollLeft, 400);
+});
+
+test('scroll-padding and scroll-margin move the positions', () => {
+    $('pad').scrollLeft = 170;
+    assert.equal($('pad').scrollLeft, 180);
+    $('margin').scrollLeft = 170;
+    assert.equal($('margin').scrollLeft, 190);
+});
+
+test('center alignment', () => {
+    const c = $('mid');
+    c.scrollLeft = 200;
+    assert.equal(c.scrollLeft, 150, 'the second box centred: 300 - 150');
+});
+
+test('scroll-snap-stop: always is not passed over', () => {
+    const c = $('stop');
+    c.scrollLeft = 0;
+    c.scrollBy(450, 0);
+    assert.equal(c.scrollLeft, 200);
+});
+
+test('no scroll-snap-type, no snapping', () => {
+    $('none').scrollLeft = 123;
+    assert.equal($('none').scrollLeft, 123);
+});
+
+test('the properties compute', () => {
+    const s = getComputedStyle($('man'));
+    assert.equal(s.scrollSnapType, 'x mandatory');
+    assert.equal(getComputedStyle($('man').firstChild).scrollSnapAlign, 'start');
+    assert.equal(getComputedStyle($('pad')).scrollPaddingLeft, '20px');
+    assert.ok(CSS.supports('scroll-snap-type: both proximity'));
+    assert.ok(!CSS.supports('scroll-snap-type: mandatory x'));
+});
+</script>
+</body>
+</html>

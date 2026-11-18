@@ -511,7 +511,7 @@ static bool is_box_shorthand(uint16_t sh)
 {
     switch (sh) {
     case AU_PROP_margin: case AU_PROP_padding: case AU_PROP_inset: case AU_PROP_border_width:
-    case AU_PROP_border_style: case AU_PROP_border_color:
+    case AU_PROP_border_style: case AU_PROP_border_color: case AU_PROP_scroll_padding: case AU_PROP_scroll_margin:
         return true;
     default:
         return false;

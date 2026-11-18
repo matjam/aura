@@ -665,6 +665,10 @@ bool au_page_find(AuPage *p, const char *text, bool forward, bool case_sensitive
  * dy). Returns false when none can move: the browser then scrolls the
  * viewport. */
 bool au_page_scroll(AuPage *p, int x, int y, int dx, int dy);
+/* Scroll snapping for the viewport: moves (*x, *y), where a scroll by a
+ * distance from (ox, oy) would end in a vw by vh view, to the root's snap
+ * position. False when the page does not snap or nothing moved. */
+bool au_page_snap(AuPage *p, int vw, int vh, int ox, int oy, int *x, int *y);
 
 /* Called from the event loop's idle time; runs timers and loading. Each
  * call does a bounded slice of work (a few tens of milliseconds) so the

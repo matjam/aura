@@ -675,6 +675,9 @@ int l_image_refresh(AuLayout *L, LReplaced *rep);
 char *l_resolve_url(AuLayout *L, const char *base, const char *url, char *buf, size_t cap);
 void l_url_free(char *url, char *buf);
 void l_box_origin(LBox *b, float *x, float *y); /* border-box origin in document coordinates (no scroll) */
+/* snap.c: moves scroll container k, just scrolled from (ox, oy), to a
+ * snap position when it has scroll-snap-type. True when it moved. */
+bool l_snap(AuLayout *L, LBlock *k, float ox, float oy, bool directional);
 bool l_aspect_ratio(const LBlock *b, float *ratio);
 float l_ratio_height(const LBlock *b, float content_w);
 /* The baseline of atomic inline k from its margin-box top. */

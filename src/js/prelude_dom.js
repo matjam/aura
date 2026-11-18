@@ -831,8 +831,8 @@ defProps(EP, {
         if (isRootish(this) || this === doc.body) { G.scrollBy(x, y); return; }
         const s = N.elScroll(this);
         if (!s) return;
-        if (x && typeof x === 'object') N.elScrollTo(this, s[0] + (+x.left || 0), s[1] + (+x.top || 0));
-        else N.elScrollTo(this, s[0] + (+x || 0), s[1] + (+y || 0));
+        if (x && typeof x === 'object') N.elScrollTo(this, s[0] + (+x.left || 0), s[1] + (+x.top || 0), true);
+        else N.elScrollTo(this, s[0] + (+x || 0), s[1] + (+y || 0), true);
     },
 });
 defProps(HTMLElement.prototype, {

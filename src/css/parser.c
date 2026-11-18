@@ -896,7 +896,7 @@ static void parse_font_face(Parser *p, uint32_t s, uint32_t e)
             k = skip_ws(tk, k, ve);
             char name[32];
             if (css_lower(css_tok_str(tk, &tk->t[i]), tk->t[i].len, name, sizeof name) && k < ve) {
-                CssParseCtx cx = {&arena, false, false, sh->base_url};
+                CssParseCtx cx = {.arena = &arena, .base_url = sh->base_url};
                 bool urange = strcmp(name, "unicode-range") == 0;
                 AuCssValue *v = urange ? parse_unicode_range(&arena, tk, k, ve) : css_parse_value(&cx, tk, k, ve);
                 if (!v && urange) {

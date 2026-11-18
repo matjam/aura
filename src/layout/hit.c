@@ -501,8 +501,10 @@ bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float sc
         if (s->overflow_y == AU_OVERFLOW_SCROLL || s->overflow_y == AU_OVERFLOW_AUTO)
             ny = l_max(0, l_min(my, k->scroll_y + dy));
         if (nx != k->scroll_x || ny != k->scroll_y) {
+            float ox = k->scroll_x, oy = k->scroll_y;
             k->scroll_x = nx;
             k->scroll_y = ny;
+            l_snap(L, k, ox, oy, true);
             L->need_paint = true;
             return true;
         }

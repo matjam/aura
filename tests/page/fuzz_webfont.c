@@ -190,7 +190,7 @@ int main(int argc, char **argv)
     for (it = 0; it < iters && now() - t0 < limit; it++) {
         Loader l;
         memset(&l, 0, sizeof l);
-        AuLoader li = {&l, req_fn, NULL, NULL, NULL};
+        AuLoader li = {&l, req_fn, NULL, NULL, NULL, NULL};
         AuDocViewCallbacks cb;
         memset(&cb, 0, sizeof cb);
         cb.now_ms = clock_fn;

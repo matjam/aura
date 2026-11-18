@@ -123,7 +123,7 @@ const AuCssValue *css_initial_value(uint16_t prop)
         const char *s = css_props[prop].initial;
         css_tokenize(s, strlen(s), &tk);
         CssArena a = {0};
-        CssParseCtx cx = {&a, false, false, NULL};
+        CssParseCtx cx = {.arena = &a};
         AuCssValue *v = css_parse_value(&cx, &tk, 0, tk.n);
         AuCssValue *ok = v ? css_validate_longhand(&cx, prop, v) : NULL;
         if (!ok) {
@@ -195,7 +195,8 @@ bool css_parse_property(uint16_t prop, const CssTokens *tk, uint32_t a, uint32_t
         return true;
     }
     css_arena_reset(&parse_arena);
-    CssParseCtx cx = {&parse_arena, quirks, prop == AU_PROP_content, base_url};
+    CssParseCtx cx = {.arena = &parse_arena, .quirks = quirks, .in_content = prop == AU_PROP_content,
+                      .base_url = base_url};
     if (sh) {
         uint32_t n0 = out->n;
         if (css_parse_shorthand(&cx, prop, tk, a, b, out, flags))
@@ -1445,6 +1446,8 @@ bool css_parse_shorthand(CssParseCtx *cx, uint16_t sh, const CssTokens *tk, uint
     case AU_PROP_margin:
     case AU_PROP_padding:
     case AU_PROP_inset:
+    case AU_PROP_scroll_padding:
+    case AU_PROP_scroll_margin:
     case AU_PROP_border_width:
     case AU_PROP_border_style:
     case AU_PROP_border_color:

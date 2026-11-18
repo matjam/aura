@@ -328,9 +328,18 @@ const char *au_layout_image_request(AuLayout *L, const AuElement *el);
 uint32_t au_layout_anim_tick(AuLayout *L, uint32_t now_ms, float view_x, float view_y,
                              void (*fn)(void *ctx, AuIRect r), void *ctx);
 bool au_layout_animating(const AuLayout *L);
-/* Scrolls el's box to (x, y), clamped. True when the offset changed (the
- * caller repaints). */
-bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y);
+/* Scrolls el's box to (x, y), clamped, then to a snap position when it
+ * has scroll-snap-type (by: the scroll was by a distance, scrollBy, so
+ * only positions past the old offset count). True when the offset
+ * changed (the caller repaints). */
+bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y, bool by);
+/* Scroll snapping for the viewport (the root element's
+ * scroll-snap-type): moves (*x, *y), where a scroll from (ox, oy) of a
+ * vw by vh viewport would end, to a snap position. directional: the
+ * scroll was by a distance (wheel, keys, scrollBy). True when it moved
+ * them. */
+bool au_layout_snap_viewport(AuLayout *L, float vw, float vh, float ox, float oy, float *x, float *y,
+                             bool directional);
 
 /* Appends a text dump of the box tree with geometry (document
  * coordinates) to out. */

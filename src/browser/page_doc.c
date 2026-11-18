@@ -4170,6 +4170,19 @@ bool au_page_scroll(AuPage *p, int x, int y, int dx, int dy)
     return au_docview_scroll_at(p->dv, x, y, dx, dy);
 }
 
+bool au_page_snap(AuPage *p, int vw, int vh, int ox, int oy, int *x, int *y)
+{
+    if (p->kind != K_DOC || !p->begun)
+        return false;
+    AuLayout *L = au_docview_layout(p->dv);
+    float fx = (float)*x, fy = (float)*y;
+    if (!L || !au_layout_snap_viewport(L, (float)vw, (float)vh, (float)ox, (float)oy, &fx, &fy, true))
+        return false;
+    *x = au_f2px(fx);
+    *y = au_f2px(fy);
+    return true;
+}
+
 /* Reads and delivers files, a slice at a time. Returns false when there
  * is nothing left to do now. */
 static bool file_step(AuPage *p)

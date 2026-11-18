@@ -2360,8 +2360,13 @@ void au_bw_scroll_to(AuBrowserWindow *w, int x, int y)
 void au_bw_scroll_by(AuBrowserWindow *w, int dx, int dy)
 {
     AuTab *t = au_bw_active_tab(w);
-    if (t)
-        au_bw_scroll_to(w, t->scroll_x + dx, t->scroll_y + dy);
+    if (!t)
+        return;
+    int x = t->scroll_x + dx, y = t->scroll_y + dy;
+    /* a page whose root has scroll-snap-type stops at its snap positions */
+    au_page_snap(t->page, w->layout.page.x1 - w->layout.page.x0, w->layout.page.y1 - w->layout.page.y0,
+                 t->scroll_x, t->scroll_y, &x, &y);
+    au_bw_scroll_to(w, x, y);
 }
 
 /* ---- Input ---- */

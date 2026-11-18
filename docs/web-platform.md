@@ -54,7 +54,7 @@ first.
 | 8 | ~~`URLPattern`~~: done 2026-11-18 ([`javascript.md`](javascript.md), "URLPattern"); string patterns are split by a simpler scan than the standard's | | | yes |
 | 8b | Nested rules in CSSOM (`CSSStyleRule.cssRules`, `insertRule` on a style rule) | nesting itself applies; only script that reads or edits nested rules sees an empty list (the probe's "css nesting" line) | small | yes |
 | 9 | ~~`CSS.registerProperty` and `@property` initial values~~: done 2026-11-18 ([`css.md`](css.md), "Registered custom properties"); values are not typed, so they do not animate | | | yes |
-| 10 | Scroll snapping (`scroll-snap-type`, `scroll-snap-align`) | carousels stop between items | medium | yes |
+| 10 | ~~Scroll snapping~~: done 2026-11-18 ([`layout.md`](layout.md), "Scroll snapping"); a scroll bar drag does not snap | | | yes |
 | 11 | ~~WebSocket~~: done 2026-11-18 ([`script-requests-and-cors.md`](script-requests-and-cors.md), "WebSocket"); no extensions | | | yes |
 | 12 | ~~IndexedDB~~: done 2026-11-18, in memory per document ([`javascript.md`](javascript.md), "IndexedDB"); saving databases to disk is left | | | yes |
 | 13 | The Navigation API (`navigation`, `NavigateEvent`) | newer routers; all detect it and fall back to `history` | large; after item 1 | no |

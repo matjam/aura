@@ -722,7 +722,8 @@ static JSValue n_img_done(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return JS_NewBool(ctx, e && (e->state & AU_STATE_IMG_EVENT));
 }
 
-/* elScrollTo(el, x, y) */
+/* elScrollTo(el, x, y, by): by is true for scrollBy (snapping looks
+ * past the old offset in the scroll's direction). */
 static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;
@@ -737,7 +738,7 @@ static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!(y == y))
         y = 0;
     js->hooks.element_scroll_to(js->hooks.ctx, e, x < -1e7 ? -1e7 : x > 1e7 ? 1e7 : x,
-                                y < -1e7 ? -1e7 : y > 1e7 ? 1e7 : y);
+                                y < -1e7 ? -1e7 : y > 1e7 ? 1e7 : y, argc > 3 && JS_ToBool(ctx, argv[3]));
     return JS_UNDEFINED;
 }
 

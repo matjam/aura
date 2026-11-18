@@ -304,12 +304,12 @@ static bool h_element_scroll(void *ctx, AuElement *el, double out[6])
     return true;
 }
 
-static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y)
+static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y, bool by)
 {
     AuDocScript *s = ctx;
     au_docview_update(s->dv);
     AuLayout *L = au_docview_layout(s->dv);
-    if (!au_layout_element_scroll_to(L, el, (float)x, (float)y))
+    if (!au_layout_element_scroll_to(L, el, (float)x, (float)y, by))
         return;
     /* Its box where it is drawn (inside other scrollers, transformed). */
     int sx, sy, vw, vh;

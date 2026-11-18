@@ -175,7 +175,11 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - `accent-color`, `caret-color`, `overscroll-behavior`,
   `scrollbar-gutter`, `content-visibility`, `field-sizing` and
   `interpolate-size` are parsed only ([`css.md`](css.md), "Properties
-  parsed only"). Relative colours work in `rgb()` and `hsl()` but not in
+  parsed only"). Scroll snapping does not follow a scroll bar drag or
+  `window.scrollTo`, and does not snap again after a relayout
+  ([`layout.md`](layout.md), "Scroll snapping"); the logical
+  `scroll-padding-*` and `scroll-margin-*` longhands are not parsed.
+  Relative colours work in `rgb()` and `hsl()` but not in
   `lab()`, `oklch()` or `color()`.
 - Container queries ([`css.md`](css.md), "Container queries"):
   - `style()` and `scroll-state()` queries are unknown, so a rule that

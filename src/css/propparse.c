@@ -2055,6 +2055,41 @@ AuCssValue *pp_container_name(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
     return v;
 }
 
+/* scroll-snap-type: none | [x | y | block | inline | both] [mandatory | proximity]? */
+AuCssValue *pp_scroll_snap_type(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (css_is_kw(v, AU_K_none))
+        return v;
+    if (v->type == AU_CSSV_COMMA_LIST)
+        return NULL;
+    uint32_t n;
+    const AuCssValue *p = css_items(v, &n);
+    if (n < 1 || n > 2 || !KW_IN(&p[0], AU_K_x, AU_K_y, AU_K_block, AU_K_inline_, AU_K_both))
+        return NULL;
+    if (n == 2 && !KW_IN(&p[1], AU_K_mandatory, AU_K_proximity))
+        return NULL;
+    return v;
+}
+
+/* scroll-snap-align: [none | start | end | center]{1,2} */
+AuCssValue *pp_scroll_snap_align(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (v->type == AU_CSSV_COMMA_LIST)
+        return NULL;
+    uint32_t n;
+    const AuCssValue *p = css_items(v, &n);
+    if (n < 1 || n > 2)
+        return NULL;
+    for (uint32_t i = 0; i < n; i++)
+        if (!KW_IN(&p[i], AU_K_none, AU_K_start, AU_K_end, AU_K_center))
+            return NULL;
+    return v;
+}
+
 AuCssValue *pp_text_decoration_line(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
 {
     (void)cx;

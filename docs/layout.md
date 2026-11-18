@@ -663,6 +663,33 @@ next block's margin apply.
 (`l_text_process` with its offset map), and `au_layout_range_rects`
 gives a range's rectangles per line.
 
+### Scroll snapping
+
+To change scroll snapping, edit `src/layout/snap.c` and run
+`tests/js/pages/scroll_snap.html` (`ctest -R scroll_snap`).
+
+- A scroll container with `scroll-snap-type` snaps after each scroll:
+  a wheel step (`au_layout_scroll_at`), `scrollLeft`, `scrollTo`,
+  `scrollBy` and `scrollIntoView` (`au_layout_element_scroll_to`).
+- The viewport snaps when the root element has `scroll-snap-type`, after
+  a wheel step or a key (`au_bw_scroll_by` calls `au_page_snap`). A drag
+  of the scroll bar, Home, End and `window.scrollTo` do not snap.
+- The snap areas are the block boxes inside the container with
+  `scroll-snap-align`, without descending into other scroll containers.
+  Each gives one position per axis from its border box grown by
+  `scroll-margin`, aligned (`start`, `end`, `center`) to the scrollport
+  shrunk by `scroll-padding` (`auto` is 0), and clamped to the scroll
+  range.
+- A scroll by a distance (wheel, keys, `scrollBy`) takes the position
+  nearest where it would end among those past the old offset in its
+  direction, and stops at a `scroll-snap-stop: always` position on the
+  way. A scroll to a place takes the nearest position.
+- `mandatory` always snaps when there is a position. `proximity` snaps
+  only when the position is within 30% of the scrollport.
+- Axes are physical: `block` is y and `inline` is x. Transforms are
+  ignored, each axis is snapped on its own, and the container does not
+  snap again after a relayout.
+
 ## Grid
 
 To change grid layout (`display: grid`, `inline-grid`), work in
