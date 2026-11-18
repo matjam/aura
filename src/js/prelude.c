@@ -117,6 +117,13 @@ const char au_js_canvas_src[] = {
     , 0};
 const size_t au_js_canvas_len = sizeof au_js_canvas_src - 1;
 
+extern const char au_js_idb_src[];
+extern const size_t au_js_idb_len;
+const char au_js_idb_src[] = {
+#embed "idb.js"
+    , 0};
+const size_t au_js_idb_len = sizeof au_js_idb_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -193,5 +200,12 @@ const unsigned char au_js_canvas_bc[] = {
 #embed "canvas.bc"
 };
 const size_t au_js_canvas_bc_len = sizeof au_js_canvas_bc;
+
+extern const unsigned char au_js_idb_bc[];
+extern const size_t au_js_idb_bc_len;
+const unsigned char au_js_idb_bc[] = {
+#embed "idb.bc"
+};
+const size_t au_js_idb_bc_len = sizeof au_js_idb_bc;
 
 #endif

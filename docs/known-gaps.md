@@ -263,6 +263,9 @@ done.
 - **Pointer capture:** `setPointerCapture` records the element, but
   pointer events still go to the element under the pointer, so a slider
   dragged past its edge stops following.
+- **IndexedDB:** databases live in memory per document or worker; a
+  reload or another tab of the site starts empty, and nothing is saved
+  to disk. `DOMStringList` is not a global in workers.
 - **Shims within one document:** `navigator.locks` and
   `BroadcastChannel` reach only the document that made them, not other
   tabs or frames.

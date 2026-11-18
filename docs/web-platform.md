@@ -56,7 +56,7 @@ first.
 | 9 | `CSS.registerProperty` and `@property` initial values | animated custom properties fall back to nothing | medium | yes |
 | 10 | Scroll snapping (`scroll-snap-type`, `scroll-snap-align`) | carousels stop between items | medium | yes |
 | 11 | ~~WebSocket~~: done 2026-11-18 ([`script-requests-and-cors.md`](script-requests-and-cors.md), "WebSocket"); no extensions | | | yes |
-| 12 | IndexedDB (in memory, per page) | sites that store state there fail to start | large | no |
+| 12 | ~~IndexedDB~~: done 2026-11-18, in memory per document ([`javascript.md`](javascript.md), "IndexedDB"); saving databases to disk is left | | | yes |
 | 13 | The Navigation API (`navigation`, `NavigateEvent`) | newer routers; all detect it and fall back to `history` | large; after item 1 | no |
 
 ## Not planned

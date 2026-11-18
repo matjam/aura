@@ -710,6 +710,10 @@ A page's script runtime (Develop > Performance, `aura-host chrome --net
 | Wikipedia article (PowerPC) | 9758, 9738 KB | 9605, 9569 KB | none |
 | GitHub repository page (torvalds/linux) | 39,608, 39,615 KB | 39,648, 39,550 KB | `cssom.js` |
 
+`idb.js` (IndexedDB, 30,976 bytes on 2026-11-18) is the fourth module,
+registered in `prelude_net.js` so that workers have it too; see
+"IndexedDB" below.
+
 Left in the prelude: `IntersectionObserver` and `ResizeObserver` (most
 script-heavy pages create one while they load, and both are run from
 layout's entry points), `MutationObserver` and custom elements (the DOM
@@ -842,6 +846,43 @@ higher than in the `Intl` table) with `aura-host js --stats`:
 Most of the 20 KB at start-up is the stream code in `prelude_net.js`
 (feeds, bodies that may be streams, the XHR progress throttle) and the
 17 accessors.
+
+## IndexedDB
+
+To change IndexedDB, edit `src/js/idb.js` and run `tests/js/idb.js`
+(`aura-host js tests/js/harness.js tests/js/idb.js`).
+
+The module (N.lazy(3), read the first time script touches `indexedDB`
+or an `IDB` class) implements the API in script, with the databases in
+memory:
+
+- Each document and each worker has its own databases, kept for as
+  long as it lives. A reload, or another document of the same origin,
+  starts with none. Nothing is written to disk.
+- A store keeps its records in an array sorted by key, an index keeps
+  `[indexKey, primaryKey]` pairs sorted by both; lookups are binary
+  searches and inserts are splices. Values are structured clones,
+  cloned again when read.
+- Keys compare as the standard says (number, date, string, binary,
+  array). Key paths, `autoIncrement`, unique and `multiEntry` indexes,
+  key ranges, `getAll` and `getAllKeys` (also with an options object),
+  `count`, and cursors in all four directions with `continue`,
+  `continuePrimaryKey`, `advance`, `update` and `delete` work.
+- Requests run in order, one per task. A transaction stays active
+  while a request's event is dispatched and until that task ends, so
+  promise wrappers (the `idb` library) can place the next request from
+  a `then`; it commits when no request is left. A failed request's
+  `error` event bubbles to the transaction and the database
+  (`eventParents` in `prelude.js`) and aborts the transaction unless a
+  listener calls `preventDefault()`.
+- A transaction that writes copies each store's arrays before its
+  first change, and an upgrade copies the database's shape; `abort()`
+  puts them back.
+- Read-write transactions with overlapping scopes run one after
+  another; read-only ones run together.
+- `open` with a higher version fires `versionchange` at the other open
+  connections, then `blocked` while any stays open, and runs the
+  upgrade once they close.
 
 ## document.cookie
 

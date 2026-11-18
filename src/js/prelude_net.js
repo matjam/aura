@@ -1161,6 +1161,12 @@ for (const name of ['EventSource', 'WebSocket']) {
         configurable: true, enumerable: false,
     });
 }
+/* IndexedDB lives in src/js/idb.js, read with N.lazy(3) the first time
+ * script touches one of these globals. */
+lazyModule(3, ['indexedDB', 'IDBFactory', 'IDBRequest', 'IDBOpenDBRequest', 'IDBDatabase', 'IDBTransaction',
+    'IDBObjectStore', 'IDBIndex', 'IDBCursor', 'IDBCursorWithValue', 'IDBKeyRange', 'IDBVersionChangeEvent'],
+    () => ({ N, domErr, Event, EventTarget, defineHandlers, fire, fireSimple, structuredClone, eventParents, Blob }));
+
 /* The document is hidden or shown again (P.pageTransition). */
 P.eventSourcesFreeze = function (frozen) { if (esLib) esLib.freeze(frozen); };
 

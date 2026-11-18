@@ -495,8 +495,12 @@ function retarget(a, b) {
 
 /* The parent in the event path: assigned slot, parent, shadow host (when
  * composed or not the target's own root), window for the document. */
+/* Parents of event targets that are not nodes (IndexedDB: a request's
+ * events go on to its transaction and database). */
+const eventParents = new WeakMap();
 function eventParent(n, event, firstTarget) {
     if (n === G) return null;
+    if (!isNode(n)) return eventParents.get(n) || null;
     if (isNode(n)) {
         if (N.is(n, 2)) return event[S.ev].type === 'load' ? null : (n === doc ? G : null);
         if (isShadowRoot(n)) {
