@@ -130,6 +130,14 @@ Decoded images on Reddit after loading and three Page Downs (host,
 
 At 8 bits the saving is less than three quarters because Reddit's
 icons and avatars have transparency and stay in 32 bits.
+
+The compressed bytes kept to decode again are small next to the
+pixels: 178 KB on Reddit after five Page Downs and 533 KB for the whole
+of Wikipedia's "Macintosh" article (host, 2026-11-18; the Performance
+report's "Image file bytes" line). Reading them back from the disk
+cache instead would save less than 1 MB a page and put a disk read, or
+a fetch when the entry has gone, in front of every decode, so they stay
+in memory.
 - Animations decode frame by frame from the compressed bytes, keep one
   canvas, and pause when not painted; delays of 10 ms or less play at
   100 ms, as browsers do.

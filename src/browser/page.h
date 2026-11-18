@@ -731,6 +731,7 @@ typedef struct AuPageStats {
     uint32_t boxes;          /* layout boxes */
     uint32_t image_decodes, image_evictions; /* the image cache's, since the load */
     uint32_t image_kb, image_budget_kb;      /* decoded pixels held, and the budget */
+    uint32_t image_bytes_kb;                 /* compressed image bytes kept to decode again */
     uint32_t blocked;        /* requests of this load a blocklist refused */
     uint32_t restored;       /* times this document was shown again from the document cache; load_ms and
                               * first_paint_ms then time the last showing */

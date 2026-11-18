@@ -308,6 +308,7 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     else
         au_buf_printf(out, "  %-18s %10s\n", "Script heap", "none");
     mem_row(out, "Decoded images", st.image_kb, st.image_budget_kb, NULL);
+    au_buf_printf(out, "  %-18s %7lu KB\n", "Image file bytes", (unsigned long)st.image_bytes_kb);
     if (h && h->have_net) {
         char note[48];
         snprintf(note, sizeof note, "%s entries", s_count(a, sizeof a, h->http_cache_entries));

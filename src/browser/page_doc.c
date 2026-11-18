@@ -5034,6 +5034,7 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     s->image_evictions = is.evictions;
     s->image_kb = (uint32_t)(is.decoded_bytes / 1024);
     s->image_budget_kb = (uint32_t)(is.budget / 1024);
+    s->image_bytes_kb = (uint32_t)(is.compressed_bytes / 1024);
     s->source_bytes = (uint32_t)source_len(&p->src);
     s->source_held = (uint32_t)source_held(&p->src);
     s->source_pack_ms = p->src.pack_ms;
