@@ -393,6 +393,16 @@ typedef struct AuPageCallbacks {
     /* Go Back on one of Aura's own pages (the blocked-site page): return
      * to the previous history entry. Optional. */
     void (*go_back)(void *ctx, AuPage *p);
+    /* The history API (all optional). history_push: the document's
+     * script made a new entry at url (pushState) without loading: add it
+     * after the current one and call au_page_set_entry with its id before
+     * returning; url_changed follows. A move to it later goes through
+     * au_page_navigate_entry as usual, and the page shows it without
+     * loading. history_go: history.go(delta) from the page, as Back or
+     * Forward by delta entries. history_length: the number of entries. */
+    void (*history_push)(void *ctx, AuPage *p, const char *url);
+    void (*history_go)(void *ctx, AuPage *p, int delta);
+    int (*history_length)(void *ctx, AuPage *p);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */
@@ -702,6 +712,7 @@ typedef struct AuPageStats {
     uint32_t source_held;    /* bytes held for it now (compressed, plus the inflated copy while one is out) */
     uint32_t source_pack_ms; /* how long compressing it took */
     bool document_cached;    /* the main document's bytes came from the HTTP cache without a request */
+    uint32_t popped;         /* moves to another entry of this document (pushState entries): popstate, no load */
 } AuPageStats;
 void au_page_stats(const AuPage *p, AuPageStats *s);
 

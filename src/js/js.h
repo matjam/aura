@@ -233,10 +233,12 @@ typedef struct AuJsHooks {
     bool (*confirm)(void *ctx, const char *origin, const char *message);
     char *(*prompt)(void *ctx, const char *origin, const char *message, const char *def);
     /* History: length, go(delta), and pushState/replaceState entries (the
-     * state object stays in script; the embedder records the URL). */
+     * state object stays in script under key, which au_js_pop_state hands
+     * back; the embedder records the URL and the key). go is called with
+     * script on the stack: the embedder moves later. */
     int (*history_length)(void *ctx);
     void (*history_go)(void *ctx, int delta);
-    void (*history_push)(void *ctx, const char *url, bool replace);
+    void (*history_push)(void *ctx, const char *url, bool replace, uint32_t key);
     /* document.cookie: the cookie string for url (au_alloc'd, or NULL), and
      * a cookie set by script. */
     char *(*get_cookie)(void *ctx, const char *url);
@@ -398,9 +400,11 @@ void au_js_add_import_map(AuJs *js, const char *src, size_t len);
 /* What a script element is, from its type and language attributes. */
 enum { AU_JS_SCRIPT_NONE, AU_JS_SCRIPT_CLASSIC, AU_JS_SCRIPT_MODULE, AU_JS_SCRIPT_IMPORTMAP };
 int au_js_script_kind(AuJs *js, AuElement *el);
-/* The embedder moved through history to an entry made by pushState (url
- * is its URL): popstate. */
-void au_js_pop_state(AuJs *js, const char *url);
+/* The embedder moved through history to another entry of this document
+ * (url is its URL, key what history_push named it with; 0 for the entry
+ * the document loaded in): popstate, and hashchange when only the
+ * fragment differs. */
+void au_js_pop_state(AuJs *js, const char *url, uint32_t key);
 
 /* ---- Events from the embedder ---- */
 /* Fires a simple event (Event, no detail) at node; window when node is

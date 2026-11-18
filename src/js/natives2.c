@@ -967,9 +967,12 @@ static JSValue n_history(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         char *u = argc > 0 ? js_tostr(ctx, argv[0], NULL) : NULL;
         if (!u)
             return JS_EXCEPTION;
+        uint32_t key = 0;
+        if (argc > 1)
+            JS_ToUint32(ctx, &key, argv[1]);
         au_js_set_url(js, u);
         if (js->hooks.history_push)
-            js->hooks.history_push(js->hooks.ctx, u, magic == 3);
+            js->hooks.history_push(js->hooks.ctx, u, magic == 3, key);
         au_free(u);
         return JS_UNDEFINED;
     }

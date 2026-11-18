@@ -299,6 +299,9 @@ void au_frames_settings_changed(AuDocView *dv);
  * loader); f names the frame for AU_RES_FRAME. 0 when it cannot start. */
 uint32_t au_dv_start_request(AuDocView *dv, const AuResourceRequest *rq, AuFrame *f);
 void au_dv_drop_routes(AuDocView *top, AuDocView *dv);
+/* The document's URL changed without a load (pushState, a history move
+ * within it); the base URL follows unless a <base> set it. */
+void au_dv_set_url(AuDocView *dv, const char *url);
 void au_dv_mouse_leave(AuDocView *dv);
 void au_dv_set_hover(AuDocView *dv, AuElement *el);
 void au_dv_clear_hover_link(AuDocView *dv);

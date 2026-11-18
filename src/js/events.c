@@ -163,9 +163,9 @@ void au_js_add_import_map(AuJs *js, const char *src, size_t len)
     call_bool(js, "addImportMap", 1, a);
 }
 
-void au_js_pop_state(AuJs *js, const char *url)
+void au_js_pop_state(AuJs *js, const char *url, uint32_t key)
 {
-    JSValue a[2] = {url ? JS_NewString(js->ctx, url) : JS_NULL, JS_UNDEFINED};
+    JSValue a[2] = {url ? JS_NewString(js->ctx, url) : JS_NULL, JS_NewUint32(js->ctx, key)};
     call_bool(js, "popState", 2, a);
 }
 

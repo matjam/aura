@@ -271,6 +271,38 @@ default was 425,000.
   after a drag or zoom) and a restored window returns there when its
   title bar is still on screen.
 
+### Entries a page's script makes (the history API)
+
+`history.pushState` gives the tab a back/forward entry without a load,
+and `history.back()`, `forward()`, `go()` and `length` act on the tab's
+list. The path is `AuJsHooks` (`history_push`, `history_go`,
+`history_length`) to `script.c`, `AuDocViewCallbacks`, `page_doc.c`
+("The history API") and `AuPageCallbacks`, which `browser.c` answers
+(`cb_history_push`, `cb_history_go`, `cb_history_length`).
+
+- The page keeps the entries of the shown document (`AuPage.sd`): the
+  one it loaded in and the ones its script pushed, each with the key
+  the script named its state with. A move to one of them
+  (`au_page_navigate_entry`) calls `au_docview_pop_state`: the URL
+  changes and the script gets `popstate` with that entry's state, and
+  `hashchange` when only the fragment differs. Nothing is fetched.
+- A document kept for Back and Forward takes its entries with it
+  (`Kept.sd`), so Back into a kept page's pushed entries pops state too.
+- The document's URL and, without a `<base>`, its base URL follow
+  `pushState` (`au_dv_set_url`, `au_js_set_url`), so relative links
+  resolve against the new address.
+- `history.go` waits until the script turn ends (`go_pending` in
+  `script.c` and `page_doc.c`); a navigation asked for in the same turn
+  wins. A tab in the background does not move.
+- Only the top-level document reaches the list: a frame's pushState
+  changes the frame's URL alone ([`known-gaps.md`](known-gaps.md)).
+- On the host, `--do back` prints "popstate in the shown document" for
+  such a move (`AuPageStats.popped`). `test_push_state` in
+  `tests/browser/test_back_cache.c` covers it on the fake transport.
+
+Before 2026-11-18 none of these hooks was set: the address field kept
+the old URL, Back left the site, and `popstate` never fired.
+
 ## Site icons
 
 Tabs show their site's icon. To change that, work in

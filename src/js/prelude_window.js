@@ -160,7 +160,7 @@ function navigateTo(url, replace) {
     if (next.hash && cur.href.replace(/#.*$/, '') === next.href.replace(/#.*$/, '')) {
         /* fragment navigation: no reload */
         const old = cur.href;
-        N.historyPush(abs);
+        pushEntry(null, abs, false);
         if (old !== abs) N.queueTask(() => fire(G, new HashChangeEvent('hashchange', { oldURL: old, newURL: abs })));
         const id = decodeURIComponent(next.hash.slice(1));
         const el = id ? doc.getElementById(id) || doc.getElementsByName(id)[0] : null;
@@ -191,7 +191,20 @@ defProps(WP, {
 
 /* ---------------- history ---------------- */
 
+/* Each entry of this document has a key (0: the one it loaded in); the
+ * browser keeps the key with the entry and hands it back when it moves to
+ * that entry (P.popState). The states are kept here, the latest 64. */
 let historyState = null;
+let historyKey = 0, historyNextKey = 1;
+const historyStates = new Map();
+function pushEntry(state, abs, replace) {
+    if (!replace) historyKey = historyNextKey++;
+    historyState = state;
+    historyStates.delete(historyKey);
+    historyStates.set(historyKey, state);
+    if (historyStates.size > 64) historyStates.delete(historyStates.keys().next().value);
+    if (replace) N.historyReplace(abs, historyKey); else N.historyPush(abs, historyKey);
+}
 class History {
     constructor() { throw new TypeError('Illegal constructor'); }
     get length() { return N.historyLength(); }
@@ -214,13 +227,18 @@ function changeState(state, url, replace) {
             throw domErr('The URL must have the same origin as the document', 'SecurityError');
         abs = u.href;
     }
-    historyState = s;
-    if (replace) N.historyReplace(abs); else N.historyPush(abs);
+    pushEntry(s, abs, replace);
 }
-P.popState = function (url, state) {
+P.popState = function (url, key) {
+    const old = N.docUrl(0);
     if (url) N.setDocUrl(url);
-    historyState = state === undefined ? null : state;
+    historyKey = key >>> 0;
+    const st = historyStates.get(historyKey);
+    historyState = st === undefined ? null : st;
     fire(G, new PopStateEvent('popstate', { state: historyState }));
+    const strip = (u) => u.replace(/#.*$/, '');
+    if (url && url !== old && strip(url) === strip(old))
+        N.queueTask(() => fire(G, new HashChangeEvent('hashchange', { oldURL: old, newURL: url })));
 };
 tag(History);
 defGlobal('History', History);

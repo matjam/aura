@@ -120,6 +120,9 @@ void au_docscript_layout_done(AuDocScript *s);
 bool au_docscript_on_stack(const AuDocScript *s);
 void au_docscript_frames_changed(AuDocScript *s);
 bool au_docscript_flush_nav(AuDocScript *s);
+/* The embedder moved to another history entry of this document
+ * (au_docview_pop_state). */
+void au_docscript_pop_state(AuDocScript *s, const char *url, uint32_t key);
 
 /* ---- script.c to docview.c ---- */
 /* Starts an AU_RES_OTHER request. background requests (fetch, XHR) do

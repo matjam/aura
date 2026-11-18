@@ -181,6 +181,16 @@ typedef struct AuDocViewCallbacks {
     bool (*confirm)(void *ctx, AuDocView *dv, const char *message);
     /* A validation message to show (status bar); "" clears it. */
     void (*message)(void *ctx, AuDocView *dv, const char *text);
+    /* The history API of the top-level document (all optional; without
+     * them history.length is 1 and the rest does nothing beyond the
+     * document's URL). history_push: pushState or replaceState changed
+     * the URL to url (called with script on the stack); a new entry
+     * unless replace, named key (au_docview_pop_state hands it back).
+     * history_go: history.go(delta), delta not 0, after the script turn.
+     * history_length: the number of entries. */
+    void (*history_push)(void *ctx, AuDocView *dv, const char *url, bool replace, uint32_t key);
+    void (*history_go)(void *ctx, AuDocView *dv, int delta);
+    int (*history_length)(void *ctx, AuDocView *dv);
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);
@@ -228,6 +238,10 @@ uint32_t au_docview_pending(const AuDocView *dv);
  * crossOrigin property says. */
 bool au_docview_image_origin_clean(AuDocView *dv, const char *url);
 
+/* The embedder moved to another history entry of the shown document, one
+ * history_push named key (0: the entry it loaded in): the document's URL
+ * becomes url and its script gets popstate. */
+void au_docview_pop_state(AuDocView *dv, const char *url, uint32_t key);
 const char *au_docview_url(const AuDocView *dv);      /* never NULL */
 const char *au_docview_base_url(const AuDocView *dv); /* never NULL */
 const char *au_docview_title(const AuDocView *dv);    /* "" when none */

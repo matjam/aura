@@ -1385,6 +1385,12 @@ void au_js_set_parser(AuJs *js, AuHtmlParser *p)
 
 void au_js_set_url(AuJs *js, const char *url)
 {
+    /* Without a <base> the base URL is the document's URL, and follows it
+     * (pushState). */
+    if (js->base && js->url && !strcmp(js->base, js->url)) {
+        au_free(js->base);
+        js->base = au_strndup(url, strlen(url));
+    }
     au_free(js->url);
     js->url = au_strndup(url, strlen(url));
 }

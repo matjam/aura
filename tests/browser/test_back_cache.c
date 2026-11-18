@@ -437,6 +437,82 @@ static void test_timers(void)
     env_free(&e);
 }
 
+/* ---- The history API: pushState entries ---- */
+
+static void eval(Env *e, const char *src, char *out, size_t cap)
+{
+    AuBuf b;
+    au_buf_init(&b);
+    au_page_eval(page(e), src, &b);
+    snprintf(out, cap, "%s", au_buf_cstr(&b));
+    au_buf_free(&b);
+}
+
+static void test_push_state(void)
+{
+    Env e;
+    env_init(&e);
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    respond_html(s, "<!DOCTYPE html><title>List</title><p>the list<script>"
+                    "var pops = [];"
+                    "addEventListener('popstate', function (ev) {"
+                    "  pops.push(location.pathname + '=' + JSON.stringify(ev.state));"
+                    "  document.title = location.pathname; });"
+                    "</script>");
+    respond_html(s, "<!DOCTYPE html><title>Other</title><p>another page");
+    au_bw_new_tab(e.w, "http://site.test/list", true, -1);
+    settle(&e, 500);
+    char out[256];
+
+    /* A router's link: a new entry, the address, the history length, and
+     * relative URLs that resolve against the new address. */
+    eval(&e, "history.pushState({n: 1}, '', 'items/1'); history.length + ' ' + new URL('x', document.baseURI).href",
+         out, sizeof out);
+    settle(&e, 100);
+    CHECK(!strcmp(out, "2 http://site.test/items/x"), "pushState: %s", out);
+    CHECK(tab(&e)->nav.n == 2 && !strcmp(au_bw_field_text(e.w), "http://site.test/items/1"),
+          "a back/forward entry and the address: %d %s", tab(&e)->nav.n, au_bw_field_text(e.w));
+    eval(&e, "history.pushState({n: 2}, '', '2'); history.replaceState({n: 3}, '', '3'); location.href", out,
+         sizeof out);
+    settle(&e, 100);
+    CHECK(!strcmp(out, "http://site.test/items/3") && tab(&e)->nav.n == 3, "replaceState keeps the entry: %s %d",
+          out, tab(&e)->nav.n);
+
+    /* Back and Forward move inside the document: popstate with each
+     * entry's state, no request, no new document. */
+    au_bw_back(e.w);
+    settle(&e, 100);
+    au_bw_back(e.w);
+    settle(&e, 100);
+    au_bw_forward(e.w);
+    settle(&e, 100);
+    eval(&e, "pops.join(' ')", out, sizeof out);
+    CHECK(!strcmp(out, "/items/1={\"n\":1} /list=null /items/1={\"n\":1}"), "popstate: %s", out);
+    CHECK(s->nreq == 1, "no request (%d)", s->nreq);
+    CHECK(!strcmp(au_bw_field_text(e.w), "http://site.test/items/1") && !strcmp(au_page_title(page(&e)), "/items/1"),
+          "the address and title follow: %s %s", au_bw_field_text(e.w), au_page_title(page(&e)));
+
+    /* history.back() from script goes through the browser too. */
+    eval(&e, "history.back(); 1", out, sizeof out);
+    settle(&e, 100);
+    CHECK(!strcmp(au_bw_field_text(e.w), "http://site.test/list"), "history.back(): %s", au_bw_field_text(e.w));
+
+    /* Another document, then Back to an entry the first one pushed: that
+     * document comes back from the document cache, its entries with it. */
+    au_bw_forward(e.w);
+    settle(&e, 100);
+    go(&e, "http://site.test/other");
+    CHECK(s->nreq == 2 && tab(&e)->nav.n == 3, "other loaded, forward entries gone (%d entries)", tab(&e)->nav.n);
+    au_bw_back(e.w);
+    settle(&e, 100);
+    au_bw_back(e.w);
+    settle(&e, 100);
+    eval(&e, "pops[pops.length - 1]", out, sizeof out);
+    CHECK(s->nreq == 2 && !strcmp(out, "/list=null"), "back into the kept document's own entries: %s (%d)", out,
+          s->nreq);
+    env_free(&e);
+}
+
 /* ---- Limits ---- */
 
 static void test_limits(void)
@@ -670,6 +746,7 @@ int main(void)
     test_slim();
     test_source();
     test_timers();
+    test_push_state();
     test_limits();
     test_excluded();
     test_edges();

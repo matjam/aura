@@ -1798,6 +1798,25 @@ DV_ENTRY_VOID(load, (AuDocView * dv, const char *bytes, size_t len, const char *
     au_docview_finish(dv);
 }
 
+void au_dv_set_url(AuDocView *dv, const char *url)
+{
+    if (!strcmp(dv->url, url))
+        return;
+    /* Without a <base> the base URL is the document's, and follows it. */
+    if (!strcmp(dv->base, dv->url)) {
+        au_free(dv->base);
+        dv->base = dup(url);
+    }
+    au_free(dv->url);
+    dv->url = dup(url);
+}
+
+DV_ENTRY_VOID(pop_state, (AuDocView * dv, const char *url, uint32_t key), (dv, url, key))
+{
+    au_dv_set_url(dv, url);
+    au_docscript_pop_state(dv->script, url, key);
+}
+
 const char *au_docview_url(const AuDocView *dv) { return dv->url; }
 const char *au_docview_base_url(const AuDocView *dv) { return dv->base; }
 const char *au_docview_title(const AuDocView *dv) { return dv->title; }

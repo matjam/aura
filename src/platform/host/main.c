@@ -1132,19 +1132,25 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
     } else if (!strcmp(a, "back") || !strcmp(a, "forward")) {
         double t0 = now_ms();
-        au_bw_go(w, a[0] == 'b' ? -1 : 1);
-        double shown = now_ms() - t0;
-        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
         AuTab *bt = au_bw_active_tab(w);
         AuPageStats ps;
         memset(&ps, 0, sizeof ps);
         if (bt)
             au_page_stats(bt->page, &ps);
-        if (ps.restored)
+        uint32_t popped0 = ps.popped;
+        au_bw_go(w, a[0] == 'b' ? -1 : 1);
+        double shown = now_ms() - t0;
+        chrome_settle(b, w, ses, o->net, 20, o->net ? 60000 : 10000);
+        bt = au_bw_active_tab(w);
+        memset(&ps, 0, sizeof ps);
+        if (bt)
+            au_page_stats(bt->page, &ps);
+        if (ps.restored && ps.popped == popped0)
             printf("%s: hiding the page left took %lu ms, building the layout again %lu ms\n", a,
                    (unsigned long)ps.hide_ms, (unsigned long)ps.rebuild_ms);
         printf("%s: %s, %.1f ms in the call, %.0f ms until idle\n", a,
-               ps.restored          ? "the kept document was shown"
+               ps.popped != popped0 ? "popstate in the shown document"
+               : ps.restored        ? "the kept document was shown"
                : ps.document_cached ? "the page was loaded again, its document from the HTTP cache"
                                     : "the page was loaded again, its document from the network",
                shown, now_ms() - t0);

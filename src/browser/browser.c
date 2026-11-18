@@ -719,6 +719,39 @@ static void cb_go_back(void *ctx, AuPage *p)
     }
 }
 
+/* history.pushState: a new entry for the same document. The page shows
+ * it without loading, now and when Back or Forward returns to it. */
+static void cb_history_push(void *ctx, AuPage *p, const char *url)
+{
+    AuTab *t = ctx;
+    AuNavEntry *cur = au_nav_current(&t->nav);
+    if (cur)
+        cur->scroll_y = t->scroll_y;
+    au_nav_push(&t->nav, url, au_page_title(p));
+    record_visit(t->win->browser, url, NULL);
+    t->win->browser->session_gen++;
+    entry_load(t);
+    if (is_active(t))
+        changed(t->win, AU_CHANGED_NAV | AU_CHANGED_MENUS);
+}
+
+/* history.go: Back or Forward in the tab the user is looking at; a tab in
+ * the background does not move. */
+static void cb_history_go(void *ctx, AuPage *p, int delta)
+{
+    AuTab *t = ctx;
+    (void)p;
+    if (is_active(t))
+        au_bw_go(t->win, delta);
+}
+
+static int cb_history_length(void *ctx, AuPage *p)
+{
+    AuTab *t = ctx;
+    (void)p;
+    return t->nav.n > 0 ? t->nav.n : 1;
+}
+
 /* The page's load turned out to be a file to save. */
 static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff)
 {
@@ -1125,7 +1158,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
                      env_history, env_bookmarks, env_dark};
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
-                          cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back};
+                          cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back,
+                          cb_history_push, cb_history_go, cb_history_length};
     t->page = au_page_new(&env, &cb);
     if (b->storage) {
         t->storage_ns = au_web_storage_ns_new(b->storage);

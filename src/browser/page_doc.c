@@ -109,6 +109,8 @@ typedef struct Kept {
     AuPageStats stats;
     uint32_t stamp; /* when it was hidden */
     size_t bytes;   /* estimated memory */
+    struct SameDocEntry *sd; /* its entries (AuPage.sd) */
+    uint32_t nsd, sd_cap;
 } Kept;
 
 struct AuPage {
@@ -217,6 +219,16 @@ struct AuPage {
     bool no_store;       /* the main response said Cache-Control: no-store */
     bool no_keep;        /* the document shown was a POST result (set until the next load starts) */
     bool discarded;      /* the document was freed to save memory (au_page_discard); cleared by the next load */
+    /* The entries of the shown document (pushState): the entry it loaded
+     * in (key 0) and those its script pushed, with the key its script
+     * named each with. A move between them pops state instead of loading
+     * ("The history API"). Empty until the script pushes. */
+    struct SameDocEntry {
+        uint32_t entry, key;
+    } *sd;
+    uint32_t nsd, sd_cap;
+    int go_delta; /* history.go waiting for the idle loop (go_pending) */
+    bool go_pending;
 
     /* Script console: the last AU_PAGE_CONSOLE_LINES lines, oldest first
      * from console_start. */
@@ -978,6 +990,79 @@ static void dv_open(void *ctx, AuDocView *dv, const char *url, bool new_tab)
     p->open_new_tab = new_tab;
 }
 
+/* ---- The history API ----
+ * pushState gives the browser a new back/forward entry (history_push);
+ * the page records it with the entries of the shown document (sd), and
+ * a move to one of them (au_page_navigate_entry) gives the document
+ * popstate instead of loading. */
+#define SAME_DOC_MAX 64
+
+static void sd_set(AuPage *p, uint32_t entry, uint32_t key)
+{
+    for (uint32_t i = 0; i < p->nsd; i++)
+        if (p->sd[i].entry == entry) {
+            p->sd[i].key = key;
+            return;
+        }
+    if (p->nsd == SAME_DOC_MAX) { /* the oldest goes; moving to it loads */
+        memmove(&p->sd[0], &p->sd[1], (p->nsd - 1) * sizeof *p->sd);
+        p->nsd--;
+    }
+    if (p->nsd == p->sd_cap) {
+        p->sd_cap = p->sd_cap ? p->sd_cap * 2 : 8;
+        p->sd = au_realloc(p->sd, p->sd_cap * sizeof *p->sd);
+    }
+    p->sd[p->nsd].entry = entry;
+    p->sd[p->nsd].key = key;
+    p->nsd++;
+}
+
+static int sd_find(const AuPage *p, uint32_t entry)
+{
+    for (uint32_t i = 0; i < p->nsd; i++)
+        if (p->sd[i].entry == entry)
+            return (int)i;
+    return -1;
+}
+
+static void dv_history_push(void *ctx, AuDocView *dv, const char *url, bool replace, uint32_t key)
+{
+    AuPage *p = ctx;
+    if (dv != p->dv || p->kind != K_DOC)
+        return;
+    if (!p->nsd && p->doc_entry)
+        sd_set(p, p->doc_entry, 0);
+    set_str(&p->url, url);
+    if (!replace && p->cb.history_push) {
+        p->next_entry = 0;
+        p->cb.history_push(p->cb.ctx, p, url); /* au_page_set_entry names the new entry */
+        if (p->next_entry) {
+            p->doc_entry = p->next_entry;
+            p->next_entry = 0;
+        }
+    }
+    if (p->doc_entry)
+        sd_set(p, p->doc_entry, key);
+    if (p->cb.url_changed)
+        p->cb.url_changed(p->cb.ctx, p, p->url);
+}
+
+static void dv_history_go(void *ctx, AuDocView *dv, int delta)
+{
+    AuPage *p = ctx;
+    if (dv != p->dv)
+        return;
+    p->go_delta = delta;
+    p->go_pending = true;
+}
+
+static int dv_history_length(void *ctx, AuDocView *dv)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->cb.history_length ? p->cb.history_length(p->cb.ctx, p) : 1;
+}
+
 /* ---- Forms ---- */
 
 typedef char au_edit_cmds_match[((int)AU_PAGE_EDIT_UNDO == (int)AU_EDITCMD_UNDO &&
@@ -1297,8 +1382,15 @@ static bool follow_open_url(AuPage *p)
 {
     if (follow_submit(p))
         return true;
-    if (!p->open_url)
-        return false;
+    if (!p->open_url) {
+        if (!p->go_pending)
+            return false;
+        p->go_pending = false;
+        if (p->cb.history_go)
+            p->cb.history_go(p->cb.ctx, p, p->go_delta);
+        return true;
+    }
+    p->go_pending = false; /* a navigation wins over history.go */
     char *u = p->open_url;
     p->open_url = NULL;
     if (starts_with_ci(u, "aura-action:")) {
@@ -1701,6 +1793,9 @@ static void new_view(AuPage *p)
     dcb.choose_file = dv_choose_file;
     dcb.confirm = dv_confirm;
     dcb.message = dv_message;
+    dcb.history_push = dv_history_push;
+    dcb.history_go = dv_history_go;
+    dcb.history_length = dv_history_length;
     p->dv = au_docview_new(p->env.fonts, &loader, &dcb);
     au_docview_set_request_ex(p->dv, loader_request_ex);
     au_docview_set_viewport(p->dv, p->vw, p->vh);
@@ -1718,6 +1813,7 @@ static void kept_free(Kept *k)
     au_free(k->cert);
     source_free(&k->src);
     au_netlog_free(&k->netlog);
+    au_free(k->sd);
     au_free(k);
 }
 
@@ -1813,6 +1909,11 @@ static Kept *kept_capture(AuPage *p)
     k->content_w = p->content_w;
     k->content_h = p->content_h;
     k->stats = p->stats;
+    k->sd = p->sd;
+    k->nsd = p->nsd;
+    k->sd_cap = p->sd_cap;
+    p->sd = NULL;
+    p->nsd = p->sd_cap = 0;
     return k;
 }
 
@@ -1925,6 +2026,13 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     /* The timings now describe the restore: load_ms the whole of it,
      * first_paint_ms up to the next paint. */
     p->stats = k->stats;
+    au_free(p->sd);
+    p->sd = k->sd;
+    p->nsd = k->nsd;
+    p->sd_cap = k->sd_cap;
+    k->sd = NULL;
+    k->nsd = k->sd_cap = 0;
+    p->go_pending = false;
     p->stats.restored++;
     p->stats.hide_ms = hide_ms;
     p->stats.first_paint_ms = 0;
@@ -3344,6 +3452,21 @@ static bool is_same_document(AuPage *p, const char *url, bool entry)
 
 static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, bool force)
 {
+    int sdi = entry && !force && p->next_entry && p->kind == K_DOC && p->begun && !p->failed
+                  ? sd_find(p, p->next_entry)
+                  : -1;
+    if (sdi >= 0) {
+        /* An entry the shown document's script made (or the one it loaded
+         * in): the document stays and gets popstate. */
+        set_str(&p->url, url);
+        p->doc_entry = p->next_entry;
+        p->next_entry = 0;
+        p->restore = false;
+        p->stats.popped++;
+        au_docview_pop_state(p->dv, url, p->sd[sdi].key);
+        request_scroll(p, rx, ry);
+        return;
+    }
     if (!force && is_same_document(p, url, entry)) {
         set_str(&p->url, url);
         au_free(p->fragment);
@@ -3388,6 +3511,8 @@ static void start_load(AuPage *p, const char *url, bool entry, int rx, int ry, b
         p->prev_entry = p->doc_entry; /* the entry of the document on screen */
     p->doc_entry = p->next_entry;
     p->next_entry = 0;
+    p->nsd = 0; /* the entries of the document going */
+    p->go_pending = false;
     p->no_store = false;
     char *u = au_strndup(url, strlen(url)); /* url may be p->url */
     /* What is shown now, in case this load turns out to be a download. */
@@ -3656,6 +3781,7 @@ void au_page_free(AuPage *p)
     p->leaving = NULL;
     au_page_drop_kept(p);
     au_free(p->kept);
+    au_free(p->sd);
     au_docview_free(p->dv);
     /* Freeing the documents can start a fetch (YouTube's page left one,
      * Fetch and URL, behind each time it closed): cancel and free those

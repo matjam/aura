@@ -71,6 +71,8 @@ struct AuDocScript {
     char perf_label[72]; /* the script it ran, for the slow task list */
     char *nav_url;
     bool nav_new_tab;
+    int go_delta; /* history.go asked for, handed over with nav_url (go_pending) */
+    bool go_pending;
 };
 
 /* ---- Helpers ---- */
@@ -411,6 +413,62 @@ static void h_reload(void *ctx)
     request_nav(s, au_docview_url(s->dv), false);
 }
 
+/* ---- The history API ----
+ * Only the top-level document reaches the browser's back and forward
+ * list; a frame's entries stay in its script (frames have no session
+ * history, known-gaps.md). */
+static int h_history_length(void *ctx)
+{
+    AuDocScript *s = ctx;
+    AuDocView *top = au_dv_top(s->dv);
+    const AuDocViewCallbacks *cb = au_dv_callbacks(top);
+    return cb->history_length ? cb->history_length(cb->ctx, top) : 1;
+}
+
+static void h_history_go(void *ctx, int delta)
+{
+    AuDocScript *s = ctx;
+    if (delta == 0) {
+        h_reload(s);
+        return;
+    }
+    s->go_delta = delta;
+    s->go_pending = true;
+    au_dv_top(s->dv)->frames_work = true;
+}
+
+static void h_history_push(void *ctx, const char *url, bool replace, uint32_t key)
+{
+    AuDocScript *s = ctx;
+    au_dv_set_url(s->dv, url);
+    const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
+    if (!s->dv->parent && cb->history_push)
+        cb->history_push(cb->ctx, s->dv, url, replace, key);
+}
+
+/* Hands a history.go over to the embedder. */
+static bool flush_go(AuDocScript *s)
+{
+    if (!s->go_pending)
+        return false;
+    s->go_pending = false;
+    AuDocView *top = au_dv_top(s->dv);
+    const AuDocViewCallbacks *cb = au_dv_callbacks(top);
+    if (cb->history_go)
+        cb->history_go(cb->ctx, top, s->go_delta);
+    return true;
+}
+
+void au_docscript_pop_state(AuDocScript *s, const char *url, uint32_t key)
+{
+    if (!s || !s->js)
+        return;
+    s->depth++;
+    au_js_pop_state(s->js, url, key);
+    s->depth--;
+    au_dv_turn_end(s->dv);
+}
+
 static bool h_open_window(void *ctx, const char *url, const char *target)
 {
     AuDocScript *s = ctx;
@@ -707,6 +765,9 @@ static bool ensure_js(AuDocScript *s)
     h.navigate = h_navigate;
     h.reload = h_reload;
     h.open_window = h_open_window;
+    h.history_length = h_history_length;
+    h.history_go = h_history_go;
+    h.history_push = h_history_push;
     h.alert = h_alert;
     h.confirm = h_confirm;
     h.prompt = h_prompt;
@@ -805,6 +866,11 @@ static void leave(AuDocScript *s)
     s->depth++;
     au_dv_check_finished(s->dv);
     s->depth--;
+    if (s->go_pending && !s->nav_url) {
+        flush_go(s);
+        return;
+    }
+    s->go_pending = false; /* a navigation wins over history.go */
     if (s->nav_url) {
         char *url = s->nav_url;
         bool new_tab = s->nav_new_tab;
@@ -1500,8 +1566,11 @@ void au_docscript_frames_changed(AuDocScript *s)
 
 bool au_docscript_flush_nav(AuDocScript *s)
 {
-    if (!s || !s->nav_url || s->depth > 0)
+    if (!s || s->depth > 0)
         return false;
+    if (!s->nav_url)
+        return flush_go(s);
+    s->go_pending = false;
     char *url = s->nav_url;
     bool new_tab = s->nav_new_tab;
     AuDocView *dv = s->dv;
