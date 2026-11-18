@@ -98,8 +98,17 @@ task, give the browser coroutines that run on the thread of the user
 interface: `AuBrowserHost.script_coro`. The Mac OS 9 shell gives the
 Thread Manager's cooperative threads, and `aura-host chrome` gives the
 POSIX ones (it has no user interface). The GTK and Cocoa shells give
-none: their coroutines are threads, and the page's script calls the
-shell's callbacks from its stack.
+`au_posix_ucoro_ops` (`src/platform/posix/coro_ucontext.c`):
+`makecontext` and `swapcontext` stacks on the main thread, because the
+page's script calls the shell's callbacks from its stack and GTK and
+AppKit take calls only on the main thread. Their workers keep the
+thread coroutines of `coro_posix.c`. To test the `ucontext` ones, run
+`test_script_park --ucontext` (ctest `browser_script_park_ucontext`).
+
+Each parked refresh of the view (every 250 ms, `h_yield` in
+`script.c`) reports the layout's damage (`au_dv_invalidate_damage`), so
+a window that repaints only invalidated rectangles shows the new
+content.
 
 With them, `au_page_idle` runs the page's script slice
 (`au_docview_run_scripts`) on a coroutine (`page_doc.c`, "Script that

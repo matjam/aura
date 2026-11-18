@@ -113,6 +113,10 @@ void au_posix_net_wait(AuPosixNet *n, int ms);
 
 /* Coroutines (core/coro.h) as threads that run one at a time. */
 const AuCoroOps *au_posix_coro_ops(void);
+/* Coroutines on the calling thread, with ucontext (coro_ucontext.c): for
+ * page script in a shell whose toolkit takes calls on the main thread
+ * only. */
+const AuCoroOps *au_posix_ucoro_ops(void);
 
 /* ---- Font files (fontdir_posix.c) ---- */
 

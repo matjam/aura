@@ -5,6 +5,7 @@
 add_library(aura_posix STATIC
     clock_posix.c
     coro_posix.c
+    coro_ucontext.c
     entropy_posix.c
     files_posix.c
     fontdir_posix.c

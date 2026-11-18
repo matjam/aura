@@ -329,6 +329,9 @@ void au_cocoa_browser_host(AuBrowserHost *h)
     h->scroll_area = h_scroll_area;
     h->random = h_random;
     h->coro = au_posix_coro_ops();
+    /* on the main thread, where AppKit takes the script's calls: a long
+     * task parks and the window scrolls meanwhile */
+    h->script_coro = au_posix_ucoro_ops();
     h->memory_free_kb = h_memory_free_kb;
 }
 

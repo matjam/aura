@@ -117,6 +117,9 @@ static bool t_read(void *ctx, const char *url, char **data, size_t *len)
 }
 
 static pthread_t main_thread;
+/* The coroutines page script parks on: threads (the host tool's), then
+ * the main thread's ucontext ones (the GTK and Cocoa shells'). */
+static const AuCoroOps *script_ops;
 static int confirms;
 static bool t_confirm(void *ctx, AuBrowserWindow *w, const char *message)
 {
@@ -216,7 +219,7 @@ static AuBrowser *make_browser(void)
     h.read_file_url = t_read;
     h.confirm = t_confirm;
     h.coro = au_posix_coro_ops();
-    h.script_coro = au_posix_coro_ops();
+    h.script_coro = script_ops;
     return au_browser_new(fonts, &h);
 }
 
@@ -500,11 +503,14 @@ static void test_held(void)
     au_browser_free(b);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     static uint8_t fontdata[16384];
     fonts = ahem_fontset(fontdata);
     main_thread = pthread_self();
+    /* One coroutine serves every page of a process, made with the first
+     * ops given: each kind runs in a process of its own. */
+    script_ops = argc > 1 && !strcmp(argv[1], "--ucontext") ? au_posix_ucoro_ops() : au_posix_coro_ops();
     test_scroll();
     test_restyle_then_park();
     test_shows_progress();

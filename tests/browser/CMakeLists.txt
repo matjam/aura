@@ -60,6 +60,9 @@ if(TARGET aura_posix)
     target_link_libraries(test_script_park aura_posix aura_engine m)
     add_test(NAME browser_script_park COMMAND test_script_park)
     set_tests_properties(browser_script_park PROPERTIES TIMEOUT 120)
+    # the GTK and Cocoa shells' coroutines: ucontext on the main thread
+    add_test(NAME browser_script_park_ucontext COMMAND test_script_park --ucontext)
+    set_tests_properties(browser_script_park_ucontext PROPERTIES TIMEOUT 120)
 endif()
 
 # The fetcher path on src/net's fake transport (no network).

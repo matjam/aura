@@ -1,9 +1,9 @@
 /* Coroutines over POSIX threads (core/coro.h, posix.h): each coroutine is
  * a thread that runs only while the thread that resumed it waits, so
  * there is one thread of control at any time, as with the Thread Manager
- * on Mac OS 9. A thread, not ucontext, because the sanitizers follow
- * threads' stacks and not hand-switched ones, and because ucontext is
- * deprecated on macOS. */
+ * on Mac OS 9. Workers and the host tool use these; page script in the
+ * GTK and Cocoa shells, which must call the toolkit on the main thread,
+ * uses the ucontext stacks of coro_ucontext.c. */
 #include "posix.h"
 
 #include <pthread.h>

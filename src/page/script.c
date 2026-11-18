@@ -153,6 +153,8 @@ static int h_yield(void *ctx)
     double every = s->park_layout_cost * 4 > PARK_LAYOUT_MS ? s->park_layout_cost * 4 : PARK_LAYOUT_MS;
     if (!au_layout_settled(au_docview_layout(s->dv)) || t - s->park_layout_at >= every) {
         au_docview_update(s->dv);
+        /* the window repaints only what it is told changed */
+        au_dv_invalidate_damage(s->dv);
         double t1 = au_dv_now(s->dv);
         s->park_layout_cost = t1 - t;
         s->park_layout_at = t1;
