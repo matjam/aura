@@ -200,6 +200,17 @@ and the legacy named access (`document.formName`, `form.controlName`,
 `form[0]`, RadioNodeList) through a proxy between `Node.prototype` and
 `EventTarget.prototype`.
 
+Form-associated custom elements (`static formAssociated = true`, with
+`attachInternals()`) live in the bindings (`prelude_obs.js`,
+"ElementInternals"): `setFormValue` gives the form a string or the
+entries of a FormData; `new FormData(form)` reads them, and a
+submission passes the string entries to C as `N.submitForm`'s third
+argument (`au_forms_script_submit` appends them after the controls'
+entries). `setValidity` joins `checkValidity`, `reportValidity` and
+interactive validation; `form.reset()` calls `formResetCallback`. Their
+file values are not submitted, and `:state()` does not match
+([`known-gaps.md`](known-gaps.md)).
+
 Events go in the standard order: keydown, beforeinput, input, keyup,
 change at blur or implicit submission, submit. Enter also fires
 keypress (code 13) before implicit submission.

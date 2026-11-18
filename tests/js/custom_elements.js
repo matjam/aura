@@ -94,3 +94,50 @@ test('a throwing constructor leaves the element failed and is reported', () => {
     assert.ok(!el.matches(':defined'));
     el.remove();
 });
+
+test('ElementInternals: form value, validity, reset, states', () => {
+    class XField extends HTMLElement {
+        static formAssociated = true;
+        constructor() { super(); this.i = this.attachInternals(); this.resets = 0; }
+        formResetCallback() { this.resets++; }
+    }
+    customElements.define('x-field', XField);
+    class XPlain extends HTMLElement { constructor() { super(); this.i = this.attachInternals(); } }
+    customElements.define('x-plain', XPlain);
+    const form = document.createElement('form');
+    form.innerHTML = '<input name="a" value="1"><x-field name="b"></x-field>';
+    document.body.appendChild(form);
+    const f = form.querySelector('x-field');
+    assert.ok(f.i instanceof ElementInternals);
+    assert.throws(() => f.attachInternals(), 'NotSupportedError');
+    assert.throws(() => document.createElement('div').attachInternals(), 'NotSupportedError');
+    assert.equal(f.i.form, form);
+    f.i.setFormValue('two');
+    assert.equal([...new FormData(form)].map((e) => e.join('=')).join('&'), 'a=1&b=two');
+    const fd = new FormData();
+    fd.append('c', '3');
+    fd.append('d', '4');
+    f.i.setFormValue(fd);
+    assert.equal([...new FormData(form)].map((e) => e.join('=')).join('&'), 'a=1&c=3&d=4');
+    assert.ok(f.i.willValidate && f.i.validity.valid);
+    assert.throws(() => f.i.setValidity({ valueMissing: true }), 'TypeError');
+    f.i.setValidity({ valueMissing: true }, 'Fill this in');
+    assert.equal(f.i.validationMessage, 'Fill this in');
+    let invalid = 0;
+    f.addEventListener('invalid', () => invalid++);
+    assert.equal(form.checkValidity(), false);
+    assert.equal(invalid, 1);
+    f.i.setValidity({});
+    assert.ok(form.checkValidity());
+    form.reset();
+    assert.equal(f.resets, 1);
+    f.i.states.add('open');
+    assert.ok(f.i.states.has('open') && f.i.states.size === 1);
+    f.i.ariaLabel = 'x';
+    assert.equal(f.i.ariaLabel, 'x');
+    const p = document.createElement('x-plain');
+    assert.throws(() => p.i.form, 'NotSupportedError');
+    f.setAttribute('disabled', '');
+    assert.equal(f.i.willValidate, false);
+    form.remove();
+});

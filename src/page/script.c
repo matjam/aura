@@ -259,10 +259,10 @@ static void h_focus_changed(void *ctx, AuElement *el)
     au_forms_script_focus(s->dv, el);
 }
 
-static void h_submit_form(void *ctx, AuElement *form, AuElement *submitter)
+static void h_submit_form(void *ctx, AuElement *form, AuElement *submitter, const char *const *extra, size_t nextra)
 {
     AuDocScript *s = ctx;
-    au_forms_script_submit(s->dv, form, submitter);
+    au_forms_script_submit(s->dv, form, submitter, extra, nextra);
 }
 
 static bool h_element_rect(void *ctx, AuElement *el, AuJsRect *out)

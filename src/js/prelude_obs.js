@@ -286,7 +286,16 @@ class CustomElementRegistry {
                 const o = ctor.observedAttributes;
                 if (o !== undefined) observed = Array.from(o, str);
             }
-            d = { name, localName, ctor, callbacks, observed: new Set(observed), stack: [] };
+            const disabledFeatures = ctor.disabledFeatures !== undefined ? Array.from(ctor.disabledFeatures, str) : [];
+            const formAssociated = !!ctor.formAssociated;
+            if (formAssociated)
+                for (const k of ['formAssociatedCallback', 'formResetCallback', 'formDisabledCallback', 'formStateRestoreCallback']) {
+                    const v = proto[k];
+                    if (v !== undefined && typeof v !== 'function') throw new TypeError(k + ' is not a function');
+                    callbacks[k] = v;
+                }
+            d = { name, localName, ctor, callbacks, observed: new Set(observed), stack: [], formAssociated,
+                noInternals: disabledFeatures.includes('internals') };
         } finally {
             ceDefining = false;
         }
@@ -327,6 +336,171 @@ tag(CustomElementRegistry);
 defGlobal('CustomElementRegistry', CustomElementRegistry);
 const theRegistry = Object.create(CustomElementRegistry.prototype);
 function customElementRegistry() { return theRegistry; }
+
+/* ---------------- ElementInternals ----------------
+ * attachInternals() for autonomous custom elements: form-associated ones
+ * (static formAssociated = true) give their form a value
+ * (P.faceEntries, read at submission and by new FormData(form)), take
+ * part in validation and get formResetCallback; states is a set of
+ * strings (the :state() selector does not match them yet,
+ * known-gaps.md); the ARIA members are plain properties. */
+const internalsOf = new WeakMap(); /* element -> ElementInternals */
+const validityFlags = ['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow',
+    'rangeOverflow', 'stepMismatch', 'badInput', 'customError'];
+class CustomStateSet {
+    constructor(key) { if (key !== S.owner) throw new TypeError('Illegal constructor'); this._s = new Set(); }
+    get size() { return this._s.size; }
+    add(v) { this._s.add(str(v)); return this; }
+    delete(v) { return this._s.delete(str(v)); }
+    has(v) { return this._s.has(str(v)); }
+    clear() { this._s.clear(); }
+    forEach(cb, t) { this._s.forEach((v) => cb.call(t, v, v, this)); }
+    values() { return this._s.values(); }
+    keys() { return this._s.values(); }
+    entries() { return this._s.entries(); }
+    [Symbol.iterator]() { return this._s.values(); }
+}
+tag(CustomStateSet);
+defGlobal('CustomStateSet', CustomStateSet);
+class ElementInternals {
+    constructor(key, el, d) {
+        if (key !== S.owner) throw new TypeError('Illegal constructor');
+        this._el = el;
+        this._d = d;
+        this._value = null;
+        this._state = null;
+        this._flags = {};
+        this._message = '';
+        this._states = new CustomStateSet(S.owner);
+    }
+    _face() {
+        if (!this._d.formAssociated) throw domErr('The element is not form-associated', 'NotSupportedError');
+    }
+    get shadowRoot() { return this._el.shadowRoot; }
+    get states() { return this._states; }
+    get form() { this._face(); return faceForm(this._el); }
+    get labels() {
+        this._face();
+        const el = this._el, out = [];
+        for (const l of el.ownerDocument.querySelectorAllArray('label'))
+            if ((el.id && l.htmlFor === el.id) || (!l.hasAttribute('for') && l.contains(el))) out.push(l);
+        return makeList(NodeList, null, -1, null, out);
+    }
+    setFormValue(value, state) {
+        this._face();
+        this._value = value === undefined ? null : value;
+        this._state = state === undefined ? this._value : state;
+    }
+    setValidity(flags, message, anchor) {
+        this._face();
+        flags = flags || {};
+        const set = {};
+        let any = false;
+        for (const k of validityFlags) if (flags[k]) { set[k] = true; any = true; }
+        if (any && (message === undefined || str(message) === ''))
+            throw new TypeError('setValidity: a message is required when a flag is set');
+        this._flags = set;
+        this._message = any ? str(message) : '';
+    }
+    get willValidate() { this._face(); return !faceDisabled(this._el) && !this._el.hasAttribute('readonly'); }
+    get validity() {
+        this._face();
+        const v = {};
+        let bad = false;
+        for (const k of validityFlags) { v[k] = !!this._flags[k]; bad = bad || v[k]; }
+        v.valid = !bad;
+        return Object.freeze(v);
+    }
+    get validationMessage() { this._face(); return this.willValidate ? this._message : ''; }
+    checkValidity() {
+        this._face();
+        if (!this.willValidate || this.validity.valid) return true;
+        fireSimple(this._el, 'invalid', false, true);
+        return false;
+    }
+    reportValidity() { return this.checkValidity(); }
+}
+for (const k of ['role', 'ariaAtomic', 'ariaAutoComplete', 'ariaBusy', 'ariaChecked', 'ariaColCount', 'ariaColIndex',
+    'ariaColSpan', 'ariaCurrent', 'ariaDescription', 'ariaDisabled', 'ariaExpanded', 'ariaHasPopup', 'ariaHidden',
+    'ariaInvalid', 'ariaKeyShortcuts', 'ariaLabel', 'ariaLevel', 'ariaLive', 'ariaModal', 'ariaMultiLine',
+    'ariaMultiSelectable', 'ariaOrientation', 'ariaPlaceholder', 'ariaPosInSet', 'ariaPressed', 'ariaReadOnly',
+    'ariaRequired', 'ariaRoleDescription', 'ariaRowCount', 'ariaRowIndex', 'ariaRowSpan', 'ariaSelected',
+    'ariaSetSize', 'ariaSort', 'ariaValueMax', 'ariaValueMin', 'ariaValueNow', 'ariaValueText'])
+    Object.defineProperty(ElementInternals.prototype, k, {
+        get() { return this['_' + k] === undefined ? null : this['_' + k]; },
+        set(v) { this['_' + k] = v === null ? null : str(v); },
+        enumerable: true, configurable: true,
+    });
+tag(ElementInternals);
+defGlobal('ElementInternals', ElementInternals);
+
+/* The form of a form-associated custom element: its form attribute's
+ * form, else its nearest form ancestor. */
+function faceForm(el) {
+    const id = el.getAttribute('form');
+    if (id !== null) {
+        const f = el.isConnected ? el.ownerDocument.getElementById(id) : null;
+        return f && f.localName === 'form' ? f : null;
+    }
+    return el.closest('form');
+}
+function faceDisabled(el) {
+    if (el.hasAttribute('disabled')) return true;
+    for (let p = el.parentElement; p; p = p.parentElement)
+        if (p.localName === 'fieldset' && p.hasAttribute('disabled')) {
+            const legend = p.querySelector(':scope > legend');
+            if (!legend || !legend.contains(el)) return true;
+        }
+    return false;
+}
+P.attachInternals = function (el) {
+    const d = ceByCtor.get(el.constructor) || defFor(el);
+    if (!d || d.name !== d.localName || d.name !== el.localName)
+        throw domErr('attachInternals is only for autonomous custom elements', 'NotSupportedError');
+    if (d.noInternals) throw domErr('This element disabled internals', 'NotSupportedError');
+    if (internalsOf.has(el)) throw domErr('attachInternals was already called', 'NotSupportedError');
+    const i = new ElementInternals(S.owner, el, d);
+    internalsOf.set(el, i);
+    return i;
+};
+/* The form-associated custom elements of form, in tree order, as
+ * [element, internals]. */
+function faceOf(form) {
+    if (!ceDefCount) return [];
+    const out = [];
+    const all = form.isConnected ? form.ownerDocument.querySelectorAllArray('*') : form.querySelectorAllArray('*');
+    for (const el of all) {
+        const i = internalsOf.get(el);
+        if (i && i._d.formAssociated && faceForm(el) === form) out.push([el, i]);
+    }
+    return out;
+}
+/* [name, value] entries the form-associated custom elements of form
+ * give it: a string value under the name attribute, or each entry of a
+ * FormData value. */
+P.faceEntries = function (form) {
+    const out = [];
+    for (const [el, i] of faceOf(form)) {
+        if (faceDisabled(el) || i._value === null) continue;
+        if (typeof i._value === 'object' && i._value instanceof G.FormData) {
+            for (const [k, v] of i._value) out.push([k, v]);
+            continue;
+        }
+        const name = el.getAttribute('name');
+        if (!name) continue;
+        out.push([name, i._value instanceof G.Blob ? i._value : str(i._value)]);
+    }
+    return out;
+};
+/* Form-associated custom elements that are invalid, for the form's
+ * interactive validation. */
+P.faceInvalid = function (form) {
+    return faceOf(form).filter(([el, i]) => i.willValidate && !i.validity.valid).map(([el]) => el);
+};
+/* A form reset reaches its form-associated custom elements. */
+P.faceReset = function (form) {
+    for (const [el, i] of faceOf(form)) ceCall(el, i._d, 'formResetCallback', []);
+};
 
 /* createElement: defined custom elements are constructed synchronously,
  * script-created scripts are watched so they run when connected. */

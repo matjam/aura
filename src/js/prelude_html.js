@@ -157,7 +157,7 @@ defProps(HEP, {
             this[S.clicking] = false;
         }
     },
-    attachInternals() { throw domErr('ElementInternals is not supported', 'NotSupportedError'); },
+    attachInternals() { return P.attachInternals(this); },
 });
 S.clicking = Symbol('clicking');
 
@@ -744,8 +744,14 @@ defProps(HTMLFormElement.prototype, {
     reset() {
         if (!fire(this, new Event('reset', { bubbles: true, cancelable: true }))) return;
         for (const e of formElementsOf(this)) resetControl(e);
+        P.faceReset(this);
     },
-    checkValidity() { let ok = true; for (const e of formElementsOf(this)) if (e.checkValidity && !e.checkValidity()) ok = false; return ok; },
+    checkValidity() {
+        let ok = true;
+        for (const e of formElementsOf(this)) if (e.checkValidity && !e.checkValidity()) ok = false;
+        for (const e of P.faceInvalid(this)) { ok = false; fireSimple(e, 'invalid', false, true); }
+        return ok;
+    },
     reportValidity() { return reportFormValidity(this); },
     item(i) { return formElementsOf(this)[i >>> 0] || null; },
     namedItem(n) { return namedControls(formElementsOf(this), n); },
@@ -842,6 +848,10 @@ function reportFormValidity(form) {
         ok = false;
         if (fire(e, new Event('invalid', { cancelable: true })) && !first) first = e;
     }
+    for (const e of P.faceInvalid(form)) {
+        ok = false;
+        if (fire(e, new Event('invalid', { cancelable: true })) && !first) first = e;
+    }
     if (first && first.isConnected) first.focus();
     return ok;
 }
@@ -863,6 +873,7 @@ function formDataSet(form, submitter) {
         const dir = e.getAttribute('dirname');
         if (dir && (t === 'text' || t === 'search' || e.localName === 'textarea')) out.push([dir, 'ltr']);
     }
+    for (const en of P.faceEntries(form)) out.push(en);
     return out;
 }
 let submitting = null;
@@ -878,7 +889,10 @@ function submitForm(form, submitter, events) {
     }
     submitting = form;
     try {
-        N.submitForm(form, submitter || null);
+        /* form-associated custom elements' values: C builds the rest */
+        const extra = [];
+        for (const [k, v] of P.faceEntries(form)) if (typeof v === 'string') extra.push(k, v);
+        N.submitForm(form, submitter || null, extra);
     } finally {
         submitting = null;
     }

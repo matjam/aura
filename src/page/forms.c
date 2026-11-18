@@ -563,8 +563,18 @@ static bool starts_ci(const char *s, const char *p)
     return strlen(s) >= n && au_ieq(s, n, p, n);
 }
 
+/* Entries the bindings add for form-associated custom elements
+ * (au_forms_script_submit): name and value strings in turn, read by the
+ * form_submit call it makes. */
+static const char *const *submit_extra;
+static size_t submit_nextra;
+
 static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, int flags, int ix, int iy)
 {
+    const char *const *extra = submit_extra;
+    size_t nextra = submit_nextra;
+    submit_extra = NULL;
+    submit_nextra = 0;
     if (dv->submitting || !alive(dv, form))
         return;
     if (dv->sandbox & AU_SANDBOX_FORMS)
@@ -622,6 +632,9 @@ static void form_submit(AuDocView *dv, AuElement *form, AuElement *submitter, in
         AuFormEntries l;
         au_form_entries_init(&l);
         au_form_entries_build(form, submitter, ix, iy, &l);
+        for (size_t k = 0; k + 1 < nextra; k += 2)
+            if (extra[k] && extra[k + 1])
+                au_form_entries_add(&l, extra[k], extra[k + 1], strlen(extra[k + 1]));
         if (!alive(dv, form)) {
             au_form_entries_free(&l);
             au_free(url);
@@ -729,9 +742,14 @@ out:
     au_node_unref(&form->node);
 }
 
-void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter)
+void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter, const char *const *extra,
+                            size_t nextra)
 {
+    submit_extra = extra;
+    submit_nextra = nextra;
     form_submit(dv, form, submitter, SUB_NO_VALIDATE | SUB_NO_EVENTS, 0, 0);
+    submit_extra = NULL;
+    submit_nextra = 0;
 }
 
 DV_ENTRY_VOID(submit, (AuDocView * dv, AuElement *form, AuElement *submitter), (dv, form, submitter))

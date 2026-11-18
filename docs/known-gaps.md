@@ -257,6 +257,10 @@ The ranked list of missing web platform features is
 [`web-platform.md`](web-platform.md); this section lists what is partly
 done.
 
+- **Custom elements:** `:state()` never matches (the selector parses;
+  `ElementInternals.states` is kept in script only); a form-associated
+  element's File value is not submitted, and `formStateRestoreCallback`
+  and `formDisabledCallback` are never called.
 - **Pointer capture:** `setPointerCapture` records the element, but
   pointer events still go to the element under the pointer, so a slider
   dragged past its edge stops following.

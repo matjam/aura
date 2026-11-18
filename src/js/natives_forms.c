@@ -209,8 +209,30 @@ static JSValue n_submit(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     AuJs *js = js_of_ctx(ctx);
     AuElement *form = el_arg(js, argc, argv, 0);
     AuElement *sub = el_arg(js, argc, argv, 1);
+    /* extra: [name, value, ...] from form-associated custom elements */
+    char **extra = NULL;
+    size_t nextra = 0;
+    if (argc > 2 && JS_IsArray(argv[2])) {
+        int64_t len = 0;
+        if (JS_GetLength(ctx, argv[2], &len) < 0)
+            return JS_EXCEPTION;
+        if (len > 2048)
+            len = 2048;
+        len &= ~(int64_t)1;
+        if (len > 0) {
+            extra = au_calloc((size_t)len * sizeof *extra);
+            for (int64_t i = 0; i < len; i++) {
+                JSValue v = JS_GetPropertyInt64(ctx, argv[2], i);
+                extra[nextra++] = js_tostr(ctx, v, NULL);
+                JS_FreeValue(ctx, v);
+            }
+        }
+    }
     if (form && js->hooks.submit_form)
-        js->hooks.submit_form(js->hooks.ctx, form, sub);
+        js->hooks.submit_form(js->hooks.ctx, form, sub, (const char *const *)extra, nextra);
+    for (size_t i = 0; i < nextra; i++)
+        au_free(extra[i]);
+    au_free(extra);
     return JS_UNDEFINED;
 }
 

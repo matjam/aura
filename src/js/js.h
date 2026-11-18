@@ -254,7 +254,9 @@ typedef struct AuJsHooks {
     /* A form is to be submitted (form.submit(), or requestSubmit and
      * activation after the submit event was not cancelled and validation
      * passed): the embedder builds the entry list and navigates. */
-    void (*submit_form)(void *ctx, AuElement *form, AuElement *submitter);
+    /* extra: nextra strings, name and value in turn, that form-associated
+     * custom elements add to the entry list (a NULL string is skipped) */
+    void (*submit_form)(void *ctx, AuElement *form, AuElement *submitter, const char *const *extra, size_t nextra);
     /* document.open(): the embedder starts a new parser. Optional. */
     AuHtmlParser *(*parser)(void *ctx);
     /* The fetch interface. */

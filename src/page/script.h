@@ -181,7 +181,8 @@ const char *au_dv_referrer(const AuDocView *dv);
  * (form.submit, or requestSubmit after its submit event); script changed
  * a control's value (repaint). */
 void au_forms_script_focus(AuDocView *dv, AuElement *el);
-void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter);
+void au_forms_script_submit(AuDocView *dv, AuElement *form, AuElement *submitter, const char *const *extra,
+                            size_t nextra);
 void au_forms_changed(AuDocView *dv, AuElement *el);
 
 #endif
