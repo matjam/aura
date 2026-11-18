@@ -28,6 +28,10 @@ struct AuImageEntry {
     uint32_t frame_due;
     uint32_t last_used;  /* epoch */
     int want_w, want_h;  /* the largest display size asked for in this epoch */
+    /* Painted at half the decoded size or less in small_epochs epochs in
+     * a row, at most small_w x small_h (shrink_when_small). */
+    uint8_t small_epochs;
+    int small_w, small_h;
     bool changed;
 };
 
@@ -391,8 +395,42 @@ void au_image_entry_done(AuImageCache *c, AuImageEntry *e, bool ok)
         set_failed(c, e);
 }
 
+static void start_decode(AuImageCache *c, AuImageEntry *e, int tw, int th);
+
+/* An image decoded at its full size before layout asked for a size (a
+ * prefetch below the view) and painted much smaller was box-filtered
+ * down on every paint and kept at full size: Reddit's feed images were a
+ * third of the paint time on the host. Once it has been painted at half
+ * its decoded size or less SHRINK_EPOCHS times in a row, it is decoded
+ * again at the largest of those sizes (a power-of-two reduction, at
+ * least that size). A paint of one strip that leaves out a larger use
+ * of the same image delays this; one that shows it larger starts over. */
+#define SHRINK_EPOCHS 8
+static void shrink_when_small(AuImageCache *c, AuImageEntry *e)
+{    if (e->last_used != c->epoch || !e->pixels || e->dec || e->loading || e->data_dropped || e->animated ||
+        e->format == AU_IMAGE_FORMAT_SVG || e->want_w <= 0 || e->want_h <= 0)
+        return;
+    const AuSurface *s = e->pixels;
+    if (s->width < 2 * e->want_w || s->height < 2 * e->want_h) {
+        e->small_epochs = 0;
+        return;
+    }
+    if (!e->small_epochs || e->want_w > e->small_w)
+        e->small_w = e->want_w;
+    if (!e->small_epochs || e->want_h > e->small_h)
+        e->small_h = e->want_h;
+    if (++e->small_epochs < SHRINK_EPOCHS)
+        return;
+    e->small_epochs = 0;
+    if (s->width < 2 * e->small_w || s->height < 2 * e->small_h)
+        return;
+    start_decode(c, e, e->small_w, e->small_h);
+}
+
 void au_image_cache_frame_begin(AuImageCache *c)
 {
+    for (uint32_t i = 0; i < c->n; i++)
+        shrink_when_small(c, c->e[i]);
     c->epoch++;
     for (uint32_t i = 0; i < c->n; i++)
         c->e[i]->want_w = c->e[i]->want_h = 0;

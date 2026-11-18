@@ -64,6 +64,44 @@ static void test_lazy_and_sizes(void)
     free(d);
 }
 
+/* Decoded at full size (before layout gave a size), then painted at a
+ * quarter: decoded again smaller once that has lasted SHRINK_EPOCHS (8)
+ * paints, and not when a larger use comes between. */
+static void test_shrink(void)
+{
+    size_t n;
+    uint8_t *d = load("png/big.png", &n);
+    if (!d)
+        return;
+    AuImageCache *c = au_image_cache_new(0);
+    AuImageEntry *e = au_image_cache_add(c, "http://x/big.png");
+    feed(c, e, d, n, 1000);
+    au_image_entry_done(c, e, true);
+    const AuSurface *view = au_image_entry_surface(e);
+    au_image_cache_frame_begin(c);
+    au_image_entry_use(c, e, 0, 0); /* a prefetch: the natural size */
+    IT_CHECK(view->width == 160 && view->height == 120, "full size first: %dx%d", view->width, view->height);
+    for (int i = 0; i < 6; i++) {
+        au_image_cache_frame_begin(c);
+        au_image_entry_use(c, e, 40, 30);
+    }
+    au_image_cache_frame_begin(c);
+    au_image_entry_use(c, e, 160, 120); /* shown large once: starts over */
+    for (int i = 0; i < 7; i++) {
+        au_image_cache_frame_begin(c);
+        au_image_entry_use(c, e, 40, 30);
+    }
+    au_image_cache_frame_begin(c);
+    IT_CHECK(view->width == 160 && view->height == 120, "kept while a larger use is recent: %dx%d", view->width,
+             view->height);
+    au_image_entry_use(c, e, 40, 30);
+    au_image_cache_frame_begin(c);
+    IT_CHECK(view->width == 40 && view->height == 30, "decoded again at the size shown: %dx%d", view->width,
+             view->height);
+    au_image_cache_free(c);
+    free(d);
+}
+
 static void test_budget(void)
 {
     size_t n;
@@ -306,6 +344,7 @@ int main(int argc, char **argv)
     }
     snprintf(root, sizeof root, "%s", argv[1]);
     test_lazy_and_sizes();
+    test_shrink();
     test_budget();
     test_capped_not_redecoded();
     test_progressive();

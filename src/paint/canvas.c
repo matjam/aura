@@ -286,20 +286,40 @@ void au_canvas_layer_end(AuCanvas *c, const AuMatrix *m, float opacity)
         AuIRect r = {au_f2px(floorf(minx)) - ox, au_f2px(floorf(miny)) - oy, au_f2px(ceilf(maxx)) - ox + 1,
                      au_f2px(ceilf(maxy)) - oy + 1};
         r = au_irect_intersect(r, clip);
+        const AuSurface *gs = g.surface;
+        const int gw = gs->width, gh = gs->height;
+        /* The source position steps by (ia, ib) per destination pixel:
+         * in 32.32 fixed point, which a G4 adds far faster than it
+         * multiplies floats (layer_end was 58% of Reddit's paint time on
+         * the host). 32 bits of fraction keep a long row from drifting. */
+        const double one = 4294967296.0;
+        const int64_t dxs = (int64_t)((double)ia * one), dys = (int64_t)((double)ib * one);
+        const int64_t wlim = (int64_t)gw << 32, hlim = (int64_t)gh << 32, neg1 = -((int64_t)1 << 32);
         for (int y = r.y0; y < r.y1; y++) {
             AuPixel *row = dst->pixels + (size_t)y * dst->stride;
-            float Y = (float)(y + oy) + 0.5f;
-            for (int x = r.x0; x < r.x1; x++) {
-                float X = (float)(x + ox) + 0.5f;
-                /* The source position, with pixel centres at .5. */
-                float sx = ia * X + ic * Y + ie - gx0 - 0.5f;
-                float sy = ib * X + id * Y + iff - gy0 - 0.5f;
-                if (sx <= -1 || sy <= -1 || sx >= g.surface->width || sy >= g.surface->height)
+            double Y = (double)(y + oy) + 0.5;
+            double X0 = (double)(r.x0 + ox) + 0.5;
+            /* The source position, with pixel centres at .5. */
+            int64_t fsx = (int64_t)floor(((double)ia * X0 + (double)ic * Y + (double)ie - gx0 - 0.5) * one);
+            int64_t fsy = (int64_t)floor(((double)ib * X0 + (double)id * Y + (double)iff - gy0 - 0.5) * one);
+            for (int x = r.x0; x < r.x1; x++, fsx += dxs, fsy += dys) {
+                if (fsx <= neg1 || fsy <= neg1 || fsx >= wlim || fsy >= hlim)
                     continue;
-                int x0 = (int)floorf(sx), y0 = (int)floorf(sy);
-                uint32_t fx = (uint32_t)((sx - x0) * 256.0f), fy = (uint32_t)((sy - y0) * 256.0f);
-                uint32_t p00 = px_at(g.surface, x0, y0), p10 = px_at(g.surface, x0 + 1, y0);
-                uint32_t p01 = px_at(g.surface, x0, y0 + 1), p11 = px_at(g.surface, x0 + 1, y0 + 1);
+                int x0 = (int)(fsx >> 32), y0 = (int)(fsy >> 32); /* floor: arithmetic shift */
+                uint32_t fx = (uint32_t)(fsx >> 24) & 255, fy = (uint32_t)(fsy >> 24) & 255;
+                uint32_t p00, p10, p01, p11;
+                if (x0 >= 0 && y0 >= 0 && x0 + 1 < gw && y0 + 1 < gh) {
+                    const AuPixel *s0 = gs->pixels + (size_t)y0 * gs->stride + x0;
+                    p00 = s0[0];
+                    p10 = s0[1];
+                    p01 = s0[gs->stride];
+                    p11 = s0[gs->stride + 1];
+                } else {
+                    p00 = px_at(gs, x0, y0);
+                    p10 = px_at(gs, x0 + 1, y0);
+                    p01 = px_at(gs, x0, y0 + 1);
+                    p11 = px_at(gs, x0 + 1, y0 + 1);
+                }
                 if (!(p00 | p10 | p01 | p11))
                     continue;
                 uint32_t top = au_px_scale_trunc(p00, 256 - fx) + au_px_scale_trunc(p10, fx);

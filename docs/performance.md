@@ -232,6 +232,39 @@ and each now restyles only what it reaches ([`css.md`](css.md)):
 To find what restyles a page, count `au_css_resolver_styled_count`
 around each `au_css_restyle` and log where `full_restyle` is set.
 
+## Transformed layers and image decoding, 2026-11-18
+
+Measured on the host (Release, base `b807370`) with `aura-host chrome
+--bundled-only -w 640 -h 480 --load-ms 3000 --tab file://feed.html
+--scroll-bench 400`. `feed.html` has 30 posts, each with a 1600 x 1200
+PNG twice: once in a `transform: scale(1.2)` backdrop at opacity 0.6
+and once as a 300 x 225 thumbnail, plus a `rotate(2deg)` caption.
+
+| | Before | After |
+|---|---|---|
+| Page down, paint per step | 63.1 to 63.5 ms | 56.8 ms |
+| `aura-host image big.png --repeat 20` | 1.01 s | 0.92 s |
+
+- `au_canvas_layer_end` mapped every pixel through the inverse matrix
+  in floats and converted four coordinates to integers. It steps in
+  32.32 fixed point now, and reads the four samples directly away from
+  the layer's edges. On the host the time is about the same; a G4
+  stalls on each float-to-integer conversion, and that loop was 58% of
+  Reddit's paint time in a host profile.
+- The CRC-32 of PNG data took two table lookups a byte; it takes one.
+  It was 15% of PNG decode time.
+- Most of this page's paint time is decoding: 30 images of 1.9 MB
+  decoded do not fit the 32 MB budget, and inflate is 57% of a decode.
+
+In the guest (stock Mac OS 9.2.2, G4 900 MHz, 640 x 480), Reddit loaded
+and paged down 12 times, from Develop > Performance. The loads differ,
+so compare the averages:
+
+| Build | Style | Paint |
+|---|---|---|
+| `a4c4424` (morning) | 13.5 s in 180 runs, 75 ms each | 19.9 s in 240 runs, 83 ms each |
+| this change, with `b807370` | 7.7 s in 161 runs, 48 ms each | 3.6 s in 103 runs, 35 ms each |
+
 ## Repainting after script on Reddit, 2026-11-17
 
 Measured on the host (Debug, base `22a4ced`) with `aura-host chrome -w

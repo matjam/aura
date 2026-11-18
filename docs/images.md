@@ -95,6 +95,12 @@ The cache (`cache.h`) holds one document's images by URL.
   not on each paint: macintoshgarden.org's 1200 x 1200 body background
   (5.8 MB) was decoded on every scroll step, about 29 ms each in the
   macOS app (2026-11-16).
+- An image decoded larger than it is painted (a prefetch below the
+  view decodes before layout gives it a size) is decoded again smaller
+  once it has been painted at half its decoded size or less for eight
+  paints in a row (`shrink_when_small` in `cache.c`). A paint that shows
+  it larger starts the count over. Until then each paint box-filtered
+  it down, and it held its full-size pixels.
 - A still image whose bytes are larger than its pixels keeps only the
   pixels.
 - Animations decode frame by frame from the compressed bytes, keep one
