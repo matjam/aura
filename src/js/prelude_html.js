@@ -915,8 +915,11 @@ defProps(HTMLImageElement.prototype, {
     set width(v) { this.setAttribute('width', String(v >>> 0)); },
     get height() { const r = N.rect(this); return r ? Math.round(r[3]) : (parseInt(this.getAttribute('height'), 10) || 0); },
     set height(v) { this.setAttribute('height', String(v >>> 0)); },
-    get naturalWidth() { return this._isz ? this._isz[0] : 0; },
-    get naturalHeight() { return this._isz ? this._isz[1] : 0; },
+    /* From script's own load of src, else from the image the document
+     * loaded for it (N.imgNatural): lazy loaders and galleries test
+     * naturalWidth to tell a loaded image. */
+    get naturalWidth() { if (this._isz) return this._isz[0]; const n = this.isConnected && N.imgNatural(this); return n ? n[0] : 0; },
+    get naturalHeight() { if (this._isz) return this._isz[1]; const n = this.isConnected && N.imgNatural(this); return n ? n[1] : 0; },
     get complete() { return !this._iload; },
     get currentSrc() { return this.src; },
     get x() { const r = N.rect(this); return r ? r[0] : 0; },

@@ -394,10 +394,10 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   "Script").
 - POST into a frame works only with a loader that implements
   `request_ex`.
-- `naturalWidth` of an `<img>` in a parsed `file:` page read 0 in
-  `aura-host chrome` for `data:` URLs short and long, though the image
-  painted (seen on 2026-11-16 while building the image-tile replica;
-  not looked into).
+- An `<img>` the parser made fires no `load` or `error` event, and its
+  `naturalWidth` comes from its layout box (`N.imgNatural`), so it reads
+  0 while the image has no box (`display: none`). Before 2026-11-17 it
+  read 0 always.
 - No CSP directive other than `frame-ancestors` is enforced anywhere
   (`script-src`, `frame-src`, `sandbox`, `default-src` and the rest are
   ignored), and neither is the `Permissions-Policy` header or the

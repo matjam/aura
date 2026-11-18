@@ -200,6 +200,9 @@ typedef struct AuJsHooks {
     bool (*element_scroll)(void *ctx, AuElement *el, double out[6]);
     /* Scrolls el's box to (x, y), clamped. Optional. */
     void (*element_scroll_to)(void *ctx, AuElement *el, double x, double y);
+    /* The natural size of the image an <img> the document loaded shows
+     * (naturalWidth); false before it has loaded. Optional. */
+    bool (*image_natural_size)(void *ctx, AuElement *el, int *w, int *h);
     /* Brings layout up to date and returns the element under viewport
      * point (x, y), or NULL (document.elementFromPoint). Optional. */
     AuElement *(*hit_test)(void *ctx, double x, double y);

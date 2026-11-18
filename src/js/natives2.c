@@ -668,6 +668,24 @@ static JSValue n_el_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return arr;
 }
 
+/* imgNatural(el): [width, height] of the image a document-loaded <img>
+ * shows, or null before it has loaded. */
+static JSValue n_img_natural(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    if (js_out_of_time(js))
+        return js_throw_stopped(ctx);
+    AuElement *e = argc > 0 ? arg_el(js, argv[0]) : NULL;
+    int w, h;
+    if (!e || !js->hooks.image_natural_size || !js->hooks.image_natural_size(js->hooks.ctx, e, &w, &h))
+        return JS_NULL;
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_NewInt32(ctx, w));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewInt32(ctx, h));
+    return arr;
+}
+
 /* elScrollTo(el, x, y) */
 static JSValue n_el_scroll_to(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1276,6 +1294,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("viewport", 0, n_viewport),
     JS_CFUNC_DEF("elScroll", 1, n_el_scroll),
     JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
+    JS_CFUNC_DEF("imgNatural", 1, n_img_natural),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),
     JS_CFUNC_DEF("imageSize", 1, n_image_size),

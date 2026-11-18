@@ -309,6 +309,9 @@ bool au_layout_element_visual_rect(AuLayout *L, const AuElement *el, float view_
  * padding box's width and height (clientWidth, clientHeight). False when
  * el has no such box. */
 bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6]);
+/* The natural size of the image an <img> box shows, once it has loaded
+ * (naturalWidth, naturalHeight). False without a box or before then. */
+bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int *h);
 /* Scrolls el's box to (x, y), clamped. True when the offset changed (the
  * caller repaints). */
 bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y);

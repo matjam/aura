@@ -319,6 +319,13 @@ static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y)
                        (AuIRect){au_f2px(r.x) - 2, au_f2px(r.y) - 2, au_f2px(r.x + r.w) + 3, au_f2px(r.y + r.h) + 3});
 }
 
+static bool h_image_natural_size(void *ctx, AuElement *el, int *w, int *h)
+{
+    AuDocScript *s = ctx;
+    au_docview_update(s->dv);
+    return au_layout_image_natural_size(au_docview_layout(s->dv), el, w, h);
+}
+
 static AuElement *h_hit_test(void *ctx, double x, double y)
 {
     AuDocScript *s = ctx;
@@ -690,6 +697,7 @@ static bool ensure_js(AuDocScript *s)
     h.element_visual_rect = h_element_visual_rect;
     h.element_scroll = h_element_scroll;
     h.element_scroll_to = h_element_scroll_to;
+    h.image_natural_size = h_image_natural_size;
     h.text_rects = h_text_rects;
     h.hit_test = h_hit_test;
     h.computed_style = h_computed_style;
