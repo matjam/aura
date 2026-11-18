@@ -38,6 +38,18 @@ doc w=800 h=600
 ---
 doc w=800 h=600
 
+=== a transformed box counts where it is drawn
+<body style="margin:0">
+<div style="position:relative;height:40px">
+<div style="position:absolute;left:600px;width:300px;height:40px;transform:translateX(-50%)"></div>
+</div>
+<div style="width:300px;height:40px;margin-left:700px;transform:translateX(-200px)"></div>
+---
+// npm's skip links: left 45% and translateX(-50%) made its page 474
+// pixels wide at 400 (these boxes end at 900 and 1000 untransformed,
+// at 750 and 800 where they are drawn)
+doc w=800 h=600
+
 === a shadow inside a scroll container does not make it scroll (GitHub's file tree)
 <body style="margin:0">
 <div style="overflow:auto;width:100px;height:100px;padding:10px;box-sizing:border-box">

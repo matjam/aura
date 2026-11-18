@@ -988,6 +988,25 @@ static void shadow_extent(const LBlock *b, LArea *r)
     }
 }
 
+/* An area of k (border-box coordinates) where k's transform draws it: the
+ * bounding box of its corners. Overflow counts a transformed box where
+ * it is drawn (CSS Transforms 1, section 3): npm's skip links sit at
+ * left 45% and move back with translateX(-50%), and counting them
+ * untransformed made its page 474 pixels wide at 400. */
+static LArea transformed_area(const LBlock *k, LArea a)
+{
+    AuMatrix m;
+    if (!(k->b.flags & LF_TRANSFORM) || !l_transform_matrix(k, &m))
+        return a;
+    float xs[4] = {a.x, a.x + a.w, a.x + a.w, a.x}, ys[4] = {a.y, a.y, a.y + a.h, a.y + a.h};
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (int i = 0; i < 4; i++) {
+        float X = m.a * xs[i] + m.c * ys[i] + m.e, Y = m.b * xs[i] + m.d * ys[i] + m.f;
+        x0 = l_min(x0, X), x1 = l_max(x1, X), y0 = l_min(y0, Y), y1 = l_max(y1, Y);
+    }
+    return (LArea){x0, y0, x1 - x0, y1 - y0};
+}
+
 /* Adds the overflow of LBlock descendants reached through inline boxes. */
 static void union_children(LBlock *b, LArea *ink, LArea *scroll)
 {
@@ -1006,12 +1025,13 @@ static void union_children(LBlock *b, LArea *ink, LArea *scroll)
                 outside = ref ? ref != &b->b : b->b.parent != NULL;
             }
             if (!(c->flags & LF_FIXED) && !outside) {
-                add_rect(ink, k->x + k->ov.x, k->y + k->ov.y, k->ov.w, k->ov.h);
+                LArea o = transformed_area(k, k->ov);
+                add_rect(ink, k->x + o.x, k->y + o.y, o.w, o.h);
                 /* A clipping child contributes its margin box. */
-                if (c->flags & LF_CLIPS)
-                    add_rect(scroll, k->x, k->y, k->w + l_max(0, k->m[1]), k->h + l_max(0, k->m[2]));
-                else
-                    add_rect(scroll, k->x + k->sov.x, k->y + k->sov.y, k->sov.w, k->sov.h);
+                LArea s = c->flags & LF_CLIPS ? (LArea){0, 0, k->w + l_max(0, k->m[1]), k->h + l_max(0, k->m[2])}
+                                              : k->sov;
+                s = transformed_area(k, s);
+                add_rect(scroll, k->x + s.x, k->y + s.y, s.w, s.h);
             }
         } else if (c->kind == LK_INLINE && c->first) {
             c = c->first;
@@ -1965,8 +1985,9 @@ static void layout_root(AuLayout *L)
             float x, y;
             l_box_origin(b, &x, &y);
             LBlock *k = (LBlock *)b;
-            right = l_max(right, x + k->sov.x + k->sov.w);
-            bottom = l_max(bottom, y + k->sov.y + k->sov.h);
+            LArea s = transformed_area(k, k->sov);
+            right = l_max(right, x + s.x + s.w);
+            bottom = l_max(bottom, y + s.y + s.h);
         }
         if (descend)
             b = b->first;
