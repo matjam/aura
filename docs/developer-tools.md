@@ -61,9 +61,11 @@ build/host/src/platform/host/aura-host chrome --net --bundled-only \
 
 To compare a page with Chrome, run `tools/render-compare.sh URL`. It
 renders the page with `aura-host chrome --native-chrome --net` and with
-headless Chrome (`google-chrome-stable --headless=new`, a fresh profile
-in a temporary directory) at a narrow viewport (400x900) and a wide one
-(1280x900), and writes these files to `run/compare` for each width W:
+headless Chrome (`tools/chrome-shot.py`, a fresh profile in a temporary
+directory) at a narrow viewport (400x900) and a wide one (1280x900),
+prints each browser's page width (`scrollWidth/clientWidth` of the
+root: a larger first number means the page scrolls sideways), and
+writes these files to `run/compare` for each width W:
 
 | File | Holds |
 |---|---|
@@ -87,14 +89,22 @@ fails at the other.
   without the `AURA_LOAD` cap `aura-host` spent 60 seconds on the load
   and 60 on the wait and the render timed out (5 of 30 Hacker News
   pages on 2026-11-16).
-- Headless Chrome screenshots when the page has loaded and Aura after
-  its wait, so content a script adds late can differ between them.
+- Chrome screenshots 2 seconds after the load event and Aura after its
+  wait, so content a script adds late can differ between them.
 - `tools/png-compare.py --side LEFT.png RIGHT.png OUT.png [DIFF.png]`
   makes the side-by-side image and figures for any two PNGs.
 - On a Mac without `google-chrome-stable`, the script uses
   `/Applications/Google Chrome.app` when `CHROME` is not set.
-- Chrome is given `--blink-settings=preferredColorScheme=1`, the light
-  scheme `aura-host` renders by default; without it Chrome follows the
+- To screenshot a page in Chrome alone, or read a value from it, run
+  `tools/chrome-shot.py [--wait MS] [--eval EXPR]... URL W H OUT.png`.
+  It sets the viewport through the DevTools protocol
+  (`Emulation.setDeviceMetricsOverride`). Headless Chrome's
+  `--window-size` lays a page out at least 500 pixels wide and 87 pixels
+  shorter than asked (Chrome 142 on macOS, 2026-11-17), so every
+  400-pixel comparison before then showed a 500x813 layout cut to
+  400x900.
+- Chrome is given the light colour scheme (`Emulation.setEmulatedMedia`),
+  the one `aura-host` renders by default; without it Chrome follows the
   desktop, and on a Mac in dark mode pages like Apple's came out dark in
   Chrome only.
 

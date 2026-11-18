@@ -51,9 +51,8 @@ if ! command -v "$chrome" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$outdir"
-profile=$(mktemp -d "${TMPDIR:-/tmp}/render-compare.XXXXXX")
-trap 'rm -rf "$profile"' EXIT INT TERM
 
+width_js="document.documentElement.scrollWidth+'/'+document.documentElement.clientWidth"
 status=0
 for w in $widths; do
     a=$outdir/aura-$w.png
@@ -61,17 +60,21 @@ for w in $widths; do
     rm -f "$a" "$c"
     echo "== ${w}x$height"
     if ! timeout "$limit" "$aura" chrome --native-chrome --net -w "$w" -h "$height" \
-        --load-ms "$load_ms" --tab "$url" --do "wait:$wait_ms" -o "$a" >"$outdir/aura-$w.log" 2>&1; then
+        --load-ms "$load_ms" --tab "$url" --do "wait:$wait_ms" --do "js:$width_js" -o "$a" \
+        >"$outdir/aura-$w.log" 2>&1; then
         echo "aura-host failed; see $outdir/aura-$w.log" >&2
         status=1
     fi
-    if ! timeout "$limit" "$chrome" --headless=new --disable-gpu --hide-scrollbars \
-        --no-first-run --no-default-browser-check --user-data-dir="$profile" \
-        --blink-settings=preferredColorScheme=1 \
-        --window-size="$w,$height" --screenshot="$c" "$url" >"$outdir/chrome-$w.log" 2>&1; then
+    # chrome-shot.py sets the viewport through the DevTools protocol:
+    # --window-size gives a layout at least 500 pixels wide.
+    if ! timeout "$limit" python3 "$root/tools/chrome-shot.py" --chrome "$chrome" --wait 2000 \
+        --timeout "$limit" --eval "$width_js" "$url" "$w" "$height" "$c" >"$outdir/chrome-$w.log" 2>&1; then
         echo "Chrome failed; see $outdir/chrome-$w.log" >&2
         status=1
     fi
+    aw=$(sed -n 's/^js =: //p' "$outdir/aura-$w.log" | tail -1)
+    cw=$(sed -n 's/^eval .*: //p' "$outdir/chrome-$w.log" | tail -1)
+    echo "page width (scrollWidth/clientWidth): aura ${aw:-?}, chrome ${cw:-?}"
     if [ -s "$a" ] && [ -s "$c" ]; then
         python3 "$root/tools/png-compare.py" --side "$a" "$c" "$outdir/side-$w.png" "$outdir/diff-$w.png"
         echo "wrote $a $c $outdir/side-$w.png $outdir/diff-$w.png"
