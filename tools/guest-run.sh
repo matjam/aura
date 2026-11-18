@@ -7,7 +7,6 @@
 #   tools/guest-run.sh stop    quit the guest started here
 #   tools/guest-run.sh status  say whether it runs
 #   tools/guest-run.sh reset   throw away the guest's disk changes
-#   BASE=stock tools/guest-run.sh start      boot the system without Enforcer
 #   WINDOW=1 tools/guest-run.sh start        boot with a window, to use by hand
 #
 # MEM sets the RAM in megabytes (default 512). The guest's disk writes are
@@ -25,12 +24,12 @@
 # QEMU_EXTRA adds arguments to QEMU's command line (tools/bench.sh passes
 # -icount there).
 #
-# BASE picks the system: enforcer (default, Mac OS 9.2.2 with the Enforcer
-# kernel and extension) or stock (without Enforcer). The guest boots an
-# overlay in AURA_RUN on the base image in disks/, so the base image is
-# never written. An overlay is valid only for the base image it was made
-# on: when the base image has changed since (a new Enforcer was folded
-# into it, or an older image was restored), start and reset set the old
+# The guest boots stock Mac OS 9.2.2 (BASE=stock, the only base: Aura is
+# not tested under Enforcer since 2026-11-18) through an overlay in
+# AURA_RUN on the base image in disks/, so the base image is never
+# written. An overlay is valid only for the base image it was made on:
+# when the base image has changed since (an older image was restored,
+# say), start and reset set the old
 # overlay aside as os9-overlay-BASE.stale.qcow2 and make a new one. See
 # tools/guest-env.sh for the settings.
 set -eu

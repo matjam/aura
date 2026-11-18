@@ -40,8 +40,8 @@ Aura for its users; keep it short.
   [`docs/conventions.md`](docs/conventions.md)
 - **Commit and push each working step to `main`.** Commit only our own
   sources. [`docs/conventions.md`](docs/conventions.md)
-- **Test on the Enforcer base by default, and on the stock base before
-  a release.** [`docs/guest-testing.md`](docs/guest-testing.md)
+- **Test on the stock base; Aura is not tested under Enforcer.**
+  [`docs/guest-testing.md`](docs/guest-testing.md)
 - **Decisions and milestones are recorded in the Gandalf vault,
   `project:aura:decisions`.** Check a feature against
   [`docs/v1-scope.md`](docs/v1-scope.md) before building it.
@@ -54,7 +54,7 @@ Aura for its users; keep it short.
 |---|---|
 | anything, for the first time | [`docs/architecture.md`](docs/architecture.md), [`docs/conventions.md`](docs/conventions.md) |
 | building, sanitizer or Release trees, the toolchain, QEMU, disk images | [`docs/building.md`](docs/building.md) |
-| driving the guest: starting it, pushing a build, clicks, screenshots, the Enforcer image, the guest clock | [`docs/guest-testing.md`](docs/guest-testing.md) |
+| driving the guest: starting it, pushing a build, clicks, screenshots, the guest clock | [`docs/guest-testing.md`](docs/guest-testing.md) |
 | CI, making a release, the installer archive, BinHex | [`docs/ci-and-releases.md`](docs/ci-and-releases.md) |
 | CSS parsing, selectors, the cascade, restyling | [`docs/css.md`](docs/css.md) |
 | the box tree, block, inline, flex or grid layout, relayout, text painting | [`docs/layout.md`](docs/layout.md) |
@@ -96,7 +96,7 @@ Aura for its users; keep it short.
 ```bash
 ./build.sh test                                            # host build and tests
 ./build.sh ppc                                             # Mac OS 9 build and installer archive
-tools/guest-run.sh start                                   # start the test machine (Enforcer base)
+tools/guest-run.sh start                                   # start the test machine (stock Mac OS 9.2.2)
 tools/guest-push.sh -n AuraTest build/ppc/dist/Aura/*      # copy the build in (quit Aura first)
 tools/guest-qmp.py open AuraTest Aura                      # launch it; `screenshot run/NAME.png` to look
 ```

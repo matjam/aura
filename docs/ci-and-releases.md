@@ -29,8 +29,8 @@ VERSION").
 - Do not push a tag or edit `AU_VERSION` by hand.
 - To force a version, add `"release-as": "X.Y.Z"` to the package in
   `release-please-config.json` and remove it after that release.
-- Before a release, test on the stock base as well as the Enforcer base
-  ([`guest-testing.md`](guest-testing.md)).
+- Before a release, run the smoke test and use the build on the stock
+  base ([`guest-testing.md`](guest-testing.md)).
 - Before a release, make the longer fuzzing pass on `main` in the
   sanitizer tree: 3,000 Domato pages over ten new seeds (about 6
   minutes four seeds at a time) and `tools/fuzz-all.sh 120` with a new

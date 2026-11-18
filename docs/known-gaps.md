@@ -53,9 +53,8 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
     Console window was pasted into the Console's input line, which uses
     the same `mac_put_scrap`; the report itself is longer than that
     line accepts;
-  - Report a Problem and System Status on the stock base
-    (`BASE=stock`), where the Enforcer line should read "not
-    installed", and on any real Mac.
+  - Report a Problem and System Status on the stock base, where the
+    Enforcer line should read "not installed", and on any real Mac.
 
 ## Layout
 

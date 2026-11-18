@@ -189,12 +189,10 @@ The test machine's base images are in `disks/` (git-ignored):
 
 | Image | System |
 |---|---|
-| `os9-novm.qcow2` | a stock Mac OS 9.2.2 with virtual memory off |
-| `os9-vmoff.qcow2` | the same system with Enforcer installed |
+| `os9-novm.qcow2` | a stock Mac OS 9.2.2 with virtual memory off: the one the guest boots |
+| `os9-vmoff.qcow2` | the same system with Enforcer installed: retired on 2026-11-18, no script boots it |
 
 Both are standalone qcow2 files with no backing file.
-[`guest-testing.md`](guest-testing.md) records which Enforcer is on the
-second image and how to update it.
 
 ### hfsutils
 
@@ -204,8 +202,7 @@ hfsutils`.
 ### Where these came from
 
 The install scripts, the QEMU patch and the two disk images were copied
-from the os9-enforcer project on 2026-11-14. The Enforcer image was
-updated on 2026-11-15 (see [`guest-testing.md`](guest-testing.md)).
+from the os9-enforcer project on 2026-11-14.
 
 ### Tools some tests and generators need
 

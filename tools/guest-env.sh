@@ -8,11 +8,9 @@
 #              checkout. The images are standalone (no backing file) and
 #              git-ignored; docs/building.md says where they came from.
 # BASE         which Mac OS 9.2.2 system the guest boots:
-#                enforcer  os9-vmoff.qcow2: virtual memory off, with the
-#                          Enforcer kernel and extension installed
-#                          (default)
 #                stock     os9-novm.qcow2: the base install with virtual
-#                          memory off, no Enforcer
+#                          memory off (default, and the only base since
+#                          2026-11-18: Aura is not tested under Enforcer)
 #              Each base has its own overlay in AURA_RUN.
 # AURA_GUEST_UTC_OFFSET
 #              seconds the base image's Mac OS time zone is east of UTC,
@@ -35,18 +33,14 @@ aura_main=$(cd "$(git -C "$aura_repo" rev-parse --path-format=absolute --git-com
 
 AURA_RUN=${AURA_RUN:-$aura_main/run}
 AURA_DISKS=${AURA_DISKS:-$aura_main/disks}
-BASE=${BASE:-enforcer}
+BASE=${BASE:-stock}
 case "$BASE" in
   stock)
     AURA_BASE=$AURA_DISKS/os9-novm.qcow2
     AURA_GUEST_UTC_OFFSET=${AURA_GUEST_UTC_OFFSET:--25200}
     ;;
-  enforcer)
-    AURA_BASE=$AURA_DISKS/os9-vmoff.qcow2
-    AURA_GUEST_UTC_OFFSET=${AURA_GUEST_UTC_OFFSET:--25200}
-    ;;
   *)
-    echo "guest: unknown BASE '$BASE' (stock or enforcer)" >&2
+    echo "guest: unknown BASE '$BASE' (only stock: Aura is not tested under Enforcer)" >&2
     exit 2
     ;;
 esac
