@@ -91,6 +91,11 @@ static const AuPrefDesc descs[AU_PREF_COUNT] = {
     {AU_PREF_WORKER_MEMORY_MB, SEC(CONTENT), AU_PREF_NUMBER, NULL, NULL, NULL, "MB", NULL, NULL, NULL,
      (int)(AU_SCRIPT_MEM_CUSTOM_MIN_KB / 1024), (int)(AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024), AU_PREF_WORKER_MEMORY_MODE,
      1, AU_PREF_STATUS, AU_PREF_STORE_SPECIAL, 0},
+    {AU_PREF_IMAGE_MEMORY_MODE, SEC(CONTENT), AU_PREF_CHOICE, "content.image_memory_kb", "Image memory per page:",
+     NULL, NULL, NULL, memory_choices, NULL, 0, 0, AU_PREF_NONE, 0, 0, AU_PREF_STORE_SPECIAL, 0},
+    {AU_PREF_IMAGE_MEMORY_MB, SEC(CONTENT), AU_PREF_NUMBER, NULL, NULL, NULL, "MB", NULL, NULL, NULL,
+     (int)(AU_SCRIPT_MEM_CUSTOM_MIN_KB / 1024), (int)(AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024), AU_PREF_IMAGE_MEMORY_MODE,
+     1, AU_PREF_STATUS, AU_PREF_STORE_SPECIAL, 0},
     D_NOTE(SCRIPT_MEMORY_NOTE, CONTENT, NULL),
     /* Privacy and Security */
     D_CHECK(SEND_DNT, PRIVACY, "privacy.do_not_track", "Send Do Not Track", send_dnt),
@@ -186,7 +191,7 @@ struct AuPrefsEdit {
     size_t nfamilies;
     /* Script memory as the window shows it: Automatic (0) or Custom (1),
      * and the number of megabytes in the field. */
-    int mem_mode[2], mem_mb[2];
+    int mem_mode[3], mem_mb[3]; /* script per page, per worker, images */
 };
 
 /* Enum fields are accessed as int (prefs.c checks they are int-sized). */
@@ -203,15 +208,25 @@ static int mem_slot(AuPrefId id)
     case AU_PREF_SCRIPT_MEMORY_MB: return 0;
     case AU_PREF_WORKER_MEMORY_MODE:
     case AU_PREF_WORKER_MEMORY_MB: return 1;
+    case AU_PREF_IMAGE_MEMORY_MODE:
+    case AU_PREF_IMAGE_MEMORY_MB: return 2;
     default: return -1;
     }
 }
 
 static uint32_t auto_kb(const AuPrefsEdit *e, int slot)
 {
+    if (slot == 2)
+        return au_image_memory_auto(e->host.memory_free_kb);
     uint32_t page_kb, worker_kb;
     au_script_memory_auto(e->host.memory_free_kb, &page_kb, &worker_kb);
     return slot ? worker_kb : page_kb;
+}
+
+/* The preference field of a memory slot. */
+static int *mem_field(AuPrefs *p, int slot)
+{
+    return slot == 2 ? &p->image_memory_kb : slot ? &p->worker_memory_kb : &p->script_memory_kb;
 }
 
 /* Automatic shows what it gives now, ready to edit after a switch to Custom. */
@@ -273,6 +288,7 @@ AuPrefsEdit *au_prefs_edit_new(const AuPrefs *prefs, const AuPrefsHost *host)
     collect_families(e, e->host.fonts);
     load_memory(e, 0, prefs->script_memory_kb);
     load_memory(e, 1, prefs->worker_memory_kb);
+    load_memory(e, 2, prefs->image_memory_kb);
     return e;
 }
 
@@ -486,7 +502,7 @@ bool au_prefs_edit_set_text(AuPrefsEdit *e, AuPrefId id, const char *text)
         /* Not a number: the value the preference had when the window opened. */
         int slot = mem_slot(id);
         if (slot >= 0)
-            au_prefs_edit_set_int(e, id, (slot ? e->orig.worker_memory_kb : e->orig.script_memory_kb) / 1024);
+            au_prefs_edit_set_int(e, id, *mem_field((AuPrefs *)&e->orig, slot) / 1024);
         else
             au_prefs_edit_set_int(e, id, *int_at(&e->orig, d));
         return false;
@@ -638,13 +654,15 @@ void au_prefs_edit_text(const AuPrefsEdit *e, AuPrefId id, AuBuf *out)
     switch (id) {
     case AU_PREF_SCRIPT_MEMORY_MB:
     case AU_PREF_WORKER_MEMORY_MB:
+    case AU_PREF_IMAGE_MEMORY_MB:
         au_buf_printf(out, "Automatic is %lu MB on %s", (unsigned long)(auto_kb(e, mem_slot(id)) / 1024), machine);
         return;
     case AU_PREF_SCRIPT_MEMORY_NOTE:
         au_buf_printf(out,
-                      "How much memory the scripts of one page, and of each worker a page starts, may use. Automatic "
-                      "follows the memory free on %s when a page starts. A custom limit is %u to %u MB. A page that "
-                      "reaches its limit says so in the Console. Changes apply to pages loaded afterwards.",
+                      "How much memory the scripts of one page, each worker a page starts, and a page's decoded "
+                      "images may use. Automatic follows the memory free on %s when a page starts. A custom limit is "
+                      "%u to %u MB. A page whose script reaches its limit says so in the Console; images past theirs "
+                      "are decoded again when shown. Changes apply to pages loaded afterwards.",
                       machine, AU_SCRIPT_MEM_CUSTOM_MIN_KB / 1024, AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024);
         return;
     case AU_PREF_DEFAULT_BROWSER:
@@ -710,6 +728,7 @@ void au_prefs_edit_reset_section(AuPrefsEdit *e, AuPrefSection s)
     if (s == AU_PREF_SECTION_CONTENT) {
         load_memory(e, 0, def.script_memory_kb);
         load_memory(e, 1, def.worker_memory_kb);
+        load_memory(e, 2, def.image_memory_kb);
     }
     au_prefs_free(&def);
 }
@@ -755,9 +774,9 @@ bool au_prefs_edit_apply(const AuPrefsEdit *e, AuPrefs *prefs)
         if (copy_item(&descs[i], prefs, &e->work))
             changed = true;
     /* Automatic is stored as 0, so it follows Aura's policy. */
-    for (int slot = 0; slot < 2; slot++) {
+    for (int slot = 0; slot < 3; slot++) {
         int kb = e->mem_mode[slot] ? au_script_memory_clamp(e->mem_mb[slot] * 1024) : 0;
-        int *field = slot ? &prefs->worker_memory_kb : &prefs->script_memory_kb;
+        int *field = mem_field(prefs, slot);
         if (*field != kb) {
             *field = kb;
             changed = true;

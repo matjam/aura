@@ -57,6 +57,8 @@ typedef struct AuPrefs {
      * follows the memory the machine has free; a number is the user's
      * own limit, 4 MB to 256 MB. They apply to pages loaded afterwards. */
     int script_memory_kb, worker_memory_kb;
+    /* Decoded images per page, in KB (scriptmem.h): 0 is Automatic. */
+    int image_memory_kb;
     bool load_images;
     bool block_popups;
 

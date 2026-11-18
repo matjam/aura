@@ -44,6 +44,7 @@ static const Key keys[] = {
     B("content.javascript", javascript),
     I("content.script_memory_kb", script_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     I("content.worker_memory_kb", worker_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    I("content.image_memory_kb", image_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     B("content.images", load_images),
     B("content.block_popups", block_popups),
     E("privacy.cookies", cookies, cookie_names),
@@ -255,6 +256,7 @@ bool au_prefs_set(AuPrefs *p, const char *key, const char *value)
             /* 0 is Automatic; any other script memory limit has a floor */
             p->script_memory_kb = au_script_memory_clamp(p->script_memory_kb);
             p->worker_memory_kb = au_script_memory_clamp(p->worker_memory_kb);
+            p->image_memory_kb = au_script_memory_clamp(p->image_memory_kb);
         }
         break;
     }

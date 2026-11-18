@@ -322,8 +322,27 @@ static void test_clamping(const AuPrefsHost *host)
     au_prefs_init(&out);
     au_prefs_edit_apply(e, &out);
     CHECK(out.script_memory_kb == 0 && out.worker_memory_kb == 0, "Automatic is stored as 0");
+    CHECK(out.image_memory_kb == 0, "images: Automatic is stored as 0");
     au_prefs_edit_set_choice(e, AU_PREF_SCRIPT_MEMORY_MODE, 1);
     au_prefs_edit_set_choice(e, AU_PREF_WORKER_MEMORY_MODE, 1);
+    au_prefs_edit_set_choice(e, AU_PREF_IMAGE_MEMORY_MODE, 1);
+    au_prefs_edit_set_text(e, AU_PREF_IMAGE_MEMORY_MB, "48");
+    au_prefs_edit_apply(e, &out);
+    CHECK(out.image_memory_kb == 48 * 1024, "images: Custom 48 MB, got %d", out.image_memory_kb);
+    au_prefs_edit_set_text(e, AU_PREF_IMAGE_MEMORY_MB, "1");
+    au_prefs_edit_apply(e, &out);
+    CHECK(out.image_memory_kb == 4096, "images: the floor, got %d", out.image_memory_kb);
+    /* Automatic: an eighth of what is free, 8 to 64 MB (times four with
+     * 64-bit pointers) */
+    {
+        uint32_t s = sizeof(void *) >= 8 ? 4 : 1;
+        CHECK(au_image_memory_auto(0) == 8192 * s, "images unknown: %u", au_image_memory_auto(0));
+        CHECK(au_image_memory_auto(40 * 1024) == 8192 * s, "40 MB free");
+        CHECK(au_image_memory_auto(330 * 1024) == 41 * 1024 * s, "330 MB free: %u",
+              au_image_memory_auto(330 * 1024));
+        CHECK(au_image_memory_auto(4096 * 1024) == 64 * 1024 * s, "4 GB free");
+        CHECK(au_image_memory_limit(20480, 330 * 1024) == 20480, "custom wins");
+    }
     static const struct {
         const char *text;
         int kb;

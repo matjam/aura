@@ -1,6 +1,11 @@
 /* Script memory limits. See scriptmem.h. */
 #include "scriptmem.h"
 
+#include <stddef.h>
+
+/* As AU_IMAGE_BUDGET_SCALE (src/image/cache.h), without its header. */
+#define IMAGE_SCALE (sizeof(void *) >= 8 ? 4u : 1u)
+
 static uint32_t clamp_mb(uint32_t kb, uint32_t lo, uint32_t hi)
 {
     if (kb < lo)
@@ -40,4 +45,17 @@ void au_script_memory_limits(int pref_page_kb, int pref_worker_kb, uint32_t free
         *page_kb = (uint32_t)au_script_memory_clamp(pref_page_kb);
     if (au_script_memory_clamp(pref_worker_kb))
         *worker_kb = (uint32_t)au_script_memory_clamp(pref_worker_kb);
+}
+
+uint32_t au_image_memory_auto(uint32_t free_kb)
+{
+    if (!free_kb)
+        return AU_IMAGE_MEM_FLOOR_KB * IMAGE_SCALE;
+    return clamp_mb(free_kb / 8, AU_IMAGE_MEM_FLOOR_KB, AU_IMAGE_MEM_CEILING_KB) * IMAGE_SCALE;
+}
+
+uint32_t au_image_memory_limit(int pref_kb, uint32_t free_kb)
+{
+    int kb = au_script_memory_clamp(pref_kb);
+    return kb ? (uint32_t)kb : au_image_memory_auto(free_kb);
 }

@@ -77,12 +77,16 @@ The cache (`cache.h`) holds one document's images by URL.
 - Layout gets the size from the header; pixels are decoded only when an
   image is used in a paint (`au_image_entry_use`), at the smallest
   power-of-two reduction that still covers the displayed size.
-- The budget comes from the memory cache preference
-  (`au_docview_set_image_budget`, 8 MB by default, as without a
-  browser). On 64-bit builds it is four times that figure
-  (`AU_IMAGE_BUDGET_SCALE`, 32 MB by default), so an image up to the
-  16 MB per-image cap decodes at full size. The scale applies to
-  existing profiles too, which store `cache.memory_kb=8192`.
+- The budget is the "Image memory per page" preference
+  (`content.image_memory_kb`, Preferences > Content), set when a page
+  starts (`au_docview_set_image_budget` from `page_doc.c`). Automatic
+  (0, the default) is an eighth of the memory free, at least 8 MB and
+  at most 64 MB; Custom is 4 to 256 MB (`au_image_memory_limit`,
+  `scriptmem.h`). On 64-bit builds Automatic is four times that
+  (`AU_IMAGE_BUDGET_SCALE`), so an image up to the 16 MB per-image cap
+  decodes at full size. Until 2026-11-18 the budget was the memory
+  cache size, 8 MB: Reddit's feed dropped 41 of 50 decodes in the guest
+  with 330 MB free, and scrolling back decoded them again.
 - Over the budget, images not used in the last paint lose their pixels,
   oldest first, and keep their compressed bytes to decode again.
 - One image may use at most half the budget (at least 1 MB, at most

@@ -57,4 +57,15 @@ int au_script_memory_clamp(int kb);
 void au_script_memory_limits(int pref_page_kb, int pref_worker_kb, uint32_t free_kb, uint32_t *page_kb,
                              uint32_t *worker_kb);
 
+/* Decoded images per page (content.image_memory_kb, the same custom
+ * range). Automatic is an eighth of what is free, at least 8 MB, at most
+ * 64 MB, times four with 64-bit pointers (AU_IMAGE_BUDGET_SCALE); 8 MB
+ * (times four) when free memory is unknown. Before 2026-11-18 it was the
+ * memory cache size, 8 MB: Reddit dropped 41 of its 50 decodes in the
+ * guest with 330 MB free and decoded them again when scrolled back. */
+#define AU_IMAGE_MEM_FLOOR_KB (8u * 1024)
+#define AU_IMAGE_MEM_CEILING_KB (64u * 1024)
+uint32_t au_image_memory_auto(uint32_t free_kb);
+uint32_t au_image_memory_limit(int pref_kb, uint32_t free_kb);
+
 #endif

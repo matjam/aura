@@ -524,9 +524,12 @@ static void apply_font_prefs(AuPage *p)
     au_docview_set_font_prefs(p->dv, &fp);
     /* The initial family: the reader's serif face, as browsers default. */
     au_docview_set_user_css(p->dv, "html { font-family: serif; }\n");
-    /* Decoded images get the memory cache size as their budget, scaled
-     * up on 64-bit builds (AU_IMAGE_BUDGET_SCALE). */
-    au_docview_set_image_budget(p->dv, pr ? (size_t)pr->memory_cache_kb * 1024 * AU_IMAGE_BUDGET_SCALE : 0);
+    /* Decoded images: the preference, or Automatic from the memory free
+     * (au_image_memory_limit in scriptmem.h). */
+    au_docview_set_image_budget(
+        p->dv, (size_t)au_image_memory_limit(pr ? pr->image_memory_kb : 0,
+                                             p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0) *
+                   1024);
     /* The colour scheme (prefers-color-scheme), from the browser. */
     au_docview_set_dark(p->dv, p->env.dark && p->env.dark(p->env.ctx));
 }
