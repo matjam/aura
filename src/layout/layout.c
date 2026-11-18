@@ -2161,6 +2161,17 @@ bool au_layout_settled(const AuLayout *L)
     return !L->unsettled;
 }
 
+void au_layout_viewport_overflow(const AuLayout *L, bool *lock_x, bool *lock_y)
+{
+    const AuElement *src = l_viewport_overflow_source(L);
+    *lock_x = *lock_y = false;
+    if (!src)
+        return;
+    const AuStyleBox *bx = au_element_style(src)->box;
+    *lock_x = bx->overflow_x == AU_OVERFLOW_HIDDEN || bx->overflow_x == AU_OVERFLOW_CLIP;
+    *lock_y = bx->overflow_y == AU_OVERFLOW_HIDDEN || bx->overflow_y == AU_OVERFLOW_CLIP;
+}
+
 static bool overflow_visible(const AuElement *el)
 {
     const AuStyle *s = el ? au_element_style(el) : NULL;

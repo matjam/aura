@@ -677,6 +677,10 @@ bool au_page_scroll(AuPage *p, int x, int y, int dx, int dy);
  * distance from (ox, oy) would end in a vw by vh view, to the root's snap
  * position. False when the page does not snap or nothing moved. */
 bool au_page_snap(AuPage *p, int vw, int vh, int ox, int oy, int *x, int *y);
+/* The axes the user may not scroll the page along: the root's (or the
+ * body's) overflow is hidden or clip there (au_layout_viewport_overflow).
+ * Script scrolls them still. */
+void au_page_scroll_locked(const AuPage *p, bool *x, bool *y);
 
 /* Called from the event loop's idle time; runs timers and loading. Each
  * call does a bounded slice of work (a few tens of milliseconds) so the

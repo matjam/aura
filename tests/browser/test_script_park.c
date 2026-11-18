@@ -67,6 +67,9 @@ static const struct {
      "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(100000) "document.title='ran to the end';},10);"
      "</script>"},
     {"other.html", "<!DOCTYPE html><title>Other</title><body>o"},
+    {"locked.html",
+     "<!DOCTYPE html><html style='overflow:hidden'><body style='margin:0'><div style='height:5000px'></div>"
+     "<script>window.go=function(){scrollTo(0,500);document.title='at '+scrollY;};</script>"},
     {"grow.html",
      "<!DOCTYPE html><body style='margin:0'><p>short</p><script>"
      "setTimeout(function(){var d=document.createElement('div');d.style.height='5000px';"
@@ -316,6 +319,29 @@ static void test_shows_progress(void)
     au_browser_free(b);
 }
 
+/* overflow: hidden on the root: the user does not scroll the page (keys,
+ * the scroll bar's range), script does. */
+static void test_scroll_locked(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/locked.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    settle(w);
+    paint(w);
+    AuEvent e = key(AU_KEY_PAGE_DOWN);
+    au_bw_key(w, &e);
+    CHECK(t->scroll_y == 0);
+    int mx, my;
+    au_bw_scroll_max(w, &mx, &my);
+    CHECK(my == 0);
+    au_page_eval(t->page, "go()", NULL);
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "at 500");
+    CHECK(t->scroll_y == 500);
+    au_browser_free(b);
+}
+
 static void test_click_waits(void)
 {
     AuBrowser *b = make_browser();
@@ -443,6 +469,7 @@ int main(void)
     test_scroll();
     test_restyle_then_park();
     test_shows_progress();
+    test_scroll_locked();
     test_click_waits();
     test_queue_dropped_on_stop();
     test_stop_and_leave();

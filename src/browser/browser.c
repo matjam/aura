@@ -2320,6 +2320,14 @@ void au_bw_scroll_max(AuBrowserWindow *w, int *max_x, int *max_y)
         *max_x = 0;
     if (*max_y < 0)
         *max_y = 0;
+    /* overflow: hidden on the root: nothing for the user to scroll, so
+     * the scroll bar is inactive (the position stays where script put it) */
+    bool lx, ly;
+    au_page_scroll_locked(t->page, &lx, &ly);
+    if (lx)
+        *max_x = 0;
+    if (ly)
+        *max_y = 0;
 }
 
 static void page_event(AuBrowserWindow *w, const AuEvent *ev);
@@ -2361,6 +2369,14 @@ void au_bw_scroll_by(AuBrowserWindow *w, int dx, int dy)
 {
     AuTab *t = au_bw_active_tab(w);
     if (!t)
+        return;
+    bool lx, ly;
+    au_page_scroll_locked(t->page, &lx, &ly);
+    if (lx)
+        dx = 0;
+    if (ly)
+        dy = 0;
+    if (!dx && !dy)
         return;
     int x = t->scroll_x + dx, y = t->scroll_y + dy;
     /* a page whose root has scroll-snap-type stops at its snap positions */

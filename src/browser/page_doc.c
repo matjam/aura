@@ -4429,6 +4429,16 @@ void au_page_content_size(const AuPage *p, int *width, int *height)
     *height = p->content_h;
 }
 
+void au_page_scroll_locked(const AuPage *p, bool *x, bool *y)
+{
+    *x = *y = false;
+    if (p->kind != K_DOC || !p->begun)
+        return;
+    AuLayout *L = au_docview_layout(p->dv);
+    if (L && au_layout_settled(L))
+        au_layout_viewport_overflow(L, x, y);
+}
+
 void au_page_set_scroll(AuPage *p, int x, int y)
 {
     p->scroll_x = x;

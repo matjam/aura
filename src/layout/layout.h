@@ -210,6 +210,10 @@ bool au_layout_needs_paint(const AuLayout *L);
  * not, and the other way round, so it must not be painted, hit-tested or
  * scrolled by moving pixels until the update. */
 bool au_layout_settled(const AuLayout *L);
+/* Whether the viewport's overflow (the root's, or the body's) is hidden
+ * or clip across and down: the user does not scroll the page along such
+ * an axis; script still does. */
+void au_layout_viewport_overflow(const AuLayout *L, bool *lock_x, bool *lock_y);
 /* What changed on screen since the last call, whoever ran the updates:
  * -1 for everything (a build, a layout, a new paint order, or a change
  * whose place depends on scrolling or a transform), else n rectangles in

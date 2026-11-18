@@ -326,9 +326,12 @@ propagation"); `l_viewport_overflow_source` names that element. Its box
 is built as if its overflow were visible: it neither clips nor scrolls,
 so the window's own scroll bar scrolls the page. A `hidden` or `clip`
 across makes the document as wide as the viewport. Down the page the
-window still scrolls, so a body made `overflow: hidden` while a dialog
-is open keeps the page where it was (browsers stop the user scrolling
-it; Aura does not). DuckDuckGo's HTML results set `html { height: 100%;
+document keeps its height, so a body made `overflow: hidden` while a
+dialog is open keeps the page where it was; the user cannot scroll it
+then, as in browsers (`au_layout_viewport_overflow`,
+`au_page_scroll_locked`: `au_bw_scroll_by` leaves a locked axis alone
+and `au_bw_scroll_max` gives 0 for it, so the scroll bar is inactive),
+and script still can. DuckDuckGo's HTML results set `html { height: 100%;
 overflow-y: auto }`; before this the root was a 1-screen scroll box with
 a thin bar of its own and the window could not scroll. Test:
 `tests/js/pages/root_overflow.html`.
