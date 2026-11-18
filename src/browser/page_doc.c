@@ -46,6 +46,7 @@
 #define CHUNK 8192
 #define LAYOUT_INTERVAL_MS 300
 #define SCRIPT_BUDGET_MS 20 /* script time per idle call, on top of BUDGET_MS */
+#define PAGE_INPUT_MAX 16    /* presses and keys kept while the script is parked */
 
 typedef enum { K_DOC, K_SCENE } Kind;
 
@@ -268,6 +269,11 @@ struct AuPage {
     void (*main_fn)(AuPage *p, void *arg); /* to run on the main stack for the script */
     void *main_arg;
     Held *held, *held_tail; /* what the network delivered while parked */
+    /* Presses, releases and keys that came while parked, for the page
+     * once the slice ends (deliver_input). */
+    AuEvent input[PAGE_INPUT_MAX];
+    uint8_t ninput;
+    bool input_mouse[PAGE_INPUT_MAX]; /* a mouse event, else a key */
 };
 
 /* Milliseconds since the navigation, for the request log. */
@@ -1398,6 +1404,41 @@ static void stop_script(AuPage *p)
     p->co_stop = true;
     thaw(p);
     p->co_stop = false;
+    p->ninput = 0; /* input for the script's page goes with it */
+}
+
+/* Keeps a press, a release or a key that came while the script was
+ * parked, for deliver_input. False when the queue is full: the caller
+ * then runs the slice to its end first, as before there was a queue. */
+static bool queue_input(AuPage *p, const AuEvent *ev, bool mouse)
+{
+    if (p->ninput >= PAGE_INPUT_MAX)
+        return false;
+    p->input[p->ninput] = *ev;
+    p->input_mouse[p->ninput] = mouse;
+    p->ninput++;
+    return true;
+}
+
+/* Hands the page what came while its script was parked, in order, once
+ * the slice has ended. A handler whose own script parks leaves the rest
+ * for the next time; a navigation drops it. */
+static void deliver_input(AuPage *p)
+{
+    uint32_t gen0 = p->gen;
+    while (p->ninput && !p->parked && p->gen == gen0) {
+        AuEvent ev = p->input[0];
+        bool mouse = p->input_mouse[0];
+        p->ninput--;
+        memmove(p->input, p->input + 1, p->ninput * sizeof p->input[0]);
+        memmove(p->input_mouse, p->input_mouse + 1, p->ninput * sizeof p->input_mouse[0]);
+        if (mouse)
+            au_page_mouse(p, &ev);
+        else
+            au_page_key(p, &ev);
+    }
+    if (p->gen != gen0)
+        p->ninput = 0;
 }
 
 static Held *held_new(AuPage *p, int kind, uint32_t id)
@@ -4470,9 +4511,20 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
     if (p->kind != K_DOC || !p->begun)
         return false;
     /* While the script is parked a moving pointer changes nothing (hover
-     * waits for the next move); a press waits for the script. */
-    if (p->parked && (ev->type == AU_EVENT_MOUSE_MOVE || !thaw(p)))
-        return false;
+     * waits for the next move); a press waits for the script's slice to
+     * end, in the queue, and the window goes on scrolling meanwhile. */
+    if (p->parked) {
+        if (ev->type == AU_EVENT_MOUSE_MOVE)
+            return false;
+        if (queue_input(p, ev, true))
+            return true;
+        if (!thaw(p))
+            return false;
+    }
+    if (p->ninput)
+        deliver_input(p); /* what came before this goes first */
+    if (p->parked)
+        return ev->type != AU_EVENT_MOUSE_MOVE && queue_input(p, ev, true);
     if (ev->type == AU_EVENT_MOUSE_DOWN) {
         int vx = ev->x, vy = ev->y;
         AuDocView *v = au_docview_view_at(p->dv, &vx, &vy);
@@ -4531,9 +4583,15 @@ bool au_page_key(AuPage *p, const AuEvent *ev)
         bool scroll_key = (ev->key >= AU_KEY_LEFT && ev->key <= AU_KEY_END) || (ev->ch == ' ' && !ev->key);
         if (scroll_key && !au_docview_editing(p->dv))
             return false;
+        if (queue_input(p, ev, false))
+            return true;
         if (!thaw(p))
             return false;
     }
+    if (p->ninput)
+        deliver_input(p); /* what came before this goes first */
+    if (p->parked)
+        return queue_input(p, ev, false);
     bool used = au_docview_key(p->dv, ev);
     if (follow_open_url(p))
         return true;
@@ -4742,6 +4800,9 @@ void au_page_idle(AuPage *p)
         if (follow_open_url(p) || gen0 != p->gen)
             return; /* script navigated */
         settle(p);
+        deliver_input(p);
+        if (p->parked || gen0 != p->gen)
+            return;
     } else if (p->kind == K_DOC && p->begun) {
         /* Animated images and CSS animations repaint only their boxes:
          * their rectangles need no layout, so they go out now instead of
@@ -4757,6 +4818,11 @@ void au_page_idle(AuPage *p)
     }
     if (p->kind == K_DOC && p->begun && !resumed) {
         uint32_t gen0 = p->gen;
+        if (p->ninput) {
+            deliver_input(p); /* a slice that a thaw ended left input */
+            if (p->parked || gen0 != p->gen)
+                return;
+        }
         run_scripts(p); /* timers, tasks, frames */
         if (p->parked)
             return; /* the window scrolls and paints; the next idle goes on */
@@ -4814,7 +4880,7 @@ bool au_page_script_parked(const AuPage *p)
 
 bool au_page_busy(const AuPage *p)
 {
-    return p->parked || p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
+    return p->parked || p->ninput || p->loading || p->nfetches > 0 || (p->dirty && p->begun) || (p->begun && au_docview_animating(p->dv)) ||
            (p->begun && au_docview_scripts_due(p->dv) < 300) || (p->begun && au_docview_settle_pending(p->dv));
 }
 

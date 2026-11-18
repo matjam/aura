@@ -116,9 +116,15 @@ parks"):
     end run the slice to its end first.
   - Mouse moves are dropped. The scrolling keys (arrows, Page Up and
     Down, Home, End, space) outside a field go to the browser.
+  - Presses, releases and other keys wait in a queue of 16
+    (`queue_input`) and reach the page in order when the slice ends
+    (`deliver_input`, from `au_page_idle`), as a browser queues input
+    behind a long task; the window scrolls meanwhile. A key or press
+    that comes after the slice ends goes behind what is queued. Stop,
+    a navigation and closing the tab drop the queue. A full queue
+    thaws.
   - Any other call first runs the slice to its end without parking
-    (`thaw`), as if it had never parked: a click, a typed key, Find,
-    the console, a resize.
+    (`thaw`), as if it had never parked: Find, the console, a resize.
   - A navigation, Stop and closing the tab stop the script instead
     (`stop_script`): it ends with the long-script limit's uncatchable
     error. Stop is enabled while a page is parked

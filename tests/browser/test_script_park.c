@@ -303,12 +303,41 @@ static void test_click_waits(void)
     e.x = w->layout.page.x0 + 20;
     e.y = w->layout.page.y0 + 20;
     au_bw_mouse(w, &e);
-    /* the press ran the slice to its end first */
-    CHECK(!au_page_script_parked(t->page));
-    CHECK_STR(au_page_title(t->page), "click after end");
     e.type = AU_EVENT_MOUSE_UP;
     au_bw_mouse(w, &e);
+    /* the press and release wait in the queue: the script stays parked
+     * and the window still scrolls */
+    CHECK(au_page_script_parked(t->page));
+    CHECK(strcmp(au_page_title(t->page), "click after end") != 0);
+    AuEvent k = key(AU_KEY_PAGE_DOWN);
+    CHECK(au_bw_key(w, &k));
+    CHECK(t->scroll_y > 0);
+    /* they reach the page, in order, once the slice ends */
     settle(w);
+    CHECK(!au_page_script_parked(t->page));
+    CHECK_STR(au_page_title(t->page), "click after end");
+    au_browser_free(b);
+}
+
+/* Stop drops what was queued with the script. */
+static void test_queue_dropped_on_stop(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/click.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    until_parked(w);
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_MOUSE_DOWN;
+    e.clicks = 1;
+    e.x = w->layout.page.x0 + 20;
+    e.y = w->layout.page.y0 + 20;
+    au_bw_mouse(w, &e);
+    au_page_stop(t->page);
+    CHECK(!au_page_script_parked(t->page));
+    settle(w);
+    CHECK(strncmp(au_page_title(t->page), "click", 5) != 0);
     au_browser_free(b);
 }
 
@@ -387,6 +416,7 @@ int main(void)
     test_scroll();
     test_restyle_then_park();
     test_click_waits();
+    test_queue_dropped_on_stop();
     test_stop_and_leave();
     test_dialog();
     test_held();
