@@ -800,9 +800,59 @@ defProps(LockManager.prototype, {
 tag(LockManager);
 defGlobal('LockManager', LockManager);
 const theLockManager = Object.create(LockManager.prototype);
+/* navigator.clipboard: writing text during a click or key press (copy
+ * buttons) through the embedder; reading is refused, as when a browser's
+ * user declines. */
+class Clipboard extends EventTarget {
+    constructor(key) { if (key !== S.owner) throw new TypeError('Illegal constructor'); super(); }
+    writeText(text) {
+        if (!arguments.length) return Promise.reject(new TypeError('writeText: 1 argument required'));
+        text = str(text);
+        if (!P.transientActivation()) return Promise.reject(domErr('writeText needs a click or key press', 'NotAllowedError'));
+        return N.clipboardWrite(text) ? Promise.resolve() : Promise.reject(domErr('The clipboard is not available', 'NotAllowedError'));
+    }
+    write(items) {
+        if (!P.transientActivation()) return Promise.reject(domErr('write needs a click or key press', 'NotAllowedError'));
+        const item = items && items[0];
+        if (!item || !item.types || !Array.from(item.types).includes('text/plain'))
+            return Promise.reject(domErr('Only text/plain can be written', 'NotAllowedError'));
+        return Promise.resolve(item.getType('text/plain')).then((b) => (typeof b === 'string' ? b : b.text())).then((t) => {
+            if (!N.clipboardWrite(str(t))) throw domErr('The clipboard is not available', 'NotAllowedError');
+        });
+    }
+    readText() { return Promise.reject(domErr('Reading the clipboard is not allowed', 'NotAllowedError')); }
+    read() { return Promise.reject(domErr('Reading the clipboard is not allowed', 'NotAllowedError')); }
+}
+tag(Clipboard);
+defGlobal('Clipboard', Clipboard);
+const theClipboard = new Clipboard(S.owner);
+class ClipboardItem {
+    constructor(items) {
+        if (!items || typeof items !== 'object') throw new TypeError('ClipboardItem: an object of types is required');
+        this._items = Object.assign({}, items);
+    }
+    get types() { return Object.freeze(Object.keys(this._items)); }
+    getType(t) {
+        if (!(t in this._items)) return Promise.reject(domErr('No data of type ' + t, 'NotFoundError'));
+        return Promise.resolve(this._items[t]).then((v) => (typeof v === 'string' ? new G.Blob([v], { type: t }) : v));
+    }
+    static supports(t) { return t === 'text/plain'; }
+}
+tag(ClipboardItem);
+defGlobal('ClipboardItem', ClipboardItem);
+class UserActivation { constructor() { throw new TypeError('Illegal constructor'); } }
+defProps(UserActivation.prototype, {
+    get isActive() { return P.transientActivation(); },
+    get hasBeenActive() { return P.hasBeenActive(); },
+});
+tag(UserActivation);
+defGlobal('UserActivation', UserActivation);
+const theUserActivation = Object.create(UserActivation.prototype);
 defProps(Navigator.prototype, {
     get permissions() { return thePermissions; },
     get locks() { return theLockManager; },
+    get clipboard() { return theClipboard; },
+    get userActivation() { return theUserActivation; },
 });
 
 /* document.startViewTransition: the update runs and the transition is

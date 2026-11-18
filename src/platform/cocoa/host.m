@@ -158,6 +158,12 @@ static void h_close_window(void *ctx, AuBrowserWindow *bw)
     }
 }
 
+static void h_copy_text(void *ctx, const char *utf8, size_t len)
+{
+    (void)ctx;
+    au_cocoa_copy_text(utf8, len);
+}
+
 static bool h_open_external(void *ctx, const char *url)
 {
     (void)ctx;
@@ -313,6 +319,7 @@ void au_cocoa_browser_host(AuBrowserHost *h)
     h->changed = h_changed;
     h->close_window = h_close_window;
     h->open_external = h_open_external;
+    h->copy_text = h_copy_text;
     h->confirm_download = h_confirm_download;
     h->download_added = h_download_added;
     h->popup = h_popup;

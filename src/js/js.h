@@ -239,6 +239,9 @@ typedef struct AuJsHooks {
     int (*history_length)(void *ctx);
     void (*history_go)(void *ctx, int delta);
     void (*history_push)(void *ctx, const char *url, bool replace, uint32_t key);
+    /* navigator.clipboard.writeText (the bindings check user activation
+     * first); false when the embedder refuses. */
+    bool (*clipboard_write)(void *ctx, const char *utf8, size_t len);
     /* document.cookie: the cookie string for url (au_alloc'd, or NULL), and
      * a cookie set by script. */
     char *(*get_cookie)(void *ctx, const char *url);

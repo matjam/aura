@@ -1056,6 +1056,13 @@ static void dv_history_go(void *ctx, AuDocView *dv, int delta)
     p->go_pending = true;
 }
 
+static bool dv_copy_text(void *ctx, AuDocView *dv, const char *utf8, size_t len)
+{
+    AuPage *p = ctx;
+    (void)dv; /* a frame's script writes for its page too */
+    return p->cb.copy_text && p->cb.copy_text(p->cb.ctx, p, utf8, len);
+}
+
 static int dv_history_length(void *ctx, AuDocView *dv)
 {
     AuPage *p = ctx;
@@ -1796,6 +1803,7 @@ static void new_view(AuPage *p)
     dcb.history_push = dv_history_push;
     dcb.history_go = dv_history_go;
     dcb.history_length = dv_history_length;
+    dcb.copy_text = dv_copy_text;
     p->dv = au_docview_new(p->env.fonts, &loader, &dcb);
     au_docview_set_request_ex(p->dv, loader_request_ex);
     au_docview_set_viewport(p->dv, p->vw, p->vh);

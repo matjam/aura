@@ -841,7 +841,16 @@ P.fire = function (node, type, bubbles, cancelable) {
 };
 const modsOf = (m) => ({ shiftKey: !!(m & 1), ctrlKey: !!(m & 2), altKey: !!(m & 4), metaKey: !!(m & 8) });
 let buttonsDown = 0;
+/* User activation (HTML Standard): a press, release or click of the
+ * mouse, or a key other than Escape, activates the window for 5 seconds
+ * (transient activation, as in Chrome); navigator.clipboard.writeText
+ * and navigator.userActivation read it. */
+let activatedAt = -1;
+const activate5 = () => { activatedAt = N.now(); };
+P.transientActivation = () => activatedAt >= 0 && N.now() - activatedAt <= 5000;
+P.hasBeenActive = () => activatedAt >= 0;
 P.fireMouse = function (target, type, x, y, button, mods, detail, related) {
+    if (type === 'mousedown' || type === 'mouseup' || type === 'click') activate5();
     if (type === 'mousedown') buttonsDown |= 1 << button;
     else if (type === 'mouseup') buttonsDown &= ~(1 << button);
     const noBubble = type === 'mouseenter' || type === 'mouseleave';
@@ -859,6 +868,7 @@ P.fireMouse = function (target, type, x, y, button, mods, detail, related) {
     return fire(target, new MouseEvent(type, init));
 };
 P.fireKey = function (target, type, key, code, mods, repeat) {
+    if (type === 'keydown' && key !== 'Escape') activate5();
     const kc = key.length === 1 ? key.toUpperCase().charCodeAt(0) :
         { Enter: 13, Tab: 9, Backspace: 8, Escape: 27, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
             Delete: 46, Home: 36, End: 35, PageUp: 33, PageDown: 34, Shift: 16, Control: 17, Alt: 18, Meta: 91 }[key] || 0;

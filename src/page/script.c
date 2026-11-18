@@ -446,6 +446,14 @@ static void h_history_push(void *ctx, const char *url, bool replace, uint32_t ke
         cb->history_push(cb->ctx, s->dv, url, replace, key);
 }
 
+static bool h_clipboard_write(void *ctx, const char *utf8, size_t len)
+{
+    AuDocScript *s = ctx;
+    AuDocView *top = au_dv_top(s->dv);
+    const AuDocViewCallbacks *cb = au_dv_callbacks(top);
+    return cb->copy_text && cb->copy_text(cb->ctx, top, utf8, len);
+}
+
 /* Hands a history.go over to the embedder. */
 static bool flush_go(AuDocScript *s)
 {
@@ -768,6 +776,7 @@ static bool ensure_js(AuDocScript *s)
     h.history_length = h_history_length;
     h.history_go = h_history_go;
     h.history_push = h_history_push;
+    h.clipboard_write = h_clipboard_write;
     h.alert = h_alert;
     h.confirm = h_confirm;
     h.prompt = h_prompt;

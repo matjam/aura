@@ -698,6 +698,20 @@ static JSValue n_img_claim(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* clipboardWrite(text): true when the embedder put text on the clipboard. */
+static JSValue n_clipboard_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    size_t len = 0;
+    char *s = argc > 0 ? js_tostr(ctx, argv[0], &len) : NULL;
+    if (!s)
+        return JS_EXCEPTION;
+    bool ok = js->hooks.clipboard_write && js->hooks.clipboard_write(js->hooks.ctx, s, len);
+    au_free(s);
+    return JS_NewBool(ctx, ok);
+}
+
 /* imgDone(el): the <img>'s load or error event has fired, or script
  * loads it (AU_STATE_IMG_EVENT). */
 static JSValue n_img_done(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -1321,6 +1335,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
     JS_CFUNC_DEF("imgNatural", 1, n_img_natural),
     JS_CFUNC_DEF("imgDone", 1, n_img_done),
+    JS_CFUNC_DEF("clipboardWrite", 1, n_clipboard_write),
     JS_CFUNC_DEF("imgClaim", 1, n_img_claim),
     JS_CFUNC_DEF("scrollTo", 2, n_scroll_to),
     JS_CFUNC_DEF("setDocUrl", 1, n_set_doc_url),

@@ -155,6 +155,16 @@ window's members win. Its `has` trap answers for global references
 through QuickJS patch 0015, so an unknown name still throws
 ReferenceError.
 
+**User activation and the clipboard.** A mouse press, release or
+click, or a key other than Escape, activates the window for 5 seconds
+(`activate5` in `prelude_obs.js`; `navigator.userActivation`). During
+that time `navigator.clipboard.writeText` (and `write` with a
+`text/plain` item) puts the text on the system clipboard: `N.clipboardWrite`,
+`AuJsHooks.clipboard_write`, `AuDocViewCallbacks.copy_text`,
+`AuPageCallbacks.copy_text`, then `AuBrowserHost.copy_text` (TEXT in
+Mac Roman on Mac OS 9) for the tab in front only. Reading the clipboard
+is refused with NotAllowedError.
+
 **Preload links.** While the document's script runs, a `<link
 rel=preload>` with an `as` of `style`, `script`, `font`, `image` or
 `fetch` is fetched in the background and fires `load` or `error` when

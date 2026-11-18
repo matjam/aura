@@ -403,6 +403,10 @@ typedef struct AuPageCallbacks {
     void (*history_push)(void *ctx, AuPage *p, const char *url);
     void (*history_go)(void *ctx, AuPage *p, int delta);
     int (*history_length)(void *ctx, AuPage *p);
+    /* Optional. The page's script puts text on the clipboard
+     * (navigator.clipboard.writeText during a click or key press);
+     * false when there is no clipboard. */
+    bool (*copy_text)(void *ctx, AuPage *p, const char *utf8, size_t len);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */

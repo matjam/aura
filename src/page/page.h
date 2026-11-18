@@ -191,6 +191,9 @@ typedef struct AuDocViewCallbacks {
     void (*history_push)(void *ctx, AuDocView *dv, const char *url, bool replace, uint32_t key);
     void (*history_go)(void *ctx, AuDocView *dv, int delta);
     int (*history_length)(void *ctx, AuDocView *dv);
+    /* Optional. Script puts text on the clipboard; false when it may not
+     * (no clipboard, a tab in the background). */
+    bool (*copy_text)(void *ctx, AuDocView *dv, const char *utf8, size_t len);
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);

@@ -513,6 +513,44 @@ static void test_push_state(void)
     env_free(&e);
 }
 
+/* ---- navigator.clipboard.writeText ---- */
+
+static char copied[64];
+static void t_copy(void *ctx, const char *utf8, size_t len)
+{
+    (void)ctx;
+    snprintf(copied, sizeof copied, "%.*s", (int)len, utf8);
+}
+
+static void test_clipboard(void)
+{
+    Env e;
+    env_init(&e);
+    e.b->host.copy_text = t_copy;
+    FakeServer *s = fake_server(&e.f, "site.test", 80);
+    respond_html(s, "<!DOCTYPE html><title>C</title><input name=q><script>var r = [];"
+                    "function w(t) { navigator.clipboard.writeText(t).then(function () { r.push('ok ' + t); },"
+                    "  function (x) { r.push(x.name); }); }</script>");
+    au_bw_new_tab(e.w, "http://site.test/c", true, -1);
+    settle(&e, 500);
+    paint(e.w);
+    char out[128];
+    eval(&e, "w('early'); navigator.userActivation.hasBeenActive", out, sizeof out);
+    settle(&e, 20);
+    CHECK(!strcmp(out, "false") && copied[0] == 0, "no write without a gesture: %s '%s'", out, copied);
+    bw_key(&e, AU_KEY_TAB, 0); /* a key press activates the page */
+    eval(&e, "w('clone url'); navigator.userActivation.isActive", out, sizeof out);
+    settle(&e, 20);
+    CHECK(!strcmp(out, "true") && !strcmp(copied, "clone url"), "written after a key press: %s '%s'", out, copied);
+    eval(&e, "r.join()", out, sizeof out);
+    CHECK(!strcmp(out, "NotAllowedError,ok clone url"), "promises: %s", out);
+    run_for(&e, 6000);
+    eval(&e, "w('late'); navigator.userActivation.isActive", out, sizeof out);
+    settle(&e, 20);
+    CHECK(!strcmp(out, "false") && !strcmp(copied, "clone url"), "the activation ends after 5 s: %s", out);
+    env_free(&e);
+}
+
 /* ---- Limits ---- */
 
 static void test_limits(void)
@@ -747,6 +785,7 @@ int main(void)
     test_source();
     test_timers();
     test_push_state();
+    test_clipboard();
     test_limits();
     test_excluded();
     test_edges();

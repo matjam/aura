@@ -145,9 +145,13 @@ typedef struct AuBrowserHost {
      * the alert's main line, detail (may be NULL) explains it. Called
      * from au_bw_idle, never with script on the stack (a page's script
      * that ran out of memory). Without it nothing is shown; the console
-     * still has the line. Last in the struct: some callers fill it in
-     * order. */
+     * still has the line. */
     void (*notice)(void *ctx, AuBrowserWindow *w, const char *message, const char *detail);
+    /* Optional. Puts UTF-8 text on the system clipboard: a page's
+     * navigator.clipboard.writeText during a click or key press. Without
+     * it writeText rejects. Last in the struct: some callers fill it in
+     * order. */
+    void (*copy_text)(void *ctx, const char *utf8, size_t len);
 } AuBrowserHost;
 
 struct AuTab {

@@ -604,6 +604,13 @@ static void host_close(void *ctx, AuBrowserWindow *w)
         b->closing = true;
 }
 
+/* navigator.clipboard.writeText: TEXT in Mac Roman on the scrap. */
+static void host_copy_page_text(void *ctx, const char *utf8, size_t len)
+{
+    (void)ctx;
+    mac_put_scrap(utf8, len);
+}
+
 /* mailto:, ftp: and other addresses go to their Internet Config helper. */
 static bool host_external(void *ctx, const char *url)
 {
@@ -798,6 +805,7 @@ void browserwin_host(AuBrowserHost *h)
     h->changed = host_changed;
     h->close_window = host_close;
     h->open_external = host_external;
+    h->copy_text = host_copy_page_text;
     h->confirm_download = host_confirm_download;
     h->download_added = host_download_added;
     h->popup = host_popup;

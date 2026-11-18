@@ -752,6 +752,19 @@ static int cb_history_length(void *ctx, AuPage *p)
     return t->nav.n > 0 ? t->nav.n : 1;
 }
 
+/* navigator.clipboard.writeText: only the tab the user is looking at
+ * may write (the page also requires a click or key press). */
+static bool cb_copy_text(void *ctx, AuPage *p, const char *utf8, size_t len)
+{
+    AuTab *t = ctx;
+    const AuBrowserHost *h = &t->win->browser->host;
+    (void)p;
+    if (!h->copy_text || !is_active(t))
+        return false;
+    h->copy_text(h->ctx, utf8, len);
+    return true;
+}
+
 /* The page's load turned out to be a file to save. */
 static bool cb_download(void *ctx, AuPage *p, const AuFetchResponse *r, uint32_t handoff)
 {
@@ -1159,7 +1172,7 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back,
-                          cb_history_push, cb_history_go, cb_history_length};
+                          cb_history_push, cb_history_go, cb_history_length, cb_copy_text};
     t->page = au_page_new(&env, &cb);
     if (b->storage) {
         t->storage_ns = au_web_storage_ns_new(b->storage);
