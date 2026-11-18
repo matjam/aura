@@ -2947,9 +2947,20 @@ static void paint_inline_layer(PCtx *P, LBox *b, float ox, float oy)
     LBlock *g = l_geom_parent(b);
     if (!g)
         return;
+    /* Opacity applies to an inline box too (a transform does not). Apple's
+     * "Hello, hello." showed a span at opacity 0 over the one that
+     * replaces it. */
+    float opacity = lb_anon(b) ? 1 : b->style->rare->opacity;
+    if (opacity <= 0)
+        return;
+    AuRect bounds = {ox + g->ov.x, oy + g->ov.y, g->ov.w, g->ov.h};
+    if (opacity < 1)
+        au_canvas_group_begin(P->c, bounds);
     paint_lines(P, g, ox, oy, b);
     /* floats inside it */
     paint_children(P, b, ox, oy, PH_FLOAT);
+    if (opacity < 1)
+        au_canvas_group_end(P->c, opacity);
 }
 
 /* mask-image: the layers (images and gradients, placed like background

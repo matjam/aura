@@ -123,6 +123,14 @@ hit 30 30 #b
 ---
 pixel 10 10 808080
 
+=== opacity applies to an inline box
+<body style="margin:0;line-height:20px">
+<div>x<span style="opacity:0;background:#000000;padding:0 20px"> </span><span style="opacity:0.5;background:#000000;padding:0 20px"> </span></div>
+---
+// Apple's "Hello, hello." painted a span at opacity 0 over its replacement
+pixel 20 10 ffffff
+pixel 70 10 808080
+
 === a scroll container clips and reports its extent
 <body style="margin:0">
 <div id=s style="overflow:auto;width:100px;height:100px">
