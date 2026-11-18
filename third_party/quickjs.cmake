@@ -146,7 +146,7 @@ else()
     # their globals or the members that reach them (N.lazy in runtime.c,
     # lazyModule in prelude.js).
     set(AURA_LAZY_BCS)
-    foreach(mod range cssom canvas idb)
+    foreach(mod range cssom canvas idb urlpattern)
         set(bc ${AURA_PRELUDE_DIR}/${mod}.bc)
         add_custom_command(OUTPUT ${bc}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${AURA_PRELUDE_DIR}

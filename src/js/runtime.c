@@ -817,31 +817,37 @@ static JSValue n_lazy(JSContext *ctx, JSValueConst this_val, int argc, JSValueCo
 }
 
 #ifdef AU_JS_PRELUDE_SOURCE
-extern const char au_js_range_src[], au_js_cssom_src[], au_js_canvas_src[], au_js_idb_src[];
-extern const size_t au_js_range_len, au_js_cssom_len, au_js_canvas_len, au_js_idb_len;
+extern const char au_js_range_src[], au_js_cssom_src[], au_js_canvas_src[], au_js_idb_src[], au_js_urlpattern_src[];
+extern const size_t au_js_range_len, au_js_cssom_len, au_js_canvas_len, au_js_idb_len, au_js_urlpattern_len;
 #else
-extern const unsigned char au_js_range_bc[], au_js_cssom_bc[], au_js_canvas_bc[], au_js_idb_bc[];
-extern const size_t au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len, au_js_idb_bc_len;
+extern const unsigned char au_js_range_bc[], au_js_cssom_bc[], au_js_canvas_bc[], au_js_idb_bc[],
+    au_js_urlpattern_bc[];
+extern const size_t au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len, au_js_idb_bc_len,
+    au_js_urlpattern_bc_len;
 #endif
 
 /* N.lazy(i): reads module i (0 src/js/range.js, 1 cssom.js, 2 canvas.js,
- * each compiled to its own bytecode) and returns the function it
+ * 3 idb.js, 4 urlpattern.js, each compiled to its own bytecode) and
+ * returns the function it
  * evaluates to. lazyModule in prelude.js calls it once per context, the
  * first time script touches one of the module's globals or members. */
 static JSValue n_lazy_module(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)this_val;
     int32_t i = -1;
-    if (argc < 1 || JS_ToInt32(ctx, &i, argv[0]) || i < 0 || i > 3)
+    if (argc < 1 || JS_ToInt32(ctx, &i, argv[0]) || i < 0 || i > 4)
         return JS_ThrowRangeError(ctx, "lazy: no such module");
 #ifdef AU_JS_PRELUDE_SOURCE
-    static const char *const names[] = {"aura:range", "aura:cssom", "aura:canvas", "aura:idb"};
-    const char *const srcs[] = {au_js_range_src, au_js_cssom_src, au_js_canvas_src, au_js_idb_src};
-    const size_t lens[] = {au_js_range_len, au_js_cssom_len, au_js_canvas_len, au_js_idb_len};
+    static const char *const names[] = {"aura:range", "aura:cssom", "aura:canvas", "aura:idb", "aura:urlpattern"};
+    const char *const srcs[] = {au_js_range_src, au_js_cssom_src, au_js_canvas_src, au_js_idb_src,
+                                au_js_urlpattern_src};
+    const size_t lens[] = {au_js_range_len, au_js_cssom_len, au_js_canvas_len, au_js_idb_len, au_js_urlpattern_len};
     return JS_Eval(ctx, srcs[i], lens[i], names[i], JS_EVAL_TYPE_GLOBAL);
 #else
-    const unsigned char *const bcs[] = {au_js_range_bc, au_js_cssom_bc, au_js_canvas_bc, au_js_idb_bc};
-    const size_t lens[] = {au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len, au_js_idb_bc_len};
+    const unsigned char *const bcs[] = {au_js_range_bc, au_js_cssom_bc, au_js_canvas_bc, au_js_idb_bc,
+                                        au_js_urlpattern_bc};
+    const size_t lens[] = {au_js_range_bc_len, au_js_cssom_bc_len, au_js_canvas_bc_len, au_js_idb_bc_len,
+                           au_js_urlpattern_bc_len};
     const unsigned char *bc = bcs[i];
     size_t len = lens[i];
     JSValue fn = JS_ReadObject(ctx, bc, len, JS_READ_OBJ_BYTECODE);

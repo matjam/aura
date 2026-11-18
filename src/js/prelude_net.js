@@ -1166,6 +1166,8 @@ for (const name of ['EventSource', 'WebSocket']) {
 lazyModule(3, ['indexedDB', 'IDBFactory', 'IDBRequest', 'IDBOpenDBRequest', 'IDBDatabase', 'IDBTransaction',
     'IDBObjectStore', 'IDBIndex', 'IDBCursor', 'IDBCursorWithValue', 'IDBKeyRange', 'IDBVersionChangeEvent'],
     () => ({ N, domErr, Event, EventTarget, defineHandlers, fire, fireSimple, structuredClone, eventParents, Blob }));
+/* URLPattern lives in src/js/urlpattern.js, read with N.lazy(4). */
+lazyModule(4, ['URLPattern'], () => ({}));
 
 /* The document is hidden or shown again (P.pageTransition). */
 P.eventSourcesFreeze = function (frozen) { if (esLib) esLib.freeze(frozen); };

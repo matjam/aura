@@ -884,6 +884,30 @@ memory:
   connections, then `blocked` while any stays open, and runs the
   upgrade once they close.
 
+## URLPattern
+
+To change `URLPattern`, edit `src/js/urlpattern.js` and run
+`tests/js/urlpattern.js`
+(`aura-host js tests/js/harness.js tests/js/urlpattern.js`).
+
+The module (N.lazy(4), read the first time script touches
+`URLPattern`) works as follows:
+
+- Each component's pattern is tokenized and parsed as the standard
+  says: fixed text, `:name` groups, `(regexp)` groups, `*`, `{...}`
+  groups, and the `?`, `+` and `*` modifiers. A `/` before a pathname
+  group or a `.` before a hostname group is the group's prefix.
+- The parts compile to one `RegExp` per component, with the `u` flag
+  (and `i` for `ignoreCase`, except on the protocol).
+- A pattern given as one string is split into components by scanning
+  for `://`, `@`, `:`, `/`, `?` and `#` outside groups. This is simpler
+  than the standard's constructor string parser: a string without
+  `://` is relative and needs a base URL.
+- A default port (443 for `https`) is dropped from the pattern and the
+  input, as the standard does.
+- The getters return the pattern strings normalized, close to the
+  standard's "generate a pattern string".
+
 ## document.cookie
 
 `document.cookie` reads and sets the cookies of the document's own URL

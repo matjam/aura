@@ -124,6 +124,13 @@ const char au_js_idb_src[] = {
     , 0};
 const size_t au_js_idb_len = sizeof au_js_idb_src - 1;
 
+extern const char au_js_urlpattern_src[];
+extern const size_t au_js_urlpattern_len;
+const char au_js_urlpattern_src[] = {
+#embed "urlpattern.js"
+    , 0};
+const size_t au_js_urlpattern_len = sizeof au_js_urlpattern_src - 1;
+
 #else
 
 /* The prelude as QuickJS bytecode, compiled at build time by
@@ -207,5 +214,12 @@ const unsigned char au_js_idb_bc[] = {
 #embed "idb.bc"
 };
 const size_t au_js_idb_bc_len = sizeof au_js_idb_bc;
+
+extern const unsigned char au_js_urlpattern_bc[];
+extern const size_t au_js_urlpattern_bc_len;
+const unsigned char au_js_urlpattern_bc[] = {
+#embed "urlpattern.bc"
+};
+const size_t au_js_urlpattern_bc_len = sizeof au_js_urlpattern_bc;
 
 #endif
