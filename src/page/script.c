@@ -70,6 +70,7 @@ struct AuDocScript {
     uint32_t perf_t0;    /* when the outermost entry began */
     uint32_t perf_frozen0; /* the view's frozen_ms then: time parked is not script time */
     double park_layout_at; /* when h_yield last laid the document out */
+    double park_layout_cost; /* how long that took, ms */
     char perf_label[72]; /* the script it ran, for the slow task list */
     char *nav_url;
     bool nav_new_tab;
@@ -130,7 +131,11 @@ size_t au_docview_script_stack(void)
     return s.stack_limit + s.stack_limit / 2;
 }
 
-#define PARK_LAYOUT_MS 1000 /* how often a parked script's document is laid out */
+/* How often a parked script's document is laid out: every
+ * PARK_LAYOUT_MS, or four times as long as the last such update took, so
+ * that the update costs at most a fifth of the script's time (a large
+ * document on a G4). */
+#define PARK_LAYOUT_MS 250
 
 static int h_yield(void *ctx)
 {
@@ -140,13 +145,17 @@ static int h_yield(void *ctx)
         return 0;
     /* A getComputedStyle may have left boxes restyled and not laid out,
      * which the parked view cannot paint. Lay them out now: the script
-     * could have asked for the same layout here (offsetHeight). Once a
-     * second the parked view also shows what the script has built so
-     * far, as a long task that builds a feed would on its own paints. */
+     * could have asked for the same layout here (offsetHeight). Every
+     * PARK_LAYOUT_MS or so the parked view also shows what the script has
+     * built so far, as a long task that builds a feed would on its own
+     * paints. */
     double t = au_dv_now(s->dv);
-    if (!au_layout_settled(au_docview_layout(s->dv)) || t - s->park_layout_at >= PARK_LAYOUT_MS) {
-        s->park_layout_at = t;
+    double every = s->park_layout_cost * 4 > PARK_LAYOUT_MS ? s->park_layout_cost * 4 : PARK_LAYOUT_MS;
+    if (!au_layout_settled(au_docview_layout(s->dv)) || t - s->park_layout_at >= every) {
         au_docview_update(s->dv);
+        double t1 = au_dv_now(s->dv);
+        s->park_layout_cost = t1 - t;
+        s->park_layout_at = t1;
     }
     return cb->script_yield(cb->ctx, s->dv);
 }

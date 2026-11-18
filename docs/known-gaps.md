@@ -487,7 +487,7 @@ failing:
 - Slashdot's Cloudflare rule challenges every request whose user agent
   says `PPC Mac OS 9`, even with a solved challenge's cookie, so Mac OS
   9 cannot read Slashdot. Aura does not send another platform's string
-  to get past it ([`networking.md`](networking.md), "User agent").
+  to get past it ([`networking.md`](networking.md), "The user agent").
 
 ## Content blocking
 
@@ -706,9 +706,9 @@ fuzzed".
   park. Layout, image decoding and HTML parsing run to their end.
 - While a page is parked, a click or a typed key reaches the page only
   when the slice ends (16 are kept; past that the slice runs to its end
-  first), dragging does not select, and the page shows the layout of
-  up to a second before (it is laid out at most once a second while
-  parked).
+  first), and dragging does not select (as in Chrome, whose selection
+  waits for a long task too). The page shows the layout of up to
+  250 ms before, or longer on a document whose layout is slow.
 - Loading a Wikipedia article in the guest took 30 to 70 seconds
   ([`browser-chrome.md`](browser-chrome.md)).
 - A window zoom in the guest costs two passes of about 280 ms each on a
