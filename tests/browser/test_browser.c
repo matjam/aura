@@ -773,7 +773,7 @@ static void test_script_memory_prefs(void)
           au_script_memory_clamp(8192) == 8192 && au_script_memory_clamp(1 << 30) == 262144);
     uint32_t page, worker;
     au_script_memory_auto(0, &page, &worker); /* an unknown machine: the host tools, tests */
-    CHECK(page == 65536 && worker == 32768);
+    CHECK(page == 65536 * AU_SCRIPT_MEM_SCALE && worker == 32768 * AU_SCRIPT_MEM_SCALE);
     au_script_memory_auto(10 * 1024, &page, &worker); /* 10 MB free: the floors */
     CHECK(page == 8192 && worker == 4096);
     au_script_memory_auto(50 * 1024 + 300, &page, &worker); /* half and a quarter, whole megabytes */
@@ -783,7 +783,7 @@ static void test_script_memory_prefs(void)
     au_script_memory_limits(0, 20000, 50 * 1024, &page, &worker); /* one Automatic, one custom */
     CHECK(page == 25 * 1024 && worker == 20000);
     au_script_memory_limits(1000, 0, 0, &page, &worker);
-    CHECK(page == 4096 && worker == 32768);
+    CHECK(page == 4096 && worker == 32768 * AU_SCRIPT_MEM_SCALE);
 }
 
 /* The Appearance preference: stored as system, light or dark; a file

@@ -260,8 +260,8 @@ in force. The policy:
 
 | | Automatic | Unknown machine (host tools, tests) | Custom range |
 |---|---|---|---|
-| Page | half of the memory free, at least 8 MB, at most 96 MB (192 MB with 64-bit pointers) | 64 MB | 4 to 256 MB |
-| Worker | a quarter of the memory free, at least 4 MB, at most 32 MB (64 MB with 64-bit pointers) | 32 MB | 4 to 256 MB |
+| Page | half of the memory free, at least 8 MB, at most 96 MB (192 MB with 64-bit pointers) | 64 MB (128 MB with 64-bit pointers) | 4 to 256 MB |
+| Worker | a quarter of the memory free, at least 4 MB, at most 32 MB (64 MB with 64-bit pointers) | 32 MB (64 MB with 64-bit pointers) | 4 to 256 MB |
 
 - **64-bit ceilings.** The engine's objects, values and arenas are close
   to twice the size with 64-bit pointers, so the mainstream ports get

@@ -358,18 +358,21 @@ static void test_enabled_and_notes(const AuPrefsHost *host)
     AuPrefs p;
     au_prefs_init(&p);
     AuPrefsHost h = *host;
-    h.memory_free_kb = 0; /* unknown: 64 MB and 32 MB */
+    h.memory_free_kb = 0; /* unknown: 64 MB and 32 MB, twice that with 64-bit pointers */
     AuPrefsEdit *e = au_prefs_edit_new(&p, &h);
     AuBuf b;
     au_buf_init(&b);
     CHECK(!au_prefs_edit_enabled(e, AU_PREF_SCRIPT_MEMORY_MB) && !au_prefs_edit_enabled(e, AU_PREF_WORKER_MEMORY_MB),
           "the MB fields are off for Automatic");
-    CHECK(au_prefs_edit_get_int(e, AU_PREF_SCRIPT_MEMORY_MB) == 64 && au_prefs_edit_get_int(e, AU_PREF_WORKER_MEMORY_MB) == 32,
+    CHECK(au_prefs_edit_get_int(e, AU_PREF_SCRIPT_MEMORY_MB) == 64 * (int)AU_SCRIPT_MEM_SCALE &&
+              au_prefs_edit_get_int(e, AU_PREF_WORKER_MEMORY_MB) == 32 * (int)AU_SCRIPT_MEM_SCALE,
           "Automatic shows what it gives");
     au_prefs_edit_set_choice(e, AU_PREF_SCRIPT_MEMORY_MODE, 1);
     CHECK(au_prefs_edit_enabled(e, AU_PREF_SCRIPT_MEMORY_MB) && !au_prefs_edit_enabled(e, AU_PREF_WORKER_MEMORY_MB),
           "Custom turns its own field on");
-    CHECK(!strcmp(note_of(e, AU_PREF_SCRIPT_MEMORY_MB, &b), "Automatic is 64 MB on this Mac"), "note: %s", b.data);
+    CHECK(!strcmp(note_of(e, AU_PREF_SCRIPT_MEMORY_MB, &b),
+                  AU_SCRIPT_MEM_SCALE == 2 ? "Automatic is 128 MB on this Mac" : "Automatic is 64 MB on this Mac"),
+          "note: %s", b.data);
     au_prefs_edit_set_memory_free(e, 40u * 1024);
     CHECK(!strcmp(note_of(e, AU_PREF_WORKER_MEMORY_MB, &b), "Automatic is 10 MB on this Mac"), "note: %s", b.data);
     CHECK(strstr(note_of(e, AU_PREF_SCRIPT_MEMORY_NOTE, &b), "memory free on this Mac") &&

@@ -13,7 +13,8 @@
  * "Free" is what the shell reports (AuBrowserHost.memory_free_kb): on
  * Mac OS 9 the free application heap plus free temporary memory, which
  * the allocator falls back to. A shell that reports nothing (the host
- * tools, tests) gets 64 MB and 32 MB. Half, because a page's documents,
+ * tools, tests) gets 64 MB and 32 MB (128 MB and 64 MB with 64-bit
+ * pointers). Half, because a page's documents,
  * styles, layout and images need the rest, and several tabs share it;
  * the limits are caps, not reservations, and the engine also refuses
  * script memory when the machine itself runs short (au_memory_low).
@@ -40,8 +41,11 @@
 #define AU_SCRIPT_MEM_PAGE_CEILING_KB (96u * 1024 * AU_SCRIPT_MEM_SCALE)
 #define AU_SCRIPT_MEM_WORKER_FLOOR_KB (4u * 1024)
 #define AU_SCRIPT_MEM_WORKER_CEILING_KB (32u * 1024 * AU_SCRIPT_MEM_SCALE)
-#define AU_SCRIPT_MEM_PAGE_UNKNOWN_KB (64u * 1024)
-#define AU_SCRIPT_MEM_WORKER_UNKNOWN_KB (32u * 1024)
+/* Scaled too, so a page measured with the host tools meets the limit
+ * where it would on a 32-bit Mac: GitHub's releases page filled 64 MB on
+ * the host and the collector ran at nearly every allocation. */
+#define AU_SCRIPT_MEM_PAGE_UNKNOWN_KB (64u * 1024 * AU_SCRIPT_MEM_SCALE)
+#define AU_SCRIPT_MEM_WORKER_UNKNOWN_KB (32u * 1024 * AU_SCRIPT_MEM_SCALE)
 
 /* What Automatic gives with free_kb of memory free (0: unknown), rounded
  * down to whole megabytes. */
