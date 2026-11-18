@@ -53,7 +53,7 @@ first.
 | 7 | ~~CSS relative colours, `accent-color`, `field-sizing`, `content-visibility`, `overscroll-behavior`, `scrollbar-gutter`, `interpolate-size`~~: done 2026-11-18 ([`css.md`](css.md), "Relative colours" and "Properties parsed only"); the properties are parsed only, and relative colours cover `rgb()` and `hsl()` | | | yes |
 | 8 | `URLPattern` | routers in newer frameworks | medium | yes |
 | 8b | Nested rules in CSSOM (`CSSStyleRule.cssRules`, `insertRule` on a style rule) | nesting itself applies; only script that reads or edits nested rules sees an empty list (the probe's "css nesting" line) | small | yes |
-| 9 | `CSS.registerProperty` and `@property` initial values | animated custom properties fall back to nothing | medium | yes |
+| 9 | ~~`CSS.registerProperty` and `@property` initial values~~: done 2026-11-18 ([`css.md`](css.md), "Registered custom properties"); values are not typed, so they do not animate | | | yes |
 | 10 | Scroll snapping (`scroll-snap-type`, `scroll-snap-align`) | carousels stop between items | medium | yes |
 | 11 | ~~WebSocket~~: done 2026-11-18 ([`script-requests-and-cors.md`](script-requests-and-cors.md), "WebSocket"); no extensions | | | yes |
 | 12 | ~~IndexedDB~~: done 2026-11-18, in memory per document ([`javascript.md`](javascript.md), "IndexedDB"); saving databases to disk is left | | | yes |

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CSS.registerProperty and @property</title>
+<script src="../harness.js"></script>
+<style>
+@property --w { syntax: '<length>'; inherits: false; initial-value: 33px; }
+#a { width: var(--w); }
+#b { width: var(--g); }
+#c { --g: 7px; }
+#c > p { width: var(--g); }
+</style>
+</head>
+<body>
+<div id="a">a</div>
+<div id="b">b</div>
+<div id="c"><p id="d">d</p></div>
+<script>
+const w = (id) => getComputedStyle(document.getElementById(id)).width;
+
+test('an @property initial value applies', () => {
+    assert.equal(w('a'), '33px');
+});
+
+test('CSS.registerProperty gives an initial value and stops inheritance', () => {
+    CSS.registerProperty({ name: '--g', syntax: '<length>', inherits: false, initialValue: '11px' });
+    assert.equal(w('b'), '11px');
+    assert.equal(w('d'), '11px', 'not inherited from #c');
+    assert.equal(document.adoptedStyleSheets.length, 0, 'the registrations are not shown to script');
+});
+
+test('what registerProperty refuses', () => {
+    assert.throws(() => CSS.registerProperty({ name: '--g', syntax: '*', inherits: true }), 'InvalidModificationError');
+    assert.throws(() => CSS.registerProperty({ name: 'nodash', syntax: '*', inherits: true }), 'SyntaxError');
+    assert.throws(() => CSS.registerProperty({ name: '--x', syntax: '<color>', inherits: true }), 'SyntaxError');
+    assert.throws(() => CSS.registerProperty({ name: '--y', syntax: '*' }), 'TypeError');
+    CSS.registerProperty({ name: '--z', inherits: true });
+});
+
+test('a page adopting its own sheets keeps the registrations', () => {
+    const s = new CSSStyleSheet();
+    s.replaceSync('#a { height: 5px; }');
+    document.adoptedStyleSheets = [s];
+    assert.equal(getComputedStyle(document.getElementById('a')).height, '5px');
+    assert.equal(w('b'), '11px');
+    assert.equal(document.adoptedStyleSheets.length, 1);
+});
+</script>
+</body>
+</html>

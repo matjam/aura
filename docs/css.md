@@ -548,6 +548,20 @@ parse time, so it cannot be `currentcolor`; a `var()` in it is
 substituted first as usual. The other colour functions (`lab()`,
 `oklch()`, `color()`) do not take the relative syntax yet.
 
+## Registered custom properties
+
+An `@property` rule (`parse_property_rule` in `src/css/parser.c`) with
+`syntax` and `inherits` registers a custom property: the cascade
+(`build_custom` in `src/css/cascade.c`) gives it its `initial-value`
+where nothing sets it, and does not inherit it when `inherits` is
+false. `CSS.registerProperty()` (`registerProperty` in
+`src/js/cssom.js`) writes the same rules into a constructed sheet of
+Aura's own, which the document adopts ahead of the page's adopted
+sheets and which `document.adoptedStyleSheets` does not show. The
+syntax is not checked against values and registered values are not
+typed, so a registered `<length>` or `<color>` does not interpolate in
+a transition or animation.
+
 ## Properties parsed only
 
 These are parsed, cascaded and computed, so `CSS.supports` and

@@ -468,11 +468,34 @@ const checkAdoptable = (s) => {
     if (!(s instanceof CSSStyleSheet) || !s._cid) throw new TypeError('Only constructed style sheets can be adopted');
     return s;
 };
+/* CSS.registerProperty: the registrations are @property rules in one
+ * constructed sheet of Aura's own, adopted by the document ahead of the
+ * page's adopted sheets and never shown to script. */
+const registered = new Map();
+let regSheet = null;
+const adoptIds = (scope, items) =>
+    (scope === doc && regSheet ? [regSheet._cid] : []).concat(items.map((s) => s._cid));
+function registerProperty(def) {
+    if (def === null || typeof def !== 'object') throw new TypeError('registerProperty: a definition is required');
+    const name = str(def.name);
+    if (!/^--./.test(name)) throw domErr("The name '" + name + "' is not a custom property name", 'SyntaxError');
+    if (registered.has(name)) throw domErr("The property '" + name + "' is already registered", 'InvalidModificationError');
+    if (def.inherits === undefined) throw new TypeError('registerProperty: inherits is required');
+    const syntax = def.syntax === undefined ? '*' : str(def.syntax).trim();
+    const initial = def.initialValue === undefined ? null : str(def.initialValue);
+    if (syntax !== '*' && initial === null) throw domErr('An initial value is required for this syntax', 'SyntaxError');
+    if (initial !== null && /[;{}]/.test(initial)) throw domErr('The initial value is not valid', 'SyntaxError');
+    registered.set(name, '@property ' + name + ' { syntax: ' + JSON.stringify(syntax) + '; inherits: ' +
+        (def.inherits ? 'true' : 'false') + (initial !== null ? '; initial-value: ' + initial : '') + '; }');
+    if (!regSheet) regSheet = new CSSStyleSheet();
+    N.sheetConstruct(regSheet._cid, [...registered.values()].join('\n'), null, null);
+    N.sheetsAdopt(doc, adoptIds(doc, adoptedOf(doc).arr));
+}
 function adoptedOf(scope) {
     let l = adoptedLists.get(scope);
     if (!l) {
         const arr = [];
-        const sync = () => N.sheetsAdopt(scope, arr.map((s) => s._cid));
+        const sync = () => N.sheetsAdopt(scope, adoptIds(scope, arr));
         l = new Proxy(arr, {
             set(t, k, v) {
                 if (typeof k === 'string' && /^\d+$/.test(k)) checkAdoptable(v);
@@ -493,9 +516,9 @@ function adoptedSet(scope, v) {
     const { arr } = adoptedOf(scope);
     arr.length = 0;
     arr.push(...items);
-    N.sheetsAdopt(scope, items.map((s) => s._cid));
+    N.sheetsAdopt(scope, adoptIds(scope, items));
 }
-const lib = { sheetFor, styleSheetsOf, adoptedGet, adoptedSet };
+const lib = { sheetFor, styleSheetsOf, adoptedGet, adoptedSet, registerProperty };
 for (const C of [CSSRule, CSSStyleRule, CSSGroupingRule, CSSConditionRule, CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule,
     CSSImportRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSRuleList, MediaList, StyleSheet,
     CSSStyleSheet, StyleSheetList]) {

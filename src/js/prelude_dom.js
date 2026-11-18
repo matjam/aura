@@ -681,6 +681,8 @@ defGlobal('getComputedStyle', function getComputedStyle(el, pseudo) {
 });
 defGlobal('CSS', {
     supports: (a, b) => (b === undefined ? N.cssSupports(str(a)) : N.cssSupports(str(a), str(b))),
+    /* cssom.js keeps the registrations (an @property sheet of its own) */
+    registerProperty(def) { cssom().registerProperty(def); },
     escape: (s) => str(s).replace(/[\0-\x1f\x7f]|^-?\d|^-$|[^\w\u0080-￿-]/g, (c) =>
         c === '\0' ? '�' : /[\0-\x1f\x7f]|\d/.test(c) ? '\\' + c.charCodeAt(0).toString(16) + ' ' : '\\' + c),
 });
