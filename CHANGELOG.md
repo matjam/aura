@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.0](https://github.com/matjam/aura/compare/v0.5.0...v0.6.0) (2026-11-18)
+
+
+### Features
+
+* **css:** play infinite transform and opacity animations ([f79ce48](https://github.com/matjam/aura/commit/f79ce4892dee4400bac419960e9a631888eb35ca))
+* **js:** fire load and error for images the document loads ([55dede4](https://github.com/matjam/aura/commit/55dede496d9c663f572ee1534d5d4ca1e1c5edd7))
+
+
+### Bug Fixes
+
+* **browser:** scale the unknown machine's script limits for 64-bit ([cfcc437](https://github.com/matjam/aura/commit/cfcc437e1eace5f9a08f81ea33294ac8a0540597))
+* **layout:** apply min-width and max-width content keywords ([ac57dae](https://github.com/matjam/aura/commit/ac57dae720fac92e217572314b01b478481bc940))
+* **layout:** count a transformed box's overflow where it is drawn ([517c374](https://github.com/matjam/aura/commit/517c374d95ffd9322510d731c63420fbffe822a9))
+* **layout:** size a select as Chrome does on the Mac ([9913c50](https://github.com/matjam/aura/commit/9913c505b81a425db2c0068aceed1701826fc58b))
+
+
+### Performance Improvements
+
+* **js:** module graphs share each module fetch ([671122a](https://github.com/matjam/aura/commit/671122a2eb55c4ac1e7d4a253421b4ee337fb358))
+* **net:** one download for simultaneous requests of a URL ([7315d05](https://github.com/matjam/aura/commit/7315d053a816408874817e1725c03f81f9a747a9))
+* **page:** nested documents repaint only what script changed ([2cffd9d](https://github.com/matjam/aura/commit/2cffd9da06af3aca671e0549d88bf23de3f9e55a))
+
 ## [0.5.0](https://github.com/matjam/aura/compare/v0.4.1...v0.5.0) (2026-11-18)
 
 
