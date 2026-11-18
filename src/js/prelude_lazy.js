@@ -11,7 +11,7 @@ const ranges = lazyModule(0, ['AbstractRange', 'Range', 'StaticRange', 'Selectio
 const cssom = lazyModule(1, ['CSSRule', 'CSSStyleRule', 'CSSGroupingRule', 'CSSConditionRule', 'CSSMediaRule',
     'CSSSupportsRule', 'CSSContainerRule', 'CSSLayerBlockRule', 'CSSImportRule', 'CSSFontFaceRule', 'CSSPageRule',
     'CSSNamespaceRule', 'CSSKeyframeRule', 'CSSKeyframesRule', 'CSSRuleList', 'MediaList', 'StyleSheet', 'CSSStyleSheet',
-    'StyleSheetList'], () => ({ N, doc, S, domErr, str, tag }));
+    'StyleSheetList', 'CSSNestedDeclarations'], () => ({ N, doc, S, domErr, str, tag }));
 defProps(HTMLStyleElement.prototype, { get sheet() { return cssom().sheetFor(this); } });
 defProps(HTMLLinkElement.prototype, { get sheet() { return cssom().sheetFor(this); } });
 const adoptedProps = {

@@ -1006,6 +1006,14 @@ style or link element.
   sheet is stored"), and `au_dv_sheet_text` reads it from there. The
   rules of a cross-origin sheet throw SecurityError.
 - A cross-origin sheet's rules throw SecurityError.
+- A style rule's block is split into its declarations and its nested
+  rules (`splitStyleBlock`): `style` holds only the declarations, and
+  `cssRules`, `insertRule` and `deleteRule` work on the nested rules.
+  A nested selector is checked with `&` read as `:scope`. A grouping
+  rule nested in a style rule puts its own declarations in a
+  `CSSNestedDeclarations` rule first. Declarations that follow a nested
+  rule join the ones before it, where the standard gives them a
+  `CSSNestedDeclarations` rule of their own.
 
 **Constructed sheets.** `new CSSStyleSheet(options)` takes an id from a
 counter in the prelude and makes the sheet in the document view

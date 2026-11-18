@@ -283,9 +283,11 @@ done.
 - **Selection:** script's selection is not joined to the selection the
   user makes with the mouse, and it is not painted
   ([`javascript.md`](javascript.md), "Selection").
-- **CSSOM:** the sheets of `@import` rules, rules nested in a style rule, `@font-face` rules
+- **CSSOM:** the sheets of `@import` rules, `@font-face` rules
   added through the CSSOM (they are not given to the web font loader).
-  `cssRules` is not live.
+  `cssRules` is not live. Declarations after a nested rule are not a
+  separate `CSSNestedDeclarations` rule. A rule's `style` gives colour
+  keywords as `rgb()` where other browsers keep the keyword.
 - **crypto.subtle** ([`javascript.md`](javascript.md), "crypto.subtle"):
   - Ed25519, Ed448 and X448: TF-PSA-Crypto has no Edwards curves.
   - RSA-PSS signs only with a salt as long as the hash (shorter when

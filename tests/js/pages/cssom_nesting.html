@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CSSOM: rules nested in style rules</title>
+<script src="../harness.js"></script>
+<style id="s">
+.card { color: red; & .title { color: blue; } &:hover { color: green; } @media (min-width: 1px) { padding: 1px; .x { margin: 0; } } }
+.plain { color: black; }
+</style>
+</head>
+<body>
+<div class="card"><span class="title" id="t">t</span></div>
+<script>
+const sheet = document.getElementById('s').sheet;
+const card = () => sheet.cssRules[0];
+
+test('a style rule lists its nested rules', () => {
+    const r = card();
+    assert.equal(r.selectorText, '.card');
+    assert.equal(r.style.color, 'rgb(255, 0, 0)');
+    assert.equal(r.style.length, 1, 'only the declarations');
+    assert.equal(r.cssRules.length, 3);
+    assert.equal(r.cssRules[0].selectorText, '& .title');
+    assert.equal(r.cssRules[0].style.color, 'rgb(0, 0, 255)');
+    assert.equal(r.cssRules[0].parentRule, r);
+    assert.equal(r.cssRules[1].selectorText, '&:hover');
+    assert.equal(sheet.cssRules[1].cssRules.length, 0);
+});
+
+test('a grouping rule nested in a style rule keeps its declarations', () => {
+    const m = card().cssRules[2];
+    assert.ok(m instanceof CSSMediaRule);
+    assert.equal(m.cssRules.length, 2);
+    assert.ok(m.cssRules[0] instanceof CSSNestedDeclarations);
+    assert.equal(m.cssRules[0].style.padding, '1px');
+    assert.equal(m.cssRules[1].selectorText, '.x');
+});
+
+test('insertRule and deleteRule on a style rule', () => {
+    const r = card();
+    assert.equal(r.insertRule('& b { color: purple; }', 1), 1);
+    assert.equal(r.cssRules.length, 4);
+    assert.equal(r.cssRules[1].selectorText, '& b');
+    assert.throws(() => r.insertRule('nonsense', 0), 'SyntaxError');
+    assert.ok(/& b \{ color: purple; \}/.test(r.cssText), r.cssText);
+    r.deleteRule(1);
+    assert.equal(r.cssRules.length, 3);
+});
+
+test('editing a nested rule applies', () => {
+    const t = document.getElementById('t');
+    assert.equal(getComputedStyle(t).color, 'rgb(0, 0, 255)');
+    card().cssRules[0].style.color = 'rgb(1, 2, 3)';
+    assert.equal(getComputedStyle(t).color, 'rgb(1, 2, 3)');
+    assert.equal(card().style.color, 'rgb(255, 0, 0)', 'the parent keeps its declarations');
+});
+</script>
+</body>
+</html>

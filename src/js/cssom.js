@@ -22,9 +22,9 @@
  * text it was fetched as.
  *
  * Not here: constructed sheets (new CSSStyleSheet, adoptedStyleSheets), the
- * sheets of @import rules (CSSImportRule.styleSheet is null), rules nested
- * in a style rule, and the rules of cross-origin sheets (SecurityError,
- * as in other browsers). document.styleSheets is a new list at each read. */
+ * sheets of @import rules (CSSImportRule.styleSheet is null), and the
+ * rules of cross-origin sheets (SecurityError, as in other browsers).
+ * Rules nested in a style rule are its cssRules (splitStyleBlock). document.styleSheets is a new list at each read. */
 (function (G, H) {
 'use strict';
 
@@ -80,6 +80,52 @@ function cssSplitRules(css) {
     return out;
 }
 
+/* Splits the block of a style rule (or of a rule nested in one) into its
+ * declarations and its nested rules. The standard keeps declarations
+ * that follow a nested rule apart (CSSNestedDeclarations); here they join
+ * the others. */
+function splitStyleBlock(block) {
+    if (block.indexOf('{') < 0) return { decls: block.trim(), rules: [] };
+    const decls = [], rules = [];
+    const n = block.length;
+    let i = 0, start = 0, depth = 0;
+    const skipString = (q) => { i++; while (i < n && block[i] !== q) { if (block[i] === '\\') i++; if (block[i] === '\n') return; i++; } i++; };
+    const skipComment = () => { const e = block.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; };
+    while (i < n) {
+        const c = block[i];
+        if (c === '"' || c === "'") { skipString(c); continue; }
+        if (c === '/' && block[i + 1] === '*') { skipComment(); continue; }
+        if (c === '\\') { i += 2; continue; }
+        if (c === '(' || c === '[') depth++;
+        else if ((c === ')' || c === ']') && depth) depth--;
+        else if (c === ';' && !depth) { decls.push(block.slice(start, i)); start = ++i; continue; }
+        else if (c === '{' && !depth) {
+            const prelude = block.slice(start, i).replace(/\/\*[^]*?\*\//g, ' ').trim();
+            const b0 = ++i;
+            let braces = 1;
+            while (i < n && braces) {
+                const e = block[i];
+                if (e === '"' || e === "'") { skipString(e); continue; }
+                if (e === '/' && block[i + 1] === '*') { skipComment(); continue; }
+                if (e === '\\') { i += 2; continue; }
+                if (e === '{') braces++;
+                else if (e === '}') braces--;
+                i++;
+            }
+            if (prelude) rules.push({ prelude, block: block.slice(b0, braces ? n : i - 1) });
+            start = i;
+            continue;
+        }
+        i++;
+    }
+    decls.push(block.slice(start));
+    return { decls: decls.map((d) => d.trim()).filter(Boolean).join('; '), rules };
+}
+/* A nested selector is checked with & as :scope, and a leading
+ * combinator relative to it. */
+const nestedSelectorOk = (s) => N.cssSupports('selector(' + (/^[>+~]/.test(s) ? '& ' + s : s).replace(/&/g, ':scope') + ')');
+const inStyleRule = (r) => { for (let p = r; p; p = p._parent) if (p._kind === 'style') return true; return false; };
+
 const cssRuleTypes = { style: 1, import: 3, media: 4, 'font-face': 5, page: 6, keyframes: 7, keyframe: 8, namespace: 10, supports: 12 };
 class CSSRule {
     constructor(key) { if (key !== S.owner) throw new TypeError('Illegal constructor'); }
@@ -88,6 +134,7 @@ class CSSRule {
     get parentRule() { return this._parent; }
     get cssText() { return this._changed ? this._build() : this._src; }
     set cssText(v) {}
+    _declText() { return (this._block || '').trim(); }
     _touch() {
         for (let r = this; r; r = r._parent) r._changed = true;
         if (this._sheet) this._sheet._sync();
@@ -103,7 +150,7 @@ for (const [k, v] of Object.entries({ STYLE_RULE: 1, CHARSET_RULE: 2, IMPORT_RUL
 function ruleStyle(rule) {
     if (rule._style) return rule._style;
     const holder = doc.createElement('span');
-    holder.setAttribute('style', rule._block || '');
+    holder.setAttribute('style', rule._declText());
     const inner = holder.style;
     const mutators = new Set(['setProperty', 'removeProperty']);
     rule._holder = holder;
@@ -119,44 +166,74 @@ function ruleStyle(rule) {
     });
     return rule._style;
 }
-const ruleDecls = (rule) => (rule._holder ? rule._holder.getAttribute('style') || '' : (rule._block || '').trim());
+const ruleDecls = (rule) => (rule._holder ? rule._holder.getAttribute('style') || '' : rule._declText());
+
+/* insertRule and deleteRule of a rule that holds rules. */
+function insertInto(owner, text, index) {
+    const rules = owner._rules();
+    const r = parseOneRule(text, owner._sheet, owner);
+    index >>>= 0;
+    if (index > rules.length) throw domErr('The index is past the end of the rules', 'IndexSizeError');
+    rules.splice(index, 0, r);
+    owner._touch();
+    return index;
+}
+function deleteFrom(owner, index) {
+    const rules = owner._rules();
+    index >>>= 0;
+    if (index >= rules.length) throw domErr('There is no rule at that index', 'IndexSizeError');
+    const [r] = rules.splice(index, 1);
+    r._parent = null; r._sheet = null;
+    owner._touch();
+}
 
 class CSSStyleRule extends CSSRule {
     get selectorText() { return this._prelude; }
     set selectorText(v) {
         v = str(v).trim();
-        if (!v || !N.cssSupports('selector(' + v + ')')) return;
+        if (!v || !(this._parent && inStyleRule(this._parent) ? nestedSelectorOk(v) : N.cssSupports('selector(' + v + ')'))) return;
         this._prelude = v;
         this._touch();
     }
     get style() { return ruleStyle(this); }
     set style(v) { ruleStyle(this).cssText = str(v); }
-    get cssRules() { return makeRuleList([]); }
-    _build() { const d = ruleDecls(this); return this._prelude + ' { ' + d + (d ? ' ' : '') + '}'; }
+    /* rules nested in this one (CSS nesting) */
+    get cssRules() { return makeRuleList(this._rules()); }
+    _split() { return this._parts || (this._parts = splitStyleBlock(this._block || '')); }
+    _declText() { return this._split().decls; }
+    _rules() {
+        if (!this._list) this._list = this._split().rules.map((p) => makeRule(p, this._sheet, this));
+        return this._list;
+    }
+    insertRule(text, index = 0) { return insertInto(this, text, index); }
+    deleteRule(index) { deleteFrom(this, index); }
+    _build() {
+        const d = ruleDecls(this);
+        const inner = this._list ? this._list.map((r) => r.cssText) : this._split().rules.map((p) => p.prelude + ' {' + p.block + '}');
+        return this._prelude + ' { ' + [d && d + (/;\s*$/.test(d) ? '' : ';'), ...inner].filter(Boolean).join(' ') + ' }';
+    }
+}
+/* Declarations inside a grouping rule that is nested in a style rule
+ * (@media inside a style rule). */
+class CSSNestedDeclarations extends CSSRule {
+    get style() { return ruleStyle(this); }
+    _build() { return ruleDecls(this); }
 }
 class CSSGroupingRule extends CSSRule {
     get cssRules() { return makeRuleList(this._rules()); }
     _rules() {
-        if (!this._list) this._list = cssSplitRules(this._block || '').map((p) => makeRule(p, this._sheet, this));
+        if (this._list) return this._list;
+        if (inStyleRule(this._parent)) {
+            const { decls, rules } = splitStyleBlock(this._block || '');
+            this._list = rules.map((p) => makeRule(p, this._sheet, this));
+            if (decls) this._list.unshift(makeRule({ prelude: '', block: decls }, this._sheet, this, 'nested-declarations'));
+        } else {
+            this._list = cssSplitRules(this._block || '').map((p) => makeRule(p, this._sheet, this));
+        }
         return this._list;
     }
-    insertRule(text, index = 0) {
-        const rules = this._rules();
-        const r = parseOneRule(text, this._sheet, this);
-        index >>>= 0;
-        if (index > rules.length) throw domErr('The index is past the end of the rules', 'IndexSizeError');
-        rules.splice(index, 0, r);
-        this._touch();
-        return index;
-    }
-    deleteRule(index) {
-        const rules = this._rules();
-        index >>>= 0;
-        if (index >= rules.length) throw domErr('There is no rule at that index', 'IndexSizeError');
-        const [r] = rules.splice(index, 1);
-        r._parent = null; r._sheet = null;
-        this._touch();
-    }
+    insertRule(text, index = 0) { return insertInto(this, text, index); }
+    deleteRule(index) { deleteFrom(this, index); }
     _build() { return '@' + this._name + (this._prelude ? ' ' + this._prelude : '') + ' {\n' + this._rules().map((r) => '  ' + r.cssText).join('\n') + '\n}'; }
 }
 class CSSConditionRule extends CSSGroupingRule {
@@ -232,7 +309,7 @@ class CSSKeyframesRule extends CSSRule {
 }
 const cssRuleClasses = { style: CSSStyleRule, media: CSSMediaRule, supports: CSSSupportsRule, container: CSSContainerRule, layer: CSSLayerBlockRule,
     import: CSSImportRule, 'font-face': CSSFontFaceRule, page: CSSPageRule, namespace: CSSNamespaceRule, keyframes: CSSKeyframesRule,
-    keyframe: CSSKeyframeRule };
+    keyframe: CSSKeyframeRule, 'nested-declarations': CSSNestedDeclarations };
 function makeRule(piece, sheet, parent, kind) {
     let name = '', prelude = piece.prelude;
     if (!kind) {
@@ -248,12 +325,13 @@ function makeRule(piece, sheet, parent, kind) {
     }
     const C = cssRuleClasses[kind] || CSSRule;
     const r = new C(S.owner);
-    const src = piece.block === null ? piece.prelude + ';' : piece.prelude + ' {' + piece.block + '}';
+    const src = piece.block === null ? piece.prelude + ';' : kind === 'nested-declarations' ? piece.block
+        : piece.prelude + ' {' + piece.block + '}';
     Object.defineProperties(r, {
         _kind: { value: kind }, _name: { value: name }, _prelude: { value: prelude, writable: true }, _block: { value: piece.block },
         _src: { value: src }, _changed: { value: false, writable: true }, _sheet: { value: sheet, writable: true },
         _parent: { value: parent || null, writable: true }, _style: { value: null, writable: true }, _holder: { value: null, writable: true },
-        _list: { value: null, writable: true },
+        _list: { value: null, writable: true }, _parts: { value: null, writable: true },
     });
     return r;
 }
@@ -264,7 +342,8 @@ function parseOneRule(text, sheet, parent) {
     if (ps.length !== 1) throw bad();
     const p = ps[0];
     if (p.prelude[0] !== '@') {
-        if (p.block === null || !N.cssSupports('selector(' + p.prelude + ')')) throw bad();
+        const nested = parent && inStyleRule(parent);
+        if (p.block === null || !(nested ? nestedSelectorOk(p.prelude) : N.cssSupports('selector(' + p.prelude + ')'))) throw bad();
     } else if (!/^@[-\w]+/.test(p.prelude)) {
         throw bad();
     }
@@ -521,7 +600,7 @@ function adoptedSet(scope, v) {
 const lib = { sheetFor, styleSheetsOf, adoptedGet, adoptedSet, registerProperty };
 for (const C of [CSSRule, CSSStyleRule, CSSGroupingRule, CSSConditionRule, CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule,
     CSSImportRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSRuleList, MediaList, StyleSheet,
-    CSSStyleSheet, StyleSheetList]) {
+    CSSStyleSheet, StyleSheetList, CSSNestedDeclarations]) {
     tag(C);
     lib[C.name] = C;
 }

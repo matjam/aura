@@ -52,7 +52,7 @@ first.
 | 6 | ~~`navigator.clipboard.writeText`~~: done 2026-11-18 ([`javascript.md`](javascript.md), "User activation and the clipboard"); reading stays refused | copy buttons | | yes |
 | 7 | ~~CSS relative colours, `accent-color`, `field-sizing`, `content-visibility`, `overscroll-behavior`, `scrollbar-gutter`, `interpolate-size`~~: done 2026-11-18 ([`css.md`](css.md), "Relative colours" and "Properties parsed only"); the properties are parsed only, and relative colours cover `rgb()` and `hsl()` | | | yes |
 | 8 | ~~`URLPattern`~~: done 2026-11-18 ([`javascript.md`](javascript.md), "URLPattern"); string patterns are split by a simpler scan than the standard's | | | yes |
-| 8b | Nested rules in CSSOM (`CSSStyleRule.cssRules`, `insertRule` on a style rule) | nesting itself applies; only script that reads or edits nested rules sees an empty list (the probe's "css nesting" line) | small | yes |
+| 8b | ~~Nested rules in CSSOM~~: done 2026-11-18 ([`javascript.md`](javascript.md), "CSSOM") | | | yes |
 | 9 | ~~`CSS.registerProperty` and `@property` initial values~~: done 2026-11-18 ([`css.md`](css.md), "Registered custom properties"); values are not typed, so they do not animate | | | yes |
 | 10 | ~~Scroll snapping~~: done 2026-11-18 ([`layout.md`](layout.md), "Scroll snapping"); a scroll bar drag does not snap | | | yes |
 | 11 | ~~WebSocket~~: done 2026-11-18 ([`script-requests-and-cors.md`](script-requests-and-cors.md), "WebSocket"); no extensions | | | yes |
