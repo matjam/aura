@@ -88,6 +88,7 @@ Patches this document refers to:
 | 0017 | function source text, which only `Function.prototype.toString` reads, can be packed while nothing reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`) and is unpacked when asked for (`0017-pack-source-text`); `runtime.c` deflates texts of 4 KB or more on the second 5-second pass after they were last read ([`memory.md`](memory.md), "Cold memory") |
 | 0018 | a hashed shape of up to 32 properties grows by one instead of by half, so the objects that share it keep no empty property slots (`0018-exact-small-shapes`; "How script memory is kept down" below) |
 | 0019 | a compiled function keeps 8 bytes per argument and local (`JSBytecodeVar`) instead of the compiler's 20-byte `JSVarDef`; only a function with a direct eval also keeps their scopes (`0019-compact-bytecode-vars`) |
+| 0020 | the weak references to an object (WeakMap and WeakSet keys, WeakRef and FinalizationRegistry targets) are listed in a runtime hash table, and the object keeps one bit instead of a pointer (`0020-weak-refs-in-runtime`) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -504,6 +505,11 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   scopes a direct eval needs are kept only by functions that contain
   one. Reddit's function records fell from 9.0 MB to 7.8 MB
   (2026-11-18, host; the PowerPC saves the same).
+- **An object has no weak-reference pointer** (patch 0020). Only about
+  1.4% of Reddit's objects are weakly referenced, so their lists live
+  in a runtime hash table. An object takes 72 bytes with its block
+  header on the host instead of 80, and 40 instead of 48 on the
+  PowerPC: about 1.8 MB for Reddit's 230,000 objects.
 - `js_workers_memory` no longer counts a worker's script text after it
   is freed.
 

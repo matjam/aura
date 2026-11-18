@@ -76,7 +76,9 @@ records where the code came from and how to update it.
   hashed shape of up to 32 properties grows by one slot instead of by
   half, so objects sharing it keep no empty slots, and `0019` 8-byte
   records for a compiled function's arguments and locals instead of
-  the compiler's 20-byte ones (scopes only for a direct eval).
+  the compiler's 20-byte ones (scopes only for a direct eval), and
+  `0020` an object's weak references listed in a runtime hash table
+  instead of through a pointer in every object.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
