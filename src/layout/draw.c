@@ -43,7 +43,8 @@ static bool creates_stacking(const LBox *b, bool flex_item)
         r->filter || r->mix_blend_mode != AU_MIX_BLEND_MODE_NORMAL || r->clip_path || (r->contain & AU_CONTAIN_PAINT) ||
         au_style_mask_layer_count(s) > 0)
         return true;
-    return false;
+    /* an animation of transform or opacity (l_anim_register) */
+    return b->kind == LK_BLOCK && ((const LBlock *)b)->anim;
 }
 
 typedef struct SCBuild {
@@ -157,6 +158,8 @@ void l_build_stacking(AuLayout *L)
             sc = root;
             b->flags |= LF_STACKING;
         }
+        if (b->kind == LK_BLOCK && (((LBlock *)b)->anim || au_css_animation_playing(b->style)))
+            l_anim_register(L, (LBlock *)b);
         if (b->kind == LK_BLOCK || b->kind == LK_INLINE) {
             if (!lb_anon(b) && ((b->flags & LF_POSITIONED) || creates_stacking(b, flex_item))) {
                 layered = true;
@@ -258,7 +261,15 @@ static float tf_arg(const AuCssValue *v, float basis)
 {
     if (v->type == AU_CSSV_PERCENT)
         return v->u.num * basis / 100;
-    if (v->type == AU_CSSV_DIMENSION || v->type == AU_CSSV_NUMBER)
+    if (v->type == AU_CSSV_DIMENSION) {
+        switch (v->unit) { /* angles in degrees: spinners turn by 1turn */
+        case AU_UNIT_TURN: return v->u.num * 360;
+        case AU_UNIT_RAD: return v->u.num * 180 / 3.14159265f;
+        case AU_UNIT_GRAD: return v->u.num * 0.9f;
+        default: return v->u.num;
+        }
+    }
+    if (v->type == AU_CSSV_NUMBER)
         return v->u.num;
     if (v->type == AU_CSSV_CALC) {
         /* translateX(calc(-100% - 10px)): Python's documentation hides
@@ -333,8 +344,70 @@ static float origin_arg(const AuCssValue *v, float len)
     return tf_arg(v, len);
 }
 
+static bool tf_is_scale(int kw)
+{
+    return kw == AU_K_scale || kw == AU_K_scale3d || kw == AU_K_scalex || kw == AU_K_scaley;
+}
+
+/* Argument i of transform function f (NULL: the function's identity, as
+ * "none" on one side of an animation is): its type in *pct. */
+static float tf_lerp_arg(const AuCssValue *f, const AuCssValue *other, uint32_t i, bool *pct)
+{
+    const AuCssValue *fn = f ? f : other;
+    if (!f || i >= f->n) {
+        *pct = false;
+        return tf_is_scale(fn->kw) ? 1 : 0;
+    }
+    const AuCssValue *v = &f->u.items[i];
+    *pct = v->type == AU_CSSV_PERCENT;
+    return *pct ? v->u.num : tf_arg(v, 0);
+}
+
+/* Multiplies into m the transform lists a and b (either may be NULL for
+ * none) interpolated by p over a w x h box. Lists of the same functions
+ * interpolate argument by argument; others switch halfway. */
+static void tf_apply_lerp(AuMatrix *m, const AuCssValue *a, const AuCssValue *b, float p, float w, float h)
+{
+    uint32_t na = 0, nb = 0;
+    const AuCssValue *ia = a ? l_items(a, &na) : NULL, *ib = b ? l_items(b, &nb) : NULL;
+    bool same = na == nb || !na || !nb;
+    uint32_t n = na > nb ? na : nb;
+    for (uint32_t i = 0; same && i < n; i++) {
+        const AuCssValue *fa = na ? &ia[i] : NULL, *fb = nb ? &ib[i] : NULL;
+        if ((fa && fa->type != AU_CSSV_FUNCTION) || (fb && fb->type != AU_CSSV_FUNCTION) ||
+            (fa && fb && (fa->kw != fb->kw || fa->n != fb->n)))
+            same = false;
+    }
+    if (!same) {
+        const AuCssValue *it = p < 0.5f ? ia : ib;
+        uint32_t k = p < 0.5f ? na : nb;
+        for (uint32_t i = 0; i < k; i++)
+            if (it[i].type == AU_CSSV_FUNCTION)
+                mat_mul(m, tf_function(&it[i], w, h));
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const AuCssValue *fa = na ? &ia[i] : NULL, *fb = nb ? &ib[i] : NULL;
+        const AuCssValue *f = fa ? fa : fb;
+        AuCssValue args[16], fn = *f;
+        uint32_t nargs = f->n < 16 ? f->n : 16;
+        for (uint32_t j = 0; j < nargs; j++) {
+            bool pa, pb;
+            float x = tf_lerp_arg(fa, fb, j, &pa), y = tf_lerp_arg(fb, fa, j, &pb);
+            memset(&args[j], 0, sizeof args[j]);
+            /* a percentage against a length: the side that is zero takes the other's kind */
+            args[j].type = (pa || pb) && (pa == pb || (pa ? y == 0 : x == 0)) ? AU_CSSV_PERCENT : AU_CSSV_NUMBER;
+            args[j].u.num = x + (y - x) * p;
+        }
+        fn.n = nargs;
+        fn.u.items = args;
+        mat_mul(m, tf_function(&fn, w, h));
+    }
+}
+
 /* b's transform as a matrix in its border-box coordinates (CSS Transforms
  * 2: translate, rotate, scale, then transform, about transform-origin).
+ * A playing animation's transform replaces the transform property.
  * Returns false when there is none. */
 bool l_transform_matrix(const LBlock *b, AuMatrix *out)
 {
@@ -342,7 +415,8 @@ bool l_transform_matrix(const LBlock *b, AuMatrix *out)
     if (lb_anon(&b->b))
         return false;
     const AuStyleRare *r = b->b.style->rare;
-    if (!r->transform && !r->translate && !r->rotate && !r->scale)
+    const AuCssAnimSample *as = b->anim && b->anim->s.transform ? &b->anim->s : NULL;
+    if (!r->transform && !r->translate && !r->rotate && !r->scale && !as)
         return false;
     float w = b->w, h = b->h;
     float ox = w / 2, oy = h / 2;
@@ -389,7 +463,9 @@ bool l_transform_matrix(const LBlock *b, AuMatrix *out)
             mat_mul(&m, (AuMatrix){sx, 0, 0, sy, 0, 0});
         }
     }
-    if (r->transform) {
+    if (as) {
+        tf_apply_lerp(&m, as->from, as->to, as->p, w, h);
+    } else if (r->transform) {
         const AuCssValue *it = l_items(&r->transform->value, &n);
         for (uint32_t i = 0; i < n; i++)
             if (it[i].type == AU_CSSV_FUNCTION)
@@ -2906,7 +2982,7 @@ static void layer_origin(PCtx *P, LBox *sc, float sx, float sy, LBox *b, float *
             /* The ink is known for an untransformed block; anything else
              * takes the group whenever a corner is rounded. */
             const AuStyleRare *r = b->style->rare;
-            if (!r->transform && !r->translate && !r->rotate && !r->scale) {
+            if (!r->transform && !r->translate && !r->rotate && !r->scale && !k->anim) {
                 float x0 = l_min(0, k->ov.x), y0 = l_min(0, k->ov.y);
                 float x1 = l_max(k->w, k->ov.x + k->ov.w), y1 = l_max(k->h, k->ov.y + k->ov.h);
                 ink = (AuRect){x + x0, y + y0, x1 - x0, y1 - y0};
@@ -3349,6 +3425,8 @@ static void paint_layer(PCtx *P, LBox *b, float ox, float oy)
         return;
     P->depth++;
     float opacity = lb_anon(b) ? 1 : b->style->rare->opacity;
+    if (k->anim && k->anim->s.opacity_set)
+        opacity = k->anim->s.opacity;
     bool group = opacity < 1;
     if (group && opacity <= 0) {
         P->depth--;

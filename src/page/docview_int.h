@@ -140,6 +140,7 @@ struct AuDocView {
     size_t hidden_image_budget; /* the image budget to return to when shown again (au_docview_set_hidden); 0 while shown */
     bool link_events; /* a <link>'s load or error event is due (SheetSrc.event) */
     bool img_events;  /* an image finished or layout found a known one: <img> load events may be due */
+    uint32_t anim_epoch; /* the clock at the document's first animation frame (0: none yet) */
     /* A hidden view frees its layout (au_docview_set_hidden); the scroll
      * offsets of its scroll containers wait here for the next layout. */
     AuLayoutScroll *slim_scrolls;

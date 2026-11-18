@@ -9,6 +9,7 @@
 #include "layout/selection.h"
 #include "page/page.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -839,6 +840,41 @@ static void test_element_scroll(void)
     au_docview_free(dv);
 }
 
+/* A CSS animation that repeats forever plays on the document's clock:
+ * the box's drawn rectangle follows the keyframes, each frame repaints
+ * only where the box was and is, and a finite animation does not play. */
+static void test_css_animation(void)
+{
+    Ctx c;
+    AuDocView *dv = view(&c,
+                         "<!DOCTYPE html><style>@keyframes grow{from{transform:scale(1)}to{transform:scale(3)}}"
+                         "@keyframes fade{50%{opacity:0}}</style><body style='margin:0'>"
+                         "<div id=g style='margin:100px;width:10px;height:10px;animation:grow 1s linear infinite'></div>"
+                         "<div id=o style='width:10px;height:10px;animation:fade 1s 2'></div>",
+                         true);
+    AuLayout *L = au_docview_layout(dv);
+    CHECK(au_docview_animating(dv), "an infinite animation animates");
+    uint32_t next = au_docview_animate(dv, 1000); /* the first frame: time 0 */
+    CHECK(next <= 100, "next frame in %u ms", next);
+    c.invals = 0;
+    au_docview_animate(dv, 1500); /* half way: scale 2 */
+    AuRect r;
+    CHECK(au_layout_element_visual_rect(L, by_id(dv, "g"), 0, 0, &r) && fabsf(r.w - 20) < 0.5f &&
+              fabsf(r.x - 95) < 0.5f,
+          "scaled about its centre: %g,%g %gx%g", r.x, r.y, r.w, r.h);
+    CHECK(c.invals >= 1 && c.inval.x0 >= 85 && c.inval.x1 <= 125 && c.inval.y1 <= 125,
+          "repaints only the box: %d invalidations, %d,%d-%d,%d", c.invals, c.inval.x0, c.inval.y0, c.inval.x1,
+          c.inval.y1);
+    AuBuf out;
+    au_buf_init(&out);
+    au_docview_eval(dv, "document.getElementById('g').style.animation='none';''", &out);
+    au_buf_free(&out);
+    au_docview_update(dv);
+    au_docview_animate(dv, 1600);
+    CHECK(!au_docview_animating(dv), "animation none stops it");
+    au_docview_free(dv);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -858,6 +894,7 @@ int main(void)
     test_textarea_wrap_scaling();
     test_settle_damage();
     test_element_scroll();
+    test_css_animation();
     au_fontset_free(fonts);
     printf("forms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

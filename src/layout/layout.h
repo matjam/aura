@@ -108,6 +108,10 @@ typedef struct AuLayoutEnv {
      * Optional; asked again for each font after
      * au_layout_text_visibility_changed. */
     bool (*text_hidden)(void *ctx, const char *const *families, size_t n, int weight, bool italic);
+    /* Samples the animation of style s at now_ms on the document's clock
+     * (au_css_animation_sample with the document's resolver). Optional;
+     * without it nothing animates. */
+    bool (*anim_sample)(void *ctx, const AuStyle *s, uint32_t now_ms, AuCssAnimSample *out);
 } AuLayoutEnv;
 enum { AU_LAYOUT_IMG_MISSING_W = 1, AU_LAYOUT_IMG_MISSING_H = 2, AU_LAYOUT_IMG_MISSING_RATIO = 4 };
 
@@ -315,6 +319,15 @@ bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int 
 /* The absolute URL an <img> box asked the image loader for, or NULL (no
  * image box, or no source). */
 const char *au_layout_image_request(AuLayout *L, const AuElement *el);
+
+/* CSS animations that repeat forever (au_css_animation_sample): moves
+ * them to now_ms on the document's clock and calls fn with each document
+ * rectangle to repaint (where each animated box was and now is, with the
+ * document scrolled to view_x, view_y). Returns the milliseconds until
+ * the next frame, or UINT32_MAX when nothing animates. */
+uint32_t au_layout_anim_tick(AuLayout *L, uint32_t now_ms, float view_x, float view_y,
+                             void (*fn)(void *ctx, AuIRect r), void *ctx);
+bool au_layout_animating(const AuLayout *L);
 /* Scrolls el's box to (x, y), clamped. True when the offset changed (the
  * caller repaints). */
 bool au_layout_element_scroll_to(AuLayout *L, const AuElement *el, float x, float y);

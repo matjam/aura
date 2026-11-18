@@ -232,7 +232,26 @@ typedef struct LBlock {
      * offset inside content reused in this pass is applied already. */
     uint32_t skip_gen, lay_gen;
     uint8_t xf;         /* LX_* */
+    struct LAnim *anim; /* a playing animation's sample (anim.c), or NULL */
 } LBlock;
+
+/* ---- Animations (anim.c) ----
+ * A block whose first animation repeats forever and sets transform or
+ * opacity is a stacking context and gets an LAnim when the stacking
+ * contexts are built. au_layout_anim_tick samples each at the document's
+ * clock and repaints where the box was and is; paint and
+ * l_transform_matrix use the sample instead of the style's values. */
+typedef struct LAnim {
+    LBlock *k;
+    AuCssAnimSample s;
+    AuRect prev; /* where the box was drawn at the last tick, document coordinates */
+    bool have_prev;
+} LAnim;
+/* Called for each block while the stacking contexts are built: gives k
+ * its LAnim when its animation plays. Returns whether it has one. */
+bool l_anim_register(AuLayout *L, LBlock *k);
+/* Drops every LAnim (the box tree is freed). */
+void l_anim_clear(AuLayout *L);
 
 /* ---- Tables (table.c) ----
  *
@@ -356,6 +375,9 @@ struct AuLayout {
     AuLayoutEnv env;
     AuDocument *doc;
     LArena tree;
+    LAnim **anims;     /* playing animations (anim.c) */
+    uint32_t nanims, anims_cap;
+    uint32_t anim_ms;  /* the document's clock at the last tick */
     LBox *root;        /* the root element's box, or NULL */
     float vw, vh;      /* viewport */
     float doc_w, doc_h;

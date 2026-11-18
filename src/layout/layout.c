@@ -1466,6 +1466,7 @@ void au_layout_free(AuLayout *L)
     au_free(L->abs);
     au_free(L->grid_abs);
     au_free(L->hidden);
+    au_free(L->anims);
     au_free(L);
 }
 

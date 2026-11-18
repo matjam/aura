@@ -774,6 +774,23 @@ void au_css_resolver_sheets_changed(AuCssResolver *r);
 void au_css_resolver_sheets_changed_in(AuCssResolver *r, AuNode *const *roots, size_t n);
 /* Finds @keyframes by name across the author sheets (last one wins). */
 const AuCssKeyframes *au_css_resolver_keyframes(AuCssResolver *r, AuAtom name);
+
+/* ---- Playing animations (anim.c) ----
+ * Only an element's first animation plays, and only when it repeats
+ * forever (spinners, pulses): animation-iteration-count infinite, a
+ * duration, not paused. Its keyframes' transform and opacity are sampled
+ * at now_ms, the document's clock; other properties and other animations
+ * keep the element's own values. */
+typedef struct AuCssAnimSample {
+    bool transform;             /* the keyframes set transform */
+    const AuCssValue *from, *to; /* the transform lists either side of now; NULL for none */
+    float p;                    /* how far from 'from' to 'to', eased (0..1) */
+    bool opacity_set;
+    float opacity;
+} AuCssAnimSample;
+bool au_css_animation_playing(const AuStyle *s);
+/* Returns false when nothing of s plays now. */
+bool au_css_animation_sample(AuCssResolver *r, const AuStyle *s, uint32_t now_ms, AuCssAnimSample *out);
 /* True if the media query list matches the current device (matchMedia). */
 bool au_css_media_matches(AuCssResolver *r, const char *query, size_t len);
 /* The same against a device, without a resolver: whether a sheet with

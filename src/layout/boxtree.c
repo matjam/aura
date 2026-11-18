@@ -2353,6 +2353,7 @@ void l_free_tree(AuLayout *L)
 {
     au_svg_id_index_free(L->svg_ids);
     L->svg_ids = NULL;
+    l_anim_clear(L);
     LBox *b = L->root;
     while (b) {
         LBox *next;

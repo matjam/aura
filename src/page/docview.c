@@ -57,6 +57,13 @@ static void layout_image_use(void *ctx, const char *url, int dw, int dh)
 static int layout_canvas(void *ctx, AuElement *el, const AuSurface **px);
 static bool layout_text_hidden(void *ctx, const char *const *families, size_t n, int weight, bool italic);
 
+/* Layout samples a playing CSS animation with the document's sheets. */
+static bool layout_anim_sample(void *ctx, const AuStyle *s, uint32_t now_ms, AuCssAnimSample *out)
+{
+    AuDocView *dv = ctx;
+    return au_css_animation_sample(dv->resolver, s, now_ms, out);
+}
+
 static int layout_embed_kind(void *ctx, AuElement *el)
 {
     return au_frames_embed_kind(ctx, el);
@@ -84,7 +91,8 @@ static void new_layout(AuDocView *dv, AuFontSet *fonts)
         au_layout_free(dv->layout);
     }
     AuLayoutEnv env = {fonts, dv, layout_image, layout_resolve, layout_image_use, layout_embed_kind,
-                       layout_paint_frame, layout_canvas, layout_image_missing, layout_text_hidden};
+                       layout_paint_frame, layout_canvas, layout_image_missing, layout_text_hidden,
+                       layout_anim_sample};
     dv->layout = au_layout_new(&env);
     if (dv->check)
         au_layout_set_check(dv->layout, true);
@@ -280,6 +288,7 @@ static void clear_document(AuDocView *dv)
 {
     au_frames_clear(dv); /* nested documents first: their script contexts go before this one's */
     au_forms_clear(dv);
+    dv->anim_epoch = 0;
     if (dv->script) {
         AuDocScript *s = dv->script;
         dv->script = NULL;
@@ -463,13 +472,24 @@ DV_ENTRY(uint32_t, animate, (AuDocView *dv, uint32_t now_ms), (dv, now_ms))
     uint32_t fn = au_frames_animate(dv, now_ms);
     if (fn < next)
         next = fn;
+    if (dv->layout && au_layout_animating(dv->layout)) {
+        /* CSS animations run on the document's clock, from its first frame */
+        if (!dv->anim_epoch)
+            dv->anim_epoch = now_ms ? now_ms : 1;
+        int sx, sy, vw, vh;
+        au_dv_scroll(dv, &sx, &sy, &vw, &vh);
+        uint32_t an = au_layout_anim_tick(dv->layout, now_ms - dv->anim_epoch, (float)sx, (float)sy, invalidate_fn, dv);
+        if (an < next)
+            next = an;
+    }
     uint32_t wf = webfonts_tick(dv);
     return wf < next ? wf : next;
 }
 
 bool au_docview_animating(const AuDocView *dv)
 {
-    return au_docimages_animating(dv->imgs) || au_frames_animating(dv);
+    return au_docimages_animating(dv->imgs) || au_frames_animating(dv) ||
+           (dv->layout && au_layout_animating(dv->layout));
 }
 
 void au_docview_stats(const AuDocView *dv, AuDocViewStats *s)

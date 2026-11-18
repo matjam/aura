@@ -4195,7 +4195,14 @@ void au_page_idle(AuPage *p)
         return;
     }
     if (p->kind == K_DOC && p->begun) {
-        au_docview_animate(p->dv, now(p)); /* animated images */
+        /* Animated images and CSS animations repaint only their boxes:
+         * their rectangles need no layout, so they go out now instead of
+         * marking the page dirty, which repainted the whole window for
+         * every frame of a GIF. */
+        bool in_idle = p->in_idle;
+        p->in_idle = false;
+        au_docview_animate(p->dv, now(p));
+        p->in_idle = in_idle;
         uint32_t t = now(p);
         if (au_docview_editing(p->dv) && (int32_t)(t - p->blink_due) >= 0)
             p->blink_due = t + au_docview_blink(key_view(p), t); /* the caret */

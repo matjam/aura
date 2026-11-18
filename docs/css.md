@@ -554,6 +554,36 @@ and border and outline widths are corrected, and `text-align:
 match-parent` (the UA sheet's `li`) becomes the parent's value, with
 `start` and `end` made `left` or `right` by the parent's direction.
 
+## Animations
+
+To play an animation, an element needs `animation-iteration-count:
+infinite`, a duration, a play state other than paused, and `@keyframes`
+that set `transform` or `opacity`. Only its first animation plays; that
+covers spinners and pulsing placeholders, so a page shows it is working.
+
+- **Sampling** (`au_css_animation_sample`, `src/css/anim.c`): the time
+  minus `animation-delay`, wrapped by the duration, turned by
+  `animation-direction`, gives a progress. The keyframes that declare
+  the property either side of it, or the element's own value at 0% and
+  100%, are interpolated through `animation-timing-function` (keywords,
+  `cubic-bezier()`, `steps()`).
+- **Layout** (`src/layout/animate.c`): while the stacking contexts are
+  built, such a block gets an `LAnim` and becomes a stacking context.
+  `l_transform_matrix` interpolates the two transform lists function by
+  function when they hold the same functions (`none` takes each
+  function's identity), else switches halfway; paint takes the sampled
+  opacity.
+- **Frames** (`au_layout_anim_tick`, called from `au_docview_animate`):
+  20 a second, on the document's clock from its first frame. Each frame
+  repaints the rectangle where the box was drawn and the one where it is
+  now. The page passes these rectangles to the window as they come
+  (`page_doc.c`); before 2026-11-17 anything invalidated during the
+  page's idle slice repainted the whole window, so every frame of an
+  animated GIF did.
+- `tests/forms/test_forms.c` (`test_css_animation`) checks a scale at
+  half its period, the repainted rectangle, and that `animation: none`
+  stops it.
+
 ## Tests
 
 - `tests/css/cases/*.txt` (one ctest per file, format in `test_css.c`).

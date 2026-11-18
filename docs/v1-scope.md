@@ -124,7 +124,10 @@ Keep code small and fast where that costs nothing.
   [`canvas.md`](canvas.md).)
 - CSS animations and transitions beyond jumping to the end state, 3D
   transforms, filters, blend modes. (Container queries were listed here
-  and have since been built: see [`css.md`](css.md).)
+  and have since been built: see [`css.md`](css.md). Infinite
+  `transform` and `opacity` animations, which spinners use, were built
+  on 2026-11-17 at the owner's request, so a page shows that it is
+  working: see [`css.md`](css.md), "Animations".)
 - Right-to-left and vertical text, complex-script shaping (Arabic,
   Indic).
 - HTTP/2, HTTP/3, TLS client certificates.
