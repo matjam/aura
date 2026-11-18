@@ -3072,13 +3072,16 @@ void au_dv_turn_end(AuDocView *dv)
     if (dv->in_key)
         return;
     if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan) {
-        /* A top-level document settles once the embedder's script slice
-         * is over, and repaints only what changed; a nested one
-         * repaints its box at once. */
-        if (dv->parent || !dv->cb.invalidate)
+        /* A document settles once the embedder's script slice is over
+         * and repaints only what changed. A nested one settles with its
+         * top document (au_docview_settle walks the frames): reCAPTCHA's
+         * badge repainted its whole box about 140 times a second. */
+        if (!dv->cb.invalidate) {
             invalidate_all(dv);
-        else
-            dv->settle = true;
+        } else {
+            for (AuDocView *p = dv; p; p = p->parent)
+                p->settle = true;
+        }
     }
 }
 
@@ -3109,8 +3112,12 @@ void au_docview_settle(AuDocView *dv)
     if (!dv->settle)
         return;
     dv->settle = false;
-    au_docview_update(dv);
-    au_dv_invalidate_damage(dv);
+    if (dv->doc) {
+        au_docview_update(dv);
+        au_dv_invalidate_damage(dv);
+    }
+    if (dv->nframes)
+        au_frames_settle(dv);
 }
 
 void au_dv_invalidate_all(AuDocView *dv)

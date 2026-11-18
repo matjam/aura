@@ -278,6 +278,9 @@ size_t au_frames_memory(AuDocView *dv);
 bool au_frames_run_scripts(AuDocView *dv, uint32_t budget_ms);
 uint32_t au_frames_scripts_due(AuDocView *dv);
 uint32_t au_frames_animate(AuDocView *dv, uint32_t now_ms);
+/* Settles the nested documents whose script changed them
+ * (au_docview_settle): each repaints only what changed. */
+void au_frames_settle(AuDocView *dv);
 bool au_frames_animating(const AuDocView *dv);
 void au_frames_settings_changed(AuDocView *dv);
 

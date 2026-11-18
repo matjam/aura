@@ -1906,6 +1906,15 @@ uint32_t au_frames_scripts_due(AuDocView *dv)
     return due;
 }
 
+void au_frames_settle(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nframes; i++) {
+        AuFrame *f = dv->frames[i];
+        if (f->dv && !f->dead)
+            au_docview_settle(f->dv);
+    }
+}
+
 uint32_t au_frames_animate(AuDocView *dv, uint32_t now_ms)
 {
     uint32_t next = UINT32_MAX;

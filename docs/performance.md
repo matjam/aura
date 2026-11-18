@@ -196,8 +196,14 @@ does.
 - A top-level document now updates once after the script slice and
   repaints only the boxes whose paint changed
   ([`layout.md`](layout.md), "Repainting after script").
-- Still open: the script heap is at its 64 MB limit, and one task takes
-  about 800 ms.
+- Still open: one task takes about 800 ms. (The heap was at the host's
+  64 MB limit because that limit was not doubled for 64-bit pointers; at
+  128 MB it holds 47 MB.)
+- Later the same day, at 1280 x 900, the idle page painted the whole
+  window about 70 times a second (366 million pixels in 5 s): the
+  reCAPTCHA badge frame repainted its box after every script turn, and
+  the window merged that with the rest. Nested documents now settle
+  with the top one; the same 5 s paint nothing.
 
 ## DOM changes: subtree rebuilds, 2026-11-16
 

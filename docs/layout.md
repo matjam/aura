@@ -243,12 +243,15 @@ by least growth when full):
   sticky, inside a scroller or a frame view mark the whole document.
 - A restyle that computes the same values adds nothing.
 
-A script turn on a top-level document (`au_dv_turn_end`) does not
-invalidate. It sets `settle`, and the embedder calls
-`au_docview_settle` after its script slice and after each mouse and key
-event (`settle` in `page_doc.c`); that updates once and invalidates the
-damage (`au_dv_invalidate_damage`). A nested document still
-invalidates its frame at once. The key path in `forms.c` takes the
+A script turn (`au_dv_turn_end`) does not invalidate. It sets `settle`
+on its document and every document above it, and the embedder calls
+`au_docview_settle` on the top document after its script slice and
+after each mouse and key event (`settle` in `page_doc.c`); that updates
+once and invalidates the damage (`au_dv_invalidate_damage`), then does
+the same for each nested document that is marked (`au_frames_settle`).
+Before 2026-11-17 a nested document invalidated its whole frame after
+each turn: reCAPTCHA's badge on Reddit repainted about 140 times a
+second while the page sat idle. The key path in `forms.c` takes the
 damage the same way.
 
 To check that repaints cover what changed, run `aura-host chrome ...
