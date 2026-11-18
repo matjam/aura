@@ -1152,6 +1152,7 @@ typedef struct JSProperty {
 
 #define JS_PROP_INITIAL_SIZE 2
 #define JS_PROP_INITIAL_HASH_SIZE 4 /* must be a power of two */
+#define JS_PROP_EXACT_MAX 32 /* hashed shapes up to this size grow by one */
 
 typedef struct JSShapeProperty {
     uint32_t hash_next : 26; /* 0 if last in list */
@@ -5987,7 +5988,15 @@ static no_inline int resize_properties(JSContext *ctx, JSShape **psh,
     intptr_t h;
 
     sh = *psh;
-    new_size = max_int(count, sh->prop_size * 3 / 2);
+    /* Every object that reaches a hashed shape keeps prop_size slots, so
+       while it is small it holds exactly what it needs: a slack slot there
+       is paid once per object, and Reddit's objects left about one slot
+       in four empty. Larger shapes (and an object's own unhashed one) grow
+       by half so that adding many properties stays linear. */
+    if (sh->is_hashed && count <= JS_PROP_EXACT_MAX)
+        new_size = count;
+    else
+        new_size = max_int(count, sh->prop_size * 3 / 2);
     /* Reallocate prop array first to avoid crash or size inconsistency
        in case of memory allocation failure */
     if (p) {

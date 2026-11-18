@@ -72,7 +72,9 @@ records where the code came from and how to update it.
   `/[\n ]$/` against long text tens of thousands of times),
   and `0017` function source text that can be packed while nothing
   reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`; functions
-  keep an offset into their text instead of a pointer).
+  keep an offset into their text instead of a pointer), and `0018` a
+  hashed shape of up to 32 properties grows by one slot instead of by
+  half, so objects sharing it keep no empty slots.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

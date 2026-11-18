@@ -86,6 +86,7 @@ Patches this document refers to:
 | 0015 | a global reference that reaches a proxy in the global object's prototype chain runs its `has` trap before `get`, as HasBinding does, so an unknown name still throws ReferenceError (`0015-global-reference-through-proxy`); the window's named properties object needs it |
 | 0016 | a regular expression that is a run of one-character matchers followed by `$` (no `m`, `y`, `u` or `v` flag) is tried only where a match can start, the end of the input less its length (`0016-regexp-end-anchored`); Reddit tests `/[\n ]$/` about 48,000 times on text of up to 10 KB while it loads, which took 2.6 s of 5.9 s of script on the host |
 | 0017 | function source text, which only `Function.prototype.toString` reads, can be packed while nothing reads it (`JS_SetSourcePackHooks`, `JS_PackSourceTexts`) and is unpacked when asked for (`0017-pack-source-text`); `runtime.c` deflates texts of 4 KB or more on the second 5-second pass after they were last read ([`memory.md`](memory.md), "Cold memory") |
+| 0018 | a hashed shape of up to 32 properties grows by one instead of by half, so the objects that share it keep no empty property slots (`0018-exact-small-shapes`; "How script memory is kept down" below) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -489,6 +490,14 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   collection.
 - **Parser buffers are trimmed** (patch 0009, `js_fd_trim`): 0.3 to
   0.9 MB of a compile's peak.
+- **Small shared shapes have no empty slots** (patch 0018). Every
+  object on a hashed shape keeps as many property slots as the shape
+  has room for, and a shape grew by half. A hashed shape of up to 32
+  properties now grows by one. On Reddit this cut property memory by
+  about 8% (19.0 to 18.2 bytes per property on the host, 2026-11-18).
+  Building small objects in a loop is about 2% slower. Starting new
+  objects at one slot instead of two saves another 6% of property
+  memory but costs another 5% of that loop's time, so it was left out.
 - `js_workers_memory` no longer counts a worker's script text after it
   is freed.
 
