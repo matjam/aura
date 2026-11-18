@@ -242,8 +242,10 @@ static void fill_focus_state(AuDocView *dv, AuElement *el, bool on, bool visible
 {
     au_element_set_state(el, AU_STATE_FOCUS, on);
     au_element_set_state(el, AU_STATE_FOCUS_VISIBLE, on && visible);
-    /* :focus-within on the ancestors */
-    for (AuElement *p = parent_el(el); p; p = parent_el(p))
+    /* :focus-within on the ancestors in the flat tree, as
+     * au_element_set_state sets it: a shadow host matches :focus-within
+     * (and :focus) for an element of its shadow tree */
+    for (AuElement *p = au_flat_parent_element(&el->node); p; p = au_flat_parent_element(&p->node))
         if (dv->resolver)
             au_css_invalidate(dv->resolver, p, AU_CSS_CHANGE_STATE, 0);
     state_changed(dv, el);

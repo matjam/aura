@@ -114,6 +114,11 @@ struct AuDocView {
     uint32_t nslots, slots_cap;
     ConstructedSheet *csheets;
     uint32_t ncsheets, csheets_cap;
+    /* Sheets script replaced or let go of that the resolver may still
+     * hold: freed once update_style has handed it the current lists
+     * (retire_sheet), so that it keeps its index meanwhile. */
+    AuCssSheet **retired;
+    uint32_t nretired, retired_cap;
     AdoptedSheets *adopted;
     uint32_t nadopted, adopted_cap;
     /* While every sheet change since the last rebuild_resolver was in a

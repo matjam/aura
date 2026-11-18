@@ -149,7 +149,6 @@ typedef struct {
 } AtomMap;
 
 enum { KEY_ID, KEY_CLASS, KEY_TAG, KEY_ATTR, KEY_UNIVERSAL };
-
 typedef struct {
     uint8_t kind; /* KEY_* */
     AuAtom atom;
@@ -209,6 +208,10 @@ struct AuCssResolver {
     bool any_scoped;  /* some sheet has a shadow root */
     bool scoping;     /* the index was built with scopes: filter by them */
     uint16_t *walked_scope; /* per walked sheet */
+    /* Per scope id of the index: its sheets have ::slotted() or ::part()
+     * rules, which reach past its shadow tree (sheets_changed_in). */
+    uint8_t *scope_out;
+    uint32_t scope_out_n;
     uint32_t walked_scope_cap;
     uint16_t walk_scope;    /* during index_build */
     ScopeKey *scope_keys;   /* shadow root -> scope id, sorted by key */
@@ -1270,12 +1273,18 @@ static void index_build(AuCssResolver *r, bool quirks)
         r->entries[i].layer = r->layers[r->entries[i].origin].n[r->entries[i].layer].rank;
     IndexKey *keys = NULL;
     uint32_t nkeys = 0, kcap = 0;
+    au_free(r->scope_out);
+    r->scope_out_n = r->nbuilt_at;
+    r->scope_out = au_calloc(r->scope_out_n ? r->scope_out_n : 1);
     for (uint32_t i = 0; i < r->nentries; i++) {
         uint8_t pe = r->entries[i].pseudo;
         if (pe == AU_CSS_PSEUDO_SLOTTED || pe == AU_CSS_PSEUDO_PART) {
             /* matched for the slotted or part element, against another
              * element (the slot, the host): not found by the keys */
             *CSS_PUSH(r->shadow_entries, r->nshadow_entries, r->shadow_entries_cap) = i;
+            uint16_t sc = r->walked_scope[r->entries[i].sheet];
+            if (sc < r->scope_out_n && r->scope_out)
+                r->scope_out[sc] = 1;
             if (pe == AU_CSS_PSEUDO_SLOTTED)
                 r->slotted_rules = true;
             else
@@ -1422,6 +1431,190 @@ static bool index_reuse(AuCssResolver *r)
     return ok;
 }
 
+/* ---- Sheets added to the document ----
+ * A page that inserts a <style> as a component loads (Reddit inserted
+ * about 40 while it loaded and scrolled) would restyle the whole
+ * document each time. As Blink does for an added rule set, a sheet whose
+ * style rules all have a keyed subject (an id, class, tag or attribute)
+ * and that holds nothing else that reaches other rules restyles only the
+ * elements with one of those keys. */
+
+#define ADDED_KEYS_MAX 65536
+
+static void mark_ancestors(AuElement *el);
+
+/* Appends the subject keys of sheet's style rules, or returns false if
+ * a rule or the sheet could reach elements without them. */
+static bool added_sheet_keys(const AuCssResolver *r, const AuCssSheet *sheet, IndexKey **keys, uint32_t *n,
+                             uint32_t *cap)
+{
+    if (sheet->nimports || sheet->nprops || sheet->nkeyframes || sheet->nfaces)
+        return false;
+    const CssRule *stack[64];
+    uint32_t sn = 0;
+    if (sheet->rules)
+        stack[sn++] = sheet->rules;
+    while (sn) {
+        const CssRule *ru = stack[--sn];
+        if (ru->next) {
+            if (sn == 64)
+                return false;
+            stack[sn++] = ru->next;
+        }
+        bool descend = false;
+        switch (ru->type) {
+        case RULE_STYLE:
+        case RULE_NESTED_DECLS: {
+            const AuSelList *sel = ru->u.sel;
+            for (uint32_t i = 0; sel && i < sel->n; i++) {
+                const AuSelector *s = &sel->sel[i];
+                if (s->flags & SELF_NEVER)
+                    continue;
+                if (s->pseudo == AU_CSS_PSEUDO_SLOTTED || s->pseudo == AU_CSS_PSEUDO_PART)
+                    return false;
+                if (!subject_keys(s, r->quirks, 0, keys, n, cap, 0) || *n > ADDED_KEYS_MAX)
+                    return false;
+            }
+            descend = ru->type == RULE_STYLE;
+            break;
+        }
+        case RULE_MEDIA:
+        case RULE_SUPPORTS:
+        case RULE_CONTAINER:
+            descend = true; /* whatever the condition: its rules may apply later */
+            break;
+        case RULE_LAYER_BLOCK:
+        case RULE_LAYER_STMT: /* a new layer name may reorder the others */
+        case RULE_IMPORT:
+        case RULE_FONT_FACE:
+        case RULE_KEYFRAMES:
+            return false;
+        default:
+            break; /* @namespace, @page, and what the index does not apply */
+        }
+        const CssRule *kids = descend ? css_rule_children(sheet, ru) : NULL;
+        if (kids) {
+            if (sn == 64)
+                return false;
+            stack[sn++] = kids;
+        }
+    }
+    return true;
+}
+
+static bool added_key_has(const IndexKey *keys, uint32_t n, uint8_t kind, AuAtom atom)
+{
+    uint32_t lo = 0, hi = n;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        const IndexKey *k = &keys[mid];
+        if (k->kind == kind && k->atom == atom)
+            return true;
+        if (k->kind < kind || (k->kind == kind && k->atom < atom))
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return false;
+}
+
+static bool added_keys_match(const AuCssResolver *r, const IndexKey *keys, uint32_t n, const AuElement *el)
+{
+    bool q = r->quirks;
+    if (el->id && added_key_has(keys, n, KEY_ID, q ? css_atom_lower(el->id) : el->id))
+        return true;
+    for (uint32_t i = 0; i < el->nclasses; i++)
+        if (added_key_has(keys, n, KEY_CLASS, q ? css_atom_lower(el->classes[i]) : el->classes[i]))
+            return true;
+    if (added_key_has(keys, n, KEY_TAG, el->ns == AU_NS_HTML ? el->tag : css_atom_lower(el->tag)))
+        return true;
+    for (uint32_t i = 0; i < el->nattrs; i++)
+        if (added_key_has(keys, n, KEY_ATTR, css_atom_lower(el->attrs[i].name)))
+            return true;
+    return false;
+}
+
+/* Whether a shadow root's sheet list is the one the index was built
+ * for it, or its host's flat subtree is marked for restyle already
+ * (au_css_resolver_sheets_changed_in). */
+static bool scope_list_same(const AuCssResolver *r, const ScopedSheet *v, uint32_t a, uint32_t b)
+{
+    const AuNode *root = v[a].key;
+    const AuElement *host = au_is_shadow_root(root) ? ((const AuShadowRoot *)root)->host : NULL;
+    if (host && (host->state & AU_STATE_STYLE_DIRTY))
+        return true;
+    uint16_t id = scope_of_root(r, root);
+    if (!id || id == SCOPE_NONE || id >= r->nbuilt_at)
+        return false;
+    uint32_t s0 = r->built_at[id - 1], s1 = r->built_at[id];
+    if (s1 - s0 != b - a)
+        return false;
+    for (uint32_t j = 0; j < b - a; j++)
+        if (!built_same(&r->built[s0 + j], r->sheets[v[a + j].index]))
+            return false;
+    return true;
+}
+
+/* After au_css_resolver_sheets_changed: when the document's sheets are
+ * the ones the index was built from with sheets inserted among them,
+ * every shadow root keeps its list, and each inserted sheet passes
+ * added_sheet_keys, marks the elements of the document tree that have
+ * one of the inserted sheets' keys and returns true: the next restyle
+ * styles those (and the subtrees whose inherited values change). */
+static bool sheets_added_only(AuCssResolver *r, AuDocument *doc)
+{
+    AuElement *de = doc ? au_document_element(doc) : NULL;    if (!de || !r->built_valid || !r->nbuilt_at || !r->styled_once || r->full_restyle ||
+        (doc->quirks == AU_QUIRKS_FULL) != r->quirks)
+        return false;
+    uint32_t k = 0, ndoc = r->built_at[0], nscoped = 0;
+    IndexKey *keys = NULL;
+    uint32_t nkeys = 0, kcap = 0;
+    bool ok = true;
+    for (uint32_t i = 0; i < r->nsheets && ok; i++) {
+        if (r->any_scoped && r->sheet_scope[i]) {
+            nscoped++;
+            continue;
+        }
+        if (k < ndoc && built_same(&r->built[k], r->sheets[i]))
+            k++;
+        else
+            ok = added_sheet_keys(r, r->sheets[i], &keys, &nkeys, &kcap);
+    }
+    ok = ok && k == ndoc;
+    if (ok && nscoped) {
+        ScopedSheet *v = au_alloc(nscoped * sizeof *v);
+        uint32_t n = 0;
+        for (uint32_t i = 0; i < r->nsheets; i++)
+            if (r->sheet_scope[i]) {
+                v[n].key = r->sheet_scope[i];
+                v[n].index = i;
+                n++;
+            }
+        qsort(v, n, sizeof *v, scoped_cmp);
+        for (uint32_t a = 0; a < n && ok;) {
+            uint32_t b = a;
+            while (b < n && v[b].key == v[a].key)
+                b++;
+            ok = scope_list_same(r, v, a, b);
+            a = b;
+        }        au_free(v);
+    }
+    if (ok && nkeys) {
+        if (nkeys > 1)
+            qsort(keys, nkeys, sizeof *keys, key_cmp);
+        for (AuNode *c = &de->node; c; c = au_node_next(c, &de->node))
+            if (c->type == AU_NODE_ELEMENT && added_keys_match(r, keys, nkeys, (AuElement *)c)) {
+                AuElement *el = (AuElement *)c;
+                el->state |= AU_STATE_STYLE_SELF_DIRTY;
+                mark_ancestors(el);
+            }
+    }
+    au_free(keys);
+    if (ok)
+        r->sheets_full = false; /* the index is built again (prepare) */
+    return ok;
+}
+
 /* ---- Resolver lifetime ---- */
 
 /* The user agent sheets are parsed once and shared by every resolver
@@ -1491,6 +1684,7 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->entries);
     au_free(r->walked);
     au_free(r->walked_scope);
+    au_free(r->scope_out);
     au_free(r->scope_keys);
     au_free(r->built);
     au_free(r->built_at);
@@ -1662,6 +1856,55 @@ void au_css_resolver_sheets_changed(AuCssResolver *r)
 }
 
 static void mark_ancestors(AuElement *el);
+static AuElement *flat_parent_element(const AuElement *el);
+
+/* Whether a sheet has ::slotted() or ::part() rules. */
+static bool sheet_reaches_out(const AuCssSheet *sheet)
+{
+    const CssRule *stack[64];
+    uint32_t sn = 0;
+    if (sheet->nimports)
+        return true; /* not looked into */
+    if (sheet->rules)
+        stack[sn++] = sheet->rules;
+    while (sn) {
+        const CssRule *ru = stack[--sn];
+        if (ru->next) {
+            if (sn == 64)
+                return true;
+            stack[sn++] = ru->next;
+        }
+        if ((ru->type == RULE_STYLE || ru->type == RULE_NESTED_DECLS) && ru->u.sel)
+            for (uint32_t i = 0; i < ru->u.sel->n; i++)
+                if (ru->u.sel->sel[i].pseudo == AU_CSS_PSEUDO_SLOTTED ||
+                    ru->u.sel->sel[i].pseudo == AU_CSS_PSEUDO_PART)
+                    return true;
+        const CssRule *kids = ru->type == RULE_STYLE || ru->type == RULE_MEDIA || ru->type == RULE_SUPPORTS ||
+                                      ru->type == RULE_CONTAINER || ru->type == RULE_LAYER_BLOCK
+                                  ? css_rule_children(sheet, ru)
+                                  : NULL;
+        if (kids) {
+            if (sn == 64)
+                return true;
+            stack[sn++] = kids;
+        }
+    }
+    return false;
+}
+
+/* Whether the rules a shadow root had (by the index) or has now reach
+ * past its tree. */
+static bool scope_reaches_out(const AuCssResolver *r, const AuNode *root)
+{    if (!r->built_valid)
+        return true;
+    uint16_t id = scope_of_root(r, root);
+    if (id != SCOPE_NONE && (id >= r->scope_out_n || !r->scope_out || r->scope_out[id]))
+        return true;
+    for (uint32_t i = 0; i < r->nsheets; i++)
+        if (r->any_scoped && r->sheet_scope[i] == root && sheet_reaches_out(r->sheets[i]))
+            return true;
+    return false;
+}
 
 void au_css_resolver_sheets_changed_in(AuCssResolver *r, AuNode *const *roots, size_t n)
 {
@@ -1672,12 +1915,37 @@ void au_css_resolver_sheets_changed_in(AuCssResolver *r, AuNode *const *roots, s
         if (!roots[i] || !au_is_shadow_root(roots[i]) || !((const AuShadowRoot *)roots[i])->host)
             return; /* the document's sheets: restyle everything */
     r->sheets_full = false;
-    /* the rules of these trees reach their shadow trees, their hosts and
-     * what is slotted into them: the hosts' flat subtrees */
     for (size_t i = 0; i < n; i++) {
         AuElement *h = ((const AuShadowRoot *)roots[i])->host;
-        h->state |= AU_STATE_STYLE_DIRTY;
+        if (scope_reaches_out(r, roots[i])) {
+            /* ::slotted() and ::part() rules reach what is slotted into
+             * the tree and the parts of the trees in it: the host's flat
+             * subtree */
+            h->state |= AU_STATE_STYLE_DIRTY;
+            mark_ancestors(h);
+            continue;
+        }
+        /* The rules of the tree reach its elements and its host (:host);
+         * what is slotted follows its slot's style when that changes. A
+         * whole flat subtree would be the whole page for a host that
+         * slots the page (Reddit's shreddit-app). */
+        h->state |= AU_STATE_STYLE_SELF_DIRTY;
         mark_ancestors(h);
+        const AuNode *root = roots[i];
+        h->state |= AU_STATE_SUBTREE_DIRTY;
+        for (AuNode *c = root->first_child; c; c = au_node_next(c, root)) {
+            if (c->type != AU_NODE_ELEMENT)
+                continue;
+            ((AuElement *)c)->state |= AU_STATE_STYLE_SELF_DIRTY;
+            /* up the flat tree (an element of a nested host's light tree
+             * sits under that host's slot), until a marked ancestor:
+             * mark_ancestors marked the rest of its chain */
+            for (AuElement *p = flat_parent_element((AuElement *)c); p; p = flat_parent_element(p)) {
+                if (p->state & AU_STATE_SUBTREE_DIRTY)
+                    break;
+                p->state |= AU_STATE_SUBTREE_DIRTY;
+            }
+        }
     }
 }
 
@@ -2629,6 +2897,8 @@ static void apply_wide(Cascade *cs, uint16_t prop, uint16_t kw, uint64_t key)
     bool inherited = (css_props[prop].flags & F_INH) != 0;
     switch (kw) {
     case AU_K_inherit:
+        if (!inherited)
+            c->style->flags |= AU_STYLE_F_EXPLICIT_INHERIT;
         css_compute_inherit(c, prop);
         return;
     case AU_K_initial:
@@ -3659,13 +3929,29 @@ static void style_pass(AuCssResolver *r, AuDocument *doc, bool only_dirty)
             /* Equal values keep the old object, so that what compares
              * style pointers (layout) sees no change. A marked element
              * that changed takes its subtree along: descendants inherit. */
-            if (el->style && style_same(s, au_element_style(el))) {
+            const AuStyle *was = au_element_style(el);
+            if (was && style_same(s, was)) {
                 au_style_release(s);
             } else {
-                if (el->style)
-                    adopt_groups(s, au_element_style(el));
+                if (was)
+                    adopt_groups(s, was);
+                /* Descendants read the inherited groups, the display
+                 * (blockification) and the containers (rare) above them.
+                 * A change to the other groups reaches only a child that
+                 * takes one of their values with inherit. */
+                bool reaches = !was || s->inh != was->inh || s->inhr != was->inhr || s->box != was->box ||
+                               s->rare != was->rare;
+                if (!reaches && !forced)
+                    for (AuNode *c = flat ? au_flat_first_child(n) : n->first_child; c;
+                         c = flat ? au_flat_next_sibling(c) : c->next)
+                        if (c->type == AU_NODE_ELEMENT && ((AuElement *)c)->style &&
+                            (au_element_style((AuElement *)c)->flags & AU_STYLE_F_EXPLICIT_INHERIT)) {
+                            ((AuElement *)c)->state |= AU_STATE_STYLE_SELF_DIRTY;
+                            el->state |= AU_STATE_SUBTREE_DIRTY;
+                        }
                 store_style(el, s);
-                forced = true;
+                if (reaches)
+                    forced = true;
             }
         }
         if (!pe)
@@ -3745,7 +4031,7 @@ static void mark_viewport_styles(AuDocument *doc)
 
 void au_css_restyle(AuCssResolver *r, AuDocument *doc)
 {
-    if (r->sheets_full)
+    if (r->sheets_full && !sheets_added_only(r, doc))
         r->full_restyle = true;
     if (r->index_dirty && r->styled_once && !r->full_restyle) {
         /* only shadow trees' sheets changed (sheets_changed_in marked
@@ -3761,8 +4047,7 @@ void au_css_restyle(AuCssResolver *r, AuDocument *doc)
     r->viewport_pending = false;
     if (r->styled_once && !r->full_restyle && !r->index_dirty)
         pending_flush(r, doc);
-    pending_drop(r);
-    if (!r->styled_once || r->full_restyle || r->index_dirty) {
+    pending_drop(r);    if (!r->styled_once || r->full_restyle || r->index_dirty) {
         r->viewport_styles = false; /* set again by the styles this pass computes */
         style_pass(r, doc, false);
     } else {
@@ -3874,6 +4159,8 @@ static void dep_fire(AuCssResolver *r, AuElement *el, const StateDep *d)
  * the whole document. */
 static bool index_current(AuCssResolver *r, const AuDocument *doc)
 {
+    if (r->index_dirty && r->sheets_full && doc && !sheets_added_only(r, (AuDocument *)doc))
+        r->full_restyle = true;
     if (r->index_dirty && r->styled_once && !r->full_restyle && !r->sheets_full && doc) {
         AuElement *de = au_document_element(doc);
         if (de)

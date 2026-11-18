@@ -369,6 +369,11 @@ static void style_name_changed(AuElement *el, AuAtom a)
     AuDocument *d = el->node.doc;
     if (!d || !a || d->style_names_n > AU_DOC_STYLE_NAMES)
         return;
+    /* An element outside the document has no style to change: inserting
+     * it restyles its subtree. Script that builds a subtree before it
+     * inserts it would otherwise fill the list. */
+    if (!au_node_is_connected(&el->node))
+        return;
     for (uint8_t i = 0; i < d->style_names_n; i++)
         if (d->style_names[i] == a)
             return;

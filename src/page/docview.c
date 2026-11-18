@@ -274,6 +274,41 @@ static void sheets_changed(AuDocView *dv, AuNode *scope)
     dv->dirty_scopes[dv->ndirty_scopes++] = au_node_ref(scope);
 }
 
+/* Frees a sheet the resolver may hold: at once when it holds none, else
+ * after update_style has handed it the current lists (free_retired). A
+ * replaced sheet would otherwise make the resolver let go of every
+ * sheet, and each change script made before the next style pass would
+ * restyle the whole document (Reddit replaced adopted sheets' text about
+ * 40 times while it loaded). */
+static void retire_sheet(AuDocView *dv, AuCssSheet *s)
+{
+    if (!s)
+        return;
+    if (!dv->resolver) {
+        au_css_sheet_free(s);
+        return;
+    }
+    if (dv->nretired == dv->retired_cap) {
+        uint32_t cap = dv->retired_cap ? dv->retired_cap * 2 : 8;
+        AuCssSheet **p = au_realloc(dv->retired, cap * sizeof *p);
+        if (!p) {
+            au_css_resolver_detach_sheets(dv->resolver);
+            au_css_sheet_free(s);
+            return;
+        }
+        dv->retired = p;
+        dv->retired_cap = cap;
+    }
+    dv->retired[dv->nretired++] = s;
+}
+
+static void free_retired(AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nretired; i++)
+        au_css_sheet_free(dv->retired[i]);
+    dv->nretired = 0;
+}
+
 static void free_constructed(AuDocView *dv)
 {
     for (uint32_t i = 0; i < dv->ncsheets; i++) {
@@ -283,6 +318,10 @@ static void free_constructed(AuDocView *dv)
     au_free(dv->csheets);
     dv->csheets = NULL;
     dv->ncsheets = dv->csheets_cap = 0;
+    free_retired(dv);
+    au_free(dv->retired);
+    dv->retired = NULL;
+    dv->retired_cap = 0;
     for (uint32_t i = 0; i < dv->nadopted; i++) {
         au_node_unref(dv->adopted[i].scope);
         au_free(dv->adopted[i].ids);
@@ -1935,8 +1974,12 @@ static void rebuild_resolver(AuDocView *dv)
         dv->restyle_needed = true;
         dv->struct_changed = true;
     } else {
+        /* The resolver restyles only what sheets inserted into the
+         * document can reach when that is all that changed
+         * (sheets_added_only in cascade.c), else everything. */
         au_css_resolver_sheets_changed(dv->resolver);
-        dv->style_all = true;
+        dv->restyle_needed = true;
+        dv->struct_changed = true;
     }
     drop_dirty_scopes(dv);
     dv->sheets_scoped_only = false;
@@ -2076,6 +2119,7 @@ static bool update_style(AuDocView *dv)
         rebuild_resolver(dv);
         dv->sheets_dirty = false;
     }
+    free_retired(dv); /* the resolver holds the current lists */
     if (dv->webfonts && au_webfonts_take_changed(dv->webfonts)) {
         /* A web font arrived and is used (webfont.h, font-display): lay
          * out again with it. */
@@ -3023,12 +3067,9 @@ void au_dv_sheet_set_text(AuDocView *dv, AuElement *el, const char *text, size_t
     SheetSrc *s = sheet_of(dv, el);
     if (!s || (!s->text && !s->sheet && !s->om_sheet))
         return;
-    /* The resolver borrows the parsed sheets: it lets go of them before
-     * one is freed, and update_style hands them back (sheets_dirty). */
-    if (dv->resolver)
-        au_css_resolver_detach_sheets(dv->resolver);
-    if (s->om_sheet)
-        au_css_sheet_free(s->om_sheet);
+    /* The resolver borrows the parsed sheets: the old one is freed after
+     * update_style has handed it the new one (retire_sheet). */
+    retire_sheet(dv, s->om_sheet);
     s->om_sheet = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, s->url, s->media); /* keeps a copy of the text */
     dv->sheets_packed = false;
     sheets_changed(dv, tree_scope(el));
@@ -3109,10 +3150,6 @@ void au_dv_sheet_construct(AuDocView *dv, uint32_t id, const char *text, size_t 
         changed = true;
     }
     if (text || (media && c->sheet)) {
-        /* the resolver lets go of the sheets before one it holds is
-         * freed; update_style hands them back */
-        if (dv->resolver && is_adopted(dv, id))
-            au_css_resolver_detach_sheets(dv->resolver);
         AuBuf old;
         au_buf_init(&old);
         if (!text && c->sheet) {
@@ -3122,7 +3159,9 @@ void au_dv_sheet_construct(AuDocView *dv, uint32_t id, const char *text, size_t 
         }
         AuCssSheet *ns = au_css_sheet_parse(text, len, AU_CSS_ORIGIN_AUTHOR, dv->base, c->media);
         au_buf_free(&old);
-        au_css_sheet_free(c->sheet);
+        /* the resolver may hold the old sheet until update_style hands
+         * it the new one */
+        retire_sheet(dv, c->sheet);
         c->sheet = ns;
         changed = true;
     }
@@ -3139,8 +3178,9 @@ void au_dv_sheet_destroy(AuDocView *dv, uint32_t id)
      * only); the adopted lists name it */
     if (is_adopted(dv, id))
         return;
-    /* the resolver does not hold a sheet nothing adopted */
-    au_css_sheet_free(c->sheet);
+    /* the resolver may still hold it if an adopted list let go of it
+     * since update_style last handed the resolver the lists */
+    retire_sheet(dv, c->sheet);
     au_free(c->media);
     uint32_t i = (uint32_t)(c - dv->csheets);
     memmove(c, c + 1, (dv->ncsheets - i - 1) * sizeof *c);
@@ -3168,11 +3208,11 @@ void au_dv_sheets_adopt(AuDocView *dv, AuNode *scope, const uint32_t *ids, size_
     } else if (a->n == n && (!n || !memcmp(a->ids, ids, n * sizeof *ids))) {
         return; /* the same list again */
     }
-    /* a sheet that leaves the list may be freed before update_style hands
-     * the sheets back: the resolver lets go of them now */
-    if (dv->resolver)
-        au_css_resolver_detach_sheets(dv->resolver);
-    au_free(a->ids);
+    /* The resolver keeps the old lists until update_style hands it the
+     * new ones, so that what script changes meanwhile is invalidated
+     * from its index instead of restyling everything. A sheet that
+     * leaves the list is freed only after the resolver lets go of it
+     * (au_dv_sheet_destroy, au_dv_sheet_construct). */    au_free(a->ids);
     a->ids = NULL;
     a->n = 0;
     if (n) {
@@ -3180,8 +3220,7 @@ void au_dv_sheets_adopt(AuDocView *dv, AuNode *scope, const uint32_t *ids, size_
         memcpy(a->ids, ids, n * sizeof *ids);
         a->n = (uint32_t)n;
     }
-    sheets_changed(dv, scope->type == AU_NODE_DOCUMENT ? NULL : scope);
-}
+    sheets_changed(dv, scope->type == AU_NODE_DOCUMENT ? NULL : scope);}
 
 void au_dv_parsed_more(AuDocView *dv)
 {

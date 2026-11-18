@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>A shadow host matches :focus-within for its shadow tree's focus</title>
+<script src="../harness.js"></script>
+<style>
+x-post { display: block; }
+x-post:focus-within { color: rgb(1, 2, 3); }
+</style>
+</head>
+<body>
+<x-post id="p"></x-post>
+<script>
+const p = document.getElementById('p');
+const root = p.attachShadow({mode: 'open'});
+root.innerHTML = '<style>:host { background: rgb(255, 255, 255); } :host(:focus-within) { background: rgb(246, 248, 249); }</style><input id="i">';
+document.body.offsetHeight;
+test('focus in the shadow tree restyles the host', () => {
+    /* Reddit's posts: the host kept its old style until the next whole
+     * restyle, since the invalidation walked node parents only */
+    root.getElementById('i').focus();
+    assert.ok(p.matches(':focus-within'));
+    assert.equal(getComputedStyle(p).backgroundColor, 'rgb(246, 248, 249)');
+    assert.equal(getComputedStyle(p).color, 'rgb(1, 2, 3)');
+});
+test('blur restyles it back', () => {
+    root.getElementById('i').blur();
+    assert.equal(getComputedStyle(p).backgroundColor, 'rgb(255, 255, 255)');
+    assert.equal(getComputedStyle(p).color, 'rgb(0, 0, 0)');
+});
+</script>
+</body>
+</html>

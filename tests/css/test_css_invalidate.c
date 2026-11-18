@@ -419,9 +419,9 @@ static void test_counts(void)
     au_css_move_state(r, NULL, l1, AU_STATE_HOVER);
     au_css_restyle(r, doc);
     /* the link and its paragraph, the ancestors a :hover rule can match;
-     * p changes, so its other link is restyled too */
+     * p's background changes, which its other link does not inherit */
     uint32_t c = css_resolver_take_computed(r);
-    CHECK(c == 3);
+    CHECK(c == 2);
     CHECK(l1->state & AU_STATE_HOVER);
     CHECK(parent_of(l1)->state & AU_STATE_HOVER);
     au_css_move_state(r, l1, l2, AU_STATE_HOVER);
@@ -1044,6 +1044,155 @@ static int bench(int argc, char **argv)
     return failures ? 1 : 0;
 }
 
+/* After a targeted restyle: every computed value equals a whole
+ * restyle's. */
+static bool same_as_whole(AuCssResolver *r, AuDocument *doc)
+{
+    AuBuf a, b;
+    au_buf_init(&a);
+    au_buf_init(&b);
+    dump_doc(doc, &a);
+    au_css_style_document(r, doc);
+    dump_doc(doc, &b);
+    bool same = a.len == b.len && memcmp(a.data, b.data, a.len) == 0;
+    au_buf_free(&a);
+    au_buf_free(&b);
+    return same;
+}
+
+static AuCssSheet *sheet(const char *css)
+{
+    return au_css_sheet_parse(css, strlen(css), AU_CSS_ORIGIN_AUTHOR, "http://x/", NULL);
+}
+
+/* A sheet inserted into the document restyles only the elements its
+ * rules are keyed on, and what inherits from them (Reddit's components
+ * insert <style> elements as they load). */
+static void test_sheet_added(void)
+{
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_puts(&html, "<!doctype html><body><div class=p><span>a</span><span>b</span></div>");
+    for (int i = 0; i < 200; i++)
+        au_buf_puts(&html, "<div class=row><i>x</i></div>");
+    au_buf_puts(&html, "<p id=last class=q>z</p></body>");
+    AuDocument *doc = au_html_parse(html.data, html.len, NULL);
+    au_buf_free(&html);
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet(".row { margin: 1px } .p > span + span { margin-left: inherit }"));
+    au_css_style_document(r, doc);
+    css_resolver_take_computed(r);
+
+    /* a value that is not inherited: .p, and the span that takes it with
+     * inherit (the other span keeps its style) */
+    au_css_resolver_add_sheet(r, sheet(".p { margin-left: 7px }"));
+    au_css_restyle(r, doc);
+    uint32_t c0 = css_resolver_take_computed(r);
+    CHECK(c0 == 2);
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* a keyed rule: #last only */
+    au_css_resolver_add_sheet(r, sheet("#last { margin-left: 3px } .nothing { color: red }"));
+    au_css_restyle(r, doc);
+    uint32_t c = css_resolver_take_computed(r);
+    CHECK(c >= 1 && c <= 3);
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* an inherited value: .p and the spans under it */
+    au_css_resolver_add_sheet(r, sheet(".p { color: rgb(1, 2, 3) }"));
+    au_css_restyle(r, doc);
+    c = css_resolver_take_computed(r);
+    CHECK(c >= 3 && c <= 6);
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* a combinator: the subjects (.q) are found by their key */
+    au_css_resolver_add_sheet(r, sheet("body > .q { padding-top: 2px } @media (min-width: 1px) { i.none { color: red } }"));
+    au_css_restyle(r, doc);
+    c = css_resolver_take_computed(r);
+    CHECK(c <= 3);
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* a rule without a key, @keyframes and @layer restyle everything */
+    static const char *const whole[] = {"* { outline-width: 1px }", "@keyframes k { to { color: red } }",
+                                        "@layer a { .q { margin: 0 } }"};
+    for (int i = 0; i < 3; i++) {
+        au_css_resolver_add_sheet(r, sheet(whole[i]));
+        au_css_restyle(r, doc);
+        c = css_resolver_take_computed(r);
+        CHECK(c > 400);
+        CHECK(same_as_whole(r, doc));
+        css_resolver_take_computed(r);
+    }
+    au_css_resolver_free(r);
+    au_node_unref(&doc->node);
+}
+
+/* A shadow root's sheets changed: its tree and host restyle, not the
+ * light tree slotted into it (Reddit's shreddit-app slots the page). */
+static void test_scoped_sheet_changed(void)
+{
+    AuBuf html;
+    au_buf_init(&html);
+    au_buf_puts(&html, "<!doctype html><body><x-app id=h>");
+    for (int i = 0; i < 200; i++)
+        au_buf_puts(&html, "<div class=row><i>x</i></div>");
+    au_buf_puts(&html, "</x-app></body>");
+    AuDocument *doc = au_html_parse(html.data, html.len, NULL);
+    au_buf_free(&html);
+    AuElement *h = NULL;
+    uint32_t n;
+    AuElement **el = elements(doc, &n);
+    for (uint32_t i = 0; i < n; i++)
+        if (el[i]->id == au_atom_cstr("h"))
+            h = el[i];
+    au_free(el);
+    CHECK(h != NULL);
+    if (!h)
+        return;
+    AuShadowRoot *sr = au_element_attach_shadow(h, AU_SHADOW_OPEN);
+    AuNode *nav = au_element_new(doc, au_atom_cstr("nav"), AU_NS_HTML);
+    au_node_append(&sr->node, nav);
+    au_node_append(nav, au_element_new(doc, au_atom_cstr("b"), AU_NS_HTML));
+    au_node_append(&sr->node, au_element_new(doc, AU_ATOM_slot, AU_NS_HTML));
+    AuCssResolver *r = au_css_resolver_new();
+    au_css_resolver_add_sheet(r, sheet(".row { margin: 1px }"));
+    au_css_resolver_add_scoped_sheet(r, sheet("nav { padding: 1px }"), &sr->node);
+    au_css_style_document(r, doc);
+    css_resolver_take_computed(r);
+
+    AuNode *roots[1] = {&sr->node};
+    au_css_resolver_add_scoped_sheet(r, sheet(":host { margin: 2px } nav b { margin: 3px }"), &sr->node);
+    au_css_resolver_sheets_changed_in(r, roots, 1);
+    au_css_restyle(r, doc);
+    uint32_t c = css_resolver_take_computed(r);
+    if (!(c >= 4 && c <= 8))
+        fprintf(stderr, "scoped change styled %u\n", (unsigned)c);
+    CHECK(c >= 4 && c <= 8); /* the host, nav, b, slot */
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* an inherited value on the host reaches the slotted rows */
+    au_css_resolver_add_scoped_sheet(r, sheet(":host { color: rgb(1, 2, 3) }"), &sr->node);
+    au_css_resolver_sheets_changed_in(r, roots, 1);
+    au_css_restyle(r, doc);
+    CHECK(same_as_whole(r, doc));
+    css_resolver_take_computed(r);
+
+    /* ::slotted() rules reach the light tree: the host's flat subtree */
+    au_css_resolver_add_scoped_sheet(r, sheet("::slotted(.row) { padding-left: 1px }"), &sr->node);
+    au_css_resolver_sheets_changed_in(r, roots, 1);
+    au_css_restyle(r, doc);
+    c = css_resolver_take_computed(r);
+    CHECK(c > 200);
+    CHECK(same_as_whole(r, doc));
+    au_css_resolver_free(r);
+    au_node_unref(&doc->node);
+}
+
 int main(int argc, char **argv)
 {
     init_props();
@@ -1060,6 +1209,8 @@ int main(int argc, char **argv)
     run_page("all", sheet_plain, sheet_has_state, NULL);
     run_page("all-has", sheet_has_plain, sheet_has_state, NULL);
     test_counts();
+    test_sheet_added();
+    test_scoped_sheet_changed();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

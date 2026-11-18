@@ -93,8 +93,9 @@ struct AuDocument {
     /* For src/css: the class names and ids that were added to or removed
      * from any element since the last style pass, which clears the list.
      * style_names_n above AU_DOC_STYLE_NAMES means more changed than fit:
-     * which ones is then unknown. */
-    AuAtom style_names[24];
+     * which ones is then unknown (Reddit changed 30 to 90 names between
+     * two passes, and 24 sent each of those to a whole restyle). */
+    AuAtom style_names[96];
     uint8_t style_names_n;
     /* An element of this document has had the inert attribute: until
      * then au_node_inert looks only for a modal dialog. */
@@ -115,7 +116,7 @@ struct AuDocument {
     struct AuManualSlot *manual;
     uint32_t nmanual, manual_cap;
 };
-#define AU_DOC_STYLE_NAMES 24
+#define AU_DOC_STYLE_NAMES 96
 
 /* ---- Casts. The caller checks node->type first. ---- */
 static inline AuElement *au_as_element(AuNode *n) { return (AuElement *)n; }

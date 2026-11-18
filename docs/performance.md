@@ -201,7 +201,36 @@ page's script depends on network timing.
   force a layout.
 - Still open: two script tasks of about 450 and 850 ms, and about ten
   full restyles a load, each for a `<style>` or `<link>` the page adds
-  to the document.
+  to the document (since targeted: "Restyles on Reddit" below).
+
+## Restyles on Reddit, 2026-11-18
+
+Measured on the host (Debug, base `a4c4424`) with `aura-host chrome -w
+640 -h 480 --net --load-ms 1000 --tab https://www.reddit.com/`, ten
+Page Downs 800 ms apart, then `--do perf`; two runs each.
+
+| | Before | After |
+|---|---|---|
+| Style time | 990 to 1,060 ms | 776 to 778 ms |
+| Elements styled | 205,000 to 217,000 | 158,000 to 166,000 |
+| Layout boxes at the end | 4,300 to 5,200 | 9,900 to 12,900 |
+
+The new build got two to three times further down the feed in the same
+time. Each cause restyled the whole document (about 8,000 elements),
+and each now restyles only what it reaches ([`css.md`](css.md)):
+
+- A `<style>` inserted into the document: about 40 a load.
+- A replaced adopted sheet (`replaceSync`) let the resolver go of every
+  sheet, so each change script made before the next pass was a full
+  restyle.
+- More than 24 class names changed between two passes. Elements that
+  script built off the tree filled the list; only connected elements
+  count now, and the list holds 96.
+- A change to the sheets of `shreddit-app`'s shadow root restyled its
+  flat subtree, which is the page.
+
+To find what restyles a page, count `au_css_resolver_styled_count`
+around each `au_css_restyle` and log where `full_restyle` is set.
 
 ## Repainting after script on Reddit, 2026-11-17
 

@@ -170,6 +170,16 @@ equal; a changed style takes over the old groups whose values are equal
 `style_diff`) then sees only what changed. A marked element whose style
 is unchanged does not restyle its subtree.
 
+A marked element whose style changed restyles its subtree only when the
+change can reach it: the inherited groups (`inh`, `inhr`), the box
+group (a flex or grid container blockifies its children) or the rare
+group (`container-type` and `container-name` decide which container a
+query below finds). A change to the other groups (margins, borders,
+backgrounds, flex items) restyles only the children that take one of
+those values with `inherit` (`AU_STYLE_F_EXPLICIT_INHERIT`, set in
+`apply_wide`). A `:hover` rule that changes a paragraph's background
+no longer restyles the links in it.
+
 ## Sharing
 
 Elements with the same parent style, tag and matched rules share one
@@ -195,6 +205,12 @@ and `@import` is a `SheetSrc`.
   resolver borrows the parsed sheets, and a change of the sheet list
   detaches and adds them again (`au_css_resolver_detach_sheets`)
   without parsing.
+- A sheet that script replaces (`replaceSync`, a CSSOM edit) or lets go
+  of is freed after `update_style` has handed the resolver the new
+  lists (`retire_sheet`). Until then the resolver keeps its index, so a
+  change script makes meanwhile is targeted. Freeing it at once made
+  the resolver let go of every sheet, and each such change restyled the
+  whole document.
 - The parsed sheet takes the text (`au_css_sheet_parse_take`) and keeps
   it; `src_text_get` and `src_text_is` read it back for the CSSOM and
   to notice a `<style>` that was edited.
@@ -297,8 +313,32 @@ view does this for each `<style>` and `<link>` in a shadow tree and for
 
 To restyle after a shadow tree's sheets change, call
 `au_css_resolver_sheets_changed_in(r, roots, n)`: the index is built
-again and only the hosts of those roots are restyled. A change to the
-document's sheets still restyles everything.
+again, and each root's host and the elements of its tree are restyled.
+What is slotted into the tree restyles only when its slot's inherited
+values change. When the root's sheets have `::slotted()` or `::part()`
+rules, now or in the index (`scope_out`), the host's whole flat
+subtree is restyled instead. Reddit's `shreddit-app` slots the whole
+page, and each change to its sheets restyled the page.
+
+To restyle after the document's sheets change, call
+`au_css_resolver_sheets_changed(r)` once the resolver has the new list.
+When the change only inserted sheets, the next restyle styles only the
+elements the new rules can match (`sheets_added_only` in
+`cascade.c`):
+
+- The document's sheets must be the ones the index was built from
+  (`built_same`), with the new ones anywhere among them, and every
+  shadow root must keep its list or have its host marked already.
+- Every style rule of a new sheet must have a keyed subject (an id,
+  class, tag or attribute, `subject_keys`). The elements of the
+  document tree with one of those keys are restyled; what inherits
+  from them follows.
+- A removed or changed sheet, a rule without a key, `::slotted()`,
+  `::part()`, `@import`, `@layer`, `@keyframes`, `@font-face` and
+  `@property` restyle everything.
+
+Reddit inserts a `<style>` for each component type as it loads; each
+restyled about 8,000 elements.
 
 These rules keep that restyle small on a page that attaches many
 components at once:
@@ -325,6 +365,17 @@ components at once:
 
 To restyle a host's whole flat subtree (a slot assignment changed),
 call `au_css_invalidate_subtree`.
+
+Focus moves invalidate `:focus-within` on the ancestors in the flat
+tree, as `au_element_set_state` sets it (`fill_focus_state` in
+`forms.c`), so a host restyles for focus in its shadow tree
+(`tests/js/pages/shadow_focus_within.html`).
+
+To check targeted restyles on a live page, build with
+`-DAURA_INCR_CHECK` and load it with `aura-host chrome`: it aborts with
+the first element whose style differs from a whole restyle. The check
+runs after child, text and sheet changes, not after a state change
+alone.
 
 Everything below runs only when the document has a shadow root
 (`AuDocument.has_shadow`); a page without one walks the same code as

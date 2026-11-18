@@ -484,7 +484,11 @@ enum {
     AU_STYLE_F_AUTHOR_DECOR = 16,
     /* Uses a container unit resolved against a container's size: not
      * shared with an element that has the same parent style. */
-    AU_STYLE_F_CONTAINER_UNITS = 32
+    AU_STYLE_F_CONTAINER_UNITS = 32,
+    /* Takes a property that is not inherited from its parent (the
+     * inherit keyword): restyled when the parent's non-inherited values
+     * change (style_pass). */
+    AU_STYLE_F_EXPLICIT_INHERIT = 64
 };
 
 AuStyle *au_style_retain(AuStyle *s);
