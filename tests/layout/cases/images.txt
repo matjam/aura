@@ -154,3 +154,15 @@ pixel 30 2 ff0000
 // the radius less the padding is 0: the content corners stay square
 pixel 80 10 ff0000
 pixel 72 2 ffffff
+
+=== an image with max-width: 100% does not widen a grid's auto column
+<body style="margin:0">
+<div style="display:grid;width:30px"><a id=a style="display:flex"><img id=i style="display:block;max-width:100%" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII="></a></div>
+<div id=f style="display:inline-flex"><img id=j style="max-width:100%;display:block" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAI0lEQVR42u3NsQ0AAAjAoP7/tJ7hIAk7TZ1ILBaLxWKx+E+8ffodDqIehz0AAAAASUVORK5CYII="></div>
+---
+// a compressible replaced element counts 0 for min-content (CSS Sizing 3,
+// 5.2.2): MDN's 728-pixel banner widened the page at a 400-pixel window
+#a w=30
+#i w=30 h=15
+// its max-content contribution is still its natural width
+#j w=40 h=20

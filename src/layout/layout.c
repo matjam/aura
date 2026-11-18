@@ -665,8 +665,12 @@ void l_outer_intrinsic(AuLayout *L, LBlock *b, float cb_w, float *min_o, float *
         float rw, rh;
         replaced_size(L, b, cb_w, -1, -1, false, &rw, &rh);
         mn = mx = rw;
-        /* A percentage width of a replaced element counts 0 for min-content. */
-        if (l_len_pct(&b->b.style->box->width) && cb_w < 0)
+        /* A compressible replaced element (CSS Sizing 3, 5.2.2): a
+         * percentage width or max-width counts 0 for min-content. MDN's
+         * 728-pixel banner (max-width: 100%) in a grid's auto column
+         * widened the page to 760 pixels at a 400-pixel window. */
+        const AuStyleBox *s = b->b.style->box;
+        if (cb_w < 0 && !lb_anon(&b->b) && (l_len_pct(&s->width) || l_len_pct(&s->max_width)))
             mn = 0;
     } else {
         l_intrinsic(L, b, &mn, &mx);
