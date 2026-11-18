@@ -63,7 +63,8 @@ Keep code small and fast where that costs nothing.
 - JavaScript (QuickJS-ng): DOM and events, CSSOM basics (`style`,
   `classList`, `getComputedStyle`, `matchMedia`), timers,
   `requestAnimationFrame`, `fetch` and XHR, URL and URLSearchParams,
-  `localStorage` and `sessionStorage`, the history API, MutationObserver,
+  `localStorage` and `sessionStorage`, IndexedDB, WebSocket, the history
+  API, MutationObserver,
   IntersectionObserver, ResizeObserver, custom elements and shadow DOM,
   modules and dynamic import, TextEncoder, `document.cookie`.
 - Incremental rendering: show the page as it arrives, and lay out again
@@ -117,11 +118,13 @@ Keep code small and fast where that costs nothing.
 - A JavaScript JIT, and Gmail-class web applications at usable speed. A
   bytecode cache and lazy compilation go in if they are cheap.
 - Audio and video, WebRTC, WebGL, WebAssembly.
-- Shared workers, service workers, IndexedDB. (Dedicated workers are in:
-  bot checks that run a proof of work need them.)
-- WebSockets. The first to pull in if an acceptance site needs it.
-  (Canvas 2D was listed here and has since been built: see
-  [`canvas.md`](canvas.md).)
+- Shared workers, service workers. (Dedicated workers are in: bot
+  checks that run a proof of work need them.) (Canvas 2D was listed
+  here and has since been built: see [`canvas.md`](canvas.md).)
+  WebSockets and IndexedDB were listed here; on 2026-11-18 the owner
+  moved them into version 1, because live updates and sites that keep
+  their state in IndexedDB fail without them
+  ([`web-platform.md`](web-platform.md)).
 - CSS animations and transitions beyond jumping to the end state, 3D
   transforms, filters, blend modes. (Container queries were listed here
   and have since been built: see [`css.md`](css.md). Infinite
