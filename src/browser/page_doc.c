@@ -47,6 +47,7 @@
 #define LAYOUT_INTERVAL_MS 300
 #define SCRIPT_BUDGET_MS 20 /* script time per idle call, on top of BUDGET_MS */
 #define PAGE_INPUT_MAX 16    /* presses and keys kept while the script is parked */
+#define RENDER_HOLD_MS 5000  /* the longest a new document waits for its style sheets */
 
 typedef enum { K_DOC, K_SCENE } Kind;
 
@@ -146,6 +147,11 @@ struct AuPage {
     bool main_done;
     uint32_t main_total; /* expected bytes of the main document, 0 if unknown */
     uint32_t load_start;
+    /* The first paint of a new document waits for its style sheets
+     * (render_held): begun_at is when its first bytes went to the view,
+     * hold_over that the wait has ended and does not come back. */
+    uint32_t begun_at;
+    bool hold_over;
     float progress;
 
     Fetch **fetches; /* resources and the main document, in request order */
@@ -1854,11 +1860,34 @@ static void run_layout(AuPage *p)
     p->dirty = false;
 }
 
+/* Whether a new document's first paint still waits, as a browser's waits
+ * for render-blocking style sheets: while it has no body, or a style
+ * sheet that applies is being fetched, for at most RENDER_HOLD_MS after
+ * its first bytes. The window shows the page's background meanwhile
+ * instead of the document unstyled, and the document is not laid out.
+ * Once the wait ends it does not come back (a sheet that script adds
+ * later does not blank a page that is showing). */
+static bool render_held(AuPage *p)
+{
+    if (p->hold_over || p->kind != K_DOC || !p->begun)
+        return false;
+    AuDocument *doc = au_docview_document(p->dv);
+    bool wait = p->loading && now(p) - p->begun_at < RENDER_HOLD_MS && doc &&
+                (!au_document_body(doc) || au_docview_sheets_pending(p->dv));
+    if (!wait) {
+        p->hold_over = true;
+        p->dirty = true; /* the first layout is due */
+    }
+    return wait;
+}
+
 /* Lays out and repaints after loading work, throttled while loading. */
 static void maybe_layout(AuPage *p, bool force)
 {
     if (!p->begun || !p->dirty || p->kind != K_DOC)
         return;
+    if (render_held(p))
+        return; /* stays dirty: laid out when the sheets are in */
     uint32_t interval = LAYOUT_INTERVAL_MS;
     if (p->stats.layout_ms * 4 > interval)
         interval = p->stats.layout_ms * 4;
@@ -2453,6 +2482,7 @@ static bool show_kept(AuPage *p, const char *url, int rx, int ry, bool keep)
     p->internal = p->interim = p->failed = p->discard = false;
     p->no_store = false;
     p->begun = true;
+    p->hold_over = true; /* a kept document is styled already */
     p->main_done = true;
     p->main = MAIN_NONE;
     p->main_total = 0;
@@ -2688,6 +2718,8 @@ static void begin_doc(AuPage *p, const char *url)
     au_docview_set_scroll(p->dv, 0, 0);
     p->begun = true;
     p->dirty = true;
+    p->begun_at = now(p);
+    p->hold_over = false;
 }
 
 /* Loads a whole generated document now. */
@@ -4448,7 +4480,7 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
         au_canvas_translate(c, view.x - (float)scroll_x, view.y);
         au_scene_draw(c, p->env.fonts, (int)view.w + scroll_x, (int)view.h, scroll_y);
         au_canvas_translate(c, (float)scroll_x - view.x, -view.y);
-    } else if (!p->begun && !au_docview_document(p->dv)) {
+    } else if ((!p->begun && !au_docview_document(p->dv)) || render_held(p)) {
         au_fill_rect(c, view, AU_RGB(255, 255, 255));
     } else {
         bool was_idle = p->in_idle;
@@ -4462,7 +4494,7 @@ void au_page_paint(AuPage *p, AuCanvas *c, AuRect view, int scroll_x, int scroll
     p->scroll_x = scroll_x;
     p->scroll_y = scroll_y;
     p->stats.paint_ms = now(p) - t0;
-    if (!p->stats.first_paint_ms && p->begun) {
+    if (!p->stats.first_paint_ms && p->begun && (p->hold_over || p->kind != K_DOC)) {
         p->stats.first_paint_ms = now(p) - p->load_start;
         if (!p->stats.first_paint_ms)
             p->stats.first_paint_ms = 1;

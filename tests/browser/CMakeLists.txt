@@ -48,6 +48,11 @@ if(TARGET aura_host_platform)
     set_tests_properties(scroll_shift PROPERTIES TIMEOUT 300)
 endif()
 
+# A new document's first paint waits for its style sheets.
+add_executable(test_render_hold test_render_hold.c)
+target_link_libraries(test_render_hold aura_engine m)
+add_test(NAME browser_render_hold COMMAND test_render_hold)
+
 # Script that parks: a long task on the POSIX coroutines, scrolling and
 # painting while it runs.
 if(TARGET aura_posix)

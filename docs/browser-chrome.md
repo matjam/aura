@@ -61,6 +61,15 @@ Pages load asynchronously: `au_page_navigate` only starts a load, and
 - While a document loads it is laid out at most every 300 ms (four
   times the last layout's duration for slow pages), then once at the
   end.
+- A new document is neither laid out nor painted until it has a body
+  and none of its style sheets that apply (`<link>`s and their
+  `@import`s, `au_docview_sheets_pending`) is still being fetched, for
+  at most 5 seconds after its first bytes (`render_held` in
+  `page_doc.c`, `RENDER_HOLD_MS`). The window shows white meanwhile, so
+  the document never flashes up unstyled. Once the page shows, a sheet
+  that script adds later does not hide it again. A document restored
+  for Back and Forward shows at once. Test:
+  `tests/browser/test_render_hold.c`.
 - Generated about: pages (home, blank, fonts) load inside
   `au_page_navigate`; about:scene paints the test scene directly.
 - A URL that differs from the current one only by its fragment scrolls

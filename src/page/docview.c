@@ -1302,6 +1302,20 @@ uint32_t au_docview_pending(const AuDocView *dv)
     return dv->nreqs;
 }
 
+bool au_docview_sheets_pending(const AuDocView *dv)
+{
+    for (uint32_t i = 0; i < dv->nreqs; i++) {
+        const Request *r = &dv->reqs[i];
+        if (r->kind != AU_RES_STYLESHEET || !r->sheet || r->preload)
+            continue;
+        const SheetSrc *s = r->sheet;
+        if (s->disabled || s->failed || s->deferred || !media_matches(dv, s))
+            continue;
+        return true;
+    }
+    return false;
+}
+
 bool au_docview_loading(const AuDocView *dv)
 {
     return dv->parsing || dv->nreqs > dv->nbg || (dv->script && au_docscript_busy(dv->script)) ||

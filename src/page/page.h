@@ -239,6 +239,9 @@ void au_docview_resource_data(AuDocView *dv, uint32_t id, const void *data, size
 void au_docview_resource_done(AuDocView *dv, uint32_t id, bool ok);
 /* Parsing is not finished or resources are pending. */
 bool au_docview_loading(const AuDocView *dv);
+/* A style sheet (a <link>'s or an @import's) whose media matches is still
+ * being fetched: the page holds its first paint for it (page_doc.c). */
+bool au_docview_sheets_pending(const AuDocView *dv);
 /* Requests still outstanding. */
 uint32_t au_docview_pending(const AuDocView *dv);
 
