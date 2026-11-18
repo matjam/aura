@@ -363,10 +363,16 @@ static void cb_url(void *ctx, AuPage *p, const char *url)
     if (e)
         set_str(&e->url, url);
     t->win->browser->session_gen++;
+    invalidate_tab(t->win, tab_index(t->win, t)); /* an untitled tab shows its address */
     unsigned what = AU_CHANGED_TAB_INFO;
     if (is_active(t)) {
-        if (!t->win->field)
+        if (!t->win->field) {
             what |= AU_CHANGED_FIELD;
+            /* The field, and the padlock and bookmark star beside it. A
+             * redirect or history.replaceState left the old address on
+             * the screen (MDN's /CSS/display). */
+            invalidate(t->win, t->win->layout.toolbar);
+        }
         /* The window title shows the address of a page without a title. */
         if (!*au_page_title(p))
             what |= AU_CHANGED_TITLE;
