@@ -190,6 +190,59 @@ and Forward drops its connections and makes them again, with
 that sends nothing for 60 seconds hits the idle timeout and the source
 reconnects; so does a stream that passes the 64 MB body limit.
 
+## WebSocket
+
+To change `WebSocket`, edit the end of `src/js/eventsource.js` (loaded
+on first use of `EventSource` or `WebSocket`), the framing in
+`src/net/websocket.c` and the tunnel in `src/net/http.c`; run
+`tests/net/test_websocket.c`, `fuzz_net websocket`
+([`fuzzing.md`](fuzzing.md)) and `tests/webapi/test_streams_net.c`.
+To try a live server:
+
+```bash
+build/host/src/platform/host/aura-host chrome --net --tab https://example.com/ --do wait:2000 --do "js:window.L=[];var ws=new WebSocket('wss://echo.websocket.org/');ws.onopen=()=>ws.send('hi');ws.onmessage=e=>L.push(e.data);'ok'" --do wait:5000 --do "js:L.join('|')"
+```
+
+The opening handshake is a script request in mode `websocket`
+(`AU_FETCH_WEBSOCKET`) to the `http:` or `https:` form of the URL:
+a GET with `Origin`, cookies, no cache, no CORS check, and no
+redirects. It travels the same layers as `fetch` (script.c,
+docview.c, page_doc.c, page_fetcher.c, loader.c) with `script_mode`
+4, and each layer has a `send` beside `pause` for the bytes script
+writes. `src/net/http.c` adds `Upgrade`, `Connection`, a fresh
+`Sec-WebSocket-Key` and `Sec-WebSocket-Version: 13`, and accepts only
+a 101 with `Upgrade: websocket`, `Connection: Upgrade`, the right
+`Sec-WebSocket-Accept` and no `Sec-WebSocket-Extensions`. Anything else
+fails the request. After the 101 the transfer is a tunnel: its
+"body" is the connection's bytes, it has no idle timeout, and it ends
+when either side closes.
+
+Script feeds the bytes to the C frame parser (`N.wsFeed`), which
+checks every rule of RFC 6455 for a client (unmasked frames, no RSV
+bits, control frame limits, fragmentation, UTF-8 in text and close
+reasons, close codes) and reports a broken stream with the close code
+to send. Frames script sends are built and masked in C (`N.wsFrame`)
+with a mask from the random source for each frame.
+
+- `new WebSocket()` throws SyntaxError for a scheme other than `ws`,
+  `wss`, `http` or `https`, a fragment, or bad or repeated
+  subprotocols, and SecurityError for `ws:` from an `https:` document.
+- A refused handshake, a dropped connection or a protocol error fires
+  `error`, then `close` with code 1006 and `wasClean` false.
+- A close frame from the server is answered with the same code; the
+  `close` event comes when the connection ends, with the server's code
+  and reason and `wasClean` true. After `close()` the server has 5
+  seconds to close the connection before Aura does.
+- A ping is answered with a pong. A message over 4 MB fails the
+  connection with 1009.
+- `bufferedAmount` counts what `send()` queued in this task and drops
+  to 0 at the next task (the network layer takes everything at once,
+  up to 16 MB waiting).
+- A document hidden for Back and Forward closes its sockets (1001); the
+  `close` events fire when it is shown again.
+- A runtime holds at most 16 open sockets (their parsers live outside
+  the script heap); each holds one of the loader's connections.
+
 ## XMLHttpRequest
 
 Asynchronous requests follow the standard's states and events
@@ -218,6 +271,9 @@ re-enter the parser and every loader.
   servers (reconnection, `Last-Event-ID`, CORS, failures, a document
   that goes).
 - `tests/net/test_sse.c` and `fuzz_sse`: the event stream parser.
+- `tests/net/test_websocket.c` and `fuzz_net websocket`: WebSocket
+  framing, the handshake and the tunnel; `test_streams_net.c` has the
+  `WebSocket` class end to end.
 - `tests/js/net.js`, `tests/js/streams.js`, `tests/js/eventsource.js`.
 
 ## Not done

@@ -1,4 +1,5 @@
-/* Aura's EventSource (HTML, "Server-sent events"). The build compiles
+/* Aura's EventSource (HTML, "Server-sent events") and WebSocket (at the
+ * end of the file; they share the loading and the freezing). The build compiles
  * this file to its own bytecode (eventsource.bc); the prelude reads it
  * with N.eventSource() the first time script touches EventSource, so a
  * page that never does pays only for the getter. It is a function of G,
@@ -153,6 +154,229 @@ function request(s) {
         N.queueTask(() => fail(s));
     }
 }
+/* ---------------- WebSocket ----------------
+ *
+ * The opening handshake is a script request in WebSocket mode
+ * (src/js/fetch.c: Origin, cookies, no CORS, no redirects) to the http
+ * or https form of the URL; src/net/http.c checks the 101 response and
+ * its Sec-WebSocket-Accept, and from then on the request's body is the
+ * connection's bytes, which N.wsFeed parses (src/net/websocket.c), and
+ * N.fetchSend writes the masked frames N.wsFrame builds. A ws: URL from
+ * a secure document is refused. docs/script-requests-and-cors.md
+ * ("WebSocket") has the details. */
+const WS_MAX_MESSAGE = 4 * 1024 * 1024;
+const WS_CLOSE_WAIT = 5000; /* after our close frame, how long the server has to close */
+const wsLive = new Set();
+const W = new WeakMap();
+const wsState = (o) => {
+    const s = o !== null && typeof o === 'object' ? W.get(o) : undefined;
+    if (!s) throw new TypeError('Illegal invocation');
+    return s;
+};
+const tokenRe = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const utf8Len = (str) => {
+    let n = 0;
+    for (const ch of str) {
+        const c = ch.codePointAt(0);
+        n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+    }
+    return n;
+};
+
+class WebSocket extends H.EventTarget {
+    constructor(url, protocols = undefined) {
+        if (!arguments.length) throw new TypeError('WebSocket: 1 argument required');
+        super();
+        let u;
+        try { u = new URL(String(url), N.docUrl(1)); } catch (e) { throw H.domErr('Invalid URL: ' + String(url), 'SyntaxError'); }
+        if (u.protocol === 'http:') u.protocol = 'ws:';
+        else if (u.protocol === 'https:') u.protocol = 'wss:';
+        if (u.protocol !== 'ws:' && u.protocol !== 'wss:')
+            throw H.domErr("The URL's scheme must be 'ws' or 'wss'", 'SyntaxError');
+        if (u.hash || String(url).includes('#'))
+            throw H.domErr('The URL contains a fragment identifier', 'SyntaxError');
+        let list = protocols === undefined ? [] : typeof protocols === 'string' ? [protocols] : Array.from(protocols, String);
+        const seen = new Set();
+        for (const p of list) {
+            if (!tokenRe.test(p) || seen.has(p.toLowerCase()))
+                throw H.domErr("The subprotocol '" + p + "' is invalid", 'SyntaxError');
+            seen.add(p.toLowerCase());
+        }
+        let docProto = '';
+        try { docProto = new URL(N.docUrl(1)).protocol; } catch (e) { /* about:blank */ }
+        if (u.protocol === 'ws:' && docProto === 'https:')
+            throw H.domErr('An insecure WebSocket connection may not be initiated from a page loaded over HTTPS', 'SecurityError');
+        const s = { obj: this, url: u.href, state: 0, protocol: '', binaryType: 'blob', buffered: 0, abort: null,
+            parser: null, sentClose: false, gotClose: false, code: 1006, reason: '', timer: 0, origin: u.origin,
+            protocols: list, ended: false };
+        W.set(this, s);
+        wsLive.add(s);
+        const httpUrl = (u.protocol === 'wss:' ? 'https:' : 'http:') + u.href.slice(u.protocol.length);
+        const headers = list.length ? [['Sec-WebSocket-Protocol', list.join(', ')]] : [];
+        try {
+            s.abort = H.startFetch('GET', httpUrl, headers, null, 2, 4 /* WebSocket */, 0, {
+                head(status, text, hdrs) { wsHead(s, status, hdrs); },
+                data(bytes) { wsData(s, bytes); },
+                done(ok) { s.abort = null; wsEnded(s); },
+            }, { cache: 1 });
+        } catch (e) {
+            s.abort = null;
+            N.queueTask(() => wsFail(s));
+        }
+    }
+    get url() { return wsState(this).url; }
+    get readyState() { return wsState(this).state; }
+    get bufferedAmount() { return wsState(this).buffered; }
+    get extensions() { wsState(this); return ''; }
+    get protocol() { return wsState(this).protocol; }
+    get binaryType() { return wsState(this).binaryType; }
+    set binaryType(v) {
+        const s = wsState(this);
+        if (v === 'blob' || v === 'arraybuffer') s.binaryType = v;
+    }
+    send(data) {
+        const s = wsState(this);
+        if (arguments.length < 1) throw new TypeError('WebSocket.send: 1 argument required');
+        if (s.state === 0) throw H.domErr('Still in CONNECTING state', 'InvalidStateError');
+        let op = 2, payload;
+        if (data instanceof ArrayBuffer) payload = new Uint8Array(data);
+        else if (ArrayBuffer.isView(data)) payload = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        else if (H.Blob && data instanceof H.Blob) payload = data._b;
+        else { op = 1; payload = String(data); }
+        const len = op === 1 ? utf8Len(payload) : payload.length;
+        s.buffered += len;
+        if (s.state !== 1) return;
+        if (!wsWrite(s, op, payload)) { wsFail(s, 1006); return; }
+        /* the bytes are on their way: the amount drops once script yields */
+        N.queueTask(() => { s.buffered = Math.max(0, s.buffered - len); });
+    }
+    close(code = undefined, reason = undefined) {
+        const s = wsState(this);
+        if (code !== undefined) {
+            code = Number(code) & 0xffff;
+            if (code !== 1000 && !(code >= 3000 && code <= 4999))
+                throw H.domErr('The code must be 1000 or between 3000 and 4999', 'InvalidAccessError');
+        }
+        reason = reason === undefined ? '' : String(reason);
+        if (utf8Len(reason) > 123) throw H.domErr('The close reason is longer than 123 bytes', 'SyntaxError');
+        if (s.state >= 2) return;
+        if (s.state === 0) {
+            /* fail the connection: error, then close */
+            wsFail(s, 1006);
+            return;
+        }
+        s.state = 2;
+        wsSendClose(s, code, reason);
+    }
+}
+for (const [k, v] of [['CONNECTING', 0], ['OPEN', 1], ['CLOSING', 2], ['CLOSED', 3]]) {
+    Object.defineProperty(WebSocket, k, { value: v, enumerable: true });
+    Object.defineProperty(WebSocket.prototype, k, { value: v, enumerable: true });
+}
+H.defineHandlers(WebSocket.prototype, ['open', 'message', 'error', 'close']);
+Object.defineProperty(WebSocket.prototype, Symbol.toStringTag, { value: 'WebSocket', configurable: true });
+
+function wsWrite(s, op, payload) {
+    if (!s.abort || !s.abort.send) return false;
+    return s.abort.send(N.wsFrame(op, payload));
+}
+function wsSendClose(s, code, reason) {
+    if (s.sentClose) return;
+    s.sentClose = true;
+    let body = new Uint8Array(0);
+    if (code !== undefined) {
+        const r = new TextEncoder().encode(reason || '');
+        body = new Uint8Array(2 + r.length);
+        body[0] = code >> 8;
+        body[1] = code & 255;
+        body.set(r, 2);
+    }
+    wsWrite(s, 8, body);
+    /* the server closes the TCP connection; if it does not, Aura does */
+    if (!s.timer) s.timer = N.setTimeout(() => { s.timer = 0; wsDrop(s); }, WS_CLOSE_WAIT);
+}
+/* Ends the connection without more events of its own (wsEnded follows
+ * from done(), or is called here when the request already ended). */
+function wsDrop(s) {
+    if (s.abort) { const a = s.abort; s.abort = null; a(); }
+    wsEnded(s);
+}
+function wsHead(s, status, hdrs) {
+    if (s.state !== 0) return;
+    const get = (n) => { const h = hdrs.find((p) => p[0].toLowerCase() === n); return h ? h[1] : null; };
+    const proto = get('sec-websocket-protocol');
+    if (status !== 101 || (proto !== null && !s.protocols.includes(proto))) {
+        wsFail(s, 1006);
+        return;
+    }
+    try { s.parser = N.wsNew(WS_MAX_MESSAGE); } catch (e) { wsFail(s, 1006); return; }
+    s.protocol = proto || '';
+    s.state = 1;
+    H.fireSimple(s.obj, 'open');
+}
+function wsData(s, bytes) {
+    if (!s.parser || s.state === 3) return;
+    for (const r of N.wsFeed(s.parser, bytes)) {
+        if (s.state === 3) return;
+        switch (r[0]) {
+        case 't':
+        case 'b': {
+            if (s.state !== 1) break; /* data after our close frame is dropped */
+            let data = r[1];
+            if (r[0] === 'b' && s.binaryType === 'blob') data = new H.Blob([data]);
+            H.fire(s.obj, new H.MessageEvent('message', { data, origin: s.origin }));
+            break;
+        }
+        case 'p':
+            if (!s.sentClose) wsWrite(s, 10, r[1]);
+            break;
+        case 'o':
+            break;
+        case 'c':
+            s.gotClose = true;
+            s.code = r[1];
+            s.reason = r[2];
+            if (s.state === 1) s.state = 2;
+            /* echo the code; the server then closes the connection */
+            wsSendClose(s, r[1] === 1005 ? undefined : r[1], '');
+            break;
+        case 'e':
+            wsFail(s, r[1]);
+            return;
+        }
+    }
+}
+/* "Fail the WebSocket connection": a close frame when open, then error
+ * and close with code 1006. */
+function wsFail(s, sendCode) {
+    if (s.state === 3) return;
+    if (s.state === 1 && sendCode && sendCode !== 1006) wsSendClose(s, sendCode, '');
+    s.gotClose = false;
+    s.code = 1006;
+    s.reason = '';
+    s.failed = true;
+    wsDrop(s);
+}
+/* The connection is gone: CLOSED, and the events. */
+function wsEnded(s) {
+    if (s.ended) return;
+    s.ended = true;
+    if (s.abort) { const a = s.abort; s.abort = null; a(); }
+    if (s.timer) { N.clearTimer(s.timer); s.timer = 0; }
+    if (s.parser) { N.wsEnd(s.parser); s.parser = null; }
+    wsLive.delete(s);
+    const clean = s.gotClose && s.sentClose && !s.failed;
+    if (!clean && !s.gotClose) { s.code = 1006; s.reason = ''; }
+    s.state = 3;
+    const fireAll = () => {
+        if (s.failed || !clean) H.fireSimple(s.obj, 'error');
+        H.fire(s.obj, new H.CloseEvent('close', { wasClean: clean, code: s.code, reason: s.reason }));
+    };
+    /* a task of its own: close() from script fires nothing inside the call */
+    if (frozen) wsHeld.push(fireAll); else N.queueTask(fireAll);
+}
+const wsHeld = []; /* close events of sockets a hidden document dropped */
+
 /* The document is hidden (true) or shown again (false). */
 function freeze(on) {
     frozen = on;
@@ -161,10 +385,18 @@ function freeze(on) {
             disconnect(s);
             if (s.state !== 2) { s.state = 0; waiting.unshift(s); }
         }
+        /* a hidden document keeps no WebSocket open: each closes (1001,
+         * going away) and its close event comes when it is shown */
+        for (const s of [...wsLive]) {
+            if (s.state === 1) wsSendClose(s, 1001, '');
+            s.failed = true;
+            wsDrop(s);
+        }
         return;
     }
     next();
+    for (const f of wsHeld.splice(0)) N.queueTask(f);
 }
 
-return { EventSource, freeze };
+return { EventSource, WebSocket, freeze };
 })

@@ -630,7 +630,10 @@ static uint32_t f_start(void *ctx, AuJs *js, const AuFetchRequest *req)
                 rq.body_type = req->headers[2 * i + 1];
         rq.headers = req->headers;
         rq.nheaders = req->nheaders;
-        rq.script_mode = req->mode == AU_FETCH_NO_CORS ? 2 : req->mode == AU_FETCH_SAME_ORIGIN_MODE ? 3 : 1;
+        rq.script_mode = req->mode == AU_FETCH_NO_CORS            ? 2
+                         : req->mode == AU_FETCH_SAME_ORIGIN_MODE ? 3
+                         : req->mode == AU_FETCH_WEBSOCKET        ? 4
+                                                                  : 1;
         rq.cache = req->cache == AU_FETCH_CACHE_ONLY_IF_CACHED ? AU_FETCH_CACHE_FORCE : req->cache;
         rq.omit_credentials = req->credentials != AU_FETCH_INCLUDE;
         rq.manual_redirect = req->manual_redirect;
@@ -692,6 +695,12 @@ static void f_pause(void *ctx, uint32_t id, bool paused)
     AuDocScript *s = ctx;
     if (find_fetch(s, id))
         au_dv_pause(s->dv, id, paused);
+}
+
+static bool f_send(void *ctx, uint32_t id, const void *data, size_t len)
+{
+    AuDocScript *s = ctx;
+    return find_fetch(s, id) && au_dv_send(s->dv, id, data, len);
 }
 
 /* A script element's kind from its type and language attributes, as the
@@ -799,6 +808,7 @@ static bool ensure_js(AuDocScript *s)
     h.fetcher.start = f_start;
     h.fetcher.abort = f_abort;
     h.fetcher.pause = f_pause;
+    h.fetcher.send = f_send;
     h.frames_changed = h_frames_changed;
     h.frame_count = h_frame_count;
     h.frame_at = h_frame_at;

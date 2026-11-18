@@ -35,6 +35,10 @@ add_executable(test_loader test_loader.c)
 target_link_libraries(test_loader aura_fakenet)
 add_test(NAME net_loader COMMAND test_loader)
 
+add_executable(test_websocket test_websocket.c)
+target_link_libraries(test_websocket aura_fakenet)
+add_test(NAME net_websocket COMMAND test_websocket)
+
 add_executable(test_sse test_sse.c)
 target_link_libraries(test_sse aura_engine)
 add_test(NAME net_sse COMMAND test_sse)

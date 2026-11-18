@@ -60,6 +60,11 @@ typedef struct AuHttpParser {
     int64_t remaining;    /* content length or current chunk bytes left */
     int64_t content_length; /* -1 when not given */
     bool keep_alive;      /* the connection may be reused after this message */
+    /* Set by the caller after init for a WebSocket opening handshake: a
+     * 101 response is then final, has no body, and the parser stops at
+     * its head (the bytes after it are the new protocol's). Otherwise 101
+     * is an error. */
+    bool upgrade;
     int interim;
     AuBuf line;           /* header block or chunk line being collected */
     size_t trailer_bytes;

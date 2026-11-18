@@ -932,6 +932,18 @@ static void loader_pause(void *ctx, uint32_t id, bool paused)
     }
 }
 
+/* A script's WebSocket: bytes for its connection (AuPageFetcher.send). */
+static bool loader_send(void *ctx, uint32_t id, const void *data, size_t len)
+{
+    AuPage *p = ctx;
+    for (size_t i = 0; i < p->nfetches; i++) {
+        Fetch *f = p->fetches[i];
+        if (!f->main && f->id == id && !f->done && !f->cancelled && f->fetcher && f->fetcher->send)
+            return f->fetcher->send(f->fetcher->ctx, f->fid, data, len);
+    }
+    return false;
+}
+
 /* ---- Document view callbacks ---- */
 
 static void dv_title(void *ctx, AuDocView *dv, const char *title)
@@ -1777,7 +1789,7 @@ static bool sel_mouse(AuPage *p, const AuEvent *ev)
 
 static void new_view(AuPage *p)
 {
-    AuLoader loader = {p, loader_request, loader_cancel, sniff_image, loader_pause};
+    AuLoader loader = {p, loader_request, loader_cancel, sniff_image, loader_pause, loader_send};
     AuDocViewCallbacks dcb;
     memset(&dcb, 0, sizeof dcb);
     dcb.ctx = p;

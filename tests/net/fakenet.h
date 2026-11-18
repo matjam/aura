@@ -29,6 +29,10 @@ typedef struct FakeResponse {
     bool reset_after;    /* error on the next recv after the response */
     bool silent;         /* never answer */
     bool close_before;   /* close without answering (stale keep-alive) */
+    /* A WebSocket handshake's answer: "{ACCEPT}" in data becomes the
+     * Sec-WebSocket-Accept for the request's key, and what the client
+     * sends after it is kept in FakeServer.tunnel. */
+    bool websocket;
 } FakeResponse;
 
 typedef struct FakeServer {
@@ -79,6 +83,7 @@ typedef struct FakeServer {
      * only to connections on this port, so one host can serve plain http
      * on 80 and a broken https on 443. */
     uint16_t special_port;
+    AuBuf tunnel; /* bytes a client sent after a websocket response */
 } FakeServer;
 
 typedef struct FakeNet {

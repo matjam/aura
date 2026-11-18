@@ -319,7 +319,8 @@ static bool send_hop(AuJs *js, JsFetch *f)
             add_header(&hv, &n, f->hv[2 * i], f->hv[2 * i + 1]);
         /* Origin goes with every CORS request and with every request that
          * is not a GET or HEAD. */
-        origin_header = origin_header && (f->taint == TAINT_CORS || (strcmp(f->method, "GET") && strcmp(f->method, "HEAD")));
+        origin_header = origin_header && (f->taint == TAINT_CORS || f->mode == AU_FETCH_WEBSOCKET ||
+                                          (strcmp(f->method, "GET") && strcmp(f->method, "HEAD")));
     }
     if (origin_header)
         add_header(&hv, &n, "Origin", request_origin(js, f));
@@ -342,7 +343,13 @@ static const char *main_fetch(AuJs *js, JsFetch *f, bool *policy)
         return "unsupported URL scheme";
     bool same = js_same_origin(js, f->url);
     f->phase = PH_MAIN;
-    if (same && f->taint == TAINT_BASIC) {
+    if (f->mode == AU_FETCH_WEBSOCKET) {
+        /* No CORS: the server decides by the Origin header. */
+        if (!is_http(f->url))
+            return "unsupported URL scheme";
+        if (!js->hooks.fetcher.send)
+            return "WebSocket is not available here";
+    } else if (same && f->taint == TAINT_BASIC) {
         /* same-origin: as it is */
     } else if (f->mode == AU_FETCH_SAME_ORIGIN_MODE || f->mode == AU_FETCH_NAVIGATE) {
         *policy = true;
@@ -425,7 +432,7 @@ static JsFetch *fetch_from_args(JSContext *ctx, int argc, JSValueConst *argv, co
     JS_ToInt32(ctx, &mode, argv[5]);
     JS_ToInt32(ctx, &dest, argv[6]);
     f->credentials = (uint8_t)(cred < 0 || cred > AU_FETCH_INCLUDE ? AU_FETCH_SAME_ORIGIN : cred);
-    f->mode = (uint8_t)(mode < 0 || mode > AU_FETCH_NAVIGATE ? AU_FETCH_CORS : mode);
+    f->mode = (uint8_t)(mode < 0 || mode > AU_FETCH_WEBSOCKET ? AU_FETCH_CORS : mode);
     f->dest = (uint8_t)dest;
     if (argc > 8 && JS_IsObject(argv[8])) {
         f->cache = (uint8_t)opt_int(ctx, argv[8], "cache", 0);
@@ -439,6 +446,18 @@ static JsFetch *fetch_from_args(JSContext *ctx, int argc, JSValueConst *argv, co
             f->redirect = 0;
         if (f->rpolicy > 8)
             f->rpolicy = 0;
+    }
+    bool ws = f->mode == AU_FETCH_WEBSOCKET;
+    if (ws) {
+        /* a GET with cookies, no body and no cache, that fails on a
+         * redirect */
+        f->redirect = REDIRECT_ERROR;
+        f->credentials = AU_FETCH_INCLUDE;
+        f->cache = AU_FETCH_CACHE_NO_STORE;
+        if (strcmp(method, "GET")) {
+            *refusal = "a WebSocket handshake is a GET";
+            return f;
+        }
     }
     if (au_cors_forbidden_method(method)) {
         *refusal = "the method is forbidden";
@@ -465,8 +484,11 @@ static JsFetch *fetch_from_args(JSContext *ctx, int argc, JSValueConst *argv, co
         JS_FreeValue(ctx, k);
         JS_FreeValue(ctx, v);
         JS_FreeValue(ctx, pair);
-        bool keep = ks && vs && ks[0] && !au_cors_forbidden_request_header(ks, vs) && !strpbrk(vs, "\r\n") &&
-                    (f->mode != AU_FETCH_NO_CORS || au_cors_no_cors_header(ks, vs));
+        /* a WebSocket sends only the subprotocols script asked for */
+        bool keep = ks && vs && ks[0] && !strpbrk(vs, "\r\n") &&
+                    (ws ? au_ieq(ks, strlen(ks), "sec-websocket-protocol", 22)
+                        : !au_cors_forbidden_request_header(ks, vs) &&
+                              (f->mode != AU_FETCH_NO_CORS || au_cors_no_cors_header(ks, vs)));
         for (const char *c = ks; keep && *c; c++)
             if ((unsigned char)*c <= 0x20 || (unsigned char)*c >= 0x7f || *c == ':')
                 keep = false;
@@ -475,7 +497,7 @@ static JsFetch *fetch_from_args(JSContext *ctx, int argc, JSValueConst *argv, co
         au_free(ks);
         au_free(vs);
     }
-    if (!JS_IsNull(argv[3]) && !JS_IsUndefined(argv[3])) {
+    if (!ws && !JS_IsNull(argv[3]) && !JS_IsUndefined(argv[3])) {
         size_t blen = 0;
         uint8_t *p = JS_GetUint8Array(ctx, &blen, argv[3]);
         if (p) {
@@ -561,6 +583,25 @@ static JSValue n_fetch_pause(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* fetchSend(id, bytes) -> whether the bytes were queued: a WebSocket
+ * request's connection, after its response head. */
+static JSValue n_fetch_send(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    uint32_t id = 0;
+    JsFetch *f;
+    if (argc < 2 || JS_ToUint32(ctx, &id, argv[0]) || !(f = find_fetch(js, id, false, NULL)))
+        return JS_FALSE;
+    if (f->mode != AU_FETCH_WEBSOCKET || !f->final || !f->hop || !js->hooks.fetcher.send)
+        return JS_FALSE;
+    size_t n = 0;
+    uint8_t *p = JS_GetUint8Array(ctx, &n, argv[1]);
+    if (!p)
+        return JS_EXCEPTION;
+    return JS_NewBool(ctx, js->hooks.fetcher.send(js->hooks.fetcher.ctx, f->hop, p, n));
+}
+
 /* fetchSync(method, url, headers, body, credentials, mode, dest, null,
  * opts) -> [status, headers, bytes, url] or null for a network error.
  * Only a worker that runs on its own stack can wait for the network
@@ -623,6 +664,7 @@ static const JSCFunctionListEntry fetch_natives[] = {
     JS_CFUNC_DEF("fetchAbort", 1, n_fetch_abort),
     JS_CFUNC_DEF("fetchSync", 9, n_fetch_sync),
     JS_CFUNC_DEF("fetchPause", 2, n_fetch_pause),
+    JS_CFUNC_DEF("fetchSend", 2, n_fetch_send),
 };
 
 void js_fetch_init(AuJs *js, JSValue N)

@@ -7,6 +7,13 @@
  *   sseNew(lastEventId) -> handle
  *   sseFeed(handle, bytes) -> [[kind, ...], ...]
  *   sseEnd(handle)
+ *   wsNew(maxMessage) -> handle           WebSocket frames (src/net/websocket.c)
+ *   wsFeed(handle, bytes) -> [[kind, ...], ...]
+ *   wsEnd(handle)
+ *   wsFrame(opcode, string or bytes) -> Uint8Array, a masked frame
+ *
+ * A WebSocket parser holds up to its largest message outside the heap;
+ * a runtime may hold MAX_WS of them.
  *
  * A handle holds memory outside the script heap (an encoder is about
  * 300 KB, a decoder 45 KB, a parser up to 1.5 MB of buffers), so a
@@ -17,17 +24,19 @@
 #include "js_int.h"
 #include "../codec/codec.h"
 #include "../net/sse.h"
+#include "../net/websocket.h"
 
 #include <string.h>
 
 #define MAX_ZIP 16
 #define MAX_SSE 8
+#define MAX_WS 16
 /* zRun gives back at most this much output per call, so that a small
  * input that inflates to a great deal arrives in pieces; the caller asks
  * again (with no input) while "more" is true. */
 #define ZIP_OUT_MAX (256u * 1024)
 
-enum { H_DEFLATE, H_INFLATE, H_SSE };
+enum { H_DEFLATE, H_INFLATE, H_SSE, H_WS };
 
 typedef struct StreamHandle {
     int kind;
@@ -38,6 +47,7 @@ typedef struct StreamHandle {
     AuBuf pending; /* input the codec has not taken yet */
     size_t pending_off;
     AuSseParser sse;
+    AuWsParser ws;
 } StreamHandle;
 
 static void handle_release(JSRuntime *rt, StreamHandle *h)
@@ -50,6 +60,10 @@ static void handle_release(JSRuntime *rt, StreamHandle *h)
         au_sse_free(&h->sse);
         if (root && root->nsse)
             root->nsse--;
+    } else if (h->kind == H_WS) {
+        au_ws_parser_free(&h->ws);
+        if (root && root->nws)
+            root->nws--;
     } else {
         au_deflate_free(h->def);
         au_inflate_free(h->inf);
@@ -91,7 +105,10 @@ static StreamHandle *get_handle(JSContext *ctx, JSValueConst v, int kind)
     if (!js->root->cls_stream_handle)
         return NULL;
     StreamHandle *h = JS_GetOpaque(v, js->root->cls_stream_handle);
-    if (!h || h->ended || (kind == H_SSE) != (h->kind == H_SSE))
+    if (!h || h->ended)
+        return NULL;
+    bool zip = h->kind == H_DEFLATE || h->kind == H_INFLATE;
+    if (kind == H_INFLATE ? !zip : h->kind != kind)
         return NULL;
     return h;
 }
@@ -340,7 +357,142 @@ static JSValue n_sse_feed(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return o.arr;
 }
 
+/* ---- WebSocket frames ---- */
+
+static JSValue n_ws_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    AuJs *root = js->root;
+    if (root->nws >= MAX_WS)
+        JS_RunGC(root->rt);
+    if (root->nws >= MAX_WS || au_memory_low(256u * 1024))
+        return JS_ThrowRangeError(ctx, "Too many WebSocket connections are open");
+    uint32_t max = 4u * 1024 * 1024;
+    if (argc > 0)
+        JS_ToUint32(ctx, &max, argv[0]);
+    if (max < 1024)
+        max = 1024;
+    StreamHandle *h = au_calloc(sizeof *h);
+    h->kind = H_WS;
+    au_ws_parser_init(&h->ws, max);
+    root->nws++;
+    return new_handle(ctx, h);
+}
+
+static void ws_push(SseOut *o, JSValue rec) { JS_SetPropertyUint32(o->ctx, o->arr, o->n++, rec); }
+
+static void ws_message(void *ctx, int opcode, const uint8_t *data, size_t len)
+{
+    SseOut *o = ctx;
+    JSValue rec = JS_NewArray(o->ctx);
+    if (opcode == AU_WS_TEXT) {
+        JS_SetPropertyUint32(o->ctx, rec, 0, JS_NewString(o->ctx, "t"));
+        JS_SetPropertyUint32(o->ctx, rec, 1, js_str(o->ctx, (const char *)data, len));
+    } else {
+        JS_SetPropertyUint32(o->ctx, rec, 0, JS_NewString(o->ctx, "b"));
+        JS_SetPropertyUint32(o->ctx, rec, 1, JS_NewArrayBufferCopy(o->ctx, data, len));
+    }
+    ws_push(o, rec);
+}
+
+static void ws_control(void *ctx, int opcode, const uint8_t *data, size_t len)
+{
+    SseOut *o = ctx;
+    JSValue rec = JS_NewArray(o->ctx);
+    JS_SetPropertyUint32(o->ctx, rec, 0, JS_NewString(o->ctx, opcode == AU_WS_PING ? "p" : "o"));
+    JS_SetPropertyUint32(o->ctx, rec, 1, JS_NewUint8ArrayCopy(o->ctx, data, len));
+    ws_push(o, rec);
+}
+
+static void ws_close(void *ctx, uint16_t code, const char *reason, size_t reason_len)
+{
+    SseOut *o = ctx;
+    JSValue rec = JS_NewArray(o->ctx);
+    JS_SetPropertyUint32(o->ctx, rec, 0, JS_NewString(o->ctx, "c"));
+    JS_SetPropertyUint32(o->ctx, rec, 1, JS_NewInt32(o->ctx, code));
+    JS_SetPropertyUint32(o->ctx, rec, 2, js_str(o->ctx, reason, reason_len));
+    ws_push(o, rec);
+}
+
+static void ws_error(void *ctx, uint16_t code, const char *why)
+{
+    SseOut *o = ctx;
+    JSValue rec = JS_NewArray(o->ctx);
+    JS_SetPropertyUint32(o->ctx, rec, 0, JS_NewString(o->ctx, "e"));
+    JS_SetPropertyUint32(o->ctx, rec, 1, JS_NewInt32(o->ctx, code));
+    JS_SetPropertyUint32(o->ctx, rec, 2, JS_NewString(o->ctx, why));
+    ws_push(o, rec);
+}
+
+/* wsFeed(handle, bytes) -> what the bytes completed, in order: ["t", text]
+ * and ["b", ArrayBuffer] messages, ["p", bytes] a ping, ["o", bytes] a
+ * pong, ["c", code, reason] the server's close frame, ["e", code, why]
+ * a broken stream (the close code to send). */
+static JSValue n_ws_feed(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    StreamHandle *h = argc > 0 ? get_handle(ctx, argv[0], H_WS) : NULL;
+    if (!h)
+        return JS_ThrowTypeError(ctx, "The WebSocket has ended");
+    size_t n = 0;
+    uint8_t *p = argc > 1 ? JS_GetUint8Array(ctx, &n, argv[1]) : NULL;
+    if (!p && JS_HasException(ctx))
+        return JS_EXCEPTION;
+    SseOut o = {ctx, JS_NewArray(ctx), 0};
+    AuWsCallbacks cb = {&o, ws_message, ws_control, ws_close, ws_error};
+    if (p && n)
+        au_ws_feed(&h->ws, p, n, &cb);
+    return o.arr;
+}
+
+/* wsFrame(opcode, data) -> a masked frame: data is a string (sent as
+ * UTF-8) or a Uint8Array. The mask comes from the embedder's random
+ * source, or, before it has any entropy, a generator seeded from the
+ * clock. */
+static JSValue n_ws_frame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    int32_t op = AU_WS_BINARY;
+    if (argc < 2 || JS_ToInt32(ctx, &op, argv[0]))
+        return JS_ThrowTypeError(ctx, "wsFrame: bad arguments");
+    size_t n = 0;
+    char *s = NULL;
+    const uint8_t *p;
+    if (JS_IsString(argv[1])) {
+        s = js_tostr(ctx, argv[1], &n);
+        if (!s)
+            return JS_EXCEPTION;
+        p = (const uint8_t *)s;
+    } else {
+        p = JS_GetUint8Array(ctx, &n, argv[1]);
+        if (!p)
+            return JS_EXCEPTION;
+    }
+    uint8_t mask[4];
+    if (!js->hooks.random || !js->hooks.random(js->hooks.ctx, mask, sizeof mask)) {
+        static uint32_t x;
+        x ^= (uint32_t)(int64_t)js_now(js) * 2654435761u + 0x9E3779B9u;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        memcpy(mask, &x, 4);
+    }
+    AuBuf b;
+    au_buf_init(&b);
+    au_ws_frame(&b, op, p, n, mask);
+    au_free(s);
+    JSValue r = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)b.data, b.len);
+    au_buf_free(&b);
+    return r;
+}
+
 static const JSCFunctionListEntry streams_natives[] = {
+    JS_CFUNC_DEF("wsNew", 1, n_ws_new),
+    JS_CFUNC_DEF("wsFeed", 2, n_ws_feed),
+    JS_CFUNC_DEF("wsEnd", 1, n_end),
+    JS_CFUNC_DEF("wsFrame", 2, n_ws_frame),
     JS_CFUNC_DEF("zNew", 2, n_z_new),
     JS_CFUNC_DEF("zRun", 3, n_z_run),
     JS_CFUNC_DEF("zEnd", 1, n_end),

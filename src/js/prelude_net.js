@@ -684,6 +684,8 @@ function startFetch(method, url, headerList, bytes, cred, mode, dest, cb, opts) 
     const abort = () => { if (!finished) { finished = true; N.fetchAbort(id); } };
     /* backpressure: stop or resume reading the response from the network */
     abort.pause = (paused) => { if (!finished) N.fetchPause(id, paused); };
+    /* a WebSocket's connection, after its head: queue bytes to send */
+    abort.send = (bytes) => !finished && N.fetchSend(id, bytes);
     return abort;
 }
 /* A request's options for startFetch. */
@@ -1151,12 +1153,14 @@ for (const C of [XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest
  * the global. */
 let esLib = null;
 const eventSources = () => esLib || (esLib = N.eventSource()(G, { N, domErr, EventTarget, defineHandlers, startFetch,
-    fire, fireSimple, MessageEvent }));
-Object.defineProperty(G, 'EventSource', {
-    get() { const v = eventSources().EventSource; defGlobal('EventSource', v); return v; },
-    set(v) { defGlobal('EventSource', v); },
-    configurable: true, enumerable: false,
-});
+    fire, fireSimple, MessageEvent, CloseEvent, Blob }));
+for (const name of ['EventSource', 'WebSocket']) {
+    Object.defineProperty(G, name, {
+        get() { const v = eventSources()[name]; defGlobal(name, v); return v; },
+        set(v) { defGlobal(name, v); },
+        configurable: true, enumerable: false,
+    });
+}
 /* The document is hidden or shown again (P.pageTransition). */
 P.eventSourcesFreeze = function (frozen) { if (esLib) esLib.freeze(frozen); };
 

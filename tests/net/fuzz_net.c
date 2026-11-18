@@ -9,7 +9,7 @@
  * file parsers), auth (WWW-Authenticate parser), dates (cookie dates),
  * mime (Content-Type), cache (serialized cache entries), aia (caIssuers
  * bundles: DER, PKCS#7 and PEM; the AIA URL; the intermediates pool
- * file), or all. Every input is copied to a heap block of
+ * file), websocket (frames, whole and split), or all. Every input is copied to a heap block of
  * exactly its size, so a sanitizer build catches any read past the end. */
 #include "../fuzz.h"
 #include "net/auth.h"
@@ -21,6 +21,7 @@
 #include "net/psl.h"
 #include "net/roots.h"
 #include "net/tls.h"
+#include "net/websocket.h"
 #include "fakenet.h"
 #include "tls_fixtures.h"
 
@@ -450,6 +451,60 @@ static void run_cache(const Input *in)
     free(p);
 }
 
+/* WebSocket frames: fed whole and in random pieces; the events must be
+ * the same either way. */
+static const char ws_seeds[][24] = {"\x81\x05Hello\x89\x00\x88\x02\x03\xe8", "\x01\x03Hel\x89\x02hi\x80\x02lo",
+                                    "\x82\x7e\x00\x04\x01\x02\x03\x04\x8a\x01x", "\x81\x02\xc3\xa9\x88\x00"};
+static void ws_log(void *ctx, int op, const uint8_t *d, size_t n)
+{
+    AuBuf *b = ctx;
+    au_buf_printf(b, "%d:", op);
+    au_buf_append(b, d, n);
+    au_buf_putc(b, ';');
+}
+static void ws_close_log(void *ctx, uint16_t code, const char *r, size_t n)
+{
+    au_buf_printf(ctx, "c%u:", code);
+    au_buf_append(ctx, r, n);
+}
+static void ws_err_log(void *ctx, uint16_t code, const char *why)
+{
+    (void)why;
+    au_buf_printf(ctx, "e%u", code);
+}
+static void run_ws(const Input *in)
+{
+    uint8_t *p = exact(in, false);
+    AuBuf whole, split;
+    au_buf_init(&whole);
+    au_buf_init(&split);
+    AuWsParser a, b;
+    au_ws_parser_init(&a, 4096);
+    au_ws_parser_init(&b, 4096);
+    AuWsCallbacks ca = {&whole, ws_log, ws_log, ws_close_log, ws_err_log};
+    AuWsCallbacks cb = {&split, ws_log, ws_log, ws_close_log, ws_err_log};
+    au_ws_feed(&a, p, in->n, &ca);
+    for (size_t i = 0; i < in->n;) {
+        size_t k = 1 + rnd() % 7;
+        if (k > in->n - i)
+            k = in->n - i;
+        uint8_t *piece = malloc(k);
+        memcpy(piece, p + i, k);
+        au_ws_feed(&b, piece, k, &cb);
+        free(piece);
+        i += k;
+    }
+    if (whole.len != split.len || memcmp(whole.data, split.data, whole.len)) {
+        fprintf(stderr, "websocket: a split changed the events\n");
+        abort();
+    }
+    au_ws_parser_free(&a);
+    au_ws_parser_free(&b);
+    au_buf_free(&whole);
+    au_buf_free(&split);
+    free(p);
+}
+
 #define N(a) (sizeof(a) / sizeof *(a))
 
 /* ---- The TLS handshake, through tls.c ----
@@ -612,7 +667,15 @@ int main(int argc, char **argv)
             iters = it;
             break;
         }
-        int which = all ? (int)(rnd() % 11) : -1;
+        int which = all ? (int)(rnd() % 12) : -1;
+        if ((all && which == 11) || !strcmp(target, "websocket")) {
+            const char *s = ws_seeds[rnd() % N(ws_seeds)];
+            load_seed(&in, s, sizeof ws_seeds[0]); /* the seeds hold NUL bytes */
+            mutate(&in, 4096);
+            run_ws(&in);
+            done++;
+            continue;
+        }
         if ((all && which == 10) || !strcmp(target, "aia")) {
             aia_seed(&in);
             mutate(&in, 8192);

@@ -2713,6 +2713,12 @@ void au_dv_pause(AuDocView *dv, uint32_t id, bool paused)
         top->loader.pause(top->loader.ctx, id, paused);
 }
 
+bool au_dv_send(AuDocView *dv, uint32_t id, const void *data, size_t len)
+{
+    AuDocView *top = au_dv_top(dv);
+    return find_request(dv, id) && top->loader.send && top->loader.send(top->loader.ctx, id, data, len);
+}
+
 void au_dv_cancel(AuDocView *dv, uint32_t id)
 {
     Request *r = find_request(dv, id);

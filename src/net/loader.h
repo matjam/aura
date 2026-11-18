@@ -68,6 +68,11 @@ typedef struct AuLoadRequest {
     int mode;
     bool manual_redirect;
     bool no_store;
+    /* A WebSocket opening handshake (AuHttpRequest.websocket); a ws: or
+     * wss: URL is sent as http: or https:. Mixed content applies as to
+     * fetch(). After the response, data() carries the connection's raw
+     * bytes and au_net_loader_send writes. */
+    bool websocket;
 } AuLoadRequest;
 
 typedef struct AuLoadInfo {
@@ -135,6 +140,9 @@ void au_net_loader_cancel(AuNetLoader *l, uint32_t id);
 /* Backpressure: stops or resumes reading request id's response from the
  * network (au_http_pause). */
 void au_net_loader_pause(AuNetLoader *l, uint32_t id, bool paused);
+/* A WebSocket request whose handshake succeeded: queues bytes to send
+ * (au_http_tunnel_send). False when it is not one, or it is closed. */
+bool au_net_loader_send(AuNetLoader *l, uint32_t id, const void *data, size_t len);
 /* Pumps the network and delivers. Returns true if anything happened. */
 bool au_net_loader_poll(AuNetLoader *l);
 int au_net_loader_active(const AuNetLoader *l);

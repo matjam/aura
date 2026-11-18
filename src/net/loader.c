@@ -508,6 +508,24 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
         au_body_free(rq->body);
         return r->id;
     }
+    /* A WebSocket goes out as http or https. */
+    if (rq->websocket && (!strcmp(u.scheme, "ws") || !strcmp(u.scheme, "wss"))) {
+        AuBuf s;
+        au_buf_init(&s);
+        au_buf_printf(&s, "%s%s", u.scheme[2] ? "https" : "http", u.href + strlen(u.scheme));
+        AuUrl hu;
+        bool ok = au_url_parse(&hu, au_buf_cstr(&s), NULL);
+        au_buf_free(&s);
+        au_url_free(&u);
+        if (!ok) {
+            r->early = r->pending = true;
+            r->early_err = AU_NET_ERR_BAD_URL;
+            r->url = au_strndup(url, strlen(url));
+            au_body_free(rq->body);
+            return r->id;
+        }
+        u = hu;
+    }
     /* Mixed content. */
     if (rq->document_url && rq->dest != AU_DEST_DOCUMENT) {
         AuUrl doc;
@@ -568,6 +586,7 @@ uint32_t au_net_loader_start(AuNetLoader *l, const AuLoadRequest *rq, const AuLo
         au_headers_add(&hr.headers, "Cache-Control", "max-age=0");
     hr.allow_http_fallback = rq->allow_http_fallback;
     hr.omit_credentials = rq->omit_credentials;
+    hr.websocket = rq->websocket;
     AuHttpCallbacks hc = {r, t_response, t_data, t_done, l->blocklist ? t_redirect : NULL, NULL};
     r->t = au_http_start(l->net, &hr, &hc);
     au_http_request_free(&hr);
@@ -591,6 +610,12 @@ void au_net_loader_pause(AuNetLoader *l, uint32_t id, bool paused)
     Req *r = find(l, id);
     if (r && r->t && !r->finished && !r->cancelled)
         au_http_pause(r->t, paused);
+}
+
+bool au_net_loader_send(AuNetLoader *l, uint32_t id, const void *data, size_t len)
+{
+    Req *r = find(l, id);
+    return r && r->t && !r->finished && !r->cancelled && au_http_tunnel_send(r->t, data, len);
 }
 
 static void deliver_early(Req *r)

@@ -393,6 +393,75 @@ static void test_eventsource_document_goes(void)
     env_free(&e);
 }
 
+/* WebSocket: the handshake goes to another origin with Origin and the
+ * subprotocol, messages arrive as text and binary, the server's close is
+ * answered and ends cleanly, and what script sends reaches the server. */
+static void test_websocket(void)
+{
+    Env e;
+    env_init(&e);
+    static const char hs[] = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                             "Sec-WebSocket-Accept: {ACCEPT}\r\nSec-WebSocket-Protocol: chat\r\n\r\n"
+                             "\x81\x05hello\x82\x03\x01\x02\x03\x88\x05\x03\xe8" "bye";
+    FakeResponse *r = fake_add(e.bs, hs);
+    r->len = sizeof hs - 1;
+    r->websocket = true;
+    r->close_after = true;
+    const char *res = run(&e, "var ws=new WebSocket('ws://b.test/live',['chat','other']);ws.binaryType='arraybuffer';"
+                              "var got=[];var st0=ws.readyState;var threw='';try{ws.send('x')}catch(e){threw=e.name}"
+                              "return await new Promise(function(done){"
+                              "ws.onopen=function(){got.push('open '+ws.protocol)};"
+                              "ws.onmessage=function(ev){got.push(typeof ev.data=='string'?ev.data:"
+                              "'bin'+new Uint8Array(ev.data).join('.'))};"
+                              "ws.onerror=function(){got.push('error')};"
+                              "ws.onclose=function(ev){got.push('close '+ev.code+' '+ev.reason+' '+ev.wasClean+' '+ws.readyState);"
+                              "done(st0+' '+threw+' '+got.join(','))}})");
+    CHECK(!strcmp(res, "0 InvalidStateError open chat,hello,bin1.2.3,close 1000 bye true 3"), "%s", res);
+    const char *q = req(e.bs, 0);
+    CHECK(!strncmp(q, "GET /live HTTP/1.1", 18) && has_header(q, "Origin", "http://a.test") &&
+              has_header(q, "Sec-WebSocket-Protocol", "chat, other") && has_header(q, "Upgrade", "websocket"),
+          "handshake: %s", q);
+
+    /* what script sends reaches the server, masked */
+    au_buf_clear(&e.bs->tunnel);
+    static const char hs2[] = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                              "Sec-WebSocket-Accept: {ACCEPT}\r\n\r\n";
+    fake_add(e.bs, hs2)->websocket = true;
+    res = run(&e, "var ws=window.ws=new WebSocket('ws://b.test/echo');"
+                  "return await new Promise(function(done){ws.onopen=function(){ws.send('hey');ws.send(new Uint8Array([9]));"
+                  "done(ws.bufferedAmount+' '+ws.protocol+'|')}})");
+    CHECK(!strcmp(res, "4 |"), "%s", res);
+    rounds(&e, 20);
+    const uint8_t *t = (const uint8_t *)e.bs->tunnel.data;
+    bool ok = e.bs->tunnel.len == 9 + 7 && t[0] == 0x81 && t[1] == 0x83 && t[9] == 0x82 && t[10] == 0x81;
+    if (ok)
+        for (int i = 0; i < 3; i++)
+            ok = ok && (uint8_t)(t[6 + i] ^ t[2 + (i & 3)]) == (uint8_t)"hey"[i];
+    CHECK(ok, "frames sent: %u bytes", (unsigned)e.bs->tunnel.len);
+    CHECK(!strcmp(js(&e, "ws.bufferedAmount"), "0"), "bufferedAmount drains: %s", js(&e, "ws.bufferedAmount"));
+    env_free(&e);
+}
+
+/* What the constructor refuses, and a handshake the server refuses. */
+static void test_websocket_refused(void)
+{
+    Env e;
+    env_init(&e);
+    answer(e.bs, "200 OK", "Content-Type: text/plain\r\n", "no");
+    const char *res =
+        run(&e, "function err(f){try{f();return 'none'}catch(e){return e.name}}"
+                "var a=[err(function(){new WebSocket('ftp://b.test/')}),err(function(){new WebSocket('ws://b.test/#x')}),"
+                "err(function(){new WebSocket('ws://b.test/',['a','a'])}),err(function(){new WebSocket('ws://b.test/','a b')})];"
+                "var ws=new WebSocket('ws://b.test/no');"
+                "var c=await new Promise(function(done){var ev=[];ws.onerror=function(){ev.push('error')};"
+                "ws.onclose=function(e){ev.push('close '+e.code+' '+e.wasClean);done(ev.join(','))}});"
+                "var ws2=new WebSocket('ws://b.test/never');ws2.close();"
+                "var d=await new Promise(function(done){ws2.onclose=function(e){done(e.code+' '+ws2.readyState)}});"
+                "return a.join(',')+'|'+c+'|'+d");
+    CHECK(!strcmp(res, "SyntaxError,SyntaxError,SyntaxError,SyntaxError|error,close 1006 false|1006 3"), "%s", res);
+    env_free(&e);
+}
+
 int main(void)
 {
     static uint8_t fontdata[16384];
@@ -404,6 +473,8 @@ int main(void)
     test_eventsource_fail();
     test_eventsource_cors();
     test_eventsource_document_goes();
+    test_websocket();
+    test_websocket_refused();
     au_fontset_free(fonts);
     for (int i = 0; i < nresponses; i++)
         free(responses[i]);

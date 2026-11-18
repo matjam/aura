@@ -424,8 +424,9 @@ static uint32_t pf_start(void *ctx, const AuFetchRequest *frq, const AuFetchSink
         rq.headers = &extra;
     if (frq->script_mode) {
         rq.dest = AU_DEST_EMPTY;
-        rq.mode = 1 + (frq->script_mode == 1 ? AU_MODE_CORS : frq->script_mode == 2 ? AU_MODE_NO_CORS
-                                                                                    : AU_MODE_SAME_ORIGIN);
+        rq.mode = 1 + (frq->script_mode == 2 ? AU_MODE_NO_CORS : frq->script_mode == 3 ? AU_MODE_SAME_ORIGIN
+                                                                                       : AU_MODE_CORS);
+        rq.websocket = frq->script_mode == 4;
     }
     rq.manual_redirect = frq->manual_redirect;
     rq.no_store = frq->no_store;
@@ -455,6 +456,15 @@ static void pf_pause(void *ctx, uint32_t id, bool paused)
     for (PfReq *r = f->reqs; r; r = r->next)
         if (r->id == id && !r->done)
             au_net_loader_pause(f->l, id, paused);
+}
+
+static bool pf_send(void *ctx, uint32_t id, const void *data, size_t len)
+{
+    AuNetPageFetcher *f = ctx;
+    for (PfReq *r = f->reqs; r; r = r->next)
+        if (r->id == id && !r->done)
+            return au_net_loader_send(f->l, id, data, len);
+    return false;
 }
 
 static void pf_poll(void *ctx)
@@ -538,6 +548,7 @@ void au_net_page_fetcher_interface(AuNetPageFetcher *f, struct AuPageFetcher *ou
     out->get_cookie = pf_get_cookie;
     out->set_cookie = pf_set_cookie;
     out->pause = pf_pause;
+    out->send = pf_send;
 }
 
 AuNetLoader *au_net_page_fetcher_loader(AuNetPageFetcher *f)

@@ -58,7 +58,7 @@ typedef struct AuResourceRequest {
      * resource fetched with CORS (a crossorigin attribute); zero for the
      * rest. method is then any method. headers: name, value pairs to send
      * as given. script_mode: 0 for a resource of the page, else 1 cors,
-     * 2 no-cors, 3 same-origin. cache: 0 the page's mode, 1 no-store,
+     * 2 no-cors, 3 same-origin, 4 a WebSocket handshake. cache: 0 the page's mode, 1 no-store,
      * 2 reload, 3 no-cache (revalidate), 4 force-cache and only-if-cached
      * (any stored copy). referrer: NULL for the document's URL, "" for
      * none, else the URL to send. */
@@ -90,6 +90,9 @@ typedef struct AuLoader {
      * response from the network until a call with paused false. Data
      * already received may still arrive. Optional. */
     void (*pause)(void *ctx, uint32_t id, bool paused);
+    /* A script's WebSocket request (script_mode 4) after its response:
+     * bytes to send on the connection. False when it cannot. Optional. */
+    bool (*send)(void *ctx, uint32_t id, const void *data, size_t len);
 } AuLoader;
 
 /* A form submission for the embedder to navigate to. */

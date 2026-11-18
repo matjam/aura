@@ -200,6 +200,18 @@ typedef struct AuHttpRequest {
     bool allow_http_fallback; /* HTTPS-first: the user confirmed plain http */
     int64_t range_start, range_end; /* bytes=start-end; -1: none / open */
     uint32_t total_timeout_ms;      /* 0: none */
+    /* A WebSocket opening handshake (RFC 6455 section 4): a GET with
+     * Upgrade: websocket, Connection: Upgrade, a fresh Sec-WebSocket-Key
+     * and Sec-WebSocket-Version: 13 (the caller adds Origin and any
+     * Sec-WebSocket-Protocol to headers). The cache is not used and
+     * redirects are not followed. A 101 response with the right
+     * Upgrade, Connection and Sec-WebSocket-Accept is delivered through
+     * response(), and the connection then becomes a tunnel: data() gets
+     * its bytes as they arrive, au_http_tunnel_send writes, there is no
+     * idle timeout, and done() comes when the connection closes
+     * (AU_NET_OK for an orderly close). Any other response fails with
+     * AU_NET_ERR_PROTOCOL. */
+    bool websocket;
 } AuHttpRequest;
 
 void au_http_request_init(AuHttpRequest *rq, const char *url);
@@ -271,6 +283,11 @@ void au_http_cancel(AuHttpTransfer *t);
  * served from the cache is not affected. Unpausing reads on at the next
  * pump. */
 void au_http_pause(AuHttpTransfer *t, bool paused);
+/* A WebSocket tunnel (AuHttpRequest.websocket): queues bytes to send on
+ * its connection. False when the transfer is not an open tunnel, or when
+ * more than AU_HTTP_TUNNEL_MAX bytes would wait to be sent. */
+#define AU_HTTP_TUNNEL_MAX (16u * 1024 * 1024)
+bool au_http_tunnel_send(AuHttpTransfer *t, const void *data, size_t len);
 /* Answers a deferred credentials request; user NULL gives up. */
 void au_http_answer_credentials(AuHttpTransfer *t, const char *user, const char *pass);
 

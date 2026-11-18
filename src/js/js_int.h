@@ -192,7 +192,7 @@ struct AuJs {
     struct AuCorsCache *cors_cache; /* root: the CORS preflight cache (fetch.c) */
     /* root: live compression and event stream parser handles
      * (natives_streams.c), which hold memory outside the script heap */
-    uint32_t nzip, nsse;
+    uint32_t nzip, nsse, nws;
     JSClassID cls_stream_handle;
     void *modules;
     /* workers (worker.c): worker is set in a worker's own AuJs, which has

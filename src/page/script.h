@@ -138,6 +138,8 @@ uint8_t au_dv_cors_attr(const AuElement *el);
 void au_dv_cancel(AuDocView *dv, uint32_t id);
 /* Backpressure on a script's request (AuLoader.pause). */
 void au_dv_pause(AuDocView *dv, uint32_t id, bool paused);
+/* Bytes for a script's WebSocket connection (AuLoader.send). */
+bool au_dv_send(AuDocView *dv, uint32_t id, const void *data, size_t len);
 /* Script changed the DOM: mark style and layout out of date. */
 void au_dv_dom_changed(AuDocView *dv, AuNode *n, AuAtom attr, int kind);
 /* Script inserted child into parent, or removed it (prev and next were

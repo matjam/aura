@@ -102,7 +102,12 @@ void au_js_settings_default(AuJsSettings *s);
  * redirect, and reports the response with au_js_fetch_head, _data and
  * _done (never from inside start), with every response header. */
 typedef enum { AU_FETCH_OMIT, AU_FETCH_SAME_ORIGIN, AU_FETCH_INCLUDE } AuFetchCredentials;
-typedef enum { AU_FETCH_CORS, AU_FETCH_NO_CORS, AU_FETCH_SAME_ORIGIN_MODE, AU_FETCH_NAVIGATE } AuFetchMode;
+/* AU_FETCH_WEBSOCKET: a WebSocket opening handshake to an http or https
+ * URL (the bindings map ws: and wss:). It carries Origin, no CORS check
+ * applies, and a redirect fails it. After a 101 response the body is the
+ * connection's bytes and AuFetcher.send writes. */
+typedef enum { AU_FETCH_CORS, AU_FETCH_NO_CORS, AU_FETCH_SAME_ORIGIN_MODE, AU_FETCH_NAVIGATE,
+               AU_FETCH_WEBSOCKET } AuFetchMode;
 /* AU_FETCH_DEST_IMAGE: an <img> loaded from script; the bytes reach only
  * the bindings, which expose the size and load or error.
  * AU_FETCH_DEST_WORKER: a worker's script (importScripts). */
@@ -146,6 +151,11 @@ typedef struct AuFetcher {
      * whose ReadableStream body holds more than it has read. Optional:
      * without it the data arrives as fast as the network gives it. */
     void (*pause)(void *ctx, uint32_t id, bool paused);
+    /* A WebSocket request (AU_FETCH_WEBSOCKET) after its response: bytes
+     * to send on the connection. False when they cannot go (the
+     * connection closed, or too much is waiting). Optional: without it
+     * script cannot open a WebSocket. */
+    bool (*send)(void *ctx, uint32_t id, const void *data, size_t len);
 } AuFetcher;
 
 /* Response head: status, status text, every header as name/value pairs,

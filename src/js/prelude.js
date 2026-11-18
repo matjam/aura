@@ -390,6 +390,7 @@ const TransitionEvent = simpleEventClass('TransitionEvent', [['propertyName', ''
 const AnimationEvent = simpleEventClass('AnimationEvent', [['animationName', ''], ['elapsedTime', 0], ['pseudoElement', '']]);
 const BeforeUnloadEvent = simpleEventClass('BeforeUnloadEvent', []);
 const ToggleEvent = simpleEventClass('ToggleEvent', [['oldState', ''], ['newState', '']]);
+const CloseEvent = simpleEventClass('CloseEvent', [['wasClean', false], ['code', 0], ['reason', '']]);
 /* Constructible for pages that make them; Aura fires none of these yet. */
 const ClipboardEvent = simpleEventClass('ClipboardEvent', [['clipboardData', null]]);
 const FormDataEvent = simpleEventClass('FormDataEvent', [['formData', null]]);
@@ -402,7 +403,7 @@ tag(DragEvent);
 for (const C of [Event, CustomEvent, UIEvent, MouseEvent, WheelEvent, PointerEvent, KeyboardEvent, FocusEvent,
     InputEvent, CompositionEvent, ErrorEvent, PromiseRejectionEvent, PopStateEvent, HashChangeEvent, MessageEvent,
     ProgressEvent, StorageEvent, PageTransitionEvent, SubmitEvent, TransitionEvent, AnimationEvent,
-    BeforeUnloadEvent, ToggleEvent, ClipboardEvent, FormDataEvent, DragEvent])
+    BeforeUnloadEvent, ToggleEvent, CloseEvent, ClipboardEvent, FormDataEvent, DragEvent])
     defGlobal(C.name, C);
 
 /* ---- EventTarget ---- */

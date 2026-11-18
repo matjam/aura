@@ -155,6 +155,12 @@ static int finish_head(AuHttpParser *p)
         return -1;
     }
     au_buf_clear(&p->line);
+    if (p->status == 101 && p->upgrade) {
+        p->framing = AU_BODY_NONE;
+        p->keep_alive = false;
+        p->content_length = -1;
+        return 1;
+    }
     if (p->status >= 100 && p->status < 200) {
         if (p->status == 101) {
             p->error = "unexpected protocol switch";

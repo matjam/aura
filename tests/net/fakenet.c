@@ -2,6 +2,7 @@
 #include "fakenet.h"
 
 #include "net/tls_platform.h"
+#include "net/websocket.h"
 
 #include "mbedtls/pk.h"
 #include "mbedtls/ssl.h"
@@ -32,6 +33,7 @@ typedef struct FakeSock {
     AuBuf c2s; /* ciphertext from the client, not yet read by the server */
     size_t c2s_off;
     bool first_record_seen;
+    bool tunnel; /* after a websocket response: client bytes go to srv->tunnel */
 } FakeSock;
 
 /* One connection's server. */
@@ -318,6 +320,11 @@ static size_t request_len(const AuBuf *b)
 static void serve(FakeSock *k)
 {
     for (;;) {
+        if (k->tunnel) {
+            au_buf_append(&k->srv->tunnel, k->req.data, k->req.len);
+            k->req.len = 0;
+            return;
+        }
         size_t n = request_len(&k->req);
         if (!n)
             return;
@@ -337,6 +344,29 @@ static void serve(FakeSock *k)
         }
         if (r->silent)
             return;
+        if (r->websocket) {
+            /* "{ACCEPT}" in the response becomes the right answer to the
+             * request's key, and the connection becomes a tunnel. */
+            const char *req = s->requests[s->nreq - 1];
+            const char *kh = strstr(req, "Sec-WebSocket-Key: ");
+            char key[64] = "", acc[29] = "";
+            if (kh)
+                sscanf(kh + 19, "%63[^\r]", key);
+            au_ws_accept(key, acc);
+            const char *d = r->data, *m = strstr(d, "{ACCEPT}");
+            size_t dl = r->len ? r->len : strlen(d);
+            if (m) {
+                au_buf_append(&k->resp, d, (size_t)(m - d));
+                au_buf_puts(&k->resp, acc);
+                au_buf_append(&k->resp, m + 8, dl - (size_t)(m - d) - 8);
+            } else {
+                au_buf_append(&k->resp, d, dl);
+            }
+            k->tunnel = true;
+            k->chunk = r->chunk;
+            k->close_when_drained = r->close_after;
+            continue;
+        }
         au_buf_append(&k->resp, r->data, r->len ? r->len : strlen(r->data));
         k->chunk = r->chunk;
         k->paced = r->paced;
@@ -537,6 +567,7 @@ void fake_free(FakeNet *f)
     for (int i = 0; i < f->nservers; i++) {
         for (int j = 0; j < f->servers[i].nreq; j++)
             au_free(f->servers[i].requests[j]);
+        au_buf_free(&f->servers[i].tunnel);
         if (f->servers[i].tls_state) {
             mbedtls_ssl_cache_free(&f->servers[i].tls_state->cache);
             mbedtls_ssl_ticket_free(&f->servers[i].tls_state->tickets);

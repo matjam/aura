@@ -11,6 +11,7 @@
 #include "policy.h"
 #include "roots.h"
 #include "tls.h"
+#include "websocket.h"
 #include "../codec/brotli.h"
 #include "../codec/codec.h"
 #include "../url/url.h"
@@ -66,7 +67,8 @@ struct Conn {
     AuNetAddr addr;   /* the address connected to (family 0 before DNS answers) */
 };
 
-enum { T_START, T_WAIT_CONN, T_SEND, T_RECV, T_DRAIN, T_WAIT_CRED, T_AIA, T_FAILED, T_FINISHED };
+/* T_TUNNEL: a WebSocket connection after its 101 response (raw bytes). */
+enum { T_START, T_WAIT_CONN, T_SEND, T_RECV, T_DRAIN, T_WAIT_CRED, T_AIA, T_TUNNEL, T_FAILED, T_FINISHED };
 
 typedef struct AuthEntry {
     char *hostport, *realm, *user, *pass;
@@ -113,6 +115,8 @@ struct AuHttpTransfer {
     bool shared_waited; /* has waited once; never waits again */
     bool resp_begun;    /* the response head was delivered (cache_w set then if it is being stored) */
     bool no_cache; /* AuHttpRequest.no_cache */
+    bool websocket;   /* AuHttpRequest.websocket */
+    char ws_key[25];  /* the Sec-WebSocket-Key of the last attempt */
     bool https_first_upgrade; /* this attempt is an HTTPS-first upgrade */
     bool was_upgraded;        /* some attempt of this transfer was an HTTPS-first upgrade */
     int64_t range_start, range_end;
@@ -442,6 +446,15 @@ AuHttpTransfer *au_http_start(AuNet *net, AuHttpRequest *rq, const AuHttpCallbac
     t->range_start = rq->range_start;
     t->range_end = rq->range_end;
     t->total_timeout = rq->total_timeout_ms;
+    t->websocket = rq->websocket;
+    if (t->websocket) {
+        snprintf(t->method, sizeof t->method, "GET");
+        au_body_free(t->body);
+        t->body = NULL;
+        t->no_cache = true;
+        t->manual_redirect = true;
+        t->range_start = t->range_end = -1;
+    }
     t->started_ms = t->last_ms = now_ms(net);
     trace_init(t);
     t->original_url = dupz(rq->url ? rq->url : "");
@@ -480,6 +493,19 @@ void au_http_pause(AuHttpTransfer *t, bool paused)
     t->paused = paused;
     /* The idle timeout counts from now, not from before the pause. */
     t->last_ms = now_ms(t->net);
+}
+
+static void conn_queue(Conn *c, const void *data, size_t n);
+
+bool au_http_tunnel_send(AuHttpTransfer *t, const void *data, size_t len)
+{
+    Conn *c = t->conn;
+    if (t->state != T_TUNNEL || t->cancelled || !c || c->state != C_READY)
+        return false;
+    if (c->out.len - c->out_off + len > AU_HTTP_TUNNEL_MAX)
+        return false;
+    conn_queue(c, data, len);
+    return true;
 }
 
 void au_http_set_user(AuHttpTransfer *t, void *user) { t->user = user; }
@@ -1176,7 +1202,23 @@ static void build_request(AuHttpTransfer *t, Conn *c)
         au_buf_printf(&b, "Accept: %s\r\n", au_accept_for(t->dest));
     if (net->cfg.accept_language[0] && !au_headers_get(&t->extra, "accept-language"))
         au_buf_printf(&b, "Accept-Language: %s\r\n", net->cfg.accept_language);
-    if (t->range_start < 0)
+    if (t->websocket) {
+        /* A fresh key for each attempt. The key is a nonce, not a
+         * secret; when the platform's entropy has not come in yet, the
+         * clock and the transfer's address stand in. */
+        uint8_t nonce[16];
+        if (!drbg_ready(net) || !au_tls_random(nonce, sizeof nonce)) {
+            uint32_t a = now_ms(net) ^ (uint32_t)(uintptr_t)t, w = (uint32_t)wall(net);
+            for (int i = 0; i < 16; i++) {
+                a = a * 1103515245u + 12345u + w;
+                nonce[i] = (uint8_t)(a >> 16);
+            }
+        }
+        au_ws_key(nonce, t->ws_key);
+        au_buf_printf(&b, "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                          "Sec-WebSocket-Version: 13\r\nCache-Control: no-cache\r\nPragma: no-cache\r\n",
+                      t->ws_key);
+    } else if (t->range_start < 0)
         au_buf_puts(&b, "Accept-Encoding: gzip, deflate, br\r\n");
     else {
         /* au_put_i64, not %lld: newlib on Mac OS 9 has no %lld. */
@@ -1215,8 +1257,8 @@ static void build_request(AuHttpTransfer *t, Conn *c)
     /* Fetch metadata: only to potentially trustworthy URLs. */
     if (au_url_trustworthy(&t->url)) {
         au_buf_printf(&b, "Sec-Fetch-Site: %s\r\n", au_sec_fetch_site(t->referrer, &t->url));
-        au_buf_printf(&b, "Sec-Fetch-Mode: %s\r\n", au_sec_fetch_mode(t->mode));
-        au_buf_printf(&b, "Sec-Fetch-Dest: %s\r\n", au_sec_fetch_dest(t->dest));
+        au_buf_printf(&b, "Sec-Fetch-Mode: %s\r\n", t->websocket ? "websocket" : au_sec_fetch_mode(t->mode));
+        au_buf_printf(&b, "Sec-Fetch-Dest: %s\r\n", t->websocket ? "websocket" : au_sec_fetch_dest(t->dest));
         if (t->mode == AU_MODE_NAVIGATE && t->user_activated)
             au_buf_puts(&b, "Sec-Fetch-User: ?1\r\n");
     }
@@ -1944,6 +1986,23 @@ static bool handle_head(AuHttpTransfer *t)
     AuNet *net = t->net;
     int st = t->parser.status;
     store_cookies(t);
+    if (t->websocket) {
+        /* RFC 6455 section 4.1: the server's handshake. No extension or
+         * subprotocol was offered unless the caller asked for one; the
+         * caller checks Sec-WebSocket-Protocol. */
+        const AuHeaders *h = &t->parser.headers;
+        const char *up = au_headers_get(h, "upgrade");
+        const char *acc = au_headers_get(h, "sec-websocket-accept");
+        char want[29];
+        bool ok = st == 101 && up && au_ieq(up, strlen(up), "websocket", 9) &&
+                  au_headers_has_token(h, "connection", "upgrade") && acc && au_ws_accept(t->ws_key, want) &&
+                  !strcmp(acc, want) && !au_headers_get(h, "sec-websocket-extensions");
+        if (!ok) {
+            fail_later(t, AU_NET_ERR_PROTOCOL);
+            return true;
+        }
+        return false;
+    }
     /* HSTS: only from a secure connection without certificate errors. */
     if (net->hsts && !strcmp(t->url.scheme, "https") && t->url.host_type == AU_URL_HOST_DOMAIN &&
         !(t->have_cert && t->cert.overridden)) {
@@ -2459,6 +2518,13 @@ static bool recv_step(AuHttpTransfer *t)
             if (!handle_head(t)) {
                 if (t->state == T_FAILED)
                     return true;
+                if (t->websocket) {
+                    /* What follows the head is the new protocol's. */
+                    t->resp_begun = true;
+                    t->state = T_TUNNEL;
+                    deliver_response(t);
+                    return true;
+                }
                 setup_decoders(t);
                 deliver_response(t);
                 cache_begin(t);
@@ -2522,6 +2588,48 @@ static bool recv_step(AuHttpTransfer *t)
         } else {
             conn_failed(t, AU_NET_ERR_RESET);
         }
+        return true;
+    }
+    return any;
+}
+
+/* A WebSocket connection: bytes both ways until either side closes.
+ * Paused, nothing is delivered and the connection stops reading once
+ * IN_MAX bytes wait, so TCP holds the server back. */
+static bool tunnel_step(AuHttpTransfer *t)
+{
+    Conn *c = t->conn;
+    if (!c) {
+        finish(t, AU_NET_ERR_RESET);
+        return true;
+    }
+    bool any = false;
+    if (c->state != C_DEAD)
+        any = conn_io(c);
+    while (!t->paused && conn_pending_in(c) && !t->cancelled) {
+        size_t n = conn_pending_in(c);
+        if (n > RECV_CHUNK)
+            n = RECV_CHUNK;
+        const uint8_t *p = (const uint8_t *)c->in.data + c->in_off;
+        c->in_off += n;
+        t->received += (int64_t)n;
+        any = true;
+        if (t->cb.data)
+            t->cb.data(t->cb.ctx, t, p, n);
+    }
+    if (t->cancelled || t->state != T_TUNNEL)
+        return true;
+    conn_compact(&c->in, &c->in_off);
+    if (c->state == C_DEAD) {
+        if (!conn_pending_in(c) || t->paused) {
+            AuNetError e = c->err;
+            detach_conn(t, false);
+            finish(t, e == AU_NET_OK ? AU_NET_ERR_RESET : e);
+            return true;
+        }
+    } else if (c->eof && !conn_pending_in(c)) {
+        detach_conn(t, false);
+        finish(t, AU_NET_OK);
         return true;
     }
     return any;
@@ -2603,6 +2711,7 @@ static bool step(AuHttpTransfer *t)
         if (!t->head_sent) {
             if (!t->parser_live) {
                 au_http_parser_init(&t->parser, !strcmp(t->method, "HEAD"));
+                t->parser.upgrade = t->websocket;
                 t->parser_live = true;
             }
             build_request(t, c);
@@ -2643,6 +2752,8 @@ static bool step(AuHttpTransfer *t)
         return false;
     case T_AIA:
         return aia_step(t);
+    case T_TUNNEL:
+        return tunnel_step(t);
     case T_FAILED:
         finish(t, t->fail_err);
         return true;
@@ -2767,6 +2878,7 @@ AuHttpPhase au_http_phase(const AuHttpTransfer *t)
         return t->got_bytes ? AU_PHASE_RECEIVING : AU_PHASE_WAITING;
     case T_WAIT_CRED: return AU_PHASE_WAITING;
     case T_AIA: return AU_PHASE_SECURING;
+    case T_TUNNEL: return AU_PHASE_RECEIVING;
     default: return AU_PHASE_DONE;
     }
 }

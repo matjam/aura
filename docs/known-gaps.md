@@ -374,6 +374,10 @@ done.
   a fifth source waits. A stream silent for 60 seconds (the loader's
   idle timeout) or past 64 MB reconnects. After Back or Forward to a
   kept document its sources reconnect without an `error` event.
+- `WebSocket` offers no extensions (no `permessage-deflate`), so
+  messages arrive uncompressed. `bufferedAmount` drops to 0 at the next
+  task, not as bytes leave. A message over 4 MB fails the connection.
+  A document kept for Back and Forward closes its sockets.
 - `TextDecoderStream` decodes UTF-8, UTF-16 and windows-1252 only, the
   encodings `TextDecoder` knows.
 - XML for `responseXML`; `responseType` `document` parses HTML only.

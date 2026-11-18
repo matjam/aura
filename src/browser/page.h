@@ -115,7 +115,9 @@ typedef struct AuFetchRequest {
      * at a time: src/js/fetch.c applies CORS and follows redirects itself.
      * headers: name, value pairs sent as given (Origin among them).
      * script_mode: 0 for a resource of the page, else 1 cors, 2 no-cors,
-     * 3 same-origin (Sec-Fetch-Mode). manual_redirect: a 3xx response is
+     * 3 same-origin (Sec-Fetch-Mode), 4 a WebSocket opening handshake
+     * (the response's body is then the connection's bytes, and
+     * AuPageFetcher.send writes). manual_redirect: a 3xx response is
      * delivered, not followed. no_store: the HTTP cache is neither read
      * nor filled. no_referrer: no Referer header. */
     const char *const *headers;
@@ -305,6 +307,9 @@ typedef struct AuPageFetcher {
      * id's response from the network (the connection's receive window
      * then fills and the server waits); paused false reads on. */
     void (*pause)(void *ctx, uint32_t id, bool paused);
+    /* Optional: bytes to send on a WebSocket fetch (script_mode 4) after
+     * its response. False when it cannot (closed, or too much waits). */
+    bool (*send)(void *ctx, uint32_t id, const void *data, size_t len);
 } AuPageFetcher;
 
 typedef struct AuPageEnv {
