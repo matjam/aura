@@ -231,7 +231,7 @@ static void sheets_changed(AuDocView *dv, AuNode *scope)
     dv->sheets_dirty = true;
     if (!dv->sheets_scoped_only)
         return;
-    if (!scope || !au_is_shadow_root(scope) || dv->ndirty_scopes == sizeof dv->dirty_scopes / sizeof dv->dirty_scopes[0]) {
+    if (!scope || !au_is_shadow_root(scope) || dv->ndirty_scopes == DV_MAX_DIRTY_SCOPES) {
         dv->sheets_scoped_only = false;
         drop_dirty_scopes(dv);
         return;
@@ -239,6 +239,17 @@ static void sheets_changed(AuDocView *dv, AuNode *scope)
     for (uint32_t i = 0; i < dv->ndirty_scopes; i++)
         if (dv->dirty_scopes[i] == scope)
             return;
+    if (dv->ndirty_scopes == dv->dirty_scopes_cap) {
+        uint32_t cap = dv->dirty_scopes_cap ? dv->dirty_scopes_cap * 2 : 16;
+        AuNode **p = au_realloc(dv->dirty_scopes, cap * sizeof *p);
+        if (!p) {
+            dv->sheets_scoped_only = false;
+            drop_dirty_scopes(dv);
+            return;
+        }
+        dv->dirty_scopes = p;
+        dv->dirty_scopes_cap = cap;
+    }
     dv->dirty_scopes[dv->ndirty_scopes++] = au_node_ref(scope);
 }
 
@@ -259,6 +270,9 @@ static void free_constructed(AuDocView *dv)
     dv->adopted = NULL;
     dv->nadopted = dv->adopted_cap = 0;
     drop_dirty_scopes(dv);
+    au_free(dv->dirty_scopes);
+    dv->dirty_scopes = NULL;
+    dv->dirty_scopes_cap = 0;
 }
 
 /* Stops request id of dv. A nested view's requests were made through
@@ -3136,6 +3150,38 @@ struct AuCanvasSet *au_dv_canvas_set(AuDocView *dv)
     return dv->canvases;
 }
 
+/* naturalWidth and naturalHeight: the size of the image the element's
+ * chosen source names, from the image cache, divided by the candidate's
+ * density. No style or layout pass: script reads these right after
+ * inserting images, and a forced update there cost Reddit hundreds of
+ * milliseconds. False until the image's size is known. */
+bool au_dv_image_natural(AuDocView *dv, AuElement *img, int *w, int *h)
+{
+    if (!dv->layout || !dv->imgs)
+        return false;
+    AuBuf src;
+    au_buf_init(&src);
+    float d = 1;
+    char *abs =
+        au_layout_image_source(dv->layout, img, &src, &d) ? au_url_resolve_dup(dv->base, au_buf_cstr(&src)) : NULL;
+    au_buf_free(&src);
+    if (!abs)
+        return false;
+    AuImageEntry *e = au_image_cache_find(au_docimages_cache(dv->imgs), abs);
+    au_free(abs);
+    int iw = 0, ih = 0;
+    AuImageState st = e ? au_image_entry_state(e) : AU_IMAGE_PENDING;
+    if (st == AU_IMAGE_PENDING || st == AU_IMAGE_FAILED || !au_image_entry_size(e, &iw, &ih) || iw <= 0 || ih <= 0)
+        return false;
+    /* an SVG with neither width nor height has no natural size */
+    unsigned m = au_image_entry_missing(e);
+    if ((m & AU_IMAGE_MISSING_W) && (m & AU_IMAGE_MISSING_H) && !(m & AU_IMAGE_MISSING_RATIO))
+        return false;
+    *w = (int)((float)iw / d + 0.5f);
+    *h = (int)((float)ih / d + 0.5f);
+    return true;
+}
+
 /* The pixels of an image element for drawImage: the image cache's entry
  * for the source layout chose, decoded at its natural size where the
  * cache's per-image limit allows. */
@@ -3144,7 +3190,8 @@ bool au_dv_canvas_image(AuDocView *dv, AuElement *img, const AuSurface **px, int
     AuBuf src;
     au_buf_init(&src);
     bool ok = false;
-    char *abs = au_layout_image_source(dv->layout, img, &src) ? au_url_resolve_dup(dv->base, au_buf_cstr(&src)) : NULL;
+    char *abs =
+        au_layout_image_source(dv->layout, img, &src, NULL) ? au_url_resolve_dup(dv->base, au_buf_cstr(&src)) : NULL;
     if (abs) {
         AuImageCache *cache = au_docimages_cache(dv->imgs);
         AuImageEntry *e = au_image_cache_find(cache, abs);

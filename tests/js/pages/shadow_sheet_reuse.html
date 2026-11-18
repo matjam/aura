@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Shadow roots that adopt the same sheets</title>
+<script src="../harness.js"></script>
+<style>.outer { color: rgb(0, 0, 9); }</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+/* The resolver keeps its rule index when a new shadow root adopts a sheet
+ * list it has indexed already (index_reuse in src/css/cascade.c). */
+const red = new CSSStyleSheet();
+red.replaceSync('p { color: rgb(200, 0, 0); } :host { width: 7px; }');
+const blue = new CSSStyleSheet();
+blue.replaceSync('p { color: rgb(0, 0, 200); }');
+const box = document.getElementById('box');
+function component(sheets) {
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'open' });
+    root.adoptedStyleSheets = sheets;
+    root.innerHTML = '<p>x</p>';
+    box.appendChild(host);
+    return host;
+}
+const color = (host) => getComputedStyle(host.shadowRoot.querySelector('p')).color;
+
+test('each copy of a component gets its sheets', () => {
+    const hosts = [];
+    for (let i = 0; i < 20; i++) {
+        hosts.push(component([red]));
+        assert.equal(color(hosts[i]), 'rgb(200, 0, 0)', 'copy ' + i);
+        assert.equal(getComputedStyle(hosts[i]).width, '7px');
+    }
+    assert.equal(getComputedStyle(document.querySelector('.outer') || document.body).color !== '', true);
+});
+
+test('another sheet list, then the first again', () => {
+    const b = component([blue]);
+    assert.equal(color(b), 'rgb(0, 0, 200)');
+    const r = component([red]);
+    assert.equal(color(r), 'rgb(200, 0, 0)');
+    const both = component([red, blue]);
+    assert.equal(color(both), 'rgb(0, 0, 200)', 'the later sheet wins');
+});
+
+test('a list no root uses any more, and a sheet that changed', () => {
+    for (const h of [...box.children]) if (h.shadowRoot.adoptedStyleSheets[0] === blue) h.remove();
+    const r = component([red]);
+    assert.equal(color(r), 'rgb(200, 0, 0)');
+    red.replaceSync('p { color: rgb(0, 150, 0); }');
+    assert.equal(color(r), 'rgb(0, 150, 0)');
+    const b = component([blue]);
+    assert.equal(color(b), 'rgb(0, 0, 200)');
+});
+
+test('a class change before the restyle that follows new shadow roots', () => {
+    /* index_current in src/css/cascade.c: the index is built when the
+     * change is invalidated, and its records reach the marked elements */
+    const d = document.createElement('div');
+    box.appendChild(d);
+    assert.equal(getComputedStyle(d).color !== 'rgb(0, 0, 9)', true);
+    const hosts = [];
+    for (let i = 0; i < 12; i++)
+        hosts.push(component([i % 2 ? red : blue]));
+    d.className = 'outer';
+    assert.equal(getComputedStyle(d).color, 'rgb(0, 0, 9)');
+    assert.equal(color(hosts[0]), 'rgb(0, 0, 200)');
+    assert.equal(color(hosts[1]), 'rgb(0, 150, 0)');
+    d.className = '';
+    assert.equal(getComputedStyle(d).color !== 'rgb(0, 0, 9)', true);
+});
+
+test('document styles still apply', () => {
+    const d = document.createElement('div');
+    d.className = 'outer';
+    box.appendChild(d);
+    component([red]);
+    assert.equal(getComputedStyle(d).color, 'rgb(0, 0, 9)');
+});
+</script>
+</body>
+</html>

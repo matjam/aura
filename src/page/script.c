@@ -324,8 +324,7 @@ static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y, bo
 static bool h_image_natural_size(void *ctx, AuElement *el, int *w, int *h)
 {
     AuDocScript *s = ctx;
-    au_docview_update(s->dv);
-    return au_layout_image_natural_size(au_docview_layout(s->dv), el, w, h);
+    return au_dv_image_natural(s->dv, el, w, h);
 }
 
 static AuElement *h_hit_test(void *ctx, double x, double y)

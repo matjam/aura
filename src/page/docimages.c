@@ -149,7 +149,7 @@ static void scan(AuDocImages *m, AuDocument *doc, AuLayout *L, const char *base)
             continue;
         /* The URL layout chose (srcset, sizes, <picture>). */
         au_buf_clear(&chosen);
-        char *abs = au_layout_image_source(L, el, &chosen) ? au_url_resolve_dup(base, au_buf_cstr(&chosen)) : NULL;
+        char *abs = au_layout_image_source(L, el, &chosen, NULL) ? au_url_resolve_dup(base, au_buf_cstr(&chosen)) : NULL;
         if (!abs)
             continue;
         AuImageEntry *e = au_image_cache_find(m->cache, abs);

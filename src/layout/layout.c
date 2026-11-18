@@ -2323,20 +2323,6 @@ static bool script_scrollable(const LBox *b)
     return s->overflow_x != AU_OVERFLOW_CLIP || s->overflow_y != AU_OVERFLOW_CLIP;
 }
 
-bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int *h)
-{
-    (void)L;
-    const LBox *b = el ? (const LBox *)el->box : NULL;
-    if (!b || b->kind != LK_BLOCK || b->replaced != LR_IMAGE)
-        return false;
-    const LReplaced *r = ((const LBlock *)b)->rep;
-    if (!r || !r->loaded || r->ratio_only || r->marker || r->iw <= 0 || r->ih <= 0)
-        return false;
-    *w = (int)(r->iw + 0.5f);
-    *h = (int)(r->ih + 0.5f);
-    return true;
-}
-
 const char *au_layout_image_request(AuLayout *L, const AuElement *el)
 {
     (void)L;

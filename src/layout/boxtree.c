@@ -939,11 +939,11 @@ static const char *img_source(const AuNode *img, float vw, float vh, bool dark, 
     return src;
 }
 
-bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out)
+bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out, float *density_out)
 {
     size_t len = 0;
     bool viewport = false;
-    float density;
+    float density = 1;
     const char *u;
     if (au_is_html_element(&el->node, AU_ATOM_img))
         u = img_source(&el->node, L->src_vw > 0 ? L->src_vw : 1024, L->src_vh > 0 ? L->src_vh : 768, L->dark, &len,
@@ -955,6 +955,8 @@ bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out)
     if (!u || !len)
         return false;
     au_buf_append(out, u, len);
+    if (density_out)
+        *density_out = density > 0 ? density : 1;
     return true;
 }
 

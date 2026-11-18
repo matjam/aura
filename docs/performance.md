@@ -176,6 +176,33 @@ Measured on the host (Release, base `2943372`) with `aura-host chrome
   showed 8 s of script, 1.8 s of style and 4 s of paint signed in, in
   the Cocoa application).
 
+## Script and style on Reddit, 2026-11-18
+
+Measured on the host (Debug, base `e0587f0`) with `aura-host chrome -w
+1024 -h 768 --net --load-ms 15000 --tab https://www.reddit.com/ --do
+wait:3000 --do perf`, signed out. Runs differ by up to 20%, because the
+page's script depends on network timing.
+
+| | Before | After |
+|---|---|---|
+| Script during the load | 5.9 s | 2.7 to 2.9 s |
+| Style during the load | about 1.2 s | 0.9 to 1.1 s |
+| Rule index builds, in a `sample` profile | 275 samples | 84 samples |
+
+- Script: one regular expression, `/[\n ]$/`, ran about 48,000 times
+  on 10 KB strings. QuickJS tried it at every position; patch 0016
+  tries an end-anchored pattern only near the end
+  ([`javascript.md`](javascript.md), QuickJS patches).
+- Style: each new component's shadow root rebuilt the rule index and
+  restyled the whole document. The index is now kept when the sheet
+  lists are ones it has, and a change made before the restyle is
+  targeted ([`css.md`](css.md), "Shadow trees and scoped styles").
+- `naturalWidth` and `naturalHeight` read the image cache and no longer
+  force a layout.
+- Still open: two script tasks of about 450 and 850 ms, and about ten
+  full restyles a load, each for a `<style>` or `<link>` the page adds
+  to the document.
+
 ## Repainting after script on Reddit, 2026-11-17
 
 Measured on the host (Debug, base `22a4ced`) with `aura-host chrome -w

@@ -1345,12 +1345,17 @@ static void parse_rule_list(Parser *p, uint32_t a, uint32_t b, RuleList *out, bo
     }
 }
 
+/* AuCssSheet.serial: a new value for each sheet, and again when an
+ * @import arrives (the rules the sheet stands for changed). */
+static uint32_t sheet_serials;
+
 AuCssSheet *css_sheet_parse(const char *css, size_t len, AuCssOrigin origin, const char *base_url,
                             const char *media, bool quirks, int text_mode)
 {
     au_css_init();
     AuCssSheet *sh = au_calloc(sizeof *sh);
     sh->refs = 1;
+    sh->serial = ++sheet_serials;
     sh->scopes = au_atom_scope_bits();
     sh->origin = (uint8_t)origin;
     sh->quirks = quirks;
@@ -1669,6 +1674,7 @@ void au_css_sheet_set_import(AuCssSheet *s, size_t i, AuCssSheet *child)
     }
     au_css_sheet_free(s->imports[i].sheet);
     s->imports[i].sheet = child;
+    s->serial = ++sheet_serials;
 }
 
 size_t au_css_sheet_font_face_count(const AuCssSheet *s) { return s->nfaces; }

@@ -659,6 +659,10 @@ typedef struct CssPropertyRule {
 
 struct AuCssSheet {
     uint32_t refs; /* owners (au_css_sheet_retain); freed with the last */
+    /* Unique per sheet made (a freed sheet's address can be reused), and
+     * new again when an @import arrives: the resolver compares sheets
+     * and their imports with it before reusing its rule index. */
+    uint32_t serial;
     uint8_t origin;
     bool quirks;
     bool text_owned;

@@ -117,10 +117,11 @@ struct AuDocView {
     AdoptedSheets *adopted;
     uint32_t nadopted, adopted_cap;
     /* While every sheet change since the last rebuild_resolver was in a
-     * shadow root, the roots (referenced; at most 8): only
-     * their hosts' subtrees are restyled. */
-    AuNode *dirty_scopes[8];
-    uint32_t ndirty_scopes;
+     * shadow root, the roots (referenced; at most DV_MAX_DIRTY_SCOPES):
+     * only their hosts' subtrees are restyled. */
+#define DV_MAX_DIRTY_SCOPES 1024
+    AuNode **dirty_scopes;
+    uint32_t ndirty_scopes, dirty_scopes_cap;
     bool sheets_scoped_only;
     AuCssSheet *user_sheet; /* user_css parsed for this document, or NULL */
     uint32_t ndeferred;     /* sheet sources waiting for their media query to match */

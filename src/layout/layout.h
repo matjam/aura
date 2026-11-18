@@ -183,9 +183,11 @@ void au_layout_text_visibility_changed(AuLayout *L);
  * an <img>, the choice among srcset candidates (density 1; width
  * descriptors against sizes and the viewport of the last layout) and
  * the <source> elements of a <picture> parent, else src; for other
- * elements the src attribute. Returns false when there is none. Layout
- * asks the loader for the same URL. */
-bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out);
+ * elements the src attribute (a video's poster). Returns false when there
+ * is none. Layout asks the loader for the same URL. density (may be
+ * NULL) is the chosen candidate's: the natural size is the image's
+ * divided by it. Needs no layout pass. */
+bool au_layout_image_source(AuLayout *L, const AuElement *el, AuBuf *out, float *density);
 /* Calls fn with the document rectangle of each box that shows the image
  * at absolute URL url: image boxes, boxes with it as a background or
  * mask layer, and every inline SVG (one may hold it in an <image>).
@@ -313,9 +315,6 @@ bool au_layout_element_visual_rect(AuLayout *L, const AuElement *el, float view_
  * padding box's width and height (clientWidth, clientHeight). False when
  * el has no such box. */
 bool au_layout_element_scroll(AuLayout *L, const AuElement *el, float out[6]);
-/* The natural size of the image an <img> box shows, once it has loaded
- * (naturalWidth, naturalHeight). False without a box or before then. */
-bool au_layout_image_natural_size(AuLayout *L, const AuElement *el, int *w, int *h);
 /* The absolute URL an <img> box asked the image loader for, or NULL (no
  * image box, or no source). */
 const char *au_layout_image_request(AuLayout *L, const AuElement *el);

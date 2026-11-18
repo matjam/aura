@@ -291,6 +291,29 @@ To restyle after a shadow tree's sheets change, call
 again and only the hosts of those roots are restyled. A change to the
 document's sheets still restyles everything.
 
+These rules keep that restyle small on a page that attaches many
+components at once:
+
+- **The index is kept when it can be** (`index_reuse` in `cascade.c`).
+  The resolver records the sheets the index was built from and a
+  signature of each (`AuCssSheet.serial`, folded over its imports). When
+  the document's sheets are the same, every shadow root's list equals a
+  list the index has already, and every indexed list is still in use,
+  the index stands and only the scope keys are rebuilt. A sheet whose
+  text changed gets a new serial, and so does a sheet whose `@import`
+  arrived.
+- **The same device changes nothing.** `au_css_resolver_set_device`
+  returns at once when the device is the one the resolver has. The
+  document view gives the device with every new sheet list; before
+  this check each new shadow root restyled the whole document.
+- **The document view keeps up to 1,024 changed shadow roots** per
+  pass (`DV_MAX_DIRTY_SCOPES`). Past that the whole document is
+  restyled.
+- **A change between the new sheet list and the restyle is targeted.**
+  The invalidation calls build the waiting index first
+  (`index_current`), so a class, attribute, state or child change marks
+  what its records reach instead of forcing a full restyle.
+
 To restyle a host's whole flat subtree (a slot assignment changed),
 call `au_css_invalidate_subtree`.
 

@@ -213,6 +213,18 @@ struct AuCssResolver {
     uint16_t walk_scope;    /* during index_build */
     ScopeKey *scope_keys;   /* shadow root -> scope id, sorted by key */
     uint32_t nscope_keys, scope_keys_cap;
+    /* What the index was built from (index_reuse): the document's sheets
+     * in order, then each scope id's sheet list, as sheet and signature
+     * (sheet_sig); scope id g's list is built[built_at[g - 1],
+     * built_at[g]). */
+    struct BuiltSheet {
+        const AuCssSheet *sheet;
+        uint32_t serial;
+    } *built;
+    uint32_t nbuilt, built_cap;
+    uint32_t *built_at; /* [0] is the end of the document's sheets */
+    uint32_t nbuilt_at, built_at_cap;
+    bool built_valid;
     uint32_t *shadow_entries; /* entries of ::slotted() and ::part() rules (not in the maps) */
     uint32_t nshadow_entries, shadow_entries_cap;
     bool slotted_rules, part_rules;
@@ -1041,6 +1053,8 @@ static void walk_sheet(AuCssResolver *r, const AuCssSheet *sheet, int32_t layer,
     }
 }
 
+static uint32_t sheet_sig(const AuCssSheet *s);
+
 static void index_clear(AuCssResolver *r)
 {
     r->nentries = 0;
@@ -1056,6 +1070,8 @@ static void index_clear(AuCssResolver *r)
     r->nprops = 0;
     r->nmedia_deps = 0;
     r->nscope_keys = 0;
+    r->built_valid = false;
+    r->nbuilt = r->nbuilt_at = 0;
     r->nshadow_entries = 0;
     r->slotted_rules = r->part_rules = false;
     r->ncq = 0;
@@ -1159,8 +1175,13 @@ static void index_scopes(AuCssResolver *r, uint32_t *order, Frame **stack, uint3
             gr->len = b - a;
             gr->hash = h;
             gr->id = id;
-            for (uint32_t k = a; k < b; k++)
+            for (uint32_t k = a; k < b; k++) {
                 list[k - a] = r->sheets[v[k].index];
+                struct BuiltSheet *bs = CSS_PUSH(r->built, r->nbuilt, r->built_cap);
+                bs->sheet = list[k - a];
+                bs->serial = sheet_sig(list[k - a]);
+            }
+            *CSS_PUSH(r->built_at, r->nbuilt_at, r->built_at_cap) = r->nbuilt; /* id's end */
             r->walk_scope = id;
             int32_t layer = layer_new(&r->layers[AU_CSS_ORIGIN_AUTHOR], 0, 0);
             walk_group(r, list, b - a, layer, order, stack, sn, scap);
@@ -1213,6 +1234,13 @@ static void index_build(AuCssResolver *r, bool quirks)
     walk_sheet(r, r->ua, 0, &order, &stack, &sn, &scap, false);
     if (quirks)
         walk_sheet(r, r->ua_quirks, 0, &order, &stack, &sn, &scap, false);
+    for (uint32_t i = 0; i < r->nsheets; i++)
+        if (!r->any_scoped || !r->sheet_scope[i]) {
+            struct BuiltSheet *bs = CSS_PUSH(r->built, r->nbuilt, r->built_cap);
+            bs->sheet = r->sheets[i];
+            bs->serial = sheet_sig(r->sheets[i]);
+        }
+    *CSS_PUSH(r->built_at, r->nbuilt_at, r->built_at_cap) = r->nbuilt;
     if (!r->any_scoped) {
         walk_group(r, r->sheets, r->nsheets, 0, &order, &stack, &sn, &scap);
     } else {
@@ -1274,6 +1302,121 @@ static void index_build(AuCssResolver *r, bool quirks)
     au_free(keys);
     deps_build(r);
     r->index_dirty = false;
+    r->built_valid = true;
+}
+
+/* The serials of a sheet and the sheets it imports, folded together: an
+ * import that arrives at any depth changes it. */
+static uint32_t sheet_sig(const AuCssSheet *s)
+{
+    const AuCssSheet *stack[32];
+    uint32_t n = 0, seen = 0, h = 2166136261u;
+    stack[n++] = s;
+    while (n && seen++ < 1024) {
+        const AuCssSheet *t = stack[--n];
+        h = (h ^ t->serial) * 16777619u;
+        for (uint32_t i = 0; i < t->nimports; i++)
+            if (t->imports[i].sheet) {
+                if (n == 32)
+                    return 0; /* too deep to tell: never equal (built_same) */
+                stack[n++] = t->imports[i].sheet;
+            }
+    }
+    return h ? h : 1;
+}
+
+static bool built_same(const struct BuiltSheet *b, const AuCssSheet *s)
+{
+    if (b->sheet != s || !b->serial)
+        return false;
+    return b->serial == sheet_sig(s);
+}
+
+/* The sheets changed, but perhaps only in which shadow roots have which
+ * sheet lists: a page that inserts another copy of a component adds a
+ * shadow root whose adopted sheets another root already has. When the
+ * document's sheets are the ones the index was built from and every
+ * shadow root's list is a list the index has a scope id for (each of
+ * them still in use, so the index points into no sheet that may have
+ * gone), the index stays and only the roots' scope ids are found again.
+ * Reddit inserted hundreds of components while it loaded, and each
+ * built the index again. */
+static bool index_reuse(AuCssResolver *r)
+{
+    if (!r->built_valid || r->nbuilt_at == 0)
+        return false;
+    uint32_t k = 0, ndoc = r->built_at[0];
+    for (uint32_t i = 0; i < r->nsheets; i++) {
+        if (r->any_scoped && r->sheet_scope[i])
+            continue;
+        if (k >= ndoc || !built_same(&r->built[k], r->sheets[i]))
+            return false;
+        k++;
+    }
+    if (k != ndoc)
+        return false;
+    uint32_t ngroups = r->nbuilt_at - 1, n = 0;
+    for (uint32_t i = 0; r->any_scoped && i < r->nsheets; i++)
+        n += r->sheet_scope[i] != NULL;
+    if (!n) {
+        if (ngroups)
+            return false;
+        r->nscope_keys = 0;
+        share_clear(r);
+        r->index_dirty = false;
+        return true;
+    }
+    ScopedSheet *v = au_alloc(n * sizeof *v);
+    ScopeKey *keys = au_alloc(n * sizeof *keys);
+    uint8_t *used = au_calloc(ngroups + 1);
+    n = 0;
+    for (uint32_t i = 0; i < r->nsheets; i++)
+        if (r->sheet_scope[i]) {
+            v[n].key = r->sheet_scope[i];
+            v[n].index = i;
+            n++;
+        }
+    qsort(v, n, sizeof *v, scoped_cmp);
+    uint32_t nkeys = 0;
+    bool ok = true;
+    for (uint32_t a = 0; a < n && ok;) {
+        uint32_t b = a;
+        while (b < n && v[b].key == v[a].key)
+            b++;
+        uint16_t id = 0;
+        for (uint32_t g = 1; g <= ngroups && !id; g++) {
+            uint32_t s0 = r->built_at[g - 1], s1 = r->built_at[g];
+            if (s1 - s0 != b - a)
+                continue;
+            bool same = true;
+            for (uint32_t j = 0; j < b - a && same; j++)
+                same = built_same(&r->built[s0 + j], r->sheets[v[a + j].index]);
+            if (same)
+                id = (uint16_t)g;
+        }
+        if (!id)
+            ok = false;
+        else {
+            used[id] = 1;
+            keys[nkeys].key = v[a].key;
+            keys[nkeys].id = id;
+            nkeys++;
+        }
+        a = b;
+    }
+    for (uint32_t g = 1; g <= ngroups && ok; g++)
+        ok = used[g] != 0;
+    if (ok) {
+        r->nscope_keys = 0;
+        for (uint32_t i = 0; i < nkeys; i++)
+            *CSS_PUSH(r->scope_keys, r->nscope_keys, r->scope_keys_cap) = keys[i];
+        share_clear(r);
+        r->index_dirty = false;
+    }
+    au_free(used);
+    au_free(keys);
+    au_free(v);
+    return ok;
 }
 
 /* ---- Resolver lifetime ---- */
@@ -1346,6 +1489,8 @@ void au_css_resolver_free(AuCssResolver *r)
     au_free(r->walked);
     au_free(r->walked_scope);
     au_free(r->scope_keys);
+    au_free(r->built);
+    au_free(r->built_at);
     au_free(r->shadow_entries);
     au_free(r->sheet_scope);
     au_free(r->media_deps);
@@ -1384,11 +1529,15 @@ static bool device_same_but_viewport(const AuCssDevice *a, const AuCssDevice *b)
 
 void au_css_resolver_set_device(AuCssResolver *r, const AuCssDevice *d)
 {
-    bool tracked = r->styled_once && !r->index_dirty && !r->full_restyle && device_same_but_viewport(&r->dev, d);
     bool same_size = r->dev.width == d->width && r->dev.height == d->height;
-    r->dev = *d;
-    if (tracked && same_size)
+    /* The same device again (the document view gives it with every new
+     * sheet list): nothing changes, even while the index waits to be
+     * built. This used to make every new shadow root restyle the whole
+     * document. */
+    if (r->styled_once && same_size && device_same_but_viewport(&r->dev, d))
         return;
+    bool tracked = r->styled_once && !r->index_dirty && !r->full_restyle && device_same_but_viewport(&r->dev, d);
+    r->dev = *d;
     if (tracked) {
         /* Only the viewport changed: the index stands unless a media
          * query it evaluated has another result now. */
@@ -1401,6 +1550,7 @@ void au_css_resolver_set_device(AuCssResolver *r, const AuCssDevice *d)
         }
     }
     r->index_dirty = true;
+    r->built_valid = false; /* the index's media queries have other results */
     r->full_restyle = true;
 }
 
@@ -1484,8 +1634,9 @@ void au_css_resolver_remove_sheet(AuCssResolver *r, AuCssSheet *s)
 
 void au_css_resolver_detach_sheets(AuCssResolver *r)
 {
-    /* the index points into the sheets */
-    index_clear(r);
+    /* The index still points into the sheets. It is not used again until
+     * index_reuse has found the sheets it was built from in the new list
+     * (alive, by their serials), or index_build has replaced it. */
     share_clear(r);
     r->nsheets = 0;
     r->any_scoped = false;
@@ -3129,7 +3280,7 @@ static bool share_eligible(const AuElement *el, const AuCssDeclBlock *inl, const
 static void prepare(AuCssResolver *r, const AuElement *el)
 {
     bool quirks = el->node.doc && el->node.doc->quirks == AU_QUIRKS_FULL;
-    if (r->index_dirty || quirks != r->quirks)
+    if (quirks != r->quirks || (r->index_dirty && !index_reuse(r)))
         index_build(r, quirks);
     /* elements of shadow trees must not match the document's rules */
     r->scoping = r->any_scoped || (el->node.doc && el->node.doc->has_shadow);
@@ -3702,9 +3853,24 @@ static void dep_fire(AuCssResolver *r, AuElement *el, const StateDep *d)
     }
 }
 
+/* Whether the index, and the invalidation records it holds, are current.
+ * After au_css_resolver_sheets_changed_in only the index waits (the
+ * marked hosts are restyled with it): it is built now, so that a change
+ * before the restyle is invalidated by its records instead of restyling
+ * the whole document. */
+static bool index_current(AuCssResolver *r, const AuDocument *doc)
+{
+    if (r->index_dirty && r->styled_once && !r->full_restyle && !r->sheets_full && doc) {
+        AuElement *de = au_document_element(doc);
+        if (de)
+            prepare(r, de);
+    }
+    return !r->index_dirty;
+}
+
 void au_css_invalidate_state(AuCssResolver *r, AuElement *el, uint32_t bits)
 {
-    if (!r->styled_once || r->index_dirty || r->full_restyle) {
+    if (!r->styled_once || !index_current(r, el->node.doc) || r->full_restyle) {
         r->full_restyle = true; /* the next restyle is a full one, or the records are stale */
         return;
     }
@@ -3923,7 +4089,8 @@ void au_css_invalidate(AuCssResolver *r, AuElement *el, AuCssChange change, AuAt
         au_css_invalidate_state(r, el, ~(uint32_t)0);
         return;
     }
-    if (change == AU_CSS_CHANGE_ALL || !r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown) {
+    if (change == AU_CSS_CHANGE_ALL || !r->styled_once || !index_current(r, el->node.doc) || r->full_restyle ||
+        r->deps_unknown) {
         r->full_restyle = true;
         return;
     }
@@ -4045,7 +4212,7 @@ void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child,
 {
     if (!child || (child->type != AU_NODE_ELEMENT && child->type != AU_NODE_TEXT))
         return; /* comments and the like match nothing and count for nothing */
-    if (!r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown || !parent ||
+    if (!r->styled_once || !parent || !index_current(r, parent->doc) || r->full_restyle || r->deps_unknown ||
         (parent->type != AU_NODE_ELEMENT && !au_is_shadow_root(parent))) {
         r->full_restyle = true;
         return;
@@ -4098,7 +4265,7 @@ void au_css_invalidate_children(AuCssResolver *r, AuNode *parent, AuNode *child,
 
 void au_css_invalidate_subtree(AuCssResolver *r, AuElement *el)
 {
-    if (!r->styled_once || r->index_dirty || r->full_restyle) {
+    if (!r->styled_once || !index_current(r, el->node.doc) || r->full_restyle) {
         r->full_restyle = true;
         return;
     }
@@ -4182,7 +4349,7 @@ void au_css_invalidate_text(AuCssResolver *r, AuNode *text)
     AuNode *parent = text ? text->parent : NULL;
     if (!parent || parent->type != AU_NODE_ELEMENT)
         return; /* text outside an element is not styled */
-    if (!r->styled_once || r->index_dirty || r->full_restyle || r->deps_unknown) {
+    if (!r->styled_once || !index_current(r, parent->doc) || r->full_restyle || r->deps_unknown) {
         r->full_restyle = true;
         return;
     }
