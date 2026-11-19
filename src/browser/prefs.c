@@ -23,7 +23,9 @@ static const char *const cookie_names[] = {"all", "same-site", "none", NULL};
 static const char *const block_update_names[] = {"daily", "weekly", "never", NULL};
 static const char *const color_scheme_names[] = {"system", "light", "dark", NULL};
 static const char *const image_colors_names[] = {"automatic", "millions", "thousands", "256", NULL};
-static const char *const identify_names[] = {"aura", "chrome", "safari", "custom", NULL};
+static const char *const identify_names[] = {"aura", "chrome", "safari", "firefox", "custom", NULL};
+static const char *const ua_os_names[] = {"this", "macos9", "macosx", "macos", "windows", "linux", NULL};
+static const char *const ua_cpu_names[] = {"this", "ppc", "x86_64", "arm", NULL};
 
 #define S(n, f) {n, T_STR, offsetof(AuPrefs, f), 0, 0, NULL}
 #define B(n, f) {n, T_BOOL, offsetof(AuPrefs, f), 0, 0, NULL}
@@ -68,6 +70,8 @@ static const Key keys[] = {
     S("proxy.https.host", https_proxy_host),
     I("proxy.https.port", https_proxy_port, 0, 65535),
     E("network.identify", identify, identify_names),
+    E("network.os", ua_os, ua_os_names),
+    E("network.cpu", ua_cpu, ua_cpu_names),
     S("network.user_agent", user_agent),
     I("cache.memory_kb", memory_cache_kb, 0, 1 << 20),
     I("cache.disk_kb", disk_cache_kb, 0, 1 << 22),
@@ -102,7 +106,8 @@ static bool *bool_field(AuPrefs *p, const Key *k) { return (bool *)((char *)p + 
  * not int-sized (-fshort-enums). */
 typedef char enum_is_int[(sizeof(AuStartup) == sizeof(int) && sizeof(AuTabPosition) == sizeof(int) &&
                           sizeof(AuCookiePolicy) == sizeof(int) && sizeof(AuColorScheme) == sizeof(int) &&
-                          sizeof(AuImageColors) == sizeof(int) && sizeof(AuIdentify) == sizeof(int))
+                          sizeof(AuImageColors) == sizeof(int) && sizeof(AuIdentify) == sizeof(int) &&
+                          sizeof(AuUaOs) == sizeof(int) && sizeof(AuUaCpu) == sizeof(int))
                              ? 1
                              : -1];
 static int *int_field(AuPrefs *p, const Key *k) { return (int *)((char *)p + k->off); }
@@ -318,20 +323,108 @@ static void put_escaped(AuBuf *b, const char *s)
     }
 }
 
+const char *au_aura_user_agent(void)
+{
+    static char buf[160];
+    snprintf(buf, sizeof buf, AU_AURA_UA_FORMAT, au_ua_platform());
+    return buf;
+}
+
+/* The operating system and processor this computer's platform part
+ * names. */
+static AuUaOs real_os(void)
+{
+    const char *r = au_ua_platform();
+    if (strstr(r, "Mac OS 9"))
+        return AU_UAOS_MACOS9;
+    if (strstr(r, "Mac OS X"))
+        return AU_UAOS_MACOS;
+    if (strstr(r, "Windows"))
+        return AU_UAOS_WINDOWS;
+    return AU_UAOS_LINUX;
+}
+
+static AuUaCpu real_cpu(void)
+{
+    const char *r = au_ua_platform();
+    if (strstr(r, "PPC") || strstr(r, "ppc"))
+        return AU_UACPU_PPC;
+    if (strstr(r, "ARM") || strstr(r, "aarch64") || strstr(r, "arm64"))
+        return AU_UACPU_ARM;
+    return AU_UACPU_X86_64;
+}
+
+/* The platform part for an operating system on a processor, in the form
+ * that system's browsers send. macOS keeps this computer's version when
+ * it is a Mac, else the version the browsers froze. */
+static void platform_part(char *out, size_t cap, AuUaOs os, AuUaCpu cpu, bool firefox)
+{
+    static const char *const mac_cpu[] = {"", "PPC", "Intel", "ARM"};
+    static const char *const win_cpu[] = {"", "PPC", "Win64; x64", "ARM64"};
+    static const char *const linux_cpu[] = {"", "ppc", "x86_64", "aarch64"};
+    char ver[32] = "10_15_7";
+    if (os == AU_UAOS_THIS) {
+        os = real_os();
+        const char *v = os == AU_UAOS_MACOS ? strstr(au_ua_platform(), "Mac OS X ") : NULL;
+        if (v)
+            snprintf(ver, sizeof ver, "%s", v + 9);
+    }
+    if (cpu == AU_UACPU_THIS)
+        cpu = real_cpu();
+    switch (os) {
+    case AU_UAOS_MACOS9: snprintf(out, cap, "Macintosh; %s Mac OS 9", mac_cpu[cpu]); return;
+    case AU_UAOS_MACOSX: snprintf(out, cap, "Macintosh; %s Mac OS X 10%s5%s8", mac_cpu[cpu], firefox ? "." : "_",
+                                  firefox ? "." : "_"); return;
+    case AU_UAOS_MACOS:
+        if (firefox)
+            for (char *c = ver; *c; c++)
+                if (*c == '_')
+                    *c = '.';
+        snprintf(out, cap, "Macintosh; %s Mac OS X %s", mac_cpu[cpu], ver);
+        return;
+    case AU_UAOS_WINDOWS: snprintf(out, cap, "Windows NT 10.0; %s", win_cpu[cpu]); return;
+    case AU_UAOS_LINUX:
+    case AU_UAOS_THIS: snprintf(out, cap, "X11; Linux %s", linux_cpu[cpu]); return;
+    }
+}
+
 const char *au_prefs_user_agent(const AuPrefs *p)
 {
+    static char buf[320];
+    char part[96];
     if (!p)
-        return AU_DEFAULT_USER_AGENT;
-    switch (p->identify) {
-    case AU_IDENTIFY_CHROME: return AU_CHROME_USER_AGENT;
-    case AU_IDENTIFY_SAFARI: return AU_SAFARI_USER_AGENT;
-    case AU_IDENTIFY_CUSTOM:
+        return au_aura_user_agent();
+    AuIdentify id = p->identify;
+    if (id == AU_IDENTIFY_CUSTOM) {
         if (p->user_agent && p->user_agent[0])
             return p->user_agent;
-        break;
-    case AU_IDENTIFY_AURA: break;
+        id = AU_IDENTIFY_AURA;
     }
-    return AU_DEFAULT_USER_AGENT;
+    AuUaOs os = p->ua_os <= AU_UAOS_LINUX ? p->ua_os : AU_UAOS_THIS;
+    AuUaCpu cpu = p->ua_cpu <= AU_UACPU_ARM ? p->ua_cpu : AU_UACPU_THIS;
+    bool here = os == AU_UAOS_THIS && cpu == AU_UACPU_THIS;
+    if (id == AU_IDENTIFY_AURA) {
+        if (here)
+            return au_aura_user_agent();
+        platform_part(part, sizeof part, os, cpu, false);
+        snprintf(buf, sizeof buf, AU_AURA_UA_FORMAT, part);
+        return buf;
+    }
+    /* Another browser on this computer: as that browser sends it from
+     * here. From any Mac they send the frozen macOS part; Safari, which
+     * runs only on Macs, sends it from anywhere. */
+    AuUaOs real = real_os();
+    bool mac = real == AU_UAOS_MACOS || real == AU_UAOS_MACOS9;
+    if (here && (mac || id == AU_IDENTIFY_SAFARI))
+        snprintf(part, sizeof part, id == AU_IDENTIFY_FIREFOX ? "Macintosh; Intel Mac OS X 10.15" : AU_UA_FROZEN_MAC);
+    else
+        platform_part(part, sizeof part, os, cpu, id == AU_IDENTIFY_FIREFOX);
+    snprintf(buf, sizeof buf,
+             id == AU_IDENTIFY_CHROME   ? AU_CHROME_UA_FORMAT
+             : id == AU_IDENTIFY_SAFARI ? AU_SAFARI_UA_FORMAT
+                                        : AU_FIREFOX_UA_FORMAT,
+             part);
+    return buf;
 }
 
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out)
@@ -427,7 +520,7 @@ bool au_prefs_parse(AuPrefs *p, const char *data, size_t len)
     au_buf_free(&val);
     /* A file saved by a version that stored its default string: the
      * Chrome-shaped one with Aura's token (up to 0.9), or an older one. */
-    if (p->user_agent && (!strcmp(p->user_agent, AU_DEFAULT_USER_AGENT) ||
+    if (p->user_agent && (!strcmp(p->user_agent, AU_DEFAULT_USER_AGENT) || !strcmp(p->user_agent, au_aura_user_agent()) ||
                           strstr(p->user_agent, AU_CHROME_DEFAULT_SUFFIX) ||
                           !strncmp(p->user_agent, AU_OLD_USER_AGENT_PREFIX, strlen(AU_OLD_USER_AGENT_PREFIX)) ||
                           !strncmp(p->user_agent, AU_MACOS9_USER_AGENT_PREFIX, strlen(AU_MACOS9_USER_AGENT_PREFIX))))

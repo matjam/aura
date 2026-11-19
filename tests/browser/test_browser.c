@@ -932,7 +932,36 @@ static void test_prefs(void)
         static const char chosen[] = "network.identify=safari\nnetwork.user_agent=Mine/1\n";
         CHECK(au_prefs_parse(&o, chosen, sizeof chosen - 1));
         CHECK(o.identify == AU_IDENTIFY_SAFARI);
-        CHECK_STR(au_prefs_user_agent(&o), AU_SAFARI_USER_AGENT);
+        CHECK(strstr(au_prefs_user_agent(&o), "(Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15") != NULL);
+        /* a browser, a system and a processor, each chosen */
+        static const char built[] = "network.identify=aura\nnetwork.os=windows\nnetwork.cpu=arm\n";
+        CHECK(au_prefs_parse(&o, built, sizeof built - 1));
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (Windows NT 10.0; ARM64) Aura/" AU_VERSION);
+        o.identify = AU_IDENTIFY_CHROME;
+        o.ua_os = AU_UAOS_LINUX;
+        o.ua_cpu = AU_UACPU_X86_64;
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                           "Chrome/" AU_UA_CHROME_VERSION ".0.0.0 Safari/537.36");
+        o.identify = AU_IDENTIFY_FIREFOX;
+        o.ua_os = AU_UAOS_MACOSX;
+        o.ua_cpu = AU_UACPU_PPC;
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (Macintosh; PPC Mac OS X 10.5.8; rv:" AU_UA_FIREFOX_VERSION
+                                           ") Gecko/20100101 Firefox/" AU_UA_FIREFOX_VERSION);
+        o.identify = AU_IDENTIFY_AURA;
+        o.ua_os = AU_UAOS_MACOS9;
+        o.ua_cpu = AU_UACPU_PPC;
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (Macintosh; PPC Mac OS 9) Aura/" AU_VERSION);
+        /* this computer: the platform the port set */
+        au_set_ua_platform("Macintosh; ARM Mac OS X 15_6");
+        o.ua_os = AU_UAOS_THIS;
+        o.ua_cpu = AU_UACPU_THIS;
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (Macintosh; ARM Mac OS X 15_6) Aura/" AU_VERSION);
+        o.ua_cpu = AU_UACPU_X86_64;
+        CHECK_STR(au_prefs_user_agent(&o), "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_6) Aura/" AU_VERSION);
+        o.ua_cpu = AU_UACPU_THIS;
+        o.identify = AU_IDENTIFY_CHROME;
+        CHECK(strstr(au_prefs_user_agent(&o), "(Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36") != NULL);
+        au_set_ua_platform(NULL);
         au_prefs_free(&o);
     }
 

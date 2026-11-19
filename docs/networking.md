@@ -90,16 +90,32 @@ keeps").
 
 ## The user agent
 
-To choose what Aura says it is, use Preferences > Network > Identify
-as (`network.identify`, `au_prefs_user_agent` in `src/browser/prefs.c`):
+To choose what Aura says it is, use Preferences > Network. Three menus
+build the user agent (`au_prefs_user_agent` in `src/browser/prefs.c`),
+and any combination is allowed:
 
-| Choice | User agent |
+| Menu (key) | Choices |
 |---|---|
-| Aura (the default) | `Mozilla/5.0 (PLATFORM) Aura/VERSION` (`AU_DEFAULT_USER_AGENT`): the real platform and browser, no other browser named |
-| Chrome | Chrome's string (`AU_CHROME_USER_AGENT`), with no Aura token; on Mac OS 9 it names macOS, where Chrome runs |
-| Safari | Safari's macOS string (`AU_SAFARI_USER_AGENT`) |
-| Custom | the User agent field (`network.user_agent`); empty is Aura's own |
+| Identify as (`network.identify`) | Aura (default), Chrome, Safari, Firefox, Custom |
+| System (`network.os`) | This computer (default), Mac OS 9, Mac OS X 10.5, macOS, Windows, Linux |
+| Processor (`network.cpu`) | This computer (default), PowerPC, x86-64 (Intel), ARM |
 
+- Each browser's string is its own form (`AU_*_UA_FORMAT` in
+  `credits.h`) around a platform part in the form that system's browsers
+  send: `Macintosh; PPC Mac OS 9`, `Macintosh; Intel Mac OS X 10_15_7`,
+  `Windows NT 10.0; Win64; x64`, `X11; Linux aarch64`, and so on.
+  Firefox writes macOS versions with dots.
+- The defaults give the truth: `Mozilla/5.0 (PLATFORM) Aura/VERSION`,
+  where PLATFORM is this computer's (`au_ua_platform`, `core.h`). The
+  macOS port sets it at start from the real processor and version
+  (`Macintosh; ARM Mac OS X 15_6`). Other ports use their build's part
+  (`core/uaplatform.h`), which is already real.
+- Chrome, Safari or Firefox on "This computer" send what that browser
+  sends from here. From any Mac that is the frozen `Intel Mac OS X
+  10_15_7` part, and Safari, which runs only on Macs, sends it from
+  anywhere. A system or processor chosen in the menus is sent as chosen.
+- Custom sends the User agent field (`network.user_agent`); an empty
+  field is Aura's own.
 - The User agent field shows the string being sent, and only Custom
   makes it editable.
 - `navigator.vendor` follows the string: "Google Inc." for Chrome's,
@@ -112,7 +128,8 @@ as (`network.identify`, `au_prefs_user_agent` in `src/browser/prefs.c`):
   a bot to risk checks such as hCaptcha's (Discord's login).
 - A file from before `network.identify` that holds a string the user
   set loads as Custom. The old Chrome-shaped default loads as Aura.
-- `AU_UA_CHROME_VERSION` and `AU_UA_SAFARI_VERSION` (`credits.h`) are
+- `AU_UA_CHROME_VERSION`, `AU_UA_SAFARI_VERSION` and
+  `AU_UA_FIREFOX_VERSION` (`credits.h`) are
   updated with each release.
 
 The platform part of Aura's own string is the platform the build runs

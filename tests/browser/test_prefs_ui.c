@@ -65,7 +65,7 @@ static const char *const shown_keys[] = {
     "security.legacy_tls", "privacy.warn_app_downloads", "privacy.cookies", "privacy.block_third_party_cookies",
     "history.enabled", "history.days", "privacy.clear_history_on_quit", "privacy.clear_cookies_on_quit",
     "privacy.clear_cache_on_quit", "proxy.http.host", "proxy.http.port", "proxy.https.host", "proxy.https.port",
-    "network.identify", "network.user_agent", "cache.memory_kb", "cache.disk_kb", "tabs.unload_low_memory", "downloads.folder",
+    "network.identify", "network.os", "network.cpu", "network.user_agent", "cache.memory_kb", "cache.disk_kb", "tabs.unload_low_memory", "downloads.folder",
     "downloads.decode", "privacy.block_trackers", "blocking.lists", "blocking.update", "blocking.custom",
     "blocking.allow", "blocking.block",
 };
@@ -294,11 +294,21 @@ static void test_clamping(const AuPrefsHost *host)
     au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, "Mozilla/1.0");
     CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, ""), "text kept without Custom");
     au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_CHROME);
-    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_CHROME_USER_AGENT), "Chrome's string shows");
-    CHECK(!strstr(AU_CHROME_USER_AGENT, "Aura") && !strstr(AU_CHROME_USER_AGENT, "PPC"), "Chrome's string: %s",
-          AU_CHROME_USER_AGENT);
+    text_of(e, AU_PREF_USER_AGENT, &b);
+    CHECK(strstr(au_buf_cstr(&b), " Chrome/") && !strstr(au_buf_cstr(&b), "Aura") && !strstr(au_buf_cstr(&b), "PPC"),
+          "Chrome's string: %s", au_buf_cstr(&b));
     au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_SAFARI);
-    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_SAFARI_USER_AGENT), "Safari's string shows");
+    text_of(e, AU_PREF_USER_AGENT, &b);
+    CHECK(strstr(au_buf_cstr(&b), " Version/") && strstr(au_buf_cstr(&b), "Mac OS X"), "Safari's string: %s",
+          au_buf_cstr(&b));
+    au_prefs_edit_set_choice(e, AU_PREF_UA_OS, AU_UAOS_WINDOWS);
+    au_prefs_edit_set_choice(e, AU_PREF_UA_CPU, AU_UACPU_X86_64);
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_FIREFOX);
+    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:" AU_UA_FIREFOX_VERSION
+                                                      ") Gecko/20100101 Firefox/" AU_UA_FIREFOX_VERSION),
+          "Firefox on Windows: %s", au_buf_cstr(&b));
+    au_prefs_edit_set_choice(e, AU_PREF_UA_OS, AU_UAOS_THIS);
+    au_prefs_edit_set_choice(e, AU_PREF_UA_CPU, AU_UACPU_THIS);
     au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_CUSTOM);
     CHECK(au_prefs_edit_enabled(e, AU_PREF_USER_AGENT), "the field is not editable for Custom");
     au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, "Mozilla/1.0");

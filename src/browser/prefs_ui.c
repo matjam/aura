@@ -24,7 +24,10 @@ static const char *const image_colors_choices[] = {"Same as the screen", "Millio
 static const char *const memory_choices[] = {"Automatic", "Custom", NULL};
 static const char *const cookie_choices[] = {"Accept all", "Same-site only", "Block all", NULL};
 static const char *const update_choices[] = {"Every day", "Every week", "Never", NULL};
-static const char *const identify_choices[] = {"Aura", "Chrome", "Safari", "Custom", NULL};
+static const char *const identify_choices[] = {"Aura", "Chrome", "Safari", "Firefox", "Custom", NULL};
+static const char *const ua_os_choices[] = {"This computer", "Mac OS 9", "Mac OS X 10.5", "macOS", "Windows", "Linux",
+                                            NULL};
+static const char *const ua_cpu_choices[] = {"This computer", "PowerPC", "x86-64 (Intel)", "ARM", NULL};
 
 #define OFF(f) offsetof(AuPrefs, f)
 #define SEC(s) AU_PREF_SECTION_##s
@@ -129,6 +132,8 @@ static const AuPrefDesc descs[AU_PREF_COUNT] = {
     D_NUMBER(HTTPS_PROXY_PORT, NETWORK, "proxy.https.port", "Port:", NULL, 0, 65535, https_proxy_port),
     D_NOTE(PROXY_NOTE, NETWORK, "Leave the host empty to connect directly."),
     D_CHOICE(IDENTIFY, NETWORK, AU_PREF_CHOICE, "network.identify", "Identify as:", identify_choices, 0, identify),
+    D_CHOICE(UA_OS, NETWORK, AU_PREF_CHOICE, "network.os", "System:", ua_os_choices, 0, ua_os),
+    D_CHOICE(UA_CPU, NETWORK, AU_PREF_CHOICE, "network.cpu", "Processor:", ua_cpu_choices, 0, ua_cpu),
     /* shows the string sent; editable for Custom */
     {AU_PREF_USER_AGENT, SEC(NETWORK), AU_PREF_TEXT, "network.user_agent", "User agent:", NULL, NULL, NULL, NULL, NULL,
      0, 0, AU_PREF_IDENTIFY, AU_IDENTIFY_CUSTOM, 0, AU_PREF_STORE_STR, OFF(user_agent)},
@@ -542,7 +547,7 @@ bool au_prefs_edit_set_text(AuPrefsEdit *e, AuPrefId id, const char *text)
          * Aura's version, and clearing the field returns to it. */
         if (e->work.identify != AU_IDENTIFY_CUSTOM)
             return true;
-        au_prefs_set_str(field, strcmp(text, AU_DEFAULT_USER_AGENT) ? text : "");
+        au_prefs_set_str(field, strcmp(text, au_aura_user_agent()) && strcmp(text, AU_DEFAULT_USER_AGENT) ? text : "");
         if (!e->work.user_agent[0])
             e->work.identify = AU_IDENTIFY_AURA;
     } else {
