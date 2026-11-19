@@ -58,7 +58,10 @@ typedef enum {
 } AuPrefKind;
 
 /* Display order. Edit fields of a section are in the order the keyboard
- * moves through them. */
+ * moves through them. The GTK and Cocoa windows lay items out from this
+ * table; the Mac OS 9 window places each by its row in the hints table
+ * of src/platform/macos9/prefswin.c and leaves out an item without one,
+ * so a new item needs a row there. */
 typedef enum {
     /* General */
     AU_PREF_HOME_PAGE,
