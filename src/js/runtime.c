@@ -1227,12 +1227,31 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
  * functions have texts of their own, cannot be written that way and is
  * compiled each time. A worker has its own runtime: the page writes the
  * bytecode when it hands the worker its script (js_code_for_worker). */
+/* Four bytes a step in two lanes, so the multiplies do not wait on each
+ * other: a page that gives eval 1.3 MB of text 93 times (Cloudflare's
+ * Turnstile) had 121 MB hashed a byte at a time, about 5 cycles a byte
+ * on PowerPC. The value names a script only beside its length, within
+ * one run and in the hints file. */
 static uint32_t code_hash(const char *src, size_t len)
 {
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++)
-        h = (h ^ (uint8_t)src[i]) * 16777619u;
-    return h;
+    const uint8_t *p = (const uint8_t *)src;
+    uint32_t a = 2166136261u, b = 0x9E3779B9u ^ (uint32_t)len;
+    size_t i = 0;
+    for (; i + 8 <= len; i += 8) {
+        uint32_t w0 = (uint32_t)p[i] << 24 | (uint32_t)p[i + 1] << 16 | (uint32_t)p[i + 2] << 8 | p[i + 3];
+        uint32_t w1 = (uint32_t)p[i + 4] << 24 | (uint32_t)p[i + 5] << 16 | (uint32_t)p[i + 6] << 8 | p[i + 7];
+        a ^= w0;
+        b ^= w1;
+        a = (a << 15 | a >> 17) * 0x9E3779B1u;
+        b = (b << 13 | b >> 19) * 0x85EBCA77u;
+    }
+    for (; i < len; i++)
+        a = (a ^ p[i]) * 16777619u;
+    a ^= (b << 16 | b >> 16);
+    a ^= a >> 15;
+    a *= 0x2C1B3C6Du;
+    a ^= a >> 12;
+    return a;
 }
 
 /* ---- Script hints ----
