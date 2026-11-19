@@ -137,15 +137,7 @@ size_t au_docview_script_stack(void)
  * document on a G4). */
 #define PARK_LAYOUT_MS 250
 
-/* The long-script limit of a page whose script parks. The window stays
- * usable while such a script runs, and Stop, a navigation and closing
- * the tab end it, so the limit only stops a script nobody stops. The
- * 10 s default is too short for a slow Mac: one task of Cloudflare's
- * Turnstile challenge took 11.1 s of script in the Mac OS 9 guest
- * (2026-11-18) and 0.33 s on the host. */
-#define PARK_KILL_MS 60000
-
-static int h_yield(void *ctx)
+static int h_yield(void *ctx, uint32_t elapsed_ms)
 {
     AuDocScript *s = ctx;
     const AuDocViewCallbacks *cb = au_dv_callbacks(s->dv);
@@ -167,7 +159,7 @@ static int h_yield(void *ctx)
         s->park_layout_cost = t1 - t;
         s->park_layout_at = t1;
     }
-    return cb->script_yield(cb->ctx, s->dv);
+    return cb->script_yield(cb->ctx, s->dv, elapsed_ms);
 }
 
 static void h_console(void *ctx, AuJsLogLevel level, const char *text, size_t len)
@@ -847,7 +839,10 @@ static bool ensure_js(AuDocScript *s)
         /* the runtime's interrupt check reads the top-level hooks */
         h.yield = h_yield;
         set.yield_ms = au_dv_callbacks(s->dv)->script_yield_ms ? au_dv_callbacks(s->dv)->script_yield_ms : 100;
-        set.kill_ms = PARK_KILL_MS;
+        /* No time limit of the runtime's own: the embedder's callback
+         * stops a script that runs too long while it cannot leave
+         * (AuDocViewCallbacks.script_yield). */
+        set.kill_ms = UINT32_MAX;
     }
     h.get_cookie = h_get_cookie;
     h.set_cookie = h_set_cookie;

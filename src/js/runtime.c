@@ -254,7 +254,7 @@ static int maybe_yield(AuJs *js, double *now)
     if (!js->hooks.yield || !js->settings.yield_ms || *now < js->next_yield)
         return 0;
     double t0 = *now;
-    int stop = js->hooks.yield(js->hooks.ctx);
+    int stop = js->hooks.yield(js->hooks.ctx, (uint32_t)(t0 - js->run_start));
     *now = js_now(js);
     /* the time away is not the script's */
     js->run_start += *now - t0;

@@ -142,7 +142,7 @@ static void style_yield(void *ctx)
     uint32_t every = dv->cb.script_yield_ms ? dv->cb.script_yield_ms : 100;
     if (t - dv->style_yield_at < every)
         return;
-    dv->cb.script_yield(dv->cb.ctx, dv);
+    dv->cb.script_yield(dv->cb.ctx, dv, 0);
     dv->style_yield_at = perf_now(dv);
 }
 

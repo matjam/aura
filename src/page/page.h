@@ -159,9 +159,12 @@ typedef struct AuDocViewCallbacks {
      * script runs (AuJsHooks.yield). The embedder that runs
      * au_docview_run_scripts on a coroutine leaves it here, so that the
      * window scrolls and paints while a long task runs; while it is away
-     * the view is frozen (au_docview_set_frozen). Return nonzero to stop
-     * the script. Only the top-level view's callback is called. */
-    int (*script_yield)(void *ctx, AuDocView *dv);
+     * the view is frozen (au_docview_set_frozen). elapsed_ms is the
+     * script's time since it was entered, less the time away; 0 for a
+     * style pass. With this callback the runtime has no long-script
+     * limit of its own: return nonzero to stop the script. Only the
+     * top-level view's callback is called. */
+    int (*script_yield)(void *ctx, AuDocView *dv, uint32_t elapsed_ms);
     uint32_t script_yield_ms; /* 0: 100 */
     /* document.cookie of the document at url (the view's own, or a nested
      * document's when nested is set; dv is the top-level view either

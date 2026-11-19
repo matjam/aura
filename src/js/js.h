@@ -203,9 +203,11 @@ typedef struct AuJsHooks {
      * settings.yield_ms while script runs, between two steps of the
      * script (never inside a native). The embedder may leave the stack
      * here (a coroutine) and come back later; the time away does not
-     * count toward the long-script limit. Return nonzero to stop the
-     * script (the same uncatchable error as the long-script limit). */
-    int (*yield)(void *ctx);
+     * count toward the long-script limit. elapsed_ms is the script's
+     * time since it was entered, less the time away. Return nonzero to
+     * stop the script (the same uncatchable error as the long-script
+     * limit). */
+    int (*yield)(void *ctx, uint32_t elapsed_ms);
     /* The DOM changed under script: the embedder invalidates style and
      * layout and schedules a coalesced update. node is the changed node
      * (an element whose attribute changed, a parent whose children

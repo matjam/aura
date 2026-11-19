@@ -463,9 +463,10 @@ static void test_stop_and_leave(void)
     au_browser_free(b);
 }
 
-/* A script that parks may run past the 10 s default (PARK_KILL_MS in
- * src/page/script.c): one of Cloudflare's challenge tasks takes 11 s on
- * the Mac OS 9 guest. One that runs past 60 s is still stopped. */
+/* A script that parks has no time limit (UNPARKED_LIMIT_MS in
+ * src/browser/page_doc.c): one of Cloudflare's challenge tasks runs for
+ * more than a minute on the Mac OS 9 guest. Once it cannot park (Find
+ * runs the slice to its end), it is stopped 10 s later. */
 static void test_long_limit(void)
 {
     AuBrowser *b = make_browser();
@@ -476,7 +477,17 @@ static void test_long_limit(void)
     CHECK_STR(au_page_title(t->page), "ran 12 s");
     au_bw_navigate(w, "file:///mem/stop.html");
     settle(w);
+    CHECK_STR(au_page_title(t->page), "ran to the end"); /* 100 s */
+    au_bw_navigate(w, "file:///mem/stop.html");
+    until_parked(w);
+    for (int i = 0; i < 300; i++)
+        au_bw_idle(w); /* 30 s parked */
+    CHECK(au_page_script_parked(t->page));
+    uint32_t t0 = clock_ms;
+    au_page_find(t->page, "x", true, false);
+    CHECK(!au_page_script_parked(t->page));
     CHECK_STR(au_page_title(t->page), "");
+    CHECK(clock_ms - t0 > 10000 && clock_ms - t0 < 12000);
     au_browser_free(b);
 }
 

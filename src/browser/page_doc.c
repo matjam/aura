@@ -275,6 +275,9 @@ struct AuPage {
     bool co_stop;      /* stop the script (navigation, Stop, closing) */
     bool co_finish;    /* run the slice to its end without parking */
     bool in_main_call; /* main_fn runs (a dialog the script opened) */
+    /* The script's time (dv_script_yield's elapsed_ms) when it could
+     * last park, and at the last call: see UNPARKED_LIMIT_MS. */
+    uint32_t parkable_at, yield_elapsed;
     void (*main_fn)(AuPage *p, void *arg); /* to run on the main stack for the script */
     void *main_arg;
     Held *held, *held_tail; /* what the network delivered while parked */
@@ -1399,14 +1402,28 @@ static bool run_scripts(AuPage *p)
     return p->parked || script_co.ran;
 }
 
+/* How long the page's script may run while it cannot park: on the
+ * caller's stack, or run to its end by thaw. The window does not answer
+ * meanwhile. A script that parks has no limit, since the window stays
+ * usable and Stop ends it: one task of Cloudflare's Turnstile challenge
+ * (Slashdot, 2026-11-18) ran for more than 60 s of script in the Mac OS
+ * 9 guest, and 0.33 s on the host. */
+#define UNPARKED_LIMIT_MS 10000
+
 /* AuDocViewCallbacks.script_yield, on the script's stack. */
-static int dv_script_yield(void *ctx, AuDocView *dv)
+static int dv_script_yield(void *ctx, AuDocView *dv, uint32_t elapsed_ms)
 {
     AuPage *p = ctx;
     if (p->co_stop)
         return 1;
-    if (!p->on_co || p->co_finish || dv != script_co.dv)
-        return 0; /* on the caller's stack, or running to the end */
+    bool can_park = p->on_co && !p->co_finish && dv == script_co.dv;
+    if (elapsed_ms) { /* script, not a style pass */
+        if (can_park || elapsed_ms < p->yield_elapsed)
+            p->parkable_at = elapsed_ms; /* parks now, or a new entry */
+        p->yield_elapsed = elapsed_ms;
+    }
+    if (!can_park) /* parkable_at <= elapsed_ms for script */
+        return elapsed_ms && elapsed_ms - p->parkable_at > UNPARKED_LIMIT_MS;
     script_co.ops->yield(script_co.ops->ctx, script_co.co);
     return p->co_stop;
 }
