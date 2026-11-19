@@ -88,7 +88,9 @@ records where the code came from and how to update it.
   on 32-bit PowerPC: an int32 add, subtract or multiply that overflows
   makes its double from the operands instead of through libgcc's
   `__floatdidf`, and the interpreter drops references in line instead
-  of calling `JS_FreeValue`.
+  of calling `JS_FreeValue`, and `0024` regular expressions with up to
+  65535 capture groups instead of 255: capture indexes are 16-bit in
+  the regexp bytecode (Discord's main script has a 343-group literal).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
