@@ -248,3 +248,56 @@ test('a function compiled at its first call that calls itself deeply', () => {
     function depth(n) { return n === 0 ? 0 : 1 + depth(n - 1); }
     assert.equal(depth(500), 500);
 });
+
+// A function compiled at its first call scans, not parses, the bodies
+// of the functions nested in it that become stubs again: they must
+// still capture what they use.
+test('functions nested in a function compiled at its first call', () => {
+    function outer(k) {
+        var a = 1, b = 2;
+        const t = `x${a}y`;
+        function inner(n) {
+            var re = /[}{]+/g, s = '}{' + `${b + `${a}`}}`;
+            if (n > 0) return inner(n - 1) + a;
+            return b + s.replace(re, '').length + t.length;
+        }
+        var arrow = (q) => { return this.tag === 'this' ? q + a : -1; };
+        var deep = function () {
+            function deeper() { function deepest() { return a * 100 + b * 10 + k; } return deepest(); }
+            return deeper();
+        };
+        return [inner(3), arrow(5), deep()];
+    }
+    assert.deepEqual(outer.call({ tag: 'this' }, 7), [10, 6, 127]);
+
+    function shadow() {
+        var v = 'outer';
+        function f() { var v = 'inner'; function g() { return v; } return g(); }
+        function h() { return v; }
+        return f() + h();
+    }
+    assert.equal(shadow(), 'innerouter');
+
+    function gen() {
+        var base = 10;
+        function* g() { var i = 0; while (i < 3) { yield base + i; i++; } }
+        return [...g()].join(',');
+    }
+    assert.equal(gen(), '10,11,12');
+});
+
+test('private names and super in arrows nested in a lazy arrow', () => {
+    class Base { m() { return 40; } }
+    class C extends Base {
+        #p = 2;
+        static #s = 5;
+        run() {
+            const f = () => {
+                const g = () => super.m() + this.#p + C.#s + (#p in this ? 1 : 0);
+                return new.target === undefined ? g() : -1;
+            };
+            return f();
+        }
+    }
+    assert.equal(new C().run(), 48);
+});

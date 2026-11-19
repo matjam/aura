@@ -550,8 +550,12 @@ What is left, measured on the host (2026-11-18, base `ebfa814`):
 
 - **Called functions are parsed twice** (patch 0021): GitHub parsed
   0.8 MB again while it loaded (about 50 ms), Wikipedia 0.7 MB.
-  Keeping a record of where each nested function's text lies would let
-  the second parse skip them.
+  Tokenizing, not parsing, the bodies of the nested functions that
+  become stubs again was tried and dropped (2026-11-18): only about
+  17% of those bytes were such bodies (most nested functions are short
+  or run at once), and it saved 2 to 3 ms of GitHub's 50, within noise
+  on Reddit, for 250 lines of parser code that miss a capture silently
+  if they misread a regular expression.
 - **Methods, getters, setters and class members are compiled with
   their script**: parsing one again needs its name, which its text
   does not start with.
