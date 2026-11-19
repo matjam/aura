@@ -29,11 +29,12 @@
  * dominant-baseline, letter-spacing, font properties), fill and stroke
  * with every stroke property, opacity, the transform attribute and the CSS
  * transform property, visibility, display, vector-effect:
- * non-scaling-stroke and paint-order.
+ * non-scaling-stroke and paint-order. In inline SVG, a foreignObject
+ * draws the first HTML <img> in it over its box, with its mask and clip.
  *
  * Not supported: filters (the element draws unfiltered), patterns (the
- * paint's fallback colour is used), markers, textPath, foreignObject,
- * multi-line text layout, SMIL animation, CSS basic shapes in clip-path,
+ * paint's fallback colour is used), markers, textPath, other HTML in a
+ * foreignObject, multi-line text layout, SMIL animation, CSS basic shapes in clip-path,
  * external references (use or gradients in other files).
  *
  * Limits for hostile input: element nesting (SVG_MAX_DEPTH), use nesting
