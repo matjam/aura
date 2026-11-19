@@ -1014,6 +1014,13 @@ static bool sup_decl(const CssTokens *tk, uint32_t a, uint32_t b)
         if (q > k && tk->t[q - 1].type == TK_DELIM && tk->t[q - 1].num == '!')
             e = q - 1;
     }
+    /* subgrid is parsed but laid out as none (layout/grid.c), so it is
+     * not claimed: Discord's app lays out its server list, channel list
+     * and page with subgrid when @supports says yes, and falls back to
+     * flex when it says no. */
+    for (uint32_t q = k; q < e; q++)
+        if (ident_is(tk, q, "subgrid"))
+            return false;
     AuCssDeclBlock tmp;
     css_decl_block_init(&tmp);
     bool ok = css_parse_property(prop, tk, k, e, false, &tmp, false, NULL);

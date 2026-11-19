@@ -656,6 +656,13 @@ and its `-x` and `-y` longhands, `scrollbar-gutter` (`auto`, `stable`;
 `visible`), `field-sizing` and `interpolate-size`. To make one take
 effect, read its field in `AuStyleRare` or `AuStyleInhRare` (`css.h`).
 
+`subgrid` is the exception: it is parsed and laid out as `none`, and
+`@supports` and `CSS.supports` answer false for any declaration that
+names it (`sup_decl` in `src/css/media.c`), because sites lay out
+whole pages with it when told yes. Discord's app put its page over its
+server and channel lists until this changed; told no, it uses its flex
+layout. Remove the check when grid layout does subgrid.
+
 ## Environment variables
 
 `env()` is substituted with `var()` (`substitute` in
