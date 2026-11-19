@@ -279,6 +279,30 @@ static void test_shared_script(void)
     env_free(&e);
 }
 
+/* With Unlimited, the reports say "unlimited" rather than the byte count
+ * the engine is given (half the address space). */
+static void test_unlimited_summary(void)
+{
+    Env e;
+    env_init(&e, AU_MEM_UNLIMITED, AU_MEM_UNLIMITED);
+    answer(e.a, "text/html",
+           "<!DOCTYPE html><title>t</title><script>var w=new Worker('/w.js');w.onmessage=function(ev){R=ev.data};"
+           "w.postMessage(1)</script>");
+    answer(e.a, "text/javascript", "onmessage=function(ev){postMessage('ok')}");
+    au_bw_new_tab(e.w, "http://a.test/", true, -1);
+    wait_result(&e, 2000);
+    AuBuf rep;
+    au_buf_init(&rep);
+    au_page_script_summary(page(&e), &rep);
+    const char *t = au_buf_cstr(&rep);
+    CHECK(strstr(t, "script runtime of http://a.test/: ") && strstr(t, ", limit unlimited\n") &&
+              strstr(t, "  worker http://a.test/w.js: ") && strstr(t, "limit unlimited, and a ") &&
+              !strstr(t, "limit 9"),
+          "summary:\n%s", t);
+    au_buf_free(&rep);
+    env_free(&e);
+}
+
 /* The readout's text for each kind of limit. */
 static void test_memory_text(void)
 {
@@ -413,6 +437,7 @@ int main(void)
     test_page_out_of_memory();
     test_oom_text();
     test_memory_text();
+    test_unlimited_summary();
     au_fontset_free(fonts);
     for (int i = 0; i < nresponses; i++)
         free(responses[i]);

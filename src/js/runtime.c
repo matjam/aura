@@ -462,13 +462,22 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
             au_buf_printf(&b, " in the frame %s", js->url);
         if (r->worker) {
             char note[160];
-            snprintf(note, sizeof note, "out of memory: the worker %s its script memory limit of %lu KB",
-                     r->oom_machine ? "could not grow to" : "reached", (unsigned long)(r->settings.memory_limit / 1024));
+            if (r->settings.memory_limit >= (size_t)-1 / 2)
+                snprintf(note, sizeof note, "out of memory: Aura had too little memory left for the worker "
+                                            "(its script memory is unlimited)");
+            else
+                snprintf(note, sizeof note, "out of memory: the worker %s its script memory limit of %lu KB",
+                         r->oom_machine ? "could not grow to" : "reached",
+                         (unsigned long)(r->settings.memory_limit / 1024));
             js_worker_fatal(r, note);
         }
-        if (js->hooks.out_of_memory)
+        if (js->hooks.out_of_memory) {
+            /* Unlimited is UINT32_MAX KB (AU_MEM_UNLIMITED_KB in the browser). */
+            size_t kb = r->settings.memory_limit / 1024;
             js->hooks.out_of_memory(js->hooks.ctx, r->worker, r->oom_machine,
-                                    (uint32_t)(r->settings.memory_limit / 1024));
+                                    r->settings.memory_limit >= (size_t)-1 / 2 || kb > UINT32_MAX ? UINT32_MAX
+                                                                                                   : (uint32_t)kb);
+        }
         if (r->oom_machine)
             au_buf_puts(&b, ". Close other tabs or applications, or give Aura more memory in its Get Info window.");
         else
@@ -1679,9 +1688,10 @@ void au_js_memory_report(AuJs *js, AuBuf *out)
 {
     JSMemoryUsage m;
     JS_ComputeMemoryUsage(js->rt, &m);
-    au_buf_printf(out, "script heap %lu KB in %lu blocks (limit %lu KB), %lu wrappers\n",
+    char lim[32];
+    au_buf_printf(out, "script heap %lu KB in %lu blocks (limit %s), %lu wrappers\n",
                   (unsigned long)(js->live_bytes / 1024), (unsigned long)m.malloc_count,
-                  (unsigned long)(js->settings.memory_limit / 1024), (unsigned long)js->nwraps);
+                  js_limit_text(js->settings.memory_limit, lim, sizeof lim), (unsigned long)js->nwraps);
     /* The engine takes blocks of up to 512 bytes from 4 KB arenas of its
      * own: "in use" is what its blocks hold, the rest of the heap is free
      * blocks inside arenas that still hold a live one. */
@@ -1761,12 +1771,22 @@ void au_js_gc(AuJs *js)
     js->gc_base = js->live_bytes;
 }
 
+const char *js_limit_text(size_t limit, char *buf, size_t cap)
+{
+    if (limit >= (size_t)-1 / 2)
+        snprintf(buf, cap, "unlimited");
+    else
+        snprintf(buf, cap, "%lu KB", (unsigned long)(limit / 1024));
+    return buf;
+}
+
 void au_js_memory_summary(const AuJs *js, AuBuf *out)
 {
     const AuJs *r = js->root;
-    au_buf_printf(out, "  script runtime of %s: %lu KB, peak %lu KB, limit %lu KB\n", r->url,
+    char lim[32];
+    au_buf_printf(out, "  script runtime of %s: %lu KB, peak %lu KB, limit %s\n", r->url,
                   (unsigned long)(r->live_bytes / 1024), (unsigned long)(r->peak_bytes / 1024),
-                  (unsigned long)(r->settings.memory_limit / 1024));
+                  js_limit_text(r->settings.memory_limit, lim, sizeof lim));
     size_t named = 0;
     for (const AuJs *g = r; g; g = g->group_next) {
         if (g->slot >= r->nslots)

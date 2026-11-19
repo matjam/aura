@@ -901,9 +901,10 @@ void js_workers_summary(const AuJs *js, AuBuf *out)
     for (const JsWorker *w = js->workers; w; w = w->next) {
         if (!w->js)
             continue;
-        au_buf_printf(out, "  worker %s: %lu KB, peak %lu KB, limit %lu KB, and a %lu KB stack\n", w->url,
+        char lim[32];
+        au_buf_printf(out, "  worker %s: %lu KB, peak %lu KB, limit %s, and a %lu KB stack\n", w->url,
                       (unsigned long)(w->js->live_bytes / 1024), (unsigned long)(w->js->peak_bytes / 1024),
-                      (unsigned long)(w->js->settings.memory_limit / 1024), (unsigned long)(w->stack / 1024));
+                      js_limit_text(w->js->settings.memory_limit, lim, sizeof lim), (unsigned long)(w->stack / 1024));
     }
 }
 

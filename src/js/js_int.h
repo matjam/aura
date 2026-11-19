@@ -412,6 +412,9 @@ void js_workers_free(AuJs *js);
 int js_worker_interrupt(AuJs *js);
 bool js_worker_terminating(const AuJs *js);
 size_t js_workers_memory(const AuJs *js);
+/* A memory limit for a report line: "unlimited" for half the address
+ * space or more (the browser's Unlimited), else "N KB". Writes into buf. */
+const char *js_limit_text(size_t limit, char *buf, size_t cap);
 /* A worker's own script text, handed to the caller (NULL when taken). */
 char *js_worker_take_source(AuJs *js, size_t *len);
 /* The bytecode the page wrote for the worker's script (au_alloc'd), once. */
