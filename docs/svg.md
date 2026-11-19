@@ -24,6 +24,17 @@ into the content box with `au_svg_paint`, at the size it is shown.
 References (`use`, gradients, clip paths, masks) resolve through a
 document id index the layout keeps until the tree changes.
 
+To show an image in a `foreignObject`, put an HTML `<img>` in it: the
+renderer draws the first `<img>` of the object's subtree (`foreign_img`
+in `src/svg/render.c`) stretched over the object's x, y, width and
+height, through the object's mask and clip path, in document order with
+the other SVG elements. Discord's avatars and server icons are drawn
+this way. The image is requested when the SVG first paints. Any other
+HTML in a `foreignObject` is not laid out, and an SVG image (a file,
+not inline) puts every element in the SVG namespace, so its
+`foreignObject` draws nothing. `test_foreign_object_img` in
+`tests/page/test_page.c` checks it.
+
 ## SVG as an image
 
 `src/image/svgimg.c` is the codec: markup is sniffed as SVG, the bytes

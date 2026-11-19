@@ -331,7 +331,7 @@ static AuRect map_rect(const AuMatrix *m, float x0, float y0, float x1, float y1
 
 /* ---- Geometry ---- */
 
-enum { K_NONE, K_CONTAINER, K_SHAPE, K_USE, K_SVG, K_TEXT, K_IMAGE, K_SWITCH, K_SKIP };
+enum { K_NONE, K_CONTAINER, K_SHAPE, K_USE, K_SVG, K_TEXT, K_IMAGE, K_SWITCH, K_FOREIGN, K_SKIP };
 
 static int kind_of(const SvgCtx *x, const AuElement *el)
 {
@@ -354,6 +354,8 @@ static int kind_of(const SvgCtx *x, const AuElement *el)
         return K_IMAGE;
     if (t == n->switch_)
         return K_SWITCH;
+    if (t == n->foreign_object)
+        return K_FOREIGN;
     return K_SKIP; /* defs, symbol, gradients, clipPath, mask, style, title, ... and unknown elements */
 }
 
@@ -528,7 +530,7 @@ static bool element_bbox(SvgCtx *x, AuElement *el, const SvgFrame *f, float b[4]
     }
     if (k == K_TEXT)
         return svg_text_bbox(x, el, f, b);
-    if (k == K_IMAGE) {
+    if (k == K_IMAGE || k == K_FOREIGN) {
         float ix = svg_len_attr(el, x->n->x, f, 0, 0), iy = svg_len_attr(el, x->n->y, f, 1, 0);
         float w = svg_len_attr(el, x->n->width, f, 0, 0), h = svg_len_attr(el, x->n->height, f, 1, 0);
         if (!(w > 0 && h > 0))
@@ -1114,6 +1116,9 @@ static void mask_render(SvgCtx *x, AuElement *el, AuElement *mk, const SvgFrame 
 
 /* ---- Images ---- */
 
+static void image_draw(SvgCtx *x, AuElement *el, const char *href, float ix, float iy, float w, float h,
+                       const char *par_attr, const SvgFrame *f, float opacity);
+
 static void image_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opacity)
 {
     const AuSvgNames *n = x->n;
@@ -1121,7 +1126,56 @@ static void image_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opac
         return;
     float ix = svg_len_attr(el, n->x, f, 0, 0), iy = svg_len_attr(el, n->y, f, 1, 0);
     float w = svg_len_attr(el, n->width, f, 0, -1), h = svg_len_attr(el, n->height, f, 1, -1);
-    const char *href = svg_href(x, el);
+    image_draw(x, el, svg_href(x, el), ix, iy, w, h, svg_attr(el, n->par), f, opacity);
+}
+
+/* A foreignObject draws only an HTML <img> in it, the first in its
+ * subtree (in document order, at most 64 nodes looked at), stretched
+ * over the object's box as object-fit: fill draws it. Sites put an
+ * avatar or icon there to mask it: Discord's avatars and server icons
+ * are <foreignObject mask="url(#...)"><div><img></div></foreignObject>.
+ * Other HTML in a foreignObject is not laid out (known-gaps.md). */
+static AuElement *foreign_img(AuElement *fo)
+{
+    AuNode *root = &fo->node, *c = root->first_child;
+    for (int seen = 0; c && seen < 64; seen++) {
+        if (c->type == AU_NODE_ELEMENT) {
+            AuElement *e = au_as_element(c);
+            if (e->ns == AU_NS_HTML && e->tag == AU_ATOM_img)
+                return e;
+            if (c->first_child) {
+                c = c->first_child;
+                continue;
+            }
+        }
+        while (c != root && !c->next)
+            c = c->parent;
+        if (c == root)
+            break;
+        c = c->next;
+    }
+    return NULL;
+}
+
+static void foreign_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opacity)
+{
+    const AuSvgNames *n = x->n;
+    if (f->st.visibility != AU_VISIBILITY_VISIBLE)
+        return;
+    AuElement *img = foreign_img(el);
+    const AuStyle *is = img ? au_element_style(img) : NULL;
+    if (!img || (is && (is->box->display == AU_DISPLAY_NONE || is->inh->visibility != AU_VISIBILITY_VISIBLE)))
+        return;
+    float ix = svg_len_attr(el, n->x, f, 0, 0), iy = svg_len_attr(el, n->y, f, 1, 0);
+    float w = svg_len_attr(el, n->width, f, 0, 0), h = svg_len_attr(el, n->height, f, 1, 0);
+    if (!(w > 0 && h > 0))
+        return;
+    image_draw(x, el, svg_attr(img, AU_ATOM_src), ix, iy, w, h, "none", f, opacity);
+}
+
+static void image_draw(SvgCtx *x, AuElement *el, const char *href, float ix, float iy, float w, float h,
+                       const char *par_attr, const SvgFrame *f, float opacity)
+{
     if (!href || !x->env || !x->env->image || w == 0 || h == 0)
         return;
     float scale = mat_scale(&f->ctm);
@@ -1138,7 +1192,7 @@ static void image_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opac
     else if (h < 0)
         h = w * ih / iw;
     SvgPar par;
-    svg_parse_par(svg_attr(el, n->par), &par);
+    svg_parse_par(par_attr, &par);
     float vb[4] = {0, 0, iw, ih};
     AuMatrix m = svg_viewbox_matrix(vb, (AuRect){ix, iy, w, h}, par);
     AuMatrix full = f->ctm;
@@ -1219,6 +1273,9 @@ static void render_content(SvgCtx *x, AuElement *el, int kind, SvgFrame *f, floa
     case K_IMAGE:
         image_render(x, el, f, opacity);
         break;
+    case K_FOREIGN:
+        foreign_render(x, el, f, opacity);
+        break;
     case K_USE:
         render_use(x, el, f, opacity);
         break;
@@ -1263,7 +1320,7 @@ static void render(SvgCtx *x, AuElement *el, const SvgFrame *parent)
         bool hass = f.st.stroke && css_len_user(&f.st.sw, &f) > 0;
         fold = !(hasf && hass);
     }
-    if (kind == K_IMAGE && !mk)
+    if ((kind == K_IMAGE || kind == K_FOREIGN) && !mk)
         fold = true; /* an image draws with its opacity */
     /* Clip pieces live on the heap: this function recurses (stacks are
      * small on Mac OS 9). */

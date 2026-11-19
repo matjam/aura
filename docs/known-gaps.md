@@ -221,8 +221,9 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 
 ## SVG
 
-- Filters, patterns, markers, textPath, foreignObject, multi-line text,
-  animation.
+- Filters, patterns, markers, textPath, multi-line text, animation.
+- `foreignObject` draws only the first HTML `<img>` in it
+  ([svg.md](svg.md#inline-svg)); other HTML in it is not laid out.
 - `clip-path`: `path()`, `rect()`, `xywh()` and `url(#id)` do not clip
   (the box paints unclipped), `polygon` ignores its fill rule, `inset`
   takes only the horizontal radii, and no clip-path clips hit testing.

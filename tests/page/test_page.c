@@ -1008,6 +1008,58 @@ static void test_object_embed(void)
     au_docview_free(dv);
 }
 
+/* An HTML <img> in an inline SVG foreignObject draws in the object's box
+ * through the object's mask, as Discord draws avatars: a 40 x 40 svg, a
+ * 32 x 32 foreignObject masked by a circle with a hole cut where the
+ * status dot goes, and the dot drawn after it. */
+static void test_foreign_object_img(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof f);
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    const char *html =
+        "<!DOCTYPE html><body style='margin:0'>"
+        "<svg width=0 height=0 style='position:absolute'><mask id=m maskContentUnits=objectBoundingBox>"
+        "<circle fill=white cx=0.5 cy=0.5 r=0.5 /><circle fill=black cx=0.85 cy=0.85 r=0.2 /></mask></svg>"
+        "<svg id=s width=40 height=40 viewBox='0 0 40 40' style='display:block'>"
+        "<foreignObject x=0 y=0 width=32 height=32 mask='url(#m)'>"
+        "<div><img src='a.png' style='width:32px;height:32px'></div></foreignObject>"
+        "<rect x=22 y=22 width=10 height=10 fill=lime /></svg>"
+        "<svg id=t width=20 height=20 style='display:block'><foreignObject width=20 height=20>"
+        "<div>text only</div></foreignObject></svg>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 200, 200);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 200);
+    AuCanvas *c = au_canvas_new(s);
+    /* The image is asked for when the svg first paints. */
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    CHECK(fake_find(&f, "http://example.com/a.png") != NULL, "foreignObject img not requested");
+    static uint8_t bmp[54 + 120 * 30];
+    size_t n = make_bmp(bmp, 40, 30, 0, 0, 255);
+    deliver_image(&f, dv, "http://example.com/a.png", bmp, n, true);
+    au_docview_update(dv);
+    au_surface_clear(s, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    AuRect r = rect_of(dv, "s");
+    int x0 = (int)r.x, y0 = (int)r.y;
+    AuColor mid = au_surface_get(s, x0 + 16, y0 + 16); /* a luminance mask rounds a little */
+    CHECK(((mid >> 16) & 255) < 8 && ((mid >> 8) & 255) < 8 && (mid & 255) > 245, "image in the circle: %08x",
+          (unsigned)mid);
+    CHECK(au_surface_get(s, x0 + 1, y0 + 1) == AU_RGB(255, 255, 255), "masked corner: %08x",
+          au_surface_get(s, x0 + 1, y0 + 1));
+    CHECK(au_surface_get(s, x0 + 27, y0 + 27) == AU_RGB(0, 255, 0), "status dot over the hole: %08x",
+          au_surface_get(s, x0 + 27, y0 + 27));
+    CHECK(au_surface_get(s, x0 + 36, y0 + 16) == AU_RGB(255, 255, 255), "nothing outside the object: %08x",
+          au_surface_get(s, x0 + 36, y0 + 16));
+    r = rect_of(dv, "t");
+    CHECK(r.w == 20 && r.h == 20, "svg with a text-only foreignObject keeps its size: %gx%g", r.w, r.h);
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* ---- User style sheet ---- */
 
 static void test_user_css(void)
@@ -1534,6 +1586,7 @@ int main(void)
     test_images();
     test_image_arrival_cost();
     test_object_embed();
+    test_foreign_object_img();
     test_user_css();
     test_webfonts();
     test_images_and_webfonts();
