@@ -605,7 +605,10 @@ without the callback keeps the old natural-size behaviour.
 box; they take no layout space. `scrollbar-width: none` draws none (the
 box still scrolls), which is how Tailwind's `scrollbar-hide` hides the
 bar under Reddit's post action row, and `thin` draws 5 px bars instead
-of 8 px. `::-webkit-scrollbar` rules are not read. The cases are in
+of 8 px. `scrollbar-color` (inherited) sets the thumb and track colours;
+when both are transparent no bar is drawn, which is how Discord's
+`.fade` scrollers hide theirs until hovered. `auto` keeps the grey
+defaults. `::-webkit-scrollbar` rules are not read. The cases are in
 `tests/layout/cases/overflow.txt`.
 
 ### Rounded clips

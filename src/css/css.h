@@ -334,6 +334,7 @@ typedef struct AuStyleInhRare { /* inherited, rarely set */
     AuColor text_fill_color; /* -webkit-text-fill-color */
     AuCssBlob *quotes;       /* KEYWORD auto/none or LIST of STRING */
     AuCssBlob *text_shadow;  /* NULL for none; COMMA_LIST of LIST(x y blur color) */
+    AuCssBlob *scrollbar_color; /* NULL or KEYWORD auto; LIST(thumb COLOR, track COLOR) */
     AuCssBlob *list_style_image; /* NULL for none */
     AuCssBlob *cursor_images;    /* NULL or COMMA_LIST of LIST(url [x y]) */
     /* NULL for normal; COMMA_LIST of LIST(STRING tag, NUMBER value) */

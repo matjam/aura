@@ -464,3 +464,15 @@ pixel 10 43 868686
 pixel 10 96 ffffff
 pixel 10 147 868686
 pixel 10 143 ffffff
+
+=== scrollbar-color paints the thumb and track, inherits, and transparent hides the bars
+<body style="margin:0">
+<div style="scrollbar-color:#ff0000 #0000ff"><div style="overflow-x:scroll;width:100px;height:50px"><div style="width:300px;height:10px"></div></div></div>
+<div style="overflow-x:scroll;width:100px;height:50px;scrollbar-color:transparent transparent"><div style="width:300px;height:10px"></div></div>
+<div style="overflow-x:scroll;width:100px;height:50px;scrollbar-color:#ff0000 #0000ff;scrollbar-color:auto"><div style="width:300px;height:10px"></div></div>
+---
+// Discord's thin scrollers set scrollbar-color; Aura drew a grey bar
+pixel 10 46 ff0000
+pixel 90 46 0000ff
+pixel 10 96 ffffff
+pixel 10 146 868686

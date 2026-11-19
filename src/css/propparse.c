@@ -475,6 +475,21 @@ AuCssValue *pp_text_shadow(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
     return each_item(cx, prop, v, text_shadow_item);
 }
 
+/* scrollbar-color: auto | <color> <color> (thumb, then track). */
+AuCssValue *pp_scrollbar_color(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
+{
+    (void)cx;
+    (void)prop;
+    if (css_is_kw(v, AU_K_auto_))
+        return v;
+    if (v->type != AU_CSSV_LIST || v->n != 2)
+        return NULL;
+    for (uint32_t i = 0; i < 2; i++)
+        if (!norm_color(&v->u.items[i]))
+            return NULL;
+    return v;
+}
+
 AuCssValue *pp_box_shadow(CssParseCtx *cx, uint16_t prop, AuCssValue *v)
 {
     if (css_is_kw(v, AU_K_none))
