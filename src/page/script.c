@@ -924,14 +924,18 @@ static void enter(AuDocScript *s)
  * used after that (the embedder may start a new document). */
 static void leave(AuDocScript *s)
 {
-    au_dv_top(s->dv)->script_depth--;
+    AuDocView *top = au_dv_top(s->dv);
+    top->script_depth--;
     if (--s->depth > 0)
         return;
-    if (s->js) {
+    /* A frame's script counts toward the page that holds it (the
+     * Performance window reads the top document), once: an entry inside
+     * another document's script is part of that one's time. */
+    if (s->js && top->script_depth == 0) {
         uint32_t t1 = au_dv_perf_now(s->dv);
-        uint32_t away = au_dv_top(s->dv)->frozen_ms - s->perf_frozen0;
+        uint32_t away = top->frozen_ms - s->perf_frozen0;
         uint32_t ran = t1 - s->perf_t0;
-        au_perf_add(au_docview_perf(s->dv), AU_PERF_SCRIPT, ran > away ? ran - away : 0, s->perf_label, t1);
+        au_perf_add(au_docview_perf(top), AU_PERF_SCRIPT, ran > away ? ran - away : 0, s->perf_label, t1);
     }
     au_dv_turn_end(s->dv);
     /* A module may have finished (load event) */

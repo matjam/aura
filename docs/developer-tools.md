@@ -430,6 +430,11 @@ the last second was, layout boxes, free memory. Then:
   layout passes, its paints and its outermost script entries with the
   embedder's millisecond clock, and the Mac shell adds each screen copy
   (`flush` in `browserwin.c`).
+- Script in a frame counts toward the page that holds it, once: an
+  entry from another document's script is part of that script's time
+  (`leave` in `src/page/script.c`). Before 2026-11-19 the report left
+  frames out, and Cloudflare's challenge on Slashdot showed 0.73 s of
+  script on the host where it ran 10 s, nearly all in its frame.
 - The shell supplies free heap and temporary memory (`AuDevHostInfo`),
   and `au_net_dev_info` (`src/net/net_report.c`) the HTTP cache and the
   open connections.
