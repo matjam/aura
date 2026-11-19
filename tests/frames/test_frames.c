@@ -177,7 +177,10 @@ static void pump(World *w)
                 continue;
             }
             const char *hdrs[4] = {"content-type", p->type ? p->type : "text/html", p->hname, p->hvalue};
-            au_docview_resource_head(w->dv, r->id, p->status ? p->status : 200, "", NULL, hdrs, p->hname ? 2 : 1);
+            /* the final URL, which has no fragment, as a network gives it */
+            char final[512];
+            snprintf(final, sizeof final, "%.*s", (int)strcspn(r->url, "#"), r->url);
+            au_docview_resource_head(w->dv, r->id, p->status ? p->status : 200, "", final, hdrs, p->hname ? 2 : 1);
             /* in two parts, as a network would */
             size_t len = strlen(p->body), half = len / 2;
             if (half)
@@ -500,6 +503,26 @@ static void test_script(void)
  * The Appearance preference reaches a page through au_docview_set_dark:
  * prefers-color-scheme rules, sheets deferred by media, matchMedia
  * listeners and frames all follow at once, without a reload. */
+
+/* A frame's document keeps the fragment of its src, though the response's
+ * final URL has none (hCaptcha's frames read their role from it). */
+static void test_fragment(void)
+{
+    static const Page site[] = {
+        {"http://a.test/", "<!DOCTYPE html><body><iframe src='same.html#frame=checkbox&id=1'></iframe>"
+                           "<iframe src='http://b.test/cross.html#frame=challenge'></iframe>"
+                           "<script>var got=[];addEventListener('message',function(e){got.push(e.data)})</script>"},
+        {"http://a.test/same.html", "<!DOCTYPE html><script>var h=location.hash</script>"},
+        {"http://b.test/cross.html", "<!DOCTYPE html><script>parent.postMessage(location.hash+' '+document.URL,'*')"
+                                     "</script>"},
+        {0}};
+    World w;
+    world_open(&w, site, "http://a.test/", 400, 600);
+    JS_IS(&w, "frames[0].h", "#frame=checkbox&id=1");
+    JS_IS(&w, "frames[0].location.href", "http://a.test/same.html#frame=checkbox&id=1");
+    JS_IS(&w, "got.join()", "#frame=challenge http://b.test/cross.html#frame=challenge");
+    world_close(&w);
+}
 
 static void test_color_scheme(void)
 {
@@ -1073,6 +1096,7 @@ int main(void)
     test_paint();
     test_input();
     test_script();
+    test_fragment();
     test_color_scheme();
     test_sandbox();
     test_sandbox_no_scripts();
