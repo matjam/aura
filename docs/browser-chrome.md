@@ -184,7 +184,9 @@ parks"):
   meanwhile. The runtime's own 10 s limit is off for such pages
   (`AuDocViewCallbacks.script_yield`). Cloudflare's Turnstile challenge
   (Slashdot, 2026-11-18) has a task that runs for 11 s to over 60 s of
-  script in the Mac OS 9 guest, and 0.33 s on the host. With a 10 s or
+  script in the Mac OS 9 guest, and up to 3.9 s on the host (10 s of
+  script in all: [`performance.md`](performance.md), "Cloudflare's
+  challenge on Slashdot"). With a 10 s or
   60 s limit it stopped with "Script stopped: it ran too long" and the
   widget reported that it had crashed. With no limit the checkbox
   appeared after about three minutes.

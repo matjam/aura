@@ -127,6 +127,35 @@ the free memory.
 | cache lookups and cache file times | Develop > System Status, the HTTP cache section | [`developer-tools.md`](developer-tools.md) |
 | the TLS primitives, DNS, TCP and handshakes | NetTest | [`networking.md`](networking.md) |
 | the script engine's start-up and benchmark | JSTest | [`javascript.md`](javascript.md) |
+| which functions take the time | `tools/guest-profile.py` (below) | |
+
+## To profile Aura in the guest
+
+To see which of Aura's functions take the time in the guest, sample
+the guest's CPU while the page runs, then report against the same
+build:
+
+1. Push and launch the build (`./build.sh ppc`, then
+   [`guest-testing.md`](guest-testing.md)). To leave someone's guest
+   alone, start a second one with `AURA_RUN=$PWD/run-perf
+   tools/guest-run.sh start` and export `AURA_RUN` for every command.
+2. Start the work, then run `tools/guest-profile.py sample 200
+   run-perf/pc.txt`. It reads the CPU's NIP and LR through QEMU's
+   monitor about 140 times a second; the guest keeps running.
+3. With Aura still running, run `tools/guest-profile.py report
+   run-perf/pc.txt 40`. It finds where Mac OS loaded Aura's code and
+   names each sample's function and caller from
+   `build/ppc/src/platform/macos9/Aura.xcoff`.
+
+- QEMU updates NIP only at the end of a translated block, so samples
+  land on the first instruction of a block: a function's count is how
+  often its blocks ran times their cost. In the interpreter
+  (`JS_CallInternal`) each opcode's handler is a block; to see which,
+  disassemble it (`powerpc-apple-macos-objdump -d --start-address=…`)
+  and count the samples per address.
+- Samples outside Aura are Mac OS. Thousands at one address are the
+  idle loop: Aura was waiting (for the network, a timer, or a sleep in
+  `WaitNextEvent`). To see when, count them per few seconds of samples.
 
 ## Where the measurements are
 
@@ -335,6 +364,47 @@ the `keys:` output). Network pages vary between runs.
   page for that.
 - Not measured in the guest.
 
+## Cloudflare's challenge on Slashdot, 2026-11-19
+
+Measured on the stock base in a second guest (base `c54c8d2`), from
+typing the address to the end of the challenge's computing, with
+`tools/guest-profile.py` (about 28,000 samples in 200 s), and on the
+host with `aura-host chrome --net --tab https://slashdot.org/ --do
+wait:25000 --do perf` and the Mac OS 9 user agent (Release build).
+
+**Why the guest takes minutes when the host takes seconds.** The
+challenge is about 10 s of script on the host, not the 0.33 s first
+reported: nearly all of it runs in the Turnstile frame, and until this
+change the Performance window counted only the top document's script
+([`developer-tools.md`](developer-tools.md)). The page gives `eval`
+93 different texts of 1.3 MB each. The guest's 120 to 140 s of
+computing is 12 to 14 times the host's time, which is what QEMU's
+emulated PowerPC costs for this script; it is not one slow path.
+
+| | Before | After |
+|---|---|---|
+| Computing, from the address to the checkbox | about 140 s | about 120 s |
+| Mac OS idle while the script computed | 14% | 6% |
+| `JS_CallInternal` (the interpreter) | 37% of samples | 36% |
+| `JS_FreeValue`, called from the interpreter | 1.2% | inline |
+| `__floatdidf`, called from the interpreter | 0.5% | none |
+
+- The idle time was the event loop's sleep of two ticks after each
+  100 ms slice of the parked script. The checkbox appears with about
+  80% idle afterwards, while the widget waits.
+- Inside the interpreter the hottest handlers are `xor`, `push_i32`,
+  `get_array_el` and `push_i16` (Turnstile's own byte-code machine).
+  Parsing the evaluated text is 2 to 3% (`next_token`), property lookup
+  by name about 4% (`JS_GetPropertyValue`, `__JS_NewAtom`,
+  `js_get_atom_index`), and the allocator about 4.6%.
+- The 93 texts are hashed for the compiled-script cache and the hints
+  (`code_hash` in `src/js/runtime.c`): 121 MB. The hash now takes four
+  bytes a step in two lanes instead of one byte; it was 0.2% of the
+  guest's samples before. None of the 93 texts is compiled twice, and
+  they add no hints.
+- Wall times in the guest vary with the network and the host's load;
+  these are one run of each build.
+
 ## Script on GitHub's repository page
 
 Measured on 2026-11-16 on the host (RelWithDebInfo, Apple silicon,
@@ -464,5 +534,13 @@ These are the causes found so far; look for the same shapes first.
 - **A native that forces layout for a value that needs none**
   (`N.viewport` for `innerWidth`).
 - **Parsing the same selector at every call** of `matches`.
+- **Sleeping with work to do.** The Mac event loop slept two ticks in
+  `WaitNextEvent` after each 100 ms slice of a parked script ("Cloudflare's
+  challenge on Slashdot" below). The loop now sleeps only when no page
+  is ready (`au_browser_ready`).
+- **Calls the PowerPC build makes that the host does not**: libgcc's
+  `__floatdidf` for an int64 converted to a double, and functions GCC
+  does not inline into a large one (QuickJS patch 0023). Look for them
+  in a guest profile; a host profile does not show them.
 
 What is still slow is listed in [`known-gaps.md`](known-gaps.md).
