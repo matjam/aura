@@ -344,6 +344,19 @@ typedef struct JSClass {
     const JSClassExoticMethods *exotic;
 } JSClass;
 
+/* Aura: the default of JSRuntime.lazy_min_len (JS_SetLazyFunctions). A
+   stub holds a function record and its closure variables, about what a
+   compiled function of 100 bytes of text holds, and a stub that is
+   called keeps both. */
+#define JS_LAZY_MIN_LEN 128
+/* Aura: a function with a longer text is compiled with its script. Such
+   a function is mostly a module that runs while the page loads, and
+   compiling it later parses it twice: on Wikipedia, the jQuery module
+   (140 KB) and the jQuery factory in it (140 KB) were parsed three times
+   in all. With this limit Wikipedia parsed 0.66 MB again instead of
+   1.13 MB and held the same memory. */
+#define JS_LAZY_MAX_LEN (16 << 10)
+
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
@@ -363,6 +376,11 @@ struct JSRuntime {
     struct JSWeakObjNode **weak_obj_hash;
     uint32_t weak_obj_hash_size; /* power of two, or 0 */
     uint32_t weak_obj_count;
+
+    /* Aura: a function whose text is this long or longer is compiled
+       at its first call (JS_SetLazyFunctions); -1: every function is
+       compiled with its script */
+    int lazy_min_len;
 
     JSClassID js_class_id_alloc; /* counter for user defined classes */
     int class_count;    /* size of class_array */
@@ -916,7 +934,16 @@ typedef struct JSFunctionBytecode {
     uint8_t text_dropped : 2;
     /* Aura: the vardefs are followed by their scopes (a direct eval) */
     uint8_t has_var_scopes : 1;
-    /* XXX: 2 bits available */
+    /* Aura: a function not compiled yet (JS_SetLazyFunctions). It has
+       no code, arguments or locals: only its closure variables, its
+       flags, its text, and one constant: the compiled function once its
+       first call has compiled it, before that an integer, where its text
+       starts in its line (see js_create_lazy_stub). lazy_expr,
+       lazy_arrow and lazy_module say how to parse its text again. */
+    uint8_t is_lazy : 1;
+    uint8_t lazy_expr : 1;
+    uint8_t lazy_arrow : 1;
+    uint8_t lazy_module : 1;
     uint8_t *byte_code_buf; /* (self pointer) */
     int byte_code_len;
     JSAtom func_name;
@@ -1357,6 +1384,8 @@ static JSAtom __JS_NewAtomInit(JSRuntime *rt, const char *str, int len,
                                int atom_type);
 static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p);
 static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b);
+static int js_lazy_link(JSContext *caller_ctx, JSObject *p);
+static JSValue js_lazy_compile(JSContext *ctx, JSFunctionBytecode *lb);
 static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
                                   JSValueConst this_obj,
                                   int argc, JSValueConst *argv, int flags);
@@ -2598,6 +2627,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->malloc_state = ms;
     js_arena_init(rt);
     rt->malloc_gc_threshold = 256 * 1024;
+    rt->lazy_min_len = JS_LAZY_MIN_LEN;
 
     init_list_head(&rt->context_list);
     init_list_head(&rt->source_text_list);
@@ -2744,6 +2774,12 @@ void JS_SetInterruptHandler(JSRuntime *rt, JSInterruptHandler *cb, void *opaque)
 void JS_SetCanBlock(JSRuntime *rt, bool can_block)
 {
     rt->can_block = can_block;
+}
+
+/* Aura */
+void JS_SetLazyFunctions(JSRuntime *rt, int min_len)
+{
+    rt->lazy_min_len = min_len < 0 ? -1 : min_len;
 }
 
 void JS_SetSharedArrayBufferFunctions(JSRuntime *rt,
@@ -18417,6 +18453,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
+    /* Aura: a function not compiled yet is compiled now */
+    if (js_class_has_bytecode(p->class_id) &&
+        unlikely(p->u.func.function_bytecode->is_lazy)) {
+        if (js_lazy_link(caller_ctx, p))
+            return JS_EXCEPTION;
+    }
     if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
         JSClassCall *call_func;
         call_func = rt->class_array[p->class_id].call;
@@ -22615,6 +22657,17 @@ typedef struct JSFunctionDef {
     bool use_short_opcodes : 1; /* true if short opcodes are used in byte_code */
     bool has_await : 1; /* true if await is used (used in module eval) */
     bool no_source : 1; /* Aura: compiled with JS_EVAL_FLAG_NO_SOURCE */
+    /* Aura: a function compiled at its first call (js_lazy_compile): it
+       has no parent, and closure_var holds the closure variables its
+       stub captured, found by name as a direct eval finds its caller's */
+    bool is_lazy : 1;
+    bool lazy_module : 1; /* Aura: its text is module code */
+    bool lazy_line1 : 1; /* Aura: it starts on its script's first line */
+    int lazy_line_ofs; /* Aura: bytes from its line's start to its text */
+    /* Aura: whether a function nested in this one may be compiled at
+       its first call, as far as this one is concerned
+       (js_fd_lazy_blocks): 0 not known yet, 1 yes, 2 no */
+    uint8_t lazy_state : 2;
 
     JSFunctionKindEnum func_kind : 8;
     JSParseFunctionEnum func_type : 7;
@@ -34830,9 +34883,10 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
 
     /* check direct eval scope (in the closure of the eval function
        which is necessarily at the top level) */
+    /* Aura: or the closure of a function compiled at its first call */
     if (!fd)
         fd = s;
-    if (var_idx < 0 && fd->is_eval) {
+    if (var_idx < 0 && (fd->is_eval || fd->is_lazy)) {
         int idx1;
         for (idx1 = 0; idx1 < fd->closure_var_count; idx1++) {
             JSClosureVar *cv = &fd->closure_var[idx1];
@@ -35057,8 +35111,10 @@ static int resolve_scope_private_field1(JSContext *ctx,
             var_kind = fd->vars[idx].var_kind;
             if (is_ref) {
                 capture_var(fd, &fd->vars[idx]);
+                /* Aura: with the field's kind, which a function compiled
+                   at its first call finds there (was JS_VAR_NORMAL) */
                 idx = get_closure_var(ctx, s, fd, JS_CLOSURE_LOCAL, idx, var_name,
-                                      true, true, JS_VAR_NORMAL);
+                                      true, true, var_kind);
                 if (idx < 0)
                     return -1;
             }
@@ -35066,7 +35122,7 @@ static int resolve_scope_private_field1(JSContext *ctx,
         }
         scope_level = fd->parent_scope_level;
         if (!fd->parent) {
-            if (fd->is_eval) {
+            if (fd->is_eval || fd->is_lazy) { /* Aura: is_lazy */
                 /* closure of the eval function (top level) */
                 for (idx = 0; idx < fd->closure_var_count; idx++) {
                     JSClosureVar *cv = &fd->closure_var[idx];
@@ -37962,7 +38018,231 @@ static int js_fd_share_source(JSContext *ctx, JSFunctionDef *fd)
 /* create a function object from a function definition. The function
    definition is freed. All the child functions are also created. It
    must be done this way to resolve all the variables. */
+/* Aura: functions compiled at their first call (JS_SetLazyFunctions).
+
+   QuickJS finds the variables a function captures while it resolves the
+   function's names, after the whole script is parsed, children first:
+   each name a child cannot find in itself is looked up in its parents,
+   marks the parent's variable captured and adds a closure variable to
+   every function between. A function the script will compile at its
+   first call (lazy) is therefore still parsed with the script, and it
+   and everything nested in it still go through resolve_variables, so
+   its parents capture what it needs and it gets its closure variables.
+   Then, instead of the later passes, it becomes a stub: a
+   JSFunctionBytecode with those closure variables, its flags and its
+   text. Everything nested in it is dropped.
+
+   OP_fclosure makes a function object from the stub as from any
+   bytecode, capturing the variables. Its first call (js_lazy_link)
+   parses the stub's text again as a function with no parent whose
+   closure variables are the stub's (is_lazy), found by name as a direct
+   eval finds its caller's, so the compiled function's closure variables
+   are the stub's, in the same order. The compiled function is kept in
+   the stub's constant pool for the stub's other function objects. */
+
+enum {
+    JS_CREATE_FULL,    /* compile the function */
+    JS_CREATE_RESOLVE, /* only resolve its names, then drop it */
+};
+
+/* Whether fd keeps the functions nested in it from being compiled at
+   their first call: their names may resolve through a 'with' or the
+   variables a direct eval adds, whose order counts. */
+static bool js_fd_lazy_blocks(JSFunctionDef *fd)
+{
+    int i;
+
+    if (fd->lazy_state == 0) {
+        fd->lazy_state = 1;
+        if (fd->has_eval_call || fd->var_object_idx >= 0 ||
+            fd->arg_var_object_idx >= 0 ||
+            (fd->is_eval && fd->eval_type == JS_EVAL_TYPE_DIRECT)) {
+            fd->lazy_state = 2;
+        } else {
+            for (i = 0; i < fd->var_count; i++) {
+                if (fd->vars[i].var_name == JS_ATOM__with_) {
+                    fd->lazy_state = 2;
+                    break;
+                }
+            }
+        }
+    }
+    return fd->lazy_state == 2;
+}
+
+/* Whether fd or a function nested in it calls eval directly. */
+static bool js_fd_subtree_has_eval(JSFunctionDef *top)
+{
+    JSFunctionDef *fd = top;
+
+    for (;;) {
+        if (fd->has_eval_call)
+            return true;
+        if (!list_empty(&fd->child_list)) {
+            fd = list_entry(fd->child_list.next, JSFunctionDef, link);
+        } else {
+            while (fd != top && fd->link.next == &fd->parent->child_list)
+                fd = fd->parent;
+            if (fd == top)
+                return false;
+            fd = list_entry(fd->link.next, JSFunctionDef, link);
+        }
+    }
+}
+
+/* Whether the parser marks fd's text as module code. */
+static bool js_fd_in_module(JSFunctionDef *fd)
+{
+    while (fd->parent)
+        fd = fd->parent;
+    return fd->lazy_module || (fd->is_eval && fd->eval_type == JS_EVAL_TYPE_MODULE);
+}
+
+static bool js_lazy_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/* Whether the function expression fd looks like one that runs as soon
+   as it is made, which a lazy compile would parse twice:
+   (function () {})(), !function () {}(), (function () {}).call(this),
+   (() => {})(). As in V8, a function expression after '(' or '!' counts
+   (arguments such as f(function () {}) too, which mostly run soon); an
+   arrow function counts when the brackets around it are called. */
+static bool js_fd_runs_at_once(JSFunctionDef *fd)
+{
+    const char *buf = fd->source_text->buf;
+    int start = fd->source_ofs, end = fd->source_ofs + fd->source_len;
+    int len = fd->source_text->len;
+
+    if (!buf)
+        return false;
+    while (start > 0 && js_lazy_space(buf[start - 1]))
+        start--;
+    if (fd->func_type == JS_PARSE_FUNC_EXPR) {
+        if (start > 0 && (buf[start - 1] == '(' || buf[start - 1] == '!'))
+            return true;
+        /* x = function () {}() */
+        while (end < len && js_lazy_space(buf[end]))
+            end++;
+        return end < len && buf[end] == '(';
+    }
+    if (start == 0 || buf[start - 1] != '(')
+        return false;
+    while (end < len && js_lazy_space(buf[end]))
+        end++;
+    if (end >= len || buf[end] != ')')
+        return false;
+    end++;
+    while (end < len && js_lazy_space(buf[end]))
+        end++;
+    return end < len && (buf[end] == '(' || buf[end] == '.');
+}
+
+/* Whether fd is compiled at its first call. */
+static bool js_fd_lazy_ok(JSContext *ctx, JSFunctionDef *fd)
+{
+    JSFunctionDef *p;
+
+    if (!fd->parent || !fd->source_text || fd->no_source ||
+        ctx->rt->lazy_min_len < 0 || fd->source_len < ctx->rt->lazy_min_len ||
+        fd->source_len > JS_LAZY_MAX_LEN)
+        return false;
+    switch (fd->func_type) {
+    case JS_PARSE_FUNC_STATEMENT:
+    case JS_PARSE_FUNC_VAR:
+        /* export default function () {} has no name to parse again */
+        if (fd->func_name == JS_ATOM_NULL)
+            return false;
+        break;
+    case JS_PARSE_FUNC_EXPR:
+    case JS_PARSE_FUNC_ARROW:
+        /* A function expression in the script's own code (not in a
+           function) is mostly a module of a bundle, which runs while the
+           page loads: Reddit's modules (20 to 390 KB each, async arrow
+           functions passed to its loader) were parsed again, 3.8 MB in
+           all, against 1.4 MB when they are compiled with the script,
+           which also held less memory. A declaration there is mostly a
+           library function. Counting functions that run at once as the
+           script's own code too (a bundle wrapped in one) took the
+           saving on Reddit away. */
+        if (js_fd_runs_at_once(fd) || (fd->parent->is_eval && !fd->parent->parent))
+            return false;
+        break;
+    default:
+        return false;
+    }
+    for (p = fd->parent; p; p = p->parent) {
+        if (js_fd_lazy_blocks(p))
+            return false;
+    }
+    return !js_fd_subtree_has_eval(fd);
+}
+
+/* The stub of fd, a lazy function whose names are resolved. */
+static JSValue js_create_lazy_stub(JSContext *ctx, JSFunctionDef *fd)
+{
+    JSFunctionBytecode *b;
+    int function_size, cpool_offset, closure_var_offset;
+
+    cpool_offset = (sizeof(*b) + 7) & ~7;
+    closure_var_offset = cpool_offset + sizeof(JSValue);
+    function_size = closure_var_offset + fd->closure_var_count * sizeof(JSClosureVar);
+    b = js_mallocz(ctx, function_size);
+    if (!b)
+        return JS_EXCEPTION;
+    JS_REF_COUNT(b) = 1;
+    b->is_lazy = 1;
+    b->lazy_expr = (fd->func_type == JS_PARSE_FUNC_EXPR);
+    b->lazy_arrow = (fd->func_type == JS_PARSE_FUNC_ARROW);
+    b->lazy_module = js_fd_in_module(fd);
+    b->cpool_count = 1;
+    b->cpool = (void *)((uint8_t *)b + cpool_offset);
+    /* Where the function's text starts in its line, and whether the
+       line is its script's first: the parser counts columns from there
+       (js_lazy_compile). The compiled function replaces it. */
+    b->cpool[0] = js_int32(fd->lazy_line_ofs * 2 + fd->lazy_line1);
+    b->closure_var_count = fd->closure_var_count;
+    if (b->closure_var_count) {
+        /* the names move over */
+        b->closure_var = (void *)((uint8_t *)b + closure_var_offset);
+        memcpy(b->closure_var, fd->closure_var, b->closure_var_count * sizeof(JSClosureVar));
+        fd->closure_var_count = 0;
+    }
+    b->func_name = fd->func_name;
+    fd->func_name = JS_ATOM_NULL;
+    b->filename = fd->filename;
+    fd->filename = JS_ATOM_NULL;
+    b->line_num = fd->line_num;
+    b->col_num = fd->col_num;
+    b->source_text = fd->source_text;
+    b->source_ofs = fd->source_ofs;
+    b->source_len = fd->source_len;
+    fd->source_text = NULL;
+    b->defined_arg_count = fd->defined_arg_count;
+    b->has_prototype = fd->has_prototype;
+    b->has_simple_parameter_list = fd->has_simple_parameter_list;
+    b->is_strict_mode = fd->is_strict_mode;
+    b->func_kind = fd->func_kind;
+    b->need_home_object = (fd->home_object_var_idx >= 0 || fd->need_home_object);
+    b->new_target_allowed = fd->new_target_allowed;
+    b->super_call_allowed = fd->super_call_allowed;
+    b->super_allowed = fd->super_allowed;
+    b->arguments_allowed = fd->arguments_allowed;
+    b->backtrace_barrier = fd->backtrace_barrier;
+    b->realm = JS_DupContext(ctx);
+    add_gc_object(ctx->rt, &b->header, JS_GC_OBJ_TYPE_FUNCTION_BYTECODE);
+    return JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b);
+}
+
+static JSValue js_create_function2(JSContext *ctx, JSFunctionDef *fd, int mode);
+
 static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
+{
+    return js_create_function2(ctx, fd, JS_CREATE_FULL);
+}
+
+static JSValue js_create_function2(JSContext *ctx, JSFunctionDef *fd, int mode)
 {
     JSValue func_obj;
     JSFunctionBytecode *b;
@@ -37971,6 +38251,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     int function_size, byte_code_offset, cpool_offset;
     int closure_var_offset, vardefs_offset;
     JSFunctionDefLate late;
+    bool lazy;
 
     /* Aura: the state of phases 2 and 3 (see JSFunctionDef.late) */
     memset(&late, 0, sizeof(late));
@@ -38022,6 +38303,10 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     if (fd->source && js_fd_share_source(ctx, fd))
         goto fail;
 
+    /* Aura: a lazy function and what is nested in it only resolve
+       their names */
+    lazy = (mode == JS_CREATE_FULL && js_fd_lazy_ok(ctx, fd));
+
     /* first create all the child functions */
     list_for_each_safe(el, el1, &fd->child_list) {
         JSFunctionDef *fd1;
@@ -38029,7 +38314,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
 
         fd1 = list_entry(el, JSFunctionDef, link);
         cpool_idx = fd1->parent_cpool_idx;
-        func_obj = js_create_function(ctx, fd1);
+        func_obj = js_create_function2(ctx, fd1, lazy ? JS_CREATE_RESOLVE : mode);
         if (JS_IsException(func_obj))
             goto fail;
         /* save it in the constant pool */
@@ -38051,6 +38336,13 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
 
     if (resolve_variables(ctx, fd))
         goto fail;
+
+    /* Aura: the names are resolved: what a lazy function needs is known */
+    if (lazy || mode == JS_CREATE_RESOLVE) {
+        func_obj = lazy ? js_create_lazy_stub(ctx, fd) : JS_UNDEFINED;
+        js_free_function_def(ctx, fd);
+        return func_obj;
+    }
 
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_PASS2
     if (check_dump_flag(ctx->rt, JS_DUMP_BYTECODE_PASS2)) {
@@ -38438,9 +38730,16 @@ static __exception int js_parse_function_decl2(JSParseState *s,
     int func_idx, lexical_func_idx = -1;
     bool has_opt_arg;
     bool create_func_var = false;
+    bool line1;
+    int line_ofs;
 
     is_expr = (func_type != JS_PARSE_FUNC_STATEMENT &&
                func_type != JS_PARSE_FUNC_VAR);
+    /* Aura: where the function's line starts, which js_lazy_compile
+       needs to count columns as here. On a script's first line,
+       line_start is where eol is, not after it. */
+    line1 = (s->line_start == s->eol);
+    line_ofs = (int)(ptr - s->line_start);
 
     if (func_type == JS_PARSE_FUNC_STATEMENT ||
         func_type == JS_PARSE_FUNC_VAR ||
@@ -38552,6 +38851,8 @@ static __exception int js_parse_function_decl2(JSParseState *s,
         *pfd = fd;
     s->cur_func = fd;
     fd->func_name = func_name;
+    fd->lazy_line1 = line1;
+    fd->lazy_line_ofs = line_ofs;
     /* XXX: test !fd->is_generator is always false */
     fd->has_prototype = (func_type == JS_PARSE_FUNC_STATEMENT ||
                          func_type == JS_PARSE_FUNC_VAR ||
@@ -39148,6 +39449,174 @@ static void js_parse_init(JSContext *ctx, JSParseState *s,
     s->token.val = ' ';
     s->token.line_num = 1;
     s->token.col_num = 1;
+}
+
+/* Aura: compiles the lazy function lb from its text (see
+   js_create_lazy_stub); ctx is lb's realm. */
+static JSValue js_lazy_compile(JSContext *ctx, JSFunctionBytecode *lb)
+{
+#ifndef QJS_DISABLE_PARSER
+    JSRuntime *rt = ctx->rt;
+    JSParseState s1, *s = &s1;
+    JSSourceText *st = lb->source_text;
+    JSFunctionDef *top, *fd, *f;
+    JSParseFunctionEnum func_type;
+    JSFunctionKindEnum func_kind;
+    JSFunctionBytecode *b;
+    JSValue func_obj;
+    const uint8_t *ptr;
+    const char *text, *filename;
+    int i, err, line_pos;
+
+    if (!st || lb->source_ofs < 0 || lb->source_len <= 0 ||
+        lb->source_ofs > st->len || lb->source_len > st->len - lb->source_ofs ||
+        JS_VALUE_GET_TAG(lb->cpool[0]) != JS_TAG_INT)
+        return JS_ThrowInternalError(ctx, "the function has no text to compile");
+    line_pos = JS_VALUE_GET_INT(lb->cpool[0]);
+    text = js_source_text_buf(rt, st);
+    if (!text)
+        return JS_ThrowOutOfMemory(ctx);
+    filename = JS_AtomToCString(ctx, lb->filename);
+    if (!filename)
+        return JS_EXCEPTION;
+
+    /* Parse in the script's text, from the function's first token on,
+       on the line that token had. The parser counts a token's column
+       from the newline before it (s->eol), some positions from the
+       line's start (s->line_start, after the newline but at it on a
+       script's first line): the stub's constant says where the line
+       starts. Both may lie before the text when the text starts with
+       the function. */
+    js_parse_init(ctx, s, text, st->len, filename, lb->line_num);
+    ptr = (const uint8_t *)text + lb->source_ofs;
+    s->buf_ptr = ptr;
+    s->mark = ptr;
+    s->line_start = ptr - (line_pos >> 1);
+    s->eol = s->line_start - ((line_pos & 1) ? 0 : 1);
+    s->is_module = lb->lazy_module;
+    s->allow_html_comments = !s->is_module;
+
+    /* a parent for the parser, which nothing resolves through */
+    top = js_new_function_def(ctx, NULL, false, false, filename,
+                              lb->line_num, lb->col_num);
+    if (!top) {
+        JS_FreeCString(ctx, filename);
+        return JS_EXCEPTION;
+    }
+    s->cur_func = top;
+    top->is_strict_mode = lb->is_strict_mode;
+    top->new_target_allowed = lb->new_target_allowed;
+    top->super_call_allowed = lb->super_call_allowed;
+    top->super_allowed = lb->super_allowed;
+    top->arguments_allowed = lb->arguments_allowed;
+    top->in_function_body = true;
+    top->lazy_module = lb->lazy_module;
+    fd = NULL;
+    err = push_scope(s) < 0;
+    top->body_scope = top->scope_level;
+    if (!err)
+        err = next_token(s);
+    func_kind = JS_FUNC_NORMAL;
+    if (lb->lazy_arrow) {
+        func_type = JS_PARSE_FUNC_ARROW;
+        if (!err && (lb->func_kind & JS_FUNC_ASYNC)) {
+            func_kind = JS_FUNC_ASYNC;
+            err = next_token(s); /* 'async' */
+        }
+    } else {
+        /* the parser finds 'async' and '*' itself */
+        func_type = lb->lazy_expr ? JS_PARSE_FUNC_EXPR : JS_PARSE_FUNC_STATEMENT;
+    }
+    if (!err)
+        err = js_parse_function_decl2(s, func_type, func_kind, JS_ATOM_NULL,
+                                      ptr, lb->line_num, lb->col_num,
+                                      JS_PARSE_EXPORT_NONE, &fd);
+    skip_memo_free(s);
+    free_token(s, &s->token);
+    JS_FreeCString(ctx, filename);
+    if (err) {
+        js_free_function_def(ctx, top);
+        return JS_EXCEPTION;
+    }
+    if (!fd || fd->source_pos1 - 1 != lb->source_ofs ||
+        fd->source_len != lb->source_len || fd->closure_var_count != 0 ||
+        fd->func_kind != lb->func_kind) {
+        js_free_function_def(ctx, top);
+        return JS_ThrowInternalError(ctx, "the function parsed differently");
+    }
+    list_del(&fd->link);
+    fd->parent = NULL;
+    fd->is_lazy = true;
+    fd->lazy_module = lb->lazy_module;
+    js_free_function_def(ctx, top);
+
+    /* every function of fd's tree gets its text from st */
+    f = fd;
+    for (;;) {
+        if (f->source_pos1 > 0 && f->source_len >= 0 &&
+            f->source_pos1 - 1 <= st->len &&
+            f->source_len <= st->len - (f->source_pos1 - 1)) {
+            st->ref_count++;
+            f->source_text = st;
+            f->source_ofs = f->source_pos1 - 1;
+        }
+        if (!list_empty(&f->child_list)) {
+            f = list_entry(f->child_list.next, JSFunctionDef, link);
+        } else {
+            while (f != fd && f->link.next == &f->parent->child_list)
+                f = f->parent;
+            if (f == fd)
+                break;
+            f = list_entry(f->link.next, JSFunctionDef, link);
+        }
+    }
+
+    /* the closure variables the stub captured, in its order */
+    if (lb->closure_var_count) {
+        fd->closure_var = js_malloc(ctx, lb->closure_var_count * sizeof(JSClosureVar));
+        if (!fd->closure_var) {
+            js_free_function_def(ctx, fd);
+            return JS_EXCEPTION;
+        }
+        fd->closure_var_size = lb->closure_var_count;
+        for (i = 0; i < lb->closure_var_count; i++) {
+            fd->closure_var[i] = lb->closure_var[i];
+            JS_DupAtom(ctx, fd->closure_var[i].var_name);
+        }
+        fd->closure_var_count = lb->closure_var_count;
+    }
+
+    func_obj = js_create_function(ctx, fd);
+    if (JS_IsException(func_obj))
+        return JS_EXCEPTION;
+    b = JS_VALUE_GET_PTR(func_obj);
+    if (b->closure_var_count != lb->closure_var_count) {
+        JS_FreeValue(ctx, func_obj);
+        return JS_ThrowInternalError(ctx, "the function captured other variables");
+    }
+    return func_obj;
+#else
+    return JS_ThrowInternalError(ctx, "the function was not compiled");
+#endif
+}
+
+/* Aura: before the first call of p, whose bytecode is a lazy stub: gives
+   p the compiled function, compiling it first if no other function
+   object of the stub has. */
+static int js_lazy_link(JSContext *caller_ctx, JSObject *p)
+{
+    JSFunctionBytecode *lb = p->u.func.function_bytecode;
+    JSValue full = lb->cpool[0];
+
+    if (JS_VALUE_GET_TAG(full) == JS_TAG_INT) {
+        full = js_lazy_compile(lb->realm, lb);
+        if (JS_IsException(full))
+            return -1;
+        lb->cpool[0] = full;
+    }
+    p->u.func.function_bytecode = JS_VALUE_GET_PTR(js_dup(full));
+    JS_FreeValueRT(caller_ctx->rt, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, lb));
+    return 0;
 }
 
 static JSValue JS_EvalFunctionInternal(JSContext *ctx, JSValue fun_obj,
@@ -39884,6 +40353,8 @@ static int JS_WriteFunctionBytecode(BCWriterState *s,
     uint32_t val;
 
     bc_len = b->byte_code_len;
+    if (bc_len == 0)
+        return 0; /* Aura: a lazy function (js_malloc(0) is NULL) */
     bc_buf = js_malloc(s->ctx, bc_len);
     if (!bc_buf)
         return -1;
@@ -39988,6 +40459,20 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
     uint32_t flags;
     int idx, i;
 
+    /* Aura: a lazy function is written as one only with a text the
+       reader gets too; otherwise it is compiled and written compiled */
+    if (b->is_lazy &&
+        !(s->allow_debug && b->source_text &&
+          (s->source_ref ? b->source_text->cached : s->allow_source))) {
+        if (JS_VALUE_GET_TAG(b->cpool[0]) == JS_TAG_INT) {
+            JSValue full = js_lazy_compile(b->realm, b);
+            if (JS_IsException(full))
+                return -1;
+            b->cpool[0] = full;
+        }
+        return JS_WriteFunctionTag(s, b->cpool[0]);
+    }
+
     bc_put_u8(s, BC_TAG_FUNCTION_BYTECODE);
     flags = idx = 0;
     bc_set_flags(&flags, &idx, b->has_prototype, 1);
@@ -40003,9 +40488,12 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
     bc_set_flags(&flags, &idx, s->allow_debug, 1);
     bc_set_flags(&flags, &idx, b->text_dropped, 2); /* Aura */
     bc_set_flags(&flags, &idx, b->has_var_scopes, 1); /* Aura */
+    bc_set_flags(&flags, &idx, b->is_lazy, 1); /* Aura */
     assert(idx <= 16);
     bc_put_u16(s, flags);
-    bc_put_u8(s, b->is_strict_mode);
+    /* Aura: how to parse a lazy function's text */
+    bc_put_u8(s, b->is_strict_mode | (b->lazy_expr << 1) |
+              (b->lazy_arrow << 2) | (b->lazy_module << 3));
     bc_put_atom(s, b->func_name);
 
     bc_put_leb128(s, b->arg_count);
@@ -41012,9 +41500,13 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
     has_debug_info = bc_get_flags(v16, &idx, 1);
     bc.text_dropped = bc_get_flags(v16, &idx, 2); /* Aura */
     bc.has_var_scopes = bc_get_flags(v16, &idx, 1); /* Aura */
+    bc.is_lazy = bc_get_flags(v16, &idx, 1); /* Aura */
     if (bc_get_u8(s, &v8))
         goto fail;
-    bc.is_strict_mode = (v8 > 0);
+    bc.is_strict_mode = v8 & 1;
+    bc.lazy_expr = (v8 >> 1) & 1;
+    bc.lazy_arrow = (v8 >> 2) & 1;
+    bc.lazy_module = (v8 >> 3) & 1;
     if (bc_get_atom(s, &bc.func_name))
         goto fail;
     if (bc_get_leb128_u16(s, &bc.arg_count))
@@ -41239,6 +41731,16 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
     bc_read_trace(s, "}\n");
 
  nodebug:
+    /* Aura: a lazy function has its text and only its compiled form
+       (or where its line starts) as constant */
+    if (b->is_lazy &&
+        (b->cpool_count != 1 || b->byte_code_len != 0 || local_count != 0 ||
+         !b->source_text ||
+         !(JS_VALUE_GET_TAG(b->cpool[0]) == JS_TAG_INT ||
+           JS_VALUE_GET_TAG(b->cpool[0]) == JS_TAG_FUNCTION_BYTECODE))) {
+        JS_ThrowSyntaxError(ctx, "invalid lazy function");
+        goto fail;
+    }
     b->realm = JS_DupContext(ctx);
     return obj;
 

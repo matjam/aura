@@ -61,6 +61,11 @@ typedef struct AuJsSettings {
     uint32_t slice_ms;    /* long-script check interval; 0: 1000 */
     uint32_t kill_ms;     /* default limit without a long_script hook; 0: 10000 */
     uint32_t yield_ms;    /* how often hooks.yield is called while script runs; 0: never */
+    /* A function nested in a script whose text is this many bytes or
+     * longer is compiled at its first call (QuickJS patch 0021,
+     * JS_SetLazyFunctions); 0: 128 bytes; negative: every function is
+     * compiled with its script. */
+    int lazy_functions;
     const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (AU_UA_PLATFORM) Aura/1" (core/uaplatform.h).
                              * Embedders pass the string the network sends (au_docview_set_user_agent). */
     const char *language;   /* navigator.language; NULL: "en-US" */

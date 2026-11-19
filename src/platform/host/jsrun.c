@@ -2,7 +2,11 @@
  *
  *   aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS]
  *                [--stack KB] [--expect-errors N] [--module] [--negative TYPE] [--stats]
- *                [--clock MS] [--zone SECONDS] FILE.js...
+ *                [--clock MS] [--zone SECONDS] [--lazy BYTES] FILE.js...
+ *
+ * --lazy compiles a function at its first call when its text is BYTES
+ * long or longer (AuJsSettings.lazy_functions; -1: every function with
+ * its script).
  *
  * --clock gives Date a fixed time (UTC milliseconds since 1970) and --zone
  * a fixed zone (seconds east of UTC) through au_js_set_clock, as the Mac
@@ -217,7 +221,7 @@ static int usage(void)
 {
     fprintf(stderr, "usage: aura-host js [--html PAGE.html] [--quiet] [--mem MB] [--kill MS] [--stack KB]\n"
                     "                    [--expect-errors N] [--module] [--negative TYPE] [--stats]\n"
-                    "                    [--clock MS] [--zone SECONDS] FILE.js...\n");
+                    "                    [--clock MS] [--zone SECONDS] [--lazy BYTES] FILE.js...\n");
     return 2;
 }
 
@@ -333,6 +337,8 @@ static int js_main(int argc, char **argv)
             run.negative = argv[++i];
         else if (!strcmp(argv[i], "--stats"))
             stats = true;
+        else if (!strcmp(argv[i], "--lazy") && i + 1 < argc)
+            s.lazy_functions = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--clock") && i + 1 < argc) {
             g_fake_ms = strtoll(argv[++i], NULL, 10);
             clock.wall_ms = fake_wall_ms;

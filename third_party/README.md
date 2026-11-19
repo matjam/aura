@@ -78,7 +78,9 @@ records where the code came from and how to update it.
   records for a compiled function's arguments and locals instead of
   the compiler's 20-byte ones (scopes only for a direct eval), and
   `0020` an object's weak references listed in a runtime hash table
-  instead of through a pointer in every object.
+  instead of through a pointer in every object, and `0021` a nested
+  function compiled at its first call from its script's text, holding
+  until then only the variables it captures (`JS_SetLazyFunctions`).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

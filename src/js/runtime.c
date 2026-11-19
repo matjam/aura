@@ -1048,6 +1048,8 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
         JS_SetInterruptHandler(js->rt, interrupt_cb, js);
         JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
         JS_SetSourcePackHooks(js->rt, source_pack, source_unpack, NULL);
+        if (js->settings.lazy_functions)
+            JS_SetLazyFunctions(js->rt, js->settings.lazy_functions);
     }
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
@@ -1156,6 +1158,8 @@ AuJs *js_create_worker(AuJs *owner, struct JsWorker *wk, const char *url, bool o
     JS_SetInterruptHandler(js->rt, interrupt_cb, js);
     JS_SetHostPromiseRejectionTracker(js->rt, rejection_tracker, js);
     JS_SetSourcePackHooks(js->rt, source_pack, source_unpack, NULL);
+    if (js->settings.lazy_functions)
+        JS_SetLazyFunctions(js->rt, js->settings.lazy_functions);
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
         JS_AddIntrinsicRegExp(ctx) || JS_AddIntrinsicJSON(ctx) || JS_AddIntrinsicProxy(ctx) ||

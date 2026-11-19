@@ -556,6 +556,13 @@ JS_EXTERN void JS_SetSourcePackHooks(JSRuntime *rt, JSSourcePackFunc *pack, JSSo
    last call (a text read in between waits for the next call); a text
    packed before only drops its unpacked copy. Returns the bytes freed. */
 JS_EXTERN size_t JS_PackSourceTexts(JSRuntime *rt, size_t min_len);
+/* Aura: a function nested in a script whose text is min_len bytes or
+   longer is compiled at its first call, from the script's text, instead
+   of with the script; until then it holds only the variables it
+   captures. A negative min_len compiles every function with its
+   script. Only scripts that keep their text (not
+   JS_EVAL_FLAG_NO_SOURCE) have such functions. */
+JS_EXTERN void JS_SetLazyFunctions(JSRuntime *rt, int min_len);
 JS_EXTERN JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque);
 JS_EXTERN void JS_FreeRuntime(JSRuntime *rt);
 JS_EXTERN void *JS_GetRuntimeOpaque(JSRuntime *rt);

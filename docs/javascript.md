@@ -89,6 +89,7 @@ Patches this document refers to:
 | 0018 | a hashed shape of up to 32 properties grows by one instead of by half, so the objects that share it keep no empty property slots (`0018-exact-small-shapes`; "How script memory is kept down" below) |
 | 0019 | a compiled function keeps 8 bytes per argument and local (`JSBytecodeVar`) instead of the compiler's 20-byte `JSVarDef`; only a function with a direct eval also keeps their scopes (`0019-compact-bytecode-vars`) |
 | 0020 | the weak references to an object (WeakMap and WeakSet keys, WeakRef and FinalizationRegistry targets) are listed in a runtime hash table, and the object keeps one bit instead of a pointer (`0020-weak-refs-in-runtime`) |
+| 0021 | a nested function of 128 bytes to 16 KB of text is compiled at its first call, from its script's text; until then it is a stub holding the variables it captures (`JS_SetLazyFunctions`, `0021-lazy-functions`) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -510,18 +511,50 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   in a runtime hash table. An object takes 72 bytes with its block
   header on the host instead of 80, and 40 instead of 48 on the
   PowerPC: about 1.8 MB for Reddit's 230,000 objects.
+- **A nested function is compiled at its first call** (patch 0021).
+  Fewer than a quarter of the functions on Reddit and GitHub are ever
+  called (6,814 of 29,826 and 5,230 of 25,738, 2026-11-18). A function
+  nested in a script that keeps its text, with 128 bytes to 16 KB of
+  text, becomes a stub: its record and the variables it captures, with
+  everything nested in it dropped. Its first call parses its text
+  again. The script still parses it, so it captures the same variables.
+  To change the 128, set `AuJsSettings.lazy_functions` (`aura-host js
+  --lazy BYTES`; -1 compiles every function with its script).
+  These stay compiled with the script, because they run while the page
+  loads and a later compile would parse them twice:
+  - functions that look like they run at once, such as
+    `(function () {})()` or `x = function () {}()`, and any function
+    expression after `(`;
+  - function expressions in a script's own code, mostly a bundle's
+    modules. Reddit's modules, 20 to 390 KB each, were parsed again
+    3.8 MB in all, and the page held more memory;
+  - functions over 16 KB. On Wikipedia the jQuery module and the
+    jQuery factory in it, 140 KB each, were parsed three times.
+
+  A stub holds about what a compiled function of 100 bytes holds, and
+  a stub that is called keeps both, so shorter functions are compiled
+  with the script.
+
+Script heap after loading, on the host (2026-11-18, base `57c22d4` with
+patch 0021, against the same build compiling every function with its
+script; two loads each, three on Reddit, whose loads differ):
+
+| Page | Every function with its script | Patch 0021 |
+|---|---|---|
+| GitHub repository page | 34.2 to 35.2 MB, script 620 ms | 30.5 to 31.1 MB, script 650 to 680 ms |
+| Wikipedia, "Macintosh" | 8.9 to 9.4 MB, script 140 to 160 ms | 8.6 to 9.0 MB, script 165 to 195 ms |
+| Reddit home page | 37.5 to 40 MB, script 1.1 to 1.3 s | 35 to 37 MB, script 1.0 to 1.2 s |
+| 830 KB script in a page, two frames and a worker (`browser_script_memory`) | peak 14.6 MB, worker 4.3 MB | peak 10.1 MB, worker 2.7 MB |
 
 What is left, measured on the host (2026-11-18, base `ebfa814`):
 
-- **Most compiled functions never run.** After loading Reddit and two
-  Page Downs, 6,814 of 29,826 functions had been called; on GitHub's
-  repository page, 5,230 of 25,738. The uncalled ones held 1.9 MB of
-  bytecode, 4.0 MB of function records and 0.4 MB of line tables on
-  Reddit (14% of the heap then). QuickJS compiles every function when
-  the script loads. Compiling a function at its first call, as V8
-  does, would save most of this and speed up loading, but the compiler
-  finds the variables a closure captures while it compiles the outer
-  function, so it is a large change.
+- **Called functions are parsed twice** (patch 0021): GitHub parsed
+  0.8 MB again while it loaded (about 50 ms), Wikipedia 0.7 MB.
+  Keeping a record of where each nested function's text lies would let
+  the second parse skip them.
+- **Methods, getters, setters and class members are compiled with
+  their script**: parsing one again needs its name, which its text
+  does not start with.
 - **Each function record has a 136-byte header** (88 bytes on the
   PowerPC); four of its pointers point into the record itself.
 - **Every block from the engine's arenas has an 8-byte header**, which
@@ -551,6 +584,15 @@ What is left, measured on the host (2026-11-18, base `ebfa814`):
   `class{}.toString()` contains "class", and error positions (including
   a column above 65535 and a line above 65535) match a script with
   text, also in a child frame that reads the script from the cache.
+- `tests/js/lazy_functions.js` (ctests `js_lazy_functions`, with every
+  function compiled at its first call, and `js_lazy_functions_eager`,
+  with none): captured variables of every kind, closures made in a loop
+  from one stub, `this`, `arguments`, `new.target` and `super` in
+  arrows, private class names, async functions and generators, `length`,
+  `name` and `toString` before the first call, `with` and direct eval,
+  annex B block functions, HTML comments, and error positions, also on
+  the script's first line, the same in both. Every `aura-host js` test
+  also passed with `--lazy 1` (2026-11-18).
 
 ### Large scripts
 

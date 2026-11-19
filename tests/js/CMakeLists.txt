@@ -9,6 +9,11 @@ foreach(name dom_tree events collections html_elements loop window net observers
     add_test(NAME js_${name} COMMAND ${JS_TOOL} js --quiet ${JS_DIR}/harness.js ${JS_DIR}/${name}.js)
 endforeach()
 
+# Functions compiled at their first call (QuickJS patch 0021): every
+# function of the file, and none, give the same results.
+add_test(NAME js_lazy_functions COMMAND ${JS_TOOL} js --quiet --lazy 1 ${JS_DIR}/harness.js ${JS_DIR}/lazy_functions.js)
+add_test(NAME js_lazy_functions_eager COMMAND ${JS_TOOL} js --quiet --lazy -1 ${JS_DIR}/harness.js ${JS_DIR}/lazy_functions.js)
+
 # Range, the CSSOM and the canvas, read on first use: each file touches
 # them first in other ways, in a fresh window.
 foreach(name lazy_prelude_a lazy_prelude_b lazy_prelude_c)

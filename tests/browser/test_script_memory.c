@@ -44,9 +44,13 @@ static int failures, checks;
  * 4,535 KB; the bounds leave 13% and 21% for compiler and library
  * differences. With each context compiling the script for itself (before
  * the compiled-script cache in src/js/runtime.c) the same page peaked at
- * 20,625 KB and the worker at 10,581 KB, which the limits below refuse. */
-#define PEAK_PAGE_BOUND_KB 17500
-#define PEAK_WORKER_BOUND_KB 5500
+ * 20,625 KB and the worker at 10,581 KB, which the limits below refuse.
+ * With functions compiled at their first call (QuickJS patch 0021, on
+ * 2026-11-18) the page peaked at 10,130 KB and the worker at 2,693 KB,
+ * against 14,649 KB and 4,250 KB without; the bounds leave 13% and 21%
+ * again, so losing the stubs shows here. */
+#define PEAK_PAGE_BOUND_KB 11500
+#define PEAK_WORKER_BOUND_KB 3300
 #define LIMIT_PAGE_KB 20480
 #define LIMIT_WORKER_KB 8192
 
