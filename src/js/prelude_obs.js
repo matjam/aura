@@ -863,13 +863,80 @@ let activatedAt = -1;
 const activate5 = () => { activatedAt = N.now(); };
 P.transientActivation = () => activatedAt >= 0 && N.now() - activatedAt <= 5000;
 P.hasBeenActive = () => activatedAt >= 0;
+/* Pointer events (Pointer Events 3) for the mouse: each mouse event
+ * the view fires is preceded by its pointer event. pointerdown is the
+ * first button pressed and pointerup the last released; a press or
+ * release of another button while one is held is a pointermove with
+ * that button. A pointerdown whose default is prevented suppresses the
+ * mousedown, mousemove and mouseup that follow until the pointerup. */
+const pointerOf = { mousemove: 'pointermove', mousedown: 'pointerdown', mouseup: 'pointerup',
+    mouseover: 'pointerover', mouseout: 'pointerout', mouseenter: 'pointerenter', mouseleave: 'pointerleave' };
+let preventMouse = false;
+P.pointerButtons = () => buttonsDown;
+const newPointer = (type, init, extra) => {
+    const noBubble = type === 'pointerenter' || type === 'pointerleave';
+    const cancelable = !noBubble && type !== 'gotpointercapture' && type !== 'lostpointercapture';
+    const ev = new PointerEvent(type, Object.assign({}, init, { bubbles: !noBubble, cancelable, composed: !noBubble,
+        detail: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true, pressure: init.buttons ? 0.5 : 0, relatedTarget: null },
+    extra));
+    ev[S.ev].trusted = true;
+    return ev;
+};
+/* The element that holds pointer capture, after firing
+ * lostpointercapture and gotpointercapture for any change since the last
+ * pointer event (the spec's pending capture). */
+let captureTarget = null;
+function processCapture(init) {
+    let want = pointerCaptures.get(1) || null;
+    if (want && !want.isConnected) { pointerCaptures.delete(1); want = null; }
+    if (want === captureTarget) return captureTarget;
+    const old = captureTarget;
+    captureTarget = want;
+    if (old && old.isConnected) fire(old, newPointer('lostpointercapture', init, { button: -1 }));
+    if (want) fire(want, newPointer('gotpointercapture', init, { button: -1 }));
+    return captureTarget;
+}
+/* Fires the pointer event of a mouse event; returns the target the
+ * mouse event goes to (the capturing element, while there is one), or
+ * null when it is not fired at all (over, out, enter and leave while the
+ * pointer is captured). */
+function firePointer(target, type, init, before) {
+    let ptype = pointerOf[type];
+    let button = init.button;
+    if (type === 'mousedown' && before !== 0) ptype = 'pointermove';
+    else if (type === 'mouseup' && init.buttons !== 0) ptype = 'pointermove';
+    else if (type === 'mousemove') button = -1;
+    const boundary = type === 'mouseover' || type === 'mouseout' || type === 'mouseenter' || type === 'mouseleave';
+    const cap = processCapture(init);
+    if (cap && boundary) return null;
+    const t = cap || target;
+    const ok = fire(t, newPointer(ptype, init, { button, relatedTarget: boundary ? init.relatedTarget : null }));
+    if (ptype === 'pointerdown' && !ok) preventMouse = true;
+    if (ptype === 'pointerup') {
+        /* implicit release */
+        pointerCaptures.delete(1);
+        processCapture(init);
+    }
+    return t;
+}
 P.fireMouse = function (target, type, x, y, button, mods, detail, related) {
     if (type === 'mousedown' || type === 'mouseup' || type === 'click') activate5();
+    const before = buttonsDown;
     if (type === 'mousedown') buttonsDown |= 1 << button;
     else if (type === 'mouseup') buttonsDown &= ~(1 << button);
     const noBubble = type === 'mouseenter' || type === 'mouseleave';
     const init = Object.assign({ bubbles: !noBubble, cancelable: !noBubble, composed: !noBubble, view: G, detail,
         clientX: x, clientY: y, screenX: x, screenY: y, button, buttons: buttonsDown, relatedTarget: related }, modsOf(mods));
+    if (pointerOf[type]) {
+        const t = firePointer(target, type, init, before);
+        if (!t) return true;
+        target = t;
+        if (preventMouse && (type === 'mousedown' || type === 'mousemove' || type === 'mouseup')) {
+            if (type === 'mouseup' && buttonsDown === 0) preventMouse = false;
+            return true; /* not fired; the view's default action still happens */
+        }
+        if (type === 'mouseup' && buttonsDown === 0) preventMouse = false;
+    }
     if (type === 'click' || type === 'auxclick' || type === 'contextmenu') {
         const ev = new PointerEvent(type, Object.assign(init, { pointerId: 1, pointerType: 'mouse', isPrimary: true }));
         ev[S.ev].trusted = true;

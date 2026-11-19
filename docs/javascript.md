@@ -1097,6 +1097,30 @@ top-level document; in a frame it is `""`
 (`localStorage`, `sessionStorage`) is described in
 [`web-storage.md`](web-storage.md).
 
+## Mouse and pointer events
+
+The view fires mouse events through `P.fireMouse` (`prelude_obs.js`).
+To change them, work there and test with `test_pointer_events` in
+`tests/forms`.
+
+- Each mouse event is preceded by its pointer event (`pointermove`,
+  `pointerdown`, `pointerup`, `pointerover`, `pointerout`,
+  `pointerenter`, `pointerleave`), as pointer 1 of type `mouse`.
+  `pointerdown` is the first button pressed and `pointerup` the last
+  released; another button in between is a `pointermove`.
+- A `pointerdown` whose default is prevented suppresses `mousedown`,
+  `mousemove` and `mouseup` until the release. The view's default
+  action (focus, selection) still happens.
+- `setPointerCapture(1)` works while a button is held. Pointer events
+  and their mouse events then go to the capturing element, with
+  `gotpointercapture` and `lostpointercapture`, and capture ends at
+  `pointerup`.
+- `offsetX`/`offsetY` are computed when read, from the target's
+  padding edge.
+- Before 2026-11-19 there were no pointer events and `offsetX` was
+  always 0, so hCaptcha's drag puzzle (Discord's login) never accepted
+  an answer.
+
 ## window.postMessage
 
 `window.postMessage` takes any absolute URL as the target origin and

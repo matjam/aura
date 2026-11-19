@@ -257,8 +257,18 @@ class MouseEvent extends UIEvent {
     get y() { return this[S.ev].clientY; }
     get pageX() { return this[S.ev].clientX + G.scrollX; }
     get pageY() { return this[S.ev].clientY + G.scrollY; }
-    get offsetX() { return this[S.ev].offsetX || 0; }
-    get offsetY() { return this[S.ev].offsetY || 0; }
+    /* The position relative to the target's padding edge (CSSOM View),
+     * from its box when read: canvas games and puzzles place what the
+     * user drops by it. Transforms are not undone. */
+    get offsetX() { return this._offset(0); }
+    get offsetY() { return this._offset(1); }
+    _offset(i) {
+        const e = this[S.ev];
+        const t = e.target;
+        if (!t || t.nodeType !== 1 || typeof t.getBoundingClientRect !== 'function') return i ? e.clientY : e.clientX;
+        const r = t.getBoundingClientRect();
+        return i ? e.clientY - r.top - (t.clientTop || 0) : e.clientX - r.left - (t.clientLeft || 0);
+    }
     get button() { return this[S.ev].button; }
     get buttons() { return this[S.ev].buttons; }
     get movementX() { return this[S.ev].movementX; }
@@ -306,6 +316,14 @@ class PointerEvent extends MouseEvent {
     get width() { return this[S.ev].width; }
     get height() { return this[S.ev].height; }
     get pressure() { return this[S.ev].pressure; }
+    get tiltX() { return 0; }
+    get tiltY() { return 0; }
+    get twist() { return 0; }
+    get tangentialPressure() { return 0; }
+    /* A trusted pointermove stands for itself: Aura delivers one event
+     * per move, so there is nothing coalesced into it. */
+    getCoalescedEvents() { return this[S.ev].trusted && this.type === 'pointermove' ? [this] : []; }
+    getPredictedEvents() { return []; }
 }
 tag(PointerEvent);
 
