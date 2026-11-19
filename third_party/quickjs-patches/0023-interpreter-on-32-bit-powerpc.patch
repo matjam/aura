@@ -1,0 +1,84 @@
+Interpreter paths that cost calls on 32-bit PowerPC.
+
+An int32 add, subtract or multiply that overflows made its double from
+the 64-bit result, which on 32-bit PowerPC is a call to libgcc's
+__floatdidf. The result is now made from the two int32 operands in
+double arithmetic: the same value (an add or subtract of two int32 is
+exact in a double; a product is rounded once either way), with the
+processor's floating-point unit. Cloudflare's Turnstile overflows int32
+in its hashing all the time: __floatdidf was 0.5% of its time in the
+guest.
+
+The interpreter is too large for GCC to inline JS_FreeValue into it,
+so each value it dropped was a call (99 call sites). It now decrements
+the reference count in line and calls only to free.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -18428,6 +18428,19 @@
+     return can_store_error_stack(exc) || can_add_backtrace(exc);
+ }
+ 
++/* The interpreter drops a reference in line: a call per value freed cost
++   more than the decrement on 32-bit PowerPC, where the interpreter is too
++   large for GCC to inline JS_FreeValue into it. */
++static inline __attribute__((always_inline))
++void js_free_value_inline(JSContext *ctx, JSValue v)
++{
++    if (JS_VALUE_HAS_REF_COUNT(v)) {
++        if (--JS_REF_COUNT(JS_VALUE_GET_PTR(v)) <= 0)
++            js_free_value_rt(ctx->rt, v);
++    }
++}
++#define JS_FreeValue(ctx, v) js_free_value_inline(ctx, v)
++
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
+ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+@@ -20510,7 +20523,8 @@
+                     int64_t r;
+                     r = (int64_t)JS_VALUE_GET_INT(op1) + JS_VALUE_GET_INT(op2);
+                     if (unlikely(r < INT32_MIN || r > INT32_MAX))
+-                        sp[-2] = js_float64(r);
++                        sp[-2] = js_float64((double)JS_VALUE_GET_INT(op1) +
++                                            (double)JS_VALUE_GET_INT(op2));
+                     else
+                         sp[-2] = js_int32(r);
+                     sp--;
+@@ -20553,7 +20567,8 @@
+                     r = (int64_t)JS_VALUE_GET_INT(*pv) +
+                         JS_VALUE_GET_INT(sp[-1]);
+                     if (unlikely((int)r != r))
+-                        *pv = __JS_NewFloat64((double)r);
++                        *pv = __JS_NewFloat64((double)JS_VALUE_GET_INT(*pv) +
++                                              (double)JS_VALUE_GET_INT(sp[-1]));
+                     else
+                         *pv = js_int32(r);
+                     sp--;
+@@ -20592,7 +20607,8 @@
+                     int64_t r;
+                     r = (int64_t)JS_VALUE_GET_INT(op1) - JS_VALUE_GET_INT(op2);
+                     if (unlikely((int)r != r))
+-                        sp[-2] = __JS_NewFloat64((double)r);
++                        sp[-2] = __JS_NewFloat64((double)JS_VALUE_GET_INT(op1) -
++                                                 (double)JS_VALUE_GET_INT(op2));
+                     else
+                         sp[-2] = js_int32(r);
+                     sp--;
+@@ -20631,7 +20647,7 @@
+                     v2 = JS_VALUE_GET_INT(op2);
+                     r = (int64_t)v1 * v2;
+                     if (unlikely((int)r != r)) {
+-                        d = (double)r;
++                        d = (double)v1 * (double)v2;
+                         goto mul_fp_res;
+                     }
+                     /* need to test zero case for -0 result */
+@@ -21369,6 +21385,7 @@
+     rt->current_stack_frame = sf->prev_frame;
+     return ret_val;
+ }
++#undef JS_FreeValue
+ 
+ JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
+                 int argc, JSValueConst *argv)

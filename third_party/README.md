@@ -84,7 +84,11 @@ records where the code came from and how to update it.
   and `0022` compile hints: the embedder names each script compiled, is
   told which of its functions were compiled at their first call, and
   passes those back to compile them with the script the next time
-  (`JS_SetCompileHints`).
+  (`JS_SetCompileHints`), and `0023` interpreter paths that cost calls
+  on 32-bit PowerPC: an int32 add, subtract or multiply that overflows
+  makes its double from the operands instead of through libgcc's
+  `__floatdidf`, and the interpreter drops references in line instead
+  of calling `JS_FreeValue`.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.
