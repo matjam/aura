@@ -3,8 +3,8 @@
  * scrolls and paints meanwhile. Covers scrolling and painting while
  * parked, the script seeing the scroll afterwards, mouse moves dropped,
  * a click waiting for the script, Stop and navigation ending a parked
- * script, a dialog running on the main thread, and network deliveries
- * held until the slice ends. Runs on the POSIX coroutines, as the host
+ * script, the longer long-script limit, a dialog running on the main
+ * thread, and network deliveries held until the slice ends. Runs on the POSIX coroutines, as the host
  * tool does. */
 #include "../layout/ahem.h"
 #include "browser/browser.h"
@@ -65,6 +65,9 @@ static const struct {
      "setTimeout(function(){" BUSY(1500) "window.done=1;},10);</script>"},
     {"stop.html",
      "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(100000) "document.title='ran to the end';},10);"
+     "</script>"},
+    {"long.html",
+     "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(12000) "document.title='ran 12 s';},10);"
      "</script>"},
     {"other.html", "<!DOCTYPE html><title>Other</title><body>o"},
     {"locked.html",
@@ -460,6 +463,23 @@ static void test_stop_and_leave(void)
     au_browser_free(b);
 }
 
+/* A script that parks may run past the 10 s default (PARK_KILL_MS in
+ * src/page/script.c): one of Cloudflare's challenge tasks takes 11 s on
+ * the Mac OS 9 guest. One that runs past 60 s is still stopped. */
+static void test_long_limit(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/long.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "ran 12 s");
+    au_bw_navigate(w, "file:///mem/stop.html");
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "");
+    au_browser_free(b);
+}
+
 static AuBrowser *net_browser(AuPageFetcher *f)
 {
     AuBrowser *b = make_browser();
@@ -519,6 +539,7 @@ int main(int argc, char **argv)
     test_click_waits();
     test_queue_dropped_on_stop();
     test_stop_and_leave();
+    test_long_limit();
     test_dialog();
     test_held();
     au_fontset_free(fonts);

@@ -137,6 +137,14 @@ size_t au_docview_script_stack(void)
  * document on a G4). */
 #define PARK_LAYOUT_MS 250
 
+/* The long-script limit of a page whose script parks. The window stays
+ * usable while such a script runs, and Stop, a navigation and closing
+ * the tab end it, so the limit only stops a script nobody stops. The
+ * 10 s default is too short for a slow Mac: one task of Cloudflare's
+ * Turnstile challenge took 11.1 s of script in the Mac OS 9 guest
+ * (2026-11-18) and 0.33 s on the host. */
+#define PARK_KILL_MS 60000
+
 static int h_yield(void *ctx)
 {
     AuDocScript *s = ctx;
@@ -839,6 +847,7 @@ static bool ensure_js(AuDocScript *s)
         /* the runtime's interrupt check reads the top-level hooks */
         h.yield = h_yield;
         set.yield_ms = au_dv_callbacks(s->dv)->script_yield_ms ? au_dv_callbacks(s->dv)->script_yield_ms : 100;
+        set.kill_ms = PARK_KILL_MS;
     }
     h.get_cookie = h_get_cookie;
     h.set_cookie = h_set_cookie;

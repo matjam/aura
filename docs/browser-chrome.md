@@ -176,6 +176,14 @@ parks"):
     chooser, a pop-up menu) runs on the main stack (`on_main`).
 - Time parked is not script time: it counts neither toward the
   long-script limit nor in the Performance window.
+- A page whose script parks has a long-script limit of 60 s of script
+  time (`PARK_KILL_MS` in `src/page/script.c`) instead of the
+  runtime's 10 s default: the window stays usable and Stop ends the
+  script, and slow Macs need the time. One task of Cloudflare's
+  Turnstile challenge (Slashdot, 2026-11-18) takes 11.1 s of script in
+  the Mac OS 9 guest and 0.33 s on the host; with 10 s the challenge
+  stopped with "Script stopped: it ran too long" and the widget
+  reported that it had crashed.
 - One coroutine serves every page, so Aura holds one more script stack
   (the runtime's stack limit and half again: 768 KB on Mac OS 9), not
   one per tab. A page whose script runs while another page's is parked
@@ -183,8 +191,8 @@ parks"):
 
 Checked on stock Mac OS 9.2.2 in the guest on 2026-11-18: during a
 6-second loop, Page Down scrolled the window at once, and the script
-read the new `scrollY` when it ended. A loop longer than 10 s of script
-time is still stopped by the long-script limit.
+read the new `scrollY` when it ended. A loop longer than the
+long-script limit is still stopped.
 
 To test it, run `test_script_park` (`tests/browser`), or load a page
 with `aura-host chrome` and send keys while its script runs:
