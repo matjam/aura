@@ -27,6 +27,11 @@
 (width: clamp(1px, 2vw, 3px)) => true
 (width: 10furlongs) => false
 (gap: 1em) => true
+(grid-template-columns: [a] 1fr [b]) => true
+(grid-template-columns: subgrid) => false
+(grid-template-rows: subgrid [a] [b]) => false
+(grid-template-columns:subgrid) and (white-space-collapse:collapse) => false
+not ((grid-template-columns:subgrid) and (white-space-collapse:collapse)) => true
 (aspect-ratio: 16 / 9) => true
 (position: sticky) => true
 (position: -webkit-sticky) => true

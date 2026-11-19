@@ -94,7 +94,8 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
   formatting context, not only the rebuilt subtree.
 - Images: `currentSrc` in script, `image-set()`, and `sizes` lengths
   other than px, vw, vh, em and rem.
-- Grid: `subgrid` (parsed; laid out as `none`), baseline alignment of
+- Grid: `subgrid` (parsed; laid out as `none`; `@supports` says no),
+  baseline alignment of
   items (they align at the start), `direction: rtl` and vertical
   writing modes, `safe` overflow alignment, painting items in `order`
   order, `masonry`. An item's min-content and max-content heights are
