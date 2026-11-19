@@ -563,6 +563,23 @@ JS_EXTERN size_t JS_PackSourceTexts(JSRuntime *rt, size_t min_len);
    script. Only scripts that keep their text (not
    JS_EVAL_FLAG_NO_SOURCE) have such functions. */
 JS_EXTERN void JS_SetLazyFunctions(JSRuntime *rt, int min_len);
+/* Aura: compile hints, so that a function called the last time a
+   script ran is compiled with the script instead of at its first call
+   (JS_SetLazyFunctions), which parses it once instead of twice.
+   Before compiling a script, module or code given to eval or Function
+   (not a direct eval) of min_len bytes or more that keeps its text,
+   the runtime calls 'hints' with the text. It returns a nonzero id for
+   the script (0: no hints), and may return the offsets in the text of
+   the functions to compile with it, sorted and ascending, which must
+   stay valid until the compile ends. After a function of a script with
+   an id is compiled at its first call, the runtime calls 'compiled'
+   with the id, the script's length and the function's offset in it.
+   NULL hooks turn hints off. */
+typedef uint32_t JSCompileHintsFunc(JSContext *ctx, void *opaque, const char *text, size_t len,
+                                    const uint32_t **ofs, size_t *count);
+typedef void JSLazyCompiledFunc(JSContext *ctx, void *opaque, uint32_t id, uint32_t len, uint32_t ofs);
+JS_EXTERN void JS_SetCompileHints(JSRuntime *rt, JSCompileHintsFunc *hints, JSLazyCompiledFunc *compiled,
+                                  void *opaque, size_t min_len);
 JS_EXTERN JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque);
 JS_EXTERN void JS_FreeRuntime(JSRuntime *rt);
 JS_EXTERN void *JS_GetRuntimeOpaque(JSRuntime *rt);

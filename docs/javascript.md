@@ -90,6 +90,7 @@ Patches this document refers to:
 | 0019 | a compiled function keeps 8 bytes per argument and local (`JSBytecodeVar`) instead of the compiler's 20-byte `JSVarDef`; only a function with a direct eval also keeps their scopes (`0019-compact-bytecode-vars`) |
 | 0020 | the weak references to an object (WeakMap and WeakSet keys, WeakRef and FinalizationRegistry targets) are listed in a runtime hash table, and the object keeps one bit instead of a pointer (`0020-weak-refs-in-runtime`) |
 | 0021 | a nested function of 128 bytes to 16 KB of text is compiled at its first call, from its script's text; until then it is a stub holding the variables it captures (`JS_SetLazyFunctions`, `0021-lazy-functions`) |
+| 0022 | compile hints: the embedder names each script it compiles and is told which of its functions were compiled at their first call, and passes those back the next time to compile them with the script (`JS_SetCompileHints`, `0022-compile-hints`; "Script hints" below) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -534,6 +535,8 @@ Largest saving first. The measurements are in [`memory.md`](memory.md),
   A stub holds about what a compiled function of 100 bytes holds, and
   a stub that is called keeps both, so shorter functions are compiled
   with the script.
+- **A function called the last time its script ran is compiled with the
+  script** (patch 0022, "Script hints" below), so it is parsed once.
 
 Script heap after loading, on the host (2026-11-18, base `57c22d4` with
 patch 0021, against the same build compiling every function with its
@@ -548,9 +551,10 @@ script; two loads each, three on Reddit, whose loads differ):
 
 What is left, measured on the host (2026-11-18, base `ebfa814`):
 
-- **Called functions are parsed twice** (patch 0021): GitHub parsed
-  0.8 MB again while it loaded (about 50 ms), Wikipedia 0.7 MB.
-  Skipping the bodies of nested stubs on the second parse was tried on
+- **Called functions are parsed twice on a script's first run**
+  (patch 0021): GitHub parsed 0.8 MB again while it loaded (about
+  50 ms), Wikipedia 0.7 MB. Later runs use the script hints. Skipping
+  the bodies of nested stubs on the second parse was tried on
   2026-11-18 and not kept:
 
   | Page | Re-parsed | Skippable | Time without | Time with |
@@ -601,6 +605,54 @@ What is left, measured on the host (2026-11-18, base `ebfa814`):
   annex B block functions, HTML comments, and error positions, also on
   the script's first line, the same in both. Every `aura-host js` test
   also passed with `--lazy 1` (2026-11-18).
+- `tests/js/test_script_hints.c` (ctest `js_script_hints`): a script's
+  functions called on its first run are compiled with it on the second
+  and none is compiled at its first call, a function not called before
+  still is, a changed script gets no hints, code given to eval gets
+  them too; the store keeps its order through its file, drops damaged
+  lines and the least recently used script, and parses every prefix of
+  a file. `test_script_hints_file` in `tests/browser/test_app.c`: the
+  file is read at start, written at most once a minute and emptied with
+  the cache. `fuzz_files hints` fuzzes the file.
+
+### Script hints
+
+To compare a page's second load with and without hints on the host,
+run `aura-host chrome --net --tab URL --do reload --do perf` with and
+without `--no-script-hints` (the host keeps the hints in memory for the
+run).
+
+A function compiled at its first call (patch 0021) is parsed twice: with
+its script, and again at the call. A page that runs the same script
+again calls mostly the same functions, so the page's runtime records
+which functions were compiled at their first call and compiles them
+with the script the next time (patch 0022, `JS_SetCompileHints`).
+
+- **What is covered.** Every classic script, module and text given to
+  `eval` or `Function` (not a direct eval) of 4 KB (`JS_HINT_SCRIPT`)
+  to 2 MB, in the page's runtime and its frames. Workers record
+  nothing.
+- **How a script is named.** By its length and a 32-bit FNV-1a hash of
+  its bytes (`runtime.c`, `hints_for`); a function by the offset of its
+  first byte in the script. A script that changes gets new hints. A
+  hash collision only compiles a function early.
+- **Where they are kept.** `AuJsSettings.hints` is an `AuJsHintStore`
+  (`js/hint_store.h`). The browser's is `src/browser/script_hints.c`:
+  the 256 scripts used most recently, at most 8,192 functions each and
+  65,536 in all, saved as `Script Hints` in the Aura folder at most
+  once a minute and at quit (about 300 KB when full,
+  [`browser-chrome.md`](browser-chrome.md)). Clearing the cache clears
+  it, because it says which scripts were run.
+
+Measured on the host, a page loaded and then reloaded in one run,
+against the same reload with `--no-script-hints` (2026-11-18, three
+runs each):
+
+| Page | Functions compiled at first call on the reload | Script time | Script heap |
+|---|---|---|---|
+| GitHub repository page | 4 instead of 1,065 | 707 to 722 ms instead of 741 to 848 ms | 37.1 MB instead of 37.3 MB |
+| Wikipedia, "PowerPC" | 83 instead of 647 | 79 to 82 ms instead of 96 to 97 ms | 7.07 MB instead of 7.16 MB |
+| Reddit home page | about 257 instead of about 2,180 | within the variation between loads | within the variation between loads |
 
 ### Large scripts
 

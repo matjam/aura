@@ -5,6 +5,7 @@
  * network stack. */
 #include "browser/app.h"
 #include "browser/netlog.h"
+#include "js/hint_store.h"
 #include "net/cookies.h"
 #include "net/hsts.h"
 #include "net/web_storage.h"
@@ -545,6 +546,41 @@ static void test_net_stores(void)
     au_browser_free(b);
 }
 
+/* Script hints: read at start, written at most once a minute and at
+ * quit, emptied with the cache. */
+static void test_script_hints_file(void)
+{
+    fs_reset();
+    put(AU_APP_FILE_SCRIPT_HINTS, "# Aura script hints 1\n3e8 abc a\n");
+    AuBrowser *b = make_browser();
+    AuAppPort port = mem_port();
+    AuApp *a = au_app_new(b, &port);
+    au_app_load(a);
+    AuAppNet n = mem_net();
+    CHECK(au_app_net_start(a, &n));
+    const AuJsHintStore *s = b->script_hints;
+    CHECK(s != NULL);
+    size_t count = 0;
+    const uint32_t *o = s ? s->get(s->ctx, 1000, 0xabc, &count) : NULL;
+    CHECK(o && count == 1 && o[0] == 10);
+    reset_writes();
+    if (s)
+        s->add(s->ctx, 1000, 0xabc, 20);
+    au_app_save(a, false);
+    CHECK(writes_of(AU_APP_FILE_SCRIPT_HINTS) == 0);
+    now_ms += AU_APP_HINTS_SAVE_MS;
+    au_app_save(a, false);
+    CHECK(writes_of(AU_APP_FILE_SCRIPT_HINTS) == 1);
+    CHECK(!strcmp(text_of(AU_APP_FILE_SCRIPT_HINTS), "# Aura script hints 1\n3e8 abc a a\n"));
+    au_app_clear_cache(a);
+    au_app_quit(a);
+    au_app_net_stop(a);
+    CHECK(b->script_hints == NULL);
+    CHECK(!strcmp(text_of(AU_APP_FILE_SCRIPT_HINTS), "# Aura script hints 1\n"));
+    au_app_free(a);
+    au_browser_free(b);
+}
+
 static void test_prefs_applied(void)
 {
     fs_reset();
@@ -642,6 +678,7 @@ int main(void)
     test_save_scheduling();
     test_running_and_session();
     test_net_stores();
+    test_script_hints_file();
     test_prefs_applied();
     test_stores_alone();
     test_folder();

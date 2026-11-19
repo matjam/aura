@@ -5,6 +5,7 @@
 #include "app_int.h"
 
 #include "netlog.h"
+#include "script_hints.h"
 
 #include "../net/cookies.h"
 #include "../net/hsts.h"
@@ -123,6 +124,17 @@ void au_app_net_save(AuApp *a, bool force)
     }
     if (au_net_intermediates_dirty(a->net))
         save_intermediates(f, a->net);
+    /* Script hints change with nearly every page, and the file can be a
+     * few hundred KB: written at most once a minute, and at quit. */
+    if (a->hints && au_script_hints_dirty(a->hints) && (force || now - a->hints_saved_ms >= AU_APP_HINTS_SAVE_MS)) {
+        AuBuf hb;
+        au_buf_init(&hb);
+        au_script_hints_serialize(a->hints, &hb);
+        if (au_app_write_file(f, AU_APP_FILE_SCRIPT_HINTS, &hb))
+            au_script_hints_clear_dirty(a->hints);
+        au_buf_free(&hb);
+        a->hints_saved_ms = now;
+    }
     /* Web storage: the changed areas, one file a pass, once script has
      * left them alone for the delay (or half a minute after the first
      * change, for a page that never stops writing), and while nothing
@@ -222,6 +234,19 @@ bool au_app_net_start(AuApp *a, const AuAppNet *np)
         au_web_storage_set_files(a->storage, &lsf);
     }
     au_browser_set_storage(b, a->storage);
+    /* Script hints: only saves time, so a damaged file is dropped. */
+    a->hints = au_script_hints_new();
+    {
+        char *data;
+        size_t len;
+        if (au_app_read_file(&a->port.files, AU_APP_FILE_SCRIPT_HINTS, &data, &len)) {
+            au_script_hints_parse(a->hints, data, len);
+            au_free(data);
+        }
+        au_script_hints_clear_dirty(a->hints);
+        a->hints_saved_ms = au_app_ms(a);
+    }
+    b->script_hints = au_script_hints_store(a->hints);
     apply_prefs(a);
 
     a->loader = au_net_loader_new(a->net);
@@ -293,6 +318,8 @@ void au_app_clear_cache(AuApp *a)
         au_disk_cache_clear(a->disk);
     if (a->net)
         au_net_clear_dns(a->net);
+    if (a->hints)
+        au_script_hints_clear(a->hints); /* it names the scripts pages ran */
 }
 
 void au_app_cookie_rules_changed(AuApp *a)
@@ -398,6 +425,9 @@ void au_app_net_stop(AuApp *a)
     au_hsts_free(a->hsts);
     au_browser_set_storage(b, NULL); /* saved above */
     au_web_storage_free(a->storage);
+    b->script_hints = NULL;
+    au_script_hints_free(a->hints);
+    a->hints = NULL;
     au_cookie_jar_free(a->jar);
     au_roots_free(a->roots);
     a->net = NULL;

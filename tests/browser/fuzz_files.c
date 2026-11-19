@@ -13,7 +13,7 @@
  * usage: fuzz_files ITERATIONS SEED SECONDS
  *        fuzz_files replay KIND FILE...   (KIND: session bookmarks history
  *                                          prefs downloads rules diskcache
- *                                          storage)
+ *                                          storage hints)
  *
  * storage: the web storage service's area files, its index and the
  * session file's storage lines (run_storage). */
@@ -23,6 +23,8 @@
 #include "browser/downloads.h"
 #include "browser/history.h"
 #include "browser/prefs.h"
+#include "browser/script_hints.h"
+#include "js/hint_store.h"
 #include "net/cookies.h"
 #include "net/disk_cache.h"
 #include "net/web_storage.h"
@@ -37,12 +39,13 @@ static const char *const dict[] = {
     "AURD1\n", "c0123456789abcdef", "http://a.test/\n", "\0", "\xFF", "\xC3\xA9", "\xEF\xBB\xBF", "\xED\xA0\x80",
     "storage\t", "storage\thttp://a.test\tk\tv\n", "%09", "%00", "%25", "%", "%zz", "AuLS", "http://a.test", "^http://b.test",
     "# Aura local storage 1\n", "0000abcd\t40\t2\thttp://a.test\n", "0000abcd", "\t99999999999\t",
+    "# Aura script hints 1\n", "ffffffff", "100000000", " 0", " 1", " ffffffff", "3e8 abc a\n",
 };
 #define NDICT ((int)(sizeof dict / sizeof dict[0]))
 
-enum { K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_STORAGE, K_COUNT };
-static const char *const kind_names[K_COUNT] = {"session", "bookmarks", "history",   "prefs",
-                                                "downloads", "rules",   "diskcache", "storage"};
+enum { K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_STORAGE, K_HINTS, K_COUNT };
+static const char *const kind_names[K_COUNT] = {"session",   "bookmarks", "history", "prefs", "downloads",
+                                                "rules",     "diskcache", "storage", "hints"};
 
 static void fail(const char *what)
 {
@@ -483,9 +486,38 @@ static void run_storage(const FzBuf *in)
     free(p);
 }
 
+/* Script Hints: offsets must ascend, lie inside their script and keep to
+ * the limits, through a round trip. */
+static void run_hints(const FzBuf *in)
+{
+    char *p = exact(in);
+    AuScriptHints *h = au_script_hints_new();
+    AuBuf out;
+    au_script_hints_parse(h, p, in->n);
+    if (au_script_hints_count(h) > AU_SCRIPT_HINTS_SCRIPTS)
+        fail("hints: more scripts than the limit");
+    au_buf_init(&out);
+    au_script_hints_serialize(h, &out);
+    if (out.len > in->n + 64)
+        fail("hints: the file grew in a round trip");
+    AuScriptHints *h2 = au_script_hints_new();
+    au_script_hints_parse(h2, out.data ? out.data : "", out.len);
+    AuBuf out2;
+    au_buf_init(&out2);
+    au_script_hints_serialize(h2, &out2);
+    if (out.len != out2.len || (out.len && memcmp(out.data, out2.data, out.len)))
+        fail("hints: a written file reads back differently");
+    au_buf_free(&out2);
+    au_buf_free(&out);
+    au_script_hints_free(h2);
+    au_script_hints_free(h);
+    free(p);
+}
+
 static void run_kind(int kind, const FzBuf *in)
 {
     switch (kind) {
+    case K_HINTS: run_hints(in); break;
     case K_STORAGE: run_storage(in); break;
     case K_SESSION: run_session(in); break;
     case K_BOOKMARKS: run_bookmarks(in); break;
@@ -552,6 +584,18 @@ static void make_seeds(FzCorpus c[K_COUNT])
         au_downloads_free(&dl);
     }
     fz_corpus_add_str(&c[K_RULES], "a.test=allow b.test=block c.co.uk=session  d.test=bogus =allow x");
+    {
+        AuScriptHints *h = au_script_hints_new();
+        const AuJsHintStore *s = au_script_hints_store(h);
+        for (uint32_t i = 0; i < 40; i++)
+            s->add(s->ctx, 70000, 0xdeadbeef, i * 1700 + 3);
+        s->add(s->ctx, 5000, 1, 0);
+        s->add(s->ctx, 5000, 1, 4999);
+        au_buf_clear(&out);
+        au_script_hints_serialize(h, &out);
+        fz_corpus_add(&c[K_HINTS], out.data, out.len);
+        au_script_hints_free(h);
+    }
     fz_corpus_add_str(&c[K_SESSION], "# Aura session 1\nwindow 800 600 0 40 60\ntab 0\nentry\thttp://a.test/\tA page\t0\n"
                                      "storage\thttp://a.test\tkey\tvalue\ta%09b\t%25%00%0A\xED\xA0\x80\n"
                                      "storage\thttp://b.test^http://a.test\tk\t\n");

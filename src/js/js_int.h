@@ -245,6 +245,12 @@ struct AuJs {
         double when;  /* when it was compiled or last read (now_ms clock) */
     } code[4];
     uint32_t code_clock;
+    /* root: the script eval_classic is compiling and its hash, which the
+     * compile hints take instead of hashing it again (runtime.c "Script
+     * hints"); NULL when none. */
+    const char *hint_text;
+    size_t hint_text_len;
+    uint32_t hint_text_hash;
     /* Parsed selectors of matches, closest and querySelector (natives.c,
      * arg_selector), in the root; allocated on first use. */
     struct JsSelector {
@@ -453,6 +459,11 @@ void js_url_free(JsUrl *u);
  * native function form. The text was a seventh of a 9.8 MB bundle's
  * compile peak and a seventh of its page's script heap afterwards. */
 #define JS_NO_TEXT_SCRIPT ((size_t)2 << 20)
+
+/* Script hints (runtime.c, "Script hints"): a script, module or text
+ * given to eval or Function this long or longer compiles the functions
+ * its last run compiled at their first call with it. */
+#define JS_HINT_SCRIPT ((size_t)4 << 10)
 
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 

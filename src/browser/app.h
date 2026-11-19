@@ -57,6 +57,7 @@
 #define AU_APP_FILE_COOKIES "Cookies"
 #define AU_APP_FILE_HSTS "HSTS"
 #define AU_APP_FILE_INTERMEDIATES "Intermediates"
+#define AU_APP_FILE_SCRIPT_HINTS "Script Hints"
 #define AU_APP_FILE_RANDOM_SEED "Random Seed"
 #define AU_APP_FOLDER_CACHE "Cache"
 #define AU_APP_FOLDER_LOCAL_STORAGE "Local Storage"
@@ -67,7 +68,8 @@ enum {
     AU_APP_SAVE_DELAY_MS = 3000,        /* preferences, bookmarks, history, session, downloads */
     AU_APP_SCROLL_SAVE_DELAY_MS = 30000, /* the session while only scroll positions changed; site icons */
     AU_APP_NET_SAVE_DELAY_MS = 5000,    /* cookies, HSTS, web storage after its last change */
-    AU_APP_STORAGE_MAX_WAIT_MS = 30000  /* web storage after its first unsaved change */
+    AU_APP_STORAGE_MAX_WAIT_MS = 30000, /* web storage after its first unsaved change */
+    AU_APP_HINTS_SAVE_MS = 60000        /* script hints, at most this often */
 };
 
 /* The port's files. folder is NULL for the profile folder itself, else

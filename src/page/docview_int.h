@@ -172,6 +172,7 @@ struct AuDocView {
      * none of its own script runs (AuJsSettings.scripts_off). */
     bool script_window;
     size_t script_mem, worker_mem; /* script memory limits for runtimes made from now on; 0: the engine's */
+    const struct AuJsHintStore *script_hints; /* au_docview_set_script_hints */
     char *user_agent;    /* navigator.userAgent for the next runtime; NULL: the script default */
     char *referrer;      /* document.referrer for the next runtime; NULL: "" */
     bool sheets_rescan;  /* script changed the tree: look for sheets again */

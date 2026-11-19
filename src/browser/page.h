@@ -357,6 +357,10 @@ typedef struct AuPageEnv {
     /* Optional: the main screen's bits per pixel, 0 when unknown
      * (AuBrowserHost.screen_bits). Read when a document begins. */
     int (*screen_bits)(void *ctx);
+    /* Optional: where the page's script records the functions of large
+     * scripts that were compiled at their first call (js/js.h,
+     * AuJsHintStore). Read when a document begins. */
+    const struct AuJsHintStore *(*script_hints)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

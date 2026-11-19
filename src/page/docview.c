@@ -2766,6 +2766,11 @@ void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worke
     dv->worker_mem = worker_bytes;
 }
 
+void au_docview_set_script_hints(AuDocView *dv, const struct AuJsHintStore *hints)
+{
+    dv->script_hints = hints;
+}
+
 void au_docview_set_user_agent(AuDocView *dv, const char *ua)
 {
     au_free(dv->user_agent);

@@ -893,6 +893,7 @@ when each is saved is decided in `src/browser/app.c` and `app_net.c`
 | `Running` | exists while Aura runs | `app.c` |
 | `Cookies`, `HSTS` | cookies and HSTS hosts | `app_net.c` ([`networking.md`](networking.md)) |
 | `Intermediates` | the intermediate certificate pool | `app_net.c` ([`tls.md`](tls.md)) |
+| `Script Hints` | for each script run, the functions compiled at their first call | `app_net.c`, `script_hints.c` ([`javascript.md`](javascript.md), "Script hints") |
 | `Cache` (folder) | the disk cache | `app_net.c`, `src/net/disk_cache.c` |
 | `Local Storage` (folder) | web storage | `app_net.c` ([`web-storage.md`](web-storage.md)) |
 | `Random Seed` | entropy carried between runs | the port ([`mac-os-9-shell.md`](mac-os-9-shell.md)) |
@@ -906,12 +907,13 @@ folder (`SEED` for `Random Seed`), `AuCa` in `Cache`, `AuLS` in
 - **Loading.** `au_app_load` reads the preferences first, then the
   bookmarks (a missing file gives the first-run bookmarks), the history
   (expired by the preference), the downloads and the site icons, then
-  marks Aura as running. `au_app_net_start` reads `Cookies`, `HSTS` and
-  `Intermediates` when it makes the network stack.
+  marks Aura as running. `au_app_net_start` reads `Cookies`, `HSTS`,
+  `Intermediates` and `Script Hints` when it makes the network stack.
 - **Damaged files.** A file that fails to parse is renamed
   `<name> (damaged)` (replacing an older one) before anything can write
   over it, and the defaults are used. A damaged `Favicons` or
   `Intermediates` file is only dropped: its contents are fetched again.
+  `Script Hints` keeps the lines that parse.
 - **Safe writes.** Each file is written to `<name>.tmp` and then
   replaced (Mac OS 9: `FSpExchangeFiles`, then the volume is flushed).
 - **When to save.** `au_app_save` compares each data set's change
@@ -921,8 +923,8 @@ folder (`SEED` for `Random Seed`), `AuCa` in `Cache`, `AuLS` in
   change. Only changed sets are written; a failed write is tried again
   after the delay. The session waits 30 seconds while only scroll
   positions changed; site icons are written at most every 30 seconds;
-  cookies and HSTS 5 seconds after a change; web storage as
-  [`web-storage.md`](web-storage.md) says. `au_app_save(app, true)`
+  cookies and HSTS 5 seconds after a change; script hints at most once
+  a minute; web storage as [`web-storage.md`](web-storage.md) says. `au_app_save(app, true)`
   writes every changed set at once: the Mac port calls it when Aura goes
   to the background, and `au_app_quit` at quit.
 - **Crash recovery.** `Running` is made at start and deleted after the

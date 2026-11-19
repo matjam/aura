@@ -1,0 +1,245 @@
+Compile hints: compile with its script a function called the last time
+the script ran.
+
+Patch 0021 compiles a nested function at its first call, which parses
+it twice: with its script, to find what it captures, and again when it
+is called. A page that runs the same scripts again (a reload, a later
+visit) calls mostly the same functions. With JS_SetCompileHints the
+embedder supplies two hooks:
+
+- 'hints', called before the runtime compiles a script, a module or the
+  code given to eval or Function (not a direct eval) of min_len bytes or
+  more that keeps its text, with that text. It returns a nonzero id for
+  the script (0: none) and may return the offsets in the text of the
+  functions to compile with it, sorted. js_fd_lazy_ok keeps a function
+  at one of those offsets compiled with its script.
+- 'compiled', called after a function of a script with an id is
+  compiled at its first call, with the id, the script's length and the
+  function's offset in the script.
+
+A script's texts (JSSourceText, patch 0008) carry the id, the script's
+length and where in the script the text starts (hint_id, hint_len,
+hint_base): a script mostly made of functions has one text, but each
+outermost function of any other script has its own, so the offset in
+the script is hint_base plus the function's offset in its text. The
+hooks' state is saved and restored around each compile, so an eval run
+while a script is compiled, or a compile that fails, leaves the
+enclosing one's alone.
+
+Measured on the host, a page loaded and then reloaded in one run with
+the hints kept in memory, against the same reload without hints
+(2026-11-18): GitHub's repository page compiled 4 functions at their
+first call on the reload instead of 1,065, and its script took 707 to
+722 ms instead of 741 to 848 ms; Wikipedia's "PowerPC" article 83
+instead of 647, 79 to 82 ms instead of 96 to 97 ms; Reddit 257 instead
+of about 2,180. The script heap was 100 to 200 KB smaller.
+
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -381,6 +381,16 @@
+        at its first call (JS_SetLazyFunctions); -1: every function is
+        compiled with its script */
+     int lazy_min_len;
++    /* Aura: compile hints (JS_SetCompileHints) */
++    JSCompileHintsFunc *hints_fn;
++    JSLazyCompiledFunc *hints_compiled;
++    void *hints_opaque;
++    size_t hints_min_len;
++    /* the script being compiled: its id and length, and the functions
++       to compile with it */
++    uint32_t hint_id, hint_len;
++    const uint32_t *eager_ofs;
++    size_t eager_count;
+ 
+     JSClassID js_class_id_alloc; /* counter for user defined classes */
+     int class_count;    /* size of class_array */
+@@ -998,6 +1008,10 @@
+     int packed_len;
+     void *packed;   /* NULL when the text was never packed */
+     char *buf;      /* len bytes, then a NUL; NULL while packed */
++    /* Aura: the script this text is from (JS_SetCompileHints): the id
++       the embedder gave it (0: none), its length, and where in it this
++       text starts */
++    uint32_t hint_id, hint_len, hint_base;
+ } JSSourceText;
+ 
+ static void js_source_text_free(JSRuntime *rt, JSSourceText *st);
+@@ -2780,6 +2794,37 @@
+ void JS_SetLazyFunctions(JSRuntime *rt, int min_len)
+ {
+     rt->lazy_min_len = min_len < 0 ? -1 : min_len;
++}
++
++/* Aura */
++void JS_SetCompileHints(JSRuntime *rt, JSCompileHintsFunc *hints, JSLazyCompiledFunc *compiled,
++                        void *opaque, size_t min_len)
++{
++    rt->hints_fn = hints && compiled ? hints : NULL;
++    rt->hints_compiled = hints && compiled ? compiled : NULL;
++    rt->hints_opaque = opaque;
++    rt->hints_min_len = min_len;
++}
++
++/* Aura: whether the function at ofs is to be compiled with its script
++   (JS_SetCompileHints) */
++static bool js_eager_function(JSRuntime *rt, int ofs)
++{
++    size_t lo = 0, hi = rt->eager_count;
++
++    if (ofs < 0)
++        return false;
++    while (lo < hi) {
++        size_t mid = lo + (hi - lo) / 2;
++        uint32_t v = rt->eager_ofs[mid];
++        if (v == (uint32_t)ofs)
++            return true;
++        if (v < (uint32_t)ofs)
++            lo = mid + 1;
++        else
++            hi = mid;
++    }
++    return false;
+ }
+ 
+ void JS_SetSharedArrayBufferFunctions(JSRuntime *rt,
+@@ -37787,6 +37832,7 @@
+     st->used = true; /* a new text outlives one pass unpacked */
+     st->packed = NULL;
+     st->packed_len = 0;
++    st->hint_id = st->hint_len = st->hint_base = 0;
+     if (buf)
+         memcpy(st->buf, buf, len);
+     st->buf[len] = '\0';
+@@ -37934,6 +37980,12 @@
+                     script = js_source_text_script(ctx, input, input_len);
+                     if (!script)
+                         return -1;
++                    if (ctx->rt->hint_id) {
++                        /* shared by content: the same script */
++                        script->hint_id = ctx->rt->hint_id;
++                        script->hint_len = ctx->rt->hint_len;
++                        script->hint_base = 0;
++                    }
+                 }
+                 script->ref_count++;
+                 fd->source_text = script;
+@@ -37956,6 +38008,9 @@
+                     if (!st)
+                         return -1;
+                     fd->source_ofs = 0;
++                    st->hint_id = ctx->rt->hint_id;
++                    st->hint_len = ctx->rt->hint_len;
++                    st->hint_base = ofs;
+                 }
+                 fd->source_text = st;
+             }
+@@ -38148,6 +38203,9 @@
+         ctx->rt->lazy_min_len < 0 || fd->source_len < ctx->rt->lazy_min_len ||
+         fd->source_len > JS_LAZY_MAX_LEN)
+         return false;
++    /* called the last time the embedder ran this script */
++    if (ctx->rt->eager_count && js_eager_function(ctx->rt, fd->source_pos1 - 1))
++        return false;
+     switch (fd->func_type) {
+     case JS_PARSE_FUNC_STATEMENT:
+     case JS_PARSE_FUNC_VAR:
+@@ -39609,10 +39667,15 @@
+     JSValue full = lb->cpool[0];
+ 
+     if (JS_VALUE_GET_TAG(full) == JS_TAG_INT) {
++        JSRuntime *rt = caller_ctx->rt;
+         full = js_lazy_compile(lb->realm, lb);
+         if (JS_IsException(full))
+             return -1;
+         lb->cpool[0] = full;
++        if (rt->hints_compiled && lb->source_text && lb->source_text->hint_id)
++            rt->hints_compiled(lb->realm, rt->hints_opaque, lb->source_text->hint_id,
++                               lb->source_text->hint_len,
++                               lb->source_text->hint_base + lb->source_ofs);
+     }
+     p->u.func.function_bytecode = JS_VALUE_GET_PTR(js_dup(full));
+     JS_FreeValueRT(caller_ctx->rt, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, lb));
+@@ -39673,6 +39736,11 @@
+     JSFunctionDef *fd;
+     JSModuleDef *m;
+     bool is_strict_mode;
++    /* Aura: the compile hints of an enclosing compile, if any */
++    JSRuntime *rt = ctx->rt;
++    uint32_t saved_hint_id = rt->hint_id, saved_hint_len = rt->hint_len;
++    const uint32_t *saved_eager_ofs = rt->eager_ofs;
++    size_t saved_eager_count = rt->eager_count;
+ 
+     js_parse_init(ctx, s, input, input_len, filename, line);
+     skip_shebang(&s->buf_ptr, s->buf_end);
+@@ -39739,6 +39807,23 @@
+ 
+     push_scope(s); /* body scope */
+     fd->body_scope = fd->scope_level;
++
++    /* Aura: compile hints (JS_SetCompileHints) */
++    rt->hint_id = 0;
++    rt->hint_len = 0;
++    rt->eager_ofs = NULL;
++    rt->eager_count = 0;
++    if (rt->hints_fn && eval_type != JS_EVAL_TYPE_DIRECT && !(flags & JS_EVAL_FLAG_NO_SOURCE) &&
++        input_len >= rt->hints_min_len && input_len <= INT32_MAX / 2) {
++        const uint32_t *ofs = NULL;
++        size_t count = 0;
++        rt->hint_id = rt->hints_fn(ctx, rt->hints_opaque, input, input_len, &ofs, &count);
++        if (rt->hint_id) {
++            rt->hint_len = (uint32_t)input_len;
++            rt->eager_ofs = ofs;
++            rt->eager_count = ofs ? count : 0;
++        }
++    }
+ 
+     err = js_parse_program(s);
+     skip_memo_free(s); /* Aura */
+@@ -39756,6 +39841,10 @@
+ 
+     /* create the function object and all the enclosed functions */
+     fun_obj = js_create_function(ctx, fd);
++    rt->hint_id = saved_hint_id; /* Aura */
++    rt->hint_len = saved_hint_len;
++    rt->eager_ofs = saved_eager_ofs;
++    rt->eager_count = saved_eager_count;
+     if (JS_IsException(fun_obj))
+         goto fail1;
+     /* Could add a flag to avoid resolution if necessary */
+@@ -39775,6 +39864,10 @@
+     }
+     return ret_val;
+  fail1:
++    rt->hint_id = saved_hint_id; /* Aura */
++    rt->hint_len = saved_hint_len;
++    rt->eager_ofs = saved_eager_ofs;
++    rt->eager_count = saved_eager_count;
+     /* XXX: should free all the unresolved dependencies */
+     if (m)
+         js_free_module_def(ctx, m);
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -563,6 +563,23 @@
+    script. Only scripts that keep their text (not
+    JS_EVAL_FLAG_NO_SOURCE) have such functions. */
+ JS_EXTERN void JS_SetLazyFunctions(JSRuntime *rt, int min_len);
++/* Aura: compile hints, so that a function called the last time a
++   script ran is compiled with the script instead of at its first call
++   (JS_SetLazyFunctions), which parses it once instead of twice.
++   Before compiling a script, module or code given to eval or Function
++   (not a direct eval) of min_len bytes or more that keeps its text,
++   the runtime calls 'hints' with the text. It returns a nonzero id for
++   the script (0: no hints), and may return the offsets in the text of
++   the functions to compile with it, sorted and ascending, which must
++   stay valid until the compile ends. After a function of a script with
++   an id is compiled at its first call, the runtime calls 'compiled'
++   with the id, the script's length and the function's offset in it.
++   NULL hooks turn hints off. */
++typedef uint32_t JSCompileHintsFunc(JSContext *ctx, void *opaque, const char *text, size_t len,
++                                    const uint32_t **ofs, size_t *count);
++typedef void JSLazyCompiledFunc(JSContext *ctx, void *opaque, uint32_t id, uint32_t len, uint32_t ofs);
++JS_EXTERN void JS_SetCompileHints(JSRuntime *rt, JSCompileHintsFunc *hints, JSLazyCompiledFunc *compiled,
++                                  void *opaque, size_t min_len);
+ JS_EXTERN JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque);
+ JS_EXTERN void JS_FreeRuntime(JSRuntime *rt);
+ JS_EXTERN void *JS_GetRuntimeOpaque(JSRuntime *rt);

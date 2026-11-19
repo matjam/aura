@@ -19,6 +19,7 @@
 #include "browser/browser.h"
 #include "browser/present.h"
 #include "browser/scene.h"
+#include "browser/script_hints.h"
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
@@ -413,7 +414,7 @@ static int usage(void)
             "                        bookmarks, history, session, web storage in DIR/Local Storage; --net keeps cookies\n"
             "                        and web storage in $AURA_PROFILE)\n"
             "                        (--do storage prints the storage service's areas; --do reload reloads)\n"
-            "                        [--net] [--no-doc-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--no-script-hints] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS pause:MS shot:FILE field\n"
@@ -425,6 +426,8 @@ static int usage(void)
             "                        damage[:FILE.png] (compares the pixels painted only where the window\n"
             "                        invalidated with a whole paint; FILE marks the stale ones in magenta);\n"
             "                        --no-doc-cache makes Back and Forward load again;\n"
+            "                        --no-script-hints: a page loaded again compiles its functions at their\n"
+            "                        first call again (script hints are kept in memory for the run);\n"
             "                        --script-mem MB and --worker-mem MB set the script memory limits of a\n"
             "                        page and of a worker, else Automatic;\n"
             "                        --image-bits 32|16|8 sets Image colours)\n"
@@ -670,6 +673,7 @@ typedef struct ChromeOpts {
     int scroll_bench; /* steps of the scroll benchmark; 0 for none */
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
+    bool no_script_hints; /* a page loaded again compiles its functions at their first call again */
     bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
     int image_bits;                   /* Image colours: 32, 16 or 8; 0: Automatic */
@@ -1452,6 +1456,11 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
      * are) or --profile DIR, else in memory for the run. */
     struct AuWebStorage *storage = au_host_storage_open(ses.jar, o->net || o->profile);
     au_browser_set_storage(b, storage);
+    /* Script hints for the run, in memory: a page loaded again (--do
+     * reload, go:URL) compiles the functions its large scripts called
+     * the first time with the scripts. */
+    AuScriptHints *hints = au_script_hints_new();
+    b->script_hints = o->no_script_hints ? NULL : au_script_hints_store(hints);
     /* --profile DIR: the browser's files there too (preferences,
      * bookmarks, history, session, downloads, site icons, Running),
      * loaded and saved by the application services as on Mac OS 9. */
@@ -1584,6 +1593,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
         au_app_free(app);
     }
     au_browser_free(b);
+    au_script_hints_free(hints);
     au_host_storage_close(storage); /* writes what changed */
     if (o->net) {
         if (blocklist) {
@@ -1682,6 +1692,8 @@ int main(int argc, char **argv)
                 o.no_shift = true;
             else if (!strcmp(a, "--no-doc-cache"))
                 o.no_doc_cache = true;
+            else if (!strcmp(a, "--no-script-hints"))
+                o.no_script_hints = true;
             else if (!strcmp(a, "--script-mem") && i + 1 < argc)
                 o.script_mem_mb = atoi(argv[++i]);
             else if (!strcmp(a, "--image-bits") && i + 1 < argc)

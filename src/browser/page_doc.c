@@ -2785,6 +2785,7 @@ static void begin_doc(AuPage *p, const char *url)
                                 p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0, &page_kb, &worker_kb);
         au_docview_set_script_memory(p->dv, (size_t)page_kb * 1024, (size_t)worker_kb * 1024);
     }
+    au_docview_set_script_hints(p->dv, p->env.script_hints ? p->env.script_hints(p->env.ctx) : NULL);
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
     {
         /* document.referrer: what the network layer sent as Referer for

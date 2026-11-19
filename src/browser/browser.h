@@ -257,6 +257,10 @@ struct AuBrowser {
      * that keeps files replaces it with au_browser_set_storage. */
     struct AuWebStorage *storage;
     bool own_storage;
+    /* The functions of large scripts compiled at their first call
+     * (js/js.h, AuJsHintStore; script_hints.h). NULL: none recorded.
+     * A shell that keeps files sets it (au_app_net_start). */
+    const struct AuJsHintStore *script_hints;
     struct {
         char scheme[16];
         AuPageFetcher fetcher;

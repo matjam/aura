@@ -54,6 +54,8 @@ struct AuApp {
     AuWebStorage *storage;
     bool storage_pending;
     uint32_t storage_gen, storage_change_ms, storage_first_ms;
+    struct AuScriptHints *hints; /* script_hints.h */
+    uint32_t hints_saved_ms;     /* when the Script Hints file was last written */
 };
 
 /* app.c */

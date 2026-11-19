@@ -80,7 +80,11 @@ records where the code came from and how to update it.
   `0020` an object's weak references listed in a runtime hash table
   instead of through a pointer in every object, and `0021` a nested
   function compiled at its first call from its script's text, holding
-  until then only the variables it captures (`JS_SetLazyFunctions`).
+  until then only the variables it captures (`JS_SetLazyFunctions`),
+  and `0022` compile hints: the embedder names each script compiled, is
+  told which of its functions were compiled at their first call, and
+  passes those back to compile them with the script the next time
+  (`JS_SetCompileHints`).
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

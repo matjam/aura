@@ -665,6 +665,9 @@ void js_safe_point(AuJs *js)
 /* ---- Natives every part uses ---- */
 
 static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *url, int line, char *owned);
+static uint32_t hints_for(JSContext *ctx, void *opaque, const char *text, size_t len, const uint32_t **ofs,
+                          size_t *count);
+static void hint_compiled(JSContext *ctx, void *opaque, uint32_t id, uint32_t len, uint32_t ofs);
 
 static JSValue n_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1050,6 +1053,8 @@ static AuJs *js_create(AuJs *root, AuDocument *doc, const char *url, const AuJsS
         JS_SetSourcePackHooks(js->rt, source_pack, source_unpack, NULL);
         if (js->settings.lazy_functions)
             JS_SetLazyFunctions(js->rt, js->settings.lazy_functions);
+        if (js->settings.hints)
+            JS_SetCompileHints(js->rt, hints_for, hint_compiled, js, JS_HINT_SCRIPT);
     }
     JSContext *ctx = JS_NewContextRaw(js->rt);
     if (!ctx || JS_AddIntrinsicBaseObjects(ctx) || JS_AddIntrinsicDate(ctx) || JS_AddIntrinsicEval(ctx) ||
@@ -1228,6 +1233,44 @@ static uint32_t code_hash(const char *src, size_t len)
     for (size_t i = 0; i < len; i++)
         h = (h ^ (uint8_t)src[i]) * 16777619u;
     return h;
+}
+
+/* ---- Script hints ----
+ * A function nested in a script is compiled at its first call (QuickJS
+ * patch 0021), from the script's text, which parses it a second time.
+ * For a large script the runtime tells the hint store
+ * (settings.hints) which functions were compiled that way, by the
+ * script's length and hash and the function's offset in its text; the
+ * next time the same script is compiled, in this page or a later one,
+ * those functions are compiled with it (patch 0022), so they are parsed
+ * once. QuickJS asks for the hints of every script, module and text
+ * given to eval or Function of JS_HINT_SCRIPT bytes or more; the hash
+ * names the script to QuickJS too, which reports a function compiled
+ * at its first call by it. */
+static uint32_t code_hash(const char *src, size_t len);
+
+static uint32_t hints_for(JSContext *ctx, void *opaque, const char *text, size_t len, const uint32_t **ofs,
+                          size_t *count)
+{
+    (void)ctx;
+    AuJs *r = opaque;
+    const AuJsHintStore *s = r->settings.hints;
+    if (len > UINT32_MAX)
+        return 0;
+    /* eval_classic hashed it already for the compiled-script cache */
+    uint32_t hash = text == r->hint_text && len == r->hint_text_len ? r->hint_text_hash : code_hash(text, len);
+    if (!hash)
+        hash = 1; /* 0 is no id */
+    *ofs = s->get(s->ctx, (uint32_t)len, hash, count);
+    return hash;
+}
+
+static void hint_compiled(JSContext *ctx, void *opaque, uint32_t id, uint32_t len, uint32_t ofs)
+{
+    (void)ctx;
+    AuJs *r = opaque;
+    const AuJsHintStore *s = r->settings.hints;
+    s->add(s->ctx, len, id, ofs);
 }
 
 static struct JsCode *code_find(AuJs *r, const char *url, size_t len, uint32_t hash, int line)
@@ -1551,7 +1594,11 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION,
                            JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY | (no_text ? JS_EVAL_FLAG_NO_SOURCE : 0),
                            name, line};
+        r->hint_text = large ? src : NULL; /* hashed: hints_for */
+        r->hint_text_len = len;
+        r->hint_text_hash = hash;
         fn = JS_Eval2(ctx, src, len, &o);
+        r->hint_text = NULL;
         if (large && !r->worker && !JS_IsException(fn))
             code_add(js, name, len, hash, line, fn);
     }
