@@ -582,6 +582,84 @@ static const char *eval_str(AuDocView *dv, const char *js, AuBuf *out)
     return au_buf_cstr(out);
 }
 
+static void mouse_at(AuDocView *dv, AuEventType t, int x, int y)
+{
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.x = x;
+    e.y = y;
+    e.clicks = 1;
+    e.type = t;
+    au_docview_mouse(dv, &e);
+}
+
+/* The mouse as script sees it: pointer events before each mouse event,
+ * offsetX/offsetY from the target's padding edge, and pointer capture
+ * that sends a drag to the capturing element (hCaptcha's drag puzzles
+ * read all three). */
+static void test_pointer_events(void)
+{
+    Ctx c;
+    AuBuf out;
+    au_buf_init(&out);
+    AuDocView *dv = view(&c,
+                         "<style>body{margin:0} div{position:absolute;width:100px;height:100px}</style>"
+                         "<div id=a style='left:50px;top:40px;border:5px solid'></div>"
+                         "<div id=b style='left:300px;top:40px'></div>"
+                         "<script>var log=[];['pointerdown','pointermove','pointerup','mousedown','mousemove','mouseup',"
+                         "'gotpointercapture','lostpointercapture'].forEach(function(t){document.addEventListener(t,"
+                         "function(e){log.push(e.type.replace('pointer','p').replace('mouse','m').replace('gotpcapture',"
+                         "'got').replace('lostpcapture','lost')+':'+e.target.id+':'+e.offsetX+','+e.offsetY+':'+e.button+"
+                         "'/'+e.buttons+(e.pointerType?':'+e.pointerType+':'+e.isTrusted:''))},true)});"
+                         "</script>",
+                         true);
+    /* a press and release inside a: offsets from a's padding edge (55,45) */
+    mouse_at(dv, AU_EVENT_MOUSE_MOVE, 75, 65);
+    mouse_at(dv, AU_EVENT_MOUSE_DOWN, 75, 65);
+    mouse_at(dv, AU_EVENT_MOUSE_UP, 75, 65);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out),
+                  "pmove:a:20,20:-1/0:mouse:true mmove:a:20,20:0/0 pdown:a:20,20:0/1:mouse:true mdown:a:20,20:0/1 "
+                  "pup:a:20,20:0/0:mouse:true mup:a:20,20:0/0"),
+          "pointer and mouse events: %s", au_buf_cstr(&out));
+    /* a drag captured by a reaches a outside it, then capture is released */
+    eval_str(dv, "log=[];document.getElementById('a').addEventListener('pointerdown',function(e){"
+                 "this.setPointerCapture(e.pointerId)})", &out);
+    mouse_at(dv, AU_EVENT_MOUSE_DOWN, 75, 65);
+    mouse_at(dv, AU_EVENT_MOUSE_MOVE, 320, 60);
+    mouse_at(dv, AU_EVENT_MOUSE_UP, 320, 60);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out),
+                  "pdown:a:20,20:0/1:mouse:true mdown:a:20,20:0/1 got:a:265,15:-1/1:mouse:true "
+                  "pmove:a:265,15:-1/1:mouse:true mmove:a:265,15:0/1 pup:a:265,15:0/0:mouse:true "
+                  "lost:a:265,15:-1/0:mouse:true mup:a:265,15:0/0"),
+          "captured drag: %s", au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "document.getElementById('a').hasPointerCapture(1)", &out), "false"),
+          "capture kept after the release: %s", au_buf_cstr(&out));
+    /* a cancelled pointerdown suppresses the mouse events until the release */
+    eval_str(dv, "log=[];document.addEventListener('pointerdown',function(e){e.preventDefault()})", &out);
+    mouse_at(dv, AU_EVENT_MOUSE_DOWN, 320, 60);
+    mouse_at(dv, AU_EVENT_MOUSE_MOVE, 330, 60);
+    mouse_at(dv, AU_EVENT_MOUSE_UP, 330, 60);
+    mouse_at(dv, AU_EVENT_MOUSE_MOVE, 331, 60);
+    CHECK(!strcmp(eval_str(dv, "log.join(' ')", &out),
+                  "pdown:b:20,20:0/1:mouse:true pmove:b:30,20:-1/1:mouse:true pup:b:30,20:0/0:mouse:true "
+                  "pmove:b:31,20:-1/0:mouse:true mmove:b:31,20:0/0"),
+          "cancelled pointerdown: %s", au_buf_cstr(&out));
+    /* setPointerCapture: only the mouse (1), and only while a button is down */
+    CHECK(!strcmp(eval_str(dv, "var n='';try{document.getElementById('a').setPointerCapture(7)}catch(e){n=e.name}n", &out),
+                  "NotFoundError"),
+          "capture of an unknown pointer: %s", au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "var a=document.getElementById('a');a.setPointerCapture(1);a.hasPointerCapture(1)", &out),
+                  "false"),
+          "capture with no button down: %s", au_buf_cstr(&out));
+    /* a script's MouseEvent has offsets from its clientX once dispatched */
+    CHECK(!strcmp(eval_str(dv, "var o;a.addEventListener('x',function(e){o=e.offsetX+','+e.offsetY});"
+                               "a.dispatchEvent(new MouseEvent('x',{clientX:60,clientY:50}));o", &out),
+                  "5,5"),
+          "a synthetic event's offsets: %s", au_buf_cstr(&out));
+    au_docview_free(dv);
+    au_buf_free(&out);
+}
+
 /* A modal dialog makes the rest of the document inert (HTML, "inert
  * subtrees"): clicks outside it reach no listener, Tab stays inside it,
  * Escape cancels and closes it, and Select All and find see only its
@@ -888,6 +966,7 @@ int main(void)
     test_validation();
     test_script_events();
     test_modal_dialog();
+    test_pointer_events();
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();

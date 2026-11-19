@@ -164,8 +164,9 @@ S.clicking = Symbol('clicking');
 /* Element methods pages call without checking (docs/web-platform.md,
  * item 5). checkVisibility: false without a box, and with the options,
  * for a hidden visibility or an ancestor of opacity 0. Fullscreen is
- * refused. Pointer capture is recorded but does not yet redirect events
- * (known-gaps.md). */
+ * refused. Pointer capture: the mouse is pointer 1 and can be captured
+ * while a button is held; P.fireMouse (prelude_obs.js) sends its events
+ * to the element that holds it. */
 const pointerCaptures = new Map(); /* pointerId -> element */
 defProps(Element.prototype, {
     checkVisibility(opts) {
@@ -182,8 +183,9 @@ defProps(Element.prototype, {
     },
     requestFullscreen() { return Promise.reject(new TypeError('Fullscreen is not supported')); },
     setPointerCapture(id) {
+        if (Number(id) !== 1) throw domErr('No active pointer with the given id is found', 'NotFoundError');
         if (!this.isConnected) throw domErr('The element is not in a document', 'InvalidStateError');
-        pointerCaptures.set(Number(id), this);
+        if (P.pointerButtons()) pointerCaptures.set(1, this);
     },
     releasePointerCapture(id) {
         if (pointerCaptures.get(Number(id)) === this) pointerCaptures.delete(Number(id));
