@@ -64,7 +64,9 @@ static gboolean tick(gpointer data)
         au_gtk_menus_refresh();
         au_app_save(au_gtk.a, false);
     }
-    schedule_tick(busy() ? TICK_BUSY_MS : TICK_IDLE_MS);
+    /* Work that could run now (a parked script) runs at the next turn of
+     * the main loop, after the events that are waiting. */
+    schedule_tick(au_browser_ready(au_gtk.browser) ? 0 : busy() ? TICK_BUSY_MS : TICK_IDLE_MS);
     return G_SOURCE_REMOVE;
 }
 
@@ -72,7 +74,9 @@ static void schedule_tick(guint ms)
 {
     if (tick_id)
         g_source_remove(tick_id);
-    tick_id = g_timeout_add(ms, tick, NULL);
+    /* At once: below GTK's drawing (G_PRIORITY_HIGH_IDLE + 20), so a page
+     * that is always ready still repaints. */
+    tick_id = ms ? g_timeout_add(ms, tick, NULL) : g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, tick, NULL, NULL);
 }
 
 static gboolean kick(gpointer data)

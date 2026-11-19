@@ -359,6 +359,9 @@ bool au_browser_memory_pressure(AuBrowser *b, uint32_t free_kb);
 size_t au_browser_release_memory(AuBrowser *b);
 /* Whether any page is loading (the shell then idles more often). */
 bool au_browser_busy(const AuBrowser *b);
+/* Whether any page has work it could do now (au_page_ready): the shell
+ * then polls for events without sleeping. */
+bool au_browser_ready(const AuBrowser *b);
 
 /* A window with no tabs yet; width and height are the content size. The
  * model lays out and paints the Platinum chrome (chrome.h) around the

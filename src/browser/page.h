@@ -696,6 +696,9 @@ void au_page_idle(AuPage *p);
 /* Whether the page wants au_page_idle called soon (loading, animating);
  * the shell can sleep longer when no page does. */
 bool au_page_busy(const AuPage *p);
+/* Whether the page has work it could do now: a parked script, queued
+ * input, or script due at once. The shell should not sleep then. */
+bool au_page_ready(const AuPage *p);
 
 /* ---- Developer tools ----
  * The request log (netlog.h): one record per request since the last

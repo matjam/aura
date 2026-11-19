@@ -82,7 +82,8 @@ AppKit's run loop drives everything; the engine has no threads.
 - **The tick** (`main.m`) is an `NSTimer` in the common run loop modes,
   so it runs while a menu is open or a window is resized. It fires every
   20 ms, or every 10 ms while a page, a download or the network is busy,
-  and runs the model's timers, pumps the network and flushes each
+  or at once while a page has work it could do now (`au_browser_ready`,
+  a parked script), and runs the model's timers, pumps the network and flushes each
   window.
 - **`au_cocoa_kick`** runs a flush on the main queue, sooner than the
   next tick. Call it after input or a control's action.

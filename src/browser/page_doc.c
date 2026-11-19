@@ -5040,6 +5040,11 @@ bool au_page_busy(const AuPage *p)
            (p->begun && au_docview_scripts_due(p->dv) < 300) || (p->begun && au_docview_settle_pending(p->dv));
 }
 
+bool au_page_ready(const AuPage *p)
+{
+    return p->parked || p->ninput || (p->begun && au_docview_scripts_due(p->dv) == 0);
+}
+
 void au_page_stats(const AuPage *p, AuPageStats *s)
 {
     *s = p->stats;

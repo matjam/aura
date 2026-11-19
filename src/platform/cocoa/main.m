@@ -61,7 +61,9 @@ static void tick(void)
             return;
         au_app_save(au_cocoa.a, false);
     }
-    schedule_tick(busy() ? TICK_BUSY_MS : TICK_IDLE_MS);
+    /* Work that could run now (a parked script) runs at the next turn of
+     * the run loop, after the events that are waiting. */
+    schedule_tick(au_browser_ready(au_cocoa.browser) ? 0 : busy() ? TICK_BUSY_MS : TICK_IDLE_MS);
 }
 
 static void schedule_tick(int ms)

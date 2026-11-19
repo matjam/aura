@@ -67,7 +67,9 @@ windows" below.
 GLib's main loop drives everything; the engine has no threads.
 
 - **The tick** (`main.c`) runs every 20 ms, or every 10 ms while a page,
-  a download or the network is busy. It runs the model's timers, pumps
+  a download or the network is busy, and at the next idle turn (below
+  GTK's drawing) while a page has work it could do now
+  (`au_browser_ready`, a parked script). It runs the model's timers, pumps
   the network for its timeouts and flushes each window.
 - **`au_gtk_kick`** runs a flush at high idle priority, sooner than the
   next tick. Call it after input or a widget action.

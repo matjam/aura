@@ -214,6 +214,13 @@ a long task parks every 100 ms and the window scrolls and paints
 runs"). Cooperative threads run on the main task, so the script's calls
 into the Toolbox work as on the main thread.
 
+The event loop (`main` in `main.c`) gives `WaitNextEvent` a sleep of 0
+while a page has work it could do now (`au_browser_ready`: a parked
+script, queued input, script due at once), 2 ticks while a page is
+loading or busy otherwise, and 20 ticks when idle. A parked script used
+to wait the 2 ticks after every slice: 14% of the time Cloudflare's
+challenge took ([`performance.md`](performance.md)).
+
 - A coroutine yields to the thread that resumed it (`GetCurrentThread`
   at resume): a worker resumed from the page's script coroutine goes
   back to that coroutine, not to the main thread.

@@ -1082,6 +1082,15 @@ bool au_browser_busy(const AuBrowser *b)
     return false;
 }
 
+bool au_browser_ready(const AuBrowser *b)
+{
+    for (int i = 0; i < b->nwindows; i++)
+        for (int j = 0; j < b->windows[i]->ntabs; j++)
+            if (au_page_ready(b->windows[i]->tabs[j]->page))
+                return true;
+    return false;
+}
+
 static AuBrowserWindow *window_new(AuBrowser *b, int width, int height, bool native_chrome);
 
 AuBrowserWindow *au_browser_window_new(AuBrowser *b, int width, int height)

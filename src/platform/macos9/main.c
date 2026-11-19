@@ -1341,7 +1341,10 @@ int main(void)
             sleep = 2;
         else if (any_field_focused())
             sleep = 10; /* caret blink */
-        if (held)
+        /* A parked script resumes at the next idle pass: a sleep of two
+         * ticks after each 100 ms slice was 13% of the time Cloudflare's
+         * challenge took (2026-11-19). */
+        if (held || au_browser_ready(g_browser))
             sleep = 0;
         EventRecord ev;
         bool got = WaitNextEvent(everyEvent, &ev, sleep, NULL);
