@@ -336,4 +336,12 @@ void au_atom_stats(AuAtomStats *st);
  * given to other strings). */
 uint32_t au_atom_generation(void);
 
+/* The platform this copy of Aura runs on, as the part in parentheses of
+ * a user agent ("Macintosh; ARM Mac OS X 15_6"). A port sets it at start
+ * from the real system (au_set_ua_platform), before the preferences are
+ * read; until then, and in the host tools, it is AU_UA_PLATFORM
+ * (core/uaplatform.h). The string is copied, up to 95 bytes. */
+const char *au_ua_platform(void);
+void au_set_ua_platform(const char *part);
+
 #endif

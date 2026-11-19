@@ -1105,7 +1105,10 @@ window used before the descriptions (tested in
   interval, which becomes daily.
 - A font family must be installed; it is matched without regard to
   case and stored with the font set's spelling.
-- The user agent equal to Aura's default is stored as empty.
+- The User agent field keeps its text only when Identify as is Custom.
+  Aura's own string, or an empty field, is stored as empty and sets
+  Identify as back to Aura ([`networking.md`](networking.md), "The user
+  agent").
 - More lists keeps only https addresses of 12 to 1023 bytes; Always
   allow and Always block keep cleaned domains, without repeats.
 

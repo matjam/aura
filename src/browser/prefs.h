@@ -31,6 +31,19 @@ typedef enum { AU_SCHEME_SYSTEM, AU_SCHEME_LIGHT, AU_SCHEME_DARK } AuColorScheme
  * is lost that the screen would show; the others keep opaque still
  * images in 32, 16 or 8 bits, dithered (au_image_cache_set_depth). */
 typedef enum { AU_IMGCOL_AUTO, AU_IMGCOL_MILLIONS, AU_IMGCOL_THOUSANDS, AU_IMGCOL_256 } AuImageColors;
+/* What the user agent says Aura is, built from three choices (see
+ * au_prefs_user_agent): the browser (network.identify; Custom sends the
+ * string in network.user_agent), the operating system (network.os) and
+ * the processor (network.cpu). "This computer" is the real one. */
+typedef enum {
+    AU_IDENTIFY_AURA,
+    AU_IDENTIFY_CHROME,
+    AU_IDENTIFY_SAFARI,
+    AU_IDENTIFY_FIREFOX,
+    AU_IDENTIFY_CUSTOM
+} AuIdentify;
+typedef enum { AU_UAOS_THIS, AU_UAOS_MACOS9, AU_UAOS_MACOSX, AU_UAOS_MACOS, AU_UAOS_WINDOWS, AU_UAOS_LINUX } AuUaOs;
+typedef enum { AU_UACPU_THIS, AU_UACPU_PPC, AU_UACPU_X86_64, AU_UACPU_ARM } AuUaCpu;
 
 /* Limits the window and the file parser apply. */
 #define AU_TAB_COLUMN_MIN 100
@@ -86,7 +99,10 @@ typedef struct AuPrefs {
     int http_proxy_port;
     char *https_proxy_host;
     int https_proxy_port;
-    char *user_agent;
+    AuIdentify identify;
+    AuUaOs ua_os;
+    AuUaCpu ua_cpu;
+    char *user_agent; /* the custom string, used when identify is AU_IDENTIFY_CUSTOM */
     int memory_cache_kb, disk_cache_kb;
     /* The document cache for Back and Forward: documents kept per tab
      * (0 turns it off) and the memory all kept documents may take. */
@@ -151,9 +167,14 @@ void au_prefs_set_str(char **field, const char *value);
  * and the caller keeps the damaged file aside rather than overwriting it
  * silently. */
 bool au_prefs_parse(AuPrefs *p, const char *data, size_t len);
-/* The user agent to send and to show script: the preference, or Aura's
- * default (AU_DEFAULT_USER_AGENT) when the preference is empty. */
+/* The user agent to send and to show script: the browser network.identify
+ * names (Aura, Chrome, Safari or Firefox, credits.h) on the operating
+ * system and processor network.os and network.cpu name, or the custom
+ * string (Aura's own when it is empty). The string is in a buffer the
+ * next call overwrites. */
 const char *au_prefs_user_agent(const AuPrefs *p);
+/* Aura's own user agent on this computer (the default). */
+const char *au_aura_user_agent(void);
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out);
 
 /* Reads or writes one setting by its file key, as text. Returns false

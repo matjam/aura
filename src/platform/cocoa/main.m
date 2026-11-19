@@ -350,9 +350,30 @@ static dispatch_source_t on_signal(int sig)
     return s;
 }
 
+/* This Mac as a user agent's platform part: the real processor and
+ * macOS version ("Macintosh; ARM Mac OS X 15_6"), not the Intel 10_15_7
+ * part Chrome and Safari froze. Set before the preferences are read. */
+static void set_ua_platform(void)
+{
+    NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+#if defined(__aarch64__) || defined(__arm64__)
+    const char *cpu = "ARM";
+#else
+    const char *cpu = "Intel";
+#endif
+    char part[96];
+    if (v.patchVersion)
+        snprintf(part, sizeof part, "Macintosh; %s Mac OS X %ld_%ld_%ld", cpu, (long)v.majorVersion,
+                 (long)v.minorVersion, (long)v.patchVersion);
+    else
+        snprintf(part, sizeof part, "Macintosh; %s Mac OS X %ld_%ld", cpu, (long)v.majorVersion, (long)v.minorVersion);
+    au_set_ua_platform(part);
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
+        set_ua_platform();
         au_cocoa_find_assets();
         pending_urls = [NSMutableArray array];
         for (int i = 1; i < argc; i++) {

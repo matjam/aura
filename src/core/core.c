@@ -1,4 +1,5 @@
 #include "core.h"
+#include "uaplatform.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -947,3 +948,17 @@ void au_atom_stats(AuAtomStats *st)
 }
 
 uint32_t au_atom_generation(void) { return atom_generation; }
+
+static char ua_platform[96];
+
+const char *au_ua_platform(void) { return ua_platform[0] ? ua_platform : AU_UA_PLATFORM; }
+
+void au_set_ua_platform(const char *part)
+{
+    size_t n = part ? strlen(part) : 0;
+    if (n >= sizeof ua_platform)
+        n = sizeof ua_platform - 1;
+    if (n)
+        memcpy(ua_platform, part, n);
+    ua_platform[n] = 0;
+}

@@ -16,19 +16,37 @@
 #define AU_TAGLINE "A web browser for Mac OS 9, with its engine written from scratch."
 #define AU_AUTHOR "Nathan Ollerenshaw"
 #define AU_HOMEPAGE "https://github.com/matjam/aura"
-/* What Aura says it is. The string has the shape every Chrome-compatible
- * browser sends (Edge, Brave, Opera and Vivaldi add their own token to the
- * same chain), because sites that read the user agent refuse or degrade
- * browsers they do not recognise. The platform part is the platform the
- * build runs on (core/uaplatform.h: a PowerPC Macintosh running Mac OS 9,
- * which sites for old Macs look for; macOS or Linux for the mainstream
- * ports), and Aura's own name and version end the string. AU_UA_CHROME_VERSION is the
- * current Chrome major version when Aura is released: update it with each
- * release, since sites also turn away old Chrome versions. */
+/* What Aura says it is (au_prefs_user_agent): a browser (Preferences >
+ * Network > Identify as) on a platform (Platform). By default the truth:
+ * Aura on the platform it runs on (au_ua_platform, core/core.h).
+ * Claiming Chrome while lacking what Chrome has (WebAssembly, WebGL,
+ * WebRTC) marks a browser as a bot to risk checks such as hCaptcha's;
+ * Chrome's and Safari's strings are there for sites that refuse browsers
+ * they do not know. AU_UA_CHROME_VERSION is the current Chrome major
+ * version when Aura is released, and AU_UA_SAFARI_VERSION Safari's:
+ * update them with each release, since sites also turn away old
+ * versions. */
 #define AU_UA_CHROME_VERSION "156"
-#define AU_DEFAULT_USER_AGENT                                                                              \
-    "Mozilla/5.0 (" AU_UA_PLATFORM ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" AU_UA_CHROME_VERSION \
-    ".0.0.0 Safari/537.36 Aura/" AU_VERSION
+#define AU_UA_SAFARI_VERSION "26.0"
+#define AU_UA_FIREFOX_VERSION "158.0"
+/* Aura's own user agent with the platform part built in; the run-time
+ * string (au_prefs_user_agent) uses the platform the port found. */
+#define AU_DEFAULT_USER_AGENT "Mozilla/5.0 (" AU_UA_PLATFORM ") Aura/" AU_VERSION
+/* The three strings, each with %s for the platform part. */
+#define AU_AURA_UA_FORMAT "Mozilla/5.0 (%s) Aura/" AU_VERSION
+#define AU_CHROME_UA_FORMAT \
+    "Mozilla/5.0 (%s) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" AU_UA_CHROME_VERSION ".0.0.0 Safari/537.36"
+#define AU_SAFARI_UA_FORMAT \
+    "Mozilla/5.0 (%s) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/" AU_UA_SAFARI_VERSION " Safari/605.1.15"
+#define AU_FIREFOX_UA_FORMAT \
+    "Mozilla/5.0 (%s; rv:" AU_UA_FIREFOX_VERSION ") Gecko/20100101 Firefox/" AU_UA_FIREFOX_VERSION
+/* The platform part Chrome, Safari and Firefox send from any Mac, which
+ * they froze (Firefox writes 10.15 with a dot); with "This computer" they
+ * send it from a Mac, as the real browsers do. */
+#define AU_UA_FROZEN_MAC "Macintosh; Intel Mac OS X 10_15_7"
+/* The Chrome-shaped default versions up to 0.9 sent, with Aura's token at
+ * the end; a saved custom string of this form is "Aura" again. */
+#define AU_CHROME_DEFAULT_SUFFIX " Safari/537.36 Aura/"
 /* The Mac OS 9 default, which earlier versions on every platform sent; a
  * saved preference holding it (or its form for another version) is "use
  * the default". */
