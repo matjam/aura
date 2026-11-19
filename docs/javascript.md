@@ -91,6 +91,7 @@ Patches this document refers to:
 | 0020 | the weak references to an object (WeakMap and WeakSet keys, WeakRef and FinalizationRegistry targets) are listed in a runtime hash table, and the object keeps one bit instead of a pointer (`0020-weak-refs-in-runtime`) |
 | 0021 | a nested function of 128 bytes to 16 KB of text is compiled at its first call, from its script's text; until then it is a stub holding the variables it captures (`JS_SetLazyFunctions`, `0021-lazy-functions`) |
 | 0022 | compile hints: the embedder names each script it compiles and is told which of its functions were compiled at their first call, and passes those back the next time to compile them with the script (`JS_SetCompileHints`, `0022-compile-hints`; "Script hints" below) |
+| 0024 | a regular expression may have up to 65535 capture groups instead of 255: capture indexes are 16-bit in the regexp bytecode (`0024-regexp-many-captures`); `BC_VERSION` stays 29, since Aura keeps no bytecode across builds and upstream's tests embed version-29 bytecode. Discord's main script has a 343-group literal, and the 255 limit made the whole script a SyntaxError |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.

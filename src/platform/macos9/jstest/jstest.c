@@ -52,6 +52,8 @@ static const char *const jt_selftest[] = {
     "bigint", "(2n**64n).toString()==='18446744073709551616'",
     "regexp", "/(\\d+)-(\\d+)/.exec('a 12-34')[2]==='34'&&'aBc'.replace(/b/i,'x')==='axc'",
     "regexp-unicode", "/\\p{L}+/u.test('\\u00e9t\\u00e9')",
+    "regexp-captures", "(()=>{const m=new RegExp('(a)'.repeat(300)+'(b)\\\\301').exec('a'.repeat(300)+'bb');"
+                       "return (m&&m.length===302&&m[301]==='b')||String(m);})()",
     "json", "JSON.stringify(JSON.parse('{\"a\":[1,2,{\"b\":null}]}'))==='{\"a\":[1,2,{\"b\":null}]}'",
     "case", "'\\u00c9cole'.toLowerCase()==='\\u00e9cole'&&'stra\\u00dfe'.toUpperCase()==='STRASSE'",
     "astral", "(()=>{const a=[...'a\\u{1f600}'];return a.length===2||a.map((c)=>c.length+':'+c.codePointAt(0)).join();})()",
