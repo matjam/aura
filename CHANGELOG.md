@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/matjam/aura/compare/v0.9.0...v0.9.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **browser:** no time limit for script that parks ([c54c8d2](https://github.com/matjam/aura/commit/c54c8d2ca76fd67e96de5936ad0591db992543a0))
+* **page:** give script that parks 60 s before the long-script limit ([9dc1a1d](https://github.com/matjam/aura/commit/9dc1a1da457aa4f7aee6078b643c3e1c02153a2a))
+
 ## [0.9.0](https://github.com/matjam/aura/compare/v0.8.0...v0.9.0) (2026-11-19)
 
 
