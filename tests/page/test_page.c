@@ -1060,6 +1060,68 @@ static void test_foreign_object_img(void)
     au_docview_free(dv);
 }
 
+/* Counts red and dark pixels in r (canvas coordinates). */
+static void count_red_dark(const AuSurface *s, AuRect r, int *red, int *dark)
+{
+    *red = *dark = 0;
+    for (int y = (int)r.y; y < (int)(r.y + r.h); y++)
+        for (int x = (int)r.x; x < (int)(r.x + r.w); x++) {
+            AuColor c = au_surface_get(s, x, y);
+            int cr = (int)((c >> 16) & 255), cg = (int)((c >> 8) & 255), cb = (int)(c & 255);
+            if (cr > 200 && cg < 60 && cb < 60)
+                (*red)++;
+            else if (cr < 100 && cg < 100 && cb < 100)
+                (*dark)++;
+        }
+}
+
+/* background-clip: text with -webkit-text-fill-color: transparent, as
+ * Discord draws gradient names: the background shows through the glyphs
+ * only, on a block and on an inline box, and the text's own colour does
+ * not show. Without the clip, a transparent fill keeps the colour. */
+static void test_background_clip_text(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof f);
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    const char *html =
+        "<!DOCTYPE html><body style='margin:0;font:40px sans-serif;color:black'>"
+        "<div id=b style='padding:10px;width:200px;background:linear-gradient(red,red);"
+        "-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent'>MWM</div>"
+        "<div><span id=i style='background-image:linear-gradient(90deg,red,red);background-clip:text;"
+        "-webkit-text-fill-color:transparent'>MWM</span></div>"
+        "<div id=n style='-webkit-text-fill-color:transparent'>MWM</div>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 400, 300);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(400, 300);
+    AuCanvas *c = au_canvas_new(s);
+    au_surface_clear(s, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 400, 300}, 0, 0);
+    int red, dark;
+    AuRect r = rect_of(dv, "b");
+    count_red_dark(s, r, &red, &dark);
+    CHECK(red > 100 && dark == 0, "block: %d red, %d dark pixels", red, dark);
+    CHECK(au_surface_get(s, (int)r.x + 3, (int)r.y + 3) == AU_RGB(255, 255, 255), "block padding stays clear: %08x",
+          (unsigned)au_surface_get(s, (int)r.x + 3, (int)r.y + 3));
+    /* Between the glyphs' tops and the box's top inside the content box,
+     * and right of the text: clear. */
+    CHECK(au_surface_get(s, (int)(r.x + r.w - 15), (int)(r.y + r.h / 2)) == AU_RGB(255, 255, 255),
+          "block right of the text stays clear");
+    r = rect_of(dv, "i");
+    count_red_dark(s, r, &red, &dark);
+    /* (The test font's glyphs are solid boxes that fill the inline box,
+     * so only the colour is checked here; the block shows the clip.) */
+    CHECK(red > 100 && dark == 0, "inline: %d red, %d dark", red, dark);
+    r = rect_of(dv, "n");
+    count_red_dark(s, r, &red, &dark);
+    CHECK(red == 0 && dark > 100, "transparent fill without the clip keeps the colour: %d dark", dark);
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* ---- User style sheet ---- */
 
 static void test_user_css(void)
@@ -1587,6 +1649,7 @@ int main(void)
     test_image_arrival_cost();
     test_object_embed();
     test_foreign_object_img();
+    test_background_clip_text();
     test_user_css();
     test_webfonts();
     test_images_and_webfonts();

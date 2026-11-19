@@ -223,6 +223,7 @@ typedef struct PCtx {
     float scroll_x, scroll_y;
     int depth;
     const LBlock *canvas_box; /* its background was painted on the canvas */
+    bool clip_text;           /* a background with background-clip: text was left for its text */
 } PCtx;
 
 enum { PH_BG, PH_FLOAT, PH_INLINE };
@@ -1187,6 +1188,24 @@ static AuRect snap_device(const AuCanvas *c, AuRect r)
     return (AuRect){x0 - dx, y0 - dy, x1 - x0, y1 - y0};
 }
 
+/* background-clip: text (CSS Backgrounds 4): the layers clipped to text
+ * are not painted with the box. Each text fragment inside the box paints
+ * them through its own glyphs (paint_clip_text), so P->clip_text tells
+ * the text painter to look for such an owner. */
+static bool bg_clip_text(const AuStyle *s)
+{
+    if (!s || !s->bg->background_clip)
+        return false;
+    size_t nl = au_style_bg_layer_count(s);
+    for (size_t i = 0; i < nl; i++) {
+        AuBgLayer ly;
+        au_style_bg_layer(s, i, &ly);
+        if (ly.clip == AU_K_text)
+            return true;
+    }
+    return false;
+}
+
 static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect border_box, bool is_root_canvas)
 {
     (void)is_root_canvas;
@@ -1197,7 +1216,9 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
     uint32_t bgc = pc(s, s->bg->background_color);
     AuBgLayer last;
     au_style_bg_layer(s, nl - 1, &last);
-    if (bgc >> 24) {
+    if (bg_clip_text(s))
+        P->clip_text = true;
+    if ((bgc >> 24) && last.clip != AU_K_text) {
         AuRect r = box_area_of(b, border_box, last.clip);
         if (rounded) {
             AuRadii rr = radii;
@@ -1214,7 +1235,7 @@ static void paint_background(PCtx *P, const AuStyle *s, const LBlock *b, AuRect 
     for (size_t i = nl; i-- > 0;) {
         AuBgLayer ly;
         au_style_bg_layer(s, i, &ly);
-        if (!ly.image || (ly.image->type == AU_CSSV_KEYWORD))
+        if (!ly.image || (ly.image->type == AU_CSSV_KEYWORD) || ly.clip == AU_K_text)
             continue;
         AuRect clip = box_area_of(b, border_box, ly.clip);
         AuRect origin = box_area_of(b, border_box, ly.origin);
@@ -2183,6 +2204,52 @@ static void deco_line(AuCanvas *c, float x, float y, float w, float th, uint32_t
     }
 }
 
+/* The nearest box from the fragment's parent up whose background is
+ * clipped to text, and the area its background is drawn over for this
+ * fragment: the IFC root's border box when it is the root (or a block
+ * above it: the root's box stands in), the fragment's own area when it
+ * is an inline box. */
+static const LBox *clip_text_owner(const LFrag *f, const LBlock *root, float ox, float oy, AuRect *area)
+{
+    for (const LBox *p = f->box->parent; p; p = p->parent) {
+        if (lb_anon(p) || !bg_clip_text(p->style))
+            continue;
+        if (p->kind == LK_INLINE)
+            *area = (AuRect){ox + f->x, oy + f->y, f->w, f->h};
+        else
+            *area = (AuRect){ox, oy, root->w, root->h};
+        return p;
+    }
+    return NULL;
+}
+
+/* The owner's text-clipped layers, drawn through the glyphs of one
+ * fragment: a group of the layers, masked by the text drawn opaque. */
+static void paint_clip_text(PCtx *P, const LBox *owner, AuRect area, LFont *font, const AuStyle *ts, const char *txt,
+                            uint32_t len, float x, float base, float spacing, float w)
+{
+    const AuStyle *s = owner->style;
+    float asc = font->m.ascent, desc = font->m.descent;
+    AuRect bounds = {x - 4, base - asc - 4, w + 8, asc + desc + 8};
+    au_canvas_group_begin(P->c, bounds);
+    size_t nl = au_style_bg_layer_count(s);
+    AuBgLayer last;
+    au_style_bg_layer(s, nl - 1, &last);
+    uint32_t bgc = pc(s, s->bg->background_color);
+    if ((bgc >> 24) && last.clip == AU_K_text)
+        au_fill_rect(P->c, area, bgc);
+    for (size_t i = nl; i-- > 0;) {
+        AuBgLayer ly;
+        au_style_bg_layer(s, i, &ly);
+        if (ly.image && ly.image->type != AU_CSSV_KEYWORD && ly.clip == AU_K_text)
+            draw_bg_image(P, s, &ly, area, area, NULL);
+    }
+    au_canvas_group_begin(P->c, bounds);
+    l_draw_text(P->L, P->c, font, ts, txt, len, x, base, AU_RGB(0, 0, 0), spacing);
+    au_canvas_mask_end(P->c, false);
+    au_canvas_group_end(P->c, 1);
+}
+
 static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
 {
     LText *t = (LText *)f->box;
@@ -2192,11 +2259,18 @@ static void paint_text_frag(PCtx *P, LBlock *root, LFrag *f, float ox, float oy)
     LFont *font = l_font(P->L, s);
     float x = ox + f->x, base = oy + f->y + f->baseline;
     uint32_t color = pc(s, s->inh->color);
+    /* A transparent -webkit-text-fill-color keeps the text's colour
+     * unless the text shows a background clipped to it: a page that
+     * hides text for such a background would otherwise show none. */
+    AuRect clip_area;
+    const LBox *clip_owner = P->clip_text ? clip_text_owner(f, root, ox, oy, &clip_area) : NULL;
     if (s->inhr->text_fill_color != AU_COLOR_CURRENT && s->inhr->text_fill_color != s->inh->color &&
-        (s->inhr->text_fill_color & 0xFF))
+        ((s->inhr->text_fill_color & 0xFF) || clip_owner))
         color = pc(s, s->inhr->text_fill_color);
     const char *txt = t->text + f->start;
     uint32_t len = f->len;
+    if (clip_owner)
+        paint_clip_text(P, clip_owner, clip_area, font, s, txt, len, x, base, f->spacing, f->w);
     if (P->L->sel.on)
         l_select_paint_frag(P->L, P->c, f, font, x, oy + f->y);
     /* Shadows first. */
@@ -2266,13 +2340,17 @@ static void paint_inline_decor(PCtx *P, LFrag *f, float ox, float oy)
     const AuStyle *s = b->style;
     AuRect box = {ox + f->x, oy + f->y, f->w, f->h};
     uint32_t bgc = pc(s, s->bg->background_color);
-    if (bgc >> 24)
-        au_fill_rect(P->c, box, bgc);
     size_t nl = au_style_bg_layer_count(s);
+    AuBgLayer last;
+    au_style_bg_layer(s, nl - 1, &last);
+    if (bg_clip_text(s))
+        P->clip_text = true;
+    if ((bgc >> 24) && last.clip != AU_K_text)
+        au_fill_rect(P->c, box, bgc);
     for (size_t i = nl; i-- > 0;) {
         AuBgLayer ly;
         au_style_bg_layer(s, i, &ly);
-        if (ly.image && ly.image->type == AU_CSSV_FUNCTION)
+        if (ly.image && ly.image->type == AU_CSSV_FUNCTION && ly.clip != AU_K_text)
             fill_gradient(P->c, ly.image, box, box, NULL, s);
     }
     const AuStyleSurround *sr = s->surr;
