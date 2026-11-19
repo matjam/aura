@@ -2705,10 +2705,16 @@ DV_ENTRY(bool, scroll_at, (AuDocView * dv, int x, int y, int dx, int dy), (dv, x
     au_docview_update(dv);
     if (dv->nframes && au_frames_scroll(dv, x, y, dx, dy))
         return true;
+    AuElement *scrolled = NULL;
     bool ok = au_layout_scroll_at(dv->layout, (float)(x - dv->scroll_x), (float)(y - dv->scroll_y),
-                                  (float)dv->scroll_x, (float)dv->scroll_y, (float)dx, (float)dy);
+                                  (float)dv->scroll_x, (float)dv->scroll_y, (float)dx, (float)dy, &scrolled);
     if (ok)
         invalidate_all(dv);
+    /* The box's scroll event, as the page's: script that keeps state
+     * from scrollTop (Discord's message list loads older messages when
+     * it reads 0) learns of the user's scroll. */
+    if (ok && scrolled && dv->script)
+        au_docscript_element_scrolled(dv->script, scrolled);
     return ok;
 }
 

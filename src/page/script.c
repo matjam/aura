@@ -66,6 +66,8 @@ struct AuDocScript {
     bool defer_module_running;         /* the head of the defer list is a module in flight */
     bool parse_done, content_loaded, loaded;
     bool resize_pending, scroll_pending, media_pending;
+    AuElement *scrolled[8]; /* inner scrollers the user scrolled since the last run (referenced) */
+    uint32_t nscrolled;
     int depth;
     uint32_t perf_t0;    /* when the outermost entry began */
     uint32_t perf_frozen0; /* the view's frozen_ms then: time parked is not script time */
@@ -352,6 +354,11 @@ static void h_element_scroll_to(void *ctx, AuElement *el, double x, double y, bo
     AuLayout *L = au_docview_layout(s->dv);
     if (!au_layout_element_scroll_to(L, el, (float)x, (float)y, by))
         return;
+    /* A scroll by script fires scroll too, at the next run (CSSOM View):
+     * Discord's message list records its place from it, and put it back
+     * at the place it last heard when it re-rendered. Only a real move
+     * gets here, so a handler that sets scrollTop again cannot loop. */
+    au_docscript_element_scrolled(s, el);
     /* Its box where it is drawn (inside other scrollers, transformed). */
     int sx, sy, vw, vh;
     au_dv_scroll(s->dv, &sx, &sy, &vw, &vh);
@@ -1117,6 +1124,8 @@ void au_docscript_free(AuDocScript *s)
         au_js_unload(s->js);
         au_js_free(s->js);
     }
+    for (uint32_t i = 0; i < s->nscrolled; i++)
+        au_node_unref(&s->scrolled[i]->node);
     free_pending(s->blocking);
     free_list(s->defer);
     free_list(s->async);
@@ -1535,6 +1544,17 @@ bool au_docscript_run(AuDocScript *s, uint32_t budget_ms)
         au_js_scrolled(s->js);
         ran = true;
     }
+    if (s->nscrolled) {
+        AuElement *els[8];
+        uint32_t n = s->nscrolled;
+        memcpy(els, s->scrolled, n * sizeof els[0]);
+        s->nscrolled = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            au_js_element_scrolled(s->js, els[i]);
+            au_node_unref(&els[i]->node);
+        }
+        ran = true;
+    }
     if (s->media_pending) {
         s->media_pending = false;
         au_js_media_changed(s->js);
@@ -1663,6 +1683,19 @@ void au_docscript_media_changed(AuDocScript *s)
 void au_docscript_scrolled(AuDocScript *s)
 {
     s->scroll_pending = s->js != NULL;
+}
+
+void au_docscript_element_scrolled(AuDocScript *s, AuElement *el)
+{
+    if (!s->js)
+        return;
+    for (uint32_t i = 0; i < s->nscrolled; i++)
+        if (s->scrolled[i] == el)
+            return;
+    if (s->nscrolled == sizeof s->scrolled / sizeof s->scrolled[0])
+        return; /* a wheel moves one box at a time; eight is plenty */
+    au_node_ref(&el->node);
+    s->scrolled[s->nscrolled++] = el;
 }
 
 bool au_docscript_on_stack(const AuDocScript *s)
