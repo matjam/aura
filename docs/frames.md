@@ -61,6 +61,11 @@ A frame's document is an `AU_RES_FRAME` request of the owner view
   nested document, an image is a generated document with an `<img>`
   (iframe) or an image box in layout (object, embed), anything else
   nothing.
+- The nested document's URL is the response's final URL with the
+  fragment of the frame's `src` added, unless the final URL has its own
+  (`au_frames_head`), as for the top page. A network's final URL has
+  no fragment. hCaptcha's frames read their role from `location.hash`,
+  and without it they stayed blank (Discord's login, 2026-11-19).
 - `srcdoc`, `about:blank` and `data:` URLs need no network;
   `page_doc.c` decodes `data:` URLs itself, for scripts too.
 - A `srcdoc` or `about:blank` frame resolves URLs against its parent's

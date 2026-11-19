@@ -922,6 +922,19 @@ void au_frames_head(AuDocView *dv, AuFrame *f, int status, const char *final_url
     const char *ct = header(headers, nheaders, "content-type");
     f->ctype = ct ? dup(ct) : NULL;
     f->final_url = final_url && *final_url ? dup(final_url) : NULL;
+    /* A fetch's final URL has no fragment: the frame's document keeps the
+     * one its src asked for unless the final URL names its own, as the
+     * top page does (hCaptcha's frames read their role from it). */
+    const char *hash = f->url ? strchr(f->url, '#') : NULL;
+    if (f->final_url && hash && !strchr(f->final_url, '#')) {
+        AuBuf nu;
+        au_buf_init(&nu);
+        au_buf_puts(&nu, f->final_url);
+        au_buf_puts(&nu, hash);
+        au_free(f->final_url);
+        f->final_url = dup(au_buf_cstr(&nu));
+        au_buf_free(&nu);
+    }
     const char *url = f->final_url ? f->final_url : f->url;
     if (!framing_allowed(f, url, header(headers, nheaders, "x-frame-options"),
                          header(headers, nheaders, "content-security-policy"))) {
