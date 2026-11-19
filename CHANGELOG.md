@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.0](https://github.com/matjam/aura/compare/v0.8.0...v0.9.0) (2026-11-19)
+
+
+### Features
+
+* **devtools:** show the image file bytes a page keeps ([57c22d4](https://github.com/matjam/aura/commit/57c22d49295e3614ba174c67142f4c781607e0b4))
+* **images:** keep opaque still images in 16 or 8 bits ([4d23cbb](https://github.com/matjam/aura/commit/4d23cbb5bc675792cb8ee5c397040bf9585f81a0))
+
+
+### Bug Fixes
+
+* **macos9:** show Image colours in the Preferences window ([857eab5](https://github.com/matjam/aura/commit/857eab5402c8e366aee41c78baf8ea4853c8b9f8))
+
+
+### Performance Improvements
+
+* **js:** compile functions called on a script's last run with the script ([6c2db4d](https://github.com/matjam/aura/commit/6c2db4d8c8060df3352381ed177101b13d0e3ebd))
+* **js:** compile nested functions at their first call ([fe15a27](https://github.com/matjam/aura/commit/fe15a27f788f86483a617708a32ce8847371b39e))
+* **js:** keep 8 bytes per variable in a compiled function ([a2e0248](https://github.com/matjam/aura/commit/a2e02480df56fc62dae126a3e19a959886856bca))
+* **js:** keep weak references in the runtime, not in every object ([ebfa814](https://github.com/matjam/aura/commit/ebfa814f0c901b95f1471da6f198994e32699855))
+
 ## [0.8.0](https://github.com/matjam/aura/compare/v0.7.0...v0.8.0) (2026-11-18)
 
 
