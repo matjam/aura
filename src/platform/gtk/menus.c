@@ -149,7 +149,7 @@ static GSimpleAction *command_action(AuCommand cmd)
     char name[32];
     g_snprintf(name, sizeof name, "cmd-%d", (int)cmd);
     GSimpleAction *a;
-    if (cmd == AU_CMD_VIEW_TABS_TOP || cmd == AU_CMD_VIEW_TABS_LEFT)
+    if (au_command_checkable(cmd))
         a = g_simple_action_new_stateful(name, NULL, g_variant_new_boolean(FALSE));
     else
         a = g_simple_action_new(name, NULL);

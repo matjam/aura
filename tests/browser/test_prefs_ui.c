@@ -398,6 +398,30 @@ static void test_clamping(const AuPrefsHost *host)
     au_prefs_edit_set_text(e, AU_PREF_SCRIPT_MEMORY_MB, "12");
     au_prefs_edit_set_text(e, AU_PREF_SCRIPT_MEMORY_MB, "x");
     CHECK(au_prefs_edit_get_int(e, AU_PREF_SCRIPT_MEMORY_MB) == 8, "not a number: back to 8");
+    au_prefs_edit_free(e);
+
+    /* Unlimited is the third choice, stored as -1; the MB field is off for
+     * it and loads back as Unlimited. */
+    p.script_memory_kb = 0;
+    e = au_prefs_edit_new(&p, host);
+    au_prefs_edit_set_choice(e, AU_PREF_SCRIPT_MEMORY_MODE, 2);
+    au_prefs_edit_set_choice(e, AU_PREF_WORKER_MEMORY_MODE, 2);
+    au_prefs_edit_set_choice(e, AU_PREF_IMAGE_MEMORY_MODE, 2);
+    CHECK(!au_prefs_edit_enabled(e, AU_PREF_SCRIPT_MEMORY_MB), "the MB field is off for Unlimited");
+    au_prefs_init(&out);
+    au_prefs_edit_apply(e, &out);
+    CHECK(out.script_memory_kb == AU_MEM_UNLIMITED && out.worker_memory_kb == AU_MEM_UNLIMITED &&
+              out.image_memory_kb == AU_MEM_UNLIMITED,
+          "Unlimited is stored as -1: %d %d %d", out.script_memory_kb, out.worker_memory_kb, out.image_memory_kb);
+    au_prefs_edit_free(e);
+    e = au_prefs_edit_new(&out, host);
+    CHECK(au_prefs_edit_get_choice(e, AU_PREF_SCRIPT_MEMORY_MODE) == 2 &&
+              au_prefs_edit_get_choice(e, AU_PREF_IMAGE_MEMORY_MODE) == 2,
+          "Unlimited loads");
+    CHECK(au_prefs_edit_get_int(e, AU_PREF_SCRIPT_MEMORY_MB) > 0, "Unlimited shows Automatic's value to edit");
+    au_prefs_edit_set_text(e, AU_PREF_SCRIPT_MEMORY_MB, "x");
+    CHECK(au_prefs_edit_get_int(e, AU_PREF_SCRIPT_MEMORY_MB) == 4, "not a number from Unlimited: the floor");
+    au_prefs_free(&out);
     au_buf_free(&b);
     au_prefs_edit_free(e);
     au_prefs_free(&p);

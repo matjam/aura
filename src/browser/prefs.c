@@ -37,6 +37,7 @@ static const Key keys[] = {
     E("startup", startup, startup_names),
     E("tabs.position", tab_position, tabpos_names),
     I("tabs.column_width", tab_column_width, AU_TAB_COLUMN_MIN, AU_TAB_COLUMN_MAX),
+    B("view.show_memory", show_memory),
     S("search.template", search_template),
     E("appearance.color_scheme", color_scheme, color_scheme_names),
     S("fonts.serif", font_serif),
@@ -46,9 +47,9 @@ static const Key keys[] = {
     I("fonts.size_monospace", font_size_mono, 6, 72),
     I("fonts.minimum_size", font_size_min, 0, 36),
     B("content.javascript", javascript),
-    I("content.script_memory_kb", script_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
-    I("content.worker_memory_kb", worker_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
-    I("content.image_memory_kb", image_memory_kb, 0, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    I("content.script_memory_kb", script_memory_kb, AU_MEM_UNLIMITED, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    I("content.worker_memory_kb", worker_memory_kb, AU_MEM_UNLIMITED, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
+    I("content.image_memory_kb", image_memory_kb, AU_MEM_UNLIMITED, (int)AU_SCRIPT_MEM_CUSTOM_MAX_KB),
     E("content.image_colors", image_colors, image_colors_names),
     B("content.images", load_images),
     B("content.block_popups", block_popups),
@@ -265,7 +266,7 @@ bool au_prefs_set(AuPrefs *p, const char *key, const char *value)
             if (v > k->max)
                 v = k->max;
             *int_field(p, k) = (int)v;
-            /* 0 is Automatic; any other script memory limit has a floor */
+            /* 0 is Automatic and -1 Unlimited; any other memory limit has a floor */
             p->script_memory_kb = au_script_memory_clamp(p->script_memory_kb);
             p->worker_memory_kb = au_script_memory_clamp(p->worker_memory_kb);
             p->image_memory_kb = au_script_memory_clamp(p->image_memory_kb);

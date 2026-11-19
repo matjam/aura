@@ -297,10 +297,17 @@ To change the limits or the policy, edit `src/browser/scriptmem.h` and
 | `content.worker_memory_kb` | each worker | Script memory per worker |
 
 The value 0 is Automatic and is the default; it is stored as 0, so it
-follows the policy of the Aura that reads it. Any other value is the
+follows the policy of the Aura that reads it. -1 (`AU_MEM_UNLIMITED`;
+any negative value reads as it) is Unlimited. Any other value is the
 user's own limit in KB, clamped to the custom range
 (`au_script_memory_clamp`). `au_script_memory_limits` gives the limits
-in force. The policy:
+in force, `AU_MEM_UNLIMITED_KB` for Unlimited, and `au_memory_kb_bytes`
+turns that into half the address space in bytes, so that the engine's
+limit plus its out-of-memory reserve cannot overflow. An unlimited
+runtime is still refused memory when the machine runs short
+(`au_memory_low`), and its out-of-memory line then says the limit is
+unlimited. `content.image_memory_kb` (decoded images) takes the same
+values. The policy:
 
 | | Automatic | Unknown machine (host tools, tests) | Custom range |
 |---|---|---|---|

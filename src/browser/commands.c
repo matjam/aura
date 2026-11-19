@@ -74,6 +74,7 @@ static const AuCommandInfo commands[AU_CMD_COUNT] = {
     [AU_CMD_VIEW_ACTUAL_SIZE] = {AU_CMD_VIEW_ACTUAL_SIZE, AU_MENU_VIEW, "Actual Size", KEY('0'), AU_MENU_NONE},
     [AU_CMD_VIEW_TABS_TOP] = {AU_CMD_VIEW_TABS_TOP, AU_MENU_VIEW, "Tabs on Top", NOKEY, AU_MENU_NONE},
     [AU_CMD_VIEW_TABS_LEFT] = {AU_CMD_VIEW_TABS_LEFT, AU_MENU_VIEW, "Tabs on Left", NOKEY, AU_MENU_NONE},
+    [AU_CMD_VIEW_SHOW_MEMORY] = {AU_CMD_VIEW_SHOW_MEMORY, AU_MENU_VIEW, "Show Memory Use", NOKEY, AU_MENU_NONE},
 
     [AU_CMD_GO_BACK] = {AU_CMD_GO_BACK, AU_MENU_GO, "Back", KEY('['), AU_MENU_NONE},
     [AU_CMD_GO_FORWARD] = {AU_CMD_GO_FORWARD, AU_MENU_GO, "Forward", KEY(']'), AU_MENU_NONE},
@@ -115,7 +116,8 @@ static const AuCommand edit_items[] = {
     AU_CMD_EDIT_PREFERENCES};
 static const AuCommand view_items[] = {
     AU_CMD_VIEW_RELOAD,  AU_CMD_VIEW_STOP,     AU_CMD_VIEW_PAGE_SOURCE, SEP, AU_CMD_VIEW_ZOOM_IN,
-    AU_CMD_VIEW_ZOOM_OUT, AU_CMD_VIEW_ACTUAL_SIZE, SEP, AU_CMD_VIEW_TABS_TOP, AU_CMD_VIEW_TABS_LEFT};
+    AU_CMD_VIEW_ZOOM_OUT, AU_CMD_VIEW_ACTUAL_SIZE, SEP, AU_CMD_VIEW_TABS_TOP, AU_CMD_VIEW_TABS_LEFT,
+    SEP, AU_CMD_VIEW_SHOW_MEMORY};
 static const AuCommand go_items[] = {AU_CMD_GO_BACK, AU_CMD_GO_FORWARD, AU_CMD_GO_HOME, SEP, AU_CMD_GO_HISTORY};
 static const AuCommand bookmarks_items[] = {AU_CMD_BOOKMARKS_ADD, AU_CMD_BOOKMARKS_SHOW, SEP};
 /* Develop, in groups: looking at the page, measuring it, the engine and
@@ -252,8 +254,14 @@ bool au_command_checked(const AuCommandState *st, AuCommand cmd)
     switch (cmd) {
     case AU_CMD_VIEW_TABS_TOP: return st->browser->prefs.tab_position == AU_TABS_TOP;
     case AU_CMD_VIEW_TABS_LEFT: return st->browser->prefs.tab_position == AU_TABS_LEFT;
+    case AU_CMD_VIEW_SHOW_MEMORY: return st->browser->prefs.show_memory;
     default: return false;
     }
+}
+
+bool au_command_checkable(AuCommand cmd)
+{
+    return cmd == AU_CMD_VIEW_TABS_TOP || cmd == AU_CMD_VIEW_TABS_LEFT || cmd == AU_CMD_VIEW_SHOW_MEMORY;
 }
 
 const char *au_command_title(const AuCommandState *st, AuCommand cmd)
@@ -404,6 +412,10 @@ void au_command_run(const AuCommandState *st, const AuCommandHost *host, AuComma
     case AU_CMD_VIEW_TABS_TOP:
     case AU_CMD_VIEW_TABS_LEFT:
         st->browser->prefs.tab_position = cmd == AU_CMD_VIEW_TABS_LEFT ? AU_TABS_LEFT : AU_TABS_TOP;
+        au_browser_prefs_changed(st->browser);
+        break;
+    case AU_CMD_VIEW_SHOW_MEMORY:
+        st->browser->prefs.show_memory = !st->browser->prefs.show_memory;
         au_browser_prefs_changed(st->browser);
         break;
     case AU_CMD_GO_BACK: au_bw_back(w); break;

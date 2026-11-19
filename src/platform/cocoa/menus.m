@@ -110,7 +110,7 @@ static AuMenus *M;
         AuCommandState st;
         au_cocoa_command_state(&st);
         AuCommand c = (AuCommand)item.tag, r = resolve(&st, c);
-        if (c == AU_CMD_VIEW_TABS_TOP || c == AU_CMD_VIEW_TABS_LEFT)
+        if (au_command_checkable(c))
             item.state = au_command_checked(&st, c) ? NSControlStateValueOn : NSControlStateValueOff;
         return r != AU_CMD_NONE && au_command_enabled(&st, r);
     }

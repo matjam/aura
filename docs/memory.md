@@ -12,6 +12,32 @@ temporary memory when there is room; everything else comes from the
 application heap through `au_alloc`, which takes temporary memory when
 the heap is short ("Temporary memory for the heap" below).
 
+## To watch a page's memory while you use it
+
+Choose View > Show Memory Use. The status bar's right end (on GTK the
+status line's, on macOS a bubble over the page's bottom right corner)
+then shows the active page's script runtime, its workers and its
+decoded images against their limits, measured about once a second
+(`au_bw_memory_text`, from `au_page_memory_use`):
+
+```
+Script 12.3 / 96 MB   Workers 2.1 MB (1 of 64 MB)   Images 8.0 / 64 MB
+```
+
+A limit set to Unlimited shows no "/ limit" part. The preference is
+`view.show_memory`; it is off by default. For every runtime, document
+and worker in detail, use Develop > Performance or System Status
+([`developer-tools.md`](developer-tools.md)).
+
+## To lift a page's limits
+
+In Preferences > Content, set "Script memory per page", "Script memory
+per worker" or "Image memory per page" to Unlimited (stored as -1,
+[`javascript.md`](javascript.md), "Script memory limits"). The page
+can then take what Aura has free; the engine still refuses script
+memory when the machine runs short (`au_memory_low`), and on Mac OS 9
+an unlimited page can leave other tabs with little.
+
 ## To see which code holds memory on the host
 
 Configure a tree with the allocation counter, build `aura-host`, and
@@ -575,11 +601,11 @@ with the sequences above only ([`known-gaps.md`](known-gaps.md#memory)).
 | The application partition | 64 MB (12 MB at least) | |
 | Kept documents | 3 per tab, 24 MB over all tabs; the oldest is dropped while less than 6 MB of heap is free | [`browser-chrome.md`](browser-chrome.md) |
 | Background tabs | unloaded, least recently shown first, while less than 6 MB is free (heap and temporary memory together), or after 30 minutes in the background while less than 16 MB is free | [`browser-chrome.md`](browser-chrome.md) |
-| The image cache | per document: Automatic, an eighth of the memory free, 8 to 64 MB; or the `content.image_memory_kb` preference, 4 to 256 MB; one image at most half of it. Opaque still images are kept in 32, 16 or 8 bits (`content.image_colors`) | [`images.md`](images.md) |
+| The image cache | per document: Automatic, an eighth of the memory free, 8 to 64 MB; or the `content.image_memory_kb` preference, 4 to 256 MB or Unlimited; one image at most half of it. Opaque still images are kept in 32, 16 or 8 bits (`content.image_colors`) | [`images.md`](images.md) |
 | A decoded image | 16 MB | [`images.md`](images.md) |
 | The HTTP memory cache | 8 MB by default; 1 MB resident with the disk cache on | [`networking.md`](networking.md) |
-| A page's script runtime, shared by its frames | Automatic: half of the memory free, at least 8 MB, at most 96 MB (64 MB where the machine is unknown); or the `content.script_memory_kb` preference, 4 to 256 MB | [`javascript.md`](javascript.md), "Script memory limits" |
-| A worker | Automatic: a quarter of the memory free, at least 4 MB, at most 32 MB (32 MB where the machine is unknown); or the `content.worker_memory_kb` preference, 4 to 256 MB. 256 KB of stack | [`javascript.md`](javascript.md), "Script memory limits"; [`workers.md`](workers.md) |
+| A page's script runtime, shared by its frames | Automatic: half of the memory free, at least 8 MB, at most 96 MB (64 MB where the machine is unknown); or the `content.script_memory_kb` preference, 4 to 256 MB or Unlimited | [`javascript.md`](javascript.md), "Script memory limits" |
+| A worker | Automatic: a quarter of the memory free, at least 4 MB, at most 32 MB (32 MB where the machine is unknown); or the `content.worker_memory_kb` preference, 4 to 256 MB or Unlimited. 256 KB of stack | [`javascript.md`](javascript.md), "Script memory limits"; [`workers.md`](workers.md) |
 | Script, when the machine is short | refused when less than 3 MB would be left (`au_memory_low`) | [`javascript.md`](javascript.md), "Script memory limits" |
 | A document's canvases | 32 MB; one canvas 16 MB | [`canvas.md`](canvas.md) |
 | Images script holds for a canvas | 4 MB each, 12 MB together | [`canvas.md`](canvas.md) |

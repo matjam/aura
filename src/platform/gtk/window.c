@@ -650,8 +650,14 @@ AuGtkWin *au_gtk_win_new(int width, int height)
     w->progress = gtk_label_new("");
     gtk_widget_add_css_class(w->progress, "caption");
     gtk_widget_add_css_class(w->progress, "dim-label");
+    w->memory = gtk_label_new("");
+    gtk_widget_add_css_class(w->memory, "caption");
+    gtk_widget_add_css_class(w->memory, "dim-label");
+    gtk_widget_add_css_class(w->memory, "numeric");
+    gtk_widget_set_visible(w->memory, FALSE);
     gtk_box_append(GTK_BOX(status), w->status);
     gtk_box_append(GTK_BOX(status), w->progress);
+    gtk_box_append(GTK_BOX(status), w->memory);
     gtk_box_append(GTK_BOX(box), status);
 
     gtk_window_set_child(w->window, box);
@@ -760,8 +766,14 @@ static void apply_changes(AuGtkWin *w)
         gtk_label_set_text(GTK_LABEL(w->progress), s);
         gtk_entry_set_progress_fraction(GTK_ENTRY(w->entry), au_bw_loading(w->bw) ? au_bw_progress(w->bw) : 0);
     }
-    if (what & (AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK))
-        au_gtk_menus_dirty();
+    if (what & (AU_CHANGED_MEMORY | AU_CHANGED_ACTIVE_TAB)) {
+        char s[128];
+        au_bw_memory_text(w->bw, s, sizeof s);
+        gtk_label_set_text(GTK_LABEL(w->memory), s);
+        gtk_widget_set_visible(w->memory, *s != 0);
+    }
+    if (what & (AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK | AU_CHANGED_MEMORY))
+        au_gtk_menus_dirty(); /* Show Memory Use's check mark */
     if (what & AU_CHANGED_FOCUS_FIELD)
         au_gtk_win_focus_address(w);
     else if (what & AU_CHANGED_FOCUS_PAGE)

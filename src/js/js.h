@@ -559,6 +559,9 @@ typedef struct AuJsStats {
     size_t memory_peak;  /* the most the page's runtime has held (workers not included) */
     size_t worker_peak;  /* the most any one live worker of the document has held */
     size_t worker_limit; /* a worker's limit */
+    size_t runtime_used; /* bytes allocated by the page's runtime alone (every document's context in it) */
+    size_t worker_used;  /* bytes held by the workers of the page's documents (frames included), with stacks */
+    int workers;         /* how many workers those documents have */
     uint32_t wrappers;   /* live node wrappers */
     uint32_t errors;     /* uncaught exceptions reported */
     uint32_t interrupted; /* scripts stopped by the time limit */

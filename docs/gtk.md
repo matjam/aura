@@ -95,6 +95,8 @@ icon and load progress, and the main menu button at the right), a
 tab labels, an optional find bar, the page (a `GtkDrawingArea` with
 scroll bars) and a status line. The model's window is made with
 `au_browser_window_new_native`, so its surface holds only the page.
+The status line's right end holds the memory readout (View > Show
+Memory Use, `au_bw_memory_text`) while that preference is on.
 
 - Reordering tabs by dragging calls `au_bw_move_tab`.
 - Ctrl+1 to Ctrl+8 choose a tab and Ctrl+9 the last.

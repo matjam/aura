@@ -19,6 +19,8 @@
 #include "fakenet.h"
 
 #include "browser/browser.h"
+#include "browser/page.h"
+#include "browser/scriptmem.h"
 #include "net/loader.h"
 
 #include <stdio.h>
@@ -255,8 +257,41 @@ static void test_shared_script(void)
               strstr(t, ", peak ") && strstr(t, "limit 20480 KB") && strstr(t, "limit 8192 KB"),
           "summary:\n%s", t);
     au_buf_free(&rep);
+    /* The memory readout: the runtime and the worker apart, each with its
+     * limit; off until View > Show Memory Use. */
+    AuPageMemory pm;
+    au_page_memory_use(page(&e), &pm);
+    CHECK(pm.workers == 1 && pm.worker_kb > 0 && pm.script_kb > 0, "workers %d, %u KB, script %u KB", pm.workers,
+          (unsigned)pm.worker_kb, (unsigned)pm.script_kb);
+    CHECK(pm.script_limit_kb == LIMIT_PAGE_KB && pm.worker_limit_kb == 8192, "limits %u %u",
+          (unsigned)pm.script_limit_kb, (unsigned)pm.worker_limit_kb);
+    CHECK((size_t)pm.script_kb + pm.worker_kb <= used / 1024 + 2 + pm.worker_kb, "split %u + %u of %lu",
+          (unsigned)pm.script_kb, (unsigned)pm.worker_kb, (unsigned long)(used / 1024));
+    char mt[128];
+    au_bw_memory_text(e.w, mt, sizeof mt);
+    CHECK(!mt[0], "off by default: %s", mt);
+    e.w->browser->prefs.show_memory = true;
+    au_bw_memory_text(e.w, mt, sizeof mt);
+    CHECK(!strncmp(mt, "Script ", 7) && strstr(mt, " / 20 MB") && strstr(mt, "Workers ") && strstr(mt, "(1 of 8 MB)") &&
+              strstr(mt, "Images "),
+          "readout: %s", mt);
     free(script);
     env_free(&e);
+}
+
+/* The readout's text for each kind of limit. */
+static void test_memory_text(void)
+{
+    char t[128];
+    AuPageMemory m = {12595, 96 * 1024, 2150, 64 * 1024, 1, 8192, 64 * 1024};
+    au_memory_text(&m, t, sizeof t);
+    CHECK(!strcmp(t, "Script 12.3 / 96 MB   Workers 2.1 MB (1 of 64 MB)   Images 8.0 / 64 MB"), "%s", t);
+    AuPageMemory u = {1024, AU_MEM_UNLIMITED_KB, 3 * 1024, AU_MEM_UNLIMITED_KB, 2, 0, AU_MEM_UNLIMITED_KB};
+    au_memory_text(&u, t, sizeof t);
+    CHECK(!strcmp(t, "Script 1.0 MB   Workers 3.0 MB (2)   Images 0.0 MB"), "%s", t);
+    AuPageMemory n = {0, 0, 0, 0, 0, 0, 8192};
+    au_memory_text(&n, t, sizeof t);
+    CHECK(!strcmp(t, "Script 0.0 MB   Workers none   Images 0.0 / 8 MB"), "%s", t);
 }
 
 static void test_worker_out_of_memory(void)
@@ -354,7 +389,7 @@ static void test_oom_text(void)
     au_buf_init(&m);
     au_buf_init(&d);
     au_script_oom_text(&o, "", &m, &d);
-    CHECK(strstr(au_buf_cstr(&m), "\"This page\"") && strstr(au_buf_cstr(&d), "already the largest setting"), "%s | %s",
+    CHECK(strstr(au_buf_cstr(&m), "\"This page\"") && strstr(au_buf_cstr(&d), "to Unlimited"), "%s | %s",
           au_buf_cstr(&m), au_buf_cstr(&d));
     au_buf_free(&m);
     au_buf_free(&d);
@@ -377,6 +412,7 @@ int main(void)
     test_worker_out_of_memory();
     test_page_out_of_memory();
     test_oom_text();
+    test_memory_text();
     au_fontset_free(fonts);
     for (int i = 0; i < nresponses; i++)
         free(responses[i]);

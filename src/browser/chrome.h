@@ -138,6 +138,8 @@ typedef struct AuChromeState {
     const char *progress_text; /* centred in the status bar ("Loading, 40%"); NULL or "" for none */
     int blocked;              /* requests of the page a blocklist refused: a shield and the count at the
                                  right of the status bar; 0 for none */
+    const char *memory_text;  /* the memory readout (au_bw_memory_text), right-aligned left of the blocked
+                                 count; NULL or "" for none */
     int throbber_frame;       /* advances while loading */
     bool draw_native_standins; /* paint scroll bar and grow box stand-ins */
     bool active_window;       /* inactive windows draw dimmed labels */

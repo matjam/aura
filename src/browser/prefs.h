@@ -59,6 +59,7 @@ typedef struct AuPrefs {
     AuStartup startup;
     AuTabPosition tab_position;
     int tab_column_width; /* pixels, for AU_TABS_LEFT */
+    bool show_memory;     /* View > Show Memory Use: the readout at the status bar's right end */
     char *search_template; /* "%s" is replaced by the query */
     /* Light or dark, for pages (prefers-color-scheme) and, where the port
      * draws native chrome, the chrome; System follows the platform
@@ -72,10 +73,12 @@ typedef struct AuPrefs {
     /* Content */
     bool javascript;
     /* Script memory limits in KB (scriptmem.h): 0 is Automatic, which
-     * follows the memory the machine has free; a number is the user's
-     * own limit, 4 MB to 256 MB. They apply to pages loaded afterwards. */
+     * follows the memory the machine has free; -1 (AU_MEM_UNLIMITED) is
+     * Unlimited; a number is the user's own limit, 4 MB to 256 MB. They
+     * apply to pages loaded afterwards. */
     int script_memory_kb, worker_memory_kb;
-    /* Decoded images per page, in KB (scriptmem.h): 0 is Automatic. */
+    /* Decoded images per page, in KB (scriptmem.h): 0 is Automatic, -1
+     * Unlimited. */
     int image_memory_kb;
     AuImageColors image_colors;
     bool load_images;

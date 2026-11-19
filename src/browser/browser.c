@@ -1009,6 +1009,7 @@ void au_browser_free(AuBrowser *b)
 }
 
 static void scheme_changed(AuBrowser *b);
+static void memory_refresh(AuBrowserWindow *w);
 
 void au_browser_prefs_changed(AuBrowser *b)
 {
@@ -1026,6 +1027,10 @@ void au_browser_prefs_changed(AuBrowser *b)
             clamp_scroll(t);
         }
         changed(w, AU_CHANGED_LAYOUT | AU_CHANGED_SCROLL | AU_CHANGED_FIELD);
+        /* View > Show Memory Use may have changed. */
+        memory_refresh(w);
+        if (!b->prefs.show_memory)
+            changed(w, AU_CHANGED_MEMORY);
     }
 }
 
@@ -1486,6 +1491,8 @@ void au_bw_select_tab(AuBrowserWindow *w, int i)
     }
     changed(w, AU_CHANGED_FIELD | AU_CHANGED_TITLE | AU_CHANGED_SCROLL | AU_CHANGED_MENUS | LOAD_STATE_CHANGES |
                    (old != i ? AU_CHANGED_ACTIVE_TAB : 0));
+    if (old != i && w->browser->prefs.show_memory)
+        memory_refresh(w); /* the readout is the new tab's */
 }
 
 void au_bw_close_tab(AuBrowserWindow *w, int i)
@@ -2234,6 +2241,67 @@ int au_bw_blocked_count(AuBrowserWindow *w)
     return (int)ps.blocked;
 }
 
+/* kb as megabytes with one decimal: "12.3". */
+static const char *mb_text(char *buf, size_t cap, uint32_t kb)
+{
+    unsigned long tenths = (unsigned long)(((uint64_t)kb * 10 + 512) / 1024);
+    snprintf(buf, cap, "%lu.%lu", tenths / 10, tenths % 10);
+    return buf;
+}
+
+/* " / 96 MB" for a limit, " MB" for Unlimited or none. */
+static const char *limit_text(char *buf, size_t cap, uint32_t kb)
+{
+    if (kb && kb != AU_MEM_UNLIMITED_KB)
+        snprintf(buf, cap, " / %lu MB", (unsigned long)((kb + 512) / 1024));
+    else
+        snprintf(buf, cap, " MB");
+    return buf;
+}
+
+void au_memory_text(const AuPageMemory *m, char *out, size_t cap)
+{
+    char a[24], b[24], c[24], d[24], e[24];
+    char workers[64];
+    if (m->workers <= 0)
+        snprintf(workers, sizeof workers, "Workers none");
+    else if (m->worker_limit_kb && m->worker_limit_kb != AU_MEM_UNLIMITED_KB)
+        snprintf(workers, sizeof workers, "Workers %s MB (%d of %lu MB)", mb_text(c, sizeof c, m->worker_kb),
+                 m->workers, (unsigned long)((m->worker_limit_kb + 512) / 1024));
+    else
+        snprintf(workers, sizeof workers, "Workers %s MB (%d)", mb_text(c, sizeof c, m->worker_kb), m->workers);
+    snprintf(out, cap, "Script %s%s   %s   Images %s%s", mb_text(a, sizeof a, m->script_kb),
+             limit_text(b, sizeof b, m->script_limit_kb), workers, mb_text(d, sizeof d, m->image_kb),
+             limit_text(e, sizeof e, m->image_limit_kb));
+}
+
+void au_bw_memory_text(AuBrowserWindow *w, char *out, size_t cap)
+{
+    if (!cap)
+        return;
+    out[0] = 0;
+    AuTab *t = au_bw_active_tab(w);
+    if (!t || !w->browser->prefs.show_memory)
+        return;
+    AuPageMemory m;
+    au_page_memory_use(t->page, &m);
+    au_memory_text(&m, out, cap);
+}
+
+/* Measures the readout again and, when its text changed, repaints the
+ * status bar and tells the port. */
+static void memory_refresh(AuBrowserWindow *w)
+{
+    char text[sizeof w->memory_text];
+    au_bw_memory_text(w, text, sizeof text);
+    w->memory_ms = time_ms(w->browser);
+    if (!strcmp(text, w->memory_text))
+        return;
+    memcpy(w->memory_text, text, sizeof text);
+    invalidate(w, w->layout.status);
+    changed(w, AU_CHANGED_MEMORY);
+}
+
 void au_bw_scroll_pos(AuBrowserWindow *w, int *x, int *y)
 {
     AuTab *t = au_bw_active_tab(w);
@@ -2273,6 +2341,7 @@ static void paint_chrome(AuBrowserWindow *w, AuCanvas *c, AuIRect clip)
     au_bw_progress_text(w, progress, sizeof progress);
     s.progress_text = progress;
     s.blocked = au_bw_blocked_count(w);
+    s.memory_text = w->browser->prefs.show_memory ? w->memory_text : NULL;
     s.throbber_frame = w->throbber_frame;
     s.draw_native_standins = w->native_standins;
     s.active_window = w->active_window;
@@ -2695,7 +2764,10 @@ void au_script_oom_text(const AuScriptOom *o, const char *page_name, AuBuf *mess
                       "and reload the page.",
                       o->worker ? "worker" : "page", (unsigned long)(want / 1024));
     else
-        au_buf_puts(detail, " That is already the largest setting, so this page needs more memory than Aura can give it.");
+        au_buf_printf(detail,
+                      " To fix it, choose Preferences > Content, set \"Script memory per %s\" to Unlimited, and "
+                      "reload the page.",
+                      o->worker ? "worker" : "page");
 }
 
 static void script_oom_notice(AuBrowserWindow *w, AuPage *p, const AuScriptOom *o)
@@ -2724,6 +2796,8 @@ void au_bw_idle(AuBrowserWindow *w)
         rehover(w);
     }
     au_browser_trim_documents(w->browser);
+    if (w->browser->prefs.show_memory && time_ms(w->browser) - w->memory_ms >= 1000)
+        memory_refresh(w);
     if (w->bench)
         au_bench_idle(w->bench); /* the results stay readable until the next run */
     {

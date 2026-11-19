@@ -900,6 +900,16 @@ static void paint_status(AuCanvas *c, AuFontSet *fonts, const AuChromeLayout *l,
         poly(c, shield, 5, sx, sy, AU_RGB(70, 110, 70));
         tr.x1 = br.x0 - 20;
     }
+    /* The memory readout, right-aligned beside them; it gives way when the
+     * bar is too narrow for it and some status text. */
+    if (s->memory_text && *s->memory_text) {
+        int w = (int)(cf_width(f, 10, s->memory_text, strlen(s->memory_text)) + 0.99f);
+        if (tr.x1 - tr.x0 > w + 120) {
+            AuIRect mr = irect(tr.x1 - w, r.y0 + 1, tr.x1, r.y1);
+            text_in(c, f, 10, mr, s->memory_text, C_INK, false);
+            tr.x1 = mr.x0 - 12;
+        }
+    }
     /* Progress text in the middle; the status text keeps to its left. */
     if (s->progress_text && *s->progress_text && r.x1 - r.x0 > 320) {
         int mid = (r.x0 + r.x1) / 2;
