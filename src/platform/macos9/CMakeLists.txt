@@ -5,15 +5,26 @@
 # OpenTptInternetLib.
 # The 'vers' resources of Aura and of the installer come from AU_VERSION in
 # src/browser/credits.h, which the About box also reads: "0.3.0" becomes
-# 0x00, 0x30 (major, then minor and bug fix as two BCD digits). The .r
-# files are generated, so a version change rebuilds them.
+# 0x00, 0x30 (major, then minor and bug fix as one BCD digit each). A
+# minor or bug-fix part above 9 does not fit its digit and is given as 9
+# ("0.10.0" is 0x00, 0x99); the version strings, which the Finder shows,
+# keep the exact version. The .r files are generated, so a version change
+# rebuilds them.
 file(STRINGS ${CMAKE_SOURCE_DIR}/src/browser/credits.h aura_version_line REGEX "^#define AU_VERSION ")
 string(REGEX REPLACE "^#define AU_VERSION \"([^\"]*)\".*$" "\\1" AURA_VERSION "${aura_version_line}")
-if(NOT AURA_VERSION MATCHES "^([0-9]+)\\.([0-9])\\.([0-9])$")
-    message(FATAL_ERROR "AU_VERSION \"${AURA_VERSION}\" is not MAJOR.MINOR.FIX with one-digit MINOR and FIX")
+if(NOT AURA_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+    message(FATAL_ERROR "AU_VERSION \"${AURA_VERSION}\" is not MAJOR.MINOR.FIX")
 endif()
 set(AURA_VERS_MAJOR ${CMAKE_MATCH_1})
-set(AURA_VERS_MINOR ${CMAKE_MATCH_2}${CMAKE_MATCH_3})
+set(aura_vers_minor ${CMAKE_MATCH_2})
+set(aura_vers_fix ${CMAKE_MATCH_3})
+if(aura_vers_minor GREATER 9)
+    set(aura_vers_minor 9)
+    set(aura_vers_fix 9)
+elseif(aura_vers_fix GREATER 9)
+    set(aura_vers_fix 9)
+endif()
+set(AURA_VERS_MINOR ${aura_vers_minor}${aura_vers_fix})
 if(AURA_VERS_MAJOR LESS 10)
     set(AURA_VERS_MAJOR 0${AURA_VERS_MAJOR})
 endif()
