@@ -638,6 +638,22 @@ It positions a layer against the viewport on any box. Once a box has
 painted one, `au_layout_scroll_damage` returns -1 and a scroll repaints
 the page.
 
+### `background-clip: text`
+
+A layer clipped to text, and the background colour when the last layer
+is, is left out when the box paints its background (`bg_clip_text` in
+`draw.c`). Each text fragment inside the box then draws those layers
+through its own glyphs (`paint_clip_text`): a canvas group of the
+layers, masked by the fragment's text drawn opaque. The layers cover
+the IFC root's border box when the owner is a block (a block above the
+root uses the root's box), and the fragment's area when the owner is an
+inline box, so a gradient restarts on each line and on each fragment of
+an inline box. A transparent `-webkit-text-fill-color` hides the text's
+own colour only under such a background; elsewhere the colour stays,
+so a page that relies on the clip never shows invisible text. Discord's
+gradient names use it. `test_background_clip_text` in
+`tests/page/test_page.c` covers it.
+
 ### Clearance
 
 A block placed by clearance takes the top margins of its first children
