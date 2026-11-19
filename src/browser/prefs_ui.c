@@ -24,6 +24,7 @@ static const char *const image_colors_choices[] = {"Same as the screen", "Millio
 static const char *const memory_choices[] = {"Automatic", "Custom", NULL};
 static const char *const cookie_choices[] = {"Accept all", "Same-site only", "Block all", NULL};
 static const char *const update_choices[] = {"Every day", "Every week", "Never", NULL};
+static const char *const identify_choices[] = {"Aura", "Chrome", "Safari", "Custom", NULL};
 
 #define OFF(f) offsetof(AuPrefs, f)
 #define SEC(s) AU_PREF_SECTION_##s
@@ -127,7 +128,10 @@ static const AuPrefDesc descs[AU_PREF_COUNT] = {
     D_TEXT(HTTPS_PROXY_HOST, NETWORK, "proxy.https.host", "HTTPS proxy:", https_proxy_host),
     D_NUMBER(HTTPS_PROXY_PORT, NETWORK, "proxy.https.port", "Port:", NULL, 0, 65535, https_proxy_port),
     D_NOTE(PROXY_NOTE, NETWORK, "Leave the host empty to connect directly."),
-    D_TEXT(USER_AGENT, NETWORK, "network.user_agent", "User agent:", user_agent),
+    D_CHOICE(IDENTIFY, NETWORK, AU_PREF_CHOICE, "network.identify", "Identify as:", identify_choices, 0, identify),
+    /* shows the string sent; editable for Custom */
+    {AU_PREF_USER_AGENT, SEC(NETWORK), AU_PREF_TEXT, "network.user_agent", "User agent:", NULL, NULL, NULL, NULL, NULL,
+     0, 0, AU_PREF_IDENTIFY, AU_IDENTIFY_CUSTOM, 0, AU_PREF_STORE_STR, OFF(user_agent)},
     D_NUMBER(MEMORY_CACHE, NETWORK, "cache.memory_kb", "Memory cache:", "KB", 0, 1 << 20, memory_cache_kb),
     D_NUMBER(DISK_CACHE, NETWORK, "cache.disk_kb", "Disk cache:", "KB", 0, 1 << 22, disk_cache_kb),
     D_CHECK(UNLOAD_TABS, NETWORK, "tabs.unload_low_memory", "Unload background tabs when memory is low", unload_tabs),
@@ -532,10 +536,15 @@ bool au_prefs_edit_set_text(AuPrefsEdit *e, AuPrefId id, const char *text)
             au_prefs_clean_domains(text, &b);
         au_prefs_set_str(field, au_buf_cstr(&b));
         au_buf_free(&b);
-    } else if (id == AU_PREF_USER_AGENT && !strcmp(text, AU_DEFAULT_USER_AGENT)) {
-        /* The default is stored as empty, so it follows Aura's version;
-         * clearing the field also returns to the default. */
-        au_prefs_set_str(field, "");
+    } else if (id == AU_PREF_USER_AGENT) {
+        /* The field shows the string sent; only Custom keeps what it
+         * holds. Aura's own string is stored as empty, so it follows
+         * Aura's version, and clearing the field returns to it. */
+        if (e->work.identify != AU_IDENTIFY_CUSTOM)
+            return true;
+        au_prefs_set_str(field, strcmp(text, AU_DEFAULT_USER_AGENT) ? text : "");
+        if (!e->work.user_agent[0])
+            e->work.identify = AU_IDENTIFY_AURA;
     } else {
         au_prefs_set_str(field, text);
     }

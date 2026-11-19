@@ -31,6 +31,10 @@ typedef enum { AU_SCHEME_SYSTEM, AU_SCHEME_LIGHT, AU_SCHEME_DARK } AuColorScheme
  * is lost that the screen would show; the others keep opaque still
  * images in 32, 16 or 8 bits, dithered (au_image_cache_set_depth). */
 typedef enum { AU_IMGCOL_AUTO, AU_IMGCOL_MILLIONS, AU_IMGCOL_THOUSANDS, AU_IMGCOL_256 } AuImageColors;
+/* What the user agent says Aura is (network.identify): Aura on the
+ * platform it runs on, Chrome, Safari, or the custom string
+ * (network.user_agent). See au_prefs_user_agent. */
+typedef enum { AU_IDENTIFY_AURA, AU_IDENTIFY_CHROME, AU_IDENTIFY_SAFARI, AU_IDENTIFY_CUSTOM } AuIdentify;
 
 /* Limits the window and the file parser apply. */
 #define AU_TAB_COLUMN_MIN 100
@@ -86,7 +90,8 @@ typedef struct AuPrefs {
     int http_proxy_port;
     char *https_proxy_host;
     int https_proxy_port;
-    char *user_agent;
+    AuIdentify identify;
+    char *user_agent; /* the custom string, used when identify is AU_IDENTIFY_CUSTOM */
     int memory_cache_kb, disk_cache_kb;
     /* The document cache for Back and Forward: documents kept per tab
      * (0 turns it off) and the memory all kept documents may take. */
@@ -151,8 +156,10 @@ void au_prefs_set_str(char **field, const char *value);
  * and the caller keeps the damaged file aside rather than overwriting it
  * silently. */
 bool au_prefs_parse(AuPrefs *p, const char *data, size_t len);
-/* The user agent to send and to show script: the preference, or Aura's
- * default (AU_DEFAULT_USER_AGENT) when the preference is empty. */
+/* The user agent to send and to show script, from network.identify:
+ * Aura's own (AU_DEFAULT_USER_AGENT), Chrome's or Safari's
+ * (AU_CHROME_USER_AGENT, AU_SAFARI_USER_AGENT), or the custom string
+ * (Aura's own when it is empty). */
 const char *au_prefs_user_agent(const AuPrefs *p);
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out);
 

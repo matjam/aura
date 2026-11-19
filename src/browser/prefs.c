@@ -23,6 +23,7 @@ static const char *const cookie_names[] = {"all", "same-site", "none", NULL};
 static const char *const block_update_names[] = {"daily", "weekly", "never", NULL};
 static const char *const color_scheme_names[] = {"system", "light", "dark", NULL};
 static const char *const image_colors_names[] = {"automatic", "millions", "thousands", "256", NULL};
+static const char *const identify_names[] = {"aura", "chrome", "safari", "custom", NULL};
 
 #define S(n, f) {n, T_STR, offsetof(AuPrefs, f), 0, 0, NULL}
 #define B(n, f) {n, T_BOOL, offsetof(AuPrefs, f), 0, 0, NULL}
@@ -66,6 +67,7 @@ static const Key keys[] = {
     I("proxy.http.port", http_proxy_port, 0, 65535),
     S("proxy.https.host", https_proxy_host),
     I("proxy.https.port", https_proxy_port, 0, 65535),
+    E("network.identify", identify, identify_names),
     S("network.user_agent", user_agent),
     I("cache.memory_kb", memory_cache_kb, 0, 1 << 20),
     I("cache.disk_kb", disk_cache_kb, 0, 1 << 22),
@@ -100,7 +102,7 @@ static bool *bool_field(AuPrefs *p, const Key *k) { return (bool *)((char *)p + 
  * not int-sized (-fshort-enums). */
 typedef char enum_is_int[(sizeof(AuStartup) == sizeof(int) && sizeof(AuTabPosition) == sizeof(int) &&
                           sizeof(AuCookiePolicy) == sizeof(int) && sizeof(AuColorScheme) == sizeof(int) &&
-                          sizeof(AuImageColors) == sizeof(int))
+                          sizeof(AuImageColors) == sizeof(int) && sizeof(AuIdentify) == sizeof(int))
                              ? 1
                              : -1];
 static int *int_field(AuPrefs *p, const Key *k) { return (int *)((char *)p + k->off); }
@@ -147,8 +149,10 @@ void au_prefs_init(AuPrefs *p)
     p->history_days = 30;
     p->http_proxy_port = 8080;
     p->https_proxy_port = 8080;
-    /* Empty: the default (au_prefs_user_agent), so a new Aura version
-     * sends its own string rather than one saved by an older version. */
+    /* Aura's own user agent, built at run time (au_prefs_user_agent), so
+     * a new Aura version sends its own string rather than one saved by an
+     * older version; the custom string starts empty. */
+    p->identify = AU_IDENTIFY_AURA;
     au_prefs_set_str(&p->user_agent, "");
     /* 8 MB: the HTTP cache keeps entries up to a quarter of it, and a
      * Wikipedia article's HTML (1.3 MB) and script bundle must fit for
@@ -316,7 +320,18 @@ static void put_escaped(AuBuf *b, const char *s)
 
 const char *au_prefs_user_agent(const AuPrefs *p)
 {
-    return p && p->user_agent && p->user_agent[0] ? p->user_agent : AU_DEFAULT_USER_AGENT;
+    if (!p)
+        return AU_DEFAULT_USER_AGENT;
+    switch (p->identify) {
+    case AU_IDENTIFY_CHROME: return AU_CHROME_USER_AGENT;
+    case AU_IDENTIFY_SAFARI: return AU_SAFARI_USER_AGENT;
+    case AU_IDENTIFY_CUSTOM:
+        if (p->user_agent && p->user_agent[0])
+            return p->user_agent;
+        break;
+    case AU_IDENTIFY_AURA: break;
+    }
+    return AU_DEFAULT_USER_AGENT;
 }
 
 void au_prefs_serialize(const AuPrefs *p, AuBuf *out)
@@ -355,7 +370,7 @@ static bool valid_key(const char *s, size_t n)
 
 bool au_prefs_parse(AuPrefs *p, const char *data, size_t len)
 {
-    bool ok = true;
+    bool ok = true, saw_identify = false;
     AuBuf key, val;
     au_buf_init(&key);
     au_buf_init(&val);
@@ -404,14 +419,22 @@ bool au_prefs_parse(AuPrefs *p, const char *data, size_t len)
                 au_buf_putc(&val, *v);
             }
         }
+        if (!strcmp(au_buf_cstr(&key), "network.identify"))
+            saw_identify = true;
         au_prefs_set(p, au_buf_cstr(&key), au_buf_cstr(&val));
     }
     au_buf_free(&key);
     au_buf_free(&val);
-    /* A file saved by a version that stored its default string. */
+    /* A file saved by a version that stored its default string: the
+     * Chrome-shaped one with Aura's token (up to 0.9), or an older one. */
     if (p->user_agent && (!strcmp(p->user_agent, AU_DEFAULT_USER_AGENT) ||
+                          strstr(p->user_agent, AU_CHROME_DEFAULT_SUFFIX) ||
                           !strncmp(p->user_agent, AU_OLD_USER_AGENT_PREFIX, strlen(AU_OLD_USER_AGENT_PREFIX)) ||
                           !strncmp(p->user_agent, AU_MACOS9_USER_AGENT_PREFIX, strlen(AU_MACOS9_USER_AGENT_PREFIX))))
         au_prefs_set_str(&p->user_agent, "");
+    /* A file from before network.identify: a string the user set is
+     * their custom one. */
+    if (!saw_identify && p->user_agent && p->user_agent[0])
+        p->identify = AU_IDENTIFY_CUSTOM;
     return ok;
 }

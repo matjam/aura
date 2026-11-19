@@ -38,7 +38,12 @@ class WorkerNavigator {
     get appCodeName() { return 'Mozilla'; }
     get appName() { return 'Netscape'; }
     get appVersion() { return settings.userAgent.replace(/^Mozilla\//, ''); }
-    get platform() { return 'MacPPC'; }
+    /* as the window's navigator (prelude_window.js) */
+    get platform() {
+        const ua = settings.userAgent;
+        return /PPC Mac OS/.test(ua) ? 'MacPPC' : /Mac OS X/.test(ua) ? 'MacIntel' : /Linux x86_64/.test(ua) ? 'Linux x86_64' :
+            /Linux aarch64/.test(ua) ? 'Linux aarch64' : /Windows/.test(ua) ? 'Win32' : settings.platform;
+    }
     get product() { return 'Gecko'; }
     get language() { return settings.language; }
     get languages() { return Object.freeze([settings.language]); }

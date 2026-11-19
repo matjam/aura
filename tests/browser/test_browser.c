@@ -3,6 +3,7 @@
  * and hit testing. Exits non-zero on the first failure. */
 #include "browser/scriptmem.h"
 #include "browser/browser.h"
+#include "browser/credits.h"
 #include "browser/listview.h"
 #include "browser/macroman.h"
 #include "browser/url.h"
@@ -913,8 +914,27 @@ static void test_prefs(void)
     CHECK(p.send_dnt && !p.send_gpc && p.clear_cache_on_quit);
     CHECK(p.cookies == AU_COOKIES_SAME_SITE);
     CHECK_STR(p.user_agent, "Line\nBreak \\ ok");
+    /* a file from before network.identify: its string is the custom one */
+    CHECK(p.identify == AU_IDENTIFY_CUSTOM);
+    CHECK_STR(au_prefs_user_agent(&p), "Line\nBreak \\ ok");
     CHECK(p.font_size == 16); /* missing: default */
     CHECK(p.nextra == 1);
+    {
+        /* the Chrome-shaped default up to 0.9, saved: Aura's own again */
+        AuPrefs o;
+        au_prefs_init(&o);
+        static const char old[] = "network.user_agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
+                                  "Gecko) Chrome/150.0.0.0 Safari/537.36 Aura/0.8.0\n";
+        CHECK(au_prefs_parse(&o, old, sizeof old - 1));
+        CHECK(o.identify == AU_IDENTIFY_AURA && !o.user_agent[0]);
+        CHECK_STR(au_prefs_user_agent(&o), AU_DEFAULT_USER_AGENT);
+        /* a saved choice with a kept custom string stays the choice */
+        static const char chosen[] = "network.identify=safari\nnetwork.user_agent=Mine/1\n";
+        CHECK(au_prefs_parse(&o, chosen, sizeof chosen - 1));
+        CHECK(o.identify == AU_IDENTIFY_SAFARI);
+        CHECK_STR(au_prefs_user_agent(&o), AU_SAFARI_USER_AGENT);
+        au_prefs_free(&o);
+    }
 
     /* Change more, then round trip. */
     p.tab_column_width = 222;

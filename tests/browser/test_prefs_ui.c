@@ -65,7 +65,7 @@ static const char *const shown_keys[] = {
     "security.legacy_tls", "privacy.warn_app_downloads", "privacy.cookies", "privacy.block_third_party_cookies",
     "history.enabled", "history.days", "privacy.clear_history_on_quit", "privacy.clear_cookies_on_quit",
     "privacy.clear_cache_on_quit", "proxy.http.host", "proxy.http.port", "proxy.https.host", "proxy.https.port",
-    "network.user_agent", "cache.memory_kb", "cache.disk_kb", "tabs.unload_low_memory", "downloads.folder",
+    "network.identify", "network.user_agent", "cache.memory_kb", "cache.disk_kb", "tabs.unload_low_memory", "downloads.folder",
     "downloads.decode", "privacy.block_trackers", "blocking.lists", "blocking.update", "blocking.custom",
     "blocking.allow", "blocking.block",
 };
@@ -282,13 +282,34 @@ static void test_clamping(const AuPrefsHost *host)
     au_prefs_edit_set_choice(e, AU_PREF_BLOCK_UPDATE, -1);
     CHECK(au_prefs_edit_get_choice(e, AU_PREF_BLOCK_UPDATE) == AU_BLOCK_UPDATE_DAILY, "below range is daily");
 
-    /* The user agent: the default shows, and is stored as empty. */
+    /* The user agent: Identify as Aura by default, which names no other
+     * browser; the field shows the string sent and is editable only for
+     * Custom. */
+    CHECK(au_prefs_edit_get_choice(e, AU_PREF_IDENTIFY) == AU_IDENTIFY_AURA, "Aura by default");
     CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_DEFAULT_USER_AGENT), "the default user agent shows");
+    CHECK(!strstr(AU_DEFAULT_USER_AGENT, "Chrome") && !strstr(AU_DEFAULT_USER_AGENT, "Safari") &&
+              strstr(AU_DEFAULT_USER_AGENT, " Aura/"),
+          "Aura's user agent claims another browser: %s", AU_DEFAULT_USER_AGENT);
+    CHECK(!au_prefs_edit_enabled(e, AU_PREF_USER_AGENT), "the field is editable without Custom");
     au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, "Mozilla/1.0");
-    CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, "Mozilla/1.0"), "a user agent is kept");
-    au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, AU_DEFAULT_USER_AGENT);
-    CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, ""), "the default is stored empty");
+    CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, ""), "text kept without Custom");
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_CHROME);
+    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_CHROME_USER_AGENT), "Chrome's string shows");
+    CHECK(!strstr(AU_CHROME_USER_AGENT, "Aura") && !strstr(AU_CHROME_USER_AGENT, "PPC"), "Chrome's string: %s",
+          AU_CHROME_USER_AGENT);
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_SAFARI);
+    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_SAFARI_USER_AGENT), "Safari's string shows");
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_CUSTOM);
+    CHECK(au_prefs_edit_enabled(e, AU_PREF_USER_AGENT), "the field is not editable for Custom");
+    au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, "Mozilla/1.0");
+    CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, "Mozilla/1.0"), "a custom user agent is kept");
+    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), "Mozilla/1.0"), "the custom user agent shows");
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_AURA);
+    CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_DEFAULT_USER_AGENT), "back to Aura's own");
+    CHECK(!strcmp(au_prefs_edit_prefs(e)->user_agent, "Mozilla/1.0"), "the custom string is kept for later");
+    au_prefs_edit_set_choice(e, AU_PREF_IDENTIFY, AU_IDENTIFY_CUSTOM);
     au_prefs_edit_set_text(e, AU_PREF_USER_AGENT, "");
+    CHECK(au_prefs_edit_get_choice(e, AU_PREF_IDENTIFY) == AU_IDENTIFY_AURA, "an empty custom string is Aura");
     CHECK(!strcmp(text_of(e, AU_PREF_USER_AGENT, &b), AU_DEFAULT_USER_AGENT), "cleared is the default");
 
     /* The blocking fields. */

@@ -90,11 +90,34 @@ keeps").
 
 ## The user agent
 
-Aura sends a Chrome-shaped user agent with its own token at the end
-(`AU_DEFAULT_USER_AGENT` in `src/browser/credits.h`). The platform part
-is the platform the build runs on (`src/core/uaplatform.h`, chosen by
-CMake as `AU_UA_KIND`), and `navigator.platform` and `navigator.oscpu`
-follow it:
+To choose what Aura says it is, use Preferences > Network > Identify
+as (`network.identify`, `au_prefs_user_agent` in `src/browser/prefs.c`):
+
+| Choice | User agent |
+|---|---|
+| Aura (the default) | `Mozilla/5.0 (PLATFORM) Aura/VERSION` (`AU_DEFAULT_USER_AGENT`): the real platform and browser, no other browser named |
+| Chrome | Chrome's string (`AU_CHROME_USER_AGENT`), with no Aura token; on Mac OS 9 it names macOS, where Chrome runs |
+| Safari | Safari's macOS string (`AU_SAFARI_USER_AGENT`) |
+| Custom | the User agent field (`network.user_agent`); empty is Aura's own |
+
+- The User agent field shows the string being sent, and only Custom
+  makes it editable.
+- `navigator.vendor` follows the string: "Google Inc." for Chrome's,
+  "Apple Computer, Inc." for Safari's, empty for Aura's.
+  `navigator.platform` names the platform the string names, in windows
+  and workers alike.
+- Aura's own string is the default since 2026-11-19. Before that, Aura
+  sent Chrome's string with an `Aura/` token at the end. A browser that
+  claims to be Chrome but lacks WebAssembly, WebGL and WebRTC looks like
+  a bot to risk checks such as hCaptcha's (Discord's login).
+- A file from before `network.identify` that holds a string the user
+  set loads as Custom. The old Chrome-shaped default loads as Aura.
+- `AU_UA_CHROME_VERSION` and `AU_UA_SAFARI_VERSION` (`credits.h`) are
+  updated with each release.
+
+The platform part of Aura's own string is the platform the build runs
+on (`src/core/uaplatform.h`, chosen by CMake as `AU_UA_KIND`), and
+`navigator.oscpu` follows it:
 
 | Build | Platform part | `navigator.platform` |
 |---|---|---|
@@ -104,19 +127,15 @@ follow it:
 
 - macOS on any processor says `Intel Mac OS X 10_15_7`, the version
   Chrome and Safari froze.
-- **Never send another platform's part.** Slashdot's Cloudflare rule
-  (2026-11-17) answers every request whose user agent says `PPC Mac OS
-  9` with a managed challenge, even one that carries a `cf_clearance`
-  cookie from a solved challenge, so the page reloaded into the
-  challenge after every tick. The same string with the macOS or Linux
-  part, `Aura/` token included, loads directly. Mac OS 9 still gets the
-  challenge there.
-- `network.user_agent` (Preferences > Network) replaces the string;
-  empty is the default. A saved string equal to the default, the old
-  `Aura/` form, or the Mac OS 9 Chrome form earlier versions sent from
-  every platform is read as empty. `au_net_apply_prefs` sets the header
-  from `au_prefs_user_agent`, so clearing a custom string goes back to
-  the default.
+- **Aura's own string never sends another platform's part.** Slashdot's
+  Cloudflare rule (2026-11-17) answers every request whose user agent
+  says `PPC Mac OS 9` with a managed challenge, even one that carries a
+  `cf_clearance` cookie from a solved challenge, so the page reloaded
+  into the challenge after every tick. The same string with the macOS
+  or Linux part loads directly. Mac OS 9 still gets the challenge
+  there unless the user chooses Chrome or Safari.
+- `au_net_apply_prefs` sets the header from `au_prefs_user_agent`, and
+  each new document's `navigator.userAgent` takes the same string.
 
 ## Cookies and `document.cookie`
 

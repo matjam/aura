@@ -250,6 +250,12 @@ defProps(WP, { get history() { return theHistory; } });
 /* Fixed strings only: nothing here describes the machine beyond what the
  * settings name (privacy). */
 class Navigator { constructor() { throw new TypeError('Illegal constructor'); } }
+/* vendor and platform agree with the user agent the user chose
+ * (Preferences > Network > Identify as): Chrome's vendor is Google's,
+ * Safari's Apple's, and the platform is the one the string names. */
+const uaVendor = (ua) => (/ Chrome\/\d/.test(ua) ? 'Google Inc.' : / Version\/[\d.]+.* Safari\//.test(ua) ? 'Apple Computer, Inc.' : '');
+const uaPlatform = (ua, own) => (/PPC Mac OS/.test(ua) ? 'MacPPC' : /Mac OS X/.test(ua) ? 'MacIntel' :
+    /Linux x86_64/.test(ua) ? 'Linux x86_64' : /Linux aarch64/.test(ua) ? 'Linux aarch64' : /Windows/.test(ua) ? 'Win32' : own);
 const navProps = {
     get userAgent() { return settings.userAgent; },
     get appVersion() { return settings.userAgent.replace(/^Mozilla\//, ''); },
@@ -257,9 +263,9 @@ const navProps = {
     get appCodeName() { return 'Mozilla'; },
     get product() { return 'Gecko'; },
     get productSub() { return '20030107'; },
-    get vendor() { return ''; },
+    get vendor() { return uaVendor(settings.userAgent); },
     get vendorSub() { return ''; },
-    get platform() { return settings.platform; },
+    get platform() { return uaPlatform(settings.userAgent, settings.platform); },
     get oscpu() { return settings.oscpu; },
     get language() { return settings.language; },
     get languages() { return Object.freeze([settings.language]); },

@@ -243,6 +243,7 @@ static void test_report(void)
     au_prefs_set_str(&pr->download_folder, "Macintosh HD:Private Folder");
     au_prefs_set_str(&pr->http_proxy_host, "proxy.secret.example");
     au_prefs_set_str(&pr->search_template, "http://search.secret.example/?q=%s");
+    pr->identify = AU_IDENTIFY_CUSTOM;
     au_prefs_set_str(&pr->user_agent, "CustomAgent/1.0 (test)");
     au_prefs_set_str(&pr->block_allow, "allowed-one.example allowed-two.example");
     au_prefs_set_str(&pr->zoom_sites, "zoomed.example=150");
