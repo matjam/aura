@@ -45,7 +45,7 @@ typedef struct AuGtkWin {
     GtkWidget *search_bar, *search_entry;
     GtkWidget *area, *vscroll, *hscroll;
     GtkAdjustment *hadj, *vadj;
-    GtkWidget *status, *progress;
+    GtkWidget *status, *progress, *memory; /* memory: View > Show Memory Use */
     /* The page's pixels: a Cairo image surface the model paints into
      * through an AuSurface over the same memory (docs/gtk.md, "HiDPI"). */
     cairo_surface_t *cs;

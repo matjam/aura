@@ -60,6 +60,8 @@
      * while there is some. */
     NSView *statusBubble;
     NSTextField *status;
+    NSView *memoryBubble; /* View > Show Memory Use: over the page's bottom right corner */
+    NSTextField *memory;
     /* The page's pixels: a bitmap the model paints into through an
      * AuSurface over the same memory (docs/cocoa.md, "HiDPI"). */
     void *pixels;

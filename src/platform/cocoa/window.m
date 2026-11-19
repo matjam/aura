@@ -608,6 +608,13 @@ static NSImage *icon_image(const AuSurface *s)
         bw = maxw;
     w->statusBubble.frame = NSMakeRect(x0 - 1, y0 + ph - STATUS_HEIGHT + 1, bw, STATUS_HEIGHT);
     w->status.frame = NSMakeRect(8, 3, bw - 16, STATUS_HEIGHT - 6);
+    /* The memory readout: the same, at the bottom right. */
+    NSSize ms = w->memory.intrinsicContentSize;
+    CGFloat mw = ceil(ms.width) + 16;
+    if (mw > maxw)
+        mw = maxw;
+    w->memoryBubble.frame = NSMakeRect(x0 + pwid - mw + 1, y0 + ph - STATUS_HEIGHT + 1, mw, STATUS_HEIGHT);
+    w->memory.frame = NSMakeRect(8, 3, mw - 16, STATUS_HEIGHT - 6);
 }
 
 - (void)drawRect:(NSRect)dirty
@@ -715,6 +722,18 @@ static void sync_status(AuCocoaWin *w)
     w->statusBubble.hidden = !str.length;
     if (![str isEqualToString:w->status.stringValue]) {
         w->status.stringValue = str;
+        w->body.needsLayout = YES;
+    }
+}
+
+static void sync_memory(AuCocoaWin *w)
+{
+    char s[128];
+    au_bw_memory_text(w->bw, s, sizeof s);
+    NSString *str = au_cocoa_str(s);
+    w->memoryBubble.hidden = !str.length;
+    if (![str isEqualToString:w->memory.stringValue]) {
+        w->memory.stringValue = str;
         w->body.needsLayout = YES;
     }
 }
@@ -1203,6 +1222,18 @@ AuCocoaWin *au_cocoa_win_new(int width, int height)
     w->status.cell.usesSingleLineMode = YES;
     [bubble addSubview:w->status];
     [body addSubview:bubble]; /* last: over the page */
+    AuFillView *mbubble = [[AuFillView alloc] initWithFill:NSColor.windowBackgroundColor];
+    mbubble.stroke = NSColor.separatorColor;
+    mbubble.radius = 5;
+    mbubble.hidden = YES;
+    w->memoryBubble = mbubble;
+    w->memory = [NSTextField labelWithString:@""];
+    w->memory.font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
+    w->memory.textColor = NSColor.secondaryLabelColor;
+    w->memory.lineBreakMode = NSLineBreakByTruncatingTail;
+    w->memory.cell.usesSingleLineMode = YES;
+    [mbubble addSubview:w->memory];
+    [body addSubview:mbubble];
 
     /* Below the toolbar: the content view is the whole window
      * (FullSizeContentView), so the body sits in the layout guide. */
@@ -1303,6 +1334,8 @@ static void apply_changes(AuCocoaWin *w)
     }
     if (what & (AU_CHANGED_STATUS | AU_CHANGED_ACTIVE_TAB))
         sync_status(w);
+    if (what & (AU_CHANGED_MEMORY | AU_CHANGED_ACTIVE_TAB))
+        sync_memory(w);
     if (what & (AU_CHANGED_PROGRESS | AU_CHANGED_NAV | AU_CHANGED_ACTIVE_TAB))
         sync_progress(w);
     if (what & (AU_CHANGED_MENUS | AU_CHANGED_BOOKMARK))

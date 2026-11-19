@@ -1587,6 +1587,22 @@ void au_docscript_heap(const AuDocScript *s, size_t *used, size_t *limit)
     *limit = st.memory_limit;
 }
 
+void au_docscript_usage(const AuDocScript *s, size_t *page_used, size_t *page_limit, size_t *worker_used,
+                        size_t *worker_limit, int *workers)
+{
+    *page_used = *page_limit = *worker_used = *worker_limit = 0;
+    *workers = 0;
+    if (!s->js)
+        return;
+    AuJsStats st;
+    au_js_stats(s->js, &st);
+    *worker_used = st.worker_used;
+    *page_used = st.runtime_used;
+    *page_limit = st.memory_limit;
+    *worker_limit = st.worker_limit;
+    *workers = st.workers;
+}
+
 void au_docscript_memory_summary(const AuDocScript *s, AuBuf *out)
 {
     if (s && s->js)

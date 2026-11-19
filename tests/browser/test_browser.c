@@ -757,11 +757,19 @@ static void test_script_memory_prefs(void)
     CHECK(q.script_memory_kb == 49152 && q.worker_memory_kb == 12288);
     au_prefs_free(&q);
 
-    /* clamping: too small, too large, negative, and back to Automatic */
+    /* clamping: too small, too large, negative (Unlimited), and back to Automatic */
     static const char small[] = "content.script_memory_kb=100\ncontent.worker_memory_kb=999999999\n";
     CHECK(au_prefs_parse(&p, small, sizeof small - 1));
     CHECK(p.script_memory_kb == 4096 && p.worker_memory_kb == 262144);
     au_prefs_set(&p, "content.script_memory_kb", "-5");
+    CHECK(p.script_memory_kb == AU_MEM_UNLIMITED);
+    {
+        AuBuf u;
+        au_buf_init(&u);
+        CHECK(au_prefs_get(&p, "content.script_memory_kb", &u) && !strcmp(au_buf_cstr(&u), "-1"));
+        au_buf_free(&u);
+    }
+    au_prefs_set(&p, "content.script_memory_kb", "0");
     CHECK(p.script_memory_kb == 0);
     au_prefs_set(&p, "content.worker_memory_kb", "0");
     CHECK(p.worker_memory_kb == 0);
@@ -787,6 +795,17 @@ static void test_script_memory_prefs(void)
     CHECK(page == 25 * 1024 && worker == 20000);
     au_script_memory_limits(1000, 0, 0, &page, &worker);
     CHECK(page == 4096 && worker == 32768 * AU_SCRIPT_MEM_SCALE);
+    /* Unlimited: any negative value; the limit is half the address space
+     * in bytes, which reads back as Unlimited. */
+    CHECK(au_script_memory_clamp(-1) == AU_MEM_UNLIMITED && au_script_memory_clamp(-7) == AU_MEM_UNLIMITED);
+    au_script_memory_limits(AU_MEM_UNLIMITED, AU_MEM_UNLIMITED, 50 * 1024, &page, &worker);
+    CHECK(page == AU_MEM_UNLIMITED_KB && worker == AU_MEM_UNLIMITED_KB);
+    CHECK(au_image_memory_limit(AU_MEM_UNLIMITED, 0) == AU_MEM_UNLIMITED_KB);
+    CHECK(au_memory_kb_bytes(AU_MEM_UNLIMITED_KB) == (size_t)-1 / 2);
+    CHECK(au_memory_kb_bytes(4096) == 4096u * 1024);
+    CHECK(au_memory_bytes_kb((size_t)-1 / 2) == AU_MEM_UNLIMITED_KB);
+    CHECK(au_memory_bytes_kb((size_t)4096 * 1024) == 4096);
+    CHECK(au_memory_bytes_kb(0) == 0);
 }
 
 /* The Appearance preference: stored as system, light or dark; a file

@@ -171,10 +171,16 @@ static const char *const kind_titles[AU_PERF_KINDS] = {"Script", "Style", "Layou
 
 #define TIME_ROW "  %-18s %7s %7s   %10s %9s   "
 
+#include "scriptmem.h"
+
 static void mem_row(AuBuf *out, const char *name, uint32_t used_kb, uint32_t limit_kb, const char *note)
 {
     char u[24], l[24];
-    au_buf_printf(out, "  %-18s %10s %10s   ", name, s_kb(u, sizeof u, used_kb), limit_kb ? s_kb(l, sizeof l, limit_kb) : "");
+    bool unlimited = limit_kb == AU_MEM_UNLIMITED_KB;
+    au_buf_printf(out, "  %-18s %10s %10s   ", name, s_kb(u, sizeof u, used_kb),
+                  unlimited ? "unlimited" : limit_kb ? s_kb(l, sizeof l, limit_kb) : "");
+    if (unlimited)
+        limit_kb = 0; /* no bar */
     if (limit_kb) {
         au_put_bar(out, used_kb, limit_kb, 20);
         au_buf_printf(out, " %3u %%", percent(used_kb, limit_kb));
@@ -304,7 +310,7 @@ void au_dev_perf_report(AuPage *p, const AuDevHostInfo *h, uint32_t now_ms, AuBu
     size_t js_used, js_limit;
     au_page_script_memory(p, &js_used, &js_limit);
     if (js_limit)
-        mem_row(out, "Script heap", (uint32_t)((js_used + 1023) / 1024), (uint32_t)(js_limit / 1024), NULL);
+        mem_row(out, "Script heap", (uint32_t)((js_used + 1023) / 1024), au_memory_bytes_kb(js_limit), NULL);
     else
         au_buf_printf(out, "  %-18s %10s\n", "Script heap", "none");
     mem_row(out, "Decoded images", st.image_kb, st.image_budget_kb, NULL);

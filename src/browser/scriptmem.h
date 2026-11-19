@@ -2,7 +2,8 @@
  * worker's, may allocate.
  *
  * Each limit is a preference (content.script_memory_kb,
- * content.worker_memory_kb) holding 0 for Automatic or a number of KB.
+ * content.worker_memory_kb) holding 0 for Automatic, -1 for Unlimited
+ * or a number of KB.
  * Automatic follows the memory the machine has free when a page starts:
  *
  *   page   = half of what is free, at least 8 MB, at most 96 MB (192 MB
@@ -28,6 +29,7 @@
 #ifndef AURA_BROWSER_SCRIPTMEM_H
 #define AURA_BROWSER_SCRIPTMEM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define AU_SCRIPT_MEM_CUSTOM_MIN_KB (4u * 1024)
@@ -50,9 +52,22 @@
 /* What Automatic gives with free_kb of memory free (0: unknown), rounded
  * down to whole megabytes. */
 void au_script_memory_auto(uint32_t free_kb, uint32_t *page_kb, uint32_t *worker_kb);
-/* A preference value as stored: 0 stays 0 (Automatic), anything else is
- * clamped to the custom range. */
+/* Unlimited: the preference value (any negative value reads as it), and
+ * the limit in KB the functions below return for it. An unlimited
+ * runtime or image cache is still refused memory when the machine runs
+ * short (au_memory_low), as every allocation is. */
+#define AU_MEM_UNLIMITED (-1)
+#define AU_MEM_UNLIMITED_KB UINT32_MAX
+/* A preference value as stored: 0 stays 0 (Automatic), a negative value
+ * is AU_MEM_UNLIMITED, anything else is clamped to the custom range. */
 int au_script_memory_clamp(int kb);
+/* A limit in KB as bytes: AU_MEM_UNLIMITED_KB (or a value too large) is
+ * half the address space, so that the engine's limit plus its reserve
+ * cannot overflow. */
+size_t au_memory_kb_bytes(uint32_t kb);
+/* The reverse, for showing a limit: half the address space or more is
+ * AU_MEM_UNLIMITED_KB. */
+uint32_t au_memory_bytes_kb(size_t bytes);
 /* The limits in force: the preference when it is not 0, else Automatic. */
 void au_script_memory_limits(int pref_page_kb, int pref_worker_kb, uint32_t free_kb, uint32_t *page_kb,
                              uint32_t *worker_kb);

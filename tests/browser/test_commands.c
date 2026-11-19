@@ -409,6 +409,21 @@ static void test_run(void)
     au_command_run(&st, &host, AU_CMD_VIEW_TABS_TOP);
     CHECK(b->prefs.tab_position == AU_TABS_TOP);
 
+    /* Show Memory Use toggles the preference and carries a check mark. */
+    CHECK(au_command_checkable(AU_CMD_VIEW_SHOW_MEMORY) && au_command_checkable(AU_CMD_VIEW_TABS_LEFT) &&
+          !au_command_checkable(AU_CMD_VIEW_RELOAD));
+    CHECK(!b->prefs.show_memory && !au_command_checked(&st, AU_CMD_VIEW_SHOW_MEMORY));
+    CHECK(au_command_enabled(&st, AU_CMD_VIEW_SHOW_MEMORY));
+    au_command_run(&st, &host, AU_CMD_VIEW_SHOW_MEMORY);
+    CHECK(b->prefs.show_memory && au_command_checked(&st, AU_CMD_VIEW_SHOW_MEMORY));
+    {
+        char mt[128];
+        au_bw_memory_text(st.window, mt, sizeof mt);
+        CHECK(!strncmp(mt, "Script ", 7));
+    }
+    au_command_run(&st, &host, AU_CMD_VIEW_SHOW_MEMORY);
+    CHECK(!b->prefs.show_memory);
+
     /* Add Bookmark. */
     CHECK(au_bookmark_find_url(&b->bookmarks, "about:fonts") == NULL);
     au_command_run(&st, &host, AU_CMD_BOOKMARKS_ADD);

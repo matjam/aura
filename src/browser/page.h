@@ -710,6 +710,16 @@ AuPerf *au_page_perf(AuPage *p);
 /* Bytes the page's script runtime has allocated, and its limit (0, 0
  * when it has none). */
 void au_page_script_memory(const AuPage *p, size_t *used, size_t *limit);
+/* What the page holds against each of its limits (Preferences > Content),
+ * for the memory readout (View > Show Memory Use). A limit of
+ * AU_MEM_UNLIMITED_KB (scriptmem.h) is Unlimited; 0 is none yet. */
+typedef struct AuPageMemory {
+    uint32_t script_kb, script_limit_kb; /* the page's runtime, its frames' documents included */
+    uint32_t worker_kb, worker_limit_kb; /* all its workers; one worker's limit */
+    int workers;
+    uint32_t image_kb, image_limit_kb; /* decoded images */
+} AuPageMemory;
+void au_page_memory_use(const AuPage *p, AuPageMemory *m);
 /* A line per script runtime, document and worker of the page (bytes now,
  * peak, limit), for the Performance report; and the peaks alone. */
 void au_page_script_summary(const AuPage *p, AuBuf *out);

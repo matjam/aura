@@ -88,6 +88,7 @@ typedef enum AuCommand {
     AU_CMD_VIEW_ACTUAL_SIZE,
     AU_CMD_VIEW_TABS_TOP,
     AU_CMD_VIEW_TABS_LEFT,
+    AU_CMD_VIEW_SHOW_MEMORY, /* the memory readout in the status bar (AuPrefs.show_memory) */
     AU_CMD_GO_BACK,
     AU_CMD_GO_FORWARD,
     AU_CMD_GO_HOME,
@@ -281,6 +282,8 @@ bool au_command_enabled(const AuCommandState *st, AuCommand cmd);
  * au_command_enabled. */
 AuCommand au_command_for_key(const AuCommandState *st, char key, unsigned mods);
 bool au_command_checked(const AuCommandState *st, AuCommand cmd);
+/* The command's menu item carries a check mark (au_command_checked). */
+bool au_command_checkable(AuCommand cmd);
 /* The title to show now: the table's, or for a command whose title
  * follows the state (AU_CMD_TOGGLE_BLOCKING) the current one. */
 const char *au_command_title(const AuCommandState *st, AuCommand cmd);

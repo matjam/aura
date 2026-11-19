@@ -2099,6 +2099,15 @@ void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit)
         au_docscript_heap(dv->script, used, limit);
 }
 
+void au_docview_script_usage(const AuDocView *dv, size_t *page_used, size_t *page_limit, size_t *worker_used,
+                             size_t *worker_limit, int *workers)
+{
+    *page_used = *page_limit = *worker_used = *worker_limit = 0;
+    *workers = 0;
+    if (dv->script)
+        au_docscript_usage(dv->script, page_used, page_limit, worker_used, worker_limit, workers);
+}
+
 void au_docview_script_summary(const AuDocView *dv, AuBuf *out)
 {
     if (dv->script)

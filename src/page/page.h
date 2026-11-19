@@ -376,6 +376,9 @@ bool au_docview_content_loaded(const AuDocView *dv);
 /* Bytes the document's script runtime has allocated and its limit; 0, 0
  * without a runtime. */
 void au_docview_script_memory(const AuDocView *dv, size_t *used, size_t *limit);
+/* The page's runtime and its workers apart (au_docscript_usage). */
+void au_docview_script_usage(const AuDocView *dv, size_t *page_used, size_t *page_limit, size_t *worker_used,
+                             size_t *worker_limit, int *workers);
 /* Script memory in detail: a line per runtime, document and worker of
  * the page (bytes now, peak, limit), and the peaks alone (the page's
  * runtime; the largest live worker). */

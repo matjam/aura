@@ -90,6 +90,14 @@ Pages load asynchronously: `au_page_navigate` only starts a load, and
   `au_page_idle` advances animations.
 - While a page loads, the status bar shows its progress in the middle
   (`AuChromeState.progress_text`).
+- With View > Show Memory Use (`AU_CMD_VIEW_SHOW_MEMORY`, the
+  `view.show_memory` preference), the status bar's right end shows the
+  active page's memory (`AuChromeState.memory_text`, left of the blocked
+  count; [`memory.md`](memory.md), "To watch a page's memory while you
+  use it"). `au_bw_idle` measures it about once a second and on a tab
+  switch, and raises `AU_CHANGED_MEMORY` when the text changes; a port
+  with native chrome shows `au_bw_memory_text` itself. A command whose
+  menu item carries a check mark answers `au_command_checkable`.
 
 ## Scrolling while script runs
 

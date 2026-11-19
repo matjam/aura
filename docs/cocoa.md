@@ -126,6 +126,9 @@ as in Safari. The model's window is made with
   what a load is doing) shows in a bubble over the page's bottom left
   corner, at most two thirds of the page wide, and only while there is
   some. The window has no status bar.
+- The memory readout (View > Show Memory Use, `au_bw_memory_text`)
+  shows in a second bubble over the page's bottom right corner, in
+  digits of one width, while the preference is on.
 - The tab strip lies on an `NSVisualEffectView` of the toolbar's
   material (the sidebar material for tabs on the left), and the window
   draws no separator under the toolbar, so the toolbar and the strip

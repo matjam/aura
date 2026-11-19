@@ -533,9 +533,8 @@ static void apply_font_prefs(AuPage *p)
     /* Decoded images: the preference, or Automatic from the memory free
      * (au_image_memory_limit in scriptmem.h). */
     au_docview_set_image_budget(
-        p->dv, (size_t)au_image_memory_limit(pr ? pr->image_memory_kb : 0,
-                                             p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0) *
-                   1024);
+        p->dv, au_memory_kb_bytes(au_image_memory_limit(
+                   pr ? pr->image_memory_kb : 0, p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0)));
     /* The bits decoded images are kept in: the preference, or Automatic
      * from the screen's depth, which shows no more than that. */
     int bits = 32;
@@ -2800,7 +2799,7 @@ static void begin_doc(AuPage *p, const char *url)
         au_script_memory_limits(p->env.prefs ? p->env.prefs->script_memory_kb : 0,
                                 p->env.prefs ? p->env.prefs->worker_memory_kb : 0,
                                 p->env.memory_free_kb ? p->env.memory_free_kb(p->env.ctx) : 0, &page_kb, &worker_kb);
-        au_docview_set_script_memory(p->dv, (size_t)page_kb * 1024, (size_t)worker_kb * 1024);
+        au_docview_set_script_memory(p->dv, au_memory_kb_bytes(page_kb), au_memory_kb_bytes(worker_kb));
     }
     au_docview_set_script_hints(p->dv, p->env.script_hints ? p->env.script_hints(p->env.ctx) : NULL);
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
@@ -5056,11 +5055,26 @@ void au_page_stats(const AuPage *p, AuPageStats *s)
     s->image_decodes = is.decodes;
     s->image_evictions = is.evictions;
     s->image_kb = (uint32_t)(is.decoded_bytes / 1024);
-    s->image_budget_kb = (uint32_t)(is.budget / 1024);
+    s->image_budget_kb = au_memory_bytes_kb(is.budget);
     s->image_bytes_kb = (uint32_t)(is.compressed_bytes / 1024);
     s->source_bytes = (uint32_t)source_len(&p->src);
     s->source_held = (uint32_t)source_held(&p->src);
     s->source_pack_ms = p->src.pack_ms;
+}
+
+void au_page_memory_use(const AuPage *p, AuPageMemory *m)
+{
+    memset(m, 0, sizeof *m);
+    size_t pu, pl, wu, wl;
+    au_docview_script_usage(p->dv, &pu, &pl, &wu, &wl, &m->workers);
+    m->script_kb = au_memory_bytes_kb(pu);
+    m->script_limit_kb = au_memory_bytes_kb(pl);
+    m->worker_kb = au_memory_bytes_kb(wu);
+    m->worker_limit_kb = au_memory_bytes_kb(wl);
+    AuImageCacheStats is;
+    au_docview_image_stats(p->dv, &is);
+    m->image_kb = au_memory_bytes_kb(is.decoded_bytes);
+    m->image_limit_kb = au_memory_bytes_kb(is.budget);
 }
 
 /* ---- Scrolling by moving pixels ---- */

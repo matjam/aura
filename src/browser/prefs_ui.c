@@ -21,7 +21,8 @@ static const char *const tab_choices[] = {"Along the top", "Down the left side",
 static const char *const appearance_choices[] = {"Same as system", "Light", "Dark", NULL};
 static const char *const image_colors_choices[] = {"Same as the screen", "Millions", "Thousands", "256 (dithered)",
                                                     NULL};
-static const char *const memory_choices[] = {"Automatic", "Custom", NULL};
+/* Indexes are AuPrefsEdit.mem_mode: 0 Automatic, 1 Custom, 2 Unlimited. */
+static const char *const memory_choices[] = {"Automatic", "Custom", "Unlimited", NULL};
 static const char *const cookie_choices[] = {"Accept all", "Same-site only", "Block all", NULL};
 static const char *const update_choices[] = {"Every day", "Every week", "Never", NULL};
 static const char *const identify_choices[] = {"Aura", "Chrome", "Safari", "Firefox", "Custom", NULL};
@@ -242,11 +243,12 @@ static int *mem_field(AuPrefs *p, int slot)
     return slot == 2 ? &p->image_memory_kb : slot ? &p->worker_memory_kb : &p->script_memory_kb;
 }
 
-/* Automatic shows what it gives now, ready to edit after a switch to Custom. */
+/* Automatic and Unlimited show what Automatic gives now, ready to edit
+ * after a switch to Custom. */
 static void load_memory(AuPrefsEdit *e, int slot, int kb)
 {
-    e->mem_mode[slot] = kb ? 1 : 0;
-    e->mem_mb[slot] = (int)((kb ? (uint32_t)kb : auto_kb(e, slot)) / 1024);
+    e->mem_mode[slot] = kb < 0 ? 2 : kb ? 1 : 0;
+    e->mem_mb[slot] = (int)((kb > 0 ? (uint32_t)kb : auto_kb(e, slot)) / 1024);
 }
 
 static char *dup_or_null(const char *s)
@@ -514,8 +516,10 @@ bool au_prefs_edit_set_text(AuPrefsEdit *e, AuPrefId id, const char *text)
             return au_prefs_edit_set_int(e, id, v);
         /* Not a number: the value the preference had when the window opened. */
         int slot = mem_slot(id);
-        if (slot >= 0)
-            au_prefs_edit_set_int(e, id, *mem_field((AuPrefs *)&e->orig, slot) / 1024);
+        if (slot >= 0) {
+            int kb = *mem_field((AuPrefs *)&e->orig, slot);
+            au_prefs_edit_set_int(e, id, kb > 0 ? kb / 1024 : 0); /* Automatic or Unlimited: the floor */
+        }
         else
             au_prefs_edit_set_int(e, id, *int_at(&e->orig, d));
         return false;
@@ -679,7 +683,7 @@ void au_prefs_edit_text(const AuPrefsEdit *e, AuPrefId id, AuBuf *out)
         au_buf_printf(out,
                       "How much memory the scripts of one page, each worker a page starts, and a page's decoded "
                       "images may use. Automatic follows the memory free on %s when a page starts. A custom limit is "
-                      "%u to %u MB. A page whose script reaches its limit says so in the Console; images past theirs "
+                      "%u to %u MB; Unlimited sets none. A page whose script reaches its limit says so in the Console; images past theirs "
                       "are decoded again when shown. Changes apply to pages loaded afterwards.",
                       machine, AU_SCRIPT_MEM_CUSTOM_MIN_KB / 1024, AU_SCRIPT_MEM_CUSTOM_MAX_KB / 1024);
         return;
@@ -791,9 +795,12 @@ bool au_prefs_edit_apply(const AuPrefsEdit *e, AuPrefs *prefs)
     for (int i = 0; i < AU_PREF_COUNT; i++)
         if (copy_item(&descs[i], prefs, &e->work))
             changed = true;
-    /* Automatic is stored as 0, so it follows Aura's policy. */
+    /* Automatic is stored as 0, so it follows Aura's policy; Unlimited as
+     * AU_MEM_UNLIMITED. */
     for (int slot = 0; slot < 3; slot++) {
-        int kb = e->mem_mode[slot] ? au_script_memory_clamp(e->mem_mb[slot] * 1024) : 0;
+        int kb = e->mem_mode[slot] == 2   ? AU_MEM_UNLIMITED
+                 : e->mem_mode[slot] == 1 ? au_script_memory_clamp(e->mem_mb[slot] * 1024)
+                                          : 0;
         int *field = mem_field(prefs, slot);
         if (*field != kb) {
             *field = kb;

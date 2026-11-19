@@ -78,7 +78,8 @@ enum {
     AU_CHANGED_STATUS = 2048,    /* the status bar's text (au_bw_status_text) */
     AU_CHANGED_SECURITY = 4096,  /* the active tab's security state (au_bw_security) */
     AU_CHANGED_PROGRESS = 8192,  /* a tab's load progress, or the active tab's progress text or blocked count */
-    AU_CHANGED_BOOKMARK = 16384  /* whether the active page is bookmarked (au_bw_is_bookmarked) */
+    AU_CHANGED_BOOKMARK = 16384, /* whether the active page is bookmarked (au_bw_is_bookmarked) */
+    AU_CHANGED_MEMORY = 32768    /* the memory readout (au_bw_memory_text), or whether it is shown */
 };
 
 typedef struct AuBrowserHost {
@@ -221,6 +222,10 @@ struct AuBrowserWindow {
     bool rehover_pending;
     uint32_t scrolled_ms;
     struct AuBench *bench; /* about:bench under way in this window (bench.h), or NULL */
+    /* The memory readout (View > Show Memory Use) as last shown, and
+     * when it was last measured. */
+    char memory_text[128];
+    uint32_t memory_ms;
 };
 
 #define AU_REHOVER_MS 150
@@ -569,6 +574,16 @@ void au_bw_status_text(AuBrowserWindow *w, char *out, size_t cap);
 void au_bw_progress_text(AuBrowserWindow *w, char *out, size_t cap);
 /* Requests of the active page a blocklist refused. */
 int au_bw_blocked_count(AuBrowserWindow *w);
+/* The memory readout for the status bar's right end while View > Show
+ * Memory Use is on: the active page's script, workers and decoded images
+ * against their limits (au_page_memory_use), as
+ * "Script 12.3 / 96 MB   Workers 2.1 MB (1 of 64 MB)   Images 8.0 / 64 MB";
+ * "" when the preference is off or there is no tab. Refreshed about once
+ * a second by au_bw_idle, which raises AU_CHANGED_MEMORY when it changes. */
+void au_bw_memory_text(AuBrowserWindow *w, char *out, size_t cap);
+/* The readout's text for m (used by au_bw_memory_text). */
+struct AuPageMemory;
+void au_memory_text(const struct AuPageMemory *m, char *out, size_t cap);
 /* The active tab's scroll position (0, 0 without a tab). */
 void au_bw_scroll_pos(AuBrowserWindow *w, int *x, int *y);
 

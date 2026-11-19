@@ -442,7 +442,11 @@ static void report_value(AuJs *js, JSValueConst exc, const char *prefix, bool ha
          * doing, so that the line says what to change. */
         AuJs *r = js->root;
         r->oom_noted = false;
-        if (r->oom_machine)
+        if (r->oom_machine && r->settings.memory_limit >= (size_t)-1 / 2)
+            au_buf_printf(&b, "Script stopped: out of memory. Aura has too little memory left to give the %s %s more (its script memory is unlimited; %lu KB in use, %lu KB more asked for) ",
+                          r->worker ? "worker" : "page", r->url, (unsigned long)(r->oom_live / 1024),
+                          (unsigned long)((r->oom_asked + 1023) / 1024));
+        else if (r->oom_machine)
             au_buf_printf(&b, "Script stopped: out of memory. Aura has too little memory left to give the %s %s more (its script memory limit is %lu KB; %lu KB in use, %lu KB more asked for) ",
                           r->worker ? "worker" : "page", r->url, (unsigned long)(r->settings.memory_limit / 1024),
                           (unsigned long)(r->oom_live / 1024), (unsigned long)((r->oom_asked + 1023) / 1024));
@@ -1790,10 +1794,15 @@ void au_js_stats(const AuJs *js, AuJsStats *s)
     s->memory_limit = js->root->settings.memory_limit;
     s->memory_peak = js->root->peak_bytes;
     s->worker_peak = 0;
+    s->runtime_used = js->root->live_bytes;
+    s->worker_used = 0;
+    s->workers = 0;
     for (const AuJs *g = js->root; g; g = g->group_next) {
         size_t p = js_workers_peak(g);
         if (p > s->worker_peak)
             s->worker_peak = p;
+        s->worker_used += js_workers_memory(g);
+        s->workers += au_js_worker_count(g);
     }
     s->worker_limit = js->root->settings.worker_memory_limit ? js->root->settings.worker_memory_limit : AU_JS_WORKER_MEMORY;
     s->wrappers = js->root->nwraps;
