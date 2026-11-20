@@ -673,6 +673,24 @@ static void test_contenteditable(void)
     CHECK(!strcmp(eval_str(dv, "st()+' '+log.join(',')", &out),
                   "hello worYld|#text:10|true beforeinput:insertText:x,beforeinput:insertText:Y,input:insertText:Y"),
           "Backspace, arrows, a cancelled beforeinput: %s", au_buf_cstr(&out));
+    /* Slate's way: the page cancels the key, edits and moves the
+     * Selection itself. The old caret's place and the new one are
+     * repainted. */
+    AuSurface *surf = au_surface_new(400, 200);
+    AuCanvas *cv = au_canvas_new(surf);
+    au_docview_paint(dv, cv, (AuRect){0, 0, 400, 200}, 0, 0);
+    AuRect before = dv->caret_rect;
+    CHECK(dv->caret_drawn, "the paint recorded the caret");
+    eval_str(dv, "e.addEventListener('keydown',function k(ev){if(ev.key!='Home')return;ev.preventDefault();"
+                 "getSelection().collapse(e.firstChild,0);e.removeEventListener('keydown',k)})",
+             &out);
+    c.invals = 0;
+    key(dv, AU_KEY_HOME, 0, 0);
+    CHECK(c.invals > 0 && c.inval.x0 <= (int)before.x && c.inval.x1 >= (int)before.x + 1 && c.inval.x0 <= 4,
+          "both places repainted: %d,%d-%d,%d (caret was at %g)", c.inval.x0, c.inval.y0, c.inval.x1, c.inval.y1,
+          before.x);
+    au_canvas_free(cv);
+    au_surface_free(surf);
     key(dv, AU_KEY_END, 0, 0);
     key(dv, AU_KEY_RETURN, 0, 0);
     type(dv, "2");

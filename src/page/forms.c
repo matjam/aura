@@ -421,6 +421,32 @@ bool au_dv_edit_caret_rect(AuDocView *dv, AuRect *out, uint32_t *color)
     return true;
 }
 
+static void invalidate_rect(AuDocView *dv, AuRect r)
+{
+    if (dv->cb.invalidate)
+        dv->cb.invalidate(dv->cb.ctx, dv,
+                          (AuIRect){au_f2px(r.x) - 2, au_f2px(r.y) - 2, au_f2px(r.x + r.w) + 3, au_f2px(r.y + r.h) + 3});
+}
+
+void au_dv_edit_caret_check(AuDocView *dv)
+{
+    AuRect r;
+    uint32_t c;
+    bool has = dv->focus && au_dv_edit_caret_rect(dv, &r, &c);
+    bool same = has && dv->caret_drawn && r.x == dv->caret_rect.x && r.y == dv->caret_rect.y &&
+                r.h == dv->caret_rect.h;
+    if (same)
+        return;
+    if (dv->caret_drawn) {
+        invalidate_rect(dv, dv->caret_rect);
+        dv->caret_drawn = false;
+    }
+    if (has) {
+        dv->caret_on = true;
+        invalidate_rect(dv, r);
+    }
+}
+
 static void invalidate_edit_caret(AuDocView *dv)
 {
     AuRect r;
@@ -1730,6 +1756,8 @@ DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
             au_dv_invalidate_all(dv);
         au_dv_invalidate_damage(dv);
     }
+    if (dv->doc && dv->cb.invalidate)
+        au_dv_edit_caret_check(dv); /* the page's own editing moved the caret */
     return used;
 }
 

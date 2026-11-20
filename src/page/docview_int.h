@@ -198,6 +198,8 @@ struct AuDocView {
     AuElement *focus;    /* the focused element (referenced), or NULL */
     bool focus_visible;  /* the focus came from the keyboard */
     bool caret_on;       /* the caret is shown (blink phase) */
+    bool caret_drawn;    /* an editing host's caret was painted at caret_rect (document coordinates) */
+    AuRect caret_rect;
     uint32_t blink_ms;   /* when the caret last changed phase */
     AuElement *drag;     /* a text field, list box or slider being dragged (referenced), or NULL */
     int drag_clicks;     /* 1 characters, 2 words, 3 lines */
@@ -370,6 +372,10 @@ void au_dv_invalidate_all(AuDocView *dv);
 /* The caret of the focused editing host (contenteditable), in document
  * coordinates, and its colour; false when there is none (forms.c). */
 bool au_dv_edit_caret_rect(AuDocView *dv, AuRect *out, uint32_t *color);
+/* After script ran: where the caret was painted and where it is now are
+ * repainted when they differ (the page moved the Selection, as Slate
+ * does after each key), and a moved caret shows at once. */
+void au_dv_edit_caret_check(AuDocView *dv);
 /* A style sheet of the document (a <link>, or an @import of a <link> or
  * <style>) is still loading: deferred and module scripts wait for it (the
  * HTML Standard's script-blocking style sheets), so they read geometry
