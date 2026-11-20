@@ -1122,6 +1122,24 @@ void l_finish_overflow(LBlock *b)
         b->sh = l_max(b->sh, b->h - b->bw[0] - b->bw[2]);
         float mx = l_max(0, b->sw - (b->w - b->bw[1] - b->bw[3]));
         float my = l_max(0, b->sh - (b->h - b->bw[0] - b->bw[2]));
+        /* One document pass can lay a box out more than once: a flex or
+         * grid container measures an item's content at other constraints
+         * before the final layout. A clamp in the measuring layout must
+         * not stand, so the offset it cut goes back when the box is laid
+         * out again in the same pass. Discord's message list, an
+         * absolutely positioned scroller in flex items, lost 3580 px of
+         * its offset in every such pass and jumped up the history. */
+        if (b->want_gen == b->lay_gen) {
+            if (b->want_x > b->scroll_x)
+                b->scroll_x = b->want_x;
+            if (b->want_y > b->scroll_y)
+                b->scroll_y = b->want_y;
+        }
+        if ((b->scroll_x > mx || b->scroll_y > my) && b->want_gen != b->lay_gen) {
+            b->want_x = b->scroll_x;
+            b->want_y = b->scroll_y;
+            b->want_gen = b->lay_gen;
+        }
         if (b->scroll_x > mx)
             b->scroll_x = mx;
         if (b->scroll_y > my)

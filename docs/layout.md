@@ -89,6 +89,16 @@ holds it (`src/layout/rebuild.c`).
   new box takes the flags its parent's normalization gives (flex and
   grid items) and goes in place of the old one; it and every ancestor
   are marked for layout, and scroll offsets inside it are kept.
+- `l_finish_overflow` clamps a scroller's offset to its extent. A flex
+  or grid container lays an item out more than once in one pass (it
+  measures the content height first, at other constraints), so the
+  offset a clamp cut is kept in `want_x`, `want_y` with the pass
+  (`want_gen`, the box's `lay_gen`), and a later layout of the box in
+  the same pass puts it back. A clamp in the last layout of a pass
+  stands, as in browsers. Before this, a flex-item scroller went back to
+  0 at every relayout (Discord's message list jumped up its history);
+  `test_flex_scroller_keeps_offset` in `tests/forms/test_forms.c`
+  covers it.
 - The whole tree is built instead when a root's outer kind changes
   (inline-level, floated, positioned, a marker, a flex item, a list
   item), its counter properties change, the walk meets a counter or a
