@@ -908,6 +908,26 @@ intlMethods(Date.prototype, {
     toLocaleDateString(l, o) { return intl().dateToLocale(thisTime(this), l, o, 'date'); },
     toLocaleTimeString(l, o) { return intl().dateToLocale(thisTime(this), l, o, 'time'); },
 }, 0);
+/* Date's toString and toTimeString end with the zone's name in
+ * parentheses in every browser ("GMT-0800 (Pacific Standard Time)"); the
+ * engine's stop at the offset. The name is the local zone's long name as
+ * Intl gives it, left out when Intl has only the offset again. */
+{
+    const zoneNamed = (orig) => function () {
+        const s = orig.call(this);
+        const t = thisTime(this);
+        if (t !== t) return s;
+        let name = '';
+        try {
+            const parts = new (intl().Intl.DateTimeFormat)('en-US', { timeZoneName: 'long' }).formatToParts(t);
+            for (const p of parts) if (p.type === 'timeZoneName') name = p.value;
+        } catch (e) { name = ''; }
+        return name && !/^GMT/.test(name) ? s + ' (' + name + ')' : s;
+    };
+    const dp = Date.prototype;
+    defProps(dp, { toString: zoneNamed(dp.toString), toTimeString: zoneNamed(dp.toTimeString) });
+    for (const k of ['toString', 'toTimeString']) Object.defineProperty(dp[k], 'name', { value: k, configurable: true });
+}
 intlMethods(String.prototype, {
     localeCompare(that, l, o) { return intl().compare(thisString(this), String(that), l, o); },
 }, 1);

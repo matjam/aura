@@ -394,3 +394,24 @@ test('DisplayNames', () => {
     assert.equal(new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }).of('XX'), undefined);
     assert.throws(() => new Intl.DisplayNames('en'), 'TypeError');
 });
+
+test('the local zone is one that keeps the clock\'s time, and Date names it', () => {
+    const id = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const o = { hour: 'numeric', minute: 'numeric', day: 'numeric', hourCycle: 'h23' };
+    for (const month of [0, 6]) {
+        const d = new Date(Date.UTC(2026, month, 15, 12));
+        assert.equal(new Intl.DateTimeFormat('en-US', o).format(d),
+            new Intl.DateTimeFormat('en-US', Object.assign({ timeZone: id }, o)).format(d), id + ' in month ' + month);
+    }
+    const y = new Date().getFullYear();
+    const dst = new Date(y, 0, 15).getTimezoneOffset() !== new Date(y, 6, 15).getTimezoneOffset();
+    if (dst) assert.ok(!/^Etc\//.test(id), 'a clock with daylight time is not in a zone without it: ' + id);
+    const long = new Intl.DateTimeFormat('en-US', { timeZoneName: 'long' }).formatToParts(new Date())
+        .find((p) => p.type === 'timeZoneName').value;
+    const s = String(new Date());
+    assert.ok(/GMT[+-]\d{4}/.test(s), s);
+    assert.equal(/\(.+\)$/.test(s), !/^GMT/.test(long), s + ' / ' + long);
+    if (!/^GMT/.test(long)) assert.ok(s.endsWith('(' + long + ')') && new Date().toTimeString().endsWith('(' + long + ')'));
+    assert.equal(Date.prototype.toString.name, 'toString');
+    assert.equal(String(new Date(NaN)), 'Invalid Date');
+});

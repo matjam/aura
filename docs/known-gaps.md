@@ -412,6 +412,16 @@ script on Discord's login, 2026-11-19:
 - `navigator.connection`, `deviceMemory`, `userAgentData` and
   `document.createEvent('TouchEvent')` are absent, as in Firefox and
   Safari on a desktop.
+- The local time zone is the first of `intl.js`'s table whose January
+  and July offsets are the clock's (`America/Los_Angeles`, `Europe/Paris`
+  for all of central Europe), not the system's own name; a clock no
+  table zone matches is named by its offset (`Etc/GMT-5`). On Mac OS 9
+  the clock has one offset for every date, so the zone is one without
+  daylight time.
+- With "Identify as" Aura, the user agent names a browser no risk
+  check knows. Safari is the nearest true story (Safari in Lockdown
+  Mode has no WebAssembly and no WebGL either); `navigator.oscpu` is
+  there only as Firefox.
 - The GTK shell reports the window at its monitor's top left: GTK 4
   does not say where a toplevel is.
 - Discord's login still fails after the faults found on 2026-11-19 were

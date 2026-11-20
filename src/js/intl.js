@@ -624,15 +624,47 @@ const offStr = (off, long) => {
     if (!off) return 'GMT';
     return 'GMT' + (off < 0 ? '-' : '+') + (long ? pad2(h) + ':' + pad2(m) : h + (m ? ':' + pad2(m) : ''));
 };
-function localZoneId() {
+/* The local zone when no zone of the table behaves as the clock does:
+ * named by its offset now. */
+function offsetZoneId() {
     const off = -new Date().getTimezoneOffset();
     if (!off) return 'UTC';
     if (off % 60 === 0) return 'Etc/GMT' + (off > 0 ? '-' : '+') + Math.abs(off / 60);
     const a = Math.abs(off);
     return (off < 0 ? '-' : '+') + pad2(Math.floor(a / 60)) + ':' + pad2(a % 60);
 }
+/* The local zone. The clock says how far local time is from UTC at any
+ * moment (Date), not what the zone is called, so the zone is the first of
+ * the table that is as far from UTC in January and in July of this year:
+ * America/Los_Angeles for a clock 8 hours behind in winter and 7 in
+ * summer. A name made from the offset alone ("Etc/GMT+8", a zone without
+ * daylight time) contradicts a clock that has it, and a page that
+ * compares the two (hCaptcha's proof script, any risk check) takes the
+ * zone for a forged one. */
+let localZone = null, localZoneKey = '';
+function localZoneInfo() {
+    const y = new Date().getFullYear();
+    const tj = Date.UTC(y, 0, 15, 12), ts = Date.UTC(y, 6, 15, 12);
+    const jan = -new Date(tj).getTimezoneOffset(), jul = -new Date(ts).getTimezoneOffset();
+    const key = y + '/' + jan + '/' + jul;
+    if (localZone && key === localZoneKey) return localZone;
+    localZoneKey = key;
+    localZone = null;
+    if (jan || jul) {
+        for (const id of Object.keys(ZONES)) {
+            const z = { id, off: ZONES[id][0], rule: ZONES[id][1], us: ZONES[id][2] };
+            if (zoneOffset(z, tj) === jan && zoneOffset(z, ts) === jul) {
+                localZone = { id, local: true, off: z.off, rule: z.rule, us: z.us };
+                break;
+            }
+        }
+    }
+    if (!localZone) localZone = { id: offsetZoneId(), local: true };
+    return localZone;
+}
+const localZoneId = () => localZoneInfo().id;
 function zoneOf(tz) {
-    if (tz === undefined) return { id: localZoneId(), local: true };
+    if (tz === undefined) return localZoneInfo();
     const t = String(tz), u = t.toUpperCase();
     if (/^(?:ETC\/)?(?:UTC|GMT|UCT|UNIVERSAL|ZULU|GREENWICH)(?:[+-]0)?$/.test(u)) return { id: 'UTC', off: 0 };
     let m = /^ETC\/GMT([+-])(\d{1,2})$/.exec(u);
@@ -651,7 +683,7 @@ function zoneOf(tz) {
     }
     const id = zoneKeys[u];
     if (id === undefined) {
-        if (u === localZoneId().toUpperCase()) return { id: localZoneId(), local: true };
+        if (u === localZoneId().toUpperCase() || u === offsetZoneId().toUpperCase()) return localZoneInfo();
         throw new RangeError('Invalid time zone specified: ' + t);
     }
     const z = ZONES[id];
@@ -702,7 +734,7 @@ function fieldsAt(t, z) {
              m: d.getUTCMinutes(), s: d.getUTCSeconds(), ms: d.getUTCMilliseconds(), off };
 }
 function zoneName(z, f, style) {
-    const dst = !z.local && z.rule && f.off !== z.off;
+    const dst = !!z.rule && f.off !== z.off;
     if (z.id === 'UTC' && (style === 'short' || style === 'long'))
         return style === 'long' ? 'Coordinated Universal Time' : 'UTC';
     if (z.us) {
@@ -712,6 +744,8 @@ function zoneName(z, f, style) {
         if (style === 'longGeneric') return US_NAMES[z.us] + ' Time';
     }
     if (z.id === 'Europe/London' && style === 'long') return dst ? 'British Summer Time' : 'Greenwich Mean Time';
+    if (style === 'long' && z.rule === 'eu' && (z.off === 60 || z.off === 120))
+        return (z.off === 60 ? 'Central' : 'Eastern') + ' European ' + (dst ? 'Summer' : 'Standard') + ' Time';
     if (z.id === 'UTC' && /Generic$/.test(style)) return 'GMT';
     return offStr(f.off, style === 'long' || style === 'longOffset');
 }
