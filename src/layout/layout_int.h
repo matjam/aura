@@ -512,7 +512,58 @@ struct AuLayout {
      * before the element can go) and whether its caret shows now. */
     AuElement *focus;
     bool caret_on;
+    /* The HTML content of foreignObjects in inline SVG (foreign.c): a box
+     * subtree per object, outside the box tree, painted by the SVG
+     * renderer through AuSvgEnv.foreign. fpend holds the svg boxes built
+     * since the last l_foreign_sync, whose objects get roots there. */
+    struct LForeign *foreign;
+    uint32_t nforeign, foreign_cap;
+    struct LForeignPend {
+        LBox *svg;
+        uint8_t depth;
+    } *fpend;
+    uint32_t nfpend, fpend_cap;
+    uint8_t foreign_depth; /* while a foreign root is built: its nesting (1 for one in the box tree's svg) */
 };
+
+/* ---- foreignObject content (foreign.c) ----
+ * Each foreignObject with HTML content (no <img>, au_svg_foreign_img) in
+ * an inline svg gets a box subtree of its own: an anonymous block
+ * container for the object (the object's style, no edges, a containing
+ * block for positioned and fixed descendants) holding the boxes of its
+ * children, built with the box tree's walk. The roots are not in the box
+ * tree: hit testing, scrolling and damage do not see them, and the
+ * elements in them have no box pointer (el->box stays NULL), so a DOM
+ * change below an object rebuilds the subtree the svg's box is in, which
+ * builds new roots. A root lives while its svg box does; a restyle that
+ * changes what a box in it builds marks it stale, and l_foreign_sync
+ * builds it again. */
+#define L_FOREIGN_MAX 1024  /* roots per layout */
+#define L_FOREIGN_DEPTH 2   /* foreignObjects nested in foreignObjects */
+typedef struct LForeign {
+    AuElement *fo;       /* referenced */
+    LBox *svg;           /* the svg box it belongs to (LF_DEAD once dropped) */
+    LBox *root;          /* LK_BLOCK, LF_ANON, node fo */
+    struct LHidden *hid; /* the boxless elements its build met (as AuLayout.hidden) */
+    uint32_t nhid;
+    float w, h;          /* the size it was laid out at; 0 when it has none */
+    uint8_t depth;
+    bool stale;
+} LForeign;
+/* boxtree.c: builds fo's root (see above); NULL when fo has no style or
+ * display: none. */
+LBox *l_build_foreign(AuLayout *L, AuElement *fo);
+/* boxtree.c, on every svg box built. */
+void l_foreign_note(AuLayout *L, LBox *svg);
+/* Drops the roots of dropped svg boxes and stale roots, and builds the
+ * roots of the svg boxes noted since. Returns whether anything changed. */
+bool l_foreign_sync(AuLayout *L);
+/* Drops every root and the pending list (l_free_tree). */
+void l_foreign_free(AuLayout *L);
+/* The live, laid-out entry of fo, or NULL. */
+LForeign *l_foreign_find(AuLayout *L, const AuElement *fo);
+/* Whether e's svg box is still in a tree. */
+static inline bool l_foreign_live(const LForeign *e) { return e->root && !(e->svg->flags & LF_DEAD); }
 
 /* controls.c: the value, placeholder, selection and caret of a text field
  * (content box cb, padding box pb, canvas coordinates). */

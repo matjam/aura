@@ -222,8 +222,14 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 ## SVG
 
 - Filters, patterns, markers, textPath, multi-line text, animation.
-- `foreignObject` draws only the first HTML `<img>` in it
-  ([svg.md](svg.md#inline-svg)); other HTML in it is not laid out.
+- `foreignObject` ([svg.md](svg.md#html-in-a-foreignobject)): one
+  with an HTML `<img>` among its first 64 nodes draws only that image,
+  stretched; clicks inside one land on the svg, not on its HTML;
+  `getBoundingClientRect` and scrolling into view find no box for its
+  elements; content in a scaled or rotated user space is drawn at CSS
+  pixels and resampled (soft when scaled up); percentage sizes resolve
+  against the nearest svg's viewBox only; an object nested more than
+  two deep in others draws nothing; an SVG image (a file) draws none.
 - `clip-path`: `path()`, `rect()`, `xywh()` and `url(#id)` do not clip
   (the box paints unclipped), `polygon` ignores its fill rule, `inset`
   takes only the horizontal radii, and no clip-path clips hit testing.

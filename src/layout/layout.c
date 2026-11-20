@@ -1544,6 +1544,8 @@ void au_layout_free(AuLayout *L)
     au_free(L->grid_abs);
     au_free(L->hidden);
     au_free(L->anims);
+    au_free(L->foreign);
+    au_free(L->fpend);
     au_free(L);
 }
 
@@ -1562,6 +1564,11 @@ void au_layout_release(AuLayout *L)
     L->abs = NULL;
     L->grid_abs = NULL;
     L->hidden = NULL;
+    au_free(L->foreign);
+    au_free(L->fpend);
+    L->foreign = NULL;
+    L->fpend = NULL;
+    L->foreign_cap = L->fpend_cap = 0;
     L->nitems = L->items_cap = 0;
     L->nsegs = L->segs_cap = 0;
     L->nabs = L->abs_cap = 0;
@@ -1677,6 +1684,33 @@ void au_layout_images_changed(AuLayout *L)
     /* The tree keeps its shape: only image boxes read the loader. A box
      * whose image changed size (or became known, or failed) is laid out
      * again; backgrounds and masks are looked up when painted. */
+    /* The image boxes of foreignObject roots (an <img> past the ones
+     * au_svg_foreign_img looks at). */
+    for (uint32_t i = 0; i < L->nforeign; i++) {
+        LForeign *e = &L->foreign[i];
+        if (!l_foreign_live(e) || e->stale)
+            continue;
+        for (LBox *f = e->root; f;) {
+            int r = f->kind == LK_BLOCK && f->replaced == LR_IMAGE && ((LBlock *)f)->rep
+                        ? l_image_refresh(L, ((LBlock *)f)->rep)
+                        : 0;
+            if (r == 2) {
+                l_mark_dirty(f);
+                L->need_layout = true;
+            }
+            if (r) {
+                L->need_paint = true;
+                L->dmg_all = true;
+            }
+            if (f->first && f->kind != LK_TEXT)
+                f = f->first;
+            else {
+                while (f != e->root && !f->next)
+                    f = f->parent;
+                f = f == e->root ? NULL : f->next;
+            }
+        }
+    }
     LBox *b = L->root;
     while (b) {
         if (b->kind == LK_BLOCK && b->replaced == LR_IMAGE && ((LBlock *)b)->rep) {
@@ -1877,6 +1911,8 @@ static const AuStyle *current_style(const LBox *b)
     return es;
 }
 
+static void foreign_styles_changed(AuLayout *L);
+
 void au_layout_styles_changed(AuLayout *L)
 {
     L->unsettled = true;
@@ -1991,6 +2027,8 @@ void au_layout_styles_changed(AuLayout *L)
         L->need_layout = true;
     if (worst >= 1)
         L->need_paint = true;
+    if (worst < 3)
+        foreign_styles_changed(L);
     /* Anonymous boxes share their parent's style: refresh them. */
     if (worst < 3) {
         b = L->root;
@@ -2010,6 +2048,123 @@ void au_layout_styles_changed(AuLayout *L)
                     b = b->next;
             }
         }
+    }
+}
+
+/* Compares the styles of the boxes of foreignObject roots with the
+ * current ones, as au_layout_styles_changed does for the tree: a change
+ * that keeps the boxes swaps the style in (a geometry change marks the
+ * box for layout), and one that changes what is built (or shows a boxless
+ * element) marks the root stale, built again at the next update. Damage
+ * is the whole view: the boxes' place on screen is the SVG renderer's. */
+static void foreign_styles_changed(AuLayout *L)
+{
+    for (uint32_t i = 0; i < L->nforeign; i++) {
+        LForeign *e = &L->foreign[i];
+        if (!l_foreign_live(e) || e->stale)
+            continue;
+        int worst = 0;
+        LBox *top = e->root, *b = top;
+        while (b && worst < 3) {
+            const AuStyle *ns;
+            if (b == top)
+                ns = au_element_style(e->fo);
+            else if (lb_anon(b))
+                ns = NULL; /* takes its parent's below */
+            else
+                ns = current_style(b);
+            if (!ns && !lb_anon(b) && b->node && b->node->type != AU_NODE_TEXT) {
+                worst = 3;
+                break;
+            }
+            if (ns && ns != b->style) {
+                int d = style_diff(b->style, ns);
+                if (d == 3) {
+                    worst = 3;
+                    break;
+                }
+                if (d > worst)
+                    worst = d;
+                if (stacking_style_differs(b->style, ns))
+                    L->need_restack = true;
+                if (d == 2)
+                    l_mark_dirty(b);
+                au_style_retain((AuStyle *)ns);
+                au_style_release(b->style);
+                b->style = (AuStyle *)ns;
+            }
+            if (b->first && b->kind != LK_TEXT)
+                b = b->first;
+            else {
+                while (b != top && !b->next)
+                    b = b->parent;
+                b = b == top ? NULL : b->next;
+            }
+        }
+        for (uint32_t h = 0; h < e->nhid && worst < 3; h++) {
+            const AuStyle *hs = au_element_style(e->hid[h].el), *was = e->hid[h].style;
+            if (!hs || !was)
+                continue;
+            if (was->box->display == AU_DISPLAY_NONE ? hs->box->display != AU_DISPLAY_NONE
+                                                     : (hs != was && style_diff(was, hs) == 3))
+                worst = 3;
+        }
+        if (worst == 3) {
+            e->stale = true;
+            L->need_layout = true;
+        } else {
+            /* Anonymous boxes share their parent's style. */
+            b = top->first;
+            while (b) {
+                if (lb_anon(b) && b->parent && b->parent->style != b->style && b->pseudo == 0 && b->kind != LK_TEXT &&
+                    !b->parent->pseudo) {
+                    au_style_retain(b->parent->style);
+                    au_style_release(b->style);
+                    b->style = b->parent->style;
+                }
+                if (b->first && b->kind != LK_TEXT)
+                    b = b->first;
+                else {
+                    while (b != top && !b->next)
+                        b = b->parent;
+                    b = b == top ? NULL : b->next;
+                }
+            }
+        }
+        if (worst == 2)
+            L->need_layout = true;
+        if (worst >= 1) {
+            L->need_paint = true;
+            L->dmg_all = true;
+        }
+    }
+}
+
+/* Lays out each foreignObject root at its object's size, as the root box
+ * is laid out at the viewport's. */
+static void foreign_layout(AuLayout *L)
+{
+    AuSvgNames *n = l_svg_names(L);
+    for (uint32_t i = 0; i < L->nforeign; i++) {
+        LForeign *e = &L->foreign[i];
+        if (!l_foreign_live(e) || e->stale)
+            continue;
+        float w, h;
+        if (!au_svg_foreign_size(n, e->fo, &w, &h)) {
+            e->w = e->h = 0;
+            continue;
+        }
+        e->w = w;
+        e->h = h;
+        LBlock *k = (LBlock *)e->root;
+        uint32_t mark = L->nabs;
+        L->depth = 0;
+        l_resolve_box_edges(k, w);
+        k->x = k->y = 0;
+        l_layout_content(L, k, w, h, h);
+        relative_pass(L, e->root, false);
+        l_layout_abspos_for(L, NULL, mark); /* any left (top layer boxes) */
+        l_finish_overflow(k);
     }
 }
 
@@ -2101,6 +2256,10 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
             L->src_vh = vh;
         }
     }
+    /* Roots of foreignObjects built again after restyles leave their old
+     * boxes in the arena, as rebuilt subtrees do (l_rebuild_dirty). */
+    if (L->nforeign && L->tree.total > 2 * L->tree_full_bytes + 256 * 1024)
+        L->need_build = true;
     if (L->need_build) {
         L->src_vw = vw;
         L->src_vh = vh;
@@ -2135,6 +2294,8 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->dmg_all = true;
         return true;
     }
+    if (l_foreign_sync(L))
+        L->need_layout = true;
     if (L->need_layout || vw != L->vw || vh != L->vh) {
         /* A viewport change is an incremental layout like any other: the
          * root's constraints change, and each independent subtree below is
@@ -2148,6 +2309,7 @@ bool au_layout_update(AuLayout *L, float vw, float vh)
         L->vh = vh;
         L->gen++;
         layout_root(L);
+        foreign_layout(L);
         L->layout_count++;
         L->need_layout = false;
         L->need_restack = true;

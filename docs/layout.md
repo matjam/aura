@@ -539,6 +539,20 @@ whenever `AuDocument.has_shadow` is set.
 The cases are in `tests/layout/cases/shadow.txt` (declarative shadow
 roots, so they need no script).
 
+### Boxes outside the tree: foreignObject content
+
+An inline `svg` element is one replaced box (`LR_SVG`) with no
+children in the box tree. The HTML content of each `foreignObject` in
+it has a box subtree of its own, kept in `AuLayout.foreign` beside the
+tree (`src/layout/foreign.c`; how it is built, laid out and painted is
+in [`svg.md`](svg.md#html-in-a-foreignobject)). Code that walks the tree
+from `L->root` (hit testing, damage, scroll saving, the differential
+check) does not see these boxes, and the elements in them have no box
+pointer, so a DOM change below an object rebuilds the subtree the svg's
+box is in. Code that must reach every box (stacking lists, restyles,
+image refreshes) walks the foreign roots too; a root whose svg box is
+`LF_DEAD` is dropped at the next update.
+
 ### Hit testing follows the paint order and its clips
 
 `hit.c` walks the boxes in the reverse of the paint order in `draw.c`

@@ -1762,6 +1762,8 @@ static LBox *make_element_box(Builder *B, AuNode *node, const AuStyle *s, int ps
         }
         if (rk != LR_NONE)
             setup_replaced(B, k);
+        if (rk == LR_SVG)
+            l_foreign_note(B->L, b); /* its foreignObjects get roots at l_foreign_sync */
     }
     b->pseudo = (uint8_t)pseudo;
     if (bx->position == AU_POSITION_RELATIVE)
@@ -2345,6 +2347,39 @@ LBox *l_build_subtree(AuLayout *L, AuElement *el)
     return box;
 }
 
+LBox *l_build_foreign(AuLayout *L, AuElement *fo)
+{
+    const AuStyle *s = au_element_style(fo);
+    if (!s || s->box->display == AU_DISPLAY_NONE)
+        return NULL;
+    Builder B;
+    memset(&B, 0, sizeof B);
+    B.L = L;
+    B.flat = L->doc && L->doc->has_shadow;
+    au_buf_init(&B.tmp);
+    B.last_space = true;
+    /* A block container that starts a formatting context and holds its
+     * positioned and fixed descendants, with no edges (anonymous): the
+     * object's own opacity, transform, mask and clip are the renderer's. */
+    LBox *box = new_box(&B, LK_BLOCK, &fo->node, s, sizeof(LBlock));
+    B.L->stats.blocks++;
+    box->inner = LI_FLOW;
+    box->flags = LF_ANON | LF_BFC | LF_CB | LF_TRANSFORM;
+    push(&B, &fo->node, box, s);
+    build_walk(&B);
+    au_free(B.st);
+    au_free(B.ctr);
+    au_buf_free(&B.tmp);
+    build_finish(&B, box);
+    /* No element below keeps a box pointer: the box tree's code (rebuild
+     * roots, rectangles for script, damage) reads them as boxes of the
+     * tree. */
+    for (LBox *b = box; b; b = next_in(b, box))
+        if (b->node && au_is_element(b->node) && au_as_element(b->node)->box == b)
+            au_as_element(b->node)->box = NULL;
+    return box;
+}
+
 /* ---- Destruction ---- */
 
 void l_box_free_layout(LBox *b)
@@ -2371,6 +2406,7 @@ void l_free_tree(AuLayout *L)
     au_svg_id_index_free(L->svg_ids);
     L->svg_ids = NULL;
     l_anim_clear(L);
+    l_foreign_free(L);
     LBox *b = L->root;
     while (b) {
         LBox *next;

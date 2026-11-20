@@ -114,12 +114,25 @@ static void sort_layers(LLayers *ls)
     }
 }
 
+static void build_stacking_from(AuLayout *L, LBox *root, bool foreign);
+
 void l_build_stacking(AuLayout *L)
 {
-    LBox *root = L->root;
     L->nview_boxes = 0;
-    if (!root)
+    if (!L->root)
         return;
+    build_stacking_from(L, L->root, false);
+    /* A foreignObject's root is the root of its own stacking contexts. */
+    for (uint32_t i = 0; i < L->nforeign; i++)
+        if (l_foreign_live(&L->foreign[i]))
+            build_stacking_from(L, L->foreign[i].root, true);
+}
+
+/* The stacking contexts below root. A foreignObject's root (foreign)
+ * places no box against the viewport and plays no animation: its boxes
+ * are painted where the SVG renderer puts them. */
+static void build_stacking_from(AuLayout *L, LBox *root, bool foreign)
+{
     /* Clear old lists and flags. */
     for (LBox *b = root; b;) {
         if (b->kind == LK_BLOCK) {
@@ -158,7 +171,7 @@ void l_build_stacking(AuLayout *L)
             sc = root;
             b->flags |= LF_STACKING;
         }
-        if (b->kind == LK_BLOCK && (((LBlock *)b)->anim || au_css_animation_playing(b->style)))
+        if (!foreign && b->kind == LK_BLOCK && (((LBlock *)b)->anim || au_css_animation_playing(b->style)))
             l_anim_register(L, (LBlock *)b);
         if (b->kind == LK_BLOCK || b->kind == LK_INLINE) {
             if (!lb_anon(b) && ((b->flags & LF_POSITIONED) || creates_stacking(b, flex_item))) {
@@ -170,7 +183,8 @@ void l_build_stacking(AuLayout *L)
         if (layered) {
             b->flags |= LF_LAYERED;
             layers_add(sc, b);
-            if ((b->flags & LF_STICKY) || (b->kind == LK_BLOCK && (b->flags & LF_FIXED) && !((LBlock *)b)->cb)) {
+            if (!foreign &&
+                ((b->flags & LF_STICKY) || (b->kind == LK_BLOCK && (b->flags & LF_FIXED) && !((LBlock *)b)->cb))) {
                 if (L->nview_boxes < L_VIEW_BOXES)
                     L->view_boxes[L->nview_boxes] = b;
                 L->nview_boxes++;
@@ -1868,17 +1882,18 @@ static const AuSurface *env_image_at(AuLayout *L, const char *url, int dw, int d
     return px->width > 1 || px->height > 1 || w == 1 ? px : NULL;
 }
 
+/* The SVG env callbacks get the paint context. */
 static const AuSurface *svg_env_image(void *ctx, const AuElement *el, const char *href, int dw, int dh)
 {
     (void)el;
     while (*href == ' ' || *href == '\t' || *href == '\n')
         href++;
-    return *href ? env_image_at(ctx, href, dw, dh, NULL, NULL) : NULL;
+    return *href ? env_image_at(((PCtx *)ctx)->L, href, dw, dh, NULL, NULL) : NULL;
 }
 
 static AuElement *svg_env_find_id(void *ctx, AuAtom id)
 {
-    AuLayout *L = ctx;
+    AuLayout *L = ((PCtx *)ctx)->L;
     if (!L->doc)
         return NULL;
     if (!L->svg_ids)
@@ -1886,11 +1901,32 @@ static AuElement *svg_env_find_id(void *ctx, AuAtom id)
     return au_svg_id_index_find(L->svg_ids, id);
 }
 
+static void paint_layer(PCtx *P, LBox *b, float ox, float oy);
+
+/* Paints the root of foreignObject fo (foreign.c) with its border box at
+ * box (canvas coordinates, possibly a layer's). */
+static bool svg_env_foreign(void *ctx, AuElement *fo, AuCanvas *c, AuRect box)
+{
+    PCtx *P = ctx;
+    LForeign *e = l_foreign_find(P->L, fo);
+    /* Each nesting paints from the depth it is reached at, so the limit
+     * holds across a foreignObject. */
+    if (!e || P->depth > L_MAX_DEPTH - 2)
+        return false;
+    PCtx Q = *P;
+    Q.c = c;
+    Q.dirty = (LArea){box.x, box.y, box.w, box.h};
+    Q.canvas_box = NULL;
+    Q.clip_text = false;
+    paint_layer(&Q, e->root, box.x, box.y);
+    return true;
+}
+
 static void paint_svg(PCtx *P, LBlock *b, AuRect cb)
 {
     if (!b->b.node || !au_is_element(b->b.node) || cb.w <= 0 || cb.h <= 0)
         return;
-    AuSvgEnv env = {P->L->env.fonts, P->L, svg_env_image, svg_env_find_id};
+    AuSvgEnv env = {P->L->env.fonts, P, svg_env_image, svg_env_find_id, svg_env_foreign};
     /* The whole pixels of the box's place go into the canvas translation
      * and the drawing gets the fraction: its coordinates, and so every
      * antialiased edge, are then the same wherever the page is scrolled

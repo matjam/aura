@@ -3,6 +3,7 @@
  * incremental feeding, resize. Uses the Ahem-like test font. */
 #include "../layout/ahem.h"
 #include "page/page.h"
+#include "page/script.h" /* au_dv_dom_changed */
 #include "page/webfont.h"
 #include "image/cache.h"
 
@@ -1060,6 +1061,133 @@ static void test_foreign_object_img(void)
     au_docview_free(dv);
 }
 
+/* Whether pixel c is within 6 of r, g, b on each channel. */
+static bool near_rgb(AuColor c, int r, int g, int b)
+{
+    int cr = (int)((c >> 16) & 255), cg = (int)((c >> 8) & 255), cb = (int)(c & 255);
+    return abs(cr - r) <= 6 && abs(cg - g) <= 6 && abs(cb - b) <= 6;
+}
+
+/* Updates dv and paints it whole over white into s (300 x 300). */
+static void repaint_white(AuDocView *dv, AuCanvas *c, AuSurface *s)
+{
+    au_docview_update(dv);
+    au_surface_clear(s, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 300, 300}, 0, 0);
+}
+
+/* HTML in a foreignObject, as Discord's server rail draws its icons: a
+ * div with a background and an svg icon or text centred in it, through
+ * the object's mask. A restyle of the div paints its new colour, and a
+ * removed object paints nothing. */
+static void test_foreign_object_html(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof f);
+    AuLoader li = {&f, fake_request, NULL, NULL, NULL, NULL};
+    AuDocView *dv = au_docview_new(fonts, &li, NULL);
+    const char *html =
+        "<!DOCTYPE html><body style='margin:0'>"
+        "<svg width=0 height=0 style='position:absolute'><mask id=sq maskContentUnits=objectBoundingBox>"
+        "<rect fill=white x=0 y=0 width=1 height=1 rx=0.3 ry=0.3 /></mask></svg>"
+        "<svg id=s width=48 height=48 viewBox='0 0 48 48' style='display:block'>"
+        "<foreignObject id=fo x=0 y=0 width=48 height=48 mask='url(#sq)'>"
+        "<div style='display:flex;align-items:center;justify-content:center;width:48px;height:48px;"
+        "background:#5865f2;color:#fff'><svg width=24 height=24 viewBox='0 0 12 12'>"
+        "<rect width=12 height=12 fill=lime /></svg></div></foreignObject></svg>"
+        "<svg id=t width=48 height=48 style='display:block'><foreignObject x=8 y=8 width=32 height=32>"
+        "<div id=v style='width:32px;height:32px;background:red'></div></foreignObject></svg>"
+        "<svg id=u width=48 height=48 style='display:block'><foreignObject width=48 height=48>"
+        "<div style='display:flex;align-items:center;justify-content:center;width:48px;height:48px;"
+        "background:black;color:white;font:16px sans-serif'>FG</div></foreignObject></svg>"
+        /* nested: a foreignObject in an svg in a foreignObject */
+        "<svg id=n width=48 height=48 style='display:block'><foreignObject width=48 height=48>"
+        "<div style='width:48px;height:48px;background:black'><svg width=32 height=32 style='display:block'>"
+        "<foreignObject x=8 y=8 width=16 height=16><div style='height:16px;background:lime'></div>"
+        "</foreignObject></svg></div></foreignObject></svg>"
+        /* a scaled user space: drawn through a layer */
+        "<svg id=z width=48 height=48 viewBox='0 0 24 24' style='display:block'>"
+        "<foreignObject width=24 height=24><div style='height:12px;background:red'></div>"
+        "<div style='height:12px;background:blue'></div></foreignObject></svg>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_check(dv, true); /* each rebuild below equals a whole build */
+    au_docview_set_viewport(dv, 300, 300);
+    AuSurface *s = au_surface_new(300, 300);
+    AuCanvas *c = au_canvas_new(s);
+    repaint_white(dv, c, s);
+    AuRect r = rect_of(dv, "s");
+    int x0 = (int)r.x, y0 = (int)r.y;
+    AuColor px = au_surface_get(s, x0 + 4, y0 + 24);
+    CHECK(near_rgb(px, 0x58, 0x65, 0xf2), "the div's background in the object: %08x", (unsigned)px);
+    px = au_surface_get(s, x0 + 24, y0 + 24);
+    CHECK(near_rgb(px, 0, 255, 0), "the svg icon centred in the div: %08x", (unsigned)px);
+    px = au_surface_get(s, x0 + 8, y0 + 24);
+    CHECK(near_rgb(px, 0x58, 0x65, 0xf2), "the background beside the icon: %08x", (unsigned)px);
+    px = au_surface_get(s, x0 + 1, y0 + 1);
+    CHECK(px == AU_RGB(255, 255, 255), "masked-out corner: %08x", (unsigned)px);
+    r = rect_of(dv, "t");
+    x0 = (int)r.x, y0 = (int)r.y;
+    CHECK(au_surface_get(s, x0 + 24, y0 + 24) == AU_RGB(255, 0, 0), "the object at x=8 y=8: %08x",
+          au_surface_get(s, x0 + 24, y0 + 24));
+    CHECK(au_surface_get(s, x0 + 4, y0 + 4) == AU_RGB(255, 255, 255), "nothing outside the object: %08x",
+          au_surface_get(s, x0 + 4, y0 + 4));
+    r = rect_of(dv, "u");
+    int light = 0;
+    for (int y = (int)r.y + 8; y < (int)r.y + 40; y++)
+        for (int x = (int)r.x + 8; x < (int)r.x + 40; x++)
+            if (((au_surface_get(s, x, y) >> 8) & 255) > 128)
+                light++;
+    /* Ahem: two 16 x 16 squares, centred in the sampled 32 x 32. */
+    CHECK(light > 400 && light <= 32 * 16, "the acronym's text in the object: %d light pixels", light);
+    CHECK(au_surface_get(s, (int)r.x + 2, (int)r.y + 2) == AU_RGB(0, 0, 0), "the acronym's background: %08x",
+          au_surface_get(s, (int)r.x + 2, (int)r.y + 2));
+    r = rect_of(dv, "n");
+    CHECK(au_surface_get(s, (int)r.x + 16, (int)r.y + 16) == AU_RGB(0, 255, 0), "the nested object: %08x",
+          au_surface_get(s, (int)r.x + 16, (int)r.y + 16));
+    CHECK(au_surface_get(s, (int)r.x + 4, (int)r.y + 4) == AU_RGB(0, 0, 0), "around the nested object: %08x",
+          au_surface_get(s, (int)r.x + 4, (int)r.y + 4));
+    r = rect_of(dv, "z");
+    px = au_surface_get(s, (int)r.x + 24, (int)r.y + 12);
+    CHECK(near_rgb(px, 255, 0, 0), "the scaled object's top half: %08x", (unsigned)px);
+    px = au_surface_get(s, (int)r.x + 24, (int)r.y + 36);
+    CHECK(near_rgb(px, 0, 0, 255), "the scaled object's bottom half (twice as tall): %08x", (unsigned)px);
+
+    /* A restyle inside the object. */
+    AuElement *v = by_id(dv, "v");
+    au_element_set_attr(v, AU_ATOM_style, "width:32px;height:32px;background:blue", 38);
+    au_dv_dom_changed(dv, &v->node, AU_ATOM_style, 2);
+    repaint_white(dv, c, s);
+    r = rect_of(dv, "t");
+    CHECK(au_surface_get(s, (int)r.x + 24, (int)r.y + 24) == AU_RGB(0, 0, 255), "the restyled div: %08x",
+          au_surface_get(s, (int)r.x + 24, (int)r.y + 24));
+    /* A change of what is built (display) inside the object. */
+    au_element_set_attr(v, AU_ATOM_style, "display:inline-block;width:32px;height:32px;background:lime", 59);
+    au_dv_dom_changed(dv, &v->node, AU_ATOM_style, 2);
+    repaint_white(dv, c, s);
+    CHECK(au_surface_get(s, (int)r.x + 24, (int)r.y + 24) == AU_RGB(0, 255, 0), "the div made inline-block: %08x",
+          au_surface_get(s, (int)r.x + 24, (int)r.y + 24));
+
+    /* The object removed. */
+    AuElement *fo = by_id(dv, "fo");
+    AuNode *svg = fo->node.parent;
+    au_node_ref(&fo->node);
+    au_node_remove(&fo->node);
+    au_dv_dom_changed(dv, svg, 0, 1);
+    repaint_white(dv, c, s);
+    r = rect_of(dv, "s");
+    CHECK(au_surface_get(s, (int)r.x + 4, (int)r.y + 24) == AU_RGB(255, 255, 255), "the removed object: %08x",
+          au_surface_get(s, (int)r.x + 4, (int)r.y + 24));
+    AuBuf msg;
+    au_buf_init(&msg);
+    uint32_t fails = au_docview_check_failures(dv, &msg);
+    CHECK(fails == 0, "rebuilds differ from a whole build: %.*s", (int)msg.len, msg.data);
+    au_buf_free(&msg);
+    au_node_unref(&fo->node);
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* Counts red and dark pixels in r (canvas coordinates). */
 static void count_red_dark(const AuSurface *s, AuRect r, int *red, int *dark)
 {
@@ -1649,6 +1777,7 @@ int main(void)
     test_image_arrival_cost();
     test_object_embed();
     test_foreign_object_img();
+    test_foreign_object_html();
     test_background_clip_text();
     test_user_css();
     test_webfonts();
