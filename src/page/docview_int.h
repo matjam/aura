@@ -367,6 +367,9 @@ void au_dv_invalidate_element(AuDocView *dv, AuElement *el);
  * fixed element, as au_dv_invalidate_element does). */
 void au_dv_invalidate_element_rect(AuDocView *dv, AuElement *el, AuIRect r);
 void au_dv_invalidate_all(AuDocView *dv);
+/* The caret of the focused editing host (contenteditable), in document
+ * coordinates, and its colour; false when there is none (forms.c). */
+bool au_dv_edit_caret_rect(AuDocView *dv, AuRect *out, uint32_t *color);
 /* A style sheet of the document (a <link>, or an @import of a <link> or
  * <style>) is still loading: deferred and module scripts wait for it (the
  * HTML Standard's script-blocking style sheets), so they read geometry

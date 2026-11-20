@@ -2389,6 +2389,14 @@ DV_ENTRY_VOID(paint, (AuDocView * dv, AuCanvas *c, AuRect view, int scroll_x, in
     au_docimages_paint_begin(dv->imgs);
     au_layout_paint(dv->layout, c, view, (float)scroll_x, (float)scroll_y);
     au_docimages_paint_end(dv->imgs);
+    /* The caret of a focused editing host, over the page. */
+    AuRect cr;
+    uint32_t cc;
+    if (dv->caret_on && dv->focus && au_dv_edit_caret_rect(dv, &cr, &cc)) {
+        AuRect at = {view.x + cr.x - (float)scroll_x, view.y + cr.y - (float)scroll_y, cr.w, cr.h};
+        if (at.x + at.w > view.x && at.x < view.x + view.w && at.y + at.h > view.y && at.y < view.y + view.h)
+            au_fill_rect(c, at, cc);
+    }
     uint32_t t1 = perf_now(dv);
     au_perf_add(&dv->perf, AU_PERF_PAINT, t1 - t0, NULL, t1);
     if (view.w > 0 && view.h > 0)

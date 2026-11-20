@@ -23,6 +23,34 @@ static bool call_bool(AuJs *js, const char *name, int argc, JSValue *argv)
     return r;
 }
 
+/* As call_bool, but true only when the result is true (an exception or
+ * a closing runtime answers false). */
+static bool call_true(AuJs *js, const char *name, int argc, JSValue *argv)
+{
+    bool r = false;
+    if (!js->closing) {
+        JSValue v = js_call_prelude(js, name, argc, argv);
+        r = JS_IsBool(v) && JS_ToBool(js->ctx, v);
+        JS_FreeValue(js->ctx, v);
+    }
+    for (int i = 0; i < argc; i++)
+        JS_FreeValue(js->ctx, argv[i]);
+    au_js_checkpoint(js);
+    return r;
+}
+
+bool au_js_edit_click(AuJs *js, AuElement *target, AuNode *text, uint32_t offset)
+{
+    JSValue a[3] = {js_wrap(js, &target->node), js_wrap(js, text), JS_NewUint32(js->ctx, offset)};
+    return call_true(js, "editClick", 3, a);
+}
+
+bool au_js_edit_key(AuJs *js, AuElement *focus, const char *key, int mods)
+{
+    JSValue a[3] = {js_wrap(js, &focus->node), JS_NewString(js->ctx, key ? key : ""), JS_NewInt32(js->ctx, mods & 15)};
+    return call_true(js, "editKey", 3, a);
+}
+
 bool au_js_fire(AuJs *js, AuNode *node, const char *type, bool bubbles, bool cancelable)
 {
     JSContext *c = js->ctx;

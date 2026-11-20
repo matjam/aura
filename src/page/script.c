@@ -1452,6 +1452,31 @@ bool au_docscript_key(AuDocScript *s, AuElement *target, const char *type, const
     return ok;
 }
 
+bool au_docscript_edit_click(AuDocScript *s, AuElement *target, AuNode *text, uint32_t offset)
+{
+    if (!s || !s->js || !target)
+        return false;
+    enter(s);
+    bool r = au_js_edit_click(s->js, target, text, offset);
+    leave(s);
+    return r;
+}
+
+bool au_docscript_edit_key(AuDocScript *s, AuElement *focus, const char *key, int mods)
+{
+    if (!s || !s->js || !focus)
+        return false;
+    enter(s);
+    bool r = au_js_edit_key(s->js, focus, key, mods);
+    leave(s);
+    return r;
+}
+
+bool au_docscript_edit_caret(AuDocScript *s, AuNode **node, uint32_t *offset)
+{
+    return s && s->js && au_js_edit_caret(s->js, node, offset);
+}
+
 bool au_docscript_input(AuDocScript *s, AuElement *el, const char *type, const char *input_type, const char *data)
 {
     if (!s->js || !el)

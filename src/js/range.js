@@ -366,7 +366,10 @@ function selChanged() {
     selChangeQueued = true;
     N.queueTask(() => { selChangeQueued = false; fire(doc, new Event('selectionchange')); });
 }
-function selSet(r, backwards) { selRange = r; selBackwards = !!backwards && !!r; selChanged(); }
+function selSet(r, backwards) {
+    selRange = r; selBackwards = !!backwards && !!r; selChanged();
+    H.selectionMoved(); /* the editing caret follows (prelude_obs.js) */
+}
 function selPoints() {
     const p = N.rangeGet(selRange[S.range]);
     return selBackwards ? [p[2], p[3], p[0], p[1]] : p;

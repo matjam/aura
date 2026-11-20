@@ -936,6 +936,7 @@ function setFocus(el) {
         fire(el, new FocusEvent('focus', { relatedTarget: old, composed: true }));
         fire(el, new FocusEvent('focusin', { bubbles: true, relatedTarget: old, composed: true }));
     }
+    editFocusMoved(); /* prelude_obs.js: an editing host's caret */
 }
 /* A host whose shadow root delegates focus hands it to the first
  * focusable element of its shadow tree (shadow-including order), unless

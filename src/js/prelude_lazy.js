@@ -6,7 +6,7 @@
  * the modules' own definitions had. */
 
 const ranges = lazyModule(0, ['AbstractRange', 'Range', 'StaticRange', 'Selection', 'getSelection'],
-    () => ({ N, doc, DOMRect, Event, S, domErr, fire, isNode, rootOf, str, tag }));
+    () => ({ N, doc, DOMRect, Event, S, domErr, fire, isNode, rootOf, str, tag, selectionMoved: editCaretMoved }));
 
 const cssom = lazyModule(1, ['CSSRule', 'CSSStyleRule', 'CSSGroupingRule', 'CSSConditionRule', 'CSSMediaRule',
     'CSSSupportsRule', 'CSSContainerRule', 'CSSLayerBlockRule', 'CSSImportRule', 'CSSFontFaceRule', 'CSSPageRule',

@@ -293,10 +293,42 @@ static JSValue n_range_split(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* editCaret(id): the editing caret is range id's (collapsed) point; -1
+ * for none. The prelude calls it when the focus or the Selection changes
+ * (contenteditable editing, prelude_edit.js); the range stays live, so
+ * DOM edits move the caret with it. */
+static JSValue n_edit_caret(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    AuJs *js = js_of_ctx(ctx);
+    int32_t id = -1;
+    if (argc > 0 && JS_ToInt32(ctx, &id, argv[0]))
+        return JS_EXCEPTION;
+    js->edit_caret = id >= 0 && (uint32_t)id < js->nranges ? (uint32_t)id + 1 : 0;
+    return JS_UNDEFINED;
+}
+
+bool au_js_edit_caret(AuJs *js, AuNode **node, uint32_t *offset)
+{
+    if (!js || !js->edit_caret)
+        return false;
+    settle(js);
+    uint32_t id = js->edit_caret - 1;
+    if (id >= js->nranges || !js->ranges[id].sc)
+        return false;
+    const JsRange *r = &js->ranges[id];
+    if (r->sc != r->ec || r->so != r->eo)
+        return false; /* a selection, not a caret */
+    *node = r->sc;
+    *offset = r->so;
+    return true;
+}
+
 static const JSCFunctionListEntry range_natives[] = {
     JS_CFUNC_DEF("rangeNew", 0, n_range_new),   JS_CFUNC_DEF("rangeFree", 1, n_range_free),
     JS_CFUNC_DEF("rangeGet", 1, n_range_get),   JS_CFUNC_DEF("rangeSet", 5, n_range_set),
     JS_CFUNC_DEF("rangeText", 4, n_range_text), JS_CFUNC_DEF("rangeSplit", 3, n_range_split),
+    JS_CFUNC_DEF("editCaret", 1, n_edit_caret),
 };
 
 void js_natives_ranges_init(AuJs *js, JSValue N)

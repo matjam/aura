@@ -968,6 +968,200 @@ P.fireKey = function (target, type, key, code, mods, repeat) {
     /* Default actions (editing, implicit submission) are the view's. */
     return fire(t, ev);
 };
+/* ---------------- contenteditable editing ----------------
+ * An editing host (an element whose contenteditable makes it editable
+ * and whose parent is not) takes the focus; the Selection is its caret.
+ * The view asks for the caret's place with au_js_edit_caret: N.editCaret
+ * names the Selection's live range while the focus is in an editing host
+ * and the Selection is a caret in it. A press places the caret
+ * (P.editClick); a key nobody cancelled edits (P.editKey), with
+ * beforeinput (cancelable) and input around each change, as browsers do.
+ * Discord's message box (Slate) cancels the keys and edits itself, then
+ * puts the Selection where the caret goes. */
+function editingHost(n) {
+    let el = n && (n.nodeType === 1 ? n : n.parentElement);
+    if (!el || !el.isContentEditable) return null;
+    for (let i = 0; el.parentElement && el.parentElement.isContentEditable && i < 10000; i++) el = el.parentElement;
+    return el;
+}
+let editCaretOn = false;
+/* The focused editing host, or null. */
+function focusedHost() {
+    return focused && focused.nodeType === 1 && focused.isContentEditable ? editingHost(focused) : null;
+}
+function editCaretMoved() {
+    const host = focusedHost();
+    let id = -1;
+    if (host) {
+        const sel = G.getSelection();
+        if (sel.rangeCount) {
+            const r = sel.getRangeAt(0);
+            if (r.collapsed && host.contains(r.startContainer)) id = r[S.range];
+        }
+    }
+    if (id >= 0 || editCaretOn) N.editCaret(id);
+    editCaretOn = id >= 0;
+}
+/* The text node and offset at the start or the end of host's text. */
+function textEdge(host, end) {
+    let found = null;
+    for (let n = host.firstChild, i = 0; n && i < 100000; i++) {
+        if (n.nodeType === 3) { found = n; if (!end) break; }
+        if (n.firstChild) { n = n.firstChild; continue; }
+        while (n && n !== host && !n.nextSibling) n = n.parentNode;
+        n = n && n !== host ? n.nextSibling : null;
+    }
+    return found ? [found, end ? found.length : 0] : [host, end ? host.childNodes.length : 0];
+}
+/* Focusing an editing host puts the caret at its start unless the
+ * Selection is in it already. */
+function editFocusMoved() {
+    const host = focusedHost();
+    if (host) {
+        const sel = G.getSelection();
+        if (!sel.rangeCount || !host.contains(sel.getRangeAt(0).startContainer)) {
+            const [n, o] = textEdge(host, false);
+            sel.collapse(n, o); /* moves the caret through selectionMoved */
+            return;
+        }
+    }
+    if (host || editCaretOn) editCaretMoved();
+}
+P.editClick = function (target, text, offset) {
+    const host = editingHost(target);
+    if (!host) return false;
+    if (!(focused && (focused === host || host.contains(focused)))) setFocus(host);
+    const sel = G.getSelection();
+    if (text && text.nodeType === 3 && host.contains(text)) sel.collapse(text, Math.min(offset, text.length));
+    else { const [n, o] = textEdge(host, true); sel.collapse(n, o); }
+    editCaretMoved();
+    return true;
+};
+/* The text node before or after (n, o) in host, in document order, with
+ * the offset at its near end; null when there is none. */
+function textBeside(host, n, o, forward) {
+    const lastDeep = (y) => { for (let i = 0; y.lastChild && i < 10000; i++) y = y.lastChild; return y; };
+    /* the next node after x's subtree, or the previous node before x
+     * (reverse document order), inside host */
+    const after = (x) => { while (x && x !== host && !x.nextSibling) x = x.parentNode; return x && x !== host ? x.nextSibling : null; };
+    const before = (x) => x === host ? null : x.previousSibling ? lastDeep(x.previousSibling) : x.parentNode === host ? null : x.parentNode;
+    let cur;
+    if (forward) cur = n.nodeType === 3 ? after(n) : n.childNodes[o] || after(n);
+    else cur = n.nodeType === 3 ? before(n) : n.childNodes[o - 1] ? lastDeep(n.childNodes[o - 1]) : before(n);
+    for (let i = 0; cur && i < 100000; i++) {
+        if (cur.nodeType === 3 && cur.length) return [cur, forward ? 0 : cur.length];
+        if (cur.nodeType === 1 && cur.localName === 'br') return [cur.parentNode, nodeIndexOf(cur) + (forward ? 0 : 1), cur];
+        cur = forward ? (cur.firstChild || after(cur)) : before(cur);
+    }
+    return null;
+}
+function nodeIndexOf(n) { let i = 0; for (let c = n.previousSibling; c; c = c.previousSibling) i++; return i; }
+/* Code units of the character before (or after) offset o in text s. */
+function charUnits(s, o, forward) {
+    if (forward) { const c = s.charCodeAt(o); return c >= 0xD800 && c < 0xDC00 && o + 1 < s.length ? 2 : 1; }
+    const c = s.charCodeAt(o - 1); return c >= 0xDC00 && c < 0xE000 && o > 1 ? 2 : 1;
+}
+function editInput(host, inputType, data, apply) {
+    const be = new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType, data });
+    be[S.ev].trusted = true;
+    if (!fire(host, be) || !host.isConnected) return;
+    apply();
+    const ie = new InputEvent('input', { bubbles: true, composed: true, inputType, data });
+    ie[S.ev].trusted = true;
+    fire(host, ie);
+}
+P.editKey = function (el, key, mods) {
+    const host = editingHost(el);
+    if (!host) return false;
+    const sel = G.getSelection();
+    if (!sel.rangeCount || !host.contains(sel.getRangeAt(0).startContainer)) {
+        const [n, o] = textEdge(host, true);
+        sel.collapse(n, o);
+    }
+    const cmd = (mods & 10) !== 0, shift = (mods & 1) !== 0;
+    const range = () => sel.getRangeAt(0);
+    if (cmd && (key === 'a' || key === 'A')) { sel.selectAllChildren(host); return true; }
+    if (cmd) return false;
+    const chars = [...key];
+    if (chars.length === 1 && key.charCodeAt(0) >= 0x20) {
+        editInput(host, 'insertText', key, () => {
+            const r = range();
+            if (!r.collapsed) r.deleteContents();
+            const n = r.startContainer, o = r.startOffset;
+            if (n.nodeType === 3) { n.insertData(o, key); sel.collapse(n, o + key.length); return; }
+            const prev = n.childNodes[o - 1];
+            if (prev && prev.nodeType === 3) { const l = prev.length; prev.appendData(key); sel.collapse(prev, l + key.length); return; }
+            const t = doc.createTextNode(key);
+            n.insertBefore(t, n.childNodes[o] || null);
+            sel.collapse(t, key.length);
+        });
+        return true;
+    }
+    switch (key) {
+    case 'Backspace':
+    case 'Delete': {
+        const forward = key === 'Delete';
+        editInput(host, forward ? 'deleteContentForward' : 'deleteContentBackward', null, () => {
+            const r = range();
+            if (!r.collapsed) { r.deleteContents(); sel.collapse(r.startContainer, r.startOffset); return; }
+            let n = r.startContainer, o = r.startOffset;
+            if (n.nodeType === 3 && (forward ? o < n.length : o > 0)) {
+                const k = charUnits(n.data, o, forward);
+                const at = forward ? o : o - k;
+                n.deleteData(at, k);
+                sel.collapse(n, at);
+                return;
+            }
+            const b = textBeside(host, n, o, forward);
+            if (!b) return;
+            if (b[2]) { const p = b[2].parentNode, i = nodeIndexOf(b[2]); b[2].remove(); sel.collapse(p, i); return; }
+            const t = b[0], to = b[1], k = charUnits(t.data, to, forward), at = forward ? to : to - k;
+            t.deleteData(at, k);
+            sel.collapse(t, at);
+        });
+        return true;
+    }
+    case 'Enter':
+        editInput(host, shift ? 'insertLineBreak' : 'insertParagraph', null, () => {
+            const r = range();
+            if (!r.collapsed) r.deleteContents();
+            const br = doc.createElement('br');
+            r.insertNode(br);
+            /* a line break at the end needs a second one to show its line */
+            if (!br.nextSibling || (br.nextSibling.nodeType === 3 && !br.nextSibling.length && !br.nextSibling.nextSibling))
+                br.parentNode.insertBefore(doc.createElement('br'), br.nextSibling);
+            sel.collapse(br.parentNode, nodeIndexOf(br) + 1);
+        });
+        return true;
+    case 'ArrowLeft':
+    case 'ArrowRight': {
+        const forward = key === 'ArrowRight';
+        const r = range();
+        if (!r.collapsed && !shift) {
+            if (forward) sel.collapse(r.endContainer, r.endOffset); else sel.collapse(r.startContainer, r.startOffset);
+            return true;
+        }
+        const n = sel.focusNode, o = sel.focusOffset;
+        let to = null;
+        if (n.nodeType === 3 && (forward ? o < n.length : o > 0)) to = [n, forward ? o + charUnits(n.data, o, true) : o - charUnits(n.data, o, false)];
+        else {
+            const b = textBeside(host, n, o, forward);
+            if (b && !b[2]) { const k = charUnits(b[0].data, b[1], forward); to = [b[0], forward ? b[1] + k : b[1] - k]; }
+            else if (b) to = [b[0], forward ? b[1] + 1 : b[1] - 1];
+        }
+        if (to) { if (shift) sel.extend(to[0], to[1]); else sel.collapse(to[0], to[1]); }
+        return true;
+    }
+    case 'Home':
+    case 'End': {
+        const [n, o] = textEdge(host, key === 'End');
+        if (shift) sel.extend(n, o); else sel.collapse(n, o);
+        return true;
+    }
+    }
+    return false;
+};
+
 /* Forms: the view moved the focus, edited a field, or submits a form. */
 P.focusFromEmbedder = function (el) { setFocus(el || null); };
 P.fireInput = function (el, type, inputType, data) {
