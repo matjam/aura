@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.10.0](https://github.com/matjam/aura/compare/v0.9.1...v0.10.0) (2026-11-20)
+
+
+### Features
+
+* **css:** scrollbar-color sets the thumb and track of scroll bars ([#24](https://github.com/matjam/aura/issues/24)) ([360812d](https://github.com/matjam/aura/commit/360812d2fcbeacfc3919d52afb980e86c0aca104))
+* **devtools:** Trace Scrolls in the Console logs a page's scrolls ([#26](https://github.com/matjam/aura/issues/26)) ([3814ecf](https://github.com/matjam/aura/commit/3814ecf5076827f0ecb7564839c6b40b246ae5d3))
+* **forms:** edit contenteditable elements ([#27](https://github.com/matjam/aura/issues/27)) ([50e8f40](https://github.com/matjam/aura/commit/50e8f40af50378b9978337c67374a4459b524124))
+* **memory:** Unlimited memory limits and a memory readout in the status bar ([#18](https://github.com/matjam/aura/issues/18)) ([07ea6c3](https://github.com/matjam/aura/commit/07ea6c31ab7cada57b944742d2668ce5cb41be3f))
+* **paint:** background-clip: text ([#21](https://github.com/matjam/aura/issues/21)) ([36f05d7](https://github.com/matjam/aura/commit/36f05d7a772328e267f389e3b64bbeeb88825b44))
+* **prefs:** honest default user agent, built from browser, system and processor ([#15](https://github.com/matjam/aura/issues/15)) ([e9cda6e](https://github.com/matjam/aura/commit/e9cda6e69272711e60e77cb59838a7a2f8e673b7))
+* **svg:** draw an HTML img inside a foreignObject ([#20](https://github.com/matjam/aura/issues/20)) ([5d24ca6](https://github.com/matjam/aura/commit/5d24ca6ee14b32c24d9d40d98be863434f4d6750))
+* **svg:** lay out and paint HTML content of a foreignObject ([#28](https://github.com/matjam/aura/issues/28)) ([75cdc86](https://github.com/matjam/aura/commit/75cdc865d9471fdbb8e54b9ccd769e638dcc9d15))
+* **tools:** guest-profile.py, a sampling profile of Aura in the guest ([b24dab8](https://github.com/matjam/aura/commit/b24dab8f12edf307ead6da64e30e63334232dac8))
+
+
+### Bug Fixes
+
+* **build:** allow a minor or bug-fix version above 9 ([#16](https://github.com/matjam/aura/issues/16)) ([a57bd2f](https://github.com/matjam/aura/commit/a57bd2ff2c42b9577f772a00a7874e1f5c762b8c))
+* **css:** answer no to subgrid in [@supports](https://github.com/supports) ([#17](https://github.com/matjam/aura/issues/17)) ([aef85b8](https://github.com/matjam/aura/commit/aef85b8bc593042a4c0d60b0b39ae6b6804d378c))
+* **devtools:** count script in frames toward the page's time ([c0087f3](https://github.com/matjam/aura/commit/c0087f36e4007078c71db816154aa94c4d06f33e))
+* **frames:** keep the src fragment in a frame's URL ([#13](https://github.com/matjam/aura/issues/13)) ([43fb1de](https://github.com/matjam/aura/commit/43fb1de918c934d5c06c3a291f2951533c3884e7)), closes [#11](https://github.com/matjam/aura/issues/11)
+* **js:** allow regular expressions with more than 255 captures ([#12](https://github.com/matjam/aura/issues/12)) ([29ef46f](https://github.com/matjam/aura/commit/29ef46f0b25ea51dd3bfe12fcb0243233b4871db)), closes [#11](https://github.com/matjam/aura/issues/11)
+* **js:** fire scroll at elements that scroll ([#22](https://github.com/matjam/aura/issues/22)) ([e655475](https://github.com/matjam/aura/commit/e6554750a32382d1ea14297da527ad59942d91c4))
+* **js:** pointer events, offsetX/offsetY and pointer capture ([#14](https://github.com/matjam/aura/issues/14)) ([4f63ea8](https://github.com/matjam/aura/commit/4f63ea89fdbea4d5a735f8a7b66b458e652b2d53)), closes [#11](https://github.com/matjam/aura/issues/11)
+* **js:** say "unlimited" for an Unlimited script memory limit in reports ([#19](https://github.com/matjam/aura/issues/19)) ([094cb84](https://github.com/matjam/aura/commit/094cb840caf407f1ccf8144c28b21d9f05a28838))
+* **layout:** a flex-item scroller keeps its offset through relayout ([#25](https://github.com/matjam/aura/issues/25)) ([712952d](https://github.com/matjam/aura/commit/712952dd420bc6da80ad71bc80b985cd0a6b30c9))
+* **svg:** do not crash on a mask or element with no computed style ([#23](https://github.com/matjam/aura/issues/23)) ([797f66a](https://github.com/matjam/aura/commit/797f66a1bc8f4fc3dcbe9f06115c75b83f48d00a))
+
+
+### Performance Improvements
+
+* **browser:** no sleep in the event loop while a page has work ready ([77cba20](https://github.com/matjam/aura/commit/77cba20291d9cd4707f224c59c0f783b86871a20))
+* **js:** hash large scripts four bytes a step ([87f818e](https://github.com/matjam/aura/commit/87f818eb442099b6a000a747583cc5f9dd5a262b))
+* **js:** keep the bytecode of large scripts between pages and runs ([#30](https://github.com/matjam/aura/issues/30)) ([c958d88](https://github.com/matjam/aura/commit/c958d88ea817c5869479a6a1d20563414f958c26))
+* **js:** QuickJS patch 0023, interpreter calls on 32-bit PowerPC ([08dcccf](https://github.com/matjam/aura/commit/08dcccf201472a4036eb3c0404e7dbb306105817))
+* **paint:** blur only the bands of an outer box shadow outside the box ([#29](https://github.com/matjam/aura/issues/29)) ([afd681f](https://github.com/matjam/aura/commit/afd681fda6dd95278aeaaadce2c738f0fdc7da33))
+
 ## [0.9.1](https://github.com/matjam/aura/compare/v0.9.0...v0.9.1) (2026-11-19)
 
 
