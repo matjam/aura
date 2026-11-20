@@ -11,8 +11,28 @@
 #ifndef AURA_JS_HINT_STORE_H
 #define AURA_JS_HINT_STORE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* The code store (runtime.c, "Compiled scripts kept between pages"):
+ * the bytecode of large scripts, kept by the embedder so that a later
+ * page reads a script instead of compiling it.
+ *
+ * key names the script: a SHA-256 over the engine build, how the script
+ * is compiled, its URL and its text, so no other script has it. get
+ * returns the bytecode stored under key as an au_alloc'd block the
+ * caller frees, or NULL; *seen says whether get was called with this
+ * key before (the runtime stores a script the second time it compiles
+ * it). put copies the bytes. The bytecode is run as it is read: the
+ * store must return only bytes that put was given, whole. */
+#define AU_JS_CODE_KEY 32
+
+typedef struct AuJsCodeStore {
+    void *ctx;
+    uint8_t *(*get)(void *ctx, const uint8_t key[AU_JS_CODE_KEY], size_t *len, bool *seen);
+    void (*put)(void *ctx, const uint8_t key[AU_JS_CODE_KEY], const uint8_t *code, size_t len);
+} AuJsCodeStore;
 
 typedef struct AuJsHintStore {
     void *ctx;

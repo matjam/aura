@@ -54,7 +54,7 @@ takes its cap from `AURA_FUZZ_SECONDS`.
 | `fuzz_cookies` | Set-Cookie parsing, the cookie file | `net/fuzz_cookies N SEED` | built-in cookies |
 | `fuzz_sse` | the EventSource event stream parser (`src/net/sse.c`): each stream parsed whole and in random pieces, which must agree; valid UTF-8 and the size limits in every callback | `net/fuzz_sse N SEED SECONDS` | built-in streams |
 | `fuzz_webcrypto` | crypto.subtle's C side (`src/net/webcrypto.c`): mutated key data imported as every kind of key (RSA DER, EC scalars and points, X25519) and used; AES in four modes and PBKDF2 and HKDF with random lengths | `net/fuzz_webcrypto N SEED SECONDS` | keys generated at start |
-| `fuzz_files` | Session, Bookmarks.html, History, Aura Preferences, Downloads, cookie rules, the disk cache folder, Script Hints | `browser/fuzz_files N SEED SECONDS` | files the stores write, made at start |
+| `fuzz_files` | Session, Bookmarks.html, History, Aura Preferences, Downloads, cookie rules, the disk cache folder, Script Hints, the script cache's Index | `browser/fuzz_files N SEED SECONDS` | files the stores write, made at start |
 | `fuzz_blocklist` | list parser, compiled files, the store's index | `blocklist/fuzz_blocklist N SEED SECONDS` | generated |
 
 ## What counts as a failure

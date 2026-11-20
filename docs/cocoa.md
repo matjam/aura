@@ -42,8 +42,8 @@ built, and the model falls back where it can.
 ## Profile and assets
 
 - The profile is `~/Library/Application Support/Aura`, read and written
-  through the POSIX `AuAppFiles`. Its `Cache` folder goes to
-  `~/Library/Caches/Aura/Cache` instead. `AURA_PROFILE` puts both in one
+  through the POSIX `AuAppFiles`. Its `Cache` and `Script Cache`
+  folders go to `~/Library/Caches/Aura` instead. `AURA_PROFILE` puts both in one
   folder.
 - Downloads go to the download folder preference, else `~/Downloads`. A
   download is written as `<id> <name>.part` and renamed when it

@@ -62,6 +62,7 @@
 #define AU_APP_FOLDER_CACHE "Cache"
 #define AU_APP_FOLDER_LOCAL_STORAGE "Local Storage"
 #define AU_APP_FOLDER_BLOCKLISTS "Blocklists"
+#define AU_APP_FOLDER_SCRIPT_CACHE "Script Cache"
 
 /* Delays, in milliseconds. */
 enum {
@@ -69,8 +70,12 @@ enum {
     AU_APP_SCROLL_SAVE_DELAY_MS = 30000, /* the session while only scroll positions changed; site icons */
     AU_APP_NET_SAVE_DELAY_MS = 5000,    /* cookies, HSTS, web storage after its last change */
     AU_APP_STORAGE_MAX_WAIT_MS = 30000, /* web storage after its first unsaved change */
-    AU_APP_HINTS_SAVE_MS = 60000        /* script hints, at most this often */
+    AU_APP_HINTS_SAVE_MS = 60000        /* script hints and the script cache's Index, at most this often */
 };
+
+/* The most the Script Cache folder holds: twice the disk cache's size
+ * preference up to this (app_net.c, apply_prefs). */
+#define AU_APP_SCRIPT_CACHE_MAX ((size_t)64 << 20)
 
 /* The port's files. folder is NULL for the profile folder itself, else
  * the name of a folder inside it (AU_APP_FOLDER_*). Names are at most

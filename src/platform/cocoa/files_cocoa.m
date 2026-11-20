@@ -1,7 +1,7 @@
 /* The profile folder and the assets (docs/cocoa.md, "Profile and assets").
  *
  * The profile is ~/Library/Application Support/Aura, through the POSIX
- * AuAppFiles. Its Cache folder goes to ~/Library/Caches/Aura/Cache
+ * AuAppFiles. Its Cache and Script Cache folders go to ~/Library/Caches/Aura
  * instead, where macOS expects data it may throw away; every other name
  * stays in the profile. */
 #import "cocoa.h"
@@ -15,7 +15,8 @@ static AuAppFiles config_ops, cache_ops;
 
 static const AuAppFiles *route(const char *folder)
 {
-    return folder && !strcmp(folder, AU_APP_FOLDER_CACHE) ? &cache_ops : &config_ops;
+    return folder && (!strcmp(folder, AU_APP_FOLDER_CACHE) || !strcmp(folder, AU_APP_FOLDER_SCRIPT_CACHE)) ? &cache_ops
+                                                                                                           : &config_ops;
 }
 
 static bool f_read(void *ctx, const char *folder, const char *name, AuBuf *out, size_t max)

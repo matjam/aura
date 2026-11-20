@@ -56,6 +56,9 @@ struct AuApp {
     uint32_t storage_gen, storage_change_ms, storage_first_ms;
     struct AuScriptHints *hints; /* script_hints.h */
     uint32_t hints_saved_ms;     /* when the Script Hints file was last written */
+    struct AuScriptCache *scripts; /* script_cache.h; NULL when its folder cannot be used */
+    AuAppFolder scripts_folder;
+    uint32_t scripts_saved_ms;   /* when its Index was last written */
 };
 
 /* app.c */

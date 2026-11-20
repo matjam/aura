@@ -126,9 +126,23 @@ static void set_meta(JSContext *ctx, JSModuleDef *md, const char *url)
 static JSModuleDef *compile_module(JSContext *ctx, const char *name, const char *src, size_t len,
                                    const char *meta_url)
 {
-    JSValue fn = JS_Eval(ctx, src, len, name,
-                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE |
-                             (len >= JS_NO_TEXT_SCRIPT ? JS_EVAL_FLAG_NO_SOURCE : 0));
+    /* A module stored by an earlier page or run is read instead (runtime.c,
+     * "Compiled scripts kept between pages"). */
+    AuJs *js = js_of_ctx(ctx);
+    uint8_t key[AU_JS_CODE_KEY];
+    bool keyed = js_code_key(js, true, name, 1, src, len, key), seen = false;
+    JSValue fn = keyed ? js_code_load(js, key, src, len, &seen) : JS_UNINITIALIZED;
+    if (JS_IsUninitialized(fn)) {
+        fn = JS_Eval(ctx, src, len, name,
+                     JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE |
+                         (len >= JS_NO_TEXT_SCRIPT ? JS_EVAL_FLAG_NO_SOURCE : 0));
+        if (keyed && !JS_IsException(fn))
+            js_code_save(js, key, fn, len, seen);
+    } else if (JS_VALUE_GET_TAG(fn) != JS_TAG_MODULE) {
+        JS_FreeValue(ctx, fn);
+        JS_ThrowInternalError(ctx, "stored code of %.200s is not a module", name);
+        return NULL;
+    }
     if (JS_IsException(fn))
         return NULL;
     JSModuleDef *md = JS_VALUE_GET_PTR(fn);

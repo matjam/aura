@@ -90,7 +90,10 @@ records where the code came from and how to update it.
   `__floatdidf`, and the interpreter drops references in line instead
   of calling `JS_FreeValue`, and `0024` regular expressions with up to
   65535 capture groups instead of 255: capture indexes are 16-bit in
-  the regexp bytecode (Discord's main script has a 343-group literal).
+  the regexp bytecode (Discord's main script has a 343-group literal),
+  and `0025` reading a module's bytecode without resolving its imports
+  (`JS_READ_OBJ_NO_RESOLVE`), for the modules Aura keeps in its script
+  cache.
 - **Tests:** `quickjs/tests` holds the subset of upstream's `tests/`
   folder that needs no `quickjs-libc` (no `qjs:std`, `qjs:os`, `bjson`,
   workers or test262 harness); the microbenchmark is left out.

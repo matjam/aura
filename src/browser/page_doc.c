@@ -2802,6 +2802,7 @@ static void begin_doc(AuPage *p, const char *url)
         au_docview_set_script_memory(p->dv, au_memory_kb_bytes(page_kb), au_memory_kb_bytes(worker_kb));
     }
     au_docview_set_script_hints(p->dv, p->env.script_hints ? p->env.script_hints(p->env.ctx) : NULL);
+    au_docview_set_script_code(p->dv, p->env.script_code ? p->env.script_code(p->env.ctx) : NULL);
     au_docview_set_user_agent(p->dv, au_prefs_user_agent(p->env.prefs));
     {
         /* document.referrer: what the network layer sent as Referer for

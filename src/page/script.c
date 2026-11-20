@@ -808,6 +808,7 @@ static bool ensure_js(AuDocScript *s)
         if (topv->worker_mem)
             set.worker_memory_limit = topv->worker_mem;
         set.hints = topv->script_hints;
+        set.code = topv->script_code;
     }
     AuJsHooks h;
     memset(&h, 0, sizeof h);

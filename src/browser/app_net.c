@@ -6,6 +6,7 @@
 
 #include "netlog.h"
 #include "script_hints.h"
+#include "script_cache.h"
 
 #include "../net/cookies.h"
 #include "../net/hsts.h"
@@ -135,6 +136,16 @@ void au_app_net_save(AuApp *a, bool force)
         au_buf_free(&hb);
         a->hints_saved_ms = now;
     }
+    /* The script cache's Index, as rarely; its queued scripts when
+     * forced (au_app_net_idle writes them otherwise). */
+    if (a->scripts) {
+        if (force)
+            au_script_cache_flush(a->scripts);
+        if (au_script_cache_dirty(a->scripts) && (force || now - a->scripts_saved_ms >= AU_APP_HINTS_SAVE_MS)) {
+            au_script_cache_save(a->scripts);
+            a->scripts_saved_ms = now;
+        }
+    }
     /* Web storage: the changed areas, one file a pass, once script has
      * left them alone for the delay (or half a minute after the first
      * change, for a page that never stops writing), and while nothing
@@ -180,6 +191,11 @@ static void apply_prefs(AuApp *a)
             au_cache_set_storage(a->cache, NULL);
         }
     }
+    /* The script cache may take twice the disk cache's size (the
+     * bytecode of Discord's 12.8 MB main script is 15.5 MB), and nothing
+     * when the disk cache is off. */
+    if (a->scripts)
+        au_script_cache_set_max(a->scripts, disk < AU_APP_SCRIPT_CACHE_MAX / 2 ? disk * 2 : AU_APP_SCRIPT_CACHE_MAX);
 }
 
 static void load_roots(AuApp *a)
@@ -247,6 +263,18 @@ bool au_app_net_start(AuApp *a, const AuAppNet *np)
         a->hints_saved_ms = au_app_ms(a);
     }
     b->script_hints = au_script_hints_store(a->hints);
+    /* The script cache: bytecode of large scripts, in a folder of its
+     * own. apply_prefs sets its size. */
+    if (au_app_folder_init(&a->scripts_folder, &a->port.files, AU_APP_FOLDER_SCRIPT_CACHE, AU_SCRIPT_CACHE_FILE_MAX)) {
+        a->scripts_folder.us = a->port.us;
+        a->scripts_folder.us_ctx = a->port.ctx;
+        AuDiskCacheFiles files;
+        au_app_folder_disk_cache(&a->scripts_folder, &files);
+        a->scripts = au_script_cache_new(&files, 0);
+        au_script_cache_set_deferred(a->scripts, np->defer_cache_writes);
+        a->scripts_saved_ms = au_app_ms(a);
+        b->script_code = au_script_cache_store(a->scripts);
+    }
     apply_prefs(a);
 
     a->loader = au_net_loader_new(a->net);
@@ -282,6 +310,8 @@ void au_app_net_idle(AuApp *a)
     /* Queued cache files: one per pass, while no transfer is under way. */
     if (a->disk && au_disk_cache_pending(a->disk) && au_net_loader_active(a->loader) == 0)
         au_disk_cache_idle(a->disk, 1);
+    else if (a->scripts && au_script_cache_pending(a->scripts) && au_net_loader_active(a->loader) == 0)
+        au_script_cache_idle(a->scripts, 1);
 }
 
 int au_app_loads_active(AuApp *a)
@@ -292,7 +322,8 @@ int au_app_loads_active(AuApp *a)
 bool au_app_net_busy(AuApp *a)
 {
     return a->net_started &&
-           (au_net_loader_active(a->loader) > 0 || (a->disk && au_disk_cache_pending(a->disk) > 0));
+           (au_net_loader_active(a->loader) > 0 || (a->disk && au_disk_cache_pending(a->disk) > 0) ||
+            (a->scripts && au_script_cache_pending(a->scripts) > 0));
 }
 
 void au_app_prefs_changed(AuApp *a)
@@ -320,6 +351,8 @@ void au_app_clear_cache(AuApp *a)
         au_net_clear_dns(a->net);
     if (a->hints)
         au_script_hints_clear(a->hints); /* it names the scripts pages ran */
+    if (a->scripts)
+        au_script_cache_clear(a->scripts); /* so do its files */
 }
 
 void au_app_cookie_rules_changed(AuApp *a)
@@ -383,6 +416,20 @@ void au_app_net_status(AuApp *a, AuBuf *out)
     au_report_kv(out, "Read from disk", "%lu entries; %u file reads in %lu ms", cs.from_storage, dc->reads,
                  (unsigned long)(dc->read_us / 1000));
     au_report_kv(out, "Written to disk", "%u files in %lu ms", dc->writes, (unsigned long)(dc->write_us / 1000));
+
+    if (a->scripts) {
+        /* Counts only: never which scripts. */
+        const AuAppFolder *sf = &a->scripts_folder;
+        AuScriptCacheStats ss;
+        au_script_cache_stats(a->scripts, &ss);
+        au_buf_puts(out, "\nScript cache\n");
+        au_report_kv(out, "On disk", "%lu KB in %u scripts, %u seen once", (unsigned long)(ss.bytes / 1024),
+                     (unsigned)ss.count, (unsigned)ss.seen);
+        au_report_kv(out, "Lookups", "%u read, %u missed, %u stored, %u damaged", ss.hits, ss.misses, ss.stores,
+                     ss.damaged);
+        au_report_kv(out, "Files", "%u read in %lu ms, %u written in %lu ms", sf->reads,
+                     (unsigned long)(sf->read_us / 1000), sf->writes, (unsigned long)(sf->write_us / 1000));
+    }
 }
 
 void au_app_net_stop(AuApp *a)
@@ -428,6 +475,9 @@ void au_app_net_stop(AuApp *a)
     b->script_hints = NULL;
     au_script_hints_free(a->hints);
     a->hints = NULL;
+    b->script_code = NULL;
+    au_script_cache_free(a->scripts);
+    a->scripts = NULL;
     au_cookie_jar_free(a->jar);
     au_roots_free(a->roots);
     a->net = NULL;

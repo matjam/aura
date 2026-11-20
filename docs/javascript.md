@@ -91,7 +91,8 @@ Patches this document refers to:
 | 0020 | the weak references to an object (WeakMap and WeakSet keys, WeakRef and FinalizationRegistry targets) are listed in a runtime hash table, and the object keeps one bit instead of a pointer (`0020-weak-refs-in-runtime`) |
 | 0021 | a nested function of 128 bytes to 16 KB of text is compiled at its first call, from its script's text; until then it is a stub holding the variables it captures (`JS_SetLazyFunctions`, `0021-lazy-functions`) |
 | 0022 | compile hints: the embedder names each script it compiles and is told which of its functions were compiled at their first call, and passes those back the next time to compile them with the script (`JS_SetCompileHints`, `0022-compile-hints`; "Script hints" below) |
-| 0024 | a regular expression may have up to 65535 capture groups instead of 255: capture indexes are 16-bit in the regexp bytecode (`0024-regexp-many-captures`); `BC_VERSION` stays 29, since Aura keeps no bytecode across builds and upstream's tests embed version-29 bytecode. Discord's main script has a 343-group literal, and the 255 limit made the whole script a SyntaxError |
+| 0024 | a regular expression may have up to 65535 capture groups instead of 255: capture indexes are 16-bit in the regexp bytecode (`0024-regexp-many-captures`); `BC_VERSION` stays 29, since upstream's tests embed version-29 bytecode and the bytecode Aura keeps is named by the engine stamp ("The script cache" below). Discord's main script has a 343-group literal, and the 255 limit made the whole script a SyntaxError |
+| 0025 | bytecode of a module can be read without resolving its imports (`JS_READ_OBJ_NO_RESOLVE`, `0025-read-module-unresolved`), for modules kept in the script cache ("The script cache" below) |
 
 `third_party/README.md` lists every patch. After changing any of them,
 run JSTest in the guest.
@@ -661,6 +662,78 @@ runs each):
 | GitHub repository page | 4 instead of 1,065 | 707 to 722 ms instead of 741 to 848 ms | 37.1 MB instead of 37.3 MB |
 | Wikipedia, "PowerPC" | 83 instead of 647 | 79 to 82 ms instead of 96 to 97 ms | 7.07 MB instead of 7.16 MB |
 | Reddit home page | about 257 instead of about 2,180 | within the variation between loads | within the variation between loads |
+
+### The script cache
+
+To compare a page's third load with and without the script cache on the
+host, run `aura-host chrome --net --tab URL --do reload --do reload
+--do perf --do cache` with and without `--no-script-cache` (the host
+keeps the bytecode in memory for the run; `--do cache` prints the
+cache's counts).
+
+A page that runs a large script compiles it on the first two visits and
+reads its bytecode after that, also in a later run of Aura.
+
+- **What is covered.** Classic scripts and modules of 32 KB
+  (`JS_STORE_SCRIPT`) or more, in the page's runtime and its frames
+  (`eval_classic` in `runtime.c`, `compile_module` in `module.c`).
+- **When a script is stored.** The second time it is compiled. A page
+  visited once costs no write, and the second compile has the script
+  hints, so the functions the page calls are in the bytecode compiled
+  instead of as stubs. A script of 2 MB or more has no stubs and is
+  stored the first time.
+- **How a script is named.** By a SHA-256 over the engine stamp, the
+  byte order and pointer size, the lazy-function setting, the script's
+  kind, URL, first line and text (`js_code_key`). The 32-bit hash that
+  names a script for the hints is not used: bytecode is run, so a
+  script from another site must not be able to take a script's name.
+- **The engine stamp** (`AU_JS_ENGINE_STAMP`, `third_party/quickjs.cmake`)
+  is a hash of the QuickJS sources and defines. Bytecode names built-in
+  atoms and opcodes by number, so a build with other QuickJS sources
+  finds none of the old files and stores its own.
+- **A module** is read with its imports unresolved
+  (`JS_READ_OBJ_NO_RESOLVE`, patch 0025), which is the state
+  `compile_module` leaves a compiled one in.
+- **Where the bytecode is kept.** `AuJsSettings.code` is an
+  `AuJsCodeStore` (`js/hint_store.h`). The browser's is
+  `src/browser/script_cache.c`: one file a script in the `Script Cache`
+  folder, named by 15 bytes of the key, and a file `Index` of the 512
+  keys asked for once ([`browser-chrome.md`](browser-chrome.md)). The
+  folder holds twice the disk cache's size preference, at most 64 MB,
+  and nothing when the disk cache is off; the oldest written file goes
+  first. On a port that defers cache writes (Mac OS 9) a stored script
+  waits for idle time. Clearing the cache empties the folder.
+- **A damaged file.** QuickJS does not check bytecode it reads. A file
+  is used only when its header, key, length and checksum match, which
+  catches a damaged or truncated file; it is then removed and the
+  script compiled and stored again. This does not guard against
+  someone who can write the folder.
+- **Memory.** Storing writes the bytecode into the script heap and
+  copies it once (15.5 MB each for Discord's main script), so a
+  runtime past three quarters of its limit stores nothing.
+
+Not covered: workers, text given to `eval`, a script that is mostly
+data, and scripts under 32 KB.
+
+Measured on the host (2026-11-19, Release build, base `afd681f`, the
+third load of the page, three runs each):
+
+| Page | Without the cache | With it | Stored |
+|---|---|---|---|
+| Discord's main script and one chunk (12.8 MB and 44 KB) in a local page | script 821 to 932 ms | 131 to 152 ms | 2 scripts, 15.6 MB |
+| https://github.com/matjam/aura | script 541 to 668 ms | 361 to 421 ms | 21 modules, 3.3 MB |
+
+Not measured in the guest or on a G4, where reading a 15 MB file and
+hashing 12.8 MB of text cost more than on the host.
+
+**Tests:** `tests/js/test_script_cache.c` (ctest `js_script_cache`): a
+classic script, a script over 2 MB and a module through three runtimes;
+functions compiled at their first call, `toString` and error positions
+of a script that was read; another URL and other bytes; the store's
+limit, damaged and truncated files, deferred writes, and the Index
+through its file and every prefix. `test_script_cache_folder` in
+`tests/browser/test_app.c`: the folder, the Index's timing, the size
+preference and clearing. `fuzz_files scripts` fuzzes the Index.
 
 ### Large scripts
 

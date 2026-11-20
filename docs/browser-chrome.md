@@ -916,6 +916,7 @@ when each is saved is decided in `src/browser/app.c` and `app_net.c`
 | `Intermediates` | the intermediate certificate pool | `app_net.c` ([`tls.md`](tls.md)) |
 | `Script Hints` | for each script run, the functions compiled at their first call | `app_net.c`, `script_hints.c` ([`javascript.md`](javascript.md), "Script hints") |
 | `Cache` (folder) | the disk cache | `app_net.c`, `src/net/disk_cache.c` |
+| `Script Cache` (folder) | the bytecode of large scripts, and `Index`, the scripts seen once | `app_net.c`, `script_cache.c` ([`javascript.md`](javascript.md), "The script cache") |
 | `Local Storage` (folder) | web storage | `app_net.c` ([`web-storage.md`](web-storage.md)) |
 | `Random Seed` | entropy carried between runs | the port ([`mac-os-9-shell.md`](mac-os-9-shell.md)) |
 | `Blocklists` (folder) | compiled blocklists | the port ([`content-blocking.md`](content-blocking.md)) |
