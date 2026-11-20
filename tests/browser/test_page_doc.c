@@ -76,6 +76,14 @@ static const struct {
      "<div style='height:1000px'>inner</div></div><div style='height:3000px'></div>"},
     {"wide.html", "<!DOCTYPE html><body style='margin:0'><p style='margin:0'>xx xx xx xx xx xx xx xx xx xx</p>"},
     {"fr.html", "<!DOCTYPE html><body><iframe src='frin.html'></iframe>"},
+    {"fo.html", "<!DOCTYPE html><body style='margin:0'>"
+                "<svg width=48 height=48 viewBox='0 0 48 48' style='display:block'><foreignObject x=4 y=4 width=40 height=40>"
+                "<div id=wrap><img id=im src='data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==' "
+                "style='width:40px;height:40px;pointer-events:none'></div></foreignObject></svg>"
+                "<svg width=100 height=60 style='display:block'><foreignObject x=10 y=5 width=60 height=40>"
+                "<div id=box style='width:60px;height:40px'><span id=word>hello</span></div></foreignObject></svg>"
+                "<script>var got='';for(const id of ['wrap','box'])document.getElementById(id)"
+                ".addEventListener('click',e=>{got+=id+':'+e.target.id+';'});</script>"},
     {"frin.html", "<!DOCTYPE html><title>Inner</title><body><script>var where = 'inner';</script>"},
     {"drag.html",
      "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:20px'>"
@@ -795,6 +803,29 @@ static void test_eval_in_frame(void)
     au_browser_free(b);
 }
 
+/* A click on a foreignObject's HTML reaches that HTML's listeners (the
+ * servers in Discord's rail are an svg holding an object holding the div
+ * that listens), and script finds the same elements at the point and
+ * with the object's rectangle. */
+static void test_foreign_click(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/fo.html", true, -1);
+    settle(w);
+    paint(w);
+    CHECK_STR(page_js(w, "document.elementFromPoint(24,24).id+' '+document.elementFromPoint(13,55).id"), "wrap word");
+    CHECK_STR(page_js(w, "(r=>[r.x,r.y,r.width,r.height].join())(document.getElementById('wrap').getBoundingClientRect())"),
+              "4,4,40,40");
+    press(w, AU_EVENT_MOUSE_DOWN, 24, 24, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 24, 24, 0, 1);
+    press(w, AU_EVENT_MOUSE_DOWN, 13, 55, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 13, 55, 0, 1);
+    CHECK_STR(page_js(w, "got"), "wrap:wrap;box:word;");
+    settle(w);
+    au_browser_free(b);
+}
+
 /* AuBrowserHost.window_geometry: script reads the screen, the window's
  * frame and each mouse event's place on the screen from what the shell
  * says, in the page and in a frame; a move says how far it came. */
@@ -1167,6 +1198,7 @@ int main(void)
     test_drag_release();
     test_eval_in_frame();
     test_window_geometry();
+    test_foreign_click();
     test_context_menu();
     test_save_source();
     test_session_scroll();

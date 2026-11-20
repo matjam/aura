@@ -413,6 +413,100 @@ static AuElement *element_of(LBox *b)
     return NULL;
 }
 
+/* The foreignObject of svg box k (border box at ox, oy) whose box holds
+ * the point, the last in document order (the one painted on top): its
+ * place in *m. Objects inside another object are that object's root's
+ * business. */
+static AuElement *foreign_at(HCtx *H, LBlock *k, float ox, float oy, AuMatrix *m, float *lx, float *ly)
+{
+    if (!k->b.node || !au_is_element(k->b.node))
+        return NULL;
+    AuElement *svg = au_as_element(k->b.node), *found = NULL;
+    AuRect view = {ox + k->bw[3] + k->p[3], oy + k->bw[0] + k->p[0], k->w - k->bw[1] - k->bw[3] - k->p[1] - k->p[3],
+                   k->h - k->bw[0] - k->bw[2] - k->p[0] - k->p[2]};
+    AuAtom fo_tag = au_atom_cstr("foreignObject");
+    AuNode *top = k->b.node, *c = top->first_child;
+    int seen = 0;
+    while (c && seen < 4096) {
+        bool descend = false;
+        seen++;
+        if (c->type == AU_NODE_ELEMENT) {
+            AuElement *e = au_as_element(c);
+            if (e->ns == AU_NS_SVG && e->tag == fo_tag) {
+                AuMatrix pm, inv;
+                float w, h;
+                if (au_svg_foreign_place(l_svg_names(H->L), svg, view, e, &pm, &w, &h) && au_matrix_invert(&pm, &inv)) {
+                    float px = inv.a * H->x + inv.c * H->y + inv.e, py = inv.b * H->x + inv.d * H->y + inv.f;
+                    if (px >= 0 && px < w && py >= 0 && py < h) {
+                        found = e;
+                        *m = pm;
+                        *lx = px;
+                        *ly = py;
+                    }
+                }
+            } else {
+                descend = e->ns == AU_NS_SVG && c->first_child;
+            }
+        }
+        if (descend) {
+            c = c->first_child;
+            continue;
+        }
+        while (c != top && !c->next)
+            c = c->parent;
+        c = c == top ? NULL : c->next;
+    }
+    return found;
+}
+
+/* A point on an inline svg may be on the HTML of one of its
+ * foreignObjects, which the box tree does not hold (foreign.c): the hit
+ * goes on into the object's root, in the object's own coordinates, and
+ * into an svg in that. An object that draws only its <img>
+ * (au_svg_foreign_img) has no root; the point is then on the element the
+ * image fills, its parent, as it is when the image has pointer-events:
+ * none over a wrapper of the object's size (Discord's server icons).
+ * False when the point is on the svg itself. */
+static bool hit_foreign(HCtx *H, AuElement **only)
+{
+    *only = NULL;
+    bool any = false;
+    for (int depth = 0; depth <= L_FOREIGN_DEPTH; depth++) {
+        LBox *b = H->box;
+        if (!b || b->kind != LK_BLOCK || b->replaced != LR_SVG)
+            break;
+        AuMatrix m;
+        float lx, ly;
+        AuElement *fo = foreign_at(H, (LBlock *)b, H->bx, H->by, &m, &lx, &ly);
+        if (!fo)
+            break;
+        LForeign *e = l_foreign_find(H->L, fo);
+        if (!e) {
+            AuElement *img = au_svg_foreign_img(fo);
+            if (img) {
+                AuNode *par = img->node.parent;
+                *only = par && par != &fo->node && au_is_element(par) ? au_as_element(par) : img;
+                any = true;
+            }
+            break;
+        }
+        HCtx Q;
+        memset(&Q, 0, sizeof Q);
+        Q.L = H->L;
+        Q.x = lx;
+        Q.y = ly;
+        if (!hit_layer(&Q, e->root, 0, 0) || !Q.box)
+            break;
+        *H = Q; /* from here on in the object's coordinates */
+        any = true;
+        if (!element_of(Q.box)) { /* the root itself: the object */
+            *only = fo;
+            break;
+        }
+    }
+    return any;
+}
+
 static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll_y, AuHitResult *r, float *bx,
                      float *by)
 {
@@ -431,8 +525,11 @@ static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll
     H.scroll_y = scroll_y;
     LBlock *root = (LBlock *)L->root;
     bool ok = hit_layer(&H, L->root, root->x - scroll_x, root->y - scroll_y);
+    LBox *outer = ok ? H.box : NULL; /* the box in the tree: what scrolls */
+    AuElement *only = NULL;
+    bool foreign = ok && hit_foreign(&H, &only);
     LBox *b = ok ? H.box : L->root;
-    r->element = element_of(b);
+    r->element = only ? only : element_of(b);
     /* Nothing that is not inert under the point (outside a modal dialog
      * without a backdrop, or in an inert page): no target. */
     if (!ok && r->element && au_node_inert(&r->element->node))
@@ -470,13 +567,14 @@ static LBox *hit_box(AuLayout *L, float x, float y, float scroll_x, float scroll
             r->link = e;
             break;
         }
-    r->local_x = x - H.bx;
-    r->local_y = y - H.by;
+    /* in a foreignObject the point and the box are in its coordinates */
+    r->local_x = (foreign ? H.x : x) - H.bx;
+    r->local_y = (foreign ? H.y : y) - H.by;
     if (bx)
         *bx = H.bx;
     if (by)
         *by = H.by;
-    return ok ? b : NULL;
+    return outer;
 }
 
 bool au_layout_hit_test(AuLayout *L, float x, float y, float scroll_x, float scroll_y, AuHitResult *r)

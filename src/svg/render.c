@@ -1245,6 +1245,65 @@ bool au_svg_foreign_size(const AuSvgNames *n, const AuElement *fo, float *w, flo
     return *w > 0 && *h > 0 && *w < 1e5f && *h < 1e5f;
 }
 
+bool au_svg_foreign_place(const AuSvgNames *n, AuElement *svg, AuRect view, const AuElement *fo, AuMatrix *m,
+                          float *w, float *h)
+{
+    /* The elements from svg down to fo, then the frames the renderer
+     * makes on its way to it (render, K_SVG, foreign_render), without
+     * drawing: nothing here touches the canvas. */
+    enum { CHAIN = 32 };
+    const AuElement *chain[CHAIN];
+    int nc = 0;
+    const AuNode *p = &fo->node;
+    for (; p && p != &svg->node; p = p->parent) {
+        if (p->type != AU_NODE_ELEMENT || nc == CHAIN)
+            return false;
+        chain[nc++] = (const AuElement *)p;
+    }
+    const AuStyle *s = au_element_style(svg);
+    if (!p || !s || !svg_is_tag(svg, n->svg) || !(view.w > 0) || !(view.h > 0) || s->box->display == AU_DISPLAY_NONE)
+        return false;
+    SvgCtx x;
+    memset(&x, 0, sizeof x);
+    x.n = n;
+    x.root = svg;
+    SvgFrame f;
+    memset(&f, 0, sizeof f);
+    f.ctm = (AuMatrix){1, 0, 0, 1, 0, 0};
+    f.vw = view.w;
+    f.vh = view.h;
+    f.vp_dev = view;
+    svg_state(svg, NULL, false, &f.st);
+    bool pushed;
+    if (!enter_viewport(&x, svg, &f, view.x, view.y, view.w, view.h, false, &pushed))
+        return false;
+    while (nc--) {
+        const AuElement *el = chain[nc];
+        const AuStyle *es = au_element_style(el);
+        if (!es || es->box->display == AU_DISPLAY_NONE || el->ns != AU_NS_SVG)
+            return false;
+        SvgFrame cf;
+        child_frame(&x, el, &f, &cf);
+        local_transform(&x, el, &f, &cf.ctm);
+        if (el != fo && svg_is_tag(el, n->svg)) {
+            float vx = svg_len_attr(el, n->x, &cf, 0, 0), vy = svg_len_attr(el, n->y, &cf, 1, 0);
+            float vw = svg_len_attr(el, n->width, &cf, 0, cf.vw), vh = svg_len_attr(el, n->height, &cf, 1, cf.vh);
+            if (!enter_viewport(&x, el, &cf, vx, vy, vw, vh, false, &pushed))
+                return false;
+        }
+        f = cf;
+    }
+    float ix = svg_len_attr(fo, n->x, &f, 0, 0), iy = svg_len_attr(fo, n->y, &f, 1, 0);
+    *w = svg_len_attr(fo, n->width, &f, 0, 0);
+    *h = svg_len_attr(fo, n->height, &f, 1, 0);
+    if (!(*w > 0 && *h > 0))
+        return false;
+    AuMatrix tr = {1, 0, 0, 1, ix, iy};
+    *m = f.ctm;
+    au_matrix_multiply(m, &tr);
+    return true;
+}
+
 static void image_draw(SvgCtx *x, AuElement *el, const char *href, float ix, float iy, float w, float h,
                        const char *par_attr, const SvgFrame *f, float opacity)
 {

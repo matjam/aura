@@ -143,6 +143,14 @@ AuElement *au_svg_foreign_img(AuElement *fo);
  * size, percentages against the nearest ancestor svg's viewBox, else its
  * absolute width and height. False when either is not positive. */
 bool au_svg_foreign_size(const AuSvgNames *n, const AuElement *fo, float *w, float *h);
+/* Where foreignObject fo of inline svg element svg is when svg is drawn
+ * in view (au_svg_paint's): m maps the object's box, (0, 0) to (w, h) in
+ * CSS pixels, to the coordinates view is in. For hit testing and for the
+ * rectangles of the object's HTML; clips and masks are not looked at.
+ * False when the object is not drawn (no size, display none above it,
+ * not under svg, nested too deep). */
+bool au_svg_foreign_place(const AuSvgNames *n, AuElement *svg, AuRect view, const AuElement *fo, AuMatrix *m,
+                          float *w, float *h);
 
 /* Paints svg (an svg element) with its viewport at view (canvas
  * coordinates). Clips to view unless the element's overflow is visible. */

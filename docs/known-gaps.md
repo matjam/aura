@@ -224,9 +224,10 @@ What version 1 leaves out on purpose is in [`v1-scope.md`](v1-scope.md).
 - Filters, patterns, markers, textPath, multi-line text, animation.
 - `foreignObject` ([svg.md](svg.md#html-in-a-foreignobject)): one
   with an HTML `<img>` among its first 64 nodes draws only that image,
-  stretched; clicks inside one land on the svg, not on its HTML;
-  `getBoundingClientRect` and scrolling into view find no box for its
-  elements; content in a scaled or rotated user space is drawn at CSS
+  stretched, and a click on it lands on the image's parent; every
+  element in an object answers `getBoundingClientRect` with the
+  object's box, not its own; an object's clip path and mask do not
+  limit where it is hit; content in a scaled or rotated user space is drawn at CSS
   pixels and resampled (soft when scaled up); percentage sizes resolve
   against the nearest svg's viewBox only; an object nested more than
   two deep in others draws nothing; an SVG image (a file) draws none.

@@ -1061,6 +1061,59 @@ static void test_foreign_object_img(void)
     au_docview_free(dv);
 }
 
+/* A point on a foreignObject is on its HTML, not on the svg, and the
+ * HTML's elements have the object's rectangle: an object that draws only
+ * its <img> (Discord's server icons: the wrapper has the click handler),
+ * one whose HTML layout lays out, one moved by a transform, and the svg
+ * itself beside its objects. */
+static const char *hit_id(AuDocView *dv, int x, int y)
+{
+    AuHitResult r;
+    if (!au_docview_hit_test(dv, x, y, &r) || !r.element)
+        return "(none)";
+    const char *id = au_element_get_attr(r.element, AU_ATOM_id);
+    return id ? id : "(no id)";
+}
+
+static void test_foreign_object_hit(void)
+{
+    AuDocView *dv = au_docview_new(fonts, NULL, NULL);
+    const char *html =
+        "<!DOCTYPE html><body style='margin:0'>"
+        "<svg id=s width=48 height=48 viewBox='0 0 48 48' style='display:block;margin:10px 0 0 20px'>"
+        "<foreignObject id=fo x=4 y=4 width=40 height=40><div id=wrap><img id=im src='a.png' "
+        "style='width:40px;height:40px;pointer-events:none'></div></foreignObject></svg>"
+        "<svg id=t width=100 height=60 style='display:block'>"
+        "<foreignObject id=fo2 x=10 y=5 width=60 height=40><div id=box style='width:60px;height:40px'>"
+        "<span id=word>hello</span></div></foreignObject>"
+        "<g transform='translate(70 0)'><foreignObject id=fo3 x=5 y=5 width=20 height=20>"
+        "<div id=moved style='width:20px;height:20px'></div></foreignObject></g></svg>";
+    au_docview_load(dv, html, strlen(html), "http://example.com/");
+    au_docview_set_viewport(dv, 200, 200);
+    au_docview_update(dv);
+    AuSurface *s = au_surface_new(200, 200);
+    AuCanvas *c = au_canvas_new(s);
+    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    /* the image object: the wrapper under the image */
+    CHECK(!strcmp(hit_id(dv, 20 + 24, 10 + 24), "wrap"), "on the icon: %s", hit_id(dv, 20 + 24, 10 + 24));
+    CHECK(!strcmp(hit_id(dv, 20 + 1, 10 + 1), "s"), "the svg outside its object: %s", hit_id(dv, 20 + 1, 10 + 1));
+    AuRect r = rect_of(dv, "wrap");
+    CHECK(r.x == 24 && r.y == 14 && r.w == 40 && r.h == 40, "wrapper's rectangle: %g,%g %gx%g", r.x, r.y, r.w, r.h);
+    r = rect_of(dv, "im");
+    CHECK(r.x == 24 && r.w == 40, "image's rectangle: %g,%g %gx%g", r.x, r.y, r.w, r.h);
+    /* laid-out HTML: its own boxes */
+    CHECK(!strcmp(hit_id(dv, 10 + 3, 58 + 5 + 4), "word"), "on the text: %s", hit_id(dv, 13, 67));
+    CHECK(!strcmp(hit_id(dv, 10 + 55, 58 + 5 + 35), "box"), "on the div: %s", hit_id(dv, 65, 98));
+    CHECK(!strcmp(hit_id(dv, 2, 58 + 2), "t"), "left of the object: %s", hit_id(dv, 2, 60));
+    /* an object under a transform */
+    CHECK(!strcmp(hit_id(dv, 70 + 5 + 10, 58 + 5 + 10), "moved"), "moved object: %s", hit_id(dv, 85, 73));
+    r = rect_of(dv, "moved");
+    CHECK(r.x == 75 && r.y == 63 && r.w == 20 && r.h == 20, "moved object's rectangle: %g,%g %gx%g", r.x, r.y, r.w, r.h);
+    au_canvas_free(c);
+    au_surface_free(s);
+    au_docview_free(dv);
+}
+
 /* Whether pixel c is within 6 of r, g, b on each channel. */
 static bool near_rgb(AuColor c, int r, int g, int b)
 {
@@ -1777,6 +1830,7 @@ int main(void)
     test_image_arrival_cost();
     test_object_embed();
     test_foreign_object_img();
+    test_foreign_object_hit();
     test_foreign_object_html();
     test_background_clip_text();
     test_user_css();

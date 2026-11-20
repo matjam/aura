@@ -67,6 +67,15 @@ icon or a text acronym, centred, in a masked object.
   boxes swaps the style in (marking the box for layout when geometry
   changes), and one that changes what is built marks the root stale,
   built again at the next update. Damage is the whole view.
+- Hit testing: a point that lands on an svg box is looked for in the
+  svg's objects (`hit_foreign` in `src/layout/hit.c`):
+  `au_svg_foreign_place` gives each object's place without drawing, the
+  last one that holds the point wins, and the hit goes on into its root
+  in the object's coordinates. An object that draws only its `<img>`
+  has no root: the hit is the image's parent (Discord's server icons,
+  whose wrapper div has the click listener). An element in an object
+  has no box, so `au_layout_element_rect` answers with the object's
+  box (`foreign_rect` in `layout.c`).
 - Limits: 1024 roots per layout (`L_FOREIGN_MAX`); an object inside an
   svg inside an object gets a root, one more level deep does not
   (`L_FOREIGN_DEPTH`).

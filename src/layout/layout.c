@@ -2461,11 +2461,63 @@ static bool box_rect(LBox *b, AuRect *out)
     return true;
 }
 
+/* An element with no box that is in a foreignObject of inline svg (its
+ * HTML is laid out beside the box tree, foreign.c, or is only an image
+ * the object draws): *svg gets the svg element that has the box and *fo
+ * the outermost object under it. */
+static bool foreign_owner(const AuElement *el, AuElement **svg, const AuElement **fo)
+{
+    AuAtom fo_tag = au_atom_cstr("foreignObject");
+    const AuElement *obj = NULL;
+    int guard = 0;
+    for (const AuNode *p = &el->node; p && p->type == AU_NODE_ELEMENT && guard < 512; p = p->parent, guard++) {
+        const AuElement *e = (const AuElement *)p;
+        if (e->ns == AU_NS_SVG && e->tag == fo_tag)
+            obj = e;
+        LBox *b = (LBox *)e->box;
+        if (b) {
+            if (!obj || b->kind != LK_BLOCK || b->replaced != LR_SVG)
+                return false;
+            *svg = (AuElement *)e;
+            *fo = obj;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The rectangle of such an element: its object's box, mapped to where
+ * the svg's border box r is. Every element in the object answers with
+ * the object's box (an approximation: the icon in Discord's server rail
+ * fills its object, and a tooltip is placed from it). */
+static bool foreign_rect(AuLayout *L, AuElement *svg, const AuElement *fo, AuRect r, AuRect *out)
+{
+    LBlock *k = (LBlock *)svg->box;
+    AuRect view = {r.x + k->bw[3] + k->p[3], r.y + k->bw[0] + k->p[0], k->w - k->bw[1] - k->bw[3] - k->p[1] - k->p[3],
+                   k->h - k->bw[0] - k->bw[2] - k->p[0] - k->p[2]};
+    AuMatrix m;
+    float w, h;
+    if (!au_svg_foreign_place(l_svg_names(L), svg, view, fo, &m, &w, &h))
+        return false;
+    float xs[4] = {0, w, w, 0}, ys[4] = {0, 0, h, h};
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (int i = 0; i < 4; i++) {
+        float X = m.a * xs[i] + m.c * ys[i] + m.e, Y = m.b * xs[i] + m.d * ys[i] + m.f;
+        x0 = l_min(x0, X), y0 = l_min(y0, Y), x1 = l_max(x1, X), y1 = l_max(y1, Y);
+    }
+    *out = (AuRect){x0, y0, x1 - x0, y1 - y0};
+    return true;
+}
+
 bool au_layout_element_rect(AuLayout *L, const AuElement *el, AuRect *out)
 {
-    (void)L;
     LBox *b = el ? (LBox *)el->box : NULL;
-    return b ? box_rect(b, out) : false;
+    if (b)
+        return box_rect(b, out);
+    AuElement *svg;
+    const AuElement *fo;
+    AuRect r;
+    return el && foreign_owner(el, &svg, &fo) && box_rect((LBox *)svg->box, &r) && foreign_rect(L, svg, fo, r, out);
 }
 
 /* Maps r through the transform of k, whose border box starts at (ox, oy),
@@ -2489,6 +2541,13 @@ static void map_through_transform(const LBlock *k, float ox, float oy, AuRect *r
 bool au_layout_element_visual_rect(AuLayout *L, const AuElement *el, float view_x, float view_y, AuRect *out)
 {
     LBox *b = el ? (LBox *)el->box : NULL;
+    if (el && !b) { /* in a foreignObject: from where its svg is seen */
+        AuElement *svg;
+        const AuElement *fo;
+        AuRect r;
+        return foreign_owner(el, &svg, &fo) && au_layout_element_visual_rect(L, svg, view_x, view_y, &r) &&
+               foreign_rect(L, svg, fo, r, out);
+    }
     if (!b || !box_rect(b, out))
         return false;
     float svx = L->view_scroll_x, svy = L->view_scroll_y;
