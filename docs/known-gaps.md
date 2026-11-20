@@ -420,13 +420,17 @@ script on Discord's login, 2026-11-19:
   the clock has one offset for every date, so the zone is one without
   daylight time.
 - With "Identify as" Aura, the user agent names a browser no risk
-  check knows. Safari is the nearest true story (Safari in Lockdown
-  Mode has no WebAssembly and no WebGL either); `navigator.oscpu` is
-  there only as Firefox.
+  check knows; `navigator.oscpu` is there only as Firefox.
+- Discord with "Identify as" Safari crashes ("Well, this is awkward")
+  in a channel that holds a voice message: for Safari it plays them with
+  ogv.js, whose player throws "WebAssembly not supported" when made. As
+  Firefox (or Chrome, or Aura) it makes an `<audio>` element, which
+  does not play but breaks nothing. Use Firefox for Discord: a session
+  signed in as Safari stays signed in (2026-11-19).
 - The GTK shell reports the window at its monitor's top left: GTK 4
   does not say where a toplevel is.
-- Discord's login works since 2026-11-19 in the macOS build, with
-  "Identify as" Safari: email, password and a TOTP code, and Discord
+- Discord's login works since 2026-11-19 in the macOS build, signed in
+  with "Identify as" Safari: email, password and a TOTP code, and Discord
   asked for no captcha. Not verified: which change decided it (the
   Safari identity, the time zone's name, or signing in with a password
   instead of the QR code); the QR code's sign-in, which had asked for
