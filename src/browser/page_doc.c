@@ -58,6 +58,7 @@ typedef enum {
     MAIN_SIM   /* the network placeholder's simulated load */
 } MainSource;
 
+#define NET_PEEK_MAX 200
 typedef struct Fetch Fetch;
 struct Fetch {
     AuPage *page;
@@ -78,6 +79,10 @@ struct Fetch {
     char *doc_url; /* the nested document that asked (a frame's resources), NULL for the page's own */
     char *mime;    /* a data: URL's type, reported as the response head before its bytes */
     uint32_t log; /* its record in the page's request log (netlog.h) */
+    /* Trace Network: the start of a text or JSON reply, for its end line */
+    char peek[NET_PEEK_MAX];
+    uint8_t peek_len;
+    bool peek_text;
 };
 
 /* A delivery from the network held while the page's script is parked
@@ -298,17 +303,29 @@ static uint32_t log_ms(AuPage *p)
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
 
 /* The Console's Trace Network: a line for the request as it now stands. */
-static void net_trace(AuPage *p, uint32_t seq)
+static void net_trace_peek(AuPage *p, uint32_t seq, const Fetch *f)
 {
     if (!(p->trace & AU_DV_TRACE_NET))
         return;
     AuBuf b;
     au_buf_init(&b);
     au_netlog_trace(&p->netlog, seq, log_ms(p), &b);
+    if (b.len && f && f->peek_len) {
+        /* what a small reply said: hCaptcha's 400 names its reason */
+        au_buf_puts(&b, " reply: ");
+        for (unsigned i = 0; i < f->peek_len; i++) {
+            char c = f->peek[i];
+            au_buf_putc(&b, c == '\n' || c == '\r' || c == '\t' ? ' ' : c);
+        }
+        if (f->peek_len == NET_PEEK_MAX)
+            au_buf_puts(&b, "...");
+    }
     if (b.len)
         dv_console(p, p->dv, 1, au_buf_cstr(&b), b.len);
     au_buf_free(&b);
 }
+
+static void net_trace(AuPage *p, uint32_t seq) { net_trace_peek(p, seq, NULL); }
 
 static void log_begin(AuPage *p, Fetch *f, const char *method)
 {
@@ -714,6 +731,11 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
     au_netlog_response(&f->page->netlog, f->log, r->status, r->content_type, r->from_cache, log_ms(f->page));
     au_netlog_set_url(&f->page->netlog, f->log, r->url);
     net_trace(f->page, f->log);
+    {
+        const char *t = r->content_type ? r->content_type : "";
+        f->peek_text = (f->page->trace & AU_DV_TRACE_NET) &&
+                       (strstr(t, "json") || !strncmp(t, "text/plain", 10) || strstr(t, "xml"));
+    }
     if (f->main) {
         thaw(f->page); /* the main response may replace the document */
         main_response(f->page, r);
@@ -802,6 +824,11 @@ static void sink_data(void *ctx, uint32_t id, const void *bytes, size_t len)
         return;
     f->off += len;
     au_netlog_data(&f->page->netlog, f->log, len);
+    if (f->peek_text && f->peek_len < NET_PEEK_MAX) {
+        size_t n = NET_PEEK_MAX - f->peek_len < len ? NET_PEEK_MAX - f->peek_len : len;
+        memcpy(f->peek + f->peek_len, bytes, n);
+        f->peek_len = (uint8_t)(f->peek_len + n);
+    }
     if (f->page->parked)
         hold_bytes(f->page, f->main ? HELD_MAIN_DATA : HELD_DATA, f->id, bytes, len);
     else if (f->main)
@@ -821,7 +848,7 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     f->ok = ok;
     AuPage *p = f->page;
     au_netlog_end(&p->netlog, f->log, ok ? AU_NETREC_DONE : AU_NETREC_FAILED, info, log_ms(p));
-    net_trace(p, f->log);
+    net_trace_peek(p, f->log, f);
     if (f->main) {
         thaw(p); /* the bytes held for the parser go first */
         main_done(p, ok, info);
@@ -1321,15 +1348,16 @@ static void dv_message(void *ctx, AuDocView *dv, const char *text)
  * runs it on the caller's stack, as without coroutines. */
 /* What a slice on the coroutine runs: the page's scripts, or the loading
  * layout (whose style pass parks as script does). */
-enum { CO_SCRIPTS, CO_LAYOUT };
+enum { CO_SCRIPTS, CO_LAYOUT, CO_MOUSE };
 
 static struct {
     const AuCoroOps *ops;
     void *co;
     AuPage *owner;    /* the page whose slice runs or is parked; NULL between slices */
     AuDocView *dv;    /* the view whose scripts the slice runs */
-    int job;          /* CO_SCRIPTS or CO_LAYOUT */
-    bool ran;         /* what the slice's au_docview_run_scripts returned */
+    int job;          /* CO_SCRIPTS, CO_LAYOUT or CO_MOUSE */
+    bool ran;         /* what the slice's au_docview_run_scripts (or au_docview_mouse) returned */
+    AuEvent ev;       /* CO_MOUSE: the press or release */
     AuAtomBits atoms; /* the atom scope entered on the coroutine when it left */
 } script_co;
 
@@ -1339,6 +1367,8 @@ static void script_entry(void *arg)
     for (;;) {
         if (script_co.job == CO_LAYOUT)
             au_docview_update(script_co.dv);
+        else if (script_co.job == CO_MOUSE)
+            script_co.ran = au_docview_mouse(script_co.dv, &script_co.ev);
         else
             script_co.ran = au_docview_run_scripts(script_co.dv, SCRIPT_BUDGET_MS);
         script_co.owner = NULL;
@@ -1419,6 +1449,23 @@ static bool run_scripts(AuPage *p)
     if (!co_job(p, CO_SCRIPTS))
         return au_docview_run_scripts(p->dv, SCRIPT_BUDGET_MS);
     return p->parked || script_co.ran;
+}
+
+/* The page's handling of a press or release (its listeners, the click,
+ * the controls), on the coroutine when there is one to be had, so that a
+ * long listener parks as a timer's does instead of being stopped by
+ * UNPARKED_LIMIT_MS: hCaptcha's Verify ran its proof of work in the click
+ * and was stopped after 10 s in the Mac OS 9 guest. True when parked: the
+ * slice ends on a later au_page_idle, and the input queue holds what
+ * comes meanwhile. Moves stay on this stack (a drag sends many). */
+static bool dispatch_mouse(AuPage *p, const AuEvent *ev)
+{
+    if (ev->type != AU_EVENT_MOUSE_MOVE && p->env.script_coro && !script_co.owner) {
+        script_co.ev = *ev;
+        if (co_job(p, CO_MOUSE))
+            return p->parked || script_co.ran;
+    }
+    return au_docview_mouse(p->dv, ev);
 }
 
 /* How long the page's script may run while it cannot park: on the
@@ -4713,7 +4760,9 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
         /* The page's mousedown first, then the selection, its default
          * action: a page that cancels the press (a drag in hCaptcha's
          * challenge, a slider) starts no selection. */
-        bool used = au_docview_mouse(p->dv, ev);
+        bool used = dispatch_mouse(p, ev);
+        if (p->parked)
+            return true; /* no selection for a press whose listener parked */
         if (follow_open_url(p))
             return true;
         if (!p->ctl_press && !au_docview_press_cancelled(p->dv))
@@ -4732,7 +4781,9 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
      * took every drop for one far outside its picture. */
     if (gesture && ev->type == AU_EVENT_MOUSE_UP)
         au_docview_suppress_click(p->dv);
-    bool used = au_docview_mouse(p->dv, ev) || gesture;
+    bool used = dispatch_mouse(p, ev) || gesture;
+    if (p->parked)
+        return true;
     if (follow_open_url(p))
         return true;
     settle(p);

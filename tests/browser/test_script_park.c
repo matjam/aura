@@ -70,6 +70,10 @@ static const struct {
      "<!DOCTYPE html><body><script>setTimeout(function(){" BUSY(12000) "document.title='ran 12 s';},10);"
      "</script>"},
     {"other.html", "<!DOCTYPE html><title>Other</title><body>o"},
+    {"longclick.html",
+     "<!DOCTYPE html><body style='margin:0'><div id=d style='height:5000px'>x</div><script>"
+     "document.getElementById('d').onclick=function(){" BUSY(12000) "document.title='clicked 12 s';};"
+     "</script>"},
     {"locked.html",
      "<!DOCTYPE html><html style='overflow:hidden'><body style='margin:0'><div style='height:5000px'></div>"
      "<script>window.go=function(){scrollTo(0,500);document.title='at '+scrollY;};</script>"},
@@ -417,6 +421,33 @@ static void test_click_waits(void)
     au_browser_free(b);
 }
 
+/* A click listener that runs long parks as a timer does, and is not
+ * stopped by the 10 s limit of script that cannot park: hCaptcha's Verify
+ * was, in the Mac OS 9 guest. */
+static void test_long_click(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 400, 300);
+    au_bw_new_tab(w, "file:///mem/longclick.html", true, -1);
+    AuTab *t = au_bw_active_tab(w);
+    settle(w);
+    AuEvent e;
+    memset(&e, 0, sizeof e);
+    e.type = AU_EVENT_MOUSE_DOWN;
+    e.clicks = 1;
+    e.x = w->layout.page.x0 + 20;
+    e.y = w->layout.page.y0 + 20;
+    au_bw_mouse(w, &e);
+    e.type = AU_EVENT_MOUSE_UP;
+    au_bw_mouse(w, &e);
+    CHECK(au_page_script_parked(t->page)); /* the listener parked; the window answers */
+    AuEvent k = key(AU_KEY_PAGE_DOWN);
+    CHECK(au_bw_key(w, &k));
+    settle(w);
+    CHECK_STR(au_page_title(t->page), "clicked 12 s");
+    au_browser_free(b);
+}
+
 /* Stop drops what was queued with the script. */
 static void test_queue_dropped_on_stop(void)
 {
@@ -548,6 +579,7 @@ int main(int argc, char **argv)
     test_scroll_locked();
     test_style_parks();
     test_click_waits();
+    test_long_click();
     test_queue_dropped_on_stop();
     test_stop_and_leave();
     test_long_limit();
