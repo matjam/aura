@@ -2852,6 +2852,12 @@ DV_ENTRY(bool, eval, (AuDocView * dv, const char *src, AuBuf *out), (dv, src, ou
     return dv->script && au_docscript_eval(dv->script, src, out);
 }
 
+DV_ENTRY_VOID(set_trace, (AuDocView * dv, unsigned flags), (dv, flags))
+{
+    if (dv->script)
+        au_docscript_set_trace(dv->script, flags);
+}
+
 uint32_t au_dv_request(AuDocView *dv, const char *url, bool background)
 {
     Request *r = add_request(dv, url, AU_RES_OTHER);

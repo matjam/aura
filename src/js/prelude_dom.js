@@ -712,6 +712,59 @@ tag(DOMRectReadOnly); tag(DOMRect);
 defGlobal('DOMRectReadOnly', DOMRectReadOnly);
 defGlobal('DOMRect', DOMRect);
 
+/* ---------------- the Console's Trace Scrolls ---------------- */
+
+/* With Trace Scrolls on (Console window, au_page_set_trace), every
+ * scroll script makes, every scroll event and every ResizeObserver
+ * delivery is printed, with the page's code that made it: Discord's
+ * message list keeps its own copy of the scroller's size and only
+ * re-reads it when told, so its scroll jumps come from those three. */
+let traceScroll = false;
+P.setTrace = function (flags) { traceScroll = !!(flags & 1); };
+function traceName(el) {
+    if (!el || el.nodeType !== 1) return String(el);
+    let s = el.localName;
+    const id = el.getAttribute('id'), cls = el.getAttribute('class');
+    if (id) s += '#' + id;
+    if (cls) s += '.' + cls.trim().split(/\s+/)[0];
+    return s;
+}
+/* The innermost frame of the page's own code, "host/path.js:line:column",
+ * or "(Aura)" for the console's input line and Aura's own calls. */
+function traceCaller() {
+    const lines = String(new Error().stack || '').split('\n');
+    for (const l of lines) {
+        const m = /https?:\/\/([^\s)]+)/.exec(l);
+        if (m) return m[1].replace(/\?[^:]*/, '');
+    }
+    return '(Aura)';
+}
+function trace(text) { N.print(0, '[trace] ' + text + ' <- ' + traceCaller()); }
+const traceInt = (v) => Math.round(v * 10) / 10;
+{
+    const rawElScrollTo = N.elScrollTo, rawScrollTo = N.scrollTo;
+    N.elScrollTo = function (el, x, y, by) {
+        if (!traceScroll) return rawElScrollTo(el, x, y, by);
+        const a = N.elScroll(el);
+        const r = rawElScrollTo(el, x, y, by);
+        const b = N.elScroll(el);
+        if (a && b)
+            trace('scroll ' + traceName(el) + ' to ' + traceInt(x) + ',' + traceInt(y) + (by ? ' (by)' : '') +
+                  ': was ' + traceInt(a[0]) + ',' + traceInt(a[1]) + ' now ' + traceInt(b[0]) + ',' + traceInt(b[1]) +
+                  ' of ' + traceInt(b[2]) + 'x' + traceInt(b[3]) + ' in ' + traceInt(b[4]) + 'x' + traceInt(b[5]));
+        return r;
+    };
+    N.scrollTo = function (x, y) {
+        if (!traceScroll) return rawScrollTo(x, y);
+        const a = N.viewport(true);
+        const r = rawScrollTo(x, y);
+        const b = N.viewport(true);
+        trace('scroll the page to ' + traceInt(x) + ',' + traceInt(y) + ': was ' + a[2] + ',' + a[3] + ' now ' +
+              b[2] + ',' + b[3] + ' of ' + b[4] + 'x' + b[5]);
+        return r;
+    };
+}
+
 function docRect(el) { return N.rect(el); }
 function viewportRect(el) {
     const r = N.rect(el, true); /* where it is drawn: scrolled, transformed */

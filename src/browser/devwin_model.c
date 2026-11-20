@@ -46,7 +46,8 @@ static const AuDevWinButton report_buttons[] = {{AU_DEVWIN_COPY_ALL, "Copy Repor
 
 static const AuDevWinToggle console_toggles[] = {{AU_DEVWIN_SHOW_ERRORS, "Errors", 62, false, true},
                                                  {AU_DEVWIN_SHOW_WARNINGS, "Warnings", 76, false, true},
-                                                 {AU_DEVWIN_SHOW_LOGS, "Logs", 52, false, true}};
+                                                 {AU_DEVWIN_SHOW_LOGS, "Logs", 52, false, true},
+                                                 {AU_DEVWIN_TRACE_SCROLLS, "Trace Scrolls", 104, false, false}};
 /* In AuNetShow order: the index of the chosen one is the view's show. */
 static const AuDevWinToggle network_toggles[] = {{AU_DEVWIN_NET_ALL, "All", 40, true, true},
                                                  {AU_DEVWIN_NET_PROBLEMS, "Problems", 76, true, false},
@@ -87,6 +88,12 @@ int au_devwin_toggles(AuDevWinKind kind, const AuDevWinToggle **out)
 static AuPage *cur_page(const AuDevWin *dw)
 {
     return dw->host.page ? dw->host.page(dw->host.ctx) : NULL;
+}
+
+/* Trace Scrolls is the Console's fourth toggle. */
+static bool trace_scrolls(const AuDevWin *dw)
+{
+    return dw->kind == AU_DEVWIN_CONSOLE && dw->ntoggles > 3 && dw->toggle_on[3];
 }
 
 static uint32_t now_ms(const AuDevWin *dw)
@@ -157,6 +164,8 @@ void au_devwin_init(AuDevWin *dw, AuDevWinKind kind, struct AuBrowser *browser, 
 
 void au_devwin_free(AuDevWin *dw)
 {
+    if (trace_scrolls(dw))
+        au_page_trace_scrolls(cur_page(dw), false);
     au_textview_free(&dw->tv);
     au_textview_free(&dw->dv);
     au_textlist_free(&dw->list);
@@ -580,6 +589,9 @@ static void build_report(AuDevWin *dw)
 
 bool au_devwin_refresh(AuDevWin *dw, bool force)
 {
+    /* Each call, so a page loaded since (or a new tab) follows the box. */
+    if (dw->kind == AU_DEVWIN_CONSOLE)
+        au_page_trace_scrolls(cur_page(dw), trace_scrolls(dw));
     if (!force && !au_devwin_stale(dw))
         return false;
     AuPage *p = cur_page(dw);

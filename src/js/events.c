@@ -158,6 +158,12 @@ void au_js_element_scrolled(AuJs *js, AuElement *el)
     call_bool(js, "elementScrolled", 1, a);
 }
 
+void au_js_set_trace(AuJs *js, unsigned flags)
+{
+    JSValue a[1] = {JS_NewInt32(js->ctx, (int32_t)flags)};
+    call_bool(js, "setTrace", 1, a);
+}
+
 void au_js_layout_done(AuJs *js)
 {
     call_bool(js, "layoutDone", 0, NULL);
