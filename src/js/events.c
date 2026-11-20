@@ -152,6 +152,12 @@ void au_js_scrolled(AuJs *js)
     call_bool(js, "scrolled", 0, NULL);
 }
 
+void au_js_element_scrolled(AuJs *js, AuElement *el)
+{
+    JSValue a[1] = {js_wrap(js, &el->node)};
+    call_bool(js, "elementScrolled", 1, a);
+}
+
 void au_js_layout_done(AuJs *js)
 {
     call_bool(js, "layoutDone", 0, NULL);

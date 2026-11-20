@@ -1128,6 +1128,20 @@ To change them, work there and test with `test_pointer_events` in
   always 0, so hCaptcha's drag puzzle (Discord's login) never accepted
   an answer.
 
+## Scroll events of elements
+
+An element that scrolls gets `scroll` (not bubbling) at the next script
+run, once however many times it moved since the last: when the wheel
+scrolls it (`au_docview_scroll_at`) and when script moves it
+(`scrollTop`, `scrollTo`, `scrollBy`, `scrollIntoView`; the
+`element_scroll_to` hook). Setting it to where it already is fires
+nothing. The page's own scroll fires `scroll` at the document as
+before. `au_docscript_element_scrolled` in `src/page/script.c` queues up
+to eight elements. Before 2026-11-19 no element got `scroll`, so
+Discord's message list, which keeps its place from the event, jumped
+back up the history and opened partway down.
+`test_inner_scroll_event` in `tests/forms/test_forms.c` covers it.
+
 ## window.postMessage
 
 `window.postMessage` takes any absolute URL as the target origin and

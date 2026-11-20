@@ -363,6 +363,11 @@ P.resized = function () {
 P.scrolled = function () {
     fireSimple(doc, 'scroll', true, false);
 };
+/* An element the user scrolled: scroll at it, not bubbling (CSSOM View). */
+P.elementScrolled = function (el) {
+    if (el && el.isConnected)
+        fireSimple(el, 'scroll', false, false);
+};
 
 /* ---------------- performance ---------------- */
 

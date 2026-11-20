@@ -597,6 +597,39 @@ static void mouse_at(AuDocView *dv, AuEventType t, int x, int y)
  * offsetX/offsetY from the target's padding edge, and pointer capture
  * that sends a drag to the capturing element (hCaptcha's drag puzzles
  * read all three). */
+/* The wheel over an inner scroll container scrolls it and fires scroll
+ * at it, once per run, not bubbling; scrollTop then reads where it is.
+ * Discord's message list keeps its place from these events. */
+static void test_inner_scroll_event(void)
+{
+    Ctx c;
+    AuBuf out;
+    au_buf_init(&out);
+    AuDocView *dv = view(&c,
+                         "<style>body{margin:0}</style>"
+                         "<div id=s style='height:100px;width:200px;overflow-y:scroll'><div style='height:1000px'></div></div>"
+                         "<script>var n=0,top_=-1,bub=0;var s=document.getElementById('s');"
+                         "s.addEventListener('scroll',function(e){n++;top_=s.scrollTop});"
+                         "document.addEventListener('scroll',function(){bub++})</script>",
+                         true);
+    CHECK(au_docview_scroll_at(dv, 50, 50, 0, 40), "inner box scrolls");
+    au_docview_scroll_at(dv, 50, 50, 0, 40);
+    au_docview_run_scripts(dv, 10);
+    CHECK(!strcmp(eval_str(dv, "n+':'+top_+':'+bub+':'+s.scrollTop", &out), "1:80:0:80"),
+          "scroll event at the scrolled box: %s", au_buf_cstr(&out));
+    /* Script scrolling fires it too, later, and only when the box moves. */
+    CHECK(!strcmp(eval_str(dv, "n=0;s.scrollTop=500;s.scrollTop=600;String(n)", &out), "0"),
+          "script scroll event is not synchronous: %s", au_buf_cstr(&out));
+    au_docview_run_scripts(dv, 10);
+    CHECK(!strcmp(eval_str(dv, "n+':'+top_", &out), "1:600"), "script scroll event: %s", au_buf_cstr(&out));
+    eval_str(dv, "n=0;s.scrollTop=600", &out);
+    au_docview_run_scripts(dv, 10);
+    CHECK(!strcmp(eval_str(dv, "String(n)", &out), "0"), "no event when the box does not move: %s",
+          au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_docview_free(dv);
+}
+
 static void test_pointer_events(void)
 {
     Ctx c;
@@ -967,6 +1000,7 @@ int main(void)
     test_script_events();
     test_modal_dialog();
     test_pointer_events();
+    test_inner_scroll_event();
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();

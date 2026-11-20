@@ -500,6 +500,8 @@ void au_js_resized(AuJs *js);
 void au_js_media_changed(AuJs *js);
 /* The document scrolled (scroll event). */
 void au_js_scrolled(AuJs *js);
+/* Fires scroll (not bubbling) at el, an element the user scrolled. */
+void au_js_element_scrolled(AuJs *js, AuElement *el);
 
 /* ---- Event loop ----
  * Runs due timers and queued tasks for up to budget_ms, each followed by a

@@ -105,6 +105,9 @@ void au_docscript_resized(AuDocScript *s);
  * scheme): matchMedia lists fire change at the next run. */
 void au_docscript_media_changed(AuDocScript *s);
 void au_docscript_scrolled(AuDocScript *s);
+/* The user scrolled el (an inner scroll container): it gets a scroll
+ * event at the next run, once however many times it scrolled. */
+void au_docscript_element_scrolled(AuDocScript *s, AuElement *el);
 /* The document cache: false when window has an unload or beforeunload
  * listener; pagehide or pageshow (persisted) when the document is hidden
  * or shown again; the script runtime's memory in bytes. NULL s is fine. */

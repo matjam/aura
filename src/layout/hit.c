@@ -484,8 +484,11 @@ bool au_layout_hit_test(AuLayout *L, float x, float y, float scroll_x, float scr
     return hit_box(L, x, y, scroll_x, scroll_y, r, NULL, NULL) != NULL;
 }
 
-bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float scroll_y, float dx, float dy)
+bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float scroll_y, float dx, float dy,
+                         AuElement **scrolled)
 {
+    if (scrolled)
+        *scrolled = NULL;
     AuHitResult r;
     LBox *b = hit_box(L, x, y, scroll_x, scroll_y, &r, NULL, NULL);
     for (; b; b = b->parent) {
@@ -506,6 +509,8 @@ bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float sc
             k->scroll_y = ny;
             l_snap(L, k, ox, oy, true);
             L->need_paint = true;
+            if (scrolled && b->node && au_is_element(b->node))
+                *scrolled = au_as_element(b->node);
             return true;
         }
     }

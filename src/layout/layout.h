@@ -310,8 +310,10 @@ float au_layout_range_frac_at(AuLayout *L, AuElement *el, float lx);
 
 /* Scrolls the innermost scroll container under viewport point (x, y) by
  * (dx, dy), clamped. Returns false when no inner scroller can move (the
- * caller then scrolls the viewport). */
-bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float scroll_y, float dx, float dy);
+ * caller then scrolls the viewport). *scrolled (may be NULL) is set to
+ * the element that scrolled, or NULL, for its scroll event. */
+bool au_layout_scroll_at(AuLayout *L, float x, float y, float scroll_x, float scroll_y, float dx, float dy,
+                         AuElement **scrolled);
 
 /* For script (getBoundingClientRect, IntersectionObserver): el's border
  * box where it is drawn, in document coordinates with the document
