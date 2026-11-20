@@ -105,6 +105,14 @@ typedef struct AuSvgEnv {
     /* The element with an id in the document. Optional; without it the
      * renderer indexes the subtree of the svg it paints. */
     AuElement *(*find_id)(void *ctx, AuAtom id);
+    /* Paints the HTML content of foreignObject fo (inline SVG) with its
+     * box at box: canvas coordinates, unscaled and unrotated (the
+     * renderer draws through a transformed layer when the user space is
+     * scaled or rotated). The renderer has pushed a clip to box and
+     * applies the object's opacity, mask and clip path around the call.
+     * Returns false when it painted nothing. Optional; called only for an
+     * object with no HTML <img> (au_svg_foreign_img). */
+    bool (*foreign)(void *ctx, AuElement *fo, AuCanvas *c, AuRect box);
 } AuSvgEnv;
 
 /* An index of the elements with an id under a node (the node included),
@@ -122,6 +130,17 @@ typedef struct AuSvgIntrinsic {
     float width, height, ratio;
 } AuSvgIntrinsic;
 void au_svg_intrinsic(const AuSvgNames *n, const AuElement *svg, float em, AuSvgIntrinsic *out);
+
+/* The HTML <img> a foreignObject draws stretched over its box: the first
+ * in its subtree, in document order, among the first 64 nodes. NULL when
+ * there is none; its other HTML content is then laid out by layout and
+ * painted through AuSvgEnv.foreign. */
+AuElement *au_svg_foreign_img(AuElement *fo);
+/* The width and height of foreignObject fo in its user space, in CSS
+ * pixels: absolute lengths, font-relative ones against the object's font
+ * size, percentages against the nearest ancestor svg's viewBox, else its
+ * absolute width and height. False when either is not positive. */
+bool au_svg_foreign_size(const AuSvgNames *n, const AuElement *fo, float *w, float *h);
 
 /* Paints svg (an svg element) with its viewport at view (canvas
  * coordinates). Clips to view unless the element's overflow is visible. */

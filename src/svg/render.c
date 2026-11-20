@@ -1147,8 +1147,9 @@ static void image_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float opac
  * over the object's box as object-fit: fill draws it. Sites put an
  * avatar or icon there to mask it: Discord's avatars and server icons
  * are <foreignObject mask="url(#...)"><div><img></div></foreignObject>.
- * Other HTML in a foreignObject is not laid out (known-gaps.md). */
-static AuElement *foreign_img(AuElement *fo)
+ * Other HTML in a foreignObject is laid out by layout and painted through
+ * AuSvgEnv.foreign. */
+AuElement *au_svg_foreign_img(AuElement *fo)
 {
     AuNode *root = &fo->node, *c = root->first_child;
     for (int seen = 0; c && seen < 64; seen++) {
@@ -1175,15 +1176,73 @@ static void foreign_render(SvgCtx *x, AuElement *el, const SvgFrame *f, float op
     const AuSvgNames *n = x->n;
     if (f->st.visibility != AU_VISIBILITY_VISIBLE)
         return;
-    AuElement *img = foreign_img(el);
+    AuElement *img = au_svg_foreign_img(el);
     const AuStyle *is = img ? au_element_style(img) : NULL;
-    if (!img || (is && (is->box->display == AU_DISPLAY_NONE || is->inh->visibility != AU_VISIBILITY_VISIBLE)))
+    if (img && is && (is->box->display == AU_DISPLAY_NONE || is->inh->visibility != AU_VISIBILITY_VISIBLE))
         return;
     float ix = svg_len_attr(el, n->x, f, 0, 0), iy = svg_len_attr(el, n->y, f, 1, 0);
     float w = svg_len_attr(el, n->width, f, 0, 0), h = svg_len_attr(el, n->height, f, 1, 0);
     if (!(w > 0 && h > 0))
         return;
-    image_draw(x, el, svg_attr(img, AU_ATOM_src), ix, iy, w, h, "none", f, opacity);
+    if (img) {
+        image_draw(x, el, svg_attr(img, AU_ATOM_src), ix, iy, w, h, "none", f, opacity);
+        return;
+    }
+    if (!x->env || !x->env->foreign)
+        return;
+    /* The HTML content, laid out by layout at w x h CSS pixels: drawn in
+     * place when the user space only moves it, else into a layer drawn
+     * through the user space's transform. */
+    AuMatrix full = f->ctm, tr = {1, 0, 0, 1, ix, iy};
+    au_matrix_multiply(&full, &tr);
+    bool moved = fabsf(full.a - 1) < 1e-4f && fabsf(full.d - 1) < 1e-4f && fabsf(full.b) < 1e-4f &&
+                 fabsf(full.c) < 1e-4f;
+    if (moved) {
+        AuRect box = {full.e, full.f, w, h};
+        bool group = opacity < 1;
+        if (group)
+            au_canvas_group_begin(x->c, box);
+        au_canvas_clip_push(x->c, box);
+        x->env->foreign(x->env->ctx, el, x->c, box);
+        au_canvas_clip_pop(x->c);
+        if (group)
+            au_canvas_group_end(x->c, opacity);
+        return;
+    }
+    if (au_canvas_layer_begin(x->c, (AuRect){0, 0, w, h})) {
+        au_canvas_clip_push(x->c, (AuRect){0, 0, w, h});
+        x->env->foreign(x->env->ctx, el, x->c, (AuRect){0, 0, w, h});
+        au_canvas_clip_pop(x->c);
+        au_canvas_layer_end(x->c, &full, opacity);
+    }
+}
+
+bool au_svg_foreign_size(const AuSvgNames *n, const AuElement *fo, float *w, float *h)
+{
+    const AuStyle *s = au_element_style(fo);
+    float em = s && s->inh->font_size > 0 ? s->inh->font_size : 16;
+    /* The percentage bases: the nearest ancestor svg's viewBox, else its
+     * own absolute width and height. */
+    float rw = 0, rh = 0;
+    for (const AuNode *p = fo->node.parent; p && p->type == AU_NODE_ELEMENT; p = p->parent) {
+        const AuElement *e = (const AuElement *)p;
+        if (!svg_is_tag(e, n->svg))
+            continue;
+        float vb[4];
+        bool ok;
+        if (svg_parse_numbers(svg_attr(e, n->view_box), vb, 4, &ok) == 4 && ok && vb[2] > 0 && vb[3] > 0) {
+            rw = vb[2], rh = vb[3];
+        } else {
+            AuSvgIntrinsic in;
+            au_svg_intrinsic(n, e, em, &in);
+            rw = in.width, rh = in.height;
+        }
+        break;
+    }
+    SvgLen l;
+    *w = svg_parse_length(svg_attr(fo, n->width), &l) ? svg_len_px(l, em, rw) : 0;
+    *h = svg_parse_length(svg_attr(fo, n->height), &l) ? svg_len_px(l, em, rh) : 0;
+    return *w > 0 && *h > 0 && *w < 1e5f && *h < 1e5f;
 }
 
 static void image_draw(SvgCtx *x, AuElement *el, const char *href, float ix, float iy, float w, float h,
