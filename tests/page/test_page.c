@@ -1068,6 +1068,14 @@ static bool near_rgb(AuColor c, int r, int g, int b)
     return abs(cr - r) <= 6 && abs(cg - g) <= 6 && abs(cb - b) <= 6;
 }
 
+/* Updates dv and paints it whole over white into s (300 x 300). */
+static void repaint_white(AuDocView *dv, AuCanvas *c, AuSurface *s)
+{
+    au_docview_update(dv);
+    au_surface_clear(s, AU_RGB(255, 255, 255));
+    au_docview_paint(dv, c, (AuRect){0, 0, 300, 300}, 0, 0);
+}
+
 /* HTML in a foreignObject, as Discord's server rail draws its icons: a
  * div with a background and an svg icon or text centred in it, through
  * the object's mask. A restyle of the div paints its new colour, and a
@@ -1091,15 +1099,22 @@ static void test_foreign_object_html(void)
         "<div id=v style='width:32px;height:32px;background:red'></div></foreignObject></svg>"
         "<svg id=u width=48 height=48 style='display:block'><foreignObject width=48 height=48>"
         "<div style='display:flex;align-items:center;justify-content:center;width:48px;height:48px;"
-        "background:black;color:white;font:16px sans-serif'>FG</div></foreignObject></svg>";
+        "background:black;color:white;font:16px sans-serif'>FG</div></foreignObject></svg>"
+        /* nested: a foreignObject in an svg in a foreignObject */
+        "<svg id=n width=48 height=48 style='display:block'><foreignObject width=48 height=48>"
+        "<div style='width:48px;height:48px;background:black'><svg width=32 height=32 style='display:block'>"
+        "<foreignObject x=8 y=8 width=16 height=16><div style='height:16px;background:lime'></div>"
+        "</foreignObject></svg></div></foreignObject></svg>"
+        /* a scaled user space: drawn through a layer */
+        "<svg id=z width=48 height=48 viewBox='0 0 24 24' style='display:block'>"
+        "<foreignObject width=24 height=24><div style='height:12px;background:red'></div>"
+        "<div style='height:12px;background:blue'></div></foreignObject></svg>";
     au_docview_load(dv, html, strlen(html), "http://example.com/");
     au_docview_set_check(dv, true); /* each rebuild below equals a whole build */
-    au_docview_set_viewport(dv, 200, 200);
-    au_docview_update(dv);
-    AuSurface *s = au_surface_new(200, 200);
+    au_docview_set_viewport(dv, 300, 300);
+    AuSurface *s = au_surface_new(300, 300);
     AuCanvas *c = au_canvas_new(s);
-    au_surface_clear(s, AU_RGB(255, 255, 255));
-    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    repaint_white(dv, c, s);
     AuRect r = rect_of(dv, "s");
     int x0 = (int)r.x, y0 = (int)r.y;
     AuColor px = au_surface_get(s, x0 + 4, y0 + 24);
@@ -1126,23 +1141,29 @@ static void test_foreign_object_html(void)
     CHECK(light > 400 && light <= 32 * 16, "the acronym's text in the object: %d light pixels", light);
     CHECK(au_surface_get(s, (int)r.x + 2, (int)r.y + 2) == AU_RGB(0, 0, 0), "the acronym's background: %08x",
           au_surface_get(s, (int)r.x + 2, (int)r.y + 2));
+    r = rect_of(dv, "n");
+    CHECK(au_surface_get(s, (int)r.x + 16, (int)r.y + 16) == AU_RGB(0, 255, 0), "the nested object: %08x",
+          au_surface_get(s, (int)r.x + 16, (int)r.y + 16));
+    CHECK(au_surface_get(s, (int)r.x + 4, (int)r.y + 4) == AU_RGB(0, 0, 0), "around the nested object: %08x",
+          au_surface_get(s, (int)r.x + 4, (int)r.y + 4));
+    r = rect_of(dv, "z");
+    px = au_surface_get(s, (int)r.x + 24, (int)r.y + 12);
+    CHECK(near_rgb(px, 255, 0, 0), "the scaled object's top half: %08x", (unsigned)px);
+    px = au_surface_get(s, (int)r.x + 24, (int)r.y + 36);
+    CHECK(near_rgb(px, 0, 0, 255), "the scaled object's bottom half (twice as tall): %08x", (unsigned)px);
 
     /* A restyle inside the object. */
     AuElement *v = by_id(dv, "v");
     au_element_set_attr(v, AU_ATOM_style, "width:32px;height:32px;background:blue", 38);
     au_dv_dom_changed(dv, &v->node, AU_ATOM_style, 2);
-    au_docview_update(dv);
-    au_surface_clear(s, AU_RGB(255, 255, 255));
-    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    repaint_white(dv, c, s);
     r = rect_of(dv, "t");
     CHECK(au_surface_get(s, (int)r.x + 24, (int)r.y + 24) == AU_RGB(0, 0, 255), "the restyled div: %08x",
           au_surface_get(s, (int)r.x + 24, (int)r.y + 24));
     /* A change of what is built (display) inside the object. */
     au_element_set_attr(v, AU_ATOM_style, "display:inline-block;width:32px;height:32px;background:lime", 59);
     au_dv_dom_changed(dv, &v->node, AU_ATOM_style, 2);
-    au_docview_update(dv);
-    au_surface_clear(s, AU_RGB(255, 255, 255));
-    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    repaint_white(dv, c, s);
     CHECK(au_surface_get(s, (int)r.x + 24, (int)r.y + 24) == AU_RGB(0, 255, 0), "the div made inline-block: %08x",
           au_surface_get(s, (int)r.x + 24, (int)r.y + 24));
 
@@ -1152,9 +1173,7 @@ static void test_foreign_object_html(void)
     au_node_ref(&fo->node);
     au_node_remove(&fo->node);
     au_dv_dom_changed(dv, svg, 0, 1);
-    au_docview_update(dv);
-    au_surface_clear(s, AU_RGB(255, 255, 255));
-    au_docview_paint(dv, c, (AuRect){0, 0, 200, 200}, 0, 0);
+    repaint_white(dv, c, s);
     r = rect_of(dv, "s");
     CHECK(au_surface_get(s, (int)r.x + 4, (int)r.y + 24) == AU_RGB(255, 255, 255), "the removed object: %08x",
           au_surface_get(s, (int)r.x + 4, (int)r.y + 24));

@@ -30,12 +30,14 @@
  * with every stroke property, opacity, the transform attribute and the CSS
  * transform property, visibility, display, vector-effect:
  * non-scaling-stroke and paint-order. In inline SVG, a foreignObject
- * draws the first HTML <img> in it over its box, with its mask and clip.
+ * draws the first HTML <img> in it over its box, or else its HTML content
+ * as layout laid it out (AuSvgEnv.foreign), with its mask and clip.
  *
  * Not supported: filters (the element draws unfiltered), patterns (the
- * paint's fallback colour is used), markers, textPath, other HTML in a
- * foreignObject, multi-line text layout, SMIL animation, CSS basic shapes in clip-path,
- * external references (use or gradients in other files).
+ * paint's fallback colour is used), markers, textPath, a foreignObject
+ * in an SVG document (no HTML there), multi-line text layout, SMIL
+ * animation, CSS basic shapes in clip-path, external references (use or
+ * gradients in other files).
  *
  * Limits for hostile input: element nesting (SVG_MAX_DEPTH), use nesting
  * and cycles, elements painted per call, href chains, nested SVG images
