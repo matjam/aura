@@ -8,6 +8,7 @@
 #include "page/formdata.h"
 #include "layout/selection.h"
 #include "page/page.h"
+#include "page/docview_int.h" /* au_dv_edit_caret_rect */
 
 #include <math.h>
 #include <stdio.h>
@@ -628,6 +629,86 @@ static void test_flex_scroller_keeps_offset(void)
     au_docview_free(dv);
 }
 
+/* contenteditable: a press puts the caret at the text pressed, keys edit
+ * with beforeinput and input around each change, a cancelled beforeinput
+ * or keypress leaves the text alone (Discord's Slate editor edits it
+ * itself), and the view has a caret to draw. */
+static void test_contenteditable(void)
+{
+    Ctx c;
+    AuBuf out;
+    au_buf_init(&out);
+    AuDocView *dv = view(&c,
+                         "<style>body{margin:0;font:16px sans-serif}</style>"
+                         "<div id=e contenteditable style='width:300px;height:40px;padding:4px'>hello world</div>"
+                         "<p id=p>not editable</p>"
+                         "<script>var log=[],e=document.getElementById('e'),block='';"
+                         "['beforeinput','input'].forEach(function(t){e.addEventListener(t,function(ev){"
+                         "log.push(t+':'+ev.inputType+(ev.data?':'+ev.data:''));"
+                         "if(t=='beforeinput'&&ev.data===block)ev.preventDefault()})});"
+                         "e.addEventListener('keypress',function(ev){if(ev.key=='!')ev.preventDefault()});"
+                         "function st(){var s=getSelection();return e.innerHTML+'|'+(s.anchorNode&&s.anchorNode.nodeName)+"
+                         "':'+s.anchorOffset+'|'+(document.activeElement===e)}</script>",
+                         true);
+    CHECK(!au_docview_editing(dv), "nothing to edit yet");
+    /* a press after "hello" (about 38 px of 16 px text) */
+    mouse_at(dv, AU_EVENT_MOUSE_DOWN, 300, 12);
+    mouse_at(dv, AU_EVENT_MOUSE_UP, 300, 12);
+    CHECK(!strcmp(eval_str(dv, "st()", &out), "hello world|#text:11|true"), "a press past the text: %s",
+          au_buf_cstr(&out));
+    CHECK(au_docview_editing(dv), "the view has a caret");
+    AuRect r;
+    uint32_t col;
+    CHECK(au_dv_edit_caret_rect(dv, &r, &col) && r.w == 1 && r.h > 10 && r.x > 50, "caret rect %g,%g %gx%g", r.x,
+          r.y, r.w, r.h);
+    type(dv, "!?");
+    CHECK(!strcmp(eval_str(dv, "st()+' '+log.join(',')", &out),
+                  "hello world?|#text:12|true beforeinput:insertText:?,input:insertText:?"),
+          "typing: a cancelled keypress types nothing: %s", au_buf_cstr(&out));
+    key(dv, AU_KEY_BACKSPACE, 0, 0);
+    key(dv, AU_KEY_LEFT, 0, 0);
+    key(dv, AU_KEY_LEFT, 0, 0);
+    eval_str(dv, "log=[];block='x'", &out);
+    type(dv, "xY");
+    CHECK(!strcmp(eval_str(dv, "st()+' '+log.join(',')", &out),
+                  "hello worYld|#text:10|true beforeinput:insertText:x,beforeinput:insertText:Y,input:insertText:Y"),
+          "Backspace, arrows, a cancelled beforeinput: %s", au_buf_cstr(&out));
+    /* Slate's way: the page cancels the key, edits and moves the
+     * Selection itself. The old caret's place and the new one are
+     * repainted. */
+    AuSurface *surf = au_surface_new(400, 200);
+    AuCanvas *cv = au_canvas_new(surf);
+    au_docview_paint(dv, cv, (AuRect){0, 0, 400, 200}, 0, 0);
+    AuRect before = dv->caret_rect;
+    CHECK(dv->caret_drawn, "the paint recorded the caret");
+    eval_str(dv, "e.addEventListener('keydown',function k(ev){if(ev.key!='Home')return;ev.preventDefault();"
+                 "getSelection().collapse(e.firstChild,0);e.removeEventListener('keydown',k)})",
+             &out);
+    c.invals = 0;
+    key(dv, AU_KEY_HOME, 0, 0);
+    CHECK(c.invals > 0 && c.inval.x0 <= (int)before.x && c.inval.x1 >= (int)before.x + 1 && c.inval.x0 <= 4,
+          "both places repainted: %d,%d-%d,%d (caret was at %g)", c.inval.x0, c.inval.y0, c.inval.x1, c.inval.y1,
+          before.x);
+    au_canvas_free(cv);
+    au_surface_free(surf);
+    key(dv, AU_KEY_END, 0, 0);
+    key(dv, AU_KEY_RETURN, 0, 0);
+    type(dv, "2");
+    CHECK(!strcmp(eval_str(dv, "e.innerHTML", &out), "hello worYld<br>2<br>"), "Enter: %s", au_buf_cstr(&out));
+    /* A press outside takes the focus and the caret away. */
+    mouse_at(dv, AU_EVENT_MOUSE_DOWN, 300, 200);
+    CHECK(!au_docview_editing(dv) && !au_dv_edit_caret_rect(dv, &r, &col), "no caret after a press outside");
+    /* Script focus keeps a Selection already in the host, and puts one
+     * that is elsewhere at the host's start. */
+    CHECK(!strcmp(eval_str(dv, "e.focus();st()", &out), "hello worYld<br>2<br>|#text:1|true"), "focus(): %s",
+          au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "e.blur();getSelection().collapse(document.getElementById('p'),0);e.focus();st()", &out),
+                  "hello worYld<br>2<br>|#text:0|true"),
+          "focus() with the Selection elsewhere: %s", au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_docview_free(dv);
+}
+
 /* The mouse as script sees it: pointer events before each mouse event,
  * offsetX/offsetY from the target's padding edge, and pointer capture
  * that sends a drag to the capturing element (hCaptcha's drag puzzles
@@ -1037,6 +1118,7 @@ int main(void)
     test_pointer_events();
     test_inner_scroll_event();
     test_flex_scroller_keeps_offset();
+    test_contenteditable();
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();

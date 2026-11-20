@@ -477,6 +477,13 @@ failing:
 - A resend prompt for POST history entries.
 - Form-associated custom elements.
 - IME input.
+- contenteditable ([`forms.md`](forms.md), "contenteditable"): no
+  `InputEvent.getTargetRanges`, `document.execCommand` or undo; Up and
+  Down, word movement and dragging a selection do nothing; a selection
+  in an editing host is not painted (only the caret); the caret ignores
+  the scroll offsets of scroll containers the text is in; Enter inserts
+  a `<br>`, never a new paragraph.
+
 ## Networking and TLS
 
 - IPv4 only on Mac OS 9.

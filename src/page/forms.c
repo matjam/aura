@@ -15,6 +15,7 @@
 #include "editing.h"
 #include "formdata.h"
 
+#include "../layout/selection.h"
 #include "../url/url.h"
 
 #include <math.h>
@@ -380,9 +381,88 @@ DV_ENTRY_VOID(set_focus, (AuDocView * dv, AuElement *el), (dv, el))
     focus_el(dv, el, false, false);
 }
 
+/* ---- contenteditable: the caret ----
+ * Script keeps the Selection (range.js); with the focus in an editing
+ * host its collapsed point is the caret (au_docscript_edit_caret), drawn
+ * by the view over the painted page. */
+
+bool au_dv_edit_caret_rect(AuDocView *dv, AuRect *out, uint32_t *color)
+{
+    AuNode *n;
+    uint32_t off;
+    if (!dv->script || !dv->doc || !au_docscript_edit_caret(dv->script, &n, &off))
+        return false;
+    AuElement *el = n->type == AU_NODE_ELEMENT ? au_as_element(n)
+                    : n->parent && n->parent->type == AU_NODE_ELEMENT ? au_as_element(n->parent)
+                                                                      : NULL;
+    if (!el || !alive(dv, el))
+        return false;
+    au_docview_update(dv);
+    const AuStyle *st = au_element_style(el);
+    float fs = st ? st->inh->font_size : 16;
+    *color = st && (st->inh->color & 0xFF) ? st->inh->color : AU_RGB(0, 0, 0);
+    AuTextPos p;
+    AuRect r;
+    if (n->type == AU_NODE_TEXT && au_layout_text_pos_from_dom(dv->layout, n, off, &p)) {
+        AuTextRange cr = au_text_range_make(p, p);
+        if (au_layout_range_rects(dv->layout, &cr, &r, 1) > 0 && r.h > 0) {
+            *out = (AuRect){floorf(r.x), r.y, 1, r.h};
+            return true;
+        }
+    }
+    /* No laid-out text there (an empty editor: Slate's zero-width text,
+     * a <br>): the start of the element's box, one line tall. */
+    if (!au_layout_element_visual_rect(dv->layout, el, (float)dv->scroll_x, (float)dv->scroll_y, &r))
+        return false;
+    float h = roundf(fs * 1.25f);
+    if (r.h > 0 && r.h < h)
+        h = r.h;
+    *out = (AuRect){floorf(r.x) + 1, r.y + (r.h > h ? (r.h - h) / 2 : 0), 1, h};
+    return true;
+}
+
+static void invalidate_rect(AuDocView *dv, AuRect r)
+{
+    if (dv->cb.invalidate)
+        dv->cb.invalidate(dv->cb.ctx, dv,
+                          (AuIRect){au_f2px(r.x) - 2, au_f2px(r.y) - 2, au_f2px(r.x + r.w) + 3, au_f2px(r.y + r.h) + 3});
+}
+
+void au_dv_edit_caret_check(AuDocView *dv)
+{
+    AuRect r;
+    uint32_t c;
+    bool has = dv->focus && au_dv_edit_caret_rect(dv, &r, &c);
+    bool same = has && dv->caret_drawn && r.x == dv->caret_rect.x && r.y == dv->caret_rect.y &&
+                r.h == dv->caret_rect.h;
+    if (same)
+        return;
+    if (dv->caret_drawn) {
+        invalidate_rect(dv, dv->caret_rect);
+        dv->caret_drawn = false;
+    }
+    if (has) {
+        dv->caret_on = true;
+        invalidate_rect(dv, r);
+    }
+}
+
+static void invalidate_edit_caret(AuDocView *dv)
+{
+    AuRect r;
+    uint32_t c;
+    if (dv->cb.invalidate && au_dv_edit_caret_rect(dv, &r, &c))
+        dv->cb.invalidate(dv->cb.ctx, dv,
+                          (AuIRect){au_f2px(r.x) - 2, au_f2px(r.y) - 2, au_f2px(r.x + r.w) + 3, au_f2px(r.y + r.h) + 3});
+}
+
 bool au_docview_editing(const AuDocView *dv)
 {
-    return dv->focus && au_ctl_is_text_field(dv->focus) && alive((AuDocView *)dv, dv->focus);
+    if (dv->focus && au_ctl_is_text_field(dv->focus) && alive((AuDocView *)dv, dv->focus))
+        return true;
+    AuNode *n;
+    uint32_t off;
+    return dv->focus && dv->script && au_docscript_edit_caret(dv->script, &n, &off);
 }
 
 /* Scrolls the viewport so el is visible. */
@@ -483,6 +563,12 @@ uint32_t au_docview_blink(AuDocView *dv, uint32_t now_ms)
     if (dt < BLINK_MS)
         return BLINK_MS - dt;
     dv->blink_ms = now_ms;
+    if (!au_ctl_is_text_field(dv->focus)) {
+        /* an editing host's caret */
+        dv->caret_on = !dv->caret_on;
+        invalidate_edit_caret(dv);
+        return BLINK_MS;
+    }
     AuControl *c = au_ctl(dv->focus);
     if (c->anchor != c->caret)
         return BLINK_MS; /* no caret over a selection */
@@ -1565,6 +1651,20 @@ static void key_names(const AuEvent *ev, char *key, size_t kcap, char *code, siz
         snprintf(code, ccap, "%s", "");
 }
 
+/* A key nobody cancelled with the focus in an editing host: script does
+ * the editing (prelude_edit.js); the caret shows again at once. */
+static bool edit_key(AuDocView *dv, AuElement *el, const AuEvent *ev)
+{
+    char key[16], code[24];
+    key_names(ev, key, sizeof key, code, sizeof code);
+    invalidate_edit_caret(dv); /* where it was */
+    if (!au_docscript_edit_key(dv->script, el, key, ev->mods))
+        return false;
+    dv->caret_on = true;
+    au_dv_invalidate_all(dv);
+    return true;
+}
+
 DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
 {
     if (!dv->doc || ev->type != AU_EVENT_KEY_DOWN)
@@ -1630,6 +1730,8 @@ DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
             used = true;
         } else if (el && au_ctl_is_text_field(el)) {
             used = field_key(dv, el, ev);
+        } else if (el && dv->script && edit_key(dv, el, ev)) {
+            used = true;
         } else if (el) {
             used = control_key(dv, el, ev);
         }
@@ -1654,6 +1756,8 @@ DV_ENTRY(bool, key, (AuDocView * dv, const AuEvent *ev), (dv, ev))
             au_dv_invalidate_all(dv);
         au_dv_invalidate_damage(dv);
     }
+    if (dv->doc && dv->cb.invalidate)
+        au_dv_edit_caret_check(dv); /* the page's own editing moved the caret */
     return used;
 }
 
@@ -1937,6 +2041,30 @@ bool au_forms_mouse(AuDocView *dv, const AuEvent *ev, const AuHitResult *r)
         if (ft != dv->focus)
             focus_el(dv, ft, false, false);
         bool target_ok = alive(dv, target);
+        /* In an editing host (contenteditable) the press puts the caret
+         * at the text pressed; script decides whether target is in one. */
+        if (target_ok && dv->script && !au_ctl_is_text_field(target)) {
+            au_docview_update(dv);
+            AuTextPos tp;
+            AuNode *tn = NULL;
+            uint32_t off = 0;
+            if (au_layout_text_pos_at(dv->layout, (float)(ev->x - dv->scroll_x), (float)(ev->y - dv->scroll_y),
+                                      (float)dv->scroll_x, (float)dv->scroll_y, &tp) &&
+                tp.node && au_layout_text_pos_to_dom(dv->layout, &tp, &off))
+                tn = tp.node;
+            if (tn)
+                au_node_ref(tn);
+            bool edited = au_docscript_edit_click(dv->script, target, tn, off);
+            if (tn)
+                au_node_unref(tn);
+            if (edited) {
+                au_node_unref(&target->node);
+                dv->caret_on = true;
+                au_dv_invalidate_all(dv);
+                return true;
+            }
+            target_ok = alive(dv, target);
+        }
         AuElement *ctl = target_ok ? control_of(target) : NULL;
         if (ctl)
             au_node_ref(&ctl->node);

@@ -111,6 +111,11 @@ void au_docscript_element_scrolled(AuDocScript *s, AuElement *el);
 /* Developer tracing (AU_TRACE_* in js.h); a document without a runtime
  * yet is not given one. */
 void au_docscript_set_trace(AuDocScript *s, unsigned flags);
+/* contenteditable editing (au_js_edit_click, au_js_edit_key and
+ * au_js_edit_caret in src/js/js.h). */
+bool au_docscript_edit_click(AuDocScript *s, AuElement *target, AuNode *text, uint32_t offset);
+bool au_docscript_edit_key(AuDocScript *s, AuElement *focus, const char *key, int mods);
+bool au_docscript_edit_caret(AuDocScript *s, AuNode **node, uint32_t *offset);
 /* The document cache: false when window has an unload or beforeunload
  * listener; pagehide or pageshow (persisted) when the document is hidden
  * or shown again; the script runtime's memory in bytes. NULL s is fine. */

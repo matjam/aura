@@ -184,6 +184,7 @@ struct AuJs {
     /* live ranges (ranges.c) */
     struct JsRange *ranges;
     uint32_t nranges, live_ranges; /* slots, and slots in use */
+    uint32_t edit_caret;           /* the editing caret's range (the Selection's), id + 1; 0: none */
     const AuNode *range_text_node; /* the prelude is replacing this text node's data */
     AuNode *range_pend_node;       /* a text node whose data changed (referenced), to settle */
     char *range_pend_old;          /* its data before the change */

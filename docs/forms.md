@@ -126,6 +126,45 @@ Tab cycles inside an open modal dialog and a click or `focus()` cannot
 move the focus out of it. A press where only inert content is under
 the pointer leaves the focus where it is.
 
+## contenteditable
+
+To edit an element with `contenteditable`, Aura keeps the caret in the
+script `Selection` (`range.js`) and does the editing in script, in the
+"contenteditable editing" part of `prelude_obs.js`:
+
+- **Focus.** An editing host (editable, its parent not) is focusable.
+  Focusing it (a press, `focus()`, Tab) keeps a `Selection` already in
+  it and otherwise puts the caret at the start of its text.
+- **A press** in an editing host asks layout for the text position under
+  the pointer (`au_layout_text_pos_at` in `au_forms_mouse`) and calls
+  `P.editClick`, which collapses the `Selection` there, or at the end of
+  the host's text where no text is under the pointer.
+- **Keys.** A key whose keydown and keypress nobody cancelled reaches
+  `P.editKey` (`edit_key` in `forms.c`, after text fields): a character
+  is inserted, Backspace and Delete remove a character (a pair of
+  surrogates together, or a `<br>`), Enter inserts a `<br>` (two at the
+  end of the host, so the new line shows), Left and Right move by a
+  character (Shift extends), Home and End go to the start and end of the
+  host's text, and Command-A selects its contents. Each change fires
+  `beforeinput` (cancelable: a cancelled one changes nothing) and
+  `input` with the `inputType` and `data` browsers give.
+- **The caret.** `N.editCaret` names the `Selection`'s live range while
+  the focus is in an editing host and the `Selection` is collapsed in
+  it, so DOM changes move the caret with the range. The view draws it
+  over the painted page (`au_dv_edit_caret_rect`, `docview.c` paint):
+  layout's caret rectangle for a collapsed text range, or the start of
+  the element's box, one line tall, where no text is laid out (Slate's
+  zero-width text). It blinks with a field's caret, and
+  `au_docview_editing` is true, so Space and the arrows edit rather
+  than scroll the page.
+- **Rich editors.** `InputEvent.getTargetRanges` is not defined, so
+  Slate (Discord's message box) takes its path for browsers without
+  `beforeinput`: it cancels keydown and the keypress React turns into
+  `onBeforeInput`, edits its own model, and sets the `Selection`, which
+  moves the caret. `test_contenteditable` in `tests/forms/test_forms.c`
+  covers the press, typing, cancelled events, Backspace, the arrows,
+  Enter and the caret.
+
 ## Dialogs and popovers
 
 Dialogs and popovers live in the bindings (`prelude_html.js`, "the top

@@ -506,6 +506,20 @@ void au_js_element_scrolled(AuJs *js, AuElement *el);
 #define AU_TRACE_SCROLL 1u
 void au_js_set_trace(AuJs *js, unsigned flags);
 
+/* ---- contenteditable editing (prelude_edit.js) ----
+ * A press in an editing host puts the Selection at the text position
+ * pressed (text is a text node and offset its UTF-16 offset, or NULL to
+ * put it at the end of the host); true when target is in one. */
+bool au_js_edit_click(AuJs *js, AuElement *target, AuNode *text, uint32_t offset);
+/* A key nobody cancelled, with the focus in an editing host: the default
+ * editing (insert the character, Backspace, Delete, Enter, the arrows).
+ * True when used. */
+bool au_js_edit_key(AuJs *js, AuElement *focus, const char *key, int mods);
+/* The editing caret: the collapsed Selection in the focused editing host,
+ * as a node and offset (UTF-16 in a text node). False when there is none
+ * (no focus in an editing host, or a selection rather than a caret). */
+bool au_js_edit_caret(AuJs *js, AuNode **node, uint32_t *offset);
+
 /* ---- Event loop ----
  * Runs due timers and queued tasks for up to budget_ms, each followed by a
  * microtask checkpoint. Returns true if anything ran. */

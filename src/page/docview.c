@@ -2389,6 +2389,19 @@ DV_ENTRY_VOID(paint, (AuDocView * dv, AuCanvas *c, AuRect view, int scroll_x, in
     au_docimages_paint_begin(dv->imgs);
     au_layout_paint(dv->layout, c, view, (float)scroll_x, (float)scroll_y);
     au_docimages_paint_end(dv->imgs);
+    /* The caret of a focused editing host, over the page. */
+    AuRect cr;
+    uint32_t cc;
+    if (dv->focus && au_dv_edit_caret_rect(dv, &cr, &cc)) {
+        /* Recorded even in the blink's off phase: au_dv_edit_caret_check
+         * repaints this place when the caret moves. */
+        dv->caret_drawn = true;
+        dv->caret_rect = cr;
+        AuRect at = {view.x + cr.x - (float)scroll_x, view.y + cr.y - (float)scroll_y, cr.w, cr.h};
+        if (dv->caret_on && at.x + at.w > view.x && at.x < view.x + view.w && at.y + at.h > view.y &&
+            at.y < view.y + view.h)
+            au_fill_rect(c, at, cc);
+    }
     uint32_t t1 = perf_now(dv);
     au_perf_add(&dv->perf, AU_PERF_PAINT, t1 - t0, NULL, t1);
     if (view.w > 0 && view.h > 0)
@@ -3427,7 +3440,11 @@ void au_dv_turn_end(AuDocView *dv)
      * updates, and repaints the page only if something changed. */
     if (dv->in_key)
         return;
-    if (dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan) {
+    /* Script may have moved an editing host's caret (the Selection)
+     * without touching the tree: the settle repaints its old and new
+     * place. */
+    bool caret = dv->cb.invalidate && (dv->caret_drawn || (dv->focus && !au_ctl_is_text_field(dv->focus)));
+    if (caret || dv->tree_dirty || dv->restyle_needed || dv->sheets_dirty || dv->sheets_rescan) {
         /* A document settles once the embedder's script slice is over
          * and repaints only what changed. A nested one settles with its
          * top document (au_docview_settle walks the frames): reCAPTCHA's
@@ -3471,6 +3488,7 @@ void au_docview_settle(AuDocView *dv)
     if (dv->doc) {
         au_docview_update(dv);
         au_dv_invalidate_damage(dv);
+        au_dv_edit_caret_check(dv);
     }
     if (dv->nframes)
         au_frames_settle(dv);
