@@ -17,6 +17,21 @@ const S = {
     list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'), range: Symbol('range'),
 };
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+/* document.getElementById and getElementsByName as the prelude made them,
+ * for the window's named properties (prelude_html.js, winNamed). */
+let namedLookups = null;
+/* The symbols in S key the prelude's own state on the page's objects (a
+ * target's listeners, an element's handlers). A page that lists an
+ * object's keys must not find them: hCaptcha's proof script walks
+ * Reflect.ownKeys(window) and reports each key that is not a string. */
+/* Every own key, the prelude's symbols too: for the prelude's own use
+ * (a proxy's ownKeys trap must name each fixed key of its target). */
+const ownKeysAll = Reflect.ownKeys;
+const isPrivateKey = (k) => {
+    if (typeof k !== 'symbol') return false;
+    for (const n in S) if (S[n] === k) return true;
+    return false;
+};
 const defProps = (proto, props) => {
     for (const k of Reflect.ownKeys(props)) {
         const d = Object.getOwnPropertyDescriptor(props, k);
@@ -26,6 +41,19 @@ const defProps = (proto, props) => {
         Object.defineProperty(proto, k, d);
     }
 };
+{
+    const ownKeys = ownKeysAll, symbols = Object.getOwnPropertySymbols, descriptors = Object.getOwnPropertyDescriptors;
+    const shown = (r) => (r.some(isPrivateKey) ? r.filter((k) => !isPrivateKey(k)) : r);
+    defProps(Reflect, { ownKeys(target) { return shown(ownKeys(target)); } });
+    defProps(Object, {
+        getOwnPropertySymbols(o) { return shown(symbols(o)); },
+        getOwnPropertyDescriptors(o) {
+            const r = descriptors(o);
+            for (const k of symbols(r)) if (isPrivateKey(k)) delete r[k];
+            return r;
+        },
+    });
+}
 const defGlobal = (name, value) =>
     Object.defineProperty(G, name, { value, writable: true, configurable: true, enumerable: false });
 const tag = (C, name) =>
@@ -897,7 +925,10 @@ const lazyModule = (index, names, helpers) => {
         lib = N.lazy(index)(G, helpers());
         for (const name of names) {
             const d = Object.getOwnPropertyDescriptor(G, name);
-            if (d && d.get && d.get === d.set) defGlobal(name, lib[name]);
+            /* as visible as it was: getSelection and createImageBitmap are
+             * among the window's enumerable operations (prelude_obs.js) */
+            if (d && d.get && d.get === d.set)
+                Object.defineProperty(G, name, { value: lib[name], writable: true, configurable: true, enumerable: d.enumerable });
         }
         return lib;
     };

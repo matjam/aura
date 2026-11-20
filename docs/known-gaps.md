@@ -391,6 +391,31 @@ done.
     comparison on the host (2000 strings in 15 to 20 ms), 15 to 20 times
     a plain `<` comparison; not measured on a G4.
 
+## Bot detection
+
+What a script that inspects the browser still finds in Aura (to list
+it again: [`developer-tools.md`](developer-tools.md), "To see what a
+script finds out about the browser"). Measured with hCaptcha's proof
+script on Discord's login, 2026-11-19:
+
+- **No WebAssembly.** hCaptcha's `hsw.js` needs it; without it the
+  server sends the pure script `hsj.js`, which works but runs its proof
+  in the interpreter (6 s on the host for Discord's challenge, 60 s for
+  a spec meant for `hsw`).
+- **No WebGL**: `canvas.getContext('webgl')` is null.
+- **`new FontFace(...).load()` rejects** ("Fonts made by script are not
+  supported"), so a font probe finds no font at all.
+- **Error messages are QuickJS's**, not V8's, SpiderMonkey's or
+  JavaScriptCore's ("not a Date object", "circular prototype chain"):
+  the script provokes errors and reports their text. Aura does not copy
+  another engine's.
+- `navigator.connection`, `deviceMemory`, `userAgentData` and
+  `document.createEvent('TouchEvent')` are absent, as in Firefox and
+  Safari on a desktop.
+- Not verified: whether Discord accepts hCaptcha's token from Aura now
+  that the faults found on 2026-11-19 are fixed. Before the fixes it
+  answered `invalid-response` to a token hCaptcha had passed.
+
 ## Script requests and CORS
 
 - A `fetch` with a `ReadableStream` body reads the whole stream before

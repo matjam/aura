@@ -345,3 +345,62 @@ promise_test('postMessage takes a URL as the target origin', async () => {
     assert.equal(got.join(), '1,3');
     assert.throws(() => postMessage(1, 'no url'), 'SyntaxError');
 });
+
+/* What a page that inspects its browser finds (hCaptcha's proof script
+ * does all of this and reports the answers to its server). */
+test('the window looks like a window to a script that inspects it', () => {
+    assert.equal(Object.prototype.toString.call(window), '[object Window]');
+    addEventListener('aura-inspect', () => {});
+    document.addEventListener('aura-inspect', () => {});
+    for (const o of [window, document, document.body]) {
+        assert.equal(Reflect.ownKeys(o).filter((k) => typeof k === 'symbol').length, 0, 'no symbol keys');
+        assert.equal(Object.getOwnPropertySymbols(o).length, 0);
+        assert.equal(Object.getOwnPropertySymbols(Object.getOwnPropertyDescriptors(o)).length, 0);
+    }
+    const keys = Object.keys(window);
+    for (const k of ['window', 'self', 'document', 'location', 'navigator', 'history', 'screen', 'performance',
+        'localStorage', 'alert', 'fetch', 'setTimeout', 'getComputedStyle', 'getSelection', 'onclick', 'onload'])
+        assert.ok(keys.includes(k), k + ' is an enumerable own property');
+    assert.ok(!keys.includes('HTMLElement') && !keys.includes('Object'), 'interfaces are not enumerable');
+});
+
+test('a missing global is looked up without calling the page\'s document.getElementById', () => {
+    const real = Document.prototype.getElementById, own = Object.getOwnPropertyDescriptor(document, 'getElementById');
+    let calls = 0;
+    const spy = function (id) { calls++; return real.call(this, id); };
+    Document.prototype.getElementById = spy;
+    document.getElementById = spy;
+    try {
+        assert.equal(typeof window.noSuchGlobalAnywhere, 'undefined');
+        assert.ok(!('noSuchGlobalAnywhere' in window));
+        assert.equal(calls, 0);
+    } finally {
+        Document.prototype.getElementById = real;
+        if (own) Object.defineProperty(document, 'getElementById', own); else delete document.getElementById;
+    }
+});
+
+test('navigator.plugins and mimeTypes are empty lists of their own kinds', () => {
+    assert.equal(Object.prototype.toString.call(navigator.plugins), '[object PluginArray]');
+    assert.equal(Object.prototype.toString.call(navigator.mimeTypes), '[object MimeTypeArray]');
+    assert.ok(navigator.plugins instanceof PluginArray && navigator.plugins === navigator.plugins);
+    assert.equal(navigator.plugins.length, 0);
+    assert.equal(navigator.plugins.item(0), null);
+    assert.equal(navigator.mimeTypes.namedItem('application/pdf'), null);
+    assert.equal([...navigator.plugins].length, 0);
+});
+
+test('performance has the document\'s navigation entry', () => {
+    const list = performance.getEntriesByType('navigation');
+    assert.equal(list.length, 1);
+    const e = list[0];
+    assert.ok(e instanceof PerformanceNavigationTiming && e instanceof PerformanceResourceTiming && e instanceof PerformanceEntry);
+    assert.equal(e.entryType, 'navigation');
+    assert.equal(e.type, 'navigate');
+    assert.equal(e.name, location.href);
+    assert.equal(e.startTime, 0);
+    assert.equal(typeof e.domInteractive, 'number');
+    assert.equal(typeof e.toJSON().loadEventEnd, 'number');
+    assert.ok(performance.getEntries().includes(e));
+    assert.ok(PerformanceObserver.supportedEntryTypes.includes('navigation'));
+});

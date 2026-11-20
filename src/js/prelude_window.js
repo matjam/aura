@@ -278,13 +278,34 @@ const navProps = {
     get maxTouchPoints() { return 0; },
     get webdriver() { return false; },
     get pdfViewerEnabled() { return false; },
-    get plugins() { return Object.freeze([]); },
-    get mimeTypes() { return Object.freeze([]); },
+    get plugins() { return thePlugins; },
+    get mimeTypes() { return theMimeTypes; },
     javaEnabled() { return false; },
     sendBeacon(url, data) { if (!arguments.length) throw new TypeError('sendBeacon: 1 argument required'); return sendBeacon(url, data); },
     vibrate() { return false; },
     registerProtocolHandler() {},
 };
+/* Aura has no plugins: both lists are empty, but they are the lists a
+ * page expects (item, namedItem), not arrays. */
+class PluginArray {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+class MimeTypeArray {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+for (const C of [PluginArray, MimeTypeArray]) {
+    defProps(C.prototype, {
+        get length() { return 0; },
+        item() { return null; },
+        namedItem() { return null; },
+        [Symbol.iterator]() { return [][Symbol.iterator](); },
+    });
+    tag(C);
+    defGlobal(C.name, C);
+}
+defProps(PluginArray.prototype, { refresh() {} });
+const thePlugins = Object.create(PluginArray.prototype);
+const theMimeTypes = Object.create(MimeTypeArray.prototype);
 defProps(Navigator.prototype, navProps);
 tag(Navigator);
 defGlobal('Navigator', Navigator);
@@ -388,6 +409,40 @@ class PerformanceEntry {
 }
 class PerformanceMark extends PerformanceEntry {}
 class PerformanceMeasure extends PerformanceEntry {}
+/* The document's navigation entry. Its document milestones are real
+ * (navTimes); the network phases all read 0, the time origin, since the
+ * script's clock starts when the document does. */
+class PerformanceResourceTiming extends PerformanceEntry {}
+class PerformanceNavigationTiming extends PerformanceResourceTiming {
+    constructor() { throw new TypeError('Illegal constructor'); }
+}
+const navEntryProps = {
+    get name() { return N.docUrl(0); },
+    get entryType() { return 'navigation'; },
+    get startTime() { return 0; },
+    get duration() { return navTimes.loadEnd; },
+    get initiatorType() { return 'navigation'; },
+    get nextHopProtocol() { return 'http/1.1'; },
+    get type() { return 'navigate'; },
+    get redirectCount() { return 0; },
+    get domInteractive() { return navTimes.interactive; },
+    get domContentLoadedEventStart() { return navTimes.contentLoaded; },
+    get domContentLoadedEventEnd() { return navTimes.contentLoadedEnd; },
+    get domComplete() { return navTimes.complete; },
+    get loadEventStart() { return navTimes.complete; },
+    get loadEventEnd() { return navTimes.loadEnd; },
+    get serverTiming() { return Object.freeze([]); },
+    toJSON() { const o = {}; for (const k of navEntryNames) o[k] = this[k]; return o; },
+};
+const navEntryZero = ['workerStart', 'redirectStart', 'redirectEnd', 'fetchStart', 'domainLookupStart', 'domainLookupEnd',
+    'connectStart', 'secureConnectionStart', 'connectEnd', 'requestStart', 'responseStart', 'responseEnd', 'transferSize',
+    'encodedBodySize', 'decodedBodySize', 'unloadEventStart', 'unloadEventEnd', 'activationStart'];
+for (const k of navEntryZero) Object.defineProperty(navEntryProps, k, { get() { return 0; }, enumerable: true, configurable: true });
+const navEntryNames = ['name', 'entryType', 'startTime', 'duration', 'initiatorType', 'nextHopProtocol', ...navEntryZero.slice(0, 15),
+    'serverTiming', 'unloadEventStart', 'unloadEventEnd', 'domInteractive', 'domContentLoadedEventStart',
+    'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd', 'type', 'redirectCount', 'activationStart'];
+defProps(PerformanceNavigationTiming.prototype, navEntryProps);
+const theNavEntry = Object.create(PerformanceNavigationTiming.prototype);
 const nowRel = () => N.now() - timeOriginNow;
 const markTime = (m) => {
     if (typeof m === 'number') return m;
@@ -423,9 +478,13 @@ defProps(Performance.prototype, {
     },
     clearMarks(name) { for (let i = marks.length - 1; i >= 0; i--) if (marks[i].entryType === 'mark' && (name === undefined || marks[i].name === name)) marks.splice(i, 1); },
     clearMeasures(name) { for (let i = marks.length - 1; i >= 0; i--) if (marks[i].entryType === 'measure' && (name === undefined || marks[i].name === name)) marks.splice(i, 1); },
-    getEntries() { return marks.slice(); },
-    getEntriesByType(t) { return marks.filter((m) => m.entryType === t); },
-    getEntriesByName(n, t) { return marks.filter((m) => m.name === n && (t === undefined || m.entryType === t)); },
+    getEntries() { return [theNavEntry, ...marks]; },
+    getEntriesByType(t) { return t === 'navigation' ? [theNavEntry] : marks.filter((m) => m.entryType === t); },
+    getEntriesByName(n, t) {
+        const r = marks.filter((m) => m.name === n && (t === undefined || m.entryType === t));
+        if (n === theNavEntry.name && (t === undefined || t === 'navigation')) r.unshift(theNavEntry);
+        return r;
+    },
     clearResourceTimings() {},
     setResourceTimingBufferSize() {},
     get timing() { return theTiming; },
@@ -463,7 +522,13 @@ const theNavigation = Object.create(PerformanceNavigation.prototype);
 tag(Performance);
 tag(PerformanceTiming);
 tag(PerformanceNavigation);
-for (const C of [Performance, PerformanceEntry, PerformanceMark, PerformanceMeasure, PerformanceTiming, PerformanceNavigation])
+tag(PerformanceEntry);
+tag(PerformanceMark);
+tag(PerformanceMeasure);
+tag(PerformanceResourceTiming);
+tag(PerformanceNavigationTiming);
+for (const C of [Performance, PerformanceEntry, PerformanceMark, PerformanceMeasure, PerformanceTiming, PerformanceNavigation,
+    PerformanceResourceTiming, PerformanceNavigationTiming])
     defGlobal(C.name, C);
 const thePerformance = Object.create(Performance.prototype);
 defProps(WP, { get performance() { return thePerformance; } });
@@ -472,7 +537,7 @@ class PerformanceObserver {
     observe() {}
     disconnect() {}
     takeRecords() { return []; }
-    static get supportedEntryTypes() { return Object.freeze(['mark', 'measure']); }
+    static get supportedEntryTypes() { return Object.freeze(['mark', 'measure', 'navigation']); }
 }
 defGlobal('PerformanceObserver', PerformanceObserver);
 
@@ -663,7 +728,7 @@ const storageHandler = {
     },
     has(t, p) { return typeof p === 'string' && N.storageGet(kindOf(t), p) !== null || p in t; },
     deleteProperty(t, p) { if (typeof p !== 'string') return Reflect.deleteProperty(t, p); t.removeItem(p); return true; },
-    ownKeys(t) { return N.storageKeys(kindOf(t)).concat(Reflect.ownKeys(t)); },
+    ownKeys(t) { return N.storageKeys(kindOf(t)).concat(ownKeysAll(t)); },
     getOwnPropertyDescriptor(t, p) {
         if (typeof p !== 'string') return Reflect.getOwnPropertyDescriptor(t, p);
         const v = N.storageGet(kindOf(t), p);

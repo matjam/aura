@@ -1480,5 +1480,39 @@ defProps(DP, {
     },
 });
 
+/* A window's own attributes and operations are enumerable own
+ * properties (Window is a [Global] interface), so Object.keys(window)
+ * names them: "window", "document", "location", "alert", every "on..."
+ * handler. The prelude defines them hidden, some on Window.prototype;
+ * this pass shows the ones a browser shows. hCaptcha sends the list to
+ * its server (its "wdata"), where a window with none of them reads as a
+ * scripted one. */
+{
+    const shown = ['window', 'self', 'document', 'name', 'location', 'customElements', 'history', 'navigation', 'locationbar',
+        'menubar', 'personalbar', 'scrollbars', 'statusbar', 'toolbar', 'status', 'closed', 'frames', 'length', 'top', 'opener',
+        'parent', 'frameElement', 'navigator', 'origin', 'external', 'screen', 'innerWidth', 'innerHeight', 'scrollX',
+        'pageXOffset', 'scrollY', 'pageYOffset', 'visualViewport', 'screenX', 'screenY', 'outerWidth', 'outerHeight',
+        'devicePixelRatio', 'event', 'clientInformation', 'screenLeft', 'screenTop', 'styleMedia', 'isSecureContext',
+        'crossOriginIsolated', 'scheduler', 'performance', 'trustedTypes', 'crypto', 'indexedDB', 'localStorage',
+        'sessionStorage', 'alert', 'atob', 'blur', 'btoa', 'cancelAnimationFrame', 'cancelIdleCallback', 'captureEvents',
+        'clearInterval', 'clearTimeout', 'close', 'confirm', 'createImageBitmap', 'fetch', 'find', 'focus', 'getComputedStyle',
+        'getSelection', 'matchMedia', 'moveBy', 'moveTo', 'open', 'postMessage', 'print', 'prompt', 'queueMicrotask',
+        'releaseEvents', 'reportError', 'requestAnimationFrame', 'requestIdleCallback', 'resizeBy', 'resizeTo', 'scroll',
+        'scrollBy', 'scrollTo', 'setInterval', 'setTimeout', 'stop', 'structuredClone', 'cookieStore', 'caches',
+        'speechSynthesis'];
+    const show = (k) => {
+        const own = Object.getOwnPropertyDescriptor(G, k);
+        const d = own || Object.getOwnPropertyDescriptor(WP, k);
+        if (!d || (own && (own.enumerable || !own.configurable))) return;
+        d.enumerable = true;
+        Object.defineProperty(G, k, d);
+    };
+    for (const k of shown) show(k);
+    for (const o of [G, WP])
+        for (const k of Object.getOwnPropertyNames(o)) if (/^on[a-z]+$/.test(k)) show(k);
+}
+
+namedLookups = { byId: doc.getElementById, byName: doc.getElementsByName };
+
 return P;
 })

@@ -807,13 +807,18 @@ defProps(HTMLFormElement.prototype, {
      * answers true only for a match, so an unknown global still throws
      * ReferenceError. Old pages and inline handlers use these. */
     const namedTags = new Set(['embed', 'form', 'img', 'object']);
+    /* The document's own lookups, taken now: a page that replaces
+     * document.getElementById to see who calls it (hCaptcha does, and
+     * reports the callers) must not see the window's lookup of a name
+     * that no script defined. The prelude's end sets them. */
     const winNamed = (p) => {
         if (typeof p !== 'string' || p === '' || p === 'then' || isIndex(p) || P.namedOff || !doc.documentElement)
             return undefined;
         const m = [];
-        const byId = doc.getElementById(p);
+        if (!namedLookups) return undefined; /* the prelude itself is loading */
+        const byId = namedLookups.byId.call(doc, p);
         if (byId) m.push(byId);
-        for (const e of doc.getElementsByName(p))
+        for (const e of namedLookups.byName.call(doc, p))
             if (e !== byId && e.namespaceURI === HTML_NS && namedTags.has(e.localName)) m.push(e);
         if (m.length > 1) {
             const all = new Set(m);
@@ -1666,20 +1671,28 @@ defProps(DP, {
  * DOMContentLoaded; "complete" fires readystatechange, load (at window,
  * with the document as target as browsers do) and pageshow. */
 let contentLoaded = false;
+/* When the document reached each state, in milliseconds since the time
+ * origin (0: not yet), for its PerformanceNavigationTiming entry. */
+const navTimes = { interactive: 0, contentLoaded: 0, contentLoadedEnd: 0, complete: 0, loadEnd: 0 };
 P.setReadyState = function (s) {
     if (s === 'contentloaded') {
         if (contentLoaded) return;
         contentLoaded = true;
         if (readyState === 'loading') P.setReadyState('interactive');
+        navTimes.contentLoaded = N.now() - timeOriginNow;
         fireSimple(doc, 'DOMContentLoaded', true, false);
+        navTimes.contentLoadedEnd = N.now() - timeOriginNow;
         return;
     }
     if (s === readyState) return;
     if (s === 'complete' && !contentLoaded) P.setReadyState('contentloaded');
     readyState = s;
+    if (s === 'interactive') navTimes.interactive = N.now() - timeOriginNow;
+    if (s === 'complete') navTimes.complete = N.now() - timeOriginNow;
     fireSimple(doc, 'readystatechange', false, false);
     if (s === 'complete') {
         fire(G, new Event('load'), doc);
+        navTimes.loadEnd = N.now() - timeOriginNow;
         fire(G, new PageTransitionEvent('pageshow', { persisted: false }), doc);
     }
 };

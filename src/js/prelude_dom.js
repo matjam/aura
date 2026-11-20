@@ -4,6 +4,9 @@ for (const k of Object.getOwnPropertyNames(G)) {
     if (/^(HTML\w*Element|SVGElement|MathMLElement|Node|Element|Document|HTMLDocument|DocumentFragment|ShadowRoot|DocumentType|CharacterData|Text|CDATASection|Comment|ProcessingInstruction|EventTarget|Window)$/.test(k) &&
         typeof G[k] === 'function') tag(G[k], k);
 }
+/* The engine tags its global object "global"; a window's tag is its
+ * interface's ("[object Window]", from Window.prototype). */
+delete G[Symbol.toStringTag];
 
 /* ---------------- DOM: collections ---------------- */
 
@@ -42,7 +45,7 @@ const listHandler = {
         const n = listItems(t).length;
         const keys = [];
         for (let i = 0; i < n; i++) keys.push(String(i));
-        return keys.concat(Reflect.ownKeys(t));
+        return keys.concat(ownKeysAll(t));
     },
     getOwnPropertyDescriptor(t, p) {
         if (isIndex(p)) {
@@ -369,7 +372,7 @@ const nnmHandler = {
     ownKeys(t) {
         const k = [];
         for (let i = 0; i < t.length; i++) k.push(String(i));
-        return k.concat(Reflect.ownKeys(t));
+        return k.concat(ownKeysAll(t));
     },
     getOwnPropertyDescriptor(t, p) {
         if (isIndex(p)) { const a = t.item(+p); return a ? { value: a, enumerable: true, configurable: true, writable: false } : undefined; }
@@ -503,7 +506,7 @@ defGlobal('DOMTokenList', DOMTokenList);
 const tokenHandler = {
     get(t, p) { return isIndex(p) ? t.item(+p) ?? undefined : Reflect.get(t, p, t); },
     has(t, p) { return isIndex(p) ? +p < t.length : p in t; },
-    ownKeys(t) { return t._get().map((_, i) => String(i)).concat(Reflect.ownKeys(t)); },
+    ownKeys(t) { return t._get().map((_, i) => String(i)).concat(ownKeysAll(t)); },
     getOwnPropertyDescriptor(t, p) {
         if (isIndex(p)) { const v = t.item(+p); return v === null ? undefined : { value: v, enumerable: true, configurable: true, writable: false }; }
         return Reflect.getOwnPropertyDescriptor(t, p);
@@ -544,7 +547,7 @@ const datasetHandler = {
     has(t, p) { return typeof p === 'string' && t[S.owner].hasAttribute(dataName(p)); },
     ownKeys(t) {
         return t[S.owner].getAttributeNames().filter((n) => n.startsWith('data-')).map((n) => camel(n.slice(5)))
-            .concat(Reflect.ownKeys(t));
+            .concat(ownKeysAll(t));
     },
     getOwnPropertyDescriptor(t, p) {
         if (typeof p !== 'string') return undefined;

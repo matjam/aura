@@ -13,12 +13,16 @@ const LAZY = {
         'ImageData', 'DOMMatrixReadOnly', 'DOMMatrix', 'OffscreenCanvas', 'createImageBitmap'],
 };
 
+/* The window's operations among them, which Object.keys(window) names;
+ * the interfaces are not enumerable. */
+const LAZY_SHOWN = new Set(['getSelection', 'createImageBitmap']);
+
 /* true while the module has not been read: every global is still the
  * accessor (reading the descriptor does not call the getter) */
 function lazyPending(mod) {
     return LAZY[mod].every((name) => {
         const d = Object.getOwnPropertyDescriptor(globalThis, name);
-        return d && typeof d.get === 'function' && d.get === d.set && !d.enumerable && d.configurable;
+        return d && typeof d.get === 'function' && d.get === d.set && d.enumerable === LAZY_SHOWN.has(name) && d.configurable;
     });
 }
 
@@ -28,7 +32,7 @@ function lazyLoaded(mod) {
         const d = Object.getOwnPropertyDescriptor(globalThis, name);
         assert.ok(d && 'value' in d, name + ' is a data property after the module is read');
         assert.equal(typeof d.value, 'function', name);
-        assert.equal(d.enumerable, false, name + ' is not enumerable');
+        assert.equal(d.enumerable, LAZY_SHOWN.has(name), name + ' is enumerable only if an operation');
         assert.equal(d.writable, true, name + ' is writable');
     }
 }
@@ -43,5 +47,6 @@ function lazyVisible(mod) {
     }
     const seen = [];
     for (const k in globalThis) seen.push(k);
-    for (const name of LAZY[mod]) assert.ok(!seen.includes(name), name + ' is not enumerated, as before');
+    for (const name of LAZY[mod])
+        assert.equal(seen.includes(name), LAZY_SHOWN.has(name), name + ' is enumerated only if an operation');
 }
