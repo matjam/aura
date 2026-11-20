@@ -580,6 +580,11 @@ bool au_page_take_script_oom(AuPage *p, AuScriptOom *out);
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* The Console's Trace Scrolls: the page's script logs each scroll it
+ * makes, each scroll event and each ResizeObserver delivery. Cheap when
+ * unchanged, so the Console calls it each refresh; a new document picks
+ * it up then. */
+void au_page_trace_scrolls(AuPage *p, bool on);
 /* The URL of the loaded document's site icon, for the caller to free with
  * au_free: the <link rel=icon> whose sizes fit 16 pixels best (the
  * smallest of at least 16, else the largest), else /favicon.ico of the

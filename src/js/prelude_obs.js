@@ -827,6 +827,10 @@ function observeResizes() {
             }
             if (entries.length) {
                 any = true;
+                if (traceScroll)
+                    for (const e of entries)
+                        N.print(0, '[trace] ResizeObserver: ' + traceName(e.target) + ' is ' +
+                                   traceInt(e.borderBoxSize[0].inlineSize) + 'x' + traceInt(e.borderBoxSize[0].blockSize));
                 try { ro._cb.call(ro, entries, ro); } catch (e) { reportError(e); }
             }
         }

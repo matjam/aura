@@ -365,8 +365,13 @@ P.scrolled = function () {
 };
 /* An element the user scrolled: scroll at it, not bubbling (CSSOM View). */
 P.elementScrolled = function (el) {
-    if (el && el.isConnected)
-        fireSimple(el, 'scroll', false, false);
+    if (!el || !el.isConnected) return;
+    if (traceScroll) {
+        const s = N.elScroll(el);
+        N.print(0, '[trace] scroll event at ' + traceName(el) + (s ? ' at ' + traceInt(s[0]) + ',' + traceInt(s[1]) +
+                   ' of ' + traceInt(s[2]) + 'x' + traceInt(s[3]) : ''));
+    }
+    fireSimple(el, 'scroll', false, false);
 };
 
 /* ---------------- performance ---------------- */

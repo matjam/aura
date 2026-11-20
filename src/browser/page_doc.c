@@ -4435,6 +4435,13 @@ bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
     return ok;
 }
 
+void au_page_trace_scrolls(AuPage *p, bool on)
+{
+    /* not while its script is parked: the next refresh tries again */
+    if (p && p->kind == K_DOC && p->begun && p->dv && !p->parked)
+        au_docview_set_trace(p->dv, on ? AU_DV_TRACE_SCROLL : 0);
+}
+
 bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s)
 {
     if (!p->dv)
