@@ -127,9 +127,14 @@ bool au_control_run(AuBrowserWindow *w, const char *line, AuBuf *out)
     AuPage *p = active_page(w);
     int x = 0, y = 0, x2 = 0, y2 = 0, steps = 10;
 
-    if (!strcmp(cmd, "eval")) {
+    if (!strcmp(cmd, "eval") || !strcmp(cmd, "eval!")) {
         if (!p)
             return error(out, "no tab");
+        /* Evaluating runs a parked script to its end first, and one that
+         * cannot park is stopped after 10 s: a watcher must not end the
+         * long task it watches (hCaptcha's proof runs for a minute). */
+        if (au_page_script_parked(p) && !cmd[4])
+            return error(out, "busy: the page's script is running (try again, or \"eval!\" to run it to its end first)");
         AuBuf r;
         au_buf_init(&r);
         bool ok = au_page_eval(p, arg, &r);

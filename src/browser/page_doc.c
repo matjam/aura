@@ -302,6 +302,19 @@ static uint32_t log_ms(AuPage *p)
 
 static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
 
+/* au_page_set_log: one sink for the application. */
+static AuPageLogFn log_sink;
+static void *log_sink_ctx;
+static unsigned log_trace;
+
+void au_page_set_log(AuPageLogFn fn, void *ctx, unsigned trace)
+{
+    log_sink = fn;
+    log_sink_ctx = ctx;
+    log_trace = fn ? trace : 0;
+    au_docview_default_trace(log_trace);
+}
+
 /* The Console's Trace Network: a line for the request as it now stands. */
 static void net_trace_peek(AuPage *p, uint32_t seq, const Fetch *f)
 {
@@ -849,6 +862,14 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     AuPage *p = f->page;
     au_netlog_end(&p->netlog, f->log, ok ? AU_NETREC_DONE : AU_NETREC_FAILED, info, log_ms(p));
     net_trace_peek(p, f->log, f);
+    if (log_sink) {
+        AuBuf h;
+        au_buf_init(&h);
+        au_netlog_heads(&p->netlog, f->log, &h);
+        if (h.len)
+            log_sink(log_sink_ctx, 1, au_buf_cstr(&h), h.len - 1); /* less the last newline */
+        au_buf_free(&h);
+    }
     if (f->main) {
         thaw(p); /* the bytes held for the parser go first */
         main_done(p, ok, info);
@@ -1877,6 +1898,8 @@ static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, si
 {
     AuPage *p = ctx;
     (void)dv;
+    if (log_sink)
+        log_sink(log_sink_ctx, level, text, len);
     size_t i = (p->console_start + p->console_count) % AU_PAGE_CONSOLE_LINES;
     if (p->console_count == AU_PAGE_CONSOLE_LINES) {
         au_free(p->console[i]);
@@ -2889,6 +2912,8 @@ static void begin_doc(AuPage *p, const char *url)
     au_docview_set_viewport(p->dv, p->vw, p->vh);
     au_docview_set_scroll(p->dv, 0, 0);
     p->begun = true;
+    if (log_trace) /* the log traces from the document's first line */
+        au_docview_set_trace(p->dv, p->trace);
     p->dirty = true;
     p->begun_at = now(p);
     p->hold_over = false;
@@ -4379,6 +4404,7 @@ AuPage *au_page_new(const AuPageEnv *env, const AuPageCallbacks *cb)
     p->cb = *cb;
     p->url = au_strndup("about:blank", 11);
     p->title = au_strndup("", 0);
+    p->trace = log_trace;
     p->kind = K_DOC;
     p->vw = 640;
     p->vh = 480;
@@ -4593,6 +4619,7 @@ void au_page_set_trace(AuPage *p, unsigned flags)
 {
     if (!p)
         return;
+    flags |= log_trace;
     p->trace = flags; /* the request lines (net_trace) */
     /* not while its script is parked: the next refresh tries again */
     if (p->kind == K_DOC && p->begun && p->dv && !p->parked)

@@ -372,6 +372,10 @@ bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
 /* AU_DV_TRACE_NET (AU_TRACE_NET) logs the script's WebSockets. */
 #define AU_DV_TRACE_NET 2u
 void au_docview_set_trace(AuDocView *dv, unsigned flags);
+/* The trace flags every document's script starts with from now on, a
+ * frame's too (au_docview_set_trace reaches the top document only once
+ * its script exists): for a log that must miss nothing. */
+void au_docview_default_trace(unsigned flags);
 
 /* ---- Measurements (the developer tools) ---- */
 /* The document's time counters (perf.h): script, style, layout and paint

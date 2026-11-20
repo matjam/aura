@@ -278,6 +278,8 @@ To drive the application from a script (clicks, keys, script in the
 page and its frames, the console, pictures), set `AURA_CONTROL` to a
 socket path and use `tools/aura-ctl.py`
 ([`developer-tools.md`](developer-tools.md), "The control socket").
+To record every console line, request and header of every page to a
+file, set `AURA_LOG` to its path ("The log file", same document).
 
 Screen recording permission is not needed to look at the page:
 

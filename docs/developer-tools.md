@@ -162,6 +162,63 @@ tools/aura-ctl.py shot /tmp/aura.png
   display): halve the picture's pixels for page coordinates.
 - With the Console window open, its Trace check boxes replace what
   `trace` set at each refresh.
+- `eval` answers "error busy" while the page's script is parked in a
+  long task, because evaluating runs that task to its end without
+  parking and a task that cannot park is stopped after 10 s (hCaptcha's
+  proof of work runs for a minute). Wait and try again, or use `eval!`
+  to accept that.
+
+## The log file
+
+To record everything a page does to a file, start the macOS build with
+`AURA_LOG` set to a path:
+
+```bash
+AURA_LOG=run/aura.log AURA_CONTROL=/tmp/aura-ctl.sock \
+    build/cocoa/src/platform/cocoa/Aura.app/Contents/MacOS/Aura https://discord.com/login &
+tail -f run/aura.log
+```
+
+- The file gets every console line of every tab, the page's and its
+  frames', as it is written and whole (the Console window keeps the
+  last lines, cut to 1 KB). Each line starts with the wall clock time
+  and the level; a line that continues the one before starts with a tab.
+- Trace Network is on for every page and frame from its first line,
+  whatever the Console's boxes say: each request's start, response and
+  end, and each WebSocket's frames.
+- Header recording is on, and each request that ends is followed by its
+  request head as sent (`[net] #12 > Name: value`) and its response head
+  (`<`). A value longer than 32 bytes, and every `Cookie`, `Set-Cookie`
+  and `Authorization` value, is written as its length and FNV-1a hash
+  (`(2615 bytes, hash beee4225)`), so the file can be passed around and
+  a token can still be followed through it: log the same hash from the
+  page's script to compare.
+- The sink is `au_page_set_log` (`src/browser/page.h`), portable; the
+  Cocoa port's writer is in `src/platform/cocoa/control_cocoa.m`.
+
+## To see what a script finds out about the browser
+
+A bot detector (hCaptcha's `hsw.js` and `hsj.js`, Cloudflare's
+Turnstile) inspects the browser and reports what it finds; a page that
+"passes" and is still refused is usually one whose report looked wrong.
+To list what such a script reads and what goes wrong while it runs:
+
+1. Load the frame that runs it alone, with the control socket on.
+2. Set `Error.prepareStackTrace` in the frame to a function that records
+   each error: QuickJS-ng calls it for every error object made, also the
+   ones the script catches.
+3. Replace `navigator`, `screen` and `performance` with proxies that
+   record each property read that gives `undefined`, and wrap
+   `document.createElement`, `createEvent` and the canvas methods.
+4. Run the script's entry point from a timer (not from `eval`, which
+   cannot park) and read the record when its promise settles.
+
+hCaptcha, 2026-11-19: this found `[object global]` for the window's
+tag, the prelude's `Symbol(listeners)` among the window's keys, an empty
+`Object.keys(window)`, `navigator.plugins` as an array, no navigation
+entry in `performance`, and the window's lookup of a missing global
+calling the page's replaced `document.getElementById`. All are fixed.
+What remains is in [`known-gaps.md`](known-gaps.md) ("Bot detection").
 
 ## The Develop menu
 

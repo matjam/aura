@@ -10,6 +10,10 @@
  *
  *   eval EXPR                  run EXPR in the page ("@N EXPR", "@text EXPR"
  *                              in a frame, "@" lists the frames)
+ *                              "error busy" while the page's script is
+ *                              parked in a long task; "eval! EXPR" runs
+ *                              that task to its end first (stopped after
+ *                              10 s more)
  *   where [@FRAME] SELECTOR    the first element matching SELECTOR, as
  *                              "X Y W H" (scrolled into view first)
  *   clicksel [@FRAME] SELECTOR click the middle of that element
@@ -28,7 +32,9 @@
  *                              Network window gives it
  *   idle [N]                   lets the window run N (10) idle turns
  *
- * The port handles "shot PATH" itself (a picture of the window). */
+ * The port handles "shot PATH" itself (a picture of the window), and
+ * "headers" (record request and response headers from now on, as the
+ * Network window does, for "net details"). */
 #ifndef AURA_BROWSER_CONTROL_H
 #define AURA_BROWSER_CONTROL_H
 

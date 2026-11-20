@@ -357,6 +357,71 @@ static void trace_phases(const AuNetRecord *r, AuBuf *out)
     }
 }
 
+static bool name_is(const char *line, size_t n, const char *name)
+{
+    size_t k = strlen(name);
+    if (n != k)
+        return false;
+    for (size_t i = 0; i < k; i++) {
+        char c = line[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c + 32);
+        if (c != name[i])
+            return false;
+    }
+    return true;
+}
+
+static void head_lines(uint32_t seq, char dir, const char *head, AuBuf *out)
+{
+    bool first = true;
+    for (const char *p = head; p && *p;) {
+        const char *e = p;
+        while (*e && *e != '\r' && *e != '\n')
+            e++;
+        size_t len = (size_t)(e - p);
+        if (len) {
+            au_buf_printf(out, "[net] #%lu %c ", (unsigned long)seq, dir);
+            const char *colon = first ? NULL : memchr(p, ':', len);
+            if (!colon) {
+                au_buf_append(out, p, len); /* the request or status line */
+            } else {
+                size_t nlen = (size_t)(colon - p);
+                const char *v = colon + 1;
+                while (v < e && *v == ' ')
+                    v++;
+                size_t vlen = (size_t)(e - v);
+                bool secret = name_is(p, nlen, "cookie") || name_is(p, nlen, "set-cookie") ||
+                              name_is(p, nlen, "authorization") || name_is(p, nlen, "proxy-authorization");
+                au_buf_append(out, p, nlen);
+                au_buf_puts(out, ": ");
+                if (!secret && vlen <= 32) {
+                    au_buf_append(out, v, vlen);
+                } else {
+                    uint32_t h = 2166136261u;
+                    for (size_t i = 0; i < vlen; i++)
+                        h = (h ^ (uint8_t)v[i]) * 16777619u;
+                    au_buf_printf(out, "(%lu bytes, hash %08lx)", (unsigned long)vlen, (unsigned long)h);
+                }
+            }
+            au_buf_putc(out, '\n');
+            first = false;
+        }
+        p = e;
+        while (*p == '\r' || *p == '\n')
+            p++;
+    }
+}
+
+void au_netlog_heads(AuNetLog *l, uint32_t seq, AuBuf *out)
+{
+    AuNetRecord *r = find(l, seq);
+    if (!r)
+        return;
+    head_lines(seq, '>', r->request_head, out);
+    head_lines(seq, '<', r->response_head, out);
+}
+
 void au_netlog_trace(AuNetLog *l, uint32_t seq, uint32_t now_ms, AuBuf *out)
 {
     const AuNetRecord *r = find(l, seq);

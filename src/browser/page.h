@@ -597,6 +597,14 @@ bool au_page_element_rect(AuPage *p, const char *frame, const char *selector, Au
 #define AU_PAGE_TRACE_SCROLL 1u /* AU_DV_TRACE_SCROLL */
 #define AU_PAGE_TRACE_NET 2u    /* AU_DV_TRACE_NET */
 void au_page_set_trace(AuPage *p, unsigned flags);
+/* A log of everything, for a port to write to a file (the Cocoa port's
+ * AURA_LOG): fn gets every console line of every page as it is written,
+ * whole, and, for each request that ends, its recorded request and
+ * response heads (au_netlog_heads; the port turns header recording on).
+ * Every page then traces with at least the flags in trace, whatever the
+ * Console's boxes say. NULL turns it off. */
+typedef void (*AuPageLogFn)(void *ctx, int level, const char *text, size_t len);
+void au_page_set_log(AuPageLogFn fn, void *ctx, unsigned trace);
 /* The URL of the loaded document's site icon, for the caller to free with
  * au_free: the <link rel=icon> whose sizes fit 16 pixels best (the
  * smallest of at least 16, else the largest), else /favicon.ico of the

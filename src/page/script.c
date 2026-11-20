@@ -32,6 +32,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* au_docview_default_trace: the flags every new runtime starts with. */
+static unsigned default_trace;
+
 typedef struct PendingScript PendingScript;
 struct PendingScript {
     AuElement *el; /* referenced */
@@ -903,6 +906,10 @@ static bool ensure_js(AuDocScript *s)
         s->js_failed = true;
         return false;
     }
+    if (default_trace) { /* a log is on: a frame's script traces from its start */
+        s->trace = default_trace;
+        au_js_set_trace(s->js, default_trace);
+    }
     if (s->parser && !au_html_parser_done(s->parser))
         au_js_set_parser(s->js, s->parser);
     if (dv->nframes)
@@ -1722,6 +1729,11 @@ void au_docscript_element_scrolled(AuDocScript *s, AuElement *el)
         return; /* a wheel moves one box at a time; eight is plenty */
     au_node_ref(&el->node);
     s->scrolled[s->nscrolled++] = el;
+}
+
+void au_docview_default_trace(unsigned flags)
+{
+    default_trace = flags;
 }
 
 void au_docscript_set_trace(AuDocScript *s, unsigned flags)

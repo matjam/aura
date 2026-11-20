@@ -109,6 +109,15 @@ const AuNetRecord *au_netlog_at(const AuNetLog *l, uint32_t i);
  * The first number is milliseconds since the navigation. */
 void au_netlog_trace(AuNetLog *l, uint32_t seq, uint32_t now_ms, AuBuf *out);
 
+/* The recorded request and response heads of record seq, for a log file
+ * that people pass around: "[net] #12 > Name: value" for each request
+ * line and "<" for each response line. A value longer than 32 bytes, and
+ * every Cookie, Set-Cookie and Authorization value, is replaced by its
+ * length and a hash ("(2615 bytes, hash beee4225)": FNV-1a, as a script's
+ * own log of the value can compute), so that a token can be followed
+ * through the log without being in it. Nothing when not recorded. */
+void au_netlog_heads(AuNetLog *l, uint32_t seq, AuBuf *out);
+
 /* ---- Text ----
  * The Network window and `aura-host chrome --do netlog` show the same
  * text: fixed-width columns, one request per line. */
