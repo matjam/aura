@@ -553,6 +553,9 @@ void au_docview_point_from_top(const AuDocView *dv, int *x, int *y);
 void au_docview_scroll_pos(const AuDocView *dv, int *x, int *y);
 /* How many nested documents the page has (all levels). */
 uint32_t au_docview_frame_count(const AuDocView *dv);
+/* The nth (from 1) nested view below dv, depth first in tree order, or
+ * NULL: the Console's "@N expression". */
+AuDocView *au_docview_frame_at(AuDocView *dv, uint32_t n);
 
 /* ---- Fragments ---- */
 /* The element a fragment identifier names (id, or <a name>), or NULL.

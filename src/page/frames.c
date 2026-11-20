@@ -1840,6 +1840,37 @@ uint32_t au_docview_frame_count(const AuDocView *dv)
     return dv->frame_total;
 }
 
+AuDocView *au_docview_frame_at(AuDocView *dv, uint32_t n)
+{
+    /* Depth first in tree order, with an explicit stack (frames nest
+     * as deep as a page likes). */
+    enum { DEPTH = 64 };
+    AuDocView *view[DEPTH];
+    uint32_t next[DEPTH];
+    int top = 0;
+    view[0] = dv;
+    next[0] = 0;
+    uint32_t seen = 0;
+    while (top >= 0) {
+        AuDocView *v = view[top];
+        if (next[top] >= v->nframes) {
+            top--;
+            continue;
+        }
+        AuFrame *f = v->frames[next[top]++];
+        if (!f->dv || f->dead)
+            continue;
+        if (++seen == n)
+            return f->dv;
+        if (top + 1 < DEPTH) {
+            top++;
+            view[top] = f->dv;
+            next[top] = 0;
+        }
+    }
+    return NULL;
+}
+
 /* ---- Sums over the frames ---- */
 
 bool au_frames_can_persist(AuDocView *dv)

@@ -339,6 +339,15 @@ stack frame gives the source URL and line. The input line calls
 (starting the script runtime on a page that has no script) and adds the
 expression and its result to the console.
 
+- **To run an expression in a frame**, start the line with `@`: `@`
+  alone lists the page's frames as "@N URL" (all levels, depth first in
+  tree order, `au_docview_frame_at`); `@N expression` runs it in the Nth;
+  `@text expression` runs it in the first whose address contains text.
+  This reaches a cross-origin frame, which the page's own script cannot:
+  `@challenge document.querySelectorAll('canvas').length` looks inside
+  hCaptcha's challenge. `test_eval_in_frame` in
+  `tests/browser/test_page_doc.c` covers it.
+
 - The filter field and the Errors, Warnings and Logs check boxes fill
   an `AuConsoleFilter`. Logs covers log, info and debug. The
   expressions typed and their results are always listed.

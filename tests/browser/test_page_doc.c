@@ -75,6 +75,8 @@ static const struct {
      "<!DOCTYPE html><body style='margin:0'><div style='height:100px;overflow:auto'>"
      "<div style='height:1000px'>inner</div></div><div style='height:3000px'></div>"},
     {"wide.html", "<!DOCTYPE html><body style='margin:0'><p style='margin:0'>xx xx xx xx xx xx xx xx xx xx</p>"},
+    {"fr.html", "<!DOCTYPE html><body><iframe src='frin.html'></iframe>"},
+    {"frin.html", "<!DOCTYPE html><title>Inner</title><body><script>var where = 'inner';</script>"},
     {"drag.html",
      "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:20px'>"
      "<p id=t style='margin:0'>alpha beta gamma delta</p><div id=pad style='height:100px'></div>"
@@ -776,6 +778,23 @@ static void test_drag_release(void)
     au_browser_free(b);
 }
 
+/* The Console's "@" prefix: "@" lists the frames, "@N expr" and "@text
+ * expr" run in one, where the page's own script cannot reach. */
+static void test_eval_in_frame(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/fr.html", true, -1);
+    settle(w);
+    CHECK_STR(page_js(w, "@"), "@1 file:///mem/frin.html");
+    CHECK_STR(page_js(w, "@1 where"), "inner");
+    CHECK_STR(page_js(w, "@frin document.title"), "Inner");
+    CHECK_STR(page_js(w, "typeof where"), "undefined");
+    CHECK(strstr(page_js(w, "@7 1"), "No frame 7") != NULL);
+    settle(w);
+    au_browser_free(b);
+}
+
 static bool has_item(const AuContextMenu *m, AuCommand cmd, bool enabled)
 {
     for (int i = 0; i < m->n; i++)
@@ -1087,6 +1106,7 @@ int main(void)
     test_zoom();
     test_selection();
     test_drag_release();
+    test_eval_in_frame();
     test_context_menu();
     test_save_source();
     test_session_scroll();

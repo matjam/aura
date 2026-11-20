@@ -4495,8 +4495,53 @@ bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
         au_buf_puts(out, "JavaScript is turned off (Preferences), or was when this page loaded");
         return false;
     }
+    /* "@" lists the frames; "@N expression" runs it in the Nth, and
+     * "@text expression" in the first whose address contains text: a
+     * cross-origin frame (hCaptcha's challenge) cannot be reached from
+     * the page's own script. */
+    AuDocView *in = p->dv;
+    if (src[0] == '@') {
+        const char *s = src + 1;
+        const char *sp = strchr(s, ' ');
+        size_t n = sp ? (size_t)(sp - s) : strlen(s);
+        if (n == 0 || !sp) {
+            uint32_t total = au_docview_frame_count(p->dv);
+            if (!total)
+                au_buf_puts(out, "This page has no frames");
+            for (uint32_t i = 1; i <= total; i++) {
+                AuDocView *v = au_docview_frame_at(p->dv, i);
+                if (v)
+                    au_buf_printf(out, "%s@%lu %s", i > 1 ? "\n" : "", (unsigned long)i, au_docview_url(v));
+            }
+            return true;
+        }
+        char key[200];
+        snprintf(key, sizeof key, "%.*s", (int)(n < sizeof key ? n : sizeof key - 1), s);
+        in = NULL;
+        bool digits = true;
+        uint32_t num = 0;
+        for (size_t i = 0; key[i]; i++) {
+            digits = digits && au_is_digit((unsigned char)key[i]);
+            if (digits && num < 100000)
+                num = num * 10 + (uint32_t)(key[i] - '0');
+        }
+        if (digits) {
+            in = au_docview_frame_at(p->dv, num);
+        } else {
+            for (uint32_t i = 1; !in && i <= au_docview_frame_count(p->dv); i++) {
+                AuDocView *v = au_docview_frame_at(p->dv, i);
+                if (v && strstr(au_docview_url(v), key))
+                    in = v;
+            }
+        }
+        if (!in) {
+            au_buf_printf(out, "No frame %s (\"@\" lists them)", key);
+            return false;
+        }
+        src = sp + 1;
+    }
     uint32_t gen = p->gen;
-    bool ok = au_docview_eval(p->dv, src, out);
+    bool ok = au_docview_eval(in, src, out);
     if (gen == p->gen)
         follow_open_url(p); /* the expression may have navigated */
     return ok;
