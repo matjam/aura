@@ -593,6 +593,41 @@ static void mouse_at(AuDocView *dv, AuEventType t, int x, int y)
     au_docview_mouse(dv, &e);
 }
 
+/* A scroller that is a flex item keeps its offset through relayout: the
+ * flex container measures it at its content height first, which clamped
+ * the offset to 0 for good (Discord's message list jumped up). */
+static void test_flex_scroller_keeps_offset(void)
+{
+    Ctx c;
+    AuBuf out;
+    au_buf_init(&out);
+    AuDocView *dv = view(&c,
+                         "<style>body{margin:0} #o div{height:40px}</style>"
+                         "<div style='display:flex;flex-direction:column;height:400px'>"
+                         "<div id=s style='flex:1 1 auto;min-height:0;overflow-y:scroll'><div id=o></div></div>"
+                         "<div style='flex:0 0 50px'></div></div>"
+                         "<script>var o=document.getElementById('o'),s=document.getElementById('s');"
+                         "for(var i=0;i<60;i++)o.appendChild(document.createElement('div'))</script>",
+                         true);
+    CHECK(!strcmp(eval_str(dv, "s.scrollTop=1500;s.scrollTop+':'+s.scrollHeight", &out), "1500:2400"),
+          "scrolled: %s", au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "o.firstChild.textContent='x';String(s.scrollTop)", &out), "1500"),
+          "a change inside keeps the offset: %s", au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "o.appendChild(document.createElement('div'));s.scrollTop+':'+s.scrollHeight", &out),
+                  "1500:2440"),
+          "content added keeps it: %s", au_buf_cstr(&out));
+    /* A real shrink still clamps, and stays clamped when the content grows. */
+    CHECK(!strcmp(eval_str(dv, "while(o.children.length>20)o.lastChild.remove();String(s.scrollTop)", &out), "450"),
+          "a shrink clamps: %s", au_buf_cstr(&out));
+    CHECK(!strcmp(eval_str(dv, "for(var i=0;i<40;i++)o.appendChild(document.createElement('div'));"
+                               "String(s.scrollTop)",
+                           &out),
+                  "450"),
+          "growing again does not return to the old offset: %s", au_buf_cstr(&out));
+    au_buf_free(&out);
+    au_docview_free(dv);
+}
+
 /* The mouse as script sees it: pointer events before each mouse event,
  * offsetX/offsetY from the target's padding edge, and pointer capture
  * that sends a drag to the capturing element (hCaptcha's drag puzzles
@@ -1001,6 +1036,7 @@ int main(void)
     test_modal_dialog();
     test_pointer_events();
     test_inner_scroll_event();
+    test_flex_scroller_keeps_offset();
     test_search_box_defer();
     test_keystroke_cost();
     test_edit_commands();

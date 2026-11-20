@@ -213,6 +213,11 @@ typedef struct LBlock {
     float baseline;     /* first baseline from the border-box top, NAN if none */
     float last_baseline;
     float scroll_x, scroll_y; /* scroll containers */
+    /* The offset before a pass clamped it, and the pass (lay_gen): a
+     * later layout of the box in the same document pass puts it back
+     * (l_finish_overflow). */
+    float want_x, want_y;
+    uint32_t want_gen;
     float sw, sh;       /* scrollable content extent from the padding-box origin */
     LLine *lines;
     LFrag *frags;
