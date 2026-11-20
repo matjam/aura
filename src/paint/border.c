@@ -242,6 +242,83 @@ static AuRadii spread_radii(const AuRadii *r, float spread)
     return o;
 }
 
+/* What one box shadow paints, in the surface's pixels less (ix, iy). */
+typedef struct {
+    AuSurface *s;
+    int ix, iy, pad;
+    float sigma;
+    uint32_t src;
+    bool inset;
+    AuRect sh, b; /* the shadow's shape and the box */
+    AuRadii shr, br;
+    bool round;   /* br applies */
+} ShadowJob;
+
+/* Paints the shadow over vis. The blur reads up to pad pixels beyond
+ * vis, so the result there does not depend on how vis was cut out of
+ * the whole shadow. */
+static void shadow_part(const ShadowJob *j, AuIRect vis)
+{
+    if (au_irect_empty(vis))
+        return;
+    int pad = j->pad;
+    AuIRect work = {vis.x0 - pad, vis.y0 - pad, vis.x1 + pad, vis.y1 + pad};
+    int ww = work.x1 - work.x0, wh = work.y1 - work.y0;
+    uint8_t *shape = au_calloc((size_t)ww * wh);
+    uint8_t *boxm = au_calloc((size_t)ww * wh);
+    AuPath p;
+    au_path_init(&p);
+    if (j->sh.w > 0 && j->sh.h > 0)
+        au_path_rounded_rect(&p, j->sh, &j->shr, false);
+    au_raster_mask(&p, AU_FILL_NONZERO, work, shape);
+    au_path_clear(&p);
+    au_path_rounded_rect(&p, j->b, j->round ? &j->br : NULL, false);
+    au_raster_mask(&p, AU_FILL_NONZERO, work, boxm);
+    au_path_free(&p);
+    au_blur_mask(shape, ww, wh, j->sigma);
+
+    AuSurface *s = j->s;
+    int n = vis.x1 - vis.x0;
+    uint8_t *cov = au_alloc((size_t)n);
+    for (int y = vis.y0; y < vis.y1; y++) {
+        const uint8_t *sm = shape + (size_t)(y - work.y0) * ww + (vis.x0 - work.x0);
+        const uint8_t *bm = boxm + (size_t)(y - work.y0) * ww + (vis.x0 - work.x0);
+        for (int i = 0; i < n; i++) {
+            uint32_t v;
+            if (j->inset)
+                v = ((255u - sm[i]) * au_a256(bm[i])) >> 8;
+            else
+                v = (sm[i] * (256u - au_a256(bm[i]))) >> 8;
+            cov[i] = (uint8_t)v;
+        }
+        au_blend_solid_span(s->pixels + (size_t)(y + j->iy) * s->stride + (vis.x0 + j->ix), n, j->src, cov);
+    }
+    au_free(cov);
+    au_free(shape);
+    au_free(boxm);
+}
+
+/* The pixels wholly inside a rounded box, which an outer shadow leaves
+ * alone. A corner of radii rx, ry passes through the point inset by
+ * (1 - 1/sqrt 2) of them, about 0.293, from the box's corner, and a pixel
+ * there extends into the box, so 0.3 of the largest radius and a pixel
+ * more is inside. */
+static AuIRect box_inside(AuRect b, const AuRadii *r)
+{
+    float m = 0;
+    if (r)
+        for (int i = 0; i < 4; i++) {
+            if (r->rx[i] > m)
+                m = r->rx[i];
+            if (r->ry[i] > m)
+                m = r->ry[i];
+        }
+    float in = 0.3f * m + 1.0f;
+    AuIRect h = {au_f2px(ceilf(b.x + in)), au_f2px(ceilf(b.y + in)), au_f2px(floorf(b.x + b.w - in)),
+                 au_f2px(floorf(b.y + b.h - in))};
+    return h;
+}
+
 void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx, float dy,
                         float blur, float spread, AuColor color, bool inset)
 {
@@ -291,38 +368,18 @@ void au_draw_box_shadow(AuCanvas *c, AuRect box, const AuRadii *radii, float dx,
     AuIRect vis = au_irect_intersect(area, clip);
     if (au_irect_empty(vis))
         return;
-    /* The blur reads up to pad pixels beyond what is visible. */
-    AuIRect work = {vis.x0 - pad, vis.y0 - pad, vis.x1 + pad, vis.y1 + pad};
-    int ww = work.x1 - work.x0, wh = work.y1 - work.y0;
-    uint8_t *shape = au_calloc((size_t)ww * wh);
-    uint8_t *boxm = au_calloc((size_t)ww * wh);
-    AuPath p;
-    au_path_init(&p);
-    if (sh.w > 0 && sh.h > 0)
-        au_path_rounded_rect(&p, sh, &shr, false);
-    au_raster_mask(&p, AU_FILL_NONZERO, work, shape);
-    au_path_clear(&p);
-    au_path_rounded_rect(&p, b, radii ? &br : NULL, false);
-    au_raster_mask(&p, AU_FILL_NONZERO, work, boxm);
-    au_path_free(&p);
-    au_blur_mask(shape, ww, wh, sigma);
-
-    int n = vis.x1 - vis.x0;
-    uint8_t *cov = au_alloc((size_t)n);
-    for (int y = vis.y0; y < vis.y1; y++) {
-        const uint8_t *sm = shape + (size_t)(y - work.y0) * ww + (vis.x0 - work.x0);
-        const uint8_t *bm = boxm + (size_t)(y - work.y0) * ww + (vis.x0 - work.x0);
-        for (int i = 0; i < n; i++) {
-            uint32_t v;
-            if (inset)
-                v = ((255u - sm[i]) * au_a256(bm[i])) >> 8;
-            else
-                v = (sm[i] * (256u - au_a256(bm[i]))) >> 8;
-            cov[i] = (uint8_t)v;
-        }
-        au_blend_solid_span(s->pixels + (size_t)(y + iy) * s->stride + (vis.x0 + ix), n, src, cov);
+    ShadowJob j = {s, ix, iy, pad, sigma, src, inset, sh, b, shr, br, radii != NULL};
+    /* An outer shadow does not paint inside the box, so a large box
+     * blurs only the bands around its edges. Blurring all of a 500 by
+     * 600 pixel box took a large part of each 2.5 s paint of Discord's
+     * login page with hCaptcha's challenge on a 900 MHz G4. */
+    AuIRect hole = inset ? (AuIRect){0, 0, 0, 0} : au_irect_intersect(box_inside(b, radii ? &br : NULL), vis);
+    if (au_irect_empty(hole)) {
+        shadow_part(&j, vis);
+        return;
     }
-    au_free(cov);
-    au_free(shape);
-    au_free(boxm);
+    shadow_part(&j, (AuIRect){vis.x0, vis.y0, vis.x1, hole.y0});
+    shadow_part(&j, (AuIRect){vis.x0, hole.y1, vis.x1, vis.y1});
+    shadow_part(&j, (AuIRect){vis.x0, hole.y0, hole.x0, hole.y1});
+    shadow_part(&j, (AuIRect){hole.x1, hole.y0, vis.x1, hole.y1});
 }
