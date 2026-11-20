@@ -386,6 +386,17 @@ static void test_taint(void)
     JS_IS(&w, "g.getImageData(0, 0, 1, 1).data[0]", "255");
     /* the one whose response failed the check has no pixels to draw */
     JS_IS(&w, "var n = mk(); try { n.drawImage(document.getElementById('corsno'), 0, 0); } catch (e) {} n.getImageData(0, 0, 1, 1).data[3]", "0");
+    /* new Image() with crossOrigin, as hCaptcha loads its pictures: a
+     * response that passes the CORS check does not taint, one that fails
+     * fires error; width and height are the natural size */
+    js(&w, "var sres = ''; var si = new Image(); si.crossOrigin = 'anonymous';"
+           "si.onload = function () { var c = mk(); c.drawImage(si, 0, 0); sres = read(c) + ' ' + si.width + 'x' + si.height; };"
+           "si.onerror = function () { sres = 'error'; }; si.src = 'http://cdn.test/ok.png'; 1");
+    JS_IS(&w, "sres", "ok 4x4");
+    js(&w, "var sno = ''; var sj = new Image(); sj.crossOrigin = 'anonymous';"
+           "sj.onload = function () { sno = 'load'; }; sj.onerror = function () { sno = 'error'; };"
+           "sj.src = 'http://cdn.test/no.png'; 1");
+    JS_IS(&w, "sno", "error");
     /* a tainted canvas still draws and measures; resetting its bitmap makes it clean */
     JS_IS(&w, "x.fillRect(0, 0, 2, 2); x.measureText('a').width >= 0", "true");
     JS_IS(&w, "x.canvas.width = 8; read(x)", "ok");

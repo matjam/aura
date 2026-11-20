@@ -558,8 +558,13 @@ static int image_source(JSContext *ctx, JSValueConst v, Src *s)
             JS_FreeValue(ctx, by);
             if (!b)
                 return 0;
+            /* _icors: script loaded it with a crossorigin attribute and
+             * the response passed the CORS check (prelude_html.js). */
+            JSValue cv = JS_GetPropertyStr(ctx, v, "_icors");
+            bool cors_ok = JS_ToBool(ctx, cv) > 0;
+            JS_FreeValue(ctx, cv);
             char *url = img_url(js, el);
-            b->clean = js_canvas_image_origin_clean(js, url);
+            b->clean = cors_ok || js_canvas_image_origin_clean(js, url);
             au_free(url);
             JSValue o = new_bitmap_object(ctx, b);
             src_bitmap(s, b);

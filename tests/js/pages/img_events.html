@@ -31,6 +31,18 @@ promise_test('setting the src attribute fires load again', async () => {
     assert.equal(img.naturalWidth, 2);
 });
 
+promise_test('an image with no box gives its natural size as width and height', async () => {
+    const img = new Image();
+    assert.equal(img.width, 0, 'nothing before it loads');
+    const p = once(img, 'load');
+    img.src = 'data:image/gif;base64,R0lGODlhAwABAIAAAP///wAAACH5BAEAAAAALAAAAAADAAEAAAICRAEAOw==';
+    await p;
+    assert.equal(img.width, 3);
+    assert.equal(img.height, 1);
+    img.setAttribute('width', '10');
+    assert.equal(img.width, 10, 'the attribute first');
+});
+
 promise_test('decode() waits for the image and rejects a broken one', async () => {
     const img = document.createElement('img');
     img.setAttribute('src', 'data:image/gif;base64,R0lGODlhAwABAIAAAP///wAAACH5BAEAAAAALAAAAAADAAEAAAICRAEAOw==');

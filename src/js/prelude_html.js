@@ -990,10 +990,22 @@ function followHyperlink(a) {
 
 /* ---------------- other element interfaces ---------------- */
 
+/* width and height (HTML): the rendered size, else (an image with no
+ * box, as new Image() is) the attribute, as Chrome gives it, else the
+ * natural size once the image is available. hCaptcha draws its challenge
+ * pictures at 480 by 480 * height / width, and with 0 drew nothing. */
 defProps(HTMLImageElement.prototype, {
-    get width() { const r = N.rect(this); return r ? Math.round(r[2]) : (parseInt(this.getAttribute('width'), 10) || 0); },
+    get width() {
+        const r = N.rect(this);
+        if (r) return Math.round(r[2]);
+        return parseInt(this.getAttribute('width'), 10) || this.naturalWidth;
+    },
     set width(v) { this.setAttribute('width', String(v >>> 0)); },
-    get height() { const r = N.rect(this); return r ? Math.round(r[3]) : (parseInt(this.getAttribute('height'), 10) || 0); },
+    get height() {
+        const r = N.rect(this);
+        if (r) return Math.round(r[3]);
+        return parseInt(this.getAttribute('height'), 10) || this.naturalHeight;
+    },
     set height(v) { this.setAttribute('height', String(v >>> 0)); },
     /* From script's own load of src, else from the image the document
      * loaded for it (N.imgNatural): lazy loaders and galleries test
@@ -1048,8 +1060,17 @@ const imgBytes = { total: 0, registry: new FinalizationRegistry((n) => { imgByte
             const chunks = [];
             let status = 0;
             const fail = () => { img._iload = false; img.dispatchEvent(new Event('error')); };
-            /* credentials same-origin (1), mode no-cors (1), dest image (3) */
-            try { img._iabort = startFetch('GET', url, [], null, 1, 1, 3, {
+            /* With a crossorigin attribute, a CORS request (mode cors 0;
+             * credentials omit 0 for anonymous, include 2 for
+             * use-credentials): one that passes is clean for a canvas
+             * (_icors, natives_canvas.c). hCaptcha draws its challenge
+             * pictures so, and its canvas was tainted. Else credentials
+             * same-origin (1), mode no-cors (1). Destination image (3). */
+            const co = img.getAttribute('crossorigin');
+            const cors = co !== null;
+            img._icors = false;
+            try { img._iabort = startFetch('GET', url, [], null, cors ? (co.toLowerCase() === 'use-credentials' ? 2 : 0) : 1,
+                cors ? 0 : 1, 3, {
                 head(s) { status = s; },
                 data(b) { chunks.push(b); },
                 done(ok) {
@@ -1074,6 +1095,7 @@ const imgBytes = { total: 0, registry: new FinalizationRegistry((n) => { imgByte
                         }
                     }
                     img._isz = size;
+                    img._icors = !!size && cors;
                     img.dispatchEvent(new Event(size ? 'load' : 'error'));
                 },
             }); } catch (e) { img._iabort = null; N.queueTask(fail); }
