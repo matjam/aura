@@ -795,6 +795,65 @@ static void test_eval_in_frame(void)
     au_browser_free(b);
 }
 
+/* AuBrowserHost.window_geometry: script reads the screen, the window's
+ * frame and each mouse event's place on the screen from what the shell
+ * says, in the page and in a frame; a move says how far it came. */
+static bool t_geometry(void *ctx, AuBrowserWindow *w, AuScreenGeom *g)
+{
+    (void)ctx;
+    (void)w;
+    *g = (AuScreenGeom){1600, 1000, 0, 25, 1600, 975, 100, 50, 820, 700, 110, 130};
+    return true;
+}
+
+static void test_window_geometry(void)
+{
+    AuBrowserHost h = {.time_ms = t_ms, .now = t_now, .read_file_url = t_read, .window_geometry = t_geometry};
+    AuBrowser *b = au_browser_new(fonts, &h);
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/fr.html", true, -1);
+    settle(w);
+    paint(w);
+    CHECK_STR(page_js(w, "[screenX,screenY,screenLeft,screenTop,outerWidth,outerHeight].join()"), "100,50,100,50,820,700");
+    CHECK_STR(page_js(w, "[screen.width,screen.height,screen.availLeft,screen.availTop,screen.availWidth,screen.availHeight].join()"),
+              "1600,1000,0,25,1600,975");
+    CHECK_STR(page_js(w, "@1 [screenX,outerWidth,screen.width].join()"), "100,820,1600");
+    const char *listen = "window.log='';for(const t of ['mousemove','mousedown'])addEventListener(t,e=>{log+=t+' '+"
+                         "(e.screenX-e.clientX)+','+(e.screenY-e.clientY)+' '+e.movementX+','+e.movementY+' '+e.which+';'},true);1";
+    page_js(w, listen);
+    char in_frame[700];
+    snprintf(in_frame, sizeof in_frame, "@1 %s", listen);
+    page_js(w, in_frame);
+    int px = w->layout.page.x0, py = w->layout.page.y0;
+    /* in the page, right of the frame (300 wide at the body's margin) */
+    press(w, AU_EVENT_MOUSE_MOVE, px + 400, py + 40, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, px + 410, py + 44, 0, 1);
+    press(w, AU_EVENT_MOUSE_DOWN, px + 410, py + 44, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, px + 410, py + 44, 0, 1);
+    char want[200];
+    snprintf(want, sizeof want, "mousemove %d,%d 0,0 0;mousemove %d,%d 10,4 0;mousedown %d,%d 0,0 1;", 110 + px, 130 + py,
+             110 + px, 130 + py, 110 + px, 130 + py);
+    CHECK_STR(page_js(w, "log"), want);
+    /* in the frame: its events are measured from the same screen */
+    press(w, AU_EVENT_MOUSE_MOVE, px + 50, py + 50, 0, 1);
+    const char *got = page_js(w, "@1 log");
+    int dx = 0, dy = 0;
+    CHECK(sscanf(got, "mousemove %d,%d", &dx, &dy) == 2);
+    /* the frame's viewport starts at the body's margin and the frame's border */
+    CHECK(dx > 110 + px && dx <= 110 + px + 12 && dy > 130 + py && dy <= 130 + py + 12);
+    settle(w);
+    au_browser_free(b);
+
+    /* a shell that does not say: the old numbers */
+    b = make_browser();
+    w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/fr.html", true, -1);
+    settle(w);
+    CHECK_STR(page_js(w, "[screenX,screenY,outerWidth===innerWidth,screen.width,screen.height].join()"), "0,0,true,1024,768");
+    settle(w);
+    au_browser_free(b);
+}
+
 static bool has_item(const AuContextMenu *m, AuCommand cmd, bool enabled)
 {
     for (int i = 0; i < m->n; i++)
@@ -1107,6 +1166,7 @@ int main(void)
     test_selection();
     test_drag_release();
     test_eval_in_frame();
+    test_window_geometry();
     test_context_menu();
     test_save_source();
     test_session_scroll();

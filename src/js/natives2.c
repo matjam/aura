@@ -650,6 +650,23 @@ static JSValue n_viewport(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return arr;
 }
 
+/* screenGeom(): the twelve numbers of AuScreenGeom (page/screen.h), or
+ * null when the shell does not say where the window is. */
+static JSValue n_screen_geom(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    AuJs *js = js_of_ctx(ctx);
+    int v[12] = {0};
+    if (!js->hooks.screen || !js->hooks.screen(js->hooks.ctx, v))
+        return JS_NULL;
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < 12; i++)
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, v[i]));
+    return arr;
+}
+
 /* elScroll(el): [scrollLeft, scrollTop, scrollWidth, scrollHeight,
  * clientWidth, clientHeight] of an element whose box clips, else null. */
 static JSValue n_el_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -1332,6 +1349,7 @@ static const JSCFunctionListEntry natives2[] = {
     JS_CFUNC_DEF("sheetDestroy", 1, n_sheet_destroy),
     JS_CFUNC_DEF("sheetsAdopt", 2, n_sheets_adopt),
     JS_CFUNC_DEF("viewport", 0, n_viewport),
+    JS_CFUNC_DEF("screenGeom", 0, n_screen_geom),
     JS_CFUNC_DEF("elScroll", 1, n_el_scroll),
     JS_CFUNC_DEF("elScrollTo", 3, n_el_scroll_to),
     JS_CFUNC_DEF("imgNatural", 1, n_img_natural),

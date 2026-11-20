@@ -240,6 +240,43 @@ static void popup_closed(GtkPopover *po, gpointer data)
     g_idle_add(popup_finish, data);
 }
 
+/* Where the window is on its screen (AuBrowserHost.window_geometry).
+ * GTK 4 does not say where a toplevel is (a Wayland client is not told),
+ * so the window is placed at the top left of its monitor, as Chromium
+ * reports it under Wayland; its size with the header bar, and the page's
+ * place inside it, are real. */
+static bool h_window_geometry(void *ctx, AuBrowserWindow *bw, AuScreenGeom *g)
+{
+    (void)ctx;
+    AuGtkWin *w = au_gtk_win_of(bw);
+    if (!w || !w->window || !w->area)
+        return false;
+    GtkWidget *top = GTK_WIDGET(w->window);
+    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(w->window));
+    GdkDisplay *display = gtk_widget_get_display(top);
+    GdkMonitor *monitor = surface && display ? gdk_display_get_monitor_at_surface(display, surface) : NULL;
+    if (!monitor)
+        return false;
+    GdkRectangle m;
+    gdk_monitor_get_geometry(monitor, &m);
+    graphene_point_t at = GRAPHENE_POINT_INIT(0, 0), in_top = GRAPHENE_POINT_INIT(0, 0);
+    if (!gtk_widget_compute_point(w->area, top, &at, &in_top))
+        return false;
+    g->screen_w = m.width;
+    g->screen_h = m.height;
+    g->avail_x = 0;
+    g->avail_y = 0;
+    g->avail_w = m.width;
+    g->avail_h = m.height;
+    g->win_x = 0;
+    g->win_y = 0;
+    g->win_w = gtk_widget_get_width(top);
+    g->win_h = gtk_widget_get_height(top);
+    g->page_x = (int)in_top.x;
+    g->page_y = (int)in_top.y;
+    return true;
+}
+
 static int h_popup(void *ctx, AuBrowserWindow *bw, const AuPopupItem *items, int n, int selected, AuIRect at)
 {
     (void)ctx;
@@ -408,6 +445,7 @@ void au_gtk_browser_host(AuBrowserHost *h)
     h->confirm_download = h_confirm_download;
     h->download_added = h_download_added;
     h->popup = h_popup;
+    h->window_geometry = h_window_geometry;
     h->choose_file = h_choose_file;
     h->confirm = h_confirm;
     h->notice = h_notice;

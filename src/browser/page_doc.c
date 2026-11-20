@@ -1225,6 +1225,13 @@ static bool dv_copy_text(void *ctx, AuDocView *dv, const char *utf8, size_t len)
     return p->cb.copy_text && p->cb.copy_text(p->cb.ctx, p, utf8, len);
 }
 
+static bool dv_screen(void *ctx, AuDocView *dv, AuScreenGeom *g)
+{
+    AuPage *p = ctx;
+    (void)dv;
+    return p->cb.screen && p->cb.screen(p->cb.ctx, p, g);
+}
+
 static int dv_history_length(void *ctx, AuDocView *dv)
 {
     AuPage *p = ctx;
@@ -2432,6 +2439,7 @@ static void new_view(AuPage *p)
     dcb.history_go = dv_history_go;
     dcb.history_length = dv_history_length;
     dcb.copy_text = dv_copy_text;
+    dcb.screen = dv_screen;
     p->dv = au_docview_new(p->env.fonts, &loader, &dcb);
     au_docview_set_request_ex(p->dv, loader_request_ex);
     au_docview_set_viewport(p->dv, p->vw, p->vh);

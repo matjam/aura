@@ -29,6 +29,7 @@
 #ifndef AURA_PAGE_H
 #define AURA_PAGE_H
 
+#include "screen.h"
 #include "../dom/control.h"
 #include "../core/coro.h"
 #include "../html/html.h"
@@ -208,6 +209,9 @@ typedef struct AuDocViewCallbacks {
     /* Optional. Script puts text on the clipboard; false when it may not
      * (no clipboard, a tab in the background). */
     bool (*copy_text)(void *ctx, AuDocView *dv, const char *utf8, size_t len);
+    /* Optional. Where the window is on the screen (screen.h), page_x and
+     * page_y being the top document's viewport; false when unknown. */
+    bool (*screen)(void *ctx, AuDocView *dv, AuScreenGeom *g);
 } AuDocViewCallbacks;
 
 AuDocView *au_docview_new(AuFontSet *fonts, const AuLoader *loader, const AuDocViewCallbacks *cb);

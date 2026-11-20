@@ -146,6 +146,16 @@ typedef struct AuBrowserHost {
      * The GTK and Cocoa shells give ucontext stacks on the main thread
      * (au_posix_ucoro_ops); the host tool gives the POSIX thread ones. */
     const AuCoroOps *script_coro;
+    /* Optional. Where window w is on its screen (page/screen.h), in the
+     * units the window's surface is drawn in, measured from the screen's
+     * top left: the screen, the part of it free for windows, the window
+     * with its frame, and, in page_x and page_y, the top left of the
+     * surface the model draws into (the model adds the page area's place
+     * in it). Pages read screen.width, window.screenX, outerWidth and each
+     * mouse event's screenX from it. Without it they get a 1024x768
+     * screen and a window at its top left as large as its viewport, which
+     * a page that checks takes for a scripted browser. */
+    bool (*window_geometry)(void *ctx, AuBrowserWindow *w, AuScreenGeom *g);
     /* Optional. The bits per pixel of the main screen (Mac OS 9: the main
      * device's depth). With "Image colours: Same as the screen" a screen
      * of thousands of colours keeps images in 16 bits and one of 256 in

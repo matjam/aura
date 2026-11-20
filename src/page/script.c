@@ -427,6 +427,28 @@ static void h_viewport(void *ctx, int *width, int *height, int *scroll_x, int *s
         au_docview_content_size(s->dv, doc_w, doc_h);
 }
 
+static bool h_screen(void *ctx, int *v)
+{
+    AuDocScript *s = ctx;
+    AuDocView *top = au_dv_top(s->dv);
+    const AuDocViewCallbacks *cb = au_dv_callbacks(top);
+    AuScreenGeom g;
+    memset(&g, 0, sizeof g);
+    if (!cb->screen || !cb->screen(cb->ctx, top, &g))
+        return false;
+    if (s->dv != top) { /* a frame: where its own viewport is */
+        AuIRect r = au_docview_rect_to_top(s->dv, (AuIRect){0, 0, 0, 0});
+        int sx = 0, sy = 0;
+        au_docview_scroll_pos(top, &sx, &sy);
+        g.page_x += r.x0 - sx;
+        g.page_y += r.y0 - sy;
+    }
+    const int all[12] = {g.screen_w, g.screen_h, g.avail_x, g.avail_y, g.avail_w, g.avail_h,
+                         g.win_x,    g.win_y,    g.win_w,   g.win_h,   g.page_x,  g.page_y};
+    memcpy(v, all, sizeof all);
+    return true;
+}
+
 static void h_scroll_to(void *ctx, int x, int y)
 {
     AuDocScript *s = ctx;
@@ -829,6 +851,7 @@ static bool ensure_js(AuDocScript *s)
     h.hit_test = h_hit_test;
     h.computed_style = h_computed_style;
     h.viewport = h_viewport;
+    h.screen = h_screen;
     h.scroll_to = h_scroll_to;
     h.media_matches = h_media_matches;
     h.navigate = h_navigate;

@@ -804,6 +804,49 @@ static int host_screen_bits(void *ctx)
     return gd && (**gd).gdPMap ? (**(**gd).gdPMap).pixelSize : 0;
 }
 
+/* Where the window is on the main screen (AuBrowserHost.window_geometry):
+ * the screen, the screen less the menu bar, the window with its title
+ * bar and frame, and the content area's top left, which is where the
+ * model's surface is drawn. */
+static bool host_window_geometry(void *ctx, AuBrowserWindow *w, AuScreenGeom *g)
+{
+    (void)ctx;
+    BrowserWin *b = (BrowserWin *)w->platform;
+    GDHandle gd = GetMainDevice();
+    if (!b || !b->base.win || !gd)
+        return false;
+    Rect scr = (**gd).gdRect, out;
+    short mbar = GetMBarHeight();
+    GrafPtr old;
+    GetPort(&old);
+    SetPort((GrafPtr)b->base.win);
+    Point p = {0, 0};
+    LocalToGlobal(&p);
+    SetPort(old);
+    int cw, ch;
+    content_size(b, &cw, &ch);
+    /* the structure region is the window with its frame, in global
+     * coordinates (GetWindowBounds is not in these interfaces) */
+    RgnHandle frame = ((WindowPeek)b->base.win)->strucRgn;
+    if (frame && !EmptyRgn(frame))
+        out = (**frame).rgnBBox;
+    else
+        SetRect(&out, p.h, p.v, (short)(p.h + cw), (short)(p.v + ch));
+    g->screen_w = scr.right - scr.left;
+    g->screen_h = scr.bottom - scr.top;
+    g->avail_x = 0;
+    g->avail_y = mbar;
+    g->avail_w = g->screen_w;
+    g->avail_h = g->screen_h - mbar;
+    g->win_x = out.left - scr.left;
+    g->win_y = out.top - scr.top;
+    g->win_w = out.right - out.left;
+    g->win_h = out.bottom - out.top;
+    g->page_x = p.h - scr.left;
+    g->page_y = p.v - scr.top;
+    return true;
+}
+
 void browserwin_host(AuBrowserHost *h)
 {
     memset(h, 0, sizeof *h);
@@ -818,6 +861,7 @@ void browserwin_host(AuBrowserHost *h)
     h->confirm_download = host_confirm_download;
     h->download_added = host_download_added;
     h->popup = host_popup;
+    h->window_geometry = host_window_geometry;
     h->choose_file = host_choose_file;
     h->confirm = host_confirm;
     h->notice = host_notice;

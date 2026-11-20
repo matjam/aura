@@ -17,6 +17,8 @@ const S = {
     list: Symbol('list'), owner: Symbol('owner'), ce: Symbol('ce'), range: Symbol('range'),
 };
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const movingTypes = new Set(['mousemove', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'pointermove', 'pointerover',
+    'pointerout', 'pointerenter', 'pointerleave']);
 /* document.getElementById and getElementsByName as the prelude made them,
  * for the window's named properties (prelude_html.js, winNamed). */
 let namedLookups = null;
@@ -306,7 +308,8 @@ class MouseEvent extends UIEvent {
     get altKey() { return this[S.ev].altKey; }
     get metaKey() { return this[S.ev].metaKey; }
     get relatedTarget() { return this[S.ev].related; }
-    get which() { return this[S.ev].button + 1; }
+    /* 0 while no button is down and none went down or up: a move */
+    get which() { const e = this[S.ev]; return !e.buttons && movingTypes.has(this.type) ? 0 : e.button + 1; }
     getModifierState(k) {
         const e = this[S.ev];
         return k === 'Control' ? e.ctrlKey : k === 'Shift' ? e.shiftKey : k === 'Alt' ? e.altKey : k === 'Meta' ? e.metaKey : false;
@@ -669,13 +672,15 @@ const fireSimple = (target, type, bubbles, cancelable) =>
 const windowReflectedHandlers = new Set(['load', 'unload', 'beforeunload', 'resize', 'error', 'focus', 'blur',
     'hashchange', 'popstate', 'message', 'storage', 'online', 'offline', 'pagehide', 'pageshow', 'scroll',
     'unhandledrejection', 'rejectionhandled', 'languagechange']);
+/* No ontouchstart and its kin: Aura has no touch input
+ * (navigator.maxTouchPoints is 0, there is no TouchEvent), and
+ * "'ontouchstart' in window" is how pages ask. */
 const handlerTypes = ['abort', 'auxclick', 'beforeinput', 'blur', 'cancel', 'change', 'click', 'close', 'contextmenu',
     'copy', 'cut', 'dblclick', 'drag', 'dragend', 'dragenter', 'dragleave', 'dragover', 'dragstart', 'drop', 'error',
     'focus', 'focusin', 'focusout', 'input', 'invalid', 'keydown', 'keypress', 'keyup', 'load', 'mousedown',
     'mouseenter', 'mouseleave', 'mousemove', 'mouseout', 'mouseover', 'mouseup', 'paste', 'pointerdown', 'pointerup',
     'pointermove', 'pointerover', 'pointerout', 'pointerenter', 'pointerleave', 'pointercancel', 'reset', 'resize',
-    'scroll', 'scrollend', 'select', 'submit', 'toggle', 'wheel', 'touchstart', 'touchend', 'touchmove',
-    'touchcancel', 'animationstart', 'animationend', 'animationiteration', 'transitionend', 'transitionstart',
+    'scroll', 'scrollend', 'select', 'submit', 'toggle', 'wheel', 'animationstart', 'animationend', 'animationiteration', 'transitionend', 'transitionstart',
     'transitionrun', 'transitioncancel', 'loadstart', 'progress', 'loadend', 'canplay', 'ended', 'play', 'pause',
     'slotchange', 'securitypolicyviolation', 'formdata', 'selectionchange', 'selectstart'];
 const windowOnlyTypes = ['beforeunload', 'unload', 'hashchange', 'popstate', 'message', 'messageerror', 'storage',

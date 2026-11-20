@@ -404,3 +404,12 @@ test('performance has the document\'s navigation entry', () => {
     assert.ok(performance.getEntries().includes(e));
     assert.ok(PerformanceObserver.supportedEntryTypes.includes('navigation'));
 });
+
+test('no touch input: no ontouchstart, and a move has no button', () => {
+    assert.ok(!('ontouchstart' in window) && !('ontouchstart' in document) && !('ontouchend' in document.body));
+    assert.equal(navigator.maxTouchPoints, 0);
+    assert.equal(new MouseEvent('mousemove', { button: 0, buttons: 0 }).which, 0, 'a move with no button down');
+    assert.equal(new MouseEvent('mousemove', { button: 0, buttons: 1 }).which, 1, 'a drag');
+    assert.equal(new MouseEvent('mousedown', { button: 0, buttons: 1 }).which, 1);
+    assert.equal(new MouseEvent('mouseup', { button: 2, buttons: 0 }).which, 3);
+});

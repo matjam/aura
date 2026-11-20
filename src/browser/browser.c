@@ -754,6 +754,19 @@ static int cb_history_length(void *ctx, AuPage *p)
 
 /* navigator.clipboard.writeText: only the tab the user is looking at
  * may write (the page also requires a click or key press). */
+static bool cb_screen(void *ctx, AuPage *p, AuScreenGeom *g)
+{
+    AuTab *t = ctx;
+    AuBrowserWindow *w = t->win;
+    const AuBrowserHost *h = &w->browser->host;
+    (void)p;
+    if (!h->window_geometry || !h->window_geometry(h->ctx, w, g))
+        return false;
+    g->page_x += w->layout.page.x0;
+    g->page_y += w->layout.page.y0;
+    return true;
+}
+
 static bool cb_copy_text(void *ctx, AuPage *p, const char *utf8, size_t len)
 {
     AuTab *t = ctx;
@@ -1198,7 +1211,8 @@ static AuTab *make_tab(AuBrowserWindow *w, int index)
     AuPageCallbacks cb = {t,         cb_title,  cb_url,        cb_started,      cb_progress,  cb_finished,
                           cb_open,   cb_status, cb_invalidate, cb_content_size, cb_scroll_to, cb_download,
                           cb_submit_post, cb_popup, cb_choose_file, cb_confirm, cb_go_back,
-                          cb_history_push, cb_history_go, cb_history_length, cb_copy_text};
+                          cb_history_push, cb_history_go, cb_history_length, cb_copy_text,
+                          cb_screen};
     t->page = au_page_new(&env, &cb);
     if (b->storage) {
         t->storage_ns = au_web_storage_ns_new(b->storage);

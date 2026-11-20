@@ -923,14 +923,22 @@ function firePointer(target, type, init, before) {
     }
     return t;
 }
+let lastMove = null; /* the last mousemove's place on the screen */
 P.fireMouse = function (target, type, x, y, button, mods, detail, related) {
     if (type === 'mousedown' || type === 'mouseup' || type === 'click') activate5();
     const before = buttonsDown;
     if (type === 'mousedown') buttonsDown |= 1 << button;
     else if (type === 'mouseup') buttonsDown &= ~(1 << button);
     const noBubble = type === 'mouseenter' || type === 'mouseleave';
+    /* On the screen: where this document's viewport is, plus the place in
+     * it. A move says how far the pointer came since the last one. */
+    const geom = N.screenGeom();
+    const sx = geom ? geom[10] + x : x, sy = geom ? geom[11] + y : y;
+    const moved = type === 'mousemove' && lastMove ? [sx - lastMove[0], sy - lastMove[1]] : [0, 0];
+    if (type === 'mousemove') lastMove = [sx, sy];
     const init = Object.assign({ bubbles: !noBubble, cancelable: !noBubble, composed: !noBubble, view: G, detail,
-        clientX: x, clientY: y, screenX: x, screenY: y, button, buttons: buttonsDown, relatedTarget: related }, modsOf(mods));
+        clientX: x, clientY: y, screenX: sx, screenY: sy, movementX: moved[0], movementY: moved[1], button,
+        buttons: buttonsDown, relatedTarget: related }, modsOf(mods));
     if (pointerOf[type]) {
         const t = firePointer(target, type, init, before);
         if (!t) return true;

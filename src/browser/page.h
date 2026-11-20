@@ -35,6 +35,7 @@
 
 #include "../dom/control.h" /* AuControlFile, AuPopupItem */
 #include "../page/perf.h" /* AuPerf: counters only */
+#include "../page/screen.h"
 #include "../paint/font.h"
 #include "../core/coro.h"
 #include "../platform/platform.h" /* AuEvent: a plain struct, no OS calls */
@@ -424,6 +425,10 @@ typedef struct AuPageCallbacks {
      * (navigator.clipboard.writeText during a click or key press);
      * false when there is no clipboard. */
     bool (*copy_text)(void *ctx, AuPage *p, const char *utf8, size_t len);
+    /* Optional. Where the page's window is on the screen
+     * (page/screen.h), page_x and page_y being the page area's top left;
+     * false when unknown. */
+    bool (*screen)(void *ctx, AuPage *p, AuScreenGeom *g);
 } AuPageCallbacks;
 
 /* Creates a page showing nothing (about:blank). env and cb are copied. */

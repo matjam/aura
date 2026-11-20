@@ -412,9 +412,14 @@ script on Discord's login, 2026-11-19:
 - `navigator.connection`, `deviceMemory`, `userAgentData` and
   `document.createEvent('TouchEvent')` are absent, as in Firefox and
   Safari on a desktop.
-- Not verified: whether Discord accepts hCaptcha's token from Aura now
-  that the faults found on 2026-11-19 are fixed. Before the fixes it
-  answered `invalid-response` to a token hCaptcha had passed.
+- The GTK shell reports the window at its monitor's top left: GTK 4
+  does not say where a toplevel is.
+- Discord's login still fails after the faults found on 2026-11-19 were
+  fixed (the window's tag, keys and geometry, mouse events' screen
+  position, `ontouchstart`): Discord answers `invalid-response` to a
+  token hCaptcha passed, and after about fifteen attempts in an hour
+  hCaptcha failed every answer. Not verified which remaining difference
+  decides it.
 
 ## Script requests and CORS
 

@@ -29,16 +29,18 @@ defProps(WP, {
     get event() { return currentEvent(); },
     get innerWidth() { return N.viewport()[0]; },
     get innerHeight() { return N.viewport()[1]; },
-    get outerWidth() { return N.viewport()[0]; },
-    get outerHeight() { return N.viewport()[1]; },
+    /* The window on its screen, as the shell reports it (screenGeom:
+     * page/screen.h); a viewport at the screen's top left without. */
+    get outerWidth() { const g = N.screenGeom(); return g ? g[8] : N.viewport()[0]; },
+    get outerHeight() { const g = N.screenGeom(); return g ? g[9] : N.viewport()[1]; },
     get scrollX() { return N.viewport()[2]; },
     get scrollY() { return N.viewport()[3]; },
     get pageXOffset() { return N.viewport()[2]; },
     get pageYOffset() { return N.viewport()[3]; },
-    get screenX() { return 0; },
-    get screenY() { return 0; },
-    get screenLeft() { return 0; },
-    get screenTop() { return 0; },
+    get screenX() { const g = N.screenGeom(); return g ? g[6] : 0; },
+    get screenY() { const g = N.screenGeom(); return g ? g[7] : 0; },
+    get screenLeft() { const g = N.screenGeom(); return g ? g[6] : 0; },
+    get screenTop() { const g = N.screenGeom(); return g ? g[7] : 0; },
     get devicePixelRatio() { return 1; },
     scrollTo(x, y) {
         const v = N.viewport();
@@ -312,15 +314,15 @@ defGlobal('Navigator', Navigator);
 const theNavigator = Object.create(Navigator.prototype);
 class Screen { constructor() { throw new TypeError('Illegal constructor'); } }
 defProps(Screen.prototype, {
-    get width() { return settings.screenWidth; },
-    get height() { return settings.screenHeight; },
-    get availWidth() { return settings.screenWidth; },
-    get availHeight() { return settings.screenHeight - 20; },
-    get availLeft() { return 0; },
-    get availTop() { return 20; },
+    get width() { const g = N.screenGeom(); return g ? g[0] : settings.screenWidth; },
+    get height() { const g = N.screenGeom(); return g ? g[1] : settings.screenHeight; },
+    get availWidth() { const g = N.screenGeom(); return g ? g[4] : settings.screenWidth; },
+    get availHeight() { const g = N.screenGeom(); return g ? g[5] : settings.screenHeight - 20; },
+    get availLeft() { const g = N.screenGeom(); return g ? g[2] : 0; },
+    get availTop() { const g = N.screenGeom(); return g ? g[3] : 20; },
     get colorDepth() { return 24; },
     get pixelDepth() { return 24; },
-    get orientation() { return { type: settings.screenWidth >= settings.screenHeight ? 'landscape-primary' : 'portrait-primary', angle: 0 }; },
+    get orientation() { return { type: this.width >= this.height ? 'landscape-primary' : 'portrait-primary', angle: 0 }; },
 });
 tag(Screen);
 defGlobal('Screen', Screen);

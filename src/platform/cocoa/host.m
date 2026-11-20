@@ -207,6 +207,36 @@ static bool h_confirm_download(void *ctx, const char *url, const char *name, con
 }
 @end
 
+/* Where the window is on its screen (AuBrowserHost.window_geometry), in
+ * points from the screen's top left: AppKit measures up from the bottom
+ * left of the main screen. */
+static bool h_window_geometry(void *ctx, AuBrowserWindow *bw, AuScreenGeom *g)
+{
+    (void)ctx;
+    AuCocoaWin *w = au_cocoa_win_of(bw);
+    if (!w || !w->window || !w->page)
+        return false;
+    NSScreen *scr = w->window.screen ?: NSScreen.mainScreen;
+    if (!scr)
+        return false;
+    NSRect sf = scr.frame, vf = scr.visibleFrame, wf = w->window.frame;
+    NSRect pf = [w->window convertRectToScreen:[w->page convertRect:w->page.bounds toView:nil]];
+    CGFloat top = NSMaxY(sf);
+    g->screen_w = (int)sf.size.width;
+    g->screen_h = (int)sf.size.height;
+    g->avail_x = (int)(vf.origin.x - sf.origin.x);
+    g->avail_y = (int)(top - NSMaxY(vf));
+    g->avail_w = (int)vf.size.width;
+    g->avail_h = (int)vf.size.height;
+    g->win_x = (int)(wf.origin.x - sf.origin.x);
+    g->win_y = (int)(top - NSMaxY(wf));
+    g->win_w = (int)wf.size.width;
+    g->win_h = (int)wf.size.height;
+    g->page_x = (int)(pf.origin.x - sf.origin.x);
+    g->page_y = (int)(top - NSMaxY(pf));
+    return true;
+}
+
 static int h_popup(void *ctx, AuBrowserWindow *bw, const AuPopupItem *items, int n, int selected, AuIRect at)
 {
     (void)ctx;
@@ -323,6 +353,7 @@ void au_cocoa_browser_host(AuBrowserHost *h)
     h->confirm_download = h_confirm_download;
     h->download_added = h_download_added;
     h->popup = h_popup;
+    h->window_geometry = h_window_geometry;
     h->choose_file = h_choose_file;
     h->confirm = h_confirm;
     h->notice = h_notice;

@@ -251,6 +251,12 @@ typedef struct AuJsHooks {
      * doc_h are NULL when script does not need the document's size (which
      * forces a layout). */
     void (*viewport)(void *ctx, int *width, int *height, int *scroll_x, int *scroll_y, int *doc_w, int *doc_h);
+    /* Optional. Where the window is on the screen: the twelve numbers of
+     * AuScreenGeom (page/screen.h) in its order, page_x and page_y being
+     * this document's viewport (a frame's own). False when the shell
+     * does not say; script then gets a 1024x768 screen and a window at
+     * its top left. */
+    bool (*screen)(void *ctx, int *geom);
     void (*scroll_to)(void *ctx, int x, int y);
     bool (*media_matches)(void *ctx, const char *query, size_t len);
     /* Navigation: location.href, assign, replace, reload, javascript:
