@@ -1689,7 +1689,14 @@ bool au_frames_mouse(AuDocView *dv, const AuEvent *ev, bool *used)
     e.x = cx;
     e.y = cy;
     au_docview_set_scroll(f->dv, f->sx, f->sy);
-    *used = au_docview_mouse(f->dv, &e);
+    if (ev->type == AU_EVENT_MOUSE_UP) {
+        f->dv->no_click = dv->no_click;
+        dv->no_click = false;
+    }
+    AuDocView *in = f->dv;
+    *used = au_docview_mouse(in, &e);
+    if (ev->type == AU_EVENT_MOUSE_DOWN)
+        dv->press_cancelled = f->dv == in && in->press_cancelled;
     if (dv->doc && dv->restyle_needed) {
         au_docview_update(dv);
         if (au_layout_needs_paint(dv->layout))

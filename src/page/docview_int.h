@@ -215,6 +215,8 @@ struct AuDocView {
     AuFrame *in_frame;   /* the frame this view is shown in (the parent's), NULL at the top */
     AuFrame *focus_frame; /* the frame that has the keyboard, or NULL */
     AuFrame *mouse_frame; /* the frame a mouse press went to, until the release */
+    bool press_cancelled; /* the page cancelled the last mousedown (in this view or the frame it went to) */
+    bool no_click;        /* the next release fires no click and follows no link */
     AuFrame *hover_frame; /* the frame the pointer is over */
     uint32_t sandbox;    /* AU_SANDBOX_* restrictions of this document */
     /* the top view only */

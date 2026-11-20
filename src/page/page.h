@@ -513,6 +513,13 @@ void au_docview_submit(AuDocView *dv, AuElement *form, AuElement *submitter);
 
 /* The hovered link's absolute URL, or "". */
 const char *au_docview_hover_link(const AuDocView *dv);
+/* Whether the page cancelled the mousedown of the last press, in the
+ * document or the frame the press went to: the press then starts no text
+ * selection, as in browsers. */
+bool au_docview_press_cancelled(const AuDocView *dv);
+/* The next release still goes to the page, where the pointer is, but
+ * fires no click and follows no link: the end of a selection drag. */
+void au_docview_suppress_click(AuDocView *dv);
 bool au_docview_hit_test(AuDocView *dv, int x, int y, AuHitResult *r);
 
 /* ---- Nested documents ----

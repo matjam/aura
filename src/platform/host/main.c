@@ -1022,6 +1022,32 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         }
         au_bw_set_field_focus(w, false);
         chrome_settle(b, w, ses, o->net, 20, 200);
+    } else if (!strncmp(a, "drag:", 5)) {
+        /* drag:X1,Y1,X2,Y2 presses at X1,Y1, moves to X2,Y2 in ten steps
+         * (letting the page run after each, as a hand would) and
+         * releases there */
+        int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+        sscanf(a + 5, "%d,%d,%d,%d", &x1, &y1, &x2, &y2);
+        AuEvent e;
+        memset(&e, 0, sizeof e);
+        e.x = x1;
+        e.y = y1;
+        e.clicks = 1;
+        e.type = AU_EVENT_MOUSE_MOVE;
+        au_bw_mouse(w, &e);
+        e.type = AU_EVENT_MOUSE_DOWN;
+        au_bw_mouse(w, &e);
+        chrome_settle(b, w, ses, o->net, 5, 50);
+        for (int k = 1; k <= 10; k++) {
+            e.type = AU_EVENT_MOUSE_MOVE;
+            e.x = x1 + (x2 - x1) * k / 10;
+            e.y = y1 + (y2 - y1) * k / 10;
+            au_bw_mouse(w, &e);
+            chrome_settle(b, w, ses, o->net, 5, 50);
+        }
+        e.type = AU_EVENT_MOUSE_UP;
+        au_bw_mouse(w, &e);
+        chrome_settle(b, w, ses, o->net, 20, 200);
     } else if (!strncmp(a, "type:", 5)) {
         const char *s = a + 5;
         size_t n = strlen(s), i = 0;

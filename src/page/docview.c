@@ -2593,8 +2593,12 @@ DV_ENTRY(bool, mouse, (AuDocView * dv, const AuEvent *ev), (dv, ev))
                 au_node_ref(&target->node);
             if (t == 0 && target != dv->hover)
                 au_docscript_hover(dv->script, dv->hover, target, ev->x - dv->scroll_x, ev->y - dv->scroll_y);
-            if (dv->script && au_dv_alive(dv, target))
-                au_docscript_mouse(dv->script, ev, target, types[t], ev->x - dv->scroll_x, ev->y - dv->scroll_y);
+            if (t == 1)
+                dv->press_cancelled = false;
+            if (dv->script && au_dv_alive(dv, target) &&
+                !au_docscript_mouse(dv->script, ev, target, types[t], ev->x - dv->scroll_x, ev->y - dv->scroll_y) &&
+                t == 1)
+                dv->press_cancelled = true;
             if (target)
                 au_node_unref(&target->node);
             if (!dv->doc)
@@ -2636,7 +2640,8 @@ DV_ENTRY(bool, mouse, (AuDocView * dv, const AuEvent *ev), (dv, ev))
         used = true;
         break;
     case AU_EVENT_MOUSE_UP: {
-        AuElement *down = dv->active;
+        AuElement *down = dv->no_click ? NULL : dv->active;
+        dv->no_click = false;
         AuHitResult dr;
         AuElement *down_link = NULL;
         if (down) {
@@ -2734,6 +2739,16 @@ DV_ENTRY(bool, scroll_at, (AuDocView * dv, int x, int y, int dx, int dy), (dv, x
 const char *au_docview_hover_link(const AuDocView *dv)
 {
     return dv->hover_link ? dv->hover_link : "";
+}
+
+bool au_docview_press_cancelled(const AuDocView *dv)
+{
+    return dv->press_cancelled;
+}
+
+void au_docview_suppress_click(AuDocView *dv)
+{
+    dv->no_click = true;
 }
 
 /* ---- Fragments ---- */

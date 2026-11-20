@@ -4687,14 +4687,29 @@ bool au_page_mouse(AuPage *p, const AuEvent *ev)
         p->ctl_press = au_docview_control_at(v, vx, vy);
         if (p->ctl_press)
             au_page_clear_selection(p);
+        /* The page's mousedown first, then the selection, its default
+         * action: a page that cancels the press (a drag in hCaptcha's
+         * challenge, a slider) starts no selection. */
+        bool used = au_docview_mouse(p->dv, ev);
+        if (follow_open_url(p))
+            return true;
+        if (!p->ctl_press && !au_docview_press_cancelled(p->dv))
+            used = sel_mouse(p, ev) || used;
+        else
+            p->selecting = false;
+        settle(p);
+        return used;
     }
     bool gesture = !p->ctl_press && sel_mouse(p, ev);
     if (ev->type == AU_EVENT_MOUSE_UP)
         p->ctl_press = false;
-    AuEvent e = *ev;
+    /* The release of a selection drag goes to the page where the pointer
+     * is (a drag and drop reads its place) but clicks nothing. Before
+     * 2026-11-19 it went to -100000, -100000, and hCaptcha's challenge
+     * took every drop for one far outside its picture. */
     if (gesture && ev->type == AU_EVENT_MOUSE_UP)
-        e.x = e.y = -100000; /* end the press without activating a link */
-    bool used = au_docview_mouse(p->dv, &e) || gesture;
+        au_docview_suppress_click(p->dv);
+    bool used = au_docview_mouse(p->dv, ev) || gesture;
     if (follow_open_url(p))
         return true;
     settle(p);

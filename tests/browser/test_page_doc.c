@@ -75,6 +75,14 @@ static const struct {
      "<!DOCTYPE html><body style='margin:0'><div style='height:100px;overflow:auto'>"
      "<div style='height:1000px'>inner</div></div><div style='height:3000px'></div>"},
     {"wide.html", "<!DOCTYPE html><body style='margin:0'><p style='margin:0'>xx xx xx xx xx xx xx xx xx xx</p>"},
+    {"drag.html",
+     "<!DOCTYPE html><body style='margin:0;font-size:10px;line-height:20px'>"
+     "<p id=t style='margin:0'>alpha beta gamma delta</p><div id=pad style='height:100px'></div>"
+     "<script>var log = '';"
+     "document.addEventListener('pointerup', e => log += 'up ' + e.clientX + ',' + e.clientY + ';');"
+     "document.addEventListener('click', e => log += 'click;');"
+     "document.getElementById('t').addEventListener('mousedown', e => { if (window.cancel) e.preventDefault(); });"
+     "</script>"},
 };
 
 static char read_log[2048];
@@ -727,6 +735,47 @@ static void test_selection(void)
     au_browser_free(b);
 }
 
+static const char *page_js(AuBrowserWindow *w, const char *src)
+{
+    static char buf[256];
+    AuBuf b;
+    au_buf_init(&b);
+    au_page_eval(au_bw_active_tab(w)->page, src, &b);
+    snprintf(buf, sizeof buf, "%s", au_buf_cstr(&b));
+    au_buf_free(&b);
+    return buf;
+}
+
+/* A drag's release goes to the page where the pointer is, also when the
+ * drag selected text (it then clicks nothing); a press the page cancels
+ * selects nothing. hCaptcha's challenge took every drop for one at
+ * -100000, -100000. */
+static void test_drag_release(void)
+{
+    AuBrowser *b = make_browser();
+    AuBrowserWindow *w = au_browser_window_new(b, 800, 600);
+    au_bw_new_tab(w, "file:///mem/drag.html", true, -1);
+    settle(w);
+    press(w, AU_EVENT_MOUSE_DOWN, 4, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, 40, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, 90, 60, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 90, 60, 0, 1);
+    CHECK(strstr(page_js(w, "log"), "up 90,60;") != NULL);
+    CHECK(strstr(page_js(w, "log"), "click") == NULL);
+    CHECK(au_bw_has_selection(w));
+
+    page_js(w, "log = ''; window.cancel = true");
+    press(w, AU_EVENT_MOUSE_DOWN, 300, 70, 0, 1); /* clears the selection */
+    press(w, AU_EVENT_MOUSE_UP, 300, 70, 0, 1);
+    press(w, AU_EVENT_MOUSE_DOWN, 4, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_MOVE, 60, 10, 0, 1);
+    press(w, AU_EVENT_MOUSE_UP, 60, 10, 0, 1);
+    CHECK(!au_bw_has_selection(w));
+    CHECK(strstr(page_js(w, "log"), "up 60,10;") != NULL);
+    settle(w);
+    au_browser_free(b);
+}
+
 static bool has_item(const AuContextMenu *m, AuCommand cmd, bool enabled)
 {
     for (int i = 0; i < m->n; i++)
@@ -1037,6 +1086,7 @@ int main(void)
     test_stop_scroll_resize();
     test_zoom();
     test_selection();
+    test_drag_release();
     test_context_menu();
     test_save_source();
     test_session_scroll();
