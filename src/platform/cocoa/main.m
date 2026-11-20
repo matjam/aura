@@ -294,10 +294,15 @@ static NSString *arg_url(const char *arg)
  * page view's place. */
 static void snapshot(void)
 {
-    const char *path = getenv("AURA_SNAPSHOT");
+    au_cocoa_snapshot(getenv("AURA_SNAPSHOT"));
+}
+
+/* Also the control socket's "shot PATH" (control_cocoa.m). */
+bool au_cocoa_snapshot(const char *path)
+{
     AuCocoaWin *w = au_cocoa_front();
     if (!path || !w || w->freed)
-        return;
+        return false;
     NSView *frame = w->window.contentView.superview;
     NSBitmapImageRep *rep = [frame bitmapImageRepForCachingDisplayInRect:frame.bounds];
     [frame cacheDisplayInRect:frame.bounds toBitmapImageRep:rep];
@@ -333,6 +338,7 @@ static void snapshot(void)
         else
             fprintf(stderr, "aura snapshot: toolbar %s button%s\n", it.itemIdentifier.UTF8String,
                     it.enabled ? "" : " (disabled)");
+    return true;
 }
 
 static dispatch_source_t on_signal(int sig)
@@ -393,6 +399,7 @@ int main(int argc, char **argv)
         sig_int = on_signal(SIGINT);
         if (getenv("AURA_SNAPSHOT"))
             sig_usr1 = on_signal(SIGUSR1);
+        au_cocoa_control_start();
         [app run];
     }
     return 0;

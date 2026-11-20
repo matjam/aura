@@ -44,6 +44,7 @@ add_executable(aura_cocoa MACOSX_BUNDLE
     downloads_cocoa.m
     sysinfo_cocoa.m
     appearance_cocoa.m
+    control_cocoa.m
     ${AURA_COCOA_WINDOW_SOURCES}
     ${AURA_ICNS})
 set_target_properties(aura_cocoa PROPERTIES

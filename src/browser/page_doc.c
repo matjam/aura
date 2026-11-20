@@ -4481,6 +4481,64 @@ void au_page_console_clear(AuPage *p)
     p->console_total++;
 }
 
+/* The frame a Console "@key" names: the Nth nested view when key is a
+ * number, else the first whose address contains key. */
+static AuDocView *frame_view(AuPage *p, const char *key)
+{
+    bool digits = *key != 0;
+    uint32_t num = 0;
+    for (size_t i = 0; key[i]; i++) {
+        digits = digits && au_is_digit((unsigned char)key[i]);
+        if (digits && num < 100000)
+            num = num * 10 + (uint32_t)(key[i] - '0');
+    }
+    if (digits)
+        return au_docview_frame_at(p->dv, num);
+    for (uint32_t i = 1; i <= au_docview_frame_count(p->dv); i++) {
+        AuDocView *v = au_docview_frame_at(p->dv, i);
+        if (v && strstr(au_docview_url(v), key))
+            return v;
+    }
+    return NULL;
+}
+
+bool au_page_element_rect(AuPage *p, const char *frame, const char *selector, AuIRect *out)
+{
+    if (p->kind != K_DOC || !p->begun || !thaw(p) || !au_docview_scripting(p->dv))
+        return false;
+    AuDocView *in = frame && *frame ? frame_view(p, frame) : p->dv;
+    if (!in)
+        return false;
+    /* The selector as a string literal for the expression. */
+    AuBuf src;
+    au_buf_init(&src);
+    au_buf_puts(&src, "(function(){var e=document.querySelector(\"");
+    for (const char *c = selector; *c; c++) {
+        if (*c == '"' || *c == '\\')
+            au_buf_putc(&src, '\\');
+        if ((unsigned char)*c >= 32)
+            au_buf_putc(&src, *c);
+    }
+    au_buf_puts(&src, "\");if(!e)return '';e.scrollIntoView&&e.scrollIntoView({block:'nearest'});"
+                      "var r=e.getBoundingClientRect();return [Math.round(r.left+scrollX),"
+                      "Math.round(r.top+scrollY),Math.round(r.width),Math.round(r.height)].join(',');})()");
+    AuBuf res;
+    au_buf_init(&res);
+    bool ok = au_docview_eval(in, au_buf_cstr(&src), &res);
+    int x = 0, y = 0, wd = 0, ht = 0;
+    ok = ok && sscanf(au_buf_cstr(&res), "%d,%d,%d,%d", &x, &y, &wd, &ht) == 4;
+    au_buf_free(&src);
+    au_buf_free(&res);
+    if (!ok)
+        return false;
+    au_docview_update(p->dv);
+    AuIRect r = au_docview_rect_to_top(in, (AuIRect){x, y, x + wd, y + ht});
+    int sx = 0, sy = 0;
+    au_docview_scroll_pos(p->dv, &sx, &sy);
+    *out = (AuIRect){r.x0 - sx, r.y0 - sy, r.x1 - sx, r.y1 - sy};
+    return true;
+}
+
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
 {
     if (!thaw(p)) {
@@ -4517,23 +4575,7 @@ bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
         }
         char key[200];
         snprintf(key, sizeof key, "%.*s", (int)(n < sizeof key ? n : sizeof key - 1), s);
-        in = NULL;
-        bool digits = true;
-        uint32_t num = 0;
-        for (size_t i = 0; key[i]; i++) {
-            digits = digits && au_is_digit((unsigned char)key[i]);
-            if (digits && num < 100000)
-                num = num * 10 + (uint32_t)(key[i] - '0');
-        }
-        if (digits) {
-            in = au_docview_frame_at(p->dv, num);
-        } else {
-            for (uint32_t i = 1; !in && i <= au_docview_frame_count(p->dv); i++) {
-                AuDocView *v = au_docview_frame_at(p->dv, i);
-                if (v && strstr(au_docview_url(v), key))
-                    in = v;
-            }
-        }
+        in = frame_view(p, key);
         if (!in) {
             au_buf_printf(out, "No frame %s (\"@\" lists them)", key);
             return false;

@@ -580,6 +580,12 @@ bool au_page_take_script_oom(AuPage *p, AuScriptOom *out);
  * result's string form to out (for the host tool and tests). False when
  * the page runs no script or the script threw. */
 bool au_page_eval(AuPage *p, const char *src, AuBuf *out);
+/* Where the first element matching the CSS selector is, in the page's
+ * view (the window's page area, scroll taken off), scrolled into view
+ * first; in the frame frame names as the Console's "@frame" does, or in
+ * the page itself when frame is NULL or "". False when there is none,
+ * or no script to ask. For the control socket (control.h). */
+bool au_page_element_rect(AuPage *p, const char *frame, const char *selector, AuIRect *out);
 /* The Console's tracing, AU_DV_TRACE_* bits. Trace Scrolls
  * (AU_DV_TRACE_SCROLL): the page's script logs each scroll it makes, each
  * scroll event and each ResizeObserver delivery. Trace Network

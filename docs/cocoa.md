@@ -274,6 +274,11 @@ between.
 
 ## To test
 
+To drive the application from a script (clicks, keys, script in the
+page and its frames, the console, pictures), set `AURA_CONTROL` to a
+socket path and use `tools/aura-ctl.py`
+([`developer-tools.md`](developer-tools.md), "The control socket").
+
 Screen recording permission is not needed to look at the page:
 
 ```bash

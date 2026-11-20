@@ -112,6 +112,12 @@ extern AuCocoa au_cocoa;
 AuCocoaWin *au_cocoa_new_window(const char *url, const AuSessionWindow *sw);
 void au_cocoa_quit(void);
 void au_cocoa_kick(void); /* run a flush soon (after input, a load starting) */
+/* Writes the front browser window to a PNG at path; false without one. */
+bool au_cocoa_snapshot(const char *path);
+
+/* control_cocoa.m: with AURA_CONTROL set, listens on that Unix socket
+ * for src/browser/control.h's commands (docs/cocoa.md, "To test"). */
+void au_cocoa_control_start(void);
 
 /* window.m */
 AuCocoaWin *au_cocoa_win_new(int width, int height);

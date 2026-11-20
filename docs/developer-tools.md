@@ -129,6 +129,40 @@ different cookie banner or an animated hero scores high too. Open the
 side-by-side image before taking the ranking as the order of work. On
 2026-11-16, 29 front-page links took four minutes with six jobs.
 
+## The control socket
+
+To drive a running Aura from a script or an agent (click, drag, type,
+run script in the page or a frame, read the console, take pictures),
+start the macOS build with `AURA_CONTROL` and send commands with
+`tools/aura-ctl.py`:
+
+```bash
+AURA_PROFILE=/tmp/aura-prof AURA_CONTROL=/tmp/aura-ctl.sock \
+    build/cocoa/src/platform/cocoa/Aura.app/Contents/MacOS/Aura https://discord.com/login &
+tools/aura-ctl.py wait                                   # until it stops loading
+tools/aura-ctl.py eval @                                 # the frames
+tools/aura-ctl.py eval "@challenge document.querySelectorAll('canvas').length"
+tools/aura-ctl.py clicksel "@checkbox #checkbox"         # click an element by selector
+tools/aura-ctl.py trace net                              # Trace Network on
+tools/aura-ctl.py console 50
+tools/aura-ctl.py shot /tmp/aura.png
+```
+
+- Each connection carries one command line and its reply, which starts
+  "ok" or "error". `src/browser/control.h` lists the commands; they run
+  in `au_control_run` (`src/browser/control.c`), portable C, so other
+  ports can listen too. The Cocoa port's listener is
+  `src/platform/cocoa/control_cocoa.m`: the socket is made with mode
+  0600 and the commands run on the main thread between events, on the
+  front browser window.
+- Coordinates are the page area's (its viewport): `where` and
+  `clicksel` give them for an element, in the page or in a frame
+  ("@N" or "@text", as the Console's input line takes them).
+- `shot` draws the whole window at the screen's scale (2x on a Retina
+  display): halve the picture's pixels for page coordinates.
+- With the Console window open, its Trace check boxes replace what
+  `trace` set at each refresh.
+
 ## The Develop menu
 
 The menu is `MENU` 135 in `src/platform/macos9/aura.r`; `main.c`
