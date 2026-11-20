@@ -308,6 +308,9 @@ for (const C of [PluginArray, MimeTypeArray]) {
 defProps(PluginArray.prototype, { refresh() {} });
 const thePlugins = Object.create(PluginArray.prototype);
 const theMimeTypes = Object.create(MimeTypeArray.prototype);
+/* navigator.oscpu is Firefox's alone: a page that sees it beside
+ * Safari's or Chrome's user agent sees a browser that is neither. */
+if (!/ Firefox\//.test(settings.userAgent)) delete navProps.oscpu;
 defProps(Navigator.prototype, navProps);
 tag(Navigator);
 defGlobal('Navigator', Navigator);

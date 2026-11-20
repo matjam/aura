@@ -413,3 +413,7 @@ test('no touch input: no ontouchstart, and a move has no button', () => {
     assert.equal(new MouseEvent('mousedown', { button: 0, buttons: 1 }).which, 1);
     assert.equal(new MouseEvent('mouseup', { button: 2, buttons: 0 }).which, 3);
 });
+
+test('navigator.oscpu is there only as Firefox', () => {
+    assert.equal('oscpu' in navigator, / Firefox\//.test(navigator.userAgent));
+});
