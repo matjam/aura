@@ -504,6 +504,7 @@ void au_js_scrolled(AuJs *js);
 void au_js_element_scrolled(AuJs *js, AuElement *el);
 /* Developer tracing (AU_TRACE_* bits): the Console's Trace Scrolls. */
 #define AU_TRACE_SCROLL 1u
+#define AU_TRACE_NET 2u /* Trace Network: WebSocket opening, messages and closing */
 void au_js_set_trace(AuJs *js, unsigned flags);
 
 /* ---- contenteditable editing (prelude_edit.js) ----

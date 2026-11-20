@@ -100,6 +100,14 @@ void au_netlog_mark(AuNetLog *l, uint32_t dcl_ms, uint32_t load_ms); /* 0 leaves
 
 /* Record i of count, oldest first; NULL out of range. */
 const AuNetRecord *au_netlog_at(const AuNetLog *l, uint32_t i);
+/* The Console's Trace Network line for request seq as it stands, after
+ * au_netlog_begin, _response or _end ("" when the record is gone):
+ *   [net] 1520 #12 GET script https://...                  (begun)
+ *   [net] 1890 #12 200 text/javascript after 370 ms        (response)
+ *   [net] 2410 #12 done 48 KB in 890 ms: connect 120, TLS 410, wait 300; #3 1.2.3.4:443
+ *   [net] 9400 #13 failed (timed out) after 30000 ms: ...  (failed)
+ * The first number is milliseconds since the navigation. */
+void au_netlog_trace(AuNetLog *l, uint32_t seq, uint32_t now_ms, AuBuf *out);
 
 /* ---- Text ----
  * The Network window and `aura-host chrome --do netlog` show the same

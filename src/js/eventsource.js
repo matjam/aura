@@ -173,6 +173,17 @@ const wsState = (o) => {
     if (!s) throw new TypeError('Illegal invocation');
     return s;
 };
+/* The Console's Trace Network: a line for each step of a socket's life,
+ * and each message each way with its start, as "[ws 2] recv 34 bytes:
+ * {"op":"heartbeat_ack"}", so that a missing heartbeat shows. */
+let wsCount = 0;
+const wsPreview = (d) => {
+    if (typeof d !== 'string') return '(binary)';
+    return d.length > 100 ? d.slice(0, 100) + '...' : d;
+};
+function wsTrace(s, text) {
+    if (H.traceNet && H.traceNet()) N.print(1, '[ws ' + s.n + '] ' + Math.round(N.now()) + ' ' + text);
+}
 const tokenRe = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const utf8Len = (str) => {
     let n = 0;
@@ -208,16 +219,21 @@ class WebSocket extends H.EventTarget {
             throw H.domErr('An insecure WebSocket connection may not be initiated from a page loaded over HTTPS', 'SecurityError');
         const s = { obj: this, url: u.href, state: 0, protocol: '', binaryType: 'blob', buffered: 0, abort: null,
             parser: null, sentClose: false, gotClose: false, code: 1006, reason: '', timer: 0, origin: u.origin,
-            protocols: list, ended: false };
+            protocols: list, ended: false, n: ++wsCount };
         W.set(this, s);
         wsLive.add(s);
+        wsTrace(s, 'connect ' + s.url);
         const httpUrl = (u.protocol === 'wss:' ? 'https:' : 'http:') + u.href.slice(u.protocol.length);
         const headers = list.length ? [['Sec-WebSocket-Protocol', list.join(', ')]] : [];
         try {
             s.abort = H.startFetch('GET', httpUrl, headers, null, 2, 4 /* WebSocket */, 0, {
                 head(status, text, hdrs) { wsHead(s, status, hdrs); },
                 data(bytes) { wsData(s, bytes); },
-                done(ok) { s.abort = null; wsEnded(s); },
+                done(ok) {
+                    wsTrace(s, 'connection ended' + (ok ? '' : ' with an error') + (s.gotClose ? '' : ', no close frame'));
+                    s.abort = null;
+                    wsEnded(s);
+                },
             }, { cache: 1 });
         } catch (e) {
             s.abort = null;
@@ -245,6 +261,7 @@ class WebSocket extends H.EventTarget {
         else { op = 1; payload = String(data); }
         const len = op === 1 ? utf8Len(payload) : payload.length;
         s.buffered += len;
+        wsTrace(s, 'send ' + len + ' bytes' + (s.state !== 1 ? ' (dropped: not open)' : '') + ': ' + wsPreview(payload));
         if (s.state !== 1) return;
         if (!wsWrite(s, op, payload)) { wsFail(s, 1006); return; }
         /* the bytes are on their way: the amount drops once script yields */
@@ -283,6 +300,7 @@ function wsWrite(s, op, payload) {
 function wsSendClose(s, code, reason) {
     if (s.sentClose) return;
     s.sentClose = true;
+    wsTrace(s, 'send close' + (code !== undefined ? ' ' + code : '') + (reason ? ' ' + reason : ''));
     let body = new Uint8Array(0);
     if (code !== undefined) {
         const r = new TextEncoder().encode(reason || '');
@@ -306,9 +324,11 @@ function wsHead(s, status, hdrs) {
     const get = (n) => { const h = hdrs.find((p) => p[0].toLowerCase() === n); return h ? h[1] : null; };
     const proto = get('sec-websocket-protocol');
     if (status !== 101 || (proto !== null && !s.protocols.includes(proto))) {
+        wsTrace(s, 'handshake refused: status ' + status + (proto !== null ? ', protocol ' + proto : ''));
         wsFail(s, 1006);
         return;
     }
+    wsTrace(s, 'open' + (proto ? ' (' + proto + ')' : ''));
     try { s.parser = N.wsNew(WS_MAX_MESSAGE); } catch (e) { wsFail(s, 1006); return; }
     s.protocol = proto || '';
     s.state = 1;
@@ -323,16 +343,20 @@ function wsData(s, bytes) {
         case 'b': {
             if (s.state !== 1) break; /* data after our close frame is dropped */
             let data = r[1];
+            wsTrace(s, 'recv ' + (r[0] === 't' ? utf8Len(data) : data.byteLength) + ' bytes: ' + wsPreview(data));
             if (r[0] === 'b' && s.binaryType === 'blob') data = new H.Blob([data]);
             H.fire(s.obj, new H.MessageEvent('message', { data, origin: s.origin }));
             break;
         }
         case 'p':
+            wsTrace(s, 'ping; pong' + (s.sentClose ? ' not sent: closing' : ' sent'));
             if (!s.sentClose) wsWrite(s, 10, r[1]);
             break;
         case 'o':
+            wsTrace(s, 'pong');
             break;
         case 'c':
+            wsTrace(s, 'recv close ' + r[1] + (r[2] ? ' ' + r[2] : ''));
             s.gotClose = true;
             s.code = r[1];
             s.reason = r[2];
@@ -341,6 +365,7 @@ function wsData(s, bytes) {
             wsSendClose(s, r[1] === 1005 ? undefined : r[1], '');
             break;
         case 'e':
+            wsTrace(s, 'bad frame: ' + r[1] + (r[2] ? ' ' + r[2] : ''));
             wsFail(s, r[1]);
             return;
         }
@@ -368,6 +393,7 @@ function wsEnded(s) {
     const clean = s.gotClose && s.sentClose && !s.failed;
     if (!clean && !s.gotClose) { s.code = 1006; s.reason = ''; }
     s.state = 3;
+    wsTrace(s, 'closed ' + s.code + (clean ? ' (clean)' : ''));
     const fireAll = () => {
         if (s.failed || !clean) H.fireSimple(s.obj, 'error');
         H.fire(s.obj, new H.CloseEvent('close', { wasClean: clean, code: s.code, reason: s.reason }));

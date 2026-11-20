@@ -335,6 +335,67 @@ static const char *error_name(int e)
     return e >= 0 && e < (int)(sizeof names / sizeof names[0]) ? names[e] : "failed";
 }
 
+/* How long each phase of r took, as ", queued 10, DNS 40, connect 120". */
+static void trace_phases(const AuNetRecord *r, AuBuf *out)
+{
+    static const char *const names[] = {"queued",  "entropy", "DNS",     "connect",
+                                        "TLS",     "send",    "wait",    "receive"};
+    bool first = true;
+    for (int i = AU_FETCH_PHASE_QUEUED; i < AU_FETCH_PHASE_DONE; i++) {
+        if (r->at[i] < 0)
+            continue;
+        int32_t next = -1;
+        for (int k = i + 1; k <= AU_FETCH_PHASE_DONE && next < 0; k++)
+            next = r->at[k];
+        if (next < 0)
+            next = r->total_ms;
+        int32_t d = next - r->at[i];
+        if (d < 1 && i != AU_FETCH_PHASE_WAITING)
+            continue;
+        au_buf_printf(out, "%s%s %ld", first ? ": " : ", ", names[i], (long)d);
+        first = false;
+    }
+}
+
+void au_netlog_trace(AuNetLog *l, uint32_t seq, uint32_t now_ms, AuBuf *out)
+{
+    const AuNetRecord *r = find(l, seq);
+    if (!r || r->source == AU_NETREC_FROM_DATA)
+        return; /* data: URLs are many and say nothing about the network */
+    au_buf_printf(out, "[net] %lu #%lu ", (unsigned long)now_ms, (unsigned long)r->seq);
+    switch (r->state) {
+    case AU_NETREC_PENDING:
+        if (r->first_ms < 0)
+            au_buf_printf(out, "%s %s %s", r->method, kind_name(r), r->url);
+        else
+            au_buf_printf(out, "%d %s after %ld ms%s", r->status, r->type[0] ? r->type : "-", (long)r->first_ms,
+                          r->source == AU_FETCH_FROM_NETWORK || r->source >= AU_NETREC_FROM_FILE
+                              ? ""
+                              : r->source == AU_FETCH_FROM_304 ? " (revalidated)" : " (from the cache)");
+        return;
+    case AU_NETREC_DONE:
+        au_buf_printf(out, "done %lu bytes in %ld ms", (unsigned long)r->decoded, (long)r->total_ms);
+        break;
+    case AU_NETREC_FAILED:
+        au_buf_printf(out, "failed (%s) after %ld ms", error_name(r->error), (long)r->total_ms);
+        break;
+    case AU_NETREC_BLOCKED:
+        au_buf_printf(out, "blocked (%s)", r->blocked_reason);
+        break;
+    default:
+        au_buf_printf(out, "cancelled after %ld ms", (long)r->total_ms);
+        break;
+    }
+    if (r->have_net) {
+        trace_phases(r, out);
+        if (r->connection)
+            au_buf_printf(out, "; connection #%lu%s %s", (unsigned long)r->connection, r->reused ? " (reused)" : "",
+                          r->remote);
+    }
+    if (r->state != AU_NETREC_DONE)
+        au_buf_printf(out, " %s", r->url);
+}
+
 /* The table's columns: title, width in cells, right-aligned. Two spaces
  * separate them; the URL takes the rest of the line. The transferred
  * size, the connection and the remote address are in the details, so

@@ -286,12 +286,28 @@ struct AuPage {
     AuEvent input[PAGE_INPUT_MAX];
     uint8_t ninput;
     bool input_mouse[PAGE_INPUT_MAX]; /* a mouse event, else a key */
+    unsigned trace; /* AU_DV_TRACE_* the Console asked for (au_page_set_trace) */
 };
 
 /* Milliseconds since the navigation, for the request log. */
 static uint32_t log_ms(AuPage *p)
 {
     return p->env.time_ms ? p->env.time_ms(p->env.ctx) - p->load_start : 0;
+}
+
+static void dv_console(void *ctx, AuDocView *dv, int level, const char *text, size_t len);
+
+/* The Console's Trace Network: a line for the request as it now stands. */
+static void net_trace(AuPage *p, uint32_t seq)
+{
+    if (!(p->trace & AU_DV_TRACE_NET))
+        return;
+    AuBuf b;
+    au_buf_init(&b);
+    au_netlog_trace(&p->netlog, seq, log_ms(p), &b);
+    if (b.len)
+        dv_console(p, p->dv, 1, au_buf_cstr(&b), b.len);
+    au_buf_free(&b);
 }
 
 static void log_begin(AuPage *p, Fetch *f, const char *method)
@@ -301,6 +317,7 @@ static void log_begin(AuPage *p, Fetch *f, const char *method)
         au_netlog_source(&p->netlog, f->log, AU_NETREC_FROM_FILE);
     else if (au_url_scheme_is(f->url, "data"))
         au_netlog_source(&p->netlog, f->log, AU_NETREC_FROM_DATA);
+    net_trace(p, f->log);
 }
 
 /* ---- The page source ----
@@ -640,6 +657,7 @@ static void fetch_cancel(Fetch *f)
         return;
     f->cancelled = true;
     au_netlog_end(&f->page->netlog, f->log, AU_NETREC_CANCELLED, NULL, log_ms(f->page));
+    net_trace(f->page, f->log);
     if (f->fetcher && f->fetcher->cancel)
         f->fetcher->cancel(f->fetcher->ctx, f->fid);
 }
@@ -695,6 +713,7 @@ static void sink_response(void *ctx, uint32_t id, const AuFetchResponse *r)
         return;
     au_netlog_response(&f->page->netlog, f->log, r->status, r->content_type, r->from_cache, log_ms(f->page));
     au_netlog_set_url(&f->page->netlog, f->log, r->url);
+    net_trace(f->page, f->log);
     if (f->main) {
         thaw(f->page); /* the main response may replace the document */
         main_response(f->page, r);
@@ -802,6 +821,7 @@ static void sink_done(void *ctx, uint32_t id, bool ok, const AuFetchInfo *info)
     f->ok = ok;
     AuPage *p = f->page;
     au_netlog_end(&p->netlog, f->log, ok ? AU_NETREC_DONE : AU_NETREC_FAILED, info, log_ms(p));
+    net_trace(p, f->log);
     if (f->main) {
         thaw(p); /* the bytes held for the parser go first */
         main_done(p, ok, info);
@@ -4435,11 +4455,14 @@ bool au_page_eval(AuPage *p, const char *src, AuBuf *out)
     return ok;
 }
 
-void au_page_trace_scrolls(AuPage *p, bool on)
+void au_page_set_trace(AuPage *p, unsigned flags)
 {
+    if (!p)
+        return;
+    p->trace = flags; /* the request lines (net_trace) */
     /* not while its script is parked: the next refresh tries again */
-    if (p && p->kind == K_DOC && p->begun && p->dv && !p->parked)
-        au_docview_set_trace(p->dv, on ? AU_DV_TRACE_SCROLL : 0);
+    if (p->kind == K_DOC && p->begun && p->dv && !p->parked)
+        au_docview_set_trace(p->dv, flags);
 }
 
 bool au_page_update_stats(const AuPage *p, struct AuDocViewStats *s)

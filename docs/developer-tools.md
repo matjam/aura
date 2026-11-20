@@ -186,7 +186,7 @@ change how the Mac OS 9 window draws it, `src/platform/macos9/devwin.c`.
 All six are laid out alike:
 
 - **A tool band at the top** where the window has a filter or options:
-  a text filter and check boxes (Console: Errors, Warnings, Logs, Trace Scrolls), a text filter and radio
+  a text filter and check boxes (Console: Errors, Warnings, Logs, Trace Scrolls, Trace Network), a text filter and radio
   buttons (Network), two lines of instructions and a check box (Report
   a Problem).
 - **The text**, drawn by the text view in Monaco 10 with a vertical
@@ -356,13 +356,34 @@ expression and its result to the console.
   A line for a scroll ends with "<- host/path.js:line:column", the
   innermost frame of the page's own code, or "(Aura)" for the input line.
   Filter on `[trace]` to see them alone. The model calls
-  `au_page_trace_scrolls` at each refresh, so a page loaded since, or
+  `au_page_set_trace` at each refresh, so a page loaded since, or
   another tab, follows the box; closing the window turns it off for the
   tab shown. The hooks are in `prelude_dom.js` ("the Console's Trace
   Scrolls"); `test_trace_scrolls` in `tests/browser/test_devwin.c`
   covers them. It was made for Discord's message list, which keeps its
   own copy of the scroller's size and re-reads it only on a render, a
   scroll event or a ResizeObserver delivery.
+- **To see what the network is doing while a page waits**, turn on
+  Trace Network (off in a new window). The page then logs, as info
+  lines:
+  - each request of the page and its frames (not `data:` URLs) when it
+    starts, gets its response and ends, from `au_netlog_trace`
+    (`netlog.c`): "[net] MS #N GET kind URL", "[net] MS #N 200 type after
+    N ms", "[net] MS #N done N bytes in N ms: DNS 40, connect 120, TLS
+    410, wait 300; connection #3 1.2.3.4:443", or "failed (timed out)
+    after N ms ... URL". MS is milliseconds since the navigation and #N
+    the request's number in the Network window;
+  - each step of each WebSocket (`wsTrace` in `src/js/eventsource.js`):
+    "[ws N] MS connect", "open", every message each way with its size and
+    first 100 characters ("send 32 bytes: {"op":"heartbeat"}", "recv
+    ..."), pings, close frames, "connection ended, no close frame" and
+    "closed 1006". A socket that closes with 1006 and no close frame
+    lost its connection; the request's "[net]" line says how.
+
+  Filter on `[net]` or `[ws` to see one kind. `test_trace_net` in
+  `tests/browser/test_devwin.c` covers the request lines. It was made for
+  Discord's remote-auth socket, which closed with 1006 every two minutes
+  on a G4 while hCaptcha's challenge ran.
 - The console keeps lines across loads. Where it holds lines of earlier
   pages, a heading line "Page: URL" marks where the lines of the page
   now shown begin. The page counts them (`au_page_console_current` in

@@ -70,7 +70,7 @@ enum {
 #define AU_DEVWIN_INPUT_MAX 4000
 #define AU_DEVWIN_HISTORY 16 /* input lines Up and Down recall */
 #define AU_DEVWIN_MAX_BUTTONS 3
-#define AU_DEVWIN_MAX_TOGGLES 4
+#define AU_DEVWIN_MAX_TOGGLES 5
 
 /* What a kind of window has. */
 typedef struct AuDevWinKindInfo {
@@ -119,6 +119,7 @@ typedef enum {
     AU_DEVWIN_SHOW_WARNINGS,    /* Console: list warnings */
     AU_DEVWIN_SHOW_LOGS,        /* Console: list log, info and debug lines */
     AU_DEVWIN_TRACE_SCROLLS,    /* Console: the page logs its scrolls (au_page_set_trace) */
+    AU_DEVWIN_TRACE_NET,        /* Console: the page logs its requests and WebSockets (au_page_set_trace) */
     AU_DEVWIN_NET_ALL,          /* Network: every request (a radio group with the next two) */
     AU_DEVWIN_NET_PROBLEMS,     /* Network: requests that failed, were blocked or got 400 or more */
     AU_DEVWIN_NET_BLOCKED,      /* Network: blocked requests */

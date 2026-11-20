@@ -1153,7 +1153,7 @@ for (const C of [XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest
  * the global. */
 let esLib = null;
 const eventSources = () => esLib || (esLib = N.eventSource()(G, { N, domErr, EventTarget, defineHandlers, startFetch,
-    fire, fireSimple, MessageEvent, CloseEvent, Blob }));
+    fire, fireSimple, MessageEvent, CloseEvent, Blob, traceNet: P.traceNet }));
 for (const name of ['EventSource', 'WebSocket']) {
     Object.defineProperty(G, name, {
         get() { const v = eventSources()[name]; defGlobal(name, v); return v; },

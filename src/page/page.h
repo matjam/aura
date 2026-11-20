@@ -369,6 +369,8 @@ bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
  * AU_DV_TRACE_SCROLL (the same bit as AU_TRACE_SCROLL in src/js/js.h)
  * logs its scrolls, scroll events and ResizeObserver deliveries. */
 #define AU_DV_TRACE_SCROLL 1u
+/* AU_DV_TRACE_NET (AU_TRACE_NET) logs the script's WebSockets. */
+#define AU_DV_TRACE_NET 2u
 void au_docview_set_trace(AuDocView *dv, unsigned flags);
 
 /* ---- Measurements (the developer tools) ---- */

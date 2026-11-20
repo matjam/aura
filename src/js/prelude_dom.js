@@ -719,8 +719,10 @@ defGlobal('DOMRect', DOMRect);
  * delivery is printed, with the page's code that made it: Discord's
  * message list keeps its own copy of the scroller's size and only
  * re-reads it when told, so its scroll jumps come from those three. */
-let traceScroll = false;
-P.setTrace = function (flags) { traceScroll = !!(flags & 1); };
+let traceScroll = false, traceNet = false;
+P.setTrace = function (flags) { traceScroll = !!(flags & 1); traceNet = !!(flags & 2); };
+/* Trace Network (eventsource.js logs its WebSockets with it). */
+P.traceNet = () => traceNet;
 function traceName(el) {
     if (!el || el.nodeType !== 1) return String(el);
     let s = el.localName;
