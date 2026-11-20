@@ -91,7 +91,12 @@ def symbols(xcoff):
 
 
 def find_base(samples, text):
+    """The base most of the commonest addresses agree on. One address can
+    find its bytes once in .text and still be wrong (on 2026-11-19 a
+    false match named every function after the wrong neighbour), so each
+    address votes and the base with the most votes wins."""
     q = gq.QMP()
+    votes = collections.Counter()
     for nip, _ in collections.Counter(s[0] for s in samples).most_common(40):
         at = (nip & ~3) - 32
         words = q.read_words(at, 24, "w")
@@ -100,8 +105,16 @@ def find_base(samples, text):
         blob = b"".join(struct.pack(">I", w) for w in words)
         i = text.find(blob)
         if i >= 0 and text.find(blob, i + 1) < 0:
-            return at - i
-    sys.exit("could not find Aura's code in the guest: is the same build running?")
+            votes[at - i] += 1
+    if not votes:
+        sys.exit("could not find Aura's code in the guest: is the same build running?")
+    # Mac OS can hold Aura's code at two places at once (seen 2026-11-19:
+    # a second copy of part of it right after the first, and both ran),
+    # so every base two addresses agree on is kept, lowest first.
+    bases = sorted(b for b, c in votes.items() if c >= 2) or [votes.most_common(1)[0][0]]
+    if len(votes) > 1:
+        print(f"bases found: {', '.join(f'{b:#x} ({c})' for b, c in votes.most_common(4))}", file=sys.stderr)
+    return bases
 
 
 def report(path, top):
@@ -112,14 +125,15 @@ def report(path, top):
     text = text_section(xcoff)
     syms = symbols(xcoff)
     addrs = [a for a, _ in syms]
-    base = find_base(samples, text)
+    bases = find_base(samples, text)
 
     def name(pc):
-        off = pc - base
-        if not 0 <= off < len(text):
-            return None
-        i = bisect.bisect_right(addrs, off) - 1
-        return syms[i][1] if i >= 0 else "?"
+        for base in bases:
+            off = pc - base
+            if 0 <= off < len(text):
+                i = bisect.bisect_right(addrs, off) - 1
+                return syms[i][1] if i >= 0 else "?"
+        return None
 
     n = len(samples)
     own = collections.Counter()
@@ -132,7 +146,7 @@ def report(path, top):
             s = "(Mac OS)"
         own[s] += 1
         pairs[(s, name(lr) or "(Mac OS)")] += 1
-    print(f"{n} samples; Aura's code at {base:#x}")
+    print(f"{n} samples; Aura's code at {', '.join(f'{b:#x}' for b in bases)}")
     print(f"\n{'samples':>7} {'share':>6}  function")
     for s, c in own.most_common(top):
         print(f"{c:7d} {100 * c / n:5.1f}%  {s}")
