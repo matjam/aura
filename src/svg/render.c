@@ -94,6 +94,17 @@ static bool len_eq(const AuLen *a, const AuLen *b)
 void svg_state(const AuElement *el, const SvgFrame *parent, bool inst, SvgState *o)
 {
     const AuStyle *s = au_element_style(el);
+    if (!s) {
+        /* No computed style (an element the cascade has not reached):
+         * the parent's state, or nothing visible. */
+        if (parent) {
+            *o = parent->st;
+        } else {
+            memset(o, 0, sizeof *o);
+            o->visibility = AU_VISIBILITY_HIDDEN;
+        }
+        return;
+    }
     const AuStyle *d = NULL;
     if (inst && el->node.parent && el->node.parent->type == AU_NODE_ELEMENT)
         d = au_element_style(au_as_element(el->node.parent));
@@ -235,6 +246,8 @@ static const AuCssValue *items(const AuCssValue *v, uint32_t *n)
  * percentages are of the viewport), about its transform-origin. */
 static bool css_transform(const AuStyle *s, const SvgFrame *f, AuMatrix *out)
 {
+    if (!s)
+        return false;
     const AuStyleRare *r = s->rare;
     if (!r->transform)
         return false;
@@ -1227,7 +1240,9 @@ static AuElement *mask_ref(SvgCtx *x, const AuStyle *s)
     if (n < 1 || it[0].type != AU_CSSV_URL)
         return NULL;
     AuElement *m = find_ref(x, it[0].u.str, it[0].n);
-    return m && svg_is_tag(m, x->n->mask) ? m : NULL;
+    /* A mask with no computed style (one the cascade has not reached)
+     * cannot be drawn: the element is drawn unmasked. */
+    return m && svg_is_tag(m, x->n->mask) && au_element_style(m) ? m : NULL;
 }
 
 static AuElement *clip_ref(SvgCtx *x, const AuStyle *s)
