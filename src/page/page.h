@@ -365,6 +365,11 @@ uint32_t au_docview_scripts_due(AuDocView *dv);
  * converted to a string, goes in out. False without a runtime or when it
  * throws (out then holds the error). */
 bool au_docview_eval(AuDocView *dv, const char *src, AuBuf *out);
+/* Developer tracing for the document's script, when it has a runtime:
+ * AU_DV_TRACE_SCROLL (the same bit as AU_TRACE_SCROLL in src/js/js.h)
+ * logs its scrolls, scroll events and ResizeObserver deliveries. */
+#define AU_DV_TRACE_SCROLL 1u
+void au_docview_set_trace(AuDocView *dv, unsigned flags);
 
 /* ---- Measurements (the developer tools) ---- */
 /* The document's time counters (perf.h): script, style, layout and paint

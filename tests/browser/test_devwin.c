@@ -249,8 +249,8 @@ static void test_kinds_and_areas(void)
           "Report a Problem's own buttons");
     CHECK(au_devwin_toggles(AU_DEVWIN_NETWORK, &t) == 3 && t[0].radio && t[0].on && !t[1].on,
           "Network: a radio group, All chosen");
-    CHECK(au_devwin_toggles(AU_DEVWIN_CONSOLE, &t) == 3 && !t[0].radio && t[0].on && t[2].on,
-          "Console: three check boxes, on");
+    CHECK(au_devwin_toggles(AU_DEVWIN_CONSOLE, &t) == 4 && !t[0].radio && t[0].on && t[2].on && !t[3].on,
+          "Console: four check boxes, Trace Scrolls off");
     CHECK(au_devwin_toggles(AU_DEVWIN_PERF, &t) == 0, "Performance: none");
 
     Env e;
@@ -506,6 +506,51 @@ static void test_network(void)
     env_free(&e);
 }
 
+/* Trace Scrolls: the page logs its scrolls, scroll events and
+ * ResizeObserver deliveries, with the caller. */
+static void test_trace_scrolls(void)
+{
+    Env e;
+    env_init(&e);
+    FakeServer *s = fake_server(&e.f, "con.test", 80);
+    respond(s, "text/html",
+            "<!DOCTYPE html><title>C</title><script>\n"
+            "function go() { document.getElementById('s').scrollTop = 50; }\n"
+            "function watch() { new ResizeObserver(function () {}).observe(document.getElementById('s')); }"
+            "</script><div id=s class='box other' style='overflow:auto;width:100px;height:50px'>"
+            "<div style='height:500px'></div></div>");
+    au_bw_new_tab(e.w, "http://con.test/", true, -1);
+    settle(&e, 500);
+    AuDevWin dw;
+    make(&dw, &e, AU_DEVWIN_CONSOLE);
+    CHECK(!dw.toggle_on[3], "Trace Scrolls starts off");
+    type(&dw, "go()");
+    au_devwin_console_run(&dw);
+    settle(&e, 100);
+    au_devwin_refresh(&dw, true);
+    CHECK(!has_line(&dw, "[trace]"), "nothing traced while off");
+    au_devwin_toggle(&dw, 3);
+    type(&dw, "document.getElementById('s').scrollTop = 0; go(); watch()");
+    au_devwin_console_run(&dw);
+    settle(&e, 100);
+    au_devwin_refresh(&dw, true);
+    CHECK(has_line(&dw, "[trace] scroll div#s.box to 0,0: was 0,50 now 0,0 of 100x500 in 100x50 <- (Aura)"),
+          "a scroll from the input line");
+    CHECK(has_line(&dw, "[trace] scroll div#s.box to 0,50: was 0,0 now 0,50 of 100x500 in 100x50 <- con.test/:"),
+          "a scroll from the page's code names it");
+    CHECK(has_line(&dw, "[trace] scroll event at div#s.box at 0,50 of 100x500"), "the scroll event");
+    CHECK(has_line(&dw, "[trace] ResizeObserver: div#s.box is 100x50"), "the ResizeObserver delivery");
+    au_devwin_toggle(&dw, 3);
+    au_page_console_clear(h_page(&e));
+    type(&dw, "go(); document.getElementById('s').scrollTop = 7");
+    au_devwin_console_run(&dw);
+    settle(&e, 100);
+    au_devwin_refresh(&dw, true);
+    CHECK(!has_line(&dw, "[trace]"), "off again");
+    au_devwin_free(&dw);
+    env_free(&e);
+}
+
 static void test_console(void)
 {
     Env e;
@@ -733,6 +778,7 @@ int main(void)
     test_refresh();
     test_network();
     test_console();
+    test_trace_scrolls();
     test_find_and_copy();
     au_fontset_free(fonts);
     printf("devwin: %d checks, %d failures\n", checks, failures);

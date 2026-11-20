@@ -108,6 +108,9 @@ void au_docscript_scrolled(AuDocScript *s);
 /* The user scrolled el (an inner scroll container): it gets a scroll
  * event at the next run, once however many times it scrolled. */
 void au_docscript_element_scrolled(AuDocScript *s, AuElement *el);
+/* Developer tracing (AU_TRACE_* in js.h); a document without a runtime
+ * yet is not given one. */
+void au_docscript_set_trace(AuDocScript *s, unsigned flags);
 /* The document cache: false when window has an unload or beforeunload
  * listener; pagehide or pageshow (persisted) when the document is hidden
  * or shown again; the script runtime's memory in bytes. NULL s is fine. */

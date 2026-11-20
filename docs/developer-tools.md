@@ -186,7 +186,7 @@ change how the Mac OS 9 window draws it, `src/platform/macos9/devwin.c`.
 All six are laid out alike:
 
 - **A tool band at the top** where the window has a filter or options:
-  a text filter and check boxes (Console), a text filter and radio
+  a text filter and check boxes (Console: Errors, Warnings, Logs, Trace Scrolls), a text filter and radio
   buttons (Network), two lines of instructions and a check box (Report
   a Problem).
 - **The text**, drawn by the text view in Monaco 10 with a vertical
@@ -342,6 +342,27 @@ expression and its result to the console.
 - The filter field and the Errors, Warnings and Logs check boxes fill
   an `AuConsoleFilter`. Logs covers log, info and debug. The
   expressions typed and their results are always listed.
+- **To see what moves a page's scrollers**, turn on Trace Scrolls (off
+  in a new window). The page then logs, as `[trace]` log lines:
+  - each scroll its script makes, of an element or the page
+    (`scrollTop`, `scrollLeft`, `scrollTo`, `scrollBy`,
+    `scrollIntoView`, `window.scrollTo`), as "scroll div#id.class to
+    X,Y: was X,Y now X,Y of WxH in WxH", the scroll size and the view
+    size;
+  - each scroll event fired at an element, with its offset and scroll
+    size;
+  - each ResizeObserver delivery, with the target's border box.
+
+  A line for a scroll ends with "<- host/path.js:line:column", the
+  innermost frame of the page's own code, or "(Aura)" for the input line.
+  Filter on `[trace]` to see them alone. The model calls
+  `au_page_trace_scrolls` at each refresh, so a page loaded since, or
+  another tab, follows the box; closing the window turns it off for the
+  tab shown. The hooks are in `prelude_dom.js` ("the Console's Trace
+  Scrolls"); `test_trace_scrolls` in `tests/browser/test_devwin.c`
+  covers them. It was made for Discord's message list, which keeps its
+  own copy of the scroller's size and re-reads it only on a render, a
+  scroll event or a ResizeObserver delivery.
 - The console keeps lines across loads. Where it holds lines of earlier
   pages, a heading line "Page: URL" marks where the lines of the page
   now shown begin. The page counts them (`au_page_console_current` in

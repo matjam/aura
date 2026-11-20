@@ -68,6 +68,7 @@ struct AuDocScript {
     bool resize_pending, scroll_pending, media_pending;
     AuElement *scrolled[8]; /* inner scrollers the user scrolled since the last run (referenced) */
     uint32_t nscrolled;
+    unsigned trace; /* AU_TRACE_* the runtime was given */
     int depth;
     uint32_t perf_t0;    /* when the outermost entry began */
     uint32_t perf_frozen0; /* the view's frozen_ms then: time parked is not script time */
@@ -1696,6 +1697,16 @@ void au_docscript_element_scrolled(AuDocScript *s, AuElement *el)
         return; /* a wheel moves one box at a time; eight is plenty */
     au_node_ref(&el->node);
     s->scrolled[s->nscrolled++] = el;
+}
+
+void au_docscript_set_trace(AuDocScript *s, unsigned flags)
+{
+    if (!s || !s->js || s->trace == flags)
+        return;
+    s->trace = flags;
+    enter(s);
+    au_js_set_trace(s->js, flags);
+    leave(s);
 }
 
 bool au_docscript_on_stack(const AuDocScript *s)

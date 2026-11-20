@@ -502,6 +502,9 @@ void au_js_media_changed(AuJs *js);
 void au_js_scrolled(AuJs *js);
 /* Fires scroll (not bubbling) at el, an element the user scrolled. */
 void au_js_element_scrolled(AuJs *js, AuElement *el);
+/* Developer tracing (AU_TRACE_* bits): the Console's Trace Scrolls. */
+#define AU_TRACE_SCROLL 1u
+void au_js_set_trace(AuJs *js, unsigned flags);
 
 /* ---- Event loop ----
  * Runs due timers and queued tasks for up to budget_ms, each followed by a
