@@ -2508,6 +2508,17 @@ static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
     if (sbw == AU_SCROLLBAR_WIDTH_NONE)
         return;
     float bw = sbw == AU_SCROLLBAR_WIDTH_THIN ? 5 : 8; /* track */
+    /* scrollbar-color: thumb and track colours in place of the greys;
+     * Discord makes both transparent until the box is hovered. */
+    uint32_t track = AU_RGBA(0, 0, 0, 20), thumb = AU_RGBA(0, 0, 0, 110);
+    const AuCssBlob *sc = b->b.style->inhr->scrollbar_color;
+    if (sc && sc->value.type == AU_CSSV_LIST && sc->value.n == 2 && sc->value.u.items[0].type == AU_CSSV_COLOR &&
+        sc->value.u.items[1].type == AU_CSSV_COLOR) {
+        thumb = pc(b->b.style, sc->value.u.items[0].u.rgba);
+        track = pc(b->b.style, sc->value.u.items[1].u.rgba);
+        if (!(thumb >> 24) && !(track >> 24))
+            return;
+    }
     AuRect pb = box_area(b, ox, oy, AU_K_padding_box);
     const AuStyleBox *s = b->b.style->box;
     float vw = pb.w, vh = pb.h;
@@ -2516,16 +2527,16 @@ static void paint_scrollbars(PCtx *P, LBlock *b, float ox, float oy)
     if (vbar && s->overflow_y != AU_OVERFLOW_HIDDEN && s->overflow_y != AU_OVERFLOW_CLIP && vh > 8) {
         float th = l_max(16, vh * vh / l_max(vh, b->sh));
         float ty = pb.y + (vh - th) * (b->sh > vh ? b->scroll_y / (b->sh - vh) : 0);
-        au_fill_rect(P->c, (AuRect){pb.x + pb.w - bw, pb.y, bw, vh}, AU_RGBA(0, 0, 0, 20));
+        au_fill_rect(P->c, (AuRect){pb.x + pb.w - bw, pb.y, bw, vh}, track);
         AuRadii r = {{3, 3, 3, 3}, {3, 3, 3, 3}};
-        au_fill_rounded_rect(P->c, (AuRect){pb.x + pb.w - bw + 1, ty + 1, bw - 2, th - 2}, &r, AU_RGBA(0, 0, 0, 110));
+        au_fill_rounded_rect(P->c, (AuRect){pb.x + pb.w - bw + 1, ty + 1, bw - 2, th - 2}, &r, thumb);
     }
     if (hbar && s->overflow_x != AU_OVERFLOW_HIDDEN && s->overflow_x != AU_OVERFLOW_CLIP && vw > 8) {
         float tw = l_max(16, vw * vw / l_max(vw, b->sw));
         float tx = pb.x + (vw - tw) * (b->sw > vw ? b->scroll_x / (b->sw - vw) : 0);
-        au_fill_rect(P->c, (AuRect){pb.x, pb.y + pb.h - bw, vw, bw}, AU_RGBA(0, 0, 0, 20));
+        au_fill_rect(P->c, (AuRect){pb.x, pb.y + pb.h - bw, vw, bw}, track);
         AuRadii r = {{3, 3, 3, 3}, {3, 3, 3, 3}};
-        au_fill_rounded_rect(P->c, (AuRect){tx + 1, pb.y + pb.h - bw + 1, tw - 2, bw - 2}, &r, AU_RGBA(0, 0, 0, 110));
+        au_fill_rounded_rect(P->c, (AuRect){tx + 1, pb.y + pb.h - bw + 1, tw - 2, bw - 2}, &r, thumb);
     }
 }
 
