@@ -424,12 +424,14 @@ script on Discord's login, 2026-11-19:
   there only as Firefox.
 - The GTK shell reports the window at its monitor's top left: GTK 4
   does not say where a toplevel is.
-- Discord's login still fails after the faults found on 2026-11-19 were
-  fixed (the window's tag, keys and geometry, mouse events' screen
-  position, `ontouchstart`): Discord answers `invalid-response` to a
-  token hCaptcha passed, and after about fifteen attempts in an hour
-  hCaptcha failed every answer. Not verified which remaining difference
-  decides it.
+- Discord's login works since 2026-11-19 in the macOS build, with
+  "Identify as" Safari: email, password and a TOTP code, and Discord
+  asked for no captcha. Not verified: which change decided it (the
+  Safari identity, the time zone's name, or signing in with a password
+  instead of the QR code); the QR code's sign-in, which had asked for
+  hCaptcha every time and refused the token hCaptcha passed
+  (`invalid-response`), with Aura's own identity and before the time
+  zone fix; and Mac OS 9.
 
 ## Script requests and CORS
 
