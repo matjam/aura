@@ -351,6 +351,10 @@ void au_docview_set_script_memory(AuDocView *dv, size_t page_bytes, size_t worke
  * frames. */
 struct AuJsHintStore;
 void au_docview_set_script_hints(AuDocView *dv, const struct AuJsHintStore *hints);
+/* Where they keep the bytecode of large scripts for later pages (js/js.h,
+ * AuJsCodeStore); NULL for none. The same rules. */
+struct AuJsCodeStore;
+void au_docview_set_script_code(AuDocView *dv, const struct AuJsCodeStore *code);
 /* The string script sees as navigator.userAgent, from the next load. It
  * must be the one the network sends. NULL or "": the script default. */
 void au_docview_set_user_agent(AuDocView *dv, const char *ua);

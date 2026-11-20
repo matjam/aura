@@ -13,7 +13,7 @@
  * usage: fuzz_files ITERATIONS SEED SECONDS
  *        fuzz_files replay KIND FILE...   (KIND: session bookmarks history
  *                                          prefs downloads rules diskcache
- *                                          storage hints)
+ *                                          storage hints scripts)
  *
  * storage: the web storage service's area files, its index and the
  * session file's storage lines (run_storage). */
@@ -23,6 +23,7 @@
 #include "browser/downloads.h"
 #include "browser/history.h"
 #include "browser/prefs.h"
+#include "browser/script_cache.h"
 #include "browser/script_hints.h"
 #include "js/hint_store.h"
 #include "net/cookies.h"
@@ -40,12 +41,15 @@ static const char *const dict[] = {
     "storage\t", "storage\thttp://a.test\tk\tv\n", "%09", "%00", "%25", "%", "%zz", "AuLS", "http://a.test", "^http://b.test",
     "# Aura local storage 1\n", "0000abcd\t40\t2\thttp://a.test\n", "0000abcd", "\t99999999999\t",
     "# Aura script hints 1\n", "ffffffff", "100000000", " 0", " 1", " ffffffff", "3e8 abc a\n",
+    "# Aura script cache 1\n", "0123456789abcdef0123456789abcdef\n",
 };
 #define NDICT ((int)(sizeof dict / sizeof dict[0]))
 
-enum { K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_STORAGE, K_HINTS, K_COUNT };
+enum {
+    K_SESSION, K_BOOKMARKS, K_HISTORY, K_PREFS, K_DOWNLOADS, K_RULES, K_DISKCACHE, K_STORAGE, K_HINTS, K_SCRIPTS, K_COUNT
+};
 static const char *const kind_names[K_COUNT] = {"session",   "bookmarks", "history", "prefs", "downloads",
-                                                "rules",     "diskcache", "storage", "hints"};
+                                                "rules",     "diskcache", "storage", "hints", "scripts"};
 
 static void fail(const char *what)
 {
@@ -514,10 +518,41 @@ static void run_hints(const FzBuf *in)
     free(p);
 }
 
+/* The script cache's Index: at most its limit of keys, each once, and a
+ * written file reads back the same. */
+static void run_scripts(const FzBuf *in)
+{
+    char *p = exact(in);
+    AuScriptCache *c = au_script_cache_new(NULL, 1 << 20);
+    AuScriptCacheStats st;
+    AuBuf out;
+    au_script_cache_index_parse(c, p, in->n);
+    au_script_cache_stats(c, &st);
+    if (st.seen > AU_SCRIPT_CACHE_SEEN)
+        fail("scripts: more keys than the limit");
+    au_buf_init(&out);
+    au_script_cache_index_serialize(c, &out);
+    if (out.len > in->n + 64)
+        fail("scripts: the file grew in a round trip");
+    AuScriptCache *c2 = au_script_cache_new(NULL, 1 << 20);
+    au_script_cache_index_parse(c2, out.data ? (const char *)out.data : "", out.len);
+    AuBuf out2;
+    au_buf_init(&out2);
+    au_script_cache_index_serialize(c2, &out2);
+    if (out.len != out2.len || (out.len && memcmp(out.data, out2.data, out.len)))
+        fail("scripts: a written file reads back differently");
+    au_buf_free(&out2);
+    au_buf_free(&out);
+    au_script_cache_free(c2);
+    au_script_cache_free(c);
+    free(p);
+}
+
 static void run_kind(int kind, const FzBuf *in)
 {
     switch (kind) {
     case K_HINTS: run_hints(in); break;
+    case K_SCRIPTS: run_scripts(in); break;
     case K_STORAGE: run_storage(in); break;
     case K_SESSION: run_session(in); break;
     case K_BOOKMARKS: run_bookmarks(in); break;
@@ -596,6 +631,8 @@ static void make_seeds(FzCorpus c[K_COUNT])
         fz_corpus_add(&c[K_HINTS], out.data, out.len);
         au_script_hints_free(h);
     }
+    fz_corpus_add_str(&c[K_SCRIPTS], "# Aura script cache 1\n0123456789abcdef0123456789abcdef\n"
+                                     "fedcba9876543210fedcba9876543210\n00000000000000000000000000000000\n");
     fz_corpus_add_str(&c[K_SESSION], "# Aura session 1\nwindow 800 600 0 40 60\ntab 0\nentry\thttp://a.test/\tA page\t0\n"
                                      "storage\thttp://a.test\tkey\tvalue\ta%09b\t%25%00%0A\xED\xA0\x80\n"
                                      "storage\thttp://b.test^http://a.test\tk\t\n");

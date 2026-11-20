@@ -2799,6 +2799,11 @@ void au_docview_set_script_hints(AuDocView *dv, const struct AuJsHintStore *hint
     dv->script_hints = hints;
 }
 
+void au_docview_set_script_code(AuDocView *dv, const struct AuJsCodeStore *code)
+{
+    dv->script_code = code;
+}
+
 void au_docview_set_user_agent(AuDocView *dv, const char *ua)
 {
     au_free(dv->user_agent);

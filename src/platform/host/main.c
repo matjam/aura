@@ -20,6 +20,7 @@
 #include "browser/present.h"
 #include "browser/scene.h"
 #include "browser/script_hints.h"
+#include "browser/script_cache.h"
 #include "browser/url.h"
 #include "render.h"
 #include "net_host.h"
@@ -414,7 +415,7 @@ static int usage(void)
             "                        bookmarks, history, session, web storage in DIR/Local Storage; --net keeps cookies\n"
             "                        and web storage in $AURA_PROFILE)\n"
             "                        (--do storage prints the storage service's areas; --do reload reloads)\n"
-            "                        [--net] [--no-doc-cache] [--no-script-hints] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
+            "                        [--net] [--no-doc-cache] [--no-script-hints] [--no-script-cache] [--script-mem MB] [--worker-mem MB] [--no-entropy] [--scroll-bench STEPS [--no-shift]] [--do ACTION]...\n"
             "                        (--do: click:X,Y dclick:X,Y tclick:X,Y clickname:NAME type:TEXT\n"
             "                        key:[cmd-][shift-]NAME\n"
             "                        edit:copy|cut|paste:TEXT|undo|clear|selectall wait:MS pause:MS shot:FILE field\n"
@@ -428,6 +429,8 @@ static int usage(void)
             "                        --no-doc-cache makes Back and Forward load again;\n"
             "                        --no-script-hints: a page loaded again compiles its functions at their\n"
             "                        first call again (script hints are kept in memory for the run);\n"
+            "                        --no-script-cache: a large script is compiled every time it runs (the\n"
+            "                        bytecode of one compiled twice is kept in memory for the run);\n"
             "                        --script-mem MB and --worker-mem MB set the script memory limits of a\n"
             "                        page and of a worker, else Automatic;\n"
             "                        --image-bits 32|16|8 sets Image colours)\n"
@@ -674,6 +677,7 @@ typedef struct ChromeOpts {
     bool no_shift;    /* scroll by repainting the page, not by moving pixels */
     bool no_doc_cache; /* Back and Forward load again (through the HTTP cache's history mode) */
     bool no_script_hints; /* a page loaded again compiles its functions at their first call again */
+    bool no_script_cache; /* a large script is compiled every time it runs */
     bool profile;      /* --profile DIR: web storage is kept in the profile folder (as --net keeps it) */
     int script_mem_mb, worker_mem_mb; /* the script memory preferences; 0: Automatic */
     int image_bits;                   /* Image colours: 32, 16 or 8; 0: Automatic */
@@ -681,6 +685,7 @@ typedef struct ChromeOpts {
     const char *actions[256]; /* --do: scripted input, in order */
     int nactions;
     AuHttpCache *cache; /* --net: an HTTP cache in memory, as the Mac application has */
+    AuScriptCache *scripts; /* the script cache of the run */
     const char *blocklist; /* --blocklist FILE: a compiled or text list requests are checked against */
 } ChromeOpts;
 
@@ -1219,6 +1224,12 @@ static void chrome_action(AuBrowser *b, AuBrowserWindow *w, AuHostSession *ses, 
         printf("cache: %lu fresh, %lu history, %lu revalidated (%lu not modified), %lu missed, %lu stored, "
                "%lu stale while revalidating\n",
                cs.fresh, cs.history, cs.stale, cs.not_modified, cs.misses, cs.stored, cs.stale_while_revalidate);
+        if (o->scripts) {
+            AuScriptCacheStats ss;
+            au_script_cache_stats(o->scripts, &ss);
+            printf("script cache: %lu scripts, %lu KB; %u read, %u missed, %u stored\n", (unsigned long)ss.count,
+                   (unsigned long)(ss.bytes / 1024), ss.hits, ss.misses, ss.stores);
+        }
         size_t kept_bytes = 0;
         size_t kept = au_browser_kept_documents(b, &kept_bytes);
         printf("documents kept for Back and Forward: %lu, about %lu KB\n", (unsigned long)kept,
@@ -1461,6 +1472,11 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
      * the first time with the scripts. */
     AuScriptHints *hints = au_script_hints_new();
     b->script_hints = o->no_script_hints ? NULL : au_script_hints_store(hints);
+    /* The script cache for the run, in memory too: a large script
+     * compiled twice is read from its bytecode after that. */
+    AuScriptCache *scripts = au_script_cache_new(NULL, (size_t)256 << 20);
+    o->scripts = scripts;
+    b->script_code = o->no_script_cache ? NULL : au_script_cache_store(scripts);
     /* --profile DIR: the browser's files there too (preferences,
      * bookmarks, history, session, downloads, site icons, Running),
      * loaded and saved by the application services as on Mac OS 9. */
@@ -1594,6 +1610,7 @@ static int cmd_chrome(AuFontSet *fonts, const char *out, ChromeOpts *o)
     }
     au_browser_free(b);
     au_script_hints_free(hints);
+    au_script_cache_free(scripts);
     au_host_storage_close(storage); /* writes what changed */
     if (o->net) {
         if (blocklist) {
@@ -1694,6 +1711,8 @@ int main(int argc, char **argv)
                 o.no_doc_cache = true;
             else if (!strcmp(a, "--no-script-hints"))
                 o.no_script_hints = true;
+            else if (!strcmp(a, "--no-script-cache"))
+                o.no_script_cache = true;
             else if (!strcmp(a, "--script-mem") && i + 1 < argc)
                 o.script_mem_mb = atoi(argv[++i]);
             else if (!strcmp(a, "--image-bits") && i + 1 < argc)

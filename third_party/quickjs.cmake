@@ -32,6 +32,24 @@ if(AURA_MACOS9)
 endif()
 target_compile_definitions(aura_quickjs PRIVATE _GNU_SOURCE ${AURA_QJS_DEFINES})
 target_link_libraries(aura_engine PUBLIC aura_quickjs)
+
+# The engine stamp: a hash of the QuickJS sources and defines. Bytecode
+# names built-in atoms and opcodes by number, so bytecode kept in the
+# Script Cache folder is read only by a build with the same stamp
+# (src/js/runtime.c, "Compiled scripts kept between pages"). CMake
+# configures again when one of the files changes.
+file(GLOB AURA_QJS_STAMP_FILES ${AURA_QJS_DIR}/*.c ${AURA_QJS_DIR}/*.h)
+list(SORT AURA_QJS_STAMP_FILES)
+set(AURA_QJS_STAMP_TEXT "${AURA_QJS_DEFINES}")
+foreach(f ${AURA_QJS_STAMP_FILES})
+    file(SHA256 ${f} AURA_QJS_FILE_HASH)
+    string(APPEND AURA_QJS_STAMP_TEXT ${AURA_QJS_FILE_HASH})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${f})
+endforeach()
+string(SHA256 AURA_QJS_STAMP "${AURA_QJS_STAMP_TEXT}")
+string(SUBSTRING ${AURA_QJS_STAMP} 0 32 AURA_QJS_STAMP)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/js/runtime.c PROPERTIES
+    COMPILE_DEFINITIONS AU_JS_ENGINE_STAMP="${AURA_QJS_STAMP}")
 # The math library goes after QuickJS on the link line (newlib's libm on
 # Mac OS 9 holds cbrt, hypot, the hyperbolic functions and so on).
 if(NOT APPLE OR AURA_MACOS9)

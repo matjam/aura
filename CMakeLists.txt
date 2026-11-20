@@ -93,7 +93,7 @@ target_compile_definitions(aura_engine PUBLIC AU_UA_KIND=${AURA_UA_KIND})
 file(GLOB AURA_LONG_LIVED_SOURCES CONFIGURE_DEPENDS src/net/*.c)
 foreach(f paint/fontset.c paint/sfnt.c paint/fontpage.c paint/fontindex.c paint/fontalias.c paint/fallback.c
           paint/fontvar.c paint/colr.c paint/gsub.c paint/text.c
-          browser/browser.c browser/history.c browser/bookmarks.c browser/prefs.c browser/downloads.c browser/favicon.c browser/bench.c browser/script_hints.c)
+          browser/browser.c browser/history.c browser/bookmarks.c browser/prefs.c browser/downloads.c browser/favicon.c browser/bench.c browser/script_hints.c browser/script_cache.c)
     list(APPEND AURA_LONG_LIVED_SOURCES ${CMAKE_SOURCE_DIR}/src/${f})
 endforeach()
 set_property(SOURCE ${AURA_LONG_LIVED_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS AU_HEAP_ZONE=1)

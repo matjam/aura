@@ -5,6 +5,7 @@
  * network stack. */
 #include "browser/app.h"
 #include "browser/netlog.h"
+#include "browser/script_cache.h"
 #include "js/hint_store.h"
 #include "net/cookies.h"
 #include "net/hsts.h"
@@ -484,7 +485,7 @@ static void test_net_stores(void)
     CHECK(au_app_net(a) && au_app_loader(a) && au_app_storage(a));
     CHECK(b->storage == au_app_storage(a));
     /* The folders were made. */
-    CHECK(fs.nfolders == 2);
+    CHECK(fs.nfolders == 3); /* Cache, Local Storage, Script Cache */
 
     AuUrl u;
     CHECK(au_url_parse(&u, "https://example.com/", NULL));
@@ -577,6 +578,67 @@ static void test_script_hints_file(void)
     au_app_net_stop(a);
     CHECK(b->script_hints == NULL);
     CHECK(!strcmp(text_of(AU_APP_FILE_SCRIPT_HINTS), "# Aura script hints 1\n"));
+    au_app_free(a);
+    au_browser_free(b);
+}
+
+/* The script cache: its folder is made with the network stack, a stored
+ * script is a file there, the Index is written as rarely as the hints,
+ * the cache's size preference bounds it and clearing the cache empties
+ * it. */
+static void test_script_cache_folder(void)
+{
+    fs_reset();
+    AuBrowser *b = make_browser();
+    b->prefs.disk_cache_kb = 1024;
+    AuAppPort port = mem_port();
+    AuApp *a = au_app_new(b, &port);
+    au_app_load(a);
+    AuAppNet n = mem_net();
+    CHECK(au_app_net_start(a, &n));
+    const AuJsCodeStore *s = b->script_code;
+    CHECK(s != NULL);
+    uint8_t key[AU_JS_CODE_KEY], other[AU_JS_CODE_KEY];
+    for (int i = 0; i < AU_JS_CODE_KEY; i++) {
+        key[i] = (uint8_t)(i + 1);
+        other[i] = (uint8_t)(0xf0 - i);
+    }
+    static const char name[] = "0102030405060708090a0b0c0d0e0f";
+    size_t len = 0;
+    bool seen = true;
+    if (s) {
+        CHECK(!s->get(s->ctx, key, &len, &seen) && !seen);
+        CHECK(!s->get(s->ctx, other, &len, &seen) && !seen);
+        s->put(s->ctx, key, (const uint8_t *)"bytecode", 8);
+        au_app_net_idle(a); /* a port that defers cache writes */
+        CHECK(find(AU_APP_FOLDER_SCRIPT_CACHE, name) != NULL);
+        uint8_t *code = s->get(s->ctx, key, &len, &seen);
+        CHECK(code && len == 8 && !memcmp(code, "bytecode", 8) && seen);
+        au_free(code);
+        /* the Index (the key asked for once) waits */
+        au_app_save(a, false);
+        CHECK(!find(AU_APP_FOLDER_SCRIPT_CACHE, AU_SCRIPT_CACHE_INDEX));
+        now_ms += AU_APP_HINTS_SAVE_MS;
+        au_app_save(a, false);
+        CHECK(find(AU_APP_FOLDER_SCRIPT_CACHE, AU_SCRIPT_CACHE_INDEX) != NULL);
+        /* with the disk cache off nothing is kept */
+        b->prefs.disk_cache_kb = 0;
+        au_app_prefs_changed(a);
+        CHECK(!find(AU_APP_FOLDER_SCRIPT_CACHE, name));
+        s->put(s->ctx, key, (const uint8_t *)"bytecode", 8);
+        CHECK(!find(AU_APP_FOLDER_SCRIPT_CACHE, name));
+        b->prefs.disk_cache_kb = 1024;
+        au_app_prefs_changed(a);
+        s->put(s->ctx, key, (const uint8_t *)"bytecode", 8);
+        au_app_net_idle(a);
+        CHECK(find(AU_APP_FOLDER_SCRIPT_CACHE, name) != NULL);
+        au_app_clear_cache(a);
+        CHECK(!find(AU_APP_FOLDER_SCRIPT_CACHE, name));
+    }
+    au_app_quit(a);
+    au_app_net_stop(a);
+    CHECK(b->script_code == NULL);
+    CHECK(!find(AU_APP_FOLDER_SCRIPT_CACHE, AU_SCRIPT_CACHE_INDEX));
     au_app_free(a);
     au_browser_free(b);
 }
@@ -679,6 +741,7 @@ int main(void)
     test_running_and_session();
     test_net_stores();
     test_script_hints_file();
+    test_script_cache_folder();
     test_prefs_applied();
     test_stores_alone();
     test_folder();

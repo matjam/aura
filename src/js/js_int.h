@@ -469,6 +469,23 @@ void js_url_free(JsUrl *u);
  * its last run compiled at their first call with it. */
 #define JS_HINT_SCRIPT ((size_t)4 << 10)
 
+/* The code store (runtime.c, "Compiled scripts kept between pages"): a
+ * classic script or module this long or longer is kept as bytecode for
+ * later pages. Under it a compile costs about what reading a file does. */
+#define JS_STORE_SCRIPT ((size_t)32 << 10)
+/* The key of a script for the store; false when the script is not kept
+ * (too short, no store, a worker). name and line are what the compile is
+ * given. */
+bool js_code_key(AuJs *js, bool module, const char *name, int line, const char *src, size_t len,
+                 uint8_t key[AU_JS_CODE_KEY]);
+/* The script stored under key, read into js's context: the function, or
+ * the module with its imports unresolved. JS_UNINITIALIZED when there is
+ * none or it cannot be read. *seen: the store was asked for it before. */
+JSValue js_code_load(AuJs *js, const uint8_t key[AU_JS_CODE_KEY], const char *src, size_t len, bool *seen);
+/* Gives the store the script just compiled, when it is time to (seen is
+ * what js_code_load said). */
+void js_code_save(AuJs *js, const uint8_t key[AU_JS_CODE_KEY], JSValueConst fn, size_t len, bool seen);
+
 #define JS_COUNTOF(a) (sizeof(a) / sizeof((a)[0]))
 
 #endif

@@ -156,6 +156,7 @@ static bool locate(const char *folder, Loc *loc)
         f->dir = dir;
         f->type = !strcmp(folder, AU_APP_FOLDER_CACHE)           ? 'AuCa'
                   : !strcmp(folder, AU_APP_FOLDER_LOCAL_STORAGE) ? 'AuLS'
+                  : !strcmp(folder, AU_APP_FOLDER_SCRIPT_CACHE)  ? 'AuSC'
                                                                  : 'TEXT';
     }
     loc->vref = folders[i].vref;

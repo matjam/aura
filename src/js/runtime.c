@@ -2,6 +2,7 @@
  * running scripts, microtask checkpoints. */
 #include "js_int.h"
 #include "../codec/codec.h"
+#include "../core/hash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1390,6 +1391,114 @@ void js_code_expire(AuJs *js)
     }
 }
 
+/* ---- Compiled scripts kept between pages ----
+ * The code store (settings.code, js/hint_store.h) keeps the bytecode of
+ * large classic scripts and modules across pages and runs of the
+ * application, so a site's bundle is compiled on the first two visits
+ * and read after that.
+ *
+ * A script is stored the second time it is compiled: a page seen once
+ * costs no write, and the second compile has the script hints, so the
+ * functions the page calls are in the bytecode compiled instead of as
+ * stubs that parse their text at the first call. A script that has no
+ * stubs (JS_NO_TEXT_SCRIPT bytes or more, or lazy functions off) is
+ * stored the first time.
+ *
+ * The key is a SHA-256 over the engine build (AU_JS_ENGINE_STAMP, from
+ * the QuickJS sources: bytecode names built-in atoms and opcodes by
+ * number), the byte order and pointer size, how the script is compiled,
+ * its URL and first line (both are in the bytecode) and its text. A
+ * script another site serves cannot take the key of this one. Without a
+ * stamp nothing is stored. A module is read with its imports unresolved
+ * (JS_READ_OBJ_NO_RESOLVE, QuickJS patch 0025), as compile_module
+ * leaves one. Not covered: workers, scripts under JS_STORE_SCRIPT, text
+ * given to eval, and a script that is mostly data (its functions have
+ * texts of their own, which the bytecode cannot name). */
+#ifdef AU_JS_ENGINE_STAMP
+bool js_code_key(AuJs *js, bool module, const char *name, int line, const char *src, size_t len,
+                 uint8_t key[AU_JS_CODE_KEY])
+{
+    static const char stamp[] = "aura-code-1 " AU_JS_ENGINE_STAMP;
+    static const uint16_t one = 1;
+    AuJs *r = js->root;
+    uint8_t head[12];
+    uint32_t lazy = (uint32_t)r->settings.lazy_functions, ln = (uint32_t)line;
+    if (!r->settings.code || r->worker || len < JS_STORE_SCRIPT)
+        return false;
+    head[0] = module;
+    head[1] = len >= JS_NO_TEXT_SCRIPT;
+    head[2] = (uint8_t)sizeof(void *);
+    head[3] = *(const uint8_t *)&one; /* 1: little-endian */
+    for (int i = 0; i < 4; i++) {
+        head[4 + i] = (uint8_t)(lazy >> (i * 8));
+        head[8 + i] = (uint8_t)(ln >> (i * 8));
+    }
+    AuSha256 h;
+    au_sha256_init(&h);
+    au_sha256_update(&h, stamp, sizeof stamp);
+    au_sha256_update(&h, head, sizeof head);
+    au_sha256_update(&h, name, strlen(name) + 1);
+    au_sha256_update(&h, src, len);
+    au_sha256_out(&h, key);
+    return true;
+}
+#else
+bool js_code_key(AuJs *js, bool module, const char *name, int line, const char *src, size_t len,
+                 uint8_t key[AU_JS_CODE_KEY])
+{
+    (void)js, (void)module, (void)name, (void)line, (void)src, (void)len, (void)key;
+    return false;
+}
+#endif
+
+JSValue js_code_load(AuJs *js, const uint8_t key[AU_JS_CODE_KEY], const char *src, size_t len, bool *seen)
+{
+    const AuJsCodeStore *s = js->root->settings.code;
+    size_t blen = 0;
+    uint8_t *blob = s->get(s->ctx, key, &blen, seen);
+    if (!blob)
+        return JS_UNINITIALIZED;
+    int flags = JS_READ_OBJ_BYTECODE | JS_READ_OBJ_NO_RESOLVE;
+    /* without texts the bytecode names no positions in the script */
+    JSValue fn = len >= JS_NO_TEXT_SCRIPT ? JS_ReadObject(js->ctx, blob, blen, flags)
+                                          : JS_ReadObjectSource(js->ctx, blob, blen, flags, src, len);
+    au_free(blob);
+    if (JS_IsException(fn)) {
+        /* no memory: the caller compiles */
+        JSValue e = JS_GetException(js->ctx);
+        JS_FreeValue(js->ctx, e);
+        return JS_UNINITIALIZED;
+    }
+    return fn;
+}
+
+/* Skipped near the memory limit: the bytecode is written into the script
+ * heap first. */
+void js_code_save(AuJs *js, const uint8_t key[AU_JS_CODE_KEY], JSValueConst fn, size_t len, bool seen)
+{
+    AuJs *r = js->root;
+    const AuJsCodeStore *s = r->settings.code;
+    bool no_text = len >= JS_NO_TEXT_SCRIPT;
+    if (!seen && !no_text && r->settings.lazy_functions >= 0)
+        return; /* the next compile has the hints */
+    if (r->live_bytes > r->settings.memory_limit / 4 * 3)
+        return;
+    bool oom = r->oom, noted = r->oom_noted;
+    size_t blen = 0;
+    uint8_t *blob = JS_WriteObject(js->ctx, &blen, fn, JS_WRITE_OBJ_BYTECODE | (no_text ? 0 : JS_WRITE_OBJ_SOURCE_REF));
+    if (!blob) {
+        /* no memory, or a script that is mostly data (its functions have
+         * texts of their own): not stored, and not an error of the page */
+        JSValue e = JS_GetException(js->ctx);
+        JS_FreeValue(js->ctx, e);
+        r->oom = oom;
+        r->oom_noted = noted;
+        return;
+    }
+    s->put(s->ctx, key, blob, blen);
+    js_free(js->ctx, blob);
+}
+
 /* The script c as bytecode in a QuickJS block of c's context, or NULL. */
 static uint8_t *code_write(struct JsCode *c, size_t *blen)
 {
@@ -1622,6 +1731,15 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         JS_FreeValue(ctx, e);
         fn = JS_UNINITIALIZED;
     }
+    /* a script stored by an earlier page or run */
+    uint8_t key[AU_JS_CODE_KEY];
+    bool keyed = JS_IsUninitialized(fn) && js_code_key(js, false, name, line, src, len, key);
+    bool seen = false;
+    if (keyed) {
+        fn = js_code_load(js, key, src, len, &seen);
+        if (large && !JS_IsUninitialized(fn))
+            code_add(js, name, len, hash, line, fn); /* for the page's frames and workers */
+    }
     if (JS_IsUninitialized(fn)) {
         JSEvalOptions o = {JS_EVAL_OPTIONS_VERSION,
                            JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY | (no_text ? JS_EVAL_FLAG_NO_SOURCE : 0),
@@ -1633,6 +1751,8 @@ static JSValue eval_classic(AuJs *js, const char *src, size_t len, const char *u
         r->hint_text = NULL;
         if (large && !r->worker && !JS_IsException(fn))
             code_add(js, name, len, hash, line, fn);
+        if (keyed && !JS_IsException(fn))
+            js_code_save(js, key, fn, len, seen);
     }
     r->compiling = prev;
     au_free(owned);

@@ -41223,6 +41223,7 @@ typedef struct BCReaderState {
     bool allow_sab;
     bool allow_bytecode;
     bool allow_reference;
+    bool no_resolve; /* Aura: JS_READ_OBJ_NO_RESOLVE */
     JSSourceText *source_ref; /* JS_ReadObjectSource: the script's text */
     /* object references */
     JSObject **objects;
@@ -41904,6 +41905,11 @@ static JSValue JS_ReadModule(BCReaderState *s)
             // JS_WriteModule() does not serialize modules transitively
             // because that doesn't work for C modules and is also prone
             // to loading the same JS module twice.
+            /* Aura: with JS_READ_OBJ_NO_RESOLVE the caller resolves the
+               module (JS_ResolveModule) once its imports can be loaded;
+               js_resolve_module asks for each of them again anyway. */
+            if (s->no_resolve)
+                continue;
             *pm = js_host_resolve_imported_module_atom(s->ctx, m->module_name,
                                                        rme->module_name,
                                                        rme->attributes);
@@ -42513,6 +42519,7 @@ JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     s->allow_bytecode = ((flags & JS_READ_OBJ_BYTECODE) != 0);
     s->allow_sab = ((flags & JS_READ_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
+    s->no_resolve = ((flags & JS_READ_OBJ_NO_RESOLVE) != 0);
     if (s->allow_bytecode)
         s->first_atom = JS_ATOM_END;
     else
@@ -42551,6 +42558,7 @@ JSValue JS_ReadObjectSource(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     s->ptr = buf;
     s->allow_bytecode = true;
     s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
+    s->no_resolve = ((flags & JS_READ_OBJ_NO_RESOLVE) != 0);
     s->first_atom = JS_ATOM_END;
     s->source_ref = js_source_text_script(ctx, source, (int)source_len);
     if (!s->source_ref)

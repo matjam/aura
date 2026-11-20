@@ -38,8 +38,8 @@ windows" below.
 ## Profile and assets
 
 - The profile is `$XDG_CONFIG_HOME/aura` (`~/.config/aura`), read and
-  written through the POSIX `AuAppFiles`. Its `Cache` folder goes to
-  `$XDG_CACHE_HOME/aura/Cache` instead.
+  written through the POSIX `AuAppFiles`. Its `Cache` and `Script Cache` folders go to
+  `$XDG_CACHE_HOME/aura` instead.
 - Downloads go to the download folder preference, else the XDG download
   folder, else `~/Downloads`. A download is written as `<id> <name>.part`
   and renamed when it completes; nothing is opened automatically.

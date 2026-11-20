@@ -72,6 +72,10 @@ typedef struct AuJsSettings {
      * again to compile them with the script the next time it runs
      * (runtime.c, "Script hints"). It must outlive the runtime. */
     const struct AuJsHintStore *hints;
+    /* Optional: where the page's runtime keeps the bytecode of large
+     * classic scripts for later pages (runtime.c, "Compiled scripts
+     * kept between pages"). It must outlive the runtime. */
+    const struct AuJsCodeStore *code;
     const char *user_agent; /* navigator.userAgent; NULL: "Mozilla/5.0 (AU_UA_PLATFORM) Aura/1" (core/uaplatform.h).
                              * Embedders pass the string the network sends (au_docview_set_user_agent). */
     const char *language;   /* navigator.language; NULL: "en-US" */

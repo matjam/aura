@@ -347,6 +347,10 @@ done.
   worker loads with `importScripts`, a script that is mostly data, or a
   script the worker compiled before the page did
   ([`javascript.md`](javascript.md), "How script memory is kept down").
+- **The script cache** does not cover workers, text given to `eval`, a
+  script that is mostly data or scripts under 32 KB, and its cost in the
+  guest is not measured ([`javascript.md`](javascript.md), "The script
+  cache").
 - **A script of 2 MB or more keeps no source text**: its functions'
   `toString` gives the native function form with the function's kind,
   and a class gives `class C { }`. A page that reads a function's text

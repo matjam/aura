@@ -361,6 +361,9 @@ typedef struct AuPageEnv {
      * scripts that were compiled at their first call (js/js.h,
      * AuJsHintStore). Read when a document begins. */
     const struct AuJsHintStore *(*script_hints)(void *ctx);
+    /* Optional: where it keeps the bytecode of large scripts for later
+     * pages (js/js.h, AuJsCodeStore). Read when a document begins. */
+    const struct AuJsCodeStore *(*script_code)(void *ctx);
 } AuPageEnv;
 
 typedef struct AuPageCallbacks {

@@ -1385,6 +1385,8 @@ JS_EXTERN uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst o
    writer in the same process (e.g. another Worker on the same runtime). */
 #define JS_READ_OBJ_SAB       (1 << 2) /* allow SharedArrayBuffer */
 #define JS_READ_OBJ_REFERENCE (1 << 3) /* allow object references */
+#define JS_READ_OBJ_NO_RESOLVE (1 << 4) /* Aura: a module is read without resolving its imports; the
+                                           caller calls JS_ResolveModule, as after JS_EVAL_FLAG_NO_RESOLVE */
 JS_EXTERN JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len, int flags);
 JS_EXTERN JSValue JS_ReadObjectSource(JSContext *ctx, const uint8_t *buf, size_t buf_len, int flags,
                                       const char *source, size_t source_len);

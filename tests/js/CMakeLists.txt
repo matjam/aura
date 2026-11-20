@@ -31,6 +31,11 @@ add_executable(test_script_hints test_script_hints.c)
 target_link_libraries(test_script_hints aura_engine)
 add_test(NAME js_script_hints COMMAND test_script_hints)
 
+# Bytecode of large scripts kept between pages.
+add_executable(test_script_cache test_script_cache.c)
+target_link_libraries(test_script_cache aura_engine)
+add_test(NAME js_script_cache COMMAND test_script_cache)
+
 add_executable(test_script_text test_script_text.c)
 target_link_libraries(test_script_text aura_engine)
 add_test(NAME js_script_text COMMAND test_script_text)
